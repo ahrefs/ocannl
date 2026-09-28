@@ -62,6 +62,9 @@
       the count of a loop unrolled by two, at half the width each.
     - {b stack_refs}: instructions addressing through the stack or frame pointer -- the spill signal
       gh-ocannl-614 measured.
+    - {b stack_writes}: of those, the ones that WRITE the stack. A value round-tripping through a
+      stack slot begins with one, where a reload of a spilled loop invariant does not
+      (gh-ocannl-1102).
     - {b residual}: instructions matched by none of those classifiers. Loop-control and integer
       bookkeeping legitimately live there, so it is reported rather than bounded; its purpose is to
       make a newly encountered dialect visible instead of silently returning zeroes. Stderr profiles
@@ -234,6 +237,7 @@ type counts = {
   scalar_fp_ops : int;
   libm_calls : int;
   stack_refs : int;
+  stack_writes : int;  (** of [stack_refs], the ones storing to the stack *)
   residual_mnemonics : (string * int) list;
       (** Exact residual histogram, sorted by descending frequency then mnemonic. Only its profile
           display is bounded; this is diagnostic data, never a compiler-sensitive threshold. *)
@@ -441,9 +445,40 @@ let vector_bytes_of ~mnemonic ~rest =
     | Some b -> b
     | None -> Option.value (on_operand ()) ~default:0
 
-let is_stack_ref ~rest =
-  List.exists [ "%rsp"; "%rbp"; "%esp"; "%ebp"; "[sp"; "[x29"; "sp,"; "x29," ] ~f:(fun p ->
+(* A memory access through the stack or frame pointer. On x86 that is a memory OPERAND based on
+   [%rsp]/[%rbp] -- [96(%rsp)], [(%rsp,%rax,4)], [-8(%rbp)] -- or an implicit one, [push]/[pop]: gcc
+   omits the frame pointer at [-O2] and allocates [%rbp]/[%ebp] as a general register, so a register
+   operand is no stack traffic ([movzwl (%r14), %ebp] in a bf16 register tile's k-loop read as one,
+   gh-ocannl-1102). *)
+let is_stack_ref ~mnemonic ~rest =
+  List.mem [ "push"; "pushq"; "pushl"; "pop"; "popq"; "popl" ] mnemonic ~equal:String.equal
+  || List.exists [ "(%rsp"; "(%rbp"; "(%esp"; "(%ebp"; "[sp"; "[x29"; "sp,"; "x29," ] ~f:(fun p ->
       has_substr rest ~sub:p)
+
+(* A stack reference that stores to the stack: a [push], an x86 instruction whose LAST operand (the
+   AT&T destination) is a stack memory operand, other than a compare or test that only reads it, or
+   an aarch64 store ([str], [stp], [stur], [st1], ...) addressing through [sp] or [x29]. *)
+let is_stack_write ~mnemonic ~rest =
+  let x86_destination () =
+    let depth = ref 0 and last = ref 0 in
+    String.iteri rest ~f:(fun i c ->
+        match c with
+        | '(' -> Int.incr depth
+        | ')' -> Int.decr depth
+        | ',' when !depth = 0 -> last := i + 1
+        | _ -> ());
+    String.drop_prefix rest !last
+  in
+  let reads_only =
+    List.exists [ "cmp"; "test"; "bt"; "ucomi"; "comi"; "vucomi"; "vcomi"; "vptest"; "ptest" ]
+      ~f:(fun prefix -> String.is_prefix mnemonic ~prefix)
+  in
+  List.mem [ "push"; "pushq"; "pushl" ] mnemonic ~equal:String.equal
+  || String.is_prefix mnemonic ~prefix:"st"
+     && (has_substr rest ~sub:"[sp" || has_substr rest ~sub:"[x29")
+  || (not reads_only)
+     && List.exists [ "(%rsp"; "(%rbp"; "(%esp"; "(%ebp" ] ~f:(fun p ->
+         has_substr (x86_destination ()) ~sub:p)
 
 let call_target ~mnemonic ~rest =
   if String.equal mnemonic "call" || String.equal mnemonic "callq" || String.equal mnemonic "bl"
@@ -709,6 +744,7 @@ let count_range lines op_class ~from_ ~to_ =
         scalar_fp_ops = 0;
         libm_calls = 0;
         stack_refs = 0;
+        stack_writes = 0;
         residual = 0;
         residual_mnemonics = [];
       }
@@ -724,7 +760,7 @@ let count_range lines op_class ~from_ ~to_ =
           | Some t -> List.mem libm t ~equal:String.equal
           | None -> false
         in
-        let stack_ref = is_stack_ref ~rest in
+        let stack_ref = is_stack_ref ~mnemonic ~rest in
         let c = { c with instructions = c.instructions + 1 } in
         let c = if vector then { c with vector_ops = c.vector_ops + 1 } else c in
         let c =
@@ -739,6 +775,11 @@ let count_range lines op_class ~from_ ~to_ =
         let c = if scalar_fp then { c with scalar_fp_ops = c.scalar_fp_ops + 1 } else c in
         let c = if libm_call then { c with libm_calls = c.libm_calls + 1 } else c in
         let c = if stack_ref then { c with stack_refs = c.stack_refs + 1 } else c in
+        let c =
+          if stack_ref && is_stack_write ~mnemonic ~rest then
+            { c with stack_writes = c.stack_writes + 1 }
+          else c
+        in
         let c =
           if vector || scalar_fp || libm_call || stack_ref then c
           else (
@@ -820,6 +861,27 @@ let census_source_in ?(selection = Innermost) parsed op_class ~source ~patterns 
   match read (anchor_lines ~source ~patterns) with
   | Some _ as profile -> profile
   | None -> read (anchor_block_lines ~source ~patterns ~after_pattern)
+
+(** [attributed_in p op_class ~anchor] is the profile of every instruction [p] attributes to a
+    source line in [anchor], in a loop or not: the reading for a construct that is not a loop of its
+    own, such as the load of a register tile's C-tile before its k-loop and the store after it. An
+    instruction belongs to the line of the last [.loc] above it, as in the DWARF line table.
+    [instructions = 0] means no instruction was attributed to the lines at all. *)
+let attributed_in ({ lines; files; _ } : parsed) op_class ~anchor =
+  let current = ref false in
+  let attributed =
+    Array.map lines ~f:(function
+      | Some (Directive (".loc" :: fno :: lno :: _)) as line ->
+          (current :=
+             match (Int.of_string_opt fno, Int.of_string_opt lno) with
+             | Some f, Some l -> Set.mem files f && Set.mem anchor l
+             | _ -> false);
+          line
+      | Some (Insn _) as line when !current -> line
+      | Some (Insn _) -> None
+      | line -> line)
+  in
+  count_range attributed op_class ~from_:0 ~to_:(Array.length attributed - 1)
 
 (** {!census_in} over an assembly listing parsed for this one question. Convenient where a caller
     asks about one construct in one file; a caller asking about many should {!parse} once. *)

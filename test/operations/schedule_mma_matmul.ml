@@ -105,19 +105,6 @@ let metal_fallback_device_fenced src =
       && String.is_prefix (String.drop_prefix src after) ~prefix:metal_device_fence
   | _ -> false
 
-(* The maximal single-child chains of statement-level loops: one symbol list per top-level nest. *)
-let nest_paths (llc : LL.t) : Ir.Indexing.symbol list list =
-  let strip stmts = List.filter stmts ~f:(function LL.Noop | LL.Comment _ -> false | _ -> true) in
-  let rec path (llc : LL.t) : Ir.Indexing.symbol list =
-    match llc with
-    | LL.For_loop { index; body; _ } ->
-        index :: (match strip (LL.flat_lines [ body ]) with [ single ] -> path single | _ -> [])
-    | LL.If { body; _ } -> path body
-    | _ -> []
-  in
-  List.filter_map (LL.flat_lines [ llc ]) ~f:(fun stmt ->
-      match path stmt with [] -> None | p -> Some p)
-
 let named name (comp : Asgns.comp) : Asgns.comp =
   { comp with asgns = Asgns.Block_comment (name, comp.asgns) }
 
@@ -278,7 +265,7 @@ let () =
 
   (* --- The tensorized schedule --- *)
   let mma_schedule ?(bm = bm) ~out (opt : LL.optimized) : Sched.schedule =
-    let paths = nest_paths opt.LL.llc in
+    let paths = Ll_test.nest_paths opt.LL.llc in
     let i, j, k =
       match List.find_exn paths ~f:(fun p -> List.length p = 3) with
       | [ i; j; k ] -> (i, j, k)
@@ -1296,7 +1283,7 @@ let () =
     let got_edge_serial = nonzero "mm_edge_serial" (Context.get_values ctx_e0 ec0.Tensor.value) in
     let%op ec1 = ea * eb in
     let edge_schedule (opt : LL.optimized) : Sched.schedule =
-      let paths = nest_paths opt.LL.llc in
+      let paths = Ll_test.nest_paths opt.LL.llc in
       let i, j, k =
         match List.find_exn paths ~f:(fun p -> List.length p = 3) with
         | [ i; j; k ] -> (i, j, k)
@@ -1377,7 +1364,7 @@ let () =
     let got_width_serial = nonzero "mm_width_serial" (Context.get_values ctx_w0 wc0.Tensor.value) in
     let%op wc1 = wa * wb in
     let width_schedule (opt : LL.optimized) : Sched.schedule =
-      let paths = nest_paths opt.LL.llc in
+      let paths = Ll_test.nest_paths opt.LL.llc in
       let i, j, k =
         match List.find_exn paths ~f:(fun p -> List.length p = 3) with
         | [ i; j; k ] -> (i, j, k)
@@ -1452,7 +1439,7 @@ let () =
     let want_fused = nonzero "mm_fused_serial" (Context.get_values ctx_f0 fc0.Tensor.value) in
     let%op fc1 = fa * fb in
     let fused_schedule (opt : LL.optimized) : Sched.schedule =
-      let paths = nest_paths opt.LL.llc in
+      let paths = Ll_test.nest_paths opt.LL.llc in
       let i, j, k =
         match List.find_exn paths ~f:(fun p -> List.length p = 3) with
         | [ i; j; k ] -> (i, j, k)
@@ -1514,7 +1501,7 @@ let () =
      — for formats whose intrinsic tile exceeds the default (fp8's m16n8k32). *)
   let staged_schedule ?swizzle ?(bm = bm) ?(bk = bm) ~out ~src_a ~src_b (opt : LL.optimized) :
       Sched.schedule =
-    let paths = nest_paths opt.LL.llc in
+    let paths = Ll_test.nest_paths opt.LL.llc in
     let i, j, k =
       match List.find_exn paths ~f:(fun p -> List.length p = 3) with
       | [ i; j; k ] -> (i, j, k)
@@ -2575,7 +2562,7 @@ let () =
   (* --- Pattern discipline: Tensorize on a non-micro-kernel nest is a targeted error --- *)
   let%op mc2 = ma * mb in
   let bad_transform (opt : LL.optimized) : LL.optimized =
-    let paths = nest_paths opt.LL.llc in
+    let paths = Ll_test.nest_paths opt.LL.llc in
     let i, j, k =
       match List.find_exn paths ~f:(fun p -> List.length p = 3) with
       | [ i; j; k ] -> (i, j, k)

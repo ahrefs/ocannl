@@ -150,8 +150,11 @@ let fit ?name ?max_candidates ~budget ctx comp bindings =
       let all =
         List.filter_map surface ~f:(fun (fc : LL.flip_candidate) ->
             match
+              (* gh-ocannl-1093: a refused flip relieves nothing — it replays to the materialization
+                 — and its proxy cost would rank it among the cheapest. *)
               List.filter_map fc.LL.fc_alternatives ~f:(fun (fa : LL.flip_alternative) ->
-                  Option.map (direction_of fa.LL.fa_flip) ~f:(fun d -> (d, fa)))
+                  if Option.is_some fa.LL.fa_refused then None
+                  else Option.map (direction_of fa.LL.fa_flip) ~f:(fun d -> (d, fa)))
             with
             | [] -> None
             | dirs -> Some (fc.LL.fc_tn, dirs))

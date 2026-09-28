@@ -24,6 +24,11 @@ module LL = Ir.Low_level
 module Sched = Ir.Schedule
 module Asgns = Ir.Assignments
 
+(* The backend's accumulator residency, which a [Privatize] tile is minted at (gh-ocannl-1116). *)
+let accum_prec =
+  let caps = lazy (Context.codegen_capabilities (Context.auto ())) in
+  fun p -> (Lazy.force caps).Ir.Backend_intf.accum_prec p
+
 let () = Utils.settings.output_debug_files_in_build_directory <- true
 
 open Verdict.Claims
@@ -45,18 +50,6 @@ module Generated = Test_utils.Generated
 
 let () = Generated.init ~backend_name
 
-let nest_paths (llc : LL.t) : Ir.Indexing.symbol list list =
-  let strip stmts = List.filter stmts ~f:(function LL.Noop | LL.Comment _ -> false | _ -> true) in
-  let rec path (llc : LL.t) : Ir.Indexing.symbol list =
-    match llc with
-    | LL.For_loop { index; body; _ } ->
-        index :: (match strip (LL.flat_lines [ body ]) with [ single ] -> path single | _ -> [])
-    | LL.If { body; _ } -> path body
-    | _ -> []
-  in
-  List.filter_map (LL.flat_lines [ llc ]) ~f:(fun stmt ->
-      match path stmt with [] -> None | p -> Some p)
-
 let named name (comp : Asgns.comp) : Asgns.comp =
   { comp with asgns = Asgns.Block_comment (name, comp.asgns) }
 
@@ -68,7 +61,7 @@ let bm, bn, bk = (8, 8, 8)
    non-dividing splits), leaving splits + stages only. *)
 let tiled_schedule ?(reorder = true) ~ma ~mb ~mc ~hoist_a ~hoist_b (opt : LL.optimized) :
     Sched.schedule =
-  let paths = nest_paths opt.LL.llc in
+  let paths = Ll_test.nest_paths opt.LL.llc in
   let accum = List.find_exn paths ~f:(fun p -> List.length p = 3) in
   let i, j, k = match accum with [ i; j; k ] -> (i, j, k) | _ -> assert false in
   let sp_i, _, i_i = Sched.split ~axis:i ~factor:bm ~outer:LL.Serial ~inner:LL.Serial in
@@ -106,7 +99,7 @@ let tiled_schedule ?(reorder = true) ~ma ~mb ~mc ~hoist_a ~hoist_b (opt : LL.opt
   [ sp_i; sp_j; sp_k ]
   @ (if reorder then sink i_i [ j_o; j_i; k_o; k_i ] @ sink j_i [ k_o; k_i; i_i ] else [])
   @ stages
-  @ if reorder then [ Sched.Privatize { target = mc; over = k_o } ] else []
+  @ if reorder then [ Sched.privatize ~accum_prec ~target:mc ~over:k_o ] else []
 
 let make_pair n =
   let mav =

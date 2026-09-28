@@ -2377,16 +2377,22 @@ case $sub in
       # owner and group can be signalled.
       run_wt=$PWD run_lock= run_owner=
     }
-    # The census prefers /proc/locks (only pids actually HOLDING the flock,
-    # matched by device AND inode -- inode numbers repeat across
-    # filesystems); lsof is the fallback and lists any process with the
-    # file open. A NON-EMPTY proc answer is authoritative, but an empty one
-    # proves nothing: the flock outlives its acquiring pid on the shared
-    # description (our take_lock perl exits immediately), and /proc/locks
-    # can then name no holder while the lock is demonstrably held -- so an
-    # empty scan falls through to lsof rather than concluding "nobody".
+    # The census prefers /proc/locks (the flock matched by device AND inode
+    # -- inode numbers repeat across filesystems); lsof is the fallback and
+    # lists any process with the file open. But /proc/locks names the pid
+    # that TOOK the flock, not the ones holding it now: the lock lives on the
+    # shared description, and our take_lock perl, its acquirer, exits at
+    # once, so for a run's lock the named pid is dead -- or recycled by an
+    # unrelated process -- while the supervisor, dune and whatever dune left
+    # behind hold it through inherited fd 9. So a named pid counts only once
+    # fd_holds_lock confirms it holds the lock now, and when none is left
+    # the census sweeps every process's fdinfo rather than concluding
+    # "nobody" (gh-ocannl-1107: trusting any named pid returned the dead
+    # perl, and `stop` reaped none of the live holders). A confirmed named
+    # pid is returned alone, missing whatever inherited from it: only an
+    # acquirer still running can be one, and test-run's never is.
     lock_holder_pids() {
-      local out
+      local out p live=
       out=$(perl -e '
         my @st = stat($ARGV[0]) or exit 1;
         my $dev = $st[0];
@@ -2401,14 +2407,18 @@ case $sub in
                hex($lmaj) == $maj && hex($lmin) == $min;
         }
       ' "$run_lock" 2>/dev/null)
-      if [ -n "$out" ]; then
-        printf '%s\n' "$out"
+      for p in $out; do
+        fd_holds_lock "$p" && live="$live$p
+"
+      done
+      if [ -n "$live" ]; then
+        printf '%s' "$live"
         return 0
       fi
       if [ -d /proc ]; then
-        # /proc/locks named nobody, yet the lock is held (inherited-only
-        # descriptions can be invisible there) -- sweep every process's
-        # fdinfo instead of depending on lsof, which need not be installed.
+        # /proc/locks named no live holder, yet the lock may be held -- sweep
+        # every process's fdinfo instead of depending on lsof, which need
+        # not be installed.
         for pd in /proc/[0-9]*; do
           p=${pd#/proc/}
           fd_holds_lock "$p" && printf '%s\n' "$p"

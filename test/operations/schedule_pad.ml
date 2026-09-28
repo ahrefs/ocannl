@@ -32,6 +32,11 @@ module LL = Ir.Low_level
 module Sched = Ir.Schedule
 module Asgns = Ir.Assignments
 
+(* The backend's accumulator residency, which a [Privatize] tile is minted at (gh-ocannl-1116). *)
+let accum_prec =
+  let caps = lazy (Context.codegen_capabilities (Context.auto ())) in
+  fun p -> (Lazy.force caps).Ir.Backend_intf.accum_prec p
+
 let () = Utils.settings.output_debug_files_in_build_directory <- true
 
 open Verdict.Claims
@@ -55,19 +60,6 @@ let on_gpu = Sched.backend_is_gpu backend_name
 module Generated = Test_utils.Generated
 
 let () = Generated.init ~backend_name
-
-(* The maximal single-child chains of statement-level loops: one symbol list per top-level nest. *)
-let nest_paths (llc : LL.t) : Ir.Indexing.symbol list list =
-  let strip stmts = List.filter stmts ~f:(function LL.Noop | LL.Comment _ -> false | _ -> true) in
-  let rec path (llc : LL.t) : Ir.Indexing.symbol list =
-    match llc with
-    | LL.For_loop { index; body; _ } ->
-        index :: (match strip (LL.flat_lines [ body ]) with [ single ] -> path single | _ -> [])
-    | LL.If { body; _ } -> path body
-    | _ -> []
-  in
-  List.filter_map (LL.flat_lines [ llc ]) ~f:(fun stmt ->
-      match path stmt with [] -> None | p -> Some p)
 
 let named name (comp : Asgns.comp) : Asgns.comp =
   { comp with asgns = Asgns.Block_comment (name, comp.asgns) }
@@ -120,7 +112,9 @@ let () =
   let%op pc1 = ma * mb in
   let padded_schedule (opt : LL.optimized) : Sched.schedule =
     let i, j, k =
-      match triple (nest_paths opt.LL.llc) with [ i; j; k ] -> (i, j, k) | _ -> assert false
+      match triple (Ll_test.nest_paths opt.LL.llc) with
+      | [ i; j; k ] -> (i, j, k)
+      | _ -> assert false
     in
     let sp_i, i_o, i_i = Sched.split ~axis:i ~factor:bm ~outer:LL.Serial ~inner:LL.Serial in
     let sp_k, k_o, k_i = Sched.split ~axis:k ~factor:bk ~outer:LL.Serial ~inner:LL.Serial in
@@ -182,7 +176,9 @@ let () =
     let%op gc1 = ma * mb in
     let staged_schedule (opt : LL.optimized) : Sched.schedule =
       let i, j, k =
-        match triple (nest_paths opt.LL.llc) with [ i; j; k ] -> (i, j, k) | _ -> assert false
+        match triple (Ll_test.nest_paths opt.LL.llc) with
+        | [ i; j; k ] -> (i, j, k)
+        | _ -> assert false
       in
       let ez, zsyms = Sched.expand_zero ~tn:gc1.Tensor.value in
       let zi, zj = match zsyms with [ zi; zj ] -> (zi, zj) | _ -> assert false in
@@ -303,7 +299,7 @@ let () =
     in
     seeded := Some (staged_gpu, unstaged_gpu, packed_cpu);
     match packed_cpu with
-    | Some p when on_cpu -> Sched.apply (Autotune.sketch_schedule ~p opt) opt
+    | Some p when on_cpu -> Sched.apply (Autotune.sketch_schedule ~accum_prec ~p opt) opt
     | _ -> opt
   in
   let ctx, routine =
@@ -335,7 +331,9 @@ let () =
   let%op nc = ma * mb in
   let unstaged_padded (opt : LL.optimized) : Sched.schedule =
     let i, j, k =
-      match triple (nest_paths opt.LL.llc) with [ i; j; k ] -> (i, j, k) | _ -> assert false
+      match triple (Ll_test.nest_paths opt.LL.llc) with
+      | [ i; j; k ] -> (i, j, k)
+      | _ -> assert false
     in
     [ Sched.Pad { axis = k; to_multiple_of = bk }; fst (Sched.tensorize ~i ~j ~k ~simd_width:1 ()) ]
   in

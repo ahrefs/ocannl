@@ -2,12 +2,15 @@
    [model_default_placements] = N > 0 branch-and-bounds over the top-N flip candidates of the
    decision surface before compiling, scoring each vector's hermetic lowering with the same
    selection that scores the pipelines, and applying the winning vector via the context-level
-   placement decisions. The dune rule pins the cc backend, [model_default_placements=4] (the whole
-   surface: the modeled recompute cost of gh-ocannl-637 ranks [y]'s one exp per read last, below the
-   two scalar reductions — whose [`Inline] flips the virtualizer would refuse, their operand reads
-   escaping the setter a store captures, so since gh-ocannl-1011 they carry the traced proxy, the
-   64-cell extent, rather than a modeled price for a reading that cannot happen), and a
+   placement decisions. The dune rule pins the cc backend, [model_default_placements=2], and a
    compute-bound envelope (peak_flops 1e9, peak_bandwidth 1e12).
+
+   gh-ocannl-1093: the lowered surface also carries the two scalar reductions' [`Inline] flips,
+   which the virtualizer refuses (their operand reads escape the setter a store captures) and which
+   therefore carry the traced proxy, the 64-cell extent — priced above [y]'s modeled one exp per
+   read. They are marked refused ([fa_refused], the virtualizer's own verdict, checked here against
+   a compile that prefers them inline) and never ranked, so a cut of 2 is the whole ranked surface:
+   before, the two refused flips took both of its slots and the pick could not reach [y].
 
    The graph makes a placement flip the model-argmin deterministically: [y = exp u] is read by two
    consumer statements yet stays policy-virtual, so both consumers replay the exp and the surface
@@ -41,16 +44,52 @@ let () =
   ignore (y, s1);
   let comp = named "mdp" (Train.forward total) in
   (let module LL = Ir.Low_level in
+   let module Tn = Ir.Tnode in
+   let show title candidates =
+     Stdio.printf "%s:\n" title;
+     List.iter candidates ~f:(fun fc ->
+         Stdio.printf "  %-8s %-11s -> %s\n" (Tn.debug_name fc.LL.fc_tn)
+           (LL.reading_to_string fc.LL.fc_default)
+           (String.concat ~sep:", "
+              (List.map fc.LL.fc_alternatives ~f:(fun fa ->
+                   Printf.sprintf "%s cost %d%s"
+                     (LL.reading_to_string fa.LL.fa_flip)
+                     fa.LL.fa_recompute_cost
+                     (Option.value_map fa.LL.fa_refused ~default:"" ~f:(fun code ->
+                          " refused " ^ code))))))
+   in
+   let lowered = Context.decision_surface (Context.auto ()) comp Ir.Indexing.Empty in
+   show "decision surface (as lowered)" lowered;
    let surface = Autotune.placement_surface (Context.auto ()) comp Ir.Indexing.Empty in
-   Stdio.printf "decision surface:\n";
-   List.iter surface.Autotune.ps_candidates ~f:(fun fc ->
-       Stdio.printf "  %-8s %-11s -> %s\n" (Ir.Tnode.debug_name fc.LL.fc_tn)
-         (LL.reading_to_string fc.LL.fc_default)
-         (String.concat ~sep:", "
-            (List.map fc.LL.fc_alternatives ~f:(fun fa ->
-                 Printf.sprintf "%s cost %d"
-                   (LL.reading_to_string fa.LL.fa_flip)
-                   fa.LL.fa_recompute_cost)))));
+   show "ranked surface" surface.Autotune.ps_candidates;
+   let flips cands =
+     List.concat_map cands ~f:(fun fc -> List.map fc.LL.fc_alternatives ~f:(fun fa -> (fc, fa)))
+   in
+   let refused = List.filter (flips lowered) ~f:(fun (_, fa) -> Option.is_some fa.LL.fa_refused) in
+   p "the lowered surface carries the two scalar reductions' refused flips" (List.length refused = 2);
+   p_all "each refused flip is an Inline flip" refused ~f:(fun (_, fa) ->
+       LL.equal_reading fa.LL.fa_flip `Inline);
+   (* The refusal is the virtualizer's verdict: preferring the flip inline, the compile still
+      materializes the node, under the provenance the alternative carries. *)
+   p_all "each refusal is the virtualizer's verdict on the flip preferred inline" refused
+     ~f:(fun (fc, fa) ->
+       let o =
+         Context.lowered_for_decisions ~inline:[ fc.LL.fc_tn ] (Context.auto ()) comp
+           Ir.Indexing.Empty
+       in
+       Tn.Placements.known_non_virtual o.LL.optimize_ctx.placements fc.LL.fc_tn
+       && Option.equal String.equal fa.LL.fa_refused
+            (Option.map (Tn.Placements.get o.LL.optimize_ctx.placements fc.LL.fc_tn)
+               ~f:(fun (_, prov) -> Tn.provenance_to_string (Tn.leading_provenance prov))));
+   p_none "no flip on the ranked surface is refused" (flips surface.Autotune.ps_candidates)
+     ~f:(fun (_, fa) -> Option.is_some fa.LL.fa_refused);
+   p "the ranked surface keeps every flip not refused"
+     (List.length (flips surface.Autotune.ps_candidates)
+     = List.length (flips lowered) - List.length refused);
+   p "the ranked surface drops the nodes whose only flip is refused"
+     (List.length surface.Autotune.ps_candidates
+     = List.count lowered ~f:(fun fc ->
+         List.exists fc.LL.fc_alternatives ~f:(fun fa -> Option.is_none fa.LL.fa_refused))));
   (* Reference values from a plain compile. *)
   let ctx_ref, routine_ref = Context.compile (Context.auto ()) comp Ir.Indexing.Empty in
   let ctx_ref = Context.run ctx_ref routine_ref in

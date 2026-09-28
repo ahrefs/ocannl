@@ -42,6 +42,11 @@ module BI = Ir.Backend_intf
 module Asgns = Ir.Assignments
 open Verdict.Claims
 
+(* The backend's accumulator residency, which a [Privatize] tile is minted at (gh-ocannl-1116). *)
+let accum_prec =
+  let caps = lazy (Context.codegen_capabilities (Context.auto ())) in
+  fun p -> (Lazy.force caps).Ir.Backend_intf.accum_prec p
+
 let named name (comp : Asgns.comp) : Asgns.comp =
   { comp with asgns = Asgns.Block_comment (name, comp.asgns) }
 
@@ -179,7 +184,7 @@ let () =
     && List.exists all_gpu ~f:(fun q -> q.Autotune.sk_batch_grid));
   let unfaithful =
     List.filter all_gpu ~f:(fun q ->
-        match Sched.apply (Autotune.sketch_schedule ~p:q opt) opt with
+        match Sched.apply (Autotune.sketch_schedule ~accum_prec ~p:q opt) opt with
         | o ->
             let actual = Sched.launch_geometry_of_dims (LL.launch_dims o.LL.llc) in
             let predicted = Autotune.matmul_launch_geometry site q in
@@ -211,7 +216,7 @@ let () =
         && Bool.equal q.Autotune.sk_batch_grid batch_grid)
   in
   let serial_seed = blocktile ~batch_grid:false and twin_seed = blocktile ~batch_grid:true in
-  let applied q = Sched.apply (Autotune.sketch_schedule ~p:q opt) opt in
+  let applied q = Sched.apply (Autotune.sketch_schedule ~accum_prec ~p:q opt) opt in
   let sdims = LL.launch_dims (applied serial_seed).LL.llc in
   let tdims = LL.launch_dims (applied twin_seed).LL.llc in
   p
@@ -336,7 +341,7 @@ let () =
   in
   p_none "conv prediction: no GPU seed predicts a dimension above its applied launch geometry"
     conv_gpu ~f:(fun q ->
-      match Sched.apply (Autotune.sketch_schedule ~p:q conv_opt) conv_opt with
+      match Sched.apply (Autotune.sketch_schedule ~accum_prec ~p:q conv_opt) conv_opt with
       | applied ->
           let actual = Sched.launch_geometry_of_dims (LL.launch_dims applied.LL.llc) in
           not (lower_bound (Autotune.conv_launch_geometry conv_site q) actual)

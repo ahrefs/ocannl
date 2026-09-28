@@ -757,6 +757,14 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   children that close their locks. The forged publication window records settle sleeps before
   checking reaping; `last` squatter/legacy lock cases end with a byte comparison of the fixture
   tree. Fixtures use `paths`/`lock-status`, identity-checked cleanup and bounded child waits.
+- **`/proc/locks` names a flock's ACQUIRER, not its holders** (gh-ocannl-1107): the lock lives on
+  the open file description, so after `take_lock`'s perl exits the line keeps its dead pid (0 from
+  inside a pid namespace; some kernels drop the row) while the supervisor, dune and a `setsid`
+  leftover hold it through fd 9.
+  `stop`'s census counts a named pid only once its own fdinfo shows the FLOCK, and otherwise sweeps
+  every `/proc/<pid>/fdinfo`; trusting the name reported `STILL hold` and reaped nothing. Leg 67
+  pins it with a lock whose acquirer exited, against the unfiltered census as negative control
+  (skipped on a kernel that names nobody, where no census can trust a name).
 - **A run directory says which source it ran, as of the launch** (gh-ocannl-992): beside `cmd`,
   `cap`, `wt`, `runs`, `log` and the verdict, `run`/`start`/`repeat` record `head` (the checkout's
   HEAD commit) and `dirty` (its `git status --porcelain`: empty when clean, else one line per
@@ -1307,6 +1315,13 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   `Tile_mma`'s `fallback` rather than stopping at the tile, and reports the operands through the
   fallback alone — reporting the tile's own `d`/`a`/`b` as well would count every operand of a
   tensorized nest twice.
+- `Ll_test.nest_paths` is the other loop query, and not derived from the walk: the perfect-nest
+  chain of each top-level statement (a loop, then the loop that is its body's only statement,
+  through `If` guards), which a schedule test selects by length to name the i/j/k symbols its
+  `Tile`/`Privatize` schedule addresses. Twenty-two tests carried a private copy until gh-ocannl-1091;
+  `bin/schedule_bench.ml` and `bin/narrow_gebp_bench.ml` still do (benchmark binaries link no
+  test library). It stops at anything other than `For_loop`/`If`, so a new constructor ends a chain
+  rather than needing a case here.
 - The dynamic-indexing pair has builders of its own: `Ll_test.gather` (`Get_dynamic`),
   `Ll_test.scatter` (`Set_dynamic`) and `Ll_test.scatter_add`, the read-modify-write shape
   `rewrite_one_hot_reductions` actually mints. Reach for them rather than spelling the record:

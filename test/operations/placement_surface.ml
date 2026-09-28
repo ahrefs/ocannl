@@ -12,9 +12,11 @@
    The decoy [us] (a pointwise scale read with a 256-fold per-cell multiplicity by a broadcast
    consumer) carries a larger recompute cost than the site candidates — the gh-558 shape, where cost
    ordering buries the family-unlocking flips below a candidate that unlocks nothing and enablement
-   ordering does not. The multiplicity is what makes it the second-dearest flip under the modeled
-   recompute cost (gh-ocannl-637), above the partial reduction [n12], whose one instantiation
-   replays a row of the matmul.
+   ordering does not. The multiplicity is what makes it the dearest flip under the modeled recompute
+   cost (gh-ocannl-637), above the partial reduction [n12], whose one instantiation replays a row of
+   the matmul. (The final scalar reduction's [`Inline] flip, at a traced proxy of 1048576, ranked
+   above both until gh-ocannl-1093: the virtualizer refuses it, and the ranking drops refused
+   flips.)
 
    The floor closure is asserted monotone in the committed materializations, under the envelope
    constants pinned by the rule's command line (cc carries none of its own).
@@ -159,12 +161,13 @@ let () =
     (same (ranked `Enablement losing) by_enablement);
   (* The displacement, in miniature: the decoy is this surface's cheap-but-highest-cost flip, the
      analogue of metal's winning `inline n32_relu.grad` at cost 1024 / cost-rank 5. At a budget of
-     two the promotion pushes it out of the chain; the profitability term hands the slot back. *)
-  let budget = 2 in
+     one the promotion pushes it out of the chain; the profitability term hands the slot back. (The
+     budget was two while a refused flip held a slot of it, gh-ocannl-1093.) *)
+  let budget = 1 in
   let prefix_has l t = List.exists (List.take l budget) ~f:(fun fc -> mem_tn fc t) in
-  p_none "the enablement prior pushes the decoy out of a budget-2 chain"
+  p_none "the enablement prior pushes the decoy out of a budget-1 chain"
     (List.take by_enablement budget) ~f:(fun fc -> mem_tn fc us);
-  p "under a measured-losing family the decoy is back in the budget-2 chain"
+  p "under a measured-losing family the decoy is back in the budget-1 chain"
     (prefix_has (ranked `Profitable losing) us);
   p_none "under a measured-paying family the promotion keeps the budget slot"
     (List.take (ranked `Profitable paying) budget)

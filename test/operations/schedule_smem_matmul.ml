@@ -25,6 +25,11 @@ module LL = Ir.Low_level
 module Sched = Ir.Schedule
 module Asgns = Ir.Assignments
 
+(* The backend's accumulator residency, which a [Privatize] tile is minted at (gh-ocannl-1116). *)
+let accum_prec =
+  let caps = lazy (Context.codegen_capabilities (Context.auto ())) in
+  fun p -> (Lazy.force caps).Ir.Backend_intf.accum_prec p
+
 let () = Utils.settings.output_debug_files_in_build_directory <- true
 
 open Verdict.Claims
@@ -47,19 +52,6 @@ let has_shared = Sched.backend_is_gpu backend_name
 module Generated = Test_utils.Generated
 
 let () = Generated.init ~backend_name
-
-(* The maximal single-child chains of statement-level loops: one symbol list per top-level nest. *)
-let nest_paths (llc : LL.t) : Ir.Indexing.symbol list list =
-  let strip stmts = List.filter stmts ~f:(function LL.Noop | LL.Comment _ -> false | _ -> true) in
-  let rec path (llc : LL.t) : Ir.Indexing.symbol list =
-    match llc with
-    | LL.For_loop { index; body; _ } ->
-        index :: (match strip (LL.flat_lines [ body ]) with [ single ] -> path single | _ -> [])
-    | LL.If { body; _ } -> path body
-    | _ -> []
-  in
-  List.filter_map (LL.flat_lines [ llc ]) ~f:(fun stmt ->
-      match path stmt with [] -> None | p -> Some p)
 
 let named name (comp : Asgns.comp) : Asgns.comp =
   { comp with asgns = Asgns.Block_comment (name, comp.asgns) }
@@ -90,7 +82,7 @@ let () =
   (* --- The SMEM schedule --- *)
   let%op mc1 = ma * mb in
   let smem_schedule (opt : LL.optimized) : Sched.schedule =
-    let paths = nest_paths opt.LL.llc in
+    let paths = Ll_test.nest_paths opt.LL.llc in
     (* The lowered code is [Zero_out mc1] (an opaque statement until Expand_zero) plus the naive
        triple loop -- the only loop nest. *)
     let accum = List.find_exn paths ~f:(fun p -> List.length p = 3) in
@@ -133,7 +125,7 @@ let () =
           pipeline_depth = 1;
           tile_prec = None;
         };
-      Sched.Privatize { target = mc1.Tensor.value; over = k_o };
+      Sched.privatize ~accum_prec ~target:mc1.Tensor.value ~over:k_o;
     ]
   in
   let smem_comp = named "mm_smem" (Train.forward mc1) in
@@ -198,7 +190,7 @@ let () =
   let%op cb = a2 + v in
   let bcast_comp = named "bcast_staged" (Train.forward cb) in
   let bcast_transform (opt : LL.optimized) : LL.optimized =
-    let paths = nest_paths opt.LL.llc in
+    let paths = Ll_test.nest_paths opt.LL.llc in
     let i, j =
       match List.find_exn paths ~f:(fun p -> List.length p = 2) with
       | [ i; j ] -> (i, j)

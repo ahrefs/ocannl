@@ -1619,7 +1619,7 @@ let k_extent_label (site : matmul_site) : string =
    materially unrolled. The zeroing nest gets the same geometry (barriers need slot-uniform
    workgroup extents), and companion nests the matching per-position split pair
    ([companion_geometry], gh-ocannl-521). *)
-let gpu_sketch_schedule ~(opt : LL.optimized) (site : matmul_site)
+let gpu_sketch_schedule ~accum_prec ~(opt : LL.optimized) (site : matmul_site)
     { sk_bm = bm; sk_bn = bn; sk_bk = bk; sk_tm = tm; sk_tn = tn; sk_epilogue; sk_batch_grid; _ } :
     Sched.schedule =
   (* One geometry description drives the accumulation nest, the expanded zeroing nest and the
@@ -1700,7 +1700,7 @@ let gpu_sketch_schedule ~(opt : LL.optimized) (site : matmul_site)
           pipeline_depth = 1;
           tile_prec = None;
         };
-      Sched.Privatize { target = site.m_d; over = List.hd_exn kb };
+      Sched.privatize ~accum_prec ~target:site.m_d ~over:(List.hd_exn kb);
       Sched.Unroll { axis = i_t; materialize = true };
       Sched.Unroll { axis = j_t; materialize = true };
     ]
@@ -1715,8 +1715,8 @@ let hoistable = Sched.hoistable_constant
    loops sunk to [i_o j_o k_o k_i i_i j_i], operands packed into contiguous stack scratch, output
    privatized across the k-block loop. With [sk_hoist], constant operands are instead packed once at
    link time into the per-device constant pool. *)
-let cpu_sketch_schedule (site : matmul_site) { sk_bm = bm; sk_bn = bn; sk_bk = bk; sk_hoist; _ } :
-    Sched.schedule =
+let cpu_sketch_schedule ~accum_prec (site : matmul_site)
+    { sk_bm = bm; sk_bn = bn; sk_bk = bk; sk_hoist; _ } : Sched.schedule =
   let sp_i, _, i_i = Sched.split ~axis:site.m_i ~factor:bm ~outer:LL.Serial ~inner:LL.Serial in
   let sp_j, j_o, j_i = Sched.split ~axis:site.m_j ~factor:bn ~outer:LL.Serial ~inner:LL.Serial in
   let sp_k, k_o, k_i = Sched.split ~axis:site.m_k ~factor:bk ~outer:LL.Serial ~inner:LL.Serial in
@@ -1749,7 +1749,7 @@ let cpu_sketch_schedule (site : matmul_site) { sk_bm = bm; sk_bn = bn; sk_bk = b
           pipeline_depth = 1;
           tile_prec = None;
         };
-      Sched.Privatize { target = site.m_d; over = List.hd_exn kb };
+      Sched.privatize ~accum_prec ~target:site.m_d ~over:(List.hd_exn kb);
     ]
 
 (* Tensorized (tile-MMA) GPU matmul (docs/proposals/tensorize-mma.md; the pinned pipelines of
@@ -2266,7 +2266,7 @@ let gpu_conv_sketch_schedule (site : conv_site)
    family ended the whole search (reproducible on Metal with test/operations/autotune_fission_sketch
    before this). Typing them here rather than around the whole transform closure keeps the boundary
    narrow, which is the point: an arbitrary exception escaping a transform stays fatal. *)
-let sketch_schedule_unchecked ~p (opt : LL.optimized) : Sched.schedule =
+let sketch_schedule_unchecked ~accum_prec ~p (opt : LL.optimized) : Sched.schedule =
   let sched, d =
     if p.sk_conv then
       match detect_conv opt.LL.llc with
@@ -2284,8 +2284,8 @@ let sketch_schedule_unchecked ~p (opt : LL.optimized) : Sched.schedule =
               if p.sk_gpu then gpu_mma_sketch_schedule ~opt site p
               else if p.sk_bk > 0 then cpu_mma_pack_sketch_schedule site p
               else cpu_mma_sketch_schedule site p
-            else if p.sk_gpu then gpu_sketch_schedule ~opt site p
-            else cpu_sketch_schedule site p
+            else if p.sk_gpu then gpu_sketch_schedule ~accum_prec ~opt site p
+            else cpu_sketch_schedule ~accum_prec site p
           in
           (sched, site.m_d)
   in
@@ -2296,8 +2296,8 @@ let sketch_schedule_unchecked ~p (opt : LL.optimized) : Sched.schedule =
     sched @ [ Sched.Fuse_epilogue { target = d; shared = p.sk_gpu && p.sk_mma } ]
   else sched
 
-let sketch_schedule ~p (opt : LL.optimized) : Sched.schedule =
-  match sketch_schedule_unchecked ~p opt with
+let sketch_schedule ~accum_prec ~p (opt : LL.optimized) : Sched.schedule =
+  match sketch_schedule_unchecked ~accum_prec ~p opt with
   | sched -> sched
   | exception Invalid_argument detail ->
       raise

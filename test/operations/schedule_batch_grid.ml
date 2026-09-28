@@ -34,6 +34,11 @@ module LL = Ir.Low_level
 module Sched = Ir.Schedule
 module Asgns = Ir.Assignments
 
+(* The backend's accumulator residency, which a [Privatize] tile is minted at (gh-ocannl-1116). *)
+let accum_prec =
+  let caps = lazy (Context.codegen_capabilities (Context.auto ())) in
+  fun p -> (Lazy.force caps).Ir.Backend_intf.accum_prec p
+
 let () = Utils.settings.output_debug_files_in_build_directory <- true
 
 open Verdict.Claims
@@ -110,7 +115,7 @@ let leg ~tag ~batch_product ~fold_div ~fold_mod ~build =
   (* --- Structural checks on the pure transform, every seed, every backend. --- *)
   let grid_z_ok = ref true and fold_ok = ref true and valid_ok = ref true in
   List.iter seeds ~f:(fun q ->
-      let o = Sched.apply (Autotune.sketch_schedule ~p:q opt) opt in
+      let o = Sched.apply (Autotune.sketch_schedule ~accum_prec ~p:q opt) opt in
       let llc = o.LL.llc in
       (match LL.validate_parallel o.LL.optimize_ctx.LL.placements llc with
       | () -> ()
@@ -164,7 +169,8 @@ let leg ~tag ~batch_product ~fold_div ~fold_mod ~build =
         match
           let ctx, routine =
             Context.compile
-              ~lowered_transform:(fun o -> [ Sched.apply (Autotune.sketch_schedule ~p:q o) o ])
+              ~lowered_transform:(fun o ->
+                [ Sched.apply (Autotune.sketch_schedule ~accum_prec ~p:q o) o ])
               (Context.auto ()) fwd Ir.Indexing.Empty
           in
           Context.get_values (Context.run ctx routine) cand.Tensor.value
@@ -316,7 +322,7 @@ let () =
   p_all
     "qkv_mma: every tensorized batch-grid twin constructs, validates, and folds the batch onto .z"
     mma_grid_seeds ~f:(fun q ->
-      match Sched.apply (Autotune.sketch_schedule ~p:q opt) opt with
+      match Sched.apply (Autotune.sketch_schedule ~accum_prec ~p:q opt) opt with
       | o -> (
           match LL.validate_parallel o.LL.optimize_ctx.LL.placements o.LL.llc with
           | () -> (LL.launch_dims o.LL.llc).LL.grid.(2) = bb * hh
@@ -335,7 +341,7 @@ let () =
      limit field (CUDA and HIP cap [gridDim.y] and [gridDim.z] at the same 65535), two typed
      resources, because the two extents are shrunk by different knobs. --- *)
   let bg_seed = List.find_exn (blocktile_seeds opt) ~f:(fun q -> q.Autotune.sk_batch_grid) in
-  let o = Sched.apply (Autotune.sketch_schedule ~p:bg_seed opt) opt in
+  let o = Sched.apply (Autotune.sketch_schedule ~accum_prec ~p:bg_seed opt) opt in
   let limits_yz n = { Ir.Backend_intf.no_hardware_limits with max_grid_yz = Some n } in
   p "limit gate: a folded .z extent at the device limit passes"
     (match
@@ -370,7 +376,7 @@ let () =
     List.find_map (blocktile_seeds opt) ~f:(fun q ->
         if q.Autotune.sk_batch_grid then None
         else
-          let os = Sched.apply (Autotune.sketch_schedule ~p:q opt) opt in
+          let os = Sched.apply (Autotune.sketch_schedule ~accum_prec ~p:q opt) opt in
           let d = LL.launch_dims os.LL.llc in
           if d.LL.grid.(2) = 1 && d.LL.grid.(1) > 1 then Some (os, d) else None)
   in

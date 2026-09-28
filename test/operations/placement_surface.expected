@@ -4,7 +4,6 @@ it contains the site destination mc: true
 it does not contain the decoy us: true
 no site is eligible under default placements (empty disablement): true
 cost ranking:
-  n11          materialize -> inline cost 1048576
   us           materialize -> inline cost 256
   n12          inline      -> materialize cost 144
   relu_t2      inline      -> materialize cost 17
@@ -13,7 +12,6 @@ cost ranking:
   d2           inline      -> materialize cost 1
 enablement ranking:
   mc           inline      -> materialize cost 16  [enablement]
-  n11          materialize -> inline cost 1048576
   us           materialize -> inline cost 256
   n12          inline      -> materialize cost 144
   relu_t2      inline      -> materialize cost 17
@@ -26,8 +24,8 @@ a measured-losing family ranks the surface exactly as cost does: true
 a measured-paying family ranks it exactly as the enablement prior does: true
 an unmeasured family leaves the enablement prior standing: true
 the pure enablement ordering ignores the evidence (the evaluation baseline): true
-the enablement prior pushes the decoy out of a budget-2 chain: true
-under a measured-losing family the decoy is back in the budget-2 chain: true
+the enablement prior pushes the decoy out of a budget-1 chain: true
+under a measured-losing family the decoy is back in the budget-1 chain: true
 under a measured-paying family the promotion keeps the budget slot: true
 an unconditional ordering records no profitability evidence: true
 the profitable ordering records the verdict it ranked by: true

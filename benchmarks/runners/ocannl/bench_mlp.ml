@@ -260,9 +260,11 @@ let () =
                   (Ir.Low_level.reading_to_string fc.Ir.Low_level.fc_default)
                   (String.concat ~sep:", "
                      (List.map fc.Ir.Low_level.fc_alternatives ~f:(fun fa ->
-                          Stdlib.Printf.sprintf "%s cost=%d"
+                          Stdlib.Printf.sprintf "%s cost=%d%s"
                             (Ir.Low_level.reading_to_string fa.Ir.Low_level.fa_flip)
-                            fa.Ir.Low_level.fa_recompute_cost))));
+                            fa.Ir.Low_level.fa_recompute_cost
+                            (Option.value_map fa.Ir.Low_level.fa_refused ~default:""
+                               ~f:(Stdlib.Printf.sprintf " refused=%s"))))));
             [ o ])
           ctx comp bindings
       with

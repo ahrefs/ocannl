@@ -600,7 +600,16 @@ let () =
   Stdio.printf "  preferred inline, the virtualizer's verdict: %s\n"
     (Option.value_map (rejection_code o_pref f) ~default:"none" ~f:Tn.provenance_to_string);
   p "reader-refused flip: preferred inline, the virtualizer refuses it all the same"
-    (known_non_virtual o_pref f)
+    (known_non_virtual o_pref f);
+  (* gh-ocannl-1093: the pricer's world carries the refusal onto the alternative, and it is the
+     virtualizer's own verdict. *)
+  p "reader-refused flip: the alternative carries the virtualizer's verdict as its refusal"
+    (match inline_flip with
+    | Some fa ->
+        Option.is_some fa.LL.fa_refused
+        && Option.equal String.equal fa.LL.fa_refused
+             (Option.map (rejection_code o_pref f) ~f:Tn.provenance_to_string)
+    | None -> false)
 
 (* An [`Inline] flip the store itself refuses: a scalar reduction S[0] = sum_i A[i] over i < 20 (the
    cap materializes it). Captured at its setter, the read of A escapes the reduction loop the
@@ -634,4 +643,11 @@ let () =
   Stdio.printf "  preferred inline, the virtualizer's verdict: %s\n"
     (Option.value_map (rejection_code o_pref s) ~default:"none" ~f:Tn.provenance_to_string);
   p "refused flip: preferred inline, the virtualizer refuses it all the same"
-    (known_non_virtual o_pref s)
+    (known_non_virtual o_pref s);
+  p "refused flip: the alternative carries the virtualizer's verdict as its refusal"
+    (match inline_flip with
+    | Some fa ->
+        Option.is_some fa.LL.fa_refused
+        && Option.equal String.equal fa.LL.fa_refused
+             (Option.map (rejection_code o_pref s) ~f:Tn.provenance_to_string)
+    | None -> false)

@@ -207,6 +207,27 @@ let baseline, minimum, mid, minimize_flips =
     = baseline - minimum);
   p_all "minimize: no flip reports negative relief" min_plan.bp_flips ~f:(fun (_, relief, _) ->
       relief >= 0);
+  (* gh-ocannl-1093: the step's scalar loss reduction offers an [`Inline] flip the virtualizer
+     refuses, at a proxy cost that would rank it among the cheapest; the planner considers exactly
+     the surface's nodes left a direction that is not refused — [Minimize] cuts none. *)
+  let module LL = Ir.Low_level in
+  let surface = Context.decision_surface ctx comp IDX.empty in
+  let open_direction (fa : LL.flip_alternative) =
+    Option.is_none fa.LL.fa_refused && not (LL.equal_reading fa.LL.fa_flip `Materialize)
+  in
+  let recompute_refused (fa : LL.flip_alternative) =
+    Option.is_some fa.LL.fa_refused && not (LL.equal_reading fa.LL.fa_flip `Materialize)
+  in
+  p "minimize: the surface carries a refused recompute flip"
+    (List.exists surface ~f:(fun fc -> List.exists fc.LL.fc_alternatives ~f:recompute_refused));
+  p "minimize: it considers exactly the nodes with a direction not refused"
+    (min_plan.bp_dropped = 0
+    && min_plan.bp_considered
+       = List.count surface ~f:(fun fc -> List.exists fc.LL.fc_alternatives ~f:open_direction));
+  p_none "minimize: it takes no node whose every direction is refused" min_plan.bp_flips
+    ~f:(fun (tn, _, _) ->
+      List.exists surface ~f:(fun fc ->
+          Tn.equal fc.LL.fc_tn tn && not (List.exists fc.LL.fc_alternatives ~f:open_direction)));
   (* Strictly between the two ends, so it is reachable but not free. The flips minimize took are the
      population a budgeted plan chooses from: what the baseline plan declines is drawn from them. *)
   (baseline, minimum, (baseline + minimum) / 2, min_plan.bp_flips)

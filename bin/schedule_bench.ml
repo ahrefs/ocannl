@@ -64,6 +64,11 @@ module Sched = Ir.Schedule
 module Asgns = Ir.Assignments
 module Numerics = Ir.Numerics
 
+(* The backend's accumulator residency, which a [Privatize] tile is minted at (gh-ocannl-1116). *)
+let accum_prec =
+  let caps = lazy (Context.codegen_capabilities (Context.auto ())) in
+  fun p -> (Lazy.force caps).Ir.Backend_intf.accum_prec p
+
 (* CUDA's uniform-f32 MMA arm is gated on tf32 (the Numerics policy): without it the [Tile_mma]s of
    the mma_pd* variants render the lane-0 scalar fallback and the labels would time a kernel that
    never tensorizes ("timed is not tensorized", docs/agent-notes/scheduling-and-autotune.md).
@@ -322,7 +327,7 @@ let () =
           pipeline_depth = 1;
           tile_prec = None;
         };
-      Sched.Privatize { target = mc; over = k_o };
+      Sched.privatize ~accum_prec ~target:mc ~over:k_o;
     ]
   in
 
@@ -362,7 +367,7 @@ let () =
             pipeline_depth = 1;
             tile_prec = None;
           };
-        Sched.Privatize { target = mc; over = k_o };
+        Sched.privatize ~accum_prec ~target:mc ~over:k_o;
       ]
   in
 
@@ -410,7 +415,7 @@ let () =
             pipeline_depth = 1;
             tile_prec = None;
           };
-        Sched.Privatize { target = mc; over = k_o };
+        Sched.privatize ~accum_prec ~target:mc ~over:k_o;
         Sched.Unroll { axis = i_t; materialize = true };
         Sched.Unroll { axis = j_t; materialize = true };
       ]

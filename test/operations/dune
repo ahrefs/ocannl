@@ -3446,7 +3446,7 @@
   (env_var OCANNL_BF16_ARITHMETIC)
   (env_var OCANNL_BACKEND))
  (modules accum_width)
- (libraries base ocannl stdio arrayjit.verdict ll_test test_utils)
+ (libraries base ocannl stdio pprint arrayjit.verdict ll_test test_utils)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -3584,6 +3584,15 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ (name codegen_resolution_identity)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules codegen_resolution_identity)
+ (libraries base ocannl stdio arrayjit.verdict))
+
+(test
  (name schedule_cache_device)
  (package neural_nets_lib)
  (deps
@@ -3684,7 +3693,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules autotune_scope_menu)
- (libraries base ocannl stdio arrayjit.verdict)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -5170,7 +5179,7 @@
     %{dep:model_default_placements.exe}
     "--ocannl_backend=cc"
     "--ocannl_model_default_schedule=true"
-    "--ocannl_model_default_placements=4"
+    "--ocannl_model_default_placements=2"
     "--ocannl_model_peak_flops=1e9"
     "--ocannl_model_peak_memory_bandwidth=1e12"))))
 

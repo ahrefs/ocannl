@@ -58,6 +58,7 @@ let () =
   let ctx = Context.auto () in
   let backend = Context.backend_name ctx in
   let limits = Context.hardware_limits ctx in
+  let capabilities = Context.codegen_capabilities ctx in
   let construction = BI.sexp_of_hardware_limits limits in
   let identity = Context.timing_identity ctx in
   Stdio.eprintf "backend=%s; timing identity (not part of the golden): %s\n%!" backend
@@ -96,8 +97,10 @@ let () =
       { fixture with toolchain_signature = Some "driver-A:compiler-B" };
     ]
   in
-  let key timing_identity = SC.cache_key ~timing_identity ~limits canon ~backend in
-  let placement_key timing_identity = SC.placement_key ~timing_identity ~limits canon ~backend in
+  let key timing_identity = SC.cache_key ~timing_identity ~limits ~capabilities canon ~backend in
+  let placement_key timing_identity =
+    SC.placement_key ~timing_identity ~limits ~capabilities canon ~backend
+  in
   p_pairwise_distinct "device, driver and compiler changes independently separate schedule keys"
     (List.map identities ~f:(fun i -> Option.value_exn (key (Some i))))
     ~equal:String.equal ~to_string:Fn.id;
@@ -112,7 +115,7 @@ let () =
       SC.version = SC.placement_entry_version;
       backend;
       numerics = SC.numerics_tag ();
-      codegen = SC.codegen_tag ~limits ();
+      codegen = SC.codegen_tag ~limits ~capabilities ();
       objective = SC.objective_tag ();
       problem_digest = SC.digest canon;
       decision = SC.Materialize_all;

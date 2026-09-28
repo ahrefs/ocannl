@@ -46,7 +46,7 @@ type saved_optop =
               [swizzle]/[pad_stride] precedent). *)
       tile_prec : Ops.prec option; [@sexp.option]
     }
-  | Privatize of { target : int; over : sym_ref }
+  | Privatize of { target : int; over : sym_ref; acc_prec : Ops.prec }
   | Expand_zero of { tn : int }
   | Tensorize of {
       i : sym_ref;
@@ -348,8 +348,10 @@ let to_saved r (sched : Schedule.schedule) : saved_schedule * registry =
                     pipeline_depth = (if pipeline_depth = 1 then None else Some pipeline_depth);
                     tile_prec;
                   } )
-          | Schedule.Privatize { target; over } ->
-              (r, Privatize { target = resolve_tn_exn r target; over = resolve_exn r over })
+          | Schedule.Privatize { target; over; acc_prec } ->
+              ( r,
+                Privatize { target = resolve_tn_exn r target; over = resolve_exn r over; acc_prec }
+              )
           | Schedule.Expand_zero { tn; indices } ->
               let r =
                 List.foldi indices ~init:r ~f:(fun j r s ->
@@ -444,10 +446,10 @@ let of_saved canonical (saved : saved_schedule) : Schedule.schedule * registry =
                     pipeline_depth = Option.value pipeline_depth ~default:1;
                     tile_prec;
                   } )
-          | Privatize { target; over } ->
+          | Privatize { target; over; acc_prec } ->
               ( r,
                 Schedule.Privatize
-                  { target = tn_of_ref canonical target; over = unresolve_exn r over } )
+                  { target = tn_of_ref canonical target; over = unresolve_exn r over; acc_prec } )
           | Expand_zero { tn } ->
               let op, indices = Schedule.expand_zero ~tn:(tn_of_ref canonical tn) in
               let r =
@@ -502,8 +504,11 @@ let numerics_tag () =
    consults when it renders, compiles or dispatches a kernel. They come in two layers: the
    backend-independent ones handled here, and the backend's own, which it reports through
    [hardware_limits.codegen_tag] because only it knows which of its knobs reach its codegen. Neither
-   layer is a property of the lowered code, so neither can reach {!digest}. *)
-let codegen_tag ~(limits : Backend_intf.hardware_limits) () =
+   layer is a property of the lowered code, so neither can reach {!digest}. What the numerics policy
+   resolves to per backend is neither a knob nor the policy itself; it is derived from the backend's
+   [codegen_capabilities] below (gh-ocannl-1117). *)
+let codegen_tag ~(limits : Backend_intf.hardware_limits)
+    ~(capabilities : Backend_intf.codegen_capabilities) () =
   (* Every key is spelled out at its call site, as an explicit [arg_name] string literal, rather
      than passed through a helper: that literal IS how the consistency tests find a configuration
      read ([Test_utils.Config_key_scan]), so a wrapper taking the name as an argument would hide
@@ -521,6 +526,13 @@ let codegen_tag ~(limits : Backend_intf.hardware_limits) () =
          discriminating as the decisions it stands for, and a device's own [codegen_tag] rides along
          in it. *)
       Sexp.to_string (Backend_intf.sexp_of_hardware_limits limits);
+      (* What the numerics policy RESOLVES to on this backend (gh-ocannl-1117): the backend's own
+         compute and accumulator resolution functions, tabulated over every precision. The numerics
+         tag hashes the configured mode, which is not the same fact — HIP's [Bf16_auto] went wide in
+         gh-ocannl-1051 with the mode unchanged, and the component that kept its old winners from
+         replaying was added by hand. Derived from the function codegen calls, the identity now
+         moves exactly when some backend's resolution does. *)
+      Backend_intf.codegen_capabilities_fingerprint capabilities;
       (if Utils.settings.large_models then "wide-index" else "narrow-index");
       (* The EFFECTIVE predicate, not the raw flag (Codex P1 on PR #337): the gate additionally
          requires [log_level > 1], so hashing the flag alone would give the logged and the unlogged
@@ -644,8 +656,8 @@ let objective_tag () =
    thing the digest-completeness registry classifies config keys against (gh-ocannl-572). *)
 let key_components = [ "digest"; "backend"; "numerics"; "codegen"; "pool"; "device"; "timing" ]
 
-let cache_key ?objective ~timing_identity ~(limits : Backend_intf.hardware_limits) canonical
-    ~backend =
+let cache_key ?objective ~timing_identity ~(limits : Backend_intf.hardware_limits) ~capabilities
+    canonical ~backend =
   Option.map timing_identity ~f:(fun identity ->
       let objective = match objective with Some o -> sanitize o | None -> objective_tag () in
       (* gh-ocannl-892 changes what CUDA/HIP [queued] measures: the old depth-200 winner was ranked
@@ -662,7 +674,7 @@ let cache_key ?objective ~timing_identity ~(limits : Backend_intf.hardware_limit
         | "digest" -> canonical.digest
         | "backend" -> sanitize backend
         | "numerics" -> "n" ^ numerics_tag ()
-        | "codegen" -> "c" ^ codegen_tag ~limits ()
+        | "codegen" -> "c" ^ codegen_tag ~limits ~capabilities ()
         (* The worker-pool signature (gh-ocannl-530): CPU crowns do not transfer across pools, so a
            pool change re-tunes instead of replaying. [None] (GPU backends) contributes nothing. *)
         | "pool" -> (
@@ -845,9 +857,9 @@ type placement_entry = {
 
 let placement_entry_version = 1
 
-let placement_key ?objective ~timing_identity ~limits canonical ~backend =
-  Option.map (cache_key ?objective ~timing_identity ~limits canonical ~backend) ~f:(fun key ->
-      "placements-" ^ key)
+let placement_key ?objective ~timing_identity ~limits ~capabilities canonical ~backend =
+  Option.map (cache_key ?objective ~timing_identity ~limits ~capabilities canonical ~backend)
+    ~f:(fun key -> "placements-" ^ key)
 
 let store_placements ~dir ~key entry = store_sexp ~dir ~key (sexp_of_placement_entry entry)
 

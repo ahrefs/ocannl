@@ -353,6 +353,44 @@ files.
   `Embed_index (Iterator s)` is in scope, and a launch parameter is in scope only because the caller
   declared it (and its symbol needs `used_as_extent`, or bind-time validation rejects the extent
   covering the whole axis).
+- **A `Privatize` tile is an accumulator, so it resides at `accum_prec`** (gh-ocannl-1116). The op
+  moves a materialized reduction's accumulator into a routine-local tile, and where the tile's cell
+  varies with loops nested inside the reduction (the CPU packing sketch's `k_o k_i i_i j_i` order,
+  the GPU blocktiling's materialized-unrolled register tile) codegen cannot localize the tile's own
+  accumulation, so the tile's precision IS the reduction's width. It used to be minted at storage
+  precision, narrowing every step (cc under `narrow_compute_f32`, CUDA bf16, HIP and Metal under
+  the wide policies) while the serial rendering widened — and the autotuner seeds it, so a tuned
+  schedule silently changed numerics (gh-ocannl-1051's A/B replay: regtile's 2048³ checksum equalled
+  the NARROW serial legs'). `Privatize` now carries `acc_prec`, validated like `Stage.tile_prec`
+  through `Schedule.exact_widening`; build it with `Schedule.privatize ~accum_prec` fed from
+  `(Context.codegen_capabilities ctx).accum_prec`. `Autotune.sketch_schedule` and
+  `extend_with_privatize` take `~accum_prec` as a REQUIRED argument, so no seeding site can default
+  to storage. Like the backend's own residency, `acc_prec` applies only to what codegen widens,
+  and `apply_privatize` asks codegen's own question of the SOURCE-order nest: the privatized
+  loop's subtree minus schedule-provenance scratch (`Schedule.schedule_scratch`, identified
+  POSITIVELY: a `Stage` load, i.e. a plain copy into a `tile`-namespace node, and barriers) must be
+  ONE chain of loops and guards down to the single target update — any
+  other statement (another node's write, a `Declare_local`/`Set_local` computation, a second update)
+  breaks it exactly where the peel refuses siblings — and that chain minus the output loops (those
+  the cell mentions, which a schedule sinks inside) goes through `Low_level.peel_accum_nest`, whose
+  base `Low_level.accum_base_widens` judges (raw updates and scope-form bases alike; a widened
+  scope base, and only it, is re-keyed to the tile, since codegen types a scope local by its id's
+  node). A hardware-typed reduction level inside the privatized loop is refused outright, since
+  whether a backend serializes it is codegen's knowledge, not the transform's. Anything else
+  gets a storage tile, which codegen renders exactly as it would the target, so its narrowing
+  points do not move. Eight review rounds found the gate one member at a time (per-update declines,
+  sibling updates, non-target, scope-local, staged, prior-tile and partial-scatter siblings,
+  scope-form bases, hardware levels): re-deriving a subset of the peel, or classifying scratch by
+  exclusion, always leaves members out — so reconstruct the peel's input, identify schedule
+  scratch positively, and call the peel (Codex, rounds 1-8 of staging#880).
+  `Low_level.mentions_rng_conversion` moved there from `C_syntax` for that sharing. It escaped gh-664's sweep because `reduction_forms` filed
+  `Privatize` out of scope as "a parallelism decision about a different node": an out-of-scope
+  verdict is a claim too. Pinned by
+  `accum_width`'s Privatize legs (the first unfused scalar seed against the serial rendering, and a
+  storage-tile negative control that must diverge; the gate legs over a recurrence, a
+  mixed-operator update, sibling updates, non-target, scope-local and staged siblings, a
+  partials scatter, two accumulators privatized in turn, the hardware refusal; the two-axis leg
+  privatizing around a materialized scope) and `autotune_privatize`'s saved-form claims.
 - **What forces one of the two RMW forms**, i.e. the declines a property test must be able to
   provoke: `debug_log_from_routines` (a `Local_scope` body renders with `log_set_locals:false`, so
   localizing would silence the per-iteration trace — the SIMD and tensorized renderings bail under
@@ -670,16 +708,35 @@ files.
   on gfx1151 and ~6.6% on gfx1102, intrinsic to the f32 arm (a before/after split showed at most ~5
   points on one cell attributable to the gh-ocannl-1064 table boundary), while the serial legs run
   5-21% faster wide. The maintainer took the accuracy. HIP's resolution lives in
-  `Hip_backend.bf16_accum_wide`, the one predicate behind its `accum_prec`, `mma_combo` and
-  `codegen_tag`; `Numerics.bf16_accum_wide` still answers only "is the mode `Bf16_wide`", which
-  is all the seeding gate needs since HIP advertises both wide scopes. Cache identity: the numerics
-  fingerprint hashes the configured MODE, so a change to what a mode RESOLVES to on one backend
-  must name itself in that backend's `codegen_tag` (`/bf16-acc-wide`), or winners tuned under the
-  old resolution replay. Pinned by: `schedule_mma_matmul`'s `Bf16_wide` legs and their
+  `Hip_backend.bf16_accum_wide`, the one predicate behind its `accum_prec` and `mma_combo`;
+  `Numerics.bf16_accum_wide` still answers only "is the mode `Bf16_wide`", which
+  is all the seeding gate needs since HIP advertises both wide scopes. Cache identity follows the
+  resolution by derivation (the next bullet); the flip first shipped with a hand-added
+  `/bf16-acc-wide` component in HIP's `codegen_tag`, now gone. Pinned by: `schedule_mma_matmul`'s `Bf16_wide` legs and their
   `Bf16_narrow` twins (the only mode that still reaches HIP's narrow arm, so the negative controls
   moved there), `accum_width`'s universal bf16 legs (the default-policy leg pins auto's current
   resolution per backend), `reduction_forms`' independent policy table, `sketch_family_tree`'s
   wide-bf16 seeding claim.
+- **What a numerics mode RESOLVES to per backend is cache identity by derivation** (gh-ocannl-1117).
+  `Schedule_cache.numerics_tag` hashes the configured mode; what the mode means on a backend is a
+  second fact, and it moved once with the mode unchanged (HIP's `Bf16_auto`, gh-ocannl-1051).
+  `Schedule_cache.codegen_tag` (and so `cache_key`/`placement_key`) takes the compiling context's
+  `Context.codegen_capabilities` as a REQUIRED `~capabilities` and hashes
+  `Backend_intf.codegen_capabilities_fingerprint`: the record's flags plus its `compute_prec` and
+  `accum_prec` — the very functions codegen calls — tabulated over `Ops.all_precs` under the current
+  policy. So a resolution change moves the key on exactly the backends it changes, and a backend
+  author adds no component by hand; the record pattern names every field, so a new capability field
+  fails to compile (warning 9) until it is rendered. No per-backend (mode → resolution) golden:
+  every backend's capabilities come from its own `C_syntax_config` through `C_syntax.codegen_capabilities`,
+  so derivation reaches all five. What it does NOT reach is a numerics decision outside those two
+  functions: an mma arm chosen from the mode (CUDA's tf32 gate in its combo table) whose accumulator
+  `accum_prec` does not describe — the uniform 16-bit arms are tied to `accum_prec` by the
+  gh-ocannl-663 width-uniformity invariant `accum_width` pins, the tf32 arm is not. Such a change
+  still needs a component in that backend's `codegen_tag`. Pinned by
+  `codegen_resolution_identity`: synthetic records (a changed resolution moves the tag, an
+  extensionally equal closure does not) and the live backend over the fp16 × bf16 × narrow-compute
+  grid (tag equal iff resolution equal, both sides populated); neutralizing the component fails
+  three of its claims on cc.
 - **The `approximate` profile is the one word for the numerics-changing regime** (gh-ocannl-719):
   the `performance` payload plus `tf32_matmuls=true`, `cc_backend_fast_math=true`,
   `cc_backend_fp_contract=fast` and `tune_inline_flips=2`, contract "results differ from the exact
@@ -1119,6 +1176,34 @@ files.
   when it converts one lane, and from a register gcc isolates the lanes with packed shuffles, so
   `scalar_fp_ops` sees the per-lane form only when the lanes come from scalar loads. bf16 narrowing needed no twin: its integer arithmetic lowers
   whole-vector at each register width on both gccs.
+  The geometry rows were all f32 until gh-ocannl-1102 added bf16 and fp16 storage twins of the
+  `n = 99` rows (`rt/n99/bf16/...`, `rt/n99/f16w/...`, f32 compute; fp16 from the wide child). They
+  found the gh-1071 class again inside the narrow bridge MACROS: a zeroed temporary plus a
+  `LANES * 2`-byte `memcpy` built the tail's B vector in a stack slot every k step (`vmovdqa
+  %xmm7, 96(%rsp)`, `movl`/`movw` into it, `vpmovzxwd 96(%rsp)`) on every x86 FMA column and both
+  aarch64 targets, and the partial store round-tripped too (`vmovdqa %xmm5, (%rsp)`, `movzwl
+  4(%rsp)`). A macro cannot spell a lane initializer for a count it receives as an argument, so the
+  fix is in `vec_bridge`: the partial column's storage bits are staged in a whole `ocannl_vec<N>u16`
+  (lane initializer in, per-lane extracts out, each staging vector in its own block) and the
+  bridge converts that at the full lane count. The lanes are `unsigned short` read and written
+  through a `may_alias` pointer even for fp16: staged as `_Float16`, gcc at `sapphirerapids` moved
+  an extracted lane through a 2-byte stack slot (`vmovw %xmm1, -2(%rsp)`). The fp16 bridge is
+  then handed a `HALF_T` vector bit-cast from the staging one as a whole (a GNU C vector cast), not
+  a `HALF_T *` into the `unsigned short` vector: the macro's per-lane fallback arm would otherwise
+  access `_Float16`s through the wrong type. Those typedefs are declared in the tile's block ahead
+  of its operand pointers, so a node LABELED like one would be shadowed and the pointer's
+  initializer would not parse; `C_syntax.get_ident` therefore reserves the whole `ocannl_` prefix
+  (`Low_level.get_ident_within_code ~reserved_prefixes`), sending such a label to the `n<id>_`
+  form -- a per-lane-count family no exact-name blacklist can list. The store is outside
+  every loop, so `Asm_census.attributed_in` reads it by DWARF line attribution: the instructions
+  under every `.loc` line that moves the partial column -- its C-tile elements, and each line of
+  the staging blocks, found by the locals `C_syntax.partial_staging_idents` names -- which the
+  census holds to zero stack WRITES where the pass fits. Writes, not references: the bf16
+  narrowing's rounding constants are hoisted loop invariants that gcc reloads at the bridge call
+  when the enclosing pass runs out of registers (1 to 3 reads on the fixed rows), while every
+  round trip starts with a store (5 to 16 per row before the fix). The same PR made `is_stack_ref` ask for a MEMORY
+  operand on x86: gcc omits the frame pointer at `-O2` and allocates `%ebp` as a register, and
+  `movzwl (%r14), %ebp` in a bf16 k-loop had read as a 12-reference spill.
 - **aarch64 gcc spills the bf16 tile's A column at `-O3` only: the pre-RA scheduler, not the
   widening.** Neither CI nor rog has an aarch64 cross gcc, so the census's aarch64 columns went
   uncompiled until minix got one; the first run found the 4x6 bf16 tile at 16 bytes spilling two
@@ -1445,12 +1530,12 @@ files.
   passes, a column tail of whole vectors plus one PARTIAL vector, a row band of `m mod rm` rows —
   and the emitter renders each piece as the same C-tile pass at a smaller grid (four pass bodies at
   most). A partial vector is zeroed and crosses the memory boundary at exactly its width
-  (`vec_bridge ~width`: a lane initializer and per-lane stores, or the narrow bridge macros with
-  `LANES` = the valid lanes — they zero-init their temporary and copy `LANES * 2` bytes, which is what makes them
-  partial-safe), so nothing past the extent is read or written, and every element's k-chain is the
+  (`vec_bridge ~width`: a lane initializer and per-lane stores, and for bf16 and fp16 the same
+  around a whole vector of storage bits the narrow bridge macros convert at full width,
+  gh-ocannl-1102), so nothing past the extent is read or written, and every element's k-chain is the
   same fused serial chain: parity with the scalar fallback stays bitwise, narrow storage included
   (`tile_mma_geometry`'s 6x19 legs at f32, bf16 and half pin the header, the zeroed register, the
-  width-3 fill and the absence of `tmma_acc__`). Measured on the M4 Max GEBP at n = 512: pure-f16
+  width-3 fill and store and the absence of `tmma_acc__`). Measured on the M4 Max GEBP at n = 512: pure-f16
   121.5 -> 148.9 GFLOP/s (the model now takes rn = 6 with a four-vector tail over the peel-free
   rn = 4), f16 n = 1024 203 -> 235; f32 stayed within run-to-run noise, which spans 79..104 GFLOP/s
   across identical 10-repeat runs — never read one such number as a regression.

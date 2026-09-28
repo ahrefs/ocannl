@@ -466,24 +466,31 @@ val sketch_path_traffic_floor :
     subtrees. Detection runs once at partial application; the returned closure is cheap per path.
     Exposed for tests. *)
 
-val sketch_schedule : p:sketch_params -> Ir.Low_level.optimized -> Ir.Schedule.schedule
+val sketch_schedule :
+  accum_prec:(Ir.Ops.prec -> Ir.Ops.prec) ->
+  p:sketch_params ->
+  Ir.Low_level.optimized ->
+  Ir.Schedule.schedule
 (** The composed pipeline a seed parameterizes, built against the given lowering (the site is
     re-detected). Raises [Invalid_argument] when no site is detected or the parameters do not fit
-    the segment. Exposed for tests (the pad-composition seeding of gh-ocannl-485 is executed
-    directly). *)
+    the segment. [accum_prec] is the rendering backend's accumulator resolution
+    ([(Context.codegen_capabilities ctx).accum_prec]): the scalar pipelines' [Privatize] mints its
+    tile at it ({!Ir.Schedule.privatize}, gh-ocannl-1116). Exposed for tests (the pad-composition
+    seeding of gh-ocannl-485 is executed directly). *)
 
 val extend_with_privatize :
+  accum_prec:(Ir.Ops.prec -> Ir.Ops.prec) ->
   static_indices:Ir.Indexing.static_symbol list ->
   Ir.Schedule.schedule ->
   Ir.Low_level.optimized ->
   Ir.Schedule.schedule
 (** The privatized preset extension used by the fissioned candidates: appends a
-    [Schedule.Privatize { target; over }] for every materialized read-modify-write accumulator
-    detected in the schedule's application to the segment — [over] being the outermost enclosing
-    [Serial] loop whose symbol the access vector does not mention and whose subtree contains no
-    hardware-typed loop. Each proposal is validated by try-applying the grown schedule against a
-    hermetic copy of the segment (proposals violating the op's preconditions are dropped), so the
-    result always applies cleanly where the input schedule does. Exposed for tests. *)
+    [Schedule.privatize ~accum_prec ~target ~over] for every materialized read-modify-write
+    accumulator detected in the schedule's application to the segment — [over] being the outermost
+    enclosing [Serial] loop whose symbol the access vector does not mention and whose subtree
+    contains no hardware-typed loop. Each proposal is validated by try-applying the grown schedule
+    against a hermetic copy of the segment (proposals violating the op's preconditions are dropped),
+    so the result always applies cleanly where the input schedule does. Exposed for tests. *)
 
 type sr_site = {
   sr_axis : Ir.Indexing.symbol;  (** The reduction loop to split. *)
@@ -1249,7 +1256,9 @@ val rank_flip_candidates :
   disablement:Set.M(Ir.Tnode).t ->
   Ir.Low_level.flip_candidate list ->
   Ir.Low_level.flip_candidate list
-(** Deduplicate (by [Tn.uid], keep-first) and rank the decision surface. [`Cost] is the legacy
+(** Deduplicate (by [Tn.uid], keep-first), drop refused alternatives
+    ({!Ir.Low_level.field-fa_refused}, gh-ocannl-1093: each replays to the materialized placement)
+    and the nodes left with none, and rank the decision surface. [`Cost] is the legacy
     recompute-cost-descending order (the gh-555 chain's, kept as the evaluation baseline);
     [`Enablement] sorts family-unlocking [`Materialize] flips ([enablement] members) first and
     family-breaking [`Inline] flips (members of either set) last, cost-descending within each class.
@@ -1275,7 +1284,7 @@ val placement_floor_withheld : Ir.Low_level.flip_candidate list -> bool
 type placement_surface = {
   ps_candidates : Ir.Low_level.flip_candidate list;
       (** Deduplicated, ranked per {!rank_flip_candidates} under config [tune_flip_ordering]: one
-          candidate per node, its alternatives in rank order. *)
+          candidate per node, its alternatives in rank order, none of them refused. *)
   ps_ordering : [ `Cost | `Enablement ];
       (** The ordering [ps_candidates] actually came out in — with [tune_flip_ordering=profitable]
           (the default) this is where the measured evidence landed, so a log line or a test can say

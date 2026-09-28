@@ -21,6 +21,11 @@ module SC = Ir.Schedule_cache
 module Asgns = Ir.Assignments
 open Verdict.Claims
 
+(* The backend's accumulator residency, which a [Privatize] tile is minted at (gh-ocannl-1116). *)
+let accum_prec =
+  let caps = lazy (Context.codegen_capabilities (Context.auto ())) in
+  fun p -> (Lazy.force caps).Ir.Backend_intf.accum_prec p
+
 (* The report's outcome as the questions this test asks of it (gh-ocannl-677): the outcome is a
    variant naming one of five mutually exclusive states, so a claim names the state it means. In
    particular [not (replayed r)] is NOT "a search ran" — that mis-derivation is what the variant
@@ -112,7 +117,7 @@ let () =
   let _i, mm_b1 = first_loop_exn mm_opt.LL.llc in
   let _j, mm_b2 = first_loop_exn mm_b1 in
   let mm_k, _ = first_loop_exn mm_b2 in
-  let priv_sched = [ Sched.Privatize { target = mc.Tensor.value; over = mm_k } ] in
+  let priv_sched = [ Sched.privatize ~accum_prec ~target:mc.Tensor.value ~over:mm_k ] in
   let priv_saved, _reg = SC.to_saved (SC.base_registry mm_canon) priv_sched in
   let priv_direct = Sched.apply priv_sched mm_opt in
   let priv_direct_digest = SC.digest (SC.canonicalize priv_direct) in

@@ -89,19 +89,6 @@ let run ?ctx ~name ~transform comp =
   in
   Context.run ctx routine
 
-(* The maximal single-child chains of statement-level loops: one symbol list per top-level nest. *)
-let nest_paths (llc : LL.t) : Ir.Indexing.symbol list list =
-  let strip stmts = List.filter stmts ~f:(function LL.Noop | LL.Comment _ -> false | _ -> true) in
-  let rec path (llc : LL.t) : Ir.Indexing.symbol list =
-    match llc with
-    | LL.For_loop { index; body; _ } ->
-        index :: (match strip (LL.flat_lines [ body ]) with [ single ] -> path single | _ -> [])
-    | LL.If { body; _ } -> path body
-    | _ -> []
-  in
-  List.filter_map (LL.flat_lines [ llc ]) ~f:(fun stmt ->
-      match path stmt with [] -> None | p -> Some p)
-
 (* The innermost loop of the first top-level nest. *)
 let rec innermost_loop (llc : LL.t) : Ir.Indexing.symbol option =
   let strip stmts = List.filter stmts ~f:(function LL.Noop | LL.Comment _ -> false | _ -> true) in
@@ -175,7 +162,7 @@ let () =
     let d_mma = accumulator "nz_d_mma" in
     let transform (opt : LL.optimized) =
       let i, j, k =
-        match List.find_exn (nest_paths opt.LL.llc) ~f:(fun q -> List.length q = 3) with
+        match List.find_exn (Ll_test.nest_paths opt.LL.llc) ~f:(fun q -> List.length q = 3) with
         | [ i; j; k ] -> (i, j, k)
         | _ -> assert false
       in

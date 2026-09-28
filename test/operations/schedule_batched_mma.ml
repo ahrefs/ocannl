@@ -29,6 +29,11 @@ module LL = Ir.Low_level
 module Sched = Ir.Schedule
 module Asgns = Ir.Assignments
 
+(* The backend's accumulator residency, which a [Privatize] tile is minted at (gh-ocannl-1116). *)
+let accum_prec =
+  let caps = lazy (Context.codegen_capabilities (Context.auto ())) in
+  fun p -> (Lazy.force caps).Ir.Backend_intf.accum_prec p
+
 let () = Utils.settings.output_debug_files_in_build_directory <- true
 
 open Verdict.Claims
@@ -125,7 +130,7 @@ let check_leg ~tag ~serial ~tensorized =
         List.find_exn (cpu_mma_seeds opt) ~f:(fun q -> q.Autotune.sk_bm = 0 && q.Autotune.sk_bk = 0)
       in
       seed := Some q;
-      Sched.apply (Autotune.sketch_schedule ~p:q opt) opt
+      Sched.apply (Autotune.sketch_schedule ~accum_prec ~p:q opt) opt
     in
     let opt, ctx, routine = with_lowering ~name:(tag ^ "_mma") tensorized ~transform in
     p (tag ^ ": cpu mma seeds present") (Option.is_some !seed);
@@ -174,7 +179,7 @@ let () =
   p "interior-batch: gpu staged sketch builds"
     (match
        List.find gpu_seeds_ib ~f:(fun q -> q.Autotune.sk_bk > 0)
-       |> Option.map ~f:(fun q -> Autotune.sketch_schedule ~p:q opt_ib)
+       |> Option.map ~f:(fun q -> Autotune.sketch_schedule ~accum_prec ~p:q opt_ib)
      with
     | Some (_ :: _) -> true
     | Some [] | None -> false
@@ -294,7 +299,8 @@ let () =
         match
           let ctx, routine =
             Context.compile
-              ~lowered_transform:(fun o -> [ Sched.apply (Autotune.sketch_schedule ~p:q o) o ])
+              ~lowered_transform:(fun o ->
+                [ Sched.apply (Autotune.sketch_schedule ~accum_prec ~p:q o) o ])
               (Context.auto ()) fwd Ir.Indexing.Empty
           in
           (Context.get_values (Context.run ctx routine) cand.Tensor.value, routine.mma)

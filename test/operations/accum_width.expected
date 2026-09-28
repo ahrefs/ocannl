@@ -22,6 +22,7 @@ Unroll-annotated both reduction axes equals the serial result: true
 BOTH reduction axes materialized sequentially keep the whole-nest accumulator (equals the serial result): true
 Pad-guarded materialized unroll equals the serial result (the guard peels into the scope): true
 inner loops stay reachable after an outer materializing unroll (annotating them equals the serial result): true
+a Privatize over the outer reduction axis, around the inner axis's materialized scope, equals the serial result: true
 the nested vectorized reduction rendering fires: true
 a vectorized inner reduction axis folds into the whole-nest wide accumulator (equals the serial result): true
 a serialized nested Workgroup_reduce keeps the whole-nest accumulator (equals the serial result): true
@@ -41,3 +42,20 @@ narrow_compute_f32=false brings back the per-k-step narrowing in the k-loop: tru
 under Bf16_wide the bf16 naive matmul equals the once-narrowed wide-accumulation reference: true
 under Bf16_wide + narrow_compute_f32=false the bf16 naive matmul still equals the wide reference: true
 the default-policy bf16 matmul matches the wide reference exactly where the backend widens bf16 and diverges where it keeps storage residency: true
+the seeded scalar matmul sketch mints its Privatize tile at the backend's accumulator residency: true
+the seeded privatized bf16 sketch equals the serial rendering under Bf16_auto: true
+under Bf16_wide the seeded privatized bf16 sketch equals the once-narrowed wide-accumulation reference: true
+a storage-precision Privatize tile narrows per step: under Bf16_wide the same seed diverges from the wide reference: true
+under Fp16_wide the seeded privatized f16 sketch equals the once-narrowed wide-accumulation reference: true
+a storage-precision Privatize tile narrows per step: under Fp16_wide the same f16 seed diverges from the wide reference: true
+a Privatize whose loop encloses a hardware-typed reduction level is refused: true
+two accumulators privatized one after the other keep their per-step narrowing with the serial rendering (256 + 1 + 1 stays 256 for each): true
+a privatized reduction beside a scatter into a schedule-minted partials node keeps per-step narrowing with the serial rendering (256 + 1 + 1 stays 256): true
+the shared widening predicate accepts the reduction and declines the recurrence and the mixed-operator update: true
+privatized sibling accumulation statements keep their separate narrowings with the serial rendering (256 +1 +1, twice, stays 256): true
+a privatized reduction beside another node's statement keeps per-step narrowing with the serial rendering (256 + 1 + 1 stays 256): true
+a privatized reduction beside a scope-local computation keeps per-step narrowing with the serial rendering (256 + 1 + 1 stays 256): true
+a privatized reduction beside a staged-compilation statement keeps per-step narrowing with the serial rendering (256 + 1 + 1 stays 256): true
+a privatized bf16 reduction widens with the serial rendering (256 + 1 + 1 reaches 258): true
+a privatized non-reduction recurrence keeps per-step narrowing with the serial rendering (256 - 0.5 - 0.5 stays 256): true
+a privatized mixed-operator update keeps per-step narrowing with the serial rendering (max(256 + 1, 0) twice stays 256): true

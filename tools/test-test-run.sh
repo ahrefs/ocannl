@@ -168,6 +168,11 @@
 #      and a repeat set red on drift alone is not called a failed action.
 #  66 sits after leg 63: the digest's `source:` line reads the record -- the
 #      commit and `(clean)`, or `+ N uncommitted paths`; nothing unrecorded.
+#  67 sits after leg 8 (Linux only): a lock whose acquirer exited, held
+#      through the description it shared, is found by `stop`'s census and
+#      reaped, though /proc/locks names only the dead acquirer, or nobody
+#      (gh-ocannl-1107); the negative control, the census trusting that
+#      name, leaves the holder running (skipped where nothing is named).
 
 set -u
 
@@ -254,6 +259,7 @@ member=""    # and the second process it put in that group
 member_token=""  # ... and its start token, since it is not this shell's child
 repeat_pid="" # leg 14's active repeat coordinator
 legacy_holder="" # leg 8's holder of the in-tree lock
+inherit_holder="" # leg 67's holder of the inherited lock
 escape_pid="" # leg 24's session-escaped descendant
 escape_release=""
 harness_scratch "test-test-run"
@@ -300,6 +306,7 @@ cleanup_fixture() {
     kill -KILL "$legacy_holder" 2>/dev/null
     wait "$legacy_holder" 2>/dev/null
   fi
+  if declare -F inherit_kill >/dev/null; then inherit_kill; fi
   [ -z "${escape_release:-}" ] || touch "$escape_release"
   if [ -n "${escape_pid:-}" ] && kill -0 "$escape_pid" 2>/dev/null; then
     kill -KILL "$escape_pid" 2>/dev/null
@@ -862,8 +869,6 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Legs 9-17: repeat mode's output, lifecycle and exit-code contract
-# ---------------------------------------------------------------------------
 # Everything the shipping script SOURCES has to exist in a fixture root, and the
 # list is derived from the script rather than kept here: a `. tools/<new>.sh`
 # added to test-run.sh otherwise makes every leg below die at startup, with the
@@ -881,6 +886,180 @@ stage_sourced() { # <fixture root>
     { echo "only $staged sourced file(s) found in $SRC; the scan is broken" >&2; exit 2; }
 }
 
+# ---------------------------------------------------------------------------
+# Leg 67: a lock its acquirer left behind, held through an inherited descriptor
+# ---------------------------------------------------------------------------
+# The shape every run's lock has (gh-ocannl-1107): the launcher opens fd 9,
+# take_lock's perl -- a child sharing that description -- takes the flock and
+# exits, and the lock lives on in the description the supervisor, dune and
+# dune's leftovers hold. On Linux /proc/locks may keep naming the ACQUIRER --
+# dead, or 0 from inside a pid namespace -- and a census that trusted any name
+# it gave returned that pid, never swept fdinfo, and `stop` reaped none of the
+# live holders. Other kernels drop the row once the acquirer exits; the census
+# then sweeps anyway, so the reap is asserted everywhere and only the negative
+# control needs a named acquirer. The fixture is that shape: a run directory
+# with no pid, no pgid and no verdict (only the lock can attribute anything),
+# the owner pointer naming it, and a perl HOLDER -- this shell's own child, so
+# it stays reapable under a PID 1 that reaps nothing -- that opens the lock
+# file, forks the ACQUIRER to flock the shared description, and reaps it. The
+# negative control runs the census that trusted the name -- the shipping
+# script with the liveness filter taken out -- and must leave the holder
+# running.
+l_inherit="stop: a leftover holding the lock through an inherited descriptor, its acquirer gone, is reaped"
+l_inherit_nc="negative control: a census that trusts /proc/locks' named acquirer misses that holder"
+inherit_skip=
+if [ ! -r /proc/locks ] || [ ! -d /proc/self/fdinfo ]; then
+  inherit_skip="no /proc/locks and fdinfo here (Linux only): the census reads lsof, which lists openers"
+elif [ "$have_state" = 0 ]; then
+  inherit_skip="no way to read a process's state, so a reaped holder cannot be told from a zombie"
+fi
+inherit_dir=$STOP_RUNS/19700101-000000-inherited
+mkdir -p "$inherit_dir" "$STOP_WT"
+printf 'runtest (test-test-run.sh fixture inherited)\n' >"$inherit_dir/cmd"
+printf '0\n' >"$inherit_dir/cap"
+printf '%s\n' "$STOP_WT" >"$inherit_dir/wt"
+printf '%s\n' "$STOP_RUNS" >"$inherit_dir/runs"
+: >"$inherit_dir/log"
+inherit_lock=$(OCANNL_TOOL_TEST_RUNS="$STOP_RUNS" "$SRC" paths lock "$inherit_dir") || inherit_lock=
+inherit_owner=$(OCANNL_TOOL_TEST_RUNS="$STOP_RUNS" "$SRC" paths owner "$inherit_dir") || inherit_owner=
+
+# The pids /proc/locks names for the fixture lock, matched by device AND inode
+# as the shipping census matches them: inode numbers repeat across
+# filesystems, and another mount's flock must not pass for the acquirer.
+inherit_named() {
+  perl -e '
+    my @st = stat($ARGV[0]) or exit 1;
+    my $dev = $st[0];
+    my ($maj, $min) = (($dev >> 8) & 0xfff, ($dev & 0xff) | (($dev >> 12) & ~0xff));
+    open my $fh, "<", "/proc/locks" or exit 1;
+    while (<$fh>) {
+      my @f = split;
+      next unless defined $f[1] && $f[1] eq "FLOCK";
+      my ($lmaj, $lmin, $ino) = split /:/, $f[5];
+      print "$f[4]\n"
+        if defined $ino && $ino == $st[1] &&
+           hex($lmaj) == $maj && hex($lmin) == $min;
+    }
+  ' "$inherit_lock" 2>/dev/null
+}
+inherit_kill() { # the holder is this shell's child: unreaped, its pid cannot be recycled
+  [ -n "${inherit_holder:-}" ] || return 0
+  kill -KILL "$inherit_holder" 2>/dev/null
+  wait "$inherit_holder" 2>/dev/null
+  inherit_holder=
+  return 0
+}
+inherit_err= inherit_acquirer= inherit_named_pids=
+inherit_start() { # sets inherit_holder, inherit_acquirer, inherit_named_pids, or inherit_err
+  local line
+  inherit_holder= inherit_acquirer= inherit_named_pids= inherit_err=
+  printf '%s\n' "$inherit_dir" >"$inherit_owner" || { inherit_err="cannot write $inherit_owner"; return 1; }
+  rm -f "$TMP/inherited.pids"
+  perl -e 'use Fcntl ":flock"; use POSIX ();
+           open(my $fh, ">>", $ARGV[0]) or exit 1;
+           defined(my $kid = fork) or exit 1;
+           POSIX::_exit(flock($fh, LOCK_EX | LOCK_NB) ? 0 : 1) if !$kid;
+           waitpid($kid, 0) == $kid && $? == 0 or exit 1;
+           $| = 1; print "$$ $kid\n"; sleep 600' \
+    "$inherit_lock" >"$TMP/inherited.pids" 2>/dev/null </dev/null &
+  inherit_holder=$!
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    [ -s "$TMP/inherited.pids" ] && break
+    sleep 0.1
+  done
+  read -r line inherit_acquirer <"$TMP/inherited.pids" 2>/dev/null
+  if [ "${line:-}" != "$inherit_holder" ] || [ -z "${inherit_acquirer:-}" ]; then
+    inherit_err="the holder did not report taking the lock through a reaped acquirer"; return 1
+  fi
+  # The premise, checked: the lock is held, its acquirer is gone, and
+  # /proc/locks does not name the live holder -- whatever else it names.
+  if [ "$(OCANNL_TOOL_TEST_RUNS="$STOP_RUNS" "$SRC" lock-status "$inherit_dir")" != held ]; then
+    inherit_err="the fixture lock is not held"; return 1
+  fi
+  kill -0 "$inherit_acquirer" 2>/dev/null && { inherit_err="the acquirer $inherit_acquirer is still alive"; return 1; }
+  inherit_named_pids=$(inherit_named)
+  if printf '%s\n' "$inherit_named_pids" | grep -qx "$inherit_holder"; then
+    inherit_err="/proc/locks names the live holder $inherit_holder, not its acquirer"; return 1
+  fi
+  return 0
+}
+inherit_stop() { # <script>
+  stop_out="$(OCANNL_TOOL_TEST_RUNS="$STOP_RUNS" "$1" stop "$inherit_dir" 2>"$TMP/inherited.stderr")"
+  stop_rc=$?
+  stop_diag="$(cat "$TMP/inherited.stderr" 2>/dev/null)"
+}
+inherit_gone() { # 0 iff the holder is dead (a zombie: it is ours to reap) within two seconds
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    case "$(pstate "$inherit_holder")" in '' | Z*) return 0 ;; esac
+    sleep 0.1
+  done
+  return 1
+}
+
+if [ -n "$inherit_skip" ]; then
+  skip "$l_inherit" "$inherit_skip"
+  skip "$l_inherit_nc" "$inherit_skip"
+elif [ -z "$inherit_lock" ] || [ -z "$inherit_owner" ]; then
+  report 1 "$l_inherit" "\`paths lock\`/\`paths owner\` did not name the fixture run's lock"
+  report 1 "$l_inherit_nc" "\`paths lock\`/\`paths owner\` did not name the fixture run's lock"
+else
+  if ! inherit_start; then
+    report 1 "$l_inherit" "$inherit_err"
+  else
+    inherit_stop "$SRC"
+    said "$l_inherit" \
+      "run is dead without a verdict, but its leftover processes held the worktree lock; reaped them"
+    if ! inherit_gone; then
+      report 1 "$l_inherit (the holder is gone and the lock is free)" \
+        "pid $inherit_holder still holds $inherit_lock after stop"
+    elif [ "$(OCANNL_TOOL_TEST_RUNS="$STOP_RUNS" "$SRC" lock-status "$inherit_dir")" = idle ]; then
+      report 0 "$l_inherit (the holder is gone and the lock is free)"
+    else
+      report 1 "$l_inherit (the holder is gone and the lock is free)" \
+        "$inherit_lock is still locked after stop"
+    fi
+  fi
+  inherit_kill
+
+  # The census before gh-ocannl-1107: every named pid, live or not. The line
+  # is replaced whole, and checked to be the only change, so a filter that
+  # moved leaves this control failing rather than testing the shipping code.
+  inherit_root=$TMP/inherit-repo
+  mkdir -p "$inherit_root/tools"
+  stage_sourced "$inherit_root"
+  awk '
+    $0 == "        fd_holds_lock \"$p\" && live=\"$live$p" { print "        live=\"$live$p"; n++; next }
+    { print }
+    END { exit n == 1 ? 0 : 1 }
+  ' "$SRC" >"$inherit_root/tools/test-run.sh" && chmod +x "$inherit_root/tools/test-run.sh"
+  inherit_mut_rc=$?
+  inherit_changed=$(diff "$SRC" "$inherit_root/tools/test-run.sh" | grep -c '^[<>]')
+  if [ "$inherit_mut_rc" != 0 ] || [ "$inherit_changed" != 2 ]; then
+    report 1 "$l_inherit_nc" "the liveness filter's line was not found once in $SRC"
+  elif ! inherit_start; then
+    report 1 "$l_inherit_nc" "$inherit_err"
+  elif [ -z "$inherit_named_pids" ]; then
+    # Nothing named, so the unfiltered census sweeps fdinfo too, and the
+    # control could not tell it from the fix.
+    skip "$l_inherit_nc" "this kernel's /proc/locks drops the row once its acquirer exits, so no census trusts a name here"
+  else
+    inherit_stop "$inherit_root/tools/test-run.sh"
+    if inherit_gone; then
+      report 1 "$l_inherit_nc" \
+        "the unfiltered census reaped the holder too (stop printed: ${stop_out:-<nothing>}), so the leg cannot tell the fix"
+    else
+      report 0 "$l_inherit_nc"
+    fi
+  fi
+  inherit_kill
+fi
+[ -z "$inherit_lock" ] || rm -f "$inherit_lock" "$inherit_owner"
+
+# ---------------------------------------------------------------------------
+# Legs 9-17: repeat mode's output, lifecycle and exit-code contract
+# ---------------------------------------------------------------------------
+# The fixture root is the shipping script plus what it sources (stage_sourced,
+# defined before leg 67).
 repeat_root=$TMP/repeat-repo
 repeat_bin=$TMP/repeat-bin
 mkdir -p "$repeat_root/tools" "$repeat_root/scripts" "$repeat_bin"

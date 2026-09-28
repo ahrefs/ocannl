@@ -1388,7 +1388,7 @@ let privatize_proposals (post : LL.optimized) : (Ir.Tnode.t * Idx.symbol) list =
     hermetic copy of the segment: [Privatize] registers its (fresh) tile in the traced store and
     placements, and abandoned tiles would otherwise be emitted as dead local declarations when the
     caller applies the returned schedule to the real segment. *)
-let extend_with_privatize ~static_indices sched (seg : LL.optimized) : Sched.schedule =
+let extend_with_privatize ~accum_prec ~static_indices sched (seg : LL.optimized) : Sched.schedule =
   let scratch () =
     {
       seg with
@@ -1400,7 +1400,7 @@ let extend_with_privatize ~static_indices sched (seg : LL.optimized) : Sched.sch
   | exception Outcome.Cause_at _ -> sched
   | post ->
       List.fold (privatize_proposals post) ~init:sched ~f:(fun acc (target, over) ->
-          let acc' = acc @ [ Sched.Privatize { target; over } ] in
+          let acc' = acc @ [ Sched.privatize ~accum_prec ~target ~over ] in
           match Sched.apply_classified ~static_indices acc' (scratch ()) with
           | (_ : LL.optimized) -> acc'
           | exception Outcome.Cause_at _ -> acc)
@@ -2075,6 +2075,7 @@ let default_seed_label ~backend_name =
 let compile_candidate ?name ~static_indices ~base_opt ~canon ~limits ~is_gpu ~is_cpu ~provenance ctx
     comp bindings spec : compiled Outcome.outcome =
   let candidate = spec_label spec in
+  let accum_prec = (Context.codegen_capabilities ctx).Ir.Backend_intf.accum_prec in
   let rebase (fresh : LL.optimized) =
     {
       base_opt with
@@ -2104,7 +2105,7 @@ let compile_candidate ?name ~static_indices ~base_opt ~canon ~limits ~is_gpu ~is
                 let saved, registry = SC.to_saved (SC.base_registry canon) sched in
                 (sched, saved, registry)
             | W_sketch p ->
-                let sched = sketch_schedule ~p opt in
+                let sched = sketch_schedule ~accum_prec ~p opt in
                 let saved, registry = SC.to_saved (SC.base_registry canon) sched in
                 (sched, saved, registry)
           in
@@ -2167,7 +2168,8 @@ let compile_candidate ?name ~static_indices ~base_opt ~canon ~limits ~is_gpu ~is
             match flavor with
             | F_preset { block_size; privatize; config_thresholds } ->
                 let sched = preset_sched ?block_size ~config_thresholds seg in
-                if privatize then extend_with_privatize ~static_indices sched seg else sched
+                if privatize then extend_with_privatize ~accum_prec ~static_indices sched seg
+                else sched
             | F_saved { entries; _ } | F_split_saved (_, entries) -> (
                 let seg_canon = SC.canonicalize ~static_indices ~with_placements:false seg in
                 match List.Assoc.find entries ~equal:String.equal (SC.digest seg_canon) with
@@ -2175,7 +2177,7 @@ let compile_candidate ?name ~static_indices ~base_opt ~canon ~limits ~is_gpu ~is
                 | None -> [])
             | F_sketch { entries; _ } -> (
                 match List.Assoc.find entries ~equal:String.equal (seg_key seg) with
-                | Some p -> sketch_schedule ~p seg
+                | Some p -> sketch_schedule ~accum_prec ~p seg
                 | None -> preset_sched seg)
             | F_split _ -> preset_sched seg
           in
@@ -2800,6 +2802,14 @@ let rank_flip_candidates ~ordering ?(profit = Unmeasured) ~enablement ~disableme
         if List.exists acc ~f:(fun c -> Ir.Tnode.equal c.LL.fc_tn fc.LL.fc_tn) then acc
         else fc :: acc)
     |> List.rev
+    (* gh-ocannl-1093: a flip the pricer's world shows refused replays to the materialized
+       placement, so it is no decision to rank; a node left with no other alternative is no
+       candidate. The dedup runs first, so a refused repeat cannot resurrect a node's first
+       record. *)
+    |> List.filter_map ~f:(fun (fc : LL.flip_candidate) ->
+        match List.filter fc.LL.fc_alternatives ~f:(fun fa -> Option.is_none fa.LL.fa_refused) with
+        | [] -> None
+        | fc_alternatives -> Some { fc with LL.fc_alternatives })
   in
   let effective = effective_flip_ordering ~ordering ~profit in
   (* An alternative's class: [`Cost] has one; [`Enablement] has three — family-unlocking
@@ -2981,6 +2991,7 @@ let model_default ?name ?report ctx comp bindings =
   let backend = Context.backend_name ctx in
   let is_gpu = Sched.backend_is_gpu backend and is_cpu = Sched.backend_is_cpu backend in
   let limits = Context.hardware_limits ctx in
+  let accum_prec = (Context.codegen_capabilities ctx).Ir.Backend_intf.accum_prec in
   let static_indices = Idx.bound_symbols bindings in
   let peak_flops, peak_memory_bandwidth = envelope ~limits in
   let emit r = Option.iter report ~f:(fun f -> f r) in
@@ -3027,7 +3038,9 @@ let model_default ?name ?report ctx comp bindings =
     in
     let score_sketch base_opt p =
       match
-        Sched.apply_classified ~static_indices (sketch_schedule ~p base_opt) (scratch_of base_opt)
+        Sched.apply_classified ~static_indices
+          (sketch_schedule ~accum_prec ~p base_opt)
+          (scratch_of base_opt)
       with
       | exception Outcome.Cause_at _ ->
           Int.incr n_rejected;
@@ -3169,7 +3182,7 @@ let model_default ?name ?report ctx comp bindings =
                     else
                       let subst_preset seg =
                         match List.Assoc.find entries ~equal:String.equal (seg_key seg) with
-                        | Some p -> sketch_schedule ~p seg
+                        | Some p -> sketch_schedule ~accum_prec ~p seg
                         | None -> preset seg
                       in
                       (* Score the substituted pipeline whole, so it competes on the same footing as
@@ -3226,11 +3239,11 @@ let model_default ?name ?report ctx comp bindings =
         | `Default -> default_segs ()
         | `Whole p ->
             validate_segments_for_model
-              [ Sched.apply_classified ~static_indices (sketch_schedule ~p opt) opt ]
+              [ Sched.apply_classified ~static_indices (sketch_schedule ~accum_prec ~p opt) opt ]
         | `Fiss entries ->
             let subst_preset seg =
               match List.Assoc.find entries ~equal:String.equal (seg_key seg) with
-              | Some p -> sketch_schedule ~p seg
+              | Some p -> sketch_schedule ~accum_prec ~p seg
               | None -> preset seg
             in
             validate_segments_for_model
@@ -3694,6 +3707,10 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
             ~detail:(Exn.to_string exn) ();
           Stdlib.Printexc.raise_with_backtrace exn backtrace
     in
+    (* The accumulator residency the seeded [Privatize] tiles are minted at: the same resolution the
+       backend's code generation widens the serial rendering by (gh-ocannl-1116). *)
+    let capabilities = Context.codegen_capabilities ctx in
+    let accum_prec = capabilities.Ir.Backend_intf.accum_prec in
     let search_ctx = Option.value timing_ctx ~default:ctx in
     (* The base compile: identity transform (= the serial baseline candidate), capturing the
        optimized code every candidate derives from (see [compile_candidate]) and its canonical form.
@@ -3769,12 +3786,12 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
           release_quietly ~what:"the baseline compile" bctx)
     in
     release_baseline_hook := release_baseline;
-    let codegen_tag = SC.codegen_tag ~limits () in
+    let codegen_tag = SC.codegen_tag ~limits ~capabilities () in
     let objective = timing_string timing in
     let key =
       SC.cache_key
         ~timing_identity:(Context.timing_identity search_ctx)
-        ~objective ~limits canon ~backend
+        ~objective ~limits ~capabilities canon ~backend
     in
     let use_cache = (not (String.is_empty cache_dir)) && SC.complete canon && Option.is_some key in
     if Option.is_none key then
@@ -4788,7 +4805,8 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
               let scored =
                 List.map params ~f:(fun p ->
                     let score =
-                      model_score ~static_indices ~limits seg_opt (sketch_schedule ~p seg_opt)
+                      model_score ~static_indices ~limits seg_opt
+                        (sketch_schedule ~accum_prec ~p seg_opt)
                     in
                     (p, score))
               in

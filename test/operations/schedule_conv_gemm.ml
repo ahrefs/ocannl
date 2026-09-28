@@ -38,6 +38,11 @@ module LL = Ir.Low_level
 module Sched = Ir.Schedule
 module Asgns = Ir.Assignments
 
+(* The backend's accumulator residency, which a [Privatize] tile is minted at (gh-ocannl-1116). *)
+let accum_prec =
+  let caps = lazy (Context.codegen_capabilities (Context.auto ())) in
+  fun p -> (Lazy.force caps).Ir.Backend_intf.accum_prec p
+
 let () = Utils.settings.output_debug_files_in_build_directory <- true
 
 open Verdict.Claims
@@ -73,18 +78,6 @@ let has_f32_input_mma = has_uniform_f32_mma || has_tf32_mma
 module Generated = Test_utils.Generated
 
 let () = Generated.init ~backend_name
-
-let nest_paths (llc : LL.t) : Ir.Indexing.symbol list list =
-  let strip stmts = List.filter stmts ~f:(function LL.Noop | LL.Comment _ -> false | _ -> true) in
-  let rec path (llc : LL.t) : Ir.Indexing.symbol list =
-    match llc with
-    | LL.For_loop { index; body; _ } ->
-        index :: (match strip (LL.flat_lines [ body ]) with [ single ] -> path single | _ -> [])
-    | LL.If { body; _ } -> path body
-    | _ -> []
-  in
-  List.filter_map (LL.flat_lines [ llc ]) ~f:(fun stmt ->
-      match path stmt with [] -> None | p -> Some p)
 
 (* Deterministic operands so sibling graphs compute identical values (forward code is consumed by
    compilation, so each leg builds its own graph). *)
@@ -239,7 +232,7 @@ let () =
   in
   let run_sched name (x, kern, y) ~tensorized =
     let transform (opt : LL.optimized) =
-      let paths = nest_paths opt.LL.llc in
+      let paths = Ll_test.nest_paths opt.LL.llc in
       let _b, _oh, ow, oc, ic, kh, kw =
         match List.find_exn paths ~f:(fun q -> List.length q = 7) with
         | [ b; oh; ow; oc; ic; kh; kw ] -> (b, oh, ow, oc, ic, kh, kw)
@@ -334,7 +327,7 @@ let () =
      rather than silently packing a dilated tile. *)
   (let x, _kern, y = make_conv_s2v "cvg2_h" in
    let transform (opt : LL.optimized) =
-     let paths = nest_paths opt.LL.llc in
+     let paths = Ll_test.nest_paths opt.LL.llc in
      let ow, ic =
        match List.find_exn paths ~f:(fun q -> List.length q = 7) with
        | [ _b; _oh; ow; _oc; ic; _kh; _kw ] -> (ow, ic)
@@ -397,7 +390,9 @@ let () =
     let run_seed i p_ =
       let tag = Printf.sprintf "cvs2_%d" i in
       let _, _, y = make_conv_s2v tag in
-      let transform (opt : LL.optimized) = Sched.apply (Autotune.sketch_schedule ~p:p_ opt) opt in
+      let transform (opt : LL.optimized) =
+        Sched.apply (Autotune.sketch_schedule ~accum_prec ~p:p_ opt) opt
+      in
       let ctx = Context.auto () in
       let ctx, routine =
         Context.compile
@@ -485,7 +480,7 @@ let () =
     let run_tail_sched name (x, kern, pr, y) ~fused =
       let n_real = ref (-1) in
       let transform (opt : LL.optimized) =
-        let paths = nest_paths opt.LL.llc in
+        let paths = Ll_test.nest_paths opt.LL.llc in
         let _b, _oh, ow, oc, ic, kh, kw =
           match List.find_exn paths ~f:(fun q -> List.length q = 7) with
           | [ b; oh; ow; oc; ic; kh; kw ] -> (b, oh, ow, oc, ic, kh, kw)
@@ -835,7 +830,7 @@ let () =
       let _, _, y = make_conv_s2_r12 tag in
       let got =
         run_fiss_sched tag y ~conv_sched:(fun site seg ->
-            if site.Autotune.c_zeroed then [] else Autotune.sketch_schedule ~p:p_ seg)
+            if site.Autotune.c_zeroed then [] else Autotune.sketch_schedule ~accum_prec ~p:p_ seg)
       in
       (not (Array.is_empty got))
       && Array.for_all2_exn got want12 ~f:(fun a b -> Float.(abs (a - b) < 1e-3))

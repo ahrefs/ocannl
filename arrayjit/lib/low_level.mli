@@ -426,6 +426,28 @@ val accum_local_update_op : id:scope_id -> scalar_t -> Ops.binop option
     deliberately not part of {!accum_local_update_parts} or of {!scope_updates_reduce_op}'s hoist
     license. *)
 
+val mentions_rng_conversion : scalar_t -> bool
+(** Whether an RNG lane conversion occurs anywhere in the expression (not inside a [Local_scope]).
+    Such a conversion picks its result type and the random bits it consumes from the precision it
+    renders at, so the expression renders at its target's storage precision and an accumulation
+    carrying it keeps a storage-width accumulator. *)
+
+val accum_update_widens : tn:Tnode.t -> idcs:Indexing.axis_index array -> scalar_t -> bool
+(** Whether code generation holds this update's accumulator at the backend's accumulator residency:
+    an {!accum_update_parts} accumulation, free of RNG conversions ({!mentions_rng_conversion}),
+    with routine logging off. Any other update — a non-reduction recurrence, a mixed-operator
+    update, an RNG-bearing one — narrows to storage at every step in the serial rendering, and a
+    [Schedule.Privatize] tile taking it over stays at storage precision too (gh-ocannl-1116). *)
+
+val accum_base_widens :
+  tn:Tnode.t ->
+  idcs:Indexing.axis_index array ->
+  [ `Update of scalar_t | `Scope of scope_id * t list ] ->
+  bool
+(** For a base {!peel_accum_nest} reached: whether code generation holds it at the accumulator
+    residency — {!accum_update_widens} for a raw update; for a scope-form base, routine logging off
+    and no RNG conversion in its scope local's assignments. *)
+
 val accum_local_update_parts : id:scope_id -> scalar_t -> (Ops.binop * scalar_t) option
 (** The reduce-shaped update of a scope LOCAL, [local = op(local, contrib)] (or its FMA form) with
     [contrib] free of the local — [subst_accum_read]'s output shape; returns [(op, contrib)]. The
@@ -928,6 +950,17 @@ type flip_alternative = {
           that reading performs — the per-cell read multiplicity for an inlined reading, the scratch
           cell count for a footprint-scoped one (gh-ocannl-616). *)
   fa_modeled : bool;
+  fa_refused : string option;
+      (** gh-ocannl-1093: the virtualizer's rejection code where the world {!recompute_pricer} is
+          handed already shows the flip refused — the virtualizer's own walk refusing to store the
+          node's computation (e.g. [9:sibling-escaping-read-index], a scalar reduction captured at
+          its setter), which refuses an [`Inline] and a [`Footprint] flip alike, or a read site the
+          inliner cannot serve (e.g. [13:call-site-index-mismatch]), which refuses the [`Inline]
+          flip only. A refused flip replays to the materialized placement, so it stays on the
+          surface to be inspected but is not a decision: [Autotune.rank_flip_candidates] and the
+          memory-budget planner exclude it, and its [fa_recompute_cost] is the traced proxy of a
+          reading that cannot happen. [None] is not a legality verdict — a flip's legality is
+          settled only when the virtualizer replays — and a [`Materialize] flip is never refused. *)
 }
 [@@deriving sexp_of]
 (** One reading a search can flip a {!flip_candidate}'s node to. *)
@@ -983,7 +1016,8 @@ val recompute_pricer :
     [hoist_cross_statement_cse] merges) only lowers what executes, so the product with the per-cell
     read multiplicity is a bound in the same sense the traced proxy's is. [Cost_model] registers it
     at module initialization; the default prices nothing, so every candidate carries the traced
-    proxy. A pricer must be pure: [specialize_proc] consults it once per alternative of a compile.
+    proxy. A pricer must be pure: [specialize_proc] consults it once per candidate node of a
+    compile, and resolves each node's world once, which also decides the alternatives' [fa_refused].
 *)
 
 val post_virtualization_pipeline :
@@ -1282,7 +1316,19 @@ val code_hum_margin : int ref
 val function_header_doc :
   ?name:string -> ?static_indices:Indexing.static_symbol list -> unit -> PPrint.document
 
-val get_ident_within_code : ?no_dots:bool -> ?blacklist:string list -> t array -> Tnode.t -> string
+val get_ident_within_code :
+  ?no_dots:bool ->
+  ?blacklist:string list ->
+  ?reserved_prefixes:string list ->
+  t array ->
+  Tnode.t ->
+  string
+(** The code-name minter for the nodes [llcs] mention. A node whose label ident is in [blacklist],
+    or starts with one of [reserved_prefixes], is treated as a repeating ident: it takes the
+    disambiguated [n<id>_<label>] form rather than the bare label, so it cannot equal a name the
+    emitter declares. A prefix reserves a namespace whose members are minted on the fly -- the
+    C-family emitters' [ocannl_vec<lanes><suffix>] typedefs, one per lane count (gh-ocannl-1102) --
+    which no finite blacklist can list. *)
 
 val to_doc_cstyle :
   ?name:string -> ?static_indices:Indexing.static_symbol list -> unit -> t -> PPrint.document
