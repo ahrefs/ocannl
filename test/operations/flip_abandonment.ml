@@ -277,6 +277,19 @@ let executed_chain ?fail_arm_a_at comp t2 expected ~flip_script =
   in
   (List.rev !arm_reports, List.rev !flip_reports, !shipped, events)
 
+(* The failed-arm-A claim (gh-ocannl-1127). The abandonment verdict is taken as an attempt STARTS
+   with [k] timings admitted, so a flip that was not abandoned and timed at most [k] candidates may
+   never have been judged — on a loaded box every window of it can be refused as contended. That
+   case is skipped, not decided; outside it the claim is the count-bearing one. An abandonment
+   always leaves the claim decidable, so a flip wrongly abandoned against a failed arm A stays red
+   however contended its search was. *)
+let searched_in_full (r : Autotune.report) =
+  Poly.equal r.Autotune.outcome Autotune.Searched && r.Autotune.candidates_timed > k
+
+let decidable (r : Autotune.report) =
+  r.Autotune.timings_contended = 0 || r.Autotune.candidates_timed > k
+  || match r.Autotune.outcome with Autotune.Abandoned _ -> true | _ -> false
+
 let () =
   verdicts ();
   let mav =
@@ -352,8 +365,45 @@ let () =
     | a :: _ ->
         Option.is_some (Autotune.terminal_failure a) && not (List.is_empty a.Autotune.best_steps)
     | [] -> false);
-  p "against a failed arm A the hopeless flip is searched in full"
+  gated ~aggregation:`Environment
+    ~when_:(match flips with [ r ] -> decidable r | _ -> true)
+    ~on:"a contended timing window (the flip timed too few candidates to be judged)"
+    ~detail:(fun () ->
+      match flips with
+      | [ r ] ->
+          Printf.sprintf "outcome=%s timed=%d contended=%d"
+            (Autotune.outcome_name r.Autotune.outcome)
+            r.Autotune.candidates_timed r.Autotune.timings_contended
+      | l -> Printf.sprintf "%d flip reports" (List.length l))
+    "against a failed arm A the hopeless flip is searched in full"
+    (match flips with [ r ] -> searched_in_full r | _ -> false);
+  p "and arm B, the only better shippable result, ships" (List.equal String.equal shipped [ "B" ]);
+  (* The negative control of that gate: the same flip report, had it been abandoned after [k]
+     timings with its other windows contended, opens the gate and fails the claim. *)
+  p "a contended flip abandoned against a failed arm A would still fail the claim"
     (match flips with
-    | [ r ] -> Poly.equal r.Autotune.outcome Autotune.Searched && r.Autotune.candidates_timed > k
+    | [ r ] ->
+        let ab =
+          { Autotune.ab_timed = k; ab_best_ms = 100.0; ab_incumbent_ms = 4.0; ab_ratio = ratio }
+        in
+        let wrong =
+          {
+            r with
+            Autotune.outcome = Autotune.Abandoned ab;
+            candidates_timed = k;
+            timings_contended = 5;
+          }
+        in
+        decidable wrong && not (searched_in_full wrong)
     | _ -> false);
-  p "and arm B, the only better shippable result, ships" (List.equal String.equal shipped [ "B" ])
+  (* The issue's regime, reproduced through the synthetic clock: every flip window reads NaN, which
+     the admission gate refuses exactly as a contended window. Nothing was timed, so nothing can
+     have been judged, and the claim above would be skipped rather than failed. *)
+  let _, flips, _, _ =
+    executed_chain ~fail_arm_a_at:3 comp t2 expected ~flip_script:(fun _ -> Float.nan)
+  in
+  p "a flip whose every window is refused is left undecided, not failed"
+    (match flips with
+    | [ r ] ->
+        r.Autotune.candidates_timed = 0 && r.Autotune.timings_contended > 0 && not (decidable r)
+    | _ -> false)
