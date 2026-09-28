@@ -288,7 +288,6 @@ let exempt_zero_reference_exports =
     "Tnode.header";
     "Tnode.initial_default_prec";
     "Tnode.is_alphanum_";
-    "Tnode.known_non_virtual";
     "Tnode.known_not_materialized";
     "Tnode.log_accessible_headers";
     "Tnode.memory_mode_of_sexp";

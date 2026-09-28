@@ -177,6 +177,7 @@ let known_config_keys =
       "bf16_arithmetic";
       (* Algebraic rewrites over lowered code *)
       "online_softmax";
+      "online_softmax_backward";
       (* Identifiers and other *)
       "ll_ident_style";
       "cd_ident_style";
@@ -237,6 +238,7 @@ let config_key_classification : (config_key_class * string * string list) list =
         "inline_complex_computations";
         "memory_budget";
         "online_softmax";
+        "online_softmax_backward";
       ] );
     ( Code_borne,
       "it changes the assignments the front end builds, hence the code they lower to",
@@ -1123,6 +1125,7 @@ narrow_compute_f32=true
 # The algebraic-rewrite gates likewise at their defaults: no rewrite reassociates a reduction
 # under this profile.
 online_softmax=false
+online_softmax_backward=false
 |}
 
 let performance_profile_payload =
@@ -1177,6 +1180,9 @@ bf16_arithmetic=true
 # The online-softmax attention rewrite (gh-ocannl-483): the softmax normalizer's summation is
 # reassociated into a per-row scan, and the probabilities are never materialized.
 online_softmax=true
+# Its fused backward (gh-ocannl-1002): the attention's score gradient is recomputed per key from
+# the forward's row state, so the [seq, seq] probability and score gradients are never stored.
+online_softmax_backward=true
 # The C compiler's licence to reassociate (fast-math) and to contract a*b+c into one rounding
 # across statements (fp-contract=fast). Both change results per compiler and target, which is
 # why `reproducible` pins them off and `performance` leaves them at their defaults.

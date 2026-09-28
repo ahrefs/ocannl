@@ -100,11 +100,11 @@ let scans (o : LL.optimized) = scans_of o.LL.llc
 
 (* The nodes the optimized code writes that have two axes of extent [seq]: the attention's [seq,
    seq] intermediates (scores, probabilities) and nothing else in these models. *)
-let square_buffers (o : LL.optimized) =
+let square_buffers ?(extent = seq) (o : LL.optimized) =
   LL.affine_accesses o.LL.llc
   |> List.filter_map ~f:(fun (a : Tn.t Ir.Affine.access) -> Option.some_if a.a_write a.a_tn)
   |> Set.of_list (module Tn)
-  |> Set.filter ~f:(fun tn -> Array.count (Lazy.force tn.Tn.dims) ~f:(fun d -> d = seq) >= 2)
+  |> Set.filter ~f:(fun tn -> Array.count (Lazy.force tn.Tn.dims) ~f:(fun d -> d = extent) >= 2)
 
 type run = { values : float array; optimized : LL.optimized; raw : LL.t }
 
@@ -197,6 +197,8 @@ let () =
 let train ~on =
   Tensor.unsafe_reinitialize ();
   Online_softmax.set_enabled (Some on);
+  (* The composed backward: the fused one (legs 9 to 11) is a gate of its own. *)
+  Online_softmax.set_backward_enabled (Some false);
   let y = model ~layers:1 ~d_k:8 ~prefix:2 () in
   let%op loss = (y *. y) ++ "... | ... => 0" in
   let params =
@@ -212,6 +214,7 @@ let train ~on =
   in
   let loss_value = (Context.get_values ctx loss.Tensor.value).(0) in
   Online_softmax.set_enabled None;
+  Online_softmax.set_backward_enabled None;
   (loss_value, grads)
 
 let () =
@@ -492,6 +495,21 @@ let () =
     c_fin o_fin;
   p "a genuinely all-masked prefix leaves both normalizers finite and equal within 1e-6 relative"
     (Float.is_finite c_fin && close ~tol:1e-6 o_fin c_fin);
+  (* The same prefix at f64: the floor is the largest finite double, not Base's [Float.max_value]
+     (which is infinity -- a floor of [-inf] made the masked prefix NaN). Metal has no doubles. *)
+  let f64 = not (String.equal (String.lowercase backend_name) "metal") in
+  let c64, o64 =
+    if f64 then both ~precs:(uniform Ir.Ops.double) "os_masked_f64" masked else (0., 0.)
+  in
+  if f64 then
+    eprintf
+      "normalizers for [-inf; -inf; 0; 1; 2] at f64: composed %.17g online %.17g (not part of the \
+       golden)\n\
+       %!"
+      c64 o64;
+  gated ~when_:f64 ~on:backend_name
+    "an all-masked prefix at f64 leaves both normalizers finite and equal within 1e-12 relative"
+    (Float.is_finite c64 && close ~tol:1e-12 o64 c64);
   (* Executed at a narrow uniform precision: the composed form rounds every intermediate to f16 per
      step while the carried pair lives at f32 -- the one difference beyond summation order, and it
      stays within f16's own resolution. *)
@@ -597,3 +615,564 @@ let () =
   let h2, m2 = LL.analysis_cache_stats () in
   Online_softmax.set_enabled None;
   p "re-lowering the rewritten forward is an analysis-cache hit, not a miss" (h2 = h1 + 1 && m2 = m1)
+
+(* --- Legs 9 to 11: the fused backward (gh-ocannl-1002). ---
+
+   With [online_softmax_backward] on as well, the training step's composed attention backward -- the
+   probabilities' gradient [dP], the chain down to the score gradient [dS], each a [seq, seq] buffer
+   -- becomes a per-row reduction [D = sum (dO * O)] into a minted node and three nests recomputing
+   each query-key pair's probability, [dP] cell and score gradient into scope locals: one over the
+   query rows accumulating the query gradient, two over the keys accumulating the key and the value
+   gradients. *)
+
+(* The fused backward's per-row [D]: the minted node the rewrite labels [bwd_rowdot]. *)
+let rowdot_writes (llc : LL.t) =
+  Ll_test.count_stmt llc ~f:(function
+    | LL.Set { tn; _ } -> ( match tn.Tn.label with "bwd_rowdot" :: _ -> true | _ -> false)
+    | _ -> false)
+
+let set_gates ~on ~bwd =
+  Online_softmax.set_enabled (Some on);
+  Online_softmax.set_backward_enabled (Some bwd)
+
+let reset_gates () =
+  Online_softmax.set_enabled None;
+  Online_softmax.set_backward_enabled None
+
+type step = {
+  loss : float;
+  grads : (string * float array) list;
+  again : (string * float array) list;  (** The same routine's gradients on a second run. *)
+  optimized : LL.optimized;  (** The training routine, as compiled. *)
+  interface : Set.M(Tn).t;  (** Its arguments: the nodes it requires initialized and writes out. *)
+  raw_step : LL.t;  (** Its raw lowering, ahead of the rewrite tier. *)
+  cache : int * int;  (** Analysis-cache hits and misses of two sibling lowerings of the step. *)
+}
+
+(* Compile and run the training step of [model] ([Train.grad_update]: forward, gradient zeroing and
+   backprop in one routine) under the two gates, capturing the routine as compiled. *)
+let training ?mask_fill ?(layers = 1) ?(prefix = 2) ~d_k ~on ~bwd () =
+  Tensor.unsafe_reinitialize ();
+  set_gates ~on ~bwd;
+  let y = model ?mask_fill ~layers ~d_k ~prefix () in
+  let%op loss = (y *. y) ++ "... | ... => 0" in
+  let params =
+    Set.to_list y.Tensor.params
+    |> List.sort ~compare:(fun a b -> Int.compare a.Tensor.value.Tn.id b.Tensor.value.Tn.id)
+  in
+  List.iter params ~f:(fun p -> Train.set_materialized (Option.value_exn p.Tensor.diff).Tensor.grad);
+  let update = Train.grad_update loss in
+  let ctx = Train.init_params (Context.auto ()) Ir.Indexing.Empty loss in
+  let captured = ref None in
+  let ctx, routine =
+    Context.compile
+      ~lowered_transform:(fun o ->
+        captured := Some o;
+        [ o ])
+      ctx update Ir.Indexing.Empty
+  in
+  let read ctx =
+    List.map params ~f:(fun p ->
+        ( Tn.debug_name p.Tensor.value,
+          Context.get_values ctx (Option.value_exn p.Tensor.diff).Tensor.grad ))
+  in
+  let ctx = Context.run ctx routine in
+  let grads = read ctx
+  and loss = Array.fold (Context.get_values ctx loss.Tensor.value) ~init:0. ~f:( +. ) in
+  let again = read (Context.run ctx routine) in
+  let lower () =
+    ignore
+      (Ir.Assignments.lower (LL.empty_optimize_ctx ()) ~unoptim_ll_source:None ~ll_source:None
+         ~cd_source:None ~name:"probe_step" [] update.Ir.Assignments.asgns
+        : LL.optimized)
+  in
+  lower ();
+  let h1, m1 = LL.analysis_cache_stats () in
+  lower ();
+  let h2, m2 = LL.analysis_cache_stats () in
+  let raw_step = Ir.Assignments.to_low_level update.Ir.Assignments.asgns in
+  reset_gates ();
+  {
+    loss;
+    grads;
+    again;
+    optimized = Option.value_exn !captured;
+    interface = Set.union routine.Context.inputs routine.Context.outputs;
+    raw_step;
+    cache = (h2 - h1, m2 - m1);
+  }
+
+let worst_relative gf gc =
+  Array.fold2_exn gf gc ~init:0. ~f:(fun acc a b ->
+      Float.max acc (Float.abs (a -. b) /. Float.max 1. (Float.abs b)))
+
+let grads_agree ~tol ~what (fused : (string * float array) list) composed =
+  p "the same parameters carry gradients in both runs"
+    (List.equal String.equal (List.map fused ~f:fst) (List.map composed ~f:fst));
+  List.iter2_exn fused composed ~f:(fun (name, gf) (_, gc) ->
+      let scale = Array.fold gc ~init:0. ~f:(fun acc b -> Float.max acc (Float.abs b)) in
+      eprintf
+        "%s %s.grad: worst relative difference %.3g at scale %.3g (not part of the golden)\n%!" what
+        name (worst_relative gf gc) scale;
+      p_all2
+        (Printf.sprintf "%s: %s.grad agrees within %g relative" what name tol)
+        gf gc ~f:(close ~tol);
+      p
+        (Printf.sprintf "%s: %s.grad is not identically zero" what name)
+        (Array.exists gc ~f:(fun v -> Float.(v <> 0.))))
+
+let () =
+  printf "--- leg 9: training with the fused backward ---\n";
+  let d_k = 8 in
+  let composed = training ~d_k ~on:false ~bwd:false () in
+  let forward_only = training ~d_k ~on:true ~bwd:false () in
+  let fused = training ~d_k ~on:true ~bwd:true () in
+  eprintf "loss: composed %.9g fused %.9g (not part of the golden)\n%!" composed.loss fused.loss;
+  p "the loss agrees within 1e-5 relative" (close ~tol:1e-5 fused.loss composed.loss);
+  grads_agree ~tol:1e-5 ~what:"head width 8" fused.grads composed.grads;
+  let flat grads = Array.concat (List.map grads ~f:snd) in
+  p_all2
+    "a second run of the fused step recomputes the same gradients: the zeroings it accumulates \
+     onto are kept"
+    (flat fused.again) (flat fused.grads) ~f:Float.equal;
+  p "the fused step has one per-row D, the forward-only step none"
+    (rowdot_writes fused.optimized.LL.llc = 1 && rowdot_writes forward_only.optimized.LL.llc = 0);
+  (* The backward gate alone: the forward rewritten, the backward composed -- leg 6's shape. *)
+  p "the backward gate off leaves the composed backward, whose seq^2 buffers the step writes"
+    (not (Set.is_empty (square_buffers forward_only.optimized)));
+  p
+    "under the recompute cap the fused step writes no seq^2-sized node at all (masked key prefixes \
+     included)"
+    (Set.is_empty (square_buffers fused.optimized));
+  let square tn = Array.count (Lazy.force tn.Tn.dims) ~f:(fun d -> d = seq) >= 2 in
+  p_none "no argument of the fused routine is seq^2-sized" (Set.to_list fused.interface) ~f:square;
+  (* The tier's member contract on the whole step: the pass consumes its instance, and its output
+     has no normalizer left to anchor a second match. *)
+  set_gates ~on:true ~bwd:true;
+  let once = Online_softmax.rewrite fused.raw_step in
+  let twice = Online_softmax.rewrite once in
+  reset_gates ();
+  p "the pass fuses the raw training step" (rowdot_writes once = 1);
+  (* Each gradient is written by one fused nest with ONE channel loop after its scalars -- the shape
+     the default GPU annotator's lane geometry reads (gh-ocannl-1003 stage 1) -- and dV's scalars
+     hold no loop (it needs [p] alone), where dQ's and dK's hold [dp]'s reduction. *)
+  let writes_to name stmt =
+    Ll_test.count_stmt stmt ~f:(function
+      | LL.Set { tn; _ } -> String.equal (Tn.debug_name tn) name
+      | _ -> false)
+    > 0
+  in
+  let rec preamble_then_one_loop ~loop_free = function
+    | LL.For_loop { body; _ } -> (
+        match
+          List.rev
+            (List.filter (LL.flat_lines [ body ]) ~f:(function
+              | LL.Noop | LL.Comment _ -> false
+              | _ -> true))
+        with
+        | [ single ] -> preamble_then_one_loop ~loop_free single
+        | LL.For_loop _ :: preamble ->
+            (not (List.is_empty preamble))
+            && List.for_all preamble ~f:(function
+              | LL.Declare_local _ | LL.Set_local _ -> true
+              | LL.For_loop _ -> not loop_free
+              | _ -> false)
+        | _ -> false)
+    | _ -> false
+  in
+  let fused_nests name =
+    List.filter (LL.flat_lines [ once ]) ~f:(fun s -> writes_to name s && rowdot_writes s = 0)
+  in
+  List.iter
+    [ ("q.grad", false); ("k.grad", false); ("v.grad", true) ]
+    ~f:(fun (name, loop_free) ->
+      p
+        (Printf.sprintf "%s: one fused nest, one channel loop after %s scalars" name
+           (if loop_free then "loop-free" else "its"))
+        (match fused_nests name with
+        | [ nest ] -> preamble_then_one_loop ~loop_free nest
+        | _ -> false));
+  p "the pass is idempotent on the fused step" (LL.equal twice once);
+  eprintf "sibling lowerings: %d hits, %d misses (not part of the golden)\n%!" (fst fused.cache)
+    (snd fused.cache);
+  p "re-lowering the fused step is an analysis-cache hit, not a miss"
+    (Poly.equal fused.cache (1, 0));
+  printf
+    "--- leg 9b: head width above the recompute cap -- the scores are the one seq^2 buffer ---\n";
+  let d_k = 32 in
+  let composed = training ~d_k ~on:false ~bwd:false () in
+  let forward_only = training ~d_k ~on:true ~bwd:false () in
+  let fused = training ~d_k ~on:true ~bwd:true () in
+  grads_agree ~tol:1e-5 ~what:"head width 32" fused.grads composed.grads;
+  let composed_squares = Set.length (square_buffers forward_only.optimized) in
+  let fused_squares = square_buffers fused.optimized in
+  printf "seq^2 buffers in the training step: composed backward %d, fused backward %d\n"
+    composed_squares (Set.length fused_squares);
+  let names s = Set.to_list s |> List.map ~f:Tn.debug_name in
+  p "the fused step writes one seq^2 buffer, the scores the forward-only step also stores"
+    (match names fused_squares with
+    | [ scores ] ->
+        List.mem (names (square_buffers forward_only.optimized)) scores ~equal:String.equal
+    | _ -> false);
+  let square tn = Array.count (Lazy.force tn.Tn.dims) ~f:(fun d -> d = seq) >= 2 in
+  p_none "no argument of the fused routine is seq^2-sized: the stored scores are routine scratch"
+    (Set.to_list fused.interface) ~f:square;
+  let cap = LL.virtualize_settings.LL.max_inline_reduction in
+  LL.virtualize_settings.LL.max_inline_reduction <- d_k;
+  let recomputed = training ~d_k ~on:true ~bwd:true () in
+  LL.virtualize_settings.LL.max_inline_reduction <- cap;
+  p "a cap admitting the head width recomputes the scores too: no seq^2 buffer at all"
+    (Set.is_empty (square_buffers recomputed.optimized));
+  grads_agree ~tol:1e-5 ~what:"recomputed scores" recomputed.grads composed.grads;
+  printf "--- leg 9c: four SGD steps in one routine -- the loss trajectories agree ---\n";
+  let trajectory ~on ~bwd =
+    Tensor.unsafe_reinitialize ();
+    set_gates ~on ~bwd;
+    let y = model ~layers:1 ~d_k:8 ~prefix:2 () in
+    let%op loss = (y *. y) ++ "... | ... => 0" in
+    let update = Train.grad_update loss in
+    let%op learning_rate = 0.001 in
+    let sgd = Train.sgd_update ~learning_rate loss in
+    let ctx = Train.init_params (Context.auto ()) Ir.Indexing.Empty loss in
+    let captured = ref None in
+    let ctx, routine =
+      Context.compile
+        ~lowered_transform:(fun o ->
+          captured := Some o;
+          [ o ])
+        ctx
+        (Ir.Assignments.sequence [ update; sgd ])
+        Ir.Indexing.Empty
+    in
+    let losses =
+      List.folding_map (List.range 0 4) ~init:ctx ~f:(fun ctx _ ->
+          let ctx = Context.run ctx routine in
+          (ctx, Array.fold (Context.get_values ctx loss.Tensor.value) ~init:0. ~f:( +. )))
+    in
+    reset_gates ();
+    (losses, rowdot_writes (Option.value_exn !captured).LL.llc)
+  in
+  let composed, _ = trajectory ~on:false ~bwd:false in
+  let fused, d_nests = trajectory ~on:true ~bwd:true in
+  eprintf "losses: composed %s; fused %s (not part of the golden)\n%!"
+    (String.concat ~sep:" " (List.map composed ~f:(Printf.sprintf "%.9g")))
+    (String.concat ~sep:" " (List.map fused ~f:(Printf.sprintf "%.9g")));
+  p "the step with the SGD update is fused too" (d_nests = 1);
+  p "the loss moves across the steps"
+    (not (Float.equal (List.hd_exn composed) (List.last_exn composed)));
+  p_all2 "every step's loss agrees within 1e-5 relative" (Array.of_list fused)
+    (Array.of_list composed) ~f:(close ~tol:1e-5);
+  printf "--- leg 9d: two stacked blocks -- one D each ---\n";
+  let composed = training ~layers:2 ~d_k:8 ~on:false ~bwd:false () in
+  let fused = training ~layers:2 ~d_k:8 ~on:true ~bwd:true () in
+  p "two per-row D reductions" (rowdot_writes fused.optimized.LL.llc = 2);
+  p "no seq^2-sized node is written" (Set.is_empty (square_buffers fused.optimized));
+  grads_agree ~tol:1e-5 ~what:"two blocks" fused.grads composed.grads;
+  printf "--- leg 9e: a NaN mask fill poisons the fused gradients exactly where the composed ---\n";
+  let composed = training ~mask_fill:Float.nan ~prefix:3 ~d_k:8 ~on:false ~bwd:false () in
+  let fused = training ~mask_fill:Float.nan ~prefix:3 ~d_k:8 ~on:true ~bwd:true () in
+  p "the fused step fired" (rowdot_writes fused.optimized.LL.llc = 1);
+  p "the composed gradients carry NaNs"
+    (List.exists composed.grads ~f:(fun (_, g) -> Array.exists g ~f:Float.is_nan));
+  List.iter2_exn fused.grads composed.grads ~f:(fun (name, gf) (_, gc) ->
+      p_all2 (name ^ ".grad is NaN exactly where the composed one is") gf gc ~f:(fun f c ->
+          Bool.equal (Float.is_nan f) (Float.is_nan c)))
+
+(* --- Leg 10: the attention's own gradients, on leaf queries, keys and values. ---
+
+   The parameter gradients of the model above reach the attention through the projections; here [q],
+   [k] and [v] are differentiable leaves, so their gradients ARE the fused nests' dQ, dK and dV.
+   Their values vary with every index (and one query row is zero: its scores tie), and the loss
+   weighs the output by an equally discriminating upstream gradient -- an all-ones one can hide a
+   broken softmax adjoint. *)
+
+let leaf_seq = 5
+let leaf_heads = 2
+let leaf_d = 3
+let leaf_e = 4
+
+let%op composed_max_softmax x =
+  (* The softmax before gh-ocannl-1002's phase 0: the max stays differentiable, so the composed
+     backward carries the max-gradient nests the fused recognizer declines. *)
+  let max_vals = x @^^ " ... | t -> ... => ... | 0 -> ..." in
+  let exp_vals = exp (x - max_vals) in
+  exp_vals /. (exp_vals ++ " ... | t -> ... => ... | 0 -> ...")
+
+let leaf_attention ~softmax ~fill ~mask q k v =
+  let%op scores =
+    (q +* k " ... s | h d; ... t | h d => ... s | t -> h" [ "h"; "d" ]) /. sqrt (dim d)
+  in
+  let%op masked = where mask scores !.fill in
+  let weights = softmax masked in
+  let%op o = weights +* v " ... s | t -> h; ... t | h e => ... s | h e" [ "e" ] in
+  o
+
+(* A value varying with every index, of moderate magnitude, [salt] telling the tensors apart. *)
+let wave salt idcs =
+  Float.sin
+    (Array.foldi idcs ~init:salt ~f:(fun i acc x ->
+         acc +. (Float.of_int ((i + 2) * (x + 1)) *. 0.37)))
+
+type leaf_run = {
+  lloss : float;
+  lgrads : (string * float array) list;
+  loptimized : LL.optimized option;  (** The training routine, when [grads]. *)
+}
+
+let fused_count run = rowdot_writes (Option.value_exn run.loptimized).LL.llc
+
+(* The leaf model's [seq, seq] intermediates: the only nodes with two axes of [leaf_seq], which no
+   other extent of it equals. *)
+let leaf_squares run = square_buffers ~extent:leaf_seq (Option.value_exn run.loptimized)
+
+(* The loss [sum (O * up)] of one leaf attention, and the gradients of [q], [k] and [v]. [live s t]
+   decides the mask; [tied] derives the keys from the queries ([k = q * 1], so the queries' gradient
+   sums the fused query-gradient nest's contribution and the one flowing back from the keys');
+   [bump] adds [h * wave] to one of the leaves, for the finite differences. At [prec] double every
+   node is double, the gradients included. *)
+let leaf ?(prec = Ir.Ops.single) ?(fill = Float.neg_infinity) ?(tied = false)
+    ?(softmax = fun x -> Nn_blocks.softmax ~spec:" ... | t -> ..." () x) ?bump ?(grads = true) ~live
+    ~on ~bwd () =
+  Tensor.unsafe_reinitialize ();
+  set_gates ~on ~bwd;
+  let value_prec = !Tensor.default_value_prec and grad_prec = !Tensor.default_grad_prec in
+  Tensor.default_value_prec := prec;
+  Tensor.default_grad_prec := prec;
+  let leaf_tensor name salt ~o =
+    let f idcs =
+      let base = if String.equal name "q" && idcs.(0) = 2 then 0. else wave salt idcs in
+      match bump with
+      | Some (which, h) when String.equal which name -> base +. (h *. wave (salt +. 5.) idcs)
+      | _ -> base
+    in
+    Ocannl.Operation.init ~l:name ~prec ~b:[ leaf_seq ] ~o ~f ~grad_spec:Tensor.Require_grad ()
+  in
+  let q = leaf_tensor "q" 0.1 ~o:[ leaf_heads; leaf_d ] in
+  let k =
+    if tied then
+      let%op k = q *. !.1. in
+      k
+    else leaf_tensor "k" 0.2 ~o:[ leaf_heads; leaf_d ]
+  in
+  let v = leaf_tensor "v" 0.3 ~o:[ leaf_heads; leaf_e ] in
+  let mask =
+    NTDSL.init ~l:"leaf_mask" ~prec:Ir.Ops.single ~b:[ leaf_seq ] ~i:[ leaf_seq ] ~o:[]
+      ~f:(function [| s; t |] -> if live s t then 1. else 0. | _ -> assert false)
+      ()
+  in
+  let up = NTDSL.init ~l:"up" ~prec ~b:[ leaf_seq ] ~o:[ leaf_heads; leaf_e ] ~f:(wave 0.4) () in
+  let o = leaf_attention ~softmax ~fill ~mask q k v in
+  let%op loss = (o *. up) ++ "... | ... => 0" in
+  let leaves = if tied then [ q; v ] else [ q; k; v ] in
+  (* Materialized, so that a leaf is uploaded rather than inlined into the code as a small constant:
+     the finite differences change its values between builds. *)
+  List.iter leaves ~f:(fun t ->
+      Train.set_materialized t.Tensor.value;
+      Train.set_materialized (Option.value_exn t.Tensor.diff).Tensor.grad);
+  let captured = ref None in
+  let ctx =
+    if grads then
+      let update = Train.grad_update loss in
+      let ctx, routine =
+        Context.compile
+          ~lowered_transform:(fun o ->
+            captured := Some o;
+            [ o ])
+          (Context.auto ()) update Ir.Indexing.Empty
+      in
+      Context.run ctx routine
+    else Train.forward_once (Context.auto ()) loss
+  in
+  let lgrads =
+    if grads then
+      List.map leaves ~f:(fun t ->
+          ( Tn.debug_name t.Tensor.value,
+            Context.get_values ctx (Option.value_exn t.Tensor.diff).Tensor.grad ))
+    else []
+  in
+  (* The loss keeps the query axis; its gradient is seeded with ones, so the total is the function
+     the gradients are of. *)
+  let lloss = Array.fold (Context.get_values ctx loss.Tensor.value) ~init:0. ~f:( +. ) in
+  reset_gates ();
+  Tensor.default_value_prec := value_prec;
+  Tensor.default_grad_prec := grad_prec;
+  { lloss; lgrads; loptimized = !captured }
+
+let causal_prefix s t = s >= t && (t >= 2 || s < 2)
+
+let () =
+  printf "--- leg 10: leaf queries, keys and values -- dQ, dK and dV themselves ---\n";
+  let composed = leaf ~live:causal_prefix ~on:false ~bwd:false () in
+  let fused = leaf ~live:causal_prefix ~on:true ~bwd:true () in
+  p "the fused backward fired on the leaf attention" (fused_count fused = 1);
+  p "the composed leaf step writes seq^2-sized nodes, the fused one none"
+    ((not (Set.is_empty (leaf_squares composed))) && Set.is_empty (leaf_squares fused));
+  grads_agree ~tol:1e-5 ~what:"leaf" fused.lgrads composed.lgrads;
+  let composed = leaf ~tied:true ~live:causal_prefix ~on:false ~bwd:false () in
+  let fused = leaf ~tied:true ~live:causal_prefix ~on:true ~bwd:true () in
+  p "keys derived from the queries: fused" (fused_count fused = 1);
+  grads_agree ~tol:1e-5 ~what:"derived keys" fused.lgrads composed.lgrads;
+  printf "--- leg 10b: a finite mask fill keeps the masked probabilities and their dV ---\n";
+  (* Query row 1 has no live key and the last key is live for no query: under a finite fill row 1
+     attends uniformly to every key, so the last key's dV comes from that row alone, while the
+     mask's own gradient rule leaves dS -- hence row 1's dQ -- exactly zero. *)
+  let live s t = s <> 1 && t < leaf_seq - 1 && t <= s in
+  let composed = leaf ~fill:(-1e4) ~live ~on:false ~bwd:false () in
+  let fused = leaf ~fill:(-1e4) ~live ~on:true ~bwd:true () in
+  p "the fused backward fired" (fused_count fused = 1);
+  grads_agree ~tol:1e-5 ~what:"finite fill" fused.lgrads composed.lgrads;
+  let grad run name = List.Assoc.find_exn run.lgrads ~equal:String.equal name in
+  let dv_last run =
+    Array.filteri (grad run "v") ~f:(fun i _ -> i / (leaf_heads * leaf_e) = leaf_seq - 1)
+  in
+  let dq_row1 run = Array.filteri (grad run "q") ~f:(fun i _ -> i / (leaf_heads * leaf_d) = 1) in
+  p_exists "the key every query masks still gets a dV under the finite fill: fused"
+    (Array.to_list (dv_last fused))
+    ~f:(fun g -> Float.(abs g > 1e-3));
+  p_exists "and composed" (Array.to_list (dv_last composed)) ~f:(fun g -> Float.(abs g > 1e-3));
+  p_all "the fully masked query row's dQ is exactly zero: fused"
+    (Array.to_list (dq_row1 fused))
+    ~f:(fun g -> Float.equal g 0.);
+  p_all "and composed" (Array.to_list (dq_row1 composed)) ~f:(fun g -> Float.equal g 0.);
+  printf "--- leg 10c: f64 finite differences of the fused dQ, dK and dV ---\n";
+  (* Directional derivatives: the fused gradient against the wave direction [bump] adds, over a mask
+     that is fixed (the loss is smooth in q, k and v away from none of its boundaries). *)
+  let f64 = not (String.equal (String.lowercase backend_name) "metal") in
+  let names = [ ("q", 0.1); ("k", 0.2); ("v", 0.3) ] in
+  let fired, matches =
+    if not f64 then (false, List.map names ~f:(fun _ -> false))
+    else
+      let prec = Ir.Ops.double in
+      let fused = leaf ~prec ~live:causal_prefix ~on:true ~bwd:true () in
+      let h = 1e-5 in
+      ( fused_count fused = 1,
+        List.map names ~f:(fun (name, salt) ->
+            let at h' =
+              (leaf ~prec ~bump:(name, h') ~grads:false ~live:causal_prefix ~on:true ~bwd:true ())
+                .lloss
+            in
+            let fd = (at h -. at (-.h)) /. (2. *. h) in
+            let g = List.Assoc.find_exn fused.lgrads ~equal:String.equal name in
+            let dir =
+              Array.init (Array.length g) ~f:(fun i ->
+                  let per = Array.length g / leaf_seq in
+                  let o = if String.equal name "v" then leaf_e else leaf_d in
+                  wave (salt +. 5.) [| i / per; i % per / o; i % o |])
+            in
+            let analytic = Array.fold2_exn g dir ~init:0. ~f:(fun acc a b -> acc +. (a *. b)) in
+            eprintf
+              "d%s along the probe: finite difference %.12g, fused %.12g (not part of the golden)\n\
+               %!"
+              name fd analytic;
+            Float.(abs analytic > 1e-3) && close ~tol:1e-6 analytic fd) )
+  in
+  (* Metal has no double precision. *)
+  gated ~when_:f64 ~on:backend_name "the fused backward fired at f64" fired;
+  List.iter2_exn names matches ~f:(fun (name, _) ok ->
+      gated ~when_:f64 ~on:backend_name
+        (Printf.sprintf "d%s: the fused gradient matches the f64 finite difference within 1e-6" name)
+        ok)
+
+(* --- Leg 11: what the fused backward declines. ---
+
+   On the raw lowering of the leg-9 training step, edited the way a model variant or another flow
+   would change it: each edit must leave the backward composed (no per-row D) while the forward
+   rewrite still fires, and an edit outside the pattern's span must not. *)
+
+let () =
+  printf "--- leg 11: the fused backward declines what it cannot prove ---\n";
+  let base = training ~d_k:8 ~on:true ~bwd:true () in
+  let stmts = LL.flat_lines [ base.raw_step ] in
+  let rec target = function
+    | LL.For_loop { body; _ } -> target body
+    | LL.Set { tn; _ } -> Some tn
+    | _ -> None
+  in
+  let position name =
+    fst
+      (Option.value_exn
+         (List.findi stmts ~f:(fun _ s ->
+              Option.exists (target s) ~f:(fun tn -> String.equal (Tn.debug_name tn) name))))
+  in
+  let insert_after pos extra =
+    List.concat_mapi stmts ~f:(fun i s -> if i = pos then [ s; extra ] else [ s ])
+  in
+  let rewritten llc =
+    set_gates ~on:true ~bwd:true;
+    let r = Online_softmax.rewrite llc in
+    reset_gates ();
+    r
+  in
+  let fused llc = rowdot_writes (rewritten llc) = 1 && scans_of (rewritten llc) = 1 in
+  let declined llc = rowdot_writes (rewritten llc) = 0 && scans_of (rewritten llc) = 1 in
+  let lines l = LL.unflat_lines l in
+  p "the unedited step is fused" (fused base.raw_step);
+  (* A flow compiling the backward as a routine of its own: nothing to anchor on. *)
+  let backprop =
+    let start =
+      fst
+        (Option.value_exn
+           (List.findi stmts ~f:(fun _ -> function
+             | LL.Comment c -> String.is_substring c ~substring:"backprop"
+             | _ -> false)))
+    in
+    lines (List.drop stmts start)
+  in
+  p "a backward lowered without its forward is left as it is"
+    (LL.equal (rewritten backprop) backprop && rowdot_writes backprop = 0);
+  (* Another reader of the probabilities' gradient: fusing would leave it reading nothing. *)
+  let a = position "softmax.grad" in
+  let dp = Option.value_exn (target (List.nth_exn stmts a)) in
+  let probe = Ll_test.node_factory ~first_id:100200 ~dims:[| 1 |] () "probe" in
+  Ll_test.materialize probe;
+  let extra_read =
+    LL.Set
+      {
+        tn = probe;
+        idcs = [| Ir.Indexing.Fixed_idx 0 |];
+        llsc = LL.Get (dp, Array.map (Lazy.force dp.Tn.dims) ~f:(fun _ -> Ir.Indexing.Fixed_idx 0));
+        debug = "";
+      }
+  in
+  p "another reader of dP is declined" (declined (lines (insert_after a extra_read)));
+  let staged = LL.Staged_compilation (fun () -> PPrint.empty) in
+  p "staged code inside the backward's span is declined" (declined (lines (insert_after a staged)));
+  p "staged code after the span is no objection" (fused (lines (stmts @ [ staged ])));
+  (* A contraction whose channel loop never runs contributes nothing: not the pattern's. *)
+  let rec kill_innermost ?(to_ = -1) = function
+    | LL.For_loop ({ body = LL.Set _; _ } as l) -> LL.For_loop { l with to_ }
+    | LL.For_loop l -> LL.For_loop { l with body = kill_innermost ~to_ l.body }
+    | s -> s
+  in
+  let k = position "q.grad" in
+  p "a dead channel loop in the query-gradient contraction is declined"
+    (declined (lines (List.mapi stmts ~f:(fun i s -> if i = k then kill_innermost s else s))));
+  (* Program order: the probabilities' gradient read by the division's gradient (C1) ahead of the
+     reduction that produces it -- the composed step then reads the zeroed dP there, which a fused
+     dp computed afresh would not reproduce. *)
+  let c1 = position "exp_exp_vals.grad" in
+  let moved =
+    List.concat_mapi stmts ~f:(fun i s ->
+        if i = a then [ List.nth_exn stmts c1; s ] else if i = c1 then [] else [ s ])
+  in
+  p "a reader of dP ahead of its producer is declined" (a < c1 && declined (lines moved));
+  (* A definition covering part of its node: the node keeps its other cells, so the fused nests must
+     read the node rather than instantiate the definition's right-hand side everywhere. *)
+  let reads_of name llc =
+    Ll_test.count_scalar llc ~f:(function
+      | LL.Get (tn, _) -> String.equal (Tn.debug_name tn) name
+      | _ -> false)
+  in
+  let scores = position "scores" in
+  let partial =
+    lines (List.mapi stmts ~f:(fun i s -> if i = scores then kill_innermost ~to_:3 s else s))
+  in
+  p "a partial definition is read as its node, not instantiated"
+    (fused partial
+    && reads_of "scores" (rewritten partial) = reads_of "scores" (rewritten base.raw_step) + 1);
+  (* The composed max gradient: the softmax before phase 0. Declined, not matched as a variant --
+     and the step it leaves still trains like the composed one. *)
+  let composed = leaf ~softmax:composed_max_softmax ~live:causal_prefix ~on:false ~bwd:false () in
+  let kept = leaf ~softmax:composed_max_softmax ~live:causal_prefix ~on:true ~bwd:true () in
+  p "a backward with the composed max gradient is declined" (fused_count kept = 0);
+  grads_agree ~tol:1e-5 ~what:"composed max gradient" kept.lgrads composed.lgrads
