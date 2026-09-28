@@ -6,7 +6,7 @@ Families, derived from the constructors of `provenance` in arrayjit/lib/tnode.ml
   Scope_local -- one tag, its case of provenance_to_string
   Surviving_read -- one tag, its case of provenance_to_string
   Site -- every tag literal it is applied to
-  Site via Non_virtual -- every tag literal in the scope of a local `Non_virtual` exception, whose payload a handler hands to Site
+  Site via Non_virtual -- every tag literal in the scope of a local `Non_virtual` exception whose handler hands its payload to Site, directly or through a caller
   Refined -- composes provenances, mints none
 Library tags, by family and by the function minting them:
 Constructors -- arrayjit/lib/tnode.ml, provenance_to_string:

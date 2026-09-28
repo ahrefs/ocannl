@@ -29,9 +29,15 @@
       shape is refused as unread.
     - A string constructor applied to a VARIABLE opens a relayed family when that variable is the
       payload a handler caught: [with Non_virtual i -> ... (Site i)] makes every tag literal in the
-      scope of the local [let exception Non_virtual of string] a tag of the family "Site via
-      Non_virtual". That covers the literal at a [raise], the one handed to a helper that raises it,
-      and the one a handler records directly. The function such a tag is minted in is the innermost
+      scope of that local [let exception Non_virtual of string] a tag of the family "Site via
+      Non_virtual". The relay belongs to the SCOPE whose handler it is -- local exceptions are
+      generative, so a same-named exception elsewhere proves nothing -- and it may take one hop
+      through a result: a handler wrapping the payload in a constructor ([Non_virtual i -> Error i])
+      relays when a caller of the declaring function matches that constructor into a carrier
+      ([match instantiate_computations ... with Error i -> ... (Site i)]). A scope reaching no
+      carrier either way mints nothing. That covers the literal at a [raise], the one handed to a
+      helper that raises it, and the one a handler records directly; a string the exception itself
+      is applied to that is no tag is refused. The function such a tag is minted in is the innermost
       value binding enclosing the exception's declaration -- a declaration anew inside the scope
       opens its own -- which is what decides its PHASE, so a relayed tag minted in two functions is
       refused. A tag computed at run time is not read.
@@ -196,14 +202,56 @@ let renderings ~renderer ~source content =
       | _ -> ());
   List.rev !found
 
+(** The constructors whose case of the top-level [renderer] binding returns their argument unchanged
+    ([Site s -> s]): only for those is the literal a carrier is applied to the text a printed
+    provenance shows. *)
+let identity_renderings ~renderer content =
+  let found = ref [] in
+  let walker =
+    object
+      inherit Ast_traverse.iter as super
+
+      method! case c =
+        (match (c.pc_lhs.ppat_desc, c.pc_rhs.pexp_desc) with
+        | ( Ppat_construct ({ txt; _ }, Some (_, { ppat_desc = Ppat_var { txt = v; _ }; _ })),
+            Pexp_ident { txt = Lident v'; _ } )
+          when String.equal v v' ->
+            Option.iter (last_name txt) ~f:(fun c -> found := c :: !found)
+        | _ -> ());
+        super#case c
+    end
+  in
+  List.iter (parse content) ~f:(fun item ->
+      match item.pstr_desc with
+      | Pstr_value (_, vbs) ->
+          List.iter vbs ~f:(fun vb ->
+              match binding_name vb with
+              | Some name when String.equal name renderer -> walker#expression vb.pvb_expr
+              | _ -> ())
+      | _ -> ());
+  List.rev !found
+
 (** {1 The sources} *)
+
+type scope = {
+  exn : string;
+  declared_in : string;
+  direct : string list;  (** Carriers a handler of THIS scope applies the payload to. *)
+  results : string list;
+      (** Constructors a handler of this scope wraps the payload in ([Non_virtual i -> Error i]),
+          for a caller of [declared_in] to hand on. *)
+  literals : mint list;  (** Its tag literals, as [Relayed] with [via] still empty. *)
+  not_tags : string list;  (** Strings the exception itself is applied to that are no tag. *)
+}
+(** A local-exception scope of one source: its exception, the function declaring it, and what its
+    handlers do with the caught payload. *)
 
 type read = {
   path : string;  (** The source read. *)
-  mints : mint list;
-      (** [Applied] literals, and the tag literals of every local-exception scope as [Relayed] with
-          [via] empty: which exceptions relay is decided across sources, by {!relays}. *)
-  relays : (string * string) list;  (** [(exception, carrier)] handlers in this source. *)
+  mints : mint list;  (** [Applied] literals. *)
+  scopes : scope list;
+  consumers : (string * string * string) list;
+      (** [(f, k, carrier)]: a [match f ... with k v -> ... (carrier v)] in this source. *)
   malformed : string list;  (** String literals a carrier is applied to that are no tag. *)
 }
 
@@ -211,8 +259,9 @@ type read = {
 let module_of_path path =
   String.capitalize (Stdlib.Filename.remove_extension (Stdlib.Filename.basename path))
 
-(* The module each module name [structure] binds resolves to, at any depth: [module Scan =
-   Test_utils.Operand_key_scan] maps [Scan] to [Operand_key_scan]. *)
+(* The module each module name [structure] binds, at any depth, as the last component of the path it
+   is bound to: [module Scan = Test_utils.Operand_key_scan] maps [Scan] to [Operand_key_scan].
+   Scoping is not modelled: a name bound twice in one file resolves to either binding. *)
 let module_bindings structure =
   let found = ref [] in
   let note name (me : module_expr) =
@@ -259,20 +308,25 @@ let own_string_constructors structure =
 let declares_own_carrier ~carriers content =
   List.exists (own_string_constructors (parse content)) ~f:(List.mem carriers ~equal:String.equal)
 
-(** One OCaml source's mints and relays, in source order, duplicates kept.
+(** One OCaml source's mints, scopes and result consumers, in source order, duplicates kept.
 
     A constructor with a carrier's name is taken for the owner's unless it names another: a module
     in [foreign] declares its own [string]-carrying constructor of that name (as [Operand_key_scan]
-    declares [Site of string]), so an application qualified by it -- directly or through a module
-    the source binds to it ([module Scan = Test_utils.Operand_key_scan]) -- is not a provenance, nor
-    is an unqualified one in [foreign]'s own source. The owner's constructors are reached through
-    aliases and opens this reader cannot follow, which is why the rule names what is excluded rather
-    than what is included. *)
+    declares [Site of string]), so an application qualified by it -- directly or through a chain of
+    module bindings in the source ([module Scan = Test_utils.Operand_key_scan]) -- is not a
+    provenance, nor is an unqualified one in [foreign]'s own source. The owner's constructors are
+    reached through aliases and opens this reader cannot follow, which is why the rule names what is
+    excluded rather than what is included. *)
 let read_source ~carriers ?(foreign = []) ~source content =
-  let mints = ref [] and relays = ref [] and malformed = ref [] in
+  let mints = ref [] and malformed = ref [] and consumers = ref [] and closed = ref [] in
   let structure = parse content in
   let bindings = module_bindings structure in
-  let resolve q = Option.value (List.Assoc.find bindings q ~equal:String.equal) ~default:q in
+  (* Through every binding in the chain; a cycle stops where it closes. *)
+  let rec resolve seen q =
+    match List.Assoc.find bindings q ~equal:String.equal with
+    | Some next when not (List.mem seen next ~equal:String.equal) -> resolve (q :: seen) next
+    | _ -> q
+  in
   let is_foreign m = List.mem foreign m ~equal:String.equal in
   let is_carrier (lid : longident) =
     match lid with
@@ -280,12 +334,15 @@ let read_source ~carriers ?(foreign = []) ~source content =
         List.mem carriers c ~equal:String.equal && not (is_foreign (module_of_path source))
     | Ldot (q, c) ->
         List.mem carriers c ~equal:String.equal
-        && not (Option.value_map (last_name q) ~default:false ~f:(fun q -> is_foreign (resolve q)))
+        && not
+             (Option.value_map (last_name q) ~default:false ~f:(fun q ->
+                  List.exists (q :: [ resolve [] q ]) ~f:is_foreign))
     | Lapply _ -> false
   in
-  (* The carriers applied to the variable [v] anywhere in [e]. *)
-  let carriers_of_var v e =
-    let hits = ref [] in
+  (* The constructors applied to the variable [v] anywhere in [e], split into carriers and
+     others. *)
+  let wrappers_of_var v e =
+    let carriers_hit = ref [] and others = ref [] in
     let finder =
       object
         inherit Ast_traverse.iter as super
@@ -293,24 +350,34 @@ let read_source ~carriers ?(foreign = []) ~source content =
         method! expression e =
           (match e.pexp_desc with
           | Pexp_construct ({ txt; _ }, Some { pexp_desc = Pexp_ident { txt = Lident x; _ }; _ })
-            when String.equal x v && is_carrier txt ->
-              Option.iter (last_name txt) ~f:(fun c -> hits := c :: !hits)
+            when String.equal x v ->
+              Option.iter (last_name txt) ~f:(fun c ->
+                  if is_carrier txt then carriers_hit := c :: !carriers_hit
+                  else others := c :: !others)
           | _ -> ());
           super#expression e
       end
     in
     finder#expression e;
-    !hits
+    (!carriers_hit, !others)
+  in
+  let rec caught (p : pattern) =
+    match p.ppat_desc with
+    | Ppat_construct ({ txt; _ }, Some (_, { ppat_desc = Ppat_var { txt = v; _ }; _ })) ->
+        Option.value_map (last_name txt) ~default:[] ~f:(fun e -> [ (e, v) ])
+    | Ppat_exception p | Ppat_alias (p, _) | Ppat_constraint (p, _) -> caught p
+    | Ppat_or (a, b) -> caught a @ caught b
+    | _ -> []
   in
   let walker =
     object (self)
       inherit Ast_traverse.iter as super
       val mutable enclosing = "(top level)"
 
-      (* The innermost local string exceptions the walk is in, each with its minter. A helper bound
-         inside a scope raises the enclosing exception, so it does not move this; an exception
-         declared anew inside the scope shadows it, and does. *)
-      val mutable scopes : (string * string) list = []
+      (* The local string exceptions the walk is in, innermost first. A helper bound inside a scope
+         raises the enclosing exception, so it does not move this; an exception declared anew inside
+         the scope shadows it, and does. *)
+      val mutable scopes : scope ref list = []
 
       method! value_binding vb =
         let saved = enclosing in
@@ -319,18 +386,13 @@ let read_source ~carriers ?(foreign = []) ~source content =
         enclosing <- saved
 
       method! case c =
-        (* A handler [E v -> ... (Carrier v)], directly or under [exception]. *)
-        let rec caught (p : pattern) =
-          match p.ppat_desc with
-          | Ppat_construct ({ txt; _ }, Some (_, { ppat_desc = Ppat_var { txt = v; _ }; _ })) ->
-              Option.value_map (last_name txt) ~default:[] ~f:(fun e -> [ (e, v) ])
-          | Ppat_exception p | Ppat_alias (p, _) | Ppat_constraint (p, _) -> caught p
-          | Ppat_or (a, b) -> caught a @ caught b
-          | _ -> []
-        in
+        (* A handler of an open scope's exception: what it does with the payload. *)
         List.iter (caught c.pc_lhs) ~f:(fun (e, v) ->
-            List.iter (carriers_of_var v c.pc_rhs) ~f:(fun carrier ->
-                relays := (e, carrier) :: !relays));
+            match List.find scopes ~f:(fun sc -> String.equal !sc.exn e) with
+            | Some sc ->
+                let direct, results = wrappers_of_var v c.pc_rhs in
+                sc := { !sc with direct = direct @ !sc.direct; results = results @ !sc.results }
+            | None -> ());
         super#case c
 
       method! expression e =
@@ -341,10 +403,31 @@ let read_source ~carriers ?(foreign = []) ~source content =
               body ) ->
             let saved = scopes in
             self#extension_constructor ext;
-            scopes <-
-              (txt, enclosing) :: List.filter scopes ~f:(fun (n, _) -> not (String.equal n txt));
+            let sc =
+              ref
+                {
+                  exn = txt;
+                  declared_in = enclosing;
+                  direct = [];
+                  results = [];
+                  literals = [];
+                  not_tags = [];
+                }
+            in
+            scopes <- sc :: List.filter scopes ~f:(fun o -> not (String.equal !o.exn txt));
             self#expression body;
+            closed := !sc :: !closed;
             scopes <- saved
+        | Pexp_match
+            ({ pexp_desc = Pexp_apply ({ pexp_desc = Pexp_ident { txt = f; _ }; _ }, _); _ }, cases)
+          ->
+            Option.iter (last_name f) ~f:(fun f ->
+                List.iter cases ~f:(fun (c : case) ->
+                    List.iter (caught c.pc_lhs) ~f:(fun (k, v) ->
+                        List.iter
+                          (fst (wrappers_of_var v c.pc_rhs))
+                          ~f:(fun carrier -> consumers := (f, k, carrier) :: !consumers))));
+            super#expression e
         | Pexp_construct
             ({ txt; _ }, Some { pexp_desc = Pexp_constant (Pconst_string (s, _, _)); _ })
           when is_carrier txt -> (
@@ -358,37 +441,68 @@ let read_source ~carriers ?(foreign = []) ~source content =
             match tag_number s with
             | Some number -> self#scoped number s
             | None -> ())
+        | Pexp_construct
+            ({ txt = Lident e; _ }, Some { pexp_desc = Pexp_constant (Pconst_string (s, _, _)); _ })
+          when List.exists scopes ~f:(fun sc -> String.equal !sc.exn e) -> (
+            match tag_number s with
+            | Some number -> self#scoped number s
+            | None ->
+                let sc = List.find_exn scopes ~f:(fun sc -> String.equal !sc.exn e) in
+                sc := { !sc with not_tags = s :: !sc.not_tags })
         | Pexp_constant (Pconst_string (s, _, _)) -> (
             match tag_number s with Some number -> self#scoped number s | None -> ())
         | _ -> super#expression e
 
       method scoped number tag =
-        List.iter scopes ~f:(fun (exn, minter) ->
-            mints := { number; tag; family = Relayed { exn; via = "" }; source; minter } :: !mints)
+        List.iter scopes ~f:(fun sc ->
+            let m =
+              {
+                number;
+                tag;
+                family = Relayed { exn = !sc.exn; via = "" };
+                source;
+                minter = !sc.declared_in;
+              }
+            in
+            sc := { !sc with literals = m :: !sc.literals })
     end
   in
   walker#structure structure;
   {
     path = source;
     mints = List.rev !mints;
-    relays = List.rev !relays;
+    scopes = List.rev_map !closed ~f:(fun sc -> { sc with literals = List.rev sc.literals });
+    consumers = List.rev !consumers;
     malformed = List.rev !malformed;
   }
 
-(** The relaying exceptions, [(exception, carrier)], deduplicated. *)
-let relays reads =
-  List.concat_map reads ~f:(fun r -> r.relays) |> List.dedup_and_sort ~compare:Poly.compare
+(** The carriers a scope's payload reaches: those its own handlers apply to it, and those a caller
+    of its declaring function applies to a result constructor its handlers wrap the payload in. *)
+let scope_carriers ~consumers (sc : scope) =
+  sc.direct
+  @ List.concat_map sc.results ~f:(fun k ->
+      List.filter_map consumers ~f:(fun (f, k', carrier) ->
+          Option.some_if (String.equal f sc.declared_in && String.equal k k') carrier))
+  |> List.dedup_and_sort ~compare:String.compare
 
-(** The mints of [reads], each scope literal kept only under the exceptions that relay, and bound to
-    the carrier relaying it. *)
-let resolve ~relays reads =
-  List.concat_map reads ~f:(fun r ->
-      List.concat_map r.mints ~f:(fun m ->
-          match m.family with
-          | Relayed { exn; _ } ->
-              List.filter_map relays ~f:(fun (e, via) ->
-                  Option.some_if (String.equal e exn) { m with family = Relayed { exn; via } })
-          | _ -> [ m ]))
+(** Every mint of [reads]: the [Applied] literals, and each scope's literals under every carrier its
+    payload reaches -- a scope reaching none mints nothing, its literals being no provenance. Also
+    [(source, literal)] for every string a carrier, or a relaying scope's exception, is applied to
+    that is no tag. *)
+let resolve reads =
+  let consumers = List.concat_map reads ~f:(fun r -> r.consumers) in
+  let relayed =
+    List.concat_map reads ~f:(fun r ->
+        List.concat_map r.scopes ~f:(fun sc ->
+            List.map (scope_carriers ~consumers sc) ~f:(fun via -> (r.path, sc, via))))
+  in
+  ( List.concat_map reads ~f:(fun r -> r.mints)
+    @ List.concat_map relayed ~f:(fun (_, sc, via) ->
+        List.map sc.literals ~f:(fun m -> { m with family = Relayed { exn = sc.exn; via } })),
+    List.concat_map reads ~f:(fun r -> List.map r.malformed ~f:(fun l -> (r.path, l)))
+    @ (List.concat_map relayed ~f:(fun (path, sc, _) ->
+           List.map sc.not_tags ~f:(fun l -> (path, l)))
+      |> List.dedup_and_sort ~compare:Poly.compare) )
 
 let compare_mint a b =
   Poly.compare
@@ -544,7 +658,7 @@ let collisions (mints : mint list) =
 
 (** What the families themselves refuse: an unread constructor, a rendering missing or doubled, an
     open family minting nothing. *)
-let family_violations ~type_source ~shape ~(mints : mint list) =
+let family_violations ?(identities = []) ~type_source ~shape ~(mints : mint list) () =
   match shape with
   | None ->
       [
@@ -569,6 +683,13 @@ let family_violations ~type_source ~shape ~(mints : mint list) =
               Some
                 (Printf.sprintf "%s: constructor %s renders as %s" type_source c
                    (String.concat ~sep:" and " tags)))
+      @ List.filter_map shape.carriers ~f:(fun c ->
+          Option.some_if
+            (not (List.mem identities c ~equal:String.equal))
+            (Printf.sprintf
+               "%s: the renderer does not return %s's string unchanged, so the literals it is \
+                applied to are not what a printed provenance shows"
+               type_source c))
       @ List.filter_map shape.carriers ~f:(fun c ->
           if List.exists mints ~f:(fun m -> Poly.equal m.family (Applied c)) then None
           else Some (Printf.sprintf "no source applies %s to a tag literal: the reader is blind" c))

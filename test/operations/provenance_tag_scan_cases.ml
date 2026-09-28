@@ -30,9 +30,13 @@ let library_with ~store ~consume =
       "let " ^ consume ^ " y =";
       "  let exception " ^ nv ^ " of string in";
       "  let rec go = function [] -> () | _ :: tl -> go tl in";
-      "  go y;";
-      "  record (Site \"8:fixture-recorded\");";
-      "  raise (" ^ nv ^ " \"4:fixture-consume\")";
+      "  try";
+      "    go y;";
+      "    record (Site \"8:fixture-recorded\");";
+      "    raise (" ^ nv ^ " \"4:fixture-consume\")";
+      "  with " ^ nv ^ " i -> Error i";
+      "";
+      "let caller y = match " ^ consume ^ " y with Ok () -> () | Error i -> record (Site i)";
       "";
       "let elsewhere () = record (Tn.Site \"6:fixture-elsewhere\")";
     ]
@@ -49,7 +53,7 @@ let type_source =
       "  | Refined (a, b) -> provenance_to_string a ^ \" -> \" ^ provenance_to_string b";
     ]
 
-let resolve reads = Scan.merge (Scan.resolve ~relays:(Scan.relays reads) reads)
+let resolve reads = Scan.merge (fst (Scan.resolve reads))
 
 let read ?(source = "lib/fixture.ml") ?foreign text =
   Scan.read_source ~carriers ?foreign ~source text
@@ -124,22 +128,32 @@ let () =
          "type provenance = Site of string | Weird of int | Cap_fixture"
      in
      has ~substring:"constructor Weird carries neither"
-       (Scan.family_violations ~type_source:"t.ml" ~shape ~mints));
+       (Scan.family_violations ~identities:[ "Site" ] ~type_source:"t.ml" ~shape ~mints ()));
   p "a nullary constructor mints the tag its renderer case returns"
     (strings (tags rendered) [ "1:cap-fixture" ]);
+  p "the renderer must return a carrier's string unchanged"
+    (strings (Scan.identity_renderings ~renderer:"provenance_to_string" type_source) [ "Site" ]
+    && has ~substring:"does not return Site's string unchanged"
+         (Scan.family_violations ~type_source:"t.ml"
+            ~identities:
+              (Scan.identity_renderings ~renderer:"provenance_to_string"
+                 (String.substr_replace_all type_source ~pattern:"Site s -> s"
+                    ~with_:"Site s -> \"site:\" ^ s"))
+            ~shape:(Scan.type_shape ~type_name:"provenance" type_source)
+            ~mints ()));
   p "a nullary constructor with no rendering is refused"
     (has ~substring:"constructor Cap_fixture has no tag rendering"
-       (Scan.family_violations ~type_source:"t.ml"
+       (Scan.family_violations ~identities:[ "Site" ] ~type_source:"t.ml"
           ~shape:(Scan.type_shape ~type_name:"provenance" type_source)
-          ~mints:applied));
+          ~mints:applied ()));
   p "a missing type is refused rather than read as no family"
     (has ~substring:"the families cannot be derived"
-       (Scan.family_violations ~type_source:"t.ml" ~shape:None ~mints));
+       (Scan.family_violations ~type_source:"t.ml" ~shape:None ~mints ()));
   p "a carrier applied to no literal anywhere is the reader gone blind"
     (has ~substring:"no source applies Site to a tag literal"
-       (Scan.family_violations ~type_source:"t.ml"
+       (Scan.family_violations ~identities:[ "Site" ] ~type_source:"t.ml"
           ~shape:(Scan.type_shape ~type_name:"provenance" type_source)
-          ~mints:(rendered @ relayed)));
+          ~mints:(rendered @ relayed) ()));
   (* What a relayed code is. *)
   p "every tag literal in a relaying exception's scope is a code, a helper's argument included"
     (strings (tags relayed)
@@ -168,7 +182,7 @@ let () =
          "  let check () = if x then raise @@ " ^ nv ^ " \"2:fixture-in-helper\" in";
          "  let inner () =";
          "    let exception " ^ nv ^ " of string in";
-         "    raise (" ^ nv ^ " \"3:fixture-inner\")";
+         "    try raise (" ^ nv ^ " \"3:fixture-inner\") with " ^ nv ^ " j -> record (Site j)";
          "  in";
          "  try check (); inner (); raise (" ^ nv ^ " \"7:fixture-store\")";
          "  with " ^ nv ^ " i -> record (Site i)";
@@ -180,6 +194,41 @@ let () =
            (resolve [ read ~source:"n.ml" nested ])
            ~f:(fun (m : Scan.mint) -> m.tag ^ " " ^ m.minter))
         [ "2:fixture-in-helper outer"; "3:fixture-inner inner"; "7:fixture-store outer" ]));
+  (* A relay belongs to its own scope: a scope is a family only through what ITS handlers do. *)
+  (let lone =
+     String.concat ~sep:"\n"
+       [
+         "let first () =";
+         "  let exception " ^ nv ^ " of string in";
+         "  try raise (" ^ nv ^ " \"2:fixture-first\") with " ^ nv ^ " i -> record (Site i)";
+         "let second () =";
+         "  let exception " ^ nv ^ " of string in";
+         "  try raise (" ^ nv ^ " \"3:fixture-second\") with " ^ nv ^ " i -> log i";
+       ]
+   in
+   p "a same-named scope whose own handler does not relay mints nothing"
+     (strings (tags (resolve [ read lone ])) [ "2:fixture-first" ]));
+  p "a payload wrapped in a result constructor is relayed by a caller matching it into a carrier"
+    (Option.equal String.equal (minter_of "4:fixture-consume") (Some "consume"));
+  (let unconsumed =
+     String.substr_replace_all library ~pattern:"Error i -> record (Site i)"
+       ~with_:"Error i -> log i"
+   in
+   p_none "a result constructor no caller hands to a carrier relays nothing"
+     (resolve [ read unconsumed ])
+     ~f:(fun (m : Scan.mint) -> String.equal m.tag "4:fixture-consume"));
+  (let bad =
+     String.substr_replace_all library ~pattern:"\"7:fixture-store\"" ~with_:"\"not-a-tag\""
+   in
+   p "the relaying exception applied to a string that is no tag is refused, not skipped"
+     (List.mem (snd (Scan.resolve [ read bad ])) ("lib/fixture.ml", "not-a-tag") ~equal:Poly.equal));
+  (let silent =
+     "let f () =\n  let exception " ^ nv ^ " of string in\n  try raise (" ^ nv
+     ^ " \"an error message\") with " ^ nv ^ " m -> log m"
+   in
+   p_empty "a string raised through an exception that relays nothing is no provenance"
+     ~over:[ silent ]
+     (snd (Scan.resolve [ read silent ])));
   p "a function declaring no exception adds no code to a source that does"
     (strings
        (tags
@@ -286,6 +335,14 @@ let () =
    in
    p "a module declaring its own string constructor of a carrier's name is foreign"
      (Scan.declares_own_carrier ~carriers own && not (Scan.declares_own_carrier ~carriers library));
+   p_empty "a foreign constructor reached through a chain of module bindings mints nothing"
+     ~over:[ aliased ]
+     (read ~source:"test/c.ml" ~foreign:[ "Key_scan" ]
+        "module A = Test_utils.Key_scan\n\
+         module B = A\n\
+         module C = C\n\
+         let e = B.Site \"12:fixture-key\"")
+       .mints;
    p_empty "a foreign constructor applied unqualified in its own module mints nothing" ~over:[ own ]
      (read ~source:"test/support/key_scan.ml" ~foreign:[ "Key_scan" ] own).mints;
    p "a foreign constructor qualified through an alias mints nothing; the owner's still does"

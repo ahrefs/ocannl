@@ -1,6 +1,7 @@
 the type's constructors split into rendered, carrier, composite and unread: true
 a constructor of another shape is unread, and refused: true
 a nullary constructor mints the tag its renderer case returns: true
+the renderer must return a carrier's string unchanged: true
 a nullary constructor with no rendering is refused: true
 a missing type is refused rather than read as no family: true
 a carrier applied to no literal anywhere is the reader gone blind: true
@@ -11,6 +12,11 @@ a carrier applied to a literal mints it, qualified or not, inside a scope or out
 a tag in a comment is minted by no family: true
 an exception whose payload no handler hands to a carrier opens no family: true
 a helper inside a scope mints for the scope, and a scope declared anew inside it is its own: true
+a same-named scope whose own handler does not relay mints nothing: true
+a payload wrapped in a result constructor is relayed by a caller matching it into a carrier: true
+a result constructor no caller hands to a carrier relays nothing: true
+the relaying exception applied to a string that is no tag is refused, not skipped: true
+a string raised through an exception that relays nothing is no provenance: true
 a function declaring no exception adds no code to a source that does: true
 the exception with the number cites the code: true
 a citation wrapped at the line break still cites it: true
@@ -38,6 +44,7 @@ a phase whose function mints nothing is stale: true
 a fixture library citing its own tags is accepted: true
 a carrier applied to a string that is no tag is recorded, and refused: true
 a module declaring its own string constructor of a carrier's name is foreign: true
+a foreign constructor reached through a chain of module bindings mints nothing: true
 a foreign constructor applied unqualified in its own module mints nothing: true
 a foreign constructor qualified through an alias mints nothing; the owner's still does: true
 a constructor's rendering minted by any other family is refused: true

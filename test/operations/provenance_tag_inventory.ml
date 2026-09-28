@@ -123,8 +123,8 @@ let scan ~records ~pinned root generated =
         if List.mem unparsed_once path ~equal:String.equal then None
         else parses (Scan.read_source ~carriers ~foreign ~source:path) candidate)
   in
-  let relays = Scan.relays reads in
-  let mints = Scan.merge (rendered @ Scan.resolve ~relays reads) in
+  let resolved, malformed = Scan.resolve reads in
+  let mints = Scan.merge (rendered @ resolved) in
   let library, tests = List.partition_tf mints ~f:(fun m -> not (Scan.is_test_source m.source)) in
   let test_tags =
     List.filter_map tests ~f:(fun m ->
@@ -156,23 +156,19 @@ let scan ~records ~pinned root generated =
   List.iter
     (List.map (List.rev !unparsed) ~f:(fun path ->
          path ^ ": does not parse as OCaml, so the tags it mints are unread")
-    @ Scan.family_violations ~type_source ~shape ~mints
-    @ Scan.violations
-        ~malformed:
-          (List.concat_map reads ~f:(fun (r : Scan.read) ->
-               List.map r.malformed ~f:(fun literal -> (r.path, literal))))
-        ~mints
+    @ Scan.family_violations
+        ~identities:(Option.value_map type_text ~default:[] ~f:(Scan.identity_renderings ~renderer))
+        ~type_source ~shape ~mints ()
+    @ Scan.violations ~malformed ~mints
         ~pinned:(List.map pinned ~f:(fun (n, tags, _) -> (n, tags)))
         ~files ()
     @ Scan.table_violations ~mints ~exn:phase_family ~table_source ~table ~phases
     @ Scan.stale_records ~records paths)
     ~f:Verdict.fail;
   let exceptions =
-    List.filter_map relays ~f:(fun (exn, via) ->
-        Option.some_if
-          (List.exists library ~f:(fun m ->
-               match m.family with Relayed r -> String.equal r.exn exn | _ -> false))
-          (exn, via))
+    List.filter_map library ~f:(fun m ->
+        match m.family with Relayed r -> Some (r.exn, r.via) | _ -> None)
+    |> List.dedup_and_sort ~compare:Poly.compare
   in
   printf "Families, derived from the constructors of `%s` in %s:\n" type_name type_source;
   Option.iter shape ~f:(fun (s : Scan.shape) ->
@@ -182,8 +178,8 @@ let scan ~records ~pinned root generated =
           List.iter exceptions ~f:(fun (exn, via) ->
               if String.equal via c then
                 printf
-                  "  %s via %s -- every tag literal in the scope of a local `%s` exception, whose \
-                   payload a handler hands to %s\n"
+                  "  %s via %s -- every tag literal in the scope of a local `%s` exception whose \
+                   handler hands its payload to %s, directly or through a caller\n"
                   c exn exn c));
       List.iter s.composite ~f:(fun c -> printf "  %s -- composes provenances, mints none\n" c));
   printf "Library tags, by family and by the function minting them:\n";
