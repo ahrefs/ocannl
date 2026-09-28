@@ -41,6 +41,7 @@ Profile "reproducible" sets:
   narrow_compute_f32=true
   online_softmax=false
   online_softmax_backward=false
+  online_softmax_block=0
 
 Profile "performance" sets:
   autotune_search=true

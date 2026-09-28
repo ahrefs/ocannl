@@ -1,0 +1,137 @@
+--- run under cc_backend_fast_math=true ---
+--- leg 1: parity over block sizes and sequence lengths ---
+seq 24: the two-pass form has one scan and no tile: true
+seq 24, block 1: one scan, over the 24 key blocks, carrying one pair: true
+seq 24, block 1: the fold writes its two tiles: true
+seq 24, block 1: no tile is a routine argument: true
+seq 24, block 1: no seq^2-sized node is written: true
+seq 24, block 1: matches the composed output within 1e-5 relative: true
+seq 24, block 1: matches the two-pass output within 1e-5 relative: true
+seq 24, block 8: one scan, over the 3 key blocks, carrying one pair: true
+seq 24, block 8: the fold writes its two tiles: true
+seq 24, block 8: no tile is a routine argument: true
+seq 24, block 8: no seq^2-sized node is written: true
+seq 24, block 8: matches the composed output within 1e-5 relative: true
+seq 24, block 8: matches the two-pass output within 1e-5 relative: true
+seq 24, block 16: one scan, over the 2 key blocks, carrying one pair: true
+seq 24, block 16: the fold writes its two tiles: true
+seq 24, block 16: no tile is a routine argument: true
+seq 24, block 16: no seq^2-sized node is written: true
+seq 24, block 16: matches the composed output within 1e-5 relative: true
+seq 24, block 16: matches the two-pass output within 1e-5 relative: true
+seq 24, block 32: one scan, over the 1 key blocks, carrying one pair: true
+seq 24, block 32: the fold writes its two tiles: true
+seq 24, block 32: no tile is a routine argument: true
+seq 24, block 32: no seq^2-sized node is written: true
+seq 24, block 32: matches the composed output within 1e-5 relative: true
+seq 24, block 32: matches the two-pass output within 1e-5 relative: true
+seq 24, block 5: one scan, over the 5 key blocks, carrying one pair: true
+seq 24, block 5: the fold writes its two tiles: true
+seq 24, block 5: no tile is a routine argument: true
+seq 24, block 5: no seq^2-sized node is written: true
+seq 24, block 5: matches the composed output within 1e-5 relative: true
+seq 24, block 5: matches the two-pass output within 1e-5 relative: true
+seq 7: the two-pass form has one scan and no tile: true
+seq 7, block 3: one scan, over the 3 key blocks, carrying one pair: true
+seq 7, block 3: the fold writes its two tiles: true
+seq 7, block 3: no tile is a routine argument: true
+seq 7, block 3: no seq^2-sized node is written: true
+seq 7, block 3: matches the composed output within 1e-5 relative: true
+seq 7, block 3: matches the two-pass output within 1e-5 relative: true
+seq 7, block 8: one scan, over the 1 key blocks, carrying one pair: true
+seq 7, block 8: the fold writes its two tiles: true
+seq 7, block 8: no tile is a routine argument: true
+seq 7, block 8: no seq^2-sized node is written: true
+seq 7, block 8: matches the composed output within 1e-5 relative: true
+seq 7, block 8: matches the two-pass output within 1e-5 relative: true
+seq 20: the two-pass form has one scan and no tile: true
+seq 20, block 8: one scan, over the 3 key blocks, carrying one pair: true
+seq 20, block 8: the fold writes its two tiles: true
+seq 20, block 8: no tile is a routine argument: true
+seq 20, block 8: no seq^2-sized node is written: true
+seq 20, block 8: matches the composed output within 1e-5 relative: true
+seq 20, block 8: matches the two-pass output within 1e-5 relative: true
+--- leg 2: head width above the recompute cap ---
+seq^2 buffers: composed 2, two-pass 1, fold 0
+the two-pass form stores the scores, read twice: true
+the fold reads the scores once, from its tile: no seq^2 buffer: true
+the fold matches the composed output within 1e-5 relative: true
+--- leg 3: special values of the masked scores, against the composed form ---
+masked key prefixes, block 8: every composed output is finite: true
+masked key prefixes, block 8: the fold is NaN exactly where the composed form is, and within 1e-5 elsewhere: true
+masked key prefixes, block 5: every composed output is finite: true
+masked key prefixes, block 5: the fold is NaN exactly where the composed form is, and within 1e-5 elsewhere: true
+fully masked rows at -inf, block 8: the composed output has NaN rows: true
+fully masked rows at -inf, block 8: the fold is NaN exactly where the composed form is, and within 1e-5 elsewhere: true
+fully masked rows at -inf, block 5: the composed output has NaN rows: true
+fully masked rows at -inf, block 5: the fold is NaN exactly where the composed form is, and within 1e-5 elsewhere: true
+fully masked rows at a finite fill, block 8: every composed output is finite: true
+fully masked rows at a finite fill, block 8: the fold is NaN exactly where the composed form is, and within 1e-5 elsewhere: true
+fully masked rows at a finite fill, block 5: every composed output is finite: true
+fully masked rows at a finite fill, block 5: the fold is NaN exactly where the composed form is, and within 1e-5 elsewhere: true
+fully masked rows at the lowest finite fill, block 8: every composed output is finite: true
+fully masked rows at the lowest finite fill, block 8: the fold is NaN exactly where the composed form is, and within 1e-5 elsewhere: true
+fully masked rows at the lowest finite fill, block 5: every composed output is finite: true
+fully masked rows at the lowest finite fill, block 5: the fold is NaN exactly where the composed form is, and within 1e-5 elsewhere: true
+a NaN fill, block 8: the composed output has NaN rows: true
+a NaN fill, block 8: the fold is NaN exactly where the composed form is, and within 1e-5 elsewhere: true
+a NaN fill, block 5: the composed output has NaN rows: true
+a NaN fill, block 5: the fold is NaN exactly where the composed form is, and within 1e-5 elsewhere: true
+a positive-infinity fill, block 8: the composed output has NaN rows: true
+a positive-infinity fill, block 8: the fold is NaN exactly where the composed form is, and within 1e-5 elsewhere: true
+a positive-infinity fill, block 5: the composed output has NaN rows: true
+a positive-infinity fill, block 5: the fold is NaN exactly where the composed form is, and within 1e-5 elsewhere: true
+--- leg 4: two stacked blocks ---
+two scans: true
+no seq^2-sized node is written: true
+matches the composed output within 1e-5 relative: true
+--- leg 5: rectangular attention, queries and keys of different lengths ---
+9 queries, 13 keys, block 4: one scan over the 4 key blocks: true
+9 queries, 13 keys, block 4: matches the composed output within 1e-5 relative: true
+13 queries, 9 keys, block 4: one scan over the 3 key blocks: true
+13 queries, 9 keys, block 4: matches the composed output within 1e-5 relative: true
+9 queries, 13 keys, block 16: one scan over the 1 key blocks: true
+9 queries, 13 keys, block 16: matches the composed output within 1e-5 relative: true
+6 queries, 11 keys, block 1: one scan over the 11 key blocks: true
+6 queries, 11 keys, block 1: matches the composed output within 1e-5 relative: true
+--- leg 6: the member contract, and the declines ---
+the pass changes the raw lowering: true
+the pass is idempotent on its own output: true
+block 0 is the two-pass form: one scan, no tile: true
+re-lowering the folded forward is an analysis-cache hit, not a miss: true
+under the default caps, each tile is non-virtual: true
+the forward writes the two tiles: true
+with the caps lifted, each tile is refused by a structural rule (147 or 148): true
+a schedule op naming a loop inside the fold's scan body declines: the body is out of reach: true
+a value pass reading the probabilities through an elementwise step: no fold, the two-pass form: true
+an accumulation reading the row max before the value pass: no fold, the two-pass form: true
+scores that are an input, not a contraction: no fold, the two-pass form: true
+--- leg 7: training -- the fold forward under the composed and the fused backward ---
+treatment E (composed backward): the step holds the fold: true
+treatment E (composed backward): and no fused backward: true
+treatment E (composed backward): the loss agrees within 1e-5 relative: true
+treatment E (composed backward): the same parameters carry gradients: true
+treatment E (composed backward): w_q_attn0.grad agrees within 1e-4 relative: true
+treatment E (composed backward): w_q_attn0.grad is not identically zero: true
+treatment E (composed backward): w_k_attn0.grad agrees within 1e-4 relative: true
+treatment E (composed backward): w_k_attn0.grad is not identically zero: true
+treatment E (composed backward): w_v_attn0.grad agrees within 1e-4 relative: true
+treatment E (composed backward): w_v_attn0.grad is not identically zero: true
+treatment E (composed backward): w_o_attn0.grad agrees within 1e-4 relative: true
+treatment E (composed backward): w_o_attn0.grad is not identically zero: true
+treatment F (fused backward): the step holds the fold: true
+treatment F (fused backward): and the fused backward: true
+treatment F (fused backward): the loss agrees within 1e-5 relative: true
+treatment F (fused backward): the same parameters carry gradients: true
+treatment F (fused backward): w_q_attn0.grad agrees within 1e-4 relative: true
+treatment F (fused backward): w_q_attn0.grad is not identically zero: true
+treatment F (fused backward): w_k_attn0.grad agrees within 1e-4 relative: true
+treatment F (fused backward): w_k_attn0.grad is not identically zero: true
+treatment F (fused backward): w_v_attn0.grad agrees within 1e-4 relative: true
+treatment F (fused backward): w_v_attn0.grad is not identically zero: true
+treatment F (fused backward): w_o_attn0.grad agrees within 1e-4 relative: true
+treatment F (fused backward): w_o_attn0.grad is not identically zero: true
+a NaN fill: w_q_attn0.grad is NaN exactly where the composed one is: true
+a NaN fill: w_k_attn0.grad is NaN exactly where the composed one is: true
+a NaN fill: w_v_attn0.grad is NaN exactly where the composed one is: true
+a NaN fill: w_o_attn0.grad is NaN exactly where the composed one is: true
