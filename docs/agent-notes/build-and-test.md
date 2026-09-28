@@ -757,6 +757,14 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   children that close their locks. The forged publication window records settle sleeps before
   checking reaping; `last` squatter/legacy lock cases end with a byte comparison of the fixture
   tree. Fixtures use `paths`/`lock-status`, identity-checked cleanup and bounded child waits.
+- **`/proc/locks` names a flock's ACQUIRER, not its holders** (gh-ocannl-1107): the lock lives on
+  the open file description, so after `take_lock`'s perl exits the line keeps its dead pid (0 from
+  inside a pid namespace; some kernels drop the row) while the supervisor, dune and a `setsid`
+  leftover hold it through fd 9.
+  `stop`'s census counts a named pid only once its own fdinfo shows the FLOCK, and otherwise sweeps
+  every `/proc/<pid>/fdinfo`; trusting the name reported `STILL hold` and reaped nothing. Leg 67
+  pins it with a lock whose acquirer exited, against the unfiltered census as negative control
+  (skipped on a kernel that names nobody, where no census can trust a name).
 - **A run directory says which source it ran, as of the launch** (gh-ocannl-992): beside `cmd`,
   `cap`, `wt`, `runs`, `log` and the verdict, `run`/`start`/`repeat` record `head` (the checkout's
   HEAD commit) and `dirty` (its `git status --porcelain`: empty when clean, else one line per
