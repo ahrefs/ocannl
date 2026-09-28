@@ -517,7 +517,10 @@ let raw_entries =
 let entries =
   List.map raw_entries ~f:(fun (source, markers) -> ("test/operations/" ^ source, markers))
 
-let markers source = List.Assoc.find_exn entries source ~equal:String.equal
+(** The markers registered for [source], none for a source without a row: the catalogue names a
+    source outside [sources] itself (gh-ocannl-1088) and still reports its row difference. *)
+let markers source = Option.value (List.Assoc.find entries source ~equal:String.equal) ~default:[]
+
 let sources = List.map entries ~f:fst
 
 let raw_direct_evidence =
