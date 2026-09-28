@@ -15,6 +15,9 @@ a helper inside a scope mints for the scope, and a scope declared anew inside it
 a same-named scope whose own handler does not relay mints nothing: true
 a payload wrapped in a result constructor is relayed by a caller matching it into a carrier: true
 a result constructor no caller hands to a carrier relays nothing: true
+a caller of a same-named function of another module relays nothing: true
+a caller qualifying the declaring module through a binding relays: true
+a caller qualifying the declaring module directly relays: true
 the relaying exception applied to a string that is no tag is refused, not skipped: true
 a string raised through an exception that relays nothing is no provenance: true
 a function declaring no exception adds no code to a source that does: true
@@ -45,6 +48,7 @@ a fixture library citing its own tags is accepted: true
 a carrier applied to a string that is no tag is recorded, and refused: true
 a module declaring its own string constructor of a carrier's name is foreign: true
 a foreign constructor reached through a chain of module bindings mints nothing: true
+a module name resolves to the binding in scope where it is used: true
 a foreign constructor applied unqualified in its own module mints nothing: true
 a foreign constructor qualified through an alias mints nothing; the owner's still does: true
 a constructor's rendering minted by any other family is refused: true
@@ -67,4 +71,5 @@ shipping inventory groups the codes under the function minting them: true
 shipping inventory refuses a citation of a code no raise site mints: true
 shipping inventory refuses a prose citation of a retired tag: true
 shipping inventory refuses a new number collision: true
+shipping inventory reads a relaying source that never spells the carrier: true
 shipping inventory refuses a phase table placing a code in the wrong phase: true

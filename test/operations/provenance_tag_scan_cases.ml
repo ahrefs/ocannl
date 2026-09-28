@@ -217,6 +217,23 @@ let () =
    p_none "a result constructor no caller hands to a carrier relays nothing"
      (resolve [ read unconsumed ])
      ~f:(fun (m : Scan.mint) -> String.equal m.tag "4:fixture-consume"));
+  (let unconsumed =
+     String.substr_replace_all library ~pattern:"Error i -> record (Site i)"
+       ~with_:"Error i -> log i"
+   in
+   let same_name = "let c y = match consume y with Ok () -> () | Error i -> record (Site i)" in
+   let qualified = "let c y = match F.consume y with Ok () -> () | Error i -> record (Site i)" in
+   let with_caller text = resolve [ read unconsumed; read ~source:"lib/other.ml" text ] in
+   let is_consume (m : Scan.mint) = String.equal m.tag "4:fixture-consume" in
+   p_none "a caller of a same-named function of another module relays nothing"
+     (with_caller same_name) ~f:is_consume;
+   p_exists "a caller qualifying the declaring module through a binding relays"
+     (with_caller ("module F = Fixture\n" ^ qualified))
+     ~f:is_consume;
+   p_exists "a caller qualifying the declaring module directly relays"
+     (with_caller
+        (String.substr_replace_all qualified ~pattern:"F.consume" ~with_:"Fixture.consume"))
+     ~f:is_consume);
   (let bad =
      String.substr_replace_all library ~pattern:"\"7:fixture-store\"" ~with_:"\"not-a-tag\""
    in
@@ -343,6 +360,24 @@ let () =
          module C = C\n\
          let e = B.Site \"12:fixture-key\"")
        .mints;
+   p_all "a module name resolves to the binding in scope where it is used"
+     [
+       "module P = Tnode\n\
+        let a = P.Site \"13:fixture-owned\"\n\
+        module P = Key_scan\n\
+        let b = P.Site \"12:fixture-key\"";
+       "module P = Key_scan\n\
+        let b = P.Site \"12:fixture-key\"\n\
+        module P = Tnode\n\
+        let a = P.Site \"13:fixture-owned\"";
+       "let b = let module P = Key_scan in P.Site \"12:fixture-key\"\n\
+        let a = P.Site \"13:fixture-owned\"";
+       "module M = struct module P = Key_scan let b = P.Site \"12:fixture-key\" end\n\
+        let a = P.Site \"13:fixture-owned\"";
+     ] ~f:(fun text ->
+       strings
+         (tags (read ~source:"test/d.ml" ~foreign:[ "Key_scan" ] text).mints)
+         [ "13:fixture-owned" ]);
    p_empty "a foreign constructor applied unqualified in its own module mints nothing" ~over:[ own ]
      (read ~source:"test/support/key_scan.ml" ~foreign:[ "Key_scan" ] own).mints;
    p "a foreign constructor qualified through an alias mints nothing; the owner's still does"
@@ -473,6 +508,32 @@ let () =
     (low_level ^ "\nlet more () = record (Site \"7:fixture-collides\")\n");
   check "shipping inventory refuses a new number collision" ~exit:1
     ~message:"number 7 is minted as 7:fixture-collides and 7:fixture-store" (run ());
+  write "arrayjit/lib/low_level.ml"
+    (String.concat ~sep:"\n"
+       [
+         "let check_and_store_virtual x =";
+         "  let exception " ^ nv ^ " of string in";
+         "  try helper ~code:\"9:fixture-helper\"; if x then raise @@ " ^ nv
+         ^ " \"7:fixture-store\"";
+         "  with " ^ nv ^ " i -> record (Site i)";
+         "let consumer y =";
+         "  match Inliner.instantiate_computations y with Ok () -> () | Error i -> record (Site i)";
+         "let elsewhere () = record (Tn.Site \"6:fixture-elsewhere\")";
+       ]);
+  write "arrayjit/lib/inliner.ml"
+    (String.concat ~sep:"\n"
+       [
+         "let instantiate_computations y =";
+         "  let exception " ^ nv ^ " of string in";
+         "  try if y then raise (" ^ nv ^ " \"4:fixture-consume\"); Ok () with " ^ nv
+         ^ " i -> Error i";
+       ]);
+  check "shipping inventory reads a relaying source that never spells the carrier" ~exit:0
+    ~message:
+      ("Site via " ^ nv
+     ^ " -- arrayjit/lib/inliner.ml, instantiate_computations:\n  4:fixture-consume\n")
+    (run ());
+  Unix.unlink (Stdlib.Filename.concat root "arrayjit/lib/inliner.ml");
   write "arrayjit/lib/low_level.ml" low_level;
   write boundary "let phase_table = [ (\"4:fixture-consume\", Store) ]\n";
   check "shipping inventory refuses a phase table placing a code in the wrong phase" ~exit:1

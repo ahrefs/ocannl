@@ -97,8 +97,11 @@ let scan ~records ~pinned root generated =
         String.is_suffix path ~suffix:".ml" && not (own path))
     |> List.filter_map ~f:(fun file ->
         let content = read file in
+        (* A source reaches a carrier by spelling it, or relays one through a local exception whose
+           payload a caller elsewhere hands on. *)
         Option.some_if
-          (List.exists carriers ~f:(fun substring -> String.is_substring content ~substring))
+          (List.exists (Scan.exception_keyword :: carriers) ~f:(fun substring ->
+               String.is_substring content ~substring))
           (file.path, content))
   in
   let parses f (path, content) =
