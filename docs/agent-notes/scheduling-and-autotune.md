@@ -33,7 +33,12 @@ files.
   barrier, so query and key tails keep the scalar form. It is GPU-only: a `Workgroup` loop
   enclosing barriers has no serial rendering (cc would finish lane 0's scan before lane 1 starts).
   Read the per-statement census (`Context.routine.mma` renderings), not the aggregate, to show both
-  contractions tensorized (`test/operations/online_softmax_block_mma`).
+  contractions tensorized (`test/operations/online_softmax_block_mma`). Measured in
+  `benchmarks/report-gh1003-block-fold.md`: on Metal the attention's per-layer kernels go from
+  3.2-7.7 ms (composed, seq 128-1024) to one kernel of 0.36-0.82 ms, both contractions
+  `Mma_intrinsics` in every layer; the key block 8/16/32 is within noise at seq 128-512 and 16
+  wins at seq 1024 (`approximate` takes 16). In training the step is backward-bound
+  (gh-ocannl-1124): the fold moves it by 1-2%.
 - A GPU schedule must cover EVERY materialized-writing nest of the routine, not only the one the
   pipeline builds. Launch dimensions are kernel-global, so `Low_level.validate_parallel` rejects any
   companion write (a bias/relu tail; the elementwise statements an aligned-merged fission segment
