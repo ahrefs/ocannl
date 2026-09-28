@@ -63,8 +63,9 @@ let canonical_of ?(materialized_constant = false) ctx =
    touch the code is answered without recompiling. *)
 let key_of ctx canon =
   Option.value_exn
-    (SC.cache_key ~timing_identity ~limits:(Context.hardware_limits ctx) canon
-       ~backend:(Context.backend_name ctx))
+    (SC.cache_key ~timing_identity ~limits:(Context.hardware_limits ctx)
+       ~capabilities:(Context.codegen_capabilities ctx)
+       canon ~backend:(Context.backend_name ctx))
 
 let identity_of ?materialized_constant ctx =
   let canon = canonical_of ?materialized_constant ctx in

@@ -3701,7 +3701,8 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
     in
     (* The accumulator residency the seeded [Privatize] tiles are minted at: the same resolution the
        backend's code generation widens the serial rendering by (gh-ocannl-1116). *)
-    let accum_prec = (Context.codegen_capabilities ctx).Ir.Backend_intf.accum_prec in
+    let capabilities = Context.codegen_capabilities ctx in
+    let accum_prec = capabilities.Ir.Backend_intf.accum_prec in
     let search_ctx = Option.value timing_ctx ~default:ctx in
     (* The base compile: identity transform (= the serial baseline candidate), capturing the
        optimized code every candidate derives from (see [compile_candidate]) and its canonical form.
@@ -3777,12 +3778,12 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
           release_quietly ~what:"the baseline compile" bctx)
     in
     release_baseline_hook := release_baseline;
-    let codegen_tag = SC.codegen_tag ~limits () in
+    let codegen_tag = SC.codegen_tag ~limits ~capabilities () in
     let objective = timing_string timing in
     let key =
       SC.cache_key
         ~timing_identity:(Context.timing_identity search_ctx)
-        ~objective ~limits canon ~backend
+        ~objective ~limits ~capabilities canon ~backend
     in
     let use_cache = (not (String.is_empty cache_dir)) && SC.complete canon && Option.is_some key in
     if Option.is_none key then

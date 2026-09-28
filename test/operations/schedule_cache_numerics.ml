@@ -103,7 +103,9 @@ let () =
   let key_of policy =
     Numerics.set_policy policy;
     Option.value_exn
-      (SC.cache_key ~timing_identity ~limits:(Context.hardware_limits ctx) canon ~backend)
+      (SC.cache_key ~timing_identity ~limits:(Context.hardware_limits ctx)
+         ~capabilities:(Context.codegen_capabilities ctx)
+         canon ~backend)
   in
   let policy_a = { base with Numerics.tf32_matmuls = false } in
   let policy_b = { base with Numerics.tf32_matmuls = true } in

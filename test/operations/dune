@@ -3583,6 +3583,15 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ (name codegen_resolution_identity)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules codegen_resolution_identity)
+ (libraries base ocannl stdio arrayjit.verdict))
+
+(test
  (name schedule_cache_device)
  (package neural_nets_lib)
  (deps
