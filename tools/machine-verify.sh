@@ -5,6 +5,13 @@
 #
 # Usage:
 #   tools/machine-verify.sh BOX BRANCH [OPTIONS]
+#   tools/machine-verify.sh BOX BRANCH (--backend NAME | --expect-lib LIB)
+#     (--test ALIAS | --run 'COMMAND' | --record-golden ALIAS)... [OPTIONS]
+#
+# Without an operation the trip compiles `@check` and executes nothing. Every
+# operation (--test, --run, --record-golden) needs --backend or --expect-lib:
+# the trip pins that configuration and proves it resolved, so an operation
+# with neither is refused before any connection.
 #
 # BRANCH may also be a full 40-hex commit (either case) that some branch of the
 # staging remote already contains -- a merged commit, a PR head -- so that
@@ -24,10 +31,14 @@
 #                            device is eligible and `hipconfig --path` holds
 #                            a complete rocWMMA tree.
 #   --test ALIAS             Build one named test alias (repeatable).
+#                            Requires --backend or --expect-lib.
 #   --run 'COMMAND'          Run an OCANNL probe under opam and the pinned
-#                            backend (repeatable).
+#                            backend (repeatable), with DUNE_JOBS set to the
+#                            trip's width (a -j in COMMAND still wins).
+#                            Requires --backend or --expect-lib.
 #   --record-golden ALIAS    Run one golden alias, print corrected contents and
-#                            an apply-ready patch (repeatable).
+#                            an apply-ready patch (repeatable). Requires
+#                            --backend or --expect-lib.
 #   --local                  BOX must be this machine: run here, never over
 #                            SSH, and refuse if BOX's endpoint is elsewhere.
 #   --ssh                    Always go through SSH, even when BOX is this
@@ -43,7 +54,21 @@
 #   --trip-cap SECONDS       Whole-trip cap, including setup and cleanup;
 #                            0 disables it (default: 21600). --ssh-cap is the
 #                            same option under its former name.
-#   -j, --jobs N             Dune concurrency, 1..4 (default: 4).
+#   -j, --jobs N             Dune concurrency, a positive integer (default:
+#                            the width tools/box-jobs.sh gives BOX for the
+#                            backend, else 4 -- see below).
+#
+# The default width is BOX's own: the per-slot cap tools/test-run.sh injects
+# into a batch there (-j 8 for cuda on a native NVIDIA boot, -j 4 for hip on a
+# small SDMA pool such as minix's, -j 8 for hip on a wider one such as tuf's,
+# -j 2 for either behind a WSL2 /dev/dxg bridge, -j 8 for a CPU backend on the
+# fleet's rog-nv-linux), the tightest any backend the trip can hold meets --
+# the pinned one, any a reached stanza names (`; ocannl-backend: cuda`), and
+# every backend for a --run probe. The far side asks this checkout's
+# tools/box-jobs.sh and tools/batch-backends.sh, probing BOX's devices and
+# resolving the aliases in the pushed tree (gh-ocannl-986); where no backend
+# meets a cap -- CPU backends off rog, metal, a box without a GPU -- the width
+# is 4. An explicit -j is always honored, and the provenance says which it was.
 #
 # Where it runs: without --local or --ssh, BOX runs here exactly when its SSH
 # endpoint is this machine -- `ssh -G BOX` names the host and port (no
@@ -65,6 +90,8 @@
 #     --record-golden @test/training/train-transformer_names
 #   tools/machine-verify.sh mac-studio codex/my-branch --local \
 #     --expect-lib metal --test @test/operations/runtest-hello_world_op
+#   tools/machine-verify.sh minix-amd-linux codex/my-branch \
+#     --backend cc --test @test/operations/runtest-hello_world_op
 #
 # The output is deliberately unpiped. A failed dune diff must be dune's status,
 # not tail's or tee's. The verification procedure prints an exit sentinel only
@@ -98,6 +125,15 @@ sq() { printf "'%s'" "$(printf %s "$1" | sed "s/'/'\\\\''/g")"; }
 here=$(cd "$(dirname "$0")" && pwd -P) || die "cannot locate the tools directory"
 far=$here/machine-verify-far.sh
 [ -r "$far" ] || die "cannot read the verification procedure $far"
+# The width table travels with the procedure, as the supervisor source does:
+# the far side evaluates THIS checkout's copy against BOX's devices, so a
+# verified commit older than the table (or one changing it) cannot change
+# the width the trip runs at.
+box_jobs=$here/box-jobs.sh
+box_jobs_source=$(cat "$box_jobs") || die "cannot read the width table $box_jobs"
+batch_backends=$here/batch-backends.sh
+batch_backends_source=$(cat "$batch_backends") ||
+  die "cannot read the backend resolution $batch_backends"
 
 [ $# -ge 2 ] || usage
 box=$1
@@ -111,7 +147,7 @@ staging_remote=
 worktree_root=
 cap=5400
 trip_cap=21600
-jobs=4
+jobs=
 placement=auto
 operations=()
 operation_count=0
@@ -167,6 +203,7 @@ while [ $# -gt 0 ]; do
       ;;
     -j | --jobs)
       [ $# -ge 2 ] || die "$1 needs a value"
+      case $2 in '' | *[!0-9]* | 0*) die "jobs must be a positive integer" ;; esac
       jobs=$2
       shift 2
       ;;
@@ -182,7 +219,6 @@ case $branch in
 esac
 git check-ref-format --branch "$branch" >/dev/null 2>&1 || die "invalid branch name: $branch"
 
-case $jobs in 1 | 2 | 3 | 4) ;; *) die "jobs must be between 1 and 4" ;; esac
 case $cap in '' | *[!0-9]*) die "cap must be a non-negative integer" ;; esac
 case $trip_cap in '' | *[!0-9]*) die "trip cap must be a non-negative integer" ;; esac
 case $staging_remote in -*) die "--remote must not begin with '-'" ;; esac
@@ -395,7 +431,8 @@ echo "machine-verify: transport: $transport_story"
 # string. The local transport hands the SAME string to /bin/sh -c, as sshd does.
 remote_command="/bin/sh -c 'exec 3<&0; exec </dev/null; exec /bin/sh /dev/fd/3 \"\$@\"' machine-verify"
 for arg in "$box" "$branch" "$backend" "$expect_lib" "$remote_repo" "$staging_remote" \
-  "$worktree_root" "$cap" "$trip_cap" "$jobs" "$transport_story" "$capped_perl"; do
+  "$worktree_root" "$cap" "$trip_cap" "$jobs" "$transport_story" "$capped_perl" \
+  "$box_jobs_source" "$batch_backends_source"; do
   remote_command="$remote_command $(sq "$arg")"
 done
 if [ "$operation_count" -gt 0 ]; then

@@ -14,11 +14,25 @@ harness_require git perl bash
 harness_scratch test-machine-verify
 TMP=$(cd "$TMP" && pwd -P)
 HERE=$(cd "$(dirname "$0")" && pwd)
-SRC=$HERE/machine-verify.sh
-FAR=$HERE/machine-verify-far.sh
-SHIM=$HERE/remote-verify.sh
 REAL_GIT=$(command -v git)
-for f in "$SRC" "$FAR" "$SHIM"; do printf 'testing %s (cksum %s)\n' "$f" "$(cksum <"$f")"; done
+for f in machine-verify.sh machine-verify-far.sh remote-verify.sh box-jobs.sh batch-backends.sh; do
+  printf 'testing %s (cksum %s)\n' "$HERE/$f" "$(cksum <"$HERE/$f")"
+done
+# The subjects run from a scratch copy of tools/: the scripts unchanged, and
+# the width table they pass to the far side with one line appended, which
+# points its device probes and the backend readers (the OCANNL_TOOL_* overrides
+# of tools/box-jobs.sh and tools/batch-backends.sh) at the case's fixture file.
+# The far side clears every ambient OCANNL_* variable, as it must, so only a
+# file can fake a box's GPU; every width decision is still those files' own.
+mkdir -p "$TMP/tools" || exit 2
+cp "$HERE/machine-verify.sh" "$HERE/machine-verify-far.sh" "$HERE/remote-verify.sh" \
+  "$HERE/box-jobs.sh" "$HERE/batch-backends.sh" "$TMP/tools/" || exit 2
+printf '. %q\n' "$TMP/fixture.env" >>"$TMP/tools/box-jobs.sh" || exit 2
+SRC=$TMP/tools/machine-verify.sh
+FAR=$TMP/tools/machine-verify-far.sh
+SHIM=$TMP/tools/remote-verify.sh
+BOX_JOBS=$TMP/tools/box-jobs.sh
+BATCH_BACKENDS=$TMP/tools/batch-backends.sh
 # Isolate Git configuration, hooks, identity and URL rewriting. Every Git
 # mutation is confined to this newly allocated scratch directory.
 mkdir -p "$TMP/bin" "$TMP/home" "$TMP/runs"
@@ -31,6 +45,10 @@ export GIT_COMMITTER_NAME=$GIT_AUTHOR_NAME GIT_COMMITTER_EMAIL=$GIT_AUTHOR_EMAIL
 printf '_build/\nocannl_config\n' >"$TMP/seed/.gitignore"
 printf 'original\n' >"$TMP/seed/value.expected"
 printf 'source\n' >"$TMP/seed/source.ml"
+# The directories whose configuration tools/batch-backends.sh reads, as the
+# real tree carries them.
+mkdir -p "$TMP/seed/test/config" "$TMP/seed/arrayjit/test" &&
+  : >"$TMP/seed/test/config/dune" && : >"$TMP/seed/arrayjit/test/dune" || exit 2
 "$REAL_GIT" -C "$TMP/seed" add . && "$REAL_GIT" -C "$TMP/seed" commit -qm seed || exit 2
 SHA=$("$REAL_GIT" -C "$TMP/seed" rev-parse HEAD)
 "$REAL_GIT" -C "$TMP/seed" branch fixture "$SHA" || exit 2
@@ -79,6 +97,7 @@ exec "$@"
 SH
 cat >"$TMP/bin/dune" <<'SH'
 #!/usr/bin/env bash
+if [ "$1" = --version ]; then echo "$FIXTURE_DUNE_VERSION"; exit 0; fi
 # This is an independent observation of the environment and actual checkout
 # received by the fake compiler, not a restatement of verifier log messages.
 [ -z "${OCANNL_PROFILE:-}" ] && [ -z "${OCANNL_PRINT_DECIMALS_PRECISION:-}" ] || {
@@ -204,12 +223,50 @@ for fake in ssh opam dune git hipconfig; do
 done
 rm -f "$TMP/fake"
 
+# The fixture BOX's devices, as tools/box-jobs.sh probes them: a WSL2 bridge
+# node, a KFD topology (one GPU node whose SDMA pool is minix's 1 x 6 or tuf's
+# 2 x 6) and a native NVIDIA control node. `absent` names nothing.
+touch "$TMP/device-present" || exit 2
+for pool in small:1 wide:2; do
+  mkdir -p "$TMP/kfd-${pool%%:*}/1" &&
+    printf 'simd_count 32\nnum_sdma_engines %s\nnum_sdma_queues_per_engine 6\n' "${pool#*:}" \
+      >"$TMP/kfd-${pool%%:*}/1/properties" || exit 2
+done
+
+# Stand-ins for the backend readers tools/batch-backends.sh builds: the
+# configuration resolves the pinned backend, and the reachability tool names
+# the backends of FIXTURE_NAMES (`<backend>:<why>;...`), or fails.
+cat >"$TMP/bin/fake-read-config" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "${OCANNL_BACKEND:-}"
+SH
+cat >"$TMP/bin/fake-slot-kind" <<'SH'
+#!/usr/bin/env bash
+[ "$FIXTURE_NAMES" != fail ] || exit 3
+IFS=';' read -r -a names <<<"$FIXTURE_NAMES"
+for n in "${names[@]}"; do [ -z "$n" ] || printf 'names %s: %s\n' "${n%%:*}" "${n#*:}"; done
+echo end
+SH
+chmod +x "$TMP/bin/fake-read-config" "$TMP/bin/fake-slot-kind" || exit 2
+
 # Placement of the fixture BOX, read by the fake `ssh -G`, and the transport a
-# case expects. A case overrides them with a prefix assignment on its call.
+# case expects; the devices BOX shows and its fleet name. A case overrides them
+# with a prefix assignment on its call.
 ENDPOINT=192.0.2.1 ENDPOINT_PORT=22 ENDPOINT_PROXY= TRANSPORT=ssh BACKEND=cc HIP_TREE=hip-complete
+DXG=absent KFD=absent NVIDIA=absent FLEET_BOX=fixture-box READERS=stand-in NAMES= DUNE_VERSION=3.24.2
 # The BRANCH operand, and the commit the fake dune requires the worktree at.
 REF=fixture WANT_SHA=$SHA
 
+fixture_device() { # absent|present|small|wide -> the path a probe reads
+  case $1 in
+    absent) printf '%s' "$TMP/no-such-device" ;;
+    present) printf '%s' "$TMP/device-present" ;;
+    *) printf '%s' "$TMP/kfd-$1" ;;
+  esac
+}
+fixture_reader() { # stand-in name -> its path, or nothing: batch-backends.sh builds the real one
+  [ "$READERS" != stand-in ] || printf '%s' "$TMP/bin/$1"
+}
 run_case() { # SUBJECT NAME MODE [verifier args]
   local subject=$1 name=$2 mode=$3
   shift 3
@@ -239,7 +296,12 @@ run_case() { # SUBJECT NAME MODE [verifier args]
     FIXTURE_PUSHED="$TMP/pushed.git" MODE="$mode" FIXTURE_REPO="$run/repo" FIXTURE_SHA="$WANT_SHA" \
     AUDIT="$run/audit" SSH_LOG="$run/ssh-log" ENDPOINT="$ENDPOINT" ENDPOINT_PORT="$ENDPOINT_PORT" \
     ENDPOINT_PROXY="$ENDPOINT_PROXY" WANT_BACKEND="$BACKEND" FIXTURE_HIP_ROOT="$TMP/$HIP_TREE" \
-    FIXTURE_UNPUSHED="$UNPUSHED"; do
+    FIXTURE_UNPUSHED="$UNPUSHED" OCANNL_TOOL_DXG_DEVICE="$(fixture_device "$DXG")" \
+    OCANNL_TOOL_KFD_TOPOLOGY="$(fixture_device "$KFD")" \
+    OCANNL_TOOL_NVIDIA_DEVICE="$(fixture_device "$NVIDIA")" FLEET_LOCAL_BOX="$FLEET_BOX" \
+    OCANNL_TOOL_READ_CONFIG="$(fixture_reader fake-read-config)" \
+    OCANNL_TOOL_SLOT_KIND="$(fixture_reader fake-slot-kind)" FIXTURE_NAMES="$NAMES" \
+    FIXTURE_DUNE_VERSION="$DUNE_VERSION"; do
     printf 'export %s=%q\n' "${var%%=*}" "${var#*=}"
   done >"$TMP/fixture.env"
   # OPAMSWITCH and DUNE_BUILD_DIR stand for the caller's session: an SSH
@@ -436,6 +498,66 @@ BACKEND=metal check_case lib-mma-unparsed lib-mma-unparsed 2 \
   --expect-lib metal
 BACKEND=cc check_refusal lib-backend-conflict '^machine-verify: --expect-lib metal conflicts with --backend cc$' --expect-lib metal
 
+# The dune width (gh-ocannl-986): with no -j, the far side runs every build at
+# the tightest width tools/box-jobs.sh gives the box it probes for any backend
+# the trip can hold -- the pinned one, any a reached stanza names, every one
+# for a --run probe or an unreadable answer -- the per-slot cap
+# tools/test-run.sh injects there; an explicit -j wins; where no backend meets
+# a cap the width is 4. Observed at the fake dune, every build of the trip (the
+# backend readers' own build, when there is one, is compile-only and runs at
+# dune's width), not read from the verifier's report of its width.
+width_case() { # NAME WIDTH PROVENANCE-ERE [args]
+  local name=$1 width=$2 story=$3 ok=0
+  shift 3
+  check_case "$name" success 0 "verified .*backend=$BACKEND" --test @fixture "$@"
+  grep -q "|$BACKEND|build -j $width @fixture\$" "$TMP/runs/$name/audit" || ok=1
+  ! grep -v -e "|build -j $width " -e '|build ./test/config/ocannl_read_config.exe ' \
+    "$TMP/runs/$name/audit" | grep -q . || ok=1
+  grep -qE "^dune jobs:     $width $story" "$TMP/runs/$name/stdout" || ok=1
+  report "$ok" "$name: every build ran at -j $width, and the provenance says why" "$TMP/runs/$name"
+}
+BACKEND=cuda NVIDIA=present width_case width-native-cuda 8 \
+  "\(this box's width for cuda, which this trip can hold -- .*: tools/box-jobs.sh hazard nvidia\)$"
+BACKEND=hip KFD=small width_case width-small-sdma 4 "\(.*for hip, .*hazard sdma\)$"
+BACKEND=hip KFD=wide width_case width-wide-sdma 8 "\(.*for hip, .*hazard wide-sdma\)$"
+# The bridge outranks the pool, and the local transport reads the same table.
+BACKEND=hip DXG=present KFD=wide ENDPOINT=127.0.0.1 TRANSPORT=local width_case width-dxg-local 2 \
+  "\(.*for hip, .*hazard dxg\)$"
+BACKEND=cuda NVIDIA=present width_case width-explicit 3 '\(explicit -j\)$' -j 3
+BACKEND=hip KFD=wide width_case width-explicit-long 12 '\(explicit -j\)$' --jobs 12
+# A CPU backend beside a GPU is uncapped, except on the fleet's rog-nv-linux.
+NVIDIA=present width_case width-cpu-default 4 \
+  "\(default; tools/box-jobs.sh names no cap here for any backend this trip can hold\)$"
+NVIDIA=present FLEET_BOX=rog-nv-linux width_case width-cpu-rog 8 "\(.*for cc, .*hazard nvidia-cpu\)$"
+# Codex review round 1 on PR #902: a CPU trip still holds the GPU a reached
+# stanza names, and a --run probe or an unread answer may hold any backend.
+BACKEND=cc DXG=present NAMES='cuda:arrayjit/test/dune names it' width_case width-reached-gpu 2 \
+  "\(this box's width for cuda, which this trip can hold -- arrayjit/test/dune names it: tools/box-jobs.sh hazard dxg\)$"
+grep -q '^machine-verify: batch: holds cuda: arrayjit/test/dune names it$' "$TMP/runs/width-reached-gpu/stdout"
+report $? 'width-reached-gpu: the resolution is in the provenance' "$TMP/runs/width-reached-gpu"
+BACKEND=cc NVIDIA=present width_case width-probe 8 \
+  "\(.*for cuda, .*its backends are unread \(a --run probe may pick its own backend\).*hazard nvidia\)$" \
+  --run 'printf "probe width: %s\n" "${DUNE_JOBS:-unset}"'
+# The probe's own dune invocations inherit the width (round 2 on PR #902).
+grep -qx 'probe width: 8' "$TMP/runs/width-probe/stdout" &&
+  grep -q '^machine-verify: probe (cc, DUNE_JOBS=8): ' "$TMP/runs/width-probe/stdout"
+report $? 'width-probe: the probe runs with DUNE_JOBS at the trip width' "$TMP/runs/width-probe"
+# A dune older than 3.22 ignores DUNE_JOBS, and the probe line says so.
+BACKEND=cc NVIDIA=present DUNE_VERSION=3.21.0 width_case width-probe-old-dune 8 "\(.*for cuda, .*\)$" \
+  --run true
+grep -q "^machine-verify: probe (cc, DUNE_JOBS=8, which dune 3.21.0 ignores (it reads DUNE_JOBS from 3.22): a bare dune in the probe runs at dune's default width): true$" \
+  "$TMP/runs/width-probe-old-dune/stdout"
+report $? 'width-probe-old-dune: an ignored DUNE_JOBS is named, not certified' "$TMP/runs/width-probe-old-dune"
+BACKEND=cc NVIDIA=present NAMES=fail width_case width-unread 8 "\(.*for cuda, .*its backends are unread .*hazard nvidia\)$"
+# No stand-ins: the pushed tree's readers are built there (a fixture tree has
+# none, so the answer is unread and every backend counts).
+BACKEND=cc NVIDIA=present READERS=absent width_case width-readers-built 8 "\(.*for cuda, .*its backends are unread .*\)$"
+grep -q '|cc|build ./test/config/ocannl_read_config.exe ./test/config/ocannl_slot_kind.exe$' \
+  "$TMP/runs/width-readers-built/audit"
+report $? 'width-readers-built: the readers were built in the pushed worktree' "$TMP/runs/width-readers-built"
+check_refusal width-zero '^machine-verify: jobs must be a positive integer$' -j 0
+check_refusal width-word '^machine-verify: jobs must be a positive integer$' --jobs auto
+
 # The deprecated name forwards every argument and says so on stderr.
 shim_case() { # NAME
   local ok=0
@@ -458,7 +580,7 @@ report $? 'shim: placement is decided by machine-verify.sh, not by the old name'
 mutant_pair() { # NAME driver|far AWK_PROGRAM -> path of the pair's driver
   local dir=$TMP/mutants/$1 target
   case $2 in driver) target=$SRC ;; far) target=$FAR ;; *) return 1 ;; esac
-  mkdir -p "$dir" && cp "$SRC" "$FAR" "$dir/" || return 1
+  mkdir -p "$dir" && cp "$SRC" "$FAR" "$BOX_JOBS" "$BATCH_BACKENDS" "$dir/" || return 1
   awk "$3" "$target" >"$dir/${target##*/}" || return 1
   bash -n "$dir/${target##*/}" || return 1
   ! cmp -s "$target" "$dir/${target##*/}" || return 1
@@ -529,4 +651,34 @@ leak_oracle() {
 }
 mutated=$(mutant_pair no-env-clear driver '/^  local_env=\(env -i\)$/ { print "  local_env=(env)"; next } { print }') || exit 2
 expect_rejected 'local environment clearing removed' "$mutated" leak_oracle 'fixture: wrong opam switch: --switch=caller-switch'
+# The box's width dropped for the former flat default: a GPU leg run without
+# -j goes back to running above the box's cap, the case this issue was filed on.
+width_oracle() {
+  local subject=$1 name=$2
+  BACKEND=cuda NVIDIA=present run_case "$subject" "$name" success --test @fixture || return 1
+  [ "$(cat "$TMP/runs/$name/rc")" = 0 ] &&
+    grep -q '|cuda|build -j 8 @fixture$' "$TMP/runs/$name/audit"
+}
+mutated=$(mutant_pair no-box-width far '/^if \[ -n "\$jobs" \]; then$/ { print "jobs=${jobs:-4}" } { print }') || exit 2
+expect_rejected 'box width ignored' "$mutated" width_oracle '^dune jobs:     4 \(explicit -j\)$'
+# The width judged over the pinned backend alone: a reached stanza's GPU runs
+# above the bridge's cap again.
+reached_oracle() {
+  local subject=$1 name=$2
+  BACKEND=cc DXG=present NAMES='cuda:arrayjit/test/dune names it' run_case "$subject" "$name" success \
+    --test @fixture || return 1
+  [ "$(cat "$TMP/runs/$name/rc")" = 0 ] &&
+    grep -q '|cc|build -j 2 @fixture$' "$TMP/runs/$name/audit"
+}
+mutated=$(mutant_pair pinned-backend-only far '/batch_resolve dune "\$log" build/ { print "      :"; next } { print }') || exit 2
+expect_rejected 'reached backends ignored' "$mutated" reached_oracle '^dune jobs:     4 \(default; '
+# The width withheld from a --run probe: its bare dune runs at dune's default.
+probe_width_oracle() {
+  local subject=$1 name=$2
+  BACKEND=cc NVIDIA=present run_case "$subject" "$name" success \
+    --run 'printf "probe width: %s\n" "${DUNE_JOBS:-unset}"' || return 1
+  [ "$(cat "$TMP/runs/$name/rc")" = 0 ] && grep -qx 'probe width: 8' "$TMP/runs/$name/stdout"
+}
+mutated=$(mutant_pair no-probe-width far '{ sub(/ "DUNE_JOBS=\$jobs" sh -c/, " sh -c"); print }') || exit 2
+expect_rejected 'probe width withheld' "$mutated" probe_width_oracle '^probe width: unset$'
 finish
