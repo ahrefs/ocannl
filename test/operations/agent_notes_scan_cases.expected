@@ -91,6 +91,7 @@ ok: bullets -- a heading carrying a numeric entity
 ok: bullets -- a heading carrying underscore emphasis
 ok: bullets -- a heading carrying underscore strong emphasis
 ok: bullets -- a heading carrying a padded code span
+ok: bullets -- a heading carrying a tab
 ok: bullets -- a heading carrying a non-ASCII letter
 ok: bullets -- a heading carrying a non-ASCII letter inside a code span
 ok: bullets -- an identifier heading
@@ -242,8 +243,8 @@ ok: script -- a comment pointing at a heading its note has
 ok: script -- a comment pointing at a heading its note lacks
 ok: script -- a printed message pointing at a heading its note lacks
 ok: script -- a path outside the notes is not a pointer into them
-ok: script -- a name opening with a shell variable is not a pointer into the notes
-ok: script -- a shell variable inside a name still cuts it
+ok: script -- a name a shell expansion builds is not a pointer into the notes
+ok: script -- a name cut by another character behind an assignment is still refused
 ok: unnamed rule -- a finding the list does not name survives the report, last
 ok: unnamed rule -- the census reports it, and not the named one beside it
 ok: unnamed rule -- a named finding leaves the census empty

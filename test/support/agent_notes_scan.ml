@@ -64,8 +64,8 @@
       pointing at it (gh-ocannl-1044). The scripts point the same way, from comments and from the
       messages they print to whoever trips a guard (lukstafi/ocannl-staging#849), and a stale anchor
       there strands a reader mid-run (gh-ocannl-1111). A bare basename is a notes file; a path
-      through [docs/agent-notes/] is resolved the same way, and a path anywhere else, or a name
-      opening with a shell variable's [$], is not a pointer into the notes and is not read.
+      through [docs/agent-notes/] is resolved the same way, and a path anywhere else, or a name a
+      shell expansion builds (one carrying [$]), is not a pointer into the notes and is not read.
 
     {1 What it deliberately does not read}
 
@@ -622,8 +622,10 @@ let looks_like_heading line =
     - an underscore at a word boundary, which is emphasis — an identifier's inner underscore is not,
       and GitHub keeps it in the id;
     - a code span padded with a space on both sides, whose padding a renderer strips;
-    - and anywhere, code spans included, a non-ASCII byte: GitHub keeps a Unicode letter in the id,
-      case-folded, where {!slug} drops it, so [## Setup 训练] would be [#setup-] here. *)
+    - and anywhere, code spans included, a byte outside printable ASCII. GitHub keeps a Unicode
+      letter in the id, case-folded, where {!slug} drops it, so [## Setup 训练] would be [#setup-]
+      here. A tab or another control character is refused along with it rather than modelled,
+      whatever a renderer makes of it (Codex P2, round 2 on lukstafi/ocannl-staging#899). *)
 let heading_markup line =
   let scan = inert_by_line line in
   let first = function (_, r) :: _ -> r | [] -> [] in
@@ -648,6 +650,8 @@ let heading_markup line =
     if Char.to_int c >= 128 then
       Some
         "a non-ASCII character, which GitHub keeps in the heading's id and this scan's slug drops"
+    else if Char.to_int c < 32 || Char.to_int c = 127 then
+      Some "a control character such as a tab, which a heading here does not carry"
     else if in_any_span code i || escaped_at line i then None
     else if Char.equal c '[' then
       Some "a '[', which opens a link, an image or a reference whose destination GitHub leaves out"
@@ -1861,11 +1865,13 @@ let pointer_target path =
     {!check_guide} and the live scan's pointer floor use, so the floor cannot count a pointer the
     rule treats as out of scope (Codex P2, round 13 on lukstafi/ocannl-staging#811). *)
 let pointer_scope p =
-  (* A name opening with [$] is a shell variable -- [$note.md#slug], [${note}.md#slug] -- so which
-     file it names is computed, not written, and it is no more a pointer into the notes than
-     [$DIR/x.md#slug], which the path rules already put out of scope (gh-ocannl-1068). *)
-  if String.is_prefix p.token ~prefix:"$" then None
-  else pointer_target (if p.cut_left then p.token else p.path)
+  (* A name carrying [$] is built by a shell expansion -- [$note.md#slug], [${note}.md#slug],
+     [target=$note.md#slug], [a$b.md#slug] -- so which file it names is computed, not written, and
+     it is no more a pointer into the notes than [$DIR/x.md#slug], which the path rules already put
+     out of scope (gh-ocannl-1068). No note's name carries one: a note's file name is ASCII letters,
+     digits, [_ - . /]. Testing only the token's first character missed the name behind an
+     assignment (Codex P2, round 2 on lukstafi/ocannl-staging#899). *)
+  if String.mem p.token '$' then None else pointer_target (if p.cut_left then p.token else p.path)
 
 (** Rule 7 over one pointer source: the agent guide, or a script. [files] is keyed as {!check_index}
     describes; the index is looked up beside them, so a pointer at [docs/agent-notes.md#…] is

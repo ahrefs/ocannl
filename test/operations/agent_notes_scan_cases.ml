@@ -370,6 +370,7 @@ let structure_cases =
     ( "a heading carrying a padded code span",
       "# Title\n\n## ` x ` usage\n",
       [ "bullet-integrity @ f.md:3" ] );
+    ("a heading carrying a tab", "# Title\n\n## Foo\tBar\n", [ "bullet-integrity @ f.md:3" ]);
     ( "a heading carrying a non-ASCII letter",
       "# Title\n\n## Setup \xe8\xae\xad\xe7\xbb\x83\n",
       [ "bullet-integrity @ f.md:3" ] );
@@ -1036,15 +1037,16 @@ let script_cases =
       "#!/usr/bin/env bash\n\
        # See docs/syntax_extensions.md#operators and ./CHANGES.md#unreleased.\n",
       [] );
-    (* A name a shell variable computes names no file the scan could check, like [$DIR/x.md#y]
-       (gh-ocannl-1068). Only a name OPENING with [$] is one: a [$] inside a name still cuts it, and
-       the cut is refused. *)
-    ( "a name opening with a shell variable is not a pointer into the notes",
+    (* A name a shell expansion builds names no file the scan could check, like [$DIR/x.md#y]
+       (gh-ocannl-1068) -- wherever the [$] sits in it, an assignment's included. The control is a
+       name cut by a character other than [$], behind the same assignment: still refused. *)
+    ( "a name a shell expansion builds is not a pointer into the notes",
       "#!/usr/bin/env bash\n\
-       echo \"see $note.md#the-sprocket-seam, ${note}.md#setup and $DIR/a.md#nope\" >&2\n",
+       echo \"see $note.md#the-sprocket-seam, ${note}.md#setup and $DIR/a.md#nope\" >&2\n\
+       target=$note.md#nope; other=a$b.md#nope\n",
       [] );
-    ( "a shell variable inside a name still cuts it",
-      "#!/usr/bin/env bash\n\necho \"see a$b.md#the-widget-seam\" >&2\n",
+    ( "a name cut by another character behind an assignment is still refused",
+      "#!/usr/bin/env bash\n\ntarget=a+b.md#the-gadget-seam\n",
       [ "guide-anchors @ tools/x.sh:3" ] );
   ]
 
