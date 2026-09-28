@@ -1241,7 +1241,11 @@ A renamed heading breaks every pointer to it, which `agent_notes_structure` repo
   1 when the run is no evidence: `STOPPED EARLY` for fewer rows or Verdict's own `STOPPED EARLY`
   line in the log, `NEVER RAN` when no candidate changed (a build failure, or a mutation that left
   the executable byte-identical so dune reused the old result -- a previous run's output is never
-  counted), `NOT COUNTED` when two did. A test that echoes a child's stderr (`verdict_teardown`)
+  counted), `NOT COUNTED` when two did. A raising `Verdict.case` prints one claim in place of its
+  rows while the cases after it still run, so fewer rows still count as reached (`cases raised:
+  K`, gh-ocannl-1084) when a case raised, Verdict's teardown line (`FAILED: n checks …`) shows the
+  process ended through `exit` rather than a signal, and the stdout ends on the golden's last row
+  or on a case's raise. A test that echoes a child's stderr (`verdict_teardown`)
   can carry a child's `STOPPED EARLY` line; read the rows line before discarding such a run.
   Otherwise the exit status remains test-run's, so a killed mutant normally exits 1, and a
   passing mutation exits 0 and needs investigation.

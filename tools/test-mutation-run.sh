@@ -56,6 +56,22 @@ case "$PROBE_MODE" in
     printf 'FAIL: first: false\nSTOPPED EARLY: an uncaught exception ended the run\n'; exit 1 ;;
   more) rows 'first: false\nFAIL: extra\nnested: label: true\nlast: true\n'
     printf 'FAIL: first: false\n'; exit 1 ;;
+  # A raising Verdict.case (gh-ocannl-1084): one failed claim in place of the
+  # rows the raise kept from printing, and the cases after it still run.
+  casemid) rows 'nested: the case ran to completion (raised Failure("injected")): false\nlast: true\n'
+    printf 'FAIL: nested: the case ran to completion (raised Failure("injected")): false\n'
+    printf 'FAILED: 1 check did not hold.\n'; exit 1 ;;
+  caselast) rows 'first: true\nlast: the case ran to completion (raised Failure("injected")): false\n'
+    printf 'FAIL: last: the case ran to completion (raised Failure("injected")): false\n'
+    printf 'FAILED: 1 check did not hold.\n'; exit 1 ;;
+  # The same raise, then a crash: no teardown line, so nothing says a later case ran.
+  casecrash) rows 'nested: the case ran to completion (raised Failure("injected")): false\n'
+    printf 'FAIL: nested: the case ran to completion (raised Failure("injected")): false\n'
+    printf 'Command got signal SEGV.\n'; exit 1 ;;
+  # A teardown, but the stdout ends on neither the golden's last row nor a raise.
+  casecut) rows 'first: the case ran to completion (raised Failure("injected")): false\nnested: label: true\n'
+    printf 'FAIL: first: the case ran to completion (raised Failure("injected")): false\n'
+    printf 'FAILED: 1 check did not hold.\n'; exit 1 ;;
   # The test never ran this time: the output a previous run left must not count.
   stale) printf 'FAIL: first: false\n'; exit 1 ;;
   reused) exit 0 ;;
@@ -120,7 +136,7 @@ flagged() {
   grep -q "^$1$" "$fixture/result" || { cat "$fixture/result"; echo "missing: $1"; exit 1; }
   grep -q '^(not evidence: the mutant was neither caught nor survived)$' "$fixture/result"
 }
-for mode in raise short stopped stale reused both; do
+for mode in raise short stopped casecrash casecut stale reused both; do
   export PROBE_MODE=$mode
   run_case 4
   case $mode in
@@ -133,6 +149,10 @@ for mode in raise short stopped stale reused both; do
     stopped)
       grep -q '^rows: 3 printed of 3 in probe.expected$' "$fixture/result"
       flagged 'STOPPED EARLY: Verdict reported an uncaught exception; no row after it ran' ;;
+    casecrash)
+      flagged "STOPPED EARLY: the mutated run printed 1 of the golden's 3 rows" ;;
+    casecut)
+      flagged "STOPPED EARLY: the mutated run printed 2 of the golden's 3 rows" ;;
     stale|reused)
       grep -q '^rows: not counted$' "$fixture/result"
       flagged 'NEVER RAN: this run wrote no stdout of probe (a build failure, or an executable the mutation left unchanged, so dune reused its result)' ;;
@@ -145,12 +165,27 @@ export PROBE_MODE=more
 run_case 1
 grep -q '^rows: 4 printed of 3 in probe.expected$' "$fixture/result"
 reached
+# A raising Verdict.case prints fewer rows than the golden and still reached its
+# last case: caught, not stopped early (gh-ocannl-1084).
+for mode in casemid caselast; do
+  export PROBE_MODE=$mode
+  run_case 1
+  grep -q '^rows: 2 printed of 3 in probe.expected$' "$fixture/result"
+  grep -q '^cases raised: 1 (the rows short of the golden are theirs; the run reached its last case)$' \
+    "$fixture/result" || { cat "$fixture/result"; echo "$mode: no cases-raised line"; exit 1; }
+  reached
+done
+# The two lines the runner reads are Verdict's own text; a rewording there must fail here.
+grep -qF '(label ^ ": the case ran to completion") ("raised " ^ text)' "$root/test/support/verdict.ml" ||
+  { echo 'Verdict.case no longer prints "<label>: the case ran to completion (raised …)"'; exit 1; }
+grep -qF 'Printf.sprintf "FAILED: %d check%s did not hold."' "$root/test/support/verdict.ml" ||
+  { echo 'Verdict.teardown_line no longer prints "FAILED: <n> check(s) did not hold."'; exit 1; }
 # DUNE_BUILD_DIR moves the tree the output is read from; _build keeps a full stale output.
 export PROBE_MODE=raise DUNE_BUILD_DIR="$fixture/build-elsewhere"
 run_case 4
 grep -q '^rows: 1 printed of 3 in probe.expected$' "$fixture/result"
 unset DUNE_BUILD_DIR
-printf 'PASS stopped early, never ran and unattributable runs exit 4 and say why\n'
+printf 'PASS stopped early, never ran and unattributable runs exit 4 and say why; a raising Verdict.case that reached its last case is caught\n'
 for mode in pass compile refused; do
   export PROBE_MODE=$mode
   case $mode in pass) rc=0 ;; compile) rc=4 ;; refused) rc=2 ;; esac
