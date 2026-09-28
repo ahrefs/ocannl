@@ -308,6 +308,12 @@ let exempt_quantified_helpers =
       "a refused conv site is deliberately recognized by no family, so both seeders yield no seeds \
        of any kind and there is no seed population to quantify over; the claim beside it pins the \
        refusal's reason on the lowered maps, which are non-empty" );
+    ( "test/operations/schedule_strided_1x1.ml:batch of one: not a matmul or conv site, and no \
+       sketch family seeds it",
+      "a batch-of-one strided 1x1 conv is recognized by no family (the pinned current boundary: \
+       its stride-2 axes cannot own the GEMM row), so both seeders yield no seeds of any kind and \
+       there is no seed population to quantify over; the claim beside it pins the reason on the \
+       lowered maps, which are non-empty" );
     (* Equivalences `Bool.equal <quantifier> <backend fact>` (staging#681 round 11): the reader sees
        that the quantifier's false polarity -- the empty population -- is what the claim accepts on
        one side of the fact, and on that side emptiness is the designed reading. *)

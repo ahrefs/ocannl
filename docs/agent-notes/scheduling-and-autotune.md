@@ -233,6 +233,12 @@ files.
   that "is not detected" usually has a singleton somewhere — keep every axis at extent >= 2 unless
   the singleton is the point. `test/operations/conv_detection_boundary` pins each class with its
   reason, derived from the lowered maps.
+- **The matmul family never tiles or packs along a strided axis** (gh-ocannl-1076): a role needs
+  unit coefficient in the operand (`Sketch_families.unit_axis`), so a stride-2 1x1 conv
+  (`resnet_block`'s downsample) classifies with the BATCH axis as the GEMM row and `oh, ow` as
+  interior batch loops (`m_bi`) — every seed stages dense tiles from a strided source address and
+  executes correctly on cc and HIP, but the row is only `b` rows tall, and at batch 1 no family
+  seeds the site at all. `test/operations/schedule_strided_1x1` executes every seed and pins both.
 - **A dispatch's launch parameters are read on the HOST, at `Context.run`, and carried to the
   device** — never re-read from the caller's refs when the device gets around to the task. Only
   `Schedulers.Multidev` defers a task at all (`Sync.schedule_task` is `Task.run`, and the GPU
