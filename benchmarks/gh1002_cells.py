@@ -38,7 +38,11 @@ per fixture), metal (the main matrix: gpt2_mini_train, _s512, _s1024), metal-swe
 repeat), artifacts (one untimed Metal cell per fixture x treatment with the generated sources kept
 under DIR/artifacts/). A host snapshot (top CPU consumers) is logged at every phase boundary.
 
-Resumable: a cell whose output already holds a result line is not run again.
+Resumable: a cell whose output already holds a result line is not run again. A run directory is
+bound to one revision and one set of fixture bytes (preflight.json): resuming it from a different
+checkout or with different fixtures refuses rather than mixing the two. Each cell runs in its own
+process group, killed whole at its deadline. `summarize` fails on a matrix with a missing cell, a
+missing torch reference or an incomplete kernel table (`--partial` lists missing cells instead).
 """
 
 import argparse
@@ -47,6 +51,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import statistics
 import subprocess
 import sys
@@ -151,11 +156,7 @@ def run_cell(out, backend, fixture, treatment, r, artifacts=False):
         f.write(" ".join(f"{k}={v}" for k, v in extra.items()) + " " + " ".join(argv) + "\n")
     log(f"run {base.name}")
     with open(str(base) + ".out", "w") as o, open(str(base) + ".err", "w") as e:
-        try:
-            status = subprocess.run(argv, cwd=HERE, env=clean_env(extra), stdout=o, stderr=e,
-                                    timeout=CELL_TIMEOUT_S).returncode
-        except subprocess.TimeoutExpired:
-            status = "timeout"
+        status = run_in_own_group(argv, env=clean_env(extra), stdout=o, stderr=e)
     with open(str(base) + ".status", "w") as f:
         f.write(f"{status}\n")
     if artifacts and (HERE / "build_files" / prefix).is_dir():
@@ -171,7 +172,45 @@ def run_cell(out, backend, fixture, treatment, r, artifacts=False):
             f"peak {res['peak_memory_bytes'] / 2**20:.1f} MiB")
 
 
-def preflight(out):
+def group_alive(pgid):
+    try:
+        os.killpg(pgid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
+def run_in_own_group(argv, **kw):
+    """Run [argv] as the leader of its own process group; on timeout (and after any exit) kill the
+    whole group, so a C compiler or other descendant a cell spawned cannot outlive it and load the
+    cells that follow. Refuses to continue when the group cannot be reaped."""
+    proc = subprocess.Popen(argv, cwd=HERE, start_new_session=True, **kw)
+    try:
+        status = proc.wait(timeout=CELL_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        status = "timeout"
+    for _ in range(50):
+        if not group_alive(proc.pid):
+            break
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            break
+        try:
+            proc.wait(timeout=0.2)
+        except subprocess.TimeoutExpired:
+            pass
+    if group_alive(proc.pid):
+        sys.exit(f"process group {proc.pid} of {argv[0]} survived SIGKILL; stopping the matrix "
+                 "rather than timing the next cells beside it")
+    return status
+
+
+def identity():
+    """The run's identity: the revision, whether tracked files are dirty, and the fixtures' content
+    digests, each of which must MATCH a recorded m4-max entry of fixtures/DIGESTS.txt."""
     sys.path.insert(0, str(HERE))
     import fixture_digest  # stdlib-only
 
@@ -185,12 +224,37 @@ def preflight(out):
         verdict, sha, _, origins = fixture_digest.status(HERE / "fixtures" / f"{fx}.safetensors",
                                                          entries)
         if verdict != "MATCH" or ORIGIN not in origins.split(","):
-            sys.exit(f"fixture {fx}: {verdict} against DIGESTS.txt (need a {ORIGIN} match); "
-                     "regenerate with gen_fixtures.py --origin m4-max")
+            # Never regenerate to get past this: that draws a new workload from this box's numpy
+            # and retires the published numbers (benchmarks/README.md, gh-ocannl-759).
+            sys.exit(f"fixture {fx}: {verdict} against DIGESTS.txt (need a {ORIGIN} match). Obtain "
+                     f"the recorded {ORIGIN} bytes (`python3 fixture_digest.py --check` reports "
+                     "disk against record); regenerating is a coordinated cross-box event, not a "
+                     "fix for this refusal")
         ids[fx] = sha
-    meta = {"revision": rev, "dirty_tracked_files": dirty, "host": os.uname().nodename,
-            "fixtures": ids, "started": datetime.datetime.now(datetime.timezone.utc).isoformat()}
-    (out / "preflight.json").write_text(json.dumps(meta, indent=2) + "\n")
+    return {"revision": rev, "dirty_tracked_files": dirty, "fixtures": ids}
+
+
+def check_identity(out, ident):
+    """A run directory holds one revision's cells on one set of fixture bytes: resuming it from a
+    different checkout or different fixtures would mix the two under one preflight record."""
+    pf = out / "preflight.json"
+    if not pf.exists():
+        return False
+    recorded = json.loads(pf.read_text())
+    for key in ("revision", "dirty_tracked_files", "fixtures"):
+        if recorded.get(key) != ident[key]:
+            sys.exit(f"{out}: its cells were measured with a different {key} "
+                     f"({recorded.get(key)!r} vs now {ident[key]!r}); use a fresh --out")
+    return True
+
+
+def preflight(out):
+    ident = identity()
+    if not check_identity(out, ident):
+        meta = dict(ident, host=os.uname().nodename,
+                    started=datetime.datetime.now(datetime.timezone.utc).isoformat())
+        (out / "preflight.json").write_text(json.dumps(meta, indent=2) + "\n")
+    rev, dirty = ident["revision"], ident["dirty_tracked_files"]
     log(f"revision {rev}{' (DIRTY)' if dirty else ''}; fixtures match {ORIGIN}")
     if not BENCH_GPT.exists():
         sys.exit(f"{BENCH_GPT} is not built: dune build benchmarks/runners/ocannl/bench_gpt.exe")
@@ -204,9 +268,26 @@ def preflight(out):
         dst.parent.mkdir(parents=True, exist_ok=True)
         log(f"torch cpu parity reference {fx}")
         with open(dst, "w") as o, open(out / "torch" / f"{fx}.err", "w") as e:
-            subprocess.run([str(venv), str(HERE / "runners" / "pytorch" / "run.py"), "--fixture",
-                            str(HERE / "fixtures" / f"{fx}.safetensors"), "--device", "cpu"],
-                           cwd=HERE, env=clean_env({}), stdout=o, stderr=e, timeout=CELL_TIMEOUT_S)
+            status = run_in_own_group(
+                [str(venv), str(HERE / "runners" / "pytorch" / "run.py"), "--fixture",
+                 str(HERE / "fixtures" / f"{fx}.safetensors"), "--device", "cpu"],
+                env=clean_env({}), stdout=o, stderr=e)
+        # The parity reference is part of what the run claims: a failed or unparseable oracle
+        # stops the run instead of leaving the A-vs-torch column silently empty.
+        if status != 0 or torch_losses(out, fx) is None:
+            dst.unlink(missing_ok=True)
+            sys.exit(f"torch parity reference for {fx} failed (status {status}); see "
+                     f"{out / 'torch' / (fx + '.err')}")
+
+
+def torch_losses(out, fx):
+    tf = out / "torch" / f"{fx}.out"
+    try:
+        lines = tf.read_text().strip().splitlines()
+        losses = json.loads(lines[-1])["losses"] if lines else None
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    return losses if isinstance(losses, list) and losses else None
 
 
 def run(args):
@@ -214,6 +295,8 @@ def run(args):
     out.mkdir(parents=True, exist_ok=True)
     backends = args.backends.split(",")
     phases = args.phases.split(",") if args.phases else PHASES
+    if "preflight" not in phases and not check_identity(out, identity()):
+        sys.exit(f"{out}: no preflight.json -- run the preflight phase first")
     for phase in phases:
         if phase not in PHASES:
             sys.exit(f"unknown phase {phase}")
@@ -250,15 +333,20 @@ KERNEL = re.compile(r"^bench: kernel (\d+)/(\d+) ([0-9.]+) ms grid=\[([0-9;]+)\]
 
 
 def kernels(base):
-    ks = []
+    """The cell's per-kernel table, or None when it is incomplete: a kernel that declined to compile
+    on its own has no row, and summing the rest would under-report the step."""
+    ks, totals = [], set()
     try:
         for line in open(str(base) + ".err"):
             m = KERNEL.match(line.rstrip("\n"))
             if m:
+                totals.add(int(m.group(2)))
                 ks.append({"i": int(m.group(1)), "ms": float(m.group(3)), "grid": m.group(4),
                            "block": m.group(5), "w": m.group(7).split()})
     except OSError:
-        pass
+        return None
+    if len(totals) != 1 or [k["i"] for k in ks] != list(range(next(iter(totals)))):
+        return None
     return ks
 
 
@@ -317,7 +405,7 @@ def rel_losses(a, b):
 def summarize(args):
     out = Path(args.out).resolve()
     cells = load_cells(out)
-    problems = []
+    problems, notes = [], []
     pre = json.loads((out / "preflight.json").read_text()) if (out / "preflight.json").exists() else {}
     print(f"revision: {pre.get('revision', '?')}  host: {pre.get('host', '?')}  "
           f"dirty: {bool(pre.get('dirty_tracked_files'))}")
@@ -332,6 +420,19 @@ def summarize(args):
         for r, (res, base) in reps.items():
             if res is None:
                 problems.append(f"{base.name}: no result line")
+    # Completeness: a matrix any cell of which exists must be whole -- every fixture, treatment and
+    # repeat -- or its ratios are over a partial set (and a missing A or B makes them nan).
+    for backend, fixtures, n_reps in (("metal", MAIN, 3), ("metal", SWEEP, 2), ("cc", MAIN, 2),
+                                      ("cc", SWEEP, 1)):
+        if not any(timed(backend, fx, t) for fx in fixtures for t in NAMES):
+            continue
+        for fx in fixtures:
+            for t in NAMES:
+                have = timed(backend, fx, t)
+                for r in range(n_reps):
+                    if f"r{r}" not in have:
+                        (notes if args.partial else problems).append(
+                            f"{backend}__{fx}__{t}__r{r}: missing (the matrix is incomplete)")
 
     for backend in ("metal", "cc"):
         for fixtures, title in ((MAIN, "main matrix"), (SWEEP, "sequence sweep, batch 1")):
@@ -377,18 +478,17 @@ def summarize(args):
                   "(6 parity steps) | A vs torch cpu |")
             print("|---|---|---|---|")
             for fx in fixtures:
-                torch_losses = None
-                tf = out / "torch" / f"{fx}.out"
-                if tf.exists() and tf.read_text().strip():
-                    torch_losses = json.loads(tf.read_text().strip().splitlines()[-1])["losses"]
+                ref_losses = torch_losses(out, fx)
+                if ref_losses is None:
+                    problems.append(f"{fx}: no torch parity reference")
                 a_reps = timed(backend, fx, "A")
                 for t in NAMES:
                     reps = timed(backend, fx, t)
                     diffs = [rel_losses(reps[r][0]["losses"], a_reps[r][0]["losses"])
                              for r in reps if r in a_reps]
                     vs_torch = ""
-                    if t == "A" and torch_losses and a_reps:
-                        vs_torch = f"{max(rel_losses(v[0]['losses'], torch_losses) for v in a_reps.values()):.2e}"
+                    if t == "A" and ref_losses and a_reps:
+                        vs_torch = f"{max(rel_losses(v[0]['losses'], ref_losses) for v in a_reps.values()):.2e}"
                     if diffs:
                         worst = max(diffs)
                         if worst > 1e-4:
@@ -408,7 +508,8 @@ def summarize(args):
                     rows = []
                     for r, (res, base) in reps.items():
                         ks = kernels(base)
-                        if not ks:
+                        if ks is None:
+                            problems.append(f"{base.name}: kernel table missing or incomplete")
                             continue
                         fwd, bwd = attention_blocks(ks)
                         rows.append((len(ks), sum(k["ms"] for k in ks),
@@ -428,7 +529,7 @@ def summarize(args):
                     rep = timed(backend, fx, t).get("r0")
                     if not rep:
                         continue
-                    _, bwd = attention_blocks(kernels(rep[1]))
+                    _, bwd = attention_blocks(kernels(rep[1]) or [])
                     if not bwd:
                         continue
                     print(f"- `{fx}` {t}:")
@@ -460,6 +561,10 @@ def summarize(args):
             cells_txt = " | ".join(f"{m / 2**20:.1f} / {ms:.0f}" for _, m, ms in pts)
             print(f"| {t} | {cells_txt} | {c:.1f} | {c / (4 * 8 * 4):.2f} |")
 
+    if notes:
+        print("\nPARTIAL (--partial):")
+        for n in notes:
+            print(f"- {n}")
     if problems:
         print("\nPROBLEMS:")
         for p in problems:
@@ -503,6 +608,8 @@ def main(argv=None):
     r.add_argument("--limit", type=int, default=None, help="run at most N cells (dry runs only)")
     s = sub.add_parser("summarize")
     s.add_argument("--out", required=True)
+    s.add_argument("--partial", action="store_true",
+                   help="summarize an incomplete matrix (missing cells are listed, not fatal)")
     args = ap.parse_args(argv)
     if args.cmd == "run":
         LIMIT[0] = args.limit

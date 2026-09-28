@@ -274,5 +274,7 @@ on cc and Metal by `gpu_serial_lanes` leg 6.
 `dune build benchmarks/runners/ocannl/bench_gpt.exe`, then `python3 benchmarks/gh1002_cells.py run
 --out DIR` (85 minutes on this box for both backends, the sweeps and the artifact pass) and
 `python3 benchmarks/gh1002_cells.py summarize --out DIR`. Phases run separately with
-`--phases metal,metal-sweep`, and a rerun resumes at the first cell without a result line. The
+`--phases metal,metal-sweep`, and a rerun resumes at the first cell without a result line (from
+the same revision and fixture bytes only); `summarize` refuses an incomplete matrix unless
+`--partial`. The
 artifact pass keeps each Metal cell's generated sources under `DIR/artifacts/`.
