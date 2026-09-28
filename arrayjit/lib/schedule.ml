@@ -4362,50 +4362,6 @@ let apply_fold_mma ~query ~lane ~block ~width (opt : Low_level.optimized) : Low_
   let llc = rewrite_loop ~what:"Schedule.Fold_mma" ~sym:outer opt.llc ~f:(fun _ -> nest) in
   { opt with llc; workgroup_shared = Set.add (Set.add opt.workgroup_shared s2) u2 }
 
-(* The default GPU preset's cooperative fold: [Some] schedule when [opt] is one fold nest the
-   backend's MMA units can take (the conditions in the section comment above). *)
-let fold_mma_schedule ~(limits : Backend_intf.hardware_limits) (opt : Low_level.optimized) :
-    schedule option =
-  let* mma = limits.Backend_intf.mma in
-  let width = mma.Backend_intf.mma_simd_width in
-  let* tm, tn, tk =
-    List.Assoc.find mma.Backend_intf.mma_format_tiles
-      (Backend_intf.Mma_f32, Backend_intf.Mma_f32, Backend_intf.Mma_f32)
-      ~equal:Backend_intf.equal_mma_format_triple
-  in
-  let* site =
-    match non_trivial [ opt.Low_level.llc ] with [ stmt ] -> find_fold_site stmt | _ -> None
-  in
-  let q_loop =
-    List.find_exn site.fs_rows ~f:(fun r -> Indexing.equal_symbol r.index site.fs_query)
-  in
-  let f32 (tn : Tn.t) = Ops.equal_prec (Lazy.force tn.Tn.storage_prec) Ops.single in
-  let scan_stmts =
-    List.concat_map site.fs_body ~f:(function
-      | Low_level.Scan_loop sc -> non_trivial [ sc.body ]
-      | _ -> [])
-  in
-  let* _, j_to, _, d_to, (x_tn, _), (y_tn, _), _ =
-    List.find_map scan_stmts ~f:(fold_score_nest ~s_tile:site.fs_s)
-  in
-  let* _, e_to, _, _, (v_tn, _) =
-    List.find_map scan_stmts ~f:(fold_value_nest ~s_tile:site.fs_s ~u_tile:site.fs_u)
-  in
-  let bk = j_to + 1 and dq = d_to + 1 and dv = e_to + 1 in
-  let divides t n = n % t = 0 in
-  let shared_bytes = 4 * width * (bk + dv) in
-  let ok =
-    List.for_all [ x_tn; y_tn; v_tn; site.fs_s; site.fs_u ] ~f:f32
-    && (q_loop.to_ + 1) % width = 0
-    && divides tm width && divides tn bk && divides tk dq && divides tn dv && divides tk bk
-    && Option.for_all limits.Backend_intf.max_workgroup_memory_bytes ~f:(fun m -> shared_bytes <= m)
-  in
-  Option.some_if ok
-    [
-      (let op, _, _ = fold_mma ~query:site.fs_query ~width in
-       op);
-    ]
-
 let apply_opt_op (opt : Low_level.optimized) (op : optop) : Low_level.optimized =
   match op with
   | Stage
@@ -6056,6 +6012,69 @@ let lane_geometry ~block_size ~min_parallel ~(limits : Backend_intf.hardware_lim
                          split ~axis:lane ~factor:block_size ~outer:Serial ~inner:Workgroup
                        in
                        [ op ]))))
+
+(* The default GPU preset's cooperative fold: [Some] schedule when [opt] is one fold nest the
+   backend's MMA units can take (the conditions in the [Fold_mma] section comment above
+   [apply_fold_mma]), and the transform itself, dry-run here, accepts it. *)
+let fold_mma_schedule ~(limits : Backend_intf.hardware_limits) (opt : Low_level.optimized) :
+    schedule option =
+  let* mma = limits.Backend_intf.mma in
+  let width = mma.Backend_intf.mma_simd_width in
+  let* tm, tn, tk =
+    List.Assoc.find mma.Backend_intf.mma_format_tiles
+      (Backend_intf.Mma_f32, Backend_intf.Mma_f32, Backend_intf.Mma_f32)
+      ~equal:Backend_intf.equal_mma_format_triple
+  in
+  let* site =
+    match non_trivial [ opt.Low_level.llc ] with [ stmt ] -> find_fold_site stmt | _ -> None
+  in
+  let q_loop =
+    List.find_exn site.fs_rows ~f:(fun r -> Indexing.equal_symbol r.index site.fs_query)
+  in
+  let f32 (tn : Tn.t) = Ops.equal_prec (Lazy.force tn.Tn.storage_prec) Ops.single in
+  let scan_stmts =
+    List.concat_map site.fs_body ~f:(function
+      | Low_level.Scan_loop sc -> non_trivial [ sc.body ]
+      | _ -> [])
+  in
+  let* _, j_to, _, d_to, (x_tn, _), (y_tn, _), _ =
+    List.find_map scan_stmts ~f:(fold_score_nest ~s_tile:site.fs_s)
+  in
+  let* _, e_to, _, _, (v_tn, _) =
+    List.find_map scan_stmts ~f:(fold_value_nest ~s_tile:site.fs_s ~u_tile:site.fs_u)
+  in
+  let bk = j_to + 1 and dq = d_to + 1 and dv = e_to + 1 in
+  let divides t n = n % t = 0 in
+  let shared_bytes = 4 * width * (bk + dv) in
+  let ok =
+    List.for_all [ x_tn; y_tn; v_tn; site.fs_s; site.fs_u ] ~f:f32
+    && (q_loop.to_ + 1) % width = 0
+    && divides tm width && divides tn bk && divides tk dq && divides tn dv && divides tk bk
+    && Option.for_all limits.Backend_intf.max_workgroup_memory_bytes ~f:(fun m -> shared_bytes <= m)
+  in
+  let* () = Option.some_if ok () in
+  let op, lane, block = fold_mma ~query:site.fs_query ~width in
+  (* The conditions above are predictions; the verdict is the transform's own. The op is applied on
+     a hermetic copy (the mint writes the placements and the traced store) and a refusal --
+     [tensorize_llc] declining a micro-kernel whose value operand the query substitution makes
+     lane-dependent, say -- keeps the scalar presets rather than failing the compile. The launch the
+     rewritten nest requests (every row loop a [Grid] axis) is read against the device's caps here,
+     for the same reason: a fold the driver would refuse is not a schedule to select. *)
+  let hermetic =
+    {
+      opt with
+      Low_level.traced_store = Hashtbl.copy opt.Low_level.traced_store;
+      optimize_ctx = Low_level.copy_optimize_ctx opt.Low_level.optimize_ctx;
+    }
+  in
+  match apply_fold_mma ~query:site.fs_query ~lane ~block ~width hermetic with
+  | exception Invalid_argument _ -> None
+  | folded ->
+      Option.some_if
+        (Option.is_none
+           (launch_geometry_excess ~limits
+              (launch_geometry_of_dims (Low_level.launch_dims folded.Low_level.llc))))
+        [ op ]
 
 let default_gpu_presets ?block_size ?min_parallel ?(limits = Backend_intf.no_hardware_limits)
     (opt : Low_level.optimized) : schedule =

@@ -13,7 +13,12 @@
    intrinsics -- a nonzero aggregate count is not enough, so the census must count exactly the two
    statements with no fallback among them, and the generated source is checked; where it cannot (cc;
    CUDA without tf32), the scalar fold ships and no [Tile_mma] is emitted. Every leg is executed
-   parity against the composed form, on the same backend; device floats stay off the golden. *)
+   parity against the composed form, on the same backend; device floats stay off the golden.
+
+   The preset's verdict is the transform's own dry run, not a prediction of it: a fold the scalar
+   form accepts but the block rendering cannot take -- a value tensor indexed by the query, whose
+   micro-kernel [tensorize_llc] refuses -- and a fold whose [Grid] launch the device's caps refuse
+   both keep the scalar fold (leg 2), rather than failing the compile. *)
 
 open Base
 open Stdio
@@ -23,6 +28,9 @@ open Ocannl.Nn_blocks.DSL_modules
 open Verdict.Claims
 module Online_softmax = Ir.Online_softmax
 module Generated = Test_utils.Generated
+module LL = Ir.Low_level
+module Sched = Ir.Schedule
+module BI = Ir.Backend_intf
 
 let backend_name = Utils.get_global_arg ~arg_name:"backend" ~default:"cc"
 let () = Generated.init ~backend_name
@@ -62,10 +70,39 @@ let model ~seq ~d_k () =
   let%op y = x + block ~train_step:None ~mask x in
   y
 
-type run = { values : float array; mma : Ir.C_syntax.mma_summary }
+(* Attention whose value tensor is indexed by the query as well as the key, [V[s, t, h, e]]: the
+   scalar fold takes it (its value pass reads [V] per row), but the block rendering's value
+   micro-kernel would make the [Tile_mma]'s B operand lane-dependent. *)
+let model_query_indexed_v ~seq ~d_k () =
+  let wave salt idcs =
+    Float.sin
+      (salt *. Float.of_int (Array.foldi idcs ~init:0 ~f:(fun a acc i -> acc + ((a + 1) * i))))
+  in
+  let leaf name salt ~b ~o = NTDSL.init ~l:name ~prec:Ir.Ops.single ~b ~o ~f:(wave salt) () in
+  let q = leaf "q" 0.1 ~b:[ seq ] ~o:[ heads; d_k ] in
+  let k = leaf "k" 0.2 ~b:[ seq ] ~o:[ heads; d_k ] in
+  let v = leaf "v" 0.3 ~b:[ seq; seq ] ~o:[ heads; d_k ] in
+  let mask = mask ~seq in
+  let%op scores =
+    (q +* k " ... s | h d; ... t | h d => ... s | t -> h" [ "h"; "d" ]) /. sqrt (dim d)
+  in
+  let%op masked = where mask scores !.Float.neg_infinity in
+  let weights = Nn_blocks.softmax ~spec:" ... | t -> ..." () masked in
+  let%op o = weights +* v " ... s | t -> h; ... s t | h e => ... s | h e" [ "e" ] in
+  o
 
-(* The forward under the default pipeline (the preset is what emits [Fold_mma]). *)
-let forward ~name ~on ~block ~seq ~d_k () =
+(* The scans a kernel carries: the fold's own survives both renderings (the block one keeps the scan
+   and rewrites its body). *)
+let scans (llc : LL.t) =
+  let n = ref 0 in
+  Ll_test.walk ~on_stmt:(function LL.Scan_loop _ -> Int.incr n | _ -> ()) llc;
+  !n
+
+type run = { values : float array; mma : Ir.C_syntax.mma_summary; scans : int }
+
+(* The forward under the default pipeline (the preset is what emits [Fold_mma]), or under
+   [lowered_transform] where a leg supplies its own pipeline. *)
+let forward ?(model = model) ?lowered_transform ~name ~on ~block ~seq ~d_k () =
   Tensor.unsafe_reinitialize ();
   Online_softmax.set_enabled (Some on);
   Online_softmax.set_block (Some block);
@@ -78,9 +115,34 @@ let forward ~name ~on ~block ~seq ~d_k () =
       Train.set_materialized t.Tensor.value;
       let ctx = Train.init_params (Context.auto ()) Ir.Indexing.Empty t in
       Generated.arm (name ^ "__seg");
-      let ctx, routine = Context.compile ~name ctx t.Tensor.forward Ir.Indexing.Empty in
+      let ctx, routine =
+        Context.compile ?lowered_transform ~name ctx t.Tensor.forward Ir.Indexing.Empty
+      in
       let ctx = Context.run ctx routine in
-      { values = Context.get_values ctx t.Tensor.value; mma = routine.Context.mma })
+      {
+        values = Context.get_values ctx t.Tensor.value;
+        mma = routine.Context.mma;
+        scans = List.sum (module Int) routine.Context.segments ~f:(fun o -> scans o.LL.llc);
+      })
+
+(* The default pipeline under [limits], as [Schedule.maybe_default_schedules] runs it (the fission
+   seam, locals promoted on a GPU, the GPU preset read against those limits), and whether any
+   segment's schedule carries a [Fold_mma]. *)
+let pipeline ~limits =
+  let emitted = ref false in
+  let gpu = Sched.backend_is_gpu backend_name in
+  let transform (o : LL.optimized) =
+    let preset seg = if gpu then Sched.default_gpu ~limits seg else Sched.default_cpu seg in
+    let zero_sched tns = if gpu then Sched.zero_expansion ~limits tns else [] in
+    let segments =
+      Sched.fission_scheduled ~promote_locals:gpu ~preset ~zero_sched ~static_indices:[] o
+    in
+    List.iter segments ~f:(fun (_, _, sched, _) ->
+        if List.exists sched ~f:(function Sched.Fold_mma _ -> true | _ -> false) then
+          emitted := true);
+    List.map segments ~f:(fun (_, _, _, post) -> post)
+  in
+  (transform, emitted)
 
 let close ~tol g w = Float.(abs (g -. w) <= tol *. max 1. (abs w))
 
@@ -130,7 +192,44 @@ let () =
       p (why ^ ": no Tile_mma emitted") (fold.mma.Ir.C_syntax.statements = 0);
       p_all2
         (why ^ ": matches the composed output within 1e-4 relative")
-        fold.values composed.values ~f:(close ~tol:1e-4))
+        fold.values composed.values ~f:(close ~tol:1e-4));
+  (* The transform's own refusal: a fold whose value tensor is indexed by the query. The scalar fold
+     ships (the scan is there), no [Tile_mma], and the compile does not fail. *)
+  (let why = "a value tensor indexed by the query (the block micro-kernel does not tensorize)" in
+   let seq = 64 and d_k = 32 and block = 16 in
+   let model = model_query_indexed_v in
+   let composed = forward ~model ~name:"osbm_qv_composed" ~on:false ~block:0 ~seq ~d_k () in
+   let fold = forward ~model ~name:"osbm_qv_fold" ~on:true ~block ~seq ~d_k () in
+   p (why ^ ": the scalar fold ships, one scan") (fold.scans = 1);
+   p (why ^ ": no Tile_mma emitted") (fold.mma.Ir.C_syntax.statements = 0);
+   p_all2
+     (why ^ ": matches the composed output within 1e-4 relative")
+     fold.values composed.values ~f:(close ~tol:1e-4));
+  (* The device's refusal: the same fold under a grid cap the folded launch (every row loop a [Grid]
+     axis) exceeds. Read through the pipeline's own seam with the limits substituted: with the
+     device's limits the preset emits the op where the units exist, under the cap never. *)
+  let seq = 64 and d_k = 32 and block = 16 in
+  let capable = Lazy.force f32_mma in
+  let limits = Context.hardware_limits (Context.auto ()) in
+  let composed = forward ~name:"osbm_cap_composed" ~on:false ~block:0 ~seq ~d_k () in
+  let device_transform, device_emitted = pipeline ~limits in
+  let device =
+    forward ~lowered_transform:device_transform ~name:"osbm_cap_device" ~on:true ~block ~seq ~d_k ()
+  in
+  let capped_transform, capped_emitted = pipeline ~limits:{ limits with BI.max_grid_yz = Some 1 } in
+  let capped =
+    forward ~lowered_transform:capped_transform ~name:"osbm_cap_capped" ~on:true ~block ~seq ~d_k ()
+  in
+  gated ~when_:capable ~on:backend_name
+    "under the device's limits the preset emits Fold_mma for the fold" !device_emitted;
+  gated ~when_:(not capable) ~on:backend_name "without f32 MMA units the preset emits no Fold_mma"
+    (not !device_emitted);
+  p "a grid cap of 1 keeps the scalar fold: no Fold_mma emitted, no Tile_mma"
+    ((not !capped_emitted) && capped.mma.Ir.C_syntax.statements = 0 && capped.scans = 1);
+  p_all2 "under the grid cap the output matches the composed output within 1e-4 relative"
+    capped.values composed.values ~f:(close ~tol:1e-4);
+  p_all2 "under the device's limits the output matches the composed output within 1e-4 relative"
+    device.values composed.values ~f:(close ~tol:1e-4)
 
 (* --- Leg 3: the training step (the fold forward under the fused backward, treatment F). --- *)
 

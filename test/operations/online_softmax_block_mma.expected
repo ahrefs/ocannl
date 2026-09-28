@@ -20,6 +20,14 @@ a query count not a multiple of the SIMD width: no Tile_mma emitted: true
 a query count not a multiple of the SIMD width: matches the composed output within 1e-4 relative: true
 a key tail (the block does not divide the key count): no Tile_mma emitted: true
 a key tail (the block does not divide the key count): matches the composed output within 1e-4 relative: true
+a value tensor indexed by the query (the block micro-kernel does not tensorize): the scalar fold ships, one scan: true
+a value tensor indexed by the query (the block micro-kernel does not tensorize): no Tile_mma emitted: true
+a value tensor indexed by the query (the block micro-kernel does not tensorize): matches the composed output within 1e-4 relative: true
+under the device's limits the preset emits Fold_mma for the fold: true
+without f32 MMA units the preset emits no Fold_mma: true
+a grid cap of 1 keeps the scalar fold: no Fold_mma emitted, no Tile_mma: true
+under the grid cap the output matches the composed output within 1e-4 relative: true
+under the device's limits the output matches the composed output within 1e-4 relative: true
 --- leg 3: the training step, the fold forward under the fused backward ---
 the step's fold renders both contractions as intrinsics: true
 a parameter gradient agrees with the composed step within 1e-4 relative: true
