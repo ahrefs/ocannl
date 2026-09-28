@@ -3505,6 +3505,21 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; gh-ocannl-1003 stage 1: the default GPU annotator's lane geometry for the online-softmax hoist's
+; value pass, executed against exact references and pinned in the emitted kernel.
+
+(test
+ (name gpu_serial_lanes)
+ (package neural_nets_lib)
+ (deps
+  (env_var OCANNL_BUILD_FILES_PREFIX)
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules gpu_serial_lanes)
+ (libraries base ocannl stdio arrayjit.verdict ll_test test_utils)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 (test
  (name gpu_small_leading_axis)
  (package neural_nets_lib)
