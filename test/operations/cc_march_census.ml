@@ -703,6 +703,18 @@ let aarch64_cross_override () =
   | Some c when not (String.is_empty (String.strip c)) -> Some (String.strip c)
   | _ -> None
 
+let column label command march note = { Census.label; command; march; note }
+
+(* The columns [AARCH64_CROSS_GCC] answers for, and only these: the override names a compiler, which
+   on a native aarch64 host can be the host compiler itself, so matching columns by command would
+   turn that host's rejected x86 [-march]es into failures too. *)
+let aarch64_columns cross =
+  [
+    column "aarch64/armv8-a" cross "armv8-a" "NEON f32/f64 builtins, no fp16 arithmetic";
+    column "aarch64/armv8.2-a+fp16" cross "armv8.2-a+fp16"
+      "ARMv8.2-FP16: the NEON fp16 vector rows, typed in __fp16";
+  ]
+
 let toolchains () =
   let host = Cc_backend.compiler_command () in
   let cross = Option.value (aarch64_cross_override ()) ~default:"aarch64-linux-gnu-gcc" in
@@ -721,7 +733,7 @@ let toolchains () =
     | Some c when not (String.is_empty (String.strip c)) -> String.strip c
     | _ -> "clang"
   in
-  let t label command march note = { Census.label; command; march; note } in
+  let t = column in
   [
     (* The host's own default target, with no [-march] at all: the one column every toolchain
        accepts, and therefore the one that keeps the matrix from being VACUOUS. Without it, a run on
@@ -740,10 +752,8 @@ let toolchains () =
     t "clang/x86-64-v3" clang "x86-64-v3" "clang, AVX2 + FMA";
     t "clang/x86-64-v4" clang "x86-64-v4" "clang, AVX-512 under a 256-bit vector preference";
     t "clang/sapphirerapids" clang "sapphirerapids" "clang, AVX512-FP16";
-    t "aarch64/armv8-a" cross "armv8-a" "NEON f32/f64 builtins, no fp16 arithmetic";
-    t "aarch64/armv8.2-a+fp16" cross "armv8.2-a+fp16"
-      "ARMv8.2-FP16: the NEON fp16 vector rows, typed in __fp16";
   ]
+  @ aarch64_columns cross
 
 (* The two numerics settings a child can emit under, named by what they resolve fp16 to. Only
    [fp16_arithmetic] differs: [native] keeps fp16 arithmetic 16-bit (so
@@ -1906,8 +1916,8 @@ let () =
               ((not (List.is_empty mine))
               && List.for_all mine ~f:(fun r -> Option.is_some r.profile))
           else if
-            Option.value_map (aarch64_cross_override ()) ~default:false
-              ~f:(String.equal t.Census.command)
+            Option.exists (aarch64_cross_override ()) ~f:(fun cross ->
+                List.mem (aarch64_columns cross) t ~equal:Poly.equal)
           then (
             Stdio.eprintf
               "  %s: AARCH64_CROSS_GCC names %s, which does not accept -march=%s (not part of the \
