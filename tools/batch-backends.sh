@@ -35,11 +35,13 @@
 # narrower width or a wait for a GPU token, never a GPU batch at dune's default
 # width or outside the tokens.
 #
-# The readers are built under the worktree lock the launcher holds, before the
-# run is published: a few seconds warm, and their libraries are the batch's own
-# anyway. OCANNL_TOOL_READ_CONFIG and OCANNL_TOOL_SLOT_KIND (both, or neither)
-# name stand-ins for them, which is how tools/test-test-run.sh drives this
-# without a build.
+# The readers are built by the run's first phase (tools/test-run.sh's
+# `_resolve`, the supervisor's child), so the worktree lock, the run's cap, its
+# process group and its signal handling cover them as they cover dune -- they
+# are plain foreground commands here (gh-ocannl-1106). A few seconds warm, and
+# their libraries are the batch's own anyway. OCANNL_TOOL_READ_CONFIG and
+# OCANNL_TOOL_SLOT_KIND (both, or neither) name stand-ins for them, which is
+# how tools/test-test-run.sh drives this without a build.
 
 # The directories whose `ocannl_config` a test run can read, relative to the
 # repository root: the shared test configuration, and arrayjit's own.
@@ -99,110 +101,13 @@ batch_box_has_hazard() {
   return 1
 }
 
-# Runs a command in <dir>, in a process group of its own, under a deadline of
-# <seconds> (0: none) that kills the whole group: a child that outlives the
-# command would otherwise hold a pipe open to its own end. INT, TERM and HUP
-# reaching the runner are relayed to the group, which gets five seconds to act
-# before it is KILLed; and a group left behind by a command that exited is
-# KILLed too, since it could hold the worktree lock with nothing over it
-# (Codex review rounds 1-6 on PR #832). Exits with the command's status, 124
-# on the deadline. Shared by the backends' readers and the fleet-slot probe:
-# `perl -e "$BATCH_GROUP_RUNNER" <seconds> <dir> command...`, run directly so
-# that `$!` of a backgrounded one is the runner itself.
-# shellcheck disable=SC2016  # perl, not shell, expands these
-BATCH_GROUP_RUNNER='
-    use POSIX ":sys_wait_h";
-    my ($left, $dir) = splice(@ARGV, 0, 2);
-    defined(my $pid = fork) or exit 127;
-    if (!$pid) { setpgrp(0, 0); chdir $dir or exit 127; exec @ARGV or exit 127 }
-    setpgrp($pid, $pid);
-    # Ending early: the signal to the group, a bounded grace for it to act,
-    # then KILL to whatever of the group is left, and the leader reaped --
-    # a group that ignores TERM must not outlive this runner holding the
-    # worktree lock with no alarm left over it (Codex review round 3).
-    my $end = sub {
-      my ($sig, $code) = @_;
-      $SIG{$_} = "IGNORE" for qw(ALRM INT TERM HUP);
-      kill $sig, -$pid; kill $sig, $pid;
-      if ($sig ne "KILL") {
-        for (1 .. 50) { last if waitpid($pid, WNOHANG) != 0; select(undef, undef, undef, 0.1) }
-      }
-      kill "KILL", -$pid; kill "KILL", $pid;
-      waitpid($pid, 0);
-      exit $code;
-    };
-    $SIG{ALRM} = sub { $end->("KILL", 124) };
-    $SIG{INT} = sub { $end->("INT", 130) };
-    $SIG{TERM} = sub { $end->("TERM", 143) };
-    $SIG{HUP} = sub { $end->("TERM", 129) };
-    alarm $left if $left > 0;
-    waitpid($pid, 0);
-    my $st = $?;
-    # A reader that left a background descendant behind has not finished:
-    # that descendant holds the worktree lock with no alarm over it, so the
-    # group goes too, whatever the leader answered (Codex review round 5).
-    $SIG{$_} = "IGNORE" for qw(ALRM INT TERM HUP);
-    alarm 0;
-    kill "KILL", -$pid;
-    exit(($st & 127) ? 128 + ($st & 127) : $st >> 8);
-  '
-
-# Runs a command under what is left of the resolution's <cap> seconds (0:
-# unbounded), so the readers' build and every reader run share one budget:
-# a hung reader answers "unread" -- every backend -- instead of stranding the
-# launch (Codex review round 1 on PR #832). Uses batch_resolve's locals; with
-# `-C <dir>` the command runs in <dir>, under BATCH_GROUP_RUNNER. The runner is
-# waited on in the BACKGROUND, because bash
-# defers a trap until a foreground command completes: this way a signal to
-# the launcher alone runs its trap at once, and batch_cancel_hook (the
-# launcher's) decides whether to end the runner (Codex review round 2).
-batch_child=   # the runner in flight, for batch_abort
-batch_bounded() { # [-C dir] command...
-  local left=0 dir=. rc
-  if [ "${1:-}" = -C ]; then dir=$2; shift 2; fi
-  # A cancellation the launcher trapped before this reader started (in
-  # new_run, take_lock, or an earlier reader) starts nothing more (Codex
-  # review round 4 on PR #832).
-  ! batch_cancel_hook || return 143
-  if [ "$bcap" -ne 0 ]; then
-    left=$((bcap - (SECONDS - bstart)))
-    [ "$left" -gt 0 ] || return 124
-  fi
-  perl -e "$BATCH_GROUP_RUNNER" "$left" "$dir" "$@" &
-  batch_child=$!
-  while :; do
-    wait "$batch_child"
-    rc=$?
-    # A trapped signal returns from `wait` early, with the runner still there.
-    kill -0 "$batch_child" 2>/dev/null || break
-    ! batch_cancel_hook || kill -TERM "$batch_child" 2>/dev/null
-  done
-  batch_child=
-  return "$rc"
-}
-
-# Whether a signal the launcher trapped means the resolution must end: the
-# launcher redefines it; standalone, nothing cancels.
-batch_cancel_hook() { return 1; }
-
-# Ends a runner in flight and waits for it -- its grace and KILL included --
-# so that nothing holding the worktree lock outlives a trap that exits at once
-# (Codex review round 4 on PR #832).
-batch_abort() {
-  [ -n "$batch_child" ] || return 0
-  kill -TERM "$batch_child" 2>/dev/null
-  while kill -0 "$batch_child" 2>/dev/null; do wait "$batch_child" 2>/dev/null; done
-  batch_child=
-  return 0
-}
-
 # Resolves the batch's backends into batch_holds / batch_unknown, and says what
-# it found. <dune> builds the readers; the build and the readers together are
-# bounded by <cap> seconds (0: unbounded), and dune's output is appended to
-# <log>.
-batch_resolve() { # <dune> <log> <cap> dune-argv...
-  local dune=$1 log=$2 bcap=$3 bstart=$SECONDS a v reader reach out line rest b ended= d
-  shift 3
+# it found. <dune> builds the readers, and its output is appended to <log>.
+# The readers' answers go through files beside <log>, not pipes: a reader that
+# leaves a background descendant holding its output must not hold the read.
+batch_resolve() { # <dune> <log> dune-argv...
+  local dune=$1 log=$2 a v reader reach out line rest b ended= d
+  shift 2
   batch_holds= batch_unknown= batch_resolved=1
   if [ "${1:-}" = exec ]; then
     batch_unknown="dune exec runs a program that may pick its own backend"
@@ -227,8 +132,7 @@ batch_resolve() { # <dune> <log> <cap> dune-argv...
   if [ -z "$batch_unknown" ]; then
     if [ -n "${OCANNL_TOOL_READ_CONFIG:-}" ] && [ -n "${OCANNL_TOOL_SLOT_KIND:-}" ]; then
       reader=$OCANNL_TOOL_READ_CONFIG reach=$OCANNL_TOOL_SLOT_KIND
-    elif batch_bounded \
-           "$dune" build ./test/config/ocannl_read_config.exe ./test/config/ocannl_slot_kind.exe \
+    elif "$dune" build ./test/config/ocannl_read_config.exe ./test/config/ocannl_slot_kind.exe \
            </dev/null >>"$log" 2>&1; then
       # Where dune just put them: DUNE_BUILD_DIR moves the build tree (as
       # tools/ci-compiler-test.sh does), and a copy left under _build/default
@@ -242,7 +146,7 @@ batch_resolve() { # <dune> <log> <cap> dune-argv...
     fi
   fi
   if [ -z "$batch_unknown" ]; then
-    if batch_bounded "$reach" ${reach_argv[@]+"${reach_argv[@]}"} >"$log.reach" 2>/dev/null; then
+    if "$reach" ${reach_argv[@]+"${reach_argv[@]}"} </dev/null >"$log.reach" 2>/dev/null; then
       out=$(cat "$log.reach" 2>/dev/null)
     else
       # A failed read is not an answer, however complete what it printed
@@ -272,7 +176,7 @@ batch_resolve() { # <dune> <log> <cap> dune-argv...
   fi
   if [ -z "$batch_unknown" ]; then
     for d in $BATCH_CONFIG_DIRS; do
-      if ! batch_bounded -C "$d" "$reader" --read=backend --output=stdout >"$log.read" 2>/dev/null; then
+      if ! (cd "$d" && exec "$reader" --read=backend --output=stdout) </dev/null >"$log.read" 2>/dev/null; then
         rm -f "$log.read"
         batch_unknown="the backend $d resolves is unreadable"
         break

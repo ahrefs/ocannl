@@ -114,7 +114,9 @@
 # worktree's path -- never in the worktree, which a run leaves exactly as it
 # found it. A run is two processes: this launching shell, which takes the lock
 # and publishes the run, and a perl supervisor that inherits the lock, caps
-# and signals dune, and records the verdict (see supervisor_perl).
+# and signals its child -- first this script's `_resolve`, which decides the
+# width and the fleet slot and then execs dune -- and records the verdict
+# (see supervisor_perl).
 #
 # A run directory also records WHICH source ran, as of the launch: `head` (the
 # checkout's HEAD commit) and `dirty` (its `git status --porcelain`, empty when
@@ -208,7 +210,8 @@ reject_misplaced_options() {
 # and an unreadable answer is every backend, which costs minutes of width, not
 # a red suite. Resolving means building the two readers, so it happens only
 # where something depends on it: a box where some backend meets a cap, or a
-# fleet box's slot (plan_batch).
+# fleet box's slot (plan_batch). It is the run's first phase (`_resolve`),
+# run by the supervisor as the child it later execs dune in.
 explicit_jobs() { # dune argv; 0 iff it names a width before dune's own `--`
   for arg do
     case $arg in
@@ -331,38 +334,17 @@ plan_width_cap() { # dune argv; after plan_batch
   explicit -j to run at a width of your own."
 }
 
-# What the resolution spent comes out of the cap, which it shares: the suite
-# gets the rest, the slot's wait at most half of that, and a cap the
-# resolution used up entirely is spent -- the cap's verdict, not a fresh budget
-# for dune (Codex review rounds 1-2 on PR #832). `plan` forecasts the same.
-cap_spent=
-deduct_planning() { # <SECONDS at the resolution's start>
-  cap_spent=
-  [ "$cap" -gt 0 ] || return 0
-  cap=$((cap - (SECONDS - $1)))
-  if [ "$cap" -le 0 ]; then
-    cap_spent=1
-  else
-    [ -z "$slot_wait" ] || [ "$slot_wait" -le $((cap / 2)) ] || slot_wait=$((cap / 2))
-  fi
-}
-
-mark_planning() {
-  ps_token "$$" >"$run_dir/planning.token" 2>/dev/null
-  printf '%s\n' "$$" >"$run_dir/planning" 2>/dev/null || :
-}
-
 # Resolves the batch's backends (tools/batch-backends.sh) where something reads
 # them: a box where a backend meets a width cap, or a fleet slot, whose kind is
 # the other reading. Elsewhere nothing is built and nothing is said. Called
-# under the worktree lock, once the run's log exists, so dune's output from
-# building the readers lands there.
+# by `_resolve`, under the worktree lock and the run's cap, so dune's output
+# from building the readers lands in the run's log.
 plan_batch() { # <log> dune argv
   local log=$1
   shift
   batch_resolved=
   [ -n "$slot_fw" ] || batch_box_has_hazard || return 0
-  batch_resolve "$DUNE" "$log" "$cap" "$@"
+  batch_resolve "$DUNE" "$log" "$@"
 }
 
 # The fleet's run-time correctness slot (gh-ocannl-1004). On a fleet box --
@@ -387,13 +369,14 @@ plan_batch() { # <log> dune argv
 # which reads the fleet's registry through the same one. `repeat` never takes it:
 # an isolation tool runs as given, like its width (wrap it yourself on a
 # fleet box). The slot's wait comes out of the run's cap: it is the smaller of
-# half the cap and OCANNL_TOOL_SLOT_WAIT (600s), after which the slot refuses
-# and the run reports SLOT REFUSED (exit 75), never a test verdict.
+# half what the resolution left of the cap and OCANNL_TOOL_SLOT_WAIT (600s),
+# after which the slot refuses and the run reports SLOT REFUSED (exit 75),
+# never a test verdict.
 slot_fw=          # the fleet-worker.sh to take the slot through, empty for none
 slot_wait=
 slot_announce=
 plan_slot() {
-  local fw probe tag box= slots tokens
+  local fw tag box= slots tokens
   slot_fw= slot_wait= slot_announce=
   # Each candidate in turn until one answers the probe: the two skill trees
   # are deployed independently, and one of them may predate the probe while
@@ -402,22 +385,31 @@ plan_slot() {
   # outside the fleet.
   while IFS= read -r fw; do
     [ -x "$fw" ] || continue
-    # Bounded, its whole process group with it: a wedged fleet-worker.sh
-    # must not hang a launch or a plan before any cap applies (Codex review
-    # rounds 5-6 on PR #832).
-    probe=$(perl -e "$BATCH_GROUP_RUNNER" 30 . "$fw" execution slot --probe 2>/dev/null) || continue
-    read -r tag _ _ box slots tokens _ <<<"$probe"
+    # Bounded, so a wedged fleet-worker.sh costs this launch 30s and no slot
+    # rather than its whole cap; answered through a file, so a descendant it
+    # leaves behind cannot hold the read open (the run's process group reaps
+    # that descendant with dune's). It is asked without the worktree lock.
+    perl -e 'alarm shift; exec @ARGV or exit 127' 30 "$fw" execution slot --probe \
+      </dev/null >"$run_dir/probe" 2>/dev/null 9>&- || continue
+    read -r tag _ _ box slots tokens _ <"$run_dir/probe"
     [ "$tag" = EXECUTION ] && [ -n "$tokens" ] && { slot_fw=$fw; break; }
   done < <(fleet_worker_candidates)
+  rm -f "$run_dir/probe"
   [ -n "$slot_fw" ] || return 0
   slot_wait=${OCANNL_TOOL_SLOT_WAIT:-600}
   case $slot_wait in '' | *[!0-9]*) slot_wait=600 ;; esac
-  # At most half the cap: the cap's alarm is already running while the slot
-  # waits, and a busy slot must be able to refuse -- and be reported SLOT
-  # REFUSED -- before the alarm reports the run as a TIMEOUT instead (Codex
-  # review round 3 on PR #803).
-  [ "$cap" -eq 0 ] || [ "$slot_wait" -le $((cap / 2)) ] || slot_wait=$((cap / 2))
   slot_box=$box slot_slots=$slots slot_tokens=$tokens
+}
+# At most half of what the resolution left of the cap: the cap's alarm has run
+# since the supervisor started, and a busy slot must be able to refuse -- and
+# be reported SLOT REFUSED -- before the alarm reports the run as a TIMEOUT
+# instead (Codex review round 3 on PR #803).
+clamp_slot_wait() { # after the resolution, in `_resolve`, whose SECONDS the cap's are
+  local left
+  [ -n "$slot_fw" ] && [ "$cap" -gt 0 ] || return 0
+  left=$((cap - SECONDS))
+  [ "$left" -ge 0 ] || left=0
+  [ "$slot_wait" -le $((left / 2)) ] || slot_wait=$((left / 2))
 }
 slot_box= slot_slots= slot_tokens=
 slot_kind=        # cpu or gpu, once plan_batch has resolved the batch
@@ -434,21 +426,6 @@ plan_slot_kind() { # after plan_batch
   fi
   slot_announce="taking one of $slot_box's $slot_slots fleet correctness slots for this run (gh-ocannl-1004),
   waiting up to ${slot_wait}s, as $what."
-}
-
-width_said=       # stderr is said once, whichever call gets there first
-width_logged=
-say_width_plan() { # -> stderr, and into the run's log once there is one
-  [ -n "$width_announce" ] || return 0
-  if [ -z "$width_said" ]; then
-    printf 'test-run: %s\n' "$width_announce" >&2
-    width_said=1
-  fi
-  if [ -z "$width_logged" ] && [ -n "${run_dir:-}" ] && [ -f "$run_dir/log" ]; then
-    printf 'test-run: %s\n' "$width_announce" >>"$run_dir/log"
-    width_logged=1
-  fi
-  return 0
 }
 
 select_dune() {
@@ -585,7 +562,9 @@ query_state_for() {
   LAST=$RUNS/last-$wt_key
 }
 case ${1:-} in
-  paths | lock-status) ;; # Initialize lazily, only if the query needs this root.
+  # Initialize lazily, only if the query needs this root; `_resolve` works in
+  # the run directory its supervisor names.
+  paths | lock-status | _resolve) ;;
   *) RUNS=${RUNS:-$HOME/.ocannl-test-runs}
      mkdir -p "$RUNS" || die "cannot create $RUNS"
      RUNS=$(cd "$RUNS" && pwd -P) || die "cannot resolve $RUNS" ;;
@@ -657,6 +636,14 @@ LAST=$RUNS/last-$wt_key   # the run this worktree published most recently
 # child records its pgid (only once confirmed to LEAD its own group, so a
 # group-kill can never hit the caller where setpgrp failed) and its start
 # token, so `stop` can reap a group that outlived this process.
+#
+# For `run`/`start`/`plan` the child is this script's `_resolve` first: the
+# batch's resolution runs as the supervisor's first phase, under this cap,
+# group and signal handling -- it builds the readers, a dune run in the
+# worktree -- and then execs dune in the same process, so the pid and group
+# recorded here are the child's throughout (gh-ocannl-1106). It writes
+# `resolved` when the phase ends; a run cut short before that says in its log
+# that dune was not started.
 #
 # OCANNL_TOOL_TESTRUN_RD: where pgid/gtoken go (the run directory, or a repeat
 # iteration's). OCANNL_TOOL_TESTRUN_OWN: the run directory whose identity and
@@ -774,6 +761,12 @@ supervisor_perl='
           select undef, undef, undef, 0.1;
         }
       }
+    }
+    # Cut short in the first phase: the child was still resolving the
+    # batch (it marks the end of that phase with `resolved`), so no dune ran.
+    if ($own && !-e "$own/resolved") {
+      print STDOUT "test-run: " . ($code == 142 ? "the cap expired" : "cancelled")
+        . " while the launch resolved the batch\x27s backends; dune was not started\n";
     }
     $finish->($code);
   };
@@ -1413,13 +1406,13 @@ resolve_run() {
 # complaint (the lines before `Usage:`), 0 iff FILE is such a refusal.
 #
 # "First" means first after the launch's own prelude, which the log carries
-# before dune starts: what the launcher wrote there (the batch's backends, the
-# width, the slot) ends at the byte offset it records in `prelude` just before
-# the supervisor starts, and is skipped by position, never by pattern -- a
-# program's own `test-run: ` line is output like any other. The fleet slot's
-# `EXECUTION SLOT ` admission lines, written by fleet-worker.sh between the
-# supervisor's start and dune's, are the one prelude read by pattern (Codex
-# review rounds 1-2 on PR #832).
+# before dune starts: what the launch's first phase wrote there (the readers'
+# build, the batch's backends, the width, the slot) ends at the byte offset
+# `_resolve` records in `prelude` just before it execs the command, and is
+# skipped by position, never by pattern -- a program's own `test-run: ` line
+# is output like any other. The fleet slot's `EXECUTION SLOT ` admission
+# lines, written by fleet-worker.sh between that exec and dune's, are the one
+# prelude read by pattern (Codex review rounds 1-2 on PR #832).
 dune_refusal() { # FILE [PRELUDE BYTES]
   tail -c +$(( ${2:-0} + 1 )) "$1" 2>/dev/null | head -c 20000 | awk '
     !started && /^EXECUTION SLOT / { next }
@@ -1984,77 +1977,103 @@ case $sub in
     # publishes the atomic verdict while signals are ignored.
     exit "$final_rc"
     ;;
-  plan)
-    # What `run` would do with this argv, without running it: the batch's
-    # resolved backends and why, the width it would inject, and the fleet slot
-    # it would take. The only thing it runs is the readers' build, which is a
-    # dune run in this worktree, so it holds the worktree lock throughout like
-    # a launch does (a run started meanwhile is refused, not raced; Codex review
-    # round 1 on PR #832) -- under a run directory that is never published and
-    # is removed at the end -- and its --cap bounds the build as a run's would.
-    cap=${OCANNL_TOOL_TEST_CAP:-3600}
-    while [ $# -gt 0 ]; do
-      case $1 in
-        --cap) [ $# -ge 2 ] || die "--cap requires a value"; cap=$2; shift 2 ;;
-        --) shift; break ;;
-        *) break ;;
-      esac
-    done
-    normalize_cap
-    reject_misplaced_options "$@"
-    [ $# -gt 0 ] || set -- runtest
-    select_dune
+  _resolve)
+    # The run's first phase, and not a command for callers (gh-ocannl-1106):
+    # the supervisor's child, in the run's own process group, under its lock,
+    # its cap and its signal handling -- the ones dune then runs under, so the
+    # resolution needs no process machinery of its own. It resolves the
+    # batch's backends where something reads them (plan_batch), decides the
+    # width and the fleet slot, and records them in the run: the capped
+    # command rewritten into `cmd`, so the width is part of the RECORDED
+    # command and of every later digest (gh-ocannl-1066), the announcements
+    # into the log and into `resolved`, which marks the end of the phase for
+    # the launcher and the supervisor. Then it execs dune (through the slot's
+    # fleet-worker.sh) in its own place, so the pid and group the supervisor
+    # caps, signals and reaps stay the same. For `plan` it resolves whatever
+    # this box is, writes the report to `plan` and exits.
+    [ $# -ge 3 ] && [ -n "${OCANNL_TOOL_TESTRUN_OWN:-}" ] ||
+      die "_resolve is the supervisor's first phase, not a command"
+    mode=$1 cap=$2 DUNE=$3
+    shift 3
+    run_dir=$OCANNL_TOOL_TESTRUN_OWN
     plan_slot
-    # Guarded: a signal before new_run has named the directory finds none
-    # (set -u; Codex review round 7 on PR #832).
-    run_dir=
-    trap 'batch_abort; [ -z "$run_dir" ] || rm -rf "$run_dir"; exit 130' INT
-    trap 'batch_abort; [ -z "$run_dir" ] || rm -rf "$run_dir"; exit 143' TERM HUP
-    new_run "$@"
-    take_lock
-    mark_planning
-    plan_log=$run_dir/log
-    # Resolved whatever this box is: the backends are what was asked for.
-    plan_start=$SECONDS
-    batch_resolve "$DUNE" "$plan_log" "$cap" "$@"
-    deduct_planning "$plan_start"
+    if [ "$mode" = plan ]; then
+      batch_resolve "$DUNE" "$run_dir/log" "$@"
+    else
+      plan_batch "$run_dir/log" "$@"
+    fi
+    clamp_slot_wait
     plan_width_cap "$@"
     plan_slot_kind
+    # The width goes immediately after dune's subcommand, where dune accepts
+    # it whatever the target is, and always before dune's own `--`.
     if [ -n "$width_cap" ]; then
       width_sub=$1
       shift
       set -- "$width_sub" -j "$width_cap" "$@"
     fi
-    echo "command: dune $*"
-    echo "backends: $(batch_summary)"
-    sed -n 's/^test-run: batch: /  /p' "$plan_log"
-    # The lock goes first, then the state it names: the owner pointer never
-    # names a deleted directory while the lock is held (Codex review round 8).
-    trap - INT TERM HUP
-    exec 9>&-
-    rm -rf "$run_dir"
+    if [ "$mode" = plan ]; then
+      {
+        echo "command: dune $*"
+        echo "backends: $(batch_summary)"
+        sed -n 's/^test-run: batch: /  /p' "$run_dir/log"
+        if [ -n "$width_cap" ]; then
+          echo "width: -j $width_cap, injected ($batch_width_hazard hazard, for $batch_width_backend)"
+        elif explicit_jobs "$@"; then
+          if [ -n "$batch_width_cap" ]; then
+            echo "width: the caller's (a -j $batch_width_cap cap applies here, for $batch_width_backend)"
+          else
+            echo "width: the caller's (no backend of the batch meets a cap on this box)"
+          fi
+        else
+          echo "width: dune's default (no backend of the batch meets a cap on this box)"
+        fi
+        [ -z "$width_announce" ] || printf '  %s\n' "$width_announce"
+        if [ -n "$slot_fw" ]; then
+          echo "slot: --$slot_kind"
+          printf '  %s\n' "$slot_announce"
+        else
+          echo "slot: none (not a fleet box, or the slot is turned off)"
+        fi
+      } >"$run_dir/plan" || { echo "test-run: cannot write the plan in $run_dir"; exit 126; }
+      exit 0
+    fi
     if [ -n "$width_cap" ]; then
-      echo "width: -j $width_cap, injected ($batch_width_hazard hazard, for $batch_width_backend)"
-    elif explicit_jobs "$@"; then
-      if [ -n "$batch_width_cap" ]; then
-        echo "width: the caller's (a -j $batch_width_cap cap applies here, for $batch_width_backend)"
-      else
-        echo "width: the caller's (no backend of the batch meets a cap on this box)"
-      fi
-    else
-      echo "width: dune's default (no backend of the batch meets a cap on this box)"
+      { { printf '%q ' "$@"; echo; } >"$run_dir/cmd.tmp" &&
+        mv -f "$run_dir/cmd.tmp" "$run_dir/cmd"; } ||
+        { echo "test-run: cannot record the capped command in $run_dir"; exit 126; }
     fi
-    [ -z "$width_announce" ] || printf '  %s\n' "$width_announce"
-    if [ -n "$cap_spent" ]; then
-      echo "slot: none -- resolving the backends used the whole cap, so run would record the cap's verdict (142) without starting dune"
-    elif [ -n "$slot_fw" ]; then
-      echo "slot: --$slot_kind"
-      printf '  %s\n' "$slot_announce"
+    # Into the run's log (this process's stdout) and, through `resolved`, onto
+    # the launcher's stderr: the cap is in the artifact triage reads rather
+    # than only in the launching terminal's scrollback.
+    : >"$run_dir/resolved.tmp" || { echo "test-run: cannot write in $run_dir"; exit 126; }
+    for line in "$width_announce" "$slot_announce"; do
+      [ -z "$line" ] || printf 'test-run: %s\n' "$line" | tee -a "$run_dir/resolved.tmp"
+    done
+    # Under a fleet slot the command is fleet-worker.sh, which takes the slot
+    # and execs dune in its place, so the pid the supervisor caps and signals
+    # ends up being dune's, and dune's status is the slot's.
+    if [ -n "$slot_fw" ]; then
+      printf '%s\n' "$slot_fw" >"$run_dir/slot" 2>/dev/null || :
+      set -- "$slot_fw" execution slot --wait "$slot_wait" "--$slot_kind" -- "$DUNE" "$@"
     else
-      echo "slot: none (not a fleet box, or the slot is turned off)"
+      set -- "$DUNE" "$@"
     fi
+    # Where the launch's own prelude in the log ends (dune_refusal).
+    wc -c <"$run_dir/log" | tr -d ' ' >"$run_dir/prelude" 2>/dev/null || :
+    mv -f "$run_dir/resolved.tmp" "$run_dir/resolved" ||
+      { echo "test-run: cannot record the end of the resolution in $run_dir"; exit 126; }
+    exec "$@"
     ;;
-  run | start)
+  run | start | plan)
+    # `plan` is what `run` would do with this argv, without running it: the
+    # batch's resolved backends and why, the width it would inject, and the
+    # fleet slot it would take. It is a launch whose first phase is its last
+    # (see `_resolve`): the readers' build is a dune run in this worktree, so
+    # it holds the worktree lock throughout like a launch does (a run started
+    # meanwhile is refused, not raced; Codex review round 1 on PR #832), under
+    # a run directory that is never published and is removed at the end, and
+    # its --cap bounds the build as a run's would.
     cap=${OCANNL_TOOL_TEST_CAP:-3600}
     while [ $# -gt 0 ]; do
       case $1 in
@@ -2069,17 +2088,16 @@ case $sub in
     # Toolchain checks gate only launches: status/wait/stop/list remain usable
     # from a shell whose opam environment is no longer active.
     select_dune
-    plan_slot
-    # Cancellation is armed BEFORE the lock is taken, for BOTH modes: from
+    # Cancellation is armed BEFORE the lock is taken, for every mode: from
     # here on the launcher holds state a signal must not abandon halfway (the
-    # lock, then a published run). For `run` the signal is forwarded to the
-    # supervisor -- at once when there is one, and right after the launch for
-    # one that arrived before; for `start` it is merely deferred past the
-    # launch: the launcher is about to exit anyway, and the run is MEANT to
-    # survive it.
+    # lock, then a published run). For `run` and `plan` the signal is
+    # forwarded to the supervisor -- at once when there is one, and right
+    # after the launch for one that arrived before; for `start` it is merely
+    # deferred past the launch: the launcher is about to exit anyway, and the
+    # run is MEANT to survive it.
     cancelled= sup=
     forward_cancel() {
-      [ "$sub" = run ] && [ -n "$sup" ] || return 0
+      [ "$sub" != start ] && [ -n "$sup" ] || return 0
       # The supervisor is signalled only while it can be identified: as this
       # shell's own unreaped child before it has recorded its identity, and
       # under its recorded start token afterwards -- never by a bare pid that
@@ -2094,93 +2112,45 @@ case $sub in
       esac
     }
     fwd_sig() { cancelled=$1; forward_cancel; }
-    # While the batch's backends resolve, a trapped signal ends the reader in
-    # flight at once (tools/batch-backends.sh waits on it in the background).
-    batch_cancel_hook() { [ -n "$cancelled" ]; }
     trap 'fwd_sig INT' INT
     trap 'fwd_sig TERM' TERM
     trap 'fwd_sig HUP' HUP
     new_run "$@"
     take_lock
-    # The batch's backends, resolved under the lock (building the readers is
-    # a dune run in this worktree) and before publication, so the width they
-    # decide is part of the RECORDED command and of every later digest -- not
-    # a decision the log alone remembers (gh-ocannl-1066). The width goes
-    # immediately after dune's subcommand, where dune accepts it whatever the
-    # target is, and always before dune's own `--`.
-    # `planning` marks the window for `stop`, which finds no supervisor yet,
-    # and names this launcher (pid, with its start token beside it), which
-    # `stop` TERMs: its trap then ends the reader in flight.
-    mark_planning
-    plan_start=$SECONDS
-    plan_batch "$run_dir/log" "$@"
-    rm -f "$run_dir/planning" "$run_dir/planning.token"
-    # The resolution spent part of the cap (it is bounded by the same budget),
-    # so the suite gets what is left, and the slot's wait at most half of that:
-    # launch plus suite stay within the one wall-clock cap the caller gave
-    # (Codex review round 1 on PR #832). The recorded `cap` stays the caller's.
-    deduct_planning "$plan_start"
-    # Signalled while the readers built -- by the caller, or by a `stop` of
-    # this run, which TERMs this launcher: nothing was published, so the
-    # launch is withdrawn like a refused one, in both modes (what a `start`
-    # survives is its launcher's end once the run is published), and the lock
-    # goes with this shell. Asked again right before anything is published.
-    withdraw_if_cancelled() {
-      [ -n "$cancelled" ] || return 0
+    # After the supervisor exits: the report, and the run directory removed --
+    # the lock went with the supervisor, so the owner pointer never names a
+    # deleted directory while the lock is held (Codex review round 8).
+    plan_finish() { # dune argv
+      local rc
+      rc=$(cat "$run_dir/exit" 2>/dev/null) || rc=
+      case $rc in
+        0) cat "$run_dir/plan" ;;
+        142)
+          echo "command: dune $*"
+          echo "backends: unresolved (the cap expired while they resolved)"
+          echo "slot: none -- resolving the backends used the whole cap, so run would record the cap's verdict (142) without starting dune"
+          ;;
+        129 | 130 | 143) ;;
+        *) { echo "test-run: plan failed (exit ${rc:-unrecorded}); its log:"
+             sed 's/^/  /' "$run_dir/log"; } >&2 ;;
+      esac
       rm -rf "$run_dir"
-      echo "test-run: cancelled ($cancelled) before the launch; nothing ran" >&2
-      case $cancelled in INT) exit 130 ;; *) exit 143 ;; esac
+      case $rc in 0 | 142) exit 0 ;; 129 | 130 | 143) exit "$rc" ;; *) exit 2 ;; esac
     }
-    withdraw_if_cancelled
-    plan_width_cap "$@"
-    if [ -n "$width_cap" ]; then
-      width_sub=$1
-      shift
-      set -- "$width_sub" -j "$width_cap" "$@"
-      { { printf '%q ' "$@"; echo; } >"$run_dir/cmd.tmp" &&
-        mv -f "$run_dir/cmd.tmp" "$run_dir/cmd"; } ||
-        { rm -rf "$run_dir"; die "cannot record the capped command in $run_dir"; }
-    fi
-    # On stderr and into the run's own log, so the cap is in the artifact
-    # triage reads rather than only in the launching terminal's scrollback.
-    say_width_plan
-    if [ -n "$cap_spent" ]; then
-      # The resolution used the whole cap: the run is over before dune starts,
-      # and its verdict is the cap's, 142, published like any other rather
-      # than a fresh budget for dune (Codex review round 2 on PR #832).
-      withdraw_if_cancelled
-      printf 'test-run: the cap expired while the batch'"'"'s backends resolved; dune was not started\n' |
-        tee -a "$run_dir/log" >&2
+    if [ "$sub" != plan ]; then
       publish_run || { rm -rf "$run_dir"; die "cannot publish $run_dir"; }
-      finish_run 142
-      trap - INT TERM HUP
-      digest "$run_dir"
-      exit "$digest_rc"
     fi
-    plan_slot_kind
-    [ -z "$slot_announce" ] || printf 'test-run: %s\n' "$slot_announce" >&2
-    publish_run || { rm -rf "$run_dir"; die "cannot publish $run_dir"; }
     # The supervisor inherits lock fd 9 and owns the run from here: it records
-    # its identity, runs dune under the cap, and publishes the verdict (see
-    # supervisor_perl). Nothing about the fate of THIS shell -- HUP from a
-    # closed terminal, harness cancellation, a plain kill -- can lose the
-    # verdict; `run` differs from `start` only in staying attached to wait
-    # and digest.
-    # What the supervisor runs, in an array of its own: "$@" stays the
-    # caller's dune argv, which `start` prints back. Under a fleet slot it is
-    # fleet-worker.sh, which takes the slot and execs dune in its place, so
-    # the pid the supervisor caps and signals ends up being dune's, and dune's
-    # status is the slot's.
-    sup_cmd=("$DUNE" "$@")
-    if [ -n "$slot_fw" ]; then
-      printf 'test-run: %s\n' "$slot_announce" >>"$run_dir/log"
-      printf '%s\n' "$slot_fw" >"$run_dir/slot" 2>/dev/null || :
-      sup_cmd=("$slot_fw" execution slot --wait "$slot_wait" "--$slot_kind" -- "$DUNE" "$@")
-    fi
-    # Where the launcher's own prelude in the log ends (dune_refusal).
-    wc -c <"$run_dir/log" | tr -d ' ' >"$run_dir/prelude" 2>/dev/null || :
+    # its identity, runs its child under the cap -- first the batch's
+    # resolution (`_resolve`), which then execs dune -- and publishes the
+    # verdict (see supervisor_perl). Nothing about the fate of THIS shell --
+    # HUP from a closed terminal, harness cancellation, a plain kill -- can
+    # lose the verdict; `run` differs from `start` only in staying attached to
+    # wait and digest.
     OCANNL_TOOL_TESTRUN_BG=1 OCANNL_TOOL_TESTRUN_RD=$run_dir OCANNL_TOOL_TESTRUN_OWN=$run_dir \
-      perl -e "$supervisor_perl" -- "$cap" "${sup_cmd[@]}" </dev/null >>"$run_dir/log" 2>&1 &
+      perl -e "$supervisor_perl" -- "$cap" \
+        "${BASH:-bash}" "$PWD/tools/test-run.sh" _resolve "$sub" "$cap" "$DUNE" "$@" \
+        </dev/null >>"$run_dir/log" 2>&1 &
     sup=$!
     # The launcher's own fd 9 copy served its purpose the moment the
     # supervisor inherited the lock's description: close it, so an attached
@@ -2213,6 +2183,7 @@ case $sub in
       wait "$sup" 2>/dev/null
       sup=
       trap - INT TERM HUP
+      [ "$sub" != plan ] || plan_finish "$@"
       if [ -f "$run_dir/exit" ]; then
         digest "$run_dir"
         exit "$digest_rc"
@@ -2220,7 +2191,17 @@ case $sub in
       echo "run died before its supervisor recorded itself: $run_dir (log: $run_dir/log)"
       exit 1
     fi
-    if [ "$sub" = run ]; then
+    if [ "$sub" != plan ]; then
+      # The launch is reported once its first phase has resolved the batch
+      # (`resolved`): its announcements then reach this terminal before dune
+      # starts, and `start` prints the command dune is given. A run that ended
+      # in that phase -- cancelled, or its cap spent -- has its verdict instead.
+      while [ ! -f "$run_dir/resolved" ] && [ ! -f "$run_dir/exit" ] && sup_alive "$run_dir"; do
+        sleep 0.1
+      done
+      [ ! -f "$run_dir/resolved" ] || cat "$run_dir/resolved" >&2
+    fi
+    if [ "$sub" != start ]; then
       # Attached: wait for the supervisor -- its exit means the verdict file
       # is on disk. A trapped signal returns from `wait` early, hence the
       # retry loop; sup_alive rather than a bare kill -0, since after the
@@ -2229,6 +2210,7 @@ case $sub in
       while sup_alive "$run_dir"; do wait "$sup" 2>/dev/null; done
       sup=
       trap - INT TERM HUP
+      [ "$sub" != plan ] || plan_finish "$@"
       if [ -f "$run_dir/exit" ]; then
         digest "$run_dir"
         exit "$digest_rc"
@@ -2237,9 +2219,18 @@ case $sub in
       exit 1
     fi
     trap - INT TERM HUP
+    if [ ! -f "$run_dir/resolved" ]; then
+      # Over before dune started.
+      if [ -f "$run_dir/exit" ]; then
+        digest "$run_dir"
+        exit "$digest_rc"
+      fi
+      echo "run died before dune started: $run_dir (log: $run_dir/log)"
+      exit 1
+    fi
     disown
     echo "started: $run_dir"
-    echo "  command: dune $*"
+    echo "  command: dune $(sed 's/ *$//' "$run_dir/cmd")"
     echo "  log:     $run_dir/log"
     echo "  check:   tools/test-run.sh status last    # from this worktree; never blocks"
     echo "  gate:    tools/test-run.sh wait last      # bounded; exits with dune's status"
@@ -2569,31 +2560,6 @@ case $sub in
              "unreaped exited processes); escalated to KILL"
       else
         echo "sent TERM to the orphaned process group $pg; re-run stop to confirm"
-      fi
-    elif [ -f "$run_dir/planning" ] && [ ! -f "$run_dir/pid" ] && lock_still_owned "$run_dir"; then
-      # Still no supervisor after the wait above, and the launcher marked the
-      # window in which it resolves the batch's backends (plan_batch builds
-      # the readers before the run is published). The launcher it names takes
-      # the TERM: its trap ends the reader in flight and withdraws the launch.
-      # One that died there leaves only leftovers, which are reaped.
-      if proc_alive "$run_dir/planning" "$run_dir/planning.token"; then
-        kill -TERM "$(cat "$run_dir/planning")" 2>/dev/null
-        # The launcher may have finished resolving and started its supervisor
-        # meanwhile (Codex review round 8): if one is on record now, it is the
-        # run's owner and takes the TERM too.
-        for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
-          [ -f "$run_dir/pid" ] || [ -f "$run_dir/planning" ] || break
-          [ ! -f "$run_dir/pid" ] || break
-          sleep 0.1
-        done
-        if [ -f "$run_dir/pid" ] && sup_alive "$run_dir"; then
-          kill -TERM "$(cat "$run_dir/pid")" 2>/dev/null
-          echo "sent TERM to the launcher and to the supervisor it had just started; confirm with: tools/test-run.sh wait $(printf %q "$run_dir")"
-        else
-          echo "sent TERM to the launcher, which was resolving the batch's backends; it withdraws the launch"
-        fi
-      else
-        report_reap "the launch had not started its supervisor (resolving the batch's backends?)"
       fi
     elif lock_still_owned "$run_dir"; then
       # Dead without a verdict, yet its leftovers still hold the worktree
