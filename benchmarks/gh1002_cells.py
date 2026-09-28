@@ -200,15 +200,29 @@ def run_in_own_group(argv, **kw):
     """Run [argv] as the leader of its own process group; on timeout (and after any exit) kill the
     whole group, so a C compiler or other descendant a cell spawned cannot outlive it and load the
     cells that follow. Refuses to continue when the group cannot be reaped."""
-    proc = subprocess.Popen(argv, cwd=HERE, start_new_session=True, **kw)
+    # Cancellation (SIGTERM, SIGINT) is held while the group is spawned and while it is reaped, and
+    # let through only during the wait: a signal between the fork and Popen's return would leave a
+    # detached group with no handle, and a second one mid-reap would abandon the reaping.
+    held = {signal.SIGTERM, signal.SIGINT}
+    signal.pthread_sigmask(signal.SIG_BLOCK, held)
     try:
+        proc = subprocess.Popen(argv, cwd=HERE, start_new_session=True, **kw)
+    except BaseException:
+        signal.pthread_sigmask(signal.SIG_UNBLOCK, held)
+        raise
+    try:
+        signal.pthread_sigmask(signal.SIG_UNBLOCK, held)
         status = proc.wait(timeout=CELL_TIMEOUT_S)
     except subprocess.TimeoutExpired:
         status = "timeout"
     finally:
         # Also on SIGTERM/KeyboardInterrupt: the group is not the driver's, so nothing else would
-        # reap it.
-        reap_group(proc, argv)
+        # reap it. A pending signal is delivered once the reaping is done.
+        signal.pthread_sigmask(signal.SIG_BLOCK, held)
+        try:
+            reap_group(proc, argv)
+        finally:
+            signal.pthread_sigmask(signal.SIG_UNBLOCK, held)
     return status
 
 
@@ -259,11 +273,12 @@ def identity():
             # Never regenerate to get past this: that draws a new workload from this box's numpy
             # and retires the published numbers (benchmarks/README.md, gh-ocannl-759).
             sys.exit(f"fixture {fx}: {verdict} against DIGESTS.txt (need a {ORIGIN} match). Obtain "
-                     f"the recorded {ORIGIN} bytes (`python3 fixture_digest.py --check` reports "
-                     "disk against record); regenerating is a coordinated cross-box event, not a "
-                     "fix for this refusal")
+                     f"the recorded {ORIGIN} bytes (`python3 {fixture_digest.cli_command()} --check` "
+                     "reports disk against record); regenerating is a coordinated cross-box event, "
+                     "not a fix for this refusal")
         ids[fx] = sha
-    return {"revision": rev, "bench_gpt_sha256": exe, "fixtures": ids}
+    # The host too: a run directory copied to another machine must not collect its cells.
+    return {"revision": rev, "bench_gpt_sha256": exe, "fixtures": ids, "host": os.uname().nodename}
 
 
 def check_identity(out, ident):
@@ -273,7 +288,7 @@ def check_identity(out, ident):
     if not pf.exists():
         return False
     recorded = json.loads(pf.read_text())
-    for key in ("revision", "bench_gpt_sha256", "fixtures"):
+    for key in ("revision", "bench_gpt_sha256", "fixtures", "host"):
         if recorded.get(key) != ident[key]:
             sys.exit(f"{out}: its cells were measured with a different {key} "
                      f"({recorded.get(key)!r} vs now {ident[key]!r}); use a fresh --out")
@@ -308,8 +323,7 @@ def preflight(out):
     # preflight.json is the completion marker the phase guard reads, so it is written last, once
     # every reference has validated.
     if not recorded:
-        meta = dict(ident, host=os.uname().nodename,
-                    started=datetime.datetime.now(datetime.timezone.utc).isoformat())
+        meta = dict(ident, started=datetime.datetime.now(datetime.timezone.utc).isoformat())
         (out / "preflight.json").write_text(json.dumps(meta, indent=2) + "\n")
 
 
