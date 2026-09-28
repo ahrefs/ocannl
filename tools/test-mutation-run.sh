@@ -68,6 +68,13 @@ case "$PROBE_MODE" in
   casecrash) rows 'nested: the case ran to completion (raised Failure("injected")): false\n'
     printf 'FAIL: nested: the case ran to completion (raised Failure("injected")): false\n'
     printf 'Command got signal SEGV.\n'; exit 1 ;;
+  # The same raise, then an exit inside a later case: Verdict says so, since the
+  # stdout alone ends on a raise exactly as a run whose last case raised does.
+  caseexit) rows 'nested: the case ran to completion (raised Failure("injected")): false\n'
+    printf 'FAIL: nested: the case ran to completion (raised Failure("injected")): false\n'
+    printf 'FAILED: 1 check did not hold.\n'
+    printf 'STOPPED EARLY: an exit inside case "last" ended the run, so no case after it ran\n'
+    exit 1 ;;
   # A teardown, but the stdout ends on neither the golden's last row nor a raise.
   casecut) rows 'first: the case ran to completion (raised Failure("injected")): false\nnested: label: true\n'
     printf 'FAIL: first: the case ran to completion (raised Failure("injected")): false\n'
@@ -136,7 +143,7 @@ flagged() {
   grep -q "^$1$" "$fixture/result" || { cat "$fixture/result"; echo "missing: $1"; exit 1; }
   grep -q '^(not evidence: the mutant was neither caught nor survived)$' "$fixture/result"
 }
-for mode in raise short stopped casecrash casecut stale reused both; do
+for mode in raise short stopped casecrash caseexit casecut stale reused both; do
   export PROBE_MODE=$mode
   run_case 4
   case $mode in
@@ -151,6 +158,8 @@ for mode in raise short stopped casecrash casecut stale reused both; do
       flagged 'STOPPED EARLY: Verdict reported an uncaught exception; no row after it ran' ;;
     casecrash)
       flagged "STOPPED EARLY: the mutated run printed 1 of the golden's 3 rows" ;;
+    caseexit)
+      flagged 'STOPPED EARLY: Verdict reported an exit inside a case; no case after it ran' ;;
     casecut)
       flagged "STOPPED EARLY: the mutated run printed 2 of the golden's 3 rows" ;;
     stale|reused)
@@ -180,6 +189,8 @@ grep -qF '(label ^ ": the case ran to completion") ("raised " ^ text)' "$root/te
   { echo 'Verdict.case no longer prints "<label>: the case ran to completion (raised …)"'; exit 1; }
 grep -qF 'Printf.sprintf "FAILED: %d check%s did not hold."' "$root/test/support/verdict.ml" ||
   { echo 'Verdict.teardown_line no longer prints "FAILED: <n> check(s) did not hold."'; exit 1; }
+grep -qF '"STOPPED EARLY: an exit inside case %S ended the run' "$root/test/support/verdict.ml" ||
+  { echo 'Verdict no longer prints "STOPPED EARLY: an exit inside case …"'; exit 1; }
 # DUNE_BUILD_DIR moves the tree the output is read from; _build keeps a full stale output.
 export PROBE_MODE=raise DUNE_BUILD_DIR="$fixture/build-elsewhere"
 run_case 4

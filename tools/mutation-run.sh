@@ -8,10 +8,11 @@
 # -- whose golden is <dir>/<name>.expected: a mutated run counts as evidence only
 # once it has REACHED ITS LAST ROW (gh-ocannl-1083). The stdout this run wrote
 # (<name>.exe.output, .actual or .output under the build tree) must print as
-# many rows as the golden, and Verdict must not have printed STOPPED EARLY. Rows
-# short of the golden still count as reached when a Verdict.case raised, Verdict's
-# teardown ended the process, and its stdout ended on the golden's last row or on
-# a case's raise (gh-ocannl-1084). A run
+# many rows as the golden, and Verdict must not have printed STOPPED EARLY (for
+# an escaping exception, or an exit inside a Verdict.case). Rows short of the
+# golden still count as reached when a Verdict.case raised, Verdict's teardown
+# ended the process, and its stdout ended on the golden's last row or on a case's
+# raise (gh-ocannl-1084). A run
 # that stopped early, or never ran (a build failure; an executable the mutation
 # left unchanged, so dune reused its result), prints STOPPED EARLY or NEVER RAN
 # (NOT COUNTED when two candidates changed) and exits 4 in place of test-run's
@@ -201,14 +202,17 @@ my $reported = eval {
     if (defined $log) {
         print 'run: ', basename(dirname($log)), "\nfalse claims:\n";
         open my $claims, '<:raw', $log or refuse("read $log: $!");
-        my ($found, $stopped, $teardown) = (0, 0, 0);
+        my ($found, $stopped, $teardown) = (0, '', 0);
         while (my $line = <$claims>) {
             if ($line =~ /^(FAIL: .*: false)\r?\n?$/) {
                 print "$1\n";
                 $found = 1;
             }
             # Verdict's uncaught-exception handler (gh-ocannl-1067).
-            $stopped = 1 if $line =~ /^STOPPED EARLY: /;
+            # Which ending: an escaping exception, or an exit inside a Verdict.case
+            # once a check had failed (gh-ocannl-1084), which a row count cannot see.
+            $stopped ||= $line =~ /^STOPPED EARLY: an exit inside case / ? 'exit'
+                : $line =~ /^STOPPED EARLY: / ? 'raise' : '';
             # Verdict's teardown (Verdict.teardown_line): the process ended through
             # exit, not a signal, so nothing after a caught raise was cut off.
             $teardown = 1 if $line =~ /^FAILED: \d+ checks? did not hold\.\r?$/;
@@ -221,14 +225,19 @@ my $reported = eval {
         if (@fresh == 1) {
             my $printed = rows($fresh[0]);
             print "rows: $printed printed of $golden_rows in $golden\n";
-            if ($stopped) {
+            if ($stopped eq 'exit') {
+                $verdict = 'STOPPED EARLY: Verdict reported an exit inside a case; no case after it ran';
+            } elsif ($stopped) {
                 $verdict = 'STOPPED EARLY: Verdict reported an uncaught exception; no row after it ran';
             } elsif ($printed < $golden_rows) {
                 # A raising Verdict.case costs the rows it never printed, yet the cases
                 # after it run (gh-ocannl-1084): the shortfall is that case's failure,
                 # not a stopped run, once the process ended through Verdict's teardown
                 # and its stdout where a complete one does -- on the golden's last row,
-                # or on the last case's own raise.
+                # or on the last case's own raise. A raise line is the LAST case's only
+                # because nothing after it ran and nothing stopped the run: a signal
+                # leaves no teardown line, and an exit inside a later case its own
+                # STOPPED EARLY, taken above.
                 my ($raised, $last) = case_raises($fresh[0]);
                 if ($raised && $teardown && ($last eq $golden_last || $last =~ $case_raise)) {
                     print "cases raised: $raised (the rows short of the golden are theirs; "
