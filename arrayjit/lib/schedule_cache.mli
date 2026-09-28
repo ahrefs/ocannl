@@ -210,10 +210,11 @@ val codegen_tag : limits:Backend_intf.hardware_limits -> unit -> string
 
 type trajectory = {
   search_shape : string;
-      (** The storing search's candidate-shaping settings the key does not carry (beam width,
-          rounds, keep fraction, split-reduce cap, seed block sizes, bound pruning), rendered by
-          [Autotune.tune]. A trajectory is an equal-depth record only for a search that times the
-          same candidates in the same order, so a replay under another shape reads it as absent. *)
+      (** The storing search's candidate-shaping inputs the key does not carry, rendered by
+          [Autotune.tune]: every [Search_shaping] configuration key that some source sets
+          ([Utils.config_class_fingerprint]) and the arguments overriding the ones it reads. A
+          trajectory is an equal-depth record only for a search that times the same candidates in
+          the same order, so a replay under another shape reads it as absent. *)
   steps : (int * float) list;
 }
 [@@deriving sexp]

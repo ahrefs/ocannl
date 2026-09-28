@@ -3476,14 +3476,16 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
         (float_setting ~default:1.
         @@ Utils.get_global_arg ~arg_name:"autotune_keep_fraction" ~default:"1.")
   in
-  (* gh-ocannl-1110: the settings that shape which candidates this search times, and in what order,
-     and that the schedule cache's key does not carry. A cached [best_steps] replays only under the
-     same shape: the flip chain compares at equal depth, which presumes the same candidate order. *)
+  (* gh-ocannl-1110: what shapes which candidates this search times, and in what order, that the
+     schedule cache's key does not carry: every [Search_shaping] configuration key (the class the
+     key leaves out by definition), plus the arguments that override the ones read here. A cached
+     [best_steps] replays only under the same shape: the flip chain compares at equal depth, which
+     presumes the same candidate order. *)
   let search_shape =
-    Printf.sprintf "beam=%d rounds=%d keep=%h split_sites=%d blocks=%s bound_pruning=%b" beam_width
-      rounds keep_fraction max_split_reduce_sites
+    Printf.sprintf "beam=%d rounds=%d keep=%h split_sites=%d blocks=%s|%s" beam_width rounds
+      keep_fraction max_split_reduce_sites
       (String.concat ~sep:"," (List.map seed_block_sizes ~f:Int.to_string))
-      (Lazy.force bound_pruning_enabled)
+      (Utils.config_class_fingerprint Utils.Search_shaping)
   in
   let static_indices = Idx.bound_symbols bindings in
   let backend = Context.backend_name ctx in

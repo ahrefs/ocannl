@@ -158,6 +158,12 @@ let cache_replay comp =
     in
     Option.value_exn !report
   in
+  (* The dune rule sets [autotune_keep_fraction] (Search_shaping) and [autotune_progress]
+     (Execution_neutral) on the command line. *)
+  let shape = Utils.config_class_fingerprint Utils.Search_shaping in
+  p "the trajectory's identity carries a set Search_shaping key and no other class's"
+    (String.is_substring shape ~substring:"autotune_keep_fraction=1;"
+    && not (String.is_substring shape ~substring:"autotune_progress"));
   clean_cache "autotune_cache_flip_abandonment";
   let first = tune_once () in
   let second = tune_once () in

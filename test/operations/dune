@@ -5032,7 +5032,9 @@
 
 ; gh-ocannl-1110: the flip chain abandons a hopeless flip at equal search depth. Every timing comes
 ; from a synthetic clock (Autotune.on_candidate_measured), so the verdicts are machine-independent;
-; autotune_progress is on because the abandonment is claimed in the progress record.
+; autotune_progress is on because the abandonment is claimed in the progress record, and
+; autotune_keep_fraction is pinned at its default so a Search_shaping key is set for the cached
+; trajectory's identity to be seen carrying.
 
 (executable
  (name flip_abandonment)
@@ -5053,7 +5055,8 @@
    (run
     %{dep:flip_abandonment.exe}
     "--ocannl_backend=cc"
-    "--ocannl_autotune_progress=true"))))
+    "--ocannl_autotune_progress=true"
+    "--ocannl_autotune_keep_fraction=1"))))
 
 (rule
  (alias runtest-flip_abandonment)

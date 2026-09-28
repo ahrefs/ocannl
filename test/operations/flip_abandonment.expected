@@ -14,6 +14,7 @@ a flip within the ratio at depth k is searched in full and finds its better time
 the search the hopeless one was cut from had more to time: true
 the completed search records its steps: true
 a flip far behind the incumbent's final best but not at equal depth is not abandoned: true
+the trajectory's identity carries a set Search_shaping key and no other class's: true
 a replayed incumbent carries the storing search's timed record: true
 a replay under another search shape abandons nothing, where the same shape's replay would: true
 autotune_progress is on for this run: true
