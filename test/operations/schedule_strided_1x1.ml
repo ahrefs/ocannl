@@ -26,11 +26,17 @@
    host oracle below computes both and pins that they differ, so the parity claims cover the stride.
    The tolerance is the sketch tier's, but on exact integers it only admits exact matches.
 
-   Every seed the tuner would propose on this box is executed: whole-routine seeds under the
-   device's own limits (and, on the C backends, also under [conv_detection_boundary]'s pinned
-   16-byte vector width), plus the seeds of the unzeroed fission segment, which is what
-   [Autotune.tune]'s per-segment flavor substitutes. Seed counts vary with the device, so they go to
-   stderr; the stdout claims are that seeds exist and that each one matches. *)
+   Every seed the tuner would propose on this box is executed, in both of [Autotune.tune]'s flavors:
+   whole-routine seeds under the device's own limits (and, on the C backends, also under
+   [conv_detection_boundary]'s pinned 16-byte vector width), and the per-segment flavor mirrored
+   from the tuner (see {!segment_seeds}). The bare einsum sites must seed both flavors, and every
+   seed must run and match. The production construction — [resnet_block]'s body, main branch
+   included (see {!make}) — is stated differently, because there the tuner's view is
+   backend-dependent: on cc the block does not fission and every whole-routine seed DECLINES (its
+   operand [Stage] meets the main branch's second read of [x]), so the tuner times no sketch for the
+   shortcut; on GPU it fissions and the shortcut's segment seeds and runs. Its claim is that every
+   proposed seed either declines with a typed cause or runs and matches. Seed counts and declines
+   vary with the device, so they go to stderr. *)
 
 open Base
 open Ocannl
@@ -76,7 +82,7 @@ type site = {
   ic : int;
   oc : int;
   stride : int;
-  build : [ `Einsum of string | `Downsample ];
+  build : [ `Einsum of string | `Resnet_block ];
 }
 
 (* The input is indexed [b; h; w; ic]; the kernel ([~i:[1; 1; ic] ~o:[oc]]) is indexed [oc; 0; 0;
@@ -100,44 +106,39 @@ let make s tag =
   | `Einsum spec ->
       let k = NTDSL.init ~l:(tag ^ "k") ~prec:s.prec ~i:[ 1; 1; s.ic ] ~o:[ s.oc ] ~f:fk () in
       (x, NTDSL.O.einsum ~label:[ tag ] spec x k)
-  | `Downsample ->
-      (* [resnet_block]'s [identity] branch at stride > 1, verbatim — [downsample_bn ~train_step
-         (downsample_conv x)] — with the out-channel count pinned ([resnet_block] leaves it to
-         inference). *)
-      let downsample_conv =
-        Nn_blocks.conv2d ~label:[ tag ^ "ds" ] ~kernel_size:1 ~stride:s.stride ~out_channels:s.oc ()
+  | `Resnet_block ->
+      (* [Nn_blocks.resnet_block ~stride]'s body verbatim — main branch, downsample shortcut,
+         residual add, final activation — except that every conv pins its out-channels. The
+         constructor leaves them to inference, which cannot close them ("You forgot to specify the
+         hidden dimension(s)" on the shortcut's bias), so [resnet_block] itself does not compile
+         standalone; nothing in the tree calls it. *)
+      let label = [ tag ^ "rb" ] and train_step = None in
+      let conv name ~kernel_size ~stride =
+        Nn_blocks.conv2d ~label:(name :: label) ~kernel_size ~stride ~out_channels:s.oc ()
       in
-      let downsample_bn = Nn_blocks.batch_norm2d ~label:[ tag ^ "bn" ] () in
-      (x, downsample_bn ~train_step:None (downsample_conv x))
+      let conv1 = conv "conv1" ~kernel_size:3 ~stride:s.stride in
+      let bn1 = Nn_blocks.batch_norm2d ~label:("bn1" :: label) () in
+      let conv2 = conv "conv2" ~kernel_size:3 ~stride:1 in
+      let bn2 = Nn_blocks.batch_norm2d ~label:("bn2" :: label) () in
+      let downsample_conv = conv "downsample" ~kernel_size:1 ~stride:s.stride in
+      let downsample_bn = Nn_blocks.batch_norm2d ~label:("downsample_bn" :: label) () in
+      let identity = downsample_bn ~train_step (downsample_conv x) in
+      let out = conv1 x |> bn1 ~train_step |> TDSL.O.relu |> conv2 |> bn2 ~train_step in
+      (x, TDSL.O.(relu (out + identity)))
 
-(* The production blocks' parameters, made deterministic: the conv kernel gets {!fk}'s values and
-   the bias [1..3] per out-channel; the batch norm keeps its constant [gamma = 1], [beta = 0]. *)
+(* The block's parameters, made deterministic: every one gets small positive values varying with
+   each of its indices (the batch norms' [gamma] and [beta] included). *)
 let init_params ctx s (y : Tensor.t) =
   match s.build with
   | `Einsum _ -> ctx
-  | `Downsample ->
-      let range n = List.range 0 n in
-      let fb = Ll_test.weighted ~weights:[| 1 |] ~modulus:3 ~offset:1. ~stride:1. in
+  | `Resnet_block ->
       let ctx = Train.init_params ctx Ir.Indexing.Empty y in
       Set.fold y.Tensor.params ~init:ctx ~f:(fun ctx p ->
           let tn = p.Tensor.value in
-          let is l = List.mem tn.Ir.Tnode.label l ~equal:String.equal in
           let dims = Lazy.force tn.Ir.Tnode.dims in
-          let expect d =
-            if not (Array.equal Int.equal dims d) then
-              failwith ("unexpected parameter dims for " ^ Ir.Tnode.debug_name tn)
-          in
-          if is "kernel" then (
-            expect [| s.oc; 1; 1; s.ic |];
-            Context.set_values ctx tn
-              (Array.of_list
-                 (List.concat_map (range s.oc) ~f:(fun o ->
-                      List.map (range s.ic) ~f:(fun c -> fk [| o; 0; 0; c |])))))
-          else if is "bias" then (
-            expect [| s.oc |];
-            Context.set_values ctx tn
-              (Array.of_list (List.map (range s.oc) ~f:(fun o -> fb [| o |]))))
-          else ctx)
+          let n = Array.fold dims ~init:1 ~f:( * ) in
+          Context.set_values ctx tn
+            (Array.init n ~f:(Ll_test.cycle_flat ~dims ~modulus:7 ~offset:1. ~stride:0.125)))
 
 (* Output spatial extents: [stride*o + 0 < n] with a 1-wide window. *)
 let out_extent s n = ((n - 1) / s.stride) + 1
@@ -205,36 +206,69 @@ let segment_seeds ~seeds_of ~arity_cuts (opt : LL.optimized) =
   | tuples ->
       Some
         (List.filter_map tuples ~f:(fun (kind, pre, _, _) ->
-             match (kind, seeds_of pre) with
-             | `Normal, (_ :: _ as seeds) -> Some (seg_key pre, seeds)
+             (* Matmul segments only: a segment of the block's 3x3 convs seeds the conv family, for
+                another site (schedule_conv_gemm's). *)
+             match kind with
+             | `Normal when Option.is_some (Autotune.detect_matmul pre.LL.llc) -> (
+                 match seeds_of pre with [] -> None | seeds -> Some (seg_key pre, seeds))
              | _ -> None))
 
-(* Run the [F_sketch] candidate scheduling the segment keyed [key] by [q]; also whether a final
+(* Run a candidate as the tuner runs it: a schedule that violates an op's precondition on this graph
+   raises a typed [Schedule_outcome.Cause_at] while scheduling, and the tuner declines that
+   candidate — skips it, never times it. The cause is caught inside the transform because
+   [Context.compile] turns it back into a plain exception at its boundary; the declined candidate is
+   reported on stderr and yields [None] (its compile falls back to the unscheduled form, which is
+   not looked at). Any other exception stays fatal. *)
+let candidate name s transform =
+  let declined = ref None in
+  let got =
+    run_with name s ~lowered_transform:(fun opt ->
+        match transform opt with
+        | opts -> opts
+        | exception Ir.Schedule_outcome.Cause_at (phase, cause) ->
+            declined := Some (phase, cause);
+            [ opt ])
+  in
+  match !declined with
+  | None -> Some got
+  | Some (phase, cause) ->
+      Stdio.eprintf "%s: declined (the tuner skips it): %s (not part of the golden)\n%!" name
+        (Sexp.to_string_hum
+           (Sexp.List
+              [ Ir.Schedule_outcome.sexp_of_phase phase; Ir.Schedule_outcome.sexp_of_cause cause ]));
+      None
+
+let run_whole_candidate name s q =
+  candidate name s (fun opt -> [ Sched.apply_classified (Autotune.sketch_schedule ~p:q opt) opt ])
+
+(* The [F_sketch] candidate scheduling the segment keyed [key] by [q]; also whether a final
    [`Normal] segment carried that key, so a segmentation that drifted from the enumerated one cannot
    pass by replaying every segment on the default preset. *)
 let run_seg_candidate name s ~arity_cuts ~key q =
   let hit = ref false in
-  let got =
-    run_with name s ~lowered_transform:(fun opt ->
-        let preset seg =
-          if String.equal (seg_key seg) key then Autotune.sketch_schedule ~p:q seg
-          else default_preset seg
-        in
-        let tuples = fission ~arity_cuts ~preset opt in
-        hit :=
-          List.exists tuples ~f:(fun (kind, pre, _, _) ->
-              Poly.equal kind `Normal && String.equal (seg_key pre) key);
-        List.map tuples ~f:(fun (_, _, _, post) -> post))
-  in
-  (!hit, got)
+  Option.map
+    (candidate name s (fun opt ->
+         let preset seg =
+           if String.equal (seg_key seg) key then Autotune.sketch_schedule ~p:q seg
+           else default_preset seg
+         in
+         let tuples = fission ~arity_cuts ~preset opt in
+         hit :=
+           List.exists tuples ~f:(fun (kind, pre, _, _) ->
+               Poly.equal kind `Normal && String.equal (seg_key pre) key);
+         List.map tuples ~f:(fun (_, _, _, post) -> post)))
+    ~f:(fun got -> (!hit, got))
 
 (* The accumulation's read map on the input [x], and its write map: the one read of [x] that shares
-   its statement with a read-modify-write (the production blocks read [x] elsewhere too). *)
-let maps (x : Ir.Tnode.t) (llc : LL.t) =
+   its statement with a read-modify-write — of the matmul site's output when there is a site (the
+   block's 3x3 conv accumulates over [x] too). *)
+let maps ?(site : Autotune.matmul_site option) (x : Ir.Tnode.t) (llc : LL.t) =
   let accs = LL.affine_accesses llc in
   let acc_write r =
     List.find accs ~f:(fun w ->
-        w.A.a_write && w.A.a_rmw && (not w.A.a_whole) && A.same_statement w.A.a_path r.A.a_path)
+        w.A.a_write && w.A.a_rmw && (not w.A.a_whole)
+        && A.same_statement w.A.a_path r.A.a_path
+        && Option.for_all site ~f:(fun m -> phys_equal w.A.a_tn m.Autotune.m_d))
   in
   match
     List.filter_map accs ~f:(fun r ->
@@ -318,7 +352,8 @@ let probe ~tag s =
    ignore
      (Context.compile
         ~lowered_transform:(fun opt ->
-          let in_map, out_map = maps x.Tensor.value opt.LL.llc in
+          let site = Autotune.detect_matmul opt.LL.llc in
+          let in_map, out_map = maps ?site x.Tensor.value opt.LL.llc in
           let segs =
             Option.map (segment_seeds ~seeds_of ~arity_cuts:false opt) ~f:(fun coarse ->
                 let fine =
@@ -334,7 +369,7 @@ let probe ~tag s =
           found :=
             Some
               {
-                site = Autotune.detect_matmul opt.LL.llc;
+                site;
                 conv = Option.is_some (Autotune.detect_conv opt.LL.llc);
                 in_map;
                 out_map;
@@ -375,7 +410,7 @@ let stride_on_batch_loops o =
            (unit_out_syms ~in_map:o.in_map ~out_map:o.out_map)
            m.Autotune.m_i ~equal:Idx.equal_symbol
 
-let leg ?(want_mma = false) ?(both_flavors = true) ~what ~tag s =
+let leg ?(want_mma = false) ?(declines = false) ~what ~tag s =
   let o = probe ~tag s in
   let unscheduled = run_plain (tag ^ "_ref") s in
   (match s.build with
@@ -387,12 +422,12 @@ let leg ?(want_mma = false) ?(both_flavors = true) ~what ~tag s =
         ~f:(fun (a, b) -> Float.(a <> b));
       p_all2 (what ^ ": the unscheduled form matches the host oracle") unscheduled want
         ~f:(fun a b -> Float.(abs (a - b) < 1e-3))
-  | `Downsample -> ());
+  | `Resnet_block -> ());
   p
     (what
    ^ ": a matmul site whose stride-2 axes are its interior batch loops, the row read at unit stride"
     )
-    ((not o.conv) && stride_on_batch_loops o);
+    (stride_on_batch_loops o);
   let matches got =
     Array.length got = Array.length unscheduled
     && Array.for_all2_exn got unscheduled ~f:(fun a b -> Float.(abs (a - b) < 1e-3))
@@ -402,42 +437,45 @@ let leg ?(want_mma = false) ?(both_flavors = true) ~what ~tag s =
         List.concat_map l ~f:(fun (arity_cuts, key, qs) ->
             List.map qs ~f:(fun q -> (arity_cuts, key, q))))
   in
-  (* With [~both_flavors] (the bare einsum sites, on every backend seen) each flavor must seed: an
-     empty population fails its claim. Without it (the production blocks, whose whole routine seeds
-     on the C backends but not on GPU, where it fissions instead) at least one flavor must, and an
-     empty one is announced as a skip — the tuner runs nothing there either. *)
-  if not both_flavors then
-    p_exists
-      (what ^ ": the tuner's whole-routine or per-segment flavor seeds the site")
-      (List.map o.whole ~f:(fun _ -> ()) @ List.map seg_seeds ~f:(fun _ -> ()))
-      ~f:(fun () -> true);
-  let flavor ~empty c l ~f =
-    if List.is_empty l && not both_flavors then (
-      Stdio.eprintf "%s: %s, so the tuner runs no such flavor here\n%!" tag empty;
-      skipped (what ^ ": " ^ c))
-    else f (what ^ ": " ^ c) l
-  in
-  let no_whole = "no whole-routine seed" in
-  let no_seg =
-    if Option.is_none o.segs then "the routine does not fission" else "no segment seeds"
-  in
   if want_mma then (
-    flavor ~empty:no_whole "the whole-routine seeds include tensorized ones" o.whole ~f:(fun c l ->
-        p_exists c l ~f:(fun q -> q.Autotune.sk_mma));
-    flavor ~empty:no_seg "the per-segment seeds include tensorized ones" seg_seeds ~f:(fun c l ->
-        p_exists c l ~f:(fun (_, _, q) -> q.Autotune.sk_mma)));
-  flavor ~empty:no_whole "every whole-routine seed matches the unscheduled form" o.whole
-    ~f:(fun c l ->
-      p_alli c l ~f:(fun i q ->
-          matches
-            (run_with (Printf.sprintf "%s_w%d" tag i) s ~lowered_transform:(fun opt ->
-                 [ Sched.apply (Autotune.sketch_schedule ~p:q opt) opt ]))));
-  flavor ~empty:no_seg
-    "every per-segment seed, scheduling the segment it was keyed on, matches the unscheduled form"
-    seg_seeds ~f:(fun c l ->
-      p_alli c l ~f:(fun i (arity_cuts, key, q) ->
-          let hit, got = run_seg_candidate (Printf.sprintf "%s_s%d" tag i) s ~arity_cuts ~key q in
-          hit && matches got))
+    p_exists (what ^ ": the whole-routine seeds include tensorized ones") o.whole ~f:(fun q ->
+        q.Autotune.sk_mma);
+    p_exists (what ^ ": the per-segment seeds include tensorized ones") seg_seeds
+      ~f:(fun (_, _, q) -> q.Autotune.sk_mma));
+  (* Declined candidates (see {!candidate}) yield [None]. *)
+  let whole_runs =
+    List.mapi o.whole ~f:(fun i q -> run_whole_candidate (Printf.sprintf "%s_w%d" tag i) s q)
+  in
+  let seg_runs =
+    List.mapi seg_seeds ~f:(fun i (arity_cuts, key, q) ->
+        run_seg_candidate (Printf.sprintf "%s_s%d" tag i) s ~arity_cuts ~key q)
+  in
+  let seg_ok (hit, got) = hit && matches got in
+  if not declines then (
+    (* The bare sites: each flavor seeds, and every seed runs — a decline fails. *)
+    p_all
+      (what ^ ": every whole-routine seed runs and matches the unscheduled form")
+      whole_runs
+      ~f:(Option.value_map ~default:false ~f:matches);
+    p_all
+      (what
+     ^ ": every per-segment seed runs, scheduling the segment it was keyed on, and matches the \
+        unscheduled form")
+      seg_runs
+      ~f:(Option.value_map ~default:false ~f:seg_ok))
+  else
+    (* The block: which flavor seeds is backend-dependent (whole-routine on the C backends, which do
+       not fission it; per-segment on GPU, which gates the zeroed whole-routine site), and inside it
+       a seed may decline — on cc every whole-routine seed does, its operand [Stage] meeting the
+       main branch's second read of [x]. What must hold is that nothing the tuner could crown
+       computes a wrong value, over a population that is not empty. *)
+    p_all
+      (what
+     ^ ": every seed either tuner flavor proposes declines with a typed cause, or runs and matches \
+        the unscheduled form")
+      (List.map whole_runs ~f:(Option.value_map ~default:true ~f:matches)
+      @ List.map seg_runs ~f:(Option.value_map ~default:true ~f:seg_ok))
+      ~f:Fn.id
 
 (* [conv_detection_boundary]'s [cdb_k11s] witness: a valid-mode 1x1 window at stride 2 over a 7x7
    map, 4 in-channels, 8 out-channels. *)
@@ -453,11 +491,11 @@ let () =
     { prec = f32; b = 2; h = 7; w = 7; ic = 4; oc = 8; stride = 2; build = `Einsum valid };
   leg ~what:"downsample einsum f32" ~tag:"s11r"
     { prec = f32; b = 2; h = 16; w = 32; ic = 16; oc = 16; stride = 2; build = `Einsum padded };
-  (* The production construction: conv2d (with its bias tail) into batch_norm2d, at a ResNet
-     downsample's channel width. At 16 channels the conv output is virtualized instead — inlined as
-     a local dot product into each of batch_norm2d's three consumers — and no family sees a site. *)
-  leg ~both_flavors:false ~what:"resnet downsample blocks" ~tag:"s11d"
-    { prec = f32; b = 2; h = 8; w = 16; ic = 64; oc = 64; stride = 2; build = `Downsample };
+  (* The production construction — the whole block, main branch included — at a ResNet downsample's
+     channel width. (At 16 channels the shortcut's conv output is virtualized instead, inlined as a
+     local dot product into each of its batch norm's three consumers, and no family sees a site.) *)
+  leg ~declines:true ~what:"resnet block" ~tag:"s11d"
+    { prec = f32; b = 2; h = 8; w = 16; ic = 64; oc = 64; stride = 2; build = `Resnet_block };
   (* The unit-stride control: the row is [ow], and the predicate above is false. *)
   (let o =
      probe ~tag:"s11c"
@@ -515,7 +553,7 @@ let () =
          stride";
         "the whole-routine seeds include tensorized ones";
         "the per-segment seeds include tensorized ones";
-        "every whole-routine seed matches the unscheduled form";
-        "every per-segment seed, scheduling the segment it was keyed on, matches the unscheduled \
-         form";
+        "every whole-routine seed runs and matches the unscheduled form";
+        "every per-segment seed runs, scheduling the segment it was keyed on, and matches the \
+         unscheduled form";
       ] ~f:(fun c -> skipped (what ^ ": " ^ c))

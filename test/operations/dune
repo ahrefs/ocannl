@@ -4308,6 +4308,20 @@
   (env_var ROCWMMA_PATH)
   (env_var LOCALAPPDATA)
   (env_var HIP_PATH)
+  ; Every configuration key the two modules its seeding and segmentation run through read --
+  ; schedule.ml (default presets, zero expansion, fission) and sketch_families.ml (seeding) -- so a
+  ; changed setting re-runs the test rather than serving the previous result.
+  (env_var OCANNL_AUTOMATIC_CPU_SCHEDULE)
+  (env_var OCANNL_AUTOMATIC_GPU_SCHEDULE)
+  (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
+  (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
+  (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
+  (env_var OCANNL_SCHEDULE_FISSION)
+  (env_var OCANNL_SCHEDULE_LOG_LAUNCHES)
+  (env_var OCANNL_AUTOTUNE_REGISTER_TILE_RM_TWIN)
+  (env_var OCANNL_CC_GRID_PRIVATE_BYTES_CAP)
+  (env_var OCANNL_CC_PARALLEL_CHUNKS)
+  (env_var OCANNL_CC_PARALLEL_GRID)
   (env_var OCANNL_BACKEND))
  (modules schedule_strided_1x1)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
