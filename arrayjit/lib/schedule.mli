@@ -276,10 +276,14 @@ type optop =
           widening of it (a narrow float to [single]/[double]), else the op is rejected. It is the
           accumulator residency: construct the op with {!privatize}, which resolves it from the
           rendering backend's [codegen_capabilities.accum_prec], so the privatized reduction widens
-          and narrows exactly where the serial rendering's scope local does (gh-ocannl-1116). Any
-          other admissible value is an explicit numerics choice of the schedule, e.g. the storage
-          precision reproduces per-step narrowing. Part of the schedule's identity (the cache saves
-          it). *)
+          and narrows exactly where the serial rendering's scope local does (gh-ocannl-1116). Like
+          the backend's own residency, it applies only to updates code generation widens: when an
+          update of [target] under [over] fails {!Low_level.accum_update_widens} (a non-reduction or
+          mixed-operator recurrence, an RNG-bearing contribution, routine logging) the serial
+          rendering narrows it at every step, and the tile is minted at storage precision instead.
+          Any other admissible value is an explicit numerics choice of the schedule, e.g. the
+          storage precision reproduces per-step narrowing. Part of the schedule's identity (the
+          cache saves it). *)
   | Expand_zero of { tn : Tn.t; indices : Indexing.symbol list }
       (** Expand the unique [Zero_out tn] statement into an ordinary loop nest over the supplied
           symbols (one per axis of [tn]'s padded dims; see {!expand_zero}). Whole-node [Zero_out] of

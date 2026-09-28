@@ -2091,10 +2091,12 @@ let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_
 
     Tile precision: [acc_prec], the backend's accumulator residency for [target]'s storage
     ({!privatize} resolves it), so the tile is the materialized twin of the scope local the serial
-    rendering widens into and narrows once at the store-back (gh-ocannl-1116). Before it the tile
-    was minted at storage precision, and every step of the privatized reduction narrowed where the
-    serial and scope renderings did not — a seeded [Privatize] silently changed a tuned reduction's
-    width. *)
+    rendering widens into and narrows once at the store-back (gh-ocannl-1116) — where code
+    generation would widen at all: when some update of [target] under [over] fails
+    [Low_level.accum_update_widens], the serial rendering narrows it per step and the tile stays at
+    storage precision. Before it the tile was minted at storage precision, and every step of the
+    privatized reduction narrowed where the serial and scope renderings did not — a seeded
+    [Privatize] silently changed a tuned reduction's width. *)
 
 let apply_privatize ~target ~over ~acc_prec (opt : Low_level.optimized) : Low_level.optimized =
   let open Low_level in
@@ -2157,6 +2159,7 @@ let apply_privatize ~target ~over ~acc_prec (opt : Low_level.optimized) : Low_le
          run under the {e same} predicate, or stale lanes clobber the result. *)
       let accesses = ref [] in
       let has_write = ref false in
+      let updates = ref [] in
       let rec scan stack conds llc =
         match llc with
         | Noop | Comment _ | Staged_compilation _ | Declare_local _ | Workgroup_barrier -> ()
@@ -2174,6 +2177,7 @@ let apply_privatize ~target ~over ~acc_prec (opt : Low_level.optimized) : Low_le
         | Set { tn; idcs; llsc; _ } ->
             if Tn.equal tn target then (
               has_write := true;
+              updates := (idcs, llsc) :: !updates;
               accesses := (idcs, stack, conds) :: !accesses);
             scan_scalar stack conds llsc
         | Set_dynamic { tn; dyn_value = v, _; llsc; _ } ->
@@ -2383,8 +2387,17 @@ let apply_privatize ~target ~over ~acc_prec (opt : Low_level.optimized) : Low_le
       in
       let scalar_acc = Array.is_empty tile_axes in
       let tile_dims = if scalar_acc then [| 1 |] else Array.map tile_axes ~f:snd in
+      (* The residency applies to what code generation would widen, and only to that: an update it
+         keeps at storage precision (a non-reduction recurrence, a mixed-operator update, an
+         RNG-bearing contribution, anything under routine logging) narrows at every step in the
+         serial rendering, so its tile must too (gh-ocannl-1116, Codex P1 on staging PR #880). *)
+      let tile_prec =
+        if List.for_all !updates ~f:(fun (idcs, llsc) -> accum_update_widens ~tn:target ~idcs llsc)
+        then acc_prec
+        else Lazy.force target.Tn.storage_prec
+      in
       let tile =
-        Tn.create ~namespace:tile_namespace (Tn.Specified acc_prec) ~id:(fresh_tile_id ())
+        Tn.create ~namespace:tile_namespace (Tn.Specified tile_prec) ~id:(fresh_tile_id ())
           ~label:("acc" :: target.Tn.label)
           ~unpadded_dims:(lazy tile_dims)
           ~padding:(lazy None)

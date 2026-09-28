@@ -2132,37 +2132,11 @@ module C_syntax (B : C_syntax_config) = struct
                (Ops.prec_string (comp_prec p))
                (Ops.prec_string p)))
 
-  (* The RNG lane conversions pick both their result type and which of the 128 random bits they
-     consume from the precision they are rendered at ([uint4x32_to_fp8_uniform_lane] is a different
-     generator from [uint4x32_to_single_uniform_lane], not a rounding of it). Their rendering
-     precision is therefore pinned to the target's storage precision, and they are outside the
-     storage/compute split -- [test_uniform_virtual_lane]'s virtual-vs-materialized parity is what
-     this protects. *)
-  let is_rng_conversion (llsc : Low_level.scalar_t) =
-    match llsc with
-    | Low_level.Binop (Ops.Uint4x32_to_prec_uniform_lane, _, _)
-    | Unop (Ops.Uint4x32_to_prec_uniform1, _) ->
-        true
-    | _ -> false
-
-  (* Anywhere in the expression, not just at its root: a virtualized narrow uniform is routinely
-     consumed by further arithmetic (the default centered-scaled parameter initializer is exactly
-     that shape), and the generator is selected by the precision the {e conversion} renders at,
-     which [pp_scalar] inherits from its enclosing operator. An assignment that mentions one
-     therefore renders wholly at the storage precision -- forgoing the wide-compute benefit for that
-     statement, which is the cheap side of the trade. Not descended into [Local_scope]: its body
-     renders at its own scope precision, decided by [scope_prec_of]. *)
-  let rec mentions_rng_conversion (llsc : Low_level.scalar_t) =
-    is_rng_conversion llsc
-    ||
-    match llsc with
-    | Low_level.Ternop (_, (a, _), (b, _), (c, _)) ->
-        mentions_rng_conversion a || mentions_rng_conversion b || mentions_rng_conversion c
-    | Binop (_, (a, _), (b, _)) -> mentions_rng_conversion a || mentions_rng_conversion b
-    | Unop (_, (a, _)) -> mentions_rng_conversion a
-    | Local_scope _ | Get _ | Get_local _ | Get_dynamic _ | Get_merge_buffer _ | Constant _
-    | Constant_bits _ | Embed_index _ ->
-        false
+  (* An RNG conversion anywhere in an expression pins its rendering to the target's storage
+     precision: the generator is selected by the precision the conversion renders at, which
+     [pp_scalar] inherits from its enclosing operator ({!Low_level.mentions_rng_conversion}, shared
+     with [Schedule.Privatize]'s tile precision). *)
+  let mentions_rng_conversion = Low_level.mentions_rng_conversion
 
   (* gh-ocannl-682: whether a recognized accumulation's contribution pins its accumulator to the
      target's STORAGE precision. One of the declines of the accumulator-width decision every
