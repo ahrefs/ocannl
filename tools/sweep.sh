@@ -405,12 +405,16 @@ lab_contract_check() { # -- sets LAB_MAP and LAB_CONTRACT; refuses the run on a 
 # fleet's policy lets correctness runs share a box (its run-time slots bound them), and a standing
 # one lasts a worker's whole life, so a sweep that stood aside for those would rarely run at all.
 #
-# One direction only. The check is a read before the unit, and the sweep owns no registry record,
-# so a measurement reserved WHILE a unit runs is not refused by anything and the unit runs on under
-# it. Closing that needs the registry to see the sweep -- a record per unit, or a measurement
-# reservation that refuses a box whose lab lane lock is held -- which is fleet machinery, not this
-# script's (lukstafi/ludics-lite#445; the fleet's measurement guidance meanwhile has the owner inspect
-# the box's activity, where `wake-lab.sh status` shows the lane lock, before timing).
+# The other direction is the registry's. The sweep owns no registry record, so a measurement
+# reserved WHILE a unit runs is refused by the fleet's side: a `measurement` reserve, run or
+# dispatch in fleet-execution.py refuses a box whose wake-lab LANE lock is held, naming the holder,
+# and holds that lock SHARED while it writes its record (lukstafi/ludics-lite#445, since
+# lukstafi/ludics-lite#451). A remote lane takes the lock EXCLUSIVE before it reads the registry
+# for any unit, so for it the race is closed both ways: a measurement that got the lock first has
+# its record written before this read can happen, and one that comes after finds the lock held and
+# is refused. The local lane takes no lab lock (run_lane: it has no host, and the lock is about a
+# box's VM), so nothing refuses a measurement reserved on this host while one of its units runs;
+# there the check stays one read before each unit.
 #
 # A record names its box by an ssh identity, and a box has one per endpoint. A remote lane's names
 # are every alias on its box's row of wake-lab.sh's endpoint map, read once above (a measurement
