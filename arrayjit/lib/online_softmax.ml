@@ -852,6 +852,7 @@ type backward = {
 type value_pass = {
   p_tn : Tn.t;
   sig_p : signature;
+  p_pos : int;  (** The probabilities' definition. *)
   v_pos : int;
   vp_voc : vocabulary;  (** The normalizer's vocabulary with the value width [Chan 0]. *)
   o_tn : Tn.t;
@@ -868,7 +869,7 @@ let find_value_pass r (nz : normalizer) : value_pass option =
   let rows_roles = roles_of nz.sig_m in
   let all_rows sg = List.for_all rows_roles ~f:(has_role sg) in
   (* 1. The probabilities [P := e / l], elementwise over the scores' roles. *)
-  let* p_tn, sig_p =
+  let* p_tn, sig_p, p_pos =
     one
       (nests_where (fun pos n ->
            match n.llsc with
@@ -877,7 +878,7 @@ let find_value_pass r (nz : normalizer) : value_pass option =
                let* env = reads_in nz.voc n [ (nz.sig_e, ei); (nz.sig_l, li) ] in
                let* def_pos, _ = definition r n.tn in
                let* sg = sign env n.idcs in
-               Option.some_if (def_pos = pos && same_roles sg nz.sig_x) (n.tn, sg)
+               Option.some_if (def_pos = pos && same_roles sg nz.sig_x) (n.tn, sg, pos)
            | _ -> None))
   in
   (* 2. The value pass [O += P * v]: its target names [O], its other operand [v], and its extra loop
@@ -897,7 +898,7 @@ let find_value_pass r (nz : normalizer) : value_pass option =
              && has_role sig_v Reduced && has_role sig_v (Chan 0))
              (pos, voc, n.tn, sig_o, v, sig_v)))
   in
-  Some { p_tn; sig_p; v_pos; vp_voc; o_tn; sig_o; v_tn; sig_v }
+  Some { p_tn; sig_p; p_pos; v_pos; vp_voc; o_tn; sig_o; v_tn; sig_v }
 
 let find_backward r (nz : normalizer) : backward option =
   let all_pos = List.range 0 (Array.length r.stmts) in
@@ -1661,7 +1662,12 @@ let find_fold r (nz : normalizer) ~block : fold option =
     && (not (List.exists inputs ~f:(List.mem state ~equal:Tn.equal)))
     (* Nothing reads [O] between its zeroing and the value pass. *)
     && List.for_all (readers r vp.o_tn) ~f:(fun p -> p <= z_o || p >= f_at)
-    && covers_node vp.o_tn vp.sig_o && List.for_all live_defs ~f:movable
+    && covers_node vp.o_tn vp.sig_o
+    (* Program order: the normalizer's sum, then the probabilities' definition, then the value pass
+       -- a value pass reading probabilities an earlier call left (read before write) is not the
+       pass over this call's normalizer. *)
+    && nz.c < vp.p_pos
+    && vp.p_pos < f_at && List.for_all live_defs ~f:movable
     && not (List.exists (List.range span_lo (f_at + 1)) ~f:(fun pos -> r.opaque.(pos)))
   in
   let* () = Option.some_if contract () in
@@ -1867,6 +1873,14 @@ let find_fold r (nz : normalizer) ~block : fold option =
     if List.is_empty added then removed else dead (removed @ added)
   in
   let removed = dead removed0 in
+  (* Nothing the fold reads may be written by a statement it removes: a value operand that is also a
+     node of the score chain (or of the row state) would lose its definition. *)
+  let* () =
+    Option.some_if
+      (List.for_all (vp.v_tn :: inputs) ~f:(fun tn ->
+           not (List.exists (writers r tn) ~f:(List.mem removed ~equal:Int.equal))))
+      ()
+  in
   Some { f_consumed = removed; f_at; f_code = unflat_lines (fold :: moved) }
 
 (* {1 The pass} *)

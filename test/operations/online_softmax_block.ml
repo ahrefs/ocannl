@@ -322,6 +322,31 @@ let rec map_sets ~f (llc : LL.t) : LL.t =
   | LL.Set s -> LL.Set { s with llsc = map_gets ~f s.llsc }
   | other -> other
 
+(* A value operand aliasing a node of the score chain, on a model whose sequence length equals its
+   head width, so that the masked scores have the values' shape. *)
+module Value_alias = struct
+  let check ~rewrite =
+    Tensor.unsafe_reinitialize ();
+    let raw =
+      with_gates ~on:true ~block:4 (fun () ->
+          let t = model ~seq:8 ~layers:1 ~d_k:8 ~prefix:0 () in
+          Ir.Assignments.to_low_level t.Tensor.forward.Ir.Assignments.asgns)
+    in
+    let where =
+      Option.value_exn (Set.find (written raw) ~f:(label_is "where")) ~message:"masked scores"
+    in
+    let aliased =
+      LL.unflat_lines
+        (List.map (LL.flat_lines [ raw ]) ~f:(fun stmt ->
+             if reads_node "softmax" stmt then
+               map_sets stmt ~f:(fun tn i ->
+                   if label_is "v" tn then LL.Get (where, i) else LL.Get (tn, i))
+             else stmt))
+    in
+    p "a value operand aliasing the masked scores: no fold"
+      (Set.is_empty (tiles (rewrite ~block:4 aliased)))
+end
+
 let () =
   printf "--- leg 6: the member contract, and the declines ---\n";
   let module B = Ll_test in
@@ -532,6 +557,29 @@ let () =
     (scans_of r = 1
     && Set.is_empty (tiles r)
     && Ll_test.count_stmt r ~f:(function LL.Zero_out tn -> Tn.equal tn wide | _ -> false) = 1);
+  (* The value pass ahead of the probabilities' definition, reading those an earlier call left (read
+     before write): not the pass over this call's normalizer, so no fold. *)
+  let reordered =
+    let stmts = LL.flat_lines [ raw ] in
+    let is_pv s = reads_node "softmax" s in
+    let is_zero_o = function LL.Zero_out tn -> label_is "n76" tn | _ -> false in
+    let is_p_def s =
+      List.exists (LL.affine_accesses s) ~f:(fun (a : Tn.t Ir.Affine.access) ->
+          a.a_write && label_is "softmax" a.a_tn)
+    in
+    let pv, _ = Option.value_exn (List.findi stmts ~f:(fun _ s -> is_pv s)) in
+    let prefix = List.take stmts (pv + 1) and suffix = List.drop stmts (pv + 1) in
+    let keep s = not (is_zero_o s || is_pv s || is_p_def s) in
+    LL.unflat_lines
+      (List.filter prefix ~f:keep @ List.filter prefix ~f:is_zero_o @ List.filter prefix ~f:is_pv
+     @ List.filter prefix ~f:is_p_def @ suffix)
+  in
+  p "a value pass ahead of the probabilities it would consume: no fold"
+    (Set.is_empty (tiles (rewrite reordered)));
+  (* A value operand aliasing a node of the score chain -- at seq 8 = head width 8 the masked scores
+     sign like the values: the fold would remove that node's definition and still read it, so it
+     declines. *)
+  Value_alias.check ~rewrite:(fun ~block llc -> rewrite ~block llc);
   (* Only the row max requested: the fold writes it, and nothing else of the row state -- the
      shifted scores, exponentials and probabilities have no reader, so they go, and with them the
      score chain; only a live definition would move behind the fold. *)

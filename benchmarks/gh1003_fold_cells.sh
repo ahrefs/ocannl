@@ -151,9 +151,13 @@ for step in "$@"; do
         benchmarks/runners/ocannl/bench_gpt_diag.exe; then built=1; fi ;;
     provenance)
       echo "revision: $(git -C "$root" rev-parse HEAD)"
-      if [ -n "$(git -C "$root" status --porcelain --untracked-files=no)" ]; then
-        echo "gh1003: the tree has uncommitted changes; the measurement would not name its code"
-        git -C "$root" status --short --untracked-files=no
+      # Untracked files count too (an untracked source or dune file changes what builds); only
+      # OUT itself is excluded when it lies inside the checkout.
+      exclude=()
+      case $out/ in "$root"/*) exclude=(":(exclude)${out#"$root"/}") ;; esac
+      if [ -n "$(git -C "$root" status --porcelain -- . ${exclude[@]+"${exclude[@]}"})" ]; then
+        echo "gh1003: the tree has uncommitted or untracked files; the measurement would not name its code"
+        git -C "$root" status --short -- . ${exclude[@]+"${exclude[@]}"}
         failed=1
       else
         ok=1
