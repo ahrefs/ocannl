@@ -144,8 +144,8 @@ Test tags, spelled `N:test-<reason>` and outside the library's number space:
   998:test-setup
   999:test-setup
 The phase table in test/operations/virtual_rejection_boundary.ml is held to those functions:
-  Store -- check_and_store_virtual
-  Consumption -- instantiate_computations
+  Store -- arrayjit/lib/low_level.ml, check_and_store_virtual
+  Consumption -- arrayjit/lib/low_level.ml, instantiate_computations
 Files citing a library tag -- as the tag, `Non_virtual N`, `provenance N` -- the checklist for a change to one:
 arrayjit/lib/assignments.ml -- 27 34
 arrayjit/lib/backends.ml -- 42 43 45

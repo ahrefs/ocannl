@@ -85,7 +85,8 @@ let table =
   \  [ (\"7:fixture-store\", Store); (\"9:fixture-helper\", Store); (\"4:fixture-consume\", \
    Consumption) ]\n"
 
-let phases = [ ("Store", "store_check"); ("Consumption", "consume") ]
+let phases =
+  [ ("Store", ("lib/fixture.ml", "store_check")); ("Consumption", ("lib/fixture.ml", "consume")) ]
 
 (* Every minting source cites its own tags, as the real ones do. *)
 let own_files ms =
@@ -156,6 +157,11 @@ let () =
             ~type_source:"t.ml"
             ~shape:(Scan.type_shape ~type_name:"provenance" type_source)
             ~mints ())));
+  p_empty "a carrier case transforming its string is not rescued by a nested identity case"
+    ~over:[ type_source ]
+    (Scan.identity_renderings ~renderer:"provenance_to_string"
+       (String.substr_replace_all type_source ~pattern:"Site s -> s"
+          ~with_:"Site s -> (match other with Site x -> x | _ -> \"site:\" ^ s)"));
   p "a nullary constructor with no rendering is refused"
     (has ~substring:"constructor Cap_fixture has no tag rendering"
        (Scan.family_violations ~identities:[ "Site" ] ~type_source:"t.ml"
@@ -348,7 +354,7 @@ let () =
   p_empty "a table agreeing with the minting functions is accepted" ~over:mints
     (table_violations ());
   p "a table entry placed in the other function's phase is refused"
-    (has ~substring:"but it is minted in consume"
+    (has ~substring:"but it is minted in lib/fixture.ml consume"
        (table_violations
           ~table:(Scan.phase_table "let phase_table = [ (\"4:fixture-consume\", Store) ]")
           ()));
@@ -365,7 +371,7 @@ let () =
   p "an unreadable table is refused rather than skipped"
     (has ~substring:"no `phase_table` binding" (table_violations ~table:None ()));
   p "a phase whose function mints nothing is stale"
-    (has ~substring:"names consume, which mints no"
+    (has ~substring:"names consume in lib/fixture.ml, which mints no"
        (table_violations
           ~mints:
             (List.filter mints ~f:(fun (m : Scan.mint) -> not (String.equal m.minter "consume")))
@@ -412,15 +418,17 @@ let () =
        strings
          (tags (read ~source:"test/d.ml" ~foreign:[ "Key_scan" ] text).mints)
          [ "13:fixture-owned" ]);
-   p "a local structure declaring its own carrier-named constructor is foreign, inside and out"
-     (strings
-        (tags
-           (read ~source:"test/e.ml"
-              "module Local = struct type t = Site of string let x = Site \"12:fixture-key\" end\n\
-               let y = Local.Site \"12:fixture-key\"\n\
-               let z = Site \"13:fixture-owned\"")
-             .mints)
-        [ "13:fixture-owned" ]);
+   p_all "a local structure declaring its own carrier-named constructor is foreign, inside and out"
+     [ "module Local = struct"; "module Local : S = struct" ] ~f:(fun header ->
+       strings
+         (tags
+            (read ~source:"test/e.ml"
+               (header
+              ^ " type t = Site of string let x = Site \"12:fixture-key\" end\n\
+                 let y = Local.Site \"12:fixture-key\"\n\
+                 let z = Site \"13:fixture-owned\""))
+              .mints)
+         [ "13:fixture-owned" ]);
    p_empty "a foreign constructor applied unqualified in its own module mints nothing" ~over:[ own ]
      (read ~source:"test/support/key_scan.ml" ~foreign:[ "Key_scan" ] own).mints;
    p "a foreign constructor qualified through an alias mints nothing; the owner's still does"
@@ -571,16 +579,21 @@ let () =
          "  try if y then raise (" ^ nv ^ " \"4:fixture-consume\"); Ok () with " ^ nv
          ^ " i -> Error i";
        ]);
-  check "shipping inventory reads a relaying source that never spells the carrier" ~exit:0
-    ~message:
-      ("Site via " ^ nv
-     ^ " -- arrayjit/lib/inliner.ml, instantiate_computations:\n  4:fixture-consume\n")
-    (run ());
+  (let moved = run () in
+   check "shipping inventory reads a relaying source that never spells the carrier" ~exit:1
+     ~message:
+       ("Site via " ^ nv
+      ^ " -- arrayjit/lib/inliner.ml, instantiate_computations:\n  4:fixture-consume\n")
+     moved;
+   check "shipping inventory refuses a phase function moved to another source" ~exit:1
+     ~message:"but it is minted in arrayjit/lib/inliner.ml instantiate_computations" moved);
   Unix.unlink (Stdlib.Filename.concat root "arrayjit/lib/inliner.ml");
   write "arrayjit/lib/low_level.ml" low_level;
   write boundary "let phase_table = [ (\"4:fixture-consume\", Store) ]\n";
   check "shipping inventory refuses a phase table placing a code in the wrong phase" ~exit:1
-    ~message:"puts 4:fixture-consume at Store, but it is minted in instantiate_computations"
+    ~message:
+      "puts 4:fixture-consume at Store, but it is minted in arrayjit/lib/low_level.ml \
+       instantiate_computations"
     (run ());
   let rec remove path =
     if Stdlib.Sys.is_directory path then (

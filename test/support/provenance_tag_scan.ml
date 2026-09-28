@@ -176,70 +176,54 @@ let type_shape ~type_name content =
               | _ -> None)
       | _ -> None)
 
-(** [(constructor, tag)] for each case [C -> "tag"] of the top-level [renderer] binding. *)
-let renderings ~renderer ~source content =
-  let found = ref [] in
-  let walker =
-    object
-      inherit Ast_traverse.iter as super
-
-      method! case c =
-        (match (c.pc_lhs.ppat_desc, c.pc_rhs.pexp_desc) with
-        | Ppat_construct ({ txt; _ }, None), Pexp_constant (Pconst_string (s, _, _)) -> (
-            match (last_name txt, tag_number s) with
-            | Some constructor, Some number ->
-                found :=
-                  { number; tag = s; family = Rendered constructor; source; minter = renderer }
-                  :: !found
-            | _ -> ())
-        | _ -> ());
-        super#case c
-    end
+(* The cases of the top-level [renderer] binding's defining match -- [function | ...], or a function
+   whose body is a [match] -- and none nested beneath them: a case inside a case's right-hand side
+   renders something else. *)
+let renderer_cases ~renderer content =
+  let rec defining (e : expression) =
+    match e.pexp_desc with
+    | Pexp_function ([], _, Pfunction_cases (cases, _, _)) -> cases
+    | Pexp_function (_ :: _, _, Pfunction_body body) -> defining body
+    | Pexp_match (_, cases) -> cases
+    | Pexp_constraint (e, _) | Pexp_newtype (_, e) -> defining e
+    | _ -> []
   in
-  List.iter (parse content) ~f:(fun item ->
+  List.concat_map (parse content) ~f:(fun item ->
       match item.pstr_desc with
       | Pstr_value (_, vbs) ->
-          List.iter vbs ~f:(fun vb ->
+          List.concat_map vbs ~f:(fun vb ->
               match binding_name vb with
-              | Some name when String.equal name renderer -> walker#expression vb.pvb_expr
-              | _ -> ())
-      | _ -> ());
-  List.rev !found
+              | Some name when String.equal name renderer -> defining vb.pvb_expr
+              | _ -> [])
+      | _ -> [])
 
-(** The constructors whose case of the top-level [renderer] binding returns their argument unchanged
+(** [(constructor, tag)] for each case [C -> "tag"] of the renderer's defining match. *)
+let renderings ~renderer ~source content =
+  List.filter_map (renderer_cases ~renderer content) ~f:(fun c ->
+      match (c.pc_lhs.ppat_desc, c.pc_rhs.pexp_desc) with
+      | Ppat_construct ({ txt; _ }, None), Pexp_constant (Pconst_string (s, _, _)) -> (
+          match (last_name txt, tag_number s) with
+          | Some constructor, Some number ->
+              Some { number; tag = s; family = Rendered constructor; source; minter = renderer }
+          | _ -> None)
+      | _ -> None)
+
+(** The constructors whose case of the renderer's defining match returns their argument unchanged
     ([Site s -> s]): only for those is the literal a carrier is applied to the text a printed
     provenance shows. *)
 let identity_renderings ~renderer content =
-  let found = ref [] in
-  let walker =
-    object
-      inherit Ast_traverse.iter as super
+  List.filter_map (renderer_cases ~renderer content) ~f:(fun c ->
+      match (c.pc_lhs.ppat_desc, c.pc_rhs.pexp_desc) with
+      | ( Ppat_construct ({ txt; _ }, Some (_, { ppat_desc = Ppat_var { txt = v; _ }; _ })),
+          Pexp_ident { txt = Lident v'; _ } )
+        when String.equal v v' ->
+          last_name txt
+      | _ -> None)
 
-      method! case c =
-        (match (c.pc_lhs.ppat_desc, c.pc_rhs.pexp_desc) with
-        | ( Ppat_construct ({ txt; _ }, Some (_, { ppat_desc = Ppat_var { txt = v; _ }; _ })),
-            Pexp_ident { txt = Lident v'; _ } )
-          when String.equal v v' ->
-            Option.iter (last_name txt) ~f:(fun c -> found := c :: !found)
-        | _ -> ());
-        super#case c
-    end
-  in
-  List.iter (parse content) ~f:(fun item ->
-      match item.pstr_desc with
-      | Pstr_value (_, vbs) ->
-          List.iter vbs ~f:(fun vb ->
-              match binding_name vb with
-              | Some name when String.equal name renderer -> walker#expression vb.pvb_expr
-              | _ -> ())
-      | _ -> ());
-  List.rev !found
-
-(** The constructors whose case of the top-level [renderer] binding binds each argument to a
-    variable and renders every one of them, in order, through a recursive call
+(** The constructors whose case of the renderer's defining match binds each argument to a variable
+    and renders every one of them, in order, through a recursive call
     ([Refined (a, b) -> renderer a ^ " -> " ^ renderer b]). *)
 let composite_renderings ~renderer content =
-  let found = ref [] in
   let calls e =
     let seen = ref [] in
     let finder =
@@ -261,35 +245,19 @@ let composite_renderings ~renderer content =
     List.rev !seen
   in
   let var (p : pattern) = match p.ppat_desc with Ppat_var { txt; _ } -> Some txt | _ -> None in
-  let walker =
-    object
-      inherit Ast_traverse.iter as super
-
-      method! case c =
-        (match c.pc_lhs.ppat_desc with
-        | Ppat_construct ({ txt; _ }, Some (_, arg)) -> (
-            let vars =
-              match arg.ppat_desc with
-              | Ppat_tuple ps -> Option.all (List.map ps ~f:var)
-              | _ -> Option.map (var arg) ~f:List.return
-            in
-            match (last_name txt, vars) with
-            | Some c', Some (_ :: _ as vars) when List.equal String.equal (calls c.pc_rhs) vars ->
-                found := c' :: !found
-            | _ -> ())
-        | _ -> ());
-        super#case c
-    end
-  in
-  List.iter (parse content) ~f:(fun item ->
-      match item.pstr_desc with
-      | Pstr_value (_, vbs) ->
-          List.iter vbs ~f:(fun vb ->
-              match binding_name vb with
-              | Some name when String.equal name renderer -> walker#expression vb.pvb_expr
-              | _ -> ())
-      | _ -> ());
-  List.rev !found
+  List.filter_map (renderer_cases ~renderer content) ~f:(fun c ->
+      match c.pc_lhs.ppat_desc with
+      | Ppat_construct ({ txt; _ }, Some (_, arg)) -> (
+          let vars =
+            match arg.ppat_desc with
+            | Ppat_tuple ps -> Option.all (List.map ps ~f:var)
+            | _ -> Option.map (var arg) ~f:List.return
+          in
+          match vars with
+          | Some (_ :: _ as vars) when List.equal String.equal (calls c.pc_rhs) vars ->
+              last_name txt
+          | _ -> None)
+      | _ -> None)
 
 (** {1 The sources} *)
 
@@ -392,8 +360,11 @@ let read_source ~carriers ?(foreign = []) ~source content =
   in
   let bind name (me : module_expr) =
     Option.iter name ~f:(fun name ->
+        let rec peel (me : module_expr) =
+          match me.pmod_desc with Pmod_constraint (me, _) -> peel me | _ -> me
+        in
         let target =
-          match me.pmod_desc with
+          match (peel me).pmod_desc with
           | Pmod_ident { txt; _ } -> Option.value_map (last_name txt) ~default:name ~f:resolve
           | Pmod_structure items when declares_carrier items ->
               let target = source ^ ":" ^ name in
@@ -960,7 +931,9 @@ let violations ?(malformed = []) ~(mints : mint list) ~pinned ~files () =
   not_tags @ shared_renderings @ one_word @ test_prefixed @ unowned @ collided @ stale_pins
   @ two_phases @ stale @ blind
 
-(** What the phase table refuses, given the relayed family [exn] whose phases [phases] names. *)
+(** What the phase table refuses, given the relayed family [exn] whose phases [phases] names, each
+    phase as [(phase, (source, function))]: the function is bound to its source, so a same-named
+    function elsewhere cannot stand in for the one that moved. *)
 let table_violations ~(mints : mint list) ~exn ~table_source ~table ~phases =
   let codes =
     List.filter mints ~f:(fun m ->
@@ -988,20 +961,29 @@ let table_violations ~(mints : mint list) ~exn ~table_source ~table ~phases =
                 Some
                   (Printf.sprintf "%s: phase table entry %s names phase %s, which has no minter"
                      table_source tag phase)
-            | minted, Some minter ->
-                if List.exists minted ~f:(fun c -> String.equal c.minter minter) then None
+            | minted, Some (source, minter) ->
+                if
+                  List.exists minted ~f:(fun c ->
+                      String.equal c.source source && String.equal c.minter minter)
+                then None
                 else
                   Some
                     (Printf.sprintf "%s: phase table puts %s at %s, but it is minted in %s"
                        table_source tag phase
                        (String.concat ~sep:" and "
                           (List.dedup_and_sort ~compare:String.compare
-                             (List.map minted ~f:(fun c -> c.minter))))))
+                             (List.map minted ~f:(fun c -> c.source ^ " " ^ c.minter))))))
       in
       let stale_phases =
-        List.filter_map phases ~f:(fun (phase, minter) ->
-            if List.exists codes ~f:(fun c -> String.equal c.minter minter) then None
-            else Some (Printf.sprintf "phase %s names %s, which mints no %s code" phase minter exn))
+        List.filter_map phases ~f:(fun (phase, (source, minter)) ->
+            if
+              List.exists codes ~f:(fun c ->
+                  String.equal c.source source && String.equal c.minter minter)
+            then None
+            else
+              Some
+                (Printf.sprintf "phase %s names %s in %s, which mints no %s code" phase minter
+                   source exn))
       in
       per_entry @ stale_phases
 

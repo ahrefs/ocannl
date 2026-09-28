@@ -4,6 +4,7 @@ a nullary constructor mints the tag its renderer case returns: true
 the renderer must return a carrier's string unchanged: true
 a composite renders each of its provenances, in order, through the renderer: true
 a composite dropping or reordering a provenance is refused: true
+a carrier case transforming its string is not rescued by a nested identity case: true
 a nullary constructor with no rendering is refused: true
 a missing type is refused rather than read as no family: true
 a carrier applied to no literal anywhere is the reader gone blind: true
@@ -78,4 +79,5 @@ shipping inventory refuses a citation of a code no raise site mints: true
 shipping inventory refuses a prose citation of a retired tag: true
 shipping inventory refuses a new number collision: true
 shipping inventory reads a relaying source that never spells the carrier: true
+shipping inventory refuses a phase function moved to another source: true
 shipping inventory refuses a phase table placing a code in the wrong phase: true

@@ -54,7 +54,11 @@ let own_files =
    phase is absent on purpose: the test derives it from [Low_level.is_cap_provenance], and caps are
    provenance constructors rather than codes. *)
 (* Consumption is [inline_computation]'s instantiation core, which mints its codes (gh-ocannl-1011). *)
-let phases = [ ("Store", "check_and_store_virtual"); ("Consumption", "instantiate_computations") ]
+let phases =
+  [
+    ("Store", ("arrayjit/lib/low_level.ml", "check_and_store_virtual"));
+    ("Consumption", ("arrayjit/lib/low_level.ml", "instantiate_computations"));
+  ]
 
 (* The number collisions that predate the inventory (gh-ocannl-1081), pinned rather than renumbered:
    a renumbering would churn every golden and page citing the tags. A new collision, a third tag on
@@ -216,7 +220,8 @@ let scan ~records ~pinned root generated =
     Scan.test_prefix;
   List.iter test_tags ~f:(printf "  %s\n");
   printf "The phase table in %s is held to those functions:\n" table_source;
-  List.iter phases ~f:(fun (phase, minter) -> printf "  %s -- %s\n" phase minter);
+  List.iter phases ~f:(fun (phase, (source, minter)) ->
+      printf "  %s -- %s, %s\n" phase source minter);
   printf "Files citing a library tag -- as the tag, %s -- the checklist for a change to one:\n"
     (String.concat ~sep:", "
        (List.map exceptions ~f:(fun (exn, _) -> "`" ^ exn ^ " N`")
