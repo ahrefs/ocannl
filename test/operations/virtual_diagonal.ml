@@ -205,12 +205,14 @@ let case_single_symbol () =
   p "single-symbol: executed values track the producer index" (same virt [ [| 1.; 2.; 3. |] ]);
   p "single-symbol: virtual and materialized arms agree" (same virt mat)
 
+(* Each row runs through [case], so a row that raises is a failed claim naming it, and the rows
+   after it still run (gh-ocannl-1084; [footprint_materialization] is the exemplar). *)
 let () =
-  case_diagonal_generic ();
-  case_diagonal_equal ();
-  case_partial_diagonal ();
-  case_static_dynamic ();
-  case_single_symbol_affine ();
-  case_single_symbol_affine_mismatch ();
-  case_single_symbol ();
+  case "diagonal-generic" case_diagonal_generic;
+  case "diagonal-equal" case_diagonal_equal;
+  case "partial-diagonal" case_partial_diagonal;
+  case "static-dynamic" case_static_dynamic;
+  case "single-affine" case_single_symbol_affine;
+  case "single-affine-mismatch" case_single_symbol_affine_mismatch;
+  case "single-symbol" case_single_symbol;
   Stdio.printf "%!"

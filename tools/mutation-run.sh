@@ -8,7 +8,11 @@
 # -- whose golden is <dir>/<name>.expected: a mutated run counts as evidence only
 # once it has REACHED ITS LAST ROW (gh-ocannl-1083). The stdout this run wrote
 # (<name>.exe.output, .actual or .output under the build tree) must print as
-# many rows as the golden, and Verdict must not have printed STOPPED EARLY. A run
+# many rows as the golden, and Verdict must not have printed STOPPED EARLY (for
+# an escaping exception, or an exit inside a Verdict.case). Rows short of the
+# golden still count as reached when a Verdict.case raised, Verdict's teardown
+# ended the process, and its stdout ended on the golden's last row or on a case's
+# raise (gh-ocannl-1084). A run
 # that stopped early, or never ran (a build failure; an executable the mutation
 # left unchanged, so dune reused its result), prints STOPPED EARLY or NEVER RAN
 # (NOT COUNTED when two candidates changed) and exits 4 in place of test-run's
@@ -85,6 +89,22 @@ sub rows {
     return $n + ($last ne "\n");
 }
 my $golden_rows = rows("$root/$golden");
+# What a Verdict.case prints when its case raises (test/support/verdict.ml): the
+# case's own failed claim, standing in for rows the raise kept from printing.
+my $case_raise = qr/: the case ran to completion \(raised .*\): false$/;
+# The number of case raises in a stdout, and its last row.
+sub case_raises {
+    open my $f, '<:raw', $_[0] or refuse("read $_[0]: $!");
+    my ($n, $last) = (0, '');
+    while (my $line = <$f>) {
+        $line =~ s/\r?\n$//;
+        $n++ if $line =~ $case_raise;
+        $last = $line;
+    }
+    close $f or refuse("close $_[0]: $!");
+    return ($n, $last);
+}
+my (undef, $golden_last) = case_raises("$root/$golden");
 my $mutated = $original;
 substr($mutated, $at, length($old), $new);
 system('bash', "$root/tools/test-run.sh", 'idle') == 0
@@ -182,14 +202,20 @@ my $reported = eval {
     if (defined $log) {
         print 'run: ', basename(dirname($log)), "\nfalse claims:\n";
         open my $claims, '<:raw', $log or refuse("read $log: $!");
-        my ($found, $stopped) = (0, 0);
+        my ($found, $stopped, $teardown) = (0, '', 0);
         while (my $line = <$claims>) {
             if ($line =~ /^(FAIL: .*: false)\r?\n?$/) {
                 print "$1\n";
                 $found = 1;
             }
             # Verdict's uncaught-exception handler (gh-ocannl-1067).
-            $stopped = 1 if $line =~ /^STOPPED EARLY: /;
+            # Which ending: an escaping exception, or an exit inside a Verdict.case
+            # once a check had failed (gh-ocannl-1084), which a row count cannot see.
+            $stopped ||= $line =~ /^STOPPED EARLY: an exit inside case / ? 'exit'
+                : $line =~ /^STOPPED EARLY: / ? 'raise' : '';
+            # Verdict's teardown (Verdict.teardown_line): the process ended through
+            # exit, not a signal, so nothing after a caught raise was cut off.
+            $teardown = 1 if $line =~ /^FAILED: \d+ checks? did not hold\.\r?$/;
         }
         close $claims or refuse("close $log: $!");
         print "(none)\n" unless $found;
@@ -199,10 +225,26 @@ my $reported = eval {
         if (@fresh == 1) {
             my $printed = rows($fresh[0]);
             print "rows: $printed printed of $golden_rows in $golden\n";
-            if ($stopped) {
+            if ($stopped eq 'exit') {
+                $verdict = 'STOPPED EARLY: Verdict reported an exit inside a case; no case after it ran';
+            } elsif ($stopped) {
                 $verdict = 'STOPPED EARLY: Verdict reported an uncaught exception; no row after it ran';
             } elsif ($printed < $golden_rows) {
-                $verdict = "STOPPED EARLY: the mutated run printed $printed of the golden's $golden_rows rows";
+                # A raising Verdict.case costs the rows it never printed, yet the cases
+                # after it run (gh-ocannl-1084): the shortfall is that case's failure,
+                # not a stopped run, once the process ended through Verdict's teardown
+                # and its stdout where a complete one does -- on the golden's last row,
+                # or on the last case's own raise. A raise line is the LAST case's only
+                # because nothing after it ran and nothing stopped the run: a signal
+                # leaves no teardown line, and an exit inside a later case its own
+                # STOPPED EARLY, taken above.
+                my ($raised, $last) = case_raises($fresh[0]);
+                if ($raised && $teardown && ($last eq $golden_last || $last =~ $case_raise)) {
+                    print "cases raised: $raised (the rows short of the golden are theirs; "
+                        . "the run reached its last case)\n";
+                } else {
+                    $verdict = "STOPPED EARLY: the mutated run printed $printed of the golden's $golden_rows rows";
+                }
             }
         } elsif (@fresh) {
             print "rows: not counted\n";
