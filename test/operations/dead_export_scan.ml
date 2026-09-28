@@ -449,6 +449,13 @@ let exempt_zero_reference_exports =
     "Sketch_families.cpu_grid_rendering_disabled";
     "Sketch_families.cpu_mma_pack_sketch_schedule";
     "Sketch_families.cpu_mma_sketch_schedule";
+    (* Not pre-existing, same class. gh-ocannl-1115 landed beside gh-ocannl-1085, so neither PR's CI
+       saw these two: it added [cpu_register_tile_prec] as a helper of
+       [tensorized_capability_refutation], and moved the last outside caller of
+       [mma_tile_for_precisions] ([schedule_contraction_nest]'s tensorized gate) onto that
+       refutation. [autotune.mli] still publishes [mma_tile_for_precisions]; nothing outside calls
+       it. *)
+    "Sketch_families.cpu_register_tile_prec";
     "Sketch_families.cpu_sketch_schedule";
     "Sketch_families.decided_choice";
     "Sketch_families.detect_conv_affine";
@@ -480,6 +487,7 @@ let exempt_zero_reference_exports =
     "Sketch_families.mma_input_formats_of_prec";
     "Sketch_families.mma_scope_of_reduction_extents";
     "Sketch_families.mma_staged_layout_for_precisions";
+    "Sketch_families.mma_tile_for_precisions";
     "Sketch_families.nest_loop_syms";
     "Sketch_families.pad_composition_ok";
     "Sketch_families.pad_to";

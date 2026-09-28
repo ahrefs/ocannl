@@ -2319,7 +2319,10 @@
 
 ; gh-ocannl-800: static scanner refusal formats are related to permanent control goldens. These
 ; cases pin extraction, Printf-hole normalization, the orphan arm, and the covered near miss on
-; synthetic OCaml rather than relying on the currently complete repository relationship.
+; synthetic OCaml rather than relying on the currently complete repository relationship. The
+; argument list below assigns each scanner source its control goldens; which sources it must name is
+; owned by `Refusal_control_manifest.sources`, and the test fails naming a source either side lacks
+; (gh-ocannl-1088).
 
 (test
  ; ocannl-backend: none -- links no backend: it parses embedded scanner source and compares text.
@@ -2330,6 +2333,8 @@
   atomic_file_rename_scan.ml
   atomic_file_rename_scan.expected
   atomic_file_rename_scan_control.expected
+  agents_md_size.ml
+  agents_md_size.expected
   agent_notes_structure.ml
   agent_notes_structure.expected
   backend_golden_family_scan.ml
@@ -2392,6 +2397,8 @@
    %{test}
    atomic_file_rename_scan.ml
    atomic_file_rename_scan.expected,atomic_file_rename_scan_control.expected
+   agents_md_size.ml
+   agents_md_size.expected
    agent_notes_structure.ml
    agent_notes_structure.expected
    backend_golden_family_scan.ml

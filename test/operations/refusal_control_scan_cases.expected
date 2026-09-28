@@ -7,6 +7,12 @@ two diagnostics sharing a display fragment still require distinct controls: true
 one control marker occurrence covers only one identical diagnostic: true
 one observed claim execution is consumed by only one matching diagnostic: true
 a second identical diagnostic cannot reuse the consumed claim execution: true
+a manifest source missing from the argument list is named as uncatalogued: true
+an argument-list source outside the manifest is named as extra: true
+a source catalogued twice is a mismatch, not a match: true
+a manifest row repeated is a mismatch even where the argument list repeats it too: true
+the same sources in another order match: true
+the stanza's scanner sources are exactly Refusal_control_manifest.sources, each once: true
 
 Scanner refusal formats and the permanent control suite assigned to their source:
 atomic_file_rename_scan.ml has exactly the explicitly assigned refusal controls: true
@@ -23,6 +29,11 @@ atomic_file_rename_scan.ml: [scanner-refusal:dfeaf03eef363cf0944237d1f754cb5a] g
 atomic_file_rename_scan.ml: [scanner-refusal:16447aab0e906595f837aaa44096abbc] Atomic_file (claim) is catalogued beside atomic_file_rename_scan.expected, atomic_file_rename_scan_control.expected: true
 atomic_file_rename_scan.ml: [scanner-refusal:698fae6b12a0d52a71f789bc962a882b] raw rename exemption (claim) is catalogued beside atomic_file_rename_scan.expected, atomic_file_rename_scan_control.expected: true
 atomic_file_rename_scan.ml: [scanner-refusal:ed6060063668d409574488fcb7fc8897] exemption matches exactly (claim) is catalogued beside atomic_file_rename_scan.expected, atomic_file_rename_scan_control.expected: true
+agents_md_size.ml has exactly the explicitly assigned refusal controls: true
+agents_md_size.ml: [scanner-refusal:9b96dba1c5b1fe8c4a37c837ecca6ddd] empty or misrouted (claim) is catalogued beside agents_md_size.expected: true
+agents_md_size.ml: [scanner-refusal:b9a291d865e79e74582ef22daf02fd3a] AGENTS.md (claim) is catalogued beside agents_md_size.expected: true
+agents_md_size.ml: [scanner-refusal:2bd517cf99304ae6d8358f4bfc6d3995] synthesized guide of (claim) is catalogued beside agents_md_size.expected: true
+agents_md_size.ml: [scanner-refusal:6e5c887df5f7f65a45a232ef22d04e62] synthesized guide one (claim) is catalogued beside agents_md_size.expected: true
 agent_notes_structure.ml has exactly the explicitly assigned refusal controls: true
 agent_notes_structure.ml: [scanner-refusal:bc4968cf04b3b7f3212afef877977199] handed the notes (claim) is catalogued beside agent_notes_structure.expected: true
 agent_notes_structure.ml: [scanner-refusal:2ac555c09ba6fe90fc6321fecba16cab] the notes' bullets (claim) is catalogued beside agent_notes_structure.expected: true

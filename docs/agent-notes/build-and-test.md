@@ -311,7 +311,8 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   `raw_entries`, on stderr (the golden keeps only the section header).
   `refusal_control_scan_cases.expected` holds the manifest equal to mechanical extraction, every entry present in the assigned live/case
   golden union, and the manifest's repo-relative source paths equal to `env_var_deps`' derived
-  scanner census. Rewording a refusal format moves its marker digest: when a row differs, that
+  scanner census; the audit's own stanza argument list assigns each source its goldens, and its
+  sources are held equal to the manifest's, a missing or extra one named on stderr (gh-ocannl-1088). Rewording a refusal format moves its marker digest: when a row differs, that
   audit writes the markers on each side and the whole replacement row on stderr, and its
   `raw_direct_evidence` claim names on stderr every `<source>:<md5>` key no current direct failure
   answers to -- re-key those from the row difference. The
@@ -2252,7 +2253,7 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   gfx1151 is an iGPU whose device memory IS host memory, so a missing or misplaced host↔device
   transfer can read the right bytes there, and only tuf-amd-linux's discrete RX 7700S (gfx1102)
   exposes it (ludics-lite#320). `--only hip` selects both units; each is its own row, keyed by
-  machine, and `known_backends` lists hip once. tuf is a single-boot Wi-Fi laptop the caller cannot
+  machine, and `known_backends` lists hip once. tuf is a Wi-Fi laptop the caller cannot
   wake (its own `WakeSystem=true` timer does, from self-improve's Linux bootstrap, or a person), so
   its lane is **gated** (`lab_box_gated`): it asks `wake-lab.sh status tuf` (`OCANNL_TOOL_SWEEP_WAKE_LAB`
   moves the script) before reserving or dialling anything, and a box not at `linux=UP` — or one
@@ -2267,9 +2268,9 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   end the lane inside that trap. A cancelled top level does not order its exit after its lanes',
   so the lane's line saying so is best-effort and the log is the record. Its unit is uncapped:
   lukstafi/ludics-lite#344's ladder ran it green at dune's default (16) and at `-j 8`, 1046 s
-  against 1105 s, with no GPU kernel line (it had run at a placeholder `-j 2` until then). A single-boot box needs no
-  `kind_of`: `lab_dest` returns its one alias, so a site table that does not describe tuf refuses
-  nothing.
+  against 1105 s, with no GPU kernel line (it had run at a placeholder `-j 2` until then). Its boot kind comes from
+  the site table's `kind_of tuf` like every box's (wake-lab.sh requires one too): the lab's map lists
+  a `tuf-amd-wsl` the lane never dials.
 - **A native lane's work legs hold a logind sleep inhibitor** (gh-ocannl-1035). Every far-side leg
   that takes the worktree lock — preparation, the suite, the RTC context, the serial rerun — runs
   under the perl supervisor's `--hold <why>` on a `-linux` destination (`sleep_guard_why`), so
@@ -2290,13 +2291,17 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   and the fleet's execution registry (both lukstafi/ludics-lite). A remote lane holds the box's
   LANE lock (`$WAKE_LAB_LOCK_DIR/<box>.lock`, never `<box>.hold.lock`; the comment above
   `LAB_LOCK_DIR` in `tools/sweep.sh` says why each) for its whole length, so wake-lab's destroyers
-  (`restart-wsl`, `sleep`, the boot verbs) refuse the box under it. That contract is four facts
-  shared across two repositories, so every run checks it at startup against the wake-lab.sh it
-  will meet (gh-ocannl-1025): for each box a selected remote lane reserves, `wake-lab.sh
-  endpoint-map` must list every boot `lab_dest_of` can address on that box's row and `lab_box_of`
-  must map each back to it, and `wake-lab.sh lock-path <box>` must answer the file the lane opens.
-  A disagreement refuses the run (startup exit 2, no record) naming what moved; no wake-lab.sh, or
-  one without `endpoint-map`, prints `lab locks: NOT CHECKED` in the header and runs. ludics-lite's
+  (`restart-wsl`, `sleep`, the boot verbs) refuse the box under it. **The sweep keeps no table of
+  ssh aliases** (gh-ocannl-1121): a run with a selected remote unit reads `wake-lab.sh endpoint-map`
+  once at startup, and each unit's destination is the `-linux`/`-wsl` alias (wake-lab's own suffix
+  rule) on its box's row for today's `kind_of`, the box an alias reserves is the row that lists it,
+  and a lane's registry names are that whole row. No wake-lab.sh, no map, no row for the box, or no
+  alias for today's boot refuses the run (startup exit 2, no record); a local-only run asks
+  nothing. A renamed alias needs no sweep edit. The old hand-written `lab_dest_of`/`lab_box_of`
+  rows, their agreement check and the no-map fallback's stem rule cost three review rounds on one
+  class of finding (staging#868) — do not reintroduce a copy. What stays checked at startup against
+  the wake-lab.sh the run will meet (gh-ocannl-1025) is `wake-lab.sh lock-path <box>` answering the
+  file the lane opens; a disagreement refuses the run naming what moved. ludics-lite's
   `scripts/test-wake-lab.sh` checks the same contract from its side, against a staging checkout it
   never fetches. Separately, before EACH unit the lane reads the registry
   (`fleet-worker.sh execution list --active --compact`, through the fleet-worker.sh
