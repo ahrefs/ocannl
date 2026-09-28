@@ -290,6 +290,7 @@ test/operations/sweep_harness.sh parses: true
 tools/aggregate-skips.sh parses: true
 tools/batch-backends.sh parses: true
 tools/box-jobs.sh parses: true
+tools/ci-aarch64-cross.sh parses: true
 tools/ci-compiler-test.sh parses: true
 tools/ci-durations.sh parses: true
 tools/ci-times.sh parses: true

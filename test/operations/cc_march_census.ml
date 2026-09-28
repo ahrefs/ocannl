@@ -109,7 +109,10 @@
    download gcc-<n>-aarch64-linux-gnu cpp-<n>-... binutils- aarch64-linux-gnu libc6-dev-arm64-cross
    linux-libc-dev-arm64-cross libgcc-<n>-dev-arm64-cross] then [dpkg-deb -x] each into one prefix.
    Point [AARCH64_CROSS_GCC] at the resulting [aarch64-linux-gnu-gcc-<n>], or leave it unset and the
-   check looks for [aarch64-linux-gnu-gcc] on [PATH]. *)
+   check looks for [aarch64-linux-gnu-gcc] on [PATH]; only the unset form skips an absent compiler,
+   a named one that does not compile fails. CI stages gcc 15 this way with
+   [tools/ci-aarch64-cross.sh], because the gcc 13 and 14 crosses ubuntu-24.04 installs fail four
+   claims gcc 15 passes (gh-ocannl-1120). *)
 
 open Base
 open Ocannl.Operation.DSL_modules
@@ -690,13 +693,31 @@ let build (emit_dir : string) =
 
 let widths = [ 16; 32; 64 ]
 
+(* The cross gcc a run was explicitly pointed at, as opposed to the [PATH] default it looks for
+   otherwise. A column whose compiler was NAMED and that still does not compile is a broken setup,
+   not an absent toolchain, and is reported as a failure rather than {!Verdict.skipped}: CI names
+   one (gh-ocannl-1120), and a skip there would be the silent regression to "no aarch64 coverage"
+   that the columns went unnoticed in before. *)
+let aarch64_cross_override () =
+  match Stdlib.Sys.getenv_opt "AARCH64_CROSS_GCC" with
+  | Some c when not (String.is_empty (String.strip c)) -> Some (String.strip c)
+  | _ -> None
+
+let column label command march note = { Census.label; command; march; note }
+
+(* The columns [AARCH64_CROSS_GCC] answers for, and only these: the override names a compiler, which
+   on a native aarch64 host can be the host compiler itself, so matching columns by command would
+   turn that host's rejected x86 [-march]es into failures too. *)
+let aarch64_columns cross =
+  [
+    column "aarch64/armv8-a" cross "armv8-a" "NEON f32/f64 builtins, no fp16 arithmetic";
+    column "aarch64/armv8.2-a+fp16" cross "armv8.2-a+fp16"
+      "ARMv8.2-FP16: the NEON fp16 vector rows, typed in __fp16";
+  ]
+
 let toolchains () =
   let host = Cc_backend.compiler_command () in
-  let cross =
-    match Stdlib.Sys.getenv_opt "AARCH64_CROSS_GCC" with
-    | Some c when not (String.is_empty (String.strip c)) -> String.strip c
-    | _ -> "aarch64-linux-gnu-gcc"
-  in
+  let cross = Option.value (aarch64_cross_override ()) ~default:"aarch64-linux-gnu-gcc" in
   (* clang beside the host compiler on the x86 targets whose rows the claims below hold strictly
      (gh-ocannl-1103). The census is a measurement of a compiler, and clang is the other one an x86
      developer's cc backend may be running: until these columns it was censused only when it WAS the
@@ -712,7 +733,7 @@ let toolchains () =
     | Some c when not (String.is_empty (String.strip c)) -> String.strip c
     | _ -> "clang"
   in
-  let t label command march note = { Census.label; command; march; note } in
+  let t = column in
   [
     (* The host's own default target, with no [-march] at all: the one column every toolchain
        accepts, and therefore the one that keeps the matrix from being VACUOUS. Without it, a run on
@@ -731,10 +752,8 @@ let toolchains () =
     t "clang/x86-64-v3" clang "x86-64-v3" "clang, AVX2 + FMA";
     t "clang/x86-64-v4" clang "x86-64-v4" "clang, AVX-512 under a 256-bit vector preference";
     t "clang/sapphirerapids" clang "sapphirerapids" "clang, AVX512-FP16";
-    t "aarch64/armv8-a" cross "armv8-a" "NEON f32/f64 builtins, no fp16 arithmetic";
-    t "aarch64/armv8.2-a+fp16" cross "armv8.2-a+fp16"
-      "ARMv8.2-FP16: the NEON fp16 vector rows, typed in __fp16";
   ]
+  @ aarch64_columns cross
 
 (* The two numerics settings a child can emit under, named by what they resolve fp16 to. Only
    [fp16_arithmetic] differs: [native] keeps fp16 arithmetic 16-bit (so
@@ -1896,6 +1915,15 @@ let () =
             Verdict.p name
               ((not (List.is_empty mine))
               && List.for_all mine ~f:(fun r -> Option.is_some r.profile))
+          else if
+            Option.exists (aarch64_cross_override ()) ~f:(fun cross ->
+                List.mem (aarch64_columns cross) t ~equal:Poly.equal)
+          then (
+            Stdio.eprintf
+              "  %s: AARCH64_CROSS_GCC names %s, which does not accept -march=%s (not part of the \
+               golden)\n"
+              t.Census.label t.Census.command t.Census.march;
+            Verdict.p name false)
           else
             Verdict.skipped ~aggregation:`Environment
               ~backend:(List.Assoc.find_exn skip_reasons t ~equal:phys_equal)
