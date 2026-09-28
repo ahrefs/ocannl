@@ -1182,3 +1182,155 @@ let () =
   p claim_bf16_default_matmul
     ((not (Array.is_empty got_auto))
     && Bool.equal (Array.for_all2_exn got_auto want ~f:Float.equal) auto_widens_bf16)
+
+(* === Privatize tiles reside at the backend's accumulator precision (gh-ocannl-1116) === *)
+(* The autotuner seeds [Privatize] in its scalar matmul sketches (the CPU packing pipeline, the GPU
+   register blocktiling), and before gh-ocannl-1116 the privatized tile was minted at the
+   destination's STORAGE precision: every step of the reduction through it narrowed, while the
+   serial rendering above widens — so a tuned schedule silently changed the reduction's width. The
+   tile's cell varies with loops nested inside the reduction (the packing pipeline's [k_o, k_i, i_i,
+   j_i] order, the blocktiling's materialized-unrolled tile), so codegen cannot localize the tile's
+   accumulation into a wide scope of its own: the tile's precision IS the width.
+
+   Universal legs, executed on every backend: the first unfused scalar seed the tuner enumerates for
+   the site, built with the backend's accumulator resolution, must equal the serial rendering of
+   the same policy bitwise — under [Bf16_auto] (whatever it resolves to here) and under the wide
+   policies, where it must also equal the once-narrowed wide reference. The negative control
+   rebuilds the same seed with a storage-precision tile — the pre-fix minting, still admissible as
+   an explicit schedule — and must DIVERGE from the wide reference: it is what proves these inputs
+   and this pipeline discriminate per-step narrowing, rather than parity holding because nothing
+   could tell the widths apart. *)
+let claim_priv_seeded =
+  "the seeded scalar matmul sketch mints its Privatize tile at the backend's accumulator residency"
+
+let claim_priv_auto =
+  "the seeded privatized bf16 sketch equals the serial rendering under Bf16_auto"
+
+let claim_priv_wide =
+  "under Bf16_wide the seeded privatized bf16 sketch equals the once-narrowed wide-accumulation \
+   reference"
+
+let claim_priv_narrow =
+  "a storage-precision Privatize tile narrows per step: under Bf16_wide the same seed diverges \
+   from the wide reference"
+
+let claim_priv_f16 =
+  "under Fp16_wide the seeded privatized f16 sketch equals the once-narrowed wide-accumulation \
+   reference"
+
+let claim_priv_f16_narrow =
+  "a storage-precision Privatize tile narrows per step: under Fp16_wide the same f16 seed diverges \
+   from the wide reference"
+
+let hardware_limits = lazy (Context.hardware_limits (Context.auto ()))
+
+(* The first unfused scalar (non-tensorized) seed of the site — the pipelines that carry a
+   [Privatize] — as the tuner would instantiate it. [~storage_tile] swaps its [Privatize] for the
+   pre-gh-ocannl-1116 minting. [seeded] collects the precisions the built schedule's [Privatize]s
+   carry, read before the swap. *)
+let privatized_seed ~storage_tile ~seeded (opt : LL.optimized) : Sched.schedule =
+  let p =
+    List.find_exn
+      (Autotune.sketch_seed_params
+         ~is_gpu:(Sched.backend_is_gpu backend_name)
+         ~is_cpu:on_cpu ~limits:(Lazy.force hardware_limits) opt)
+      ~f:(fun p -> (not p.Autotune.sk_mma) && (not p.sk_conv) && not p.sk_epilogue)
+  in
+  Stdio.eprintf
+    "accum_width: privatized seed on %s: %s pipeline, bm=%d bn=%d bk=%d (not part of the golden)\n\
+     %!"
+    backend_name
+    (if p.sk_gpu then "GPU blocktiling" else "CPU packing")
+    p.sk_bm p.sk_bn p.sk_bk;
+  let sched =
+    Autotune.sketch_schedule ~accum_prec:codegen_capabilities.Ir.Backend_intf.accum_prec ~p opt
+  in
+  List.map sched ~f:(function
+    | Sched.Privatize { target; over; acc_prec } ->
+        seeded := (Lazy.force target.Tn.storage_prec, acc_prec) :: !seeded;
+        Sched.Privatize
+          {
+            target;
+            over;
+            acc_prec = (if storage_tile then Lazy.force target.Tn.storage_prec else acc_prec);
+          }
+    | op -> op)
+
+(* One matmul instance per run (the routine name keys its build artifacts), over the given operand
+   cycles; [schedule] as in {!run}. *)
+let precision_matmul ~prec ~size ~fa ~fb ~name ?schedule () =
+  let ma = NTDSL.init ~l:(name ^ "_a") ~prec ~i:[ size ] ~o:[ size ] ~f:fa () in
+  let mb = NTDSL.init ~l:(name ^ "_b") ~prec ~i:[ size ] ~o:[ size ] ~f:fb () in
+  let%op mc = ma * mb in
+  Tn.update_prec mc.Tensor.value prec;
+  run ~name ?schedule mc
+
+(* The whole-k f64 dot products, exact reproductions of the kernels' f32 chains for these cycles,
+   narrowed once per cell by minting a [prec] tensor from them. *)
+let wide_reference ~prec ~size ~fa ~fb ~name =
+  let sums =
+    Array.init (size * size) ~f:(fun t ->
+        let i = t / size and j = t % size in
+        let acc = ref 0.0 in
+        for k = 0 to size - 1 do
+          acc := !acc +. (fa [| i; k |] *. fb [| k; j |])
+        done;
+        !acc)
+  in
+  run ~name
+    (NTDSL.init ~l:name ~prec ~i:[ size ] ~o:[ size ]
+       ~f:(fun idcs -> sums.((idcs.(0) * size) + idcs.(1)))
+       ())
+
+let () =
+  let seeded = ref [] in
+  let privatized ~prec ~size ~fa ~fb ~name ~storage_tile =
+    precision_matmul ~prec ~size ~fa ~fb ~name ~schedule:(privatized_seed ~storage_tile ~seeded) ()
+  in
+  let bf16 = Ir.Ops.bfloat16 and f16 = Ir.Ops.half in
+  let saved_policy = Numerics.get () in
+  Numerics.set_policy { saved_policy with bf16_arithmetic = Numerics.Bf16_auto };
+  let serial_auto = precision_matmul ~prec:bf16 ~size:n ~fa ~fb ~name:"aw_priv_serial_auto" () in
+  let priv_auto = privatized ~prec:bf16 ~size:n ~fa ~fb ~name:"aw_priv_auto" ~storage_tile:false in
+  let auto_resolution = codegen_capabilities.Ir.Backend_intf.accum_prec bf16 in
+  Numerics.set_policy { saved_policy with bf16_arithmetic = Numerics.Bf16_wide };
+  let want = wide_reference ~prec:bf16 ~size:n ~fa ~fb ~name:"aw_priv_ref" in
+  let priv_wide = privatized ~prec:bf16 ~size:n ~fa ~fb ~name:"aw_priv_wide" ~storage_tile:false in
+  let wide_resolution = codegen_capabilities.Ir.Backend_intf.accum_prec bf16 in
+  let priv_narrow =
+    privatized ~prec:bf16 ~size:n ~fa ~fb ~name:"aw_priv_narrow" ~storage_tile:true
+  in
+  Numerics.set_policy { saved_policy with fp16_arithmetic = Numerics.Fp16_wide };
+  let want16 = wide_reference ~prec:f16 ~size:n16 ~fa:fa16 ~fb:fb16 ~name:"aw_priv16_ref" in
+  let priv16 =
+    privatized ~prec:f16 ~size:n16 ~fa:fa16 ~fb:fb16 ~name:"aw_priv16_wide" ~storage_tile:false
+  in
+  let f16_resolution = codegen_capabilities.Ir.Backend_intf.accum_prec f16 in
+  let priv16_narrow =
+    privatized ~prec:f16 ~size:n16 ~fa:fa16 ~fb:fb16 ~name:"aw_priv16_narrow" ~storage_tile:true
+  in
+  Numerics.set_policy saved_policy;
+  (* Every build of the five privatized runs carried a Privatize, each at the resolution of the
+     policy it was built under (read before the storage-tile swap): in build order, auto, wide,
+     wide, f16-wide, f16-wide. *)
+  let expected =
+    [
+      (bf16, auto_resolution);
+      (bf16, wide_resolution);
+      (bf16, wide_resolution);
+      (f16, f16_resolution);
+      (f16, f16_resolution);
+    ]
+  in
+  p claim_priv_seeded
+    (List.equal
+       (fun (s, a) (s', a') -> Ir.Ops.equal_prec s s' && Ir.Ops.equal_prec a a')
+       (List.rev !seeded) expected);
+  p_all2 claim_priv_auto priv_auto serial_auto ~f:Float.equal;
+  p_all2 claim_priv_wide priv_wide want ~f:Float.equal;
+  p claim_priv_narrow
+    ((not (Array.is_empty priv_narrow)) && not (Array.for_all2_exn priv_narrow want ~f:Float.equal));
+  p_all2 claim_priv_f16 priv16 want16 ~f:Float.equal;
+  p claim_priv_f16_narrow
+    ((not (Array.is_empty priv16_narrow))
+    && not (Array.for_all2_exn priv16_narrow want16 ~f:Float.equal))

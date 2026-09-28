@@ -245,7 +245,7 @@ type optop =
           numerics-preserving; a narrowing tile would change values and is rejected. Composes with
           [hoisted] (the host-side pack converts) and with the in-kernel copy nest; the edge-guard
           zero fill is at the tile's precision either way. *)
-  | Privatize of { target : Tn.t; over : Indexing.symbol }
+  | Privatize of { target : Tn.t; over : Indexing.symbol; acc_prec : Ops.prec }
       (** Accumulator privatization: contract the read-modify-write accumulation of the materialized
           [target] across the (Serial) [over] loop's whole subtree into a per-thread [Local]
           accumulator tile — initialized from [target] before the loop, accumulated in place, stored
@@ -270,7 +270,16 @@ type optop =
           an accumulator that never received the update. A [Zero_out] of [target] elsewhere is left
           in place — the init-load observes it, so semantics are preserved without a surjectivity
           analysis. Compose as: [Split]s → [Stage]s → [Privatize] → materializing [Unroll]s (the
-          unrolls then turn the tile accesses into constant-indexed, register-allocatable form). *)
+          unrolls then turn the tile accesses into constant-indexed, register-allocatable form).
+
+          The tile is minted at [acc_prec], which must be [target]'s storage precision or an exact
+          widening of it (a narrow float to [single]/[double]), else the op is rejected. It is the
+          accumulator residency: construct the op with {!privatize}, which resolves it from the
+          rendering backend's [codegen_capabilities.accum_prec], so the privatized reduction widens
+          and narrows exactly where the serial rendering's scope local does (gh-ocannl-1116). Any
+          other admissible value is an explicit numerics choice of the schedule, e.g. the storage
+          precision reproduces per-step narrowing. Part of the schedule's identity (the cache saves
+          it). *)
   | Expand_zero of { tn : Tn.t; indices : Indexing.symbol list }
       (** Expand the unique [Zero_out tn] statement into an ordinary loop nest over the supplied
           symbols (one per axis of [tn]'s padded dims; see {!expand_zero}). Whole-node [Zero_out] of
@@ -435,6 +444,13 @@ val partition_breakpoints : axis:Indexing.symbol -> Low_level.t -> int list
 val expand_zero : tn:Tn.t -> optop * Indexing.symbol list
 (** Builds an {!constructor-Expand_zero} with one fresh symbol per axis of [tn] (forcing [tn]'s
     dims) and returns the symbols for subsequent [Split]/[Retype] ops. *)
+
+val privatize : accum_prec:(Ops.prec -> Ops.prec) -> target:Tn.t -> over:Indexing.symbol -> optop
+(** Builds a {!constructor-Privatize} whose tile resides at [accum_prec] of [target]'s storage
+    precision (forcing it). Pass the rendering backend's resolution,
+    [(Context.codegen_capabilities ctx).accum_prec] — the same function its code generation widens
+    the serial rendering's accumulator by — so the privatized reduction's width is the policy's, not
+    the schedule's (gh-ocannl-1116). *)
 
 val split_reduce :
   axis:Indexing.symbol ->

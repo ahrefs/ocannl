@@ -38,6 +38,11 @@ module LL = Ir.Low_level
 module Sched = Ir.Schedule
 module Asgns = Ir.Assignments
 
+(* The backend's accumulator residency, which a [Privatize] tile is minted at (gh-ocannl-1116). *)
+let accum_prec =
+  let caps = lazy (Context.codegen_capabilities (Context.auto ())) in
+  fun p -> (Lazy.force caps).Ir.Backend_intf.accum_prec p
+
 let () = Utils.settings.output_debug_files_in_build_directory <- true
 
 open Verdict.Claims
@@ -397,7 +402,9 @@ let () =
     let run_seed i p_ =
       let tag = Printf.sprintf "cvs2_%d" i in
       let _, _, y = make_conv_s2v tag in
-      let transform (opt : LL.optimized) = Sched.apply (Autotune.sketch_schedule ~p:p_ opt) opt in
+      let transform (opt : LL.optimized) =
+        Sched.apply (Autotune.sketch_schedule ~accum_prec ~p:p_ opt) opt
+      in
       let ctx = Context.auto () in
       let ctx, routine =
         Context.compile
@@ -835,7 +842,7 @@ let () =
       let _, _, y = make_conv_s2_r12 tag in
       let got =
         run_fiss_sched tag y ~conv_sched:(fun site seg ->
-            if site.Autotune.c_zeroed then [] else Autotune.sketch_schedule ~p:p_ seg)
+            if site.Autotune.c_zeroed then [] else Autotune.sketch_schedule ~accum_prec ~p:p_ seg)
       in
       (not (Array.is_empty got))
       && Array.for_all2_exn got want12 ~f:(fun a b -> Float.(abs (a - b) < 1e-3))

@@ -23,6 +23,11 @@ module LL = Ir.Low_level
 module Sched = Ir.Schedule
 module Asgns = Ir.Assignments
 
+(* The backend's accumulator residency, which a [Privatize] tile is minted at (gh-ocannl-1116). *)
+let accum_prec =
+  let caps = lazy (Context.codegen_capabilities (Context.auto ())) in
+  fun p -> (Lazy.force caps).Ir.Backend_intf.accum_prec p
+
 let () = Utils.settings.output_debug_files_in_build_directory <- true
 
 (* Progress markers on stderr: the test's stdout is captured into [.exe.output], but stderr reaches
@@ -151,7 +156,7 @@ let () =
             zop;
             Sched.Retype { axis = List.hd_exn zsyms; ty = LL.Grid };
             Sched.Retype { axis = i; ty = LL.Grid };
-            Sched.Privatize { target = mc1.Tensor.value; over = red };
+            Sched.privatize ~accum_prec ~target:mc1.Tensor.value ~over:red;
           ]
           opt)
       mc1

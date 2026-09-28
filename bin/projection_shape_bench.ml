@@ -98,6 +98,11 @@ module Sched = Ir.Schedule
 module Asgns = Ir.Assignments
 module Outcome = Ir.Schedule_outcome
 
+(* The backend's accumulator residency, which a [Privatize] tile is minted at (gh-ocannl-1116). *)
+let accum_prec =
+  let caps = lazy (Context.codegen_capabilities (Context.auto ())) in
+  fun p -> (Lazy.force caps).Ir.Backend_intf.accum_prec p
+
 (* Flushed per line ([Bench_out]): a long remote run should be readable while it is still going. *)
 let p fmt = Bench_out.p fmt
 
@@ -712,7 +717,7 @@ let () =
                   arm pr ~label:(geom_label q) ~compile:(fun ~record ~name ~fatal_seen fwd ->
                       compiled ~fatal_seen
                         ~lowered_transform:(fun o ->
-                          [ record (Sched.apply (Autotune.sketch_schedule ~p:q o) o) ])
+                          [ record (Sched.apply (Autotune.sketch_schedule ~accum_prec ~p:q o) o) ])
                         ~name (Context.auto ()) fwd)))
         in
         run_round ~label:g lives)

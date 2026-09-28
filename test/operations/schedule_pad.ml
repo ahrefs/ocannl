@@ -32,6 +32,11 @@ module LL = Ir.Low_level
 module Sched = Ir.Schedule
 module Asgns = Ir.Assignments
 
+(* The backend's accumulator residency, which a [Privatize] tile is minted at (gh-ocannl-1116). *)
+let accum_prec =
+  let caps = lazy (Context.codegen_capabilities (Context.auto ())) in
+  fun p -> (Lazy.force caps).Ir.Backend_intf.accum_prec p
+
 let () = Utils.settings.output_debug_files_in_build_directory <- true
 
 open Verdict.Claims
@@ -303,7 +308,7 @@ let () =
     in
     seeded := Some (staged_gpu, unstaged_gpu, packed_cpu);
     match packed_cpu with
-    | Some p when on_cpu -> Sched.apply (Autotune.sketch_schedule ~p opt) opt
+    | Some p when on_cpu -> Sched.apply (Autotune.sketch_schedule ~accum_prec ~p opt) opt
     | _ -> opt
   in
   let ctx, routine =

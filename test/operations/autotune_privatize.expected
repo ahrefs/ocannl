@@ -1,2 +1,5 @@
 extension appends exactly one Privatize targeting the accumulator: true
 privatized preset matches the identity twin: true
+the extension mints the bf16 accumulator's Privatize tile at the backend's accumulator residency: true
+a saved Privatize replays with the precision it was minted at: true
+a saved Privatize without its accumulator precision (a pre-gh-ocannl-1116 entry) does not decode: true

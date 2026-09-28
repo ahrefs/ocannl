@@ -21,6 +21,11 @@ module LL = Ir.Low_level
 module Sched = Ir.Schedule
 module Asgns = Ir.Assignments
 
+(* The backend's accumulator residency, which a [Privatize] tile is minted at (gh-ocannl-1116). *)
+let accum_prec =
+  let caps = lazy (Context.codegen_capabilities (Context.auto ())) in
+  fun p -> (Lazy.force caps).Ir.Backend_intf.accum_prec p
+
 let () = Utils.settings.output_debug_files_in_build_directory <- true
 
 open Verdict.Claims
@@ -271,7 +276,9 @@ let () =
           (Ir.Ops.Cmpeq, (LL.Embed_index (Ir.Indexing.Iterator w), iprec), (LL.Constant 0., iprec)))
   in
   let lane_res =
-    Sched.apply [ Sched.Privatize { target = cacc.Tensor.value; over = lane_k } ] (fake lane_llc)
+    Sched.apply
+      [ Sched.privatize ~accum_prec ~target:cacc.Tensor.value ~over:lane_k ]
+      (fake lane_llc)
   in
   let lane_src = doc_to_str (LL.to_doc () lane_res.LL.llc) in
   let count_sub sub =
@@ -285,7 +292,9 @@ let () =
           (Ir.Ops.Cmplt, (LL.Embed_index (Ir.Indexing.Iterator k), iprec), (LL.Constant 3., iprec)))
   in
   let iter_res =
-    Sched.apply [ Sched.Privatize { target = cacc.Tensor.value; over = iter_k } ] (fake iter_llc)
+    Sched.apply
+      [ Sched.privatize ~accum_prec ~target:cacc.Tensor.value ~over:iter_k ]
+      (fake iter_llc)
   in
   let iter_src = doc_to_str (LL.to_doc () iter_res.LL.llc) in
   (* The mask fires within one thread's own accumulation: it stays on the update (one [if]) and the
@@ -314,7 +323,7 @@ let () =
        try
          ignore
            (Sched.apply
-              [ Sched.Privatize { target = cacc.Tensor.value; over = mixed_k } ]
+              [ Sched.privatize ~accum_prec ~target:cacc.Tensor.value ~over:mixed_k ]
               (fake mixed_llc)
              : LL.optimized);
          None

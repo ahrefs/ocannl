@@ -24,6 +24,11 @@ module LL = Ir.Low_level
 module Sched = Ir.Schedule
 module Asgns = Ir.Assignments
 
+(* The backend's accumulator residency, which a [Privatize] tile is minted at (gh-ocannl-1116). *)
+let accum_prec =
+  let caps = lazy (Context.codegen_capabilities (Context.auto ())) in
+  fun p -> (Lazy.force caps).Ir.Backend_intf.accum_prec p
+
 let () = Utils.settings.output_debug_files_in_build_directory <- true
 
 open Verdict.Claims
@@ -106,7 +111,7 @@ let tiled_schedule ?(reorder = true) ~ma ~mb ~mc ~hoist_a ~hoist_b (opt : LL.opt
   [ sp_i; sp_j; sp_k ]
   @ (if reorder then sink i_i [ j_o; j_i; k_o; k_i ] @ sink j_i [ k_o; k_i; i_i ] else [])
   @ stages
-  @ if reorder then [ Sched.Privatize { target = mc; over = k_o } ] else []
+  @ if reorder then [ Sched.privatize ~accum_prec ~target:mc ~over:k_o ] else []
 
 let make_pair n =
   let mav =

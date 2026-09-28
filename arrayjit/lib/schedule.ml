@@ -41,7 +41,7 @@ type optop =
       pipeline_depth : int;
       tile_prec : Ops.prec option;
     }
-  | Privatize of { target : Tn.t; over : Indexing.symbol }
+  | Privatize of { target : Tn.t; over : Indexing.symbol; acc_prec : Ops.prec }
   | Expand_zero of { tn : Tn.t; indices : Indexing.symbol list }
   | Tensorize of {
       i : Indexing.symbol;
@@ -84,6 +84,9 @@ let expand_zero ~tn =
   let rank = Array.length (Lazy.force tn.Tn.dims) in
   let indices = List.init rank ~f:(fun _ -> Indexing.get_symbol ()) in
   (Expand_zero { tn; indices }, indices)
+
+let privatize ~accum_prec ~target ~over =
+  Privatize { target; over; acc_prec = accum_prec (Lazy.force target.Tn.storage_prec) }
 
 let split_reduce ~axis ~target ~num_blocks =
   let block_index = Indexing.get_symbol () and inner_index = Indexing.get_symbol () in
@@ -1310,6 +1313,19 @@ let written_nodes (llc : Low_level.t) : Set.M(Tn).t =
   code llc;
   !acc
 
+(* The precision a schedule-minted scratch tile of [tn] may take: [tn]'s storage precision or an
+   exact widening of it (a narrow float to f32/f64). [Stage.tile_prec] and [Privatize.acc_prec]
+   share it: a narrowing tile would change values the schedule is not licensed to change. *)
+let exact_widening ~what (tn : Tn.t) (p : Ops.prec) : Ops.prec =
+  let storage = Lazy.force tn.Tn.storage_prec in
+  match p with
+  | _ when Ops.equal_prec p storage -> p
+  | (Ops.Single_prec _ | Ops.Double_prec _) when Ops.is_narrow_float storage -> p
+  | _ ->
+      invalid_arg
+        (Printf.sprintf "%s %s is not an exact widening of %s storage for %s" what
+           (Ops.prec_string p) (Ops.prec_string storage) (Tn.debug_name tn))
+
 let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_stride
     ~pipeline_depth ~tile_prec (opt : Low_level.optimized) : Low_level.optimized =
   let open Low_level in
@@ -1321,15 +1337,7 @@ let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_
   let stage_prec =
     match tile_prec with
     | None -> source_prec
-    | Some p when Ops.equal_prec p source_prec -> p
-    | (Some (Ops.Single_prec _ as p) | Some (Ops.Double_prec _ as p))
-      when Ops.is_narrow_float source_prec ->
-        p
-    | Some p ->
-        invalid_arg
-          (Printf.sprintf
-             "Schedule.Stage: tile_prec %s is not an exact widening of %s storage for %s"
-             (Ops.prec_string p) (Ops.prec_string source_prec) (Tn.debug_name source))
+    | Some p -> exact_widening ~what:"Schedule.Stage: tile_prec" source p
   in
   Option.iter cooperative ~f:(fun w ->
       if not shared then invalid_arg "Schedule.Stage: cooperative staging requires shared = true";
@@ -2079,10 +2087,18 @@ let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_
     yields a scalar accumulator (dims [|1|]). Init/store nests iterate fresh serial symbols with
     per-axis edge guards (construct-then-fold, as in [Stage]). Any [Zero_out] of [target] elsewhere
     in the routine is left in place: the init-load observes its effect, so semantics are preserved
-    without a surjectivity analysis (dropping the redundant zeroing is a follow-up). *)
+    without a surjectivity analysis (dropping the redundant zeroing is a follow-up).
 
-let apply_privatize ~target ~over (opt : Low_level.optimized) : Low_level.optimized =
+    Tile precision: [acc_prec], the backend's accumulator residency for [target]'s storage
+    ({!privatize} resolves it), so the tile is the materialized twin of the scope local the serial
+    rendering widens into and narrows once at the store-back (gh-ocannl-1116). Before it the tile
+    was minted at storage precision, and every step of the privatized reduction narrowed where the
+    serial and scope renderings did not — a seeded [Privatize] silently changed a tuned reduction's
+    width. *)
+
+let apply_privatize ~target ~over ~acc_prec (opt : Low_level.optimized) : Low_level.optimized =
   let open Low_level in
+  let acc_prec = exact_widening ~what:"Schedule.Privatize: acc_prec" target acc_prec in
   let iprec = Ops.index_prec () in
   let tgt_dims = Lazy.force target.Tn.dims in
   (* Every loop of the routine by index symbol, with its axis type. Guard classification below needs
@@ -2367,9 +2383,8 @@ let apply_privatize ~target ~over (opt : Low_level.optimized) : Low_level.optimi
       in
       let scalar_acc = Array.is_empty tile_axes in
       let tile_dims = if scalar_acc then [| 1 |] else Array.map tile_axes ~f:snd in
-      let prec = Lazy.force target.Tn.storage_prec in
       let tile =
-        Tn.create ~namespace:tile_namespace (Tn.Specified prec) ~id:(fresh_tile_id ())
+        Tn.create ~namespace:tile_namespace (Tn.Specified acc_prec) ~id:(fresh_tile_id ())
           ~label:("acc" :: target.Tn.label)
           ~unpadded_dims:(lazy tile_dims)
           ~padding:(lazy None)
@@ -3788,7 +3803,7 @@ let apply_opt_op (opt : Low_level.optimized) (op : optop) : Low_level.optimized 
       } ->
       apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_stride
         ~pipeline_depth ~tile_prec opt
-  | Privatize { target; over } -> apply_privatize ~target ~over opt
+  | Privatize { target; over; acc_prec } -> apply_privatize ~target ~over ~acc_prec opt
   | Tensorize _ -> apply_tensorize op opt
   | Fuse_epilogue { target; shared } -> apply_fuse_epilogue ~target ~shared opt
   | Split_reduce { axis; target; num_blocks; block_index; inner_index; combine_indices } -> (

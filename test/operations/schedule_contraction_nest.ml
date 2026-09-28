@@ -47,6 +47,11 @@ module Sspace = Ir.Schedule_space
 module Asgns = Ir.Assignments
 module Tn = Ir.Tnode
 
+(* The backend's accumulator residency, which a [Privatize] tile is minted at (gh-ocannl-1116). *)
+let accum_prec =
+  let caps = lazy (Context.codegen_capabilities (Context.auto ())) in
+  fun p -> (Lazy.force caps).Ir.Backend_intf.accum_prec p
+
 let () = Utils.settings.output_debug_files_in_build_directory <- true
 
 open Verdict.Claims
@@ -125,7 +130,7 @@ let constructs_and_validates ~tag ~what seeds opt =
   let ok = ref true in
   let valid, invalid =
     List.partition_tf seeds ~f:(fun q ->
-        match Sched.apply (Autotune.sketch_schedule ~p:q opt) opt with
+        match Sched.apply (Autotune.sketch_schedule ~accum_prec ~p:q opt) opt with
         | o -> (
             match LL.validate_parallel o.LL.optimize_ctx.LL.placements o.LL.llc with
             | () -> true
@@ -140,7 +145,7 @@ let constructs_and_validates ~tag ~what seeds opt =
   (valid, invalid)
 
 let binds_hardware q opt =
-  let o = Sched.apply (Autotune.sketch_schedule ~p:q opt) opt in
+  let o = Sched.apply (Autotune.sketch_schedule ~accum_prec ~p:q opt) opt in
   let dims = LL.launch_dims o.LL.llc in
   let product = Array.fold ~init:1 ~f:( * ) in
   (product dims.LL.grid, product dims.LL.block)
@@ -156,7 +161,8 @@ let execute_seeds ?(on_routine = fun (_ : Context.routine) -> ()) ~tag ~routine 
       match
         let ctx, r =
           Context.compile
-            ~lowered_transform:(fun o -> [ Sched.apply (Autotune.sketch_schedule ~p:q o) o ])
+            ~lowered_transform:(fun o ->
+              [ Sched.apply (Autotune.sketch_schedule ~accum_prec ~p:q o) o ])
             (Context.auto ()) fwd Ir.Indexing.Empty
         in
         let ctx = Context.run ctx r in
@@ -274,7 +280,8 @@ let leg ~tag ~ko_extents ~nk ?(companion = false) ~build () =
     let q = List.hd_exn gpu_seeds in
     let _ctx, _r =
       Context.compile
-        ~lowered_transform:(fun o -> [ Sched.apply (Autotune.sketch_schedule ~p:q o) o ])
+        ~lowered_transform:(fun o ->
+          [ Sched.apply (Autotune.sketch_schedule ~accum_prec ~p:q o) o ])
         (Context.auto ()) fwd Ir.Indexing.Empty
     in
     Generated.assert_emits ~routine:(tag ^ "_sched") ~contains:shared
@@ -509,7 +516,7 @@ let padded_leg ~tag ~nk ~build () =
     (not (List.is_empty seeds));
   p_all (tag ^ ": every seeded geometry pads rather than gating on the contraction extent") seeds
     ~f:(fun q ->
-      List.exists (Autotune.sketch_schedule ~p:q opt) ~f:(function
+      List.exists (Autotune.sketch_schedule ~accum_prec ~p:q opt) ~f:(function
         | Sched.Pad _ -> true
         | _ -> false));
   let _, invalid = constructs_and_validates ~tag ~what:"padded GPU blocktile" seeds opt in

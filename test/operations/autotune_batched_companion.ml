@@ -22,6 +22,11 @@ module LL = Ir.Low_level
 module Asgns = Ir.Assignments
 open Verdict.Claims
 
+(* The backend's accumulator residency, which a [Privatize] tile is minted at (gh-ocannl-1116). *)
+let accum_prec =
+  let caps = lazy (Context.codegen_capabilities (Context.auto ())) in
+  fun p -> (Lazy.force caps).Ir.Backend_intf.accum_prec p
+
 (* The report's outcome as the questions this test asks of it (gh-ocannl-677): the outcome is a
    variant naming one of five mutually exclusive states, so a claim names the state it means instead
    of combining flags — [not (replayed r)] in particular does NOT say a search ran. *)
@@ -116,7 +121,7 @@ let () =
       backend_name;
   let constructed =
     List.map seeds ~f:(fun sp ->
-        match Autotune.sketch_schedule ~p:sp opt with
+        match Autotune.sketch_schedule ~accum_prec ~p:sp opt with
         | sched -> Either.First sched
         | exception Ir.Schedule_outcome.Cause_at (_, Ir.Schedule_outcome.Unsupported { detail; _ })
           ->
@@ -184,7 +189,9 @@ let () =
       (List.filter (Autotune.sketch_seed_params ~is_gpu:false ~is_cpu:true ~limits opt)
          ~f:(fun sp -> not sp.Autotune.sk_epilogue))
       ~f:(fun sp ->
-        match Autotune.sketch_schedule ~p:sp opt with sched -> Some sched | exception _ -> None)
+        match Autotune.sketch_schedule ~accum_prec ~p:sp opt with
+        | sched -> Some sched
+        | exception _ -> None)
   in
   p_none "bc: the j-blocking detector rejects the CPU pipelines, which block the row axis instead"
     cpu_scheds ~f:(fun s -> blocks_j bounds s);
@@ -202,7 +209,7 @@ let () =
       ||
       let transform opt =
         let sp = List.nth_exn (gpu_seeds opt) idx in
-        Sched.apply (Autotune.sketch_schedule ~p:sp opt) opt
+        Sched.apply (Autotune.sketch_schedule ~accum_prec ~p:sp opt) opt
       in
       match
         let sctx, sroutine =
@@ -283,7 +290,7 @@ let () =
   p "bc: a foreign seed replayed against the companion routine still raises the decline"
     (match seeds with
     | sp :: _ -> (
-        match Autotune.sketch_schedule ~p:sp opt2 with
+        match Autotune.sketch_schedule ~accum_prec ~p:sp opt2 with
         | _ -> false
         | exception Ir.Schedule_outcome.Cause_at (_, Ir.Schedule_outcome.Unsupported { feature; _ })
           ->
@@ -411,7 +418,7 @@ let () =
         let seeds = gpu_seeds seg in
         let built =
           List.filter_map seeds ~f:(fun sp ->
-              match Autotune.sketch_schedule ~p:sp seg with
+              match Autotune.sketch_schedule ~accum_prec ~p:sp seg with
               | sched -> Some (sp, sched)
               | exception exn ->
                   Stdio.eprintf "lm: fine seed FAILED to construct: %s\n" (Exn.to_string exn);
@@ -484,7 +491,7 @@ let () =
           (* The freed GEMM segment is the only one with GPU seeds; every other segment keeps the
              default preset. *)
           match List.nth (gpu_seeds seg) idx with
-          | Some sp -> Autotune.sketch_schedule ~p:sp seg
+          | Some sp -> Autotune.sketch_schedule ~accum_prec ~p:sp seg
           | None -> Sched.default_gpu ~min_parallel:1 ~limits seg
         in
         let zero_sched = Sched.zero_expansion ~limits in

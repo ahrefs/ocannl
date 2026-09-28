@@ -41,3 +41,9 @@ narrow_compute_f32=false brings back the per-k-step narrowing in the k-loop: tru
 under Bf16_wide the bf16 naive matmul equals the once-narrowed wide-accumulation reference: true
 under Bf16_wide + narrow_compute_f32=false the bf16 naive matmul still equals the wide reference: true
 the default-policy bf16 matmul matches the wide reference exactly where the backend widens bf16 and diverges where it keeps storage residency: true
+the seeded scalar matmul sketch mints its Privatize tile at the backend's accumulator residency: true
+the seeded privatized bf16 sketch equals the serial rendering under Bf16_auto: true
+under Bf16_wide the seeded privatized bf16 sketch equals the once-narrowed wide-accumulation reference: true
+a storage-precision Privatize tile narrows per step: under Bf16_wide the same seed diverges from the wide reference: true
+under Fp16_wide the seeded privatized f16 sketch equals the once-narrowed wide-accumulation reference: true
+a storage-precision Privatize tile narrows per step: under Fp16_wide the same f16 seed diverges from the wide reference: true
