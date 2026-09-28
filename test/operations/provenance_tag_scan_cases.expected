@@ -29,6 +29,7 @@ a result constructor no caller hands to a carrier relays nothing: true
 a caller of a same-named function of another module relays nothing: true
 a caller qualifying the declaring module through a binding relays: true
 a caller qualifying through a longer path, whose identity is not established, relays nothing: true
+a guarded caller case relays nothing: true
 an unqualified caller of a name the source also binds locally relays nothing: true
 a payload wrapped in a result that the handler discards relays nothing: true
 a caller qualifying the declaring module directly relays: true

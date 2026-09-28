@@ -274,6 +274,7 @@ let () =
        "Other." ^ nv ^ " i -> record (Site i)";
        nv ^ " i -> let* i = next in record (Site i)";
        nv ^ " i -> let open Key_scan in record (Site i)";
+       nv ^ " i when false -> record (Site i) | " ^ nv ^ " _ -> ()";
      ]
      ~f:(fun handler -> List.is_empty (resolve [ read (scope handler) ]));
    p_exists "the same handler shape relays when the carrier does receive the payload"
@@ -305,6 +306,11 @@ let () =
      "a caller qualifying through a longer path, whose identity is not established, relays nothing"
      (with_caller
         (String.substr_replace_all qualified ~pattern:"F.consume" ~with_:"Other.Fixture.consume"))
+     ~f:is_consume;
+   p_none "a guarded caller case relays nothing"
+     (with_caller
+        "let c y = match Fixture.consume y with Ok () -> () | Error i when false -> record (Site \
+         i) | Error _ -> ()")
      ~f:is_consume;
    p_none "an unqualified caller of a name the source also binds locally relays nothing"
      (resolve
@@ -502,6 +508,9 @@ let () =
        "let a = Site \"13:fixture-owned\"\nopen Key_scan\nlet b = Site \"12:fixture-key\"";
        "let b = Key_scan.(Site \"12:fixture-key\")\nlet a = Site \"13:fixture-owned\"";
        "let b = let open Key_scan in Site \"12:fixture-key\"\nlet a = Site \"13:fixture-owned\"";
+       "module Local = struct include Key_scan end\n\
+        let b = Local.Site \"12:fixture-key\"\n\
+        let a = Site \"13:fixture-owned\"";
      ] ~f:(fun text ->
        strings
          (tags (read ~source:"test/f.ml" ~foreign:[ "Key_scan" ] text).mints)

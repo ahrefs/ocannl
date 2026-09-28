@@ -32,9 +32,9 @@
       qualified by that module -- directly or through module bindings, resolved where they are in
       scope -- unqualified inside it, or unqualified where an [open] or [include] of it is in scope,
       it mints nothing; the same goes for a module the source itself declares with such a
-      constructor. Those modules are derived from their declarations; the owner's constructor is
-      assumed everywhere else, since opens and aliases reach it in ways a reader of one file cannot
-      follow.
+      constructor, or includes a module that does. Those modules are derived from their
+      declarations; the owner's constructor is assumed everywhere else, since opens and aliases
+      reach it in ways a reader of one file cannot follow.
     - A constructor carrying provenances only ([Refined]) composes and mints nothing; its case of
       the renderer must return a concatenation of string literals and recursive calls rendering each
       of its arguments exactly once, in order, or a printed provenance could drop or reorder a
@@ -54,12 +54,13 @@
       unqualified in its own source where nothing else binds the name -- matches that constructor
       into a carrier ([match instantiate_computations ... with Error i -> ... (Site i)]). A handler
       or caller body that rebinds the payload's name anywhere, or changes module scope ([let open],
-      [let module]), is not read. A scope reaching no carrier mints nothing. That covers the literal
-      at a [raise], the one handed to a helper that raises it, and the one a handler records
-      directly; a string the exception itself is applied to that is no tag is refused. The function
-      such a tag is minted in is the innermost value binding enclosing the exception's declaration
-      -- a declaration anew inside the scope opens its own -- which is what decides its PHASE, so a
-      relayed tag minted in two functions is refused. A tag computed at run time is not read.
+      [let module]), is not read, nor is a guarded case. A scope reaching no carrier mints nothing.
+      That covers the literal at a [raise], the one handed to a helper that raises it, and the one a
+      handler records directly; a string the exception itself is applied to that is no tag is
+      refused. The function such a tag is minted in is the innermost value binding enclosing the
+      exception's declaration -- a declaration anew inside the scope opens its own -- which is what
+      decides its PHASE, so a relayed tag minted in two functions is refused. A tag computed at run
+      time is not read.
 
     The minter of a tag of the other families is the innermost value binding around the literal.
 
@@ -409,24 +410,38 @@ let read_source ~carriers ?(foreign = []) ~source content =
   let declares_carrier items =
     List.exists (own_string_constructors items) ~f:(List.mem carriers ~equal:String.equal)
   in
+  let is_foreign m =
+    List.mem foreign m ~equal:String.equal || List.mem !local_foreign m ~equal:String.equal
+  in
+  let rec peel_module (me : module_expr) =
+    match me.pmod_desc with Pmod_constraint (me, _) -> peel_module me | _ -> me
+  in
+  (* Whether the module [me] exports a foreign carrier constructor: it is a foreign module (or an
+     alias of one in scope), or a structure declaring one or including a module that does. *)
+  let rec foreign_module (me : module_expr) =
+    match (peel_module me).pmod_desc with
+    | Pmod_ident { txt; _ } ->
+        Option.value_map (last_name txt) ~default:false ~f:(fun m -> is_foreign (resolve m))
+    | Pmod_structure items ->
+        declares_carrier items
+        || List.exists items ~f:(fun item ->
+            match item.pstr_desc with
+            | Pstr_include { pincl_mod; _ } -> foreign_module pincl_mod
+            | _ -> false)
+    | _ -> false
+  in
   let bind name (me : module_expr) =
     Option.iter name ~f:(fun name ->
-        let rec peel (me : module_expr) =
-          match me.pmod_desc with Pmod_constraint (me, _) -> peel me | _ -> me
-        in
         let target =
-          match (peel me).pmod_desc with
+          match (peel_module me).pmod_desc with
           | Pmod_ident { txt; _ } -> Option.value_map (last_name txt) ~default:name ~f:resolve
-          | Pmod_structure items when declares_carrier items ->
+          | Pmod_structure _ when foreign_module me ->
               let target = source ^ ":" ^ name in
               local_foreign := target :: !local_foreign;
               target
           | _ -> name
         in
         env := (name, target) :: !env)
-  in
-  let is_foreign m =
-    List.mem foreign m ~equal:String.equal || List.mem !local_foreign m ~equal:String.equal
   in
   (* Whether an unqualified carrier name here is some other constructor: in [foreign]'s own source,
      or inside a nested structure declaring one of its own. *)
@@ -544,16 +559,7 @@ let read_source ~carriers ?(foreign = []) ~source content =
       && Option.equal Int.equal (Hashtbl.find bound f) (Some 1)
   in
   (* Whether an [open] or [include] of [me] brings a foreign carrier constructor into scope. *)
-  let opens_foreign (me : module_expr) =
-    let rec peel (me : module_expr) =
-      match me.pmod_desc with Pmod_constraint (me, _) -> peel me | _ -> me
-    in
-    match (peel me).pmod_desc with
-    | Pmod_ident { txt; _ } ->
-        Option.value_map (last_name txt) ~default:false ~f:(fun m -> is_foreign (resolve m))
-    | Pmod_structure items -> declares_carrier items
-    | _ -> false
-  in
+  let opens_foreign = foreign_module in
   let walker =
     object (self)
       inherit Ast_traverse.iter as super
@@ -598,7 +604,10 @@ let read_source ~carriers ?(foreign = []) ~source content =
       method! case c =
         (* A handler of an open scope's exception -- spelled unqualified, as a local exception is;
            [M.Non_virtual] is another constructor -- and what it does with the payload. *)
-        List.iter (caught c.pc_lhs) ~f:(fun (e, v) ->
+        (* A guarded case is not read: whether its body runs is not a syntactic fact. *)
+        List.iter
+          (if Option.is_some c.pc_guard then [] else caught c.pc_lhs)
+          ~f:(fun (e, v) ->
             match e with
             | Lident e -> (
                 match List.find scopes ~f:(fun sc -> String.equal !sc.exn e) with
@@ -657,7 +666,9 @@ let read_source ~carriers ?(foreign = []) ~source content =
             in
             Option.iter callee ~f:(fun (m, f) ->
                 List.iter cases ~f:(fun (c : case) ->
-                    List.iter (caught c.pc_lhs) ~f:(fun (k, v) ->
+                    List.iter
+                      (if Option.is_some c.pc_guard then [] else caught c.pc_lhs)
+                      ~f:(fun (k, v) ->
                         Option.iter (last_name k) ~f:(fun k ->
                             List.iter
                               (fst (wrappers_of_var v c.pc_rhs))
