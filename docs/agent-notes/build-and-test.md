@@ -543,8 +543,14 @@ A renamed heading breaks every pointer to it, which `agent_notes_structure` repo
   point, an unused parser over opaque fields is a runtime trap, and narrowing `sexp` to `sexp_of`
   is a real cleanup. Module aliases are
   followed conservatively; an unqualified identifier in the lexical scope of `open M` counts even
-  when shadowing could make it local, and `include M` counts every value because it re-exports the
-  interface. Those choices admit false positives rather than refusing valid code. Values created
+  when shadowing could make it local. An `include M` is NOT a use (gh-ocannl-1085): crediting every
+  value of `M` there hid `Datatypes.mutable_list` behind `utils.ml`'s `include Datatypes` for years.
+  The including module — a file, or the `module N = struct … end` around a nested include — becomes
+  a further receiver of `M`'s values instead, transitively and through local aliases, so
+  `Utils.insert` counts for `Datatypes.insert` and so does a bare `insert` under `open Utils` or below
+  the include. Includes of a functor application or inside a functor body are not followed, so a use
+  through one reads dead — the loud direction; the other choices admit false positives rather than
+  refusing valid code. Values created
   by other PPX expansions or brought into the defining module by `include` are outside this first
   cut. Every current zero-reference export is an exact stale-checked exemption: adding an `.mli`,
   removing the value, or giving it a detected caller requires deleting its exemption.
