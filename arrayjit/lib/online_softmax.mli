@@ -6,8 +6,8 @@
     over the key axis with two elementwise nests between them, then a reduction over the key axis
     against [v]. Two of its intermediates are [seq^2]-shaped and get materialized: the scores are
     read by both reductions, and the probabilities are read once per value-width iteration of the
-    final reduction. This pass rewrites three shapes, all gated by the config key [online_softmax]
-    (default off, on in the [approximate] profile), the third by a second key as well:
+    final reduction. This pass rewrites four shapes, all gated by the config key [online_softmax]
+    (default off, on in the [approximate] profile), the third and the fourth by a second key each:
 
     - The (max, sum-of-exp-shifted-by-max) reduction pair over one axis becomes ONE
       {!Ir.Low_level.t.Scan_loop} per row carrying the running max and the rescaled running sum --
@@ -44,19 +44,40 @@
       span, a dead or partial loop, mixed precisions along either chain, or an elementwise step
       between [e / l] and the value pass (active dropout).
 
-    What stays as it was: the score reduction [q * k^T] keeps its own placement decision -- the
-    recompute cap [virtualize_max_inline_reduction] decides whether it is replayed at its two read
-    sites (the scan and the hoisted read) or stored once. Recomputing is flash attention's memory
-    trade (no [seq, seq] buffer at all); storing was faster at every cell measured on cc and Metal
-    (benchmarks/report-gh483-online-softmax.md, seq 128 to 1024), and a training step's backward
-    reads the scores again through cross-routine splicing.
+    - With a positive block size [B] in [online_softmax_block] (gh-ocannl-1003), the first two
+      shapes give way, per attention, to ONE pass: per query row, a scan over the key blocks of [B]
+      carrying the row's running max and sum, whose body computes the block's scores into a minted
+      tile (the score contraction and its elementwise chain -- scale, mask), the new max, the
+      rescale factor, the exponentials in place, the rescaled sum, and the row's output numerator in
+      a second tile, rescaled and accumulating [p * v] -- FlashAttention-2's block recurrence; the
+      last key block writes the output [O = U / l]. The tiles are carried through memory by the scan
+      body, sound because a write in a scan body is never a virtualization candidate and schedule
+      transforms do not enter a scan body. The scores are read once, so no [seq, seq] buffer is left
+      at any recompute cap. The value contraction is reassociated too ([(sum p * v) / l] for
+      [sum (p / l) * v]), within the same numerics gate. A key count not a multiple of [B] leaves a
+      guarded tail, padded with [-inf] scores. The final [(m, l)] land in their nodes when a later
+      statement reads them, and the elementwise definitions reading them move behind the fold, so
+      the composed or fused backward reads what it reads after the two-pass form. It declines -- the
+      two-pass form applies -- on a value pass that does not read [e / l] directly (active dropout),
+      a reader of the row state it cannot move, scores that are not a contraction of two reads, or
+      anything else the two-pass contract refuses. This is the scalar form: no [Tile_mma] is
+      emitted.
+
+    What stays as it was in the two-pass form: the score reduction [q * k^T] keeps its own placement
+    decision -- the recompute cap [virtualize_max_inline_reduction] decides whether it is replayed
+    at its two read sites (the scan and the hoisted read) or stored once. Recomputing is flash
+    attention's memory trade (no [seq, seq] buffer at all); storing was faster at every cell
+    measured on cc and Metal (benchmarks/report-gh483-online-softmax.md, seq 128 to 1024), and a
+    training step's backward reads the scores again through cross-routine splicing. (The block fold
+    computes its scores into the tile from [q] and [k] and reads nothing else of the score chain,
+    which it removes where nothing else reads it.)
 
     The pass runs at lowering, ahead of the analyses ({!Rewrites.apply}, from [Assignments.lower],
     over the raw lowered code), so the traced store and the placements see the rewritten routine and
     no analysis digest needs the knob: the code itself carries the decision ([Code_borne]). It is
     idempotent, as the tier's fixpoint requires: its output has no max-reduction nest left to match
-    -- so no normalizer to anchor a backward on either -- and a hoisted reduction is no longer a
-    single nest. *)
+    -- so no normalizer to anchor a backward or a fold on either -- and a hoisted reduction is no
+    longer a single nest. *)
 
 val enabled : unit -> bool
 (** Whether the rewrite applies: the programmatic override if one is set, else the config key
@@ -73,6 +94,14 @@ val backward_enabled : unit -> bool
 val set_backward_enabled : bool option -> unit
 (** Programmatic override of [online_softmax_backward], like {!set_enabled}. *)
 
+val block : unit -> int
+(** The block size of the single-pass fold (gh-ocannl-1003): the programmatic override if one is
+    set, else the config key [online_softmax_block]; [0] (the default) keeps the two-pass form. Read
+    only where the rewrite applies. *)
+
+val set_block : int option -> unit
+(** Programmatic override of [online_softmax_block], like {!set_enabled}. *)
+
 val reset : unit -> unit
 (** Drops the memoized scope-local nodes (the tier's session-reset hook; also run ahead of an
     accessibility snapshot). Sibling lowerings of one program mint the same nodes, which is what
@@ -82,4 +111,7 @@ val rewrite : Low_level.t -> Low_level.t
 (** The pass over raw lowered code (no gate: the tier consults {!enabled}). Every normalizer pattern
     in the routine is rewritten; a routine without one is returned as is. The minted scope-local
     nodes carry memory-mode provenance ["483:online-softmax-state"], the fused backward's per-row
-    [D] (a stored node: [Never_virtual]) ["1002:fused-backward-row-dot"]. *)
+    [D] (a stored node: [Never_virtual]) ["1002:fused-backward-row-dot"]; the block fold's tiles
+    (labelled [block_scores] and [block_numerator]) request no memory mode: the optimizer refuses
+    them structurally ([Non_virtual 148] for a write in a scan body, [147] for their inits ahead of
+    it). *)

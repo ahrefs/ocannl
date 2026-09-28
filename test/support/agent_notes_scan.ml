@@ -32,7 +32,8 @@
       continuation lines joined by single spaces — ends in sentence-terminating punctuation. The
       last clause is the one that catches a splice: a bullet a merge cut in half ends mid-word, and
       the tail it stranded lands inside some other bullet. See {!bullet_text_is_terminated} for the
-      exact predicate and its escape.
+      exact predicate and its escape. A heading's text is plain ASCII and code spans, since its
+      anchor id is slugged from the source ({!heading_markup}).
     - {b index-agreement}: every index row is
       [| [<basename>](agent-notes/<basename>) | prose with `hooks` |], the target is a file this
       scan was handed, the link text is that file's basename, an anchor (if the link carries one)
@@ -63,8 +64,8 @@
       pointing at it (gh-ocannl-1044). The scripts point the same way, from comments and from the
       messages they print to whoever trips a guard (lukstafi/ocannl-staging#849), and a stale anchor
       there strands a reader mid-run (gh-ocannl-1111). A bare basename is a notes file; a path
-      through [docs/agent-notes/] is resolved the same way, and a path anywhere else is not a
-      pointer into the notes and is not read.
+      through [docs/agent-notes/] is resolved the same way, and a path anywhere else, or a name a
+      shell expansion builds (one carrying [$]), is not a pointer into the notes and is not read.
 
     {1 What it deliberately does not read}
 
@@ -602,13 +603,95 @@ let looks_like_heading line =
   in
   String.is_prefix s ~prefix:"#" && not is_citation
 
-(** The headings a reader actually sees: a heading-looking line inside a multiline code span or an
-    HTML comment is an example, and an index anchor naming its slug points at nothing (Codex P2,
-    round 5). *)
+(** {2 Heading text}
+
+    A heading's anchor id is {!slug} over its SOURCE text, while GitHub makes it from the text it
+    RENDERS, so the two agree only where rendering leaves the text as written. The notes' headings
+    are that dialect: plain ASCII words and punctuation, and code spans. A heading outside it is
+    reported rather than slugged the way a renderer would, because emulating the renderer grows a
+    case for every construct it has: [## [Windows CI](details)] is [#windows-ci] on GitHub and
+    [#windows-cidetails] to a raw slug, so a correct anchor at it was refused and a wrong one could
+    pass (gh-ocannl-1068).
+
+    What is refused is each spelling whose rendered text differs from the source by more than the
+    punctuation {!slug} drops anyway, outside code spans (which render as written) and not
+    backslash-escaped (an escape renders the character it escapes, which {!slug} treats alike):
+    - an opening square bracket, which opens a link, an image, a reference or a footnote;
+    - ['<'], which opens inline HTML, a comment or an autolink;
+    - an entity or character reference, [&name;] or [&#NN;];
+    - an underscore at a word boundary, which is emphasis — an identifier's inner underscore is not,
+      and GitHub keeps it in the id;
+    - a code span padded with a space on both sides, whose padding a renderer strips;
+    - and anywhere, code spans included, a byte outside printable ASCII. GitHub keeps a Unicode
+      letter in the id, case-folded, where {!slug} drops it, so [## Setup 训练] would be [#setup-]
+      here. A tab or another control character is refused along with it rather than modelled,
+      whatever a renderer makes of it (Codex P2, round 2 on lukstafi/ocannl-staging#899). *)
+let heading_markup line =
+  let scan = inert_by_line line in
+  let first = function (_, r) :: _ -> r | [] -> [] in
+  let comments = first scan.comment_ranges in
+  let code =
+    List.filter (first scan.ranges) ~f:(fun (a, b) ->
+        not (List.exists comments ~f:(fun (c, d) -> a = c && b = d)))
+  in
+  let n = String.length line in
+  let word i = i >= 0 && i < n && (Char.is_alphanum line.[i] || Char.equal line.[i] '_') in
+  let entity_at i =
+    match String.index_from line (i + 1) ';' with
+    | Some j ->
+        j > i + 1
+        && String.for_all
+             (String.sub line ~pos:(i + 1) ~len:(j - i - 1))
+             ~f:(fun c -> Char.is_alphanum c || Char.equal c '#')
+    | None -> false
+  in
+  let construct_at i =
+    let c = line.[i] in
+    if Char.to_int c >= 128 then
+      Some
+        "a non-ASCII character, which GitHub keeps in the heading's id and this scan's slug drops"
+    else if Char.to_int c < 32 || Char.to_int c = 127 then
+      Some "a control character such as a tab, which a heading here does not carry"
+    else if in_any_span code i || escaped_at line i then None
+    else if Char.equal c '[' then
+      Some "a '[', which opens a link, an image or a reference whose destination GitHub leaves out"
+    else if Char.equal c '<' then
+      Some "a '<', which opens inline HTML, a comment or an autolink that GitHub renders away"
+    else if Char.equal c '&' && entity_at i then
+      Some "an entity reference, which GitHub renders as the character it names"
+    else if Char.equal c '_' && not (word (i - 1) && word (i + 1)) then
+      Some "an underscore at a word boundary, which is emphasis that GitHub renders away"
+    else None
+  in
+  let padded (a, b) =
+    let k = run_length line a '`' in
+    let content = String.sub line ~pos:(a + k) ~len:(b - a - (2 * k)) in
+    String.length content >= 2
+    && String.is_prefix content ~prefix:" "
+    && String.is_suffix content ~suffix:" "
+    && not (String.for_all content ~f:(Char.equal ' '))
+  in
+  match List.find_map (List.init n ~f:Fn.id) ~f:construct_at with
+  | Some what -> Some what
+  | None ->
+      if List.exists code ~f:padded then
+        Some "a code span padded with spaces, which GitHub strips from the heading's id"
+      else None
+
+(** The headings a reader actually sees, and that an anchor can be checked against: a
+    heading-looking line inside a multiline code span or an HTML comment is an example, and an index
+    anchor naming its slug points at nothing (Codex P2, round 5). A heading outside the dialect
+    ({!heading_markup}) is left out too. Its source slug is not the id GitHub gives it, so keeping
+    it let an anchor spelling that slug pass beside the heading's own finding, and it went dead only
+    when the heading was fixed (Codex P2, round 1 on lukstafi/ocannl-staging#899). Its real id is
+    not known here, so a later same-titled heading's suffix may be off by one. That can only happen
+    in a file that already fails. *)
 let headings contents =
   let map = (inert_by_line contents).ranges in
   List.filter_map (lines contents) ~f:(fun (lineno, line) ->
-      if marker_is_text ~spans:(spans_at map lineno) line then atx_heading line else None)
+      if marker_is_text ~spans:(spans_at map lineno) line && Option.is_none (heading_markup line)
+      then atx_heading line
+      else None)
 
 (** {2 The closed dialect}
 
@@ -879,11 +962,22 @@ let parse_file ~file contents =
       else
         let indent = indent_of line in
         if looks_like_heading line then (
-          if Option.is_none (atx_heading line) then
-            bad lineno
-              "a line opening with # that is not a heading: an ATX marker is one to six hashes, \
-               followed by a space, indented at most three -- without all three of those it \
-               renders as prose or as code, so an anchor naming it points at nothing";
+          (if Option.is_none (atx_heading line) then
+             bad lineno
+               "a line opening with # that is not a heading: an ATX marker is one to six hashes, \
+                followed by a space, indented at most three -- without all three of those it \
+                renders as prose or as code, so an anchor naming it points at nothing"
+           else
+             match heading_markup line with
+             | Some what ->
+                 bad lineno
+                   (Printf.sprintf
+                      "a heading whose text carries %s: GitHub makes a heading's id from the text \
+                       it renders and this scan from the source, so an anchor at this heading \
+                       would be checked against the wrong id -- a heading here is ASCII words and \
+                       code spans"
+                      what)
+             | None -> ());
           close_all ())
         else if is_table_line line then close_all ()
         else
@@ -1208,8 +1302,9 @@ let backticked cell =
     identifiers (`ident_blacklist`, `promote_prec`), and GitHub anchors those as `#ident_blacklist`;
     rewriting the underscore rejected the correct anchor and accepted the wrong one (Codex P2, round
     1). Hyphens are likewise kept as themselves rather than re-derived. Only ASCII is modelled:
-    GitHub's Unicode handling (letters kept and case-folded, punctuation dropped) is not, and a
-    guide pointer touching non-ASCII text is refused instead (see {!guide_pointers}). *)
+    GitHub's Unicode handling (letters kept and case-folded, punctuation dropped) is not: a guide
+    pointer touching non-ASCII text is refused instead (see {!guide_pointers}), and so is a heading
+    whose text carries it or any markup that renders away ({!heading_markup}). *)
 let slug heading =
   String.lowercase heading |> String.to_list
   |> List.filter_map ~f:(fun c ->
@@ -1769,7 +1864,14 @@ let pointer_target path =
     path run was cut on the left ([token]), else by the path read. The one classification both
     {!check_guide} and the live scan's pointer floor use, so the floor cannot count a pointer the
     rule treats as out of scope (Codex P2, round 13 on lukstafi/ocannl-staging#811). *)
-let pointer_scope p = pointer_target (if p.cut_left then p.token else p.path)
+let pointer_scope p =
+  (* A name carrying [$] is built by a shell expansion -- [$note.md#slug], [${note}.md#slug],
+     [target=$note.md#slug], [a$b.md#slug] -- so which file it names is computed, not written, and
+     it is no more a pointer into the notes than [$DIR/x.md#slug], which the path rules already put
+     out of scope (gh-ocannl-1068). No note's name carries one: a note's file name is ASCII letters,
+     digits, [_ - . /]. Testing only the token's first character missed the name behind an
+     assignment (Codex P2, round 2 on lukstafi/ocannl-staging#899). *)
+  if String.mem p.token '$' then None else pointer_target (if p.cut_left then p.token else p.path)
 
 (** Rule 7 over one pointer source: the agent guide, or a script. [files] is keyed as {!check_index}
     describes; the index is looked up beside them, so a pointer at [docs/agent-notes.md#…] is

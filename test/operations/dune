@@ -206,6 +206,7 @@
  (name runtest)
  (deps
   (alias runtest-online_softmax_fast_math)
+  (alias runtest-online_softmax_block_fast_math)
   (alias runtest-fast_math_libmvec)
   (alias runtest-cc_dlopen_cause)
   (alias runtest-micrograd_demo_logging)
@@ -3517,8 +3518,11 @@
 ; value pass, executed against exact references and pinned in the emitted kernel.
 
 (test
+ ; Leg 6 runs training steps: it takes the training lock, so its OpenMP pool never overlaps
+ ; another training action's.
  (name gpu_serial_lanes)
  (package neural_nets_lib)
+ (locks ocannl_training_test)
  (deps
   (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
@@ -3581,6 +3585,15 @@
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+(test
+ (name codegen_resolution_identity)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules codegen_resolution_identity)
+ (libraries base ocannl stdio arrayjit.verdict))
 
 (test
  (name schedule_cache_device)
@@ -6329,3 +6342,44 @@
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+; gh-ocannl-1003: the single-pass block fold of the online-softmax rewrite (online_softmax_block).
+; Picks its backend from the environment.
+
+(test
+ (name online_softmax_block)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules online_softmax_block)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+; The same executable on cc under `cc_backend_fast_math`, as online_softmax_fast_math: the
+; `approximate` profile's C compiler licence beside the rewrite. The golden differs from
+; online_softmax_block.expected in its regime line only.
+
+(rule
+ ; ocannl-backend: cc -- the flag under test is the cc backend's; the command line pins both.
+ (target online_softmax_block_fast_math.actual)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:online_softmax_block.exe}
+    --ocannl_backend=cc
+    --ocannl_cc_backend_fast_math=true))))
+
+(rule
+ (alias runtest-online_softmax_block_fast_math)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate))
+ (action
+  (diff
+   online_softmax_block_fast_math.expected
+   online_softmax_block_fast_math.actual)))

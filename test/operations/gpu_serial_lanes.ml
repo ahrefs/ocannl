@@ -16,7 +16,12 @@
    it); 5. the real pipeline: the rewritten attention's value pass is scheduled with lanes on a GPU
    backend and not on the CPU one, and the forward agrees with the composed model on the run's
    backend. The emitted kernel's lane binding sits inside the serial loop (a GPU backend's generated
-   source; skipped on cc, which renders hardware loops serially). *)
+   source; skipped on cc, which renders hardware loops serially); 6. the attention backward of a
+   training step at a size above [gpu_schedule_min_parallel] (gh-ocannl-1124 point 1): on the GPU
+   pipeline every nest of the fused backward (the per-row [D], dQ, dK, dV) and the composed
+   backward's [dP] nest carries hardware geometry -- the all-serial kernel the issue reported is a
+   toy-size artifact, the kernel's largest chain below the threshold -- and the fused gradients
+   agree with the composed ones on the run's backend. *)
 
 open Base
 open Stdio
@@ -28,6 +33,7 @@ module S = Ir.Schedule
 module Train = Ocannl.Train
 module Nn_blocks = Ocannl.Nn_blocks
 module Generated = Test_utils.Generated
+module Online_softmax = Ir.Online_softmax
 
 let () = Utils.settings.output_debug_files_in_build_directory <- true
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
@@ -358,3 +364,108 @@ let () =
       p_all2
         (Printf.sprintf "attention, %s: the rewritten forward agrees with the composed one" form)
         rewritten composed ~f:close)
+
+(* Leg 6: the training step's attention backward, fused and composed, at [train_seq] -- large enough
+   that every backward nest's chain ([b x s] rows or [b x t] keys, 128 threads) clears
+   [gpu_schedule_min_parallel] (64). One head of width 32, above the recompute cap: the scores are
+   stored, as in gpt2_mini (treatment D1 of benchmarks/report-gh1002-fused-backward.md). *)
+let train_seq = 64
+
+let train_step ~bwd =
+  Tensor.unsafe_reinitialize ();
+  Online_softmax.set_enabled (Some true);
+  Online_softmax.set_backward_enabled (Some bwd);
+  let x =
+    TDSL.range_of_shape ~label:[ "x" ] ~batch_dims:[ batch; train_seq ] ~input_dims:[]
+      ~output_dims:[ d_model ] ()
+  in
+  (* Scaled into [0, 1): a saturated softmax would make the gradient parity vacuous. *)
+  let scale = Float.of_int (batch * train_seq * d_model) in
+  let%op x = x /. !.scale in
+  let mask =
+    NTDSL.init ~l:"mask" ~prec:Ir.Ops.single ~b:[ train_seq ] ~i:[ train_seq ] ~o:[]
+      ~f:(function [| s; t |] -> if s >= t then 1. else 0. | _ -> assert false)
+      ()
+  in
+  let block =
+    Nn_blocks.multi_head_attention ~label:[ "attn" ] ~num_heads:1 ~d_k:d_model ~d_v:d_model ()
+  in
+  let%op y = x + block ~train_step:None ~mask x in
+  let%op loss = (y *. y) ++ "... | ... => 0" in
+  let params =
+    Set.to_list y.Tensor.params
+    |> List.sort ~compare:(fun a b ->
+        Int.compare a.Tensor.value.Ir.Tnode.id b.Tensor.value.Ir.Tnode.id)
+  in
+  List.iter params ~f:(fun p -> Train.set_materialized (Option.value_exn p.Tensor.diff).Tensor.grad);
+  let update = Train.grad_update loss in
+  let ctx = Train.init_params (Context.auto ()) Ir.Indexing.Empty loss in
+  (* The routine runs the run's own default pipeline; a copy of its lowering, taken before that
+     pipeline promotes anything, is what the GPU pipeline is asked about below. *)
+  let captured = ref None in
+  let ctx, routine =
+    Context.compile
+      ~lowered_transform:(fun o ->
+        captured :=
+          Some
+            {
+              o with
+              LL.traced_store = Hashtbl.copy o.LL.traced_store;
+              LL.optimize_ctx = LL.copy_optimize_ctx o.LL.optimize_ctx;
+            };
+        S.maybe_default_schedules ~backend_name ~static_indices:[] o)
+      ctx update Ir.Indexing.Empty
+  in
+  let ctx = Context.run ctx routine in
+  let grads =
+    Array.concat
+      (List.map params ~f:(fun p ->
+           Context.get_values ctx (Option.value_exn p.Tensor.diff).Tensor.grad))
+  in
+  Online_softmax.set_enabled None;
+  Online_softmax.set_backward_enabled None;
+  (grads, Option.value_exn !captured)
+
+(* The top-level statements of the GPU pipeline's segments that compute a node named by [writes]:
+   they write it and read something, which leaves out the gradients' zeroing kernels. *)
+let gpu_statements (o : LL.optimized) ~writes =
+  S.maybe_default_schedules ~backend_name:"metal" ~static_indices:[] o
+  |> List.concat_map ~f:(fun (seg : LL.optimized) -> LL.flat_lines [ seg.LL.llc ])
+  |> List.filter ~f:(fun stmt ->
+      let accesses = LL.affine_accesses stmt in
+      List.exists accesses ~f:(fun (a : Ir.Tnode.t Ir.Affine.access) -> not a.a_write)
+      && List.exists accesses ~f:(fun (a : Ir.Tnode.t Ir.Affine.access) ->
+          a.a_write && writes (Ir.Tnode.debug_name a.a_tn)))
+
+(* A loop bound to GPU threads: Unrolled and Vectorized loops still run inside one thread. *)
+let rec hardware (llc : LL.t) =
+  match llc with
+  | LL.For_loop { axis = LL.Grid | LL.Workgroup | LL.Workgroup_reduce; _ } -> true
+  | LL.For_loop { body; _ } -> hardware body
+  | LL.Seq (a, b) -> hardware a || hardware b
+  | LL.If { body; _ } | LL.Scan_loop { body; _ } -> hardware body
+  | _ -> false
+
+let () =
+  printf "--- leg 6: the attention backward of a training step carries hardware geometry ---\n";
+  let composed, composed_opt = train_step ~bwd:false in
+  let fused, fused_opt = train_step ~bwd:true in
+  List.iter
+    [
+      ("fused D", fused_opt, fun n -> String.is_substring n ~substring:"bwd_rowdot");
+      ("fused dQ", fused_opt, String.is_suffix ~suffix:"q.grad");
+      ("fused dK", fused_opt, String.is_suffix ~suffix:"k.grad");
+      ("fused dV", fused_opt, String.is_suffix ~suffix:"v.grad");
+      ("composed dP", composed_opt, String.is_suffix ~suffix:"softmax.grad");
+    ]
+    ~f:(fun (what, o, writes) ->
+      let stmts = gpu_statements o ~writes in
+      p (Printf.sprintf "%s: the GPU pipeline emits its nest" what) (not (List.is_empty stmts));
+      p_all
+        (Printf.sprintf "%s: every nest writing it runs under a Grid or Workgroup loop" what)
+        stmts ~f:hardware);
+  let close g w = Float.(abs (g -. w) <= 1e-4 *. max 1. (abs w)) in
+  p "the fused step's parameter gradients are not identically zero"
+    (Array.exists fused ~f:(fun v -> Float.(v <> 0.)));
+  p_all2 "the fused step's parameter gradients agree with the composed ones within 1e-4 relative"
+    fused composed ~f:close

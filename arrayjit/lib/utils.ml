@@ -178,6 +178,7 @@ let known_config_keys =
       (* Algebraic rewrites over lowered code *)
       "online_softmax";
       "online_softmax_backward";
+      "online_softmax_block";
       (* Identifiers and other *)
       "ll_ident_style";
       "cd_ident_style";
@@ -239,6 +240,7 @@ let config_key_classification : (config_key_class * string * string list) list =
         "memory_budget";
         "online_softmax";
         "online_softmax_backward";
+        "online_softmax_block";
       ] );
     ( Code_borne,
       "it changes the assignments the front end builds, hence the code they lower to",
@@ -1126,6 +1128,7 @@ narrow_compute_f32=true
 # under this profile.
 online_softmax=false
 online_softmax_backward=false
+online_softmax_block=0
 |}
 
 let performance_profile_payload =

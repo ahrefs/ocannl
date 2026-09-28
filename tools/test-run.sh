@@ -114,9 +114,9 @@
 # worktree's path -- never in the worktree, which a run leaves exactly as it
 # found it. A run is two processes: this launching shell, which takes the lock
 # and publishes the run, and a perl supervisor that inherits the lock, caps
-# and signals its child -- first this script's `_resolve`, which decides the
-# width and the fleet slot and then execs dune -- and records the verdict
-# (see supervisor_perl).
+# and signals its child -- this script's `_resolve`, which decides the width
+# and the fleet slot, runs dune, then records dune's promotion list -- and
+# records the verdict (see supervisor_perl).
 #
 # A run directory also records WHICH source ran, as of the launch: `head` (the
 # checkout's HEAD commit) and `dirty` (its `git status --porcelain`, empty when
@@ -124,7 +124,10 @@
 # says anything about an edit made after the launch, or about ignored files and
 # the environment, which are configuration rather than source (see
 # record_checkout). The digest prints them as its `source:` line: the commit,
-# then `(clean)` or `+ N uncommitted paths`.
+# then `(clean)` or `+ N uncommitted paths`. At the run's end it records
+# `promotions`: dune's own promotion list, which the digest reports in place
+# of reading the log for diffs, and which outlives the next build's
+# replacement of dune's list (see record_promotions).
 #
 # Windows: run it from Git Bash, whose MSYS perl carries the flock and the cap.
 # Best-effort even there -- process-group kills may only reach dune itself, not
@@ -211,7 +214,7 @@ reject_misplaced_options() {
 # a red suite. Resolving means building the two readers, so it happens only
 # where something depends on it: a box where some backend meets a cap, or a
 # fleet box's slot (plan_batch). It is the run's first phase (`_resolve`),
-# run by the supervisor as the child it later execs dune in.
+# run by the supervisor as the child that later runs dune.
 explicit_jobs() { # dune argv; 0 iff it names a width before dune's own `--`
   for arg do
     case $arg in
@@ -640,10 +643,11 @@ LAST=$RUNS/last-$wt_key   # the run this worktree published most recently
 # For `run`/`start`/`plan` the child is this script's `_resolve` first: the
 # batch's resolution runs as the supervisor's first phase, under this cap,
 # group and signal handling -- it builds the readers, a dune run in the
-# worktree -- and then execs dune in the same process, so the pid and group
-# recorded here are the child's throughout (gh-ocannl-1106). It writes
-# `resolved` when the phase ends; a run cut short before that says in its log
-# that dune was not started.
+# worktree -- and then runs dune as its own child, in the group it leads, so
+# the pid and group recorded here are the child's throughout (gh-ocannl-1106);
+# once dune exits it records dune's promotion list and exits with dune's
+# status (gh-ocannl-1087). It writes `resolved` when the first phase ends; a
+# run cut short before that says in its log that dune was not started.
 #
 # OCANNL_TOOL_TESTRUN_RD: where pgid/gtoken go (the run directory, or a repeat
 # iteration's). OCANNL_TOOL_TESTRUN_OWN: the run directory whose identity and
@@ -996,6 +1000,95 @@ record_checkout() {
     done
     printf '%s\n' "$head" >"$run_dir/head"
   )
+}
+
+# Dune's own promotion list, recorded at the run's end (gh-ocannl-1087): the
+# `promotions` file holds one source path per line, the files `dune promote`
+# would update right then, and is empty when dune has nothing to promote. The
+# digest used to infer this from the log, and four review rounds of
+# staging#827 each found a log shape the inference misread (colored and
+# patdiff headers, a chosen --diff-command, a quoted `.corrected` stanza, a
+# hunk above the scanned tail): dune's output is not a contract, and `dune
+# promotion list` (since 3.14, below the 3.20 floor) is. It printed on stderr
+# before 3.22 and on stdout since, so `dune --version` picks the stream. The
+# run's last phase writes it (see `_resolve`), after dune exits and before
+# the supervisor publishes the verdict, so every reader of a verdict finds
+# it. It is kept in the run directory because dune's list is not: the next
+# build in the worktree, an unrelated one included, replaces it, after which
+# `dune promote` says "Nothing to promote" for a run whose digest offered
+# promotion (staging#840).
+#
+# Optional, like `head`: without it the digest falls back to reading the log.
+# It is not written where the list cannot be taken faithfully: the argv names
+# another build directory or root (`--build-dir`, `--root`, or any
+# abbreviation cmdliner accepts; erring towards "names one" costs only the
+# record), dune's version or list cannot be read, the cap is nearly spent
+# (recording must never turn a finished run into a TIMEOUT), or a line is not
+# a path in this worktree (a warning on the pre-3.22 stream). A missing build
+# directory is an empty list without asking dune: its list lives there, and
+# asking would recreate the directory a `dune clean` just removed. The list's
+# own trace goes to a file of the run's, so the build's `_build/trace.csexp`
+# survives it (dune before 3.22 still rewrites `_build/log`, as any later
+# dune command in the worktree would). What the record is NOT: this run's
+# diffs. It is dune's list when the run ended, which for a run that ran
+# nothing (a refused slot or invocation) is an older build's, so the digest
+# reads it only under a pass or FAIL verdict.
+explicit_build_root() { # dune argv; 0 iff it names a build dir or root before dune's `--`
+  for arg do
+    case $arg in
+      --) return 1 ;;
+      --bu* | --ro*) return 0 ;;
+    esac
+  done
+  return 1
+}
+record_promotions() { # in `_resolve`, after dune exited, whose SECONDS the cap's are
+  local build_dir=${DUNE_BUILD_DIR:-_build} version major minor stream
+  if [ ! -d "$build_dir" ]; then
+    : >"$run_dir/promotions" 2>/dev/null || rm -f "$run_dir/promotions"
+    return 0
+  fi
+  version=$(promotion_bounded "$DUNE" --version 2>/dev/null) || return 0
+  case $version in [0-9]*.[0-9]*) ;; *) return 0 ;; esac
+  major=${version%%.*} minor=${version#*.}
+  minor=${minor%%[!0-9]*}
+  case $major in *[!0-9]*) return 0 ;; esac
+  if [ "$major" -gt 3 ] || { [ "$major" = 3 ] && [ "$minor" -ge 22 ]; }; then
+    stream=stdout
+  else
+    stream=stderr
+  fi
+  set -- "$DUNE" promotion list --trace-file="$run_dir/promotions.trace"
+  if [ "$stream" = stdout ]; then
+    promotion_bounded "$@" >"$run_dir/promotions.tmp" 2>/dev/null
+  else
+    promotion_bounded "$@" 2>"$run_dir/promotions.tmp" >/dev/null
+  fi && promotion_lines <"$run_dir/promotions.tmp" >"$run_dir/promotions.list" &&
+    mv -f "$run_dir/promotions.list" "$run_dir/promotions"
+  rm -f "$run_dir/promotions.tmp" "$run_dir/promotions.list" "$run_dir/promotions.trace"
+}
+# Copies dune's list, failing on the first line that is not a relative path
+# whose directory exists here (every promotion targets a file beside its dune
+# stanza) -- the one guard against reading a warning as a path.
+promotion_lines() {
+  local line
+  while IFS= read -r line || [ -n "$line" ]; do
+    line=${line%$'\r'}
+    case $line in '' | /* | \\* | [A-Za-z]:*) return 1 ;; esac
+    case $line in */*) [ -d "${line%/*}" ] || return 1 ;; esac
+    printf '%s\n' "$line" || return 1
+  done
+}
+# One dune query, bounded by what the cap leaves (five seconds kept back for
+# the supervisor) and by 30 seconds; refused outright when nothing is left.
+promotion_bounded() { # command...
+  local bound=30 left
+  if [ "$cap" -gt 0 ]; then
+    left=$((cap - SECONDS - 5))
+    [ "$left" -ge 1 ] || return 1
+    [ "$left" -ge "$bound" ] || bound=$left
+  fi
+  perl -e 'alarm shift; exec @ARGV or exit 127' "$bound" "$@" </dev/null
 }
 
 new_run() {
@@ -1408,7 +1501,7 @@ resolve_run() {
 # "First" means first after the launch's own prelude, which the log carries
 # before dune starts: what the launch's first phase wrote there (the readers'
 # build, the batch's backends, the width, the slot) ends at the byte offset
-# `_resolve` records in `prelude` just before it execs the command, and is
+# `_resolve` records in `prelude` just before it runs the command, and is
 # skipped by position, never by pattern -- a program's own `test-run: ` line
 # is output like any other. The fleet slot's `EXECUTION SLOT ` admission
 # lines, written by fleet-worker.sh between that exec and dune's, are the one
@@ -1518,9 +1611,17 @@ digest() {
   # Digest sits on `wait`'s deadline path, so it examines at most the last
   # 10MB of the log rather than scaling with an arbitrarily noisy run.
   scan_log() { tail -c 10000000 "$dir/log" 2>/dev/null; }
-  # Promotion is offered only on a diff dune actually printed: a `--- ` header
-  # line directly followed by a `+++ ` one (git diff and diff -u; patdiff's
-  # `------ `/`++++++ ` too; color escapes stripped first). Merely NAMING a
+  # Promotion is dune's own answer where the run recorded it (`promotions`,
+  # see record_promotions), read only under a verdict dune gave: a refused
+  # slot ran nothing, and the list it found is an older build's. The log is
+  # read only for runs that recorded none.
+  local promo_n=
+  case $verdict in
+    pass | FAIL) [ ! -f "$dir/promotions" ] || promo_n=$(grep -c '' "$dir/promotions") ;;
+  esac
+  # Without it, promotion is offered only on a diff dune actually printed: a
+  # `--- ` header line directly followed by a `+++ ` one (git diff and diff
+  # -u; patdiff's `------ `/`++++++ ` too; color escapes stripped first). Merely NAMING a
   # `.expected` or `.corrected` file is not one -- dune quotes the failing
   # stanza, `(diff? x.ml x.ml.corrected)` included, for a rule whose action
   # failed before any diff ran, and sending that reader to `dune promote`
@@ -1532,7 +1633,18 @@ digest() {
   # scanned tail, which may hold a hunk above it.
   local log_bytes
   log_bytes=$(wc -c <"$dir/log" 2>/dev/null | tr -d ' ')
-  if scan_log | awk 'BEGIN { esc = sprintf("%c", 27) }
+  if [ -n "$promo_n" ] && [ "$promo_n" -gt 0 ]; then
+    echo "promotion diffs present -- dune's promotion list at the run's end names $promo_n" \
+         "file(s); inspect the log, accept with \`dune promote\` (tools/promote.sh on Windows):"
+    sed -n '1,20p' "$dir/promotions" | sed 's/^/  /'
+    [ "$promo_n" -le 20 ] || echo "  ... and $((promo_n - 20)) more, in $dir/promotions"
+    echo "  (the next build in this worktree replaces dune's list: if \`dune promote\`" \
+         "finds nothing, run this command again)"
+  elif [ -n "$promo_n" ]; then
+    [ "$verdict" != FAIL ] ||
+      echo "action failed -- dune's promotion list at the run's end is empty, nothing to" \
+           "promote; read the failure below"
+  elif scan_log | awk 'BEGIN { esc = sprintf("%c", 27) }
                      { gsub(esc "\\[[0-9;]*m", "") }
                      prev ~ /^---+ / && /^\+\+\++ / { found = 1; exit }
                      { prev = $0 }
@@ -1987,9 +2099,10 @@ case $sub in
     # command rewritten into `cmd`, so the width is part of the RECORDED
     # command and of every later digest (gh-ocannl-1066), the announcements
     # into the log and into `resolved`, which marks the end of the phase for
-    # the launcher and the supervisor. Then it execs dune (through the slot's
-    # fleet-worker.sh) in its own place, so the pid and group the supervisor
-    # caps, signals and reaps stay the same. For `plan` it resolves whatever
+    # the launcher and the supervisor. Then it runs dune (through the slot's
+    # fleet-worker.sh) as its child, in the group it leads, so the pid and
+    # group the supervisor caps, signals and reaps stay the same, and records
+    # dune's promotion list once dune exits. For `plan` it resolves whatever
     # this box is, writes the report to `plan` and exits.
     [ $# -ge 3 ] && [ -n "${OCANNL_TOOL_TESTRUN_OWN:-}" ] ||
       die "_resolve is the supervisor's first phase, not a command"
@@ -2050,9 +2163,11 @@ case $sub in
     for line in "$width_announce" "$slot_announce"; do
       [ -z "$line" ] || printf 'test-run: %s\n' "$line" | tee -a "$run_dir/resolved.tmp"
     done
+    # Decided on the caller's argv, before the slot's words are put in front.
+    promotions_recordable=1
+    ! explicit_build_root "$@" || promotions_recordable=
     # Under a fleet slot the command is fleet-worker.sh, which takes the slot
-    # and execs dune in its place, so the pid the supervisor caps and signals
-    # ends up being dune's, and dune's status is the slot's.
+    # and execs dune in its place, so dune's status is the slot's.
     if [ -n "$slot_fw" ]; then
       printf '%s\n' "$slot_fw" >"$run_dir/slot" 2>/dev/null || :
       set -- "$slot_fw" execution slot --wait "$slot_wait" "--$slot_kind" -- "$DUNE" "$@"
@@ -2063,7 +2178,17 @@ case $sub in
     wc -c <"$run_dir/log" | tr -d ' ' >"$run_dir/prelude" 2>/dev/null || :
     mv -f "$run_dir/resolved.tmp" "$run_dir/resolved" ||
       { echo "test-run: cannot record the end of the resolution in $run_dir"; exit 126; }
-    exec "$@"
+    # Dune runs as this phase's child, not in its place, for the run's last
+    # phase: recording dune's promotion list once it exits (record_promotions,
+    # gh-ocannl-1087), before the supervisor publishes the verdict. The group
+    # the supervisor caps, signals and reaps is still this process's, which
+    # leads it; a signal that kills dune ends this shell with the same status
+    # an exec'd dune would have had, and dune's own status is the one it
+    # exits with.
+    "$@"
+    rc=$?
+    [ -z "$promotions_recordable" ] || record_promotions
+    exit "$rc"
     ;;
   run | start | plan)
     # `plan` is what `run` would do with this argv, without running it: the
@@ -2142,7 +2267,7 @@ case $sub in
     fi
     # The supervisor inherits lock fd 9 and owns the run from here: it records
     # its identity, runs its child under the cap -- first the batch's
-    # resolution (`_resolve`), which then execs dune -- and publishes the
+    # resolution (`_resolve`), which then runs dune -- and publishes the
     # verdict (see supervisor_perl). Nothing about the fate of THIS shell --
     # HUP from a closed terminal, harness cancellation, a plain kill -- can
     # lose the verdict; `run` differs from `start` only in staying attached to

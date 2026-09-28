@@ -605,8 +605,9 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   shell, which takes the lock and publishes the run, and a perl supervisor that inherits the lock,
   caps its child and records the verdict (gh-ocannl-606 collapsed the former three-party launch and
   its publication handshake). The child is the script's `_resolve` first — the batch's backends,
-  width and fleet slot — which then execs dune in its own place: work that must run under the lock
-  before dune belongs in that first phase, never in the launcher, which then needs its own copy of
+  width and fleet slot — which then runs dune as its child and, once dune exits, records dune's
+  promotion list before exiting with dune's status: work that must run under the lock before or
+  after dune belongs in those phases, never in the launcher, which then needs its own copy of
   the cap, the signal relays and the group kills (staging#832 grew one, and six of its nine review
   rounds went there; gh-ocannl-1106 deleted it). Everything a run keeps per worktree (the lock, its owner pointer, the
   `last` pointer) lives under `~/.ocannl-test-runs` keyed by the worktree's path, never in the
@@ -785,6 +786,24 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   pair the old commit with the new tree's clean status. An edit made after the launch — during a
   fleet slot's wait, or while dune runs — is in neither. Legs 59–63 of `tools/test-test-run.sh` pin
   clean, dirty, an inherited `GIT_DIR`, the absent cases and that mid-record commit.
+- **Whether a run left anything to promote is dune's answer, recorded at the run's end**
+  (gh-ocannl-1087): the run's last phase writes `promotions` beside `head`/`dirty` (what
+  `dune promotion list` prints, one source path per line, empty when there is nothing) before the
+  supervisor publishes `exit`, and the digest names those files. It used to infer promotion from the log, and
+  four review rounds of staging#827 each found a shape it misread (colored and patdiff headers, a
+  chosen `--diff-command`, a quoted `.corrected` stanza, a hunk above the scanned tail): dune's log
+  is not a contract, its list is. Two traps in taking it: the list is on stderr before dune 3.22
+  and on stdout since (the version picks the stream; a line that is not a path in the worktree
+  voids the record), and asking recreates a build directory a `dune clean` just removed and
+  rewrites dune's default trace, so a missing build directory is an empty list asked of nobody and
+  the query gets a trace file of its own. The record also outlives dune's own list, which the next
+  build in the worktree replaces — an unrelated failing one empties it, after which `dune promote`
+  says "Nothing to promote" for a run whose digest offered promotion (staging#840). It is dune's
+  list at the run's end, not the run's own diffs, so the digest reads it only under a pass or FAIL
+  verdict (a refused slot ran nothing and found an older build's list), and the log inference
+  survives only for runs with no record: another `--build-dir`/`--root` in the argv, an
+  unreadable answer, a nearly spent cap, `repeat`, and runs from before. Legs 71-73 of
+  `tools/test-test-run.sh` pin it; legs 68-69 now pin the fallback.
 - **`cmd 2>/dev/null` does not silence a failed REDIRECTION.** The shell reports that before the
   command's own stderr redirection applies, so `read -r line <"$f" 2>/dev/null` prints
   `/proc/NNN/stat: No such file or directory` whenever the entry vanishes mid-scan — routine, not
@@ -2527,7 +2546,11 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   compile-inclusive; and without `dune clean`, `--force` does not re-run the tests at all.
   `tools/test-test-run.sh` fakes the topology (`OCANNL_TOOL_KFD_TOPOLOGY`), the device
   (`OCANNL_TOOL_NVIDIA_DEVICE`) and the fleet's name for the box (`FLEET_LOCAL_BOX`,
-  `FLEET_HOSTNAME_MAP`) as it fakes the bridge.
+  `FLEET_HOSTNAME_MAP`) as it fakes the bridge. All three device probes default, harness-wide,
+  to paths that do not exist (`hermetic_probes`, as `tools/test-mutation-run.sh` does); a leg
+  opts in to a device and goes back through that function, never `unset` — an unset or empty
+  probe falls back to the real device, and on minix the lifecycle and repeat legs' runs then
+  took `-j 4` while still passing (gh-ocannl-1108). Leg 70 runs last to catch such a leak.
 - **`tools/test-run.sh run`/`start` takes the fleet's run-time correctness slot itself**
   (gh-ocannl-1004), as `fleet-worker.sh execution slot --cpu|--gpu`, on any box whose deployed
   `fleet-worker.sh execution slot --probe` answers (lukstafi/ludics-lite's issue-wave skill; the
@@ -2536,7 +2559,7 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   above, read ONE resolution of the backends the batch can hold (`tools/batch-backends.sh`,
   gh-ocannl-1066), made by the run's first phase (the supervisor's child, under the lock, the cap
   and the run's signal handling; gh-ocannl-1106), which rewrites the recorded command with the
-  injected width before it execs dune; a `stop` or an expired cap there is an ordinary CANCELLED
+  injected width before it runs dune; a `stop` or an expired cap there is an ordinary CANCELLED
   or TIMEOUT run whose log says dune was not started. `--cpu` means
   none of them holds a GPU. It asks two
   questions. First, which backends do the stanzas the run can reach NAME (`; ocannl-backend: cuda`

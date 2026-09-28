@@ -708,16 +708,35 @@ files.
   on gfx1151 and ~6.6% on gfx1102, intrinsic to the f32 arm (a before/after split showed at most ~5
   points on one cell attributable to the gh-ocannl-1064 table boundary), while the serial legs run
   5-21% faster wide. The maintainer took the accuracy. HIP's resolution lives in
-  `Hip_backend.bf16_accum_wide`, the one predicate behind its `accum_prec`, `mma_combo` and
-  `codegen_tag`; `Numerics.bf16_accum_wide` still answers only "is the mode `Bf16_wide`", which
-  is all the seeding gate needs since HIP advertises both wide scopes. Cache identity: the numerics
-  fingerprint hashes the configured MODE, so a change to what a mode RESOLVES to on one backend
-  must name itself in that backend's `codegen_tag` (`/bf16-acc-wide`), or winners tuned under the
-  old resolution replay. Pinned by: `schedule_mma_matmul`'s `Bf16_wide` legs and their
+  `Hip_backend.bf16_accum_wide`, the one predicate behind its `accum_prec` and `mma_combo`;
+  `Numerics.bf16_accum_wide` still answers only "is the mode `Bf16_wide`", which
+  is all the seeding gate needs since HIP advertises both wide scopes. Cache identity follows the
+  resolution by derivation (the next bullet); the flip first shipped with a hand-added
+  `/bf16-acc-wide` component in HIP's `codegen_tag`, now gone. Pinned by: `schedule_mma_matmul`'s `Bf16_wide` legs and their
   `Bf16_narrow` twins (the only mode that still reaches HIP's narrow arm, so the negative controls
   moved there), `accum_width`'s universal bf16 legs (the default-policy leg pins auto's current
   resolution per backend), `reduction_forms`' independent policy table, `sketch_family_tree`'s
   wide-bf16 seeding claim.
+- **What a numerics mode RESOLVES to per backend is cache identity by derivation** (gh-ocannl-1117).
+  `Schedule_cache.numerics_tag` hashes the configured mode; what the mode means on a backend is a
+  second fact, and it moved once with the mode unchanged (HIP's `Bf16_auto`, gh-ocannl-1051).
+  `Schedule_cache.codegen_tag` (and so `cache_key`/`placement_key`) takes the compiling context's
+  `Context.codegen_capabilities` as a REQUIRED `~capabilities` and hashes
+  `Backend_intf.codegen_capabilities_fingerprint`: the record's flags plus its `compute_prec` and
+  `accum_prec` — the very functions codegen calls — tabulated over `Ops.all_precs` under the current
+  policy. So a resolution change moves the key on exactly the backends it changes, and a backend
+  author adds no component by hand; the record pattern names every field, so a new capability field
+  fails to compile (warning 9) until it is rendered. No per-backend (mode → resolution) golden:
+  every backend's capabilities come from its own `C_syntax_config` through `C_syntax.codegen_capabilities`,
+  so derivation reaches all five. What it does NOT reach is a numerics decision outside those two
+  functions: an mma arm chosen from the mode (CUDA's tf32 gate in its combo table) whose accumulator
+  `accum_prec` does not describe — the uniform 16-bit arms are tied to `accum_prec` by the
+  gh-ocannl-663 width-uniformity invariant `accum_width` pins, the tf32 arm is not. Such a change
+  still needs a component in that backend's `codegen_tag`. Pinned by
+  `codegen_resolution_identity`: synthetic records (a changed resolution moves the tag, an
+  extensionally equal closure does not) and the live backend over the fp16 × bf16 × narrow-compute
+  grid (tag equal iff resolution equal, both sides populated); neutralizing the component fails
+  three of its claims on cc.
 - **The `approximate` profile is the one word for the numerics-changing regime** (gh-ocannl-719):
   the `performance` payload plus `tf32_matmuls=true`, `cc_backend_fast_math=true`,
   `cc_backend_fp_contract=fast` and `tune_inline_flips=2`, contract "results differ from the exact

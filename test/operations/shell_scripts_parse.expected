@@ -269,6 +269,7 @@ duplicate harness expect_rejected() is refused: true
 duplicate harness expect_rejected() is refused: true
 a comment mentioning support cannot satisfy sourcing: true
 .github/actions/pin-revisions/resolve.sh parses: true
+benchmarks/gh1003_fold_cells.sh parses: true
 benchmarks/gh1051_bf16_ab.sh parses: true
 benchmarks/gh1051_boundary_split.sh parses: true
 benchmarks/gh514_cells.sh parses: true

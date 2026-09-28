@@ -58,19 +58,19 @@ def kill_the_group_on_cleanup(case, pidfile):
     """Register on the TestCase `case` a cleanup that SIGKILLs whatever is left of the group of
     the pid a child published (through `publish_pid`) to `pidfile`.
 
-    Every fixture that publishes a pid parks a process in `time.sleep(300)`, and it is the test's
+    Every fixture that parks a process in `time.sleep(300)` publishes its pid, and it is the test's
     own assertions that establish the code under test killed it. When one of them fails, nothing
     else will: a cell sits in a session of its own by design, so killing the test's direct child
     -- or a sweep driver, which the cancellation tests SIGKILL, running no handler -- leaves it
-    orphaned for the full 300 s (gh-ocannl-1054: a forced failure left three such processes
-    behind, and on a shared box or a CI runner they hold whatever a later timing test measures
-    against). So the kill is owed on every path; registered after `setUp`, it runs before the
-    directory holding the pidfile is removed.
+    orphaned for the full 300 s (gh-ocannl-1054: a forced failure left three such processes behind,
+    and on a shared box or a CI runner they hold whatever a later timing test measures against). So
+    the kill is owed on every path; registered after `setUp`, it runs before the directory holding
+    the pidfile is removed.
 
     It kills the GROUP, not the pid: where the published pid is a grandchild, its sleeping parent
     -- the cell -- is the same leak, and `cell_group.spawn` keeps both in the cell's group. The
     pid is read at cleanup time, which is why `kill_the_group` guards against a reused number.
-    `test_every_published_pid_is_killed_on_cleanup` keeps new fixtures registering it.
+    `test_every_sleeping_fixture_is_killed_on_cleanup` keeps new fixtures registering it.
     """
 
     def kill_what_is_left():
@@ -312,45 +312,81 @@ class CellGroupTest(unittest.TestCase):
         ]
         self.assertEqual(offenders, [], "pid files written in place, not via publish_pid")
 
-    def test_every_published_pid_is_killed_on_cleanup(self):
-        # Fixtures here are written by copying a neighbour, and one that drops the registration
-        # passes every green run: the leak shows only when an assertion fails (gh-ocannl-1054,
-        # gh-ocannl-1089). Over the same test sources as the scan above, not just one module's.
-        # (The two needles are split so that this test's own source matches neither.)
+    def test_every_sleeping_fixture_is_killed_on_cleanup(self):
+        # Fixtures here are written by copying a neighbour, and one that parks a sleeper with no
+        # kill on cleanup passes every green run: the leak shows only when an assertion fails
+        # (gh-ocannl-1054, gh-ocannl-1089). The census is keyed on the SLEEP, not on a published
+        # pid: a fixture that never publishes is exactly the one a pid-keyed census cannot see,
+        # and nine of them did not (gh-ocannl-1105). A sleeper is a string literal -- the source
+        # of a child -- sleeping a second or more; the test process's own polling sleeps are
+        # calls, not literals, and a docstring describes rather than spawns.
+        sleep = re.compile(r"sleep\(\s*(\d+(?:\.\d*)?)\s*\)")
+
+        def parks(literal):
+            return any(float(seconds) >= 1 for seconds in sleep.findall(literal))
+
+        # Two-sided on the predicate, with the needles built at run time so that this test's own
+        # literals are not sleepers: the fixtures' spelling matches, a short child sleep does not.
+        self.assertTrue(parks("import time; time.sleep(" + "300)"))
+        self.assertTrue(parks("'import time; time.sleep(" + "300)'])\n"))
+        self.assertFalse(parks("time.sleep(" + "0.2)\n"))
+        # (Split so that this test's own source matches neither.)
         publishes, registers = "publish" "_pid(", "kill_the_group" "_on_cleanup(self, pidfile)"
-        # Tests that publish in-process and spawn nothing. Registering there would be WRONG, not
-        # just idle: the cleanup would SIGKILL whatever group the fake pid 4242 happens to lead.
-        spawn_nothing = {
-            "test_a_published_pid_file_never_exists_without_its_pid",
-            "test_every_published_pid_goes_through_publish_pid",
-        }
         sources = sorted([*HERE.glob("test*.py"), *HERE.glob("test/test*.py")])
-        fixtures, offenders = set(), []
+        sleepers, offenders = set(), set()
         for path in sources:
             text = path.read_text()
-            for case in ast.walk(ast.parse(text, filename=str(path))):
-                if not isinstance(case, ast.ClassDef):
+            tree = ast.parse(text, filename=str(path))
+            docstrings = {
+                id(node.body[0].value)
+                for node in ast.walk(tree)
+                if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef))
+                and node.body
+                and isinstance(node.body[0], ast.Expr)
+                and isinstance(node.body[0].value, ast.Constant)
+            }
+            fixture_of = {
+                id(node): method
+                for case in ast.walk(tree)
+                if isinstance(case, ast.ClassDef)
+                for method in case.body
+                if isinstance(method, ast.FunctionDef) and method.name.startswith("test")
+                for node in ast.walk(method)
+            }
+            for node in ast.walk(tree):
+                if not (
+                    isinstance(node, ast.Constant)
+                    and isinstance(node.value, str)
+                    and id(node) not in docstrings
+                    and parks(node.value)
+                ):
                     continue
-                for method in case.body:
-                    if not (
-                        isinstance(method, ast.FunctionDef) and method.name.startswith("test")
-                    ):
-                        continue
-                    source = ast.get_source_segment(text, method)
-                    if publishes in source:
-                        fixtures.add(method.name)
-                        if method.name not in spawn_nothing and registers not in source:
-                            offenders.append(f"{path.relative_to(HERE)}:{method.lineno}")
-        # Two-sided: the scan reaches the tests the leak was found in, in both files, so it
-        # cannot pass by finding no fixture at all -- and the exemptions are still publishers.
+                method = fixture_of.get(id(node))
+                where = f"{path.relative_to(HERE)}:{node.lineno}"
+                if method is None:
+                    # A sleeper built in a helper or at module level: no fixture's source can be
+                    # read for its cleanup, so it is reported rather than trusted.
+                    offenders.add(f"{where} (outside a test method)")
+                    continue
+                sleepers.add(method.name)
+                source = ast.get_source_segment(text, method)
+                if publishes not in source or registers not in source:
+                    offenders.add(f"{path.relative_to(HERE)}:{method.lineno} {method.name}")
+        # Two-sided: the census reaches fixtures in both files -- ones that always published, the
+        # ones gh-ocannl-1105 found publishing nothing, and the one whose pid is taken at `Popen`
+        # -- so it cannot pass by finding no sleeper at all.
         for found in (
             "test_a_sigterm_to_the_sweep_takes_the_running_cell_with_it",
-            "test_a_cancellation_during_the_kill_does_not_abandon_the_group",
             "test_a_sleep_chain_is_killed_and_reaped_as_one_group",
-            *spawn_nothing,
+            "test_a_cell_over_the_cap_is_a_runner_failure_naming_the_cap",
+            "test_a_killed_cell_leaves_a_log_of_what_it_printed",
+            "test_a_cancellation_inside_the_spawn_window_still_kills_the_cell",
+            "test_the_gh675_spawn_window_defers_cancellation_until_cleanup_is_owned",
         ):
-            self.assertIn(found, fixtures)
-        self.assertEqual(offenders, [], "pid-publishing fixtures with no kill on cleanup")
+            self.assertIn(found, sleepers)
+        self.assertEqual(
+            sorted(offenders), [], "sleeping fixtures that publish no pid or kill none on cleanup"
+        )
 
     def test_a_failed_windows_job_assignment_kills_the_unassigned_child_too(self):
         job = unittest.mock.Mock()
@@ -389,8 +425,11 @@ class CellGroupTest(unittest.TestCase):
         self.addCleanup(setattr, cancellation, "depth", 0)
         self.addCleanup(setattr, cancellation, "held_signal", None)
         # The child sleeps 300 s in a session of its own; when the cancellation this test pins
-        # fails to collect it, nothing else will (gh-ocannl-1089).
+        # fails to collect it, nothing else will (gh-ocannl-1089). The pid taken at `Popen` covers
+        # a child killed before it ran a line; the published one, one the census can see.
         self.addCleanup(lambda: [kill_the_group(pid) for pid in spawned])
+        pidfile = self.dir / "spawn-window.pid"
+        kill_the_group_on_cleanup(self, pidfile)
         cancellation.install()
 
         def popen_then_cancel(*args, **kwargs):
@@ -404,7 +443,12 @@ class CellGroupTest(unittest.TestCase):
         ):
             with self.assertRaises(SystemExit):
                 gh675_cells.run_managed(
-                    self.python("import time; time.sleep(300)"),
+                    self.python(
+                        "import sys, time\n"
+                        + publish_pid("sys.argv[1]", "os.getpid()")
+                        + "time.sleep(300)\n",
+                        pidfile,
+                    ),
                     timeout=60,
                     context="cancelled probe",
                 )

@@ -195,7 +195,9 @@ files.
   key read in a codegen-stage module yet classified code-borne. When adding a config key, classify
   it; when adding a backend knob consulted at codegen, put it in the backend's
   `hardware_limits.codegen_tag` — `cache_key` takes the whole limits record precisely so a new
-  component reaches every call site. `digest_identity_flips` calibrates one representative per
+  component reaches every call site. What a numerics mode resolves to needs no such component: the
+  key derives it from the backend's `codegen_capabilities` (gh-ocannl-1117; the precision note owns
+  it). `digest_identity_flips` calibrates one representative per
   class against a real compile; when picking a code-borne representative note that many optimizer
   keys (`virtualize_max_visits` and its neighbors) are read ONCE into `Low_level.virtualize_settings`
   at module init, so poking `Utils.config_file_args` at runtime does not move them. Caches with an
@@ -429,4 +431,20 @@ files.
   `n` and the scores' reduction, one counted visit each; (b) a symbol bound by two sibling loops makes the routine
   uncacheable (`analysis_digest`), so mint one per loop; (c) Base's `Float.max_value` is infinity
   (`max_finite_value` is not): the forward's f64 floor was `-inf` until the f64 test here ran.
+- **`Online_softmax`'s fourth shape is the single-pass block fold** (gh-ocannl-1003, key
+  `online_softmax_block`; `find_fold`): one scan per row over key blocks, the block's scores and
+  the row's output numerator in minted tiles the body updates in place. Traps: (a) it cannot sit
+  where the two-pass scan does -- the lowering computes `V` after the softmax chain -- so it goes at
+  the value pass, and the elementwise definitions between the max and the value pass that read the
+  row state (shifted scores, exponentials, probabilities) ran after the max against its FINAL `m`:
+  they move behind the fold when anything later reads them (the training step's backward), or go;
+  (b) a definition chain the member stops reading is not dead to the optimizer when the recompute
+  cap keeps one of its nodes -- the score reduction stays a stored `[seq, seq]` buffer (found at
+  head width 32) unless the member removes the chain; (c) `unfold`'s positions include constant
+  fills lowered at the top of the routine, so "every input is final from its composed read on"
+  must use each input's own first read, not the earliest position the unfold visited (a first
+  draft declined every attention); (d) keep the tiles per row and write them whole ahead of the
+  scan, inside the row loop: that is what cc's pool-parallel `Grid` can privatize (its first-access
+  rule wants a standalone covering write), and it keeps the row loop on the GPU annotator's
+  single-child chain.
 

@@ -1287,6 +1287,20 @@
 # Programmatic override: `Ir.Online_softmax.set_backward_enabled`.
 #online_softmax_backward=false
 
+# The block size of the single-pass attention fold (gh-ocannl-1003), read only where
+# `online_softmax` applies; 0 (the default) keeps the two-pass form above. With B > 0 the
+# normalizer scan and the hoisted value pass become ONE pass: per query row, a scan over key
+# blocks of B carrying the running max and sum, computing the block's scores into a [B] tile (the
+# score contraction and its scale/mask chain), rescaling a [d_v] numerator tile and
+# accumulating `probabilities * v` into it; the last key block writes the output. The
+# scores are never read twice, so no [seq, seq] score buffer is needed whatever the recompute cap
+# says. It reassociates the value contraction as well (`(sum p * v) / l` for `sum (p / l) * v`),
+# within the same numerics gate. A key count not a multiple of B leaves a guarded tail; a pattern
+# the fold cannot prove (active dropout between the probabilities and the value contraction, a
+# score that is not a contraction of two reads) keeps the two-pass form.
+# Programmatic override: `Ir.Online_softmax.set_block`.
+#online_softmax_block=0
+
 # Whether the cc backend's target has native _Float16 arithmetic. "auto" (the default) probes the
 # configured compiler once per process: "none" if _Float16 is missing, "native" if the target
 # defines __ARM_FEATURE_FP16_VECTOR_ARITHMETIC or __AVX512FP16__, "promoted" if the type exists
@@ -1385,6 +1399,7 @@
 # # under this profile.
 # online_softmax=false
 # online_softmax_backward=false
+# online_softmax_block=0
 # --- END PROFILE PAYLOAD reproducible ---
 
 # --- BEGIN PROFILE PAYLOAD performance ---

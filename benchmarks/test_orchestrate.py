@@ -2051,13 +2051,21 @@ class FixtureDigestTest(unittest.TestCase):
         # nothing pins. (Their digests are deliberately NOT pinned here: a coordinated
         # regeneration is allowed to change them, it is only allowed to change them for BOTH.)
         # gh-ocannl-483 added m4-max's bytes for gpt2_mini (its report is on them) and the
-        # long-context legs it introduced, which only m4-max has recorded so far.
+        # long-context legs it introduced, which only m4-max has recorded so far. gh-ocannl-1002's
+        # training report is on m4-max's bytes of the training workload, its long-context legs and
+        # the batch-1 sequence sweep.
         entries = fixture_digest.read_digests(HERE / "fixtures" / fixture_digest.DIGEST_FILE)
         published = {
             "mlp_small.safetensors": {"minix", "rog-nv"},
             "gpt2_mini.safetensors": {"minix", "rog-nv", "m4-max"},
             "gpt2_mini_s512.safetensors": {"m4-max"},
             "gpt2_mini_s1024.safetensors": {"m4-max"},
+            "gpt2_mini_train.safetensors": {"m4-max"},
+            "gpt2_mini_train_s512.safetensors": {"m4-max"},
+            "gpt2_mini_train_s1024.safetensors": {"m4-max"},
+            "gpt2_mini_train_b1_s128.safetensors": {"m4-max"},
+            "gpt2_mini_train_b1_s256.safetensors": {"m4-max"},
+            "gpt2_mini_train_b1_s512.safetensors": {"m4-max"},
         }
         for name, boxes in published.items():
             self.assertTrue(boxes <= {e.origin for e in entries[name]}, name)
@@ -2963,9 +2971,13 @@ class CellTimeoutTest(unittest.TestCase):
         self.assertEqual(result["workload"], "uncapped")
 
     def test_a_cell_over_the_cap_is_a_runner_failure_naming_the_cap(self):
-        result, note, log = self.run_cell(
-            "wedged", self.python("import time; time.sleep(300)"), timeout=1.0
+        pidfile = self.dir / "wedged.pid"
+        kill_the_group_on_cleanup(self, pidfile)
+        cell = self.python(
+            "import sys, time\n" + publish_pid("sys.argv[1]", "os.getpid()") + "time.sleep(300)\n",
+            pidfile,
         )
+        result, note, log = self.run_cell("wedged", cell, timeout=1.0)
 
         self.assertIsNone(result)
         self.assertIn("TIMED OUT after 1s", note)
@@ -3039,7 +3051,14 @@ class CellTimeoutTest(unittest.TestCase):
         # Nothing survives SIGKILL except a process stuck in the kernel (an uninterruptible driver
         # ioctl), which is not synthesizable -- so the group probe is stood in for. What is pinned
         # is the consequence: the sweep goes on, and the failure says every later cell in the run
-        # was measured against whatever is still holding the device.
+        # was measured against whatever is still holding the device. With the probe stood in for,
+        # nothing here observes whether the kill landed, so the cleanup is what makes sure of it.
+        pidfile = self.dir / "stuck.pid"
+        kill_the_group_on_cleanup(self, pidfile)
+        cell = self.python(
+            "import sys, time\n" + publish_pid("sys.argv[1]", "os.getpid()") + "time.sleep(300)\n",
+            pidfile,
+        )
         with contextlib.ExitStack() as stack:
             stack.enter_context(unittest.mock.patch.object(orchestrate, "CELL_KILL_GRACE_S", 0.2))
             stack.enter_context(
@@ -3049,9 +3068,7 @@ class CellTimeoutTest(unittest.TestCase):
                     lambda _proc, _allow_zombie_gone=False: cell_group.SURVIVORS,
                 )
             )
-            _, note, _ = self.run_cell(
-                "stuck in the driver", self.python("import time; time.sleep(300)"), timeout=0.5
-            )
+            _, note, _ = self.run_cell("stuck in the driver", cell, timeout=0.5)
 
         self.assertIn("SURVIVED SIGKILL", note)
         self.assertIn("measured against it", note)
@@ -3061,6 +3078,12 @@ class CellTimeoutTest(unittest.TestCase):
         # Ctrl-C on a wedged beam cell is the likeliest way anyone meets this bug by hand, and the
         # search it interrupts leaves exactly the partial cache the cap's kill path quarantines.
         called = []
+        pidfile = self.dir / "interrupted.pid"
+        kill_the_group_on_cleanup(self, pidfile)
+        cell = self.python(
+            "import sys, time\n" + publish_pid("sys.argv[1]", "os.getpid()") + "time.sleep(300)\n",
+            pidfile,
+        )
 
         def handler(_signum, _frame):
             raise KeyboardInterrupt
@@ -3073,7 +3096,7 @@ class CellTimeoutTest(unittest.TestCase):
         with self.assertRaises(KeyboardInterrupt):
             self.run_cell(
                 "interrupted",
-                self.python("import time; time.sleep(300)"),
+                cell,
                 on_incomplete=lambda killed: called.append(("killed", killed))
                 or "quarantined the cache",
             )
@@ -3203,7 +3226,14 @@ class CellTimeoutTest(unittest.TestCase):
         self.addCleanup(signal.signal, signal.SIGTERM, previous_term)
         self.addCleanup(signal.signal, signal.SIGINT, previous_int)
         orchestrate.install_termination_handler()
-        cell = self.python("import time; time.sleep(300)")
+        # The pidfile is the cleanup's alone -- the assertion below reads the pid from Popen: a
+        # cancellation that fails leaves the cell to run, publish and sleep to its 60 s cap.
+        pidfile = self.dir / "mid-spawn.pid"
+        kill_the_group_on_cleanup(self, pidfile)
+        cell = self.python(
+            "import sys, time\n" + publish_pid("sys.argv[1]", "os.getpid()") + "time.sleep(300)\n",
+            pidfile,
+        )
         real_popen = cell_group.subprocess.Popen
         spawned = []
 
@@ -3595,6 +3625,13 @@ class CellTimeoutTest(unittest.TestCase):
         # cancellation that reports a clean exit over a process still holding the device is how
         # the NEXT run gets measured against it (gh-ocannl-760 review). The survivor is stood in
         # for as elsewhere: nothing outlives SIGKILL but a process stuck in the kernel.
+        pidfile = self.dir / "supporting.pid"
+        kill_the_group_on_cleanup(self, pidfile)
+        command = self.python(
+            "import sys, time\n" + publish_pid("sys.argv[1]", "os.getpid()") + "time.sleep(300)\n",
+            pidfile,
+        )
+
         def handler(_signum, _frame):
             raise KeyboardInterrupt
 
@@ -3612,7 +3649,7 @@ class CellTimeoutTest(unittest.TestCase):
             )
             signal.setitimer(signal.ITIMER_REAL, 1.0)
             with self.assertRaises(cell_group.CleanupFailed) as raised:
-                orchestrate.run_supporting(self.python("import time; time.sleep(300)"))
+                orchestrate.run_supporting(command)
 
         self.assertIn("SURVIVED SIGKILL", str(raised.exception))
 
@@ -3717,9 +3754,13 @@ class CellTimeoutTest(unittest.TestCase):
     def test_a_fractional_cap_is_reported_as_the_cap_it_was(self):
         # `{:.0f}` rounded a sub-second cap to `TIMED OUT after 0s`, one clause before the text
         # saying that zero disables the cap.
-        _, note, _ = self.run_cell(
-            "briefly capped", self.python("import time; time.sleep(300)"), timeout=0.25
+        pidfile = self.dir / "briefly.pid"
+        kill_the_group_on_cleanup(self, pidfile)
+        cell = self.python(
+            "import sys, time\n" + publish_pid("sys.argv[1]", "os.getpid()") + "time.sleep(300)\n",
+            pidfile,
         )
+        _, note, _ = self.run_cell("briefly capped", cell, timeout=0.25)
 
         self.assertIn("TIMED OUT after 0.25s", note)
 
@@ -3756,6 +3797,13 @@ class CellTimeoutTest(unittest.TestCase):
         # chance to hear that something still holds the device -- while the cancellation's own
         # message says the cell was killed, and the retry they are about to start would be
         # measured against the survivor. The survivor is stood in for, as elsewhere.
+        pidfile = self.dir / "interrupted-survivor.pid"
+        kill_the_group_on_cleanup(self, pidfile)
+        cell = self.python(
+            "import sys, time\n" + publish_pid("sys.argv[1]", "os.getpid()") + "time.sleep(300)\n",
+            pidfile,
+        )
+
         def handler(_signum, _frame):
             raise KeyboardInterrupt
 
@@ -3774,9 +3822,7 @@ class CellTimeoutTest(unittest.TestCase):
                 )
             )
             with self.assertRaises(cell_group.CleanupFailed) as raised:
-                orchestrate.run_cell(
-                    "interrupted over a survivor", self.python("import time; time.sleep(300)")
-                )
+                orchestrate.run_cell("interrupted over a survivor", cell)
 
         self.assertIn("SURVIVED SIGKILL", str(raised.exception))
 
@@ -3786,12 +3832,18 @@ class CellTimeoutTest(unittest.TestCase):
         # full, and losing the sweep to that would leave the partial cache.db in place AND lose
         # the failure record.
         called = []
+        pidfile = self.dir / "broken-log.pid"
+        kill_the_group_on_cleanup(self, pidfile)
+        cell = self.python(
+            "import sys, time\n" + publish_pid("sys.argv[1]", "os.getpid()") + "time.sleep(300)\n",
+            pidfile,
+        )
         with unittest.mock.patch.object(
             orchestrate, "CELL_LOG_DIR", Path("/dev/null/not-a-directory")
         ):
             result, note, _ = self.run_cell(
                 "wedged with a broken log dir",
-                self.python("import time; time.sleep(300)"),
+                cell,
                 timeout=1.0,
                 on_incomplete=lambda killed: called.append(("killed", killed))
                 or "quarantined the cache",
@@ -3808,11 +3860,15 @@ class CellTimeoutTest(unittest.TestCase):
         # search's progress up to the kill was unreadable. The log is written as the cell runs;
         # what the cell printed before the cap is on disk after the kill.
         logs = self.dir / "cells"
+        pidfile = self.dir / "logged.pid"
+        kill_the_group_on_cleanup(self, pidfile)
         cell = self.python(
             "import sys, time\n"
             "print('autotune-progress: event=arm_start arm=\"A\"', flush=True)\n"
             "sys.stderr.write('stderr evidence\\n'); sys.stderr.flush()\n"
-            "time.sleep(300)\n"
+            + publish_pid("sys.argv[1]", "os.getpid()")
+            + "time.sleep(300)\n",
+            pidfile,
         )
         with unittest.mock.patch.object(orchestrate, "CELL_LOG_DIR", logs):
             result, note, _ = self.run_cell("gpt2 ocannl/cc/tuned (search pass)", cell, timeout=2.0)

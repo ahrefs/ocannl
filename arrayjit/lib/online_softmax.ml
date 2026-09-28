@@ -471,6 +471,9 @@ let lowest_finite = function
   | Ops.Double_prec _ -> -.Float.max_finite_value
   | _ -> -3.4028234663852886e38
 
+(* A running max read through that floor. *)
+let floor_at prec v = LL.Binop (Ops.Max, (v, prec), (LL.Constant (lowest_finite prec), prec))
+
 let emit_normalizer (nz : normalizer) : LL.t =
   let open LL in
   let m_st = scalar_node ~label:"online_max" ~like:nz.m (state_prec nz.m) in
@@ -493,7 +496,6 @@ let emit_normalizer (nz : normalizer) : LL.t =
      step ([nan * alpha + p]), as in the composed form. Having no [-inf] comparison in the update
      leaves a C compiler's finite-math licence ([cc_backend_fast_math], on in the same [approximate]
      profile) nothing to fold that a finite result depends on. *)
-  let floor_at prec v = Binop (Ops.Max, (v, prec), (Constant (lowest_finite prec), prec)) in
   let m_prec = state_prec nz.m in
   let m_floor_prev = floor_at m_prec m_prev and m_floor_next = floor_at m_prec m_next in
   let l_next =
@@ -843,16 +845,31 @@ type backward = {
   code : LL.t;
 }
 
-let find_backward r (nz : normalizer) : backward option =
+(* The probabilities [P := e / l] a normalizer's value pass consumes, and that pass [O += P * v]:
+   [P] elementwise over the scores' roles, the pass a reduction whose target names [O], whose other
+   operand names [v], and whose extra loop is the value width [Chan 0]. Shared by the fused backward
+   and the block fold, which both anchor on it. *)
+type value_pass = {
+  p_tn : Tn.t;
+  sig_p : signature;
+  p_pos : int;  (** The probabilities' definition. *)
+  v_pos : int;
+  vp_voc : vocabulary;  (** The normalizer's vocabulary with the value width [Chan 0]. *)
+  o_tn : Tn.t;
+  sig_o : signature;
+  v_tn : Tn.t;
+  sig_v : signature;
+}
+
+let find_value_pass r (nz : normalizer) : value_pass option =
   let all_pos = List.range 0 (Array.length r.stmts) in
   let nests_where f =
     List.filter_map all_pos ~f:(fun pos -> Option.bind r.nests.(pos) ~f:(f pos))
   in
-  let x_prec = Lazy.force nz.x.Tn.storage_prec in
   let rows_roles = roles_of nz.sig_m in
   let all_rows sg = List.for_all rows_roles ~f:(has_role sg) in
   (* 1. The probabilities [P := e / l], elementwise over the scores' roles. *)
-  let* p_tn, sig_p =
+  let* p_tn, sig_p, p_pos =
     one
       (nests_where (fun pos n ->
            match n.llsc with
@@ -861,12 +878,12 @@ let find_backward r (nz : normalizer) : backward option =
                let* env = reads_in nz.voc n [ (nz.sig_e, ei); (nz.sig_l, li) ] in
                let* def_pos, _ = definition r n.tn in
                let* sg = sign env n.idcs in
-               Option.some_if (def_pos = pos && same_roles sg nz.sig_x) (n.tn, sg)
+               Option.some_if (def_pos = pos && same_roles sg nz.sig_x) (n.tn, sg, pos)
            | _ -> None))
   in
   (* 2. The value pass [O += P * v]: its target names [O], its other operand [v], and its extra loop
      the value width [Chan 0]. *)
-  let* v_pos, voc, o_tn, sig_o, v_tn, sig_v =
+  let* v_pos, vp_voc, o_tn, sig_o, v_tn, sig_v =
     one
       (nests_where (fun pos n ->
            let* op, rhs = reduction n in
@@ -881,6 +898,17 @@ let find_backward r (nz : normalizer) : backward option =
              && has_role sig_v Reduced && has_role sig_v (Chan 0))
              (pos, voc, n.tn, sig_o, v, sig_v)))
   in
+  Some { p_tn; sig_p; p_pos; v_pos; vp_voc; o_tn; sig_o; v_tn; sig_v }
+
+let find_backward r (nz : normalizer) : backward option =
+  let all_pos = List.range 0 (Array.length r.stmts) in
+  let nests_where f =
+    List.filter_map all_pos ~f:(fun pos -> Option.bind r.nests.(pos) ~f:(f pos))
+  in
+  let x_prec = Lazy.force nz.x.Tn.storage_prec in
+  let rows_roles = roles_of nz.sig_m in
+  let all_rows sg = List.for_all rows_roles ~f:(has_role sg) in
+  let* { p_tn; sig_p; v_pos; vp_voc = voc; o_tn; sig_o; v_tn; sig_v; _ } = find_value_pass r nz in
   (* 3. A: [dP += dO * v] over the value width, into a node of the scores' roles; its other operand,
      read with [O]'s roles, names [dO]. *)
   let* a_pos, a_env, a_rhs, dp_tn, sig_dp, do_tn =
@@ -1374,6 +1402,506 @@ let find_backward r (nz : normalizer) : backward option =
       code = unflat_lines [ d_code; dq_code; dk_code; dv_code ];
     }
 
+(* {1 The block fold (gh-ocannl-1003)}
+
+   With a positive block size [B] ([online_softmax_block]), a normalizer whose value pass the fold
+   can see becomes ONE pass instead of the scan and the hoisted value pass: per query row (and per
+   batch and head), a {!Ir.Low_level.t.Scan_loop} over the key blocks of [B] carrying the row's
+   running max and rescaled sum, whose body computes the row's block of scores into a tile [S[B]] by
+   the score reduction and its elementwise chain (scale, mask), the new max, the rescale factor
+   [alpha], the exponentials [P = exp (S - m')] in place, the rescaled sum, and the row's numerator
+   [U[d_v]] rescaled by [alpha] and accumulating [P * V] for the block -- FlashAttention-2's block
+   recurrence (the gh-ocannl-1002/1003 record). The last key block writes [O = U / l]. [S] and [U]
+   are minted tile nodes the body updates in place: undeclared carried state, sound because a write
+   in a scan body is never a virtualization candidate ([Non_virtual 148], so [U] is never inlined
+   across iterations; the tiles' inits ahead of the scan are refused too, [147]) and schedule
+   transforms do not enter a scan body (nothing reorders the rescale against the accumulation). The
+   query rows are the max's own loops around the scan, so the carried state is one scalar pair per
+   row, and the tiles are the row's own scratch: first written whole ahead of its scan, which is
+   what lets a pool-parallel CPU rendering privatize them per chunk and a GPU thread keep them
+   private. A cooperative rendering of the two contractions on matrix units needs query blocks, and
+   the block's rows in the tiles, shared across the lanes that own the rows; that is a layout the
+   scheduling side would give them (splitting the query loop), not this pass.
+
+   The pass reassociates the value contraction ([sum (P / l) * V] becomes [(sum P * V) / l], block
+   by block) on top of the normalizer's summation: the same numerics gate. Masked and special-valued
+   scores follow the two-pass recurrence's arithmetic -- the running max read through the
+   lowest-finite floor, [-inf] never meeting itself, a NaN poisoning the row's sum and numerator --
+   and a key tail (the key count not a multiple of [B]) pads the tile with [-inf] scores, zero
+   weight, never zero scores; the reads a padded cell would make are guarded away. Final [(m, l)]
+   land in the original nodes when anything else reads them (the composed or the fused backward,
+   which then read what they read after the two-pass form), [O] in its own; the scores' own chain
+   goes when nothing else reads it. *)
+
+let block_override : int option ref = ref None
+let set_block b = block_override := b
+
+let block () =
+  match !block_override with
+  | Some b -> b
+  | None -> Int.of_string (Utils.get_global_arg ~default:"0" ~arg_name:"online_softmax_block")
+
+(* A tile: routine scratch a scan body updates in place. No memory mode is requested: that the tile
+   is never virtual is the optimizer's own structural refusal -- every setter in a scan body is
+   refused ([Non_virtual 148]), and so is the whole-tile init ahead of the scan, a write the
+   enclosing row loops repeat ([147]) -- which is the soundness argument for carrying it through
+   memory, so the test pins that decision, not a request of ours. Memoized like the scope-local
+   nodes, per shape: a session sweeping the block size mints one tile per size. *)
+let tile_node ~label ~(like : Tn.t) ~dims prec =
+  let key = label ^ ":" ^ String.concat_array ~sep:"x" (Array.map dims ~f:Int.to_string) in
+  Hashtbl.find_or_add minted (like.Tn.uid, key) ~default:(fun () ->
+      Tn.create ~namespace (Tn.Specified prec) ~id:(fresh_id ()) ~label:(label :: like.Tn.label)
+        ~unpadded_dims:(lazy dims)
+        ~padding:(lazy None)
+        ())
+
+(* {2 Index arithmetic} *)
+
+let terms_of = function
+  | Idx.Fixed_idx k -> Some ([], k)
+  | Idx.Iterator s -> Some ([ (1, s) ], 0)
+  | Idx.Affine { symbols; offset } -> Some (symbols, offset)
+  | Idx.Sub_axis | Idx.Concat _ -> None
+
+(* [i] with each symbol [sub] maps replaced by the index it maps to, affinely. *)
+let subst_idx sub (i : Idx.axis_index) : Idx.axis_index option =
+  let* terms, offset = terms_of i in
+  let* parts =
+    List.map terms ~f:(fun (c, s) ->
+        match sub s with
+        | None -> Some ([ (c, s) ], 0)
+        | Some i' ->
+            let* ts, o = terms_of i' in
+            Some (List.map ts ~f:(fun (c', s') -> (c * c', s')), c * o))
+    |> Option.all
+  in
+  Some
+    (Idx.affine ~symbols:(List.concat_map parts ~f:fst)
+       ~offset:(offset + List.sum (module Int) parts ~f:snd))
+
+let subst_scalar ?(get = fun _ _ -> None) sub s =
+  Option.map (map_scalar ~idx:(subst_idx sub) ~get s) ~f:fst
+
+(* Whether a reduction nest writes every cell of its node: each target axis a distinct plain
+   iterator of a live loop over the axis's whole extent (or the fixed index of a unit axis), the
+   other loops live reduction loops. *)
+let reduction_covers (n : nest) =
+  let dims = Lazy.force n.tn.Tn.dims in
+  let targets =
+    Array.to_list n.idcs |> List.filter_map ~f:(function Idx.Iterator s -> Some s | _ -> None)
+  in
+  Array.length dims = Array.length n.idcs
+  && (not (List.contains_dup ~compare:Idx.compare_symbol targets))
+  && Array.for_alli n.idcs ~f:(fun a -> function
+    | Idx.Fixed_idx k -> k = 0 && dims.(a) = 1
+    | Idx.Iterator s -> (
+        match List.find n.loops ~f:(fun lp -> Idx.equal_symbol lp.index s) with
+        | Some lp -> lp.from_ = 0 && lp.to_ = dims.(a) - 1
+        | None -> false)
+    | _ -> false)
+  && List.for_all n.loops ~f:(fun lp -> lp.from_ <= lp.to_)
+
+type fold = {
+  f_consumed : int list;  (** The statements the fold replaces, moved definitions included. *)
+  f_at : int;  (** Where it goes: the value pass's position. *)
+  f_code : LL.t;  (** The fold, then the moved definitions. *)
+}
+
+let find_fold r (nz : normalizer) ~block : fold option =
+  let* vp = find_value_pass r nz in
+  let* z_o, o_accs = accumulated r vp.o_tn in
+  let* () = Option.some_if (List.equal Int.equal (List.map o_accs ~f:pos_of) [ vp.v_pos ]) () in
+  let f_at = vp.v_pos in
+  let rows_roles = roles_of nz.sig_m in
+  let idcs_at (sym : role -> Idx.axis_index) sg =
+    Array.map sg ~f:(function Fixed k -> Idx.Fixed_idx k | Role r -> sym r)
+  in
+  (* The scores' definition, instantiated at one canonical symbol per role, unfolded through the
+     elementwise chain (the mask's [where], the scale) down to the score reduction. *)
+  let canon = List.map (rows_roles @ [ Reduced ]) ~f:(fun r -> (r, Idx.get_symbol ())) in
+  let canon_sym role = List.Assoc.find_exn canon ~equal:equal_role role in
+  let* chain, chain_defs =
+    unfold r ~stop:[] ~before:nz.a ~depth:8
+      (LL.Get (nz.x, idcs_at (fun r -> Idx.Iterator (canon_sym r)) nz.sig_x))
+  in
+  let reads = ref [] in
+  let* _ =
+    map_scalar ~idx:Option.some
+      ~get:(fun tn i ->
+        reads := (tn, i) :: !reads;
+        None)
+      chain
+  in
+  (* The score reduction: the one node the chain reads that a single product accumulation defines,
+     read at one cell. *)
+  let is_score tn =
+    match accumulated r tn with
+    | Some (_, [ (_, _, rhs) ]) -> Option.is_some (product rhs)
+    | _ -> false
+  in
+  let score_reads = List.filter !reads ~f:(fun (tn, _) -> is_score tn) in
+  let* sr, sr_idcs =
+    match score_reads with
+    | (sr, idcs) :: rest
+      when List.for_all rest ~f:(fun (tn, i) ->
+               Tn.equal tn sr && [%equal: Idx.axis_index array] i idcs) ->
+        Some (sr, idcs)
+    | _ -> None
+  in
+  let* z_s, sr_accs = accumulated r sr in
+  let* sr_pos, sr_nest, sr_rhs = one sr_accs in
+  let* () = Option.some_if (reduction_covers sr_nest) () in
+  let* (qa, _), (kb, _) = product sr_rhs in
+  (* The reduction's symbols: a target symbol maps to the chain's read of that axis, a reduction
+     loop to a fresh symbol per instantiation. *)
+  let red_loops = List.filter sr_nest.loops ~f:(fun lp -> not (mentions lp.index sr_nest.idcs)) in
+  let sr_sub red s =
+    match
+      Array.find_mapi sr_nest.idcs ~f:(fun a -> function
+        | Idx.Iterator s' when Idx.equal_symbol s s' -> Some sr_idcs.(a)
+        | _ -> None)
+    with
+    | Some i -> Some i
+    | None ->
+        List.find_map red ~f:(fun ((lp : loop), s') ->
+            Option.some_if (Idx.equal_symbol lp.index s) (Idx.Iterator s'))
+  in
+  (* {2 The contract} *)
+  let float_node (tn : Tn.t) = Ops.is_float (Lazy.force tn.Tn.storage_prec) in
+  let leaves =
+    List.filter_map !reads ~f:(fun (tn, _) -> Option.some_if (not (Tn.equal tn sr)) tn)
+  in
+  let inputs = qa :: kb :: leaves in
+  (* Every node the fold reads is final where the composed form read it and stays so up to the fold:
+     nothing writes the score's operands or the chain's leaves from their first composed read to the
+     value pass, where the fold reads them ([v] is read where it always was). *)
+  let first_read tn =
+    List.filter (sr_pos :: chain_defs) ~f:(fun p -> Set.mem (reads_at r p) tn)
+    |> List.fold ~init:nz.a ~f:Int.min
+  in
+  let untouched_from lo tn = List.for_all (writers r tn) ~f:(fun w -> w < lo || w > f_at) in
+  let lo = List.fold (z_s :: sr_pos :: chain_defs) ~init:nz.a ~f:Int.min in
+  let consumed0 = [ nz.a_init; nz.a; nz.c_init; nz.c; z_o; f_at ] in
+  let is_consumed0 p = List.mem consumed0 p ~equal:Int.equal in
+  (* The pointwise definitions between the max and the value pass reading the row state -- the
+     shifted scores, the exponentials, the probabilities, and whatever reads those in turn -- ran
+     after the max in the composed order and read its final [m] and [l]; the fold writes those at
+     the value pass, so the definitions move behind it (or go, if nothing reads them). *)
+  let rec closure c_nodes c_defs =
+    let watched = nz.m :: nz.l :: c_nodes in
+    let fresh =
+      List.filter
+        (List.range (nz.a + 1) f_at)
+        ~f:(fun p ->
+          (not (is_consumed0 p))
+          && (not (List.mem c_defs p ~equal:Int.equal))
+          && List.exists watched ~f:(Set.mem (reads_at r p)))
+    in
+    if List.is_empty fresh then Some (c_nodes, c_defs)
+    else
+      let* added =
+        List.map fresh ~f:(fun p ->
+            let* n = r.nests.(p) in
+            let* dp, _ = definition r n.tn in
+            Option.some_if (dp = p) (n.tn, p))
+        |> Option.all
+      in
+      closure (c_nodes @ List.map added ~f:fst) (c_defs @ List.map added ~f:snd)
+  in
+  let* c_nodes, c_defs = closure [] [] in
+  let c_defs = List.sort c_defs ~compare:Int.compare in
+  let state = nz.m :: nz.l :: c_nodes in
+  (* Liveness per node, from the downstream roots: a node of the row state is live when it was
+     requested, when a statement after the value pass reads it, or when a live definition reads it.
+     Only live definitions move; a dead one goes, so that it keeps nothing it reads -- the score
+     chain above all -- alive. *)
+  let target_of_def p = Option.map r.nests.(p) ~f:(fun n -> n.tn) in
+  let rooted tn = Tn.known_non_virtual tn || List.exists (readers r tn) ~f:(fun p -> p > f_at) in
+  let rec liveness live =
+    let more =
+      List.filter c_defs ~f:(fun p ->
+          Option.exists (target_of_def p) ~f:(fun tn -> List.mem live tn ~equal:Tn.equal))
+      |> List.concat_map ~f:(fun p ->
+          List.filter state ~f:(fun tn ->
+              Set.mem (reads_at r p) tn && not (List.mem live tn ~equal:Tn.equal)))
+      |> List.dedup_and_sort ~compare:Tn.compare
+    in
+    if List.is_empty more then live else liveness (live @ more)
+  in
+  let live_nodes = liveness (List.filter state ~f:rooted) in
+  let is_live tn = List.mem live_nodes tn ~equal:Tn.equal in
+  let live_defs = List.filter c_defs ~f:(fun p -> Option.exists (target_of_def p) ~f:is_live) in
+  let dead_defs = List.filter c_defs ~f:(fun p -> not (List.mem live_defs p ~equal:Int.equal)) in
+  (* [O] must be written whole: the fold replaces its zeroing, and writes the cells the value pass's
+     signature spans -- every role over its whole extent, a fixed index only on a unit axis. *)
+  let covers_node (tn : Tn.t) (sg : signature) =
+    let dims = Lazy.force tn.Tn.dims in
+    Array.length dims = Array.length sg
+    && Array.for_alli sg ~f:(fun a slot ->
+        match slot with
+        | Fixed k -> k = 0 && dims.(a) = 1
+        | Role role ->
+            Option.equal Int.equal
+              (List.Assoc.find vp.vp_voc.extents ~equal:equal_role role)
+              (Some (dims.(a) - 1)))
+    && not (List.contains_dup (roles_of sg) ~compare:compare_role)
+  in
+  let movable p =
+    (* No scope locals: their writes are not in the census this motion check reads. *)
+    Option.exists r.nests.(p) ~f:(fun n ->
+        Option.is_some (map_scalar ~idx:Option.some ~get:(fun _ _ -> None) n.llsc))
+    && Set.for_all (reads_at r p) ~f:(fun tn ->
+        List.mem state tn ~equal:Tn.equal
+        || List.for_all (writers r tn) ~f:(fun w -> w <= p || w > f_at))
+  in
+  let span_lo = List.fold consumed0 ~init:lo ~f:Int.min in
+  let contract =
+    List.for_all [ sr; qa; kb; vp.v_tn; vp.o_tn ] ~f:float_node
+    (* The scores are computed into a tile at the chain's state precision: the composed reduction
+       rounds each score to its own node, so it must be at the chain's precision too. *)
+    && Ops.equal_prec (Lazy.force sr.Tn.storage_prec) (Lazy.force nz.x.Tn.storage_prec)
+    (* Likewise the probabilities: the composed value pass reads them rounded to their node, which
+       the fold never stores; so the whole chain from the scores to [P] is at one precision (the
+       normalizer's own contract already holds [m], [n], [e] and [l] there). *)
+    && Ops.equal_prec (Lazy.force vp.p_tn.Tn.storage_prec) (Lazy.force nz.x.Tn.storage_prec)
+    && List.for_all inputs ~f:(fun tn -> untouched_from (first_read tn) tn)
+    && (not (List.mem inputs vp.o_tn ~equal:Tn.equal))
+    && (not (List.exists inputs ~f:(List.mem state ~equal:Tn.equal)))
+    (* Nothing reads [O] between its zeroing and the value pass. *)
+    && List.for_all (readers r vp.o_tn) ~f:(fun p -> p <= z_o || p >= f_at)
+    && covers_node vp.o_tn vp.sig_o
+    (* Program order: the normalizer's sum, then the probabilities' definition, then the value pass
+       -- a value pass reading probabilities an earlier call left (read before write) is not the
+       pass over this call's normalizer. *)
+    && nz.c < vp.p_pos
+    && vp.p_pos < f_at && List.for_all live_defs ~f:movable
+    && not (List.exists (List.range span_lo (f_at + 1)) ~f:(fun pos -> r.opaque.(pos)))
+  in
+  let* () = Option.some_if contract () in
+  (* {2 Emission} *)
+  let open LL in
+  let extent (voc : vocabulary) role = List.Assoc.find_exn voc.extents ~equal:equal_role role + 1 in
+  let sk = extent nz.voc Reduced and dv = extent vp.vp_voc (Chan 0) in
+  let bk = Int.min block sk in
+  let nkb = (sk + bk - 1) / bk in
+  let mp = state_prec nz.m in
+  (* The numerator accumulates [p * v] into [O]'s values: at the wider of the two state precisions.
+     The score tile stays at the scores' own. *)
+  let prec =
+    match (mp, state_prec vp.o_tn) with
+    | (Ops.Double_prec _ as p), _ | _, (Ops.Double_prec _ as p) -> p
+    | p, _ -> p
+  in
+  let s_tile = tile_node ~label:"block_scores" ~like:nz.x ~dims:[| bk |] mp in
+  let u_tile = tile_node ~label:"block_numerator" ~like:vp.o_tn ~dims:[| dv |] prec in
+  (* A tile past the stack threshold would resolve to an [On_device] buffer, one for every row the
+     schedule runs in parallel: the rows would race on it. The fold needs thread-private tiles. *)
+  let* () =
+    Option.some_if
+      (List.for_all [ s_tile; u_tile ] ~f:(fun tn ->
+           Tn.equal_memory_mode (Tn.most_local_materialized_mode tn) Tn.Local))
+      ()
+  in
+  let m_st = scalar_node ~label:"block_max" ~like:nz.m mp in
+  let l_st = scalar_node ~label:"block_sum" ~like:nz.l mp in
+  let local label like = get_scope (scalar_node ~label ~like mp) in
+  let m = { prev = get_scope m_st; next = get_scope m_st; init = Constant Float.neg_infinity } in
+  let l = { prev = get_scope l_st; next = get_scope l_st; init = Constant 0. } in
+  let row_syms = List.map rows_roles ~f:(fun r -> (r, Idx.get_symbol ())) in
+  let row_sym r = List.Assoc.find_exn row_syms ~equal:equal_role r in
+  let tb = Idx.get_symbol () in
+  (* The fold's index of each role, for the in-block key [j] and value channel [e]. *)
+  let role_idx ~j ~e = function
+    | Row _ as r -> Idx.Iterator (row_sym r)
+    | Reduced -> Idx.affine ~symbols:[ (bk, tb); (1, j) ] ~offset:0
+    | Chan _ -> Idx.Iterator e
+  in
+  let canon_sub ~j ~e s =
+    List.find_map canon ~f:(fun (r, c) -> Option.some_if (Idx.equal_symbol c s) (role_idx ~j ~e r))
+  in
+  (* A placeholder for the [j] or [e] a role's index does not use. *)
+  let none = Idx.get_symbol () in
+  let binop op a b = apply_op (Ops.Binop op) [| a; b |] in
+  let exp_ a = apply_op (Ops.Unop Ops.Exp) [| a |] in
+  let set tn idcs llsc = Set { tn; idcs; llsc; debug = "" } in
+  let loop_n n body_of =
+    let s = Idx.get_symbol () in
+    For_loop { index = s; from_ = 0; to_ = n - 1; body = body_of s; axis = Serial }
+  in
+  let iprec = Ops.index_prec () in
+  let lt idx bound =
+    Binop (Ops.Cmplt, (Embed_index idx, iprec), (Constant (Float.of_int bound), iprec))
+  in
+  let guard_if cond body = If { cond = (cond, iprec); body } in
+  let key_guard ~j body =
+    if sk % bk = 0 then body else guard_if (lt (role_idx ~j ~e:none Reduced) sk) body
+  in
+  let tile j = [| Idx.Iterator j |] in
+  (* One row's scan. *)
+  let row_scan () =
+    let* score_code =
+      let j = Idx.get_symbol () in
+      let red = List.map red_loops ~f:(fun lp -> (lp, Idx.get_symbol ())) in
+      let at = tile j in
+      let* term = subst_scalar (sr_sub red) sr_rhs in
+      let* term = subst_scalar (canon_sub ~j ~e:none) term in
+      let* chained =
+        subst_scalar (canon_sub ~j ~e:none)
+          ~get:(fun tn _ -> Option.some_if (Tn.equal tn sr) (Get (s_tile, at)))
+          chain
+      in
+      let accumulate =
+        List.fold_right red
+          ~init:(set s_tile at (binop Ops.Add (Get (s_tile, at)) term))
+          ~f:(fun ((lp : loop), s) body ->
+            For_loop { index = s; from_ = lp.from_; to_ = lp.to_; body; axis = Serial })
+      in
+      let body = unflat_lines [ set s_tile at (Constant 0.); accumulate; set s_tile at chained ] in
+      Some
+        ((if sk % bk = 0 then []
+          else [ loop_n bk (fun j -> set s_tile (tile j) (Constant Float.neg_infinity)) ])
+        @ [
+            For_loop { index = j; from_ = 0; to_ = bk - 1; body = key_guard ~j body; axis = Serial };
+          ])
+    in
+    let bm = local "block_rowmax" nz.m and fm = local "block_floor" nz.m in
+    let al = local "block_rescale" nz.l and rs = local "block_rowsum" nz.l in
+    let lf = local "block_norm" nz.l in
+    let s_ij j = Get (s_tile, tile j) in
+    let u_ie e = Get (u_tile, tile e) in
+    let v_read j e = Get (vp.v_tn, idcs_at (role_idx ~j ~e) vp.sig_v) in
+    let decl id = Declare_local { id; needs_init = false } in
+    let l_stored =
+      apply_op (Ops.Ternop Ops.Where)
+        [|
+          Binop (Ops.Cmpeq, (Get_local m.next, mp), (Constant Float.neg_infinity, mp));
+          Constant Float.nan;
+          Get_local l.next;
+        |]
+    in
+    let state_writes =
+      (if is_live nz.m then
+         [ set nz.m (idcs_at (role_idx ~j:none ~e:none) nz.sig_m) (Get_local m.next) ]
+       else [])
+      @
+      if is_live nz.l then [ set nz.l (idcs_at (role_idx ~j:none ~e:none) nz.sig_l) (Get_local lf) ]
+      else []
+    in
+    let last =
+      Binop
+        ( Ops.Cmpeq,
+          (Embed_index (Idx.Iterator tb), iprec),
+          (Constant (Float.of_int (nkb - 1)), iprec) )
+    in
+    let body =
+      score_code
+      @ [
+          decl bm;
+          Set_local (bm, Get_local m.prev);
+          loop_n bk (fun j -> Set_local (bm, binop Ops.Max (Get_local bm) (s_ij j)));
+          Set_local (m.next, Get_local bm);
+          decl fm;
+          Set_local (fm, floor_at mp (Get_local m.next));
+          decl al;
+          Set_local (al, exp_ (binop Ops.Sub (floor_at mp (Get_local m.prev)) (Get_local fm)));
+          loop_n bk (fun j -> set s_tile (tile j) (exp_ (binop Ops.Sub (s_ij j) (Get_local fm))));
+          decl rs;
+          Set_local (rs, Constant 0.);
+          loop_n bk (fun j -> Set_local (rs, binop Ops.Add (Get_local rs) (s_ij j)));
+          Set_local
+            (l.next, binop Ops.Add (binop Ops.Mul (Get_local l.prev) (Get_local al)) (Get_local rs));
+          decl lf;
+          Set_local (lf, l_stored);
+          loop_n dv (fun e -> set u_tile (tile e) (binop Ops.Mul (u_ie e) (Get_local al)));
+          loop_n dv (fun e ->
+              loop_n bk (fun j ->
+                  key_guard ~j
+                    (set u_tile (tile e)
+                       (binop Ops.Add (u_ie e) (binop Ops.Mul (s_ij j) (v_read j e))))));
+        ]
+      @ state_writes
+      @ [
+          guard_if last
+            (loop_n dv (fun e ->
+                 set vp.o_tn
+                   (idcs_at (role_idx ~j:none ~e) vp.sig_o)
+                   (binop Ops.Div (u_ie e) (Get_local lf))));
+        ]
+    in
+    Some
+      (Scan_loop
+         {
+           index = tb;
+           from_ = 0;
+           to_ = nkb - 1;
+           direction = Forward;
+           carried = [ m; l ];
+           body = unflat_lines body;
+         })
+  in
+  let* scan = row_scan () in
+  (* Each row's tiles are first touched by a whole-tile write ahead of its scan, so a pool-parallel
+     CPU rendering can give each chunk its own copy, and a GPU thread keeps them private. The row
+     loops are the max's own: grouping the query rows into blocks buys the scalar form nothing, and
+     a split query loop is what the GPU preset's chain selection would pair badly. *)
+  let row =
+    unflat_lines
+      [
+        loop_n dv (fun e -> set u_tile (tile e) (Constant 0.));
+        loop_n bk (fun j -> set s_tile (tile j) (Constant 0.));
+        scan;
+      ]
+  in
+  let rows =
+    List.map nz.rows ~f:(fun lp ->
+        let role = Option.value_exn (role_of nz.voc.env lp.index) in
+        { index = row_sym role; from_ = 0; to_ = lp.to_ })
+  in
+  let fold = wrap rows row in
+  let moved = List.map live_defs ~f:(fun p -> r.stmts.(p)) in
+  (* The score chain the fold no longer reads -- the reduction, its zeroing, the scale and the
+     mask's [where] -- goes too once nothing else reads it: a node the recompute cap keeps would
+     otherwise be computed into a [seq, seq] buffer for no reader. Removed only when every writer of
+     the node is removed with it and nothing requested it. *)
+  let removed0 = consumed0 @ dead_defs in
+  let target_of pos =
+    match (r.stmts.(pos), r.nests.(pos)) with
+    | Zero_out tn, _ -> Some tn
+    | _, Some n -> Some n.tn
+    | _ -> None
+  in
+  let candidates = List.dedup_and_sort ~compare:Int.compare (z_s :: sr_pos :: chain_defs) in
+  let rec dead removed =
+    let gone p = List.mem removed p ~equal:Int.equal in
+    let added =
+      List.filter candidates ~f:(fun pos ->
+          (not (gone pos))
+          &&
+          match target_of pos with
+          | Some tn ->
+              let ws = writers r tn in
+              (not (Tn.known_non_virtual tn))
+              && List.for_all ws ~f:(fun w -> gone w || List.mem candidates w ~equal:Int.equal)
+              && List.for_all (readers r tn) ~f:(fun p -> gone p || List.mem ws p ~equal:Int.equal)
+          | None -> false)
+    in
+    if List.is_empty added then removed else dead (removed @ added)
+  in
+  let removed = dead removed0 in
+  (* The live definitions MOVE: their copies follow the fold, and their original positions go with
+     the rest (consumed, not removed -- the copies still read the score chain). *)
+  let consumed = removed @ live_defs in
+  (* Nothing the fold reads may be written by a statement it consumes -- one it removes, or one it
+     moves behind itself: a value operand that is also a node of the score chain or of the row state
+     would lose its definition, or get it only after the fold read it. *)
+  let* () =
+    Option.some_if
+      (List.for_all (vp.v_tn :: inputs) ~f:(fun tn ->
+           not (List.exists (writers r tn) ~f:(List.mem consumed ~equal:Int.equal))))
+      ()
+  in
+  Some { f_consumed = consumed; f_at; f_code = unflat_lines (fold :: moved) }
+
 (* {1 The pass} *)
 
 let rewrite (llc : LL.t) : LL.t =
@@ -1382,20 +1910,32 @@ let rewrite (llc : LL.t) : LL.t =
   if List.is_empty normalizers then llc
   else
     let stmts = Array.copy r.stmts in
-    List.iter normalizers ~f:(fun nz ->
-        stmts.(nz.a_init) <- LL.Noop;
-        stmts.(nz.c_init) <- LL.Noop;
-        stmts.(nz.c) <- LL.Noop;
-        stmts.(nz.a) <- emit_normalizer nz);
+    let block = block () in
+    (* The block fold replaces a normalizer together with its value pass; one it declines keeps the
+       two-pass form. *)
+    let folded =
+      List.fold normalizers
+        ~init:(Set.empty (module Int))
+        ~f:(fun consumed nz ->
+          match if block > 0 then find_fold r nz ~block else None with
+          | Some f when not (List.exists f.f_consumed ~f:(Set.mem consumed)) ->
+              List.iter f.f_consumed ~f:(fun pos -> stmts.(pos) <- LL.Noop);
+              stmts.(f.f_at) <- f.f_code;
+              Set.union consumed (Set.of_list (module Int) f.f_consumed)
+          | _ ->
+              stmts.(nz.a_init) <- LL.Noop;
+              stmts.(nz.c_init) <- LL.Noop;
+              stmts.(nz.c) <- LL.Noop;
+              stmts.(nz.a) <- emit_normalizer nz;
+              consumed)
+    in
     (* The fused backward consumes its nests before the hoist sees them: B reads the probabilities
        and would otherwise be hoisted in place. Two attention blocks never share a nest, but a match
        overlapping an earlier one is dropped rather than trusted. *)
     let consumed =
-      if not (backward_enabled ()) then Set.empty (module Int)
+      if not (backward_enabled ()) then folded
       else
-        List.fold normalizers
-          ~init:(Set.empty (module Int))
-          ~f:(fun consumed nz ->
+        List.fold normalizers ~init:folded ~f:(fun consumed nz ->
             match find_backward r nz with
             | Some b when not (List.exists b.consumed ~f:(Set.mem consumed)) ->
                 List.iter b.consumed ~f:(fun pos -> stmts.(pos) <- LL.Noop);
