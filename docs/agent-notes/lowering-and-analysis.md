@@ -195,7 +195,9 @@ files.
   key read in a codegen-stage module yet classified code-borne. When adding a config key, classify
   it; when adding a backend knob consulted at codegen, put it in the backend's
   `hardware_limits.codegen_tag` — `cache_key` takes the whole limits record precisely so a new
-  component reaches every call site. `digest_identity_flips` calibrates one representative per
+  component reaches every call site. What a numerics mode resolves to needs no such component: the
+  key derives it from the backend's `codegen_capabilities` (gh-ocannl-1117; the precision note owns
+  it). `digest_identity_flips` calibrates one representative per
   class against a real compile; when picking a code-borne representative note that many optimizer
   keys (`virtualize_max_visits` and its neighbors) are read ONCE into `Low_level.virtualize_settings`
   at module init, so poking `Utils.config_file_args` at runtime does not move them. Caches with an

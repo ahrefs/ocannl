@@ -160,8 +160,8 @@ let fp8_guard_source () =
    unscheduled reference's 536, where the wide arm's first difference was 34.25 against 34.5; wide
    costs up to ~8% on some tensorized cells (intrinsic to the f32-accumulate path, not the
    gh-ocannl-1064 boundary) and speeds the serial legs up 5-21%. The one predicate behind
-   [accum_prec], [mma_combo] and [codegen_tag], so emission, residency and the cache key cannot
-   disagree. *)
+   [accum_prec] and [mma_combo], so emission and residency cannot disagree; the cache key follows
+   [accum_prec] by derivation ([Backend_intf.codegen_capabilities_fingerprint], gh-ocannl-1117). *)
 let bf16_accum_wide () =
   match (Numerics.get ()).Numerics.bf16_arithmetic with
   | Numerics.Bf16_auto | Numerics.Bf16_wide -> true
@@ -1607,12 +1607,11 @@ end = struct
          configurable, so the two regimes needed distinct cache entries; it is now unconditional,
          and a constant contributes nothing to a tag. Restore a component here if the guard ever
          becomes conditional again — say on a ROCm version predicate, once upstream fixes it. *)
-      ^ (if Utils.with_runtime_debug () then "/device-debug" else "/no-device-debug")
-      (* gh-ocannl-1051: [Bf16_auto] now resolves to f32 bf16 residency here, but the numerics
-         fingerprint hashes the configured MODE, which did not change -- so without this component a
-         winner tuned when auto meant the bf16-accumulate arm would replay under the wide one. Named
-         only when wide, so [Bf16_narrow]'s key (the old auto rendering) is unchanged. *)
-      ^ if bf16_accum_wide () then "/bf16-acc-wide" else ""
+      ^ if Utils.with_runtime_debug () then "/device-debug" else "/no-device-debug"
+      (* No [bf16_accum_wide] component (gh-ocannl-1117): gh-ocannl-1051 added one by hand when
+         [Bf16_auto] went wide here with the configured mode unchanged, but what a mode resolves to
+         is now cache identity by derivation — [Schedule_cache.codegen_tag] tabulates this backend's
+         [accum_prec] (which this predicate drives, as it does [mma_combo]) over every precision. *)
     in
     fun () -> { (Lazy.force limits) with Backend_intf.codegen_tag = Some (codegen_tag ()) }
 

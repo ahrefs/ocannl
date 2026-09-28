@@ -200,18 +200,27 @@ val numerics_tag : unit -> string
     replaying a tf32-tuned tensorized winner measured 5.9x slower than not tuning at all, its mma
     rendering degraded to the scalar fallback). Hence it enters {!cache_key} and {!entry}. *)
 
-val codegen_tag : limits:Backend_intf.hardware_limits -> unit -> string
+val codegen_tag :
+  limits:Backend_intf.hardware_limits ->
+  capabilities:Backend_intf.codegen_capabilities ->
+  unit ->
+  string
 (** A filename-safe short digest of the codegen environment (gh-ocannl-572): everything consulted
     when a kernel is {e rendered, compiled or dispatched}, which happens after the lowered code that
     {!digest} names — so, exactly like {!numerics_tag}, these are invisible to the digest while
     changing the kernel or what a timing measures, and a winner crowned under one such regime must
-    not replay under another. Three layers: the process-wide gates (the index and pool-slot width
+    not replay under another. Four layers: the process-wide gates (the index and pool-slot width
     [large_models], [buffer_aliasing]'s [restrict] suppression, and the {e effective}
     routine-logging predicate — which includes the [log_level > 1] threshold, so a verbosity bump
     alone never churns keys — together with the settings that only matter once logging reaches the
     kernel ([prefer_backend_uniformity]'s logging spelling, the stream-log routing); the whole
     [limits] record, which describes the device candidates are generated, rendered and timed
-    against; and, inside it, the backend's own {!Ir.Backend_intf.hardware_limits.codegen_tag}. *)
+    against; and, inside it, the backend's own {!Ir.Backend_intf.hardware_limits.codegen_tag}; and
+    the [capabilities] record, whose precision-resolution functions are tabulated over every
+    precision ({!Ir.Backend_intf.codegen_capabilities_fingerprint}), so what a numerics mode
+    RESOLVES to on this backend is identity by derivation rather than by a hand-named component
+    (gh-ocannl-1117). Pass the compiling context's [Context.codegen_capabilities]: a required
+    argument, so no key-minting site can default to a resolution codegen does not use. *)
 
 type trajectory = {
   search_shape : string;
@@ -311,6 +320,7 @@ val cache_key :
   ?objective:string ->
   timing_identity:Backend_intf.timing_identity option ->
   limits:Backend_intf.hardware_limits ->
+  capabilities:Backend_intf.codegen_capabilities ->
   canonical ->
   backend:string ->
   string option
@@ -318,9 +328,9 @@ val cache_key :
     including directory creation, locking and regime changes. Otherwise a filename-safe cache key:
     the digest, the backend name, {!numerics_tag} of the current numerics policy, {!codegen_tag} of
     the codegen configuration (including [limits.codegen_tag], the compiling backend's own
-    contribution), the worker-pool signature ([limits.worker_pool_tag], gh-ocannl-530: CPU crowns do
-    not transfer across pools), and the autotuner's timing objective ([objective], defaulting to
-    {!objective_tag}).
+    contribution, and the [capabilities]' precision resolution), the worker-pool signature
+    ([limits.worker_pool_tag], gh-ocannl-530: CPU crowns do not transfer across pools), and the
+    autotuner's timing objective ([objective], defaulting to {!objective_tag}).
 
     The objective is a key component because the two objectives crown DIFFERENT candidates
     (gh-ocannl-755, measured): an entry crowned under isolated timing is not the answer to a search
@@ -427,6 +437,7 @@ val placement_key :
   ?objective:string ->
   timing_identity:Backend_intf.timing_identity option ->
   limits:Backend_intf.hardware_limits ->
+  capabilities:Backend_intf.codegen_capabilities ->
   canonical ->
   backend:string ->
   string option

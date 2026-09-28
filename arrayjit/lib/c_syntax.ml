@@ -942,6 +942,7 @@ end
 let codegen_capabilities (module Config : C_syntax_config) =
   {
     Backend_intf.supports_f64 = Config.supports_f64;
+    compute_prec = Config.compute_prec;
     accum_prec = Config.accum_prec;
     asynchronous_staging_copy = Option.is_some Config.async_copy;
   }

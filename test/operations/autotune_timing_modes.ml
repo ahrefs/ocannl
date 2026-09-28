@@ -1283,8 +1283,9 @@ let () =
   let opt, ctx = Option.value_exn !measured in
   let canon = SC.canonicalize ~static_indices:[] opt in
   let limits = Context.hardware_limits ctx and backend = Context.backend_name ctx in
+  let capabilities = Context.codegen_capabilities ctx in
   let key objective =
-    Option.value_exn (SC.cache_key ~timing_identity ~objective ~limits canon ~backend)
+    Option.value_exn (SC.cache_key ~timing_identity ~objective ~limits ~capabilities canon ~backend)
   in
   p "the cache key is stable within one objective" (String.equal (key "queued") (key "queued"));
   p "the cache key separates the two timing objectives"
@@ -1293,20 +1294,20 @@ let () =
     ~f:(fun backend ->
       String.is_suffix
         (Option.value_exn
-           (SC.cache_key ~timing_identity ~objective:"queued" ~limits canon ~backend))
+           (SC.cache_key ~timing_identity ~objective:"queued" ~limits ~capabilities canon ~backend))
         ~suffix:"-tqueued-v2");
   Verdict.p_all "cc and Metal queued keys retain their unchanged timing generation"
     [ "cc"; "multidev_cc"; "metal" ] ~f:(fun backend ->
       String.is_suffix
         (Option.value_exn
-           (SC.cache_key ~timing_identity ~objective:"queued" ~limits canon ~backend))
+           (SC.cache_key ~timing_identity ~objective:"queued" ~limits ~capabilities canon ~backend))
         ~suffix:"-tqueued");
   (* Derived, not restated: a caller that resolved no mode of its own must key exactly as one that
      resolved the configured mode, or a test's hand-built entry would sit under a key no search
      looks up. *)
   p "an omitted objective keys as the configured one"
     (String.equal
-       (Option.value_exn (SC.cache_key ~timing_identity ~limits canon ~backend))
+       (Option.value_exn (SC.cache_key ~timing_identity ~limits ~capabilities canon ~backend))
        (key (SC.objective_tag ())));
   (* The tag a key carries is the mode's own spelling, so a report's objective and the entry that
      stored its times name the same thing. *)

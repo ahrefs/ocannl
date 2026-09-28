@@ -286,6 +286,9 @@ type codegen_capabilities = {
   supports_f64 : bool;
       (** Whether the backend dialect can represent f64 tensor storage. This is explicit rather than
           an exception probe against [typ_of_prec]. *)
+  compute_prec : Ops.prec -> Ops.prec;
+      (** The resolved compute precision for a storage precision, from the same
+          [C_syntax_config.compute_prec] function code generation uses. *)
   accum_prec : Ops.prec -> Ops.prec;
       (** The resolved accumulator precision for a storage precision, from the same
           [C_syntax_config.accum_prec] function code generation uses. *)
@@ -299,7 +302,35 @@ type codegen_capabilities = {
 (** Conservative implementation-facing defaults for missing and mock backends. A real C-family
     backend derives this record from its {!Ir.C_syntax.C_syntax_config}. *)
 let no_codegen_capabilities =
-  { supports_f64 = false; accum_prec = Fn.id; asynchronous_staging_copy = false }
+  {
+    supports_f64 = false;
+    compute_prec = Fn.id;
+    accum_prec = Fn.id;
+    asynchronous_staging_copy = false;
+  }
+
+(** A stable, exhaustive rendering of a capability record under the CURRENT numerics policy: its
+    flags, and each precision-resolution function tabulated over every precision ({!Ops.all_precs}).
+    It is what a numerics mode resolves to on this backend (gh-ocannl-1117) — the mode itself is
+    fingerprinted by [Schedule_cache.numerics_tag], but what [Bf16_auto] means on HIP changed in
+    gh-ocannl-1051 with the mode unchanged, and a winner tuned under the old resolution would have
+    replayed. Tabulating the function codegen calls, rather than naming the predicate behind it,
+    makes the cache identity move exactly when the resolution does, on every backend, with nothing
+    to add by hand. The record pattern names every field, so a field added to
+    {!codegen_capabilities} is a compile error here until it is rendered (warning 9). *)
+let codegen_capabilities_fingerprint
+    { supports_f64; compute_prec; accum_prec; asynchronous_staging_copy } =
+  let resolution f =
+    String.concat ~sep:","
+      (List.map Ops.all_precs ~f:(fun prec -> Ops.prec_string prec ^ ">" ^ Ops.prec_string (f prec)))
+  in
+  String.concat ~sep:";"
+    [
+      (if supports_f64 then "f64" else "no-f64");
+      "compute:" ^ resolution compute_prec;
+      "accum:" ^ resolution accum_prec;
+      (if asynchronous_staging_copy then "async-staging" else "no-async-staging");
+    ]
 
 let no_hardware_limits =
   {

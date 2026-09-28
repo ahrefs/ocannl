@@ -177,15 +177,16 @@ let () =
       fctx chain_comp Ir.Indexing.Empty
   in
   let blimits = Context.hardware_limits bctx in
+  let bcaps = Context.codegen_capabilities bctx in
   SC.store ~dir:cache_dir
     ~key:
-      (SC.cache_key ~timing_identity:(Context.timing_identity bctx) ~limits:blimits base_canon
-         ~backend:(Context.backend_name bctx))
+      (SC.cache_key ~timing_identity:(Context.timing_identity bctx) ~limits:blimits
+         ~capabilities:bcaps base_canon ~backend:(Context.backend_name bctx))
     {
       SC.version = SC.entry_version;
       backend = Context.backend_name bctx;
       numerics = SC.numerics_tag ();
-      codegen = Some (SC.codegen_tag ~limits:blimits ());
+      codegen = Some (SC.codegen_tag ~limits:blimits ~capabilities:bcaps ());
       objective = Some (SC.objective_tag ());
       source_digest = SC.digest base_canon;
       saved = [];
@@ -282,8 +283,8 @@ let () =
      Simulated by rewriting the stored entry's fingerprint: the entry still hits — the winner replay
      is config-independent — but the config-relative default reference is dropped. *)
   let key2 =
-    SC.cache_key ~timing_identity:(Context.timing_identity bctx) ~limits:blimits base_canon
-      ~backend:(Context.backend_name bctx)
+    SC.cache_key ~timing_identity:(Context.timing_identity bctx) ~limits:blimits ~capabilities:bcaps
+      base_canon ~backend:(Context.backend_name bctx)
   in
   (match SC.lookup ~dir:cache_dir2 ~key:key2 with
   | Some entry ->
