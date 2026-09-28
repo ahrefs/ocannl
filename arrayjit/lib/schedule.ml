@@ -2091,12 +2091,13 @@ let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_
 
     Tile precision: [acc_prec], the backend's accumulator residency for [target]'s storage
     ({!privatize} resolves it), so the tile is the materialized twin of the scope local the serial
-    rendering widens into and narrows once at the store-back (gh-ocannl-1116) — where code
-    generation would widen at all: when some update of [target] under [over] fails
-    [Low_level.accum_update_widens], the serial rendering narrows it per step and the tile stays at
-    storage precision. Before it the tile was minted at storage precision, and every step of the
-    privatized reduction narrowed where the serial and scope renderings did not — a seeded
-    [Privatize] silently changed a tuned reduction's width. *)
+    rendering widens into and narrows once at the store-back (gh-ocannl-1116) — for a single
+    accumulation statement passing [Low_level.accum_update_widens]. Any other body (sibling update
+    statements, a non-reduction or RNG-bearing update, a scope-form base) keeps a storage-precision
+    tile, which code generation renders exactly as it would [target], so the narrowing points do not
+    move. Before it the tile was minted at storage precision, and every step of the privatized
+    reduction narrowed where the serial and scope renderings did not — a seeded [Privatize] silently
+    changed a tuned reduction's width. *)
 
 let apply_privatize ~target ~over ~acc_prec (opt : Low_level.optimized) : Low_level.optimized =
   let open Low_level in
@@ -2387,14 +2388,22 @@ let apply_privatize ~target ~over ~acc_prec (opt : Low_level.optimized) : Low_le
       in
       let scalar_acc = Array.is_empty tile_axes in
       let tile_dims = if scalar_acc then [| 1 |] else Array.map tile_axes ~f:snd in
-      (* The residency applies to what code generation would widen, and only to that: an update it
-         keeps at storage precision (a non-reduction recurrence, a mixed-operator update, an
-         RNG-bearing contribution, anything under routine logging) narrows at every step in the
-         serial rendering, so its tile must too (gh-ocannl-1116, Codex P1 on staging PR #880). *)
+      (* Which width the tile takes (gh-ocannl-1116 review rounds 1-2, Codex P1s on staging PR
+         #880). A STORAGE-precision tile is rendered by code generation exactly as [target] would be
+         — the same per-nest peel, the same declines — so it narrows wherever the unprivatized
+         schedule does. The residency is reserved for the one shape whose SOURCE-order rendering
+         holds the accumulator wide across the whole reduction while a reordered schedule can leave
+         the tile's cell varying under inner loops, where no peel reaches it: a single accumulation
+         statement that [accum_update_widens]. Everything else keeps storage, so its narrowing
+         points stay the ones code generation already gives it: sibling update statements (their
+         separate stores are their semantics — the peel refuses a level carrying two), a
+         non-reduction or mixed-operator recurrence, an RNG-bearing contribution, routine logging,
+         and a scope-form base a previous materializing rewrite minted (which the peel hoists
+         through the tile's nest as it would through [target]'s). *)
       let tile_prec =
-        if List.for_all !updates ~f:(fun (idcs, llsc) -> accum_update_widens ~tn:target ~idcs llsc)
-        then acc_prec
-        else Lazy.force target.Tn.storage_prec
+        match !updates with
+        | [ (idcs, llsc) ] when accum_update_widens ~tn:target ~idcs llsc -> acc_prec
+        | _ -> Lazy.force target.Tn.storage_prec
       in
       let tile =
         Tn.create ~namespace:tile_namespace (Tn.Specified tile_prec) ~id:(fresh_tile_id ())

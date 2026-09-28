@@ -1336,18 +1336,18 @@ let () =
     && not (Array.for_all2_exn priv16_narrow want16 ~f:Float.equal))
 
 (* === A Privatize tile widens only what code generation widens (gh-ocannl-1116 review) === *)
-(* [acc_prec] is the residency of a RECOGNIZED widenable accumulation, as the backend's own is: an
-   update code generation keeps at storage precision — a non-reduction recurrence, a
-   mixed-operator update, an RNG-bearing contribution — narrows at every step in the serial
-   rendering, so a Privatize tile taking it over must stay at storage precision, or a tuned
-   schedule would change its per-iteration rounding (Codex P1 on staging PR #880). The gate is the
-   shared [Low_level.accum_update_widens], so these legs are about which updates the tile follows,
-   under [Bf16_wide], where the residency itself widens bf16 on every backend. Two updates it must
-   decline, each discriminating against a widened tile (256 - 0.5 - 0.5 is 255 in f32 and stays
-   256 at bf16; max(256 + 1, 0) twice is 258 in f32 and stays 256 — not [* 1], which simplification
-   folds into a plain reduction), and one reduction it must widen
-   (256 + 1 + 1 reaches 258) — the positive control that the privatized legs do mint a wide tile
-   where one is due, so the declined legs' 256 is the gate and not a tile that never widened. *)
+(* [acc_prec] is the residency of a RECOGNIZED widenable accumulation, as the backend's own is. A
+   body code generation does not widen narrows at its own points in the serial rendering, so a
+   Privatize tile taking it over must stay at storage precision, or a tuned schedule would change
+   its rounding (Codex P1s, rounds 1-2 on staging PR #880): a non-reduction recurrence (256 - 0.5
+   - 0.5 is 255 in f32 and stays 256 at bf16), a mixed-operator update (max(256 + 1, 0) twice is
+   258 in f32 and stays 256 — not [* 1], which simplification folds into a plain reduction), and
+   sibling accumulation statements into one cell, whose separate stores are their semantics: each
+   update alone would widen, but the peel refuses a level carrying two (256 +1 +1 twice is 260
+   wide and stays 256). The positive control is one reduction statement the tile must widen with
+   the serial rendering (256 + 1 + 1 reaches 258), so the declined legs' 256 is the gate and not a
+   tile that never widened. All under [Bf16_wide], where the residency itself widens bf16 on every
+   backend; the per-update gate is the shared [Low_level.accum_update_widens]. *)
 let claim_priv_gate =
   "the shared widening predicate accepts the reduction and declines the recurrence and the \
    mixed-operator update"
@@ -1359,6 +1359,10 @@ let claim_priv_gate_sub =
   "a privatized non-reduction recurrence keeps per-step narrowing with the serial rendering (256 - \
    0.5 - 0.5 stays 256)"
 
+let claim_priv_gate_sib =
+  "privatized sibling accumulation statements keep their separate narrowings with the serial \
+   rendering (256 +1 +1, twice, stays 256)"
+
 let claim_priv_gate_mixed =
   "a privatized mixed-operator update keeps per-step narrowing with the serial rendering (max(256 \
    + 1, 0) twice stays 256)"
@@ -1367,12 +1371,15 @@ let () =
   let bf16 = Ir.Ops.bfloat16 in
   let node = Ll_test.node_factory ~prec:bf16 ~first_id:9900 ~dims:[| 1 |] () in
   let cell = [| Ll_test.fixed 0 |] in
-  let leg ~label ~update =
+  let leg ?(siblings = 1) ~label ~update () =
     let acc = node label in
     Ll_test.materialize acc;
     let k = Ll_test.sym () in
     let llsc = update (Ll_test.get acc cell) in
-    let raw () = Ll_test.loop_n k 2 (Ll_test.set acc cell llsc) in
+    let raw () =
+      Ll_test.loop_n k 2
+        (LL.unflat_lines (List.init siblings ~f:(fun _ -> Ll_test.set acc cell llsc)))
+    in
     let exec ~name o =
       (List.hd_exn (Ll_test.execute ~name o ~seed:[ (acc, [| 256.0 |]) ] ~read:[ acc ])).(0)
     in
@@ -1397,21 +1404,26 @@ let () =
     (fun pol -> { pol with Numerics.bf16_arithmetic = Numerics.Bf16_wide })
     (fun () ->
       let w_add, s_add, p_add =
-        leg ~label:"aw_pg_add" ~update:(fun a -> bin Ir.Ops.Add a (LL.Constant 1.0))
+        leg ~label:"aw_pg_add" ~update:(fun a -> bin Ir.Ops.Add a (LL.Constant 1.0)) ()
+      in
+      let w_sib, s_sib, p_sib =
+        leg ~siblings:2 ~label:"aw_pg_sib" ~update:(fun a -> bin Ir.Ops.Add a (LL.Constant 1.0)) ()
       in
       let w_sub, s_sub, p_sub =
-        leg ~label:"aw_pg_sub" ~update:(fun a -> bin Ir.Ops.Sub a (LL.Constant 0.5))
+        leg ~label:"aw_pg_sub" ~update:(fun a -> bin Ir.Ops.Sub a (LL.Constant 0.5)) ()
       in
       let w_mix, s_mix, p_mix =
-        leg ~label:"aw_pg_mix" ~update:(fun a ->
-            bin Ir.Ops.Max (bin Ir.Ops.Add a (LL.Constant 1.0)) (LL.Constant 0.0))
+        leg ~label:"aw_pg_mix"
+          ~update:(fun a -> bin Ir.Ops.Max (bin Ir.Ops.Add a (LL.Constant 1.0)) (LL.Constant 0.0))
+          ()
       in
       Stdio.eprintf
-        "accum_width: privatize gate legs serial/privatized: add %g/%g, sub %g/%g, mixed %g/%g \
-         (not part of the golden)\n\
+        "accum_width: privatize gate legs serial/privatized: add %g/%g, siblings %g/%g, sub %g/%g, \
+         mixed %g/%g (not part of the golden)\n\
          %!"
-        s_add p_add s_sub p_sub s_mix p_mix;
-      p claim_priv_gate (w_add && (not w_sub) && not w_mix);
+        s_add p_add s_sib p_sib s_sub p_sub s_mix p_mix;
+      p claim_priv_gate (w_add && w_sib && (not w_sub) && not w_mix);
+      p claim_priv_gate_sib (Float.equal s_sib 256.0 && Float.equal p_sib 256.0);
       p claim_priv_gate_add (Float.equal s_add 258.0 && Float.equal p_add 258.0);
       p claim_priv_gate_sub (Float.equal s_sub 256.0 && Float.equal p_sub 256.0);
       p claim_priv_gate_mixed (Float.equal s_mix 256.0 && Float.equal p_mix 256.0))

@@ -365,16 +365,17 @@ files.
   through `Schedule.exact_widening`; build it with `Schedule.privatize ~accum_prec` fed from
   `(Context.codegen_capabilities ctx).accum_prec`. `Autotune.sketch_schedule` and
   `extend_with_privatize` take `~accum_prec` as a REQUIRED argument, so no seeding site can default
-  to storage. Like the backend's own residency, `acc_prec` applies only to updates codegen widens:
-  `apply_privatize` mints at storage when any update it takes over fails the shared
-  `Low_level.accum_update_widens` (non-reduction or mixed-operator recurrences, RNG-bearing
-  contributions, routine logging), which the serial rendering narrows per step (Codex P1 on
-  staging#880). `Low_level.mentions_rng_conversion` moved there from `C_syntax` for that sharing.
+  to storage. Like the backend's own residency, `acc_prec` applies only to what codegen widens:
+  `apply_privatize` mints at it only for a SINGLE update statement passing the shared
+  `Low_level.accum_update_widens`; anything else (sibling statements, non-reduction or
+  mixed-operator recurrences, RNG-bearing contributions, routine logging, scope-form bases) gets a
+  storage tile, which codegen renders exactly as it would the target, so its narrowing points do
+  not move (Codex P1s, rounds 1-2 of staging#880). `Low_level.mentions_rng_conversion` moved there from `C_syntax` for that sharing.
   It escaped gh-664's sweep because `reduction_forms` filed `Privatize` out of scope as
   "a parallelism decision about a different node": an out-of-scope verdict is a claim too. Pinned by
   `accum_width`'s Privatize legs (the first unfused scalar seed against the serial rendering, and a
-  storage-tile negative control that must diverge; the gate legs over a recurrence and a
-  mixed-operator update) and `autotune_privatize`'s saved-form claims.
+  storage-tile negative control that must diverge; the gate legs over a recurrence, a
+  mixed-operator update and sibling statements) and `autotune_privatize`'s saved-form claims.
 - **What forces one of the two RMW forms**, i.e. the declines a property test must be able to
   provoke: `debug_log_from_routines` (a `Local_scope` body renders with `log_set_locals:false`, so
   localizing would silence the per-iteration trace — the SIMD and tensorized renderings bail under

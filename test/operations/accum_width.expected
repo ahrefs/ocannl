@@ -48,6 +48,7 @@ a storage-precision Privatize tile narrows per step: under Bf16_wide the same se
 under Fp16_wide the seeded privatized f16 sketch equals the once-narrowed wide-accumulation reference: true
 a storage-precision Privatize tile narrows per step: under Fp16_wide the same f16 seed diverges from the wide reference: true
 the shared widening predicate accepts the reduction and declines the recurrence and the mixed-operator update: true
+privatized sibling accumulation statements keep their separate narrowings with the serial rendering (256 +1 +1, twice, stays 256): true
 a privatized bf16 reduction widens with the serial rendering (256 + 1 + 1 reaches 258): true
 a privatized non-reduction recurrence keeps per-step narrowing with the serial rendering (256 - 0.5 - 0.5 stays 256): true
 a privatized mixed-operator update keeps per-step narrowing with the serial rendering (max(256 + 1, 0) twice stays 256): true
