@@ -45,23 +45,23 @@
       between [e / l] and the value pass (active dropout).
 
     - With a positive block size [B] in [online_softmax_block] (gh-ocannl-1003), the first two
-      shapes give way, per attention, to ONE pass: per query block of [B] rows, per row, a scan over
-      the key blocks of [B] carrying the row's running max and sum, whose body computes the block's
-      scores into a minted tile (the score contraction and its elementwise chain -- scale, mask),
-      the new max, the rescale factor, the exponentials in place, the rescaled sum, and the row's
-      output numerator in a second tile, rescaled and accumulating [p * v] -- FlashAttention-2's
-      block recurrence; the last key block writes the output [O = U / l]. The tiles are carried
-      through memory by the scan body, sound because a write in a scan body is never a
-      virtualization candidate and schedule transforms do not enter a scan body. The scores are read
-      once, so no [seq, seq] buffer is left at any recompute cap. The value contraction is
-      reassociated too ([(sum p * v) / l] for [sum (p / l) * v]), within the same numerics gate. A
-      key or query count not a multiple of [B] leaves guarded tails, the key tail padded with [-inf]
-      scores. The final [(m, l)] land in their nodes when a later statement reads them, and the
-      elementwise definitions reading them move behind the fold, so the composed or fused backward
-      reads what it reads after the two-pass form. It declines -- the two-pass form applies -- on a
-      value pass that does not read [e / l] directly (active dropout), a reader of the row state it
-      cannot move, scores that are not a contraction of two reads, or anything else the two-pass
-      contract refuses. This is the scalar form: no [Tile_mma] is emitted.
+      shapes give way, per attention, to ONE pass: per query row, a scan over the key blocks of [B]
+      carrying the row's running max and sum, whose body computes the block's scores into a minted
+      tile (the score contraction and its elementwise chain -- scale, mask), the new max, the
+      rescale factor, the exponentials in place, the rescaled sum, and the row's output numerator in
+      a second tile, rescaled and accumulating [p * v] -- FlashAttention-2's block recurrence; the
+      last key block writes the output [O = U / l]. The tiles are carried through memory by the scan
+      body, sound because a write in a scan body is never a virtualization candidate and schedule
+      transforms do not enter a scan body. The scores are read once, so no [seq, seq] buffer is left
+      at any recompute cap. The value contraction is reassociated too ([(sum p * v) / l] for
+      [sum (p / l) * v]), within the same numerics gate. A key count not a multiple of [B] leaves a
+      guarded tail, padded with [-inf] scores. The final [(m, l)] land in their nodes when a later
+      statement reads them, and the elementwise definitions reading them move behind the fold, so
+      the composed or fused backward reads what it reads after the two-pass form. It declines -- the
+      two-pass form applies -- on a value pass that does not read [e / l] directly (active dropout),
+      a reader of the row state it cannot move, scores that are not a contraction of two reads, or
+      anything else the two-pass contract refuses. This is the scalar form: no [Tile_mma] is
+      emitted.
 
     What stays as it was in the two-pass form: the score reduction [q * k^T] keeps its own placement
     decision -- the recompute cap [virtualize_max_inline_reduction] decides whether it is replayed

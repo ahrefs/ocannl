@@ -1289,13 +1289,13 @@
 
 # The block size of the single-pass attention fold (gh-ocannl-1003), read only where
 # `online_softmax` applies; 0 (the default) keeps the two-pass form above. With B > 0 the
-# normalizer scan and the hoisted value pass become ONE pass: per query block of B rows, per row,
-# a scan over key blocks of B carrying the running max and sum, computing the block's scores into
-# a [B, B] tile (the score contraction and its scale/mask chain), rescaling a [B, d_v] numerator
-# tile and accumulating `probabilities * v` into it; the last key block writes the output. The
+# normalizer scan and the hoisted value pass become ONE pass: per query row, a scan over key
+# blocks of B carrying the running max and sum, computing the block's scores into a [B] tile (the
+# score contraction and its scale/mask chain), rescaling a [d_v] numerator tile and
+# accumulating `probabilities * v` into it; the last key block writes the output. The
 # scores are never read twice, so no [seq, seq] score buffer is needed whatever the recompute cap
 # says. It reassociates the value contraction as well (`(sum p * v) / l` for `sum (p / l) * v`),
-# within the same numerics gate. Rows and keys not a multiple of B are guarded tails; a pattern
+# within the same numerics gate. A key count not a multiple of B leaves a guarded tail; a pattern
 # the fold cannot prove (active dropout between the probabilities and the value contraction, a
 # score that is not a contraction of two reads) keeps the two-pass form.
 # Programmatic override: `Ir.Online_softmax.set_block`.

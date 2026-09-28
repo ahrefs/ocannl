@@ -1404,33 +1404,33 @@ let find_backward r (nz : normalizer) : backward option =
 (* {1 The block fold (gh-ocannl-1003)}
 
    With a positive block size [B] ([online_softmax_block]), a normalizer whose value pass the fold
-   can see becomes ONE pass instead of the scan and the hoisted value pass: per query block of [B]
-   rows (and per batch and head), per row, a {!Ir.Low_level.t.Scan_loop} over the key blocks of [B]
-   carrying the row's running max and rescaled sum, whose body computes the row's block of scores
-   into a tile [S[B]] by the score reduction and its elementwise chain (scale, mask), the new max,
-   the rescale factor [alpha], the exponentials [P = exp (S - m')] in place, the rescaled sum, and
-   the row's numerator [U[d_v]] rescaled by [alpha] and accumulating [P * V] for the block --
-   FlashAttention-2's block recurrence (the gh-ocannl-1002/1003 record). The last key block writes
-   [O = U / l]. [S] and [U] are minted tile nodes the body updates in place: undeclared carried
-   state, sound because a write in a scan body is never a virtualization candidate ([Non_virtual
-   148], so [U] is never inlined across iterations; the tiles' inits ahead of the scan are refused
-   too, [147]) and schedule transforms do not enter a scan body (nothing reorders the rescale
-   against the accumulation). The query rows are the loop around the scan, so the carried state is
-   one scalar pair per row, and the tiles are the row's own scratch: first written whole ahead of
-   its scan, which is what lets a pool-parallel CPU rendering privatize them per chunk and a GPU
-   thread keep them private. A cooperative rendering of the two contractions on matrix units needs
-   the block's rows in the tiles too, shared across the lanes that own the rows; that is a layout
-   the scheduling side would give them, not this pass.
+   can see becomes ONE pass instead of the scan and the hoisted value pass: per query row (and per
+   batch and head), a {!Ir.Low_level.t.Scan_loop} over the key blocks of [B] carrying the row's
+   running max and rescaled sum, whose body computes the row's block of scores into a tile [S[B]] by
+   the score reduction and its elementwise chain (scale, mask), the new max, the rescale factor
+   [alpha], the exponentials [P = exp (S - m')] in place, the rescaled sum, and the row's numerator
+   [U[d_v]] rescaled by [alpha] and accumulating [P * V] for the block -- FlashAttention-2's block
+   recurrence (the gh-ocannl-1002/1003 record). The last key block writes [O = U / l]. [S] and [U]
+   are minted tile nodes the body updates in place: undeclared carried state, sound because a write
+   in a scan body is never a virtualization candidate ([Non_virtual 148], so [U] is never inlined
+   across iterations; the tiles' inits ahead of the scan are refused too, [147]) and schedule
+   transforms do not enter a scan body (nothing reorders the rescale against the accumulation). The
+   query rows are the max's own loops around the scan, so the carried state is one scalar pair per
+   row, and the tiles are the row's own scratch: first written whole ahead of its scan, which is
+   what lets a pool-parallel CPU rendering privatize them per chunk and a GPU thread keep them
+   private. A cooperative rendering of the two contractions on matrix units needs query blocks, and
+   the block's rows in the tiles, shared across the lanes that own the rows; that is a layout the
+   scheduling side would give them (splitting the query loop), not this pass.
 
    The pass reassociates the value contraction ([sum (P / l) * V] becomes [(sum P * V) / l], block
    by block) on top of the normalizer's summation: the same numerics gate. Masked and special-valued
    scores follow the two-pass recurrence's arithmetic -- the running max read through the
    lowest-finite floor, [-inf] never meeting itself, a NaN poisoning the row's sum and numerator --
    and a key tail (the key count not a multiple of [B]) pads the tile with [-inf] scores, zero
-   weight, never zero scores; the reads a padded cell would make, and a query tail's rows, are
-   guarded away. Final [(m, l)] land in the original nodes when anything else reads them (the
-   composed or the fused backward, which then read what they read after the two-pass form), [O] in
-   its own; the scores' own chain goes when nothing else reads it. *)
+   weight, never zero scores; the reads a padded cell would make are guarded away. Final [(m, l)]
+   land in the original nodes when anything else reads them (the composed or the fused backward,
+   which then read what they read after the two-pass form), [O] in its own; the scores' own chain
+   goes when nothing else reads it. *)
 
 let block_override : int option ref = ref None
 let set_block b = block_override := b
@@ -1480,12 +1480,6 @@ let subst_idx sub (i : Idx.axis_index) : Idx.axis_index option =
 
 let subst_scalar ?(get = fun _ _ -> None) sub s =
   Option.map (map_scalar ~idx:(subst_idx sub) ~get s) ~f:fst
-
-let mentions_in sym idcs =
-  Array.exists idcs ~f:(fun i ->
-      match terms_of i with
-      | Some (ts, _) -> List.exists ts ~f:(fun (_, s) -> Idx.equal_symbol s sym)
-      | None -> false)
 
 (* Whether a reduction nest writes every cell of its node: each target axis a distinct plain
    iterator of a live loop over the axis's whole extent (or the fixed index of a unit axis), the
@@ -1556,7 +1550,7 @@ let find_fold r (nz : normalizer) ~block : fold option =
   let* z_s, sr_accs = accumulated r sr in
   let* sr_pos, sr_nest, sr_rhs = one sr_accs in
   let* () = Option.some_if (reduction_covers sr_nest) () in
-  let* (qa, qai), (kb, kbi) = product sr_rhs in
+  let* (qa, _), (kb, _) = product sr_rhs in
   (* The reduction's symbols: a target symbol maps to the chain's read of that axis, a reduction
      loop to a fresh symbol per instantiation. *)
   let red_loops = List.filter sr_nest.loops ~f:(fun lp -> not (mentions lp.index sr_nest.idcs)) in
@@ -1570,27 +1564,6 @@ let find_fold r (nz : normalizer) ~block : fold option =
     | None ->
         List.find_map red ~f:(fun ((lp : loop), s') ->
             Option.some_if (Idx.equal_symbol lp.index s) (Idx.Iterator s'))
-  in
-  let operand_idcs idcs =
-    Array.to_list idcs
-    |> List.map ~f:(subst_idx (sr_sub []))
-    |> Option.all |> Option.map ~f:Array.of_list
-  in
-  let* q_idcs = operand_idcs qai in
-  let* k_idcs = operand_idcs kbi in
-  (* The query axis: the row the reduction's key-free operand indexes and the other does not. *)
-  let red_canon = canon_sym Reduced in
-  let* q_idcs, k_idcs =
-    if (not (mentions_in red_canon q_idcs)) && mentions_in red_canon k_idcs then
-      Some (q_idcs, k_idcs)
-    else if (not (mentions_in red_canon k_idcs)) && mentions_in red_canon q_idcs then
-      Some (k_idcs, q_idcs)
-    else None
-  in
-  let* q_role =
-    one
-      (List.filter rows_roles ~f:(fun r ->
-           mentions_in (canon_sym r) q_idcs && not (mentions_in (canon_sym r) k_idcs)))
   in
   (* {2 The contract} *)
   let float_node (tn : Tn.t) = Ops.is_float (Lazy.force tn.Tn.storage_prec) in
@@ -1661,9 +1634,9 @@ let find_fold r (nz : normalizer) ~block : fold option =
   (* {2 Emission} *)
   let open LL in
   let extent (voc : vocabulary) role = List.Assoc.find_exn voc.extents ~equal:equal_role role + 1 in
-  let sq = extent nz.voc q_role and sk = extent nz.voc Reduced and dv = extent vp.vp_voc (Chan 0) in
-  let bq = Int.min block sq and bk = Int.min block sk in
-  let nqb = (sq + bq - 1) / bq and nkb = (sk + bk - 1) / bk in
+  let sk = extent nz.voc Reduced and dv = extent vp.vp_voc (Chan 0) in
+  let bk = Int.min block sk in
+  let nkb = (sk + bk - 1) / bk in
   let mp = state_prec nz.m in
   let prec =
     match (mp, state_prec vp.o_tn) with
@@ -1680,18 +1653,16 @@ let find_fold r (nz : normalizer) ~block : fold option =
   let row_syms = List.map rows_roles ~f:(fun r -> (r, Idx.get_symbol ())) in
   let row_sym r = List.Assoc.find_exn row_syms ~equal:equal_role r in
   let tb = Idx.get_symbol () in
-  (* The fold's index of each role, for the in-block row [i], key [j] and value channel [e]. *)
-  let role_idx ~i ~j ~e = function
-    | r when equal_role r q_role -> Idx.affine ~symbols:[ (bq, row_sym r); (1, i) ] ~offset:0
+  (* The fold's index of each role, for the in-block key [j] and value channel [e]. *)
+  let role_idx ~j ~e = function
     | Row _ as r -> Idx.Iterator (row_sym r)
     | Reduced -> Idx.affine ~symbols:[ (bk, tb); (1, j) ] ~offset:0
     | Chan _ -> Idx.Iterator e
   in
-  let canon_sub ~i ~j ~e s =
-    List.find_map canon ~f:(fun (r, c) ->
-        Option.some_if (Idx.equal_symbol c s) (role_idx ~i ~j ~e r))
+  let canon_sub ~j ~e s =
+    List.find_map canon ~f:(fun (r, c) -> Option.some_if (Idx.equal_symbol c s) (role_idx ~j ~e r))
   in
-  (* A placeholder for the [i]/[j]/[e] a role's index does not use. *)
+  (* A placeholder for the [j] or [e] a role's index does not use. *)
   let none = Idx.get_symbol () in
   let binop op a b = apply_op (Ops.Binop op) [| a; b |] in
   let exp_ a = apply_op (Ops.Unop Ops.Exp) [| a |] in
@@ -1706,19 +1677,19 @@ let find_fold r (nz : normalizer) ~block : fold option =
   in
   let guard_if cond body = If { cond = (cond, iprec); body } in
   let key_guard ~j body =
-    if sk % bk = 0 then body else guard_if (lt (role_idx ~i:none ~j ~e:none Reduced) sk) body
+    if sk % bk = 0 then body else guard_if (lt (role_idx ~j ~e:none Reduced) sk) body
   in
   let tile j = [| Idx.Iterator j |] in
-  (* One row's scan, at in-block row [i]. *)
-  let row_scan i =
+  (* One row's scan. *)
+  let row_scan () =
     let* score_code =
       let j = Idx.get_symbol () in
       let red = List.map red_loops ~f:(fun lp -> (lp, Idx.get_symbol ())) in
       let at = tile j in
       let* term = subst_scalar (sr_sub red) sr_rhs in
-      let* term = subst_scalar (canon_sub ~i ~j ~e:none) term in
+      let* term = subst_scalar (canon_sub ~j ~e:none) term in
       let* chained =
-        subst_scalar (canon_sub ~i ~j ~e:none)
+        subst_scalar (canon_sub ~j ~e:none)
           ~get:(fun tn _ -> Option.some_if (Tn.equal tn sr) (Get (s_tile, at)))
           chain
       in
@@ -1741,7 +1712,7 @@ let find_fold r (nz : normalizer) ~block : fold option =
     let lf = local "block_norm" nz.l in
     let s_ij j = Get (s_tile, tile j) in
     let u_ie e = Get (u_tile, tile e) in
-    let v_read j e = Get (vp.v_tn, idcs_at (role_idx ~i ~j ~e) vp.sig_v) in
+    let v_read j e = Get (vp.v_tn, idcs_at (role_idx ~j ~e) vp.sig_v) in
     let decl id = Declare_local { id; needs_init = false } in
     let l_stored =
       apply_op (Ops.Ternop Ops.Where)
@@ -1755,8 +1726,8 @@ let find_fold r (nz : normalizer) ~block : fold option =
       if not live then []
       else
         [
-          set nz.m (idcs_at (role_idx ~i ~j:none ~e:none) nz.sig_m) (Get_local m.next);
-          set nz.l (idcs_at (role_idx ~i ~j:none ~e:none) nz.sig_l) (Get_local lf);
+          set nz.m (idcs_at (role_idx ~j:none ~e:none) nz.sig_m) (Get_local m.next);
+          set nz.l (idcs_at (role_idx ~j:none ~e:none) nz.sig_l) (Get_local lf);
         ]
     in
     let last =
@@ -1796,7 +1767,7 @@ let find_fold r (nz : normalizer) ~block : fold option =
           guard_if last
             (loop_n dv (fun e ->
                  set vp.o_tn
-                   (idcs_at (role_idx ~i ~j:none ~e) vp.sig_o)
+                   (idcs_at (role_idx ~j:none ~e) vp.sig_o)
                    (binop Ops.Div (u_ie e) (Get_local lf))));
         ]
     in
@@ -1811,33 +1782,25 @@ let find_fold r (nz : normalizer) ~block : fold option =
            body = unflat_lines body;
          })
   in
-  let i = Idx.get_symbol () in
-  let* scan = row_scan i in
-  let q_guard body =
-    if sq % bq = 0 then body else guard_if (lt (role_idx ~i ~j:none ~e:none q_role) sq) body
-  in
+  let* scan = row_scan () in
   (* Each row's tiles are first touched by a whole-tile write ahead of its scan, so a pool-parallel
-     CPU rendering can give each chunk its own copy, and a GPU thread keeps them private. *)
+     CPU rendering can give each chunk its own copy, and a GPU thread keeps them private. The row
+     loops are the max's own: grouping the query rows into blocks buys the scalar form nothing, and
+     a split query loop is what the GPU preset's chain selection would pair badly. *)
   let row =
     unflat_lines
       [
         loop_n dv (fun e -> set u_tile (tile e) (Constant 0.));
         loop_n bk (fun j -> set s_tile (tile j) (Constant 0.));
-        q_guard scan;
+        scan;
       ]
   in
   let rows =
     List.map nz.rows ~f:(fun lp ->
         let role = Option.value_exn (role_of nz.voc.env lp.index) in
-        {
-          index = row_sym role;
-          from_ = 0;
-          to_ = (if equal_role role q_role then nqb - 1 else lp.to_);
-        })
+        { index = row_sym role; from_ = 0; to_ = lp.to_ })
   in
-  let fold =
-    wrap rows (For_loop { index = i; from_ = 0; to_ = bq - 1; body = row; axis = Serial })
-  in
+  let fold = wrap rows row in
   let moved = if live then List.map c_defs ~f:(fun p -> r.stmts.(p)) else [] in
   (* The score chain the fold no longer reads -- the reduction, its zeroing, the scale and the
      mask's [where] -- goes too once nothing else reads it: a node the recompute cap keeps would

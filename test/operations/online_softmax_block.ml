@@ -3,10 +3,10 @@
 
    The two-pass rewrite (test/operations/online_softmax.ml) turns the softmax normalizer into a
    per-row scan and hoists the probability read of the value contraction, which reads the scores a
-   second time. The fold makes it ONE pass: per query block of [B] rows, per row, a scan over the
-   key blocks carrying the row's running max and sum, whose body computes the block's scores into a
-   [B x B] tile by the score contraction and its scale/mask chain, rescales a [B x d_v] numerator
-   tile and accumulates [probabilities * v] into it; the last key block writes the output.
+   second time. The fold makes it ONE pass: per query row, a scan over the key blocks of [B]
+   carrying the row's running max and sum, whose body computes the block's scores into a [B] tile by
+   the score contraction and its scale/mask chain, rescales a [d_v] numerator tile and accumulates
+   [probabilities * v] into it; the last key block writes the output.
 
    Every executed leg compares the fold against the SAME model composed and in the two-pass form
    (the session is reinitialized before each build, so the builds mint the same tensor ids and draw
