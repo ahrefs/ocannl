@@ -95,8 +95,13 @@ loop nest — schedulable, and the shape a fused backward recomputes from `(m, l
   consumed gradient, a requested intermediate, or active dropout between `P` and the value pass.
 - **Block tiling with tensor cores.** The scan is opaque to the schedule ops (gh-ocannl-696), so
   the rewritten attention runs one row per thread with a serial key loop: memory-optimal, not
-  compute-optimal. Blocking the key axis and materializing a probability tile for `Tile_mma` is
-  the follow-up that would let "the schedule layer still tiles the rewritten loops" hold.
+  compute-optimal. The single-pass block fold now exists as the pass's fourth shape, behind the
+  rewrite-time block size `online_softmax_block` ([gh-ocannl-1003](gh-ocannl-1002-1003.md#as-implemented-1003-pr-1-the-scalar-fold)):
+  the normalizer scan and the hoisted value pass become one scan per row over key blocks, with
+  the block's scores and the row's output numerator in minted tiles the scan body updates in
+  place, so the scores are read once and no `[seq, seq]` buffer is needed at any recompute cap.
+  It is the scalar form; putting its two contractions on matrix units is a scheduling-side
+  cooperative rendering (the record's step 2 onward), which that record tracks.
 - **Dropout between the probabilities and the value reduction** is handled (the chain from `l` to
   the reduction's operand may pass through any elementwise nests); a mask applied *after* the
   normalization is not recognized as such and simply leaves the shape alone.
