@@ -140,6 +140,17 @@ files.
   fresh checkout (`benchmarks/fixtures/*.safetensors` is gitignored and generated), and they are
   only valid while `gen_fixtures.py`, `benchmarks/workloads/` **and the generating numpy** are
   unchanged.
+- **Take a GPU schedule verdict at the workload's size, never at a test model's.** A probe of
+  the `online_softmax` test's seq-7 model saw the whole fused attention backward in one all-serial
+  Metal kernel (gh-ocannl-1124 point 1), but that is `gpu_schedule_min_parallel` (64) declining
+  a kernel whose largest chain is 32 threads; at gpt2_mini's sizes every nest carries geometry
+  (`gpu_serial_lanes` leg 6 pins it at seq 64). The per-kernel table of the step as shipped
+  (`BENCH_KERNEL_TABLE=1`) answers the question directly, geometry included. Two more traps from
+  the same measurement (`report-gh1002-fused-backward.md`): **the online-softmax forward alone
+  saves no training memory** -- the composed backward still reads `P` and writes `dP`/`dS`, so
+  only the fused backward (or a raised recompute cap, for the scores and `P`) moves the peak; and
+  `--ocannl_build_files_prefix` names a SUBDIRECTORY of `./build_files` -- an absolute path is
+  mangled into one name there, not written to.
 - **Do not run `gen_fixtures.py` to get past the digest gate.** It is the reflex the refusal
   message used to invite, and it is wrong: regenerating draws a NEW workload from this box's
   numpy, which retires every published number on the old bytes and does nothing for the other

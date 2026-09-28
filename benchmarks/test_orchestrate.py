@@ -2051,13 +2051,21 @@ class FixtureDigestTest(unittest.TestCase):
         # nothing pins. (Their digests are deliberately NOT pinned here: a coordinated
         # regeneration is allowed to change them, it is only allowed to change them for BOTH.)
         # gh-ocannl-483 added m4-max's bytes for gpt2_mini (its report is on them) and the
-        # long-context legs it introduced, which only m4-max has recorded so far.
+        # long-context legs it introduced, which only m4-max has recorded so far. gh-ocannl-1002's
+        # training report is on m4-max's bytes of the training workload, its long-context legs and
+        # the batch-1 sequence sweep.
         entries = fixture_digest.read_digests(HERE / "fixtures" / fixture_digest.DIGEST_FILE)
         published = {
             "mlp_small.safetensors": {"minix", "rog-nv"},
             "gpt2_mini.safetensors": {"minix", "rog-nv", "m4-max"},
             "gpt2_mini_s512.safetensors": {"m4-max"},
             "gpt2_mini_s1024.safetensors": {"m4-max"},
+            "gpt2_mini_train.safetensors": {"m4-max"},
+            "gpt2_mini_train_s512.safetensors": {"m4-max"},
+            "gpt2_mini_train_s1024.safetensors": {"m4-max"},
+            "gpt2_mini_train_b1_s128.safetensors": {"m4-max"},
+            "gpt2_mini_train_b1_s256.safetensors": {"m4-max"},
+            "gpt2_mini_train_b1_s512.safetensors": {"m4-max"},
         }
         for name, boxes in published.items():
             self.assertTrue(boxes <= {e.origin for e in entries[name]}, name)

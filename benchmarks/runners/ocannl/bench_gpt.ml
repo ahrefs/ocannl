@@ -97,9 +97,21 @@ let () =
   let%op tgt_b = tgt_t @| batch_n in
   (* Training makes every weight a parameter (the optimizer's target, and what the Python runners
      put in their optimizer); inference keeps them data-backed constants, re-precisioned at load. *)
+  (* The training parameters [wrap_param] builds already hold their fixture tensor, as a host init
+     the step's link uploads; the untuned path does not inject them again (see [H.inject]'s
+     [skip] below). *)
+  let fixture_backed = Hash_set.create (module Int) in
+  let wrap_param ~l ?i ~o nd =
+    let t = TDSL.wrap_param ~l ?i ~o nd () in
+    (* Under a reduced-precision leg the parameter postprocessor returns a cast twin of the f32
+       master; the master is the parameter [inject] visits, so record it through [params]. *)
+    Hash_set.add fixture_backed t.Tensor.value.Ir.Tnode.id;
+    Set.iter t.Tensor.params ~f:(fun p -> Hash_set.add fixture_backed p.Tensor.value.Ir.Tnode.id);
+    t
+  in
   let wrap name ~i ~o =
     let nd = St.to_ndarray st name in
-    if training then TDSL.wrap_param ~l:name ~i ~o nd ()
+    if training then wrap_param ~l:name ~i ~o nd
     else TDSL.wrap ~l:name ?prec:mp_prec ~b:[] ~i ~o nd ()
   in
   let mask =
@@ -115,11 +127,13 @@ let () =
     (* A parameter has no batch axes (Tensor.param pins them empty), so the trained positional table
        is [seq] x [d_model] output axes and the einsum-add places its seq axis onto the sequence
        batch axis; inference keeps the plain broadcast add over a [seq]-batched table. *)
+    let wpe_param =
+      if training then Some (wrap_param ~l:"wpe" ~o:[ seq; d_model ] (St.to_ndarray st "wpe"))
+      else None
+    in
     let%op embedded =
       if training then
-        (wte * onehot_x)
-        +++ "... s | d; | s d => ... s | d"
-              (TDSL.wrap_param ~l:"wpe" ~o:[ seq; d_model ] (St.to_ndarray st "wpe") ())
+        (wte * onehot_x) +++ "... s | d; | s d => ... s | d" (Option.value_exn wpe_param)
       else
         (wte * onehot_x)
         + TDSL.wrap ~l:"wpe" ?prec:mp_prec ~b:[ seq ] ~i:[] ~o:[ d_model ] (St.to_ndarray st "wpe")
@@ -237,7 +251,14 @@ let () =
           ]
         else [])
   in
-  let ctx = H.inject ctx st batch_loss mapping in
+  (* Injecting a fixture-backed parameter here would re-upload the tensor it already holds, and
+     through [Context.set_values] on a node no routine has linked yet, which allocates it a pool of
+     its own: 18 of them in the training step, over Metal's 16-pool binding budget, so the step
+     could not link on Metal at all. Left alone, they are uploaded from their host init into the
+     step's own pool at its link. The tuned variant's re-injection below covers every parameter. *)
+  let ctx =
+    H.inject ~skip:(fun tn -> Hash_set.mem fixture_backed tn.Ir.Tnode.id) ctx st batch_loss mapping
+  in
   let t0 = Unix.gettimeofday () in
   (* Placement A/B: tune the default (virtual + promotion) graph and the materialize-all graph,
      keep the measured winner. Tuning runs on a scratch lineage, so the repeated candidate
