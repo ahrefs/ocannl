@@ -92,18 +92,36 @@ let scan ~records ~pinned root generated =
     Option.value_map type_text ~default:[] ~f:(Scan.renderings ~renderer ~source:type_source)
   in
   let unparsed = ref [] in
-  let reads =
+  let candidates =
     Inventory.select inventory ~f:(fun path ->
         String.is_suffix path ~suffix:".ml" && not (own path))
     |> List.filter_map ~f:(fun file ->
         let content = read file in
-        if List.exists carriers ~f:(fun substring -> String.is_substring content ~substring) then (
-          match Scan.read_source ~carriers ~source:file.path content with
-          | r -> Some r
-          | exception _ ->
-              unparsed := file.path :: !unparsed;
-              None)
-        else None)
+        Option.some_if
+          (List.exists carriers ~f:(fun substring -> String.is_substring content ~substring))
+          (file.path, content))
+  in
+  let parses f (path, content) =
+    match f content with
+    | x -> Some x
+    | exception _ ->
+        unparsed := path :: !unparsed;
+        None
+  in
+  (* The modules declaring a constructor of a carrier's name that is not the owner's. *)
+  let foreign =
+    List.filter_map candidates ~f:(fun ((path, _) as candidate) ->
+        if String.equal path type_source then None
+        else
+          match parses (Scan.declares_own_carrier ~carriers) candidate with
+          | Some true -> Some (Scan.module_of_path path)
+          | _ -> None)
+  in
+  let unparsed_once = !unparsed in
+  let reads =
+    List.filter_map candidates ~f:(fun ((path, _) as candidate) ->
+        if List.mem unparsed_once path ~equal:String.equal then None
+        else parses (Scan.read_source ~carriers ~foreign ~source:path) candidate)
   in
   let relays = Scan.relays reads in
   let mints = Scan.merge (rendered @ Scan.resolve ~relays reads) in
@@ -139,7 +157,13 @@ let scan ~records ~pinned root generated =
     (List.map (List.rev !unparsed) ~f:(fun path ->
          path ^ ": does not parse as OCaml, so the tags it mints are unread")
     @ Scan.family_violations ~type_source ~shape ~mints
-    @ Scan.violations ~mints ~pinned:(List.map pinned ~f:(fun (n, tags, _) -> (n, tags))) ~files
+    @ Scan.violations
+        ~malformed:
+          (List.concat_map reads ~f:(fun (r : Scan.read) ->
+               List.map r.malformed ~f:(fun literal -> (r.path, literal))))
+        ~mints
+        ~pinned:(List.map pinned ~f:(fun (n, tags, _) -> (n, tags)))
+        ~files ()
     @ Scan.table_violations ~mints ~exn:phase_family ~table_source ~table ~phases
     @ Scan.stale_records ~records paths)
     ~f:Verdict.fail;

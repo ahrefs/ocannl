@@ -50,7 +50,10 @@ let type_source =
     ]
 
 let resolve reads = Scan.merge (Scan.resolve ~relays:(Scan.relays reads) reads)
-let read ?(source = "lib/fixture.ml") text = Scan.read_source ~carriers ~source text
+
+let read ?(source = "lib/fixture.ml") ?foreign text =
+  Scan.read_source ~carriers ?foreign ~source text
+
 let rendered = Scan.renderings ~renderer:"provenance_to_string" ~source:"lib/tnode.ml" type_source
 let mints = Scan.merge (rendered @ resolve [ read library ])
 
@@ -94,8 +97,8 @@ let own_files ms =
           stale = [];
         } ))
 
-let violations ?(mints = mints) ?(pinned = []) ?(files = []) () =
-  Scan.violations ~mints ~pinned ~files:(own_files mints @ files)
+let violations ?malformed ?(mints = mints) ?(pinned = []) ?(files = []) () =
+  Scan.violations ?malformed ~mints ~pinned ~files:(own_files mints @ files) ()
 
 let table_violations ?(mints = mints) ?(table = Scan.phase_table table) () =
   Scan.table_violations ~mints ~exn:nv ~table_source:"t.ml" ~table ~phases
@@ -270,6 +273,32 @@ let () =
           ()));
   (* The refusals, and the clean case they must leave alone. *)
   p_empty "a fixture library citing its own tags is accepted" ~over:mints (violations ());
+  p "a carrier applied to a string that is no tag is recorded, and refused"
+    (let r = read "let bad () = record (Site \"not-a-tag\"); record (Tn.Site \"12:Bad-tag\")" in
+     strings r.malformed [ "not-a-tag"; "12:Bad-tag" ]
+     && has ~substring:"which is not a tag"
+          (violations ~malformed:(List.map r.malformed ~f:(fun l -> (r.path, l))) ()));
+  (let own = "type exemption = Site of string | File\nlet e = Site \"12:fixture-key\"" in
+   let aliased =
+     "module Scan = Test_utils.Key_scan\n\
+      let e = Scan.Site \"12:fixture-key\"\n\
+      let t = Tn.Site \"13:fixture-owned\""
+   in
+   p "a module declaring its own string constructor of a carrier's name is foreign"
+     (Scan.declares_own_carrier ~carriers own && not (Scan.declares_own_carrier ~carriers library));
+   p_empty "a foreign constructor applied unqualified in its own module mints nothing" ~over:[ own ]
+     (read ~source:"test/support/key_scan.ml" ~foreign:[ "Key_scan" ] own).mints;
+   p "a foreign constructor qualified through an alias mints nothing; the owner's still does"
+     (strings
+        (tags (read ~source:"test/b.ml" ~foreign:[ "Key_scan" ] aliased).mints)
+        [ "13:fixture-owned" ]));
+  p "a constructor's rendering minted by any other family is refused"
+    (has ~substring:"1:cap-fixture is Cap_fixture's rendering, and is also minted by Site"
+       (violations ~mints:(Scan.merge (mint "1:cap-fixture" :: mints)) ())
+    && has ~substring:"is also minted by Other_cap"
+         (violations
+            ~mints:(Scan.merge (mint ~family:(Rendered "Other_cap") "1:cap-fixture" :: mints))
+            ()));
   (let colliding = Scan.merge (mint "7:fixture-collides" :: mints) in
    p "a new number minted under two tags is refused"
      (has ~substring:"number 7 is minted as 7:fixture-collides and 7:fixture-store"
@@ -316,7 +345,8 @@ let () =
   p "a minting source whose tags the citation reader misses is the reader gone blind"
     (has ~substring:"but the citation reader does not see it there"
        (Scan.violations ~mints ~pinned:[]
-          ~files:[ ("lib/fixture.ml", { Scan.named = [ 7 ]; stale = [] }) ]));
+          ~files:[ ("lib/fixture.ml", { Scan.named = [ 7 ]; stale = [] }) ]
+          ()));
   p "an excluded prefix no file lives under is stale"
     (List.length
        (Scan.stale_records

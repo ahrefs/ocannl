@@ -15,9 +15,16 @@
     The families are read off [Tnode.provenance] itself, never listed: its declaration and its
     renderer are the owner of what a tag can be.
     - A constructor with no argument ([Visit_cap], ...) mints ONE tag: the string literal its case
-      of [provenance_to_string] returns.
-    - A constructor carrying a [string] ([Site]) is open: it mints every tag-shaped string literal
-      it is applied to, however qualified ([Tn.Site], [Ir.Tnode.Site]).
+      of [provenance_to_string] returns, and no other constructor or family may mint that text, or a
+      printed provenance could not say which decision it records.
+    - A constructor carrying a [string] ([Site]) is open: it mints every string literal it is
+      applied to ([Tn.Site], [Ir.Tnode.Site], or unqualified), and a literal that is not a tag is
+      refused rather than skipped. A constructor of the same name that another module declares with
+      a [string] argument ([Operand_key_scan]'s [Site of string]) is not a provenance: applied
+      qualified by that module, directly or through a module binding of the source, or unqualified
+      inside it, it mints nothing. Those modules are derived from their declarations; the owner's
+      constructor is assumed everywhere else, since opens and aliases reach it in ways a reader of
+      one file cannot follow.
     - A constructor carrying provenances only ([Refined]) composes and mints nothing. Any other
       shape is refused as unread.
     - A string constructor applied to a VARIABLE opens a relayed family when that variable is the
@@ -192,17 +199,89 @@ let renderings ~renderer ~source content =
 (** {1 The sources} *)
 
 type read = {
+  path : string;  (** The source read. *)
   mints : mint list;
       (** [Applied] literals, and the tag literals of every local-exception scope as [Relayed] with
           [via] empty: which exceptions relay is decided across sources, by {!relays}. *)
   relays : (string * string) list;  (** [(exception, carrier)] handlers in this source. *)
+  malformed : string list;  (** String literals a carrier is applied to that are no tag. *)
 }
 
-(** One OCaml source's mints and relays, in source order, duplicates kept. *)
-let read_source ~carriers ~source content =
-  let mints = ref [] and relays = ref [] in
-  let is_carrier lid =
-    Option.value_map (last_name lid) ~default:false ~f:(List.mem carriers ~equal:String.equal)
+(** The module a source file defines: [arrayjit/lib/tnode.ml] is [Tnode]. *)
+let module_of_path path =
+  String.capitalize (Stdlib.Filename.remove_extension (Stdlib.Filename.basename path))
+
+(* The module each module name [structure] binds resolves to, at any depth: [module Scan =
+   Test_utils.Operand_key_scan] maps [Scan] to [Operand_key_scan]. *)
+let module_bindings structure =
+  let found = ref [] in
+  let note name (me : module_expr) =
+    match (name, me.pmod_desc) with
+    | Some name, Pmod_ident { txt; _ } ->
+        Option.iter (last_name txt) ~f:(fun target -> found := (name, target) :: !found)
+    | _ -> ()
+  in
+  let walker =
+    object
+      inherit Ast_traverse.iter as super
+
+      method! module_binding mb =
+        note mb.pmb_name.txt mb.pmb_expr;
+        super#module_binding mb
+
+      method! expression e =
+        (match e.pexp_desc with Pexp_letmodule ({ txt; _ }, me, _) -> note txt me | _ -> ());
+        super#expression e
+    end
+  in
+  walker#structure structure;
+  !found
+
+(* The constructor names [structure] declares with a single [string] argument. *)
+let own_string_constructors structure =
+  List.concat_map structure ~f:(fun item ->
+      match item.pstr_desc with
+      | Pstr_type (_, decls) ->
+          List.concat_map decls ~f:(fun decl ->
+              match decl.ptype_kind with
+              | Ptype_variant cds ->
+                  List.filter_map cds ~f:(fun cd ->
+                      match cd.pcd_args with
+                      | Pcstr_tuple
+                          [ { ptyp_desc = Ptyp_constr ({ txt = Lident "string"; _ }, []); _ } ] ->
+                          Some cd.pcd_name.txt
+                      | _ -> None)
+              | _ -> [])
+      | _ -> [])
+
+(** Whether [content], a source other than the owner's, declares a [string]-carrying constructor
+    under a carrier's name -- one that is NOT a provenance, however it is spelled. *)
+let declares_own_carrier ~carriers content =
+  List.exists (own_string_constructors (parse content)) ~f:(List.mem carriers ~equal:String.equal)
+
+(** One OCaml source's mints and relays, in source order, duplicates kept.
+
+    A constructor with a carrier's name is taken for the owner's unless it names another: a module
+    in [foreign] declares its own [string]-carrying constructor of that name (as [Operand_key_scan]
+    declares [Site of string]), so an application qualified by it -- directly or through a module
+    the source binds to it ([module Scan = Test_utils.Operand_key_scan]) -- is not a provenance, nor
+    is an unqualified one in [foreign]'s own source. The owner's constructors are reached through
+    aliases and opens this reader cannot follow, which is why the rule names what is excluded rather
+    than what is included. *)
+let read_source ~carriers ?(foreign = []) ~source content =
+  let mints = ref [] and relays = ref [] and malformed = ref [] in
+  let structure = parse content in
+  let bindings = module_bindings structure in
+  let resolve q = Option.value (List.Assoc.find bindings q ~equal:String.equal) ~default:q in
+  let is_foreign m = List.mem foreign m ~equal:String.equal in
+  let is_carrier (lid : longident) =
+    match lid with
+    | Lident c ->
+        List.mem carriers c ~equal:String.equal && not (is_foreign (module_of_path source))
+    | Ldot (q, c) ->
+        List.mem carriers c ~equal:String.equal
+        && not (Option.value_map (last_name q) ~default:false ~f:(fun q -> is_foreign (resolve q)))
+    | Lapply _ -> false
   in
   (* The carriers applied to the variable [v] anywhere in [e]. *)
   let carriers_of_var v e =
@@ -274,7 +353,7 @@ let read_source ~carriers ~source content =
                 mints :=
                   { number; tag = s; family = Applied carrier; source; minter = enclosing }
                   :: !mints
-            | _ -> ());
+            | _ -> malformed := s :: !malformed);
             (* The same literal is also in any exception scope around it. *)
             match tag_number s with
             | Some number -> self#scoped number s
@@ -288,8 +367,13 @@ let read_source ~carriers ~source content =
             mints := { number; tag; family = Relayed { exn; via = "" }; source; minter } :: !mints)
     end
   in
-  walker#structure (parse content);
-  { mints = List.rev !mints; relays = List.rev !relays }
+  walker#structure structure;
+  {
+    path = source;
+    mints = List.rev !mints;
+    relays = List.rev !relays;
+    malformed = List.rev !malformed;
+  }
 
 (** The relaying exceptions, [(exception, carrier)], deduplicated. *)
 let relays reads =
@@ -374,7 +458,7 @@ type mention = {
 }
 
 (** What [text] cites, given every library mint and the test-owned tags. *)
-let mentions ~mints ~test_tags text =
+let mentions ~(mints : mint list) ~test_tags text =
   let library = List.filter mints ~f:(fun m -> not (is_test_source m.source)) in
   let library_tags = Set.of_list (module String) (List.map library ~f:(fun m -> m.tag)) in
   let known_tags = Set.union library_tags (Set.of_list (module String) test_tags) in
@@ -449,7 +533,7 @@ let phase_table content =
 (** {1 Refusals} *)
 
 (** The library numbers minted under more than one tag, each with its sorted tags. *)
-let collisions mints =
+let collisions (mints : mint list) =
   List.filter mints ~f:(fun m -> not (is_test_source m.source))
   |> List.map ~f:(fun m -> (m.number, m.tag))
   |> List.dedup_and_sort ~compare:Poly.compare
@@ -460,7 +544,7 @@ let collisions mints =
 
 (** What the families themselves refuse: an unread constructor, a rendering missing or doubled, an
     open family minting nothing. *)
-let family_violations ~type_source ~shape ~mints =
+let family_violations ~type_source ~shape ~(mints : mint list) =
   match shape with
   | None ->
       [
@@ -490,9 +574,10 @@ let family_violations ~type_source ~shape ~mints =
           else Some (Printf.sprintf "no source applies %s to a tag literal: the reader is blind" c))
 
 (** Everything else the inventory refuses. [mints] are resolved and merged, from library and test
-    sources alike; [pinned] is [(number, tags)] per tolerated collision; [files] is
-    [(path, mention)] per file read. *)
-let violations ~mints ~pinned ~files =
+    sources alike; [malformed] is [(source, literal)] per carrier applied to a string that is no
+    tag; [pinned] is [(number, tags)] per tolerated collision; [files] is [(path, mention)] per file
+    read. *)
+let violations ?(malformed = []) ~(mints : mint list) ~pinned ~files () =
   let library, tests = List.partition_tf mints ~f:(fun m -> not (is_test_source m.source)) in
   let library_tags = Set.of_list (module String) (List.map library ~f:(fun m -> m.tag)) in
   let one_word =
@@ -503,6 +588,35 @@ let violations ~mints ~pinned ~files =
              "%s mints %s: a one-word reason cannot be told from other colon-joined text in prose \
               -- give it at least two kebab-case words"
              m.source m.tag))
+  in
+  let not_tags =
+    List.map malformed ~f:(fun (source, literal) ->
+        Printf.sprintf
+          "%s applies a provenance carrier to %S, which is not a tag (<digits>:<kebab-reason>): \
+           the inventory can neither list it nor check its number"
+          source literal)
+  in
+  (* A constructor's rendering is what a printed provenance says; a second minter of the same text
+     makes the two decisions indistinguishable wherever it is printed. *)
+  let shared_renderings =
+    List.filter_map library ~f:(fun m ->
+        match m.family with
+        | Rendered c ->
+            let others =
+              List.filter library ~f:(fun o ->
+                  String.equal o.tag m.tag && not (Poly.equal o.family m.family))
+              |> List.map ~f:(fun o -> family_label o.family ^ " in " ^ o.source)
+              |> List.dedup_and_sort ~compare:String.compare
+            in
+            if List.is_empty others then None
+            else
+              Some
+                (Printf.sprintf
+                   "%s is %s's rendering, and is also minted by %s: a printed provenance can no \
+                    longer say which decision it records"
+                   m.tag c
+                   (String.concat ~sep:" and " others))
+        | _ -> None)
   in
   let test_prefixed =
     List.filter_map library ~f:(fun m ->
@@ -577,10 +691,11 @@ let violations ~mints ~pinned ~files =
                  m.tag))
     |> List.dedup_and_sort ~compare:String.compare
   in
-  one_word @ test_prefixed @ unowned @ collided @ stale_pins @ two_phases @ stale @ blind
+  not_tags @ shared_renderings @ one_word @ test_prefixed @ unowned @ collided @ stale_pins
+  @ two_phases @ stale @ blind
 
 (** What the phase table refuses, given the relayed family [exn] whose phases [phases] names. *)
-let table_violations ~mints ~exn ~table_source ~table ~phases =
+let table_violations ~(mints : mint list) ~exn ~table_source ~table ~phases =
   let codes =
     List.filter mints ~f:(fun m ->
         (not (is_test_source m.source))

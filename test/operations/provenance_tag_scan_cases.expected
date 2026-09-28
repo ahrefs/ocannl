@@ -36,6 +36,11 @@ a table entry naming a phase with no minter is refused: true
 an unreadable table is refused rather than skipped: true
 a phase whose function mints nothing is stale: true
 a fixture library citing its own tags is accepted: true
+a carrier applied to a string that is no tag is recorded, and refused: true
+a module declaring its own string constructor of a carrier's name is foreign: true
+a foreign constructor applied unqualified in its own module mints nothing: true
+a foreign constructor qualified through an alias mints nothing; the owner's still does: true
+a constructor's rendering minted by any other family is refused: true
 a new number minted under two tags is refused: true
 a pinned collision is accepted: true
 a third tag on a pinned number is refused: true
