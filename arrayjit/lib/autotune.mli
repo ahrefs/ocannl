@@ -562,6 +562,18 @@ type terminal_failure = {
   detail : string;
 }
 
+type abandonment = {
+  ab_timed : int;
+      (** How many admitted timings the verdict was taken after: the search's beam width, the depth
+          at which its first beam is full. *)
+  ab_best_ms : float;  (** This search's best after its first [ab_timed] admitted timings. *)
+  ab_incumbent_ms : float;
+      (** The incumbent's best after {e its} first [ab_timed] — the same depth, not its final best.
+      *)
+  ab_ratio : float;  (** The trailing ratio [ab_best_ms] exceeded, against [ab_incumbent_ms]. *)
+}
+(** Why a search was abandoned by its caller's [?abandon] rule (gh-ocannl-1110). *)
+
 (** What the call did about searching (gh-ocannl-677). The states are mutually exclusive and each
     carries exactly its own data, so a consumer matches instead of re-deriving: "it searched" is
     [Searched | Search_died _] and nothing else — in particular it is {e not} [not cache_hit], the
@@ -599,6 +611,12 @@ type outcome =
           still reports (gh-ocannl-550), carrying whatever census the call had reached, so a caller
           attributing arms by arrival order (the positional [?report] of {!Train.tune_placements})
           gets a slot for it. *)
+  | Abandoned of abandonment
+      (** The caller's [?abandon] rule stopped the search once its first timed candidates trailed
+          the incumbent's at the same depth by more than the rule's ratio (gh-ocannl-1110), and
+          {!tune} raised {!Search_abandoned}. Not a failure: the counters hold the work it reached,
+          [best_ms] is a measurement of the search context, nothing was compiled for the caller and
+          nothing was cached. *)
 
 type timing_mode =
   | Isolated
@@ -956,6 +974,14 @@ type report = {
           search-less call with no cache directory (which skips the base compile), and a failure
           before the base compile's transform ran (a failure after it, at codegen or link, carries
           the digest of the lowering it had captured). *)
+  best_steps : (int * float) list;
+      (** The best-so-far as a step function of the admitted timings (gh-ocannl-1110): [(n, ms)]
+          says the search's best became [ms] at its [n]-th admitted timing (the dispatched baseline
+          is the first), ascending in [n] and descending in [ms], so {!best_after} reads the best at
+          any depth. What {!Train.tune_placements}' flip chain abandons a hopeless flip against. A
+          {!Cache_replay} carries the storing search's steps, like its times, when that search had
+          this call's shape ({!Ir.Schedule_cache.trajectory}); empty when nothing was timed, for an
+          entry older than the field, and for one stored under another shape. *)
 }
 
 val no_search_report : timing:timing_mode -> report
@@ -1008,11 +1034,13 @@ val no_search_report : timing:timing_mode -> report
       [outcome] ({!outcome_name}), [timed], [contended], [unbatched], [failed], [rounds],
       [attempts], [compile_s], [timing_s], [best_ms], [best].
     - [arm_start] / [arm_done] ({!Train.tune_placements}, around each arm's, flip's or replayed
-      placement's search): [arm]; a flip's carry [flip=<k>/<budget>]; [arm_done] adds [result] ([ok]
-      or [failed]), [best_ms] and [elapsed_s].
+      placement's search): [arm]; a flip's carry [flip=<k>/<budget>]; [arm_done] adds [result]
+      ([ok], [failed] or [abandoned]), [best_ms] and [elapsed_s]. An abandoned flip's [best_ms] is
+      its best at the verdict's depth, followed by that depth as [after] and the incumbent's best
+      there as [incumbent_ms] (gh-ocannl-1110).
     - [flips_start] / [flips_done] ({!Train.tune_placements}): [candidates] and [budget];
-      [flips_done] adds [measured], [pruned], [improved] (whether the chain beat the A/B winner) and
-      [best_ms].
+      [flips_done] adds [measured], [pruned], [abandoned] (of the [measured]), [improved] (whether
+      the chain beat the A/B winner) and [best_ms].
 
     [elapsed_s] is seconds since that search (or arm) started; [compile_s] and [timing_s] are the
     parts of it spent in candidate compiles and in candidate timing windows, [attempts] the
@@ -1034,7 +1062,8 @@ val progress_stopwatch : unit -> unit -> float
 
 val outcome_name : outcome -> string
 (** The stable one-word name of an outcome state — ["searched"], ["search-died"], ["cache-replay"],
-    ["search-disabled"], ["pre-search-failure"] — for logs, JSON records and test goldens. *)
+    ["search-disabled"], ["pre-search-failure"], ["abandoned"] — for logs, JSON records and test
+    goldens. *)
 
 val terminal_failure : report -> terminal_failure option
 (** The fatal failure that ended the call, from whichever of the two failing states carried it;
@@ -1130,6 +1159,48 @@ val flip_profit_margin_of_string : string -> float
     {!Utils.User_error} rather than falling back to the default, since a run that asked for a
     profitability policy it also made impossible should not quietly get a different one. Exposed for
     tests. *)
+
+(** {2 Abandoning a hopeless flip (gh-ocannl-1110)}
+
+    [Train.tune_placements]' flip chain runs a full {!tune} per tried flip, and on gh-719's
+    approximate CUDA gpt2_mini cell two flips that ended 9-15x behind the arm they refined took 4747
+    s of a 9145 s search. The rule that cuts them is a comparison at EQUAL DEPTH: a flip is
+    abandoned once its best after its first [k] admitted timings trails the incumbent's best after
+    the incumbent's own first [k] by more than [trailing_ratio]. Against the incumbent's FINAL best
+    the same rule would abandon every flip, the profitable ones included: that cell's arm A itself
+    sat at 80.6 ms — 11.7x its final 6.862 ms — for 207 of its 209 timed candidates, and only the
+    last two (the recombination composites) brought it down. At equal depth the two flips trailed by
+    2.0x and 1.7x, and arm B (the materialize-all specialization, the other direction a flip can
+    take) by 1.07x. *)
+
+exception Search_abandoned of abandonment
+(** Raised by {!tune} when its [?abandon] rule decides; its report (outcome {!Abandoned}) has
+    already been delivered, and every candidate the search compiled released. *)
+
+type abandon_rule = {
+  incumbent_steps : (int * float) list;  (** The incumbent search's {!report.best_steps}. *)
+  trailing_ratio : float;  (** See {!flip_abandon_ratio}. *)
+}
+
+val best_after : (int * float) list -> int -> float
+(** [best_after steps k]: the best after the first [k] admitted timings of the search whose
+    {!report.best_steps} is [steps] — its final best when it timed fewer than [k], [infinity] when
+    it timed nothing. *)
+
+val abandon_verdict : abandon_rule -> k:int -> steps:(int * float) list -> abandonment option
+(** [Some] exactly when [best_after steps k] exceeds [trailing_ratio] times the incumbent's
+    [best_after] at the same [k] — strictly, so a flip trailing by exactly the ratio keeps searching
+    — and the incumbent timed something by then. {!tune} decides once, as soon as it has
+    [k = beam_width] admitted timings (the depth at which its first beam is full), before its next
+    attempt. Exposed for tests. *)
+
+val flip_abandon_ratio : ?margin:float -> unit -> float
+(** The trailing ratio the flip chain abandons at: config [tune_flip_profit_margin], squared (1.5625
+    at the default 1.25). The margin is the gap the chain already calls a measured loss for a
+    family; squared, a flip must trail by that much once more than the rest of its search could be
+    granted to catch up. That separates gh-719's hopeless flips (2.0x, 1.7x at equal depth) from arm
+    B's 1.07x with room on both sides. [margin] overrides the configured one; a malformed configured
+    value raises {!Utils.User_error} as {!flip_profit_margin_of_string} does. *)
 
 val family_profit_of_report : ?margin:float -> report -> family_profit
 
@@ -1686,6 +1757,11 @@ val tune :
      [Invalid_argument] otherwise — candidates timed elsewhere do not predict this device). Only the
      winning schedule is then compiled from [ctx], exactly like a cache hit. Without it, the search
      shares [ctx]'s buffers and the caller should re-initialize mutated state afterwards. *)
+  ?abandon:abandon_rule ->
+  (* gh-ocannl-1110: stop the search, raising {!Search_abandoned} after delivering an {!Abandoned}
+     report, when {!abandon_verdict} decides at [k = beam_width] admitted timings. Absent (the
+     default), a search always runs to completion. [Train.tune_placements] passes it for flips only,
+     against the incumbent they refine. *)
   ?report:(report -> unit) ->
   Context.t ->
   Ir.Assignments.comp ->

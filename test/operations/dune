@@ -246,6 +246,7 @@
   (alias runtest-model_default_fallback)
   (alias runtest-placement_surface)
   (alias runtest-flip_bound_pruning)
+  (alias runtest-flip_abandonment)
   (alias runtest-model_default_placements)
   (alias runtest-agent_notes_structure)
   (alias runtest-changelog_unreleased_scan)
@@ -5043,6 +5044,42 @@
   (alias runtest-env_spelling_gate))
  (action
   (diff flip_bound_pruning.expected flip_bound_pruning.actual)))
+
+; gh-ocannl-1110: the flip chain abandons a hopeless flip at equal search depth. Every timing comes
+; from a synthetic clock (Autotune.on_candidate_measured), so the verdicts are machine-independent;
+; autotune_progress is on because the abandonment is claimed in the progress record, and
+; autotune_keep_fraction is pinned at its default so a Search_shaping key is set for the cached
+; trajectory's identity to be seen carrying.
+
+(executable
+ (name flip_abandonment)
+ (modules flip_abandonment)
+ (libraries base ocannl stdio unix arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(rule
+ ; ocannl-backend: cc -- the command line below pins `--ocannl_backend=cc`, which outranks the
+ ; environment, so the `Context.auto ()` in the source resolves to cc whatever is ambient.
+ (target flip_abandonment.actual)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:flip_abandonment.exe}
+    "--ocannl_backend=cc"
+    "--ocannl_autotune_progress=true"
+    "--ocannl_autotune_keep_fraction=1"))))
+
+(rule
+ (alias runtest-flip_abandonment)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate))
+ (action
+  (diff flip_abandonment.expected flip_abandonment.actual)))
 
 ; gh-ocannl-514: the placement levels of the untuned regime (model_default_placements), with the
 ; envelope pinned so selection runs live on cc.

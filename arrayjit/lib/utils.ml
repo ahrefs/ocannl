@@ -1306,6 +1306,18 @@ let profile_key_source key =
   | _, From_default -> None
   | value, source -> Some (value, source)
 
+(** Every key [classify_config_key] puts in [cls] that some source sets, as [key=value;] in the
+    classification's order: an identity for the resolved settings of one class. [Autotune.tune] keys
+    a cached search trajectory by the [Search_shaping] class this way (gh-ocannl-1110), so a key
+    classified into it later joins the identity with no second list to update. Not logged and not
+    recorded as an access, like [profile_key_source]. *)
+let config_class_fingerprint cls =
+  List.concat_map config_key_classification ~f:(fun (c, _, keys) ->
+      if Poly.equal c cls then keys else [])
+  |> List.filter_map ~f:(fun key ->
+      Option.map (profile_key_source key) ~f:(fun (value, _) -> key ^ "=" ^ value ^ ";"))
+  |> String.concat
+
 let profile_payload_sources name =
   match List.Assoc.find profile_payloads name ~equal:String.equal with
   | None -> invalid_arg ("OCANNL: unknown profile " ^ name)

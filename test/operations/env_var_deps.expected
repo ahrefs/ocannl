@@ -165,6 +165,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-env_var_deps_control
   test/operations/dune                     @runtest-exit_stream_teardown
   test/operations/dune                     @runtest-fast_math_libmvec
+  test/operations/dune                     @runtest-flip_abandonment
   test/operations/dune                     @runtest-flip_bound_pruning
   test/operations/dune                     @runtest-foreign_c_stderr
   test/operations/dune                     @runtest-generated_provenance

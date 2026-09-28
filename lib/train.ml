@@ -815,6 +815,14 @@ let placement_outcome_digest ?name ?timing_ctx ctx loss comp bindings decision =
     (admissible: the floor lower-bounds every completion, so the flip cannot win). Fathomed flips do
     not consume the budget, which counts measured flips.
 
+    gh-ocannl-1110: a flip whose best after its first [beam_width] timed candidates trails the
+    incumbent's best after the incumbent's own first as many by more than
+    {!Autotune.flip_abandon_ratio} is abandoned there ({!Autotune.tune}'s [?abandon]): its report
+    reaches [flip_report] as {!Autotune.Abandoned}, it loses, and it counts as measured. The
+    incumbent's record is its report's [best_steps], so an arm whose report has none (a cache entry
+    older than the field, or stored under another search shape) leaves the flips to run in full, as
+    does an incumbent that failed: its partial record is no shippable routine's.
+
     gh-ocannl-638, [ship_arm] (config [tune_ship_arm], default [Measured_winner]): ship a chosen
     {!placement_arm} instead of the measured winner. It exists for measurement — a profile of arm
     A's kernels is evidence about arm A's routine, and until that routine is the one that ships,
@@ -946,7 +954,7 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
      the default exception printer when it swallows it, and that printer shows string fields
      only. *)
   let exception Report_callback_failed of string * exn * Stdlib.Printexc.raw_backtrace in
-  let tune ?to_report ?(progress_note = "") arm ctx timing_ctx =
+  let tune ?to_report ?(progress_note = "") ?abandon arm ctx timing_ctx =
     let to_report = Option.value to_report ~default:report in
     let capture r =
       last := Some r;
@@ -971,8 +979,8 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
     last := None;
     let result =
       match
-        Autotune.tune ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ~report:capture ctx
-          comp bindings
+        Autotune.tune ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?abandon
+          ~report:capture ctx comp bindings
       with
       | compiled -> Ok compiled
       (* Unwrapped, so the caller sees its own exception with its own backtrace: the wrapper is an
@@ -995,11 +1003,30 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
       | Error _ -> Float.infinity
       | Ok _ -> Option.value_map r ~default:Float.infinity ~f:(fun r -> r.Autotune.best_ms)
     in
-    Autotune.progressf "event=arm_done arm=%S%s result=%s best_ms=%s elapsed_s=%.1f" arm
-      progress_note
-      (match result with Ok _ -> "ok" | Error _ -> "failed")
-      (Autotune.progress_ms best_ms) (stopwatch ());
     (match result with
+    | Error (Autotune.Search_abandoned ab, _) ->
+        (* gh-ocannl-1110: the flip's best at the verdict's depth, not the [infinity] it ships
+           at. *)
+        Autotune.progressf
+          "event=arm_done arm=%S%s result=abandoned best_ms=%s after=%d incumbent_ms=%s \
+           elapsed_s=%.1f"
+          arm progress_note
+          (Autotune.progress_ms ab.Autotune.ab_best_ms)
+          ab.Autotune.ab_timed
+          (Autotune.progress_ms ab.Autotune.ab_incumbent_ms)
+          (stopwatch ())
+    | _ ->
+        Autotune.progressf "event=arm_done arm=%S%s result=%s best_ms=%s elapsed_s=%.1f" arm
+          progress_note
+          (match result with Ok _ -> "ok" | Error _ -> "failed")
+          (Autotune.progress_ms best_ms) (stopwatch ()));
+    (match result with
+    | Error (Autotune.Search_abandoned ab, _) ->
+        logf
+          "arm %s ABANDONED after %d timed candidates: its best %.4f ms trails the incumbent's \
+           %.4f ms at the same depth by more than %.4gx"
+          arm ab.Autotune.ab_timed ab.Autotune.ab_best_ms ab.Autotune.ab_incumbent_ms
+          ab.Autotune.ab_ratio
     | Error (exn, _) ->
         logf "arm %s FAILED, it loses the comparison (%s): %s" arm
           (Option.value_map r ~default:"it reported nothing" ~f:(fun r ->
@@ -1073,8 +1100,8 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
      — so results already collected would be abandoned rooted. Every call after the first goes
      through this (gh-ocannl-550, round-four review); the first needs nothing, since [produced] is
      still empty. *)
-  let tune_or_release ?to_report ?progress_note arm c t =
-    match tune ?to_report ?progress_note arm c t with
+  let tune_or_release ?to_report ?progress_note ?abandon arm c t =
+    match tune ?to_report ?progress_note ?abandon arm c t with
     | r -> r
     | exception exn ->
         let backtrace = Stdlib.Printexc.get_raw_backtrace () in
@@ -1496,6 +1523,25 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
           let bound_pruning =
             Utils.get_global_flag ~default:false ~arg_name:"autotune_bound_pruning"
           in
+          (* gh-ocannl-1110: a flip is abandoned once its best after its first [beam_width] timed
+             candidates trails the incumbent's best at the same depth by more than this ratio
+             ({!Autotune.flip_abandon_ratio}). Read once, here, so a malformed margin fails the
+             chain before any flip rather than midway. It propagates, like the surface's own reading
+             of it above, after releasing the arms' results (gh-ocannl-550). *)
+          let abandon_ratio =
+            match Autotune.flip_abandon_ratio () with
+            | ratio -> ratio
+            | exception exn ->
+                let backtrace = Stdlib.Printexc.get_raw_backtrace () in
+                release_unshipped ();
+                Stdlib.Printexc.raise_with_backtrace exn backtrace
+          in
+          (* Against the incumbent's own timed record, which a report without one (an entry cached
+             before the field) leaves empty: no comparison, so the flip runs its full search. *)
+          let abandon_against (incumbent : Autotune.report option) =
+            Option.map incumbent ~f:(fun r ->
+                { Autotune.incumbent_steps = r.Autotune.best_steps; trailing_ratio = abandon_ratio })
+          in
           let candidates = surface.Autotune.ps_candidates in
           logf "flip refinement: %d candidate(s), %d enablement-promoted, ranked by %s, budget %d%s"
             (List.length candidates)
@@ -1531,7 +1577,7 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
              node whose DEFAULT reading is [`Materialize] (the candidate's own field,
              gh-ocannl-1017) is left certainly materialized by a group whose every alternative
              lost. *)
-          let measured = ref 0 and pruned = ref 0 in
+          let measured = ref 0 and pruned = ref 0 and abandoned = ref 0 in
           let rec walk = function
             | [] -> ()
             | _ when !measured >= inline_flips -> ()
@@ -1542,7 +1588,12 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
                 logf "flip refinement stopped: the shared lineage is poisoned"
             | (fc : LL.flip_candidate) :: rest ->
                 let tn = fc.LL.fc_tn in
-                let _, chain_ms, base_ctx, base_timing, _ = !chain in
+                let chain_result, chain_ms, base_ctx, base_timing, chain_report = !chain in
+                (* Only against a shippable incumbent: a failed arm A still starts the chain, with
+                   its partial record, and a flip may then be the only result that ships. *)
+                let abandon =
+                  match chain_result with Ok _ -> abandon_against chain_report | Error _ -> None
+                in
                 (* A group started is a group finished: the budget is checked between candidates,
                    not between a node's alternatives, or the comparison against the same incumbent
                    that the group exists for would be cut short by an exhausted budget. *)
@@ -1574,10 +1625,15 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
                       let r, ms, rep =
                         tune_or_release ~to_report:flip_report
                           ~progress_note:(Printf.sprintf " flip=%d/%d" (!measured + 1) inline_flips)
-                          arm ctx' timing'
+                          ?abandon arm ctx' timing'
                       in
                       record r;
+                      (* An abandoned flip spent a budget slot: it was measured, briefly, and
+                         lost. *)
                       Int.incr measured;
+                      (match r with
+                      | Error (Autotune.Search_abandoned _, _) -> Int.incr abandoned
+                      | Ok _ | Error _ -> ());
                       Some (fa, r, ms, ctx', timing', rep)
                 in
                 let results = List.filter_map fc.LL.fc_alternatives ~f:try_alternative in
@@ -1610,10 +1666,13 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
           walk candidates;
           if !pruned > 0 then
             logf "flip refinement: %d flip(s) bound-pruned, %d measured" !pruned !measured;
+          if !abandoned > 0 then
+            logf "flip refinement: %d of %d measured flip(s) abandoned early" !abandoned !measured;
           let chain_result, chain_ms, _, _, chain_report = !chain in
           Autotune.progressf
-            "event=flips_done candidates=%d budget=%d measured=%d pruned=%d improved=%b best_ms=%s"
-            (List.length candidates) inline_flips !measured !pruned
+            "event=flips_done candidates=%d budget=%d measured=%d pruned=%d abandoned=%d \
+             improved=%b best_ms=%s"
+            (List.length candidates) inline_flips !measured !pruned !abandoned
             Float.(chain_ms < winner_ms)
             (Autotune.progress_ms (Float.min chain_ms winner_ms));
           if Float.(chain_ms < winner_ms) then (
