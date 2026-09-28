@@ -44,9 +44,9 @@
       integer mnemonic, an operand naming [%ymm]/[%zmm], an aarch64 operand in vector-lane form
       ([v0.2d], [q0]), or an aarch64 mnemonic carrying the arrangement instead ([fmla.4s]), which is
       how Apple's assembler spells the same instruction.
-    - {b scalar_fp_ops}: an x86 mnemonic ending in [ss]/[sd]/[sh], or an aarch64 [f...] instruction
-      on a scalar FP register. This is the count that gives away SLP scalarization, which leaves no
-      stack traffic behind.
+    - {b scalar_fp_ops}: an x86 mnemonic ending in [ss]/[sd]/[sh] other than a move from memory (a
+      load, whatever its width), or an aarch64 [f...] instruction on a scalar FP register. This is
+      the count that gives away SLP scalarization, which leaves no stack traffic behind.
     - {b libm_calls}: a call to the censused class's library function ([fmax]/[fmin] and friends,
       [fma]/[fmaf]). One of these inside a vector loop is the worst outcome of all: an opaque call
       cannot be vectorized at any optimization level or grid size.
@@ -61,7 +61,8 @@
       256-bit vectors and legalizes a 64-byte GNU C vector as two [ymm] halves -- twice the FMAs,
       the count of a loop unrolled by two, at half the width each.
     - {b stack_refs}: instructions addressing through the stack or frame pointer -- the spill signal
-      gh-ocannl-614 measured.
+      gh-ocannl-614 measured. [%rbp] is a frame pointer only in a function that made it one
+      ({!frame_pointer_lines}); elsewhere both compilers allocate it as an ordinary register.
     - {b stack_writes}: of those, the ones that WRITE the stack. A value round-tripping through a
       stack slot begins with one, where a reload of a spilled loop invariant does not
       (gh-ocannl-1102).
@@ -304,6 +305,13 @@ let classify_line raw =
 
 let x86_fp_suffix m =
   let m = if String.is_prefix m ~prefix:"v" then String.drop_prefix m 1 else m in
+  (* AVX512-FP16's conversions spell their packed forms with a trailing [x] ([vcvtph2psx],
+     [vcvtps2phx]), which left gcc's and clang's [sapphirerapids] fp16 bridges unclassified. *)
+  let m =
+    if String.is_prefix m ~prefix:"cvt" && String.is_suffix m ~suffix:"x" then
+      String.drop_suffix m 1
+    else m
+  in
   (* [push]/[pop] would otherwise read as scalar-single-precision by their last two characters. *)
   if String.is_prefix m ~prefix:"push" || String.is_prefix m ~prefix:"pop" then None
   else if String.length m < 3 then None
@@ -389,9 +397,24 @@ let is_vector_insn ~mnemonic ~rest =
       || aarch64_arrangement_mnemonic mnemonic
       || aarch64_vector_operand rest
 
+(* An x86 scalar MOVE from memory -- [movss], [movsd], [movsh], VEX-encoded or not -- is a load, and
+   its width is all it says: clang loads four fp16 lanes of a vector with [vmovsd] where gcc spells
+   the same 8-byte load [vmovq], and counting it as scalar FP read clang's whole-vector fp16
+   reductions at [x86-64-v4] and [sapphirerapids] as scalarized (gh-ocannl-1103). What a scalarized
+   loop does with a lane it loaded is scalar ARITHMETIC, which is still counted. *)
+let x86_scalar_load ~mnemonic ~rest =
+  let m =
+    if String.is_prefix mnemonic ~prefix:"v" then String.drop_prefix mnemonic 1 else mnemonic
+  in
+  List.mem [ "movss"; "movsd"; "movsh" ] m ~equal:String.equal
+  &&
+  match String.lsplit2 rest ~on:',' with
+  | Some (source, _) -> String.is_substring source ~substring:"("
+  | None -> false
+
 let is_scalar_fp_insn ~mnemonic ~rest =
   match x86_fp_suffix mnemonic with
-  | Some (`Scalar, _) -> true
+  | Some (`Scalar, _) -> not (x86_scalar_load ~mnemonic ~rest)
   | Some (`Packed, _) -> false
   | None ->
       (* aarch64: an [f...] instruction whose operands are scalar FP registers. [fcmp s0, s0] and
@@ -446,19 +469,36 @@ let vector_bytes_of ~mnemonic ~rest =
     | None -> Option.value (on_operand ()) ~default:0
 
 (* A memory access through the stack or frame pointer. On x86 that is a memory OPERAND based on
-   [%rsp]/[%rbp] -- [96(%rsp)], [(%rsp,%rax,4)], [-8(%rbp)] -- or an implicit one, [push]/[pop]: gcc
-   omits the frame pointer at [-O2] and allocates [%rbp]/[%ebp] as a general register, so a register
-   operand is no stack traffic ([movzwl (%r14), %ebp] in a bf16 register tile's k-loop read as one,
-   gh-ocannl-1102). *)
-let is_stack_ref ~mnemonic ~rest =
+   [%rsp] -- [96(%rsp)], [(%rsp,%rax,4)] -- or on [%rbp] where the enclosing function made it the
+   frame pointer ([-8(%rbp)] after [movq %rsp, %rbp]), or an implicit one, [push]/[pop]. Both
+   compilers omit the frame pointer at [-O2] and allocate [%rbp]/[%ebp] as a general register, so a
+   register operand is no stack traffic ([movzwl (%r14), %ebp] in a bf16 register tile's k-loop read
+   as one, gh-ocannl-1102) -- and neither is a memory operand through it where no frame was set up:
+   clang keeps a register tile's B-row pointer there ([vmovups -460(%rbp), %ymm14]), which read as a
+   spill on every clang x86 register-tile row that touched no stack (gh-ocannl-1103). [~frame] is
+   whether [%rbp] is the frame pointer at the instruction's line ({!frame_pointer_lines}). *)
+let x86_stack_bases ~frame = "(%rsp" :: "(%esp" :: (if frame then [ "(%rbp"; "(%ebp" ] else [])
+
+(* An aarch64 register operand [sp] or [x29] ahead of a comma: [add x0, sp, 16] takes a stack slot's
+   address. Not preceded by a letter, digit or [%], so that x86's [%rsp, %rbp] -- the prologue that
+   makes [%rbp] the frame pointer -- is not one. *)
+let aarch64_stack_register rest =
+  List.exists [ "sp,"; "x29," ] ~f:(fun sub ->
+      List.exists (String.substr_index_all rest ~may_overlap:false ~pattern:sub) ~f:(fun i ->
+          i = 0
+          ||
+          let c = rest.[i - 1] in
+          not (Char.is_alphanum c || Char.equal c '%')))
+
+let is_stack_ref ~frame ~mnemonic ~rest =
   List.mem [ "push"; "pushq"; "pushl"; "pop"; "popq"; "popl" ] mnemonic ~equal:String.equal
-  || List.exists [ "(%rsp"; "(%rbp"; "(%esp"; "(%ebp"; "[sp"; "[x29"; "sp,"; "x29," ] ~f:(fun p ->
-      has_substr rest ~sub:p)
+  || List.exists (x86_stack_bases ~frame @ [ "[sp"; "[x29" ]) ~f:(fun p -> has_substr rest ~sub:p)
+  || aarch64_stack_register rest
 
 (* A stack reference that stores to the stack: a [push], an x86 instruction whose LAST operand (the
    AT&T destination) is a stack memory operand, other than a compare or test that only reads it, or
    an aarch64 store ([str], [stp], [stur], [st1], ...) addressing through [sp] or [x29]. *)
-let is_stack_write ~mnemonic ~rest =
+let is_stack_write ~frame ~mnemonic ~rest =
   let x86_destination () =
     let depth = ref 0 and last = ref 0 in
     String.iteri rest ~f:(fun i c ->
@@ -477,8 +517,7 @@ let is_stack_write ~mnemonic ~rest =
   || String.is_prefix mnemonic ~prefix:"st"
      && (has_substr rest ~sub:"[sp" || has_substr rest ~sub:"[x29")
   || (not reads_only)
-     && List.exists [ "(%rsp"; "(%rbp"; "(%esp"; "(%ebp" ] ~f:(fun p ->
-         has_substr (x86_destination ()) ~sub:p)
+     && List.exists (x86_stack_bases ~frame) ~f:(fun p -> has_substr (x86_destination ()) ~sub:p)
 
 let call_target ~mnemonic ~rest =
   if String.equal mnemonic "call" || String.equal mnemonic "callq" || String.equal mnemonic "bl"
@@ -683,6 +722,30 @@ let source_file_numbers lines ~basename =
 
 let classify_asm asm = String.split_lines asm |> List.map ~f:classify_line |> Array.of_list
 
+(** [frame_pointer_lines lines] is, per line, whether [%rbp] is the frame pointer there: from an
+    instruction that makes it one -- [movq %rsp, %rbp], the prologue of a function that keeps a
+    frame (to realign its stack for 64-byte spills, say) -- to the end of that function, as its
+    unwind directives delimit it ([.cfi_startproc]/[.cfi_endproc], and mingw's
+    [.seh_proc]/[.seh_endproc]). A listing without those directives keeps the frame from the first
+    such instruction on, which errs toward counting a reference. *)
+let frame_pointer_lines lines =
+  let frame = ref false in
+  Array.map lines ~f:(fun line ->
+      (match line with
+      | Some (Directive (d :: _))
+        when List.mem
+               [ ".cfi_startproc"; ".cfi_endproc"; ".seh_proc"; ".seh_endproc" ]
+               d ~equal:String.equal ->
+          frame := false
+      | Some (Insn { mnemonic; rest })
+        when List.mem [ "mov"; "movq"; "movl" ] mnemonic ~equal:String.equal
+             && List.mem [ "%rsp,%rbp"; "%esp,%ebp" ]
+                  (String.filter rest ~f:(fun c -> not (Char.is_whitespace c)))
+                  ~equal:String.equal ->
+          frame := true
+      | _ -> ());
+      !frame)
+
 (* Every backward branch is a loop edge; its body is the span from the target label to the branch.
    Nested loops both span an anchor, so the smallest span is the innermost. *)
 let backward_edges lines =
@@ -700,6 +763,7 @@ let backward_edges lines =
 
 type parsed = {
   lines : line option array;
+  frame : bool array;  (** {!frame_pointer_lines} of [lines] *)
   edges : (string * int * int) list;  (** (label, body start, backward branch) *)
   files : Set.M(Int).t;  (** the DWARF file numbers naming the censused source *)
 }
@@ -716,6 +780,7 @@ let parse ~asm ~source_basename =
   let lines = classify_asm asm in
   {
     lines;
+    frame = frame_pointer_lines lines;
     edges = backward_edges lines;
     files = source_file_numbers (Array.to_list lines) ~basename:source_basename;
   }
@@ -731,7 +796,7 @@ let loop_edges ~asm = List.length (backward_edges (classify_asm asm))
 
 (* The instruction profile of one span of classified lines. Shared by {!census_in}, which asks it
    about a loop body, and {!profile_all}, which asks it about a whole listing. *)
-let count_range lines op_class ~from_ ~to_ =
+let count_range lines ~frame op_class ~from_ ~to_ =
   let libm = libm_names op_class in
   let residual_mnemonics = Hashtbl.create (module String) in
   let counts =
@@ -760,7 +825,8 @@ let count_range lines op_class ~from_ ~to_ =
           | Some t -> List.mem libm t ~equal:String.equal
           | None -> false
         in
-        let stack_ref = is_stack_ref ~mnemonic ~rest in
+        let frame = frame.(k) in
+        let stack_ref = is_stack_ref ~frame ~mnemonic ~rest in
         let c = { c with instructions = c.instructions + 1 } in
         let c = if vector then { c with vector_ops = c.vector_ops + 1 } else c in
         let c =
@@ -776,7 +842,7 @@ let count_range lines op_class ~from_ ~to_ =
         let c = if libm_call then { c with libm_calls = c.libm_calls + 1 } else c in
         let c = if stack_ref then { c with stack_refs = c.stack_refs + 1 } else c in
         let c =
-          if stack_ref && is_stack_write ~mnemonic ~rest then
+          if stack_ref && is_stack_write ~frame ~mnemonic ~rest then
             { c with stack_writes = c.stack_writes + 1 }
           else c
         in
@@ -807,7 +873,8 @@ let count_range lines op_class ~from_ ~to_ =
     every loop in it together. *)
 let profile_all op_class ~asm =
   let lines = classify_asm asm in
-  count_range lines op_class ~from_:0 ~to_:(Array.length lines - 1)
+  count_range lines ~frame:(frame_pointer_lines lines) op_class ~from_:0
+    ~to_:(Array.length lines - 1)
 
 type selection = Innermost | Smallest_outer_anchor_carrier
 
@@ -820,7 +887,8 @@ type selection = Innermost | Smallest_outer_anchor_carrier
 
     [None] means no loop carried the anchor -- the construct was hoisted, folded away, or never
     emitted. That is a finding, not an absence of one: report it as a failure. *)
-let census_in ?(selection = Innermost) ({ lines; edges = loops; files } : parsed) op_class ~anchor =
+let census_in ?(selection = Innermost) ({ lines; frame; edges = loops; files } : parsed) op_class
+    ~anchor =
   let carries (_, j, i) =
     let rec go k =
       if k > i then false
@@ -851,7 +919,11 @@ let census_in ?(selection = Innermost) ({ lines; edges = loops; files } : parsed
         Int.compare (i1 - j1) (i2 - j2))
   in
   Option.map best ~f:(fun (label, j, i) ->
-      { loop_label = label; span = i - j; counts = count_range lines op_class ~from_:j ~to_:i })
+      {
+        loop_label = label;
+        span = i - j;
+        counts = count_range lines ~frame op_class ~from_:j ~to_:i;
+      })
 
 (** Prefer exact source anchors; only when none carries a loop, try the smallest enclosing construct
     after [after_pattern]. Trying the range eagerly can select unrelated compiler loops nested
@@ -867,7 +939,7 @@ let census_source_in ?(selection = Innermost) parsed op_class ~source ~patterns 
     own, such as the load of a register tile's C-tile before its k-loop and the store after it. An
     instruction belongs to the line of the last [.loc] above it, as in the DWARF line table.
     [instructions = 0] means no instruction was attributed to the lines at all. *)
-let attributed_in ({ lines; files; _ } : parsed) op_class ~anchor =
+let attributed_in ({ lines; frame; files; _ } : parsed) op_class ~anchor =
   let current = ref false in
   let attributed =
     Array.map lines ~f:(function
@@ -881,7 +953,7 @@ let attributed_in ({ lines; files; _ } : parsed) op_class ~anchor =
       | Some (Insn _) -> None
       | line -> line)
   in
-  count_range attributed op_class ~from_:0 ~to_:(Array.length attributed - 1)
+  count_range attributed ~frame op_class ~from_:0 ~to_:(Array.length attributed - 1)
 
 (** {!census_in} over an assembly listing parsed for this one question. Convenient where a caller
     asks about one construct in one file; a caller asking about many should {!parse} once. *)
