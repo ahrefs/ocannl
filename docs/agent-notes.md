@@ -27,8 +27,10 @@ re-pointing the rules and script messages that cite it. The
 dialect it reads is deliberately small: headings, prose paragraphs, `- ` bullets one level deep, and
 the table above. Anything else — a fenced block, an
 ordered or `*` item, a block quote whether or not its marker carries a space, an HTML comment, a
-heading underlined instead of written with hashes — is REPORTED rather than guessed at, because a
-construct the scan cannot read is text no rule checks. Two of those readings are Markdown's rather
+heading underlined instead of written with hashes, a heading whose text carries a link, HTML, an
+entity, `_` emphasis or a non-ASCII character (its anchor is slugged from the source, GitHub's from
+the rendering) — is REPORTED rather than guessed at, because a construct the scan cannot read is
+text no rule checks. Two of those readings are Markdown's rather
 than the obvious one, so write around them: a quote marker does not need its space, so a line whose
 first visible column is `>=` is a quote however arithmetic it reads — rewrap the comparison to keep
 its operator off the first column, or write it inside a code span; and a line of nothing but `-` or
