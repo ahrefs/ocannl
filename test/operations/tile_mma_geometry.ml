@@ -342,8 +342,9 @@ let () =
    stored. A 6 x 19 site divides neither way at every width the fleet renders (19 is 3 mod 4, 8 and
    16; 6 is 2 mod 4): the header names the tails, no scalar accumulator is emitted, the partial
    column is a zeroed register filled at exactly its width — a three-lane initializer and three lane
-   stores at f32 (gh-ocannl-1071), the narrow bridges called at width 3 for bf16 (widened to f32)
-   and half — and the values match the serial twin bitwise. *)
+   stores at f32 (gh-ocannl-1071), and for bf16 and half (widened to f32) the same around a whole
+   vector of storage bits the bridges convert at full width (gh-ocannl-1102) — and the values match
+   the serial twin bitwise. *)
 let () =
   let m, nt, k = (6, 19, 5) in
   let names tag =
@@ -408,12 +409,23 @@ let () =
         && has (lane 2 ^ " = tmma_c_0_0__[2];")
         && not (has (lane 3)));
     (* The narrow legs leave the geometry to the renderer (the lane count follows the COMPUTE
-       precision, f32 for bf16 and — under the default policy — for half too); the bridge macro's
-       lane argument is the valid width. *)
-    leg ~tag:"bf16" ~prec:Ir.Ops.bfloat16 ~tile:None ~partial:(fun has ->
-        has "tmma_c_0_0__ = {0};" && has "u32, 3, tmma_c_0_0__");
-    leg ~tag:"half" ~prec:Ir.Ops.half ~tile:None ~partial:(fun has ->
-        has "tmma_c_0_0__ = {0};" && has "h, 3, tmma_c_0_0__")
+       precision, f32 for bf16 and — under the default policy — for half too). The partial column's
+       storage bits are staged in a whole vector, three lanes in and three lanes out, and the bridge
+       macro converts it at the full lane count. *)
+    let narrow_partial ~bridged has =
+      let bits ~qual l =
+        Printf.sprintf "((%socannl_u16_alias *)&tmma_d__[(tmma_i__ + 0) * %d + 16 + 0])[%d]" qual nt
+          l
+      in
+      has ("ocannl_pv__ = {" ^ bits ~qual:"const " 0)
+      && has (bits ~qual:"const " 2 ^ "};")
+      && has (bits ~qual:"" 2 ^ " = ocannl_pv__[2];")
+      && has (Printf.sprintf "%d, tmma_c_0_0__, (const %s *)&ocannl_pv__);" lanes bridged)
+      && not (has (bits ~qual:"const " 3) || has (bits ~qual:"" 3))
+    in
+    leg ~tag:"bf16" ~prec:Ir.Ops.bfloat16 ~tile:None
+      ~partial:(narrow_partial ~bridged:"unsigned short");
+    leg ~tag:"half" ~prec:Ir.Ops.half ~tile:None ~partial:(narrow_partial ~bridged:"HALF_T")
   end
 
 (* === The seeding === *)

@@ -1119,6 +1119,23 @@ files.
   when it converts one lane, and from a register gcc isolates the lanes with packed shuffles, so
   `scalar_fp_ops` sees the per-lane form only when the lanes come from scalar loads. bf16 narrowing needed no twin: its integer arithmetic lowers
   whole-vector at each register width on both gccs.
+  The geometry rows were all f32 until gh-ocannl-1102 added bf16 and fp16 storage twins of the
+  `n = 99` rows (`rt/n99/bf16/...`, `rt/n99/f16w/...`, f32 compute; fp16 from the wide child). They
+  found the gh-1071 class again inside the narrow bridge MACROS: a zeroed temporary plus a
+  `LANES * 2`-byte `memcpy` built the tail's B vector in a stack slot every k step (`vmovdqa
+  %xmm7, 96(%rsp)`, `movl`/`movw` into it, `vpmovzxwd 96(%rsp)`) on every x86 FMA column and both
+  aarch64 targets, and the partial store round-tripped too (`vmovdqa %xmm5, (%rsp)`, `movzwl
+  4(%rsp)`). A macro cannot spell a lane initializer for a count it receives as an argument, so the
+  fix is in `vec_bridge`: the partial column's storage bits are staged in a whole `ocannl_vec<N>u16`
+  (lane initializer in, per-lane extracts out, each staging vector in its own block) and the
+  bridge converts that at the full lane count. The lanes are `unsigned short` read and written
+  through a `may_alias` pointer even for fp16: staged as `_Float16`, gcc at `sapphirerapids` moved
+  an extracted lane through a 2-byte stack slot (`vmovw %xmm1, -2(%rsp)`). The store is outside
+  every loop, so `Asm_census.attributed_in` reads it by DWARF line attribution: the instructions
+  under the `.loc` lines naming the partial column's C-tile elements, which the census holds to
+  zero stack references where the pass fits. The same PR made `is_stack_ref` ask for a MEMORY
+  operand on x86: gcc omits the frame pointer at `-O2` and allocates `%ebp` as a register, and
+  `movzwl (%r14), %ebp` in a bf16 k-loop had read as a 12-reference spill.
 - **aarch64 gcc spills the bf16 tile's A column at `-O3` only: the pre-RA scheduler, not the
   widening.** Neither CI nor rog has an aarch64 cross gcc, so the census's aarch64 columns went
   uncompiled until minix got one; the first run found the 4x6 bf16 tile at 16 bytes spilling two
@@ -1445,12 +1462,12 @@ files.
   passes, a column tail of whole vectors plus one PARTIAL vector, a row band of `m mod rm` rows —
   and the emitter renders each piece as the same C-tile pass at a smaller grid (four pass bodies at
   most). A partial vector is zeroed and crosses the memory boundary at exactly its width
-  (`vec_bridge ~width`: a lane initializer and per-lane stores, or the narrow bridge macros with
-  `LANES` = the valid lanes — they zero-init their temporary and copy `LANES * 2` bytes, which is what makes them
-  partial-safe), so nothing past the extent is read or written, and every element's k-chain is the
+  (`vec_bridge ~width`: a lane initializer and per-lane stores, and for bf16 and fp16 the same
+  around a whole vector of storage bits the narrow bridge macros convert at full width,
+  gh-ocannl-1102), so nothing past the extent is read or written, and every element's k-chain is the
   same fused serial chain: parity with the scalar fallback stays bitwise, narrow storage included
   (`tile_mma_geometry`'s 6x19 legs at f32, bf16 and half pin the header, the zeroed register, the
-  width-3 fill and the absence of `tmma_acc__`). Measured on the M4 Max GEBP at n = 512: pure-f16
+  width-3 fill and store and the absence of `tmma_acc__`). Measured on the M4 Max GEBP at n = 512: pure-f16
   121.5 -> 148.9 GFLOP/s (the model now takes rn = 6 with a four-vector tail over the peel-free
   rn = 4), f16 n = 1024 203 -> 235; f32 stayed within run-to-run noise, which spans 79..104 GFLOP/s
   across identical 10-repeat runs — never read one such number as a regression.
