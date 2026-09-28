@@ -142,7 +142,9 @@ def result_line(path):
 
 def run_cell(out, backend, fixture, treatment, r, artifacts=False):
     base = cell_path(out, backend, fixture, treatment, r)
-    if result_line(base) is not None:
+    artifact_dir = out / "artifacts" / f"{backend}__{fixture}__{treatment}"
+    # Done means the deliverable exists: an artifact cell also needs its sources moved into DIR.
+    if result_line(base) is not None and (not artifacts or artifact_dir.is_dir()):
         log(f"skip (done) {base.name}")
         return
     if LIMIT[0] is not None:
@@ -173,10 +175,9 @@ def run_cell(out, backend, fixture, treatment, r, artifacts=False):
     with open(str(base) + ".status", "w") as f:
         f.write(f"{status}\n")
     if artifacts and (HERE / "build_files" / prefix).is_dir():
-        dst = out / "artifacts" / f"{backend}__{fixture}__{treatment}"
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.rmtree(dst, ignore_errors=True)
-        shutil.move(str(HERE / "build_files" / prefix), str(dst))
+        artifact_dir.parent.mkdir(parents=True, exist_ok=True)
+        shutil.rmtree(artifact_dir, ignore_errors=True)
+        shutil.move(str(HERE / "build_files" / prefix), str(artifact_dir))
     res = result_line(base)
     if res is None:
         log(f"FAILED {base.name}: status {status}, no result line")
@@ -281,10 +282,7 @@ def check_identity(out, ident):
 
 def preflight(out):
     ident = identity()
-    if not check_identity(out, ident):
-        meta = dict(ident, host=os.uname().nodename,
-                    started=datetime.datetime.now(datetime.timezone.utc).isoformat())
-        (out / "preflight.json").write_text(json.dumps(meta, indent=2) + "\n")
+    recorded = check_identity(out, ident)
     log(f"revision {ident['revision']}, bench_gpt {ident['bench_gpt_sha256'][:16]}; "
         f"fixtures match {ORIGIN}")
     import bench_venv
@@ -307,6 +305,12 @@ def preflight(out):
             dst.unlink(missing_ok=True)
             sys.exit(f"torch parity reference for {fx} failed (status {status}); see "
                      f"{out / 'torch' / (fx + '.err')}")
+    # preflight.json is the completion marker the phase guard reads, so it is written last, once
+    # every reference has validated.
+    if not recorded:
+        meta = dict(ident, host=os.uname().nodename,
+                    started=datetime.datetime.now(datetime.timezone.utc).isoformat())
+        (out / "preflight.json").write_text(json.dumps(meta, indent=2) + "\n")
 
 
 def parity_steps(fx):
@@ -341,8 +345,12 @@ def run(args):
             sys.exit(f"unknown phase {phase}")
     # Canonical order whatever the argument's: preflight always precedes every cell.
     phases = [p for p in PHASES if p in requested]
-    if "preflight" not in phases and not check_identity(out, identity()):
-        sys.exit(f"{out}: no preflight.json -- run the preflight phase first")
+    if "preflight" not in phases and not (
+        check_identity(out, identity())
+        and all(torch_losses(out, fx) is not None for fx in MAIN + SWEEP)
+    ):
+        sys.exit(f"{out}: preflight incomplete (no preflight.json, or a torch reference missing) "
+                 "-- run the preflight phase first")
     for phase in phases:
         if phase not in PHASES:
             sys.exit(f"unknown phase {phase}")
