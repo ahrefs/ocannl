@@ -1960,7 +1960,8 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   `--run` probe or an unread answer (a tree predating the readers), and the tightest cap wins.
   Where no backend meets a cap (CPU backends off rog, metal, a box without a GPU) nothing is built
   and the width is 4; an explicit `-j` always wins; the provenance's `dune jobs:` line and its
-  `machine-verify: batch:` lines say which it was and why. Golden mode prints the corrected `.actual`
+  `machine-verify: batch:` lines say which it was and why. A `--run` probe gets the width as
+  `DUNE_JOBS`, so a bare `dune` inside it is capped too, while a `-j` of its own still wins. Golden mode prints the corrected `.actual`
   contents and an apply-ready patch, then re-runs the alias before accepting it so a second failing
   dependency cannot hide behind a promotable diff. Before reset, source status (with untracked-file
   reporting forced independently of Git configuration) must name exactly the listed golden

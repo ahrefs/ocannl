@@ -594,8 +594,12 @@ while [ $# -gt 0 ]; do
       echo "machine-verify: test alias backend execution: not claimed (the alias may be backend-independent)"
       ;;
     run)
-      echo "machine-verify: probe ($backend): $value"
-      opam_exec env "OCANNL_BACKEND=$backend" sh -c "$value" </dev/null || exit $?
+      # The trip's width reaches the probe's own dune invocations through
+      # DUNE_JOBS, which a -j on their command line still overrides: a probe
+      # that builds is as much a GPU leg as a --test (Codex review round 2 on
+      # PR #902).
+      echo "machine-verify: probe ($backend, DUNE_JOBS=$jobs): $value"
+      opam_exec env "OCANNL_BACKEND=$backend" "DUNE_JOBS=$jobs" sh -c "$value" </dev/null || exit $?
       assert_backend
       echo "machine-verify: probe: PASS with resolved backend configuration $backend"
       echo "machine-verify: probe backend execution: see the probe's own output above"

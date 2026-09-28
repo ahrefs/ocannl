@@ -33,8 +33,9 @@
 #   --test ALIAS             Build one named test alias (repeatable).
 #                            Requires --backend or --expect-lib.
 #   --run 'COMMAND'          Run an OCANNL probe under opam and the pinned
-#                            backend (repeatable). Requires --backend or
-#                            --expect-lib.
+#                            backend (repeatable), with DUNE_JOBS set to the
+#                            trip's width (a -j in COMMAND still wins).
+#                            Requires --backend or --expect-lib.
 #   --record-golden ALIAS    Run one golden alias, print corrected contents and
 #                            an apply-ready patch (repeatable). Requires
 #                            --backend or --expect-lib.

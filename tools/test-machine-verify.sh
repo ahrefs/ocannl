@@ -535,7 +535,10 @@ grep -q '^machine-verify: batch: holds cuda: arrayjit/test/dune names it$' "$TMP
 report $? 'width-reached-gpu: the resolution is in the provenance' "$TMP/runs/width-reached-gpu"
 BACKEND=cc NVIDIA=present width_case width-probe 8 \
   "\(.*for cuda, .*its backends are unread \(a --run probe may pick its own backend\).*hazard nvidia\)$" \
-  --run true
+  --run 'printf "probe width: %s\n" "${DUNE_JOBS:-unset}"'
+# The probe's own dune invocations inherit the width (round 2 on PR #902).
+grep -qx 'probe width: 8' "$TMP/runs/width-probe/stdout"
+report $? 'width-probe: the probe runs with DUNE_JOBS at the trip width' "$TMP/runs/width-probe"
 BACKEND=cc NVIDIA=present NAMES=fail width_case width-unread 8 "\(.*for cuda, .*its backends are unread .*hazard nvidia\)$"
 # No stand-ins: the pushed tree's readers are built there (a fixture tree has
 # none, so the answer is unread and every backend counts).
@@ -660,4 +663,13 @@ reached_oracle() {
 }
 mutated=$(mutant_pair pinned-backend-only far '/batch_resolve dune "\$log" build/ { print "      :"; next } { print }') || exit 2
 expect_rejected 'reached backends ignored' "$mutated" reached_oracle '^dune jobs:     4 \(default; '
+# The width withheld from a --run probe: its bare dune runs at dune's default.
+probe_width_oracle() {
+  local subject=$1 name=$2
+  BACKEND=cc NVIDIA=present run_case "$subject" "$name" success \
+    --run 'printf "probe width: %s\n" "${DUNE_JOBS:-unset}"' || return 1
+  [ "$(cat "$TMP/runs/$name/rc")" = 0 ] && grep -qx 'probe width: 8' "$TMP/runs/$name/stdout"
+}
+mutated=$(mutant_pair no-probe-width far '{ sub(/ "DUNE_JOBS=\$jobs" sh -c/, " sh -c"); print }') || exit 2
+expect_rejected 'probe width withheld' "$mutated" probe_width_oracle '^probe width: unset$'
 finish
