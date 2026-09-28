@@ -11,22 +11,28 @@
 
     A reference is conservative: a direct qualified path ([M.v]), a path through a module alias, or
     an unqualified identifier inside the lexical range of [open M]. Alias scopes are deliberately
-    over-approximated to the whole source, and an [include M] counts as a reference to every value
-    because it re-exports the whole interface. Both choices can hide a dead export through a false
-    positive, but cannot falsely reject an ordinary use. Values generated for top-level types by
-    [of_sexp], [compare], and [equal] derivings are included (a standalone [of_sexp] deriving as
-    much as the [of_sexp] half of [sexp]); their expression extensions count as references without
-    needing to spell the generated value. The [sexp_of] converters -- derived or hand-written,
-    recognized by the [sexp_of_] name prefix -- are excluded by policy: they are the entry point for
-    debugging and observability, and consumed as often through [ppx_minidebug]'s typed log
-    annotations, which expand to converter calls this source-level census cannot see, as through
-    spelled references. A [sexp_of] with no caller costs nothing and cannot drift from its type,
-    while removing it to satisfy a ratchet only takes the converter away from the next debugging
-    session. Values introduced by other PPX expansions or by an [include] of another module inside
-    the defining module remain outside this source-level census. A bare [include struct ... end]
-    declares into the module and is read like top-level items; a constrained
-    [include (struct ... end : S)] carries its own interface, which publishes deliberately, so like
-    a module with an [.mli] it is not censused. *)
+    over-approximated to the whole source. An [include M] is not a use of anything (gh-ocannl-1085):
+    it makes the including module another receiver of [M]'s values, so [N.v] after
+    [module N = struct include M end] -- or [Utils.insert] after [utils.ml]'s [include Datatypes] --
+    counts, transitively and through a module alias declared in any source, as does a bare [v] where
+    [N] is opened or below the include itself; a value the include re-exports but nobody spells
+    reads dead. Receivers match by their last qualifier, and an includer that shadows an included
+    value still credits it. These choices can hide a dead export through a false positive, but
+    cannot falsely reject an ordinary use, save through an include this reader does not follow: of a
+    functor application, or inside a functor body or an anonymous structure. Values generated for
+    top-level types by [of_sexp], [compare], and [equal] derivings are included (a standalone
+    [of_sexp] deriving as much as the [of_sexp] half of [sexp]); their expression extensions count
+    as references without needing to spell the generated value. The [sexp_of] converters -- derived
+    or hand-written, recognized by the [sexp_of_] name prefix -- are excluded by policy: they are
+    the entry point for debugging and observability, and consumed as often through [ppx_minidebug]'s
+    typed log annotations, which expand to converter calls this source-level census cannot see, as
+    through spelled references. A [sexp_of] with no caller costs nothing and cannot drift from its
+    type, while removing it to satisfy a ratchet only takes the converter away from the next
+    debugging session. Values introduced by other PPX expansions or by an [include] of another
+    module inside the defining module remain outside this source-level census. A bare
+    [include struct ... end] declares into the module and is read like top-level items; a
+    constrained [include (struct ... end : S)] carries its own interface, which publishes
+    deliberately, so like a module with an [.mli] it is not censused. *)
 
 open Base
 open Ppxlib.Parsetree
@@ -222,12 +228,96 @@ let label_ignored ~deriver label =
   | "equal" -> has_attribute "equal.ignore" label.pld_attributes
   | _ -> false
 
+(** The name a top-level item of [source] is reached under: its module name, also for a dune select
+    alternative, which implements the module named before its first dot
+    ([cuda_backend_impl.cudajit.ml] is [Cuda_backend_impl]). *)
+let includer_name_of_source source =
+  match String.lsplit2 (Stdlib.Filename.basename source) ~on:'.' with
+  | Some (stem, _) when valid_module_stem stem -> Some (String.capitalize stem)
+  | Some _ | None -> None
+
+(** The [(reached, receiver)] edges of [structure]: a module named [receiver] reaches every value
+    the module named [reached] does. Both are last path components. An [include M] is an edge from
+    [M] to the including module -- the source's own module at top level, the innermost
+    [module N = struct ... end] around a nested one, or the [let module N = struct ... end in]
+    around a local one, wherever that sits. A module alias [module A = M], at any level or local, is
+    an edge from [M] to [A]. An [include struct ... end] declares into the module it sits in; an
+    included functor application, or an include in a functor body or an anonymous structure, is not
+    followed. *)
+let receiver_edges ~top structure =
+  let found = ref [] in
+  let rec items includer structure = List.iter structure ~f:(item includer)
+  and item includer structure_item =
+    match structure_item.pstr_desc with
+    | Pstr_include { pincl_mod = { pmod_desc = Pmod_structure nested; _ }; _ } ->
+        items includer nested
+    | Pstr_include { pincl_mod; _ } -> (
+        match (includer, module_expr_name pincl_mod) with
+        | Some includer, Some included -> found := (included, includer) :: !found
+        | _ -> ())
+    | Pstr_module binding -> module_binding binding
+    | Pstr_recmodule bindings -> List.iter bindings ~f:module_binding
+    | Pstr_extension ((_, PStr nested), _) -> items includer nested
+    | _ -> ()
+  and module_binding { pmb_name = { txt; _ }; pmb_expr; _ } = named_module txt pmb_expr
+  and named_module name module_expr =
+    match module_expr.pmod_desc with
+    | Pmod_structure nested -> items name nested
+    | Pmod_constraint (inner, _) -> named_module name inner
+    | Pmod_ident _ -> (
+        (* An alias reaches everything its target does, from wherever it is spelled. *)
+        match (name, module_expr_name module_expr) with
+        | Some alias, Some target -> found := (target, alias) :: !found
+        | _ -> ())
+    | _ -> ()
+  in
+  items top structure;
+  (* A [let module] can sit in any expression, including one inside another local module; each is
+     visited once, and its body is walked like a structure-level binding's. *)
+  let local_modules =
+    object
+      inherit Ast_traverse.iter as super
+
+      method! expression expression =
+        (match expression.pexp_desc with
+        | Pexp_letmodule ({ txt; _ }, module_expr, _) -> named_module txt module_expr
+        | _ -> ());
+        super#expression expression
+    end
+  in
+  local_modules#structure structure;
+  !found
+
+(** For each of [modules], the names its values are reached under in [parsed] sources: itself, and
+    everything {!receiver_edges} reaches from it, across sources -- an includer, an alias of either
+    declared anywhere, and so on. A name, like every receiver here, is matched as the last qualifier
+    of a path, so a same-named module elsewhere credits too -- the over-reading direction. *)
+let receiver_names ~modules ~parsed =
+  let edges =
+    List.concat_map parsed ~f:(fun (source, structure) ->
+        receiver_edges ~top:(includer_name_of_source source) structure)
+  in
+  List.map modules ~f:(fun module_name ->
+      let rec close names =
+        let grown =
+          List.fold edges ~init:names ~f:(fun names (reached, receiver) ->
+              if Set.mem names reached then Set.add names receiver else names)
+        in
+        if Set.length grown = Set.length names then names else close grown
+      in
+      (module_name, Set.to_list (close (Set.singleton (module String) module_name))))
+  |> Map.of_alist_exn (module String)
+
 (** References to [exports] from [sources]. Sources are [(repository-relative path, contents)]. *)
 let references ~(exports : export list) ~sources =
   let modules =
     List.map exports ~f:(fun export -> export.module_name)
     |> List.dedup_and_sort ~compare:String.compare
   in
+  let parsed =
+    List.map sources ~f:(fun (source, contents) -> (source, Read.structure_of contents))
+  in
+  let receiver_names = receiver_names ~modules ~parsed in
   let export_names =
     List.fold exports
       ~init:(Map.empty (module String))
@@ -236,13 +326,17 @@ let references ~(exports : export list) ~sources =
           | None -> Set.singleton (module String) export.value
           | Some values -> Set.add values export.value))
   in
-  List.concat_map sources ~f:(fun (source, contents) ->
-      let structure = Read.structure_of contents in
+  List.concat_map parsed ~f:(fun (source, structure) ->
       List.concat_map modules ~f:(fun module_name ->
-          let aliases, _opened, open_ranges =
-            Read.module_bindings_of structure ~wanted:module_name
+          let receivers, open_ranges =
+            List.fold
+              (Map.find_exn receiver_names module_name)
+              ~init:(Set.empty (module String), [])
+              ~f:(fun (receivers, open_ranges) name ->
+                let aliases, _opened, ranges = Read.module_bindings_of structure ~wanted:name in
+                ( Set.union receivers (Set.of_list (module String) (name :: aliases)),
+                  ranges @ open_ranges ))
           in
-          let receivers = Set.of_list (module String) (module_name :: aliases) in
           let names = Map.find_exn export_names module_name in
           let found = ref [] in
           let add ~value ~line ~spelling =
@@ -320,16 +414,9 @@ let references ~(exports : export list) ~sources =
               inherit Ast_traverse.iter as super
 
               method! structure_item item =
-                (* [include M] consumes and re-exports M's entire interface. Count every value; an
-                   external caller may subsequently reach it only through the including module. *)
+                (* An [include M] is not itself a use: it makes the including module a receiver of
+                   M's values ({!receiver_names}), and a use is a spelling through either. *)
                 (match item.pstr_desc with
-                | Pstr_include { pincl_mod; _ } -> (
-                    match module_expr_name pincl_mod with
-                    | Some receiver when Set.mem receivers receiver ->
-                        Set.iter names ~f:(fun value ->
-                            add ~value ~line:item.pstr_loc.loc_start.pos_lnum
-                              ~spelling:("include " ^ receiver))
-                    | Some _ | None -> ())
                 | Pstr_type (_, declarations) ->
                     let derivers =
                       List.concat_map declarations ~f:derivers_of_type_declaration
@@ -404,9 +491,9 @@ let counts ~(exports : export list) references =
     can use the type through its converter alone. Comments, docstrings and string literals never
     parse into a path, so prose cannot keep a type alive. A type named with a leading [_] is not
     censused, as it is not for OCaml's own unused-type warning (34): its author marked it
-    deliberately unused, the convention the value census follows for [let]. Unlike the value census,
-    an [include M] credits none of [M]'s types: the count is blind to qualifiers, so a use through
-    the including module ([N.foo]) is already a mention, and a re-export nobody spells is not a use.
+    deliberately unused, the convention the value census follows for [let]. As in the value census,
+    an [include M] credits none of [M]'s types, and here needs no receiver either: the count is
+    blind to qualifiers, so a use through the including module ([N.foo]) is already a mention.
 
     Out of scope, by design: the constructors and record labels of a type are not resolved to it (a
     record built only by its labels, never annotated, reads as unmentioned), and neither are the

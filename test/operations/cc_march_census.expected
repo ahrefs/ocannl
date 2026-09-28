@@ -21,6 +21,7 @@ no Max/Min accumulator loop calls libm: true
 no FMA accumulator loop calls libm where the ISA has a fused multiply-add: true
 no accumulator loop is rendered wholly scalar where a named target's ISA has the operation: true
 no accumulator loop is scalarized where a named target's ISA has the operation: true
+the emitted fp16 narrowing bridge is one packed conversion per vector where a named target converts fp16 packed: true
 every register-tiled Tile_mma k-loop does more vector than scalar work where the ISA has a fused multiply-add: true
 every register-tile accumulator update is one whole-width vector FMA per k step where the ISA has a fused multiply-add: true
 no register-tile k-loop references the stack where its pass fits the target's vector registers: true

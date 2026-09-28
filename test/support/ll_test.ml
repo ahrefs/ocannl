@@ -821,3 +821,56 @@ let read_before_write (o : LL.optimized) tn =
 
 (** Whether [tn] carries no assignment in this routine. *)
 let read_only (o : LL.optimized) tn = (Hashtbl.find_exn o.LL.traced_store tn).LL.read_only
+
+(** {1 Tensorized-seed capability gates} *)
+
+(** Whether the backend and configuration admit a tensorized matmul pipeline for a site with these
+    operand and destination storage precisions (gh-ocannl-1115) — the gate a test puts on the
+    PRESENCE of tensorized seeds, so that where the capability holds an absent seed is a failed
+    claim, never a vacuous skip. A gate read off the seed list under test cannot fail on the seeding
+    regression it exists to catch.
+
+    The judgment is the seeder's own: {!Autotune.tensorized_capability_refutation}, the witness the
+    family tree refutes its tensorized branch with (format tiles, lane width and routine logging on
+    GPU; the register tiling's vector file, lanes, precision uniformity and routine logging on CPU).
+    Nothing here restates it.
+
+    [`Withheld] carries the skip's aggregation, derived rather than keyed on a backend name: when
+    the refutation lifts under the permissive configuration — {!Ir.Numerics.t.tf32_matmuls} on,
+    routine logging off — the missing capability is the run's choice ([`Environment]: CUDA at the
+    repository default, any backend under routine logging), otherwise the backend's ([`Backend]:
+    HIP's rocWMMA has no f32-input shape, cc no GPU tile). A vector file configured away
+    ([cc_vector_bytes]) reads as [`Backend], since the permissive configuration cannot know the
+    hardware's width.
+
+    A test gated here declares the configuration the judgment reads beside [OCANNL_BACKEND] —
+    [OCANNL_TF32_MATMULS], [OCANNL_PROFILE], [OCANNL_DEBUG_LOG_FROM_ROUTINES], [OCANNL_LOG_LEVEL],
+    [OCANNL_CC_VECTOR_BYTES] — so a rerun under another configuration is not served a cached
+    verdict. *)
+let tensorized_capability ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits) ~a_prec
+    ~b_prec ~d_prec =
+  let refuted () =
+    Option.is_some
+      (Autotune.tensorized_capability_refutation ~is_gpu ~is_cpu ~limits ~a_prec ~b_prec ~d_prec)
+  in
+  if not (refuted ()) then `Advertised
+  else
+    let saved_policy = Ir.Numerics.get () in
+    let saved_logging = Utils.settings.debug_log_from_routines in
+    let lifted =
+      Exn.protect
+        ~finally:(fun () ->
+          Ir.Numerics.set_policy saved_policy;
+          Utils.settings.debug_log_from_routines <- saved_logging)
+        ~f:(fun () ->
+          Ir.Numerics.set_policy { saved_policy with Ir.Numerics.tf32_matmuls = true };
+          Utils.settings.debug_log_from_routines <- false;
+          not (refuted ()))
+    in
+    `Withheld (if lifted then `Environment else `Backend)
+
+(** {!tensorized_capability} for a site whose operands are the nodes [a] and [b] and whose
+    destination is [d], at their storage precisions. *)
+let tensorized_matmul_capability ~is_gpu ~is_cpu ~limits ~a ~b ~d =
+  let prec (tn : Tn.t) = Lazy.force tn.Tn.storage_prec in
+  tensorized_capability ~is_gpu ~is_cpu ~limits ~a_prec:(prec a) ~b_prec:(prec b) ~d_prec:(prec d)

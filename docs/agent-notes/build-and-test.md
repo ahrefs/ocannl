@@ -544,8 +544,14 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   point, an unused parser over opaque fields is a runtime trap, and narrowing `sexp` to `sexp_of`
   is a real cleanup. Module aliases are
   followed conservatively; an unqualified identifier in the lexical scope of `open M` counts even
-  when shadowing could make it local, and `include M` counts every value because it re-exports the
-  interface. Those choices admit false positives rather than refusing valid code. Values created
+  when shadowing could make it local. An `include M` is NOT a use (gh-ocannl-1085): crediting every
+  value of `M` there hid `Datatypes.mutable_list` behind `utils.ml`'s `include Datatypes` for years.
+  The including module — a file, or the `module N = struct … end` or `let module N = … in` around
+  a nested include — becomes a further receiver of `M`'s values instead, transitively and through
+  a module alias of either declared in any source, so `Utils.insert` counts for `Datatypes.insert` and so does a bare `insert` under
+  `open Utils` or below the include. Includes of a functor application, or inside a functor body or
+  an anonymous structure, are not followed, so a use through one reads dead — the loud direction;
+  the other choices admit false positives rather than refusing valid code. Values created
   by other PPX expansions or brought into the defining module by `include` are outside this first
   cut. Every current zero-reference export is an exact stale-checked exemption: adding an `.mli`,
   removing the value, or giving it a detected caller requires deleting its exemption.
@@ -596,8 +602,12 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   invocation refuses loudly instead of queueing behind dune's lock — "I lost track of a run so
   I started another" being the usual start of the spiral. A run is two processes — the launching
   shell, which takes the lock and publishes the run, and a perl supervisor that inherits the lock,
-  caps dune and records the verdict (gh-ocannl-606 collapsed the former three-party launch and its
-  publication handshake) — and everything it keeps per worktree (the lock, its owner pointer, the
+  caps its child and records the verdict (gh-ocannl-606 collapsed the former three-party launch and
+  its publication handshake). The child is the script's `_resolve` first — the batch's backends,
+  width and fleet slot — which then execs dune in its own place: work that must run under the lock
+  before dune belongs in that first phase, never in the launcher, which then needs its own copy of
+  the cap, the signal relays and the group kills (staging#832 grew one, and six of its nine review
+  rounds went there; gh-ocannl-1106 deleted it). Everything a run keeps per worktree (the lock, its owner pointer, the
   `last` pointer) lives under `~/.ocannl-test-runs` keyed by the worktree's path, never in the
   tree: a run leaves the worktree exactly as clean as it found it, so a teardown that judges a
   worktree by its ignored files is not refused over lock residue. `OCANNL_TOOL_TEST_RUNS` relocates
@@ -2493,8 +2503,10 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   probe also proves that version runs a nested slot inside an enclosing one, so a worker's own
   `execution slot` wrapper around the runner costs one slot, not two). The kind, and the width
   above, read ONE resolution of the backends the batch can hold (`tools/batch-backends.sh`,
-  gh-ocannl-1066), made under the worktree lock before the run is published, so the injected
-  width is in the recorded command; a `stop` in that window withdraws the launch. `--cpu` means
+  gh-ocannl-1066), made by the run's first phase (the supervisor's child, under the lock, the cap
+  and the run's signal handling; gh-ocannl-1106), which rewrites the recorded command with the
+  injected width before it execs dune; a `stop` or an expired cap there is an ordinary CANCELLED
+  or TIMEOUT run whose log says dune was not started. `--cpu` means
   none of them holds a GPU. It asks two
   questions. First, which backends do the stanzas the run can reach NAME (`; ocannl-backend: cuda`
   and friends, which hold that backend whatever the configuration says): `ocannl_slot_kind`

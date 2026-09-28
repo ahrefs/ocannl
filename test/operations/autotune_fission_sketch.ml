@@ -363,46 +363,35 @@ let () =
   let%op mc0 = ma * mb in
   let serial_comp = named "af_mm_serial" (Train.forward mc0) in
   let sctx = Context.auto () in
-  let mm_capture = ref None in
   let sctx, sroutine =
-    Context.compile
-      ~lowered_transform:(fun opt ->
-        mm_capture := Some opt;
-        [ opt ])
-      sctx serial_comp Ir.Indexing.Empty
+    Context.compile ~lowered_transform:(fun opt -> [ opt ]) sctx serial_comp Ir.Indexing.Empty
   in
   let sctx = Context.run sctx sroutine in
   let got_serial = nonzero "af_mm_serial" (Context.get_values sctx mc0.Tensor.value) in
-  (* Whether the search proposes a tensorized sketch for a site at all is the backend's call, and
-     [sketch_seed_params] is the composition the search enumerates, so the tests below ask it the
-     same question rather than a backend-name substring: a GPU backend seeds [sk_mma] sketches only
-     where its descriptor advertises an mma format for the site's f32 triple (Metal's simdgroup,
-     CUDA's tf32 arm), and HIP's rocWMMA advertises none for f32, so on HIP every MMA counter of an
-     f32 site is zero by design. The claims that count MMA candidates are then vacuous there and say
-     so through [skipped], the way the sibling tuner tests treat a site with no tensorized seed; the
-     scalar seeding and the value parity stay pinned on every backend. *)
-  let tensorized_seeded ctx opt =
-    Autotune.sketch_seed_params ~is_gpu ~is_cpu ~limits:(Context.hardware_limits ctx) opt
-    |> List.exists ~f:(fun q -> q.Autotune.sk_mma)
+  (* Whether the search proposes a tensorized sketch for a site at all is the backend's call: a GPU
+     backend seeds [sk_mma] sketches only where its descriptor advertises an mma format for the
+     site's f32 triple (Metal's simdgroup, CUDA's tf32 arm), and HIP's rocWMMA advertises none for
+     f32, so on HIP every MMA counter of an f32 site is zero by design. The claims that count MMA
+     candidates are gated on that CAPABILITY, never on the seeds they count (gh-ocannl-1115): where
+     the backend advertises the tile a missing seed fails the claim, and only where it does not do
+     they say so through [skipped]; the scalar seeding and the value parity stay pinned on every
+     backend. The skip's scope says WHY the tile is missing, derived by
+     [Ll_test.tensorized_matmul_capability]: HIP's absence is a backend fact, CUDA's is the
+     repository default [tf32_matmuls=false] -- the measurement environment's choice, not the
+     backend's limit, so that skip aggregates as environment non-coverage (the sibling companion
+     test draws the same line). *)
+  let mma_capability ctx ~a ~b ~d =
+    Ll_test.tensorized_matmul_capability ~is_gpu ~is_cpu ~limits:(Context.hardware_limits ctx)
+      ~a:a.Tensor.value ~b:b.Tensor.value ~d:d.Tensor.value
   in
-  (* The skip's scope says WHY the seed is missing. HIP's rocWMMA has no f32-input shape, so on HIP
-     an f32 site never seeds a tensorized sketch whatever the configuration (verified with
-     [tf32_matmuls] on): a backend fact. CUDA seeds one through the tf32 arm, which the repository
-     default [tf32_matmuls=false] turns off: the measurement environment's choice, not the backend's
-     limit, so that skip aggregates as environment non-coverage rather than as CUDA universally
-     lacking the coverage (the sibling companion test draws the same line). *)
-  let mma_skip_aggregation =
-    match backend_name with
-    | "cuda" when not (Ir.Numerics.get ()).tf32_matmuls -> `Environment
-    | _ -> `Backend
+  let mma_claim ~capability name b =
+    match capability with
+    | `Advertised -> p name b
+    | `Withheld aggregation ->
+        Stdio.eprintf "af: %s advertises no tensorized pipeline for this site\n" backend_name;
+        skipped ~aggregation ~backend:backend_name name
   in
-  let mma_claim ~seeded name b =
-    if seeded then p name b
-    else (
-      Stdio.eprintf "af: no tensorized seed for this site on %s\n" backend_name;
-      skipped ~aggregation:mma_skip_aggregation ~backend:backend_name name)
-  in
-  let mm_mma_seeded = tensorized_seeded sctx (Option.value_exn ~here:[%here] !mm_capture) in
+  let mm_mma = mma_capability sctx ~a:ma ~b:mb ~d:mc0 in
   let%op mc1 = ma * mb in
   let mm_comp = named "af_mm_tuned" (Train.forward mc1) in
   let cache_dir3 = "autotune_cache_sketch" in
@@ -428,12 +417,11 @@ let () =
   p "matmul sketch instantiations seeded" (mr1.Autotune.sketch_candidates > 0);
   (* [mma_candidates] records the decision after the seeded candidates reached candidate compile; it
      is stronger than reconstructing a per-dialect minimum from the aggregate sketch count. *)
-  mma_claim ~seeded:mm_mma_seeded "tensorized (mma) sketch instantiations seeded"
+  mma_claim ~capability:mm_mma "tensorized (mma) sketch instantiations seeded"
     (mr1.Autotune.mma_candidates > 0);
   Stdio.eprintf "matmul MMA accounting (not part of the golden): %d total, %d fission-scoped\n"
     mr1.Autotune.mma_candidates mr1.Autotune.fiss_mma_candidates;
-  mma_claim ~seeded:mm_mma_seeded
-    "whole-routine MMA candidates stay out of the fission-scoped counter"
+  mma_claim ~capability:mm_mma "whole-routine MMA candidates stay out of the fission-scoped counter"
     (mr1.Autotune.fiss_mma_candidates < mr1.Autotune.mma_candidates);
   p_all2 "tuned matmul matches the serial twin" got_mm1 got_serial ~f:approx;
   p "matmul tune replays exactly after a contention-free search"
@@ -546,41 +534,15 @@ let () =
   let%op qe0 = qd0 * qc in
   let fs_serial_comp = named "af_fs_serial" (Train.forward qe0) in
   let qsctx = Context.auto () in
-  let qslimits = Context.hardware_limits qsctx in
-  let fs_mma_seeded = ref false in
+  (* The per-segment claim's subject is the fissioned matmul segment's site, [qd0 * qc]; its
+     capability is a property of that site's nodes, whatever the fission pipeline makes of the whole
+     routine. *)
+  let fs_mma = mma_capability qsctx ~a:qd0 ~b:qc ~d:qe0 in
   let qsctx, qsroutine =
-    Context.compile
-      ~lowered_transform:(fun opt ->
-        (* The per-segment oracle asks the question the tuner asks, of the segments the tuner seeds:
-           [F_sketch] entries come from [sketch_seed_params] on each post-fission [`Normal]
-           segment's pre-schedule form, under the same fission pipeline and presets. The whole
-           routine is the wrong subject here -- a materialized producer can fail the whole-routine
-           tensorized family's companion coverage while the isolated matmul segment seeds fine
-           (Codex P2 on PR #658). An unfissioned routine falls back to the whole-routine question,
-           as the tuner does. *)
-        let preset o =
-          if is_gpu then Sched.default_gpu ~min_parallel:1 ~limits:qslimits o
-          else if is_cpu then Sched.default_cpu ~min_parallel:1 o
-          else []
-        in
-        let zero_sched tns = if is_gpu then Sched.zero_expansion ~limits:qslimits tns else [] in
-        (fs_mma_seeded :=
-           match
-             Sched.fission_scheduled ~promote_locals:is_gpu ~preset ~zero_sched ~static_indices:[]
-               opt
-           with
-           | [] | [ _ ] -> tensorized_seeded qsctx opt
-           | tuples ->
-               List.exists tuples ~f:(fun (kind, pre, _, _) ->
-                   match kind with
-                   | `Normal -> tensorized_seeded qsctx pre
-                   | `Zeros | `Solo -> false));
-        [ opt ])
-      qsctx fs_serial_comp Ir.Indexing.Empty
+    Context.compile ~lowered_transform:(fun opt -> [ opt ]) qsctx fs_serial_comp Ir.Indexing.Empty
   in
   let qsctx = Context.run qsctx qsroutine in
   let got_fs_serial = Context.get_values qsctx qe0.Tensor.value in
-  let fs_mma_seeded = !fs_mma_seeded in
   let%op qd1 = qa + qb in
   Train.set_materialized qd1.Tensor.value;
   let%op qe1 = qd1 * qc in
@@ -600,7 +562,7 @@ let () =
          tensorized member actually reached candidate compile. The MMA counter is fission-scoped: a
          whole-routine MMA candidate cannot satisfy this assertion. *)
       p "per-segment sketch candidates seeded" (r.Autotune.fiss_sketch_candidates > 0);
-      mma_claim ~seeded:fs_mma_seeded "per-segment tensorized sketch candidates seeded"
+      mma_claim ~capability:fs_mma "per-segment tensorized sketch candidates seeded"
         (r.Autotune.fiss_mma_candidates > 0);
       p "per-segment sketch candidates timed" (r.Autotune.fiss_sketch_timed > 0)
   | None ->

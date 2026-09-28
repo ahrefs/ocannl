@@ -3709,7 +3709,12 @@
   ocannl_config
   (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
-  (env_var OCANNL_BACKEND))
+  (env_var OCANNL_BACKEND)
+  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_TF32_MATMULS)
+  (env_var OCANNL_PROFILE)
+  (env_var OCANNL_CC_VECTOR_BYTES))
  ; Keep execution off @default as well as @runtest; @check still compiles the source.
  (action
   (no-infer
@@ -3759,7 +3764,12 @@
   (alias slow-env_spelling_gate)
   autotune_batched_companion.expected
   ocannl_config
-  (env_var OCANNL_BACKEND))
+  (env_var OCANNL_BACKEND)
+  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_TF32_MATMULS)
+  (env_var OCANNL_PROFILE)
+  (env_var OCANNL_CC_VECTOR_BYTES))
  ; Keep execution off @default as well as @runtest; @check still compiles the source.
  (action
   (no-infer
@@ -4294,6 +4304,49 @@
   (env_var OCANNL_BACKEND))
  (modules schedule_conv_gemm)
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
+ (name schedule_strided_1x1)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  ; The f16 leg branches on the ADVERTISED tile-MMA capability, so the rocWMMA-header probe's three
+  ; variables are inputs to its verdict (the rationale, and the residual: schedule_mma_matmul's
+  ; stanza, gh-ocannl-1032). The numerics policy is pinned in the test instead.
+  (env_var ROCWMMA_PATH)
+  (env_var LOCALAPPDATA)
+  (env_var HIP_PATH)
+  ; Every configuration key the two modules its seeding and segmentation run through read --
+  ; schedule.ml (default presets, zero expansion, fission) and sketch_families.ml (seeding) -- so a
+  ; changed setting re-runs the test rather than serving the previous result.
+  (env_var OCANNL_AUTOMATIC_CPU_SCHEDULE)
+  (env_var OCANNL_AUTOMATIC_GPU_SCHEDULE)
+  (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
+  (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
+  (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
+  (env_var OCANNL_SCHEDULE_FISSION)
+  (env_var OCANNL_SCHEDULE_LOG_LAUNCHES)
+  (env_var OCANNL_AUTOTUNE_REGISTER_TILE_RM_TWIN)
+  (env_var OCANNL_CC_GRID_PRIVATE_BYTES_CAP)
+  (env_var OCANNL_CC_PARALLEL_CHUNKS)
+  (env_var OCANNL_CC_PARALLEL_GRID)
+  ; And every key low_level.ml reads: its inlining and virtualization decide whether the block's
+  ; shortcut is a materialized site at all.
+  (env_var OCANNL_ENABLE_DEVICE_ONLY)
+  (env_var OCANNL_INLINE_COMPLEX_COMPUTATIONS)
+  (env_var OCANNL_INLINE_SCALAR_CONSTEXPRS)
+  (env_var OCANNL_INLINE_SIMPLE_COMPUTATIONS)
+  (env_var OCANNL_LL_IDENT_STYLE)
+  (env_var OCANNL_OUTPUT_PREC_IN_LL_FILES)
+  (env_var OCANNL_VIRTUALIZE_FOOTPRINT_MATERIALIZATION)
+  (env_var OCANNL_VIRTUALIZE_MAX_INLINE_FANIN)
+  (env_var OCANNL_VIRTUALIZE_MAX_INLINE_REDUCTION)
+  (env_var OCANNL_VIRTUALIZE_MAX_VISITS)
+  (env_var OCANNL_BACKEND))
+ (modules schedule_strided_1x1)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -4851,7 +4904,12 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
-  (env_var OCANNL_BACKEND))
+  (env_var OCANNL_BACKEND)
+  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_TF32_MATMULS)
+  (env_var OCANNL_PROFILE)
+  (env_var OCANNL_CC_VECTOR_BYTES))
  (modules epilogue_fusion_mma_seeds)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
@@ -5432,7 +5490,12 @@
  (deps
   (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
-  (env_var OCANNL_BACKEND))
+  (env_var OCANNL_BACKEND)
+  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_TF32_MATMULS)
+  (env_var OCANNL_PROFILE)
+  (env_var OCANNL_CC_VECTOR_BYTES))
  (modules schedule_contraction_nest)
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess

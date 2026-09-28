@@ -255,9 +255,71 @@ let () =
   let functor_application = refs functor_sources in
   Verdict.p_empty "a functor-application type path is accepted without guessed credit"
     ~over:functor_sources functor_application;
-  let included = refs [ ("included.ml", "include Sample\n") ] in
-  Verdict.p "include counts as a reference to every re-exported value"
-    (List.length included = List.length fixture_exports);
+  (* gh-ocannl-1085: an include re-exports, it does not use. [Datatypes.mutable_list] hid for years
+     behind [utils.ml]'s [include Datatypes] when the include itself credited every value. *)
+  let include_only_sources = [ ("included.ml", "include Sample\n") ] in
+  Verdict.p_empty "an include alone references nothing it re-exports" ~over:include_only_sources
+    (refs include_only_sources);
+  let included_counts =
+    Scan.counts ~exports:fixture_exports
+      (refs [ ("included.ml", "include Sample\n"); ("user.ml", "let a = Included.plain\n") ])
+  in
+  Verdict.p "a value used only through the includer is live"
+    (Hashtbl.find_exn included_counts "Sample.plain" > 0);
+  Verdict.p "a value the includer re-exports but nobody uses stays dead"
+    (Hashtbl.find_exn included_counts "Sample.x" = 0);
+  let through_includers =
+    refs
+      [
+        ("included.ml", "include Sample\n");
+        ("twice.ml", "include Included\n");
+        ( "wrapper.ml",
+          "module S = Sample\n\
+           module Inner = struct include S end\n\
+           module Rec = struct include struct include Sample end end\n" );
+        ("selected.cudajit.ml", "include Sample\n");
+        ("inside.ml", "include Sample\nlet own = alias\n");
+        ("local.ml", "let a = let module L = struct include Sample end in L.included\n");
+        ("exported.ml", "module Alias = Included\nmodule Direct = Sample\n");
+        ( "user.ml",
+          "let a = Twice.x\n\
+           let g = Exported.Alias.outer\n\
+           let h = Exported.Direct.poly_of_sexp\n\
+           let b = Wrapper.Inner.pair\n\
+           let c = Selected.extended\n\
+           let d = Rec.public_pair\n\
+           open Included\n\
+           let e = primitive\n\
+           let f = [%equal: Twice.named] Named Named\n" );
+      ]
+  in
+  Verdict.p_all
+    "includers are receivers transitively, nested, through aliases and select alternatives, \
+     opened, below the include itself, local to an expression, and aliased in another source"
+    [
+      "x";
+      "pair";
+      "extended";
+      "public_pair";
+      "primitive";
+      "equal_named";
+      "alias";
+      "included";
+      "outer";
+      "poly_of_sexp";
+    ]
+    ~f:(referenced through_includers);
+  let unrelated =
+    refs
+      [
+        ("included.ml", "include Sample\n");
+        ("other.ml", "include Unrelated\n");
+        ( "user.ml",
+          "let a = Other.plain\nmodule Functorized = F (Included)\nlet b = Functorized.x\n" );
+      ]
+  in
+  Verdict.p_none "an include of another module, or a functor application, makes no receiver"
+    [ "plain"; "x" ] ~f:(referenced unrelated);
   let counts = Scan.counts ~exports:fixture_exports direct in
   Verdict.p "a synthetic zero-reference export is detected"
     (Hashtbl.find_exn counts "Sample.primitive" = 0);

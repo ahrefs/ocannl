@@ -250,6 +250,90 @@ let mma_tile_for_precisions_in_scope (mma : Ir.Backend_intf.mma_capability) ~sco
   if wide_acc_withholds mma ~scope ~d_prec then None
   else mma_tile_for_precisions mma ~a_prec ~b_prec ~d_prec
 
+(* The compute precision the CPU register tiling runs a destination of this storage precision at,
+   through the same [Numerics.cpu_compute_prec] the emission asks (gh-ocannl-575). *)
+let cpu_register_tile_prec ~(limits : Ir.Backend_intf.hardware_limits) prec =
+  Ir.Numerics.cpu_compute_prec ~native_fp16_arithmetic:limits.Ir.Backend_intf.native_fp16_arithmetic
+    prec
+
+(* gh-ocannl-1115: why the backend and the configuration withhold the tensorized family from a
+   matmul site with these storage precisions, before any geometry or site structure is consulted --
+   [None] when they do not. The family tree refutes its tensorized branch through this, and the
+   tests that claim a tensorized seed's PRESENCE gate on it, so the gate is the seeder's own
+   judgment and never a restatement of it (nor the seed list under test). On GPU: routine logging, a
+   lane wider than the workgroup, no advertised format tile; on CPU, the register tiling's
+   statically decidable rules (gh-ocannl-479) that do not depend on the site's shape: a usable
+   vector file, two lanes at the compute precision, uniform vector-capable compute precisions, and
+   routine logging. *)
+let tensorized_capability_refutation ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits)
+    ~a_prec ~b_prec ~d_prec =
+  match (is_gpu, limits.Ir.Backend_intf.mma) with
+  | true, Some _ when Utils.debug_log_from_routines () ->
+      (* Same predicate the GPU [mma_syntax] paths consult: under routine logging the emission skips
+         the intrinsic and renders the scalar fallback, so every leaf would be timed (and cached)
+         under a tensorized label. *)
+      Some
+        "routine logging is active (debug_log_from_routines): the mma emission renders the scalar \
+         fallback, so every leaf would time under a tensorized label"
+  | true, Some { Ir.Backend_intf.mma_simd_width = w; _ }
+    when Option.value_map limits.Ir.Backend_intf.max_threads_per_workgroup ~default:false
+           ~f:(fun cap -> w > cap) ->
+      (* The tensorization lane is a Workgroup axis of extent [w] in every geometry. *)
+      Some
+        (Printf.sprintf "mma lane width %d exceeds the %d-thread workgroup limit" w
+           (Option.value_exn limits.Ir.Backend_intf.max_threads_per_workgroup))
+  | true, Some mma -> (
+      match mma_tile_for_precisions mma ~a_prec ~b_prec ~d_prec with
+      | Some _ -> None
+      | None ->
+          Some
+            (Printf.sprintf
+               "backend advertises no mma format tile for operands (%s, %s) with accumulator %s"
+               (Ir.Ops.prec_string a_prec) (Ir.Ops.prec_string b_prec) (Ir.Ops.prec_string d_prec)))
+  | true, None -> Some "backend advertises no mma capability"
+  | _ when is_cpu ->
+      let native_fp16 = limits.Ir.Backend_intf.native_fp16_arithmetic in
+      let comp_prec = cpu_register_tile_prec ~limits in
+      let prec = comp_prec d_prec in
+      let uniform_vec_capable =
+        (match prec with
+          | Ir.Ops.Single_prec _ | Ir.Ops.Double_prec _ -> true
+          | Ir.Ops.Half_prec _ -> native_fp16
+          | _ -> false)
+        && Ir.Ops.equal_prec (comp_prec a_prec) prec
+        && Ir.Ops.equal_prec (comp_prec b_prec) prec
+        (* The C-tile accumulates at the compute precision, so a divergent accumulator residency
+           ([Fp16_wide] + [narrow_compute_f32 = false] on an f16 destination) is an emission decline
+           — mirror it here or the candidate is timed under a tensorized label (gh-ocannl-680; Codex
+           P1 round 1 on staging PR #477). *)
+        && Ir.Ops.equal_prec
+             (Ir.Numerics.cpu_accum_prec ~native_fp16_arithmetic:native_fp16 d_prec)
+             prec
+      in
+      let lanes = limits.Ir.Backend_intf.simd_vector_bytes / max 1 (Ir.Ops.prec_in_bytes prec) in
+      List.find_map
+        [
+          ( limits.Ir.Backend_intf.simd_vector_bytes >= 8,
+            lazy
+              (Printf.sprintf "no usable SIMD vector file (simd_vector_bytes=%d < 8)"
+                 limits.Ir.Backend_intf.simd_vector_bytes) );
+          ( lanes >= 2,
+            lazy
+              (Printf.sprintf "fewer than two vector lanes at %s (simd_vector_bytes=%d)"
+                 (Ir.Ops.prec_string prec) limits.Ir.Backend_intf.simd_vector_bytes) );
+          ( uniform_vec_capable,
+            lazy
+              "register tiling requires uniform vector-capable compute precisions (f32/f64, or \
+               fp16 where arithmetic is native)" );
+          ( not (Utils.debug_log_from_routines ()),
+            lazy
+              "routine logging is active (debug_log_from_routines): [C_syntax.try_register_tile] \
+               deterministically declines, so every leaf would time the scalar fallback under a \
+               tensorized label" );
+        ]
+        ~f:(fun (ok, witness) -> if ok then None else Some (Lazy.force witness))
+  | _ -> Some "backend kind seeds no tensorized pipeline"
+
 (* The swizzled staged layout, if any, that the backend can read for this site's formats
    (gh-ocannl-481 item 3, D3). [None] leaves the staged seeds untwinned. Operand layout is
    independent of the accumulator lifetime; the geometry that consumes this result applies the
@@ -2918,31 +3002,20 @@ let matmul_flavor_tree ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limit
     else Sspace.Refuted "backend kind seeds no scalar blocktile pipeline"
   in
   let mma_child ~batch_grid =
-    match (is_gpu, limits.Ir.Backend_intf.mma) with
-    | true, Some _ when Utils.debug_log_from_routines () ->
-        (* Same predicate the GPU [mma_syntax] paths consult: under routine logging the emission
-           skips the intrinsic and renders the scalar fallback, so every leaf would be timed (and
-           cached) under a tensorized label. *)
-        Sspace.Refuted
-          "routine logging is active (debug_log_from_routines): the mma emission renders the \
-           scalar fallback, so every leaf would time under a tensorized label"
-    | true, Some { Ir.Backend_intf.mma_simd_width = w; _ }
-      when Option.value_map limits.Ir.Backend_intf.max_threads_per_workgroup ~default:false
-             ~f:(fun cap -> w > cap) ->
-        (* The tensorization lane is a Workgroup axis of extent [w] in every geometry. *)
-        Sspace.Refuted
-          (Printf.sprintf "mma lane width %d exceeds the %d-thread workgroup limit" w
-             (Option.value_exn limits.Ir.Backend_intf.max_threads_per_workgroup))
-    | true, Some ({ Ir.Backend_intf.mma_simd_width = w; _ } as mma) -> (
-        let a_prec = Lazy.force site.m_a.Ir.Tnode.storage_prec in
-        let b_prec = Lazy.force site.m_b.Ir.Tnode.storage_prec in
-        let d_prec = Lazy.force site.m_d.Ir.Tnode.storage_prec in
+    let a_prec = Lazy.force site.m_a.Ir.Tnode.storage_prec in
+    let b_prec = Lazy.force site.m_b.Ir.Tnode.storage_prec in
+    let d_prec = Lazy.force site.m_d.Ir.Tnode.storage_prec in
+    match
+      ( tensorized_capability_refutation ~is_gpu ~is_cpu ~limits ~a_prec ~b_prec ~d_prec,
+        is_gpu,
+        limits.Ir.Backend_intf.mma )
+    with
+    | Some witness, _, _ -> Sspace.Refuted witness
+    | None, true, Some ({ Ir.Backend_intf.mma_simd_width = w; _ } as mma) -> (
         match mma_tile_for_precisions mma ~a_prec ~b_prec ~d_prec with
         | None ->
-            Sspace.Refuted
-              (Printf.sprintf
-                 "backend advertises no mma format tile for operands (%s, %s) with accumulator %s"
-                 (Ir.Ops.prec_string a_prec) (Ir.Ops.prec_string b_prec) (Ir.Ops.prec_string d_prec))
+            (* [tensorized_capability_refutation] refuted this triple above. *)
+            assert false
         | Some (tm_t, tn_t, tk_t) ->
             (* [bn = w] keeps the zeroing's column grid blocks aligned with [j]'s (see
                [gpu_mma_sketch_schedule]); [bk = 0] = unstaged full-K block. Staged seeds
@@ -3185,8 +3258,7 @@ let matmul_flavor_tree ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limit
                                    (((Family_decision.Twin `Plain, leaf base) :: swizzle_twins)
                                    @ depth_twins))) ))
                   @ [ (Family_decision.Geometry Lattice, lattice_child) ])))
-    | true, None -> Sspace.Refuted "backend advertises no mma capability"
-    | _ when is_cpu ->
+    | None, _, _ when is_cpu ->
         (* The register-tiled [Tile_mma] rendering needs no MMA units (cc's [limits.mma] is a token
            1x1x1 capability). Statement rules the renderer checks per emission
            ([C_syntax.try_register_tile]) that are already decidable here judge the branch
@@ -3202,25 +3274,10 @@ let matmul_flavor_tree ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limit
            the layout, so the packed flavors are exempt). What is only knowable at emission (address
            spaces, footprint interactions with other locals) is covered by the decline diagnostics
            and the [C_syntax.mma_census]. *)
-        let native_fp16 = limits.Ir.Backend_intf.native_fp16_arithmetic in
-        let comp_prec p = Ir.Numerics.cpu_compute_prec ~native_fp16_arithmetic:native_fp16 p in
-        let d_store_prec = Lazy.force site.m_d.Ir.Tnode.storage_prec in
-        let prec = comp_prec d_store_prec in
-        let uniform_vec_capable =
-          (match prec with
-            | Ir.Ops.Single_prec _ | Ir.Ops.Double_prec _ -> true
-            | Ir.Ops.Half_prec _ -> native_fp16
-            | _ -> false)
-          && Ir.Ops.equal_prec (comp_prec (Lazy.force site.m_a.Ir.Tnode.storage_prec)) prec
-          && Ir.Ops.equal_prec (comp_prec (Lazy.force site.m_b.Ir.Tnode.storage_prec)) prec
-          (* The C-tile accumulates at the compute precision, so a divergent accumulator residency
-             ([Fp16_wide] + [narrow_compute_f32 = false] on an f16 destination) is an emission
-             decline — mirror it here or the candidate is timed under a tensorized label
-             (gh-ocannl-680; Codex P1 round 1 on staging PR #477). *)
-          && Ir.Ops.equal_prec
-               (Ir.Numerics.cpu_accum_prec ~native_fp16_arithmetic:native_fp16 d_store_prec)
-               prec
-        in
+        (* The capability-level rules (vector file, lanes, compute-precision uniformity, routine
+           logging) were judged by [tensorized_capability_refutation] above; the site's own form and
+           shape are judged here. *)
+        let prec = cpu_register_tile_prec ~limits d_prec in
         (* [lanes] is the widest the register file offers, which is what the decline messages quote;
            whether a given extent can be tiled is [lanes_fit], which lets the renderer's per-extent
            halving ({!Ir.Backend_intf.simd_lanes_for}) through instead of gating every extent on the
@@ -3266,22 +3323,7 @@ let matmul_flavor_tree ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limit
                     ))
         in
         refute_unless
-          [
-            ( limits.Ir.Backend_intf.simd_vector_bytes >= 8,
-              Printf.sprintf "no usable SIMD vector file (simd_vector_bytes=%d < 8)"
-                limits.Ir.Backend_intf.simd_vector_bytes );
-            ( lanes >= 2,
-              Printf.sprintf "fewer than two vector lanes at %s (simd_vector_bytes=%d)"
-                (Ir.Ops.prec_string prec) limits.Ir.Backend_intf.simd_vector_bytes );
-            ( uniform_vec_capable,
-              "register tiling requires uniform vector-capable compute precisions (f32/f64, or \
-               fp16 where arithmetic is native)" );
-            (site.m_fma, "register tiling requires the fused accumulation form");
-            ( not (Utils.debug_log_from_routines ()),
-              "routine logging is active (debug_log_from_routines): [C_syntax.try_register_tile] \
-               deterministically declines, so every leaf would time the scalar fallback under a \
-               tensorized label" );
-          ]
+          [ (site.m_fma, "register tiling requires the fused accumulation form") ]
           (fun () ->
             let whole () =
               (* Whole-triple [Tile_mma] reads both operands in place over the full column extent:
@@ -3594,7 +3636,9 @@ let matmul_flavor_tree ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limit
                     (Family_decision.Tensorized_form `Whole_triple, whole_child);
                     (Family_decision.Tensorized_form `Packed, subt (fun () -> packed ()));
                   ]))
-    | _ -> Sspace.Refuted "backend kind seeds no tensorized pipeline"
+    | None, _, _ ->
+        (* [tensorized_capability_refutation] refutes every other backend kind above. *)
+        assert false
   in
   (* The batch-geometry level (gh-ocannl-643), per GPU pipeline, ABOVE the geometry menus:
      "batch-serial" first, so an unbatched (or CPU) site's leaf list is byte-identical to the

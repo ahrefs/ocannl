@@ -312,7 +312,8 @@ let leg ~tag ~ko_extents ~nk ?(companion = false) ~build () =
    (unstaged, staged, batch-grid) under the 5% tolerance schedule_batched_mma uses for gfx1151's
    not-exactly-rounded WMMA, and checking that the emitted source reaches the backend's intrinsic
    rather than the scalar fallback. Where the device advertises no such tile (cc; an f32-only
-   capability) the leg is reported skipped.
+   capability) the leg is reported skipped; where it does, a shape the site fails to seed fails the
+   shape's claims (gh-ocannl-1115) -- the gate is the capability, never the seeds under test.
 
    No pipelined-staged shape here: depth twins are seeded only for staged operands of at least 4
    bytes -- the async arms' element floor ([Autotune.sketch_params.sk_depth]) -- so a bf16 site
@@ -320,9 +321,12 @@ let leg ~tag ~ko_extents ~nk ?(companion = false) ~build () =
    on the f32 site. *)
 let bf16_leg ~tag ~build =
   let real_limits = Context.hardware_limits (Context.auto ()) in
-  let has_uniform_bf16_tile =
-    Ir.Backend_intf.advertises_mma_format real_limits ~a:Ir.Backend_intf.Mma_bf16
-      ~b:Ir.Backend_intf.Mma_bf16 ~d:Ir.Backend_intf.Mma_bf16
+  (* The seeder's own capability judgment for the site's storage precisions (all bf16: the build
+     below pins operands and destination), never the seeds under test (gh-ocannl-1115); a withheld
+     capability carries its derived skip aggregation (routine logging is the run's choice). *)
+  let capability =
+    Ll_test.tensorized_capability ~is_gpu:on_gpu ~is_cpu:false ~limits:real_limits
+      ~a_prec:Ir.Ops.bfloat16 ~b_prec:Ir.Ops.bfloat16 ~d_prec:Ir.Ops.bfloat16
   in
   let shapes =
     [
@@ -332,60 +336,64 @@ let bf16_leg ~tag ~build =
       ("batch-grid", fun q -> q.Autotune.sk_batch_grid && q.Autotune.sk_depth = 1);
     ]
   in
-  let skip_shape what =
-    skipped (tag ^ " bf16: the " ^ what ^ " candidate compiles and runs");
-    skipped (tag ^ " bf16: the " ^ what ^ " candidate agrees with the serial twin");
-    skipped (tag ^ " bf16: the " ^ what ^ " candidate renders the tensor-core intrinsic")
+  let shape_claims what =
+    List.map
+      [ "compiles and runs"; "agrees with the serial twin"; "renders the tensor-core intrinsic" ]
+      ~f:(fun c -> tag ^ " bf16: the " ^ what ^ " candidate " ^ c)
   in
-  if not (on_gpu && has_uniform_bf16_tile) then begin
-    Stdio.eprintf
-      "%s: %s advertises no uniform-bf16 mma tile -- the tensorized execution leg is skipped\n" tag
-      backend_name;
-    skipped (tag ^ " bf16: the multi-axis site seeds the backend's advertised tile");
-    skipped (tag ^ " bf16: no pipelined twin is seeded below the async arms' 4-byte element floor");
-    List.iter shapes ~f:(fun (what, _) -> skip_shape what)
-  end
-  else begin
-    let close a b = Float.(abs (a - b) <= 0.05 * max 1. (abs b)) in
-    let ref_t = build () in
-    let want =
-      List.hd_exn (run_serial ~name:(tag ^ "_bf16_serial") (Train.forward ref_t) [ ref_t ])
-      |> nonzero (tag ^ "_bf16_serial")
-    in
-    let cand = build () in
-    let routine = tag ^ "_bf16_mma" in
-    let fwd = named routine (Train.forward cand) in
-    let opt = capture fwd in
-    let seeds =
-      Autotune.sketch_seed_params ~is_gpu:true ~is_cpu:false ~limits:real_limits opt
-      |> List.filter ~f:(fun q -> q.Autotune.sk_mma && not q.Autotune.sk_epilogue)
-    in
-    p
-      (tag ^ " bf16: the multi-axis site seeds the backend's advertised tile")
-      (not (List.is_empty seeds));
-    p_none (tag ^ " bf16: no pipelined twin is seeded below the async arms' 4-byte element floor")
-      seeds ~f:(fun q -> q.Autotune.sk_depth > 1);
-    List.iter shapes ~f:(fun (what, pick) ->
-        match List.find seeds ~f:pick with
-        | None ->
-            Stdio.eprintf "%s: no %s tensorized seed for this site on %s\n" tag what backend_name;
-            skip_shape what
-        | Some q ->
-            let tensorized = ref false in
-            let n_ran, n_match =
-              execute_seeds
-                ~on_routine:(fun r ->
-                  tensorized :=
-                    Ir.C_syntax.equal_tensorization r.mma.Ir.C_syntax.tensorization
-                      Ir.C_syntax.Tensorized)
-                ~tag ~routine ~fwd ~outs:[ cand ] ~wants:[ want ] ~close [ q ]
-            in
-            p (tag ^ " bf16: the " ^ what ^ " candidate compiles and runs") (n_ran = 1);
-            p (tag ^ " bf16: the " ^ what ^ " candidate agrees with the serial twin") (n_match = 1);
-            p
-              (tag ^ " bf16: the " ^ what ^ " candidate renders the tensor-core intrinsic")
-              (n_ran = 1 && !tensorized))
-  end
+  match capability with
+  | `Withheld aggregation ->
+      Stdio.eprintf
+        "%s: %s withholds the uniform-bf16 tensorized family -- the tensorized execution leg is \
+         skipped\n"
+        tag backend_name;
+      let skipped = skipped ~aggregation in
+      skipped (tag ^ " bf16: the multi-axis site seeds the backend's advertised tile");
+      skipped (tag ^ " bf16: no pipelined twin is seeded below the async arms' 4-byte element floor");
+      List.iter shapes ~f:(fun (what, _) -> List.iter (shape_claims what) ~f:skipped)
+  | `Advertised ->
+      let close a b = Float.(abs (a - b) <= 0.05 * max 1. (abs b)) in
+      let ref_t = build () in
+      let want =
+        List.hd_exn (run_serial ~name:(tag ^ "_bf16_serial") (Train.forward ref_t) [ ref_t ])
+        |> nonzero (tag ^ "_bf16_serial")
+      in
+      let cand = build () in
+      let routine = tag ^ "_bf16_mma" in
+      let fwd = named routine (Train.forward cand) in
+      let opt = capture fwd in
+      let seeds =
+        Autotune.sketch_seed_params ~is_gpu:true ~is_cpu:false ~limits:real_limits opt
+        |> List.filter ~f:(fun q -> q.Autotune.sk_mma && not q.Autotune.sk_epilogue)
+      in
+      p
+        (tag ^ " bf16: the multi-axis site seeds the backend's advertised tile")
+        (not (List.is_empty seeds));
+      p_none (tag ^ " bf16: no pipelined twin is seeded below the async arms' 4-byte element floor")
+        seeds ~f:(fun q -> q.Autotune.sk_depth > 1);
+      List.iter shapes ~f:(fun (what, pick) ->
+          match List.find seeds ~f:pick with
+          | None ->
+              (* The gate above is the advertised capability, not this seed list (gh-ocannl-1115):
+                 under it the site seeds every one of these shapes, so a missing one is a seeding
+                 regression and fails its claims rather than skipping them. *)
+              Stdio.eprintf
+                "%s: no %s tensorized seed for this site on %s, which advertises the tile\n" tag
+                what backend_name;
+              List.iter (shape_claims what) ~f:(fun c -> p c false)
+          | Some q ->
+              let tensorized = ref false in
+              let n_ran, n_match =
+                execute_seeds
+                  ~on_routine:(fun r ->
+                    tensorized :=
+                      Ir.C_syntax.equal_tensorization r.mma.Ir.C_syntax.tensorization
+                        Ir.C_syntax.Tensorized)
+                  ~tag ~routine ~fwd ~outs:[ cand ] ~wants:[ want ] ~close [ q ]
+              in
+              List.iter2_exn (shape_claims what)
+                [ n_ran = 1; n_match = 1; n_ran = 1 && !tensorized ]
+                ~f:p)
 
 (* The pipelined-staged tensorized shape (gh-ocannl-487) through the real mma hook, on the f32 out
    projection: its staged operands clear the async arms' 4-byte element floor the bf16 leg sits
@@ -409,55 +417,62 @@ let pipelined_leg ~tag ~build =
     ~finally:(fun () -> Ir.Numerics.set_policy saved)
     ~f:(fun () ->
       let real_limits = Context.hardware_limits (Context.auto ()) in
-      let seedable =
-        match real_limits.Ir.Backend_intf.mma with
-        | Some mma ->
-            List.mem mma.Ir.Backend_intf.mma_pipeline_depths 2 ~equal:Int.equal
-            && Option.is_some
-                 (Autotune.mma_tile_for_precisions mma ~a_prec:Ir.Ops.single ~b_prec:Ir.Ops.single
-                    ~d_prec:Ir.Ops.single)
-        | None -> false
+      (* The seeder's capability judgment for the f32 site (under the leg's tf32 policy), plus the
+         advertised depth: a withheld capability or a missing depth is a skip, with the aggregation
+         the capability derives (routine logging is the run's choice; HIP's empty depth list and a
+         CPU backend's lack of a GPU tile are the backend's). *)
+      let withheld =
+        match
+          Ll_test.tensorized_capability ~is_gpu:on_gpu ~is_cpu:false ~limits:real_limits
+            ~a_prec:Ir.Ops.single ~b_prec:Ir.Ops.single ~d_prec:Ir.Ops.single
+        with
+        | `Withheld aggregation -> Some aggregation
+        | `Advertised ->
+            Option.value_map real_limits.Ir.Backend_intf.mma ~default:(Some `Backend) ~f:(fun mma ->
+                if List.mem mma.Ir.Backend_intf.mma_pipeline_depths 2 ~equal:Int.equal then None
+                else Some `Backend)
       in
-      if not (on_gpu && seedable) then begin
-        Stdio.eprintf
-          "%s: %s advertises no depth-2 pipeline over an f32 mma tile -- the pipelined leg is \
-           skipped\n"
-          tag backend_name;
-        skipped (tag ^ ": the multi-axis site seeds a pipelined-staged tensorized candidate");
-        List.iter claims ~f:skipped
-      end
-      else begin
-        let ref_t = build () in
-        let want =
-          List.hd_exn (run_serial ~name:(tag ^ "_serial") (Train.forward ref_t) [ ref_t ])
-          |> nonzero (tag ^ "_serial")
-        in
-        let cand = build () in
-        let routine = tag ^ "_mma" in
-        let fwd = named routine (Train.forward cand) in
-        let opt = capture fwd in
-        let pipelined =
-          Autotune.sketch_seed_params ~is_gpu:true ~is_cpu:false ~limits:real_limits opt
-          |> List.filter ~f:(fun q ->
-              q.Autotune.sk_mma && (not q.Autotune.sk_epilogue) && q.Autotune.sk_depth = 2)
-        in
-        p
-          (tag ^ ": the multi-axis site seeds a pipelined-staged tensorized candidate")
-          (not (List.is_empty pipelined));
-        match pipelined with
-        | [] -> List.iter claims ~f:(fun c -> p c false)
-        | q :: _ ->
-            let tensorized = ref false in
-            let n_ran, n_match =
-              execute_seeds
-                ~on_routine:(fun r ->
-                  tensorized :=
-                    Ir.C_syntax.equal_tensorization r.mma.Ir.C_syntax.tensorization
-                      Ir.C_syntax.Tensorized)
-                ~tag ~routine ~fwd ~outs:[ cand ] ~wants:[ want ] ~close:Float.equal [ q ]
-            in
-            List.iter2_exn claims [ n_ran = 1; n_match = 1; n_ran = 1 && !tensorized ] ~f:p
-      end)
+      match withheld with
+      | Some aggregation ->
+          Stdio.eprintf
+            "%s: %s advertises no depth-2 pipeline over an f32 mma tile -- the pipelined leg is \
+             skipped\n"
+            tag backend_name;
+          let skipped = skipped ~aggregation in
+          skipped (tag ^ ": the multi-axis site seeds a pipelined-staged tensorized candidate");
+          List.iter claims ~f:skipped
+      | None -> begin
+          let ref_t = build () in
+          let want =
+            List.hd_exn (run_serial ~name:(tag ^ "_serial") (Train.forward ref_t) [ ref_t ])
+            |> nonzero (tag ^ "_serial")
+          in
+          let cand = build () in
+          let routine = tag ^ "_mma" in
+          let fwd = named routine (Train.forward cand) in
+          let opt = capture fwd in
+          let pipelined =
+            Autotune.sketch_seed_params ~is_gpu:true ~is_cpu:false ~limits:real_limits opt
+            |> List.filter ~f:(fun q ->
+                q.Autotune.sk_mma && (not q.Autotune.sk_epilogue) && q.Autotune.sk_depth = 2)
+          in
+          p
+            (tag ^ ": the multi-axis site seeds a pipelined-staged tensorized candidate")
+            (not (List.is_empty pipelined));
+          match pipelined with
+          | [] -> List.iter claims ~f:(fun c -> p c false)
+          | q :: _ ->
+              let tensorized = ref false in
+              let n_ran, n_match =
+                execute_seeds
+                  ~on_routine:(fun r ->
+                    tensorized :=
+                      Ir.C_syntax.equal_tensorization r.mma.Ir.C_syntax.tensorization
+                        Ir.C_syntax.Tensorized)
+                  ~tag ~routine ~fwd ~outs:[ cand ] ~wants:[ want ] ~close:Float.equal [ q ]
+              in
+              List.iter2_exn claims [ n_ran = 1; n_match = 1; n_ran = 1 && !tensorized ] ~f:p
+        end)
 
 (* What a tile-geometry refutation calls the extent it judged (gh-ocannl-683). The divisibility
    gates compare a tile's k-extent against the INNERMOST contraction loop's extent [m_nk] alone --

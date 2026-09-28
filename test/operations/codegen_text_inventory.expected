@@ -198,6 +198,7 @@ test/operations/narrow_storage_compute.ml
     "HALF_TO_FLOAT(a)"
     "OCANNL_HALF_FMA"
     "OCANNL_VEC_NARROW_BFLOAT16"
+    "OCANNL_VEC_NARROW_HALF"
     "OCANNL_VEC_WIDEN_BFLOAT16"
     "OCANNL_VEC_WIDEN_HALF"
     "__builtin_elementwise_fma"

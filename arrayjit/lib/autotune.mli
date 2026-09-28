@@ -310,6 +310,24 @@ val mma_tile_for_precisions :
     can gate a tensorized leg on the seeder's own format resolution rather than on the seeds under
     test. *)
 
+val tensorized_capability_refutation :
+  is_gpu:bool ->
+  is_cpu:bool ->
+  limits:Ir.Backend_intf.hardware_limits ->
+  a_prec:Ir.Ops.prec ->
+  b_prec:Ir.Ops.prec ->
+  d_prec:Ir.Ops.prec ->
+  string option
+(** Why the backend and the configuration withhold the tensorized family from a matmul site with
+    these operand and destination storage precisions, before any geometry or site structure is
+    consulted — [None] when they do not (gh-ocannl-1115). {!matmul_sketch_tree} refutes its
+    tensorized branch with exactly this witness. On GPU: routine logging, an mma lane wider than the
+    workgroup, no advertised format tile ({!mma_tile_for_precisions}); on CPU, the register tiling's
+    shape-independent rules: a usable vector file, two lanes at the compute precision, uniform
+    vector-capable compute precisions, routine logging. Exposed so a test claims a tensorized seed's
+    PRESENCE exactly where the seeder's own capability judgment admits it, never gating on the seed
+    list under test. *)
+
 module Family_decision : sig
   (** {1 What a commitment on the matmul family tree is (gh-ocannl-591)}
 

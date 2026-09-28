@@ -233,6 +233,19 @@ files.
   that "is not detected" usually has a singleton somewhere — keep every axis at extent >= 2 unless
   the singleton is the point. `test/operations/conv_detection_boundary` pins each class with its
   reason, derived from the lowered maps.
+- **The matmul family never tiles or packs along a strided axis** (gh-ocannl-1076): a role needs
+  unit coefficient in the operand (`Sketch_families.unit_axis`), so a stride-2 1x1 conv
+  (`resnet_block`'s downsample) classifies with the BATCH axis as the GEMM row and `oh, ow` as
+  interior batch loops (`m_bi`) — every seed stages dense tiles from a strided source address and
+  executes correctly on cc and HIP, but the row is only `b` rows tall, and at batch 1 no family
+  seeds the site at all. Inside the full block (at 64 channels; at 16 the shortcut's conv is
+  virtualized into its norm and is no site) cc does not fission it and every whole-routine seed
+  declines — the operand `Stage` meets the 3x3 conv's second read of `x` — so the tuner times no
+  sketch for the shortcut there; GPU fissions it and the segment's seeds run. `resnet_block` itself
+  does not compile (no out-channel knob). `test/operations/schedule_strided_1x1` PINS the role
+  structure, the batch-1 refusal and every seed's parity (or typed decline, in the block); which
+  seeds decline where it only reports on stderr, and the 16-channel virtualization is a manual
+  observation (conv2d into batch_norm2d, 16 channels) that no test exercises.
 - **A dispatch's launch parameters are read on the HOST, at `Context.run`, and carried to the
   device** — never re-read from the caller's refs when the device gets around to the task. Only
   `Schedulers.Multidev` defers a task at all (`Sync.schedule_task` is `Task.run`, and the GPU
@@ -1039,3 +1052,18 @@ files.
   seed (base compile, analyses, the ~2 s baseline's timing window), then timing windows dominate
   compiles about 9:1 on second-scale candidates — so on cc a candidate's cost is its sample count
   times its step, not its compile. The format is the interface's (`Autotune.progressf`).
+- A test claims a tensorized seed's PRESENCE wherever the backend advertises the capability, and
+  gates on that capability, never on the seed list its claims are about (gh-ocannl-1115). Gated on
+  the seeds, a seeding regression — or a claim asking for a seed the seeder excludes by
+  construction, like the bf16 pipelined-staged shape below the 4-byte async floor — skips on every
+  backend, and skip coverage notices only once every backend skips. The capability is the seeder's
+  own judgment, `Autotune.tensorized_capability_refutation`: the family tree refutes its tensorized
+  branch through it (format tile, lane width and routine logging on GPU; vector file, lanes,
+  precision uniformity and routine logging on CPU), and `Ll_test.tensorized_capability` gates on it,
+  deriving a withheld capability's skip aggregation (`Environment` when `tf32_matmuls` on or routine
+  logging off would lift it) instead of keying on a backend name. Review found the piecemeal
+  re-derivation's gaps one condition per round (logging on GPU, then CPU, then the vector width),
+  which is why the predicate now has one owner. A gated test declares the configuration the judgment
+  reads (`OCANNL_TF32_MATMULS`, `OCANNL_PROFILE`, the two logging keys, `OCANNL_CC_VECTOR_BYTES`).
+  For an f32 site that leaves Metal as the only GPU evaluating those claims at default config (CUDA
+  needs tf32, HIP has no f32 shape), and CI's macOS job runs cc, not Metal.
