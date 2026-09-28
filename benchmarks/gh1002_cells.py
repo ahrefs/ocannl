@@ -46,6 +46,7 @@ import datetime
 import json
 import os
 import re
+import shutil
 import statistics
 import subprocess
 import sys
@@ -134,11 +135,12 @@ def run_cell(out, backend, fixture, treatment, r, artifacts=False):
     argv = [str(BENCH_GPT), f"--ocannl_backend={backend}", "--ocannl_autotune_cache_dir=",
             "--ocannl_log_config_sourcing=true"] + flags
     extra = {"BENCH_FIXTURE": str(HERE / "fixtures" / f"{fixture}.safetensors")}
+    # build_files_prefix names a subdirectory of ./build_files (a path is mangled into one name),
+    # so the artifacts are written under benchmarks/build_files/ and moved into DIR afterwards.
+    prefix = f"gh1002__{backend}__{fixture}__{treatment}"
     if artifacts:
-        adir = out / "artifacts" / f"{backend}__{fixture}__{treatment}"
-        adir.mkdir(parents=True, exist_ok=True)
         argv += ["--ocannl_output_debug_files_in_build_directory=true",
-                 f"--ocannl_build_files_prefix={adir}"]
+                 f"--ocannl_build_files_prefix={prefix}"]
         extra["BENCH_DOMINANT_KERNEL"] = "0"
     elif backend == "metal":
         extra["BENCH_KERNEL_TABLE"] = "1"
@@ -156,6 +158,11 @@ def run_cell(out, backend, fixture, treatment, r, artifacts=False):
             status = "timeout"
     with open(str(base) + ".status", "w") as f:
         f.write(f"{status}\n")
+    if artifacts and (HERE / "build_files" / prefix).is_dir():
+        dst = out / "artifacts" / f"{backend}__{fixture}__{treatment}"
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.rmtree(dst, ignore_errors=True)
+        shutil.move(str(HERE / "build_files" / prefix), str(dst))
     res = result_line(base)
     if res is None:
         log(f"FAILED {base.name}: status {status}, no result line")
