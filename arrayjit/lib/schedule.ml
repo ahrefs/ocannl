@@ -2069,23 +2069,30 @@ let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_
       zero_fringe = Set.add opt.zero_fringe tile;
     }
 
-(* A statement whose provenance is the schedule and not the source program: a [Stage] copy nest
-   (every write it makes is a plain copy into a [tile]-namespace node, and it declares or sets no
-   scope local), a [Workgroup_barrier] (lowering never emits one; staging does), and what the peel
-   itself strips ([Noop], [Comment]). A [Staged_compilation] is source and stays. *)
+(* A statement whose provenance is the schedule and not the source program, identified POSITIVELY
+   (round 8: every negative rule leaked a member): a [Stage] load — a [Set] into a [tile]-namespace
+   node of a plain copy, i.e. a read of ANOTHER node, a constant fill, or [Stage]'s [Where]-form
+   edge guard over those — or a [Workgroup_barrier] (lowering never emits one; staging does), and
+   what the peel itself strips ([Noop], [Comment]). Everything else is kept as a statement: tile
+   read-modify-writes (a previous [Privatize]'s relocated accumulation), [Split_reduce]'s partial
+   writes and scatters, any computation, vector writes, zeroings, scope locals, staged
+   compilation. *)
 let rec schedule_scratch (llc : Low_level.t) =
+  let rec plain_copy ~tn (v : Low_level.scalar_t) =
+    match v with
+    | Low_level.Get (src, _) -> not (Tn.equal src tn)
+    | Constant _ -> true
+    | Ternop (Ops.Where, _, (a, _), (b, _)) -> plain_copy ~tn a && plain_copy ~tn b
+    | _ -> false
+  in
   match llc with
   | Low_level.Noop | Comment _ | Workgroup_barrier -> true
-  | Staged_compilation _ -> false
   | Seq (a, b) -> schedule_scratch a && schedule_scratch b
   | For_loop { body; _ } | If { body; _ } -> schedule_scratch body
-  | Set { tn; llsc; _ } ->
-      (* A tile read-modify-write is not a copy: it is a previous [Privatize]'s relocated
-         accumulation, a source statement in all but its node (round 6). *)
-      String.equal tn.Tn.namespace tile_namespace && not (Low_level.scalar_touches_tn tn llsc)
-  | Set_dynamic { tn; _ } | Set_from_vec { tn; _ } | Zero_out tn ->
-      String.equal tn.Tn.namespace tile_namespace
-  | Declare_local _ | Set_local _ | Scan_loop _ | Tile_mma _ -> false
+  | Set { tn; llsc; _ } -> String.equal tn.Tn.namespace tile_namespace && plain_copy ~tn llsc
+  | Set_dynamic _ | Set_from_vec _ | Zero_out _ | Staged_compilation _ | Declare_local _
+  | Set_local _ | Scan_loop _ | Tile_mma _ ->
+      false
 
 (** {2 [Privatize]: accumulator privatization}
 

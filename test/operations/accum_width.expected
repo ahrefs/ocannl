@@ -50,6 +50,7 @@ under Fp16_wide the seeded privatized f16 sketch equals the once-narrowed wide-a
 a storage-precision Privatize tile narrows per step: under Fp16_wide the same f16 seed diverges from the wide reference: true
 a Privatize whose loop encloses a hardware-typed reduction level is refused: true
 two accumulators privatized one after the other keep their per-step narrowing with the serial rendering (256 + 1 + 1 stays 256 for each): true
+a privatized reduction beside a scatter into a schedule-minted partials node keeps per-step narrowing with the serial rendering (256 + 1 + 1 stays 256): true
 the shared widening predicate accepts the reduction and declines the recurrence and the mixed-operator update: true
 privatized sibling accumulation statements keep their separate narrowings with the serial rendering (256 +1 +1, twice, stays 256): true
 a privatized reduction beside another node's statement keeps per-step narrowing with the serial rendering (256 + 1 + 1 stays 256): true

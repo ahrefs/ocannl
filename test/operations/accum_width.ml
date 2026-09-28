@@ -1429,6 +1429,10 @@ let claim_priv_gate_two =
   "two accumulators privatized one after the other keep their per-step narrowing with the serial \
    rendering (256 + 1 + 1 stays 256 for each)"
 
+let claim_priv_gate_scatter =
+  "a privatized reduction beside a scatter into a schedule-minted partials node keeps per-step \
+   narrowing with the serial rendering (256 + 1 + 1 stays 256)"
+
 let claim_priv_gate_mixed =
   "a privatized mixed-operator update keeps per-step narrowing with the serial rendering (max(256 \
    + 1, 0) twice stays 256)"
@@ -1592,6 +1596,71 @@ let () =
         List.equal Float.equal serial [ 256.0; 256.0 ] && List.equal Float.equal priv serial
       in
       p claim_priv_gate_two two_targets;
+      (* A schedule-minted partials node written by a scatter beside the accumulation — the shape a
+         [Split_reduce] of a one-hot scatter leaves (round 8) — is reduction work, not staging
+         scratch, even though its node lives in the tile namespace: the tile must stay at storage
+         precision with the serial rendering (256 + 1 + 1 stays 256). *)
+      let beside_scatter =
+        let acc = node "aw_pg_scat" in
+        Ll_test.materialize acc;
+        let partials =
+          Tn.create ~namespace:"tile" (Tn.Specified bf16) ~id:9995 ~label:[ "aw_pg_scat_part" ]
+            ~unpadded_dims:(lazy [| 1 |])
+            ~padding:(lazy None)
+            ()
+        in
+        Ll_test.materialize partials;
+        let k = Ll_test.sym () in
+        (* [Set_dynamic] is post-optimize IR (only the one-hot rewrite produces it), so the scatter
+           twin reaches the backend through [optimize_scoped]: [raw] spells the same nodes with a
+           plain write for the optimizer's traced store. *)
+        let body ~scatter =
+          Ll_test.loop_n k 2
+            (LL.unflat_lines
+               [
+                 Ll_test.set acc cell (bin Ir.Ops.Add (Ll_test.get acc cell) (LL.Constant 1.0));
+                 (if scatter then
+                    LL.Set_dynamic
+                      {
+                        tn = partials;
+                        idcs = cell;
+                        dyn_axis = 0;
+                        dyn_value = (LL.Constant 0.0, Ir.Ops.index_prec ());
+                        llsc = LL.Constant 3.0;
+                        debug = "";
+                      }
+                  else Ll_test.set partials cell (LL.Constant 3.0));
+               ])
+        in
+        let scoped name =
+          Ll_test.optimize_scoped ~materialized:[ acc; partials ] ~name ~raw:(body ~scatter:false)
+            (body ~scatter:true)
+        in
+        let exec ~name o =
+          (List.hd_exn
+             (Ll_test.execute ~name o
+                ~seed:[ (acc, [| 256.0 |]); (partials, [| 0.0 |]) ]
+                ~read:[ acc ])).(0)
+        in
+        let serial = exec ~name:"aw_pg_scat_serial" (scoped "aw_pg_scat_serial") in
+        let priv =
+          let o = scoped "aw_pg_scat_priv" in
+          exec ~name:"aw_pg_scat_priv"
+            (Sched.apply
+               [
+                 Sched.privatize ~accum_prec:codegen_capabilities.Ir.Backend_intf.accum_prec
+                   ~target:acc ~over:k;
+               ]
+               o)
+        in
+        Stdio.eprintf
+          "accum_width: privatized beside a tile scatter serial %g privatized %g (not part of the \
+           golden)\n\
+           %!"
+          serial priv;
+        Float.equal serial 256.0 && Float.equal priv 256.0
+      in
+      p claim_priv_gate_scatter beside_scatter;
       p claim_priv_gate (w_add && w_sib && (not w_sub) && not w_mix);
       p claim_priv_gate_sib (Float.equal s_sib 256.0 && Float.equal p_sib 256.0);
       p claim_priv_gate_other (Float.equal s_oth 256.0 && Float.equal p_oth 256.0);
