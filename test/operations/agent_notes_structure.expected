@@ -8,7 +8,7 @@ every table is a table, row by row: true
 every notes file is reachable from the index, and links back: true
 no bullet is repeated across the notes: true
 no numeric GitHub citation uses an unqualified bare hash: true
-every note anchor AGENTS.md points at is a heading its note has: true
+every note anchor AGENTS.md or a tools script points at is a heading its note has: true
 every rule the scan names is reported over the live tree: true
 every finding carries one of the rules the scan names: true
 each flagged bullet has an exemption key of its own: true
@@ -17,6 +17,7 @@ every exemption still names a bullet that needs one: true
 Synthetic controls: scanner refusal diagnostics exercised by this control golden:
   [scanner-refusal:bc4968cf04b3b7f3212afef877977199] handed the notes
   [scanner-refusal:2ac555c09ba6fe90fc6321fecba16cab] the notes' bullets
+  [scanner-refusal:3b1b44bc902f09eaba8469a50662c285] tools scripts' pointers
   [scanner-refusal:ec487246d0ff9ad951333a2c56d4a990] names is reported
   [scanner-refusal:ed552c5b3e09a3046aa9cce5257cc148] every finding carries
   [scanner-refusal:348bb1f1fa0be73fb4796a31a76abaad] each flagged bullet

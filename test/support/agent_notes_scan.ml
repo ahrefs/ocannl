@@ -56,12 +56,15 @@
       silently resolves against whichever repository renders the note; [staging#NNN],
       [gh-ocannl-NNN] and [ahrefs/ocannl#NNN] do not. Inline code, fenced blocks, comments and
       identifier-attached hashes are inert to this rule.
-    - {b guide-anchors}: every [<note>.md#<anchor>] pointer in the agent guide ([AGENTS.md]) names a
-      notes file and a heading that file has. The guide keeps a rule and points at its mechanism; a
-      note long enough to need sections is useless to a pointer naming only the file, and a heading
-      renamed under an anchored pointer strands every rule pointing at it (gh-ocannl-1044). A bare
-      basename is a notes file; a path through [docs/agent-notes/] is resolved the same way, and a
-      path anywhere else is not a pointer into the notes and is not read.
+    - {b guide-anchors}: every [<note>.md#<anchor>] pointer in the agent guide ([AGENTS.md]), and in
+      the scripts under [tools/], names a notes file and a heading that file has. The guide keeps a
+      rule and points at its mechanism; a note long enough to need sections is useless to a pointer
+      naming only the file, and a heading renamed under an anchored pointer strands every rule
+      pointing at it (gh-ocannl-1044). The scripts point the same way, from comments and from the
+      messages they print to whoever trips a guard (lukstafi/ocannl-staging#849), and a stale anchor
+      there strands a reader mid-run (gh-ocannl-1111). A bare basename is a notes file; a path
+      through [docs/agent-notes/] is resolved the same way, and a path anywhere else is not a
+      pointer into the notes and is not read.
 
     {1 What it deliberately does not read}
 
@@ -1642,7 +1645,7 @@ let check_citations ~file contents =
       find 0 [])
 
 (* ------------------------------------------------------------------ *)
-(* Rule 7: the agent guide's anchored pointers resolve *)
+(* Rule 7: the anchored pointers into the notes, from the guide and the scripts, resolve *)
 (* ------------------------------------------------------------------ *)
 
 type pointer = {
@@ -1768,9 +1771,10 @@ let pointer_target path =
     rule treats as out of scope (Codex P2, round 13 on lukstafi/ocannl-staging#811). *)
 let pointer_scope p = pointer_target (if p.cut_left then p.token else p.path)
 
-(** Rule 7 over the agent guide. [files] is keyed as {!check_index} describes; the index is looked
-    up beside them, so a pointer at [docs/agent-notes.md#…] is checked against the index's headings.
-*)
+(** Rule 7 over one pointer source: the agent guide, or a script. [files] is keyed as {!check_index}
+    describes; the index is looked up beside them, so a pointer at [docs/agent-notes.md#…] is
+    checked against the index's headings. [guide_file] is the name findings carry, so it is the
+    source's repository-relative path. *)
 let check_guide ~guide_file ~guide_contents ~index_file ~index_contents
     ~(files : (string * string) list) =
   let known = (index_file, index_contents) :: files in
@@ -1838,11 +1842,12 @@ let in_rule_order found =
   List.concat_map rules ~f:(fun r -> List.filter named ~f:(fun f -> String.equal f.rule r))
   @ unnamed
 
-(** Every rule, over an index and the files it indexes, and over the agent guide's pointers into
-    them when [guide] — [(name, contents)] — is given. Findings come back in {!in_rule_order} --
-    grouped by rule in {!rules} order, and within a rule in file and line order, with any finding
-    carrying an unnamed rule last. [files] is keyed as {!check_index} describes. *)
-let check_all ?guide ~index_file ~index_contents ~(files : (string * string) list) () =
+(** Every rule, over an index and the files it indexes, and over the pointers into them from each of
+    [guides] — [(name, contents)] pairs: the agent guide and the [tools/] scripts. Findings come
+    back in {!in_rule_order} -- grouped by rule in {!rules} order, and within a rule in file and
+    line order, with any finding carrying an unnamed rule last. [files] is keyed as {!check_index}
+    describes. *)
+let check_all ?(guides = []) ~index_file ~index_contents ~(files : (string * string) list) () =
   let all = (index_file, index_contents) :: files in
   let structure = List.concat_map all ~f:(fun (file, c) -> check_structure ~file c) in
   let table = List.concat_map all ~f:(fun (file, c) -> check_tables ~file c) in
@@ -1851,7 +1856,7 @@ let check_all ?guide ~index_file ~index_contents ~(files : (string * string) lis
   let repetition = check_repetition bullets in
   let citations = List.concat_map all ~f:(fun (file, c) -> check_citations ~file c) in
   let guide =
-    Option.value_map guide ~default:[] ~f:(fun (guide_file, guide_contents) ->
+    List.concat_map guides ~f:(fun (guide_file, guide_contents) ->
         check_guide ~guide_file ~guide_contents ~index_file ~index_contents ~files)
   in
   let found = structure @ table @ index @ repetition @ citations @ guide in

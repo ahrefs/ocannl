@@ -39,6 +39,17 @@ let unterminated_bullets : (string * string) list = []
 
 let read path = Stdlib.In_channel.with_open_bin path Stdlib.In_channel.input_all
 
+(** The path a source outside [docs/] is known by, relative to the repository root: dune hands over
+    [../../tools/test-run.sh], and a finding names [tools/test-run.sh]. *)
+let repo_relative path =
+  let path = String.substr_replace_all path ~pattern:"\\" ~with_:"/" in
+  let rec strip p =
+    match String.chop_prefix p ~prefix:"../" with
+    | Some rest -> strip rest
+    | None -> Option.value_map (String.chop_prefix p ~prefix:"./") ~default:p ~f:strip
+  in
+  strip path
+
 (** The path a notes file is known by, relative to the index's own directory: dune hands over
     [../../docs/agent-notes/build-and-test.md] and an index row spells
     [agent-notes/build-and-test.md]. *)
@@ -51,6 +62,14 @@ let docs_relative path =
 let () =
   let args = Array.to_list Stdlib.Sys.argv |> List.tl_exn in
   let md = List.filter args ~f:(String.is_suffix ~suffix:".md") in
+  (* The scripts under tools/ are read for their pointers into the notes too (rule 7,
+     gh-ocannl-1111): their comments and the messages they print point at the note sections that
+     explain them. The set is the dune rule's glob, so a new script is read the day it lands. *)
+  let scripts =
+    List.filter args ~f:(String.is_suffix ~suffix:".sh")
+    |> List.map ~f:(fun p -> (repo_relative p, read p))
+    |> List.sort ~compare:(fun (a, _) (b, _) -> String.compare a b)
+  in
   (* The agent guide is read for its pointers into the notes (rule 7), and is not a note itself. *)
   let guide_paths, md =
     List.partition_tf md ~f:(fun p ->
@@ -82,18 +101,28 @@ let () =
     |> List.sort ~compare:(fun (a, _) (b, _) -> String.compare a b)
   in
   let bullets, findings =
-    Notes.check_all ~guide:("AGENTS.md", guide_contents) ~index_file ~index_contents ~files ()
+    Notes.check_all
+      ~guides:(("AGENTS.md", guide_contents) :: scripts)
+      ~index_file ~index_contents ~files ()
   in
-  let pointers =
-    List.filter (Notes.guide_pointers guide_contents) ~f:(fun p ->
-        Option.is_some (Notes.pointer_scope p))
+  let pointers_in contents =
+    List.filter (Notes.guide_pointers contents) ~f:(fun p -> Option.is_some (Notes.pointer_scope p))
   in
-  eprintf "Scanned %d notes files plus the index, %d bullets, %d AGENTS.md pointers, %d findings.\n"
-    (List.length files) (List.length bullets) (List.length pointers) (List.length findings);
-  (* The floors. Neither moves when a note is edited, a bullet added or a file split; both fail the
+  let pointers = pointers_in guide_contents in
+  let script_pointers = List.concat_map scripts ~f:(fun (_, c) -> pointers_in c) in
+  eprintf
+    "Scanned %d notes files plus the index, %d bullets, %d AGENTS.md pointers, %d pointers from %d \
+     tools scripts, %d findings.\n"
+    (List.length files) (List.length bullets) (List.length pointers) (List.length script_pointers)
+    (List.length scripts) (List.length findings);
+  (* The floors. None moves when a note is edited, a bullet added or a file split; each fails the
      moment the scan is handed nothing, which is the one way its silence would be a lie. *)
   Verdict.claim "the scan was handed the notes files" (List.length files >= 10);
   Verdict.claim "the scan read the notes' bullets" (List.length bullets >= 100);
+  (* tools/test-run.sh, box-jobs.sh and sweep.sh carry ten anchored pointers between them
+     (lukstafi/ocannl-staging#849); fewer than five means the glob or the reader lost them. *)
+  Verdict.claim "the scan read the tools scripts' pointers into the notes"
+    (List.length script_pointers >= 5);
   print_endline
     "Structure of docs/agent-notes.md and docs/agent-notes/, over the live tree. The rules are\n\
      stated in test/support/agent_notes_scan.ml; the counts scanned go to stderr, since a tally in\n\
@@ -133,9 +162,10 @@ let () =
   report Notes.rule_qualified_citations "no numeric GitHub citation uses an unqualified bare hash";
   (* Over the pointers rather than the files, with a floor: AGENTS.md anchors about ten rules into
      build-and-test.md, so a reader that finds fewer than five has stopped reading them, and an
-     empty finding list over nothing would pass by default. *)
+     empty finding list over nothing would pass by default. The scripts' pointers have their floor
+     above. *)
   report_over ~min:5 ~over:pointers Notes.rule_guide_anchors
-    "every note anchor AGENTS.md points at is a heading its note has";
+    "every note anchor AGENTS.md or a tools script points at is a heading its note has";
   (* The relationship the seven calls above rest on, and nothing used to state (gh-ocannl-706): a
      rule this file does not report is a rule whose findings the live tree never shows, and the
      omission is silent -- the scan computes them, [of_rule] is never asked for them, and the golden

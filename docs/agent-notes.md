@@ -21,8 +21,9 @@ it, not a second statement (the one-owner rule, in conventions.md). The structur
 `agent_notes_structure` (gh-ocannl-691): a bullet ends in punctuation and its continuations sit two
 spaces in, every row of the table is one physical line, every backticked hook occurs in the file its
 row links, and every file under `docs/agent-notes/` is linked from exactly one row — so a new file
-does need its row the day it appears. It also reads AGENTS.md: each `<note>.md#<anchor>` pointer
-there must name a heading of that note, so renaming a heading means re-pointing its rules. The
+does need its row the day it appears. It also reads AGENTS.md and the `tools/*.sh` scripts: each
+`<note>.md#<anchor>` pointer there must name a heading of that note, so renaming a heading means
+re-pointing the rules and script messages that cite it. The
 dialect it reads is deliberately small: headings, prose paragraphs, `- ` bullets one level deep, and
 the table above. Anything else — a fenced block, an
 ordered or `*` item, a block quote whether or not its marker carries a space, an HTML comment, a

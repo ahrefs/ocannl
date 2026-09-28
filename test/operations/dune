@@ -5231,14 +5231,15 @@
  (libraries base stdio test_utils arrayjit.verdict))
 
 (rule
- ; ocannl-backend: none -- reads markdown only: it opens the agent notes as text and links no backend.
+ ; ocannl-backend: none -- reads text only: it opens the agent notes, AGENTS.md and the tools scripts as text and links no backend.
  (target agent_notes_structure.actual)
  (package neural_nets_lib)
  (deps
   ocannl_config
   ../../AGENTS.md
   ../../docs/agent-notes.md
-  (glob_files_rec ../../docs/agent-notes/*.md))
+  (glob_files_rec ../../docs/agent-notes/*.md)
+  (glob_files ../../tools/*.sh))
  (action
   (with-stdout-to
    %{target}

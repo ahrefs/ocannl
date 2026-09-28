@@ -753,7 +753,11 @@ files.
   depth 4 of a 64 ms kernel would keep 256 ms batches). None of this changes the objective (the depth picks the scale;
   an entry timed at an older depth is an accurate, merely expensive, reading), so no cache-key
   generation bump. `autotune_timing_modes` pins each change on the injected clock with a claim
-  that fails without it.
+  that fails without it. Its probe claims read `Autotune.on_calibration_probe` (gh-ocannl-1119),
+  one record per probe tagged with the branch that started it, never the `batch` calls: runs of
+  same-depth batches merge a stall retry into its confirmation, so the retry escaped the budget
+  claim, and chunking them counts probes only as a lower bound. A new probe site passes its own
+  `~role`; the test's witness claim holds every report against the device's batch log.
   An unresolved first pair retries at double depth, and the next fit uses the two batch observations so an
   inflated synchronized-single window cannot force the cap. If the last bounded probe first reaches
   the target, the interpolated target depth is still sampled and checked against the measured

@@ -217,6 +217,10 @@ ok: guide -- an external path with a Unicode slug is not read
 ok: guide -- a pointer in bold is read
 ok: guide -- hashes that are no pointer
 ok: guide -- plain mentions of a note are not pointers
+ok: script -- a comment pointing at a heading its note has
+ok: script -- a comment pointing at a heading its note lacks
+ok: script -- a printed message pointing at a heading its note lacks
+ok: script -- a path outside the notes is not a pointer into them
 ok: unnamed rule -- a finding the list does not name survives the report, last
 ok: unnamed rule -- the census reports it, and not the named one beside it
 ok: unnamed rule -- a named finding leaves the census empty

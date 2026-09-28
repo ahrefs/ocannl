@@ -210,12 +210,19 @@ let reduce_specified_axes spec =
   in
   spec ^ " => " ^ lhs
 
-(** Softmax across specified axes. Does not support non-default row variables. *)
+(** Softmax across specified axes. Does not support non-default row variables.
+
+    The row max is taken through the non-differentiable DSL: softmax is invariant under a shift of
+    its input, so the gradient through the max is exactly zero, and the composed autodiff would
+    otherwise spend a per-row reduction and an argmax-equality pass computing that zero up to
+    rounding -- and inject the rounding at the argmax cells. Applying an [NTDSL] operation to a
+    differentiable operand cuts the gradient at that operation ([Prohibit_grad]); [stop_gradient] is
+    the identity instance of the same mechanism, at the price of a copy. *)
 let%op softmax ~spec ?(temperature = 1.0) () =
   let spec = reduce_specified_axes spec in
   fun x ->
     let x_scaled = if Float.(temperature <> 1.0) then x /. !.temperature else x in
-    let max_vals = x_scaled @^^ spec in
+    let max_vals = NTDSL.O.(x_scaled @^^ spec) in
     let exp_vals = exp (x_scaled - max_vals) in
     exp_vals /. (exp_vals ++ spec)
 
@@ -223,8 +230,8 @@ let%op softmax ~spec ?(temperature = 1.0) () =
     gh-464): numerically stable log-sum-exp (never [log (softmax logits)]), written so that the
     softmax-probabilities intermediate stays virtual — never materialized in either pass — and the
     backward accumulates [probs - targets] directly into the logits gradient. The row-wise max is
-    detached via [stop_gradient]: the max term cancels exactly in the loss, so no gradient should
-    flow through it (llm.c likewise treats it as a constant).
+    taken through the non-differentiable DSL, as in {!softmax}: the max term cancels exactly in the
+    loss, so no gradient should flow through it (llm.c likewise treats it as a constant).
 
     [spec] follows the {!softmax} convention: it names the class/vocabulary axes to reduce over
     (e.g. ["... | v"]). [targets] is a probability distribution over those axes (typically one-hot;
@@ -233,7 +240,7 @@ let%op softmax ~spec ?(temperature = 1.0) () =
     [mask] and [normalize_by], returns the summed scalar loss. *)
 let%op cross_entropy_loss ~spec ?mask ?normalize_by () ~logits ~targets =
   let reduce_spec = reduce_specified_axes spec in
-  let max_logits = stop_gradient logits @^^ reduce_spec in
+  let max_logits = NTDSL.O.(logits @^^ reduce_spec) in
   let shifted = logits - max_logits in
   let log_probs = shifted - log (exp shifted ++ reduce_spec) in
   let nll = neg ((targets *. log_probs) ++ reduce_spec) in
