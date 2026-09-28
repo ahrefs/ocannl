@@ -418,8 +418,73 @@ let fma_probe () =
       let ops, summed = count listing in
       ops = 2 && summed = bytes)
 
+(* {2 Stack traffic, in a loop and outside one (gh-ocannl-1102)}
+
+   A stack reference is a MEMORY access through the stack or frame pointer. gcc omits the frame
+   pointer at [-O2] and allocates [%rbp] as an ordinary register, and a bf16 register tile's k-loop
+   that loaded into [%ebp] read as a spill until the census asked for the memory operand. The
+   listing below holds each x86 form once -- a store and a reload through [%rsp], a frame-pointer
+   load, a [push] -- beside two look-alikes, a register [%ebp] and a [popcnt].
+
+   And a register tile's C-tile load and store are straight-line code, read by attributing
+   instructions to source lines ({!Census.attributed_in}) rather than by finding a loop: the
+   instruction under a [.loc] belongs to that line until the next [.loc], labels between them
+   included, and a [.loc] naming another file or another line ends the attribution. *)
+let stack_probe () =
+  let stack instructions =
+    (Census.profile_all Census.Fma ~asm:(String.concat ~sep:"\n" instructions)).stack_refs
+  in
+  Verdict.p
+    "a memory operand through the stack or frame pointer is a stack reference, a register is not"
+    (stack
+       [
+         "\tvmovdqa %xmm0, (%rsp)";
+         "\tmovzwl 4(%rsp), %eax";
+         "\tmovq -8(%rbp), %rax";
+         "\tpushq %rbx";
+         "\tmovzwl (%r14), %ebp";
+         "\tsall $16, %ebp";
+         "\tpopcntq %rax, %rbx";
+       ]
+    = 4);
+  let source = "void f(void) {\n  LOAD;\n  LOOP;\n  STORE;\n}\n" in
+  let listing =
+    String.concat ~sep:"\n"
+      [
+        "\t.file 1 \"/build/census_kernel.c\"";
+        "\t.file 2 \"/usr/include/other.h\"";
+        "f:";
+        "\t.loc 1 2 3";
+        "\tvmovdqa %xmm0, (%rsp)";
+        ".L1:";
+        "\tvpmovzxwd (%rsp), %ymm0";
+        "\t.loc 1 3 3";
+        "\tvfmadd231ps %ymm0, %ymm1, %ymm2";
+        "\tjne .L1";
+        "\t.loc 2 2 1";
+        "\tmovq 8(%rsp), %rax";
+        "\t.loc 1 4 3";
+        "\tvpextrw $2, %xmm2, 4(%rdi)";
+        "\tret";
+      ]
+  in
+  let parsed = Census.parse ~asm:listing ~source_basename:"census_kernel.c" in
+  let edge patterns =
+    let c =
+      Census.attributed_in parsed Census.Fma ~anchor:(Census.anchor_lines ~source ~patterns)
+    in
+    (c.instructions, c.stack_refs)
+  in
+  Verdict.p
+    "line attribution reads the instructions under a line's .loc, across a label, and no other \
+     line's or file's"
+    (Poly.equal (edge [ "LOAD" ]) (2, 2)
+    && Poly.equal (edge [ "STORE" ]) (2, 0)
+    && Poly.equal (edge [ "LOAD"; "STORE" ]) (4, 2))
+
 let () =
   dialect_probes ();
   anchor_precedence_probe ();
   residual_probe ();
-  fma_probe ()
+  fma_probe ();
+  stack_probe ()

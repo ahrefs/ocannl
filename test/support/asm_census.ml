@@ -441,8 +441,14 @@ let vector_bytes_of ~mnemonic ~rest =
     | Some b -> b
     | None -> Option.value (on_operand ()) ~default:0
 
-let is_stack_ref ~rest =
-  List.exists [ "%rsp"; "%rbp"; "%esp"; "%ebp"; "[sp"; "[x29"; "sp,"; "x29," ] ~f:(fun p ->
+(* A memory access through the stack or frame pointer. On x86 that is a memory OPERAND based on
+   [%rsp]/[%rbp] -- [96(%rsp)], [(%rsp,%rax,4)], [-8(%rbp)] -- or an implicit one, [push]/[pop]: gcc
+   omits the frame pointer at [-O2] and allocates [%rbp]/[%ebp] as a general register, so a register
+   operand is no stack traffic ([movzwl (%r14), %ebp] in a bf16 register tile's k-loop read as one,
+   gh-ocannl-1102). *)
+let is_stack_ref ~mnemonic ~rest =
+  List.mem [ "push"; "pushq"; "pushl"; "pop"; "popq"; "popl" ] mnemonic ~equal:String.equal
+  || List.exists [ "(%rsp"; "(%rbp"; "(%esp"; "(%ebp"; "[sp"; "[x29"; "sp,"; "x29," ] ~f:(fun p ->
       has_substr rest ~sub:p)
 
 let call_target ~mnemonic ~rest =
@@ -724,7 +730,7 @@ let count_range lines op_class ~from_ ~to_ =
           | Some t -> List.mem libm t ~equal:String.equal
           | None -> false
         in
-        let stack_ref = is_stack_ref ~rest in
+        let stack_ref = is_stack_ref ~mnemonic ~rest in
         let c = { c with instructions = c.instructions + 1 } in
         let c = if vector then { c with vector_ops = c.vector_ops + 1 } else c in
         let c =
@@ -820,6 +826,27 @@ let census_source_in ?(selection = Innermost) parsed op_class ~source ~patterns 
   match read (anchor_lines ~source ~patterns) with
   | Some _ as profile -> profile
   | None -> read (anchor_block_lines ~source ~patterns ~after_pattern)
+
+(** [attributed_in p op_class ~anchor] is the profile of every instruction [p] attributes to a
+    source line in [anchor], in a loop or not: the reading for a construct that is not a loop of its
+    own, such as the load of a register tile's C-tile before its k-loop and the store after it. An
+    instruction belongs to the line of the last [.loc] above it, as in the DWARF line table.
+    [instructions = 0] means no instruction was attributed to the lines at all. *)
+let attributed_in ({ lines; files; _ } : parsed) op_class ~anchor =
+  let current = ref false in
+  let attributed =
+    Array.map lines ~f:(function
+      | Some (Directive (".loc" :: fno :: lno :: _)) as line ->
+          (current :=
+             match (Int.of_string_opt fno, Int.of_string_opt lno) with
+             | Some f, Some l -> Set.mem files f && Set.mem anchor l
+             | _ -> false);
+          line
+      | Some (Insn _) as line when !current -> line
+      | Some (Insn _) -> None
+      | line -> line)
+  in
+  count_range attributed op_class ~from_:0 ~to_:(Array.length attributed - 1)
 
 (** {!census_in} over an assembly listing parsed for this one question. Convenient where a caller
     asks about one construct in one file; a caller asking about many should {!parse} once. *)
