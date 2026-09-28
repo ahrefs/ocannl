@@ -1261,6 +1261,18 @@ files.
   residual count for instructions matched by no vector, scalar-FP, libm, or stack classifier; it is
   descriptive because loop control belongs there, but an unknown mnemonic can no longer vanish into
   passing-looking zeroes (gh-ocannl-844).
+- **clang is an x86 census column of its own, and its first red rows were all OCANNL's**
+  (gh-ocannl-1103). `cc_march_census` runs `clang/x86-64-v3`, `clang/x86-64-v4` and
+  `clang/sapphirerapids` beside the host compiler's columns (`X86_CLANG` picks the clang). Three
+  readings were `Asm_census` misreading clang: `N(%rbp)` counts as stack only in a function that ran
+  `movq %rsp, %rbp` (clang keeps a tile's B pointer in `%rbp`); a scalar move from memory is a load
+  (clang's `vmovsd` of four fp16 lanes is gcc's `vmovq`); and clang's `label: # @label` defeated the
+  bridge probes' own label match, so every fp16 bridge read as per-lane. The fourth was emission:
+  under clang's 256-bit preference (`x86-64-v4`, Intel AVX-512 tunings) a 64-byte GNU C vector in the
+  function BODY is split into `ymm` halves unless the function carries `min_vector_width(512)`, which
+  `C_syntax.compile_proc` now emits as `OCANNL_WIDE_VECTOR_KERNEL` on a kernel whose renderings
+  declared a vector wider than 32 bytes (keyed on the rendering, not on `cc_vector_bytes`, so kernels
+  that vectorize nothing keep one text on every host). It reaches OpenMP-outlined bodies too.
 - **`Max`/`Min` SIMD reductions were a libm call per lane, on every x86 target** (gh-ocannl-649,
   fixed). The `Vectorized` accumulation loop rendered them as a fixed-trip per-lane loop calling the
   scalar `fmaxf`/`fminf`, on the reasoning that the packed-max builtins have the wrong NaN semantics

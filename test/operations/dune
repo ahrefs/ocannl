@@ -3479,6 +3479,7 @@
   (env_var COMPILER_PATH)
   (env_var GCC_EXEC_PREFIX)
   (env_var AARCH64_CROSS_GCC)
+  (env_var X86_CLANG)
   (universe)
   ocannl_config)
  (modules cc_march_census)

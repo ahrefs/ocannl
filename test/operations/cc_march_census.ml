@@ -80,8 +80,12 @@
    compiler that rendered it, and CI runs two: gcc on ubuntu-latest and clang on macos-latest
    (arm64, where every named x86 [-march] is skipped and the [native] column is the whole matrix).
    Both of the census's inputs turned out to be compiler-dependent in ways a gcc-only box cannot
-   see, and both made CI red at gh-ocannl-752 with this box green. The reader explicitly models GCC
-   and Clang output on x86-64 and aarch64; synthetic probes carry every assembler dialect below:
+   see, and both made CI red at gh-ocannl-752 with this box green. So clang is also a column of its
+   own on the x86 targets the strict claims cover ([clang/x86-64-v3], [clang/x86-64-v4],
+   [clang/sapphirerapids], gh-ocannl-1103), held to the same claims as gcc's: an x86 developer's cc
+   compiler may be clang, and a column only its host compiler reaches is one CI's x86 leg never
+   runs. The reader explicitly models GCC and Clang output on x86-64 and aarch64; synthetic probes
+   carry every assembler dialect below:
 
    - {b which line the loop's instructions are attributed to}, which is how a row is FOUND. clang
    attributes an inlined function's instructions to the CALLEE's lines, so an exact anchor on a line
@@ -693,6 +697,19 @@ let toolchains () =
     | Some c when not (String.is_empty (String.strip c)) -> String.strip c
     | _ -> "aarch64-linux-gnu-gcc"
   in
+  (* clang beside the host compiler on the x86 targets whose rows the claims below hold strictly
+     (gh-ocannl-1103). The census is a measurement of a compiler, and clang is the other one an x86
+     developer's cc backend may be running: until these columns it was censused only when it WAS the
+     host compiler, which CI's x86 leg never is, and a clang-only defect read as coverage. What
+     their first run found red was OCANNL's, not clang's -- see the resident claim's comment -- so
+     they carry no known-defect class. Where the named clang does not accept a target -- or is not
+     installed -- its column is skipped like any other. [X86_CLANG] names another clang (a version
+     to compare against); the default is the one on [PATH]. *)
+  let clang =
+    match Stdlib.Sys.getenv_opt "X86_CLANG" with
+    | Some c when not (String.is_empty (String.strip c)) -> String.strip c
+    | _ -> "clang"
+  in
   let t label command march note = { Census.label; command; march; note } in
   [
     (* The host's own default target, with no [-march] at all: the one column every toolchain
@@ -709,6 +726,9 @@ let toolchains () =
     t "x86-64-v4" host "x86-64-v4" "AVX-512F/VL/BW/DQ: the masked 512-bit FMA builtins";
     t "sapphirerapids" host "sapphirerapids"
       "AVX512-FP16: the only x86 target with native 16-bit arithmetic";
+    t "clang/x86-64-v3" clang "x86-64-v3" "clang, AVX2 + FMA";
+    t "clang/x86-64-v4" clang "x86-64-v4" "clang, AVX-512 under a 256-bit vector preference";
+    t "clang/sapphirerapids" clang "sapphirerapids" "clang, AVX512-FP16";
     t "aarch64/armv8-a" cross "armv8-a" "NEON f32/f64 builtins, no fp16 arithmetic";
     t "aarch64/armv8.2-a+fp16" cross "armv8.2-a+fp16"
       "ARMv8.2-FP16: the NEON fp16 vector rows, typed in __fp16";
@@ -905,13 +925,17 @@ typedef float ocannl_probe_f __attribute__((vector_size(%d)));
 (* The probe function's own instructions: the prelude it compiles with defines functions of its own
    (the software fp16 codec a portable arm falls back to), which would read as scalar FP work of the
    probe. They are defined above it, and compilers emit functions in definition order, so the probe
-   runs from its label to the end of its frame description. *)
+   runs from its label to the end of its frame description. The label is read as the census reads
+   one ({!Census.classify_line}): clang annotates it, [ocannl_probe_narrow: # @ocannl_probe_narrow],
+   and a label read as the line's text found no probe on any clang x86 column -- which reported
+   every fp16 bridge there as lowered per lane, and failed the narrowing claim on a probe that
+   compiled to one [vcvtps2ph] (gh-ocannl-1103). Mach-O prefixes the symbol with an underscore. *)
 let probe_function_asm ~name asm =
   let lines = String.split_lines asm in
   let is_label l =
-    (not (String.is_empty l))
-    && (not (Char.is_whitespace l.[0]))
-    && String.is_suffix (String.rstrip l) ~suffix:(name ^ ":")
+    match Census.classify_line l with
+    | Some (Census.Label label) -> String.equal label name || String.equal label ("_" ^ name)
+    | Some (Census.Insn _ | Census.Directive _) | None -> false
   in
   match List.drop_while lines ~f:(fun l -> not (is_label l)) with
   | [] -> None
@@ -2023,10 +2047,11 @@ let () =
          to it; a per-lane rendering of the update issues no vector FMA at all; and an update the
          compiler SPLIT issues a count an unroll by two would also give, at half the width -- which
          the summed register widths ({!Census.counts.vector_fma_bytes}) tell apart. That last one is
-         not hypothetical: clang on [-march=x86-64-v4] prefers 256-bit vectors and legalizes the
-         64-byte tile as [ymm] halves, doubling the grid's register demand into a spill. The
-         vector-majority claim above sees none of the three as long as the loads around them stay
-         packed. *)
+         not hypothetical: clang on [-march=x86-64-v4] and [sapphirerapids] prefers 256-bit vectors
+         and legalized the 64-byte tile as [ymm] halves, doubling the grid's register demand into a
+         spill, until the emission stated the width it meant ([OCANNL_WIDE_VECTOR_KERNEL],
+         gh-ocannl-1103) -- the clang columns hold it to that. The vector-majority claim above sees
+         none of the three as long as the loads around them stay packed. *)
       let geometry_rows =
         List.filter_map tile_rows ~f:(fun r -> Option.map r.loop.geometry ~f:(fun g -> (r, g)))
       in
@@ -2114,8 +2139,24 @@ let () =
          column's storage bits lane by lane in a whole vector the bridge converts, and the claim
          below reads the load and the store as well as the k-loop.
 
+         The clang x86 columns (gh-ocannl-1103) arrived red on 42 resident rows and on the FMA and
+         narrowing claims -- and, once the probes read, on the scalarization claim -- and none of it
+         was clang's codegen. Three were this census's READER: clang allocates [%rbp] as a data
+         pointer (a tile's B row, [vmovups -460(%rbp), %ymm14]), whose loads read as spills -- a
+         memory operand through [%rbp] is now a stack reference only in a function that made it the
+         frame pointer; clang loads four fp16 lanes with [vmovsd] where gcc writes [vmovq], which
+         read as scalar FP -- a scalar move from memory is now a load; and clang annotates a
+         function label ([name: # @name]), so the fp16 bridge probes found no function and reported
+         every bridge per lane. The fourth was the EMISSION: under clang's 256-bit preference at
+         [x86-64-v4] and [sapphirerapids] a 64-byte vector the kernel declares is legalized as [ymm]
+         halves, 24 accumulators became 48 and spilled (22 to 74 references per k step), and nothing
+         in the kernel said that the width was meant. A kernel with a vector wider than 32 bytes now
+         carries [OCANNL_WIDE_VECTOR_KERNEL] ([min_vector_width(512)] where the compiler has it),
+         and every clang row reads 0.
+
          A defect found here again is a failure of this claim, which is the point: fix it, or
-         reinstate the class list and its reproduction claim with the defect named. *)
+         reinstate the class list and its reproduction claim with the defect named -- asked of the
+         column's compiler ([__clang__] in its predefined macros) where it is one compiler's. *)
       let spills r = match counts r with Some c -> c.Census.stack_refs > 0 | None -> true in
       let resident_claim =
         "no register-tile k-loop references the stack where its pass fits the target's vector \

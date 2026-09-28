@@ -12,6 +12,9 @@ x86-64-v2: the -march column compiles clean and its loops are censused: true
 x86-64-v3: the -march column compiles clean and its loops are censused: true
 x86-64-v4: the -march column compiles clean and its loops are censused: true
 sapphirerapids: the -march column compiles clean and its loops are censused: true
+clang/x86-64-v3: the -march column compiles clean and its loops are censused: true
+clang/x86-64-v4: the -march column compiles clean and its loops are censused: true
+clang/sapphirerapids: the -march column compiles clean and its loops are censused: true
 aarch64/armv8-a: the -march column compiles clean and its loops are censused: true
 aarch64/armv8.2-a+fp16: the -march column compiles clean and its loops are censused: true
 every emitted kernel compiles clean at -O2 and -O3 under every accepted -march: true
