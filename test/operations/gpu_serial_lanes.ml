@@ -437,9 +437,11 @@ let gpu_statements (o : LL.optimized) ~writes =
       && List.exists accesses ~f:(fun (a : Ir.Tnode.t Ir.Affine.access) ->
           a.a_write && writes (Ir.Tnode.debug_name a.a_tn)))
 
+(* A loop bound to GPU threads: Unrolled and Vectorized loops still run inside one thread. *)
 let rec hardware (llc : LL.t) =
   match llc with
-  | LL.For_loop { axis; body; _ } -> (not (LL.equal_axis_type axis LL.Serial)) || hardware body
+  | LL.For_loop { axis = LL.Grid | LL.Workgroup | LL.Workgroup_reduce; _ } -> true
+  | LL.For_loop { body; _ } -> hardware body
   | LL.Seq (a, b) -> hardware a || hardware b
   | LL.If { body; _ } | LL.Scan_loop { body; _ } -> hardware body
   | _ -> false
@@ -464,6 +466,6 @@ let () =
         stmts ~f:hardware);
   let close g w = Float.(abs (g -. w) <= 1e-4 *. max 1. (abs w)) in
   p "the fused step's parameter gradients are not identically zero"
-    (Array.exists composed ~f:(fun v -> Float.(v <> 0.)));
+    (Array.exists fused ~f:(fun v -> Float.(v <> 0.)));
   p_all2 "the fused step's parameter gradients agree with the composed ones within 1e-4 relative"
     fused composed ~f:close

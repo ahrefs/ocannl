@@ -35,8 +35,9 @@ Phases, in order: preflight (revision, fixture identities against fixtures/DIGES
 fixture that matches no recorded m4-max entry aborts the run -- and a torch CPU parity reference
 per fixture), metal (the main matrix: gpt2_mini_train, _s512, _s1024), metal-sweep (batch 1 at seq
 128, 256, 512 -- seq 1024 at batch 1 is the main matrix's _s1024 -- two repeats), cc, cc-sweep (one
-repeat), artifacts (one untimed Metal cell per fixture x treatment with the generated sources kept
-under DIR/artifacts/). A host snapshot (top CPU consumers) is logged at every phase boundary.
+repeat), artifacts (one untimed Metal cell per fixture x treatment, sweep included, with the
+generated sources kept under DIR/artifacts/). A host snapshot (top CPU consumers) is logged at
+every phase boundary.
 
 Resumable: a cell whose output already holds a result line is not run again. A run directory is
 bound to one revision and one set of fixture bytes (preflight.json): resuming it from a different
@@ -174,10 +175,18 @@ def run_cell(out, backend, fixture, treatment, r, artifacts=False):
         status = run_in_own_group(argv, env=clean_env(extra), stdout=o, stderr=e)
     with open(str(base) + ".status", "w") as f:
         f.write(f"{status}\n")
-    if artifacts and (HERE / "build_files" / prefix).is_dir():
-        artifact_dir.parent.mkdir(parents=True, exist_ok=True)
-        shutil.rmtree(artifact_dir, ignore_errors=True)
-        shutil.move(str(HERE / "build_files" / prefix), str(artifact_dir))
+    if artifacts:
+        staged = HERE / "build_files" / prefix
+        if staged.is_dir() and any(staged.iterdir()):
+            artifact_dir.parent.mkdir(parents=True, exist_ok=True)
+            shutil.rmtree(artifact_dir, ignore_errors=True)
+            shutil.move(str(staged), str(artifact_dir))
+        else:
+            # The sources ARE this cell's deliverable: without them it failed, whatever it timed.
+            with open(str(base) + ".status", "w") as f:
+                f.write("no-artifacts\n")
+            log(f"FAILED {base.name}: no generated sources under {staged}")
+            return
     res = result_line(base)
     if res is None:
         log(f"FAILED {base.name}: status {status}, no result line")
@@ -298,6 +307,10 @@ def check_identity(out, ident):
 def preflight(out):
     ident = identity()
     recorded = check_identity(out, ident)
+    if not recorded:
+        # No completion marker: references left by an interrupted preflight may be from another
+        # identity, so none is reused.
+        shutil.rmtree(out / "torch", ignore_errors=True)
     log(f"revision {ident['revision']}, bench_gpt {ident['bench_gpt_sha256'][:16]}; "
         f"fixtures match {ORIGIN}")
     import bench_venv
@@ -386,7 +399,7 @@ def run(args):
                     for t in order(r):
                         run_cell(out, backend, fx, t, r)
         elif phase == "artifacts":
-            for fx in MAIN:
+            for fx in MAIN + SWEEP:
                 for t in NAMES:
                     run_cell(out, "metal", fx, t, "art", artifacts=True)
     host_snapshot(out, "end")

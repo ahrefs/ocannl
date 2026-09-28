@@ -277,4 +277,5 @@ on cc and Metal by `gpu_serial_lanes` leg 6.
 `--phases metal,metal-sweep`, and a rerun resumes at the first cell without a result line (from
 the same revision and fixture bytes only); `summarize` refuses an incomplete matrix unless
 `--partial`. The
-artifact pass keeps each Metal cell's generated sources under `DIR/artifacts/`.
+artifact pass keeps each Metal cell's generated sources under `DIR/artifacts/` (the published
+run's pass, from an earlier driver revision, covered the main matrix's fixtures only).
