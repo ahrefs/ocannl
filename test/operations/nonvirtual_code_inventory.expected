@@ -29,12 +29,13 @@ The phase table in test/operations/virtual_rejection_boundary.ml is held to thos
   Consumption -- instantiate_computations
 Files naming a code, as `Non_virtual N` or by its tag -- the checklist for a change to where a code can fire:
 arrayjit/lib/low_level.ml -- 4 5 7 8 9 10 11 12 13 14 19 51 52 140 141 142 143 144 145 146 147 148 149
-arrayjit/lib/low_level.mli -- 148
+arrayjit/lib/low_level.mli -- 9 13 148
 arrayjit/lib/tnode.ml -- 13
 docs/agent-notes/virtualization-and-inlining.md -- 8 9 13 19 52 141 142 143 144 147 148 149
 docs/lowering_and_inlining.md -- 4 5 7 8 9 10 11 12 13 14 19 51 52 140 141 142 143 144 145 146 147 148 149
 test/operations/cost_model_template.expected -- 9 13
 test/operations/footprint_materialization.ml -- 13
+test/operations/model_default_placements.expected -- 9
 test/operations/scan_loop.expected -- 148
 test/operations/scan_loop.ml -- 148
 test/operations/scope_over_materialized.ml -- 13 142

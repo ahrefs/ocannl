@@ -108,7 +108,9 @@ val fit :
     node. Legality and observability are not this pass's to enforce and it does not try: the
     decisions record preferences, the virtualizer's [check_and_store_virtual] settles legality, and
     a rejected preference simply reproduces the materialized placement — which is why relief is
-    scored from a real lowering rather than assumed.
+    scored from a real lowering rather than assumed. A direction the surface already shows refused
+    ({!Ir.Low_level.field-fa_refused}, gh-ocannl-1093) is not considered at all: it would relieve
+    nothing, and its proxy recompute cost would rank it among the cheapest.
 
     Raises {!Ir.Utils.User_error} when config [buffer_aliasing] is off: without the liveness planner
     every node is always-live and the score has nothing to do with what the allocator would do. *)

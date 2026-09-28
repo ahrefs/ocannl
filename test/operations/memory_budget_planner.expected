@@ -13,6 +13,9 @@ minimize: takes at least one flip: true
 minimize: reports itself within budget (it has no target): true
 minimize: the reported reliefs sum to the footprint moved: true
 minimize: no flip reports negative relief: true
+minimize: the surface carries a refused recompute flip: true
+minimize: it considers exactly the nodes with a direction not refused: true
+minimize: it takes no node whose every direction is refused: true
 budget at the baseline: no flips: true
 budget at the baseline: within budget: true
 reachable budget: met: true
