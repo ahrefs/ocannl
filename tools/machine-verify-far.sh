@@ -12,7 +12,7 @@
 # caller passes in, never timeout(1), which macOS does not ship.
 set -u
 
-[ $# -ge 13 ] || {
+[ $# -ge 14 ] || {
   echo "machine-verify-far.sh: run tools/machine-verify.sh, which supplies this procedure's arguments" >&2
   exit 2
 }
@@ -29,7 +29,8 @@ jobs=${10}
 transport=${11}
 capped_perl=${12}
 box_jobs_source=${13}
-shift 13
+batch_backends_source=${14}
+shift 14
 
 # Non-login SSH shells on rog need both locations; harmless when the
 # directories do not exist (tools/sweep.sh uses the same prefix), as on macOS.
@@ -219,32 +220,6 @@ remaining_switch_ocannl_names=$(printf '%s\n' "$sanitized_switch_environment" |
   fail "opam switch OCANNL variables remain after sanitization: $remaining_switch_ocannl_names"
 echo "machine-verify: opam switch OCANNL configuration: stripped"
 
-# The dune width. An explicit -j is the caller's; otherwise it is this box's
-# own, from the caller's tools/box-jobs.sh (passed in, like the supervisor)
-# evaluated HERE, where the devices it probes are: the per-slot cap
-# tools/test-run.sh would inject into a batch of this backend on this box, so
-# a GPU leg run without -j no longer runs above it (gh-ocannl-986). The table
-# is bash, which this procedure is not, so a bash child evaluates it; the
-# ambient OCANNL_TOOL_* probe overrides are already cleared above, so it reads
-# the real devices. Where it names no cap, 4.
-if [ -n "$jobs" ]; then
-  jobs_story="$jobs (explicit -j)"
-else
-  width=$(capped bash -c '
-    eval "$1" || exit 1
-    hazard=$(box_jobs_local_hazard "$2")
-    printf "%s %s\n" "${hazard:-none}" "$(box_jobs_hazard_cap "$hazard")"
-  ' machine-verify-width "$box_jobs_source" "$backend") ||
-    fail "cannot resolve this box's dune width from tools/box-jobs.sh; pass -j N to name one"
-  hazard=${width%% *}
-  jobs=${width#* }
-  case $hazard:$jobs in
-    none:) jobs=4 jobs_story="4 (default; tools/box-jobs.sh names no cap for backend ${backend:-none} here)" ;;
-    *:*[!0-9]* | *:0* | *:) fail "tools/box-jobs.sh answered an unreadable width: $width" ;;
-    *) jobs_story="$jobs (this box's width for $backend: tools/box-jobs.sh hazard $hazard)" ;;
-  esac
-fi
-
 actual_box=$(hostname 2>/dev/null || uname -n)
 echo "=== machine-verify provenance ==="
 echo "requested box: $requested_box"
@@ -260,7 +235,6 @@ else
 fi
 echo "requested backend: ${backend:-none (@check compiles only)}"
 echo "expected optional library: ${expect_lib:-none}"
-echo "dune jobs:     $jobs_story"
 echo "per-command cap: ${cap}s"
 echo "whole-trip cap: ${trip_cap}s"
 echo "PATH prefix:   /usr/local/cuda/bin:/usr/lib/wsl/lib"
@@ -332,9 +306,84 @@ echo "worktree:      $wt"
 echo "worktree HEAD: $actual_sha"
 echo "source state:  clean, detached, exact commit"
 echo "config boundary: $config_boundary"
-echo "=== end provenance ==="
 
 cd "$wt" || fail "cannot enter $wt"
+
+# The dune width. An explicit -j is the caller's; otherwise it is this box's
+# own: the per-slot cap tools/test-run.sh would inject into this trip's batch
+# on this box, so a GPU leg run without -j no longer runs above it
+# (gh-ocannl-986). The caller's tools/box-jobs.sh and tools/batch-backends.sh
+# (passed in, like the supervisor) are evaluated HERE, where the devices they
+# probe are, in a bash child (they are bash; this procedure is not), after the
+# ambient OCANNL_* clearing above, so they read the real devices.
+#
+# The width is the tightest cap any backend the trip can HOLD meets, not just
+# the pinned one's (Codex review round 1 on PR #902): a reached stanza that
+# names its backend (`; ocannl-backend: cuda`) holds that GPU whatever
+# --backend says, and a --run probe may pick any backend, as a `dune exec`
+# may. So the aliases the trip builds go through batch_resolve, test-run.sh's
+# own resolution, with the pinned backend in the environment; a --run makes
+# it every backend; an unreadable answer is every backend too (the pushed tree
+# may predate the readers), which costs width, never a GPU leg above its cap.
+# Where no backend meets a cap on this box, nothing is built and the width
+# is 4.
+if [ -n "$jobs" ]; then
+  jobs_story="$jobs (explicit -j)"
+else
+  mkdir -p _build || fail "cannot create _build for the backend resolution"
+  batch_log=_build/.machine-verify-backends.log
+  : >"$batch_log" || fail "cannot write $batch_log"
+  width=$(opam_exec "OCANNL_BACKEND=$backend" bash -c '
+    eval "$1" && eval "$2" || exit 1
+    backend=$3 log=$4
+    shift 4
+    aliases=() probe=
+    while [ $# -ge 2 ]; do
+      case $1 in run) probe=1 ;; *) aliases+=("$2") ;; esac
+      shift 2
+    done
+    [ -n "$backend" ] || unset OCANNL_BACKEND
+    batch_holds= batch_unknown=
+    if ! batch_box_has_hazard; then
+      printf "none\n"
+      exit 0
+    elif [ -n "$probe" ]; then
+      batch_unknown="a --run probe may pick its own backend"
+    elif [ ${#aliases[@]} -gt 0 ]; then
+      batch_resolve dune "$log" build "${aliases[@]}" || exit 1
+    fi
+    [ -z "$backend" ] || batch_add "$backend" "pinned by --backend"
+    batch_width
+    if [ -z "$batch_width_cap" ]; then
+      printf "none\n"
+    else
+      printf "%s %s %s %s\n" "$batch_width_cap" "$batch_width_hazard" "$batch_width_backend" \
+        "$(batch_why "$batch_width_backend")"
+    fi
+  ' machine-verify-width "$box_jobs_source" "$batch_backends_source" "$backend" "$batch_log" \
+    "$@") || fail "cannot resolve this box's dune width from tools/box-jobs.sh; pass -j N to name one"
+  sed -n 's/^test-run: batch: /machine-verify: batch: /p' "$batch_log"
+  case $width in
+    none)
+      jobs=4
+      jobs_story="4 (default; tools/box-jobs.sh names no cap here for any backend this trip can hold)"
+      ;;
+    *)
+      jobs=${width%% *}
+      rest=${width#* }
+      width_hazard=${rest%% *}
+      rest=${rest#* }
+      width_backend=${rest%% *}
+      width_why=${rest#* }
+      case $jobs in
+        '' | *[!0-9]* | 0*) fail "tools/box-jobs.sh answered an unreadable width: $width" ;;
+      esac
+      jobs_story="$jobs (this box's width for $width_backend, which this trip can hold -- $width_why: tools/box-jobs.sh hazard $width_hazard)"
+      ;;
+  esac
+fi
+echo "dune jobs:     $jobs_story"
+echo "=== end provenance ==="
 
 assert_source_state() {
   state_context=$1

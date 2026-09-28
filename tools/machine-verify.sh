@@ -61,10 +61,13 @@
 # into a batch there (-j 8 for cuda on a native NVIDIA boot, -j 4 for hip on a
 # small SDMA pool such as minix's, -j 8 for hip on a wider one such as tuf's,
 # -j 2 for either behind a WSL2 /dev/dxg bridge, -j 8 for a CPU backend on the
-# fleet's rog-nv-linux). The far side asks this checkout's tools/box-jobs.sh,
-# probing BOX's devices (gh-ocannl-986); where it names no cap -- a CPU
-# backend elsewhere, metal, an @check-only trip -- the width is 4. An explicit
-# -j is always honored, and the provenance says which of the two it was.
+# fleet's rog-nv-linux), the tightest any backend the trip can hold meets --
+# the pinned one, any a reached stanza names (`; ocannl-backend: cuda`), and
+# every backend for a --run probe. The far side asks this checkout's
+# tools/box-jobs.sh and tools/batch-backends.sh, probing BOX's devices and
+# resolving the aliases in the pushed tree (gh-ocannl-986); where no backend
+# meets a cap -- CPU backends off rog, metal, a box without a GPU -- the width
+# is 4. An explicit -j is always honored, and the provenance says which it was.
 #
 # Where it runs: without --local or --ssh, BOX runs here exactly when its SSH
 # endpoint is this machine -- `ssh -G BOX` names the host and port (no
@@ -127,6 +130,9 @@ far=$here/machine-verify-far.sh
 # the width the trip runs at.
 box_jobs=$here/box-jobs.sh
 box_jobs_source=$(cat "$box_jobs") || die "cannot read the width table $box_jobs"
+batch_backends=$here/batch-backends.sh
+batch_backends_source=$(cat "$batch_backends") ||
+  die "cannot read the backend resolution $batch_backends"
 
 [ $# -ge 2 ] || usage
 box=$1
@@ -425,7 +431,7 @@ echo "machine-verify: transport: $transport_story"
 remote_command="/bin/sh -c 'exec 3<&0; exec </dev/null; exec /bin/sh /dev/fd/3 \"\$@\"' machine-verify"
 for arg in "$box" "$branch" "$backend" "$expect_lib" "$remote_repo" "$staging_remote" \
   "$worktree_root" "$cap" "$trip_cap" "$jobs" "$transport_story" "$capped_perl" \
-  "$box_jobs_source"; do
+  "$box_jobs_source" "$batch_backends_source"; do
   remote_command="$remote_command $(sq "$arg")"
 done
 if [ "$operation_count" -gt 0 ]; then
