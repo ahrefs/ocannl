@@ -193,6 +193,8 @@ another reader of dP is declined: true
 staged code inside the backward's span is declined: true
 staged code after the span is no objection: true
 a dead channel loop in the query-gradient contraction is declined: true
+a reader of dP ahead of its producer is declined: true
+a partial definition is read as its node, not instantiated: true
 a backward with the composed max gradient is declined: true
 the same parameters carry gradients in both runs: true
 composed max gradient: q.grad agrees within 1e-05 relative: true

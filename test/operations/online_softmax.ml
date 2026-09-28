@@ -1139,14 +1139,37 @@ let () =
   p "staged code inside the backward's span is declined" (declined (lines (insert_after a staged)));
   p "staged code after the span is no objection" (fused (lines (stmts @ [ staged ])));
   (* A contraction whose channel loop never runs contributes nothing: not the pattern's. *)
-  let rec kill_innermost = function
-    | LL.For_loop ({ body = LL.Set _; _ } as l) -> LL.For_loop { l with to_ = -1 }
-    | LL.For_loop l -> LL.For_loop { l with body = kill_innermost l.body }
+  let rec kill_innermost ?(to_ = -1) = function
+    | LL.For_loop ({ body = LL.Set _; _ } as l) -> LL.For_loop { l with to_ }
+    | LL.For_loop l -> LL.For_loop { l with body = kill_innermost ~to_ l.body }
     | s -> s
   in
   let k = position "q.grad" in
   p "a dead channel loop in the query-gradient contraction is declined"
     (declined (lines (List.mapi stmts ~f:(fun i s -> if i = k then kill_innermost s else s))));
+  (* Program order: the probabilities' gradient read by the division's gradient (C1) ahead of the
+     reduction that produces it -- the composed step then reads the zeroed dP there, which a fused
+     dp computed afresh would not reproduce. *)
+  let c1 = position "exp_exp_vals.grad" in
+  let moved =
+    List.concat_mapi stmts ~f:(fun i s ->
+        if i = a then [ List.nth_exn stmts c1; s ] else if i = c1 then [] else [ s ])
+  in
+  p "a reader of dP ahead of its producer is declined" (a < c1 && declined (lines moved));
+  (* A definition covering part of its node: the node keeps its other cells, so the fused nests must
+     read the node rather than instantiate the definition's right-hand side everywhere. *)
+  let reads_of name llc =
+    Ll_test.count_scalar llc ~f:(function
+      | LL.Get (tn, _) -> String.equal (Tn.debug_name tn) name
+      | _ -> false)
+  in
+  let scores = position "scores" in
+  let partial =
+    lines (List.mapi stmts ~f:(fun i s -> if i = scores then kill_innermost ~to_:3 s else s))
+  in
+  p "a partial definition is read as its node, not instantiated"
+    (fused partial
+    && reads_of "scores" (rewritten partial) = reads_of "scores" (rewritten base.raw_step) + 1);
   (* The composed max gradient: the softmax before phase 0. Declined, not matched as a variant --
      and the step it leaves still trains like the composed one. *)
   let composed = leaf ~softmax:composed_max_softmax ~live:causal_prefix ~on:false ~bwd:false () in

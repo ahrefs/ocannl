@@ -767,24 +767,45 @@ let transplant_idcs env sym idcs =
   |> List.map ~f:(transplanting env sym)
   |> Option.all |> Option.map ~f:Array.of_list
 
+(* Whether a nest writes every cell of its node, once: each axis a plain iterator of its own loop
+   over the axis's whole extent, or the fixed index of a unit axis. Instantiating a definition at
+   arbitrary subscripts is sound only then -- a partial writer's node keeps whatever else it held in
+   the cells it skips. *)
+let covers_whole (n : nest) =
+  let dims = Lazy.force n.tn.Tn.dims in
+  Array.length dims = Array.length n.idcs
+  && List.length n.loops = Array.count n.idcs ~f:(function Idx.Iterator _ -> true | _ -> false)
+  && Array.for_alli n.idcs ~f:(fun a -> function
+    | Idx.Fixed_idx k -> k = 0 && dims.(a) = 1
+    | Idx.Iterator s -> (
+        match List.find n.loops ~f:(fun lp -> Idx.equal_symbol lp.index s) with
+        | Some lp -> lp.from_ = 0 && lp.to_ = dims.(a) - 1
+        | None -> false)
+    | _ -> false)
+  && not
+       (List.contains_dup ~compare:Idx.compare_symbol
+          (Array.to_list n.idcs
+          |> List.filter_map ~f:(function Idx.Iterator s -> Some s | _ -> None)))
+
 (* The expression a read stands for, unfolded through single-writer elementwise definitions and
-   constant fills (short of the [stop] nodes), with the positions of the definitions it went
+   constant fills (short of the [stop] nodes) that write their whole node at a position before
+   [before] -- where the reads being replaced ran -- with the positions of the definitions it went
    through. A definition's target symbols map positionally to the read's indices. *)
-let rec unfold r ~stop ~depth (s : LL.scalar_t) : (LL.scalar_t * int list) option =
+let rec unfold r ~stop ~before ~depth (s : LL.scalar_t) : (LL.scalar_t * int list) option =
   let found = ref [] in
   let get tn idcs =
     if depth <= 0 || List.mem stop tn ~equal:Tn.equal then None
     else
       match writers r tn with
-      | [ pos ] -> (
+      | [ pos ] when pos < before -> (
           match (r.stmts.(pos), r.nests.(pos)) with
           | LL.Zero_out _, _ ->
               found := [ pos ] :: !found;
               Some (LL.Constant 0.)
-          | _, Some { llsc = LL.Constant c; _ } ->
+          | _, Some ({ llsc = LL.Constant c; _ } as n) when covers_whole n ->
               found := [ pos ] :: !found;
               Some (LL.Constant c)
-          | _, Some n when pointwise n ->
+          | _, Some n when pointwise n && covers_whole n ->
               let pairs = Array.zip_exn n.idcs idcs |> Array.to_list in
               let subst =
                 List.filter_map pairs ~f:(function Idx.Iterator s, i -> Some (s, i) | _ -> None)
@@ -807,7 +828,7 @@ let rec unfold r ~stop ~depth (s : LL.scalar_t) : (LL.scalar_t * int list) optio
                   | _ -> None
                 in
                 let* body, _ = map_scalar ~idx ~get:(fun _ _ -> None) n.llsc in
-                let* body, ps = unfold r ~stop ~depth:(depth - 1) body in
+                let* body, ps = unfold r ~stop ~before ~depth:(depth - 1) body in
                 found := (pos :: ps) :: !found;
                 Some body
           | _ -> None)
@@ -900,7 +921,7 @@ let find_backward r (nz : normalizer) : backward option =
             let* env = reads_in voc n [ (sig_dp, di) ] in
             let* sg = sign env n.idcs in
             let* () = Option.some_if (same_roles sg nz.sig_m) () in
-            let* u, aux = unfold r ~stop:[ nz.e; nz.l; dp_tn ] ~depth:8 u in
+            let* u, aux = unfold r ~stop:[ nz.e; nz.l; dp_tn ] ~before:pos ~depth:8 u in
             let e_read = function
               | LL.Get (e', ei) -> Tn.equal e' nz.e && Option.is_some (bind env nz.sig_e ei)
               | _ -> false
@@ -1089,7 +1110,7 @@ let find_backward r (nz : normalizer) : backward option =
     | [ pos ] -> (
         match (r.stmts.(pos), r.nests.(pos)) with
         | LL.Zero_out _, _ -> Some (0., pos)
-        | _, Some { llsc = LL.Constant c; _ } -> Some (c, pos)
+        | _, Some ({ llsc = LL.Constant c; _ } as n) when covers_whole n -> Some (c, pos)
         | _ -> None)
     | _ -> None
   in
@@ -1128,11 +1149,28 @@ let find_backward r (nz : normalizer) : backward option =
         Set.mem consumed_so_far pos
         || not (Set.mem (reads_at r pos) tn || List.mem (writers r tn) pos ~equal:Int.equal))
   in
+  (* Program order, the class the matching above is blind to (it relates nests by what they read,
+     not where they sit): every consumed gradient is complete before anything reads it -- a reader
+     ahead of an accumulation consumed a partial or stale value the fused nests would not reproduce
+     -- and a constant the chain reads in place of its node was filled before the link that read
+     it. *)
+  let complete_before_read tn =
+    let accs = List.drop (writers r tn) 1 in
+    List.for_all (outside_readers r tn) ~f:(fun rd -> List.for_all accs ~f:(fun w -> w < rd))
+  in
+  let filled_before_read =
+    List.for_all links ~f:(fun (pos, _, _, rhs, _, _) ->
+        List.for_all substituted ~f:(fun tn ->
+            (not (LL.scalar_mentions_tn tn rhs))
+            || Option.exists (constant_of tn) ~f:(fun (_, fill) -> fill < pos)))
+  in
   let contract =
+    List.for_all intermediates ~f:complete_before_read
+    && filled_before_read
     (* One precision per side: the probabilities at the scores' (the forward's chain), the gradient
        chain from dP to dS at one of its own -- a node narrower or wider than its neighbours rounds
        where the fused locals would not. *)
-    float_at x_prec p_tn
+    && float_at x_prec p_tn
     && List.for_all intermediates ~f:(float_at grad_prec)
     (* A requested intermediate keeps its composed definition: the fusion never writes it. *)
     && List.for_all intermediates ~f:(fun tn -> not (Tn.known_non_virtual tn))
@@ -1240,7 +1278,7 @@ let find_backward r (nz : normalizer) : backward option =
   let pair ~stop ~grad sym =
     let p = get_scope p_node and dp = get_scope dp_node and ds = get_scope ds_node in
     let* p_val, _ =
-      unfold r ~stop:(stop @ [ nz.m; nz.l ]) ~depth:8 (Get (p_tn, idcs_of sym sig_p))
+      unfold r ~stop:(stop @ [ nz.m; nz.l ]) ~before:emit ~depth:8 (Get (p_tn, idcs_of sym sig_p))
     in
     (* Read where the fused nests run: only nodes final there. *)
     let p_reads = ref [] in
