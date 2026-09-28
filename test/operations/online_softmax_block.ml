@@ -344,7 +344,51 @@ module Value_alias = struct
              else stmt))
     in
     p "a value operand aliasing the masked scores: no fold"
-      (Set.is_empty (tiles (rewrite ~block:4 aliased)))
+      (Set.is_empty (tiles (rewrite ~block:4 aliased)));
+    (* The same with a materialized exponential: a live row-state definition the fold would move
+       behind itself, and so define only after reading it. *)
+    let e = Option.value_exn (Set.find (written raw) ~f:(label_is "exp_exp_vals")) in
+    Ll_test.materialize e;
+    let aliased_live =
+      LL.unflat_lines
+        (List.map (LL.flat_lines [ raw ]) ~f:(fun stmt ->
+             if reads_node "softmax" stmt then
+               map_sets stmt ~f:(fun tn i ->
+                   if label_is "v" tn then LL.Get (e, i) else LL.Get (tn, i))
+             else stmt))
+    in
+    p "a value operand aliasing a live row-state definition (the exponentials): no fold"
+      (Set.is_empty (tiles (rewrite ~block:4 aliased_live)));
+    (* A live definition reading a scope local: the census does not see local writes, so the fold
+       will not move it (the probabilities materialized, their definition wrapped in a scope). *)
+    let probs = Option.value_exn (Set.find (written raw) ~f:(label_is "softmax")) in
+    Ll_test.materialize probs;
+    let scoped =
+      LL.unflat_lines
+        (List.map (LL.flat_lines [ raw ]) ~f:(fun stmt ->
+             let rec wrap (llc : LL.t) : LL.t =
+               match llc with
+               | LL.For_loop fl -> LL.For_loop { fl with body = wrap fl.body }
+               | LL.Set ({ tn; llsc; _ } as st) when Tn.equal tn probs ->
+                   let id = LL.get_scope probs in
+                   LL.Set
+                     {
+                       st with
+                       llsc =
+                         LL.Local_scope
+                           {
+                             id;
+                             orig_indices = st.idcs;
+                             mint = LL.Inlined_computation;
+                             body = LL.Set_local (id, llsc);
+                           };
+                     }
+               | other -> other
+             in
+             wrap stmt))
+    in
+    p "a live definition reading a scope local: no fold"
+      (Set.is_empty (tiles (rewrite ~block:4 scoped)))
 end
 
 let () =
@@ -580,6 +624,19 @@ let () =
      sign like the values: the fold would remove that node's definition and still read it, so it
      declines. *)
   Value_alias.check ~rewrite:(fun ~block llc -> rewrite ~block llc);
+  (* Tiles past the stack threshold would be [On_device] buffers shared by every parallel row: the
+     fold declines, and the output is the composed one (executed). *)
+  let threshold_key = "stack_threshold_in_bytes" in
+  Hashtbl.set Utils.config_file_args ~key:threshold_key ~data:"16";
+  let small =
+    Exn.protect
+      ~f:(fun () -> forward ~on:true ~block:8 ~seq ~d_k:8 ())
+      ~finally:(fun () -> Hashtbl.remove Utils.config_file_args threshold_key)
+  in
+  let reference = forward ~on:false ~block:0 ~seq ~d_k:8 () in
+  p "tiles past the stack threshold: no fold" (Set.is_empty (tiles small.optimized.LL.llc));
+  p_all2 "tiles past the stack threshold: the output matches the composed within 1e-5 relative"
+    small.values reference.values ~f:(close ~tol:1e-5);
   (* Only the row max requested: the fold writes it, and nothing else of the row state -- the
      shifted scores, exponentials and probabilities have no reader, so they go, and with them the
      score chain; only a live definition would move behind the fold. *)

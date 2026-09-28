@@ -1647,7 +1647,10 @@ let find_fold r (nz : normalizer) ~block : fold option =
     && not (List.contains_dup (roles_of sg) ~compare:compare_role)
   in
   let movable p =
-    Set.for_all (reads_at r p) ~f:(fun tn ->
+    (* No scope locals: their writes are not in the census this motion check reads. *)
+    Option.exists r.nests.(p) ~f:(fun n ->
+        Option.is_some (map_scalar ~idx:Option.some ~get:(fun _ _ -> None) n.llsc))
+    && Set.for_all (reads_at r p) ~f:(fun tn ->
         List.mem state tn ~equal:Tn.equal
         || List.for_all (writers r tn) ~f:(fun w -> w <= p || w > f_at))
   in
@@ -1687,6 +1690,14 @@ let find_fold r (nz : normalizer) ~block : fold option =
   in
   let s_tile = tile_node ~label:"block_scores" ~like:nz.x ~dims:[| bk |] mp in
   let u_tile = tile_node ~label:"block_numerator" ~like:vp.o_tn ~dims:[| dv |] prec in
+  (* A tile past the stack threshold would resolve to an [On_device] buffer, one for every row the
+     schedule runs in parallel: the rows would race on it. The fold needs thread-private tiles. *)
+  let* () =
+    Option.some_if
+      (List.for_all [ s_tile; u_tile ] ~f:(fun tn ->
+           Tn.equal_memory_mode (Tn.most_local_materialized_mode tn) Tn.Local))
+      ()
+  in
   let m_st = scalar_node ~label:"block_max" ~like:nz.m mp in
   let l_st = scalar_node ~label:"block_sum" ~like:nz.l mp in
   let local label like = get_scope (scalar_node ~label ~like mp) in
@@ -1873,17 +1884,19 @@ let find_fold r (nz : normalizer) ~block : fold option =
     if List.is_empty added then removed else dead (removed @ added)
   in
   let removed = dead removed0 in
-  (* Nothing the fold reads may be written by a statement it removes: a value operand that is also a
-     node of the score chain (or of the row state) would lose its definition. *)
+  (* The live definitions MOVE: their copies follow the fold, and their original positions go with
+     the rest (consumed, not removed -- the copies still read the score chain). *)
+  let consumed = removed @ live_defs in
+  (* Nothing the fold reads may be written by a statement it consumes -- one it removes, or one it
+     moves behind itself: a value operand that is also a node of the score chain or of the row state
+     would lose its definition, or get it only after the fold read it. *)
   let* () =
     Option.some_if
       (List.for_all (vp.v_tn :: inputs) ~f:(fun tn ->
-           not (List.exists (writers r tn) ~f:(List.mem removed ~equal:Int.equal))))
+           not (List.exists (writers r tn) ~f:(List.mem consumed ~equal:Int.equal))))
       ()
   in
-  (* The live definitions MOVE: their copies follow the fold, and their original positions go with
-     the rest (they are consumed, not removed -- the copies still read the score chain). *)
-  Some { f_consumed = removed @ live_defs; f_at; f_code = unflat_lines (fold :: moved) }
+  Some { f_consumed = consumed; f_at; f_code = unflat_lines (fold :: moved) }
 
 (* {1 The pass} *)
 

@@ -200,6 +200,7 @@ for step in "$@"; do
 import json, os, re, statistics, sys
 out, treatments = sys.argv[1], sys.argv[2].split()
 cells = {}
+missing = []
 for name in sorted(os.listdir(out)):
     # The dry cells are a smoke of the matrix, never a repeat: only the numbered passes enter.
     m = re.fullmatch(r"(cc|metal)-(gpt2_mini\w*)-(composed|two-pass|fold-\d+)-(r\d+)\.out", name)
@@ -211,8 +212,16 @@ for name in sorted(os.listdir(out)):
         if line.startswith("{") and '"step_ms"' in line:
             rec = json.loads(line)
     if rec is None:
+        missing.append(name)
         continue
     cells.setdefault(m.group(1, 2, 3), []).append((m.group(4), rec))
+# A summary is only as complete as its cells: a numbered cell without a result line, or no
+# numbered cell at all, fails the step (the table is still printed for what exists).
+incomplete = bool(missing) or not cells
+for name in missing:
+    print("MISSING RESULT: %s has no result line" % name)
+if not cells:
+    print("NO MEASUREMENT: no numbered cell produced a result line")
 print("| backend | fixture | treatment | p50 per repeat (ms) | median p50 | vs composed | vs two-pass | p10..p90 spread | shipped mma | loss vs composed |")
 print("|---|---|---|---|---|---|---|---|---|---|")
 def med(key):
@@ -234,6 +243,7 @@ for (backend, fixture, treatment), reps in sorted(cells.items(), key=lambda kv: 
         backend, fixture, treatment, ", ".join("%.1f" % p for p in p50s), m,
         "%.3fx" % (m / comp) if comp else "", "%.3fx" % (m / two) if two else "",
         spread, json.dumps(mma) if mma is not None else "", loss))
+sys.exit(1 if incomplete else 0)
 PY
       cat "$out/summary.md" ;;
     *) echo "gh1003: unknown step $step"; failed=1 ;;

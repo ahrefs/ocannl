@@ -109,6 +109,10 @@ scores that are an input, not a contraction: no fold, the two-pass form: true
 a value pass into a slice of its output: no fold, the two-pass form keeps the zeroing: true
 a value pass ahead of the probabilities it would consume: no fold: true
 a value operand aliasing the masked scores: no fold: true
+a value operand aliasing a live row-state definition (the exponentials): no fold: true
+a live definition reading a scope local: no fold: true
+tiles past the stack threshold: no fold: true
+tiles past the stack threshold: the output matches the composed within 1e-5 relative: true
 the row max alone requested: the fold writes it and its tiles: true
 the row max alone requested: no other row-state or score-chain node is written: true
 --- leg 7: training -- the fold forward under the composed and the fused backward ---
