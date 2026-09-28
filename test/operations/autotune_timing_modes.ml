@@ -308,10 +308,14 @@ type synthetic_call = {
   reused_batches : int;
   fresh_launches : int;
   all_launches : int;
-  probes : (int * float) list;
-      (** The calibration's batch probes, one [(depth, wall)] per batch in dispatch order: every
-          batch before the depth decision but the synchronized singles, which are depth 1 while no
-          probe is (gh-ocannl-1098). *)
+  probes : Autotune.calibration_probe list;
+      (** The calibration's batch probes in dispatch order, as [Autotune.on_calibration_probe]
+          reported them (gh-ocannl-1119). *)
+  probe_batches : (int * float) list list;
+      (** For each reported probe, the [(depth, wall)] batches the device dispatched since the
+          previous report, the first probe's segment starting at the call's first batch. *)
+  unreported_batches : (int * float) list;
+      (** The batches dispatched after the last probe report and before the depth decision. *)
   reading : Autotune.timing_result;
   cap : int;
   repeats : int;
@@ -322,31 +326,43 @@ type synthetic_call = {
 let synthetic_calls : (string * synthetic_call) list ref = ref []
 
 let synthetic_call ?(repeats = 3) ?walls ~timing ~cap ~fixed_ms ~launch_ms () =
-  let launches = ref 0 and batches = ref 0 and probes = ref [] and decided = ref None in
+  let launches = ref 0 and batches = ref 0 and decided = ref None in
+  (* [segment] holds the batches since the last probe report, newest first. *)
+  let segment = ref [] and probes = ref [] in
   let batch d =
     launches := !launches + d;
     Int.incr batches;
     let wall =
       match walls with Some f -> f !batches d | None -> fixed_ms +. (launch_ms *. Float.of_int d)
     in
-    if d > 1 && Option.is_none !decided then probes := (d, wall) :: !probes;
+    if Option.is_none !decided then segment := (d, wall) :: !segment;
     wall
   in
-  let window = ref None in
-  let old_depth = !Autotune.on_batch_depth and old_window = !Autotune.on_timed_window in
+  let window = ref None and unreported = ref [] in
+  let old_depth = !Autotune.on_batch_depth
+  and old_window = !Autotune.on_timed_window
+  and old_probe = !Autotune.on_calibration_probe in
   Exn.protect
     ~finally:(fun () ->
       Autotune.on_batch_depth := old_depth;
-      Autotune.on_timed_window := old_window)
+      Autotune.on_timed_window := old_window;
+      Autotune.on_calibration_probe := old_probe)
     ~f:(fun () ->
+      (Autotune.on_calibration_probe :=
+         fun probe ->
+           probes := (probe, List.rev !segment) :: !probes;
+           segment := []);
       (Autotune.on_batch_depth :=
-         fun d ~calibration_samples -> decided := Some (d, calibration_samples, !launches));
+         fun d ~calibration_samples ->
+           decided := Some (d, calibration_samples, !launches);
+           unreported := List.rev !segment);
       (Autotune.on_timed_window :=
          fun ~samples ~reused ~wall_ms:_ ~median_wall_ms:_ ->
            window := Some (samples, reused, !launches));
       let reading = Autotune.calibrate_and_time ~timing ~repeats ~queue_depth_cap:cap ~batch in
       let settled_depth, calibration_launches, at_decision = Option.value_exn !decided in
       let window_batches, reused_batches, at_window = Option.value_exn !window in
+      let probes, probe_batches = List.unzip (List.rev !probes) in
       {
         settled_depth;
         calibration_launches;
@@ -354,7 +370,9 @@ let synthetic_call ?(repeats = 3) ?walls ~timing ~cap ~fixed_ms ~launch_ms () =
         reused_batches;
         fresh_launches = at_window - at_decision;
         all_launches = !launches;
-        probes = List.rev !probes;
+        probes;
+        probe_batches;
+        unreported_batches = !unreported;
         reading;
         cap;
         repeats;
@@ -370,8 +388,9 @@ let describe what c =
     c.all_launches c.reading.ms
     (String.concat
        [
-         Printf.sprintf ", probes %d batches in %g ms" (List.length c.probes)
-           (List.sum (module Float) c.probes ~f:snd);
+         Printf.sprintf ", %d probes of %d batches in %g ms" (List.length c.probes)
+           (List.sum (module Int) c.probes ~f:(fun pr -> pr.runs))
+           (List.sum (module Float) c.probes ~f:(fun pr -> pr.wall_ms));
          (if c.reading.contended then " (contended)" else "");
          (if c.reading.unbatched then " (unbatched)" else "");
        ])
@@ -619,6 +638,36 @@ let () =
   let jump =
     device "fixed-dominated, its queue cost jumping past depth 8" ~launch_ms:12. jump_clean
   in
+  (* gh-ocannl-1100: two more exits settle on a depth no probe measured. The first is the last
+     validation's affine projection. Singles at 2.5 ms and a concave curve walk the four validations
+     through depths 6, 8, 10 and 14 (the longest path's), each reading under the target, and the
+     last pair (10, 9.5) / (14, 9.5625) is nearly flat: its fit wants depth 42, three times the
+     deepest probe, past which this device's queue cost jumps. *)
+  let projected_clean d =
+    match d with
+    | 1 -> 2.5
+    | 4 -> 7.
+    | 6 -> 8.5
+    | 8 -> 9.25
+    | 10 -> 9.5
+    | 14 -> 9.5625
+    | d -> 400. *. Float.of_int d
+  in
+  let projected =
+    device "the last validation's projection, its queue cost jumping past depth 14" ~launch_ms:2.5
+      projected_clean
+  in
+  (* The second is a confirmation that reads below the target, which the confirmation branch scales
+     from linearly. Singles at 2.5 ms, a provisional probe at depth 4 reading exactly the target,
+     and a confirmation at depth 5 reading a quarter of that -- a clock ramping up between the two
+     -- scale to depth 20, four times the deepest probe, past which the queue cost jumps. *)
+  let scaled_clean d =
+    match d with 1 -> 2.5 | 4 -> 10. | 5 -> 2.5 | d -> 400. *. Float.of_int d
+  in
+  let scaled =
+    device "a confirmation scaled past depth 5, where its queue cost jumps" ~launch_ms:2.5
+      scaled_clean
+  in
   let converging =
     device "fast, clean" ~fixed_ms:fast_fixed_ms ~launch_ms:fast_launch_ms (fun d ->
         fast_fixed_ms +. fast_launch_work d)
@@ -656,22 +705,16 @@ let () =
           20.25)
         else longest_clean d)
   in
-  (* Consecutive batches at one depth are one probe, as [(depth, batches, wall)]. A stall retry at
-     the confirmation depth merges with the confirmation it repeats, which can only hide a late
-     start, never invent one. *)
-  let probes c =
-    List.group c.probes ~break:(fun (d, _) (d', _) -> d <> d')
-    |> List.map ~f:(fun g -> (fst (List.hd_exn g), List.length g, List.sum (module Float) g ~f:snd))
-  in
-  (* The probes one at a time, as [(depth, minimum)]: a run at one depth split into chunks of
-     [queue_batch_probe_runs] batches. No probe takes more, so this never counts more probes than
-     started, and it separates a stall retry from the confirmation it repeats when both took all
-     their minima. *)
-  let probe_minima c =
-    List.group c.probes ~break:(fun (d, _) (d', _) -> d <> d')
-    |> List.concat_map ~f:(List.chunks_of ~length:Autotune.queue_batch_probe_runs)
-    |> List.map ~f:(fun g ->
-        (fst (List.hd_exn g), List.fold g ~init:Float.infinity ~f:(fun m (_, w) -> Float.min m w)))
+  (* A confirmation that reads as a stall over twice its target-sized base is retried once at the
+     same depth -- unless the stall itself spent the wall budget. Singles at 2.5 ms give provisional
+     depth 4, whose probe reads exactly the target, so the confirmation at 5 is the second probe.
+     Its batches are stalled to 320 ms, so it stops at three minima, and with the provisional
+     probe's twelve target-sized batches the two have charged 1080 ms, past the 960 ms budget: the
+     retry must not start. Before gh-ocannl-1119 the test grouped a retry with the confirmation it
+     repeats, so no device's retry was ever held against the budget. *)
+  let stall_at_budget =
+    device "a confirmation stall that spends the budget" ~launch_ms:2.5 (fun d ->
+        match d with 1 -> 2.5 | 4 -> 10. | 5 -> 320. | d -> 2.5 *. Float.of_int d)
   in
   let every_device =
     [
@@ -684,32 +727,42 @@ let () =
       ("61 ms a launch, superlinear", superlinear);
       ("16 ms a launch, low depth-2 probe", dip);
       ("fixed-dominated, jumping past depth 8", jump);
+      ("the last validation's projection", projected);
+      ("a confirmation scaled from below the target", scaled);
       ("fast, clean", converging);
       ("the longest calibration path", longest);
+      ("a confirmation stall that spends the budget", stall_at_budget);
     ]
   in
-  (* The last probe is exempt: it may be the rescue, which is charged to no budget because its depth
-     bounds its own wall. *)
+  let is_rescue (pr : Autotune.calibration_probe) =
+    match pr.role with Rescue_probe -> true | _ -> false
+  in
+  (* The rescue is exempt: it is charged to no budget, because its depth bounds its own wall. *)
   Verdict.p_all
-    "no calibration probe but the last starts once the probes' wall has reached the budget"
+    "no calibration probe but the rescue starts once the probes' wall has reached the budget"
     every_device ~f:(fun (what, c) ->
       let late =
-        List.fold
-          (Option.value ~default:[] (List.drop_last (probes c)))
-          ~init:(0., 0)
-          ~f:(fun (spent, late) (_, _, wall) ->
-            ( spent +. wall,
-              if Float.(spent >= Autotune.queue_calibration_wall_ms) then late + 1 else late ))
+        List.fold c.probes ~init:(0., 0) ~f:(fun (spent, late) (pr : Autotune.calibration_probe) ->
+            ( spent +. pr.wall_ms,
+              if Float.(spent >= Autotune.queue_calibration_wall_ms) && not (is_rescue pr) then
+                late + 1
+              else late ))
         |> snd
       in
       if late > 0 then Stdio.eprintf "  %s: %d probes started past the budget\n%!" what late;
       late = 0);
+  Verdict.p_all "a rescue probe is the calibration's last" every_device ~f:(fun (_, c) ->
+      not (List.exists (Option.value ~default:[] (List.drop_last c.probes)) ~f:is_rescue));
+  p "a stall retry is not started once the stalled confirmation has spent the budget"
+    (List.equal Poly.equal
+       (List.map stall_at_budget.probes ~f:(fun pr -> pr.role))
+       [ Provisional_probe; Confirmation_probe ]);
   Verdict.p_all
     "a converging calibration is untouched by the budgets: every probe takes all twelve minima"
-    (probes converging) ~f:(fun (depth, batches, _) ->
-      if batches % 12 <> 0 then
-        Stdio.eprintf "  fast, clean: depth %d took %d minima\n%!" depth batches;
-      batches % 12 = 0);
+    converging.probes ~f:(fun pr ->
+      if pr.runs <> Autotune.queue_batch_probe_runs then
+        Stdio.eprintf "  fast, clean: depth %d took %d minima\n%!" pr.depth pr.runs;
+      pr.runs = Autotune.queue_batch_probe_runs);
   p "a converging calibration still reaches its affine target depth"
     (converging.settled_depth = 1272);
   (* gh-ocannl-834's depth-1 settle: sixteen singles, then the depth-2 confirmation, whose 128 ms
@@ -720,7 +773,7 @@ let () =
     && linear.calibration_launches = 16 + (3 * 2));
   p "a slow candidate's superlinear first pair fits within the wall-relative tolerance"
     (superlinear.settled_depth = 1
-    && List.equal Int.equal (List.map (probes superlinear) ~f:(fun (d, _, _) -> d)) [ 2 ]);
+    && List.equal Int.equal (List.map superlinear.probes ~f:(fun pr -> pr.depth)) [ 2 ]);
   Verdict.p_all
     "a resolved calibration never settles on a batch whose launch work exceeds the target"
     [
@@ -740,11 +793,36 @@ let () =
   (* The escaped depth is unmeasured and beyond every depth the calibration measured: neither the
      wall budget nor the fallback would ever check it. *)
   p "a refitted crossing never settles past the batches it was checked against"
-    (let deepest = List.fold jump.probes ~init:1 ~f:(fun m (d, _) -> Int.max m d) in
+    (let deepest = List.fold jump.probes ~init:1 ~f:(fun m pr -> Int.max m pr.depth) in
      if jump.settled_depth > deepest then
        Stdio.eprintf "  fixed-dominated: settled %d past the deepest probe %d\n%!"
          jump.settled_depth deepest;
      jump.settled_depth <= deepest && jump.settled_depth > 1);
+  (* The bound over the probe record (gh-ocannl-1100), on every CUDA/HIP device in this section.
+     Each of the two fixtures above walks its own exit -- read off its probes' roles -- and settles
+     exactly at the bound, where its projection wanted deeper. *)
+  let deepest_probe (c : synthetic_call) =
+    List.fold c.probes ~init:1 ~f:(fun m (pr : Autotune.calibration_probe) -> Int.max m pr.depth)
+  in
+  let within_bound what c =
+    let ok = c.settled_depth <= Autotune.queue_depth_projection_factor * deepest_probe c in
+    if not ok then
+      Stdio.eprintf "  %s: settled %d, past %d times the deepest probe %d\n%!" what c.settled_depth
+        Autotune.queue_depth_projection_factor (deepest_probe c);
+    ok
+  in
+  Verdict.p_all
+    "no calibration settles deeper than queue_depth_projection_factor times the deepest batch it \
+     probed"
+    every_device ~f:(fun (what, c) -> within_bound what c);
+  let roles (c : synthetic_call) = List.map c.probes ~f:(fun pr -> pr.role) in
+  p "the last validation's projection past its deepest probe is capped at the bound"
+    (List.equal Poly.equal (roles projected)
+       [ Provisional_probe; Validation_probe; Validation_probe; Validation_probe; Validation_probe ]
+    && projected.settled_depth = Autotune.queue_depth_projection_factor * deepest_probe projected);
+  p "a confirmation scaled from below the target is capped at the bound"
+    (List.equal Poly.equal (roles scaled) [ Provisional_probe; Confirmation_probe ]
+    && scaled.settled_depth = Autotune.queue_depth_projection_factor * deepest_probe scaled);
   p
     "a kernel with a queue threshold below its provisional depth is rescued, timed within the \
      target"
@@ -754,19 +832,37 @@ let () =
   p "a refusal no rescue could lift carries its own reason, apart from the contention verdict"
     (stalled.reading.unbatched && not stalled.reading.contended);
   (* The bound is reached, not exceeded: the control flow's longest path is exactly
-     [queue_calibration_max_probes] long, so enforcing the count cuts no path short. *)
-  let longest_probes = probe_minima longest in
-  if List.length longest_probes <> Autotune.queue_calibration_max_probes then
+     [queue_calibration_max_probes] long, so enforcing the count cuts no path short. The path is the
+     one the comment above [longest_clean] walks, branch by branch. *)
+  let longest_roles = List.map longest.probes ~f:(fun pr -> pr.role) in
+  if List.length longest.probes <> Autotune.queue_calibration_max_probes then
     Stdio.eprintf "  the longest calibration path: %d probes at depths %s\n%!"
-      (List.length longest_probes)
-      (String.concat ~sep:", " (List.map longest_probes ~f:(fun (d, _) -> Int.to_string d)));
+      (List.length longest.probes)
+      (String.concat ~sep:", " (List.map longest.probes ~f:(fun pr -> Int.to_string pr.depth)));
   p "the longest calibration path dispatches queue_calibration_max_probes probes"
-    (List.length longest_probes = Autotune.queue_calibration_max_probes);
-  p "the longest calibration path's last probe is the rescue, and it times the candidate"
-    (match List.split_n longest_probes (List.length longest_probes - 1) with
-    | earlier, [ (last_depth, _) ] ->
-        Option.equal Int.equal (Autotune.rescue_depth ~observed:earlier) (Some last_depth)
-        && longest.settled_depth = last_depth
+    (List.length longest.probes = Autotune.queue_calibration_max_probes);
+  p
+    "the longest calibration path is the provisional probe, four validations, a confirmation, its \
+     stall retry, a sampled crossing and the rescue"
+    (List.equal Poly.equal longest_roles
+       [
+         Provisional_probe;
+         Validation_probe;
+         Validation_probe;
+         Validation_probe;
+         Validation_probe;
+         Confirmation_probe;
+         Stall_retry_probe;
+         Crossing_probe;
+         Rescue_probe;
+       ]);
+  p "the longest calibration path's rescue probes rescue_depth and times the candidate there"
+    (match List.split_n longest.probes (List.length longest.probes - 1) with
+    | earlier, [ ({ role = Rescue_probe; _ } as rescue) ] ->
+        Option.equal Int.equal
+          (Autotune.rescue_depth ~observed:(List.map earlier ~f:(fun pr -> (pr.depth, pr.min_ms))))
+          (Some rescue.depth)
+        && longest.settled_depth = rescue.depth
         && Option.is_some (Autotune.admitted_timing_ms longest.reading)
     | _ -> false);
   (* [time_routine]'s documented queued maximum, over every synthetic device in this file: a warmup
@@ -781,11 +877,42 @@ let () =
       if c.all_launches > bound then
         Stdio.eprintf "  %s: %d launches past the documented %d\n%!" what c.all_launches bound;
       c.all_launches <= bound);
+  (* The seam against the device's own batch log, so a probe that dispatched without reporting, or
+     misreported what it measured, fails here rather than thinning every claim above: each report
+     ends exactly the batches dispatched since the previous one, at its depth, with their minimum
+     and their finite positive sum; only the first report's segment starts earlier, with the
+     synchronized singles; and nothing but singles precedes the depth decision unreported. *)
+  let singles = List.for_all ~f:(fun (d, _) -> d = 1) in
+  Verdict.p_all "every reported probe is exactly the batches the device dispatched for it"
+    !synthetic_calls ~f:(fun (what, c) ->
+      let matches nth (pr : Autotune.calibration_probe) segment =
+        let before, own = List.split_n segment (List.length segment - pr.runs) in
+        pr.runs >= 1
+        && List.length own = pr.runs
+        && List.for_all own ~f:(fun (d, _) -> d = pr.depth)
+        && Float.equal pr.min_ms
+             (List.fold own ~init:Float.infinity ~f:(fun m (_, w) -> Float.min m w))
+        && Float.equal pr.wall_ms
+             (List.sum
+                (module Float)
+                own
+                ~f:(fun (_, w) -> if Float.is_finite w && Float.is_positive w then w else 0.))
+        && if nth = 0 then singles before else List.is_empty before
+      in
+      let ok =
+        List.for_alli (List.zip_exn c.probes c.probe_batches) ~f:(fun nth (pr, segment) ->
+            matches nth pr segment)
+        &&
+        if List.is_empty c.probes then singles c.unreported_batches
+        else List.is_empty c.unreported_batches
+      in
+      if not ok then
+        Stdio.eprintf "  %s: the reported probes disagree with the dispatched batches\n%!" what;
+      ok);
   Stdio.eprintf
     "  (not part of the golden) most dispatches of any synthetic device: %d, probes %d\n%!"
     (List.fold !synthetic_calls ~init:0 ~f:(fun m (_, c) -> Int.max m c.all_launches))
-    (List.fold !synthetic_calls ~init:0 ~f:(fun m (_, c) ->
-         Int.max m (List.length (probe_minima c))))
+    (List.fold !synthetic_calls ~init:0 ~f:(fun m (_, c) -> Int.max m (List.length c.probes)))
 
 (* {1 The setting's spelling} *)
 

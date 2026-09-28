@@ -85,6 +85,7 @@ test/einsum/test_cse-cse_d_fwd.ll.expected [ll] extension .ll.expected; markers 
 test/operations/canonical_render.expected [ll] markers ll-assign
 test/operations/concat_loop_symbols.expected [derived] beside test/operations/concat_loop_symbols.ml
 test/operations/cost_model_floor.expected [derived] beside test/operations/cost_model_floor.ml
+test/operations/gpu_serial_lanes.expected [derived] beside test/operations/gpu_serial_lanes.ml
 test/operations/ll_printer_constants.expected [derived] beside test/operations/ll_printer_constants.ml
 test/operations/log_index_width_narrow.c.expected [c] extension .c.expected; markers c-decl-banner c-for c-logic-banner c-prec-cast c-restrict ll-assign routine-log
 test/operations/log_index_width_wide.c.expected [c] extension .c.expected; markers c-decl-banner c-for c-logic-banner c-prec-cast c-restrict ll-assign routine-log
@@ -162,6 +163,8 @@ test/operations/fission_schedule.ml
     "gid."
 test/operations/float_literal_forms.ml
     "(float)(" ^ ... ^ ")"
+test/operations/gpu_serial_lanes.ml [also pins text this scan cannot name]
+    "for ("
 test/operations/hardware_axes_parity.ml
     " = 0;"
     " = 7;"

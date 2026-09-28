@@ -44,6 +44,7 @@ let raw_entries =
       [
         "[scanner-refusal:bc4968cf04b3b7f3212afef877977199] handed the notes";
         "[scanner-refusal:2ac555c09ba6fe90fc6321fecba16cab] the notes' bullets";
+        "[scanner-refusal:3b1b44bc902f09eaba8469a50662c285] tools scripts' pointers";
         "[scanner-refusal:ec487246d0ff9ad951333a2c56d4a990] names is reported";
         "[scanner-refusal:ed552c5b3e09a3046aa9cce5257cc148] every finding carries";
         "[scanner-refusal:348bb1f1fa0be73fb4796a31a76abaad] each flagged bullet";

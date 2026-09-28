@@ -136,9 +136,11 @@ let case_width_one_enclosing () =
   p "width-1 enclosing loop: candidate still virtual" (known_virtual o x);
   p "width-1 enclosing loop: inlined (no array reads survive)" (count_get o x = 0)
 
+(* Each row runs through [case], so a row that raises is a failed claim naming it, and the rows
+   after it still run (gh-ocannl-1084; [footprint_materialization] is the exemplar). *)
 let () =
-  case_repetition_above ();
-  case_symbol_free_map ();
-  case_inner_reduction ();
-  case_width_one_enclosing ();
+  case "repetition_above" case_repetition_above;
+  case "symbol_free_map" case_symbol_free_map;
+  case "inner_reduction" case_inner_reduction;
+  case "width_one_enclosing" case_width_one_enclosing;
   Stdio.printf "%!"

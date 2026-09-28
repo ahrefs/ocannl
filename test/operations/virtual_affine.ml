@@ -177,10 +177,12 @@ let case_stage_a_diagonal () =
   p "stage-a diagonal: executed values are the diagonal over the zero-init" (same virt [ expected ]);
   p "stage-a diagonal: virtual and materialized arms agree" (same virt mat)
 
+(* Each row runs through [case], so a row that raises is a failed claim naming it, and the rows
+   after it still run (gh-ocannl-1084; [footprint_materialization] is the exemplar). *)
 let () =
-  case_structural_match ();
-  case_unit_solve_plain ();
-  case_triangular ();
-  case_noninjective ();
-  case_stage_a_diagonal ();
+  case "structural-match" case_structural_match;
+  case "unit-solve(plain)" case_unit_solve_plain;
+  case "triangular" case_triangular;
+  case "non-injective" case_noninjective;
+  case "stage-a diagonal" case_stage_a_diagonal;
   Stdio.printf "%!"

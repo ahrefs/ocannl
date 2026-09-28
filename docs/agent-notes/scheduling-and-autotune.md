@@ -12,6 +12,16 @@ files.
   thread-coordinate tuple. Metal GPT measurements and the explicit CUDA/HIP residual are in
   `benchmarks/report-gh995-metal.md`; `gpu_small_leading_axis` executes dependent-nest and
   zero-initialization oracles.
+- A parallel loop under a serial loop is reachable only past lane-uniform scalar work
+  (gh-ocannl-1003). The presets' chain is the single-child loop path, which stops at the
+  online-softmax hoist's preamble (`for t { p := P[s, t]; for e { O[s, e] += p * V[t, e] } }`);
+  `default_gpu`'s lane geometry reads the path through it (`path_loops ~lanes`) and emits
+  `Grid (every chain loop above) -> Serial t -> Workgroup e`. It applies only when every
+  chain-carrying nest of the kernel is such a lane nest with the same Grid arity (positional slot
+  coverage), so a kernel mixing it with a plain nest keeps the presets. The preamble must be loop-free
+  (each lane recomputes it: the recomputed-scores form's inlined `q . k` cost 1.5x at seq 1024 on
+  Metal under lanes) and must precede exactly ONE loop: a nest with two sibling channel loops under
+  one preamble (a fused dK+dV) is not reached. `test/operations/gpu_serial_lanes`; measured in `benchmarks/report-gh1003-stage1.md`.
 - A GPU schedule must cover EVERY materialized-writing nest of the routine, not only the one the
   pipeline builds. Launch dimensions are kernel-global, so `Low_level.validate_parallel` rejects any
   companion write (a bias/relu tail; the elementwise statements an aligned-merged fission segment
@@ -470,6 +480,14 @@ files.
   `Autotune.on_candidate_preflight` exists — though since the lineage-wide half now escapes the
   region, injecting one of *its* exceptions through that hook exercises the containment machinery
   with a realistic payload rather than mirroring where a real one is raised.
+- A typed cause is not automatically a containable one. `Schedule_outcome.uncontainable` names the
+  causes `protect` makes `Fatal` although typed, the fatal record keeping them in `cause`: today the
+  cc backend's `dlopen` rejection at `Backend_link` (gh-ocannl-1077). The object compiled and the
+  loader found a symbol nothing supplies, an OCANNL link bug; contained, it declines exactly the
+  candidates whose code reaches the symbol (gh-ocannl-1045's libmvec: the vectorized ones), and
+  the search quietly ships a slower winner. Before, it escaped as a raw `Dl.DL_error`, contained
+  under permissive classification. A JIT rejecting one candidate's PTX stays a counted decline.
+  `test/operations/cc_dlopen_cause` manufactures one via the compiler command.
 - Placement decides which tensorized candidates *exist*, not just how they rank, because
   `mma_tile_for_precisions` keys on the storage precisions of the nodes the site actually reads.
   Under the mixed-precision recipe on a uniform-format backend (Metal's `simdgroup_matrix`: no mixed
@@ -535,13 +553,22 @@ files.
   is strictly better evidence anyway); and pricing the *displaced* flip instead of the promoted one
   (its gain is unknown until measured, which is exactly the budget the promotion consumes).
   `model_default`'s placement walk hands over no evidence, so it gets the prior and is unchanged —
-  and the derivation happens inside `placement_surface`, on the `profitable` path only, so a run
-  pinned to `cost` or `enablement` never reads `tune_flip_profit_margin` (`ps_profit` is `None`
-  there, which is what the log line reports instead of a verdict nothing consulted). A malformed
+  and the derivation happens inside `placement_surface`, on the `profitable` path only, so the
+  ordering of a run pinned to `cost` or `enablement` never reads `tune_flip_profit_margin`
+  (`ps_profit` is `None` there, which is what the log line reports instead of a verdict nothing
+  consulted; the flip chain's abandonment rule, next entry, does read it). A malformed
   margin is a `Utils.User_error` and must reach the caller: `tune_placements`' containment around the
   decision-surface lowering names the classes it does NOT absorb, because swallowing that one skips
   the refinement the configuration asked for and ships the A/B winner as though the setting had been
   honored.
+- **A hopeless flip is abandoned at EQUAL search depth, never against the incumbent's final best**
+  (gh-ocannl-1110): `Autotune.tune ?abandon` stops once its best after `beam_width` admitted timings
+  trails the incumbent's `report.best_steps` at that depth by more than the margin squared, raising
+  `Search_abandoned`. On gh-719's cuda gpt2_mini cell arm A sat at 11.7x its final 6.862 ms for 207 of
+  209 timed candidates (the recombination composites delivered the rest), so a final-best rule would
+  abandon every flip. `best_steps` is cached like `mma_best_ms`, keyed by every `Search_shaping`
+  key's value (`Utils.config_class_fingerprint`, `SC.trajectory`), so a replayed incumbent still
+  has one; a failed one abandons nothing.
 - The action menu's loop enumeration is provenance-aimed **by action category**, not by loop
   (gh-ocannl-687). `Local_scope` has two producers — virtualization's inline at a read site, and the
   accumulator localization `Schedule`'s materializing `Unroll` / `Partition` and
@@ -723,7 +750,13 @@ files.
   consumers (the benchmark JSON's per-arm `timings_unbatched`, `gh834_cells.sh`) keep treating it
   as an incomplete measurement; one that repeats on an idle rerun is the threshold. A sampled
   shallower crossing is refitted against the batch above it and never settles past that batch: a
-  fixed-dominated refit projects far deeper, unmeasured, where a queue cost may jump. Do not replace
+  fixed-dominated refit projects far deeper, unmeasured, where a queue cost may jump. Every other
+  settle is capped at `Autotune.queue_depth_projection_factor` (2) times the deepest batch probed
+  (gh-ocannl-1100), one chokepoint after the branches rather than a fix per exit: the last
+  validation's affine projection, a linear scale from a below-target confirmation and a fit wanting
+  the cap all used to settle unmeasured (a pair (2, 12.25) / (3, 12.5) wants depth 40). A bound in
+  depth, not wall, spending no probe; ultra-fast kernels whose fit wanted the cap now batch shorter
+  than the target. Do not replace
   this with a bound
   extrapolated through a per-launch cost (least `wall / depth`): the readings that leave the fits
   unresolved cannot tell a host stall from a cost that jumps past a queue threshold, and two review
@@ -743,7 +776,11 @@ files.
   depth 4 of a 64 ms kernel would keep 256 ms batches). None of this changes the objective (the depth picks the scale;
   an entry timed at an older depth is an accurate, merely expensive, reading), so no cache-key
   generation bump. `autotune_timing_modes` pins each change on the injected clock with a claim
-  that fails without it.
+  that fails without it. Its probe claims read `Autotune.on_calibration_probe` (gh-ocannl-1119),
+  one record per probe tagged with the branch that started it, never the `batch` calls: runs of
+  same-depth batches merge a stall retry into its confirmation, so the retry escaped the budget
+  claim, and chunking them counts probes only as a lower bound. A new probe site passes its own
+  `~role`; the test's witness claim holds every report against the device's batch log.
   An unresolved first pair retries at double depth, and the next fit uses the two batch observations so an
   inflated synchronized-single window cannot force the cap. If the last bounded probe first reaches
   the target, the interpolated target depth is still sampled and checked against the measured

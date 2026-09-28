@@ -952,6 +952,27 @@ let guide_cases =
       [] );
   ]
 
+(* gh-ocannl-1111: the scripts under tools/ are pointer sources beside the guide. A script points
+   from a comment and from a message it prints, and a finding names the script and line, not the
+   guide. The guide is present and clean in each case, so a finding here can only come from the
+   script. *)
+let script_cases =
+  [
+    ( "a comment pointing at a heading its note has",
+      "#!/usr/bin/env bash\n# The mechanism is in docs/agent-notes/a.md#the-widget-seam.\n",
+      [] );
+    ( "a comment pointing at a heading its note lacks",
+      "#!/usr/bin/env bash\n\n# The mechanism is in docs/agent-notes/a.md#the-sprocket-seam.\n",
+      [ "guide-anchors @ tools/x.sh:3" ] );
+    ( "a printed message pointing at a heading its note lacks",
+      "#!/usr/bin/env bash\necho 'refusing: see\n  docs/agent-notes/b.md#the-widget-seam.' >&2\n",
+      [ "guide-anchors @ tools/x.sh:3" ] );
+    ( "a path outside the notes is not a pointer into them",
+      "#!/usr/bin/env bash\n\
+       # See docs/syntax_extensions.md#operators and ./CHANGES.md#unreleased.\n",
+      [] );
+  ]
+
 (* The LEXICAL layer, tested directly rather than only through the rules above it.
 
    Round 3 was six findings and three of them were here -- code-span pairing, backslash parity, ATX
@@ -1134,10 +1155,19 @@ let () =
       check ("index -- " ^ name) expected (List.map found ~f:render));
   List.iter guide_cases ~f:(fun (name, guide_contents, expected) ->
       let _, found =
-        Notes.check_all ~guide:("AGENTS.md", guide_contents) ~index_file:"agent-notes.md"
-          ~index_contents:guide_index ~files:guide_notes ()
+        Notes.check_all
+          ~guides:[ ("AGENTS.md", guide_contents) ]
+          ~index_file:"agent-notes.md" ~index_contents:guide_index ~files:guide_notes ()
       in
       check ("guide -- " ^ name) expected (List.map found ~f:render));
+  List.iter script_cases ~f:(fun (name, script, expected) ->
+      let _, found =
+        Notes.check_all
+          ~guides:
+            [ ("AGENTS.md", guide "- A rule (a.md#the-widget-seam)."); ("tools/x.sh", script) ]
+          ~index_file:"agent-notes.md" ~index_contents:guide_index ~files:guide_notes ()
+      in
+      check ("script -- " ^ name) expected (List.map found ~f:render));
   (* gh-ocannl-706. A finding whose rule [Notes.rules] does not name -- a sixth rule written and not
      added to the list -- used to be dropped where the report is grouped by that list: the rule
      fired and nothing showed it. Put to the rule synthetically, since no fixture here can produce
@@ -1165,6 +1195,7 @@ let () =
     @ List.concat_map index_cases ~f:(fun (_, _, _, e) -> e)
     @ List.concat_map citation_cases ~f:(fun (_, _, e) -> e)
     @ List.concat_map guide_cases ~f:(fun (_, _, e) -> e)
+    @ List.concat_map script_cases ~f:(fun (_, _, e) -> e)
     |> List.map ~f:rule_of_expectation
     |> List.dedup_and_sort ~compare:String.compare
   in

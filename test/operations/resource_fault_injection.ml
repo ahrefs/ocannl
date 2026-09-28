@@ -59,6 +59,7 @@ let cache_entry backend best_ms : SC.entry =
     mma_best_ms = None;
     default_ms = None;
     default_fingerprint = None;
+    best_steps = None;
   }
 
 let resource_cache_dir = "autotune_cache_resource_fault_injection"

@@ -11,6 +11,9 @@ module SC = Ir.Schedule_cache
 type decline_summary = { key : Outcome.rejection_key; count : int; sample_details : string list }
 type terminal_failure = { phase : Outcome.phase; candidate : string option; detail : string }
 
+(* gh-ocannl-1110: why a search stopped early by its caller's rule. See the interface. *)
+type abandonment = { ab_timed : int; ab_best_ms : float; ab_incumbent_ms : float; ab_ratio : float }
+
 (* gh-ocannl-677: the one thing a [tune] call did about searching, as a state rather than as
    independent flags. The states are mutually exclusive and each carries exactly its own data, so
    "replayed a cached winner AND ran a search" and "died mid-search but carries no failure" are not
@@ -26,6 +29,9 @@ type outcome =
   | Pre_search_failure of terminal_failure
       (** A failure before (or instead of) the search proper: the base compile, the baseline link or
           timing, a fatal cache replay, an untuned fallback compile. *)
+  | Abandoned of abandonment
+      (** A search its caller's [?abandon] rule stopped after its first timed candidates
+          (gh-ocannl-1110). Not a failure: nothing was compiled for the caller. *)
 
 (* gh-ocannl-755: what a timed candidate's number is a measurement OF. [Isolated] times one launch
    followed by a host synchronization, so the number is the latency of a lone dispatch — the kernel
@@ -192,6 +198,9 @@ type report = {
   source_digest : string;
       (** The digest of the base lowering this call tuned (gh-ocannl-1022), [""] when it never
           reached one. See the interface. *)
+  best_steps : (int * float) list;
+      (** The best-so-far as a step function of the admitted timings (gh-ocannl-1110). See the
+          interface. *)
 }
 
 (** The report of a [tune] call that never searched (config [autotune_search=false], gh-ocannl-559):
@@ -250,6 +259,7 @@ let no_search_report ~timing =
     (* No base lowering reached yet: [tune] fills this in once its base compile has captured one,
        and every report from then on carries it. *)
     source_digest = "";
+    best_steps = [];
   }
 
 (** The stable one-word name of an outcome state, for logs, JSON records and test goldens. *)
@@ -259,6 +269,7 @@ let outcome_name = function
   | Cache_replay -> "cache-replay"
   | Search_disabled -> "search-disabled"
   | Pre_search_failure _ -> "pre-search-failure"
+  | Abandoned _ -> "abandoned"
 
 (** The fatal failure that ended the call, from whichever of the two failing states it was. A
     projection over the outcome, not a re-derivation of it: "did this call fail" is a question that
@@ -266,7 +277,31 @@ let outcome_name = function
 let terminal_failure (r : report) =
   match r.outcome with
   | Search_died tf | Pre_search_failure tf -> Some tf
-  | Searched | Cache_replay | Search_disabled -> None
+  | Searched | Cache_replay | Search_disabled | Abandoned _ -> None
+
+(* gh-ocannl-1110: the flip chain's early abandonment. *)
+exception Search_abandoned of abandonment
+
+type abandon_rule = { incumbent_steps : (int * float) list; trailing_ratio : float }
+
+let best_after steps k =
+  List.fold steps ~init:Float.infinity ~f:(fun acc (n, ms) ->
+      if n <= k then Float.min acc ms else acc)
+
+let abandon_verdict rule ~k ~steps =
+  let incumbent_ms = best_after rule.incumbent_steps k in
+  let best_ms = best_after steps k in
+  (* Strict, so a flip trailing by exactly the ratio keeps searching; and nothing to compare against
+     when the incumbent timed nothing (a cache replay of an entry older than the field). *)
+  if Float.is_finite incumbent_ms && Float.(best_ms > rule.trailing_ratio *. incumbent_ms) then
+    Some
+      {
+        ab_timed = k;
+        ab_best_ms = best_ms;
+        ab_incumbent_ms = incumbent_ms;
+        ab_ratio = rule.trailing_ratio;
+      }
+  else None
 
 (* Best-effort reporting must stay best-effort for ordinary callback errors and NOT for these: an
    interrupt or a runtime-fatal condition raised inside a [report] callback is about the process,
@@ -490,6 +525,18 @@ let queue_calibration_wall_ms = 8. *. Float.of_int queue_batch_probe_runs *. que
    wall budget were spent, so that [time_routine]'s documented dispatch maximum is a bound the code
    keeps rather than a reading of its control flow. *)
 let queue_calibration_max_probes = 9
+
+(* How far past its deepest batch probe a CUDA/HIP calibration may settle, as a multiple of that
+   depth (gh-ocannl-1100): one doubling, the step the calibration's own unresolved retries take into
+   unmeasured depth. Several exits settle on a depth no probe measured -- the last validation's
+   affine projection, a linear scale from a confirmation that read below the target, a fit that
+   wants the cap -- and a fixed-dominated or non-monotone pair projects far past every measured
+   batch (a pair (2, 12.25 ms) / (3, 12.5 ms) wants depth 40), where a queue cost can jump and
+   neither the wall budget nor the fallback would ever look. The timed window would then run at a
+   per-launch cost the calibration never saw, and its 2x contention rule would judge a wall it did
+   not measure. A bound in depth, not in wall: a jump inside the factor is the bet it states, and no
+   probe is spent confirming it. *)
+let queue_depth_projection_factor = 2
 
 (* The calibration policy itself, as a function of the estimate, so a test can pin it without a
    device: what [Queued] measures depends on it, and its two boundaries are the ones a regression
@@ -742,6 +789,31 @@ let on_timed_window :
     (samples:int -> reused:int -> wall_ms:float -> median_wall_ms:float -> unit) ref =
   ref (fun ~samples:_ ~reused:_ ~wall_ms:_ ~median_wall_ms:_ -> ())
 
+(* Which of the calibration's branches dispatched a batch probe. *)
+type calibration_probe_role =
+  | Provisional_probe
+  | Validation_probe
+  | Confirmation_probe
+  | Stall_retry_probe
+  | Crossing_probe
+  | Rescue_probe
+
+type calibration_probe = {
+  role : calibration_probe_role;
+  depth : int;
+  runs : int;
+  wall_ms : float;
+  min_ms : float;
+}
+
+(* Observation seam for the timing tests (gh-ocannl-1119), fired once per CUDA/HIP calibration batch
+   probe as it ends, in dispatch order, with the branch that started it, how many minima it took,
+   the wall it charged to [queue_calibration_wall_ms] and its minimum. A test that saw only the
+   [batch] calls had to reconstruct probes from runs of same-depth batches, which merged a stall
+   retry into the confirmation it repeats and counted probes only as a lower bound. Default no-op;
+   no configuration key selects it. *)
+let on_calibration_probe : (calibration_probe -> unit) ref = ref (fun _ -> ())
+
 (* The measurement proper, after the warmup: the calibration and the timed loop, with the device
    reduced to [batch depth], which dispatches [depth] launches back to back, synchronizes once and
    returns the wall in milliseconds. Separated from [time_routine] so a test can drive the whole
@@ -759,13 +831,19 @@ let calibrate_and_time ~timing ~repeats ~queue_depth_cap ~batch =
      charged: a clock that resolved nothing spends no measurable wall, and must not end a probe on a
      NaN comparison. *)
   let probe_wall_ms = ref 0. and probes_started = ref 0 in
+  (* The deepest batch any probe dispatched, the synchronized singles as depth 1: what
+     [queue_depth_projection_factor] multiplies. Every probe counts, whatever it read: a clock that
+     resolved nothing still dispatched its provisional probe at the cap, which the bound must not
+     shorten. *)
+  let deepest_probed = ref 1 in
   (* The last of [queue_calibration_max_probes] is kept for the rescue, which checks no budget. *)
   let probe_budget_spent () =
     Float.(!probe_wall_ms >= queue_calibration_wall_ms)
     || !probes_started >= queue_calibration_max_probes - 1
   in
-  let probe_batch depth =
+  let probe_batch ~role depth =
     Int.incr probes_started;
+    deepest_probed := Int.max !deepest_probed depth;
     let best_ms = ref Float.infinity and runs = ref 0 and wall_ms = ref 0. in
     while
       !runs < queue_batch_probe_runs
@@ -778,6 +856,7 @@ let calibrate_and_time ~timing ~repeats ~queue_depth_cap ~batch =
     done;
     probe_wall_ms := !probe_wall_ms +. !wall_ms;
     observe ~depth !best_ms;
+    !on_calibration_probe { role; depth; runs = !runs; wall_ms = !wall_ms; min_ms = !best_ms };
     { ms = !best_ms; contended = false; unbatched = false; samples = !runs }
   in
   (* [singles] is the calibration's window of synchronized single launches, kept rather than reduced
@@ -821,7 +900,7 @@ let calibrate_and_time ~timing ~repeats ~queue_depth_cap ~batch =
                whole batch reaches the target even when the provisional depth is shallow. Budget the
                probe on batch wall rather than per-launch time: it is calibration, not a candidate
                measurement, and need not spend 64 whole batches to learn the scale. *)
-            let probe = probe_batch probe_depth in
+            let probe = probe_batch ~role:Provisional_probe probe_depth in
             let depth, estimated_batch_wall_ms =
               refine_queued_batch_depth_with_cap ~max_depth:queue_depth_cap
                 ~single_ms:single_estimate.ms ~probe_depth ~probe_ms:probe.ms
@@ -829,7 +908,7 @@ let calibrate_and_time ~timing ~repeats ~queue_depth_cap ~batch =
             let confirm_interpolated calibration_dispatches depth ~upper_depth ~upper_ms =
               if probe_budget_spent () then (calibration_dispatches, depth, Float.nan)
               else
-                let measured = probe_batch depth in
+                let measured = probe_batch ~role:Crossing_probe depth in
                 let calibration_dispatches = calibration_dispatches + (measured.samples * depth) in
                 let confirmed_depth, confirmed_wall_ms =
                   refine_queued_batch_depth_between_with_cap ~max_depth:queue_depth_cap
@@ -872,7 +951,11 @@ let calibrate_and_time ~timing ~repeats ~queue_depth_cap ~batch =
               else if probe_budget_spent () then (calibration_dispatches, depth, Float.nan)
               else
                 let confirmation_depth = Int.min queue_depth_cap (depth + Int.max 1 (depth / 4)) in
-                let confirmation = probe_batch confirmation_depth in
+                let confirmation =
+                  probe_batch
+                    ~role:(if retry_stall then Confirmation_probe else Stall_retry_probe)
+                    confirmation_depth
+                in
                 let calibration_dispatches =
                   calibration_dispatches + (confirmation.samples * confirmation_depth)
                 in
@@ -908,7 +991,7 @@ let calibrate_and_time ~timing ~repeats ~queue_depth_cap ~batch =
               if depth = queue_depth_cap then (calibration_dispatches, depth, estimated_wall_ms)
               else if probe_budget_spent () then (calibration_dispatches, depth, Float.nan)
               else
-                let validation = probe_batch depth in
+                let validation = probe_batch ~role:Validation_probe depth in
                 let calibration_dispatches =
                   calibration_dispatches + (validation.samples * depth)
                 in
@@ -991,6 +1074,20 @@ let calibrate_and_time ~timing ~repeats ~queue_depth_cap ~batch =
                 validate_depth max_depth_validation_probes calibration_dispatches probe_depth
                   probe.ms depth estimated_batch_wall_ms
             in
+            (* Every exit above, bounded at once rather than branch by branch (gh-ocannl-1100): no
+               settle goes past [queue_depth_projection_factor] times the deepest probe. The wall
+               estimate keeps its per-launch share; an unresolved one stays unresolved, for the
+               stricter fallback below. *)
+            let depth, estimated_batch_wall_ms =
+              let bound = queue_depth_projection_factor * !deepest_probed in
+              if depth <= bound then (depth, estimated_batch_wall_ms)
+              else (
+                logf
+                  "queued batch depth %d projected past the deepest calibration probe (%d): \
+                   settled at %d"
+                  depth !deepest_probed bound;
+                (bound, estimated_batch_wall_ms *. Float.of_int bound /. Float.of_int depth))
+            in
             (* An unresolved outcome is the only one whose depth no measured wall or fit supports;
                every resolved one carries its own wall estimate. *)
             let depth =
@@ -1020,7 +1117,7 @@ let calibrate_and_time ~timing ~repeats ~queue_depth_cap ~batch =
                     (* One rescue probe before refusing (gh-ocannl-1098), charged to no budget: its
                        depth is chosen so that a cost whose per-launch average does not fall with
                        depth reads within the target there, which is a bounded wall. *)
-                    let measured = probe_batch rescue in
+                    let measured = probe_batch ~role:Rescue_probe rescue in
                     let calibration_dispatches =
                       calibration_dispatches + (measured.samples * rescue)
                     in
@@ -2637,6 +2734,10 @@ let flip_profit_margin () =
   flip_profit_margin_of_string
     (Utils.get_global_arg ~arg_name:"tune_flip_profit_margin" ~default:"1.25")
 
+let flip_abandon_ratio ?margin () =
+  let margin = match margin with Some m -> m | None -> flip_profit_margin () in
+  margin *. margin
+
 (** What one completed search measured about the tensorized family's profitability. A search that
     timed no tensorized candidate measured nothing about it — including one that seeded many and
     timed none, the gh-ocannl-521 state, which is a fact about candidate compilation rather than
@@ -3356,7 +3457,7 @@ let resolve_cache_dir ?cache_dir ~search () =
   if search || cache_dir_chosen then cache_dir else ""
 
 let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?cache_dir
-    ?keep_fraction ?max_split_reduce_sites ?timing_ctx ?report ctx comp bindings =
+    ?keep_fraction ?max_split_reduce_sites ?timing_ctx ?abandon ?report ctx comp bindings =
   (* gh-ocannl-559: with the search off, [tune] still replays an explicitly provided cache -- a
      pinned schedule is deterministic, and committing one is how a reproducible run keeps a tuned
      schedule -- but never times candidates, whose crowning is the largest cross-machine determinism
@@ -3411,6 +3512,18 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
       ~default:
         (float_setting ~default:1.
         @@ Utils.get_global_arg ~arg_name:"autotune_keep_fraction" ~default:"1.")
+  in
+  (* gh-ocannl-1110: what shapes which candidates this search times, and in what order, that the
+     schedule cache's key does not carry: every [Search_shaping] configuration key (the class the
+     key leaves out by definition), plus every argument of this function that resolves one — each
+     resolved value, whether passed or read. A cached [best_steps] replays only under the same
+     shape: the flip chain compares at equal depth, which presumes the same candidate order and
+     sampling. *)
+  let search_shape =
+    Printf.sprintf "search=%b beam=%d rounds=%d repeats=%d keep=%h split_sites=%d blocks=%s|%s"
+      search beam_width rounds repeats keep_fraction max_split_reduce_sites
+      (String.concat ~sep:"," (List.map seed_block_sizes ~f:Int.to_string))
+      (Utils.config_class_fingerprint Utils.Search_shaping)
   in
   let static_indices = Idx.bound_symbols bindings in
   let backend = Context.backend_name ctx in
@@ -3853,6 +3966,15 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                     mma_best_ms = Option.value entry.SC.mma_best_ms ~default:Float.infinity;
                     best_schedule = flat_schedule c.form;
                     source_digest = base_digest;
+                    (* Replayed for the same reason as [mma_best_ms]: a flip chain whose incumbent
+                       replayed would otherwise have no timed record to abandon a hopeless flip
+                       against (gh-ocannl-1110). Empty for entries older than the field, and when
+                       the storing search had another shape, whose candidate order an equal-depth
+                       comparison cannot assume. *)
+                    best_steps =
+                      (match entry.SC.best_steps with
+                      | Some t when String.equal t.SC.search_shape search_shape -> t.SC.steps
+                      | Some _ | None -> []);
                   };
                 Some (c.cctx, c.routine)
             | Error (Outcome.Classified classified) ->
@@ -4104,6 +4226,9 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
         and n_fiss_sketch_candidates = ref 0
         and n_split_reduce_candidates = ref 0 in
         let best_so_far = ref ((if baseline_timed then baseline else None), baseline_ms) in
+        (* [report.best_steps], newest first: each time [best_so_far] improves, at which admitted
+           timing it did (gh-ocannl-1110). *)
+        let best_steps = ref (if baseline_timed then [ (1, baseline_ms) ] else []) in
         let by_time (_, a) (_, b) = Float.compare a b in
         (* gh-ocannl-550: the search's live artifacts are bounded by [beam_width], not by candidates
            processed. [beam] IS the candidate pool — it holds the fastest [beam_width] entries seen
@@ -4225,57 +4350,61 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
           Option.value_map !default_seed_digest ~default:false ~f:(Hash_set.mem contended_digests)
         in
         let partial_emitted = ref false in
-        let emit_partial_and_raise (fatal : Outcome.fatal) =
+        (* The report of a search cut short, from the state it reached: a fatal failure's
+           ([emit_partial_and_raise]) and an abandonment's. *)
+        let partial_report outcome =
           let summaries = decline_summaries declines in
           let best_c, best_ms = !best_so_far in
+          {
+            outcome;
+            timing;
+            candidates_timed = !n_timed;
+            timings_contended = !n_timings_contended;
+            timings_unbatched = !n_timings_unbatched;
+            candidates_contended = candidates_contended ();
+            default_refused = default_refused ();
+            candidates_failed = failed_count declines;
+            baseline_declined = Option.is_some baseline_decline;
+            declines = summaries;
+            rounds_run = !rounds_run;
+            sketch_candidates = !n_sketch_candidates;
+            epilogue_sketch_candidates = !n_epilogue_sketch_candidates;
+            fiss_sketch_candidates = !n_fiss_sketch_candidates;
+            fiss_sketch_timed = !n_fiss_sketch_timed;
+            fiss_sketch_composite = !fs_composite;
+            split_reduce_candidates = !n_split_reduce_candidates;
+            split_reduce_timed = !n_sr_timed;
+            split_reduce_composite_eligible = !sr_composite_eligible;
+            split_reduce_composite_timed = !sr_composite_timed;
+            mma_candidates = !n_mma_proposed;
+            fiss_mma_candidates = !n_fiss_mma_proposed;
+            mma_timed = !n_mma_timed;
+            model_scored = !n_model_scored;
+            model_pruned = !n_model_pruned;
+            bound_pruned = !n_bound_pruned;
+            fissioned = Option.exists best_c ~f:(fun c -> is_fissioned c.form);
+            baseline_ms;
+            default_ms = default_ms ();
+            best_ms;
+            best_label = winner_label best_c;
+            best_tensorized = winner_tensorized best_c;
+            best_tensorization =
+              Option.map best_c ~f:(fun c -> (mma_summary c).Ir.C_syntax.tensorization);
+            best_mma_statements = Option.value_map best_c ~default:0 ~f:mma_statements;
+            best_mma_scalar_fallbacks = Option.value_map best_c ~default:0 ~f:mma_scalar_fallbacks;
+            mma_best_ms = !mma_best_ms;
+            best_schedule = Option.value_map best_c ~default:[] ~f:(fun c -> flat_schedule c.form);
+            source_digest = base_digest;
+            best_steps = List.rev !best_steps;
+          }
+        in
+        let emit_partial_and_raise (fatal : Outcome.fatal) =
           (* Shadowing the projection of the same name would be gratuitous here: this is the failure
              being constructed, not one being read off a report. *)
           let failure =
             { phase = fatal.phase; candidate = fatal.candidate; detail = Exn.to_string fatal.exn }
           in
-          let partial_report =
-            {
-              outcome = Search_died failure;
-              timing;
-              candidates_timed = !n_timed;
-              timings_contended = !n_timings_contended;
-              timings_unbatched = !n_timings_unbatched;
-              candidates_contended = candidates_contended ();
-              default_refused = default_refused ();
-              candidates_failed = failed_count declines;
-              baseline_declined = Option.is_some baseline_decline;
-              declines = summaries;
-              rounds_run = !rounds_run;
-              sketch_candidates = !n_sketch_candidates;
-              epilogue_sketch_candidates = !n_epilogue_sketch_candidates;
-              fiss_sketch_candidates = !n_fiss_sketch_candidates;
-              fiss_sketch_timed = !n_fiss_sketch_timed;
-              fiss_sketch_composite = !fs_composite;
-              split_reduce_candidates = !n_split_reduce_candidates;
-              split_reduce_timed = !n_sr_timed;
-              split_reduce_composite_eligible = !sr_composite_eligible;
-              split_reduce_composite_timed = !sr_composite_timed;
-              mma_candidates = !n_mma_proposed;
-              fiss_mma_candidates = !n_fiss_mma_proposed;
-              mma_timed = !n_mma_timed;
-              model_scored = !n_model_scored;
-              model_pruned = !n_model_pruned;
-              bound_pruned = !n_bound_pruned;
-              fissioned = Option.exists best_c ~f:(fun c -> is_fissioned c.form);
-              baseline_ms;
-              default_ms = default_ms ();
-              best_ms;
-              best_label = winner_label best_c;
-              best_tensorized = winner_tensorized best_c;
-              best_tensorization =
-                Option.map best_c ~f:(fun c -> (mma_summary c).Ir.C_syntax.tensorization);
-              best_mma_statements = Option.value_map best_c ~default:0 ~f:mma_statements;
-              best_mma_scalar_fallbacks = Option.value_map best_c ~default:0 ~f:mma_scalar_fallbacks;
-              mma_best_ms = !mma_best_ms;
-              best_schedule = Option.value_map best_c ~default:[] ~f:(fun c -> flat_schedule c.form);
-              source_digest = base_digest;
-            }
-          in
+          let partial_report = partial_report (Search_died failure) in
           (* Reporting is best-effort on the exceptional path and must not replace the compiler
              failure or its raw backtrace. *)
           partial_emitted := true;
@@ -4307,6 +4436,7 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
               emit_partial_and_raise
                 (Outcome.fatal_of_classified ~candidate:"untuned default fallback" classified)
         in
+        let exception Abandon_now of abandonment in
         let search () =
           progress_stage "seed_enumeration";
           (* gh-ocannl-521: tensorized candidates are counted where they are TIMED, not where they
@@ -4491,6 +4621,7 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                         if Float.(ms < snd !best_so_far) then (
                           let previous = fst !best_so_far in
                           best_so_far := (Some c, ms);
+                          best_steps := (!n_timed, ms) :: !best_steps;
                           (* A timing tie can evict the old best from the beam while the best
                              reference retains it. Replacing that last owner must release it. *)
                           Option.iter previous ~f:release_candidate);
@@ -4619,11 +4750,25 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                   (Printf.sprintf "phase=%s candidates=%d timed=%d %s %s" phase n !n_timed
                      (progress_costs ()) (progress_best ())))
           in
+          (* gh-ocannl-1110: the caller's abandonment rule, decided once, as soon as the search has
+             [beam_width] admitted timings. Checked as the NEXT attempt starts, so every candidate
+             already timed has been admitted (the exit sweep owns it) and none is cut short. *)
+          let abandon_decided = ref false in
+          let check_abandon () =
+            match abandon with
+            | Some rule when (not !abandon_decided) && !n_timed >= beam_width -> (
+                abandon_decided := true;
+                match abandon_verdict rule ~k:beam_width ~steps:!best_steps with
+                | Some ab -> raise (Abandon_now ab)
+                | None -> ())
+            | Some _ | None -> ()
+          in
           (* Written as an attempt STARTS, naming it: a search killed inside a long candidate then
              leaves the candidate it was in, and the costs of everything before it. Counted before
              the attempt too, so a fatal candidate -- which writes [search_done] from inside itself
              and raises -- is in the closing record's [attempts]. *)
           let try_spec spec =
+            check_abandon ();
             Int.incr progress_attempts;
             Int.incr progress_tried;
             (* Guarded here, not only inside [progress_line]: its arguments render a label and read
@@ -5030,6 +5175,7 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                    default_fingerprint =
                      Option.map (default_ms ()) ~f:(fun _ ->
                          Sched.default_schedule_fingerprint ~backend_name:backend);
+                   best_steps = Some { SC.search_shape; steps = List.rev !best_steps };
                  });
           (* Diagnostic control (config [autotune_log]): compile and time the UNTUNED default
              pipeline in this very process, on the search context — discriminates a genuinely slow
@@ -5103,6 +5249,7 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
               mma_best_ms = !mma_best_ms;
               best_schedule = Option.value_map best_c ~default:[] ~f:(fun c -> flat_schedule c.form);
               source_digest = base_digest;
+              best_steps = List.rev !best_steps;
             }
           in
           let result =
@@ -5167,9 +5314,22 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
         let result, completed_report =
           let escaped ~phase exn backtrace =
             if !partial_emitted then Stdlib.Printexc.raise_with_backtrace exn backtrace
-            else emit_partial_and_raise { exn; backtrace; phase; candidate = None }
+            else emit_partial_and_raise { exn; backtrace; phase; candidate = None; cause = None }
           in
           try search () with
+          | Abandon_now ab ->
+              logf
+                "abandoned after %d timed candidates: best %.4f ms trails the incumbent's %.4f ms \
+                 at the same depth by more than %.4gx"
+                ab.ab_timed ab.ab_best_ms ab.ab_incumbent_ms ab.ab_ratio;
+              (* Built before the sweep, which the report's winner label outlives (see
+                 [release_all_candidates]). Nothing is cached: an abandoned search crowned nothing,
+                 and the store below the rounds was never reached. *)
+              let r = partial_report (Abandoned ab) in
+              release_all_candidates ~keep:[] ();
+              (* The callback's own exception propagates, as on the completion path. *)
+              emit_report r;
+              raise (Search_abandoned ab)
           (* A raise that carries its phase keeps it: the lineage-wide pre-dispatch validation is
              deliberately raised outside the candidate loop's failure boundary (gh-ocannl-569), so
              it arrives here rather than at a classifier, and reporting it under the [Transform]

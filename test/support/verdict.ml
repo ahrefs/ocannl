@@ -30,6 +30,8 @@ let failures = ref 0
    there. Declared up here because {!case} must let it through. *)
 exception Checks_failed
 
+(* The case an explicit [exit] ended the run in, once a check had failed; see {!case}. *)
+let exited_in_case = ref None
 let passed_label_history = ref []
 
 (** The labels of claims this process actually evaluated successfully, in evaluation order.
@@ -380,11 +382,19 @@ let pass_fail_all2 ?min ?detail label got want ~f =
 
     The exception's text goes on the claim line (echoed to stderr like every failure), and the
     backtrace, when one is recorded, to stderr. What an explicit [exit] raises is let through, not
-    recorded: that is the process ending, not a case failing. *)
+    recorded: that is the process ending, not a case failing. Once a check has failed, that ending
+    is reported as [STOPPED EARLY: an exit inside case "<label>" …] on stderr (gh-ocannl-1084): a
+    run that ended inside a case never ran the cases after it, and a reader counting rows
+    ([tools/mutation-run.sh]) cannot otherwise tell it from a run whose earlier case raised and
+    whose later ones completed. *)
 let case label f =
   match f () with
   | () -> ()
-  | exception (Checks_failed as e) -> raise e
+  | exception (Checks_failed as e) ->
+      (* The teardown raises this out of an [exit] only, so the case it passes through is the one
+         that called [exit]; the innermost case records it first. *)
+      if Option.is_none !exited_in_case then exited_in_case := Some label;
+      raise e
   | exception e ->
       let backtrace = Stdlib.Printexc.get_raw_backtrace () in
       let text = String.map (Stdlib.Printexc.to_string e) ~f:(function '\n' -> ' ' | c -> c) in
@@ -481,6 +491,10 @@ let () =
       | Checks_failed ->
           settling := true;
           report_failures ();
+          Option.iter !exited_in_case ~f:(fun label ->
+              Stdio.eprintf
+                "STOPPED EARLY: an exit inside case %S ended the run, so no case after it ran\n%!"
+                label);
           Stdlib.exit 1
       | _ when !failures > 0 ->
           settling := true;
