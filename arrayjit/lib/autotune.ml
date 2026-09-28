@@ -5158,7 +5158,7 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
         let result, completed_report =
           let escaped ~phase exn backtrace =
             if !partial_emitted then Stdlib.Printexc.raise_with_backtrace exn backtrace
-            else emit_partial_and_raise { exn; backtrace; phase; candidate = None }
+            else emit_partial_and_raise { exn; backtrace; phase; candidate = None; cause = None }
           in
           try search () with
           (* A raise that carries its phase keeps it: the lineage-wide pre-dispatch validation is

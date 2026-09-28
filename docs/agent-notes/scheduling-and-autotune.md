@@ -470,6 +470,14 @@ files.
   `Autotune.on_candidate_preflight` exists — though since the lineage-wide half now escapes the
   region, injecting one of *its* exceptions through that hook exercises the containment machinery
   with a realistic payload rather than mirroring where a real one is raised.
+- A typed cause is not automatically a containable one. `Schedule_outcome.uncontainable` names the
+  causes `protect` makes `Fatal` although typed, the fatal record keeping them in `cause`: today the
+  cc backend's `dlopen` rejection at `Backend_link` (gh-ocannl-1077). The object compiled and the
+  loader found a symbol nothing supplies, an OCANNL link bug; contained, it declines exactly the
+  candidates whose code reaches the symbol (gh-ocannl-1045's libmvec: the vectorized ones), and
+  the search quietly ships a slower winner. Before, it escaped as a raw `Dl.DL_error`, contained
+  under permissive classification. A JIT rejecting one candidate's PTX stays a counted decline.
+  `test/operations/cc_dlopen_cause` manufactures one via the compiler command.
 - Placement decides which tensorized candidates *exist*, not just how they rank, because
   `mma_tile_for_precisions` keys on the storage precisions of the nodes the site actually reads.
   Under the mixed-precision recipe on a uniform-format backend (Metal's `simdgroup_matrix`: no mixed
