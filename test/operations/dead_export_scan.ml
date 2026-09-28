@@ -281,7 +281,6 @@ let exempt_zero_reference_exports =
     "Tnode.delayed_prec_of_sexp";
     "Tnode.equal_bounds_state";
     "Tnode.equal_delayed_prec";
-    "Tnode.equal_memory_mode";
     "Tnode.fresh_uid";
     "Tnode.hash_fold_t";
     "Tnode.hash_t";
@@ -291,7 +290,6 @@ let exempt_zero_reference_exports =
     "Tnode.known_not_materialized";
     "Tnode.log_accessible_headers";
     "Tnode.memory_mode_of_sexp";
-    "Tnode.most_local_materialized_mode";
     "Tnode.next_uid";
     "Tnode.prec_of_dalayed";
     "Tnode.propose_bounds";
