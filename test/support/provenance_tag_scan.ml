@@ -23,9 +23,9 @@
       a [string] argument ([Operand_key_scan]'s [Site of string]) is not a provenance: applied
       qualified by that module, directly or through a module binding of the source, or unqualified
       inside it, it mints nothing; the same goes for a module the source itself declares with such a
-      constructor. Those modules are derived from their declarations; the owner's
-      constructor is assumed everywhere else, since opens and aliases reach it in ways a reader of
-      one file cannot follow.
+      constructor. Those modules are derived from their declarations; the owner's constructor is
+      assumed everywhere else, since opens and aliases reach it in ways a reader of one file cannot
+      follow.
     - A constructor carrying provenances only ([Refined]) composes and mints nothing; its case of
       the renderer must render each of them, in order, through a recursive call, or a printed
       provenance could drop or reorder a recorded tag. Any other shape is refused as unread.
@@ -35,9 +35,9 @@
       Non_virtual". The relay belongs to the SCOPE whose handler it is -- local exceptions are
       generative, so a same-named exception elsewhere proves nothing, and a handler names the local
       exception unqualified -- and the carrier must receive the payload itself, not a value a binder
-      in between gives the same name. It may take one hop
-      through a result: a handler wrapping the payload in a constructor ([Non_virtual i -> Error i])
-      relays when a caller of the declaring function matches that constructor into a carrier
+      in between gives the same name. It may take one hop through a result: a handler wrapping the
+      payload in a constructor ([Non_virtual i -> Error i]) relays when a caller of the declaring
+      function matches that constructor into a carrier
       ([match instantiate_computations ... with Error i -> ... (Site i)]). A scope reaching no
       carrier either way mints nothing. That covers the literal at a [raise], the one handed to a
       helper that raises it, and the one a handler records directly; a string the exception itself
@@ -356,7 +356,8 @@ let pattern_binds v (p : pattern) =
 
       method! pattern p =
         (match p.ppat_desc with
-        | Ppat_var { txt; _ } | Ppat_alias (_, { txt; _ }) when String.equal txt v -> found := true
+        | (Ppat_var { txt; _ } | Ppat_alias (_, { txt; _ })) when String.equal txt v ->
+            found := true
         | _ -> ());
         super#pattern p
     end
@@ -383,8 +384,8 @@ let read_source ~carriers ?(foreign = []) ~source content =
   (* The module bindings in scope, innermost first, each to the module it resolved to. *)
   let env = ref [] in
   let resolve q = Option.value (List.Assoc.find !env q ~equal:String.equal) ~default:q in
-  (* A module this source declares with its own carrier-named [string] constructor, under the
-     name it resolves to; a non-alias module expression otherwise resolves to its own name. *)
+  (* A module this source declares with its own carrier-named [string] constructor, under the name
+     it resolves to; a non-alias module expression otherwise resolves to its own name. *)
   let local_foreign = ref [] in
   let declares_carrier items =
     List.exists (own_string_constructors items) ~f:(List.mem carriers ~equal:String.equal)
@@ -405,8 +406,8 @@ let read_source ~carriers ?(foreign = []) ~source content =
   let is_foreign m =
     List.mem foreign m ~equal:String.equal || List.mem !local_foreign m ~equal:String.equal
   in
-  (* Whether an unqualified carrier name here is some other constructor: in [foreign]'s own
-     source, or inside a nested structure declaring one of its own. *)
+  (* Whether an unqualified carrier name here is some other constructor: in [foreign]'s own source,
+     or inside a nested structure declaring one of its own. *)
   let unqualified_foreign = ref (is_foreign own_module) in
   let is_carrier (lid : longident) =
     match lid with
@@ -424,7 +425,6 @@ let read_source ~carriers ?(foreign = []) ~source content =
     let finder =
       object (self)
         inherit Ast_traverse.iter as super
-
         method! case c = if not (pattern_binds v c.pc_lhs) then super#case c
 
         method! expression e =
@@ -507,8 +507,7 @@ let read_source ~carriers ?(foreign = []) ~source content =
                 match List.find scopes ~f:(fun sc -> String.equal !sc.exn e) with
                 | Some sc ->
                     let direct, results = wrappers_of_var v c.pc_rhs in
-                    sc :=
-                      { !sc with direct = direct @ !sc.direct; results = results @ !sc.results }
+                    sc := { !sc with direct = direct @ !sc.direct; results = results @ !sc.results }
                 | None -> ())
             | _ -> ());
         super#case c
@@ -706,9 +705,9 @@ type mention = {
   stale : string list;  (** Each citation no source mints, as spelled. *)
 }
 
-(** What [text] cites, given every library mint and the test-owned tags. *)
-(** [spellings] are relayed-family names read whether or not the family mints anything now: the
-    one a retired family's [Non_virtual N] citations need, to be refused rather than unread. *)
+(** What [text] cites, given every library mint and the test-owned tags. [spellings] are
+    relayed-family names read whether or not the family mints anything now: the one a retired
+    family's [Non_virtual N] citations need, to be refused rather than unread. *)
 let mentions ?(spellings = []) ~(mints : mint list) ~test_tags text =
   let library = List.filter mints ~f:(fun m -> not (is_test_source m.source)) in
   let library_tags = Set.of_list (module String) (List.map library ~f:(fun m -> m.tag)) in
