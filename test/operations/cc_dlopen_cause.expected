@@ -1,0 +1,14 @@
+backend: cc
+the compiler command renames expf to the undefined symbol: true
+strict failure classification is off: true
+the candidate compile is fatal, not a contained decline: true
+the fatal failure is at Backend_link: true
+the fatal failure carries its Backend_rejected cause: true
+the rejecting backend is cc: true
+the stage is dlopen: true
+the severity is Compiler_bug: true
+the detail carries dlerror's unresolved symbol: true
+the detail carries the compile/link command: true
+Context.compile raises Invalid_argument naming dlopen: true
+Autotune.tune raises: true
+autotune reports a pre-search failure at Backend_link: true
