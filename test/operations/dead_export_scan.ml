@@ -365,7 +365,6 @@ let exempt_zero_reference_exports =
        (lib/ has no interfaces); this block is its census. *)
     "Calibrate.named";
     "Nn_blocks.avg_pool2d";
-    "Nn_blocks.batch_norm2d";
     "Nn_blocks.box_muller";
     "Nn_blocks.conv_bn_relu";
     "Nn_blocks.cross_attention";

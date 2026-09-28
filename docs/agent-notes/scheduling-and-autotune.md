@@ -238,7 +238,10 @@ files.
   (`resnet_block`'s downsample) classifies with the BATCH axis as the GEMM row and `oh, ow` as
   interior batch loops (`m_bi`) — every seed stages dense tiles from a strided source address and
   executes correctly on cc and HIP, but the row is only `b` rows tall, and at batch 1 no family
-  seeds the site at all. `test/operations/schedule_strided_1x1` executes every seed and pins both.
+  seeds the site at all. Built through `conv2d` + `batch_norm2d` at 16 channels the conv is not even
+  a site: it is virtualized into the norm's three consumers (at 64 it materializes). Which tuner
+  flavor seeds it is backend-dependent (whole-routine on cc, per-segment on GPU).
+  `test/operations/schedule_strided_1x1` executes every seed of both flavors and pins the structure.
 - **A dispatch's launch parameters are read on the HOST, at `Context.run`, and carried to the
   device** — never re-read from the caller's refs when the device gets around to the task. Only
   `Schedulers.Multidev` defers a task at all (`Sync.schedule_task` is `Task.run`, and the GPU

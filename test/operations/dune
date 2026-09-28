@@ -4302,6 +4302,12 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
+  ; The f16 leg branches on the ADVERTISED tile-MMA capability, so the rocWMMA-header probe's three
+  ; variables are inputs to its verdict (the rationale, and the residual: schedule_mma_matmul's
+  ; stanza, gh-ocannl-1032). The numerics policy is pinned in the test instead.
+  (env_var ROCWMMA_PATH)
+  (env_var LOCALAPPDATA)
+  (env_var HIP_PATH)
   (env_var OCANNL_BACKEND))
  (modules schedule_strided_1x1)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
