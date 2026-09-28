@@ -710,6 +710,27 @@ uint16_t single_to_bfloat16(float f)
 #endif
 |},
       [ "OCANNL_HAS_CONVERTVECTOR"; "HAS_NATIVE_FLOAT16"; "HALF_T"; "FLOAT_TO_HALF" ] );
+    (* The attribute [C_syntax.compile_proc] puts on a kernel whose rendering declared a vector
+       wider than 32 bytes (gh-ocannl-1103). clang's x86 tuning prefers 256-bit vectors on
+       [x86-64-v4] and the Intel AVX-512 parts, and under that preference it legalizes a 64-byte GNU
+       C vector the function body declares as two [ymm] halves unless the function says it needs the
+       width: a register tile's 24 accumulators become 48 and spill (66 stack references per k step
+       at [x86-64-v4], where the whole-width tile holds none). [min_vector_width] changes only which
+       vector types are legal in the function, OpenMP-outlined bodies included; what width clang's
+       own auto-vectorizer picks is still its tuning's. gcc has no such attribute and keeps a
+       64-byte vector whole where the target has it. *)
+    ( "OCANNL_WIDE_VECTOR_KERNEL",
+      {|
+#ifndef __has_attribute
+  #define __has_attribute(x) 0
+#endif
+#if __has_attribute(min_vector_width)
+  #define OCANNL_WIDE_VECTOR_KERNEL __attribute__((min_vector_width(512)))
+#else
+  #define OCANNL_WIDE_VECTOR_KERNEL
+#endif
+|},
+      [] );
     (* The widening bridges at the three f32 lane counts an x86 register holds, each ONE packed
        instruction where the target has it (gh-ocannl-1072), and otherwise the portable bridge above
        under another name. [C_syntax.vec_widen_macro] picks the name; the arguments are the portable

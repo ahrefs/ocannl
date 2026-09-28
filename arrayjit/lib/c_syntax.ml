@@ -2482,6 +2482,9 @@ module C_syntax (B : C_syntax_config) = struct
             {!Low_level.optimized.swizzled}). Scalar element accesses go through [pp_tn_offset]
             below; renderings that assume row-major storage (contiguous vector loads/stores,
             [Tile_mma] intrinsic / register-tiled / fragment paths) must decline these nodes. *)
+    widest_vector_bytes : int ref;
+        (** The widest GNU C vector a rendering that did not decline declared, in bytes: a kernel
+            past 32 carries [OCANNL_WIDE_VECTOR_KERNEL] (gh-ocannl-1103, [Builtins_cc] says why). *)
     current_pipelined : Low_level.pipelined_tile Map.M(Tn).t ref;
         (** Set by [compile_proc]: software-pipelined staged tiles
             ([Schedule.Stage ~pipeline_depth], see {!Low_level.optimized.pipelined}), allocated as
@@ -2794,6 +2797,10 @@ module C_syntax (B : C_syntax_config) = struct
       PPrint.string
         (Printf.sprintf "typedef %s %s __attribute__((vector_size(%d)));" (B.typ_of_prec prec) vtyp
            (lanes * Ops.prec_in_bytes prec)) )
+
+  (* Called where a rendering past its last bail-out declares its [vec_ext_typ]. *)
+  let note_vector_width ctx ~prec ~lanes =
+    ctx.widest_vector_bytes := Int.max !(ctx.widest_vector_bytes) (lanes * Ops.prec_in_bytes prec)
 
   (* The widest vector this loop can fill, [None] where even the narrowest cannot: see
      {!Backend_intf.simd_lanes_for} for why the width degrades per loop instead of being one number
@@ -5352,6 +5359,7 @@ module C_syntax (B : C_syntax_config) = struct
                  (if vectors = 1 then "" else "s"))
             ^ if m_tail = 0 then "" else Printf.sprintf "; row tail %d" m_tail
           in
+          note_vector_width ctx ~prec ~lanes;
           Some
             (string
                (Printf.sprintf
@@ -6092,6 +6100,7 @@ module C_syntax (B : C_syntax_config) = struct
       let ivar = symbol_ident i in
       let it = B.loop_index_type in
       let body_vec = separate hardline (List.rev !stmts_docs) in
+      note_vector_width ctx ~prec ~lanes;
       Some
         (string
            (Printf.sprintf "{ /* Vectorized rendering: %d lanes of %s. */" lanes
@@ -6325,6 +6334,7 @@ module C_syntax (B : C_syntax_config) = struct
          from. A scope-local target sits inside a scope that was censused when it was minted, so it
          records nothing here. *)
       Option.iter decided ~f:(fun sa -> (record_peel_site ctx loop) (width_site sa));
+      note_vector_width ctx ~prec ~lanes;
       Some
         (string
            (Printf.sprintf "{ /* Vectorized reduction rendering: %d chain(s) of %d lanes of %s. */"
@@ -7145,6 +7155,7 @@ module C_syntax (B : C_syntax_config) = struct
         current_simdgroup_fragments = ref simdgroup_fragments;
         rendered_simdgroup_fragments = ref (Set.empty (module Tn));
         current_swizzled = ref swizzled;
+        widest_vector_bytes = ref 0;
         current_pipelined = ref pipelined;
         current_async_tiles = ref (Set.empty (module Tn));
         active_mma_accumulator = ref None;
@@ -7399,8 +7410,14 @@ module C_syntax (B : C_syntax_config) = struct
           string (B.buffer_prefix ^ name ^ B.buffer_suffix ~pos))
       @ List.map B.extra_args ~f:string
     in
-    let func_header =
-      string B.main_kernel_prefix ^^ space ^^ string "void" ^^ space ^^ string name
+    (* Built once the body has rendered: whether the kernel needs [OCANNL_WIDE_VECTOR_KERNEL] is
+       which vectors its renderings declared (gh-ocannl-1103). *)
+    let func_header () =
+      string
+        (if !(ctx.widest_vector_bytes) <= 32 then B.main_kernel_prefix
+         else if String.is_empty B.main_kernel_prefix then "OCANNL_WIDE_VECTOR_KERNEL"
+         else "OCANNL_WIDE_VECTOR_KERNEL " ^ B.main_kernel_prefix)
+      ^^ space ^^ string "void" ^^ space ^^ string name
       ^^ nest 4 (lparen ^^ hardline ^^ separate (comma ^^ hardline) args_docs ^^ rparen)
     in
     let body = ref empty in
@@ -7582,7 +7599,7 @@ module C_syntax (B : C_syntax_config) = struct
         ^^ hardline;
 
     let func_doc =
-      func_header ^^ space ^^ lbrace ^^ nest 2 (hardline ^^ !body) ^^ hardline ^^ rbrace
+      func_header () ^^ space ^^ lbrace ^^ nest 2 (hardline ^^ !body) ^^ hardline ^^ rbrace
     in
     (sorted_params, func_doc, launch)
 end
