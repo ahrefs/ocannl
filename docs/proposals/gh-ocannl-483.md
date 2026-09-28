@@ -87,9 +87,9 @@ loop nest — schedulable, and the shape a fused backward recomputes from `(m, l
   algebra, the recognition and the declines). In the training step that holds both the rewritten
   forward and the composed backward (`Train.grad_update`), the backward's `[seq, seq]` buffers --
   the probabilities `P` (stored in training only because the backward read them), their gradient
-  `dP` and the score gradient `dS` -- give way to a per-row `D = sum (dO * O)` and two nests that
+  `dP` and the score gradient `dS` -- give way to a per-row `D = sum (dO * O)` and three nests that
   recompute each pair's `p = e / l`, `dp` and `ds = chain (p * (dp - D))` into scope locals, one
-  over the query rows for `dQ`, one over the keys for `dK` and `dV`. It reuses the `(m, l)` this
+  over the query rows for `dQ`, two over the keys for `dK` and `dV`. It reuses the `(m, l)` this
   forward saves rather than a log-sum-exp. A backward compiled without its forward declines (there
   is no normalizer to anchor on), as does one with the composed max gradient, an extra reader of a
   consumed gradient, a requested intermediate, or active dropout between `P` and the value pass.

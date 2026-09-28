@@ -1269,9 +1269,9 @@
 # `online_softmax` is off. Where the training step holds both the forward the rewrite turned into
 # a scan and the composed backward of `softmax (q * k^T) * v`, the backward's [seq, seq]
 # intermediates -- the probabilities, their gradient and the score gradient -- are replaced by a
-# per-row reduction `D = sum (dO * O)` and two nests that recompute each query-key pair's
+# per-row reduction `D = sum (dO * O)` and three nests that recompute each query-key pair's
 # probability and score gradient into scope locals: one over the query rows accumulating the query
-# gradient, one over the keys accumulating the key and value gradients. The score gradient is
+# gradient, two over the keys accumulating the key and the value gradients. The score gradient is
 # reassociated (`p * (dP - D)` against the composed `(dP / l + dl) * e`): results move within
 # rounding, which is why it is a numerics gate of its own -- off by default, on in the
 # `approximate` profile, pinned off in `reproducible`. A backward compiled as a routine of its own,

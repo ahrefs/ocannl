@@ -31,17 +31,18 @@
       pass the first two shapes matched -- [O] and [v]; [dO] from the reduction [dP += dO * v]; the
       chain from [dP] through [e.grad], [l.grad] and [n.grad = e.grad * e] to the score gradient
       [dS] the two contractions against the scores' operands [q] and [k] read -- it replaces every
-      [seq, seq] gradient buffer with a per-row [D = sum (dO * O)] into a minted node and two nests
-      recomputing each pair's [p], [dp] and [ds = chain (p * (dp - D))] into scope locals (the
+      [seq, seq] gradient buffer with a per-row [D = sum (dO * O)] into a minted node and three
+      nests recomputing each pair's [p], [dp] and [ds = chain (p * (dp - D))] into scope locals (the
       recovered elementwise chain -- the mask's [where], the scale -- applies to [ds] only, so a
       finite mask fill keeps its probabilities and their [dV]): one over the query rows accumulating
-      [q.grad], one over the keys accumulating [k.grad] and [v.grad], each owning what it writes.
-      The per-cell summation orders of the three gradients are the composed ones; [ds] reassociates
-      the composed [(dP / l + dl) * e], hence the numerics gate. It declines whole -- the backward
-      stays composed -- on anything it cannot prove: no normalizer in the routine, a composed max
-      gradient, another reader of a consumed gradient node, a requested (materialized) intermediate,
-      code the census cannot see in the span, a dead or partial loop, mixed precisions along either
-      chain, or an elementwise step between [e / l] and the value pass (active dropout).
+      [q.grad], one over the keys accumulating [k.grad], one over the keys accumulating [v.grad]
+      from [p] alone, each owning what it writes. The per-cell summation orders of the three
+      gradients are the composed ones; [ds] reassociates the composed [(dP / l + dl) * e], hence the
+      numerics gate. It declines whole -- the backward stays composed -- on anything it cannot
+      prove: no normalizer in the routine, a composed max gradient, another reader of a consumed
+      gradient node, a requested (materialized) intermediate, code the census cannot see in the
+      span, a dead or partial loop, mixed precisions along either chain, or an elementwise step
+      between [e / l] and the value pass (active dropout).
 
     What stays as it was: the score reduction [q * k^T] keeps its own placement decision -- the
     recompute cap [virtualize_max_inline_reduction] decides whether it is replayed at its two read

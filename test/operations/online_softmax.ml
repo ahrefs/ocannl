@@ -620,9 +620,9 @@ let () =
 
    With [online_softmax_backward] on as well, the training step's composed attention backward -- the
    probabilities' gradient [dP], the chain down to the score gradient [dS], each a [seq, seq] buffer
-   -- becomes a per-row reduction [D = sum (dO * O)] into a minted node and two nests recomputing
+   -- becomes a per-row reduction [D = sum (dO * O)] into a minted node and three nests recomputing
    each query-key pair's probability, [dP] cell and score gradient into scope locals: one over the
-   query rows accumulating the query gradient, one over the keys accumulating the key and value
+   query rows accumulating the query gradient, two over the keys accumulating the key and the value
    gradients. *)
 
 (* The fused backward's per-row [D]: the minted node the rewrite labels [bwd_rowdot]. *)
@@ -753,6 +753,45 @@ let () =
   let twice = Online_softmax.rewrite once in
   reset_gates ();
   p "the pass fuses the raw training step" (rowdot_writes once = 1);
+  (* Each gradient is written by one fused nest with ONE channel loop after its scalars -- the shape
+     the default GPU annotator's lane geometry reads (gh-ocannl-1003 stage 1) -- and dV's scalars
+     hold no loop (it needs [p] alone), where dQ's and dK's hold [dp]'s reduction. *)
+  let writes_to name stmt =
+    Ll_test.count_stmt stmt ~f:(function
+      | LL.Set { tn; _ } -> String.equal (Tn.debug_name tn) name
+      | _ -> false)
+    > 0
+  in
+  let rec preamble_then_one_loop ~loop_free = function
+    | LL.For_loop { body; _ } -> (
+        match
+          List.rev
+            (List.filter (LL.flat_lines [ body ]) ~f:(function
+              | LL.Noop | LL.Comment _ -> false
+              | _ -> true))
+        with
+        | [ single ] -> preamble_then_one_loop ~loop_free single
+        | LL.For_loop _ :: preamble ->
+            (not (List.is_empty preamble))
+            && List.for_all preamble ~f:(function
+              | LL.Declare_local _ | LL.Set_local _ -> true
+              | LL.For_loop _ -> not loop_free
+              | _ -> false)
+        | _ -> false)
+    | _ -> false
+  in
+  let fused_nests name =
+    List.filter (LL.flat_lines [ once ]) ~f:(fun s -> writes_to name s && rowdot_writes s = 0)
+  in
+  List.iter
+    [ ("q.grad", false); ("k.grad", false); ("v.grad", true) ]
+    ~f:(fun (name, loop_free) ->
+      p
+        (Printf.sprintf "%s: one fused nest, one channel loop after %s scalars" name
+           (if loop_free then "loop-free" else "its"))
+        (match fused_nests name with
+        | [ nest ] -> preamble_then_one_loop ~loop_free nest
+        | _ -> false));
   p "the pass is idempotent on the fused step" (LL.equal twice once);
   eprintf "sibling lowerings: %d hits, %d misses (not part of the golden)\n%!" (fst fused.cache)
     (snd fused.cache);

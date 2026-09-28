@@ -626,10 +626,11 @@ let hoist r ~ls (n : nest) : LL.t option =
    With [D = sum over the value width of dO * O] per row, [n.grad = P * (dP - D)] (the
    FlashAttention backward), so every pair's gradient is a function of [x], [m], [l], [dO], [v] and
    [D] alone: a per-row reduction into a minted node, then a nest over the query rows recomputing
-   [p], [dp] and [ds] per key into scope locals and accumulating [q.grad], and one over the keys
-   doing the same and accumulating [k.grad] and [v.grad]. Each nest's outer loops index what it
-   writes, so neither races; the per-cell summation orders of the three gradients are the composed
-   ones. *)
+   [p], [dp] and [ds] per key into scope locals and accumulating [q.grad], one over the keys doing
+   the same and accumulating [k.grad], and one over the keys recomputing [p] alone and accumulating
+   [v.grad]. Each nest's outer loops index what it writes, so none races, and each has one channel
+   loop after its scalars (the shape the default GPU annotator gives lanes); the per-cell summation
+   orders of the three gradients are the composed ones. *)
 
 let backward_override : bool option ref = ref None
 let set_backward_enabled b = backward_override := b
@@ -641,8 +642,8 @@ let backward_enabled () =
 
 let backward_provenance = Tn.Site "1002:fused-backward-row-dot"
 
-(* The per-row [D]: a node of [m]'s shape the backward's two nests both read, so it is stored --
-   never virtual, which would replay its reduction at every pair; whether it is routine scratch or a
+(* The per-row [D]: a node of [m]'s shape two of the backward's nests read, so it is stored -- never
+   virtual, which would replay its reduction at every pair; whether it is routine scratch or a
    buffer is the placements' call. *)
 let row_node ~label ~(like : Tn.t) prec =
   Hashtbl.find_or_add minted (like.Tn.uid, label) ~default:(fun () ->
@@ -1052,7 +1053,7 @@ let find_backward r (nz : normalizer) : backward option =
     List.filter (roles_of sg) ~f:(function Chan _ -> false | _ -> true)
     |> List.sort ~compare:compare_role
   in
-  let* b_pos, b_nest, b_env =
+  let* b_pos, b_nest, b_env, sig_vg =
     one
       (List.filter_map (outside_readers r p_tn) ~f:(fun pos ->
            let* n = Option.some_if (pos <> v_pos) () |> Option.bind ~f:(fun () -> r.nests.(pos)) in
@@ -1064,7 +1065,7 @@ let find_backward r (nz : normalizer) : backward option =
            let* sg = sign env n.idcs in
            Option.some_if
              (has_role sg (Chan 0) && List.equal equal_role (key_roles sg) (key_roles sig_kg))
-             (pos, n, env)))
+             (pos, n, env, sg)))
   in
   (* {2 The contract} *)
   let link_pos (pos, _, _, _, _, _) = pos in
@@ -1229,12 +1230,17 @@ let find_backward r (nz : normalizer) : backward option =
            Set { tn = d_node; idcs = idcs_of sym nz.sig_m; llsc = Get_local acc; debug = "" };
          ])
   in
-  (* One pair's scalars, outside the channel loops: [p] as the forward defines it, [dp] as A sums
-     it, and [ds] through the recovered chain. *)
-  let pair ~stop sym =
+  (* One pair's scalars, outside the channel loop: [p] as the forward defines it, instantiated at
+     this nest's subscripts down to [stop]; with [~grad], [dp] as A sums it and [ds] through the
+     recovered chain. Each nest stops the instantiation at a different node of the probability's
+     chain -- [e], [n], and past [x] to the scores' reduction -- because the visit cap counts a read
+     in a [Set_local] (and exempts one in a [Set] at its own write position): the scan already reads
+     [x], and a second counted read of any one node of the chain would store it as a [seq, seq]
+     buffer. *)
+  let pair ~stop ~grad sym =
     let p = get_scope p_node and dp = get_scope dp_node and ds = get_scope ds_node in
     let* p_val, _ =
-      unfold r ~stop:(stop @ [ nz.x; nz.m; nz.l ]) ~depth:8 (Get (p_tn, idcs_of sym sig_p))
+      unfold r ~stop:(stop @ [ nz.m; nz.l ]) ~depth:8 (Get (p_tn, idcs_of sym sig_p))
     in
     (* Read where the fused nests run: only nodes final there. *)
     let p_reads = ref [] in
@@ -1246,29 +1252,33 @@ let find_backward r (nz : normalizer) : backward option =
         p_val
     in
     let* () = Option.some_if (List.for_all !p_reads ~f:before_emit) () in
-    (* The value-width loop of [dp] binds its own symbol: the dV loop beside it in the key nest
-       iterates the same role, and a symbol bound twice makes the routine uncacheable. *)
-    let e_sym = Idx.get_symbol () in
-    let dp_sym = function Chan 0 -> e_sym | r -> sym r in
-    let* dp_term = transplant a_env dp_sym a_rhs in
-    let ds0 = mul (Get_local p) (sub (Get_local dp) (Get (d_node, idcs_of sym nz.sig_m))) in
-    let* ds_val =
-      List.fold links ~init:(Some ds0) ~f:(fun expr (_, _, env, rhs, cur, _) ->
-          let* expr = expr in
-          transplant env sym ~get:(side_get cur expr) rhs)
-    in
-    Some
-      ( [
-          Declare_local { id = p; needs_init = false };
-          Set_local (p, p_val);
-          Declare_local { id = dp; needs_init = false };
-          Set_local (dp, Constant 0.);
-          loop e_sym ext_v (Set_local (dp, add (Get_local dp) dp_term));
-          Declare_local { id = ds; needs_init = false };
-          Set_local (ds, ds_val);
-        ],
-        p,
-        ds )
+    let p_code = [ Declare_local { id = p; needs_init = false }; Set_local (p, p_val) ] in
+    if not grad then Some (p_code, p, ds)
+    else
+      (* [dp]'s value-width loop binds a symbol of its own: one bound by two sibling loops makes the
+         routine uncacheable. It sits in the lane-uniform preamble, which is why the dQ and dK nests
+         get no lane geometry from the default GPU annotator (a preamble must be loop-free, since
+         every lane would recompute it); see the gh-1002/1003 record. *)
+      let e_sym = Idx.get_symbol () in
+      let dp_sym = function Chan 0 -> e_sym | r -> sym r in
+      let* dp_term = transplant a_env dp_sym a_rhs in
+      let ds0 = mul (Get_local p) (sub (Get_local dp) (Get (d_node, idcs_of sym nz.sig_m))) in
+      let* ds_val =
+        List.fold links ~init:(Some ds0) ~f:(fun expr (_, _, env, rhs, cur, _) ->
+            let* expr = expr in
+            transplant env sym ~get:(side_get cur expr) rhs)
+      in
+      Some
+        ( p_code
+          @ [
+              Declare_local { id = dp; needs_init = false };
+              Set_local (dp, Constant 0.);
+              loop e_sym ext_v (Set_local (dp, add (Get_local dp) dp_term));
+              Declare_local { id = ds; needs_init = false };
+              Set_local (ds, ds_val);
+            ],
+          p,
+          ds )
   in
   let accumulate env sym (n : nest) ~replaced ~by =
     let* idcs = transplant_idcs env sym n.idcs in
@@ -1279,39 +1289,52 @@ let find_backward r (nz : normalizer) : backward option =
     in
     Some (Set { tn = n.tn; idcs; llsc; debug = "" })
   in
-  (* dQ: rows outer, keys inner. *)
+  (* Three nests, each owning what it writes, each with ONE channel loop after its scalars -- the
+     shape the default GPU annotator's lane geometry reads (gh-ocannl-1003 stage 1). dQ: the query
+     rows outer, the keys serial. *)
   let* dq_code =
-    let syms = symbols () in
-    let sym = sym_of syms in
-    let* pair_code, _, ds = pair ~stop:[ nz.e ] sym in
+    let sym = sym_of (symbols ()) in
+    let* pair_code, _, ds = pair ~stop:[ nz.e ] ~grad:true sym in
     let* dq = accumulate kq_env sym kq_nest ~replaced:ds_tn ~by:ds in
     Some
       (loops_over sym rows_extents
          (loop (sym Reduced) (extent nz.voc Reduced)
             (unflat_lines (pair_code @ [ loop (sym (Chan 1)) (extent kq_voc (Chan 1)) dq ]))))
   in
-  (* dK and dV: the key and the rows [k.grad] keeps outer, the query rows inner. *)
-  let* dkv_code =
-    let syms = symbols () in
-    let sym = sym_of syms in
-    let* pair_code, p, ds = pair ~stop:[ nz.n ] sym in
-    let* dk = accumulate kk_env sym kk_nest ~replaced:ds_tn ~by:ds in
-    let* dv = accumulate b_env sym b_nest ~replaced:p_tn ~by:p in
+  (* dK and dV: the key and the rows the target keeps outer, the other query rows serial. *)
+  let key_nest ~target_env ~(target : nest) ~sg body_of =
+    let sym = sym_of (symbols ()) in
     let outer =
-      List.filter_map kk_nest.loops ~f:(fun lp ->
-          match role_of kk_env lp.index with
+      List.filter_map target.loops ~f:(fun lp ->
+          match role_of target_env lp.index with
           | Some (Chan _) | None -> None
-          | Some r -> Option.some_if (has_role sig_kg r) (r, lp.to_))
+          | Some r -> Option.some_if (has_role sg r) (r, lp.to_))
     in
-    let inner = List.filter rows_extents ~f:(fun (r, _) -> not (has_role sig_kg r)) in
-    Some
-      (loops_over sym outer
-         (loops_over sym inner
-            (unflat_lines
-               (pair_code
-               @ [ loop (sym (Chan 1)) (extent kk_voc (Chan 1)) dk; loop (sym (Chan 0)) ext_v dv ]))))
+    let inner = List.filter rows_extents ~f:(fun (r, _) -> not (has_role sg r)) in
+    let* body = body_of sym in
+    Some (loops_over sym outer (loops_over sym inner (unflat_lines body)))
   in
-  Some { consumed = Set.to_list consumed; emit; code = unflat_lines [ d_code; dq_code; dkv_code ] }
+  let* dk_code =
+    key_nest ~target_env:kk_env ~target:kk_nest ~sg:sig_kg (fun sym ->
+        let* pair_code, _, ds = pair ~stop:[ nz.n ] ~grad:true sym in
+        let* dk = accumulate kk_env sym kk_nest ~replaced:ds_tn ~by:ds in
+        Some (pair_code @ [ loop (sym (Chan 1)) (extent kk_voc (Chan 1)) dk ]))
+  in
+  (* dV needs [p] alone: a loop-free preamble wherever the scores' placement leaves [p]'s
+     instantiation loop-free (the scores stored), hence lane-eligible. Its instantiation runs past
+     [x] to the scores' reduction. *)
+  let* dv_code =
+    key_nest ~target_env:b_env ~target:b_nest ~sg:sig_vg (fun sym ->
+        let* pair_code, p, _ = pair ~stop:[] ~grad:false sym in
+        let* dv = accumulate b_env sym b_nest ~replaced:p_tn ~by:p in
+        Some (pair_code @ [ loop (sym (Chan 0)) ext_v dv ]))
+  in
+  Some
+    {
+      consumed = Set.to_list consumed;
+      emit;
+      code = unflat_lines [ d_code; dq_code; dk_code; dv_code ];
+    }
 
 (* {1 The pass} *)
 

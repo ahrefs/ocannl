@@ -93,6 +93,9 @@ the backward gate off leaves the composed backward, whose seq^2 buffers the step
 under the recompute cap the fused step writes no seq^2-sized node at all (masked key prefixes included): true
 no argument of the fused routine is seq^2-sized: true
 the pass fuses the raw training step: true
+q.grad: one fused nest, one channel loop after its scalars: true
+k.grad: one fused nest, one channel loop after its scalars: true
+v.grad: one fused nest, one channel loop after loop-free scalars: true
 the pass is idempotent on the fused step: true
 re-lowering the fused step is an analysis-cache hit, not a miss: true
 --- leg 9b: head width above the recompute cap -- the scores are the one seq^2 buffer ---

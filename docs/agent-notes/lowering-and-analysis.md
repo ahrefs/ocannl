@@ -425,8 +425,8 @@ files.
   `online_softmax_backward`; `find_backward`): it anchors on the normalizer found in the SAME pass
   (a backward lowered alone declines), so it cannot be a later fixpoint round. Traps: (a) the visit
   cap exempts a read in a `Set` at its own write position but counts one in a `Set_local`, so the
-  scan plus two fused nests reading one node materialize it -- the dQ nest reads `e`, the dK+dV
-  nest `n`, one counted visit each; (b) a symbol bound by two sibling loops makes the routine
+  scan plus the fused nests reading one node materialize it -- the dQ, dK and dV nests read `e`,
+  `n` and the scores' reduction, one counted visit each; (b) a symbol bound by two sibling loops makes the routine
   uncacheable (`analysis_digest`), so mint one per loop; (c) Base's `Float.max_value` is infinity
   (`max_finite_value` is not): the forward's f64 floor was `-inf` until the f64 test here ran.
 
