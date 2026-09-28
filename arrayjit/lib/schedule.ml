@@ -5137,6 +5137,111 @@ let aligned_chains ?max_chain ?(expanded_zeros = []) (opt : Low_level.optimized)
                  | Low_level.For_loop fc -> Some (fc.index, fc.to_ + 1)
                  | _ -> None) )))
 
+(** {2 The launch-geometry predicate (gh-ocannl-709)}
+
+    One static reading of what a device permits of a launch's {e geometry}, so the pre-driver gate
+    below and autotune's seeding pre-filter ({!Autotune.Sketch_families}) cannot disagree about a
+    cap. Before this the two encoded the caps independently: the gate covered five dimensions and
+    the seeder pre-filtered exactly one of them, which is how a search could only learn the other
+    four one wasted compile at a time. The caps live here; what a caller supplies is a geometry, and
+    the two callers differ only in where their geometry comes from — the gate reads it off the
+    lowered code ({!Low_level.launch_dims}), the seeder predicts it from the parameters it is about
+    to commit to. *)
+
+type launch_geometry = {
+  lg_grid_y : int option;
+  lg_grid_z : int option;
+  lg_block_x : int option;
+  lg_block_y : int option;
+  lg_block_z : int option;
+}
+(** As much of a candidate's launch geometry as its caller knows; [None] is "not predicted here",
+    and exempts that dimension rather than refusing on it. Five fields, not six: [grid.(0)] is
+    2^31-scale on every backend that binds hardware axes, so no backend has a cap to report for it
+    (the same reason the gate's table has five rows). A seeder's prediction is a {e lower bound} —
+    it describes the site's own nest, while [Low_level.launch_dims] maxes over the kernel's zeroing
+    and companion nests too — so an under-prediction costs a compile the gate then declines, and
+    only an over-prediction could withhold a legal candidate. *)
+
+let unknown_launch_geometry =
+  { lg_grid_y = None; lg_grid_z = None; lg_block_x = None; lg_block_y = None; lg_block_z = None }
+
+let launch_geometry_of_dims (dims : Low_level.launch_dims) =
+  {
+    lg_grid_y = Some dims.grid.(1);
+    lg_grid_z = Some dims.grid.(2);
+    lg_block_x = Some dims.block.(0);
+    lg_block_y = Some dims.block.(1);
+    lg_block_z = Some dims.block.(2);
+  }
+
+type launch_excess = {
+  lx_resource : Schedule_outcome.resource;
+  lx_requested : int;
+  lx_limit : int;
+  lx_phrase : string;
+}
+(** The first dimension of a geometry the device refuses. [lx_phrase] is the verb phrase both
+    callers render — "requests a .z workgroup extent of 128, exceeding the device limit of 64" — so
+    the gate's [detail] and the seeder's refutation witness say the same thing about the same
+    candidate, and a reader comparing a decline log against a refutation log sees one sentence. *)
+
+let launch_geometry_excess ~(limits : Backend_intf.hardware_limits) (geom : launch_geometry) :
+    launch_excess option =
+  let wg f = Option.map limits.max_workgroup_dims ~f in
+  let requests what requested limit =
+    [%string "requests a %{what} of %{requested#Int}, exceeding the device limit of %{limit#Int}"]
+  in
+  (* One row per hardware dimension, enumerated rather than hand-written per bound: an ungated
+     dimension is a missing ROW, visible beside its neighbours, instead of an absence. That is how
+     [gridDim.y] came to be ungated for a release (gh-ocannl-643 gated the fold,
+     lukstafi/ocannl-staging#397 added the row blocks) and how the workgroup's per-dimension caps
+     came to be missing entirely (gh-ocannl-679). *)
+  let rows =
+    [
+      (* The workgroup's own dimensions: a separate hardware fact from the thread PRODUCT cap
+         ([max_threads_per_workgroup], checked by the gate alone since it is not a geometry
+         question), and CUDA's [.z] cap of 64 sits 16x below its product cap, so a legal-product
+         workgroup with a deep [.z] passes every other check and dies at the driver. [Workgroup]
+         slots are capped at 3, so these three rows are exhaustive. *)
+      ( wg (fun (x, _, _) -> x),
+        geom.lg_block_x,
+        Schedule_outcome.Workgroup_x_extent,
+        requests ".x workgroup extent" );
+      ( wg (fun (_, y, _) -> y),
+        geom.lg_block_y,
+        Schedule_outcome.Workgroup_y_extent,
+        requests ".y workgroup extent" );
+      ( wg (fun (_, _, z) -> z),
+        geom.lg_block_z,
+        Schedule_outcome.Workgroup_z_extent,
+        requests ".z workgroup extent" );
+      (* [.y] is the grid slot-1 extent — the row-block count of a blocktiled matmul, which grows
+         with the site's m-extent rather than with any fold: at [bm = 16] an m-extent past ~1M rows
+         is already over the cap. *)
+      (limits.max_grid_yz, geom.lg_grid_y, Schedule_outcome.Grid_y_extent, requests ".y grid extent");
+      (* The [.z] grid fold (gh-ocannl-643) multiplies every Grid slot [>= 2] into [grid.(2)]. *)
+      ( limits.max_grid_yz,
+        geom.lg_grid_z,
+        Schedule_outcome.Grid_z_extent,
+        fun requested limit ->
+          [%string
+            "folds grid slots >= 2 to a .z extent of %{requested#Int}, exceeding the device limit \
+             of %{limit#Int}"] );
+    ]
+  in
+  List.find_map rows ~f:(fun (cap, requested, resource, phrase) ->
+      match (cap, requested) with
+      | Some limit, Some requested when requested > limit ->
+          Some
+            {
+              lx_resource = resource;
+              lx_requested = requested;
+              lx_limit = limit;
+              lx_phrase = phrase requested limit;
+            }
+      | _ -> None)
+
 (* The configured block size is a target; the device's capacity is a hard cap. Two hardware facts,
    not one (gh-ocannl-679): the workgroup's thread PRODUCT ([max_threads_per_workgroup]) and its
    per-dimension bound ([max_workgroup_dims]) — on CUDA the latter's [.z] entry is 16x below the
@@ -6074,111 +6179,6 @@ let maybe_default_schedules ~backend_name ?(limits = Backend_intf.no_hardware_li
          producer nest costs little next to CPU cores but is catastrophic next to GPU threads, and
          keeping CPU placements unchanged keeps small-routine codegen stable. *)
       fission_default ~promote_locals:gpu ~preset ~zero_sched ~static_indices opt
-
-(** {2 The launch-geometry predicate (gh-ocannl-709)}
-
-    One static reading of what a device permits of a launch's {e geometry}, so the pre-driver gate
-    below and autotune's seeding pre-filter ({!Autotune.Sketch_families}) cannot disagree about a
-    cap. Before this the two encoded the caps independently: the gate covered five dimensions and
-    the seeder pre-filtered exactly one of them, which is how a search could only learn the other
-    four one wasted compile at a time. The caps live here; what a caller supplies is a geometry, and
-    the two callers differ only in where their geometry comes from — the gate reads it off the
-    lowered code ({!Low_level.launch_dims}), the seeder predicts it from the parameters it is about
-    to commit to. *)
-
-type launch_geometry = {
-  lg_grid_y : int option;
-  lg_grid_z : int option;
-  lg_block_x : int option;
-  lg_block_y : int option;
-  lg_block_z : int option;
-}
-(** As much of a candidate's launch geometry as its caller knows; [None] is "not predicted here",
-    and exempts that dimension rather than refusing on it. Five fields, not six: [grid.(0)] is
-    2^31-scale on every backend that binds hardware axes, so no backend has a cap to report for it
-    (the same reason the gate's table has five rows). A seeder's prediction is a {e lower bound} —
-    it describes the site's own nest, while [Low_level.launch_dims] maxes over the kernel's zeroing
-    and companion nests too — so an under-prediction costs a compile the gate then declines, and
-    only an over-prediction could withhold a legal candidate. *)
-
-let unknown_launch_geometry =
-  { lg_grid_y = None; lg_grid_z = None; lg_block_x = None; lg_block_y = None; lg_block_z = None }
-
-let launch_geometry_of_dims (dims : Low_level.launch_dims) =
-  {
-    lg_grid_y = Some dims.grid.(1);
-    lg_grid_z = Some dims.grid.(2);
-    lg_block_x = Some dims.block.(0);
-    lg_block_y = Some dims.block.(1);
-    lg_block_z = Some dims.block.(2);
-  }
-
-type launch_excess = {
-  lx_resource : Schedule_outcome.resource;
-  lx_requested : int;
-  lx_limit : int;
-  lx_phrase : string;
-}
-(** The first dimension of a geometry the device refuses. [lx_phrase] is the verb phrase both
-    callers render — "requests a .z workgroup extent of 128, exceeding the device limit of 64" — so
-    the gate's [detail] and the seeder's refutation witness say the same thing about the same
-    candidate, and a reader comparing a decline log against a refutation log sees one sentence. *)
-
-let launch_geometry_excess ~(limits : Backend_intf.hardware_limits) (geom : launch_geometry) :
-    launch_excess option =
-  let wg f = Option.map limits.max_workgroup_dims ~f in
-  let requests what requested limit =
-    [%string "requests a %{what} of %{requested#Int}, exceeding the device limit of %{limit#Int}"]
-  in
-  (* One row per hardware dimension, enumerated rather than hand-written per bound: an ungated
-     dimension is a missing ROW, visible beside its neighbours, instead of an absence. That is how
-     [gridDim.y] came to be ungated for a release (gh-ocannl-643 gated the fold,
-     lukstafi/ocannl-staging#397 added the row blocks) and how the workgroup's per-dimension caps
-     came to be missing entirely (gh-ocannl-679). *)
-  let rows =
-    [
-      (* The workgroup's own dimensions: a separate hardware fact from the thread PRODUCT cap
-         ([max_threads_per_workgroup], checked by the gate alone since it is not a geometry
-         question), and CUDA's [.z] cap of 64 sits 16x below its product cap, so a legal-product
-         workgroup with a deep [.z] passes every other check and dies at the driver. [Workgroup]
-         slots are capped at 3, so these three rows are exhaustive. *)
-      ( wg (fun (x, _, _) -> x),
-        geom.lg_block_x,
-        Schedule_outcome.Workgroup_x_extent,
-        requests ".x workgroup extent" );
-      ( wg (fun (_, y, _) -> y),
-        geom.lg_block_y,
-        Schedule_outcome.Workgroup_y_extent,
-        requests ".y workgroup extent" );
-      ( wg (fun (_, _, z) -> z),
-        geom.lg_block_z,
-        Schedule_outcome.Workgroup_z_extent,
-        requests ".z workgroup extent" );
-      (* [.y] is the grid slot-1 extent — the row-block count of a blocktiled matmul, which grows
-         with the site's m-extent rather than with any fold: at [bm = 16] an m-extent past ~1M rows
-         is already over the cap. *)
-      (limits.max_grid_yz, geom.lg_grid_y, Schedule_outcome.Grid_y_extent, requests ".y grid extent");
-      (* The [.z] grid fold (gh-ocannl-643) multiplies every Grid slot [>= 2] into [grid.(2)]. *)
-      ( limits.max_grid_yz,
-        geom.lg_grid_z,
-        Schedule_outcome.Grid_z_extent,
-        fun requested limit ->
-          [%string
-            "folds grid slots >= 2 to a .z extent of %{requested#Int}, exceeding the device limit \
-             of %{limit#Int}"] );
-    ]
-  in
-  List.find_map rows ~f:(fun (cap, requested, resource, phrase) ->
-      match (cap, requested) with
-      | Some limit, Some requested when requested > limit ->
-          Some
-            {
-              lx_resource = resource;
-              lx_requested = requested;
-              lx_limit = limit;
-              lx_phrase = phrase requested limit;
-            }
-      | _ -> None)
 
 let check_hardware_limits_classified ~name ~(limits : Backend_intf.hardware_limits)
     (opt : Low_level.optimized) : unit =
