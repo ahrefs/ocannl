@@ -173,6 +173,22 @@
 #      its log names (an inline-expect rule's names only its `.ml`). A log
 #      longer than the digest's scan window is never "nothing to promote",
 #      and a repeat set red on drift alone is not called a failed action.
+#      Since gh-ocannl-1087 these read the log only as the fallback, for a run
+#      that recorded no promotion list (legs 71-73).
+#  71-73 sit after leg 69: the run's last phase records dune's own promotion
+#      list, and the digest reads it (gh-ocannl-1087).
+#  71. the record decides whatever the log shows: a listed file under a
+#      suppressed diff is promotion, named; a hunk over an empty list is not;
+#      a green run says nothing; `status`/`wait` read the same record; the
+#      list's stream follows dune's version (stderr before 3.22), CRs are
+#      dropped, a long list is cut only in the digest, and a dune killed by a
+#      signal keeps the status an exec'd one would have.
+#  72. no record, and the log decides, where the list cannot be taken
+#      faithfully: it fails, a line is not a path here, the version is
+#      unreadable, the argv names another build directory or root (dune not
+#      asked), or the cap is nearly spent; a missing build directory, also
+#      under DUNE_BUILD_DIR's name, is an empty record asked of nobody.
+#  73. a refused slot or a cancelled run never reads a recorded list.
 #  70 sits at the very end, after every leg that fakes a device: a leg that
 #      names no device probe still reads the harness's absent defaults, the
 #      width-cap probes answer "no device" through the shipping readers, and
@@ -1106,6 +1122,9 @@ chmod +x "$repeat_root/tools/test-run.sh"
 # records the argv it was asked about and prints FAKE_REACH (by default: no
 # stanza naming a backend).
 mkdir -p "$repeat_root/test/config" "$repeat_root/arrayjit/test"
+# A build directory, as any worktree that has built has: without one the run's
+# last phase records an empty promotion list without asking dune (gh-ocannl-1087).
+mkdir -p "$repeat_root/_build"
 batch_reader=$TMP/fake-read-config.sh
 cat >"$batch_reader" <<'FAKE'
 #!/usr/bin/env bash
@@ -1754,6 +1773,34 @@ lock_probe() {
   fi
 }
 lock_probe
+# The run's last phase asks dune for its version and its promotion list
+# (gh-ocannl-1087), still under the lock. The version is
+# REPEAT_TEST_DUNE_VERSION (3.24.2 by default; `fail` fails). The list is the
+# lines of the file REPEAT_TEST_PROMOTIONS names, printed on stdout from 3.22
+# and on stderr before, as dune does, with REPEAT_TEST_PROMOTION_NOISE on the
+# other stream; unset, the list fails, so every leg that sets none digests
+# from the log. Neither query is counted or recorded among the calls every leg
+# pins; the list's argv goes to REPEAT_TEST_PROMOTION_CALLS when that is set.
+if [ "${1:-}" = --version ]; then
+  [ "${REPEAT_TEST_DUNE_VERSION:-}" != fail ] || exit 1
+  printf '%s\n' "${REPEAT_TEST_DUNE_VERSION:-3.24.2}"
+  exit 0
+fi
+if [ "${1:-}" = promotion ]; then
+  [ -z "${REPEAT_TEST_PROMOTION_CALLS:-}" ] || printf '%s\n' "$*" >>"$REPEAT_TEST_PROMOTION_CALLS"
+  [ -n "${REPEAT_TEST_PROMOTIONS:-}" ] || exit 1
+  case ${REPEAT_TEST_DUNE_VERSION:-3.24.2} in
+    3.2[01].* | 3.1[0-9].*)
+      cat "$REPEAT_TEST_PROMOTIONS" >&2
+      [ -z "${REPEAT_TEST_PROMOTION_NOISE:-}" ] || printf '%s\n' "$REPEAT_TEST_PROMOTION_NOISE"
+      ;;
+    *)
+      cat "$REPEAT_TEST_PROMOTIONS"
+      [ -z "${REPEAT_TEST_PROMOTION_NOISE:-}" ] || printf '%s\n' "$REPEAT_TEST_PROMOTION_NOISE" >&2
+      ;;
+  esac
+  exit 0
+fi
 # Repeat establishes a fresh context with `dune clean` before each measured
 # invocation. The fixture keeps setup out of the iteration count and streams.
 if [ "${1:-}" = clean ]; then
@@ -1891,6 +1938,9 @@ case $REPEAT_TEST_MODE in
     printf '@@ -1 +1 @@\n-old line\n+new line\n' >&2
     yes 'noise from a parallel action' | head -c 10500000
     exit 1 ;;
+  # A dune killed by a signal, not by its caller: the run's last phase must
+  # exit with the status an exec'd dune would have had (gh-ocannl-1087).
+  self_kill) kill -KILL $$ ;;
   *) echo "unknown repeat fixture mode: $REPEAT_TEST_MODE" >&2; exit 92 ;;
 esac
 EOF
@@ -3423,6 +3473,258 @@ if [ "$repeat_rc" = 1 ] && [ "$argv_rc" = 1 ] \
   report 0 "$drift_label"
 else
   report 1 "$drift_label" "repeat exit $repeat_rc: $repeat_out; wait exit $argv_rc: $argv_out"
+fi
+
+# Legs 71-73 (gh-ocannl-1087): the run's last phase records dune's own
+# promotion list (`dune promotion list`) as `promotions`, and the digest reads
+# that record in place of the log -- the log inference of legs 68-69 is only
+# the fallback for runs that recorded none. The fixture dune answers the list
+# from a file (REPEAT_TEST_PROMOTIONS), on the stream its faked version uses.
+promo_lists=$TMP/promotion-lists
+mkdir -p "$promo_lists" "$repeat_root/test/operations"
+printf 'test/operations/fixture.expected\n' >"$promo_lists/one"
+: >"$promo_lists/empty"
+printf 'test/operations/fixture.expected\r\ntest/operations/other.expected\r\n' >"$promo_lists/crlf"
+printf 'test/operations/fixture.expected\ntest/operations/other.expected\n' >"$promo_lists/crlf-want"
+for ((i = 1; i <= 23; i++)); do printf 'test/operations/f%02d.expected\n' "$i"; done >"$promo_lists/many"
+printf 'no/such/dir/fixture.expected\n' >"$promo_lists/absent-dir"
+printf 'test/operations/fixture.expected\n/abs/elsewhere.expected\n' >"$promo_lists/absolute"
+promo_present="promotion diffs present -- dune's promotion list at the run's end names"
+promo_empty="dune's promotion list at the run's end is empty, nothing to promote"
+promo_calls=$TMP/promotion-calls
+promo_any() { # <run dir>; 0 iff the record, or any scratch file of its, is there
+  local f
+  for f in "$1"/promotions*; do [ -e "$f" ] && return 0; done
+  return 1
+}
+promo_probe() { # tag list-name mode subcommand [argv...]; the list file may be "unset"
+  local tag=$1 list=$2 mode=$3
+  shift 3
+  : >"$promo_calls"
+  if [ "$list" = unset ]; then
+    REPEAT_TEST_PROMOTION_CALLS=$promo_calls argv_mode=$mode argv_probe "$tag" "$@"
+  else
+    REPEAT_TEST_PROMOTIONS=$promo_lists/$list REPEAT_TEST_PROMOTION_CALLS=$promo_calls \
+      argv_mode=$mode argv_probe "$tag" "$@"
+  fi
+  argv_mode=
+}
+
+# Leg 71: the record decides, whatever the log shows. A log with no hunk (a
+# suppressed diff, on the command line too) over a nonempty list is promotion,
+# listed file by file, never "possible" or "no diff"; a hunk over an empty list
+# is not promotion; a green run with an empty list says nothing. `status` and
+# `wait` read the same record. dune before 3.22 prints the list on stderr, and
+# a line on the other stream is not part of it either way; CRs are dropped; a
+# long list is cut at 20 in the digest, never in the record. A dune killed by
+# a signal leaves the status an exec'd one would have, and that verdict does
+# not read the record.
+rec_label="dune's recorded promotion list decides the digest, whatever the log shows"
+rec_detail=
+promo_probe rec-suppressed one diff_suppressed run build @cheap
+case $argv_rc:$argv_out in
+  1:*"$promo_present 1 file(s)"*"  test/operations/fixture.expected"*) ;;
+  *) rec_detail="suppressed diff over a listed file: exit $argv_rc: $argv_out" ;;
+esac
+[ -n "$rec_detail" ] || case $argv_out in
+  *"no diff)"* | *"promotions possible"* | *"diffs possible"* | *"$promo_empty"*)
+    rec_detail="suppressed diff: the log was read as well: $argv_out" ;;
+esac
+[ -n "$rec_detail" ] || cmp -s "$argv_dir/promotions" "$promo_lists/one" ||
+  rec_detail="suppressed diff: the record is not dune's list: $(cat "$argv_dir/promotions" 2>&1)"
+[ -n "$rec_detail" ] || [ "$(cat "$promo_calls")" = "promotion list --trace-file=$argv_dir/promotions.trace" ] ||
+  rec_detail="the list was not asked for once, with its own trace file: $(cat "$promo_calls")"
+[ -n "$rec_detail" ] || { [ ! -e "$argv_dir/promotions.trace" ] && [ ! -e "$argv_dir/promotions.tmp" ] &&
+                          [ ! -e "$argv_dir/promotions.list" ]; } ||
+  rec_detail="the recorder left its scratch files: $(ls "$argv_dir" | tr '\n' ' ')"
+if [ -z "$rec_detail" ]; then
+  argv_runs=$TMP/argv-runs-rec-suppressed argv_probe rec-suppressed-status status last
+  case $argv_rc:$argv_out in
+    0:*"$promo_present 1 file(s)"*) ;;
+    *) rec_detail="status last: exit $argv_rc: $argv_out" ;;
+  esac
+  argv_runs=$TMP/argv-runs-rec-suppressed argv_probe rec-suppressed-wait wait last
+  case $argv_rc:$argv_out in
+    1:*"$promo_present 1 file(s)"*) ;;
+    *) rec_detail="${rec_detail:+$rec_detail; }wait last: exit $argv_rc: $argv_out" ;;
+  esac
+  argv_runs=
+fi
+if [ -z "$rec_detail" ]; then
+  promo_probe rec-diff-command one diff_suppressed run build --diff-command - @cheap
+  case $argv_out in
+    *"$promo_present 1 file(s)"*) ;;
+    *) rec_detail="a chosen diff command over a listed file: $argv_out" ;;
+  esac
+fi
+if [ -z "$rec_detail" ]; then
+  promo_probe rec-hunk-empty empty diff_hunk run build @cheap
+  case $argv_rc:$argv_out in
+    *"promotion diffs present"*) rec_detail="a hunk over an empty list offered promotion: $argv_out" ;;
+    1:*"action failed -- $promo_empty"*) ;;
+    *) rec_detail="a hunk over an empty list: exit $argv_rc: $argv_out" ;;
+  esac
+  [ -n "$rec_detail" ] || { [ -f "$argv_dir/promotions" ] && [ ! -s "$argv_dir/promotions" ]; } ||
+    rec_detail="an empty list is not recorded as an empty file"
+fi
+if [ -z "$rec_detail" ]; then
+  promo_probe rec-green empty stable run build @cheap
+  case $argv_rc:$argv_out in
+    0:*promot*) rec_detail="a green run with an empty list mentioned promotion: $argv_out" ;;
+    0:*) ;;
+    *) rec_detail="a green run: exit $argv_rc: $argv_out" ;;
+  esac
+fi
+if [ -z "$rec_detail" ]; then
+  REPEAT_TEST_DUNE_VERSION=3.20.2 REPEAT_TEST_PROMOTION_NOISE='chatter on stdout' \
+    promo_probe rec-old-stream one diff_suppressed run build @cheap
+  cmp -s "$argv_dir/promotions" "$promo_lists/one" ||
+    rec_detail="dune 3.20 (stderr): recorded $(cat "$argv_dir/promotions" 2>&1)"
+  REPEAT_TEST_PROMOTION_NOISE='Warning: chatter on stderr' \
+    promo_probe rec-new-stream one diff_suppressed run build @cheap
+  cmp -s "$argv_dir/promotions" "$promo_lists/one" ||
+    rec_detail="${rec_detail:+$rec_detail; }dune 3.24 (stdout): recorded $(cat "$argv_dir/promotions" 2>&1)"
+  promo_probe rec-crlf crlf diff_suppressed run build @cheap
+  cmp -s "$argv_dir/promotions" "$promo_lists/crlf-want" ||
+    rec_detail="${rec_detail:+$rec_detail; }CRLF list: recorded $(od -c "$argv_dir/promotions" 2>&1 | head -3)"
+fi
+if [ -z "$rec_detail" ]; then
+  promo_probe rec-many many diff_suppressed run build @cheap
+  case $argv_out in
+    *"$promo_present 23 file(s)"*"  test/operations/f20.expected"*"  ... and 3 more, in $argv_dir/promotions"*) ;;
+    *) rec_detail="a long list: $argv_out" ;;
+  esac
+  case $argv_out in
+    *f21.expected*) rec_detail="a long list is not cut at 20: $argv_out" ;;
+  esac
+  [ -n "$rec_detail" ] || cmp -s "$argv_dir/promotions" "$promo_lists/many" ||
+    rec_detail="a long list is cut in the record itself"
+fi
+if [ -z "$rec_detail" ]; then
+  promo_probe rec-self-kill one self_kill run build @cheap
+  case $argv_rc:$argv_out in
+    *"promotion diffs present"*) rec_detail="a KILLED run read the record: $argv_out" ;;
+    137:*"verdict: KILLED"*) ;;
+    *) rec_detail="a dune killed by SIGKILL: exit $argv_rc (want 137): $argv_out" ;;
+  esac
+  [ -n "$rec_detail" ] || [ "$(cat "$argv_dir/exit" 2>/dev/null)" = 137 ] ||
+    rec_detail="a dune killed by SIGKILL: recorded $(cat "$argv_dir/exit" 2>&1)"
+fi
+if [ -z "$rec_detail" ]; then
+  report 0 "$rec_label"
+else
+  report 1 "$rec_label" "$rec_detail"
+fi
+
+# Leg 72: no record where the list cannot be taken faithfully, and the log
+# decides as before: the list failing, a line that is not a path here (a
+# directory this worktree lacks, an absolute path), an unreadable version, an
+# argv naming another build directory or root (dune not even asked; past
+# dune's own `--` the words are a program's, and the list is taken), and a cap
+# too nearly spent to ask. A missing build directory is an empty record,
+# asked of nobody -- under DUNE_BUILD_DIR's name too.
+norec_label="no record where dune's list cannot be taken faithfully; the log decides as before"
+norec_detail=
+for probe in "unset|diff_hunk|present|" \
+             "absent-dir|diff_suppressed|nodiff|" \
+             "absolute|diff_suppressed|nodiff|" \
+             "one|diff_suppressed|nodiff|fail"; do
+  IFS='|' read -r list mode want version <<<"$probe"
+  REPEAT_TEST_DUNE_VERSION=$version promo_probe "norec-$list-$mode" "$list" "$mode" run build @cheap
+  case $want:$argv_out in
+    present:*"promotion diffs present -- inspect the log"*) ;;
+    nodiff:*"action failed (no diff)"*) ;;
+    *) norec_detail="$list/$mode/${version:-default}: want the log's $want: $argv_out"; break ;;
+  esac
+  if promo_any "$argv_dir"; then
+    norec_detail="$list/$mode/${version:-default}: recorded anyway: $(ls "$argv_dir" | tr '\n' ' ')"; break
+  fi
+done
+if [ -z "$norec_detail" ]; then
+  for argv in "build --build-dir=elsewhere @cheap" "build --bu elsewhere @cheap" "build --root . @cheap"; do
+    # shellcheck disable=SC2086
+    promo_probe norec-build-root one diff_suppressed run $argv
+    if [ -e "$argv_dir/promotions" ] || [ -s "$promo_calls" ]; then
+      norec_detail="$argv: recorded or asked: $(cat "$promo_calls")"; break
+    fi
+    case $argv_out in
+      *"action failed (no diff)"*) ;;
+      *) norec_detail="$argv: the log did not decide: $argv_out"; break ;;
+    esac
+  done
+fi
+if [ -z "$norec_detail" ]; then
+  promo_probe norec-past-separator one stable run exec ./prog.exe -- --build-dir=elsewhere
+  cmp -s "$argv_dir/promotions" "$promo_lists/one" ||
+    norec_detail="--build-dir past dune's own --: not recorded ($(cat "$promo_calls"))"
+fi
+if [ -z "$norec_detail" ]; then
+  promo_probe norec-cap-spent one stable run --cap 5 build @cheap
+  if [ "$argv_rc" != 0 ] || [ -e "$argv_dir/promotions" ] || [ -s "$promo_calls" ]; then
+    norec_detail="a nearly spent cap: exit $argv_rc; asked: $(cat "$promo_calls"); $(ls "$argv_dir" | tr '\n' ' ')"
+  fi
+fi
+if [ -z "$norec_detail" ]; then
+  mv "$repeat_root/_build" "$repeat_root/_build.away"
+  promo_probe norec-no-build-dir one diff_suppressed run build @cheap
+  mv "$repeat_root/_build.away" "$repeat_root/_build"
+  { [ -f "$argv_dir/promotions" ] && [ ! -s "$argv_dir/promotions" ] && [ ! -s "$promo_calls" ] \
+    && [ ! -e "$repeat_root/_build.away" ]; } ||
+    norec_detail="no build directory: asked $(cat "$promo_calls"); record: $(cat "$argv_dir/promotions" 2>&1)"
+  case $argv_out in
+    *"action failed -- $promo_empty"*) ;;
+    *) norec_detail="${norec_detail:+$norec_detail; }no build directory: $argv_out" ;;
+  esac
+fi
+if [ -z "$norec_detail" ]; then
+  DUNE_BUILD_DIR=$TMP/no-such-build-dir promo_probe norec-env-absent one stable run build @cheap
+  { [ -f "$argv_dir/promotions" ] && [ ! -s "$argv_dir/promotions" ] && [ ! -s "$promo_calls" ]; } ||
+    norec_detail="DUNE_BUILD_DIR naming no directory: asked $(cat "$promo_calls")"
+  mkdir -p "$TMP/other-build-dir"
+  mv "$repeat_root/_build" "$repeat_root/_build.away"
+  DUNE_BUILD_DIR=$TMP/other-build-dir promo_probe norec-env-present one stable run build @cheap
+  mv "$repeat_root/_build.away" "$repeat_root/_build"
+  cmp -s "$argv_dir/promotions" "$promo_lists/one" ||
+    norec_detail="${norec_detail:+$norec_detail; }DUNE_BUILD_DIR naming a directory, _build absent: not asked"
+fi
+if [ -z "$norec_detail" ]; then
+  report 0 "$norec_label"
+else
+  report 1 "$norec_label" "$norec_detail"
+fi
+
+# Leg 73: a verdict dune did not give never reads the record -- the list a run
+# that ran nothing finds is an older build's. Forged from a recorded run with
+# a stale list: a refused slot (exit 1 under a `slot` record and the slot's
+# refusal line) and a cancellation (143).
+stale_label="a refused slot or a cancelled run never reads a recorded list"
+stale_detail=
+promo_probe stale-source one diff_suppressed run build @cheap
+stale_src=$argv_dir
+stale_runs=$(dirname "$stale_src")
+for probe in "slot|1|SLOT REFUSED|1" "cancel|143|CANCELLED|2"; do
+  IFS='|' read -r kind code want n <<<"$probe"
+  forged=$stale_runs/20000101T00000${n}Z-99$n
+  rm -rf "$forged"
+  cp -R "$stale_src" "$forged"
+  printf '%s\n' "$code" >"$forged/exit"
+  if [ "$kind" = slot ]; then
+    printf '%s\n' "$TMP/no-fleet-worker.sh" >"$forged/slot"
+    printf 'EXECUTION SLOT REFUSED fixture: no slot before the deadline\nexit: 1\n' >"$forged/log"
+  else
+    printf 'exit: 143\n' >"$forged/log"
+  fi
+  out=$(OCANNL_TOOL_TEST_RUNS=$stale_runs "$repeat_root/tools/test-run.sh" status "$forged" 2>&1)
+  case $out in
+    *promot*) stale_detail="$kind: the record was read: $out"; break ;;
+    *"verdict: $want"*) ;;
+    *) stale_detail="$kind: want $want: $out"; break ;;
+  esac
+done
+if [ -z "$stale_detail" ]; then
+  report 0 "$stale_label"
+else
+  report 1 "$stale_label" "$stale_detail"
 fi
 
 # The guard from leg 26 is not made redundant by the digest: it knows the
