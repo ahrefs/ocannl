@@ -279,6 +279,7 @@ let () =
            module Rec = struct include struct include Sample end end\n" );
         ("selected.cudajit.ml", "include Sample\n");
         ("inside.ml", "include Sample\nlet own = alias\n");
+        ("local.ml", "let a = let module L = struct include Sample end in L.included\n");
         ( "user.ml",
           "let a = Twice.x\n\
            let b = Wrapper.Inner.pair\n\
@@ -291,8 +292,8 @@ let () =
   in
   Verdict.p_all
     "includers are receivers transitively, nested, through aliases and select alternatives, \
-     opened, and below the include itself"
-    [ "x"; "pair"; "extended"; "public_pair"; "primitive"; "equal_named"; "alias" ]
+     opened, below the include itself, and local to an expression"
+    [ "x"; "pair"; "extended"; "public_pair"; "primitive"; "equal_named"; "alias"; "included" ]
     ~f:(referenced through_includers);
   let unrelated =
     refs

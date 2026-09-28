@@ -19,19 +19,20 @@
     their last qualifier, and an includer that shadows an included value still credits it. These
     choices can hide a dead export through a false positive, but cannot falsely reject an ordinary
     use, save through an include this reader does not follow: of a functor application, or inside a
-    functor body. Values generated for top-level types by [of_sexp], [compare], and [equal]
-    derivings are included (a standalone [of_sexp] deriving as much as the [of_sexp] half of
-    [sexp]); their expression extensions count as references without needing to spell the generated
-    value. The [sexp_of] converters -- derived or hand-written, recognized by the [sexp_of_] name
-    prefix -- are excluded by policy: they are the entry point for debugging and observability, and
-    consumed as often through [ppx_minidebug]'s typed log annotations, which expand to converter
-    calls this source-level census cannot see, as through spelled references. A [sexp_of] with no
-    caller costs nothing and cannot drift from its type, while removing it to satisfy a ratchet only
-    takes the converter away from the next debugging session. Values introduced by other PPX
-    expansions or by an [include] of another module inside the defining module remain outside this
-    source-level census. A bare [include struct ... end] declares into the module and is read like
-    top-level items; a constrained [include (struct ... end : S)] carries its own interface, which
-    publishes deliberately, so like a module with an [.mli] it is not censused. *)
+    functor body or an anonymous structure. Values generated for top-level types by [of_sexp],
+    [compare], and [equal] derivings are included (a standalone [of_sexp] deriving as much as the
+    [of_sexp] half of [sexp]); their expression extensions count as references without needing to
+    spell the generated value. The [sexp_of] converters -- derived or hand-written, recognized by
+    the [sexp_of_] name prefix -- are excluded by policy: they are the entry point for debugging and
+    observability, and consumed as often through [ppx_minidebug]'s typed log annotations, which
+    expand to converter calls this source-level census cannot see, as through spelled references. A
+    [sexp_of] with no caller costs nothing and cannot drift from its type, while removing it to
+    satisfy a ratchet only takes the converter away from the next debugging session. Values
+    introduced by other PPX expansions or by an [include] of another module inside the defining
+    module remain outside this source-level census. A bare [include struct ... end] declares into
+    the module and is read like top-level items; a constrained [include (struct ... end : S)]
+    carries its own interface, which publishes deliberately, so like a module with an [.mli] it is
+    not censused. *)
 
 open Base
 open Ppxlib.Parsetree
@@ -237,9 +238,10 @@ let includer_name_of_source source =
 
 (** Every [include] of a named module in [structure], as [(included, includer)] pairs: the last
     component of the included path, and the name under which the including module is reached -- the
-    source's own module at top level, the innermost [module N = struct ... end] around a nested one.
-    An [include struct ... end] declares into the module it sits in; an included functor application
-    or functor body is not followed. *)
+    source's own module at top level, the innermost [module N = struct ... end] around a nested one,
+    or the [let module N = struct ... end in] around a local one, wherever that sits. An
+    [include struct ... end] declares into the module it sits in; an included functor application,
+    or an include in a functor body or an anonymous structure, is not followed. *)
 let includes_of ~top structure =
   let found = ref [] in
   let rec items includer structure = List.iter structure ~f:(item includer)
@@ -255,16 +257,28 @@ let includes_of ~top structure =
     | Pstr_recmodule bindings -> List.iter bindings ~f:module_binding
     | Pstr_extension ((_, PStr nested), _) -> items includer nested
     | _ -> ()
-  and module_binding { pmb_name = { txt; _ }; pmb_expr; _ } =
-    let rec body module_expr =
-      match module_expr.pmod_desc with
-      | Pmod_structure nested -> items txt nested
-      | Pmod_constraint (inner, _) -> body inner
-      | _ -> ()
-    in
-    body pmb_expr
+  and module_binding { pmb_name = { txt; _ }; pmb_expr; _ } = named_module txt pmb_expr
+  and named_module name module_expr =
+    match module_expr.pmod_desc with
+    | Pmod_structure nested -> items name nested
+    | Pmod_constraint (inner, _) -> named_module name inner
+    | _ -> ()
   in
   items top structure;
+  (* A [let module] can sit in any expression, including one inside another local module; each is
+     visited once, and its body is walked like a structure-level binding's. *)
+  let local_modules =
+    object
+      inherit Ast_traverse.iter as super
+
+      method! expression expression =
+        (match expression.pexp_desc with
+        | Pexp_letmodule ({ txt; _ }, module_expr, _) -> named_module txt module_expr
+        | _ -> ());
+        super#expression expression
+    end
+  in
+  local_modules#structure structure;
   !found
 
 (** For each of [modules], the names its values are reached under in [parsed] sources: itself, and
