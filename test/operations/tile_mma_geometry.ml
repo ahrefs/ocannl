@@ -49,6 +49,11 @@ module Asgns = Ir.Assignments
 module RT = Ir.Register_tile
 open Verdict.Claims
 
+(* The backend's accumulator residency, which a [Privatize] tile is minted at (gh-ocannl-1116). *)
+let accum_prec =
+  let caps = lazy (Context.codegen_capabilities (Context.auto ())) in
+  fun p -> (Lazy.force caps).Ir.Backend_intf.accum_prec p
+
 let () = Utils.settings.output_debug_files_in_build_directory <- true
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
 let on_cpu = Sched.backend_is_cpu backend_name
@@ -491,7 +496,8 @@ let () =
         let comp = named "tmg_seeded" (Train.forward sc2) in
         let ctx, routine =
           Context.compile
-            ~lowered_transform:(fun o -> [ Sched.apply (Autotune.sketch_schedule ~p:seed o) o ])
+            ~lowered_transform:(fun o ->
+              [ Sched.apply (Autotune.sketch_schedule ~accum_prec ~p:seed o) o ])
             ctx comp Ir.Indexing.Empty
         in
         let _ctx = Context.run ctx routine in

@@ -952,6 +952,14 @@ files.
   old stamp and the next opener retries; power-loss durability is the filesystem's, not an fsync
   guarantee. Pre-gh-835 binaries do not take the lock and must not share a live cache directory
   during an upgrade.
+- **A REQUIRED field in the saved form is the scoped generation bump** (gh-ocannl-1116). Optional
+  (`[@sexp.option]`) fields keep old entries readable, which is right when the old meaning is the
+  default; when old entries were timed under a rendering the fix removes, give the new field no
+  default instead: exactly the entries carrying that op fail to decode, `lookup` swallows the
+  failure as a miss, the routine re-tunes and the store overwrites the file, while entries without
+  the op stay valid — no `entry_version` or `cache_regime_version` bump sweeping every winner.
+  `Privatize.acc_prec` is the instance; `autotune_privatize` pins that the pre-fix spelling does not
+  decode.
 - **`Train.tune_placements` persists its decision beside the schedule entries** (gh-ocannl-786,
   `Schedule_cache.store_placements` / `lookup_placements`, same directory, lock, regime stamp and
   key components). Placement stays outside the schedule value — a schedule is keyed by the

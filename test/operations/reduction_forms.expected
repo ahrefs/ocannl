@@ -7,7 +7,7 @@ Schedule.optop coverage:
   Partition          covered by partition, partition-then-unroll, partition-outer
   Pad                covered by pad-then-unroll-mat
   Stage              out of scope: stages an OPERAND into shared memory: it changes where the reduction reads from, never where its accumulator lives
-  Privatize          out of scope: gives a scratch node a per-thread copy, which is a parallelism decision about a different node than the one being accumulated
+  Privatize          out of scope: relocates the accumulator into a routine-local tile minted at the backend's accumulator residency, whose own accumulation then takes one of the forms this table pins; the tile's width is pinned by accum_width's Privatize legs (gh-ocannl-1116)
   Expand_zero        covered by tile-mma-fallback
   Tensorize          covered by tile-mma-fallback
   Fuse_epilogue      out of scope: splices a consumer AFTER the reduction's closing store, so the form it follows is whichever one this table already pins

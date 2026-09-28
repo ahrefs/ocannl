@@ -14,6 +14,11 @@ module Sched = Ir.Schedule
 module Asgns = Ir.Assignments
 open Verdict.Claims
 
+(* The backend's accumulator residency, which a [Privatize] tile is minted at (gh-ocannl-1116). *)
+let accum_prec =
+  let caps = lazy (Context.codegen_capabilities (Context.auto ())) in
+  fun p -> (Lazy.force caps).Ir.Backend_intf.accum_prec p
+
 let named name (comp : Asgns.comp) : Asgns.comp =
   { comp with asgns = Asgns.Block_comment (name, comp.asgns) }
 
@@ -93,7 +98,7 @@ let () =
     p_all claim (List.init n_seeds ~f:Fn.id) ~f:(fun k ->
         let transform opt =
           let p = List.nth_exn (seeds_of opt) k in
-          Sched.apply (Autotune.sketch_schedule ~p opt) opt
+          Sched.apply (Autotune.sketch_schedule ~accum_prec ~p opt) opt
         in
         match
           let sctx, sroutine =

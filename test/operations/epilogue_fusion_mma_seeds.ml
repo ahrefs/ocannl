@@ -25,6 +25,11 @@ module Sched = Ir.Schedule
 module Asgns = Ir.Assignments
 open Verdict.Claims
 
+(* The backend's accumulator residency, which a [Privatize] tile is minted at (gh-ocannl-1116). *)
+let accum_prec =
+  let caps = lazy (Context.codegen_capabilities (Context.auto ())) in
+  fun p -> (Lazy.force caps).Ir.Backend_intf.accum_prec p
+
 (* Zeros compare equal to zeros. A fragment mapping that reads outside the staged block, a kernel
    that never ran, or a reference whose own setup silently collapsed all yield all-zeros, and a
    parity check between two zero arrays passes while covering nothing (gh-ocannl-481 item 3). Every
@@ -103,7 +108,7 @@ let census tag ~m ~n ~k =
             LL.optimize_ctx = LL.copy_optimize_ctx opt.LL.optimize_ctx;
           }
         in
-        match Sched.apply (Autotune.sketch_schedule ~p:q scratch) scratch with
+        match Sched.apply (Autotune.sketch_schedule ~accum_prec ~p:q scratch) scratch with
         | post -> (
             match LL.validate_parallel post.LL.optimize_ctx.placements post.LL.llc with
             | () -> true
@@ -121,7 +126,8 @@ let census tag ~m ~n ~k =
         let ctx = Context.auto () in
         let ctx, routine =
           Context.compile
-            ~lowered_transform:(fun opt -> [ Sched.apply (Autotune.sketch_schedule ~p:q opt) opt ])
+            ~lowered_transform:(fun opt ->
+              [ Sched.apply (Autotune.sketch_schedule ~accum_prec ~p:q opt) opt ])
             ctx fwd Ir.Indexing.Empty
         in
         let ctx = Context.run ctx routine in

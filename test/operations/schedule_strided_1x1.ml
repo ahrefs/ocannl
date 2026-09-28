@@ -78,6 +78,9 @@ let on_cpu = Sched.backend_is_cpu backend_name
 let () = Stdio.eprintf "schedule_strided_1x1: backend %s (not part of the golden)\n%!" backend_name
 let device_limits = Context.hardware_limits (Context.auto ())
 
+(* The backend's accumulator residency, which a [Privatize] tile is minted at (gh-ocannl-1116). *)
+let accum_prec = (Context.codegen_capabilities (Context.auto ())).Ir.Backend_intf.accum_prec
+
 (* A 1x1 site: [b] images of [h x w x ic] channels, [oc] out-channels, at [stride]; built either as
    a bare einsum over constant operands, or through the production blocks. *)
 type site = {
@@ -252,7 +255,8 @@ let candidate name s transform =
       None
 
 let run_whole_candidate name s q =
-  candidate name s (fun opt -> [ Sched.apply_classified (Autotune.sketch_schedule ~p:q opt) opt ])
+  candidate name s (fun opt ->
+      [ Sched.apply_classified (Autotune.sketch_schedule ~accum_prec ~p:q opt) opt ])
 
 (* The [F_sketch] candidate scheduling the segment keyed [key] by [q]; also whether a final
    [`Normal] segment carried that key, so a segmentation that drifted from the enumerated one cannot
@@ -262,7 +266,7 @@ let run_seg_candidate name s ~arity_cuts ~key q =
   Option.map
     (candidate name s (fun opt ->
          let preset seg =
-           if String.equal (seg_key seg) key then Autotune.sketch_schedule ~p:q seg
+           if String.equal (seg_key seg) key then Autotune.sketch_schedule ~accum_prec ~p:q seg
            else default_preset seg
          in
          let tuples = fission ~arity_cuts ~preset opt in

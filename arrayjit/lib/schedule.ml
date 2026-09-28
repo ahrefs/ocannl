@@ -41,7 +41,7 @@ type optop =
       pipeline_depth : int;
       tile_prec : Ops.prec option;
     }
-  | Privatize of { target : Tn.t; over : Indexing.symbol }
+  | Privatize of { target : Tn.t; over : Indexing.symbol; acc_prec : Ops.prec }
   | Expand_zero of { tn : Tn.t; indices : Indexing.symbol list }
   | Tensorize of {
       i : Indexing.symbol;
@@ -84,6 +84,9 @@ let expand_zero ~tn =
   let rank = Array.length (Lazy.force tn.Tn.dims) in
   let indices = List.init rank ~f:(fun _ -> Indexing.get_symbol ()) in
   (Expand_zero { tn; indices }, indices)
+
+let privatize ~accum_prec ~target ~over =
+  Privatize { target; over; acc_prec = accum_prec (Lazy.force target.Tn.storage_prec) }
 
 let split_reduce ~axis ~target ~num_blocks =
   let block_index = Indexing.get_symbol () and inner_index = Indexing.get_symbol () in
@@ -1310,6 +1313,19 @@ let written_nodes (llc : Low_level.t) : Set.M(Tn).t =
   code llc;
   !acc
 
+(* The precision a schedule-minted scratch tile of [tn] may take: [tn]'s storage precision or an
+   exact widening of it (a narrow float to f32/f64). [Stage.tile_prec] and [Privatize.acc_prec]
+   share it: a narrowing tile would change values the schedule is not licensed to change. *)
+let exact_widening ~what (tn : Tn.t) (p : Ops.prec) : Ops.prec =
+  let storage = Lazy.force tn.Tn.storage_prec in
+  match p with
+  | _ when Ops.equal_prec p storage -> p
+  | (Ops.Single_prec _ | Ops.Double_prec _) when Ops.is_narrow_float storage -> p
+  | _ ->
+      invalid_arg
+        (Printf.sprintf "%s %s is not an exact widening of %s storage for %s" what
+           (Ops.prec_string p) (Ops.prec_string storage) (Tn.debug_name tn))
+
 let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_stride
     ~pipeline_depth ~tile_prec (opt : Low_level.optimized) : Low_level.optimized =
   let open Low_level in
@@ -1321,15 +1337,7 @@ let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_
   let stage_prec =
     match tile_prec with
     | None -> source_prec
-    | Some p when Ops.equal_prec p source_prec -> p
-    | (Some (Ops.Single_prec _ as p) | Some (Ops.Double_prec _ as p))
-      when Ops.is_narrow_float source_prec ->
-        p
-    | Some p ->
-        invalid_arg
-          (Printf.sprintf
-             "Schedule.Stage: tile_prec %s is not an exact widening of %s storage for %s"
-             (Ops.prec_string p) (Ops.prec_string source_prec) (Tn.debug_name source))
+    | Some p -> exact_widening ~what:"Schedule.Stage: tile_prec" source p
   in
   Option.iter cooperative ~f:(fun w ->
       if not shared then invalid_arg "Schedule.Stage: cooperative staging requires shared = true";
@@ -2061,6 +2069,31 @@ let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_
       zero_fringe = Set.add opt.zero_fringe tile;
     }
 
+(* A statement whose provenance is the schedule and not the source program, identified POSITIVELY
+   (round 8: every negative rule leaked a member): a [Stage] load — a [Set] into a [tile]-namespace
+   node of a plain copy, i.e. a read of ANOTHER node, a constant fill, or [Stage]'s [Where]-form
+   edge guard over those — or a [Workgroup_barrier] (lowering never emits one; staging does), and
+   what the peel itself strips ([Noop], [Comment]). Everything else is kept as a statement: tile
+   read-modify-writes (a previous [Privatize]'s relocated accumulation), [Split_reduce]'s partial
+   writes and scatters, any computation, vector writes, zeroings, scope locals, staged
+   compilation. *)
+let rec schedule_scratch (llc : Low_level.t) =
+  let rec plain_copy ~tn (v : Low_level.scalar_t) =
+    match v with
+    | Low_level.Get (src, _) -> not (Tn.equal src tn)
+    | Constant _ -> true
+    | Ternop (Ops.Where, _, (a, _), (b, _)) -> plain_copy ~tn a && plain_copy ~tn b
+    | _ -> false
+  in
+  match llc with
+  | Low_level.Noop | Comment _ | Workgroup_barrier -> true
+  | Seq (a, b) -> schedule_scratch a && schedule_scratch b
+  | For_loop { body; _ } | If { body; _ } -> schedule_scratch body
+  | Set { tn; llsc; _ } -> String.equal tn.Tn.namespace tile_namespace && plain_copy ~tn llsc
+  | Set_dynamic _ | Set_from_vec _ | Zero_out _ | Staged_compilation _ | Declare_local _
+  | Set_local _ | Scan_loop _ | Tile_mma _ ->
+      false
+
 (** {2 [Privatize]: accumulator privatization}
 
     Virtualization already privatizes accumulators — that is what [Local_scope] is — but it is
@@ -2079,10 +2112,21 @@ let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_
     yields a scalar accumulator (dims [|1|]). Init/store nests iterate fresh serial symbols with
     per-axis edge guards (construct-then-fold, as in [Stage]). Any [Zero_out] of [target] elsewhere
     in the routine is left in place: the init-load observes its effect, so semantics are preserved
-    without a surjectivity analysis (dropping the redundant zeroing is a follow-up). *)
+    without a surjectivity analysis (dropping the redundant zeroing is a follow-up).
 
-let apply_privatize ~target ~over (opt : Low_level.optimized) : Low_level.optimized =
+    Tile precision: [acc_prec], the backend's accumulator residency for [target]'s storage
+    ({!privatize} resolves it), so the tile is the materialized twin of the scope local the serial
+    rendering widens into and narrows once at the store-back (gh-ocannl-1116) — where code
+    generation's own peel, asked of the source-order nest, would widen (see [tile_prec] below; the
+    interface documents the rule). Any other body keeps a storage-precision tile, which code
+    generation renders exactly as it would [target], so the narrowing points do not move. Before it
+    the tile was minted at storage precision, and every step of the privatized reduction narrowed
+    where the serial and scope renderings did not — a seeded [Privatize] silently changed a tuned
+    reduction's width. *)
+
+let apply_privatize ~target ~over ~acc_prec (opt : Low_level.optimized) : Low_level.optimized =
   let open Low_level in
+  let acc_prec = exact_widening ~what:"Schedule.Privatize: acc_prec" target acc_prec in
   let iprec = Ops.index_prec () in
   let tgt_dims = Lazy.force target.Tn.dims in
   (* Every loop of the routine by index symbol, with its axis type. Guard classification below needs
@@ -2157,6 +2201,26 @@ let apply_privatize ~target ~over (opt : Low_level.optimized) : Low_level.optimi
             invalid_arg "Schedule.Privatize: a Scan_loop inside the privatized loop is unsupported"
         | Set { tn; idcs; llsc; _ } ->
             if Tn.equal tn target then (
+              (* A hardware-typed loop the cell does not mention, between [over] and the update, is
+                 a cross-thread reduction level: each thread would fold only its own lanes'
+                 contributions into its private accumulator, and whether a backend serializes the
+                 level instead (cc's [Workgroup_reduce]) is a codegen fact this backend-independent
+                 transform cannot see (round 5). *)
+              List.iter stack ~f:(fun (fl : floop) ->
+                  match fl.axis with
+                  | (Grid | Workgroup | Workgroup_reduce)
+                    when not
+                           (Array.exists idcs ~f:(fun idx ->
+                                match terms_of_index idx with
+                                | Some (terms, _) ->
+                                    List.exists terms ~f:(fun (_, s) ->
+                                        Indexing.equal_symbol s fl.index)
+                                | None -> true)) ->
+                      invalid_arg
+                        ("Schedule.Privatize: the hardware-typed reduction loop "
+                       ^ Indexing.symbol_ident fl.index
+                       ^ " inside the privatized loop would split the accumulation across threads")
+                  | _ -> ());
               has_write := true;
               accesses := (idcs, stack, conds) :: !accesses);
             scan_scalar stack conds llsc
@@ -2367,9 +2431,69 @@ let apply_privatize ~target ~over (opt : Low_level.optimized) : Low_level.optimi
       in
       let scalar_acc = Array.is_empty tile_axes in
       let tile_dims = if scalar_acc then [| 1 |] else Array.map tile_axes ~f:snd in
-      let prec = Lazy.force target.Tn.storage_prec in
+      (* Which width the tile takes (gh-ocannl-1116 review rounds 1-4, Codex P1s on staging PR
+         #880). A STORAGE-precision tile is rendered by code generation exactly as [target] would be
+         — the same per-nest peel, the same declines — so it narrows wherever the unprivatized
+         schedule does. The residency is for the case a reordering schedule breaks: a source
+         reduction nest code generation peels and holds wide, laid out so that the tile's cell
+         varies under inner loops where no peel reaches it. So the question is code generation's
+         own, asked of the SOURCE-order nest, reconstructed without re-deriving any part of the
+         peel: the privatized loop's subtree with the schedule's scratch statements dropped
+         ({!schedule_scratch}) must be one chain of loops and guards down to the single update of
+         [target] — any other statement beside it (a write of another node, a [Declare_local] /
+         [Set_local] computation, a second update) is kept, so the chain fails exactly where the
+         peel refuses a level carrying siblings. The loops the cell does not mention are the
+         reduction levels, kept in order with the guards; the output loops, which a schedule sinks
+         inside, are dropped. [Low_level.peel_accum_nest] then decides the nest with the routine's
+         loop bounds, and [accum_base_widens] its base — a raw update or a scope-form base a
+         previous materializing rewrite minted, which code generation hoists through the outer
+         reduction levels. Everything else keeps storage. *)
+      let widened_scope = ref None in
+      let tile_prec =
+        let storage = Lazy.force target.Tn.storage_prec in
+        let rec chain (llc : t) =
+          match
+            List.filter (flat_lines [ llc ]) ~f:(fun st ->
+                code_touches_tn target st || not (schedule_scratch st))
+          with
+          | [ For_loop { index; from_; to_; body; axis } ] ->
+              Option.map (chain body) ~f:(fun (levels, st) ->
+                  (`Loop { index; from_; to_; body = Noop; axis } :: levels, st))
+          | [ If { cond; body } ] ->
+              Option.map (chain body) ~f:(fun (levels, st) -> (`Guard cond :: levels, st))
+          | [ (Set { tn; _ } as st) ] when Tn.equal tn target -> Some ([], st)
+          | _ -> None
+        in
+        match chain fc.body with
+        | Some (levels, (Set { idcs; _ } as st)) -> (
+            let mentioned sym =
+              Array.exists idcs ~f:(fun idx ->
+                  match terms_of_index idx with
+                  | Some (terms, _) ->
+                      List.exists terms ~f:(fun (_, s) -> Indexing.equal_symbol s sym)
+                  | None -> true)
+            in
+            let nest =
+              List.fold_right
+                (`Loop { fc with body = Noop } :: levels)
+                ~init:st
+                ~f:(fun level body ->
+                  match level with
+                  | `Guard cond -> If { cond; body }
+                  | `Loop (fl : floop) when mentioned fl.index -> body
+                  | `Loop fl ->
+                      For_loop
+                        { index = fl.index; from_ = fl.from_; to_ = fl.to_; body; axis = fl.axis })
+            in
+            match peel_accum_nest ~loop_bounds:(loop_bounds opt.llc) ~free_of:[] nest with
+            | Some (_, _, base, _, _) when accum_base_widens ~tn:target ~idcs base ->
+                (match base with `Scope (id, _) -> widened_scope := Some id | `Update _ -> ());
+                acc_prec
+            | _ -> storage)
+        | _ -> storage
+      in
       let tile =
-        Tn.create ~namespace:tile_namespace (Tn.Specified prec) ~id:(fresh_tile_id ())
+        Tn.create ~namespace:tile_namespace (Tn.Specified tile_prec) ~id:(fresh_tile_id ())
           ~label:("acc" :: target.Tn.label)
           ~unpadded_dims:(lazy tile_dims)
           ~padding:(lazy None)
@@ -2436,6 +2560,40 @@ let apply_privatize ~target ~over (opt : Low_level.optimized) : Low_level.optimi
       let remapped =
         remap_reads ~writes:true ~source:target ~from_idcs:idcs0 ~tile ~tile_idcs:tile_read_idcs
           fc.body
+      in
+      (* A scope-form base keeps [target]'s scope id after the remap, and code generation types a
+         scope local — and narrows its opening init — by its id's node: re-key the accumulating
+         scope to the widened tile, or every iteration of [over] would re-narrow the tile's value
+         through [target]'s storage on entry (the round-4 two-axis leg on CUDA read that). Only THE
+         scope the peel accepted as the base: another scope keyed to [target] inside the
+         contribution is not the accumulator and keeps its typing (round 5). *)
+      let remapped =
+        match !widened_scope with
+        | None -> remapped
+        | Some base_id ->
+            let rekey (id : scope_id) =
+              if equal_scope_id id base_id then { id with tn = tile } else id
+            in
+            let rec go (llc : t) : t =
+              match llc with
+              | Seq (a, b) -> Seq (go a, go b)
+              | For_loop fl -> For_loop { fl with body = go fl.body }
+              | If i -> If { i with body = go i.body }
+              | Set st -> Set { st with llsc = go_scalar st.llsc }
+              | Declare_local d -> Declare_local { d with id = rekey d.id }
+              | Set_local (id, v) -> Set_local (rekey id, go_scalar v)
+              | other -> other
+            and go_scalar (v : scalar_t) : scalar_t =
+              match v with
+              | Local_scope sc -> Local_scope { sc with id = rekey sc.id; body = go sc.body }
+              | Get_local id -> Get_local (rekey id)
+              | Binop (op, (a, pa), (b, pb)) -> Binop (op, (go_scalar a, pa), (go_scalar b, pb))
+              | Unop (op, (a, pa)) -> Unop (op, (go_scalar a, pa))
+              | Ternop (op, (a, pa), (b, pb), (c, pc)) ->
+                  Ternop (op, (go_scalar a, pa), (go_scalar b, pb), (go_scalar c, pc))
+              | other -> other
+            in
+            go remapped
       in
       unflat_lines
         [
@@ -3788,7 +3946,7 @@ let apply_opt_op (opt : Low_level.optimized) (op : optop) : Low_level.optimized 
       } ->
       apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_stride
         ~pipeline_depth ~tile_prec opt
-  | Privatize { target; over } -> apply_privatize ~target ~over opt
+  | Privatize { target; over; acc_prec } -> apply_privatize ~target ~over ~acc_prec opt
   | Tensorize _ -> apply_tensorize op opt
   | Fuse_epilogue { target; shared } -> apply_fuse_epilogue ~target ~shared opt
   | Split_reduce { axis; target; num_blocks; block_index; inner_index; combine_indices } -> (

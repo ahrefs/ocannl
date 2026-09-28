@@ -78,7 +78,12 @@ type saved_optop =
           (** The staged tile's storage precision override (gh-ocannl-575); omitted when unset, so
               pre-gh-575 cache files parse. *)
     }
-  | Privatize of { target : int; over : sym_ref }
+  | Privatize of { target : int; over : sym_ref; acc_prec : Ops.prec }
+      (** [acc_prec] is REQUIRED, unlike the optional fields above, and that is the schedule-cache
+          generation bump of gh-ocannl-1116: an entry saved before it minted its accumulator tile at
+          storage precision and was timed under that narrowing rendering, so there is no default to
+          parse it into. Such an entry fails to decode and its lookup misses, so the routine
+          re-tunes; entries carrying no [Privatize] stay valid. *)
   | Expand_zero of { tn : int }
   | Tensorize of {
       i : sym_ref;

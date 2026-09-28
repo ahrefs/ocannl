@@ -353,6 +353,44 @@ files.
   `Embed_index (Iterator s)` is in scope, and a launch parameter is in scope only because the caller
   declared it (and its symbol needs `used_as_extent`, or bind-time validation rejects the extent
   covering the whole axis).
+- **A `Privatize` tile is an accumulator, so it resides at `accum_prec`** (gh-ocannl-1116). The op
+  moves a materialized reduction's accumulator into a routine-local tile, and where the tile's cell
+  varies with loops nested inside the reduction (the CPU packing sketch's `k_o k_i i_i j_i` order,
+  the GPU blocktiling's materialized-unrolled register tile) codegen cannot localize the tile's own
+  accumulation, so the tile's precision IS the reduction's width. It used to be minted at storage
+  precision, narrowing every step (cc under `narrow_compute_f32`, CUDA bf16, HIP and Metal under
+  the wide policies) while the serial rendering widened — and the autotuner seeds it, so a tuned
+  schedule silently changed numerics (gh-ocannl-1051's A/B replay: regtile's 2048³ checksum equalled
+  the NARROW serial legs'). `Privatize` now carries `acc_prec`, validated like `Stage.tile_prec`
+  through `Schedule.exact_widening`; build it with `Schedule.privatize ~accum_prec` fed from
+  `(Context.codegen_capabilities ctx).accum_prec`. `Autotune.sketch_schedule` and
+  `extend_with_privatize` take `~accum_prec` as a REQUIRED argument, so no seeding site can default
+  to storage. Like the backend's own residency, `acc_prec` applies only to what codegen widens,
+  and `apply_privatize` asks codegen's own question of the SOURCE-order nest: the privatized
+  loop's subtree minus schedule-provenance scratch (`Schedule.schedule_scratch`, identified
+  POSITIVELY: a `Stage` load, i.e. a plain copy into a `tile`-namespace node, and barriers) must be
+  ONE chain of loops and guards down to the single target update — any
+  other statement (another node's write, a `Declare_local`/`Set_local` computation, a second update)
+  breaks it exactly where the peel refuses siblings — and that chain minus the output loops (those
+  the cell mentions, which a schedule sinks inside) goes through `Low_level.peel_accum_nest`, whose
+  base `Low_level.accum_base_widens` judges (raw updates and scope-form bases alike; a widened
+  scope base, and only it, is re-keyed to the tile, since codegen types a scope local by its id's
+  node). A hardware-typed reduction level inside the privatized loop is refused outright, since
+  whether a backend serializes it is codegen's knowledge, not the transform's. Anything else
+  gets a storage tile, which codegen renders exactly as it would the target, so its narrowing
+  points do not move. Eight review rounds found the gate one member at a time (per-update declines,
+  sibling updates, non-target, scope-local, staged, prior-tile and partial-scatter siblings,
+  scope-form bases, hardware levels): re-deriving a subset of the peel, or classifying scratch by
+  exclusion, always leaves members out — so reconstruct the peel's input, identify schedule
+  scratch positively, and call the peel (Codex, rounds 1-8 of staging#880).
+  `Low_level.mentions_rng_conversion` moved there from `C_syntax` for that sharing. It escaped gh-664's sweep because `reduction_forms` filed
+  `Privatize` out of scope as "a parallelism decision about a different node": an out-of-scope
+  verdict is a claim too. Pinned by
+  `accum_width`'s Privatize legs (the first unfused scalar seed against the serial rendering, and a
+  storage-tile negative control that must diverge; the gate legs over a recurrence, a
+  mixed-operator update, sibling updates, non-target, scope-local and staged siblings, a
+  partials scatter, two accumulators privatized in turn, the hardware refusal; the two-axis leg
+  privatizing around a materialized scope) and `autotune_privatize`'s saved-form claims.
 - **What forces one of the two RMW forms**, i.e. the declines a property test must be able to
   provoke: `debug_log_from_routines` (a `Local_scope` body renders with `log_set_locals:false`, so
   localizing would silence the per-iteration trace — the SIMD and tensorized renderings bail under

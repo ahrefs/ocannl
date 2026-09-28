@@ -40,6 +40,11 @@ module LL = Ir.Low_level
 module Sched = Ir.Schedule
 module Asgns = Ir.Assignments
 
+(* The backend's accumulator residency, which a [Privatize] tile is minted at (gh-ocannl-1116). *)
+let accum_prec =
+  let caps = lazy (Context.codegen_capabilities (Context.auto ())) in
+  fun p -> (Lazy.force caps).Ir.Backend_intf.accum_prec p
+
 let () = Utils.settings.output_debug_files_in_build_directory <- true
 
 open Verdict.Claims
@@ -157,7 +162,7 @@ let () =
           pipeline_depth = 1;
           tile_prec = None;
         };
-      Sched.Privatize { target = mc.Tensor.value; over = k_o };
+      Sched.privatize ~accum_prec ~target:mc.Tensor.value ~over:k_o;
     ]
   in
   let smem_comp = named "mm_swizzled_smem" (Train.forward mc1) in

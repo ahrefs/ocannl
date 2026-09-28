@@ -5963,6 +5963,60 @@ let accum_update_parts ~tn ~idcs (llsc : scalar_t) : (Ops.binop * scalar_t) opti
       Some (Ops.Add, Binop (Ops.Mul, (a, pa), (b, pb)))
   | _ -> None
 
+(* The RNG lane conversions pick both their result type and which of the 128 random bits they
+   consume from the precision they are rendered at ([uint4x32_to_fp8_uniform_lane] is a different
+   generator from [uint4x32_to_single_uniform_lane], not a rounding of it), so an expression
+   carrying one renders at its target's storage precision. Anywhere in the expression, not just at
+   its root: a narrow uniform is routinely consumed by further arithmetic. Not descended into
+   [Local_scope], whose body renders at its own scope precision. Shared by [C_syntax]'s storage pin
+   and [Schedule.Privatize]'s tile precision ({!accum_update_widens}). *)
+let is_rng_conversion (llsc : scalar_t) =
+  match llsc with
+  | Binop (Ops.Uint4x32_to_prec_uniform_lane, _, _) | Unop (Ops.Uint4x32_to_prec_uniform1, _) ->
+      true
+  | _ -> false
+
+let rec mentions_rng_conversion (llsc : scalar_t) =
+  is_rng_conversion llsc
+  ||
+  match llsc with
+  | Ternop (_, (a, _), (b, _), (c, _)) ->
+      mentions_rng_conversion a || mentions_rng_conversion b || mentions_rng_conversion c
+  | Binop (_, (a, _), (b, _)) -> mentions_rng_conversion a || mentions_rng_conversion b
+  | Unop (_, (a, _)) -> mentions_rng_conversion a
+  | Local_scope _ | Get _ | Get_local _ | Get_dynamic _ | Get_merge_buffer _ | Constant _
+  | Constant_bits _ | Embed_index _ ->
+      false
+
+(* gh-ocannl-1116: whether an update of [tn[idcs]] is one whose accumulator code generation holds at
+   the backend's accumulator residency rather than narrowing it per step — the per-update half of
+   [C_syntax.decide_accum_width]: a recognized accumulation ({!accum_update_parts}), not pinned to
+   storage by an RNG conversion, and not under routine logging (which keeps the traceable per-step
+   form). A [Schedule.Privatize] tile widens exactly when every update it takes over passes. *)
+let accum_update_widens ~tn ~idcs (llsc : scalar_t) =
+  (not (Utils.debug_log_from_routines ()))
+  && Option.is_some (accum_update_parts ~tn ~idcs llsc)
+  && not (mentions_rng_conversion llsc)
+
+(* The base half of [C_syntax.decide_accum_width]'s decision for a nest [peel_accum_nest] accepted
+   (gh-ocannl-1116): a raw update widens by {!accum_update_widens}; a scope-form base widens unless
+   routine logging keeps the per-step form or an RNG conversion reaches one of its scope local's
+   assignments (the codegen census that pins such a scope to storage). *)
+let accum_base_widens ~tn ~idcs = function
+  | `Update llsc -> accum_update_widens ~tn ~idcs llsc
+  | `Scope (id, (updates : t list)) ->
+      let rec rng_in (llc : t) =
+        match llc with
+        | Set_local (id', v) ->
+            (equal_scope_id id id' && mentions_rng_conversion v) || rng_in_scalar v
+        | Seq (a, b) -> rng_in a || rng_in b
+        | For_loop { body; _ } | If { body; _ } -> rng_in body
+        | _ -> false
+      and rng_in_scalar (v : scalar_t) =
+        match v with Local_scope { body; _ } -> rng_in body | _ -> false
+      in
+      (not (Utils.debug_log_from_routines ())) && not (List.exists updates ~f:rng_in)
+
 (* Retarget an accumulation update's read of [tn[idcs]] to the scope local [id] — the shapes
    [accum_update_parts] admits only carry the accumulator read as a direct operand of the top
    operator. *)

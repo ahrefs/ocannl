@@ -46,7 +46,7 @@ type saved_optop =
               [swizzle]/[pad_stride] precedent). *)
       tile_prec : Ops.prec option; [@sexp.option]
     }
-  | Privatize of { target : int; over : sym_ref }
+  | Privatize of { target : int; over : sym_ref; acc_prec : Ops.prec }
   | Expand_zero of { tn : int }
   | Tensorize of {
       i : sym_ref;
@@ -348,8 +348,10 @@ let to_saved r (sched : Schedule.schedule) : saved_schedule * registry =
                     pipeline_depth = (if pipeline_depth = 1 then None else Some pipeline_depth);
                     tile_prec;
                   } )
-          | Schedule.Privatize { target; over } ->
-              (r, Privatize { target = resolve_tn_exn r target; over = resolve_exn r over })
+          | Schedule.Privatize { target; over; acc_prec } ->
+              ( r,
+                Privatize { target = resolve_tn_exn r target; over = resolve_exn r over; acc_prec }
+              )
           | Schedule.Expand_zero { tn; indices } ->
               let r =
                 List.foldi indices ~init:r ~f:(fun j r s ->
@@ -444,10 +446,10 @@ let of_saved canonical (saved : saved_schedule) : Schedule.schedule * registry =
                     pipeline_depth = Option.value pipeline_depth ~default:1;
                     tile_prec;
                   } )
-          | Privatize { target; over } ->
+          | Privatize { target; over; acc_prec } ->
               ( r,
                 Schedule.Privatize
-                  { target = tn_of_ref canonical target; over = unresolve_exn r over } )
+                  { target = tn_of_ref canonical target; over = unresolve_exn r over; acc_prec } )
           | Expand_zero { tn } ->
               let op, indices = Schedule.expand_zero ~tn:(tn_of_ref canonical tn) in
               let r =

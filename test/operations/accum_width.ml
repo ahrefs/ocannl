@@ -163,6 +163,10 @@ let claim_2ax_inner =
   "materialized-unrolled INNER reduction axis equals the serial result (the scope hoists through \
    the outer reduction loop)"
 
+let claim_2ax_priv_outer =
+  "a Privatize over the outer reduction axis, around the inner axis's materialized scope, equals \
+   the serial result"
+
 let claim_2ax_outer = "materialized-unrolled OUTER reduction axis equals the serial result"
 let claim_2ax_annot = "Unroll-annotated both reduction axes equals the serial result"
 
@@ -500,6 +504,7 @@ let all_claims =
     claim_partition_compose;
     claim_2ax_ref;
     claim_2ax_inner;
+    claim_2ax_priv_outer;
     claim_2ax_outer;
     claim_2ax_annot;
     claim_2ax_both_mat;
@@ -677,6 +682,44 @@ let default_bf16_block () =
           Sched.Unroll { axis = r; materialize = true };
           Sched.Unroll { axis = s; materialize = false };
         ]);
+    (* A PRIVATIZED outer reduction axis over the scope form the inner unroll minted (gh-ocannl-1116
+       review round 4): swapping the output loop inside the outer reduction loop makes the tile's
+       cell vary under it, so no peel reaches the tile — a storage tile would narrow once per outer
+       iteration, while code generation hoists the scope-form base through the serial nest. The tile
+       must take the residency for a scope-form base too, and the scope must be re-keyed to the
+       tile: under [target]'s scope id its opening init re-narrows through bf16 on every outer
+       iteration wherever bf16 computes at storage width (CUDA read 14.5625 for 14.5 before the
+       re-key). *)
+    let accum_target (opt : LL.optimized) =
+      let rec go (llc : LL.t) =
+        match llc with
+        | LL.Set { tn; llsc; _ } when LL.scalar_touches_tn tn llsc -> Some tn
+        | LL.Set { llsc = LL.Local_scope _; tn; _ } -> Some tn
+        | LL.For_loop { body; _ } | LL.If { body; _ } -> go body
+        | LL.Seq (a, b) -> Option.first_some (go a) (go b)
+        | _ -> None
+      in
+      Option.value_exn (go opt.LL.llc)
+    in
+    let got_priv2 =
+      run2 ~name:"aw2_unroll_inner_priv_outer"
+        ~schedule:(fun opt ->
+          let target = accum_target opt in
+          two_axis_sched opt ~f:(fun ~r ~s ->
+              let i =
+                match List.find_exn (nest_paths opt.LL.llc) ~f:(fun p -> List.length p = 3) with
+                | i :: _ -> i
+                | [] -> assert false
+              in
+              [
+                Sched.Unroll { axis = s; materialize = true };
+                Sched.Swap { outer = i; inner = r };
+                Sched.privatize ~accum_prec:codegen_capabilities.Ir.Backend_intf.accum_prec ~target
+                  ~over:r;
+              ]))
+        ()
+    in
+    p_all2 claim_2ax_priv_outer got_priv2 got2 ~f:Float.equal;
     (* === a VECTORIZED inner reduction axis === *)
     (* The nest peel rides through the Vectorized level, and the SIMD reduction rendering folds
        its chains into the scope LOCAL (no storage round-trip): the whole nest keeps one wide
@@ -1182,3 +1225,447 @@ let () =
   p claim_bf16_default_matmul
     ((not (Array.is_empty got_auto))
     && Bool.equal (Array.for_all2_exn got_auto want ~f:Float.equal) auto_widens_bf16)
+
+(* === Privatize tiles reside at the backend's accumulator precision (gh-ocannl-1116) === *)
+(* The autotuner seeds [Privatize] in its scalar matmul sketches (the CPU packing pipeline, the GPU
+   register blocktiling), and before gh-ocannl-1116 the privatized tile was minted at the
+   destination's STORAGE precision: every step of the reduction through it narrowed, while the
+   serial rendering above widens — so a tuned schedule silently changed the reduction's width. The
+   tile's cell varies with loops nested inside the reduction (the packing pipeline's [k_o, k_i, i_i,
+   j_i] order, the blocktiling's materialized-unrolled tile), so codegen cannot localize the tile's
+   accumulation into a wide scope of its own: the tile's precision IS the width.
+
+   Universal legs, executed on every backend: the first unfused scalar seed the tuner enumerates for
+   the site, built with the backend's accumulator resolution, must equal the serial rendering of
+   the same policy bitwise — under [Bf16_auto] (whatever it resolves to here) and under the wide
+   policies, where it must also equal the once-narrowed wide reference. The negative control
+   rebuilds the same seed with a storage-precision tile — the pre-fix minting, still admissible as
+   an explicit schedule — and must DIVERGE from the wide reference: it is what proves these inputs
+   and this pipeline discriminate per-step narrowing, rather than parity holding because nothing
+   could tell the widths apart. *)
+let claim_priv_seeded =
+  "the seeded scalar matmul sketch mints its Privatize tile at the backend's accumulator residency"
+
+let claim_priv_auto =
+  "the seeded privatized bf16 sketch equals the serial rendering under Bf16_auto"
+
+let claim_priv_wide =
+  "under Bf16_wide the seeded privatized bf16 sketch equals the once-narrowed wide-accumulation \
+   reference"
+
+let claim_priv_narrow =
+  "a storage-precision Privatize tile narrows per step: under Bf16_wide the same seed diverges \
+   from the wide reference"
+
+let claim_priv_f16 =
+  "under Fp16_wide the seeded privatized f16 sketch equals the once-narrowed wide-accumulation \
+   reference"
+
+let claim_priv_f16_narrow =
+  "a storage-precision Privatize tile narrows per step: under Fp16_wide the same f16 seed diverges \
+   from the wide reference"
+
+let hardware_limits = lazy (Context.hardware_limits (Context.auto ()))
+
+(* The first unfused scalar (non-tensorized) seed of the site — the pipelines that carry a
+   [Privatize] — as the tuner would instantiate it. [~storage_tile] swaps its [Privatize] for the
+   pre-gh-ocannl-1116 minting. [seeded] collects the precisions the built schedule's [Privatize]s
+   carry, read before the swap. *)
+let privatized_seed ~storage_tile ~seeded (opt : LL.optimized) : Sched.schedule =
+  let p =
+    List.find_exn
+      (Autotune.sketch_seed_params
+         ~is_gpu:(Sched.backend_is_gpu backend_name)
+         ~is_cpu:on_cpu ~limits:(Lazy.force hardware_limits) opt)
+      ~f:(fun p -> (not p.Autotune.sk_mma) && (not p.sk_conv) && not p.sk_epilogue)
+  in
+  Stdio.eprintf
+    "accum_width: privatized seed on %s: %s pipeline, bm=%d bn=%d bk=%d (not part of the golden)\n\
+     %!"
+    backend_name
+    (if p.sk_gpu then "GPU blocktiling" else "CPU packing")
+    p.sk_bm p.sk_bn p.sk_bk;
+  let sched =
+    Autotune.sketch_schedule ~accum_prec:codegen_capabilities.Ir.Backend_intf.accum_prec ~p opt
+  in
+  List.map sched ~f:(function
+    | Sched.Privatize { target; over; acc_prec } ->
+        seeded := (Lazy.force target.Tn.storage_prec, acc_prec) :: !seeded;
+        Sched.Privatize
+          {
+            target;
+            over;
+            acc_prec = (if storage_tile then Lazy.force target.Tn.storage_prec else acc_prec);
+          }
+    | op -> op)
+
+(* One matmul instance per run (the routine name keys its build artifacts), over the given operand
+   cycles; [schedule] as in {!run}. *)
+let precision_matmul ~prec ~size ~fa ~fb ~name ?schedule () =
+  let ma = NTDSL.init ~l:(name ^ "_a") ~prec ~i:[ size ] ~o:[ size ] ~f:fa () in
+  let mb = NTDSL.init ~l:(name ^ "_b") ~prec ~i:[ size ] ~o:[ size ] ~f:fb () in
+  let%op mc = ma * mb in
+  Tn.update_prec mc.Tensor.value prec;
+  run ~name ?schedule mc
+
+(* The whole-k f64 dot products, exact reproductions of the kernels' f32 chains for these cycles,
+   narrowed once per cell by minting a [prec] tensor from them. *)
+let wide_reference ~prec ~size ~fa ~fb ~name =
+  let sums =
+    Array.init (size * size) ~f:(fun t ->
+        let i = t / size and j = t % size in
+        let acc = ref 0.0 in
+        for k = 0 to size - 1 do
+          acc := !acc +. (fa [| i; k |] *. fb [| k; j |])
+        done;
+        !acc)
+  in
+  run ~name
+    (NTDSL.init ~l:name ~prec ~i:[ size ] ~o:[ size ]
+       ~f:(fun idcs -> sums.((idcs.(0) * size) + idcs.(1)))
+       ())
+
+let () =
+  let seeded = ref [] in
+  let privatized ~prec ~size ~fa ~fb ~name ~storage_tile =
+    precision_matmul ~prec ~size ~fa ~fb ~name ~schedule:(privatized_seed ~storage_tile ~seeded) ()
+  in
+  let bf16 = Ir.Ops.bfloat16 and f16 = Ir.Ops.half in
+  let saved_policy = Numerics.get () in
+  Numerics.set_policy { saved_policy with bf16_arithmetic = Numerics.Bf16_auto };
+  let serial_auto = precision_matmul ~prec:bf16 ~size:n ~fa ~fb ~name:"aw_priv_serial_auto" () in
+  let priv_auto = privatized ~prec:bf16 ~size:n ~fa ~fb ~name:"aw_priv_auto" ~storage_tile:false in
+  let auto_resolution = codegen_capabilities.Ir.Backend_intf.accum_prec bf16 in
+  Numerics.set_policy { saved_policy with bf16_arithmetic = Numerics.Bf16_wide };
+  let want = wide_reference ~prec:bf16 ~size:n ~fa ~fb ~name:"aw_priv_ref" in
+  let priv_wide = privatized ~prec:bf16 ~size:n ~fa ~fb ~name:"aw_priv_wide" ~storage_tile:false in
+  let wide_resolution = codegen_capabilities.Ir.Backend_intf.accum_prec bf16 in
+  let priv_narrow =
+    privatized ~prec:bf16 ~size:n ~fa ~fb ~name:"aw_priv_narrow" ~storage_tile:true
+  in
+  Numerics.set_policy { saved_policy with fp16_arithmetic = Numerics.Fp16_wide };
+  let want16 = wide_reference ~prec:f16 ~size:n16 ~fa:fa16 ~fb:fb16 ~name:"aw_priv16_ref" in
+  let priv16 =
+    privatized ~prec:f16 ~size:n16 ~fa:fa16 ~fb:fb16 ~name:"aw_priv16_wide" ~storage_tile:false
+  in
+  let f16_resolution = codegen_capabilities.Ir.Backend_intf.accum_prec f16 in
+  let priv16_narrow =
+    privatized ~prec:f16 ~size:n16 ~fa:fa16 ~fb:fb16 ~name:"aw_priv16_narrow" ~storage_tile:true
+  in
+  Numerics.set_policy saved_policy;
+  (* Every build of the five privatized runs carried a Privatize, each at the resolution of the
+     policy it was built under (read before the storage-tile swap): in build order, auto, wide,
+     wide, f16-wide, f16-wide. *)
+  let expected =
+    [
+      (bf16, auto_resolution);
+      (bf16, wide_resolution);
+      (bf16, wide_resolution);
+      (f16, f16_resolution);
+      (f16, f16_resolution);
+    ]
+  in
+  p claim_priv_seeded
+    (List.equal
+       (fun (s, a) (s', a') -> Ir.Ops.equal_prec s s' && Ir.Ops.equal_prec a a')
+       (List.rev !seeded) expected);
+  p_all2 claim_priv_auto priv_auto serial_auto ~f:Float.equal;
+  p_all2 claim_priv_wide priv_wide want ~f:Float.equal;
+  p claim_priv_narrow
+    ((not (Array.is_empty priv_narrow)) && not (Array.for_all2_exn priv_narrow want ~f:Float.equal));
+  p_all2 claim_priv_f16 priv16 want16 ~f:Float.equal;
+  p claim_priv_f16_narrow
+    ((not (Array.is_empty priv16_narrow))
+    && not (Array.for_all2_exn priv16_narrow want16 ~f:Float.equal))
+
+(* === A Privatize tile widens only what code generation widens (gh-ocannl-1116 review) === *)
+(* [acc_prec] is the residency of a RECOGNIZED widenable accumulation, as the backend's own is. A
+   body code generation does not widen narrows at its own points in the serial rendering, so a
+   Privatize tile taking it over must stay at storage precision, or a tuned schedule would change
+   its rounding (Codex P1s, rounds 1-2 on staging PR #880): a non-reduction recurrence (256 - 0.5
+   - 0.5 is 255 in f32 and stays 256 at bf16), a mixed-operator update (max(256 + 1, 0) twice is
+   258 in f32 and stays 256 — not [* 1], which simplification folds into a plain reduction), and
+   sibling accumulation statements into one cell, whose separate stores are their semantics: each
+   update alone would widen, but the peel refuses a level carrying two (256 +1 +1 twice is 260
+   wide and stays 256), and a reduction beside a statement writing another node, which the peel
+   refuses the same way (256 + 1 + 1 stays 256; round 3) — or beside a [Declare_local] /
+   [Set_local] computation, the shape online softmax's hoist emits (round 4), or beside a
+   [Staged_compilation] statement, which is source and not schedule scratch (round 5). The positive
+   control is one reduction statement the tile must widen with
+   the serial rendering (256 + 1 + 1 reaches 258), so the declined legs' 256 is the gate and not a
+   tile that never widened. All under [Bf16_wide], where the residency itself widens bf16 on every
+   backend; the per-update gate is the shared [Low_level.accum_update_widens]. *)
+let claim_priv_gate =
+  "the shared widening predicate accepts the reduction and declines the recurrence and the \
+   mixed-operator update"
+
+let claim_priv_gate_add =
+  "a privatized bf16 reduction widens with the serial rendering (256 + 1 + 1 reaches 258)"
+
+let claim_priv_gate_sub =
+  "a privatized non-reduction recurrence keeps per-step narrowing with the serial rendering (256 - \
+   0.5 - 0.5 stays 256)"
+
+let claim_priv_gate_sib =
+  "privatized sibling accumulation statements keep their separate narrowings with the serial \
+   rendering (256 +1 +1, twice, stays 256)"
+
+let claim_priv_gate_other =
+  "a privatized reduction beside another node's statement keeps per-step narrowing with the serial \
+   rendering (256 + 1 + 1 stays 256)"
+
+let claim_priv_gate_local =
+  "a privatized reduction beside a scope-local computation keeps per-step narrowing with the \
+   serial rendering (256 + 1 + 1 stays 256)"
+
+let claim_priv_gate_staged =
+  "a privatized reduction beside a staged-compilation statement keeps per-step narrowing with the \
+   serial rendering (256 + 1 + 1 stays 256)"
+
+let claim_priv_gate_hw =
+  "a Privatize whose loop encloses a hardware-typed reduction level is refused"
+
+let claim_priv_gate_two =
+  "two accumulators privatized one after the other keep their per-step narrowing with the serial \
+   rendering (256 + 1 + 1 stays 256 for each)"
+
+let claim_priv_gate_scatter =
+  "a privatized reduction beside a scatter into a schedule-minted partials node keeps per-step \
+   narrowing with the serial rendering (256 + 1 + 1 stays 256)"
+
+let claim_priv_gate_mixed =
+  "a privatized mixed-operator update keeps per-step narrowing with the serial rendering (max(256 \
+   + 1, 0) twice stays 256)"
+
+let () =
+  let bf16 = Ir.Ops.bfloat16 in
+  let node = Ll_test.node_factory ~prec:bf16 ~first_id:9900 ~dims:[| 1 |] () in
+  let cell = [| Ll_test.fixed 0 |] in
+  let leg ?(siblings = 1) ?(other = false) ?(local = false) ?(staged = false) ~label ~update () =
+    let acc = node label in
+    Ll_test.materialize acc;
+    let other_node = node (label ^ "_other") in
+    Ll_test.materialize other_node;
+    let k = Ll_test.sym () in
+    let loc_node = node (label ^ "_loc") in
+    Ll_test.virtualize loc_node;
+    let loc = LL.get_scope loc_node in
+    (* The local-computation leg's update is a recognized reduction whose contribution reads the
+       scope local, so the per-update gate alone would widen it: only the sibling statements
+       decline. *)
+    let llsc =
+      if local then
+        LL.Binop
+          ( Ir.Ops.Add,
+            (Ll_test.get acc cell, bf16),
+            (LL.Binop (Ir.Ops.Add, (LL.Get_local loc, bf16), (LL.Constant 1.0, bf16)), bf16) )
+      else update (Ll_test.get acc cell)
+    in
+    let raw () =
+      Ll_test.loop_n k 2
+        (LL.unflat_lines
+           ((if local then
+               [
+                 LL.Declare_local { id = loc; needs_init = false };
+                 LL.Set_local (loc, LL.Constant 0.0);
+               ]
+             else [])
+           @ List.init siblings ~f:(fun _ -> Ll_test.set acc cell llsc)
+           @ (if other then [ Ll_test.set other_node cell (LL.Constant 7.0) ] else [])
+           @
+           if staged then [ LL.Staged_compilation (fun () -> PPrint.string "/* staged */") ] else []
+           ))
+    in
+    let exec ~name o =
+      (List.hd_exn (Ll_test.execute ~name o ~seed:[ (acc, [| 256.0 |]) ] ~read:[ acc ])).(0)
+    in
+    let serial =
+      exec ~name:(label ^ "_serial")
+        (Ll_test.optimize ~materialized:[ acc; other_node ] ~name:(label ^ "_serial") (raw ()))
+    in
+    let o = Ll_test.optimize ~materialized:[ acc; other_node ] ~name:(label ^ "_priv") (raw ()) in
+    let priv =
+      exec ~name:(label ^ "_priv")
+        (Sched.apply
+           [
+             Sched.privatize ~accum_prec:codegen_capabilities.Ir.Backend_intf.accum_prec ~target:acc
+               ~over:k;
+           ]
+           o)
+    in
+    (LL.accum_update_widens ~tn:acc ~idcs:cell llsc, serial, priv)
+  in
+  let bin op a b = LL.Binop (op, (a, bf16), (b, bf16)) in
+  Test_utils.with_policy
+    (fun pol -> { pol with Numerics.bf16_arithmetic = Numerics.Bf16_wide })
+    (fun () ->
+      let w_add, s_add, p_add =
+        leg ~label:"aw_pg_add" ~update:(fun a -> bin Ir.Ops.Add a (LL.Constant 1.0)) ()
+      in
+      let w_sib, s_sib, p_sib =
+        leg ~siblings:2 ~label:"aw_pg_sib" ~update:(fun a -> bin Ir.Ops.Add a (LL.Constant 1.0)) ()
+      in
+      let _, s_oth, p_oth =
+        leg ~other:true ~label:"aw_pg_oth" ~update:(fun a -> bin Ir.Ops.Add a (LL.Constant 1.0)) ()
+      in
+      let _, s_loc, p_loc =
+        leg ~local:true ~label:"aw_pg_loc" ~update:(fun a -> bin Ir.Ops.Add a (LL.Constant 1.0)) ()
+      in
+      let _, s_stg, p_stg =
+        leg ~staged:true ~label:"aw_pg_stg" ~update:(fun a -> bin Ir.Ops.Add a (LL.Constant 1.0)) ()
+      in
+      let w_sub, s_sub, p_sub =
+        leg ~label:"aw_pg_sub" ~update:(fun a -> bin Ir.Ops.Sub a (LL.Constant 0.5)) ()
+      in
+      let w_mix, s_mix, p_mix =
+        leg ~label:"aw_pg_mix"
+          ~update:(fun a -> bin Ir.Ops.Max (bin Ir.Ops.Add a (LL.Constant 1.0)) (LL.Constant 0.0))
+          ()
+      in
+      Stdio.eprintf
+        "accum_width: privatize gate legs serial/privatized: add %g/%g, siblings %g/%g, \
+         beside-other %g/%g, beside-local %g/%g, beside-staged %g/%g, sub %g/%g, mixed %g/%g (not \
+         part of the golden)\n\
+         %!"
+        s_add p_add s_sib p_sib s_oth p_oth s_loc p_loc s_stg p_stg s_sub p_sub s_mix p_mix;
+      (* A hardware reduction level inside the privatized loop is refused outright (round 5): a
+         per-thread tile would fold only its own lanes, and whether a backend serializes the level
+         is not the transform's to know. *)
+      let hw_refused =
+        let acc = node "aw_pg_hw" in
+        Ll_test.materialize acc;
+        let xs = Ll_test.node_factory ~prec:bf16 ~first_id:9990 ~dims:[| 4 |] () "aw_pg_hw_x" in
+        Ll_test.materialize xs;
+        let k = Ll_test.sym () and w = Ll_test.sym () in
+        let raw =
+          Ll_test.loop_n k 2
+            (Ll_test.loop_n ~axis:LL.Workgroup_reduce w 4
+               (Ll_test.set acc cell
+                  (bin Ir.Ops.Add (Ll_test.get acc cell) (Ll_test.get xs [| Ll_test.iter w |]))))
+        in
+        let o = Ll_test.optimize ~materialized:[ acc; xs ] ~name:"aw_pg_hw" raw in
+        Result.is_error
+          (Result.try_with (fun () ->
+               Sched.apply
+                 [
+                   Sched.privatize ~accum_prec:codegen_capabilities.Ir.Backend_intf.accum_prec
+                     ~target:acc ~over:k;
+                 ]
+                 o))
+      in
+      p claim_priv_gate_hw hw_refused;
+      (* Two accumulators updated side by side, privatized one after the other (round 6): the first
+         Privatize turns its update into a tile read-modify-write, which is still a sibling
+         statement of the second's update — not staging scratch — so neither tile widens, as the
+         serial rendering keeps both per-step (256 + 1 + 1 stays 256 for each). *)
+      let two_targets =
+        let a = node "aw_pg_two_a" and b = node "aw_pg_two_b" in
+        Ll_test.materialize a;
+        Ll_test.materialize b;
+        let k = Ll_test.sym () in
+        let raw () =
+          Ll_test.loop_n k 2
+            (LL.unflat_lines
+               [
+                 Ll_test.set a cell (bin Ir.Ops.Add (Ll_test.get a cell) (LL.Constant 1.0));
+                 Ll_test.set b cell (bin Ir.Ops.Add (Ll_test.get b cell) (LL.Constant 1.0));
+               ])
+        in
+        let exec ~name o =
+          List.map
+            (Ll_test.execute ~name o ~seed:[ (a, [| 256.0 |]); (b, [| 256.0 |]) ] ~read:[ a; b ])
+            ~f:(fun v -> v.(0))
+        in
+        let serial =
+          exec ~name:"aw_pg_two_serial"
+            (Ll_test.optimize ~materialized:[ a; b ] ~name:"aw_pg_two_serial" (raw ()))
+        in
+        let priv =
+          let o = Ll_test.optimize ~materialized:[ a; b ] ~name:"aw_pg_two_priv" (raw ()) in
+          let pz target =
+            Sched.privatize ~accum_prec:codegen_capabilities.Ir.Backend_intf.accum_prec ~target
+              ~over:k
+          in
+          exec ~name:"aw_pg_two_priv" (Sched.apply [ pz a; pz b ] o)
+        in
+        Stdio.eprintf
+          "accum_width: two privatized accumulators serial %s privatized %s (not part of the golden)\n\
+           %!"
+          (String.concat ~sep:"," (List.map serial ~f:Float.to_string))
+          (String.concat ~sep:"," (List.map priv ~f:Float.to_string));
+        List.equal Float.equal serial [ 256.0; 256.0 ] && List.equal Float.equal priv serial
+      in
+      p claim_priv_gate_two two_targets;
+      (* A schedule-minted partials node written by a scatter beside the accumulation — the shape a
+         [Split_reduce] of a one-hot scatter leaves (round 8) — is reduction work, not staging
+         scratch, even though its node lives in the tile namespace: the tile must stay at storage
+         precision with the serial rendering (256 + 1 + 1 stays 256). *)
+      let beside_scatter =
+        let acc = node "aw_pg_scat" in
+        Ll_test.materialize acc;
+        let partials =
+          Tn.create ~namespace:"tile" (Tn.Specified bf16) ~id:9995 ~label:[ "aw_pg_scat_part" ]
+            ~unpadded_dims:(lazy [| 1 |])
+            ~padding:(lazy None)
+            ()
+        in
+        Ll_test.materialize partials;
+        let k = Ll_test.sym () in
+        (* [Set_dynamic] is post-optimize IR (only the one-hot rewrite produces it), so the scatter
+           twin reaches the backend through [optimize_scoped]: [raw] spells the same nodes with a
+           plain write for the optimizer's traced store. *)
+        let body ~scatter =
+          Ll_test.loop_n k 2
+            (LL.unflat_lines
+               [
+                 Ll_test.set acc cell (bin Ir.Ops.Add (Ll_test.get acc cell) (LL.Constant 1.0));
+                 (if scatter then
+                    LL.Set_dynamic
+                      {
+                        tn = partials;
+                        idcs = cell;
+                        dyn_axis = 0;
+                        dyn_value = (LL.Constant 0.0, Ir.Ops.index_prec ());
+                        llsc = LL.Constant 3.0;
+                        debug = "";
+                      }
+                  else Ll_test.set partials cell (LL.Constant 3.0));
+               ])
+        in
+        let scoped name =
+          Ll_test.optimize_scoped ~materialized:[ acc; partials ] ~name ~raw:(body ~scatter:false)
+            (body ~scatter:true)
+        in
+        let exec ~name o =
+          (List.hd_exn
+             (Ll_test.execute ~name o
+                ~seed:[ (acc, [| 256.0 |]); (partials, [| 0.0 |]) ]
+                ~read:[ acc ])).(0)
+        in
+        let serial = exec ~name:"aw_pg_scat_serial" (scoped "aw_pg_scat_serial") in
+        let priv =
+          let o = scoped "aw_pg_scat_priv" in
+          exec ~name:"aw_pg_scat_priv"
+            (Sched.apply
+               [
+                 Sched.privatize ~accum_prec:codegen_capabilities.Ir.Backend_intf.accum_prec
+                   ~target:acc ~over:k;
+               ]
+               o)
+        in
+        Stdio.eprintf
+          "accum_width: privatized beside a tile scatter serial %g privatized %g (not part of the \
+           golden)\n\
+           %!"
+          serial priv;
+        Float.equal serial 256.0 && Float.equal priv 256.0
+      in
+      p claim_priv_gate_scatter beside_scatter;
+      p claim_priv_gate (w_add && w_sib && (not w_sub) && not w_mix);
+      p claim_priv_gate_sib (Float.equal s_sib 256.0 && Float.equal p_sib 256.0);
+      p claim_priv_gate_other (Float.equal s_oth 256.0 && Float.equal p_oth 256.0);
+      p claim_priv_gate_local (Float.equal s_loc 256.0 && Float.equal p_loc 256.0);
+      p claim_priv_gate_staged (Float.equal s_stg 256.0 && Float.equal p_stg 256.0);
+      p claim_priv_gate_add (Float.equal s_add 258.0 && Float.equal p_add 258.0);
+      p claim_priv_gate_sub (Float.equal s_sub 256.0 && Float.equal p_sub 256.0);
+      p claim_priv_gate_mixed (Float.equal s_mix 256.0 && Float.equal p_mix 256.0))

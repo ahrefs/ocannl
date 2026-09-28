@@ -426,6 +426,28 @@ val accum_local_update_op : id:scope_id -> scalar_t -> Ops.binop option
     deliberately not part of {!accum_local_update_parts} or of {!scope_updates_reduce_op}'s hoist
     license. *)
 
+val mentions_rng_conversion : scalar_t -> bool
+(** Whether an RNG lane conversion occurs anywhere in the expression (not inside a [Local_scope]).
+    Such a conversion picks its result type and the random bits it consumes from the precision it
+    renders at, so the expression renders at its target's storage precision and an accumulation
+    carrying it keeps a storage-width accumulator. *)
+
+val accum_update_widens : tn:Tnode.t -> idcs:Indexing.axis_index array -> scalar_t -> bool
+(** Whether code generation holds this update's accumulator at the backend's accumulator residency:
+    an {!accum_update_parts} accumulation, free of RNG conversions ({!mentions_rng_conversion}),
+    with routine logging off. Any other update — a non-reduction recurrence, a mixed-operator
+    update, an RNG-bearing one — narrows to storage at every step in the serial rendering, and a
+    [Schedule.Privatize] tile taking it over stays at storage precision too (gh-ocannl-1116). *)
+
+val accum_base_widens :
+  tn:Tnode.t ->
+  idcs:Indexing.axis_index array ->
+  [ `Update of scalar_t | `Scope of scope_id * t list ] ->
+  bool
+(** For a base {!peel_accum_nest} reached: whether code generation holds it at the accumulator
+    residency — {!accum_update_widens} for a raw update; for a scope-form base, routine logging off
+    and no RNG conversion in its scope local's assignments. *)
+
 val accum_local_update_parts : id:scope_id -> scalar_t -> (Ops.binop * scalar_t) option
 (** The reduce-shaped update of a scope LOCAL, [local = op(local, contrib)] (or its FMA form) with
     [contrib] free of the local — [subst_accum_read]'s output shape; returns [(op, contrib)]. The

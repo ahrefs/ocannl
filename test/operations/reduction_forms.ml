@@ -1612,8 +1612,9 @@ let optop_coverage (op : Sched.optop) : coverage =
          where its accumulator lives"
   | Sched.Privatize _ ->
       Out_of_scope
-        "gives a scratch node a per-thread copy, which is a parallelism decision about a different \
-         node than the one being accumulated"
+        "relocates the accumulator into a routine-local tile minted at the backend's accumulator \
+         residency, whose own accumulation then takes one of the forms this table pins; the tile's \
+         width is pinned by accum_width's Privatize legs (gh-ocannl-1116)"
   | Sched.Fuse_epilogue _ ->
       Out_of_scope
         "splices a consumer AFTER the reduction's closing store, so the form it follows is \
@@ -1690,7 +1691,8 @@ let optop_samples : Sched.optop list =
         pipeline_depth = 0;
         tile_prec = None;
       };
-    Sched.Privatize { target = coverage_node; over = s };
+    Sched.privatize ~accum_prec:codegen_capabilities.Ir.Backend_intf.accum_prec
+      ~target:coverage_node ~over:s;
     Sched.Expand_zero { tn = coverage_node; indices = [] };
     Sched.Tensorize { i = s; j = s; k = s; lane = s; simd_width = 1; tile = None };
     Sched.Fuse_epilogue { target = coverage_node; shared = false };
