@@ -4648,15 +4648,31 @@ let query_map (a : access) : Indexing.axis_index array =
   end
 
 (* The single-child chain of [For_loop]s from the top of a nest, descending through [If] wrappers
-   and comments; stops at the first branching ([Seq] with more than one non-comment statement). *)
-let path_loops (nest : Low_level.t) : Low_level.t list =
+   and comments; stops at the first branching ([Seq] with more than one non-comment statement).
+
+   [~lanes:true] also descends a loop body that is lane-uniform scalar work -- declarations and
+   assignments of scope locals -- ahead of exactly one loop: the shape the online-softmax hoist
+   leaves, [for t { p := P[.., t]; for e { O[.., e] += p * V[.., t, e] } }] (gh-ocannl-1003). The
+   preamble's value depends only on loops enclosing it, so when a loop past it carries hardware
+   geometry, every thread recomputes the same value into its own register; the loops past it are
+   ordinary chain candidates of the same race analysis, whose thread identity is the tuple of chain
+   symbols wherever in the nest they sit. *)
+let path_loops ?(lanes = false) (nest : Low_level.t) : Low_level.t list =
   let open Low_level in
   let strip stmts = List.filter stmts ~f:(function Noop | Comment _ -> false | _ -> true) in
+  let uniform = function Declare_local _ | Set_local _ -> true | _ -> false in
   let rec go llc acc =
     match llc with
     | For_loop fc -> (
         let acc = llc :: acc in
-        match strip (flat_lines [ fc.body ]) with [ single ] -> go single acc | _ -> List.rev acc)
+        match strip (flat_lines [ fc.body ]) with
+        | [ single ] -> go single acc
+        | stmts when lanes -> (
+            match List.rev stmts with
+            | (For_loop _ as inner) :: preamble when List.for_all preamble ~f:uniform ->
+                go inner acc
+            | _ -> List.rev acc)
+        | _ -> List.rev acc)
     | If { body; _ } -> go body acc
     | _ -> List.rev acc
   in
@@ -4675,9 +4691,10 @@ let path_loops (nest : Low_level.t) : Low_level.t list =
    matmul's chain is batch loops plus row plus column (gh-ocannl-569 — capping at 2 made every
    rank-3+ site's companion coverage decline, serializing the axis whose spreading the hardware
    wanted most). The alignment rule is arity-independent; a longer chain only asks the same
-   per-position question more times. *)
-let analyze_parallel_chains ?(max_chain = 2) ?(select_chain = Fn.id) (opt : Low_level.optimized) :
-    Low_level.t list list =
+   per-position question more times. [lanes] reads chains through {!path_loops}' lane extension (the
+   GPU preset's lane geometry, see {!lane_geometry}). *)
+let analyze_parallel_chains ?(max_chain = 2) ?(select_chain = Fn.id) ?(lanes = false)
+    (opt : Low_level.optimized) : Low_level.t list list =
   let open Low_level in
   let plc = opt.optimize_ctx.placements in
   let nests, bare = split_nests plc opt.llc in
@@ -4699,7 +4716,7 @@ let analyze_parallel_chains ?(max_chain = 2) ?(select_chain = Fn.id) (opt : Low_
                   Indexing.equal_axis_index idx (Indexing.Iterator s)))
         in
         let chain =
-          List.filter (path_loops n.n_loops) ~f:(function
+          List.filter (path_loops ~lanes n.n_loops) ~f:(function
             | For_loop fc -> fc.from_ = 0 && qualifies fc.index
             | _ -> false)
           |> select_chain
@@ -5275,6 +5292,109 @@ let gpu_parallel_suffix ~block_size ~min_parallel ~extent chain =
       choose chain chain
   | _ -> chain
 
+(* Lane geometry (gh-ocannl-1003 stage 1). A nest whose parallel loop sits under a serial loop past
+   a lane-uniform preamble -- the online-softmax hoist's value pass, [for (b, s, h) { for t { p :=
+   P[s, t]; for e { O[s, e] += p * V[t, e] } } }] -- has a plain path that stops at the preamble, so
+   the presets' chain is two of the loops above [t] and the [e] loop runs serially inside every
+   thread, a read-modify-write of [O] per key step. Here the chain extends through the preamble
+   ({!path_loops}' [~lanes]) and uncapped: every chain loop above the serial loop becomes a [Grid]
+   loop (slots [>= 2] fold onto [.z]) and the loop past the preamble a [Workgroup] lane, [Grid (b,
+   s, h) -> Serial t -> Workgroup e]. A lane recomputes the uniform [p] into its own register and
+   owns its [O] cells, which the same race analysis proves as for any chain: thread identity is the
+   tuple of chain symbols, the serial loop runs whole and in program order inside every thread, and
+   a cell two lanes could both touch is a cross-thread conflict that bails the analysis. So nothing
+   new is asked of [Low_level.validate_parallel], which already takes a hardware loop under a serial
+   one (its obligation is coverage: every materialized write sits under a loop of every active slot,
+   which each lane nest's writes do by construction).
+
+   Declines ([None], the presets' chains stand) unless every nest carrying a chain is such a lane
+   nest with the same number of [Grid] loops -- the slots must line up positionally for the coverage
+   rule, and a kernel mixing a lane nest with the presets' one-Grid shape would leave the other
+   nest's writes uncovered on the extra slots -- the launch fits the device's grid caps, the
+   parallel size reaches [min_parallel], and the launch has strictly more threads than the presets'
+   geometry [standard_threads]. Cheap to ask of every kernel: without a nest whose lane path is
+   longer than its plain path, it runs no analysis. GPU only: the CPU preset parallelizes one
+   outermost loop across pool chunks, where a lane loop would only add structure that runs serially
+   inside a chunk. *)
+let lane_geometry ~block_size ~min_parallel ~(limits : Backend_intf.hardware_limits)
+    ~standard_threads (opt : Low_level.optimized) : schedule option =
+  let open Low_level in
+  (* A chain loop as its symbol and extent. *)
+  let loop = function For_loop fc -> Some (fc.index, fc.to_ + 1) | _ -> None in
+  if
+    not
+      (List.exists (flat_lines [ opt.llc ]) ~f:(fun stmt ->
+           List.length (path_loops ~lanes:true stmt) > List.length (path_loops stmt)))
+  then None
+  else
+    match
+      let chains = analyze_parallel_chains ~lanes:true ~max_chain:Int.max_value opt in
+      (fst (split_nests opt.optimize_ctx.placements opt.llc), chains)
+    with
+    | exception Bail -> None
+    | nests, chains -> (
+        (* A lane chain ends in a loop the plain path does not reach, with a grid loop above it. *)
+        let lane_of nest chain =
+          match List.rev_filter_map chain ~f:loop with
+          | ((lane, _) as lane_loop) :: (_ :: _ as rev_grid)
+            when not
+                   (List.exists (path_loops nest) ~f:(fun l ->
+                        Option.exists (loop l) ~f:(fun (s, _) -> Indexing.equal_symbol s lane))) ->
+              Some (List.rev rev_grid, lane_loop)
+          | _ -> None
+        in
+        let lanes =
+          List.filter_map (List.zip_exn nests chains) ~f:(fun (n, chain) ->
+              if List.is_empty chain then None else Some (lane_of n.n_loops chain))
+        in
+        match Option.all lanes with
+        | None | Some [] -> None
+        | Some ((grid0, _) :: _ as lanes)
+          when not (List.for_all lanes ~f:(fun (grid, _) -> List.length grid = List.length grid0))
+          ->
+            None
+        | Some ((grid0, _) :: _ as lanes) ->
+            let arity = List.length grid0 in
+            (* Grid slot [k] is the [k]-th loop from the innermost; the launch takes each slot's
+               maximum, and slots [>= 2] multiply into [.z] ([Low_level.launch_dims]). *)
+            let slot_max k =
+              List.fold lanes ~init:1 ~f:(fun m (grid, _) ->
+                  max m (snd (List.nth_exn (List.rev grid) k)))
+            in
+            let lane_width (_, n) = min block_size n in
+            let geometry =
+              {
+                lg_grid_y = Some (if arity > 1 then slot_max 1 else 1);
+                lg_grid_z =
+                  Some (List.fold (List.range 2 arity) ~init:1 ~f:(fun z k -> z * slot_max k));
+                lg_block_x =
+                  Some (List.fold lanes ~init:1 ~f:(fun m (_, lane) -> max m (lane_width lane)));
+                lg_block_y = Some 1;
+                lg_block_z = Some 1;
+              }
+            in
+            let threads =
+              List.fold lanes ~init:0 ~f:(fun m (grid, lane) ->
+                  max m (List.fold grid ~init:(lane_width lane) ~f:(fun t (_, n) -> t * n)))
+            in
+            if
+              Option.is_some (launch_geometry_excess ~limits geometry)
+              || max_parallel_size chains < min_parallel
+              || threads <= standard_threads
+            then None
+            else (
+              crosscheck_scratch_containment opt chains;
+              Some
+                (List.concat_map lanes ~f:(fun (grid, (lane, n)) ->
+                     List.map grid ~f:(fun (axis, _) -> Retype { axis; ty = Grid })
+                     @
+                     if n <= block_size then [ Retype { axis = lane; ty = Workgroup } ]
+                     else
+                       let op, _, _ =
+                         split ~axis:lane ~factor:block_size ~outer:Serial ~inner:Workgroup
+                       in
+                       [ op ]))))
+
 let default_gpu ?block_size ?min_parallel ?(limits = Backend_intf.no_hardware_limits)
     (opt : Low_level.optimized) : schedule =
   let open Low_level in
@@ -5296,77 +5416,87 @@ let default_gpu ?block_size ?min_parallel ?(limits = Backend_intf.no_hardware_li
       ~default:
         (Int.of_string @@ Utils.get_global_arg ~arg_name:"gpu_schedule_min_parallel" ~default:"64")
   in
-  try
-    let selection_changed = ref false in
-    let select_chain chain =
-      let selected =
-        gpu_parallel_suffix ~block_size ~min_parallel
-          ~extent:(function For_loop fc -> fc.to_ + 1 | _ -> assert false)
-          chain
+  (* The presets' schedule and the thread count of its launch (1 when it stays serial), which the
+     lane geometry has to beat. *)
+  let standard, standard_threads =
+    try
+      let selection_changed = ref false in
+      let select_chain chain =
+        let selected =
+          gpu_parallel_suffix ~block_size ~min_parallel
+            ~extent:(function For_loop fc -> fc.to_ + 1 | _ -> assert false)
+            chain
+        in
+        (* The selector returns the original list or one of its tails. Preserve that fact so
+           ordinary rank-two/large-leading nests do not pay for the same affine proof twice. *)
+        if not (phys_equal selected chain) then selection_changed := true;
+        selected
       in
-      (* The selector returns the original list or one of its tails. Preserve that fact so ordinary
-         rank-two/large-leading nests do not pay for the same affine proof twice. *)
-      if not (phys_equal selected chain) then selection_changed := true;
-      selected
-    in
-    let original = lazy (analyze_parallel_chains opt) in
-    let selected =
-      try analyze_parallel_chains ~select_chain opt
-      with Bail -> if !selection_changed then Lazy.force original else raise Bail
-    in
-    (* Alignment can remove the axis which made a suffix attractive. Compare the proved geometry,
-       not the proposal: retaining a short singleton can otherwise turn a parallel original into a
-       serial kernel, or reduce its group count even above the threshold. *)
-    let geometry = function
-      | [ For_loop fc ] ->
-          let n = fc.to_ + 1 in
-          ((n + block_size - 1) / block_size, min block_size n)
-      | For_loop fc0 :: For_loop fc1 :: _ -> (fc0.to_ + 1, min block_size (fc1.to_ + 1))
-      | _ -> (0, 0)
-    in
-    let chains =
-      if not !selection_changed then selected
+      let original = lazy (analyze_parallel_chains opt) in
+      let selected =
+        try analyze_parallel_chains ~select_chain opt
+        with Bail -> if !selection_changed then Lazy.force original else raise Bail
+      in
+      (* Alignment can remove the axis which made a suffix attractive. Compare the proved geometry,
+         not the proposal: retaining a short singleton can otherwise turn a parallel original into a
+         serial kernel, or reduce its group count even above the threshold. *)
+      let geometry = function
+        | [ For_loop fc ] ->
+            let n = fc.to_ + 1 in
+            ((n + block_size - 1) / block_size, min block_size n)
+        | For_loop fc0 :: For_loop fc1 :: _ -> (fc0.to_ + 1, min block_size (fc1.to_ + 1))
+        | _ -> (0, 0)
+      in
+      let chains =
+        if not !selection_changed then selected
+        else
+          try
+            let original = Lazy.force original in
+            if
+              max_parallel_size selected < min_parallel
+              && max_parallel_size original >= min_parallel
+              || List.exists2_exn selected original ~f:(fun selected original ->
+                  let sg, sb = geometry selected and og, ob = geometry original in
+                  sg < og || sg * sb < og * ob)
+            then original
+            else selected
+          with Bail -> selected
+      in
+      crosscheck_scratch_containment opt chains;
+      if max_parallel_size chains < min_parallel then ([], 1)
       else
-        try
-          let original = Lazy.force original in
-          if
-            (max_parallel_size selected < min_parallel && max_parallel_size original >= min_parallel)
-            || List.exists2_exn selected original ~f:(fun selected original ->
-                let sg, sb = geometry selected and og, ob = geometry original in
-                sg < og || sg * sb < og * ob)
-          then original
-          else selected
-        with Bail -> selected
-    in
-    crosscheck_scratch_containment opt chains;
-    if max_parallel_size chains < min_parallel then []
-    else
-      (* Emit per-nest ops. Every annotated nest contributes exactly one Grid and one Workgroup
-         loop, so hardware slots are uniform ([.x] of each kind) across nests and every materialized
-         write covers all active dimensions ([validate_parallel]'s requirement). *)
-      List.concat_map chains ~f:(fun chain ->
-          match chain with
-          | [] -> []
-          | [ For_loop fc ] ->
-              let n0 = fc.to_ + 1 in
-              let op, _, _ =
-                split ~axis:fc.index ~factor:(min block_size n0) ~outer:Grid ~inner:Workgroup
-              in
-              [ op ]
-          | For_loop fc0 :: For_loop fc1 :: _ ->
-              let n1 = fc1.to_ + 1 in
-              if n1 <= block_size then
-                [
-                  Retype { axis = fc0.index; ty = Grid };
-                  Retype { axis = fc1.index; ty = Workgroup };
-                ]
-              else
-                let op, _, _ =
-                  split ~axis:fc1.index ~factor:block_size ~outer:Serial ~inner:Workgroup
-                in
-                [ Retype { axis = fc0.index; ty = Grid }; op ]
-          | _ -> [])
-  with Bail -> []
+        (* Emit per-nest ops. Every annotated nest contributes exactly one Grid and one Workgroup
+           loop, so hardware slots are uniform ([.x] of each kind) across nests and every
+           materialized write covers all active dimensions ([validate_parallel]'s requirement). *)
+        ( List.concat_map chains ~f:(fun chain ->
+              match chain with
+              | [] -> []
+              | [ For_loop fc ] ->
+                  let n0 = fc.to_ + 1 in
+                  let op, _, _ =
+                    split ~axis:fc.index ~factor:(min block_size n0) ~outer:Grid ~inner:Workgroup
+                  in
+                  [ op ]
+              | For_loop fc0 :: For_loop fc1 :: _ ->
+                  let n1 = fc1.to_ + 1 in
+                  if n1 <= block_size then
+                    [
+                      Retype { axis = fc0.index; ty = Grid };
+                      Retype { axis = fc1.index; ty = Workgroup };
+                    ]
+                  else
+                    let op, _, _ =
+                      split ~axis:fc1.index ~factor:block_size ~outer:Serial ~inner:Workgroup
+                    in
+                    [ Retype { axis = fc0.index; ty = Grid }; op ]
+              | _ -> []),
+          List.fold chains ~init:1 ~f:(fun m chain ->
+              let g, b = geometry chain in
+              max m (g * b)) )
+    with Bail -> ([], 1)
+  in
+  Option.value ~default:standard
+    (lane_geometry ~block_size ~min_parallel ~limits ~standard_threads opt)
 
 let default_cpu ?min_parallel (opt : Low_level.optimized) : schedule =
   let min_parallel =
@@ -6147,7 +6277,7 @@ let default_schedule_fingerprint ~backend_name =
         String.strip (Utils.get_global_arg ~arg_name:"gpu_schedule_min_parallel" ~default:"64")
       in
       [%string
-        "gpu:policy=small-leading-v1:fission=%{fission#Bool}:block_size=%{bs}:min_parallel=%{mp}"]
+        "gpu:policy=small-leading-v1+lanes-v1:fission=%{fission#Bool}:block_size=%{bs}:min_parallel=%{mp}"]
     else
       let mp =
         String.strip (Utils.get_global_arg ~arg_name:"cpu_schedule_min_parallel" ~default:"16384")

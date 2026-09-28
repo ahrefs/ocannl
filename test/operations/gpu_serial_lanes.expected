@@ -1,0 +1,20 @@
+--- leg 1: the hoisted value pass takes the lane geometry ---
+lanes_hoisted: the optimized nest keeps the hoisted shape: true
+lanes_hoisted: Grid (h, s, b) on .x, .y, .z and a 32-wide lane: true
+lanes_hoisted: the Workgroup lane sits inside the serial key loop, past the preamble: true
+lanes_hoisted: every cell of lanes_hoisted_o holds the serial order's exact value: true
+lanes_hoisted: the emitted kernel binds the lane inside the serial loop: true
+--- leg 2: a lane nest sharing its kernel with a plain nest keeps the presets ---
+lanes_mixed: no lane geometry: true
+lanes_mixed: the presets' suffix pair, Grid s x Workgroup h: true
+lanes_mixed: every cell of lanes_mixed_o holds the serial order's exact value: true
+lanes_mixed: every cell of lanes_mixed_q holds the serial order's exact value: true
+--- leg 3: a lane reading another lane's cell declines ---
+lanes_mirror: no lane geometry: true
+lanes_mirror: the presets' suffix pair, Grid s x Workgroup h: true
+lanes_mirror: every cell of lanes_mirror_o holds the serial order's exact value: true
+--- leg 4: the rewritten attention's value pass, through the real pipeline ---
+attention: the lowering carries the hoisted value pass: true
+attention: the CPU preset schedules no lanes: true
+attention: a GPU segment schedules the value pass with lanes: true
+attention: the rewritten forward agrees with the composed one: true
