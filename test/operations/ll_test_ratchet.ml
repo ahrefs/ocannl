@@ -14,9 +14,6 @@ let exemptions =
     ( "test/operations/affine_lowering.ml",
       Scan.Migration { records = 0; traversals = 3 },
       "existing migration debt; adopt ll_test when touched" );
-    ( "test/operations/autotune_scope_menu.ml",
-      Scan.Migration { records = 0; traversals = 1 },
-      "existing migration debt; adopt ll_test when touched" );
     ( "test/operations/autotune_smoke.ml",
       Scan.Migration { records = 3; traversals = 1 },
       "existing migration debt; adopt ll_test when touched" );
@@ -25,9 +22,6 @@ let exemptions =
       "links ll_test for operand helpers only; still hand-builds Low_level" );
     ( "test/operations/cost_model_selection.ml",
       Scan.Migration { records = 0; traversals = 1 },
-      "links ll_test for operand helpers only; still hand-builds Low_level" );
-    ( "test/operations/cpu_parallel.ml",
-      Scan.Migration { records = 11; traversals = 1 },
       "links ll_test for operand helpers only; still hand-builds Low_level" );
     ( "test/operations/cpu_simd_reduction.ml",
       Scan.Migration { records = 5; traversals = 1 },
@@ -44,9 +38,6 @@ let exemptions =
     ( "test/operations/hip_scratch_budget.ml",
       Scan.Migration { records = 5; traversals = 0 },
       "existing migration debt; adopt ll_test when touched" );
-    ( "test/operations/mma_tensorization_label.ml",
-      Scan.Migration { records = 0; traversals = 1 },
-      "links ll_test for operand helpers only; still hand-builds Low_level" );
     ( "test/operations/model_default_fallback.ml",
       Scan.Migration { records = 2; traversals = 2 },
       "existing migration debt; adopt ll_test when touched" );
@@ -56,47 +47,11 @@ let exemptions =
     ( "test/operations/op_legality.ml",
       Scan.Migration { records = 4; traversals = 1 },
       "links ll_test for operand helpers only; still hand-builds Low_level" );
-    ( "test/operations/schedule_conv_gemm.ml",
-      Scan.Migration { records = 0; traversals = 1 },
-      "links ll_test for operand helpers only; still hand-builds Low_level" );
-    ( "test/operations/schedule_cpu_pack_matmul.ml",
-      Scan.Migration { records = 0; traversals = 1 },
-      "links ll_test for operand helpers only; still hand-builds Low_level" );
-    ( "test/operations/schedule_epilogue_fusion.ml",
-      Scan.Migration { records = 4; traversals = 4 },
-      "links ll_test for operand helpers only; still hand-builds Low_level" );
-    ( "test/operations/schedule_ldmatrix_matmul.ml",
-      Scan.Migration { records = 0; traversals = 1 },
-      "links ll_test for operand helpers only; still hand-builds Low_level" );
-    ( "test/operations/schedule_mma_matmul.ml",
-      Scan.Migration { records = 0; traversals = 1 },
-      "links ll_test for operand helpers only; still hand-builds Low_level" );
     ( "test/operations/schedule_ops.ml",
       Scan.Migration { records = 4; traversals = 1 },
       "links ll_test for operand helpers only; still hand-builds Low_level" );
-    ( "test/operations/schedule_pack_mma_matmul.ml",
-      Scan.Migration { records = 0; traversals = 1 },
-      "links ll_test for operand helpers only; still hand-builds Low_level" );
-    ( "test/operations/schedule_packed_constants.ml",
-      Scan.Migration { records = 0; traversals = 1 },
-      "links ll_test for operand helpers only; still hand-builds Low_level" );
-    ( "test/operations/schedule_pad.ml",
-      Scan.Migration { records = 0; traversals = 1 },
-      "links ll_test for operand helpers only; still hand-builds Low_level" );
-    ( "test/operations/schedule_pipelined_matmul.ml",
-      Scan.Migration { records = 3; traversals = 8 },
-      "links ll_test for operand helpers only; still hand-builds Low_level" );
-    ( "test/operations/schedule_register_matmul.ml",
-      Scan.Migration { records = 0; traversals = 1 },
-      "links ll_test for operand helpers only; still hand-builds Low_level" );
-    ( "test/operations/schedule_smem_matmul.ml",
-      Scan.Migration { records = 0; traversals = 1 },
-      "links ll_test for operand helpers only; still hand-builds Low_level" );
     ( "test/operations/schedule_split_reduce.ml",
       Scan.Migration { records = 0; traversals = 7 },
-      "links ll_test for operand helpers only; still hand-builds Low_level" );
-    ( "test/operations/schedule_swizzle_matmul.ml",
-      Scan.Migration { records = 0; traversals = 1 },
       "links ll_test for operand helpers only; still hand-builds Low_level" );
     ( "test/operations/scratch_value_variance.ml",
       Scan.Migration { records = 5; traversals = 0 },
@@ -113,18 +68,6 @@ let exemptions =
     ( "test/operations/test_slice_alias.ml",
       Scan.Migration { records = 0; traversals = 2 },
       "existing migration debt; adopt ll_test when touched" );
-    ( "test/operations/tile_mma_declines.ml",
-      Scan.Migration { records = 0; traversals = 1 },
-      "links ll_test for operand helpers only; still hand-builds Low_level" );
-    ( "test/operations/tile_mma_geometry.ml",
-      Scan.Migration { records = 0; traversals = 1 },
-      "links ll_test for operand helpers only; still hand-builds Low_level" );
-    ( "test/operations/tile_mma_narrow.ml",
-      Scan.Migration { records = 0; traversals = 1 },
-      "links ll_test for operand helpers only; still hand-builds Low_level" );
-    ( "test/operations/vec_signed_zero.ml",
-      Scan.Migration { records = 0; traversals = 2 },
-      "links ll_test for operand helpers only; still hand-builds Low_level" );
     ( "test/support/ll_builders.ml",
       Scan.Permanent,
       "canonical pure IR builders shared by both packages" );

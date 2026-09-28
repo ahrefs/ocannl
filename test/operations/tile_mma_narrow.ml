@@ -58,19 +58,6 @@ let () = Generated.init ~backend_name
 let named name (comp : Asgns.comp) : Asgns.comp =
   { comp with asgns = Asgns.Block_comment (name, comp.asgns) }
 
-(* The single-child chain of loops from the top of each top-level nest. *)
-let nest_paths (llc : LL.t) : Ir.Indexing.symbol list list =
-  let strip stmts = List.filter stmts ~f:(function LL.Noop | LL.Comment _ -> false | _ -> true) in
-  let rec path (llc : LL.t) : Ir.Indexing.symbol list =
-    match llc with
-    | LL.For_loop { index; body; _ } ->
-        index :: (match strip (LL.flat_lines [ body ]) with [ single ] -> path single | _ -> [])
-    | LL.If { body; _ } -> path body
-    | _ -> []
-  in
-  List.filter_map (LL.flat_lines [ llc ]) ~f:(fun stmt ->
-      match path stmt with [] -> None | p -> Some p)
-
 let sink sym below = List.map below ~f:(fun inner -> Sched.Swap { outer = sym; inner })
 let n = 64
 let bm, bk = (16, 16)
@@ -93,7 +80,7 @@ let half_vec_typ =
    gh-ocannl-639 section, by the k blocking — [bk = n] makes the single register tile cover the
    whole k extent, so the C-tile narrows once per cell like the serial fallback). *)
 let composed_schedule ?(bk = bk) ~hoist_b ~tile_prec ~a ~b (opt : LL.optimized) : Sched.schedule =
-  let paths = nest_paths opt.LL.llc in
+  let paths = Ll_test.nest_paths opt.LL.llc in
   let i, j, k =
     match List.find_exn paths ~f:(fun p -> List.length p = 3) with
     | [ i; j; k ] -> (i, j, k)

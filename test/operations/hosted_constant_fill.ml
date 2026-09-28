@@ -26,29 +26,16 @@ module Asgns = Ir.Assignments
 
 let m, n, k = (4, 4, 4)
 
-(* Mirrors [bin/schedule_bench.ml]: the i/j/k accumulation nest is the unique 3-deep loop nest of
-   the lowered matmul. *)
-let nest_paths (llc : LL.t) : Ir.Indexing.symbol list list =
-  let strip stmts = List.filter stmts ~f:(function LL.Noop | LL.Comment _ -> false | _ -> true) in
-  let rec path (llc : LL.t) : Ir.Indexing.symbol list =
-    match llc with
-    | LL.For_loop { index; body; _ } ->
-        index :: (match strip (LL.flat_lines [ body ]) with [ single ] -> path single | _ -> [])
-    | LL.If { body; _ } -> path body
-    | _ -> []
-  in
-  List.filter_map (LL.flat_lines [ llc ]) ~f:(fun stmt ->
-      match path stmt with [] -> None | p -> Some p)
-
 let named name (comp : Asgns.comp) : Asgns.comp =
   { comp with asgns = Asgns.Block_comment (name, comp.asgns) }
 
 (* One thread per output element: Grid x Workgroup splits of the matmul's zeroing and accumulation
    loops (the [parallel] shape of [bin/schedule_bench.ml]). Any active hardware dimension makes an
    in-kernel constant init illegal under [validate_parallel]'s coverage rule, which is what the
-   parts below exercise. *)
+   parts below exercise. The i/j/k accumulation nest is the unique 3-deep loop nest of the lowered
+   matmul. *)
 let grid_workgroup_schedule ~mc opt =
-  let paths = nest_paths opt.LL.llc in
+  let paths = Ll_test.nest_paths opt.LL.llc in
   let i, j =
     match List.find paths ~f:(fun p -> List.length p = 3) with
     | Some [ i; j; _k ] -> (i, j)

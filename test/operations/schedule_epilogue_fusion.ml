@@ -42,18 +42,6 @@ let nonzero name (a : float array) =
 let named name (comp : Asgns.comp) : Asgns.comp =
   { comp with asgns = Asgns.Block_comment (name, comp.asgns) }
 
-let nest_paths (llc : LL.t) : Ir.Indexing.symbol list list =
-  let strip stmts = List.filter stmts ~f:(function LL.Noop | LL.Comment _ -> false | _ -> true) in
-  let rec path (llc : LL.t) : Ir.Indexing.symbol list =
-    match llc with
-    | LL.For_loop { index; body; _ } ->
-        index :: (match strip (LL.flat_lines [ body ]) with [ single ] -> path single | _ -> [])
-    | LL.If { body; _ } -> path body
-    | _ -> []
-  in
-  List.filter_map (LL.flat_lines [ llc ]) ~f:(fun stmt ->
-      match path stmt with [] -> None | p -> Some p)
-
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
 
 (* Intentional dialect identity: the remaining branch pins the exact MSL fragment-store and barrier
@@ -125,7 +113,7 @@ let () =
   (* --- Site 2: the S4 packed pipeline's Privatize store-back (all-Serial, every backend) --- *)
   let ma2, mb2, prod2, mc2 = make_graph () in
   let transform2 (opt : LL.optimized) =
-    let paths = nest_paths opt.LL.llc in
+    let paths = Ll_test.nest_paths opt.LL.llc in
     let i, j, k =
       match List.find_exn paths ~f:(fun p -> List.length p = 3) with
       | [ i; j; k ] -> (i, j, k)
@@ -178,7 +166,7 @@ let () =
   let _, _, prod3, mc3 = make_graph () in
   let has_epilogue_sibling = ref false in
   let transform3 (opt : LL.optimized) =
-    let paths = nest_paths opt.LL.llc in
+    let paths = Ll_test.nest_paths opt.LL.llc in
     let i, j, k =
       match List.find_exn paths ~f:(fun p -> List.length p = 3) with
       | [ i; j; k ] -> (i, j, k)
@@ -344,7 +332,7 @@ let () =
      pinned). *)
   let _, _, prod6, mc6 = make_graph () in
   (let transform6 (opt : LL.optimized) =
-     let paths = nest_paths opt.LL.llc in
+     let paths = Ll_test.nest_paths opt.LL.llc in
      let i, j, k =
        match List.find_exn paths ~f:(fun p -> List.length p = 3) with
        | [ i; j; k ] -> (i, j, k)

@@ -2292,19 +2292,7 @@ let mma_matmul ~tag ~prec =
   mc
 
 let mma_nest_syms (opt : LL.optimized) =
-  let strip stmts = List.filter stmts ~f:(function LL.Noop | LL.Comment _ -> false | _ -> true) in
-  let rec path (llc : LL.t) : Idx.symbol list =
-    match llc with
-    | LL.For_loop { index; body; _ } ->
-        index :: (match strip (LL.flat_lines [ body ]) with [ single ] -> path single | _ -> [])
-    | LL.If { body; _ } -> path body
-    | _ -> []
-  in
-  let paths =
-    List.filter_map (LL.flat_lines [ opt.LL.llc ]) ~f:(fun stmt ->
-        match path stmt with [] -> None | pth -> Some pth)
-  in
-  match List.find_exn paths ~f:(fun pth -> List.length pth = 3) with
+  match List.find_exn (Ll_test.nest_paths opt.LL.llc) ~f:(fun pth -> List.length pth = 3) with
   | [ i; j; k ] -> (i, j, k)
   | _ -> assert false
 
