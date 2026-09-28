@@ -305,21 +305,32 @@ let classify_line raw =
 
 let x86_fp_suffix m =
   let m = if String.is_prefix m ~prefix:"v" then String.drop_prefix m 1 else m in
-  (* AVX512-FP16's conversions spell their packed forms with a trailing [x] ([vcvtph2psx],
-     [vcvtps2phx]), which left gcc's and clang's [sapphirerapids] fp16 bridges unclassified. *)
-  let m =
-    if String.is_prefix m ~prefix:"cvt" && String.is_suffix m ~suffix:"x" then
-      String.drop_suffix m 1
-    else m
+  let classify m =
+    (* [push]/[pop] would otherwise read as scalar-single-precision by their last two characters. *)
+    if String.is_prefix m ~prefix:"push" || String.is_prefix m ~prefix:"pop" then None
+    else if String.length m < 3 then None
+    else
+      match String.suffix m 2 with
+      | ("ps" | "pd" | "ph") as s -> Some (`Packed, s)
+      | ("ss" | "sd" | "sh") as s -> Some (`Scalar, s)
+      | _ -> None
   in
-  (* [push]/[pop] would otherwise read as scalar-single-precision by their last two characters. *)
-  if String.is_prefix m ~prefix:"push" || String.is_prefix m ~prefix:"pop" then None
-  else if String.length m < 3 then None
-  else
-    match String.suffix m 2 with
-    | ("ps" | "pd" | "ph") as s -> Some (`Packed, s)
-    | ("ss" | "sd" | "sh") as s -> Some (`Scalar, s)
-    | _ -> None
+  match classify m with
+  | Some _ as c -> c
+  | None when String.is_prefix m ~prefix:"cvt" ->
+      (* A conversion can end in up to two letters past its precision pair: AVX512-FP16's [x]
+         ([vcvtph2psx], [vcvtps2phx]) and AT&T's operand-width suffix for a memory operand
+         ([vcvtps2phxx], [vcvtps2phxy], [vcvtpd2psy]). Both left gcc's and clang's [sapphirerapids]
+         fp16 bridges unclassified. *)
+      let width_letter c = List.mem [ 'x'; 'y'; 'z' ] c ~equal:Char.equal in
+      let rec strip m n =
+        if n = 0 || String.is_empty m || not (width_letter m.[String.length m - 1]) then None
+        else
+          let m = String.drop_suffix m 1 in
+          match classify m with Some _ as c -> c | None -> strip m (n - 1)
+      in
+      strip m 2
+  | None -> None
 
 let packed_integer_mnemonic m =
   let m = if String.is_prefix m ~prefix:"v" then String.drop_prefix m 1 else m in
@@ -722,14 +733,34 @@ let source_file_numbers lines ~basename =
 
 let classify_asm asm = String.split_lines asm |> List.map ~f:classify_line |> Array.of_list
 
-(** [frame_pointer_lines lines] is, per line, whether [%rbp] is the frame pointer there: from an
-    instruction that makes it one -- [movq %rsp, %rbp], the prologue of a function that keeps a
-    frame (to realign its stack for 64-byte spills, say) -- to the end of that function, as its
-    unwind directives delimit it ([.cfi_startproc]/[.cfi_endproc], and mingw's
-    [.seh_proc]/[.seh_endproc]). A listing without those directives keeps the frame from the first
-    such instruction on, which errs toward counting a reference. *)
+(** [frame_pointer_lines lines] is, per line, whether [%rbp] is the frame pointer there: from the
+    prologue step that makes it one to the end of that function, as its unwind directives delimit it
+    ([.cfi_startproc]/[.cfi_endproc], and mingw's [.seh_proc]/[.seh_endproc]). A function keeps a
+    frame to realign its stack for 64-byte spills, say, and sets it up by any of: [movq %rsp, %rbp];
+    an offset one, [leaq 128(%rsp), %rbp] (clang for mingw); and the unwind directive that records
+    either, [.cfi_def_cfa_register %rbp] (or DWARF register [6]) or [.seh_setframe %rbp, N] -- any
+    one suffices, since a form this misses hides the function's spills. A listing without function
+    delimiters keeps the frame from the first such line on, which errs toward counting. *)
 let frame_pointer_lines lines =
   let frame = ref false in
+  let operands rest = String.filter rest ~f:(fun c -> not (Char.is_whitespace c)) in
+  let sets_frame = function
+    | Directive (".cfi_def_cfa_register" :: reg :: _) ->
+        List.mem [ "%rbp"; "6" ] reg ~equal:String.equal
+    | Directive (".seh_setframe" :: reg :: _) -> String.is_prefix reg ~prefix:"%rbp"
+    | Insn { mnemonic; rest } when List.mem [ "mov"; "movq"; "movl" ] mnemonic ~equal:String.equal
+      ->
+        List.mem [ "%rsp,%rbp"; "%esp,%ebp" ] (operands rest) ~equal:String.equal
+    | Insn { mnemonic; rest } when List.mem [ "lea"; "leaq"; "leal" ] mnemonic ~equal:String.equal
+      -> (
+        match String.rsplit2 (operands rest) ~on:',' with
+        | Some (source, destination) ->
+            List.mem [ "%rbp"; "%ebp" ] destination ~equal:String.equal
+            && (String.is_substring source ~substring:"(%rsp"
+               || String.is_substring source ~substring:"(%esp")
+        | None -> false)
+    | _ -> false
+  in
   Array.map lines ~f:(fun line ->
       (match line with
       | Some (Directive (d :: _))
@@ -737,12 +768,7 @@ let frame_pointer_lines lines =
                [ ".cfi_startproc"; ".cfi_endproc"; ".seh_proc"; ".seh_endproc" ]
                d ~equal:String.equal ->
           frame := false
-      | Some (Insn { mnemonic; rest })
-        when List.mem [ "mov"; "movq"; "movl" ] mnemonic ~equal:String.equal
-             && List.mem [ "%rsp,%rbp"; "%esp,%ebp" ]
-                  (String.filter rest ~f:(fun c -> not (Char.is_whitespace c)))
-                  ~equal:String.equal ->
-          frame := true
+      | Some l when sets_frame l -> frame := true
       | _ -> ());
       !frame)
 

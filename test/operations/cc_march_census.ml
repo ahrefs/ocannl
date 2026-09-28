@@ -703,8 +703,9 @@ let toolchains () =
      host compiler, which CI's x86 leg never is, and a clang-only defect read as coverage. What
      their first run found red was OCANNL's, not clang's -- see the resident claim's comment -- so
      they carry no known-defect class. Where the named clang does not accept a target -- or is not
-     installed -- its column is skipped like any other. [X86_CLANG] names another clang (a version
-     to compare against); the default is the one on [PATH]. *)
+     installed, or targets MSVC, as the clang on a Windows PATH does by default -- its column is
+     skipped with the reason, like any other. [X86_CLANG] names another clang (a version to compare
+     against); the default is the one on [PATH]. *)
   let clang =
     match Stdlib.Sys.getenv_opt "X86_CLANG" with
     | Some c when not (String.is_empty (String.strip c)) -> String.strip c
@@ -1669,7 +1670,25 @@ let () =
         geometry_loops ~f:(fun (e, g) ->
           String.is_substring e.source ~substring:(tile_header g.tile));
       let all = toolchains () in
-      let available = List.filter all ~f:Census.accepts in
+      (* Why a column is not censused, per column that is not. A toolchain that rejects the target
+         is the usual reason. The other is a toolchain that accepts it but writes no line table this
+         census reads: one targeting MSVC -- the clang on a Windows PATH, by default -- emits
+         CodeView's [.cv_file]/[.cv_loc] rather than [.file]/[.loc], and every row of its column
+         would report no loop. *)
+      let skip_reasons =
+        List.filter_map all ~f:(fun t ->
+            if not (Census.accepts t) then Some (t, t.Census.label ^ ", " ^ t.Census.note)
+            else if Set.mem (Census.defines t) "_MSC_VER" then
+              Some
+                ( t,
+                  t.Census.label
+                  ^ ", whose compiler targets MSVC: CodeView line tables, which this census does \
+                     not read" )
+            else None)
+      in
+      let available =
+        List.filter all ~f:(fun t -> not (List.Assoc.mem skip_reasons t ~equal:phys_equal))
+      in
       (* The per-row table goes to a file beside the kernels it describes, not to stderr: dune cuts
          a long stderr down to its head and tail with [...TRUNCATED BY DUNE...], and the rows it
          cuts are whichever happen to sit in the middle -- which hid rows during the staging#865
@@ -1830,7 +1849,7 @@ let () =
               && List.for_all mine ~f:(fun r -> Option.is_some r.profile))
           else
             Verdict.skipped ~aggregation:`Environment
-              ~backend:(t.Census.label ^ ", " ^ t.Census.note)
+              ~backend:(List.Assoc.find_exn skip_reasons t ~equal:phys_equal)
               name);
       Verdict.p_empty
         "every emitted kernel compiles clean at -O2 and -O3 under every accepted -march" ~over:rows

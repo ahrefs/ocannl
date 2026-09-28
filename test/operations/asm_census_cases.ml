@@ -428,8 +428,10 @@ let fma_probe () =
 
    And a memory operand through [%rbp] is a stack reference only where the function made [%rbp] its
    frame pointer: clang at [-O2] keeps a register tile's B-row pointer there, and its loads read as
-   spills on every clang x86 tile row until the census asked (gh-ocannl-1103). Two functions in one
-   listing tell the cases apart, the frame of the first ending with its [.cfi_endproc].
+   spills on every clang x86 tile row until the census asked (gh-ocannl-1103). Three functions in
+   one listing tell the cases apart, the frame of the first ending with its [.cfi_endproc]; the
+   third sets its frame up the way clang does for mingw, at an offset ([leaq 128(%rsp), %rbp] and
+   [.seh_setframe]), whose [%rbp] stores are spills too.
 
    And a register tile's C-tile load and store are straight-line code, read by attributing
    instructions to source lines ({!Census.attributed_in}) rather than by finding a loop: the
@@ -470,12 +472,19 @@ let stack_probe () =
              "\tvpmovzxwd (%rbp), %ymm1";
              "\tvmovaps %ymm2, 32(%rbp)";
              "\t.cfi_endproc";
+             "\t.seh_proc g";
+             "\tpushq %rbp";
+             "\t.seh_pushreg %rbp";
+             "\tleaq 128(%rsp), %rbp";
+             "\t.seh_setframe %rbp, 128";
+             "\tvmovaps %ymm0, -32(%rbp)";
+             "\t.seh_endproc";
            ])
   in
   Verdict.p
     "a memory operand through %rbp is a stack reference only in a function that made %rbp its \
      frame pointer"
-    (Poly.equal (frames.stack_refs, frames.stack_writes) (4, 2));
+    (Poly.equal (frames.stack_refs, frames.stack_writes) (7, 4));
   let source = "void f(void) {\n  LOAD;\n  LOOP;\n  STORE;\n}\n" in
   let listing =
     String.concat ~sep:"\n"
@@ -546,7 +555,8 @@ let stack_probe () =
    the same 8-byte load [vmovq], and the scalar-double suffix read clang's packed [Max]/[Min] fp16
    reductions as scalarized. A scalar move from memory is a load; a scalar STORE is what a
    scalarized loop writes its lanes back with, and scalar arithmetic is what it does to them, so
-   both still count. AVX512-FP16 spells its packed conversions with a trailing [x]. *)
+   both still count. AVX512-FP16 spells its packed conversions with a trailing [x], and AT&T adds an
+   operand-width letter after it for a memory source ([vcvtps2phxy]). *)
 let scalar_load_probe () =
   let c =
     Census.profile_all Census.Max_min
@@ -558,13 +568,15 @@ let scalar_load_probe () =
              "\tvmovss %xmm0, 4(%rdi)";
              "\tvmaxss %xmm1, %xmm0, %xmm0";
              "\tvcvtph2psx %xmm5, %xmm9";
+             "\tvcvtps2phxx (%rax), %xmm1";
+             "\tvcvtps2phxy (%rax), %xmm1";
              "\tvcvtsh2ss %xmm1, %xmm1, %xmm1";
            ])
   in
   Verdict.p
     "a scalar move from memory is a load, not scalar FP work, and an x-suffixed AVX512-FP16 \
      conversion is packed"
-    (Poly.equal (c.vector_ops, c.scalar_fp_ops) (1, 3))
+    (Poly.equal (c.vector_ops, c.scalar_fp_ops) (3, 3))
 
 let () =
   dialect_probes ();
