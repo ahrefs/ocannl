@@ -12,6 +12,16 @@ files.
   thread-coordinate tuple. Metal GPT measurements and the explicit CUDA/HIP residual are in
   `benchmarks/report-gh995-metal.md`; `gpu_small_leading_axis` executes dependent-nest and
   zero-initialization oracles.
+- A parallel loop under a serial loop is reachable only past lane-uniform scalar work
+  (gh-ocannl-1003). The presets' chain is the single-child loop path, which stops at the
+  online-softmax hoist's preamble (`for t { p := P[s, t]; for e { O[s, e] += p * V[t, e] } }`);
+  `default_gpu`'s lane geometry reads the path through it (`path_loops ~lanes`) and emits
+  `Grid (every chain loop above) -> Serial t -> Workgroup e`. It applies only when every
+  chain-carrying nest of the kernel is such a lane nest with the same Grid arity (positional slot
+  coverage), so a kernel mixing it with a plain nest keeps the presets. The preamble must be loop-free
+  (each lane recomputes it: the recomputed-scores form's inlined `q . k` cost 1.5x at seq 1024 on
+  Metal under lanes) and must precede exactly ONE loop: a nest with two sibling channel loops under
+  one preamble (a fused dK+dV) is not reached. `test/operations/gpu_serial_lanes`; measured in `benchmarks/report-gh1003-stage1.md`.
 - A GPU schedule must cover EVERY materialized-writing nest of the routine, not only the one the
   pipeline builds. Launch dimensions are kernel-global, so `Low_level.validate_parallel` rejects any
   companion write (a bias/relu tail; the elementwise statements an aligned-merged fission segment
@@ -470,6 +480,14 @@ files.
   `Autotune.on_candidate_preflight` exists — though since the lineage-wide half now escapes the
   region, injecting one of *its* exceptions through that hook exercises the containment machinery
   with a realistic payload rather than mirroring where a real one is raised.
+- A typed cause is not automatically a containable one. `Schedule_outcome.uncontainable` names the
+  causes `protect` makes `Fatal` although typed, the fatal record keeping them in `cause`: today the
+  cc backend's `dlopen` rejection at `Backend_link` (gh-ocannl-1077). The object compiled and the
+  loader found a symbol nothing supplies, an OCANNL link bug; contained, it declines exactly the
+  candidates whose code reaches the symbol (gh-ocannl-1045's libmvec: the vectorized ones), and
+  the search quietly ships a slower winner. Before, it escaped as a raw `Dl.DL_error`, contained
+  under permissive classification. A JIT rejecting one candidate's PTX stays a counted decline.
+  `test/operations/cc_dlopen_cause` manufactures one via the compiler command.
 - Placement decides which tensorized candidates *exist*, not just how they rank, because
   `mma_tile_for_precisions` keys on the storage precisions of the nodes the site actually reads.
   Under the mixed-precision recipe on a uniform-format backend (Metal's `simdgroup_matrix`: no mixed

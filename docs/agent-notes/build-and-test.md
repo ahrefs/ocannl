@@ -1107,7 +1107,12 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   Verdict's uncaught-exception handler prints `STOPPED EARLY` and the exception (status 2).
   `Verdict.case label f` turns a raise into `<label>: the case ran to completion (raised …): false`
   and runs the next case, printing nothing when `f` returns, so wrapping is golden-neutral
-  (`footprint_materialization` is the exemplar; `verdict_teardown` pins every ending).
+  (`footprint_materialization` is the exemplar; `verdict_teardown` pins every ending). An `exit`
+  inside a case, once a check has failed, is not a case failing but the run ending there, so
+  Verdict prints `STOPPED EARLY: an exit inside case "<label>" …` for it (gh-ocannl-1084). The
+  hand-built-IR `virtual_*` tests run their `case_*` rows through it too (gh-ocannl-1084); a new
+  multi-case test does the same. No scan holds it: the `case_` prefix is a local habit, and the
+  wider population of `test_*` drivers often catches its own exceptions to print them.
 - One claim surface, opened rather than copied. Every test that decides a verdict reaches the claim
   names through `open Verdict.Claims`; nothing in the tree rebinds them per file any more
   (gh-ocannl-815). The aliases the population used to carry were a maintenance defect with a
@@ -1239,7 +1244,11 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   1 when the run is no evidence: `STOPPED EARLY` for fewer rows or Verdict's own `STOPPED EARLY`
   line in the log, `NEVER RAN` when no candidate changed (a build failure, or a mutation that left
   the executable byte-identical so dune reused the old result -- a previous run's output is never
-  counted), `NOT COUNTED` when two did. A test that echoes a child's stderr (`verdict_teardown`)
+  counted), `NOT COUNTED` when two did. A raising `Verdict.case` prints one claim in place of its
+  rows while the cases after it still run, so fewer rows still count as reached (`cases raised:
+  K`, gh-ocannl-1084) when a case raised, Verdict's teardown line (`FAILED: n checks …`) shows the
+  process ended through `exit` rather than a signal, no `STOPPED EARLY` says that exit came from
+  inside a later case, and the stdout ends on the golden's last row or on a case's raise. A test that echoes a child's stderr (`verdict_teardown`)
   can carry a child's `STOPPED EARLY` line; read the rows line before discarding such a run.
   Otherwise the exit status remains test-run's, so a killed mutant normally exits 1, and a
   passing mutation exits 0 and needs investigation.

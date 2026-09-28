@@ -207,6 +207,7 @@
  (deps
   (alias runtest-online_softmax_fast_math)
   (alias runtest-fast_math_libmvec)
+  (alias runtest-cc_dlopen_cause)
   (alias runtest-micrograd_demo_logging)
   (alias runtest-n3_fwd_with_prec-unoptimized)
   (alias runtest-top_down_prec-unoptimized)
@@ -625,6 +626,40 @@
   (alias runtest-env_spelling_gate))
  (action
   (diff fast_math_libmvec.expected fast_math_libmvec.actual)))
+
+; gh-ocannl-1077: a cc kernel that compiles but fails at dlopen surfaces as a typed Backend_link
+; cause, and autotune does not absorb it. The compiler command renames `expf` to a symbol nothing
+; defines; strict classification is off so the autotune claims discriminate (the header of
+; cc_dlopen_cause.ml has the mechanism).
+
+(executable
+ (name cc_dlopen_cause)
+ (modules cc_dlopen_cause)
+ (libraries base ocannl stdio arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(rule
+ ; ocannl-backend: cc -- the defect is the cc kernel's dlopen; the command line pins the backend.
+ (target cc_dlopen_cause.actual)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:cc_dlopen_cause.exe}
+    --ocannl_backend=cc
+    --ocannl_strict_failure_classification=false
+    "--ocannl_cc_backend_compiler_command=%{ocaml-config:c_compiler} -Dexpf=ocannl_gh1077_undefined_expf -D__DECL_SIMD_ocannl_gh1077_undefined_expf="))))
+
+(rule
+ (alias runtest-cc_dlopen_cause)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate))
+ (action
+  (diff cc_dlopen_cause.expected cc_dlopen_cause.actual)))
 
 (test
  (name half_softmax)
@@ -3467,6 +3502,21 @@
   (env_var OCANNL_BACKEND))
  (modules cpu_parallel)
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+; gh-ocannl-1003 stage 1: the default GPU annotator's lane geometry for the online-softmax hoist's
+; value pass, executed against exact references and pinned in the emitted kernel.
+
+(test
+ (name gpu_serial_lanes)
+ (package neural_nets_lib)
+ (deps
+  (env_var OCANNL_BUILD_FILES_PREFIX)
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules gpu_serial_lanes)
+ (libraries base ocannl stdio arrayjit.verdict ll_test test_utils)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 

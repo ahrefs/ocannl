@@ -72,6 +72,38 @@ let () =
     |> expect_classified
   in
   assert (equal_cause typed.cause illegal_1);
+  (* gh-ocannl-1077: typed, yet fatal. A kernel the host loader refuses is an OCANNL link bug that a
+     search must not absorb as a decline, under any provenance or strictness; the fatal failure
+     keeps its cause and renders it into the public exception. *)
+  let dlopen_rejection = backend_rejection ~stage:dlopen_stage "undefined symbol: sym" in
+  List.iter [ Candidate; Cache_replay; Advisory; User_schedule ] ~f:(fun provenance ->
+      List.iter [ true; false ] ~f:(fun strict ->
+          let fatal =
+            protect ~strict ~classify_backend:no_backend_classification ~provenance ~phase:Transform
+              (fun () -> raise (Cause_at (Backend_link, dlopen_rejection)))
+            |> expect_fatal
+          in
+          assert (equal_phase fatal.phase Backend_link);
+          assert (Option.equal equal_cause fatal.cause (Some dlopen_rejection));
+          assert (
+            match fatal.exn with
+            | Invalid_argument detail -> String.equal detail "undefined symbol: sym"
+            | _ -> false)));
+  (* The escalation is the loader's stage at [Backend_link], not every link-time rejection: the
+     compiler stage at link, and the loader stage raised at another phase, stay declines. *)
+  let link_compiler_rejection = backend_rejection "declined at link" in
+  let contained_at_link =
+    protect ~strict:true ~classify_backend:no_backend_classification ~provenance:Candidate
+      ~phase:Transform (fun () -> raise (Cause_at (Backend_link, link_compiler_rejection)))
+    |> expect_classified
+  in
+  assert (equal_cause contained_at_link.cause link_compiler_rejection);
+  let contained_elsewhere =
+    protect ~strict:true ~classify_backend:no_backend_classification ~provenance:Candidate
+      ~phase:Transform (fun () -> raise (Cause_at (Backend_compile, dlopen_rejection)))
+    |> expect_classified
+  in
+  assert (equal_cause contained_elsewhere.cause dlopen_rejection);
   let strict_unknown =
     protect ~strict:true ~classify_backend:no_backend_classification ~provenance:Candidate
       ~phase:Backend_compile (fun () -> failwith "compiler vanished")

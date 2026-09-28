@@ -91,11 +91,28 @@ val key_of_cause : cause -> rejection_key
 val detail_of_cause : cause -> string
 val exception_of_cause : cause -> exn
 
+val dlopen_stage : string
+(** The [stage] of a {!Backend_rejected} raised when the host's dynamic loader refuses a kernel the
+    compiler built — [dlopen] on an undefined symbol, a missing dependency (gh-ocannl-1077). *)
+
+val uncontainable : phase -> cause -> bool
+(** Whether a typed cause must end a search rather than decline one candidate: {!protect} makes it
+    {!Fatal} although it is typed. One case today, the {!dlopen_stage} rejection at [Backend_link]:
+    the object compiled, and the loader then found a symbol that neither the kernel's link line nor
+    the process supplies — an OCANNL link bug (gh-ocannl-1045's missing [-lm] was one), and the
+    fails-identically class a search must not absorb. Absorbed, it would not even look identical: it
+    hits exactly the candidates whose code reaches the symbol, and the search would quietly prefer
+    the ones that do not. Contrast a JIT rejecting the PTX of one candidate's schedule, a codegen
+    bug the search survives and counts. *)
+
 type fatal = {
   exn : exn;
   backtrace : Stdlib.Printexc.raw_backtrace;
   phase : phase;
   candidate : string option;
+  cause : cause option;
+      (** The typed cause of a fatal failure that has one: an {!uncontainable} cause, or one
+          escalated by {!fatal_of_classified}. [None] for an exception nothing classified. *)
 }
 
 type classified_cause = { phase : phase; cause : cause; execution_effect : execution_effect }

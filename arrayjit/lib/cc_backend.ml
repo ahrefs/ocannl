@@ -993,8 +993,34 @@ let%track7_sexp c_compile_and_load ~f_path =
        @@ Printf.sprintf
             "Cc_backend.c_compile_and_load: codesign failed with exit code %d for library %s" rc
             libname);
-  (* Note: RTLD_DEEPBIND not available on MacOS. *)
-  let result = { lib = Dl.dlopen ~filename:libname ~flags:[ RTLD_NOW ]; libname } in
+  (* Note: RTLD_DEEPBIND not available on MacOS. A load failure is typed at [Backend_link]
+     (gh-ocannl-1077): the object compiled, so what the loader refuses — typically a symbol neither
+     the link line nor the process supplies — is OCANNL's link bug, and [Schedule_outcome.protect]
+     makes it fatal rather than a candidate decline. *)
+  let lib =
+    try Dl.dlopen ~filename:libname ~flags:[ RTLD_NOW ]
+    with Dl.DL_error dlerror ->
+      let detail =
+        Printf.sprintf
+          "OCANNL cc backend: the compiled kernel failed to load (dlopen).\n\
+           This is a bug in OCANNL: the kernel references a symbol that neither its link line nor \
+           the process supplies. Please file an issue with the generated .c file at %s\n\
+           dlerror: %s\n\
+           Compilation command: %s"
+          f_path dlerror _cmdline
+      in
+      raise
+        (Schedule_outcome.Cause_at
+           ( Schedule_outcome.Backend_link,
+             Schedule_outcome.Backend_rejected
+               {
+                 backend = name;
+                 stage = Schedule_outcome.dlopen_stage;
+                 severity = Schedule_outcome.Compiler_bug;
+                 detail;
+               } ))
+  in
+  let result = { lib; libname } in
   Alloc_census.count_module_loaded ();
   (* gh-ocannl-550: counted here, next to the unload the OpenMP arm deliberately does not perform,
      so the census reports the mapping as live for as long as it really is. *)

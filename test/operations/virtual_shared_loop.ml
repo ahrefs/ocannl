@@ -258,15 +258,17 @@ let case_if_cond_read () =
   let got = execute ~name:"vsl_if_cond" o ~seed:[ (a, [| 0.5; 2.; -1. |]) ] ~read:[ a ] in
   p "if-cond read: only the cells failing the guard were updated" (same got [ [| 1.; 2.; 1. |] ])
 
+(* Each row runs through [case], so a row that raises is a failed claim naming it, and the rows
+   after it still run (gh-ocannl-1084; [footprint_materialization] is the exemplar). *)
 let () =
-  case_independent ();
-  case_mixed ();
-  case_forward_provider ();
-  case_chain ();
-  case_reverse ();
-  case_complex ();
-  case_inloop_consumer ();
-  case_dead_loop ();
-  case_dead_non_traced ();
-  case_if_cond_read ();
+  case "independent" case_independent;
+  case "mixed" case_mixed;
+  case "forward-provider" case_forward_provider;
+  case "chain" case_chain;
+  case "reverse" case_reverse;
+  case "complex" case_complex;
+  case "inloop-consumer" case_inloop_consumer;
+  case "dead-loop" case_dead_loop;
+  case "dead-non-traced" case_dead_non_traced;
+  case "if-cond-read" case_if_cond_read;
   Stdio.printf "%!"

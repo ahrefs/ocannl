@@ -94,7 +94,9 @@ let () =
           && not (has err ~substring:"STOPPED EARLY"));
       about "fail_then_exit0" "an explicit exit 0 after a failed check exits 1"
         (run_child "fail_then_exit0") ~holds:(fun status _ err ->
-          exited 1 status && has err ~substring:"FAILED: 1 check did not hold.");
+          exited 1 status
+          && has err ~substring:"FAILED: 1 check did not hold."
+          && not (has err ~substring:"STOPPED EARLY"));
       about "exit_swallowed" "a catch-all that swallows the exit still ends the run with status 1"
         (run_child "exit_swallowed") ~holds:(fun status _ _ -> exited 1 status);
       let case_raise = run_child "case_raise" in
@@ -105,11 +107,19 @@ let () =
                ~substring:"first: the case ran to completion (raised Failure(\"boom\")): false\n");
       about "case_raise" "the case after a raising case still runs" case_raise
         ~holds:(fun _ out _ -> has out ~substring:"second: reached: true\n");
-      about "case_exit" "an exit inside a case ends the run rather than failing the case"
-        (run_child "case_exit") ~holds:(fun status out _ ->
+      let case_exit = run_child "case_exit" in
+      about "case_exit" "an exit inside a case ends the run rather than failing the case" case_exit
+        ~holds:(fun status out _ ->
           exited 1 status
           && (not (has out ~substring:"after the exit"))
           && not (has out ~substring:"the case ran to completion"));
+      (* gh-ocannl-1084: what tools/mutation-run.sh reads to tell this ending from a run whose
+         earlier case raised and whose later cases all ran. *)
+      about "case_exit" "an exit inside a case after a failed check says which case stopped the run"
+        case_exit ~holds:(fun _ _ err ->
+          has err
+            ~substring:
+              "STOPPED EARLY: an exit inside case \"exits\" ended the run, so no case after it ran\n");
       let pass_status, pass_out, _ = run_child "pass" in
       let case_status, case_out, _ = run_child "case_pass" in
       p "a case that returns prints only what its claims print"

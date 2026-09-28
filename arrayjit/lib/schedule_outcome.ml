@@ -62,11 +62,19 @@ let key_of_cause = function
   | Seed_evicted { family; _ } -> Seed_evicted_key family
   | Not_dispatched { origin; _ } -> Not_dispatched_key origin
 
+let dlopen_stage = "dlopen"
+
+let uncontainable phase cause =
+  match (phase, cause) with
+  | Backend_link, Backend_rejected { stage; _ } -> String.equal stage dlopen_stage
+  | _ -> false
+
 type fatal = {
   exn : exn;
   backtrace : Stdlib.Printexc.raw_backtrace;
   phase : phase;
   candidate : string option;
+  cause : cause option;
 }
 
 type classified_cause = { phase : phase; cause : cause; execution_effect : execution_effect }
@@ -110,7 +118,7 @@ let unclassified phase exn =
   }
 
 let classify_raw ~strict ~classify_backend ~provenance ~phase ~candidate exn backtrace =
-  let fatal () = Fatal { exn; backtrace; phase; candidate } in
+  let fatal () = Fatal { exn; backtrace; phase; candidate; cause = None } in
   if is_oom_or_interrupt exn then fatal ()
   else if is_assert_or_stack exn && not (equal_provenance provenance Cache_replay) then fatal ()
   else if is_pre_dispatch phase then
@@ -133,12 +141,42 @@ let classify_raw ~strict ~classify_backend ~provenance ~phase ~candidate exn bac
         then Classified (unclassified phase exn)
         else fatal ()
 
+let detail_of_cause = function
+  | Illegal_schedule { detail; _ }
+  | Unsupported { detail; _ }
+  | Resource_exceeded { detail; _ }
+  | Backend_rejected { detail; _ }
+  | Unclassified { detail; _ }
+  | Seed_evicted { detail; _ }
+  | Not_dispatched { detail; _ } ->
+      detail
+
+let exception_of_cause cause =
+  match cause with
+  | Resource_exceeded _ -> Utils.User_error (detail_of_cause cause)
+  | Illegal_schedule _ | Unsupported _ | Backend_rejected _ | Unclassified _ | Seed_evicted _
+  | Not_dispatched _ ->
+      Invalid_argument (detail_of_cause cause)
+
 let protect ?strict ~classify_backend ~provenance ~phase ?candidate f =
   let strict = Option.value strict ~default:(Lazy.force strict_failure_classification) in
   match f () with
   | result -> Ok result
   | exception Cause_at (cause_phase, cause) ->
-      Error (Classified { phase = cause_phase; cause; execution_effect = No_device_writes })
+      if uncontainable cause_phase cause then
+        (* Rendered into the public exception, as {!fatal_of_classified} does, but with the raise
+           site's backtrace: nothing contained it first. *)
+        let backtrace = Stdlib.Printexc.get_raw_backtrace () in
+        Error
+          (Fatal
+             {
+               exn = exception_of_cause cause;
+               backtrace;
+               phase = cause_phase;
+               candidate;
+               cause = Some cause;
+             })
+      else Error (Classified { phase = cause_phase; cause; execution_effect = No_device_writes })
   | exception Raised_at (raised_phase, exn, backtrace) ->
       Error
         (classify_raw ~strict ~classify_backend ~provenance ~phase:raised_phase ~candidate exn
@@ -160,29 +198,12 @@ let tag phase f =
       let backtrace = Stdlib.Printexc.get_raw_backtrace () in
       Stdlib.Printexc.raise_with_backtrace (Raised_at (phase, exn, backtrace)) backtrace
 
-let detail_of_cause = function
-  | Illegal_schedule { detail; _ }
-  | Unsupported { detail; _ }
-  | Resource_exceeded { detail; _ }
-  | Backend_rejected { detail; _ }
-  | Unclassified { detail; _ }
-  | Seed_evicted { detail; _ }
-  | Not_dispatched { detail; _ } ->
-      detail
-
-let exception_of_cause cause =
-  match cause with
-  | Resource_exceeded _ -> Utils.User_error (detail_of_cause cause)
-  | Illegal_schedule _ | Unsupported _ | Backend_rejected _ | Unclassified _ | Seed_evicted _
-  | Not_dispatched _ ->
-      Invalid_argument (detail_of_cause cause)
-
 let raise_cause cause = raise (exception_of_cause cause)
 
 let fatal_of_classified ?candidate (classified : classified_cause) =
   let exn = exception_of_cause classified.cause in
   let backtrace = Stdlib.Printexc.get_callstack 16 in
-  { exn; backtrace; phase = classified.phase; candidate }
+  { exn; backtrace; phase = classified.phase; candidate; cause = Some classified.cause }
 
 let raise_failure = function
   | Classified { cause; _ } -> raise_cause cause
