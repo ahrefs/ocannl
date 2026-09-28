@@ -1881,7 +1881,9 @@ let find_fold r (nz : normalizer) ~block : fold option =
            not (List.exists (writers r tn) ~f:(List.mem removed ~equal:Int.equal))))
       ()
   in
-  Some { f_consumed = removed; f_at; f_code = unflat_lines (fold :: moved) }
+  (* The live definitions MOVE: their copies follow the fold, and their original positions go with
+     the rest (they are consumed, not removed -- the copies still read the score chain). *)
+  Some { f_consumed = removed @ live_defs; f_at; f_code = unflat_lines (fold :: moved) }
 
 (* {1 The pass} *)
 

@@ -629,18 +629,31 @@ let training ?mask_fill ?(prefix = 2) ~seq ~d_k ~on ~block ~bwd () =
               Context.get_values ctx (Option.value_exn p.Tensor.diff).Tensor.grad ))
       in
       let loss = Array.fold (Context.get_values ctx loss.Tensor.value) ~init:0. ~f:( +. ) in
-      (loss, grads, Option.value_exn !captured))
+      let rewritten =
+        Online_softmax.rewrite (Ir.Assignments.to_low_level update.Ir.Assignments.asgns)
+      in
+      (loss, grads, Option.value_exn !captured, rewritten))
 
 let () =
   printf "--- leg 7: training -- the fold forward under the composed and the fused backward ---\n";
   let seq = 20 and d_k = 8 in
-  let loss_c, grads_c, _ = training ~seq ~d_k ~on:false ~block:0 ~bwd:false () in
+  let loss_c, grads_c, _, _ = training ~seq ~d_k ~on:false ~block:0 ~bwd:false () in
   List.iter
     [ ("treatment E (composed backward)", false); ("treatment F (fused backward)", true) ]
     ~f:(fun (what, bwd) ->
-      let loss, grads, optimized = training ~seq ~d_k ~on:true ~block:8 ~bwd () in
+      let loss, grads, optimized, rewritten = training ~seq ~d_k ~on:true ~block:8 ~bwd () in
       eprintf "%s loss: composed %.9g fold %.9g (not part of the golden)\n%!" what loss_c loss;
       p (what ^ ": the step holds the fold") (Set.length (tiles optimized.LL.llc) = 2);
+      (* The row-state definitions the backward reads move behind the fold: one writer each, never a
+         copy beside the original. *)
+      let writers_of name =
+        Ll_test.count_stmt rewritten ~f:(function
+          | LL.Set { tn; _ } -> label_is name tn
+          | _ -> false)
+      in
+      p
+        (what ^ ": the moved probabilities and exponentials have one writer each")
+        (writers_of "softmax" = 1 && writers_of "exp_exp_vals" = 1);
       p
         (what ^ if bwd then ": and the fused backward" else ": and no fused backward")
         (rowdot_writes optimized.LL.llc = if bwd then 1 else 0);
@@ -657,10 +670,10 @@ let () =
             (Array.exists gc ~f:(fun v -> Float.(v <> 0.)))));
   (* The NaN fill through the whole step: the gradients poisoned exactly where the composed ones
      are. *)
-  let _, grads_c, _ =
+  let _, grads_c, _, _ =
     training ~mask_fill:Float.nan ~prefix:3 ~seq ~d_k ~on:false ~block:0 ~bwd:false ()
   in
-  let _, grads_f, _ =
+  let _, grads_f, _, _ =
     training ~mask_fill:Float.nan ~prefix:3 ~seq ~d_k ~on:true ~block:8 ~bwd:true ()
   in
   List.iter2_exn grads_f grads_c ~f:(fun (name, gf) (_, gc) ->

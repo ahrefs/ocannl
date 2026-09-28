@@ -100,10 +100,13 @@ capped() {
   t0=$(date +%s)
   # perl's alarm: macOS has no timeout(1). The cell runs in a process group of its own, which the
   # supervisor (outside it) terminates whole and then kills, so a cell ignoring TERM cannot outlive
-  # its cap into the next cell's timing.
+  # its cap into the next cell's timing -- and on an interrupt of the supervisor too (Ctrl-C
+  # reaches it in the foreground group; the detached cell group would not see it).
   perl -e 'my $cap = shift @ARGV; my $pid = fork; die "fork: $!" unless defined $pid;
            if ($pid == 0) { setpgrp(0, 0); exec @ARGV or exit 127 }
-           $SIG{ALRM} = sub { kill "TERM", -$pid; sleep 2; kill "KILL", -$pid; waitpid $pid, 0; exit 124 };
+           sub stop { kill "TERM", -$pid; sleep 2; kill "KILL", -$pid; waitpid $pid, 0; exit shift }
+           $SIG{ALRM} = sub { stop(124) };
+           $SIG{INT} = $SIG{TERM} = $SIG{HUP} = sub { stop(130) };
            alarm $cap; waitpid $pid, 0; exit($? & 127 ? 128 + ($? & 127) : $? >> 8)' \
     "$cap" "$@" >"$out/$cell.out" 2>>"$out/$cell.err"
   st=$?

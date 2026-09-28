@@ -113,6 +113,7 @@ the row max alone requested: the fold writes it and its tiles: true
 the row max alone requested: no other row-state or score-chain node is written: true
 --- leg 7: training -- the fold forward under the composed and the fused backward ---
 treatment E (composed backward): the step holds the fold: true
+treatment E (composed backward): the moved probabilities and exponentials have one writer each: true
 treatment E (composed backward): and no fused backward: true
 treatment E (composed backward): the loss agrees within 1e-5 relative: true
 treatment E (composed backward): the same parameters carry gradients: true
@@ -125,6 +126,7 @@ treatment E (composed backward): w_v_attn0.grad is not identically zero: true
 treatment E (composed backward): w_o_attn0.grad agrees within 1e-4 relative: true
 treatment E (composed backward): w_o_attn0.grad is not identically zero: true
 treatment F (fused backward): the step holds the fold: true
+treatment F (fused backward): the moved probabilities and exponentials have one writer each: true
 treatment F (fused backward): and the fused backward: true
 treatment F (fused backward): the loss agrees within 1e-5 relative: true
 treatment F (fused backward): the same parameters carry gradients: true
