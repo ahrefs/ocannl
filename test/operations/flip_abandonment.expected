@@ -16,7 +16,8 @@ the completed search records its steps: true
 a flip far behind the incumbent's final best but not at equal depth is not abandoned: true
 the trajectory's identity carries a set Search_shaping key and no other class's: true
 a replayed incumbent carries the storing search's timed record: true
-a replay under another search shape abandons nothing, where the same shape's replay would: true
+a replay under another beam width abandons nothing, where the same shape's replay would: true
+a replay under other repeats abandons nothing, where the same shape's replay would: true
 autotune_progress is on for this run: true
 the shipped routine computes the plain compile's values: true
 the hopeless flip's report is an abandonment after beam_width timed candidates: true

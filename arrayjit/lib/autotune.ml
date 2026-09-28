@@ -3478,12 +3478,13 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
   in
   (* gh-ocannl-1110: what shapes which candidates this search times, and in what order, that the
      schedule cache's key does not carry: every [Search_shaping] configuration key (the class the
-     key leaves out by definition), plus the arguments that override the ones read here. A cached
-     [best_steps] replays only under the same shape: the flip chain compares at equal depth, which
-     presumes the same candidate order. *)
+     key leaves out by definition), plus every argument of this function that resolves one — each
+     resolved value, whether passed or read. A cached [best_steps] replays only under the same
+     shape: the flip chain compares at equal depth, which presumes the same candidate order and
+     sampling. *)
   let search_shape =
-    Printf.sprintf "beam=%d rounds=%d keep=%h split_sites=%d blocks=%s|%s" beam_width rounds
-      keep_fraction max_split_reduce_sites
+    Printf.sprintf "search=%b beam=%d rounds=%d repeats=%d keep=%h split_sites=%d blocks=%s|%s"
+      search beam_width rounds repeats keep_fraction max_split_reduce_sites
       (String.concat ~sep:"," (List.map seed_block_sizes ~f:Int.to_string))
       (Utils.config_class_fingerprint Utils.Search_shaping)
   in

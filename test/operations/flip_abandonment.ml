@@ -145,13 +145,13 @@ let clean_cache dir =
    record a flip is abandoned against. Nothing is cached after a refused window, so on a box whose
    load refused one the claim is skipped rather than decided. *)
 let cache_replay comp =
-  let tune_once ?(beam_width = k) () =
+  let tune_once ?(beam_width = k) ?(repeats = 1) () =
     let report = ref None in
     let _ =
       with_clock
         (fun i -> if i <= 1 then 3.0 else 2.0)
         (fun () ->
-          Autotune.tune ~search:true ~beam_width ~rounds:0 ~repeats:1 ~timing:Autotune.Isolated
+          Autotune.tune ~search:true ~beam_width ~rounds:0 ~repeats ~timing:Autotune.Isolated
             ~cache_dir:"autotune_cache_flip_abandonment"
             ~report:(fun r -> report := Some r)
             (Context.auto ()) comp Ir.Indexing.Empty)
@@ -167,9 +167,11 @@ let cache_replay comp =
   clean_cache "autotune_cache_flip_abandonment";
   let first = tune_once () in
   let second = tune_once () in
-  (* The cache key does not carry the beam width, so this replays the same entry; its trajectory was
-     timed in another candidate order, so it must not stand as an equal-depth record. *)
-  let other_shape = tune_once ~beam_width:(k + 1) () in
+  (* The cache key carries neither the beam width nor the repeats, so these replay the same entry;
+     its trajectory was timed in another candidate order, or under another sampling, so it must not
+     stand as an equal-depth record. *)
+  let other_beam = tune_once ~beam_width:(k + 1) () in
+  let other_repeats = tune_once ~repeats:2 () in
   clean_cache "autotune_cache_flip_abandonment";
   gated ~aggregation:`Environment
     ~when_:(first.Autotune.timings_contended = 0)
@@ -180,13 +182,21 @@ let cache_replay comp =
     && List.equal
          (fun (a, x) (b, y) -> a = b && Float.equal x y)
          second.Autotune.best_steps first.Autotune.best_steps);
+  let replays_no_record (r : Autotune.report) =
+    Poly.equal r.Autotune.outcome Autotune.Cache_replay
+    && abandons second.Autotune.best_steps [ (1, 1e9) ]
+    && not (abandons r.Autotune.best_steps [ (1, 1e9) ])
+  in
   gated ~aggregation:`Environment
     ~when_:(first.Autotune.timings_contended = 0)
     ~on:"a contended timing window (nothing was cached)"
-    "a replay under another search shape abandons nothing, where the same shape's replay would"
-    (Poly.equal other_shape.Autotune.outcome Autotune.Cache_replay
-    && abandons second.Autotune.best_steps [ (1, 1e9) ]
-    && not (abandons other_shape.Autotune.best_steps [ (1, 1e9) ]))
+    "a replay under another beam width abandons nothing, where the same shape's replay would"
+    (replays_no_record other_beam);
+  gated ~aggregation:`Environment
+    ~when_:(first.Autotune.timings_contended = 0)
+    ~on:"a contended timing window (nothing was cached)"
+    "a replay under other repeats abandons nothing, where the same shape's replay would"
+    (replays_no_record other_repeats)
 
 (* An [autotune-progress:] line's [key=value] fields; values are unquoted words here. *)
 let progress_fields line =
