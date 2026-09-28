@@ -62,6 +62,9 @@
       the count of a loop unrolled by two, at half the width each.
     - {b stack_refs}: instructions addressing through the stack or frame pointer -- the spill signal
       gh-ocannl-614 measured.
+    - {b stack_writes}: of those, the ones that WRITE the stack. A value round-tripping through a
+      stack slot begins with one, where a reload of a spilled loop invariant does not
+      (gh-ocannl-1102).
     - {b residual}: instructions matched by none of those classifiers. Loop-control and integer
       bookkeeping legitimately live there, so it is reported rather than bounded; its purpose is to
       make a newly encountered dialect visible instead of silently returning zeroes. Stderr profiles
@@ -234,6 +237,7 @@ type counts = {
   scalar_fp_ops : int;
   libm_calls : int;
   stack_refs : int;
+  stack_writes : int;  (** of [stack_refs], the ones storing to the stack *)
   residual_mnemonics : (string * int) list;
       (** Exact residual histogram, sorted by descending frequency then mnemonic. Only its profile
           display is bounded; this is diagnostic data, never a compiler-sensitive threshold. *)
@@ -450,6 +454,31 @@ let is_stack_ref ~mnemonic ~rest =
   List.mem [ "push"; "pushq"; "pushl"; "pop"; "popq"; "popl" ] mnemonic ~equal:String.equal
   || List.exists [ "(%rsp"; "(%rbp"; "(%esp"; "(%ebp"; "[sp"; "[x29"; "sp,"; "x29," ] ~f:(fun p ->
       has_substr rest ~sub:p)
+
+(* A stack reference that stores to the stack: a [push], an x86 instruction whose LAST operand (the
+   AT&T destination) is a stack memory operand, other than a compare or test that only reads it, or
+   an aarch64 store ([str], [stp], [stur], [st1], ...) addressing through [sp] or [x29]. *)
+let is_stack_write ~mnemonic ~rest =
+  let x86_destination () =
+    let depth = ref 0 and last = ref 0 in
+    String.iteri rest ~f:(fun i c ->
+        match c with
+        | '(' -> Int.incr depth
+        | ')' -> Int.decr depth
+        | ',' when !depth = 0 -> last := i + 1
+        | _ -> ());
+    String.drop_prefix rest !last
+  in
+  let reads_only =
+    List.exists [ "cmp"; "test"; "bt"; "ucomi"; "comi"; "vucomi"; "vcomi"; "vptest"; "ptest" ]
+      ~f:(fun prefix -> String.is_prefix mnemonic ~prefix)
+  in
+  List.mem [ "push"; "pushq"; "pushl" ] mnemonic ~equal:String.equal
+  || String.is_prefix mnemonic ~prefix:"st"
+     && (has_substr rest ~sub:"[sp" || has_substr rest ~sub:"[x29")
+  || (not reads_only)
+     && List.exists [ "(%rsp"; "(%rbp"; "(%esp"; "(%ebp" ] ~f:(fun p ->
+         has_substr (x86_destination ()) ~sub:p)
 
 let call_target ~mnemonic ~rest =
   if String.equal mnemonic "call" || String.equal mnemonic "callq" || String.equal mnemonic "bl"
@@ -715,6 +744,7 @@ let count_range lines op_class ~from_ ~to_ =
         scalar_fp_ops = 0;
         libm_calls = 0;
         stack_refs = 0;
+        stack_writes = 0;
         residual = 0;
         residual_mnemonics = [];
       }
@@ -745,6 +775,11 @@ let count_range lines op_class ~from_ ~to_ =
         let c = if scalar_fp then { c with scalar_fp_ops = c.scalar_fp_ops + 1 } else c in
         let c = if libm_call then { c with libm_calls = c.libm_calls + 1 } else c in
         let c = if stack_ref then { c with stack_refs = c.stack_refs + 1 } else c in
+        let c =
+          if stack_ref && is_stack_write ~mnemonic ~rest then
+            { c with stack_writes = c.stack_writes + 1 }
+          else c
+        in
         let c =
           if vector || scalar_fp || libm_call || stack_ref then c
           else (

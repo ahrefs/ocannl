@@ -12,4 +12,5 @@ residual display breaks frequency ties by mnemonic and bounds the omitted total:
 a fully classified listing has an empty residual diagnostic: true
 vector FMAs are counted with their register widths in every dialect, and scalar FMAs and packed multiplies are not: true
 a memory operand through the stack or frame pointer is a stack reference, a register is not: true
+a stack write is a store to the stack in either dialect, a reload or a compare is not: true
 line attribution reads the instructions under a line's .loc, across a label, and no other line's or file's: true

@@ -468,6 +468,35 @@ let stack_probe () =
         "\tret";
       ]
   in
+  (* Of the references, the ones that store: the value a round trip parks is WRITTEN first, where a
+     reload of a spilled invariant only reads. The destination is AT&T's last operand, so a compare
+     against a stack slot is a read; aarch64 stores are the [st*] mnemonics. *)
+  let writes instructions =
+    let c = Census.profile_all Census.Fma ~asm:(String.concat ~sep:"\n" instructions) in
+    (c.stack_refs, c.stack_writes)
+  in
+  Verdict.p "a stack write is a store to the stack in either dialect, a reload or a compare is not"
+    (Poly.equal
+       (writes
+          [
+            "\tvmovdqa %xmm0, (%rsp)";
+            "\tmovw %cx, 100(%rsp)";
+            "\tpushq %rbx";
+            "\tvmovdqa -96(%rsp), %ymm7";
+            "\tvpmovzxwd 96(%rsp), %ymm0";
+            "\tcmpl $0, 8(%rsp)";
+            "\tvpextrw $2, %xmm5, 196(%r8)";
+          ])
+       (6, 3)
+    && Poly.equal
+         (writes
+            [
+              "\tstr\tq0, [sp, 16]";
+              "\tstp\tx29, x30, [sp, -16]!";
+              "\tldr\tq1, [sp, 16]";
+              "\tstr\th31, [x7, 192]";
+            ])
+         (3, 2));
   let parsed = Census.parse ~asm:listing ~source_basename:"census_kernel.c" in
   let edge patterns =
     let c =

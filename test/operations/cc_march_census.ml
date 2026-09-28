@@ -652,15 +652,21 @@ let build (emit_dir : string) =
                         | None -> "tmma_j__"
                         | Some n_full -> Int.to_string n_full
                       in
-                      (* The partial column's C-tile accesses, [tmma_d__[(<row>) * n + n_full +
-                         <offset>]] on every line of its load and its store: the tail pass's last
-                         column group, whose offset from [n_full] is [cols - 1] whole vectors. *)
+                      (* The lines that move the partial column: its C-tile accesses,
+                         [tmma_d__[(<row>) * n + n_full + <offset>]] on every line of its load and
+                         its store (the tail pass's last column group, [cols - 1] whole vectors past
+                         [n_full]), and for narrow storage every line of the blocks staging it --
+                         the B row's in the k-loop among them -- which name the staging locals
+                         {!Ir.C_syntax.partial_staging_idents} (gh-ocannl-1102). *)
                       let edge =
                         match tail_from with
                         | Some n_full when geometry.partial ->
+                            let bits, conv = Ir.C_syntax.partial_staging_idents in
                             [
                               Printf.sprintf ") * %d + %d + %d]" n n_full
                                 ((geometry.cols - 1) * g.lanes);
+                              bits;
+                              conv;
                             ]
                         | _ -> []
                       in
@@ -1717,8 +1723,8 @@ let () =
                             let edge_line =
                               match edge_profile with
                               | Some p ->
-                                  Printf.sprintf " edge: insns=%d stack=%d" p.Census.instructions
-                                    p.Census.stack_refs
+                                  Printf.sprintf " edge: insns=%d stack=%d writes=%d"
+                                    p.Census.instructions p.Census.stack_refs p.Census.stack_writes
                               | None -> ""
                             in
                             (match c with
@@ -2124,21 +2130,26 @@ let () =
          k-loop; a column tail's partial vector also crosses memory once before it, as the C-tile
          load, and once after it, as the store -- straight-line code no loop of its own carries, so
          it is read by line attribution instead ({!Census.attributed_in}): every instruction the
-         listing attributes to a line naming the partial column's C-tile elements. Where the pass
-         fits, a stack reference there is the partial vector itself round-tripping through a stack
-         slot, which is what the width-counted [__builtin_memcpy] of the storage bridges did at
-         every narrow tail's store (found at gh-ocannl-1101): [vmovdqa %xmm0, (%rsp)] then [movzwl
-         4(%rsp)] for a three-lane fp16 store. A row whose lines carry no instruction at all fails
-         too: the reading would be vacuous. *)
+         listing attributes to a line that moves the partial column ({!field-kernel_loop.edge}), the
+         staging blocks' casts and bridge calls included. A value round-tripping through a stack
+         slot begins with a STORE to it, which is what the width-counted [__builtin_memcpy] of the
+         storage bridges did at every narrow tail's store (found at gh-ocannl-1101): [vmovdqa %xmm0,
+         (%rsp)] then [movzwl 4(%rsp)] for a three-lane fp16 store, 5 to 16 stack writes on these
+         lines per row before the fix. So the reading is stack WRITES, not references: the bf16
+         narrowing's rounding constants are loop invariants the enclosing pass hoists, and where its
+         registers run out gcc reloads them at the bridge call -- a read of a slot written once,
+         outside, which reads 1 to 3 references on the fixed rows at [x86-64-v3], [x86-64-v4] and
+         [sapphirerapids]. A row whose lines carry no instruction at all fails too: the reading
+         would be vacuous. *)
       let edge_claim =
-        "no register-tile column tail moves its partial C-tile vector through the stack where its \
-         pass fits the target's vector registers"
+        "no register-tile column tail stores its partial vector to the stack where its pass fits \
+         the target's vector registers"
       in
       let edge_rows =
         List.filter_map resident_rows ~f:(fun (r, _) ->
             Option.map r.edge_profile ~f:(fun p -> (r, p)))
       in
-      let edge_spills (_, (p : Census.counts)) = p.instructions = 0 || p.stack_refs > 0 in
+      let edge_spills (_, (p : Census.counts)) = p.instructions = 0 || p.stack_writes > 0 in
       if List.is_empty edge_rows then
         Verdict.skipped ~aggregation:`Environment
           ~backend:"no accepted target holds a register-tile column tail in its vector registers"
@@ -2147,5 +2158,7 @@ let () =
         Verdict.p_none edge_claim edge_rows ~f:edge_spills;
         List.iter edge_rows ~f:(fun ((r, p) as row) ->
             if edge_spills row then
-              Stdio.eprintf "  %s violates %S: edge insns=%d stack=%d (not part of the golden)\n"
-                (describe r) edge_claim p.Census.instructions p.Census.stack_refs))
+              Stdio.eprintf
+                "  %s violates %S: edge insns=%d stack=%d writes=%d (not part of the golden)\n"
+                (describe r) edge_claim p.Census.instructions p.Census.stack_refs
+                p.Census.stack_writes))

@@ -1139,8 +1139,12 @@ files.
   (`Low_level.get_ident_within_code ~reserved_prefixes`), sending such a label to the `n<id>_`
   form -- a per-lane-count family no exact-name blacklist can list. The store is outside
   every loop, so `Asm_census.attributed_in` reads it by DWARF line attribution: the instructions
-  under the `.loc` lines naming the partial column's C-tile elements, which the census holds to
-  zero stack references where the pass fits. The same PR made `is_stack_ref` ask for a MEMORY
+  under every `.loc` line that moves the partial column -- its C-tile elements, and each line of
+  the staging blocks, found by the locals `C_syntax.partial_staging_idents` names -- which the
+  census holds to zero stack WRITES where the pass fits. Writes, not references: the bf16
+  narrowing's rounding constants are hoisted loop invariants that gcc reloads at the bridge call
+  when the enclosing pass runs out of registers (1 to 3 reads on the fixed rows), while every
+  round trip starts with a store (5 to 16 per row before the fix). The same PR made `is_stack_ref` ask for a MEMORY
   operand on x86: gcc omits the frame pointer at `-O2` and allocates `%ebp` as a register, and
   `movzwl (%r14), %ebp` in a bf16 k-loop had read as a 12-reference spill.
 - **aarch64 gcc spills the bf16 tile's A column at `-O3` only: the pre-RA scheduler, not the

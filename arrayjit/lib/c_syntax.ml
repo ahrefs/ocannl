@@ -1324,6 +1324,12 @@ let vec_narrow_macro ~store_prec ~prec ~lanes =
   | Ops.Half_prec _ -> Some (narrow "HALF")
   | _ -> None
 
+(** The locals a register tile's PARTIAL bf16/fp16 column is staged through by [vec_bridge]
+    (gh-ocannl-1102), as [(bits, conv)]: the whole vector of its storage bits, and for fp16 that
+    vector bit-cast to [HALF_T]. Every line of a staging block names one of them or the column's own
+    elements, which is how [test/operations/cc_march_census] finds the block's instructions. *)
+let partial_staging_idents = ("ocannl_pv__", "ocannl_pc__")
+
 (** The cc builtins a register tile's A column widens its rows through, as [(pack, row)], where the
     tile holds [lanes] lanes of [prec] over [store_prec] storage; [None] where each row widens its
     own scalar. [pack] widens one k step's A elements of [lanes] consecutive rows into one vector
@@ -2947,6 +2953,7 @@ module C_syntax (B : C_syntax_config) = struct
          [HALF_T]s. Each staging vector lives in a block of its own, so any number of them share one
          name. *)
       let elt = B.typ_of_prec store_prec in
+      let pv, pc = partial_staging_idents in
       let staging ?conv () =
         Option.iter conv ~f:(fun c ->
             need_typedef c (vec_typedef_doc ~ctyp:elt ~name:c ~bytes:(lanes * 2)));
@@ -2965,16 +2972,14 @@ module C_syntax (B : C_syntax_config) = struct
       in
       let bridge ?conv ~widen ~narrow () =
         let bridged ~qual =
-          string
-            (Printf.sprintf "(%s%s *)&%s" qual elt
-               (if Option.is_some conv then "ocannl_pc__" else "ocannl_pv__"))
+          string (Printf.sprintf "(%s%s *)&%s" qual elt (if Option.is_some conv then pc else pv))
         in
         ( (fun ~width ~dst ~mem ->
             if width < lanes then
               let u16 = staging ?conv () in
               declare ~width:lanes dst ^^ hardline
               ^^ block
-                   ((string (u16 ^ " ocannl_pv__ = {")
+                   ((string (Printf.sprintf "%s %s = {" u16 pv)
                     ^^ nest 2
                          (flow
                             (comma ^^ break 1)
@@ -2982,7 +2987,7 @@ module C_syntax (B : C_syntax_config) = struct
                     ^^ string "};")
                     :: Option.to_list
                          (Option.map conv ~f:(fun c ->
-                              string (Printf.sprintf "%s ocannl_pc__ = (%s)ocannl_pv__;" c c)))
+                              string (Printf.sprintf "%s %s = (%s)%s;" c pc c pv)))
                    @ [ widen ~dst (bridged ~qual:"const ") ])
             else declare ~width dst ^^ hardline ^^ widen ~dst (base mem)),
           fun ~width ~src ~mem ->
@@ -2990,16 +2995,18 @@ module C_syntax (B : C_syntax_config) = struct
               let u16 = staging ?conv () in
               let lanes_out =
                 List.init width ~f:(fun l ->
-                    bits_lane ~qual:"" ~mem l ^^ string (Printf.sprintf " = ocannl_pv__[%d];" l))
+                    bits_lane ~qual:"" ~mem l ^^ string (Printf.sprintf " = %s[%d];" pv l))
               in
               block
                 (match conv with
                 | None ->
-                    string (u16 ^ " ocannl_pv__;") :: narrow ~src (bridged ~qual:"") :: lanes_out
-                | Some c ->
-                    string (c ^ " ocannl_pc__;")
+                    string (Printf.sprintf "%s %s;" u16 pv)
                     :: narrow ~src (bridged ~qual:"")
-                    :: string (Printf.sprintf "%s ocannl_pv__ = (%s)ocannl_pc__;" u16 u16)
+                    :: lanes_out
+                | Some c ->
+                    string (Printf.sprintf "%s %s;" c pc)
+                    :: narrow ~src (bridged ~qual:"")
+                    :: string (Printf.sprintf "%s %s = (%s)%s;" u16 pv u16 pc)
                     :: lanes_out)
             else narrow ~src (base mem) )
       in
