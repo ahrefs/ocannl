@@ -311,7 +311,8 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   `raw_entries`, on stderr (the golden keeps only the section header).
   `refusal_control_scan_cases.expected` holds the manifest equal to mechanical extraction, every entry present in the assigned live/case
   golden union, and the manifest's repo-relative source paths equal to `env_var_deps`' derived
-  scanner census. Rewording a refusal format moves its marker digest: when a row differs, that
+  scanner census; the audit's own stanza argument list assigns each source its goldens, and its
+  sources are held equal to the manifest's, a missing or extra one named on stderr (gh-ocannl-1088). Rewording a refusal format moves its marker digest: when a row differs, that
   audit writes the markers on each side and the whole replacement row on stderr, and its
   `raw_direct_evidence` claim names on stderr every `<source>:<md5>` key no current direct failure
   answers to -- re-key those from the row difference. The

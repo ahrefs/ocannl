@@ -6,6 +6,22 @@ open Stdio
 module Scan = Test_utils.Refusal_control_scan
 module Manifest = Test_utils.Refusal_control_manifest
 
+(* Multiset difference: [minus xs ys] removes one occurrence per [ys] element, since markers repeat
+   when formats do and an argument list can name a source twice. *)
+let minus xs ys =
+  List.fold ys ~init:xs ~f:(fun remaining y ->
+      let before, after = List.split_while remaining ~f:(Fn.non (String.equal y)) in
+      before @ Option.value (List.tl after) ~default:[])
+
+(* gh-ocannl-1088: the stanza's argument list decides which goldens answer for a source, but
+   [Manifest.sources] owns which sources there are. Compared as sorted multisets, so a source the
+   argument list lacks, one it adds, and one it names twice are each a mismatch: the first list is
+   the manifest's uncatalogued sources, the second the catalogue's sources outside the manifest. *)
+let catalogue_mismatch ~manifest ~catalogued =
+  let manifest = List.sort manifest ~compare:String.compare
+  and catalogued = List.sort catalogued ~compare:String.compare in
+  (minus manifest catalogued, minus catalogued manifest)
+
 let () =
   let source =
     {ocaml|
@@ -69,6 +85,19 @@ let dynamic reason = Verdict.fail reason
     (Option.is_none
        (Option.bind (Manifest.claim_exercises [ "valid" ] valid) ~f:(fun remaining ->
             Manifest.claim_exercises remaining valid)));
+  let manifest = [ "b.ml"; "a.ml"; "c.ml" ] in
+  Verdict.p "a manifest source missing from the argument list is named as uncatalogued"
+    (Poly.equal (catalogue_mismatch ~manifest ~catalogued:[ "c.ml"; "a.ml" ]) ([ "b.ml" ], []));
+  Verdict.p "an argument-list source outside the manifest is named as extra"
+    (Poly.equal
+       (catalogue_mismatch ~manifest ~catalogued:[ "a.ml"; "d.ml"; "b.ml"; "c.ml" ])
+       ([], [ "d.ml" ]));
+  Verdict.p "a source catalogued twice is a mismatch, not a match"
+    (Poly.equal
+       (catalogue_mismatch ~manifest ~catalogued:[ "a.ml"; "b.ml"; "c.ml"; "a.ml" ])
+       ([], [ "a.ml" ]));
+  Verdict.p "the same sources in another order match"
+    (Poly.equal (catalogue_mismatch ~manifest ~catalogued:[ "c.ml"; "a.ml"; "b.ml" ]) ([], []));
   let arguments = Array.to_list (Array.subo Stdlib.Sys.argv ~pos:1) in
   let rec pairs = function
     | source :: control :: rest -> (source, control) :: pairs rest
@@ -77,9 +106,29 @@ let dynamic reason = Verdict.fail reason
         Verdict.fail (Printf.sprintf "scanner source %s has no assigned control golden" dangling);
         []
   in
+  let pairs = pairs arguments in
+  let uncatalogued, extra =
+    catalogue_mismatch ~manifest:Manifest.sources
+      ~catalogued:(List.map pairs ~f:(fun (source, _) -> "test/operations/" ^ source))
+  in
+  List.iter uncatalogued ~f:(fun source ->
+      eprintf
+        "%s: in Refusal_control_manifest.sources but not catalogued -- add it and its control \
+         goldens to the refusal_control_scan_cases stanza in test/operations/dune (not part of the \
+         golden)\n"
+        source);
+  List.iter extra ~f:(fun source ->
+      eprintf
+        "%s: catalogued by the refusal_control_scan_cases stanza %s (not part of the golden)\n"
+        source
+        (if List.mem Manifest.sources source ~equal:String.equal then "more than once"
+         else "but absent from Refusal_control_manifest.sources"));
+  Verdict.p_empty
+    "the stanza's scanner sources are exactly Refusal_control_manifest.sources, each once"
+    ~over:Manifest.sources (uncatalogued @ extra);
   printf "\nScanner refusal formats and the permanent control suite assigned to their source:\n";
   let catalogued = Hashtbl.create (module String) in
-  pairs arguments
+  pairs
   |> List.iter ~f:(fun (source, control) ->
       let controls = String.split control ~on:',' in
       let control_text = controls |> List.map ~f:In_channel.read_all |> String.concat ~sep:"\n" in
@@ -96,14 +145,8 @@ let dynamic reason = Verdict.fail reason
       (* A reworded format changes its marker: name both sides of the difference and the row to
          paste, so the author never has to recover a digest from another failure line. *)
       if not row_holds then (
-        (* Markers repeat when formats do, so each side is a multiset: [minus xs ys] removes one
-           occurrence per [ys] element. A move within the source leaves both sides empty and differs
-           only in order, reported at its first differing position. *)
-        let minus xs ys =
-          List.fold ys ~init:xs ~f:(fun remaining y ->
-              let before, after = List.split_while remaining ~f:(Fn.non (String.equal y)) in
-              before @ Option.value (List.tl after) ~default:[])
-        in
+        (* A move within the source leaves both [minus] sides empty and differs only in order,
+           reported at its first differing position. *)
         eprintf "%s: refusal-control row differs from extraction (not part of the golden):\n" source;
         let absent = minus extracted registered and no_longer = minus registered extracted in
         List.iter absent ~f:(eprintf "  extracted, absent from the row: %s\n");
