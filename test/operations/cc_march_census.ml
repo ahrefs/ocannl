@@ -802,10 +802,47 @@ let isa_has ~caps ~(loop : kernel_loop) ~width =
    [__builtin_convertvector] arm is still per lane there. A probe of the arm would exclude rows
    whose bridge is packed. *)
 
-let half_widen_probe_source ~lanes =
+(* The narrowing direction (gh-ocannl-1101) is asked the same way, of the macro
+   {!Ir.C_syntax.vec_narrow_macro} names, and for a different reason: the store sits after the
+   k-loop, where no row's census reads it, so the probe IS its census. gcc lowers the portable
+   [__builtin_convertvector] to a [_Float16] vector one lane at a time at [x86-64-v3] and
+   [x86-64-v4]: each lane isolated in a register of its own and converted by its own [vcvtps2ph].
+   [scalar_fp_ops] sees that only by accident of where the vector comes from -- the probe's lanes
+   arrive through scalar [vmovss] loads, but from a register (a C-tile accumulator) gcc isolates
+   them with packed shuffles ([vinsertps], [vshufps]), and [vcvtps2ph] is a packed mnemonic whatever
+   it converts. So that probe's reading is the number of conversion instructions, which a
+   whole-vector lowering keeps at one per vector register. *)
+type bridge_direction = Widen | Narrow
+
+let probe_function_name = function Widen -> "ocannl_probe_widen" | Narrow -> "ocannl_probe_narrow"
+
+let half_bridge_probe_source direction ~lanes =
   let macro =
     Option.value_exn
-      (Ir.C_syntax.vec_widen_macro ~store_prec:Ir.Ops.half ~prec:Ir.Ops.single ~lanes)
+      ((match direction with
+       | Widen -> Ir.C_syntax.vec_widen_macro
+       | Narrow -> Ir.C_syntax.vec_narrow_macro)
+         ~store_prec:Ir.Ops.half ~prec:Ir.Ops.single ~lanes)
+  in
+  let body =
+    match direction with
+    | Widen ->
+        Printf.sprintf
+          {|void ocannl_probe_widen(ocannl_probe_f *dst, const HALF_T *src) {
+  ocannl_probe_f d;
+  %s(ocannl_probe_f, ocannl_probe_h, %d, d, src);
+  *dst = d;
+}
+|}
+          macro lanes
+    | Narrow ->
+        Printf.sprintf
+          {|void ocannl_probe_narrow(HALF_T *dst, const ocannl_probe_f *src) {
+  ocannl_probe_f s = *src;
+  %s(ocannl_probe_h, %d, dst, s);
+}
+|}
+          macro lanes
   in
   String.concat ~sep:"\n"
     (Context.Builtins_cc.includes
@@ -816,25 +853,20 @@ let half_widen_probe_source ~lanes =
 typedef _Float16 ocannl_probe_h __attribute__((vector_size(%d)));
 #endif
 typedef float ocannl_probe_f __attribute__((vector_size(%d)));
-void ocannl_probe_widen(ocannl_probe_f *dst, const HALF_T *src) {
-  ocannl_probe_f d;
-  %s(ocannl_probe_f, ocannl_probe_h, %d, d, src);
-  *dst = d;
-}
-|}
-          (lanes * 2) (lanes * 4) macro lanes;
+%s|}
+          (lanes * 2) (lanes * 4) body;
       ])
 
 (* The probe function's own instructions: the prelude it compiles with defines functions of its own
    (the software fp16 codec a portable arm falls back to), which would read as scalar FP work of the
    probe. They are defined above it, and compilers emit functions in definition order, so the probe
    runs from its label to the end of its frame description. *)
-let probe_function_asm asm =
+let probe_function_asm ~name asm =
   let lines = String.split_lines asm in
   let is_label l =
     (not (String.is_empty l))
     && (not (Char.is_whitespace l.[0]))
-    && String.is_suffix (String.rstrip l) ~suffix:"ocannl_probe_widen:"
+    && String.is_suffix (String.rstrip l) ~suffix:(name ^ ":")
   in
   match List.drop_while lines ~f:(fun l -> not (is_label l)) with
   | [] -> None
@@ -1240,42 +1272,62 @@ let compile_cached (t : Census.toolchain) ~opt_level ~source ~src_path ~asm_path
                    with _ -> ());
                   ok)))
 
-let half_widen_cache : (string * int * int, bool) Hashtbl.t = Hashtbl.Poly.create ()
+let half_bridge_cache : (bridge_direction * string * int * int, string option) Hashtbl.t =
+  Hashtbl.Poly.create ()
 
-(* [packed_half_widen t ~width ~opt_level] is whether [t] lowers the emitted fp16 widening bridge to
-   whole-vector instructions at the lane count [width] implies, WHEN COMPILING THE WAY THE ROW IT
-   excludes was compiled. A toolchain that does not COMPILE the probe answers [false]: it cannot
-   express the bridge whole-vector either, and the rows that would be excluded are reported.
+(* [half_bridge_probe t direction ~width ~opt_level] is the probe function's assembly for the
+   emitted fp16 bridge in [direction] at the lane count [width] implies, as [t] compiles it at
+   [opt_level]; [None] where [t] does not compile the probe.
 
    The optimization level is part of the question and not a constant, for the same reason the width
-   is: this probe decides which rows a claim is held over, and a row is a (column, width, -O)
+   is: a widening probe decides which rows a claim is held over, and a row is a (column, width, -O)
    triple. Vectorizing a whole-vector builtin per lane is a lowering decision, and a compiler that
    makes it at one level and not the other would have the probe excluding a row whose bridge is
    packed, or holding the strict claim over one whose bridge is not -- a false green as easily as a
    false red, from an answer taken at an optimization level nothing here compiles the row at.
-   Memoized per (column, width, level): this is asked once per row and a run has hundreds. *)
-let packed_half_widen t ~width ~opt_level =
-  Hashtbl.find_or_add half_widen_cache (t.Census.label, width, opt_level) ~default:(fun () ->
-      let src = Stdlib.Filename.temp_file "ocannl_census_widen_" ".c" in
-      let asm = Stdlib.Filename.temp_file "ocannl_census_widen_" ".s" in
-      let source = half_widen_probe_source ~lanes:(width / 4) in
+   Memoized per (direction, column, width, level): the widening one is asked once per row and a run
+   has hundreds. *)
+let half_bridge_probe t direction ~width ~opt_level =
+  Hashtbl.find_or_add half_bridge_cache (direction, t.Census.label, width, opt_level)
+    ~default:(fun () ->
+      let name = probe_function_name direction in
+      let src = Stdlib.Filename.temp_file ("ocannl_census_" ^ name) ".c" in
+      let asm = Stdlib.Filename.temp_file ("ocannl_census_" ^ name) ".s" in
+      let source = half_bridge_probe_source direction ~lanes:(width / 4) in
       Stdio.Out_channel.write_all src ~data:source;
-      let verdict =
+      let listing =
         match
           compile_cached t ~opt_level ~source ~src_path:src ~asm_path:asm ~validate:(fun asm ->
-              String.is_substring asm ~substring:"ocannl_probe_widen")
+              String.is_substring asm ~substring:name)
         with
-        | Error _ -> false
-        | Ok () -> (
-            match probe_function_asm (Stdio.In_channel.read_all asm) with
-            | None -> false
-            | Some asm ->
-                let p = Census.profile_all Census.Fma ~asm in
-                p.Census.scalar_fp_ops = 0)
+        | Error _ -> None
+        | Ok () -> probe_function_asm ~name (Stdio.In_channel.read_all asm)
       in
       (try Stdlib.Sys.remove src with _ -> ());
       (try Stdlib.Sys.remove asm with _ -> ());
-      verdict)
+      listing)
+
+(* [packed_half_widen t ~width ~opt_level] is whether [t] lowers the emitted fp16 widening bridge to
+   whole-vector instructions at the lane count [width] implies, WHEN COMPILING THE WAY THE ROW IT
+   excludes was compiled. A toolchain that does not COMPILE the probe answers [false]: it cannot
+   express the bridge whole-vector either, and the rows that would be excluded are reported. *)
+let packed_half_widen t ~width ~opt_level =
+  match half_bridge_probe t Widen ~width ~opt_level with
+  | None -> false
+  | Some asm -> (Census.profile_all Census.Fma ~asm).Census.scalar_fp_ops = 0
+
+(* [half_narrow_conversions t ~width ~opt_level] is how many conversion instructions [t] spends on
+   the emitted fp16 narrowing bridge of one [width]-byte f32 vector, and how many scalar FP ones;
+   [None] where the probe does not compile. A conversion is any mnemonic carrying [cvt]: x86's
+   [vcvtps2ph] and [vcvtps2phx], aarch64's [fcvtn] and [fcvtn2]. *)
+let half_narrow_conversions t ~width ~opt_level =
+  Option.map (half_bridge_probe t Narrow ~width ~opt_level) ~f:(fun asm ->
+      let conversions =
+        Array.count (Census.classify_asm asm) ~f:(function
+          | Some (Census.Insn { mnemonic; _ }) -> String.is_substring mnemonic ~substring:"cvt"
+          | Some (Census.Label _ | Census.Directive _) | None -> false)
+      in
+      (conversions, (Census.profile_all Census.Fma ~asm).Census.scalar_fp_ops))
 
 type emitted = {
   width : int;
@@ -1560,12 +1612,12 @@ let () =
       row "host toolchain: %s\n" (Cc_backend.compiler_command ());
       let failed_compiles = ref [] in
       let edges = ref [] in
+      (* Once per toolchain, not once per row: [caps_of] launches a compiler process, and the rows
+         below map over every loop x kernel x optimization level, so computing it there cost
+         hundreds of redundant `cc -dM -E` invocations per run. *)
+      let columns = List.map available ~f:(fun t -> (t, caps_of t)) in
       let rows =
-        List.concat_map available ~f:(fun t ->
-            (* Once per toolchain, not once per row: [caps_of] launches a compiler process, and this
-               sits above the map over every loop x kernel x optimization level, so computing it
-               inside cost hundreds of redundant `cc -dM -E` invocations per run. *)
-            let caps = caps_of t in
+        List.concat_map columns ~f:(fun (t, caps) ->
             List.concat_map emitted ~f:(fun e ->
                 List.concat_map [ 2; 3 ] ~f:(fun opt ->
                     let kernel = kernel_label e in
@@ -1628,6 +1680,25 @@ let () =
                               profile = c;
                             }))))
       in
+      (* The fp16 narrowing probe, per (column, width, level) that the narrowing claim below is held
+         over (its population is argued there), read here so its table lines sit beside the rows. *)
+      let narrow_population =
+        List.concat_map columns ~f:(fun (t, caps) ->
+            if not (caps.named && caps.fp16_convert) then []
+            else
+              List.concat_map widths ~f:(fun width ->
+                  if width > caps.vector_bytes then []
+                  else
+                    List.map [ 2; 3 ] ~f:(fun opt ->
+                        ( Printf.sprintf "%s w%d -O%d" t.Census.label width opt,
+                          half_narrow_conversions t ~width ~opt_level:opt ))))
+      in
+      List.iter narrow_population ~f:(fun (what, reading) ->
+          row "  %-40s narrow-half probe: %s\n" what
+            (match reading with
+            | Some (conversions, scalar) ->
+                Printf.sprintf "conversions=%d scalar_fp=%d" conversions scalar
+            | None -> "DOES NOT COMPILE"));
       row "=== end census ===\n";
       Stdio.Out_channel.close table;
       Stdio.eprintf "\n=== cc kernel census (not part of the golden) ===\n";
@@ -1809,6 +1880,33 @@ let () =
              whole-vector"
           scalarization_claim
       else claim_none scalarization_claim scalarization_population ~f:scalarized;
+      (* {b The narrowing store, one conversion per vector} (gh-ocannl-1101). The fp16 narrowing
+         bridge writes the register tile's C-tile and every vectorized fp16-storage store, after the
+         loop the rows above census, so it is asked of the probe {!half_narrow_conversions} compiles
+         -- the macro the emission calls, at each width, at each level. Held where the target
+         converts fp16 packed at all ([fp16_convert]: F16C, AVX512-FP16, aarch64's baseline) and the
+         width is one of its registers: a wider vector is emulated in pieces, which is the
+         configuration being wrong for the machine, as for the rows above. Named columns only, like
+         the scalarization claim: the [native] column's compiler is whatever the run landed on. The
+         reading is exact -- one conversion instruction, no scalar FP: the lane-by-lane lowering gcc
+         gives the portable spelling on [x86-64-v3] and [x86-64-v4] is 4, 8 or 16 [vcvtps2ph], and
+         their count tells it from the one packed instruction wherever the lanes come from. *)
+      let narrow_claim =
+        "the emitted fp16 narrowing bridge is one packed conversion per vector where a named \
+         target converts fp16 packed"
+      in
+      let one_conversion (_, reading) =
+        match reading with Some (1, 0) -> true | Some _ | None -> false
+      in
+      if List.is_empty narrow_population then
+        Verdict.skipped ~aggregation:`Environment
+          ~backend:"no named -march target that converts fp16 packed accepted by this toolchain"
+          narrow_claim
+      else (
+        Verdict.p_all narrow_claim narrow_population ~f:one_conversion;
+        List.iter narrow_population ~f:(fun ((what, _) as probe) ->
+            if not (one_conversion probe) then
+              Stdio.eprintf "  %s violates %S (not part of the golden)\n" what narrow_claim));
       (* The [Tile_mma] rows' own claim, in the shape gh-ocannl-614 measured the GEBP kernel in: the
          k-loop's work is vector work. An inequality between the two counts rather than a threshold
          on either, so a misclassified move cannot flip it, and it is two-sided in the way that

@@ -1306,6 +1306,24 @@ let vec_widen_macro ~store_prec ~prec ~lanes =
   | Ops.Half_prec _ -> Some (widen "HALF")
   | _ -> None
 
+(** The cc builtin a whole-vector narrowing bridge from [lanes] lanes of [prec] back to 16-bit
+    storage [store_prec] calls, as {!vec_widen_macro} for the other direction. fp16 at an x86
+    register's f32 width names its width's macro, one [vcvtps2ph] where the target has F16C
+    (gh-ocannl-1101): gcc lowers the portable [__builtin_convertvector] to [_Float16] one lane at a
+    time. bf16 keeps the portable macro at every width: its narrowing is integer arithmetic and a
+    truncating [__builtin_convertvector] between unsigned vectors, which gcc 13.4 and 15.2 both
+    lower whole-vector at each x86 register's width. *)
+let vec_narrow_macro ~store_prec ~prec ~lanes =
+  let narrow format =
+    match (prec, lanes) with
+    | Ops.Single_prec _, (4 | 8 | 16) -> Printf.sprintf "OCANNL_VEC_NARROW_%s_X%d" format lanes
+    | _ -> "OCANNL_VEC_NARROW_" ^ format
+  in
+  match store_prec with
+  | Ops.Bfloat16_prec _ -> Some "OCANNL_VEC_NARROW_BFLOAT16"
+  | Ops.Half_prec _ -> Some (narrow "HALF")
+  | _ -> None
+
 (** The cc builtins a register tile's A column widens its rows through, as [(pack, row)], where the
     tile holds [lanes] lanes of [prec] over [store_prec] storage; [None] where each row widens its
     own scalar. [pack] widens one k step's A elements of [lanes] consecutive rows into one vector
@@ -2843,12 +2861,15 @@ module C_syntax (B : C_syntax_config) = struct
      friends in {!Builtins_cc}) rather than inline preprocessor arms, so a kernel body stays one
      line per load. A widening at an x86 register's width calls that width's macro
      ({!vec_widen_macro}, gh-ocannl-1072): gcc lowers the portable [__builtin_convertvector]
-     spelling through general-purpose registers and the stack inside the register tile's k-loop. *)
+     spelling through general-purpose registers and the stack inside the register tile's k-loop. An
+     fp16 narrowing does the same ({!vec_narrow_macro}, gh-ocannl-1101): gcc converts the portable
+     spelling one lane at a time. *)
   let vec_bridge ~store_prec ~prec ~lanes ~vtyp ~need_typedef ~fresh:_ =
     let open PPrint in
     let base mem = string "&" ^^ mem in
     let call fn args = string (fn ^ "(") ^^ separate (string ", ") args ^^ string ");" in
     let widen_macro () = Option.value_exn (vec_widen_macro ~store_prec ~prec ~lanes) in
+    let narrow_macro () = Option.value_exn (vec_narrow_macro ~store_prec ~prec ~lanes) in
     (* [~width] is the number of VALID lanes, [lanes] for a whole vector. A PARTIAL vector -- the
        register tiling's last column group, gh-ocannl-620 -- is zeroed, so its lanes past [width]
        hold 0 rather than whatever the register held, and only [width] elements cross the memory
@@ -2911,8 +2932,8 @@ module C_syntax (B : C_syntax_config) = struct
           ( (fun ~width ~dst ~mem ->
               declare ~width dst ^^ hardline
               ^^ call (widen_macro ()) (args ~width @ [ string dst; base mem ])),
-            fun ~width ~src ~mem ->
-              call "OCANNL_VEC_NARROW_BFLOAT16" (args ~width @ [ base mem; string src ]) )
+            fun ~width ~src ~mem -> call (narrow_macro ()) (args ~width @ [ base mem; string src ])
+          )
       | Ops.Half_prec _ ->
           let h = Printf.sprintf "ocannl_vec%dh" lanes in
           (* [_Float16] exists only where the C preprocessor says so, and this typedef is the one
@@ -2926,7 +2947,7 @@ module C_syntax (B : C_syntax_config) = struct
               ^^ call (widen_macro ())
                    [ string vtyp; string h; OCaml.int width; string dst; base mem ]),
             fun ~width ~src ~mem ->
-              call "OCANNL_VEC_NARROW_HALF" [ string h; OCaml.int width; base mem; string src ] )
+              call (narrow_macro ()) [ string h; OCaml.int width; base mem; string src ] )
       | _ ->
           (* fp8 and any other narrow format: the arithmetic still vectorizes, only the conversion
              is per lane -- through the scalar path's own conversion, so parity is by

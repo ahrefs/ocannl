@@ -1111,6 +1111,14 @@ files.
   named by `C_syntax.vec_widen_macro` and falling back to the portable macro under
   `__has_builtin` -- clang has no `__builtin_ia32_pmovzxwd*` (its intrinsics use `convertvector`,
   which clang lowers well). Check CI's gcc 13 side with the recipe in the next entry.
+  The store side had the same fp16 gap (gh-ocannl-1101): `convertvector` from f32 to `_Float16`
+  went lane by lane on gcc 13.4 and 15.2 at `x86-64-v3`/`v4` -- one `vcvtps2ph` per lane, 99 in
+  the w32 fp16 tile kernel where 12 C-tile registers need 12 -- outside the k-loop, so no loop row
+  saw it. `OCANNL_VEC_NARROW_HALF_X4`, `_X8` and `_X16` (`C_syntax.vec_narrow_macro`) are one
+  `vcvtps2ph` each. The census reads the probe's conversion COUNT: `vcvtps2ph` is a packed mnemonic even
+  when it converts one lane, and from a register gcc isolates the lanes with packed shuffles, so
+  `scalar_fp_ops` sees the per-lane form only when the lanes come from scalar loads. bf16 narrowing needed no twin: its integer arithmetic lowers
+  whole-vector at each register width on both gccs.
 - **aarch64 gcc spills the bf16 tile's A column at `-O3` only: the pre-RA scheduler, not the
   widening.** Neither CI nor rog has an aarch64 cross gcc, so the census's aarch64 columns went
   uncompiled until minix got one; the first run found the 4x6 bf16 tile at 16 bytes spilling two
