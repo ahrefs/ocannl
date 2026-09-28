@@ -637,6 +637,28 @@ let () =
   p "tiles past the stack threshold: no fold" (Set.is_empty (tiles small.optimized.LL.llc));
   p_all2 "tiles past the stack threshold: the output matches the composed within 1e-5 relative"
     small.values reference.values ~f:(close ~tol:1e-5);
+  (* Probabilities stored at a precision other than the scores': the composed value pass reads them
+     rounded to their node, which the fold never stores, so it declines. *)
+  let probs = Option.value_exn (Set.find (written raw) ~f:(label_is "softmax")) in
+  let narrow =
+    B.node_factory ~prec:Ir.Ops.half ~first_id:100700 ~dims:(Lazy.force probs.Tn.dims) ()
+      "softmax_f16"
+  in
+  let rec renarrow (llc : LL.t) : LL.t =
+    match llc with
+    | LL.Seq (a, b) -> LL.Seq (renarrow a, renarrow b)
+    | LL.For_loop fl -> LL.For_loop { fl with body = renarrow fl.body }
+    | LL.Set st ->
+        let llsc =
+          map_gets st.llsc ~f:(fun tn i ->
+              if Tn.equal tn probs then LL.Get (narrow, i) else LL.Get (tn, i))
+        in
+        if Tn.equal st.tn probs then LL.Set { st with tn = narrow; llsc }
+        else LL.Set { st with llsc }
+    | other -> other
+  in
+  p "probabilities stored narrower than the scores: no fold"
+    (Set.is_empty (tiles (rewrite (renarrow raw))));
   (* Only the row max requested: the fold writes it, and nothing else of the row state -- the
      shifted scores, exponentials and probabilities have no reader, so they go, and with them the
      score chain; only a live definition would move behind the fold. *)

@@ -113,6 +113,7 @@ a value operand aliasing a live row-state definition (the exponentials): no fold
 a live definition reading a scope local: no fold: true
 tiles past the stack threshold: no fold: true
 tiles past the stack threshold: the output matches the composed within 1e-5 relative: true
+probabilities stored narrower than the scores: no fold: true
 the row max alone requested: the fold writes it and its tiles: true
 the row max alone requested: no other row-state or score-chain node is written: true
 --- leg 7: training -- the fold forward under the composed and the fused backward ---

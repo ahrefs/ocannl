@@ -1660,6 +1660,10 @@ let find_fold r (nz : normalizer) ~block : fold option =
     (* The scores are computed into a tile at the chain's state precision: the composed reduction
        rounds each score to its own node, so it must be at the chain's precision too. *)
     && Ops.equal_prec (Lazy.force sr.Tn.storage_prec) (Lazy.force nz.x.Tn.storage_prec)
+    (* Likewise the probabilities: the composed value pass reads them rounded to their node, which
+       the fold never stores; so the whole chain from the scores to [P] is at one precision (the
+       normalizer's own contract already holds [m], [n], [e] and [l] there). *)
+    && Ops.equal_prec (Lazy.force vp.p_tn.Tn.storage_prec) (Lazy.force nz.x.Tn.storage_prec)
     && List.for_all inputs ~f:(fun tn -> untouched_from (first_read tn) tn)
     && (not (List.mem inputs vp.o_tn ~equal:Tn.equal))
     && (not (List.exists inputs ~f:(List.mem state ~equal:Tn.equal)))
