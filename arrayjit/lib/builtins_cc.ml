@@ -821,6 +821,73 @@ uint16_t single_to_bfloat16(float f)
 #endif
 |},
       [ "HAS_NATIVE_FLOAT16"; "OCANNL_VEC_WIDEN_HALF" ] );
+    (* The fp16 narrowing bridges at the same three widths (gh-ocannl-1101), the store-side twins of
+       the widenings above, named by [C_syntax.vec_narrow_macro]; same arguments as the portable
+       [OCANNL_VEC_NARROW_HALF], so the fallback is a rename.
+
+       [__builtin_convertvector] from a float vector to a [_Float16] one has no packed pattern in
+       gcc without AVX512-FP16 either, so gcc narrows lane by lane: each lane shuffled to the bottom
+       of its own register, converted by its own [vcvtps2ph] and the halves reassembled with
+       [vpunpck*] -- 4, 8 and 16 conversions at the three widths (gcc 13.4 and 15.2, at [x86-64-v3]
+       and [x86-64-v4]), in every register-tile C-tile store and every vectorized fp16-storage
+       write. F16C converts a whole register at once. The builtins are [<immintrin.h>]'s
+       [_mm_cvtps_ph], [_mm256_cvtps_ph] and [_mm512_cvtps_ph] as gcc and clang both spell them,
+       with [_MM_FROUND_CUR_DIRECTION] = 4: round as MXCSR says, as the scalar path's [(_Float16)]
+       cast does.
+
+       Parity: on an F16C target without AVX512-FP16 the scalar path's cast IS [vcvtps2ph], one lane
+       at a time. With AVX512-FP16 it is [vcvtss2sh] (and gcc's own vector lowering [vcvtps2phx]):
+       the same IEEE round-to-nearest-even conversion with the same NaN rule -- quieted, payload
+       truncated to its top bits -- so under the default MXCSR (no DAZ/FTZ) they agree on every
+       input. The arms are taken there too, as the widening ones are, so a width has one instruction
+       choice per x86 target on either compiler. Every f32 input through the X4 and X8 arms, and the
+       scalar cast, matches an integer round-to-nearest-even reference bit for bit (all 2^32, F16C
+       host, gh-ocannl-1101); [test/operations/narrow_storage_compute.ml] pins the arm its host
+       takes against the serial twin at every fp16 rounding boundary. Only LANES elements are
+       written, as in the portable arm. *)
+    ( "OCANNL_VEC_NARROW_HALF_X4",
+      {|
+#if HAS_NATIVE_FLOAT16 && defined(__F16C__) && __has_builtin(__builtin_ia32_vcvtps2ph)
+  #define OCANNL_VEC_NARROW_HALF_X4(HV, LANES, dst, src) do { \
+    typedef float ocannl_n4sf__ __attribute__((vector_size(16))); \
+    typedef short ocannl_n8hi__ __attribute__((vector_size(16))); \
+    ocannl_n8hi__ ocannl_nh__ = __builtin_ia32_vcvtps2ph((ocannl_n4sf__)(src), 4); \
+    __builtin_memcpy((dst), &ocannl_nh__, (LANES) * 2); \
+  } while (0)
+#else
+  #define OCANNL_VEC_NARROW_HALF_X4 OCANNL_VEC_NARROW_HALF
+#endif
+|},
+      [ "HAS_NATIVE_FLOAT16"; "OCANNL_VEC_NARROW_HALF" ] );
+    ( "OCANNL_VEC_NARROW_HALF_X8",
+      {|
+#if HAS_NATIVE_FLOAT16 && defined(__F16C__) && __has_builtin(__builtin_ia32_vcvtps2ph256)
+  #define OCANNL_VEC_NARROW_HALF_X8(HV, LANES, dst, src) do { \
+    typedef float ocannl_n8sf__ __attribute__((vector_size(32))); \
+    typedef short ocannl_n8hi__ __attribute__((vector_size(16))); \
+    ocannl_n8hi__ ocannl_nh__ = __builtin_ia32_vcvtps2ph256((ocannl_n8sf__)(src), 4); \
+    __builtin_memcpy((dst), &ocannl_nh__, (LANES) * 2); \
+  } while (0)
+#else
+  #define OCANNL_VEC_NARROW_HALF_X8 OCANNL_VEC_NARROW_HALF
+#endif
+|},
+      [ "HAS_NATIVE_FLOAT16"; "OCANNL_VEC_NARROW_HALF" ] );
+    ( "OCANNL_VEC_NARROW_HALF_X16",
+      {|
+#if HAS_NATIVE_FLOAT16 && defined(__AVX512F__) && __has_builtin(__builtin_ia32_vcvtps2ph512_mask)
+  #define OCANNL_VEC_NARROW_HALF_X16(HV, LANES, dst, src) do { \
+    typedef float ocannl_n16sf__ __attribute__((vector_size(64))); \
+    typedef short ocannl_n16hi__ __attribute__((vector_size(32))); \
+    ocannl_n16hi__ ocannl_nh__ = __builtin_ia32_vcvtps2ph512_mask( \
+      (ocannl_n16sf__)(src), 4, (ocannl_n16hi__){0}, (unsigned short)-1); \
+    __builtin_memcpy((dst), &ocannl_nh__, (LANES) * 2); \
+  } while (0)
+#else
+  #define OCANNL_VEC_NARROW_HALF_X16 OCANNL_VEC_NARROW_HALF
+#endif
+|},
+      [ "HAS_NATIVE_FLOAT16"; "OCANNL_VEC_NARROW_HALF" ] );
     (* A register tile's bf16 A column, widened a group of four rows at a time (named by
        [C_syntax.vec_widen_rows_macros], which says why only there). [..._ROWS_X4] declares [dst]
        and widens the four rows' storage elements [a0]..[a3] into it; [OCANNL_VEC_WIDENED_ROW_X4] is

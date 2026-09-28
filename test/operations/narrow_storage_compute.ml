@@ -211,6 +211,73 @@ let () =
         twin codes ~f:(fun got want ->
           if Float.is_nan want then Float.is_nan got else same_bits got want));
 
+  (* --- 2c. Every fp16 rounding boundary through the narrowing bridge (gh-ocannl-1101). --- The
+     store-side twin of 2a: the narrowing bridge's x86 arms (one [vcvtps2ph] per width, named by
+     [C_syntax.vec_narrow_macro]) replace gcc's per-lane lowering of the portable one. The f32
+     inputs are chosen where rounding decides: for every finite half code, its exact value, the
+     midpoint to the next code up in magnitude (a tie, which goes to the even code), and the f32
+     neighbours on either side of that midpoint; both signs; the top code's next is 65536, so 65520
+     and up round to infinity. Plus the infinities, a NaN, the largest f32 and the smallest f32
+     subnormal. Each input's code is known by construction, not asked of either converter. bf16's
+     narrowing needs no twin here: [bf16_codec_exhaustive] feeds every f32 input through it. *)
+  (let boundaries =
+     List.concat_map (List.init 0x7C00 ~f:Fn.id) ~f:(fun c ->
+         let v = half_value c in
+         let next = if c = 0x7BFF then 65536. else half_value (c + 1) in
+         let rounded_up = if c = 0x7BFF then Float.infinity else next in
+         let mid = (v +. next) /. 2. in
+         let mid_bits = Int32.bits_of_float mid in
+         [
+           (v, v);
+           (mid, if c % 2 = 0 then v else rounded_up);
+           (Int32.float_of_bits (Int32.pred mid_bits), v);
+           (Int32.float_of_bits (Int32.succ mid_bits), rounded_up);
+         ])
+   in
+   let specials =
+     [
+       (Float.infinity, Float.infinity);
+       (Float.nan, Float.nan);
+       (Int32.float_of_bits 0x7F7FFFFFl, Float.infinity);
+       (Int32.float_of_bits 1l, 0.);
+     ]
+   in
+   let cases =
+     List.concat_map (boundaries @ specials) ~f:(fun (x, want) -> [ (x, want); (-.x, -.want) ])
+   in
+   (* A multiple of every lane count, so the vectorized rendering's remainder loop has no trips and
+      every input crosses the bridge. *)
+   let padded =
+     Array.of_list (cases @ List.init (64 - (List.length cases % 64)) ~f:(fun _ -> (0., 0.)))
+   in
+   let len = Array.length padded in
+   let narrow ~transform ~label =
+     let x =
+       NTDSL.init ~l:(label ^ "x") ~prec:Ir.Ops.single ~o:[ len ]
+         ~f:(function [| i |] -> fst padded.(i) | _ -> assert false)
+         ()
+     in
+     let%op y = x *. 1. in
+     Tn.update_prec y.Tensor.value Ir.Ops.half;
+     let ctx = Context.auto () in
+     let ctx, routine =
+       Context.compile
+         ~lowered_transform:(fun o -> [ transform o ])
+         ctx
+         (named ("nsc_" ^ label) (Train.forward y))
+         Ir.Indexing.Empty
+     in
+     Context.get_values (Context.run ctx routine) y.Tensor.value
+   in
+   let twin = narrow ~transform:serial ~label:"ntwin_half" in
+   let vec = narrow ~transform:vectorize ~label:"nvec_half" in
+   p_all2
+     "half vectorized narrowing of every rounding boundary is bitwise identical to the serial twin"
+     vec twin ~f:same_bits;
+   p_all2 "half serial narrowing rounds every boundary to nearest even, and a NaN to a NaN" twin
+     (Array.map padded ~f:snd) ~f:(fun got want ->
+       if Float.is_nan want then Float.is_nan got else same_bits got want));
+
   (* --- 2b. Native fp16 arithmetic (gh-ocannl-516): same parity obligation, one precision up. ---
      Where the target has genuine 16-bit arithmetic the half legs compute *in* half at twice f32's
      lane count, so the vector rendering is a different kernel from the one checked above -- and
@@ -322,6 +389,9 @@ let () =
     ((not on_cpu)
     || src_has (read_on_cpu "nsc_wvec_bf16") "OCANNL_VEC_WIDEN_BFLOAT16"
        && src_has (read_on_cpu "nsc_wvec_half") "OCANNL_VEC_WIDEN_HALF");
+  (* And section 2c's vectorized kernel must have stored through the narrowing bridge. *)
+  p "the rounding-boundary sweep stores through the narrowing bridge"
+    ((not on_cpu) || src_has (read_on_cpu "nsc_nvec_half") "OCANNL_VEC_NARROW_HALF");
   (* [narrow(op(...))] immediately re-widened is the signature of per-operator rounding; the seam
      makes it unspellable, in the vector body and in the serial remainder alike. *)
   p "no operator narrows only to be widened again"
