@@ -8613,7 +8613,7 @@ let function_header_doc ?name ?static_indices () =
   | Some name, None -> !^name ^^ colon ^^ space
   | _ -> empty
 
-let get_ident_within_code ?no_dots ?(blacklist = []) llcs =
+let get_ident_within_code ?no_dots ?(blacklist = []) ?(reserved_prefixes = []) llcs =
   let ident_style = Tn.get_style ~arg_name:"ll_ident_style" ?no_dots () in
   let nograd_idents = Hashtbl.create (module String) in
   let grad_idents = Hashtbl.create (module String) in
@@ -8625,10 +8625,14 @@ let get_ident_within_code ?no_dots ?(blacklist = []) llcs =
   let visit tn =
     let is_grad, ident = Tn.no_grad_ident_label tn in
     let idents = if is_grad then grad_idents else nograd_idents in
-    Option.iter ident
-      ~f:
-        (Hashtbl.update idents ~f:(fun old ->
-             Set.add (Option.value ~default:Utils.no_ints old) tn.uid))
+    Option.iter ident ~f:(fun ident ->
+        (* A reserved prefix is seen as a repeat, like a blacklisted name. *)
+        let reserved =
+          List.exists reserved_prefixes ~f:(fun prefix -> String.is_prefix ident ~prefix)
+        in
+        Hashtbl.update idents ident ~f:(fun old ->
+            let ids = Set.add (Option.value ~default:Utils.no_ints old) tn.uid in
+            if reserved then Set.add ids (-1) else ids))
   in
   let rec loop (c : t) =
     match c with

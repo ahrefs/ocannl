@@ -48,6 +48,11 @@ half: the header names the one-vector column tail and the two-row band: true
 half: no scalar accumulator is emitted: true
 half: the partial column is a zeroed register filled at exactly its width: true
 half: the tails match the serial twin bitwise: true
+half_ns: a site the tile divides in neither dimension renders register-tiled: true
+half_ns: the header names the one-vector column tail and the two-row band: true
+half_ns: no scalar accumulator is emitted: true
+half_ns: the partial column is a zeroed register filled at exactly its width: true
+half_ns: the tails match the serial twin bitwise: true
 seeds: whole-triple bm0 tiles on 16-byte vectors at 64x512x64: auto, rm4 rn4 lanes4
 the whole-triple seeds carry one auto geometry then exactly the model's alternatives: true
 the site offers at least one alternative to time: true

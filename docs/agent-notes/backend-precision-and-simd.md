@@ -1133,7 +1133,11 @@ files.
   an extracted lane through a 2-byte stack slot (`vmovw %xmm1, -2(%rsp)`). The fp16 bridge is
   then handed a `HALF_T` vector bit-cast from the staging one as a whole (a GNU C vector cast), not
   a `HALF_T *` into the `unsigned short` vector: the macro's per-lane fallback arm would otherwise
-  access `_Float16`s through the wrong type. The store is outside
+  access `_Float16`s through the wrong type. Those typedefs are declared in the tile's block ahead
+  of its operand pointers, so a node LABELED like one would be shadowed and the pointer's
+  initializer would not parse; `C_syntax.get_ident` therefore reserves the whole `ocannl_` prefix
+  (`Low_level.get_ident_within_code ~reserved_prefixes`), sending such a label to the `n<id>_`
+  form -- a per-lane-count family no exact-name blacklist can list. The store is outside
   every loop, so `Asm_census.attributed_in` reads it by DWARF line attribution: the instructions
   under the `.loc` lines naming the partial column's C-tile elements, which the census holds to
   zero stack references where the pass fits. The same PR made `is_stack_ref` ask for a MEMORY

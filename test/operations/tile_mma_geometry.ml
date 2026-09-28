@@ -357,7 +357,7 @@ let () =
     ]
   in
   if not on_cpu then
-    List.iter [ "f32"; "bf16"; "half" ] ~f:(fun tag -> List.iter (names tag) ~f:skipped)
+    List.iter [ "f32"; "bf16"; "half"; "half_ns" ] ~f:(fun tag -> List.iter (names tag) ~f:skipped)
   else begin
     let limits = Context.hardware_limits (Context.auto ()) in
     let lanes =
@@ -373,9 +373,10 @@ let () =
        twin. *)
     let av = Ll_test.cycle ~dims:[| m; k |] ~modulus:7 ~offset:(-3.) ~stride:0.5 in
     let bv = Ll_test.cycle ~dims:[| k; nt |] ~modulus:7 ~offset:(-3.) ~stride:0.5 in
-    let leg ~tag ~prec ~tile ~partial =
+    let leg ?b_label ~tag ~prec ~tile ~partial () =
       let a = NTDSL.init ~l:("tmt_a_" ^ tag) ~prec ~i:[ k ] ~o:[ m ] ~f:av () in
-      let b = NTDSL.init ~l:("tmt_b_" ^ tag) ~prec ~i:[ nt ] ~o:[ k ] ~f:bv () in
+      let b_label = Option.value b_label ~default:("tmt_b_" ^ tag) in
+      let b = NTDSL.init ~l:b_label ~prec ~i:[ nt ] ~o:[ k ] ~f:bv () in
       let%op serial = a * b in
       Tn.update_prec serial.Tensor.value prec;
       let want, _ =
@@ -407,7 +408,8 @@ let () =
         has ("tmma_c_0_0__ = {" ^ lane 0)
         && has (lane 2 ^ "};")
         && has (lane 2 ^ " = tmma_c_0_0__[2];")
-        && not (has (lane 3)));
+        && not (has (lane 3)))
+      ();
     (* The narrow legs leave the geometry to the renderer (the lane count follows the COMPUTE
        precision, f32 for bf16 and — under the default policy — for half too). The partial column's
        storage bits are staged in a whole vector, three lanes in and three lanes out, and the bridge
@@ -425,9 +427,21 @@ let () =
       && not (has (bits ~qual:"const " 3) || has (bits ~qual:"" 3))
     in
     leg ~tag:"bf16" ~prec:Ir.Ops.bfloat16 ~tile:None
-      ~partial:(narrow_partial ~bridged:"unsigned short" ~via:"ocannl_pv__");
+      ~partial:(narrow_partial ~bridged:"unsigned short" ~via:"ocannl_pv__")
+      ();
     leg ~tag:"half" ~prec:Ir.Ops.half ~tile:None
       ~partial:(narrow_partial ~bridged:"HALF_T" ~via:"ocannl_pc__")
+      ();
+    (* The same half leg with its B operand labeled like the staging typedef the tile declares
+       ([ocannl_vec<lanes>hs]) ahead of its operand pointers: [ocannl_] is the emitter's namespace,
+       so the node's code name takes the [n<id>_] form and the kernel compiles (gh-ocannl-1102). A
+       bare name there would be shadowed by the typedef and the pointer's initializer would not
+       parse. *)
+    leg
+      ~b_label:(Printf.sprintf "ocannl_vec%dhs" lanes)
+      ~tag:"half_ns" ~prec:Ir.Ops.half ~tile:None
+      ~partial:(narrow_partial ~bridged:"HALF_T" ~via:"ocannl_pc__")
+      ()
   end
 
 (* === The seeding === *)

@@ -1408,9 +1408,6 @@ let c_keywords =
     (* Scaffolding names emitted by generated code that must not clash with variable names *)
     "log_file";
     "log_file_name";
-    (* The register tile's partial-column staging typedef (gh-ocannl-1102), declared in the tile's
-       block ahead of the operand pointers a kernel parameter of that name would initialize. *)
-    "ocannl_u16_alias";
     "uint32_t";
     "uint64_t";
   ]
@@ -2050,7 +2047,13 @@ module C_syntax (B : C_syntax_config) = struct
         ~convert_precision:B.convert_precision
 
   let get_ident =
-    Low_level.get_ident_within_code ~no_dots:true ~blacklist:ident_blacklist @@ B.procs
+    (* [ocannl_] is the emitter's own namespace: typedefs minted per lane count
+       ([ocannl_vec<lanes><suffix>]), the partial-column staging names (gh-ocannl-1102), loop
+       counters. A node label there takes the [n<id>_] form, so no emitted declaration can shadow a
+       kernel parameter. *)
+    Low_level.get_ident_within_code ~no_dots:true ~blacklist:ident_blacklist
+      ~reserved_prefixes:[ "ocannl_" ]
+    @@ B.procs
 
   (* What a ROUTINE name must avoid: everything a node name must ({!ident_blacklist}) plus the
      standard-library functions and types the preludes' unconditional includes declare. The extra
