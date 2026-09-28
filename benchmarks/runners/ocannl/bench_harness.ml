@@ -880,6 +880,11 @@ let time_segments ?promote_locals ?(repeats = 20) ~backend ~limits ~static_indic
 let dominant_kernel_enabled () =
   match Stdlib.Sys.getenv_opt "BENCH_DOMINANT_KERNEL" with Some "0" -> false | _ -> true
 
+(** [BENCH_KERNEL_TABLE=1] (gh-ocannl-1002): {!dominant_kernel} also prints every kernel it timed on
+    stderr -- one line per shipped segment with its min-of-N time, launch geometry, tensorization
+    census and written nodes. *)
+let kernel_table_enabled () = env_flag "BENCH_KERNEL_TABLE"
+
 (** A shipped segment, copied before it is compiled again: the codegen settles placements in the
     record it is handed, and the routine's own IR is not this instrument's to mutate. *)
 let scratch_segment (seg : Ir.Low_level.optimized) =
@@ -967,6 +972,18 @@ let dominant_kernel ?(repeats = 20) ~ctx ~bindings routines =
   | [] when n = 0 -> no_kernel "the step shipped no kernel segments"
   | [] -> no_kernel (Printf.sprintf "all %d kernels declined to compile on their own" n)
   | timed ->
+      (* [BENCH_KERNEL_TABLE=1]: every timed kernel, not only the slowest -- the per-kernel
+         attribution of the step AS SHIPPED (a diagnostic companion of this column: stderr, so the
+         result line is unchanged). Each line names the kernel's launch geometry and every node it
+         writes, which is what a driver classifies kernels by. *)
+      if kernel_table_enabled () then
+        List.iter timed ~f:(fun (i, seg, ms, mma) ->
+            let d = Ir.Low_level.launch_dims seg.Ir.Low_level.llc in
+            let dims a = String.concat_array ~sep:";" (Array.map a ~f:Int.to_string) in
+            Stdio.eprintf "bench: kernel %d/%d %.4f ms grid=[%s] block=[%s] mma:%s w: %s\n%!" i n ms
+              (dims d.Ir.Low_level.grid) (dims d.Ir.Low_level.block)
+              (Ir.C_syntax.mma_summary_string mma)
+              (String.concat ~sep:" " (List.map (writes_of seg.Ir.Low_level.llc) ~f:Tn.debug_name)));
       let segments_ms = List.sum (module Float) timed ~f:(fun (_, _, ms, _) -> ms) in
       let i, seg, seg_ms, mma =
         List.max_elt timed ~compare:(fun (_, _, a, _) (_, _, b, _) -> Float.compare a b)

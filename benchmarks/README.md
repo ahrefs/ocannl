@@ -83,7 +83,7 @@ nested-division rewrite; regression test `test/training/virtual_grads_parity.ml`
   backward keeps. **gpt2_mini_train_b1_s128** / **_b1_s256** / **_b1_s512** are the same recipe at
   batch 1: with `gpt2_mini_train_s1024` they are a sequence sweep at fixed batch, which separates
   quadratic buffers from linear saved state (the constant-token fixtures above conflate batch and
-  sequence scaling).
+  sequence scaling). `gh1002_cells.py` runs the gh-ocannl-1002 matrix over all of them.
 
 ## Layout
 
@@ -212,6 +212,10 @@ nested-division rewrite; regression test `test/training/virtual_grads_parity.ml`
   Debug helpers: `BENCH_DEBUG=1` prints param names/dims (conv/gpt) or bias gradients (mlp) and
   exits; `BENCH_NO_SGD=1` compiles the gradient update without the SGD step (mlp);
   `BENCH_NO_SLICE=1` skips `@|` batch slicing (mlp, single-batch fixture);
+  `BENCH_KERNEL_TABLE=1` (all three runners, gh-ocannl-1002) prints on stderr every kernel the
+  dominant-kernel instrument timed -- per shipped segment its min-of-20 time, launch geometry,
+  tensorization census and written nodes -- the per-kernel attribution of the step as shipped,
+  after the timed steps and the memory reading (off with `BENCH_DOMINANT_KERNEL=0`);
   `BENCH_TWIN_PLACEMENT=materialized|virtual` (mlp, reduced precision) pins the master weights'
   cast twins instead of leaving them to the virtualization heuristics
   (`Mixed_prec.Twin_materialized`). The twins' placement decides whether a tensorized candidate is
