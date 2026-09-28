@@ -314,9 +314,12 @@ let leg ~tag ~ko_extents ~nk ?(companion = false) ~build () =
    on the f32 site. *)
 let bf16_leg ~tag ~build =
   let real_limits = Context.hardware_limits (Context.auto ()) in
+  (* Routine logging withholds the capability as the seeder does: the mma emission renders the
+     scalar fallback there, so every GPU tensorized leaf is refuted. *)
   let has_uniform_bf16_tile =
-    Ir.Backend_intf.advertises_mma_format real_limits ~a:Ir.Backend_intf.Mma_bf16
-      ~b:Ir.Backend_intf.Mma_bf16 ~d:Ir.Backend_intf.Mma_bf16
+    (not (Utils.debug_log_from_routines ()))
+    && Ir.Backend_intf.advertises_mma_format real_limits ~a:Ir.Backend_intf.Mma_bf16
+         ~b:Ir.Backend_intf.Mma_bf16 ~d:Ir.Backend_intf.Mma_bf16
   in
   let shapes =
     [
@@ -408,6 +411,7 @@ let pipelined_leg ~tag ~build =
       let real_limits = Context.hardware_limits (Context.auto ()) in
       let seedable =
         match real_limits.Ir.Backend_intf.mma with
+        | Some _ when Utils.debug_log_from_routines () -> false
         | Some mma ->
             List.mem mma.Ir.Backend_intf.mma_pipeline_depths 2 ~equal:Int.equal
             && Option.is_some
