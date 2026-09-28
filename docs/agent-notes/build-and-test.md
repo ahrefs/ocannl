@@ -10,7 +10,8 @@ that they earn a lookup rather than always-loaded space. The file is far too lon
 it is sectioned by topic: `grep -n '^##'` lists the sections with their line numbers, and AGENTS.md
 points into them by anchor, as `build-and-test.md#<heading-slug>`. Append a new bullet at the end
 of the section it belongs to rather than at the end of the file, and open a section when none fits.
-A renamed heading breaks every pointer to it, which `agent_notes_structure` reports.
+A renamed heading breaks every pointer to it; `agent_notes_structure` reports the ones in AGENTS.md
+and in the `tools/*.sh` scripts (gh-ocannl-1111).
 
 ## Repository scans
 
