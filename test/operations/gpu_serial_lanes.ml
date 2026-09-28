@@ -12,10 +12,11 @@
    comparison is exact on every backend); 2. a lane nest sharing its kernel with a plain nest
    declines (the slots would not line up) and keeps the presets' geometry, values exact; 3. a lane
    body reading another lane's cell declines (a cross-thread conflict), values exact under the
-   serial order; 4. the real pipeline: the rewritten attention's value pass is scheduled with lanes
-   on a GPU backend and not on the CPU one, and the forward agrees with the composed model on the
-   run's backend. The emitted kernel's lane binding sits inside the serial loop (a GPU backend's
-   generated source; skipped on cc, which renders hardware loops serially). *)
+   serial order; 4. a preamble holding an inlined reduction declines (every lane would recompute
+   it); 5. the real pipeline: the rewritten attention's value pass is scheduled with lanes on a GPU
+   backend and not on the CPU one, and the forward agrees with the composed model on the run's
+   backend. The emitted kernel's lane binding sits inside the serial loop (a GPU backend's generated
+   source; skipped on cc, which renders hardware loops serially). *)
 
 open Base
 open Stdio
@@ -198,14 +199,15 @@ let check_values case got =
            (Ir.Tnode.debug_name tn))
         got want ~f:Float.equal)
 
-(* The rewritten attention, for leg 4 (online_softmax.ml's model at a size the presets alone leave
-   under-parallel). *)
+(* The rewritten attention, for leg 5 (online_softmax.ml's model at a size the presets alone leave
+   under-parallel). One head of width 32 is above the recompute cap
+   ([virtualize_max_inline_reduction] = 16), so the scores are stored and the value pass's preamble
+   reads them; four heads of width 8 are under it, so the preamble recomputes [q . k] inline. *)
 let batch = 2
 let seq = 16
 let d_model = 32
-let heads = 4
 
-let attention () =
+let attention ~heads =
   let x =
     TDSL.range_of_shape ~label:[ "x" ] ~batch_dims:[ batch; seq ] ~input_dims:[]
       ~output_dims:[ d_model ] ()
@@ -222,10 +224,10 @@ let attention () =
   let%op y = x + block ~train_step:None ~mask x in
   y
 
-let forward ~on =
+let forward ~heads ~on =
   Tensor.unsafe_reinitialize ();
   Ir.Online_softmax.set_enabled (Some on);
-  let t = attention () in
+  let t = attention ~heads in
   let ctx = Train.forward_once (Context.auto ()) t in
   let values = Context.get_values ctx t.Tensor.value in
   let optimized =
@@ -277,19 +279,82 @@ let () =
     (dims_are (LL.launch_dims scheduled.llc) ~grid:[| s_n; 1; 1 |] ~block:[| h_n; 1; 1 |]);
   check_values case got;
 
-  printf "--- leg 4: the rewritten attention's value pass, through the real pipeline ---\n";
-  let composed, _ = forward ~on:false in
-  let rewritten, optimized = forward ~on:true in
-  let segments backend_name =
-    S.maybe_default_schedules ~backend_name ~static_indices:[] optimized
-    |> List.map ~f:(fun (o : LL.optimized) -> o.llc)
+  printf "--- leg 4: a preamble holding an inlined reduction keeps the presets ---\n";
+  (* Every lane recomputes the preamble, so a lane geometry multiplies its work by the lane width:
+     the recomputed score [q . k] of the flash-attention form cost 1.5x at seq 1024 on Metal that
+     way (benchmarks/report-gh1003-stage1.md). The scope is spliced into the optimized record by
+     hand -- the annotator reads only the code and the placements -- so the leg is structural. *)
+  let case =
+    hoisted ~name:"lanes_scoped" ~lane_body:accumulate ~reference:accumulate_reference ()
   in
-  (* The CPU pipeline first: the GPU one promotes statement-crossing locals in this lineage. *)
-  let cpu = segments "cc" in
-  p_exists "attention: the lowering carries the hoisted value pass" [ optimized.llc ]
-    ~f:(lane_under_serial ~inner:LL.Serial);
-  p_none "attention: the CPU preset schedules no lanes" cpu ~f:lane_under_serial;
-  p_exists "attention: a GPU segment schedules the value pass with lanes" (segments "metal")
-    ~f:lane_under_serial;
-  let close g w = Float.(abs (g -. w) <= 1e-4 *. max 1. (abs w)) in
-  p_all2 "attention: the rewritten forward agrees with the composed one" rewritten composed ~f:close
+  let k_tn = node ~dims:v_dims "lanes_scoped_k" and acc = node ~dims:[| 1 |] "lanes_scoped_acc" in
+  L.materialize k_tn;
+  L.virtualize acc;
+  let acc = LL.get_scope acc in
+  let rec splice (llc : LL.t) : LL.t =
+    match llc with
+    | LL.For_loop fc -> LL.For_loop { fc with body = splice fc.body }
+    | LL.Seq (a, b) -> LL.Seq (splice a, splice b)
+    | LL.Set_local (p, (LL.Get (_, idcs) as read)) ->
+        let d = L.sym () in
+        let reduce =
+          LL.Local_scope
+            {
+              id = acc;
+              body =
+                LL.Seq
+                  ( LL.Set_local (acc, read),
+                    L.loop_n d 4
+                      (LL.Set_local
+                         ( acc,
+                           L.add (LL.Get_local acc)
+                             (L.get k_tn [| idcs.(0); idcs.(3); idcs.(2); L.iter d |]) )) );
+              orig_indices = [| L.fixed 0 |];
+              mint = LL.Schedule_minted;
+            }
+        in
+        LL.Set_local (p, reduce)
+    | other -> other
+  in
+  let scoped = { case.opt with llc = splice case.opt.llc } in
+  p "lanes_scoped: the preamble holds the inlined loop" (not (LL.equal scoped.llc case.opt.llc));
+  let scheduled = S.apply (S.default_gpu ~block_size:256 ~min_parallel:64 scoped) scoped in
+  p "lanes_scoped: no lane geometry" (not (lane_under_serial scheduled.llc));
+  p "lanes_scoped: the presets' suffix pair, Grid s x Workgroup h"
+    (dims_are (LL.launch_dims scheduled.llc) ~grid:[| s_n; 1; 1 |] ~block:[| h_n; 1; 1 |]);
+
+  printf "--- leg 5: the rewritten attention's value pass, through the real pipeline ---\n";
+  List.iter
+    [ ("stored scores", 1); ("recomputed scores", 4) ]
+    ~f:(fun (form, heads) ->
+      let composed, _ = forward ~heads ~on:false in
+      let rewritten, optimized = forward ~heads ~on:true in
+      let segments backend_name =
+        S.maybe_default_schedules ~backend_name ~static_indices:[] optimized
+        |> List.map ~f:(fun (o : LL.optimized) -> o.llc)
+      in
+      (* The CPU pipeline first: the GPU one promotes statement-crossing locals in this lineage. *)
+      let cpu = segments "cc" in
+      p_exists
+        (Printf.sprintf "attention, %s: the lowering carries the hoisted value pass" form)
+        [ optimized.llc ]
+        ~f:(lane_under_serial ~inner:LL.Serial);
+      p_none
+        (Printf.sprintf "attention, %s: the CPU preset schedules no lanes" form)
+        cpu ~f:lane_under_serial;
+      let gpu = segments "metal" in
+      if heads = 1 then
+        p_exists
+          (Printf.sprintf "attention, %s: a GPU segment schedules the value pass with lanes" form)
+          gpu ~f:lane_under_serial
+      else
+        p_none
+          (Printf.sprintf
+             "attention, %s: no GPU segment takes lanes (every lane would recompute the dot \
+              product)"
+             form)
+          gpu ~f:lane_under_serial;
+      let close g w = Float.(abs (g -. w) <= 1e-4 *. max 1. (abs w)) in
+      p_all2
+        (Printf.sprintf "attention, %s: the rewritten forward agrees with the composed one" form)
+        rewritten composed ~f:close)

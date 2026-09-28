@@ -18,9 +18,10 @@ files.
   `default_gpu`'s lane geometry reads the path through it (`path_loops ~lanes`) and emits
   `Grid (every chain loop above) -> Serial t -> Workgroup e`. It applies only when every
   chain-carrying nest of the kernel is such a lane nest with the same Grid arity (positional slot
-  coverage), so a kernel mixing it with a plain nest keeps the presets. The preamble must precede
-  exactly ONE loop: a nest with two sibling channel loops under one preamble (a fused dK+dV) is not
-  reached. `test/operations/gpu_serial_lanes`; measured in `benchmarks/report-gh1003-stage1.md`.
+  coverage), so a kernel mixing it with a plain nest keeps the presets. The preamble must be loop-free
+  (each lane recomputes it: the recomputed-scores form's inlined `q . k` cost 1.5x at seq 1024 on
+  Metal under lanes) and must precede exactly ONE loop: a nest with two sibling channel loops under
+  one preamble (a fused dK+dV) is not reached. `test/operations/gpu_serial_lanes`; measured in `benchmarks/report-gh1003-stage1.md`.
 - A GPU schedule must cover EVERY materialized-writing nest of the routine, not only the one the
   pipeline builds. Launch dimensions are kernel-global, so `Low_level.validate_parallel` rejects any
   companion write (a bias/relu tail; the elementwise statements an aligned-merged fission segment

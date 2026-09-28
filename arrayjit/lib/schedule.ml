@@ -4650,17 +4650,44 @@ let query_map (a : access) : Indexing.axis_index array =
 (* The single-child chain of [For_loop]s from the top of a nest, descending through [If] wrappers
    and comments; stops at the first branching ([Seq] with more than one non-comment statement).
 
-   [~lanes:true] also descends a loop body that is lane-uniform scalar work -- declarations and
-   assignments of scope locals -- ahead of exactly one loop: the shape the online-softmax hoist
+   [~lanes:true] also descends a loop body that is cheap lane-uniform scalar work -- declarations
+   and assignments of scope locals -- ahead of exactly one loop: the shape the online-softmax hoist
    leaves, [for t { p := P[.., t]; for e { O[.., e] += p * V[.., t, e] } }] (gh-ocannl-1003). The
    preamble's value depends only on loops enclosing it, so when a loop past it carries hardware
    geometry, every thread recomputes the same value into its own register; the loops past it are
    ordinary chain candidates of the same race analysis, whose thread identity is the tuple of chain
-   symbols wherever in the nest they sit. *)
+   symbols wherever in the nest they sit. Cheap means loop-free: that recomputation multiplies the
+   preamble's work by the lane width, and a preamble holding an inlined reduction (a [Local_scope]
+   whose body loops -- the recomputed score [q . k] when the recompute cap inlines it) turned a 1.5x
+   step-time regression at seq 1024 on Metal, so such a preamble ends the path as before. *)
 let path_loops ?(lanes = false) (nest : Low_level.t) : Low_level.t list =
   let open Low_level in
   let strip stmts = List.filter stmts ~f:(function Noop | Comment _ -> false | _ -> true) in
-  let uniform = function Declare_local _ | Set_local _ -> true | _ -> false in
+  let rec loops_in (llc : t) =
+    match llc with
+    | For_loop _ | Scan_loop _ -> true
+    | Seq (a, b) -> loops_in a || loops_in b
+    | If { cond = c, _; body } -> scalar_loops c || loops_in body
+    | Set { llsc; _ } | Set_local (_, llsc) -> scalar_loops llsc
+    | Set_dynamic { dyn_value = v, _; llsc; _ } -> scalar_loops v || scalar_loops llsc
+    | Set_from_vec { arg = a, _; _ } -> scalar_loops a
+    | Tile_mma _ | Staged_compilation _ -> true
+    | Noop | Comment _ | Zero_out _ | Declare_local _ | Workgroup_barrier -> false
+  and scalar_loops (llsc : scalar_t) =
+    match llsc with
+    | Local_scope { body; _ } -> loops_in body
+    | Get_dynamic { dyn_value = v, _; _ } -> scalar_loops v
+    | Ternop (_, (a, _), (b, _), (c, _)) -> scalar_loops a || scalar_loops b || scalar_loops c
+    | Binop (_, (a, _), (b, _)) -> scalar_loops a || scalar_loops b
+    | Unop (_, (a, _)) -> scalar_loops a
+    | Get_local _ | Get _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ ->
+        false
+  in
+  let uniform = function
+    | Declare_local _ -> true
+    | Set_local (_, llsc) -> not (scalar_loops llsc)
+    | _ -> false
+  in
   let rec go llc acc =
     match llc with
     | For_loop fc -> (

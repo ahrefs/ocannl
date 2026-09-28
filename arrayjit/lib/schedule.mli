@@ -611,9 +611,10 @@ val default_gpu :
     loses groups, active lanes, or the launch threshold, the original outermost pair is used
     instead. Expanded whole-node zeros use the same choice. One geometry goes beyond the shape of
     one [Grid] and one [Workgroup] loop per nest (gh-ocannl-1003): when every nest carrying a chain
-    has a parallel loop under a serial loop past lane-uniform scalar work (declarations and
-    assignments of scope locals -- the online-softmax hoist's value pass,
-    [for (b, s, h) { for t { p := P[s, t]; for e { O[s, e] += p * V[t, e] } } }]), the chain extends
+    has a parallel loop under a serial loop past loop-free lane-uniform scalar work (declarations
+    and assignments of scope locals -- the online-softmax hoist's value pass,
+    [for (b, s, h) { for t { p := P[s, t]; for e { O[s, e] += p * V[t, e] } } }]; a preamble holding
+    an inlined reduction is excluded, since every lane would recompute it), the chain extends
     through that preamble uncapped: the loops above the serial loop become [Grid] loops (slots
     [>= 2] fold onto [.z]) and the loop past it a [Workgroup] lane,
     [Grid (b, s, h) -> Serial t -> Workgroup e] — taken when every such nest has the same number of
