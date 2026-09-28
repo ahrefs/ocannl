@@ -7,6 +7,7 @@ a composite dropping or reordering a provenance is refused: true
 a carrier case transforming its string is not rescued by a nested identity case: true
 a composite whose result does not concatenate every provenance, in order, is unread: true
 a composite rendering in a non-recursive renderer calls something else: true
+a composite rendering beside a source's own ( ^ ) is unread: true
 a guarded or repeated carrier case is not an identity rendering: true
 a renderer matching on its own parameter is read like a function: true
 a renderer matching on anything but its parameter is unread: true
@@ -32,6 +33,7 @@ a caller qualifying the declaring module through a binding relays: true
 a caller qualifying through a longer path, whose identity is not established, relays nothing: true
 a result returned only from a guarded nested case relays nothing: true
 a producer inside a nested module is not the top-level function a caller names: true
+a caller of a local module named like the producer's file relays nothing: true
 a guarded caller case relays nothing: true
 an unqualified caller of a name the source also binds locally relays nothing: true
 a payload wrapped in a result that the handler discards relays nothing: true
@@ -57,6 +59,7 @@ colon-joined text that is not a tag is not read: true
 the table reads as its literal pairs: true
 a table with an element of another shape is unread, not guessed at: true
 a table bound twice is unread: which binding the test reads is a question of order: true
+a table shadowed by a local binding of the name is unread: true
 a source with no table binding has no table: true
 a table agreeing with the minting functions is accepted: true
 a table entry placed in the other function's phase is refused: true
@@ -74,7 +77,8 @@ a local structure declaring its own carrier-named constructor is foreign, inside
 an open or include of a foreign module makes the unqualified name foreign in its scope: true
 a declaration of its own carrier-named constructor takes effect from where it is declared: true
 the owner's own declaration, in the owner's file, keeps the name the owner's: true
-a top-level include is read, so a module re-exporting a foreign one can be found: true
+a top-level include is read, constrained or not, so a module re-exporting a foreign one can be found: true
+a longer qualifier is the owner's only when it ends in the owner's module: true
 a foreign constructor applied unqualified in its own module mints nothing: true
 a foreign constructor qualified through an alias mints nothing; the owner's still does: true
 a constructor's rendering minted by any other family is refused: true

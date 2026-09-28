@@ -36,11 +36,14 @@
       it stands (the owner's own type, in its own file, excepted). Those modules -- and, to a
       fixpoint, the sources re-exporting one through a top-level [include] -- are derived from their
       declarations; the owner's constructor is assumed everywhere else, since opens and aliases
-      reach it in ways a reader of one file cannot follow.
+      reach it in ways a reader of one file cannot follow -- except behind a qualifier of two or
+      more components, whose identity is not established: that is the owner's only when it ends in
+      the owner's module ([Ir.Tnode.Site]).
     - A constructor carrying provenances only ([Refined]) composes and mints nothing; its case of
-      the renderer -- a [let rec] -- must return a concatenation of string literals and recursive
-      calls rendering each of its arguments exactly once, in order, or a printed provenance could
-      drop or reorder a recorded tag. Any other shape is refused as unread.
+      the renderer -- a [let rec], in a source binding no [( ^ )] of its own -- must return a
+      concatenation of string literals and recursive calls rendering each of its arguments exactly
+      once, in order, or a printed provenance could drop or reorder a recorded tag. Any other shape
+      is refused as unread.
     - Each of those renderer checks reads a constructor's ONE unguarded case of the renderer's
       defining match -- [function | ...], or a [match] on its one parameter, of its one top-level
       binding (a renderer bound twice is refused); several cases, a guard or an or-pattern leave the
@@ -53,17 +56,17 @@
       exception unqualified. It may take one hop through a result: a handler returning the payload
       wrapped in a constructor ([Non_virtual i -> Error i]), from an unguarded return position,
       relays when a caller of the declaring function -- the source's one top-level binding of the
-      name, qualified by its module in one component ([Low_level.f], or an alias of it), or
-      unqualified in its own source where nothing else binds the name -- matches that constructor
-      into a carrier ([match instantiate_computations ... with Error i -> ... (Site i)]). A handler
-      or caller body that rebinds the payload's name anywhere, or changes module scope ([let open],
-      [let module]), is not read, nor is a guarded case. A scope reaching no carrier mints nothing.
-      That covers the literal at a [raise], the one handed to a helper that raises it, and the one a
-      handler records directly; a string the exception itself is applied to that is no tag is
-      refused. The function such a tag is minted in is the innermost value binding enclosing the
-      exception's declaration -- a declaration anew inside the scope opens its own -- which is what
-      decides its PHASE, so a relayed tag minted in two functions is refused. A tag computed at run
-      time is not read.
+      name, qualified by its module in one component ([Low_level.f], or an alias of it; a local
+      structure of that name is not the file module), or unqualified in its own source where nothing
+      else binds the name -- matches that constructor into a carrier
+      ([match instantiate_computations ... with Error i -> ... (Site i)]). A handler or caller body
+      that rebinds the payload's name anywhere, or changes module scope ([let open], [let module]),
+      is not read, nor is a guarded case. A scope reaching no carrier mints nothing. That covers the
+      literal at a [raise], the one handed to a helper that raises it, and the one a handler records
+      directly; a string the exception itself is applied to that is no tag is refused. The function
+      such a tag is minted in is the innermost value binding enclosing the exception's declaration
+      -- a declaration anew inside the scope opens its own -- which is what decides its PHASE, so a
+      relayed tag minted in two functions is refused. A tag computed at run time is not read.
 
     The minter of a tag of the other families is the innermost value binding around the literal.
 
@@ -151,6 +154,23 @@ let last_name (lid : longident) =
   match lid with Lident s | Ldot (_, s) -> Some s | Lapply _ -> None
 
 let parse content = Parse.implementation (Lexing.from_string content)
+
+(* How many patterns anywhere in [structure] bind the name [v]. *)
+let bindings_of v structure =
+  let n = ref 0 in
+  let counter =
+    object
+      inherit Ast_traverse.iter as super
+
+      method! pattern p =
+        (match p.ppat_desc with
+        | (Ppat_var { txt; _ } | Ppat_alias (_, { txt; _ })) when String.equal txt v -> Int.incr n
+        | _ -> ());
+        super#pattern p
+    end
+  in
+  counter#structure structure;
+  !n
 
 (** {1 The type} *)
 
@@ -305,8 +325,10 @@ let composite_renderings ~renderer content =
   let var (p : pattern) = match p.ppat_desc with Ppat_var { txt; _ } -> Some txt | _ -> None in
   (* A call of the renderer's name is a recursive call only in a [let rec]: otherwise it names
      whatever was bound before. *)
+  (* [^] is the standard concatenation only where the source binds no [^] of its own. *)
   let recursive =
-    match renderer_bindings ~renderer content with [ (Recursive, _) ] -> true | _ -> false
+    bindings_of "^" (parse content) = 0
+    && match renderer_bindings ~renderer content with [ (Recursive, _) ] -> true | _ -> false
   in
   if not recursive then []
   else
@@ -328,7 +350,7 @@ let composite_renderings ~renderer content =
 
 (** The text every source declaring a local exception contains, so a relaying source is read even
     when it does not spell a carrier. *)
-let exception_keyword = "let exception"
+let exception_keyword = "exception"
 
 type scope = {
   exn : string;
@@ -383,7 +405,14 @@ let own_string_constructors structure =
 let top_level_includes content =
   List.filter_map (parse content) ~f:(fun item ->
       match item.pstr_desc with
-      | Pstr_include { pincl_mod = { pmod_desc = Pmod_ident { txt; _ }; _ }; _ } -> last_name txt
+      | Pstr_include { pincl_mod; _ } ->
+          let rec peel (me : module_expr) =
+            match me.pmod_desc with
+            | Pmod_constraint (me, _) -> peel me
+            | Pmod_ident { txt; _ } -> last_name txt
+            | _ -> None
+          in
+          peel pincl_mod
       | _ -> None)
 
 (** Whether [content], a source other than the owner's, declares a [string]-carrying constructor
@@ -425,6 +454,7 @@ let read_source ~carriers ?(foreign = []) ?(owner = ("", "")) ~source content =
   let mints = ref [] and malformed = ref [] and consumers = ref [] and closed = ref [] in
   let structure = parse content in
   let own_module = module_of_path source in
+  let owner_module = if String.is_empty (fst owner) then "Tnode" else module_of_path (fst owner) in
   (* The module bindings in scope, innermost first, each to the module it resolved to. *)
   let env = ref [] in
   let resolve q = Option.value (List.Assoc.find !env q ~equal:String.equal) ~default:q in
@@ -463,7 +493,8 @@ let read_source ~carriers ?(foreign = []) ?(owner = ("", "")) ~source content =
               let target = source ^ ":" ^ name in
               local_foreign := target :: !local_foreign;
               target
-          | _ -> name
+          (* Any other module expression is this source's own, not the file module of its name. *)
+          | _ -> source ^ ":" ^ name
         in
         env := (name, target) :: !env)
   in
@@ -473,9 +504,12 @@ let read_source ~carriers ?(foreign = []) ?(owner = ("", "")) ~source content =
   let is_carrier (lid : longident) =
     match lid with
     | Lident c -> List.mem carriers c ~equal:String.equal && not !unqualified_foreign
+    | Ldot (Lident q, c) -> List.mem carriers c ~equal:String.equal && not (is_foreign (resolve q))
     | Ldot (q, c) ->
+        (* A longer path's identity is not established here: only one ending in the owner's module
+           ([Ir.Tnode.Site]) is taken for the owner's. *)
         List.mem carriers c ~equal:String.equal
-        && not (Option.value_map (last_name q) ~default:false ~f:(fun q -> is_foreign (resolve q)))
+        && Option.equal String.equal (last_name q) (Some owner_module)
     | Lapply _ -> false
   in
   (* What a handler or consumer body [e] does with the variable [v]: the carriers applied to it
@@ -922,16 +956,18 @@ let phase_table content =
         match (entry hd, elements tl) with Some x, Some xs -> Some (x :: xs) | _ -> None)
     | _ -> None
   in
-  (* Exactly one binding: with several, which one the test reads is a question of order. *)
+  (* Exactly one binding, and nothing else in the source binds the name: with several, or a local
+     one, which table the test reads is a question of order and scope. *)
+  let structure = parse content in
   match
-    List.concat_map (parse content) ~f:(fun item ->
+    List.concat_map structure ~f:(fun item ->
         match item.pstr_desc with
         | Pstr_value (_, vbs) ->
             List.filter vbs ~f:(fun vb ->
                 Option.equal String.equal (binding_name vb) (Some "phase_table"))
         | _ -> [])
   with
-  | [ vb ] -> elements vb.pvb_expr
+  | [ vb ] when bindings_of "phase_table" structure = 1 -> elements vb.pvb_expr
   | _ -> None
 
 (** {1 Refusals} *)

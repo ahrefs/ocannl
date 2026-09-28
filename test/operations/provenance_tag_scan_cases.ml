@@ -176,6 +176,9 @@ let () =
     (Scan.composite_renderings ~renderer:"provenance_to_string"
        (String.substr_replace_all type_source ~pattern:"let rec provenance_to_string"
           ~with_:"let provenance_to_string"));
+  p_empty "a composite rendering beside a source's own ( ^ ) is unread" ~over:[ type_source ]
+    (Scan.composite_renderings ~renderer:"provenance_to_string"
+       ("let ( ^ ) a _ = a\n" ^ type_source));
   p_empty "a guarded or repeated carrier case is not an identity rendering" ~over:[ type_source ]
     (Scan.identity_renderings ~renderer:"provenance_to_string"
        (String.substr_replace_all type_source ~pattern:"| Site s -> s"
@@ -336,6 +339,11 @@ let () =
             "let c y = match Fixture.consume y with Ok () -> () | Error i -> record (Site i)";
         ])
      ~f:is_consume;
+   p_none "a caller of a local module named like the producer's file relays nothing"
+     (with_caller
+        ("module Fixture = struct let consume _ = Ok () end\n"
+        ^ String.substr_replace_all qualified ~pattern:"F.consume" ~with_:"Fixture.consume"))
+     ~f:is_consume;
    p_none "a guarded caller case relays nothing"
      (with_caller
         "let c y = match Fixture.consume y with Ok () -> () | Error i when false -> record (Site \
@@ -445,6 +453,9 @@ let () =
     (Option.is_none (Scan.phase_table "let phase_table = [ (\"7:fixture-store\", phase) ]"));
   p "a table bound twice is unread: which binding the test reads is a question of order"
     (Option.is_none (Scan.phase_table (table ^ "let phase_table = []\n")));
+  p "a table shadowed by a local binding of the name is unread"
+    (Option.is_none
+       (Scan.phase_table (table ^ "let phase_of_code t = let phase_table = [] in t phase_table\n")));
   p "a source with no table binding has no table"
     (Option.is_none (Scan.phase_table "let other_table = []"));
   p_empty "a table agreeing with the minting functions is accepted" ~over:mints
@@ -562,8 +573,21 @@ let () =
               (type_source ^ "\nlet x = Site \"13:fixture-owned\""))
              .mints)
         [ "13:fixture-owned" ]);
-   p "a top-level include is read, so a module re-exporting a foreign one can be found"
-     (strings (Scan.top_level_includes "include Test_utils.Key_scan\nlet x = 1") [ "Key_scan" ]);
+   p
+     "a top-level include is read, constrained or not, so a module re-exporting a foreign one can \
+      be found"
+     (strings
+        (Scan.top_level_includes "include Test_utils.Key_scan\ninclude (Other : S)\nlet x = 1")
+        [ "Key_scan"; "Other" ]);
+   p "a longer qualifier is the owner's only when it ends in the owner's module"
+     (strings
+        (tags
+           (read ~source:"test/h.ml"
+              "module Outer = struct module Foreign = struct type t = Site of string end end\n\
+               let b = Outer.Foreign.Site \"12:fixture-key\"\n\
+               let a = Ir.Tnode.Site \"13:fixture-owned\"")
+             .mints)
+        [ "13:fixture-owned" ]);
    p_empty "a foreign constructor applied unqualified in its own module mints nothing" ~over:[ own ]
      (read ~source:"test/support/key_scan.ml" ~foreign:[ "Key_scan" ] own).mints;
    p "a foreign constructor qualified through an alias mints nothing; the owner's still does"
@@ -710,7 +734,7 @@ let () =
     (String.concat ~sep:"\n"
        [
          "let instantiate_computations y =";
-         "  let exception " ^ nv ^ " of string in";
+         "  let (* spelled apart *) exception " ^ nv ^ " of string in";
          "  try if y then raise (" ^ nv ^ " \"4:fixture-consume\"); Ok () with " ^ nv
          ^ " i -> Error i";
        ]);
