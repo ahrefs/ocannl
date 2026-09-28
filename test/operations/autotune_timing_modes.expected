@@ -41,7 +41,9 @@ a fallback that kept a batch measured within the target is admitted: true
 a slow candidate's unresolved calibration costs no more than its probes: true
 
 == calibration probes are wall-budgeted ==
-no calibration probe but the last starts once the probes' wall has reached the budget: true
+no calibration probe but the rescue starts once the probes' wall has reached the budget: true
+a rescue probe is the calibration's last: true
+a stall retry is not started once the stalled confirmation has spent the budget: true
 a converging calibration is untouched by the budgets: every probe takes all twelve minima: true
 a converging calibration still reaches its affine target depth: true
 a 64 ms candidate's depth-2 confirmation stops at three minima: true
@@ -51,8 +53,10 @@ a refitted crossing never settles past the batches it was checked against: true
 a kernel with a queue threshold below its provisional depth is rescued, timed within the target: true
 a refusal no rescue could lift carries its own reason, apart from the contention verdict: true
 the longest calibration path dispatches queue_calibration_max_probes probes: true
-the longest calibration path's last probe is the rescue, and it times the candidate: true
+the longest calibration path is the provisional probe, four validations, a confirmation, its stall retry, a sampled crossing and the rescue: true
+the longest calibration path's rescue probes rescue_depth and times the candidate there: true
 every synthetic device's dispatches stay within time_routine's documented maximum: true
+every reported probe is exactly the batches the device dispatched for it: true
 
 == autotune_timing spelling ==
 "queued" selects the queued objective: true
