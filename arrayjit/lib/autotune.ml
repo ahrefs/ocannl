@@ -742,6 +742,31 @@ let on_timed_window :
     (samples:int -> reused:int -> wall_ms:float -> median_wall_ms:float -> unit) ref =
   ref (fun ~samples:_ ~reused:_ ~wall_ms:_ ~median_wall_ms:_ -> ())
 
+(* Which of the calibration's branches dispatched a batch probe. *)
+type calibration_probe_role =
+  | Provisional_probe
+  | Validation_probe
+  | Confirmation_probe
+  | Stall_retry_probe
+  | Crossing_probe
+  | Rescue_probe
+
+type calibration_probe = {
+  role : calibration_probe_role;
+  depth : int;
+  runs : int;
+  wall_ms : float;
+  min_ms : float;
+}
+
+(* Observation seam for the timing tests (gh-ocannl-1119), fired once per CUDA/HIP calibration batch
+   probe as it ends, in dispatch order, with the branch that started it, how many minima it took,
+   the wall it charged to [queue_calibration_wall_ms] and its minimum. A test that saw only the
+   [batch] calls had to reconstruct probes from runs of same-depth batches, which merged a stall
+   retry into the confirmation it repeats and counted probes only as a lower bound. Default no-op;
+   no configuration key selects it. *)
+let on_calibration_probe : (calibration_probe -> unit) ref = ref (fun _ -> ())
+
 (* The measurement proper, after the warmup: the calibration and the timed loop, with the device
    reduced to [batch depth], which dispatches [depth] launches back to back, synchronizes once and
    returns the wall in milliseconds. Separated from [time_routine] so a test can drive the whole
@@ -764,7 +789,7 @@ let calibrate_and_time ~timing ~repeats ~queue_depth_cap ~batch =
     Float.(!probe_wall_ms >= queue_calibration_wall_ms)
     || !probes_started >= queue_calibration_max_probes - 1
   in
-  let probe_batch depth =
+  let probe_batch ~role depth =
     Int.incr probes_started;
     let best_ms = ref Float.infinity and runs = ref 0 and wall_ms = ref 0. in
     while
@@ -778,6 +803,7 @@ let calibrate_and_time ~timing ~repeats ~queue_depth_cap ~batch =
     done;
     probe_wall_ms := !probe_wall_ms +. !wall_ms;
     observe ~depth !best_ms;
+    !on_calibration_probe { role; depth; runs = !runs; wall_ms = !wall_ms; min_ms = !best_ms };
     { ms = !best_ms; contended = false; unbatched = false; samples = !runs }
   in
   (* [singles] is the calibration's window of synchronized single launches, kept rather than reduced
@@ -821,7 +847,7 @@ let calibrate_and_time ~timing ~repeats ~queue_depth_cap ~batch =
                whole batch reaches the target even when the provisional depth is shallow. Budget the
                probe on batch wall rather than per-launch time: it is calibration, not a candidate
                measurement, and need not spend 64 whole batches to learn the scale. *)
-            let probe = probe_batch probe_depth in
+            let probe = probe_batch ~role:Provisional_probe probe_depth in
             let depth, estimated_batch_wall_ms =
               refine_queued_batch_depth_with_cap ~max_depth:queue_depth_cap
                 ~single_ms:single_estimate.ms ~probe_depth ~probe_ms:probe.ms
@@ -829,7 +855,7 @@ let calibrate_and_time ~timing ~repeats ~queue_depth_cap ~batch =
             let confirm_interpolated calibration_dispatches depth ~upper_depth ~upper_ms =
               if probe_budget_spent () then (calibration_dispatches, depth, Float.nan)
               else
-                let measured = probe_batch depth in
+                let measured = probe_batch ~role:Crossing_probe depth in
                 let calibration_dispatches = calibration_dispatches + (measured.samples * depth) in
                 let confirmed_depth, confirmed_wall_ms =
                   refine_queued_batch_depth_between_with_cap ~max_depth:queue_depth_cap
@@ -872,7 +898,11 @@ let calibrate_and_time ~timing ~repeats ~queue_depth_cap ~batch =
               else if probe_budget_spent () then (calibration_dispatches, depth, Float.nan)
               else
                 let confirmation_depth = Int.min queue_depth_cap (depth + Int.max 1 (depth / 4)) in
-                let confirmation = probe_batch confirmation_depth in
+                let confirmation =
+                  probe_batch
+                    ~role:(if retry_stall then Confirmation_probe else Stall_retry_probe)
+                    confirmation_depth
+                in
                 let calibration_dispatches =
                   calibration_dispatches + (confirmation.samples * confirmation_depth)
                 in
@@ -908,7 +938,7 @@ let calibrate_and_time ~timing ~repeats ~queue_depth_cap ~batch =
               if depth = queue_depth_cap then (calibration_dispatches, depth, estimated_wall_ms)
               else if probe_budget_spent () then (calibration_dispatches, depth, Float.nan)
               else
-                let validation = probe_batch depth in
+                let validation = probe_batch ~role:Validation_probe depth in
                 let calibration_dispatches =
                   calibration_dispatches + (validation.samples * depth)
                 in
@@ -1020,7 +1050,7 @@ let calibrate_and_time ~timing ~repeats ~queue_depth_cap ~batch =
                     (* One rescue probe before refusing (gh-ocannl-1098), charged to no budget: its
                        depth is chosen so that a cost whose per-launch average does not fall with
                        depth reads within the target there, which is a bounded wall. *)
-                    let measured = probe_batch rescue in
+                    let measured = probe_batch ~role:Rescue_probe rescue in
                     let calibration_dispatches =
                       calibration_dispatches + (measured.samples * rescue)
                     in

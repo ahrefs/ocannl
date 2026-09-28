@@ -1536,6 +1536,40 @@ val on_timed_window :
     every other depth and under {!Isolated}. The default is a no-op and no configuration selects it.
 *)
 
+(** The branch of a CUDA/HIP {!Queued} calibration that started a batch probe. The longest path
+    {!queue_calibration_max_probes} counts is one provisional probe, four validations, a
+    confirmation, its stall retry, a sampled shallower crossing and the rescue. *)
+type calibration_probe_role =
+  | Provisional_probe  (** At the depth the synchronized singles' estimate provisionally picks. *)
+  | Validation_probe  (** At a depth an affine fit projected, checked against its base. *)
+  | Confirmation_probe
+      (** One step deeper than a target-sized batch, the depth-separated confirmation. *)
+  | Stall_retry_probe
+      (** The confirmation repeated once at the same depth, after it read as a stall. *)
+  | Crossing_probe  (** At a fit's target crossing, below a measured over-target batch. *)
+  | Rescue_probe
+      (** At {!rescue_depth}, before refusing a candidate that measured no batch within the target;
+          charged to no budget. *)
+
+type calibration_probe = {
+  role : calibration_probe_role;
+  depth : int;
+  runs : int;  (** The minima taken: {!queue_batch_probe_runs}, or as few as three over-target. *)
+  wall_ms : float;
+      (** The probe's summed wall over its finite positive batches: what it charged to
+          {!queue_calibration_wall_ms}. *)
+  min_ms : float;  (** The minimum batch wall, the probe's reading. *)
+}
+(** One batch probe of a calibration, as it ended. *)
+
+val on_calibration_probe : (calibration_probe -> unit) ref
+(** Observation seam for the timing tests (gh-ocannl-1119), called once per CUDA/HIP calibration
+    batch probe, in dispatch order, as the probe ends. A test that sees only the [batch] calls of
+    {!calibrate_and_time} can reconstruct probes only from runs of same-depth batches, which merges
+    a stall retry into the confirmation it repeats and counts probes as a lower bound; this reports
+    each probe with the branch that started it. The cc/Metal calibration has no batch probes, and
+    {!Isolated} no calibration. The default is a no-op and no configuration selects it. *)
+
 val on_candidate_attempt : (string -> unit) ref
 (** Fault-injection seam for the containment tests (gh-ocannl-550), called with each candidate's
     label just before its compile — including the baseline's, which is a candidate (gh-ocannl-533);
