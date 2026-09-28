@@ -616,7 +616,7 @@ let looks_like_heading line =
     What is refused is each spelling whose rendered text differs from the source by more than the
     punctuation {!slug} drops anyway, outside code spans (which render as written) and not
     backslash-escaped (an escape renders the character it escapes, which {!slug} treats alike):
-    - ['['], which opens a link, an image, a reference or a footnote;
+    - an opening square bracket, which opens a link, an image, a reference or a footnote;
     - ['<'], which opens inline HTML, a comment or an autolink;
     - an entity or character reference, [&name;] or [&#NN;];
     - an underscore at a word boundary, which is emphasis — an identifier's inner underscore is not,
