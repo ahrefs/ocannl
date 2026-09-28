@@ -723,7 +723,13 @@ files.
   consumers (the benchmark JSON's per-arm `timings_unbatched`, `gh834_cells.sh`) keep treating it
   as an incomplete measurement; one that repeats on an idle rerun is the threshold. A sampled
   shallower crossing is refitted against the batch above it and never settles past that batch: a
-  fixed-dominated refit projects far deeper, unmeasured, where a queue cost may jump. Do not replace
+  fixed-dominated refit projects far deeper, unmeasured, where a queue cost may jump. Every other
+  settle is capped at `Autotune.queue_depth_projection_factor` (2) times the deepest batch probed
+  (gh-ocannl-1100), one chokepoint after the branches rather than a fix per exit: the last
+  validation's affine projection, a linear scale from a below-target confirmation and a fit wanting
+  the cap all used to settle unmeasured (a pair (2, 12.25) / (3, 12.5) wants depth 40). A bound in
+  depth, not wall, spending no probe; ultra-fast kernels whose fit wanted the cap now batch shorter
+  than the target. Do not replace
   this with a bound
   extrapolated through a per-launch cost (least `wall / depth`): the readings that leave the fits
   unresolved cannot tell a host stall from a cost that jumps past a queue threshold, and two review

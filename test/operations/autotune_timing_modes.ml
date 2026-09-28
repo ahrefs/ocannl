@@ -638,6 +638,36 @@ let () =
   let jump =
     device "fixed-dominated, its queue cost jumping past depth 8" ~launch_ms:12. jump_clean
   in
+  (* gh-ocannl-1100: two more exits settle on a depth no probe measured. The first is the last
+     validation's affine projection. Singles at 2.5 ms and a concave curve walk the four validations
+     through depths 6, 8, 10 and 14 (the longest path's), each reading under the target, and the
+     last pair (10, 9.5) / (14, 9.5625) is nearly flat: its fit wants depth 42, three times the
+     deepest probe, past which this device's queue cost jumps. *)
+  let projected_clean d =
+    match d with
+    | 1 -> 2.5
+    | 4 -> 7.
+    | 6 -> 8.5
+    | 8 -> 9.25
+    | 10 -> 9.5
+    | 14 -> 9.5625
+    | d -> 400. *. Float.of_int d
+  in
+  let projected =
+    device "the last validation's projection, its queue cost jumping past depth 14" ~launch_ms:2.5
+      projected_clean
+  in
+  (* The second is a confirmation that reads below the target, which the confirmation branch scales
+     from linearly. Singles at 2.5 ms, a provisional probe at depth 4 reading exactly the target,
+     and a confirmation at depth 5 reading a quarter of that -- a clock ramping up between the two
+     -- scale to depth 20, four times the deepest probe, past which the queue cost jumps. *)
+  let scaled_clean d =
+    match d with 1 -> 2.5 | 4 -> 10. | 5 -> 2.5 | d -> 400. *. Float.of_int d
+  in
+  let scaled =
+    device "a confirmation scaled past depth 5, where its queue cost jumps" ~launch_ms:2.5
+      scaled_clean
+  in
   let converging =
     device "fast, clean" ~fixed_ms:fast_fixed_ms ~launch_ms:fast_launch_ms (fun d ->
         fast_fixed_ms +. fast_launch_work d)
@@ -697,6 +727,8 @@ let () =
       ("61 ms a launch, superlinear", superlinear);
       ("16 ms a launch, low depth-2 probe", dip);
       ("fixed-dominated, jumping past depth 8", jump);
+      ("the last validation's projection", projected);
+      ("a confirmation scaled from below the target", scaled);
       ("fast, clean", converging);
       ("the longest calibration path", longest);
       ("a confirmation stall that spends the budget", stall_at_budget);
@@ -766,6 +798,31 @@ let () =
        Stdio.eprintf "  fixed-dominated: settled %d past the deepest probe %d\n%!"
          jump.settled_depth deepest;
      jump.settled_depth <= deepest && jump.settled_depth > 1);
+  (* The bound over the probe record (gh-ocannl-1100), on every CUDA/HIP device in this section.
+     Each of the two fixtures above walks its own exit -- read off its probes' roles -- and settles
+     exactly at the bound, where its projection wanted deeper. *)
+  let deepest_probe (c : synthetic_call) =
+    List.fold c.probes ~init:1 ~f:(fun m (pr : Autotune.calibration_probe) -> Int.max m pr.depth)
+  in
+  let within_bound what c =
+    let ok = c.settled_depth <= Autotune.queue_depth_projection_factor * deepest_probe c in
+    if not ok then
+      Stdio.eprintf "  %s: settled %d, past %d times the deepest probe %d\n%!" what c.settled_depth
+        Autotune.queue_depth_projection_factor (deepest_probe c);
+    ok
+  in
+  Verdict.p_all
+    "no calibration settles deeper than queue_depth_projection_factor times the deepest batch it \
+     probed"
+    every_device ~f:(fun (what, c) -> within_bound what c);
+  let roles (c : synthetic_call) = List.map c.probes ~f:(fun pr -> pr.role) in
+  p "the last validation's projection past its deepest probe is capped at the bound"
+    (List.equal Poly.equal (roles projected)
+       [ Provisional_probe; Validation_probe; Validation_probe; Validation_probe; Validation_probe ]
+    && projected.settled_depth = Autotune.queue_depth_projection_factor * deepest_probe projected);
+  p "a confirmation scaled from below the target is capped at the bound"
+    (List.equal Poly.equal (roles scaled) [ Provisional_probe; Confirmation_probe ]
+    && scaled.settled_depth = Autotune.queue_depth_projection_factor * deepest_probe scaled);
   p
     "a kernel with a queue threshold below its provisional depth is rescued, timed within the \
      target"
