@@ -161,14 +161,20 @@ let oracle s ~stride =
                     ~f:(fun c -> fx [| b; stride * i; stride * j; c |] *. fk [| o; 0; 0; c |])))))
   |> Array.of_list
 
+(* Every run builds its own graph in its own context, and releases both contexts after the readback,
+   leaf first: device buffers live in backend pool tables the GC does not reclaim, and a leg runs
+   tens of candidates. *)
 let run_with name s ~lowered_transform =
   let _, y = make s name in
-  let ctx = init_params (Context.auto ()) s y in
+  let init = init_params (Context.auto ()) s y in
   let ctx, routine =
-    Context.compile ~lowered_transform ctx (named name (Train.forward y)) Ir.Indexing.Empty
+    Context.compile ~lowered_transform init (named name (Train.forward y)) Ir.Indexing.Empty
   in
   let ctx = Context.run ctx routine in
-  Context.get_values ctx y.Tensor.value
+  let got = Context.get_values ctx y.Tensor.value in
+  Context.release ctx;
+  Context.release init;
+  got
 
 let run_plain name s = run_with name s ~lowered_transform:(fun opt -> [ opt ])
 
@@ -349,37 +355,41 @@ let probe ~tag s =
   in
   let found = ref None in
   (let x, y = make s (tag ^ "_probe") in
-   ignore
-     (Context.compile
-        ~lowered_transform:(fun opt ->
-          let site = Autotune.detect_matmul opt.LL.llc in
-          let in_map, out_map = maps ?site x.Tensor.value opt.LL.llc in
-          let segs =
-            Option.map (segment_seeds ~seeds_of ~arity_cuts:false opt) ~f:(fun coarse ->
-                let fine =
-                  if on_cpu then []
-                  else
-                    Option.value ~default:[] (segment_seeds ~seeds_of ~arity_cuts:true opt)
-                    |> List.filter ~f:(fun (k, _) ->
-                        not (List.exists coarse ~f:(fun (c, _) -> String.equal c k)))
-                in
-                List.map coarse ~f:(fun (k, q) -> (false, k, q))
-                @ List.map fine ~f:(fun (k, q) -> (true, k, q)))
-          in
-          found :=
-            Some
-              {
-                site;
-                conv = Option.is_some (Autotune.detect_conv opt.LL.llc);
-                in_map;
-                out_map;
-                whole = seeds_of opt;
-                segs;
-              };
-          [ opt ])
-        (init_params (Context.auto ()) s y)
-        (named (tag ^ "_probe") (Train.forward y))
-        Ir.Indexing.Empty));
+   let init = init_params (Context.auto ()) s y in
+   let ctx, _ =
+     Context.compile
+       ~lowered_transform:(fun opt ->
+         let site = Autotune.detect_matmul opt.LL.llc in
+         let in_map, out_map = maps ?site x.Tensor.value opt.LL.llc in
+         let segs =
+           Option.map (segment_seeds ~seeds_of ~arity_cuts:false opt) ~f:(fun coarse ->
+               let fine =
+                 if on_cpu then []
+                 else
+                   Option.value ~default:[] (segment_seeds ~seeds_of ~arity_cuts:true opt)
+                   |> List.filter ~f:(fun (k, _) ->
+                       not (List.exists coarse ~f:(fun (c, _) -> String.equal c k)))
+               in
+               List.map coarse ~f:(fun (k, q) -> (false, k, q))
+               @ List.map fine ~f:(fun (k, q) -> (true, k, q)))
+         in
+         found :=
+           Some
+             {
+               site;
+               conv = Option.is_some (Autotune.detect_conv opt.LL.llc);
+               in_map;
+               out_map;
+               whole = seeds_of opt;
+               segs;
+             };
+         [ opt ])
+       init
+       (named (tag ^ "_probe") (Train.forward y))
+       Ir.Indexing.Empty
+   in
+   Context.release ctx;
+   Context.release init);
   let o = Option.value_exn !found in
   Option.iter o.site ~f:(fun m ->
       Stdio.eprintf
@@ -467,12 +477,15 @@ let leg ?(want_mma = false) ?(declines = false) ~what ~tag s =
     (* The block: which flavor seeds is backend-dependent (whole-routine on the C backends, which do
        not fission it; per-segment on GPU, which gates the zeroed whole-routine site), and inside it
        a seed may decline — on cc every whole-routine seed does, its operand [Stage] meeting the
-       main branch's second read of [x]. What must hold is that nothing the tuner could crown
-       computes a wrong value, over a population that is not empty. *)
+       main branch's second read of [x]. What holds is that no proposed seed, applied alone,
+       computes a wrong value — over a population that is not empty. The tuner's recombined
+       per-segment candidates (several keyed segments' best seeds at once, the block's conv segments
+       included) are not exercised: they are the fission machinery's composition, not this site's
+       seeds. *)
     p_all
       (what
-     ^ ": every seed either tuner flavor proposes declines with a typed cause, or runs and matches \
-        the unscheduled form")
+     ^ ": every seed either tuner flavor proposes, applied alone, declines with a typed cause or \
+        runs and matches the unscheduled form")
       (List.map whole_runs ~f:(Option.value_map ~default:true ~f:matches)
       @ List.map seg_runs ~f:(Option.value_map ~default:true ~f:seg_ok))
       ~f:Fn.id

@@ -242,7 +242,9 @@ files.
   virtualized into its norm and is no site) cc does not fission it and every whole-routine seed
   declines — the operand `Stage` meets the 3x3 conv's second read of `x` — so the tuner times no
   sketch for the shortcut there; GPU fissions it and the segment's seeds run. `resnet_block` itself
-  does not compile (no out-channel knob). `test/operations/schedule_strided_1x1` pins all of this.
+  does not compile (no out-channel knob). `test/operations/schedule_strided_1x1` PINS the role
+  structure, the batch-1 refusal and every seed's parity (or typed decline, in the block); the
+  16-channel virtualization and which seeds decline where are observations it reports on stderr.
 - **A dispatch's launch parameters are read on the HOST, at `Context.run`, and carried to the
   device** — never re-read from the caller's refs when the device gets around to the task. Only
   `Schedulers.Multidev` defers a task at all (`Sync.schedule_task` is `Task.run`, and the GPU

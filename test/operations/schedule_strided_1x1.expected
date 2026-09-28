@@ -9,7 +9,7 @@ downsample einsum f32: a matmul site whose stride-2 axes are its interior batch 
 downsample einsum f32: every whole-routine seed runs and matches the unscheduled form: true
 downsample einsum f32: every per-segment seed runs, scheduling the segment it was keyed on, and matches the unscheduled form: true
 resnet block: a matmul site whose stride-2 axes are its interior batch loops, the row read at unit stride: true
-resnet block: every seed either tuner flavor proposes declines with a typed cause, or runs and matches the unscheduled form: true
+resnet block: every seed either tuner flavor proposes, applied alone, declines with a typed cause or runs and matches the unscheduled form: true
 unit-stride control: a matmul site whose row is the minor spatial axis, read at unit stride: true
 unit-stride control: the input is read at no stride-2 axis: true
 unit-stride control: the stride predicate is false: true
