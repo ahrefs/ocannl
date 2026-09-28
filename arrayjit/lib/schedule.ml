@@ -2161,11 +2161,19 @@ let apply_privatize ~target ~over ~acc_prec (opt : Low_level.optimized) : Low_le
       let accesses = ref [] in
       let has_write = ref false in
       let updates = ref [] in
+      let source_siblings = ref false in
+      (* A write of a node other than [target] and the schedule's own scratch ([Stage] tiles,
+         earlier [Privatize] tiles) is a statement of the source program beside the accumulation. *)
+      let note_write tn =
+        if (not (Tn.equal tn target)) && not (String.equal tn.Tn.namespace tile_namespace) then
+          source_siblings := true
+      in
       let rec scan stack conds llc =
         match llc with
         | Noop | Comment _ | Staged_compilation _ | Declare_local _ | Workgroup_barrier -> ()
         | Tile_mma _ -> invalid_arg "Schedule.Privatize: apply Privatize before Tensorize"
         | Zero_out tn ->
+            note_write tn;
             if Tn.equal tn target then
               invalid_arg "Schedule.Privatize: Zero_out of the target inside the accumulation loop"
         | Seq (a, b) ->
@@ -2176,17 +2184,20 @@ let apply_privatize ~target ~over ~acc_prec (opt : Low_level.optimized) : Low_le
         | Scan_loop _ ->
             invalid_arg "Schedule.Privatize: a Scan_loop inside the privatized loop is unsupported"
         | Set { tn; idcs; llsc; _ } ->
+            note_write tn;
             if Tn.equal tn target then (
               has_write := true;
-              updates := (idcs, llsc) :: !updates;
+              updates := (idcs, llsc, stack, conds) :: !updates;
               accesses := (idcs, stack, conds) :: !accesses);
             scan_scalar stack conds llsc
         | Set_dynamic { tn; dyn_value = v, _; llsc; _ } ->
+            note_write tn;
             if Tn.equal tn target then
               invalid_arg "Schedule.Privatize: dynamically indexed target writes are unsupported";
             scan_scalar stack conds v;
             scan_scalar stack conds llsc
         | Set_from_vec { tn; arg = a, _; _ } ->
+            note_write tn;
             if Tn.equal tn target then
               invalid_arg "Schedule.Privatize: vector writes to the target are unsupported";
             scan_scalar stack conds a
@@ -2388,22 +2399,50 @@ let apply_privatize ~target ~over ~acc_prec (opt : Low_level.optimized) : Low_le
       in
       let scalar_acc = Array.is_empty tile_axes in
       let tile_dims = if scalar_acc then [| 1 |] else Array.map tile_axes ~f:snd in
-      (* Which width the tile takes (gh-ocannl-1116 review rounds 1-2, Codex P1s on staging PR
+      (* Which width the tile takes (gh-ocannl-1116 review rounds 1-3, Codex P1s on staging PR
          #880). A STORAGE-precision tile is rendered by code generation exactly as [target] would be
          — the same per-nest peel, the same declines — so it narrows wherever the unprivatized
-         schedule does. The residency is reserved for the one shape whose SOURCE-order rendering
-         holds the accumulator wide across the whole reduction while a reordered schedule can leave
-         the tile's cell varying under inner loops, where no peel reaches it: a single accumulation
-         statement that [accum_update_widens]. Everything else keeps storage, so its narrowing
-         points stay the ones code generation already gives it: sibling update statements (their
-         separate stores are their semantics — the peel refuses a level carrying two), a
-         non-reduction or mixed-operator recurrence, an RNG-bearing contribution, routine logging,
-         and a scope-form base a previous materializing rewrite minted (which the peel hoists
-         through the tile's nest as it would through [target]'s). *)
+         schedule does. The residency is for the case a reordering schedule breaks: the source
+         program's reduction nest, which code generation peels and holds wide, laid out so that the
+         tile's cell varies under inner loops where no peel reaches it. So the question is code
+         generation's own, asked of that SOURCE-order nest: [over] and the reduction loops inside it
+         (those the cell does not mention — the output loops are the ones a schedule sinks inside),
+         around the update under its guards, peeled by [Low_level.peel_accum_nest] with the
+         routine's loop bounds and judged by [accum_update_widens]. It holds only for a single
+         update statement with no source statement beside it (schedule scratch — [Stage] tiles —
+         does not count): the peel refuses a level carrying siblings, whose separate stores are
+         their semantics. Everything else keeps storage: sibling statements, a guard the peel will
+         not cross, a non-reduction or mixed-operator recurrence, an RNG-bearing contribution,
+         routine logging, a scope-form base. *)
       let tile_prec =
+        let storage = Lazy.force target.Tn.storage_prec in
         match !updates with
-        | [ (idcs, llsc) ] when accum_update_widens ~tn:target ~idcs llsc -> acc_prec
-        | _ -> Lazy.force target.Tn.storage_prec
+        | [ (idcs, llsc, stack, conds) ] when not !source_siblings -> (
+            let reduction_level (fl : floop) =
+              not
+                (Array.exists idcs ~f:(fun idx ->
+                     match terms_of_index idx with
+                     | Some (terms, _) ->
+                         List.exists terms ~f:(fun (_, s) -> Indexing.equal_symbol s fl.index)
+                     | None -> true))
+            in
+            let base =
+              List.fold conds
+                ~init:(Set { tn = target; idcs; llsc; debug = "" })
+                ~f:(fun body cond -> If { cond; body })
+            in
+            let nest =
+              List.fold
+                (List.filter stack ~f:reduction_level @ [ fc ])
+                ~init:base
+                ~f:(fun body (fl : floop) ->
+                  For_loop
+                    { index = fl.index; from_ = fl.from_; to_ = fl.to_; body; axis = fl.axis })
+            in
+            match peel_accum_nest ~loop_bounds:(loop_bounds opt.llc) ~free_of:[] nest with
+            | Some (_, _, `Update u, _, _) when accum_update_widens ~tn:target ~idcs u -> acc_prec
+            | _ -> storage)
+        | _ -> storage
       in
       let tile =
         Tn.create ~namespace:tile_namespace (Tn.Specified tile_prec) ~id:(fresh_tile_id ())
