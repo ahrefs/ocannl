@@ -1324,6 +1324,12 @@ let vec_narrow_macro ~store_prec ~prec ~lanes =
   | Ops.Half_prec _ -> Some (narrow "HALF")
   | _ -> None
 
+(** The locals a register tile's PARTIAL bf16/fp16 column is staged through by [vec_bridge]
+    (gh-ocannl-1102), as [(bits, conv)]: the whole vector of its storage bits, and for fp16 that
+    vector bit-cast to [HALF_T]. Every line of a staging block names one of them or the column's own
+    elements, which is how [test/operations/cc_march_census] finds the block's instructions. *)
+let partial_staging_idents = ("ocannl_pv__", "ocannl_pc__")
+
 (** The cc builtins a register tile's A column widens its rows through, as [(pack, row)], where the
     tile holds [lanes] lanes of [prec] over [store_prec] storage; [None] where each row widens its
     own scalar. [pack] widens one k step's A elements of [lanes] consecutive rows into one vector
@@ -2047,7 +2053,13 @@ module C_syntax (B : C_syntax_config) = struct
         ~convert_precision:B.convert_precision
 
   let get_ident =
-    Low_level.get_ident_within_code ~no_dots:true ~blacklist:ident_blacklist @@ B.procs
+    (* [ocannl_] is the emitter's own namespace: typedefs minted per lane count
+       ([ocannl_vec<lanes><suffix>]), the partial-column staging names (gh-ocannl-1102), loop
+       counters. A node label there takes the [n<id>_] form, so no emitted declaration can shadow a
+       kernel parameter. *)
+    Low_level.get_ident_within_code ~no_dots:true ~blacklist:ident_blacklist
+      ~reserved_prefixes:[ "ocannl_" ]
+    @@ B.procs
 
   (* What a ROUTINE name must avoid: everything a node name must ({!ident_blacklist}) plus the
      standard-library functions and types the preludes' unconditional includes declare. The extra
@@ -2799,7 +2811,8 @@ module C_syntax (B : C_syntax_config) = struct
 
      [vec_bridge] returns the [load]/[store] statement builders for one (storage, compute) pair. It
      is the identity memcpy when they coincide (the pre-gh-517 f32/f64 path, unchanged byte for byte
-     at full width; a partial vector crosses lane by lane, gh-ocannl-1071), and otherwise:
+     at full width; a partial vector crosses lane by lane, gh-ocannl-1071, and so do a bf16 or fp16
+     one's storage bits, gh-ocannl-1102), and otherwise:
 
      - bf16 is the top 16 bits of an f32, so widening is a zero-extend and a shift, and narrowing is
      [single_to_bfloat16]'s round-to-nearest-even done with vector arithmetic — bitwise what the
@@ -2869,6 +2882,7 @@ module C_syntax (B : C_syntax_config) = struct
       ^^ string (Printf.sprintf "%s[ocannl_l__]" src)
       ^^ string post ^^ semi
     in
+    let lane ~mem l = parens (base mem) ^^ string (Printf.sprintf "[%d]" l) in
     if Ops.equal_prec store_prec prec then
       (* A partial vector crosses lane by lane: an initializer naming its [width] elements (the
          lanes it omits are zero, as C specifies for an aggregate initializer) and one element store
@@ -2879,7 +2893,6 @@ module C_syntax (B : C_syntax_config) = struct
          partial accumulator kept its register on the stack too. gcc builds the lane initializer
          with loads and inserts, and the per-lane stores with extracts, in registers; clang lowers
          either form in registers. *)
-      let lane ~mem l = parens (base mem) ^^ string (Printf.sprintf "[%d]" l) in
       ( (fun ~width ~dst ~mem ->
           if width < lanes then
             string (vtyp ^ " " ^ dst ^ " = {")
@@ -2899,15 +2912,86 @@ module C_syntax (B : C_syntax_config) = struct
             string "__builtin_memcpy(&" ^^ mem
             ^^ string (Printf.sprintf ", &%s, sizeof(%s));" src src) )
     else
+      (* A PARTIAL vector of 16-bit storage crosses lane by lane too, for the identity arm's reason
+         (gh-ocannl-1102): the bridges' width-counted [__builtin_memcpy] between the storage run and
+         a zeroed vector made gcc build the vector in a stack slot on every k step of the register
+         tile's column tail, and round-trip the narrowed accumulator through one at its store. So
+         the storage bits are staged in a whole [lanes]-lane vector, built by a lane initializer
+         (its lanes past [width] are zero) and stored by per-lane extracts, and the bridge converts
+         that whole vector: a copy between two whole vectors is a register move. The staging lanes
+         are 16-bit integers whatever the storage type is, reached through a [may_alias] pointer:
+         where [HALF_T] is [_Float16], gcc moved each extracted [_Float16] lane through a stack slot
+         of its own at [-march=sapphirerapids]. The bridge itself is handed a vector of the storage
+         type ([conv], where that is not the staging type), bit-cast from or to the staging one as a
+         whole, so a fallback arm that reads or writes it element by element accesses [HALF_T]s as
+         [HALF_T]s. Each staging vector lives in a block of its own, so any number of them share one
+         name. *)
+      let elt = B.typ_of_prec store_prec in
+      let pv, pc = partial_staging_idents in
+      let staging ?conv () =
+        Option.iter conv ~f:(fun c ->
+            need_typedef c (vec_typedef_doc ~ctyp:elt ~name:c ~bytes:(lanes * 2)));
+        let u16 = Printf.sprintf "ocannl_vec%du16" lanes in
+        need_typedef u16 (vec_typedef_doc ~ctyp:"unsigned short" ~name:u16 ~bytes:(lanes * 2));
+        need_typedef "ocannl_u16_alias"
+          (string "typedef unsigned short ocannl_u16_alias __attribute__((may_alias));");
+        u16
+      in
+      let bits_lane ~qual ~mem l =
+        parens (string (Printf.sprintf "(%socannl_u16_alias *)" qual) ^^ base mem)
+        ^^ string (Printf.sprintf "[%d]" l)
+      in
+      let block stmts =
+        lbrace ^^ nest 2 (hardline ^^ separate hardline stmts) ^^ hardline ^^ rbrace
+      in
+      let bridge ?conv ~widen ~narrow () =
+        let bridged ~qual =
+          string (Printf.sprintf "(%s%s *)&%s" qual elt (if Option.is_some conv then pc else pv))
+        in
+        ( (fun ~width ~dst ~mem ->
+            if width < lanes then
+              let u16 = staging ?conv () in
+              declare ~width:lanes dst ^^ hardline
+              ^^ block
+                   ((string (Printf.sprintf "%s %s = {" u16 pv)
+                    ^^ nest 2
+                         (flow
+                            (comma ^^ break 1)
+                            (List.init width ~f:(bits_lane ~qual:"const " ~mem)))
+                    ^^ string "};")
+                    :: Option.to_list
+                         (Option.map conv ~f:(fun c ->
+                              string (Printf.sprintf "%s %s = (%s)%s;" c pc c pv)))
+                   @ [ widen ~dst (bridged ~qual:"const ") ])
+            else declare ~width dst ^^ hardline ^^ widen ~dst (base mem)),
+          fun ~width ~src ~mem ->
+            if width < lanes then
+              let u16 = staging ?conv () in
+              let lanes_out =
+                List.init width ~f:(fun l ->
+                    bits_lane ~qual:"" ~mem l ^^ string (Printf.sprintf " = %s[%d];" pv l))
+              in
+              block
+                (match conv with
+                | None ->
+                    string (Printf.sprintf "%s %s;" u16 pv)
+                    :: narrow ~src (bridged ~qual:"")
+                    :: lanes_out
+                | Some c ->
+                    string (Printf.sprintf "%s %s;" c pc)
+                    :: narrow ~src (bridged ~qual:"")
+                    :: string (Printf.sprintf "%s %s = (%s)%s;" u16 pv u16 pc)
+                    :: lanes_out)
+            else narrow ~src (base mem) )
+      in
       match store_prec with
       | Ops.Bfloat16_prec _ ->
           let u16, u32 = bf16_bit_typedefs ~lanes ~need_typedef in
-          let args ~width = [ string u16; string u32; OCaml.int width ] in
-          ( (fun ~width ~dst ~mem ->
-              declare ~width dst ^^ hardline
-              ^^ call (widen_macro ()) (args ~width @ [ string dst; base mem ])),
-            fun ~width ~src ~mem -> call (narrow_macro ()) (args ~width @ [ base mem; string src ])
-          )
+          let args = [ string u16; string u32; OCaml.int lanes ] in
+          bridge
+            ~widen:(fun ~dst src -> call (widen_macro ()) (args @ [ string dst; src ]))
+            ~narrow:(fun ~src dst -> call (narrow_macro ()) (args @ [ dst; string src ]))
+            ()
       | Ops.Half_prec _ ->
           let h = Printf.sprintf "ocannl_vec%dh" lanes in
           (* [_Float16] exists only where the C preprocessor says so, and this typedef is the one
@@ -2916,12 +3000,14 @@ module C_syntax (B : C_syntax_config) = struct
             (string "#if HAS_NATIVE_FLOAT16" ^^ hardline
             ^^ vec_typedef_doc ~ctyp:"_Float16" ~name:h ~bytes:(lanes * 2)
             ^^ hardline ^^ string "#endif");
-          ( (fun ~width ~dst ~mem ->
-              declare ~width dst ^^ hardline
-              ^^ call (widen_macro ())
-                   [ string vtyp; string h; OCaml.int width; string dst; base mem ]),
-            fun ~width ~src ~mem ->
-              call (narrow_macro ()) [ string h; OCaml.int width; base mem; string src ] )
+          (* The storage-typed vector a partial column's bits are bit-cast to and from. *)
+          bridge
+            ~conv:(Printf.sprintf "ocannl_vec%dhs" lanes)
+            ~widen:(fun ~dst src ->
+              call (widen_macro ()) [ string vtyp; string h; OCaml.int lanes; string dst; src ])
+            ~narrow:(fun ~src dst ->
+              call (narrow_macro ()) [ string h; OCaml.int lanes; dst; string src ])
+            ()
       | _ ->
           (* fp8 and any other narrow format: the arithmetic still vectorizes, only the conversion
              is per lane -- through the scalar path's own conversion, so parity is by

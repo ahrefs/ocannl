@@ -49,18 +49,6 @@ module Generated = Test_utils.Generated
 
 let () = Generated.init ~backend_name
 
-let nest_paths (llc : LL.t) : Ir.Indexing.symbol list list =
-  let strip stmts = List.filter stmts ~f:(function LL.Noop | LL.Comment _ -> false | _ -> true) in
-  let rec path (llc : LL.t) : Ir.Indexing.symbol list =
-    match llc with
-    | LL.For_loop { index; body; _ } ->
-        index :: (match strip (LL.flat_lines [ body ]) with [ single ] -> path single | _ -> [])
-    | LL.If { body; _ } -> path body
-    | _ -> []
-  in
-  List.filter_map (LL.flat_lines [ llc ]) ~f:(fun stmt ->
-      match path stmt with [] -> None | p -> Some p)
-
 let named name (comp : Asgns.comp) : Asgns.comp =
   { comp with asgns = Asgns.Block_comment (name, comp.asgns) }
 
@@ -91,7 +79,7 @@ let () =
   (* --- The register-blocktiled schedule --- *)
   let%op mc1 = ma * mb in
   let register_schedule (opt : LL.optimized) : Sched.schedule =
-    let paths = nest_paths opt.LL.llc in
+    let paths = Ll_test.nest_paths opt.LL.llc in
     let accum = List.find_exn paths ~f:(fun p -> List.length p = 3) in
     let i, j, k = match accum with [ i; j; k ] -> (i, j, k) | _ -> assert false in
     let ez, zsyms = Sched.expand_zero ~tn:mc1.Tensor.value in

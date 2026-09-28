@@ -1315,6 +1315,13 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   `Tile_mma`'s `fallback` rather than stopping at the tile, and reports the operands through the
   fallback alone — reporting the tile's own `d`/`a`/`b` as well would count every operand of a
   tensorized nest twice.
+- `Ll_test.nest_paths` is the other loop query, and not derived from the walk: the perfect-nest
+  chain of each top-level statement (a loop, then the loop that is its body's only statement,
+  through `If` guards), which a schedule test selects by length to name the i/j/k symbols its
+  `Tile`/`Privatize` schedule addresses. Twenty-two tests carried a private copy until gh-ocannl-1091;
+  `bin/schedule_bench.ml` and `bin/narrow_gebp_bench.ml` still do (benchmark binaries link no
+  test library). It stops at anything other than `For_loop`/`If`, so a new constructor ends a chain
+  rather than needing a case here.
 - The dynamic-indexing pair has builders of its own: `Ll_test.gather` (`Get_dynamic`),
   `Ll_test.scatter` (`Set_dynamic`) and `Ll_test.scatter_add`, the read-modify-write shape
   `rewrite_one_hot_reductions` actually mints. Reach for them rather than spelling the record:

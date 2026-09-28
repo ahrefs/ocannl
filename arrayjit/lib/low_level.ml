@@ -953,7 +953,12 @@ let partition_readings readings =
       | `Inline -> (mat, tn :: inl, fp)
       | `Footprint -> (mat, inl, tn :: fp))
 
-type flip_alternative = { fa_flip : reading; fa_recompute_cost : int; fa_modeled : bool }
+type flip_alternative = {
+  fa_flip : reading;
+  fa_recompute_cost : int;
+  fa_modeled : bool;
+  fa_refused : string option;
+}
 [@@deriving sexp_of]
 (** One reading a search can flip a node to, with the recompute-cost bound of the recompute reading
     the flip involves (the per-instantiation cost — the cost model's count where exact
@@ -961,7 +966,8 @@ type flip_alternative = { fa_flip : reading; fa_recompute_cost : int; fa_modeled
     instantiations the reading performs: the per-cell read multiplicity for an inlined reading, the
     scratch cell count for a footprint-scoped one; without the fan-in factor a node the fanin cap
     materialized would rank among the cheapest to re-inline, and the memory-budget planner would
-    prefer undoing exactly the guard's decision). *)
+    prefer undoing exactly the guard's decision), and the virtualizer's rejection code where the
+    pricer's world already shows the flip refused ([fa_refused], gh-ocannl-1093). *)
 
 type flip_candidate = {
   fc_tn : Tnode.t;
@@ -7999,55 +8005,65 @@ let rec writes_node (self : Tn.t) (c : t) =
    setter no longer hosts retracting to inlining or to the producer's materialization — then checks
    that every read site the routine has for the node is one the inliner can serve, and returns the
    scratch placements with the stored computations, the world a read of the flipped node is
-   instantiated in. [Error] carries the store's rejection code. The scratch lineage already holds
-   this routine's own templates, which the re-walk's entry snapshot takes for inherited ones; that
-   changes nothing it prices — the reads of them it replays are ones the routine's walk already
-   served — beyond turning a merge-reading template into a refusal, whose inlined merge read would
-   have made the count opaque anyway. *)
+   instantiated in. [Error] carries the rejection code, tagged by who refused (gh-ocannl-1093):
+   [`Store] for the walk's own verdict on the node's computation — where it is captured, so it
+   refuses every recompute reading, footprint-scoped as well as inlined — and [`Read] for a read
+   site the inliner cannot serve, which refuses the inlined reading only. The scratch lineage
+   already holds this routine's own templates, which the re-walk's entry snapshot takes for
+   inherited ones; that changes nothing it prices — the reads of them it replays are ones the
+   routine's walk already served — beyond turning a merge-reading template into a refusal, whose
+   inlined merge read would have made the count opaque anyway. *)
 let walked_computations ~(ctx : optimize_ctx) ~placements ~traced_store ~reverse_node_map
     ~footprint_scoped ~static_indices ~raw (self : Tn.t) :
-    (Tn.Placements.t * (Indexing.axis_index array option * t) list, string) Result.t =
+    ( Tn.Placements.t * (Indexing.axis_index array option * t) list,
+      [ `Store of string | `Read of string ] )
+    Result.t =
   match List.filter (flat_lines [ raw ]) ~f:(writes_node self) with
-  | [] -> Error "12:no-setter"
+  | [] -> Error (`Store "12:no-setter")
   | stmts -> (
       let plc = Tn.Placements.copy placements in
       Tn.Placements.unsafe_restore plc self None;
       let scratch = { (copy_optimize_ctx ctx) with placements = plc } in
       Hashtbl.remove scratch.computations self;
-      try
-        ignore
-          (virtual_llc ~fresh_symbol:pricing_symbol ~fresh_scope:pricing_scope ~only_store:self
-             scratch (copy_traced_store traced_store) reverse_node_map static_indices
-             ~footprint_scoped:(Hashtbl.copy footprint_scoped)
-             ~footprint_retracted:(Hash_set.create (module Tnode))
-             (unflat_lines stmts)
-            : t * Tnode.t Hash_set.t);
-        match Hashtbl.find scratch.computations self with
-        | Some computations when not (Tn.Placements.known_non_virtual plc self) ->
-            (* The flip replays at every read the routine has of [self] — outside its own setters,
-               whose self-reads the store turned into the scope local — and the first read the
-               inliner cannot serve commits the node materialized (a consumption-time rejection, 13
-               and the like), so each is instantiated here at its own indices. *)
-            let reads =
-              List.concat_map (flat_lines [ raw ]) ~f:(fun stmt ->
-                  if writes_node self stmt then []
-                  else
-                    List.filter (affine_accesses stmt) ~f:(fun (a : Tn.t Affine.access) ->
-                        Tn.equal a.a_tn self && (not a.a_write) && Affine.loops_live a.a_loops))
-            in
-            if List.exists reads ~f:(fun a -> a.Affine.a_dynamic) then Error "dynamic-gather-read"
-            else
-              List.fold_result reads ~init:() ~f:(fun () (a : Tn.t Affine.access) ->
-                  Result.map ~f:ignore
-                    (instantiate_computations ~fresh_symbol:pricing_symbol ~placements:plc
-                       ~id:(pricing_scope self) self computations static_indices a.a_map))
-              |> Result.map ~f:(fun () -> (plc, computations))
-        | _ -> (
-            match Tn.Placements.get plc self with
-            | Some (_, Site code) -> Error code
-            | Some (_, prov) -> Error (Tn.provenance_to_string prov)
-            | None -> Error "12:no-setter")
-      with Utils.User_error m | Invalid_argument m | Failure m -> Error m)
+      let guarded ~tag f =
+        try f () with Utils.User_error m | Invalid_argument m | Failure m -> Error (tag m)
+      in
+      guarded ~tag:(fun m -> `Store m) @@ fun () ->
+      ignore
+        (virtual_llc ~fresh_symbol:pricing_symbol ~fresh_scope:pricing_scope ~only_store:self
+           scratch (copy_traced_store traced_store) reverse_node_map static_indices
+           ~footprint_scoped:(Hashtbl.copy footprint_scoped)
+           ~footprint_retracted:(Hash_set.create (module Tnode))
+           (unflat_lines stmts)
+          : t * Tnode.t Hash_set.t);
+      match Hashtbl.find scratch.computations self with
+      | Some computations when not (Tn.Placements.known_non_virtual plc self) ->
+          guarded ~tag:(fun m -> `Read m) @@ fun () ->
+          (* The flip replays at every read the routine has of [self] — outside its own setters,
+             whose self-reads the store turned into the scope local — and the first read the inliner
+             cannot serve commits the node materialized (a consumption-time rejection, 13 and the
+             like), so each is instantiated here at its own indices. *)
+          let reads =
+            List.concat_map (flat_lines [ raw ]) ~f:(fun stmt ->
+                if writes_node self stmt then []
+                else
+                  List.filter (affine_accesses stmt) ~f:(fun (a : Tn.t Affine.access) ->
+                      Tn.equal a.a_tn self && (not a.a_write) && Affine.loops_live a.a_loops))
+          in
+          if List.exists reads ~f:(fun a -> a.Affine.a_dynamic) then
+            Error (`Read "dynamic-gather-read")
+          else
+            List.fold_result reads ~init:() ~f:(fun () (a : Tn.t Affine.access) ->
+                Result.map ~f:ignore
+                  (instantiate_computations ~fresh_symbol:pricing_symbol ~placements:plc
+                     ~id:(pricing_scope self) self computations static_indices a.a_map))
+            |> Result.map ~f:(fun () -> (plc, computations))
+            |> Result.map_error ~f:(fun code -> `Read code)
+      | _ -> (
+          match Tn.Placements.get plc self with
+          | Some (_, Site code) -> Error (`Store code)
+          | Some (_, prov) -> Error (`Store (Tn.provenance_to_string prov))
+          | None -> Error (`Store "12:no-setter")))
 
 (* gh-ocannl-1011: what ONE read of [self] executes, as code — [computations] instantiated by the
    inliner itself ({!instantiate_computations}, the core of [inline_computation]) at a synthetic
@@ -8172,14 +8188,31 @@ let%diagn2_sexp specialize_proc (input_ctx : optimize_ctx) (an : analysis) : opt
      ([default_to_most_local]) has not yet rewritten the cap provenances. *)
   let flip_candidates =
     let plc = input_ctx.placements in
-    let price =
-      !recompute_pricer ~static_indices (fun tn ->
+    (* The world a read of a candidate is instantiated in, resolved once per node: both the pricer
+       and the refusal below read it (gh-ocannl-1093). *)
+    let worlds = Hashtbl.create (module Tnode) in
+    let world tn =
+      Hashtbl.find_or_add worlds tn ~default:(fun () ->
           match Hashtbl.find input_ctx.computations tn with
           | Some computations -> Ok (walked_placements, computations)
           | None ->
               walked_computations ~ctx:input_ctx ~placements:walked_placements ~traced_store
                 ~reverse_node_map:an.an_reverse_node_map ~footprint_scoped ~static_indices
                 ~raw:an.an_llc tn)
+    in
+    let price =
+      !recompute_pricer ~static_indices (fun tn ->
+          Result.map_error (world tn) ~f:(function `Store code | `Read code -> code))
+    in
+    (* gh-ocannl-1093: the refusal the world already shows for a recompute reading — the walk's own
+       verdict refuses both (the node is captured the same way whichever reading serves its reads),
+       an unservable read site only the inlined one, which a footprint-scoped reading serves from
+       scratch instead. A [`Materialize] flip is never refused: it recomputes nothing. *)
+    let refusal tn (flip : reading) =
+      match (flip, world tn) with
+      | `Materialize, _ | _, Ok _ -> None
+      | (`Inline | `Footprint), Error (`Store code) | `Inline, Error (`Read code) -> Some code
+      | `Footprint, Error (`Read _) -> None
     in
     Hashtbl.fold traced_store ~init:[] ~f:(fun ~key:tn ~data:traced acc ->
         let one_hot = traced.prefers_virtual_one_hot && not traced.has_non_one_hot_setter in
@@ -8247,6 +8280,8 @@ let%diagn2_sexp specialize_proc (input_ctx : optimize_ctx) (an : analysis) : opt
                 else List.filter flips ~f:(equal_reading `Inline)
               in
               let mult = max 1 ((Lazy.force an.an_read_multiplicity) tn) in
+              (* One recompute per node, whichever alternatives it prices. *)
+              let modeled = lazy (price tn) in
               let alternative fa_flip =
                 (* The instantiations the flip's recompute reading performs, per read cell: the read
                    multiplicity for an inlined reading, the sites' fiber cardinalities for a
@@ -8262,13 +8297,18 @@ let%diagn2_sexp specialize_proc (input_ctx : optimize_ctx) (an : analysis) : opt
                 (* gh-ocannl-637: the modeled op count of one recompute, times the instantiations;
                    the traced proxy (reduction extent × instantiations × transitive fan-in) where
                    the model's count is not exact. *)
-                let modeled = price tn in
+                let modeled = Lazy.force modeled in
                 let fa_recompute_cost =
                   match modeled with
                   | Some flops -> flops * instantiations
                   | None -> traced.inline_reduction_extent * instantiations * traced.inline_fanin
                 in
-                { fa_flip; fa_recompute_cost; fa_modeled = Option.is_some modeled }
+                {
+                  fa_flip;
+                  fa_recompute_cost;
+                  fa_modeled = Option.is_some modeled;
+                  fa_refused = refusal tn fa_flip;
+                }
               in
               match
                 List.map flips ~f:alternative
@@ -8667,7 +8707,7 @@ let function_header_doc ?name ?static_indices () =
   | Some name, None -> !^name ^^ colon ^^ space
   | _ -> empty
 
-let get_ident_within_code ?no_dots ?(blacklist = []) llcs =
+let get_ident_within_code ?no_dots ?(blacklist = []) ?(reserved_prefixes = []) llcs =
   let ident_style = Tn.get_style ~arg_name:"ll_ident_style" ?no_dots () in
   let nograd_idents = Hashtbl.create (module String) in
   let grad_idents = Hashtbl.create (module String) in
@@ -8679,10 +8719,14 @@ let get_ident_within_code ?no_dots ?(blacklist = []) llcs =
   let visit tn =
     let is_grad, ident = Tn.no_grad_ident_label tn in
     let idents = if is_grad then grad_idents else nograd_idents in
-    Option.iter ident
-      ~f:
-        (Hashtbl.update idents ~f:(fun old ->
-             Set.add (Option.value ~default:Utils.no_ints old) tn.uid))
+    Option.iter ident ~f:(fun ident ->
+        (* A reserved prefix is seen as a repeat, like a blacklisted name. *)
+        let reserved =
+          List.exists reserved_prefixes ~f:(fun prefix -> String.is_prefix ident ~prefix)
+        in
+        Hashtbl.update idents ident ~f:(fun old ->
+            let ids = Set.add (Option.value ~default:Utils.no_ints old) tn.uid in
+            if reserved then Set.add ids (-1) else ids))
   in
   let rec loop (c : t) =
     match c with

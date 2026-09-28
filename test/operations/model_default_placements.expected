@@ -1,8 +1,17 @@
-decision surface:
-  n3       materialize -> inline cost 64
-  n4       materialize -> inline cost 64
+decision surface (as lowered):
+  n3       materialize -> inline cost 64 refused 9:sibling-escaping-read-index
+  n4       materialize -> inline cost 64 refused 9:sibling-escaping-read-index
   relu_s1  inline      -> materialize cost 2
   exp_y    inline      -> materialize cost 1
+ranked surface:
+  relu_s1  inline      -> materialize cost 2
+  exp_y    inline      -> materialize cost 1
+the lowered surface carries the two scalar reductions' refused flips: true
+each refused flip is an Inline flip: true
+each refusal is the virtualizer's verdict on the flip preferred inline: true
+no flip on the ranked surface is refused: true
+the ranked surface keeps every flip not refused: true
+the ranked surface drops the nodes whose only flip is refused: true
 model_default with placement levels returns a routine with correct values: true
 selection ran (scored the default pipeline and the placement leaves): true
 the placement pick fired and the label carries it: true

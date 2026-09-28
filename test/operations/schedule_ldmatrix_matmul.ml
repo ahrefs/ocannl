@@ -61,19 +61,6 @@ module Generated = Test_utils.Generated
 
 let () = Generated.init ~backend_name
 
-(* The maximal single-child chains of statement-level loops: one symbol list per top-level nest. *)
-let nest_paths (llc : LL.t) : Ir.Indexing.symbol list list =
-  let strip stmts = List.filter stmts ~f:(function LL.Noop | LL.Comment _ -> false | _ -> true) in
-  let rec path (llc : LL.t) : Ir.Indexing.symbol list =
-    match llc with
-    | LL.For_loop { index; body; _ } ->
-        index :: (match strip (LL.flat_lines [ body ]) with [ single ] -> path single | _ -> [])
-    | LL.If { body; _ } -> path body
-    | _ -> []
-  in
-  List.filter_map (LL.flat_lines [ llc ]) ~f:(fun stmt ->
-      match path stmt with [] -> None | p -> Some p)
-
 let named name (comp : Asgns.comp) : Asgns.comp =
   { comp with asgns = Asgns.Block_comment (name, comp.asgns) }
 
@@ -97,7 +84,7 @@ let simd_width = 32
    a row of single-byte elements. *)
 let staged_schedule ~out ~src_a ~src_b ~swz_a ~swz_b ~bk ~ta ~tb (opt : LL.optimized) :
     Sched.schedule =
-  let paths = nest_paths opt.LL.llc in
+  let paths = Ll_test.nest_paths opt.LL.llc in
   let i, j, k =
     match List.find_exn paths ~f:(fun p -> List.length p = 3) with
     | [ i; j; k ] -> (i, j, k)

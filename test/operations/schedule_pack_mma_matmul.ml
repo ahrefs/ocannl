@@ -83,19 +83,6 @@ let has_parallel_construct src =
 let named name (comp : Asgns.comp) : Asgns.comp =
   { comp with asgns = Asgns.Block_comment (name, comp.asgns) }
 
-(* The single-child chain of loops from the top of each top-level nest. *)
-let nest_paths (llc : LL.t) : Ir.Indexing.symbol list list =
-  let strip stmts = List.filter stmts ~f:(function LL.Noop | LL.Comment _ -> false | _ -> true) in
-  let rec path (llc : LL.t) : Ir.Indexing.symbol list =
-    match llc with
-    | LL.For_loop { index; body; _ } ->
-        index :: (match strip (LL.flat_lines [ body ]) with [ single ] -> path single | _ -> [])
-    | LL.If { body; _ } -> path body
-    | _ -> []
-  in
-  List.filter_map (LL.flat_lines [ llc ]) ~f:(fun stmt ->
-      match path stmt with [] -> None | p -> Some p)
-
 let sink sym below = List.map below ~f:(fun inner -> Sched.Swap { outer = sym; inner })
 let n = 64
 let bm, bk = (16, 16)
@@ -104,7 +91,7 @@ let bm, bk = (16, 16)
    backends the trailing [Tensorize] is dropped: the packing is legal everywhere, while a unit-lane
    [Tile_mma] must not reach hardware simdgroup intrinsics. *)
 let composed_schedule ~a ~b (opt : LL.optimized) : Sched.schedule =
-  let paths = nest_paths opt.LL.llc in
+  let paths = Ll_test.nest_paths opt.LL.llc in
   let i, j, k =
     match List.find_exn paths ~f:(fun p -> List.length p = 3) with
     | [ i; j; k ] -> (i, j, k)
@@ -212,7 +199,7 @@ let () =
   let want_g = run_serial ~name:"pmm_grid_serial" gc0 in
   let%op gc1 = ma * mb in
   let grid_schedule (opt : LL.optimized) : Sched.schedule =
-    let paths = nest_paths opt.LL.llc in
+    let paths = Ll_test.nest_paths opt.LL.llc in
     let i, j, k =
       match List.find_exn paths ~f:(fun p -> List.length p = 3) with
       | [ i; j; k ] -> (i, j, k)
@@ -257,7 +244,7 @@ let () =
   let want_pp = run_serial ~name:"pmm_par_serial" pp0 in
   let%op pp1 = ma * mb in
   let par_packed_schedule (opt : LL.optimized) : Sched.schedule =
-    let paths = nest_paths opt.LL.llc in
+    let paths = Ll_test.nest_paths opt.LL.llc in
     let i, j, k =
       match List.find_exn paths ~f:(fun p -> List.length p = 3) with
       | [ i; j; k ] -> (i, j, k)
@@ -334,7 +321,7 @@ let () =
   let want = run_serial ~name:"pmm_gridpack_serial" hc0 in
   let%op hc1 = ga * gb in
   let gridpack_schedule (opt : LL.optimized) : Sched.schedule =
-    let paths = nest_paths opt.LL.llc in
+    let paths = Ll_test.nest_paths opt.LL.llc in
     let i, j, k =
       match List.find_exn paths ~f:(fun p -> List.length p = 3) with
       | [ i; j; k ] -> (i, j, k)
@@ -406,7 +393,7 @@ let () =
   let xa1 = TDSL.param ~values:gav "xa1" ~input_dims:[ n ] ~output_dims:[ n ] () in
   let%op mx1 = xa1 * gb in
   let mixed_schedule (opt : LL.optimized) : Sched.schedule =
-    let paths = nest_paths opt.LL.llc in
+    let paths = Ll_test.nest_paths opt.LL.llc in
     let i, j, k =
       match List.find_exn paths ~f:(fun p -> List.length p = 3) with
       | [ i; j; k ] -> (i, j, k)

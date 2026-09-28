@@ -151,7 +151,7 @@ arrayjit/lib/assignments.ml -- 27 34
 arrayjit/lib/backends.ml -- 42 43 45
 arrayjit/lib/c_syntax.ml -- 46 333 334 335 336 337 431 432 433 487 820 959
 arrayjit/lib/low_level.ml -- 1 4 5 7 8 9 10 11 12 13 14 17 18 19 31 35 36 37 40 41 50 51 52 140 141 142 143 144 145 146 147 148 149 151 152 153 160 1011
-arrayjit/lib/low_level.mli -- 148
+arrayjit/lib/low_level.mli -- 9 13 148
 arrayjit/lib/online_softmax.ml -- 483 1002
 arrayjit/lib/online_softmax.mli -- 483 1002
 arrayjit/lib/schedule.ml -- 175 176 177 178 184 486
@@ -165,6 +165,7 @@ test/operations/cost_model_template.expected -- 9 13
 test/operations/footprint_materialization.ml -- 13
 test/operations/gather_table_placement.ml -- 17 152
 test/operations/local_host_access.ml -- 39
+test/operations/model_default_placements.expected -- 9
 test/operations/provenance_tag_inventory.ml -- 176 178
 test/operations/scan_loop.expected -- 148
 test/operations/scan_loop.ml -- 148

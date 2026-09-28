@@ -305,7 +305,11 @@ files.
   short-circuiting `&&` keeps the op count a bound (affine write positions, multi-setter
   components), exactly as for the emitted read; (c) a flip the store refuses (a scalar reduction's
   operand read escapes the setter it would be captured at, `9:`) is refused by the re-run walk and
-  carries the proxy. The ordering is otherwise as before: `specialize_proc` multiplies the one-read
+  carries the proxy — and, since gh-ocannl-1093, the refusal itself as `fa_refused`, which
+  `Autotune.rank_flip_candidates` and `Memory_budget.fit` exclude (the proxy of a scalar reduction
+  is its whole extent, so it used to rank first and take budget slots). The walk tags who refused:
+  its own store verdict refuses the `Footprint` flip too, a read site the inliner cannot serve
+  (`13:`) only the `Inline` one. The ordering is otherwise as before: `specialize_proc` multiplies the one-read
   count by the instantiations (read multiplicity, or `per_cell` for a footprint reading) and falls
   back to the proxy (reduction extent × multiplicity × transitive fan-in, `fa_modeled = false`) when
   the op count is only a bound. A test that stages a "decoy" or a budget cut on cost ORDER must build

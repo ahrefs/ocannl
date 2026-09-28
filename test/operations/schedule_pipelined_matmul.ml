@@ -75,19 +75,6 @@ module Generated = Test_utils.Generated
 
 let () = Generated.init ~backend_name
 
-(* The maximal single-child chains of statement-level loops: one symbol list per top-level nest. *)
-let nest_paths (llc : LL.t) : Ir.Indexing.symbol list list =
-  let strip stmts = List.filter stmts ~f:(function LL.Noop | LL.Comment _ -> false | _ -> true) in
-  let rec path (llc : LL.t) : Ir.Indexing.symbol list =
-    match llc with
-    | LL.For_loop { index; body; _ } ->
-        index :: (match strip (LL.flat_lines [ body ]) with [ single ] -> path single | _ -> [])
-    | LL.If { body; _ } -> path body
-    | _ -> []
-  in
-  List.filter_map (LL.flat_lines [ llc ]) ~f:(fun stmt ->
-      match path stmt with [] -> None | p -> Some p)
-
 let named name (comp : Asgns.comp) : Asgns.comp =
   { comp with asgns = Asgns.Block_comment (name, comp.asgns) }
 
@@ -161,7 +148,7 @@ let () =
   (* --- The staged + tensorized schedule with a pipeline depth knob. Returns the rotor. --- *)
   let staged_schedule ~pipeline_depth ~out (opt : LL.optimized) :
       Sched.schedule * Ir.Indexing.symbol =
-    let paths = nest_paths opt.LL.llc in
+    let paths = Ll_test.nest_paths opt.LL.llc in
     let i, j, k =
       match List.find_exn paths ~f:(fun path -> List.length path = 3) with
       | [ i; j; k ] -> (i, j, k)
@@ -456,7 +443,7 @@ let () =
   expect_invalid "pipelining a non-cooperative (packing) Stage is rejected"
     ~substring:"requires cooperative staging"
     (reapply ~probe:"pipe_mm_probe1" ~f:(fun ~out:_ opt ->
-         let paths = nest_paths opt.LL.llc in
+         let paths = Ll_test.nest_paths opt.LL.llc in
          let k =
            match List.find_exn paths ~f:(fun path -> List.length path = 3) with
            | [ _; _; k ] -> k
@@ -482,7 +469,7 @@ let () =
          (* Same composition, but the anchor k_o retyped to Grid before the stages: the rotor has no
             serial iteration order to rotate with. (Racy as a real schedule — irrelevant, the
             application must already reject it.) *)
-         let paths = nest_paths opt.LL.llc in
+         let paths = Ll_test.nest_paths opt.LL.llc in
          let i, j, k =
            match List.find_exn paths ~f:(fun path -> List.length path = 3) with
            | [ i; j; k ] -> (i, j, k)

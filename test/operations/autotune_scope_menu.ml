@@ -51,18 +51,9 @@ let x = NTDSL.init ~l:"smn_x" ~prec:Ir.Ops.single ~o:[ ni; nq; nr; ns; nt ] ~f:f
 let%op out = x ++ "iqrst => i"
 let comp = named "smn" (Train.forward out)
 
-(* The single-child chain of loops of the reduction nest (accum_width's helper). *)
+(* The single-child chain of loops of the reduction nest. *)
 let nest_path (llc : LL.t) : Idx.symbol list =
-  let strip stmts = List.filter stmts ~f:(function LL.Noop | LL.Comment _ -> false | _ -> true) in
-  let rec path (llc : LL.t) : Idx.symbol list =
-    match llc with
-    | LL.For_loop { index; body; _ } ->
-        index :: (match strip (LL.flat_lines [ body ]) with [ single ] -> path single | _ -> [])
-    | LL.If { body; _ } -> path body
-    | _ -> []
-  in
-  List.find_map_exn (LL.flat_lines [ llc ]) ~f:(fun stmt ->
-      match path stmt with p when List.length p = 5 -> Some p | _ -> None)
+  List.find_exn (Ll_test.nest_paths llc) ~f:(fun p -> List.length p = 5)
 
 let hermetic (o : LL.optimized) =
   {
