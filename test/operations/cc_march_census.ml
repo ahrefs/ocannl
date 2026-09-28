@@ -701,11 +701,12 @@ let toolchains () =
      (gh-ocannl-1103). The census is a measurement of a compiler, and clang is the other one an x86
      developer's cc backend may be running: until these columns it was censused only when it WAS the
      host compiler, which CI's x86 leg never is, and a clang-only defect read as coverage. What
-     their first run found red was OCANNL's, not clang's -- see the resident claim's comment -- so
-     they carry no known-defect class. Where the named clang does not accept a target -- or is not
-     installed, or targets MSVC, as the clang on a Windows PATH does by default -- its column is
-     skipped with the reason, like any other. [X86_CLANG] names another clang (a version to compare
-     against); the default is the one on [PATH]. *)
+     their first run (clang 21) found red was OCANNL's, not clang's -- see the resident claim's
+     comment; CI's clang 18 then found one that is clang's, pinned as a class at the scalarization
+     claim. Where the named clang does not accept a target -- or is not installed, or targets MSVC,
+     as the clang on a Windows PATH does by default -- its column is skipped with the reason, like
+     any other. [X86_CLANG] names another clang (a version to compare against); the default is the
+     one on [PATH]. *)
   let clang =
     match Stdlib.Sys.getenv_opt "X86_CLANG" with
     | Some c when not (String.is_empty (String.strip c)) -> String.strip c
@@ -801,6 +802,10 @@ type caps = {
           none gcc widens lane by lane. x86 gets it with F16C (from [x86-64-v3]), aarch64 has it at
           the armv8-a baseline. *)
   named : bool;  (** a column whose [-march] this test chose, as opposed to the host's default *)
+  clang : bool;
+      (** the column's compiler is clang ([__clang__]): the known defect classes are one compiler's
+          lowering, not the target's *)
+  x86 : bool;  (** an x86-64 target *)
 }
 
 (* Read off the compiler's own predefined macros rather than pattern-matched from the label: what
@@ -817,6 +822,8 @@ let caps_of t =
     fp16_vector = has "__AVX512FP16__" || has "__ARM_FEATURE_FP16_VECTOR_ARITHMETIC";
     fp16_convert = has "__F16C__" || has "__AVX512FP16__" || has "__ARM_FP16_FORMAT_IEEE";
     named = not (String.is_empty t.Census.march);
+    clang = has "__clang__";
+    x86 = has "__x86_64__";
   }
 
 (* Whether this target's ISA has the operations the loop wants, so that a claim about how well gcc
@@ -878,15 +885,20 @@ let isa_has ~caps ~(loop : kernel_loop) ~width =
    them with packed shuffles ([vinsertps], [vshufps]), and [vcvtps2ph] is a packed mnemonic whatever
    it converts. So that probe's reading is the number of conversion instructions, which a
    whole-vector lowering keeps at one per vector register. *)
-type bridge_direction = Widen | Narrow
+(* The third probe asks about the [Max] combine an fp16-storage reduction applies to its widened
+   operand -- see {!half_minmax_per_lane}. *)
+type bridge_direction = Widen | Narrow | Widen_then_max
 
-let probe_function_name = function Widen -> "ocannl_probe_widen" | Narrow -> "ocannl_probe_narrow"
+let probe_function_name = function
+  | Widen -> "ocannl_probe_widen"
+  | Narrow -> "ocannl_probe_narrow"
+  | Widen_then_max -> "ocannl_probe_widen_then_max"
 
 let half_bridge_probe_source direction ~lanes =
   let macro =
     Option.value_exn
       ((match direction with
-       | Widen -> Ir.C_syntax.vec_widen_macro
+       | Widen | Widen_then_max -> Ir.C_syntax.vec_widen_macro
        | Narrow -> Ir.C_syntax.vec_narrow_macro)
          ~store_prec:Ir.Ops.half ~prec:Ir.Ops.single ~lanes)
   in
@@ -909,6 +921,18 @@ let half_bridge_probe_source direction ~lanes =
 }
 |}
           macro lanes
+    | Widen_then_max ->
+        Printf.sprintf
+          {|void ocannl_probe_widen_then_max(ocannl_probe_f *acc, const HALF_T *src) {
+  ocannl_probe_f v;
+  %s(ocannl_probe_f, ocannl_probe_h, %d, v, src);
+  ocannl_probe_f a = *acc;
+  %s
+  *acc = a;
+}
+|}
+          macro lanes
+          (Ir.C_syntax.vec_minmax_blend ~op:Ir.Ops.Max ~dst:"a" ~src:"v")
   in
   String.concat ~sep:"\n"
     (Context.Builtins_cc.includes
@@ -1399,6 +1423,21 @@ let half_narrow_conversions t ~width ~opt_level =
       in
       (conversions, (Census.profile_all Census.Fma ~asm).Census.scalar_fp_ops))
 
+(* [half_minmax_per_lane t ~width ~opt_level] is whether [t] lowers the [Max] combine of an
+   fp16-storage reduction lane by lane: the widening bridge the emission calls, then the portable
+   blend {!Ir.C_syntax.vec_minmax_blend} spells, asked of the probe's scalar FP work. [false] where
+   the probe does not compile, which leaves the row under the strict claim.
+
+   The known clang defect it detects (gh-ocannl-1103): clang 18 folds the blend's NaN test ([v !=
+   v]) back through the widening conversion onto the fp16 lanes, and without AVX512-FP16 it has no
+   packed fp16 compare to give that test, so it extracts each lane ([vpextrw]), converts it alone
+   and tests it with [vucomiss] -- 4 per 4-lane vector at [x86-64-v3] and [x86-64-v4], none at
+   [sapphirerapids]. clang 21 and gcc test the widened f32 vector in one packed compare. *)
+let half_minmax_per_lane t ~width ~opt_level =
+  match half_bridge_probe t Widen_then_max ~width ~opt_level with
+  | None -> false
+  | Some asm -> (Census.profile_all Census.Max_min ~asm).Census.scalar_fp_ops > 0
+
 type emitted = {
   width : int;
   fp16 : string;  (** the [fp16_arithmetic] setting this kernel was emitted under *)
@@ -1439,6 +1478,9 @@ type row = {
       (** whether this column's TOOLCHAIN lowers this loop's storage bridge whole-vector -- see
           {!packed_half_widen}. [true] for a loop that bridges nothing, and for a narrow bridge
           whose codec is integer shifts (bf16) rather than a conversion instruction. *)
+  minmax_per_lane : bool;
+      (** a clang x86 column's fp16-storage [Max]/[Min] row whose toolchain lowers the combine's NaN
+          test lane by lane -- {!half_minmax_per_lane}, the known clang defect class *)
   profile : Census.t option;  (** [None]: no loop carried the anchor *)
   edge_profile : Census.counts option;
       (** the instructions attributed to the loop's {!field-kernel_loop.edge} lines; [None] where it
@@ -1788,6 +1830,13 @@ let () =
                                    String.equal loop.store half && not (String.equal loop.comp half)
                                  then packed_half_widen t ~width:e.width ~opt_level:opt
                                  else true);
+                              minmax_per_lane =
+                                caps.clang && caps.x86 && String.equal loop.store half
+                                && (not (String.equal loop.comp half))
+                                && (match loop.op_class with
+                                  | Census.Max_min -> true
+                                  | Census.Fma -> false)
+                                && half_minmax_per_lane t ~width:e.width ~opt_level:opt;
                               profile = c;
                               edge_profile;
                             }))))
@@ -1912,7 +1961,8 @@ let () =
         (List.filter served ~f:is_fma_row)
         ~f:libm;
       let scalarization_claim =
-        "no accumulator loop is scalarized where a named target's ISA has the operation"
+        "no accumulator loop is scalarized where a named target's ISA has the operation, outside \
+         the known clang defect (per-lane fp16 NaN test)"
       in
       (* {b Which rows the scalarization claim can be held over.} "Scalarized" means [scalar_fp_ops
          > 0 || vector_ops = 0], and that reading is only a defect where the emission set out to
@@ -1975,9 +2025,29 @@ let () =
          either gcc -- the strict claim still covers them. The excluded rows are named on stderr;
          they keep the wholly-scalar claim above, and their bridge is still pinned by the
          codec-coverage claims, which are about the source and so are compiler-independent. *)
+      (* {b The known clang defect, pinned as a class} (gh-ocannl-1103). clang 18 -- CI's
+         ubuntu-latest clang, where this box's clang 21 is clean -- lowers the NaN test of the
+         portable [Max]/[Min] blend lane by lane when the operand is a widened fp16 vector, on
+         [x86-64-v3] and [x86-64-v4] (see {!half_minmax_per_lane}): 16 to 64 scalar FP instructions
+         in an otherwise packed loop. That is clang's codegen, not the emission: the blend is the
+         one every f32 row renders packed on the same clang. So it is a CLASS -- a predicate over
+         rows, asked of the column's compiler ([__clang__]) and of a probe of that compiler, as
+         {!packed_half_widen} is asked -- rather than a row list or a version test, since which
+         clang has it is a fact about clang's releases. Its rows leave the strict claim below and
+         keep the wholly-scalar one above; the claim after it holds that the census still sees the
+         defect wherever the probe excuses a row, so the probe cannot excuse a row the defect has
+         left. Where no clang anyone runs reproduces it, that claim is skipped on every host: delete
+         the class then. A gcc row the probe would flag stays under the strict claim. *)
+      let clang_defect_rows = List.filter whole_vector_population ~f:(fun r -> r.minmax_per_lane) in
       let scalarization_population =
-        List.filter whole_vector_population ~f:(fun r -> r.bridge_packed)
+        List.filter whole_vector_population ~f:(fun r -> r.bridge_packed && not r.minmax_per_lane)
       in
+      if not (List.is_empty clang_defect_rows) then (
+        Stdio.eprintf "  %d known-clang-defect row(s) outside %S (not part of the golden):\n"
+          (List.length clang_defect_rows) scalarization_claim;
+        List.iter clang_defect_rows ~f:(fun r ->
+            Stdio.eprintf "    %s -> %s\n" (describe r)
+              (match r.profile with Some p -> Census.to_line p | None -> "no loop")));
       let bridge_excluded = List.filter whole_vector_population ~f:(fun r -> not r.bridge_packed) in
       if not (List.is_empty bridge_excluded) then (
         Stdio.eprintf
@@ -1992,6 +2062,15 @@ let () =
              whole-vector"
           scalarization_claim
       else claim_none scalarization_claim scalarization_population ~f:scalarized;
+      let clang_defect_claim =
+        "the known clang defect (per-lane fp16 NaN test) scalarizes every row whose clang's probe \
+         reproduces it"
+      in
+      if List.is_empty clang_defect_rows then
+        Verdict.skipped ~aggregation:`Environment
+          ~backend:"no accepted clang x86 column reproduces the known clang defect"
+          clang_defect_claim
+      else claim_all clang_defect_claim clang_defect_rows ~f:scalarized;
       (* {b The narrowing store, one conversion per vector} (gh-ocannl-1101). The fp16 narrowing
          bridge writes the register tile's C-tile and every vectorized fp16-storage store, after the
          loop the rows above census, so it is asked of the probe {!half_narrow_conversions} compiles

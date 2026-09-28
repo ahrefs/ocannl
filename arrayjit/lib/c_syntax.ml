@@ -1324,6 +1324,22 @@ let vec_narrow_macro ~store_prec ~prec ~lanes =
   | Ops.Half_prec _ -> Some (narrow "HALF")
   | _ -> None
 
+(** The portable whole-vector [Max]/[Min] accumulator update [dst = op(dst, src)] that
+    [vec_acc_combine] renders where no target builtin arm applies: a packed compare OR'd with
+    [src]'s NaN test, then a bitwise select, so a NaN lane of [src] propagates as [fmax]/[fmin]
+    would not, and the vectorized and serial renderings agree. Named here, outside the functor, so
+    that [test/operations/cc_march_census] compiles exactly this text in its probe of how a compiler
+    lowers it (gh-ocannl-1103). *)
+let vec_minmax_blend ~op ~dst ~src =
+  let cmp =
+    match op with Ops.Max -> ">=" | Ops.Min -> "<=" | _ -> invalid_arg "vec_minmax_blend"
+  in
+  Printf.sprintf
+    "{ __typeof__(%s %s %s) ocannl_m__ = (%s %s %s) | (%s != %s); %s = \
+     (__typeof__(%s))((ocannl_m__ & (__typeof__(ocannl_m__))%s) | (~ocannl_m__ & \
+     (__typeof__(ocannl_m__))%s)); }"
+    dst cmp src dst cmp src src src dst dst dst src
+
 (** The locals a register tile's PARTIAL bf16/fp16 column is staged through by [vec_bridge]
     (gh-ocannl-1102), as [(bits, conv)]: the whole vector of its storage bits, and for fp16 that
     vector bit-cast to [HALF_T]. Every line of a staging block names one of them or the column's own
@@ -3132,15 +3148,7 @@ module C_syntax (B : C_syntax_config) = struct
         PPrint.string (Printf.sprintf "%s = %s%s%s;" dst dst inf src)
     | Ops.Max | Ops.Min -> (
         let open PPrint in
-        let cmp = match op with Ops.Max -> ">=" | _ -> "<=" in
-        let blend =
-          string
-            (Printf.sprintf
-               "{ __typeof__(%s %s %s) ocannl_m__ = (%s %s %s) | (%s != %s); %s = \
-                (__typeof__(%s))((ocannl_m__ & (__typeof__(ocannl_m__))%s) | (~ocannl_m__ & \
-                (__typeof__(ocannl_m__))%s)); }"
-               dst cmp src dst cmp src src src dst dst dst src)
-        in
+        let blend = string (vec_minmax_blend ~op ~dst ~src) in
         match vec_minmax_builtin ~prec ~lanes ~op with
         | [] -> blend
         | arms ->
