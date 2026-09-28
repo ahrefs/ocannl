@@ -5169,7 +5169,7 @@
     %{dep:model_default_placements.exe}
     "--ocannl_backend=cc"
     "--ocannl_model_default_schedule=true"
-    "--ocannl_model_default_placements=4"
+    "--ocannl_model_default_placements=2"
     "--ocannl_model_peak_flops=1e9"
     "--ocannl_model_peak_memory_bandwidth=1e12"))))
 

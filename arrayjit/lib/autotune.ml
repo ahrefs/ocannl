@@ -2802,6 +2802,14 @@ let rank_flip_candidates ~ordering ?(profit = Unmeasured) ~enablement ~disableme
         if List.exists acc ~f:(fun c -> Ir.Tnode.equal c.LL.fc_tn fc.LL.fc_tn) then acc
         else fc :: acc)
     |> List.rev
+    (* gh-ocannl-1093: a flip the pricer's world shows refused replays to the materialized
+       placement, so it is no decision to rank; a node left with no other alternative is no
+       candidate. The dedup runs first, so a refused repeat cannot resurrect a node's first
+       record. *)
+    |> List.filter_map ~f:(fun (fc : LL.flip_candidate) ->
+        match List.filter fc.LL.fc_alternatives ~f:(fun fa -> Option.is_none fa.LL.fa_refused) with
+        | [] -> None
+        | fc_alternatives -> Some { fc with LL.fc_alternatives })
   in
   let effective = effective_flip_ordering ~ordering ~profit in
   (* An alternative's class: [`Cost] has one; [`Enablement] has three — family-unlocking

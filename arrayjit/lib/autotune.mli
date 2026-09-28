@@ -1256,7 +1256,9 @@ val rank_flip_candidates :
   disablement:Set.M(Ir.Tnode).t ->
   Ir.Low_level.flip_candidate list ->
   Ir.Low_level.flip_candidate list
-(** Deduplicate (by [Tn.uid], keep-first) and rank the decision surface. [`Cost] is the legacy
+(** Deduplicate (by [Tn.uid], keep-first), drop refused alternatives
+    ({!Ir.Low_level.field-fa_refused}, gh-ocannl-1093: each replays to the materialized placement)
+    and the nodes left with none, and rank the decision surface. [`Cost] is the legacy
     recompute-cost-descending order (the gh-555 chain's, kept as the evaluation baseline);
     [`Enablement] sorts family-unlocking [`Materialize] flips ([enablement] members) first and
     family-breaking [`Inline] flips (members of either set) last, cost-descending within each class.
@@ -1282,7 +1284,7 @@ val placement_floor_withheld : Ir.Low_level.flip_candidate list -> bool
 type placement_surface = {
   ps_candidates : Ir.Low_level.flip_candidate list;
       (** Deduplicated, ranked per {!rank_flip_candidates} under config [tune_flip_ordering]: one
-          candidate per node, its alternatives in rank order. *)
+          candidate per node, its alternatives in rank order, none of them refused. *)
   ps_ordering : [ `Cost | `Enablement ];
       (** The ordering [ps_candidates] actually came out in — with [tune_flip_ordering=profitable]
           (the default) this is where the measured evidence landed, so a log line or a test can say
