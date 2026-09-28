@@ -998,10 +998,14 @@ files.
   gates on that capability, never on the seed list its claims are about (gh-ocannl-1115). Gated on
   the seeds, a seeding regression — or a claim asking for a seed the seeder excludes by
   construction, like the bf16 pipelined-staged shape below the 4-byte async floor — skips on every
-  backend, and skip coverage notices only once every backend skips.
-  `Ll_test.tensorized_matmul_capability` resolves the site nodes' storage precisions through the
-  seeder's own `Autotune.mma_tile_for_precisions` on GPU (the token capability on CPU) and derives a
-  withheld tile's skip aggregation (`Environment` when `tf32_matmuls` would supply it) instead of
-  keying on a backend name. For an f32 site that leaves Metal as the only GPU evaluating those
-  claims at default config (CUDA needs tf32, HIP has no f32 shape), and CI's macOS job runs cc, not
-  Metal.
+  backend, and skip coverage notices only once every backend skips. The capability is the seeder's
+  own judgment, `Autotune.tensorized_capability_refutation`: the family tree refutes its tensorized
+  branch through it (format tile, lane width and routine logging on GPU; vector file, lanes,
+  precision uniformity and routine logging on CPU), and `Ll_test.tensorized_capability` gates on it,
+  deriving a withheld capability's skip aggregation (`Environment` when `tf32_matmuls` on or routine
+  logging off would lift it) instead of keying on a backend name. Review found the piecemeal
+  re-derivation's gaps one condition per round (logging on GPU, then CPU, then the vector width),
+  which is why the predicate now has one owner. A gated test declares the configuration the judgment
+  reads (`OCANNL_TF32_MATMULS`, `OCANNL_PROFILE`, the two logging keys, `OCANNL_CC_VECTOR_BYTES`).
+  For an f32 site that leaves Metal as the only GPU evaluating those claims at default config (CUDA
+  needs tf32, HIP has no f32 shape), and CI's macOS job runs cc, not Metal.

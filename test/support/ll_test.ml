@@ -824,49 +824,53 @@ let read_only (o : LL.optimized) tn = (Hashtbl.find_exn o.LL.traced_store tn).LL
 
 (** {1 Tensorized-seed capability gates} *)
 
-(** Whether the backend advertises a tensorized pipeline for a matmul site whose operands are [a]
-    and [b] and whose destination is [d] (gh-ocannl-1115) — the gate a test puts on the PRESENCE of
-    tensorized seeds, so that where the capability holds an absent seed is a failed claim, never a
-    vacuous skip. A gate read off the seed list under test cannot fail on the seeding regression it
-    exists to catch.
+(** Whether the backend and configuration admit a tensorized matmul pipeline for a site with these
+    operand and destination storage precisions (gh-ocannl-1115) — the gate a test puts on the
+    PRESENCE of tensorized seeds, so that where the capability holds an absent seed is a failed
+    claim, never a vacuous skip. A gate read off the seed list under test cannot fail on the seeding
+    regression it exists to catch.
 
-    On a GPU backend the capability is the device's mma descriptor carrying a format tile for the
-    nodes' storage precisions, resolved by the seeder's own {!Autotune.mma_tile_for_precisions}
-    (which also applies the tf32 policy). On a CPU backend it is the token capability the C backends
-    advertise for the register-tiled [Tile_mma] rendering ([limits.mma] present). Under routine
-    logging ([Utils.debug_log_from_routines]) the capability is withheld on both: the mma emission
-    and the register tiling both render the scalar fallback there, so the seeder refutes the
-    tensorized family. A test gated here declares [OCANNL_DEBUG_LOG_FROM_ROUTINES] and
-    [OCANNL_LOG_LEVEL] beside [OCANNL_BACKEND], so a logging rerun is not served a cached verdict.
+    The judgment is the seeder's own: {!Autotune.tensorized_capability_refutation}, the witness the
+    family tree refutes its tensorized branch with (format tiles, lane width and routine logging on
+    GPU; the register tiling's vector file, lanes, precision uniformity and routine logging on CPU).
+    Nothing here restates it.
 
     [`Withheld] carries the skip's aggregation, derived rather than keyed on a backend name: when
-    the tile appears once {!Ir.Numerics.t.tf32_matmuls} is on, the missing tile is the run's policy
-    choice ([`Environment], CUDA at the repository default), otherwise the backend's ([`Backend]:
-    HIP's rocWMMA has no f32-input shape at all, cc's token capability no GPU tile). *)
-let tensorized_matmul_capability ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits) ~a ~b
-    ~d =
-  let prec (tn : Tn.t) = Lazy.force tn.Tn.storage_prec in
-  let gpu_tile mma =
+    the refutation lifts under the permissive configuration — {!Ir.Numerics.t.tf32_matmuls} on,
+    routine logging off — the missing capability is the run's choice ([`Environment]: CUDA at the
+    repository default, any backend under routine logging), otherwise the backend's ([`Backend]:
+    HIP's rocWMMA has no f32-input shape, cc no GPU tile). A vector file configured away
+    ([cc_vector_bytes]) reads as [`Backend], since the permissive configuration cannot know the
+    hardware's width.
+
+    A test gated here declares the configuration the judgment reads beside [OCANNL_BACKEND] —
+    [OCANNL_TF32_MATMULS], [OCANNL_PROFILE], [OCANNL_DEBUG_LOG_FROM_ROUTINES], [OCANNL_LOG_LEVEL],
+    [OCANNL_CC_VECTOR_BYTES] — so a rerun under another configuration is not served a cached
+    verdict. *)
+let tensorized_capability ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits) ~a_prec
+    ~b_prec ~d_prec =
+  let refuted () =
     Option.is_some
-      (Autotune.mma_tile_for_precisions mma ~a_prec:(prec a) ~b_prec:(prec b) ~d_prec:(prec d))
+      (Autotune.tensorized_capability_refutation ~is_gpu ~is_cpu ~limits ~a_prec ~b_prec ~d_prec)
   in
-  match limits.Ir.Backend_intf.mma with
-  | Some _ when (is_gpu || is_cpu) && Utils.debug_log_from_routines () ->
-      (* The seeder refutes every tensorized leaf under routine logging, GPU and CPU alike: the
-         predicate both the mma emission and [C_syntax.try_register_tile] consult to render the
-         scalar fallback. A configuration's choice. *)
-      `Withheld `Environment
-  | Some _ when (not is_gpu) && is_cpu -> `Advertised
-  | Some mma when is_gpu && gpu_tile mma -> `Advertised
-  | Some mma when is_gpu ->
-      let saved = Ir.Numerics.get () in
-      let under_tf32 =
-        Exn.protect
-          ~finally:(fun () -> Ir.Numerics.set_policy saved)
-          ~f:(fun () ->
-            Ir.Numerics.set_policy { saved with Ir.Numerics.tf32_matmuls = true };
-            gpu_tile mma)
-      in
-      `Withheld
-        (if under_tf32 && not saved.Ir.Numerics.tf32_matmuls then `Environment else `Backend)
-  | Some _ | None -> `Withheld `Backend
+  if not (refuted ()) then `Advertised
+  else
+    let saved_policy = Ir.Numerics.get () in
+    let saved_logging = Utils.settings.debug_log_from_routines in
+    let lifted =
+      Exn.protect
+        ~finally:(fun () ->
+          Ir.Numerics.set_policy saved_policy;
+          Utils.settings.debug_log_from_routines <- saved_logging)
+        ~f:(fun () ->
+          Ir.Numerics.set_policy { saved_policy with Ir.Numerics.tf32_matmuls = true };
+          Utils.settings.debug_log_from_routines <- false;
+          not (refuted ()))
+    in
+    `Withheld (if lifted then `Environment else `Backend)
+
+(** {!tensorized_capability} for a site whose operands are the nodes [a] and [b] and whose
+    destination is [d], at their storage precisions. *)
+let tensorized_matmul_capability ~is_gpu ~is_cpu ~limits ~a ~b ~d =
+  let prec (tn : Tn.t) = Lazy.force tn.Tn.storage_prec in
+  tensorized_capability ~is_gpu ~is_cpu ~limits ~a_prec:(prec a) ~b_prec:(prec b) ~d_prec:(prec d)
