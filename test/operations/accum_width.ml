@@ -494,12 +494,12 @@ let all_claims =
     claim_partition_compose;
     claim_2ax_ref;
     claim_2ax_inner;
-    claim_2ax_priv_outer;
     claim_2ax_outer;
     claim_2ax_annot;
     claim_2ax_both_mat;
     claim_2ax_pad_mat;
     claim_mat_then_inner;
+    claim_2ax_priv_outer;
     claim_vec_nested_structure;
     claim_vec_nested;
     claim_wgr_nested;
@@ -524,6 +524,7 @@ let default_bf16_block () =
        line; every bf16-widening leg is skipped. *)
     List.iter all_claims ~f:(fun c -> if String.equal c claim_fp8 then fp8_leg () else skipped c)
   else begin
+    let reported_before = List.length (Verdict.passed_labels ()) in
     let ma = NTDSL.init ~l:"ma" ~prec:Ir.Ops.bfloat16 ~i:[ n ] ~o:[ n ] ~f:fa () in
     let mb = NTDSL.init ~l:"mb" ~prec:Ir.Ops.bfloat16 ~i:[ n ] ~o:[ n ] ~f:fb () in
     let%op mc = ma * mb in
@@ -1146,7 +1147,19 @@ let default_bf16_block () =
     cc_only claim_off_shape (fun () ->
         let src = Generated.read ~ext:".c" "aw_bf16_naive_off" in
         let has s = String.is_substring src ~substring:s in
-        p claim_off_shape (has "single_to_bfloat16(fmaf("))
+        p claim_off_shape (has "single_to_bfloat16(fmaf("));
+    (* The skip branch prints [all_claims] in its declared order, so that order must be exactly the
+       sequence this branch reports: a claim missing from the list, a stale entry, a repeat, or one
+       out of place would each move a golden line on the skip branch only (gh-ocannl-1130).
+       [Verdict.skipped] reports through [p], so a widening GPU backend's cc-only skips are in the
+       sequence too. Silent on stdout: the goldens stay backend-uniform. *)
+    let this_branch = List.drop (Verdict.passed_labels ()) reported_before in
+    let same = List.equal String.equal this_branch all_claims in
+    if not same then
+      Stdio.eprintf "reported by this branch:\n  %s\nall_claims:\n  %s\n"
+        (String.concat ~sep:"\n  " this_branch)
+        (String.concat ~sep:"\n  " all_claims);
+    Verdict.claim "all_claims is exactly the sequence of claims this branch reports" same
   end
 
 let () = Test_utils.with_policy bf16_auto default_bf16_block
