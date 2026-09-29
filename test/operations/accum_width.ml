@@ -494,12 +494,12 @@ let all_claims =
     claim_partition_compose;
     claim_2ax_ref;
     claim_2ax_inner;
-    claim_2ax_priv_outer;
     claim_2ax_outer;
     claim_2ax_annot;
     claim_2ax_both_mat;
     claim_2ax_pad_mat;
     claim_mat_then_inner;
+    claim_2ax_priv_outer;
     claim_vec_nested_structure;
     claim_vec_nested;
     claim_wgr_nested;
