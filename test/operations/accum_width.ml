@@ -524,6 +524,7 @@ let default_bf16_block () =
        line; every bf16-widening leg is skipped. *)
     List.iter all_claims ~f:(fun c -> if String.equal c claim_fp8 then fp8_leg () else skipped c)
   else begin
+    let passed_before = List.length (Verdict.passed_labels ()) in
     let ma = NTDSL.init ~l:"ma" ~prec:Ir.Ops.bfloat16 ~i:[ n ] ~o:[ n ] ~f:fa () in
     let mb = NTDSL.init ~l:"mb" ~prec:Ir.Ops.bfloat16 ~i:[ n ] ~o:[ n ] ~f:fb () in
     let%op mc = ma * mb in
@@ -1146,7 +1147,19 @@ let default_bf16_block () =
     cc_only claim_off_shape (fun () ->
         let src = Generated.read ~ext:".c" "aw_bf16_naive_off" in
         let has s = String.is_substring src ~substring:s in
-        p claim_off_shape (has "single_to_bfloat16(fmaf("))
+        p claim_off_shape (has "single_to_bfloat16(fmaf("));
+    (* The skip branch prints [all_claims] in its declared order, so that order must be the one this
+       branch evaluates them in (gh-ocannl-1130). Silent on stdout: the goldens stay
+       backend-uniform. *)
+    let declared = List.mem all_claims ~equal:String.equal in
+    let evaluated =
+      List.drop (Verdict.passed_labels ()) passed_before
+      |> List.filter ~f:declared
+      |> List.remove_consecutive_duplicates ~equal:String.equal
+    in
+    Verdict.claim "all_claims lists the claims in the order this branch evaluates them"
+      (List.equal String.equal evaluated
+         (List.filter all_claims ~f:(List.mem evaluated ~equal:String.equal)))
   end
 
 let () = Test_utils.with_policy bf16_auto default_bf16_block
