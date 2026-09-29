@@ -43,23 +43,7 @@ let () = Utils.settings.output_debug_files_in_build_directory <- true
 open Verdict.Claims
 
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
-
-(* Every label this process has passed or skipped, newest first: [Verdict.passed_labels] carries the
-   passes, and [skipped] splices each skip in at the point it happened, so the log keeps the order
-   the claims were reported in. *)
-let reported = ref []
-let synced_passes = ref 0
-
-let sync_reported () =
-  let passed = Verdict.passed_labels () in
-  reported := List.rev_append (List.drop passed !synced_passes) !reported;
-  synced_passes := List.length passed
-
-let skipped c =
-  sync_reported ();
-  reported := c :: !reported;
-  Verdict.skipped ~backend:backend_name c
-
+let skipped = Verdict.skipped ~backend:backend_name
 let on_cpu = Sched.backend_is_cpu backend_name
 let codegen_capabilities = Context.codegen_capabilities (Context.auto ())
 
@@ -540,8 +524,7 @@ let default_bf16_block () =
        line; every bf16-widening leg is skipped. *)
     List.iter all_claims ~f:(fun c -> if String.equal c claim_fp8 then fp8_leg () else skipped c)
   else begin
-    sync_reported ();
-    let reported_before = List.length !reported in
+    let reported_before = List.length (Verdict.passed_labels ()) in
     let ma = NTDSL.init ~l:"ma" ~prec:Ir.Ops.bfloat16 ~i:[ n ] ~o:[ n ] ~f:fa () in
     let mb = NTDSL.init ~l:"mb" ~prec:Ir.Ops.bfloat16 ~i:[ n ] ~o:[ n ] ~f:fb () in
     let%op mc = ma * mb in
@@ -1166,14 +1149,11 @@ let default_bf16_block () =
         let has s = String.is_substring src ~substring:s in
         p claim_off_shape (has "single_to_bfloat16(fmaf("));
     (* The skip branch prints [all_claims] in its declared order, so that order must be exactly the
-       sequence this branch reports, passes and skips alike: a claim missing from the list, a stale
-       entry, or one out of place would each move a golden line on the skip branch only
-       (gh-ocannl-1130). Silent on stdout: the goldens stay backend-uniform. *)
-    sync_reported ();
-    let this_branch =
-      List.drop (List.rev !reported) reported_before
-      |> List.remove_consecutive_duplicates ~equal:String.equal
-    in
+       sequence this branch reports: a claim missing from the list, a stale entry, a repeat, or one
+       out of place would each move a golden line on the skip branch only (gh-ocannl-1130).
+       [Verdict.skipped] reports through [p], so a widening GPU backend's cc-only skips are in the
+       sequence too. Silent on stdout: the goldens stay backend-uniform. *)
+    let this_branch = List.drop (Verdict.passed_labels ()) reported_before in
     let same = List.equal String.equal this_branch all_claims in
     if not same then
       Stdio.eprintf "reported by this branch:\n  %s\nall_claims:\n  %s\n"
