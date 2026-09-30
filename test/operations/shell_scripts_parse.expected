@@ -272,6 +272,7 @@ a comment mentioning support cannot satisfy sourcing: true
 benchmarks/gh1003_fold_cells.sh parses: true
 benchmarks/gh1051_bf16_ab.sh parses: true
 benchmarks/gh1051_boundary_split.sh parses: true
+benchmarks/gh1133_cells.sh parses: true
 benchmarks/gh514_cells.sh parses: true
 benchmarks/gh612_cells.sh parses: true
 benchmarks/gh612v_session.sh parses: true
