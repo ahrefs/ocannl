@@ -18,6 +18,12 @@ module Symbol : sig
 end
 
 val get_symbol : unit -> symbol
+
+val discarding_symbols : (unit -> 'a) -> 'a
+(** [discarding_symbols f] runs [f] and then rewinds the symbol counter to where it was: for dry
+    runs whose minted symbols are all discarded (a schedule probe), so they shift no later minted
+    name. Sound only when no symbol [f] mints outlives it. *)
+
 val symbol_ident : symbol -> string
 
 type 'a environment = 'a Map.M(Symbol).t [@@deriving sexp]

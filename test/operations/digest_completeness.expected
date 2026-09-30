@@ -70,6 +70,7 @@ search-shaping -- it defines the untuned default pipeline, which a search seeds 
   automatic_cpu_schedule
   automatic_gpu_schedule
   cpu_schedule_min_parallel
+  gpu_fission_keep_mapping
   gpu_schedule_block_size
   gpu_schedule_min_parallel
   gpu_schedule_workgroup_fill

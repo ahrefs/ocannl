@@ -3556,6 +3556,24 @@
  (modules gpu_small_leading_axis)
  (libraries base ocannl arrayjit.verdict ll_test))
 
+; gh-ocannl-1126: schedule-aware fission -- a merge that costs a nest its own mapping keeps the
+; kernel boundary.
+
+(test
+ (name gpu_fission_mapping)
+ (package neural_nets_lib)
+ (locks ocannl_training_test)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND)
+  ; The GPU pipeline reads the fill and, through Schedule.fission_keep_mapping, the gate itself.
+  (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
+  (env_var OCANNL_GPU_FISSION_KEEP_MAPPING))
+ (modules gpu_fission_mapping)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 (test
  (name gpu_parallel_prefix)
  (package neural_nets_lib)

@@ -2193,8 +2193,9 @@ let compile_candidate ?name ~static_indices ~base_opt ~canon ~limits ~is_gpu ~is
           let tuples =
             (* Match the default pipeline's placements (statement-crossing [Local]s promoted on
                GPU), so fissioned candidates and the untuned baseline schedule the same code. *)
-            Sched.fission_scheduled ~promote_locals:is_gpu ~arity_cuts ~preset ~zero_sched
-              ~static_indices opt
+            Sched.fission_scheduled ~promote_locals:is_gpu
+              ?keep_mapping:(Sched.fission_keep_mapping ~is_gpu ~limits)
+              ~arity_cuts ~preset ~zero_sched ~static_indices opt
           in
           (* Genuine-drift guard for saved replays (cross-process cache entries): with the
              empty-on-miss closure above, a saved winner whose segmentation no longer matches would
@@ -2656,7 +2657,9 @@ let mma_eligible_sites ~(limits : Ir.Backend_intf.hardware_limits) ~static_indic
   | Some mma ->
       let segments =
         match
+          (* [mma] is a GPU capability: segment as the GPU seeders do. *)
           Sched.fission_scheduled
+            ?keep_mapping:(Sched.fission_keep_mapping ~is_gpu:true ~limits)
             ~preset:(fun _ -> [])
             ~zero_sched:(fun _ -> [])
             ~static_indices (scratch_of opt)
@@ -3150,8 +3153,9 @@ let model_default ?name ?report ctx comp bindings =
               if List.length default_scratch <= 1 then None
               else
                 match
-                  Sched.fission_scheduled ~promote_locals:is_gpu ~preset ~zero_sched ~static_indices
-                    (scratch_of opt)
+                  Sched.fission_scheduled ~promote_locals:is_gpu
+                    ?keep_mapping:(Sched.fission_keep_mapping ~is_gpu ~limits)
+                    ~preset ~zero_sched ~static_indices (scratch_of opt)
                 with
                 | exception Outcome.Cause_at _ ->
                     Int.incr n_rejected;
@@ -3189,8 +3193,9 @@ let model_default ?name ?report ctx comp bindings =
                       (* Score the substituted pipeline whole, so it competes on the same footing as
                          the other candidates. *)
                       match
-                        Sched.fission_scheduled ~promote_locals:is_gpu ~preset:subst_preset
-                          ~zero_sched ~static_indices (scratch_of opt)
+                        Sched.fission_scheduled ~promote_locals:is_gpu
+                          ?keep_mapping:(Sched.fission_keep_mapping ~is_gpu ~limits)
+                          ~preset:subst_preset ~zero_sched ~static_indices (scratch_of opt)
                       with
                       | exception Outcome.Cause_at _ ->
                           Int.incr n_rejected;
@@ -3249,8 +3254,10 @@ let model_default ?name ?report ctx comp bindings =
             in
             validate_segments_for_model
               (List.map
-                 (Sched.fission_scheduled ~promote_locals:is_gpu ~preset:subst_preset ~zero_sched
-                    ~static_indices opt) ~f:(fun (_, _, _, post) -> post))
+                 (Sched.fission_scheduled ~promote_locals:is_gpu
+                    ?keep_mapping:(Sched.fission_keep_mapping ~is_gpu ~limits)
+                    ~preset:subst_preset ~zero_sched ~static_indices opt)
+                 ~f:(fun (_, _, _, post) -> post))
       in
       match apply_action () with
       | segs ->
@@ -4849,8 +4856,9 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
               in
               let zero_sched tns = if is_gpu then Sched.zero_expansion ~limits tns else [] in
               match
-                Sched.fission_scheduled ~promote_locals:is_gpu ~arity_cuts ~preset ~zero_sched
-                  ~static_indices scratch
+                Sched.fission_scheduled ~promote_locals:is_gpu
+                  ?keep_mapping:(Sched.fission_keep_mapping ~is_gpu ~limits)
+                  ~arity_cuts ~preset ~zero_sched ~static_indices scratch
               with
               | exception Outcome.Cause_at _ -> []
               | [] | [ _ ] -> [] (* Unfissioned: the whole-routine sketches cover the site. *)

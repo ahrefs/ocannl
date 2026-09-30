@@ -6461,7 +6461,10 @@ let default_cpu ?min_parallel (opt : Low_level.optimized) : schedule =
     proves race-free do {e not} cut, provided the shared kernel keeps every nest's standalone
     parallelism (see {!aligned_merge}): elementwise chains over one intermediate stay a single
     kernel, while parallelism switches (a batch-parallel producer feeding a reduce-over-batch
-    consumer) and alignment-trimming merges still cut.
+    consumer) and alignment-trimming merges still cut. On GPU backends every merge -- dependent or
+    conflict-free -- is also judged against the schedule its statements would actually receive
+    ({!keeps_mapping}, gh-ocannl-1126): one that costs a statement its own mapping keeps the
+    boundary.
 
     Segmentation is conservative and total (no [Bail]): a statement opaque to the analysis
     ([Staged_compilation], barriers, pre-annotated loops) or one the annotator can never cover (bare
@@ -6721,16 +6724,208 @@ let aligned_merge ?max_chain ?(uniform_shapes = false) (opt : Low_level.optimize
           | [] -> true
           | e0 :: rest -> List.for_all rest ~f:(List.equal ( = ) e0)))
 
-let group_units ?max_chain ?(arity_cuts = false) (opt : Low_level.optimized) (units : funit list) :
-    segment list =
+(* All tensor nodes a segment's code references — including scope ids' backing tnodes, so the
+   filtered traced store retains every entry codegen consults — and whether it reads the merge
+   buffer. *)
+let code_footprint (llc : Low_level.t) : Set.M(Tn).t * bool =
+  let open Low_level in
+  let tns = ref (Set.empty (module Tn)) and merge = ref false in
+  let add tn = tns := Set.add !tns tn in
+  let rec code llc =
+    match llc with
+    | Noop | Comment _ | Staged_compilation _ | Workgroup_barrier -> ()
+    | Tile_mma { d = d_tn, _; a = a_tn, _; b = b_tn, _; _ } ->
+        add d_tn;
+        add a_tn;
+        add b_tn
+    | Declare_local { id; _ } -> add id.tn
+    | Seq (a, b) ->
+        code a;
+        code b
+    | For_loop { body; _ } -> code body
+    | Scan_loop { carried; body; _ } ->
+        List.iter carried ~f:(fun c ->
+            add c.prev.tn;
+            scalar c.init);
+        code body
+    | Zero_out tn -> add tn
+    | Set { tn; llsc; _ } ->
+        add tn;
+        scalar llsc
+    | Set_dynamic { tn; dyn_value = v, _; llsc; _ } ->
+        add tn;
+        scalar v;
+        scalar llsc
+    | Set_from_vec { tn; arg = a, _; _ } ->
+        add tn;
+        scalar a
+    | Set_local (id, llsc) ->
+        add id.tn;
+        scalar llsc
+    | If { cond = c, _; body } ->
+        scalar c;
+        code body
+  and scalar (llsc : scalar_t) =
+    match llsc with
+    | Local_scope { id; body; _ } ->
+        add id.tn;
+        code body
+    | Get_local id -> add id.tn
+    | Get (tn, _) -> add tn
+    | Get_dynamic { tn; dyn_value = v, _; _ } ->
+        add tn;
+        scalar v
+    | Get_merge_buffer (tn, _) ->
+        add tn;
+        merge := true
+    | Constant _ | Constant_bits _ | Embed_index _ -> ()
+    | Ternop (_, (a, _), (b, _), (c, _)) ->
+        scalar a;
+        scalar b;
+        scalar c
+    | Binop (_, (a, _), (b, _)) ->
+        scalar a;
+        scalar b
+    | Unop (_, (a, _)) -> scalar a
+  in
+  code llc;
+  (!tns, !merge)
+
+let segment_optimized (full : Low_level.optimized) (llc : Low_level.t) : Low_level.optimized =
+  let tns, reads_merge = code_footprint llc in
+  {
+    Low_level.traced_store =
+      Hashtbl.filteri full.Low_level.traced_store ~f:(fun ~key ~data:_ -> Set.mem tns key);
+    optimize_ctx = full.Low_level.optimize_ctx;
+    llc;
+    merge_node = (if reads_merge then full.Low_level.merge_node else None);
+    workgroup_shared = Set.filter full.Low_level.workgroup_shared ~f:(Set.mem tns);
+    simdgroup_fragments = Set.filter full.Low_level.simdgroup_fragments ~f:(Set.mem tns);
+    swizzled = Map.filter_keys full.Low_level.swizzled ~f:(Set.mem tns);
+    pipelined = Map.filter_keys full.Low_level.pipelined ~f:(Set.mem tns);
+    zero_fringe = Set.filter full.Low_level.zero_fringe ~f:(Set.mem tns);
+    flip_candidates = full.Low_level.flip_candidates;
+    spliced_rbw = Set.filter full.Low_level.spliced_rbw ~f:(Set.mem tns);
+    source = full.Low_level.source;
+  }
+
+(* The hardware mapping a schedule gives each top-level statement of [llc] (comments and noops
+   skipped), as [(groups, active)]: the [Grid] groups the statement's own loops launch, and its
+   iterations executed by distinct threads -- a split lane's padding threads are not work, and the
+   [Serial] outer part of a preset split is work one thread repeats. Read off the schedule's ops,
+   not the applied code: a probe must not mint the placements or nodes [apply] would. Only a
+   statement's OWN loops count, so hardware loops elsewhere in the kernel -- which set its launch
+   dimensions -- say nothing about it. A cooperative fold ({!fold_mma_schedule}) counts as a mapping
+   no other schedule matches: it is the matrix-unit form of its one nest (gh-ocannl-1126). *)
+let statement_mappings (llc : Low_level.t) (sched : schedule) : (int * int) list =
+  let open Low_level in
+  let hw = function Grid | Workgroup | Workgroup_reduce -> true | _ -> false in
+  let times a n = Option.value ~default:Int.max_value (checked_mul a n) in
+  let stmts =
+    List.filter (flat_lines [ llc ]) ~f:(function Noop | Comment _ -> false | _ -> true)
+  in
+  List.map stmts ~f:(fun stmt ->
+      let extents = Hashtbl.create (module Indexing.Symbol) in
+      let rec loops (llc : t) =
+        match llc with
+        | For_loop { index; from_; to_; body; _ } ->
+            Hashtbl.set extents ~key:index ~data:(to_ - from_ + 1);
+            loops body
+        | Seq (a, b) ->
+            loops a;
+            loops b
+        | If { body; _ } | Scan_loop { body; _ } -> loops body
+        | _ -> ()
+      in
+      loops stmt;
+      List.fold sched ~init:(1, 1) ~f:(fun (g, a) op ->
+          match op with
+          | Retype { axis; ty } -> (
+              match Hashtbl.find extents axis with
+              | Some n when equal_axis_type ty Grid -> (times g n, times a n)
+              | Some n when hw ty -> (g, times a n)
+              | _ -> (g, a))
+          | Split { axis; factor; outer; inner; _ } -> (
+              match Hashtbl.find extents axis with
+              | None -> (g, a)
+              | Some n ->
+                  let blocks = (n + factor - 1) / factor in
+                  let g = if equal_axis_type outer Grid then times g blocks else g in
+                  let a =
+                    match (hw outer, hw inner) with
+                    | true, true -> times a n
+                    | false, true -> times a (min factor n)
+                    | true, false -> times a blocks
+                    | false, false -> a
+                  in
+                  (g, a))
+          | Fold_mma { query; _ } when Hashtbl.mem extents query -> (Int.max_value, Int.max_value)
+          | _ -> (g, a)))
+
+(* A probe of the per-segment schedule leaves no trace: [split] and the lane plans mint loop
+   symbols, and a discarded probe's symbols would shift every later minted name -- in the goldens
+   that print scheduled code as much as anywhere. *)
+let dry_run = Indexing.discarding_symbols
+
+(* Config [gpu_fission_keep_mapping] (gh-ocannl-1126). *)
+let gpu_fission_keep_mapping =
+  lazy (Utils.get_global_flag ~default:true ~arg_name:"gpu_fission_keep_mapping")
+
+(* The schedule-aware half of the merge decision (gh-ocannl-1126): [mapping] is the per-segment
+   schedule the kernel will actually receive -- the default GPU schedule, lane plans and lane
+   geometry included -- and a merge the legality rules admit is still refused when some statement of
+   the merged kernel gets less of its own mapping than it gets alone: fewer groups, or fewer active
+   threads. Both kinds of merge are judged: a dependent one whose alignment trims a statement's
+   chain to the common prefix (the composed [v.grad] merged with [w_v.grad], which reduces over the
+   positions [v.grad]'s blocks own), and an independent one whose kernel no longer admits a
+   statement's geometry (the fused dV lane nest merged with dK, which is no lane nest; the lm_head
+   logits beside the row max that trims them). A segment's statements were each admitted under this
+   test, so comparing every statement with its standalone mapping is the same as comparing with the
+   segment before the extension. Per statement, never the kernel's largest thread count: one
+   well-mapped nest does not pay for another's lost one.
+
+   A mapping cut needs no retest after scope-local resolution ({!resolve_scope_crossings}). A cut
+   whose new segment cannot replicate its scope-local definitions -- a unit between the definition
+   and the cut writes a tensor the definition reads -- is merged back into a serial [`Solo] kernel,
+   but the merge the cut refused would have been serial too: the writer then sits inside the merged
+   segment (else resolution merges the legality-only segmentation back as well), together with the
+   definition or its replica, a bare statement reading the node a nest writes -- which
+   {!analyze_parallel_chains} declines (the bare group has no chain, so the alignment trims the
+   component to nothing). If that analysis ever admits such a pair, a merged-back mapping cut has to
+   take the refused merge instead. *)
+let keeps_mapping ~mapping (opt : Low_level.optimized) seg (u : funit) standalone =
+  let units = seg.g_units @ [ u ] in
+  let llc = Low_level.unflat_lines (List.concat_map units ~f:(fun u' -> u'.f_stmts)) in
+  let merged = dry_run (fun () -> statement_mappings llc (mapping (segment_optimized opt llc))) in
+  match List.zip merged (List.map units ~f:standalone) with
+  | Unequal_lengths -> true
+  | Ok pairs -> List.for_all pairs ~f:(fun ((g, a), (g0, a0)) -> g >= g0 && a >= a0)
+
+let group_units ?max_chain ?(arity_cuts = false) ?mapping (opt : Low_level.optimized)
+    (units : funit list) : segment list =
   let plc = opt.Low_level.optimize_ctx.placements in
   let close cur acc = match cur with None -> acc | Some seg -> seg :: acc in
+  (* One standalone probe per unit, taken only when a merge is judged. *)
+  let standalone =
+    let memo = Hashtbl.create (module Int) in
+    fun mapping (u : funit) ->
+      Hashtbl.find_or_add memo u.f_index ~default:(fun () ->
+          let llc = Low_level.unflat_lines u.f_stmts in
+          match
+            dry_run (fun () -> statement_mappings llc (mapping (segment_optimized opt llc)))
+          with
+          | [ m ] -> m
+          | _ -> (1, 1))
+  in
   let mergeable seg s u =
     (* In [arity_cuts] mode even a conflict-free extension must pass the uniform-shape rule: an
        unrelated nest of a different arity (the reduction target's initialization) fails the
        sketches' companion coverage just like a trimmed one. *)
     if arity_cuts then aligned_merge ?max_chain ~uniform_shapes:true opt seg u
-    else (not (mat_conflict plc seg s)) || aligned_merge ?max_chain opt seg u
+    else
+      ((not (mat_conflict plc seg s)) || aligned_merge ?max_chain opt seg u)
+      && Option.for_all mapping ~f:(fun mapping ->
+          keeps_mapping ~mapping opt seg u (standalone mapping))
   in
   let rec go cur acc = function
     | [] -> List.rev (close cur acc)
@@ -6900,91 +7095,6 @@ let promote_crossing plc (segs_with_replicas : (segment * funit list) list) :
         (tn, prior) :: undo)
       else undo)
 
-(* All tensor nodes a segment's code references — including scope ids' backing tnodes, so the
-   filtered traced store retains every entry codegen consults — and whether it reads the merge
-   buffer. *)
-let code_footprint (llc : Low_level.t) : Set.M(Tn).t * bool =
-  let open Low_level in
-  let tns = ref (Set.empty (module Tn)) and merge = ref false in
-  let add tn = tns := Set.add !tns tn in
-  let rec code llc =
-    match llc with
-    | Noop | Comment _ | Staged_compilation _ | Workgroup_barrier -> ()
-    | Tile_mma { d = d_tn, _; a = a_tn, _; b = b_tn, _; _ } ->
-        add d_tn;
-        add a_tn;
-        add b_tn
-    | Declare_local { id; _ } -> add id.tn
-    | Seq (a, b) ->
-        code a;
-        code b
-    | For_loop { body; _ } -> code body
-    | Scan_loop { carried; body; _ } ->
-        List.iter carried ~f:(fun c ->
-            add c.prev.tn;
-            scalar c.init);
-        code body
-    | Zero_out tn -> add tn
-    | Set { tn; llsc; _ } ->
-        add tn;
-        scalar llsc
-    | Set_dynamic { tn; dyn_value = v, _; llsc; _ } ->
-        add tn;
-        scalar v;
-        scalar llsc
-    | Set_from_vec { tn; arg = a, _; _ } ->
-        add tn;
-        scalar a
-    | Set_local (id, llsc) ->
-        add id.tn;
-        scalar llsc
-    | If { cond = c, _; body } ->
-        scalar c;
-        code body
-  and scalar (llsc : scalar_t) =
-    match llsc with
-    | Local_scope { id; body; _ } ->
-        add id.tn;
-        code body
-    | Get_local id -> add id.tn
-    | Get (tn, _) -> add tn
-    | Get_dynamic { tn; dyn_value = v, _; _ } ->
-        add tn;
-        scalar v
-    | Get_merge_buffer (tn, _) ->
-        add tn;
-        merge := true
-    | Constant _ | Constant_bits _ | Embed_index _ -> ()
-    | Ternop (_, (a, _), (b, _), (c, _)) ->
-        scalar a;
-        scalar b;
-        scalar c
-    | Binop (_, (a, _), (b, _)) ->
-        scalar a;
-        scalar b
-    | Unop (_, (a, _)) -> scalar a
-  in
-  code llc;
-  (!tns, !merge)
-
-let segment_optimized (full : Low_level.optimized) (llc : Low_level.t) : Low_level.optimized =
-  let tns, reads_merge = code_footprint llc in
-  {
-    Low_level.traced_store =
-      Hashtbl.filteri full.Low_level.traced_store ~f:(fun ~key ~data:_ -> Set.mem tns key);
-    optimize_ctx = full.Low_level.optimize_ctx;
-    llc;
-    merge_node = (if reads_merge then full.Low_level.merge_node else None);
-    workgroup_shared = Set.filter full.Low_level.workgroup_shared ~f:(Set.mem tns);
-    simdgroup_fragments = Set.filter full.Low_level.simdgroup_fragments ~f:(Set.mem tns);
-    swizzled = Map.filter_keys full.Low_level.swizzled ~f:(Set.mem tns);
-    pipelined = Map.filter_keys full.Low_level.pipelined ~f:(Set.mem tns);
-    zero_fringe = Set.filter full.Low_level.zero_fringe ~f:(Set.mem tns);
-    flip_candidates = full.Low_level.flip_candidates;
-    spliced_rbw = Set.filter full.Low_level.spliced_rbw ~f:(Set.mem tns);
-    source = full.Low_level.source;
-  }
-
 (* Expand-and-annotate schedule for a segment of materialized whole-node [Zero_out]s (GPU): the
    expanded nests get the same geometry policy as {!default_gpu}'s chains. Below [min_parallel]
    (largest node) the zeros stay whole-node — a serial kernel renders them as [memset]. *)
@@ -7100,7 +7210,11 @@ let promote_statement_crossing_locals plc (stmts : Low_level.t list) :
               (tn, prior) :: undo)
             else undo))
 
-let fission_scheduled ?(promote_locals = false) ?(arity_cuts = false)
+let fission_keep_mapping ~is_gpu ~limits =
+  if is_gpu && Lazy.force gpu_fission_keep_mapping then Some (fun opt -> default_gpu ~limits opt)
+  else None
+
+let fission_scheduled ?(promote_locals = false) ?(arity_cuts = false) ?keep_mapping
     ~(preset : Low_level.optimized -> schedule) ~(zero_sched : Tn.t list -> schedule)
     ~static_indices (opt : Low_level.optimized) :
     ([ `Normal | `Zeros | `Solo ] * Low_level.optimized * schedule * Low_level.optimized) list =
@@ -7119,7 +7233,10 @@ let fission_scheduled ?(promote_locals = false) ?(arity_cuts = false)
      cap, a merge that trims a rank-3 site's minor axis reads as lossless (gh-ocannl-574). *)
   let max_chain = if arity_cuts then Some Int.max_value else None in
   let units = collect_units ?max_chain plc opt stmts in
-  let segs = group_units ?max_chain ~arity_cuts opt units in
+  (* The [arity_cuts] mode has its own, stricter merge rule for the sketches' full-arity
+     geometry. *)
+  let mapping = if arity_cuts then None else keep_mapping in
+  let segs = group_units ?max_chain ~arity_cuts ?mapping opt units in
   if List.length segs <= 1 then fallback ()
   else
     match resolve_scope_crossings (Array.of_list units) segs with
@@ -7184,9 +7301,9 @@ let fission_scheduled ?(promote_locals = false) ?(arity_cuts = false)
               let pre = segment_optimized opt (seg_llc replicas seg) in
               (seg.g_kind, pre, sched, apply_classified ~static_indices sched pre))
 
-let fission_default ?promote_locals ~preset ~zero_sched ~static_indices (opt : Low_level.optimized)
-    : Low_level.optimized list =
-  List.map (fission_scheduled ?promote_locals ~preset ~zero_sched ~static_indices opt)
+let fission_default ?promote_locals ?keep_mapping ~preset ~zero_sched ~static_indices
+    (opt : Low_level.optimized) : Low_level.optimized list =
+  List.map (fission_scheduled ?promote_locals ?keep_mapping ~preset ~zero_sched ~static_indices opt)
     ~f:(fun (_kind, _pre, _sched, post) -> post)
 
 (** {2 Wiring: the implicit transform for GPU and CPU backends} *)
@@ -7228,9 +7345,11 @@ let default_schedule_fingerprint ~backend_name =
       in
       let fill = gpu_schedule_workgroup_fill () in
       (* [lane-plans-v1] (gh-ocannl-1133): the default maps every loop of a proved chain, so a
-         [default_ms] timed under the two-loop presets describes another algorithm. *)
+         [default_ms] timed under the two-loop presets describes another algorithm. [keep_mapping]
+         (gh-ocannl-1126): the segmentation itself depends on those mappings. *)
+      let keep = Lazy.force gpu_fission_keep_mapping in
       [%string
-        "gpu:policy=small-leading-v1+lanes-v1+fold-mma-v1+lane-plans-v1:fission=%{fission#Bool}:block_size=%{bs}:min_parallel=%{mp}:workgroup_fill=%{fill#Int}"]
+        "gpu:policy=small-leading-v1+lanes-v1+fold-mma-v1+lane-plans-v1:fission=%{fission#Bool}:keep_mapping=%{keep#Bool}:block_size=%{bs}:min_parallel=%{mp}:workgroup_fill=%{fill#Int}"]
     else
       let mp =
         String.strip (Utils.get_global_arg ~arg_name:"cpu_schedule_min_parallel" ~default:"16384")
@@ -7261,7 +7380,9 @@ let maybe_default_schedules ~backend_name ?(limits = Backend_intf.no_hardware_li
       (* Statement-crossing [Local]s are promoted on GPU only: a serial (or per-thread redundant)
          producer nest costs little next to CPU cores but is catastrophic next to GPU threads, and
          keeping CPU placements unchanged keeps small-routine codegen stable. *)
-      fission_default ~promote_locals:gpu ~preset ~zero_sched ~static_indices opt
+      fission_default ~promote_locals:gpu
+        ?keep_mapping:(fission_keep_mapping ~is_gpu:gpu ~limits)
+        ~preset ~zero_sched ~static_indices opt
 
 let check_hardware_limits_classified ~name ~(limits : Backend_intf.hardware_limits)
     (opt : Low_level.optimized) : unit =

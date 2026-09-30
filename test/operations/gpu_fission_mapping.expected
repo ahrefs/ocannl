@@ -1,0 +1,63 @@
+--- case 1: the composed backward's v.grad against w_v.grad (gh-ocannl-1126) ---
+composed v.grad, batch 1 x seq 1024: the lowering computes the target: true
+composed v.grad, batch 1 x seq 1024: both pipelines schedule every target statement: true
+composed v.grad, batch 1 x seq 1024: some target statement carries a parallel chain alone: true
+composed v.grad, batch 1 x seq 1024: schedule-aware fission gives every target statement its standalone mapping: true
+composed v.grad, batch 1 x seq 1024: the legality-only segmentation loses some target statement's mapping (control): true
+composed step, batch 1 x seq 128: the lowering computes the target: true
+composed step, batch 1 x seq 128: both pipelines schedule every target statement: true
+composed step, batch 1 x seq 128: some target statement carries a parallel chain alone: true
+composed step, batch 1 x seq 128: schedule-aware fission gives every target statement its standalone mapping: true
+composed step, batch 1 x seq 128: the legality-only segmentation loses some target statement's mapping (control): true
+composed step, batch 1 x seq 128: the gradients are not identically zero: true
+composed step, batch 1 x seq 128: the gradients agree with the legality-only segmentation's: true
+composed step, batch 1 x seq 128: the updated parameters agree with the legality-only segmentation's: true
+composed step, batch 2 x seq 128: the lowering computes the target: true
+composed step, batch 2 x seq 128: both pipelines schedule every target statement: true
+composed step, batch 2 x seq 128: some target statement carries a parallel chain alone: true
+composed step, batch 2 x seq 128: schedule-aware fission gives every target statement its standalone mapping: true
+composed step, batch 2 x seq 128: the gradients are not identically zero: true
+composed step, batch 2 x seq 128: the gradients agree with the legality-only segmentation's: true
+composed step, batch 2 x seq 128: the updated parameters agree with the legality-only segmentation's: true
+--- case 2: the fused backward's dV lanes against dK (gh-ocannl-1124) ---
+fused dV, batch 1 x seq 1024: the lowering computes the target: true
+fused dV, batch 1 x seq 1024: both pipelines schedule every target statement: true
+fused dV, batch 1 x seq 1024: some target statement carries a parallel chain alone: true
+fused dV, batch 1 x seq 1024: alone, some target statement runs on lanes: true
+fused dV, batch 1 x seq 1024: schedule-aware fission gives every target statement its standalone mapping: true
+fused dV, batch 1 x seq 1024: the legality-only segmentation loses some target statement's mapping (control): true
+fused step, batch 1 x seq 128: the lowering computes the target: true
+fused step, batch 1 x seq 128: both pipelines schedule every target statement: true
+fused step, batch 1 x seq 128: some target statement carries a parallel chain alone: true
+fused step, batch 1 x seq 128: alone, some target statement runs on lanes: true
+fused step, batch 1 x seq 128: schedule-aware fission gives every target statement its standalone mapping: true
+fused step, batch 1 x seq 128: the legality-only segmentation loses some target statement's mapping (control): true
+fused step, batch 1 x seq 128: the gradients are not identically zero: true
+fused step, batch 1 x seq 128: the gradients agree with the legality-only segmentation's: true
+fused step, batch 1 x seq 128: the updated parameters agree with the legality-only segmentation's: true
+fused step, batch 2 x seq 128: the lowering computes the target: true
+fused step, batch 2 x seq 128: both pipelines schedule every target statement: true
+fused step, batch 2 x seq 128: some target statement carries a parallel chain alone: true
+fused step, batch 2 x seq 128: alone, some target statement runs on lanes: true
+fused step, batch 2 x seq 128: schedule-aware fission gives every target statement its standalone mapping: true
+fused step, batch 2 x seq 128: the legality-only segmentation loses some target statement's mapping (control): true
+fused step, batch 2 x seq 128: the gradients are not identically zero: true
+fused step, batch 2 x seq 128: the gradients agree with the legality-only segmentation's: true
+fused step, batch 2 x seq 128: the updated parameters agree with the legality-only segmentation's: true
+--- case 3: the lm_head's logits against the row max ---
+lm_head step, batch 1 x seq 128: the lowering computes the target: true
+lm_head step, batch 1 x seq 128: both pipelines schedule every target statement: true
+lm_head step, batch 1 x seq 128: some target statement carries a parallel chain alone: true
+lm_head step, batch 1 x seq 128: schedule-aware fission gives every target statement its standalone mapping: true
+lm_head step, batch 1 x seq 128: the legality-only segmentation loses some target statement's mapping (control): true
+lm_head step, batch 1 x seq 128: the gradients are not identically zero: true
+lm_head step, batch 1 x seq 128: the gradients agree with the legality-only segmentation's: true
+lm_head step, batch 1 x seq 128: the updated parameters agree with the legality-only segmentation's: true
+lm_head step, batch 2 x seq 128: the lowering computes the target: true
+lm_head step, batch 2 x seq 128: both pipelines schedule every target statement: true
+lm_head step, batch 2 x seq 128: some target statement carries a parallel chain alone: true
+lm_head step, batch 2 x seq 128: schedule-aware fission gives every target statement its standalone mapping: true
+lm_head step, batch 2 x seq 128: the legality-only segmentation loses some target statement's mapping (control): true
+lm_head step, batch 2 x seq 128: the gradients are not identically zero: true
+lm_head step, batch 2 x seq 128: the gradients agree with the legality-only segmentation's: true
+lm_head step, batch 2 x seq 128: the updated parameters agree with the legality-only segmentation's: true

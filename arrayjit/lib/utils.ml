@@ -136,6 +136,7 @@ let known_config_keys =
       "automatic_cpu_schedule";
       "cpu_schedule_min_parallel";
       "schedule_fission";
+      "gpu_fission_keep_mapping";
       "schedule_log_launches";
       "schedule_log_declines";
       "legality_crosscheck";
@@ -317,6 +318,7 @@ let config_key_classification : (config_key_class * string * string list) list =
         "automatic_cpu_schedule";
         "cpu_schedule_min_parallel";
         "schedule_fission";
+        "gpu_fission_keep_mapping";
       ] );
     ( Search_shaping,
       "it steers the search: how wide, how long, what is proposed, what is pruned, how candidates \
