@@ -55,28 +55,28 @@ let rec gcd a b = if b = 0 then abs a else gcd b (Int.rem a b)
 
     gh-ocannl-1162. [Indexing.Sub_axis] has one meaning in the IR: the axis contributes zero to the
     row-major flat offset while keeping its stride ([Indexing.reflect_projection], the renderers'
-    Horner sum). A [Sub_axis] run followed by a component therefore makes that component a
-    FLATTENED index ranging over the run's whole extent — lowering's flat stores ([Row]'s strided
-    projection: every axis but the innermost non-unit one is [Sub_axis]). The queries, though, also
-    need to be told that a component is UNKNOWN — a dynamic access's data-dependent axis, a vector
-    store's run — and those two readings need opposite treatment: "no information" is unsound for a
-    flattened index (its neighbour escapes its own axis's dim), and folding a run into its following
-    component is unsound for a placeholder (it turns ignorance into a known address). So the
-    placeholder never enters the map: callers state what they do not know out of band ([?dyn_axis],
-    [?vec]) and {!view} builds the query input, in which [Sub_axis] no longer occurs.
+    Horner sum). A [Sub_axis] run followed by a component therefore makes that component a FLATTENED
+    index ranging over the run's whole extent — lowering's flat stores ([Row]'s strided projection:
+    every axis but the innermost non-unit one is [Sub_axis]). The queries, though, also need to be
+    told that a component is UNKNOWN — a dynamic access's data-dependent axis, a vector store's run
+    — and those two readings need opposite treatment: "no information" is unsound for a flattened
+    index (its neighbour escapes its own axis's dim), and folding a run into its following component
+    is unsound for a placeholder (it turns ignorance into a known address). So the placeholder never
+    enters the map: callers state what they do not know out of band ([?dyn_axis], [?vec]) and
+    {!view} builds the query input, in which [Sub_axis] no longer occurs.
 
     A coordinate folds [span] consecutive physical axes of extent product [size]. A [Sub_axis] run
     and the component after it are one [Known] coordinate whose index is that component (its stride
-    is the group's innermost stride, so the coordinate IS the flattened index); a trailing [Sub_axis]
-    with no component after it is a [Known] zero of its own axis; every other axis is its own
-    coordinate. A group containing the dynamic axis, or a [Concat] component, is [Unknown]. Pair
+    is the group's innermost stride, so the coordinate IS the flattened index); a trailing
+    [Sub_axis] with no component after it is a [Known] zero of its own axis; every other axis is its
+    own coordinate. A group containing the dynamic axis, or a [Concat] component, is [Unknown]. Pair
     queries re-coarsen both sides to the coarsest grouping either needs (the un-flattened [[h; e]]
     over [[H; E]] becomes the single coordinate [E·h + e]); a group containing an [Unknown] part
     coarsens to [Unknown].
 
-    Coordinates are assumed in bounds — each index within [[0, size)] — the same assumption the
-    per-axis reading has always made of ordinary components: with every coordinate in bounds, two
-    addresses coincide exactly when every coordinate does (mixed radix). *)
+    Coordinates are assumed in bounds — each index within [0 <= index < size] — the same assumption
+    the per-axis reading has always made of ordinary components: with every coordinate in bounds,
+    two addresses coincide exactly when every coordinate does (mixed radix). *)
 
 type coord =
   | Known of { span : int; size : int; terms : (int * Idx.symbol) list; offset : int }
@@ -453,9 +453,9 @@ let separates ~range ~concurrent ~syms ~coords =
   Option.is_none (separation_failure ~range ~concurrent ~syms ~coords)
 
 (** [within_box ~range coords]: does the viewed access address a cell INSIDE its node for every
-    valuation of its symbols within their ranges — every coordinate within [[0, size)]? The interval
-    companion of {!covers_box}, which asks about a bijection onto the box; this asks only that
-    nothing leaves it. A flattened coordinate is bounded by its run's whole extent.
+    valuation of its symbols within their ranges — every coordinate within [0 <= index < size]? The
+    interval companion of {!covers_box}, which asks about a bijection onto the box; this asks only
+    that nothing leaves it. A flattened coordinate is bounded by its run's whole extent.
 
     Access validity, as distinct from the distinctness {!separates} proves. A symbol with no range
     (a static index parameter) and an [Unknown] coordinate both answer [false]: an unknown value can

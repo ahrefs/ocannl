@@ -38,7 +38,7 @@
 
 type coord = private
   | Known of { span : int; size : int; terms : (int * Indexing.symbol) list; offset : int }
-      (** The index is the linear form [Σ c·s + offset] (coalesced), within [[0, size)]. *)
+      (** The index is the linear form [Σ c·s + offset] (coalesced), within [0 <= index < size]. *)
   | Unknown of { span : int; size : int }
 [@@deriving sexp_of]
 
@@ -140,9 +140,9 @@ val separation_failure :
 
 val within_box : range:(Indexing.symbol -> (int * int) option) -> coord array -> bool
 (** [within_box ~range coords]: does the viewed access address a cell INSIDE its node — every
-    coordinate within [[0, size)] — for every valuation of its symbols within their ranges? The
-    interval companion of {!covers_box}, which asks about a bijection onto the box; this asks only
-    that nothing leaves it.
+    coordinate within [0 <= index < size] — for every valuation of its symbols within their ranges?
+    The interval companion of {!covers_box}, which asks about a bijection onto the box; this asks
+    only that nothing leaves it.
 
     Access validity, as distinct from the distinctness {!separates} proves. A symbol with no range
     (a static index parameter) and an [Unknown] coordinate both answer [false]: an unknown value can
