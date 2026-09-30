@@ -564,7 +564,9 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
-  (env_var OCANNL_BACKEND))
+  (env_var OCANNL_BACKEND)
+  ; The fused backward's dK and dQ nests take lanes on a GPU backend per this key (gh-ocannl-1124).
+  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION))
  (modules online_softmax)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
@@ -3541,7 +3543,8 @@
   ocannl_config
   (env_var OCANNL_BACKEND)
   ; Legs 5 and 6 run the default pipeline, whose lane plans read the workgroup fill.
-  (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL))
+  (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
+  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION))
  (modules gpu_serial_lanes)
  (libraries base ocannl stdio arrayjit.verdict ll_test test_utils)
  (preprocess
@@ -3571,6 +3574,7 @@
   (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
+  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
   (env_var OCANNL_GPU_FISSION_KEEP_MAPPING))
  (modules gpu_fission_mapping)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
@@ -3689,6 +3693,7 @@
   (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
+  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
   (env_var OCANNL_GPU_FISSION_KEEP_MAPPING))
  (modules fission_equivalence)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
@@ -3780,6 +3785,7 @@
   (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
+  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
   (env_var OCANNL_BACKEND)
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
   (env_var OCANNL_LOG_LEVEL)
@@ -4398,6 +4404,7 @@
   (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
+  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
   (env_var OCANNL_SCHEDULE_FISSION)
   (env_var OCANNL_SCHEDULE_LOG_LAUNCHES)
   (env_var OCANNL_AUTOTUNE_REGISTER_TILE_RM_TWIN)
@@ -6424,7 +6431,9 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
-  (env_var OCANNL_BACKEND))
+  (env_var OCANNL_BACKEND)
+  ; The fused backward's dK and dQ nests take lanes on a GPU backend per this key (gh-ocannl-1124).
+  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION))
  (modules online_softmax_block)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
@@ -6471,6 +6480,7 @@
   (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
+  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
   (env_var OCANNL_GPU_FISSION_KEEP_MAPPING))
  (modules online_softmax_block_mma)
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
