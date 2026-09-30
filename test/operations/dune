@@ -4427,6 +4427,14 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ ; ocannl-backend: none -- pure Ir.Affine queries checked against enumerated cell addresses; nothing is compiled or run.
+ (name affine_coordinate_view)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules affine_coordinate_view)
+ (libraries base stdio arrayjit.ir arrayjit.verdict))
+
+(test
  (name affine_extraction)
  (package neural_nets_lib)
  (deps
