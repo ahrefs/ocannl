@@ -47,6 +47,7 @@ Configuration keys tracked as ambient dependencies, in the one spelling OCANNL r
   fp16_arithmetic
   gpu_schedule_block_size
   gpu_schedule_min_parallel
+  gpu_schedule_workgroup_fill
   inline_complex_computations
   inline_scalar_constexprs
   inline_simple_computations

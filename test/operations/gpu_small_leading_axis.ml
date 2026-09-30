@@ -47,7 +47,9 @@ let run ~name ~dims ~transpose ~grid ~block =
         L.set b idcs (L.add (L.get a idcs) (L.c 3.)))
   in
   let opt = L.optimize ~materialized:[ a; b ] ~name (L.seq producer consumer) in
-  let scheduled = S.apply (S.default_gpu ~block_size:256 ~min_parallel:64 opt) opt in
+  let scheduled =
+    S.apply (S.default_gpu ~block_size:256 ~min_parallel:64 ~workgroup_fill:1 opt) opt
+  in
   p (name ^ ": selected launch geometry") (dims_equal (LL.launch_dims scheduled.llc) grid block);
   let got = List.hd_exn (L.execute ~name scheduled ~seed:[] ~read:[ b ]) in
   let expected = Array.init (Array.fold dims ~init:1 ~f:( * )) ~f:(fun i -> Float.of_int (i + 4)) in
@@ -66,7 +68,9 @@ let mismatched_suffix ~name ~producer_dims ~consumer_dims ~grid ~block =
         L.set b idcs (L.add (L.get a source) (value idcs consumer_dims)))
   in
   let opt = L.optimize ~materialized:[ a; b ] ~name (L.seq producer consumer) in
-  let scheduled = S.apply (S.default_gpu ~block_size:256 ~min_parallel:64 opt) opt in
+  let scheduled =
+    S.apply (S.default_gpu ~block_size:256 ~min_parallel:64 ~workgroup_fill:1 opt) opt
+  in
   p
     (name ^ ": original geometry survives suffix disagreement")
     (dims_equal (LL.launch_dims scheduled.llc) grid block);
@@ -103,8 +107,8 @@ let () =
   let opt = L.optimize ~materialized:[ a ] ~name:"gsa_zero" (L.zero a) in
   let scheduled =
     S.apply
-      (S.zero_expansion ~block_size:256 ~min_parallel:64 ~limits:Ir.Backend_intf.no_hardware_limits
-         [ a ])
+      (S.zero_expansion ~block_size:256 ~min_parallel:64 ~workgroup_fill:1
+         ~limits:Ir.Backend_intf.no_hardware_limits [ a ])
       opt
   in
   p "expanded zeros map every axis, as compute does"

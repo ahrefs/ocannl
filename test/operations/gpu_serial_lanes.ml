@@ -196,7 +196,9 @@ let dims_are (d : LL.launch_dims) ~grid ~block =
   Array.equal Int.equal d.LL.grid grid && Array.equal Int.equal d.LL.block block
 
 let execute case =
-  let scheduled = S.apply (S.default_gpu ~block_size:256 ~min_parallel:64 case.opt) case.opt in
+  let scheduled =
+    S.apply (S.default_gpu ~block_size:256 ~min_parallel:64 ~workgroup_fill:1 case.opt) case.opt
+  in
   let got = L.execute ~name:case.name scheduled ~seed:case.seed ~read:case.read in
   (scheduled, got)
 
@@ -326,7 +328,9 @@ let () =
   in
   let scoped = { case.opt with llc = splice case.opt.llc } in
   p "lanes_scoped: the preamble holds the inlined loop" (not (LL.equal scoped.llc case.opt.llc));
-  let scheduled = S.apply (S.default_gpu ~block_size:256 ~min_parallel:64 scoped) scoped in
+  let scheduled =
+    S.apply (S.default_gpu ~block_size:256 ~min_parallel:64 ~workgroup_fill:1 scoped) scoped
+  in
   p "lanes_scoped: no lane geometry" (not (lane_under_serial scheduled.llc));
   p "lanes_scoped: the plain plan, Grid (s, b) x Workgroup h"
     (dims_are (LL.launch_dims scheduled.llc) ~grid:[| s_n; b_n; 1 |] ~block:[| h_n; 1; 1 |]);

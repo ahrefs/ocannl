@@ -28,7 +28,7 @@ files.
   `.z` fold, overflow = refusal), which `Sketch_families.predicted_launch_geometry` forwards to.
   The lm_head is untouched by this: its segment carries `max_logits`, whose chain `(b, s)` trims
   the logits nest's `(b, s, v)` to `(b, s)` -- an alignment trim left by fission's no-loss guard
-  comparing at `max_chain=2`, which is gh-ocannl-1126's to fix. `test/operations/gpu_parallel_prefix`;
+  comparing at a `max_chain` of 2, which is gh-ocannl-1126's to fix. `test/operations/gpu_parallel_prefix`;
   measured in `benchmarks/report-gh1133-lane-plans.md`.
 - A parallel loop under a serial loop is reachable only past lane-uniform scalar work
   (gh-ocannl-1003). The presets' chain is the single-child loop path, which stops at the
