@@ -98,7 +98,9 @@ files.
   `upload_slot` bump-packs them first-fit into `context.upload_arenas`: first arena exact, later
   ones doubling. The arenas are shared by the values `evolve_with_buffer` derives (one `finalized`
   flag, so they free together) and fresh in `make_child`: an arena must never span two lifecycles,
-  or the child's `finalize` frees the parent's tenants. A failed upload into an existing arena rolls
+  or the child's `finalize` frees the parent's tenants. Within a lifecycle only a value holding an
+  arena's `last_tenant` extends it, so two sibling uploads into one earlier value never share a
+  slab one sibling's release would free. A failed upload into an existing arena rolls
   its bump back and frees nothing; `finalize` empties the list so a dead handle cannot bump into a
   freed slab. Guard: `test/operations/set_values_pool_coalescing.ml`, plus the arena leg of
   `resource_fault_injection`.

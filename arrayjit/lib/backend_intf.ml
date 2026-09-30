@@ -25,6 +25,12 @@ type upload_arena = {
           share it. *)
   capacity : int;
   mutable used : int;  (** The bump pointer: bytes laid out so far, alignment padding included. *)
+  mutable last_tenant : (Tnode.t[@sexp.opaque]);
+      (** The node laid out last. Only a context value holding it may extend the arena -- and one
+          that does holds every earlier tenant too, since each extension required the same of the
+          value it extended and a derivation never drops a buffer. So a sibling value, a second
+          upload into the same earlier value, gets an arena of its own, and releasing one sibling
+          cannot free a slab the other's node lives in. *)
 }
 [@@deriving sexp_of]
 (** A working pool that host uploads of not-yet-allocated nodes are bump-packed into
@@ -32,19 +38,13 @@ type upload_arena = {
     links them costs a few pools rather than one each -- Metal binds at most [metal_max_pools] per
     routine. *)
 
-type upload_arenas = {
-  mutable arenas : upload_arena list;
-  mutable minted_bytes : int;
-      (** Total capacity of the arenas minted so far: the next arena's size target, so that
-          capacities double and [n] uploads cost O(log n) pools. *)
-}
-[@@deriving sexp_of]
+type upload_arenas = { mutable arenas : upload_arena list } [@@deriving sexp_of]
 (** The upload arenas of one context lifecycle, shared by reference between the context values that
     {!evolve_with_buffer} derives -- the values that share one [finalized] flag and so free their
     pools together. A compile's child starts a fresh set: its pools must never share a slab with its
     parent's, whose [finalize] frees them independently. *)
 
-let fresh_upload_arenas () = { arenas = []; minted_bytes = 0 }
+let fresh_upload_arenas () = { arenas = [] }
 
 exception Backend_unavailable of { backend : string; detail : string }
 (** Device discovery established that this backend cannot be used on this machine: its library is

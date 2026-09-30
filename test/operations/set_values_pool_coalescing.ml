@@ -106,3 +106,21 @@ let () =
     expected_sum ~f:Float.equal;
   p_alli "after the child's release every parameter still reads back its own upload" params
     ~f:(reads_back ctx)
+
+(* Sibling values of one lifecycle (review round 1): [a] extends a fresh root with three uploads,
+   the third minting an arena with room to spare, and [b] uploads one node into the same ROOT. [b]
+   does not hold [a]'s tenants, so it must not bump into [a]'s arena: releasing [a] frees the arenas
+   its uploads live in, and [b]'s own upload has to survive that. *)
+let () =
+  let zeros = Ir.Ndarray.init_array ~debug:"svpc_sib" Ir.Ops.single ~dims:[| len |] ~padding:None in
+  let fresh l = TDSL.wrap_param ~l ~o:[ len ] (zeros ~f:(fun _ -> 0.)) () in
+  let xs = List.init 3 ~f:(fun k -> fresh (Printf.sprintf "svpc_sib_x%d" k)) in
+  let y = fresh "svpc_sib_y" in
+  let root = Context.auto () in
+  let a =
+    List.foldi xs ~init:root ~f:(fun k ctx x -> Context.set_values ctx x.Tensor.value (values k))
+  in
+  let b = Context.set_values root y.Tensor.value (values 7) in
+  Context.release a;
+  p "a sibling's upload survives the other sibling's release"
+    (Array.equal Float.equal (Context.get_values b y.Tensor.value) (values 7))

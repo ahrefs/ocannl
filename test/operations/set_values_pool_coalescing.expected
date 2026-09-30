@@ -6,3 +6,4 @@ every parameter reads back its own upload: true
 the child reads back its own upload: true
 after the child's release the routine still sums every upload: true
 after the child's release every parameter still reads back its own upload: true
+a sibling's upload survives the other sibling's release: true

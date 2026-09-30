@@ -481,20 +481,17 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
      They are bump-packed instead into the upload arenas of the context's LIFECYCLE -- the context
      values sharing one [finalized] flag, which free their pools together, so no arena tenant can be
      freed out from under a pool-mate (a compile's child starts fresh arenas: its parent frees its
-     own pools independently).
+     own pools independently). Within a lifecycle, only a value holding an arena's last tenant
+     extends it ([upload_arena.last_tenant]), so sibling values -- two uploads into the same earlier
+     value -- never share an arena: releasing one frees nothing the other's own uploads live in.
 
-     First fit, among arenas of the same residency hint. The first arena is sized exactly to its
-     node, so a lone upload costs what it always did; each later one targets the capacity minted so
-     far ([minted_bytes]), rounded up to the node's alignment so that the padding between tenants
-     cannot eat the room the doubling promised. Capacities double: [n] consecutive uploads take
-     O(log n) pools, and the unused room is bounded by the capacity already filled. A node over the
-     per-pool cap gets an exact pool of its own, as before.
-
-     Values of one lifecycle -- including siblings, two uploads into the same earlier value -- may
-     share an arena. That leaves no live value reading a freed slab that was not one already: they
-     share the [finalized] flag, so releasing either sibling frees their common ancestors' pools and
-     turns the other's release into a no-op -- the other is a dead handle either way (a compile's
-     children, the siblings [Context.release] keeps independent, are separate lifecycles).
+     First fit, among arenas of the same residency hint that this value may extend. The first arena
+     of a residency hint is sized exactly to its node, so a lone upload costs what it always did;
+     each later one targets the capacity that hint's arenas hold so far, rounded up to the node's
+     alignment so that the padding between tenants cannot eat the room the doubling promised.
+     Capacities double: [n] consecutive uploads take O(log n) pools, and the unused room is bounded
+     by the capacity already filled. A node over the per-pool cap gets an exact pool of its own, as
+     before.
 
      Returns the location and the [release] that gives it back if the upload fails: a fresh arena is
      freed and forgotten, a bump into an existing one is rolled back (only if still on top, which it
@@ -506,22 +503,34 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
     let size_in_bytes, align = layout_item tn in
     let mode = Option.map tn.Tn.memory_mode_intent ~f:fst in
     let align_up off = (off + align - 1) / align * align in
-    let fits (a : Backend_intf.upload_arena) =
+    let same_mode (a : Backend_intf.upload_arena) =
       [%equal: Tn.memory_mode option] a.arena_mode mode
+    in
+    let fits (a : Backend_intf.upload_arena) =
+      same_mode a
       && align_up a.used + size_in_bytes <= a.capacity
+      && Map.mem ctx.ctx_buffers a.last_tenant
     in
     match List.find arenas.arenas ~f:fits with
     | Some a ->
-        let before = a.used in
+        let before = a.used and before_tenant = a.last_tenant in
         let offset = align_up before in
         a.used <- offset + size_in_bytes;
-        let release () = if a.used = offset + size_in_bytes then a.used <- before in
+        a.last_tenant <- tn;
+        let release () =
+          if a.used = offset + size_in_bytes then (
+            a.used <- before;
+            a.last_tenant <- before_tenant)
+        in
         ({ pool_id = a.arena_pool_id; offset }, release)
     | None ->
         let cap = pool_cap () in
+        let minted =
+          List.sum (module Int) arenas.arenas ~f:(fun a -> if same_mode a then a.capacity else 0)
+        in
         let capacity =
           if size_in_bytes >= cap then size_in_bytes
-          else min cap (max size_in_bytes (align_up arenas.minted_bytes))
+          else min cap (max size_in_bytes (align_up minted))
         in
         let pool_id = device.next_pool_id in
         device.next_pool_id <- pool_id + 1;
@@ -530,13 +539,17 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
         Alloc_census.record_pool ~device_id:device.device_id ~pool_id ~constant:false
           ~size_in_bytes:capacity;
         let a : Backend_intf.upload_arena =
-          { arena_pool_id = pool_id; arena_mode = mode; capacity; used = size_in_bytes }
+          {
+            arena_pool_id = pool_id;
+            arena_mode = mode;
+            capacity;
+            used = size_in_bytes;
+            last_tenant = tn;
+          }
         in
         arenas.arenas <- a :: arenas.arenas;
-        arenas.minted_bytes <- arenas.minted_bytes + capacity;
         let release () =
           arenas.arenas <- List.filter arenas.arenas ~f:(fun b -> not (phys_equal a b));
-          arenas.minted_bytes <- arenas.minted_bytes - capacity;
           free_transfer_pool device pool_id ()
         in
         ({ pool_id; offset = 0 }, release)
