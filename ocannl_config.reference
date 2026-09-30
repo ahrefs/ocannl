@@ -225,9 +225,10 @@
 # leading loops to Grid (grid slots beyond the second fold onto .z), the innermost one to the
 # Workgroup (split into Grid blocks past gpu_schedule_block_size). While that workgroup holds fewer
 # threads than this value, the loops just above it join it as further Workgroup dimensions (at most
-# three, their product within the block size). 1 keeps one-dimensional workgroups: a (b, s, h, d)
-# projection output runs as Grid (b, s, h) x Workgroup d rather than Grid (b, s) x Workgroup (h, d).
-#gpu_schedule_workgroup_fill=1
+# three, their product within the block size): a (b, s, h, d) projection output with d = 32, h = 8
+# runs as Grid (b, s) x Workgroup (h, d). 1 keeps one-dimensional workgroups, Grid (b, s, h) x
+# Workgroup d -- within 0.5% on CUDA, but half the kernel speed on HIP (gh-ocannl-1133).
+#gpu_schedule_workgroup_fill=256
 
 # If true, on CPU backends (cc, multidev_cc) kernels compiled without an explicit
 # `lowered_transform` get the default CPU schedule: the same conservative analysis as the GPU

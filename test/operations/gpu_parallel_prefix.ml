@@ -64,13 +64,13 @@ let dependent ?block_size ?fill ?limits ~name ~dims ~grid ~block () =
   p_all2 (name ^ ": every consumer cell") (List.nth_exn got 1) (ramp dims ~plus:3.) ~f:Float.equal
 
 (* Two independent producers of different ranks in one kernel. *)
-let mixed_rank ~name ~dims_a ~dims_b ~grid ~block =
+let mixed_rank ?fill ~name ~dims_a ~dims_b ~grid ~block () =
   let a = node ~dims:dims_a (name ^ "_a") and b = node ~dims:dims_b (name ^ "_b") in
   List.iter [ a; b ] ~f:L.materialize;
   let na = nest dims_a (fun idcs -> L.set a idcs (value idcs dims_a)) in
   let nb = nest dims_b (fun idcs -> L.set b idcs (L.add (value idcs dims_b) (L.c 0.5))) in
   let opt = L.optimize ~materialized:[ a; b ] ~name (L.seq na nb) in
-  let scheduled = schedule opt in
+  let scheduled = schedule ?fill opt in
   geometry_is name (LL.launch_dims scheduled.llc) ~grid ~block;
   let got = L.execute ~name scheduled ~seed:[] ~read:[ a; b ] in
   p_all2
@@ -208,17 +208,28 @@ let () =
     ~block:[| 32; 1; 1 |];
 
   Stdio.printf "--- mixed ranks in one kernel ---\n";
-  (* (4, 8 | 32) and (16 | 64): the rank-2 nest splits its lane into a one-block grid slot to meet
-     the rank-3 nest's two. *)
-  mixed_rank ~name:"pp_mixed_split" ~dims_a:[| 4; 8; 32 |] ~dims_b:[| 16; 64 |] ~grid:[| 8; 16; 1 |]
-    ~block:[| 64; 1; 1 |];
+  (* (4, 2 | 64) and (4 | 128): the rank-2 nest splits its lane into a one-block grid slot to meet
+     the rank-3 nest's two; the union launch, 2 x 4 groups of 128, is twice each nest's own. *)
+  mixed_rank ~name:"pp_mixed_split" ~dims_a:[| 4; 2; 64 |] ~dims_b:[| 4; 128 |] ~grid:[| 2; 4; 1 |]
+    ~block:[| 128; 1; 1 |] ();
+  (* (4, 8 | 32) and (16 | 64) unify the same way, but the union launch (8 x 16 groups of 64) is
+     eight times either nest's own, so the presets' pairs stand: (8, 32) and (16, 64). *)
+  mixed_rank ~name:"pp_mixed_wasteful" ~dims_a:[| 4; 8; 32 |] ~dims_b:[| 16; 64 |]
+    ~grid:[| 16; 1; 1 |] ~block:[| 64; 1; 1 |] ();
+  (* Fill 256 gives 8 x 32 and 4 x 64 workgroups, whose per-slot maxima would launch 64 x 8 = 512
+     threads per group: past the block size, so both fall back to one-loop workgroups. *)
+  mixed_rank ~fill:256 ~name:"pp_fill_union_product" ~dims_a:[| 64; 8; 32 |] ~dims_b:[| 64; 4; 64 |]
+    ~grid:[| 8; 64; 1 |] ~block:[| 64; 1; 1 |] ();
   (* Three grid slots against at most two: no common topology, so both keep the presets' pairs ((8,
      32) after the suffix choice, and (16, 64)). *)
   mixed_rank ~name:"pp_mixed_fallback" ~dims_a:[| 2; 4; 8; 32 |] ~dims_b:[| 16; 64 |]
-    ~grid:[| 16; 1; 1 |] ~block:[| 64; 1; 1 |];
+    ~grid:[| 16; 1; 1 |] ~block:[| 64; 1; 1 |] ();
   zeros ~name:"pp_zeros_mixed_split"
+    ~dims_list:[ [| 4; 2; 64 |]; [| 4; 128 |] ]
+    ~grid:[| 2; 4; 1 |] ~block:[| 128; 1; 1 |];
+  zeros ~name:"pp_zeros_mixed_wasteful"
     ~dims_list:[ [| 4; 8; 32 |]; [| 16; 64 |] ]
-    ~grid:[| 8; 16; 1 |] ~block:[| 64; 1; 1 |];
+    ~grid:[| 16; 1; 1 |] ~block:[| 64; 1; 1 |];
   (* A singleton axis stays a serial loop outside the zero plan. *)
   zeros ~name:"pp_zeros_singleton"
     ~dims_list:[ [| 1; 6; 20; 48 |] ]

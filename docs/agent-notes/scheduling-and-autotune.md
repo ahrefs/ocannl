@@ -19,7 +19,7 @@ files.
   `Serial`), widening the workgroup upward while it holds fewer than `gpu_schedule_workgroup_fill`
   threads. The constraint mapping more loops adds is COVERAGE, not ownership: every
   chain-carrying nest of a kernel needs the same `Grid` and `Workgroup` counts, or
-  `validate_parallel` rejects the nest short of a slot. `unify_plans` narrows workgroups or splits
+  `validate_parallel` rejects the nest short of a slot. `unify_candidates` narrows workgroups or splits
   a short nest's lane into a one-block `Grid` slot, else declines; `lane_plans_gain` then keeps
   the two-loop presets unless no nest loses groups or active threads and one gains. Dependent
   nests have pointwise-equal chains, so they get identical plans at every unify step -- keep any

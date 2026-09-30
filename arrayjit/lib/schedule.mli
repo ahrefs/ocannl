@@ -649,16 +649,16 @@ val default_gpu :
     {!field:Backend_intf.max_threads_per_workgroup} and [.x] workgroup cap when given — the
     configured block size is a target, the device's workgroup capacity a hard cap). While the
     workgroup holds fewer than [workgroup_fill] threads (default from config
-    [gpu_schedule_workgroup_fill] = 1), the loops just above the lane join it as further [Workgroup]
-    dimensions (at most three, the product within the block size, each extent within its dimension's
-    cap). The plan is taken only when every chain-carrying nest of the kernel fits one common
-    hardware topology (a nest one [Grid] slot short may split its lane into a one-block [Grid]
-    loop), the launch fits the device's per-dimension caps, and no nest does less useful parallel
-    work than under the two-loop presets below, with more work somewhere; otherwise the presets
-    apply. The presets annotate exactly one [Grid] and one [Workgroup] loop per nest (splitting a
-    single parallel loop by [block_size]; a second loop longer than the block size keeps its outer
-    part [Serial]). A loop is parallelizable when its index occurs as a plain [Iterator] component
-    in every materialized write vector beneath it — the same coverage property
+    [gpu_schedule_workgroup_fill] = 256), the loops just above the lane join it as further
+    [Workgroup] dimensions (at most three, the product within the block size, each extent within its
+    dimension's cap). The plan is taken only when every chain-carrying nest of the kernel fits one
+    common hardware topology (a nest one [Grid] slot short may split its lane into a one-block
+    [Grid] loop), the launch fits the device's per-dimension caps, and no nest does less useful
+    parallel work than under the two-loop presets below, with more work somewhere; otherwise the
+    presets apply. The presets annotate exactly one [Grid] and one [Workgroup] loop per nest
+    (splitting a single parallel loop by [block_size]; a second loop longer than the block size
+    keeps its outer part [Serial]). A loop is parallelizable when its index occurs as a plain
+    [Iterator] component in every materialized write vector beneath it — the same coverage property
     [Low_level.validate_parallel] enforces, used generatively — and the kernel passes a conservative
     race analysis (all accesses to written nodes agree on parallel-index components, no [Zero_out]
     of materialized nodes, no barriers or opaque statements; reduction loops stay serial). Both

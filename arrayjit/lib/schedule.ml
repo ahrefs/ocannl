@@ -5944,10 +5944,13 @@ let gpu_parallel_suffix ~block_size ~min_parallel ~extent chain =
   | _ -> chain
 
 (* Config [gpu_schedule_workgroup_fill]: the thread count below which a lane plan widens its
-   workgroup with the loops just above the lane ({!plan_nest}). *)
+   workgroup with the loops just above the lane ({!plan_nest}). Default 256, from the gh-ocannl-1133
+   measurement (benchmarks/report-gh1133-lane-plans.md): on HIP (gfx1151) a one-dimensional 32-lane
+   workgroup over a (b, s, h, d) projection runs at half the speed of a (h, d) = 8 x 32 one, while
+   CUDA measures the two within 0.5% of each other. *)
 let gpu_schedule_workgroup_fill () =
   Int.of_string
-    (String.strip (Utils.get_global_arg ~arg_name:"gpu_schedule_workgroup_fill" ~default:"1"))
+    (String.strip (Utils.get_global_arg ~arg_name:"gpu_schedule_workgroup_fill" ~default:"256"))
 
 (** {2 The parallel-prefix launch plan (gh-ocannl-1133)}
 
@@ -5965,7 +5968,7 @@ let gpu_schedule_workgroup_fill () =
     mapping more of a proved chain asks nothing further of it. What the plan must add is the
     kernel-global COVERAGE rule of [Low_level.validate_parallel]: every chain-carrying nest of the
     kernel needs the same number of [Grid] and of [Workgroup] loops (one common topology), or some
-    nest's writes miss a slot another nest activates. {!unify_plans} finds that topology or
+    nest's writes miss a slot another nest activates. {!unify_candidates} finds that topology or
     declines. *)
 
 type lane_plan = {
@@ -6026,14 +6029,16 @@ let plan_nest ~block_size ~fill ~(limits : Backend_intf.hardware_limits) ~max_bl
         in
         widen [ lane ] n rev_rest
 
-(* Plans for every chain-carrying nest under ONE common hardware topology, or [None]. Tried in
-   order: each nest's own plan; every workgroup capped at the narrowest one (a nest that cannot
-   reach a width keeps a narrower, mismatching one); and at one workgroup loop, a nest one [Grid]
-   slot short splits its lane ([force_split]). Nests of one dependency component have
-   pointwise-equal chains (the alignment rule) and so receive identical plans at every step, which
-   is what keeps chain position [k] the same thread coordinate in all of them. *)
-let unify_plans ~block_size ~fill ~limits (chains : (Indexing.symbol * int) list list) :
-    lane_plan list option =
+(* Plan sets for every chain-carrying nest under ONE common hardware topology, in order of
+   preference: each nest's own plan; every workgroup capped at the narrowest one (a nest that cannot
+   reach a width keeps a narrower, mismatching one); one-loop workgroups; and one-loop workgroups
+   where a nest one [Grid] slot short splits its lane ([force_split]). Only sets with a common
+   topology are returned; {!plan_chains} takes the first whose union launch passes its checks. Nests
+   of one dependency component have pointwise-equal chains (the alignment rule) and so receive
+   identical plans in every set, which is what keeps chain position [k] the same thread coordinate
+   in all of them. *)
+let unify_candidates ~block_size ~fill ~limits (chains : (Indexing.symbol * int) list list) :
+    lane_plan list list =
   let plan ~max_block ~force_split = plan_nest ~block_size ~fill ~limits ~max_block ~force_split in
   let uniform plans =
     match plans with
@@ -6042,23 +6047,14 @@ let unify_plans ~block_size ~fill ~limits (chains : (Indexing.symbol * int) list
   in
   let at max_block = List.map chains ~f:(plan ~max_block ~force_split:false) in
   let own = at 3 in
-  if uniform own then Some own
-  else
-    let narrowest = List.fold own ~init:3 ~f:(fun m p -> min m (snd (plan_topology p))) in
-    List.find_map
-      (List.dedup_and_sort ~compare:(fun a b -> Int.compare b a) [ narrowest; 1 ])
-      ~f:(fun max_block ->
-        let plans = at max_block in
-        if uniform plans then Some plans
-        else if max_block > 1 then None
-        else
-          let grids = List.fold plans ~init:0 ~f:(fun m p -> max m (fst (plan_topology p))) in
-          let plans =
-            List.map2_exn chains plans ~f:(fun chain p ->
-                if fst (plan_topology p) < grids then plan ~max_block:1 ~force_split:true chain
-                else p)
-          in
-          Option.some_if (uniform plans) plans)
+  let narrowest = List.fold own ~init:3 ~f:(fun m p -> min m (snd (plan_topology p))) in
+  let one = at 1 in
+  let grids = List.fold one ~init:0 ~f:(fun m p -> max m (fst (plan_topology p))) in
+  let split_short =
+    List.map2_exn chains one ~f:(fun chain p ->
+        if fst (plan_topology p) < grids then plan ~max_block:1 ~force_split:true chain else p)
+  in
+  List.filter ~f:uniform [ own; at narrowest; one; split_short ]
 
 (* The useful work a nest's mapping exposes: [(groups, active)] — [Grid] groups launched, and
    iterations executed by distinct threads (padding threads of a split tail are not work). *)
@@ -6092,18 +6088,44 @@ let lane_plans_gain ~block_size ~(preset : int list list) (plans : lane_plan opt
   && List.exists pairs ~f:(fun (chain, p) ->
       Option.exists p ~f:(fun p -> snd (plan_work p) > snd (preset_work ~block_size chain)))
 
+(* The per-slot maxima of the plans' [Grid] and [Workgroup] extents, innermost slot first: what the
+   kernel's launch allocates, before the [.z] fold. *)
+let slot_maxima plans =
+  let slots sel =
+    let n = List.fold plans ~init:0 ~f:(fun m p -> max m (List.length (sel p))) in
+    List.init n ~f:(fun k ->
+        List.fold plans ~init:1 ~f:(fun m p ->
+            match List.nth (List.rev (sel p)) k with Some e -> max m e | None -> m))
+  in
+  (slots plan_grid_extents, slots plan_block_extents)
+
 (* The lane plans for per-nest chains (empty = a nest carrying none), when a common topology exists
-   and the launch it asks for fits the device: per-nest [Some plan] / [None], aligned with
-   [chains]. *)
+   and the launch it asks for is one the kernel can use: per-nest [Some plan] / [None], aligned with
+   [chains]. The launch takes each slot's maximum across nests, so three things are checked on that
+   union rather than per nest: the device's per-dimension caps; the workgroup's thread PRODUCT,
+   which per-slot maxima of differently shaped workgroups can push past the block size though no
+   nest's own workgroup exceeds it ([32 x 8] beside [256 x 1] launches [256 x 8]); and the waste of
+   a union of differently shaped grids -- a launch over twice the largest nest's own allocation
+   spends most of its threads failing the guards of [Low_level.guard_annotated_extents] (a [(v, d)]
+   weight gradient beside a [(b, s, d)] one: [1024 x 128] groups where each nest uses one row or one
+   column of them). *)
 let plan_chains ~block_size ~fill ~limits (chains : (Indexing.symbol * int) list list) :
     lane_plan option list option =
   let carrying = List.filter chains ~f:(Fn.non List.is_empty) in
-  let* plans = unify_plans ~block_size ~fill ~limits carrying in
-  let* geometry =
-    launch_geometry_of_nests
-      (List.map plans ~f:(fun p -> (plan_grid_extents p, plan_block_extents p)))
+  let usable plans =
+    let* geometry =
+      launch_geometry_of_nests
+        (List.map plans ~f:(fun p -> (plan_grid_extents p, plan_block_extents p)))
+    in
+    let* () = Option.some_if (Option.is_none (launch_geometry_excess ~limits geometry)) () in
+    let grid_slots, block_slots = slot_maxima plans in
+    let* block_threads = checked_product block_slots in
+    let* grid_groups = checked_product grid_slots in
+    let* launched = checked_mul grid_groups block_threads in
+    let largest = List.fold plans ~init:0 ~f:(fun m p -> max m (plan_threads p)) in
+    Option.some_if (block_threads <= block_size && launched / 2 <= largest) plans
   in
-  let* () = Option.some_if (Option.is_none (launch_geometry_excess ~limits geometry)) () in
+  let* plans = List.find_map (unify_candidates ~block_size ~fill ~limits carrying) ~f:usable in
   let rec zip chains plans =
     match (chains, plans) with
     | [], _ -> []
@@ -7199,13 +7221,11 @@ let default_schedule_fingerprint ~backend_name =
       let mp =
         String.strip (Utils.get_global_arg ~arg_name:"gpu_schedule_min_parallel" ~default:"64")
       in
-      let fill =
-        String.strip (Utils.get_global_arg ~arg_name:"gpu_schedule_workgroup_fill" ~default:"1")
-      in
+      let fill = gpu_schedule_workgroup_fill () in
       (* [lane-plans-v1] (gh-ocannl-1133): the default maps every loop of a proved chain, so a
          [default_ms] timed under the two-loop presets describes another algorithm. *)
       [%string
-        "gpu:policy=small-leading-v1+lanes-v1+fold-mma-v1+lane-plans-v1:fission=%{fission#Bool}:block_size=%{bs}:min_parallel=%{mp}:workgroup_fill=%{fill}"]
+        "gpu:policy=small-leading-v1+lanes-v1+fold-mma-v1+lane-plans-v1:fission=%{fission#Bool}:block_size=%{bs}:min_parallel=%{mp}:workgroup_fill=%{fill#Int}"]
     else
       let mp =
         String.strip (Utils.get_global_arg ~arg_name:"cpu_schedule_min_parallel" ~default:"16384")
