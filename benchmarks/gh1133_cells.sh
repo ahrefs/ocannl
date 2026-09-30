@@ -39,6 +39,11 @@
 #   keep      this checkout's runner, its defaults (gh-ocannl-1126: schedule-aware fission on)
 #   legacy    this checkout's runner, --ocannl_gpu_fission_keep_mapping=false (fission merges
 #             whatever the race analysis admits, as before gh-ocannl-1126)
+#   pre<M>    this checkout's runner, --ocannl_gpu_lane_preamble_reduction=<M>, M one of refused
+#             (the lane geometry refuses a preamble reduction, as before gh-ocannl-1124),
+#             duplicated (every lane recomputes it) or cooperative (the lanes all-reduce it) --
+#             the arms of gh-ocannl-1124 over the fused backward's dK nest, so a d1pre<M> cell is
+#             the one that exercises them; BASE may name this checkout for these
 #   d1<T>     treatment <T> (one of the above but base) with the online-softmax forward and the
 #             fused attention backward on -- treatment D1 of benchmarks/report-gh1002-fused-backward.md
 #             (the others are its treatment A)
@@ -100,6 +105,8 @@ flags_of() {
     fill*) echo "--ocannl_online_softmax=false --ocannl_gpu_schedule_workgroup_fill=${1#fill}" ;;
     keep) echo "--ocannl_online_softmax=false" ;;
     legacy) echo "--ocannl_online_softmax=false --ocannl_gpu_fission_keep_mapping=false" ;;
+    prerefused | preduplicated | precooperative)
+      echo "--ocannl_online_softmax=false --ocannl_gpu_lane_preamble_reduction=${1#pre}" ;;
     d1base) echo "gh1133: the base runner takes no d1 form" >&2; return 1 ;;
     d1*)
       local rest
@@ -219,7 +226,7 @@ import json, os, re, statistics, sys
 out, treatments, ref_treatment = sys.argv[1], sys.argv[2].split(), sys.argv[3]
 cells, missing = {}, []
 for name in sorted(os.listdir(out)):
-    m = re.fullmatch(r"(\w+)-(gpt2_mini\w*)-(base|(?:d1)?(?:fill\d+|keep|legacy))-(r\d+)\.out", name)
+    m = re.fullmatch(r"(\w+)-(gpt2_mini\w*)-(base|(?:d1)?(?:fill\d+|keep|legacy|pre(?:refused|duplicated|cooperative)))-(r\d+)\.out", name)
     if not m:
         continue
     rec = None
