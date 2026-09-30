@@ -49,11 +49,25 @@ while read -r v; do unset "$v"; done < <(env | sed -n 's/^\(BENCH_[A-Z0-9_]*\)=.
   { echo "gh728_cells: build failed" >&2; exit 1; }
 PSB=$TREE/_build/default/bin/projection_shape_bench.exe
 GPT=$TREE/_build/default/benchmarks/runners/ocannl/bench_gpt.exe
+# The workload's bytes must be SOME recorded origin's (benchmarks/fixtures/DIGESTS.txt): numbers
+# on unrecorded bytes compare with nothing, and the raw hash alone cannot say so (entries may be
+# content digests). The verdict line, naming whose bytes these are, goes into the manifest.
+FIXTURE_VERDICT=$(cd "$TREE/benchmarks" && python3 fixture_digest.py --check "$FIXTURE") &&
+  case $FIXTURE_VERDICT in *" — MATCH"*) ;; *) false ;; esac ||
+  { echo "gh728_cells: fixture is not a recorded origin's bytes: ${FIXTURE_VERDICT:-no verdict}" >&2; exit 2; }
+# Which device the numbers are OF, selected by the backend under test and refused when empty: a
+# manifest that names no device cannot be read or reproduced.
+case $BACKEND in
+  cuda) DEVICE=$(nvidia-smi --query-gpu=name,driver_version --format=csv,noheader 2>/dev/null) ;;
+  hip) DEVICE=$(rocminfo 2>/dev/null | grep -E "Marketing Name|^ *Name: *gfx" | sed 's/^ *//' | sort -u) ;;
+  metal) DEVICE=$(system_profiler SPDisplaysDataType 2>/dev/null | grep -E "Chipset Model|Total Number of Cores" | sed 's/^ *//') ;;
+  cc) DEVICE=$(sysctl -n machdep.cpu.brand_string 2>/dev/null || lscpu 2>/dev/null | grep -E "^Model name") ;;
+esac
+[ -n "$DEVICE" ] || { echo "gh728_cells: could not identify the $BACKEND device" >&2; exit 2; }
 {
   echo "gh728_cells: backend=$BACKEND host=$(hostname) commit=$(git -C "$TREE" rev-parse HEAD)$(git -C "$TREE" diff --quiet HEAD -- || echo +uncommitted) repeats=$REPEATS batches=$BATCHES"
-  echo "fixture: $FIXTURE sha256=$( (sha256sum "$FIXTURE" 2>/dev/null || shasum -a 256 "$FIXTURE") | cut -d' ' -f1)"
-  nvidia-smi --query-gpu=name,driver_version --format=csv,noheader 2>/dev/null | sed 's/^/device: /'
-  rocminfo 2>/dev/null | grep -E "Marketing Name|^ *Name: *gfx" | sed 's/^ */device: /' | sort -u
+  echo "fixture: $FIXTURE: $FIXTURE_VERDICT"
+  printf '%s\n' "$DEVICE" | sed 's/^/device: /'
 } | tee "$OUT/manifest.txt"
 
 FAILED=0
