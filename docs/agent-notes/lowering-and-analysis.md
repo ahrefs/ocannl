@@ -249,6 +249,24 @@ files.
   environment both take (do not add a second walker for it — round 7 of gh-693 did, and gh-722
   removed the duplicate). Soundness direction, as everywhere in the engine: a proven "separated" is
   proven, and anything it cannot interpret declines.
+- **`Sub_axis` has ONE meaning, and "unknown" is never written into a map** (gh-ocannl-1162): the
+  axis adds zero to the row-major offset while keeping its stride, so a `Sub_axis` run makes the
+  component after it a flattened index over the run (lowering's flat stores, `Row`'s strided
+  projection). The query callers used to spell "this component is unknown" (a dynamic axis, a
+  vector store's run) by writing `Sub_axis` into the map, and the engine read every `Sub_axis` as
+  "no information" — unsound for the real flattened index (`[Sub_axis; 40]` over `[8; 32]` is
+  `[1; 8]`, yet per axis `40 = e` is infeasible: `Disjoint`), while folding a run into its
+  neighbour would be unsound for the placeholder. So the address queries (`pair_conflict`,
+  `separates`, `within_box`, `covers_box`, `read_covered_before`, `vec_runs_disjoint`) take
+  `Affine.view ~dims ?dyn_axis ?vec map` — `Known`/`Unknown` coordinates, pairs re-coarsened to a
+  common frame — and `coord` is private, so no caller can build a placeholder. A vector run is FLAT
+  (it moves along the minor coordinate: the innermost non-unit axis plus the unit axes after it,
+  which is why "mask the last component" missed the trailing unit `Sub_axis` of `Row`'s flat RNG
+  store) and may spill into an outer coordinate unless proved not to. `test/operations/
+  affine_coordinate_view.ml` checks every proven verdict against enumerated renderer addresses.
+  No lowering path was found that pairs a flattened store with an ordinary access in one
+  correctness query (the RNG store's `Affine` minor index gives the cross-nest analysis no chain,
+  and nothing shares a loop with it), so the hole was latent — keep it that way by construction.
 - **The peel's DECISION is carried, not re-derived from the emitted kernel** (gh-ocannl-733). Two
   nests differing only in whether the accumulated cell mentions the enclosing index peel a different
   number of levels under a different guard verdict and emit the SAME localized kernel — one scope,

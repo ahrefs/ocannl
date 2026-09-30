@@ -82,44 +82,24 @@ let lookup env s = List.Assoc.find env s ~equal:Idx.equal_symbol
 
 (* {2 How the production callers hand an access to the engine}
 
-   Today, before the coordinate view: the callers MASK what they do not know by writing [Sub_axis]
-   into the map — the vector store's last component and the dynamic axis ([Schedule.query_map], the
-   CPU pool's [`Vec] interpretation) — and the separation check judges a vector store by the aligned
-   quotient of its last component ([Low_level.unseparated_thread_write]'s [vec_blocks]). The box and
-   counting queries read the raw map. *)
+   Through the coordinate view ([Affine.view]): the map as the IR holds it, and what the caller does
+   not know stated beside it — the dynamic axis, and a vector store's run, as [Run] for the pair
+   queries ([Schedule.query_view], the CPU pool's [`Vec] interpretation) and as [Blocks] for the
+   separation check ([Low_level.unseparated_thread_write]). The box queries view the raw map. *)
 module Q = struct
-  let masked (a : acc) =
-    let m = Array.copy a.map in
-    if Option.is_some a.vec && not (Array.is_empty m) then m.(Array.length m - 1) <- Idx.Sub_axis;
-    Option.iter a.dyn ~f:(fun ax -> m.(ax) <- Idx.Sub_axis);
-    m
+  let view ~range ~vec ~dims (a : acc) =
+    Aff.view ~range ?dyn_axis:a.dyn ?vec:(Option.map a.vec ~f:vec) ~dims a.map
 
-  let blocks (a : acc) =
-    let m = Array.copy a.map in
-    Option.iter a.dyn ~f:(fun ax -> m.(ax) <- Idx.Sub_axis);
-    let last = Array.length m - 1 in
-    (match a.vec with
-    | Some length when length > 1 && last >= 0 ->
-        m.(last) <-
-          (match m.(last) with
-          | Idx.Fixed_idx c when c % length = 0 -> Idx.Fixed_idx (c / length)
-          | Idx.Affine { symbols; offset }
-            when offset % length = 0 && List.for_all symbols ~f:(fun (c, _) -> c % length = 0) ->
-              Idx.affine
-                ~symbols:(List.map symbols ~f:(fun (c, s) -> (c / length, s)))
-                ~offset:(offset / length)
-          | _ -> Idx.Sub_axis)
-    | _ -> ());
-    m
+  let pair_conflict ~dims ~range ~dup_left ~dup_right ~pairs left right =
+    let view = view ~range ~vec:(fun l -> Aff.Run l) ~dims in
+    Aff.pair_conflict ~range ~dup_left ~dup_right ~pairs ~left:(view left) ~right:(view right)
 
-  let pair_conflict ~dims:_ ~range ~dup_left ~dup_right ~pairs left right =
-    Aff.pair_conflict ~range ~dup_left ~dup_right ~pairs ~left:(masked left) ~right:(masked right)
+  let separates ~dims ~range ~concurrent ~syms a =
+    Aff.separates ~range ~concurrent ~syms
+      ~coords:(view ~range ~vec:(fun l -> Aff.Blocks l) ~dims a)
 
-  let separates ~dims:_ ~range ~concurrent ~syms a =
-    Aff.separates ~range ~concurrent ~syms ~idcs:(blocks a)
-
-  let within_box ~dims ~range map = Aff.within_box ~range ~dims map
-  let covers_box ~dims ~range map = Aff.covers_box ~range ~dims map
+  let within_box ~dims ~range map = Aff.within_box ~range (Aff.view ~dims map)
+  let covers_box ~dims ~range map = Aff.covers_box ~range (Aff.view ~dims map)
 end
 
 let show_verdict = function
@@ -183,7 +163,7 @@ let conflict ~name ~dims ~ranges ?(own_left = []) ?(own_right = []) ?(pairs = []
 let () =
   Stdio.printf "=== pair_conflict ===\n";
   let h = sym () and e = sym () and f = sym () and c = sym () in
-  let i = sym () and j = sym () in
+  let i = sym () and j = sym () and u = sym () in
   let r lo hi = (lo, hi) in
   (* The oracle is not vacuous: the issue's example pair shares a cell, [8 * 0 + 40 = 32 * 1 +
      8]. *)
@@ -191,7 +171,45 @@ let () =
     (intersects
        (cells ~dims:[| 8; 32 |] [] (plain [| sub; fx 40 |]))
        (cells ~dims:[| 8; 32 |] [] (plain [| fx 1; fx 8 |])));
-  (* A flattened store against an ordinary access of the same node. *)
+  (* Both readings the issue's table rejects are refuted by the enumeration, so a soundness claim
+     below can fail: reading the flattened [Sub_axis; 40] as a placeholder (per-axis "no
+     information", the pre-view rule) answers [Disjoint] against [[h; e]], and reading a dynamic
+     axis followed by [1] as a flattened run (#728's collapse) answers [Disjoint] against [[2;
+     1]]. *)
+  let refuted ~dims ~ranges ~own_right ~(reading : acc) ~(truth : acc) (other : acc) =
+    let range s = find_range ranges s in
+    let dup s = List.mem own_right s ~equal:Idx.equal_symbol in
+    let verdict =
+      Q.pair_conflict ~dims ~range ~dup_left:(fun _ -> false) ~dup_right:dup ~pairs:[] reading other
+    in
+    not
+      (sound_conflict verdict
+         (oracle_conflict ~dims ~ranges
+            ~dup_left:(fun _ -> false)
+            ~dup_right:dup ~pairs:[] truth other))
+  in
+  p "control: the placeholder reading of a flattened [Sub_axis; 40] is refuted"
+    (refuted ~dims:[| 8; 32 |]
+       ~ranges:[ (h, r 0 7); (e, r 0 31) ]
+       ~own_right:[ h; e ]
+       ~reading:(dynamic ~axis:0 [| fx 0; fx 40 |])
+       ~truth:(plain [| sub; fx 40 |])
+       (plain [| it h; it e |]));
+  p "control: the flattened reading of a dynamic axis then [1] is refuted"
+    (refuted ~dims:[| 3; 4 |] ~ranges:[] ~own_right:[]
+       ~reading:(plain [| sub; fx 1 |])
+       ~truth:(dynamic ~axis:0 [| fx 0; fx 1 |])
+       (plain [| fx 2; fx 1 |]));
+  (* A flattened store against an ordinary access of the same node. The issue's two examples first:
+     both pairs share a cell, and the per-axis reading answered [Disjoint] for both. *)
+  conflict ~name:"issue: flat [Sub;40] vs [h;e] (8x32)" ~dims:[| 8; 32 |]
+    ~ranges:[ (h, r 0 7); (e, r 0 31) ]
+    ~own_right:[ h; e ]
+    (plain [| sub; fx 40 |])
+    (plain [| it h; it e |]);
+  conflict ~name:"issue: flat [Sub;2] vs [1;0] (2x2)" ~dims:[| 2; 2 |] ~ranges:[]
+    (plain [| sub; fx 2 |])
+    (plain [| fx 1; fx 0 |]);
   conflict ~name:"flat [Sub;f] vs row-major [h;e] (8x32)" ~dims:[| 8; 32 |]
     ~ranges:[ (f, r 0 255); (h, r 0 7); (e, r 0 31) ]
     ~own_left:[ f ] ~own_right:[ h; e ]
@@ -202,6 +220,14 @@ let () =
     ~own_left:[ f ] ~own_right:[ e ]
     (plain [| sub; it f |])
     (plain [| fx 1; it e |]);
+  (* The per-axis reading forced [u = e] from the minor axis alone and answered [Same_thread]; the
+     writer's thread [u = 4] writes the cell the reader's thread [e = 0] reads in row 1. *)
+  conflict ~name:"flat [Sub;u] vs [h;e], thread u~e" ~dims:[| 2; 4 |]
+    ~ranges:[ (u, r 0 7); (h, r 0 1); (e, r 0 3) ]
+    ~own_left:[ u ] ~own_right:[ h; e ]
+    ~pairs:[ (u, e) ]
+    (plain [| sub; it u |])
+    (plain [| it h; it e |]);
   (* A masked dynamic axis followed by an iterator: unknown, not a flattened index. *)
   conflict ~name:"dynamic axis then iterator vs [i;j], thread j" ~dims:[| 3; 4 |]
     ~ranges:[ (i, r 0 2); (j, r 0 3) ]
@@ -226,12 +252,32 @@ let () =
     ~own_left:[ c ]
     (vector ~length:4 [| sub; aff [ (4, c) ] 0 |])
     (plain [| fx 1; fx 7 |]);
+  (* The trailing vector-lane store: [Row]'s flat projection leaves a trailing unit axis as
+     [Sub_axis], so "mask the last component" masked the wrong one. The tail store of a [2x9x1] node
+     (base 16, two lanes) writes cells 16-17, i.e. [1;7;0] and [1;8;0]; the per-axis reading saw
+     [16] against a 9-wide axis and answered [Disjoint]. *)
+  conflict ~name:"trailing-lane tail vec [Sub;16;Sub] run 2 vs [h;e;0]" ~dims:[| 2; 9; 1 |]
+    ~ranges:[ (h, r 0 1); (e, r 0 8) ]
+    ~own_right:[ h; e ]
+    (vector ~length:2 [| sub; fx 16; sub |])
+    (plain [| it h; it e; fx 0 |]);
+  conflict ~name:"trailing-lane vec [Sub;4c;Sub] run 4 vs [1;e;0], thread c~e" ~dims:[| 2; 8; 1 |]
+    ~ranges:[ (c, r 0 3); (e, r 0 7) ]
+    ~own_left:[ c ] ~own_right:[ e ]
+    ~pairs:[ (c, e) ]
+    (vector ~length:4 [| sub; aff [ (4, c) ] 0; sub |])
+    (plain [| fx 1; it e; fx 0 |]);
   (* Repeated symbols: the diagonal against a flat cell. *)
   conflict ~name:"diagonal [i;i] vs flat [Sub;5]: off-diagonal" ~dims:[| 3; 3 |]
     ~ranges:[ (i, r 0 2) ]
     ~own_left:[ i ]
     (plain [| it i; it i |])
     (plain [| sub; fx 5 |]);
+  conflict ~name:"diagonal [i;i] vs flat [Sub;4]: on-diagonal" ~dims:[| 3; 3 |]
+    ~ranges:[ (i, r 0 2) ]
+    ~own_left:[ i ]
+    (plain [| it i; it i |])
+    (plain [| sub; fx 4 |]);
   conflict ~name:"diagonal [i;i] vs flat [Sub;f]" ~dims:[| 3; 3 |]
     ~ranges:[ (i, r 0 2); (f, r 0 8) ]
     ~own_left:[ i ] ~own_right:[ f ]
@@ -294,6 +340,17 @@ let () =
     ~ranges:[ (c, r 0 3) ]
     ~concurrent:[ c ] ~syms:[ c ]
     (vector ~length:4 [| sub; aff [ (4, c) ] 0; sub |]);
+  (* Runs spill across rows when the minor extent is not a multiple of the run: [(i, 1)] writes
+     [6i+4 .. 6i+7], [(i+1, 0)] writes [6i+6 .. 6i+9]. The aligned quotient alone claimed
+     separation. *)
+  separation ~name:"row-spilling vec [i;4j] run 4 (3x6) does not separate i, j" ~dims:[| 3; 6 |]
+    ~ranges:[ (i, r 0 2); (j, r 0 1) ]
+    ~concurrent:[ i; j ] ~syms:[ i; j ]
+    (vector ~length:4 [| it i; aff [ (4, j) ] 0 |]);
+  separation ~name:"row-aligned vec [i;4j] run 4 (3x8) separates i, j" ~dims:[| 3; 8 |]
+    ~ranges:[ (i, r 0 2); (j, r 0 1) ]
+    ~concurrent:[ i; j ] ~syms:[ i; j ]
+    (vector ~length:4 [| it i; aff [ (4, j) ] 0 |]);
   separation ~name:"dynamic [?;j] separates j" ~dims:[| 3; 4 |]
     ~ranges:[ (j, r 0 3) ]
     ~concurrent:[ j ] ~syms:[ j ]
@@ -413,3 +470,74 @@ let () =
   fiber ~name:"trailing-lane [Sub;4c;Sub] over c:4" ~dims:[| 2; 8; 1 |]
     ~domain:[ (c, 4) ]
     [| sub; aff [ (4, c) ] 0; sub |]
+
+(* {2 Containment}: [read_covered_before] compares each prior write with the read in their views'
+   common frame, so a flattened write can cover an ordinary read and vice versa. Every write here
+   precedes the read and shares no loop with it; covered means every cell the read touches is a cell
+   some write instance touches. *)
+let () =
+  Stdio.printf "\n=== read_covered_before ===\n";
+  let access ?(write = true) ~loops ~path (a : acc) : unit Aff.access =
+    {
+      Aff.a_tn = ();
+      a_map = a.map;
+      a_write = write;
+      a_dynamic = Option.is_some a.dyn;
+      a_whole = false;
+      a_vec_last = Option.is_some a.vec;
+      a_vec_len = Option.value a.vec ~default:0;
+      a_guarded = false;
+      a_gated = false;
+      a_rmw = false;
+      a_val_syms = [];
+      a_stmt_write = None;
+      a_loops = loops;
+      a_path = [ Aff.Stmt path; (if write then Aff.Write else Aff.Rhs) ];
+    }
+  in
+  let covered ~name ~dims ~(read : acc * (Idx.symbol * (int * int)) list)
+      ~(writes : (acc * (Idx.symbol * (int * int)) list) list) =
+    let read_acc, read_loops = read in
+    let query =
+      Aff.read_covered_before ~dims
+        ~read:(access ~write:false ~loops:read_loops ~path:1 read_acc)
+        ~writes:(List.map writes ~f:(fun (w, loops) -> access ~loops ~path:0 w))
+        ()
+    in
+    let written =
+      List.concat_map writes ~f:(fun (w, loops) ->
+          List.concat_map (envs loops (List.map loops ~f:fst)) ~f:(fun env -> cells ~dims env w))
+    in
+    let missing =
+      List.find_map
+        (envs read_loops (List.map read_loops ~f:fst))
+        ~f:(fun env ->
+          List.find (cells ~dims env read_acc) ~f:(fun x ->
+              not (List.mem written x ~equal:Int.equal)))
+    in
+    let oracle = Option.is_none missing in
+    let shown = match query with `Covered -> "Covered" | `Unknown _ -> "Unknown" in
+    Stdio.printf "%-60s query %-12s oracle %s\n" name shown
+      (if oracle then "covered" else "uncovered");
+    claimf "%s: a proven coverage agrees with the enumerated cells" name
+      (match query with `Covered -> oracle | `Unknown _ -> true)
+  in
+  let c = sym () and h = sym () and e = sym () and f = sym () in
+  covered ~name:"flat write [Sub;c<8] covers read [h;e] (2x4)" ~dims:[| 2; 4 |]
+    ~read:(plain [| it h; it e |], [ (h, (0, 1)); (e, (0, 3)) ])
+    ~writes:[ (plain [| sub; it c |], [ (c, (0, 7)) ]) ];
+  covered ~name:"flat write [Sub;c<4] leaves row 1 of read [h;e]" ~dims:[| 2; 4 |]
+    ~read:(plain [| it h; it e |], [ (h, (0, 1)); (e, (0, 3)) ])
+    ~writes:[ (plain [| sub; it c |], [ (c, (0, 3)) ]) ];
+  covered ~name:"write [h;e] covers flat read [Sub;f<8]" ~dims:[| 2; 4 |]
+    ~read:(plain [| sub; it f |], [ (f, (0, 7)) ])
+    ~writes:[ (plain [| it h; it e |], [ (h, (0, 1)); (e, (0, 3)) ]) ];
+  covered ~name:"flat vec write [Sub;4c] run 4 covers read [h;e]" ~dims:[| 2; 4 |]
+    ~read:(plain [| it h; it e |], [ (h, (0, 1)); (e, (0, 3)) ])
+    ~writes:[ (vector ~length:4 [| sub; aff [ (4, c) ] 0 |], [ (c, (0, 1)) ]) ];
+  covered ~name:"trailing-lane vec [Sub;4c;Sub] covers read [h;e;0]" ~dims:[| 2; 4; 1 |]
+    ~read:(plain [| it h; it e; fx 0 |], [ (h, (0, 1)); (e, (0, 3)) ])
+    ~writes:[ (vector ~length:4 [| sub; aff [ (4, c) ] 0; sub |], [ (c, (0, 1)) ]) ];
+  covered ~name:"trailing-lane vec [Sub;4c;Sub] c<1 leaves row 1" ~dims:[| 2; 4; 1 |]
+    ~read:(plain [| it h; it e; fx 0 |], [ (h, (0, 1)); (e, (0, 3)) ])
+    ~writes:[ (vector ~length:4 [| sub; aff [ (4, c) ] 0; sub |], [ (c, (0, 0)) ]) ]

@@ -25,14 +25,19 @@ type summary = {
 [@@deriving sexp_of]
 
 (* Distinct cells one access can touch, with exactness. Interpretable maps: image cardinality =
-   loop-box size / fiber size ({!Affine.fiber_cardinality}); an [`At_least] fiber (non-injective
-   map) makes that an upper bound on the image. Uninterpretable components fall back to the whole
-   node. Guarded accesses are counted guards-taken. All biases over-count. *)
+   loop-box size / fiber size ({!Affine.fiber_cardinality}, which reads a flattened [Sub_axis] run
+   in its IR meaning, gh-ocannl-1162); an [`At_least] fiber (non-injective map) makes that an upper
+   bound on the image. An access whose coordinate view has an unknown coordinate (a dynamic index, a
+   [Concat]) falls back to the whole node. Guarded accesses are counted guards-taken. All biases
+   over-count. *)
 let access_cells (a : Tn.t Affine.access) : int * bool =
   let node_cells = Tn.num_elems a.a_tn in
+  let dims = Lazy.force a.a_tn.Tn.dims in
   let uninterpretable =
     a.a_dynamic
-    || Array.exists a.a_map ~f:(function Idx.Sub_axis | Idx.Concat _ -> true | _ -> false)
+    || Array.exists (Affine.view ~dims a.a_map) ~f:(function
+      | Affine.Unknown _ -> true
+      | Affine.Known _ -> false)
   in
   if a.a_whole then (node_cells, a.a_guarded)
   else if uninterpretable then (node_cells, true)
@@ -49,9 +54,7 @@ let access_cells (a : Tn.t Affine.access) : int * bool =
          and the runs are provably pairwise disjoint ({!Affine.vec_runs_disjoint}), the product is
          the exact distinct-cell count (gh-ocannl-578); otherwise runs may overlap for strided
          bases, so it is an upper bound. *)
-      let dims = Lazy.force a.a_tn.Tn.dims in
-      let minor_dim = if Array.length dims = 0 then 0 else dims.(Array.length dims - 1) in
-      let disjoint_runs = Affine.vec_runs_disjoint ~minor_dim a in
+      let disjoint_runs = Affine.vec_runs_disjoint ~dims a in
       ( min node_cells (image * max 1 a.a_vec_len),
         (not (exact_image && disjoint_runs)) || a.a_guarded )
     else (min node_cells image, (not exact_image) || a.a_guarded)
@@ -61,7 +64,9 @@ let access_cells (a : Tn.t Affine.access) : int * bool =
 let rec pairwise_disjoint = function
   | [] -> true
   | a :: tl ->
-      List.for_all tl ~f:(fun b -> not (Affine.may_touch_same_cell a b)) && pairwise_disjoint tl
+      List.for_all tl ~f:(fun b ->
+          not (Affine.may_touch_same_cell ~dims:(Lazy.force a.Affine.a_tn.Tn.dims) a b))
+      && pairwise_disjoint tl
 
 (* The certainty pre-pass shared by both extractions (gh-ocannl-578): which nodes' reads (or any
    accesses) are not certain to execute as the access list says. Node-granular and therefore

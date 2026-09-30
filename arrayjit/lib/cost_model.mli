@@ -14,12 +14,13 @@
       assumption): per-access image cardinalities are exact for injective interpretable maps, and
       for vectorized runs whose bases are provably non-overlapping ({!Affine.vec_runs_disjoint});
       non-injective maps, guarded ([If]) accesses (counted guards-taken), other vectorized runs, and
-      uninterpretable components ([Sub_axis]/[Concat]/dynamic indices — whole-node fallback) only
-      over-count, as does summing multiple same-direction accesses of one node (a union bound,
-      capped by the node's size) — except that a direction whose accesses are all exact and pairwise
-      provably disjoint ({!Affine.may_touch_same_cell}) sums exactly (gh-ocannl-578). Conditional
-      evaluation also over-counts: a read the renderers may skip — a [Where] arm's or a gated right
-      operand's ([&&]/[||]/a gate) inline read — or any access under a dead loop keeps its direction
+      unknown coordinates ([Concat]/dynamic indices — whole-node fallback; a flattened [Sub_axis]
+      run is interpretable, {!Affine.type-coord}) only over-count, as does summing multiple
+      same-direction accesses of one node (a union bound, capped by the node's size) — except that a
+      direction whose accesses are all exact and pairwise provably disjoint
+      ({!Affine.may_touch_same_cell}) sums exactly (gh-ocannl-578). Conditional evaluation also
+      over-counts: a read the renderers may skip — a [Where] arm's or a gated right operand's
+      ([&&]/[||]/a gate) inline read — or any access under a dead loop keeps its direction
       approximate, since the image can exceed what executes; a read inside a [Local_scope] body
       under such an operand is certain, the body being hoisted out of the conditional
       (gh-ocannl-637). [fp_approx] is [false] only when the count is exact.

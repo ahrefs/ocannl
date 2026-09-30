@@ -11,9 +11,63 @@
     Scope: linear-integer reasoning over box domains — per-axis linear Diophantine equations with
     gcd/interval infeasibility and forced-equality derivation via the mixed-radix injectivity
     criterion (the same criterion as {!Indexing.affine_injective}). No full Presburger machinery:
-    every query form needed so far is decided (or conservatively declined) at this level. Any
-    component the engine cannot interpret ([Sub_axis], [Concat], dynamic indices) contributes no
+    every query form needed so far is decided (or conservatively declined) at this level. The
+    address queries read accesses through the coordinate view ({!type-coord}): a coordinate the
+    caller does not know ([Unknown]: a dynamic axis, a vector run, a [Concat]) contributes no
     information, which errs on the side of declining — soundness is preserved by construction. *)
+
+(** {2 The coordinate view}
+
+    gh-ocannl-1162. [Indexing.Sub_axis] has one meaning in the IR: the axis contributes zero to the
+    row-major flat offset while keeping its stride, so a [Sub_axis] run followed by a component
+    makes that component a flattened index over the run's whole extent (lowering's flat stores).
+    What a caller does NOT know about an access — a dynamic access's data-dependent axis, a vector
+    store's run — is a different fact, stated out of band to {!view} rather than written into the
+    map: "no information" is unsound for a flattened index, and folding a run into its following
+    component is unsound for a placeholder, so the two must never share a spelling. The address
+    queries take the view; [Sub_axis] never reaches them.
+
+    A coordinate folds [span] consecutive physical axes whose extents multiply to [size]: a
+    [Sub_axis] run with the component after it is one [Known] coordinate indexed by that component,
+    a trailing [Sub_axis] is a [Known] zero of its own axis, every other axis is its own coordinate,
+    and a group containing the dynamic axis or a [Concat] is [Unknown]. Pair queries re-coarsen both
+    sides to the coarsest grouping either needs (mixed radix: an un-flattened [[h; e]] over [[H; E]]
+    becomes [E·h + e]; any [Unknown] part makes the merged coordinate [Unknown]). Every coordinate
+    is assumed in bounds — the assumption the per-axis reading always made of ordinary components —
+    so two addresses coincide exactly when every coordinate does. *)
+
+type coord = private
+  | Known of { span : int; size : int; terms : (int * Indexing.symbol) list; offset : int }
+      (** The index is the linear form [Σ c·s + offset] (coalesced), within [[0, size)]. *)
+  | Unknown of { span : int; size : int }
+[@@deriving sexp_of]
+
+(** A vector store's opacity ([Set_from_vec]: [length] consecutive FLAT cells from the base). *)
+type vec_view =
+  | Run of int
+      (** The run length: the minor coordinate (the innermost non-unit axis with the unit axes after
+          it and a flattened run before it) becomes [Unknown] — or the whole map, when the run
+          cannot be proved to stay inside it. *)
+  | Blocks of int
+      (** The separation form: a minor index divisible by the run length is replaced by its aligned
+          quotient (distinct quotients are disjoint runs) when the runs cannot spill into an outer
+          coordinate; otherwise as [Run]. *)
+[@@deriving sexp_of]
+
+val view :
+  ?range:(Indexing.symbol -> (int * int) option) ->
+  ?dyn_axis:int ->
+  ?vec:vec_view ->
+  dims:int array ->
+  Indexing.axis_index array ->
+  coord array
+(** [view ~dims idcs]: the coordinates of the access map [idcs] into a node of physical [dims]
+    (padding included: the buffer the map indexes). [?dyn_axis] names the data-dependent axis,
+    [?vec] a vector store's run; [?range] (loop bounds) lets a run be proved not to spill. A map
+    whose rank differs from [dims] is one [Unknown] coordinate. *)
+
+val coords_to_string : coord array -> string
+(** The spelling witnesses use for a view. *)
 
 (** {2 The pair-conflict query}
 
@@ -38,17 +92,17 @@ val pair_conflict :
   dup_left:(Indexing.symbol -> bool) ->
   dup_right:(Indexing.symbol -> bool) ->
   pairs:(Indexing.symbol * Indexing.symbol) list ->
-  left:Indexing.axis_index array ->
-  right:Indexing.axis_index array ->
+  left:coord array ->
+  right:coord array ->
   verdict
 (** [pair_conflict ~range ~dup_left ~dup_right ~pairs ~left ~right]: verdict on whether the accesses
-    with index vectors [left] and [right] (over the same tensor node; rank-padded with
-    [Fixed_idx 0]) can touch a common cell from different threads. [range s] gives the inclusive
-    iteration bounds of loop symbol [s] ([None] for static/unknown symbols). [dup_left]/[dup_right]
-    select the symbols iterated independently by each side (its enclosing loops within the analyzed
-    parallel region); other symbols are shared — equal across concurrently executing threads.
-    [pairs] is the thread identity: the parallel symbols of the left copy paired with those of the
-    right copy (for same-nest analyses, pairs of the form [(p, p)]).
+    viewed as [left] and [right] (over the same tensor node; re-coarsened to their common frame,
+    declined when they span different axes) can touch a common cell from different threads.
+    [range s] gives the inclusive iteration bounds of loop symbol [s] ([None] for static/unknown
+    symbols). [dup_left]/[dup_right] select the symbols iterated independently by each side (its
+    enclosing loops within the analyzed parallel region); other symbols are shared — equal across
+    concurrently executing threads. [pairs] is the thread identity: the parallel symbols of the left
+    copy paired with those of the right copy (for same-nest analyses, pairs of the form [(p, p)]).
 
     Sound and conservative: [Disjoint] and [Same_thread] are proven; everything else is
     [Cross_thread]. *)
@@ -57,9 +111,9 @@ val separates :
   range:(Indexing.symbol -> (int * int) option) ->
   concurrent:(Indexing.symbol -> bool) ->
   syms:Indexing.symbol list ->
-  idcs:Indexing.axis_index array ->
+  coords:coord array ->
   bool
-(** The separation query: does an index vector tell apart the iterations of a set of loop symbols?
+(** The separation query: does an access's view tell apart the iterations of a set of loop symbols?
     Where {!pair_conflict} asks whether two accesses of DIFFERENT program positions can collide,
     this asks the same engine about ONE access taken twice — the instance-vs-instance form of the
     question: two instances of the same statement, iterating [concurrent] symbols independently, can
@@ -78,25 +132,22 @@ val separation_failure :
   range:(Indexing.symbol -> (int * int) option) ->
   concurrent:(Indexing.symbol -> bool) ->
   syms:Indexing.symbol list ->
-  idcs:Indexing.axis_index array ->
+  coords:coord array ->
   string option
 (** {!separates} with the engine's witness: [None] where the vector separates [syms], otherwise the
     explanation {!pair_conflict} gives for the cross-thread conflict — the symbol a common cell does
     not force equal — for a refusal message that names what failed. *)
 
-val within_box :
-  range:(Indexing.symbol -> (int * int) option) ->
-  dims:int array ->
-  Indexing.axis_index array ->
-  bool
-(** [within_box ~range ~dims idcs]: does the index vector address a cell INSIDE the [dims] box for
-    every valuation of its symbols within their ranges? The interval companion of {!covers_box},
-    which asks about a bijection onto the box; this asks only that nothing leaves it.
+val within_box : range:(Indexing.symbol -> (int * int) option) -> coord array -> bool
+(** [within_box ~range coords]: does the viewed access address a cell INSIDE its node — every
+    coordinate within [[0, size)] — for every valuation of its symbols within their ranges? The
+    interval companion of {!covers_box}, which asks about a bijection onto the box; this asks only
+    that nothing leaves it.
 
     Access validity, as distinct from the distinctness {!separates} proves. A symbol with no range
-    (a static index parameter) and a component the engine cannot interpret both answer [false]: an
-    unknown value can be anywhere, and this query is only ever used to license moving an access to
-    where a guard no longer covers it. *)
+    (a static index parameter) and an [Unknown] coordinate both answer [false]: an unknown value can
+    be anywhere, and this query is only ever used to license moving an access to where a guard no
+    longer covers it. *)
 
 (** {2 The peel-guard legality query}
 
@@ -120,17 +171,13 @@ val peel_guard :
 
 (** {2 The covering query} *)
 
-val covers_box :
-  range:(Indexing.symbol -> (int * int) option) ->
-  dims:int array ->
-  Indexing.axis_index array ->
-  bool
-(** [covers_box ~range ~dims idcs]: whether the index vector [idcs], as its symbols range over their
-    (loop) bounds, enumerates every cell of the [dims] box exactly once — a bijection onto the box.
-    This is the write-dominance building block: a covering unguarded write rewrites the whole array.
-    Requirements: each symbol used at most once across the vector; per axis, a zero-based
+val covers_box : range:(Indexing.symbol -> (int * int) option) -> coord array -> bool
+(** [covers_box ~range coords]: whether the viewed access, as its symbols range over their (loop)
+    bounds, enumerates every cell of its node exactly once — a bijection onto the box. This is the
+    write-dominance building block: a covering unguarded write rewrites the whole array.
+    Requirements: each symbol used at most once across the view; per coordinate, a zero-based
     full-extent iterator, a mixed-radix affine combination of zero-based symbols whose radix chain
-    exactly composes to the axis dimension, or [Fixed_idx 0] on a unit axis. Generalizes (and is
+    exactly composes to the coordinate's size, or [0] on a unit-size coordinate. Generalizes (and is
     checked against) the procedural per-axis rule of [C_syntax.first_access_standalone_covering]. *)
 
 (** {2 Counting} *)
@@ -144,7 +191,10 @@ val fiber_cardinality :
     access, and the recompute cost per read site of inlining a setter. Domain symbols absent from
     the map contribute the product of their widths; when the map is injective on its mentioned
     symbols ({!Indexing.affine_injective}) that product is the exact fiber size of every image cell
-    (cells outside the image have zero), otherwise it is a lower bound. *)
+    (cells outside the image have zero), otherwise it is a lower bound. [Sub_axis] is read in its IR
+    meaning — it pins and mentions nothing, while the flattened component after it pins its own
+    symbols — which is exact: a coordinate group has one component, and injective coordinates give
+    an injective address. *)
 
 val fiber_cardinality_ub :
   domain:(Indexing.symbol * int) list ->
@@ -223,8 +273,9 @@ type 'tn access = {
           placeholder component, so queries must not interpret it. *)
   a_whole : bool;  (** A whole-node access ([Zero_out]). *)
   a_vec_last : bool;
-      (** A vectorized write ([Set_from_vec]): the last map component is the base of a run along the
-          minor axis, not a single cell — queries must treat that component as opaque. *)
+      (** A vectorized write ([Set_from_vec]): the map is the base of a run of [a_vec_len]
+          consecutive flat cells along the minor coordinate, not a single cell — viewed through
+          {!vec_view}, never by writing a placeholder into the map. *)
   a_vec_len : int;
       (** The run length of a vectorized write along the minor axis; [0] unless [a_vec_last]. *)
   a_guarded : bool;  (** Under an [If] guard: executes conditionally, never a definite write. *)
@@ -328,24 +379,31 @@ val within_statement : write:path_comp list -> path_comp list -> bool
     write itself. [false] when [write] is not a write position. *)
 
 val may_touch_same_cell :
-  ?static_range:(Indexing.symbol -> (int * int) option) -> 'tn access -> 'tn access -> bool
+  ?static_range:(Indexing.symbol -> (int * int) option) ->
+  dims:int array ->
+  'tn access ->
+  'tn access ->
+  bool
 (** Whether two accesses (of the same node) can touch a common cell, each access taken over its
     whole loop box — the two sides' iterations paired independently, including iterations of loops
     the sides share (the accesses need not be simultaneous, so a shared loop's symbol varies
     independently between one side's visit and the other's). Symbols bound by neither side's loops
     (static indices) are shared parameters, equal on both sides, bounded by [static_range] when
-    known. Conservative: [false] only when {!pair_conflict} proves disjointness; uninterpretable
-    access kinds (dynamic, whole-node, vectorized) count as overlapping. *)
+    known. [dims] is the node's dims (the coordinate view's). Conservative: [false] only when
+    {!pair_conflict} proves disjointness; uninterpretable access kinds (dynamic, whole-node,
+    vectorized) count as overlapping. *)
 
-val vec_runs_disjoint : minor_dim:int -> 'tn access -> bool
+val vec_runs_disjoint : dims:int array -> 'tn access -> bool
 (** Whether the runs of a vectorized access ([a_vec_last]) are pairwise disjoint in the node's flat
     cell space — the access then touches exactly [base image * a_vec_len] distinct cells
-    (gh-ocannl-578). [minor_dim] is the node's minor-axis extent. Conservative: [false] when any of
-    the sufficient conditions (documented in the implementation) is not proved. *)
+    (gh-ocannl-578). [dims] is the node's dims; the runs move along the minor coordinate of the
+    view. Conservative: [false] when any of the sufficient conditions (documented in the
+    implementation) is not proved. *)
 
 val read_covered_before :
   ?thread:(Indexing.symbol -> bool) ->
   ?static_range:(Indexing.symbol -> (int * int) option) ->
+  dims:int array ->
   read:'tn access ->
   writes:'tn access list ->
   unit ->
@@ -363,7 +421,8 @@ val read_covered_before :
     Guarded writes are the caller's choice: include them to mirror guards-taken analyses
     ([Low_level.trace_node_facts] and the coverage queries take guards unconditionally), pre-filter
     [a_guarded] for execution-accurate coverage. [writes] must be accesses of the same node as
-    [read]. *)
+    [read], whose dims are [dims]: each write is compared with the read in their views' common
+    frame. *)
 
 (** {2 Crosscheck}
 
