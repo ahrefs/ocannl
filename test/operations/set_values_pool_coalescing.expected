@@ -1,0 +1,9 @@
+24 uploads took at most 1 + ceil(log2 24) working pools: true
+the uploads' pools hold at most twice the bytes uploaded: true
+the routine reading every upload linked within Metal's pool binding budget: true
+the routine sums every upload: true
+every parameter reads back its own upload: true
+the child reads back its own upload: true
+after the child's release the routine still sums every upload: true
+after the child's release every parameter still reads back its own upload: true
+a sibling's upload survives the other sibling's release: true

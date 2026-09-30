@@ -231,6 +231,7 @@ struct
       ctx_buffers;
       finalized = Atomic.make false;
       released_pool_ids = Set.empty (module Int);
+      upload_arenas = fresh_upload_arenas ();
       optimize_ctx;
       merge_buffer_node = None;
     }
@@ -246,6 +247,7 @@ struct
       ctx_buffers;
       finalized = Atomic.make false;
       released_pool_ids = Set.empty (module Int);
+      upload_arenas = fresh_upload_arenas ();
       optimize_ctx;
       merge_buffer_node;
     }

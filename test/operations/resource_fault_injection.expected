@@ -18,6 +18,11 @@ existing from-host failure retains the destination for retry: true
 existing from-host control retries in place: true
 to-host copy injection fired: true
 to-host failure retained the source for retry: true
+arena-append copy injection fired: true
+failed arena append allocates and frees nothing: true
+failed arena append leaves its pool-mates' values intact: true
+arena-append retry lands in the arena without a pool of its own: true
+arena control releases each of its three pools exactly once: true
 finalize-await injection fired: true
 failed finalize await commits no cleanup state: true
 finalize-await control retry releases exactly once: true

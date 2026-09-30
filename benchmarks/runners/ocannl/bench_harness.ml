@@ -556,14 +556,12 @@ let matches ~required dn =
 (** [inject ctx st loss mapping] overwrites each param of [loss] with the fixture tensor whose
     required tokens all appear in the param's debug name. [mapping]: (fixture_key, required tokens).
     Every param must match exactly one mapping entry (and sizes must agree). Params matching no
-    entry are left at their initialization (pass them deliberately!). [skip] names params that
-    already hold their fixture tensor (a host init): they are left alone, matched or not. *)
-let inject ?(skip = fun _ -> false) ctx st loss mapping =
+    entry are left at their initialization (pass them deliberately!). *)
+let inject ctx st loss mapping =
   Set.fold loss.Tensor.params ~init:ctx ~f:(fun ctx p ->
       let tn = p.Tensor.value in
       let dn = Tn.debug_name tn in
       match List.filter mapping ~f:(fun (_, required) -> matches ~required dn) with
-      | _ when skip tn -> ctx
       | [] -> failwith ("bench: no fixture entry matches param " ^ dn)
       | [ (key, _) ] ->
           let values = floats_of_gen (St.to_float32 st key) in

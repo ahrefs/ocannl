@@ -6310,11 +6310,13 @@ let has_accumulating_cell (llc : t) : bool =
    Reads play no part: a plain store every thread performs to one cell is a write-write race whether
    or not the values agree, so the sound single-thread form is a pinned store or a per-thread cell.
    A dead level ([to_ < from_]) and a statically false guard execute nothing. A [Set_dynamic] is
-   judged by its static slots (the dynamic one separates nothing: masked opaque). A [Set_from_vec]
-   is a run of [length] cells from its base: where the base's last component is a multiple of
-   [length] the runs are aligned blocks and the quotient map is what must separate, otherwise the
-   component is opaque and the other slots must. A [Zero_out] is a store of every cell. A [Tile_mma]
-   is judged through its [fallback] — the scalar nest that spells the tile's stores — with its own
+   judged by its static slots (the dynamic one is an unknown coordinate of the store's
+   {!Affine.view}, separating nothing). A [Set_from_vec] is a run of [length] flat cells from its
+   base: where the base's minor coordinate is a multiple of [length] and the runs cannot spill into
+   an outer coordinate, the runs are aligned blocks and the quotient is what must separate,
+   otherwise the minor coordinate (or, for a possibly spilling run, the whole map) is unknown and
+   what remains must ({!Affine.Blocks}). A [Zero_out] is a store of every cell. A [Tile_mma] is
+   judged through its [fallback] — the scalar nest that spells the tile's stores — with its own
    cooperating [lane] excused (the tile is jointly owned by that axis and by construction mentions
    it nowhere), so a tile whose base omits an outer bound axis is refused where the plain store
    would be (gh-ocannl-960). [Set_local] and [Declare_local] are thread-private by nature.
@@ -6341,31 +6343,12 @@ let unseparated_thread_write ~(active : thread_slot list)
   let describe (kind, slot) =
     (match kind with `Grid -> "Grid" | `Workgroup -> "Workgroup") ^ " slot " ^ Int.to_string slot
   in
-  let mask_dynamic idcs dyn_axis =
-    let m = Array.copy idcs in
-    m.(dyn_axis) <- Indexing.Sub_axis;
-    m
-  in
-  (* The aligned-block quotient a vector store's separation is judged by. *)
-  let vec_blocks idcs length =
-    let last = Array.length idcs - 1 in
-    if length <= 1 || last < 0 then idcs
-    else
-      let m = Array.copy idcs in
-      m.(last) <-
-        (match idcs.(last) with
-        | Indexing.Fixed_idx c when c % length = 0 -> Indexing.Fixed_idx (c / length)
-        | Indexing.Affine { symbols; offset }
-          when offset % length = 0 && List.for_all symbols ~f:(fun (c, _) -> c % length = 0) ->
-            Indexing.affine
-              ~symbols:(List.map symbols ~f:(fun (c, s) -> (c / length, s)))
-              ~offset:(offset / length)
-        | _ -> Indexing.Sub_axis);
-      m
-  in
   (* [threads]: the bound loops enclosing the store, innermost first; [excused]: the cooperating
-     lanes of the tiles it sits in. *)
-  let judge ~env ~threads ~excused tn idcs =
+     lanes of the tiles it sits in. [?dyn_axis]/[?vec] are what the store's map does not say
+     statically (gh-ocannl-1162): they go to the coordinate view, never into the map — a dynamic
+     slot is an unknown coordinate, a vector store is judged by the aligned quotient of its runs
+     ({!Affine.Blocks}). *)
+  let judge ~env ~threads ~excused ?dyn_axis ?vec tn idcs =
     match storage tn with
     | `Thread -> None
     | (`Device | `Shared) as cls -> (
@@ -6394,9 +6377,10 @@ let unseparated_thread_write ~(active : thread_slot list)
               && (Poly.equal cls `Device
                  || not (Option.exists (thread s) ~f:(fun (k, _) -> Poly.equal k `Grid)))
             in
-            Option.map
-              (Affine.separation_failure ~range:(sym_int_bounds env.sym_env) ~concurrent ~syms ~idcs)
-              ~f:(fun why -> (tn, idcs, why)))
+            let range = sym_int_bounds env.sym_env in
+            let coords = Affine.view ~range ?dyn_axis ?vec ~dims:(Lazy.force tn.Tn.dims) idcs in
+            Option.map (Affine.separation_failure ~range ~concurrent ~syms ~coords) ~f:(fun why ->
+                (tn, idcs, why)))
   in
   let rec go ~env ~threads ~excused (st : t) =
     let go' = go ~env ~threads ~excused in
@@ -6414,8 +6398,8 @@ let unseparated_thread_write ~(active : thread_slot list)
     | If { cond = c, cprec; body } ->
         go ~env:(ienv_narrow_from_cond env ~cprec c) ~threads ~excused body
     | Set { tn; idcs; _ } -> judge tn idcs
-    | Set_dynamic { tn; idcs; dyn_axis; _ } -> judge tn (mask_dynamic idcs dyn_axis)
-    | Set_from_vec { tn; idcs; length; _ } -> judge tn (vec_blocks idcs length)
+    | Set_dynamic { tn; idcs; dyn_axis; _ } -> judge ~dyn_axis tn idcs
+    | Set_from_vec { tn; idcs; length; _ } -> judge ~vec:(Affine.Blocks length) tn idcs
     | Zero_out tn -> judge tn [||]
     | Tile_mma { lane; fallback; _ } -> go ~env ~threads ~excused:(lane :: excused) fallback
     | Noop | Comment _ | Staged_compilation _ | Set_local _ | Declare_local _ | Workgroup_barrier ->
@@ -6501,10 +6485,12 @@ let peel_accum_nest ?(extra_level = fun _ _ -> false) ?report ~loop_bounds ~free
      the escape needs this: a confined guard mentions no symbol the cell mentions. *)
   let cell_admits ~free_of ~pending tn idcs =
     List.is_empty pending
-    || Affine.separates ~range
-         ~concurrent:(fun s -> loop_bound s && not (peeled ~free_of s))
-         ~syms:pending ~idcs
-       && Affine.within_box ~range ~dims:(Lazy.force tn.Tn.dims) idcs
+    ||
+    let coords = Affine.view ~dims:(Lazy.force tn.Tn.dims) idcs in
+    Affine.separates ~range
+      ~concurrent:(fun s -> loop_bound s && not (peeled ~free_of s))
+      ~syms:pending ~coords
+    && Affine.within_box ~range coords
   in
   let cell_invariant ~free_of idcs =
     not (Array.exists idcs ~f:(fun idx -> List.exists free_of ~f:(fun s -> idx_mentions s idx)))
@@ -6953,7 +6939,10 @@ let reads_covered_query ?(write_eligible = fun ~read:_ ~write:_ -> true)
           | r :: rest when r.Affine.a_write -> go rest
           | r :: rest -> (
               let writes = List.filter writes ~f:(fun w -> write_eligible ~read:r ~write:w) in
-              match Affine.read_covered_before ~static_range ~read:r ~writes () with
+              match
+                Affine.read_covered_before ~static_range ~dims:(Lazy.force tn.Tn.dims) ~read:r
+                  ~writes ()
+              with
               | `Covered -> go rest
               | `Unknown w when rmw_exempt ~statics_set r ->
                   if Option.is_none !exempt_witness then exempt_witness := Some w;
@@ -6994,7 +6983,11 @@ let read_multiplicity_query (static_indices : Indexing.static_symbol list)
         Array.foldi sites ~init:0 ~f:(fun i acc a ->
             let total =
               Array.foldi sites ~init:bounds.(i) ~f:(fun j acc' b ->
-                  if j = i || not (Affine.may_touch_same_cell ~static_range a b) then acc'
+                  if
+                    j = i
+                    || not
+                         (Affine.may_touch_same_cell ~static_range ~dims:(Lazy.force tn.Tn.dims) a b)
+                  then acc'
                   else acc' + bounds.(j))
             in
             max acc total)

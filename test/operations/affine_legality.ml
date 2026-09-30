@@ -108,9 +108,19 @@ let unsound name =
   Int.incr unsound_count;
   Verdict.claim (name ^ ": query unsound against the oracle") false
 
+(* The engine reads maps through the coordinate view (gh-ocannl-1162), which needs the node's dims.
+   The cases here are about per-axis arithmetic, not buffer extents, so every axis gets a roomy
+   extent; a map of the wrong rank for the node is viewed as one unknown coordinate. *)
+let roomy rank = Array.create ~len:rank 64
+let view_in ~rank idcs = Aff.view ~dims:(roomy rank) idcs
+
 let check_conflict ~name ~query_ranges ~oracle_ranges ~dup_left ~dup_right ~pairs ~left ~right =
   let range s = find_range query_ranges s in
-  let verdict = Aff.pair_conflict ~range ~dup_left ~dup_right ~pairs ~left ~right in
+  let rank = max (Array.length left) (Array.length right) in
+  let verdict =
+    Aff.pair_conflict ~range ~dup_left ~dup_right ~pairs ~left:(view_in ~rank left)
+      ~right:(view_in ~rank right)
+  in
   let oracle = oracle_conflict ~oracle_ranges ~dup_left ~dup_right ~pairs ~left ~right in
   let ok = sound verdict oracle in
   if not ok then unsound name;
@@ -141,7 +151,7 @@ let oracle_covers ~oracle_ranges ~dims idcs =
 
 let check_covers ~name ~query_ranges ~oracle_ranges ~dims idcs =
   let range s = find_range query_ranges s in
-  let query = Aff.covers_box ~range ~dims idcs in
+  let query = Aff.covers_box ~range (Aff.view ~dims idcs) in
   let oracle = oracle_covers ~oracle_ranges ~dims idcs in
   let ok = (not query) || oracle in
   if not ok then unsound name;
@@ -202,10 +212,13 @@ let () =
     ~pairs:[ p; j ]
     [| Idx.Iterator p; Idx.Iterator j |]
     [| Idx.Iterator p; Idx.Iterator j |];
-  same_nest ~name:"rank padding" ~syms:[ p; j ] ~pairs:[ p ]
+  (* A map of the wrong rank for its node says nothing about the node's cells (gh-ocannl-1162: the
+     view no longer pads it with zeros), so the engine declines. *)
+  same_nest ~name:"rank mismatch declines" ~syms:[ p; j ] ~pairs:[ p ]
     [| Idx.Iterator p; Idx.Fixed_idx 0 |]
     [| Idx.Iterator p |];
-  same_nest ~name:"sub_axis is opaque" ~syms:[ p ] ~pairs:[ p ]
+  (* A flattened run: [p] indexes the whole two-axis coordinate, forced equal on both sides. *)
+  same_nest ~name:"flattened [Sub_axis; p]" ~syms:[ p ] ~pairs:[ p ]
     [| Idx.Sub_axis; Idx.Iterator p |]
     [| Idx.Sub_axis; Idx.Iterator p |];
   (* Static (shared) symbol: unknown range to the query, enumerated by the oracle. *)
@@ -257,7 +270,7 @@ let () =
           let verdict =
             Aff.pair_conflict ~range ~dup_left:dup ~dup_right:dup
               ~pairs:[ (p, p) ]
-              ~left:[| lc |] ~right:[| rc |]
+              ~left:(view_in ~rank:1 [| lc |]) ~right:(view_in ~rank:1 [| rc |])
           in
           let oracle =
             oracle_conflict ~oracle_ranges:ranges ~dup_left:dup ~dup_right:dup
@@ -422,7 +435,8 @@ let () =
   in
   let check_containment ~name ?(static_ranges = []) ?(thread = fun _ -> false) ~read ~writes () =
     let static_range s = find_range static_ranges s in
-    let query = Aff.read_covered_before ~thread ~static_range ~read ~writes () in
+    let dims = roomy (Array.length read.Aff.a_map) in
+    let query = Aff.read_covered_before ~thread ~static_range ~dims ~read ~writes () in
     let oracle = oracle_covered ~static_ranges ~thread ~read ~writes in
     let qs = match query with `Covered -> "Covered" | `Unknown _ -> "Unknown" in
     let os =
@@ -669,7 +683,9 @@ let () =
   let check_separates ~name ~concurrent ~syms idcs =
     let range x = find_range ranges x in
     let conc = concurrent_of concurrent in
-    let query = Aff.separates ~range ~concurrent:conc ~syms ~idcs in
+    let query =
+      Aff.separates ~range ~concurrent:conc ~syms ~coords:(view_in ~rank:(Array.length idcs) idcs)
+    in
     let oracle =
       match
         oracle_conflict ~oracle_ranges ~dup_left:conc ~dup_right:conc
@@ -706,17 +722,18 @@ let () =
   (* Nothing to tell apart is separated vacuously — the peel's "no enclosing symbol" case. *)
   check_separates ~name:"an empty symbol set is separated" ~concurrent:[ w ] ~syms:[]
     [| Idx.Fixed_idx 0 |];
-  (* An index component the engine cannot interpret contributes no information, so the answer is the
-     conservative one rather than an unsound "separated". *)
-  check_separates ~name:"an opaque component does not separate" ~concurrent:[ w ] ~syms:[ w ]
+  (* A lone [Sub_axis] adds zero (its IR meaning, gh-ocannl-1162): one cell for every lane. *)
+  check_separates ~name:"a lone Sub_axis (cell 0) does not separate" ~concurrent:[ w ] ~syms:[ w ]
     [| Idx.Sub_axis |];
 
   (* {!Aff.within_box}: access validity, the half separation does not answer (Codex P1 on PR #443).
      No oracle -- an interval containment over a box is decided by the same arithmetic an
      enumeration would perform -- so these are named cases, each naming which way it must go. *)
   Stdio.printf "\n=== gh-722: within_box (the validity half) ===\n";
-  let wb name ~dims idcs expected =
-    let got = Aff.within_box ~range:(fun x -> find_range ranges x) ~dims idcs in
+  let wb ?dyn_axis name ~dims idcs expected =
+    let got =
+      Aff.within_box ~range:(fun x -> find_range ranges x) (Aff.view ?dyn_axis ~dims idcs)
+    in
     Stdio.printf "%-52s %b (want %b)\n" name got expected;
     Verdict.claim name (Bool.equal got expected)
   in
@@ -736,7 +753,11 @@ let () =
      conservative answer, this query being asked only to license moving an access out from under a
      guard. *)
   wb "a static index parameter is not placed" ~dims:[| 4 |] [| Idx.Iterator s |] false;
-  wb "an opaque component is not placed" ~dims:[| 4 |] [| Idx.Sub_axis |] false;
+  (* gh-ocannl-1162: [Sub_axis] is not a placeholder — it adds zero — while a coordinate the caller
+     states as unknown (a dynamic axis) is not placed. *)
+  wb "a lone Sub_axis addresses cell 0, inside the box" ~dims:[| 4 |] [| Idx.Sub_axis |] true;
+  wb "an unknown (dynamic) coordinate is not placed" ~dyn_axis:0 ~dims:[| 4 |] [| Idx.Fixed_idx 0 |]
+    false;
   wb "a rank mismatch is not placed" ~dims:[| 4; 4 |] [| Idx.Iterator w |] false;
 
   Stdio.printf "\n=== gh-722: peel_guard (which guards may join the peeled levels) ===\n";

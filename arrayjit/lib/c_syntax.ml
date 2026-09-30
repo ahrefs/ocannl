@@ -3518,8 +3518,8 @@ module C_syntax (B : C_syntax_config) = struct
      observes the statement-level events the locals analysis keys on (opaque statements, scope
      declarations). [kind] tells the affine queries how to interpret the index vector: [`Whole] for
      accesses whose cells are not statically known ([Zero_out]'s every-cell write, data-dependent
-     [Set_dynamic]/[Get_dynamic] slots, fired with empty indices), [`Vec] for vectorized writes
-     whose last component is the base of a minor-axis run. *)
+     [Set_dynamic]/[Get_dynamic] slots, fired with empty indices), [`Vec length] for vectorized
+     writes whose index vector is the base of a [length]-cell run ({!Affine.vec_view}). *)
   let iter_local_accesses ~access ~on_stmt (root : Low_level.t) : unit =
     let rec go (llc : Low_level.t) =
       match llc with
@@ -3549,9 +3549,9 @@ module C_syntax (B : C_syntax_config) = struct
           go_sc v;
           go_sc llsc;
           access ~write:true ~kind:`Whole tn [||]
-      | Set_from_vec { tn; idcs; arg = a, _; _ } ->
+      | Set_from_vec { tn; idcs; length; arg = a, _; _ } ->
           go_sc a;
-          access ~write:true ~kind:`Vec tn idcs
+          access ~write:true ~kind:(`Vec length) tn idcs
       | Set_local (id, llsc) ->
           on_stmt (`Set_local id);
           go_sc llsc
@@ -3583,7 +3583,7 @@ module C_syntax (B : C_syntax_config) = struct
   type grid_local_info = {
     gl_tn : Tn.t;
     mutable gl_written : bool;
-    mutable gl_accs : (bool * [ `Exact | `Whole | `Vec ] * Indexing.axis_index array) list;
+    mutable gl_accs : (bool * [ `Exact | `Whole | `Vec of int ] * Indexing.axis_index array) list;
     mutable gl_count : int;
   }
 
@@ -3619,7 +3619,7 @@ module C_syntax (B : C_syntax_config) = struct
         List.find_map loops ~f:(fun (s', from_, to_) ->
             if Indexing.equal_symbol s s' then Some (from_, to_) else None)
       in
-      Affine.covers_box ~range ~dims idcs
+      Affine.covers_box ~range (Affine.view ~dims idcs)
     in
     let rec stmt (llc : Low_level.t) ~loops =
       match llc with
@@ -3758,16 +3758,16 @@ module C_syntax (B : C_syntax_config) = struct
             let shared_ok =
               (not info.gl_written)
               ||
+              (* The coordinate view (gh-ocannl-1162): a vector store's run is stated to the view,
+                 never written into the map as a placeholder. *)
+              let dims = Lazy.force info.gl_tn.Tn.dims in
               let interp (kind, idcs) =
                 match kind with
                 | `Whole -> None
-                | `Exact -> Some idcs
-                | `Vec ->
+                | `Exact -> Some (Affine.view ~dims idcs)
+                | `Vec length ->
                     if Array.is_empty idcs then None
-                    else
-                      let m = Array.copy idcs in
-                      m.(Array.length m - 1) <- Indexing.Sub_axis;
-                      Some m
+                    else Some (Affine.view ~range ~vec:(Affine.Run length) ~dims idcs)
               in
               let witness = ref "" in
               let q =
@@ -3990,7 +3990,8 @@ module C_syntax (B : C_syntax_config) = struct
                 if Indexing.equal_symbol symbol bound then Some range else None)
           in
           if List.exists write.a_loops ~f:(fun (_, (lo, hi)) -> hi < lo) then None
-          else if Affine.covers_box ~range ~dims:(Lazy.force tn.Tn.dims) write.a_map then
+          else if Affine.covers_box ~range (Affine.view ~dims:(Lazy.force tn.Tn.dims) write.a_map)
+          then
             let repeated =
               List.filter_map write.a_loops ~f:(fun (symbol, (lo, hi)) ->
                   Option.some_if

@@ -1,0 +1,10 @@
+the reference holds values in [0, 1): true
+the reference holds 18 pairwise distinct values: true
+routine-local r: the uniform node is 2x9x1 (a trailing unit axis beside the flattened run): true
+routine-local r: y = r + x in every cell, against the materialized reference: true
+routine-local r: z = 2r in every cell, against the materialized reference: true
+routine-local r: the tail store's two cells (16, 17) reach both readers: true
+materialized r: the uniform node is 2x9x1 (a trailing unit axis beside the flattened run): true
+materialized r: y = r + x in every cell, against the materialized reference: true
+materialized r: z = 2r in every cell, against the materialized reference: true
+materialized r: the tail store's two cells (16, 17) reach both readers: true

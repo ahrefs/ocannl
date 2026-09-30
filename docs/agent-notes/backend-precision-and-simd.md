@@ -452,8 +452,9 @@ files.
   lanes 1–3 address cells that do not exist (Codex P1 on staging#443). The confined case needs no such
   check — there the guard mentions only peeled symbols and symbols no loop binds, while the cell is
   invariant across the peeled levels, so the guard cannot bound anything the cell mentions.
-  Uninterpretable components (`Sub_axis`, `Concat`, dynamic indices) contribute no information to
-  either query, so they decline rather than admit.
+  Unknown coordinates of the access's `Affine.view` (a dynamic axis, a vector run, `Concat`)
+  contribute no information to either query, so they decline rather than admit; a flattened
+  `Sub_axis` run is a known coordinate (gh-ocannl-1162, lowering-and-analysis.md).
 - **The gh-490 runtime-extent guard is NOT constant-bounded** — worth knowing, because assuming it
   was cost a review round: `Assignments.extent_guard` (assignments.ml:225) emits
   `Cmplt (Embed_index (Iterator index), Embed_index (Iterator sym.static_symbol))`, whose bound is a
