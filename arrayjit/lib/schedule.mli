@@ -635,8 +635,10 @@ val aligned_chains :
     not bare by the time the code is validated. *)
 
 (** How the default GPU schedule's lane geometry treats a preamble reduction — a serial loop
-    accumulating into a scope local ahead of the lane loop, the fused attention backward's
-    [dp = Σ_e dO·v] (gh-ocannl-1124). [Preamble_refused]: such a nest keeps its plain plan (the
+    accumulating into the fused attention backward's [dp] scope local ahead of the lane loop,
+    [dp = Σ_e dO·v] (gh-ocannl-1124); only that local qualifies
+    ({!Online_softmax.reassociable_local}), since the cooperative form reassociates under the fused
+    backward's approximate-tier license. [Preamble_refused]: such a nest keeps its plain plan (the
     gh-ocannl-1003 stage-1 rule). [Preamble_duplicated]: the nest takes lanes and every lane
     recomputes the reduction serially, in its summation order. [Preamble_cooperative]: a reduction
     whose extent is the lane's whole workgroup is retyped [Workgroup_reduce], sharing the lane's

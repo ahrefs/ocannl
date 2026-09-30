@@ -21,7 +21,10 @@
    a partial simdgroup (E = D = 16): retyped, but the renderer declines the shuffle (lanes outside
    the reduction would be read) and every lane runs the loop; 6. several simdgroups (E = D = 64):
    retyped, declined by this v1 (it would need a shared broadcast and barrier), every lane runs the
-   loop. *)
+   loop; 7. the same nest over an ordinary scope local, not the fused backward's [dp]: the plain
+   plan in every mode -- the reassociation's license is the gate that minted [dp], not the shape; 8.
+   a [Workgroup_reduce] hand-retyped over such a local keeps the hardware binding a staged reduction
+   relies on (compiled, and read on GPU backends). *)
 
 open Base
 open Stdio
@@ -58,13 +61,14 @@ type case = {
   name : string;
   opt : LL.optimized;
   e_sym : Ir.Indexing.symbol;
+  hw_syms : Ir.Indexing.symbol list;  (** [b], [t], [h] and the lane [d]. *)
   seed : (Ir.Tnode.t * float array) list;
   k_tn : Ir.Tnode.t;
   expected : float array;
   launch_block : int;
 }
 
-let dk_nest ~name ~e_n ~d_n =
+let dk_nest ?(minted = true) ~name ~e_n ~d_n () =
   let a_dims = [| b_n; s_n; h_n; e_n |]
   and bv_dims = [| b_n; t_n; h_n; e_n |]
   and q_dims = [| b_n; s_n; h_n; d_n |]
@@ -72,8 +76,14 @@ let dk_nest ~name ~e_n ~d_n =
   let a_tn = node ~dims:a_dims (name ^ "_a")
   and bv_tn = node ~dims:bv_dims (name ^ "_b")
   and q_tn = node ~dims:q_dims (name ^ "_q")
-  and k_tn = node ~dims:k_dims (name ^ "_k")
-  and dp_node = node ~dims:[| 1 |] (name ^ "_dp") in
+  and k_tn = node ~dims:k_dims (name ^ "_k") in
+  (* The fused backward's own [dp] local, the only one whose reduction the lanes may reassociate
+     ([Online_softmax.reassociable_local]); [~minted:false] gives the same nest an ordinary
+     local. *)
+  let dp_node =
+    if minted then Ir.Online_softmax.dprob_local ~like:a_tn Ir.Ops.single
+    else node ~dims:[| 1 |] (name ^ "_dp")
+  in
   L.virtualize dp_node;
   List.iter [ a_tn; bv_tn; q_tn; k_tn ] ~f:L.materialize;
   let dp = LL.get_scope dp_node in
@@ -115,6 +125,7 @@ let dk_nest ~name ~e_n ~d_n =
     name;
     opt;
     e_sym = e;
+    hw_syms = [ b; t; h; d ];
     seed =
       [
         (a_tn, fill ~dims:a_dims (fun i -> a_value i.(0) i.(1) i.(2) i.(3)));
@@ -194,21 +205,53 @@ let () =
   eprintf "gpu_lane_reduction backend: %s (not part of the golden)\n%!" backend_name;
   printf "--- leg 1: equal widths at one simdgroup, cooperative ---\n";
   run ~reduction_axis:LL.Workgroup_reduce ~emits_all_reduce:true
-    (dk_nest ~name:"lred_coop32" ~e_n:32 ~d_n:32);
+    (dk_nest ~name:"lred_coop32" ~e_n:32 ~d_n:32 ());
   printf "--- leg 2: the same nest, duplicated ---\n";
   run ~preamble:S.Preamble_duplicated ~reduction_axis:LL.Serial ~emits_all_reduce:false
-    (dk_nest ~name:"lred_dup32" ~e_n:32 ~d_n:32);
+    (dk_nest ~name:"lred_dup32" ~e_n:32 ~d_n:32 ());
   printf "--- leg 3: refused keeps the plain plan ---\n";
   run ~preamble:S.Preamble_refused ~lanes:false ~reduction_axis:LL.Serial ~emits_all_reduce:false
-    (dk_nest ~name:"lred_refused32" ~e_n:32 ~d_n:32);
+    (dk_nest ~name:"lred_refused32" ~e_n:32 ~d_n:32 ());
   printf "--- leg 4: unequal key and value widths ---\n";
   run ~reduction_axis:LL.Serial ~emits_all_reduce:false
-    (dk_nest ~name:"lred_e16_d32" ~e_n:16 ~d_n:32);
+    (dk_nest ~name:"lred_e16_d32" ~e_n:16 ~d_n:32 ());
   run ~reduction_axis:LL.Serial ~emits_all_reduce:false
-    (dk_nest ~name:"lred_e64_d32" ~e_n:64 ~d_n:32);
+    (dk_nest ~name:"lred_e64_d32" ~e_n:64 ~d_n:32 ());
   printf "--- leg 5: a partial simdgroup declines the shuffle ---\n";
   run ~reduction_axis:LL.Workgroup_reduce ~emits_all_reduce:false
-    (dk_nest ~name:"lred_coop16" ~e_n:16 ~d_n:16);
+    (dk_nest ~name:"lred_coop16" ~e_n:16 ~d_n:16 ());
   printf "--- leg 6: several simdgroups decline the shuffle (v1) ---\n";
   run ~reduction_axis:LL.Workgroup_reduce ~emits_all_reduce:false
-    (dk_nest ~name:"lred_coop64" ~e_n:64 ~d_n:64)
+    (dk_nest ~name:"lred_coop64" ~e_n:64 ~d_n:64 ())
+
+let () =
+  printf "--- leg 7: an ordinary local in the same shape keeps the plain plan ---\n";
+  run ~lanes:false ~reduction_axis:LL.Serial ~emits_all_reduce:false
+    (dk_nest ~minted:false ~name:"lred_plain32" ~e_n:32 ~d_n:32 ());
+  printf "--- leg 8: a hand-retyped Workgroup_reduce over an ordinary local keeps its binding ---\n";
+  (* The renderer's all-reduce keys on the local's provenance, not on the local target: a staged
+     reduction may bind such a loop to leave each lane its own partial. Compiled only -- under the
+     binding each lane holds its own term, which is that reading's meaning, not this nest's. *)
+  let case = dk_nest ~minted:false ~name:"lred_bound32" ~e_n:32 ~d_n:32 () in
+  let b, t, h, d = match case.hw_syms with [ b; t; h; d ] -> (b, t, h, d) | _ -> assert false in
+  let sched =
+    [
+      S.Retype { axis = b; ty = LL.Grid };
+      S.Retype { axis = t; ty = LL.Grid };
+      S.Retype { axis = h; ty = LL.Grid };
+      S.Retype { axis = d; ty = LL.Workgroup };
+      S.Retype { axis = case.e_sym; ty = LL.Workgroup_reduce };
+    ]
+  in
+  let scheduled = S.apply sched case.opt in
+  ignore (L.link ~name:case.name scheduled : Context.t * Context.routine);
+  let omits = "lred_bound32: the emitted kernel does not spell the all-reduce" in
+  let binds = "lred_bound32: the emitted kernel binds the reduction loop instead of looping it" in
+  if not gpu then (
+    skipped ~backend:backend_name omits;
+    skipped ~backend:backend_name binds)
+  else (
+    Generated.assert_omits ~routine:case.name ~contains:all_reduce_marker omits;
+    Generated.assert_omits ~routine:case.name
+      ~contains:(Printf.sprintf "for (int32_t %s " (Ir.Indexing.symbol_ident case.e_sym))
+      binds)

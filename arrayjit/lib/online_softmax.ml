@@ -53,6 +53,17 @@ let scalar_node ~label ~(like : Tn.t) prec =
       Tn.update_memory_mode tn Tn.Virtual provenance;
       tn)
 
+(* The fused backward's per-pair [dp] local (gh-ocannl-1124): its value-width accumulation is the
+   one a lane geometry may reassociate, licensed by [online_softmax_backward] -- an approximate-tier
+   gate, pinned off by the [reproducible] profile -- which is the only thing that mints it. *)
+let dprob_label = "bwd_dprob"
+
+let reassociable_local (tn : Tn.t) =
+  String.equal tn.Tn.namespace namespace
+  && match tn.Tn.label with l :: _ -> String.equal l dprob_label | [] -> false
+
+let dprob_local ~like prec = scalar_node ~label:dprob_label ~like prec
+
 (* {1 Nests}
 
    Every [Accum_op] lowers to one top-level nest: serial loops from the outside in and a single
@@ -1257,7 +1268,7 @@ let find_backward r (nz : normalizer) : backward option =
     | p, _ -> p
   in
   let p_node = scalar_node ~label:"bwd_probability" ~like:p_tn prec in
-  let dp_node = scalar_node ~label:"bwd_dprob" ~like:dp_tn prec in
+  let dp_node = scalar_node ~label:dprob_label ~like:dp_tn prec in
   let ds_node = scalar_node ~label:"bwd_dscore" ~like:ds_tn prec in
   let acc_node = scalar_node ~label:"bwd_rowdot_acc" ~like:do_tn prec in
   let d_node = row_node ~label:"bwd_rowdot" ~like:nz.m prec in

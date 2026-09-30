@@ -168,6 +168,7 @@ test/operations/float_literal_forms.ml
     "(float)(" ^ ... ^ ")"
 test/operations/gpu_lane_reduction.ml
     "lane all-reduce into a scope local"
+    sprintf "for (int32_t %s "
 test/operations/gpu_serial_lanes.ml [also pins text this scan cannot name]
     "for ("
 test/operations/hardware_axes_parity.ml

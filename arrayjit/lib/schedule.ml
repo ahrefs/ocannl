@@ -5269,15 +5269,20 @@ let strip_comments stmts =
    backward's [dp = sum_e dO . v] ahead of the dQ and dK nests' channel loop. Its symbol and extent.
    A scope local is thread-private, so under a lane every thread holds the whole sum whichever way
    it is computed: serially by each lane (the loop's plain meaning), or by the lanes together as a
-   butterfly all-reduce ([Workgroup_reduce] over a local, see [C_syntax.try_lane_all_reduce]). An
-   inlined reduction in an expression (a [Local_scope] whose body loops, the recomputed [q . k]) is
-   not one: it stays refused, as stage 1 measured it. *)
+   butterfly all-reduce ([Workgroup_reduce] over a local, see [C_syntax.try_lane_all_reduce]). Only
+   the fused backward's own [dp] qualifies ({!Online_softmax.reassociable_local}): the all-reduce
+   reassociates the reduction, and the license for that is the approximate-tier gate that minted the
+   local, not the shape -- a program whose lowering happened to leave the same shape keeps its
+   serial order and its plain plan. An inlined reduction in an expression (a [Local_scope] whose
+   body loops, the recomputed [q . k]) is not one either: it stays refused, as stage 1 measured
+   it. *)
 let preamble_reduction (llc : Low_level.t) : (Indexing.symbol * int) option =
   match llc with
   | For_loop { index; from_ = 0; to_; body; axis = Serial } when to_ >= 0 -> (
       match strip_comments (Low_level.flat_lines [ body ]) with
       | [ Set_local (id, llsc) ]
-        when (not (scalar_loops llsc))
+        when Online_softmax.reassociable_local id.Low_level.tn
+             && (not (scalar_loops llsc))
              && Option.is_some (Low_level.accum_local_update_parts ~id llsc) ->
           Some (index, to_ + 1)
       | _ -> None)
@@ -5326,15 +5331,17 @@ let path_loops ?(lanes = false) ?(preamble_reductions = false) (nest : Low_level
   in
   go nest []
 
-(* The preamble reductions {!path_loops} [~lanes:true ~preamble_reductions:true] passes over in
-   [nest], outermost first. *)
-let lane_preamble_reductions (nest : Low_level.t) : (Indexing.symbol * int) list =
+(* The preamble reductions of the preamble directly ahead of the loop [lane] on [nest]'s lane path
+   ({!path_loops} [~lanes:true ~preamble_reductions:true]), in program order: the lane's siblings. A
+   preamble deeper on the path sits under the lane, where a retype would nest a workgroup slot
+   inside it; one higher up sits outside the serial loop the lane runs in. *)
+let lane_preamble_reductions ~lane (nest : Low_level.t) : (Indexing.symbol * int) list =
   let open Low_level in
   let path = path_loops ~lanes:true ~preamble_reductions:true nest in
   List.concat_map path ~f:(function
     | For_loop fc -> (
         match List.rev (strip_comments (flat_lines [ fc.body ])) with
-        | For_loop _ :: (_ :: _ as rev_preamble) ->
+        | For_loop inner :: (_ :: _ as rev_preamble) when Indexing.equal_symbol inner.index lane ->
             List.filter_map (List.rev rev_preamble) ~f:preamble_reduction
         | _ -> [])
     | _ -> [])
@@ -6301,10 +6308,11 @@ let lane_geometry ~block_size ~min_parallel ~(limits : Backend_intf.hardware_lim
                     | Preamble_refused | Preamble_duplicated -> []
                     | Preamble_cooperative ->
                         List.concat
-                          (List.map2_exn carrying plans ~f:(fun (n, _) p ->
+                          (List.map2_exn (List.zip_exn carrying lanes) plans
+                             ~f:(fun ((n, _), (_, (lane, _))) p ->
                                match (p.lp_split, p.lp_block) with
                                | None, [ (_, width) ] ->
-                                   List.filter_map (lane_preamble_reductions n.n_loops)
+                                   List.filter_map (lane_preamble_reductions ~lane n.n_loops)
                                      ~f:(fun (axis, extent) ->
                                        Option.some_if (extent = width)
                                          (Retype { axis; ty = Workgroup_reduce }))

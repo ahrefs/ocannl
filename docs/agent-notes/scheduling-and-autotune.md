@@ -61,8 +61,12 @@ files.
   Metal under lanes) and must precede exactly ONE loop: a nest with two sibling channel loops under
   one preamble (a fused dK+dV) is not reached. `test/operations/gpu_serial_lanes`; measured in `benchmarks/report-gh1003-stage1.md`.
 - One loop IS admitted into a lane preamble (gh-ocannl-1124): a `preamble_reduction`, a serial loop
-  whose body is ONE loop-free accumulation into a scope local (the fused backward's
-  `dp = sum_e dO . v` ahead of dK's and dQ's channel loop), per `gpu_lane_preamble_reduction`. An
+  whose body is ONE loop-free accumulation into the fused backward's own `dp` local
+  (`dp = sum_e dO . v` ahead of dK's and dQ's channel loop), per `gpu_lane_preamble_reduction`.
+  Provenance, not shape, admits it (`Online_softmax.reassociable_local`, in the schedule and the
+  renderer alike): the all-reduce reassociates, and the license is `online_softmax_backward`'s,
+  an approximate-tier gate. A same-shaped ordinary local keeps its plain plan and, hand-retyped
+  `Workgroup_reduce`, the hardware binding a staged reduction relies on. An
   inlined reduction inside an expression (a `Local_scope` whose body loops) stays refused in every
   mode. `cooperative` retypes a reduction whose extent is the lane's unsplit workgroup
   `Workgroup_reduce` — the lane's own `.x` slot, no lane axis nested inside the output lanes — and

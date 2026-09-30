@@ -6370,11 +6370,14 @@ module C_syntax (B : C_syntax_config) = struct
     with Vectorization_declined -> None
 
   (* The lane all-reduce (gh-ocannl-1124): a [Workgroup_reduce] loop whose body is ONE accumulation
-     into a scope local, [for e { acc := acc op contrib(e) }] -- the default GPU schedule retypes
-     the fused attention backward's [dp] preamble reduction so, beside a lane loop of the same
-     extent. A scope local is thread-private, so the loop's serial meaning is that EVERY thread ends
-     holding [acc op (the whole reduction)]; this is the lane-uniform result contract, and both
-     renderings below honour it:
+     into the fused attention backward's [dp] scope local ({!Online_softmax.reassociable_local}),
+     [for e { dp := dp op contrib(e) }] -- the default GPU schedule retypes that preamble reduction
+     so, beside a lane loop of the same extent. The provenance, not the local target, is the marker:
+     an explicitly staged reduction may bind a [Workgroup_reduce] loop over a thread-private local
+     to leave each lane its own partial for a later staged tree, and it keeps the hardware binding
+     it always had. A scope local is thread-private, so the loop's serial meaning is that EVERY
+     thread ends holding [acc op (the whole reduction)]; this is the lane-uniform result contract,
+     and both renderings below honour it:
 
      - the butterfly: each lane computes the contribution at its own index (the loop's symbol bound
      to the workgroup's [.x] register, the slot it shares with the output lanes -- no lane axis of
@@ -6391,11 +6394,11 @@ module C_syntax (B : C_syntax_config) = struct
      lanes outside the reduction), several simdgroups (which need a shared-memory broadcast and
      barrier this v1 does not render), a backend without shuffles (cc), a narrow residency, or a
      logged run. Binding the index like a [Workgroup] axis instead would leave each lane its own
-     term only -- wrong, not merely racy -- which is why this arm owns every local-target
-     [Workgroup_reduce] and never falls through to the binding.
+     term only -- wrong for this local, every reader of which wants the whole sum -- which is why
+     this arm owns it and never falls through to the binding.
 
-     [None] for any other body: those keep [try_warp_reduce]'s cell-target rendering and its
-     fallbacks. *)
+     [None] for any other body or local: those keep [try_warp_reduce]'s cell-target rendering and
+     its fallbacks, the hardware binding among them. *)
   and try_lane_all_reduce ctx ({ i; from_; to_; body; _ } as loop) () : PPrint.document option =
     let open PPrint in
     let extent = to_ - from_ + 1 in
@@ -6413,7 +6416,7 @@ module C_syntax (B : C_syntax_config) = struct
       | stmts -> stmts
     in
     match stmts with
-    | [ Low_level.Set_local (id, llsc) ] -> (
+    | [ Low_level.Set_local (id, llsc) ] when Online_softmax.reassociable_local id.Low_level.tn -> (
         match Low_level.accum_local_update_parts ~id llsc with
         | None -> None
         | Some (op, contrib) ->

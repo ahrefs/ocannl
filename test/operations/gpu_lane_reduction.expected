@@ -38,3 +38,11 @@ lred_coop64: the lane sits inside the serial query loop: true
 lred_coop64: the reduction loop is Workgroup_reduce: true
 lred_coop64: every cell of K holds the serial reference's exact value: true
 lred_coop64: the emitted kernel does not spell the all-reduce: true
+--- leg 7: an ordinary local in the same shape keeps the plain plan ---
+lred_plain32: no lane inside the serial query loop: true
+lred_plain32: the reduction loop is Serial: true
+lred_plain32: every cell of K holds the serial reference's exact value: true
+lred_plain32: the emitted kernel does not spell the all-reduce: true
+--- leg 8: a hand-retyped Workgroup_reduce over an ordinary local keeps its binding ---
+lred_bound32: the emitted kernel does not spell the all-reduce: true
+lred_bound32: the emitted kernel binds the reduction loop instead of looping it: true
