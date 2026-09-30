@@ -58,6 +58,17 @@ while read -r v; do unset "$v"; done < <(env | sed -nE 's/^((OMP|GOMP|KMP)_[A-Z0
 case $OUT/ in "$TREE"/*) echo "gh728_cells: <out-dir> must be outside the checkout $TREE" >&2; exit 2 ;; esac
 COMMIT=$(git -C "$TREE" rev-parse HEAD) || exit 2
 [ -z "$(git -C "$TREE" status --porcelain --untracked-files=all)" ] || COMMIT="$COMMIT+uncommitted"
+# An IGNORED dune-workspace is a build input git status cannot see (the worktree hook writes one; a
+# stray one in an ancestor can make dune build a different checkout). Every one from the checkout up
+# to / is recorded, path and contents, in the manifest.
+WORKSPACES=""
+d=$TREE
+while :; do
+  [ -f "$d/dune-workspace" ] && WORKSPACES="$WORKSPACES$d/dune-workspace: $(tr '\n' ' ' <"$d/dune-workspace")
+"
+  [ "$d" = / ] && break
+  d=$(dirname "$d")
+done
 (cd "$TREE" && dune build bin/projection_shape_bench.exe benchmarks/runners/ocannl/bench_gpt.exe) ||
   { echo "gh728_cells: build failed" >&2; exit 1; }
 PSB=$TREE/_build/default/bin/projection_shape_bench.exe
@@ -80,6 +91,7 @@ esac
 {
   echo "gh728_cells: backend=$BACKEND host=$(hostname) commit=$COMMIT repeats=$REPEATS batches=$BATCHES"
   echo "fixture: $FIXTURE: $FIXTURE_VERDICT"
+  if [ -n "$WORKSPACES" ]; then printf '%s' "$WORKSPACES" | sed 's/^/dune-workspace: /'; else echo "dune-workspace: none"; fi
   printf '%s\n' "$DEVICE" | sed 's/^/device: /'
   # Device selection is the box's configuration rather than a treatment: recorded, not cleared.
   env | grep -E '^(CUDA|HIP|ROCR)_VISIBLE_DEVICES=' | sed 's/^/device selection: /'
@@ -130,12 +142,14 @@ if len(rows) != 1:
 tune = rows[0].get("tune") or {}
 searched, n_search, n_replay = rows[0].get("searched"), tune.get("searches"), tune.get("replays")
 n_none = tune.get("no_searches")
+# A search that refused a timing window crowned its winner from an incomplete comparison.
+refused = sum((a.get("timings_contended") or 0) for a in tune.get("arms") or [])
 # An arm that neither searched nor replayed (a pre-search failure) ships the untuned default:
 # neither pass may carry one.
-ok = n_none == 0 and ((searched is True and (n_search or 0) > 0) if want == "search" else (
+ok = n_none == 0 and refused == 0 and ((searched is True and (n_search or 0) > 0) if want == "search" else (
     searched is False and n_search == 0 and (n_replay or 0) > 0))
 line = (f"   protocol: {want} pass searched={searched} searches={n_search} replays={n_replay}"
-        f" no_searches={n_none}")
+        f" no_searches={n_none} refused_windows={refused}")
 print(line + ("" if ok else "  -- NOT A " + want.upper() + " PASS"))
 sys.exit(0 if ok else 1)
 VERIFY
