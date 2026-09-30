@@ -18,6 +18,34 @@ type buffer_loc = { pool_id : int; offset : int } [@@deriving sexp, compare, equ
 
 type ctx_buffers = buffer_loc Map.M(Tnode).t [@@deriving sexp_of]
 
+type upload_arena = {
+  arena_pool_id : int;
+  arena_mode : Tnode.memory_mode option;
+      (** The residency hint the arena's slab was allocated with; only nodes with the same hint
+          share it. *)
+  capacity : int;
+  mutable used : int;  (** The bump pointer: bytes laid out so far, alignment padding included. *)
+  mutable last_tenant : (Tnode.t[@sexp.opaque]);
+      (** The node laid out last. Only a context value holding it may extend the arena -- and one
+          that does holds every earlier tenant too, since each extension required the same of the
+          value it extended and a derivation never drops a buffer. So a sibling value, a second
+          upload into the same earlier value, gets an arena of its own, and releasing one sibling
+          cannot free a slab the other's node lives in. *)
+}
+[@@deriving sexp_of]
+(** A working pool that host uploads of not-yet-allocated nodes are bump-packed into
+    (gh-ocannl-1125), so that loading many parameters with [Context.set_values] before any routine
+    links them costs a few pools rather than one each -- Metal binds at most [metal_max_pools] per
+    routine. *)
+
+type upload_arenas = { mutable arenas : upload_arena list } [@@deriving sexp_of]
+(** The upload arenas of one context lifecycle, shared by reference between the context values that
+    {!evolve_with_buffer} derives -- the values that share one [finalized] flag and so free their
+    pools together. A compile's child starts a fresh set: its pools must never share a slab with its
+    parent's, whose [finalize] frees them independently. *)
+
+let fresh_upload_arenas () = { arenas = [] }
+
 exception Backend_unavailable of { backend : string; detail : string }
 (** Device discovery established that this backend cannot be used on this machine: its library is
     not linked in, or the driver reports no devices. This is deliberately narrow — it is the only
@@ -621,6 +649,9 @@ type ('dev, 'runner, 'event) context = {
   mutable released_pool_ids : Set.M(Int).t;
       (** Pools this context has already released. Retained across a failed-finalize retry so a
           cleanup that freed some pools before raising never calls the backend free twice. *)
+  upload_arenas : upload_arenas;
+      (** This lifecycle's host-upload arenas (gh-ocannl-1125): shared with every context value
+          {!evolve_with_buffer} derives from this one, fresh in {!Device.make_child}. *)
   optimize_ctx : Low_level.optimize_ctx;
       (** The optimization context threaded through compilation: all OCANNL backends compile through
           the {!Low_level} IR, so this is concretely {!Low_level.optimize_ctx} (the abstraction for
