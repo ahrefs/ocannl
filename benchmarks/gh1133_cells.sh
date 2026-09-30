@@ -44,6 +44,10 @@
 #             duplicated (every lane recomputes it) or cooperative (the lanes all-reduce it) --
 #             the arms of gh-ocannl-1124 over the fused backward's dK nest, so a d1pre<M> cell is
 #             the one that exercises them; BASE may name this checkout for these
+#   fold<T>   treatment <T> plus --ocannl_online_softmax_block=16 (the single-pass block fold of
+#             gh-ocannl-1003, the `approximate` profile's setting; meaningful with a d1 <T>)
+#   b<T>      treatment <T> run by BASE's runner, for a same-flags A/B across revisions
+#             (gh-ocannl-1124: BASE is the previous revision; <T> is not `base`)
 #   d1<T>     treatment <T> (one of the above but base) with the online-softmax forward and the
 #             fused attention backward on -- treatment D1 of benchmarks/report-gh1002-fused-backward.md
 #             (the others are its treatment A)
@@ -52,7 +56,8 @@
 # "base fill1 fill256"), FIXTURE_DIR (default benchmarks/fixtures of this checkout), REF (default
 # base: the treatment the summary's ratio column divides by; a d1 treatment divides by d1REF),
 # KERNEL_TABLE (default 0; 1 prints every shipped kernel's min-of-20 time to the cell's .err, the
-# per-kernel attribution of gh-ocannl-1002).
+# per-kernel attribution of gh-ocannl-1002), REF_ALL (default unset: a treatment every cell's ratio
+# divides by, overriding REF's d1 pairing -- for the b<T> A/Bs).
 #
 # Exit: 0 all steps complete; 1 a cell or step failed; 2 usage; 130 interrupted.
 # The environment is cleared of OCANNL_*, BENCH_* and the OpenMP controls: every treatment is
@@ -93,7 +98,7 @@ echo "gh1133: $(date -u +%FT%TZ) root=$root base=$base out=$out cap=$cap backend
 echo "gh1133: fixtures: $fixtures; treatments: $treatments; ref: $ref; kernel table: $kernel_table; fixture dir: $fixture_dir; steps: $*"
 built=0 proven=0 failed=0
 
-runner_root() { case $1 in base) echo "$base" ;; *) echo "$root" ;; esac; }
+runner_root() { case $1 in base | b[!a]*) echo "$base" ;; *) echo "$root" ;; esac; }
 
 # The attention form's flags come first, the forward key ahead of the backward one: the
 # command-line reader takes the FIRST argument that begins with a key's spelling followed by a
@@ -108,6 +113,13 @@ flags_of() {
     prerefused | preduplicated | precooperative)
       echo "--ocannl_online_softmax=false --ocannl_gpu_lane_preamble_reduction=${1#pre}" ;;
     d1base) echo "gh1133: the base runner takes no d1 form" >&2; return 1 ;;
+    fold*)
+      local inner
+      inner=$(flags_of "${1#fold}") || return 1
+      # Last: the command-line reader takes the FIRST argument beginning with a key's spelling and
+      # a separator, so the block key's argument must follow the forward key's.
+      echo "$inner --ocannl_online_softmax_block=16" ;;
+    b[!a]*) flags_of "${1#b}" ;;
     d1*)
       local rest
       rest=$(flags_of "${1#d1}") || return 1
@@ -221,12 +233,13 @@ for step in "$@"; do
         for t in $treatments; do SEG=1 BENCH_STEPS=1 cell "$f" "$t" seg bench_gpt_diag; done
       done ;;
     summary)
-      python3 - "$out" "$treatments" "$ref" >"$out/summary.md" <<'PY' || failed=1
+      python3 - "$out" "$treatments" "$ref" "${REF_ALL:-}" >"$out/summary.md" <<'PY' || failed=1
 import json, os, re, statistics, sys
 out, treatments, ref_treatment = sys.argv[1], sys.argv[2].split(), sys.argv[3]
+ref_all = sys.argv[4] if len(sys.argv) > 4 else ""
 cells, missing = {}, []
 for name in sorted(os.listdir(out)):
-    m = re.fullmatch(r"(\w+)-(gpt2_mini\w*)-(base|(?:d1)?(?:fill\d+|keep|legacy|pre(?:refused|duplicated|cooperative)))-(r\d+)\.out", name)
+    m = re.fullmatch(r"(\w+)-(gpt2_mini\w*)-(base|b?(?:fold)?(?:d1)?(?:fill\d+|keep|legacy|pre(?:refused|duplicated|cooperative)))-(r\d+)\.out", name)
     if not m:
         continue
     rec = None
@@ -255,7 +268,7 @@ for (backend, fixture, treatment), reps in sorted(cells.items(), key=lambda kv: 
     spread = max(r["step_ms"]["p90"] / r["step_ms"]["p10"] for _, r in reps)
     queued = statistics.median(r.get("queued_step_ms") or 0.0 for _, r in reps)
     # A d1 treatment is compared with the d1 form of the reference (the same attention form).
-    rt = ("d1" + ref_treatment) if treatment.startswith("d1") else ref_treatment
+    rt = ref_all or (("d1" + ref_treatment) if treatment.startswith("d1") else ref_treatment)
     ref = med((backend, fixture, rt))
     if ref is None:
         # The comparison the summary advertises did not happen: an incomplete matrix.
