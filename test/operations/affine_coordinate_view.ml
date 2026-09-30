@@ -261,6 +261,13 @@ let () =
     ~own_right:[ h; e ]
     (vector ~length:2 [| sub; fx 16; sub |])
     (plain [| it h; it e; fx 0 |]);
+  (* The shape lowering actually emits: the trailing unit axis pinned to [0] rather than [Sub_axis]
+     (affine_view_executed runs it) — masked the same wrong way. *)
+  conflict ~name:"lowered tail vec [Sub;16;0] run 2 vs [h;e;0]" ~dims:[| 2; 9; 1 |]
+    ~ranges:[ (h, r 0 1); (e, r 0 8) ]
+    ~own_right:[ h; e ]
+    (vector ~length:2 [| sub; fx 16; fx 0 |])
+    (plain [| it h; it e; fx 0 |]);
   conflict ~name:"trailing-lane vec [Sub;4c;Sub] run 4 vs [1;e;0], thread c~e" ~dims:[| 2; 8; 1 |]
     ~ranges:[ (c, r 0 3); (e, r 0 7) ]
     ~own_left:[ c ] ~own_right:[ e ]

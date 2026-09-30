@@ -13,6 +13,7 @@ dynamic axis then [1] vs [2;2]: never meet                   query Disjoint     
 flat vec [Sub;4c] run 4 vs [h;e] (2x8)                       query Cross_thread oracle overlap
 flat vec [Sub;4c] run 4 vs cell [1;7]                        query Cross_thread oracle overlap
 trailing-lane tail vec [Sub;16;Sub] run 2 vs [h;e;0]         query Cross_thread oracle overlap
+lowered tail vec [Sub;16;0] run 2 vs [h;e;0]                 query Cross_thread oracle overlap
 trailing-lane vec [Sub;4c;Sub] run 4 vs [1;e;0], thread c~e  query Cross_thread oracle cross-thread
 diagonal [i;i] vs flat [Sub;5]: off-diagonal                 query Disjoint     oracle disjoint
 diagonal [i;i] vs flat [Sub;4]: on-diagonal                  query Cross_thread oracle overlap

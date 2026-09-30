@@ -4435,6 +4435,19 @@
  (libraries base stdio arrayjit.ir arrayjit.verdict))
 
 (test
+ (name affine_view_executed)
+ (package neural_nets_lib)
+ (enabled_if
+  (<> %{env:OCANNL_BACKEND=cc} metal))
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules affine_view_executed)
+ (libraries base ocannl stdio arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
  (name affine_extraction)
  (package neural_nets_lib)
  (deps
