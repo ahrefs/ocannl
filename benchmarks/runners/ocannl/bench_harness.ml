@@ -668,7 +668,11 @@ let print_census ?promote_locals ~backend ~limits ~static_indices opt =
   let promote_locals = Option.value promote_locals ~default:gpu in
   let preset o = if gpu then Sched.default_gpu ~limits o else Sched.default_cpu o in
   let zero_sched tns = if gpu then Sched.zero_expansion ~limits tns else [] in
-  let segs = Sched.fission_scheduled ~promote_locals ~preset ~zero_sched ~static_indices opt in
+  (* The default pipeline's own merge rule (gh-ocannl-1126), or this reconstructs another one. *)
+  let keep_mapping = Sched.fission_keep_mapping ~is_gpu:gpu ~limits in
+  let segs =
+    Sched.fission_scheduled ~promote_locals ?keep_mapping ~preset ~zero_sched ~static_indices opt
+  in
   Stdio.printf "default pipeline: %d segments\n" (List.length segs);
   List.iteri segs ~f:(fun i (kind, pre, sched, post) ->
       let dims = LL.launch_dims post.LL.llc in
@@ -817,7 +821,11 @@ let time_segments ?promote_locals ?(repeats = 20) ~backend ~limits ~static_indic
   let promote_locals = Option.value promote_locals ~default:gpu in
   let preset o = if gpu then Sched.default_gpu ~limits o else Sched.default_cpu o in
   let zero_sched tns = if gpu then Sched.zero_expansion ~limits tns else [] in
-  let segs = Sched.fission_scheduled ~promote_locals ~preset ~zero_sched ~static_indices opt in
+  (* The default pipeline's own merge rule (gh-ocannl-1126), or this reconstructs another one. *)
+  let keep_mapping = Sched.fission_keep_mapping ~is_gpu:gpu ~limits in
+  let segs =
+    Sched.fission_scheduled ~promote_locals ?keep_mapping ~preset ~zero_sched ~static_indices opt
+  in
   Stdio.printf "segment times (min of %d runs, ms):\n" repeats;
   let total = ref 0. in
   let declined = ref 0 in

@@ -120,7 +120,9 @@ let () =
     in
     let zero_sched tns = if is_gpu then Sched.zero_expansion ~limits tns else [] in
     List.map
-      (Sched.fission_scheduled ~promote_locals:is_gpu ~preset ~zero_sched ~static_indices (copy opt))
+      (Sched.fission_scheduled ~promote_locals:is_gpu
+         ?keep_mapping:(Sched.fission_keep_mapping ~is_gpu ~limits)
+         ~preset ~zero_sched ~static_indices (copy opt))
       ~f:(fun (_, _, _, post) -> post)
   in
   let digests posts =

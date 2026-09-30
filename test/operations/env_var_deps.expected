@@ -45,6 +45,7 @@ Configuration keys tracked as ambient dependencies, in the one spelling OCANNL r
   enable_device_only
   exit_stream_teardown_timeout
   fp16_arithmetic
+  gpu_fission_keep_mapping
   gpu_schedule_block_size
   gpu_schedule_min_parallel
   gpu_schedule_workgroup_fill

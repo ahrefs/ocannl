@@ -14,6 +14,10 @@ let get_symbol () =
   Int.incr unique_id;
   Symbol uid
 
+let discarding_symbols f =
+  let saved = !unique_id in
+  Exn.protect ~f ~finally:(fun () -> unique_id := saved)
+
 module CompareSymbol = struct
   type t = symbol = Symbol of int [@@deriving compare, equal, sexp, hash]
 end

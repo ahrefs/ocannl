@@ -126,8 +126,8 @@ let forward ?(model = model) ?lowered_transform ~name ~on ~block ~seq ~d_k () =
       })
 
 (* The default pipeline under [limits], as [Schedule.maybe_default_schedules] runs it (the fission
-   seam, locals promoted on a GPU, the GPU preset read against those limits), and whether any
-   segment's schedule carries a [Fold_mma]. *)
+   seam, locals promoted on a GPU, the GPU preset and the schedule-aware merge rule read against
+   those limits), and whether any segment's schedule carries a [Fold_mma]. *)
 let pipeline ~limits =
   let emitted = ref false in
   let gpu = Sched.backend_is_gpu backend_name in
@@ -135,7 +135,9 @@ let pipeline ~limits =
     let preset seg = if gpu then Sched.default_gpu ~limits seg else Sched.default_cpu seg in
     let zero_sched tns = if gpu then Sched.zero_expansion ~limits tns else [] in
     let segments =
-      Sched.fission_scheduled ~promote_locals:gpu ~preset ~zero_sched ~static_indices:[] o
+      Sched.fission_scheduled ~promote_locals:gpu
+        ?keep_mapping:(Sched.fission_keep_mapping ~is_gpu:gpu ~limits)
+        ~preset ~zero_sched ~static_indices:[] o
     in
     List.iter segments ~f:(fun (_, _, sched, _) ->
         if List.exists sched ~f:(function Sched.Fold_mma _ -> true | _ -> false) then

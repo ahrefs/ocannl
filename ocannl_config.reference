@@ -252,6 +252,15 @@
 # serially whenever the analysis bails, as before.
 #schedule_fission=true
 
+# If true (with schedule_fission, on GPU backends), fission's merge decision is schedule-aware: two
+# statements the race analysis would let share a kernel still get a kernel boundary when some
+# statement of the merged kernel would receive fewer Grid groups or fewer active threads of its own
+# loops under the default GPU schedule than it receives in a kernel of its own -- an alignment that
+# trims a nest's chain to a common prefix, or a neighbour that denies a nest its lane geometry. A
+# merge that keeps every statement's mapping still saves its launch. If false, fission merges
+# whatever the race analysis admits.
+#gpu_fission_keep_mapping=true
+
 # If true, backend compilation logs one stderr line per compiled kernel/segment with its launch
 # grid/block dimensions and statement count — for diffing what two compiles of nominally
 # identical code actually emit. Debugging aid; independent of the ppx_minidebug log levels.

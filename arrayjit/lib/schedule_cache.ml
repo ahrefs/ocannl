@@ -665,7 +665,8 @@ let objective_tag () =
    {!cache_key} (each name dispatches to an arm below, and an unknown name raises), so the
    enumeration cannot go stale against the implementation — which is what makes it usable as the
    thing the digest-completeness registry classifies config keys against (gh-ocannl-572). *)
-let key_components = [ "digest"; "backend"; "numerics"; "codegen"; "pool"; "device"; "timing" ]
+let key_components =
+  [ "digest"; "backend"; "numerics"; "codegen"; "fission"; "pool"; "device"; "timing" ]
 
 let cache_key ?objective ~timing_identity ~(limits : Backend_intf.hardware_limits) ~capabilities
     canonical ~backend =
@@ -686,6 +687,15 @@ let cache_key ?objective ~timing_identity ~(limits : Backend_intf.hardware_limit
         | "backend" -> sanitize backend
         | "numerics" -> "n" ^ numerics_tag ()
         | "codegen" -> "c" ^ codegen_tag ~limits ~capabilities ()
+        (* The inputs of the default GPU segmentation beyond the code (gh-ocannl-1126): a fissioned
+           winner's saved schedules are keyed by segment digests that replay recomputes, so a winner
+           must not be looked up under settings that segment the routine differently. Only the
+           settings some source sets contribute, so keys minted under the defaults are unchanged. *)
+        | "fission" -> (
+            match Utils.config_class_fingerprint (Utils.Keyed "fission") with
+            | "" -> ""
+            | resolved ->
+                "f" ^ String.prefix (Stdlib.Digest.to_hex (Stdlib.Digest.string resolved)) 8)
         (* The worker-pool signature (gh-ocannl-530): CPU crowns do not transfer across pools, so a
            pool change re-tunes instead of replaying. [None] (GPU backends) contributes nothing. *)
         | "pool" -> (
@@ -715,8 +725,10 @@ let cache_file ~dir ~key = Stdlib.Filename.concat dir (sanitize key ^ ".sexp")
    payload at a key can be decoded; this stamp says whether the directory's filenames were minted by
    the same [key_components] schema. Bump this once when that schema changes. Cache-open then
    discards the superseded generation wholesale, with no migration arm for each historical schema
-   (gh-ocannl-835). *)
-let cache_regime_version = 2
+   (gh-ocannl-835). 3: the [fission] component (gh-ocannl-1126) -- empty under the defaults, but the
+   default segmentation it stands for changed, so a regime-2 fissioned winner would replay into a
+   segmentation it was not saved against. *)
+let cache_regime_version = 3
 let regime_stamp_filename = ".ocannl-schedule-cache-regime"
 let regime_lock_filename = ".ocannl-schedule-cache.lock"
 let regime_stamp_file dir = Stdlib.Filename.concat dir regime_stamp_filename

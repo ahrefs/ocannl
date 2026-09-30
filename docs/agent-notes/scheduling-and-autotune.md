@@ -31,10 +31,25 @@ files.
   new unify rule a function of the chain alone, or the positional thread identity breaks. The
   slot arithmetic has one owner, `Schedule.launch_geometry_of_nests` (per-slot maxima BEFORE the
   `.z` fold, overflow = refusal), which `Sketch_families.predicted_launch_geometry` forwards to.
-  The lm_head is untouched by this: its segment carries `max_logits`, whose chain `(b, s)` trims
-  the logits nest's `(b, s, v)` to `(b, s)` -- an alignment trim left by fission's no-loss guard
-  comparing at a `max_chain` of 2, which is gh-ocannl-1126's to fix. `test/operations/gpu_parallel_prefix`;
+  The lm_head was untouched by this: its segment carried `max_logits`, whose chain `(b, s)` trims
+  the logits nest's `(b, s, v)` to `(b, s)` -- an alignment trim fission's no-loss guard let through
+  comparing at a `max_chain` of 2; the schedule-aware merge rule below cuts it. `test/operations/gpu_parallel_prefix`;
   measured by `benchmarks/gh1133_cells.sh`; the tables are on lukstafi/ocannl-staging#909 and ahrefs/ocannl#1133.
+- Fission's merge decision is schedule-aware on GPU backends (gh-ocannl-1126, `Schedule.keeps_mapping`,
+  config `gpu_fission_keep_mapping`): a merge the race analysis admits -- an aligned dependent merge,
+  and a conflict-free one, which it admits unconditionally -- is still refused when some statement
+  gets less of its OWN mapping merged than alone (fewer groups or active threads of its own loops,
+  read off `default_gpu`'s ops by `statement_mappings`). Judge per statement, never by the kernel's
+  largest thread count: the merged kernel's launch can be wide while one nest in it runs on 256
+  threads -- the composed `v.grad` trimmed to `(h, e)` by `w_v.grad` at batch 1 (86 ms per layer on
+  Metal), the fused dV denied its lanes by dK, the logits trimmed by their row max. The probes run
+  under `Indexing.discarding_symbols`: `split` mints symbols, and a discarded probe's would shift every
+  later minted name. Autotuner fission call sites pass `Schedule.fission_keep_mapping` too, or their
+  segmentation stops being the untuned default's (`fission_equivalence`). The segmentation's inputs
+  beyond the code -- the gate, `gpu_schedule_block_size`, `_min_parallel`, `_workgroup_fill` -- are
+  the schedule cache's `fission` key component: a fissioned winner replays by re-segmenting. A cut needs no retest after
+  scope-local resolution: a cut that resolution merges back is serial either way (the reason is in
+  the comment on `keeps_mapping`). `test/operations/gpu_fission_mapping`.
 - A parallel loop under a serial loop is reachable only past lane-uniform scalar work
   (gh-ocannl-1003). The presets' chain is the single-child loop path, which stops at the
   online-softmax hoist's preamble (`for t { p := P[s, t]; for e { O[s, e] += p * V[t, e] } }`);
@@ -109,7 +124,7 @@ files.
   candidate-generation mode — the autotuner seeds fine-flagged per-segment sketches when the finer
   segmentation mints new digests, and a fine winner records `finer_fission` in its cache entry so
   replay re-segments identically — never the default pipeline, which would pay the extra launches
-  unconditionally for parallelism its 2-loop presets cannot use. Since gh-ocannl-577 the
+  unconditionally; the default cuts only where a merge costs a nest its mapping (gh-ocannl-1126, above). Since gh-ocannl-577 the
   coverage verdict is also a construction-time refutation in the matmul family tree
   (`matmul_coverage_witness`): this is sound because `companion_geometry`'s Ok/Error never depends
   on the geometry its `annotate` callback emits — only on the lowering, the site chain, the fused

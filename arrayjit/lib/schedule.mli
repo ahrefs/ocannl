@@ -773,9 +773,17 @@ val zero_expansion :
     whole-node (a serial kernel renders them as [memset]). Exposed for callers (e.g. the autotuner)
     that replicate the default fission pipeline with custom per-segment schedules. *)
 
+val fission_keep_mapping :
+  is_gpu:bool -> limits:Backend_intf.hardware_limits -> (Low_level.optimized -> schedule) option
+(** The [keep_mapping] schedule {!maybe_default_schedules} passes to {!fission_scheduled}:
+    {!default_gpu} at [limits] on a GPU backend while config [gpu_fission_keep_mapping] is on (the
+    default), [None] otherwise. A caller replicating the default segmentation (the autotuner's
+    fissioned candidates) passes the same, so its segments are the untuned pipeline's. *)
+
 val fission_scheduled :
   ?promote_locals:bool ->
   ?arity_cuts:bool ->
+  ?keep_mapping:(Low_level.optimized -> schedule) ->
   preset:(Low_level.optimized -> schedule) ->
   zero_sched:(Tnode.t list -> schedule) ->
   static_indices:Indexing.static_symbol list ->
@@ -808,6 +816,15 @@ val fission_scheduled :
     site's kernel seeds at full arity. The finer segmentation costs launches the default pipeline
     does not want to pay unconditionally, so this is a candidate-generation mode (the autotuner
     times it), never the default.
+
+    [keep_mapping] (gh-ocannl-1126): the schedule each candidate kernel would actually receive
+    ({!fission_keep_mapping}). A merge the rules above admit -- an aligned dependent merge, and a
+    conflict-free one, which they admit unconditionally -- is still refused when some statement of
+    the merged kernel gets fewer [Grid] groups or fewer active threads of its OWN loops under
+    [keep_mapping] than it gets in a kernel of its own: the kernel boundary is kept rather than a
+    nest's mapping lost. Only the refused merges add cuts, so a merge that keeps every mapping (an
+    elementwise tail over the same chain) still saves its launch. Ignored under [arity_cuts]. [None]
+    (the default): the legality rules alone decide.
 
     [promote_locals] (default [false]): promote statement-crossing [Local] scratch to [On_device]
     before segmentation. A nest whose only writes land in [Local] scratch gets no parallel chain
