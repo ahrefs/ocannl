@@ -1982,6 +1982,11 @@ let pack_prec_label p =
   | Some pr -> Printf.sprintf " pack%s" (Ir.Ops.prec_string pr)
   | None -> ""
 
+(* The batch flavor's label (gh-ocannl-643, gh-ocannl-728): " bgrid" for the batch-grid twin, "
+   bgrid-in" for its interior-batch-inside-the-row-blocks order. *)
+let batch_label p =
+  if not p.sk_batch_grid then "" else if p.sk_batch_inner then " bgrid-in" else " bgrid"
+
 let spec_label = function
   | Whole (W_saved s) -> Printf.sprintf "W_saved[%d ops]" (List.length s)
   | Whole (W_preset { block_size }) -> Printf.sprintf "W_preset[bs=%s]" (bs_label block_size)
@@ -1995,14 +2000,14 @@ let spec_label = function
         (if p.sk_hoist then " hoist" else "")
         (if p.sk_grid then " grid" else "")
         (if p.sk_pack_rest then " packrest" else "")
-        (if p.sk_batch_grid then " bgrid" else "")
+        (batch_label p)
         (if p.sk_epilogue then " ep" else "")
   | Whole (W_sketch p) ->
       Printf.sprintf "W_sketch[%s %dx%dx%d/%dx%d%s%s%s]"
         (if p.sk_gpu then "gpu" else "cpu")
         p.sk_bm p.sk_bn p.sk_bk p.sk_tm p.sk_tn
         (if p.sk_hoist then " hoist" else "")
-        (if p.sk_batch_grid then " bgrid" else "")
+        (batch_label p)
         (if p.sk_epilogue then " ep" else "")
   | Fiss (F_preset { block_size; privatize; config_thresholds }) ->
       Printf.sprintf "F_preset[bs=%s%s%s]" (bs_label block_size)
@@ -2025,7 +2030,7 @@ let spec_label = function
                   (if p.sk_hoist then " hoist" else "")
                   (if p.sk_grid then " grid" else "")
                   (if p.sk_pack_rest then " packrest" else "")
-                  (if p.sk_batch_grid then " bgrid" else "")
+                  (batch_label p)
                   (if p.sk_epilogue then " ep" else ""))))
   | Fiss (F_split { sites }) ->
       Printf.sprintf "F_split[%s]"

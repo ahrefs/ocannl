@@ -309,6 +309,7 @@ let () =
             sk_swizzle = Some LL.Swizzle_b128;
             sk_depth = 1;
             sk_batch_grid = false;
+            sk_batch_inner = false;
             sk_pack_prec = None;
             sk_tile = None;
           }

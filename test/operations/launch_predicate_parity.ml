@@ -74,6 +74,7 @@ let key (q : Autotune.sketch_params) =
     q.Autotune.sk_tn,
     q.Autotune.sk_simd,
     q.Autotune.sk_batch_grid,
+    q.Autotune.sk_batch_inner,
     q.Autotune.sk_epilogue,
     q.Autotune.sk_depth )
 
@@ -200,6 +201,52 @@ let () =
   in
   p_empty "prediction: every GPU seed launches with exactly the geometry the seeder predicted"
     ~over:all_gpu unfaithful;
+
+  (* The same faithfulness on the gpt2 projection's own layout, [d[b,s,h,e] += x[b,s,k] * w[h,e,k]]:
+     its head loop is INTERIOR, so the bgrid-in twins (gh-ocannl-728) seed here — the interior batch
+     between the row and column blocks, the row blocks folding with [b] onto [.z] — and their
+     prediction is a different grid order from the batch-grid twins'. *)
+  let pcaptured = ref None in
+  let _ctx, _r =
+    let xv = x () in
+    let wv =
+      NTDSL.init ~l:"lpp_wp" ~prec:Ir.Ops.single ~o:[ hh; jj; kk ]
+        ~f:(Ll_test.cycle ~dims:[| hh; jj; kk |] ~modulus:11 ~offset:(-5.) ~stride:0.5)
+        ()
+    in
+    let%op out = xv +* "bsk;hjk=>bshj" wv in
+    Context.compile
+      ~lowered_transform:(fun opt ->
+        pcaptured := Some opt;
+        [ opt ])
+      (Context.auto ())
+      (named "lpp_proj" (Train.forward out))
+      Ir.Indexing.Empty
+  in
+  let popt = Option.value_exn ~here:[%here] !pcaptured in
+  let psite = Option.value_exn ~here:[%here] (Autotune.detect_matmul popt.LL.llc) in
+  let proj_gpu =
+    List.filter (Autotune.sketch_seed_params ~is_gpu:true ~is_cpu:false ~limits:mma_limits popt)
+      ~f:(fun q -> q.Autotune.sk_gpu)
+  in
+  p "prediction: the projection site seeds bgrid-in twins of both pipelines"
+    (List.exists proj_gpu ~f:(fun q -> q.Autotune.sk_batch_inner && q.Autotune.sk_mma)
+    && List.exists proj_gpu ~f:(fun q -> q.Autotune.sk_batch_inner && not q.Autotune.sk_mma));
+  p_all "prediction: every projection GPU seed launches with exactly the predicted geometry"
+    proj_gpu ~f:(fun q ->
+      match Sched.apply (Autotune.sketch_schedule ~accum_prec ~p:q popt) popt with
+      | o ->
+          let actual = Sched.launch_geometry_of_dims (LL.launch_dims o.LL.llc) in
+          let ok = Poly.equal (Autotune.matmul_launch_geometry psite q) actual in
+          if not ok then
+            Stdio.eprintf
+              "projection prediction MISMATCH: mma=%b batch_grid=%b inner=%b bm=%d bn=%d\n"
+              q.Autotune.sk_mma q.Autotune.sk_batch_grid q.Autotune.sk_batch_inner q.Autotune.sk_bm
+              q.Autotune.sk_bn;
+          ok
+      | exception exn ->
+          Stdio.eprintf "projection prediction: schedule FAILED: %s\n" (Exn.to_string exn);
+          false);
 
   (* === Parity, dimension by dimension, on one real seed ===
 

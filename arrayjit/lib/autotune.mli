@@ -148,6 +148,7 @@ type sketch_params = {
   sk_conv : bool;
   sk_epilogue : bool;
   sk_batch_grid : bool;
+  sk_batch_inner : bool;
   sk_swizzle : Ir.Low_level.swizzle_kind option;
   sk_depth : int;
   sk_pack_prec : Ir.Ops.prec option;
@@ -369,7 +370,9 @@ module Family_decision : sig
   type t =
     | Fusion of [ `Unfused | `Fused ]  (** The root: the epilogue-fusion flavor (gh-ocannl-613). *)
     | Pipeline of [ `Blocktile | `Tensorized ]  (** Which composed pipeline. *)
-    | Batch of [ `Serial | `Grid ]  (** The batch-geometry twin (gh-ocannl-643), GPU only. *)
+    | Batch of [ `Serial | `Grid | `Grid_inner ]
+        (** The batch-geometry twin (gh-ocannl-643), GPU only; [`Grid_inner] binds the interior
+            batch loops inside the row blocks (gh-ocannl-728, [sk_batch_inner]). *)
     | Packing of [ `In_kernel | `Hoisted ]
         (** The CPU blocktile pipeline's link-time packing twin (gh-ocannl-470). *)
     | Geometry of geometry_choice  (** The tile geometry, per the pipeline's own menu. *)

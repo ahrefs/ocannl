@@ -1,35 +1,55 @@
 qkv: batch-grid twins are seeded: true
 qkv: one batch-grid twin per serial-batch geometry: true
-qkv: batch-serial seeds precede their batch-grid twins: true
+qkv: no bgrid-in twin on a site without interior batch loops: true
+qkv: batch-serial seeds precede their batch-grid twins, which precede the bgrid-in ones: true
 qkv: every seed's schedule constructs and validates: true
-qkv: batch-grid twins launch grid.z = batch product; serial twins launch grid.z = 1: true
+qkv: batch-grid twins launch grid.z = batch product; serial twins launch grid.z = 1; bgrid-in twins fold the row blocks with the outer batch: true
 qkv: the fold arithmetic decodes innermost-mod, outermost-div: true
 qkv: every seed compiles and runs: true
 qkv: every candidate matches the serial reference bitwise: true
 qkv: the generated source folds the batch axes onto the .z register: true
 qkv_companion: batch-grid twins are seeded: true
 qkv_companion: one batch-grid twin per serial-batch geometry: true
-qkv_companion: batch-serial seeds precede their batch-grid twins: true
+qkv_companion: no bgrid-in twin on a site without interior batch loops: true
+qkv_companion: batch-serial seeds precede their batch-grid twins, which precede the bgrid-in ones: true
 qkv_companion: every seed's schedule constructs and validates: true
-qkv_companion: batch-grid twins launch grid.z = batch product; serial twins launch grid.z = 1: true
+qkv_companion: batch-grid twins launch grid.z = batch product; serial twins launch grid.z = 1; bgrid-in twins fold the row blocks with the outer batch: true
 qkv_companion: the fold arithmetic decodes innermost-mod, outermost-div: true
 qkv_companion: every seed compiles and runs: true
 qkv_companion: every candidate matches the serial reference bitwise: true
 qkv_companion: the generated source folds the batch axes onto the .z register: true
+projection: batch-grid twins are seeded: true
+projection: one batch-grid twin per serial-batch geometry: true
+projection: one interior-inside-row-blocks (bgrid-in) twin per serial-batch geometry: true
+projection: every bgrid-in twin is a batch-grid seed: true
+projection: batch-serial seeds precede their batch-grid twins, which precede the bgrid-in ones: true
+projection: every seed's schedule constructs and validates: true
+projection: batch-grid twins launch grid.z = batch product; serial twins launch grid.z = 1; bgrid-in twins fold the row blocks with the outer batch: true
+projection: bgrid-in twins launch the interior batch on grid.y: true
+projection: the fold arithmetic decodes innermost-mod, outermost-div: true
+projection: every seed compiles and runs: true
+projection: every candidate matches the serial reference bitwise: true
+projection: the generated source folds the batch axes onto the .z register: true
 interior: batch-grid twins are seeded: true
 interior: one batch-grid twin per serial-batch geometry: true
-interior: batch-serial seeds precede their batch-grid twins: true
+interior: one interior-inside-row-blocks (bgrid-in) twin per serial-batch geometry: true
+interior: every bgrid-in twin is a batch-grid seed: true
+interior: batch-serial seeds precede their batch-grid twins, which precede the bgrid-in ones: true
 interior: every seed's schedule constructs and validates: true
-interior: batch-grid twins launch grid.z = batch product; serial twins launch grid.z = 1: true
+interior: batch-grid twins launch grid.z = batch product; serial twins launch grid.z = 1; bgrid-in twins fold the row blocks with the outer batch: true
+interior: bgrid-in twins launch the interior batch on grid.y: true
 interior: the fold arithmetic decodes innermost-mod, outermost-div: true
 interior: every seed compiles and runs: true
 interior: every candidate matches the serial reference bitwise: true
 interior: the generated source folds the batch axes onto the .z register: true
 interior_companion: batch-grid twins are seeded: true
 interior_companion: one batch-grid twin per serial-batch geometry: true
-interior_companion: batch-serial seeds precede their batch-grid twins: true
+interior_companion: one interior-inside-row-blocks (bgrid-in) twin per serial-batch geometry: true
+interior_companion: every bgrid-in twin is a batch-grid seed: true
+interior_companion: batch-serial seeds precede their batch-grid twins, which precede the bgrid-in ones: true
 interior_companion: every seed's schedule constructs and validates: true
-interior_companion: batch-grid twins launch grid.z = batch product; serial twins launch grid.z = 1: true
+interior_companion: batch-grid twins launch grid.z = batch product; serial twins launch grid.z = 1; bgrid-in twins fold the row blocks with the outer batch: true
+interior_companion: bgrid-in twins launch the interior batch on grid.y: true
 interior_companion: the fold arithmetic decodes innermost-mod, outermost-div: true
 interior_companion: every seed compiles and runs: true
 interior_companion: every candidate matches the serial reference bitwise: true

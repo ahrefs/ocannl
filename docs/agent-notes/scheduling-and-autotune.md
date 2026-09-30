@@ -194,6 +194,18 @@ files.
   rejection key is what an autotune search groups declines by and the fixes differ.
   Pinned end-to-end by `test/operations/schedule_batch_grid.ml` (structure everywhere, execution
   and emitted-source fold on GPU backends).
+  A third flavor, `bgrid-in` (`sk_batch_inner`, the `batch-grid-inner` decision of the family tree's
+  batch level, gh-ocannl-728), exists only on sites with INTERIOR batch loops (`m_bi`, the q/k/v projections'
+  heads): the interior loops hoist above the row's in-block remainder instead of above `m_i`, so
+  the grid nest is `m_bo; row blocks; m_bi; column blocks` — heads on `.y` beside the column
+  blocks, row blocks folded with `m_bo` onto `.z`, i.e. the launch order of the heads-merged
+  layout. One layout type (`batch_layout`) drives the site, zero and companion nests; the row
+  geometry comes in two halves (`row_parts`: block split / remainder / register split) so the
+  hoist lands between them. Trap: a NON-dividing `Split` wraps the remainder loop's body in its
+  guard, which `Swap` cannot pass, so the zero and companion nests `Pad` the row loop first under
+  this flavor (the site nest is padded by the pipeline at such geometries anyway). A menu change
+  like this one bumps `Schedule_cache.entry_version`: a stored crown is only the best of the menu
+  that searched it.
   The gate covers the WORKGROUP's dimensions the same way (gh-ocannl-679):
   `hardware_limits.max_workgroup_dims` is an `(int * int * int) option` of per-dimension caps
   beside — not instead of — `max_threads_per_workgroup`, which caps only the thread PRODUCT.
