@@ -81,7 +81,13 @@ let dk_nest ?(minted = true) ~name ~e_n ~d_n () =
      ([Online_softmax.reassociable_local]); [~minted:false] gives the same nest an ordinary
      local. *)
   let dp_node =
-    if minted then Ir.Online_softmax.dprob_local ~like:a_tn Ir.Ops.single
+    if minted then (
+      (* Minted under the approximate-tier gate that licenses the reassociation, as the rewrite
+         mints it. *)
+      Ir.Online_softmax.set_backward_enabled (Some true);
+      let tn = Ir.Online_softmax.dprob_local ~like:a_tn Ir.Ops.single in
+      Ir.Online_softmax.set_backward_enabled None;
+      tn)
     else node ~dims:[| 1 |] (name ^ "_dp")
   in
   L.virtualize dp_node;
@@ -239,6 +245,13 @@ let () =
 
 let () =
   printf "--- leg 7: an ordinary local in the same shape keeps the plain plan ---\n";
+  let like = node ~dims:[| 1 |] "lred_ungated" in
+  Ir.Online_softmax.set_backward_enabled (Some false);
+  p "the fused backward's dp local is not minted without online_softmax_backward"
+    (match Ir.Online_softmax.dprob_local ~like Ir.Ops.single with
+    | _ -> false
+    | exception Invalid_argument _ -> true);
+  Ir.Online_softmax.set_backward_enabled None;
   run ~lanes:false ~reduction_axis:LL.Serial ~emits_all_reduce:false
     (dk_nest ~minted:false ~name:"lred_plain32" ~e_n:32 ~d_n:32 ());
   printf "--- leg 8: a hand-retyped Workgroup_reduce over an ordinary local keeps its binding ---\n";

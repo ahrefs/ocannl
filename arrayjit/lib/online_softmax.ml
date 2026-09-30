@@ -62,8 +62,6 @@ let reassociable_local (tn : Tn.t) =
   String.equal tn.Tn.namespace namespace
   && match tn.Tn.label with l :: _ -> String.equal l dprob_label | [] -> false
 
-let dprob_local ~like prec = scalar_node ~label:dprob_label ~like prec
-
 (* {1 Nests}
 
    Every [Accum_op] lowers to one top-level nest: serial loops from the outside in and a single
@@ -652,6 +650,15 @@ let backward_enabled () =
   match !backward_override with
   | Some b -> b
   | None -> Utils.get_global_flag ~default:false ~arg_name:"online_softmax_backward"
+
+(* Minting the marker IS the license, so the only public way to it runs under the gate: the rewrite
+   below mints it only there too. *)
+let dprob_local ~like prec =
+  if not (backward_enabled ()) then
+    invalid_arg
+      "Online_softmax.dprob_local: the fused backward's dp local is minted only under \
+       online_softmax_backward, the gate that licenses reassociating its reduction";
+  scalar_node ~label:dprob_label ~like prec
 
 let backward_provenance = Tn.Site "1002:fused-backward-row-dot"
 
