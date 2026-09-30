@@ -164,12 +164,23 @@ let cycle ~dims ~modulus ~offset ~stride idcs =
    measured. It also mints no context to leak. *)
 let capture fwd = Context.lowered_for_decisions (Context.auto ()) fwd Ir.Indexing.Empty
 
+(* Every field two seeds of one site can differ by, so no two seeds share a label: the tables and
+   the finalists round's recompile key on it. The register tile, swizzle, pack precision and conv
+   flag print only when set, so the historical scalar labels are unchanged; a pair still colliding
+   on a field this omits is a counted failure at phase 1, not a merged row. *)
 let geom_label (q : Autotune.sketch_params) =
-  Printf.sprintf "%s%s %dx%dx%d/%dx%d%s%s%s%s%s"
+  Printf.sprintf "%s%s%s %dx%dx%d/%dx%d%s%s%s%s%s%s%s%s"
+    (if q.sk_conv then "conv-" else "")
     (if q.sk_mma then "mma-" else "")
     (if q.sk_gpu then "gpu" else "cpu")
     q.sk_bm q.sk_bn q.sk_bk q.sk_tm q.sk_tn
     (if q.sk_depth > 1 then Printf.sprintf " pd%d" q.sk_depth else "")
+    (match q.sk_tile with Some t -> " tile " ^ Ir.Register_tile.to_string t | None -> "")
+    (match q.sk_swizzle with
+    | Some Ir.Low_level.Swizzle_elem -> " swz-elem"
+    | Some Ir.Low_level.Swizzle_b128 -> " swz-b128"
+    | None -> "")
+    (match q.sk_pack_prec with Some pr -> " pack" ^ Ir.Ops.prec_string pr | None -> "")
     (if q.sk_hoist then " hoist" else "")
     (if q.sk_grid then " grid" else "")
     (if q.sk_pack_rest then " packrest" else "")

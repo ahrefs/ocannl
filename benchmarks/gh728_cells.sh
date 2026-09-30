@@ -9,7 +9,7 @@
 #
 # Legs, in order (each writes <leg>.out / <leg>.err under <out-dir>, then an `exit: N` line):
 #   psb_exact_fwd   bin/projection_shape_bench <repeats> <batches> qkv fwd both --with-mma (exact)
-#   psb_exact_rev   the same seeds in the reversed rotation, no search          (order control)
+#   psb_exact_rev   the same, in the reversed rotation                          (order control)
 #   psb_approx_fwd  psb_exact_fwd under --ocannl_profile=approximate            (tf32 tensorized seeds
 #                   on CUDA; HIP has no f32 tile shape, so there it is a replicate of the scalar legs)
 #   gpt_default     bench_gpt, untuned, with the per-kernel table              (the shipped default)
@@ -45,6 +45,13 @@ TREE=$(cd "$(dirname "$0")/.." && pwd -P) || exit 2
 while read -r v; do unset "$v"; done < <(env | sed -n 's/^\(OCANNL_[A-Z0-9_]*\)=.*/\1/p')
 while read -r v; do unset "$v"; done < <(env | sed -n 's/^\(BENCH_[A-Z0-9_]*\)=.*/\1/p')
 
+# The commit the binaries are built from, marked when the tree carries anything that commit does
+# not: a modified tracked file, or an untracked non-ignored one (a stray root `dune` or
+# `dune-workspace` is a build input too). Read BEFORE the build and the legs, so nothing this run
+# writes can mark it; <out-dir> is refused inside the tree for the same reason.
+case $OUT/ in "$TREE"/*) echo "gh728_cells: <out-dir> must be outside the checkout $TREE" >&2; exit 2 ;; esac
+COMMIT=$(git -C "$TREE" rev-parse HEAD) || exit 2
+[ -z "$(git -C "$TREE" status --porcelain --untracked-files=all)" ] || COMMIT="$COMMIT+uncommitted"
 (cd "$TREE" && dune build bin/projection_shape_bench.exe benchmarks/runners/ocannl/bench_gpt.exe) ||
   { echo "gh728_cells: build failed" >&2; exit 1; }
 PSB=$TREE/_build/default/bin/projection_shape_bench.exe
@@ -65,7 +72,7 @@ case $BACKEND in
 esac
 [ -n "$DEVICE" ] || { echo "gh728_cells: could not identify the $BACKEND device" >&2; exit 2; }
 {
-  echo "gh728_cells: backend=$BACKEND host=$(hostname) commit=$(git -C "$TREE" rev-parse HEAD)$(git -C "$TREE" diff --quiet HEAD -- || echo +uncommitted) repeats=$REPEATS batches=$BATCHES"
+  echo "gh728_cells: backend=$BACKEND host=$(hostname) commit=$COMMIT repeats=$REPEATS batches=$BATCHES"
   echo "fixture: $FIXTURE: $FIXTURE_VERDICT"
   printf '%s\n' "$DEVICE" | sed 's/^/device: /'
 } | tee "$OUT/manifest.txt"
@@ -85,7 +92,10 @@ PIN=(--ocannl_backend="$BACKEND")
 APPROX=(--ocannl_profile=approximate)
 
 leg psb_exact_fwd "$PSB" "$REPEATS" "$BATCHES" qkv fwd both --with-mma "${PIN[@]}"
-leg psb_exact_rev "$PSB" "$REPEATS" "$BATCHES" qkv rev seeds --with-mma "${PIN[@]}"
+# The reversed rotation runs the same mode as the forward leg -- searches included -- so the two
+# finalists rounds are timed in the same (search-loaded) process state and differ in visiting order
+# only; the second set of searches is also a replicate of what the tuner crowns.
+leg psb_exact_rev "$PSB" "$REPEATS" "$BATCHES" qkv rev both --with-mma "${PIN[@]}"
 leg psb_approx_fwd "$PSB" "$REPEATS" "$BATCHES" qkv fwd both --with-mma "${APPROX[@]}" "${PIN[@]}"
 
 leg gpt_default env BENCH_FIXTURE="$FIXTURE" BENCH_KERNEL_TABLE=1 "$GPT" "${PIN[@]}"
@@ -97,6 +107,27 @@ for profile in exact approx; do
   for pass in search replay; do
     leg "gpt_${profile}_$pass" env BENCH_FIXTURE="$FIXTURE" BENCH_TUNE=1 BENCH_KERNEL_TABLE=1 \
       "$GPT" ${extra[@]+"${extra[@]}"} --ocannl_autotune_cache_dir="$cache" "${PIN[@]}"
+    # The two-pass protocol is what the replay's kernel table is quoted for, so it is verified off
+    # the runner's own result line rather than assumed from the exit status: the first pass must
+    # have searched, and the second must have replayed every arm and searched none -- a replay over
+    # an incomplete cache searches the missing arms and would publish a search-loaded table.
+    (
+      set -o pipefail
+      python3 - "$OUT/gpt_${profile}_$pass.out" "$pass" <<'VERIFY' 2>&1 | tee -a "$OUT/manifest.txt"
+import json, sys
+path, want = sys.argv[1], sys.argv[2]
+rows = [json.loads(l) for l in open(path) if l.startswith('{"framework"')]
+if len(rows) != 1:
+    sys.exit(f"   protocol: {path}: expected one result line, found {len(rows)}")
+tune = rows[0].get("tune") or {}
+searched, n_search, n_replay = rows[0].get("searched"), tune.get("searches"), tune.get("replays")
+ok = (searched is True and (n_search or 0) > 0) if want == "search" else (
+    searched is False and n_search == 0 and (n_replay or 0) > 0)
+line = f"   protocol: {want} pass searched={searched} searches={n_search} replays={n_replay}"
+print(line + ("" if ok else "  -- NOT A " + want.upper() + " PASS"))
+sys.exit(0 if ok else 1)
+VERIFY
+    ) || FAILED=1
   done
 done
 echo "gh728_cells: done, failed=$FAILED" | tee -a "$OUT/manifest.txt"
