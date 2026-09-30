@@ -133,6 +133,7 @@ let known_config_keys =
       "gpu_schedule_block_size";
       "gpu_schedule_min_parallel";
       "gpu_schedule_workgroup_fill";
+      "gpu_lane_preamble_reduction";
       "automatic_cpu_schedule";
       "cpu_schedule_min_parallel";
       "schedule_fission";
@@ -318,6 +319,7 @@ let config_key_classification : (config_key_class * string * string list) list =
         "gpu_schedule_block_size";
         "gpu_schedule_min_parallel";
         "gpu_schedule_workgroup_fill";
+        "gpu_lane_preamble_reduction";
       ] );
     ( Search_shaping,
       "it defines the untuned default pipeline, which a search seeds from and reports against; a \

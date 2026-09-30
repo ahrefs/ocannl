@@ -42,8 +42,12 @@ let minted : (Minted_key.t, Tn.t) Hashtbl.t = Hashtbl.create (module Minted_key)
 let reset () = Hashtbl.clear minted
 let () = Tn.before_accessibility_snapshot := reset :: !Tn.before_accessibility_snapshot
 
+(* Memoized per [like], label AND precision: one scalar per role and width, so a request at another
+   precision is a node of its own rather than the first request's node at the wrong width. *)
 let scalar_node ~label ~(like : Tn.t) prec =
-  Hashtbl.find_or_add minted (like.Tn.uid, label) ~default:(fun () ->
+  Hashtbl.find_or_add minted
+    (like.Tn.uid, label ^ "@" ^ Ops.prec_string prec)
+    ~default:(fun () ->
       let tn =
         Tn.create ~namespace (Tn.Specified prec) ~id:(fresh_id ()) ~label:(label :: like.Tn.label)
           ~unpadded_dims:(lazy [| 1 |])
@@ -52,6 +56,23 @@ let scalar_node ~label ~(like : Tn.t) prec =
       in
       Tn.update_memory_mode tn Tn.Virtual provenance;
       tn)
+
+(* The fused backward's per-pair [dp] local (gh-ocannl-1124): its value-width accumulation is the
+   one a lane geometry may reassociate, licensed by [online_softmax_backward] -- an approximate-tier
+   gate, pinned off by the [reproducible] profile -- which is the only thing that mints it. *)
+let dprob_label = "bwd_dprob"
+
+(* The identities [mint_dprob] minted: the marker is membership here, which no public field of a
+   node can forge (a node built with this module's namespace and label is not in it). Never cleared
+   -- a node's uid is never reused, and a [reset] of the memo table must not revoke the license of a
+   node already in some lowered code. *)
+let reassociable : int Hash_set.t = Hash_set.create (module Int)
+let reassociable_local (tn : Tn.t) = Hash_set.mem reassociable tn.Tn.uid
+
+let mint_dprob ~like prec =
+  let tn = scalar_node ~label:dprob_label ~like prec in
+  Hash_set.add reassociable tn.Tn.uid;
+  tn
 
 (* {1 Nests}
 
@@ -641,6 +662,15 @@ let backward_enabled () =
   match !backward_override with
   | Some b -> b
   | None -> Utils.get_global_flag ~default:false ~arg_name:"online_softmax_backward"
+
+(* Minting the marker IS the license, so the only public way to it runs under the gate: the rewrite
+   below mints it only there too. *)
+let dprob_local ~like prec =
+  if not (backward_enabled ()) then
+    invalid_arg
+      "Online_softmax.dprob_local: the fused backward's dp local is minted only under \
+       online_softmax_backward, the gate that licenses reassociating its reduction";
+  mint_dprob ~like prec
 
 let backward_provenance = Tn.Site "1002:fused-backward-row-dot"
 
@@ -1257,7 +1287,7 @@ let find_backward r (nz : normalizer) : backward option =
     | p, _ -> p
   in
   let p_node = scalar_node ~label:"bwd_probability" ~like:p_tn prec in
-  let dp_node = scalar_node ~label:"bwd_dprob" ~like:dp_tn prec in
+  let dp_node = mint_dprob ~like:dp_tn prec in
   let ds_node = scalar_node ~label:"bwd_dscore" ~like:ds_tn prec in
   let acc_node = scalar_node ~label:"bwd_rowdot_acc" ~like:do_tn prec in
   let d_node = row_node ~label:"bwd_rowdot" ~like:nz.m prec in
@@ -1322,9 +1352,11 @@ let find_backward r (nz : normalizer) : backward option =
     if not grad then Some (p_code, p, ds)
     else
       (* [dp]'s value-width loop binds a symbol of its own: one bound by two sibling loops makes the
-         routine uncacheable. It sits in the lane-uniform preamble, which is why the dQ and dK nests
-         get no lane geometry from the default GPU annotator (a preamble must be loop-free, since
-         every lane would recompute it); see the gh-1002/1003 record. *)
+         routine uncacheable. It sits in the lane-uniform preamble as a plain accumulation into a
+         scope local -- the shape the default GPU annotator admits into a lane preamble
+         ([Schedule.preamble_reduction], gh-ocannl-1124), where the lanes all-reduce it or each
+         recompute it per [gpu_lane_preamble_reduction]. Keep it that shape: an inlined reduction in
+         an expression would keep the nest off the lanes. *)
       let e_sym = Idx.get_symbol () in
       let dp_sym = function Chan 0 -> e_sym | r -> sym r in
       let* dp_term = transplant a_env dp_sym a_rhs in

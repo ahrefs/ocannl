@@ -634,10 +634,38 @@ val aligned_chains :
     for the query instead of bailing it as a bare materialized write — the write it stands for is
     not bare by the time the code is validated. *)
 
+(** How the default GPU schedule's lane geometry treats a preamble reduction — a serial loop
+    accumulating into the fused attention backward's [dp] scope local ahead of the lane loop,
+    [dp = Σ_e dO·v] (gh-ocannl-1124); only that local qualifies
+    ({!Online_softmax.reassociable_local}), since the cooperative form reassociates under the fused
+    backward's approximate-tier license. [Preamble_refused]: such a nest keeps its plain plan (the
+    gh-ocannl-1003 stage-1 rule). [Preamble_duplicated]: the nest takes lanes and every lane
+    recomputes the reduction serially, in its summation order. [Preamble_cooperative]: a reduction
+    whose extent is the lane's whole one-loop workgroup and the device's [simdgroup_width] is
+    retyped [Workgroup_reduce], sharing the lane's slot, and renders as a butterfly all-reduce
+    leaving the sum in every lane; a kernel holding any other admitted reduction keeps its plain
+    plan, never duplicated lanes (a renderer that still cannot shuffle runs the loop in every lane,
+    the retype's serial meaning). Config [gpu_lane_preamble_reduction], whose [auto] default
+    resolves per device ({!lane_preamble_reduction_for}). *)
+type lane_preamble_reduction = Preamble_refused | Preamble_duplicated | Preamble_cooperative
+[@@deriving sexp_of, equal]
+
+val gpu_lane_preamble_reduction : unit -> lane_preamble_reduction option
+(** Config [gpu_lane_preamble_reduction] ([auto], the default, is [None] | [refused] | [duplicated]
+    | [cooperative]). *)
+
+val lane_preamble_reduction_for : Backend_intf.hardware_limits -> lane_preamble_reduction
+(** The treatment {!default_gpu} applies at [limits] absent an explicit [?preamble_reduction]: the
+    configured mode, or under [auto] the device's economics — [Preamble_cooperative] where
+    {!Backend_intf.hardware_limits}' [lane_scalar_recompute_cheap] holds (measured: Metal, CUDA),
+    [Preamble_refused] otherwise (HIP, the C backends, anything unmeasured), since the lanes
+    recompute each pair's scalar preamble once per lane (gh-ocannl-1124). *)
+
 val default_gpu :
   ?block_size:int ->
   ?min_parallel:int ->
   ?workgroup_fill:int ->
+  ?preamble_reduction:lane_preamble_reduction ->
   ?limits:Backend_intf.hardware_limits ->
   Low_level.optimized ->
   schedule
@@ -672,9 +700,10 @@ val default_gpu :
     past loop-free lane-uniform scalar work (declarations and assignments of scope locals -- the
     online-softmax hoist's value pass,
     [for (b, s, h) { for t { p := P[s, t]; for e { O[s, e] += p * V[t, e] } } }]; a preamble holding
-    an inlined reduction is excluded, since every lane would recompute it), the chain extends
-    through that preamble uncapped: the loops above the serial loop become [Grid] loops (slots
-    [>= 2] fold onto [.z]) and the loop past it a [Workgroup] lane,
+    an inlined reduction is excluded, since every lane would recompute it; a preamble reduction loop
+    into a scope local is admitted per [?preamble_reduction], see {!type-lane_preamble_reduction}),
+    the chain extends through that preamble uncapped: the loops above the serial loop become [Grid]
+    loops (slots [>= 2] fold onto [.z]) and the loop past it a [Workgroup] lane,
     [Grid (b, s, h) -> Serial t -> Workgroup e] — taken when the planner finds such nests one common
     topology, the launch fits the device's caps, and it has more threads than the plain plan's
     geometry. The race analysis is the same: thread identity is the tuple of chain symbols wherever
@@ -772,6 +801,14 @@ val zero_expansion :
     segment's nodes, else the two-loop presets. Below [min_parallel] (largest node) the zeros stay
     whole-node (a serial kernel renders them as [memset]). Exposed for callers (e.g. the autotuner)
     that replicate the default fission pipeline with custom per-segment schedules. *)
+
+val statement_mappings : Low_level.t -> schedule -> (int * int) list
+(** The hardware mapping [schedule] gives each top-level statement of the code, as
+    [(groups, active threads)] of the statement's OWN loops, read off the ops: what schedule-aware
+    fission ({!fission_keep_mapping}) compares between a merged kernel and a statement alone. A
+    [Workgroup_reduce] retype shares the slot of the statement's widest [Workgroup] loop (the lane
+    geometry's cooperative preamble reduction, gh-ocannl-1124), adding threads only past its width.
+*)
 
 val fission_keep_mapping :
   is_gpu:bool -> limits:Backend_intf.hardware_limits -> (Low_level.optimized -> schedule) option

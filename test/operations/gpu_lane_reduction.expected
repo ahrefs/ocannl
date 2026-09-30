@@ -1,0 +1,69 @@
+--- leg 1: equal widths at one simdgroup, cooperative ---
+lred_coop32: the mapping probe counts 4096 active threads (a reduce lane adds none): true
+lred_coop32: Grid (h, t, b) and a 32-wide lane: true
+lred_coop32: the lane sits inside the serial query loop: true
+lred_coop32: the reduction loop is Workgroup_reduce: true
+lred_coop32: every cell of K holds the serial reference's exact value: true
+lred_coop32: the emitted kernel spells the all-reduce: true
+--- leg 2: the same nest, duplicated ---
+lred_dup32: the mapping probe counts 4096 active threads (a reduce lane adds none): true
+lred_dup32: Grid (h, t, b) and a 32-wide lane: true
+lred_dup32: the lane sits inside the serial query loop: true
+lred_dup32: the reduction loop is Serial: true
+lred_dup32: every cell of K holds the serial reference's exact value: true
+lred_dup32: the emitted kernel does not spell the all-reduce: true
+--- leg 3: refused keeps the plain plan ---
+lred_refused32: no lane inside the serial query loop: true
+lred_refused32: the reduction loop is Serial: true
+lred_refused32: every cell of K holds the serial reference's exact value: true
+lred_refused32: the emitted kernel does not spell the all-reduce: true
+--- leg 4: unequal key and value widths keep the plain plan ---
+lred_e16_d32: no lane inside the serial query loop: true
+lred_e16_d32: the reduction loop is Serial: true
+lred_e16_d32: every cell of K holds the serial reference's exact value: true
+lred_e16_d32: the emitted kernel does not spell the all-reduce: true
+lred_e64_d32: no lane inside the serial query loop: true
+lred_e64_d32: the reduction loop is Serial: true
+lred_e64_d32: every cell of K holds the serial reference's exact value: true
+lred_e64_d32: the emitted kernel does not spell the all-reduce: true
+--- leg 5: a partial simdgroup keeps the plain plan; the renderer declines it too ---
+lred_coop16: no lane inside the serial query loop: true
+lred_coop16: the reduction loop is Serial: true
+lred_coop16: every cell of K holds the serial reference's exact value: true
+lred_coop16: the emitted kernel does not spell the all-reduce: true
+lred_coop16r: the mapping probe counts 2048 active threads (a reduce lane adds none): true
+lred_coop16r: Grid (h, t, b) and a 16-wide lane: true
+lred_coop16r: the lane sits inside the serial query loop: true
+lred_coop16r: the reduction loop is Workgroup_reduce: true
+lred_coop16r: every cell of K holds the serial reference's exact value: true
+lred_coop16r: the emitted kernel does not spell the all-reduce: true
+--- leg 6: several simdgroups keep the plain plan; the renderer declines them (v1) ---
+lred_coop64: no lane inside the serial query loop: true
+lred_coop64: the reduction loop is Serial: true
+lred_coop64: every cell of K holds the serial reference's exact value: true
+lred_coop64: the emitted kernel does not spell the all-reduce: true
+lred_coop64r: the mapping probe counts 8192 active threads (a reduce lane adds none): true
+lred_coop64r: Grid (h, t, b) and a 64-wide lane: true
+lred_coop64r: the lane sits inside the serial query loop: true
+lred_coop64r: the reduction loop is Workgroup_reduce: true
+lred_coop64r: every cell of K holds the serial reference's exact value: true
+lred_coop64r: the emitted kernel does not spell the all-reduce: true
+--- leg 7: an ordinary local in the same shape keeps the plain plan ---
+the fused backward's dp local is not minted without online_softmax_backward: true
+the dp local minted for the same node at another precision is a node of its own, at that one: true
+the dp local minted again at its own precision is the same node: true
+a node forged with the dp local's namespace and label is not reassociable: true
+lred_plain32: no lane inside the serial query loop: true
+lred_plain32: the reduction loop is Serial: true
+lred_plain32: every cell of K holds the serial reference's exact value: true
+lred_plain32: the emitted kernel does not spell the all-reduce: true
+--- leg 8: a hand-retyped Workgroup_reduce over an ordinary local keeps its binding ---
+lred_bound32: the emitted kernel does not spell the all-reduce: true
+lred_bound32: the emitted kernel binds the reduction loop instead of looping it: true
+--- leg 9: auto resolves from the device's economics ---
+auto on a device where per-lane recompute is cheap is cooperative: true
+auto on an unmeasured device is refused: true
+auto on the run's backend resolves to its measured mode: true
+on a cheap-recompute device the default schedule is the resolved mode's: true
+on an unmeasured device the default schedule is the resolved mode's: true
+on the run's device the default schedule is the resolved mode's: true

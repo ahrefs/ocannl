@@ -68,6 +68,7 @@ keyed: codegen -- it changes the emitted code or the mechanics a search measures
 
 keyed: fission -- it decides the default fission segmentation on GPU backends: since gh-ocannl-1126 the merge decision compares the default GPU schedule's per-statement mappings, so these are inputs of the segmentation itself, and a fissioned winner's saved per-segment schedules are keyed by segment digests that replay recomputes -- a winner stored under one setting would find another segmentation under another ([Schedule.default_schedule_fingerprint] also records them for the [default_ms] diagnostic)
   gpu_fission_keep_mapping
+  gpu_lane_preamble_reduction
   gpu_schedule_block_size
   gpu_schedule_min_parallel
   gpu_schedule_workgroup_fill

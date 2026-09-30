@@ -435,7 +435,16 @@ let train_step ~bwd =
 (* The top-level statements of the GPU pipeline's segments that compute a node named by [writes]:
    they write it and read something, which leaves out the gradients' zeroing kernels. *)
 let gpu_statements (o : LL.optimized) ~writes =
-  S.maybe_default_schedules ~backend_name:"metal" ~static_indices:[] o
+  (* At the economics measured on Metal and CUDA (gh-ocannl-1124): [auto] then gives dK and dQ their
+     lanes, as on those devices. *)
+  let limits =
+    {
+      Ir.Backend_intf.no_hardware_limits with
+      Ir.Backend_intf.simdgroup_width = Some 32;
+      lane_scalar_recompute_cheap = true;
+    }
+  in
+  S.maybe_default_schedules ~backend_name:"metal" ~limits ~static_indices:[] o
   |> List.concat_map ~f:(fun (seg : LL.optimized) -> LL.flat_lines [ seg.LL.llc ])
   |> List.filter ~f:(fun stmt ->
       let accesses = LL.affine_accesses stmt in
@@ -450,6 +459,25 @@ let rec hardware (llc : LL.t) =
   | LL.For_loop { body; _ } -> hardware body
   | LL.Seq (a, b) -> hardware a || hardware b
   | LL.If { body; _ } | LL.Scan_loop { body; _ } -> hardware body
+  | _ -> false
+
+(* A [Workgroup] lane bound inside a [Serial] loop: the lane geometry's shape, whatever the preamble
+   holds. *)
+let rec lane_inside_serial ?(under = false) (llc : LL.t) =
+  match llc with
+  | LL.For_loop { axis = LL.Workgroup; _ } when under -> true
+  | LL.For_loop { axis = LL.Serial; body; _ } -> lane_inside_serial ~under:true body
+  | LL.For_loop { body; _ } | LL.If { body; _ } | LL.Scan_loop { body; _ } ->
+      lane_inside_serial ~under body
+  | LL.Seq (a, b) -> lane_inside_serial ~under a || lane_inside_serial ~under b
+  | _ -> false
+
+(* A [Workgroup_reduce] loop: the cooperative preamble reduction (gh-ocannl-1124). *)
+let rec reduce_lane (llc : LL.t) =
+  match llc with
+  | LL.For_loop { axis = LL.Workgroup_reduce; _ } -> true
+  | LL.For_loop { body; _ } | LL.If { body; _ } | LL.Scan_loop { body; _ } -> reduce_lane body
+  | LL.Seq (a, b) -> reduce_lane a || reduce_lane b
   | _ -> false
 
 let () =
@@ -470,6 +498,13 @@ let () =
       p_all
         (Printf.sprintf "%s: every nest writing it runs under a Grid or Workgroup loop" what)
         stmts ~f:hardware);
+  (* gh-ocannl-1124: dK's own nest takes the lanes -- its preamble's [dp] no longer keeps it on the
+     plain plan -- with [dp] computed by the lanes together. *)
+  let dk = gpu_statements fused_opt ~writes:(String.is_suffix ~suffix:"k.grad") in
+  p_all "fused dK: every nest writing it binds a Workgroup lane inside the serial query loop" dk
+    ~f:lane_inside_serial;
+  p_all "fused dK: every nest writing it computes dp as a Workgroup_reduce over the lanes" dk
+    ~f:reduce_lane;
   let close g w = Float.(abs (g -. w) <= 1e-4 *. max 1. (abs w)) in
   p "the fused step's parameter gradients are not identically zero"
     (Array.exists fused ~f:(fun v -> Float.(v <> 0.)));

@@ -37,6 +37,7 @@ ternop_syntax [Ir.C_syntax.C_syntax_config.ternop_syntax Ir.C_syntax.Pure_C_conf
 to_doc [Ir.Assignments.to_doc Ir.Low_level.to_doc Ir.Ndarray.to_doc]
 to_doc_cstyle [Ir.Low_level.to_doc_cstyle]
 to_doc_inline [Ir.Ndarray.to_doc_inline]
+try_lane_all_reduce [Ir.C_syntax.C_syntax.try_lane_all_reduce]
 try_localize_serial_reduce [Ir.C_syntax.C_syntax.try_localize_serial_reduce]
 try_mma_fragment_scope [Ir.C_syntax.C_syntax.try_mma_fragment_scope]
 try_vectorize [Ir.C_syntax.C_syntax.try_vectorize]
@@ -85,6 +86,7 @@ test/einsum/test_cse-cse_d_fwd.ll.expected [ll] extension .ll.expected; markers 
 test/operations/canonical_render.expected [ll] markers ll-assign
 test/operations/concat_loop_symbols.expected [derived] beside test/operations/concat_loop_symbols.ml
 test/operations/cost_model_floor.expected [derived] beside test/operations/cost_model_floor.ml
+test/operations/gpu_lane_reduction.expected [derived] beside test/operations/gpu_lane_reduction.ml
 test/operations/gpu_serial_lanes.expected [derived] beside test/operations/gpu_serial_lanes.ml
 test/operations/ll_printer_constants.expected [derived] beside test/operations/ll_printer_constants.ml
 test/operations/log_index_width_narrow.c.expected [c] extension .c.expected; markers c-decl-banner c-for c-logic-banner c-prec-cast c-restrict ll-assign routine-log
@@ -164,6 +166,9 @@ test/operations/fission_schedule.ml
     "gid."
 test/operations/float_literal_forms.ml
     "(float)(" ^ ... ^ ")"
+test/operations/gpu_lane_reduction.ml
+    " " ^ ... ^ " = 0;"
+    "lane all-reduce into a scope local"
 test/operations/gpu_serial_lanes.ml [also pins text this scan cannot name]
     "for ("
 test/operations/hardware_axes_parity.ml
