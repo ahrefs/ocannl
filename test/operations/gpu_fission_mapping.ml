@@ -36,7 +36,11 @@ let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~d
 (* The GPU pipeline is what the cases are about: on a C backend it is still built (and executed, its
    hardware loops rendered serially) under a GPU backend's name. *)
 let gpu_name = if S.backend_is_gpu backend_name then backend_name else "metal"
-let limits = Ir.Backend_intf.no_hardware_limits
+
+(* At the economics measured on Metal and CUDA (gh-ocannl-1124): the configured [auto] gives the
+   fused backward's dK and dQ their lanes, as on those devices. *)
+let limits =
+  { Ir.Backend_intf.no_hardware_limits with Ir.Backend_intf.lane_scalar_recompute_cheap = true }
 
 (* A hermetic copy: fission promotes placements of the record it is given. *)
 let copy (o : LL.optimized) =

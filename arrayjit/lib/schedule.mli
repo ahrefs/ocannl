@@ -644,12 +644,21 @@ val aligned_chains :
     whose extent is the lane's whole workgroup is retyped [Workgroup_reduce], sharing the lane's
     slot, and renders as a butterfly all-reduce leaving the sum in every lane (the serial loop in
     every lane where the shuffle cannot render it); other extents are duplicated. Config
-    [gpu_lane_preamble_reduction]. *)
+    [gpu_lane_preamble_reduction], whose [auto] default resolves per device
+    ({!lane_preamble_reduction_for}). *)
 type lane_preamble_reduction = Preamble_refused | Preamble_duplicated | Preamble_cooperative
 [@@deriving sexp_of, equal]
 
-val gpu_lane_preamble_reduction : unit -> lane_preamble_reduction
-(** Config [gpu_lane_preamble_reduction] ([refused] | [duplicated] | [cooperative]). *)
+val gpu_lane_preamble_reduction : unit -> lane_preamble_reduction option
+(** Config [gpu_lane_preamble_reduction] ([auto], the default, is [None] | [refused] | [duplicated]
+    | [cooperative]). *)
+
+val lane_preamble_reduction_for : Backend_intf.hardware_limits -> lane_preamble_reduction
+(** The treatment {!default_gpu} applies at [limits] absent an explicit [?preamble_reduction]: the
+    configured mode, or under [auto] the device's economics — [Preamble_cooperative] where
+    {!Backend_intf.hardware_limits}' [lane_scalar_recompute_cheap] holds (measured: Metal, CUDA),
+    [Preamble_refused] otherwise (HIP, the C backends, anything unmeasured), since the lanes
+    recompute each pair's scalar preamble once per lane (gh-ocannl-1124). *)
 
 val default_gpu :
   ?block_size:int ->

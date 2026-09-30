@@ -6203,15 +6203,26 @@ type lane_preamble_reduction = Preamble_refused | Preamble_duplicated | Preamble
 let gpu_lane_preamble_reduction () =
   match
     String.lowercase
-      (String.strip
-         (Utils.get_global_arg ~arg_name:"gpu_lane_preamble_reduction" ~default:"cooperative"))
+      (String.strip (Utils.get_global_arg ~arg_name:"gpu_lane_preamble_reduction" ~default:"auto"))
   with
-  | "refused" -> Preamble_refused
-  | "duplicated" -> Preamble_duplicated
-  | "cooperative" -> Preamble_cooperative
+  | "auto" -> None
+  | "refused" -> Some Preamble_refused
+  | "duplicated" -> Some Preamble_duplicated
+  | "cooperative" -> Some Preamble_cooperative
   | other ->
       invalid_arg
-        ("gpu_lane_preamble_reduction: expected refused, duplicated or cooperative, got " ^ other)
+        ("gpu_lane_preamble_reduction: expected auto, refused, duplicated or cooperative, got "
+       ^ other)
+
+(* [auto] resolves from the device's economics ({!Backend_intf.hardware_limits}'s
+   [lane_scalar_recompute_cheap]): the lanes recompute each pair's scalar preamble ([p], [ds]) once
+   per lane, which Metal and CUDA absorb and HIP does not (gh-ocannl-1124). *)
+let lane_preamble_reduction_for (limits : Backend_intf.hardware_limits) =
+  match gpu_lane_preamble_reduction () with
+  | Some mode -> mode
+  | None ->
+      if limits.Backend_intf.lane_scalar_recompute_cheap then Preamble_cooperative
+      else Preamble_refused
 
 (* Lane geometry (gh-ocannl-1003 stage 1). A nest whose parallel loop sits under a serial loop past
    a lane-uniform preamble -- the online-softmax hoist's value pass, [for (b, s, h) { for t { p :=
@@ -6530,7 +6541,7 @@ let default_gpu_presets ?block_size ?min_parallel ?workgroup_fill ?preamble_redu
        ~preamble_reduction:
          (match preamble_reduction with
          | Some p -> Lazy.from_val p
-         | None -> lazy (gpu_lane_preamble_reduction ()))
+         | None -> lazy (lane_preamble_reduction_for limits))
        opt)
 
 let default_gpu ?block_size ?min_parallel ?workgroup_fill ?preamble_reduction
@@ -7481,12 +7492,14 @@ let default_schedule_fingerprint ~backend_name =
          [default_ms] timed under the two-loop presets describes another algorithm. [keep_mapping]
          (gh-ocannl-1126): the segmentation itself depends on those mappings. *)
       let keep = Lazy.force gpu_fission_keep_mapping in
-      (* [lane-reductions-v1] (gh-ocannl-1124): lanes over a preamble reduction, per [preamble]. *)
+      (* [lane-reductions-v1] (gh-ocannl-1124): lanes over a preamble reduction, per [preamble];
+         [auto] resolves per device from the limits, which the cache key hashes whole. *)
       let preamble =
         match gpu_lane_preamble_reduction () with
-        | Preamble_refused -> "refused"
-        | Preamble_duplicated -> "duplicated"
-        | Preamble_cooperative -> "cooperative"
+        | None -> "auto"
+        | Some Preamble_refused -> "refused"
+        | Some Preamble_duplicated -> "duplicated"
+        | Some Preamble_cooperative -> "cooperative"
       in
       [%string
         "gpu:policy=small-leading-v1+lanes-v1+fold-mma-v1+lane-plans-v1+lane-reductions-v1:fission=%{fission#Bool}:keep_mapping=%{keep#Bool}:block_size=%{bs}:min_parallel=%{mp}:workgroup_fill=%{fill#Int}:preamble=%{preamble}"]

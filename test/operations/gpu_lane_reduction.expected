@@ -55,3 +55,10 @@ lred_plain32: the emitted kernel does not spell the all-reduce: true
 --- leg 8: a hand-retyped Workgroup_reduce over an ordinary local keeps its binding ---
 lred_bound32: the emitted kernel does not spell the all-reduce: true
 lred_bound32: the emitted kernel binds the reduction loop instead of looping it: true
+--- leg 9: auto resolves from the device's economics ---
+auto on a device where per-lane recompute is cheap is cooperative: true
+auto on an unmeasured device is refused: true
+auto on the run's backend resolves to its measured mode: true
+on a cheap-recompute device the default schedule is the resolved mode's: true
+on an unmeasured device the default schedule is the resolved mode's: true
+on the run's device the default schedule is the resolved mode's: true

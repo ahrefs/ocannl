@@ -272,6 +272,16 @@ type hardware_limits = {
 
           Always [false] on the GPU backends, whose 16-bit story is their native types and
           tensor-core shapes rather than a CPU vector width. *)
+  lane_scalar_recompute_cheap : bool;
+      (** Device economics (gh-ocannl-1124): whether scalar work every lane of a lane geometry
+          recomputes redundantly -- the per-pair preamble a lane nest repeats in each of its lanes
+          (the fused attention backward's [p], [dp], [ds]) -- is cheap relative to a thread's serial
+          walk over the channel loop that the plain plan pays it once for. Measured: true on Metal
+          (M4 Max) and CUDA (RTX, rog-nv), whose dK and dQ nests on lanes cut the D1 training step
+          by 2-9%; false on HIP (gfx1151), where the same lanes cost 7-20% against the plain dK
+          plan. [false] -- today's behaviour, the plain plan -- wherever unmeasured, and on the C
+          backends, which run no lane geometry. Read by the default GPU schedule's
+          [gpu_lane_preamble_reduction = auto]. *)
   worker_pool_tag : string option;
       (** Compact signature of the worker pool timings execute on ([w8P], [w24], ...), filled by the
           CPU backends from the pool-uniformity policy (gh-ocannl-530). Enters the autotune
@@ -372,6 +382,7 @@ let no_hardware_limits =
     peak_flops = None;
     peak_memory_bandwidth = None;
     native_fp16_arithmetic = false;
+    lane_scalar_recompute_cheap = false;
     worker_pool_tag = None;
     codegen_tag = None;
   }

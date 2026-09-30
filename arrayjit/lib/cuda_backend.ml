@@ -2091,6 +2091,8 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
               else None);
            simd_vector_bytes = 0;
            native_fp16_arithmetic = false;
+           (* gh-ocannl-1124: measured true on the RTX of rog-nv; see the field. *)
+           lane_scalar_recompute_cheap = true;
            worker_pool_tag = None;
            (* Filled fresh by the accessor below, not here: both inputs are process-mutable
               ([Train.CDSL.enable_all_debugs] flips the debug settings at any point), and this

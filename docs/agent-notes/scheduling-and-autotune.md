@@ -77,7 +77,12 @@ files.
   Measured on Metal (D1 training, lukstafi/ocannl-staging PR for gh-ocannl-1124): duplicated is a
   1.07-1.45x step REGRESSION (every lane pays the value width per pair), cooperative a 0.94-0.98x
   win, and it lanes dQ too -- fission then cuts dQ from the row dot `D`, whose merge would now cost
-  dQ its mapping. `test/operations/gpu_lane_reduction`, and leg 6 of `gpu_serial_lanes` pins dK's
+  dQ its mapping. CUDA agrees (0.91-0.98x); HIP (gfx1151) LOSES 1.07-1.20x, and not from workgroup
+  width (widening the lanes to `gpu_schedule_workgroup_fill` was measured neutral on Metal and CUDA,
+  worse on HIP, and reverted): every lane recomputes the pair's scalar preamble (`p`, `ds`), which
+  the plain plan pays once per thread over its channel loop. So the default `auto` resolves per
+  device from `hardware_limits.lane_scalar_recompute_cheap` (Metal, CUDA true; HIP, cc and anything
+  unmeasured false, i.e. refused) -- a device fact on the limits seam, never a backend name. `test/operations/gpu_lane_reduction`, and leg 6 of `gpu_serial_lanes` pins dK's
   own nest.
 - **A contraction inside a scan body is tensorized by rewriting the whole scan's owner, not by
   `Tensorize`** (gh-ocannl-1003, `Schedule.Fold_mma`): `rewrite_loop` does not enter a scan, and

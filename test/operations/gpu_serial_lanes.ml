@@ -435,7 +435,12 @@ let train_step ~bwd =
 (* The top-level statements of the GPU pipeline's segments that compute a node named by [writes]:
    they write it and read something, which leaves out the gradients' zeroing kernels. *)
 let gpu_statements (o : LL.optimized) ~writes =
-  S.maybe_default_schedules ~backend_name:"metal" ~static_indices:[] o
+  (* At the economics measured on Metal and CUDA (gh-ocannl-1124): [auto] then gives dK and dQ their
+     lanes, as on those devices. *)
+  let limits =
+    { Ir.Backend_intf.no_hardware_limits with Ir.Backend_intf.lane_scalar_recompute_cheap = true }
+  in
+  S.maybe_default_schedules ~backend_name:"metal" ~limits ~static_indices:[] o
   |> List.concat_map ~f:(fun (seg : LL.optimized) -> LL.flat_lines [ seg.LL.llc ])
   |> List.filter ~f:(fun stmt ->
       let accesses = LL.affine_accesses stmt in

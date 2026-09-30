@@ -24,7 +24,10 @@
    loop; 7. the same nest over an ordinary scope local, not the fused backward's [dp]: the plain
    plan in every mode -- the reassociation's license is the gate that minted [dp], not the shape; 8.
    a [Workgroup_reduce] hand-retyped over such a local keeps the hardware binding a staged reduction
-   relies on (compiled, and read on GPU backends). *)
+   relies on (compiled, and read on GPU backends); 9. the configured [auto] resolves from the
+   device's economics -- cooperative where per-lane recompute is cheap (Metal, CUDA), refused
+   elsewhere (HIP, cc, unmeasured) -- and the default schedule equals the resolved explicit
+   mode's. *)
 
 open Base
 open Stdio
@@ -296,3 +299,41 @@ let () =
            String.is_substring line ~substring:(" " ^ ident ^ " = (")
            && String.is_substring line ~substring:register)
       && not (String.is_substring src ~substring:(" " ^ ident ^ " = 0;"))))
+
+let () =
+  printf "--- leg 9: auto resolves from the device's economics ---\n";
+  (* Under the configured [auto]: cooperative where redundant per-lane scalar work is cheap
+     (measured on Metal and CUDA), refused elsewhere (HIP, the C backends, anything unmeasured) --
+     and what the default schedule then emits IS the explicit mode's schedule, so the Metal and CUDA
+     timings of [cooperative] are the default's. *)
+  let module BI = Ir.Backend_intf in
+  let cheap = { BI.no_hardware_limits with lane_scalar_recompute_cheap = true } in
+  p "auto on a device where per-lane recompute is cheap is cooperative"
+    (S.equal_lane_preamble_reduction (S.lane_preamble_reduction_for cheap) S.Preamble_cooperative);
+  p "auto on an unmeasured device is refused"
+    (S.equal_lane_preamble_reduction
+       (S.lane_preamble_reduction_for BI.no_hardware_limits)
+       S.Preamble_refused);
+  let device = Context.hardware_limits (Lazy.force L.base_ctx) in
+  let expected =
+    match backend_name with "metal" | "cuda" -> S.Preamble_cooperative | _ -> S.Preamble_refused
+  in
+  p "auto on the run's backend resolves to its measured mode"
+    (S.equal_lane_preamble_reduction (S.lane_preamble_reduction_for device) expected);
+  let case = dk_nest ~name:"lred_auto32" ~e_n:32 ~d_n:32 () in
+  let sched ?preamble_reduction limits =
+    S.sexp_of_schedule
+      (S.default_gpu ~block_size:256 ~min_parallel:64 ~workgroup_fill:1 ?preamble_reduction ~limits
+         case.opt)
+  in
+  List.iter
+    [
+      ("a cheap-recompute device", cheap);
+      ("an unmeasured device", BI.no_hardware_limits);
+      ("the run's device", device);
+    ]
+    ~f:(fun (what, limits) ->
+      p
+        (Printf.sprintf "on %s the default schedule is the resolved mode's" what)
+        (Sexp.equal (sched limits)
+           (sched ~preamble_reduction:(S.lane_preamble_reduction_for limits) limits)))
