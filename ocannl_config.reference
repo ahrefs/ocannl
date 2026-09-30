@@ -235,10 +235,11 @@
 # and dQ nests' lane loop (gh-ocannl-1124). Only that local qualifies: the cooperative form
 # reassociates, licensed by online_softmax_backward, so the key has no effect without it.
 # `refused` keeps such a nest on its plain plan; `duplicated` gives it lanes and every lane
-# recomputes the reduction serially (summation order unchanged); `cooperative` gives it lanes and,
-# where the reduction spans exactly the lane's workgroup, the lanes compute it together as a
-# simdgroup butterfly all-reduce (reassociated), each other extent duplicated. `auto` resolves per
-# device: cooperative where redundant per-lane scalar work is cheap (measured on Metal and CUDA),
+# recomputes the reduction serially (summation order unchanged); `cooperative` gives it lanes
+# where the reduction spans exactly the lane's workgroup of one simdgroup, the lanes computing it
+# together as a butterfly all-reduce (reassociated), and keeps the plain plan for any other width.
+# `auto` resolves per device: cooperative where redundant per-lane scalar work is cheap (measured
+# on Metal and CUDA),
 # refused elsewhere (HIP, where the lanes lost to the plain plan, and anything unmeasured). An
 # inlined reduction inside an expression stays refused in every mode.
 #gpu_lane_preamble_reduction=auto

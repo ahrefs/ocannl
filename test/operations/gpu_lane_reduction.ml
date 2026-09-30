@@ -17,17 +17,18 @@
    equal widths at one simdgroup (E = D = 32), cooperative: lanes, the reduction retyped, the
    emitted GPU kernel spells the all-reduce; 2. the same nest duplicated: lanes, the reduction
    serial, no all-reduce emitted; 3. refused: no lanes, the plain plan; 4. unequal widths (E = 16 or
-   64 beside D = 32): lanes, the reduction stays serial (it does not span the lane's workgroup); 5.
-   a partial simdgroup (E = D = 16): retyped, but the renderer declines the shuffle (lanes outside
-   the reduction would be read) and every lane runs the loop; 6. several simdgroups (E = D = 64):
-   retyped, declined by this v1 (it would need a shared broadcast and barrier), every lane runs the
-   loop; 7. the same nest over an ordinary scope local, not the fused backward's [dp]: the plain
-   plan in every mode -- the reassociation's license is the gate that minted [dp], not the shape; 8.
-   a [Workgroup_reduce] hand-retyped over such a local keeps the hardware binding a staged reduction
-   relies on (compiled, and read on GPU backends); 9. the configured [auto] resolves from the
-   device's economics -- cooperative where per-lane recompute is cheap (Metal, CUDA), refused
-   elsewhere (HIP, cc, unmeasured) -- and the default schedule equals the resolved explicit
-   mode's. *)
+   64 beside D = 32): cooperative retypes a reduction or declines the lanes, so the plain plan -- a
+   reduction every lane would run whole is the duplicated arm, measured as a regression; 5. a
+   partial simdgroup (E = D = 16) likewise keeps the plain plan at the devices' 32-lane shuffles,
+   and on a device claiming 16-lane ones the retype happens and the renderer (32-lane warps)
+   declines the shuffle, every lane running the loop; 6. several simdgroups (E = D = 64): the same,
+   declined by this v1 (it would need a shared broadcast and barrier); 7. the same nest over an
+   ordinary scope local, not the fused backward's [dp]: the plain plan in every mode -- the
+   reassociation's license is the gate that minted [dp], not the shape; 8. a [Workgroup_reduce]
+   hand-retyped over such a local keeps the hardware binding a staged reduction relies on (compiled,
+   and read on GPU backends); 9. the configured [auto] resolves from the device's economics --
+   cooperative where per-lane recompute is cheap (Metal, CUDA), refused elsewhere (HIP, cc,
+   unmeasured) -- and the default schedule equals the resolved explicit mode's. *)
 
 open Base
 open Stdio
@@ -174,12 +175,15 @@ let axis_name = function
   | LL.Workgroup_reduce -> "Workgroup_reduce"
   | _ -> "another kind"
 
-let run ?(preamble = S.Preamble_cooperative) ?(lanes = true) ~reduction_axis ~emits_all_reduce case
-    =
+(* A device whose shuffles are [width] lanes wide: the GPU backends state 32. *)
+let simd width = { Ir.Backend_intf.no_hardware_limits with simdgroup_width = Some width }
+
+let run ?(preamble = S.Preamble_cooperative) ?(lanes = true) ?(limits = simd 32) ~reduction_axis
+    ~emits_all_reduce case =
   let scheduled =
     S.apply
       (S.default_gpu ~block_size:256 ~min_parallel:64 ~workgroup_fill:1 ~preamble_reduction:preamble
-         case.opt)
+         ~limits case.opt)
       case.opt
   in
   (* What schedule-aware fission reads: the reduce lane is the output lanes' threads, not a
@@ -193,7 +197,7 @@ let run ?(preamble = S.Preamble_cooperative) ?(lanes = true) ~reduction_axis ~em
          (fun (g1, a1) (g2, a2) -> g1 = g2 && a1 = a2)
          (S.statement_mappings case.opt.llc
             (S.default_gpu ~block_size:256 ~min_parallel:64 ~workgroup_fill:1
-               ~preamble_reduction:preamble case.opt))
+               ~preamble_reduction:preamble ~limits case.opt))
          [ (b_n * t_n * h_n, b_n * t_n * h_n * case.launch_block) ]);
   if lanes then (
     p
@@ -234,17 +238,23 @@ let () =
   printf "--- leg 3: refused keeps the plain plan ---\n";
   run ~preamble:S.Preamble_refused ~lanes:false ~reduction_axis:LL.Serial ~emits_all_reduce:false
     (dk_nest ~name:"lred_refused32" ~e_n:32 ~d_n:32 ());
-  printf "--- leg 4: unequal key and value widths ---\n";
-  run ~reduction_axis:LL.Serial ~emits_all_reduce:false
+  printf "--- leg 4: unequal key and value widths keep the plain plan ---\n";
+  run ~lanes:false ~reduction_axis:LL.Serial ~emits_all_reduce:false
     (dk_nest ~name:"lred_e16_d32" ~e_n:16 ~d_n:32 ());
-  run ~reduction_axis:LL.Serial ~emits_all_reduce:false
+  run ~lanes:false ~reduction_axis:LL.Serial ~emits_all_reduce:false
     (dk_nest ~name:"lred_e64_d32" ~e_n:64 ~d_n:32 ());
-  printf "--- leg 5: a partial simdgroup declines the shuffle ---\n";
-  run ~reduction_axis:LL.Workgroup_reduce ~emits_all_reduce:false
+  printf "--- leg 5: a partial simdgroup keeps the plain plan; the renderer declines it too ---\n";
+  run ~lanes:false ~reduction_axis:LL.Serial ~emits_all_reduce:false
     (dk_nest ~name:"lred_coop16" ~e_n:16 ~d_n:16 ());
-  printf "--- leg 6: several simdgroups decline the shuffle (v1) ---\n";
-  run ~reduction_axis:LL.Workgroup_reduce ~emits_all_reduce:false
-    (dk_nest ~name:"lred_coop64" ~e_n:64 ~d_n:64 ())
+  (* A device claiming 16-lane shuffles gets the retype; the renderer, whose warp is 32 lanes, then
+     declines the shuffle and every lane runs the loop -- still exact. *)
+  run ~limits:(simd 16) ~reduction_axis:LL.Workgroup_reduce ~emits_all_reduce:false
+    (dk_nest ~name:"lred_coop16r" ~e_n:16 ~d_n:16 ());
+  printf "--- leg 6: several simdgroups keep the plain plan; the renderer declines them (v1) ---\n";
+  run ~lanes:false ~reduction_axis:LL.Serial ~emits_all_reduce:false
+    (dk_nest ~name:"lred_coop64" ~e_n:64 ~d_n:64 ());
+  run ~limits:(simd 64) ~reduction_axis:LL.Workgroup_reduce ~emits_all_reduce:false
+    (dk_nest ~name:"lred_coop64r" ~e_n:64 ~d_n:64 ())
 
 let () =
   printf "--- leg 7: an ordinary local in the same shape keeps the plain plan ---\n";
@@ -263,6 +273,18 @@ let () =
   p "the dp local minted again at its own precision is the same node"
     (Ir.Tnode.equal single (Ir.Online_softmax.dprob_local ~like Ir.Ops.single));
   Ir.Online_softmax.set_backward_enabled None;
+  (* The marker is the minting, not the node's public fields: a look-alike built with the rewrite's
+     namespace and label is an ordinary local. *)
+  let forged =
+    Ir.Tnode.create ~namespace:single.Ir.Tnode.namespace (Ir.Tnode.Specified Ir.Ops.single)
+      ~id:1124999 ~label:single.Ir.Tnode.label
+      ~unpadded_dims:(lazy [| 1 |])
+      ~padding:(lazy None)
+      ()
+  in
+  p "a node forged with the dp local's namespace and label is not reassociable"
+    (Ir.Online_softmax.reassociable_local single
+    && not (Ir.Online_softmax.reassociable_local forged));
   run ~lanes:false ~reduction_axis:LL.Serial ~emits_all_reduce:false
     (dk_nest ~minted:false ~name:"lred_plain32" ~e_n:32 ~d_n:32 ());
   printf "--- leg 8: a hand-retyped Workgroup_reduce over an ordinary local keeps its binding ---\n";
@@ -307,7 +329,7 @@ let () =
      and what the default schedule then emits IS the explicit mode's schedule, so the Metal and CUDA
      timings of [cooperative] are the default's. *)
   let module BI = Ir.Backend_intf in
-  let cheap = { BI.no_hardware_limits with lane_scalar_recompute_cheap = true } in
+  let cheap = { (simd 32) with lane_scalar_recompute_cheap = true } in
   p "auto on a device where per-lane recompute is cheap is cooperative"
     (S.equal_lane_preamble_reduction (S.lane_preamble_reduction_for cheap) S.Preamble_cooperative);
   p "auto on an unmeasured device is refused"

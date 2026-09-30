@@ -40,7 +40,11 @@ let gpu_name = if S.backend_is_gpu backend_name then backend_name else "metal"
 (* At the economics measured on Metal and CUDA (gh-ocannl-1124): the configured [auto] gives the
    fused backward's dK and dQ their lanes, as on those devices. *)
 let limits =
-  { Ir.Backend_intf.no_hardware_limits with Ir.Backend_intf.lane_scalar_recompute_cheap = true }
+  {
+    Ir.Backend_intf.no_hardware_limits with
+    Ir.Backend_intf.simdgroup_width = Some 32;
+    lane_scalar_recompute_cheap = true;
+  }
 
 (* A hermetic copy: fission promotes placements of the record it is given. *)
 let copy (o : LL.optimized) =

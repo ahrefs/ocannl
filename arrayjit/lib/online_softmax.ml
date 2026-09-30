@@ -62,9 +62,17 @@ let scalar_node ~label ~(like : Tn.t) prec =
    gate, pinned off by the [reproducible] profile -- which is the only thing that mints it. *)
 let dprob_label = "bwd_dprob"
 
-let reassociable_local (tn : Tn.t) =
-  String.equal tn.Tn.namespace namespace
-  && match tn.Tn.label with l :: _ -> String.equal l dprob_label | [] -> false
+(* The identities [mint_dprob] minted: the marker is membership here, which no public field of a
+   node can forge (a node built with this module's namespace and label is not in it). Never cleared
+   -- a node's uid is never reused, and a [reset] of the memo table must not revoke the license of a
+   node already in some lowered code. *)
+let reassociable : int Hash_set.t = Hash_set.create (module Int)
+let reassociable_local (tn : Tn.t) = Hash_set.mem reassociable tn.Tn.uid
+
+let mint_dprob ~like prec =
+  let tn = scalar_node ~label:dprob_label ~like prec in
+  Hash_set.add reassociable tn.Tn.uid;
+  tn
 
 (* {1 Nests}
 
@@ -662,7 +670,7 @@ let dprob_local ~like prec =
     invalid_arg
       "Online_softmax.dprob_local: the fused backward's dp local is minted only under \
        online_softmax_backward, the gate that licenses reassociating its reduction";
-  scalar_node ~label:dprob_label ~like prec
+  mint_dprob ~like prec
 
 let backward_provenance = Tn.Site "1002:fused-backward-row-dot"
 
@@ -1279,7 +1287,7 @@ let find_backward r (nz : normalizer) : backward option =
     | p, _ -> p
   in
   let p_node = scalar_node ~label:"bwd_probability" ~like:p_tn prec in
-  let dp_node = scalar_node ~label:dprob_label ~like:dp_tn prec in
+  let dp_node = mint_dprob ~like:dp_tn prec in
   let ds_node = scalar_node ~label:"bwd_dscore" ~like:ds_tn prec in
   let acc_node = scalar_node ~label:"bwd_rowdot_acc" ~like:do_tn prec in
   let d_node = row_node ~label:"bwd_rowdot" ~like:nz.m prec in

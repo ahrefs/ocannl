@@ -272,6 +272,12 @@ type hardware_limits = {
 
           Always [false] on the GPU backends, whose 16-bit story is their native types and
           tensor-core shapes rather than a CPU vector width. *)
+  simdgroup_width : int option;
+      (** The SIMD-group (warp) width the backend's warp-shuffle renderings assume -- its [C_syntax]
+          configuration's [warp_size]: 32 on Metal, CUDA and HIP (whose shuffles pass an explicit
+          width of 32). [None] where kernels render no shuffles (the C backends). The default GPU
+          schedule retypes a cooperative lane reduction only at exactly this width, the one the lane
+          all-reduce renders (gh-ocannl-1124). *)
   lane_scalar_recompute_cheap : bool;
       (** Device economics (gh-ocannl-1124): whether scalar work every lane of a lane geometry
           recomputes redundantly -- the per-pair preamble a lane nest repeats in each of its lanes
@@ -382,6 +388,7 @@ let no_hardware_limits =
     peak_flops = None;
     peak_memory_bandwidth = None;
     native_fp16_arithmetic = false;
+    simdgroup_width = None;
     lane_scalar_recompute_cheap = false;
     worker_pool_tag = None;
     codegen_tag = None;

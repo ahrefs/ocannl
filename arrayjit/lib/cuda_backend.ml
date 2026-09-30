@@ -2091,6 +2091,7 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
               else None);
            simd_vector_bytes = 0;
            native_fp16_arithmetic = false;
+           simdgroup_width = Some 32;
            (* gh-ocannl-1124: measured true on the RTX of rog-nv; see the field. *)
            lane_scalar_recompute_cheap = true;
            worker_pool_tag = None;

@@ -6323,24 +6323,36 @@ let lane_geometry ~block_size ~min_parallel ~(limits : Backend_intf.hardware_lim
                      so it shares the lane's workgroup slot -- the output lanes' physical layout, no
                      lane axis of its own -- and the renderer computes it as a butterfly all-reduce
                      leaving the sum in every lane ([C_syntax.try_lane_all_reduce]), or, where the
-                     shuffle cannot render it, as the serial loop every lane runs whole. Any other
-                     extent stays [Serial]: each lane recomputes it. *)
+                     renderer still cannot shuffle, as the serial loop every lane runs whole. *)
+                  (* Under [cooperative] every admitted reduction is retyped or the lanes are
+                     declined: a reduction the renderer could not all-reduce -- not exactly the
+                     lane's unsplit one-simdgroup extent ({!Backend_intf.hardware_limits}'
+                     [simdgroup_width]) -- would run serially in every lane, the duplicated arm
+                     measured as a regression, and the plain plan is today's behaviour. *)
                   let cooperative =
                     match preamble_reduction with
-                    | Preamble_refused | Preamble_duplicated -> []
+                    | Preamble_refused | Preamble_duplicated -> Some []
                     | Preamble_cooperative ->
-                        List.concat
-                          (List.map2_exn (List.zip_exn carrying lanes) plans
-                             ~f:(fun ((n, _), (_, (lane, _))) p ->
-                               match (p.lp_split, p.lp_block) with
-                               | None, [ (_, width) ] ->
-                                   List.filter_map (lane_preamble_reductions ~lane n.n_loops)
-                                     ~f:(fun (axis, extent) ->
-                                       Option.some_if (extent = width)
-                                         (Retype { axis; ty = Workgroup_reduce }))
-                               | _ -> []))
+                        Option.all
+                          (List.concat
+                             (List.map2_exn (List.zip_exn carrying lanes) plans
+                                ~f:(fun ((n, _), (_, (lane, _))) p ->
+                                  let width =
+                                    match (p.lp_split, p.lp_block) with
+                                    | None, [ (_, width) ]
+                                      when Option.equal Int.equal limits.simdgroup_width
+                                             (Some width) ->
+                                        Some width
+                                    | _ -> None
+                                  in
+                                  List.map (lane_preamble_reductions ~lane n.n_loops)
+                                    ~f:(fun (axis, extent) ->
+                                      Option.some_if
+                                        (Option.equal Int.equal width (Some extent))
+                                        (Retype { axis; ty = Workgroup_reduce })))))
                   in
-                  Some (List.concat_map plans ~f:plan_ops @ cooperative))))
+                  Option.map cooperative ~f:(fun cooperative ->
+                      List.concat_map plans ~f:plan_ops @ cooperative))))
 
 (* The default GPU preset's cooperative fold: [Some] schedule when [opt] is one fold nest the
    backend's MMA units can take (the conditions in the [Fold_mma] section comment above

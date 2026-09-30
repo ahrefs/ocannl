@@ -17,37 +17,42 @@ lred_refused32: no lane inside the serial query loop: true
 lred_refused32: the reduction loop is Serial: true
 lred_refused32: every cell of K holds the serial reference's exact value: true
 lred_refused32: the emitted kernel does not spell the all-reduce: true
---- leg 4: unequal key and value widths ---
-lred_e16_d32: the mapping probe counts 4096 active threads (a reduce lane adds none): true
-lred_e16_d32: Grid (h, t, b) and a 32-wide lane: true
-lred_e16_d32: the lane sits inside the serial query loop: true
+--- leg 4: unequal key and value widths keep the plain plan ---
+lred_e16_d32: no lane inside the serial query loop: true
 lred_e16_d32: the reduction loop is Serial: true
 lred_e16_d32: every cell of K holds the serial reference's exact value: true
 lred_e16_d32: the emitted kernel does not spell the all-reduce: true
-lred_e64_d32: the mapping probe counts 4096 active threads (a reduce lane adds none): true
-lred_e64_d32: Grid (h, t, b) and a 32-wide lane: true
-lred_e64_d32: the lane sits inside the serial query loop: true
+lred_e64_d32: no lane inside the serial query loop: true
 lred_e64_d32: the reduction loop is Serial: true
 lred_e64_d32: every cell of K holds the serial reference's exact value: true
 lred_e64_d32: the emitted kernel does not spell the all-reduce: true
---- leg 5: a partial simdgroup declines the shuffle ---
-lred_coop16: the mapping probe counts 2048 active threads (a reduce lane adds none): true
-lred_coop16: Grid (h, t, b) and a 16-wide lane: true
-lred_coop16: the lane sits inside the serial query loop: true
-lred_coop16: the reduction loop is Workgroup_reduce: true
+--- leg 5: a partial simdgroup keeps the plain plan; the renderer declines it too ---
+lred_coop16: no lane inside the serial query loop: true
+lred_coop16: the reduction loop is Serial: true
 lred_coop16: every cell of K holds the serial reference's exact value: true
 lred_coop16: the emitted kernel does not spell the all-reduce: true
---- leg 6: several simdgroups decline the shuffle (v1) ---
-lred_coop64: the mapping probe counts 8192 active threads (a reduce lane adds none): true
-lred_coop64: Grid (h, t, b) and a 64-wide lane: true
-lred_coop64: the lane sits inside the serial query loop: true
-lred_coop64: the reduction loop is Workgroup_reduce: true
+lred_coop16r: the mapping probe counts 2048 active threads (a reduce lane adds none): true
+lred_coop16r: Grid (h, t, b) and a 16-wide lane: true
+lred_coop16r: the lane sits inside the serial query loop: true
+lred_coop16r: the reduction loop is Workgroup_reduce: true
+lred_coop16r: every cell of K holds the serial reference's exact value: true
+lred_coop16r: the emitted kernel does not spell the all-reduce: true
+--- leg 6: several simdgroups keep the plain plan; the renderer declines them (v1) ---
+lred_coop64: no lane inside the serial query loop: true
+lred_coop64: the reduction loop is Serial: true
 lred_coop64: every cell of K holds the serial reference's exact value: true
 lred_coop64: the emitted kernel does not spell the all-reduce: true
+lred_coop64r: the mapping probe counts 8192 active threads (a reduce lane adds none): true
+lred_coop64r: Grid (h, t, b) and a 64-wide lane: true
+lred_coop64r: the lane sits inside the serial query loop: true
+lred_coop64r: the reduction loop is Workgroup_reduce: true
+lred_coop64r: every cell of K holds the serial reference's exact value: true
+lred_coop64r: the emitted kernel does not spell the all-reduce: true
 --- leg 7: an ordinary local in the same shape keeps the plain plan ---
 the fused backward's dp local is not minted without online_softmax_backward: true
 the dp local minted for the same node at another precision is a node of its own, at that one: true
 the dp local minted again at its own precision is the same node: true
+a node forged with the dp local's namespace and label is not reassociable: true
 lred_plain32: no lane inside the serial query loop: true
 lred_plain32: the reduction loop is Serial: true
 lred_plain32: every cell of K holds the serial reference's exact value: true

@@ -641,11 +641,12 @@ val aligned_chains :
     backward's approximate-tier license. [Preamble_refused]: such a nest keeps its plain plan (the
     gh-ocannl-1003 stage-1 rule). [Preamble_duplicated]: the nest takes lanes and every lane
     recomputes the reduction serially, in its summation order. [Preamble_cooperative]: a reduction
-    whose extent is the lane's whole workgroup is retyped [Workgroup_reduce], sharing the lane's
-    slot, and renders as a butterfly all-reduce leaving the sum in every lane (the serial loop in
-    every lane where the shuffle cannot render it); other extents are duplicated. Config
-    [gpu_lane_preamble_reduction], whose [auto] default resolves per device
-    ({!lane_preamble_reduction_for}). *)
+    whose extent is the lane's whole one-loop workgroup and the device's [simdgroup_width] is
+    retyped [Workgroup_reduce], sharing the lane's slot, and renders as a butterfly all-reduce
+    leaving the sum in every lane; a kernel holding any other admitted reduction keeps its plain
+    plan, never duplicated lanes (a renderer that still cannot shuffle runs the loop in every lane,
+    the retype's serial meaning). Config [gpu_lane_preamble_reduction], whose [auto] default
+    resolves per device ({!lane_preamble_reduction_for}). *)
 type lane_preamble_reduction = Preamble_refused | Preamble_duplicated | Preamble_cooperative
 [@@deriving sexp_of, equal]
 

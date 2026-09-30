@@ -438,7 +438,11 @@ let gpu_statements (o : LL.optimized) ~writes =
   (* At the economics measured on Metal and CUDA (gh-ocannl-1124): [auto] then gives dK and dQ their
      lanes, as on those devices. *)
   let limits =
-    { Ir.Backend_intf.no_hardware_limits with Ir.Backend_intf.lane_scalar_recompute_cheap = true }
+    {
+      Ir.Backend_intf.no_hardware_limits with
+      Ir.Backend_intf.simdgroup_width = Some 32;
+      lane_scalar_recompute_cheap = true;
+    }
   in
   S.maybe_default_schedules ~backend_name:"metal" ~limits ~static_indices:[] o
   |> List.concat_map ~f:(fun (seg : LL.optimized) -> LL.flat_lines [ seg.LL.llc ])
