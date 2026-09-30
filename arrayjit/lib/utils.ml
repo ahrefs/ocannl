@@ -306,6 +306,11 @@ let config_key_classification : (config_key_class * string * string list) list =
        capture fires only for multi-segment routines, so it moves a fissioned candidate's launch \
        overhead relative to a whole-routine one",
       [ "buffer_aliasing"; "gpu_graph_capture" ] );
+    ( Keyed "codegen",
+      "it decides the default fission segmentation on GPU backends, which a fissioned winner's \
+       saved per-segment schedules are keyed by and re-segmented against at replay: a winner \
+       stored under one setting finds another segmentation under the other (gh-ocannl-1126)",
+      [ "gpu_fission_keep_mapping" ] );
     ( Search_shaping,
       "it defines the untuned default pipeline, which a search seeds from and reports against; a \
        cached winner carries its own ops and replays without consulting it \
@@ -318,7 +323,6 @@ let config_key_classification : (config_key_class * string * string list) list =
         "automatic_cpu_schedule";
         "cpu_schedule_min_parallel";
         "schedule_fission";
-        "gpu_fission_keep_mapping";
       ] );
     ( Search_shaping,
       "it steers the search: how wide, how long, what is proposed, what is pruned, how candidates \

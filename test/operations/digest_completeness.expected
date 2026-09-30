@@ -66,11 +66,13 @@ keyed: codegen -- it changes the emitted code or the mechanics a search measures
   buffer_aliasing [read at codegen]
   gpu_graph_capture [read at codegen]
 
+keyed: codegen -- it decides the default fission segmentation on GPU backends, which a fissioned winner's saved per-segment schedules are keyed by and re-segmented against at replay: a winner stored under one setting finds another segmentation under the other (gh-ocannl-1126)
+  gpu_fission_keep_mapping [read at codegen]
+
 search-shaping -- it defines the untuned default pipeline, which a search seeds from and reports against; a cached winner carries its own ops and replays without consulting it ([Schedule.default_schedule_fingerprint] records these for the [default_ms] diagnostic)
   automatic_cpu_schedule
   automatic_gpu_schedule
   cpu_schedule_min_parallel
-  gpu_fission_keep_mapping
   gpu_schedule_block_size
   gpu_schedule_min_parallel
   gpu_schedule_workgroup_fill

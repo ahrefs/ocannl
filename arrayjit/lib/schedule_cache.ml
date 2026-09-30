@@ -571,6 +571,14 @@ let codegen_tag ~(limits : Backend_intf.hardware_limits)
          #337. *)
       gate "buffer-aliasing" (Utils.get_global_flag ~default:false ~arg_name:"buffer_aliasing");
     ]
+    (* A fissioned winner's saved schedules are keyed by segment digests of the default
+       segmentation, which replay recomputes; with the schedule-aware merge rule off, the routine
+       segments differently and the winner would be refused as drifted (gh-ocannl-1126, Codex P2 on
+       PR #913). Only the non-default setting adds a part, so keys written under the default are
+       unchanged. *)
+    @
+    if Utils.get_global_flag ~default:true ~arg_name:"gpu_fission_keep_mapping" then []
+    else [ "no-fission-keep-mapping" ]
   in
   String.prefix (Stdlib.Digest.to_hex (Stdlib.Digest.string (String.concat ~sep:"\000" parts))) 8
 
