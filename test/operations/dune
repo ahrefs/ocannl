@@ -3539,7 +3539,9 @@
  (deps
   (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
-  (env_var OCANNL_BACKEND))
+  (env_var OCANNL_BACKEND)
+  ; Legs 5 and 6 run the default pipeline, whose lane plans read the workgroup fill.
+  (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL))
  (modules gpu_serial_lanes)
  (libraries base ocannl stdio arrayjit.verdict ll_test test_utils)
  (preprocess
@@ -3553,6 +3555,15 @@
   (env_var OCANNL_BACKEND))
  (modules gpu_small_leading_axis)
  (libraries base ocannl arrayjit.verdict ll_test))
+
+(test
+ (name gpu_parallel_prefix)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules gpu_parallel_prefix)
+ (libraries base stdio ocannl arrayjit.verdict ll_test))
 
 (test
  (name schedule_ops)
@@ -3742,6 +3753,7 @@
   ocannl_config
   (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
+  (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
   (env_var OCANNL_BACKEND)
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
   (env_var OCANNL_LOG_LEVEL)
@@ -4359,6 +4371,7 @@
   (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
+  (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
   (env_var OCANNL_SCHEDULE_FISSION)
   (env_var OCANNL_SCHEDULE_LOG_LAUNCHES)
   (env_var OCANNL_AUTOTUNE_REGISTER_TILE_RM_TWIN)

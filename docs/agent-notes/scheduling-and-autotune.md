@@ -11,7 +11,30 @@ files.
   fallback; `zero_expansion` shares the policy. Never select a subset after proving a larger
   thread-coordinate tuple. Metal GPT measurements and the explicit CUDA/HIP residual are in
   `benchmarks/report-gh995-metal.md`; `gpu_small_leading_axis` executes dependent-nest and
-  zero-initialization oracles.
+  zero-initialization oracles. Since gh-ocannl-1133 that pair is the FALLBACK of the lane plans
+  below, not the default.
+- The default GPU schedule maps every loop of a proved chain (gh-ocannl-1133, "lane plans"):
+  `analyze_parallel_chains` runs uncapped, `Schedule.plan_nest` puts the leading loops on `Grid`
+  and the innermost on the `Workgroup` lane (split `Grid` outer past the block size, never
+  `Serial`), widening the workgroup upward while it holds fewer than `gpu_schedule_workgroup_fill`
+  threads. The constraint mapping more loops adds is COVERAGE, not ownership: every
+  chain-carrying nest of a kernel needs the same `Grid` and `Workgroup` counts, or
+  `validate_parallel` rejects the nest short of a slot. `unify_candidates` narrows workgroups or splits
+  a short nest's lane into a one-block `Grid` slot, else declines; `lane_plans_gain` then keeps
+  the two-loop presets unless no nest loses groups or active threads and one gains. The launch
+  takes each slot's maximum ACROSS nests, so `plan_chains` also judges the union: workgroup
+  product within the block size (a 32 x 8 beside a 256 x 1 launched 2048 threads) and at most
+  twice the largest nest's own allocation (a `(v, d)` weight gradient beside a `(b, s, d)` one
+  launched 1024 x 128 groups; on HIP that segment became the training step's dominant kernel).
+  Per-nest checks cannot see either. Dependent
+  nests have pointwise-equal chains, so they get identical plans at every unify step -- keep any
+  new unify rule a function of the chain alone, or the positional thread identity breaks. The
+  slot arithmetic has one owner, `Schedule.launch_geometry_of_nests` (per-slot maxima BEFORE the
+  `.z` fold, overflow = refusal), which `Sketch_families.predicted_launch_geometry` forwards to.
+  The lm_head is untouched by this: its segment carries `max_logits`, whose chain `(b, s)` trims
+  the logits nest's `(b, s, v)` to `(b, s)` -- an alignment trim left by fission's no-loss guard
+  comparing at a `max_chain` of 2, which is gh-ocannl-1126's to fix. `test/operations/gpu_parallel_prefix`;
+  measured by `benchmarks/gh1133_cells.sh`; the tables are on lukstafi/ocannl-staging#909 and ahrefs/ocannl#1133.
 - A parallel loop under a serial loop is reachable only past lane-uniform scalar work
   (gh-ocannl-1003). The presets' chain is the single-child loop path, which stops at the
   online-softmax hoist's preamble (`for t { p := P[s, t]; for e { O[s, e] += p * V[t, e] } }`);
@@ -171,8 +194,10 @@ files.
   `max_threads_dim` triple, Metal all three components of `maxThreadsPerThreadgroup` — it used to
   read `width` alone), `None` on the C backends. `Schedule.default_gpu` and
   `Schedule.zero_expansion` clamp their block size against the `.x` entry too, so the gate is a
-  backstop; they emit one `Workgroup` loop per nest, which is why no in-tree annotator can reach
-  the `.z` cliff and why `test/operations/launch_dim_gate.ml` builds that geometry by hand.
+  backstop; a lane plan widened past one `Workgroup` loop (`gpu_schedule_workgroup_fill`) checks
+  the `.y`/`.z` entries it reaches itself (`plan_nest`), which is why no in-tree annotator
+  reaches the `.z` cliff and why `test/operations/launch_dim_gate.ml` builds that geometry by
+  hand.
   **The gate is now one table, five rows** (block `.x`/`.y`/`.z`, grid `.y`/`.z`), not a
   hand-written `Option.iter` per bound — each bound used to be a copy of its neighbour, which is
   how `gridDim.y` went ungated for a release and how the workgroup dimensions went ungated

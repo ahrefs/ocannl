@@ -637,33 +637,46 @@ val aligned_chains :
 val default_gpu :
   ?block_size:int ->
   ?min_parallel:int ->
+  ?workgroup_fill:int ->
   ?limits:Backend_intf.hardware_limits ->
   Low_level.optimized ->
   schedule
 (** The default GPU annotator preset (schedule-ir-optops §6): for each top-level loop nest whose
-    parallelism is provable from the lowered code alone, produce ops annotating exactly one [Grid]
-    and one [Workgroup] loop (splitting single parallel loops by [block_size], default from config
-    [gpu_schedule_block_size] = 256, clamped to [limits]'
-    {!field:Backend_intf.max_threads_per_workgroup} when given — the configured block size is a
-    target, the device's workgroup capacity a hard cap). A loop is parallelizable when its index
-    occurs as a plain [Iterator] component in every materialized write vector beneath it — the same
-    coverage property [Low_level.validate_parallel] enforces, used generatively — and the kernel
-    passes a conservative race analysis (all accesses to written nodes agree on parallel-index
-    components, no [Zero_out] of materialized nodes, no barriers or opaque statements; reduction
-    loops stay serial). When the leading parallel extent is below [min_parallel], a later pair with
-    no fewer grid groups and a larger grid-times-clamped-workgroup product is preferred. Skipped
-    leading loops remain serial. This choice precedes the race analysis; if it fails, or alignment
-    loses groups, active lanes, or the launch threshold, the original outermost pair is used
-    instead. Expanded whole-node zeros use the same choice. One geometry goes beyond the shape of
-    one [Grid] and one [Workgroup] loop per nest (gh-ocannl-1003): when every nest carrying a chain
-    has a parallel loop under a serial loop past loop-free lane-uniform scalar work (declarations
-    and assignments of scope locals -- the online-softmax hoist's value pass,
+    parallelism is provable from the lowered code alone, annotate every loop of its proved parallel
+    chain (gh-ocannl-1133) — the leading loops [Grid] ([Grid] slots [>= 2] fold onto [.z]), the
+    innermost the [Workgroup] lane, split [Grid] blocks x [Workgroup] by [block_size] when it is
+    longer (default from config [gpu_schedule_block_size] = 256, clamped to [limits]'
+    {!field:Backend_intf.max_threads_per_workgroup} and [.x] workgroup cap when given — the
+    configured block size is a target, the device's workgroup capacity a hard cap). While the
+    workgroup holds fewer than [workgroup_fill] threads (default from config
+    [gpu_schedule_workgroup_fill] = 256), the loops just above the lane join it as further
+    [Workgroup] dimensions (at most three, the product within the block size, each extent within its
+    dimension's cap). The plan is taken only when every chain-carrying nest of the kernel fits one
+    common hardware topology (a nest one [Grid] slot short may split its lane into a one-block
+    [Grid] loop), the launch fits the device's per-dimension caps, and no nest does less useful
+    parallel work than under the two-loop presets below, with more work somewhere; otherwise the
+    presets apply. The presets annotate exactly one [Grid] and one [Workgroup] loop per nest
+    (splitting a single parallel loop by [block_size]; a second loop longer than the block size
+    keeps its outer part [Serial]). A loop is parallelizable when its index occurs as a plain
+    [Iterator] component in every materialized write vector beneath it — the same coverage property
+    [Low_level.validate_parallel] enforces, used generatively — and the kernel passes a conservative
+    race analysis (all accesses to written nodes agree on parallel-index components, no [Zero_out]
+    of materialized nodes, no barriers or opaque statements; reduction loops stay serial). Both
+    plans map proved chains: the lane plans propose each nest's whole chain to that analysis, the
+    presets a pair — when the leading parallel extent is below [min_parallel], a later pair with no
+    fewer grid groups and a larger grid-times-clamped-workgroup product. Skipped leading loops
+    remain serial. This choice precedes the race analysis; if it fails, or alignment loses groups,
+    active lanes, or the launch threshold, the original outermost pair is used instead. Expanded
+    whole-node zeros ({!zero_expansion}) use the same plans. A lane geometry takes priority over
+    both (gh-ocannl-1003): when every nest carrying a chain has a parallel loop under a serial loop
+    past loop-free lane-uniform scalar work (declarations and assignments of scope locals -- the
+    online-softmax hoist's value pass,
     [for (b, s, h) { for t { p := P[s, t]; for e { O[s, e] += p * V[t, e] } } }]; a preamble holding
     an inlined reduction is excluded, since every lane would recompute it), the chain extends
     through that preamble uncapped: the loops above the serial loop become [Grid] loops (slots
     [>= 2] fold onto [.z]) and the loop past it a [Workgroup] lane,
-    [Grid (b, s, h) -> Serial t -> Workgroup e] — taken when every such nest has the same number of
-    [Grid] loops, the launch fits the device's grid caps, and it has more threads than the presets'
+    [Grid (b, s, h) -> Serial t -> Workgroup e] — taken when the planner finds such nests one common
+    topology, the launch fits the device's caps, and it has more threads than the plain plan's
     geometry. The race analysis is the same: thread identity is the tuple of chain symbols wherever
     they sit, the serial loop runs whole in every thread, and [Low_level.validate_parallel] already
     accepts a hardware loop under a serial one. Cross-nest producer/consumer (or WAW/WAR) pairs over
@@ -748,14 +761,17 @@ val maybe_default_schedule :
 val zero_expansion :
   ?block_size:int ->
   ?min_parallel:int ->
+  ?workgroup_fill:int ->
   limits:Backend_intf.hardware_limits ->
   Tnode.t list ->
   schedule
 (** The expand-and-annotate schedule {!maybe_default_schedules} applies to a fission segment of
-    materialized whole-node [Zero_out]s on GPU backends: {!expand_zero} plus the same Grid/Workgroup
-    geometry policy as {!default_gpu}. Below [min_parallel] (largest node) the zeros stay whole-node
-    (a serial kernel renders them as [memset]). Exposed for callers (e.g. the autotuner) that
-    replicate the default fission pipeline with custom per-segment schedules. *)
+    materialized whole-node [Zero_out]s on GPU backends: {!expand_zero} plus the same geometry
+    policy as {!default_gpu} — the lane plans over each node's non-singleton axes (its whole loop
+    set is a proved chain: each cell is written once), under one common topology across the
+    segment's nodes, else the two-loop presets. Below [min_parallel] (largest node) the zeros stay
+    whole-node (a serial kernel renders them as [memset]). Exposed for callers (e.g. the autotuner)
+    that replicate the default fission pipeline with custom per-segment schedules. *)
 
 val fission_scheduled :
   ?promote_locals:bool ->
@@ -851,6 +867,16 @@ val unknown_launch_geometry : launch_geometry
 
 val launch_geometry_of_dims : Low_level.launch_dims -> launch_geometry
 (** The geometry a lowered kernel will actually launch with — every field [Some]. *)
+
+val launch_geometry_of_nests : (int list * int list) list -> launch_geometry option
+(** The geometry a kernel launches with when its nests' hardware loops have these extents — per
+    nest, its [Grid] and its [Workgroup] loop extents in nest order, outermost first
+    (gh-ocannl-1133). The one encoding of the positional slot rule outside {!Low_level.launch_dims},
+    which reads the same rule off lowered code: among loops of one kind the innermost binds [.x],
+    the next [.y], the next [.z]; the maximum is taken per slot across nests, and [Grid] slots
+    [>= 2] fold the product of their per-slot maxima onto [.z]. Every field is [Some]; [None] when
+    that product overflows. The default annotators' lane plans and the sketch families' predictions
+    ([Sketch_families.predicted_launch_geometry]) both read it. *)
 
 type launch_excess = {
   lx_resource : Schedule_outcome.resource;

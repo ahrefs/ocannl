@@ -1266,7 +1266,7 @@ let rec nest_loop_syms acc (llc : LL.t) =
    back to a bare companion: on GPU there is no all-serial fallback.
 
    The query runs at the site's own arity ([max_chain = length site_syms], gh-ocannl-569): the
-   analysis' default cap of 2 is the preset annotators' Grid+Workgroup shape, and under it a batched
+   analysis' default cap of 2 is the two-loop presets' Grid+Workgroup shape, and under it a batched
    (rank-3+) site could never match its full chain — every seed for gpt2's FFN-class kernels
    declined here, serializing the minor output axis. A companion that genuinely cannot follow the
    full arity (a reduction over the site's minor axis, e.g. the lm_head's max-logits row) still
@@ -1508,22 +1508,18 @@ let seeding_limits (limits : Ir.Backend_intf.hardware_limits) : Ir.Backend_intf.
   }
 
 (* The launch geometry of a nest whose hardware-annotated loops have these extents in NEST order
-   (outermost first) — the seeding-side mirror of [Ir.Low_level.launch_dims], which reads the same
-   positional rule off the lowered code: among a kernel's loops of one kind the innermost binds
-   [.x], the next [.y], the next [.z], and [Grid] loops beyond the second fold their PRODUCT onto
-   [.z]. One encoding of the slot rule for every family that predicts a geometry. *)
+   (outermost first): the slot rule's one owner, [Sched.launch_geometry_of_nests] (shared with the
+   default annotators' lane plans, gh-ocannl-1133), for a single nest. A fold whose product
+   overflows predicts the largest [.z] extent there is, which every capped device refuses. *)
 let predicted_launch_geometry ~(grid : int list) ~(block : int list) : Sched.launch_geometry =
-  let slot loops i = match List.nth (List.rev loops) i with Some n -> Some n | None -> Some 1 in
-  let fold =
-    match List.rev grid with _ :: _ :: rest -> List.fold rest ~init:1 ~f:( * ) | _ -> 1
-  in
-  {
-    Sched.lg_grid_y = slot grid 1;
-    lg_grid_z = Some fold;
-    lg_block_x = slot block 0;
-    lg_block_y = slot block 1;
-    lg_block_z = slot block 2;
-  }
+  match Sched.launch_geometry_of_nests [ (grid, block) ] with
+  | Some geometry -> geometry
+  | None ->
+      {
+        (Option.value_exn (Sched.launch_geometry_of_nests [ ([], block) ])) with
+        Sched.lg_grid_y = Some (Option.value (List.nth (List.rev grid) 1) ~default:1);
+        lg_grid_z = Some Int.max_value;
+      }
 
 (* Why a device refuses this predicted geometry, phrased as the seed's refutation witness: the same
    sentence [Schedule.check_hardware_limits_classified] would put in its decline, so a refutation

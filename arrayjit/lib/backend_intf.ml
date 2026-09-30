@@ -214,8 +214,9 @@ type hardware_limits = {
 
           Enforced pre-driver by [Schedule.check_hardware_limits_classified] (as
           [Schedule_outcome.Workgroup_x_extent] / [_y_] / [_z_extent]); [Schedule.default_gpu] and
-          [Schedule.zero_expansion] clamp their block size against the [.x] entry too, so the gate
-          is a backstop rather than the first line of defence. *)
+          [Schedule.zero_expansion] clamp their block size against the [.x] entry too, and check the
+          [.y]/[.z] entries a widened workgroup reaches, so the gate is a backstop rather than the
+          first line of defence. *)
   max_grid_yz : int option;
       (** Upper bound on {e each} of the launch's [.y] and [.z] grid dimensions: the row-block count
           ([grid.(1)]) and the folded batch-extent product ([grid.(2)], the dimension [Grid] slots

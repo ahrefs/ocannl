@@ -4,19 +4,19 @@ lanes_hoisted: Grid (h, s, b) on .x, .y, .z and a 32-wide lane: true
 lanes_hoisted: the Workgroup lane sits inside the serial key loop, past the preamble: true
 lanes_hoisted: every cell of lanes_hoisted_o holds the serial order's exact value: true
 lanes_hoisted: the emitted kernel binds the lane inside the serial loop: true
---- leg 2: a lane nest sharing its kernel with a plain nest keeps the presets ---
+--- leg 2: a lane nest sharing its kernel with a plain nest keeps the plain plan ---
 lanes_mixed: no lane geometry: true
-lanes_mixed: the presets' suffix pair, Grid s x Workgroup h: true
+lanes_mixed: the plain plans, Grid (h, s, b) x Workgroup e with the lane nest's h split: true
 lanes_mixed: every cell of lanes_mixed_o holds the serial order's exact value: true
 lanes_mixed: every cell of lanes_mixed_q holds the serial order's exact value: true
 --- leg 3: a lane reading another lane's cell declines ---
 lanes_mirror: no lane geometry: true
-lanes_mirror: the presets' suffix pair, Grid s x Workgroup h: true
+lanes_mirror: the plain plan, Grid (s, b) x Workgroup h: true
 lanes_mirror: every cell of lanes_mirror_o holds the serial order's exact value: true
---- leg 4: a preamble holding an inlined reduction keeps the presets ---
+--- leg 4: a preamble holding an inlined reduction keeps the plain plan ---
 lanes_scoped: the preamble holds the inlined loop: true
 lanes_scoped: no lane geometry: true
-lanes_scoped: the presets' suffix pair, Grid s x Workgroup h: true
+lanes_scoped: the plain plan, Grid (s, b) x Workgroup h: true
 --- leg 5: the rewritten attention's value pass, through the real pipeline ---
 attention, stored scores: the lowering carries the hoisted value pass: true
 attention, stored scores: the CPU preset schedules no lanes: true

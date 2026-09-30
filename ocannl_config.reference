@@ -202,14 +202,14 @@
 
 # If true, on GPU backends (cuda, hip, metal) kernels compiled without an explicit `lowered_transform`
 # get the default GPU schedule (docs/proposals/schedule-ir-optops.md §6): parallelizable loops are
-# annotated / split into Grid x Workgroup pairs when a conservative analysis proves the kernel
+# annotated with Grid and Workgroup loops when a conservative analysis proves the kernel
 # race-free under the annotation; otherwise the kernel runs single-threaded as before. Disabled
 # automatically while `debug_log_from_routines` is active (to keep kernel logs serial).
 #automatic_gpu_schedule=true
 
-# The workgroup (threadgroup, block) size the default GPU schedule targets: single parallel loops
-# are split by this factor; a second parallelizable loop is used as the Workgroup axis directly
-# when its extent fits. The configured value is a target: the annotator clamps it to the backend's
+# The workgroup (threadgroup, block) size the default GPU schedule targets: a nest's innermost
+# parallelizable loop is the Workgroup axis directly when its extent fits, and is split by this
+# factor (Grid blocks x Workgroup) otherwise. The configured value is a target: the annotator clamps it to the backend's
 # max-threads-per-workgroup device limit (minimum across devices on multi-device backends).
 #gpu_schedule_block_size=256
 
@@ -220,6 +220,15 @@
 # programs' segments coalesce back to a single kernel with unchanged placements. Raise this to
 # keep more kernels serial, e.g. to make their generated code easier to read.
 #gpu_schedule_min_parallel=64
+
+# The default GPU schedule maps every loop of a nest's proved parallel chain to hardware: the
+# leading loops to Grid (grid slots beyond the second fold onto .z), the innermost one to the
+# Workgroup (split into Grid blocks past gpu_schedule_block_size). While that workgroup holds fewer
+# threads than this value, the loops just above it join it as further Workgroup dimensions (at most
+# three, their product within the block size): a (b, s, h, d) projection output with d = 32, h = 8
+# runs as Grid (b, s) x Workgroup (h, d). 1 keeps one-dimensional workgroups, Grid (b, s, h) x
+# Workgroup d -- within 0.5% on CUDA, but half the kernel speed on HIP (gh-ocannl-1133).
+#gpu_schedule_workgroup_fill=256
 
 # If true, on CPU backends (cc, multidev_cc) kernels compiled without an explicit
 # `lowered_transform` get the default CPU schedule: the same conservative analysis as the GPU
