@@ -29,8 +29,11 @@ set -u
 BACKEND=$1
 REPEATS=${4:-200}
 BATCHES=${5:-8}
+# Positive and even, as the bench itself requires: zero batches time nothing (and the gate would
+# have no contenders), zero repeats divide by zero; odd counts break the mirrored visiting order.
 for n in "$REPEATS" "$BATCHES"; do
   case $n in '' | *[!0-9]*) echo "gh728_cells: repeats and batches must be integers, got '$n'" >&2; exit 2 ;; esac
+  ((10#$n > 0 && 10#$n % 2 == 0)) || { echo "gh728_cells: repeats and batches must be positive and even, got $n" >&2; exit 2; }
 done
 case $BACKEND in cuda | hip | metal | cc) ;; *) echo "gh728_cells: unknown backend '$BACKEND'" >&2; exit 2 ;; esac
 mkdir -p "$2" || { echo "gh728_cells: cannot create $2" >&2; exit 2; }
@@ -44,6 +47,9 @@ FIXTURE=$(cd "$(dirname "$3")" 2>/dev/null && pwd -P)/$(basename "$3")
 TREE=$(cd "$(dirname "$0")/.." && pwd -P) || exit 2
 while read -r v; do unset "$v"; done < <(env | sed -n 's/^\(OCANNL_[A-Z0-9_]*\)=.*/\1/p')
 while read -r v; do unset "$v"; done < <(env | sed -n 's/^\(BENCH_[A-Z0-9_]*\)=.*/\1/p')
+# The OpenMP runtime's controls shape the cc backend's parallel Grid kernels (team size, placement):
+# cleared, so every cc leg runs the runtime's own default regime.
+while read -r v; do unset "$v"; done < <(env | sed -nE 's/^((OMP|GOMP|KMP)_[A-Z0-9_]*)=.*/\1/p')
 
 # The commit the binaries are built from, marked when the tree carries anything that commit does
 # not: a modified tracked file, or an untracked non-ignored one (a stray root `dune` or
@@ -75,6 +81,8 @@ esac
   echo "gh728_cells: backend=$BACKEND host=$(hostname) commit=$COMMIT repeats=$REPEATS batches=$BATCHES"
   echo "fixture: $FIXTURE: $FIXTURE_VERDICT"
   printf '%s\n' "$DEVICE" | sed 's/^/device: /'
+  # Device selection is the box's configuration rather than a treatment: recorded, not cleared.
+  env | grep -E '^(CUDA|HIP|ROCR)_VISIBLE_DEVICES=' | sed 's/^/device selection: /'
 } | tee "$OUT/manifest.txt"
 
 FAILED=0
@@ -121,9 +129,13 @@ if len(rows) != 1:
     sys.exit(f"   protocol: {path}: expected one result line, found {len(rows)}")
 tune = rows[0].get("tune") or {}
 searched, n_search, n_replay = rows[0].get("searched"), tune.get("searches"), tune.get("replays")
-ok = (searched is True and (n_search or 0) > 0) if want == "search" else (
-    searched is False and n_search == 0 and (n_replay or 0) > 0)
-line = f"   protocol: {want} pass searched={searched} searches={n_search} replays={n_replay}"
+n_none = tune.get("no_searches")
+# An arm that neither searched nor replayed (a pre-search failure) ships the untuned default:
+# neither pass may carry one.
+ok = n_none == 0 and ((searched is True and (n_search or 0) > 0) if want == "search" else (
+    searched is False and n_search == 0 and (n_replay or 0) > 0))
+line = (f"   protocol: {want} pass searched={searched} searches={n_search} replays={n_replay}"
+        f" no_searches={n_none}")
 print(line + ("" if ok else "  -- NOT A " + want.upper() + " PASS"))
 sys.exit(0 if ok else 1)
 VERIFY

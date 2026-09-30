@@ -782,10 +782,12 @@ let () =
     end
   in
   (* Round 0: the untuned shipped default, one arm per site. *)
-  run_round ~label:"default (untuned)"
-    (List.filter_map prepared ~f:(fun pr ->
-         arm pr ~label:"default (untuned)" ~compile:(fun ~name ~fatal_seen fwd ->
-             compiled ~fatal_seen ~name (Context.auto ()) fwd)));
+  let default_label = "default (untuned)" in
+  let default_arm ?(prefix = "") pr =
+    arm pr ~label:(prefix ^ default_label) ~compile:(fun ~name ~fatal_seen fwd ->
+        compiled ~fatal_seen ~name (Context.auto ()) fwd)
+  in
+  run_round ~label:default_label (List.filter_map prepared ~f:default_arm);
   (* A seed arm: the sketch geometry [q] applied to the site's lowering as the pure IR transform it
      is. Shared by the per-geometry rounds and the finalists round, so a finalist is the SAME
      schedule its geometry round measured, recompiled. *)
@@ -918,7 +920,9 @@ let () =
      other, with every other site's finalists, and with the searches' crowned winners -- one round
      holding every contender of the question "does the merged site beat the best the split site
      has", duplicated sites included. The finalists are chosen by one statistic and then
-     re-measured, so the round's numbers are not the selection's own optimistic draw. *)
+     re-measured, so the round's numbers are not the selection's own optimistic draw. The untuned
+     default joins the round too: it is a candidate a site has, and nothing guarantees a seed or the
+     queued search's crown beats it under every statistic the gate reads. *)
   let finalists =
     if not do_seeds then []
     else
@@ -936,13 +940,16 @@ let () =
               |> Option.map ~f:fst)
           |> List.filter_map ~f:(seed_arm ~prefix:final_prefix pr))
   in
+  let contenders = finalists @ winners in
   run_round
     ~label:
       (match (finalists, winners) with
-      | _ :: _, _ :: _ -> "finalists (each site's best seeds + the searches' crowned winners)"
-      | _ :: _, [] -> "finalists (each site's best scalar and tensorized seeds)"
-      | [], _ -> "TUNED winners")
-    (finalists @ winners);
+      | _ :: _, _ :: _ ->
+          "finalists (each site's best seeds, the searches' crowned winners and the defaults)"
+      | _ :: _, [] -> "finalists (each site's best scalar and tensorized seeds and the defaults)"
+      | [], _ -> "TUNED winners and the defaults")
+    (if List.is_empty contenders then []
+     else contenders @ List.filter_map prepared ~f:(default_arm ~prefix:final_prefix));
   let f_opt = function None -> "     n/a" | Some g -> Printf.sprintf "%8.1f" g in
   let of_site tag lbl =
     Option.bind (Hashtbl.find results tag) ~f:(fun l ->
@@ -1061,10 +1068,12 @@ let () =
     let split = [ "Q_heads8_a"; "Q_heads8_b" ] and merged = [ "Q_heads1_a"; "Q_heads1_b" ] in
     let is_final l = String.is_prefix l ~prefix:final_prefix in
     let is_mma l = String.is_prefix l ~prefix:(final_prefix ^ "mma-") in
+    let is_default = String.equal (final_prefix ^ default_label) in
     let classes =
       [
-        ("scalar seeds", fun l -> is_final l && not (is_mma l));
+        ("scalar seeds", fun l -> is_final l && (not (is_mma l)) && not (is_default l));
         ("tensorized seeds", is_mma);
+        ("untuned default", is_default);
         ("tuner's crown", String.equal tuned_label);
         ("any contender", fun l -> is_final l || String.equal l tuned_label);
       ]
