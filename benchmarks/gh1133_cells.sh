@@ -238,6 +238,7 @@ if not cells:
     print("NO MEASUREMENT: no numbered cell produced a result line")
 print("| backend | fixture | treatment | p50 per repeat (ms) | median p50 | vs %s | p10..p90 spread | queued (median) | loss vs %s |" % (ref_treatment, ref_treatment))
 print("|---|---|---|---|---|---|---|---|---|")
+missing_refs = []
 def med(key):
     reps = cells.get(key, [])
     return statistics.median(r["step_ms"]["p50"] for _, r in reps) if reps else None
@@ -249,6 +250,9 @@ for (backend, fixture, treatment), reps in sorted(cells.items(), key=lambda kv: 
     # A d1 treatment is compared with the d1 form of the reference (the same attention form).
     rt = ("d1" + ref_treatment) if treatment.startswith("d1") else ref_treatment
     ref = med((backend, fixture, rt))
+    if ref is None:
+        # The comparison the summary advertises did not happen: an incomplete matrix.
+        missing_refs.append("%s %s %s (reference %s)" % (backend, fixture, treatment, rt))
     loss = ""
     bref = cells.get((backend, fixture, rt))
     if bref:
@@ -258,7 +262,9 @@ for (backend, fixture, treatment), reps in sorted(cells.items(), key=lambda kv: 
     print("| %s | %s | %s | %s | %.2f | %s | %.3fx | %.2f | %s |" % (
         backend, fixture, treatment, ", ".join("%.2f" % p for p in p50s), m,
         "%.3fx" % (m / ref) if ref else "", spread, queued, loss))
-sys.exit(1 if incomplete else 0)
+for row in missing_refs:
+    print("MISSING REFERENCE: %s has no reference cell to compare with" % row)
+sys.exit(1 if incomplete or missing_refs else 0)
 PY
       cat "$out/summary.md" ;;
     *) echo "gh1133: unknown step $step"; failed=1 ;;

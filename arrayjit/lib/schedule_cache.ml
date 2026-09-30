@@ -571,14 +571,6 @@ let codegen_tag ~(limits : Backend_intf.hardware_limits)
          #337. *)
       gate "buffer-aliasing" (Utils.get_global_flag ~default:false ~arg_name:"buffer_aliasing");
     ]
-    (* A fissioned winner's saved schedules are keyed by segment digests of the default
-       segmentation, which replay recomputes; with the schedule-aware merge rule off, the routine
-       segments differently and the winner would be refused as drifted (gh-ocannl-1126, Codex P2 on
-       PR #913). Only the non-default setting adds a part, so keys written under the default are
-       unchanged. *)
-    @
-    if Utils.get_global_flag ~default:true ~arg_name:"gpu_fission_keep_mapping" then []
-    else [ "no-fission-keep-mapping" ]
   in
   String.prefix (Stdlib.Digest.to_hex (Stdlib.Digest.string (String.concat ~sep:"\000" parts))) 8
 
@@ -673,7 +665,8 @@ let objective_tag () =
    {!cache_key} (each name dispatches to an arm below, and an unknown name raises), so the
    enumeration cannot go stale against the implementation — which is what makes it usable as the
    thing the digest-completeness registry classifies config keys against (gh-ocannl-572). *)
-let key_components = [ "digest"; "backend"; "numerics"; "codegen"; "pool"; "device"; "timing" ]
+let key_components =
+  [ "digest"; "backend"; "numerics"; "codegen"; "fission"; "pool"; "device"; "timing" ]
 
 let cache_key ?objective ~timing_identity ~(limits : Backend_intf.hardware_limits) ~capabilities
     canonical ~backend =
@@ -694,6 +687,15 @@ let cache_key ?objective ~timing_identity ~(limits : Backend_intf.hardware_limit
         | "backend" -> sanitize backend
         | "numerics" -> "n" ^ numerics_tag ()
         | "codegen" -> "c" ^ codegen_tag ~limits ~capabilities ()
+        (* The inputs of the default GPU segmentation beyond the code (gh-ocannl-1126): a fissioned
+           winner's saved schedules are keyed by segment digests that replay recomputes, so a winner
+           must not be looked up under settings that segment the routine differently. Only the
+           settings some source sets contribute, so keys minted under the defaults are unchanged. *)
+        | "fission" -> (
+            match Utils.config_class_fingerprint (Utils.Keyed "fission") with
+            | "" -> ""
+            | resolved ->
+                "f" ^ String.prefix (Stdlib.Digest.to_hex (Stdlib.Digest.string resolved)) 8)
         (* The worker-pool signature (gh-ocannl-530): CPU crowns do not transfer across pools, so a
            pool change re-tunes instead of replaying. [None] (GPU backends) contributes nothing. *)
         | "pool" -> (

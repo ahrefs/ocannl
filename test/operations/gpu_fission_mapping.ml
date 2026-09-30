@@ -151,22 +151,26 @@ let step ?(run = true) ~name ~build ~transform () =
   let update = Train.grad_update loss in
   let%op learning_rate = 0.5 in
   let sgd = Train.sgd_update ~learning_rate loss in
-  let ctx = Train.init_params (Context.auto ()) Ir.Indexing.Empty loss in
+  let init = Train.init_params (Context.auto ()) Ir.Indexing.Empty loss in
   let captured = ref None in
   let ctx, routine =
     Context.compile ~name
       ~lowered_transform:(fun o ->
         captured := Some (copy o);
         transform o)
-      ctx
+      init
       (Ir.Assignments.sequence [ update; sgd ])
       Ir.Indexing.Empty
   in
   let ctx = if run then Context.run ctx routine else ctx in
   let read f = Array.concat (List.map params ~f:(fun p -> Context.get_values ctx (f p))) in
-  ( Option.value_exn !captured,
-    read (fun p -> (Option.value_exn p.Tensor.diff).Tensor.grad),
-    read (fun p -> p.Tensor.value) )
+  let grads = read (fun p -> (Option.value_exn p.Tensor.diff).Tensor.grad)
+  and values = read (fun p -> p.Tensor.value) in
+  (* Device buffers are rooted in the backend's pool tables, not reclaimed by the GC: release the
+     compiled leaf, then its initialization parent, before the next case allocates. *)
+  Context.release ctx;
+  Context.release init;
+  (Option.value_exn !captured, grads, values)
 
 let lowering ~name ~build =
   (* Compiled unscheduled and never run: only the lowering is wanted. *)

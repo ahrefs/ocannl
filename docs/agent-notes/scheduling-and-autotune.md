@@ -45,7 +45,9 @@ files.
   Metal), the fused dV denied its lanes by dK, the logits trimmed by their row max. The probes run
   under `Indexing.discarding_symbols`: `split` mints symbols, and a discarded probe's would shift every
   later minted name. Autotuner fission call sites pass `Schedule.fission_keep_mapping` too, or their
-  segmentation stops being the untuned default's (`fission_equivalence`). A cut needs no retest after
+  segmentation stops being the untuned default's (`fission_equivalence`). The segmentation's inputs
+  beyond the code -- the gate, `gpu_schedule_block_size`, `_min_parallel`, `_workgroup_fill` -- are
+  the schedule cache's `fission` key component: a fissioned winner replays by re-segmenting. A cut needs no retest after
   scope-local resolution: a cut that resolution merges back is serial either way (the reason is in
   the comment on `keeps_mapping`). `test/operations/gpu_fission_mapping`.
 - A parallel loop under a serial loop is reachable only past lane-uniform scalar work
