@@ -70,7 +70,11 @@ files.
   (an all-reduce: the total lands in every lane, no shared scratch, no barrier) at exactly one
   simdgroup, else the serial loop in every lane. Never the `Workgroup` binding: each lane would
   keep its own term, a wrong value rather than a race. Multi-simdgroup widths decline in v1.
-  `test/operations/gpu_lane_reduction`, and leg 6 of `gpu_serial_lanes` pins dK's own nest.
+  Measured on Metal (D1 training, lukstafi/ocannl-staging PR for gh-ocannl-1124): duplicated is a
+  1.07-1.45x step REGRESSION (every lane pays the value width per pair), cooperative a 0.94-0.98x
+  win, and it lanes dQ too -- fission then cuts dQ from the row dot `D`, whose merge would now cost
+  dQ its mapping. `test/operations/gpu_lane_reduction`, and leg 6 of `gpu_serial_lanes` pins dK's
+  own nest.
 - **A contraction inside a scan body is tensorized by rewriting the whole scan's owner, not by
   `Tensorize`** (gh-ocannl-1003, `Schedule.Fold_mma`): `rewrite_loop` does not enter a scan, and
   a lane loop minted inside the body would take a second `Workgroup` slot under the row loop. The
