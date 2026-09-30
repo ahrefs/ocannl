@@ -253,10 +253,10 @@ let () =
     | exception Invalid_argument _ -> true);
   Ir.Online_softmax.set_backward_enabled (Some true);
   let single = Ir.Online_softmax.dprob_local ~like Ir.Ops.single in
-  p "the dp local minted again for the same node at another precision is refused"
-    (match Ir.Online_softmax.dprob_local ~like Ir.Ops.double with
-    | _ -> false
-    | exception Invalid_argument _ -> true);
+  p "the dp local minted for the same node at another precision is a node of its own, at that one"
+    (let double = Ir.Online_softmax.dprob_local ~like Ir.Ops.double in
+     (not (Ir.Tnode.equal single double))
+     && Ir.Ops.equal_prec (Lazy.force double.Ir.Tnode.storage_prec) Ir.Ops.double);
   p "the dp local minted again at its own precision is the same node"
     (Ir.Tnode.equal single (Ir.Online_softmax.dprob_local ~like Ir.Ops.single));
   Ir.Online_softmax.set_backward_enabled None;

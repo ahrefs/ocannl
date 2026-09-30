@@ -112,12 +112,12 @@ val reassociable_local : Tnode.t -> bool
     ([C_syntax.try_lane_all_reduce]) renders only such a local. *)
 
 val dprob_local : like:Tnode.t -> Ops.prec -> Tnode.t
-(** The [dp] scope local the fused backward mints for the pair nests over [like] (memoized per
-    [like], virtual): the one node {!reassociable_local} accepts. Exposed so that hand-built IR can
-    exercise the schedule's preamble-reduction lanes on it -- and, since minting it is the license
-    to reassociate, only under the gate that licenses that: raises [Invalid_argument] unless
-    [online_softmax_backward] (or {!set_backward_enabled}) is on, and when [like]'s local was
-    already minted at another precision. *)
+(** The [dp] scope local the fused backward mints for the pair nests over [like] (virtual; memoized
+    per [like] and precision, like every scalar the rewrite mints): the one node
+    {!reassociable_local} accepts. Exposed so that hand-built IR can exercise the schedule's
+    preamble-reduction lanes on it -- and, since minting it is the license to reassociate, only
+    under the gate that licenses that: raises [Invalid_argument] unless [online_softmax_backward]
+    (or {!set_backward_enabled}) is on. *)
 
 val fold_tile_role : Tnode.t -> [ `Scores | `Numerator ] option
 (** Whether a node is one of the block fold's per-row tiles, and which: the score tile or the output
