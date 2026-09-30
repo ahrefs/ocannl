@@ -283,8 +283,15 @@ Functions inside <code>Operation.TDSL</code> use
 <code>~grad_spec:If_needed</code>, which will make the tensors
 non-differentiable when the gradient is not needed – except for
 <code>TDSL.param</code>, which makes the final parameter tensor
-differentiable after evaluating its initializer as forward-only
-code.</p>
+differentiable after evaluating its initializer as forward-only code. A
+<code>Prohibit_grad</code> operation cuts the gradient at that operation
+whatever its operands are: <code>Tensor.op</code> builds no gradient
+node and composes no backpropagation code for it, so applying an
+<code>NTDSL</code> operation to a differentiable operand –
+<code>NTDSL.O.(x @^^ spec)</code> inside a <code>%op</code> body, as
+<code>Nn_blocks.softmax</code> does for its row max – detaches the
+result without a copy. <code>Operation.stop_gradient</code> is the
+identity instance of the same mechanism.</p>
 <p>The extension points open <code>NTDSL.O</code>, resp.
 <code>TDSL.O</code>, for the scope of the extension point, to expose the
 corresponding operators.</p>
