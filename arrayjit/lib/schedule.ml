@@ -6919,7 +6919,11 @@ let segment_optimized (full : Low_level.optimized) (llc : Low_level.t) : Low_lev
    not the applied code: a probe must not mint the placements or nodes [apply] would. Only a
    statement's OWN loops count, so hardware loops elsewhere in the kernel -- which set its launch
    dimensions -- say nothing about it. A cooperative fold ({!fold_mma_schedule}) counts as a mapping
-   no other schedule matches: it is the matrix-unit form of its one nest (gh-ocannl-1126). *)
+   no other schedule matches: it is the matrix-unit form of its one nest (gh-ocannl-1126). A
+   [Workgroup_reduce] retype shares the workgroup slot of the statement's widest [Workgroup] loop
+   rather than adding a dimension -- the lane geometry's cooperative preamble reduction is a sibling
+   of its lane on the same [.x] threads (gh-ocannl-1124) -- so it adds threads only past that loop's
+   width. *)
 let statement_mappings (llc : Low_level.t) (sched : schedule) : (int * int) list =
   let open Low_level in
   let hw = function Grid | Workgroup | Workgroup_reduce -> true | _ -> false in
@@ -6941,29 +6945,42 @@ let statement_mappings (llc : Low_level.t) (sched : schedule) : (int * int) list
         | _ -> ()
       in
       loops stmt;
-      List.fold sched ~init:(1, 1) ~f:(fun (g, a) op ->
-          match op with
-          | Retype { axis; ty } -> (
-              match Hashtbl.find extents axis with
-              | Some n when equal_axis_type ty Grid -> (times g n, times a n)
-              | Some n when hw ty -> (g, times a n)
-              | _ -> (g, a))
-          | Split { axis; factor; outer; inner; _ } -> (
-              match Hashtbl.find extents axis with
-              | None -> (g, a)
-              | Some n ->
-                  let blocks = (n + factor - 1) / factor in
-                  let g = if equal_axis_type outer Grid then times g blocks else g in
-                  let a =
-                    match (hw outer, hw inner) with
-                    | true, true -> times a n
-                    | false, true -> times a (min factor n)
-                    | true, false -> times a blocks
-                    | false, false -> a
-                  in
-                  (g, a))
-          | Fold_mma { query; _ } when Hashtbl.mem extents query -> (Int.max_value, Int.max_value)
-          | _ -> (g, a)))
+      let own ty =
+        List.filter_map sched ~f:(function
+          | Retype { axis; ty = ty' } when equal_axis_type ty ty' -> Hashtbl.find extents axis
+          | _ -> None)
+      in
+      let widest l = List.fold l ~init:1 ~f:max in
+      let lane = widest (own Workgroup) and reduce = widest (own Workgroup_reduce) in
+      let g, a =
+        List.fold sched
+          ~init:(1, (reduce + lane - 1) / lane)
+          ~f:(fun (g, a) op ->
+            match op with
+            | Retype { ty = Workgroup_reduce; _ } -> (g, a)
+            | Retype { axis; ty } -> (
+                match Hashtbl.find extents axis with
+                | Some n when equal_axis_type ty Grid -> (times g n, times a n)
+                | Some n when hw ty -> (g, times a n)
+                | _ -> (g, a))
+            | Split { axis; factor; outer; inner; _ } -> (
+                match Hashtbl.find extents axis with
+                | None -> (g, a)
+                | Some n ->
+                    let blocks = (n + factor - 1) / factor in
+                    let g = if equal_axis_type outer Grid then times g blocks else g in
+                    let a =
+                      match (hw outer, hw inner) with
+                      | true, true -> times a n
+                      | false, true -> times a (min factor n)
+                      | true, false -> times a blocks
+                      | false, false -> a
+                    in
+                    (g, a))
+            | Fold_mma { query; _ } when Hashtbl.mem extents query -> (Int.max_value, Int.max_value)
+            | _ -> (g, a))
+      in
+      (g, a))
 
 (* A probe of the per-segment schedule leaves no trace: [split] and the lane plans mint loop
    symbols, and a discarded probe's symbols would shift every later minted name -- in the goldens

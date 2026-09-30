@@ -792,6 +792,14 @@ val zero_expansion :
     whole-node (a serial kernel renders them as [memset]). Exposed for callers (e.g. the autotuner)
     that replicate the default fission pipeline with custom per-segment schedules. *)
 
+val statement_mappings : Low_level.t -> schedule -> (int * int) list
+(** The hardware mapping [schedule] gives each top-level statement of the code, as
+    [(groups, active threads)] of the statement's OWN loops, read off the ops: what schedule-aware
+    fission ({!fission_keep_mapping}) compares between a merged kernel and a statement alone. A
+    [Workgroup_reduce] retype shares the slot of the statement's widest [Workgroup] loop (the lane
+    geometry's cooperative preamble reduction, gh-ocannl-1124), adding threads only past its width.
+*)
+
 val fission_keep_mapping :
   is_gpu:bool -> limits:Backend_intf.hardware_limits -> (Low_level.optimized -> schedule) option
 (** The [keep_mapping] schedule {!maybe_default_schedules} passes to {!fission_scheduled}:

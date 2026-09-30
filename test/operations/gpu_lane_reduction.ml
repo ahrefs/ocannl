@@ -173,6 +173,19 @@ let run ?(preamble = S.Preamble_cooperative) ?(lanes = true) ~reduction_axis ~em
          case.opt)
       case.opt
   in
+  (* What schedule-aware fission reads: the reduce lane is the output lanes' threads, not a
+     dimension of its own. *)
+  if lanes then
+    p
+      (Printf.sprintf "%s: the mapping probe counts %d active threads (a reduce lane adds none)"
+         case.name
+         (b_n * t_n * h_n * case.launch_block))
+      (List.equal
+         (fun (g1, a1) (g2, a2) -> g1 = g2 && a1 = a2)
+         (S.statement_mappings case.opt.llc
+            (S.default_gpu ~block_size:256 ~min_parallel:64 ~workgroup_fill:1
+               ~preamble_reduction:preamble case.opt))
+         [ (b_n * t_n * h_n, b_n * t_n * h_n * case.launch_block) ]);
   if lanes then (
     p
       (Printf.sprintf "%s: Grid (h, t, b) and a %d-wide lane" case.name case.launch_block)
@@ -252,6 +265,13 @@ let () =
     skipped ~backend:backend_name binds)
   else (
     Generated.assert_omits ~routine:case.name ~contains:all_reduce_marker omits;
-    Generated.assert_omits ~routine:case.name
-      ~contains:(Printf.sprintf "for (int32_t %s " (Ir.Indexing.symbol_ident case.e_sym))
-      binds)
+    (* Positively, whatever the dialect's index type: the loop's symbol is assigned from the
+       workgroup [.x] register, and it has no serial loop's [= 0] start. *)
+    let register = match backend_name with "metal" -> "lid.x" | _ -> "threadIdx.x" in
+    let ident = Ir.Indexing.symbol_ident case.e_sym in
+    let src = Generated.read case.name in
+    p binds
+      (List.exists (String.split_lines src) ~f:(fun line ->
+           String.is_substring line ~substring:(" " ^ ident ^ " = (")
+           && String.is_substring line ~substring:register)
+      && not (String.is_substring src ~substring:(" " ^ ident ^ " = 0;"))))
