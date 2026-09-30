@@ -1,0 +1,61 @@
+=== pair_conflict ===
+control: [Sub_axis; 40] and [1; 8] address one cell of an 8x32 buffer: true
+control: the placeholder reading of a flattened [Sub_axis; 40] is refuted: true
+control: the flattened reading of a dynamic axis then [1] is refuted: true
+issue: flat [Sub;40] vs [h;e] (8x32)                         query Cross_thread oracle overlap
+issue: flat [Sub;2] vs [1;0] (2x2)                           query Cross_thread oracle overlap
+flat [Sub;f] vs row-major [h;e] (8x32)                       query Cross_thread oracle overlap
+flat [Sub;f<32] vs row 1 [1;e]: disjoint halves              query Disjoint     oracle disjoint
+flat [Sub;u] vs [h;e], thread u~e                            query Cross_thread oracle cross-thread
+dynamic axis then iterator vs [i;j], thread j                query Same_thread  oracle same-thread
+dynamic axis then [1] vs [2;1]: may meet                     query Cross_thread oracle overlap
+dynamic axis then [1] vs [2;2]: never meet                   query Disjoint     oracle disjoint
+flat vec [Sub;4c] run 4 vs [h;e] (2x8)                       query Cross_thread oracle overlap
+flat vec [Sub;4c] run 4 vs cell [1;7]                        query Cross_thread oracle overlap
+trailing-lane tail vec [Sub;16;Sub] run 2 vs [h;e;0]         query Cross_thread oracle overlap
+lowered tail vec [Sub;16;0] run 2 vs [h;e;0]                 query Cross_thread oracle overlap
+trailing-lane vec [Sub;4c;Sub] run 4 vs [1;e;0], thread c~e  query Cross_thread oracle cross-thread
+diagonal [i;i] vs flat [Sub;5]: off-diagonal                 query Disjoint     oracle disjoint
+diagonal [i;i] vs flat [Sub;4]: on-diagonal                  query Cross_thread oracle overlap
+diagonal [i;i] vs flat [Sub;f]                               query Cross_thread oracle overlap
+vec [i;4j] run 4 vs itself, thread i                         query Same_thread  oracle same-thread
+
+=== separates ===
+aligned vec [4i] run 4 separates i                           query true         oracle true
+unaligned vec [2i] run 4 does not separate i                 query false        oracle false
+trailing-lane vec [Sub;4c;Sub] run 4 separates c             query true         oracle true
+row-spilling vec [i;4j] run 4 (3x6) does not separate i, j   query false        oracle false
+row-aligned vec [i;4j] run 4 (3x8) separates i, j            query true         oracle true
+dynamic [?;j] separates j                                    query true         oracle true
+dynamic [?;j] does not separate i                            query false        oracle false
+flat store [Sub;c] separates c                               query true         oracle true
+diagonal [i;i] separates i                                   query true         oracle true
+
+=== within_box ===
+flat [Sub;c<8] inside 2x4                                    query true         oracle true
+flat [Sub;c<9] leaves 2x4                                    query false        oracle false
+[i;j] inside 2x4                                             query true         oracle true
+[i;j+1] leaves 2x4                                           query false        oracle false
+trailing [c;Sub] inside 3x2                                  query true         oracle true
+
+=== covers_box ===
+flat [Sub;c] covers 2x4                                      query true         oracle true
+flat [Sub;2c] leaves holes in 2x4                            query false        oracle false
+flat [Sub;i+4j] covers 2x4                                   query true         oracle true
+trailing [c;Sub] leaves holes in 3x2                         query false        oracle false
+[i;j] covers 2x4                                             query true         oracle true
+diagonal [i;i] does not cover 3x3                            query false        oracle false
+
+=== fiber_cardinality ===
+flat [Sub;c] over c:8                                        query Exact 1
+flat [Sub;c] over c:8, d:3 absent                            query Exact 3
+flat [Sub;c+d] over c:4, d:4                                 query At_least 1
+trailing-lane [Sub;4c;Sub] over c:4                          query Exact 1
+
+=== read_covered_before ===
+flat write [Sub;c<8] covers read [h;e] (2x4)                 query Covered      oracle covered
+flat write [Sub;c<4] leaves row 1 of read [h;e]              query Unknown      oracle uncovered
+write [h;e] covers flat read [Sub;f<8]                       query Covered      oracle covered
+flat vec write [Sub;4c] run 4 covers read [h;e]              query Covered      oracle covered
+trailing-lane vec [Sub;4c;Sub] covers read [h;e;0]           query Covered      oracle covered
+trailing-lane vec [Sub;4c;Sub] c<1 leaves row 1              query Unknown      oracle uncovered

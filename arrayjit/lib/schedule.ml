@@ -4834,9 +4834,11 @@ let loops_independent (opt : Low_level.optimized) ~(syms : Indexing.symbol list)
                   List.fold accs ~init:nv ~f:(fun nv x ->
                       if licensed w x then nv
                       else
+                        let dims = Lazy.force tn.Tn.dims in
                         match
                           Affine.pair_conflict ~range ~dup_left:dup ~dup_right:dup ~pairs
-                            ~left:w.Affine.a_map ~right:x.Affine.a_map
+                            ~left:(Affine.view ~dims w.Affine.a_map)
+                            ~right:(Affine.view ~dims x.Affine.a_map)
                         with
                         | Affine.Disjoint | Affine.Same_thread -> nv
                         | Affine.Cross_thread wit ->
@@ -4907,7 +4909,9 @@ let stage_legality (opt : Low_level.optimized) (op : optop) : op_verdict =
             let reads = List.filter tile_accs ~f:(fun a -> not a.Affine.a_write) in
             let uncovered =
               List.find_map reads ~f:(fun read ->
-                  match Affine.read_covered_before ~read ~writes () with
+                  match
+                    Affine.read_covered_before ~dims:(Lazy.force tile.Tn.dims) ~read ~writes ()
+                  with
                   | `Covered -> None
                   | `Unknown witness -> Some witness)
             in
@@ -5098,10 +5102,10 @@ type access = {
   a_dyn_axis : int option;
       (** The data-dependent component of a dynamic access ([Set_dynamic]/[Get_dynamic]'s
           [dyn_axis]; [a_idcs] holds a placeholder there) — affine queries must treat that component
-          as opaque ({!query_map}). *)
-  a_vec : bool;
-      (** [Set_from_vec]: [a_idcs] is the base of a length-run along the minor axis, not a single
-          cell — affine queries must treat the last component as opaque ({!query_map}). *)
+          as opaque ({!query_view}). *)
+  a_vec : int option;
+      (** [Set_from_vec]'s run length: [a_idcs] is the base of a run of that many flat cells, not a
+          single cell — affine queries must treat the run as opaque ({!query_view}). *)
   a_val_syms : Indexing.symbol list;
       (** Writes only: loop symbols the written value depends on syntactically (index symbols of rhs
           reads, embedded indices, dynamic-index sub-expressions). Direct dependence only — a chain
@@ -5116,7 +5120,7 @@ exception Bail
 let scan_accesses plc ~local_syms (llc : Low_level.t) : access list =
   let open Low_level in
   let acc = ref [] in
-  let add ~depth:_ ~write ~dynamic ?dyn_axis ?(vec = false) ?(val_syms = []) tn idcs =
+  let add ~depth:_ ~write ~dynamic ?dyn_axis ?vec ?(val_syms = []) tn idcs =
     acc :=
       {
         a_tn = tn;
@@ -5162,7 +5166,7 @@ let scan_accesses plc ~local_syms (llc : Low_level.t) : access list =
     | Set_dynamic { tn; idcs; dyn_axis; dyn_value = v, _; llsc; _ } ->
         (* gh-466: the scatter's effective write index is not statically known. Registering it
            [~dynamic:true] makes the cross-nest alignment reject it, and the per-nest hazard
-           analysis mask the dynamic component from the affine queries ([query_map]) — the
+           analysis mask the dynamic component from the affine queries ([query_view]) — the
            deterministic no-atomics invariant: loops driving the dynamic index are never forced
            equal across threads, so they stay serial, while statically-pinning components (gh-484
            task 2: the per-block partials row of [Split_reduce], the embedding-dim column) may
@@ -5173,9 +5177,9 @@ let scan_accesses plc ~local_syms (llc : Low_level.t) : access list =
           tn idcs;
         scalar ~depth v;
         scalar ~depth llsc
-    | Set_from_vec { tn; idcs; arg = a, _; _ } ->
+    | Set_from_vec { tn; idcs; length; arg = a, _; _ } ->
         if depth > 0 && Tn.Placements.is_materialized_peek plc tn then raise Bail;
-        add ~depth ~write:true ~dynamic:false ~vec:true ~val_syms:(scalar_syms a) tn idcs;
+        add ~depth ~write:true ~dynamic:false ~vec:length ~val_syms:(scalar_syms a) tn idcs;
         scalar ~depth a
     | Set_local (_, llsc) -> scalar ~depth llsc
     | If { cond = c, _; body } ->
@@ -5225,18 +5229,16 @@ let split_nests plc (llc : Low_level.t) : nest_info list * access list =
 
 let mentions_sym = Indexing.axis_index_mentions_any
 
-(* The affine-query view of an access's index map: a vectorized write's last (minor-axis run)
-   component is the base of a run, and a dynamic access's [dyn_axis] component is a data-dependent
-   row (the vector holds a placeholder there) — both are masked to an opaque [Sub_axis], so the
-   engine draws no (possibly wrong) disjointness or confinement conclusion from them. *)
-let query_map (a : access) : Indexing.axis_index array =
-  if ((not a.a_vec) && Option.is_none a.a_dyn_axis) || Array.is_empty a.a_idcs then a.a_idcs
-  else begin
-    let m = Array.copy a.a_idcs in
-    if a.a_vec then m.(Array.length m - 1) <- Indexing.Sub_axis;
-    Option.iter a.a_dyn_axis ~f:(fun ax -> if ax < Array.length m then m.(ax) <- Indexing.Sub_axis);
-    m
-  end
+(* The affine-query view of an access (gh-ocannl-1162): a vectorized write is the base of a run of
+   flat cells, and a dynamic access's [dyn_axis] component is a data-dependent row (the vector holds
+   a placeholder there) — both are stated to {!Affine.view} as unknown, never written into the map,
+   so the engine draws no (possibly wrong) disjointness or confinement conclusion from them while a
+   flattened [Sub_axis] run keeps its real meaning. [range] (loop bounds) lets a run be proved not
+   to spill out of its minor coordinate. *)
+let query_view ~range (a : access) : Affine.coord array =
+  Affine.view ~range ?dyn_axis:a.a_dyn_axis
+    ?vec:(Option.map a.a_vec ~f:(fun length -> Affine.Run length))
+    ~dims:(Lazy.force a.a_tn.Tn.dims) a.a_idcs
 
 (* The single-child chain of [For_loop]s from the top of a nest, descending through [If] wrappers
    and comments; stops at the first branching ([Seq] with more than one non-comment statement).
@@ -5463,7 +5465,7 @@ let analyze_parallel_chains ?(max_chain = 2) ?(select_chain = Fn.id) ?(lanes = f
       let pairs = List.zip_exn (List.take full_syms.(gi) l) (List.take full_syms.(gj) l) in
       let verdict =
         Affine.pair_conflict ~range ~dup_left:(dup gi) ~dup_right:(dup gj) ~pairs
-          ~left:(query_map a) ~right:(query_map b)
+          ~left:(query_view ~range a) ~right:(query_view ~range b)
       in
       let query_safe = match verdict with Affine.Cross_thread _ -> false | _ -> true in
       Affine.crosscheck ~site:"schedule cross-nest alignment" ~context:(Tn.debug_name a.a_tn)
@@ -5567,14 +5569,14 @@ let analyze_parallel_chains ?(max_chain = 2) ?(select_chain = Fn.id) ?(lanes = f
             if is_mat || chain_relevant then (
               let has_dynamic = List.exists accs ~f:(fun a -> a.a_dynamic) in
               (* gh-484 (task 2, unbailing the gh-466 scatter): dynamic accesses of a materialized
-                 node no longer bail wholesale. The dynamic component is masked to [Sub_axis] in
-                 [query_map], so the conflict query decides from the statically-known components: a
-                 chain symbol pinning a same-position plain component of every access confines
-                 conflicts to its own thread (the per-block partials row of [Split_reduce], the
-                 embedding-dim column of the scatter), while loops driving the dynamic index are
-                 never forced equal across threads and stay serial. Per-thread (non-materialized)
-                 scratch keeps bailing: its containment rule ("reads hit exactly the cells the same
-                 thread wrote") is order-sensitive and unknowable under data-dependent rows. *)
+                 node no longer bail wholesale. The dynamic component is an unknown coordinate of
+                 [query_view], so the conflict query decides from the statically-known ones: a chain
+                 symbol pinning a same-position plain component of every access confines conflicts
+                 to its own thread (the per-block partials row of [Split_reduce], the embedding-dim
+                 column of the scatter), while loops driving the dynamic index are never forced
+                 equal across threads and stay serial. Per-thread (non-materialized) scratch keeps
+                 bailing: its containment rule ("reads hit exactly the cells the same thread wrote")
+                 is order-sensitive and unknowable under data-dependent rows. *)
               if has_dynamic && not is_mat then raise Bail;
               if is_mat then (
                 (* Materialized: genuine shared memory — the affine conflict query decides. Every
@@ -5587,7 +5589,7 @@ let analyze_parallel_chains ?(max_chain = 2) ?(select_chain = Fn.id) ?(lanes = f
                       || List.for_all accs ~f:(fun x ->
                           match
                             Affine.pair_conflict ~range ~dup_left:dup ~dup_right:dup ~pairs
-                              ~left:(query_map w) ~right:(query_map x)
+                              ~left:(query_view ~range w) ~right:(query_view ~range x)
                           with
                           | Affine.Disjoint | Affine.Same_thread -> true
                           | Affine.Cross_thread wit ->
@@ -5709,7 +5711,10 @@ let crosscheck_scratch_containment (opt : Low_level.optimized) (chains : Low_lev
             && List.for_all accs ~f:(fun r ->
                 r.Affine.a_write
                 ||
-                match Affine.read_covered_before ~thread ~read:r ~writes () with
+                match
+                  Affine.read_covered_before ~thread ~dims:(Lazy.force tn.Tn.dims) ~read:r ~writes
+                    ()
+                with
                 | `Covered -> true
                 | `Unknown w ->
                     witness := w;

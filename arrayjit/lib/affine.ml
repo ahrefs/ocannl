@@ -14,8 +14,9 @@ module Idx = Indexing
     Scope: linear-integer reasoning over box domains — per-axis linear Diophantine equations with
     gcd/interval infeasibility and forced-equality derivation via the mixed-radix injectivity
     criterion (the same criterion as {!Indexing.affine_injective}). No full Presburger machinery:
-    every query form needed so far is decided (or conservatively declined) at this level. Any
-    component the engine cannot interpret ([Sub_axis], [Concat], dynamic indices) contributes no
+    every query form needed so far is decided (or conservatively declined) at this level. The
+    address queries read accesses through the coordinate view ({!type-coord}, gh-ocannl-1162): a
+    coordinate the caller does not know ([Unknown]: a dynamic axis, a vector run) contributes no
     information, which errs on the side of declining — soundness is preserved by construction. *)
 
 (** {2 The pair-conflict query}
@@ -50,35 +51,249 @@ type verdict =
 
 let rec gcd a b = if b = 0 then abs a else gcd b (Int.rem a b)
 
-(* Linear terms of one axis component on one side. [None] = uninterpretable component (no
-   information; conservative). Width-1 symbols are substituted by their lower bound: they are
-   constants, and removing them unclutters the matched-pair forcing below. *)
-let terms_of ~range ~dup ~(side : Idx.symbol -> var) (idx : Idx.axis_index) :
-    ((int * var) list * int) option =
+(** {2 The coordinate view}
+
+    gh-ocannl-1162. [Indexing.Sub_axis] has one meaning in the IR: the axis contributes zero to the
+    row-major flat offset while keeping its stride ([Indexing.reflect_projection], the renderers'
+    Horner sum). A [Sub_axis] run followed by a component therefore makes that component a FLATTENED
+    index ranging over the run's whole extent — lowering's flat stores ([Row]'s strided projection:
+    every axis but the innermost non-unit one is [Sub_axis]). The queries, though, also need to be
+    told that a component is UNKNOWN — a dynamic access's data-dependent axis, a vector store's run
+    — and those two readings need opposite treatment: "no information" is unsound for a flattened
+    index (its neighbour escapes its own axis's dim), and folding a run into its following component
+    is unsound for a placeholder (it turns ignorance into a known address). So the placeholder never
+    enters the map: callers state what they do not know out of band ([?dyn_axis], [?vec]) and
+    {!view} builds the query input, in which [Sub_axis] no longer occurs.
+
+    A coordinate folds [span] consecutive physical axes of extent product [size]. A [Sub_axis] run
+    and the component after it are one [Known] coordinate whose index is that component (its stride
+    is the group's innermost stride, so the coordinate IS the flattened index); a trailing
+    [Sub_axis] with no component after it is a [Known] zero of its own axis; every other axis is its
+    own coordinate. A group containing the dynamic axis, or a [Concat] component, is [Unknown]. Pair
+    queries re-coarsen both sides to the coarsest grouping either needs (the un-flattened [[h; e]]
+    over [[H; E]] becomes the single coordinate [E·h + e]); a group containing an [Unknown] part
+    coarsens to [Unknown].
+
+    Coordinates are assumed in bounds — each index within [0 <= index < size] — the same assumption
+    the per-axis reading has always made of ordinary components: with every coordinate in bounds,
+    two addresses coincide exactly when every coordinate does (mixed radix). *)
+
+type coord =
+  | Known of { span : int; size : int; terms : (int * Idx.symbol) list; offset : int }
+  | Unknown of { span : int; size : int }
+[@@deriving sexp_of]
+
+type vec_view = Run of int | Blocks of int [@@deriving sexp_of]
+
+let coord_span = function Known { span; _ } | Unknown { span; _ } -> span
+let coord_size = function Known { size; _ } | Unknown { size; _ } -> size
+let to_unknown c = Unknown { span = coord_span c; size = coord_size c }
+
+let coord_to_string c =
+  let group s = match coord_span c with 1 -> s | n -> Printf.sprintf "[%d axes: %s]" n s in
+  match c with
+  | Known { terms; offset; _ } ->
+      group (Sexp.to_string_hum ([%sexp_of: Idx.axis_index] (Idx.affine ~symbols:terms ~offset)))
+  | Unknown _ -> group "unknown"
+
+let coords_to_string cs = String.concat_array ~sep:"," (Array.map cs ~f:coord_to_string)
+
+(* The coordinates [cs] (outermost first) as one: [Known] only when every part is, with the parts
+   composed mixed-radix — [Σ_i (Π_{j>i} size_j)·idx_i]. *)
+let merge (cs : coord list) : coord =
+  let span = List.fold cs ~init:0 ~f:(fun n c -> n + coord_span c) in
+  let size = List.fold cs ~init:1 ~f:(fun n c -> n * coord_size c) in
+  let composed =
+    List.fold cs
+      ~init:(Some ([], 0))
+      ~f:(fun acc c ->
+        match (acc, c) with
+        | Some (terms, offset), Known k ->
+            Some
+              ( List.map terms ~f:(fun (co, s) -> (co * k.size, s)) @ k.terms,
+                (offset * k.size) + k.offset )
+        | _ -> None)
+  in
+  match composed with
+  | Some (terms, offset) -> Known { span; size; terms = Idx.coalesce_affine_terms terms; offset }
+  | None -> Unknown { span; size }
+
+(* The interval a known coordinate's index ranges over, when every symbol's range is known. *)
+let interval ~range (terms, offset) =
+  List.fold terms
+    ~init:(Some (offset, offset))
+    ~f:(fun acc (c, s) ->
+      match (acc, range s) with
+      | Some (lo, hi), Some (slo, shi) ->
+          Some (lo + min (c * slo) (c * shi), hi + max (c * slo) (c * shi))
+      | _ -> None)
+
+(* The minor coordinate a vector run moves along: the group holding the innermost axis of extent [>
+   1] merged with every (unit-extent) group after it — stride 1, so a run of [len] consecutive flat
+   cells from base [v] is [v .. v + len - 1] of it while it does not spill. *)
+let split_minor (v : coord array) : coord array * coord =
+  let k = Array.length v in
+  let m =
+    Option.value ~default:0
+      (Array.fold v ~init:(0, None) ~f:(fun (i, last) c ->
+           (i + 1, if coord_size c > 1 then Some i else last))
+      |> snd)
+  in
+  (Array.sub v ~pos:0 ~len:m, merge (Array.to_list (Array.sub v ~pos:m ~len:(k - m))))
+
+(* A vector store's opacity. The run is [len] consecutive FLAT cells ([Set_from_vec]), so it moves
+   along the minor coordinate and could carry into the outer ones: the minor coordinate becomes
+   [Unknown] when the run provably stays inside it (or nothing lies outside it), otherwise the whole
+   map does. [Blocks len] is the separation form (a store's instances told apart by their aligned
+   runs): a minor index divisible by [len] is replaced by its quotient — distinct quotients are
+   disjoint runs — provided the runs cannot spill into an outer coordinate. *)
+let apply_vec ~range (vec : vec_view) (v : coord array) : coord array =
+  let len = match vec with Run l | Blocks l -> l in
+  if len <= 1 || Array.is_empty v then v
+  else
+    let outer, minor = split_minor v in
+    let no_spill () =
+      Array.is_empty outer
+      ||
+      match minor with
+      | Known k -> (
+          match interval ~range (k.terms, k.offset) with
+          | Some (lo, hi) -> lo >= 0 && hi + len <= k.size
+          | None -> false)
+      | Unknown _ -> false
+    in
+    let opaque () =
+      if no_spill () then Array.append outer [| to_unknown minor |]
+      else [| to_unknown (merge (Array.to_list v)) |]
+    in
+    match (vec, minor) with
+    | Blocks _, Known k
+      when k.offset % len = 0
+           && List.for_all k.terms ~f:(fun (c, _) -> c % len = 0)
+           && (k.size % len = 0 || no_spill ()) ->
+        Array.append outer
+          [|
+            Known
+              {
+                k with
+                size = (k.size + len - 1) / len;
+                terms = List.map k.terms ~f:(fun (c, s) -> (c / len, s));
+                offset = k.offset / len;
+              };
+          |]
+    | _ -> opaque ()
+
+let view ?(range = fun _ -> None) ?dyn_axis ?vec ~(dims : int array) (idcs : Idx.axis_index array) :
+    coord array =
+  let n = Array.length dims in
+  let product lo hi =
+    let p = ref 1 in
+    for a = lo to hi do
+      p := !p * dims.(a)
+    done;
+    !p
+  in
+  (* A map shorter than the node addresses what the renderers' Horner sum over its own length
+     addresses: the missing trailing axes contribute nothing, which is index 0 of each exactly when
+     their extents are 1 (an empty map — a scalar node's, or a whole-node placeholder — is cell 0 in
+     every case). Any other rank mismatch is not a map of this node's cells: nothing is known. *)
+  let idcs =
+    let k = Array.length idcs in
+    if k < n && (k = 0 || Array.for_alli dims ~f:(fun a d -> a < k || d = 1)) then
+      Array.append idcs (Array.create ~len:(n - k) (Idx.Fixed_idx 0))
+    else idcs
+  in
+  if Array.length idcs <> n then
+    if n = 0 then [||] else [| Unknown { span = n; size = product 0 (n - 1) } |]
+  else
+    let is_dyn a = Option.exists dyn_axis ~f:(fun d -> d = a) in
+    let groups = ref [] and run_start = ref 0 in
+    Array.iteri idcs ~f:(fun a idx ->
+        match idx with
+        | Idx.Sub_axis -> ()
+        | _ ->
+            let lo = !run_start in
+            let span = a - lo + 1 and size = product lo a in
+            let dyn = List.exists (List.range lo (a + 1)) ~f:is_dyn in
+            let g =
+              match idx with
+              | _ when dyn -> Unknown { span; size }
+              | Idx.Fixed_idx c -> Known { span; size; terms = []; offset = c }
+              | Idx.Iterator s -> Known { span; size; terms = [ (1, s) ]; offset = 0 }
+              | Idx.Affine { symbols; offset } ->
+                  Known { span; size; terms = Idx.coalesce_affine_terms symbols; offset }
+              | Idx.Concat _ | Idx.Sub_axis -> Unknown { span; size }
+            in
+            groups := g :: !groups;
+            run_start := a + 1);
+    (* A trailing [Sub_axis] adds zero: its own axis at index 0. *)
+    for a = !run_start to n - 1 do
+      let size = dims.(a) in
+      groups :=
+        (if is_dyn a then Unknown { span = 1; size }
+         else Known { span = 1; size; terms = []; offset = 0 })
+        :: !groups
+    done;
+    let v = Array.of_list_rev !groups in
+    match vec with None -> v | Some vec -> apply_vec ~range vec v
+
+(* Group boundaries of a view: the cumulative axis counts at which its coordinates end. *)
+let ends_of (v : coord array) : Set.M(Int).t =
+  Array.fold v
+    ~init:(0, Set.empty (module Int))
+    ~f:(fun (pos, acc) c ->
+      let pos = pos + coord_span c in
+      (pos, Set.add acc pos))
+  |> snd
+
+let total_span v = Array.fold v ~init:0 ~f:(fun n c -> n + coord_span c)
+
+(* Re-coarsen [v] to the boundaries [ends] (a subset of its own). *)
+let regroup ~(ends : Set.M(Int).t) (v : coord array) : coord array =
+  let out = ref [] and pending = ref [] and pos = ref 0 in
+  Array.iter v ~f:(fun c ->
+      pending := c :: !pending;
+      pos := !pos + coord_span c;
+      if Set.mem ends !pos then (
+        out := merge (List.rev !pending) :: !out;
+        pending := []));
+  if not (List.is_empty !pending) then out := merge (List.rev !pending) :: !out;
+  Array.of_list_rev !out
+
+(* The views re-coarsened to one common frame — the coarsest grouping any of them needs — or [None]
+   when they do not span the same axes (maps of different ranks). *)
+let common_frame (views : coord array list) : coord array list option =
+  match views with
+  | [] -> Some []
+  | v0 :: _ ->
+      let total = total_span v0 in
+      if not (List.for_all views ~f:(fun v -> total_span v = total)) then None
+      else
+        let ends = List.fold views ~init:(ends_of v0) ~f:(fun acc v -> Set.inter acc (ends_of v)) in
+        Some (List.map views ~f:(regroup ~ends))
+
+(* Linear terms of one known coordinate on one side. Width-1 symbols are substituted by their lower
+   bound: they are constants, and removing them unclutters the matched-pair forcing below. *)
+let terms_of ~range ~dup ~(side : Idx.symbol -> var)
+    ((terms, offset) : (int * Idx.symbol) list * int) : (int * var) list * int =
   let tag s = if dup s then side s else Shared s in
   let term (c, s) =
     match range s with
     | Some (lo, hi) when lo = hi -> Either.Second (c * lo)
     | _ -> Either.First (c, tag s)
   in
-  match idx with
-  | Idx.Fixed_idx c -> Some ([], c)
-  | Idx.Iterator s -> (
-      match term (1, s) with Either.First t -> Some ([ t ], 0) | Either.Second c -> Some ([], c))
-  | Idx.Affine { symbols; offset } ->
-      let ts, cs = List.partition_map (Idx.coalesce_affine_terms symbols) ~f:term in
-      Some (ts, offset + List.fold cs ~init:0 ~f:( + ))
-  | Idx.Sub_axis | Idx.Concat _ -> None
+  let ts, cs = List.partition_map terms ~f:term in
+  (ts, offset + List.fold cs ~init:0 ~f:( + ))
 
-(* Combine left and right components into [Σ d·v = δ] with per-var coalescing (a [Shared] symbol
-   appearing with equal coefficients on both sides cancels). *)
-let equation_of ~range ~dup_left ~dup_right (l : Idx.axis_index) (r : Idx.axis_index) :
+(* Combine left and right coordinates into [Σ d·v = δ] with per-var coalescing (a [Shared] symbol
+   appearing with equal coefficients on both sides cancels). [None] when either side is [Unknown]:
+   no information, conservatively. *)
+let equation_of ~range ~dup_left ~dup_right (l : coord) (r : coord) :
     ((int * var) list * int) option =
-  match
-    ( terms_of ~range ~dup:dup_left ~side:(fun s -> Left_v s) l,
-      terms_of ~range ~dup:dup_right ~side:(fun s -> Right_v s) r )
-  with
-  | Some (lt, lc), Some (rt, rc) ->
+  match (l, r) with
+  | Known l, Known r ->
+      let lt, lc = terms_of ~range ~dup:dup_left ~side:(fun s -> Left_v s) (l.terms, l.offset) in
+      let rt, rc = terms_of ~range ~dup:dup_right ~side:(fun s -> Right_v s) (r.terms, r.offset) in
       let combined =
         List.fold
           (lt @ List.map rt ~f:(fun (c, v) -> (-c, v)))
@@ -87,7 +302,7 @@ let equation_of ~range ~dup_left ~dup_right (l : Idx.axis_index) (r : Idx.axis_i
         |> Map.filter ~f:(fun c -> c <> 0)
       in
       Some (Map.to_alist combined |> List.map ~f:(fun (v, c) -> (c, v)), rc - lc)
-  | _ -> None
+  | Unknown _, _ | _, Unknown _ -> None
 
 let range_of_var ~range = function Shared s | Left_v s | Right_v s -> range s
 
@@ -159,64 +374,56 @@ let axis_index_to_string (idx : Idx.axis_index) =
   Sexp.to_string_hum ([%sexp_of: Idx.axis_index] idx)
 
 (** [pair_conflict ~range ~dup_left ~dup_right ~pairs ~left ~right]: verdict on whether the accesses
-    with index vectors [left] and [right] (over the same tensor node; rank-padded with
-    [Fixed_idx 0]) can touch a common cell from different threads. [range s] gives the inclusive
-    iteration bounds of loop symbol [s] ([None] for static/unknown symbols). [dup_left]/[dup_right]
-    select the symbols iterated independently by each side (its enclosing loops within the analyzed
-    parallel region); other symbols are shared — equal across concurrently executing threads.
-    [pairs] is the thread identity: the parallel symbols of the left copy paired with those of the
-    right copy (for same-nest analyses, pairs of the form [(p, p)]).
+    viewed as [left] and [right] (over the same tensor node, re-coarsened here to a common frame)
+    can touch a common cell from different threads. [range s] gives the inclusive iteration bounds
+    of loop symbol [s] ([None] for static/unknown symbols). [dup_left]/[dup_right] select the
+    symbols iterated independently by each side (its enclosing loops within the analyzed parallel
+    region); other symbols are shared — equal across concurrently executing threads. [pairs] is the
+    thread identity: the parallel symbols of the left copy paired with those of the right copy (for
+    same-nest analyses, pairs of the form [(p, p)]).
 
     Sound and conservative: [Disjoint] and [Same_thread] are proven; everything else is
     [Cross_thread]. *)
 let pair_conflict ~range ~dup_left ~dup_right ~(pairs : (Idx.symbol * Idx.symbol) list)
-    ~(left : Idx.axis_index array) ~(right : Idx.axis_index array) : verdict =
-  let rank = max (Array.length left) (Array.length right) in
-  let comp idcs p = if p < Array.length idcs then idcs.(p) else Idx.Fixed_idx 0 in
-  let eqs =
-    List.init rank ~f:(fun p ->
-        (p, equation_of ~range ~dup_left ~dup_right (comp left p) (comp right p)))
+    ~(left : coord array) ~(right : coord array) : verdict =
+  let describe witness =
+    Printf.sprintf "%s (left %s, right %s)" witness (coords_to_string left) (coords_to_string right)
   in
-  if List.exists eqs ~f:(fun (_, eq) -> Option.value_map eq ~default:false ~f:(infeasible ~range))
-  then Disjoint
-  else
-    let forced =
-      List.concat_map eqs ~f:(fun (_, eq) ->
-          Option.value_map eq ~default:[] ~f:(forced_pairs ~range))
-    in
-    let pair_forced (p, p') =
-      (* A width-1 parallel symbol has a single thread coordinate, so equality across threads holds
-         by definition — necessary because {!terms_of} substitutes width-1 symbols away before the
-         equation-level forcing can see them. *)
-      (match (range p, range p') with
-        | Some (lo, hi), Some (lo', hi') -> lo = hi && lo' = hi' && lo = lo'
-        | _ -> false)
-      || List.exists forced ~f:(fun (a, b) -> Idx.equal_symbol a p && Idx.equal_symbol b p')
-    in
-    if (not (List.is_empty pairs)) && List.for_all pairs ~f:pair_forced then Same_thread
-    else
-      let witness =
-        match List.find pairs ~f:(Fn.non pair_forced) with
-        | Some (p, p') when Idx.equal_symbol p p' ->
-            Printf.sprintf "parallel symbol %s is not forced equal across threads"
-              (Idx.symbol_ident p)
-        | Some (p, p') ->
-            Printf.sprintf "paired parallel symbols %s ~ %s are not forced equal across threads"
-              (Idx.symbol_ident p) (Idx.symbol_ident p')
-        | None -> "no parallel symbols to confine the conflict"
-      in
-      Cross_thread
-        (Printf.sprintf "%s (left %s, right %s)" witness
-           (String.concat_array ~sep:"," (Array.map left ~f:axis_index_to_string))
-           (String.concat_array ~sep:"," (Array.map right ~f:axis_index_to_string)))
-
-(* Linear view of one axis component: terms plus offset, [None] for uninterpretable ones. *)
-let linear_terms (idx : Idx.axis_index) : ((int * Idx.symbol) list * int) option =
-  match idx with
-  | Idx.Fixed_idx c -> Some ([], c)
-  | Idx.Iterator s -> Some ([ (1, s) ], 0)
-  | Idx.Affine { symbols; offset } -> Some (Idx.coalesce_affine_terms symbols, offset)
-  | Idx.Sub_axis | Idx.Concat _ -> None
+  match common_frame [ left; right ] with
+  | Some [ l; r ] -> (
+      let eqs = Array.to_list (Array.map2_exn l r ~f:(equation_of ~range ~dup_left ~dup_right)) in
+      if List.exists eqs ~f:(fun eq -> Option.value_map eq ~default:false ~f:(infeasible ~range))
+      then Disjoint
+      else
+        let forced =
+          List.concat_map eqs ~f:(fun eq ->
+              Option.value_map eq ~default:[] ~f:(forced_pairs ~range))
+        in
+        let pair_forced (p, p') =
+          (* A width-1 parallel symbol has a single thread coordinate, so equality across threads
+             holds by definition — necessary because {!terms_of} substitutes width-1 symbols away
+             before the equation-level forcing can see them. *)
+          (match (range p, range p') with
+            | Some (lo, hi), Some (lo', hi') -> lo = hi && lo' = hi' && lo = lo'
+            | _ -> false)
+          || List.exists forced ~f:(fun (a, b) -> Idx.equal_symbol a p && Idx.equal_symbol b p')
+        in
+        if (not (List.is_empty pairs)) && List.for_all pairs ~f:pair_forced then Same_thread
+        else
+          match List.find pairs ~f:(Fn.non pair_forced) with
+          | Some (p, p') when Idx.equal_symbol p p' ->
+              Cross_thread
+                (describe
+                   (Printf.sprintf "parallel symbol %s is not forced equal across threads"
+                      (Idx.symbol_ident p)))
+          | Some (p, p') ->
+              Cross_thread
+                (describe
+                   (Printf.sprintf
+                      "paired parallel symbols %s ~ %s are not forced equal across threads"
+                      (Idx.symbol_ident p) (Idx.symbol_ident p')))
+          | None -> Cross_thread (describe "no parallel symbols to confine the conflict"))
+  | _ -> Cross_thread (describe "the two views do not span the same axes")
 
 (** {2 The separation query}
 
@@ -231,44 +438,36 @@ let linear_terms (idx : Idx.axis_index) : ((int * Idx.symbol) list * int) option
     that a common cell forces [w1] equal, while instances [(0, 1)] and [(1, 0)] share [acc[1]].
     [syms] is then the subset the caller needs told apart. *)
 let separation_failure ~range ~(concurrent : Idx.symbol -> bool) ~(syms : Idx.symbol list)
-    ~(idcs : Idx.axis_index array) : string option =
+    ~(coords : coord array) : string option =
   if List.is_empty syms then None
   else
     match
       pair_conflict ~range ~dup_left:concurrent ~dup_right:concurrent
         ~pairs:(List.map syms ~f:(fun s -> (s, s)))
-        ~left:idcs ~right:idcs
+        ~left:coords ~right:coords
     with
     | Disjoint | Same_thread -> None
     | Cross_thread witness -> Some witness
 
-let separates ~range ~concurrent ~syms ~idcs =
-  Option.is_none (separation_failure ~range ~concurrent ~syms ~idcs)
+let separates ~range ~concurrent ~syms ~coords =
+  Option.is_none (separation_failure ~range ~concurrent ~syms ~coords)
 
-(** [within_box ~range ~dims idcs]: does the index vector address a cell INSIDE the [dims] box for
-    every valuation of its symbols within their ranges? The interval companion of {!covers_box},
-    which asks about a bijection onto the box; this asks only that nothing leaves it.
+(** [within_box ~range coords]: does the viewed access address a cell INSIDE its node for every
+    valuation of its symbols within their ranges — every coordinate within [0 <= index < size]? The
+    interval companion of {!covers_box}, which asks about a bijection onto the box; this asks only
+    that nothing leaves it. A flattened coordinate is bounded by its run's whole extent.
 
     Access validity, as distinct from the distinctness {!separates} proves. A symbol with no range
-    (a static index parameter) and a component the engine cannot interpret both answer [false]: an
-    unknown value can be anywhere, and this query is only ever used to license moving an access to
-    where a guard no longer covers it. *)
-let within_box ~range ~(dims : int array) (idcs : Idx.axis_index array) : bool =
-  Array.length idcs = Array.length dims
-  && Array.for_alli idcs ~f:(fun ax idx ->
-      match linear_terms idx with
-      | None -> false
-      | Some (terms, offset) -> (
-          let bounds =
-            List.fold terms
-              ~init:(Some (offset, offset))
-              ~f:(fun acc (c, s) ->
-                match (acc, range s) with
-                | Some (lo, hi), Some (slo, shi) ->
-                    Some (lo + min (c * slo) (c * shi), hi + max (c * slo) (c * shi))
-                | _ -> None)
-          in
-          match bounds with Some (lo, hi) -> lo >= 0 && hi < dims.(ax) | None -> false))
+    (a static index parameter) and an [Unknown] coordinate both answer [false]: an unknown value can
+    be anywhere, and this query is only ever used to license moving an access to where a guard no
+    longer covers it. *)
+let within_box ~range (coords : coord array) : bool =
+  Array.for_all coords ~f:(function
+    | Unknown _ -> false
+    | Known { size; terms; offset; _ } -> (
+        match interval ~range (terms, offset) with
+        | Some (lo, hi) -> lo >= 0 && hi < size
+        | None -> false))
 
 (** {2 The peel-guard legality query}
 
@@ -343,16 +542,15 @@ let peel_guard ~(loop_bound : Idx.symbol -> bool) ~(peeled : Idx.symbol -> bool)
 
 (** {2 The covering query} *)
 
-(** [covers_box ~range ~dims idcs]: whether the index vector [idcs], as its symbols range over their
-    (loop) bounds, enumerates every cell of the [dims] box exactly once — a bijection onto the box.
-    This is the write-dominance building block: a covering unguarded write rewrites the whole array.
-    Requirements: each symbol used at most once across the vector; per axis, a zero-based
+(** [covers_box ~range coords]: whether the viewed access, as its symbols range over their (loop)
+    bounds, enumerates every cell of its node exactly once — a bijection onto the box. This is the
+    write-dominance building block: a covering unguarded write rewrites the whole array.
+    Requirements: each symbol used at most once across the view; per coordinate, a zero-based
     full-extent iterator, a mixed-radix affine combination of zero-based symbols whose radix chain
-    exactly composes to the axis dimension, or [Fixed_idx 0] on a unit axis. Generalizes (and is
-    checked against) the procedural per-axis rule of [C_syntax.first_access_standalone_covering]. *)
-let covers_box ~range ~(dims : int array) (idcs : Idx.axis_index array) : bool =
-  Array.length idcs = Array.length dims
-  &&
+    exactly composes to the coordinate's size (a flattened coordinate: its run's whole extent), or
+    [0] on a unit-size coordinate. Generalizes (and is checked against) the procedural per-axis rule
+    of [C_syntax.first_access_standalone_covering]. *)
+let covers_box ~range (coords : coord array) : bool =
   let used = ref [] in
   let fresh s =
     if List.mem !used s ~equal:Idx.equal_symbol then false
@@ -361,24 +559,19 @@ let covers_box ~range ~(dims : int array) (idcs : Idx.axis_index array) : bool =
       true)
   in
   let extent_of s = match range s with Some (0, hi) -> Some (hi + 1) | _ -> None in
-  Array.for_alli idcs ~f:(fun a idx ->
-      let dim = dims.(a) in
-      match idx with
-      | Idx.Fixed_idx 0 -> dim = 1
-      | Idx.Iterator s -> ( fresh s && match extent_of s with Some e -> e = dim | None -> false)
-      | Idx.Affine { symbols; offset = 0 } ->
-          let sorted =
-            List.sort (Idx.coalesce_affine_terms symbols) ~compare:(fun (c1, _) (c2, _) ->
-                Int.compare c1 c2)
-          in
-          let rec radix r = function
-            | [] -> r = dim
-            | (c, s) :: tl -> (
-                c = r && fresh s
-                && match extent_of s with Some e -> radix (r * e) tl | None -> false)
-          in
-          radix 1 sorted
-      | Idx.Fixed_idx _ | Idx.Affine _ | Idx.Sub_axis | Idx.Concat _ -> false)
+  Array.for_all coords ~f:(function
+    | Unknown _ -> false
+    | Known { size; terms; offset; _ } ->
+        offset = 0
+        &&
+        let sorted = List.sort terms ~compare:(fun (c1, _) (c2, _) -> Int.compare c1 c2) in
+        let rec radix r = function
+          | [] -> r = size
+          | (c, s) :: tl -> (
+              c = r && fresh s
+              && match extent_of s with Some e -> radix (r * e) tl | None -> false)
+        in
+        radix 1 sorted)
 
 (** {2 Counting}
 
@@ -768,8 +961,9 @@ type 'tn access = {
           placeholder component, so queries must not interpret it. *)
   a_whole : bool;  (** A whole-node access ([Zero_out]). *)
   a_vec_last : bool;
-      (** A vectorized write ([Set_from_vec]): the last map component is the base of a run along the
-          minor axis, not a single cell — queries must treat that component as opaque. *)
+      (** A vectorized write ([Set_from_vec]): the map is the base of a run of [a_vec_len]
+          consecutive flat cells along the minor coordinate, not a single cell — viewed through
+          {!vec_view}, never by writing a placeholder into the map. *)
   a_vec_len : int;
       (** The run length of a vectorized write along the minor axis; [0] unless [a_vec_last]. *)
   a_guarded : bool;  (** Under an [If] guard: executes conditionally, never a definite write. *)
@@ -883,9 +1077,11 @@ let within_statement ~(write : path_comp list) (path : path_comp list) : bool =
     the sides share (the accesses need not be simultaneous, so a shared loop's symbol varies
     independently between one side's visit and the other's). Symbols bound by neither side's loops
     (static indices) are shared parameters, equal on both sides, bounded by [static_range] when
-    known. Conservative: [false] only when {!pair_conflict} proves disjointness; uninterpretable
+    known. [dims] is the node's (physical) dims, which the coordinate view reads flattened indices
+    against. Conservative: [false] only when {!pair_conflict} proves disjointness; uninterpretable
     access kinds (dynamic, whole-node, vectorized) count as overlapping. *)
-let may_touch_same_cell ?(static_range = fun _ -> None) (a : 'tn access) (b : 'tn access) : bool =
+let may_touch_same_cell ?(static_range = fun _ -> None) ~dims (a : 'tn access) (b : 'tn access) :
+    bool =
   if a.a_dynamic || b.a_dynamic || a.a_whole || b.a_whole || a.a_vec_last || b.a_vec_last then true
   else
     let range s =
@@ -898,7 +1094,10 @@ let may_touch_same_cell ?(static_range = fun _ -> None) (a : 'tn access) (b : 't
     in
     let dup_left s = List.Assoc.mem a.a_loops s ~equal:Idx.equal_symbol in
     let dup_right s = List.Assoc.mem b.a_loops s ~equal:Idx.equal_symbol in
-    match pair_conflict ~range ~dup_left ~dup_right ~pairs:[] ~left:a.a_map ~right:b.a_map with
+    match
+      pair_conflict ~range ~dup_left ~dup_right ~pairs:[] ~left:(view ~dims a.a_map)
+        ~right:(view ~dims b.a_map)
+    with
     | Disjoint -> false
     | Same_thread | Cross_thread _ -> true
 
@@ -973,21 +1172,22 @@ let ap_covered_chunk r w : (int * int) option =
 
 (** Whether the runs of a vectorized access ([a_vec_last]) are pairwise disjoint in the node's flat
     cell space — the access then touches exactly [base image * a_vec_len] distinct cells
-    (gh-ocannl-578). Sufficient conditions on the minor (last, contiguous) axis component: it is
-    linear with every symbol's range known from [a_loops]; every run stays within its row ([lo >= 0]
-    and [hi + a_vec_len <= minor_dim], where [minor_dim] is the node's minor-axis extent — a
-    spilling run could overlap a base in the next row); and any two attained base values differ by a
-    multiple of the coefficient gcd [g] with [g >= a_vec_len] (or the component is constant,
-    [g = 0]). Distinct base cells then differ either in a non-minor axis — disjoint runs, since none
-    spills — or by at least a run length along the minor axis. Conservative: [false] when any
-    condition is not proved. *)
-let vec_runs_disjoint ~minor_dim (a : 'tn access) : bool =
+    (gh-ocannl-578). Sufficient conditions on the minor coordinate of the access's view (the
+    innermost non-unit axis with the unit axes after it, and a flattened [Sub_axis] run before it —
+    stride 1, which the run moves along; [dims] are the node's dims): it is known with every
+    symbol's range known from [a_loops]; every run stays within it ([lo >= 0] and
+    [hi + a_vec_len <= size] — a spilling run could overlap a base in the next row); and any two
+    attained base values differ by a multiple of the coefficient gcd [g] with [g >= a_vec_len] (or
+    the coordinate is constant, [g = 0]). Distinct base cells then differ either in an outer
+    coordinate — disjoint runs, since none spills — or by at least a run length along the minor one.
+    Conservative: [false] when any condition is not proved. *)
+let vec_runs_disjoint ~dims (a : 'tn access) : bool =
   a.a_vec_last
   && Array.length a.a_map > 0
   &&
-  match linear_terms a.a_map.(Array.length a.a_map - 1) with
-  | None -> false
-  | Some (terms, offset) -> (
+  match split_minor (view ~dims a.a_map) with
+  | _, Unknown _ -> false
+  | _, Known { size; terms; offset; _ } -> (
       let ranged =
         List.map terms ~f:(fun (c, s) ->
             Option.map (List.Assoc.find a.a_loops s ~equal:Idx.equal_symbol) ~f:(fun r -> (c, r)))
@@ -1001,9 +1201,9 @@ let vec_runs_disjoint ~minor_dim (a : 'tn access) : bool =
                 (lo + min (c * vlo) (c * vhi), hi + max (c * vlo) (c * vhi)))
           in
           let g = List.fold cts ~init:0 ~f:(fun g (c, _) -> gcd g c) in
-          lo >= 0 && hi + a.a_vec_len <= minor_dim && (g = 0 || g >= a.a_vec_len))
+          lo >= 0 && hi + a.a_vec_len <= size && (g = 0 || g >= a.a_vec_len))
 
-let read_covered_before ?(thread = fun _ -> false) ?(static_range = fun _ -> None)
+let read_covered_before ?(thread = fun _ -> false) ?(static_range = fun _ -> None) ~dims
     ~(read : 'tn access) ~(writes : 'tn access list) () : [ `Covered | `Unknown of string ] =
   let exception Fail of string in
   let path_before p q =
@@ -1028,13 +1228,13 @@ let read_covered_before ?(thread = fun _ -> false) ?(static_range = fun _ -> Non
     in
     before p q
   in
-  let has_opaque m =
-    Array.exists m ~f:(function Idx.Sub_axis | Idx.Concat _ -> true | _ -> false)
-  in
+  let known = function Known k -> Some (k.terms, k.offset) | Unknown _ -> None in
   try
     if read.a_dynamic then raise (Fail "dynamic read");
     if read.a_whole || read.a_vec_last then raise (Fail "uninterpretable read kind");
-    if has_opaque read.a_map then raise (Fail "opaque read component");
+    let read_view = view ~dims read.a_map in
+    if Array.exists read_view ~f:(fun c -> Option.is_none (known c)) then
+      raise (Fail "opaque read component");
     let usable =
       List.filter writes ~f:(fun w ->
           w.a_write && (not w.a_dynamic) && path_before w.a_path read.a_path)
@@ -1043,18 +1243,28 @@ let read_covered_before ?(thread = fun _ -> false) ?(static_range = fun _ -> Non
     if List.exists usable ~f:(fun w -> w.a_whole) then `Covered
     else begin
       let read_range s = List.Assoc.find read.a_loops s ~equal:Idx.equal_symbol in
-      let rank =
-        List.fold usable ~init:(Array.length read.a_map) ~f:(fun m w ->
-            max m (Array.length w.a_map))
-      in
-      let comp m p = if p < Array.length m then m.(p) else Idx.Fixed_idx 0 in
-      (* Per write: per-axis relation to the read's cells, in the residual coordinate frame left by
-         parameter cancellation. [None] = this write proves nothing. *)
+      (* Per write: per-coordinate relation to the read's cells, in the common coordinate frame of
+         the two views and the residual frame left by parameter cancellation. [None] = this write
+         proves nothing. *)
       let analyze (w : 'tn access) :
           (string * ap array * [ `Full | `Chunk of int * int | `Nope ] array) option =
         let exception Skip in
         try
-          if has_opaque w.a_map && not w.a_vec_last then raise Skip;
+          (* A vectorized write's run moves along its minor coordinate, which is then its view's
+             last one — the run's own opacity is modelled below, where the run extends the base. *)
+          let w_view =
+            let v = view ~dims w.a_map in
+            if w.a_vec_last then
+              let outer, minor = split_minor v in
+              Array.append outer [| minor |]
+            else v
+          in
+          let r_view, w_view =
+            match common_frame [ read_view; w_view ] with
+            | Some [ r; w ] -> (r, w)
+            | _ -> raise Skip
+          in
+          let rank = Array.length r_view in
           let c_len =
             let rec go n rl wl =
               match (rl, wl) with
@@ -1074,11 +1284,11 @@ let read_covered_before ?(thread = fun _ -> false) ?(static_range = fun _ -> Non
              the superset side — so reuse declines the write. *)
           let used_exist = ref [] in
           let sig_parts = ref [] in
-          let vec_axis = if w.a_vec_last then Array.length w.a_map - 1 else -1 in
+          let vec_axis = if w.a_vec_last then rank - 1 else -1 in
           let r_aps = Array.create ~len:rank { ap_lo = 0; ap_hi = 0; ap_step = 0 } in
           let rels =
             Array.init rank ~f:(fun p ->
-                match (linear_terms (comp read.a_map p), linear_terms (comp w.a_map p)) with
+                match (known r_view.(p), known w_view.(p)) with
                 | None, _ | _, None -> raise Skip
                 | Some (rts, ro), Some (wts, wo) -> (
                     (* Split each side into shared-parameter terms and own terms. *)
@@ -1170,12 +1380,14 @@ let read_covered_before ?(thread = fun _ -> false) ?(static_range = fun _ -> Non
                           | None -> `Nope)))
           in
           (* The residual coordinate frame: which parameters were cancelled vs. universalized shifts
-             what the chunk indices mean, so unionable writes must agree on both the residual
-             parameter lists and the resulting read-side progressions. *)
+             what the chunk indices mean, so unionable writes must agree on the coordinate grouping,
+             the residual parameter lists and the resulting read-side progressions. *)
           let signature =
             Sexp.to_string
-              ([%sexp_of: (int * (int * Idx.symbol) list) list * ap array]
-                 (List.sort !sig_parts ~compare:(fun (p, _) (q, _) -> Int.compare p q), r_aps))
+              ([%sexp_of: int list * (int * (int * Idx.symbol) list) list * ap array]
+                 ( Array.to_list (Array.map r_view ~f:coord_span),
+                   List.sort !sig_parts ~compare:(fun (p, _) (q, _) -> Int.compare p q),
+                   r_aps ))
           in
           Some (signature, r_aps, rels)
         with Skip -> None

@@ -92,7 +92,8 @@ type axis_index =
   | Iterator of symbol         (* A simple loop variable: symbol *)
   | Affine of { symbols : (int * symbol) list; offset : int }
       (* An affine expression: Σ(coeff_i * symbol_i) + offset *)
-  | Sub_axis                   (* Part of a multi-axis vectorized access *)
+  | Sub_axis                   (* Adds 0 to the row-major offset, keeping its stride: the next
+                                  component is a flattened index over the run *)
   | Concat of symbol list
       (** This axis is formed by concatenating multiple axes, each represented by an iterator
           symbol. [Concat] indices are eliminated during lowering. *)

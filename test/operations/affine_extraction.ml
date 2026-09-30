@@ -181,10 +181,11 @@ let () =
       List.concat_map nest_accs ~f:(fun x ->
           List.filter_map nest_accs ~f:(fun y ->
               if (x.Aff.a_write || y.Aff.a_write) && x.Aff.a_tn.Tn.uid = y.Aff.a_tn.Tn.uid then
+                let dims = Lazy.force x.Aff.a_tn.Tn.dims in
                 Some
                   (Aff.pair_conflict ~range ~dup_left:dup ~dup_right:dup
                      ~pairs:[ (sym, sym) ]
-                     ~left:x.Aff.a_map ~right:y.Aff.a_map)
+                     ~left:(Aff.view ~dims x.Aff.a_map) ~right:(Aff.view ~dims y.Aff.a_map))
               else None))
     in
     let safe =
@@ -268,7 +269,7 @@ let () =
     List.find_exn sib_accs ~f:(fun a -> (not a.Aff.a_write) && a.Aff.a_tn.Tn.uid = x.Tn.uid)
   in
   let x_writes = List.filter sib_accs ~f:(fun a -> a.Aff.a_write && a.Aff.a_tn.Tn.uid = x.Tn.uid) in
-  (match Aff.read_covered_before ~read:x_read ~writes:x_writes () with
+  (match Aff.read_covered_before ~dims:(Lazy.force x.Tn.dims) ~read:x_read ~writes:x_writes () with
   | `Covered ->
       Verdict.fail "scope A's read covered by scope B's write: containment crossed sibling operands"
   | `Unknown _ ->
@@ -291,7 +292,7 @@ let () =
     List.find_exn rev_accs ~f:(fun a -> (not a.Aff.a_write) && a.Aff.a_tn.Tn.uid = x.Tn.uid)
   in
   let x_writes = List.filter rev_accs ~f:(fun a -> a.Aff.a_write && a.Aff.a_tn.Tn.uid = x.Tn.uid) in
-  (match Aff.read_covered_before ~read:x_read ~writes:x_writes () with
+  (match Aff.read_covered_before ~dims:(Lazy.force x.Tn.dims) ~read:x_read ~writes:x_writes () with
   | `Covered ->
       Stdio.printf "read covered across sibling operands (write-first): ordering claimed\n"
   | `Unknown _ ->

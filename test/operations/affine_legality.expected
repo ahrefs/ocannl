@@ -10,8 +10,8 @@ transposed access                  query Cross_thread oracle cross-thread
 read row 0                         query Cross_thread oracle cross-thread
 offset loop bounds [2,5]           query Same_thread  oracle same-thread 
 width-1 parallel symbol            query Same_thread  oracle same-thread 
-rank padding                       query Same_thread  oracle same-thread 
-sub_axis is opaque                 query Same_thread  oracle opaque      
+rank mismatch declines             query Cross_thread oracle same-thread 
+flattened [Sub_axis; p]            query Same_thread  oracle opaque      
 shared static symbol               query Same_thread  oracle same-thread 
 cross-nest aligned                 query Same_thread  oracle same-thread 
 cross-nest chain-position swap     query Cross_thread oracle cross-thread
@@ -82,7 +82,7 @@ acc[4w + w2] separates w and w2                query true   oracle true
 acc[w, w2] separates both                      query true   oracle true  
 acc[w + s] separates w (s static)              query true   oracle true  
 an empty symbol set is separated               query true   oracle true  
-an opaque component does not separate          query false  oracle true  
+a lone Sub_axis (cell 0) does not separate     query false  oracle true  
 
 === gh-722: within_box (the validity half) ===
 acc[w] fits a 4-cell node                            true (want true)
@@ -96,7 +96,8 @@ acc[w, w2] does not fit a 4x2 node                   false (want false)
 a fixed index inside the box fits                    true (want true)
 a fixed index outside it does not                    false (want false)
 a static index parameter is not placed               false (want false)
-an opaque component is not placed                    false (want false)
+a lone Sub_axis addresses cell 0, inside the box     true (want true)
+an unknown (dynamic) coordinate is not placed        false (want false)
 a rank mismatch is not placed                        false (want false)
 
 === gh-722: peel_guard (which guards may join the peeled levels) ===
