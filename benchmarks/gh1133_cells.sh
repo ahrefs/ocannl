@@ -2,7 +2,7 @@
 # gh-ocannl-1133 measurement driver: the default GPU schedule's lane plans (every loop of a proved
 # chain mapped to hardware) against the base revision's two-loop presets, on the gpt2_mini fixtures
 # of gh-ocannl-995 and their training counterparts, so the report quotes invocations rather than
-# restating commands (benchmarks/report-gh1133-lane-plans.md).
+# restating commands (the tables on lukstafi/ocannl-staging#909 and ahrefs/ocannl#1133).
 #
 # Usage (from anywhere; the "fix" checkout is the one this script lives in):
 #   benchmarks/gh1133_cells.sh OUT BASE CAP STEP...

@@ -21,7 +21,12 @@ files.
   chain-carrying nest of a kernel needs the same `Grid` and `Workgroup` counts, or
   `validate_parallel` rejects the nest short of a slot. `unify_candidates` narrows workgroups or splits
   a short nest's lane into a one-block `Grid` slot, else declines; `lane_plans_gain` then keeps
-  the two-loop presets unless no nest loses groups or active threads and one gains. Dependent
+  the two-loop presets unless no nest loses groups or active threads and one gains. The launch
+  takes each slot's maximum ACROSS nests, so `plan_chains` also judges the union: workgroup
+  product within the block size (a 32 x 8 beside a 256 x 1 launched 2048 threads) and at most
+  twice the largest nest's own allocation (a `(v, d)` weight gradient beside a `(b, s, d)` one
+  launched 1024 x 128 groups; on HIP that segment became the training step's dominant kernel).
+  Per-nest checks cannot see either. Dependent
   nests have pointwise-equal chains, so they get identical plans at every unify step -- keep any
   new unify rule a function of the chain alone, or the positional thread identity breaks. The
   slot arithmetic has one owner, `Schedule.launch_geometry_of_nests` (per-slot maxima BEFORE the
@@ -29,7 +34,7 @@ files.
   The lm_head is untouched by this: its segment carries `max_logits`, whose chain `(b, s)` trims
   the logits nest's `(b, s, v)` to `(b, s)` -- an alignment trim left by fission's no-loss guard
   comparing at a `max_chain` of 2, which is gh-ocannl-1126's to fix. `test/operations/gpu_parallel_prefix`;
-  measured in `benchmarks/report-gh1133-lane-plans.md`.
+  measured by `benchmarks/gh1133_cells.sh`; the tables are on lukstafi/ocannl-staging#909 and ahrefs/ocannl#1133.
 - A parallel loop under a serial loop is reachable only past lane-uniform scalar work
   (gh-ocannl-1003). The presets' chain is the single-child loop path, which stops at the
   online-softmax hoist's preamble (`for t { p := P[s, t]; for e { O[s, e] += p * V[t, e] } }`);

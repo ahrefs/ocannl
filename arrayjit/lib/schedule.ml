@@ -5945,9 +5945,9 @@ let gpu_parallel_suffix ~block_size ~min_parallel ~extent chain =
 
 (* Config [gpu_schedule_workgroup_fill]: the thread count below which a lane plan widens its
    workgroup with the loops just above the lane ({!plan_nest}). Default 256, from the gh-ocannl-1133
-   measurement (benchmarks/report-gh1133-lane-plans.md): on HIP (gfx1151) a one-dimensional 32-lane
-   workgroup over a (b, s, h, d) projection runs at half the speed of a (h, d) = 8 x 32 one, while
-   CUDA measures the two within 0.5% of each other. *)
+   measurement (lukstafi/ocannl-staging#909, ahrefs/ocannl#1133): on HIP (gfx1151) a one-dimensional
+   32-lane workgroup over a (b, s, h, d) projection runs at half the speed of a (h, d) = 8 x 32 one,
+   while CUDA measures the two within 0.5% of each other. *)
 let gpu_schedule_workgroup_fill () =
   Int.of_string
     (String.strip (Utils.get_global_arg ~arg_name:"gpu_schedule_workgroup_fill" ~default:"256"))
