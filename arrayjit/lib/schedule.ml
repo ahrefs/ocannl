@@ -6240,9 +6240,20 @@ let gpu_lane_preamble_reduction () =
    loop across pool chunks, where a lane loop would only add structure that runs serially inside a
    chunk. *)
 let lane_geometry ~block_size ~min_parallel ~(limits : Backend_intf.hardware_limits)
-    ~standard_threads ~(preamble_reduction : lane_preamble_reduction) (opt : Low_level.optimized) :
-    schedule option =
+    ~standard_threads ~(preamble_reduction : lane_preamble_reduction Lazy.t)
+    (opt : Low_level.optimized) : schedule option =
   let open Low_level in
+  (* The treatment is asked for only where the kernel holds a preamble reduction on some lane path
+     -- only the fused backward mints one -- so its configuration is read by exactly the programs it
+     can affect (gh-ocannl-1124). *)
+  let has_reductions =
+    List.exists (flat_lines [ opt.llc ]) ~f:(fun stmt ->
+        List.length (path_loops ~lanes:true ~preamble_reductions:true stmt)
+        > List.length (path_loops ~lanes:true stmt))
+  in
+  let preamble_reduction =
+    if has_reductions then Lazy.force preamble_reduction else Preamble_refused
+  in
   let preamble_reductions =
     match preamble_reduction with
     | Preamble_refused -> false
@@ -6517,7 +6528,9 @@ let default_gpu_presets ?block_size ?min_parallel ?workgroup_fill ?preamble_redu
   Option.value ~default:standard
     (lane_geometry ~block_size ~min_parallel ~limits ~standard_threads
        ~preamble_reduction:
-         (match preamble_reduction with Some p -> p | None -> gpu_lane_preamble_reduction ())
+         (match preamble_reduction with
+         | Some p -> Lazy.from_val p
+         | None -> lazy (gpu_lane_preamble_reduction ()))
        opt)
 
 let default_gpu ?block_size ?min_parallel ?workgroup_fill ?preamble_reduction

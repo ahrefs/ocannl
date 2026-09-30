@@ -658,7 +658,12 @@ let dprob_local ~like prec =
     invalid_arg
       "Online_softmax.dprob_local: the fused backward's dp local is minted only under \
        online_softmax_backward, the gate that licenses reassociating its reduction";
-  scalar_node ~label:dprob_label ~like prec
+  let tn = scalar_node ~label:dprob_label ~like prec in
+  (* Memoized per [like]: a second request at another precision is refused, not served the first
+     node. *)
+  if not (Ops.equal_prec (Lazy.force tn.Tn.storage_prec) prec) then
+    invalid_arg "Online_softmax.dprob_local: already minted for this node at another precision";
+  tn
 
 let backward_provenance = Tn.Site "1002:fused-backward-row-dot"
 

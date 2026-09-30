@@ -251,6 +251,14 @@ let () =
     (match Ir.Online_softmax.dprob_local ~like Ir.Ops.single with
     | _ -> false
     | exception Invalid_argument _ -> true);
+  Ir.Online_softmax.set_backward_enabled (Some true);
+  let single = Ir.Online_softmax.dprob_local ~like Ir.Ops.single in
+  p "the dp local minted again for the same node at another precision is refused"
+    (match Ir.Online_softmax.dprob_local ~like Ir.Ops.double with
+    | _ -> false
+    | exception Invalid_argument _ -> true);
+  p "the dp local minted again at its own precision is the same node"
+    (Ir.Tnode.equal single (Ir.Online_softmax.dprob_local ~like Ir.Ops.single));
   Ir.Online_softmax.set_backward_enabled None;
   run ~lanes:false ~reduction_axis:LL.Serial ~emits_all_reduce:false
     (dk_nest ~minted:false ~name:"lred_plain32" ~e_n:32 ~d_n:32 ());
