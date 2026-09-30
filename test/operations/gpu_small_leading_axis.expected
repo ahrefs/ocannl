@@ -10,5 +10,5 @@ gsa_trimmed_suffix: original geometry survives suffix disagreement: true
 gsa_trimmed_suffix: dependent row reads remain correct: true
 gsa_failed_suffix: original geometry survives suffix disagreement: true
 gsa_failed_suffix: dependent row reads remain correct: true
-expanded zeros use the same suffix geometry: true
+expanded zeros map every axis, as compute does: true
 expanded zeros clear every coordinate: true

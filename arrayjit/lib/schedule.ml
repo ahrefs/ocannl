@@ -5301,16 +5301,17 @@ let path_loops ?(lanes = false) (nest : Low_level.t) : Low_level.t list =
    (see {!default_gpu}'s doc). Nests linked by cross-nest dependencies keep a common aligned prefix
    of their chains (see the module comment). Raises [Bail] when any check fails.
 
-   [max_chain] caps the per-nest chain length. The default 2 is the presets' shape — each annotated
-   nest carries exactly one Grid and one Workgroup loop. A sketch pipeline supplying its own
-   geometry per chain position (gh-ocannl-521 companion coverage, via {!aligned_chains}) is not
-   bound by that shape and passes its site's arity. [select_chain] chooses a suffix before the cap
-   and every ownership check; the GPU preset uses it to look past small leading axes. A batched
-   matmul's chain is batch loops plus row plus column (gh-ocannl-569 — capping at 2 made every
-   rank-3+ site's companion coverage decline, serializing the axis whose spreading the hardware
-   wanted most). The alignment rule is arity-independent; a longer chain only asks the same
-   per-position question more times. [lanes] reads chains through {!path_loops}' lane extension (the
-   GPU preset's lane geometry, see {!lane_geometry}). *)
+   [max_chain] caps the per-nest chain length. The default 2 is the two-loop presets' shape — each
+   annotated nest carries exactly one Grid and one Workgroup loop; the lane plans of
+   {!default_gpu_presets} (gh-ocannl-1133) analyze uncapped and map every returned loop. A sketch
+   pipeline supplying its own geometry per chain position (gh-ocannl-521 companion coverage, via
+   {!aligned_chains}) is not bound by that shape and passes its site's arity. [select_chain] chooses
+   a suffix before the cap and every ownership check; the GPU preset uses it to look past small
+   leading axes. A batched matmul's chain is batch loops plus row plus column (gh-ocannl-569 —
+   capping at 2 made every rank-3+ site's companion coverage decline, serializing the axis whose
+   spreading the hardware wanted most). The alignment rule is arity-independent; a longer chain only
+   asks the same per-position question more times. [lanes] reads chains through {!path_loops}' lane
+   extension (the GPU preset's lane geometry, see {!lane_geometry}). *)
 let analyze_parallel_chains ?(max_chain = 2) ?(select_chain = Fn.id) ?(lanes = false)
     (opt : Low_level.optimized) : Low_level.t list list =
   let open Low_level in
@@ -5877,12 +5878,44 @@ let launch_geometry_excess ~(limits : Backend_intf.hardware_limits) (geom : laun
             }
       | _ -> None)
 
+let checked_mul a b =
+  if a = 0 || b = 0 then Some 0 else if a > Int.max_value / b then None else Some (a * b)
+
+let checked_product = List.fold ~init:(Some 1) ~f:(fun acc n -> Option.bind acc ~f:(checked_mul n))
+
+(* The ONE encoding of the positional slot rule for a kernel whose nests' hardware loops have these
+   extents (gh-ocannl-1133): per nest, its [Grid] and its [Workgroup] loop extents in NEST order,
+   outermost first. Among a kernel's loops of one kind the innermost binds [.x], the next [.y], the
+   next [.z], and [Grid] slots [>= 2] fold their PRODUCT onto [.z] — the seeding-side mirror of
+   [Low_level.launch_dims], and like it, the maximum is taken PER SLOT across nests BEFORE the fold:
+   the product of per-slot maxima, not the maximum of per-nest products, which differ as soon as two
+   nests peak at different slots. [None] when that product overflows — no device launches it, and a
+   wrapped product could read as a small one. The default annotators below and the sketch families'
+   predictions ([Sketch_families.predicted_launch_geometry]) both read it. *)
+let launch_geometry_of_nests (nests : (int list * int list) list) : launch_geometry option =
+  let slot_max sel k =
+    List.fold nests ~init:1 ~f:(fun m nest ->
+        match List.nth (List.rev (sel nest)) k with Some n -> max m n | None -> m)
+  in
+  let grid_slots = List.fold nests ~init:0 ~f:(fun m (grid, _) -> max m (List.length grid)) in
+  Option.map
+    (checked_product (List.map (List.range 2 grid_slots) ~f:(slot_max fst)))
+    ~f:(fun fold ->
+      {
+        lg_grid_y = Some (slot_max fst 1);
+        lg_grid_z = Some fold;
+        lg_block_x = Some (slot_max snd 0);
+        lg_block_y = Some (slot_max snd 1);
+        lg_block_z = Some (slot_max snd 2);
+      })
+
 (* The configured block size is a target; the device's capacity is a hard cap. Two hardware facts,
    not one (gh-ocannl-679): the workgroup's thread PRODUCT ([max_threads_per_workgroup]) and its
    per-dimension bound ([max_workgroup_dims]) — on CUDA the latter's [.z] entry is 16x below the
-   former. Both annotators below emit exactly one [Workgroup] loop per nest, so the extent they
-   choose lands on [.x] and only that entry can bind; clamping here is what keeps
-   [check_hardware_limits_classified] a backstop rather than the first line of defence. *)
+   former. The lane loop the annotators below choose lands on [.x], so clamping here covers that
+   entry; a workgroup widened past one loop ({!plan_nest}) checks the [.y]/[.z] entries it reaches
+   itself. That is what keeps [check_hardware_limits_classified] a backstop rather than the first
+   line of defence. *)
 let clamp_block_size ~(limits : Backend_intf.hardware_limits) block_size =
   let clamp cap n = Option.value_map cap ~default:n ~f:(min n) in
   clamp limits.max_threads_per_workgroup block_size
@@ -5910,6 +5943,181 @@ let gpu_parallel_suffix ~block_size ~min_parallel ~extent chain =
       choose chain chain
   | _ -> chain
 
+(* Config [gpu_schedule_workgroup_fill]: the thread count below which a lane plan widens its
+   workgroup with the loops just above the lane ({!plan_nest}). *)
+let gpu_schedule_workgroup_fill () =
+  Int.of_string
+    (String.strip (Utils.get_global_arg ~arg_name:"gpu_schedule_workgroup_fill" ~default:"1"))
+
+(** {2 The parallel-prefix launch plan (gh-ocannl-1133)}
+
+    The presets above map exactly two loops of a nest, one [Grid] and one [Workgroup], whatever the
+    proved chain offers: the q/k/v projections of a [(b, s, h, d)] output ran on 1024 threads, and a
+    second loop longer than the block size kept its outer part [Serial]. A {e lane plan} maps every
+    loop of a proved chain instead: the leading loops [Grid] (slots [>= 2] fold onto [.z]), the
+    trailing one the [Workgroup] lane — split [Grid] outer x [Workgroup] inner past the block size,
+    never [Serial] outer — and, while the workgroup holds fewer than [fill] threads, the loops just
+    above the lane join it as further [Workgroup] slots (at most three, the product within the block
+    size and each extent within its dimension's cap).
+
+    A plan is chosen for ALREADY PROVED chains: the ownership analysis proves the exact tuple of
+    chain symbols, which is the thread identity whichever hardware slot each symbol lands on, so
+    mapping more of a proved chain asks nothing further of it. What the plan must add is the
+    kernel-global COVERAGE rule of [Low_level.validate_parallel]: every chain-carrying nest of the
+    kernel needs the same number of [Grid] and of [Workgroup] loops (one common topology), or some
+    nest's writes miss a slot another nest activates. {!unify_plans} finds that topology or
+    declines. *)
+
+type lane_plan = {
+  lp_grid : (Indexing.symbol * int) list;  (** Retyped [Grid], outermost first. *)
+  lp_block : (Indexing.symbol * int) list;
+      (** Retyped [Workgroup], outermost first; with [lp_split], the one loop that is split. *)
+  lp_split : int option;
+      (** [Some factor]: the single [lp_block] loop is split [Grid] outer x [Workgroup] inner. *)
+}
+
+let plan_grid_extents p =
+  List.map p.lp_grid ~f:snd
+  @ match (p.lp_split, p.lp_block) with Some f, [ (_, n) ] -> [ (n + f - 1) / f ] | _ -> []
+
+let plan_block_extents p =
+  match (p.lp_split, p.lp_block) with Some f, [ _ ] -> [ f ] | _ -> List.map p.lp_block ~f:snd
+
+let plan_topology p = (List.length (plan_grid_extents p), List.length (plan_block_extents p))
+
+let plan_ops p =
+  List.map p.lp_grid ~f:(fun (axis, _) -> Retype { axis; ty = Low_level.Grid })
+  @
+  match (p.lp_split, p.lp_block) with
+  | Some factor, [ (axis, _) ] ->
+      let op, _, _ = split ~axis ~factor ~outer:Low_level.Grid ~inner:Low_level.Workgroup in
+      [ op ]
+  | _ -> List.map p.lp_block ~f:(fun (axis, _) -> Retype { axis; ty = Low_level.Workgroup })
+
+(* The allocated threads of a plan's launch for this nest alone: groups times workgroup size. *)
+let plan_threads p =
+  Option.value ~default:Int.max_value (checked_product (plan_grid_extents p @ plan_block_extents p))
+
+(* One nest's plan over its proved [chain] ((symbol, extent), outermost first, non-empty).
+   [max_block] caps the workgroup's loop count; [force_split] splits a lane that fits the block size
+   anyway (factor = its extent, a one-block [Grid] outer), the one extra [Grid] slot a nest can grow
+   to meet a common topology. A one-loop chain is always split, as the presets do. *)
+let plan_nest ~block_size ~fill ~(limits : Backend_intf.hardware_limits) ~max_block ~force_split
+    chain =
+  let wg_cap k =
+    Option.value_map limits.max_workgroup_dims ~default:Int.max_value ~f:(fun (x, y, z) ->
+        match k with 0 -> x | 1 -> y | _ -> z)
+  in
+  match List.rev chain with
+  | [] -> invalid_arg "Schedule.plan_nest: empty chain"
+  | ((_, n) as lane) :: rev_rest ->
+      if List.is_empty rev_rest || n > block_size || force_split then
+        { lp_grid = List.rev rev_rest; lp_block = [ lane ]; lp_split = Some (min block_size n) }
+      else
+        (* Widen from the lane outwards; keep at least one loop on the grid. *)
+        let rec widen block threads = function
+          | ((_, e) as l) :: (_ :: _ as rest)
+            when List.length block < max_block
+                 && threads < fill
+                 && threads * e <= block_size
+                 && e <= wg_cap (List.length block) ->
+              widen (l :: block) (threads * e) rest
+          | rest -> { lp_grid = List.rev rest; lp_block = block; lp_split = None }
+        in
+        widen [ lane ] n rev_rest
+
+(* Plans for every chain-carrying nest under ONE common hardware topology, or [None]. Tried in
+   order: each nest's own plan; every workgroup capped at the narrowest one (a nest that cannot
+   reach a width keeps a narrower, mismatching one); and at one workgroup loop, a nest one [Grid]
+   slot short splits its lane ([force_split]). Nests of one dependency component have
+   pointwise-equal chains (the alignment rule) and so receive identical plans at every step, which
+   is what keeps chain position [k] the same thread coordinate in all of them. *)
+let unify_plans ~block_size ~fill ~limits (chains : (Indexing.symbol * int) list list) :
+    lane_plan list option =
+  let plan ~max_block ~force_split = plan_nest ~block_size ~fill ~limits ~max_block ~force_split in
+  let uniform plans =
+    match plans with
+    | [] -> true
+    | p0 :: rest -> List.for_all rest ~f:(fun p -> Poly.equal (plan_topology p) (plan_topology p0))
+  in
+  let at max_block = List.map chains ~f:(plan ~max_block ~force_split:false) in
+  let own = at 3 in
+  if uniform own then Some own
+  else
+    let narrowest = List.fold own ~init:3 ~f:(fun m p -> min m (snd (plan_topology p))) in
+    List.find_map
+      (List.dedup_and_sort ~compare:(fun a b -> Int.compare b a) [ narrowest; 1 ])
+      ~f:(fun max_block ->
+        let plans = at max_block in
+        if uniform plans then Some plans
+        else if max_block > 1 then None
+        else
+          let grids = List.fold plans ~init:0 ~f:(fun m p -> max m (fst (plan_topology p))) in
+          let plans =
+            List.map2_exn chains plans ~f:(fun chain p ->
+                if fst (plan_topology p) < grids then plan ~max_block:1 ~force_split:true chain
+                else p)
+          in
+          Option.some_if (uniform plans) plans)
+
+(* The useful work a nest's mapping exposes: [(groups, active)] — [Grid] groups launched, and
+   iterations executed by distinct threads (padding threads of a split tail are not work). *)
+let plan_work p =
+  ( Option.value ~default:Int.max_value (checked_product (plan_grid_extents p)),
+    Option.value ~default:Int.max_value (checked_product (List.map (p.lp_grid @ p.lp_block) ~f:snd))
+  )
+
+(* The same pair for the presets' two-loop mapping of a (possibly suffix-selected) chain: a lone
+   loop is split into blocks, a pair maps its first loop to groups and at most [block_size] of its
+   second to lanes; a longer second loop's outer part is [Serial] and does not count. *)
+let preset_work ~block_size = function
+  | [] -> (0, 0)
+  | [ n ] -> ((n + block_size - 1) / block_size, n)
+  | n0 :: n1 :: _ -> (n0, n0 * min block_size n1)
+
+(* Whether the lane plans are worth taking over the presets' proved plan: per participating nest no
+   fewer groups and no fewer active threads, and more active threads somewhere. A construction
+   heuristic, not a performance theorem — what it rules out is a wider plan that the alignment trim
+   or the topology left doing LESS than the presets for some nest (the presets may have chosen a
+   better-populated suffix pair, gh-ocannl-995), and a wider plan that is only a relabelling. *)
+let lane_plans_gain ~block_size ~(preset : int list list) (plans : lane_plan option list) =
+  let pairs = List.zip_exn preset plans in
+  List.for_all pairs ~f:(fun (chain, p) ->
+      let pg, pa = preset_work ~block_size chain in
+      match p with
+      | None -> pa = 0
+      | Some p ->
+          let g, a = plan_work p in
+          g >= pg && a >= pa)
+  && List.exists pairs ~f:(fun (chain, p) ->
+      Option.exists p ~f:(fun p -> snd (plan_work p) > snd (preset_work ~block_size chain)))
+
+(* The lane plans for per-nest chains (empty = a nest carrying none), when a common topology exists
+   and the launch it asks for fits the device: per-nest [Some plan] / [None], aligned with
+   [chains]. *)
+let plan_chains ~block_size ~fill ~limits (chains : (Indexing.symbol * int) list list) :
+    lane_plan option list option =
+  let carrying = List.filter chains ~f:(Fn.non List.is_empty) in
+  let* plans = unify_plans ~block_size ~fill ~limits carrying in
+  let* geometry =
+    launch_geometry_of_nests
+      (List.map plans ~f:(fun p -> (plan_grid_extents p, plan_block_extents p)))
+  in
+  let* () = Option.some_if (Option.is_none (launch_geometry_excess ~limits geometry)) () in
+  let rec zip chains plans =
+    match (chains, plans) with
+    | [], _ -> []
+    | [] :: chains, plans -> None :: zip chains plans
+    | _ :: chains, p :: plans -> Some p :: zip chains plans
+    | _ :: _, [] -> assert false
+  in
+  Some (zip chains plans)
+
+let chain_loops chain =
+  List.filter_map chain ~f:(function
+    | Low_level.For_loop fc -> Some (fc.index, fc.to_ + 1)
+    | _ -> None)
+
 (* Lane geometry (gh-ocannl-1003 stage 1). A nest whose parallel loop sits under a serial loop past
    a lane-uniform preamble -- the online-softmax hoist's value pass, [for (b, s, h) { for t { p :=
    P[s, t]; for e { O[s, e] += p * V[t, e] } } }] -- has a plain path that stops at the preamble, so
@@ -5925,15 +6133,17 @@ let gpu_parallel_suffix ~block_size ~min_parallel ~extent chain =
    one (its obligation is coverage: every materialized write sits under a loop of every active slot,
    which each lane nest's writes do by construction).
 
-   Declines ([None], the presets' chains stand) unless every nest carrying a chain is such a lane
-   nest with the same number of [Grid] loops -- the slots must line up positionally for the coverage
-   rule, and a kernel mixing a lane nest with the presets' one-Grid shape would leave the other
-   nest's writes uncovered on the extra slots -- the launch fits the device's grid caps, the
-   parallel size reaches [min_parallel], and the launch has strictly more threads than the presets'
-   geometry [standard_threads]. Cheap to ask of every kernel: without a nest whose lane path is
-   longer than its plain path, it runs no analysis. GPU only: the CPU preset parallelizes one
-   outermost loop across pool chunks, where a lane loop would only add structure that runs serially
-   inside a chunk. *)
+   The geometry is the shared lane planner's ({!plan_chains}) at a one-loop workgroup, so a lane
+   past the block size is split [Grid] outer x [Workgroup] inner like any other plan's. Declines
+   ([None], the other plans stand) unless every nest carrying a chain is such a lane nest and the
+   planner finds them one common topology -- the slots must line up positionally for the coverage
+   rule, and a kernel mixing a lane nest with a nest whose chain ends above its serial loop would
+   leave that nest's writes uncovered on the lane's slot -- the launch fits the device's caps, the
+   parallel size reaches [min_parallel], and the launch has strictly more threads than the plain
+   plan's [standard_threads]. Cheap to ask of every kernel: without a nest whose lane path is longer
+   than its plain path, it runs no analysis. GPU only: the CPU preset parallelizes one outermost
+   loop across pool chunks, where a lane loop would only add structure that runs serially inside a
+   chunk. *)
 let lane_geometry ~block_size ~min_parallel ~(limits : Backend_intf.hardware_limits)
     ~standard_threads (opt : Low_level.optimized) : schedule option =
   let open Low_level in
@@ -5967,51 +6177,22 @@ let lane_geometry ~block_size ~min_parallel ~(limits : Backend_intf.hardware_lim
         in
         match Option.all lanes with
         | None | Some [] -> None
-        | Some ((grid0, _) :: _ as lanes)
-          when not (List.for_all lanes ~f:(fun (grid, _) -> List.length grid = List.length grid0))
-          ->
-            None
-        | Some ((grid0, _) :: _ as lanes) ->
-            let arity = List.length grid0 in
-            (* Grid slot [k] is the [k]-th loop from the innermost; the launch takes each slot's
-               maximum, and slots [>= 2] multiply into [.z] ([Low_level.launch_dims]). *)
-            let slot_max k =
-              List.fold lanes ~init:1 ~f:(fun m (grid, _) ->
-                  max m (snd (List.nth_exn (List.rev grid) k)))
-            in
-            let lane_width (_, n) = min block_size n in
-            let geometry =
-              {
-                lg_grid_y = Some (if arity > 1 then slot_max 1 else 1);
-                lg_grid_z =
-                  Some (List.fold (List.range 2 arity) ~init:1 ~f:(fun z k -> z * slot_max k));
-                lg_block_x =
-                  Some (List.fold lanes ~init:1 ~f:(fun m (_, lane) -> max m (lane_width lane)));
-                lg_block_y = Some 1;
-                lg_block_z = Some 1;
-              }
-            in
-            let threads =
-              List.fold lanes ~init:0 ~f:(fun m (grid, lane) ->
-                  max m (List.fold grid ~init:(lane_width lane) ~f:(fun t (_, n) -> t * n)))
-            in
-            if
-              Option.is_some (launch_geometry_excess ~limits geometry)
-              || max_parallel_size chains < min_parallel
-              || threads <= standard_threads
-            then None
-            else (
-              crosscheck_scratch_containment opt chains;
-              Some
-                (List.concat_map lanes ~f:(fun (grid, (lane, n)) ->
-                     List.map grid ~f:(fun (axis, _) -> Retype { axis; ty = Grid })
-                     @
-                     if n <= block_size then [ Retype { axis = lane; ty = Workgroup } ]
-                     else
-                       let op, _, _ =
-                         split ~axis:lane ~factor:block_size ~outer:Serial ~inner:Workgroup
-                       in
-                       [ op ]))))
+        | Some lanes -> (
+            (* The shared lane planner at a one-loop workgroup: the loops above the serial loop on
+               the grid, the lane on the workgroup (split, [Grid] outer, past the block size), one
+               common topology across the lane nests and a launch within the device's caps. *)
+            match
+              plan_chains ~block_size ~fill:1 ~limits
+                (List.map lanes ~f:(fun (grid, lane) -> grid @ [ lane ]))
+            with
+            | None -> None
+            | Some plans ->
+                let plans = List.filter_opt plans in
+                let threads = List.fold plans ~init:0 ~f:(fun m p -> max m (plan_threads p)) in
+                if max_parallel_size chains < min_parallel || threads <= standard_threads then None
+                else (
+                  crosscheck_scratch_containment opt chains;
+                  Some (List.concat_map plans ~f:plan_ops))))
 
 (* The default GPU preset's cooperative fold: [Some] schedule when [opt] is one fold nest the
    backend's MMA units can take (the conditions in the [Fold_mma] section comment above
@@ -6076,8 +6257,8 @@ let fold_mma_schedule ~(limits : Backend_intf.hardware_limits) (opt : Low_level.
               (launch_geometry_of_dims (Low_level.launch_dims folded.Low_level.llc))))
         [ op ]
 
-let default_gpu_presets ?block_size ?min_parallel ?(limits = Backend_intf.no_hardware_limits)
-    (opt : Low_level.optimized) : schedule =
+let default_gpu_presets ?block_size ?min_parallel ?workgroup_fill
+    ?(limits = Backend_intf.no_hardware_limits) (opt : Low_level.optimized) : schedule =
   let open Low_level in
   let block_size =
     Option.value block_size
@@ -6097,9 +6278,10 @@ let default_gpu_presets ?block_size ?min_parallel ?(limits = Backend_intf.no_har
       ~default:
         (Int.of_string @@ Utils.get_global_arg ~arg_name:"gpu_schedule_min_parallel" ~default:"64")
   in
-  (* The presets' schedule and the thread count of its launch (1 when it stays serial), which the
-     lane geometry has to beat. *)
-  let standard, standard_threads =
+  let fill = Option.value workgroup_fill ~default:(gpu_schedule_workgroup_fill ()) in
+  (* The presets' proved two-loop schedule, the thread count of its launch (1 when it stays serial)
+     and its per-nest chains ([None] when it stays serial): the fallback of the lane plans below. *)
+  let two_loop, two_loop_threads, two_loop_chains =
     try
       let selection_changed = ref false in
       let select_chain chain =
@@ -6144,7 +6326,7 @@ let default_gpu_presets ?block_size ?min_parallel ?(limits = Backend_intf.no_har
           with Bail -> selected
       in
       crosscheck_scratch_containment opt chains;
-      if max_parallel_size chains < min_parallel then ([], 1)
+      if max_parallel_size chains < min_parallel then ([], 1, None)
       else
         (* Emit per-nest ops. Every annotated nest contributes exactly one Grid and one Workgroup
            loop, so hardware slots are uniform ([.x] of each kind) across nests and every
@@ -6173,19 +6355,49 @@ let default_gpu_presets ?block_size ?min_parallel ?(limits = Backend_intf.no_har
               | _ -> []),
           List.fold chains ~init:1 ~f:(fun m chain ->
               let g, b = geometry chain in
-              max m (g * b)) )
-    with Bail -> ([], 1)
+              max m (g * b)),
+          Some chains )
+    with Bail -> ([], 1, None)
+  in
+  (* The lane plans over the uncapped proved chains (gh-ocannl-1133). The chains are proposed whole
+     BEFORE the ownership and alignment analysis, which proves exactly the tuples it returns; the
+     plans then map every loop of those, never a subset of a proved tuple. Declines to the two-loop
+     plan on a failed proof, no common topology, a launch over the device's caps, or no gain in
+     useful parallel work for some nest ({!lane_plans_gain}). *)
+  let lane_plans =
+    match analyze_parallel_chains ~max_chain:Int.max_value opt with
+    | exception Bail -> None
+    | chains ->
+        let* () = Option.some_if (max_parallel_size chains >= min_parallel) () in
+        let* plans = plan_chains ~block_size ~fill ~limits (List.map chains ~f:chain_loops) in
+        let gain =
+          match two_loop_chains with
+          | None -> true
+          | Some preset ->
+              lane_plans_gain ~block_size
+                ~preset:(List.map preset ~f:(fun c -> List.map (chain_loops c) ~f:snd))
+                plans
+        in
+        Option.some_if gain (chains, List.filter_opt plans)
+  in
+  let standard, standard_threads =
+    match lane_plans with
+    | None -> (two_loop, two_loop_threads)
+    | Some (chains, plans) ->
+        crosscheck_scratch_containment opt chains;
+        ( List.concat_map plans ~f:plan_ops,
+          List.fold plans ~init:1 ~f:(fun m p -> max m (plan_threads p)) )
   in
   Option.value ~default:standard
     (lane_geometry ~block_size ~min_parallel ~limits ~standard_threads opt)
 
-let default_gpu ?block_size ?min_parallel ?(limits = Backend_intf.no_hardware_limits)
-    (opt : Low_level.optimized) : schedule =
+let default_gpu ?block_size ?min_parallel ?workgroup_fill
+    ?(limits = Backend_intf.no_hardware_limits) (opt : Low_level.optimized) : schedule =
   (* The block fold on matrix units comes first: its kernel is one fold nest the presets would give
      scalar geometry. *)
   match fold_mma_schedule ~limits opt with
   | Some schedule -> schedule
-  | None -> default_gpu_presets ?block_size ?min_parallel ~limits opt
+  | None -> default_gpu_presets ?block_size ?min_parallel ?workgroup_fill ~limits opt
 
 let default_cpu ?min_parallel (opt : Low_level.optimized) : schedule =
   let min_parallel =
@@ -6749,8 +6961,8 @@ let segment_optimized (full : Low_level.optimized) (llc : Low_level.t) : Low_lev
 (* Expand-and-annotate schedule for a segment of materialized whole-node [Zero_out]s (GPU): the
    expanded nests get the same geometry policy as {!default_gpu}'s chains. Below [min_parallel]
    (largest node) the zeros stay whole-node — a serial kernel renders them as [memset]. *)
-let zero_expansion ?block_size ?min_parallel ~(limits : Backend_intf.hardware_limits)
-    (tns : Tn.t list) : schedule =
+let zero_expansion ?block_size ?min_parallel ?workgroup_fill
+    ~(limits : Backend_intf.hardware_limits) (tns : Tn.t list) : schedule =
   let block_size =
     Option.value block_size
       ~default:
@@ -6770,36 +6982,58 @@ let zero_expansion ?block_size ?min_parallel ~(limits : Backend_intf.hardware_li
     || List.fold tns ~init:0 ~f:(fun m tn -> max m (numel tn)) < min_parallel
   then []
   else
-    List.concat_map tns ~f:(fun tn ->
-        let op, syms = expand_zero ~tn in
-        let ds = dims tn in
-        let annots =
-          let selected =
-            gpu_parallel_suffix ~block_size ~min_parallel ~extent:snd
-              (List.zip_exn syms (Array.to_list ds))
-          in
-          match selected with
-          | [] -> assert false
-          | [ (s0, n0) ] ->
-              let sp, _, _ =
-                split ~axis:s0 ~factor:(min block_size n0) ~outer:Low_level.Grid
-                  ~inner:Low_level.Workgroup
-              in
-              [ sp ]
-          | (s0, _) :: (s1, n1) :: _ ->
-              if n1 <= block_size then
-                [
-                  Retype { axis = s0; ty = Low_level.Grid };
-                  Retype { axis = s1; ty = Low_level.Workgroup };
-                ]
-              else
-                let sp, _, _ =
-                  split ~axis:s1 ~factor:block_size ~outer:Low_level.Serial
-                    ~inner:Low_level.Workgroup
-                in
-                [ Retype { axis = s0; ty = Low_level.Grid }; sp ]
-        in
-        op :: annots)
+    let fill = Option.value workgroup_fill ~default:(gpu_schedule_workgroup_fill ()) in
+    let expanded =
+      List.map tns ~f:(fun tn ->
+          let op, syms = expand_zero ~tn in
+          let loops = List.zip_exn syms (Array.to_list (dims tn)) in
+          (op, loops, gpu_parallel_suffix ~block_size ~min_parallel ~extent:snd loops))
+    in
+    (* The lane plans, over each node's non-singleton loops (a singleton stays a serial loop outside
+       them): an expanded zero writes every cell of its own node exactly once, so its whole loop set
+       is a proved chain, and the nodes are independent. The same common-topology rule, device caps
+       and no-loss test against the two-loop plan as {!default_gpu}'s. *)
+    let lane_plans =
+      let chains =
+        List.map expanded ~f:(fun (_, loops, _) -> List.filter loops ~f:(fun (_, n) -> n > 1))
+      in
+      if List.exists chains ~f:List.is_empty then None
+      else
+        let* plans = plan_chains ~block_size ~fill ~limits chains in
+        Option.some_if
+          (lane_plans_gain ~block_size
+             ~preset:(List.map expanded ~f:(fun (_, _, selected) -> List.map selected ~f:snd))
+             plans)
+          (List.filter_opt plans)
+    in
+    match lane_plans with
+    | Some plans ->
+        List.concat (List.map2_exn expanded plans ~f:(fun (op, _, _) p -> op :: plan_ops p))
+    | None ->
+        List.concat_map expanded ~f:(fun (op, _, selected) ->
+            let annots =
+              match selected with
+              | [] -> assert false
+              | [ (s0, n0) ] ->
+                  let sp, _, _ =
+                    split ~axis:s0 ~factor:(min block_size n0) ~outer:Low_level.Grid
+                      ~inner:Low_level.Workgroup
+                  in
+                  [ sp ]
+              | (s0, _) :: (s1, n1) :: _ ->
+                  if n1 <= block_size then
+                    [
+                      Retype { axis = s0; ty = Low_level.Grid };
+                      Retype { axis = s1; ty = Low_level.Workgroup };
+                    ]
+                  else
+                    let sp, _, _ =
+                      split ~axis:s1 ~factor:block_size ~outer:Low_level.Serial
+                        ~inner:Low_level.Workgroup
+                    in
+                    [ Retype { axis = s0; ty = Low_level.Grid }; sp ]
+            in
+            op :: annots)
 
 let seg_llc replicas seg =
   Low_level.unflat_lines (List.concat_map (replicas @ seg.g_units) ~f:(fun u -> u.f_stmts))
@@ -6965,8 +7199,13 @@ let default_schedule_fingerprint ~backend_name =
       let mp =
         String.strip (Utils.get_global_arg ~arg_name:"gpu_schedule_min_parallel" ~default:"64")
       in
+      let fill =
+        String.strip (Utils.get_global_arg ~arg_name:"gpu_schedule_workgroup_fill" ~default:"1")
+      in
+      (* [lane-plans-v1] (gh-ocannl-1133): the default maps every loop of a proved chain, so a
+         [default_ms] timed under the two-loop presets describes another algorithm. *)
       [%string
-        "gpu:policy=small-leading-v1+lanes-v1+fold-mma-v1:fission=%{fission#Bool}:block_size=%{bs}:min_parallel=%{mp}"]
+        "gpu:policy=small-leading-v1+lanes-v1+fold-mma-v1+lane-plans-v1:fission=%{fission#Bool}:block_size=%{bs}:min_parallel=%{mp}:workgroup_fill=%{fill}"]
     else
       let mp =
         String.strip (Utils.get_global_arg ~arg_name:"cpu_schedule_min_parallel" ~default:"16384")

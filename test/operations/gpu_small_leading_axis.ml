@@ -1,6 +1,9 @@
-(* gh-ocannl-995: choose GPU ownership after looking past a small leading batch axis. Every producer
-   identifies every coordinate; dependent nests and an incompatible traversal exercise both the new
-   choice and the conservative fallback. *)
+(* gh-ocannl-995: a small leading batch axis must not starve GPU ownership. Every producer
+   identifies every coordinate; dependent nests and an incompatible traversal exercise both the
+   chosen geometry and the conservative fallback. Since gh-ocannl-1133 the default maps every loop
+   of the proved chain (the small leading axis becomes one more [Grid] slot); the two-loop suffix
+   pair of gh-995 survives as the fallback, which the trimmed and failed suffix cases below still
+   reach. *)
 open Base
 open Ocannl.Operation.DSL_modules
 open Verdict.Claims
@@ -25,8 +28,7 @@ let value idcs dims =
       L.add acc (L.mul (L.c (Float.of_int stride)) (LL.Embed_index idx)))
 
 let dims_equal d grid block =
-  Array.equal Int.equal d.LL.grid [| grid; 1; 1 |]
-  && Array.equal Int.equal d.LL.block [| block; 1; 1 |]
+  Array.equal Int.equal d.LL.grid grid && Array.equal Int.equal d.LL.block block
 
 let run ~name ~dims ~transpose ~grid ~block =
   let a = node ~dims (name ^ "_a") and b = node ~dims (name ^ "_b") in
@@ -81,14 +83,20 @@ let mismatched_suffix ~name ~producer_dims ~consumer_dims ~grid ~block =
 let () =
   Stdlib.Printf.eprintf "gpu_small_leading_axis backend: %s\n%!"
     (Context.backend_name (Context.auto ()));
-  run ~name:"gsa_batch2" ~dims:[| 2; 128; 32 |] ~transpose:false ~grid:128 ~block:32;
-  run ~name:"gsa_batch8" ~dims:[| 8; 128; 32 |] ~transpose:false ~grid:128 ~block:32;
-  run ~name:"gsa_batch_head" ~dims:[| 2; 8; 128; 32 |] ~transpose:false ~grid:128 ~block:32;
-  run ~name:"gsa_unequal_order" ~dims:[| 2; 128; 32 |] ~transpose:true ~grid:1 ~block:1;
+  (* Grid slots from the innermost: the last grid loop binds .x, the one above it .y, the rest fold
+     onto .z; the innermost chain loop is the workgroup lane. *)
+  run ~name:"gsa_batch2" ~dims:[| 2; 128; 32 |] ~transpose:false ~grid:[| 128; 2; 1 |]
+    ~block:[| 32; 1; 1 |];
+  run ~name:"gsa_batch8" ~dims:[| 8; 128; 32 |] ~transpose:false ~grid:[| 128; 8; 1 |]
+    ~block:[| 32; 1; 1 |];
+  run ~name:"gsa_batch_head" ~dims:[| 2; 8; 128; 32 |] ~transpose:false ~grid:[| 128; 8; 2 |]
+    ~block:[| 32; 1; 1 |];
+  run ~name:"gsa_unequal_order" ~dims:[| 2; 128; 32 |] ~transpose:true ~grid:[| 1; 1; 1 |]
+    ~block:[| 1; 1; 1 |];
   mismatched_suffix ~name:"gsa_trimmed_suffix" ~producer_dims:[| 2; 32; 64 |]
-    ~consumer_dims:[| 2; 32; 128 |] ~grid:2 ~block:32;
+    ~consumer_dims:[| 2; 32; 128 |] ~grid:[| 2; 1; 1 |] ~block:[| 32; 1; 1 |];
   mismatched_suffix ~name:"gsa_failed_suffix" ~producer_dims:[| 8; 8; 32; 16 |]
-    ~consumer_dims:[| 8; 8; 16; 16 |] ~grid:8 ~block:8;
+    ~consumer_dims:[| 8; 8; 16; 16 |] ~grid:[| 8; 1; 1 |] ~block:[| 8; 1; 1 |];
   let dims = [| 2; 128; 32 |] in
   let a = node ~dims "gsa_zero" in
   L.materialize a;
@@ -99,7 +107,8 @@ let () =
          [ a ])
       opt
   in
-  p "expanded zeros use the same suffix geometry" (dims_equal (LL.launch_dims scheduled.llc) 128 32);
+  p "expanded zeros map every axis, as compute does"
+    (dims_equal (LL.launch_dims scheduled.llc) [| 128; 2; 1 |] [| 32; 1; 1 |]);
   let seed = Array.create ~len:(2 * 128 * 32) 17. in
   let got = List.hd_exn (L.execute ~name:"gsa_zero" scheduled ~seed:[ (a, seed) ] ~read:[ a ]) in
   p_all "expanded zeros clear every coordinate" (Array.to_list got) ~f:(Float.equal 0.)

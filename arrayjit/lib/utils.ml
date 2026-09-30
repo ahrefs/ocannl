@@ -132,6 +132,7 @@ let known_config_keys =
       "automatic_gpu_schedule";
       "gpu_schedule_block_size";
       "gpu_schedule_min_parallel";
+      "gpu_schedule_workgroup_fill";
       "automatic_cpu_schedule";
       "cpu_schedule_min_parallel";
       "schedule_fission";
@@ -312,6 +313,7 @@ let config_key_classification : (config_key_class * string * string list) list =
         "automatic_gpu_schedule";
         "gpu_schedule_block_size";
         "gpu_schedule_min_parallel";
+        "gpu_schedule_workgroup_fill";
         "automatic_cpu_schedule";
         "cpu_schedule_min_parallel";
         "schedule_fission";

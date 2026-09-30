@@ -3543,6 +3543,15 @@
  (libraries base ocannl arrayjit.verdict ll_test))
 
 (test
+ (name gpu_parallel_prefix)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules gpu_parallel_prefix)
+ (libraries base stdio ocannl arrayjit.verdict ll_test))
+
+(test
  (name schedule_ops)
  (package neural_nets_lib)
  (deps

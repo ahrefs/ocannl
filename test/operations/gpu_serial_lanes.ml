@@ -10,8 +10,10 @@
    Legs: 1. the hoisted shape gets the lane geometry -- every Grid slot and the lane width, the lane
    bound inside the serial loop -- and executes every cell exactly (integer-valued data, so the
    comparison is exact on every backend); 2. a lane nest sharing its kernel with a plain nest
-   declines (the slots would not line up) and keeps the presets' geometry, values exact; 3. a lane
-   body reading another lane's cell declines (a cross-thread conflict), values exact under the
+   declines (the slots would not line up) and keeps the plain plan -- since gh-ocannl-1133 every
+   loop of each nest's plain chain, the lane nest's [(b, s, h)] splitting its last loop into a
+   one-block [Grid] slot to meet the plain nest's three -- values exact; 3. a lane body reading
+   another lane's cell declines (a cross-thread conflict) to the plain plan, values exact under the
    serial order; 4. a preamble holding an inlined reduction declines (every lane would recompute
    it); 5. the real pipeline: the rewritten attention's value pass is scheduled with lanes on a GPU
    backend and not on the CPU one, and the forward agrees with the composed model on the run's
@@ -266,26 +268,26 @@ let () =
       let lane = String.substr_index src ~pattern:register in
       p claim (match (first_for, lane) with Some f, Some l -> f < l | _ -> false));
 
-  printf "--- leg 2: a lane nest sharing its kernel with a plain nest keeps the presets ---\n";
+  printf "--- leg 2: a lane nest sharing its kernel with a plain nest keeps the plain plan ---\n";
   let case =
     hoisted ~name:"lanes_mixed" ~lane_body:accumulate ~reference:accumulate_reference
       ~with_plain:true ()
   in
   let scheduled, got = execute case in
   p "lanes_mixed: no lane geometry" (not (lane_under_serial scheduled.llc));
-  p "lanes_mixed: the presets' suffix pair, Grid s x Workgroup h"
-    (dims_are (LL.launch_dims scheduled.llc) ~grid:[| s_n; 1; 1 |] ~block:[| h_n; 1; 1 |]);
+  p "lanes_mixed: the plain plans, Grid (h, s, b) x Workgroup e with the lane nest's h split"
+    (dims_are (LL.launch_dims scheduled.llc) ~grid:[| h_n; s_n; b_n |] ~block:[| e_n; 1; 1 |]);
   check_values case got;
 
   printf "--- leg 3: a lane reading another lane's cell declines ---\n";
   let case = hoisted ~name:"lanes_mirror" ~lane_body:mirror ~reference:mirror_reference () in
   let scheduled, got = execute case in
   p "lanes_mirror: no lane geometry" (not (lane_under_serial scheduled.llc));
-  p "lanes_mirror: the presets' suffix pair, Grid s x Workgroup h"
-    (dims_are (LL.launch_dims scheduled.llc) ~grid:[| s_n; 1; 1 |] ~block:[| h_n; 1; 1 |]);
+  p "lanes_mirror: the plain plan, Grid (s, b) x Workgroup h"
+    (dims_are (LL.launch_dims scheduled.llc) ~grid:[| s_n; b_n; 1 |] ~block:[| h_n; 1; 1 |]);
   check_values case got;
 
-  printf "--- leg 4: a preamble holding an inlined reduction keeps the presets ---\n";
+  printf "--- leg 4: a preamble holding an inlined reduction keeps the plain plan ---\n";
   (* Every lane recomputes the preamble, so a lane geometry multiplies its work by the lane width:
      the recomputed score [q . k] of the flash-attention form cost 1.5x at seq 1024 on Metal that
      way (benchmarks/report-gh1003-stage1.md). The scope is spliced into the optimized record by
@@ -326,8 +328,8 @@ let () =
   p "lanes_scoped: the preamble holds the inlined loop" (not (LL.equal scoped.llc case.opt.llc));
   let scheduled = S.apply (S.default_gpu ~block_size:256 ~min_parallel:64 scoped) scoped in
   p "lanes_scoped: no lane geometry" (not (lane_under_serial scheduled.llc));
-  p "lanes_scoped: the presets' suffix pair, Grid s x Workgroup h"
-    (dims_are (LL.launch_dims scheduled.llc) ~grid:[| s_n; 1; 1 |] ~block:[| h_n; 1; 1 |]);
+  p "lanes_scoped: the plain plan, Grid (s, b) x Workgroup h"
+    (dims_are (LL.launch_dims scheduled.llc) ~grid:[| s_n; b_n; 1 |] ~block:[| h_n; 1; 1 |]);
 
   printf "--- leg 5: the rewritten attention's value pass, through the real pipeline ---\n";
   List.iter
