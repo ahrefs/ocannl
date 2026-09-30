@@ -752,8 +752,12 @@ let writes_of (llc : Ir.Low_level.t) =
   let rec code (l : LL.t) =
     match l with
     | LL.Noop | LL.Comment _ | LL.Declare_local _ | LL.Staged_compilation _ | LL.Workgroup_barrier
-    | LL.Tile_mma _ | LL.Set_local _ ->
+    | LL.Set_local _ ->
         ()
+    (* A tile multiply-accumulate writes its accumulator block: without this a tensorized kernel
+       whose only store is the [Tile_mma] -- a q/k/v projection's, say -- is listed as writing
+       nothing, and the per-kernel table cannot say which kernel it is (gh-ocannl-728). *)
+    | LL.Tile_mma { d = tn, _; _ } -> writes := tn :: !writes
     | LL.Seq (a, b) ->
         code a;
         code b

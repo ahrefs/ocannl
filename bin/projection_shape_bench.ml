@@ -25,30 +25,41 @@
    is deliberate -- each is measured twice within one run, so a run reports its own session drift
    and a shape effect can be judged against it.
 
+   Group [qkv] is gh-ocannl-728's Move 0 gate on its own: the real q/k/v site (rows 8 x 128, columns
+   8 heads x 32) and its heads-merged twin (columns 256), each twice ([Q_heads8_a/b],
+   [Q_heads1_a/b]). It closes with a gate table -- per candidate class, the merged pair against the
+   split pair beside the duplicate pairs' own disagreement -- read off the finalists round below.
+
    Candidates per site: the untuned shipped default, then every geometry of the GPU blocktile sketch
-   family applied as the pure IR transform it is; mode [tune] instead runs a full [Autotune.tune]
-   search per site with [~search:true] and the disk cache DISABLED, so neither shape can replay the
-   other's cached winner and a configuration that disabled searching cannot return the untuned
-   default under a tuned label.
+   family applied as the pure IR transform it is -- plus, under [--with-mma], every tensorized seed
+   the backend and numerics policy offer (f32 on CUDA needs [tf32_matmuls], e.g. the [approximate]
+   profile; each site's phase-1 line counts what the menu offered); mode [tune] instead runs a full
+   [Autotune.tune] search per site with [~search:true] and the disk cache DISABLED, so neither shape
+   can replay the other's cached winner and a configuration that disabled searching cannot return
+   the untuned default under a tuned label.
 
    Timing is ROUND-INTERLEAVED, not site-by-site: one round per base tile geometry ([bgrid] twins
    included, since a merged site's plain arm and a batched site's [bgrid] arm are the pair being
-   compared; the crowned routines of [tune] mode are one further round), inside which every arm is
-   timed batch by batch. The visiting order uses ONE rotation per adjacent PAIR of batches, mirrored
-   on the odd member, so each such pair exchanges the positions of every pair of arms exactly -- the
-   run-by-run A/B alternation, for all pairs at once and with no RNG. (A rotation that advances
-   every batch does not do this: rotate-then-reverse leaves each arm at the same position in both
-   halves.) An even batch count balances the pairs exactly, which is why the default is even. Timing
-   one site to completion before the next puts the drift straight into the difference under test,
-   and reversing the site order only moves that bias. Three statistics per arm: [repeats] dispatches
-   queued back-to-back with one sync -- the sync only, never a device-to-host readback, which would
-   put a transfer and a host allocation inside the timed region (what a kernel sustains inside a
-   step, and the summary's statistic, taken at the MEDIAN batch), and [Autotune.time_routine] in
-   each of its two modes ([Isolated], one dispatch and one sync, which reads up to 2.6x higher; and
-   [Queued], its gh-ocannl-755 companion), minimized over the same interleaved passes. The last two
-   are the TUNER'S instrument rather than a re-derivation of it, which is what makes the closing
-   gh-ocannl-755 table a comparison of the ranking a search would produce against the ranking
-   steady-state throughput produces, and not of two lookalikes.
+   compared), inside which every arm is timed batch by batch. A last FINALISTS round recompiles each
+   site's best scalar and best tensorized seed (under each of the three statistics, from their own
+   rounds) and its default, and times them again, interleaved with every other site's finalists and
+   with the searches' crowned routines: the cross-geometry question "which candidate is best" is
+   then answered inside one round rather than across rounds' drift, by numbers that are not the
+   selection's own optimistic draw. The visiting order uses ONE rotation per adjacent PAIR of
+   batches, mirrored on the odd member, so each such pair exchanges the positions of every pair of
+   arms exactly -- the run-by-run A/B alternation, for all pairs at once and with no RNG. (A
+   rotation that advances every batch does not do this: rotate-then-reverse leaves each arm at the
+   same position in both halves.) An even batch count balances the pairs exactly, which is why the
+   default is even. Timing one site to completion before the next puts the drift straight into the
+   difference under test, and reversing the site order only moves that bias. Three statistics per
+   arm: [repeats] dispatches queued back-to-back with one sync -- the sync only, never a
+   device-to-host readback, which would put a transfer and a host allocation inside the timed region
+   (what a kernel sustains inside a step, and the summary's statistic, taken at the MEDIAN batch),
+   and [Autotune.time_routine] in each of its two modes ([Isolated], one dispatch and one sync,
+   which reads up to 2.6x higher; and [Queued], its gh-ocannl-755 companion), minimized over the
+   same interleaved passes. The last two are the TUNER'S instrument rather than a re-derivation of
+   it, which is what makes the closing gh-ocannl-755 table a comparison of the ranking a search
+   would produce against the ranking steady-state throughput produces, and not of two lookalikes.
 
    Which of the numbers on a line to believe depends on what the noise is. The median is the right
    summary when the noise is symmetric, which is why it is the summary. On a CONTENDED box it is
@@ -60,35 +71,40 @@
 
    Every candidate's whole output is compared cell by cell against a host-computed oracle -- built
    straight from the input formulas, so it is independent of the compiler under test -- and the
-   inputs are chosen so that f32 and f64 accumulation agree exactly whatever order either uses. Each
-   line carries the launch dimensions the schedule actually produced, so "same geometry" is read off
-   the kernel. Any cell that fails parity, fails to compile or run, or (in [tune] mode) did not
-   actually search, is counted and the process exits nonzero: a blank in the column the caller asked
-   for is a failed experiment, not a missing number.
+   inputs are chosen so that f32 and f64 accumulation agree exactly whatever order either uses (and
+   survive a tensorized arm's operand rounding: a few significant bits each, well inside tf32's 11).
+   Each line carries the launch dimensions of every kernel the compile shipped, read off the
+   routine's own segments, so "same geometry" is read off the kernel -- for the untuned default and
+   a crowned search too -- and a tensorized arm carries the routine's tensorization census; one that
+   rendered only the scalar fallback is refused rather than timed under an [mma-] label. Any cell
+   that fails parity, fails to compile or run, or (in [tune] mode) did not actually search, is
+   counted and the process exits nonzero: a blank in the column the caller asked for is a failed
+   experiment, not a missing number.
 
    Usage (bin/ cwd trap: pin the backend, and run from a directory holding an ocannl_config):
    OCANNL_BACKEND=hip <path to>/projection_shape_bench.exe \ [repeats] [batches] [group] [order]
-   [mode] Defaults 50 repeats, 6 timing batches, group "all" (a/b/c/d/e/p/abd/abde/all), order fwd
-   (or rev, which reverses the rotation each round starts from), mode seeds (or tune, or both). The
-   batch count must be EVEN -- the visiting order mirrors in adjacent pairs -- so the measurement
-   this bench was written for reads, in full:
+   [mode] [--with-mma] Defaults 50 repeats, 6 timing batches, group "all"
+   (a/b/c/d/e/p/abd/abde/all/qkv), order fwd (or rev, which reverses every round's complete arm
+   order), mode seeds (or tune, or both). The batch count must be EVEN -- the visiting order mirrors
+   in adjacent pairs -- so the measurement this bench was written for reads, in full:
 
    cd benchmarks # the nearest ocannl_config, and bin/ has the cwd trap OCANNL_BACKEND=hip
    ../_build/default/bin/projection_shape_bench.exe 200 8 abde fwd seeds
+
+   and gh-ocannl-728's Move 0 is benchmarks/gh728_cells.sh, which drives group [qkv] beside the real
+   gpt2_mini kernels.
 
    Group [smoke] is deliberately outside that measurement vocabulary: its one 2x2 matmul exists only
    so [@bin-smoke] can start and complete every phase cheaply on the cc backend. Its output is not
    evidence about the projection-shape question this benchmark measures (gh-ocannl-858).
 
-   Three things the output does NOT claim. The launch dimensions are printed only for the arms whose
-   lowering this bench transforms itself; the untuned default and a crowned search compile their
-   own, so those rows say so rather than reporting a geometry nobody verified. The [bestseed] column
-   ranks arms measured in DIFFERENT rounds, so unlike every per-geometry comparison it is exposed to
-   drift between rounds -- read it as indicative and the round lines as the measurement. And on the
-   C backends the hoisted seeds mint packed-constant nodes per candidate, which land in the
-   device-wide constant cache that [Context.release] cannot reclaim, so a long CPU run grows by one
-   packed pool per hoisted candidate; the bench says so when it times them rather than pretending
-   its cleanup covers that class. *)
+   Two things the output does NOT claim. The [bestseed] column ranks arms measured in DIFFERENT
+   rounds, so unlike every per-geometry comparison it is exposed to drift between rounds -- read it
+   as indicative and the round lines as the measurement. And on the C backends the hoisted seeds
+   mint packed-constant nodes per candidate, which land in the device-wide constant cache that
+   [Context.release] cannot reclaim, so a long CPU run grows by one packed pool per hoisted
+   candidate; the bench says so when it times them rather than pretending its cleanup covers that
+   class. *)
 
 open Base
 open Ocannl
@@ -148,12 +164,23 @@ let cycle ~dims ~modulus ~offset ~stride idcs =
    measured. It also mints no context to leak. *)
 let capture fwd = Context.lowered_for_decisions (Context.auto ()) fwd Ir.Indexing.Empty
 
+(* Every field two seeds of one site can differ by, so no two seeds share a label: the tables and
+   the finalists round's recompile key on it. The register tile, swizzle, pack precision and conv
+   flag print only when set, so the historical scalar labels are unchanged; a pair still colliding
+   on a field this omits is a counted failure at phase 1, not a merged row. *)
 let geom_label (q : Autotune.sketch_params) =
-  Printf.sprintf "%s%s %dx%dx%d/%dx%d%s%s%s%s%s"
+  Printf.sprintf "%s%s%s %dx%dx%d/%dx%d%s%s%s%s%s%s%s%s"
+    (if q.sk_conv then "conv-" else "")
     (if q.sk_mma then "mma-" else "")
     (if q.sk_gpu then "gpu" else "cpu")
     q.sk_bm q.sk_bn q.sk_bk q.sk_tm q.sk_tn
     (if q.sk_depth > 1 then Printf.sprintf " pd%d" q.sk_depth else "")
+    (match q.sk_tile with Some t -> " tile " ^ Ir.Register_tile.to_string t | None -> "")
+    (match q.sk_swizzle with
+    | Some Ir.Low_level.Swizzle_elem -> " swz-elem"
+    | Some Ir.Low_level.Swizzle_b128 -> " swz-b128"
+    | None -> "")
+    (match q.sk_pack_prec with Some pr -> " pack" ^ Ir.Ops.prec_string pr | None -> "")
     (if q.sk_hoist then " hoist" else "")
     (if q.sk_grid then " grid" else "")
     (if q.sk_pack_rest then " packrest" else "")
@@ -223,6 +250,17 @@ let oracle s =
   done;
   d
 
+(* One measured arm, in GFLOP/s: the median timing batch (the summary), the minimum batch, and the
+   tuner's own [Queued] reading -- the objective a default search ranks by. *)
+type stats = { st_med : float; st_min : float; st_queued : float }
+
+(* The label prefix of an arm re-timed in the finalists round, which keeps it apart from the seed
+   round's arm of the same geometry in every table. *)
+let final_prefix = "FINAL "
+
+(* The label of a search's crowned winner. *)
+let tuned_label = "TUNED (full search)"
+
 (* Everything one timed row needs, kept alive only for the round that times it. *)
 type live = {
   lv_tag : string;
@@ -231,6 +269,10 @@ type live = {
   lv_ctx : Context.t ref;
   lv_routine : Context.routine;
   lv_launch : string;
+  lv_mma : string;
+      (** The compiled routine's own tensorization census ([Context.routine.mma]), so a line
+          labelled as a tensorized seed says whether it measured tensor-core code or its scalar
+          fallback. *)
   lv_parity : bool;
   lv_times : float list ref;
   lv_iso : float ref;
@@ -264,8 +306,8 @@ let () =
           statistic"
          repeats);
   let group = String.lowercase (Bench_args.string args 2 ~default:"all") in
-  (* [fwd]/[rev] reverses the rotation the interleaved rounds start from, so a residual
-     first-arm-is-cold bias can be shown not to carry the conclusion. *)
+  (* [rev] reverses every round's complete arm order, so a residual position bias (a cold first arm,
+     a site's twins always visited in one order) can be shown not to carry the conclusion. *)
   let order = String.lowercase (Bench_args.string args 3 ~default:"fwd") in
   (* [seeds] times the sketch seeds, one interleaved round per geometry; [tune] runs the full search
      per site (which cannot be interleaved -- a search is minutes of its own dispatches) with the
@@ -275,6 +317,12 @@ let () =
     invalid_arg ("unknown mode " ^ mode ^ " (seeds | tune | both)");
   let do_seeds = not (String.equal mode "tune") in
   let do_tune = List.mem [ "tune"; "both" ] mode ~equal:String.equal in
+  (* [--with-mma] keeps the tensorized seeds in the menu (gh-ocannl-728 Move 0). Off by default so
+     the historical groups keep meaning the scalar blocktile family they were measured over. Which
+     tensorized seeds exist is the backend's and the numerics policy's call -- f32 operands on CUDA
+     need [tf32_matmuls] (the [approximate] profile), HIP has no f32 tile shape -- so the phase-1
+     line per site prints how many the menu offered, and a flag that yields none says so there. *)
+  let with_mma = Bench_args.flag args ~name:"with-mma" in
   (* The backend comes from the CONTEXT, not from the [backend] setting: unpinned, that setting
      reads "cc" while [Context.auto] picks the first available GPU, and the harness would then seed
      the CPU families against a GPU context's limits and print the wrong name over the numbers. *)
@@ -285,8 +333,12 @@ let () =
   in
   let limits = Context.hardware_limits probe_ctx in
   Context.release probe_ctx;
-  p "backend %s, repeats %d, batches %d, group %s, order %s, mode %s\n" backend repeats nbatches
-    group order mode;
+  p "backend %s, repeats %d, batches %d, group %s, order %s, mode %s%s\n" backend repeats nbatches
+    group order mode
+    (if with_mma then ", tensorized seeds included" else "");
+  (* The numerics gate the tensorized f32 seeds hinge on, off the effective policy the seeding
+     consults -- so a log says which regime its mma arms (or their absence) belong to. *)
+  p "numerics policy: tf32_matmuls=%b\n" (Ir.Numerics.get ()).Ir.Numerics.tf32_matmuls;
   p "%s\n" (if on_gpu then "GPU blocktile family" else "CPU families");
   let sites =
     let a =
@@ -332,6 +384,16 @@ let () =
         { tag = "E_qkv_rows1_heads1"; bs = []; m = 1024; ns = [ 256 ]; ks = [ 256 ] };
       ]
     and pk = [ { tag = "P_square1024"; bs = []; m = 1024; ns = [ 1024 ]; ks = [ 1024 ] } ]
+    (* gh-ocannl-728 Move 0: the real q/k/v site (8 heads of 32 columns) against its heads-merged
+       twin (256 columns), EACH TWICE, in alternation -- the two copies of a shape are the in-run
+       noise floor the gate judges the merge against, and they share every round with the pair under
+       test. *)
+    and qkv =
+      List.concat_map [ "a"; "b" ] ~f:(fun copy ->
+          [
+            { tag = "Q_heads8_" ^ copy; bs = [ 8 ]; m = 128; ns = [ 8; 32 ]; ks = [ 256 ] };
+            { tag = "Q_heads1_" ^ copy; bs = [ 8 ]; m = 128; ns = [ 256 ]; ks = [ 256 ] };
+          ])
     and smoke = [ { tag = "smoke_2x2"; bs = []; m = 2; ns = [ 2 ]; ks = [ 2 ] } ] in
     match group with
     | "a" -> a
@@ -343,14 +405,15 @@ let () =
     | "abd" -> a @ b @ d
     | "abde" -> a @ b @ d @ e
     | "all" -> a @ b @ c @ d @ e @ pk
+    | "qkv" -> qkv
     | "smoke" -> smoke
     | g -> invalid_arg ("unknown group " ^ g)
   in
-  let sites =
-    match order with
-    | "fwd" -> sites
-    | "rev" -> List.rev sites
-    | o -> invalid_arg ("unknown order " ^ o)
+  (* [rev] reverses each round's COMPLETE arm list (see [run_round]), not the site list: reversing
+     sites alone would leave a site's own arms -- plain/bgrid twins, a finalist's scalar/tensorized
+     pair -- and the finalists round's appended groups in their forward order. *)
+  let reversed =
+    match order with "fwd" -> false | "rev" -> true | o -> invalid_arg ("unknown order " ^ o)
   in
   (* Any cell of the experiment that could not be measured is a failure of the run, not a blank in a
      table: a harness that exits 0 with "n/a" in the column the caller asked for lets automation
@@ -408,11 +471,23 @@ let () =
                  (List.map site.Autotune.m_bo ~f:(fun (_, e) -> Int.to_string e)))
               (String.concat ~sep:","
                  (List.map site.Autotune.m_bi ~f:(fun (_, e) -> Int.to_string e))));
-        let seeds =
+        let offered =
           Autotune.sketch_seed_params ~is_gpu:on_gpu ~is_cpu:(not on_gpu) ~limits opt
-          |> List.filter ~f:(fun (q : Autotune.sketch_params) ->
-              (not q.sk_epilogue) && not q.sk_mma)
+          |> List.filter ~f:(fun (q : Autotune.sketch_params) -> not q.sk_epilogue)
         in
+        let seeds =
+          List.filter offered ~f:(fun (q : Autotune.sketch_params) -> with_mma || not q.sk_mma)
+        in
+        p "   menu: %d scalar seed(s), %d tensorized seed(s) offered%s\n"
+          (List.count offered ~f:(fun q -> not q.Autotune.sk_mma))
+          (List.count offered ~f:(fun q -> q.Autotune.sk_mma))
+          (if with_mma then "" else " (tensorized not timed: no --with-mma)");
+        (* The seed's label is how every later table -- and the finalists round, which recompiles a
+           site's best seed from it -- names the seed, so two seeds one label cannot tell apart
+           would silently merge into one row. *)
+        (match List.find_a_dup (List.map seeds ~f:geom_label) ~compare:String.compare with
+        | Some l -> fail "%s: two seeds share the label %S -- their rows would merge" s.tag l
+        | None -> ());
         (* The same comp is compiled for every candidate, which is what the sketch suites do too. *)
         (s, fl, seeds, lazy (oracle s), d, fwd))
   in
@@ -444,7 +519,7 @@ let () =
         fatal_seen := true;
         Outcome.raise_failure f
   in
-  let arm (s, fl, _, orc, d, fwd) ~label ~compile =
+  let arm ?(tensorized = false) (s, fl, _, orc, d, fwd) ~label ~compile =
     Int.incr counter;
     let name = Printf.sprintf "%s_c%d" s.tag !counter in
     let held = ref None in
@@ -453,13 +528,12 @@ let () =
        original exception with its backtrace, which the containment below would otherwise catch like
        any other. A classified decline is left to that containment on purpose. *)
     let fatal_seen = ref false in
+    (* A tensorized seed whose every [Tile_mma] declined to the scalar fallback (or that emitted
+       none) would be timed as scalar code under an [mma-] label -- the false perf number the
+       routine's census exists to stop. Refused, and counted, rather than timed. *)
+    let not_tensorized = ref None in
     match
-      let dims = ref None in
-      let record o =
-        dims := Some (LL.launch_dims o.LL.llc);
-        o
-      in
-      let ctx, routine = compile ~record ~name ~fatal_seen fwd in
+      let ctx, routine = compile ~name ~fatal_seen fwd in
       let ctx = ref ctx in
       held := Some ctx;
       (* The warm-up launches and the synchronizing readback go through the same classifier the
@@ -488,13 +562,22 @@ let () =
       let parity =
         Array.length got = Array.length want && Array.for_all2_exn got want ~f:Float.equal
       in
+      (* The launch geometry of every kernel the compile SHIPPED, read off the routine's own
+         segments -- so the untuned default and a crowned search, which lower themselves, report a
+         verified geometry too, and a multi-kernel routine shows each launch. *)
       let launch =
-        match !dims with
-        | None -> "(geometry not captured -- this arm compiles its own lowering)"
-        | Some dm ->
-            let pr a = String.concat ~sep:"x" (Array.to_list (Array.map a ~f:Int.to_string)) in
-            Printf.sprintf "grid %s block %s" (pr dm.LL.grid) (pr dm.LL.block)
+        let pr a = String.concat ~sep:"x" (Array.to_list (Array.map a ~f:Int.to_string)) in
+        String.concat ~sep:" + "
+          (List.map routine.Context.segments ~f:(fun seg ->
+               let dm = LL.launch_dims seg.LL.llc in
+               Printf.sprintf "grid %s block %s" (pr dm.LL.grid) (pr dm.LL.block)))
       in
+      let mma = routine.Context.mma in
+      if
+        tensorized
+        && not
+             (Ir.C_syntax.equal_tensorization mma.Ir.C_syntax.tensorization Ir.C_syntax.Tensorized)
+      then not_tensorized := Some (Ir.C_syntax.mma_summary_string mma);
       {
         lv_tag = s.tag;
         lv_flops = fl;
@@ -502,6 +585,7 @@ let () =
         lv_ctx = ctx;
         lv_routine = routine;
         lv_launch = launch;
+        lv_mma = Ir.C_syntax.mma_summary_string mma;
         lv_parity = parity;
         lv_times = ref [];
         lv_iso = ref Float.infinity;
@@ -509,6 +593,11 @@ let () =
         lv_failed = ref false;
       }
     with
+    | _ when Option.is_some !not_tensorized ->
+        fail "%s / %s: a tensorized seed did not tensorize (%s) -- not timed" s.tag label
+          (Option.value_exn !not_tensorized);
+        drop ();
+        None
     | lv when lv.lv_parity -> Some lv
     | _ ->
         fail "%s / %s: PARITY FAILED against the host oracle -- not timed" s.tag label;
@@ -626,6 +715,9 @@ let () =
       done
     end
   in
+  (* Every measured arm's three throughput statistics, by site: what the finalists round and the
+     gh-ocannl-728 gate read back. *)
+  let measured : (string, (string * stats) list) Hashtbl.t = Hashtbl.create (module String) in
   (* The median is the summary and the winner-selection statistic: with a handful of batches on a
      loaded device the minimum is systematically optimistic and crowns whichever geometry drew the
      luckiest batch. The minimum is kept beside it as a diagnostic. *)
@@ -638,15 +730,22 @@ let () =
       if n % 2 = 1 then sorted.(n / 2) else (sorted.((n / 2) - 1) +. sorted.(n / 2)) /. 2.
     in
     let g t = lv.lv_flops /. t /. 1e9 in
-    p "   %-22s %-26s %8.1f GFLOP/s med (min %7.1f)  tuner iso %8.1f q %8.1f  spread %4.1f%%  %s\n"
+    p
+      "   %-22s %-26s %8.1f GFLOP/s med (min %7.1f)  tuner iso %8.1f q %8.1f  spread %4.1f%%  %s%s\n"
       lv.lv_tag lv.lv_label (g median) (g best) (g !(lv.lv_iso)) (g !(lv.lv_queued))
       ((worst -. best) /. best *. 100.)
-      lv.lv_launch;
-    Hashtbl.update instrument
-      ~f:(function
-        | None -> [ (lv.lv_label, median, !(lv.lv_iso), !(lv.lv_queued)) ]
-        | Some l -> (lv.lv_label, median, !(lv.lv_iso), !(lv.lv_queued)) :: l)
-      lv.lv_tag;
+      lv.lv_launch
+      (if String.is_prefix lv.lv_mma ~prefix:"not-requested" then "" else "  mma " ^ lv.lv_mma);
+    (* The finalists round re-times arms under a [FINAL] label; they stay out of the gh-755 ranking,
+       whose population is one tuning round's seeds. *)
+    if not (String.is_prefix lv.lv_label ~prefix:final_prefix) then
+      Hashtbl.update instrument
+        ~f:(function
+          | None -> [ (lv.lv_label, median, !(lv.lv_iso), !(lv.lv_queued)) ]
+          | Some l -> (lv.lv_label, median, !(lv.lv_iso), !(lv.lv_queued)) :: l)
+        lv.lv_tag;
+    Hashtbl.add_multi measured ~key:lv.lv_tag
+      ~data:(lv.lv_label, { st_med = g median; st_min = g best; st_queued = g !(lv.lv_queued) });
     g median
   in
   (* On the success path a release failure is a failed cell, not something to swallow: the arm's
@@ -665,6 +764,7 @@ let () =
       | Some l -> (lv.lv_label, g) :: l)
   in
   let run_round ~label lives =
+    let lives = if reversed then List.rev lives else lives in
     if not (List.is_empty lives) then begin
       p "\n-- round: %s (%d arms interleaved)\n" label (List.length lives);
       time_round lives;
@@ -683,10 +783,30 @@ let () =
     end
   in
   (* Round 0: the untuned shipped default, one arm per site. *)
-  run_round ~label:"default (untuned)"
-    (List.filter_map prepared ~f:(fun pr ->
-         arm pr ~label:"default (untuned)" ~compile:(fun ~record:_ ~name ~fatal_seen fwd ->
-             compiled ~fatal_seen ~name (Context.auto ()) fwd)));
+  (* The default a caller of the runners actually gets: under [model_default_schedule] (the
+     [performance]/[approximate] profiles) the benchmark runners' untuned compile is the cost
+     model's pick, [Autotune.model_default], not the plain pipeline -- so that is the arm, labelled
+     as such. It is a raising API, so a failure there is contained by [arm]'s handler as one cell. *)
+  let model_default = Lazy.force Autotune.model_default_enabled in
+  let default_label = if model_default then "default (model-picked)" else "default (untuned)" in
+  let default_arm ?(prefix = "") pr =
+    arm pr ~label:(prefix ^ default_label) ~compile:(fun ~name ~fatal_seen fwd ->
+        if model_default then Autotune.model_default ~name (Context.auto ()) fwd Ir.Indexing.Empty
+        else compiled ~fatal_seen ~name (Context.auto ()) fwd)
+  in
+  run_round ~label:default_label (List.filter_map prepared ~f:default_arm);
+  (* A seed arm: the sketch geometry [q] applied to the site's lowering as the pure IR transform it
+     is. Shared by the per-geometry rounds and the finalists round, so a finalist is the SAME
+     schedule its geometry round measured, recompiled. *)
+  let seed_arm ?(prefix = "") pr (q : Autotune.sketch_params) =
+    arm ~tensorized:q.sk_mma pr
+      ~label:(prefix ^ geom_label q)
+      ~compile:(fun ~name ~fatal_seen fwd ->
+        compiled ~fatal_seen
+          ~lowered_transform:(fun o ->
+            [ Sched.apply (Autotune.sketch_schedule ~accum_prec ~p:q o) o ])
+          ~name (Context.auto ()) fwd)
+  in
   (* One round per geometry, over the sites whose seed list offers it: that is the comparison the
      experiment makes, so that is the set that has to be interleaved. Menu order is preserved. *)
   if do_seeds then begin
@@ -713,12 +833,7 @@ let () =
         let lives =
           List.concat_map prepared ~f:(fun ((_, _, seeds, _, _, _) as pr) ->
               List.filter seeds ~f:(fun q -> String.equal (base_geom (geom_label q)) g)
-              |> List.filter_map ~f:(fun q ->
-                  arm pr ~label:(geom_label q) ~compile:(fun ~record ~name ~fatal_seen fwd ->
-                      compiled ~fatal_seen
-                        ~lowered_transform:(fun o ->
-                          [ record (Sched.apply (Autotune.sketch_schedule ~accum_prec ~p:q o) o) ])
-                        ~name (Context.auto ()) fwd)))
+              |> List.filter_map ~f:(seed_arm pr))
         in
         run_round ~label:g lives)
   end;
@@ -728,43 +843,62 @@ let () =
      would leave the tuned comparison confounded by the drift accumulated during the other sites'
      searches, which is the same defect the seed rounds were restructured to remove.
 
-     Every parameter that shapes the search is passed explicitly and printed, rather than inherited
-     from the ambient configuration: [~search:true] alone still leaves beam width, rounds, timing
-     repeats and the model pre-filter to whatever OCANNL_* or the nearest ocannl_config says, so a
-     run under autotune_rounds=0 or a pruning fraction below 1 would print "full search" over a
-     search that was neither. And a completed search is not automatically a measurement: when every
+     Every parameter that shapes the search is passed explicitly and printed: [~search:true] alone
+     would leave timing repeats and the model pre-filter to whatever OCANNL_* or the nearest
+     ocannl_config says, so a pruning fraction below 1 would print "full search" over a search that
+     was not; beam width and rounds follow the effective configuration (below) and are printed as
+     used. And a completed search is not automatically a measurement: when every
      candidate declines, the outcome is still [Searched] while [best_ms] is infinite and the
      returned routine is the untuned default, so a finite time and a non-empty winner are required
      before the arm is admitted. *)
-  let tn_beam = 2 and tn_rounds = 2 and tn_repeats = 3 and tn_keep = 1.0 and tn_split = 8 in
+  (* Beam width and rounds are the EFFECTIVE configuration's -- the reference defaults 2/2, or a
+     profile's (the [approximate] payload's 4/4) -- read with [Autotune.tune]'s own defaults and
+     passed explicitly, so the search a leg runs is the one a caller under the same configuration
+     gets, and the header prints what was used rather than restating a constant. *)
+  let setting_int name v =
+    match Int.of_string_opt (String.strip v) with
+    | Some n when n >= 0 -> n
+    | _ -> invalid_arg (Printf.sprintf "%s=%S is not a nonnegative integer" name v)
+  in
+  let tn_beam =
+    max 1
+      (setting_int "autotune_beam_width"
+         (Utils.get_global_arg ~arg_name:"autotune_beam_width" ~default:"2"))
+  and tn_rounds =
+    setting_int "autotune_rounds" (Utils.get_global_arg ~arg_name:"autotune_rounds" ~default:"2")
+  and tn_repeats = 3
+  and tn_keep = 1.0
+  and tn_split = 8 in
   let tuned = Hashtbl.create (module String) in
-  if do_tune then begin
-    (* The four pinned arguments are not the whole treatment: [Autotune.tune] also consults gates
-       that have no parameter -- the bound-pruning gate and the two roofline constants it prices
-       candidates against -- so two identical invocations can publish differently pruned searches
-       under one label. They cannot be pinned from here, so they are REPORTED, and a tune run is
-       reproducible only against the line below. *)
-    let shown = function "" -> "(unset)" | v -> v in
-    p
-      "\n\
-       -- searches: beam_width %d, rounds %d, repeats %d, keep_fraction %.2f, \
-       split_reduce_max_sites %d, cache disabled\n\
-       -- ambient search gates: autotune_bound_pruning=%s autotune_timing=%s model_peak_flops=%s \
-       model_peak_memory_bandwidth=%s\n"
-      tn_beam tn_rounds tn_repeats tn_keep tn_split
-      (Utils.get_global_arg ~arg_name:"autotune_bound_pruning" ~default:"false")
-      (Utils.get_global_arg ~arg_name:"autotune_timing" ~default:"queued")
-      (shown (Utils.get_global_arg ~arg_name:"model_peak_flops" ~default:""))
-      (shown (Utils.get_global_arg ~arg_name:"model_peak_memory_bandwidth" ~default:""));
-    let winners =
+  let winners =
+    if not do_tune then []
+    else begin
+      (* The four pinned arguments are not the whole treatment: [Autotune.tune] also consults gates
+         that have no parameter -- the bound-pruning gate and the two roofline constants it prices
+         candidates against -- so two identical invocations can publish differently pruned searches
+         under one label. They cannot be pinned from here, so they are REPORTED, and a tune run is
+         reproducible only against the line below. *)
+      let shown = function "" -> "(unset)" | v -> v in
+      p
+        "\n\
+         -- searches: beam_width %d, rounds %d, repeats %d, keep_fraction %.2f, \
+         split_reduce_max_sites %d, cache disabled\n\
+         -- ambient search gates: autotune_bound_pruning=%s autotune_timing=%s model_peak_flops=%s \
+         model_peak_memory_bandwidth=%s\n"
+        tn_beam tn_rounds tn_repeats tn_keep tn_split
+        (Utils.get_global_arg ~arg_name:"autotune_bound_pruning" ~default:"false")
+        (Utils.get_global_arg ~arg_name:"autotune_timing" ~default:"queued")
+        (shown (Utils.get_global_arg ~arg_name:"model_peak_flops" ~default:""))
+        (shown (Utils.get_global_arg ~arg_name:"model_peak_memory_bandwidth" ~default:""));
       List.filter_map prepared ~f:(fun ((s, _, _, _, _, _) as pr) ->
-          let lbl = ref "" and ms = ref Float.nan and outcome = ref None in
+          let lbl = ref "" and ms = ref Float.nan and outcome = ref None and contended = ref 0 in
           let lv =
-            arm pr ~label:"TUNED (full search)" ~compile:(fun ~record:_ ~name ~fatal_seen fwd ->
+            arm pr ~label:tuned_label ~compile:(fun ~name ~fatal_seen fwd ->
                 Autotune.tune ~name ~search:true ~cache_dir:"" ~beam_width:tn_beam ~rounds:tn_rounds
                   ~repeats:tn_repeats ~keep_fraction:tn_keep ~max_split_reduce_sites:tn_split
                   ~report:(fun (r : Autotune.report) ->
                     lbl := r.Autotune.best_label;
+                    contended := r.Autotune.timings_contended;
                     ms := r.Autotune.best_ms;
                     outcome := Some r.Autotune.outcome;
                     (* [tune] reports and then re-raises the original exception when a search dies
@@ -779,6 +913,14 @@ let () =
             match !outcome with
             | None ->
                 if Option.is_some lv then fail "%s: the tune cell reported nothing" s.tag;
+                false
+            | Some Autotune.Searched when !contended > 0 ->
+                (* A refused timing window leaves the search's measurement set incomplete: its crown
+                   was chosen from a truncated comparison, so it is not the tuner's selection. *)
+                fail
+                  "%s: the search refused %d timing window(s) for contention -- its crown %S is \
+                   from an incomplete comparison"
+                  s.tag !contended !lbl;
                 false
             | Some Autotune.Searched when Float.is_finite !ms && not (String.is_empty !lbl) ->
                 p "   %-22s crowned: %s  (search best_ms %.4f)\n" s.tag !lbl !ms;
@@ -802,9 +944,55 @@ let () =
               release lv;
               None
           | None -> None)
-    in
-    run_round ~label:"TUNED winners" winners
-  end;
+    end
+  in
+  (* The finalists round (gh-ocannl-728 Move 0). Each geometry round compares arms AT one geometry;
+     "the best candidate a site has" is a comparison ACROSS rounds, which the bestseed column reads
+     through whatever drift separated them. So each site's best scalar seed and best tensorized seed
+     (by their own rounds' readings, under each statistic the gate uses) are recompiled and timed
+     again here, interleaved with each other, with every other site's finalists, and with the
+     searches' crowned winners -- one round holding every contender of the question "does the merged
+     site beat the best the split site has", duplicated sites included. The finalists are chosen by
+     one statistic and then re-measured, so the round's numbers are not the selection's own
+     optimistic draw. The untuned default joins the round too: it is a candidate a site has, and
+     nothing guarantees a seed or the queued search's crown beats it under every statistic the gate
+     reads. *)
+  let finalists =
+    if not do_seeds then []
+    else
+      List.concat_map prepared ~f:(fun ((s, _, seeds, _, _, _) as pr) ->
+          let seed_rows =
+            Option.value (Hashtbl.find measured s.tag) ~default:[]
+            |> List.filter_map ~f:(fun (l, st) ->
+                List.find seeds ~f:(fun q -> String.equal (geom_label q) l)
+                |> Option.map ~f:(fun q -> (q, st)))
+          in
+          (* The best seed of each class under EACH statistic the gate reads, deduplicated: when the
+             statistics rank differently (the gh-755 question), the best under the min-batch or
+             queued reading is in the round too, not only the median's pick. *)
+          List.concat_map [ false; true ] ~f:(fun mma ->
+              let rows =
+                List.filter seed_rows ~f:(fun ((q : Autotune.sketch_params), _) ->
+                    Bool.equal q.sk_mma mma)
+              in
+              List.filter_map
+                [ (fun st -> st.st_med); (fun st -> st.st_min); (fun st -> st.st_queued) ]
+                ~f:(fun stat ->
+                  List.max_elt rows ~compare:(fun (_, a) (_, b) -> Float.compare (stat a) (stat b))
+                  |> Option.map ~f:fst))
+          |> List.dedup_and_sort ~compare:(fun a b -> String.compare (geom_label a) (geom_label b))
+          |> List.filter_map ~f:(seed_arm ~prefix:final_prefix pr))
+  in
+  let contenders = finalists @ winners in
+  run_round
+    ~label:
+      (match (finalists, winners) with
+      | _ :: _, _ :: _ ->
+          "finalists (each site's best seeds, the searches' crowned winners and the defaults)"
+      | _ :: _, [] -> "finalists (each site's best scalar and tensorized seeds and the defaults)"
+      | [], _ -> "TUNED winners and the defaults")
+    (if List.is_empty contenders then []
+     else contenders @ List.filter_map prepared ~f:(default_arm ~prefix:final_prefix));
   let f_opt = function None -> "     n/a" | Some g -> Printf.sprintf "%8.1f" g in
   let of_site tag lbl =
     Option.bind (Hashtbl.find results tag) ~f:(fun l ->
@@ -892,16 +1080,18 @@ let () =
       let all = Option.value (Hashtbl.find results s.tag) ~default:[] in
       let seeds_only =
         List.filter all ~f:(fun (l, _) ->
-            (not (String.is_prefix l ~prefix:"default")) && not (String.is_prefix l ~prefix:"TUNED"))
+            not
+              (List.exists [ "default"; "TUNED"; final_prefix ] ~f:(fun prefix ->
+                   String.is_prefix l ~prefix)))
       in
       let best_of =
         List.fold seeds_only ~init:None ~f:(fun acc (l, g) ->
             match acc with Some (_, bg) when Float.(bg >= g) -> acc | _ -> Some (l, g))
       in
-      let tn = of_site s.tag "TUNED (full search)" in
+      let tn = of_site s.tag tuned_label in
       p "%-22s %9.1f  %s  %s  %s  %s  %s  %s\n" s.tag
         (flops s /. 1e6)
-        (f_opt (of_site s.tag "default (untuned)"))
+        (f_opt (of_site s.tag default_label))
         (f_opt (crowned s.tag col_a))
         (f_opt (crowned s.tag col_b))
         (f_opt (Option.map best_of ~f:snd))
@@ -909,6 +1099,77 @@ let () =
         (match Hashtbl.find tuned s.tag with
         | Some l when Option.is_some tn -> l
         | _ -> Option.value_map best_of ~default:"-" ~f:fst));
+  (* gh-ocannl-728 Move 0's gate: does the heads-merged twin beat the BEST candidate the real
+     heads-split site has by more than the in-run duplicate noise? Read off the finalists round
+     only, where every contender -- each site's best scalar seed, best tensorized seed and the
+     search's crown, for both copies of both shapes -- was timed interleaved. Per class and per
+     statistic, a site's figure is its best contender of that class under that statistic. The noise
+     is the larger disagreement of the two duplicated pairs; the effect is the merged pair's mean
+     over the split pair's mean, and the worst case is the slower merged copy against the faster
+     split one. *)
+  if String.equal group "qkv" then begin
+    let split = [ "Q_heads8_a"; "Q_heads8_b" ] and merged = [ "Q_heads1_a"; "Q_heads1_b" ] in
+    let is_final l = String.is_prefix l ~prefix:final_prefix in
+    let is_mma l = String.is_prefix l ~prefix:(final_prefix ^ "mma-") in
+    let is_default = String.equal (final_prefix ^ default_label) in
+    let classes =
+      [
+        ("scalar seeds", fun l -> is_final l && (not (is_mma l)) && not (is_default l));
+        ("tensorized seeds", is_mma);
+        ("untuned default", is_default);
+        ("tuner's crown", String.equal tuned_label);
+        ("any contender", fun l -> is_final l || String.equal l tuned_label);
+      ]
+    and statistics =
+      [
+        ("median batch", fun st -> st.st_med);
+        ("min batch", fun st -> st.st_min);
+        ("tuner queued", fun st -> st.st_queued);
+      ]
+    in
+    let best tag in_class stat =
+      Option.value (Hashtbl.find measured tag) ~default:[]
+      |> List.filter ~f:(fun (l, _) -> in_class l)
+      |> List.max_elt ~compare:(fun (_, a) (_, b) -> Float.compare (stat a) (stat b))
+    in
+    let pct x = Printf.sprintf "%+.1f%%" (x *. 100.) in
+    p "\n\n== gh-ocannl-728 Move 0: the heads-merged twin against the best of the split site ==\n";
+    p
+      "   finalists round only (GFLOP/s); noise = larger |a-b|/min over the duplicated pairs; gain \
+       = mean(heads1)/mean(heads8) - 1; worst = min(heads1)/max(heads8) - 1\n";
+    p "   %-17s %-13s %9s %9s %9s %9s  %8s %8s %8s  %s\n" "class" "statistic" "heads8_a" "heads8_b"
+      "heads1_a" "heads1_b" "noise" "gain" "worst" "verdict";
+    List.iter classes ~f:(fun (cname, in_class) ->
+        List.iter statistics ~f:(fun (sname, stat) ->
+            let vals tags =
+              List.map tags ~f:(fun t ->
+                  Option.map (best t in_class stat) ~f:(fun (_, st) -> stat st))
+            in
+            match (Option.all (vals split), Option.all (vals merged)) with
+            | Some ([ s1; s2 ] as sv), Some ([ m1; m2 ] as mv) ->
+                let rel x y = Float.abs (x -. y) /. Float.min x y in
+                let noise = Float.max (rel s1 s2) (rel m1 m2) in
+                let gain = ((m1 +. m2) /. (s1 +. s2)) -. 1. in
+                let worst = (Float.min m1 m2 /. Float.max s1 s2) -. 1. in
+                p "   %-17s %-13s %9.1f %9.1f %9.1f %9.1f  %8s %8s %8s  %s\n" cname sname
+                  (List.nth_exn sv 0) (List.nth_exn sv 1) (List.nth_exn mv 0) (List.nth_exn mv 1)
+                  (Printf.sprintf "%.1f%%" (noise *. 100.))
+                  (pct gain) (pct worst)
+                  (if Float.(gain > noise) then "merged beats split beyond the noise"
+                   else if Float.(gain < -.noise) then "merged LOSES beyond the noise"
+                   else "within the noise")
+            | _ -> p "   %-17s %-13s   (no contender of this class on every site)\n" cname sname);
+        (* Which arm each site's median-best contender of the class is: the geometry the gate's
+           headline figure belongs to. *)
+        let names =
+          List.map (split @ merged) ~f:(fun t ->
+              match best t in_class (fun st -> st.st_med) with
+              | Some (l, _) ->
+                  Printf.sprintf "%s=%s" t (String.chop_prefix_if_exists l ~prefix:final_prefix)
+              | None -> t ^ "=-")
+        in
+        p "   %-17s by median: %s\n" "" (String.concat ~sep:" | " names))
+  end;
   if !failures > 0 || !unmeasured > 0 then
     p
       "\n\
