@@ -725,8 +725,10 @@ let cache_file ~dir ~key = Stdlib.Filename.concat dir (sanitize key ^ ".sexp")
    payload at a key can be decoded; this stamp says whether the directory's filenames were minted by
    the same [key_components] schema. Bump this once when that schema changes. Cache-open then
    discards the superseded generation wholesale, with no migration arm for each historical schema
-   (gh-ocannl-835). *)
-let cache_regime_version = 2
+   (gh-ocannl-835). 3: the [fission] component (gh-ocannl-1126) -- empty under the defaults, but the
+   default segmentation it stands for changed, so a regime-2 fissioned winner would replay into a
+   segmentation it was not saved against. *)
+let cache_regime_version = 3
 let regime_stamp_filename = ".ocannl-schedule-cache-regime"
 let regime_lock_filename = ".ocannl-schedule-cache.lock"
 let regime_stamp_file dir = Stdlib.Filename.concat dir regime_stamp_filename
