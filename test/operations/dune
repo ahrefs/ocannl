@@ -6476,3 +6476,17 @@
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+; gh-ocannl-1124: the default GPU schedule's lanes over a nest whose preamble holds a reduction (the
+; fused attention backward's dK shape): refused / duplicated / cooperative, unequal widths, a
+; partial and a multi-simdgroup lane, executed against the serial reference on the run's backend.
+
+(test
+ (name gpu_lane_reduction)
+ (package neural_nets_lib)
+ (deps
+  (env_var OCANNL_BUILD_FILES_PREFIX)
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules gpu_lane_reduction)
+ (libraries base ocannl stdio arrayjit.verdict ll_test test_utils))

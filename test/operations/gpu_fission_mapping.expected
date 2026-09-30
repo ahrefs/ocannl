@@ -44,6 +44,14 @@ fused step, batch 2 x seq 128: the legality-only segmentation loses some target 
 fused step, batch 2 x seq 128: the gradients are not identically zero: true
 fused step, batch 2 x seq 128: the gradients agree with the legality-only segmentation's: true
 fused step, batch 2 x seq 128: the updated parameters agree with the legality-only segmentation's: true
+default, fused dV: the schedule-aware pipeline schedules it: true
+default, fused dV: the schedule-aware segmentation keeps it on lanes: true
+default, fused dV: the legality-only pipeline schedules it: true
+default, fused dV: the legality-only segmentation keeps it on lanes: true
+default, fused dK: the schedule-aware pipeline schedules it: true
+default, fused dK: the schedule-aware segmentation keeps it on lanes: true
+default, fused dK: the legality-only pipeline schedules it: true
+default, fused dK: the legality-only segmentation keeps it on lanes: true
 --- case 3: the lm_head's logits against the row max ---
 lm_head step, batch 1 x seq 128: the lowering computes the target: true
 lm_head step, batch 1 x seq 128: both pipelines schedule every target statement: true

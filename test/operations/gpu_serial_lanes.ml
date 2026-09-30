@@ -452,6 +452,25 @@ let rec hardware (llc : LL.t) =
   | LL.If { body; _ } | LL.Scan_loop { body; _ } -> hardware body
   | _ -> false
 
+(* A [Workgroup] lane bound inside a [Serial] loop: the lane geometry's shape, whatever the preamble
+   holds. *)
+let rec lane_inside_serial ?(under = false) (llc : LL.t) =
+  match llc with
+  | LL.For_loop { axis = LL.Workgroup; _ } when under -> true
+  | LL.For_loop { axis = LL.Serial; body; _ } -> lane_inside_serial ~under:true body
+  | LL.For_loop { body; _ } | LL.If { body; _ } | LL.Scan_loop { body; _ } ->
+      lane_inside_serial ~under body
+  | LL.Seq (a, b) -> lane_inside_serial ~under a || lane_inside_serial ~under b
+  | _ -> false
+
+(* A [Workgroup_reduce] loop: the cooperative preamble reduction (gh-ocannl-1124). *)
+let rec reduce_lane (llc : LL.t) =
+  match llc with
+  | LL.For_loop { axis = LL.Workgroup_reduce; _ } -> true
+  | LL.For_loop { body; _ } | LL.If { body; _ } | LL.Scan_loop { body; _ } -> reduce_lane body
+  | LL.Seq (a, b) -> reduce_lane a || reduce_lane b
+  | _ -> false
+
 let () =
   printf "--- leg 6: the attention backward of a training step carries hardware geometry ---\n";
   let composed, composed_opt = train_step ~bwd:false in
@@ -470,6 +489,13 @@ let () =
       p_all
         (Printf.sprintf "%s: every nest writing it runs under a Grid or Workgroup loop" what)
         stmts ~f:hardware);
+  (* gh-ocannl-1124: dK's own nest takes the lanes -- its preamble's [dp] no longer keeps it on the
+     plain plan -- with [dp] computed by the lanes together. *)
+  let dk = gpu_statements fused_opt ~writes:(String.is_suffix ~suffix:"k.grad") in
+  p_all "fused dK: every nest writing it binds a Workgroup lane inside the serial query loop" dk
+    ~f:lane_inside_serial;
+  p_all "fused dK: every nest writing it computes dp as a Workgroup_reduce over the lanes" dk
+    ~f:reduce_lane;
   let close g w = Float.(abs (g -. w) <= 1e-4 *. max 1. (abs w)) in
   p "the fused step's parameter gradients are not identically zero"
     (Array.exists fused ~f:(fun v -> Float.(v <> 0.)));

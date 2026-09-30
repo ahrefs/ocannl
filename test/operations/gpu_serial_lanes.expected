@@ -37,5 +37,7 @@ fused dV: the GPU pipeline emits its nest: true
 fused dV: every nest writing it runs under a Grid or Workgroup loop: true
 composed dP: the GPU pipeline emits its nest: true
 composed dP: every nest writing it runs under a Grid or Workgroup loop: true
+fused dK: every nest writing it binds a Workgroup lane inside the serial query loop: true
+fused dK: every nest writing it computes dp as a Workgroup_reduce over the lanes: true
 the fused step's parameter gradients are not identically zero: true
 the fused step's parameter gradients agree with the composed ones within 1e-4 relative: true

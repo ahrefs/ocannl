@@ -8,8 +8,10 @@
    merge trims [v.grad] to the common prefix -- at batch 1 x seq 1024 a 256-thread kernel (the
    issue's 86 ms per layer on Metal); 2. the fused backward's dV nest, a lane nest, merged with dK
    (conflict-free, so merged unconditionally before), which is no lane nest: the kernel keeps the
-   plain plans and dV loses its lanes (gh-ocannl-1124); 3. the lm_head's logits accumulation beside
-   the row max that reads it: the alignment trims the logits' [(b, s, v)] chain to [(b, s)].
+   plain plans and dV loses its lanes -- since gh-ocannl-1124 dK IS a lane nest by default, so the
+   case pins the preamble reduction refused, and the default's claims say that neither segmentation
+   takes dV or dK off its lanes any more; 3. the lm_head's logits accumulation beside the row max
+   that reads it: the alignment trims the logits' [(b, s, v)] chain to [(b, s)].
 
    Per case, structurally on the GPU pipeline (the schedule every hardware loop of the statement
    ITSELF carries, so hardware loops elsewhere in its kernel cannot satisfy the claim): the affected
@@ -46,11 +48,17 @@ let copy (o : LL.optimized) =
 
 (* The GPU pipeline's segments as (pre-schedule, scheduled) pairs, on a copy unless [in_place];
    [keep] selects the schedule-aware merge rule ([Schedule.fission_keep_mapping], what the default
-   pipeline passes), otherwise the legality rules alone decide. *)
-let segments ?(in_place = false) ~keep (o : LL.optimized) =
-  let keep_mapping = if keep then S.fission_keep_mapping ~is_gpu:true ~limits else None in
+   pipeline passes), otherwise the legality rules alone decide. [preamble_reduction] pins the lane
+   geometry's treatment of a preamble reduction in both the rule and the preset (the configured one
+   otherwise, which is what [Schedule.fission_keep_mapping] reads). *)
+let segments ?(in_place = false) ?preamble_reduction ~keep (o : LL.optimized) =
+  let keep_mapping =
+    match preamble_reduction with
+    | None -> if keep then S.fission_keep_mapping ~is_gpu:true ~limits else None
+    | Some _ -> Option.some_if keep (fun o -> S.default_gpu ~limits ?preamble_reduction o)
+  in
   S.fission_scheduled ~promote_locals:true ?keep_mapping
-    ~preset:(fun o -> S.default_gpu ~limits o)
+    ~preset:(fun o -> S.default_gpu ~limits ?preamble_reduction o)
     ~zero_sched:(S.zero_expansion ~limits) ~static_indices:[]
     (if in_place then o else copy o)
   |> List.map ~f:(fun (_, pre, _, post) -> (pre, post))
@@ -96,20 +104,22 @@ let targets ~target ~side segs =
 
 (* The same statements scheduled in a kernel of their own: the pre-schedule slices of the
    schedule-aware pipeline (with its placements), one statement at a time. *)
-let standalone ~target segs =
+let standalone ?preamble_reduction ~target segs =
   List.concat_map segs ~f:(fun ((pre : LL.optimized), _) ->
       List.filter_map (non_glue pre.LL.llc) ~f:(fun stmt ->
           if writes_named ~f:target stmt && reads_something stmt then
             let solo = { pre with LL.llc = stmt } in
-            Some (S.apply (S.default_gpu ~limits solo) solo).LL.llc
+            Some (S.apply (S.default_gpu ~limits ?preamble_reduction solo) solo).LL.llc
           else None))
 
 (* The structural claims of one case over a lowering [o]. [lanes]: the standalone mapping is the
    lane geometry, and the schedule-aware one keeps it. [control]: the legality-only segmentation
    loses the mapping (where it does, the first claim is discriminating). *)
-let check_mapping ~what ~target ?(lanes = false) ?(control = true) (o : LL.optimized) =
-  let keep = segments ~keep:true o and legacy = segments ~keep:false o in
-  let alone = standalone ~target keep in
+let check_mapping ~what ~target ?(lanes = false) ?(control = true) ?preamble_reduction
+    (o : LL.optimized) =
+  let keep = segments ?preamble_reduction ~keep:true o
+  and legacy = segments ?preamble_reduction ~keep:false o in
+  let alone = standalone ?preamble_reduction ~target keep in
   let kept = targets ~target ~side:snd keep and merged = targets ~target ~side:snd legacy in
   let n = List.length alone in
   p (what ^ ": the lowering computes the target") (n > 0);
@@ -266,15 +276,40 @@ let () =
           check_mapping ~what ~target:v_grad ~control:(batch = 1) (lowering ~name ~build);
           check_parity ~what ~name ~build));
   printf "--- case 2: the fused backward's dV lanes against dK (gh-ocannl-1124) ---\n";
+  (* The case needs dK to be no lane nest: since gh-ocannl-1124 it is one by default (its [dp]
+     preamble reduction is admitted), so the merge the legality rules take no longer costs dV its
+     lanes -- which the default-mode claims below pin. The scenario itself, a lane nest merged with
+     a plain one, is kept with the preamble reduction refused. *)
   with_attention_forms ~online:true ~fused:true (fun () ->
+      let preamble_reduction = S.Preamble_refused in
       check_mapping ~what:"fused dV, batch 1 x seq 1024" ~target:v_grad ~lanes:true
+        ~preamble_reduction
         (lowering ~name:"gfm_fused_s1024" ~build:(attention ~batch:1 ~seq:1024 ~heads:8 ~width:32));
       List.iter [ 1; 2 ] ~f:(fun batch ->
           let what = Printf.sprintf "fused step, batch %d x seq 128" batch in
           let name = Printf.sprintf "gfm_fused_b%d" batch in
           let build = attention ~batch ~seq:128 ~heads:8 ~width:32 in
-          check_mapping ~what ~target:v_grad ~lanes:true (lowering ~name ~build);
-          check_parity ~what ~name ~build));
+          check_mapping ~what ~target:v_grad ~lanes:true ~preamble_reduction (lowering ~name ~build);
+          check_parity ~what ~name ~build);
+      (* The configured default: dK on lanes too, so even the legality-only segmentation keeps every
+         dV and dK statement on its lanes. *)
+      let o =
+        lowering ~name:"gfm_fused_default" ~build:(attention ~batch:1 ~seq:1024 ~heads:8 ~width:32)
+      in
+      let k_grad n = String.is_suffix n ~suffix:"k.grad" in
+      List.iter
+        [ ("dV", v_grad); ("dK", k_grad) ]
+        ~f:(fun (name, target) ->
+          List.iter
+            [ ("schedule-aware", true); ("legality-only", false) ]
+            ~f:(fun (rule, keep) ->
+              let stmts = targets ~target ~side:snd (segments ~keep o) in
+              p
+                (Printf.sprintf "default, fused %s: the %s pipeline schedules it" name rule)
+                (not (List.is_empty stmts));
+              p_all
+                (Printf.sprintf "default, fused %s: the %s segmentation keeps it on lanes" name rule)
+                stmts ~f:on_lanes)));
   printf "--- case 3: the lm_head's logits against the row max ---\n";
   List.iter [ 1; 2 ] ~f:(fun batch ->
       let what = Printf.sprintf "lm_head step, batch %d x seq 128" batch in

@@ -1,0 +1,40 @@
+--- leg 1: equal widths at one simdgroup, cooperative ---
+lred_coop32: Grid (h, t, b) and a 32-wide lane: true
+lred_coop32: the lane sits inside the serial query loop: true
+lred_coop32: the reduction loop is Workgroup_reduce: true
+lred_coop32: every cell of K holds the serial reference's exact value: true
+lred_coop32: the emitted kernel spells the all-reduce: true
+--- leg 2: the same nest, duplicated ---
+lred_dup32: Grid (h, t, b) and a 32-wide lane: true
+lred_dup32: the lane sits inside the serial query loop: true
+lred_dup32: the reduction loop is Serial: true
+lred_dup32: every cell of K holds the serial reference's exact value: true
+lred_dup32: the emitted kernel does not spell the all-reduce: true
+--- leg 3: refused keeps the plain plan ---
+lred_refused32: no lane inside the serial query loop: true
+lred_refused32: the reduction loop is Serial: true
+lred_refused32: every cell of K holds the serial reference's exact value: true
+lred_refused32: the emitted kernel does not spell the all-reduce: true
+--- leg 4: unequal key and value widths ---
+lred_e16_d32: Grid (h, t, b) and a 32-wide lane: true
+lred_e16_d32: the lane sits inside the serial query loop: true
+lred_e16_d32: the reduction loop is Serial: true
+lred_e16_d32: every cell of K holds the serial reference's exact value: true
+lred_e16_d32: the emitted kernel does not spell the all-reduce: true
+lred_e64_d32: Grid (h, t, b) and a 32-wide lane: true
+lred_e64_d32: the lane sits inside the serial query loop: true
+lred_e64_d32: the reduction loop is Serial: true
+lred_e64_d32: every cell of K holds the serial reference's exact value: true
+lred_e64_d32: the emitted kernel does not spell the all-reduce: true
+--- leg 5: a partial simdgroup declines the shuffle ---
+lred_coop16: Grid (h, t, b) and a 16-wide lane: true
+lred_coop16: the lane sits inside the serial query loop: true
+lred_coop16: the reduction loop is Workgroup_reduce: true
+lred_coop16: every cell of K holds the serial reference's exact value: true
+lred_coop16: the emitted kernel does not spell the all-reduce: true
+--- leg 6: several simdgroups decline the shuffle (v1) ---
+lred_coop64: Grid (h, t, b) and a 64-wide lane: true
+lred_coop64: the lane sits inside the serial query loop: true
+lred_coop64: the reduction loop is Workgroup_reduce: true
+lred_coop64: every cell of K holds the serial reference's exact value: true
+lred_coop64: the emitted kernel does not spell the all-reduce: true

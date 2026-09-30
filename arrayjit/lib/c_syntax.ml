@@ -4361,10 +4361,13 @@ module C_syntax (B : C_syntax_config) = struct
         | Workgroup ->
             (hardware_binding ctx loop) ~fallback:(localize_or_serial ctx loop) `Workgroup
         | Workgroup_reduce -> (
-            match (try_warp_reduce ctx loop) () with
+            match (try_lane_all_reduce ctx loop) () with
             | Some doc -> doc
-            | None -> (hardware_binding ctx loop) ~fallback:(localize_or_serial ctx loop) `Workgroup
-            )
+            | None -> (
+                match (try_warp_reduce ctx loop) () with
+                | Some doc -> doc
+                | None ->
+                    (hardware_binding ctx loop) ~fallback:(localize_or_serial ctx loop) `Workgroup))
         | Vectorized -> (
             match (try_vectorize_reduce ctx loop) () with
             | Some doc -> doc
@@ -6365,6 +6368,114 @@ module C_syntax (B : C_syntax_config) = struct
              ^^ hardline ^^ string "}" ^^ hardline ^^ store)
         ^^ hardline ^^ string "}")
     with Vectorization_declined -> None
+
+  (* The lane all-reduce (gh-ocannl-1124): a [Workgroup_reduce] loop whose body is ONE accumulation
+     into a scope local, [for e { acc := acc op contrib(e) }] -- the default GPU schedule retypes
+     the fused attention backward's [dp] preamble reduction so, beside a lane loop of the same
+     extent. A scope local is thread-private, so the loop's serial meaning is that EVERY thread ends
+     holding [acc op (the whole reduction)]; this is the lane-uniform result contract, and both
+     renderings below honour it:
+
+     - the butterfly: each lane computes the contribution at its own index (the loop's symbol bound
+     to the workgroup's [.x] register, the slot it shares with the output lanes -- no lane axis of
+     its own), the [ocannl_shfl_xor] tree over [warp_shuffle_stages] leaves the total in every lane
+     (an XOR butterfly is an all-reduce: after the last stage each lane holds the combination of
+     every lane), and every lane folds it into its local. No shared memory and no barrier, so no
+     scratch can be overwritten early and no inactive lane can miss a barrier. Taken when the loop
+     spans exactly one simdgroup ([extent = warp_size]), is the whole [.x] workgroup dimension (no
+     launch guard, so every lane of the simdgroup reaches every shuffle), sits at slot 0 with a
+     bound register, and the local resides at f32/f64 (the precisions [ocannl_shfl_xor] is
+     overloaded at). Reassociation is the [Workgroup_reduce] annotation's license.
+
+     - otherwise the plain serial loop, in every lane: a partial simdgroup (the shuffle would read
+     lanes outside the reduction), several simdgroups (which need a shared-memory broadcast and
+     barrier this v1 does not render), a backend without shuffles (cc), a narrow residency, or a
+     logged run. Binding the index like a [Workgroup] axis instead would leave each lane its own
+     term only -- wrong, not merely racy -- which is why this arm owns every local-target
+     [Workgroup_reduce] and never falls through to the binding.
+
+     [None] for any other body: those keep [try_warp_reduce]'s cell-target rendering and its
+     fallbacks. *)
+  and try_lane_all_reduce ctx ({ i; from_; to_; body; _ } as loop) () : PPrint.document option =
+    let open PPrint in
+    let extent = to_ - from_ + 1 in
+    let stmts =
+      match nonempty_stmts body with
+      | [
+       Low_level.If
+         {
+           cond = Binop (Ops.Cmplt, (Embed_index (Indexing.Iterator s), _), (Constant c, _)), _;
+           body = guarded;
+         };
+      ]
+        when Indexing.equal_symbol s i && Float.equal c (Float.of_int extent) ->
+          nonempty_stmts guarded
+      | stmts -> stmts
+    in
+    match stmts with
+    | [ Low_level.Set_local (id, llsc) ] -> (
+        match Low_level.accum_local_update_parts ~id llsc with
+        | None -> None
+        | Some (op, contrib) ->
+            let prec = (scope_prec_of ctx) id in
+            let axes = !(ctx.current_hardware_axes) in
+            let axis = List.find axes ~f:(fun a -> Indexing.equal_symbol a.Low_level.ha_index i) in
+            let slot_max =
+              List.fold axes ~init:1 ~f:(fun m a ->
+                  match a.Low_level.ha_kind with
+                  | `Workgroup when a.Low_level.ha_slot = 0 -> max m a.Low_level.ha_extent
+                  | _ -> m)
+            in
+            let register =
+              match axis with Some a when a.Low_level.ha_slot = 0 -> bound_register a | _ -> None
+            in
+            let shuffle =
+              match (register, prec) with
+              | Some reg, (Ops.Single_prec _ | Ops.Double_prec _)
+                when B.warp_size > 1 && from_ = 0 && extent = B.warp_size && extent = slot_max
+                     && not (Utils.debug_log_from_routines ()) ->
+                  Some reg
+              | _ -> None
+            in
+            Some
+              (match shuffle with
+              | None -> (serial_loop ctx loop) ()
+              | Some reg ->
+                  let ident = symbol_ident i in
+                  let ctyp = B.typ_of_prec prec in
+                  let cast = "(" ^ String.strip B.loop_index_type ^ ")" in
+                  let vname = "lred_v_" ^ ident ^ "__" in
+                  let combine a b = B.binop_syntax prec op a b in
+                  let shuffle_stage off =
+                    string (vname ^ " = ")
+                    ^^ combine (string vname)
+                         (string (Printf.sprintf "ocannl_shfl_xor(%s, %d)" vname off))
+                    ^^ semi
+                  in
+                  let local_defs, contrib_doc = (pp_scalar ctx) prec contrib in
+                  let local_defs = pp_local_defs local_defs in
+                  let binding =
+                    string ("const " ^ B.loop_index_type)
+                    ^^ pp_symbol i
+                    ^^ string (" = " ^ cast ^ reg ^ ";")
+                  in
+                  string
+                    (Printf.sprintf
+                       "{ /* Workgroup_reduce lane all-reduce into a scope local: extent %d = one \
+                        simdgroup; the total lands in every lane. */"
+                       extent)
+                  ^^ nest 2
+                       (hardline ^^ binding ^^ hardline
+                       ^^ (if PPrint.is_empty local_defs then empty else local_defs ^^ hardline)
+                       ^^ string (ctyp ^ " " ^ vname ^ " = ")
+                       ^^ contrib_doc ^^ semi ^^ hardline
+                       ^^ separate hardline
+                            (List.map (warp_shuffle_stages ~width:extent) ~f:shuffle_stage)
+                       ^^ hardline ^^ pp_scope_id id ^^ string " = "
+                       ^^ combine (pp_scope_id id) (string vname)
+                       ^^ semi)
+                  ^^ hardline ^^ rbrace))
+    | _ -> None
   (* Warp-shuffle rendering of a [Workgroup_reduce] accumulation loop (gh-ocannl-462; llm.c's
      [warpReduceSum] / [blockReduce] idiom, llmc/cuda_utils.cuh). Recognizes a body that is a single
      accumulation statement [acc[idcs] = op(acc[idcs], contrib)] (or its FMA form [acc = FMA(a, b,

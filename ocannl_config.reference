@@ -230,6 +230,15 @@
 # Workgroup d -- within 0.5% on CUDA, but half the kernel speed on HIP (gh-ocannl-1133).
 #gpu_schedule_workgroup_fill=256
 
+# How the default GPU schedule's lane geometry treats a preamble reduction: a serial loop
+# accumulating into a scope local ahead of a nest's lane loop, the fused attention backward's
+# dp = sum_e dO . v (gh-ocannl-1124). `refused` keeps such a nest on its plain plan; `duplicated`
+# gives it lanes and every lane recomputes the reduction serially (summation order unchanged);
+# `cooperative` gives it lanes and, where the reduction spans exactly the lane's workgroup, the
+# lanes compute it together as a simdgroup butterfly all-reduce (reassociated), each other extent
+# duplicated. An inlined reduction inside an expression stays refused in every mode.
+#gpu_lane_preamble_reduction=cooperative
+
 # If true, on CPU backends (cc, multidev_cc) kernels compiled without an explicit
 # `lowered_transform` get the default CPU schedule: the same conservative analysis as the GPU
 # schedule, retyping each nest's outermost parallelizable loop to Grid, which the C backend

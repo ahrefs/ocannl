@@ -5240,6 +5240,49 @@ let query_view ~range (a : access) : Affine.coord array =
     ?vec:(Option.map a.a_vec ~f:(fun length -> Affine.Run length))
     ~dims:(Lazy.force a.a_tn.Tn.dims) a.a_idcs
 
+(* Whether a statement or scalar holds a loop: a [Local_scope] whose body loops counts. *)
+let rec loops_in (llc : Low_level.t) =
+  match llc with
+  | For_loop _ | Scan_loop _ -> true
+  | Seq (a, b) -> loops_in a || loops_in b
+  | If { cond = c, _; body } -> scalar_loops c || loops_in body
+  | Set { llsc; _ } | Set_local (_, llsc) -> scalar_loops llsc
+  | Set_dynamic { dyn_value = v, _; llsc; _ } -> scalar_loops v || scalar_loops llsc
+  | Set_from_vec { arg = a, _; _ } -> scalar_loops a
+  | Tile_mma _ | Staged_compilation _ -> true
+  | Noop | Comment _ | Zero_out _ | Declare_local _ | Workgroup_barrier -> false
+
+and scalar_loops (llsc : Low_level.scalar_t) =
+  match llsc with
+  | Local_scope { body; _ } -> loops_in body
+  | Get_dynamic { dyn_value = v, _; _ } -> scalar_loops v
+  | Ternop (_, (a, _), (b, _), (c, _)) -> scalar_loops a || scalar_loops b || scalar_loops c
+  | Binop (_, (a, _), (b, _)) -> scalar_loops a || scalar_loops b
+  | Unop (_, (a, _)) -> scalar_loops a
+  | Get_local _ | Get _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ -> false
+
+let strip_comments stmts =
+  List.filter stmts ~f:(function Low_level.Noop | Low_level.Comment _ -> false | _ -> true)
+
+(* A preamble REDUCTION (gh-ocannl-1124): one serial loop from 0 whose body is a single loop-free
+   accumulation into a scope local, [for e { acc := acc op contrib(e) }] -- the fused attention
+   backward's [dp = sum_e dO . v] ahead of the dQ and dK nests' channel loop. Its symbol and extent.
+   A scope local is thread-private, so under a lane every thread holds the whole sum whichever way
+   it is computed: serially by each lane (the loop's plain meaning), or by the lanes together as a
+   butterfly all-reduce ([Workgroup_reduce] over a local, see [C_syntax.try_lane_all_reduce]). An
+   inlined reduction in an expression (a [Local_scope] whose body loops, the recomputed [q . k]) is
+   not one: it stays refused, as stage 1 measured it. *)
+let preamble_reduction (llc : Low_level.t) : (Indexing.symbol * int) option =
+  match llc with
+  | For_loop { index; from_ = 0; to_; body; axis = Serial } when to_ >= 0 -> (
+      match strip_comments (Low_level.flat_lines [ body ]) with
+      | [ Set_local (id, llsc) ]
+        when (not (scalar_loops llsc))
+             && Option.is_some (Low_level.accum_local_update_parts ~id llsc) ->
+          Some (index, to_ + 1)
+      | _ -> None)
+  | _ -> None
+
 (* The single-child chain of [For_loop]s from the top of a nest, descending through [If] wrappers
    and comments; stops at the first branching ([Seq] with more than one non-comment statement).
 
@@ -5252,40 +5295,25 @@ let query_view ~range (a : access) : Affine.coord array =
    symbols wherever in the nest they sit. Cheap means loop-free: that recomputation multiplies the
    preamble's work by the lane width, and a preamble holding an inlined reduction (a [Local_scope]
    whose body loops -- the recomputed score [q . k] when the recompute cap inlines it) turned a 1.5x
-   step-time regression at seq 1024 on Metal, so such a preamble ends the path as before. *)
-let path_loops ?(lanes = false) (nest : Low_level.t) : Low_level.t list =
+   step-time regression at seq 1024 on Metal, so such a preamble ends the path as before.
+
+   [~preamble_reductions:true] (gh-ocannl-1124) additionally admits {!preamble_reduction} statements
+   into that preamble: the fused backward's [dp], which the lanes either each recompute or compute
+   together (see {!lane_geometry}). *)
+let path_loops ?(lanes = false) ?(preamble_reductions = false) (nest : Low_level.t) :
+    Low_level.t list =
   let open Low_level in
-  let strip stmts = List.filter stmts ~f:(function Noop | Comment _ -> false | _ -> true) in
-  let rec loops_in (llc : t) =
-    match llc with
-    | For_loop _ | Scan_loop _ -> true
-    | Seq (a, b) -> loops_in a || loops_in b
-    | If { cond = c, _; body } -> scalar_loops c || loops_in body
-    | Set { llsc; _ } | Set_local (_, llsc) -> scalar_loops llsc
-    | Set_dynamic { dyn_value = v, _; llsc; _ } -> scalar_loops v || scalar_loops llsc
-    | Set_from_vec { arg = a, _; _ } -> scalar_loops a
-    | Tile_mma _ | Staged_compilation _ -> true
-    | Noop | Comment _ | Zero_out _ | Declare_local _ | Workgroup_barrier -> false
-  and scalar_loops (llsc : scalar_t) =
-    match llsc with
-    | Local_scope { body; _ } -> loops_in body
-    | Get_dynamic { dyn_value = v, _; _ } -> scalar_loops v
-    | Ternop (_, (a, _), (b, _), (c, _)) -> scalar_loops a || scalar_loops b || scalar_loops c
-    | Binop (_, (a, _), (b, _)) -> scalar_loops a || scalar_loops b
-    | Unop (_, (a, _)) -> scalar_loops a
-    | Get_local _ | Get _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ ->
-        false
-  in
   let uniform = function
     | Declare_local _ -> true
     | Set_local (_, llsc) -> not (scalar_loops llsc)
+    | For_loop _ as stmt when preamble_reductions -> Option.is_some (preamble_reduction stmt)
     | _ -> false
   in
   let rec go llc acc =
     match llc with
     | For_loop fc -> (
         let acc = llc :: acc in
-        match strip (flat_lines [ fc.body ]) with
+        match strip_comments (flat_lines [ fc.body ]) with
         | [ single ] -> go single acc
         | stmts when lanes -> (
             match List.rev stmts with
@@ -5297,6 +5325,19 @@ let path_loops ?(lanes = false) (nest : Low_level.t) : Low_level.t list =
     | _ -> List.rev acc
   in
   go nest []
+
+(* The preamble reductions {!path_loops} [~lanes:true ~preamble_reductions:true] passes over in
+   [nest], outermost first. *)
+let lane_preamble_reductions (nest : Low_level.t) : (Indexing.symbol * int) list =
+  let open Low_level in
+  let path = path_loops ~lanes:true ~preamble_reductions:true nest in
+  List.concat_map path ~f:(function
+    | For_loop fc -> (
+        match List.rev (strip_comments (flat_lines [ fc.body ])) with
+        | For_loop _ :: (_ :: _ as rev_preamble) ->
+            List.filter_map (List.rev rev_preamble) ~f:preamble_reduction
+        | _ -> [])
+    | _ -> [])
 
 (* Shared analysis of the default annotator presets (schedule-ir-optops §6): per top-level nest, the
    parallelizable chain of outermost Serial path loops, validated by the conservative race analysis
@@ -5315,7 +5356,7 @@ let path_loops ?(lanes = false) (nest : Low_level.t) : Low_level.t list =
    asks the same per-position question more times. [lanes] reads chains through {!path_loops}' lane
    extension (the GPU preset's lane geometry, see {!lane_geometry}). *)
 let analyze_parallel_chains ?(max_chain = 2) ?(select_chain = Fn.id) ?(lanes = false)
-    (opt : Low_level.optimized) : Low_level.t list list =
+    ?(preamble_reductions = false) (opt : Low_level.optimized) : Low_level.t list list =
   let open Low_level in
   let plc = opt.optimize_ctx.placements in
   let nests, bare = split_nests plc opt.llc in
@@ -5337,7 +5378,7 @@ let analyze_parallel_chains ?(max_chain = 2) ?(select_chain = Fn.id) ?(lanes = f
                   Indexing.equal_axis_index idx (Indexing.Iterator s)))
         in
         let chain =
-          List.filter (path_loops ~lanes n.n_loops) ~f:(function
+          List.filter (path_loops ~lanes ~preamble_reductions n.n_loops) ~f:(function
             | For_loop fc -> fc.from_ = 0 && qualifies fc.index
             | _ -> false)
           |> select_chain
@@ -6145,6 +6186,26 @@ let chain_loops chain =
     | Low_level.For_loop fc -> Some (fc.index, fc.to_ + 1)
     | _ -> None)
 
+(* How the lane geometry treats a preamble reduction ({!preamble_reduction}) -- config
+   [gpu_lane_preamble_reduction] (gh-ocannl-1124): refused, the nest keeps its plain plan (the
+   stage-1 rule); duplicated, every lane recomputes it serially (summation order unchanged);
+   cooperative, the lanes compute it together where it spans their workgroup. *)
+type lane_preamble_reduction = Preamble_refused | Preamble_duplicated | Preamble_cooperative
+[@@deriving sexp_of, equal]
+
+let gpu_lane_preamble_reduction () =
+  match
+    String.lowercase
+      (String.strip
+         (Utils.get_global_arg ~arg_name:"gpu_lane_preamble_reduction" ~default:"cooperative"))
+  with
+  | "refused" -> Preamble_refused
+  | "duplicated" -> Preamble_duplicated
+  | "cooperative" -> Preamble_cooperative
+  | other ->
+      invalid_arg
+        ("gpu_lane_preamble_reduction: expected refused, duplicated or cooperative, got " ^ other)
+
 (* Lane geometry (gh-ocannl-1003 stage 1). A nest whose parallel loop sits under a serial loop past
    a lane-uniform preamble -- the online-softmax hoist's value pass, [for (b, s, h) { for t { p :=
    P[s, t]; for e { O[s, e] += p * V[t, e] } } }] -- has a plain path that stops at the preamble, so
@@ -6172,18 +6233,27 @@ let chain_loops chain =
    loop across pool chunks, where a lane loop would only add structure that runs serially inside a
    chunk. *)
 let lane_geometry ~block_size ~min_parallel ~(limits : Backend_intf.hardware_limits)
-    ~standard_threads (opt : Low_level.optimized) : schedule option =
+    ~standard_threads ~(preamble_reduction : lane_preamble_reduction) (opt : Low_level.optimized) :
+    schedule option =
   let open Low_level in
+  let preamble_reductions =
+    match preamble_reduction with
+    | Preamble_refused -> false
+    | Preamble_duplicated | Preamble_cooperative -> true
+  in
   (* A chain loop as its symbol and extent. *)
   let loop = function For_loop fc -> Some (fc.index, fc.to_ + 1) | _ -> None in
   if
     not
       (List.exists (flat_lines [ opt.llc ]) ~f:(fun stmt ->
-           List.length (path_loops ~lanes:true stmt) > List.length (path_loops stmt)))
+           List.length (path_loops ~lanes:true ~preamble_reductions stmt)
+           > List.length (path_loops stmt)))
   then None
   else
     match
-      let chains = analyze_parallel_chains ~lanes:true ~max_chain:Int.max_value opt in
+      let chains =
+        analyze_parallel_chains ~lanes:true ~preamble_reductions ~max_chain:Int.max_value opt
+      in
       (fst (split_nests opt.optimize_ctx.placements opt.llc), chains)
     with
     | exception Bail -> None
@@ -6198,10 +6268,10 @@ let lane_geometry ~block_size ~min_parallel ~(limits : Backend_intf.hardware_lim
               Some (List.rev rev_grid, lane_loop)
           | _ -> None
         in
-        let lanes =
-          List.filter_map (List.zip_exn nests chains) ~f:(fun (n, chain) ->
-              if List.is_empty chain then None else Some (lane_of n.n_loops chain))
+        let carrying =
+          List.filter (List.zip_exn nests chains) ~f:(fun (_, c) -> not (List.is_empty c))
         in
+        let lanes = List.map carrying ~f:(fun (n, chain) -> lane_of n.n_loops chain) in
         match Option.all lanes with
         | None | Some [] -> None
         | Some lanes -> (
@@ -6219,7 +6289,28 @@ let lane_geometry ~block_size ~min_parallel ~(limits : Backend_intf.hardware_lim
                 if max_parallel_size chains < min_parallel || threads <= standard_threads then None
                 else (
                   crosscheck_scratch_containment opt chains;
-                  Some (List.concat_map plans ~f:plan_ops))))
+                  (* The cooperative preamble reductions (gh-ocannl-1124): a reduction whose extent
+                     is the lane's whole workgroup (the lane unsplit) is retyped [Workgroup_reduce],
+                     so it shares the lane's workgroup slot -- the output lanes' physical layout, no
+                     lane axis of its own -- and the renderer computes it as a butterfly all-reduce
+                     leaving the sum in every lane ([C_syntax.try_lane_all_reduce]), or, where the
+                     shuffle cannot render it, as the serial loop every lane runs whole. Any other
+                     extent stays [Serial]: each lane recomputes it. *)
+                  let cooperative =
+                    match preamble_reduction with
+                    | Preamble_refused | Preamble_duplicated -> []
+                    | Preamble_cooperative ->
+                        List.concat
+                          (List.map2_exn carrying plans ~f:(fun (n, _) p ->
+                               match (p.lp_split, p.lp_block) with
+                               | None, [ (_, width) ] ->
+                                   List.filter_map (lane_preamble_reductions n.n_loops)
+                                     ~f:(fun (axis, extent) ->
+                                       Option.some_if (extent = width)
+                                         (Retype { axis; ty = Workgroup_reduce }))
+                               | _ -> []))
+                  in
+                  Some (List.concat_map plans ~f:plan_ops @ cooperative))))
 
 (* The default GPU preset's cooperative fold: [Some] schedule when [opt] is one fold nest the
    backend's MMA units can take (the conditions in the [Fold_mma] section comment above
@@ -6284,7 +6375,7 @@ let fold_mma_schedule ~(limits : Backend_intf.hardware_limits) (opt : Low_level.
               (launch_geometry_of_dims (Low_level.launch_dims folded.Low_level.llc))))
         [ op ]
 
-let default_gpu_presets ?block_size ?min_parallel ?workgroup_fill
+let default_gpu_presets ?block_size ?min_parallel ?workgroup_fill ?preamble_reduction
     ?(limits = Backend_intf.no_hardware_limits) (opt : Low_level.optimized) : schedule =
   let open Low_level in
   let block_size =
@@ -6416,15 +6507,19 @@ let default_gpu_presets ?block_size ?min_parallel ?workgroup_fill
           List.fold plans ~init:1 ~f:(fun m p -> max m (plan_threads p)) )
   in
   Option.value ~default:standard
-    (lane_geometry ~block_size ~min_parallel ~limits ~standard_threads opt)
+    (lane_geometry ~block_size ~min_parallel ~limits ~standard_threads
+       ~preamble_reduction:
+         (match preamble_reduction with Some p -> p | None -> gpu_lane_preamble_reduction ())
+       opt)
 
-let default_gpu ?block_size ?min_parallel ?workgroup_fill
+let default_gpu ?block_size ?min_parallel ?workgroup_fill ?preamble_reduction
     ?(limits = Backend_intf.no_hardware_limits) (opt : Low_level.optimized) : schedule =
   (* The block fold on matrix units comes first: its kernel is one fold nest the presets would give
      scalar geometry. *)
   match fold_mma_schedule ~limits opt with
   | Some schedule -> schedule
-  | None -> default_gpu_presets ?block_size ?min_parallel ?workgroup_fill ~limits opt
+  | None ->
+      default_gpu_presets ?block_size ?min_parallel ?workgroup_fill ?preamble_reduction ~limits opt
 
 let default_cpu ?min_parallel (opt : Low_level.optimized) : schedule =
   let min_parallel =
@@ -7348,8 +7443,15 @@ let default_schedule_fingerprint ~backend_name =
          [default_ms] timed under the two-loop presets describes another algorithm. [keep_mapping]
          (gh-ocannl-1126): the segmentation itself depends on those mappings. *)
       let keep = Lazy.force gpu_fission_keep_mapping in
+      (* [lane-reductions-v1] (gh-ocannl-1124): lanes over a preamble reduction, per [preamble]. *)
+      let preamble =
+        match gpu_lane_preamble_reduction () with
+        | Preamble_refused -> "refused"
+        | Preamble_duplicated -> "duplicated"
+        | Preamble_cooperative -> "cooperative"
+      in
       [%string
-        "gpu:policy=small-leading-v1+lanes-v1+fold-mma-v1+lane-plans-v1:fission=%{fission#Bool}:keep_mapping=%{keep#Bool}:block_size=%{bs}:min_parallel=%{mp}:workgroup_fill=%{fill#Int}"]
+        "gpu:policy=small-leading-v1+lanes-v1+fold-mma-v1+lane-plans-v1+lane-reductions-v1:fission=%{fission#Bool}:keep_mapping=%{keep#Bool}:block_size=%{bs}:min_parallel=%{mp}:workgroup_fill=%{fill#Int}:preamble=%{preamble}"]
     else
       let mp =
         String.strip (Utils.get_global_arg ~arg_name:"cpu_schedule_min_parallel" ~default:"16384")

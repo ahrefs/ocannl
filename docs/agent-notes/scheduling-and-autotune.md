@@ -60,6 +60,17 @@ files.
   (each lane recomputes it: the recomputed-scores form's inlined `q . k` cost 1.5x at seq 1024 on
   Metal under lanes) and must precede exactly ONE loop: a nest with two sibling channel loops under
   one preamble (a fused dK+dV) is not reached. `test/operations/gpu_serial_lanes`; measured in `benchmarks/report-gh1003-stage1.md`.
+- One loop IS admitted into a lane preamble (gh-ocannl-1124): a `preamble_reduction`, a serial loop
+  whose body is ONE loop-free accumulation into a scope local (the fused backward's
+  `dp = sum_e dO . v` ahead of dK's and dQ's channel loop), per `gpu_lane_preamble_reduction`. An
+  inlined reduction inside an expression (a `Local_scope` whose body loops) stays refused in every
+  mode. `cooperative` retypes a reduction whose extent is the lane's unsplit workgroup
+  `Workgroup_reduce` — the lane's own `.x` slot, no lane axis nested inside the output lanes — and
+  `C_syntax.try_lane_all_reduce` owns EVERY local-target `Workgroup_reduce`: the xor butterfly
+  (an all-reduce: the total lands in every lane, no shared scratch, no barrier) at exactly one
+  simdgroup, else the serial loop in every lane. Never the `Workgroup` binding: each lane would
+  keep its own term, a wrong value rather than a race. Multi-simdgroup widths decline in v1.
+  `test/operations/gpu_lane_reduction`, and leg 6 of `gpu_serial_lanes` pins dK's own nest.
 - **A contraction inside a scan body is tensorized by rewriting the whole scan's owner, not by
   `Tensorize`** (gh-ocannl-1003, `Schedule.Fold_mma`): `rewrite_loop` does not enter a scan, and
   a lane loop minted inside the body would take a second `Workgroup` slot under the row loop. The

@@ -1322,9 +1322,11 @@ let find_backward r (nz : normalizer) : backward option =
     if not grad then Some (p_code, p, ds)
     else
       (* [dp]'s value-width loop binds a symbol of its own: one bound by two sibling loops makes the
-         routine uncacheable. It sits in the lane-uniform preamble, which is why the dQ and dK nests
-         get no lane geometry from the default GPU annotator (a preamble must be loop-free, since
-         every lane would recompute it); see the gh-1002/1003 record. *)
+         routine uncacheable. It sits in the lane-uniform preamble as a plain accumulation into a
+         scope local -- the shape the default GPU annotator admits into a lane preamble
+         ([Schedule.preamble_reduction], gh-ocannl-1124), where the lanes all-reduce it or each
+         recompute it per [gpu_lane_preamble_reduction]. Keep it that shape: an inlined reduction in
+         an expression would keep the nest off the lanes. *)
       let e_sym = Idx.get_symbol () in
       let dp_sym = function Chan 0 -> e_sym | r -> sym r in
       let* dp_term = transplant a_env dp_sym a_rhs in
