@@ -1,13 +1,13 @@
 --- leg 1: equal widths at one simdgroup, cooperative ---
 lred_coop32: the mapping probe counts 4096 active threads (a reduce lane adds none): true
-lred_coop32: Grid (h, t, b) and a 32-wide lane: true
+lred_coop32: Grid (h, t, b) and a 32-wide lane on .x: true
 lred_coop32: the lane sits inside the serial query loop: true
 lred_coop32: the reduction loop is Workgroup_reduce: true
 lred_coop32: every cell of K holds the serial reference's exact value: true
 lred_coop32: the emitted kernel spells the all-reduce: true
 --- leg 2: the same nest, duplicated ---
 lred_dup32: the mapping probe counts 4096 active threads (a reduce lane adds none): true
-lred_dup32: Grid (h, t, b) and a 32-wide lane: true
+lred_dup32: Grid (h, t, b) and a 32-wide lane on .x: true
 lred_dup32: the lane sits inside the serial query loop: true
 lred_dup32: the reduction loop is Serial: true
 lred_dup32: every cell of K holds the serial reference's exact value: true
@@ -19,27 +19,27 @@ lred_refused32: every cell of K holds the serial reference's exact value: true
 lred_refused32: the emitted kernel does not spell the all-reduce: true
 --- leg 4: unequal key and value widths ---
 lred_e16_d32: the mapping probe counts 4096 active threads (a reduce lane adds none): true
-lred_e16_d32: Grid (h, t, b) and a 32-wide lane: true
+lred_e16_d32: Grid (h, t, b) and a 32-wide lane on .x: true
 lred_e16_d32: the lane sits inside the serial query loop: true
 lred_e16_d32: the reduction loop is Serial: true
 lred_e16_d32: every cell of K holds the serial reference's exact value: true
 lred_e16_d32: the emitted kernel does not spell the all-reduce: true
 lred_e64_d32: the mapping probe counts 4096 active threads (a reduce lane adds none): true
-lred_e64_d32: Grid (h, t, b) and a 32-wide lane: true
+lred_e64_d32: Grid (h, t, b) and a 32-wide lane on .x: true
 lred_e64_d32: the lane sits inside the serial query loop: true
 lred_e64_d32: the reduction loop is Serial: true
 lred_e64_d32: every cell of K holds the serial reference's exact value: true
 lred_e64_d32: the emitted kernel does not spell the all-reduce: true
 --- leg 5: a partial simdgroup declines the shuffle ---
 lred_coop16: the mapping probe counts 2048 active threads (a reduce lane adds none): true
-lred_coop16: Grid (h, t, b) and a 16-wide lane: true
+lred_coop16: Grid (h, t, b) and a 16-wide lane on .x: true
 lred_coop16: the lane sits inside the serial query loop: true
 lred_coop16: the reduction loop is Workgroup_reduce: true
 lred_coop16: every cell of K holds the serial reference's exact value: true
 lred_coop16: the emitted kernel does not spell the all-reduce: true
 --- leg 6: several simdgroups decline the shuffle (v1) ---
 lred_coop64: the mapping probe counts 8192 active threads (a reduce lane adds none): true
-lred_coop64: Grid (h, t, b) and a 64-wide lane: true
+lred_coop64: Grid (h, t, b) and a 64-wide lane on .x: true
 lred_coop64: the lane sits inside the serial query loop: true
 lred_coop64: the reduction loop is Workgroup_reduce: true
 lred_coop64: every cell of K holds the serial reference's exact value: true
@@ -55,3 +55,10 @@ lred_plain32: the emitted kernel does not spell the all-reduce: true
 --- leg 8: a hand-retyped Workgroup_reduce over an ordinary local keeps its binding ---
 lred_bound32: the emitted kernel does not spell the all-reduce: true
 lred_bound32: the emitted kernel binds the reduction loop instead of looping it: true
+--- leg 9: the workgroup widened on .y, the all-reduce still one row of lanes ---
+lred_fill32: the mapping probe counts 4096 active threads (a reduce lane adds none): true
+lred_fill32: Grid (t, b), the heads on .y and a 32-wide lane on .x: true
+lred_fill32: the lane sits inside the serial query loop: true
+lred_fill32: the reduction loop is Workgroup_reduce: true
+lred_fill32: every cell of K holds the serial reference's exact value: true
+lred_fill32: the emitted kernel spells the all-reduce: true

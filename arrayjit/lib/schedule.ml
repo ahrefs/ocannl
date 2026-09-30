@@ -6228,18 +6228,23 @@ let gpu_lane_preamble_reduction () =
    one (its obligation is coverage: every materialized write sits under a loop of every active slot,
    which each lane nest's writes do by construction).
 
-   The geometry is the shared lane planner's ({!plan_chains}) at a one-loop workgroup, so a lane
-   past the block size is split [Grid] outer x [Workgroup] inner like any other plan's. Declines
-   ([None], the other plans stand) unless every nest carrying a chain is such a lane nest and the
-   planner finds them one common topology -- the slots must line up positionally for the coverage
-   rule, and a kernel mixing a lane nest with a nest whose chain ends above its serial loop would
-   leave that nest's writes uncovered on the lane's slot -- the launch fits the device's caps, the
-   parallel size reaches [min_parallel], and the launch has strictly more threads than the plain
-   plan's [standard_threads]. Cheap to ask of every kernel: without a nest whose lane path is longer
-   than its plain path, it runs no analysis. GPU only: the CPU preset parallelizes one outermost
-   loop across pool chunks, where a lane loop would only add structure that runs serially inside a
+   The geometry is the shared lane planner's ({!plan_chains}) at the configured workgroup fill, so a
+   lane past the block size is split [Grid] outer x [Workgroup] inner like any other plan's, and a
+   narrow lane is widened with the chain loops just above the serial loop as further [Workgroup]
+   slots: the fused backward's dK over [(b, t, h)] with a 32-wide channel lane runs as Grid (b, t) x
+   Workgroup (h, d) = 8 x 32 rather than 32-thread workgroups, which HIP and CUDA ran at a fraction
+   of the plain plans' speed (gh-ocannl-1124; gh-ocannl-1133 measured the same on the plain plans).
+   The lane stays on [.x], so one simdgroup is still one row of lanes. Declines ([None], the other
+   plans stand) unless every nest carrying a chain is such a lane nest and the planner finds them
+   one common topology -- the slots must line up positionally for the coverage rule, and a kernel
+   mixing a lane nest with a nest whose chain ends above its serial loop would leave that nest's
+   writes uncovered on the lane's slot -- the launch fits the device's caps, the parallel size
+   reaches [min_parallel], and the launch has strictly more threads than the plain plan's
+   [standard_threads]. Cheap to ask of every kernel: without a nest whose lane path is longer than
+   its plain path, it runs no analysis. GPU only: the CPU preset parallelizes one outermost loop
+   across pool chunks, where a lane loop would only add structure that runs serially inside a
    chunk. *)
-let lane_geometry ~block_size ~min_parallel ~(limits : Backend_intf.hardware_limits)
+let lane_geometry ~block_size ~min_parallel ~fill ~(limits : Backend_intf.hardware_limits)
     ~standard_threads ~(preamble_reduction : lane_preamble_reduction Lazy.t)
     (opt : Low_level.optimized) : schedule option =
   let open Low_level in
@@ -6293,11 +6298,12 @@ let lane_geometry ~block_size ~min_parallel ~(limits : Backend_intf.hardware_lim
         match Option.all lanes with
         | None | Some [] -> None
         | Some lanes -> (
-            (* The shared lane planner at a one-loop workgroup: the loops above the serial loop on
-               the grid, the lane on the workgroup (split, [Grid] outer, past the block size), one
-               common topology across the lane nests and a launch within the device's caps. *)
+            (* The shared lane planner: the loops above the serial loop on the grid, the lane on the
+               workgroup (split, [Grid] outer, past the block size; widened with the loops just
+               above the serial loop below [fill]), one common topology across the lane nests and a
+               launch within the device's caps. *)
             match
-              plan_chains ~block_size ~fill:1 ~limits
+              plan_chains ~block_size ~fill ~limits
                 (List.map lanes ~f:(fun (grid, lane) -> grid @ [ lane ]))
             with
             | None -> None
@@ -6308,12 +6314,13 @@ let lane_geometry ~block_size ~min_parallel ~(limits : Backend_intf.hardware_lim
                 else (
                   crosscheck_scratch_containment opt chains;
                   (* The cooperative preamble reductions (gh-ocannl-1124): a reduction whose extent
-                     is the lane's whole workgroup (the lane unsplit) is retyped [Workgroup_reduce],
-                     so it shares the lane's workgroup slot -- the output lanes' physical layout, no
-                     lane axis of its own -- and the renderer computes it as a butterfly all-reduce
-                     leaving the sum in every lane ([C_syntax.try_lane_all_reduce]), or, where the
-                     shuffle cannot render it, as the serial loop every lane runs whole. Any other
-                     extent stays [Serial]: each lane recomputes it. *)
+                     is the lane's whole [.x] extent (the lane unsplit) is retyped
+                     [Workgroup_reduce], so it shares the lane's workgroup slot -- the output lanes'
+                     physical layout, no lane axis of its own -- and the renderer computes it as a
+                     butterfly all-reduce leaving the sum in every lane
+                     ([C_syntax.try_lane_all_reduce]), or, where the shuffle cannot render it, as
+                     the serial loop every lane runs whole. Any other extent stays [Serial]: each
+                     lane recomputes it. *)
                   let cooperative =
                     match preamble_reduction with
                     | Preamble_refused | Preamble_duplicated -> []
@@ -6321,8 +6328,8 @@ let lane_geometry ~block_size ~min_parallel ~(limits : Backend_intf.hardware_lim
                         List.concat
                           (List.map2_exn (List.zip_exn carrying lanes) plans
                              ~f:(fun ((n, _), (_, (lane, _))) p ->
-                               match (p.lp_split, p.lp_block) with
-                               | None, [ (_, width) ] ->
+                               match (p.lp_split, List.last p.lp_block) with
+                               | None, Some (s, width) when Indexing.equal_symbol s lane ->
                                    List.filter_map (lane_preamble_reductions ~lane n.n_loops)
                                      ~f:(fun (axis, extent) ->
                                        Option.some_if (extent = width)
@@ -6526,7 +6533,7 @@ let default_gpu_presets ?block_size ?min_parallel ?workgroup_fill ?preamble_redu
           List.fold plans ~init:1 ~f:(fun m p -> max m (plan_threads p)) )
   in
   Option.value ~default:standard
-    (lane_geometry ~block_size ~min_parallel ~limits ~standard_threads
+    (lane_geometry ~block_size ~min_parallel ~fill ~limits ~standard_threads
        ~preamble_reduction:
          (match preamble_reduction with
          | Some p -> Lazy.from_val p
@@ -7481,7 +7488,9 @@ let default_schedule_fingerprint ~backend_name =
          [default_ms] timed under the two-loop presets describes another algorithm. [keep_mapping]
          (gh-ocannl-1126): the segmentation itself depends on those mappings. *)
       let keep = Lazy.force gpu_fission_keep_mapping in
-      (* [lane-reductions-v1] (gh-ocannl-1124): lanes over a preamble reduction, per [preamble]. *)
+      (* [lane-reductions-v1] (gh-ocannl-1124): lanes over a preamble reduction, per [preamble];
+         [lane-fill-v1]: lane nests widen their workgroup to [workgroup_fill] like the plain
+         plans. *)
       let preamble =
         match gpu_lane_preamble_reduction () with
         | Preamble_refused -> "refused"
@@ -7489,7 +7498,7 @@ let default_schedule_fingerprint ~backend_name =
         | Preamble_cooperative -> "cooperative"
       in
       [%string
-        "gpu:policy=small-leading-v1+lanes-v1+fold-mma-v1+lane-plans-v1+lane-reductions-v1:fission=%{fission#Bool}:keep_mapping=%{keep#Bool}:block_size=%{bs}:min_parallel=%{mp}:workgroup_fill=%{fill#Int}:preamble=%{preamble}"]
+        "gpu:policy=small-leading-v1+lanes-v1+fold-mma-v1+lane-plans-v1+lane-reductions-v1+lane-fill-v1:fission=%{fission#Bool}:keep_mapping=%{keep#Bool}:block_size=%{bs}:min_parallel=%{mp}:workgroup_fill=%{fill#Int}:preamble=%{preamble}"]
     else
       let mp =
         String.strip (Utils.get_global_arg ~arg_name:"cpu_schedule_min_parallel" ~default:"16384")
