@@ -188,7 +188,8 @@
   (alias runtest-schedule_cache_device)
   (alias runtest-alloc_census_peak)
   (alias runtest-autotune_candidate_release)
-  (alias runtest-autotune_callback_release)))
+  (alias runtest-autotune_callback_release)
+  (alias runtest-set_values_pool_coalescing)))
 
 ; This directory's golden-diff rules, aggregated back onto `runtest` (gh-ocannl-726). Each of them
 ; attaches to its own `runtest-<name>` alias and to NOTHING else, so that `dune build
@@ -767,6 +768,17 @@
  (deps ocannl_config)
  (modules shard_transfer)
  (libraries base ocannl stdio arrayjit.utils arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
+ (name set_values_pool_coalescing)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules set_values_pool_coalescing)
+ (libraries base ocannl stdio arrayjit.verdict)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 

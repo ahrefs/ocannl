@@ -387,7 +387,8 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
      backend's int-in/int-out API, and returns the [buffer_loc]. Phase-1 policy is one pool per
      tnode at offset 0 -- byte-for-byte equivalent to the old per-tnode allocation. [zero_init] asks
      for the slab to be zero-filled after it is minted (see the [memset_zero] below); a node the
-     code first-touches ([zero_initialized_by_code]) does not need it. *)
+     code first-touches ([zero_initialized_by_code]) does not need it. The destination of
+     [init_from_device]; host uploads pack into upload arenas instead ([upload_slot] below). *)
   let allocate (device : _ Backend_intf.device) (tn : Tn.t) ~zero_init : Backend_intf.buffer_loc =
     let pool_id = device.next_pool_id in
     device.next_pool_id <- pool_id + 1;
@@ -400,11 +401,11 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
     let mode = Option.map tn.Tn.memory_mode_intent ~f:fst in
     Backend.alloc_pool ?mode device ~pool_id ~size_in_bytes ~alignment:(Ops.prec_in_bytes prec);
     (* gh-ocannl-550: the OTHER shared allocation site — a [from_host] or [copy] whose destination
-       node is not in the context yet allocates here, not through [allocate_delta]. Its slabs go
-       into the same backend pool tables and are freed by the same context [finalize], so leaving
-       them uncounted made the census silently underreport in data-loading and context-copy
-       workflows. Not working-vs-constant: this path is a working buffer by construction (a host
-       transfer's destination). *)
+       node is not in the context yet allocates here or in [upload_slot], not through
+       [allocate_delta]. Its slabs go into the same backend pool tables and are freed by the same
+       context [finalize], so leaving them uncounted made the census silently underreport in
+       data-loading and context-copy workflows. Not working-vs-constant: this path is a working
+       buffer by construction (a host transfer's destination). *)
     Alloc_census.record_pool ~device_id:device.device_id ~pool_id ~constant:false ~size_in_bytes;
     if zero_init then Backend.memset_zero device ~pool_id ~offset:0 ~size_in_bytes;
     { pool_id; offset = 0 }
@@ -450,11 +451,12 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
 
   (* gh-ocannl-550: [allocate] roots a pool in the backend table, and the transfer that follows adds
      its location to the context only on success — so a failing upload leaves a pool no context can
-     ever reach, and therefore no [Context.release] can reclaim. Frees the one pool this operation
-     minted; unlike [allocate_delta]'s unwind there is no constant-cache involvement here (a
-     transfer destination is a working buffer by construction), so this needs nothing beyond the
-     free. *)
-  let with_transfer_pool device (loc : Backend_intf.buffer_loc) ~f =
+     ever reach, and therefore no [Context.release] can reclaim. [release] gives back what this
+     operation took: the one pool it minted, or (gh-ocannl-1125) the bytes it bumped in an upload
+     arena whose other tenants stay. Unlike [allocate_delta]'s unwind there is no constant-cache
+     involvement here (a transfer destination is a working buffer by construction), so this needs
+     nothing beyond that. *)
+  let with_transfer_pool device ~release ~f =
     match f () with
     | result -> result
     | exception exn ->
@@ -466,18 +468,85 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
            Resource_fault_injection.hit Transfer_cleanup_before_await;
            Backend.await device
          with _ -> ());
-        (try
-           Option.iter Backend.free_pool ~f:(fun free -> free device ~pool_id:loc.pool_id);
-           Alloc_census.forget_pool ~device_id:device.device_id ~pool_id:loc.pool_id
-         with _ -> ());
+        (try release () with _ -> ());
         Stdlib.Printexc.raise_with_backtrace exn backtrace
+
+  let free_transfer_pool device pool_id () =
+    Option.iter Backend.free_pool ~f:(fun free -> free device ~pool_id);
+    Alloc_census.forget_pool ~device_id:device.Backend_intf.device_id ~pool_id
+
+  (* gh-ocannl-1125: where a host upload of a node the context does not hold yet lands. Each such
+     node used to get a pool of its own, so loading more parameters than Metal's [metal_max_pools]
+     with [Context.set_values] before any routine linked them left no routine able to bind them all.
+     They are bump-packed instead into the upload arenas of the context's LIFECYCLE -- the context
+     values sharing one [finalized] flag, which free their pools together, so no arena tenant can be
+     freed out from under a pool-mate (a compile's child starts fresh arenas: its parent frees its
+     own pools independently).
+
+     First fit, among arenas of the same residency hint. The first arena is sized exactly to its
+     node, so a lone upload costs what it always did; each later one targets the capacity minted so
+     far ([minted_bytes]), rounded up to the node's alignment so that the padding between tenants
+     cannot eat the room the doubling promised. Capacities double: [n] consecutive uploads take
+     O(log n) pools, and the unused room is bounded by the capacity already filled. A node over the
+     per-pool cap gets an exact pool of its own, as before.
+
+     Values of one lifecycle -- including siblings, two uploads into the same earlier value -- may
+     share an arena. That leaves no live value reading a freed slab that was not one already: they
+     share the [finalized] flag, so releasing either sibling frees their common ancestors' pools and
+     turns the other's release into a no-op -- the other is a dead handle either way (a compile's
+     children, the siblings [Context.release] keeps independent, are separate lifecycles).
+
+     Returns the location and the [release] that gives it back if the upload fails: a fresh arena is
+     freed and forgotten, a bump into an existing one is rolled back (only if still on top, which it
+     is: transfers into a lifecycle are not concurrent) and its pool-mates are left alone. A
+     finalized lifecycle's arenas are gone (see [finalize]), so a dead handle mints a fresh one. *)
+  let upload_slot (ctx : Backend.context) (tn : Tn.t) : Backend_intf.buffer_loc * (unit -> unit) =
+    let device = ctx.device in
+    let arenas = ctx.upload_arenas in
+    let size_in_bytes, align = layout_item tn in
+    let mode = Option.map tn.Tn.memory_mode_intent ~f:fst in
+    let align_up off = (off + align - 1) / align * align in
+    let fits (a : Backend_intf.upload_arena) =
+      [%equal: Tn.memory_mode option] a.arena_mode mode
+      && align_up a.used + size_in_bytes <= a.capacity
+    in
+    match List.find arenas.arenas ~f:fits with
+    | Some a ->
+        let before = a.used in
+        let offset = align_up before in
+        a.used <- offset + size_in_bytes;
+        let release () = if a.used = offset + size_in_bytes then a.used <- before in
+        ({ pool_id = a.arena_pool_id; offset }, release)
+    | None ->
+        let cap = pool_cap () in
+        let capacity =
+          if size_in_bytes >= cap then size_in_bytes
+          else min cap (max size_in_bytes (align_up arenas.minted_bytes))
+        in
+        let pool_id = device.next_pool_id in
+        device.next_pool_id <- pool_id + 1;
+        Backend.alloc_pool ?mode device ~pool_id ~size_in_bytes:capacity ~alignment:align;
+        (* The same census class as [allocate]'s: a transfer destination is a working buffer. *)
+        Alloc_census.record_pool ~device_id:device.device_id ~pool_id ~constant:false
+          ~size_in_bytes:capacity;
+        let a : Backend_intf.upload_arena =
+          { arena_pool_id = pool_id; arena_mode = mode; capacity; used = size_in_bytes }
+        in
+        arenas.arenas <- a :: arenas.arenas;
+        arenas.minted_bytes <- arenas.minted_bytes + capacity;
+        let release () =
+          arenas.arenas <- List.filter arenas.arenas ~f:(fun b -> not (phys_equal a b));
+          arenas.minted_bytes <- arenas.minted_bytes - capacity;
+          free_transfer_pool device pool_id ()
+        in
+        ({ pool_id; offset = 0 }, release)
 
   let%track3_sexp init_from_host (ctx : Backend.context) (tn : Tn.t) (hosted : Ndarray.t) =
     match Map.find ctx.ctx_buffers tn with
     | None ->
         (* No zero-init: we are immediately copying from host. *)
-        let dst = allocate ctx.device tn ~zero_init:false in
-        with_transfer_pool ctx.device dst ~f:(fun () ->
+        let dst, release = upload_slot ctx tn in
+        with_transfer_pool ctx.device ~release ~f:(fun () ->
             Resource_fault_injection.hit Transfer_pool_allocated;
             [%log "copying", Tn.debug_name tn, "to", (dst : Backend_intf.buffer_loc), "from host"];
             Resource_fault_injection.hit From_host_before_copy;
@@ -596,7 +665,8 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
         | None ->
             (* No zero-init: we are immediately copying from another device. *)
             let d_loc = allocate dst.device tn ~zero_init:false in
-            with_transfer_pool dst.device d_loc ~f:(fun () ->
+            with_transfer_pool dst.device ~release:(free_transfer_pool dst.device d_loc.pool_id)
+              ~f:(fun () ->
                 Resource_fault_injection.hit Transfer_pool_allocated;
                 Backend.(
                   device_to_device tn ~into_merge_buffer:No ~dst_loc:(Some d_loc) ~dst
@@ -1322,6 +1392,9 @@ let finalize (type dev runner event)
      retry skips the pool ids whose frees already returned successfully; backend frees are
      idempotent too, but relying on that would still call a raw deallocator twice. *)
   let cleanup () =
+    (* gh-ocannl-1125: the lifecycle's upload arenas die with it -- a later upload through a dead
+       handle of this lifecycle must not bump into a slab freed below. *)
+    ctx.upload_arenas.arenas <- [];
     Option.iter Backend.free_pool ~f:(fun free_pool ->
         Resource_fault_injection.hit Finalize_before_await;
         Backend.await ctx.device;

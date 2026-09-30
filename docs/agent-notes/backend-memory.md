@@ -79,9 +79,10 @@ files.
   hoisted candidates it passes while proving less than it looks like.
 - Four facts about the allocation seams that each cost a review round to learn, and that any further
   release work will meet again. (1) There are **two** shared allocation sites, not one:
-  `Backends.allocate_delta` for a compile's delta, and the `allocate` inside
-  `Add_buffer_retrieval_and_syncing` for a `from_host`/`copy` destination not yet in the context. Both
-  land in the same pool tables and are freed by the same context `finalize`. (2) `allocate_delta` is
+  `Backends.allocate_delta` for a compile's delta, and the transfer destinations inside
+  `Add_buffer_retrieval_and_syncing` for a node not yet in the context (`upload_slot` for
+  `from_host`, `allocate` for `init_from_device`). Both land in the same pool tables and are freed
+  by the same context `finalize`. (2) `allocate_delta` is
   **not atomic** — it schedules host uploads and can allocate several segments — so a guard wrapped
   around it from outside cannot see a partial delta; the unwind has to live inside, and must `await`
   before freeing because those uploads are asynchronous. (3) Constant-cache entries **point into**
@@ -91,6 +92,16 @@ files.
   artifact you deliberately kept is the one nobody can reach. Corollary for reviewing such a change:
   each fix adds a container, a guard or a retention decision, i.e. a new path with the same obligation
   — re-examine the failure paths the fix itself created, not just the ones it closed.
+- **Host uploads of absent nodes share upload arenas, owned by the context LIFECYCLE**
+  (gh-ocannl-1125). One pool per `set_values` of a not-yet-linked node made a routine reading 18
+  such parameters need 20 pools, over Metal's 16-binding budget (`build_pool_binding`), so
+  `upload_slot` bump-packs them first-fit into `context.upload_arenas`: first arena exact, later
+  ones doubling. The arenas are shared by the values `evolve_with_buffer` derives (one `finalized`
+  flag, so they free together) and fresh in `make_child`: an arena must never span two lifecycles,
+  or the child's `finalize` frees the parent's tenants. A failed upload into an existing arena rolls
+  its bump back and frees nothing; `finalize` empties the list so a dead handle cannot bump into a
+  freed slab. Guard: `test/operations/set_values_pool_coalescing.ml`, plus the arena leg of
+  `resource_fault_injection`.
 - Fissioned-step segment batches go through the `sequence_segments` seam
   (`Backend_impl.Lowered_backend`): Metal encodes one serial-dispatch command buffer; CUDA/HIP
   stream-capture the launch loop into a graph replayed as one `cuGraphLaunch`/`hipGraphLaunch`

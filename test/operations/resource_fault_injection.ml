@@ -227,6 +227,53 @@ let () =
     && approx_array (Context.get_values read_ctx x.Tensor.value) values);
   Context.release read_ctx;
 
+  (* gh-ocannl-1125: uploads of nodes the context does not hold share upload arenas. The first arena
+     is exact and the second targets the capacity minted so far, so [x] and [z] take one pool each
+     and [w] mints a doubled arena with room for [v]. A failed upload INTO that arena minted
+     nothing, so it must free nothing -- least of all the slab [w] lives in -- and must give its
+     bytes back: the uninjected retry lands in the same arena, with no pool of its own. *)
+  let arena_nd shift =
+    Ir.Ndarray.init_array ~debug:"gh1125 arena" Ir.Ops.single ~dims:[| 4 |] ~padding:None
+      ~f:(fun i -> values.(i.(0)) +. shift)
+  in
+  let w = TDSL.ndarray values ~label:[ "rfi_w" ] ~output_dims:[ 4 ] () in
+  let v = TDSL.ndarray values ~label:[ "rfi_v" ] ~output_dims:[ 4 ] () in
+  let nd_w = arena_nd 20. and nd_v = arena_nd 30. in
+  let before_arena = AC.snapshot () in
+  let arena_ctx = Context.from_host (Context.cpu ()) x.Tensor.value nd in
+  let arena_ctx = Context.from_host arena_ctx z.Tensor.value (arena_nd 10.) in
+  let arena_ctx = Context.from_host arena_ctx w.Tensor.value nd_w in
+  let held = AC.snapshot () in
+  let raised, hits =
+    injected FI.From_host_before_copy (fun () -> Context.from_host arena_ctx v.Tensor.value nd_v)
+  in
+  let after_failed_append = AC.snapshot () in
+  p "arena-append copy injection fired" (raised && hits = 1);
+  p "failed arena append allocates and frees nothing"
+    (working_allocated held after_failed_append = 0
+    && pools_freed held after_failed_append = 0
+    && live_working_delta held after_failed_append = 0);
+  let reads tn nd =
+    approx_array (Context.get_values arena_ctx tn) (Ir.Ndarray.retrieve_flat_values nd)
+  in
+  p "failed arena append leaves its pool-mates' values intact"
+    (reads x.Tensor.value nd && reads w.Tensor.value nd_w);
+  let arena_ctx = Context.from_host arena_ctx v.Tensor.value nd_v in
+  let after_retry_append = AC.snapshot () in
+  p "arena-append retry lands in the arena without a pool of its own"
+    (working_allocated before_arena after_retry_append = 3
+    && approx_array
+         (Context.get_values arena_ctx v.Tensor.value)
+         (Ir.Ndarray.retrieve_flat_values nd_v)
+    && approx_array
+         (Context.get_values arena_ctx w.Tensor.value)
+         (Ir.Ndarray.retrieve_flat_values nd_w));
+  Context.release arena_ctx;
+  let after_arena_release = AC.snapshot () in
+  p "arena control releases each of its three pools exactly once"
+    (pools_freed after_retry_append after_arena_release = 3
+    && live_working_delta before_arena after_arena_release = 0);
+
   (* Await is the first fallible release action. A failure there commits neither the finalized flag
      nor any free, and the uninjected retry performs the one cleanup. *)
   let await_ctx = Context.from_host (Context.cpu ()) x.Tensor.value nd in
