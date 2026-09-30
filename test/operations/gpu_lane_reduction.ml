@@ -171,19 +171,14 @@ let axis_name = function
   | LL.Workgroup_reduce -> "Workgroup_reduce"
   | _ -> "another kind"
 
-(* [fill] 1 keeps one-loop workgroups: Grid (h, t, b) x Workgroup d. At [fill] 256 the head loop
-   joins the workgroup on [.y] (the lane staying on [.x]): Grid (t, b) x Workgroup (d, h). *)
-let run ?(preamble = S.Preamble_cooperative) ?(lanes = true) ?(fill = 1) ~reduction_axis
-    ~emits_all_reduce case =
-  let schedule () =
-    S.default_gpu ~block_size:256 ~min_parallel:64 ~workgroup_fill:fill ~preamble_reduction:preamble
+let run ?(preamble = S.Preamble_cooperative) ?(lanes = true) ~reduction_axis ~emits_all_reduce case
+    =
+  let scheduled =
+    S.apply
+      (S.default_gpu ~block_size:256 ~min_parallel:64 ~workgroup_fill:1 ~preamble_reduction:preamble
+         case.opt)
       case.opt
   in
-  let scheduled = S.apply (schedule ()) case.opt in
-  let widened = fill > 1 in
-  let groups = if widened then b_n * t_n else b_n * t_n * h_n in
-  let grid = if widened then [| t_n; b_n; 1 |] else [| h_n; t_n; b_n |] in
-  let block = if widened then [| case.launch_block; h_n; 1 |] else [| case.launch_block; 1; 1 |] in
   (* What schedule-aware fission reads: the reduce lane is the output lanes' threads, not a
      dimension of its own. *)
   if lanes then
@@ -193,15 +188,15 @@ let run ?(preamble = S.Preamble_cooperative) ?(lanes = true) ?(fill = 1) ~reduct
          (b_n * t_n * h_n * case.launch_block))
       (List.equal
          (fun (g1, a1) (g2, a2) -> g1 = g2 && a1 = a2)
-         (S.statement_mappings case.opt.llc (schedule ()))
-         [ (groups, b_n * t_n * h_n * case.launch_block) ]);
+         (S.statement_mappings case.opt.llc
+            (S.default_gpu ~block_size:256 ~min_parallel:64 ~workgroup_fill:1
+               ~preamble_reduction:preamble case.opt))
+         [ (b_n * t_n * h_n, b_n * t_n * h_n * case.launch_block) ]);
   if lanes then (
     p
-      (Printf.sprintf "%s: %s and a %d-wide lane on .x" case.name
-         (if widened then "Grid (t, b), the heads on .y" else "Grid (h, t, b)")
-         case.launch_block)
-      (Array.equal Int.equal (LL.launch_dims scheduled.llc).LL.block block
-      && Array.equal Int.equal (LL.launch_dims scheduled.llc).LL.grid grid);
+      (Printf.sprintf "%s: Grid (h, t, b) and a %d-wide lane" case.name case.launch_block)
+      (Array.equal Int.equal (LL.launch_dims scheduled.llc).LL.block [| case.launch_block; 1; 1 |]
+      && Array.equal Int.equal (LL.launch_dims scheduled.llc).LL.grid [| h_n; t_n; b_n |]);
     p
       (Printf.sprintf "%s: the lane sits inside the serial query loop" case.name)
       (lane_under_serial scheduled.llc))
@@ -301,8 +296,3 @@ let () =
            String.is_substring line ~substring:(" " ^ ident ^ " = (")
            && String.is_substring line ~substring:register)
       && not (String.is_substring src ~substring:(" " ^ ident ^ " = 0;"))))
-
-let () =
-  printf "--- leg 9: the workgroup widened on .y, the all-reduce still one row of lanes ---\n";
-  run ~fill:256 ~reduction_axis:LL.Workgroup_reduce ~emits_all_reduce:true
-    (dk_nest ~name:"lred_fill32" ~e_n:32 ~d_n:32 ())

@@ -77,10 +77,7 @@ files.
   Measured on Metal (D1 training, lukstafi/ocannl-staging PR for gh-ocannl-1124): duplicated is a
   1.07-1.45x step REGRESSION (every lane pays the value width per pair), cooperative a 0.94-0.98x
   win, and it lanes dQ too -- fission then cuts dQ from the row dot `D`, whose merge would now cost
-  dQ its mapping. A lane nest plans at `gpu_schedule_workgroup_fill` like the plain plans: the loops
-  just above its serial loop join the workgroup on `.y`/`.z`, the lane stays on `.x` (so a
-  simdgroup is still one row of lanes). At one-loop 32-thread workgroups the lanes ran HIP 1.06-1.20x
-  slower than the plain dK plan (CUDA mildly too), the gh-ocannl-1133 effect. `test/operations/gpu_lane_reduction`, and leg 6 of `gpu_serial_lanes` pins dK's
+  dQ its mapping. `test/operations/gpu_lane_reduction`, and leg 6 of `gpu_serial_lanes` pins dK's
   own nest.
 - **A contraction inside a scan body is tensorized by rewriting the whole scan's owner, not by
   `Tensorize`** (gh-ocannl-1003, `Schedule.Fold_mma`): `rewrite_loop` does not enter a scan, and
