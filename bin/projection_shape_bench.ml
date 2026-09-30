@@ -184,7 +184,7 @@ let geom_label (q : Autotune.sketch_params) =
     (if q.sk_hoist then " hoist" else "")
     (if q.sk_grid then " grid" else "")
     (if q.sk_pack_rest then " packrest" else "")
-    (if q.sk_batch_grid then " bgrid" else "")
+    (if not q.sk_batch_grid then "" else if q.sk_batch_inner then " bgrid-in" else " bgrid")
 
 (* A MONOTONIC counter, not a wall-clock timestamp: an NTP step or a VM clock correction during a
    long run would otherwise jump (or invert) an interval, and the corrupted batch feeds the median
@@ -813,8 +813,13 @@ let () =
     (* A round is a BASE geometry, [sk_batch_grid] twins included, because a merged site's
        [32x32x8/4x4] and a batched site's [32x32x8/4x4 bgrid] are the two arms the experiment
        actually compares -- putting the twins in separate rounds would leave exactly that pair
-       un-interleaved. A batched site therefore contributes both of its arms to the round. *)
-    let base_geom g = String.chop_suffix_if_exists g ~suffix:" bgrid" in
+       un-interleaved. A batched site therefore contributes all of its batch arms to the round (with
+       interior batch loops, the [bgrid-in] order of gh-ocannl-728 is the third). *)
+    let base_geom g =
+      String.chop_suffix_if_exists
+        (String.chop_suffix_if_exists g ~suffix:" bgrid-in")
+        ~suffix:" bgrid"
+    in
     let geometries =
       List.concat_map prepared ~f:(fun (_, _, seeds, _, _, _) ->
           List.map seeds ~f:(fun q -> base_geom (geom_label q)))

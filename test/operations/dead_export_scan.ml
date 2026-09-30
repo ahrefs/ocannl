@@ -429,8 +429,11 @@ let exempt_zero_reference_exports =
        [autotune.ml] includes and [autotune.mli] publishes selectively. They leak because
        [sketch_families.ml] has no interface; that interface is the fix, not a removal. *)
     "Sketch_families.accesses_by_statement";
+    "Sketch_families.batch_grid_of";
     "Sketch_families.batch_grid_twin_ok";
     "Sketch_families.batch_hoist_swaps";
+    "Sketch_families.batch_inner_of";
+    "Sketch_families.batch_layout_of";
     "Sketch_families.blocks_of";
     "Sketch_families.classify_matmul";
     "Sketch_families.companion_coverage_unsupported";
@@ -465,6 +468,7 @@ let exempt_zero_reference_exports =
     "Sketch_families.gpu_conv_sketch_schedule";
     "Sketch_families.gpu_mma_sketch_schedule";
     "Sketch_families.gpu_sketch_schedule";
+    "Sketch_families.hoist_above";
     "Sketch_families.hoistable";
     "Sketch_families.idx_coeff";
     "Sketch_families.idx_mentions";
@@ -492,6 +496,7 @@ let exempt_zero_reference_exports =
     "Sketch_families.path_head";
     "Sketch_families.predicted_launch_geometry";
     "Sketch_families.reorder_swaps";
+    "Sketch_families.row_hoists";
     "Sketch_families.seeding_limits";
     "Sketch_families.serial_kernel_of";
     "Sketch_families.serial_nest_of";

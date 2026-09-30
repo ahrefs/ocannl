@@ -13,6 +13,8 @@ an unpredicted dimension is exempt rather than refused: true
 absent caps gate nothing: true
 prediction: the site seeds GPU candidates of both pipelines: true
 prediction: every GPU seed launches with exactly the geometry the seeder predicted: true
+prediction: the projection site seeds bgrid-in twins of both pipelines: true
+prediction: every projection GPU seed launches with exactly the predicted geometry: true
 parity premise: the reference seed launches 8 x 8 workgroups over a .y grid of 2, its twin folding 8 onto .z: true
 seed .x workgroup extent: at the cap the candidate is still seeded: true
 seed .x workgroup extent: at the cap the gate accepts it: true

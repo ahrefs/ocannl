@@ -16,11 +16,19 @@
    replacement: block-count curves are non-monotone (gh-ocannl-569's probe), so the tuner measures
    both.
 
-   Three lowered shapes: the q/k/v projection's leading-batch rank-4 site [out[b,h,s,j] += x[b,s,k]
-   * w[h,k,j]] (two outer batch loops — the issue's mechanism); the same site with a materialized
+   Four lowered shapes: the q/k/v projection's leading-batch rank-4 site [out[b,h,s,j] += x[b,s,k] *
+   w[h,k,j]] (two outer batch loops — the issue's mechanism); the same site with a materialized
    output feeding a bias+relu companion nest (companion coverage at full arity plus the companions'
-   batch annotation); and the interior-batch rank-4 site [out[b,i,h,j] += att[b,i,h,k] * v[b,k,h,j]]
-   (the head axis BETWEEN the tile roles, so the zero-nest and companion hoisting is load-bearing).
+   batch annotation); the gpt2 projection's own layout [out[b,s,h,j] += x[b,s,k] * w[h,j,k]], whose
+   head axis is interior and indexes the weight alone (gh-ocannl-728); and the interior-batch rank-4
+   site [out[b,i,h,j] += att[b,i,h,k] * v[b,k,h,j]] (the head axis BETWEEN the tile roles, so the
+   zero-nest and companion hoisting is load-bearing).
+
+   On the interior-batch sites each geometry is seeded a third time, as the bgrid-in twin
+   ([sk_batch_inner], gh-ocannl-728): the interior batch binds the grid slot beside the column
+   blocks and the row blocks fold with the outer batch onto [.z]. Its zero and companion nests hoist
+   their interior loops between the row's block split and its remainder, padding the row loop where
+   the block does not divide it; parity against the serial reference covers all three flavors.
 
    Executed assertions compare each candidate against a serial reference computed from the same
    discriminating inputs; the input values vary with every index and keep all partial sums exactly
@@ -86,8 +94,14 @@ let blocktile_seeds opt =
    and — for the batch-grid twins — the generated source is checked for the folded [.z] bindings; cc
    cannot execute workgroup-shared staging, so those claims print as skipped there (the same gating
    as autotune_batched_companion). [batch_product] is the expected [.z] extent; [fold_div] and
-   [fold_mod] the substrings the folded bindings must render. *)
-let leg ~tag ~batch_product ~fold_div ~fold_mod ~build =
+   [fold_mod] the substrings the folded bindings must render. [interior], on sites with an interior
+   batch loop, is [(interior batch extent, row extent)]: the bgrid-in twins (gh-ocannl-728) launch
+   the former on [.y] and fold the row blocks with the outer batch onto [.z]. *)
+(* This is intentionally dialect identity: the source assertion spells the folded grid-z register
+   as MSL [gid.z] or CUDA/HIP [blockIdx.z]. *)
+let fold_reg = if String.is_substring backend_name ~substring:"metal" then "gid.z" else "blockIdx.z"
+
+let leg ~tag ~batch_product ?interior ~fold_div ~fold_mod ~build () =
   let want = compile_serial ~name:(tag ^ "_serial") (build ()) in
   let cand = build () in
   let fwd = named (tag ^ "_sched") (Train.forward cand) in
@@ -101,19 +115,38 @@ let leg ~tag ~batch_product ~fold_div ~fold_mod ~build =
   in
   let opt = Option.value_exn ~here:[%here] !captured in
   let seeds = blocktile_seeds opt in
-  let serial_seeds, grid_seeds =
-    List.partition_tf seeds ~f:(fun q -> not q.Autotune.sk_batch_grid)
+  let serial_seeds = List.filter seeds ~f:(fun q -> not q.Autotune.sk_batch_grid) in
+  let grid_seeds =
+    List.filter seeds ~f:(fun q -> q.Autotune.sk_batch_grid && not q.Autotune.sk_batch_inner)
   in
+  let inner_seeds = List.filter seeds ~f:(fun q -> q.Autotune.sk_batch_inner) in
   p (tag ^ ": batch-grid twins are seeded") (not (List.is_empty grid_seeds));
   p
     (tag ^ ": one batch-grid twin per serial-batch geometry")
     (List.length grid_seeds = List.length serial_seeds);
+  (* gh-ocannl-728: the interior-batch launch order is a third flavor exactly where there are
+     interior batch loops to place; on the leading-batch sites it would be the batch-grid twin's own
+     schedule, so it must not be seeded there. *)
+  (match interior with
+  | Some _ ->
+      p
+        (tag ^ ": one interior-inside-row-blocks (bgrid-in) twin per serial-batch geometry")
+        (List.length inner_seeds = List.length serial_seeds)
+  | None ->
+      p_none (tag ^ ": no bgrid-in twin on a site without interior batch loops") seeds ~f:(fun q ->
+          q.Autotune.sk_batch_inner));
+  if Option.is_some interior then
+    p_all (tag ^ ": every bgrid-in twin is a batch-grid seed") inner_seeds ~f:(fun q ->
+        q.Autotune.sk_batch_grid);
+  let flavor q =
+    if not q.Autotune.sk_batch_grid then 0 else if q.Autotune.sk_batch_inner then 2 else 1
+  in
   p
-    (tag ^ ": batch-serial seeds precede their batch-grid twins")
-    (List.is_sorted seeds ~compare:(fun a b ->
-         Bool.compare a.Autotune.sk_batch_grid b.Autotune.sk_batch_grid));
+    (tag ^ ": batch-serial seeds precede their batch-grid twins, which precede the bgrid-in ones")
+    (List.is_sorted seeds ~compare:(fun a b -> Int.compare (flavor a) (flavor b)));
   (* --- Structural checks on the pure transform, every seed, every backend. --- *)
   let grid_z_ok = ref true and fold_ok = ref true and valid_ok = ref true in
+  let inner_ok = ref true in
   List.iter seeds ~f:(fun q ->
       let o = Sched.apply (Autotune.sketch_schedule ~accum_prec ~p:q opt) opt in
       let llc = o.LL.llc in
@@ -123,12 +156,23 @@ let leg ~tag ~batch_product ~fold_div ~fold_mod ~build =
           Stdio.eprintf "%s: validate_parallel FAILED: %s\n" tag (Exn.to_string exn);
           valid_ok := false);
       let dims = LL.launch_dims llc in
-      let want_z = if q.Autotune.sk_batch_grid then batch_product else 1 in
+      (* Under bgrid-in the interior batch binds [.y] and the row blocks fold with the outer batch
+         onto [.z]; the [.x] column blocks are the same in every flavor. *)
+      let want_z =
+        match (q.Autotune.sk_batch_inner, interior) with
+        | true, Some (heads, rows) ->
+            let row_blocks = (rows + q.Autotune.sk_bm - 1) / q.Autotune.sk_bm in
+            if dims.LL.grid.(1) <> heads then inner_ok := false;
+            batch_product / heads * row_blocks
+        | _ -> if q.Autotune.sk_batch_grid then batch_product else 1
+      in
       if dims.LL.grid.(2) <> want_z then grid_z_ok := false;
       if q.Autotune.sk_batch_grid then
-        (* The fold arithmetic, straight off the annotated loops. Both legs have exactly two batch
-           loops: the innermost batch slot (2) decodes with stride 1 under a modulo of its own
-           extent, the outermost (3) with that extent as stride and no modulo. *)
+        (* The fold arithmetic, straight off the annotated loops. Every leg folds exactly two grid
+           loops: the batch-grid twins the two batch loops, the bgrid-in twins the row blocks (slot
+           2) and the one outer batch loop (slot 3). The inner folded slot (2) decodes with stride 1
+           under a modulo of its own extent, the outer (3) with that extent as stride and no
+           modulo. *)
         let axes = LL.hardware_axes llc in
         let max_slot =
           List.fold axes ~init:(-1) ~f:(fun m a ->
@@ -147,12 +191,16 @@ let leg ~tag ~batch_product ~fold_div ~fold_mod ~build =
             && Poly.equal (cap_at 2) (Some (slot_max 2))
             && stride_at 3 = slot_max 2
             && Option.is_none (cap_at 3)
-            && slot_max 2 * slot_max 3 = batch_product)
+            && slot_max 2 * slot_max 3 = want_z)
         then fold_ok := false);
   p (tag ^ ": every seed's schedule constructs and validates") !valid_ok;
   p
-    (tag ^ ": batch-grid twins launch grid.z = batch product; serial twins launch grid.z = 1")
+    (tag
+   ^ ": batch-grid twins launch grid.z = batch product; serial twins launch grid.z = 1; bgrid-in \
+      twins fold the row blocks with the outer batch")
     !grid_z_ok;
+  if Option.is_some interior then
+    p (tag ^ ": bgrid-in twins launch the interior batch on grid.y") !inner_ok;
   p (tag ^ ": the fold arithmetic decodes innermost-mod, outermost-div") !fold_ok;
   (* --- Executable parity, seed by seed, on backends that can run shared staging. --- *)
   if on_gpu then begin
@@ -178,13 +226,25 @@ let leg ~tag ~batch_product ~fold_div ~fold_mod ~build =
         | got ->
             Int.incr n_ran;
             if Array.for_all2_exn got want ~f:Float.equal then Int.incr n_match;
-            if q.Autotune.sk_batch_grid then (
-              Int.incr n_fold_seeds;
-              let src = Generated.read (tag ^ "_sched") in
-              if
-                String.is_substring src ~substring:fold_div
-                && String.is_substring src ~substring:fold_mod
-              then Int.incr n_folded)
+            let fold_strings =
+              match (q.Autotune.sk_batch_inner, interior) with
+              | true, Some (_, rows) ->
+                  (* bgrid-in folds the row blocks (innermost-mod) with the outer batch
+                     (outermost-div); a single row block leaves nothing to decode. *)
+                  let row_blocks = (rows + q.Autotune.sk_bm - 1) / q.Autotune.sk_bm in
+                  if row_blocks < 2 then None
+                  else
+                    let n = Int.to_string row_blocks in
+                    Some (fold_reg ^ " / " ^ n, fold_reg ^ " % " ^ n)
+              | _ -> if q.Autotune.sk_batch_grid then Some (fold_div, fold_mod) else None
+            in
+            Option.iter fold_strings ~f:(fun (fold_div, fold_mod) ->
+                Int.incr n_fold_seeds;
+                let src = Generated.read (tag ^ "_sched") in
+                if
+                  String.is_substring src ~substring:fold_div
+                  && String.is_substring src ~substring:fold_mod
+                then Int.incr n_folded)
         | exception exn -> Stdio.eprintf "%s: seed FAILED: %s\n" tag (Exn.to_string exn));
     p (tag ^ ": every seed compiles and runs") (!n_ran = List.length seeds && !n_ran > 0);
     p (tag ^ ": every candidate matches the serial reference bitwise") (!n_ran = !n_match);
@@ -217,14 +277,13 @@ let () =
   in
   (* --- The q/k/v shape: rank-4 output, two outer batch loops (batch, head) --- *)
   (* Slots: j-blocks 0, s-blocks 1, h 2 (extent 4: "% 4"), b 3 (stride 4: "/ 4"). *)
-  (* This is intentionally dialect identity: the source assertion spells the folded grid-z
-     register as MSL [gid.z] or CUDA/HIP [blockIdx.z]. *)
-  let reg = if String.is_substring backend_name ~substring:"metal" then "gid.z" else "blockIdx.z" in
+  let reg = fold_reg in
   leg ~tag:"qkv" ~batch_product:(bb * hh) ~fold_div:(reg ^ " / 4") ~fold_mod:(reg ^ " % 4")
     ~build:(fun () ->
       let xv = x () and wv = w () in
       let%op out = xv +* "bsk;hkj=>bhsj" wv in
-      out);
+      out)
+    ();
 
   (* --- The q/k/v shape with a materialized output feeding a bias+relu companion nest --- *)
   let bias () =
@@ -238,7 +297,26 @@ let () =
       let%op z = xv +* "bsk;hkj=>bhsj" wv in
       Train.set_materialized z.Tensor.value;
       let%op y = relu (z + bv) in
-      y);
+      y)
+    ();
+
+  (* --- The gpt2 q/k/v projection's own layout (gh-ocannl-728): [d[b,s,h,e] += x[b,s,k] *
+     w[h,e,k]] — the head axis is INTERIOR ([m_bi], between the rows [s] and the columns [e]) and
+     indexes the weight alone, the site whose bgrid-in twin launches the heads beside the column
+     blocks the way the heads-merged layout does. --- *)
+  (* Batch-grid slots: e-blocks 0, s-blocks 1, h 2 (extent 4: "% 4"), b 3 (stride 4: "/ 4"). *)
+  let wp () =
+    NTDSL.init ~l:"bg_wp" ~prec:Ir.Ops.single ~o:[ hh; jj; kk ]
+      ~f:(Ll_test.cycle ~dims:[| hh; jj; kk |] ~modulus:11 ~offset:(-5.) ~stride:0.5)
+      ()
+  in
+  leg ~tag:"projection" ~batch_product:(bb * hh) ~interior:(hh, ss) ~fold_div:(reg ^ " / 4")
+    ~fold_mod:(reg ^ " % 4")
+    ~build:(fun () ->
+      let xv = x () and wv = wp () in
+      let%op out = xv +* "bsk;hjk=>bshj" wv in
+      out)
+    ();
 
   (* --- Interior batch: the head axis BETWEEN the tile roles (gh-ocannl-528's shape) --- *)
   (* Slots: j-blocks 0, i-blocks 1, h 2 (extent 2: "% 2"), b 3 (stride 2: "/ 2"). The zero nest
@@ -254,11 +332,13 @@ let () =
       ~f:(Ll_test.cycle ~dims:[| bt; kk2; hh2; jj2 |] ~modulus:7 ~offset:(-3.) ~stride:0.5)
       ()
   in
-  leg ~tag:"interior" ~batch_product:(bt * hh2) ~fold_div:(reg ^ " / 2") ~fold_mod:(reg ^ " % 2")
+  leg ~tag:"interior" ~batch_product:(bt * hh2) ~interior:(hh2, ss2) ~fold_div:(reg ^ " / 2")
+    ~fold_mod:(reg ^ " % 2")
     ~build:(fun () ->
       let a = att () and vv = v () in
       let%op out = a +* "bihk;bkhj=>bihj" vv in
-      out);
+      out)
+    ();
 
   (* --- Interior batch with a companion: the companion nest's own head loop must hoist above its
      row loop ([companion_role_ops]'s Swaps on the companion's symbols) or its positional slot order
@@ -268,13 +348,15 @@ let () =
       ~f:(fun idcs -> (Float.of_int (idcs.(0) % 3) -. 1.) *. 0.5)
       ()
   in
-  leg ~tag:"interior_companion" ~batch_product:(bt * hh2) ~fold_div:(reg ^ " / 2")
-    ~fold_mod:(reg ^ " % 2") ~build:(fun () ->
+  leg ~tag:"interior_companion" ~batch_product:(bt * hh2) ~interior:(hh2, ss2)
+    ~fold_div:(reg ^ " / 2") ~fold_mod:(reg ^ " % 2")
+    ~build:(fun () ->
       let a = att () and vv = v () and bv = bias2 () in
       let%op z2 = a +* "bihk;bkhj=>bihj" vv in
       Train.set_materialized z2.Tensor.value;
       let%op y2 = relu (z2 + bv) in
-      y2);
+      y2)
+    ();
 
   (* --- The tensorized (mma) pipeline's batch-grid twins, construction and validation only --- A
      synthetic f32 mma capability makes the tensorized branch seedable machine-independently;
