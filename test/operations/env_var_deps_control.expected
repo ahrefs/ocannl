@@ -189,7 +189,7 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:b0ff4d4e5709299b84685f0fc189cc63] the inline-test runner
   [scanner-refusal:5893c6332b1f903470ec51cad4f20e8f] holds inline tests
   [scanner-refusal:5f2b09efad6e397fb5bd77b84255d0bf] runs inline tests
-  [scanner-refusal:8340c017c83e73ac4649ceb92fa15ee7] scanner refusal
+  [scanner-refusal:7637eff157ad54e2ce52846535604f2a] scanner refusal
   [scanner-refusal:fe4c53f899eb08a9ae67e7a797a5a841] scanner-refusal exemptions no
   [scanner-refusal:0b33370125e32eaa4bb0f50c6cc3bc1a] exempted declarations no
   [scanner-refusal:638620a0745d0a136810c5b0256e0ec0] directories exempted from

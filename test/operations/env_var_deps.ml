@@ -2489,7 +2489,7 @@ let main () =
             `Synthetic controls:` section, or exempt the exact fragment with a reason; an embedded \
             section also needs the source's row in `raw_entries` of \
             test/support/refusal_control_manifest.ml, which `Refusal_control_manifest.print` \
-            writes ready to paste on stderr while the row is missing or empty"
+            writes ready to paste on stderr while the row is missing, empty or stale"
            source diagnostic.Refusals.line diagnostic.fragment));
   let stale_refusal_exemptions =
     Set.diff

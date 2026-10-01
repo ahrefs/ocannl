@@ -291,7 +291,7 @@ let raw_entries =
         "[scanner-refusal:b0ff4d4e5709299b84685f0fc189cc63] the inline-test runner";
         "[scanner-refusal:5893c6332b1f903470ec51cad4f20e8f] holds inline tests";
         "[scanner-refusal:5f2b09efad6e397fb5bd77b84255d0bf] runs inline tests";
-        "[scanner-refusal:8340c017c83e73ac4649ceb92fa15ee7] scanner refusal";
+        "[scanner-refusal:7637eff157ad54e2ce52846535604f2a] scanner refusal";
         "[scanner-refusal:fe4c53f899eb08a9ae67e7a797a5a841] scanner-refusal exemptions no";
         "[scanner-refusal:0b33370125e32eaa4bb0f50c6cc3bc1a] exempted declarations no";
         "[scanner-refusal:638620a0745d0a136810c5b0256e0ec0] directories exempted from";
@@ -697,7 +697,7 @@ let raw_direct_evidence =
     ( "env_var_deps.ml:a323f01100bfd685e76c62154cf4eaae",
       "the checker reports the key and exits 1 when the rule running the guard neither declares \
        nor pins it: true" );
-    ( "env_var_deps.ml:8340c017c83e73ac4649ceb92fa15ee7",
+    ( "env_var_deps.ml:7637eff157ad54e2ce52846535604f2a",
       "appears in no permanent control golden in the negative arm, and appears in the positive arm."
     );
     ( "env_var_deps.ml:fe4c53f899eb08a9ae67e7a797a5a841",
@@ -817,6 +817,78 @@ let row ~source diagnostics =
              Printf.sprintf "        %S;\n" (Refusal_control_scan.marker diagnostic))
         @ [ "      ] );\n" ])
 
+(** Multiset difference: [minus xs ys] removes one occurrence per [ys] element, since markers repeat
+    when formats do and an argument list can name a source twice. *)
+let minus xs ys =
+  List.fold ys ~init:xs ~f:(fun remaining y ->
+      let before, after = List.split_while remaining ~f:(Fn.non (String.equal y)) in
+      before @ Option.value (List.tl after) ~default:[])
+
+type row_difference = {
+  absent : string list;  (** Extracted markers the row lacks. *)
+  no_longer : string list;  (** Row markers no longer extracted. *)
+  first_misplaced : (int * string * string) option;
+      (** With neither side lacking anything, the first 1-based entry where the order differs, as
+          (position, extracted, registered). *)
+}
+
+(** How a [registered] row differs from the [extracted] markers, [None] when it holds them in order.
+*)
+let row_difference ~registered ~extracted =
+  if List.equal String.equal extracted registered then None
+  else
+    let absent = minus extracted registered and no_longer = minus registered extracted in
+    let first_misplaced =
+      if List.is_empty absent && List.is_empty no_longer then
+        List.findi (List.zip_exn extracted registered) ~f:(fun _ (e, r) -> not (String.equal e r))
+        |> Option.map ~f:(fun (position, (e, r)) -> (position + 1, e, r))
+      else None
+    in
+    Some { absent; no_longer; first_misplaced }
+
+(** Writes [difference] for [source]'s row (its key without the [test/operations/] prefix) on
+    stderr, with a short summary and the replacement row built from [diagnostics] -- never into a
+    golden: the row a check holds the manifest to stays the hand-pasted one. *)
+let eprint_row_difference ~source diagnostics difference =
+  eprintf
+    "%s: refusal-control row differs from extraction, %d added and %d removed (not part of the \
+     golden):\n"
+    source (List.length difference.absent)
+    (List.length difference.no_longer);
+  List.iter difference.absent ~f:(eprintf "  extracted, absent from the row: %s\n");
+  List.iter difference.no_longer ~f:(eprintf "  in the row, no longer extracted: %s\n");
+  Option.iter difference.first_misplaced ~f:(fun (position, e, r) ->
+      eprintf
+        "  same markers in a different order; first difference at entry %d: extracted %s, the row \
+         has %s\n"
+        position e r);
+  eprintf "  replace its `raw_entries` row in test/support/refusal_control_manifest.ml with:\n%s"
+    (row ~source diagnostics)
+
+(** The [raw_direct_evidence] keys (without the [test/operations/] prefix) of [source]'s direct
+    failures beyond its [registered] row -- consumed as a multiset, since identical formats need a
+    control apiece -- that no entry answers and that this process did not record through
+    [observe_failure]. A scan whose control arm runs in a separate process records its observations
+    there, so a key named here may still be covered by that arm: the list is what to check, not a
+    verdict. Which control observes a failure is a judgment, so the entries stay hand-written. *)
+let unevidenced_failures ~source ~registered diagnostics =
+  List.fold diagnostics ~init:(registered, []) ~f:(fun (remaining, keys) diagnostic ->
+      let marker = Refusal_control_scan.marker diagnostic in
+      if List.mem remaining marker ~equal:String.equal then (minus remaining [ marker ], keys)
+      else
+        let key = failure_key ~source ~identity:diagnostic.Refusal_control_scan.identity in
+        match diagnostic.Refusal_control_scan.kind with
+        | Refusal_control_scan.Fail
+          when not
+                 (Hash_set.mem observed_failures key
+                 || List.Assoc.mem direct_evidence key ~equal:String.equal) ->
+            ( remaining,
+              Option.value (String.chop_prefix key ~prefix:"test/operations/") ~default:key :: keys
+            )
+        | Refusal_control_scan.Fail | Refusal_control_scan.Claim -> (remaining, keys))
+  |> snd
+  |> List.dedup_and_sort ~compare:String.compare
+
 (** The [direct_evidence] keys no current direct-failure diagnostic answers to: [diagnostics_of]
     gives a catalogued source's extracted diagnostics, [None] for a source outside the catalogue. A
     reworded failure format changes its identity, leaving its old key silently dead. *)
@@ -864,16 +936,34 @@ let print source =
      whether the row was added. A registered row with no diagnostics to list has nothing to say. *)
   let registered = List.Assoc.find entries source ~equal:String.equal in
   let expected = Option.value registered ~default:[] in
+  let row_source =
+    Option.value (String.chop_prefix source ~prefix:"test/operations/") ~default:source
+  in
   if List.is_empty expected && not (List.is_empty diagnostics && Option.is_some registered) then (
-    let row_source =
-      Option.value (String.chop_prefix source ~prefix:"test/operations/") ~default:source
-    in
     eprintf
       "%s has %s row in Refusal_control_manifest; add this row to `raw_entries` in \
        test/support/refusal_control_manifest.ml (not part of the golden):\n"
       source
       (if Option.is_some registered then "an empty" else "no");
-    eprintf "%s" (row ~source:row_source diagnostics));
+    eprintf "%s" (row ~source:row_source diagnostics))
+  else
+    (* A stale row -- a diagnostic gained, lost or reworded -- gets the same treatment, again only
+       on stderr: the catalogue still holds the manifest to the extraction, and a marker outside the
+       row prints nothing below, so the census claim in env_var_deps still decides. *)
+    Option.iter
+      (row_difference ~registered:expected
+         ~extracted:(List.map diagnostics ~f:Refusal_control_scan.marker))
+      ~f:(fun difference ->
+        eprint_row_difference ~source:row_source diagnostics difference;
+        match unevidenced_failures ~source ~registered:expected diagnostics with
+        | [] -> ()
+        | keys ->
+            eprintf
+              "  direct failures new to the row with no `raw_direct_evidence` entry, none recorded \
+               through `observe_failure` in this run: unless the scan's separate control run \
+               records it, each needs a hand-written entry naming the control output that observes \
+               it, under the key\n";
+            List.iter keys ~f:(eprintf "    %S\n"));
   diagnostics
   |> List.iter ~f:(fun diagnostic ->
       let marker = Refusal_control_scan.marker diagnostic in
