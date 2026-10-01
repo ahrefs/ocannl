@@ -1001,6 +1001,22 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   can always put its keys behind an abstraction — and the module header says so. If that trade stops
   holding, the answer is a structural contract for how a guard spells its keys, matched rather than
   inferred, not another name in its tables.
+- **A test that names the schedule pipeline declares the keys it reaches — derived, not
+  hand-listed** (gh-ocannl-1149). A test calling `Ir.Schedule.default_gpu`,
+  `maybe_default_schedules`, `zero_expansion`, `fission_keep_mapping` … is one whose subject is the
+  default schedule, and its keys (`gpu_schedule_block_size`, `gpu_fission_keep_mapping`,
+  `schedule_fission`, …) are the ones flipped while debugging it; the hand lists drifted, and a
+  `gpu_serial_lanes` run with `OCANNL_GPU_FISSION_KEEP_MAPPING` changed came back from the cache as a
+  pass (lukstafi/ocannl-staging#916). `Config_key_scan.top_level_key_reach` reads `schedule.ml`'s
+  literal `~arg_name` reads per top-level value, closed over the module's own calls in source order;
+  `env_var_deps` then requires every key a NAMED value reaches — through `Ir.Schedule`, an alias of
+  it or an `open` — of every rule running the program, `setenv` pins counting, `Execution_neutral`
+  keys (the launch trace) excepted. It over-reads where it errs: optional arguments a call supplies
+  are not modeled, so `default_gpu ~block_size:…` still asks for the block-size variable — a rerun
+  is the cost. Out of scope on purpose: a program reaching the pipeline only through
+  `Context.compile` (every compiled test), a library, and an executable no rule runs. The failure
+  message lists the exact `(env_var …)` lines to add; the golden lists the derived key universe, so
+  a new key in `schedule.ml` shows up as a diff and as a failure on each stanza that reaches it.
 - Dune roots at the OUTERMOST ancestor holding a `dune-workspace` (failing that, a `dune-project`)
   and ignores dot-directories, so from a worktree under `.claude/worktrees/` the main checkout wins
   and the worktree is invisible to dune: targeted commands fail with `Don't know about directory

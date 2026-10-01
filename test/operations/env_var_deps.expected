@@ -125,6 +125,32 @@ on its own deps.
   OCANNL_PROFILE                         test/operations/startup_streams/dune, executable startup_streams (4 runs of startup_streams.exe)
   OCANNL_SUPPRESS_WELCOME_MESSAGE        test/operations/startup_streams/dune, executable startup_streams (4 runs of startup_streams.exe)
 
+Programs naming `Ir.Schedule`, the entry points they name, and how many configuration keys those
+reach -- every one declared or pinned by every rule running the program (gh-ocannl-1149):
+  (the keys its values reach: automatic_cpu_schedule, automatic_gpu_schedule, cpu_schedule_min_parallel, gpu_fission_keep_mapping, gpu_lane_preamble_reduction, gpu_schedule_block_size, gpu_schedule_min_parallel, gpu_schedule_workgroup_fill, schedule_fission)
+  test/operations/dune, executable autotune_batched_companion: 5 keys via Ir.Schedule.default_cpu, Ir.Schedule.default_gpu, Ir.Schedule.zero_expansion
+  test/operations/dune, executable autotune_fission_sketch: 6 keys via Ir.Schedule.default_cpu, Ir.Schedule.default_gpu, Ir.Schedule.default_pipeline_fissions, Ir.Schedule.zero_expansion
+  test/operations/dune, test autotune_privatize: 5 keys via Ir.Schedule.default_cpu, Ir.Schedule.default_gpu
+  test/operations/dune, test autotune_serial_baseline: 9 keys via Ir.Schedule.automatic_schedule_active, Ir.Schedule.maybe_default_schedules
+  test/operations/dune, test autotune_split_reduce: 5 keys via Ir.Schedule.default_cpu, Ir.Schedule.default_gpu
+  test/operations/dune, test conv_detection_boundary: 4 keys via Ir.Schedule.default_gpu, Ir.Schedule.zero_expansion
+  test/operations/dune, test fission_equivalence: 9 keys via Ir.Schedule.default_cpu, Ir.Schedule.default_gpu, Ir.Schedule.fission_keep_mapping, Ir.Schedule.maybe_default_schedules, Ir.Schedule.zero_expansion
+  test/operations/dune, test fission_schedule: 9 keys via Ir.Schedule.default_gpu, Ir.Schedule.maybe_default_schedules, Ir.Schedule.zero_expansion
+  test/operations/dune, test gpu_fission_mapping: 5 keys via Ir.Schedule.default_gpu, Ir.Schedule.fission_keep_mapping, Ir.Schedule.zero_expansion
+  test/operations/dune, test gpu_lane_reduction: 4 keys via Ir.Schedule.default_gpu, Ir.Schedule.lane_preamble_reduction_for
+  test/operations/dune, test gpu_parallel_prefix: 4 keys via Ir.Schedule.default_gpu, Ir.Schedule.zero_expansion
+  test/operations/dune, test gpu_serial_lanes: 9 keys via Ir.Schedule.default_gpu, Ir.Schedule.maybe_default_schedules
+  test/operations/dune, test gpu_small_leading_axis: 4 keys via Ir.Schedule.default_gpu, Ir.Schedule.zero_expansion
+  test/operations/dune, test launch_dim_gate: 4 keys via Ir.Schedule.default_gpu
+  test/operations/dune, test launch_predicate_parity: 4 keys via Ir.Schedule.default_gpu, Ir.Schedule.zero_expansion
+  test/operations/dune, test online_softmax_block_mma: 6 keys via Ir.Schedule.default_cpu, Ir.Schedule.default_gpu, Ir.Schedule.fission_keep_mapping, Ir.Schedule.zero_expansion
+  test/operations/dune, test schedule_conv_gemm: 4 keys via Ir.Schedule.default_cpu, Ir.Schedule.zero_expansion
+  test/operations/dune, test schedule_ops: 4 keys via Ir.Schedule.default_gpu
+  test/operations/dune, test schedule_split_reduce: 5 keys via Ir.Schedule.default_cpu, Ir.Schedule.default_gpu
+  test/operations/dune, test schedule_strided_1x1: 5 keys via Ir.Schedule.default_cpu, Ir.Schedule.default_gpu, Ir.Schedule.zero_expansion
+  test/operations/dune, test scratch_value_variance: 4 keys via Ir.Schedule.default_gpu
+  test/training/dune, test fused_classifier: 9 keys via Ir.Schedule.maybe_default_schedules
+
 Ambient environment gates, by dune file and every alias whose build runs one:
   arrayjit/test/dune                       @lifecycle
   arrayjit/test/dune                       @metal-codegen

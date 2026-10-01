@@ -728,6 +728,31 @@ let module_stanzas = [ "library"; "test"; "tests"; "executable"; "executables" ]
    8). *)
 let env_reader_home = "arrayjit/lib/utils.ml"
 
+(* gh-ocannl-1149: the schedule pipeline, and the keys a program that names it depends on.
+
+   The configuration a run reads through the library is out of reach of this file in general -- a
+   test compiling through `Context.compile` reads dozens of keys, and declaring them all on two
+   hundred stanzas would claim a sensitivity no one varies. The tests whose SUBJECT is the default
+   schedule are different: they call `Ir.Schedule`'s presets, its fission or its default pipeline by
+   name, and its keys are exactly the ones a developer flips while debugging them. Left to hand
+   lists, the declarations drifted -- `gpu_serial_lanes` declared three of the keys its legs read,
+   and a hip run with `OCANNL_GPU_FISSION_KEEP_MAPPING` changed served the previous result as a pass
+   (lukstafi/ocannl-staging#916).
+
+   So the keys are derived, from the module rather than listed: every top-level value of
+   `schedule.ml`, with the literal `~arg_name` reads it makes and those of the module's other values
+   it names, transitively ([Sources.top_level_key_reach]). A source naming one of those values
+   through `Ir.Schedule` -- directly, under an alias, or under an `open` -- puts its keys on every
+   rule that runs it. A key that changes nothing a run computes ([Utils.Execution_neutral], such as
+   the launch trace) is left out: a rerun for it would recompute the same golden. *)
+let pipeline_home = "arrayjit/lib/schedule.ml"
+let pipeline_module = [ "Ir"; "Schedule" ]
+
+let pipeline_relevant key =
+  match Utils.classify_config_key key with
+  | Some (Utils.Execution_neutral, _) -> false
+  | Some _ | None -> true
+
 (* Dune resolves aliases, module defaults, and action paths within the directory a stanza is applied
    to. Keep that descent in one place: checks plug into [checks], and this iterator hands every one
    the same [(subdir, stanzas)] groups. A new check therefore starts per-directory instead of having
@@ -922,6 +947,59 @@ let main () =
   let artifact_caller_keys =
     Set.of_list (module String) (List.map artifact_callers ~f:String.lowercase)
   in
+  (* gh-ocannl-1149: the configuration keys a program reaches by NAMING the schedule pipeline. *)
+  let pipeline_entries =
+    match List.Assoc.find source_files ~equal:String.equal pipeline_home with
+    | None -> []
+    | Some on_disk -> (
+        (* A source that does not parse RAISES here, and below: the build that compiles it has
+           failed already, and a scan carrying on would report no reach for it -- the silent
+           direction. *)
+        match Sources.top_level_key_reach (In_channel.read_all on_disk) with
+        | { Sources.reach; unplaced } ->
+            List.iter unplaced ~f:(fun key ->
+                fail
+                  (Printf.sprintf
+                     "%s reads the configuration key `%s` outside every named top-level value, so \
+                      no entry point of `%s` is credited with it and a program naming the pipeline \
+                      would not be asked to declare it -- move the read into a named top-level \
+                      function"
+                     pipeline_home key
+                     (String.concat ~sep:"." pipeline_module)));
+            List.filter_map reach ~f:(fun (name, keys) ->
+                match List.filter keys ~f:pipeline_relevant with
+                | [] -> None
+                | keys -> Some (name, keys)))
+  in
+  (* Per source, the entry points it names and the keys they reach, keyed the way `source_of` looks
+     a module up. Narrowed textually first, as the sibling censuses are: the module has to be NAMED
+     for any reference to reach it. *)
+  let pipeline_reach =
+    if List.is_empty pipeline_entries then Map.empty (module String)
+    else
+      let paths = List.map pipeline_entries ~f:(fun (name, _) -> pipeline_module @ [ name ]) in
+      List.filter_map source_files ~f:(fun (path, on_disk) ->
+          let content = In_channel.read_all on_disk in
+          if
+            String.equal path pipeline_home
+            || not (String.is_substring content ~substring:(List.last_exn pipeline_module))
+          then None
+          else
+            match Sources.module_references_in_source content ~paths with
+            | [] -> None
+            | spellings ->
+                let names =
+                  List.map spellings ~f:(fun s -> List.last_exn (String.split s ~on:'.'))
+                in
+                let keys =
+                  List.concat_map names ~f:(fun name ->
+                      List.Assoc.find_exn pipeline_entries ~equal:String.equal name)
+                  |> List.dedup_and_sort ~compare:String.compare
+                in
+                Some (String.lowercase path, (names, keys)))
+      |> Map.of_alist_reduce (module String) ~f:(fun a _ -> a)
+  in
+  let pipeline_table = ref [] in
   (* Whether this run was handed the repository, established the way the sibling scans establish it:
      every scan root the globs are written for contributed its floor of sources. The relationship
      below is about whatever tree is in front of the scan and is checked either way; the CENSUS
@@ -2161,7 +2239,59 @@ let main () =
                                       Printf.sprintf
                                         ". `%s` is no configuration key OCANNL reads, so it cannot \
                                          be declared -- pin it, or fix the spelling"
-                                        key))))));
+                                        key)));
+                      (* gh-ocannl-1149: the keys the program reaches by naming the schedule
+                         pipeline, asked of every run of it exactly as a guard's keys are. Not of a
+                         library: one naming the pipeline is the route every compiled program takes,
+                         which the header of [pipeline_home] leaves out of scope -- and not of an
+                         executable no rule runs, which has no cached result to go stale. *)
+                      if not (String.equal kind "library") then
+                        let reached =
+                          List.filter_map own_modules ~f:(fun module_name ->
+                              Map.find pipeline_reach
+                                (String.lowercase (Scan.in_subdir here (module_name ^ ".ml"))))
+                        in
+                        let entries =
+                          List.concat_map reached ~f:fst
+                          |> List.dedup_and_sort ~compare:String.compare
+                        in
+                        let pipeline_keys =
+                          List.concat_map reached ~f:snd
+                          |> List.dedup_and_sort ~compare:String.compare
+                        in
+                        if not (List.is_empty runners || List.is_empty pipeline_keys) then
+                          let unanswered =
+                            List.filter pipeline_keys ~f:(fun key ->
+                                let var = Utils.env_var_name key in
+                                List.exists runners ~f:(fun (deps, pins) ->
+                                    not (Scan.declares_env_var deps var || Set.mem pins var)))
+                          in
+                          let via =
+                            String.concat ~sep:", "
+                              (List.map entries ~f:(fun entry ->
+                                   String.concat ~sep:"." (pipeline_module @ [ entry ])))
+                          in
+                          if List.is_empty unanswered then
+                            pipeline_table :=
+                              (where, via, List.length pipeline_keys) :: !pipeline_table
+                          else
+                            fail
+                              (Printf.sprintf
+                                 "%s names %s, which reach%s the configuration key%s %s, and a \
+                                  rule running %s neither declares nor pins %s -- dune then serves \
+                                  the previous result as a pass when the variable changes, which \
+                                  is how a debugging run of the default schedule goes silently \
+                                  stale. Add %s to every rule that runs %s"
+                                 where via
+                                 (if List.length entries = 1 then "es" else "")
+                                 (if List.length unanswered = 1 then "" else "s")
+                                 (String.concat ~sep:", " unanswered)
+                                 program
+                                 (if List.length unanswered = 1 then "it" else "them")
+                                 (String.concat ~sep:" "
+                                    (List.map unanswered ~f:(fun key ->
+                                         Printf.sprintf "(env_var %s)" (Utils.env_var_name key))))
+                                 program))));
       (* gh-ocannl-1037: the per-module entry points into inline tests. Every module of an
          inline-test library that holds tests has one, every rule running such a runner IS one, and
          none is aggregated onto `runtest`, where the library's generated action already runs it.
@@ -2341,6 +2471,19 @@ let main () =
       | 0 -> ( match String.compare a b with 0 -> String.compare sa sb | c -> c)
       | c -> c)
   |> List.iter ~f:(fun (where, var, source) -> printf "  %-38s %s (%s)\n" var where source);
+  printf
+    "\n\
+     Programs naming `%s`, the entry points they name, and how many configuration keys those\n\
+     reach -- every one declared or pinned by every rule running the program (gh-ocannl-1149):\n"
+    (String.concat ~sep:"." pipeline_module);
+  (* The universe the requirement is drawn from, so a key the pipeline starts reading is a
+     reviewable diff -- and a `schedule.ml` this run was not handed empties it rather than retiring
+     the rule in silence. *)
+  printf "  (the keys its values reach: %s)\n"
+    (String.concat ~sep:", "
+       (List.concat_map pipeline_entries ~f:snd |> List.dedup_and_sort ~compare:String.compare));
+  List.sort !pipeline_table ~compare:(fun (a, _, _) (b, _, _) -> String.compare a b)
+  |> List.iter ~f:(fun (where, via, n) -> printf "  %s: %d keys via %s\n" where n via);
   let stale_gateless =
     Set.diff (Set.of_list (module String) (List.map gateless_dirs ~f:fst)) !gateless_used
   in
@@ -4452,6 +4595,122 @@ let inline_alias_control () =
     aggregated_ok;
   try remove_tree root with Unix.Unix_error _ -> ()
 
+(* gh-ocannl-1149's control. Every stanza naming the schedule pipeline now declares what it reaches,
+   so a control drawn from the corpus would pass whether the rule decides anything or not; put to a
+   tree of its own, the same test is run under each way a rule can answer for the key.
+
+   The stand-in `schedule.ml` reads its key one call away from the value the test names, so the
+   requirement can only come from following the module's own calls; and it reads a key
+   [Utils.Execution_neutral] classifies, which no arm declares, so a requirement for it would fail
+   the arms that pass. *)
+let pipeline_key = "gpu_schedule_block_size"
+
+let pipeline_stub ~unplaced =
+  Printf.sprintf
+    "let block () = Utils.get_global_arg ~arg_name:%S ~default:\"256\"\n\
+     let trace = lazy (Utils.get_global_flag ~default:false ~arg_name:\"schedule_log_launches\")\n\
+     let preset () = block ()\n\
+     let launches () = Lazy.force trace\n\
+     %s"
+    pipeline_key
+    (if unplaced then
+       "let () = ignore (Utils.get_global_arg ~arg_name:\"gpu_schedule_min_parallel\" \
+        ~default:\"64\")\n"
+     else "")
+
+let pipeline_subject ~declares ~pins =
+  Printf.sprintf
+    "(test\n\
+    \ ; ocannl-backend: none -- a synthetic control fixture, which runs on no device at all.\n\
+    \ (name probe)\n\
+    \ (modules probe)\n\
+    \ (deps ocannl_config%s)\n\
+    \ (libraries arrayjit.ir)%s)\n\n\
+     (rule\n\
+    \ (alias runtest)\n\
+    \ (deps ocannl_config (universe))\n\
+    \ (action\n\
+    \  (progn)))\n"
+    (if declares then Printf.sprintf " (env_var %s)" (Utils.env_var_name pipeline_key) else "")
+    (if pins then
+       Printf.sprintf "\n (action\n  (setenv %s 64\n   (run %%{test})))"
+         (Utils.env_var_name pipeline_key)
+     else "")
+
+let pipeline_control () =
+  let exe =
+    let name = Stdlib.Sys.executable_name in
+    if Stdlib.Filename.is_relative name then Stdlib.Filename.concat (Stdlib.Sys.getcwd ()) name
+    else name
+  in
+  let root = Stdlib.Filename.temp_dir "evd_pipeline" "" in
+  let context = control_context () in
+  List.iter context ~f:(fun (file, content) ->
+      write_file (Stdlib.Filename.concat root file) content);
+  let paths = "t/dune" :: "t/probe.ml" :: pipeline_home :: List.map context ~f:fst in
+  let run ?(unplaced = false) ~probe ~declares ~pins () =
+    write_file (Stdlib.Filename.concat root pipeline_home) (pipeline_stub ~unplaced);
+    write_file (Stdlib.Filename.concat root "t/probe.ml") probe;
+    write_file (Stdlib.Filename.concat root "t/dune") (pipeline_subject ~declares ~pins);
+    run_checker ~root ~exe ("." :: paths)
+  in
+  let aliased = "module S = Ir.Schedule\nlet () = ignore (S.preset ()); ignore (S.launches ())\n" in
+  let opened = "open Ir.Schedule\nlet () = ignore (preset ())\n" in
+  let vendor = "let () = ignore (Vendor.Schedule.preset ())\n" in
+  let report label (status, text) =
+    eprintf "the pipeline control's %s run %s. Its captured output:\n%s\n" label
+      (describe_status status) text
+  in
+  let exited n (status, _) = match status with Unix.WEXITED m -> m = n | _ -> false in
+  let says substring (_, text) = String.is_substring text ~substring in
+  let diagnostic = "how a debugging run of the default schedule goes silently stale" in
+  let undeclared = run ~probe:aliased ~declares:false ~pins:false () in
+  let declared = run ~probe:aliased ~declares:true ~pins:false () in
+  let pinned = run ~probe:aliased ~declares:false ~pins:true () in
+  let under_open = run ~probe:opened ~declares:false ~pins:false () in
+  let lookalike = run ~probe:vendor ~declares:false ~pins:false () in
+  let unplaced = run ~unplaced:true ~probe:aliased ~declares:true ~pins:false () in
+  let undeclared_ok =
+    exited 1 undeclared && says diagnostic undeclared
+    && says (Utils.env_var_name pipeline_key) undeclared
+    && not (says "OCANNL_SCHEDULE_LOG_LAUNCHES" undeclared)
+  in
+  let declared_ok = exited 0 declared && not (says diagnostic declared) in
+  let pinned_ok = exited 0 pinned && not (says diagnostic pinned) in
+  let under_open_ok = exited 1 under_open && says diagnostic under_open in
+  let lookalike_ok = exited 0 lookalike && not (says diagnostic lookalike) in
+  let unplaced_ok =
+    exited 1 unplaced
+    && says "outside every named top-level value" unplaced
+    && says "gpu_schedule_min_parallel" unplaced
+  in
+  if not undeclared_ok then report "undeclared" undeclared;
+  if not declared_ok then report "declared" declared;
+  if not pinned_ok then report "pinned" pinned;
+  if not under_open_ok then report "under-open" under_open;
+  if not lookalike_ok then report "lookalike" lookalike;
+  if not unplaced_ok then report "unplaced" unplaced;
+  printf
+    "\n\
+     The schedule-pipeline rule (gh-ocannl-1149) is put to a tree of one `(test)` whose module\n\
+     names a value of a stand-in `Ir.Schedule`, which reads `%s` one call away\n\
+     and the execution-neutral launch trace directly. The arms differ in how the stanza answers\n\
+     for the key, in how the module is reached, and in one stray read in the stand-in.\n\n"
+    pipeline_key;
+  Verdict.p
+    "a test naming the pipeline is reported, with the key its value reaches through the module's \
+     own calls and without the execution-neutral one, when its stanza declares neither"
+    undeclared_ok;
+  Verdict.p "the same stanza declaring the key passes" declared_ok;
+  Verdict.p "and so does the same stanza pinning it with `setenv` around its run" pinned_ok;
+  Verdict.p "a value reached under `open Ir.Schedule` is a reference too" under_open_ok;
+  Verdict.p "another library's `Schedule` is not the pipeline, and asks for nothing" lookalike_ok;
+  Verdict.p
+    "a key the pipeline reads outside every named value is refused, not dropped from every \
+     requirement"
+    unplaced_ok;
+  try remove_tree root with Unix.Unix_error _ -> ()
+
 let () =
   match Array.to_list argv with
   | _ :: [ "--control" ] ->
@@ -4462,6 +4721,7 @@ let () =
       guard_control ();
       family_control ();
       inline_alias_control ();
+      pipeline_control ();
       (* Dune's repository-wide rule hands the same source to [main] as [./env_var_deps.ml] after a
          full build has materialized the local build-tree copy. Exercise that spelling here too: the
          manifest identity is repository-relative even when the file used to extract the diagnostics
