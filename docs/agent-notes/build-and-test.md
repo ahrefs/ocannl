@@ -1007,16 +1007,24 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   default schedule, and its keys (`gpu_schedule_block_size`, `gpu_fission_keep_mapping`,
   `schedule_fission`, …) are the ones flipped while debugging it; the hand lists drifted, and a
   `gpu_serial_lanes` run with `OCANNL_GPU_FISSION_KEEP_MAPPING` changed came back from the cache as a
-  pass (lukstafi/ocannl-staging#916). `Config_key_scan.top_level_key_reach` reads `schedule.ml`'s
-  literal `~arg_name` reads per top-level value, closed over the module's own calls in source order;
-  `env_var_deps` then requires every key a NAMED value reaches — through `Ir.Schedule`, an alias of
-  it or an `open` — of every rule running the program, `setenv` pins counting, `Execution_neutral`
-  keys (the launch trace) excepted. It over-reads where it errs: optional arguments a call supplies
-  are not modeled, so `default_gpu ~block_size:…` still asks for the block-size variable — a rerun
-  is the cost. Out of scope on purpose: a program reaching the pipeline only through
+  pass (lukstafi/ocannl-staging#916). `Config_key_scan.top_level_key_reach` reads `schedule.ml`
+  per top-level value: its literal `~arg_name` reads, its `Utils.settings.<key>` fields, and those of
+  everything it calls -- the module's own values in source order, a `Utils` settings predicate
+  through the scanner's `settings_predicates` table, and a `Module.value` of a sibling module of
+  `arrayjit/lib`, read the same way. Following the calls is what makes it the CLASS rather than a
+  list: `Ir.Schedule.apply` reaches `log_level` and `debug_log_from_routines` through
+  `Utils.debug_log_from_routines`, every `Utils.get_global_arg` reaches `profile`, and `Affine`
+  reaches `legality_crosscheck` -- review round 1 found the first of those by hand. `env_var_deps`
+  then requires every key a NAMED value reaches -- through `Ir.Schedule`, an alias of it or an
+  `open` -- of every rule running the program; `setenv` pins answer, and so does a `(universe)`
+  dependency, which no cache serves. Execution-neutral keys are asked for too: the launch trace
+  changes no golden, but a developer setting `OCANNL_SCHEDULE_LOG_LAUNCHES` needs the run to happen.
+  It over-reads where it errs: optional arguments a call supplies and local shadowing are not
+  modeled, so a rerun is the cost. Not followed: functors, functions passed as values, modules
+  outside `arrayjit/lib`. Out of scope on purpose: a program reaching the pipeline only through
   `Context.compile` (every compiled test), a library, and an executable no rule runs. The failure
   message lists the exact `(env_var …)` lines to add; the golden lists the derived key universe, so
-  a new key in `schedule.ml` shows up as a diff and as a failure on each stanza that reaches it.
+  a new key the pipeline reaches shows up as a diff and as a failure on each stanza that reaches it.
 - Dune roots at the OUTERMOST ancestor holding a `dune-workspace` (failing that, a `dune-project`)
   and ignores dot-directories, so from a worktree under `.claude/worktrees/` the main checkout wins
   and the worktree is invisible to dune: targeted commands fail with `Don't know about directory

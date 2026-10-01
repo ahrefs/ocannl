@@ -389,9 +389,11 @@ let raw_entries =
         "[scanner-refusal:9dc8db9d29efd1b85da8aff105b1aae8] tested module with";
         "[scanner-refusal:775f43c0a7dca22c07a091f603457c7a] another is reported";
         "[scanner-refusal:87104dd3758037b44d4f5c8979a42039] per-module alias listed";
-        "[scanner-refusal:a4e9678904be6202dd9290ba0ec5df48] without the execution-neutral";
-        "[scanner-refusal:7a8fa1b745bd7c6f15eb999ee3b17f57] same stanza declaring";
-        "[scanner-refusal:45395f20182e8b4db70fcc36f4ffa2fb] same stanza pinning";
+        "[scanner-refusal:7e6affeccdb27fbb0cb1f4badf37de1d] the execution-neutral trace";
+        "[scanner-refusal:f9582c73fb6a2f7fd49f75722410c4db] same stanza declaring";
+        "[scanner-refusal:e580cc4e7efaa931c01ab30fe3797e63] same stanza pinning";
+        "[scanner-refusal:3ffbb67fe1662db0e9bc1bfa8ef2b707] depending on universe";
+        "[scanner-refusal:6fdbbed3ca57cb0756ac35697e756f5a] Utils.settings";
         "[scanner-refusal:0a556db347940fc8afa67b95bbe681ad] Ir.Schedule";
         "[scanner-refusal:dfee69c1373134de53471c5591146cee] another library's Schedule";
         "[scanner-refusal:596c956b100d191f1322f23aea4b1186] pipeline reads outside";
@@ -717,7 +719,7 @@ let raw_direct_evidence =
        requirement: true" );
     ( "env_var_deps.ml:ae1b95995f2c4aa10cdeee699ccb3413",
       "a test naming the pipeline is reported, with the key its value reaches through the module's \
-       own calls and without the execution-neutral one, when its stanza declares neither: true" );
+       own calls and the execution-neutral trace key, when its stanza declares neither: true" );
     ( "env_var_deps.ml:9ad60261dbb2540d4d7e060be725ad4d",
       "a dynamic reach whose keys resolve to nothing is refused rather than passed over in \
        silence: true" );

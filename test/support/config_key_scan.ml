@@ -1389,10 +1389,31 @@ type key_reach = {
     changes; the cost of a miss is a stale result served as a pass.
 
     In source order, so a top-level name refers to the binding before it, as in OCaml, and a
-    [let rec] group is closed to its fixpoint. Reads through another module ([Utils.debug_log_…])
-    are that module's, and are not followed. *)
-let top_level_key_reach content =
+    [let rec] group is closed to its fixpoint. A QUALIFIED value -- [Utils.debug_log_from_routines],
+    [Low_level.f] -- contributes whatever [external_keys] answers for its path, after a top-level
+    [module X = Y] alias of this module has been expanded; the caller decides which modules it can
+    follow, since this function sees one file. *)
+let top_level_key_reach ?(external_keys = fun (_ : string list) -> []) content =
   let structure = structure_of content in
+  let aliases =
+    List.filter_map structure ~f:(fun item ->
+        match item.pstr_desc with
+        | Pstr_module
+            {
+              pmb_name = { txt = Some alias; _ };
+              pmb_expr = { pmod_desc = Pmod_ident { txt; _ }; _ };
+              _;
+            } ->
+            Option.map (flatten_module_path txt) ~f:(fun path -> (alias, path))
+        | _ -> None)
+  in
+  let expand = function
+    | head :: rest -> (
+        match List.Assoc.find aliases head ~equal:String.equal with
+        | Some path -> path @ rest
+        | None -> head :: rest)
+    | [] -> []
+  in
   let placed = ref (Set.empty (module Int)) in
   let direct_of expr =
     let keys = ref [] and names = ref [] in
@@ -1403,6 +1424,22 @@ let top_level_key_reach content =
         method! expression expr =
           (match expr.pexp_desc with
           | Pexp_ident { txt = Lident name; _ } -> names := name :: !names
+          | Pexp_ident { txt; _ } ->
+              Option.iter (flatten_module_path txt) ~f:(fun path ->
+                  keys := external_keys (expand path) @ !keys)
+          (* The record spelling of a read, recognised as {!settings_keys_in_source} recognises it:
+             a field of [Utils.settings] is named by its key. *)
+          | Pexp_field ({ pexp_desc = Pexp_ident { txt; _ }; _ }, { txt = field; _ }) -> (
+              match Option.map (flatten_module_path txt) ~f:expand with
+              | Some path
+                when List.length path >= 2
+                     && List.equal String.equal
+                          (List.drop path (List.length path - 2))
+                          [ "Utils"; "settings" ] ->
+                  Option.iter
+                    (List.last (flatten_longident field))
+                    ~f:(fun key -> keys := key :: !keys)
+              | _ -> ())
           | Pexp_apply (_, args) ->
               List.iter args ~f:(fun (lbl, arg) ->
                   if is_our_label lbl then (

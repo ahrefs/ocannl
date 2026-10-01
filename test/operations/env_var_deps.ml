@@ -743,15 +743,15 @@ let env_reader_home = "arrayjit/lib/utils.ml"
    `schedule.ml`, with the literal `~arg_name` reads it makes and those of the module's other values
    it names, transitively ([Sources.top_level_key_reach]). A source naming one of those values
    through `Ir.Schedule` -- directly, under an alias, or under an `open` -- puts its keys on every
-   rule that runs it. A key that changes nothing a run computes ([Utils.Execution_neutral], such as
-   the launch trace) is left out: a rerun for it would recompute the same golden. *)
+   rule that runs it. A qualified call out of `schedule.ml` is followed into the sibling module of
+   `arrayjit/lib` it names, by the same reading of that module, and a call of a `Utils` settings
+   predicate contributes the keys [Sources.settings_predicates] records for it: the run that
+   `Utils.debug_log_from_routines ()` switches serial depends on `log_level` as surely as on a
+   literal read. Execution-neutral keys are asked for like the rest -- the launch trace changes no
+   golden, but a developer setting `OCANNL_SCHEDULE_LOG_LAUNCHES` to read it needs the run to
+   happen. *)
 let pipeline_home = "arrayjit/lib/schedule.ml"
 let pipeline_module = [ "Ir"; "Schedule" ]
-
-let pipeline_relevant key =
-  match Utils.classify_config_key key with
-  | Some (Utils.Execution_neutral, _) -> false
-  | Some _ | None -> true
 
 (* Dune resolves aliases, module defaults, and action paths within the directory a stanza is applied
    to. Keep that descent in one place: checks plug into [checks], and this iterator hands every one
@@ -948,6 +948,43 @@ let main () =
     Set.of_list (module String) (List.map artifact_callers ~f:String.lowercase)
   in
   (* gh-ocannl-1149: the configuration keys a program reaches by NAMING the schedule pipeline. *)
+  (* The library's modules by the name its sources call them, each read once and only when a call
+     reaches it. OCaml admits no cycle between a library's modules, so the in-progress guard only
+     keeps a malformed tree from looping. *)
+  let pipeline_library = Stdlib.Filename.dirname pipeline_home in
+  let library_modules =
+    List.filter_map source_files ~f:(fun (path, on_disk) ->
+        if String.equal (Stdlib.Filename.dirname path) pipeline_library then
+          Some
+            ( String.capitalize (Stdlib.Filename.remove_extension (Stdlib.Filename.basename path)),
+              on_disk )
+        else None)
+  in
+  let module_reaches = Hashtbl.create (module String) in
+  let rec external_keys path =
+    match Sources.settings_predicate_keys path with
+    | Some keys when match path with [ "Utils"; _ ] -> true | _ -> false -> keys
+    | _ -> (
+        match path with
+        | [ module_name; value ] -> (
+            match module_reach module_name with
+            | Some reach ->
+                Option.value (List.Assoc.find reach value ~equal:String.equal) ~default:[]
+            | None -> [])
+        | _ -> [])
+  and module_reach module_name =
+    match Hashtbl.find module_reaches module_name with
+    | Some reach -> reach
+    | None ->
+        Option.map (List.Assoc.find library_modules module_name ~equal:String.equal)
+          ~f:(fun on_disk ->
+            Hashtbl.set module_reaches ~key:module_name ~data:(Some []);
+            let reach =
+              (Sources.top_level_key_reach ~external_keys (In_channel.read_all on_disk)).reach
+            in
+            Hashtbl.set module_reaches ~key:module_name ~data:(Some reach);
+            reach)
+  in
   let pipeline_entries =
     match List.Assoc.find source_files ~equal:String.equal pipeline_home with
     | None -> []
@@ -955,7 +992,7 @@ let main () =
         (* A source that does not parse RAISES here, and below: the build that compiles it has
            failed already, and a scan carrying on would report no reach for it -- the silent
            direction. *)
-        match Sources.top_level_key_reach (In_channel.read_all on_disk) with
+        match Sources.top_level_key_reach ~external_keys (In_channel.read_all on_disk) with
         | { Sources.reach; unplaced } ->
             List.iter unplaced ~f:(fun key ->
                 fail
@@ -966,10 +1003,7 @@ let main () =
                       function"
                      pipeline_home key
                      (String.concat ~sep:"." pipeline_module)));
-            List.filter_map reach ~f:(fun (name, keys) ->
-                match List.filter keys ~f:pipeline_relevant with
-                | [] -> None
-                | keys -> Some (name, keys)))
+            List.filter reach ~f:(fun (_, keys) -> not (List.is_empty keys)))
   in
   (* Per source, the entry points it names and the keys they reach, keyed the way `source_of` looks
      a module up. Narrowed textually first, as the sibling censuses are: the module has to be NAMED
@@ -2263,8 +2297,13 @@ let main () =
                           let unanswered =
                             List.filter pipeline_keys ~f:(fun key ->
                                 let var = Utils.env_var_name key in
+                                (* A rule depending on `(universe)` reruns on every build, so no
+                                   variable can serve it from the cache. *)
                                 List.exists runners ~f:(fun (deps, pins) ->
-                                    not (Scan.declares_env_var deps var || Set.mem pins var)))
+                                    not
+                                      (Scan.declares_env_var deps var || Set.mem pins var
+                                      || Option.value_map deps ~default:false
+                                           ~f:(List.exists ~f:depends_on_universe))))
                           in
                           let via =
                             String.concat ~sep:", "
@@ -2272,8 +2311,7 @@ let main () =
                                    String.concat ~sep:"." (pipeline_module @ [ entry ])))
                           in
                           if List.is_empty unanswered then
-                            pipeline_table :=
-                              (where, via, List.length pipeline_keys) :: !pipeline_table
+                            pipeline_table := (where, via) :: !pipeline_table
                           else
                             fail
                               (Printf.sprintf
@@ -2473,8 +2511,8 @@ let main () =
   |> List.iter ~f:(fun (where, var, source) -> printf "  %-38s %s (%s)\n" var where source);
   printf
     "\n\
-     Programs naming `%s`, the entry points they name, and how many configuration keys those\n\
-     reach -- every one declared or pinned by every rule running the program (gh-ocannl-1149):\n"
+     Programs naming `%s` and the entry points they name, every configuration key of which is\n\
+     declared or pinned by every rule running the program (gh-ocannl-1149):\n"
     (String.concat ~sep:"." pipeline_module);
   (* The universe the requirement is drawn from, so a key the pipeline starts reading is a
      reviewable diff -- and a `schedule.ml` this run was not handed empties it rather than retiring
@@ -2482,8 +2520,8 @@ let main () =
   printf "  (the keys its values reach: %s)\n"
     (String.concat ~sep:", "
        (List.concat_map pipeline_entries ~f:snd |> List.dedup_and_sort ~compare:String.compare));
-  List.sort !pipeline_table ~compare:(fun (a, _, _) (b, _, _) -> String.compare a b)
-  |> List.iter ~f:(fun (where, via, n) -> printf "  %s: %d keys via %s\n" where n via);
+  List.sort !pipeline_table ~compare:(fun (a, _) (b, _) -> String.compare a b)
+  |> List.iter ~f:(fun (where, via) -> printf "  %s: %s\n" where via);
   let stale_gateless =
     Set.diff (Set.of_list (module String) (List.map gateless_dirs ~f:fst)) !gateless_used
   in
@@ -4597,28 +4635,47 @@ let inline_alias_control () =
 
 (* gh-ocannl-1149's control. Every stanza naming the schedule pipeline now declares what it reaches,
    so a control drawn from the corpus would pass whether the rule decides anything or not; put to a
-   tree of its own, the same test is run under each way a rule can answer for the key.
+   tree of its own, the same test is run under each way a rule can answer for its keys.
 
-   The stand-in `schedule.ml` reads its key one call away from the value the test names, so the
-   requirement can only come from following the module's own calls; and it reads a key
-   [Utils.Execution_neutral] classifies, which no arm declares, so a requirement for it would fail
-   the arms that pass. *)
+   The stand-in `schedule.ml` reads each key in a way the derivation has to follow: one call away
+   from the value the test names, through a `Utils` settings predicate, and through a sibling module
+   of the library that reads a field of `Utils.settings`. It reads the launch trace too, which is
+   execution-neutral and asked for all the same: a developer setting it needs the run to happen. *)
 let pipeline_key = "gpu_schedule_block_size"
+let pipeline_trace_key = "schedule_log_launches"
+let pipeline_helper = "arrayjit/lib/helper.ml"
 
 let pipeline_stub ~unplaced =
   Printf.sprintf
     "let block () = Utils.get_global_arg ~arg_name:%S ~default:\"256\"\n\
-     let trace = lazy (Utils.get_global_flag ~default:false ~arg_name:\"schedule_log_launches\")\n\
+     let trace = lazy (Utils.get_global_flag ~default:false ~arg_name:%S)\n\
      let preset () = block ()\n\
      let launches () = Lazy.force trace\n\
+     let serial () = Utils.debug_log_from_routines ()\n\
+     let tiled () = Helper.width ()\n\
      %s"
-    pipeline_key
+    pipeline_key pipeline_trace_key
     (if unplaced then
        "let () = ignore (Utils.get_global_arg ~arg_name:\"gpu_schedule_min_parallel\" \
         ~default:\"64\")\n"
      else "")
 
-let pipeline_subject ~declares ~pins =
+(* How the stanza answers for the keys the aliased probe reaches. *)
+let pipeline_subject answer =
+  let vars = List.map [ pipeline_key; pipeline_trace_key ] ~f:Utils.env_var_name in
+  let deps =
+    match answer with
+    | `Declares -> String.concat (List.map vars ~f:(Printf.sprintf " (env_var %s)"))
+    | `Universe -> " (universe)"
+    | `Pins | `Neither -> ""
+  in
+  let action =
+    match answer with
+    | `Pins ->
+        Printf.sprintf "\n (action\n  (setenv %s 64\n   (setenv %s false\n    (run %%{test}))))"
+          (List.nth_exn vars 0) (List.nth_exn vars 1)
+    | `Declares | `Universe | `Neither -> ""
+  in
   Printf.sprintf
     "(test\n\
     \ ; ocannl-backend: none -- a synthetic control fixture, which runs on no device at all.\n\
@@ -4631,11 +4688,7 @@ let pipeline_subject ~declares ~pins =
     \ (deps ocannl_config (universe))\n\
     \ (action\n\
     \  (progn)))\n"
-    (if declares then Printf.sprintf " (env_var %s)" (Utils.env_var_name pipeline_key) else "")
-    (if pins then
-       Printf.sprintf "\n (action\n  (setenv %s 64\n   (run %%{test})))"
-         (Utils.env_var_name pipeline_key)
-     else "")
+    deps action
 
 let pipeline_control () =
   let exe =
@@ -4647,36 +4700,50 @@ let pipeline_control () =
   let context = control_context () in
   List.iter context ~f:(fun (file, content) ->
       write_file (Stdlib.Filename.concat root file) content);
-  let paths = "t/dune" :: "t/probe.ml" :: pipeline_home :: List.map context ~f:fst in
-  let run ?(unplaced = false) ~probe ~declares ~pins () =
+  write_file
+    (Stdlib.Filename.concat root pipeline_helper)
+    "let width () = Utils.settings.large_models\n";
+  let paths =
+    "t/dune" :: "t/probe.ml" :: pipeline_home :: pipeline_helper :: List.map context ~f:fst
+  in
+  let run ?(unplaced = false) ~probe answer =
     write_file (Stdlib.Filename.concat root pipeline_home) (pipeline_stub ~unplaced);
     write_file (Stdlib.Filename.concat root "t/probe.ml") probe;
-    write_file (Stdlib.Filename.concat root "t/dune") (pipeline_subject ~declares ~pins);
+    write_file (Stdlib.Filename.concat root "t/dune") (pipeline_subject answer);
     run_checker ~root ~exe ("." :: paths)
   in
   let aliased = "module S = Ir.Schedule\nlet () = ignore (S.preset ()); ignore (S.launches ())\n" in
   let opened = "open Ir.Schedule\nlet () = ignore (preset ())\n" in
   let vendor = "let () = ignore (Vendor.Schedule.preset ())\n" in
+  let across = "let () = ignore (Ir.Schedule.serial ()); ignore (Ir.Schedule.tiled ())\n" in
   let report label (status, text) =
     eprintf "the pipeline control's %s run %s. Its captured output:\n%s\n" label
       (describe_status status) text
   in
   let exited n (status, _) = match status with Unix.WEXITED m -> m = n | _ -> false in
   let says substring (_, text) = String.is_substring text ~substring in
+  let names key result = says (Utils.env_var_name key) result in
   let diagnostic = "how a debugging run of the default schedule goes silently stale" in
-  let undeclared = run ~probe:aliased ~declares:false ~pins:false () in
-  let declared = run ~probe:aliased ~declares:true ~pins:false () in
-  let pinned = run ~probe:aliased ~declares:false ~pins:true () in
-  let under_open = run ~probe:opened ~declares:false ~pins:false () in
-  let lookalike = run ~probe:vendor ~declares:false ~pins:false () in
-  let unplaced = run ~unplaced:true ~probe:aliased ~declares:true ~pins:false () in
+  let undeclared = run ~probe:aliased `Neither in
+  let declared = run ~probe:aliased `Declares in
+  let pinned = run ~probe:aliased `Pins in
+  let universe = run ~probe:aliased `Universe in
+  let crossing = run ~probe:across `Neither in
+  let under_open = run ~probe:opened `Neither in
+  let lookalike = run ~probe:vendor `Neither in
+  let unplaced = run ~unplaced:true ~probe:aliased `Declares in
   let undeclared_ok =
-    exited 1 undeclared && says diagnostic undeclared
-    && says (Utils.env_var_name pipeline_key) undeclared
-    && not (says "OCANNL_SCHEDULE_LOG_LAUNCHES" undeclared)
+    exited 1 undeclared && says diagnostic undeclared && names pipeline_key undeclared
+    && names pipeline_trace_key undeclared
   in
   let declared_ok = exited 0 declared && not (says diagnostic declared) in
   let pinned_ok = exited 0 pinned && not (says diagnostic pinned) in
+  let universe_ok = exited 0 universe && not (says diagnostic universe) in
+  let crossing_ok =
+    exited 1 crossing && says diagnostic crossing && names "log_level" crossing
+    && names "debug_log_from_routines" crossing
+    && names "large_models" crossing
+  in
   let under_open_ok = exited 1 under_open && says diagnostic under_open in
   let lookalike_ok = exited 0 lookalike && not (says diagnostic lookalike) in
   let unplaced_ok =
@@ -4687,22 +4754,30 @@ let pipeline_control () =
   if not undeclared_ok then report "undeclared" undeclared;
   if not declared_ok then report "declared" declared;
   if not pinned_ok then report "pinned" pinned;
+  if not universe_ok then report "universe" universe;
+  if not crossing_ok then report "crossing" crossing;
   if not under_open_ok then report "under-open" under_open;
   if not lookalike_ok then report "lookalike" lookalike;
   if not unplaced_ok then report "unplaced" unplaced;
   printf
     "\n\
      The schedule-pipeline rule (gh-ocannl-1149) is put to a tree of one `(test)` whose module\n\
-     names a value of a stand-in `Ir.Schedule`, which reads `%s` one call away\n\
-     and the execution-neutral launch trace directly. The arms differ in how the stanza answers\n\
-     for the key, in how the module is reached, and in one stray read in the stand-in.\n\n"
+     names values of a stand-in `Ir.Schedule`, which reads `%s` one call away, the\n\
+     launch trace directly, a settings predicate of `Utils`, and a sibling module's settings field.\n\
+     The arms differ in how the stanza answers for the keys, in which values the module names and\n\
+     how, and in one stray read in the stand-in.\n\n"
     pipeline_key;
   Verdict.p
     "a test naming the pipeline is reported, with the key its value reaches through the module's \
-     own calls and without the execution-neutral one, when its stanza declares neither"
+     own calls and the execution-neutral trace key, when its stanza declares neither"
     undeclared_ok;
-  Verdict.p "the same stanza declaring the key passes" declared_ok;
-  Verdict.p "and so does the same stanza pinning it with `setenv` around its run" pinned_ok;
+  Verdict.p "the same stanza declaring the keys passes" declared_ok;
+  Verdict.p "and so does the same stanza pinning them with `setenv` around its run" pinned_ok;
+  Verdict.p "and so does one depending on `(universe)`, which no cache serves" universe_ok;
+  Verdict.p
+    "keys read through a `Utils` settings predicate and through a sibling module's \
+     `Utils.settings` field are followed and asked for"
+    crossing_ok;
   Verdict.p "a value reached under `open Ir.Schedule` is a reference too" under_open_ok;
   Verdict.p "another library's `Schedule` is not the pipeline, and asks for nothing" lookalike_ok;
   Verdict.p

@@ -121,13 +121,16 @@ a rule whose alias names one module and whose run tests another is reported: tru
 a per-module alias listed in the `runtest` aggregate is reported as a double run: true
 
 The schedule-pipeline rule (gh-ocannl-1149) is put to a tree of one `(test)` whose module
-names a value of a stand-in `Ir.Schedule`, which reads `gpu_schedule_block_size` one call away
-and the execution-neutral launch trace directly. The arms differ in how the stanza answers
-for the key, in how the module is reached, and in one stray read in the stand-in.
+names values of a stand-in `Ir.Schedule`, which reads `gpu_schedule_block_size` one call away, the
+launch trace directly, a settings predicate of `Utils`, and a sibling module's settings field.
+The arms differ in how the stanza answers for the keys, in which values the module names and
+how, and in one stray read in the stand-in.
 
-a test naming the pipeline is reported, with the key its value reaches through the module's own calls and without the execution-neutral one, when its stanza declares neither: true
-the same stanza declaring the key passes: true
-and so does the same stanza pinning it with `setenv` around its run: true
+a test naming the pipeline is reported, with the key its value reaches through the module's own calls and the execution-neutral trace key, when its stanza declares neither: true
+the same stanza declaring the keys passes: true
+and so does the same stanza pinning them with `setenv` around its run: true
+and so does one depending on `(universe)`, which no cache serves: true
+keys read through a `Utils` settings predicate and through a sibling module's `Utils.settings` field are followed and asked for: true
 a value reached under `open Ir.Schedule` is a reference too: true
 another library's `Schedule` is not the pipeline, and asks for nothing: true
 a key the pipeline reads outside every named value is refused, not dropped from every requirement: true
@@ -273,9 +276,11 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:9dc8db9d29efd1b85da8aff105b1aae8] tested module with
   [scanner-refusal:775f43c0a7dca22c07a091f603457c7a] another is reported
   [scanner-refusal:87104dd3758037b44d4f5c8979a42039] per-module alias listed
-  [scanner-refusal:a4e9678904be6202dd9290ba0ec5df48] without the execution-neutral
-  [scanner-refusal:7a8fa1b745bd7c6f15eb999ee3b17f57] same stanza declaring
-  [scanner-refusal:45395f20182e8b4db70fcc36f4ffa2fb] same stanza pinning
+  [scanner-refusal:7e6affeccdb27fbb0cb1f4badf37de1d] the execution-neutral trace
+  [scanner-refusal:f9582c73fb6a2f7fd49f75722410c4db] same stanza declaring
+  [scanner-refusal:e580cc4e7efaa931c01ab30fe3797e63] same stanza pinning
+  [scanner-refusal:3ffbb67fe1662db0e9bc1bfa8ef2b707] depending on universe
+  [scanner-refusal:6fdbbed3ca57cb0756ac35697e756f5a] Utils.settings
   [scanner-refusal:0a556db347940fc8afa67b95bbe681ad] Ir.Schedule
   [scanner-refusal:dfee69c1373134de53471c5591146cee] another library's Schedule
   [scanner-refusal:596c956b100d191f1322f23aea4b1186] pipeline reads outside
