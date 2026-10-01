@@ -1533,12 +1533,15 @@ dune_refusal() { # FILE [PRELUDE BYTES]
 # one: fleet-worker.sh refused (exit 1: no slot or GPU token before the
 # deadline, a measurement holding the box, a spec it could not read) or could
 # not read the anchor's registry (exit 4), and says so in a line of its own --
-# while a run it admitted logs the slot it holds before dune starts. A refusal
-# line with no admission is the slot's verdict, not the suite's.
+# while a run it admitted logs the admission before dune starts: the slot it
+# holds, the enclosing slot it nests in, or the live measurement hold it runs
+# under (`execution hold --request <id> -- ...` exports FLEET_MEASUREMENT_HELD,
+# and the slot then admits the batch inside it; lukstafi/ludics-lite#480). A
+# refusal line with no admission is the slot's verdict, not the suite's.
 slot_refusal() { # <run dir>; 0 iff the slot was refused and dune never ran
   [ -f "$1/slot" ] || return 1
   grep -Eq '^EXECUTION SLOT (REFUSED|UNREACHABLE) ' "$1/log" 2>/dev/null || return 1
-  ! grep -Eq '^EXECUTION SLOT [^ ]+: (slot [0-9]+ of [0-9]+.* held for|inside slot [0-9]+ of [0-9]+)' "$1/log"
+  ! grep -Eq '^EXECUTION SLOT [^ ]+: (slot [0-9]+ of [0-9]+.* held for|inside slot [0-9]+ of [0-9]+|inside measurement [^ ]+)' "$1/log"
 }
 
 digest_rc=
