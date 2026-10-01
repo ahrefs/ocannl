@@ -393,7 +393,7 @@ let raw_entries =
         "[scanner-refusal:f9582c73fb6a2f7fd49f75722410c4db] same stanza declaring";
         "[scanner-refusal:e580cc4e7efaa931c01ab30fe3797e63] same stanza pinning";
         "[scanner-refusal:3ffbb67fe1662db0e9bc1bfa8ef2b707] depending on universe";
-        "[scanner-refusal:6fdbbed3ca57cb0756ac35697e756f5a] Utils.settings";
+        "[scanner-refusal:0ef14060bb3652683a114deb420a5f42] Utils.settings";
         "[scanner-refusal:0a556db347940fc8afa67b95bbe681ad] Ir.Schedule";
         "[scanner-refusal:dfee69c1373134de53471c5591146cee] another library's Schedule";
         "[scanner-refusal:596c956b100d191f1322f23aea4b1186] pipeline reads outside";

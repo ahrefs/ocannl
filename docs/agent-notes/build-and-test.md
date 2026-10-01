@@ -1010,8 +1010,9 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   pass (lukstafi/ocannl-staging#916). `Config_key_scan.top_level_key_reach` reads `schedule.ml`
   per top-level value: its literal `~arg_name` reads, its `Utils.settings.<key>` fields, and those of
   everything it calls -- the module's own values in source order, a `Utils` settings predicate
-  through the scanner's `settings_predicates` table, and a `Module.value` of a sibling module of
-  `arrayjit/lib`, read the same way. Following the calls is what makes it the CLASS rather than a
+  through the scanner's `settings_predicates` table, and a `Module.value` (or `Module.Sub.value`)
+  of a sibling module of `arrayjit/lib`, read the same way; a `Utils.settings` field stands for
+  every key its `restore_settings` assignment reads, so `big_models` comes with `large_models`. Following the calls is what makes it the CLASS rather than a
   list: `Ir.Schedule.apply` reaches `log_level` and `debug_log_from_routines` through
   `Utils.debug_log_from_routines`, every `Utils.get_global_arg` reaches `profile`, and `Affine`
   reaches `legality_crosscheck` -- review round 1 found the first of those by hand. `env_var_deps`
@@ -1020,8 +1021,9 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   dependency, which no cache serves. Execution-neutral keys are asked for too: the launch trace
   changes no golden, but a developer setting `OCANNL_SCHEDULE_LOG_LAUNCHES` needs the run to happen.
   It over-reads where it errs: optional arguments a call supplies and local shadowing are not
-  modeled, so a rerun is the cost. Not followed: functors, functions passed as values, modules
-  outside `arrayjit/lib`. Out of scope on purpose: a program reaching the pipeline only through
+  modeled, so a rerun is the cost. Not followed: functor bodies, functions passed as values,
+  modules outside `arrayjit/lib`, and reads the backend makes on its own while compiling
+  (`Backends.compile` consulting `Schedule.log_launches`) -- that is the `Context.compile` route. Out of scope on purpose: a program reaching the pipeline only through
   `Context.compile` (every compiled test), a library, and an executable no rule runs. The failure
   message lists the exact `(env_var …)` lines to add; the golden lists the derived key universe, so
   a new key the pipeline reaches shows up as a diff and as a failure on each stanza that reaches it.

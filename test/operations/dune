@@ -437,7 +437,8 @@
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
   (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL))
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_BIG_MODELS))
  (modules hosted_constant_fill)
  (libraries base ocannl arrayjit.verdict ll_test)
  (preprocess
@@ -1586,7 +1587,8 @@
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
   (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL))
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_BIG_MODELS))
  (modules scan_loop)
  (libraries base ocannl stdio arrayjit.verdict ll_test))
 
@@ -3399,7 +3401,8 @@
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
   (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL))
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_BIG_MODELS))
  (modules cpu_vectorized)
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
@@ -3432,7 +3435,8 @@
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
   (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL))
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_BIG_MODELS))
  (modules vec_signed_zero)
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
@@ -3460,7 +3464,8 @@
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
   (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL))
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_BIG_MODELS))
  (modules narrow_storage_compute)
  (libraries base ocannl stdio arrayjit.verdict test_utils)
  (preprocess
@@ -3488,7 +3493,8 @@
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
   (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL))
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_BIG_MODELS))
  (modules accum_width)
  (libraries base ocannl stdio pprint arrayjit.verdict ll_test test_utils)
  (preprocess
@@ -3543,7 +3549,8 @@
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
   (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL))
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_BIG_MODELS))
  (modules cpu_simd_reduction)
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
@@ -3563,7 +3570,8 @@
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
   (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL))
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_BIG_MODELS))
  (modules cpu_parallel)
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
@@ -3598,7 +3606,9 @@
   (env_var OCANNL_LARGE_MODELS)
   (env_var OCANNL_LEGALITY_CROSSCHECK)
   (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_PROFILE))
+  (env_var OCANNL_PROFILE)
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
  (modules gpu_serial_lanes)
  (libraries base ocannl stdio arrayjit.verdict ll_test test_utils)
  (preprocess
@@ -3620,7 +3630,9 @@
   (env_var OCANNL_LARGE_MODELS)
   (env_var OCANNL_LEGALITY_CROSSCHECK)
   (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_PROFILE))
+  (env_var OCANNL_PROFILE)
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
  (modules gpu_small_leading_axis)
  (libraries base ocannl arrayjit.verdict ll_test))
 
@@ -3646,7 +3658,9 @@
   (env_var OCANNL_LARGE_MODELS)
   (env_var OCANNL_LEGALITY_CROSSCHECK)
   (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_PROFILE))
+  (env_var OCANNL_PROFILE)
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
  (modules gpu_fission_mapping)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
@@ -3668,7 +3682,9 @@
   (env_var OCANNL_LARGE_MODELS)
   (env_var OCANNL_LEGALITY_CROSSCHECK)
   (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_PROFILE))
+  (env_var OCANNL_PROFILE)
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
  (modules gpu_parallel_prefix)
  (libraries base stdio ocannl arrayjit.verdict ll_test))
 
@@ -3689,7 +3705,9 @@
   (env_var OCANNL_LARGE_MODELS)
   (env_var OCANNL_LEGALITY_CROSSCHECK)
   (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_PROFILE))
+  (env_var OCANNL_PROFILE)
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
  (modules schedule_ops)
  (libraries base ocannl stdio pprint arrayjit.verdict test_utils ll_test)
  (preprocess
@@ -3705,7 +3723,8 @@
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
   (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL))
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_BIG_MODELS))
  (modules autotune_smoke)
  (libraries base ocannl stdio arrayjit.verdict)
  (preprocess
@@ -3732,7 +3751,9 @@
   (env_var OCANNL_LARGE_MODELS)
   (env_var OCANNL_LEGALITY_CROSSCHECK)
   (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_PROFILE))
+  (env_var OCANNL_PROFILE)
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
  (modules autotune_serial_baseline)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
@@ -3818,7 +3839,9 @@
   (env_var OCANNL_LARGE_MODELS)
   (env_var OCANNL_LEGALITY_CROSSCHECK)
   (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_PROFILE))
+  (env_var OCANNL_PROFILE)
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
  (modules fission_equivalence)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
@@ -3852,7 +3875,9 @@
   (env_var OCANNL_LARGE_MODELS)
   (env_var OCANNL_LEGALITY_CROSSCHECK)
   (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_PROFILE))
+  (env_var OCANNL_PROFILE)
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
  (modules autotune_privatize)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
@@ -3890,7 +3915,8 @@
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
   (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL))
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_BIG_MODELS))
  (modules autotune_scope_menu)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
@@ -3937,6 +3963,8 @@
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
   (env_var OCANNL_LARGE_MODELS)
   (env_var OCANNL_LEGALITY_CROSSCHECK)
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES)
   (env_var OCANNL_CC_VECTOR_BYTES))
  ; Keep execution off @default as well as @runtest; @check still compiles the source.
  (action
@@ -3967,7 +3995,8 @@
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
   (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL))
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_BIG_MODELS))
  ; Keep execution off @default as well as @runtest; @check still compiles the source.
  (action
   (no-infer
@@ -4006,7 +4035,9 @@
   (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
   (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LEGALITY_CROSSCHECK))
+  (env_var OCANNL_LEGALITY_CROSSCHECK)
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
  ; Keep execution off @default as well as @runtest; @check still compiles the source.
  (action
   (no-infer
@@ -4056,7 +4087,9 @@
   (env_var OCANNL_LARGE_MODELS)
   (env_var OCANNL_LEGALITY_CROSSCHECK)
   (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_PROFILE))
+  (env_var OCANNL_PROFILE)
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
  (modules fission_schedule)
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
@@ -4072,7 +4105,10 @@
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
   (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL))
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_PROFILE)
+  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
  (modules op_legality)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
@@ -4093,7 +4129,9 @@
   (env_var OCANNL_LARGE_MODELS)
   (env_var OCANNL_LEGALITY_CROSSCHECK)
   (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_PROFILE))
+  (env_var OCANNL_PROFILE)
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
  (modules scratch_value_variance)
  (libraries base ocannl stdio arrayjit.verdict)
  (preprocess
@@ -4110,7 +4148,8 @@
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
   (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL))
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_BIG_MODELS))
  (modules schedule_smem_matmul)
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
@@ -4127,7 +4166,8 @@
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
   (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL))
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_BIG_MODELS))
  (modules schedule_batched_mma)
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
@@ -4149,7 +4189,9 @@
   (env_var OCANNL_LARGE_MODELS)
   (env_var OCANNL_LEGALITY_CROSSCHECK)
   (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_PROFILE))
+  (env_var OCANNL_PROFILE)
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
  (modules launch_predicate_parity)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
@@ -4172,7 +4214,9 @@
   (env_var OCANNL_LARGE_MODELS)
   (env_var OCANNL_LEGALITY_CROSSCHECK)
   (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_PROFILE))
+  (env_var OCANNL_PROFILE)
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
  (modules launch_dim_gate)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
@@ -4189,7 +4233,8 @@
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
   (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL))
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_BIG_MODELS))
  (modules schedule_batch_grid)
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
@@ -4233,7 +4278,8 @@
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
   (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL))
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_BIG_MODELS))
  (modules schedule_mma_matmul)
  (libraries
   base
@@ -4292,7 +4338,8 @@
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
   (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL))
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_BIG_MODELS))
  (modules schedule_pipelined_matmul)
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
@@ -4309,7 +4356,8 @@
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
   (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL))
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_BIG_MODELS))
  (modules schedule_ldmatrix_matmul)
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
@@ -4326,7 +4374,8 @@
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
   (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL))
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_BIG_MODELS))
  (modules schedule_swizzle_matmul)
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
@@ -4343,7 +4392,8 @@
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
   (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL))
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_BIG_MODELS))
  (modules schedule_register_matmul)
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
@@ -4360,7 +4410,8 @@
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
   (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL))
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_BIG_MODELS))
  (modules schedule_cpu_pack_matmul)
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
@@ -4377,7 +4428,8 @@
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
   (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL))
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_BIG_MODELS))
  (modules schedule_pack_mma_matmul)
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
@@ -4395,7 +4447,8 @@
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
   (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL))
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_BIG_MODELS))
  (modules tile_mma_narrow)
  (libraries base ocannl stdio unix arrayjit.verdict test_utils ll_test)
  (preprocess
@@ -4421,7 +4474,8 @@
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
   (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL))
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_BIG_MODELS))
  (modules mma_tensorization_label)
  (libraries base ocannl arrayjit.autotune stdio arrayjit.verdict ll_test)
  (preprocess
@@ -4439,7 +4493,8 @@
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
   (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL))
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_BIG_MODELS))
  (modules tile_mma_geometry)
  (libraries
   base
@@ -4464,7 +4519,8 @@
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
   (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL))
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_BIG_MODELS))
  (modules tile_mma_declines)
  (libraries
   base
@@ -4488,7 +4544,8 @@
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
   (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL))
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_BIG_MODELS))
  (modules schedule_packed_constants)
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
@@ -4626,7 +4683,8 @@
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
   (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL))
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_BIG_MODELS))
  (modules schedule_epilogue_fusion)
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
@@ -4642,7 +4700,8 @@
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
   (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL))
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_BIG_MODELS))
  (modules schedule_partition)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
@@ -4659,7 +4718,8 @@
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
   (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL))
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_BIG_MODELS))
  (modules schedule_pad)
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
@@ -4675,7 +4735,8 @@
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
   (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL))
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_BIG_MODELS))
  (modules clamped_window_pool)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
@@ -4698,7 +4759,9 @@
   (env_var OCANNL_LARGE_MODELS)
   (env_var OCANNL_LEGALITY_CROSSCHECK)
   (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_PROFILE))
+  (env_var OCANNL_PROFILE)
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
  (modules schedule_conv_gemm)
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
@@ -4733,6 +4796,8 @@
   (env_var OCANNL_LEGALITY_CROSSCHECK)
   (env_var OCANNL_LOG_LEVEL)
   (env_var OCANNL_PROFILE)
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES)
   (env_var OCANNL_AUTOTUNE_REGISTER_TILE_RM_TWIN)
   (env_var OCANNL_CC_GRID_PRIVATE_BYTES_CAP)
   (env_var OCANNL_CC_PARALLEL_CHUNKS)
@@ -4771,7 +4836,9 @@
   (env_var OCANNL_LARGE_MODELS)
   (env_var OCANNL_LEGALITY_CROSSCHECK)
   (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_PROFILE))
+  (env_var OCANNL_PROFILE)
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
  (modules conv_detection_boundary)
  (libraries base ocannl stdio arrayjit.verdict)
  (preprocess
@@ -5298,7 +5365,9 @@
   (env_var OCANNL_LARGE_MODELS)
   (env_var OCANNL_LEGALITY_CROSSCHECK)
   (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_PROFILE))
+  (env_var OCANNL_PROFILE)
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
  (modules schedule_split_reduce)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
@@ -5321,7 +5390,9 @@
   (env_var OCANNL_LARGE_MODELS)
   (env_var OCANNL_LEGALITY_CROSSCHECK)
   (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_PROFILE))
+  (env_var OCANNL_PROFILE)
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
  (modules autotune_split_reduce)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
@@ -5372,6 +5443,7 @@
   (env_var OCANNL_PROFILE)
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
   (env_var OCANNL_LARGE_MODELS)
+  (env_var OCANNL_BIG_MODELS)
   (env_var OCANNL_CC_VECTOR_BYTES))
  (modules epilogue_fusion_mma_seeds)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
@@ -5943,6 +6015,7 @@
   (env_var OCANNL_PROFILE)
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
   (env_var OCANNL_LARGE_MODELS)
+  (env_var OCANNL_BIG_MODELS)
   (env_var OCANNL_DEFAULT_PREC))
  (modules reduction_forms)
  (libraries base ocannl stdio arrayjit.verdict ll_test test_utils)
@@ -5962,6 +6035,7 @@
   (env_var OCANNL_PROFILE)
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
   (env_var OCANNL_LARGE_MODELS)
+  (env_var OCANNL_BIG_MODELS)
   (env_var OCANNL_CC_VECTOR_BYTES))
  (modules schedule_contraction_nest)
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
@@ -6804,7 +6878,8 @@
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
   (env_var OCANNL_LARGE_MODELS)
-  (env_var OCANNL_LOG_LEVEL))
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_BIG_MODELS))
  (modules online_softmax_block)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
@@ -6859,7 +6934,9 @@
   (env_var OCANNL_LARGE_MODELS)
   (env_var OCANNL_LEGALITY_CROSSCHECK)
   (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_PROFILE))
+  (env_var OCANNL_PROFILE)
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
  (modules online_softmax_block_mma)
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
@@ -6887,6 +6964,8 @@
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
   (env_var OCANNL_LARGE_MODELS)
   (env_var OCANNL_LEGALITY_CROSSCHECK)
-  (env_var OCANNL_PROFILE))
+  (env_var OCANNL_PROFILE)
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
  (modules gpu_lane_reduction)
  (libraries base ocannl stdio arrayjit.verdict ll_test test_utils))

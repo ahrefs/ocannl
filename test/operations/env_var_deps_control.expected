@@ -122,7 +122,8 @@ a per-module alias listed in the `runtest` aggregate is reported as a double run
 
 The schedule-pipeline rule (gh-ocannl-1149) is put to a tree of one `(test)` whose module
 names values of a stand-in `Ir.Schedule`, which reads `gpu_schedule_block_size` one call away, the
-launch trace directly, a settings predicate of `Utils`, and a sibling module's settings field.
+launch trace directly, a settings predicate of `Utils`, and a settings field two keys set, from
+a submodule of a sibling module.
 The arms differ in how the stanza answers for the keys, in which values the module names and
 how, and in one stray read in the stand-in.
 
@@ -130,7 +131,7 @@ a test naming the pipeline is reported, with the key its value reaches through t
 the same stanza declaring the keys passes: true
 and so does the same stanza pinning them with `setenv` around its run: true
 and so does one depending on `(universe)`, which no cache serves: true
-keys read through a `Utils` settings predicate and through a sibling module's `Utils.settings` field are followed and asked for: true
+keys read through a `Utils` settings predicate, and through a `Utils.settings` field read in a sibling module's submodule -- with the alias that also sets the field -- are followed and asked for: true
 a value reached under `open Ir.Schedule` is a reference too: true
 another library's `Schedule` is not the pipeline, and asks for nothing: true
 a key the pipeline reads outside every named value is refused, not dropped from every requirement: true
@@ -280,7 +281,7 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:f9582c73fb6a2f7fd49f75722410c4db] same stanza declaring
   [scanner-refusal:e580cc4e7efaa931c01ab30fe3797e63] same stanza pinning
   [scanner-refusal:3ffbb67fe1662db0e9bc1bfa8ef2b707] depending on universe
-  [scanner-refusal:6fdbbed3ca57cb0756ac35697e756f5a] Utils.settings
+  [scanner-refusal:0ef14060bb3652683a114deb420a5f42] Utils.settings
   [scanner-refusal:0a556db347940fc8afa67b95bbe681ad] Ir.Schedule
   [scanner-refusal:dfee69c1373134de53471c5591146cee] another library's Schedule
   [scanner-refusal:596c956b100d191f1322f23aea4b1186] pipeline reads outside

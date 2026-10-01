@@ -167,7 +167,9 @@
   (env_var OCANNL_LARGE_MODELS)
   (env_var OCANNL_LEGALITY_CROSSCHECK)
   (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_PROFILE))
+  (env_var OCANNL_PROFILE)
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
  (libraries base ocannl stdio arrayjit.verdict)
  (preprocess
   (pps ppx_here ppx_ocannl)))

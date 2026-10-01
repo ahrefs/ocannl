@@ -744,12 +744,19 @@ let env_reader_home = "arrayjit/lib/utils.ml"
    it names, transitively ([Sources.top_level_key_reach]). A source naming one of those values
    through `Ir.Schedule` -- directly, under an alias, or under an `open` -- puts its keys on every
    rule that runs it. A qualified call out of `schedule.ml` is followed into the sibling module of
-   `arrayjit/lib` it names, by the same reading of that module, and a call of a `Utils` settings
-   predicate contributes the keys [Sources.settings_predicates] records for it: the run that
-   `Utils.debug_log_from_routines ()` switches serial depends on `log_level` as surely as on a
-   literal read. Execution-neutral keys are asked for like the rest -- the launch trace changes no
-   golden, but a developer setting `OCANNL_SCHEDULE_LOG_LAUNCHES` to read it needs the run to
-   happen. *)
+   `arrayjit/lib` it names -- a nested submodule of it included -- by the same reading of that
+   module, and a call of a `Utils` settings predicate contributes the keys
+   [Sources.settings_predicates] records for it: the run that `Utils.debug_log_from_routines ()`
+   switches serial depends on `log_level` as surely as on a literal read. A field of
+   `Utils.settings` is answered for by every key its `restore_settings` assignment reads, a
+   compatibility alias included.
+
+   What is followed is calls OUT of the values a test names. A key the backend reads on its own
+   while compiling -- `Backends.compile` consulting `Schedule.log_launches`, say -- is a read every
+   compiled program makes, which is the `Context.compile` route this rule leaves out of scope; the
+   wider class is gh-ocannl-1149's remainder. Execution-neutral keys are asked for like the rest --
+   the launch trace changes no golden, but a developer setting `OCANNL_SCHEDULE_LOG_LAUNCHES` to
+   read it needs the run to happen. *)
 let pipeline_home = "arrayjit/lib/schedule.ml"
 let pipeline_module = [ "Ir"; "Schedule" ]
 
@@ -960,16 +967,31 @@ let main () =
               on_disk )
         else None)
   in
+  (* A field of `Utils.settings` is answered for by every key its `restore_settings` assignment
+     reads, so a compatibility alias (`big_models` for `large_models`) is asked for beside the
+     key. *)
+  let settings_initializers =
+    match List.Assoc.find library_modules "Utils" ~equal:String.equal with
+    | Some on_disk -> Sources.settings_field_initializers (In_channel.read_all on_disk)
+    | None -> []
+  in
+  let settings_field_keys field =
+    match List.Assoc.find settings_initializers field ~equal:String.equal with
+    | Some (_ :: _ as keys) -> keys
+    | Some [] | None -> [ field ]
+  in
   let module_reaches = Hashtbl.create (module String) in
   let rec external_keys path =
     match Sources.settings_predicate_keys path with
     | Some keys when match path with [ "Utils"; _ ] -> true | _ -> false -> keys
     | _ -> (
         match path with
-        | [ module_name; value ] -> (
+        | module_name :: (_ :: _ as value) -> (
             match module_reach module_name with
             | Some reach ->
-                Option.value (List.Assoc.find reach value ~equal:String.equal) ~default:[]
+                Option.value
+                  (List.Assoc.find reach (String.concat ~sep:"." value) ~equal:String.equal)
+                  ~default:[]
             | None -> [])
         | _ -> [])
   and module_reach module_name =
@@ -980,7 +1002,9 @@ let main () =
           ~f:(fun on_disk ->
             Hashtbl.set module_reaches ~key:module_name ~data:(Some []);
             let reach =
-              (Sources.top_level_key_reach ~external_keys (In_channel.read_all on_disk)).reach
+              (Sources.top_level_key_reach ~external_keys ~settings_field_keys
+                 (In_channel.read_all on_disk))
+                .reach
             in
             Hashtbl.set module_reaches ~key:module_name ~data:(Some reach);
             reach)
@@ -992,7 +1016,10 @@ let main () =
         (* A source that does not parse RAISES here, and below: the build that compiles it has
            failed already, and a scan carrying on would report no reach for it -- the silent
            direction. *)
-        match Sources.top_level_key_reach ~external_keys (In_channel.read_all on_disk) with
+        match
+          Sources.top_level_key_reach ~external_keys ~settings_field_keys
+            (In_channel.read_all on_disk)
+        with
         | { Sources.reach; unplaced } ->
             List.iter unplaced ~f:(fun key ->
                 fail
@@ -1022,8 +1049,10 @@ let main () =
             match Sources.module_references_in_source content ~paths with
             | [] -> None
             | spellings ->
+                let prefix = String.concat ~sep:"." pipeline_module ^ "." in
                 let names =
-                  List.map spellings ~f:(fun s -> List.last_exn (String.split s ~on:'.'))
+                  List.map spellings ~f:(fun s ->
+                      Option.value (String.chop_prefix s ~prefix) ~default:s)
                 in
                 let keys =
                   List.concat_map names ~f:(fun name ->
@@ -4638,9 +4667,11 @@ let inline_alias_control () =
    tree of its own, the same test is run under each way a rule can answer for its keys.
 
    The stand-in `schedule.ml` reads each key in a way the derivation has to follow: one call away
-   from the value the test names, through a `Utils` settings predicate, and through a sibling module
-   of the library that reads a field of `Utils.settings`. It reads the launch trace too, which is
-   execution-neutral and asked for all the same: a developer setting it needs the run to happen. *)
+   from the value the test names, through a `Utils` settings predicate, and through a submodule of a
+   sibling module of the library that reads a field of `Utils.settings` -- one a stand-in
+   `restore_settings` initializes from two keys, the second a compatibility alias. It reads the
+   launch trace too, which is execution-neutral and asked for all the same: a developer setting it
+   needs the run to happen. *)
 let pipeline_key = "gpu_schedule_block_size"
 let pipeline_trace_key = "schedule_log_launches"
 let pipeline_helper = "arrayjit/lib/helper.ml"
@@ -4652,7 +4683,7 @@ let pipeline_stub ~unplaced =
      let preset () = block ()\n\
      let launches () = Lazy.force trace\n\
      let serial () = Utils.debug_log_from_routines ()\n\
-     let tiled () = Helper.width ()\n\
+     let tiled () = Helper.Inner.width ()\n\
      %s"
     pipeline_key pipeline_trace_key
     (if unplaced then
@@ -4702,9 +4733,16 @@ let pipeline_control () =
       write_file (Stdlib.Filename.concat root file) content);
   write_file
     (Stdlib.Filename.concat root pipeline_helper)
-    "let width () = Utils.settings.large_models\n";
+    "module Inner = struct\n  let width () = Utils.settings.large_models\nend\n";
+  write_file
+    (Stdlib.Filename.concat root env_reader_home)
+    "let restore_settings () =\n\
+    \  settings.large_models <-\n\
+    \    get_global_flag ~default:(get_global_flag ~default:false ~arg_name:\"big_models\")\n\
+    \      ~arg_name:\"large_models\"\n";
   let paths =
-    "t/dune" :: "t/probe.ml" :: pipeline_home :: pipeline_helper :: List.map context ~f:fst
+    "t/dune" :: "t/probe.ml" :: pipeline_home :: pipeline_helper :: env_reader_home
+    :: List.map context ~f:fst
   in
   let run ?(unplaced = false) ~probe answer =
     write_file (Stdlib.Filename.concat root pipeline_home) (pipeline_stub ~unplaced);
@@ -4742,7 +4780,7 @@ let pipeline_control () =
   let crossing_ok =
     exited 1 crossing && says diagnostic crossing && names "log_level" crossing
     && names "debug_log_from_routines" crossing
-    && names "large_models" crossing
+    && names "large_models" crossing && names "big_models" crossing
   in
   let under_open_ok = exited 1 under_open && says diagnostic under_open in
   let lookalike_ok = exited 0 lookalike && not (says diagnostic lookalike) in
@@ -4763,7 +4801,8 @@ let pipeline_control () =
     "\n\
      The schedule-pipeline rule (gh-ocannl-1149) is put to a tree of one `(test)` whose module\n\
      names values of a stand-in `Ir.Schedule`, which reads `%s` one call away, the\n\
-     launch trace directly, a settings predicate of `Utils`, and a sibling module's settings field.\n\
+     launch trace directly, a settings predicate of `Utils`, and a settings field two keys set, from\n\
+     a submodule of a sibling module.\n\
      The arms differ in how the stanza answers for the keys, in which values the module names and\n\
      how, and in one stray read in the stand-in.\n\n"
     pipeline_key;
@@ -4775,8 +4814,9 @@ let pipeline_control () =
   Verdict.p "and so does the same stanza pinning them with `setenv` around its run" pinned_ok;
   Verdict.p "and so does one depending on `(universe)`, which no cache serves" universe_ok;
   Verdict.p
-    "keys read through a `Utils` settings predicate and through a sibling module's \
-     `Utils.settings` field are followed and asked for"
+    "keys read through a `Utils` settings predicate, and through a `Utils.settings` field read in \
+     a sibling module's submodule -- with the alias that also sets the field -- are followed and \
+     asked for"
     crossing_ok;
   Verdict.p "a value reached under `open Ir.Schedule` is a reference too" under_open_ok;
   Verdict.p "another library's `Schedule` is not the pipeline, and asks for nothing" lookalike_ok;
