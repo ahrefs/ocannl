@@ -6,12 +6,7 @@ open Stdio
 module Scan = Test_utils.Refusal_control_scan
 module Manifest = Test_utils.Refusal_control_manifest
 
-(* Multiset difference: [minus xs ys] removes one occurrence per [ys] element, since markers repeat
-   when formats do and an argument list can name a source twice. *)
-let minus xs ys =
-  List.fold ys ~init:xs ~f:(fun remaining y ->
-      let before, after = List.split_while remaining ~f:(Fn.non (String.equal y)) in
-      before @ Option.value (List.tl after) ~default:[])
+let minus = Manifest.minus
 
 (* gh-ocannl-1088: the stanza's argument list decides which goldens answer for a source, but
    [Manifest.sources] owns which sources there are. The catalogue is compared as a sorted multiset
@@ -89,6 +84,45 @@ let dynamic reason = Verdict.fail reason
     (Option.is_none
        (Option.bind (Manifest.claim_exercises [ "valid" ] valid) ~f:(fun remaining ->
             Manifest.claim_exercises remaining valid)));
+  (* The stale-row report a scan's own [Manifest.print] writes on stderr: the difference it names
+     and the direct failures it asks evidence for, over a row the synthetic source has outgrown. *)
+  let extracted = List.map diagnostics ~f:Scan.marker in
+  let first = List.hd_exn extracted and second = List.nth_exn extracted 1 in
+  let reworded = "[scanner-refusal:00000000000000000000000000000000] reworded" in
+  Verdict.p "a row holding the extraction in order has no difference"
+    (Option.is_none (Manifest.row_difference ~registered:extracted ~extracted));
+  Verdict.p "a reworded format is one marker added and one removed, with no order to report"
+    (match Manifest.row_difference ~registered:(reworded :: List.tl_exn extracted) ~extracted with
+    | Some { absent; no_longer; first_misplaced } ->
+        List.equal String.equal absent [ first ]
+        && List.equal String.equal no_longer [ reworded ]
+        && Option.is_none first_misplaced
+    | None -> false);
+  Verdict.p "a row holding the same markers in another order names the first misplaced entry"
+    (match
+       Manifest.row_difference ~registered:(second :: first :: List.drop extracted 2) ~extracted
+     with
+    | Some { absent = []; no_longer = []; first_misplaced = Some (1, e, r) } ->
+        String.equal e first && String.equal r second
+    | _ -> false);
+  let synthetic = "test/operations/synthetic_scan.ml" in
+  let is_kind kind diagnostic = Poly.equal diagnostic.Scan.kind kind in
+  let new_fail = List.find_exn diagnostics ~f:(is_kind Scan.Fail)
+  and new_claim = List.find_exn diagnostics ~f:(is_kind Scan.Claim) in
+  let outgrown =
+    List.filter diagnostics ~f:(fun diagnostic ->
+        not (phys_equal diagnostic new_fail || phys_equal diagnostic new_claim))
+    |> List.map ~f:Scan.marker
+  in
+  Verdict.p
+    "a direct failure new to the row, observed by nothing, is named for a direct-evidence entry; a \
+     new claim is not"
+    (List.equal String.equal
+       (Manifest.unevidenced_failures ~source:synthetic ~registered:outgrown diagnostics)
+       [ "synthetic_scan.ml:" ^ new_fail.Scan.identity ]);
+  Verdict.p_empty "a direct failure the row already lists asks for no new evidence"
+    ~over:(List.filter diagnostics ~f:(is_kind Scan.Fail))
+    (Manifest.unevidenced_failures ~source:synthetic ~registered:extracted diagnostics);
   let manifest = [ "b.ml"; "a.ml"; "c.ml" ] in
   Verdict.p "a manifest source missing from the argument list is named as uncatalogued"
     (Poly.equal (catalogue_mismatch ~manifest ~catalogued:[ "c.ml"; "a.ml" ]) ([ "b.ml" ], [], []));
@@ -159,27 +193,9 @@ let dynamic reason = Verdict.fail reason
         row_holds;
       (* A reworded format changes its marker: name both sides of the difference and the row to
          paste, so the author never has to recover a digest from another failure line. *)
-      if not row_holds then (
-        (* A move within the source leaves both [minus] sides empty and differs only in order,
-           reported at its first differing position. *)
-        eprintf "%s: refusal-control row differs from extraction (not part of the golden):\n" source;
-        let absent = minus extracted registered and no_longer = minus registered extracted in
-        List.iter absent ~f:(eprintf "  extracted, absent from the row: %s\n");
-        List.iter no_longer ~f:(eprintf "  in the row, no longer extracted: %s\n");
-        (if List.is_empty absent && List.is_empty no_longer then
-           match
-             List.findi (List.zip_exn extracted registered) ~f:(fun _ (e, r) ->
-                 not (String.equal e r))
-           with
-           | Some (position, (e, r)) ->
-               eprintf
-                 "  same markers in a different order; first difference at entry %d: extracted %s, \
-                  the row has %s\n"
-                 (position + 1) e r
-           | None -> ());
-        eprintf
-          "  replace its `raw_entries` row in test/support/refusal_control_manifest.ml with:\n%s"
-          (Manifest.row ~source diagnostics));
+      Option.iter
+        (Manifest.row_difference ~registered ~extracted)
+        ~f:(Manifest.eprint_row_difference ~source diagnostics);
       List.iter2_exn diagnostics coverage ~f:(fun diagnostic covered ->
           Verdict.p
             (Printf.sprintf "%s: %s (%s) is catalogued beside %s" source (Scan.marker diagnostic)
