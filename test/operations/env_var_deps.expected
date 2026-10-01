@@ -27,6 +27,7 @@ Configuration keys tracked as ambient dependencies, in the one spelling OCANNL r
   autotune_search
   backend
   bf16_arithmetic
+  big_models
   buffer_aliasing
   build_files_prefix
   cc_backend_arch_flags
@@ -39,6 +40,7 @@ Configuration keys tracked as ambient dependencies, in the one spelling OCANNL r
   cc_parallel_chunks
   cc_parallel_grid
   cc_vector_bytes
+  check_half_prec_constants_cutoff
   cpu_schedule_min_parallel
   debug_log_from_routines
   default_prec
@@ -53,6 +55,8 @@ Configuration keys tracked as ambient dependencies, in the one spelling OCANNL r
   inline_complex_computations
   inline_scalar_constexprs
   inline_simple_computations
+  large_models
+  legality_crosscheck
   ll_ident_style
   log_config_sourcing
   log_level
@@ -64,6 +68,7 @@ Configuration keys tracked as ambient dependencies, in the one spelling OCANNL r
   profile
   schedule_fission
   schedule_log_launches
+  stack_threshold_in_bytes
   suppress_welcome_message
   tf32_matmuls
   tune_inline_flips
@@ -124,6 +129,71 @@ on its own deps.
   OCANNL_NO_CONFIG_FILE                  test/operations/startup_streams/dune, executable startup_streams (4 runs of startup_streams.exe)
   OCANNL_PROFILE                         test/operations/startup_streams/dune, executable startup_streams (4 runs of startup_streams.exe)
   OCANNL_SUPPRESS_WELCOME_MESSAGE        test/operations/startup_streams/dune, executable startup_streams (4 runs of startup_streams.exe)
+
+Programs naming `Ir.Schedule` and the entry points they name, every configuration key of which is
+declared or pinned by every rule running the program (gh-ocannl-1149):
+  (the keys its values reach: automatic_cpu_schedule, automatic_gpu_schedule, big_models, check_half_prec_constants_cutoff, cpu_schedule_min_parallel, debug_log_from_routines, gpu_fission_keep_mapping, gpu_lane_preamble_reduction, gpu_schedule_block_size, gpu_schedule_min_parallel, gpu_schedule_workgroup_fill, large_models, legality_crosscheck, log_level, profile, schedule_fission, schedule_log_launches, stack_threshold_in_bytes)
+  bin/dune, executable narrow_gebp_bench: Ir.Schedule.apply
+  bin/dune, executable narrow_storage_bench: Ir.Schedule.apply
+  bin/dune, executable projection_shape_bench: Ir.Schedule.apply
+  bin/dune, executable schedule_bench: Ir.Schedule.apply
+  test/operations/dune, executable autotune_batched_companion: Ir.Schedule.apply, Ir.Schedule.default_cpu, Ir.Schedule.default_gpu, Ir.Schedule.fission_scheduled, Ir.Schedule.zero_expansion
+  test/operations/dune, executable autotune_fission_sketch: Ir.Schedule.default_cpu, Ir.Schedule.default_gpu, Ir.Schedule.default_pipeline_fissions, Ir.Schedule.fission_scheduled, Ir.Schedule.zero_expansion
+  test/operations/dune, executable autotune_mma_companion: Ir.Schedule.apply
+  test/operations/dune, test accum_width: Ir.Schedule.apply
+  test/operations/dune, test autotune_privatize: Ir.Schedule.apply, Ir.Schedule.default_cpu, Ir.Schedule.default_gpu
+  test/operations/dune, test autotune_scope_menu: Ir.Schedule.apply
+  test/operations/dune, test autotune_serial_baseline: Ir.Schedule.automatic_schedule_active, Ir.Schedule.maybe_default_schedules
+  test/operations/dune, test autotune_smoke: Ir.Schedule.apply
+  test/operations/dune, test autotune_split_reduce: Ir.Schedule.apply, Ir.Schedule.default_cpu, Ir.Schedule.default_gpu, Ir.Schedule.fission_scheduled
+  test/operations/dune, test clamped_window_pool: Ir.Schedule.apply
+  test/operations/dune, test conv_detection_boundary: Ir.Schedule.default_gpu, Ir.Schedule.fission_scheduled, Ir.Schedule.zero_expansion
+  test/operations/dune, test cpu_parallel: Ir.Schedule.apply
+  test/operations/dune, test cpu_simd_reduction: Ir.Schedule.apply
+  test/operations/dune, test cpu_vectorized: Ir.Schedule.apply
+  test/operations/dune, test epilogue_fusion_mma_seeds: Ir.Schedule.apply
+  test/operations/dune, test fission_equivalence: Ir.Schedule.default_cpu, Ir.Schedule.default_gpu, Ir.Schedule.fission_keep_mapping, Ir.Schedule.fission_scheduled, Ir.Schedule.maybe_default_schedules, Ir.Schedule.zero_expansion
+  test/operations/dune, test fission_schedule: Ir.Schedule.default_gpu, Ir.Schedule.fission_scheduled, Ir.Schedule.maybe_default_schedules, Ir.Schedule.zero_expansion
+  test/operations/dune, test gpu_fission_mapping: Ir.Schedule.apply, Ir.Schedule.default_gpu, Ir.Schedule.fission_keep_mapping, Ir.Schedule.fission_scheduled, Ir.Schedule.zero_expansion
+  test/operations/dune, test gpu_lane_reduction: Ir.Schedule.apply, Ir.Schedule.default_gpu, Ir.Schedule.lane_preamble_reduction_for
+  test/operations/dune, test gpu_parallel_prefix: Ir.Schedule.apply, Ir.Schedule.default_gpu, Ir.Schedule.zero_expansion
+  test/operations/dune, test gpu_serial_lanes: Ir.Schedule.apply, Ir.Schedule.default_gpu, Ir.Schedule.maybe_default_schedules
+  test/operations/dune, test gpu_small_leading_axis: Ir.Schedule.apply, Ir.Schedule.default_gpu, Ir.Schedule.zero_expansion
+  test/operations/dune, test hosted_constant_fill: Ir.Schedule.apply
+  test/operations/dune, test launch_dim_gate: Ir.Schedule.apply, Ir.Schedule.default_gpu
+  test/operations/dune, test launch_predicate_parity: Ir.Schedule.apply, Ir.Schedule.default_gpu, Ir.Schedule.fission_scheduled, Ir.Schedule.zero_expansion
+  test/operations/dune, test mma_tensorization_label: Ir.Schedule.apply
+  test/operations/dune, test narrow_storage_compute: Ir.Schedule.apply
+  test/operations/dune, test online_softmax_block: Ir.Schedule.apply
+  test/operations/dune, test online_softmax_block_mma: Ir.Schedule.default_cpu, Ir.Schedule.default_gpu, Ir.Schedule.fission_keep_mapping, Ir.Schedule.fission_scheduled, Ir.Schedule.zero_expansion
+  test/operations/dune, test op_legality: Ir.Schedule.apply, Ir.Schedule.op_legality, Ir.Schedule.schedule_legality
+  test/operations/dune, test reduction_forms: Ir.Schedule.apply
+  test/operations/dune, test scan_loop: Ir.Schedule.apply
+  test/operations/dune, test schedule_batch_grid: Ir.Schedule.apply
+  test/operations/dune, test schedule_batched_mma: Ir.Schedule.apply
+  test/operations/dune, test schedule_contraction_nest: Ir.Schedule.apply
+  test/operations/dune, test schedule_conv_gemm: Ir.Schedule.apply, Ir.Schedule.default_cpu, Ir.Schedule.fission_scheduled, Ir.Schedule.zero_expansion
+  test/operations/dune, test schedule_cpu_pack_matmul: Ir.Schedule.apply
+  test/operations/dune, test schedule_epilogue_fusion: Ir.Schedule.apply
+  test/operations/dune, test schedule_ldmatrix_matmul: Ir.Schedule.apply
+  test/operations/dune, test schedule_mma_matmul: Ir.Schedule.apply
+  test/operations/dune, test schedule_ops: Ir.Schedule.apply, Ir.Schedule.default_gpu
+  test/operations/dune, test schedule_pack_mma_matmul: Ir.Schedule.apply
+  test/operations/dune, test schedule_packed_constants: Ir.Schedule.apply
+  test/operations/dune, test schedule_pad: Ir.Schedule.apply
+  test/operations/dune, test schedule_partition: Ir.Schedule.apply
+  test/operations/dune, test schedule_pipelined_matmul: Ir.Schedule.apply
+  test/operations/dune, test schedule_register_matmul: Ir.Schedule.apply
+  test/operations/dune, test schedule_smem_matmul: Ir.Schedule.apply
+  test/operations/dune, test schedule_split_reduce: Ir.Schedule.apply, Ir.Schedule.default_cpu, Ir.Schedule.default_gpu, Ir.Schedule.fission_scheduled, Ir.Schedule.op_legality, Ir.Schedule.schedule_legality
+  test/operations/dune, test schedule_strided_1x1: Ir.Schedule.apply_classified, Ir.Schedule.default_cpu, Ir.Schedule.default_gpu, Ir.Schedule.fission_scheduled, Ir.Schedule.zero_expansion
+  test/operations/dune, test schedule_swizzle_matmul: Ir.Schedule.apply
+  test/operations/dune, test scratch_value_variance: Ir.Schedule.default_gpu
+  test/operations/dune, test tile_mma_declines: Ir.Schedule.apply
+  test/operations/dune, test tile_mma_geometry: Ir.Schedule.apply
+  test/operations/dune, test tile_mma_narrow: Ir.Schedule.apply
+  test/operations/dune, test vec_signed_zero: Ir.Schedule.apply
+  test/training/dune, test fused_classifier: Ir.Schedule.maybe_default_schedules
 
 Ambient environment gates, by dune file and every alias whose build runs one:
   arrayjit/test/dune                       @lifecycle

@@ -223,6 +223,7 @@ env_var_deps.ml: [scanner-refusal:87659b49df04eee3fc19350b0be6629a] repo-relativ
 env_var_deps.ml: [scanner-refusal:490ac5e3405d328c2953c38df4f0974b] arguments the rule's (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:1356c3ade8d75f4aeb6332c69e239db3] the resource-lifecycle instrumentation (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:09e01a62cce1d340393a2244ed33ea10] Test_utils.Generated (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:22e8c3d320466372ca09214ed5850f4f] reads the configuration (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:034280d144ee4338406ff5f6a1cf287d] comment that does (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:30c88c1631600d7969a9aefd4de74162] carries a backend (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:f2633aa4ebd6f2c33fd21e4d69cc9786] one backend marker (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
@@ -259,6 +260,7 @@ env_var_deps.ml: [scanner-refusal:55f2feade4e139b5abb073d0b89c42cb] reaches the 
 env_var_deps.ml: [scanner-refusal:267a42b2812f4679c4463495cc199d36] reads the configuration (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:41d9bc729b5b8b3908a48d45b1e0203c] reads the configuration (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:a323f01100bfd685e76c62154cf4eaae] reads the configuration (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:ae1b95995f2c4aa10cdeee699ccb3413] which reach (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:b0ff4d4e5709299b84685f0fc189cc63] the inline-test runner (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:5893c6332b1f903470ec51cad4f20e8f] holds inline tests (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:5f2b09efad6e397fb5bd77b84255d0bf] runs inline tests (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
@@ -360,6 +362,14 @@ env_var_deps.ml: [scanner-refusal:b8514eb10109dce5b36ef105c1bc36a6] module passe
 env_var_deps.ml: [scanner-refusal:9dc8db9d29efd1b85da8aff105b1aae8] tested module with (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:775f43c0a7dca22c07a091f603457c7a] another is reported (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:87104dd3758037b44d4f5c8979a42039] per-module alias listed (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:7e6affeccdb27fbb0cb1f4badf37de1d] the execution-neutral trace (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:f9582c73fb6a2f7fd49f75722410c4db] same stanza declaring (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:e580cc4e7efaa931c01ab30fe3797e63] same stanza pinning (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:3ffbb67fe1662db0e9bc1bfa8ef2b707] depending on universe (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:0ef14060bb3652683a114deb420a5f42] Utils.settings (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:0a556db347940fc8afa67b95bbe681ad] Ir.Schedule (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:dfee69c1373134de53471c5591146cee] another library's Schedule (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:596c956b100d191f1322f23aea4b1186] pipeline reads outside (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 ll_test_ratchet.ml has exactly the explicitly assigned refusal controls: true
 operand_key_ratchet.ml has exactly the explicitly assigned refusal controls: true
 provenance_tag_inventory.ml has exactly the explicitly assigned refusal controls: true

@@ -728,6 +728,38 @@ let module_stanzas = [ "library"; "test"; "tests"; "executable"; "executables" ]
    8). *)
 let env_reader_home = "arrayjit/lib/utils.ml"
 
+(* gh-ocannl-1149: the schedule pipeline, and the keys a program that names it depends on.
+
+   The configuration a run reads through the library is out of reach of this file in general -- a
+   test compiling through `Context.compile` reads dozens of keys, and declaring them all on two
+   hundred stanzas would claim a sensitivity no one varies. The tests whose SUBJECT is the default
+   schedule are different: they call `Ir.Schedule`'s presets, its fission or its default pipeline by
+   name, and its keys are exactly the ones a developer flips while debugging them. Left to hand
+   lists, the declarations drifted -- `gpu_serial_lanes` declared three of the keys its legs read,
+   and a hip run with `OCANNL_GPU_FISSION_KEEP_MAPPING` changed served the previous result as a pass
+   (lukstafi/ocannl-staging#916).
+
+   So the keys are derived, from the module rather than listed: every top-level value of
+   `schedule.ml`, with the literal `~arg_name` reads it makes and those of the module's other values
+   it names, transitively ([Sources.top_level_key_reach]). A source naming one of those values
+   through `Ir.Schedule` -- directly, under an alias, or under an `open` -- puts its keys on every
+   rule that runs it. A qualified call out of `schedule.ml` is followed into the sibling module of
+   `arrayjit/lib` it names -- a nested submodule of it included -- by the same reading of that
+   module, and a call of a `Utils` settings predicate contributes the keys
+   [Sources.settings_predicates] records for it: the run that `Utils.debug_log_from_routines ()`
+   switches serial depends on `log_level` as surely as on a literal read. A field of
+   `Utils.settings` is answered for by every key its `restore_settings` assignment reads, a
+   compatibility alias included.
+
+   What is followed is calls OUT of the values a test names. A key the backend reads on its own
+   while compiling -- `Backends.compile` consulting `Schedule.log_launches`, say -- is a read every
+   compiled program makes, which is the `Context.compile` route this rule leaves out of scope; the
+   wider class is gh-ocannl-1149's remainder. Execution-neutral keys are asked for like the rest --
+   the launch trace changes no golden, but a developer setting `OCANNL_SCHEDULE_LOG_LAUNCHES` to
+   read it needs the run to happen. *)
+let pipeline_home = "arrayjit/lib/schedule.ml"
+let pipeline_module = [ "Ir"; "Schedule" ]
+
 (* Dune resolves aliases, module defaults, and action paths within the directory a stanza is applied
    to. Keep that descent in one place: checks plug into [checks], and this iterator hands every one
    the same [(subdir, stanzas)] groups. A new check therefore starts per-directory instead of having
@@ -922,6 +954,115 @@ let main () =
   let artifact_caller_keys =
     Set.of_list (module String) (List.map artifact_callers ~f:String.lowercase)
   in
+  (* gh-ocannl-1149: the configuration keys a program reaches by NAMING the schedule pipeline. *)
+  (* The library's modules by the name its sources call them, each read once and only when a call
+     reaches it. OCaml admits no cycle between a library's modules, so the in-progress guard only
+     keeps a malformed tree from looping. *)
+  let pipeline_library = Stdlib.Filename.dirname pipeline_home in
+  let library_modules =
+    List.filter_map source_files ~f:(fun (path, on_disk) ->
+        if String.equal (Stdlib.Filename.dirname path) pipeline_library then
+          Some
+            ( String.capitalize (Stdlib.Filename.remove_extension (Stdlib.Filename.basename path)),
+              on_disk )
+        else None)
+  in
+  (* A field of `Utils.settings` is answered for by every key its `restore_settings` assignment
+     reads, so a compatibility alias (`big_models` for `large_models`) is asked for beside the
+     key. *)
+  let settings_initializers =
+    match List.Assoc.find library_modules "Utils" ~equal:String.equal with
+    | Some on_disk -> Sources.settings_field_initializers (In_channel.read_all on_disk)
+    | None -> []
+  in
+  let settings_field_keys field =
+    match List.Assoc.find settings_initializers field ~equal:String.equal with
+    | Some (_ :: _ as keys) -> keys
+    | Some [] | None -> [ field ]
+  in
+  let module_reaches = Hashtbl.create (module String) in
+  let rec external_keys path =
+    match Sources.settings_predicate_keys path with
+    | Some keys when match path with [ "Utils"; _ ] -> true | _ -> false -> keys
+    | _ -> (
+        match path with
+        | module_name :: (_ :: _ as value) -> (
+            match module_reach module_name with
+            | Some reach ->
+                Option.value
+                  (List.Assoc.find reach (String.concat ~sep:"." value) ~equal:String.equal)
+                  ~default:[]
+            | None -> [])
+        | _ -> [])
+  and module_reach module_name =
+    match Hashtbl.find module_reaches module_name with
+    | Some reach -> reach
+    | None ->
+        Option.map (List.Assoc.find library_modules module_name ~equal:String.equal)
+          ~f:(fun on_disk ->
+            Hashtbl.set module_reaches ~key:module_name ~data:(Some []);
+            let reach =
+              (Sources.top_level_key_reach ~external_keys ~settings_field_keys
+                 (In_channel.read_all on_disk))
+                .reach
+            in
+            Hashtbl.set module_reaches ~key:module_name ~data:(Some reach);
+            reach)
+  in
+  let pipeline_entries =
+    match List.Assoc.find source_files ~equal:String.equal pipeline_home with
+    | None -> []
+    | Some on_disk -> (
+        (* A source that does not parse RAISES here, and below: the build that compiles it has
+           failed already, and a scan carrying on would report no reach for it -- the silent
+           direction. *)
+        match
+          Sources.top_level_key_reach ~external_keys ~settings_field_keys
+            (In_channel.read_all on_disk)
+        with
+        | { Sources.reach; unplaced } ->
+            List.iter unplaced ~f:(fun key ->
+                fail
+                  (Printf.sprintf
+                     "%s reads the configuration key `%s` outside every named top-level value, so \
+                      no entry point of `%s` is credited with it and a program naming the pipeline \
+                      would not be asked to declare it -- move the read into a named top-level \
+                      function"
+                     pipeline_home key
+                     (String.concat ~sep:"." pipeline_module)));
+            List.filter reach ~f:(fun (_, keys) -> not (List.is_empty keys)))
+  in
+  (* Per source, the entry points it names and the keys they reach, keyed the way `source_of` looks
+     a module up. Narrowed textually first, as the sibling censuses are: the module has to be NAMED
+     for any reference to reach it. *)
+  let pipeline_reach =
+    if List.is_empty pipeline_entries then Map.empty (module String)
+    else
+      let paths = List.map pipeline_entries ~f:(fun (name, _) -> pipeline_module @ [ name ]) in
+      List.filter_map source_files ~f:(fun (path, on_disk) ->
+          let content = In_channel.read_all on_disk in
+          if
+            String.equal path pipeline_home
+            || not (String.is_substring content ~substring:(List.last_exn pipeline_module))
+          then None
+          else
+            match Sources.module_references_in_source content ~paths with
+            | [] -> None
+            | spellings ->
+                let prefix = String.concat ~sep:"." pipeline_module ^ "." in
+                let names =
+                  List.map spellings ~f:(fun s ->
+                      Option.value (String.chop_prefix s ~prefix) ~default:s)
+                in
+                let keys =
+                  List.concat_map names ~f:(fun name ->
+                      List.Assoc.find_exn pipeline_entries ~equal:String.equal name)
+                  |> List.dedup_and_sort ~compare:String.compare
+                in
+                Some (String.lowercase path, (names, keys)))
+      |> Map.of_alist_reduce (module String) ~f:(fun a _ -> a)
+  in
+  let pipeline_table = ref [] in
   (* Whether this run was handed the repository, established the way the sibling scans establish it:
      every scan root the globs are written for contributed its floor of sources. The relationship
      below is about whatever tree is in front of the scan and is checked either way; the CENSUS
@@ -2161,7 +2302,63 @@ let main () =
                                       Printf.sprintf
                                         ". `%s` is no configuration key OCANNL reads, so it cannot \
                                          be declared -- pin it, or fix the spelling"
-                                        key))))));
+                                        key)));
+                      (* gh-ocannl-1149: the keys the program reaches by naming the schedule
+                         pipeline, asked of every run of it exactly as a guard's keys are. Not of a
+                         library: one naming the pipeline is the route every compiled program takes,
+                         which the header of [pipeline_home] leaves out of scope -- and not of an
+                         executable no rule runs, which has no cached result to go stale. *)
+                      if not (String.equal kind "library") then
+                        let reached =
+                          List.filter_map own_modules ~f:(fun module_name ->
+                              Map.find pipeline_reach
+                                (String.lowercase (Scan.in_subdir here (module_name ^ ".ml"))))
+                        in
+                        let entries =
+                          List.concat_map reached ~f:fst
+                          |> List.dedup_and_sort ~compare:String.compare
+                        in
+                        let pipeline_keys =
+                          List.concat_map reached ~f:snd
+                          |> List.dedup_and_sort ~compare:String.compare
+                        in
+                        if not (List.is_empty runners || List.is_empty pipeline_keys) then
+                          let unanswered =
+                            List.filter pipeline_keys ~f:(fun key ->
+                                let var = Utils.env_var_name key in
+                                (* A rule depending on `(universe)` reruns on every build, so no
+                                   variable can serve it from the cache. *)
+                                List.exists runners ~f:(fun (deps, pins) ->
+                                    not
+                                      (Scan.declares_env_var deps var || Set.mem pins var
+                                      || Option.value_map deps ~default:false
+                                           ~f:(List.exists ~f:depends_on_universe))))
+                          in
+                          let via =
+                            String.concat ~sep:", "
+                              (List.map entries ~f:(fun entry ->
+                                   String.concat ~sep:"." (pipeline_module @ [ entry ])))
+                          in
+                          if List.is_empty unanswered then
+                            pipeline_table := (where, via) :: !pipeline_table
+                          else
+                            fail
+                              (Printf.sprintf
+                                 "%s names %s, which reach%s the configuration key%s %s, and a \
+                                  rule running %s neither declares nor pins %s -- dune then serves \
+                                  the previous result as a pass when the variable changes, which \
+                                  is how a debugging run of the default schedule goes silently \
+                                  stale. Add %s to every rule that runs %s"
+                                 where via
+                                 (if List.length entries = 1 then "es" else "")
+                                 (if List.length unanswered = 1 then "" else "s")
+                                 (String.concat ~sep:", " unanswered)
+                                 program
+                                 (if List.length unanswered = 1 then "it" else "them")
+                                 (String.concat ~sep:" "
+                                    (List.map unanswered ~f:(fun key ->
+                                         Printf.sprintf "(env_var %s)" (Utils.env_var_name key))))
+                                 program))));
       (* gh-ocannl-1037: the per-module entry points into inline tests. Every module of an
          inline-test library that holds tests has one, every rule running such a runner IS one, and
          none is aggregated onto `runtest`, where the library's generated action already runs it.
@@ -2341,6 +2538,19 @@ let main () =
       | 0 -> ( match String.compare a b with 0 -> String.compare sa sb | c -> c)
       | c -> c)
   |> List.iter ~f:(fun (where, var, source) -> printf "  %-38s %s (%s)\n" var where source);
+  printf
+    "\n\
+     Programs naming `%s` and the entry points they name, every configuration key of which is\n\
+     declared or pinned by every rule running the program (gh-ocannl-1149):\n"
+    (String.concat ~sep:"." pipeline_module);
+  (* The universe the requirement is drawn from, so a key the pipeline starts reading is a
+     reviewable diff -- and a `schedule.ml` this run was not handed empties it rather than retiring
+     the rule in silence. *)
+  printf "  (the keys its values reach: %s)\n"
+    (String.concat ~sep:", "
+       (List.concat_map pipeline_entries ~f:snd |> List.dedup_and_sort ~compare:String.compare));
+  List.sort !pipeline_table ~compare:(fun (a, _) (b, _) -> String.compare a b)
+  |> List.iter ~f:(fun (where, via) -> printf "  %s: %s\n" where via);
   let stale_gateless =
     Set.diff (Set.of_list (module String) (List.map gateless_dirs ~f:fst)) !gateless_used
   in
@@ -4452,6 +4662,170 @@ let inline_alias_control () =
     aggregated_ok;
   try remove_tree root with Unix.Unix_error _ -> ()
 
+(* gh-ocannl-1149's control. Every stanza naming the schedule pipeline now declares what it reaches,
+   so a control drawn from the corpus would pass whether the rule decides anything or not; put to a
+   tree of its own, the same test is run under each way a rule can answer for its keys.
+
+   The stand-in `schedule.ml` reads each key in a way the derivation has to follow: one call away
+   from the value the test names, through a `Utils` settings predicate, and through a submodule of a
+   sibling module of the library that reads a field of `Utils.settings` -- one a stand-in
+   `restore_settings` initializes from two keys, the second a compatibility alias. It reads the
+   launch trace too, which is execution-neutral and asked for all the same: a developer setting it
+   needs the run to happen. *)
+let pipeline_key = "gpu_schedule_block_size"
+let pipeline_trace_key = "schedule_log_launches"
+let pipeline_helper = "arrayjit/lib/helper.ml"
+
+let pipeline_stub ~unplaced =
+  Printf.sprintf
+    "let block () = Utils.get_global_arg ~arg_name:%S ~default:\"256\"\n\
+     let trace = lazy (Utils.get_global_flag ~default:false ~arg_name:%S)\n\
+     let preset () = block ()\n\
+     let launches () = Lazy.force trace\n\
+     let serial () = Utils.debug_log_from_routines ()\n\
+     let tiled () = Helper.Inner.width ()\n\
+     %s"
+    pipeline_key pipeline_trace_key
+    (if unplaced then
+       "let () = ignore (Utils.get_global_arg ~arg_name:\"gpu_schedule_min_parallel\" \
+        ~default:\"64\")\n"
+     else "")
+
+(* How the stanza answers for the keys the aliased probe reaches. *)
+let pipeline_subject answer =
+  let vars = List.map [ pipeline_key; pipeline_trace_key ] ~f:Utils.env_var_name in
+  let deps =
+    match answer with
+    | `Declares -> String.concat (List.map vars ~f:(Printf.sprintf " (env_var %s)"))
+    | `Universe -> " (universe)"
+    | `Pins | `Neither -> ""
+  in
+  let action =
+    match answer with
+    | `Pins ->
+        Printf.sprintf "\n (action\n  (setenv %s 64\n   (setenv %s false\n    (run %%{test}))))"
+          (List.nth_exn vars 0) (List.nth_exn vars 1)
+    | `Declares | `Universe | `Neither -> ""
+  in
+  Printf.sprintf
+    "(test\n\
+    \ ; ocannl-backend: none -- a synthetic control fixture, which runs on no device at all.\n\
+    \ (name probe)\n\
+    \ (modules probe)\n\
+    \ (deps ocannl_config%s)\n\
+    \ (libraries arrayjit.ir)%s)\n\n\
+     (rule\n\
+    \ (alias runtest)\n\
+    \ (deps ocannl_config (universe))\n\
+    \ (action\n\
+    \  (progn)))\n"
+    deps action
+
+let pipeline_control () =
+  let exe =
+    let name = Stdlib.Sys.executable_name in
+    if Stdlib.Filename.is_relative name then Stdlib.Filename.concat (Stdlib.Sys.getcwd ()) name
+    else name
+  in
+  let root = Stdlib.Filename.temp_dir "evd_pipeline" "" in
+  let context = control_context () in
+  List.iter context ~f:(fun (file, content) ->
+      write_file (Stdlib.Filename.concat root file) content);
+  write_file
+    (Stdlib.Filename.concat root pipeline_helper)
+    "module Inner = struct\n  let width () = Utils.settings.large_models\nend\n";
+  write_file
+    (Stdlib.Filename.concat root env_reader_home)
+    "let restore_settings () =\n\
+    \  settings.large_models <-\n\
+    \    get_global_flag ~default:(get_global_flag ~default:false ~arg_name:\"big_models\")\n\
+    \      ~arg_name:\"large_models\"\n";
+  let paths =
+    "t/dune" :: "t/probe.ml" :: pipeline_home :: pipeline_helper :: env_reader_home
+    :: List.map context ~f:fst
+  in
+  let run ?(unplaced = false) ~probe answer =
+    write_file (Stdlib.Filename.concat root pipeline_home) (pipeline_stub ~unplaced);
+    write_file (Stdlib.Filename.concat root "t/probe.ml") probe;
+    write_file (Stdlib.Filename.concat root "t/dune") (pipeline_subject answer);
+    run_checker ~root ~exe ("." :: paths)
+  in
+  let aliased = "module S = Ir.Schedule\nlet () = ignore (S.preset ()); ignore (S.launches ())\n" in
+  let opened = "open Ir.Schedule\nlet () = ignore (preset ())\n" in
+  let vendor = "let () = ignore (Vendor.Schedule.preset ())\n" in
+  let across = "let () = ignore (Ir.Schedule.serial ()); ignore (Ir.Schedule.tiled ())\n" in
+  let report label (status, text) =
+    eprintf "the pipeline control's %s run %s. Its captured output:\n%s\n" label
+      (describe_status status) text
+  in
+  let exited n (status, _) = match status with Unix.WEXITED m -> m = n | _ -> false in
+  let says substring (_, text) = String.is_substring text ~substring in
+  let names key result = says (Utils.env_var_name key) result in
+  let diagnostic = "how a debugging run of the default schedule goes silently stale" in
+  let undeclared = run ~probe:aliased `Neither in
+  let declared = run ~probe:aliased `Declares in
+  let pinned = run ~probe:aliased `Pins in
+  let universe = run ~probe:aliased `Universe in
+  let crossing = run ~probe:across `Neither in
+  let under_open = run ~probe:opened `Neither in
+  let lookalike = run ~probe:vendor `Neither in
+  let unplaced = run ~unplaced:true ~probe:aliased `Declares in
+  let undeclared_ok =
+    exited 1 undeclared && says diagnostic undeclared && names pipeline_key undeclared
+    && names pipeline_trace_key undeclared
+  in
+  let declared_ok = exited 0 declared && not (says diagnostic declared) in
+  let pinned_ok = exited 0 pinned && not (says diagnostic pinned) in
+  let universe_ok = exited 0 universe && not (says diagnostic universe) in
+  let crossing_ok =
+    exited 1 crossing && says diagnostic crossing && names "log_level" crossing
+    && names "debug_log_from_routines" crossing
+    && names "large_models" crossing && names "big_models" crossing
+  in
+  let under_open_ok = exited 1 under_open && says diagnostic under_open in
+  let lookalike_ok = exited 0 lookalike && not (says diagnostic lookalike) in
+  let unplaced_ok =
+    exited 1 unplaced
+    && says "outside every named top-level value" unplaced
+    && says "gpu_schedule_min_parallel" unplaced
+  in
+  if not undeclared_ok then report "undeclared" undeclared;
+  if not declared_ok then report "declared" declared;
+  if not pinned_ok then report "pinned" pinned;
+  if not universe_ok then report "universe" universe;
+  if not crossing_ok then report "crossing" crossing;
+  if not under_open_ok then report "under-open" under_open;
+  if not lookalike_ok then report "lookalike" lookalike;
+  if not unplaced_ok then report "unplaced" unplaced;
+  printf
+    "\n\
+     The schedule-pipeline rule (gh-ocannl-1149) is put to a tree of one `(test)` whose module\n\
+     names values of a stand-in `Ir.Schedule`, which reads `%s` one call away, the\n\
+     launch trace directly, a settings predicate of `Utils`, and a settings field two keys set, from\n\
+     a submodule of a sibling module.\n\
+     The arms differ in how the stanza answers for the keys, in which values the module names and\n\
+     how, and in one stray read in the stand-in.\n\n"
+    pipeline_key;
+  Verdict.p
+    "a test naming the pipeline is reported, with the key its value reaches through the module's \
+     own calls and the execution-neutral trace key, when its stanza declares neither"
+    undeclared_ok;
+  Verdict.p "the same stanza declaring the keys passes" declared_ok;
+  Verdict.p "and so does the same stanza pinning them with `setenv` around its run" pinned_ok;
+  Verdict.p "and so does one depending on `(universe)`, which no cache serves" universe_ok;
+  Verdict.p
+    "keys read through a `Utils` settings predicate, and through a `Utils.settings` field read in \
+     a sibling module's submodule -- with the alias that also sets the field -- are followed and \
+     asked for"
+    crossing_ok;
+  Verdict.p "a value reached under `open Ir.Schedule` is a reference too" under_open_ok;
+  Verdict.p "another library's `Schedule` is not the pipeline, and asks for nothing" lookalike_ok;
+  Verdict.p
+    "a key the pipeline reads outside every named value is refused, not dropped from every \
+     requirement"
+    unplaced_ok;
+  try remove_tree root with Unix.Unix_error _ -> ()
+
 let () =
   match Array.to_list argv with
   | _ :: [ "--control" ] ->
@@ -4462,6 +4836,7 @@ let () =
       guard_control ();
       family_control ();
       inline_alias_control ();
+      pipeline_control ();
       (* Dune's repository-wide rule hands the same source to [main] as [./env_var_deps.ml] after a
          full build has materialized the local build-tree copy. Exercise that spelling here too: the
          manifest identity is repository-relative even when the file used to extract the diagnostics

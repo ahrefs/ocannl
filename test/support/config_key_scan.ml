@@ -1368,6 +1368,204 @@ let keys_in_source content =
      literal is still visible as a literal. *)
   |> List.filter ~f:(fun key -> not (String.is_empty key))
 
+type key_reach = {
+  reach : (string * string list) list;
+      (** Every top-level value of the module, with the keys it reaches. *)
+  unplaced : string list;
+      (** Keys read outside every NAMED top-level value binding -- in a nested module, or under
+          [let () = …] -- which no entry is credited with, and which a caller has to refuse rather
+          than lose. *)
+}
+
+(** The configuration keys each top-level value of a module reaches: the literal [~arg_name:"k"]
+    reads in its own body, and those of every top-level value of the same module it names,
+    transitively (gh-ocannl-1149).
+
+    What it is for is a requirement on a program that NAMES one of these values from outside: the
+    keys reached are the ones its run depends on, so the rules running it declare them. A reach is a
+    superset where it errs, and errs that way on purpose: a local binding that shadows a top-level
+    name is still read as a use of it, and an optional argument a caller supplies -- which spares
+    the read it defaults to -- is not modeled. The cost of the excess is a rerun when the variable
+    changes; the cost of a miss is a stale result served as a pass.
+
+    In source order, so a top-level name refers to the binding before it, as in OCaml, and a
+    [let rec] group is closed to its fixpoint. A nested [module M = struct … end] is walked too, its
+    values reported as [M.v] and resolved innermost scope first; a functor's body is not. A
+    QUALIFIED value no local one answers to -- [Utils.debug_log_from_routines], [Tnode.Placements.f]
+    -- contributes whatever [external_keys] answers for its path, after a top-level [module X = Y]
+    alias of this module has been expanded; the caller decides which modules it can follow, since
+    this function sees one file. A field of [Utils.settings] contributes what [settings_field_keys]
+    answers for it (the field's own name by default). *)
+let top_level_key_reach ?(external_keys = fun (_ : string list) -> [])
+    ?(settings_field_keys = fun field -> [ field ]) content =
+  let structure = structure_of content in
+  let aliases =
+    List.filter_map structure ~f:(fun item ->
+        match item.pstr_desc with
+        | Pstr_module
+            {
+              pmb_name = { txt = Some alias; _ };
+              pmb_expr = { pmod_desc = Pmod_ident { txt; _ }; _ };
+              _;
+            } ->
+            Option.map (flatten_module_path txt) ~f:(fun path -> (alias, path))
+        | _ -> None)
+  in
+  let expand = function
+    | head :: rest -> (
+        match List.Assoc.find aliases head ~equal:String.equal with
+        | Some path -> path @ rest
+        | None -> head :: rest)
+    | [] -> []
+  in
+  let placed = ref (Set.empty (module Int)) in
+  (* What a binding's body reads itself, and every value path it names -- resolved later, against
+     the scope the binding sits in. *)
+  let direct_of expr =
+    let keys = ref [] and names = ref [] in
+    let iterator =
+      object
+        inherit Ast_traverse.iter as super
+
+        method! expression expr =
+          (match expr.pexp_desc with
+          | Pexp_ident { txt; _ } ->
+              Option.iter (flatten_module_path txt) ~f:(fun path -> names := path :: !names)
+          (* The record spelling of a read, recognised as {!settings_keys_in_source} recognises it:
+             a field of [Utils.settings], answered for by every key that initializes the field. *)
+          | Pexp_field ({ pexp_desc = Pexp_ident { txt; _ }; _ }, { txt = field; _ }) -> (
+              match Option.map (flatten_module_path txt) ~f:expand with
+              | Some path
+                when List.length path >= 2
+                     && List.equal String.equal
+                          (List.drop path (List.length path - 2))
+                          [ "Utils"; "settings" ] ->
+                  Option.iter
+                    (List.last (flatten_longident field))
+                    ~f:(fun field -> keys := settings_field_keys field @ !keys)
+              | _ -> ())
+          | Pexp_apply (_, args) ->
+              List.iter args ~f:(fun (lbl, arg) ->
+                  if is_our_label lbl then (
+                    placed := Set.add !placed arg.pexp_loc.loc_start.pos_cnum;
+                    Option.iter (string_literal arg) ~f:(fun key -> keys := key :: !keys)))
+          | _ -> ());
+          super#expression expr
+      end
+    in
+    iterator#expression expr;
+    (!keys, !names)
+  in
+  let dotted = String.concat ~sep:"." in
+  (* A path named inside [scope] (the nested modules a binding sits in) means the innermost value of
+     that spelling defined so far, as OCaml resolves it; a path no local value answers to is another
+     module's, whatever [external_keys] says of it. *)
+  let resolve ~env ~scope path =
+    let rec local depth =
+      if depth < 0 then None
+      else
+        match Map.find env (dotted (List.take scope depth @ path)) with
+        | Some keys -> Some keys
+        | None -> local (depth - 1)
+    in
+    match local (List.length scope) with
+    | Some keys -> keys
+    | None -> (
+        match path with
+        | [ _ ] -> Set.empty (module String)
+        | _ -> Set.of_list (module String) (external_keys (expand path)))
+  in
+  let reach_of ~env ~scope (keys, names) =
+    List.fold names
+      ~init:(Set.of_list (module String) keys)
+      ~f:(fun acc path -> Set.union acc (resolve ~env ~scope path))
+  in
+  let rec unwrap module_expr =
+    match module_expr.pmod_desc with Pmod_constraint (inner, _) -> unwrap inner | _ -> module_expr
+  in
+  let rec walk ~scope env items =
+    List.fold items ~init:env ~f:(fun env item ->
+        match item.pstr_desc with
+        | Pstr_value (rec_flag, bindings) -> (
+            let group =
+              List.filter_map bindings ~f:(fun binding ->
+                  Option.map (pattern_name binding.pvb_pat) ~f:(fun name ->
+                      (dotted (scope @ [ name ]), direct_of binding.pvb_expr)))
+            in
+            let rec close env =
+              let env' =
+                List.fold group ~init:env ~f:(fun acc (name, direct) ->
+                    Map.set acc ~key:name ~data:(reach_of ~env:acc ~scope direct))
+              in
+              if Map.equal Set.equal env env' then env else close env'
+            in
+            match rec_flag with
+            | Recursive ->
+                close
+                  (List.fold group ~init:env ~f:(fun acc (name, _) ->
+                       Map.set acc ~key:name ~data:(Set.empty (module String))))
+            | Nonrecursive ->
+                List.fold group ~init:env ~f:(fun acc (name, direct) ->
+                    Map.set acc ~key:name ~data:(reach_of ~env ~scope direct)))
+        (* A nested structure's values are reached as [M.v], from inside it and from after it. A
+           functor's body is not walked: what its values read depends on its argument. *)
+        | Pstr_module { pmb_name = { txt = Some name; _ }; pmb_expr; _ } -> (
+            match (unwrap pmb_expr).pmod_desc with
+            | Pmod_structure inner -> walk ~scope:(scope @ [ name ]) env inner
+            | _ -> env)
+        | _ -> env)
+  in
+  let env = walk ~scope:[] (Map.empty (module String)) structure in
+  let unplaced =
+    List.filter_map (label_uses content) ~f:(fun use ->
+        if Set.mem !placed use.offset then None else use.key)
+  in
+  {
+    reach = Map.to_alist env |> List.map ~f:(fun (name, keys) -> (name, Set.to_list keys));
+    unplaced;
+  }
+
+(** Every configuration key that initializes each field of a record called [settings]: the literal
+    [~arg_name] reads in the value of each [settings.field <- …] assignment, so that a field a
+    compatibility alias can also set ([large_models], from [big_models]) is answered for by both
+    keys. *)
+let settings_field_initializers content =
+  let found = ref [] in
+  let iterator =
+    object
+      inherit Ast_traverse.iter as super
+
+      method! expression expr =
+        (match expr.pexp_desc with
+        | Pexp_setfield ({ pexp_desc = Pexp_ident { txt; _ }; _ }, { txt = field; _ }, value)
+          when Option.value_map (flatten_module_path txt) ~default:false ~f:(fun path ->
+                   String.equal (List.last_exn path) "settings") -> (
+            let keys = ref [] in
+            let reads =
+              object
+                inherit Ast_traverse.iter as super
+
+                method! expression e =
+                  (match e.pexp_desc with
+                  | Pexp_apply (_, args) ->
+                      List.iter args ~f:(fun (lbl, arg) ->
+                          if is_our_label lbl then
+                            Option.iter (string_literal arg) ~f:(fun key -> keys := key :: !keys))
+                  | _ -> ());
+                  super#expression e
+              end
+            in
+            reads#expression value;
+            match List.last (flatten_longident field) with
+            | Some field -> found := (field, !keys) :: !found
+            | None -> ())
+        | _ -> ());
+        super#expression expr
+    end
+  in
+  iterator#structure (structure_of content);
+  List.rev !found
+
 (** The library sources among a rule's dependencies, sorted and deduplicated.
 
     Both consistency tests are handed [%{deps}] — the whole dependency set of the rule that runs

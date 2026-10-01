@@ -250,6 +250,7 @@ let raw_entries =
         "[scanner-refusal:490ac5e3405d328c2953c38df4f0974b] arguments the rule's";
         "[scanner-refusal:1356c3ade8d75f4aeb6332c69e239db3] the resource-lifecycle instrumentation";
         "[scanner-refusal:09e01a62cce1d340393a2244ed33ea10] Test_utils.Generated";
+        "[scanner-refusal:22e8c3d320466372ca09214ed5850f4f] reads the configuration";
         "[scanner-refusal:034280d144ee4338406ff5f6a1cf287d] comment that does";
         "[scanner-refusal:30c88c1631600d7969a9aefd4de74162] carries a backend";
         "[scanner-refusal:f2633aa4ebd6f2c33fd21e4d69cc9786] one backend marker";
@@ -286,6 +287,7 @@ let raw_entries =
         "[scanner-refusal:267a42b2812f4679c4463495cc199d36] reads the configuration";
         "[scanner-refusal:41d9bc729b5b8b3908a48d45b1e0203c] reads the configuration";
         "[scanner-refusal:a323f01100bfd685e76c62154cf4eaae] reads the configuration";
+        "[scanner-refusal:ae1b95995f2c4aa10cdeee699ccb3413] which reach";
         "[scanner-refusal:b0ff4d4e5709299b84685f0fc189cc63] the inline-test runner";
         "[scanner-refusal:5893c6332b1f903470ec51cad4f20e8f] holds inline tests";
         "[scanner-refusal:5f2b09efad6e397fb5bd77b84255d0bf] runs inline tests";
@@ -387,6 +389,14 @@ let raw_entries =
         "[scanner-refusal:9dc8db9d29efd1b85da8aff105b1aae8] tested module with";
         "[scanner-refusal:775f43c0a7dca22c07a091f603457c7a] another is reported";
         "[scanner-refusal:87104dd3758037b44d4f5c8979a42039] per-module alias listed";
+        "[scanner-refusal:7e6affeccdb27fbb0cb1f4badf37de1d] the execution-neutral trace";
+        "[scanner-refusal:f9582c73fb6a2f7fd49f75722410c4db] same stanza declaring";
+        "[scanner-refusal:e580cc4e7efaa931c01ab30fe3797e63] same stanza pinning";
+        "[scanner-refusal:3ffbb67fe1662db0e9bc1bfa8ef2b707] depending on universe";
+        "[scanner-refusal:0ef14060bb3652683a114deb420a5f42] Utils.settings";
+        "[scanner-refusal:0a556db347940fc8afa67b95bbe681ad] Ir.Schedule";
+        "[scanner-refusal:dfee69c1373134de53471c5591146cee] another library's Schedule";
+        "[scanner-refusal:596c956b100d191f1322f23aea4b1186] pipeline reads outside";
       ] );
     ( "ocamlformat_ignore_scan.ml",
       [
@@ -704,6 +714,12 @@ let raw_direct_evidence =
     ( "env_var_deps.ml:b35f6c5cf70c9d942c2e42a4c1af9975",
       "an external command handed a file this workspace builds is a stanza the rule reaches, \
        reported by name when it declares neither: true" );
+    ( "env_var_deps.ml:22e8c3d320466372ca09214ed5850f4f",
+      "a key the pipeline reads outside every named value is refused, not dropped from every \
+       requirement: true" );
+    ( "env_var_deps.ml:ae1b95995f2c4aa10cdeee699ccb3413",
+      "a test naming the pipeline is reported, with the key its value reaches through the module's \
+       own calls and the execution-neutral trace key, when its stanza declares neither: true" );
     ( "env_var_deps.ml:9ad60261dbb2540d4d7e060be725ad4d",
       "a dynamic reach whose keys resolve to nothing is refused rather than passed over in \
        silence: true" );
