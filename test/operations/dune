@@ -3542,9 +3542,11 @@
   (env_var OCANNL_BUILD_FILES_PREFIX)
   ocannl_config
   (env_var OCANNL_BACKEND)
-  ; Legs 5 and 6 run the default pipeline, whose lane plans read the workgroup fill.
+  ; Legs 5 and 6 run the default pipeline, whose lane plans read the workgroup fill and whose
+  ; fission reads the keep-mapping gate.
   (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
-  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION))
+  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_FISSION_KEEP_MAPPING))
  (modules gpu_serial_lanes)
  (libraries base ocannl stdio arrayjit.verdict ll_test test_utils)
  (preprocess

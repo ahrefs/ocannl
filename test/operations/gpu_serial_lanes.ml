@@ -222,6 +222,13 @@ let attention ~heads =
     TDSL.range_of_shape ~label:[ "x" ] ~batch_dims:[ batch; seq ] ~input_dims:[]
       ~output_dims:[ d_model ] ()
   in
+  (* Scaled into [0, 1), as leg 6's input is. Unscaled, the scores reach ~1.6e5, where one ulp is
+     ~0.016: the softmax is saturated, so the parity reduces to agreeing on the argmax, and a
+     fast-math compiler contracting the score's scaling with [- max] into one FMA in a kernel other
+     than the one that rounded the score into the max leaves the max cell at [exp(residual)], not 1
+     -- a 0.4% error, which HIP showed once fission split the composed softmax (gh-ocannl-1126). *)
+  let scale = Float.of_int (batch * seq * d_model) in
+  let%op x = x /. !.scale in
   let mask =
     NTDSL.init ~l:"mask" ~prec:Ir.Ops.single ~b:[ seq ] ~i:[ seq ] ~o:[]
       ~f:(function [| s; t |] -> if s >= t then 1. else 0. | _ -> assert false)
