@@ -120,6 +120,11 @@ let dynamic reason = Verdict.fail reason
     (List.equal String.equal
        (Manifest.unevidenced_failures ~source:synthetic ~registered:outgrown diagnostics)
        [ "synthetic_scan.ml:" ^ new_fail.Scan.identity ]);
+  Verdict.p "a second occurrence of a listed direct failure is new to the row, and is named"
+    (List.equal String.equal
+       (Manifest.unevidenced_failures ~source:synthetic ~registered:extracted
+          (diagnostics @ [ new_fail ]))
+       [ "synthetic_scan.ml:" ^ new_fail.Scan.identity ]);
   Verdict.p_empty "a direct failure the row already lists asks for no new evidence"
     ~over:(List.filter diagnostics ~f:(is_kind Scan.Fail))
     (Manifest.unevidenced_failures ~source:synthetic ~registered:extracted diagnostics);

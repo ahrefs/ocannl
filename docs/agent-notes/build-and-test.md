@@ -310,8 +310,9 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   scan's row is missing or empty, its golden run's `print` writes the whole row, ready to paste into
   `raw_entries`, on stderr (the golden keeps only the section header); once the row is stale -- a
   diagnostic gained, lost or reworded -- it writes the added/removed markers and the replacement row
-  there instead, and names the `<source>:<md5>` key of each new direct failure no control has
-  observed, whose `raw_direct_evidence` entry stays hand-written.
+  there instead, and names the `<source>:<md5>` key of each new direct failure with no entry and
+  no in-process `observe_failure` (a separate `--control` run's observations are invisible there),
+  whose `raw_direct_evidence` entry stays hand-written.
   `refusal_control_scan_cases.expected` holds the manifest equal to mechanical extraction, every entry present in the assigned live/case
   golden union, and the manifest's repo-relative source paths equal to `env_var_deps`' derived
   scanner census; the audit's own stanza argument list assigns each source its goldens, and its

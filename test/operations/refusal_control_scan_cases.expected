@@ -11,6 +11,7 @@ a row holding the extraction in order has no difference: true
 a reworded format is one marker added and one removed, with no order to report: true
 a row holding the same markers in another order names the first misplaced entry: true
 a direct failure new to the row, observed by nothing, is named for a direct-evidence entry; a new claim is not: true
+a second occurrence of a listed direct failure is new to the row, and is named: true
 a direct failure the row already lists asks for no new evidence: true
 a manifest source missing from the argument list is named as uncatalogued: true
 an argument-list source outside the manifest is named as extra: true

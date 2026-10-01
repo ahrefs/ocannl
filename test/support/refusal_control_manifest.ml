@@ -866,22 +866,27 @@ let eprint_row_difference ~source diagnostics difference =
     (row ~source diagnostics)
 
 (** The [raw_direct_evidence] keys (without the [test/operations/] prefix) of [source]'s direct
-    failures outside its [registered] row that nothing yet observes: neither its scan recorded the
-    failure through [observe_failure] nor an entry answers its identity. Which control observes a
-    failure is a judgment, so the entries stay hand-written; this only names the keys. Meaningful
-    only at the end of the scan's own run, where [observed_failures] is complete. *)
+    failures beyond its [registered] row -- consumed as a multiset, since identical formats need a
+    control apiece -- that no entry answers and that this process did not record through
+    [observe_failure]. A scan whose control arm runs in a separate process records its observations
+    there, so a key named here may still be covered by that arm: the list is what to check, not a
+    verdict. Which control observes a failure is a judgment, so the entries stay hand-written. *)
 let unevidenced_failures ~source ~registered diagnostics =
-  List.filter_map diagnostics ~f:(fun diagnostic ->
-      let key = failure_key ~source ~identity:diagnostic.Refusal_control_scan.identity in
-      match diagnostic.Refusal_control_scan.kind with
-      | Refusal_control_scan.Claim -> None
-      | Refusal_control_scan.Fail ->
-          if
-            List.mem registered (Refusal_control_scan.marker diagnostic) ~equal:String.equal
-            || Hash_set.mem observed_failures key
-            || List.Assoc.mem direct_evidence key ~equal:String.equal
-          then None
-          else Some (Option.value (String.chop_prefix key ~prefix:"test/operations/") ~default:key))
+  List.fold diagnostics ~init:(registered, []) ~f:(fun (remaining, keys) diagnostic ->
+      let marker = Refusal_control_scan.marker diagnostic in
+      if List.mem remaining marker ~equal:String.equal then (minus remaining [ marker ], keys)
+      else
+        let key = failure_key ~source ~identity:diagnostic.Refusal_control_scan.identity in
+        match diagnostic.Refusal_control_scan.kind with
+        | Refusal_control_scan.Fail
+          when not
+                 (Hash_set.mem observed_failures key
+                 || List.Assoc.mem direct_evidence key ~equal:String.equal) ->
+            ( remaining,
+              Option.value (String.chop_prefix key ~prefix:"test/operations/") ~default:key :: keys
+            )
+        | Refusal_control_scan.Fail | Refusal_control_scan.Claim -> (remaining, keys))
+  |> snd
   |> List.dedup_and_sort ~compare:String.compare
 
 (** The [direct_evidence] keys no current direct-failure diagnostic answers to: [diagnostics_of]
@@ -954,8 +959,9 @@ let print source =
         | [] -> ()
         | keys ->
             eprintf
-              "  direct failures new to the row that no control has observed: each needs a \
-               hand-written `raw_direct_evidence` entry naming the control output that observes \
+              "  direct failures new to the row with no `raw_direct_evidence` entry, none recorded \
+               through `observe_failure` in this run: unless the scan's separate control run \
+               records it, each needs a hand-written entry naming the control output that observes \
                it, under the key\n";
             List.iter keys ~f:(eprintf "    %S\n"));
   diagnostics
