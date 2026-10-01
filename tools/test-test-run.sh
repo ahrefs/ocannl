@@ -133,7 +133,8 @@
 #      command-line GPU backend, a reachable GPU stanza, or a reachability
 #      answer outside its grammar is --gpu; the cap bounds the wait.
 #  54. a refused or unreachable slot is SLOT REFUSED, exit 75, and dune never runs.
-#  55. a red suite under a held slot is still FAIL; `start` prints the caller's argv.
+#  55. a red suite under a held slot is still FAIL; `start` prints the caller's argv;
+#      a batch admitted inside a measurement hold is admitted, its red still FAIL.
 #  56. no probe, OCANNL_TOOL_FLEET_WORKER=none, and repeat all run dune directly;
 #      a stale first skill tree does not hide a second that answers the probe.
 #  57. every tracked ocannl_config naming a backend is one the backends are
@@ -4238,7 +4239,9 @@ cat >"$slot_fake" <<'FAKE'
 printf '%s\n' "$*" >>"$FAKE_FW_CALLS"
 if [ "$1 $2 $3" = "execution slot --probe" ]; then
   [ "${FAKE_FW_MODE:-}" = noprobe ] && { echo "fleet-worker.sh: execution slot [--wait <seconds>] ..." >&2; exit 2; }
-  echo "EXECUTION SLOT PROBE fakebox 4 2"
+  # Inside a live measurement hold the probe's line carries the hold's id.
+  if [ "${FAKE_FW_MODE:-}" = measurement ]; then echo "EXECUTION SLOT PROBE fakebox 4 2 measurement M-7"
+  else echo "EXECUTION SLOT PROBE fakebox 4 2"; fi
   exit 0
 fi
 shift 2
@@ -4247,6 +4250,12 @@ shift
 case ${FAKE_FW_MODE:-} in
   refuse) echo "EXECUTION SLOT REFUSED fakebox: all 2 GPU tokens (slots 1-2 of 4) busy after 0s; a batch that holds no GPU declares --cpu"; exit 1 ;;
   unreachable) echo "EXECUTION SLOT UNREACHABLE anchor: registry unread, no slot taken"; exit 4 ;;
+  # The batch runs under the caller's measurement hold (lukstafi/ludics-lite#480),
+  # and something inside it -- a nested runner, say -- logs a refusal of its own.
+  measurement)
+    echo "EXECUTION SLOT fakebox: inside measurement M-7, running under the hold: $*" >&2
+    echo "EXECUTION SLOT REFUSED fakebox: a nested batch's own refusal"
+    exec "$@" ;;
 esac
 echo "EXECUTION SLOT fakebox: slot 1 of 4, GPU token 1 of 2 held for: $*" >&2
 exec "$@"
@@ -4395,6 +4404,25 @@ argv_mode=red slot_probe slot-red hold cc cc run build @cheap
 case "$argv_rc:$argv_out" in
   1:*"verdict: FAIL"*) report 0 "slot: a red suite under a held slot is still FAIL" ;;
   *) report 1 "slot: a red suite under a held slot is still FAIL" "exit $argv_rc: $argv_out" ;;
+esac
+
+# Leg 55b: inside a live measurement hold the slot admits the batch under the
+# hold (`inside measurement <id>`, lukstafi/ludics-lite#480) -- an admission
+# like a held slot's, so a refusal line the batch itself logs leaves a red
+# suite FAIL, never SLOT REFUSED. The probe's trailing `measurement <id>` still
+# reads as a fleet box.
+argv_mode=red slot_probe slot-measurement measurement cc cc run build @cheap
+case "$argv_rc:$argv_out" in
+  1:*"verdict: FAIL"*)
+    if [ "$slot_calls" = "execution slot --wait 600 --cpu -- dune build @cheap" ] &&
+       grep -q "^EXECUTION SLOT fakebox: inside measurement M-7" "$argv_dir/log"; then
+      report 0 "slot: a batch admitted inside a measurement hold is admitted, not SLOT REFUSED"
+    else
+      report 1 "slot: a batch admitted inside a measurement hold is admitted, not SLOT REFUSED" \
+        "slot call: ${slot_calls:-<none>}; log: $(cat "$argv_dir/log" 2>/dev/null)"
+    fi ;;
+  *) report 1 "slot: a batch admitted inside a measurement hold is admitted, not SLOT REFUSED" \
+       "exit $argv_rc: $argv_out" ;;
 esac
 
 # Leg 56: no slot where the fleet cannot give one safely -- a fleet-worker.sh

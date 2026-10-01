@@ -2666,7 +2666,10 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   comes out of the cap; a refused or unreachable slot
   is the verdict `SLOT REFUSED`, exit 75, never a test verdict. `repeat` takes no slot (wrap it
   yourself), `OCANNL_TOOL_FLEET_WORKER=none` turns it off, and a box outside the fleet runs as
-  before, silently.
+  before, silently. A measurement runs as `fleet-worker.sh execution hold --request <request_id>
+  -- tools/test-run.sh ...`, with no slot override: the hold exports `FLEET_MEASUREMENT_HELD`, and
+  the slot then runs the batch under it, logging `EXECUTION SLOT <box>: inside measurement <id>`
+  (lukstafi/ludics-lite#480), which `slot_refusal` reads as an admission like a held slot's.
 - **Runtime-refusal signature table.** These are the exception names `tools/sweep.sh`'s
   `ENVIRONMENT_REFUSALS` treats as the environment refusing a run rather than a test judging it;
   dune prints an uncaught binding error as `Fatal error: exception <name>:` with the status on
