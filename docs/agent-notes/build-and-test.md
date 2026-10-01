@@ -712,11 +712,13 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   loop around the signal was never the fix. That is why the two harnesses run where the fact
   reproduces: `tools/test-test-run.sh` and its sibling `scripts/test-setup-ocaml-env.sh` are on no
   dune alias (they spawn, STOP and kill processes, and the `bounded` legs sit out watchdog
-  timeouts) but since staging#621 (gh-ocannl-795) the Ubuntu 5.5 `main` CI leg runs BOTH in one
-  isolated step before `setup-ocaml`, summing their exits so a red first harness does not suppress
+  timeouts) but since staging#621 (gh-ocannl-795) CI runs BOTH in one isolated step on Ubuntu with
+  no OCaml toolchain — now the `harnesses` job ("Shell harnesses"), beside the build matrix rather
+  than ahead of one of its shards — summing their exits so a red first harness does not suppress
   the second's diagnostics. The step is now the home of any hand-run harness that has a reason not
-  to be a dune test — `tools/test-ci-times.sh` joined it for a different one (its subject invokes
-  `python3` under that exact name) — and they share one contract for a leg the host cannot decide:
+  to be a dune test — `tools/test-ci-times.sh` and `tools/test-ci-shard.sh` joined it for a
+  different one (their subjects invoke `python3` under that exact name) — and they share one
+  contract for a leg the host cannot decide:
   `SKIP LABEL REASON` on stdout, a footer that always prints the skip count
   (`all legs passed (N skipped)`), and exit 0 when no leg FAILED — so "all legs passed" over a run
   that decided fewer legs is never the reading, and a macOS run of the sibling is green with its
@@ -1055,7 +1057,7 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   full suite run then tests old code. Read the checklist before the first build.
   That section has a hand-runnable harness, `scripts/test-setup-ocaml-env.sh` — run it after
   editing the section; it is on no dune alias, since its `bounded` legs sit out watchdog timeouts,
-  and CI runs it only in the pre-toolchain Ubuntu step alongside `tools/test-test-run.sh`
+  and CI runs it only in the toolchain-free `harnesses` job alongside `tools/test-test-run.sh`
   (the `group_alive` bullet above has the SKIP contract the two share).
   It copies the WORKING-TREE hook into throwaway clones under a `mktemp -d` (never touching this
   repository's refs or config) and covers the watchdog (TERM at the bound, KILL 5s later, the
@@ -1878,7 +1880,7 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   Merging sessions do not watch CI after landing (roll-forward, ahrefs/ocannl#861); before fixing
   a master red by hand, find the claiming issue and any linked PR, and take over only where triage
   visibly stopped short — saying so on the issue first.
-- The Ubuntu/OCaml 5.5 main job preprocesses `cc_backend.ml` with
+- The first shard of the Ubuntu/OCaml 5.5 main suite preprocesses `cc_backend.ml` with
   `OCANNL_LOG_LEVEL_CC_BACKEND=3` and builds both `@check` and
   `@test/operations/runtest-cc_backend_trace_name` in that environment. The focused runtime test
   executes one cc routine and checks the bare result inside its `work` trace against the compiled
@@ -2086,6 +2088,29 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   serialized lock chain (what remains of it) against an otherwise idle runner after every file
   target finished, and the quotes are for PowerShell on the Windows leg, which splats unquoted
   `@` tokens to nothing.
+- Per-PR ubuntu runs that suite as N jobs (`shard: K/N` in `ci.yml`'s matrix), macOS as one: as a
+  single job ubuntu had grown back to 18-32min, three quarters of its dune step executing
+  `test/operations`, and macOS runners are the scarce ones. `tools/ci-shard.sh targets K/N` names
+  a shard's targets: each `runtest-<name>` alias of `test/operations` (built `@@`, non-recursive)
+  is a unit, and one `@rest` unit is every suite alias, non-recursively, of every OTHER directory
+  holding a tracked dune file. **`@@dir/default` is not non-recursive**: no dune file here defines
+  `default`, and dune's implicit one is `(alias_rec all)`, so `@@./default` builds the whole tree's
+  `all` — and `all` RUNS every `(test)`, whose stdout capture is a file target, so one shard
+  would execute nearly every test. A directory's share of `@default` is `@@dir/all`, and the
+  script refuses a dune file that defines `default` itself. The units cover the suite because a directory's `runtest` is its
+  per-test aliases (dune generates one per `(test)` and inline-test library; `env_var_deps` holds
+  every hand-written one to the `runtest-<name>` shape and the aggregation) and its `all` adds
+  only what they already build — checked when the split landed by running both shards in fresh
+  build directories under `--trace-file` and comparing their executed commands with an unsharded
+  run's; repeat that check after adding an `all`-only target to `test/operations`. The units are
+  dealt longest-first by the script's `WEIGHTS` table (CPU seconds; the costs are heavy-tailed,
+  so an unweighted deal measured 63/37); refresh it with `tools/ci-shard.sh weigh` over a full
+  traced run when `tools/ci-times.sh` shows the shards drifting apart. `dune show aliases`, which
+  the script reads, prints on STDERR and exits 0 for a directory it does not know (and `dune
+  rules` prints nothing for an action-only alias, so it cannot answer coverage questions either):
+  the script validates the listing and refuses (exit 2) rather than shard a partial one.
+  `test/operations/ci_matrix.sh` holds the matrix to exactly `1/N..N/N` and the unsharded legs'
+  alias list to the script's; `tools/test-ci-shard.sh` is the hermetic harness.
 
 ### opam and caches in CI
 
@@ -2172,7 +2197,7 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   holds nothing else), the per-definition digest listing (asserted to carry a DISTINCT hash per
   definition, so a per-run constant naming nothing would go red), color suppression, empty
   registries and failed resolutions all have fault-injected negative controls. CI runs the harness
-  once on its Ubuntu main leg because this
+  once, in its toolchain-free `harnesses` job, because this
   is POSIX action plumbing, not an OCaml test or a repository scan, and the fixtures need neither
   setup-ocaml nor network.
   Both workflows use exact-key restores only: cache

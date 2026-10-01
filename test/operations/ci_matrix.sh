@@ -10,7 +10,7 @@ harness_args "$@"
 harness_require python3
 harness_scratch ci-matrix
 rc=0
-python3 - "$root/.github/workflows/ci.yml" "$TMP" <<'PY' || rc=$?
+python3 - "$root/.github/workflows/ci.yml" "$TMP" "$("$root/tools/ci-shard.sh" aliases)" <<'PY' || rc=$?
 import ast
 import itertools
 import json
@@ -60,11 +60,33 @@ def matrix(text, event, windows=False):
         match = re.search(r'^        ' + name + r':\n((?:          - .+\n)+)', text, re.M)
         assert match, name
         axes.append([line.strip().removeprefix('- ') for line in match[1].splitlines()])
-    jobs = list(itertools.product(systems, *axes))
-    jobs += [(entry['os'], entry['ocaml-compiler'], entry['suite']) for entry in includes]
-    fmt = re.search(r'^  fmt:\n    if: (.*)$', text, re.M)
-    assert fmt, 'Formatting selection missing'
-    return sorted(jobs), bool(expression(fmt[1], event, windows))
+    jobs = [job + ('',) for job in itertools.product(systems, *axes)]
+    jobs += [(entry['os'], entry['ocaml-compiler'], entry['suite'], entry.get('shard', ''))
+             for entry in includes]
+    selected = []
+    for job in ('fmt', 'harnesses'):
+        guard = re.search(r'^  ' + job + r':\n    if: (.*)$', text, re.M)
+        assert guard, job + ' selection missing'
+        selected.append(bool(expression(guard[1], event, windows)))
+    assert selected[0] == selected[1], 'formatting and harnesses select differently'
+    return unshard(sorted(jobs)), selected[0]
+
+
+def unshard(jobs):
+    # ubuntu's 5.5 main suite as N shard jobs stands for ONE suite, but only if
+    # its shards are exactly 1/N..N/N: a missing K is coverage lost without a red,
+    # a duplicate is a job run twice. Any other job must not carry a shard.
+    shards = [job[3] for job in jobs if job[:3] == ('ubuntu-latest', '5.5.x', 'main')]
+    rest = [job for job in jobs if job[:3] != ('ubuntu-latest', '5.5.x', 'main')]
+    assert all(job[3] == '' for job in rest), 'shard on an unsharded suite'
+    if not shards:
+        return [job[:3] for job in rest]
+    counts = {shard.partition('/')[2] for shard in shards}
+    assert len(counts) == 1 and counts.pop().isdigit(), 'shards disagree on N: %s' % shards
+    n = int(shards[0].partition('/')[2])
+    assert sorted(shards) == sorted('%d/%d' % (k, n) for k in range(1, n + 1)), \
+        'shards are not exactly 1/%d..%d/%d: %s' % (n, n, n, shards)
+    return sorted([job[:3] for job in rest] + [('ubuntu-latest', '5.5.x', 'main')])
 
 
 normal = sorted([('ubuntu-latest', '5.5.x', 'main'),
@@ -72,6 +94,17 @@ normal = sorted([('ubuntu-latest', '5.5.x', 'main'),
 full = sorted(normal + [('windows-latest', '5.5.x', 'main'),
                         ('windows-latest', '5.5.x', 'train'), ('ubuntu-latest', '5.3.x', 'main')])
 windows = [('windows-latest', '5.5.x', 'main'), ('windows-latest', '5.5.x', 'train')]
+
+
+def suite_step(text):
+    # The unsharded legs name the suite's aliases in ci.yml; the shards get
+    # theirs from tools/ci-shard.sh. Drift between the two would let the shards
+    # build a different suite than the job they replace, green either way.
+    step = re.search(r"^      run: opam exec -- dune build \$\{\{ matrix.suite == 'train' "
+                     r"&& '\"@train\"' \|\| '([^']*)' \}\}$", text, re.M)
+    assert step, 'unsharded suite step missing'
+    named = [token.strip('"').removeprefix('@') for token in step[1].split()]
+    assert named == sys.argv[3].split(), 'ci.yml names %s, ci-shard.sh %s' % (named, sys.argv[3].split())
 
 
 def controls(text):
@@ -84,16 +117,25 @@ def controls(text):
         assert matrix(text, 'schedule', option) == (full, True), 'scheduled full coverage'
     assert matrix(text, 'workflow_dispatch', False) == (normal, True), 'ordinary manual run'
     assert matrix(text, 'workflow_dispatch', True) == (windows, False), 'explicit Windows fallback'
+    suite_step(text)
 
 
 controls(source)
 print('PASS normal, scheduled and explicit Windows fallback matrix selections')
+print('PASS ubuntu main shards are exactly 1/N..N/N, over the aliases ci-shard.sh shards')
+second = '{"os": "ubuntu-latest", "ocaml-compiler": "5.5.x", "suite": "main", "shard": "2/2"},'
 for label, mutant in (
     ('fallback enabled by default', source.replace('default: false', 'default: true')),
     ('automatic Windows jobs', source.replace("github.event_name == 'schedule'", "github.event_name != 'workflow_dispatch'")),
     ('schedule loses coverage', source.replace("github.event_name == 'schedule'", "github.event_name == 'never'")),
     ('schedule narrowed by dispatch input', source.replace("github.event_name == 'workflow_dispatch' && inputs.windows_only", 'inputs.windows_only')),
-    ('duplicate formatting job', source.replace("github.event_name != 'workflow_dispatch' || !inputs.windows_only", "github.event_name != 'never'")),
+    ('duplicate formatting job', source.replace("github.event_name != 'workflow_dispatch' || !inputs.windows_only", "github.event_name != 'never'", 1)),
+    ('harnesses in the Windows fallback', source.replace("  harnesses:\n    if: github.event_name != 'workflow_dispatch' || !inputs.windows_only", "  harnesses:\n    if: github.event_name != 'never'")),
+    ('per-PR shard dropped', source[:source.rindex(second)] + source[source.rindex(second) + len(second):]),
+    ('scheduled shard dropped', source.replace(second, '', 1)),
+    ('shard renumbered', source.replace('"shard": "2/2"', '"shard": "2/3"', 1)),
+    ('floor job sharded', source.replace('"ocaml-compiler": "5.3.x", "suite": "main"}', '"ocaml-compiler": "5.3.x", "suite": "main", "shard": "1/1"}')),
+    ('suite alias drift', source.replace('"@default" "@runtest" "@bin-smoke"', '"@default" "@runtest"')),
 ):
     assert mutant != source, label
     try:
@@ -105,7 +147,7 @@ for label, mutant in (
 
 
 # Run the exact bash guard from the workflow with git reporting a fixture HEAD.
-step = source.split('    - name: Verify dispatch commit\n', 1)[1].split('    # Hermetic', 1)[0]
+step = source.split('    - name: Verify dispatch commit\n', 1)[1].split('    - uses: ', 1)[0]
 assert "if: github.event_name == 'workflow_dispatch'" in step
 script = step.split('      run: |\n', 1)[1]
 script = '\n'.join(line[8:] for line in script.splitlines())

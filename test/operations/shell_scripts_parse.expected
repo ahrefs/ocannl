@@ -295,6 +295,7 @@ tools/box-jobs.sh parses: true
 tools/ci-aarch64-cross.sh parses: true
 tools/ci-compiler-test.sh parses: true
 tools/ci-durations.sh parses: true
+tools/ci-shard.sh parses: true
 tools/ci-times.sh parses: true
 tools/dune-quiet.sh parses: true
 tools/fleet-worker-candidates.sh parses: true
@@ -307,6 +308,8 @@ tools/opam-env.sh parses: true
 tools/promote.sh parses: true
 tools/remote-verify.sh parses: true
 tools/sweep.sh parses: true
+tools/test-ci-shard.sh uses the shared harness contract: true
+tools/test-ci-shard.sh parses: true
 tools/test-ci-times.sh uses the shared harness contract: true
 tools/test-ci-times.sh parses: true
 tools/test-fmt-check.sh uses the shared harness contract: true

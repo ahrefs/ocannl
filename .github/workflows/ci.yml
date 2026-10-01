@@ -77,6 +77,9 @@ jobs:
         # Windows main/training and requires the intended full commit SHA.
         # Guard the option by event name so it cannot narrow scheduled coverage.
         #
+        # ubuntu is absent here on purpose: its 5.5 `main` suite runs as shards,
+        # which `include` below adds (it says why).
+        #
         # Not listed: freebsd. Either the waiting queue for it is very long, or
         # it is not available. (A comment cannot live inside the folded scalar
         # below -- YAML reads anything indented under it as content.)
@@ -84,8 +87,8 @@ jobs:
           ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.windows_only
           && '["windows-latest"]'
           || github.event_name == 'schedule'
-          && '["ubuntu-latest", "macos-latest", "windows-latest"]'
-          || '["ubuntu-latest", "macos-latest"]') }}
+          && '["macos-latest", "windows-latest"]'
+          || '["macos-latest"]') }}
         ocaml-compiler:
           - 5.5.x
         # Which dune targets the job builds. `main` is the regular suite; the
@@ -95,7 +98,21 @@ jobs:
         # full run's wall-clock tail (test/training/dune says why).
         suite:
           - main
-        # Two kinds of include entry. The `train` shards: macOS on every run,
+        # Three kinds of include entry. First, ubuntu's 5.5 `main` suite, as
+        # one job per `shard` K/N: `tools/ci-shard.sh targets K/N` names that
+        # job's dune targets, and the N jobs together build exactly the
+        # unsharded suite. As one job it ran 18-32min, 13-26 of them in its
+        # one dune step, and set the matrix's latency; three quarters of that
+        # step executes test/operations, so the cut runs through that
+        # directory, by measured weight (the script says how, and how to
+        # re-weigh). Every K from 1 to N must be listed --
+        # test/operations/ci_matrix.sh holds that, since a missing shard is
+        # coverage lost without a red. macOS keeps its suite in ONE job: its
+        # runners are the scarce ones (GitHub grants an account a fraction of
+        # the macOS concurrency it grants Linux), so a second macOS job would
+        # more likely wait for a runner than run beside the first.
+        #
+        # The `train` shards: macOS on every run,
         # Windows only on the scheduled or explicit Windows-only matrix beside its main job.
         # macOS ONLY per-PR, deliberately: the tier is a serialized chain
         # (measured ~4.7min on an M4 Max, ~10min on a 24-thread Linux box with
@@ -112,17 +129,22 @@ jobs:
         # One extra ubuntu job on the schedule tests the claim instead. It
         # rides the same cadence as Windows because a floor breaks the way
         # Windows does: slowly, through the dependency cone rather than through
-        # this repo's code. Its `suite` is spelled out because an include entry
+        # this repo's code, and unsharded: nobody waits on a scheduled job. Its
+        # `suite` is spelled out because an include entry
         # that omits a matrix key would otherwise match and EXTEND an existing
         # combination instead of adding a job.
         include: >-
           ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.windows_only
           && '[{"os": "windows-latest", "ocaml-compiler": "5.5.x", "suite": "train"}]'
           || github.event_name == 'schedule'
-          && '[{"os": "ubuntu-latest", "ocaml-compiler": "5.3.x", "suite": "main"},
+          && '[{"os": "ubuntu-latest", "ocaml-compiler": "5.5.x", "suite": "main", "shard": "1/2"},
+               {"os": "ubuntu-latest", "ocaml-compiler": "5.5.x", "suite": "main", "shard": "2/2"},
+               {"os": "ubuntu-latest", "ocaml-compiler": "5.3.x", "suite": "main"},
                {"os": "macos-latest", "ocaml-compiler": "5.5.x", "suite": "train"},
                {"os": "windows-latest", "ocaml-compiler": "5.5.x", "suite": "train"}]'
-          || '[{"os": "macos-latest", "ocaml-compiler": "5.5.x", "suite": "train"}]') }}
+          || '[{"os": "ubuntu-latest", "ocaml-compiler": "5.5.x", "suite": "main", "shard": "1/2"},
+               {"os": "ubuntu-latest", "ocaml-compiler": "5.5.x", "suite": "main", "shard": "2/2"},
+               {"os": "macos-latest", "ocaml-compiler": "5.5.x", "suite": "train"}]') }}
     runs-on: ${{ matrix.os }}
     # Hard ceilings, not budgets: a hung job otherwise runs to GitHub's six-hour
     # default. The ceiling is fixed when the job starts, before the opam cache
@@ -209,38 +231,6 @@ jobs:
           }
         fi
         echo "Dispatch checkout: $(git rev-parse HEAD)"
-    # Hermetic composite-action coverage belongs on the POSIX runner where the
-    # action's bash/sed/awk contract executes natively. It uses fake opam and
-    # git binaries, so it needs neither setup-ocaml nor network and adds no
-    # matrix-wide dependency-install cost.
-    - name: Test pin-revisions action
-      if: matrix.os == 'ubuntu-latest' && matrix.ocaml-compiler == '5.5.x' && matrix.suite == 'main'
-      run: tools/test-pin-revisions.sh
-    # These harnesses deliberately sit outside dune. The first two create, stop
-    # and kill process groups, and the zombie-only-group fact they guard is
-    # decided by the kernel; run the family on Linux, where the bare killpg
-    # probe counts a zombie and the shared state-reading ladder must narrow it.
-    # test-ci-times.sh spawns nothing, but its subject shells out to `python3`
-    # under that exact name, which is not what a python3 is called on every
-    # platform `dune runtest` runs on -- so it rides the same POSIX leg rather
-    # than a dune alias. These platform-sensitive harnesses share the SKIP
-    # contract. The mutation harness also exercises the real supervisor in
-    # isolated fixtures. Run every harness even when one fails, so one
-    # regression cannot mask the others' diagnostics. The machine verifier uses
-    # loopback SSH, its local transport and fake opam/Dune, with real disposable
-    # Git worktrees.
-    - name: Test shell harnesses (Ubuntu)
-      if: matrix.os == 'ubuntu-latest' && matrix.ocaml-compiler == '5.5.x' && matrix.suite == 'main'
-      run: |
-        failures=0
-        scripts/test-harness-support.sh || failures=$((failures + 1))
-        tools/test-test-run.sh || failures=$((failures + 1))
-        tools/test-mutation-run.sh || failures=$((failures + 1))
-        scripts/test-setup-ocaml-env.sh || failures=$((failures + 1))
-        tools/test-ci-times.sh || failures=$((failures + 1))
-        test/operations/ci_matrix.sh || failures=$((failures + 1))
-        tools/test-machine-verify.sh || failures=$((failures + 1))
-        exit $((failures > 0 ? 1 : 0))
     - uses: ocaml/setup-ocaml@v3
       with:
         ocaml-compiler: ${{ matrix.ocaml-compiler }}
@@ -370,8 +360,9 @@ jobs:
       if: steps.opam-cache.outputs.cache-hit != 'true'
       shell: bash
       run: rm -rf _opam/.opam-switch/sources _opam/.opam-switch/build
+    # On the first ubuntu shard only: one leg answers the question.
     - name: Check non-default module log level and trace semantics
-      if: matrix.os == 'ubuntu-latest' && matrix.ocaml-compiler == '5.5.x' && matrix.suite == 'main'
+      if: matrix.os == 'ubuntu-latest' && matrix.ocaml-compiler == '5.5.x' && startsWith(matrix.shard, '1/')
       env:
         OCANNL_LOG_LEVEL_CC_BACKEND: 3
       run: opam exec -- dune build "@check" "@test/operations/runtest-cc_backend_trace_name"
@@ -414,7 +405,22 @@ jobs:
     # variables and the command degrades to a plain `dune build` that compiles
     # everything and runs no tests -- a silent false green. bash and cmd are
     # unaffected.
-    - run: opam exec -- dune build ${{ matrix.suite == 'train' && '"@train"' || '"@default" "@runtest" "@bin-smoke"' }}
+    - if: ${{ !matrix.shard }}
+      run: opam exec -- dune build ${{ matrix.suite == 'train' && '"@train"' || '"@default" "@runtest" "@bin-smoke"' }}
+    # A sharded job builds the same suite's share that `tools/ci-shard.sh`
+    # assigns it, still in one walk. The script refuses (exit 2) rather than
+    # print a listing it could not validate, and the assignment is expanded
+    # into the log, so a red shard names what it was carrying. ubuntu only,
+    # which is why plain bash may word-split the targets.
+    - if: ${{ matrix.shard }}
+      env:
+        SHARD: ${{ matrix.shard }}
+      run: |
+        targets=$(opam exec -- tools/ci-shard.sh targets "$SHARD")
+        echo "::group::shard $SHARD: $(printf '%s\n' "$targets" | wc -l) targets"
+        printf '%s\n' "$targets"
+        echo "::endgroup::"
+        opam exec -- dune build $targets
     # cc_march_census writes its per-row table to a file rather than to stderr,
     # which dune truncates in the middle; the file lives in `_build` and dies
     # with the runner, so a failing leg keeps it as an artifact.
@@ -422,7 +428,9 @@ jobs:
       if: ${{ failure() }}
       uses: actions/upload-artifact@v4
       with:
-        name: cc-march-census-rows-${{ matrix.os }}-${{ matrix.ocaml-compiler }}-${{ matrix.suite }}-attempt${{ github.run_attempt }}
+        # `strategy.job-index`, not the shard: `K/N` holds a `/`, which an
+        # artifact name may not, and the shards share every other key here.
+        name: cc-march-census-rows-${{ matrix.os }}-${{ matrix.ocaml-compiler }}-${{ matrix.suite }}-job${{ strategy.job-index }}-attempt${{ github.run_attempt }}
         path: _build/default/test/operations/cc_march_census_kernels/rows.txt
         if-no-files-found: ignore
     # `tools/test-run.sh` carries branches that ONLY execute under MSYS: it
@@ -565,6 +573,49 @@ jobs:
     - name: Check formatting and documentation comments
       run: tools/fmt-check.sh
 
+  # The shell harnesses that sit outside dune, on a job of their own: none of
+  # them needs a toolchain, so they answer in minutes beside the build matrix
+  # instead of adding those minutes to one of its shards.
+  #
+  # Hermetic composite-action coverage belongs on the POSIX runner where the
+  # action's bash/sed/awk contract executes natively. It uses fake opam and
+  # git binaries, so it needs neither setup-ocaml nor network.
+  #
+  # The rest deliberately sit outside dune. The first two create, stop
+  # and kill process groups, and the zombie-only-group fact they guard is
+  # decided by the kernel; run the family on Linux, where the bare killpg
+  # probe counts a zombie and the shared state-reading ladder must narrow it.
+  # test-ci-times.sh spawns nothing, but its subject shells out to `python3`
+  # under that exact name, which is not what a python3 is called on every
+  # platform `dune runtest` runs on -- so it rides the same POSIX leg rather
+  # than a dune alias; test-ci-shard.sh likewise. These platform-sensitive
+  # harnesses share the SKIP contract. The mutation harness also exercises
+  # the real supervisor in isolated fixtures. Run every harness even when one
+  # fails, so one regression cannot mask the others' diagnostics. The machine
+  # verifier uses loopback SSH, its local transport and fake opam/Dune, with
+  # real disposable Git worktrees.
+  harnesses:
+    if: github.event_name != 'workflow_dispatch' || !inputs.windows_only
+    name: Shell harnesses
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+    - uses: actions/checkout@v7
+    - name: Test pin-revisions action
+      run: tools/test-pin-revisions.sh
+    - name: Test shell harnesses
+      run: |
+        failures=0
+        scripts/test-harness-support.sh || failures=$((failures + 1))
+        tools/test-test-run.sh || failures=$((failures + 1))
+        tools/test-mutation-run.sh || failures=$((failures + 1))
+        scripts/test-setup-ocaml-env.sh || failures=$((failures + 1))
+        tools/test-ci-times.sh || failures=$((failures + 1))
+        tools/test-ci-shard.sh || failures=$((failures + 1))
+        test/operations/ci_matrix.sh || failures=$((failures + 1))
+        tools/test-machine-verify.sh || failures=$((failures + 1))
+        exit $((failures > 0 ? 1 : 0))
+
   # A red on master is nobody's to sit and watch: merging sessions do not poll
   # CI after landing (roll-forward, ahrefs/ocannl#861). Instead this job fires
   # the "ocannl-staging CI-red triage" Claude Code routine, which claims the
@@ -580,7 +631,7 @@ jobs:
   # run).
   notify-triage-routine:
     name: Fire CI-red triage routine
-    needs: [run, fmt]
+    needs: [run, fmt, harnesses]
     if: failure() && github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     timeout-minutes: 5
