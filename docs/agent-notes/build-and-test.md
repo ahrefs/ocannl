@@ -878,8 +878,18 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   `scripts/setup-ocaml-env.sh` reports both that and a version drifted from the pin at session
   start. The wrapper also fails on ocamlformat's softer `Invalid documentation comment` warnings,
   which otherwise leave `@fmt` green and bury a real formatting diff in their output; a nonzero dune
-  status still wins unchanged. `tools/test-fmt-check.sh` pins the clean, warning, and formatter-error
-  outcomes separately. Two files a formatter cannot handle are refused at the site rather than
+  status still wins unchanged. That warning is printed only when ocamlformat's action RUNS, so the
+  wrapper passes `--force`: after a `dune fmt`, every file that was already formatted has an
+  up-to-date action, and a plain `dune build @fmt` replays nothing and passes a tree CI's fresh
+  checkout rejects (gh-ocannl-1155; measured on this repository: the unforced gate exited 0 on a
+  planted invalid comment the forced one rejects, for about two seconds more). The wrapper's last
+  line is always a `fmt-check: PASSED` or `fmt-check: FAILED (exit N)` verdict; read that line or
+  the exit status, and never judge a run piped through `tail`, whose status is `tail`'s (the
+  slip behind staging#910's red). `tools/test-fmt-check.sh` pins the clean, warning, and
+  formatter-error outcomes separately, each ending in its verdict line, and, where opam has dune
+  and ocamlformat (CI's `fmt` job runs it after the install), runs a real project through `dune
+  fmt` and then the wrapper, with the unforced build passing the same tree as its negative control.
+  Two files a formatter cannot handle are refused at the site rather than
   discovered in CI:
   a misplaced doc comment (ocamlformat declines the whole file) is a compile error under the root
   `dune`'s `-w +50`, and a ppx-expectation golden is in `.ocamlformat-ignore`, which

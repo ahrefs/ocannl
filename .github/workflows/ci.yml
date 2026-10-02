@@ -556,8 +556,6 @@ jobs:
     timeout-minutes: 15
     steps:
     - uses: actions/checkout@v7
-    - name: Test formatting gate controls
-      run: tools/test-fmt-check.sh
     - uses: ocaml/setup-ocaml@v3
       with:
         ocaml-compiler: 5.5.x
@@ -570,6 +568,10 @@ jobs:
         test -n "$ocamlformat_version"
         test "$ocamlformat_versions" = "$ocamlformat_version"
         opam install dune "ocamlformat=$ocamlformat_version"
+    # After the install: the controls' post-`dune fmt` legs need dune and
+    # ocamlformat, and skip without them (gh-ocannl-1155).
+    - name: Test formatting gate controls
+      run: tools/test-fmt-check.sh
     - name: Check formatting and documentation comments
       run: tools/fmt-check.sh
 
