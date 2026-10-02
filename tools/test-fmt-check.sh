@@ -69,11 +69,17 @@ check 7 "formatter failure status preservation" failure
 # A real project whose only fault is an invalid doc comment in otherwise
 # formatted code: `dune fmt` prints the warning once, promotes nothing, and
 # leaves the file's ocamlformat action up to date.
-if ! opam exec -- dune --version >/dev/null 2>&1 \
-   || ! opam exec -- ocamlformat --version >/dev/null 2>&1; then
+# The fixture lives outside the repository, so name the switch the repository
+# resolves: setup-ocaml's is a local one, which `opam exec` finds only from
+# inside the checkout (outside it, opam exits 50).
+switch=$(cd "$script_dir/.." && opam switch show 2>/dev/null) || switch=
+if [ -z "$switch" ] \
+   || ! OPAMSWITCH=$switch opam exec -- dune --version >/dev/null 2>&1 \
+   || ! OPAMSWITCH=$switch opam exec -- ocamlformat --version >/dev/null 2>&1; then
   skip "the legs after dune fmt" "no opam switch with dune and ocamlformat"
   finish
 fi
+export OPAMSWITCH="$switch"
 project="$fixture_dir/project"
 mkdir -p "$project"
 printf '(lang dune 3.20)\n' >"$project/dune-project"
@@ -83,7 +89,8 @@ printf '(library\n (name broken))\n' >"$project/dune"
 grep -v '^version' "$script_dir/../.ocamlformat" >"$project/.ocamlformat"
 printf '(** Unclosed code span: [x *)\nlet x = 1\n' >"$project/broken.ml"
 export DUNE_CACHE=disabled
-(cd "$project" && opam exec -- dune fmt) >"$fixture_dir/dune-fmt.log" 2>&1
+# Its status is not the point (a promotion would make it 1); its output is.
+(cd "$project" && opam exec -- dune fmt) >"$fixture_dir/dune-fmt.log" 2>&1 || true
 if grep -Fq "Warning: Invalid documentation comment:" "$fixture_dir/dune-fmt.log"; then
   report 0 "fixture: dune fmt reports the invalid doc comment"
 else
@@ -92,8 +99,8 @@ fi
 # Negative control: an unforced @fmt replays nothing and passes the tree, the
 # trap the default command has to defeat. If dune ever replays the warning,
 # this leg says the next one no longer tests anything.
-(cd "$project" && "$subject" opam exec -- dune build @fmt) >"$fixture_dir/unforced.log" 2>&1
-got=$?
+got=0
+(cd "$project" && "$subject" opam exec -- dune build @fmt) >"$fixture_dir/unforced.log" 2>&1 || got=$?
 if [ "$got" -eq 0 ]; then
   report 0 "negative control: unforced @fmt after dune fmt passes"
 else
