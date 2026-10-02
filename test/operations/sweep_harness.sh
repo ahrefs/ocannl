@@ -2755,6 +2755,26 @@ ${native_abort/ReleaseQueueMainScratch/AcquireQueueScratch}" run_sweep_backend c
 grep -q 'm4-max/cc: fail ' <<<"$native_other_abort"
 absent 'serial rerun' <<<"$native_other_abort"
 
+# A status-qualified refusal: a kernel launch refused for device memory is the concurrent suite's
+# pressure (the 2026-10-02 rog-nv/cuda shape, empty kernel window, green alone) and buys the
+# rerun; the same launch failing for the kernel's own resources is a test's failure and does not.
+launch_oom='Fatal error: exception cu_launch_kernel:
+CUDA_ERROR_OUT_OF_MEMORY
+Raised at Cuda.check in file "src/cuda.ml", line 119, characters 34-73'
+launch_oom_run=$(SWEEP_TEST_OPAM_RC=1 SWEEP_TEST_OPAM_OUT="$state_failure
+$launch_oom" run_sweep_backend cc --target state-probe)
+grep -q 'm4-max/cc: fail ' <<<"$launch_oom_run"
+grep -q 'serial rerun' <<<"$launch_oom_run"
+launch_resources_run=$(SWEEP_TEST_OPAM_RC=1 SWEEP_TEST_OPAM_OUT="$state_failure
+${launch_oom/OUT_OF_MEMORY/LAUNCH_OUT_OF_RESOURCES}" run_sweep_backend cc --target state-probe)
+grep -q 'm4-max/cc: fail ' <<<"$launch_resources_run"
+absent 'serial rerun' <<<"$launch_resources_run"
+# HIP's launch takes the same qualification.
+hip_launch_oom_run=$(SWEEP_TEST_OPAM_RC=1 SWEEP_TEST_OPAM_OUT="$state_failure
+Fatal error: exception hip_module_launch_kernel:
+HIP_ERROR_OUT_OF_MEMORY" run_sweep_backend cc --target state-probe)
+grep -q 'serial rerun' <<<"$hip_launch_oom_run"
+
 
 # ---- The gated tuf lane and the sleep guard (gh-ocannl-1035). tuf is the fleet's discrete-memory
 # hip box, a Wi-Fi laptop nothing the caller runs can wake: its lane runs only when `wake-lab.sh

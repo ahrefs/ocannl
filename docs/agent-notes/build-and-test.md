@@ -2673,7 +2673,8 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
 - **Runtime-refusal signature table.** These are the exception names `tools/sweep.sh`'s
   `ENVIRONMENT_REFUSALS` treats as the environment refusing a run rather than a test judging it;
   dune prints an uncaught binding error as `Fatal error: exception <name>:` with the status on
-  the next line, and the sweep keys on the name. A `fail` unit whose log carries any of them is
+  the next line, and the sweep keys on the name — or, for a name whose row below gives one
+  qualifying status, on the name AND that status. A `fail` unit whose log carries any of them is
   *environment-red* and gets a **serial rerun** (gh-ocannl-945): every failing stanza again as
   `dune build -j 1 @<dir>/runtest-<name>` (or `@<dir>/<alias>` for an explicit rule), one dune
   call each, under the same worktree lock and the unit's own cap, appended to the unit's log.
@@ -2710,6 +2711,8 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
 | `cu_device_primary_ctx_retain` | `Cu.Context.get_primary`, backend `get_device` | rog-nv, 2026-09-13: `CUDA_ERROR_OUT_OF_MEMORY` (1) — the only one of the box's three bursts to reach a stanza |
 | `cu_module_load_data_ex` | `Cu.Module.load_data_ex` | analogue, not yet observed |
 | `cu_stream_create_with_priority` | `Cu.Stream.create` | analogue, not yet observed |
+| `cu_launch_kernel`, only with `CUDA_ERROR_OUT_OF_MEMORY` | `Cu.Stream.launch_kernel`, backend `link_proc` | rog-nv native, 2026-10-02: `CUDA_ERROR_OUT_OF_MEMORY` (1, `schedule_strided_1x1`, empty kernel window, green alone at the same commit); the status three concurrent cuda batches produced in `fused_classifier` (lukstafi/ludics-lite#316, lukstafi/ludics-lite#344) |
+| `hip_module_launch_kernel`, only with `HIP_ERROR_OUT_OF_MEMORY` | `Hip.Stream.launch_kernel`, backend `link_proc` | analogue of the CUDA launch, not yet observed |
 - **A name is no longer the only trigger: the kernel's own evidence in the unit's window is the
   other** (gh-ocannl-979). A remote `cuda` or `hip` unit records its UTC window and, at the end,
   appends the kernel's lines from it to its log and fingerprint; a counted refusal in that window
@@ -2774,7 +2777,15 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   moves it — which is why the block carries its deduplicated signature list uncapped even though
   the raw lines it shows are capped at 40.
 - **Reading a rerun's verdict.** Adding a name means adding it in both places: the table in
-  `sweep.sh` gates the rerun, this one records what the name has been seen with. A name is worth
+  `sweep.sh` gates the rerun, this one records what the name has been seen with. Qualify a name
+  by its status (`<name> <STATUS>` in `ENVIRONMENT_REFUSALS`) when the call site also fails for
+  the test's own reasons: a kernel launch is where device-memory pressure from a concurrent
+  suite lands, but also where a kernel's own resource bug lands deterministically
+  (`CUDA_ERROR_LAUNCH_OUT_OF_RESOURCES`, or `CUDA_ERROR_INVALID_VALUE` for shared memory over the
+  limit) and where an earlier kernel's sticky fault surfaces (`CUDA_ERROR_ILLEGAL_ADDRESS`), so
+  only the memory status buys the launch's rerun. An `OUT_OF_MEMORY` that is the kernel's own
+  (local memory too large for the resident threads) stays red at `-j 1`, which is what the rerun
+  is for. A name is worth
   adding even now that the kernel evidence triggers too: it names the call site for the table. The verdict is written as `serial
   rerun:` lines in the log AND the fingerprint (outside the fingerprint's 60-entry bound, so a
   wide red cannot drop it), and quoted in the sweep's summary: `still red: <aliases>` names the

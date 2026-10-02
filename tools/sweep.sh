@@ -652,17 +652,28 @@ unit_jobs() { # machine backend [ssh-destination]
 # (serial_rerun below, gh-ocannl-945): every failing stanza again under `-j 1`,
 # and `serial rerun:` lines in its log and fingerprint saying which stayed red.
 # Keyed as dune prints an uncaught binding error, `Fatal error: exception
-# <name>:` with the status on the next line. The statuses each name has been
+# <name>:` with the status on the next line. An entry is a name, or a name and
+# the one status that qualifies it: the kernel launch is where a concurrent
+# suite's device-memory pressure lands (rog-nv's native cuda unit lost
+# `schedule_strided_1x1` to `cu_launch_kernel` CUDA_ERROR_OUT_OF_MEMORY on
+# 2026-10-02 with an empty kernel window, and passed alone), but it is also
+# where a kernel's own resource bug lands deterministically
+# (CUDA_ERROR_LAUNCH_OUT_OF_RESOURCES, INVALID_VALUE for shared memory over the
+# limit) and where an earlier kernel's sticky fault surfaces
+# (CUDA_ERROR_ILLEGAL_ADDRESS) -- those are a test's own failures, so only the
+# memory status buys the rerun. The statuses each name has been
 # seen with, and how to read a rerun's verdict, are the signature table in
 # docs/agent-notes/build-and-test.md#gpu-boxes-job-caps-and-runtime-refusals
 # (the record half of gh-ocannl-927).
 ENVIRONMENT_REFUSALS='hip_init
 hip_module_load_data_ex
 hip_stream_create_with_priority
+hip_module_launch_kernel HIP_ERROR_OUT_OF_MEMORY
 cu_init
 cu_device_primary_ctx_retain
 cu_module_load_data_ex
-cu_stream_create_with_priority'
+cu_stream_create_with_priority
+cu_launch_kernel CUDA_ERROR_OUT_OF_MEMORY'
 
 # The runtime ASSERTIONS that mean the same thing, for a refusal the runtime does not report as an
 # error at all but dies of. On a native boot, a HIP process whose SDMA queue KFD refused goes on
@@ -678,6 +689,21 @@ cu_stream_create_with_priority'
 # entry, so an unrelated assertion in the same runtime is not caught by it.
 ENVIRONMENT_ASSERTIONS='GpuAgent::ReleaseQueueMainScratch'
 
+# Whether the log holds `Fatal error: exception <name>:` with exactly <status> after it: on the
+# next line, where the bindings' printer breaks, or on the same line should it ever not break.
+refusal_with_status() { # log name status
+  awk -v head="Fatal error: exception $2:" -v status="$3" '
+    pending { line = $0; sub(/^[ \t]+/, "", line); sub(/[ \t\r]+$/, "", line)
+              if (line == status) { found = 1; exit } }
+    { pending = 0 }
+    index($0, head) == 1 {
+      rest = substr($0, length(head) + 1); sub(/^[ \t]+/, "", rest); sub(/[ \t\r]+$/, "", rest)
+      if (rest == status) { found = 1; exit }
+      pending = rest == ""
+    }
+    END { exit !found }' "$1"
+}
+
 # Either the name lists or the kernel's own evidence (window_red, which reads the unit's
 # collected-evidence sidecar and answers only to a positive count). The kernel arm is what lets a
 # call site nobody has seen yet -- or a failure with no exception name at all,
@@ -687,9 +713,14 @@ ENVIRONMENT_ASSERTIONS='GpuAgent::ReleaseQueueMainScratch'
 # `all clean` verdict remains the judge either way: this decides that the unit is
 # rerun, never that its failures were the environment's.
 environment_red() { # log
-  local name
-  while IFS= read -r name; do
-    [ -n "$name" ] && grep -q "^Fatal error: exception $name:" "$1" && return 0
+  local name status
+  while read -r name status; do
+    [ -n "$name" ] || continue
+    if [ -z "$status" ]; then
+      grep -q "^Fatal error: exception $name:" "$1" && return 0
+    else
+      refusal_with_status "$1" "$name" "$status" && return 0
+    fi
   done <<<"$ENVIRONMENT_REFUSALS"
   while IFS= read -r name; do
     [ -n "$name" ] &&
