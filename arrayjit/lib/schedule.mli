@@ -931,7 +931,7 @@ val launch_geometry_of_nests : (int list * int list) list -> launch_geometry opt
     the next [.y], the next [.z]; the maximum is taken per slot across nests, and [Grid] slots
     [>= 2] fold the product of their per-slot maxima onto [.z]. Every field is [Some]; [None] when
     that product overflows. The default annotators' lane plans and the sketch families' predictions
-    ([Sketch_families.predicted_launch_geometry]) both read it. *)
+    ({!Autotune.matmul_launch_geometry} / {!Autotune.conv_launch_geometry}) both read it. *)
 
 type launch_excess = {
   lx_resource : Schedule_outcome.resource;

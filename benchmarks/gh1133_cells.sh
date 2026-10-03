@@ -100,10 +100,6 @@ built=0 proven=0 failed=0
 
 runner_root() { case $1 in base | b[!a]*) echo "$base" ;; *) echo "$root" ;; esac; }
 
-# The attention form's flags come first, the forward key ahead of the backward one: the
-# command-line reader takes the FIRST argument that begins with a key's spelling followed by a
-# separator, and "_" is one -- so the backward key's argument also begins with the forward key's
-# spelling (see conventions.md on key-name prefixes).
 flags_of() {
   case $1 in
     base) echo "--ocannl_online_softmax=false" ;;
@@ -116,8 +112,6 @@ flags_of() {
     fold*)
       local inner
       inner=$(flags_of "${1#fold}") || return 1
-      # Last: the command-line reader takes the FIRST argument beginning with a key's spelling and
-      # a separator, so the block key's argument must follow the forward key's.
       echo "$inner --ocannl_online_softmax_block=16" ;;
     b[!a]*) flags_of "${1#b}" ;;
     d1*)

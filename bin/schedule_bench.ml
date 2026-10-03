@@ -191,9 +191,8 @@ let () =
      gh-ocannl-711 (gh-ocannl-738). Keying on the (row, column) pair does not answer how many rows a
      generator can keep distinct over a k-wide row: that is bounded by [levels ^ k] whatever it
      encodes, so at the narrowest reduction this bench accepts, k = 2, 12 levels left only 144 rows
-     to draw from and ma's rows first repeated at row 11. 48 levels take the bound to 2304 and the
-     measured first repeat to 33; every k above 2 moves out by a comparable factor
-     ([test/operations/bench_checksum_discrimination] prints the table). The finer levels stay exact
+     to draw from. 48 levels take the bound to 2304; [test/operations/bench_checksum_discrimination]
+     measures the actual first repeat at each k against the flat form. The finer levels stay exact
      in binary — a multiple of 1/16 below 3 needs six significant bits, which f32, tf32 (11) and f16
      (11) all hold — so no leg's reduction rounds, and the CUDA mma variants were re-run to confirm
      it rather than argued into it: see the [tf32_matmuls] note at the top of this file. That covers

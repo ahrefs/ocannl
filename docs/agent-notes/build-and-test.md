@@ -1188,7 +1188,9 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   (`footprint_materialization` is the exemplar; `verdict_teardown` pins every ending). An `exit`
   inside a case, once a check has failed, is not a case failing but the run ending there, so
   Verdict prints `STOPPED EARLY: an exit inside case "<label>" …` for it (gh-ocannl-1084). The
-  hand-built-IR `virtual_*` tests run their `case_*` rows through it too (gh-ocannl-1084); a new
+  hand-built-IR `virtual_*` tests run their `case_*` rows through it too (gh-ocannl-1084), as do
+  the multi-case `test_*` drivers that do not catch their own exceptions (gh-ocannl-1143). A labeled
+  row helper owns the boundary, so future rows inherit it without repeating the label; a new
   multi-case test does the same. No scan holds it: the `case_` prefix is a local habit, and the
   wider population of `test_*` drivers often catches its own exceptions to print them.
 - One claim surface, opened rather than copied. Every test that decides a verdict reaches the claim
@@ -1424,6 +1426,12 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   `bin/narrow_gebp_bench.ml`'s `mix`. A formula that is NOT a flat index —
   `(i0 + i1 + 2*i2 + 3*i3) mod 7` — goes through `Ll_test.weighted`, which computes it unchanged
   and raises when a weight is a multiple of the modulus, the same blindness read off the weights.
+- `Bench_checksum.mix`'s injectivity is about its full 24-bit values, not any selected bits
+  (gh-ocannl-1118): its low seven bits can alias whole rows and columns. `residue` reduces the full value for odd
+  moduli and draws even-modulus residues from bit 7 upwards, because an even remainder carries
+  the raw value's parity. A bounded value set
+  still needs row/column distinctness checked at the operand's actual extent; the binary
+  32x64 control in `bench_checksum_discrimination` pairs that claim with raw parity's failure.
 - `operand_key_ratchet` (gh-ocannl-1018) is what makes the guard above reach more than its
   callers: a test source minting a value from a remainder of a hand-rolled multi-axis key is
   refused unless the key goes through `Ll_test.cycle`, `cycle_flat` or `weighted`, or the site
@@ -1435,7 +1443,9 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   two do not look like the same thing. What it deliberately does not read is stated in
   `Test_utils.Operand_key_scan`'s header: a remainder of one literal axis, `i % d` with `d` a
   trailing run of the length's factors (unflattening), a key computed outside the closure, and
-  mixers other than a remainder. A converted site keeps its values, so a golden moves only where
+  mixers other than a remainder or bit mask. Masks, including a shifted mix masked with
+  `land 1`, follow the same axis reader; the trailing-factor exception applies only to remainders.
+  A converted site keeps its values, so a golden moves only where
   the guard fires; the conversion found one blind term, `schedule_mma_matmul`'s tf32 perturbation
   at modulus 3 over a `k = 24` row, which took `~radix:2`. Converting links `ll_test`, which does
   NOT retire an `ll_test_ratchet` row: linking for an operand helper is not adoption

@@ -73,156 +73,163 @@ let () =
   let tn_out1 = make_tn ~id:2 ~label:"out1" ~dim:1 in
   let tn_out2 = make_tn ~id:3 ~label:"out2" ~dim:1 in
 
-  (* ===================================================================== *)
-  (* Scenario B (soundness, Bug 1): distinct-vs-repeated orig_indices must NOT be CSE'd, in BOTH
+  Verdict.case "Scenario B" (fun () ->
+      (* ===================================================================== *)
+      (* Scenario B (soundness, Bug 1): distinct-vs-repeated orig_indices must NOT be CSE'd, in BOTH
      statement orderings. off = t[a; b] (a != b), diag = t[c; c]. The bodies are alpha-equivalent,
      so the only blocker is the orig_indices bijection check. *)
-  Stdio.printf "=== Scenario B: diagonal vs off-diagonal (must NOT merge, both orders) ===\n";
-  let mk_off () =
-    let a = Idx.get_symbol () and b = Idx.get_symbol () in
-    make_scope ~tn_src { tn = tn_src; scope_id = 100 } [| Idx.Iterator a; Idx.Iterator b |]
-  in
-  let mk_diag () =
-    let c = Idx.get_symbol () in
-    make_scope ~tn_src { tn = tn_src; scope_id = 200 } [| Idx.Iterator c; Idx.Iterator c |]
-  in
-  (* Representative-first: off-diagonal seen first (the order in which the old code mis-merged). *)
-  let b_off_first =
-    LL.Seq (make_set ~tn_out:tn_out1 (mk_off ()), make_set ~tn_out:tn_out2 (mk_diag ()))
-  in
-  report "B.off-first" ~hoisted_expected:false (LL.hoist_cross_statement_cse b_off_first);
-  (* Candidate-first: diagonal seen first. *)
-  let b_diag_first =
-    LL.Seq (make_set ~tn_out:tn_out1 (mk_diag ()), make_set ~tn_out:tn_out2 (mk_off ()))
-  in
-  report "B.diag-first" ~hoisted_expected:false (LL.hoist_cross_statement_cse b_diag_first);
-  Stdio.printf "\n";
+      Stdio.printf "=== Scenario B: diagonal vs off-diagonal (must NOT merge, both orders) ===\n";
+      let mk_off () =
+        let a = Idx.get_symbol () and b = Idx.get_symbol () in
+        make_scope ~tn_src { tn = tn_src; scope_id = 100 } [| Idx.Iterator a; Idx.Iterator b |]
+      in
+      let mk_diag () =
+        let c = Idx.get_symbol () in
+        make_scope ~tn_src { tn = tn_src; scope_id = 200 } [| Idx.Iterator c; Idx.Iterator c |]
+      in
+      (* Representative-first: off-diagonal seen first (the order in which the old code
+         mis-merged). *)
+      let b_off_first =
+        LL.Seq (make_set ~tn_out:tn_out1 (mk_off ()), make_set ~tn_out:tn_out2 (mk_diag ()))
+      in
+      report "B.off-first" ~hoisted_expected:false (LL.hoist_cross_statement_cse b_off_first);
+      (* Candidate-first: diagonal seen first. *)
+      let b_diag_first =
+        LL.Seq (make_set ~tn_out:tn_out1 (mk_diag ()), make_set ~tn_out:tn_out2 (mk_off ()))
+      in
+      report "B.diag-first" ~hoisted_expected:false (LL.hoist_cross_statement_cse b_diag_first);
+      Stdio.printf "\n");
 
-  (* ===================================================================== *)
-  (* Scenario C (does-not-disable, Bug 1): legitimate alpha-equivalent pair with distinct, but
+  Verdict.case "Scenario C" (fun () ->
+      (* ===================================================================== *)
+      (* Scenario C (does-not-disable, Bug 1): legitimate alpha-equivalent pair with distinct, but
      consistently-renamed, fresh symbols in orig_indices ([a; b] vs [c; d], all distinct, a!=b,
      c!=d) MUST still be CSE'd/hoisted. *)
-  Stdio.printf "=== Scenario C: legitimate renamed pair (must merge) ===\n";
-  let mk_pair scope_id =
-    let x = Idx.get_symbol () and y = Idx.get_symbol () in
-    make_scope ~tn_src { tn = tn_src; scope_id } [| Idx.Iterator x; Idx.Iterator y |]
-  in
-  let c_prog =
-    LL.Seq (make_set ~tn_out:tn_out1 (mk_pair 300), make_set ~tn_out:tn_out2 (mk_pair 400))
-  in
-  report "C.renamed-pair" ~hoisted_expected:true (LL.hoist_cross_statement_cse c_prog);
-  Stdio.printf "\n";
+      Stdio.printf "=== Scenario C: legitimate renamed pair (must merge) ===\n";
+      let mk_pair scope_id =
+        let x = Idx.get_symbol () and y = Idx.get_symbol () in
+        make_scope ~tn_src { tn = tn_src; scope_id } [| Idx.Iterator x; Idx.Iterator y |]
+      in
+      let c_prog =
+        LL.Seq (make_set ~tn_out:tn_out1 (mk_pair 300), make_set ~tn_out:tn_out2 (mk_pair 400))
+      in
+      report "C.renamed-pair" ~hoisted_expected:true (LL.hoist_cross_statement_cse c_prog);
+      Stdio.printf "\n");
 
-  (* ===================================================================== *)
-  (* Scenario D (hoist hazard, Bug 2): two alpha-equivalent Local_scopes reading [src] separated by
+  Verdict.case "Scenario D" (fun () ->
+      (* ===================================================================== *)
+      (* Scenario D (hoist hazard, Bug 2): two alpha-equivalent Local_scopes reading [src] separated by
      a sibling For_loop that WRITES [src] must NOT be hoisted above the loop: the hazard check must
      see writes inside a lifted-over statement's loop body, not only its top level. *)
-  Stdio.printf "=== Scenario D: For_loop write hazard blocks hoist (must NOT merge) ===\n";
-  let d_scope0 = make_scope ~tn_src { tn = tn_src; scope_id = 500 } [||] in
-  let d_scope2 = make_scope ~tn_src { tn = tn_src; scope_id = 600 } [||] in
-  let k = Idx.get_symbol () in
-  let d_loop = B.loop ~upto:3 k (B.set tn_src [| Idx.Iterator k |] (LL.Constant 1.0)) in
-  let d_prog =
-    LL.Seq (make_set ~tn_out:tn_out1 d_scope0, LL.Seq (d_loop, make_set ~tn_out:tn_out2 d_scope2))
-  in
-  report "D.forloop-hazard" ~hoisted_expected:false (LL.hoist_cross_statement_cse d_prog);
-  Stdio.printf "\n";
+      Stdio.printf "=== Scenario D: For_loop write hazard blocks hoist (must NOT merge) ===\n";
+      let d_scope0 = make_scope ~tn_src { tn = tn_src; scope_id = 500 } [||] in
+      let d_scope2 = make_scope ~tn_src { tn = tn_src; scope_id = 600 } [||] in
+      let k = Idx.get_symbol () in
+      let d_loop = B.loop ~upto:3 k (B.set tn_src [| Idx.Iterator k |] (LL.Constant 1.0)) in
+      let d_prog =
+        LL.Seq
+          (make_set ~tn_out:tn_out1 d_scope0, LL.Seq (d_loop, make_set ~tn_out:tn_out2 d_scope2))
+      in
+      report "D.forloop-hazard" ~hoisted_expected:false (LL.hoist_cross_statement_cse d_prog);
+      Stdio.printf "\n");
 
-  (* ===================================================================== *)
-  (* Scenario A (legitimate cross-statement hoist, full pipeline demo): two sibling Set statements
+  Verdict.case "Scenario A" (fun () ->
+      (* ===================================================================== *)
+      (* Scenario A (legitimate cross-statement hoist, full pipeline demo): two sibling Set statements
      with structurally-equivalent reduction Local_scopes share a computation, which CSE hoists.
      Preserved from the original test to keep end-to-end codegen coverage of a firing hoist. *)
-  let scope1 : LL.scope_id = { tn = tn_src; scope_id = 700 } in
-  let scope2 : LL.scope_id = { tn = tn_src; scope_id = 800 } in
-  let idx1 = Idx.get_symbol () in
-  let idx2 = Idx.get_symbol () in
-  let make_local_scope scope_id idx =
-    LL.Local_scope
-      {
-        id = scope_id;
-        body =
-          B.loop ~upto:3 idx
-            (LL.Set_local
-               ( scope_id,
-                 LL.Binop
-                   ( Ops.Add,
-                     (LL.Get_local scope_id, Ops.single),
-                     (LL.Get (tn_src, [| Idx.Iterator idx |]), Ops.single) ) ));
-        orig_indices = [||];
-        mint = LL.Inlined_computation;
-      }
-  in
-  let stmt1 =
-    B.set ~debug:"out1 := sum(src)" tn_out1 [| Idx.Fixed_idx 0 |] (make_local_scope scope1 idx1)
-  in
-  let stmt2 =
-    B.set ~debug:"out2 := sum(src)" tn_out2 [| Idx.Fixed_idx 0 |] (make_local_scope scope2 idx2)
-  in
-  let llc = LL.Seq (stmt1, stmt2) in
+      let scope1 : LL.scope_id = { tn = tn_src; scope_id = 700 } in
+      let scope2 : LL.scope_id = { tn = tn_src; scope_id = 800 } in
+      let idx1 = Idx.get_symbol () in
+      let idx2 = Idx.get_symbol () in
+      let make_local_scope scope_id idx =
+        LL.Local_scope
+          {
+            id = scope_id;
+            body =
+              B.loop ~upto:3 idx
+                (LL.Set_local
+                   ( scope_id,
+                     LL.Binop
+                       ( Ops.Add,
+                         (LL.Get_local scope_id, Ops.single),
+                         (LL.Get (tn_src, [| Idx.Iterator idx |]), Ops.single) ) ));
+            orig_indices = [||];
+            mint = LL.Inlined_computation;
+          }
+      in
+      let stmt1 =
+        B.set ~debug:"out1 := sum(src)" tn_out1 [| Idx.Fixed_idx 0 |] (make_local_scope scope1 idx1)
+      in
+      let stmt2 =
+        B.set ~debug:"out2 := sum(src)" tn_out2 [| Idx.Fixed_idx 0 |] (make_local_scope scope2 idx2)
+      in
+      let llc = LL.Seq (stmt1, stmt2) in
 
-  Stdio.printf "=== Scenario A: legitimate hoist (to_doc, before) ===\n";
-  PPrint.ToChannel.pretty 0.9 100 Stdio.stdout (LL.to_doc () llc);
-  Stdio.printf "\n\n";
+      Stdio.printf "=== Scenario A: legitimate hoist (to_doc, before) ===\n";
+      PPrint.ToChannel.pretty 0.9 100 Stdio.stdout (LL.to_doc () llc);
+      Stdio.printf "\n\n";
 
-  let result = LL.hoist_cross_statement_cse llc in
-  report "A.legit-hoist" ~hoisted_expected:true result;
+      let result = LL.hoist_cross_statement_cse llc in
+      report "A.legit-hoist" ~hoisted_expected:true result;
 
-  Stdio.printf "=== Scenario A: legitimate hoist (to_doc, after) ===\n";
-  PPrint.ToChannel.pretty 0.9 100 Stdio.stdout (LL.to_doc () result);
-  Stdio.printf "\n\n";
+      Stdio.printf "=== Scenario A: legitimate hoist (to_doc, after) ===\n";
+      PPrint.ToChannel.pretty 0.9 100 Stdio.stdout (LL.to_doc () result);
+      Stdio.printf "\n\n";
 
-  Stdio.printf "=== Scenario A: legitimate hoist (to_doc_cstyle, after) ===\n";
-  PPrint.ToChannel.pretty 0.9 100 Stdio.stdout (LL.to_doc_cstyle () result);
-  Stdio.printf "\n\n";
+      Stdio.printf "=== Scenario A: legitimate hoist (to_doc_cstyle, after) ===\n";
+      PPrint.ToChannel.pretty 0.9 100 Stdio.stdout (LL.to_doc_cstyle () result);
+      Stdio.printf "\n\n";
 
-  let optimized : LL.optimized =
-    {
-      traced_store = Hashtbl.create (module Ir.Tnode);
-      optimize_ctx = Ir.Low_level.empty_optimize_ctx ();
-      llc = result;
-      merge_node = None;
-      workgroup_shared = Base.Set.empty (module Tn);
-      simdgroup_fragments = Base.Set.empty (module Tn);
-      swizzled = Base.Map.empty (module Tn);
-      pipelined = Base.Map.empty (module Tn);
-      zero_fringe = Base.Set.empty (module Tn);
-      flip_candidates = [];
-      spliced_rbw = Base.Set.empty (module Tn);
-      source = result;
-    }
-  in
-  let module Syntax = Ir.C_syntax.C_syntax (Ir.C_syntax.Pure_C_config (struct
-    let procs = [| optimized.LL.llc |]
-    let full_printf_support = true
-  end))
-  in
-  Utils.set_log_level 2;
-  Utils.settings.debug_log_from_routines <- true;
-  Stdio.printf "=== Scenario A: legitimate hoist (c_syntax pp_ll, after) ===\n";
-  PPrint.ToChannel.pretty 0.9 110 Stdio.stdout
-    (Syntax.compile_main (Syntax.create_render_ctx ~name:"cross_cse" optimized) result);
-  Stdio.printf "\n%!"
+      let optimized : LL.optimized =
+        {
+          traced_store = Hashtbl.create (module Ir.Tnode);
+          optimize_ctx = Ir.Low_level.empty_optimize_ctx ();
+          llc = result;
+          merge_node = None;
+          workgroup_shared = Base.Set.empty (module Tn);
+          simdgroup_fragments = Base.Set.empty (module Tn);
+          swizzled = Base.Map.empty (module Tn);
+          pipelined = Base.Map.empty (module Tn);
+          zero_fringe = Base.Set.empty (module Tn);
+          flip_candidates = [];
+          spliced_rbw = Base.Set.empty (module Tn);
+          source = result;
+        }
+      in
+      let module Syntax = Ir.C_syntax.C_syntax (Ir.C_syntax.Pure_C_config (struct
+        let procs = [| optimized.LL.llc |]
+        let full_printf_support = true
+      end))
+      in
+      Utils.set_log_level 2;
+      Utils.settings.debug_log_from_routines <- true;
+      Stdio.printf "=== Scenario A: legitimate hoist (c_syntax pp_ll, after) ===\n";
+      PPrint.ToChannel.pretty 0.9 110 Stdio.stdout
+        (Syntax.compile_main (Syntax.create_render_ctx ~name:"cross_cse" optimized) result);
+      Stdio.printf "\n%!")
 
 (* Scenario E (gh-ocannl-1050): the hazard check is a query over each lifted-over statement's
    relations, and [Staged_compilation] is the one row whose accesses the relations do not enumerate
    -- code it cannot see through, so the hoist declines to move a body's reads across it. The
    positive control lifts the same body over a statement writing a node the body does not read. *)
 let () =
-  let tn_src = make_tn ~id:11 ~label:"src" ~dim:4 in
-  let tn_out1 = make_tn ~id:12 ~label:"out1" ~dim:1 in
-  let tn_out2 = make_tn ~id:13 ~label:"out2" ~dim:1 in
-  let tn_other = make_tn ~id:14 ~label:"other" ~dim:1 in
-  let program between =
-    LL.unflat_lines
-      [
-        make_set ~tn_out:tn_out1 (make_scope ~tn_src { tn = tn_src; scope_id = 900 } [||]);
-        between;
-        make_set ~tn_out:tn_out2 (make_scope ~tn_src { tn = tn_src; scope_id = 1000 } [||]);
-      ]
-  in
-  Stdio.printf "\n=== Scenario E: opaque code between the users blocks the hoist ===\n";
-  report "E.unrelated-write" ~hoisted_expected:true
-    (LL.hoist_cross_statement_cse (program (make_set ~tn_out:tn_other (LL.Constant 2.0))));
-  report "E.staged-between" ~hoisted_expected:false
-    (LL.hoist_cross_statement_cse
-       (program (LL.Staged_compilation (fun () -> PPrint.string "/* opaque */"))))
+  Verdict.case "Scenario E" (fun () ->
+      let tn_src = make_tn ~id:11 ~label:"src" ~dim:4 in
+      let tn_out1 = make_tn ~id:12 ~label:"out1" ~dim:1 in
+      let tn_out2 = make_tn ~id:13 ~label:"out2" ~dim:1 in
+      let tn_other = make_tn ~id:14 ~label:"other" ~dim:1 in
+      let program between =
+        LL.unflat_lines
+          [
+            make_set ~tn_out:tn_out1 (make_scope ~tn_src { tn = tn_src; scope_id = 900 } [||]);
+            between;
+            make_set ~tn_out:tn_out2 (make_scope ~tn_src { tn = tn_src; scope_id = 1000 } [||]);
+          ]
+      in
+      Stdio.printf "\n=== Scenario E: opaque code between the users blocks the hoist ===\n";
+      report "E.unrelated-write" ~hoisted_expected:true
+        (LL.hoist_cross_statement_cse (program (make_set ~tn_out:tn_other (LL.Constant 2.0))));
+      report "E.staged-between" ~hoisted_expected:false
+        (LL.hoist_cross_statement_cse
+           (program (LL.Staged_compilation (fun () -> PPrint.string "/* opaque */")))))

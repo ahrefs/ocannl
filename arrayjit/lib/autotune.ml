@@ -4,8 +4,13 @@ open Base
    parameterize, and the refinement trees whose leaves are the seed lists — live in their own module
    (gh-ocannl-580). Included rather than opened: the search harness below refers to the family types
    and helpers unqualified, and {!sketch_params} and the site types are part of this module's public
-   interface. The module aliases shared by both halves come from here as well. *)
+   interface. The harness keeps its own aliases for the IR modules. *)
 include Sketch_families
+module Sched = Ir.Schedule
+module Sspace = Ir.Schedule_space
+module LL = Ir.Low_level
+module Idx = Ir.Indexing
+module Outcome = Ir.Schedule_outcome
 module SC = Ir.Schedule_cache
 
 type decline_summary = { key : Outcome.rejection_key; count : int; sample_details : string list }
@@ -1307,29 +1312,6 @@ let optop_family (op : SC.saved_optop) =
   | SC.Fuse_epilogue _ -> "Fuse_epilogue"
   | SC.Fold_mma _ -> "Fold_mma"
   | SC.Split_reduce _ -> "Split_reduce"
-
-(** {2 The composed seed list} *)
-
-(* The families composed into the seed list the search enumerates: the matmul family when a matmul
-   site is detected, else the convolution family, each with its epilogue-fusion twins. *)
-let sketch_seed_params ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits)
-    (opt : LL.optimized) : sketch_params list =
-  (* Fused-epilogue variants (gh-ocannl-486): when the site's output feeds an eligible elementwise
-     tail, every seed gets a fused twin — the tuner measures fused (one kernel) vs. unfused (the
-     fissioned two-kernel form). The check runs on the base code where the plain accumulation-nest
-     fusion site applies; seeds whose scheduled form no longer admits the fusion fail their
-     candidate compile and are skipped. For the matmul family the fusion choice is the tree's root
-     level (gh-ocannl-613), so its leaves already carry the twins, each flavor under its own
-     preconditions; the conv family is not tree-factored yet and flag-flips its seeds. *)
-  match detect_matmul opt.LL.llc with
-  | Some site -> matmul_seed_params ~is_gpu ~is_cpu ~limits ~opt site
-  | None -> (
-      match conv_seed_params ~is_gpu ~is_cpu ~limits opt with
-      | None -> []
-      | Some (seeds, d) ->
-          if (not (List.is_empty seeds)) && Sched.can_fuse_epilogue ~target:d opt then
-            seeds @ List.map seeds ~f:(fun p -> { p with sk_epilogue = true })
-          else seeds)
 
 (** {2 The privatized fission flavor}
 
