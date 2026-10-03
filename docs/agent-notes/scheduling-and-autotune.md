@@ -935,6 +935,20 @@ files.
   records every refusal so the incomplete candidate set is diagnosable and a later cache-cold call
   retries it. Falling back to depth 1 would silently change the queued objective back into the
   isolated one.
+  **Metal queued contention gets one fresh window before it becomes a candidate refusal**
+  (gh-ocannl-1060). On a loaded M4 Max the refused batches already had 10--14 ms median walls
+  at depths well below 200, so raising the queue cap did not address the observed dispersion.
+  `time_routine` instead enables one retry at the same calibrated depth, with the same sample
+  budget and 2x-majority rule. The windows are never pooled: the first is discarded and the
+  retry's own verdict reaches ranking and refusal accounting. Persistent contention still refuses
+  once and prevents caching; a recovered window leaves the candidate measured. A depth-one
+  retry takes fresh singles instead of resuming the refused calibration window. Only finite
+  positive contention readings qualify, not an unresolved clock or an `unbatched` result.
+  `on_timing_retry` accounts for the discarded window's extra dispatches, while
+  `on_timed_window` describes only the returned window; `autotune_measured_refusal` labels the
+  retries separately from final host refusals and prints each returned depth and median wall.
+  cc, CUDA/HIP and isolated timing keep their existing dispatch counts and policy. This adds
+  sampling of the same objective, so cache-key generations stay unchanged.
   **That 2x-majority rule is a statement about a ~10 ms batch, and applying it anywhere else is a
   scale error** (gh-ocannl-888). The queued calibration samples ONE dispatch plus one host sync;
   on a GPU the dispersion of that quantity is the round trip's own heavy tail, and a majority above

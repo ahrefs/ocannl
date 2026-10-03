@@ -50,23 +50,37 @@ let () =
   let default_digest = ref None and seam_refused = ref 0 and report = ref None in
   (* The label of the latest attempt, the label of a timed window the seam has not yet followed, and
      the labels of the windows the host refused. *)
-  let attempt = ref "" and unfollowed = ref None and host_refused = ref [] in
+  let attempt = ref "" and unfollowed = ref None and host_refused = ref [] and depth = ref 1 in
+  let retried = ref [] in
   let settle_window () =
     Option.iter !unfollowed ~f:(fun label -> host_refused := label :: !host_refused);
     unfollowed := None
   in
   let old_measured = !Autotune.on_candidate_measured
   and old_attempt = !Autotune.on_candidate_attempt
-  and old_window = !Autotune.on_timed_window in
+  and old_window = !Autotune.on_timed_window
+  and old_depth = !Autotune.on_batch_depth
+  and old_retry = !Autotune.on_timing_retry in
   Exn.protect
     ~finally:(fun () ->
       Autotune.on_candidate_measured := old_measured;
       Autotune.on_candidate_attempt := old_attempt;
-      Autotune.on_timed_window := old_window)
+      Autotune.on_timed_window := old_window;
+      Autotune.on_batch_depth := old_depth;
+      Autotune.on_timing_retry := old_retry)
     ~f:(fun () ->
       (Autotune.on_candidate_attempt := fun label -> attempt := label);
+      (Autotune.on_batch_depth := fun d ~calibration_samples:_ -> depth := d);
+      (Autotune.on_timing_retry :=
+         fun ~samples ~reused:_ ->
+           retried := !attempt :: !retried;
+           Stdio.eprintf "retrying %s: host contention over %d samples at depth %d\n%!" !attempt
+             samples !depth);
       (Autotune.on_timed_window :=
-         fun ~samples:_ ~reused:_ ~wall_ms:_ ~median_wall_ms:_ ->
+         fun ~samples ~reused:_ ~wall_ms:_ ~median_wall_ms ->
+           Stdio.eprintf
+             "  (not part of the golden) %s: depth %d, samples %d, median batch wall %.4f ms\n%!"
+             !attempt !depth samples median_wall_ms;
            settle_window ();
            unfollowed := Some !attempt);
       (Autotune.on_candidate_measured :=
@@ -90,6 +104,8 @@ let () =
   Stdio.eprintf "refused by the seam: %d; by the host: %d [%s]\n%!" !seam_refused
     (List.length host_refused)
     (String.concat ~sep:"; " host_refused);
+  Stdio.eprintf "retried by the host: %d [%s]\n%!" (List.length !retried)
+    (String.concat ~sep:"; " (List.rev !retried));
   let quiet_host = List.is_empty host_refused in
   let default_reached_seam = not (List.mem host_refused default_seed_label ~equal:String.equal) in
   gated ~aggregation:`Environment ~when_:default_reached_seam
