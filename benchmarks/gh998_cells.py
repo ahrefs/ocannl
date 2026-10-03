@@ -2,8 +2,9 @@
 """Ablate simplify_llc float algebra on byte-identical benchmark fixtures (#998).
 
 prepare --out DIR: bind the revision, executable bytes and fixture digests, run the existing
-Torch CPU exact oracle. Build bench_conv.exe and bench_gpt.exe beforehand, outside a timing hold.
-dry --out DIR --backends metal,cc: arms-on/off LeNet twice per backend (discard timings).
+Torch CPU exact oracle. Build bench_mlp.exe, bench_conv.exe and bench_gpt.exe beforehand, outside a timing hold.
+dry --out DIR --backends metal,cc: arms-on/off self-test twice per backend (discard timings).
+The self-test uses the same compilation, execution and emission path with a short protocol.
 run --out DIR --backends metal,cc: three order-balanced rounds of all, none and each family off.
 summarize --out DIR: print the per-workload envelopes against arms-on and the Torch oracle.
 
@@ -59,7 +60,8 @@ def identity():
         ['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
         diff_sha256=hashlib.sha256(subprocess.check_output(
             ['git', 'diff', 'HEAD'], cwd=ROOT)).hexdigest(),
-        fixtures=fixtures, executables={w: digest(executable(w)) for w in WORKLOADS})
+        fixtures=fixtures, executables={w: digest(executable(w)) for w in WORKLOADS},
+        smoke_executable=digest(ROOT / '_build/default/benchmarks/runners/ocannl/bench_mlp.exe'))
 
 
 def clean_env():
@@ -99,8 +101,9 @@ def cell(out, name, argv, env):
 def ocannl(out, backend, workload, treatment, repeat, dry=False):
     name = f'{"dry-" if dry else ""}{backend}-{workload}-{treatment}-{repeat}'
     env = clean_env()
-    env.update(BENCH_FIXTURE=str(HERE / 'fixtures' / (workload + '.safetensors')),
-               BENCH_TUNE='0', BENCH_MATERIALIZE='0', BENCH_DOMINANT_KERNEL='0')
+    env.update(BENCH_TUNE='0', BENCH_MATERIALIZE='0', BENCH_DOMINANT_KERNEL='0')
+    if not dry:
+        env['BENCH_FIXTURE'] = str(HERE / 'fixtures' / (workload + '.safetensors'))
     prefix = 'gh998-' + hashlib.sha256(str(out).encode()).hexdigest()[:12] + '-' + name
     artifacts = HERE / 'build_files' / prefix
     if artifacts.exists():
@@ -115,15 +118,22 @@ def ocannl(out, backend, workload, treatment, repeat, dry=False):
             '--ocannl_clean_up_build_files_on_startup=false',
             f'--ocannl_build_files_prefix={prefix}',
             f'--ocannl_simplify_fp_algebra={TREATMENTS[treatment]}']
+    if dry:
+        argv[0] = str(ROOT / '_build/default/benchmarks/runners/ocannl/bench_mlp.exe')
+        argv.append('--self-test')
     try:
         row = cell(out, name, argv, env)
     finally:
         if artifacts.exists():
             shutil.move(str(artifacts), str(out / name / 'artifacts'))
-    if row['backend'] != backend or row['workload'] != workload or row['searched']:
+    expected_workload = 'selftest-tiny' if dry else workload
+    if row['backend'] != backend or row['workload'] != expected_workload or row['searched']:
         raise RuntimeError(f'{name}: wrong backend/workload or a searching process')
-    oracle = result(out / f'torch-{workload}' / 'stdout')['losses']
-    envelope(row['losses'], oracle)
+    if dry:
+        envelope(row['losses'], row['losses'])
+    else:
+        oracle = result(out / f'torch-{workload}' / 'stdout')['losses']
+        envelope(row['losses'], oracle)
     return row
 
 
@@ -196,7 +206,7 @@ def main():
         for backend in backends:
             for treatment in ['all', 'none']:
                 for repeat in range(2):
-                    ocannl(out, backend, 'lenet', treatment, repeat, dry=True)
+                    ocannl(out, backend, 'selftest', treatment, repeat, dry=True)
         (out / 'dry-ok.json').write_text(json.dumps(backends) + '\n')
         return
     if subprocess.check_output(['git', 'status', '--porcelain'], cwd=ROOT, text=True).strip():
