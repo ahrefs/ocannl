@@ -126,10 +126,10 @@
     Implementation note: the {e structured} half of the candidate space — matmul/conv site
     detection, the composed schedule pipelines those sites parameterize, and the refinement trees
     whose leaves are the seed lists — lives in [sketch_families.ml] and is included here
-    (gh-ocannl-580). This interface is unchanged by that split and remains the library's only gate;
-    the family entry points below ({!sketch_params}, {!detect_conv}, {!matmul_sketch_tree},
-    {!sketch_schedule}, {!sketch_path_traffic_floor}, …) are defined there, and
-    {!sketch_seed_params} is the composition the search enumerates. *)
+    (gh-ocannl-580). [Sketch_families]' interface bounds that include to the construction contracts
+    consumed here; the family entry points below ({!sketch_params}, {!detect_conv},
+    {!matmul_sketch_tree}, {!sketch_schedule}, {!sketch_path_traffic_floor}, …) are defined there,
+    and {!sketch_seed_params} is the composition the search enumerates. *)
 
 open Base
 
@@ -154,9 +154,9 @@ type sketch_params = {
   sk_pack_prec : Ir.Ops.prec option;
   sk_tile : Ir.Register_tile.t option;
 }
-(** Parameters of one matmul-sketch seed candidate; see the implementation's field docs. Exposed for
-    tests (the seeding pre-filter of gh-ocannl-479 and the mixed grid-outermost shape of
-    gh-ocannl-473 are asserted on directly). *)
+(** Parameters of one matmul-sketch seed candidate; see {!Sketch_families.sketch_params} for field
+    documentation. Exposed for tests (the seeding pre-filter of gh-ocannl-479 and the mixed
+    grid-outermost shape of gh-ocannl-473 are asserted on directly). *)
 
 type matmul_site = {
   m_i : Ir.Indexing.symbol;
@@ -298,19 +298,6 @@ val sketch_seed_params :
     list {e is} {!Ir.Schedule_space.leaves} of {!matmul_sketch_tree}, epilogue twins included.
     Exposed for tests. *)
 
-val mma_tile_for_precisions :
-  Ir.Backend_intf.mma_capability ->
-  a_prec:Ir.Ops.prec ->
-  b_prec:Ir.Ops.prec ->
-  d_prec:Ir.Ops.prec ->
-  (int * int * int) option
-(** The advertised intrinsic tile a matmul site with these operand and destination storage
-    precisions resolves to under the current {!Ir.Numerics} policy (f32 operands resolve to TF32
-    first when [tf32_matmuls] is on), or [None] when the capability advertises no matching format
-    triple — the resolution {!sketch_seed_params} gates its tensorized seeds on. Exposed so a test
-    can gate a tensorized leg on the seeder's own format resolution rather than on the seeds under
-    test. *)
-
 val tensorized_capability_refutation :
   is_gpu:bool ->
   is_cpu:bool ->
@@ -323,11 +310,10 @@ val tensorized_capability_refutation :
     these operand and destination storage precisions, before any geometry or site structure is
     consulted — [None] when they do not (gh-ocannl-1115). {!matmul_sketch_tree} refutes its
     tensorized branch with exactly this witness. On GPU: routine logging, an mma lane wider than the
-    workgroup, no advertised format tile ({!mma_tile_for_precisions}); on CPU, the register tiling's
-    shape-independent rules: a usable vector file, two lanes at the compute precision, uniform
-    vector-capable compute precisions, routine logging. Exposed so a test claims a tensorized seed's
-    PRESENCE exactly where the seeder's own capability judgment admits it, never gating on the seed
-    list under test. *)
+    workgroup, no advertised format tile; on CPU, the register tiling's shape-independent rules: a
+    usable vector file, two lanes at the compute precision, uniform vector-capable compute
+    precisions, routine logging. Exposed so a test claims a tensorized seed's PRESENCE exactly where
+    the seeder's own capability judgment admits it, never gating on the seed list under test. *)
 
 module Family_decision : sig
   (** {1 What a commitment on the matmul family tree is (gh-ocannl-591)}
