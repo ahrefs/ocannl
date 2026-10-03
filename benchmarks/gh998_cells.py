@@ -33,6 +33,7 @@ import time
 
 import fixture_digest
 import cell_group
+import bench_venv
 
 ROOT = Path(__file__).resolve().parent.parent
 HERE = ROOT / 'benchmarks'
@@ -262,7 +263,7 @@ def main():
         if preflight.exists():
             raise RuntimeError('prepare requires a fresh output directory')
         preflight.write_text(json.dumps(current, indent=2) + '\n')
-        python = str(HERE / '.venv/bin/python')
+        python = str(bench_venv.venv_python(HERE))
         for workload in workloads:
             cell(out, f'torch-{workload}', [python, str(HERE / 'runners/pytorch/run.py'),
                  '--fixture', str(HERE / 'fixtures' / (workload + '.safetensors')),
@@ -277,7 +278,7 @@ def main():
                     ocannl(out, backend, 'selftest', treatment, repeat, dry=True)
         (out / 'dry-ok.json').write_text(json.dumps(backends) + '\n')
         return
-    if subprocess.check_output(['git', 'status', '--porcelain'], cwd=ROOT, text=True).strip():
+    if subprocess.check_output(['git', 'status', '--porcelain', '--untracked-files=no'], cwd=ROOT, text=True).strip():
         raise RuntimeError('timing requires a clean tree')
     if not set(backends) <= set(json.loads((out / 'dry-ok.json').read_text())):
         raise RuntimeError('backend has not passed dry run')
