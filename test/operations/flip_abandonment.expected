@@ -18,6 +18,19 @@ the trajectory's identity carries a set Search_shaping key and no other class's:
 a replayed incumbent carries the storing search's timed record: true
 a replay under another beam width abandons nothing, where the same shape's replay would: true
 a replay under other repeats abandons nothing, where the same shape's replay would: true
+the cached abandonment starts with a search of exactly beam_width timings: true
+an abandoned flip is not searched on replay: true
+the harness counts the cold abandonment as a search: true
+the harness counts the abandoned prefix replay as a replay with no search: true
+another beam width searches before abandoning at its own depth: true
+another sampling shape searches before abandoning: true
+a weaker incumbent invalidates the cached abandonment and the full search runs: true
+a completed winner takes precedence over the older abandonment record: true
+a looser margin invalidates the cached abandonment: true
+a call without an abandonment rule searches normally: true
+an incumbent with no record invalidates the cached abandonment: true
+a mismatched abandonment digest is rejected before the flip searches again: true
+an abandonment with a refused window is not cached: true
 autotune_progress is on for this run: true
 the shipped routine computes the plain compile's values: true
 the hopeless flip's report is an abandonment after beam_width timed candidates: true
@@ -25,6 +38,11 @@ the A/B winner ships: true
 the progress record closes the flip's search as abandoned: true
 the flip's arm_done says abandoned, after beam_width timings, against the incumbent's 4 ms: true
 flips_done counts the abandonment among the measured flips: true
+the shipped routine computes the plain compile's values: true
+the cold cached flip chain really searches and abandons a distinct flip: true
+the shipped routine computes the plain compile's values: true
+the warm flip chain replays both placement arms: true
+the warm flip chain replays the abandonment and ships the same winner: true
 the shipped routine computes the plain compile's values: true
 a flip that becomes profitable is searched in full: true
 and the refined placement ships: true
