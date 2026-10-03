@@ -63,6 +63,10 @@ ok: source -- a fragment named through a binding is still that fragment
 ok: source -- same-named literal lets in different scopes each pin their own text
 ok: source -- same-named literal lets pin their text even when the values agree
 ok: source -- a parameter is not a same-named literal let elsewhere in the file
+ok: source -- labelled source and several text parameters match reordered call arguments
+ok: source -- labelled parameters do not shift positional source or text arguments
+ok: source -- a helper reading generated source internally pins its labelled markers
+ok: source -- labelled predicates over ordinary text pin no generated fragments
 ok: source -- a binding shadowing a literal let is not that literal
 ok: source -- a buffer-writing serializer is an emitter too
 ok: source -- the buffer a serializer writes into carries the text, across bindings

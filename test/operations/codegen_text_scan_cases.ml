@@ -430,7 +430,29 @@ let () = p "resident" (resident (Generated.read "r") ~body_begin:"/* wmma body b
 let metal_marker () =
   let body_begin = "/* simdgroup fragment reduction body begins */" in
   describe body_begin|ocaml},
-      "+partial" );
+      {|"/* wmma body begins */"|} );
+    ( "labelled source and several text parameters match reordered call arguments",
+      {ocaml|let resident ~body_begin ~src ~body_end =
+  Option.is_some (String.substr_index src ~pattern:body_begin)
+  && Option.is_some (String.substr_index src ~pattern:body_end)
+let () = p "resident" (resident ~body_end:"end marker" ~src:(Generated.read "r") ~body_begin:"begin marker")|ocaml},
+      {|"begin marker" "end marker"|} );
+    ( "labelled parameters do not shift positional source or text arguments",
+      {ocaml|let has ?(enabled = true) ~unused src sub = String.is_substring src ~substring:sub
+let () = p "marker" (has ~unused:"not a pin" (Generated.read "r") "real marker")|ocaml},
+      {|"real marker"|} );
+    ( "a helper reading generated source internally pins its labelled markers",
+      {ocaml|let check ~build ~marker =
+  let src = Generated.read (build ()) in
+  String.is_substring src ~substring:marker
+let () = p "marker" (check ~build:compile ~marker:"internal marker")|ocaml},
+      {|"internal marker"|} );
+    ( "labelled predicates over ordinary text pin no generated fragments",
+      {ocaml|let has ~src ~sub = String.is_substring src ~substring:sub
+let () =
+  let generated = Generated.read "r" in
+  p "ordinary" (has ~src:backend_name ~sub:"not a pin")|ocaml},
+      "" );
     ( "a binding shadowing a literal let is not that literal",
       {ocaml|let marker = "/* stale marker */"
 let () =

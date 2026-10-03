@@ -1564,6 +1564,11 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   bindings outright, equal values included. Taint, emitter value aliases and predicate names stay
   file-wide on purpose, since there over-reach costs an inventory line rather than naming the
   wrong fragment. `codegen_text_scan_cases` controls each spelling against the old resolution.
+- Predicate parameters use the emitter destination lookup too (gh-ocannl-1150): labelled text
+  and source parameters match by label, while only unlabelled parameters consume positions.
+  Keep every text test in a predicate, since `residency_holds` pins several caller-supplied markers;
+  choosing one loses the rest even after the parameter reader learns labels. Optional defaults
+  must not stop that reader before a later source parameter.
 - **What no file-local rule can follow now says so.** A buffer is where generated text lands with no
   name to carry it, and the ways to fill one do not end (a wrapper reaching its parameter through a
   local binding, PPrint's own `ToBuffer` renderers, a buffer in a record). So a substring test whose
