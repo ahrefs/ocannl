@@ -99,7 +99,16 @@ files.
   `benchmarks/report-gh1003-block-fold.md`: on Metal the attention's per-layer kernels go from
   3.2-7.7 ms (composed, seq 128-1024) to one kernel of 0.36-0.82 ms, both contractions
   `Mma_intrinsics` in every layer; the key block 8/16/32 is within noise at seq 128-512 and 16
-  wins at seq 1024 (`approximate` takes 16). In training the step is backward-bound
+  wins at seq 1024. `approximate` selects `online_softmax_block=auto` (gh-ocannl-1171):
+  the device limits' `online_softmax_auto_block` keeps 16 on CUDA, Metal and CPU,
+  and 0 (the two-pass rewrite) on HIP and unmeasured targets. On gfx1151 **unified** memory,
+  the tuned f32 forward's first search sweep measured 7.22 ms at 16 against 4.72 ms at 0
+  (exact 4.75 ms); the losing placement arms of block-off and exact refused timing windows,
+  so the clean three-arm confirmation is pending, including gfx1102 **discrete**. Explicit
+  integers and `set_block` force their size. The limits travel through backend compilation
+  AND analyze-only lowering before the rewrites; the resolved code retains the existing
+  `Code_borne` cache classification. Backend-free lowering conservatively resolves auto to 0.
+  In training the step is backward-bound
   (gh-ocannl-1124): the fold moves it by 1-2%.
 - `Schedule.expand_reduction_zeros` expands covering zeros before fission when the zero policy
   distributes them (GPU, above its size threshold; gh-ocannl-1175). The aligned-merge and

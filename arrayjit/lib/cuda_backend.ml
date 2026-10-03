@@ -2123,6 +2123,7 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
            simdgroup_width = Some 32;
            (* gh-ocannl-1124: measured true on the RTX of rog-nv; see the field. *)
            lane_scalar_recompute_cheap = true;
+           online_softmax_auto_block = 16;
            worker_pool_tag = None;
            (* Filled fresh by the accessor below, not here: both inputs are process-mutable
               ([Train.CDSL.enable_all_debugs] flips the debug settings at any point), and this

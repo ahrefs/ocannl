@@ -25,7 +25,8 @@
    schedule ops' reach), and the declines (an active dropout's shape, a reader of the row state the
    fold cannot move, scores that are no contraction), each falling back to the two-pass form; 7.
    training: the fold forward under the composed backward (treatment E of the gh-1002/1003 record)
-   and under the fused one (treatment F). *)
+   and under the fused one (treatment F); 8. device resolution before analysis and compilation, and
+   structural agreement with an explicit block size. *)
 
 open Base
 open Stdio
@@ -760,3 +761,98 @@ let () =
         ("a NaN fill: " ^ name ^ ".grad is NaN exactly where the composed one is")
         gf gc
         ~f:(fun f c -> Bool.equal (Float.is_nan f) (Float.is_nan c)))
+
+(* --- Leg 8: automatic block size is a device fact before every lowering. --- *)
+let () =
+  printf "--- leg 8: auto resolves before lowering and preserves explicit sizes ---\n";
+  let key = "online_softmax_block" in
+  let previous = Hashtbl.find Utils.config_file_args key in
+  Hashtbl.set Utils.config_file_args ~key ~data:"auto";
+  Online_softmax.set_enabled (Some true);
+  Online_softmax.set_backward_enabled (Some false);
+  Online_softmax.set_block None;
+  Exn.protect
+    ~finally:(fun () ->
+      (match previous with
+      | None -> Hashtbl.remove Utils.config_file_args key
+      | Some value -> Hashtbl.set Utils.config_file_args ~key ~data:value);
+      Online_softmax.set_enabled None;
+      Online_softmax.set_backward_enabled None;
+      Online_softmax.set_block None)
+    ~f:(fun () ->
+      p "auto keeps block 16 where the device says the fold is profitable"
+        (Online_softmax.block ~auto_block:16 () = 16);
+      p "auto uses the device key-block size rather than a fixed profile constant"
+        (Online_softmax.block ~auto_block:8 () = 8);
+      p "auto keeps the two-pass rewrite on an unmeasured device" (Online_softmax.block () = 0);
+      Tensor.unsafe_reinitialize ();
+      let t = model ~seq:32 ~layers:1 ~d_k:8 ~prefix:0 () in
+      Train.set_materialized t.Tensor.value;
+      let comp = Train.forward t in
+      let lower auto_block =
+        Ir.Assignments.lower
+          ~rewrite_target:{ online_softmax_auto_block = auto_block }
+          (LL.empty_optimize_ctx ()) ~unoptim_ll_source:None ~ll_source:None ~cd_source:None
+          ~name:"osb_auto_probe" [] comp.Ir.Assignments.asgns
+      in
+      let off = lower 0 and on = lower 16 in
+      p "auto on a declining device lowers to the two-pass form"
+        (scans_of off.LL.llc = 1 && Set.is_empty (tiles off.LL.llc));
+      p "auto on a profitable device lowers to the block fold"
+        (scans_of on.LL.llc = 1 && Set.length (tiles on.LL.llc) = 2);
+      let digest opt = Ir.Schedule_cache.digest (Ir.Schedule_cache.canonicalize opt) in
+      p "different resolved programs have different schedule-cache code digests"
+        (not (String.equal (digest off) (digest on)));
+      List.iter
+        [ (0, off); (16, on) ]
+        ~f:(fun (size, expected) ->
+          Online_softmax.set_block (Some size);
+          p
+            (Printf.sprintf "explicit block %d bypasses declining device economics" size)
+            (String.equal (digest (lower 0)) (digest expected));
+          p
+            (Printf.sprintf "explicit block %d bypasses profitable device economics" size)
+            (String.equal (digest (lower 16)) (digest expected)));
+      Online_softmax.set_block None;
+      let ctx = Train.init_params (Context.auto ()) Ir.Indexing.Empty t in
+      let auto_block = (Context.hardware_limits ctx).Ir.Backend_intf.online_softmax_auto_block in
+      p "the backend pins the automatic block policy (HIP off; CUDA/Metal/CPU preserved)"
+        (auto_block = if String.equal backend_name "hip" then 0 else 16);
+      p "backend-free hardware limits conservatively decline the automatic fold"
+        (Ir.Backend_intf.no_hardware_limits.online_softmax_auto_block = 0);
+      let analyzed =
+        Context.lowered_for_decisions ~name:"osb_auto_analysis" ctx comp Ir.Indexing.Empty
+      in
+      (* Linking settles placements after the transform; compare the resolved structure here. *)
+      let structural_digest opt =
+        Ir.Schedule_cache.digest (Ir.Schedule_cache.canonicalize ~with_placements:false opt)
+      in
+      let analyzed_digest = structural_digest analyzed in
+      let captured_digest = ref None in
+      let captured = ref None in
+      let _auto_ctx, _routine =
+        Context.compile ~name:"osb_auto_exec"
+          ~lowered_transform:(fun opt ->
+            captured := Some opt;
+            captured_digest := Some (structural_digest opt);
+            [ opt ])
+          ctx comp Ir.Indexing.Empty
+      in
+      let compiled = Option.value_exn !captured in
+      p "analyze-only lowering honors the run's device economics"
+        (Bool.equal (Set.is_empty (tiles analyzed.LL.llc)) (auto_block = 0));
+      p "backend compilation honors the same device economics"
+        (Bool.equal (Set.is_empty (tiles compiled.LL.llc)) (auto_block = 0));
+      p "analysis and compilation agree on the resolved code structure"
+        (String.equal analyzed_digest (Option.value_exn !captured_digest));
+      Online_softmax.set_block (Some auto_block);
+      let forced_digest = ref None in
+      let _forced_ctx, _forced =
+        Context.compile ~name:"osb_auto_forced"
+          ~lowered_transform:(fun opt ->
+            forced_digest := Some (structural_digest opt);
+            [ opt ])
+          ctx comp Ir.Indexing.Empty
+      in
+      p "auto compilation has the same code structure as the explicit resolved size"
+        (String.equal (Option.value_exn !captured_digest) (Option.value_exn !forced_digest)))

@@ -68,6 +68,7 @@ val to_doc :
 val get_name_exn : t -> string
 
 val lower :
+  ?rewrite_target:Rewrites.target ->
   Low_level.optimize_ctx ->
   unoptim_ll_source:(PPrint.document -> unit) option ->
   ll_source:(PPrint.document -> unit) option ->

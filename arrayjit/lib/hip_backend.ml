@@ -1577,6 +1577,9 @@ end = struct
            simdgroup_width = Some 32;
            (* gh-ocannl-1124: measured false on gfx1151; see the field. *)
            lane_scalar_recompute_cheap = false;
+           (* gh-ocannl-1171: gfx1151 loses with the block fold; other HIP targets are unmeasured.
+              Keep the two-pass rewrite under auto until evidence admits it. *)
+           online_softmax_auto_block = 0;
            worker_pool_tag = None;
            (* Filled fresh by the accessor below, not here: both inputs are process-mutable
               ([Train.CDSL.enable_all_debugs] flips the debug settings at any point), and this

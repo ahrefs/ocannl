@@ -713,7 +713,7 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
     Hashtbl.clear device.updating_for
 end
 
-let%track6_sexp lower_assignments optim_ctx ?name bindings asgns =
+let%track6_sexp lower_assignments ~limits optim_ctx ?name bindings asgns =
   (* Fork the lineage state (computations and placements) so this compile's decisions do not leak
      into the incoming context or into sibling compiles from the same context
      (docs/proposals/context-scoped-memory-modes.md). The forked state travels with the code and
@@ -726,8 +726,10 @@ let%track6_sexp lower_assignments optim_ctx ?name bindings asgns =
   let ll_source = Utils.output_to_build_file ~fname:(name ^ ".ll") in
   let cd_source = Utils.output_to_build_file ~fname:(name ^ ".cd") in
   ( name,
-    Assignments.lower optim_ctx ~unoptim_ll_source ~ll_source ~cd_source ~name
-      (Indexing.bound_symbols bindings) asgns )
+    Assignments.lower
+      ~rewrite_target:{ online_softmax_auto_block = limits.online_softmax_auto_block }
+      optim_ctx ~unoptim_ll_source ~ll_source ~cd_source ~name (Indexing.bound_symbols bindings)
+      asgns )
 
 let%debug3_sexp verify_prior_context ~(plc : Tn.Placements.t) ~ctx_arrays ~from_prior_context : unit
     =
@@ -966,7 +968,8 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
       (comp : Assignments.comp) : code =
     let (name : string), (lowered : Low_level.optimized) =
       match prelowered with
-      | None -> lower_assignments optim_ctx ?name bindings comp.asgns
+      | None ->
+          lower_assignments ~limits:(Device.hardware_limits ()) optim_ctx ?name bindings comp.asgns
       | Some (lowered : Low_level.optimized) ->
           (* gh-ocannl-562 test seam: the caller supplies the lowering. Substituting only the
              codegen input ([lowered_transform]) is not enough to execute hand-built IR — the

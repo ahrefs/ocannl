@@ -15,10 +15,18 @@
     application consumes at least one instance of its pattern. A member that keeps rewriting past
     {!max_rounds} rounds is refused as malformed rather than looped on. *)
 
+type target = { online_softmax_auto_block : int }
+(** Device economics needed before lowering analyses. Supplied by backend limits rather than
+    selected by backend name; kept separate from [Backend_intf] to avoid an IR/interface dependency
+    cycle. *)
+
+val conservative_target : target
+(** Backend-free lowerings decline automatic block folding. Explicit numeric sizes still apply. *)
+
 type rewrite = {
   name : string;  (** The config key that gates it. *)
   enabled : unit -> bool;
-  apply : Low_level.t -> Low_level.t;
+  apply : target -> Low_level.t -> Low_level.t;
   reset : unit -> unit;
       (** Drops whatever the member retains across lowerings (memoized nodes, say): the
           session-reset hook, run by [Tensor.unsafe_reinitialize] through {!reset}. *)
@@ -32,5 +40,5 @@ val max_rounds : int
 val reset : unit -> unit
 (** Every member's [reset], for the session-reset boundary. *)
 
-val apply : Low_level.t -> Low_level.t
+val apply : ?target:target -> Low_level.t -> Low_level.t
 (** The enabled members to a fixpoint; the identity when none is enabled. *)
