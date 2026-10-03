@@ -38,8 +38,12 @@ let () =
     leg;
     mapping;
   } =
-    Bench_gpt_model.prepare ~materialize ~debug st
+    Bench_gpt_model.prepare ~materialize st
   in
+  if debug then (
+    H.dump_params batch_loss;
+    Stdlib.exit 0);
+  let ctx = H.inject ctx st batch_loss mapping in
   let backend = Context.backend_name ctx in
   let t0 = Unix.gettimeofday () in
   (* Placement A/B: tune the default (virtual + promotion) graph and the materialize-all graph,
@@ -55,20 +59,7 @@ let () =
     Train.tune_placements ~report:(H.collect_arm arms) ~flip_report:(H.collect_search arms)
       ~on_ship:(H.collect_ship arms) ~rounds:0 ~timing_ctx:scratch ctx batch_loss comp bindings
   in
-  let ctx, routines =
-    match step_shape with
-    | `Train parts -> H.compile_train_step ~tune ~tuned ctx bindings parts
-    | `Forward fwd ->
-        let ctx, routine =
-          if tune then tuned ctx fwd
-          else if Lazy.force Autotune.model_default_enabled then
-            (* gh-ocannl-491: the model-picked untuned default (config
-               [model_default_schedule=true]). *)
-            Autotune.model_default ctx fwd bindings
-          else Context.compile ctx fwd bindings
-        in
-        (ctx, H.Plain routine)
-  in
+  let ctx, routines = H.compile_step ~tune ~tuned ctx bindings step_shape in
   (* What the timed artifact emitted, off the routines themselves (gh-ocannl-626): a flip refinement
      or a timing_ctx replay fallback ships something no arm report describes. *)
   H.collect_shipped arms routines;

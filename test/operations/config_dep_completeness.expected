@@ -18,7 +18,7 @@ test/config/dune: exe-running rules
 test/einsum/dune: tests, inline-test libraries, exe-running rules
 test/gpt2/dune: tests, exe-running rules
 test/operations/atomic_file_rename_scan_fixture/dune: tests, exe-running rules
-test/operations/dune: tests, inline-test libraries, exe-running rules, exempt rules (gen_codec_header.exe)
+test/operations/dune: tests, inline-test libraries, exe-running rules, exempt rules (gen_codec_header.exe, python3, handed %{dep:gh1133_summary.py}, %{dep:../../benchmarks/gh1133_summary.py})
 test/operations/profiles/dune: tests, exe-running rules
 test/operations/startup_streams/dune: tests, exe-running rules
 test/ppx/dune: tests, exe-running rules, exempt rules (pp.exe)
@@ -32,6 +32,7 @@ Actions that execute a program: run, dynamic-run, system, bash.
 Actions that do not: progn, concurrent, chdir, setenv, with-stdout-to, with-stderr-to, with-outputs-to, with-stdin-from, with-accepted-exit-codes, ignore-stdout, ignore-stderr, ignore-outputs, no-infer, echo, write-file, cat, copy, copy#, copy-and-add-line-directive, diff, diff?, cmp, pipe-stdout, pipe-stderr, pipe-outputs, format-dune-file, or, and, not. Anything else fails above.
 
 Exempt from the dependency, running an executable that reads no configuration:
+  test/operations:python3, handed %{dep:gh1133_summary.py}, %{dep:../../benchmarks/gh1133_summary.py} -- the training-table report controls import only the stdlib Python summary module and launch no OCANNL executable, so no configuration reader is in reach
   arrayjit/lib:gen_builtins/generate.exe -- the builtin header generator links only the OCaml stdlib and a pure C definition table; it reads no OCANNL configuration
   test/operations:gen_codec_header.exe -- the codec header generator for half_codec_exhaustive and bf16_codec_exhaustive (gh-ocannl-985, gh-ocannl-1069) links only the OCaml stdlib and a copy of the same pure C definition table; it reads no OCANNL configuration
   test/ppx:pp.exe -- the ppx driver, run to expand a source file and diff the expansion: `ppx_ocannl` links base, ppxlib, str and einsum_parser -- no configuration reader -- so no `ocannl_config` can reach its output

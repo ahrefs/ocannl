@@ -46,7 +46,7 @@ let with_master_weights_except_ln ~prec f =
 type prepared = {
   ctx : Context.t;
   batch_loss : Tensor.t;
-  step_shape : [ `Train of H.train_parts | `Forward of Ir.Assignments.comp ];
+  step_shape : H.step_shape;
   bindings : Ir.Indexing.unit_bindings;
   batch_n : Ir.Indexing.static_symbol;
   n_batches : int;
@@ -56,7 +56,7 @@ type prepared = {
   mapping : (string * string list) list;
 }
 
-let prepare ~materialize ~debug st =
+let prepare ~materialize st =
   (* BENCH_PRECISION=bf16|f16 (gh-ocannl-492 task 4). Reduced precision enters differently in the
      two modes, and the difference is the workload's, not a limitation:
 
@@ -198,9 +198,6 @@ let prepare ~materialize ~debug st =
   in
   let ctx = Context.auto () in
   let ctx = Train.init_params ctx bindings batch_loss in
-  if debug then (
-    H.dump_params batch_loss;
-    Stdlib.exit 0);
   let mapping =
     ("lnf_g", [ "gamma"; "lnf" ])
     :: ("lnf_b", [ "beta"; "lnf" ])
@@ -230,5 +227,4 @@ let prepare ~materialize ~debug st =
           ]
         else [])
   in
-  let ctx = H.inject ctx st batch_loss mapping in
   { ctx; batch_loss; step_shape; bindings; batch_n; n_batches; batch_size; seq; leg; mapping }

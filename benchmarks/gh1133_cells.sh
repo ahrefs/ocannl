@@ -147,6 +147,7 @@ capped() {
            alarm $cap; waitpid $pid, 0; exit($? & 127 ? 128 + ($? & 127) : $? >> 8)' \
     "$cap" "$@" >"$out/$cell.out" 2>>"$out/$cell.err"
   st=$?
+  printf "%s\n" "$st" >"$out/$cell.exit"
   t1=$(date +%s)
   echo "=== cell $cell exit $st wall $((t1 - t0))s"
   [ "$st" -eq 0 ] || failed=1
@@ -243,73 +244,12 @@ for step in "$@"; do
         for t in $treatments; do
           SEG=1 BENCH_STEPS=1 cell "$f" "$t" trainseg bench_gpt_diag || continue
           name="$backend-$f-$t-trainseg"
-          if ! grep -q '^mode: train backend:' "$out/$name.out"; then
-            echo "gh1133: $name did not run a training diagnostic; use a BASE with gh-ocannl-1170"
-            failed=1
-          fi
+          python3 "$root/benchmarks/gh1133_summary.py" --check-training "$out" "$name.out" || failed=1
         done
       done ;;
     summary)
-      python3 - "$out" "$treatments" "$ref" "${REF_ALL:-}" >"$out/summary.md" <<'PY' || failed=1
-import json, os, re, statistics, sys
-out, treatments, ref_treatment = sys.argv[1], sys.argv[2].split(), sys.argv[3]
-ref_all = sys.argv[4] if len(sys.argv) > 4 else ""
-cells, missing = {}, []
-for name in sorted(os.listdir(out)):
-    m = re.fullmatch(r"(\w+)-(gpt2_mini\w*)-(base|b?(?:fold)?(?:d1)?(?:fill\d+|keep|legacy|pre(?:refused|duplicated|cooperative)))-(r\d+)\.out", name)
-    if not m:
-        continue
-    rec = None
-    for line in open(os.path.join(out, name)):
-        line = line.strip()
-        if line.startswith("{") and '"step_ms"' in line:
-            rec = json.loads(line)
-    if rec is None:
-        missing.append(name)
-        continue
-    cells.setdefault(m.group(1, 2, 3), []).append((m.group(4), rec))
-incomplete = bool(missing) or not cells
-for name in missing:
-    print("MISSING RESULT: %s has no result line" % name)
-if not cells:
-    print("NO MEASUREMENT: no numbered cell produced a result line")
-print("| backend | fixture | treatment | p50 per repeat (ms) | median p50 | vs %s | p10..p90 spread | queued (median) | loss vs %s |" % (ref_treatment, ref_treatment))
-print("|---|---|---|---|---|---|---|---|---|")
-missing_refs = []
-def med(key):
-    reps = cells.get(key, [])
-    return statistics.median(r["step_ms"]["p50"] for _, r in reps) if reps else None
-for (backend, fixture, treatment), reps in sorted(cells.items(), key=lambda kv: (kv[0][0], kv[0][1], treatments.index(kv[0][2]) if kv[0][2] in treatments else 99)):
-    p50s = [r["step_ms"]["p50"] for _, r in reps]
-    m = statistics.median(p50s)
-    spread = max(r["step_ms"]["p90"] / r["step_ms"]["p10"] for _, r in reps)
-    queued = statistics.median(r.get("queued_step_ms") or 0.0 for _, r in reps)
-    # A d1 treatment is compared with the d1 form of the reference (the same attention form).
-    rt = ref_all or (("d1" + ref_treatment) if treatment.startswith("d1") else ref_treatment)
-    ref = med((backend, fixture, rt))
-    if ref is None:
-        # The comparison the summary advertises did not happen: an incomplete matrix.
-        missing_refs.append("%s %s %s (reference %s)" % (backend, fixture, treatment, rt))
-    loss = ""
-    bref = cells.get((backend, fixture, rt))
-    if bref:
-        a, b = reps[0][1].get("losses") or [], bref[0][1].get("losses") or []
-        if a and b and len(a) == len(b):
-            loss = "%.2g" % max(abs(x - y) / max(1.0, abs(y)) for x, y in zip(a, b))
-    print("| %s | %s | %s | %s | %.2f | %s | %.3fx | %.2f | %s |" % (
-        backend, fixture, treatment, ", ".join("%.2f" % p for p in p50s), m,
-        "%.3fx" % (m / ref) if ref else "", spread, queued, loss))
-for row in missing_refs:
-    print("MISSING REFERENCE: %s has no reference cell to compare with" % row)
-for name in sorted(os.listdir(out)):
-    if name.endswith("-trainseg.out"):
-        print("\n### Training segments: %s\n" % name[:-4])
-        print("Isolated min-of-20 launch + sync times; their sum is not a step latency.\n")
-        print("```text")
-        print(open(os.path.join(out, name)).read().rstrip())
-        print("```")
-sys.exit(1 if incomplete or missing_refs else 0)
-PY
+      python3 "$root/benchmarks/gh1133_summary.py" "$out" "$treatments" "$ref" "${REF_ALL:-}" \
+        >"$out/summary.md" || failed=1
       cat "$out/summary.md" ;;
     *) echo "gh1133: unknown step $step"; failed=1 ;;
   esac

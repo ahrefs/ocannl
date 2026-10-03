@@ -467,11 +467,12 @@ nested-division rewrite; regression test `test/training/virtual_grads_parity.ml`
   attribution, the split-reduce `op_legality` verdicts, and the nine variant cells) — kept because
   that session's logs were lost to GPU-driver crashes and reboots, so it is the only surviving
   primary source for a state the current report no longer describes.
-- `runners/ocannl/bench_{gpt,conv}_diag.ml` — schedule diagnostics: print the default
-  fission-pipeline segment census (launch geometry, per-nest loop extents, written nodes with
-  materialization markers) for the gpt2_mini / lenet graphs, then optionally time steps
-  (`BENCH_STEPS=1`) or dump tensor values (`BENCH_PROBE=1`, `BENCH_DUMP=1`; `BENCH_FWD=1`
-  compiles forward-only, `BENCH_PROMOTE=0` disables fission's Local promotion in the census).
+- `runners/ocannl/bench_{gpt,conv}_diag.ml` — schedule diagnostics for gpt2_mini / lenet:
+  GPT prints the compiled segment census (launch geometry, statement counts and written nodes).
+  Conv prints the reconstructed fission census, including per-nest loop extents and materialization
+  markers. `BENCH_STEPS=1` adds full-step controls; conv also offers value dumps (`BENCH_PROBE=1`,
+  `BENCH_DUMP=1`) and `BENCH_FWD=1` for forward-only compilation. `BENCH_PROMOTE=0` reconstructs
+  the census with fission's Local promotion disabled.
   `BENCH_SEG_TIMES=1` (**both runners**) adds per-segment (≈ per-layer) wall times: each fission
   segment is compiled as its own routine (hermetic substitution through the `lowered_transform`
   seam) and timed min-of-N with a sync per run, labeled by the nodes it writes — the per-layer
@@ -486,16 +487,21 @@ nested-division rewrite; regression test `test/training/virtual_grads_parity.ml`
   so a surprising segment time is read together with this).
   A training fixture (`mode: train`, e.g. `gpt2_mini_train`) selects the real backprop + SGD
   step in `bench_gpt_diag`, sharing model construction and fixture injection with `bench_gpt`.
-  Its census and timing rows enumerate `Context.routine.segments` as shipped, including gradient
-  zeroing and optimizer work, with identical segment IDs and launch geometry. `BENCH_STEPS=1`
+  Both GPT modes enumerate `Context.routine.segments` as shipped; training includes gradient zeroing
+  and optimizer work. Census and timing use identical segment IDs and geometry. `BENCH_STEPS=1`
   prints three full-step controls and losses **before** isolated timings: timing a backward or
   optimizer segment repeatedly changes gradients and weights. The isolated minima include one
   launch + sync per kernel; their sum is not a step latency. Classified standalone compilation
   refusals retain a `DECLINED` row and the total states how many segments were timed.
-  `BENCH_PROMOTE=0` remains an inference-only census experiment.
+  The row format and timing loop are shared with `BENCH_KERNEL_TABLE=1`; `BENCH_PROMOTE=0`
+  retains the inference-only reconstructed census experiment. The diagnostic includes both compiled
+  host-gated routines even before a step runs, while benchmark reporting includes conditional SGD
+  only when the measured window ran it.
   `gh1133_cells.sh ... build provenance step trainseg summary` puts the training census/timing
   tables beside its step-time matrix; every selected treatment's runner must support training
-  diagnostics (an older forward-only BASE is refused).
+  diagnostics (an older forward-only BASE is refused). The driver records a cell's exit status;
+  both `trainseg` and `summary` use one validator, so forward-only, capped and crashed outputs are
+  refused explicitly and never published as training tables.
   `BENCH_SR_SITES=1` (`bench_conv_diag`) prints what `Autotune.split_reduce_sites` proposes on the
   same graph — the gh-ocannl-484 task-3 seeding can only reach the accumulations listed there, so
   it is the companion to the census above when asking why a seeded split-reduce family did or did

@@ -206,6 +206,7 @@
 (alias
  (name runtest)
  (deps
+  (alias runtest-gh1133_summary)
   (alias runtest-online_softmax_fast_math)
   (alias runtest-online_softmax_block_fast_math)
   (alias runtest-fast_math_libmvec)
@@ -6969,3 +6970,24 @@
   (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
  (modules gpu_lane_reduction)
  (libraries base ocannl stdio arrayjit.verdict ll_test test_utils))
+
+; Host-only controls for the benchmark driver's report validator.
+
+(rule
+ ; ocannl-backend: none -- runs Python report controls and launches no OCANNL executable.
+ (alias runtest-gh1133_summary)
+ (deps
+  (alias runtest-env_spelling_gate)
+  gh1133_summary.py
+  gh1133_summary.expected
+  ../../benchmarks/gh1133_summary.py)
+ (action
+  (no-infer
+   (progn
+    (with-stdout-to
+     gh1133_summary.actual
+     (run
+      python3
+      %{dep:gh1133_summary.py}
+      %{dep:../../benchmarks/gh1133_summary.py}))
+    (diff gh1133_summary.expected gh1133_summary.actual)))))

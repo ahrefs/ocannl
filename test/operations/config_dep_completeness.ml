@@ -68,6 +68,10 @@ module Scan = Test_utils.Dune_stanza_scan
    claim about what a program links, and a claim that stops being true is not a free pass. *)
 let exempt_sites =
   [
+    ( "test/operations:python3, handed %{dep:gh1133_summary.py}, \
+       %{dep:../../benchmarks/gh1133_summary.py}",
+      "the training-table report controls import only the stdlib Python summary module and launch \
+       no OCANNL executable, so no configuration reader is in reach" );
     ( "arrayjit/lib:gen_builtins/generate.exe",
       "the builtin header generator links only the OCaml stdlib and a pure C definition table; it \
        reads no OCANNL configuration" );
