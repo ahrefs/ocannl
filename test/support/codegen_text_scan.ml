@@ -908,8 +908,16 @@ let local_generated_source scope ~emitters ~aliases body =
         super#expression env e
     end
   in
-  ignore
-    (resolver#expression { frames = []; modules = Map.empty (module String) } body : expression);
+  (* Local let denotations are requested before their right-hand sides are walked. Revisit the
+     lexical walk until identifier provenance stops growing, so aliases can use those resolved
+     right-hand sides without replacing lexical scope with file-wide name taint. *)
+  let changed = ref true in
+  while !changed do
+    let previous = Hashtbl.length uses in
+    ignore
+      (resolver#expression { frames = []; modules = Map.empty (module String) } body : expression);
+    changed := Hashtbl.length uses <> previous
+  done;
   generated
 
 type predicate = {
@@ -1251,6 +1259,40 @@ let classify_source ~emitters ~path ~contents =
           List.filter predicates ~f:(fun p -> Poly.equal p.pred_binding binding_id)
       | _ -> []
     in
+    (* Ordinary forwarding wrappers do not expose their caller's marker as a predicate parameter.
+       Keep calls supplying generated text visibly partial, including chains of such wrappers. *)
+    let forwarding = Hashtbl.Poly.create () in
+    let function_at callee =
+      match Hashtbl.find scope.values (span callee.pexp_loc) with
+      | Some (Function_binding binding_id) -> Some binding_id
+      | _ -> None
+    in
+    let changed = ref true in
+    while !changed do
+      changed := false;
+      List.iter bindings ~f:(fun binding ->
+          if not (Hashtbl.mem forwarding binding.binding_id) then (
+            let forwards = ref false in
+            let iterator =
+              object
+                inherit Ast_traverse.iter as super
+
+                method! expression e =
+                  (match e.pexp_desc with
+                  | Pexp_apply (callee, _) ->
+                      if
+                        List.exists (predicates_at callee) ~f:(fun p -> Option.is_some p.source_at)
+                        || Option.exists (function_at callee) ~f:(Hashtbl.mem forwarding)
+                      then forwards := true
+                  | _ -> ());
+                  super#expression e
+              end
+            in
+            iterator#expression binding.body;
+            if !forwards then (
+              Hashtbl.set forwarding ~key:binding.binding_id ~data:();
+              changed := true)))
+    done;
     let pins = ref [] in
     let is_consumed (e : expression) =
       List.mem consumed (e.pexp_loc.loc_start.pos_cnum, e.pexp_loc.loc_end.pos_cnum)
@@ -1383,6 +1425,11 @@ let classify_source ~emitters ~path ~contents =
           | None -> (
               match e.pexp_desc with
               | Pexp_apply (callee, args) ->
+                  if
+                    List.is_empty (predicates_at callee)
+                    && Option.exists (function_at callee) ~f:(Hashtbl.mem forwarding)
+                    && List.exists args ~f:(fun (_, argument) -> mentions_tainted argument)
+                  then unattributed := true;
                   List.iter (predicates_at callee) ~f:(fun predicate ->
                       let at parameter = predicate_argument_at parameter args in
                       let source = Option.bind predicate.source_at ~f:at in

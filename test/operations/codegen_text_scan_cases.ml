@@ -466,6 +466,19 @@ let () =
   p "default" (has (Generated.read "r") ());
   p "explicit" (explicit (Generated.read "r") ~marker:"explicit marker" ())|ocaml},
       {|"default marker" "explicit marker"|} );
+    ( "a forwarding wrapper keeps unresolved caller markers visibly partial",
+      {ocaml|let has src marker = String.is_substring src ~substring:marker
+let check src marker = has src marker
+let () = p "marker" (check (Generated.read "r") "forwarded marker")|ocaml},
+      "+partial" );
+    ( "a helper-local generated read propagates through normalization aliases",
+      {ocaml|let check ~routine ~marker =
+  let src = Generated.read routine in
+  let alias = String.lowercase src in
+  let second = String.strip alias in
+  String.is_substring second ~substring:marker
+let () = p "marker" (check ~routine:"r" ~marker:"aliased marker")|ocaml},
+      {|"aliased marker"|} );
     ( "same-named local predicates pin only their in-scope composite context",
       {ocaml|let kernel () =
   let has ~src ~marker = String.is_substring src ~substring:("kernel:" ^ marker) in
