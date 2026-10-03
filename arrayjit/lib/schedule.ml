@@ -2142,11 +2142,13 @@ let apply_privatize ~target ~over ~acc_prec (opt : Low_level.optimized) : Low_le
   (* Every loop of the routine by index symbol, with its axis type. Guard classification below needs
      the axis type of symbols bound OUTSIDE [over] too (a lane restriction is the whole point of the
      rule), and the [rewrite_loop] callback only sees the subtree. *)
+  let over_loops = ref [] in
   let loop_axes =
     let tbl = ref (Map.empty (module Indexing.Symbol)) in
     let rec go llc =
       match llc with
       | For_loop { index; axis; body; _ } ->
+          if Indexing.equal_symbol index over then over_loops := List.map (loop_bounds llc) ~f:fst;
           tbl := Map.set !tbl ~key:index ~data:axis;
           go body
       | Scan_loop { carried; body; _ } ->
@@ -2185,7 +2187,36 @@ let apply_privatize ~target ~over ~acc_prec (opt : Low_level.optimized) : Low_le
     go opt.llc;
     !tbl
   in
-  rewrite_loop ~what:"Schedule.Privatize" ~sym:over opt.llc ~f:(fun fc ->
+  (* The serial localizer's zero-forwarding proof also licenses a private tile's opening value. The
+     entire target RMW must be in [over], including EVERY repeated-cell loop; otherwise resetting
+     the tile would drop contributions made by an enclosing reduction. The original initializer may
+     already be an Expand_zero companion with hardware annotations. *)
+  let stmts = flat_lines [ opt.llc ] in
+  let meaningful = List.filter stmts ~f:(function Noop | Comment _ -> false | _ -> true) in
+  let rec preceding_zero = function
+    | init :: (next :: _ as rest) -> (
+        let seed =
+          match zero_initializer_target init with
+          | Some tn when Tn.equal tn target -> (
+              match zero_seed_candidate ~allow_workgroup_barriers:true target next with
+              | Some (_, repeated)
+                when List.for_all repeated ~f:(fun s ->
+                         List.mem !over_loops s ~equal:Indexing.equal_symbol)
+                     && List.exists (affine_accesses next) ~f:(fun a ->
+                         Tn.equal a.Affine.a_tn target
+                         && List.Assoc.mem a.a_loops over ~equal:Indexing.equal_symbol) ->
+                  Some init
+              | _ -> None)
+          | _ -> None
+        in
+        match seed with Some _ -> seed | None -> preceding_zero rest)
+    | _ -> None
+  in
+  let zero_stmt = preceding_zero meaningful in
+  let llc =
+    unflat_lines (List.filter stmts ~f:(fun st -> not (Option.exists zero_stmt ~f:(phys_equal st))))
+  in
+  rewrite_loop ~what:"Schedule.Privatize" ~sym:over llc ~f:(fun fc ->
       if not (equal_axis_type fc.axis Serial) then
         invalid_arg "Schedule.Privatize: the accumulation loop must be Serial";
       (* Accesses of [target] within the loop's subtree, with their loop stacks and enclosing [If]
@@ -2544,7 +2575,13 @@ let apply_privatize ~target ~over ~acc_prec (opt : Low_level.optimized) : Low_le
         in
         let stmt =
           if into_tile then
-            Set { tn = tile; idcs = t_idcs; llsc = Get (target, src_idcs); debug = "" }
+            Set
+              {
+                tn = tile;
+                idcs = t_idcs;
+                llsc = (if Option.is_some zero_stmt then Constant 0. else Get (target, src_idcs));
+                debug = "";
+              }
           else Set { tn = target; idcs = src_idcs; llsc = Get (tile, t_idcs); debug = "" }
         in
         (* Per-axis edge guards (construct-then-fold; they survive only for non-dividing tiles). *)
@@ -6608,9 +6645,11 @@ let default_cpu ?min_parallel (opt : Low_level.optimized) : schedule =
     Segmentation is conservative and total (no [Bail]): a statement opaque to the analysis
     ([Staged_compilation], barriers, pre-annotated loops) or one the annotator can never cover (bare
     materialized writes, materialized writes inside [Local_scope] bodies, non-injective nests) is
-    isolated into its own serial segment rather than poisoning its neighbors' schedules.
-    Materialized whole-node [Zero_out]s are likewise isolated and — on GPU — expanded
-    ({!optop.Expand_zero}) and annotated with the same geometry policy as ordinary nests.
+    isolated into its own serial segment rather than poisoning its neighbors' schedules. On GPU,
+    covering reduction zeros expand ({!optop.Expand_zero}) before segmentation: the ordinary
+    alignment and mapping rules may keep them with their accumulation as per-cell companions.
+    Remaining materialized whole-node zeros are isolated, then expanded and annotated with the same
+    geometry policy as ordinary nests.
 
     Two constructs cross segment boundaries and need repair, because a kernel's locals die at launch
     end:
@@ -7370,10 +7409,38 @@ let fission_keep_mapping ~is_gpu ~limits =
   if is_gpu && Lazy.force gpu_fission_keep_mapping then Some (fun opt -> default_gpu ~limits opt)
   else None
 
+(* Expose an eligible zero's per-cell ownership before fission. The ordinary aligned-merge and
+   keep-mapping rules now judge it together with the reduction, just like the sketch families' zero
+   companions. Non-covering, conditional and opaque reductions retain their separate zero. *)
+let expand_reduction_zeros ~zero_sched (opt : Low_level.optimized) =
+  let rec expand = function
+    | [] -> []
+    | (Low_level.Zero_out tn as zero) :: rest ->
+        let next = List.find rest ~f:(function Low_level.Noop | Comment _ -> false | _ -> true) in
+        let expanded =
+          if
+            Option.exists next ~f:(fun next ->
+                Option.is_some (Low_level.zero_seed_candidate tn next))
+          then
+            (* Only zeros the supplied policy distributes: CPU and below-threshold zeroing keep
+               their original form. Reuse Expand_zero itself, withholding its hardware geometry
+               until the ordinary aligned-companion analysis has judged the paired nests. *)
+            List.find_map (zero_sched [ tn ]) ~f:(function
+              | Expand_zero { tn = target; _ } as op when Tn.equal tn target ->
+                  Some (apply_opt_op { opt with llc = zero } op).Low_level.llc
+              | _ -> None)
+          else None
+        in
+        Option.value expanded ~default:zero :: expand rest
+    | st :: rest -> st :: expand rest
+  in
+  { opt with llc = Low_level.unflat_lines (expand (Low_level.flat_lines [ opt.llc ])) }
+
 let fission_scheduled ?(promote_locals = false) ?(arity_cuts = false) ?keep_mapping
     ~(preset : Low_level.optimized -> schedule) ~(zero_sched : Tn.t list -> schedule)
     ~static_indices (opt : Low_level.optimized) :
     ([ `Normal | `Zeros | `Solo ] * Low_level.optimized * schedule * Low_level.optimized) list =
+  let opt = expand_reduction_zeros ~zero_sched opt in
   let plc = opt.Low_level.optimize_ctx.placements in
   let stmts = Low_level.flat_lines [ opt.Low_level.llc ] in
   let pre_promoted = if promote_locals then promote_statement_crossing_locals plc stmts else [] in

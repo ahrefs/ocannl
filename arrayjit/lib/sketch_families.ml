@@ -1199,10 +1199,10 @@ let hoist_above ~(outer : Idx.symbol) (syms : Idx.symbol list) : Sched.schedule 
    and give the resulting nest a compatible parallel geometry, via [mk_zops] on its two fresh loop
    symbols and — under a [`Grid_inner] layout only — the interior batch zero loops [mk_zops] must
    hoist under the row's block split ([~interior]; empty otherwise). When the site is NOT zeroed — a
-   fission segment's site never is, the [Zero_out] lands in its own [`Zeros] segment — there is
-   nothing to expand and the pipelines are correct without it: [Privatize] init-loads the
-   accumulator tile from the (pre-zeroed) target, and [Tile_mma] loads the accumulator fragment
-   before the reduction. *)
+   fission exposes a covering zero as an ordinary per-cell companion, and other whole-node zeros
+   land in their own [`Zeros] segment — there is nothing to expand here. Companion geometry maps the
+   per-cell zero with the site; [Privatize] can forward it into the accumulator tile using the
+   shared zero-seed proof. Otherwise the tile/fragment loads the initialized target. *)
 let zero_geometry ?(layout : batch_layout = `Serial) (site : matmul_site)
     ~(mk_zops : zi:Idx.symbol -> zj:Idx.symbol -> interior:Idx.symbol list -> Sched.schedule) :
     Sched.schedule =

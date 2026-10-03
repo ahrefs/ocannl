@@ -620,6 +620,20 @@ val peel_accum_nest :
     levels under a different guard verdict and render the same localized kernel. Codegen passes a
     reporter that accumulates the per-routine peel census; the schedule mints pass none. *)
 
+val zero_initializer_target : t -> Tnode.t option
+(** A whole-node zero, or its unconditional covering [Expand_zero] loop nest. *)
+
+val zero_seed_candidate :
+  ?allow_workgroup_barriers:bool ->
+  Tnode.t ->
+  t ->
+  (Indexing.axis_index array * Indexing.symbol list) option
+(** The zero-forwarding proof shared by code generation and [Schedule.Privatize]: one unconditional
+    same-cell RMW pair covering the whole node. Returns its index map and every loop that repeats a
+    cell; the accepting accumulator scope must contain all those loops. [allow_workgroup_barriers]
+    is for [Privatize], which retains the barriers while replacing the target accesses with
+    private-tile accesses. Opaque effects and [Tile_mma] are always refused. *)
+
 (** {2 Hardware axis analyses}
 
     Phase B of docs/proposals/axis-types-for-loops.md. Hardware slot assignment is positional, not
