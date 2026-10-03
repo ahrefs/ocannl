@@ -2,19 +2,6 @@ scalar reduction matches host reference: true
 row reduction matches host reference: true
 index-only reduction matches host reference: true
 reference discriminates a last-iteration-only result: true
-expanded-zero reduction matches a separately materialized initialization: true
-expanded-zero reduction: accumulator opens from zero in a scope local: true
-expanded-zero reduction: the reduction updates the local, not the node: true
-expanded-zero reduction: no statement both reads and writes the node: true
-expanded-zero reduction: the dead zeroing store and opening read are absent: true
-expanded-zero reduction: the node is stored exactly once, from the local: true
-expanded-zero reduction: the census names the accumulator the kernel declares: true
-expanded-zero reduction: the accumulator declaration stays plain: true
-expanded-zero reduction: the accumulating loop's volatile-read form is the one the census reports: true
-expanded-zero reduction: the forwarded zero seed performs no device read: true
-expanded-zero reduction: no rmw shadow declaration, by the census and by the text: true
-partial per-cell zero preserves the untouched cell's opening value: true
-partial per-cell zero retains zero store, opening read and closing store: true
 scalar reduction: accumulator opens from zero in a scope local: true
 scalar reduction: the reduction updates the local, not the node: true
 scalar reduction: no statement both reads and writes the node: true

@@ -514,9 +514,9 @@ let () =
      | _ -> fail "expected a first-admission partial best report");
 
   (* === Per-fission-segment sketches (F_sketch): qd = qa + qb (forced materialized), then the
-     matmul qe = qd * qc. The chain fissions; covering zeros are per-cell companions on GPU
-     (gh-ocannl-1175), while CPU keeps its whole-node form. [detect_matmul] must fire per segment
-     and the sketch pipelines handle the site's initialization in either representation. === *)
+     matmul qe = qd * qc. The chain fissions; the matmul's [Zero_out] lands in its own [`Zeros]
+     segment, so the matmul segment's site is unzeroed — [detect_matmul] must fire per segment and
+     the sketch pipelines apply without the zero-expansion geometry. === *)
   let q = 32 in
   let qav =
     Array.init (q * q) ~f:(Ll_test.cycle_flat ~dims:[| q; q |] ~modulus:11 ~offset:0. ~stride:0.125)

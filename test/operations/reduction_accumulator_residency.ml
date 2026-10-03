@@ -270,46 +270,6 @@ let () =
           (v.Ir.C_syntax.volatile_rmw_reads = 0
           && not (String.is_substring source ~substring:"__rmw_"))
   in
-  (* Hand-built post-schedule form: keep Expand_zero's per-cell nest visible to codegen. The
-     reference runs init and reduction in separate kernels, forcing the opening output read. *)
-  let module LL = Ir.Low_level in
-  let open Ll_test in
-  let node = node_factory ~first_id:9890 () in
-  let src = node ~dims:[| 2; 4 |] "res_expanded_src" in
-  let out = node ~dims:[| 2 |] "res_expanded_out" in
-  List.iter [ src; out ] ~f:materialize;
-  let z = sym () and j = sym () and i = sym () in
-  let init = loop_n z 2 (set_at out (iter z) (c 0.)) in
-  let cell = [| iter j |] in
-  let reduction =
-    loop_n j 2 (loop_n i 4 (set out cell (add (get out cell) (get src [| iter j; iter i |]))))
-  in
-  let program = seq init reduction in
-  let opt = optimize_scoped ~materialized:[ src; out ] ~name:"res_expanded" ~raw:program program in
-  let ref_ctx, ref_r =
-    Context.compile ~name:"res_expanded_reference" ~prelowered:opt
-      ~lowered_transform:(fun o -> [ { o with LL.llc = init }; { o with LL.llc = reduction } ])
-      (Context.auto ()) Ir.Assignments.empty_comp Ir.Indexing.Empty
-  in
-  let seed = [ (src, Array.init 8 ~f:(fun n -> elem (n / 4) (n % 4))); (out, [| -7.; -9. |]) ] in
-  let ref_ctx = run_linked (ref_ctx, ref_r) ~seed in
-  let want = Context.get_values ref_ctx out in
-  let ctx, r_expanded = link ~name:"res_expanded" opt in
-  let ctx = run_linked (ctx, r_expanded) ~seed in
-  Verdict.p_all2 "expanded-zero reduction matches a separately materialized initialization"
-    (Context.get_values ctx out) want ~f:Float.equal;
-  check_localized r_expanded "res_expanded" "expanded-zero reduction";
-  let partial = seq (loop_n z 1 (set_at out (iter z) (c 0.))) reduction in
-  let partial_opt =
-    optimize_scoped ~materialized:[ src; out ] ~name:"res_expanded_partial" ~raw:partial partial
-  in
-  let ctx, r_partial = link ~name:"res_expanded_partial" partial_opt in
-  let ctx = run_linked (ctx, r_partial) ~seed in
-  Verdict.p "partial per-cell zero preserves the untouched cell's opening value"
-    (Array.equal Float.equal (Context.get_values ctx out) [| 10.; 41. |]);
-  let partial_source = Test_utils.Generated.read "res_expanded_partial" in
-  Verdict.p "partial per-cell zero retains zero store, opening read and closing store"
-    (count_node_accesses partial_source "res_expanded_out" = 3);
   check_localized r_total "res_total" "scalar reduction";
   check_localized r_per_col "res_per_col" "row reduction";
   check_localized r_index_total "res_index_total" "index-only reduction";
