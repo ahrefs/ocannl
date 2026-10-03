@@ -95,15 +95,21 @@ val dlopen_stage : string
 (** The [stage] of a {!Backend_rejected} raised when the host's dynamic loader refuses a kernel the
     compiler built — [dlopen] on an undefined symbol, a missing dependency (gh-ocannl-1077). *)
 
+val artifact_missing_stage : string
+(** The compiler reported success but its library did not appear before the timeout. *)
+
+val codesign_stage : string
+(** The requested host signing step rejected the compiled library. *)
+
 val uncontainable : phase -> cause -> bool
 (** Whether a typed cause must end a search rather than decline one candidate: {!protect} makes it
-    {!Fatal} although it is typed. One case today, the {!dlopen_stage} rejection at [Backend_link]:
-    the object compiled, and the loader then found a symbol that neither the kernel's link line nor
-    the process supplies — an OCANNL link bug (gh-ocannl-1045's missing [-lm] was one), and the
-    fails-identically class a search must not absorb. Absorbed, it would not even look identical: it
-    hits exactly the candidates whose code reaches the symbol, and the search would quietly prefer
-    the ones that do not. Contrast a JIT rejecting the PTX of one candidate's schedule, a codegen
-    bug the search survives and counts. *)
+    {!Fatal} although it is typed. Post-compile rejections at [Backend_link] include
+    {!dlopen_stage}, {!artifact_missing_stage}, and {!codesign_stage}: missing artifacts after a
+    successful compiler exit and signing failures are host/toolchain contract failures, not evidence
+    against a candidate's schedule (gh-ocannl-1142). The loader refusing a symbol nothing supplies
+    is likewise a link bug (gh-ocannl-1077). Absorbing these failures can silently ship an untuned
+    fallback or favor candidates that avoid the broken symbol. A JIT rejecting one candidate's PTX
+    remains a counted decline. *)
 
 type fatal = {
   exn : exn;

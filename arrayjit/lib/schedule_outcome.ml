@@ -63,10 +63,13 @@ let key_of_cause = function
   | Not_dispatched { origin; _ } -> Not_dispatched_key origin
 
 let dlopen_stage = "dlopen"
+let artifact_missing_stage = "artifact_missing"
+let codesign_stage = "codesign"
 
 let uncontainable phase cause =
   match (phase, cause) with
-  | Backend_link, Backend_rejected { stage; _ } -> String.equal stage dlopen_stage
+  | Backend_link, Backend_rejected { stage; _ } ->
+      List.mem [ dlopen_stage; artifact_missing_stage; codesign_stage ] stage ~equal:String.equal
   | _ -> false
 
 type fatal = {
