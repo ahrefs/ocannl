@@ -1189,8 +1189,12 @@ val reads_scope_before_set : scope_id -> t -> bool
     first definitely-executed [Set_local id] in [body]. Use this at code-generation time to decide
     whether a [Local_scope] or [Declare_local] declaration needs a zero initializer. *)
 
-val simplify_llc : Indexing.static_symbol list -> t -> t
-(** Top-down algebraic simplification with interval-driven comparison folding (in particular, it
+val simplify_llc : ?fp_algebra:string -> Indexing.static_symbol list -> t -> t
+(** [fp_algebra] overrides the development [simplify_fp_algebra] selection for focused tests. The
+    default keeps all existing arms; ["none"] disables only floating-point algebra. See
+    [ocannl_config.reference] for the six families and group aliases.
+
+    Top-down algebraic simplification with interval-driven comparison folding (in particular, it
     erases [If] guards whose conditions the loop extents prove). The interval environment is
     narrowed by every enclosing [If] condition that is a conjunction of integer-affine index
     comparisons (gh-ocannl-566), so a guard the statement guard proves folds too — what is

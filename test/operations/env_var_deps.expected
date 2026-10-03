@@ -68,6 +68,7 @@ Configuration keys tracked as ambient dependencies, in the one spelling OCANNL r
   profile
   schedule_fission
   schedule_log_launches
+  simplify_fp_algebra
   stack_threshold_in_bytes
   suppress_welcome_message
   tf32_matmuls
@@ -132,7 +133,7 @@ on its own deps.
 
 Programs naming `Ir.Schedule` and the entry points they name, every configuration key of which is
 declared or pinned by every rule running the program (gh-ocannl-1149):
-  (the keys its values reach: automatic_cpu_schedule, automatic_gpu_schedule, big_models, check_half_prec_constants_cutoff, cpu_schedule_min_parallel, debug_log_from_routines, gpu_fission_keep_mapping, gpu_lane_preamble_reduction, gpu_schedule_block_size, gpu_schedule_min_parallel, gpu_schedule_workgroup_fill, large_models, legality_crosscheck, log_level, profile, schedule_fission, schedule_log_launches, stack_threshold_in_bytes)
+  (the keys its values reach: automatic_cpu_schedule, automatic_gpu_schedule, big_models, check_half_prec_constants_cutoff, cpu_schedule_min_parallel, debug_log_from_routines, gpu_fission_keep_mapping, gpu_lane_preamble_reduction, gpu_schedule_block_size, gpu_schedule_min_parallel, gpu_schedule_workgroup_fill, large_models, legality_crosscheck, log_level, profile, schedule_fission, schedule_log_launches, simplify_fp_algebra, stack_threshold_in_bytes)
   bin/dune, executable narrow_gebp_bench: Ir.Schedule.apply
   bin/dune, executable narrow_storage_bench: Ir.Schedule.apply
   bin/dune, executable projection_shape_bench: Ir.Schedule.apply

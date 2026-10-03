@@ -150,6 +150,7 @@
  (modules fused_classifier)
  (locks ocannl_training_test)
  (deps
+  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   ocannl_config
   (env_var OCANNL_BACKEND)
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).

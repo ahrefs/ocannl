@@ -179,6 +179,7 @@ let known_config_keys =
       "fp16_arithmetic";
       "bf16_arithmetic";
       (* Algebraic rewrites over lowered code *)
+      "simplify_fp_algebra";
       "online_softmax";
       "online_softmax_backward";
       "online_softmax_block";
@@ -241,6 +242,7 @@ let config_key_classification : (config_key_class * string * string list) list =
         "inline_simple_computations";
         "inline_complex_computations";
         "memory_budget";
+        "simplify_fp_algebra";
         "online_softmax";
         "online_softmax_backward";
         "online_softmax_block";
