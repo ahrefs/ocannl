@@ -1188,7 +1188,9 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   (`footprint_materialization` is the exemplar; `verdict_teardown` pins every ending). An `exit`
   inside a case, once a check has failed, is not a case failing but the run ending there, so
   Verdict prints `STOPPED EARLY: an exit inside case "<label>" …` for it (gh-ocannl-1084). The
-  hand-built-IR `virtual_*` tests run their `case_*` rows through it too (gh-ocannl-1084); a new
+  hand-built-IR `virtual_*` tests run their `case_*` rows through it too (gh-ocannl-1084), as do
+  the multi-case `test_*` drivers that do not catch their own exceptions (gh-ocannl-1143). A labeled
+  row helper owns the boundary, so future rows inherit it without repeating the label; a new
   multi-case test does the same. No scan holds it: the `case_` prefix is a local habit, and the
   wider population of `test_*` drivers often catches its own exceptions to print them.
 - One claim surface, opened rather than copied. Every test that decides a verdict reaches the claim

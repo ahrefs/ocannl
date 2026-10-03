@@ -6,6 +6,7 @@ open! Stdio
 let gdn label = Ir.Tnode.get_debug_name ~id:0 ~label ()
 
 let check desc expected label =
+  Verdict.case desc @@ fun () ->
   let got = gdn label in
   if String.equal got expected then printf "%s: PASS (%s)\n" desc got
   else Verdict.fail (Printf.sprintf "%s\n  expected %s\n  got      %s" desc expected got)
