@@ -23,7 +23,8 @@
    16-bit units, so it can build a register holding 4 fp8 bytes only when those bytes are contiguous
    — 4 consecutive [k] at fixed [m] for A (row-major storage, [ta = false]) and 4 consecutive [k] at
    fixed [n] for B (transposed storage, [tb = true]). The other side keeps its byte gathers, so the
-   fp8 legs swizzle one operand and leave the other plain.
+   fp8 legs pin the one-sided [ldmatrix] forms and the swizzle-aware byte gathers used when a
+   register's four bytes are strided.
 
    The wmma path cannot participate at all: its fragments are opaque and there is no supported way
    to feed one from [ldmatrix] destination registers. The f16 leg pins that decline — the statement
@@ -82,7 +83,7 @@ let simd_width = 32
    row): with [bk = 16] the 16-bit tiles are [16 x 16] / [16 x 32] / [32 x 16] — 32 or 64 bytes per
    row, 2 or 4 units. fp8 needs [bk = 32] both for [m16n8k32]'s reduction tile and to put 2 units in
    a row of single-byte elements. *)
-let staged_schedule ~out ~src_a ~src_b ~swz_a ~swz_b ~bk ~ta ~tb (opt : LL.optimized) :
+let staged_schedule ~bm ~out ~src_a ~src_b ~swz_a ~swz_b ~bk ~ta ~tb (opt : LL.optimized) :
     Sched.schedule =
   let paths = Ll_test.nest_paths opt.LL.llc in
   let i, j, k =
@@ -134,7 +135,7 @@ let staged_schedule ~out ~src_a ~src_b ~swz_a ~swz_b ~bk ~ta ~tb (opt : LL.optim
 
 (* One leg: the serial twin, then the swizzled staged+tensorized form under census collection. On
    the C backends the shared placement is rejected before any of that. *)
-let leg ?schedule_of ~tag ~build ~src_a ~src_b ~swz_a ~swz_b ~check ~acc_prec ?(bk = bm)
+let leg ?schedule_of ~tag ~build ~src_a ~src_b ~swz_a ~swz_b ~check ~acc_prec ?(bm = bm) ?(bk = bm)
     ?(ta = false) ?(tb = false) () =
   let name = "ldm_" ^ tag in
   let parity_label =
@@ -148,7 +149,7 @@ let leg ?schedule_of ~tag ~build ~src_a ~src_b ~swz_a ~swz_b ~check ~acc_prec ?(
     Tn.update_prec t0.Tensor.value acc_prec;
     let schedule_of =
       Option.value schedule_of
-        ~default:(staged_schedule ~out:t0.Tensor.value ~src_a ~src_b ~swz_a ~swz_b ~bk ~ta ~tb)
+        ~default:(staged_schedule ~bm ~out:t0.Tensor.value ~src_a ~src_b ~swz_a ~swz_b ~bk ~ta ~tb)
     in
     let transform opt = Sched.apply (schedule_of opt) opt in
     f t0 transform
@@ -237,6 +238,16 @@ let () =
     has src "== 0)"
     && (not (List.is_empty census))
     && List.for_all census ~f:(Ir.C_syntax.equal_mma_rendering Ir.C_syntax.Mma_scalar_fallback)
+  in
+  let fp8_gather_check ~src ~census =
+    if not on_cuda then declined ~src ~census
+    else
+      has src "mma.sync.aligned.m16n8k32"
+      && has src " >> 4) ^ "
+      && (not (has src "ldmatrix"))
+      && (not (has src "== 0)"))
+      && (not (List.is_empty census))
+      && List.for_all census ~f:(Ir.C_syntax.equal_mma_rendering Ir.C_syntax.Mma_intrinsics)
   in
   let bf16_check ~a_trans ~b_trans ~src ~census =
     if not on_cuda then declined ~src ~census
@@ -349,17 +360,25 @@ let () =
         && (not (has src "ldmatrix.sync.aligned.m8n8.x4"))
         && ldm_census census)
     ();
-  (* The other fp8 side of each operand has no 16-bit-granularity load form: a b128-swizzled B
-     staged in the B role's own orientation needs 4 bytes strided by the tile's leading dimension,
-     which no [ldmatrix.b16] shape produces. The arm declines the whole call rather than reading the
-     swizzled tile as if it were row-major. *)
-  leg ~tag:"f8_b_decline" ~acc_prec:Ir.Ops.single ~src_a:maf.Tensor.value ~src_b:mbf.Tensor.value
+  (* A row-major swizzled B needs four bytes strided by its leading dimension, which no
+     [ldmatrix.b16] shape produces. Its byte gathers now apply the XOR address map (gh-ocannl-1073);
+     this B-only leg must tensorize without being falsely counted as an [ldmatrix] emission. The
+     capability-derived twins in schedule_mma_matmul also exercise both operands swizzled, with A on
+     [ldmatrix]. *)
+  leg ~tag:"f8_b_gather" ~acc_prec:Ir.Ops.single ~src_a:maf.Tensor.value ~src_b:mbf.Tensor.value
     ~swz_a:None ~swz_b:b128 ~bk:32
     ~build:(fun () ->
       let%op t = maf * mbf in
       t)
-    ~check:(fun ~src ~census -> (not (has src "ldmatrix")) && declined ~src ~census)
-    ();
+    ~check:fp8_gather_check ();
+  (* Transposed swizzled A uses the same address-map gathers. A 32-row block gives its stored minor
+     axis two whole 16-byte units, and exercises __mi > 0. *)
+  leg ~tag:"f8_a_gather" ~acc_prec:Ir.Ops.single ~src_a:maf.Tensor.value ~src_b:mbf.Tensor.value
+    ~swz_a:b128 ~swz_b:None ~bm:32 ~bk:32 ~ta:true
+    ~build:(fun () ->
+      let%op t = maf * mbf in
+      t)
+    ~check:fp8_gather_check ();
   (* The wmma combinations cannot consume [ldmatrix] destination registers, so a swizzled staged f16
      leg declines the template path AND the accumulator-residency scope built on it, landing on the
      swizzle-aware lane-0 micro-kernel. Correct, and visibly not tensorized. *)

@@ -258,6 +258,7 @@ test/operations/schedule_epilogue_fusion.ml
     "simdgroup_store(__mma_fragment_"
     "threadgroup float"
 test/operations/schedule_ldmatrix_matmul.ml [also pins text this scan cannot name]
+    " >> 4) ^ "
     "(mma-bf16) ldmatrix a,b"
     "(mma-fp8) e5m2 ldmatrix a"
     "(mma-fp8) e5m2 ldmatrix b"

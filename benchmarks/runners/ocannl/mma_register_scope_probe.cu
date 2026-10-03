@@ -17,6 +17,17 @@ static void check(cudaError_t e) {
   }
 }
 
+// For a generated-kernel confirmation, compile with both emitted .cu paths:
+// -DMMA_GENERATED_BASELINE='"/absolute/baseline.cu"'
+// -DMMA_GENERATED_RESIDENT='"/absolute/resident.cu"'
+#ifdef MMA_GENERATED_BASELINE
+#define mma_register_scope_probe mma_register_scope_baseline
+#include MMA_GENERATED_BASELINE
+#undef mma_register_scope_probe
+#define mma_register_scope_probe mma_register_scope_resident
+#include MMA_GENERATED_RESIDENT
+#undef mma_register_scope_probe
+#else
 // One warp owns a 16x32 D tile, with a 32-wide cooperative staging loop.
 // Like the backend, each mma statement ends in a barrier releasing its tiles.
 // The statement arm additionally brackets its D load with a leading barrier;
@@ -97,6 +108,8 @@ __global__ void staged(const unsigned char *a, const unsigned char *b, float *d,
   }
 }
 
+#endif
+
 int main(int argc, char **argv) {
   const bool dry = argc == 2 && std::strcmp(argv[1], "--dry-run") == 0;
   if (argc > 1 && !dry) { std::fprintf(stderr, "usage: %s [--dry-run]\n", argv[0]); return 2; }
@@ -104,7 +117,14 @@ int main(int argc, char **argv) {
   check(cudaGetDeviceProperties(&prop, 0));
   std::printf("backend=cuda device=%s sm_%d%d\n", prop.name, prop.major, prop.minor);
   if (prop.major * 10 + prop.minor < 89) return 2;
+#ifdef MMA_GENERATED_BASELINE
+  // Matches bench_mma_register_scope_emit's actual schedule: 512 warps, 128 k_o blocks.
+  const int m = 8192, n = 32, k = 4096;
+  std::puts("arms=generated baseline and generated resident kernels");
+#else
   const int m = 512, n = 512, k = 4096;
+  std::puts("arms=standalone fragment/staging reproduction");
+#endif
   unsigned char *a, *b;
   float *d;
   check(cudaMalloc(&a, m*k)); check(cudaMalloc(&b, k*n));
@@ -116,8 +136,13 @@ int main(int argc, char **argv) {
   check(cudaMemcpy(a, ha.data(), ha.size(), cudaMemcpyHostToDevice));
   check(cudaMemcpy(b, hb.data(), hb.size(), cudaMemcpyHostToDevice));
   auto launch = [&](int arm) {
+#ifdef MMA_GENERATED_BASELINE
+    if (arm) mma_register_scope_resident<<<m/16,32>>>((__nv_fp8_e5m2 *)a,(__nv_fp8_e5m2 *)b,d);
+    else mma_register_scope_baseline<<<m/16,32>>>((__nv_fp8_e5m2 *)a,(__nv_fp8_e5m2 *)b,d);
+#else
     if (arm) staged<true><<<dim3(n/32,m/16),32>>>(a,b,d,m,n,k);
     else staged<false><<<dim3(n/32,m/16),32>>>(a,b,d,m,n,k);
+#endif
     check(cudaGetLastError());
   };
   if (dry) {
@@ -138,6 +163,11 @@ int main(int argc, char **argv) {
       }
     }
     launch(1); check(cudaDeviceSynchronize());
+    std::vector<float> replay(m*n);
+    check(cudaMemcpy(replay.data(), d, m*n*sizeof(float), cudaMemcpyDeviceToHost));
+    if (replay != outputs[1]) {
+      std::fprintf(stderr, "resident replay differs from the validated output\n"); return 1;
+    }
     std::puts("dry-run: both arms equal every exact host cell; resident replay passed");
   } else {
     const int repeats = 100, pairs = 9;
