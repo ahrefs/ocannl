@@ -69,6 +69,13 @@ ok: source -- a helper reading generated source internally pins its labelled mar
 ok: source -- each test in a helper checks its own haystack
 ok: source -- a helper reading generated source inline pins its labelled marker
 ok: source -- omitted optional markers use their defaults and explicit markers override them
+ok: source -- unfollowed callbacks keep hard-coded predicate text visibly partial
+ok: source -- validated source parameters propagate through nested predicate calls
+ok: source -- marker-first partial applications remain visibly partial
+ok: source -- explicit optional absence selects a generated-source default
+ok: source -- unresolved optional source forwarding remains visibly partial
+ok: source -- explicit optional presence unwraps the supplied generated source
+ok: source -- hard-coded predicate fragments require their own call-site source
 ok: source -- partial applications do not select optional defaults prematurely
 ok: source -- a composite marker retains every caller-supplied parameter
 ok: source -- a later generated binding does not taint an earlier source parameter

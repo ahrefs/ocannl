@@ -148,7 +148,7 @@ test/operations/cpu_parallel.ml
     "#pragma omp parallel for"
     "Pool-backed Grid rendering"
     "dispatch_apply"
-test/operations/cpu_simd_reduction.ml
+test/operations/cpu_simd_reduction.ml [also pins text this scan cannot name]
     "#pragma"
     "Vectorized reduction rendering"
     "vector_size"
@@ -216,22 +216,15 @@ test/operations/online_softmax_block_mma.ml
     "simdgroup_multiply_accumulate"
 test/operations/reduction_accumulator_residency.ml [also pins text this scan cannot name]
     " " ^ ...
-    " = "
-    "["
-    "] = " ^ ...
     "__rmw_"
     "device volatile float*"
     "volatile float*)res_guard_mask"
     "volatile"
-    ... ^ " = "
 test/operations/reduction_forms.ml [also pins text this scan cannot name]
-    " = "
     "*)"
     "Vectorized reduction rendering"
-    "] = "
     "ocannl_shfl_xor"
     "volatile "
-    ... ^ "["
 test/operations/reserved_routine_names.ml
     "arrayjit_threefry4x32__"
     "asm__"
@@ -246,7 +239,7 @@ test/operations/schedule_batch_grid.ml [also pins text this scan cannot name]
 test/operations/schedule_batched_mma.ml
     "Tile_mma register tiling"
 test/operations/schedule_contraction_nest.ml [also pins text this scan cannot name]
-test/operations/schedule_conv_gemm.ml
+test/operations/schedule_conv_gemm.ml [also pins text this scan cannot name]
     "Tile_mma register tiling"
     "fragment_"
     "tile_"
@@ -303,7 +296,6 @@ test/operations/schedule_mma_matmul.ml [also pins text this scan cannot name]
     "__device__ __align__(32) float ocannl_wmma_rc16[256]"
     "__float2bfloat16"
     "__float_to_tf32"
-    "__mma_dr0"
     "__mma_dr0[0] = "
     "__mma_dr0[0] = __float2bfloat16(__mma_fragment_"
     "__mma_dstage"

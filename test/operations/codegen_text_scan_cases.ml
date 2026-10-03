@@ -466,6 +466,39 @@ let () =
   p "default" (has (Generated.read "r") ());
   p "explicit" (explicit (Generated.read "r") ~marker:"explicit marker" ())|ocaml},
       {|"default marker" "explicit marker"|} );
+    ( "unfollowed callbacks keep hard-coded predicate text visibly partial",
+      {ocaml|let barrier src = String.is_substring src ~substring:"barrier marker"
+let () = List.iter [Generated.read "r"] ~f:barrier|ocaml},
+      "+partial" );
+    ( "validated source parameters propagate through nested predicate calls",
+      {ocaml|let inner code = String.is_substring code ~substring:"inner marker"
+let outer input = String.is_substring input ~substring:"outer marker" && inner input
+let () = p "markers" (outer (Generated.read "r"))|ocaml},
+      {|"inner marker" "outer marker"|} );
+    ( "marker-first partial applications remain visibly partial",
+      {ocaml|let has src ~marker = String.is_substring src ~substring:marker
+let check = has ~marker:"actual marker"
+let () = p "marker" (check (Generated.read "r"))|ocaml},
+      "+partial" );
+    ( "explicit optional absence selects a generated-source default",
+      {ocaml|let has ?(src = Generated.read "r") ~marker () = String.is_substring src ~substring:marker
+let () = p "marker" (has ?src:None ~marker:"actual marker" ())|ocaml},
+      {|"actual marker"|} );
+    ( "unresolved optional source forwarding remains visibly partial",
+      {ocaml|let absent = None
+let has ?(src = Generated.read "r") ~marker () = String.is_substring src ~substring:marker
+let () = p "marker" (has ?src:absent ~marker:"actual marker" ())|ocaml},
+      "+partial" );
+    ( "explicit optional presence unwraps the supplied generated source",
+      {ocaml|let has ?(src = backend_name) ~marker () = String.is_substring src ~substring:marker
+let () = p "marker" (has ?src:(Some (Generated.read "r")) ~marker:"actual marker" ())|ocaml},
+      {|"actual marker"|} );
+    ( "hard-coded predicate fragments require their own call-site source",
+      {ocaml|let check src1 src2 ~marker =
+  String.is_substring src1 ~substring:marker
+  && String.is_substring src2 ~substring:"backend-only literal"
+let () = p "marker" (check (Generated.read "r") backend_name ~marker:"kernel marker")|ocaml},
+      {|"kernel marker"|} );
     ( "partial applications do not select optional defaults prematurely",
       {ocaml|let has src ?(marker = "unused default") () = String.is_substring src ~substring:marker
 let check = has (Generated.read "r")
