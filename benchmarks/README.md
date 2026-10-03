@@ -89,6 +89,38 @@ nested-division rewrite; regression test `test/training/virtual_grads_parity.ml`
   inference fixtures, per-segment attribution, cc, and the two training fixtures under the fused
   backward; [report-gh1003-block-fold.md](report-gh1003-block-fold.md)).
 
+
+- **Sequence scaling (gh-ocannl-720, leg 2)** uses `gpt2_mini` / `_s512` / `_s1024` and
+  their training counterparts: seq 128 / 512 / 1024, batch 8 / 2 / 1, all at 1024 tokens per
+  step. Report tokens/s beside latency and peak memory to demonstrate the attention rewrites
+  (gh-ocannl-483/696), fused backward (gh-ocannl-1002), memory pressure (gh-ocannl-565), and
+  narrow reductions (gh-ocannl-682). This is a constant-token curve, not a fixed-batch curve:
+  total attention-score storage grows 4x / 8x while individual score matrices grow 16x / 64x;
+  changing the leading batch axis also changes GPU scheduling. The batch-1 training sequence
+  sweep above separates these effects. Seq 1024 is the bounded v1.1 endpoint, reusing the
+  recorded fixtures rather than adding the originally proposed seq-2048 cell.
+- **gpt2_mini_b1** / **gpt2_mini_train_b256** (gh-ocannl-720, leg 4): the same decoder at
+  seq 128 with batch 1 inference (128 tokens/step) and batch 256 training (32768 tokens/step).
+  Compare each to its batch-8 counterpart in the same mode: the first measures per-step latency
+  and whole-graph submission overhead (gh-ocannl-488); the second exposes the GEMM-library
+  throughput advantage and device-memory limit (gh-ocannl-565). Training keeps SGD lr 0.01 and
+  six parity steps, with one data batch reused across steps; the inference fixture has four
+  batches. Both fixtures are under 15 MB, but small fixtures do not imply small activations.
+  Report allocation failures as failures, and name discrete versus unified memory on HIP.
+  Per-step sync latency and the suite's queued-step mean answer different questions; record the
+  runner's graph-capture setting rather than assuming every backend captures a graph. An eager
+  torch comparison includes framework overhead, so it cannot establish a kernel-efficiency win;
+  `--torch-compile` adds the compiled comparison when that arm is included.
+- **Reduced precision on the larger transformer legs** (gh-ocannl-720, leg 7):
+  `orchestrate.py --precision bf16 f16` adds both storage formats over the sequence and batch
+  cells above, demonstrating gh-ocannl-680/682. Inference converts weights at load time;
+  training keeps f32 masters and includes f16's dynamic loss-scaling gate in step time. These
+  are OCANNL precision legs against the f32 torch CPU oracle, not reduced-precision torch
+  performance comparisons. Report each precision and regime separately with its parity verdict;
+  an approximate row also reports whether it passes the exact envelope. An untuned reduced
+  format does not promise tensorization: `--tuned` is the separate schedule-search leg, whose
+  search and replay costs follow the two-pass protocol below.
+
 ## Layout
 
 - `workloads/*.json` — workload specs; `gen_fixtures.py` generates
