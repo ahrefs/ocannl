@@ -6609,7 +6609,7 @@ let has_opaque_zero_forwarding_effect ~allow_workgroup_barriers (body : t) =
   stmt body
 
 let zero_seed_candidate ?(allow_workgroup_barriers = false) (tn : Tn.t) (next : t) :
-    (Indexing.axis_index array * Indexing.symbol list) option =
+    (Tn.t Affine.access * Indexing.symbol list) option =
   if has_opaque_zero_forwarding_effect ~allow_workgroup_barriers next then None
   else
     let same_map = Array.equal Indexing.equal_axis_index in
@@ -6639,7 +6639,7 @@ let zero_seed_candidate ?(allow_workgroup_barriers = false) (tn : Tn.t) (next : 
                   )
                   symbol)
           in
-          Some (write.a_map, repeated)
+          Some (write, repeated)
         else None
     | _ -> None
 

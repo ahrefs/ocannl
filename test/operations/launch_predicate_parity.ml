@@ -27,10 +27,10 @@
    real devices are nowhere near these extents (CUDA's [maxThreadsDim.z] of 64 against a 1024
    product cap is the one genuinely tight per-dimension cap, and no Apple part reproduces it). The
    lowering is real. The matmul site is captured directly; the conv sites are derived from the
-   pre-schedule normal segment of [Schedule.fission_scheduled], because their [Zero_out] must be in
-   a separate kernel before a GPU conv schedule applies. Only [Schedule.apply] and the seeding API
-   consume those sites, so the claims remain backend-independent while the CUDA run exercises the
-   real GPU lowering path. *)
+   pre-schedule normal segment of [Schedule.fission_scheduled], including the covering per-cell zero
+   companion exposed before GPU fission. Only [Schedule.apply] and the seeding API consume those
+   sites, so the claims remain backend-independent while the CUDA run exercises the real GPU
+   lowering path. *)
 
 open Base
 open Ocannl
@@ -352,12 +352,14 @@ let () =
   let make_conv2 tag =
     let x =
       NTDSL.init ~l:(tag ^ "_x") ~prec:Ir.Ops.single ~b:[ 2 ] ~o:[ 18; 18; 8 ]
-        ~f:(fun idcs -> Float.of_int (Int.rem (Array.fold idcs ~init:0 ~f:( + )) 7))
+        ~f:(fun ix ->
+          Float.of_int (1 + (3 * ix.(0)) + (5 * ix.(1)) + (7 * ix.(2)) + (11 * ix.(3))) /. 128.)
         ()
     in
     let kernel =
       NTDSL.init ~l:(tag ^ "_k") ~prec:Ir.Ops.single ~i:[ 3; 3; 8 ] ~o:[ 16 ]
-        ~f:(fun idcs -> Float.of_int (Int.rem (Array.fold idcs ~init:0 ~f:( + )) 5))
+        ~f:(fun ix ->
+          Float.of_int (1 + (2 * ix.(0)) + (3 * ix.(1)) + (5 * ix.(2)) + (7 * ix.(3))) /. 64.)
         ()
     in
     let%op y =
@@ -372,6 +374,79 @@ let () =
     Autotune.sketch_seed_params ~is_gpu:true ~is_cpu:false ~limits:mma_limits conv_opt
     |> List.filter ~f:(fun q -> q.Autotune.sk_gpu && q.Autotune.sk_conv)
   in
+  let apply_conv pre q =
+    Sched.apply
+      (Autotune.sketch_schedule ~accum_prec ~p:q pre)
+      {
+        pre with
+        LL.traced_store = Hashtbl.copy pre.LL.traced_store;
+        optimize_ctx = LL.copy_optimize_ctx pre.LL.optimize_ctx;
+      }
+  in
+  let valid_conv pre q =
+    match apply_conv pre q with
+    | applied -> (
+        match LL.validate_parallel applied.LL.optimize_ctx.placements applied.LL.llc with
+        | () -> true
+        | exception exn ->
+            Stdio.eprintf "conv validation FAILED: %s\n" (Exn.to_string exn);
+            false)
+    | exception exn ->
+        Stdio.eprintf "conv construction FAILED: %s\n" (Exn.to_string exn);
+        false
+  in
+  p_all "conv coverage: every GPU seed maps the covering zero companion" conv_gpu
+    ~f:(valid_conv conv_opt);
+  let biased_conv = make_conv2 "lpp_cb" in
+  Train.set_materialized biased_conv.Tensor.value;
+  let bias =
+    NTDSL.init ~l:"lpp_cb_bias" ~prec:Ir.Ops.single ~o:[ 16 ]
+      ~f:(fun ix -> Float.of_int (1 + ix.(0)))
+      ()
+  in
+  let%op biased = biased_conv + bias in
+  Train.set_materialized biased.Tensor.value;
+  let biased_opt = capture_conv_segment "lpp_conv_bias" biased in
+  let biased_gpu =
+    Autotune.sketch_seed_params ~is_gpu:true ~is_cpu:false ~limits:mma_limits biased_opt
+    |> List.filter ~f:(fun q -> q.Autotune.sk_gpu && q.Autotune.sk_conv)
+  in
+  p_all "conv+bias coverage: GPU seeds remain eligible and validate with the zero companion"
+    biased_gpu ~f:(valid_conv biased_opt);
+  let parity_label =
+    "conv+bias coverage: GPU sketches match a materialized run with discriminating operands"
+  in
+  let backend = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc") in
+  let real_gpu =
+    if not (Sched.backend_is_gpu backend) then []
+    else
+      Autotune.sketch_seed_params ~is_gpu:true ~is_cpu:false
+        ~limits:(Context.hardware_limits (Context.auto ()))
+        biased_opt
+      |> List.filter ~f:(fun q -> q.Autotune.sk_gpu && q.Autotune.sk_conv)
+  in
+  if List.is_empty real_gpu then Verdict.skipped ~backend parity_label
+  else begin
+    let outputs = [ biased_conv.Tensor.value; biased.Tensor.value ] in
+    let seed =
+      List.map outputs ~f:(fun tn -> (tn, Array.create ~len:(Ir.Tnode.num_elems tn) (-999.)))
+    in
+    let want =
+      List.hd_exn
+        (Ll_test.execute ~name:"lpp_cb_materialized" biased_opt ~seed ~read:[ biased.Tensor.value ])
+    in
+    p_all parity_label real_gpu ~f:(fun q ->
+        let got =
+          List.hd_exn
+            (Ll_test.execute
+               ~name:
+                 ("lpp_cb_sketch_" ^ Int.to_string q.Autotune.sk_bm ^ "_"
+                 ^ Bool.to_string q.Autotune.sk_epilogue
+                 ^ "_" ^ Int.to_string q.Autotune.sk_depth)
+               (apply_conv biased_opt q) ~seed ~read:[ biased.Tensor.value ])
+        in
+        Array.equal Float.equal got want)
+  end;
   p_exists "conv prediction: the fission segment seeds a whole-extent GPU flavor" conv_gpu
     ~f:(fun q -> q.Autotune.sk_bm = 0);
   p_exists "conv prediction: the fission segment seeds a row-blocked GPU flavor" conv_gpu
@@ -388,7 +463,7 @@ let () =
   in
   p_none "conv prediction: no GPU seed predicts a dimension above its applied launch geometry"
     conv_gpu ~f:(fun q ->
-      match Sched.apply (Autotune.sketch_schedule ~accum_prec ~p:q conv_opt) conv_opt with
+      match apply_conv conv_opt q with
       | applied ->
           let actual = Sched.launch_geometry_of_dims (LL.launch_dims applied.LL.llc) in
           not (lower_bound (Autotune.conv_launch_geometry conv_site q) actual)

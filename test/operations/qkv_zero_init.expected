@@ -14,3 +14,5 @@ an enclosing repeated-cell loop retains initialization and opening reads: true
 repeated-cell private reduction preserves earlier contributions: true
 a full per-cell zero is recognized: true
 partial, guarded, dead and negative-zero initializers are retained: true
+private zero forwarding removes only the proven initializer occurrence: true
+reused final zero preserves executed parity with the materialized run: true

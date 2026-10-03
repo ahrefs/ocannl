@@ -3930,16 +3930,21 @@ module C_syntax (B : C_syntax_config) = struct
         && Poly.equal ((thread_storage ctx) tn) `Thread
     | None -> false
 
-  (* A whole-node zero immediately before a statement can be forwarded into that statement's
-     localized serial accumulator when the statement owns every cell it closes. The affine check
-     below establishes the dead-store side of the rewrite; [try_localize_serial_reduce] marks the
-     seed consumed only after the localization itself has succeeded. Keeping those two decisions
-     separate is load-bearing: a vector/SIMD rendering or any localizer refusal still needs the
-     original [Zero_out] and opening node read. *)
+  (* A covering zero initializer immediately before a statement can be forwarded into that
+     statement's localized serial accumulator when the statement owns every cell it closes. The
+     affine check below establishes the dead-store side of the rewrite; [try_localize_serial_reduce]
+     marks the seed consumed only after the localization itself has succeeded. Keeping those two
+     decisions separate is load-bearing: a vector/SIMD rendering or any localizer refusal still
+     needs the original initializer and opening node read. *)
 
   let localized_zero_seed_candidate tn next =
-    Option.map (Low_level.zero_seed_candidate tn next) ~f:(fun (idcs, repeated) ->
-        { lzs_tn = tn; lzs_idcs = idcs; lzs_repeated = repeated; lzs_consumed = false })
+    Option.map (Low_level.zero_seed_candidate tn next) ~f:(fun (write, repeated) ->
+        {
+          lzs_tn = tn;
+          lzs_idcs = write.Affine.a_map;
+          lzs_repeated = repeated;
+          lzs_consumed = false;
+        })
 
   (* Take one top-level statement without flattening the suffix. Optimized programs are commonly
      right-associated [Seq] trees, so this is constant work there; a left-associated prefix costs

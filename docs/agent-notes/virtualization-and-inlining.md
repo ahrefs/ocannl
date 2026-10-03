@@ -154,7 +154,7 @@ files.
   `Low_level.zero_seed_candidate` proof (gh-ocannl-1175): `Low_level.affine_accesses` must find exactly one same-cell RMW pair and
   `Affine.covers_box` proves its closing stores cover the whole node (gh-ocannl-821). The zero store
   is dropped only after `try_localize_serial_reduce` actually accepts, every loop that repeats a
-  cell is inside that accepted scope, no enclosing loop is statically dead, and the covering write
+  cell is inside that accepted scope (inside `over` for `Privatize`), no enclosing loop is statically dead, and the covering write
   is unconditional. Those clauses are distinct from geometric coverage: an enclosing reduction
   loop can repeat an otherwise covering output nest, a dead loop executes no closing store, and a
   symbolic-extent guard can make only a prefix execute. A localizer/SIMD decline, partial or
@@ -441,16 +441,3 @@ files.
   precision in `scope_prec_of` (`carried_state_scope_ids`, rng-carve-out precedence): a half state
   rounds every step — `scan_loop.ml` leg 6b holds 2048 through six +1 steps where a single state
   reaches 2054. Build scans through `Ll_test.carry`/`scan`/`prev`/`next`/`set_next`.
-
-- A covering reduction's zero expands BEFORE fission when the supplied zero policy distributes it
-  (GPU, above its size threshold; gh-ocannl-1175), so the ordinary aligned
-  merge and keep-mapping checks can keep its initialization in the accumulation kernel. Previously
-  fission isolated `Zero_out` before either the serial localizer or tiled accumulator could see it;
-  zero expansion and the sketches' zero companions only distributed the stores, while footprint
-  materialization applies to virtual producers rather than these materialized outputs. An eligible
-  private tile opens from constant zero and drops the covering initializer; staged copy barriers
-  remain in place, and the proof still refuses opaque effects, guards and `Tile_mma`. Partial and
-  conditional coverage, or a repeated-cell loop outside the accepted accumulator, keeps the init.
-  `qkv_zero_init` pins the GPT-2 rank-4 shape, sketch eligibility, executed materialized parity and
-  reruns with nonzero index-dependent operands, plus the enclosing-reduction refusal. Schedule
-  cache entry version 6 invalidates crowns over the old split-init menu.

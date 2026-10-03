@@ -67,9 +67,16 @@ let () =
   in
   p "qkv init companion preserves tiled sketch eligibility" (not (List.is_empty seeds));
   p_all "qkv tiled sketches construct and validate" seeds ~f:(fun seed ->
-      let o = apply (Autotune.sketch_schedule ~accum_prec:Fn.id ~p:seed pre) pre in
-      LL.validate_parallel o.LL.optimize_ctx.placements o.LL.llc;
-      true);
+      match apply (Autotune.sketch_schedule ~accum_prec:Fn.id ~p:seed pre) pre with
+      | o -> (
+          match LL.validate_parallel o.LL.optimize_ctx.placements o.LL.llc with
+          | () -> true
+          | exception exn ->
+              Stdio.eprintf "qkv sketch validation FAILED: %s\n" (Exn.to_string exn);
+              false)
+      | exception exn ->
+          Stdio.eprintf "qkv sketch construction FAILED: %s\n" (Exn.to_string exn);
+          false);
   p_exists "a tiled qkv sketch forwards zero into the private accumulator" seeds ~f:(fun seed ->
       let o = apply (Autotune.sketch_schedule ~accum_prec:Fn.id ~p:seed pre) pre in
       Ll_test.count_get o out.Tensor.value = 0 && Ll_test.count_set o out.Tensor.value = 1)
@@ -164,3 +171,27 @@ let () =
   in
   p_all "partial, guarded, dead and negative-zero initializers are retained" refused ~f:(fun init ->
       Option.is_none (LL.zero_initializer_target init))
+
+(* Reusing an immutable statement at two positions must not make zero DSE remove both. *)
+let () =
+  let open Ll_test in
+  let node = node_factory ~first_id:117700 ~dims:[| 4 |] () in
+  let out = node "zi_reused_zero" in
+  materialize out;
+  let i = sym () and k = sym () in
+  let cell = [| iter i |] in
+  let shared_zero = zero out in
+  let update = set out cell (add (get out cell) (add (tick i) (tick k))) in
+  let program = seq shared_zero (seq (loop_n i 4 (loop_n k 5 update)) shared_zero) in
+  let opt = optimize_scoped ~materialized:[ out ] ~name:"zi_reused_capture" ~raw:program program in
+  let priv = apply [ Sched.privatize ~accum_prec:Fn.id ~target:out ~over:k ] opt in
+  p "private zero forwarding removes only the proven initializer occurrence"
+    (List.count (LL.flat_lines [ priv.LL.llc ]) ~f:(function
+       | LL.Zero_out tn -> Ir.Tnode.equal tn out
+       | _ -> false)
+    = 1);
+  let seed = [ (out, Array.create ~len:4 (-999.)) ] in
+  let want = List.hd_exn (execute ~name:"zi_reused_materialized" opt ~seed ~read:[ out ]) in
+  let got = List.hd_exn (execute ~name:"zi_reused_private" priv ~seed ~read:[ out ]) in
+  p_all2 "reused final zero preserves executed parity with the materialized run" got want
+    ~f:Float.equal

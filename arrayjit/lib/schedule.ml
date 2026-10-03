@@ -2120,9 +2120,10 @@ let rec schedule_scratch (llc : Low_level.t) =
     elements) form the tile part sizing that axis; terms over loops outside [over] are the
     per-thread element selection, kept in the init-load and store-back indices. No tile part at all
     yields a scalar accumulator (dims [|1|]). Init/store nests iterate fresh serial symbols with
-    per-axis edge guards (construct-then-fold, as in [Stage]). Any [Zero_out] of [target] elsewhere
-    in the routine is left in place: the init-load observes its effect, so semantics are preserved
-    without a surjectivity analysis (dropping the redundant zeroing is a follow-up).
+    per-axis edge guards (construct-then-fold, as in [Stage]). A preceding covering zero initializer
+    is removed and the tile opens from zero when [zero_seed_candidate] proves the whole target RMW
+    is inside [over], including every loop that repeats a cell. Other zeroings remain in place and
+    the tile init-load observes their effect.
 
     Tile precision: [acc_prec], the backend's accumulator residency for [target]'s storage
     ({!privatize} resolves it), so the tile is the materialized twin of the scope local the serial
@@ -2142,13 +2143,11 @@ let apply_privatize ~target ~over ~acc_prec (opt : Low_level.optimized) : Low_le
   (* Every loop of the routine by index symbol, with its axis type. Guard classification below needs
      the axis type of symbols bound OUTSIDE [over] too (a lane restriction is the whole point of the
      rule), and the [rewrite_loop] callback only sees the subtree. *)
-  let over_loops = ref [] in
   let loop_axes =
     let tbl = ref (Map.empty (module Indexing.Symbol)) in
     let rec go llc =
       match llc with
       | For_loop { index; axis; body; _ } ->
-          if Indexing.equal_symbol index over then over_loops := List.map (loop_bounds llc) ~f:fst;
           tbl := Map.set !tbl ~key:index ~data:axis;
           go body
       | Scan_loop { carried; body; _ } ->
@@ -2192,29 +2191,35 @@ let apply_privatize ~target ~over ~acc_prec (opt : Low_level.optimized) : Low_le
      the tile would drop contributions made by an enclosing reduction. The original initializer may
      already be an Expand_zero companion with hardware annotations. *)
   let stmts = flat_lines [ opt.llc ] in
-  let meaningful = List.filter stmts ~f:(function Noop | Comment _ -> false | _ -> true) in
+  let meaningful =
+    List.filter
+      (List.mapi stmts ~f:(fun pos st -> (pos, st)))
+      ~f:(function _, (Noop | Comment _) -> false | _ -> true)
+  in
   let rec preceding_zero = function
-    | init :: (next :: _ as rest) -> (
-        let seed =
-          match zero_initializer_target init with
-          | Some tn when Tn.equal tn target -> (
-              match zero_seed_candidate ~allow_workgroup_barriers:true target next with
-              | Some (_, repeated)
-                when List.for_all repeated ~f:(fun s ->
-                         List.mem !over_loops s ~equal:Indexing.equal_symbol)
-                     && List.exists (affine_accesses next) ~f:(fun a ->
-                         Tn.equal a.Affine.a_tn target
-                         && List.Assoc.mem a.a_loops over ~equal:Indexing.equal_symbol) ->
-                  Some init
-              | _ -> None)
-          | _ -> None
-        in
-        match seed with Some _ -> seed | None -> preceding_zero rest)
+    | (pos, init) :: ((_, next) :: _ as rest) -> (
+        match zero_initializer_target init with
+        | Some tn when Tn.equal tn target -> (
+            match zero_seed_candidate ~allow_workgroup_barriers:true target next with
+            | Some (write, repeated) ->
+                let inside =
+                  List.drop_while write.Affine.a_loops ~f:(fun (s, _) ->
+                      not (Indexing.equal_symbol s over))
+                in
+                if
+                  (not (List.is_empty inside))
+                  && List.for_all repeated ~f:(fun s ->
+                      List.Assoc.mem inside s ~equal:Indexing.equal_symbol)
+                then Some pos
+                else preceding_zero rest
+            | None -> preceding_zero rest)
+        | _ -> preceding_zero rest)
     | _ -> None
   in
-  let zero_stmt = preceding_zero meaningful in
+  let zero_pos = preceding_zero meaningful in
   let llc =
-    unflat_lines (List.filter stmts ~f:(fun st -> not (Option.exists zero_stmt ~f:(phys_equal st))))
+    unflat_lines
+      (List.filteri stmts ~f:(fun pos _ -> not (Option.equal Int.equal zero_pos (Some pos))))
   in
   rewrite_loop ~what:"Schedule.Privatize" ~sym:over llc ~f:(fun fc ->
       if not (equal_axis_type fc.axis Serial) then
@@ -2579,7 +2584,7 @@ let apply_privatize ~target ~over ~acc_prec (opt : Low_level.optimized) : Low_le
               {
                 tn = tile;
                 idcs = t_idcs;
-                llsc = (if Option.is_some zero_stmt then Constant 0. else Get (target, src_idcs));
+                llsc = (if Option.is_some zero_pos then Constant 0. else Get (target, src_idcs));
                 debug = "";
               }
           else Set { tn = target; idcs = src_idcs; llsc = Get (tile, t_idcs); debug = "" }
@@ -7445,8 +7450,8 @@ let fission_scheduled ?(promote_locals = false) ?(arity_cuts = false) ?keep_mapp
   let stmts = Low_level.flat_lines [ opt.Low_level.llc ] in
   let pre_promoted = if promote_locals then promote_statement_crossing_locals plc stmts else [] in
   let fallback () =
-    (* Single-kernel compilation, exactly as before fission: no boundary needs the promotions, and
-       placement changes must not leak out of an unfissioned routine. *)
+    (* Single-kernel compilation after policy-driven zero expansion: no boundary needs promotions,
+       and placement changes must not leak out of an unfissioned routine. *)
     List.iter pre_promoted ~f:(fun (tn, prior) -> Tn.Placements.unsafe_restore plc tn prior);
     let sched = preset opt in
     [ (`Normal, opt, sched, apply ~static_indices sched opt) ]
@@ -7508,9 +7513,9 @@ let fission_scheduled ?(promote_locals = false) ?(arity_cuts = false) ?keep_mapp
           |> List.rev
         in
         if List.length coalesced <= 1 then (
-          (* Everything merged back: single kernel, exactly as before fission — including
-             placements, so undo every promotion (an all-serial small routine must not leak
-             observable placement changes; zero2hero's virtual-neuron printouts pinned this). *)
+          (* Everything merged back: one kernel with expanded zeros, restoring original placements,
+             so undo every promotion (an all-serial small routine must not leak observable placement
+             changes; zero2hero's virtual-neuron printouts pinned this). *)
           undo_promotions promoted;
           fallback ())
         else
