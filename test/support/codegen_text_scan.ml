@@ -404,6 +404,7 @@ type module_denotes = Named of string | Opaque
 type value_denotes =
   | Literal_binding of string
   | Hidden of { opened : string; name : string }
+  | Function_binding of (int * int)
   | Bound
 
 type scope = {
@@ -469,7 +470,10 @@ let scope_of ~emitters structure =
       method! let_denotes vb =
         match (vb.pvb_pat.ppat_desc, string_literal vb.pvb_expr) with
         | Ppat_var _, Some text -> Literal_binding text
-        | _ -> Bound
+        | _ -> (
+            match vb.pvb_expr.pexp_desc with
+            | Pexp_function _ -> Function_binding (span vb.pvb_expr.pexp_loc)
+            | _ -> Bound)
 
       method! opened ~top:_ ~include_:_ env denoted =
         match denoted with
@@ -723,6 +727,7 @@ let peel_params expr =
   go [] expr
 
 type binding = {
+  binding_id : int * int;
   names : string list;
   params : (Asttypes.arg_label * string * expression option) list;
   body : expression;
@@ -738,7 +743,14 @@ let bindings_of ?(include_compiler_plan = false) collect =
       method! value_binding vb =
         if include_compiler_plan || not (classifies_compiler_plan vb) then (
           let params, body = peel_params vb.pvb_expr in
-          found := { names = pattern_names vb.pvb_pat; params; body } :: !found;
+          found :=
+            {
+              binding_id = span vb.pvb_expr.pexp_loc;
+              names = pattern_names vb.pvb_pat;
+              params;
+              body;
+            }
+            :: !found;
           super#value_binding vb)
     end
   in
@@ -754,7 +766,7 @@ let bindings_in_expression expr = bindings_of (fun it -> it#expression expr)
 let emitter_bindings structure =
   bindings_of ~include_compiler_plan:true (fun it -> it#structure structure)
   |> List.filter_map ~f:(function
-    | { names = [ name ]; params; body } -> Some (name, params, body)
+    | { names = [ name ]; params; body; _ } -> Some (name, params, body)
     | _ -> None)
 
 (** Local names that reach an emitter, to a fixed point, with where a call to each of them leaves
@@ -845,7 +857,7 @@ let tainted_names scope ~emitters ~aliases ~seeds bindings =
   let changed = ref true in
   while !changed do
     changed := false;
-    List.iter bindings ~f:(fun { names; params = _; body } ->
+    List.iter bindings ~f:(fun { names; params = _; body; _ } ->
         if not (List.for_all names ~f:(Set.mem !tainted)) then
           if seeded body || List.exists (idents_in body) ~f:(fun i -> Set.mem !tainted i) then (
             tainted := List.fold names ~init:!tainted ~f:Set.add;
@@ -901,7 +913,7 @@ let local_generated_source scope ~emitters ~aliases body =
   generated
 
 type predicate = {
-  pred_name : string;
+  pred_binding : int * int;
   text_at : (destination * expression option * int) option;
       (** The caller-supplied fragment, with its destination and optional default. *)
   body_text : expression option;
@@ -957,7 +969,7 @@ let params_derived_in ~params body =
   let changed = ref true in
   while !changed do
     changed := false;
-    List.iter inner ~f:(fun { names; params = _; body } ->
+    List.iter inner ~f:(fun { names; params = _; body; _ } ->
         let from = of_expr body in
         if not (Set.is_empty from) then
           List.iter names ~f:(fun name ->
@@ -982,9 +994,9 @@ let predicates scope ~emitters ~aliases ~tainted bindings =
   let consumed = ref [] in
   let uncertain_capture = ref false in
   let predicates =
-    List.concat_map bindings ~f:(fun { names; params; body } ->
+    List.concat_map bindings ~f:(fun { binding_id; names; params; body } ->
         match (names, params) with
-        | [ name ], _ :: _ ->
+        | [ _name ], _ :: _ ->
             let destinations = param_destinations params in
             let destination_of p = List.Assoc.find destinations p ~equal:String.equal in
             let rebound = ref (Set.empty (module String)) in
@@ -1037,7 +1049,7 @@ let predicates scope ~emitters ~aliases ~tainted bindings =
                     (text.pexp_loc.loc_start.pos_cnum, text.pexp_loc.loc_end.pos_cnum) :: !consumed;
                   result :=
                     {
-                      pred_name = name;
+                      pred_binding = binding_id;
                       text_at = Option.bind text_param ~f:destination_of;
                       body_text =
                         (match (text_param, text.pexp_desc) with
@@ -1180,7 +1192,7 @@ let rejections ~emitters ~path ~contents =
   Hashtbl.data scope.values
   |> List.filter_map ~f:(function
     | Hidden { opened; name } -> Some (opened, name)
-    | Literal_binding _ | Bound -> None)
+    | Literal_binding _ | Function_binding _ | Bound -> None)
   |> List.dedup_and_sort ~compare:Poly.compare
   |> List.map ~f:(fun (opened, name) ->
       Printf.sprintf
@@ -1233,6 +1245,12 @@ let classify_source ~emitters ~path ~contents =
     let predicates, consumed, uncertain_capture =
       predicates scope ~emitters ~aliases ~tainted bindings
     in
+    let predicates_at callee =
+      match Hashtbl.find scope.values (span callee.pexp_loc) with
+      | Some (Function_binding binding_id) ->
+          List.filter predicates ~f:(fun p -> Poly.equal p.pred_binding binding_id)
+      | _ -> []
+    in
     let pins = ref [] in
     let is_consumed (e : expression) =
       List.mem consumed (e.pexp_loc.loc_start.pos_cnum, e.pexp_loc.loc_end.pos_cnum)
@@ -1255,7 +1273,7 @@ let classify_source ~emitters ~path ~contents =
     in
     (* Source parameters carry provenance into nested predicate calls only when a caller actually
        supplies generated text. This is a fixed point because helpers can call other helpers. *)
-    let called = ref (Set.empty (module String)) in
+    let called = Hashtbl.Poly.create () in
     let applied = Hashtbl.Poly.create () in
     let changed = ref true in
     let propagate =
@@ -1265,23 +1283,19 @@ let classify_source ~emitters ~path ~contents =
 
         method! expression e =
           (match e.pexp_desc with
-          | Pexp_apply (callee, args) -> (
+          | Pexp_apply (callee, args) ->
               Hashtbl.set applied ~key:(span callee.pexp_loc) ~data:();
-              match longident_of callee with
-              | Some [ name ] ->
-                  called := Set.add !called name;
-                  List.iter predicates ~f:(fun predicate ->
-                      if String.equal predicate.pred_name name then
-                        match (predicate.source_param, predicate.source_at) with
-                        | Some parameter, Some destination
-                          when (not (Set.mem !source_names parameter))
-                               && Option.value_map
-                                    (predicate_argument_at destination args)
-                                    ~default:false ~f:mentions_tainted ->
-                            source_names := Set.add !source_names parameter;
-                            changed := true
-                        | _ -> ())
-              | _ -> ())
+              List.iter (predicates_at callee) ~f:(fun predicate ->
+                  Hashtbl.set called ~key:predicate.pred_binding ~data:();
+                  match (predicate.source_param, predicate.source_at) with
+                  | Some parameter, Some destination
+                    when (not (Set.mem !source_names parameter))
+                         && Option.value_map
+                              (predicate_argument_at destination args)
+                              ~default:false ~f:mentions_tainted ->
+                      source_names := Set.add !source_names parameter;
+                      changed := true
+                  | _ -> ())
           | _ -> ());
           super#expression e
       end
@@ -1299,7 +1313,7 @@ let classify_source ~emitters ~path ~contents =
     (* A helper reached without an explicit call, for example as a callback, has no validated caller
        source. Keep that uncertainty visible rather than silently dropping its body text. *)
     List.iter predicates ~f:(fun predicate ->
-        if not (Set.mem !called predicate.pred_name) then
+        if not (Hashtbl.mem called predicate.pred_binding) then
           if Option.is_some predicate.source_at then pins := Computed :: !pins
           else
             Option.iter predicate.body_text ~f:(fun text ->
@@ -1337,7 +1351,7 @@ let classify_source ~emitters ~path ~contents =
       let changed = ref true in
       while !changed do
         changed := false;
-        List.iter bindings ~f:(fun { names; params = _; body } ->
+        List.iter bindings ~f:(fun { names; params = _; body; _ } ->
             if not (List.for_all names ~f:(Set.mem !derived)) then
               if
                 reads_a_buffer_inline body
@@ -1358,11 +1372,8 @@ let classify_source ~emitters ~path ~contents =
         method! value_binding vb = if not (classifies_compiler_plan vb) then super#value_binding vb
 
         method! expression e =
-          (match longident_of e with
-          | Some [ name ] when not (Hashtbl.mem applied (span e.pexp_loc)) ->
-              if List.exists predicates ~f:(fun predicate -> String.equal predicate.pred_name name)
-              then unattributed := true
-          | _ -> ());
+          if (not (Hashtbl.mem applied (span e.pexp_loc))) && not (List.is_empty (predicates_at e))
+          then unattributed := true;
           (match text_test scope e with
           | Some { text; tested; inherent } ->
               if inherent || Option.value_map tested ~default:false ~f:mentions_tainted then
@@ -1371,38 +1382,29 @@ let classify_source ~emitters ~path ~contents =
                 unattributed := true
           | None -> (
               match e.pexp_desc with
-              | Pexp_apply (callee, args) -> (
-                  match longident_of callee with
-                  | Some [ name ] ->
-                      List.iter
-                        (List.filter predicates ~f:(fun p -> String.equal p.pred_name name))
-                        ~f:(fun predicate ->
-                          let at parameter = predicate_argument_at parameter args in
-                          let source = Option.bind predicate.source_at ~f:at in
-                          let source_ok =
-                            match predicate.source_at with
-                            | None -> true
-                            | Some _ -> Option.value_map source ~default:false ~f:mentions_tainted
-                          in
-                          (* The backstop belongs on this path as much as on a direct test: a helper
-                             is how a test reads a buffer one indirection further out, and a guard
-                             that fires only for the spelling written first is not one (Codex round
-                             5). *)
-                          if
-                            (not source_ok)
-                            && Option.value_map source ~default:false ~f:reads_a_buffer
-                          then unattributed := true;
-                          if source_ok then (
-                            Option.iter predicate.body_text ~f:(fun text ->
-                                pins := pin_of_expr scope text :: !pins);
-                            match Option.bind predicate.text_at ~f:at with
-                            | Some text -> record text
-                            | None when Option.is_some predicate.text_at ->
-                                pins := Computed :: !pins
-                            | None -> ())
-                          else if Option.is_none source && Option.is_some predicate.source_at then
-                            pins := Computed :: !pins)
-                  | _ -> ())
+              | Pexp_apply (callee, args) ->
+                  List.iter (predicates_at callee) ~f:(fun predicate ->
+                      let at parameter = predicate_argument_at parameter args in
+                      let source = Option.bind predicate.source_at ~f:at in
+                      let source_ok =
+                        match predicate.source_at with
+                        | None -> true
+                        | Some _ -> Option.value_map source ~default:false ~f:mentions_tainted
+                      in
+                      (* The backstop belongs on this path as much as on a direct test: a helper is
+                         how a test reads a buffer one indirection further out, and a guard that
+                         fires only for the spelling written first is not one (Codex round 5). *)
+                      if (not source_ok) && Option.value_map source ~default:false ~f:reads_a_buffer
+                      then unattributed := true;
+                      if source_ok then (
+                        Option.iter predicate.body_text ~f:(fun text ->
+                            pins := pin_of_expr scope text :: !pins);
+                        match Option.bind predicate.text_at ~f:at with
+                        | Some text -> record text
+                        | None when Option.is_some predicate.text_at -> pins := Computed :: !pins
+                        | None -> ())
+                      else if Option.is_none source && Option.is_some predicate.source_at then
+                        pins := Computed :: !pins)
               | _ -> ()));
           super#expression e
       end

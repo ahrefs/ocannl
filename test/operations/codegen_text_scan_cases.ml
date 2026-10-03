@@ -466,6 +466,15 @@ let () =
   p "default" (has (Generated.read "r") ());
   p "explicit" (explicit (Generated.read "r") ~marker:"explicit marker" ())|ocaml},
       {|"default marker" "explicit marker"|} );
+    ( "same-named local predicates pin only their in-scope composite context",
+      {ocaml|let kernel () =
+  let has ~src ~marker = String.is_substring src ~substring:("kernel:" ^ marker) in
+  has ~src:(Generated.read "r") ~marker:"actual marker"
+let ordinary () =
+  let has ~src ~marker = String.is_substring src ~substring:("backend:" ^ marker) in
+  has ~src:backend_name ~marker:"not a pin"
+let () = p "kernel" (kernel ()); p "ordinary" (ordinary ())|ocaml},
+      {|"actual marker" "kernel:" ^ ...|} );
     ( "a nested predicate capturing an enclosing source parameter stays partial",
       {ocaml|let outer src =
   let inner ~marker = String.is_substring src ~substring:marker in

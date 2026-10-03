@@ -69,6 +69,7 @@ ok: source -- a helper reading generated source internally pins its labelled mar
 ok: source -- each test in a helper checks its own haystack
 ok: source -- a helper reading generated source inline pins its labelled marker
 ok: source -- omitted optional markers use their defaults and explicit markers override them
+ok: source -- same-named local predicates pin only their in-scope composite context
 ok: source -- a nested predicate capturing an enclosing source parameter stays partial
 ok: source -- a nested predicate reaching its captured source through an alias stays partial
 ok: source -- a nested backend-name predicate does not capture an unrelated source parameter

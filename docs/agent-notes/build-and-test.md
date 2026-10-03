@@ -1561,9 +1561,10 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   reaches the binding in scope where it is spelled. File-wide lookup failed silently both ways:
   gh-ocannl-1063's inventory recorded another leg's `let body_begin` text for a pin (a labelled
   parameter of that name read as the literal), and staging#855 lost the pins of two same-named
-  bindings outright, equal values included. Taint, emitter value aliases and predicate names stay
-  file-wide on purpose, since there over-reach costs an inventory line rather than naming the
-  wrong fragment. `codegen_text_scan_cases` controls each spelling against the old resolution.
+  bindings outright, equal values included. Predicate callees resolve to the lexical function
+  binding too (gh-ocannl-1150), since their body text must not come from a same-named helper in
+  another scope. Taint and emitter value aliases stay file-wide on purpose, since there over-reach
+  costs an inventory line. `codegen_text_scan_cases` controls each spelling against the old resolution.
 - Predicate parameters use the emitter destination lookup too (gh-ocannl-1150): labelled text
   and source parameters match by label, while only unlabelled parameters consume positions.
   Keep every text test in a predicate, since `residency_holds` pins several caller-supplied markers;
