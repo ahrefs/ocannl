@@ -963,9 +963,7 @@ let%track7_sexp c_compile_and_load ~f_path =
                 detail;
               } )))
    else try Stdlib.Sys.remove temp_log with _ -> ());
-  (* These failures say nothing about a candidate's schedule: a successful compiler must produce its
-     artifact, and signing is a host/toolchain prerequisite. Keep them fatal even under permissive
-     classification (gh-ocannl-1142). *)
+  (* All three post-compile host-boundary failures are typed, uncontainable link rejections. *)
   let reject_link stage detail =
     raise
       (Schedule_outcome.Cause_at
@@ -973,7 +971,9 @@ let%track7_sexp c_compile_and_load ~f_path =
            Schedule_outcome.Backend_rejected
              { backend = name; stage; severity = Schedule_outcome.Compiler_bug; detail } ))
   in
-  (* Wait a moment for the file to be fully written on success *)
+  (* A successful compiler must produce its artifact. A missing library says nothing about the
+     candidate's schedule, so keep it fatal under permissive classification (gh-ocannl-1142). Wait a
+     moment for the file to be fully written on success. *)
   let start_time = Unix.gettimeofday () in
   let timeout =
     Float.of_string
@@ -990,7 +990,8 @@ let%track7_sexp c_compile_and_load ~f_path =
            libname timeout _cmdline);
     Unix.sleepf 0.001
   done;
-  (* Expected to succeed on MacOS only. *)
+  (* Signing is a host/toolchain prerequisite, not a schedule constraint (gh-ocannl-1142). Expected
+     to succeed on MacOS only. *)
   let verify_codesign =
     Utils.get_global_flag ~default:false ~arg_name:"cc_backend_verify_codesign"
   in

@@ -599,8 +599,10 @@ files.
   host/toolchain contract, rather than establish that a schedule is unsuitable. `Compiler_bug`
   here identifies that broken backend contract; the actual cause may be an external tool or
   filesystem. A search must surface it instead of quietly falling back. The
-  `cc_post_compile_cause` fixtures provoke both paths with permissive classification on Unix;
-  Windows cannot run the shell fixtures and pins their classification instead.
+  `cc_dlopen_cause` modes provoke all three paths with permissive classification on Unix;
+  Windows cannot run the shell fixtures or defer undefined symbols to dlopen. The
+  `test_schedule_outcome` unit test pins all three stages across provenance and strictness on
+  every platform.
 - Placement decides which tensorized candidates *exist*, not just how they rank, because
   `mma_tile_for_precisions` keys on the storage precisions of the nodes the site actually reads.
   Under the mixed-precision recipe on a uniform-format backend (Metal's `simdgroup_matrix`: no mixed

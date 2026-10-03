@@ -614,7 +614,7 @@
 (executable
  (name fast_math_libmvec)
  (modules fast_math_libmvec)
- (libraries base ocannl stdio arrayjit.verdict)
+ (libraries base ocannl stdio unix arrayjit.verdict)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -648,7 +648,7 @@
 (executable
  (name cc_dlopen_cause)
  (modules cc_dlopen_cause)
- (libraries base ocannl stdio arrayjit.verdict)
+ (libraries base ocannl stdio unix arrayjit.verdict)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -662,6 +662,7 @@
    %{target}
    (run
     %{dep:cc_dlopen_cause.exe}
+    dlopen
     --ocannl_backend=cc
     --ocannl_strict_failure_classification=false
     "--ocannl_cc_backend_compiler_command=%{ocaml-config:c_compiler} -Dexpf=ocannl_gh1077_undefined_expf -D__DECL_SIMD_ocannl_gh1077_undefined_expf="))))
@@ -676,13 +677,6 @@
 
 ; gh-ocannl-1142: deterministic compiler/signing fixtures exercise post-compile failures.
 
-(executable
- (name cc_post_compile_cause)
- (modules cc_post_compile_cause)
- (libraries base ocannl stdio unix arrayjit.verdict)
- (preprocess
-  (pps ppx_here ppx_ocannl)))
-
 (rule
  ; ocannl-backend: cc -- explicitly pinned to the cc post-compile boundary.
  (target cc_post_compile_cause-artifact_missing.actual)
@@ -692,13 +686,12 @@
   (with-stdout-to
    %{target}
    (run
-    %{dep:cc_post_compile_cause.exe}
+    %{dep:cc_dlopen_cause.exe}
     artifact_missing
     --ocannl_backend=cc
     --ocannl_strict_failure_classification=false
     --ocannl_cc_backend_probe_cache=false
     --ocannl_cc_backend_post_compile_timeout=0
-    --ocannl_cc_backend_verify_codesign=true
     "--ocannl_cc_backend_compiler_command=sh '%{dep:cc_post_compile_stub.sh}' artifact_missing"))))
 
 (rule
@@ -720,12 +713,11 @@
   (with-stdout-to
    %{target}
    (run
-    %{dep:cc_post_compile_cause.exe}
+    %{dep:cc_dlopen_cause.exe}
     codesign
     --ocannl_backend=cc
     --ocannl_strict_failure_classification=false
     --ocannl_cc_backend_probe_cache=false
-    --ocannl_cc_backend_post_compile_timeout=0
     --ocannl_cc_backend_verify_codesign=true
     "--ocannl_cc_backend_compiler_command=sh '%{dep:cc_post_compile_stub.sh}' codesign"))))
 

@@ -103,13 +103,14 @@ val codesign_stage : string
 
 val uncontainable : phase -> cause -> bool
 (** Whether a typed cause must end a search rather than decline one candidate: {!protect} makes it
-    {!Fatal} although it is typed. Post-compile rejections at [Backend_link] include
-    {!dlopen_stage}, {!artifact_missing_stage}, and {!codesign_stage}: missing artifacts after a
-    successful compiler exit and signing failures are host/toolchain contract failures, not evidence
-    against a candidate's schedule (gh-ocannl-1142). The loader refusing a symbol nothing supplies
-    is likewise a link bug (gh-ocannl-1077). Absorbing these failures can silently ship an untuned
-    fallback or favor candidates that avoid the broken symbol. A JIT rejecting one candidate's PTX
-    remains a counted decline. *)
+    {!Fatal} although it is typed. Exactly three post-compile host-boundary stages at [Backend_link]
+    are uncontainable: {!artifact_missing_stage} violates the successful compiler's output contract;
+    {!codesign_stage} rejects a host/toolchain prerequisite; {!dlopen_stage} refuses a library the
+    compiler built. The first two provide no evidence against a candidate's schedule
+    (gh-ocannl-1142). The third can correlate with candidates: gh-ocannl-1045's missing [-lm] broke
+    only kernels referencing libmvec, so absorbing it quietly favored slower candidates avoiding
+    those symbols (gh-ocannl-1077). A JIT rejecting one candidate's PTX remains a counted decline.
+*)
 
 type fatal = {
   exn : exn;

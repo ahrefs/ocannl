@@ -1,7 +1,3 @@
-artifact_missing at Backend_link is uncontainable: true
-artifact_missing at Backend_compile remains containable: true
-codesign at Backend_link is uncontainable: true
-codesign at Backend_compile remains containable: true
 backend: cc
 strict failure classification is off: true
 the candidate compile is fatal, not a contained decline: true
@@ -10,7 +6,7 @@ the fatal failure carries its Backend_rejected cause: true
 the rejecting backend is cc: true
 the stage matches the injected post-compile failure: true
 the severity is Compiler_bug: true
-the detail names the missing artifact or codesign exit status: true
+the detail carries the injected failure diagnostic: true
 the detail carries the compile/link command: true
 Context.compile raises Invalid_argument with the post-compile diagnostic: true
 Autotune.tune raises: true
