@@ -1329,8 +1329,9 @@
 # says. It reassociates the value contraction as well (`(sum p * v) / l` for `sum (p / l) * v`),
 # within the same numerics gate. The `approximate` profile selects auto: block 16 on CUDA,
 # Metal and CPU; the two-pass rewrite on HIP and unmeasured targets. The hardware-limits fact
-# online_softmax_block_profitable owns that resolution. On gfx1151 unified memory, forcing
-# block 16 regressed the tuned f32 forward from 4.72 to 7.22 ms (gh-ocannl-1171);
+# online_softmax_auto_block owns that resolution. CUDA preserves the prior profile choice;
+# its fold was not ablated alone. On gfx1151 unified memory, the first search sweep measured
+# the tuned f32 forward at 7.22 ms with 16 versus 4.72 ms with 0 (gh-ocannl-1171);
 # gfx1102 discrete confirmation is pending. Explicit integers force the same block size on
 # every device, and `reproducible` stays at 0. A key count not a multiple of B leaves a guarded tail; a pattern
 # the fold cannot prove (active dropout between the probabilities and the value contraction, a

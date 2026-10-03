@@ -713,7 +713,7 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
     Hashtbl.clear device.updating_for
 end
 
-let%track6_sexp lower_assignments ?(limits = no_hardware_limits) optim_ctx ?name bindings asgns =
+let%track6_sexp lower_assignments ~limits optim_ctx ?name bindings asgns =
   (* Fork the lineage state (computations and placements) so this compile's decisions do not leak
      into the incoming context or into sibling compiles from the same context
      (docs/proposals/context-scoped-memory-modes.md). The forked state travels with the code and
@@ -727,7 +727,7 @@ let%track6_sexp lower_assignments ?(limits = no_hardware_limits) optim_ctx ?name
   let cd_source = Utils.output_to_build_file ~fname:(name ^ ".cd") in
   ( name,
     Assignments.lower
-      ~rewrite_target:{ online_softmax_block_profitable = limits.online_softmax_block_profitable }
+      ~rewrite_target:{ online_softmax_auto_block = limits.online_softmax_auto_block }
       optim_ctx ~unoptim_ll_source ~ll_source ~cd_source ~name (Indexing.bound_symbols bindings)
       asgns )
 

@@ -24,7 +24,7 @@ let cpu_mma_limits () =
     native_fp16_arithmetic = Cc_backend.has_native_fp16_arithmetic ();
     simdgroup_width = None;
     lane_scalar_recompute_cheap = false;
-    online_softmax_block_profitable = true;
+    online_softmax_auto_block = 16;
     worker_pool_tag = Some (Cc_backend.pool_tag ());
     codegen_tag = Some (Cc_backend.codegen_tag ());
     (* [mma_format_tiles] is empty: the register tiling is not a tensor-core instruction — no

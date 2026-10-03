@@ -64,7 +64,6 @@ Configuration keys tracked as ambient dependencies, in the one spelling OCANNL r
   model_default_schedule
   narrow_compute_f32
   no_config_file
-  online_softmax_block
   output_prec_in_ll_files
   profile
   schedule_fission

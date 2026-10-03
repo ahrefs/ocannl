@@ -15,7 +15,7 @@
     application consumes at least one instance of its pattern. A member that keeps rewriting past
     {!max_rounds} rounds is refused as malformed rather than looped on. *)
 
-type target = { online_softmax_block_profitable : bool }
+type target = { online_softmax_auto_block : int }
 (** Device economics needed before lowering analyses. Supplied by backend limits rather than
     selected by backend name; kept separate from [Backend_intf] to avoid an IR/interface dependency
     cycle. *)

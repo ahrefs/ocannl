@@ -2,9 +2,9 @@
 
 open Base
 
-type target = { online_softmax_block_profitable : bool }
+type target = { online_softmax_auto_block : int }
 
-let conservative_target = { online_softmax_block_profitable = false }
+let conservative_target = { online_softmax_auto_block = 0 }
 
 type rewrite = {
   name : string;
@@ -18,9 +18,7 @@ let tier : rewrite list =
     {
       name = "online_softmax";
       enabled = Online_softmax.enabled;
-      apply =
-        (fun target ->
-          Online_softmax.rewrite ~block_profitable:target.online_softmax_block_profitable);
+      apply = (fun target -> Online_softmax.rewrite ~auto_block:target.online_softmax_auto_block);
       reset = Online_softmax.reset;
     };
   ]

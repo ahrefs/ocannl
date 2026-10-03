@@ -1469,7 +1469,7 @@ let find_backward r (nz : normalizer) : backward option =
 let block_override : int option ref = ref None
 let set_block b = block_override := b
 
-let block ?(profitable = false) () =
+let block ?(auto_block = 0) () =
   let size =
     match !block_override with
     | Some b -> b
@@ -1477,8 +1477,7 @@ let block ?(profitable = false) () =
         let raw =
           String.strip (Utils.get_global_arg ~default:"0" ~arg_name:"online_softmax_block")
         in
-        if String.equal (String.lowercase raw) "auto" then if profitable then 16 else 0
-        else Int.of_string raw
+        if String.equal (String.lowercase raw) "auto" then auto_block else Int.of_string raw
   in
   if size < 0 then invalid_arg "online_softmax_block: expected auto or a nonnegative integer";
   size
@@ -1957,13 +1956,13 @@ let find_fold r (nz : normalizer) ~block : fold option =
 
 (* {1 The pass} *)
 
-let rewrite ?(block_profitable = false) (llc : LL.t) : LL.t =
+let rewrite ?(auto_block = 0) (llc : LL.t) : LL.t =
   let r = routine_of llc in
   let normalizers = List.filter_map (List.range 0 (Array.length r.stmts)) ~f:(find_normalizer r) in
   if List.is_empty normalizers then llc
   else
     let stmts = Array.copy r.stmts in
-    let block = block ~profitable:block_profitable () in
+    let block = block ~auto_block () in
     (* The block fold replaces a normalizer together with its value pass; one it declines keeps the
        two-pass form. *)
     let folded =

@@ -438,7 +438,7 @@ module Impl = struct
            simdgroup_width = Some 32;
            (* gh-ocannl-1124: measured true on the M4 Max; see the field. *)
            lane_scalar_recompute_cheap = true;
-           online_softmax_block_profitable = true;
+           online_softmax_auto_block = 16;
            worker_pool_tag = None;
            (* gh-ocannl-572: no codegen or dispatch knob of this backend is configurable — the
               kernel source is a function of the lowered code, the device capabilities and the

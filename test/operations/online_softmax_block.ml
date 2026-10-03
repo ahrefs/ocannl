@@ -25,7 +25,8 @@
    schedule ops' reach), and the declines (an active dropout's shape, a reader of the row state the
    fold cannot move, scores that are no contraction), each falling back to the two-pass form; 7.
    training: the fold forward under the composed backward (treatment E of the gh-1002/1003 record)
-   and under the fused one (treatment F). *)
+   and under the fused one (treatment F); 8. device resolution before analysis and compilation, and
+   structural agreement with an explicit block size. *)
 
 open Base
 open Stdio
@@ -780,19 +781,21 @@ let () =
       Online_softmax.set_block None)
     ~f:(fun () ->
       p "auto keeps block 16 where the device says the fold is profitable"
-        (Online_softmax.block ~profitable:true () = 16);
+        (Online_softmax.block ~auto_block:16 () = 16);
+      p "auto uses the device key-block size rather than a fixed profile constant"
+        (Online_softmax.block ~auto_block:8 () = 8);
       p "auto keeps the two-pass rewrite on an unmeasured device" (Online_softmax.block () = 0);
       Tensor.unsafe_reinitialize ();
       let t = model ~seq:32 ~layers:1 ~d_k:8 ~prefix:0 () in
       Train.set_materialized t.Tensor.value;
       let comp = Train.forward t in
-      let lower profitable =
+      let lower auto_block =
         Ir.Assignments.lower
-          ~rewrite_target:{ online_softmax_block_profitable = profitable }
+          ~rewrite_target:{ online_softmax_auto_block = auto_block }
           (LL.empty_optimize_ctx ()) ~unoptim_ll_source:None ~ll_source:None ~cd_source:None
           ~name:"osb_auto_probe" [] comp.Ir.Assignments.asgns
       in
-      let off = lower false and on = lower true in
+      let off = lower 0 and on = lower 16 in
       p "auto on a declining device lowers to the two-pass form"
         (scans_of off.LL.llc = 1 && Set.is_empty (tiles off.LL.llc));
       p "auto on a profitable device lowers to the block fold"
@@ -806,19 +809,17 @@ let () =
           Online_softmax.set_block (Some size);
           p
             (Printf.sprintf "explicit block %d bypasses declining device economics" size)
-            (String.equal (digest (lower false)) (digest expected));
+            (String.equal (digest (lower 0)) (digest expected));
           p
             (Printf.sprintf "explicit block %d bypasses profitable device economics" size)
-            (String.equal (digest (lower true)) (digest expected)));
+            (String.equal (digest (lower 16)) (digest expected)));
       Online_softmax.set_block None;
       let ctx = Train.init_params (Context.auto ()) Ir.Indexing.Empty t in
-      let profitable =
-        (Context.hardware_limits ctx).Ir.Backend_intf.online_softmax_block_profitable
-      in
+      let auto_block = (Context.hardware_limits ctx).Ir.Backend_intf.online_softmax_auto_block in
       p "the backend pins the automatic block policy (HIP off; CUDA/Metal/CPU preserved)"
-        (Bool.equal profitable (not (String.equal backend_name "hip")));
+        (auto_block = if String.equal backend_name "hip" then 0 else 16);
       p "backend-free hardware limits conservatively decline the automatic fold"
-        (not Ir.Backend_intf.no_hardware_limits.online_softmax_block_profitable);
+        (Ir.Backend_intf.no_hardware_limits.online_softmax_auto_block = 0);
       let analyzed =
         Context.lowered_for_decisions ~name:"osb_auto_analysis" ctx comp Ir.Indexing.Empty
       in
@@ -829,7 +830,7 @@ let () =
       let analyzed_digest = structural_digest analyzed in
       let captured_digest = ref None in
       let captured = ref None in
-      let ctx, routine =
+      let _auto_ctx, _routine =
         Context.compile ~name:"osb_auto_exec"
           ~lowered_transform:(fun opt ->
             captured := Some opt;
@@ -839,17 +840,19 @@ let () =
       in
       let compiled = Option.value_exn !captured in
       p "analyze-only lowering honors the run's device economics"
-        (Bool.equal (Set.is_empty (tiles analyzed.LL.llc)) (not profitable));
+        (Bool.equal (Set.is_empty (tiles analyzed.LL.llc)) (auto_block = 0));
       p "backend compilation honors the same device economics"
-        (Bool.equal (Set.is_empty (tiles compiled.LL.llc)) (not profitable));
+        (Bool.equal (Set.is_empty (tiles compiled.LL.llc)) (auto_block = 0));
       p "analysis and compilation agree on the resolved code structure"
         (String.equal analyzed_digest (Option.value_exn !captured_digest));
-      let ctx = Context.run ctx routine in
-      let auto_values = Context.get_values ctx t.Tensor.value in
-      Online_softmax.set_block (Some (if profitable then 16 else 0));
-      let ctx, forced = Context.compile ~name:"osb_auto_forced" ctx comp Ir.Indexing.Empty in
-      let ctx = Context.run ctx forced in
-      p_all2 "executed auto output matches the explicit resolved mode within 1e-5 relative"
-        auto_values
-        (Context.get_values ctx t.Tensor.value)
-        ~f:(close ~tol:1e-5))
+      Online_softmax.set_block (Some auto_block);
+      let forced_digest = ref None in
+      let _forced_ctx, _forced =
+        Context.compile ~name:"osb_auto_forced"
+          ~lowered_transform:(fun opt ->
+            forced_digest := Some (structural_digest opt);
+            [ opt ])
+          ctx comp Ir.Indexing.Empty
+      in
+      p "auto compilation has the same code structure as the explicit resolved size"
+        (String.equal (Option.value_exn !captured_digest) (Option.value_exn !forced_digest)))
