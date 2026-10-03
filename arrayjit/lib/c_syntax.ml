@@ -888,8 +888,21 @@ module type C_syntax_config = sig
       apply the emission.
 
       Accepting a [`Swizzled_b128] operand is a promise that it was consumed through a swizzle-aware
-      load: the caller records the call as {!Mma_intrinsics_ldmatrix} on that basis. An arm without
-      such a load form must decline the call. *)
+      load. {!mma_uses_ldmatrix} distinguishes that instruction from swizzle-aware gathers in the
+      rendering census. An arm without a swizzle-aware load must decline the call. *)
+
+  val mma_uses_ldmatrix :
+    a_prec:Ops.prec ->
+    b_prec:Ops.prec ->
+    d_prec:Ops.prec ->
+    ta:bool ->
+    tb:bool ->
+    a:mma_source ->
+    b:mma_source ->
+    bool
+  (** Load-path census for an accepted {!mma_syntax} call. Shared-swizzled operands can also use
+      byte gathers, so layout alone cannot establish [ldmatrix] emission. Backends without that
+      instruction inherit [false]. *)
 
   val mma_fragment_syntax :
     (d_prec:Ops.prec ->
@@ -1869,6 +1882,7 @@ struct
   (* No tile-MMA units on plain C backends: [Tile_mma] renders its scalar fallback under the [lane
      == 0] guard. *)
   let mma_syntax = None
+  let mma_uses_ldmatrix ~a_prec:_ ~b_prec:_ ~d_prec:_ ~ta:_ ~tb:_ ~a:_ ~b:_ = false
   let mma_fragment_syntax = None
   let float_log_style = if Input.full_printf_support then "%g" else "%de-3"
 
@@ -5362,13 +5376,9 @@ module C_syntax (B : C_syntax_config) = struct
                 let b_ptr_doc, b_src = (operand_ptr b_op, operand_source b_op) in
                 match emit ~d_prec ~a_prec ~b_prec ~ta ~tb ~m ~n ~k ~d:d_op ~a:a_src ~b:b_src with
                 | Some emission ->
-                    (* Accepting a swizzled operand is a promise that it was read through a
-                       swizzle-aware load; no other reading of that layout is correct. *)
-                    let swizzled (_, _, _, layout) =
-                      match layout with `Swizzled_b128 -> true | `Plain -> false
-                    in
                     record
-                      (if List.exists [ d_op; a_op; b_op ] ~f:swizzled then Mma_intrinsics_ldmatrix
+                      (if B.mma_uses_ldmatrix ~a_prec ~b_prec ~d_prec ~ta ~tb ~a:a_src ~b:b_src then
+                         Mma_intrinsics_ldmatrix
                        else Mma_intrinsics);
                     emission ~a_ptr:a_ptr_doc ~b_ptr:b_ptr_doc
                 | None ->

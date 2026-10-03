@@ -10,7 +10,9 @@ f8_a staged ldmatrix parity (GPU) or clean rejection (CPU): true
 f8_a ldmatrix structure and census as expected: true
 f8_b staged ldmatrix parity (GPU) or clean rejection (CPU): true
 f8_b ldmatrix structure and census as expected: true
-f8_b_decline staged ldmatrix parity (GPU) or clean rejection (CPU): true
-f8_b_decline ldmatrix structure and census as expected: true
+f8_b_gather staged ldmatrix parity (GPU) or clean rejection (CPU): true
+f8_b_gather ldmatrix structure and census as expected: true
+f8_a_gather staged ldmatrix parity (GPU) or clean rejection (CPU): true
+f8_a_gather ldmatrix structure and census as expected: true
 f16_decline staged ldmatrix parity (GPU) or clean rejection (CPU): true
 f16_decline ldmatrix structure and census as expected: true

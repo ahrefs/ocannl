@@ -263,6 +263,7 @@ test/operations/schedule_ldmatrix_matmul.ml [also pins text this scan cannot nam
     "(mma-fp8) e5m2 ldmatrix b"
     "== 0)"
     "__bfloat16_as_ushort"
+    "__mma_g) >> 4) ^ "
     "ldmatrix"
     "ldmatrix.sync.aligned.m8n8.x2"
     "ldmatrix.sync.aligned.m8n8.x2.shared.b16"

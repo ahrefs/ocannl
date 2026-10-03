@@ -683,6 +683,16 @@ files.
   backend-resolution change, and the schedule cache's `codegen` component hashes the whole
   `hardware_limits` record, whose `mma_bf16_wide_acc_scopes` changed on exactly the sm_80+ devices
   whose rendering did, so old winners do not replay.
+- **CUDA fp8 staged twins use that same register scope** (gh-ocannl-1073), with
+  m16n8k32's identical m16n8 f32 accumulator mapping and direct f32 destination moves.
+  The plain and swizzled twins both keep the registers across the outer reduction;
+  `schedule_mma_matmul` derives their residency and exact-value checks from `mma_staged_layouts`.
+  fp8's `ldmatrix.b16` eligibility remains one-sided: A row-major and B transposed.
+  Other shared-swizzled orientations gather bytes through the b128 XOR address map,
+  so the row-major staged twin uses `ldmatrix` for A and gathers for B. A gather-only
+  statement is tensorized but has no `ldmatrix`; CUDA's `mma_ldmatrix_operands` drives
+  both load emission and `mma_uses_ldmatrix` for the census, rather than inferring the
+  instruction from the layout. `schedule_ldmatrix_matmul` pins both gather-only orientations.
 - **bf16 residency is the ternary `bf16_arithmetic` policy's question** (gh-ocannl-838), the same
   shape as `fp16_arithmetic`: `Numerics.bf16_mode`, `Numerics.bf16_accum_wide`, and a per-format
   capability list `mma_bf16_wide_acc_scopes` read by the same seeding gate

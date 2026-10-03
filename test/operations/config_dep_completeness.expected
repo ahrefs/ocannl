@@ -9,7 +9,7 @@ arrayjit/lib/dune: exempt rules (gen_builtins/generate.exe)
 arrayjit/lib/gen_builtins/dune: nothing that runs a test executable
 arrayjit/test/dune: tests, exe-running rules
 benchmarks/dune: exempt rules (python3, handed %{dep:test_orchestrate.py})
-benchmarks/runners/ocannl/dune: exempt rules (metal_queue_probe.exe)
+benchmarks/runners/ocannl/dune: exe-running rules, exempt rules (metal_queue_probe.exe)
 bin/dune: exe-running rules
 dune: nothing that runs a test executable
 lib/dune: nothing that runs a test executable

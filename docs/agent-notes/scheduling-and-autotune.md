@@ -490,10 +490,12 @@ files.
   back to the untuned default after crowning a winner. Same rule as "crowned is not shipped", one
   level down.
   `mma_staged_layouts` (gh-ocannl-481) is keyed the same way for the same reason: the swizzled
-  staged twin is seeded only where the emission can actually read that layout, which on CUDA is
-  the uniform-bf16 combination and not fp8 (whose B side has no 16-bit `ldmatrix` form at the
-  orientation the staged sketches mint). The census distinguishes `Mma_intrinsics_ldmatrix` from
-  `Mma_intrinsics`, so "tensorized" and "fed at rate" are separable in a sweep.
+  staged twin is seeded only where the emission can actually read that layout. CUDA advertises
+  uniform bf16 and fp8 x fp8 -> f32 (gh-ocannl-1073): bf16 uses `ldmatrix` for both operands;
+  fp8's row-major staged A uses `ldmatrix`, while B's four strided bytes per register gather
+  through the swizzle map. Eligibility remains per operand and orientation. The census
+  distinguishes `Mma_intrinsics_ldmatrix` from `Mma_intrinsics` using the actual load choice,
+  so "tensorized" and "fed at rate" are separable in a sweep.
 - **The register-tile geometry is a schedule decision, not a renderer constant** (gh-ocannl-619).
   `Schedule.Tensorize` carries `tile : Register_tile.t option` (`{rm; rn; lanes}`) into
   `Low_level.Tile_mma`; `C_syntax.try_register_tile` honours a request EXACTLY or declines it to

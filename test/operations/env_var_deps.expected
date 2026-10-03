@@ -133,6 +133,7 @@ on its own deps.
 Programs naming `Ir.Schedule` and the entry points they name, every configuration key of which is
 declared or pinned by every rule running the program (gh-ocannl-1149):
   (the keys its values reach: automatic_cpu_schedule, automatic_gpu_schedule, big_models, check_half_prec_constants_cutoff, cpu_schedule_min_parallel, debug_log_from_routines, gpu_fission_keep_mapping, gpu_lane_preamble_reduction, gpu_schedule_block_size, gpu_schedule_min_parallel, gpu_schedule_workgroup_fill, large_models, legality_crosscheck, log_level, profile, schedule_fission, schedule_log_launches, stack_threshold_in_bytes)
+  benchmarks/runners/ocannl/dune, executable bench_mma_register_scope_emit: Ir.Schedule.apply
   bin/dune, executable narrow_gebp_bench: Ir.Schedule.apply
   bin/dune, executable narrow_storage_bench: Ir.Schedule.apply
   bin/dune, executable projection_shape_bench: Ir.Schedule.apply
@@ -203,6 +204,8 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   arrayjit/test/dune                       @runtest-env_spelling_gate
   benchmarks/runners/ocannl/dune           @bin-smoke
   benchmarks/runners/ocannl/dune           @metal-codegen
+  benchmarks/runners/ocannl/dune           @mma-register-scope-emit
+  benchmarks/runners/ocannl/dune           @mma-register-scope-emit-env_spelling_gate
   bin/dune                                 @bin-smoke
   bin/dune                                 @bin-smoke-env_spelling_gate
   test/einsum/dune                         @runtest
@@ -356,6 +359,7 @@ the rule that runs it (gh-ocannl-723). What is held here is which VERDICTS a fil
 draw, not how many draw each: a tally would move whenever a test is added, and the per-stanza
 table goes to stderr.
   the census covers every scan root, so the floor of 20 callers applies to it
+  benchmarks/runners/ocannl/dune: declared
   test/operations/dune: declared
 
 Backend declarations, by dune file. Every stanza that runs an executable either declares
@@ -369,7 +373,7 @@ will copy them from, and the tallies go to stderr (gh-ocannl-659, gh-ocannl-665)
   arrayjit/lib/gen_builtins/dune: nothing that runs a test executable
   arrayjit/test/dune: declares OCANNL_BACKEND; markers: cc, cuda, metal, none
   benchmarks/dune: markers: none
-  benchmarks/runners/ocannl/dune: markers: metal
+  benchmarks/runners/ocannl/dune: markers: cuda, metal, none
   bin/dune: markers: cc, none
   dune: nothing that runs a test executable
   lib/dune: nothing that runs a test executable
