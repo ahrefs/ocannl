@@ -447,6 +447,42 @@ let () = p "marker" (has ~unused:"not a pin" (Generated.read "r") "real marker")
   String.is_substring src ~substring:marker
 let () = p "marker" (check ~build:compile ~marker:"internal marker")|ocaml},
       {|"internal marker"|} );
+    ( "each test in a helper checks its own haystack",
+      {ocaml|let src = Generated.read "r"
+let check ~marker ~backend_marker =
+  String.is_substring src ~substring:marker
+  && String.is_substring backend_name ~substring:backend_marker
+let () = p "marker" (check ~marker:"kernel marker" ~backend_marker:"cuda")|ocaml},
+      {|"kernel marker"|} );
+    ( "a helper reading generated source inline pins its labelled marker",
+      {ocaml|let check ~routine ~marker =
+  String.is_substring (Generated.read routine) ~substring:marker
+let () = p "marker" (check ~routine:"r" ~marker:"inline marker")|ocaml},
+      {|"inline marker"|} );
+    ( "omitted optional markers use their defaults and explicit markers override them",
+      {ocaml|let has src ?(marker = "default marker") () = String.is_substring src ~substring:marker
+let explicit src ?(marker = "unused default") () = String.is_substring src ~substring:marker
+let () =
+  p "default" (has (Generated.read "r") ());
+  p "explicit" (explicit (Generated.read "r") ~marker:"explicit marker" ())|ocaml},
+      {|"default marker" "explicit marker"|} );
+    ( "a labelled marker inside an expression keeps its literal context",
+      {ocaml|let symbol ~emitted src = String.is_substring src ~substring:("void " ^ emitted ^ "(")
+let () = p "symbol" (symbol ~emitted:"asm__" (Generated.read "r"))|ocaml},
+      {|"asm__" "void " ^ ... ^ "("|} );
+    ( "a labelled text parameter shadowed by a lambda pattern stays partial",
+      {ocaml|let check ~marker src =
+  Option.iter (current_marker ()) ~f:(fun (marker, other) ->
+    String.is_substring src ~substring:marker)
+let () = p "marker" (check ~marker:"caller marker" (Generated.read "r"))|ocaml},
+      "+partial" );
+    ( "a local source alias is not generated because another scope uses its name",
+      {ocaml|let other () = let src = Generated.read "r" in describe src
+let has ~s ~sub =
+  let src = String.lowercase s in
+  String.is_substring src ~substring:sub
+let () = p "ordinary" (has ~s:backend_name ~sub:"cuda")|ocaml},
+      "" );
     ( "labelled predicates over ordinary text pin no generated fragments",
       {ocaml|let has ~src ~sub = String.is_substring src ~substring:sub
 let () =
@@ -500,6 +536,15 @@ let () =
     ( "a wrapper around an emitter carries its caller's buffer",
       {ocaml|module CR = Ir.Low_level.Canonical_render
 let write ~buf policy llc = CR.emit ~buf policy llc
+let () =
+  let output = Buffer.create 256 in
+  write ~buf:output policy llc;
+  p "free" (String.is_substring (Buffer.contents output) ~substring:"s0")|ocaml},
+      {|"s0" +rendered|} );
+    ( "a compiler-plan annotation does not hide an exported emitter wrapper",
+      {ocaml|module CR = Ir.Low_level.Canonical_render
+let write ~buf policy llc = CR.emit ~buf policy llc
+[@@ocannl.codegen_text.compiler_plan]
 let () =
   let output = Buffer.create 256 in
   write ~buf:output policy llc;

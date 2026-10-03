@@ -66,6 +66,12 @@ ok: source -- a parameter is not a same-named literal let elsewhere in the file
 ok: source -- labelled source and several text parameters match reordered call arguments
 ok: source -- labelled parameters do not shift positional source or text arguments
 ok: source -- a helper reading generated source internally pins its labelled markers
+ok: source -- each test in a helper checks its own haystack
+ok: source -- a helper reading generated source inline pins its labelled marker
+ok: source -- omitted optional markers use their defaults and explicit markers override them
+ok: source -- a labelled marker inside an expression keeps its literal context
+ok: source -- a labelled text parameter shadowed by a lambda pattern stays partial
+ok: source -- a local source alias is not generated because another scope uses its name
 ok: source -- labelled predicates over ordinary text pin no generated fragments
 ok: source -- a binding shadowing a literal let is not that literal
 ok: source -- a buffer-writing serializer is an emitter too
@@ -73,6 +79,7 @@ ok: source -- the buffer a serializer writes into carries the text, across bindi
 ok: source -- an emitter bound to a local name is still the emitter
 ok: source -- an alias of that alias is the emitter too
 ok: source -- a wrapper around an emitter carries its caller's buffer
+ok: source -- a compiler-plan annotation does not hide an exported emitter wrapper
 ok: source -- a wrapper whose buffer parameter carries no label is addressed by position
 ok: source -- a buffer this scan did not see filled marks the itemisation partial
 ok: source -- a buffer read through an alias of Buffer marks it partial just the same

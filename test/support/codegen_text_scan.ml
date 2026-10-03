@@ -553,13 +553,14 @@ let renders_generated_text ~emitters ~aliases expr =
   iterator#expression expr;
   !found
 
-(** Each parameter with its position among the parameters that carry no label, which is how a call
-    site addresses it. A labelled parameter keeps its label and takes no position. *)
-let positional_params params =
-  List.folding_map params ~init:0 ~f:(fun position (label, name) ->
+(** How each named parameter is addressed at a call site, with its optional default. Labels consume
+    no positional index. *)
+let param_destinations params =
+  List.folding_map params ~init:0 ~f:(fun position (label, name, default) ->
       match label with
-      | Asttypes.Nolabel -> (position + 1, (position, (label, name)))
-      | _ -> (position, (position, (label, name))))
+      | Asttypes.Nolabel -> (position + 1, (name, (At_position position, default)))
+      | Asttypes.Labelled label | Asttypes.Optional label ->
+          (position, (name, (At_label label, default))))
 
 (** The unlabelled arguments of an application, in order. *)
 let positional args =
@@ -703,8 +704,10 @@ let peel_params expr =
           | [] -> []
           | param :: rest -> (
               match param.pparam_desc with
-              | Pparam_val (label, _, pat) -> (
-                  match bound_name pat with Some p -> (label, p) :: take rest | None -> [])
+              | Pparam_val (label, default, pat) -> (
+                  match bound_name pat with
+                  | Some p -> (label, p, default) :: take rest
+                  | None -> [])
               | _ -> [])
         in
         let taken = take params in
@@ -720,19 +723,19 @@ let peel_params expr =
 
 type binding = {
   names : string list;
-  params : (Asttypes.arg_label * string) list;
+  params : (Asttypes.arg_label * string * expression option) list;
   body : expression;
 }
 
 (** Every [let]-bound value in [expr] or [structure], nested ones included. *)
-let bindings_of collect =
+let bindings_of ?(include_compiler_plan = false) collect =
   let found = ref [] in
   let iterator =
     object
       inherit Ast_traverse.iter as super
 
       method! value_binding vb =
-        if not (classifies_compiler_plan vb) then (
+        if include_compiler_plan || not (classifies_compiler_plan vb) then (
           let params, body = peel_params vb.pvb_expr in
           found := { names = pattern_names vb.pvb_pat; params; body } :: !found;
           super#value_binding vb)
@@ -744,25 +747,14 @@ let bindings_of collect =
 let bindings_in_structure structure = bindings_of (fun it -> it#structure structure)
 let bindings_in_expression expr = bindings_of (fun it -> it#expression expr)
 
-(** Single-name bindings for the emitter alias and wrapper analysis. Uses the same parameter reader
-    as predicates so both routes address labelled and positional arguments alike. *)
-let labelled_bindings structure =
-  let found = ref [] in
-  let iterator =
-    object
-      inherit Ast_traverse.iter as super
-
-      method! value_binding vb =
-        (match bound_name vb.pvb_pat with
-        | Some name ->
-            let params, body = peel_params vb.pvb_expr in
-            found := (name, params, body) :: !found
-        | None -> ());
-        super#value_binding vb
-    end
-  in
-  iterator#structure structure;
-  List.rev !found
+(** Single-name bindings for emitter aliases, including compiler-plan classifiers: the annotation
+    suppresses their pins, but an emitter alias they export can still be used outside the
+    classifier. *)
+let emitter_bindings structure =
+  bindings_of ~include_compiler_plan:true (fun it -> it#structure structure)
+  |> List.filter_map ~f:(function
+    | { names = [ name ]; params; body } -> Some (name, params, body)
+    | _ -> None)
 
 (** Local names that reach an emitter, to a fixed point, with where a call to each of them leaves
     its generated text.
@@ -784,7 +776,7 @@ let labelled_bindings structure =
     caller's buffer is then read untainted, which {!classify_source} reports as an itemisation this
     scan cannot complete. *)
 let emitter_aliases ~emitters structure =
-  let candidates = labelled_bindings structure in
+  let candidates = emitter_bindings structure in
   let aliases = ref [] in
   let known path = emitter_of_path ~emitters ~aliases:!aliases path in
   let wrapper_destinations ~params body =
@@ -801,13 +793,10 @@ let emitter_aliases ~emitters structure =
                   List.iter emitter.destinations ~f:(fun destination ->
                       Option.iter (argument_at ~destination args) ~f:(fun argument ->
                           let carried = idents_in argument in
-                          List.iter (positional_params params) ~f:(fun (position, (label, name)) ->
+                          List.iter (param_destinations params)
+                            ~f:(fun (name, (destination, _default)) ->
                               if List.mem carried name ~equal:String.equal then
-                                found :=
-                                  (match label with
-                                  | Asttypes.Nolabel -> At_position position
-                                  | Asttypes.Labelled l | Asttypes.Optional l -> At_label l)
-                                  :: !found)))
+                                found := destination :: !found)))
               | None -> ())
           | _ -> ());
           super#expression e
@@ -865,7 +854,7 @@ let tainted_names scope ~emitters ~aliases ~seeds bindings =
 
 type predicate = {
   pred_name : string;
-  text_at : destination option;
+  text_at : (destination * expression option) option;
       (** Label or positional index of the pinned-text parameter, when the fragment is one the
           CALLER supplies. [None] where the helper hard-codes the fragment itself
           ([let has_barrier src = String.is_substring src ~substring:"__syncthreads()"]) -- the
@@ -877,7 +866,7 @@ type predicate = {
           rather than closing over it. Such a parameter IS generated source inside the predicate's
           body, so a literal the body tests against it -- the ["Main logic"] banner a helper slices
           on -- is a pin like any other, and the name joins the tainted set for the pin walk. *)
-  source_at : destination option;
+  source_at : (destination * expression option) option;
       (** Label or positional index of the parameter that carries the generated source, when the
           predicate takes it rather than closing over it. Checked at each call site: a predicate is
           only pinning where the haystack it is handed really is generated source. *)
@@ -926,38 +915,51 @@ let params_derived_in ~params body =
     a PARAMETER, not a fragment, and reading them as pins would mark every file using the idiom as
     pinning text the scan cannot name. Skipped by range at the pin walk rather than by skipping the
     whole binding, so a literal a predicate's body pins alongside its parameter still counts. *)
-let predicates scope ~tainted bindings =
+let predicates scope ~emitters ~aliases ~tainted bindings =
   let consumed = ref [] in
   let predicates =
     List.concat_map bindings ~f:(fun { names; params; body } ->
         match (names, params) with
         | [ name ], _ :: _ ->
-            let destination_of p =
-              List.find_map (positional_params params) ~f:(fun (position, (label, name)) ->
-                  if not (String.equal p name) then None
-                  else
-                    Some
-                      (match label with
-                      | Asttypes.Nolabel -> At_position position
-                      | Asttypes.Labelled label | Asttypes.Optional label -> At_label label))
+            let destinations = param_destinations params in
+            let destination_of p = List.Assoc.find destinations p ~equal:String.equal in
+            let rebound = ref (Set.empty (module String)) in
+            let patterns =
+              object
+                inherit Ast_traverse.iter as super
+
+                method! pattern p =
+                  rebound := List.fold (pattern_names p) ~init:!rebound ~f:Set.add;
+                  super#pattern p
+              end
             in
-            let params = List.map params ~f:snd in
-            let closes_over_source = List.exists (idents_in body) ~f:(fun i -> Set.mem tainted i) in
+            patterns#expression body;
+            let local_tainted =
+              tainted_names scope ~emitters ~aliases ~seeds:[] (bindings_in_expression body)
+            in
+            let params = List.map params ~f:(fun (_label, name, _default) -> name) in
             let derived_params = params_derived_in ~params body in
+            let generated_inline tested =
+              mentions_generated_read scope tested
+              || reads_artifacts_directly scope tested
+              || renders_generated_text ~emitters ~aliases tested
+            in
+            let generated_locally tested =
+              generated_inline tested
+              || List.exists (idents_in tested) ~f:(fun name -> Set.mem local_tainted name)
+            in
             let result = ref [] in
             let consider { text; tested; inherent } =
               let text_param =
-                List.find params ~f:(fun p -> List.exists (idents_in text) ~f:(String.equal p))
+                List.find params ~f:(fun p ->
+                    (not (Set.mem !rebound p)) && List.exists (idents_in text) ~f:(String.equal p))
               in
               (* Keep each text parameter: one predicate can pin several caller-supplied markers. *)
               let source_param =
                 Option.bind tested ~f:(fun tested ->
                     (* A generated read inside the helper is already a source. Its dependence on a
                        parameter used to compile the routine does not make that parameter source. *)
-                    if
-                      List.exists (idents_in tested) ~f:(fun name ->
-                          Set.mem tainted name && not (List.mem params name ~equal:String.equal))
-                    then None
+                    if generated_locally tested then None
                     else
                       match Set.to_list (derived_params tested) with
                       | [ p ] when not (Option.exists text_param ~f:(String.equal p)) -> Some p
@@ -966,12 +968,14 @@ let predicates scope ~tainted bindings =
               let record source =
                 (* The fragment argument inside a predicate's own definition tests a PARAMETER, not
                    a fragment; reading it as a pin would mark every file using the idiom partial.
-                   Only that shape is consumed -- a literal the body hard-codes is left for the pin
-                   walk. *)
-                Option.iter text_param ~f:(fun _ ->
+                   Consume only the identifier itself: a composite expression keeps its literal
+                   context in the pin walk alongside the caller-supplied fragment. *)
+                (match (text_param, text.pexp_desc) with
+                | Some _, Pexp_ident _ ->
                     consumed :=
                       (text.pexp_loc.loc_start.pos_cnum, text.pexp_loc.loc_end.pos_cnum)
-                      :: !consumed);
+                      :: !consumed
+                | _ -> ());
                 result :=
                   {
                     pred_name = name;
@@ -986,7 +990,18 @@ let predicates scope ~tainted bindings =
                  "__syncthreads()"] unrecognised, so neither the literal nor a partial mark reached
                  the inventory (Codex P2, round 3). *)
               if Option.is_some source_param then record source_param
-              else if Option.is_some text_param && (closes_over_source || inherent) then record None
+              else if
+                Option.is_some text_param
+                && (inherent
+                   (* A partially applied substring predicate has no explicit haystack; keep the
+                      enclosing source evidence for that existing higher-order idiom. *)
+                   || Option.value_map tested
+                        ~default:
+                          (List.exists (idents_in body) ~f:(fun name -> Set.mem tainted name))
+                        ~f:(fun tested ->
+                          generated_locally tested
+                          || List.exists (idents_in tested) ~f:(fun name -> Set.mem tainted name)))
+              then record None
             in
             let iterator =
               object
@@ -1139,7 +1154,7 @@ let classify_source ~emitters ~path ~contents =
   else
     let seeds = buffer_destinations ~emitters ~aliases structure in
     let tainted = tainted_names scope ~emitters ~aliases ~seeds bindings in
-    let predicates, consumed = predicates scope ~tainted bindings in
+    let predicates, consumed = predicates scope ~emitters ~aliases ~tainted bindings in
     (* A predicate's source parameter IS generated source, inside that predicate's body. Adding the
        name to the tainted set is how the literals a helper tests against it -- the banner it slices
        on, a second fragment it checks alongside its own argument -- become pins rather than being
@@ -1235,7 +1250,11 @@ let classify_source ~emitters ~path ~contents =
                       List.iter
                         (List.filter predicates ~f:(fun p -> String.equal p.pred_name name))
                         ~f:(fun predicate ->
-                          let at destination = argument_at ~destination args in
+                          let at (destination, default) =
+                            match argument_at ~destination args with
+                            | Some argument -> Some argument
+                            | None -> default
+                          in
                           let source = Option.bind predicate.source_at ~f:at in
                           let source_ok =
                             match predicate.source_at with

@@ -215,6 +215,7 @@ test/operations/narrow_storage_compute.ml
 test/operations/online_softmax_block_mma.ml
     "simdgroup_multiply_accumulate"
 test/operations/reduction_accumulator_residency.ml [also pins text this scan cannot name]
+    " " ^ ...
     " = "
     "["
     "] = " ^ ...
@@ -239,12 +240,9 @@ test/operations/reserved_routine_names.ml
     "k_686_leading_digit"
     "printf__"
     "void " ^ "gh686_ordinary_name" ^ "("
+    "void " ^ ... ^ "("
 test/operations/scan_loop.ml [renders generated text in memory]
-test/operations/schedule_batch_grid.ml
-    ... ^ " % 2"
-    ... ^ " % 4"
-    ... ^ " / 2"
-    ... ^ " / 4"
+test/operations/schedule_batch_grid.ml [also pins text this scan cannot name]
 test/operations/schedule_batched_mma.ml
     "Tile_mma register tiling"
 test/operations/schedule_contraction_nest.ml [also pins text this scan cannot name]
