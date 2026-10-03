@@ -1215,9 +1215,10 @@ online_softmax=true
 # the forward's row state, so the [seq, seq] probability and score gradients are never stored.
 online_softmax_backward=true
 # Its single-pass block fold (gh-ocannl-1003): the scores are read once per key block into a tile
-# and the value contraction is reassociated as `(sum p * v) / l`; 16 is the key block the Metal and
-# cc sweep crowned (benchmarks/report-gh1003-block-fold.md), untested on CUDA and HIP.
-online_softmax_block=16
+# and the value contraction is reassociated as `(sum p * v) / l`. Auto keeps block 16 on
+# CUDA, Metal and CPU, and the two-pass rewrite on HIP and unmeasured targets (gh-ocannl-1171:
+# gfx1151 unified, tuned f32 forward 7.22 -> 4.72 ms without the block fold).
+online_softmax_block=auto
 # The C compiler's licence to reassociate (fast-math) and to contract a*b+c into one rounding
 # across statements (fp-contract=fast). Both change results per compiler and target, which is
 # why `reproducible` pins them off and `performance` leaves them at their defaults.

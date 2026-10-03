@@ -95,10 +95,12 @@ val backward_enabled : unit -> bool
 val set_backward_enabled : bool option -> unit
 (** Programmatic override of [online_softmax_backward], like {!set_enabled}. *)
 
-val block : unit -> int
+val block : ?profitable:bool -> unit -> int
 (** The block size of the single-pass fold (gh-ocannl-1003): the programmatic override if one is
     set, else the config key [online_softmax_block]; [0] (the default) keeps the two-pass form. Read
-    only where the rewrite applies. *)
+    only where the rewrite applies. [auto] resolves to 16 when [profitable] is true, otherwise 0. A
+    backend-free caller defaults to the conservative choice; numeric values and the programmatic
+    override force their size regardless of device economics. *)
 
 val set_block : int option -> unit
 (** Programmatic override of [online_softmax_block], like {!set_enabled}. *)
@@ -130,7 +132,7 @@ val reset : unit -> unit
     accessibility snapshot). Sibling lowerings of one program mint the same nodes, which is what
     keeps them on one analysis-cache key; a reset only makes the next lowering mint afresh. *)
 
-val rewrite : Low_level.t -> Low_level.t
+val rewrite : ?block_profitable:bool -> Low_level.t -> Low_level.t
 (** The pass over raw lowered code (no gate: the tier consults {!enabled}). Every normalizer pattern
     in the routine is rewritten; a routine without one is returned as is. The minted scope-local
     nodes carry memory-mode provenance ["483:online-softmax-state"], the fused backward's per-row

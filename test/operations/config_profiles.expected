@@ -64,7 +64,7 @@ Profile "approximate" sets:
   bf16_arithmetic=true
   online_softmax=true
   online_softmax_backward=true
-  online_softmax_block=16
+  online_softmax_block=auto
   cc_backend_fast_math=true
   cc_backend_fp_contract=fast
   tune_inline_flips=2

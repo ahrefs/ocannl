@@ -6932,6 +6932,7 @@
  (deps
   ocannl_config
   (env_var OCANNL_BACKEND)
+  (env_var OCANNL_ONLINE_SOFTMAX_BLOCK)
   ; The fused backward's dK and dQ nests take lanes on a GPU backend per this key (gh-ocannl-1124).
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)

@@ -970,7 +970,8 @@ let lowered_for_decisions ?name ?(materialized = []) ?(inline = []) ?(footprint 
   Ir.Low_level.prefer_inline optim_ctx inline;
   Ir.Low_level.prefer_footprint optim_ctx footprint;
   let _name, (lowered : Ir.Low_level.optimized) =
-    Backends.lower_assignments optim_ctx ?name bindings comp.Asgns.asgns
+    Backends.lower_assignments ~limits:(hardware_limits ctx) optim_ctx ?name bindings
+      comp.Asgns.asgns
   in
   lowered
 

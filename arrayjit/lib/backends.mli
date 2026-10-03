@@ -78,6 +78,7 @@ val finalize :
     {!Context.release} is the front-end entry point; prefer it over calling this directly. *)
 
 val lower_assignments :
+  ?limits:Ir.Backend_intf.hardware_limits ->
   Ir.Low_level.optimize_ctx ->
   ?name:string ->
   'a Ir.Indexing.bindings ->

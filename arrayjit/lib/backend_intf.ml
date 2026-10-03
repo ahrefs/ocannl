@@ -288,6 +288,12 @@ type hardware_limits = {
           plan. [false] -- today's behaviour, the plain plan -- wherever unmeasured, and on the C
           backends, which run no lane geometry. Read by the default GPU schedule's
           [gpu_lane_preamble_reduction = auto]. *)
+  online_softmax_block_profitable : bool;
+      (** Device economics for [online_softmax_block=auto] (gh-ocannl-1171). Keeps the single-pass
+          block fold on the CPU, Metal and CUDA paths; false on HIP gfx1151, where the all-f32 tuned
+          forward regresses from 4.7 to 7.2 ms, and conservatively false on unmeasured targets.
+          Explicit numeric block sizes bypass this policy. Consumed before lowering analyses, so the
+          resolved choice is in the code digest. *)
   worker_pool_tag : string option;
       (** Compact signature of the worker pool timings execute on ([w8P], [w24], ...), filled by the
           CPU backends from the pool-uniformity policy (gh-ocannl-530). Enters the autotune
@@ -390,6 +396,7 @@ let no_hardware_limits =
     native_fp16_arithmetic = false;
     simdgroup_width = None;
     lane_scalar_recompute_cheap = false;
+    online_softmax_block_profitable = false;
     worker_pool_tag = None;
     codegen_tag = None;
   }

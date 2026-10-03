@@ -1327,8 +1327,12 @@
 # accumulating `probabilities * v` into it; the last key block writes the output. The
 # scores are never read twice, so no [seq, seq] score buffer is needed whatever the recompute cap
 # says. It reassociates the value contraction as well (`(sum p * v) / l` for `sum (p / l) * v`),
-# within the same numerics gate: 16 in the `approximate` profile (the gh-ocannl-1003 report's
-# block sweep on Metal and cc; CUDA and HIP unmeasured), pinned at 0 in `reproducible`. A key count not a multiple of B leaves a guarded tail; a pattern
+# within the same numerics gate. The `approximate` profile selects auto: block 16 on CUDA,
+# Metal and CPU; the two-pass rewrite on HIP and unmeasured targets. The hardware-limits fact
+# online_softmax_block_profitable owns that resolution. On gfx1151 unified memory, forcing
+# block 16 regressed the tuned f32 forward from 4.72 to 7.22 ms (gh-ocannl-1171);
+# gfx1102 discrete confirmation is pending. Explicit integers force the same block size on
+# every device, and `reproducible` stays at 0. A key count not a multiple of B leaves a guarded tail; a pattern
 # the fold cannot prove (active dropout between the probabilities and the value contraction, a
 # score that is not a contraction of two reads) keeps the two-pass form. On a GPU whose matrix
 # units take f32 (Metal's simdgroup_matrix), the default schedule computes the block's score and
@@ -1495,9 +1499,10 @@
 # # the forward's row state, so the [seq, seq] probability and score gradients are never stored.
 # online_softmax_backward=true
 # # Its single-pass block fold (gh-ocannl-1003): the scores are read once per key block into a tile
-# # and the value contraction is reassociated as `(sum p * v) / l`; 16 is the key block the Metal and
-# # cc sweep crowned (benchmarks/report-gh1003-block-fold.md), untested on CUDA and HIP.
-# online_softmax_block=16
+# # and the value contraction is reassociated as `(sum p * v) / l`. Auto keeps block 16 on
+# # CUDA, Metal and CPU, and the two-pass rewrite on HIP and unmeasured targets (gh-ocannl-1171:
+# # gfx1151 unified, tuned f32 forward 7.22 -> 4.72 ms without the block fold).
+# online_softmax_block=auto
 # # The C compiler's licence to reassociate (fast-math) and to contract a*b+c into one rounding
 # # across statements (fp-contract=fast). Both change results per compiler and target, which is
 # # why `reproducible` pins them off and `performance` leaves them at their defaults.

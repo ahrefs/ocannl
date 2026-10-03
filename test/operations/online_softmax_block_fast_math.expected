@@ -147,3 +147,19 @@ a NaN fill: w_q_attn0.grad is NaN exactly where the composed one is: true
 a NaN fill: w_k_attn0.grad is NaN exactly where the composed one is: true
 a NaN fill: w_v_attn0.grad is NaN exactly where the composed one is: true
 a NaN fill: w_o_attn0.grad is NaN exactly where the composed one is: true
+--- leg 8: auto resolves before lowering and preserves explicit sizes ---
+auto keeps block 16 where the device says the fold is profitable: true
+auto keeps the two-pass rewrite on an unmeasured device: true
+auto on a declining device lowers to the two-pass form: true
+auto on a profitable device lowers to the block fold: true
+different resolved programs have different schedule-cache code digests: true
+explicit block 0 bypasses declining device economics: true
+explicit block 0 bypasses profitable device economics: true
+explicit block 16 bypasses declining device economics: true
+explicit block 16 bypasses profitable device economics: true
+the backend pins the automatic block policy (HIP off; CUDA/Metal/CPU preserved): true
+backend-free hardware limits conservatively decline the automatic fold: true
+analyze-only lowering honors the run's device economics: true
+backend compilation honors the same device economics: true
+analysis and compilation agree on the resolved code structure: true
+executed auto output matches the explicit resolved mode within 1e-5 relative: true

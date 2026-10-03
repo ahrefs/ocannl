@@ -2,10 +2,14 @@
 
 open Base
 
+type target = { online_softmax_block_profitable : bool }
+
+let conservative_target = { online_softmax_block_profitable = false }
+
 type rewrite = {
   name : string;
   enabled : unit -> bool;
-  apply : Low_level.t -> Low_level.t;
+  apply : target -> Low_level.t -> Low_level.t;
   reset : unit -> unit;
 }
 
@@ -14,7 +18,9 @@ let tier : rewrite list =
     {
       name = "online_softmax";
       enabled = Online_softmax.enabled;
-      apply = Online_softmax.rewrite;
+      apply =
+        (fun target ->
+          Online_softmax.rewrite ~block_profitable:target.online_softmax_block_profitable);
       reset = Online_softmax.reset;
     };
   ]
@@ -22,12 +28,12 @@ let tier : rewrite list =
 let reset () = List.iter tier ~f:(fun r -> r.reset ())
 let max_rounds = 8
 
-let apply (llc : Low_level.t) : Low_level.t =
+let apply ?(target = conservative_target) (llc : Low_level.t) : Low_level.t =
   match List.filter tier ~f:(fun r -> r.enabled ()) with
   | [] -> llc
   | enabled ->
       let rec fixpoint round llc =
-        let llc' = List.fold enabled ~init:llc ~f:(fun llc r -> r.apply llc) in
+        let llc' = List.fold enabled ~init:llc ~f:(fun llc r -> r.apply target llc) in
         if Low_level.equal llc' llc then llc'
         else if round >= max_rounds then
           invalid_arg
