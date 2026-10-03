@@ -56,6 +56,7 @@ ARMS = {
     "torch-defaults-eager": ("pytorch", None, "approximate", "eager"),
 }
 BEAM = 2
+COMPLETION_PASSES = 2
 
 
 def parse_args(argv=None):
@@ -302,7 +303,19 @@ def measure(a):
                             searched_once[(workload, arm)] = search
                     if search is None:
                         continue
-                    replay = run(workload, arm, repeat, "replay", cmd, env, root / "benchmarks", regime)
+                    # The tuner caches nothing from a search whose timings it found contended
+                    # (`Autotune.search_measurements_cacheable`), so the next process searches that
+                    # arm again. Such a pass is a cache completion, not a timing: it is recorded
+                    # and followed by a fresh process, up to COMPLETION_PASSES times; only a
+                    # process that replayed every arm supplies the timing.
+                    for attempt in range(COMPLETION_PASSES + 1):
+                        stage = "replay" if attempt == 0 else f"replay{attempt + 1}"
+                        replay = run(workload, arm, repeat, stage, cmd, env, root / "benchmarks",
+                                     regime)
+                        if replay is None or o.search_provenance(replay) != "SEARCHED":
+                            break
+                        replay["stage"] = f"completion{attempt + 1}"
+                        rows.append(replay)
                     if replay is None:
                         continue
                     rows.append(replay)
