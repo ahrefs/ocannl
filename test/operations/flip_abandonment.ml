@@ -149,6 +149,10 @@ let clean_cache dir =
    derive the digest, but must attempt no search candidates or timings. *)
 let report_of_run = function Completed r | Abandoned (r, _) -> r
 let cacheable run = (report_of_run run).Autotune.timings_contended = 0
+let is_abandoned r = match r.Autotune.outcome with Autotune.Abandoned _ -> true | _ -> false
+
+let is_abandonment_replay r =
+  match r.Autotune.outcome with Autotune.Abandonment_replay _ -> true | _ -> false
 
 let abandonment_replay comp =
   let cache_dir = "autotune_cache_abandonment_replay" in
@@ -156,9 +160,7 @@ let abandonment_replay comp =
   clean_cache cache_dir;
   let first, timed = cold () in
   p "the cached abandonment starts with a search of exactly beam_width timings"
-    (match first with
-    | Abandoned (r, _) -> String.equal (Autotune.outcome_name r.outcome) "abandoned" && timed = k
-    | Completed _ -> false);
+    (match first with Abandoned (r, _) -> is_abandoned r && timed = k | Completed _ -> false);
   let attempts = ref 0 and baselines = ref 0 in
   let old_attempt = !Autotune.on_candidate_attempt in
   let replay, replay_timed =
@@ -170,16 +172,16 @@ let abandonment_replay comp =
              if String.equal label "baseline" then Int.incr baselines else Int.incr attempts);
         cold ())
   in
-  let replay_claim =
-    gated ~aggregation:`Environment ~when_:(cacheable first)
+  let cached_claim run =
+    gated ~aggregation:`Environment ~when_:(cacheable run)
       ~on:"a contended timing window (the cold abandonment was not cached)"
   in
+  let replay_claim = cached_claim first in
   replay_claim "an abandoned flip is not searched on replay"
     (match replay with
     | Abandoned (r, ab) ->
         !baselines = 1 && !attempts = 0 && replay_timed = 0 && r.Autotune.candidates_timed = 0
-        && String.equal (Autotune.outcome_name r.outcome) "abandonment-replay"
-        && ab.Autotune.ab_timed = k && Float.equal ab.ab_best_ms 100.0
+        && is_abandonment_replay r && ab.Autotune.ab_timed = k && Float.equal ab.ab_best_ms 100.0
     | Completed _ -> false);
   let provenance = Bench_harness.tune_arms () in
   (match first with Abandoned (r, _) -> Bench_harness.collect_search provenance r | _ -> ());
@@ -192,18 +194,21 @@ let abandonment_replay comp =
      whose shape or incumbent no longer justifies it. *)
   let control ?beam_width ?repeats ?trailing_ratio ?with_rule incumbent =
     clean_cache cache_dir;
-    ignore (cold ());
-    run_tune ~cache_dir ?beam_width ?repeats ?trailing_ratio ?with_rule comp ~incumbent (fun _ ->
-        100.0)
+    let prefix, _ = cold () in
+    let result =
+      run_tune ~cache_dir ?beam_width ?repeats ?trailing_ratio ?with_rule comp ~incumbent (fun _ ->
+          100.0)
+    in
+    (result, cached_claim prefix)
   in
-  let other_beam, bt = control ~beam_width:(k + 1) [ (1, 4.0) ] in
-  p "another beam width searches before abandoning at its own depth"
+  let (other_beam, bt), control_claim = control ~beam_width:(k + 1) [ (1, 4.0) ] in
+  control_claim "another beam width searches before abandoning at its own depth"
     (match other_beam with Abandoned (_, ab) -> bt = k + 1 && ab.ab_timed = k + 1 | _ -> false);
-  let other_repeats, rt = control ~repeats:2 [ (1, 4.0) ] in
-  p "another sampling shape searches before abandoning"
+  let (other_repeats, rt), control_claim = control ~repeats:2 [ (1, 4.0) ] in
+  control_claim "another sampling shape searches before abandoning"
     (rt = k && match other_repeats with Abandoned _ -> true | _ -> false);
-  let weaker, wt = control [ (1, 80.0) ] in
-  p "a weaker incumbent invalidates the cached abandonment and the full search runs"
+  let (weaker, wt), control_claim = control [ (1, 80.0) ] in
+  control_claim "a weaker incumbent invalidates the cached abandonment and the full search runs"
     (match weaker with
     | Completed r -> Poly.equal r.outcome Autotune.Searched && wt > k
     | _ -> false);
@@ -214,18 +219,18 @@ let abandonment_replay comp =
     (match winner with
     | Completed r -> Poly.equal r.outcome Autotune.Cache_replay && winner_timed = 0
     | _ -> false);
-  let looser, lt = control ~trailing_ratio:30.0 [ (1, 4.0) ] in
-  p "a looser margin invalidates the cached abandonment"
+  let (looser, lt), control_claim = control ~trailing_ratio:30.0 [ (1, 4.0) ] in
+  control_claim "a looser margin invalidates the cached abandonment"
     (match looser with
     | Completed r -> Poly.equal r.outcome Autotune.Searched && lt > k
     | _ -> false);
-  let no_rule, nt = control ~with_rule:false [ (1, 4.0) ] in
-  p "a call without an abandonment rule searches normally"
+  let (no_rule, nt), control_claim = control ~with_rule:false [ (1, 4.0) ] in
+  control_claim "a call without an abandonment rule searches normally"
     (match no_rule with
     | Completed r -> Poly.equal r.outcome Autotune.Searched && nt > k
     | _ -> false);
-  let absent, at = control [] in
-  p "an incumbent with no record invalidates the cached abandonment"
+  let (absent, at), control_claim = control [] in
+  control_claim "an incumbent with no record invalidates the cached abandonment"
     (match absent with
     | Completed r -> Poly.equal r.outcome Autotune.Searched && at > k
     | _ -> false);
@@ -245,10 +250,7 @@ let abandonment_replay comp =
     ~on:"a contended timing window (no abandonment entry to corrupt)"
     "a mismatched abandonment digest is rejected before the flip searches again"
     (Option.is_some key
-    &&
-    match mismatched with
-    | Abandoned (r, _) -> String.equal (Autotune.outcome_name r.outcome) "abandoned" && mt = k
-    | _ -> false);
+    && match mismatched with Abandoned (r, _) -> is_abandoned r && mt = k | _ -> false);
   (* A refused window invalidates a prefix even if k later timings were admitted. The measurement
      seam deliberately refuses the first window; a retry must search again. *)
   clean_cache cache_dir;
@@ -258,11 +260,7 @@ let abandonment_replay comp =
   let retry, retry_timed = cold () in
   p "an abandonment with a refused window is not cached"
     ((report_of_run refused).Autotune.timings_contended > 0
-    &&
-    match retry with
-    | Abandoned (r, _) ->
-        String.equal (Autotune.outcome_name r.outcome) "abandoned" && retry_timed = k
-    | _ -> false);
+    && match retry with Abandoned (r, _) -> is_abandoned r && retry_timed = k | _ -> false);
   clean_cache cache_dir
 
 (* The warm path: an incumbent whose search replays from the schedule cache still carries the timed
@@ -476,7 +474,7 @@ let () =
   let chain_expected = Context.get_values chain_ctx chain_t.Tensor.value in
   let chain_cache_dir = "autotune_cache_abandoned_chain" in
   clean_cache chain_cache_dir;
-  let cold_arms, cold_flips, _, _ =
+  let cold_arms, cold_flips, cold_shipped, _ =
     executed_chain ~cache_dir:chain_cache_dir chain_comp chain_t chain_expected
       ~flip_script:(fun _ -> 100.0)
   in
@@ -504,13 +502,9 @@ let () =
   gated ~aggregation:`Environment ~when_:clean_chain
     ~on:"a contended timing window (cold chain not cached)"
     "the warm flip chain replays the abandonment and ships the same winner"
-    (List.equal String.equal shipped [ "A" ]
-    &&
-    match flips with
-    | [ r ] ->
-        String.equal (Autotune.outcome_name r.outcome) "abandonment-replay"
-        && r.candidates_timed = 0
-    | _ -> false);
+    ((not (List.is_empty cold_shipped))
+    && List.equal String.equal shipped cold_shipped
+    && match flips with [ r ] -> is_abandonment_replay r && r.candidates_timed = 0 | _ -> false);
   clean_cache chain_cache_dir;
   (* The negative control: within the ratio at depth k, then faster than arm A — searched in full,
      and it ships. *)

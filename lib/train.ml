@@ -818,10 +818,11 @@ let placement_outcome_digest ?name ?timing_ctx ctx loss comp bindings decision =
     gh-ocannl-1110: a flip whose best after its first [beam_width] timed candidates trails the
     incumbent's best after the incumbent's own first as many by more than
     {!Autotune.flip_abandon_ratio} is abandoned there ({!Autotune.tune}'s [?abandon]): its report
-    reaches [flip_report] as {!Autotune.Abandoned}, it loses, and it counts as measured. The
-    incumbent's record is its report's [best_steps], so an arm whose report has none (a cache entry
-    older than the field, or stored under another search shape) leaves the flips to run in full, as
-    does an incumbent that failed: its partial record is no shippable routine's.
+    reaches [flip_report] as {!Autotune.Abandoned} or, on a cache replay,
+    {!Autotune.Abandonment_replay}; it loses, and it counts toward the flip budget. The incumbent's
+    record is its report's [best_steps], so an arm whose report has none (a cache entry older than
+    the field, or stored under another search shape) leaves the flips to run in full, as does an
+    incumbent that failed: its partial record is no shippable routine's.
 
     gh-ocannl-638, [ship_arm] (config [tune_ship_arm], default [Measured_winner]): ship a chosen
     {!placement_arm} instead of the measured winner. It exists for measurement — a profile of arm
@@ -1022,10 +1023,15 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
           (Autotune.progress_ms best_ms) (stopwatch ()));
     (match result with
     | Error (Autotune.Search_abandoned ab, _) ->
+        let timing_source =
+          match r with
+          | Some { Autotune.outcome = Autotune.Abandonment_replay _; _ } -> "cached timings"
+          | _ -> "timed candidates"
+        in
         logf
-          "arm %s ABANDONED after %d timed candidates: its best %.4f ms trails the incumbent's \
-           %.4f ms at the same depth by more than %.4gx"
-          arm ab.Autotune.ab_timed ab.Autotune.ab_best_ms ab.Autotune.ab_incumbent_ms
+          "arm %s ABANDONED after %d %s: its best %.4f ms trails the incumbent's %.4f ms at the \
+           same depth by more than %.4gx"
+          arm ab.Autotune.ab_timed timing_source ab.Autotune.ab_best_ms ab.Autotune.ab_incumbent_ms
           ab.Autotune.ab_ratio
     | Error (exn, _) ->
         logf "arm %s FAILED, it loses the comparison (%s): %s" arm

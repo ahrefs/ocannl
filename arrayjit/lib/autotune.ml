@@ -4014,30 +4014,36 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
     (* A winner takes precedence. Without one, replay an abandoned prefix only under the shape that
        measured it and a current rule that still rejects it. A weaker incumbent, changed margin,
        absent rule or changed sampling cannot inherit yesterday's verdict. *)
-    if use_cache && Option.is_none cached then
-      Option.iter abandon ~f:(fun rule ->
-          match SC.lookup_abandonment ~dir:cache_dir ~key with
-          | Some entry
-            when String.equal entry.SC.source_digest base_digest
-                 && String.equal entry.SC.trajectory.SC.search_shape search_shape ->
-              Option.iter (abandon_verdict rule ~k:beam_width ~steps:entry.SC.trajectory.SC.steps)
-                ~f:(fun ab ->
-                  release_baseline ();
-                  emit_report
-                    {
-                      (census ()) with
-                      outcome = Abandonment_replay ab;
-                      best_ms = ab.ab_best_ms;
-                      best_label = "cached-abandonment";
-                      best_steps = entry.SC.trajectory.SC.steps;
-                    };
-                  raise (Search_abandoned ab))
-          | Some _ | None -> ());
-    match cached with
-    | Some result ->
+    let replayed_abandonment =
+      if use_cache && Option.is_none cached then
+        Option.bind abandon ~f:(fun rule ->
+            Option.bind (SC.lookup_abandonment ~dir:cache_dir ~key) ~f:(fun entry ->
+                if
+                  String.equal entry.SC.source_digest base_digest
+                  && String.equal entry.SC.trajectory.SC.search_shape search_shape
+                then
+                  Option.map
+                    (abandon_verdict rule ~k:beam_width ~steps:entry.SC.trajectory.SC.steps)
+                    ~f:(fun ab -> (ab, entry))
+                else None))
+      else None
+    in
+    match (cached, replayed_abandonment) with
+    | Some result, _ ->
         release_baseline ();
         result
-    | None when not search ->
+    | None, Some (ab, entry) ->
+        release_baseline ();
+        emit_report
+          {
+            (census ()) with
+            outcome = Abandonment_replay ab;
+            best_ms = ab.ab_best_ms;
+            best_label = "cached-abandonment";
+            best_steps = entry.SC.trajectory.SC.steps;
+          };
+        raise (Search_abandoned ab)
+    | None, None when not search ->
         logf
           "search disabled (autotune_search=false) and no cache entry: compiling the untuned \
            default";
@@ -4049,7 +4055,7 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
         let result = compile_untuned_default ~base:reached () in
         report_or_release reached ~result;
         result
-    | None ->
+    | None, None ->
         let seen = Hash_set.create (module String) in
         Hash_set.add seen base_digest;
         (* Every gh-ocannl-532 refusal enters the same decline census (gh-ocannl-543). Without it a
