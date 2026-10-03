@@ -337,12 +337,12 @@ let test_xavier_at_with_proper_shape () =
   print_check "Min <= max" Float.(min_val <= max_val)
 
 let () =
-  test_uniform_at_with_shape ();
+  Verdict.case "test_uniform_at_with_shape" test_uniform_at_with_shape;
   printf "\n";
-  test_normal_at_with_shape ();
+  Verdict.case "test_normal_at_with_shape" test_normal_at_with_shape;
   printf "\n";
-  test_counter_bifurcation ();
+  Verdict.case "test_counter_bifurcation" test_counter_bifurcation;
   printf "\n";
-  test_kaiming_at_with_proper_shape ();
+  Verdict.case "test_kaiming_at_with_proper_shape" test_kaiming_at_with_proper_shape;
   printf "\n";
-  test_xavier_at_with_proper_shape ()
+  Verdict.case "test_xavier_at_with_proper_shape" test_xavier_at_with_proper_shape

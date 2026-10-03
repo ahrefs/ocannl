@@ -302,11 +302,11 @@ let test_merge_buffer_read_dependency () =
        [| 5.; 6. |])
 
 let () =
-  test_raw_dependency ();
-  test_disjoint ();
-  test_can_run ();
-  test_wrong_order_raises ();
-  test_reexecution ();
-  test_rollback_execution ();
-  test_poisoned_lineage ();
-  test_merge_buffer_read_dependency ()
+  Verdict.case "test_raw_dependency" test_raw_dependency;
+  Verdict.case "test_disjoint" test_disjoint;
+  Verdict.case "test_can_run" test_can_run;
+  Verdict.case "test_wrong_order_raises" test_wrong_order_raises;
+  Verdict.case "test_reexecution" test_reexecution;
+  Verdict.case "test_rollback_execution" test_rollback_execution;
+  Verdict.case "test_poisoned_lineage" test_poisoned_lineage;
+  Verdict.case "test_merge_buffer_read_dependency" test_merge_buffer_read_dependency

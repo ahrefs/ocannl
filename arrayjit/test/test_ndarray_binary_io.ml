@@ -11,6 +11,7 @@ module Ops = Ir.Ops
 let fresh_tmp_file () = Stdlib.Filename.temp_file "ndarray_binary_io_test" ".bin"
 
 let test_round_trip_prec prec_name prec init_f =
+  Verdict.case prec_name @@ fun () ->
   let tmp_file = fresh_tmp_file () in
   let dims = [| 3; 4 |] in
   let nd1 = Nd.create_array ~debug:"test" prec ~dims ~padding:None in
@@ -214,6 +215,6 @@ let () =
   test_round_trip_prec "Uint4x32" Ops.uint4x32 (fun nd idx i ->
       Nd.set_from_float nd idx (Float.of_int ((i * 7) + 3)));
   (* Test padded tensor *)
-  test_padded ();
-  test_mapped_at_offset ();
-  test_ingestion ()
+  Verdict.case "test_padded" test_padded;
+  Verdict.case "test_mapped_at_offset" test_mapped_at_offset;
+  Verdict.case "test_ingestion" test_ingestion

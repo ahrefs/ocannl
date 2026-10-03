@@ -213,12 +213,8 @@ files.
   gates (`mixed_prec_parity`, `precision_policy_parity`) or that distinct inputs give distinct
   outputs (`gpt2_dry_run`'s positions-differ). "All finite" is not such a guard — all-zeros is
   finite.
-- A new configuration key must not have an existing key as a NAME PREFIX. `Utils.read_cmdline_var`
-  matches an argument against `key ^ ("_" | "-" | "=" | "")` and takes whatever follows as the value,
-  so `--ocannl_cc_parallel_grid_private_bytes_cap=N` was read as `cc_parallel_grid` with the value
-  `private_bytes_cap=N` and crashed the run — the key was renamed `cc_grid_private_bytes_cap`.
-  Nothing checks this: the consistency tests check documentation, classification and read sites, not
-  name disjointness.
+- A configuration key may extend another key's name: the longest registered spelling owns the
+  argument (`Utils.cmdline_arg_value`, pinned by `config_key_exact`; gh-ocannl-1163).
 - Stacked PRs: once the base PR merges, RETARGET the stacked one to master BEFORE merging it. A merge
   into the now-stale base branch lands the work on that branch and nowhere else while GitHub still
   reports the PR as "merged" — staging#168's conv sketches were stranded exactly that way and had to

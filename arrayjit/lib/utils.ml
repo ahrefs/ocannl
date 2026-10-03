@@ -758,18 +758,9 @@ let cmdline_var_names ?(qualified_only = false) n =
   in
   qualified @ unqualified
 
-(** What an argument setting [n] begins with: a spelling from {!cmdline_var_names} followed by the
-    value separator, which is [_], [-], [=] or nothing at all. Whatever remains of the argument is
-    the value.
-
-    This is the single source of truth for "an argument OCANNL reads", and the unknown-argument
-    warning at the bottom of this file matches against it rather than parsing arguments a second
-    way. It used to parse: split on [=], normalize every dash to an underscore, look the result up
-    -- which accepted spellings the reader ignored (`--ocannl-log-level=1`, before gh-ocannl-605
-    made it real) and rejected ones the reader honoured (`--ocannl_log_level_1`, whose separator is
-    not an [=], so the key came out as `log_level_1`). Both directions are silent contradictions:
-    one applies nothing while saying nothing, the other applies the setting while warning that it is
-    unknown. One table cannot disagree with itself. *)
+(** Candidate prefixes for an argument setting [n]: a spelling from {!cmdline_var_names} followed by
+    [_], [-], [=] or nothing. {!cmdline_arg_value} decides whether a candidate belongs to [n] or to
+    a longer registered key before taking the remainder as its value. *)
 let cmdline_var_prefixes ?qualified_only n =
   List.concat_map (cmdline_var_names ?qualified_only n) ~f:(fun n ->
       [ n ^ "_"; n ^ "-"; n ^ "="; n ])
@@ -871,21 +862,43 @@ let parse_config_token ?(documentation = false) token =
    argument (gh-ocannl-578). *)
 let qualified_only_config_keys = Set.of_list (module String) [ "profile" ]
 
+(** Read one argument for [n]. A longer registered key owns its spelling, even when the shorter key
+    could interpret its suffix as a value separated by [_], [-], or nothing. [=] ends the name
+    unambiguously. Unregistered suffixes retain the legacy value grammar.
+
+    This is the single source of truth for reading an argument's value. For registered keys under
+    their default qualification policy, the unknown-argument classifier uses the union of
+    {!cmdline_var_prefixes}: ownership cannot change that union, because an argument a shorter key
+    gives up is still claimed by its longest registered extension. Both paths use the same spelling
+    table, so they cannot disagree about whether an argument is read. *)
+let cmdline_arg_value ?qualified_only n =
+  let qualified_only =
+    Option.value qualified_only ~default:(Set.mem qualified_only_config_keys n)
+  in
+  let normalized = String.tr n ~target:'-' ~replacement:'_' in
+  let longer_names =
+    Set.to_list known_config_keys
+    |> List.filter ~f:(fun key ->
+        String.length key > String.length normalized && String.is_prefix key ~prefix:normalized)
+    |> List.concat_map ~f:(fun key ->
+        cmdline_var_names ~qualified_only:(Set.mem qualified_only_config_keys key) key)
+  in
+  let prefixes = cmdline_var_prefixes ~qualified_only n in
+  fun arg ->
+    if List.exists longer_names ~f:(fun longer -> String.is_prefix arg ~prefix:longer) then None
+    else List.find_map prefixes ~f:(fun prefix -> String.chop_prefix arg ~prefix)
+
 (** The commandline sublevel of {!get_global_arg}: returns the setting's value and the [Sys.argv]
     element it came from. Pure -- the sourcing log lives at the resolution seam, which is the only
     place that knows which sublevel actually won.
 
     [qualified_only] defaults per key from {!qualified_only_config_keys}, so a caller need not
-    remember which keys renounce their prefix-free spellings. *)
+    remember which keys renounce their prefix-free spellings. The first argument for that exact key
+    wins, independent of arguments for longer registered keys. *)
 let read_cmdline_var ?qualified_only n =
-  let qualified_only =
-    Option.value qualified_only ~default:(Set.mem qualified_only_config_keys n)
-  in
-  let cmd_variants = cmdline_var_prefixes ~qualified_only n in
+  let value_of_arg = cmdline_arg_value ?qualified_only n in
   Array.find_map Stdlib.Sys.argv ~f:(fun arg ->
-      List.find_map cmd_variants ~f:(fun p ->
-          Option.some_if (String.is_prefix ~prefix:p arg)
-            (String.drop_prefix arg (String.length p), arg)))
+      Option.map (value_of_arg arg) ~f:(fun value -> (value, arg)))
 
 (** Whether a raw command-line argument addresses a known configuration key under {e any} spelling
     {!read_cmdline_var} accepts — prefixed or prefix-free, dashed or underscored, any separator. For
@@ -895,8 +908,8 @@ let read_cmdline_var ?qualified_only n =
 let cmdline_arg_is_config_key arg =
   Set.exists known_config_keys ~f:(fun k ->
       let qualified_only = Set.mem qualified_only_config_keys k in
-      List.exists (cmdline_var_prefixes ~qualified_only k) ~f:(fun p ->
-          String.is_prefix arg ~prefix:p))
+      List.exists (cmdline_var_prefixes ~qualified_only k) ~f:(fun prefix ->
+          String.is_prefix arg ~prefix))
 
 (** The environment sublevel of {!get_global_arg}: returns the setting's value and the variable it
     came from. An empty value counts as unset. *)
@@ -1713,9 +1726,9 @@ let () = restore_settings ()
    from. Only the qualified spellings are eligible: a prefix-free `--verbose` belongs to the host
    application, and OCANNL has no standing to call it unknown.
 
-   The test is "would some key read this argument", asked of {!cmdline_var_prefixes}, which is what
-   `read_cmdline_var` itself scans -- so the warning cannot disagree with the reader about what a
-   spelling means. It costs one pass over argv per known key, at module initialization. *)
+   The test is "would some key read this argument", asked of {!cmdline_arg_is_config_key}. Its union
+   of candidate prefixes is unchanged by the longest-key ownership in {!cmdline_arg_value}, so the
+   warning and reader agree about which arguments are read. *)
 let () =
   (* The leading dash is what makes an argument addressed rather than positional, which is why
      `cmdline_var_names` no longer reads bare qualified spellings: these four prefixes now cover

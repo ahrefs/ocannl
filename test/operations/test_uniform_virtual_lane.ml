@@ -51,6 +51,7 @@ let has sub s =
   String.is_substring body ~substring:sub
 
 let check ~name ~prec ?input_dims output_dims =
+  Verdict.case name @@ fun () ->
   let ref_vals, ref_src = run ~virtual_:false ~prec ?input_dims output_dims in
   let vir_vals, vir_src = run ~virtual_:true ~prec ?input_dims output_dims in
   let parity =
