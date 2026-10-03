@@ -1742,17 +1742,15 @@ class FixtureDigestTest(unittest.TestCase):
     def test_the_checked_in_header_declares_the_measurement_boxes(self):
         digests = HERE / "fixtures" / fixture_digest.DIGEST_FILE
 
-        self.assertEqual(
-            fixture_digest.declared_measurement_boxes(digests),
-            ["m4-max", "minix", "rog-nv"],
-        )
+        declared = fixture_digest.declared_measurement_boxes(digests)
+        self.assertEqual(declared, ["m4-max", "minix", "rog-nv", "tuf"])
 
         with contextlib.redirect_stdout(io.StringIO()) as out:
             code = fixture_digest._main(
                 ["--list-declared-measurement-boxes", "--digests", str(digests)]
             )
         self.assertEqual(code, 0)
-        self.assertEqual(out.getvalue(), "m4-max\nminix\nrog-nv\n")
+        self.assertEqual(out.getvalue(), "".join(f"{box}\n" for box in declared))
 
     def test_listing_boxes_does_not_infer_a_matrix_for_a_legacy_file(self):
         # A pre-gh-ocannl-850 file can still be swept for backend coverage, but its row origins
@@ -1771,21 +1769,32 @@ class FixtureDigestTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(out.getvalue(), "")
 
-    def test_every_declared_box_is_on_its_own_bytes_for_checked_in_fixtures(self):
-        # Until gh-ocannl-483 recorded m4-max's bytes for the gpt fixtures, this pinned that the
-        # unrecorded metal box is reported divergent for every checked-in fixture. Recorded or
-        # not, no two boxes are on the same bytes today: for every fixture and every box that
-        # recorded it, every OTHER declared box is reported divergent -- absent, or on different
-        # bytes -- so a regenerating box is told about all of them.
+    def test_checked_in_divergence_accounts_for_tuf_copies_of_m4_max(self):
+        # gh-ocannl-720 copies the transformer fixtures to TUF instead of regenerating them.
+        # Pin that recorded policy and keep missing/different origins visible for every entry.
         digests = HERE / "fixtures" / fixture_digest.DIGEST_FILE
         entries, declared = fixture_digest._read_document(digests)
+        copied = {name for name, recorded in entries.items() if any(e.origin == "tuf" for e in recorded)}
+        self.assertTrue(copied, "no TUF copies recorded")
 
         for name, recorded in entries.items():
             self.assertTrue(recorded, name)
+            by_origin = {e.origin: e for e in recorded}
+            if name in copied:
+                spec = json.loads((HERE / "workloads" / f"{Path(name).stem}.json").read_text())
+                self.assertEqual(spec["model"], "gpt", name)
+                self.assertIn("m4-max", by_origin, name)
+                for origin in ("m4-max", "tuf"):
+                    self.assertEqual(by_origin[origin].kind, "content-v1", name)
+                self.assertEqual(by_origin["tuf"].sha256, by_origin["m4-max"].sha256, name)
+
             for entry in recorded:
+                same = {entry.origin}
+                if name in copied and entry.origin in {"m4-max", "tuf"}:
+                    same = {"m4-max", "tuf"}
                 self.assertEqual(
                     set(fixture_digest.divergent_origins(digests, [name], entry.origin)),
-                    set(declared) - {entry.origin},
+                    set(declared) - same,
                     f"{name} from {entry.origin}",
                 )
 
