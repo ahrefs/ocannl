@@ -515,6 +515,13 @@ files.
   joins the level only under `autotune_register_tile_rm_twin`, off until a timing shows it winning.
   Not done: the conv family (not tree-factored); whether a partial vector's masked copies deserve
   a term of their own.
+- **C-tile traffic cannot rank `rn` at a fixed lane width** (gh-ocannl-1099).
+  Full passes plus the narrower column tail move `2 * rm * ceil(n/lanes)` C vectors per row
+  band, independent of `rn`; adding `2 * rm * rn / k` only once to the site price miscounts
+  the traffic. The exclusive AVX2 A/B confirmed a 4x2 serial win at n=28, but 4x3 won at
+  fixed n=512 with k=32 as well as k=256. Retain the ranking and its tie rule: the tiny-site
+  difference has no established setup or tail model yet. Derivation, paired measurements and
+  reproduction protocol: [gh-ocannl-1099](../proposals/gh-ocannl-1099.md).
 - "Crowned" is not "shipped", and neither is reproducible on a small routine. `Train.tune_placements`
   runs two searches and keeps one artifact, so a family can win the arm that is then discarded whole
   — read `report.best_label` / `best_tensorized` / `best_tensorization` / `mma_best_ms` per arm (the A/B calls `?report`
