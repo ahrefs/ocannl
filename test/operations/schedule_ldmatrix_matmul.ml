@@ -243,7 +243,9 @@ let () =
     if not on_cuda then declined ~src ~census
     else
       has src "mma.sync.aligned.m16n8k32"
-      && has src " >> 4) ^ "
+      (* B's gathered column (and transposed A's) uses the fragment group coordinate; cooperative
+         staging stores cannot satisfy this XOR pin. *)
+      && has src "__mma_g) >> 4) ^ "
       && (not (has src "ldmatrix"))
       && (not (has src "== 0)"))
       && (not (List.is_empty census))

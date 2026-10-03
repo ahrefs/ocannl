@@ -779,8 +779,9 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
       match (a_prec, b_prec, d_prec) with
       | Ops.Bfloat16_prec _, Ops.Bfloat16_prec _, Ops.Bfloat16_prec _ ->
           Option.map (mma16_spellings ~a_prec ~b_prec ~d_prec)
-            ~f:(fun (elt_typ, _, widen, narrow, _, marker) -> (elt_typ, widen, narrow, marker))
-      | Ops.Fp8_prec _, Ops.Fp8_prec _, Ops.Single_prec _ -> Some ("float", "", "", "mma-fp8")
+            ~f:(fun (elt_typ, _, widen, narrow, _, marker) ->
+              (elt_typ, Some (widen, narrow), marker))
+      | Ops.Fp8_prec _, Ops.Fp8_prec _, Ops.Single_prec _ -> Some ("float", None, "mma-fp8")
       | _ -> None
 
     (* Shared by statement and scope: the intrinsic divides the block, and every operand is plain or
@@ -798,12 +799,9 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
       && mma_loadable a_space && mma_loadable b_space
       && min_compute_capability () >= min_cc
 
-    let mma16_convert conversion value =
-      if String.is_empty conversion then value else Printf.sprintf "%s(%s)" conversion value
-
     (* Both inline-PTX shapes address and move the same four f32 accumulators. The statement
        declares scalar registers on load; a persistent boundary moves to/from its existing fragment
-       array. Empty conversions are the f32 storage identity. *)
+       array. [None] is the f32 storage identity; [Some] names the boundary conversions. *)
     let mma16_d_rows ~elt_typ ~ldd =
       [
         Printf.sprintf
@@ -812,15 +810,20 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
         Printf.sprintf "%s *__mma_dr1 = __mma_dr0 + 8 * %d;" elt_typ ldd;
       ]
 
-    let mma16_d_moves ~dir ~reg ~declare ~widen ~narrow =
+    let mma16_d_moves ~dir ~reg ~declare ~d_cvt =
+      let convert value =
+        match d_cvt with
+        | None -> value
+        | Some (widen, narrow) ->
+            let conversion = match dir with `Load -> widen | `Store -> narrow in
+            Printf.sprintf "%s(%s)" conversion value
+      in
       let move i row col =
         let cell = Printf.sprintf "__mma_dr%d[%d]" row col in
         match dir with
         | `Load ->
-            Printf.sprintf "%s%s = %s;"
-              (if declare then "float " else "")
-              (reg i) (mma16_convert widen cell)
-        | `Store -> Printf.sprintf "%s = %s;" cell (mma16_convert narrow (reg i))
+            Printf.sprintf "%s%s = %s;" (if declare then "float " else "") (reg i) (convert cell)
+        | `Store -> Printf.sprintf "%s = %s;" cell (convert (reg i))
       in
       [ move 0 0 0 ^ " " ^ move 1 0 1; move 2 1 0 ^ " " ^ move 3 1 1 ]
 
@@ -832,20 +835,20 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
     let mma16_either resident ~fragment ~statement =
       match resident with Some _ -> fragment | None -> statement
 
-    let mma16_d_statement_lines ~dir ~elt_typ ~widen ~narrow ~ldd =
+    let mma16_d_statement_lines ~dir ~elt_typ ~d_cvt ~ldd =
       let rows = match dir with `Load -> mma16_d_rows ~elt_typ ~ldd | `Store -> [] in
       List.map
-        (rows @ mma16_d_moves ~dir ~reg:(mma16_acc None) ~declare:true ~widen ~narrow)
+        (rows @ mma16_d_moves ~dir ~reg:(mma16_acc None) ~declare:true ~d_cvt)
         ~f:(fun line -> "    " ^ line)
 
     (* The [d] boundary of an m16n8 register fragment [frag] ([float frag[mt][nt][4]], one m16n8
        accumulator tile per [(__mi, __ni)]; gh-ocannl-1063): [`Load] fills it from the [elt] storage
-       at [__mma_dp] widened with [widen], [`Store] writes it back narrowed with [narrow]. Unlike
+       at [__mma_dp], applying [d_cvt] on load/store when storage is narrower than f32. Unlike
        [wmma_d_boundary_lines] no coordinate table is needed: the PTX ISA fixes the accumulator
        layout — with groupID g = lane>>2 and threadID-in-group t = lane&3, registers 0..3 hold rows
        {g, g+8} x columns {2t, 2t+1} — which is the same mapping the per-statement rendering in
        [mma_syntax] loads and stores through. *)
-    let mma16_d_boundary_lines ~dir ~frag ~elt_typ ~widen ~narrow ~ldd ~mt ~nt =
+    let mma16_d_boundary_lines ~dir ~frag ~elt_typ ~d_cvt ~ldd ~mt ~nt =
       let reg i = Printf.sprintf "%s[__mi][__ni][%d]" frag i in
       [
         "{ /* mma.sync register fragment d boundary: the m16n8 f32 accumulator layout */";
@@ -859,7 +862,7 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
         Printf.sprintf "    for (int __ni = 0; __ni < %d; ++__ni) {" nt;
       ]
       @ List.map
-          (mma16_d_rows ~elt_typ ~ldd @ mma16_d_moves ~dir ~reg ~declare:false ~widen ~narrow)
+          (mma16_d_rows ~elt_typ ~ldd @ mma16_d_moves ~dir ~reg ~declare:false ~d_cvt)
           ~f:(fun line -> "      " ^ line)
       @ [ "    }"; "  }"; "}" ]
 
@@ -910,20 +913,21 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
           let combo = wmma_combo ~a_prec ~b_prec ~d_prec in
           let loadable = mma_loadable and plain = mma_plain in
           let a_swz = mma_ldm (a_space, a_layout) and b_swz = mma_ldm (b_space, b_layout) in
-          (* The shared-window address of the element at (row, col) of a [Swizzle_b128] tile whose
-             minor dim is [ld]: the column's 16-byte-unit index is XORed with the low bits of the
-             row (see [Low_level.Swizzle_b128]), everything within a unit left alone. Every fragment
-             entry point below has [col] a multiple of [u], so the within-unit remainder is zero and
-             drops out. [ldmatrix] is a [.shared] instruction, hence the conversion out of the
-             generic window. *)
+          (* Element offset in a [Swizzle_b128] tile: XOR the column's 16-byte-unit index with the
+             low row bits, preserving the within-unit remainder. Both [ldmatrix] addresses and fp8
+             byte gathers use this map. *)
+          let b128_offset ~ld ~u ~row ~col =
+            let shift = Int.floor_log2 u in
+            Printf.sprintf "(%s) * %d + (((((%s) >> %d) ^ ((%s) & %d)) << %d) + ((%s) & %d))" row ld
+              col shift row
+              ((ld / u) - 1)
+              shift col (u - 1)
+          in
+          (* [ldmatrix] takes a [.shared] address, converted from the generic window. Its fragment
+             entry points have columns aligned to 16-byte units. *)
           let swz_saddr ~ptr ~ld ~prec ~row ~col =
-            let u = 16 / Ops.prec_in_bytes prec in
-            let s = Int.floor_log2 u in
-            let units = ld / u in
-            Printf.sprintf
-              "(unsigned)__cvta_generic_to_shared(%s + (%s) * %d + (((((%s) >> %d) ^ ((%s) & %d)) \
-               << %d)))"
-              ptr row ld col s row (units - 1) s
+            let offset = b128_offset ~ld ~u:(16 / Ops.prec_in_bytes prec) ~row ~col in
+            Printf.sprintf "(unsigned)__cvta_generic_to_shared(%s + %s)" ptr offset
           in
           (* [ldmatrix.sync.aligned.m8n8.xN[.trans].shared.b16]: the first 8N lanes each supply one
              16-byte row address of the N 8x8 tiles of 16-bit elements, and the results land in
@@ -1014,15 +1018,11 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
                 name base offs.(0) base offs.(1) base offs.(2) base offs.(3)
             in
             (* Byte offset of logical element (row, col) in an operand stored under its own leading
-               dimension, transposed or not (fp8 is one byte per element, so element index = byte
-               offset from the [unsigned char *] base). *)
+               dimension, transposed or not, then through the b128 map when swizzled. fp8 is one
+               byte per element, so element index = byte offset from the [unsigned char *] base. *)
             let elem_at ~ld ~transposed ~swizzled ~row ~col =
               let row, col = if transposed then (col, row) else (row, col) in
-              if swizzled then
-                Printf.sprintf "(%s) * %d + (((((%s) >> 4) ^ ((%s) & %d)) << 4) + ((%s) & 15))" row
-                  ld col row
-                  ((ld / 16) - 1)
-                  col
+              if swizzled then b128_offset ~ld ~u:16 ~row ~col
               else Printf.sprintf "(%s) * %d + (%s)" row ld col
             in
             let a_at ~row ~col = elem_at ~ld:lda ~transposed:ta ~swizzled:a_swz ~row ~col in
@@ -1080,8 +1080,7 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
               @ unroll
               @ [ Printf.sprintf "  for (int __ni = 0; __ni < %d; ++__ni) {" nt ]
               @ either ~fragment:[]
-                  ~statement:
-                    (mma16_d_statement_lines ~dir:`Load ~elt_typ:"float" ~widen:"" ~narrow:"" ~ldd)
+                  ~statement:(mma16_d_statement_lines ~dir:`Load ~elt_typ:"float" ~d_cvt:None ~ldd)
               @ [ Printf.sprintf "    for (int __ki = 0; __ki < %d; ++__ki) {" kt ]
               @ (if a_ldm then a_ldm_lines
                  else
@@ -1102,8 +1101,7 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
                   "    }";
                 ]
               @ either ~fragment:[]
-                  ~statement:
-                    (mma16_d_statement_lines ~dir:`Store ~elt_typ:"float" ~widen:"" ~narrow:"" ~ldd)
+                  ~statement:(mma16_d_statement_lines ~dir:`Store ~elt_typ:"float" ~d_cvt:None ~ldd)
               @ [ "  }"; "}"; barrier ]
             in
             let cast_ptr name ptr =
@@ -1249,10 +1247,11 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
               @ [ Printf.sprintf "  for (int __ni = 0; __ni < %d; ++__ni) {" nt ]
               @ either ~fragment:[]
                   ~statement:
-                    (mma16_d_statement_lines ~dir:`Load ~elt_typ ~widen:to_float ~narrow:from_float
+                    (mma16_d_statement_lines ~dir:`Load ~elt_typ
+                       ~d_cvt:(Some (to_float, from_float))
                        ~ldd)
               @ [ Printf.sprintf "    for (int __ki = 0; __ki < %d; ++__ki) {" kt ]
-              @ (if a_swz then a_ldm_lines
+              @ (if a_ldm then a_ldm_lines
                  else
                    [
                      a_reg "__mma_a0" ~lo:true ~c:0;
@@ -1260,7 +1259,7 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
                      a_reg "__mma_a2" ~lo:true ~c:8;
                      a_reg "__mma_a3" ~lo:false ~c:8;
                    ])
-              @ (if b_swz then b_ldm_lines else [ b_reg "__mma_b0" ~r:0; b_reg "__mma_b1" ~r:8 ])
+              @ (if b_ldm then b_ldm_lines else [ b_reg "__mma_b0" ~r:0; b_reg "__mma_b1" ~r:8 ])
               @ [
                   Printf.sprintf "      asm(\"mma.sync.aligned.m16n8k16.row.col.f32.%s.%s.f32 \""
                     instr_elt instr_elt;
@@ -1273,7 +1272,8 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
                 ]
               @ either ~fragment:[]
                   ~statement:
-                    (mma16_d_statement_lines ~dir:`Store ~elt_typ ~widen:to_float ~narrow:from_float
+                    (mma16_d_statement_lines ~dir:`Store ~elt_typ
+                       ~d_cvt:(Some (to_float, from_float))
                        ~ldd)
               @ [ "  }"; "}"; barrier ]
             in
@@ -1294,7 +1294,7 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
                   (string
                      (Printf.sprintf "{ /* tile_mma %s%dx%dx%d (%s)%s */"
                         (either ~fragment:"fragment update " ~statement:"")
-                        m n k marker (ldm_tag ~a:a_swz ~b:b_swz))
+                        m n k marker (ldm_tag ~a:a_ldm ~b:b_ldm))
                   ^^ nest 2 (hardline ^^ body ~a_ptr ~b_ptr)
                   ^^ hardline ^^ rbrace))
           else
@@ -1541,10 +1541,10 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
                 wmma_combo ~a_prec ~b_prec ~d_prec
               else None )
           with
-          | Some (elt_typ, widen, narrow, marker), _ ->
+          | Some (elt_typ, d_cvt, marker), _ ->
               let mt = m / 16 and nt = n / 8 in
               let boundary dir =
-                mma16_d_boundary_lines ~dir ~frag:fragment ~elt_typ ~widen ~narrow ~ldd ~mt ~nt
+                mma16_d_boundary_lines ~dir ~frag:fragment ~elt_typ ~d_cvt ~ldd ~mt ~nt
               in
               Some
                 (scope_doc
