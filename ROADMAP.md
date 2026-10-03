@@ -1,6 +1,6 @@
 # OCANNL Roadmap
 
-**v1.0.2 released September 16, 2026. Next: v1.1, targeted for October 5, 2026; followed by consolidation (v1.1.1, October 16), performance beyond transformers (v1.1.2, October 24), consumers (v1.1.3, October 31) and v1.2 around November 15, 2026. v1.1 remains unreleased.**
+**v1.0.2 released September 16, 2026. Next: v1.1, planned for October 4, 2026; followed by consolidation (v1.1.1, October 16), performance beyond transformers (v1.1.2, October 24), consumers (v1.1.3, October 31) and v1.2 around November 15, 2026. v1.1 remains unreleased.**
 
 This roadmap outlines the development plan for OCANNL through version 1.0 and beyond. Dates indicate **end of period** targets. Through v1.0 the schedule was pinned to conference deadlines; it is now project-internal, and the dates below are aspirational rather than external commitments.
 
@@ -24,7 +24,7 @@ This roadmap outlines the development plan for OCANNL through version 1.0 and be
 >
 > **Rebalance (September 14, 2026):** finish v1.0.2 with a bounded compiler-deduplication set, then start performance work promptly. The deferred consolidation becomes **v1.1.1**, and the former consumers milestone becomes **v1.1.2**. Working backward from **November 3** for v1.2 gives **October 18** for consumers, **October 10** for consolidation and **October 2** for v1.1, after **September 16** for v1.0.2. The 48 days after that cut split 16 : 8 : 8 : 16 (feature : consolidation : consumers : feature), preserving the scope weighting used in September. These are soft end-of-period targets, not requirements to empty each milestone; protect the early-November anchor by reducing scope when necessary.
 >
-> **Update (October 4, 2026):** the September 29 split keeps **v1.1 focused on transformer workloads**. Convolution and CPU kernel/sketch economy now have their own **v1.1.2** milestone; consumers moved to **v1.1.3**. Live GitHub targets are October 5, 16, 24 and 31, then November 15 for v1.2. Undated v1.2.1/v1.2.2 placeholders allow consolidation and consumers to continue if scope moves again. These dates supersede the September schedule above.
+> **Update (October 4, 2026):** the September 29 split keeps **v1.1 focused on transformer workloads**. Convolution and CPU kernel/sketch economy now have their own **v1.1.2** milestone; consumers moved to **v1.1.3**. The release plan now brings v1.1 forward to **October 4**, ahead of its unchanged October 5 GitHub due date. Later GitHub targets remain October 16, 24 and 31, then November 15 for v1.2. Undated v1.2.1/v1.2.2 placeholders allow consolidation and consumers to continue if scope moves again. These dates supersede the September schedule above.
 >
 > The version sequence is: `0.7 → 0.8 → 0.9 → 1.0 → 1.0.1 → 1.0.2 → 1.1 → 1.1.1 → 1.1.2 → 1.1.3 → 1.2`. Milestone *scope* below tracks the GitHub milestones, which are the source of truth. Proposed release wording is identified explicitly; it has not changed the GitHub milestone.
 
@@ -300,8 +300,8 @@ follow-ups the v1.0.2 review cycles filed against it.
 
 ---
 
-## v1.1 — October 5, 2026 (unreleased)
-**Proposed theme: Fused attention and better transformer scheduling**
+## v1.1 — planned October 4, 2026 (unreleased)
+**Release theme: Fused attention and better transformer scheduling**
 
 GitHub currently describes the milestone as *"Performance-chasing in the approximate profile,
 demonstrated on transformer workloads (gpt2_mini and gpt2_mini_train, the only sort-of realistic
@@ -401,8 +401,10 @@ For #998, measurements support separating optional float algebra from integer-po
 the latter is currently required for finite CUDA GPT training under NVRTC fast math. The compiler
 split is still outstanding. Q/K/V zero-init folding (#1175, PR #934) was **reverted by
 [PR #941](https://github.com/lukstafi/ocannl-staging/pull/941)** after doubling tuned CUDA forward
-latency; it is excluded from the delivered feature list. Decide explicitly which remaining fixes
-and measurements gate the tag and which become documented follow-ups, then cut a coherent release.
+latency; it is excluded from the delivered feature list. Publication is planned for later on
+October 4, with completed measurements available at the cut and remaining limitations stated
+together. Finalize which open items gate the tag and which remain follow-ups before publishing;
+the release plan does not imply that the pending comparison or fixes are complete.
 
 ---
 
@@ -525,7 +527,7 @@ feature releases.
 | **1.0** | Aug 13, 2026 | **released** | **Branch-and-bound schedule inference, inlining as a searchable decision, graph capture, software pipelining, rematerialization, CPU reduced precision, and the 2x `gpt2_mini` step** |
 | **1.0.1** | Aug 26, 2026 | **released** | **Consolidation after v1.0** (planned as "v1.1"): search follow-through, inlining and reduction soundness, test and benchmark seams that cannot report a false pass, and the training-loop mechanics |
 | **1.0.2** | Sep 16, 2026 | **released** | **Robustness pulled forward, plus compiler elegance through shared structure**: the landed robustness fixes and eight compiler-structure/coverage issues |
-| 1.1    | Oct 5, 2026 | unreleased; framing proposed | Transformer compiler advances: online/fused/block attention, GPU scheduling, precision paths and measured speed/memory tradeoffs; approximate performance remains workload-dependent |
+| 1.1    | Oct 4, 2026 | planned; unreleased | Transformer compiler advances: online/fused/block attention, GPU scheduling, precision paths and measured speed/memory tradeoffs; approximate performance remains workload-dependent |
 | 1.1.1  | Oct 16, 2026 | planned; work already landing | Consolidation informed by transformer measurements and review findings |
 | 1.1.2  | Oct 24, 2026 | planned | Performance beyond transformers: reduced ResNet-style convs and CPU kernel/sketch economy |
 | 1.1.3  | Oct 31, 2026 | planned | Consumers, models, integrations, checkpointing and observability |

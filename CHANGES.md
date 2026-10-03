@@ -5,6 +5,9 @@ choices, important bug fixes — not ongoing progress. Finer-grained history liv
 commits, PR pages (development happens in `lukstafi/ocannl-staging`), and issue threads
 (`ahrefs/ocannl`, cited as gh-ocannl-NNN).
 
+The Unreleased changes below are prepared for **v1.1 — Fused attention and better transformer
+scheduling**, planned for October 4, 2026. Publication and tagging remain pending.
+
 ## [Unreleased]
 
 ### Added
