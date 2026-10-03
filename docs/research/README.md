@@ -23,3 +23,4 @@ Two kinds of entries:
 | `megakernel-deep-dive.md` | `../megakernel-deep-dive.md` | Megakernel patterns (Hazy Research, Mirage MPK) (#318) |
 | `ggml-lessons.md` | (regular file) | Efficiency lessons from ggml for CPU inference (#163) |
 | `llmc-lessons.md` | (regular file) | llm.c lessons for GPU training/inference of the GPT-2 driver workload (#253) |
+| `gh-1099-register-tile-c-traffic.md` | (regular file) | Register-tile C-traffic invariant, AVX2 A/B and the remaining tail-bearing tie question (#1099, #1180) |

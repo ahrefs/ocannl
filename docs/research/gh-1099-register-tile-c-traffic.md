@@ -1,10 +1,12 @@
 # Register-tile C traffic does not distinguish column geometries
 
 Investigation of [gh-ocannl-1099](https://github.com/ahrefs/ocannl/issues/1099),
-2026-10-03. Decision: retain `Register_tile.cost`, `default`, and the existing
-tie-break order. The proposed per-pass C-load/store term cannot distinguish
-`rn` at a fixed vector width, and the AVX2 measurements do not justify a new
-setup or tail penalty. No k argument or new register-tile seeds are added.
+2026-10-03. Decision: retain `Register_tile.cost` without a C-traffic term and
+leave the tie-break order unchanged in this investigation. The proposed
+per-pass C-load/store term cannot distinguish `rn` at a fixed vector width.
+The tail-bearing tie rule has a separate unresolved measurement question,
+tracked in [gh-ocannl-1180](https://github.com/ahrefs/ocannl/issues/1180).
+No k argument or new register-tile seeds are added.
 
 ## The traffic term cancels
 
@@ -138,16 +140,30 @@ k alone therefore does not make the smaller tile preferable. The parallel
 results disagree with serial on some sites and are kept separate.
 
 The current issue-slot model cannot distinguish the n=28 pair before its
-tie-break. Its default remains a heuristic on that tie: this investigation
-does not remove the measured serial disadvantage, nor establish its cause.
-Setup, partial-vector instruction sequences, or register pressure would need
-their own evidence and model; the correctly summed C-traffic term supplies
-none of those distinctions. A new site-size penalty fitted to this one tiny
-site would claim more than the measurements establish.
+tie-break. Preferring a tail-free tile has a structural rationale: it emits
+one column-tile body instead of a full body and a tail body. When both tied
+candidates carry tails, however, both emit two bodies, and equal cost at equal
+lanes means the same total A splats. The remaining preferences for fewer tail
+vectors and then larger `rn` have no additional rationale in the issue-slot
+model on such a tie. This investigation does not remove the measured serial
+disadvantage of the current n=28 pick, nor establish its cause.
 
-Keep the model and seeding unchanged and record the limitation. No fresh
-NEON or AVX-512 measurements are needed for this decision: no new heuristic
-is being applied to either target, and the traffic cancellation follows from
-the shared emitter. This makes no new performance claim about those targets.
-If a later investigation changes the tie rule or adds a measured setup term,
-it should validate the change on them and vary n, bm and k independently.
+A zero-parameter alternative is to prefer a tail-free tile, then smaller
+`rn`, at equal cost and lane width. It would choose 4x2 at n=28 and preserve
+the already tail-free 4x2 choice at n=32 on AVX2. This is a tie-rule question,
+separate from adding a setup penalty or a mis-summed C-traffic term.
+[gh-ocannl-1180](https://github.com/ahrefs/ocannl/issues/1180) owns validating
+that rule on NEON and AVX2 before changing it. The earlier
+[#947 NEON report](https://github.com/ahrefs/ocannl/issues/947#issuecomment-5852345656)
+already measured a tail-bearing tie at f32 n=56, bm=8: rn6 with a two-vector
+tail versus rn5 with a four-vector tail was neutral within noise. That one
+comparison does not establish the proposed rule across NEON sites; the
+follow-up needs targeted measurement coverage rather than assuming none
+exists.
+
+Keep the model and seeding unchanged here and leave the tie key to #1180's
+measurement window. No fresh NEON or AVX-512 measurements are needed to reject
+the C-traffic term: no new heuristic is applied to either target, and the
+traffic cancellation follows from the shared emitter. This makes no new
+performance claim about those targets. A later setup or tie-rule investigation
+should vary n, bm and k independently.
