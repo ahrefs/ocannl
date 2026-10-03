@@ -62,7 +62,7 @@ endpoint, **but base training is beyond the exact f16 envelope** (0.005048112670
 The driver prints `PASS (5.0e-03, beyond exact envelope)` for that row. This control belongs
 with the exact failures in [gh-ocannl-1182](https://github.com/ahrefs/ocannl/issues/1182).
 Metal exact f16 passes all eight endpoints, including these three HIP failures (see the
-[mac leg-7 analysis](#leg-7-metal-reduced-precision)). This points #1182 toward HIP;
+[mac leg-7 analysis](#leg-7-metal-reduced-precision)). This points gh-ocannl-1182 toward HIP;
 the different source revisions keep it from isolating the backend as the cause.
 The complete exact-f16 base-training parity trajectory (`null` encodes a non-finite float; later losses are finite) is:
 
@@ -236,8 +236,8 @@ Missing default-schedule cc cells (each entry means **both exact and approximate
 | gpt2_mini_train_b256 | f32; bf16, f16 | f32 hit 600 s; reduced formats skipped |
 
 That is **10 timed-out f32 cells plus 28 deliberately skipped bf16/f16 cells**. Batch1
-inference is complete in every requested format/regime. This leaves #720 partially reported;
-HIP exact-f16 correctness findings continue separately in #1182.
+inference is complete in every requested format/regime. This leaves gh-ocannl-720 partially reported;
+HIP exact-f16 correctness findings continue separately in gh-ocannl-1182.
 
 ## HIP generated reports
 

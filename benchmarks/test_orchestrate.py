@@ -1774,15 +1774,19 @@ class FixtureDigestTest(unittest.TestCase):
         # Pin that recorded policy and keep missing/different origins visible for every entry.
         digests = HERE / "fixtures" / fixture_digest.DIGEST_FILE
         entries, declared = fixture_digest._read_document(digests)
+        expected = {
+            f"{spec.stem}.safetensors"
+            for spec in (HERE / "workloads").glob("*.json")
+            if json.loads(spec.read_text()).get("model") == "gpt"
+        }
+        self.assertTrue(expected, "no GPT workload specs found")
         copied = {name for name, recorded in entries.items() if any(e.origin == "tuf" for e in recorded)}
-        self.assertTrue(copied, "no TUF copies recorded")
+        self.assertEqual(copied, expected, "TUF must record every GPT fixture copy")
 
         for name, recorded in entries.items():
             self.assertTrue(recorded, name)
             by_origin = {e.origin: e for e in recorded}
             if name in copied:
-                spec = json.loads((HERE / "workloads" / f"{Path(name).stem}.json").read_text())
-                self.assertEqual(spec["model"], "gpt", name)
                 self.assertIn("m4-max", by_origin, name)
                 for origin in ("m4-max", "tuf"):
                     self.assertEqual(by_origin[origin].kind, "content-v1", name)
