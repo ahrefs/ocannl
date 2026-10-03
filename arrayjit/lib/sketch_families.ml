@@ -12,9 +12,9 @@
     seeds crossed with their epilogue-fusion twins) into the seed list the search actually
     enumerates.
 
-    No [.mli] of its own: [autotune.ml] {e includes} this module, so the whole of it is in scope for
-    the search harness unqualified (the site helpers as much as the families), and [autotune.mli]
-    remains the single gate on what leaves the library. *)
+    Its interface bounds the construction contracts consumed by the search harness: [autotune.ml]
+    {e includes} this module, so those contracts are in scope unqualified, and [autotune.mli]
+    selects the public search and inspection API. *)
 
 open Base
 module Sched = Ir.Schedule

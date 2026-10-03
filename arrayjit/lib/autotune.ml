@@ -4,8 +4,13 @@ open Base
    parameterize, and the refinement trees whose leaves are the seed lists — live in their own module
    (gh-ocannl-580). Included rather than opened: the search harness below refers to the family types
    and helpers unqualified, and {!sketch_params} and the site types are part of this module's public
-   interface. The module aliases shared by both halves come from here as well. *)
+   interface. The harness keeps its own aliases for the IR modules. *)
 include Sketch_families
+module Sched = Ir.Schedule
+module Sspace = Ir.Schedule_space
+module LL = Ir.Low_level
+module Idx = Ir.Indexing
+module Outcome = Ir.Schedule_outcome
 module SC = Ir.Schedule_cache
 
 type decline_summary = { key : Outcome.rejection_key; count : int; sample_details : string list }
