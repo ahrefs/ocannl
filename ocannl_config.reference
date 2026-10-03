@@ -1295,6 +1295,8 @@
 # constant-constant folding remain enabled.
 # This is a measurement control, not a promise of strict IEEE evaluation: backend compiler
 # math settings still apply. No profile changes it; the later rewrite-tier split is separate.
+# Post-schedule simplification can expose new algebra (e.g. after unrolling), so the selector
+# also enters the schedule cache's numerics identity. Default all preserves existing cache tags.
 #simplify_fp_algebra=all
 
 # Algebraic rewrite over lowered code (gh-ocannl-483): the online-softmax attention rewrite. The

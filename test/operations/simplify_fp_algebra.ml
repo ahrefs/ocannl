@@ -35,10 +35,11 @@ let () =
   in
   p_all "each family leaves other witnesses alone" pairs ~f:(fun (family, other, rhs) ->
       String.equal family other || LL.equal_scalar_t rhs (simplify family rhs));
-  p_all "default matches explicit all" cases ~f:(fun (_, rhs) ->
+  let resolved = Utils.get_global_arg ~default:"all" ~arg_name:"simplify_fp_algebra" in
+  p_all "unqualified simplification matches the resolved selector" cases ~f:(fun (_, rhs) ->
       let default = LL.simplify_llc [] (set_at output (fixed 0) rhs) in
       match default with
-      | LL.Set { llsc; _ } -> LL.equal_scalar_t llsc (simplify "all" rhs)
+      | LL.Set { llsc; _ } -> LL.equal_scalar_t llsc (simplify resolved rhs)
       | _ -> false);
   let add_zero = add x (c 0.) in
   p "all-off retains signed-zero addition" (LL.equal_scalar_t add_zero (simplify "none" add_zero));
@@ -61,6 +62,46 @@ let () =
       LL.equal_scalar_t
         (isimplify (ibinop op (ibinop op i (c 2.)) (c 3.)))
         (ibinop op (c combined) i));
+  (* Unrolling exposes fixed scalar indices only AFTER the source digest was computed. *)
+  let smk = node_factory ~first_id:100000 ~dims:[| 3 |] () in
+  let source = smk ~dims:[| 1 |] "cache_source" and target = smk "cache_target" in
+  materialize source;
+  materialize target;
+  let axis = sym () in
+  let raw =
+    loop ~from_:1 ~upto:2 axis
+      (set target [| iter axis |] (add (add (get source [| fixed 0 |]) (embed axis)) (c 3.)))
+  in
+  let var = "OCANNL_SIMPLIFY_FP_ALGEBRA" in
+  let previous = Stdlib.Sys.getenv_opt var in
+  let under selection f =
+    Unix.putenv var selection;
+    Stdlib.Fun.protect f ~finally:(fun () -> Unix.putenv var (Option.value previous ~default:""))
+  in
+  let cache_arm selection =
+    under selection (fun () ->
+        let opt = optimize ~name:"af_cache_unroll" raw in
+        let base = Ir.Schedule_cache.digest (Ir.Schedule_cache.canonicalize opt) in
+        let scheduled = Ir.Schedule.apply [ Ir.Schedule.Unroll { axis; materialize = true } ] opt in
+        ( base,
+          Ir.Schedule_cache.digest (Ir.Schedule_cache.canonicalize scheduled),
+          Ir.Schedule_cache.numerics_tag () ))
+  in
+  let base_off, code_off, tag_off = cache_arm "none" in
+  let base_constants, code_constants, tag_constants = cache_arm "constants" in
+  p "the unroll witness has identical pre-schedule digests across selectors"
+    (String.equal base_off base_constants);
+  p "unrolling exposes selector-dependent constant reassociation"
+    (not (String.equal code_off code_constants));
+  p "the cache numerics tag separates identical sources with different scheduled algebra"
+    (not (String.equal tag_off tag_constants));
+  let original_tag =
+    String.prefix
+      (Stdlib.Digest.to_hex (Stdlib.Digest.string (Ir.Numerics.fingerprint (Ir.Numerics.get ()))))
+      8
+  in
+  p "the all-on cache tag remains compatible with existing entries"
+    (String.equal original_tag (under "all" Ir.Schedule_cache.numerics_tag));
   p "unknown family is refused"
     (try
        ignore (simplify "typo" x);

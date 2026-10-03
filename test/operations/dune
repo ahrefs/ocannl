@@ -7122,9 +7122,15 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA))
+  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
+  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
+  (env_var OCANNL_LARGE_MODELS)
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_PROFILE))
  (modules simplify_fp_algebra)
- (libraries base ocannl arrayjit.verdict ll_test))
+ (libraries base ocannl unix arrayjit.verdict ll_test))
 
 (test
  ; ocannl-backend: none -- exercises Utils configuration readers without a backend.

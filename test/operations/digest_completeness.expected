@@ -15,7 +15,6 @@ code-borne (digest) -- an optimizer decision: it changes the code that comes out
   online_softmax
   online_softmax_backward
   online_softmax_block
-  simplify_fp_algebra
   virtualize_footprint_materialization
   virtualize_max_inline_fanin
   virtualize_max_inline_reduction
@@ -37,6 +36,9 @@ keyed: numerics -- the numerics policy is consulted at codegen and by the autotu
   fp16_arithmetic
   narrow_compute_f32
   tf32_matmuls
+
+keyed: numerics -- simplification also runs after scheduling, where unrolling can expose algebra absent from the base code digest (gh-ocannl-998)
+  simplify_fp_algebra [read at codegen]
 
 keyed: pool -- it decides the worker pool timings execute on, and CPU crowns do not transfer across pools (gh-ocannl-530)
   cc_pool_core_class [read at codegen]

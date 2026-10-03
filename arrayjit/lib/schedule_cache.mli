@@ -197,11 +197,13 @@ val of_saved : canonical -> saved_schedule -> Schedule.schedule * registry
 
 val numerics_tag : unit -> string
 (** A filename-safe short digest of the current {!Ir.Numerics} policy ({!Ir.Numerics.get}, so it
-    tracks {!Ir.Numerics.set_policy}). The policy is not a property of the code — it is consulted at
-    codegen and by the autotune tile-shape choice — so it cannot enter {!digest}, yet a schedule
-    tuned under one policy must never replay under another (gh-ocannl-568: a default-flags run
-    replaying a tf32-tuned tensorized winner measured 5.9x slower than not tuning at all, its mma
-    rendering degraded to the scalar fallback). Hence it enters {!cache_key} and {!entry}. *)
+    tracks {!Ir.Numerics.set_policy}), including the development algebra selector for post-schedule
+    simplification. Its default [all] preserves existing tags. The policy is not a property of the
+    code — it is consulted at codegen and by the autotune tile-shape choice — so it cannot enter
+    {!digest}, yet a schedule tuned under one policy must never replay under another (gh-ocannl-568:
+    a default-flags run replaying a tf32-tuned tensorized winner measured 5.9x slower than not
+    tuning at all, its mma rendering degraded to the scalar fallback). Hence it enters {!cache_key}
+    and {!entry}. *)
 
 val codegen_tag :
   limits:Backend_intf.hardware_limits ->

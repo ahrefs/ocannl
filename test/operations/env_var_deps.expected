@@ -190,6 +190,7 @@ declared or pinned by every rule running the program (gh-ocannl-1149):
   test/operations/dune, test schedule_strided_1x1: Ir.Schedule.apply_classified, Ir.Schedule.default_cpu, Ir.Schedule.default_gpu, Ir.Schedule.fission_scheduled, Ir.Schedule.zero_expansion
   test/operations/dune, test schedule_swizzle_matmul: Ir.Schedule.apply
   test/operations/dune, test scratch_value_variance: Ir.Schedule.default_gpu
+  test/operations/dune, test simplify_fp_algebra: Ir.Schedule.apply
   test/operations/dune, test tile_mma_declines: Ir.Schedule.apply
   test/operations/dune, test tile_mma_geometry: Ir.Schedule.apply
   test/operations/dune, test tile_mma_narrow: Ir.Schedule.apply

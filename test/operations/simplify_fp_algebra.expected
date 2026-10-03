@@ -1,9 +1,13 @@
 all-off preserves each floating-point expression: true
 each family changes its witness when selected: true
 each family leaves other witnesses alone: true
-default matches explicit all: true
+unqualified simplification matches the resolved selector: true
 all-off retains signed-zero addition: true
 constant folding still runs all-off: true
 integer zero identity still runs all-off: true
 integer constant reassociation still runs all-off: true
+the unroll witness has identical pre-schedule digests across selectors: true
+unrolling exposes selector-dependent constant reassociation: true
+the cache numerics tag separates identical sources with different scheduled algebra: true
+the all-on cache tag remains compatible with existing entries: true
 unknown family is refused: true
