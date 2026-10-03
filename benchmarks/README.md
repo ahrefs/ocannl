@@ -89,7 +89,6 @@ nested-division rewrite; regression test `test/training/virtual_grads_parity.ml`
   inference fixtures, per-segment attribution, cc, and the two training fixtures under the fused
   backward; [report-gh1003-block-fold.md](report-gh1003-block-fold.md)).
 
-
 - **Sequence scaling (gh-ocannl-720, leg 2)** uses `gpt2_mini` / `_s512` / `_s1024` and
   their training counterparts: seq 128 / 512 / 1024, batch 8 / 2 / 1, all at 1024 tokens per
   step. Report tokens/s beside latency and peak memory to demonstrate the attention rewrites
@@ -120,6 +119,11 @@ nested-division rewrite; regression test `test/training/virtual_grads_parity.ml`
   an approximate row also reports whether it passes the exact envelope. An untuned reduced
   format does not promise tensorization: `--tuned` is the separate schedule-search leg, whose
   search and replay costs follow the two-pass protocol below.
+
+The v1.1 transformer sweep on HIP gfx1102 (discrete memory) is reported by leg:
+[regimes](report-gh720-leg1-hip.md), [sequence scaling](report-gh720-leg2-hip.md),
+[batch scaling](report-gh720-leg4-hip.md), and [reduced precision](report-gh720-leg7-hip.md).
+The reports retain parity failures; cc/Metal measurements remain pending.
 
 ## Layout
 
@@ -158,9 +162,10 @@ nested-division rewrite; regression test `test/training/virtual_grads_parity.ml`
   `content-v1`. They are kept visibly legacy until their original files are available; relabelling
   an old raw digest as canonical would invent evidence the digest cannot contain.
   The current declaration names `m4-max` (the Apple M4 Max/macOS measurement host), `minix`, and
-  `rog-nv`. The Metal reports before gh-ocannl-483 predate per-origin recording, so `m4-max` has
-  rows only for the fixtures that report is on (`gpt2_mini` and the long-context legs); for the
-  others its absence is an explicit missing-record warning rather than an omitted host.
+  `rog-nv`, plus `tuf` (HIP gfx1102 with discrete VRAM). The gh-ocannl-720 transformer
+  fixtures on `tuf` were copied from `m4-max`, including the two new batch endpoints generated
+  with the mac-studio bench venv; their content digests match. Older reports predate some
+  per-origin records; a missing origin remains an explicit warning.
   - **Entries are per box, and today the boxes differ.** `mlp_small` and `gpt2_mini` hash
     differently on minix and rog-nv at identical sizes — two venvs, two numpy streams, one
     workload spec — so `report-hip.md` and `report-gh675-cuda.md` are **not cross-box
