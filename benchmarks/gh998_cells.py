@@ -2,11 +2,14 @@
 """Ablate simplify_llc float algebra on byte-identical benchmark fixtures (#998).
 
 prepare --out DIR: bind the revision, executable bytes and fixture digests, run the existing
-Torch CPU exact oracle. Build bench_mlp.exe, bench_conv.exe and bench_gpt.exe beforehand, outside a timing hold.
+Torch CPU exact oracle. Build bench_mlp.exe and the selected fixture runners beforehand, outside a timing hold.
 dry --out DIR --backends metal,cc: arms-on/off self-test twice per backend (discard timings).
 The self-test uses the same compilation, execution and emission path with a short protocol.
 run --out DIR --backends metal,cc: three order-balanced rounds of all, none and each family off.
 summarize --out DIR: print the per-workload envelopes against arms-on and the Torch oracle.
+--workloads selects a comma-separated subset (use the same selection for prepare/dry/run).
+--rounds selects the repeat count for run (default 3); summarize reads the recorded matrix.
+The preflight records the host and CPU; cc measurements on different CPUs are separate rows.
 
 Each cell uses the suite's unchanged f32 protocol, untuned default schedule and fixed compiler
 math settings. A family's removal may expose another simplifier arm or be undone by backend
@@ -19,12 +22,12 @@ import hashlib
 import json
 import math
 import os
+import platform
 import signal
 import shutil
 from pathlib import Path
 import statistics
 import subprocess
-import sys
 
 import fixture_digest
 from gh1002_cells import run_in_own_group
@@ -47,10 +50,19 @@ def executable(workload):
         'bench_conv.exe' if workload == 'lenet' else 'bench_gpt.exe')
 
 
-def identity():
+def host_identity():
+    if platform.system() == 'Darwin':
+        cpu = subprocess.check_output(['sysctl', '-n', 'machdep.cpu.brand_string'], text=True).strip()
+    else:
+        cpu = next((line.split(':', 1)[1].strip() for line in
+                    Path('/proc/cpuinfo').read_text().splitlines() if line.startswith('model name')), 'unknown')
+    return dict(host=platform.node(), system=platform.platform(), machine=platform.machine(), cpu=cpu)
+
+
+def identity(workloads):
     entries = fixture_digest.read_digests(HERE / 'fixtures/DIGESTS.txt')
     fixtures = {}
-    for workload in WORKLOADS:
+    for workload in workloads:
         status, sha, size, origins = fixture_digest.status(
             HERE / 'fixtures' / (workload + '.safetensors'), entries)
         if status != 'MATCH':
@@ -60,7 +72,7 @@ def identity():
         ['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
         diff_sha256=hashlib.sha256(subprocess.check_output(
             ['git', 'diff', 'HEAD'], cwd=ROOT)).hexdigest(),
-        fixtures=fixtures, executables={w: digest(executable(w)) for w in WORKLOADS},
+        host=host_identity(), fixtures=fixtures, executables={w: digest(executable(w)) for w in workloads},
         smoke_executable=digest(ROOT / '_build/default/benchmarks/runners/ocannl/bench_mlp.exe'))
 
 
@@ -147,15 +159,18 @@ def envelope(got, ref):
             sum(a != b for a, b in zip(got, ref)))
 
 
-def summarize(out, backends):
+def summarize(out):
+    matrix = json.loads((out / 'matrix.json').read_text())
+    preflight = json.loads((out / 'preflight.json').read_text())
+    print(f"Host: {preflight['host']['host']}; CPU: {preflight['host']['cpu']}; revision: {preflight['revision']}; rounds: {matrix['rounds']}.")
     print('| backend | workload | arm | off/on p50 median (range) | max abs / rel vs on | changed losses | max abs / rel vs Torch |')
     print('|---|---|---|---|---|---|---|')
-    for backend in backends:
-        for workload in WORKLOADS:
+    for backend in matrix['backends']:
+        for workload in matrix['workloads']:
             oracle = result(out / f'torch-{workload}' / 'stdout')['losses']
             for treatment in TREATMENTS:
                 ratios, vs_on, vs_torch = [], [], []
-                for repeat in range(3):
+                for repeat in range(matrix['rounds']):
                     row = json.loads((out / f'{backend}-{workload}-{treatment}-{repeat}' / 'result.json').read_text())
                     on = json.loads((out / f'{backend}-{workload}-all-{repeat}' / 'result.json').read_text())
                     ratios.append(row['step_ms']['p50'] / on['step_ms']['p50'])
@@ -171,8 +186,12 @@ def main():
     ap.add_argument('phase', choices=['prepare', 'dry', 'run', 'summarize'])
     ap.add_argument('--out', type=Path, required=True)
     ap.add_argument('--backends', default='metal,cc')
+    ap.add_argument('--workloads', default=','.join(WORKLOADS))
+    ap.add_argument('--rounds', type=int, default=3)
     ap.add_argument('--deadline-seconds', type=int, default=7200)
     args = ap.parse_args()
+    if args.rounds <= 0:
+        ap.error('rounds must be positive')
     if args.deadline_seconds <= 0:
         ap.error('deadline must be positive')
     def deadline(signum, frame):
@@ -181,21 +200,24 @@ def main():
     signal.signal(signal.SIGTERM, deadline)
     signal.alarm(args.deadline_seconds)
     out = args.out.resolve()
+    workloads = args.workloads.split(',')
+    if not workloads or len(set(workloads)) != len(workloads) or any(w not in WORKLOADS for w in workloads):
+        ap.error('workloads must be a nonempty distinct list from ' + ','.join(WORKLOADS))
     backends = args.backends.split(',')
-    if any(b not in ['metal', 'cc', 'cuda'] for b in backends):
+    if len(set(backends)) != len(backends) or any(b not in ['metal', 'cc', 'cuda'] for b in backends):
         ap.error('backends must be metal,cc,cuda')
     out.mkdir(parents=True, exist_ok=True)
     if args.phase == 'summarize':
-        summarize(out, backends)
+        summarize(out)
         return
-    current = identity()
+    current = identity(workloads)
     preflight = out / 'preflight.json'
     if args.phase == 'prepare':
         if preflight.exists():
             raise RuntimeError('prepare requires a fresh output directory')
         preflight.write_text(json.dumps(current, indent=2) + '\n')
         python = str(HERE / '.venv/bin/python')
-        for workload in WORKLOADS:
+        for workload in workloads:
             cell(out, f'torch-{workload}', [python, str(HERE / 'runners/pytorch/run.py'),
                  '--fixture', str(HERE / 'fixtures' / (workload + '.safetensors')),
                  '--device', 'cpu', '--regime', 'exact'], clean_env())
@@ -213,8 +235,12 @@ def main():
         raise RuntimeError('timing requires a clean tree')
     if not set(backends) <= set(json.loads((out / 'dry-ok.json').read_text())):
         raise RuntimeError('backend has not passed dry run')
-    for repeat in range(3):
-        cells = [(b, w, t) for b in backends for w in WORKLOADS for t in TREATMENTS]
+    matrix = out / 'matrix.json'
+    if matrix.exists():
+        raise RuntimeError('timing requires a fresh matrix; existing evidence is never overwritten')
+    matrix.write_text(json.dumps(dict(backends=backends, workloads=workloads, rounds=args.rounds), indent=2) + '\n')
+    for repeat in range(args.rounds):
+        cells = [(b, w, t) for b in backends for w in workloads for t in TREATMENTS]
         # Rotated/reversed order splits treatment order effects across repeats.
         if repeat == 1:
             cells.reverse()
