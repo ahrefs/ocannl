@@ -11,6 +11,12 @@ spec = importlib.util.spec_from_file_location("summary", sys.argv[1])
 report = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(report)
 
+def check(condition, detail):
+    # Python -O must not erase a control's verdict while leaving its passing golden line.
+    if not condition:
+        raise SystemExit("FAIL: " + detail)
+
+
 with tempfile.TemporaryDirectory() as scratch:
     out = Path(scratch)
     name = "hip-gpt2_mini_train-keep-trainseg.out"
@@ -27,9 +33,9 @@ with tempfile.TemporaryDirectory() as scratch:
 
     def refused(reason):
         code, text = render()
-        assert code == 1 and "REFUSED:" in text and reason in text, text
-        assert "### Training segments:" not in text, text
-        assert "sentinel" not in text, text
+        check(code == 1 and "REFUSED:" in text and reason in text, text)
+        check("### Training segments:" not in text, text)
+        check("sentinel" not in text, text)
 
     table.write_text("mode: infer backend: hip\nsentinel-forward-table\n")
     status.write_text("0\n")
@@ -47,6 +53,6 @@ with tempfile.TemporaryDirectory() as scratch:
     status.write_text("0\n")
     table.write_text("mode: train backend: hip\nsentinel-training-table\n")
     code, text = render()
-    assert code == 0 and "### Training segments:" in text and "sentinel-training-table" in text, text
-    assert "| hip | gpt2_mini_train | keep |" in text, text
+    check(code == 0 and "### Training segments:" in text and "sentinel-training-table" in text, text)
+    check("| hip | gpt2_mini_train | keep |" in text, text)
     print("successful training output appears beside its step-time row: true")
