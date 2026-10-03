@@ -278,9 +278,7 @@ let () =
             then Some (a, b, v)
             else None))
   in
-  (* Two geometries, so the class is not read as a property of the narrowest one. Drawing even
-     residues from the middle bits (gh-ocannl-1118) moves both first cancelling pairs beyond the old
-     4000/2000-row bounds. A 10000-row sweep still exhibits the class without prescribing either
+  (* A 10000-row sweep exhibits checksum cancellation at both geometries without prescribing either
      pair: the bounded checksum is a fingerprint, not the guard. *)
   let cancel_cases =
     List.filter_map
@@ -362,28 +360,24 @@ let () =
   (* gh-ocannl-1118: full mix values being distinct does not imply their low bits discriminate. Test
      both axes of the binary operand at the staged-twin extent. *)
   let binary_salts = [ 0x5A17; 0x3C6E; 0x00A5 ] in
-  let axes_distinct value ~salt =
-    let row_vectors = List.init 32 ~f:(fun r -> Array.init 64 ~f:(fun c -> value ~salt r c))
-    and column_vectors = List.init 64 ~f:(fun c -> Array.init 32 ~f:(fun r -> value ~salt r c)) in
+  let axes_distinct value =
+    let row_vectors = List.init 32 ~f:(fun r -> Array.init 64 ~f:(fun c -> value r c))
+    and column_vectors = List.init 64 ~f:(fun c -> Array.init 32 ~f:(fun r -> value r c)) in
     pairwise_distinct row_vectors && pairwise_distinct column_vectors
   in
   Verdict.p_all "binary residues have distinct rows and columns at 32x64" binary_salts
     ~f:(fun salt ->
-      axes_distinct
-        (fun ~salt r c -> Bc.residue ~salt ~row_stride:64 ~modulus:2 ((r * 64) + c))
-        ~salt);
+      axes_distinct (fun r c -> Bc.residue ~salt ~row_stride:64 ~modulus:2 ((r * 64) + c)));
   Verdict.p_all "the raw mix low bit aliases rows or columns at 32x64 (negative control)"
-    binary_salts ~f:(fun salt -> not (axes_distinct (fun ~salt r c -> Bc.mix ~salt r c % 2) ~salt));
+    binary_salts ~f:(fun salt -> not (axes_distinct (fun r c -> Bc.mix ~salt r c % 2)));
 
   (* Narrow reductions, which the four-row and 12-multiple sweeps above cannot reach. How many rows
      an operand keeps distinct is bounded by [levels ^ row_stride] whatever the generator — 2304 at
      the narrowest reduction this bench accepts, since gh-ocannl-738 took ma to 48 levels of 1/16
      from 12 of 1/4 and the bound at k = 2 from 144 — so the honest claim is a COMPARISON against
      the form this replaced, not distinctness. The flat residue's bound is not a birthday at all:
-     rows repeat with the modulus's period, 13, at EVERY stride. That is what the granularity bump
-     bought and what this table measures: ma's first repeat at k = 2 moved from row 11 to row 33,
-     which is the first stride at which the mixed form overtakes the flat one at all, so the
-     crossover below is k = 1 rather than the k = 2 it was. *)
+     rows repeat with the modulus's period, 13, at EVERY stride. This table measures where the mixed
+     form overtakes the flat one; the claims below state the crossover. *)
   let first_row_collision rowf =
     let seen = Hashtbl.create (module String) in
     List.find_map (List.range 0 20_000) ~f:(fun r ->

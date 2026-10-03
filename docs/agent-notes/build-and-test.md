@@ -1425,8 +1425,9 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   `(i0 + i1 + 2*i2 + 3*i3) mod 7` — goes through `Ll_test.weighted`, which computes it unchanged
   and raises when a weight is a multiple of the modulus, the same blindness read off the weights.
 - `Bench_checksum.mix`'s injectivity is about its full 24-bit values, not any selected bits
-  (gh-ocannl-1118): its low seven bits can alias whole rows and columns. `residue` keeps odd
-  moduli unchanged and draws even-modulus residues from bit 7 upwards. A bounded value set
+  (gh-ocannl-1118): its low seven bits can alias whole rows and columns. `residue` reduces the full value for odd
+  moduli and draws even-modulus residues from bit 7 upwards, because an even remainder carries
+  the raw value's parity. A bounded value set
   still needs row/column distinctness checked at the operand's actual extent; the binary
   32x64 control in `bench_checksum_discrimination` pairs that claim with raw parity's failure.
 - `operand_key_ratchet` (gh-ocannl-1018) is what makes the guard above reach more than its

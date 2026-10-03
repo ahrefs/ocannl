@@ -15,21 +15,20 @@
     are not code, and a closure spread over several lines is one expression. A {e site} is an
     application of an integer-remainder or bit-mask operator — any identifier whose last component
     is [%], [mod] or [rem], or [land], so [Int.( % )], [Int.rem] and [Stdlib.( mod )] too — inside
-    the body of a function, whose LEFT operand reads that function's parameter in one of two
-    spellings:
+    the body of a function, whose left operand (either operand for a mask) reads that function's
+    parameter in one of two spellings:
 
-    - {!Multi_index}: the parameter is an index array and the left operand reads two or more
-      distinct axes of it ([v.(0)], [Array.get v 1]), or one axis through a non-literal index. Names
-      [let]-bound inside the body to an expression that reads axes are followed:
+    - {!Multi_index}: the parameter is an index array and the key reads two or more distinct axes of
+      it ([v.(0)], [Array.get v 1]), or one axis through a non-literal index. Names [let]-bound
+      inside the body to an expression that reads axes are followed:
       [let flat = (idcs.(0) * n) + idcs.(1) in … flat % 7] is a site. Any function counts, not only
       an [~f] argument, so [let value idcs = …] is read too.
     - {!Flat}: the function is the [~f] of [Array.init] / [List.init] (or the positional function of
       [Stdlib.Array.init]) whose length is written as a product at the call,
-      [Array.init (m * k) ~f:(fun i -> …)], and the left operand mentions the flat parameter itself.
-      A right operand that is syntactically the product of a TRAILING run of the length's factors is
-      NOT a site: [i % cols] beside [i / cols] over [Array.init (rows * cols)], or [idx % (n * m)]
-      over [Array.init (b * n * m)], is unflattening the index, the correct idiom, not minting a
-      cycle.
+      [Array.init (m * k) ~f:(fun i -> …)], and the key mentions the flat parameter itself. A right
+      operand that is syntactically the product of a TRAILING run of the length's factors is NOT a
+      site: [i % cols] beside [i / cols] over [Array.init (rows * cols)], or [idx % (n * m)] over
+      [Array.init (b * n * m)], is unflattening the index, the correct idiom, not minting a cycle.
 
     {1 What it deliberately does not read}
 
@@ -63,22 +62,16 @@ let spelling_name = function Multi_index -> "multi-index" | Flat -> "flat"
 
 (* An axis read of the parameter: a literal axis, or an index the scan cannot evaluate. *)
 type read = Axis of int | Dynamic_axis | Whole
+type bounding_kind = Remainder | Mask
 
-let remainder_op (e : expression) =
+let bounding_kind (e : expression) =
   match e.pexp_desc with
   | Pexp_ident { txt; _ } -> (
-      match Longident.last_exn txt with "%" | "mod" | "rem" -> true | _ -> false)
-  | _ -> false
-
-let bounding_op (e : expression) =
-  remainder_op e
-  ||
-  match e.pexp_desc with
-  | Pexp_ident { txt; _ } -> String.equal (Longident.last_exn txt) "land"
-  | _ -> false
-
-let is_remainder (e : expression) =
-  match e.pexp_desc with Pexp_apply (op, _) -> remainder_op op | _ -> false
+      match Longident.last_exn txt with
+      | "%" | "mod" | "rem" -> Some Remainder
+      | "land" -> Some Mask
+      | _ -> None)
+  | _ -> None
 
 let is_ident name (e : expression) =
   match e.pexp_desc with Pexp_ident { txt = Lident n; _ } -> String.equal n name | _ -> false
@@ -177,17 +170,21 @@ let named_params (e : expression) =
           | _ -> None)
   | _ -> []
 
-(* The remainder and mask applications in [body] whose left operand reads [param], with the reads.
-   [let] bindings extend the alias environment for their body. *)
+(* The remainder and mask applications in [body] that read [param], with their kind and reads. [let]
+   bindings extend the alias environment for their body. *)
 let bounded_keys ~param body =
   let found = ref [] in
   let rec go env (e : expression) =
     match e.pexp_desc with
-    | Pexp_apply (op, [ (Nolabel, lhs); (Nolabel, rhs) ]) when bounding_op op ->
-        let rs = reads ~param ~env lhs in
-        if not (List.is_empty rs) then found := (e, rs, rhs) :: !found;
-        go env lhs;
-        go env rhs
+    | Pexp_apply (op, [ (Nolabel, lhs); (Nolabel, rhs) ]) -> (
+        match bounding_kind op with
+        | Some kind ->
+            let rs = reads ~param ~env lhs in
+            let rs = match kind with Remainder -> rs | Mask -> rs @ reads ~param ~env rhs in
+            if not (List.is_empty rs) then found := (e, kind, rs, rhs) :: !found;
+            go env lhs;
+            go env rhs
+        | None -> descend env e)
     | Pexp_let (_, bindings, let_body) ->
         List.iter bindings ~f:(fun vb -> go env vb.pvb_expr);
         let env =
@@ -200,15 +197,16 @@ let bounded_keys ~param body =
               | _ -> env)
         in
         go env let_body
-    | _ ->
-        let walker =
-          object
-            inherit Ast_traverse.iter
-            method! expression e' = go env e'
-          end
-        in
-        (* Descend one level through the generic traversal, re-entering [go] on each child. *)
-        walker#expression_desc e.pexp_desc
+    | _ -> descend env e
+  and descend env e =
+    let walker =
+      object
+        inherit Ast_traverse.iter
+        method! expression e' = go env e'
+      end
+    in
+    (* Descend one level through the generic traversal, re-entering [go] on each child. *)
+    walker#expression_desc e.pexp_desc
   in
   go (Map.empty (module String)) body;
   List.rev !found
@@ -243,7 +241,7 @@ let sites source =
 
       method! expression e =
         List.iter (named_params e) ~f:(fun (param, body) ->
-            List.iter (bounded_keys ~param body) ~f:(fun (site, rs, _) ->
+            List.iter (bounded_keys ~param body) ~f:(fun (site, _, rs, _) ->
                 if multi_axis rs then record Multi_index site));
         (match init_function e with
         | Some (len, fn) -> (
@@ -258,10 +256,10 @@ let sites source =
                   let n = List.length factor_shapes and k = List.length divisor in
                   k < n && List.equal String.equal (List.drop factor_shapes (n - k)) divisor
                 in
-                List.iter (bounded_keys ~param body) ~f:(fun (site, rs, rhs) ->
+                List.iter (bounded_keys ~param body) ~f:(fun (site, kind, rs, rhs) ->
                     if
                       List.exists rs ~f:(function Whole -> true | _ -> false)
-                      && not (is_remainder site && unflattens rhs)
+                      && not (match kind with Remainder -> unflattens rhs | Mask -> false)
                     then record Flat site)
             | _ -> ())
         | None -> ());

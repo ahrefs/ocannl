@@ -79,10 +79,10 @@ let mix ~salt a b =
 (** [residue ~salt ~row_stride ~modulus t] is [mix] of the (row, column) pair that the flat offset
     [t] denotes in a row-major array of the given row stride, reduced mod [modulus]. This is the
     call site to prefer over a hand-written [t % modulus]: same shape, no divisibility collapse.
-    Non-negative, and below [modulus]. Odd moduli retain the full mix's residue. Even moduli use
+    Non-negative, and below [modulus]. Odd moduli reduce the full mix value. Even moduli use
     [mix lsr 7]: the raw low bits alias whole rows and columns, and an even remainder retains that
-    parity defect. This keeps {!mix} and odd-modulus checksum weights unchanged; it does not promise
-    distinct vectors at arbitrary extents in a bounded value space. *)
+    parity defect. It does not promise distinct vectors at arbitrary extents in a bounded value
+    space. *)
 let residue ~salt ~row_stride ~modulus t =
   if row_stride <= 0 then
     invalid_arg

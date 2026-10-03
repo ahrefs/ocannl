@@ -66,6 +66,13 @@ let () =
     = 1);
   p "a mask matching a trailing factor is still a site"
     (count "let a = Array.init (rows * cols) ~f:(fun i -> i land cols)" = 1);
+  p "a commuted mask reads its right operand" (count "let f v = 1 land (v.(0) + v.(1))" = 1);
+  p "a mask unions axis reads from both operands" (count "let f v = v.(0) land v.(1)" = 1);
+  p "a commuted shifted flat mask is a site"
+    (count
+       "let a = Array.init (m * k) ~f:(fun i -> 1 land (Bench_checksum.mix ~salt:0 (i / k) (i % k) \
+        lsr 16))"
+    = 1);
   p "a mask of one literal axis is out of scope" (count "let f v = v.(0) land 1" = 0);
   (* The nearest legitimate text, which a rule that fires on it would get switched off over. *)
   p "a site converted onto the guard has no remainder left"

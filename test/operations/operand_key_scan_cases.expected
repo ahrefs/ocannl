@@ -13,6 +13,9 @@ a divisor that is a LEADING factor is not unflattening: true
 a shifted mix masked to one bit is a multi-index site: true
 a shifted flat mix masked to one bit is a flat site: true
 a mask matching a trailing factor is still a site: true
+a commuted mask reads its right operand: true
+a mask unions axis reads from both operands: true
+a commuted shifted flat mask is a site: true
 a mask of one literal axis is out of scope: true
 a site converted onto the guard has no remainder left: true
 one literal axis under a remainder is out of scope: true
