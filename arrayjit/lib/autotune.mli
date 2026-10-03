@@ -154,9 +154,9 @@ type sketch_params = {
   sk_pack_prec : Ir.Ops.prec option;
   sk_tile : Ir.Register_tile.t option;
 }
-(** Parameters of one matmul-sketch seed candidate; see the implementation's field docs. Exposed for
-    tests (the seeding pre-filter of gh-ocannl-479 and the mixed grid-outermost shape of
-    gh-ocannl-473 are asserted on directly). *)
+(** Parameters of one matmul-sketch seed candidate; see {!Sketch_families.sketch_params} for field
+    documentation. Exposed for tests (the seeding pre-filter of gh-ocannl-479 and the mixed
+    grid-outermost shape of gh-ocannl-473 are asserted on directly). *)
 
 type matmul_site = {
   m_i : Ir.Indexing.symbol;

@@ -8,9 +8,8 @@
     {!Ir.Schedule_space} and a handful of {!Ir.Schedule} helpers, so it is reviewable, and
     extensible, in isolation from the beam search that consumes it.
 
-    {!Autotune.sketch_seed_params} composes the families (the matmul tree's leaves, else the conv
-    seeds crossed with their epilogue-fusion twins) into the seed list the search actually
-    enumerates.
+    {!sketch_seed_params} composes the families (the matmul tree's leaves, else the conv seeds
+    crossed with their epilogue-fusion twins) into the seed list the search actually enumerates.
 
     Its interface bounds the construction contracts consumed by the search harness: [autotune.ml]
     {e includes} this module, so those contracts are in scope unqualified, and [autotune.mli]
@@ -33,157 +32,25 @@ module Outcome = Ir.Schedule_outcome
     [validate_parallel], hardware limits) and is skipped like any other invalid candidate. *)
 
 type sketch_params = {
-  sk_gpu : bool;  (** Register blocktiling with shared staging vs. CPU operand packing. *)
+  sk_gpu : bool;
   sk_mma : bool;
-      (** Tensorized (tile-MMA) pipeline instead of the scalar blocktiling/packing one: on GPU,
-          Split → (optional cooperative shared Stage) → Tensorize targeting [simdgroup_matrix] /
-          tensor cores; on cc, the whole-triple [Tile_mma] rendered register-tiled (gh-ocannl-469),
-          optionally Grid-parallel over row blocks — or, with [sk_bk > 0], the cache-blocked packed
-          composition (packing Stages feeding the register-tiled kernel;
-          [cpu_mma_pack_sketch_schedule]), itself optionally Grid-parallel ([sk_grid]: hoisted
-          packing runs Grid-outermost; in-kernel packing relies on the renderer's per-chunk tile
-          privatization). Seeded directly because the greedy menu cannot reach the composition: a
-          bare [Tensorize] from the serial baseline (one simdgroup, everything else serial) loses
-          round 1 and the beam discards it before Grid retypes could join it. *)
-  sk_simd : int;  (** MMA lane width ([hardware_limits.mma_simd_width]); 0 when [not sk_mma]. *)
+  sk_simd : int;
   sk_bm : int;
   sk_bn : int;
   sk_bk : int;
-      (** For GPU MMA sketches, [sk_bk = 0] = unstaged (one full-K [Tile_mma] block). For conv GPU
-          seeds, [sk_bn]/[sk_bk] are re-purposed as the pad-to multiples of the column/reduction
-          extents (gh-ocannl-485; 0 = already an intrinsic-tile multiple). *)
   sk_tm : int;
-      (** Register-tile factors; unused on CPU. For conv GPU seeds, [sk_tm] is re-purposed as the
-          row pad-to multiple of the unblocked flavor (gh-ocannl-485; 0 = no pad). *)
   sk_tn : int;
   sk_hoist : bool;
-      (** CPU packing only: pack compile-time-constant operands out of the routine, into the
-          per-device constant pool (gh-ocannl-470). Proposed alongside the in-kernel packing variant
-          so the choice stays measured; applied per operand, only to hoistable (known-constant,
-          host-init-backed) sources. *)
   sk_grid : bool;
-      (** CPU packed composition only ([sk_mma] with [sk_bk > 0]): split [i] into pool-parallel
-          [Grid] row blocks instead of Serial ones. Four shapes, keyed by [sk_hoist] and
-          [sk_pack_rest]:
-
-          - With [sk_hoist] alone, hoisted-only packing: only hoistable operands are packed (at link
-            time, into the constant pool) and the rest are read in place, leaving the kernel body
-            all-materialized; the Grid loop stays outermost (one dispatch spanning the whole GEBP
-            triple). The typical inference GEMM: activations (in place) x constant weights.
-          - With [sk_hoist] and [sk_pack_rest], the mixed grid-outermost shape (gh-ocannl-473):
-            hoistable operands still pack at link time, but a non-hoistable operand gets an
-            in-kernel packing Stage instead of being read in place — its tile lands inside the Grid
-            body and is privatized to per-chunk block-scope storage by the renderer. For the
-            inference GEMM this recovers the A~ pack the hoisted-only shape forfeits (a per-chunk
-            [bm x bk] tile) while keeping the single outermost dispatch.
-          - With [sk_pack_rest] alone, grid-outermost in-kernel packing (gh-ocannl-475): both
-            operands pack inside the Grid body and privatize per chunk — each chunk re-packs its own
-            B~ panel (redundant copies, but one dispatch instead of one per k-block). Needs the
-            tiles under the renderer's per-chunk privatization cap (config
-            [cc_grid_private_bytes_cap]).
-          - Without [sk_hoist] or [sk_pack_rest], in-kernel packing: the per-row-block A~ packing
-            Stage lands inside the Grid body — its tile is privatized to per-chunk block-scope
-            storage by the renderer ([C_syntax.parallel_grid_safe]'s privatization rule) — while the
-            B~ panel packs at the k-block loop outside the Grid and is read-only inside (shared
-            across the row-block chunks, behind a pointer alias under the blocks extension),
-            re-entering the parallel construct once per k-block.
-
-          Proposed alongside the serial flavors so the choice stays measured. *)
   sk_pack_rest : bool;
-      (** Grid-outermost packed compositions only (with [sk_grid]): give non-hoistable operands a
-          non-hoisted in-kernel packing Stage instead of reading them in place, relying on the
-          renderer's per-chunk tile privatization. With [sk_hoist], the mixed shape of gh-ocannl-473
-          (hoisted constant panel + per-chunk pack of the rest); without [sk_hoist], the per-chunk
-          B~ re-packing shape of gh-ocannl-475 — the Grid loop stays outermost (one dispatch
-          spanning the GEBP triple) and every operand packs inside the Grid body. No effect on the
-          serial flavors or the hoisted-only Grid flavor, whose stages are already determined. *)
   sk_conv : bool;
-      (** Convolution site (gh-ocannl-493): the seed instantiates the implicit-GEMM conv pipeline
-          ([cpu_conv_sketch_schedule] / [gpu_conv_sketch_schedule] via [detect_conv]) instead of a
-          matmul one. The packing [Stage] serves as im2col and the micro-kernel is the ordinary
-          [Tile_mma] ([sk_mma] is set so the census expectations apply). On CPU, [sk_grid]
-          pool-parallelizes the outermost batch/spatial loop — on merged segments with the aligned
-          whole-segment geometry of the default preset ([conv_aligned_grid]). On GPU backends with
-          an mma capability ([sk_gpu] with [sk_simd] the lane width), the staged pipeline: outer
-          loops [Grid]-typed, cooperative shared-tile staging, the accumulator fragment resident
-          across the kernel window (gh-ocannl-480). *)
   sk_epilogue : bool;
-      (** Epilogue fusion (gh-ocannl-486): append [Sched.Fuse_epilogue] on the site's output, so the
-          sole-consumer elementwise tail (bias add / activation / residual) folds into the
-          store-back and the whole routine is one kernel — the fused competitor to the fissioned
-          two-kernel form. The matmul family tree's root level (gh-ocannl-613): the fused flavor is
-          refuted with the recognizer's own reason ([Sched.fuse_epilogue_witness]) when the base
-          code has no fusable tail, and otherwise enumerates after every unfused leaf; a candidate
-          whose scheduled form no longer admits the fusion (e.g. materializing unrolls duplicating
-          the store-back) fails its compile and is skipped like any other invalid candidate. On GPU
-          the accumulator moves to workgroup-shared memory (the [shared] flag) so the Metal fragment
-          intrinsics keep firing after placement makes it routine-local. *)
   sk_batch_grid : bool;
-      (** GPU matmul pipelines on batched (rank-3+) sites only (gh-ocannl-643): [Retype] the site's
-          batch loops — [m_bo] and the hoisted [m_bi] — to [Grid], so a batched/multi-head GEMM's
-          batch and head axes launch as grid blocks (folded onto the hardware [.z] dimension, see
-          [Low_level]'s hardware-axis section comment) instead of running as serial loops inside
-          each block. The zeroing nest and every companion nest carry the same per-position
-          annotation, with interior batch loops hoisted identically, so the cross-nest positional
-          thread identity is preserved. Seeded as a {e twin} of each geometry — the serial-batch
-          flavor stays measured, because block-count curves are non-monotone (gh-ocannl-569's probe
-          peaked near 128 blocks and regressed by 1024): the tuner, not a heuristic, decides whether
-          the extra parallelism beats the occupancy it costs. Refuted at the leaf, like every other
-          launch dimension, when the batch extents' product exceeds the backend's [.z] limit
-          ([Schedule.launch_geometry_excess] over [hardware_limits.max_grid_yz], with
-          [max_grid_fold_extent] standing in where the backend advertises none) — the same reading
-          [Schedule.check_hardware_limits_classified] enforces pre-driver for schedules that do not
-          come from these seeds. *)
   sk_batch_inner : bool;
-      (** With [sk_batch_grid], on sites with interior batch loops ([m_bi], the q/k/v projections'
-          heads) only (gh-ocannl-728): bind the interior batch loops {e inside} the row blocks —
-          grid nest order [m_bo; row blocks; m_bi; column blocks] instead of
-          [m_bo; m_bi; row blocks; column blocks]. The interior batch then takes the grid slot next
-          to the column blocks, and the row blocks fold with [m_bo] onto [.z]: consecutive blocks in
-          launch order sweep the heads of one row block, the order the heads-merged twin of the same
-          site launches in (heads on the column grid axis). Move 0 of gh-ocannl-728 measured most of
-          that twin's gain at an unchanged tile and block count — i.e. from this launch order. A
-          third batch flavor rather than the [sk_batch_grid] twin's order, for the same reason the
-          twin is one: the tuner measures, not a heuristic. Always [false] where [sk_batch_grid] is,
-          and on sites without interior batch loops, where the two orders are the same schedule. *)
   sk_swizzle : LL.swizzle_kind option;
-      (** Staged GPU mma sketches only ([sk_mma] with [sk_bk > 0]): store both cooperative operand
-          tiles in this XOR layout (gh-ocannl-481 item 3, D3). Seeded as a {e twin} of each staged
-          seed — same tile sizes, both operands marked — and only for format triples the backend
-          advertises in {!Ir.Backend_intf.mma_capability.mma_staged_layouts}, so a twin is never
-          proposed where the emission would decline it back to the scalar fallback (gh-ocannl-479).
-          The tuner, not a heuristic, decides whether the bank-conflict fix beats the plain tile:
-          the same "propose both, measure" pattern as hoisted packing. Unstaged seeds have no shared
-          tile to swizzle and are never twinned. *)
   sk_depth : int;
-      (** Staged GPU mma/conv sketches: the cooperative stages' software-pipelining depth
-          ([Schedule.Stage ~pipeline_depth], gh-ocannl-487); 1 = unpipelined. Depths > 1 are seeded
-          as {e twins} of each staged seed — same tile sizes, same pipeline, so a timing difference
-          between the two is the prefetch overlap's (against the halved occupancy from the doubled
-          shared-memory footprint), and nothing else's — for exactly the depths the backend
-          advertises in {!Ir.Backend_intf.mma_capability.mma_pipeline_depths}, and only for staged
-          operands of at least 4-byte storage — the async arms' element floor
-          ([C_syntax_config.async_copy]); a narrower twin could only render the portable synchronous
-          form, whose occupancy cost phase 1 measured. The rendering is bitwise identical to the
-          plain sibling, so the tuner's choice is free of numerics concerns. Unstaged seeds have no
-          cooperative copy to pipeline and are never twinned. *)
   sk_pack_prec : Ir.Ops.prec option;
-      (** CPU packing compositions only: the compute precision the site's register-tiled
-          micro-kernel runs at, resolved by the seeding pre-filter through
-          {!Ir.Numerics.cpu_compute_prec} (gh-ocannl-575). The packing [Stage]s mint their tiles at
-          this precision ([Stage.tile_prec]) where it differs from an operand's storage precision,
-          folding the narrow-storage widening into the packing copy — packed panels become e.g. f32
-          scratch, converted once per element at pack time instead of once per read inside the
-          micro-kernel. [None] for GPU seeds and for CPU sites whose storage already is the compute
-          precision. Recorded in the params (rather than re-derived at build time) because schedule
-          construction has no [hardware_limits] and the instantiated schedule must reproduce the
-          seed-time decision exactly. *)
   sk_tile : Ir.Register_tile.t option;
-      (** CPU tensorized pipelines only: the register-tile geometry the [Tensorize] carries
-          (gh-ocannl-619). [None] lets the renderer's ranking model choose
-          ({!Ir.Register_tile.default}); the family tree twins each CPU tensorized leaf with the
-          {!Ir.Register_tile.alternatives} of its micro-kernel extents (the "register-tile" level),
-          so the width the tuner ships is measured rather than modelled. *)
 }
 
 (* Resolve the tensor-core input format from storage precision before seeding a typed matmul/conv
@@ -3817,6 +3684,29 @@ let matmul_family_tree ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limit
 let matmul_seed_params ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits) ~opt site :
     sketch_params list =
   Sspace.leaves (matmul_family_tree ~is_gpu ~is_cpu ~limits ~opt site)
+
+(** {2 The composed seed list} *)
+
+(* The families composed into the seed list the search enumerates: the matmul family when a matmul
+   site is detected, else the convolution family, each with its epilogue-fusion twins. *)
+let sketch_seed_params ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits)
+    (opt : LL.optimized) : sketch_params list =
+  (* Fused-epilogue variants (gh-ocannl-486): when the site's output feeds an eligible elementwise
+     tail, every seed gets a fused twin — the tuner measures fused (one kernel) vs. unfused (the
+     fissioned two-kernel form). The check runs on the base code where the plain accumulation-nest
+     fusion site applies; seeds whose scheduled form no longer admits the fusion fail their
+     candidate compile and are skipped. For the matmul family the fusion choice is the tree's root
+     level (gh-ocannl-613), so its leaves already carry the twins, each flavor under its own
+     preconditions; the conv family is not tree-factored yet and flag-flips its seeds. *)
+  match detect_matmul opt.LL.llc with
+  | Some site -> matmul_seed_params ~is_gpu ~is_cpu ~limits ~opt site
+  | None -> (
+      match conv_seed_params ~is_gpu ~is_cpu ~limits opt with
+      | None -> []
+      | Some (seeds, d) ->
+          if (not (List.is_empty seeds)) && Sched.can_fuse_epilogue ~target:d opt then
+            seeds @ List.map seeds ~f:(fun p -> { p with sk_epilogue = true })
+          else seeds)
 
 (* The exported tree view of the matmul family (site detection included); the conv family factors
    the same way as a follow-up. *)
