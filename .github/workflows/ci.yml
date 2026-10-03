@@ -13,15 +13,15 @@ on:
   pull_request:
     paths-ignore:
       - "docs/**"
-  # Sunday and Wednesday, 03:00 UTC. Twice weekly rather than weekly because
-  # actions/cache evicts entries not read for 7 days: on an exactly-weekly
-  # cadence the Windows opam cache would sit on that boundary and every sweep
-  # would pay the cold-switch cost (~74min against ~62min warm). The second run
-  # also halves the range to bisect when a sweep goes red, which at ~30 commits
-  # a day on master is the dominant triage cost. Runner minutes are free here
-  # (public repo), so the extra run is paid for in nothing but calendar noise.
+  # Daily, 03:00 UTC, so a scheduled red spans about one day of merges: it
+  # carries the only Windows and OCaml-floor coverage, and at 50-150 merges a
+  # span (the twice-weekly cadence before this) a red named no culprit anyone
+  # could find without a long bisect. A daily read also keeps the Windows opam
+  # cache well inside actions/cache's 7-day eviction, so no sweep pays the
+  # cold-switch cost (~74min against ~62min warm). Runner minutes are free
+  # here (public repo).
   schedule:
-    - cron: "0 3 * * 0,3"
+    - cron: "0 3 * * *"
   workflow_dispatch:
     inputs:
       windows_only:
@@ -49,9 +49,8 @@ on:
 # bounds the cost -- at most one master run in flight, so a PR's macOS jobs
 # queue behind at most one master macOS job. A per-commit group would buy a
 # verdict per merge with a queue as deep as the burst on the scarce macOS
-# runners. Naming the merge inside a red span is the CI-red triage routine's
-# job (`notify-triage-routine` below): it dispatches this workflow at commits
-# inside the span through `expected_sha` and bisects.
+# runners. A red span is narrowed by hand, by dispatching this workflow at
+# commits inside it through `expected_sha`.
 #
 # `github.event_name` is in the group so that only like supersedes like. All
 # three non-PR triggers share `refs/heads/master` as their ref, and a master
@@ -59,11 +58,11 @@ on:
 # period's only Windows and OCaml-floor coverage (the same reasoning as
 # `fail-fast: false` below -- cancellation destroys information), and a
 # workflow_dispatch run was launched deliberately, for a rerun, a Windows-only
-# check or a triage bisection probe. Dispatches go further and key on the run
+# check or a probe inside a red span. Dispatches go further and key on the run
 # itself, since in a shared group a newer dispatch would replace an older one
 # still pending, and every dispatch is somebody's open question. Scheduled runs
-# cannot overlap each other in practice (74min worst case against a 3-day
-# cadence), so grouping them is harmless.
+# cannot overlap each other in practice (the Windows job's longest runs
+# against a 24-hour cadence), so grouping them is harmless.
 concurrency:
   group: ci-${{ github.event_name }}-${{ github.ref }}${{ github.event_name == 'workflow_dispatch' && format('-{0}', github.run_id) || '' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -75,7 +74,7 @@ jobs:
       # you nothing about the others -- and cancelling them destroys exactly the
       # information you need. Concretely: the ~25min OCaml-floor job going red
       # would cancel the 62-74min Windows job mid-run, losing that sweep's only
-      # Windows coverage for three or four days. It has already cost us on the
+      # Windows coverage for a day. It has already cost us on the
       # per-PR side, where a macOS failure cancelled ubuntu and left it unclear
       # whether a dependency-solve break was platform-specific.
       fail-fast: false
@@ -234,8 +233,8 @@ jobs:
     # head the run was dispatched at: the run's checks attach to that head and
     # gate it, so a branch advancing between the SHA read and dispatch must
     # fail rather than certify a different commit. On master it may also be an
-    # ancestor of the head, which is how the CI-red triage routine builds a
-    # commit inside a red span without a branch of its own. That run's checks
+    # ancestor of the head, which is how a session narrows a red span without
+    # a branch of its own. That run's checks
     # still attach to master's head, which is why it is named for the commit it
     # built (`run-name`) and fires no triage (`notify-triage-routine`).
     - name: Verify dispatch commit
@@ -485,8 +484,8 @@ jobs:
     # to build anything.
     #
     # Runs regardless of whether `dune runtest` above passed (but not after a
-    # cancellation): Windows runs twice a week, so letting a golden drift mask
-    # the runner's health would cost three days of signal for nothing. It is
+    # cancellation): Windows runs once a day, so letting a golden drift mask
+    # the runner's health would cost a day of signal for nothing. It is
     # last so that the converse cannot happen either -- a broken runner must
     # not abort the sweep's only Windows test coverage.
     #
@@ -668,8 +667,8 @@ jobs:
   # floor) are master reds that no merge event announces. PR runs are excluded:
   # the PR's own session watches those. So is a dispatch that names its commit
   # (`expected_sha`): its dispatcher reads the verdict -- the routine's own
-  # bisection probes among them, which would otherwise fire it again -- and its
-  # sha below would be master's head, not the commit built. Until the ROUTINE_FIRE_URL and
+  # re-run of a red commit among them, which would otherwise fire it again --
+  # and its sha below would be master's head, not the commit built. Until the ROUTINE_FIRE_URL and
   # ROUTINE_FIRE_TOKEN secrets are set this job is a logged no-op, and a failed
   # fire is soft (the routine's daily backstop sweep catches what a lost
   # notification misses; a second red job here would only muddy an already-red
