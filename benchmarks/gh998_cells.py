@@ -5,12 +5,13 @@ prepare --out DIR: bind the revision, executable bytes and fixture digests, run 
 Torch CPU exact oracle. Build bench_mlp.exe and the selected fixture runners beforehand, outside a timing hold.
 dry --out DIR --backends metal,cc: arms-on/off self-test twice per backend (discard timings).
 The self-test uses the same compilation, execution and emission path with a short protocol.
-run --out DIR --backends metal,cc: two reverse-paired rounds of all, none and each family off.
+run --out DIR --backends metal,cc: four reverse-paired rounds of all, none and each family off.
 summarize --out DIR: print the per-workload envelopes against arms-on and the Torch oracle.
 --workloads selects a comma-separated subset (use the same selection for prepare/dry/run).
---rounds selects the repeat count for run (default 2, even); summarize reads the recorded matrix.
+--rounds selects the repeat count for run (default 4, even); summarize reads the recorded matrix.
 Each pair contributes the geometric mean of its two off/on p50 ratios; the table
-reports the median and range of these pair means.
+reports the median and range of these pair means. An independent all-control treatment
+must emit byte-identical sources; its raw ratio spread is reported beside each workload.
 The preflight records the host and CPU; cc measurements on different CPUs are separate rows.
 
 Each cell uses the suite's unchanged f32 protocol, untuned default schedule and fixed compiler
@@ -39,7 +40,7 @@ ROOT = Path(__file__).resolve().parent.parent
 HERE = ROOT / 'benchmarks'
 FAMILIES = ['contract', 'constants', 'sub', 'mul_div', 'pow', 'identities']
 WORKLOADS = ['lenet', 'gpt2_mini', 'gpt2_mini_train']
-TREATMENTS = {'all': 'all', 'none': 'none', **{
+TREATMENTS = {'all': 'all', 'all-control': 'all', 'none': 'none', **{
     'no-' + arm: ','.join(a for a in FAMILIES if a != arm) for arm in FAMILIES}}
 
 
@@ -178,6 +179,8 @@ def ocannl(out, backend, workload, treatment, repeat, dry=False):
     finally:
         if artifacts.exists():
             shutil.move(str(artifacts), str(out / name / 'artifacts'))
+    (out / name / 'sources.json').write_text(json.dumps(source_manifest(out / name), indent=2) + '\n')
+    verify_control(out, backend, workload, repeat, dry=dry)
     expected_workload = 'selftest-tiny' if dry else workload
     if row['backend'] != backend or row['workload'] != expected_workload or row['searched']:
         raise RuntimeError(f'{name}: wrong backend/workload or a searching process')
@@ -189,6 +192,24 @@ def ocannl(out, backend, workload, treatment, repeat, dry=False):
         oracle = result(out / f'torch-{workload}' / 'stdout')['losses']
         envelope(row['losses'], oracle)
     return row
+
+
+
+def source_manifest(base):
+    artifacts = base / 'artifacts'
+    sources = {str(p.relative_to(artifacts)): digest(p)
+               for p in sorted(artifacts.rglob('*')) if p.suffix in {'.c', '.cu', '.metal'}}
+    if not sources:
+        raise RuntimeError(f'{base}: no emitted backend source to verify')
+    return sources
+
+
+def verify_control(out, backend, workload, repeat, dry=False):
+    stem = ('dry-' if dry else '') + f'{backend}-{workload}-'
+    paths = [out / f'{stem}{t}-{repeat}' / 'sources.json' for t in ['all', 'all-control']]
+    if all(p.exists() for p in paths):
+        if json.loads(paths[0].read_text()) != json.loads(paths[1].read_text()):
+            raise RuntimeError(f'{stem}{repeat}: all-control sources differ from all')
 
 
 def envelope(got, ref):
@@ -206,26 +227,43 @@ def summarize(out):
     preflight = json.loads((out / 'preflight.json').read_text())
     if matrix['rounds'] < 2 or matrix['rounds'] % 2:
         raise RuntimeError('summary requires complete forward/reverse round pairs')
-    print(f"Host: {preflight['host']['host']}; CPU: {preflight['host']['cpu']}; revision: {preflight['revision']}; rounds: {matrix['rounds']}.")
+    print(f"Host: {preflight['host']['host']}; CPU: {preflight['host']['cpu']}; revision: {preflight['revision']}; rounds: {matrix['rounds']}; reverse pairs: {matrix['rounds'] // 2}.")
     for workload in matrix['workloads']:
         fixture = preflight['fixtures'][workload]
         print(f"Fixture {workload}: SHA-256 {fixture['sha256']}; {fixture['size']} bytes; recorded origins: {fixture['origins']}.")
     print()
-    print('| backend | workload | arm | off/on paired p50 ratio median (range) | max abs / rel vs on | changed losses | max abs / rel vs Torch |')
-    print('|---|---|---|---|---|---|---|')
+    for backend in matrix['backends']:
+        for workload in matrix['workloads']:
+            controls = []
+            for repeat in range(matrix['rounds']):
+                verify_control(out, backend, workload, repeat)
+                control = out / f'{backend}-{workload}-all-control-{repeat}'
+                baseline = out / f'{backend}-{workload}-all-{repeat}'
+                # Re-read source bytes, so the drift claim cannot be satisfied by stale manifests.
+                if source_manifest(control) != source_manifest(baseline):
+                    raise RuntimeError(f'{control}: drift control is not byte-identical')
+                controls.append(json.loads((control / 'result.json').read_text())['step_ms']['p50'] /
+                                json.loads((baseline / 'result.json').read_text())['step_ms']['p50'])
+            print(f'Drift control {backend}/{workload}: verified byte-identical sources; '
+                  f'raw off/on p50 range {min(controls):.4f}–{max(controls):.4f}.')
+    print()
+    print('| backend | workload | arm | source matches on | off/on paired p50 ratio median (range) | max abs / rel vs on | changed losses | max abs / rel vs Torch |')
+    print('|---|---|---|---|---|---|---|---|')
     for backend in matrix['backends']:
         for workload in matrix['workloads']:
             oracle = result(out / f'torch-{workload}' / 'stdout')['losses']
             for treatment in TREATMENTS:
+                sources_equal = True
                 ratios, vs_on, vs_torch = [], [], []
                 for repeat in range(matrix['rounds']):
                     row = json.loads((out / f'{backend}-{workload}-{treatment}-{repeat}' / 'result.json').read_text())
                     on = json.loads((out / f'{backend}-{workload}-all-{repeat}' / 'result.json').read_text())
+                    sources_equal &= source_manifest(out / f'{backend}-{workload}-{treatment}-{repeat}') == source_manifest(out / f'{backend}-{workload}-all-{repeat}')
                     ratios.append(row['step_ms']['p50'] / on['step_ms']['p50'])
                     vs_on.append(envelope(row['losses'], on['losses']))
                     vs_torch.append(envelope(row['losses'], oracle))
                 paired = [math.sqrt(a * b) for a, b in zip(ratios[::2], ratios[1::2])]
-                print(f'| {backend} | {workload} | {treatment} | {statistics.median(paired):.4f} ({min(paired):.4f}–{max(paired):.4f}) | '
+                print(f'| {backend} | {workload} | {treatment} | {sources_equal} | {statistics.median(paired):.4f} ({min(paired):.4f}–{max(paired):.4f}) | '
                       f'{max(v[0] for v in vs_on):.3g} / {max(v[1] for v in vs_on):.3g} | '
                       f'{max(v[2] for v in vs_on)} | {max(v[0] for v in vs_torch):.3g} / {max(v[1] for v in vs_torch):.3g} |')
 
@@ -236,7 +274,7 @@ def main():
     ap.add_argument('--out', type=Path, required=True)
     ap.add_argument('--backends', default='metal,cc')
     ap.add_argument('--workloads', default=','.join(WORKLOADS))
-    ap.add_argument('--rounds', type=int, default=2)
+    ap.add_argument('--rounds', type=int, default=4)
     ap.add_argument('--deadline-seconds', type=int, default=7200)
     args = ap.parse_args()
     if args.rounds < 2 or args.rounds % 2:
@@ -273,7 +311,7 @@ def main():
         raise RuntimeError('revision, diff, binary or fixture changed since prepare')
     if args.phase == 'dry':
         for backend in backends:
-            for treatment in ['all', 'none']:
+            for treatment in ['all', 'all-control', 'none']:
                 for repeat in range(2):
                     ocannl(out, backend, 'selftest', treatment, repeat, dry=True)
         (out / 'dry-ok.json').write_text(json.dumps(backends) + '\n')
