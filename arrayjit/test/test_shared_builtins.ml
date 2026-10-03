@@ -22,6 +22,7 @@ let same_float x y =
   (Float.is_nan x && Float.is_nan y) || Int64.bits_of_float x = Int64.bits_of_float y
 
 let run mode flags =
+  case mode @@ fun () ->
   let src = Filename.temp_file "ocannl_shared_builtins_" ".c" in
   let dll = Filename.temp_file "ocannl_shared_builtins_" (if Sys.win32 then ".dll" else ".so") in
   let log = Filename.temp_file "ocannl_shared_builtins_" ".log" in
@@ -152,5 +153,5 @@ let run mode flags =
               fp8_single x = Ir.Ops.single_to_fp8 x)))
 
 let () =
-  Verdict.case "default" (fun () -> run "default" "");
-  Verdict.case "emulated" (fun () -> run "emulated" "-U__FLT16_MAX__")
+  run "default" "";
+  run "emulated" "-U__FLT16_MAX__"

@@ -11,6 +11,7 @@ module Ops = Ir.Ops
 let fresh_tmp_file () = Stdlib.Filename.temp_file "ndarray_binary_io_test" ".bin"
 
 let test_round_trip_prec prec_name prec init_f =
+  Verdict.case prec_name @@ fun () ->
   let tmp_file = fresh_tmp_file () in
   let dims = [| 3; 4 |] in
   let nd1 = Nd.create_array ~debug:"test" prec ~dims ~padding:None in
@@ -188,43 +189,31 @@ let test_ingestion () =
 
 let () =
   (* Test each precision type *)
-  Verdict.case "Byte" (fun () ->
-      test_round_trip_prec "Byte" Ops.byte (fun nd idx i ->
-          Nd.set_from_float nd idx (Float.of_int (i % 256))));
-  Verdict.case "Uint16" (fun () ->
-      test_round_trip_prec "Uint16" Ops.uint16 (fun nd idx i ->
-          Nd.set_from_float nd idx (Float.of_int (i * 1000))));
-  Verdict.case "Int32" (fun () ->
-      test_round_trip_prec "Int32" Ops.int32 (fun nd idx i ->
-          Nd.set_from_float nd idx (Float.of_int ((i * 100000) - 500000))));
-  Verdict.case "Uint32" (fun () ->
-      test_round_trip_prec "Uint32" Ops.uint32 (fun nd idx i ->
-          Nd.set_from_float nd idx (Float.of_int (i * 100000))));
-  Verdict.case "Int64" (fun () ->
-      test_round_trip_prec "Int64" Ops.int64 (fun nd idx i ->
-          Nd.set_from_float nd idx (Float.of_int ((i + 1) * 1_000_000_000_000))));
-  Verdict.case "Uint64" (fun () ->
-      test_round_trip_prec "Uint64" Ops.uint64 (fun nd idx i ->
-          Nd.set_from_float nd idx (Float.of_int ((i + 1) * 1_000_000_000_000))));
-  Verdict.case "Half" (fun () ->
-      test_round_trip_prec "Half" Ops.half (fun nd idx i ->
-          Nd.set_from_float nd idx (Float.of_int i *. 0.5)));
-  Verdict.case "Bfloat16" (fun () ->
-      test_round_trip_prec "Bfloat16" Ops.bfloat16 (fun nd idx i ->
-          Nd.set_from_float nd idx (Float.of_int i *. 0.25)));
-  Verdict.case "Fp8" (fun () ->
-      test_round_trip_prec "Fp8" Ops.fp8 (fun nd idx i ->
-          Nd.set_from_float nd idx (Float.of_int (i % 128) *. 0.1)));
-  Verdict.case "Single" (fun () ->
-      test_round_trip_prec "Single" Ops.single (fun nd idx i ->
-          Nd.set_from_float nd idx (Float.of_int i *. 3.14)));
-  Verdict.case "Double" (fun () ->
-      test_round_trip_prec "Double" Ops.double (fun nd idx i ->
-          Nd.set_from_float nd idx (Float.of_int i *. 2.71828)));
+  test_round_trip_prec "Byte" Ops.byte (fun nd idx i ->
+      Nd.set_from_float nd idx (Float.of_int (i % 256)));
+  test_round_trip_prec "Uint16" Ops.uint16 (fun nd idx i ->
+      Nd.set_from_float nd idx (Float.of_int (i * 1000)));
+  test_round_trip_prec "Int32" Ops.int32 (fun nd idx i ->
+      Nd.set_from_float nd idx (Float.of_int ((i * 100000) - 500000)));
+  test_round_trip_prec "Uint32" Ops.uint32 (fun nd idx i ->
+      Nd.set_from_float nd idx (Float.of_int (i * 100000)));
+  test_round_trip_prec "Int64" Ops.int64 (fun nd idx i ->
+      Nd.set_from_float nd idx (Float.of_int ((i + 1) * 1_000_000_000_000)));
+  test_round_trip_prec "Uint64" Ops.uint64 (fun nd idx i ->
+      Nd.set_from_float nd idx (Float.of_int ((i + 1) * 1_000_000_000_000)));
+  test_round_trip_prec "Half" Ops.half (fun nd idx i ->
+      Nd.set_from_float nd idx (Float.of_int i *. 0.5));
+  test_round_trip_prec "Bfloat16" Ops.bfloat16 (fun nd idx i ->
+      Nd.set_from_float nd idx (Float.of_int i *. 0.25));
+  test_round_trip_prec "Fp8" Ops.fp8 (fun nd idx i ->
+      Nd.set_from_float nd idx (Float.of_int (i % 128) *. 0.1));
+  test_round_trip_prec "Single" Ops.single (fun nd idx i ->
+      Nd.set_from_float nd idx (Float.of_int i *. 3.14));
+  test_round_trip_prec "Double" Ops.double (fun nd idx i ->
+      Nd.set_from_float nd idx (Float.of_int i *. 2.71828));
   (* Note: Uint4x32 uses Complex.t carrier with raw byte access *)
-  Verdict.case "Uint4x32" (fun () ->
-      test_round_trip_prec "Uint4x32" Ops.uint4x32 (fun nd idx i ->
-          Nd.set_from_float nd idx (Float.of_int ((i * 7) + 3))));
+  test_round_trip_prec "Uint4x32" Ops.uint4x32 (fun nd idx i ->
+      Nd.set_from_float nd idx (Float.of_int ((i * 7) + 3)));
   (* Test padded tensor *)
   Verdict.case "test_padded" test_padded;
   Verdict.case "test_mapped_at_offset" test_mapped_at_offset;

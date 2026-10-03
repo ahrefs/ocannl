@@ -115,7 +115,7 @@ let () =
   let ids = mk ~dims:[| 2 |] "ids" in
   let result = mk ~dims:[| 2; embed |] "emb" in
 
-  Verdict.case "gather: Where" (fun () ->
+  case "gather: Where" (fun () ->
       (* Positive: Where form. *)
       let pos_where =
         make_local_scope_reduction ~table ~ids ~result ~table_idcs:plain_table_idcs ~vocab
@@ -126,7 +126,7 @@ let () =
       p "scalar-local Where form rewrites to Get_dynamic" (dyn = 1);
       p "scalar-local Where form removes the vocab loop" (loops = 0));
 
-  Verdict.case "gather: multiply with reversed equality" (fun () ->
+  case "gather: multiply with reversed equality" (fun () ->
       (* Positive: multiply form, reversed equality operands. *)
       let pos_mul =
         make_local_scope_reduction ~table ~ids ~result ~table_idcs:plain_table_idcs ~vocab
@@ -136,7 +136,7 @@ let () =
       let dyn, loops = summarize (LL.rewrite_one_hot_reductions pos_mul) in
       p "scalar-local multiply form (reversed Cmpeq) rewrites to Get_dynamic" (dyn = 1 && loops = 0));
 
-  Verdict.case "gather: repeated table index" (fun () ->
+  case "gather: repeated table index" (fun () ->
       (* Negative: loop variable used twice in the table access. *)
       let neg_twice =
         make_local_scope_reduction
@@ -150,7 +150,7 @@ let () =
       let dyn, loops = summarize (LL.rewrite_one_hot_reductions neg_twice) in
       p "double-use of loop var is not rewritten" (dyn = 0 && loops = 1));
 
-  Verdict.case "gather: partial bounds" (fun () ->
+  case "gather: partial bounds" (fun () ->
       (* Negative: partial loop bounds (does not span the full vocabulary axis). *)
       let neg_partial =
         make_local_scope_reduction ~table ~ids ~result ~table_idcs:plain_table_idcs ~vocab
@@ -160,7 +160,7 @@ let () =
       let dyn, loops = summarize (LL.rewrite_one_hot_reductions neg_partial) in
       p "partial loop bounds are not rewritten" (dyn = 0 && loops = 1));
 
-  Verdict.case "gather: affine index" (fun () ->
+  case "gather: affine index" (fun () ->
       (* Negative: genuinely strided table index at the gathered axis. A unit-coefficient
          zero-offset index now normalizes to Iterator and is intentionally eligible. *)
       let neg_affine =
@@ -229,7 +229,7 @@ let () =
   let plain_lhs k d = [| Idx.Iterator d; Idx.Iterator k |] in
   let g_demb ~b ~d ~k:_ = LL.Get (demb, [| Idx.Iterator b; Idx.Iterator d |]) in
 
-  Verdict.case "scatter: FMA" (fun () ->
+  case "scatter: FMA" (fun () ->
       (* Positive: fused FMA accumulator (the shape actual lowering produces). *)
       let pos_fma =
         make_transposed_loop ~d_table ~ids ~g:g_demb ~lhs_idcs:plain_lhs
@@ -240,7 +240,7 @@ let () =
       p "transposed FMA form rewrites to Set_dynamic" (scatters = 1);
       p "transposed FMA form removes the vocab loop" (loops = 0));
 
-  Verdict.case "scatter: Add-of-Where" (fun () ->
+  case "scatter: Add-of-Where" (fun () ->
       (* Positive: Add-of-Where accumulator. *)
       let pos_where =
         make_transposed_loop ~d_table ~ids ~g:g_demb ~lhs_idcs:plain_lhs
@@ -250,7 +250,7 @@ let () =
       let scatters, loops = count_scatters (LL.rewrite_one_hot_reductions pos_where) in
       p "transposed Add-of-Where form rewrites to Set_dynamic" (scatters = 1 && loops = 0));
 
-  Verdict.case "scatter: reads target" (fun () ->
+  case "scatter: reads target" (fun () ->
       (* Negative: the contribution reads the scattered tensor itself — dropping the per-row
          iterations could change what it observes. *)
       let neg_reads_target =
@@ -263,7 +263,7 @@ let () =
       let scatters, loops = count_scatters (LL.rewrite_one_hot_reductions neg_reads_target) in
       p "contribution reading the scattered tensor is not rewritten" (scatters = 0 && loops = 1));
 
-  Verdict.case "scatter: reduction variable in contribution" (fun () ->
+  case "scatter: reduction variable in contribution" (fun () ->
       (* Negative: the contribution mentions the reduction variable. *)
       let neg_g_mentions_k =
         make_transposed_loop ~d_table ~ids
@@ -275,7 +275,7 @@ let () =
       let scatters, loops = count_scatters (LL.rewrite_one_hot_reductions neg_g_mentions_k) in
       p "contribution mentioning the loop var is not rewritten" (scatters = 0 && loops = 1));
 
-  Verdict.case "scatter: partial bounds" (fun () ->
+  case "scatter: partial bounds" (fun () ->
       (* Negative: partial loop bounds (does not span the full written axis). *)
       let neg_partial =
         make_transposed_loop ~d_table ~ids ~g:g_demb ~lhs_idcs:plain_lhs
@@ -285,7 +285,7 @@ let () =
       let scatters, loops = count_scatters (LL.rewrite_one_hot_reductions neg_partial) in
       p "transposed partial bounds are not rewritten" (scatters = 0 && loops = 1));
 
-  Verdict.case "scatter: repeated written index" (fun () ->
+  case "scatter: repeated written index" (fun () ->
       (* Negative: the loop variable indexes the written tensor twice. *)
       let neg_twice =
         make_transposed_loop

@@ -33,6 +33,7 @@ let make_tensor label vals =
     ~batch_dims:[] ~input_dims:[] ~output_dims:[ n ] ()
 
 let run_once tag =
+  Verdict.case tag @@ fun () ->
   Tensor.unsafe_reinitialize ();
   let backend = Backends.backend_module (Backends.get_backend ~backend_name:"cc" ()) in
   let module Backend = (val backend : Ir.Backend_intf.Backend) in
@@ -138,8 +139,8 @@ let run_pooled_values_correct () =
   Verdict.p "pooled q (a*b expect [3.0;8.0]) correct" (Array.equal Float.equal qv [| 3.0; 8.0 |])
 
 let () =
-  Verdict.case "run1" (fun () -> run_once "run1");
-  Verdict.case "run2" (fun () -> run_once "run2");
+  run_once "run1";
+  run_once "run2";
   Verdict.case "run_packed" run_packed;
   Verdict.case "run_pooled_values_correct" run_pooled_values_correct;
   Stdio.printf "done\n"

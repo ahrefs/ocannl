@@ -77,7 +77,7 @@ let () =
 
 (* === Case 1: the Stage B unit-solve guard shape itself === *)
 let () =
-  Verdict.case "unit-solve guard" (fun () ->
+  case "unit-solve guard" (fun () ->
       let producer = mk ~id:1 ~label:"producer" ~dims:[| 6 |] in
       let out = mk ~id:2 ~label:"outc" ~dims:[| 6 |] in
       let t = Idx.get_symbol () in
@@ -115,7 +115,7 @@ let () =
 
 (* === Case 2: symmetric guarding -- array reads in BOTH branches === *)
 let () =
-  Verdict.case "symmetric Where" (fun () ->
+  case "symmetric Where" (fun () ->
       let athen = mk ~id:11 ~label:"athen2" ~dims:[| 4 |] in
       let belse = mk ~id:12 ~label:"belse2" ~dims:[| 4 |] in
       let out = mk ~id:13 ~label:"out2" ~dims:[| 4 |] in
@@ -141,7 +141,7 @@ let () =
    The inner condition's [Get] is reached only when the outer guard holds, so its dereference must
    be gated by the outer guard (Codex P2: the condition must inherit the enclosing guard). *)
 let () =
-  Verdict.case "nested Where" (fun () ->
+  case "nested Where" (fun () ->
       let athen = mk ~id:21 ~label:"athen3" ~dims:[| 4 |] in
       let condrd = mk ~id:22 ~label:"condrd3" ~dims:[| 4 |] in
       let out = mk ~id:23 ~label:"out3" ~dims:[| 4 |] in

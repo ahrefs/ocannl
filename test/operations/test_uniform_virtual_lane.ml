@@ -51,6 +51,7 @@ let has sub s =
   String.is_substring body ~substring:sub
 
 let check ~name ~prec ?input_dims output_dims =
+  Verdict.case name @@ fun () ->
   let ref_vals, ref_src = run ~virtual_:false ~prec ?input_dims output_dims in
   let vir_vals, vir_src = run ~virtual_:true ~prec ?input_dims output_dims in
   let parity =
@@ -74,33 +75,27 @@ let check ~name ~prec ?input_dims output_dims =
   Verdict.claimf "%s: virtual run emits no vectorized store" name (not vir_vec)
 
 let () =
-  Verdict.case "single n=1 (lone partial block)" (fun () ->
-      check ~name:"single n=1 (lone partial block)" ~prec:Ir.Ops.single [ 1 ]);
-  Verdict.case "single n=5 (tail peel)" (fun () ->
-      check ~name:"single n=5 (tail peel)" ~prec:Ir.Ops.single [ 5 ]);
-  Verdict.case "single n=8 (divisible)" (fun () ->
-      check ~name:"single n=8 (divisible)" ~prec:Ir.Ops.single [ 8 ]);
-  Verdict.case "single 5->3 (multi-axis, 15 elements)" (fun () ->
-      check ~name:"single 5->3 (multi-axis, 15 elements)" ~prec:Ir.Ops.single ~input_dims:[ 5 ]
-        [ 3 ]);
+  check ~name:"single n=1 (lone partial block)" ~prec:Ir.Ops.single [ 1 ];
+  check ~name:"single n=5 (tail peel)" ~prec:Ir.Ops.single [ 5 ];
+  check ~name:"single n=8 (divisible)" ~prec:Ir.Ops.single [ 8 ];
+  check ~name:"single 5->3 (multi-axis, 15 elements)" ~prec:Ir.Ops.single ~input_dims:[ 5 ] [ 3 ];
   (* Trailing dim-1 axis (e.g. a conv kernel's single input channel): the strided store projection
      must pair with the innermost non-unit axis -- pairing with the dim-1 axis collapsed the stride
      and left all cells beyond the first block uninitialized. *)
-  Verdict.case "single 9->1 (trailing dim-1 axis)" (fun () ->
-      check ~name:"single 9->1 (trailing dim-1 axis)" ~prec:Ir.Ops.single ~input_dims:[ 1 ] [ 9 ]);
-  Verdict.case "half n=9" (fun () -> check ~name:"half n=9" ~prec:Ir.Ops.half [ 9 ]);
+  check ~name:"single 9->1 (trailing dim-1 axis)" ~prec:Ir.Ops.single ~input_dims:[ 1 ] [ 9 ];
+  check ~name:"half n=9" ~prec:Ir.Ops.half [ 9 ];
   (* bfloat16 pins that the packed path exists at this precision on every backend -- a missing
      vector block type shows up here as a compile-time refusal. It cannot police the element type
      itself: both runs go through the same builtin, so a builtin returning raw bits (which the
      assignment to a bfloat16 cell would convert by value) still shows parity. The value-level check
      for that lives in bf16_ops.ml. *)
-  Verdict.case "bfloat16 n=9" (fun () -> check ~name:"bfloat16 n=9" ~prec:Ir.Ops.bfloat16 [ 9 ]);
+  check ~name:"bfloat16 n=9" ~prec:Ir.Ops.bfloat16 [ 9 ];
   (* uint32 exercises the unsigned vec/lane builtins (full-range bit patterns). *)
-  Verdict.case "uint32 n=5" (fun () -> check ~name:"uint32 n=5" ~prec:Ir.Ops.uint32 [ 5 ]);
+  check ~name:"uint32 n=5" ~prec:Ir.Ops.uint32 [ 5 ];
   (* uint64 is the 2-lanes-per-block end of the range, and pins the widest element type against a
      missing vector block entry -- the same compile-time refusal the bfloat16 case guards above. *)
-  Verdict.case "uint64 n=3" (fun () -> check ~name:"uint64 n=3" ~prec:Ir.Ops.uint64 [ 3 ]);
-  Verdict.case "double n=3" (fun () -> check ~name:"double n=3" ~prec:Ir.Ops.double [ 3 ]);
+  check ~name:"uint64 n=3" ~prec:Ir.Ops.uint64 [ 3 ];
+  check ~name:"double n=3" ~prec:Ir.Ops.double [ 3 ];
   (* fp8 is the stress case: 16 lanes per block, and random bit patterns include NaNs (compared by
      bits, not value). *)
-  Verdict.case "fp8 n=17" (fun () -> check ~name:"fp8 n=17" ~prec:Ir.Ops.fp8 [ 17 ])
+  check ~name:"fp8 n=17" ~prec:Ir.Ops.fp8 [ 17 ]

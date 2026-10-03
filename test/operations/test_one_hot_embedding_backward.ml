@@ -151,7 +151,7 @@ let run_backward ?name ids =
   (Context.get_values ctx (grad_of c), update)
 
 let () =
-  Verdict.case "float ids" (fun () ->
+  case "float ids" (fun () ->
       (* --- Float ids, all in range --- *)
       let id_values = [| 1.; 3.; 0. |] in
       let ids =
@@ -178,7 +178,7 @@ let () =
       in
       p "generated C has no vocabulary reduction loop (zero-init only)" (vocab_loop_count <= 1));
 
-  Verdict.case "out-of-range and fractional ids" (fun () ->
+  case "out-of-range and fractional ids" (fun () ->
       (* --- Out-of-range and fractional ids contribute nothing --- *)
       let id_oob = [| 2.; Float.of_int vocab; 1.5 |] in
       let ids_oob =
@@ -188,7 +188,7 @@ let () =
       p_all2 "OOB and fractional ids: untouched rows stay zero, in-range rows correct" grads_oob
         (expected_grads id_oob) ~f:approx);
 
-  Verdict.case "uint32 ids" (fun () ->
+  case "uint32 ids" (fun () ->
       (* --- uint32 ids: integer guard flavor (no Trunc), OOB still skipped --- *)
       let id_ints = [ 1; 3; vocab (* out of [0, vocab) *) ] in
       let ids_int = Nn_blocks.class_ids_of_int_list ~label:"ids_int" id_ints in
@@ -221,7 +221,7 @@ let () =
       p "uint32 ids: vocabulary loop is eliminated" (vocab_loops_int = 0);
       p "uint32 ids: scatter guard has no integrality Trunc" (guard_truncs_int = 0));
 
-  Verdict.case "ordinary matmul" (fun () ->
+  case "ordinary matmul" (fun () ->
       (* --- Fallback: an ordinary matmul backward is not rewritten --- *)
       let x =
         TDSL.ndarray

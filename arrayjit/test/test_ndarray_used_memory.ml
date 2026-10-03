@@ -28,6 +28,7 @@ let alloc_hold_drop ~n ~alloc =
   (while_held - before, after - before)
 
 let check name ~n ~bytes_per_array ~alloc =
+  Verdict.case name @@ fun () ->
   let held, residual = alloc_hold_drop ~n ~alloc in
   Stdio.printf "%s: %d arrays of %d bytes each\n" name n bytes_per_array;
   Verdict.p "  delta while held = allocated bytes" (held = n * bytes_per_array);
@@ -39,14 +40,12 @@ let () =
   let prec = Ops.single in
   let bytes_of dims = Array.fold dims ~init:1 ~f:( * ) * Ops.prec_in_bytes prec in
   let create_dims = [| 128; 1024 |] in
-  Verdict.case "create_array" (fun () ->
-      check "create_array" ~n:4 ~bytes_per_array:(bytes_of create_dims) ~alloc:(fun () ->
-          Nd.create_array ~debug:"used_memory" prec ~dims:create_dims ~padding:None));
+  check "create_array" ~n:4 ~bytes_per_array:(bytes_of create_dims) ~alloc:(fun () ->
+      Nd.create_array ~debug:"used_memory" prec ~dims:create_dims ~padding:None);
   (* [init_array] is slow (unboxing at each index), hence the smaller arrays. *)
   let init_dims = [| 32; 256 |] in
-  Verdict.case "init_array" (fun () ->
-      check "init_array" ~n:3 ~bytes_per_array:(bytes_of init_dims) ~alloc:(fun () ->
-          Nd.init_array ~debug:"used_memory" prec ~dims:init_dims ~padding:None ~f:(fun _ -> 1.0)));
+  check "init_array" ~n:3 ~bytes_per_array:(bytes_of init_dims) ~alloc:(fun () ->
+      Nd.init_array ~debug:"used_memory" prec ~dims:init_dims ~padding:None ~f:(fun _ -> 1.0));
   (* A reshaped view shares the source's bytes, so accounting must outlive the source wrapper: the
      bytes are still held while only the view is reachable. [Tnode.create_with_reshape] is exactly
      that situation -- it hands out the view and drops the array it reshaped. *)
