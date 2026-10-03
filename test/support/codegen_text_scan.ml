@@ -1000,7 +1000,7 @@ let params_derived_in ~params body =
     the body would attribute literals even when the caller supplies ordinary text. *)
 let predicates scope ~emitters ~aliases ~tainted bindings =
   let consumed = ref [] in
-  let uncertain_capture = ref false in
+  let uncertain_source = ref false in
   let predicates =
     List.concat_map bindings ~f:(fun { binding_id; names; params; body } ->
         match (names, params) with
@@ -1086,11 +1086,21 @@ let predicates scope ~emitters ~aliases ~tainted bindings =
                 else if
                   Option.value_map tested ~default:false ~f:(fun tested ->
                       not (Set.is_empty (derives_from_capture tested)))
-                then uncertain_capture := true
+                then uncertain_source := true
               in
-              List.iter
-                (match text_params with [] -> [ None ] | ps -> List.map ps ~f:Option.some)
-                ~f:consider_param
+              (* A rebound source name cannot prove that this test uses the caller's parameter. Keep
+                 that uncertainty visible instead of attributing the caller marker to it. *)
+              if
+                Option.value_map tested ~default:false ~f:(fun tested ->
+                    (not (generated_locally tested))
+                    && not (Set.is_empty (Set.inter (derived_params tested) !rebound)))
+              then (
+                consumed := span text.pexp_loc :: !consumed;
+                uncertain_source := true)
+              else
+                List.iter
+                  (match text_params with [] -> [ None ] | ps -> List.map ps ~f:Option.some)
+                  ~f:consider_param
             in
             let iterator =
               object
@@ -1112,7 +1122,7 @@ let predicates scope ~emitters ~aliases ~tainted bindings =
             List.rev !result
         | _ -> [])
   in
-  (predicates, !consumed, !uncertain_capture)
+  (predicates, !consumed, !uncertain_source)
 
 type pin = Literal of string | Format of string | Interpolated of string | Computed
 
@@ -1250,7 +1260,7 @@ let classify_source ~emitters ~path ~contents =
   else
     let seeds = buffer_destinations ~emitters ~aliases structure in
     let tainted = tainted_names scope ~emitters ~aliases ~seeds bindings in
-    let predicates, consumed, uncertain_capture =
+    let predicates, consumed, uncertain_source =
       predicates scope ~emitters ~aliases ~tainted bindings
     in
     let predicates_at callee =
@@ -1464,7 +1474,7 @@ let classify_source ~emitters ~path ~contents =
         site_path = path;
         pins = List.filter_map all ~f:render_pin |> List.dedup_and_sort ~compare:String.compare;
         partial =
-          uncertain_capture || !unattributed
+          uncertain_source || !unattributed
           || List.exists all ~f:(function Computed -> true | _ -> false);
         direct = !reads_direct;
         rendered = !renders;

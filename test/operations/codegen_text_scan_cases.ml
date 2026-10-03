@@ -471,6 +471,13 @@ let () =
   String.is_substring (Generated.read routine) ~substring:"callback marker"
 let () = List.iter ["r"] ~f:check|ocaml},
       {|"callback marker" +partial|} );
+    ( "a shadowed source parameter does not validate the caller marker",
+      {ocaml|let has ~src ~marker =
+  describe src;
+  let src = backend_name in
+  String.is_substring src ~substring:marker
+let () = p "ordinary" (has ~src:(Generated.read "r") ~marker:"not a pin")|ocaml},
+      "+partial" );
     ( "forwarding wrappers with generated defaults stay visibly partial",
       {ocaml|let has src ~marker = String.is_substring src ~substring:marker
 let check ?(src = Generated.read "r") ~marker () = has src ~marker
