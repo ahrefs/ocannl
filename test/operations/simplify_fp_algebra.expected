@@ -2,8 +2,8 @@ all-off preserves each floating-point expression: true
 each family changes its witness when selected: true
 each family leaves other witnesses alone: true
 default matches explicit all: true
-reassociate excludes only contraction: true
 all-off retains signed-zero addition: true
 constant folding still runs all-off: true
-integer canonicalization still runs all-off: true
+integer zero identity still runs all-off: true
+integer constant reassociation still runs all-off: true
 unknown family is refused: true

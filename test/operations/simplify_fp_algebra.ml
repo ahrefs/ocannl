@@ -40,21 +40,27 @@ let () =
       match default with
       | LL.Set { llsc; _ } -> LL.equal_scalar_t llsc (simplify "all" rhs)
       | _ -> false);
-  p_all "reassociate excludes only contraction" cases ~f:(fun (family, rhs) ->
-      LL.equal_scalar_t (simplify "reassociate" rhs)
-        (simplify (if String.equal family "contract" then "none" else "all") rhs));
   let add_zero = add x (c 0.) in
   p "all-off retains signed-zero addition" (LL.equal_scalar_t add_zero (simplify "none" add_zero));
   p "constant folding still runs all-off"
     (LL.equal_scalar_t (c 5.) (simplify "none" (add (c 2.) (c 3.))));
   let imk = node_factory ~prec:Ops.int64 ~first_id:99900 ~dims:[| 1 |] () in
-  let integer_out = imk "integer_out" in
-  let index = LL.Embed_index (fixed 7) in
-  let rhs = LL.Binop (Ops.Add, (index, Ops.int64), (LL.Constant 0., Ops.int64)) in
-  p "integer canonicalization still runs all-off"
-    (match LL.simplify_llc ~fp_algebra:"none" [] (set_at integer_out (fixed 0) rhs) with
-    | LL.Set { llsc = LL.Constant 7.; _ } -> true
-    | _ -> false);
+  let integer_out = imk "integer_out" and integer_input = imk "integer_input" in
+  let i = get integer_input [| fixed 0 |] in
+  let ibinop op a b = LL.Binop (op, (a, Ops.int64), (b, Ops.int64)) in
+  let isimplify rhs =
+    match LL.simplify_llc ~fp_algebra:"none" [] (set_at integer_out (fixed 0) rhs) with
+    | LL.Set { llsc; _ } -> llsc
+    | _ -> failwith "integer simplification lost the assignment"
+  in
+  p "integer zero identity still runs all-off"
+    (LL.equal_scalar_t i (isimplify (ibinop Ops.Add i (c 0.))));
+  let integer_constants = [ (Ops.Add, 5.); (Ops.Mul, 6.) ] in
+  p_all "integer constant reassociation still runs all-off" integer_constants
+    ~f:(fun (op, combined) ->
+      LL.equal_scalar_t
+        (isimplify (ibinop op (ibinop op i (c 2.)) (c 3.)))
+        (ibinop op (c combined) i));
   p "unknown family is refused"
     (try
        ignore (simplify "typo" x);

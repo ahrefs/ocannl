@@ -1190,18 +1190,18 @@ val reads_scope_before_set : scope_id -> t -> bool
     whether a [Local_scope] or [Declare_local] declaration needs a zero initializer. *)
 
 val simplify_llc : ?fp_algebra:string -> Indexing.static_symbol list -> t -> t
-(** [fp_algebra] overrides the development [simplify_fp_algebra] selection for focused tests. The
-    default keeps all existing arms; ["none"] disables only floating-point algebra. See
-    [ocannl_config.reference] for the six families and group aliases.
-
-    Top-down algebraic simplification with interval-driven comparison folding (in particular, it
+(** Top-down algebraic simplification with interval-driven comparison folding (in particular, it
     erases [If] guards whose conditions the loop extents prove). The interval environment is
     narrowed by every enclosing [If] condition that is a conjunction of integer-affine index
     comparisons (gh-ocannl-566), so a guard the statement guard proves folds too — what is
     simplified under a condition is valid only where that condition holds. Called internally by
     [optimize]; exposed for [Schedule.apply], whose transforms construct guards after the pipeline's
     simplify already ran (docs/proposals/schedule-ir-optops.md §2), and for testing. Pure and
-    idempotent. *)
+    idempotent.
+
+    [fp_algebra] overrides the development [simplify_fp_algebra] selection for focused tests. The
+    default keeps all existing arms; ["none"] disables only floating-point algebra. See
+    [ocannl_config.reference] for the six families. *)
 
 val rewrite_one_hot_reductions : ?static_indices:Indexing.static_symbol list -> t -> t
 (** gh-343: rewrites the narrow one-hot embedding pattern -- an [Add] reduction over a loop variable

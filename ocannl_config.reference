@@ -1291,8 +1291,8 @@
 # Comma-separated enabled families: contract (FMA), constants (Add/Mul constant reassociation),
 # sub (subtraction re-parenthesizing), mul_div (division constant folds and mul/div interchange),
 # pow (integer-power unrolling), identities (zero Add/Sub/Mul/Div folds).
-# all keeps today's behaviour; none disables all families; reassociate selects every family
-# except contract. Integer canonicalization and constant-constant folding remain enabled.
+# all keeps today's behaviour; none disables all families. Integer canonicalization and
+# constant-constant folding remain enabled.
 # This is a measurement control, not a promise of strict IEEE evaluation: backend compiler
 # math settings still apply. No profile changes it; the later rewrite-tier split is separate.
 #simplify_fp_algebra=all

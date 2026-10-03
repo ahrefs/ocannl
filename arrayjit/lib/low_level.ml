@@ -4101,12 +4101,10 @@ let simplify_llc ?fp_algebra static_indices llc =
         match String.strip token with
         | "all" -> families
         | "none" -> []
-        | "reassociate" -> List.tl_exn families
         | name when List.mem families name ~equal:String.equal -> [ name ]
         | name -> raise (Utils.User_error ("Unknown simplify_fp_algebra family: " ^ name)))
   in
   let enabled name = List.mem selected name ~equal:String.equal in
-  (* Preserve the integer canonicalizer even in an all-off floating-point ablation. *)
   let constants = enabled "constants" in
   let sub = enabled "sub" and mul_div = enabled "mul_div" in
   let identities = enabled "identities" and contract = enabled "contract" in
@@ -4185,6 +4183,8 @@ let simplify_llc ?fp_algebra static_indices llc =
                 body = loop_proc ~ienv:(ienv_narrow_from_cond ienv ~cprec c') body;
               })
   and loop_scalar ~ienv ((llsc, prec) : scalar_t * Ops.prec) : scalar_t * Ops.prec =
+    (* Preserve the integer canonicalizer even in an all-off floating-point ablation. *)
+    let licensed family = family || not (Ops.is_float prec) in
     let loop_scalar = loop_scalar ~ienv in
     let loop_proc = loop_proc ~ienv in
     let local_scope_body, llsc' =
@@ -4242,9 +4242,9 @@ let simplify_llc ?fp_algebra static_indices llc =
     | Binop (Add, (llsc, prec1), (Constant 0., _))
     | Binop (Sub, (llsc, prec1), (Constant 0., _))
     | Binop (Add, (Constant 0., _), (llsc, prec1))
-      when (not (Ops.is_float prec)) || identities ->
+      when licensed identities ->
         loop_scalar (llsc, prec1)
-    | Binop (Sub, (Constant 0., _), (llsc, prec1)) when (not (Ops.is_float prec)) || identities ->
+    | Binop (Sub, (Constant 0., _), (llsc, prec1)) when licensed identities ->
         loop_scalar (Binop (Mul, (Constant (-1.), prec1), (llsc, prec1)), prec1)
     | Binop (Mul, (llsc, prec1), (Constant 1., _))
     | Binop (Div, (llsc, prec1), (Constant 1., _))
@@ -4253,7 +4253,7 @@ let simplify_llc ?fp_algebra static_indices llc =
     | Binop (Mul, (_, prec1), (Constant 0., _))
     | Binop (Div, (Constant 0., _), (_, prec1))
     | Binop (Mul, (Constant 0., _), (_, prec1))
-      when (not (Ops.is_float prec)) || identities ->
+      when licensed identities ->
         (Constant 0., prec1)
     | Binop
         ( Add,
@@ -4265,29 +4265,29 @@ let simplify_llc ?fp_algebra static_indices llc =
           (Constant c1, prec1),
           ( Binop (Add, (Constant c2, prec2), llsc), prec3
           | Binop (Add, llsc, (Constant c2, prec2)), prec3 ) )
-      when (not (Ops.is_float prec)) || constants ->
+      when licensed constants ->
         loop_scalar (Binop (Add, (Constant (c1 +. c2), Ops.promote_prec prec1 prec2), llsc), prec3)
     | Binop
         ( Sub,
           ( Binop (Add, (Constant c2, prec2), llsc), prec3
           | Binop (Add, llsc, (Constant c2, prec2)), prec3 ),
           (Constant c1, prec1) )
-      when (not (Ops.is_float prec)) || constants ->
+      when licensed constants ->
         loop_scalar (Binop (Add, (Constant (c2 -. c1), Ops.promote_prec prec2 prec1), llsc), prec3)
     | Binop
         ( Sub,
           (Constant c1, prec1),
           ( Binop (Add, (Constant c2, prec2), llsc), prec3
           | Binop (Add, llsc, (Constant c2, prec2)), prec3 ) )
-      when (not (Ops.is_float prec)) || constants ->
+      when licensed constants ->
         loop_scalar (Binop (Add, (Constant (c1 -. c2), Ops.promote_prec prec1 prec2), llsc), prec3)
     | Binop (Add, llv1, (Binop (Sub, llv2, llv3), prec3))
     | Binop (Add, (Binop (Sub, llv2, llv3), prec3), llv1)
-      when (not (Ops.is_float prec)) || sub ->
+      when licensed sub ->
         loop_scalar (Binop (Sub, (Binop (Add, llv1, llv2), prec), llv3), prec3)
-    | Binop (Sub, llv1, (Binop (Sub, llv2, llv3), prec3)) when (not (Ops.is_float prec)) || sub ->
+    | Binop (Sub, llv1, (Binop (Sub, llv2, llv3), prec3)) when licensed sub ->
         loop_scalar (Binop (Sub, (Binop (Add, llv1, llv3), prec), llv2), prec3)
-    | Binop (Sub, (Binop (Sub, llv1, llv2), prec1), llv3) when (not (Ops.is_float prec)) || sub ->
+    | Binop (Sub, (Binop (Sub, llv1, llv2), prec1), llv3) when licensed sub ->
         loop_scalar (Binop (Sub, llv1, (Binop (Add, llv2, llv3), prec1)), prec1)
     | Binop
         ( Mul,
@@ -4299,7 +4299,7 @@ let simplify_llc ?fp_algebra static_indices llc =
           (Constant c1, prec1),
           ( Binop (Mul, (Constant c2, prec2), llsc), prec3
           | Binop (Mul, llsc, (Constant c2, prec2)), prec3 ) )
-      when (not (Ops.is_float prec)) || constants ->
+      when licensed constants ->
         loop_scalar (Binop (Mul, (Constant (c1 *. c2), Ops.promote_prec prec1 prec2), llsc), prec3)
     | Binop
         ( Div,
@@ -4326,7 +4326,7 @@ let simplify_llc ?fp_algebra static_indices llc =
         let ((v1_scalar, _) as v1) = loop_scalar llv1 in
         let v2 = loop_scalar llv2 in
         let result = (Binop (ToPowOf, v1, v2), prec) in
-        if (not !optimize_integer_pow) || (Ops.is_float prec && not pow) then result
+        if (not !optimize_integer_pow) || not (licensed pow) then result
         else
           match v2 with
           | Constant c, _ when Float.is_integer c ->
