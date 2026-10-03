@@ -485,6 +485,8 @@ let queue_depth_cap_for_backend = function
   | "cuda" | "hip" -> max_queue_depth
   | _ -> legacy_queue_depth
 
+let retry_contended_window_for_backend backend = String.equal backend "metal"
+
 (* The depth is calibrated from timed single launches, not from the warmup: the warmup absorbs lazy
    initialization and module loading, so on a fast kernel it can overestimate by enough to collapse
    the depth to 1 and silently turn a queued search into an isolated one. The synchronized-single
@@ -797,6 +799,11 @@ let on_timed_window :
     (samples:int -> reused:int -> wall_ms:float -> median_wall_ms:float -> unit) ref =
   ref (fun ~samples:_ ~reused:_ ~wall_ms:_ ~median_wall_ms:_ -> ())
 
+(* A discarded contention window, immediately before its one fresh retry (gh-ocannl-1060).
+   [on_timed_window] describes only the returned window. These counts account for the extra
+   dispatches without treating the discarded window as a candidate refusal. *)
+let on_timing_retry : (samples:int -> reused:int -> unit) ref = ref (fun ~samples:_ ~reused:_ -> ())
+
 (* Which of the calibration's branches dispatched a batch probe. *)
 type calibration_probe_role =
   | Provisional_probe
@@ -827,7 +834,7 @@ let on_calibration_probe : (calibration_probe -> unit) ref = ref (fun _ -> ())
    returns the wall in milliseconds. Separated from [time_routine] so a test can drive the whole
    policy -- which depth a call settles on, which window it times, how many launches each costs --
    on an injected clock, with no device and no machine-dependent routine (gh-ocannl-1074). *)
-let calibrate_and_time ~timing ~repeats ~queue_depth_cap ~batch =
+let calibrate_and_time ~retry_contended ~timing ~repeats ~queue_depth_cap ~batch =
   (* Every finite positive batch minimum the calibration measured, as [(depth, wall)]: the evidence
      that bounds an unresolved calibration's fallback depth. *)
   let observed = ref [] and no_supported_batch = ref false in
@@ -1179,31 +1186,51 @@ let calibrate_and_time ~timing ~repeats ~queue_depth_cap ~batch =
      place anyway: a candidate whose minimum falls just short settles at depth 2 and reads the
      batched, amortized cost. The candidates reuse exists for sit far above the target (55-70 ms
      gpt2_mini steps against 10 ms), where the condition holds with or without the conditioning. *)
+  let time_window reused =
+    let timed_wall_ms = ref (List.fold reused ~init:0. ~f:(fun total s -> total +. s.contention_ms))
+    and timed_batches = ref (List.length reused)
+    and timed_walls = ref (List.rev_map reused ~f:(fun s -> s.contention_ms)) in
+    let result =
+      window_result
+      @@ sample_window ~prior:reused ~repeats
+           ~sample:(fun () ->
+             let wall = batch depth in
+             timed_wall_ms := !timed_wall_ms +. wall;
+             timed_walls := wall :: !timed_walls;
+             Int.incr timed_batches;
+             { per_launch_ms = wall /. Float.of_int depth; contention_ms = wall })
+           ()
+    in
+    let report () =
+      let median_wall_ms =
+        let sorted = Array.of_list !timed_walls in
+        Array.sort sorted ~compare:Float.compare;
+        let n = Array.length sorted in
+        if n = 0 then 0.
+        else if n % 2 = 1 then sorted.(n / 2)
+        else (sorted.((n / 2) - 1) +. sorted.(n / 2)) /. 2.
+      in
+      !on_timed_window ~samples:!timed_batches ~reused:(List.length reused) ~wall_ms:!timed_wall_ms
+        ~median_wall_ms
+    in
+    (result, report)
+  in
   let reused = if depth = 1 then singles else [] in
-  let timed_wall_ms = ref (List.fold reused ~init:0. ~f:(fun total s -> total +. s.contention_ms))
-  and timed_batches = ref (List.length reused)
-  and timed_walls = ref (List.rev_map reused ~f:(fun s -> s.contention_ms)) in
-  let result =
-    window_result
-    @@ sample_window ~prior:reused ~repeats
-         ~sample:(fun () ->
-           let wall = batch depth in
-           timed_wall_ms := !timed_wall_ms +. wall;
-           timed_walls := wall :: !timed_walls;
-           Int.incr timed_batches;
-           { per_launch_ms = wall /. Float.of_int depth; contention_ms = wall })
-         ()
+  let ((result, _) as window) = time_window reused in
+  let result, report =
+    if
+      retry_contended && Poly.equal timing Queued && result.contended && Float.is_finite result.ms
+      && Float.is_positive result.ms
+    then (
+      (* Keep the depth and the 2x-majority rule. A fresh independent window can outlast a transient
+         Metal scheduler burst; mixing windows would instead dilute its refusal evidence. Depth-1
+         retries must likewise dispatch fresh singles rather than resume the refused ones. *)
+      logf "queued timing retry: contention refused the first window (%d samples)" result.samples;
+      !on_timing_retry ~samples:result.samples ~reused:(List.length reused);
+      time_window [])
+    else window
   in
-  let median_wall_ms =
-    let sorted = Array.of_list !timed_walls in
-    Array.sort sorted ~compare:Float.compare;
-    let n = Array.length sorted in
-    if n = 0 then 0.
-    else if n % 2 = 1 then sorted.(n / 2)
-    else (sorted.((n / 2) - 1) +. sorted.(n / 2)) /. 2.
-  in
-  !on_timed_window ~samples:!timed_batches ~reused:(List.length reused) ~wall_ms:!timed_wall_ms
-    ~median_wall_ms;
+  report ();
   if !no_supported_batch then (
     logf
       "queued timing refused: every batched calibration probe read over the %.1f ms target, so \
@@ -1254,6 +1281,7 @@ let time_routine ?(tag_failures = false) ~timing ~repeats cctx routine =
         Mtime.Span.to_float_ns (Mtime_clock.count c0) /. 1e6
       in
       calibrate_and_time ~timing ~repeats
+        ~retry_contended:(retry_contended_window_for_backend (Context.backend_name cctx))
         ~queue_depth_cap:(queue_depth_cap_for_backend (Context.backend_name cctx))
         ~batch)
 

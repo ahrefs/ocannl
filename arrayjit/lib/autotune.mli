@@ -1578,7 +1578,10 @@ val time_routine :
     of the timed loop reports when most of ITS samples were stalled, and the tuner refuses such a
     candidate measurement rather than ranking and caching it (gh-ocannl-888). Since the budget is
     per-launch rather than batch wall, queued timing can spend up to [max 64 repeats] batches on a
-    fast candidate; [max_timing_runs] bounds the top-up beyond the caller's requested floor.
+    fast candidate; [max_timing_runs] bounds the top-up beyond the caller's requested floor. Metal
+    queued timing retries a contention-refused window once at the same depth with fresh samples
+    (gh-ocannl-1060). The retry faces the same admission rule; only its outcome reaches the search's
+    refusal accounting. Other backends and isolated timing take no retry.
 
     With [~tag_failures:true] the pre-dispatch validation, the launches and the synchronization are
     wrapped in their {!Ir.Schedule_outcome} phases, which is what lets a caller's
@@ -1586,16 +1589,16 @@ val time_routine :
     propagate raw. Timing dispatches the routine repeatedly against live buffers, so an accumulating
     routine must be timed on a scratch lineage (see [tune]'s [?timing_ctx]) if its inputs matter
     afterwards. [Queued] raises how many such dispatches happen. For [repeats <= 64], the maxima are
-    65 under [Isolated] and, under [Queued], 352321 on CUDA/HIP or 12865 on cc/Metal. The CUDA/HIP
-    bound includes warmup, 64 single-launch calibration runs, at most
+    65 under [Isolated] and, under [Queued], 352321 on CUDA/HIP, 12865 on cc or 25665 on Metal. The
+    CUDA/HIP bound includes warmup, 64 single-launch calibration runs, at most
     {!queue_calibration_max_probes} (nine) {!queue_batch_probe_runs}-sample calibration probes (the
     provisional probe, four validations, a confirmation, its stall retry, a sampled shallower
     crossing, and the rescue) and 64 timed batches at the cap; cc/Metal have no batch probes. In
     general the queued bounds are [65 + 2048 * (108 + max 64 repeats)] on CUDA/HIP and
-    [65 + 200 * max 64 repeats] on cc/Metal. Thus a routine whose values grow per run reaches larger
-    ones. That is a fact about the scratch buffers, not about the measurement: the cap bounds each
-    in-memory queue while the ~25 ms budget accumulates per-launch samples, and a candidate's time
-    is not what it accumulated. *)
+    [65 + 200 * max 64 repeats] on cc, twice the timed part on Metal for its one retry. Thus a
+    routine whose values grow per run reaches larger ones. That is a fact about the scratch buffers,
+    not about the measurement: the cap bounds each in-memory queue while the ~25 ms budget
+    accumulates per-launch samples, and a candidate's time is not what it accumulated. *)
 
 val on_batch_depth : (int -> calibration_samples:int -> unit) ref
 (** Observation seam for the timing tests (gh-ocannl-851), called by each {!time_routine} call with
@@ -1609,13 +1612,29 @@ val on_batch_depth : (int -> calibration_samples:int -> unit) ref
     it. *)
 
 val calibrate_and_time :
-  timing:timing_mode -> repeats:int -> queue_depth_cap:int -> batch:(int -> float) -> timing_result
+  retry_contended:bool ->
+  timing:timing_mode ->
+  repeats:int ->
+  queue_depth_cap:int ->
+  batch:(int -> float) ->
+  timing_result
 (** {!time_routine} after its warmup — the calibration and the timed loop, seams included — with the
     device reduced to [batch depth], which must dispatch [depth] launches back to back, synchronize
     once and return the wall in milliseconds. [queue_depth_cap] is {!queue_depth_cap_for_backend}'s
     value for the backend being modelled; it also selects between the CUDA/HIP affine calibration
     and the historical cc/Metal single estimate. Exposed so a test can drive the whole timing policy
-    on an injected clock and count its launches exactly (gh-ocannl-1074). *)
+    on an injected clock and count its launches exactly (gh-ocannl-1074). [retry_contended] is
+    {!retry_contended_window_for_backend}'s value for the backend being modelled; it enables one
+    retry only under [Queued], never [Isolated]. *)
+
+val retry_contended_window_for_backend : string -> bool
+(** The backend whose contended queued windows get one immediate retry: Metal only. *)
+
+val on_timing_retry : (samples:int -> reused:int -> unit) ref
+(** A discarded contention window, immediately before its one fresh retry. Counts the batches
+    sampled and those reused from calibration, so extra dispatches can be accounted for.
+    {!on_timed_window} describes only the returned window; a recovered first window is not a
+    candidate refusal. Default no-op, no configuration key selects it. *)
 
 val on_timed_window :
   (samples:int -> reused:int -> wall_ms:float -> median_wall_ms:float -> unit) ref
