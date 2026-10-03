@@ -466,6 +466,23 @@ let () =
   p "default" (has (Generated.read "r") ());
   p "explicit" (explicit (Generated.read "r") ~marker:"explicit marker" ())|ocaml},
       {|"default marker" "explicit marker"|} );
+    ( "partial applications do not select optional defaults prematurely",
+      {ocaml|let has src ?(marker = "unused default") () = String.is_substring src ~substring:marker
+let check = has (Generated.read "r")
+let () = p "marker" (check ~marker:"actual marker" ())|ocaml},
+      "+partial" );
+    ( "a composite marker retains every caller-supplied parameter",
+      {ocaml|let has src ~prefix ~suffix = String.is_substring src ~substring:(prefix ^ ":" ^ suffix)
+let () = p "marker" (has (Generated.read "r") ~prefix:"first" ~suffix:"second")|ocaml},
+      {|"first" "second" ... ^ ":" ^ ...|} );
+    ( "a later generated binding does not taint an earlier source parameter",
+      {ocaml|let has src ~marker =
+  let earlier = String.is_substring src ~substring:marker in
+  let src = Generated.read "r" in
+  describe src;
+  earlier
+let () = p "ordinary" (has backend_name ~marker:"cuda")|ocaml},
+      "" );
     ( "a labelled marker inside an expression keeps its literal context",
       {ocaml|let symbol ~emitted src = String.is_substring src ~substring:("void " ^ emitted ^ "(")
 let () = p "symbol" (symbol ~emitted:"asm__" (Generated.read "r"))|ocaml},

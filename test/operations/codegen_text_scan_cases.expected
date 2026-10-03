@@ -69,6 +69,9 @@ ok: source -- a helper reading generated source internally pins its labelled mar
 ok: source -- each test in a helper checks its own haystack
 ok: source -- a helper reading generated source inline pins its labelled marker
 ok: source -- omitted optional markers use their defaults and explicit markers override them
+ok: source -- partial applications do not select optional defaults prematurely
+ok: source -- a composite marker retains every caller-supplied parameter
+ok: source -- a later generated binding does not taint an earlier source parameter
 ok: source -- a labelled marker inside an expression keeps its literal context
 ok: source -- a labelled text parameter shadowed by a lambda pattern stays partial
 ok: source -- a local source alias is not generated because another scope uses its name

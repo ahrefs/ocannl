@@ -553,14 +553,15 @@ let renders_generated_text ~emitters ~aliases expr =
   iterator#expression expr;
   !found
 
-(** How each named parameter is addressed at a call site, with its optional default. Labels consume
-    no positional index. *)
+(** How each named parameter is addressed at a call site, with its optional default and the number
+    of preceding positional parameters. An omitted default is selected only once a later positional
+    argument is supplied. Labels consume no positional index. *)
 let param_destinations params =
   List.folding_map params ~init:0 ~f:(fun position (label, name, default) ->
       match label with
-      | Asttypes.Nolabel -> (position + 1, (name, (At_position position, default)))
+      | Asttypes.Nolabel -> (position + 1, (name, (At_position position, default, position)))
       | Asttypes.Labelled label | Asttypes.Optional label ->
-          (position, (name, (At_label label, default))))
+          (position, (name, (At_label label, default, position))))
 
 (** The unlabelled arguments of an application, in order. *)
 let positional args =
@@ -794,7 +795,7 @@ let emitter_aliases ~emitters structure =
                       Option.iter (argument_at ~destination args) ~f:(fun argument ->
                           let carried = idents_in argument in
                           List.iter (param_destinations params)
-                            ~f:(fun (name, (destination, _default)) ->
+                            ~f:(fun (name, (destination, _default, _position)) ->
                               if List.mem carried name ~equal:String.equal then
                                 found := destination :: !found)))
               | None -> ())
@@ -852,9 +853,56 @@ let tainted_names scope ~emitters ~aliases ~seeds bindings =
   done;
   !tainted
 
+(** Generated-source identifiers resolved inside one helper, at each use rather than by name.
+    Parameters start untainted; a later or nested read cannot change an earlier binding's meaning.
+*)
+let local_generated_source scope ~emitters ~aliases body =
+  let uses = Hashtbl.Poly.create () in
+  let mentions_source expr =
+    let found = ref false in
+    let iterator =
+      object
+        inherit Ast_traverse.iter as super
+
+        method! expression e =
+          (match e.pexp_desc with
+          | Pexp_ident _ when Hashtbl.mem uses (span e.pexp_loc) -> found := true
+          | _ -> ());
+          super#expression e
+      end
+    in
+    iterator#expression expr;
+    !found
+  in
+  let generated expr =
+    mentions_generated_read scope expr
+    || reads_artifacts_directly scope expr
+    || renders_generated_text ~emitters ~aliases expr
+    || mentions_source expr
+  in
+  let resolver =
+    object
+      inherit [bool, unit] Lexical_scope.scoped as super
+      method local = false
+      method module_path _ _ = None
+      method! let_denotes vb = generated vb.pvb_expr
+
+      method! expression env e =
+        (match e.pexp_desc with
+        | Pexp_ident { txt = Lident name; _ }
+          when Option.value (Lexical_scope.lookup env name) ~default:false ->
+            Hashtbl.set uses ~key:(span e.pexp_loc) ~data:()
+        | _ -> ());
+        super#expression env e
+    end
+  in
+  ignore
+    (resolver#expression { frames = []; modules = Map.empty (module String) } body : expression);
+  generated
+
 type predicate = {
   pred_name : string;
-  text_at : (destination * expression option) option;
+  text_at : (destination * expression option * int) option;
       (** Label or positional index of the pinned-text parameter, when the fragment is one the
           CALLER supplies. [None] where the helper hard-codes the fragment itself
           ([let has_barrier src = String.is_substring src ~substring:"__syncthreads()"]) -- the
@@ -866,7 +914,7 @@ type predicate = {
           rather than closing over it. Such a parameter IS generated source inside the predicate's
           body, so a literal the body tests against it -- the ["Main logic"] banner a helper slices
           on -- is a pin like any other, and the name joins the tainted set for the pin walk. *)
-  source_at : (destination * expression option) option;
+  source_at : (destination * expression option * int) option;
       (** Label or positional index of the parameter that carries the generated source, when the
           predicate takes it rather than closing over it. Checked at each call site: a predicate is
           only pinning where the haystack it is handed really is generated source. *)
@@ -934,74 +982,71 @@ let predicates scope ~emitters ~aliases ~tainted bindings =
               end
             in
             patterns#expression body;
-            let local_tainted =
-              tainted_names scope ~emitters ~aliases ~seeds:[] (bindings_in_expression body)
-            in
+            let generated_locally = local_generated_source scope ~emitters ~aliases body in
             let params = List.map params ~f:(fun (_label, name, _default) -> name) in
             let derived_params = params_derived_in ~params body in
-            let generated_inline tested =
-              mentions_generated_read scope tested
-              || reads_artifacts_directly scope tested
-              || renders_generated_text ~emitters ~aliases tested
-            in
-            let generated_locally tested =
-              generated_inline tested
-              || List.exists (idents_in tested) ~f:(fun name -> Set.mem local_tainted name)
-            in
             let result = ref [] in
             let consider { text; tested; inherent } =
-              let text_param =
-                List.find params ~f:(fun p ->
+              let text_params =
+                List.filter params ~f:(fun p ->
                     (not (Set.mem !rebound p)) && List.exists (idents_in text) ~f:(String.equal p))
               in
-              (* Keep each text parameter: one predicate can pin several caller-supplied markers. *)
-              let source_param =
-                Option.bind tested ~f:(fun tested ->
-                    (* A generated read inside the helper is already a source. Its dependence on a
-                       parameter used to compile the routine does not make that parameter source. *)
-                    if generated_locally tested then None
-                    else
-                      match Set.to_list (derived_params tested) with
-                      | [ p ] when not (Option.exists text_param ~f:(String.equal p)) -> Some p
-                      | _ -> None)
+              let consider_param text_param =
+                (* Keep each text parameter: one predicate can pin several caller-supplied
+                   markers. *)
+                let source_param =
+                  Option.bind tested ~f:(fun tested ->
+                      (* A generated read inside the helper is already a source. Its dependence on a
+                         parameter used to compile the routine does not make that parameter
+                         source. *)
+                      if generated_locally tested then None
+                      else
+                        match Set.to_list (derived_params tested) with
+                        | [ p ] when not (List.mem text_params p ~equal:String.equal) -> Some p
+                        | _ -> None)
+                in
+                let record source =
+                  (* The fragment argument inside a predicate's own definition tests a PARAMETER,
+                     not a fragment; reading it as a pin would mark every file using the idiom
+                     partial. Consume only the identifier itself: a composite expression keeps its
+                     literal context in the pin walk alongside the caller-supplied fragment. *)
+                  (match (text_param, text.pexp_desc) with
+                  | Some _, Pexp_ident _ ->
+                      consumed :=
+                        (text.pexp_loc.loc_start.pos_cnum, text.pexp_loc.loc_end.pos_cnum)
+                        :: !consumed
+                  | _ -> ());
+                  result :=
+                    {
+                      pred_name = name;
+                      text_at = Option.bind text_param ~f:destination_of;
+                      source_param = source;
+                      source_at = Option.bind source ~f:destination_of;
+                    }
+                    :: !result
+                in
+                (* A parameter that IS the haystack makes this a predicate whether or not the caller
+                   supplies the fragment. Requiring both left [let has_barrier src = ... ~substring:
+                   "__syncthreads()"] unrecognised, so neither the literal nor a partial mark
+                   reached the inventory (Codex P2, round 3). *)
+                if Option.is_some source_param then record source_param
+                else if
+                  Option.is_some text_param
+                  && (inherent
+                     (* A partially applied substring predicate has no explicit haystack; keep the
+                        enclosing source evidence for that existing higher-order idiom. *)
+                     || Option.value_map tested
+                          ~default:
+                            (List.exists (idents_in body) ~f:(fun name -> Set.mem tainted name))
+                          ~f:(fun tested ->
+                            generated_locally tested
+                            || List.exists (idents_in tested) ~f:(fun name -> Set.mem tainted name))
+                     )
+                then record None
               in
-              let record source =
-                (* The fragment argument inside a predicate's own definition tests a PARAMETER, not
-                   a fragment; reading it as a pin would mark every file using the idiom partial.
-                   Consume only the identifier itself: a composite expression keeps its literal
-                   context in the pin walk alongside the caller-supplied fragment. *)
-                (match (text_param, text.pexp_desc) with
-                | Some _, Pexp_ident _ ->
-                    consumed :=
-                      (text.pexp_loc.loc_start.pos_cnum, text.pexp_loc.loc_end.pos_cnum)
-                      :: !consumed
-                | _ -> ());
-                result :=
-                  {
-                    pred_name = name;
-                    text_at = Option.bind text_param ~f:destination_of;
-                    source_param = source;
-                    source_at = Option.bind source ~f:destination_of;
-                  }
-                  :: !result
-              in
-              (* A parameter that IS the haystack makes this a predicate whether or not the caller
-                 supplies the fragment. Requiring both left [let has_barrier src = ... ~substring:
-                 "__syncthreads()"] unrecognised, so neither the literal nor a partial mark reached
-                 the inventory (Codex P2, round 3). *)
-              if Option.is_some source_param then record source_param
-              else if
-                Option.is_some text_param
-                && (inherent
-                   (* A partially applied substring predicate has no explicit haystack; keep the
-                      enclosing source evidence for that existing higher-order idiom. *)
-                   || Option.value_map tested
-                        ~default:
-                          (List.exists (idents_in body) ~f:(fun name -> Set.mem tainted name))
-                        ~f:(fun tested ->
-                          generated_locally tested
-                          || List.exists (idents_in tested) ~f:(fun name -> Set.mem tainted name)))
-              then record None
+              List.iter
+                (match text_params with [] -> [ None ] | ps -> List.map ps ~f:Option.some)
+                ~f:consider_param
             in
             let iterator =
               object
@@ -1250,10 +1295,11 @@ let classify_source ~emitters ~path ~contents =
                       List.iter
                         (List.filter predicates ~f:(fun p -> String.equal p.pred_name name))
                         ~f:(fun predicate ->
-                          let at (destination, default) =
+                          let at (destination, default, position) =
                             match argument_at ~destination args with
                             | Some argument -> Some argument
-                            | None -> default
+                            | None when List.length (positional args) > position -> default
+                            | None -> None
                           in
                           let source = Option.bind predicate.source_at ~f:at in
                           let source_ok =
@@ -1271,6 +1317,8 @@ let classify_source ~emitters ~path ~contents =
                           then unattributed := true;
                           match (source_ok, Option.bind predicate.text_at ~f:at) with
                           | true, Some text -> record text
+                          | true, None when Option.is_some predicate.text_at ->
+                              pins := Computed :: !pins
                           | _ -> ())
                   | _ -> ())
               | _ -> ()));
