@@ -6212,7 +6212,8 @@
  (locks ocannl_training_test)
  (deps
   ocannl_config
-  (env_var OCANNL_BACKEND))
+  (env_var OCANNL_BACKEND)
+  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA))
  (modules bench_self_test)
  (libraries base stdio yojson bench_harness arrayjit.verdict))
 

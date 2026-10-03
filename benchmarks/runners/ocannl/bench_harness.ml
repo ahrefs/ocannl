@@ -1167,6 +1167,9 @@ let measure_and_emit ~protocol ~backend ~variant ?(precision = "f32") ~compile_s
     else None
   in
   Array.sort synced ~compare:Float.compare;
+  let fp_algebra, fp_source =
+    Utils.get_global_arg_with_source ~default:"all" ~arg_name:"simplify_fp_algebra"
+  in
   let line =
     Bench_json.result_line ~backend ~variant ~precision
       ~profile:(Option.map Utils.active_profile ~f:(fun (_, name, _) -> name))
@@ -1175,6 +1178,7 @@ let measure_and_emit ~protocol ~backend ~variant ?(precision = "f32") ~compile_s
              ( key,
                Option.map resolution ~f:(fun (value, source) ->
                    (value, Utils.config_source_label source)) )))
+      ~simplify_fp_algebra:(fp_algebra, Utils.config_source_label fp_source)
       ~workload ~compile_s
       ~searched:(Option.value_map tune ~default:false ~f:searched)
       ?tokens_per_step ?tune:(Option.bind tune ~f:tune_json) ~p10:(percentile synced 10.)

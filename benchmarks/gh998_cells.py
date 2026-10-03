@@ -23,14 +23,14 @@ import json
 import math
 import os
 import platform
-import signal
 import shutil
 from pathlib import Path
 import statistics
 import subprocess
+import time
 
 import fixture_digest
-from gh1002_cells import run_in_own_group
+import cell_group
 
 ROOT = Path(__file__).resolve().parent.parent
 HERE = ROOT / 'benchmarks'
@@ -38,6 +38,43 @@ FAMILIES = ['contract', 'constants', 'sub', 'mul_div', 'pow', 'identities']
 WORKLOADS = ['lenet', 'gpt2_mini', 'gpt2_mini_train']
 TREATMENTS = {'all': 'all', 'none': 'none', **{
     'no-' + arm: ','.join(a for a in FAMILIES if a != arm) for arm in FAMILIES}}
+
+
+CELL_TIMEOUT_S = 1800
+DEADLINE = None
+_cancellation = cell_group.CancellationDeferral('gh998')
+
+
+def run_child(argv, **kwargs):
+    # The matrix deadline is a wait timeout, so it cannot interrupt spawn or cleanup.
+    # The shared deferral handles operator cancellation in those ownership windows.
+    with _cancellation.deferring():
+        proc = cell_group.spawn(argv, cwd=HERE, **kwargs)
+        try:
+            timeout = CELL_TIMEOUT_S if DEADLINE is None else min(
+                CELL_TIMEOUT_S, max(0., DEADLINE - time.monotonic()))
+            with _cancellation.cancellable():
+                status = proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            status = 'timeout'
+        finally:
+            cleanup = cell_group.terminate(proc, grace=1.)
+            if cleanup.observation is not cell_group.GONE or not cleanup.reaped:
+                raise cell_group.CleanupFailed(
+                    f'gh998: child group {proc.pid} cleanup {cleanup.observation.value}; '
+                    'clear survivors before retrying the matrix')
+    return status
+
+
+def visit_cells(backends, workloads, repeat):
+    treatments = list(TREATMENTS)
+    offset = (repeat // 2) % len(treatments)
+    treatments = treatments[offset:] + treatments[:offset]
+    blocks = [(b, w) for b in backends for w in workloads]
+    if repeat % 2:
+        treatments.reverse()
+        blocks.reverse()
+    return [(b, w, t) for b, w in blocks for t in treatments]
 
 
 def digest(path):
@@ -101,7 +138,7 @@ def cell(out, name, argv, env):
     (base / 'command.json').write_text(json.dumps(argv, indent=2) + '\n')
     print(f'cell {name}', flush=True)
     with (base / 'stdout').open('w') as stdout, (base / 'stderr').open('w') as stderr:
-        status = run_in_own_group(argv, env=env, stdout=stdout, stderr=stderr)
+        status = run_child(argv, env=env, stdout=stdout, stderr=stderr)
     (base / 'exit.json').write_text(json.dumps(status) + '\n')
     if status != 0:
         raise RuntimeError(f'{name}: exit {status}; see {base}')
@@ -141,6 +178,8 @@ def ocannl(out, backend, workload, treatment, repeat, dry=False):
     expected_workload = 'selftest-tiny' if dry else workload
     if row['backend'] != backend or row['workload'] != expected_workload or row['searched']:
         raise RuntimeError(f'{name}: wrong backend/workload or a searching process')
+    if row.get('simplify_fp_algebra') != dict(value=TREATMENTS[treatment], source='commandline'):
+        raise RuntimeError(f'{name}: result does not confirm the selected float algebra')
     if dry:
         envelope(row['losses'], row['losses'])
     else:
@@ -163,6 +202,10 @@ def summarize(out):
     matrix = json.loads((out / 'matrix.json').read_text())
     preflight = json.loads((out / 'preflight.json').read_text())
     print(f"Host: {preflight['host']['host']}; CPU: {preflight['host']['cpu']}; revision: {preflight['revision']}; rounds: {matrix['rounds']}.")
+    for workload in matrix['workloads']:
+        fixture = preflight['fixtures'][workload]
+        print(f"Fixture {workload}: SHA-256 {fixture['sha256']}; {fixture['size']} bytes; recorded origins: {', '.join(fixture['origins'])}.")
+    print()
     print('| backend | workload | arm | off/on p50 median (range) | max abs / rel vs on | changed losses | max abs / rel vs Torch |')
     print('|---|---|---|---|---|---|---|')
     for backend in matrix['backends']:
@@ -194,11 +237,9 @@ def main():
         ap.error('rounds must be positive')
     if args.deadline_seconds <= 0:
         ap.error('deadline must be positive')
-    def deadline(signum, frame):
-        raise TimeoutError('matrix deadline reached')
-    signal.signal(signal.SIGALRM, deadline)
-    signal.signal(signal.SIGTERM, deadline)
-    signal.alarm(args.deadline_seconds)
+    global DEADLINE
+    DEADLINE = time.monotonic() + args.deadline_seconds
+    _cancellation.install()
     out = args.out.resolve()
     workloads = args.workloads.split(',')
     if not workloads or len(set(workloads)) != len(workloads) or any(w not in WORKLOADS for w in workloads):
@@ -238,14 +279,10 @@ def main():
     matrix = out / 'matrix.json'
     if matrix.exists():
         raise RuntimeError('timing requires a fresh matrix; existing evidence is never overwritten')
-    matrix.write_text(json.dumps(dict(backends=backends, workloads=workloads, rounds=args.rounds), indent=2) + '\n')
-    for repeat in range(args.rounds):
-        cells = [(b, w, t) for b in backends for w in workloads for t in TREATMENTS]
-        # Rotated/reversed order splits treatment order effects across repeats.
-        if repeat == 1:
-            cells.reverse()
-        elif repeat == 2:
-            cells = cells[len(cells)//2:] + cells[:len(cells)//2]
+    visits = [visit_cells(backends, workloads, r) for r in range(args.rounds)]
+    matrix.write_text(json.dumps(dict(backends=backends, workloads=workloads,
+                                     rounds=args.rounds, visit_order=visits), indent=2) + '\n')
+    for repeat, cells in enumerate(visits):
         for backend, workload, treatment in cells:
             ocannl(out, backend, workload, treatment, repeat)
 
