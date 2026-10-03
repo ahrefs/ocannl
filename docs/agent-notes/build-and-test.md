@@ -92,28 +92,7 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   where the branch is shared and rewriting is not yours to do (as staging#413 did), and re-run the scan
   BEFORE opening such a PR; where neither is welcome, build the merge commit on a scratch branch
   and run it there. What the omission buys is a false failure on a colleague's correct work, which
-  is the outcome that gets a check disabled rather than fixed. Merging does NOT repeat the
-  exercise: under the roll-forward policy (gh-ocannl-861) the gate is one green full-matrix run
-  for the PR's current head, and a clean merge proceeds on it however far the base has moved —
-  re-verifying after every sibling merge is exactly the cost the policy removed (staging#533 ran
-  three clean rebases and three full CI cycles over an unchanged topic diff before it). The gate
-  reads whatever the head is: a merge that adds no commit to the branch restarts nothing, while
-  any commit that moves the head — a conflict resolution, a rebase, a merge of the base — waits
-  for its own green run, conflicts or not. A diff the `ci` path filter ignores entirely
-  (`docs/**`) gets no run at all; there an absent check is the filter's answer, not a missing
-  verdict. Bring the base in again before merging only when its advance touched the PR's own
-  files — which the endpoint diff `<staging>/master..HEAD` cannot tell you, since it includes the
-  PR's edits and so makes every nonempty PR look drifted. Anchor the question at the branch point
-  instead, as the intersection of two name lists — `git diff --name-only --no-renames $(git
-  merge-base <staging>/master HEAD) <staging>/master | grep -Fxf <(git diff --name-only
-  --no-renames <staging>/master...HEAD)`, with `<staging>` the remote name resolved above — which
-  prints exactly the PR's files that the base's advance also touched, and nothing when there are
-  none. The pieces are there for reasons: `--no-renames` lists both names of a file the PR
-  renamed, so an edit the base made to the old name still shows, and `grep -Fx` matches whole
-  lines, so a path with spaces is compared as one path instead of being word-split into
-  pathspec fragments. A scan that turns red on the merged tree anyway is a master red like any
-  other, owned by the CI-red triage routine (the CI section below) rather than by the session
-  that merged.
+  is the outcome that gets a check disabled rather than fixed.
 - A negative control written FROM the corpus can encode the ABSENCE of a shape rather than a rule
   about it, and that is the more expensive half of the same story. staging#413's fixtures came from a
   survey of the notes as they stood; the survey found no bullet continued after a blank line, so
@@ -128,6 +107,25 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   contain is the one most in need of a fixture, since nothing in the tree will contradict the
   implementation's guess about it; a survey reporting zero of something is a hole in the fixtures,
   not permission to leave that case undefined.
+- Bring the base in before opening the PR; merging does NOT repeat the exercise. Under the
+  roll-forward policy (gh-ocannl-861) the gate is one green full-matrix run for the PR's current
+  head, and a clean merge proceeds on it however far the base has moved — re-verifying after every
+  sibling merge is exactly the cost the policy removed (staging#533 ran three clean rebases and
+  three full CI cycles over an unchanged topic diff before it). The gate reads whatever the head is:
+  a merge that adds no commit to the branch restarts nothing, while any commit that moves the head —
+  a conflict resolution, a rebase, a merge of the base — waits for its own green run, conflicts or
+  not. A diff the `ci` path filter ignores entirely (`docs/**`) gets no run at all; there an absent
+  check is the filter's answer, not a missing verdict. So **a green head merges as it is**: the
+  `--merge` merge commit combines it with the newer base, and the PR's run already built
+  `refs/pull/N/merge`, the head merged with the base as it stood then. An overlap between the base's
+  advance and the PR's own files is information, not a reason to rebase — ship-pr's `merge` prints
+  it; read those files for semantic drift, then merge. Rebase, or merge the base in where the branch
+  is shared, only for a textual conflict: GitHub reports the PR as CONFLICTING, or the merge is
+  refused as not mergeable. Push that resolution only once the head's own run has finished, never
+  while it is in flight: `ci.yml`'s `cancel-in-progress` cancels the running one, and its verdict on
+  the change with it. Interactions with siblings merged meanwhile are a clean GitHub merge's risk as
+  much as a stale branch's, and they belong to the integration loop on the merged tip or to the
+  CI-red triage routine (the CI section below), not to the session that merged.
 
 ### Scan corpora, goldens and floors
 
