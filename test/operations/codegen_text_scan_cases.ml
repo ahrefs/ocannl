@@ -466,6 +466,28 @@ let () =
   p "default" (has (Generated.read "r") ());
   p "explicit" (explicit (Generated.read "r") ~marker:"explicit marker" ())|ocaml},
       {|"default marker" "explicit marker"|} );
+    ( "a nested predicate capturing an enclosing source parameter stays partial",
+      {ocaml|let outer src =
+  let inner ~marker = String.is_substring src ~substring:marker in
+  inner ~marker:"captured marker"
+let () = p "marker" (outer (Generated.read "r"))|ocaml},
+      "+partial" );
+    ( "a nested predicate reaching its captured source through an alias stays partial",
+      {ocaml|let outer src =
+  let inner ~marker =
+    let alias = String.lowercase src in
+    String.is_substring alias ~substring:marker
+  in
+  inner ~marker:"captured marker"
+let () = p "marker" (outer (Generated.read "r"))|ocaml},
+      "+partial" );
+    ( "a nested backend-name predicate does not capture an unrelated source parameter",
+      {ocaml|let outer src =
+  let inner ~marker = String.is_substring backend_name ~substring:marker in
+  describe src;
+  inner ~marker:"cuda"
+let () = p "ordinary" (outer (Generated.read "r"))|ocaml},
+      "" );
     ( "nested helpers own their tests independently of enclosing predicates",
       {ocaml|let outer ~routine =
   let src = Generated.read routine in

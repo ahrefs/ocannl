@@ -1571,13 +1571,13 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   must not stop that reader before a later source parameter.
   A name rebound inside the body is conservatively not a caller-supplied marker; leave that site
   visible to the pin walk and its partial mark. Distinguish source read inside a helper using local
-  taint resolved at each use, rather than another scope's same-named value. Consume only a bare
-  marker identifier, so a composite fragment retains its literal context and every caller-supplied
-  component in the inventory. An omitted optional marker uses its default only when a later
+  taint resolved at each use, rather than another scope's same-named value. A composite fragment
+  retains its literal context and every caller-supplied component in the inventory. An omitted optional marker uses its default only when a later
   positional argument selects it; an unfollowed partial application stays marked partial.
   Static optional forwarding resolves `None` to the selected default and unwraps `Some`.
   Predicate body literals pass the same call-site source check as caller markers; only validated
-  source parameters propagate into nested helper calls. An unfollowed callback remains partial.
+  source parameters propagate into nested helper calls. An unfollowed callback remains partial,
+  as does a nested predicate capturing an enclosing source parameter the scan cannot validate.
 - **What no file-local rule can follow now says so.** A buffer is where generated text lands with no
   name to carry it, and the ways to fill one do not end (a wrapper reaching its parameter through a
   local binding, PPrint's own `ToBuffer` renderers, a buffer in a record). So a substring test whose
