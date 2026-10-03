@@ -75,12 +75,17 @@ nested-division rewrite; regression test `test/training/virtual_grads_parity.ml`
   `[seq, seq]` attention intermediates grow 16x and 64x over `gpt2_mini`'s while the matmul
   work grows 4x and 8x, which is what makes these the workloads the online-softmax rewrite
   (`online_softmax=true`, in the `approximate` profile) exists for; `gpt2_mini` at seq 128 is
-  matmul-dominated and the rewrite's prize there is a few percent of the step.
+  matmul-dominated and the rewrite's prize there is a few percent of the step. These are
+  gh-ocannl-720 leg 2's constant-token inference curve: batch 8/2/1 at seq128/512/1024,
+  with total attention-score storage growing 4x/8x; changing batch also changes scheduling.
+  Seq1024 reuses the bounded v1.1 endpoint rather than adding seq2048.
 - **gpt2_mini_train_s512** / **gpt2_mini_train_s1024** (`model: gpt`, `mode: train`): the
   training recipe of `gpt2_mini_train` at the long-context legs' shapes (seq 512 at batch 2, seq
   1024 at batch 1; 1024 tokens per step), for the fused attention backward of gh-ocannl-1002
   (`online_softmax_backward=true`), whose prize is the `[seq, seq]` gradient buffers the composed
-  backward keeps. **gpt2_mini_train_b1_s128** / **_b1_s256** / **_b1_s512** are the same recipe at
+  backward keeps; with the seq128 baseline these form gh-ocannl-720 leg 2's training curve
+  for attention/memory pressure and narrow reductions (gh-ocannl-565/682).
+  **gpt2_mini_train_b1_s128** / **_b1_s256** / **_b1_s512** are the same recipe at
   batch 1: with `gpt2_mini_train_s1024` they are a sequence sweep at fixed batch, which separates
   quadratic buffers from linear saved state (the constant-token fixtures above conflate batch and
   sequence scaling). `gh1002_cells.py` runs the gh-ocannl-1002 matrix over all of them
@@ -88,6 +93,26 @@ nested-division rewrite; regression test `test/training/virtual_grads_parity.ml`
   gh-ocannl-1003 block-fold matrix (the composed, two-pass and fold-B attention forms on the
   inference fixtures, per-segment attribution, cc, and the two training fixtures under the fused
   backward; [report-gh1003-block-fold.md](report-gh1003-block-fold.md)).
+- **gpt2_mini_b1** (`model: gpt`, `mode: infer`) / **gpt2_mini_train_b256**
+  (`model: gpt`, `mode: train`): the same decoder at seq128 with batch1 (128 tokens/step)
+  or batch256 (32768 tokens/step), gh-ocannl-720 leg 4. Against the batch8 workload in the
+  same mode they expose latency and submission overhead (gh-ocannl-488), versus GEMM
+  throughput and memory pressure (gh-ocannl-565). Batch1 cycles four input batches;
+  batch256 training uses one batch repeatedly to keep its fixture under 15 MB, with SGD
+  lr 0.01 and six parity steps. Small fixtures do not imply small activations; the large
+  batch must fit the backend's discrete or unified memory. An eager torch comparison
+  includes framework overhead and does not establish kernel-only efficiency.
+
+`orchestrate.py --precision bf16 f16` over the sequence and batch workloads adds
+OCANNL's reduced-storage cells against the f32 torch CPU oracle (gh-ocannl-720 leg 7,
+for gh-ocannl-680/682), with precision/regime-specific envelopes and untuned versus tuned
+scheduling kept distinct.
+
+The v1.1 transformer [report](report-gh720-transformer.md) analyzes each leg and embeds the
+suite driver's generated tables. HIP gfx1102 (discrete memory) and Metal (M4 Max unified memory)
+are reported, along with ten passing cc cells. Ten cc cells exceeded their protocol time caps;
+28 reduced-format cc cells were skipped and remain outstanding. Metal exact f16 passes every
+endpoint, whereas HIP's invalid exact-f16 and beyond-exact approximate rows are retained.
 
 ## Layout
 
@@ -126,9 +151,13 @@ nested-division rewrite; regression test `test/training/virtual_grads_parity.ml`
   `content-v1`. They are kept visibly legacy until their original files are available; relabelling
   an old raw digest as canonical would invent evidence the digest cannot contain.
   The current declaration names `m4-max` (the Apple M4 Max/macOS measurement host), `minix`, and
-  `rog-nv`. The Metal reports before gh-ocannl-483 predate per-origin recording, so `m4-max` has
-  rows only for the fixtures that report is on (`gpt2_mini` and the long-context legs); for the
-  others its absence is an explicit missing-record warning rather than an omitted host.
+  `rog-nv`, plus `tuf` (HIP gfx1102 with discrete VRAM). Metal reports before gh-ocannl-483
+  predate per-origin recording: their m4-max records covered only `gpt2_mini` and the
+  long-context legs, so absent records elsewhere mean missing attribution, not an omitted
+  measurement host. Later records include more fixtures (for example `lenet`). TUF has
+  transformer records only, copied unchanged from m4-max, including the two new batch
+  endpoints generated with the mac-studio bench venv; its non-transformer absences are
+  likewise explicit missing-record warnings.
   - **Entries are per box, and today the boxes differ.** `mlp_small` and `gpt2_mini` hash
     differently on minix and rog-nv at identical sizes — two venvs, two numpy streams, one
     workload spec — so `report-hip.md` and `report-gh675-cuda.md` are **not cross-box
