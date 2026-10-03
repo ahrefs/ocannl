@@ -466,6 +466,26 @@ let () =
   p "default" (has (Generated.read "r") ());
   p "explicit" (explicit (Generated.read "r") ~marker:"explicit marker" ())|ocaml},
       {|"default marker" "explicit marker"|} );
+    ( "nested helpers own their tests independently of enclosing predicates",
+      {ocaml|let outer ~routine =
+  let src = Generated.read routine in
+  let inner ~inner_marker = String.is_substring src ~substring:inner_marker in
+  inner ~inner_marker:"inner marker"
+let () = p "marker" (outer ~routine:"r")|ocaml},
+      {|"inner marker"|} );
+    ( "validated source aliases propagate into nested predicate calls",
+      {ocaml|let inner code = String.is_substring code ~substring:"inner marker"
+let outer input =
+  let alias = input in
+  String.is_substring input ~substring:"outer marker" && inner alias
+let () = p "markers" (outer (Generated.read "r"))|ocaml},
+      {|"inner marker" "outer marker"|} );
+    ( "an ordinary direct call does not hide an unresolved generated-source callback",
+      {ocaml|let barrier src = String.is_substring src ~substring:"barrier marker"
+let () =
+  p "ordinary" (barrier backend_name);
+  List.iter [Generated.read "r"] ~f:barrier|ocaml},
+      "+partial" );
     ( "unfollowed callbacks keep hard-coded predicate text visibly partial",
       {ocaml|let barrier src = String.is_substring src ~substring:"barrier marker"
 let () = List.iter [Generated.read "r"] ~f:barrier|ocaml},

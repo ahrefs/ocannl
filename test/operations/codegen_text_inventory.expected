@@ -148,7 +148,7 @@ test/operations/cpu_parallel.ml
     "#pragma omp parallel for"
     "Pool-backed Grid rendering"
     "dispatch_apply"
-test/operations/cpu_simd_reduction.ml [also pins text this scan cannot name]
+test/operations/cpu_simd_reduction.ml
     "#pragma"
     "Vectorized reduction rendering"
     "vector_size"
@@ -239,7 +239,7 @@ test/operations/schedule_batch_grid.ml [also pins text this scan cannot name]
 test/operations/schedule_batched_mma.ml
     "Tile_mma register tiling"
 test/operations/schedule_contraction_nest.ml [also pins text this scan cannot name]
-test/operations/schedule_conv_gemm.ml [also pins text this scan cannot name]
+test/operations/schedule_conv_gemm.ml
     "Tile_mma register tiling"
     "fragment_"
     "tile_"

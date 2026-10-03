@@ -69,6 +69,9 @@ ok: source -- a helper reading generated source internally pins its labelled mar
 ok: source -- each test in a helper checks its own haystack
 ok: source -- a helper reading generated source inline pins its labelled marker
 ok: source -- omitted optional markers use their defaults and explicit markers override them
+ok: source -- nested helpers own their tests independently of enclosing predicates
+ok: source -- validated source aliases propagate into nested predicate calls
+ok: source -- an ordinary direct call does not hide an unresolved generated-source callback
 ok: source -- unfollowed callbacks keep hard-coded predicate text visibly partial
 ok: source -- validated source parameters propagate through nested predicate calls
 ok: source -- marker-first partial applications remain visibly partial

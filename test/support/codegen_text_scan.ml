@@ -1060,6 +1060,13 @@ let predicates scope ~emitters ~aliases ~tainted bindings =
               object
                 inherit Ast_traverse.iter as super
 
+                (* Nested bindings are classified separately by bindings_of. Their parameter tests
+                   must not become computed body fragments of the enclosing predicate. *)
+                method! value_binding vb =
+                  match vb.pvb_expr.pexp_desc with
+                  | Pexp_function _ -> ()
+                  | _ -> super#value_binding vb
+
                 method! expression e =
                   (match text_test scope e with Some t -> consider t | None -> ());
                   super#expression e
@@ -1231,6 +1238,7 @@ let classify_source ~emitters ~path ~contents =
     (* Source parameters carry provenance into nested predicate calls only when a caller actually
        supplies generated text. This is a fixed point because helpers can call other helpers. *)
     let called = ref (Set.empty (module String)) in
+    let applied = Hashtbl.Poly.create () in
     let changed = ref true in
     let propagate =
       object
@@ -1240,6 +1248,7 @@ let classify_source ~emitters ~path ~contents =
         method! expression e =
           (match e.pexp_desc with
           | Pexp_apply (callee, args) -> (
+              Hashtbl.set applied ~key:(span callee.pexp_loc) ~data:();
               match longident_of callee with
               | Some [ name ] ->
                   called := Set.add !called name;
@@ -1261,7 +1270,13 @@ let classify_source ~emitters ~path ~contents =
     in
     while !changed do
       changed := false;
-      propagate#structure structure
+      propagate#structure structure;
+      let aliases_of_source =
+        tainted_names scope ~emitters ~aliases ~seeds:(Set.to_list !source_names) bindings
+      in
+      if not (Set.equal aliases_of_source !source_names) then (
+        source_names := aliases_of_source;
+        changed := true)
     done;
     (* A helper reached without an explicit call, for example as a callback, has no validated caller
        source. Keep that uncertainty visible rather than silently dropping its body text. *)
@@ -1325,6 +1340,11 @@ let classify_source ~emitters ~path ~contents =
         method! value_binding vb = if not (classifies_compiler_plan vb) then super#value_binding vb
 
         method! expression e =
+          (match longident_of e with
+          | Some [ name ] when not (Hashtbl.mem applied (span e.pexp_loc)) ->
+              if List.exists predicates ~f:(fun predicate -> String.equal predicate.pred_name name)
+              then unattributed := true
+          | _ -> ());
           (match text_test scope e with
           | Some { text; tested; inherent } ->
               if inherent || Option.value_map tested ~default:false ~f:mentions_tainted then
