@@ -963,7 +963,17 @@ let%track7_sexp c_compile_and_load ~f_path =
                 detail;
               } )))
    else try Stdlib.Sys.remove temp_log with _ -> ());
-  (* Wait a moment for the file to be fully written on success *)
+  (* All three post-compile host-boundary failures are typed, uncontainable link rejections. *)
+  let reject_link stage detail =
+    raise
+      (Schedule_outcome.Cause_at
+         ( Schedule_outcome.Backend_link,
+           Schedule_outcome.Backend_rejected
+             { backend = name; stage; severity = Schedule_outcome.Compiler_bug; detail } ))
+  in
+  (* A successful compiler must produce its artifact. A missing library says nothing about the
+     candidate's schedule, so keep it fatal under permissive classification (gh-ocannl-1142). Wait a
+     moment for the file to be fully written on success. *)
   let start_time = Unix.gettimeofday () in
   let timeout =
     Float.of_string
@@ -972,27 +982,32 @@ let%track7_sexp c_compile_and_load ~f_path =
   while not (Stdlib.Sys.file_exists libname) do
     let elapsed = Unix.gettimeofday () -. start_time in
     if Float.(elapsed > timeout) then
-      failwith
-      @@ Printf.sprintf
+      reject_link Schedule_outcome.artifact_missing_stage
+        (Printf.sprintf
            "Cc_backend.c_compile_and_load: compiled library %s not found after successful \
-            compilation"
-           libname;
+            compilation (timeout %g seconds).\n\
+            Compilation command: %s"
+           libname timeout _cmdline);
     Unix.sleepf 0.001
   done;
-  (* Expected to succeed on MacOS only. *)
+  (* Signing is a host/toolchain prerequisite, not a schedule constraint (gh-ocannl-1142). Expected
+     to succeed on MacOS only. *)
   let verify_codesign =
     Utils.get_global_flag ~default:false ~arg_name:"cc_backend_verify_codesign"
   in
   (if verify_codesign then
      let null_device = if Sys.win32 then "nul" else "/dev/null" in
-     let rc =
-       Stdlib.Sys.command @@ Printf.sprintf "codesign -s - %s > %s 2>&1" libname null_device
+     let command =
+       Printf.sprintf "codesign -s - %s > %s 2>&1" (Stdlib.Filename.quote libname) null_device
      in
+     let rc = Stdlib.Sys.command command in
      if rc <> 0 then
-       invalid_arg
-       @@ Printf.sprintf
-            "Cc_backend.c_compile_and_load: codesign failed with exit code %d for library %s" rc
-            libname);
+       reject_link Schedule_outcome.codesign_stage
+         (Printf.sprintf
+            "Cc_backend.c_compile_and_load: codesign failed with exit code %d for library %s\n\
+             Codesign command: %s\n\
+             Compilation command: %s"
+            rc libname command _cmdline));
   (* Note: RTLD_DEEPBIND not available on MacOS. A load failure is typed at [Backend_link]
      (gh-ocannl-1077): the object compiled, so what the loader refuses — typically a symbol neither
      the link line nor the process supplies — is OCANNL's link bug, and [Schedule_outcome.protect]
@@ -1009,16 +1024,7 @@ let%track7_sexp c_compile_and_load ~f_path =
            Compilation command: %s"
           f_path dlerror _cmdline
       in
-      raise
-        (Schedule_outcome.Cause_at
-           ( Schedule_outcome.Backend_link,
-             Schedule_outcome.Backend_rejected
-               {
-                 backend = name;
-                 stage = Schedule_outcome.dlopen_stage;
-                 severity = Schedule_outcome.Compiler_bug;
-                 detail;
-               } ))
+      reject_link Schedule_outcome.dlopen_stage detail
   in
   let result = { lib; libname } in
   Alloc_census.count_module_loaded ();

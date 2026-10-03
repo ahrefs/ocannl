@@ -1,5 +1,4 @@
 backend: cc
-the compiler command renames expf to the undefined symbol: true
 strict failure classification is off: true
 the candidate compile is fatal, not a contained decline: true
 the fatal failure is at Backend_link: true

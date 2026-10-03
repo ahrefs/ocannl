@@ -588,12 +588,21 @@ files.
   with a realistic payload rather than mirroring where a real one is raised.
 - A typed cause is not automatically a containable one. `Schedule_outcome.uncontainable` names the
   causes `protect` makes `Fatal` although typed, the fatal record keeping them in `cause`: today the
-  cc backend's `dlopen` rejection at `Backend_link` (gh-ocannl-1077). The object compiled and the
+  cc backend's `dlopen`, `artifact_missing`, and `codesign` rejections at `Backend_link`
+  (gh-ocannl-1077, gh-ocannl-1142). In the `dlopen` case the object compiled and the
   loader found a symbol nothing supplies, an OCANNL link bug; contained, it declines exactly the
   candidates whose code reaches the symbol (gh-ocannl-1045's libmvec: the vectorized ones), and
   the search quietly ships a slower winner. Before, it escaped as a raw `Dl.DL_error`, contained
   under permissive classification. A JIT rejecting one candidate's PTX stays a counted decline.
-  `test/operations/cc_dlopen_cause` manufactures one via the compiler command.
+  `test/operations/cc_dlopen_cause` manufactures one via the compiler command. Missing artifacts
+  after a successful compiler exit and signing failures are also fatal: they violate the
+  host/toolchain contract, rather than establish that a schedule is unsuitable. `Compiler_bug`
+  here identifies that broken backend contract; the actual cause may be an external tool or
+  filesystem. A search must surface it instead of quietly falling back. The
+  `cc_dlopen_cause` modes provoke all three paths with permissive classification on Unix;
+  Windows cannot run the shell fixtures or defer undefined symbols to dlopen. The
+  `test_schedule_outcome` unit test pins all three stages across provenance and strictness on
+  every platform.
 - Placement decides which tensorized candidates *exist*, not just how they rank, because
   `mma_tile_for_precisions` keys on the storage precisions of the nodes the site actually reads.
   Under the mixed-precision recipe on a uniform-format backend (Metal's `simdgroup_matrix`: no mixed
