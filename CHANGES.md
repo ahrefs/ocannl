@@ -12,9 +12,9 @@ commits, PR pages (development happens in `lukstafi/ocannl-staging`), and issue 
 - Online-softmax attention rewrites reduce probability-buffer materialization; the separately
   gated fused backward removes recognized attention's quadratic gradient intermediates
   (gh-ocannl-483, gh-ocannl-1002).
-- A single-pass block attention fold computes scores and output tiles without a quadratic score
-  buffer; eligible Metal f32 folds use matrix units. These numerics-changing rewrites are enabled
-  by the `approximate` profile (gh-ocannl-1003).
+- A single-pass block attention fold avoids the quadratic score buffer when no later reader needs
+  it, as in inference; eligible Metal f32 folds use matrix units. The `approximate` profile
+  enables these numerics-changing rewrites (gh-ocannl-1003).
 - Footprint-scoped materialization serves eligible affine sub-image reads from smaller private
   scratch instead of a full tensor buffer; `Context.decide_footprint` exposes the choice alongside
   inline and materialized decisions (gh-ocannl-616).
