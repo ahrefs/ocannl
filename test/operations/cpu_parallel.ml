@@ -8,10 +8,11 @@
    [cpu_schedule_min_parallel] stays entirely serial. - Per-chunk local privatization: a
    [Privatize]d matmul accumulator is a stack array written grid-invariantly (on GPU each thread has
    a private copy; one shared function-scope array would race across parallel chunks). Its accesses
-   all sit inside the Grid body and each iteration's first access is a covering write (the init-load
-   from the target), so the renderer privatizes it to per-chunk block-scope storage and parallelizes
-   the loop ([C_syntax.parallel_grid_safe]'s privatization rule, gh-ocannl-469; a local failing that
-   rule — e.g. carrying values across iterations — still keeps the loop serial).
+   all sit inside the Grid body and each iteration's first access is a covering write (the seed
+   forwarded from zero, or an init-load from the target), so the renderer privatizes it to per-chunk
+   block-scope storage and parallelizes the loop ([C_syntax.parallel_grid_safe]'s privatization
+   rule, gh-ocannl-469; a local failing that rule — e.g. carrying values across iterations — still
+   keeps the loop serial).
 
    On GPU backends the same programs go through the GPU annotator / hardware binding; every printed
    boolean holds on every backend (structure checks dispatch on the configured backend). *)
@@ -129,6 +130,7 @@ let () =
   let mm_twin = run_mm ~name:"cpu_par_twin" ~transform:(fun opt -> opt) mc0 in
   phase "matmul privatized";
   let%op mc1 = ma * mb in
+  let private_accesses = ref None in
   let mm_priv =
     run_mm ~name:"cpu_par_privatized"
       ~transform:(fun opt ->
@@ -138,28 +140,36 @@ let () =
         (* Whole-node [Zero_out] of a materialized node is rejected in multi-threaded kernels;
            expand it and give the zeroing nest the same one-Grid geometry as the accumulation. *)
         let zop, zsyms = Sched.expand_zero ~tn:mc1.Tensor.value in
-        Sched.apply
-          [
-            zop;
-            Sched.Retype { axis = List.hd_exn zsyms; ty = LL.Grid };
-            Sched.Retype { axis = i; ty = LL.Grid };
-            Sched.privatize ~accum_prec ~target:mc1.Tensor.value ~over:red;
-          ]
-          opt)
+        let private_opt =
+          Sched.apply
+            [
+              zop;
+              Sched.Retype { axis = List.hd_exn zsyms; ty = LL.Grid };
+              Sched.Retype { axis = i; ty = LL.Grid };
+              Sched.privatize ~accum_prec ~target:mc1.Tensor.value ~over:red;
+            ]
+            opt
+        in
+        private_accesses :=
+          Some
+            ( Ll_test.count_get private_opt mc1.Tensor.value,
+              Ll_test.count_set private_opt mc1.Tensor.value );
+        private_opt)
       mc1
   in
   p_all2 "privatized matmul values match the twin" mm_priv mm_twin ~f:approx;
   let src = Generated.read "cpu_par_privatized" in
-  (* The zeroing nest parallelizes (its write covers its grid index); the accumulation nest's grid
-     loop parallelizes too, with the privatized accumulator declared per chunk inside the parallel
-     construct (its init-load makes each iteration self-contained). So on CPU: two parallel
-     constructs; on GPU: hardware bindings, none. *)
+  (* The covering zero is forwarded into the private accumulator. Its sole closing-store nest keeps
+     the accumulator per chunk inside the parallel construct. CPU emits one parallel construct; GPU
+     uses hardware bindings instead. *)
   let count =
     String.substr_index_all src ~may_overlap:false ~pattern:"Pool-backed Grid rendering"
     |> List.length
   in
-  p "privatized accumulator gets per-chunk storage, both nests parallel"
-    (if on_cpu then count = 2 else count = 0);
+  p "privatized accumulator keeps per-chunk storage in its parallel closing-store nest"
+    (if on_cpu then count = 1 else count = 0);
+  p "privatized accumulator forwards zero without output init stores or opening reads"
+    (Option.exists !private_accesses ~f:(fun (reads, writes) -> reads = 0 && writes = 1));
 
   (* --- Privatization write-dominance edge (Codex P2 on PR #159): a local whose covering write
      shares its loop with a read of the local, [for x { tmp[x] = ..; use tmp[0] }] — the write nest

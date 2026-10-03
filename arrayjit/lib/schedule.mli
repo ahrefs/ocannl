@@ -268,9 +268,10 @@ type optop =
           dependent, or mixing a hardware symbol into a comparison that is not [target]'s index — is
           rejected, since it could restrict which threads accumulate while the transfers write back
           an accumulator that never received the update. A [Zero_out] of [target] elsewhere is left
-          in place — the init-load observes it, so semantics are preserved without a surjectivity
-          analysis. Compose as: [Split]s → [Stage]s → [Privatize] → materializing [Unroll]s (the
-          unrolls then turn the tile accesses into constant-indexed, register-allocatable form).
+          in place unless the shared zero-seed proof licenses forwarding it directly into the tile:
+          unconditional whole-node coverage and every repeated-cell loop inside [over]. Compose as:
+          [Split]s → [Stage]s → [Privatize] → materializing [Unroll]s (the unrolls then turn the
+          tile accesses into constant-indexed, register-allocatable form).
 
           The tile is minted at [acc_prec], which must be [target]'s storage precision or an exact
           widening of it (a narrow float to [single]/[double]), else the op is rejected. It is the
@@ -930,7 +931,7 @@ val launch_geometry_of_nests : (int list * int list) list -> launch_geometry opt
     the next [.y], the next [.z]; the maximum is taken per slot across nests, and [Grid] slots
     [>= 2] fold the product of their per-slot maxima onto [.z]. Every field is [Some]; [None] when
     that product overflows. The default annotators' lane plans and the sketch families' predictions
-    ([Sketch_families.predicted_launch_geometry]) both read it. *)
+    ({!Autotune.matmul_launch_geometry} / {!Autotune.conv_launch_geometry}) both read it. *)
 
 type launch_excess = {
   lx_resource : Schedule_outcome.resource;

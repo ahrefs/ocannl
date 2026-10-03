@@ -82,8 +82,9 @@ type mma_input_format =
 type mma_staged_layout =
   | Mma_swizzled_b128
       (** {!Low_level.Swizzle_b128}: the CUDA inline-PTX [mma.sync] arms read it with
-          [ldmatrix.sync.aligned.m8n8]. Metal banks too but has no [ldmatrix] analogue; a later
-          [simdgroup]-era entry would reuse this type. *)
+          [ldmatrix.sync.aligned.m8n8] or swizzle-aware byte gathers where [ldmatrix.b16] cannot
+          form the register. Metal banks too but has no [ldmatrix] analogue; a later [simdgroup]-era
+          entry would reuse this type. *)
 [@@deriving sexp, compare, equal]
 
 (** Where a tensor-unit rendering keeps its accumulator. The distinction is observable whenever a
@@ -153,10 +154,11 @@ type mma_capability = {
 
           Keyed by format triple for the same reason as [mma_format_tiles], and pre-filtered for the
           same reason (gh-ocannl-479): eligibility is per operand AND per orientation, and the
-          orientation the staged sketches mint is each role's own. CUDA's fp8 arm, for instance, can
-          feed A from [ldmatrix] in that orientation but not B — 4 fp8 bytes of a B register are
-          strided there — so a swizzled fp8 twin would be timed and ranked as a tensorized candidate
-          while rendering the scalar fallback. Empty everywhere the question does not arise. *)
+          orientation the staged sketches mint is each role's own. CUDA's fp8 arm, for instance,
+          feeds A from [ldmatrix] in that orientation; B's four bytes per register are strided, so
+          its row-major staged tile uses swizzle-aware byte gathers instead (gh-ocannl-1073). Both
+          operands tensorize, allowing the advertised swizzled twin. Empty everywhere the question
+          does not arise. *)
   mma_pipeline_depths : int list;
       (** Software-pipelining depths beyond the unpipelined 1 that autotune's {e staged} mma/conv
           sketches propose as twins of each staged seed ([Schedule.Stage ~pipeline_depth],

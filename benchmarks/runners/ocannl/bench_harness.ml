@@ -146,6 +146,12 @@ type train_routines =
   | Host_gate of Mixed_prec.Loss_scaler.t * Tensor.t * Context.routine * Context.routine
   | Device_gate of Mixed_prec.Loss_scaler.t * Tensor.t * Context.routine * int
 
+type step_shape = [ `Train of train_parts | `Forward of Asgns.comp ]
+
+let compile_default ctx comp bindings =
+  if Lazy.force Autotune.model_default_enabled then Autotune.model_default ctx comp bindings
+  else Context.compile ctx comp bindings
+
 (** Compiles a step shape. [tuned] is the runner's autotuning compile (it needs the loss tensor, so
     the runner supplies it). Each leg tunes the routine that carries the work: the
     dynamic-loss-scaling legs keep their step SHAPE — the gate is what they measure — so only the
@@ -157,10 +163,7 @@ let compile_train_step ~tune ~tuned ctx bindings parts =
      the same benchmark with the gate off vs on for the before/after comparison. Every leg's
      work-carrying routine takes this path when it is not tuned, so the gated (f16) legs compare a
      real model pick against the plain default rather than two identical executions. *)
-  let untuned ctx comp =
-    if Lazy.force Autotune.model_default_enabled then Autotune.model_default ctx comp bindings
-    else Context.compile ctx comp bindings
-  in
+  let untuned ctx comp = compile_default ctx comp bindings in
   match parts with
   | Plain_step comp ->
       let ctx, routine = if tune then tuned ctx comp else untuned ctx comp in
@@ -179,6 +182,19 @@ let compile_train_step ~tune ~tuned ctx bindings parts =
   | Device_gated (scaler, wflag, comp, interval) ->
       let ctx, routine = if tune then tuned ctx comp else untuned ctx comp in
       (ctx, Device_gate (scaler, wflag, routine, interval))
+
+(** Shared benchmark/diagnostic dispatch, including the model-default gate in both modes. *)
+let compile_step ~tune ~tuned ctx bindings : step_shape -> Context.t * train_routines = function
+  | `Train parts -> compile_train_step ~tune ~tuned ctx bindings parts
+  | `Forward comp ->
+      let ctx, routine = if tune then tuned ctx comp else compile_default ctx comp bindings in
+      (ctx, Plain routine)
+
+(** Every compiled routine, including the conditional optimizer before any step has run. The
+    diagnostic inventories compiled work; {!step_routines} filters work observed in a benchmark. *)
+let compiled_step_routines = function
+  | Plain routine | Device_gate (_, _, routine, _) -> [ routine ]
+  | Host_gate (_, _, grad_routine, sgd_routine) -> [ grad_routine; sgd_routine ]
 
 let train_step_bindings = function
   | Plain routine -> routine.Context.bindings
@@ -420,7 +436,7 @@ let collect_search t (r : Autotune.report) =
   match r.Autotune.outcome with
   | Autotune.Searched | Autotune.Search_died _ | Autotune.Abandoned _ ->
       t.searches <- t.searches + 1
-  | Autotune.Cache_replay -> t.replays <- t.replays + 1
+  | Autotune.Cache_replay | Autotune.Abandonment_replay _ -> t.replays <- t.replays + 1
   | Autotune.Search_disabled | Autotune.Pre_search_failure _ -> t.no_searches <- t.no_searches + 1
 
 let collect_arm t (r : Autotune.report) =
@@ -511,7 +527,7 @@ let tune_json t =
         let searched, cache_hit =
           match r.Autotune.outcome with
           | Autotune.Searched | Autotune.Search_died _ | Autotune.Abandoned _ -> (true, false)
-          | Autotune.Cache_replay -> (false, true)
+          | Autotune.Cache_replay | Autotune.Abandonment_replay _ -> (false, true)
           | Autotune.Search_disabled | Autotune.Pre_search_failure _ -> (false, false)
         in
         Bench_json.tune_arm ~name
@@ -905,6 +921,94 @@ let scratch_segment (seg : Ir.Low_level.optimized) =
     LL.optimize_ctx = LL.copy_optimize_ctx seg.LL.optimize_ctx;
   }
 
+(** The segment order of the compiled step, shared by its census and timing instruments. *)
+let shipped_kernels routines =
+  List.concat_map routines ~f:(fun (routine : Context.routine) ->
+      List.map routine.Context.segments ~f:(fun seg -> (routine, seg)))
+
+(** Compile the shipped IR itself: re-lowering from the step's context loses routine-local
+    intermediates, and re-segmenting before it need not reproduce the pipeline that shipped. *)
+let compile_shipped_kernel ~ctx ~bindings ~i (shipped : Context.routine) seg =
+  let bind (r : Context.routine) =
+    List.iter r.Context.bindings ~f:(fun (sym, cell) ->
+        Option.iter
+          (List.Assoc.find shipped.Context.bindings sym ~equal:Ir.Indexing.equal_static_symbol)
+          ~f:(fun v -> cell := !v))
+  in
+  let compile () =
+    Context.compile_outcome
+      ~name:(Printf.sprintf "%s__kernel%d" shipped.Context.name i)
+      ~prelowered:(scratch_segment seg)
+      ~lowered_transform:(fun o -> [ o ])
+      ~provenance:Ir.Schedule_outcome.User_schedule ctx Ir.Assignments.empty_comp bindings
+  in
+  (bind, compile)
+
+let segment_geometry seg =
+  let d = Ir.Low_level.launch_dims seg.Ir.Low_level.llc in
+  let dims a = String.concat_array ~sep:";" (Array.map a ~f:Int.to_string) in
+  Printf.sprintf "grid=[%s] block=[%s]" (dims d.grid) (dims d.block)
+
+(** Diagnostic census of the segments actually compiled, including gradient zeroing, backward and
+    optimizer kernels for a training step. IDs match {!time_shipped_segments}. *)
+let print_shipped_census ?(out = Stdio.stdout) routines =
+  let kernels = shipped_kernels routines in
+  Stdio.Out_channel.fprintf out "shipped pipeline: %d segments\n" (List.length kernels);
+  List.iteri kernels ~f:(fun i (_, seg) ->
+      Stdio.Out_channel.fprintf out "  seg%-3d %s stmts=%d w:%s\n" i (segment_geometry seg)
+        (List.length (Ir.Low_level.flat_lines [ seg.Ir.Low_level.llc ]))
+        (String.concat ~sep:" " (List.map (writes_of seg.Ir.Low_level.llc) ~f:Tn.debug_name)));
+  Stdio.Out_channel.flush out
+
+(** One timing loop and row format for both the standalone diagnostic and the benchmark's
+    dominant-kernel column. Results retain refused rows in census order; fatal failures propagate
+    (the benchmark caller catches them to preserve its already-paid-for result line). *)
+let time_shipped_kernels ?out ?(repeats = 20) ~ctx ~bindings routines =
+  let kernels = shipped_kernels routines in
+  let n = List.length kernels in
+  List.mapi kernels ~f:(fun i (shipped, seg) ->
+      let bind, compile = compile_shipped_kernel ~ctx ~bindings ~i shipped seg in
+      let result = time_hermetic ~repeats ~bind compile in
+      let row_out =
+        match (out, result) with
+        | Some out, _ -> Some out
+        | None, Error _ -> Some Stdio.stderr
+        | None, Ok _ -> None
+      in
+      Option.iter row_out ~f:(fun out ->
+          let ws =
+            String.concat ~sep:" " (List.map (writes_of seg.Ir.Low_level.llc) ~f:Tn.debug_name)
+          in
+          (match result with
+          | Error detail ->
+              Stdio.Out_channel.fprintf out "bench: kernel %d/%d %s DECLINED (%s) w: %s\n" i n
+                (segment_geometry seg) detail ws
+          | Ok (ms, routine) ->
+              Stdio.Out_channel.fprintf out "bench: kernel %d/%d %.4f ms %s mma:%s vol:%s w: %s\n" i
+                n ms (segment_geometry seg)
+                (Ir.C_syntax.mma_summary_string routine.Context.mma)
+                (Ir.C_syntax.volatility_summary_string routine.Context.volatility)
+                ws);
+          Stdio.Out_channel.flush out);
+      (i, seg, result))
+
+(** Full-step controls precede this: isolated backward/SGD mutates gradients/weights. Minima include
+    a launch/sync floor per kernel and their sum is not step latency. *)
+let time_shipped_segments ?(out = Stdio.stdout) ?(repeats = 20) ~ctx ~bindings routines =
+  Stdio.Out_channel.fprintf out "segment times (min of %d runs, ms; isolated launch + sync):\n"
+    repeats;
+  let outcomes =
+    time_shipped_kernels ~out ~repeats ~ctx ~bindings routines
+    |> List.map ~f:(fun (_, _, result) -> Result.map result ~f:fst)
+  in
+  let timed = List.filter_map outcomes ~f:Result.ok in
+  Stdio.Out_channel.fprintf out
+    "  total (sum of per-segment minima, not step latency): %.4f ms (%d/%d timed)\n"
+    (List.sum (module Float) timed ~f:Fn.id)
+    (List.length timed) (List.length outcomes);
+  Stdio.Out_channel.flush out;
+  outcomes
+
 (** Whether every node the kernel touches is 16-bit float storage computed at 16 bits — the
     [f16-native] ceiling's case (gh-ocannl-575), which only a target with native 16-bit arithmetic
     has: the same [Numerics.cpu_compute_prec] resolution the emitter uses. *)
@@ -938,62 +1042,23 @@ let dominant_kernel ?(repeats = 20) ~ctx ~bindings routines =
   let peak_memory_bandwidth =
     Option.map bandwidth_leg ~f:(leg_source "model_peak_memory_bandwidth")
   in
-  let kernels =
-    List.concat_map routines ~f:(fun (routine : Context.routine) ->
-        List.map routine.Context.segments ~f:(fun seg -> (routine, seg)))
-  in
+  let kernels = shipped_kernels routines in
   let n = List.length kernels in
   let no_kernel note =
     Stdio.eprintf "bench: dominant kernel: %s\n%!" note;
     Bench_json.dominant_kernel_object ~note ~ceiling:(Error note) None
   in
   match
-    List.filter_mapi kernels ~f:(fun i ((shipped : Context.routine), seg) ->
-        (* The shipped routine's current static-index values: the kernel alone reads the batch the
-           step last read. *)
-        let bind (r : Context.routine) =
-          List.iter r.Context.bindings ~f:(fun (sym, cell) ->
-              Option.iter
-                (List.Assoc.find shipped.Context.bindings sym ~equal:Ir.Indexing.equal_static_symbol)
-                ~f:(fun v -> cell := !v))
-        in
-        (* The segment AS SHIPPED, through the [?prelowered] seam with the identity transform: its
-           own IR drives codegen and the analysis layer alike, so nothing is lowered again. That
-           matters twice over. Re-lowering the step's computation in [ctx], a context descended from
-           the step's own compile, is refused wherever the step keeps routine-local scratch (the
-           lineage says an earlier routine computed it, and its buffer does not persist). And
-           compiling it from the context BEFORE the step would re-lower it without the placement
-           decisions a tuned cell's search recorded. Compiled from [ctx], it reads and writes the
-           step's own buffers. *)
-        let compile () =
-          Context.compile_outcome
-            ~name:(Printf.sprintf "%s__kernel%d" shipped.Context.name i)
-            ~prelowered:(scratch_segment seg)
-            ~lowered_transform:(fun o -> [ o ])
-            ~provenance:Ir.Schedule_outcome.User_schedule ctx Ir.Assignments.empty_comp bindings
-        in
-        match time_hermetic ~repeats ~bind compile with
-        | Error detail ->
-            Stdio.eprintf "bench: kernel %d of %d declined on its own: %s\n%!" i n detail;
-            None
-        | Ok (ms, routine) -> Some (i, seg, ms, routine.Context.mma))
+    time_shipped_kernels
+      ?out:(if kernel_table_enabled () then Some Stdio.stderr else None)
+      ~repeats ~ctx ~bindings routines
+    |> List.filter_map ~f:(fun (i, seg, result) ->
+        Result.ok result |> Option.map ~f:(fun (ms, routine) -> (i, seg, ms, routine.Context.mma)))
   with
   | exception exn -> no_kernel ("instrument failed: " ^ Exn.to_string exn)
   | [] when n = 0 -> no_kernel "the step shipped no kernel segments"
   | [] -> no_kernel (Printf.sprintf "all %d kernels declined to compile on their own" n)
   | timed ->
-      (* [BENCH_KERNEL_TABLE=1]: every timed kernel, not only the slowest -- the per-kernel
-         attribution of the step AS SHIPPED (a diagnostic companion of this column: stderr, so the
-         result line is unchanged). Each line names the kernel's launch geometry and every node it
-         writes, which is what a driver classifies kernels by. *)
-      if kernel_table_enabled () then
-        List.iter timed ~f:(fun (i, seg, ms, mma) ->
-            let d = Ir.Low_level.launch_dims seg.Ir.Low_level.llc in
-            let dims a = String.concat_array ~sep:";" (Array.map a ~f:Int.to_string) in
-            Stdio.eprintf "bench: kernel %d/%d %.4f ms grid=[%s] block=[%s] mma:%s w: %s\n%!" i n ms
-              (dims d.Ir.Low_level.grid) (dims d.Ir.Low_level.block)
-              (Ir.C_syntax.mma_summary_string mma)
-              (String.concat ~sep:" " (List.map (writes_of seg.Ir.Low_level.llc) ~f:Tn.debug_name)));
       let segments_ms = List.sum (module Float) timed ~f:(fun (_, _, ms, _) -> ms) in
       let i, seg, seg_ms, mma =
         List.max_elt timed ~compare:(fun (_, _, a, _) (_, _, b, _) -> Float.compare a b)
@@ -1234,7 +1299,7 @@ let self_test_leg =
     Not a benchmark, and not comparable to one: see {!self_test_protocol}. The backend is chosen the
     usual OCANNL way, so the same call smoke-tests the measurement path on whatever backend the
     caller is configured for. *)
-let run_self_test ?(out = Stdio.stdout) () =
+let run_self_test ?(out = Stdio.stdout) ?(leg = self_test_leg) ?inspect_compiled ?inspect_step () =
   let module TDSL = Operation.DSL_modules.TDSL in
   let module IDX = Train.IDX in
   let n_samples = 8 and n_features = 4 and n_hidden = 5 and n_classes = 3 in
@@ -1274,7 +1339,7 @@ let run_self_test ?(out = Stdio.stdout) () =
     Nn_blocks.cross_entropy_loss ~spec:"...|v" ~normalize_by:!..n_samples () ~logits ~targets:ys
   in
   let learning_rate = TDSL.O.( !. ) 0.01 in
-  let parts = train_step_parts ~leg:self_test_leg ~learning_rate loss in
+  let parts = train_step_parts ~leg ~learning_rate loss in
   let ctx = Context.auto () in
   let backend = Context.backend_name ctx in
   let bindings = IDX.empty in
@@ -1286,6 +1351,7 @@ let run_self_test ?(out = Stdio.stdout) () =
       ctx bindings parts
   in
   let compile_s = Unix.gettimeofday () -. t0 in
+  Option.iter inspect_compiled ~f:(fun inspect -> inspect loss routines);
   let ctx_ref = ref ctx in
   let step_count = ref 0 in
   let run_step () =
@@ -1295,9 +1361,14 @@ let run_self_test ?(out = Stdio.stdout) () =
   let open Operation.At in
   (* No [~tune]: an untuned cell, so the line's [searched] is false and it carries no [tune] object.
      What the self-test guards is the protocol and the emitter, not the search. *)
-  measure_and_emit ~protocol:self_test_protocol ~backend ~variant:"self-test" ~compile_s ~out
-    ~dominant_kernel:(fun () -> dominant_kernel ~ctx:!ctx_ref ~bindings (step_routines routines))
-    ~run_step
-    ~read_loss:(fun () -> (!ctx_ref, loss).@[0])
-    ~sync:(fun () -> Context.sync !ctx_ref)
-    ()
+  let line =
+    measure_and_emit ~protocol:self_test_protocol ~backend ~variant:"self-test" ~compile_s ~out
+      ~dominant_kernel:(fun () -> dominant_kernel ~ctx:!ctx_ref ~bindings (step_routines routines))
+      ~run_step
+      ~read_loss:(fun () -> (!ctx_ref, loss).@[0])
+      ~sync:(fun () -> Context.sync !ctx_ref)
+      ()
+  in
+  Option.iter inspect_step ~f:(fun inspect ->
+      inspect !ctx_ref bindings loss (step_routines routines));
+  line

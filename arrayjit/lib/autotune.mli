@@ -63,18 +63,19 @@
       before Grid retypes could join it. The sketches are seeded whole-routine {e and} per fission
       segment: on a fissionable computation, the fission segmentation is enumerated once and the
       sketch pipelines are instantiated for each segment where a matmul site is detected (keyed by
-      the segment's pre-schedule digest), the remaining segments keeping the default preset. A
-      segment's site has its [Zero_out] in a separate [`Zeros] segment, so the pipelines skip the
-      zero-expansion geometry there — sound because [Privatize] init-loads the accumulator tile from
-      the (pre-zeroed) target and [Tile_mma] loads the accumulator fragment before the reduction. On
-      GPU backends the segmentation is additionally enumerated under
-      {!Ir.Schedule.fission_scheduled}'s [arity_cuts] (finer) mode (gh-ocannl-574): a segment
-      carrying a companion that cannot follow its site's full arity — the lm_head GEMM with its
-      max-logits row reduction — has every seed of the shared segment decline on companion coverage,
-      and the finer cut frees the site into its own kernel; segments whose digest is new versus the
-      coarse segmentation seed [fine]-flagged singles, one composite recombines the fine keys'
-      best-timed singles (coarse-timed bests staff the digest-identical segments), and a fine winner
-      records the mode in its cache entry so replay re-segments identically.
+      the segment's pre-schedule digest), the remaining segments keeping the default preset. GPU
+      segments can carry a covering per-cell zero companion, mapped with the site's geometry;
+      [Privatize] forwards its seed when its scope owns the whole reduction. Whole-node zeros
+      retained by the policy (including CPU zeros) remain separate, and the accumulator init-load
+      observes them. [Tile_mma] loads its accumulator fragment before the reduction. On GPU backends
+      the segmentation is additionally enumerated under {!Ir.Schedule.fission_scheduled}'s
+      [arity_cuts] (finer) mode (gh-ocannl-574): a segment carrying a companion that cannot follow
+      its site's full arity — the lm_head GEMM with its max-logits row reduction — has every seed of
+      the shared segment decline on companion coverage, and the finer cut frees the site into its
+      own kernel; segments whose digest is new versus the coarse segmentation seed [fine]-flagged
+      singles, one composite recombines the fine keys' best-timed singles (coarse-timed bests staff
+      the digest-identical segments), and a fine winner records the mode in its cache entry so
+      replay re-segments identically.
     - {b Convolution sketches} (gh-ocannl-493): when a convolution accumulation site is detected
       ({!detect_conv}), the implicit-GEMM pipeline — the packing [Stage] serving as im2col, the
       micro-kernel the ordinary [Tile_mma]. On the C backends: serial and Grid-parallel flavors, the
@@ -126,10 +127,10 @@
     Implementation note: the {e structured} half of the candidate space — matmul/conv site
     detection, the composed schedule pipelines those sites parameterize, and the refinement trees
     whose leaves are the seed lists — lives in [sketch_families.ml] and is included here
-    (gh-ocannl-580). This interface is unchanged by that split and remains the library's only gate;
-    the family entry points below ({!sketch_params}, {!detect_conv}, {!matmul_sketch_tree},
-    {!sketch_schedule}, {!sketch_path_traffic_floor}, …) are defined there, and
-    {!sketch_seed_params} is the composition the search enumerates. *)
+    (gh-ocannl-580). [Sketch_families]' interface bounds that include to the construction contracts
+    consumed here; the family entry points below ({!sketch_params}, {!detect_conv},
+    {!matmul_sketch_tree}, {!sketch_schedule}, {!sketch_path_traffic_floor}, …) are defined there,
+    and {!sketch_seed_params} is the composition the search enumerates. *)
 
 open Base
 
@@ -154,9 +155,9 @@ type sketch_params = {
   sk_pack_prec : Ir.Ops.prec option;
   sk_tile : Ir.Register_tile.t option;
 }
-(** Parameters of one matmul-sketch seed candidate; see the implementation's field docs. Exposed for
-    tests (the seeding pre-filter of gh-ocannl-479 and the mixed grid-outermost shape of
-    gh-ocannl-473 are asserted on directly). *)
+(** Parameters of one matmul-sketch seed candidate; see {!Sketch_families.sketch_params} for field
+    documentation. Exposed for tests (the seeding pre-filter of gh-ocannl-479 and the mixed
+    grid-outermost shape of gh-ocannl-473 are asserted on directly). *)
 
 type matmul_site = {
   m_i : Ir.Indexing.symbol;
@@ -298,19 +299,6 @@ val sketch_seed_params :
     list {e is} {!Ir.Schedule_space.leaves} of {!matmul_sketch_tree}, epilogue twins included.
     Exposed for tests. *)
 
-val mma_tile_for_precisions :
-  Ir.Backend_intf.mma_capability ->
-  a_prec:Ir.Ops.prec ->
-  b_prec:Ir.Ops.prec ->
-  d_prec:Ir.Ops.prec ->
-  (int * int * int) option
-(** The advertised intrinsic tile a matmul site with these operand and destination storage
-    precisions resolves to under the current {!Ir.Numerics} policy (f32 operands resolve to TF32
-    first when [tf32_matmuls] is on), or [None] when the capability advertises no matching format
-    triple — the resolution {!sketch_seed_params} gates its tensorized seeds on. Exposed so a test
-    can gate a tensorized leg on the seeder's own format resolution rather than on the seeds under
-    test. *)
-
 val tensorized_capability_refutation :
   is_gpu:bool ->
   is_cpu:bool ->
@@ -323,11 +311,10 @@ val tensorized_capability_refutation :
     these operand and destination storage precisions, before any geometry or site structure is
     consulted — [None] when they do not (gh-ocannl-1115). {!matmul_sketch_tree} refutes its
     tensorized branch with exactly this witness. On GPU: routine logging, an mma lane wider than the
-    workgroup, no advertised format tile ({!mma_tile_for_precisions}); on CPU, the register tiling's
-    shape-independent rules: a usable vector file, two lanes at the compute precision, uniform
-    vector-capable compute precisions, routine logging. Exposed so a test claims a tensorized seed's
-    PRESENCE exactly where the seeder's own capability judgment admits it, never gating on the seed
-    list under test. *)
+    workgroup, no advertised format tile; on CPU, the register tiling's shape-independent rules: a
+    usable vector file, two lanes at the compute precision, uniform vector-capable compute
+    precisions, routine logging. Exposed so a test claims a tensorized seed's PRESENCE exactly where
+    the seeder's own capability judgment admits it, never gating on the seed list under test. *)
 
 module Family_decision : sig
   (** {1 What a commitment on the matmul family tree is (gh-ocannl-591)}
@@ -626,6 +613,10 @@ type outcome =
       (** A cached winner replayed; no search ran in this process. The census is then empty except
           for a declined baseline: the base compile precedes the lookup, so its rejection is real
           information about this process on this device even though nothing was searched. *)
+  | Abandonment_replay of abandonment
+      (** Cached timings under this call's search shape still satisfy its current [?abandon] rule.
+          No search ran, the counters describe only the base compile, and {!tune} raises
+          {!Search_abandoned} without returning a routine. *)
   | Search_disabled
       (** Nothing was searched and there was nothing to replay: config [autotune_search=false] (the
           reproducible profile, gh-ocannl-559) with no chosen cache, or a chosen cache that missed.
@@ -644,7 +635,7 @@ type outcome =
           the incumbent's at the same depth by more than the rule's ratio (gh-ocannl-1110), and
           {!tune} raised {!Search_abandoned}. Not a failure: the counters hold the work it reached,
           [best_ms] is a measurement of the search context, nothing was compiled for the caller and
-          nothing was cached. *)
+          clean measured prefixes are cached for a later {!Abandonment_replay}. *)
 
 type timing_mode =
   | Isolated
@@ -788,10 +779,11 @@ type report = {
           then proposed both unfused and with [Schedule.Fuse_epilogue] appended, so the tuner
           measures the one-kernel fused form against the fissioned two-kernel form. *)
   fiss_sketch_candidates : int;
-      (** Per-fission-segment sketch candidates seeded (0 when the computation does not fission, or
-          no segment contains a compatible matmul site). Includes the finer-segmentation
-          ([arity_cuts], gh-ocannl-574) singles on GPU backends. Deterministic given the computation
-          and backend. *)
+      (** Per-fission-segment sketch candidates seeded (0 when segmentation neither splits the
+          computation nor exposes a changed lowering, or no segment contains a compatible site). GPU
+          zero expansion can expose a sketchable singleton with a per-cell zero companion. Includes
+          the finer-segmentation ([arity_cuts], gh-ocannl-574) singles on GPU backends.
+          Deterministic given the computation and backend. *)
   fiss_sketch_timed : int;
       (** Of the seeded per-fission-segment sketch candidates, those that compiled and were actually
           timed (not rejected by op preconditions or hardware limits, not deduplicated by digest).
@@ -1202,8 +1194,9 @@ val flip_profit_margin_of_string : string -> float
     take) by 1.07x. *)
 
 exception Search_abandoned of abandonment
-(** Raised by {!tune} when its [?abandon] rule decides; its report (outcome {!Abandoned}) has
-    already been delivered, and every candidate the search compiled released. *)
+(** Raised by {!tune} when its [?abandon] rule decides, including from cached evidence. Its report
+    ({!Abandoned} or {!Abandonment_replay}) has already been delivered, and every candidate this
+    call compiled released. *)
 
 type abandon_rule = {
   incumbent_steps : (int * float) list;  (** The incumbent search's {!report.best_steps}. *)
@@ -1791,7 +1784,10 @@ val tune :
   (* gh-ocannl-1110: stop the search, raising {!Search_abandoned} after delivering an {!Abandoned}
      report, when {!abandon_verdict} decides at [k = beam_width] admitted timings. Absent (the
      default), a search always runs to completion. [Train.tune_placements] passes it for flips only,
-     against the incumbent they refine. *)
+     against the incumbent they refine. A clean abandoned prefix is saved under the unchanged
+     schedule key in a separate filename space. With the same search shape, a later call
+     re-evaluates this rule on that prefix and may raise without searching, reporting
+     {!Abandonment_replay}; without a rule, it always searches or replays a winner. *)
   ?report:(report -> unit) ->
   Context.t ->
   Ir.Assignments.comp ->

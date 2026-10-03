@@ -24,6 +24,7 @@
 open Base
 module H = Bench_harness
 module U = Yojson.Safe.Util
+open Ocannl.Operation.DSL_modules
 
 let field j k = try Some (U.member k j) with _ -> None
 
@@ -41,7 +42,45 @@ let is_str j k expected =
 let () =
   (* Emitted to stderr rather than stdout: the line carries wall-clock digits, and the golden is
      diffed. It is echoed rather than dropped so a failing run is diagnosable from the log. *)
-  let line = H.run_self_test ~out:Stdio.stderr () in
+  let inspect_step ctx bindings loss routines =
+    let kernels = H.shipped_kernels routines in
+    let writes = List.concat_map kernels ~f:(fun (_, seg) -> H.writes_of seg.Ir.Low_level.llc) in
+    let writes_node tn = List.mem writes tn ~equal:Ir.Tnode.equal in
+    Verdict.p "training segment census includes the forward loss"
+      (writes_node loss.Ocannl.Tensor.value);
+    let params = Ocannl.Train.trainable_params loss |> Set.to_list in
+    Verdict.p_all "training segment census includes every parameter gradient and optimizer write"
+      params ~f:(fun p ->
+        writes_node p.Ocannl.Tensor.value
+        && Option.value_map p.Ocannl.Tensor.diff ~default:false ~f:(fun d ->
+            writes_node d.Ocannl.Tensor.grad));
+    H.print_shipped_census ~out:Stdio.stderr routines;
+    let outcomes = H.time_shipped_segments ~out:Stdio.stderr ~repeats:1 ~ctx ~bindings routines in
+    Verdict.p_all "every tiny training segment executes with a positive standalone time" outcomes
+      ~f:(fun result -> match result with Ok ms -> Float.(ms > 0.) | Error _ -> false)
+  in
+  let line = H.run_self_test ~out:Stdio.stderr ~inspect_step () in
+  (* Before any host-gated step runs, its conditional SGD is nevertheless compiled work. *)
+  ignore
+    (H.run_self_test ~out:Stdio.stderr
+       ~leg:{ H.self_test_leg with base = "f16" }
+       ~inspect_compiled:(fun loss routines ->
+         let shipped = H.compiled_step_routines routines in
+         let writes =
+           List.concat_map (H.shipped_kernels shipped) ~f:(fun (_, seg) ->
+               H.writes_of seg.Ir.Low_level.llc)
+         in
+         Verdict.p "a host-gated census before execution includes its separately compiled optimizer"
+           (match routines with
+           | H.Host_gate (_, _, grad, sgd) ->
+               (not (String.equal grad.Context.name sgd.Context.name))
+               && List.exists shipped ~f:(fun r -> String.equal r.Context.name sgd.Context.name)
+           | _ -> false);
+         Verdict.p_all "that pre-execution census includes every optimizer parameter write"
+           (Ocannl.Train.trainable_params loss |> Set.to_list)
+           ~f:(fun p -> List.mem writes p.Ocannl.Tensor.value ~equal:Ir.Tnode.equal))
+       ()
+      : string);
   let protocol = H.self_test_protocol in
   let parsed =
     match try Some (Yojson.Safe.from_string line) with _ -> None with

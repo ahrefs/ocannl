@@ -4,8 +4,13 @@ open Base
    parameterize, and the refinement trees whose leaves are the seed lists — live in their own module
    (gh-ocannl-580). Included rather than opened: the search harness below refers to the family types
    and helpers unqualified, and {!sketch_params} and the site types are part of this module's public
-   interface. The module aliases shared by both halves come from here as well. *)
+   interface. The harness keeps its own aliases for the IR modules. *)
 include Sketch_families
+module Sched = Ir.Schedule
+module Sspace = Ir.Schedule_space
+module LL = Ir.Low_level
+module Idx = Ir.Indexing
+module Outcome = Ir.Schedule_outcome
 module SC = Ir.Schedule_cache
 
 type decline_summary = { key : Outcome.rejection_key; count : int; sample_details : string list }
@@ -24,6 +29,8 @@ type outcome =
   | Search_died of terminal_failure
       (** A search ran and terminated on a fatal failure. The counters hold what it had reached. *)
   | Cache_replay  (** A cached winner replayed; nothing was searched in this process. *)
+  | Abandonment_replay of abandonment
+      (** Cached timings justify abandoning this call; nothing was searched or returned. *)
   | Search_disabled
       (** [autotune_search=false] with nothing to replay: the untuned default ships. *)
   | Pre_search_failure of terminal_failure
@@ -270,6 +277,7 @@ let outcome_name = function
   | Search_disabled -> "search-disabled"
   | Pre_search_failure _ -> "pre-search-failure"
   | Abandoned _ -> "abandoned"
+  | Abandonment_replay _ -> "abandonment-replay"
 
 (** The fatal failure that ended the call, from whichever of the two failing states it was. A
     projection over the outcome, not a re-derivation of it: "did this call fail" is a question that
@@ -277,7 +285,7 @@ let outcome_name = function
 let terminal_failure (r : report) =
   match r.outcome with
   | Search_died tf | Pre_search_failure tf -> Some tf
-  | Searched | Cache_replay | Search_disabled | Abandoned _ -> None
+  | Searched | Cache_replay | Abandonment_replay _ | Search_disabled | Abandoned _ -> None
 
 (* gh-ocannl-1110: the flip chain's early abandonment. *)
 exception Search_abandoned of abandonment
@@ -1308,29 +1316,6 @@ let optop_family (op : SC.saved_optop) =
   | SC.Fold_mma _ -> "Fold_mma"
   | SC.Split_reduce _ -> "Split_reduce"
 
-(** {2 The composed seed list} *)
-
-(* The families composed into the seed list the search enumerates: the matmul family when a matmul
-   site is detected, else the convolution family, each with its epilogue-fusion twins. *)
-let sketch_seed_params ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits)
-    (opt : LL.optimized) : sketch_params list =
-  (* Fused-epilogue variants (gh-ocannl-486): when the site's output feeds an eligible elementwise
-     tail, every seed gets a fused twin — the tuner measures fused (one kernel) vs. unfused (the
-     fissioned two-kernel form). The check runs on the base code where the plain accumulation-nest
-     fusion site applies; seeds whose scheduled form no longer admits the fusion fail their
-     candidate compile and are skipped. For the matmul family the fusion choice is the tree's root
-     level (gh-ocannl-613), so its leaves already carry the twins, each flavor under its own
-     preconditions; the conv family is not tree-factored yet and flag-flips its seeds. *)
-  match detect_matmul opt.LL.llc with
-  | Some site -> matmul_seed_params ~is_gpu ~is_cpu ~limits ~opt site
-  | None -> (
-      match conv_seed_params ~is_gpu ~is_cpu ~limits opt with
-      | None -> []
-      | Some (seeds, d) ->
-          if (not (List.is_empty seeds)) && Sched.can_fuse_epilogue ~target:d opt then
-            seeds @ List.map seeds ~f:(fun p -> { p with sk_epilogue = true })
-          else seeds)
-
 (** {2 The privatized fission flavor}
 
     A variant of the per-segment preset that contracts each materialized read-modify-write
@@ -1613,11 +1598,23 @@ let scratch_of (opt : LL.optimized) =
     LL.optimize_ctx = LL.copy_optimize_ctx opt.LL.optimize_ctx;
   }
 
+(* Fission can expose new sketch sites without adding a kernel: GPU zero expansion makes a covering
+   initializer a per-cell companion even when the routine stays in one segment. Only an unchanged
+   singleton is already covered by whole-routine sketches. *)
+let fission_exposes_sites ~static_indices (opt : LL.optimized) tuples =
+  match tuples with
+  | [] -> false
+  | [ (_, pre, _, _) ] ->
+      let key o = SC.digest (SC.canonicalize ~static_indices ~with_placements:false o) in
+      not (String.equal (key pre) (key opt))
+  | _ -> true
+
 (* Per-machine calibrated envelope constants from the config beat the backend's class-level advisory
    constants ([Backend_intf.hardware_limits]'s [peak_flops] / [peak_memory_bandwidth]) — fitting
    them from [autotune_calibration_file] data is the intended workflow. *)
 (* Takes the read as a thunk, both to keep it lazy and to keep the key a literal at its call
    site -- see [int_setting]. *)
+
 let peak_override read =
   lazy
     (let s = String.strip (read ()) in
@@ -3150,64 +3147,63 @@ let model_default ?name ?report ctx comp bindings =
               | Some (p, sc) -> [ (spec_label (Whole (W_sketch p)), sc, `Whole p) ]
               | None -> []
             in
-            (* Per-segment sketch substitution over the default fission segmentation (only when the
-               default actually fissioned; otherwise the whole-routine sketches cover the site).
-               Mirrors [tune]'s [F_sketch] flavor: segments keyed by their structural pre-schedule
-               digest, a key miss degrading to the default preset. *)
+            (* Per-segment sketch substitution when fission splits the routine or exposes a new
+               lowering (a covering GPU zero companion) for sketching. Mirrors [tune]'s [F_sketch]
+               flavor: segments keyed by their structural pre-schedule digest, a key miss degrading
+               to the default preset. *)
             let fiss =
-              if List.length default_scratch <= 1 then None
-              else
-                match
-                  Sched.fission_scheduled ~promote_locals:is_gpu
-                    ?keep_mapping:(Sched.fission_keep_mapping ~is_gpu ~limits)
-                    ~preset ~zero_sched ~static_indices (scratch_of opt)
-                with
-                | exception Outcome.Cause_at _ ->
-                    Int.incr n_rejected;
-                    None
-                | tuples -> (
-                    let entries =
-                      List.filter_map tuples ~f:(fun (kind, pre, _sched, post) ->
-                          match kind with
-                          | `Zeros | `Solo -> None
-                          | `Normal -> (
-                              match score [ post ] with
-                              | None -> None
-                              | Some bs -> (
-                                  (* The segment's family tree searched with the segment's own
-                                     default-preset score as incumbent; conv segments keep the flat
-                                     path. *)
-                                  let best_sketch =
-                                    match tree_search ~incumbent:bs pre with
-                                    | Some tree_best -> tree_best
-                                    | None ->
-                                        best_flat ~threshold:bs pre
-                                          (sketch_seed_params ~is_gpu ~is_cpu ~limits pre)
-                                  in
-                                  match best_sketch with
-                                  | Some (p, _s) -> Some (seg_key pre, p)
-                                  | None -> None)))
+              match
+                Sched.fission_scheduled ~promote_locals:is_gpu
+                  ?keep_mapping:(Sched.fission_keep_mapping ~is_gpu ~limits)
+                  ~preset ~zero_sched ~static_indices (scratch_of opt)
+              with
+              | exception Outcome.Cause_at _ ->
+                  Int.incr n_rejected;
+                  None
+              | tuples when not (fission_exposes_sites ~static_indices opt tuples) -> None
+              | tuples -> (
+                  let entries =
+                    List.filter_map tuples ~f:(fun (kind, pre, _sched, post) ->
+                        match kind with
+                        | `Zeros | `Solo -> None
+                        | `Normal -> (
+                            match score [ post ] with
+                            | None -> None
+                            | Some bs -> (
+                                (* The segment's family tree searched with the segment's own
+                                   default-preset score as incumbent; conv segments keep the flat
+                                   path. *)
+                                let best_sketch =
+                                  match tree_search ~incumbent:bs pre with
+                                  | Some tree_best -> tree_best
+                                  | None ->
+                                      best_flat ~threshold:bs pre
+                                        (sketch_seed_params ~is_gpu ~is_cpu ~limits pre)
+                                in
+                                match best_sketch with
+                                | Some (p, _s) -> Some (seg_key pre, p)
+                                | None -> None)))
+                  in
+                  if List.is_empty entries then None
+                  else
+                    let subst_preset seg =
+                      match List.Assoc.find entries ~equal:String.equal (seg_key seg) with
+                      | Some p -> sketch_schedule ~accum_prec ~p seg
+                      | None -> preset seg
                     in
-                    if List.is_empty entries then None
-                    else
-                      let subst_preset seg =
-                        match List.Assoc.find entries ~equal:String.equal (seg_key seg) with
-                        | Some p -> sketch_schedule ~accum_prec ~p seg
-                        | None -> preset seg
-                      in
-                      (* Score the substituted pipeline whole, so it competes on the same footing as
-                         the other candidates. *)
-                      match
-                        Sched.fission_scheduled ~promote_locals:is_gpu
-                          ?keep_mapping:(Sched.fission_keep_mapping ~is_gpu ~limits)
-                          ~preset:subst_preset ~zero_sched ~static_indices (scratch_of opt)
-                      with
-                      | exception Outcome.Cause_at _ ->
-                          Int.incr n_rejected;
-                          None
-                      | tuples2 ->
-                          let posts = List.map tuples2 ~f:(fun (_, _, _, post) -> post) in
-                          Option.map (score_valid posts) ~f:(fun s -> (entries, s)))
+                    (* Score the substituted pipeline whole, so it competes on the same footing as
+                       the other candidates. *)
+                    match
+                      Sched.fission_scheduled ~promote_locals:is_gpu
+                        ?keep_mapping:(Sched.fission_keep_mapping ~is_gpu ~limits)
+                        ~preset:subst_preset ~zero_sched ~static_indices (scratch_of opt)
+                    with
+                    | exception Outcome.Cause_at _ ->
+                        Int.incr n_rejected;
+                        None
+                    | tuples2 ->
+                        let posts = List.map tuples2 ~f:(fun (_, _, _, post) -> post) in
+                        Option.map (score_valid posts) ~f:(fun s -> (entries, s)))
             in
             let contenders =
               contenders
@@ -4008,11 +4004,39 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
         | _ -> None
       else None
     in
-    match cached with
-    | Some result ->
+    (* A winner takes precedence. Without one, replay an abandoned prefix only under the shape that
+       measured it and a current rule that still rejects it. A weaker incumbent, changed margin,
+       absent rule or changed sampling cannot inherit yesterday's verdict. *)
+    let replayed_abandonment =
+      if use_cache && Option.is_none cached then
+        Option.bind abandon ~f:(fun rule ->
+            Option.bind (SC.lookup_abandonment ~dir:cache_dir ~key) ~f:(fun entry ->
+                if
+                  String.equal entry.SC.source_digest base_digest
+                  && String.equal entry.SC.trajectory.SC.search_shape search_shape
+                then
+                  Option.map
+                    (abandon_verdict rule ~k:beam_width ~steps:entry.SC.trajectory.SC.steps)
+                    ~f:(fun ab -> (ab, entry))
+                else None))
+      else None
+    in
+    match (cached, replayed_abandonment) with
+    | Some result, _ ->
         release_baseline ();
         result
-    | None when not search ->
+    | None, Some (ab, entry) ->
+        release_baseline ();
+        emit_report
+          {
+            (census ()) with
+            outcome = Abandonment_replay ab;
+            best_ms = ab.ab_best_ms;
+            best_label = "cached-abandonment";
+            best_steps = entry.SC.trajectory.SC.steps;
+          };
+        raise (Search_abandoned ab)
+    | None, None when not search ->
         logf
           "search disabled (autotune_search=false) and no cache entry: compiling the untuned \
            default";
@@ -4024,7 +4048,7 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
         let result = compile_untuned_default ~base:reached () in
         report_or_release reached ~result;
         result
-    | None ->
+    | None, None ->
         let seen = Hash_set.create (module String) in
         Hash_set.add seen base_digest;
         (* Every gh-ocannl-532 refusal enters the same decline census (gh-ocannl-543). Without it a
@@ -4866,7 +4890,7 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                   ~arity_cuts ~preset ~zero_sched ~static_indices scratch
               with
               | exception Outcome.Cause_at _ -> []
-              | [] | [ _ ] -> [] (* Unfissioned: the whole-routine sketches cover the site. *)
+              | tuples when not (fission_exposes_sites ~static_indices base_opt tuples) -> []
               | tuples ->
                   List.filter_map tuples ~f:(fun (kind, pre, _, _) ->
                       match kind with
@@ -5346,10 +5370,21 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                  at the same depth by more than %.4gx"
                 ab.ab_timed ab.ab_best_ms ab.ab_incumbent_ms ab.ab_ratio;
               (* Built before the sweep, which the report's winner label outlives (see
-                 [release_all_candidates]). Nothing is cached: an abandoned search crowned nothing,
-                 and the store below the rounds was never reached. *)
+                 [release_all_candidates]). No winner is crowned, but the clean measured prefix can
+                 spare a replay this same search (gh-ocannl-1136). *)
               let r = partial_report (Abandoned ab) in
               release_all_candidates ~keep:[] ();
+              if
+                use_cache
+                && search_measurements_cacheable ~nothing_timed:false
+                     ~timings_contended:r.timings_contended
+              then
+                SC.store_abandonment ~dir:cache_dir ~key
+                  {
+                    SC.version = SC.entry_version;
+                    source_digest = base_digest;
+                    trajectory = { SC.search_shape; steps = r.best_steps };
+                  };
               (* The callback's own exception propagates, as on the completion path. *)
               emit_report r;
               raise (Search_abandoned ab)

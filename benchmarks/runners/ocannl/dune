@@ -24,6 +24,14 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+(library
+ (name bench_gpt_model)
+ (package neural_nets_lib)
+ (modules bench_gpt_model)
+ (libraries base bench_harness ocannl)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 (executables
  (names
   bench_mlp
@@ -42,6 +50,7 @@
  (libraries
   base
   bench_harness
+  bench_gpt_model
   bench_json
   ocannl
   stdio
@@ -102,3 +111,47 @@
  (name metal-codegen)
  (deps
   (alias bin-smoke)))
+
+; Deep-k CUDA source exporter for the precompiled gh-ocannl-1073 A/B probe.
+
+(executable
+ (name bench_mma_register_scope_emit)
+ (modules bench_mma_register_scope_emit)
+ (libraries base ocannl stdio test_utils ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl))
+ (modes exe))
+
+; Opt-in source export: no timing and no GPU execution on @default or @check.
+
+(copy_files ../../ocannl_config)
+
+(rule
+ ; ocannl-backend: none -- only checks ambient environment variable spellings.
+ (alias mma-register-scope-emit-env_spelling_gate)
+ (deps ocannl_config (universe))
+ (action
+  (run %{exe:../../../bin/env_spelling_gate.exe})))
+
+(rule
+ ; ocannl-backend: cuda -- pins the backend in the exporter invocation.
+ (alias mma-register-scope-emit)
+ ; Keep the opt-in source export in this worktree's build directory after the action.
+ (deps
+  (sandbox none)
+  ocannl_config
+  (alias mma-register-scope-emit-env_spelling_gate)
+  (env_var OCANNL_BUILD_FILES_PREFIX)
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
+  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
+  (env_var OCANNL_LARGE_MODELS)
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_PROFILE)
+  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA))
+ (action
+  (no-infer
+   (run
+    %{exe:bench_mma_register_scope_emit.exe}
+    generated-mma-register-scope.cu
+    --ocannl_backend=cuda))))

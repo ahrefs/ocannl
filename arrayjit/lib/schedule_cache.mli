@@ -392,6 +392,21 @@ val lookup : dir:string -> key:string option -> entry option
     race. A binary predating this protocol does not participate and must not share a live directory
     during an upgrade. *)
 
+(** {2 Abandoned searches} *)
+
+type abandonment_entry = { version : int; source_digest : string; trajectory : trajectory }
+[@@deriving sexp]
+(** The measured prefix of an abandoned search. [version] follows {!entry_version}, so a search-menu
+    change invalidates this evidence along with its winners. Replay checks the digest and search
+    shape, then re-evaluates the caller's current abandonment rule. *)
+
+val store_abandonment : dir:string -> key:string option -> abandonment_entry -> unit
+(** {!store}'s protocol, under ["abandonment-" ^ key]. The supplied key is the unchanged schedule
+    key; this namespace keeps the evidence separate from any crowned schedule. *)
+
+val lookup_abandonment : dir:string -> key:string option -> abandonment_entry option
+(** {!lookup}'s protocol and version check, for an abandoned search. *)
+
 (** {2 The placement-decision store}
 
     The durable record of what {!Train.tune_placements} decided (gh-ocannl-786), beside the schedule

@@ -8,13 +8,12 @@
     {!Ir.Schedule_space} and a handful of {!Ir.Schedule} helpers, so it is reviewable, and
     extensible, in isolation from the beam search that consumes it.
 
-    {!Autotune.sketch_seed_params} composes the families (the matmul tree's leaves, else the conv
-    seeds crossed with their epilogue-fusion twins) into the seed list the search actually
-    enumerates.
+    {!sketch_seed_params} composes the families (the matmul tree's leaves, else the conv seeds
+    crossed with their epilogue-fusion twins) into the seed list the search actually enumerates.
 
-    No [.mli] of its own: [autotune.ml] {e includes} this module, so the whole of it is in scope for
-    the search harness unqualified (the site helpers as much as the families), and [autotune.mli]
-    remains the single gate on what leaves the library. *)
+    Its interface bounds the construction contracts consumed by the search harness: [autotune.ml]
+    {e includes} this module, so those contracts are in scope unqualified, and [autotune.mli]
+    selects the public search and inspection API. *)
 
 open Base
 module Sched = Ir.Schedule
@@ -33,157 +32,25 @@ module Outcome = Ir.Schedule_outcome
     [validate_parallel], hardware limits) and is skipped like any other invalid candidate. *)
 
 type sketch_params = {
-  sk_gpu : bool;  (** Register blocktiling with shared staging vs. CPU operand packing. *)
+  sk_gpu : bool;
   sk_mma : bool;
-      (** Tensorized (tile-MMA) pipeline instead of the scalar blocktiling/packing one: on GPU,
-          Split → (optional cooperative shared Stage) → Tensorize targeting [simdgroup_matrix] /
-          tensor cores; on cc, the whole-triple [Tile_mma] rendered register-tiled (gh-ocannl-469),
-          optionally Grid-parallel over row blocks — or, with [sk_bk > 0], the cache-blocked packed
-          composition (packing Stages feeding the register-tiled kernel;
-          [cpu_mma_pack_sketch_schedule]), itself optionally Grid-parallel ([sk_grid]: hoisted
-          packing runs Grid-outermost; in-kernel packing relies on the renderer's per-chunk tile
-          privatization). Seeded directly because the greedy menu cannot reach the composition: a
-          bare [Tensorize] from the serial baseline (one simdgroup, everything else serial) loses
-          round 1 and the beam discards it before Grid retypes could join it. *)
-  sk_simd : int;  (** MMA lane width ([hardware_limits.mma_simd_width]); 0 when [not sk_mma]. *)
+  sk_simd : int;
   sk_bm : int;
   sk_bn : int;
   sk_bk : int;
-      (** For GPU MMA sketches, [sk_bk = 0] = unstaged (one full-K [Tile_mma] block). For conv GPU
-          seeds, [sk_bn]/[sk_bk] are re-purposed as the pad-to multiples of the column/reduction
-          extents (gh-ocannl-485; 0 = already an intrinsic-tile multiple). *)
   sk_tm : int;
-      (** Register-tile factors; unused on CPU. For conv GPU seeds, [sk_tm] is re-purposed as the
-          row pad-to multiple of the unblocked flavor (gh-ocannl-485; 0 = no pad). *)
   sk_tn : int;
   sk_hoist : bool;
-      (** CPU packing only: pack compile-time-constant operands out of the routine, into the
-          per-device constant pool (gh-ocannl-470). Proposed alongside the in-kernel packing variant
-          so the choice stays measured; applied per operand, only to hoistable (known-constant,
-          host-init-backed) sources. *)
   sk_grid : bool;
-      (** CPU packed composition only ([sk_mma] with [sk_bk > 0]): split [i] into pool-parallel
-          [Grid] row blocks instead of Serial ones. Four shapes, keyed by [sk_hoist] and
-          [sk_pack_rest]:
-
-          - With [sk_hoist] alone, hoisted-only packing: only hoistable operands are packed (at link
-            time, into the constant pool) and the rest are read in place, leaving the kernel body
-            all-materialized; the Grid loop stays outermost (one dispatch spanning the whole GEBP
-            triple). The typical inference GEMM: activations (in place) x constant weights.
-          - With [sk_hoist] and [sk_pack_rest], the mixed grid-outermost shape (gh-ocannl-473):
-            hoistable operands still pack at link time, but a non-hoistable operand gets an
-            in-kernel packing Stage instead of being read in place — its tile lands inside the Grid
-            body and is privatized to per-chunk block-scope storage by the renderer. For the
-            inference GEMM this recovers the A~ pack the hoisted-only shape forfeits (a per-chunk
-            [bm x bk] tile) while keeping the single outermost dispatch.
-          - With [sk_pack_rest] alone, grid-outermost in-kernel packing (gh-ocannl-475): both
-            operands pack inside the Grid body and privatize per chunk — each chunk re-packs its own
-            B~ panel (redundant copies, but one dispatch instead of one per k-block). Needs the
-            tiles under the renderer's per-chunk privatization cap (config
-            [cc_grid_private_bytes_cap]).
-          - Without [sk_hoist] or [sk_pack_rest], in-kernel packing: the per-row-block A~ packing
-            Stage lands inside the Grid body — its tile is privatized to per-chunk block-scope
-            storage by the renderer ([C_syntax.parallel_grid_safe]'s privatization rule) — while the
-            B~ panel packs at the k-block loop outside the Grid and is read-only inside (shared
-            across the row-block chunks, behind a pointer alias under the blocks extension),
-            re-entering the parallel construct once per k-block.
-
-          Proposed alongside the serial flavors so the choice stays measured. *)
   sk_pack_rest : bool;
-      (** Grid-outermost packed compositions only (with [sk_grid]): give non-hoistable operands a
-          non-hoisted in-kernel packing Stage instead of reading them in place, relying on the
-          renderer's per-chunk tile privatization. With [sk_hoist], the mixed shape of gh-ocannl-473
-          (hoisted constant panel + per-chunk pack of the rest); without [sk_hoist], the per-chunk
-          B~ re-packing shape of gh-ocannl-475 — the Grid loop stays outermost (one dispatch
-          spanning the GEBP triple) and every operand packs inside the Grid body. No effect on the
-          serial flavors or the hoisted-only Grid flavor, whose stages are already determined. *)
   sk_conv : bool;
-      (** Convolution site (gh-ocannl-493): the seed instantiates the implicit-GEMM conv pipeline
-          ([cpu_conv_sketch_schedule] / [gpu_conv_sketch_schedule] via [detect_conv]) instead of a
-          matmul one. The packing [Stage] serves as im2col and the micro-kernel is the ordinary
-          [Tile_mma] ([sk_mma] is set so the census expectations apply). On CPU, [sk_grid]
-          pool-parallelizes the outermost batch/spatial loop — on merged segments with the aligned
-          whole-segment geometry of the default preset ([conv_aligned_grid]). On GPU backends with
-          an mma capability ([sk_gpu] with [sk_simd] the lane width), the staged pipeline: outer
-          loops [Grid]-typed, cooperative shared-tile staging, the accumulator fragment resident
-          across the kernel window (gh-ocannl-480). *)
   sk_epilogue : bool;
-      (** Epilogue fusion (gh-ocannl-486): append [Sched.Fuse_epilogue] on the site's output, so the
-          sole-consumer elementwise tail (bias add / activation / residual) folds into the
-          store-back and the whole routine is one kernel — the fused competitor to the fissioned
-          two-kernel form. The matmul family tree's root level (gh-ocannl-613): the fused flavor is
-          refuted with the recognizer's own reason ([Sched.fuse_epilogue_witness]) when the base
-          code has no fusable tail, and otherwise enumerates after every unfused leaf; a candidate
-          whose scheduled form no longer admits the fusion (e.g. materializing unrolls duplicating
-          the store-back) fails its compile and is skipped like any other invalid candidate. On GPU
-          the accumulator moves to workgroup-shared memory (the [shared] flag) so the Metal fragment
-          intrinsics keep firing after placement makes it routine-local. *)
   sk_batch_grid : bool;
-      (** GPU matmul pipelines on batched (rank-3+) sites only (gh-ocannl-643): [Retype] the site's
-          batch loops — [m_bo] and the hoisted [m_bi] — to [Grid], so a batched/multi-head GEMM's
-          batch and head axes launch as grid blocks (folded onto the hardware [.z] dimension, see
-          [Low_level]'s hardware-axis section comment) instead of running as serial loops inside
-          each block. The zeroing nest and every companion nest carry the same per-position
-          annotation, with interior batch loops hoisted identically, so the cross-nest positional
-          thread identity is preserved. Seeded as a {e twin} of each geometry — the serial-batch
-          flavor stays measured, because block-count curves are non-monotone (gh-ocannl-569's probe
-          peaked near 128 blocks and regressed by 1024): the tuner, not a heuristic, decides whether
-          the extra parallelism beats the occupancy it costs. Refuted at the leaf, like every other
-          launch dimension, when the batch extents' product exceeds the backend's [.z] limit
-          ([Schedule.launch_geometry_excess] over [hardware_limits.max_grid_yz], with
-          [max_grid_fold_extent] standing in where the backend advertises none) — the same reading
-          [Schedule.check_hardware_limits_classified] enforces pre-driver for schedules that do not
-          come from these seeds. *)
   sk_batch_inner : bool;
-      (** With [sk_batch_grid], on sites with interior batch loops ([m_bi], the q/k/v projections'
-          heads) only (gh-ocannl-728): bind the interior batch loops {e inside} the row blocks —
-          grid nest order [m_bo; row blocks; m_bi; column blocks] instead of
-          [m_bo; m_bi; row blocks; column blocks]. The interior batch then takes the grid slot next
-          to the column blocks, and the row blocks fold with [m_bo] onto [.z]: consecutive blocks in
-          launch order sweep the heads of one row block, the order the heads-merged twin of the same
-          site launches in (heads on the column grid axis). Move 0 of gh-ocannl-728 measured most of
-          that twin's gain at an unchanged tile and block count — i.e. from this launch order. A
-          third batch flavor rather than the [sk_batch_grid] twin's order, for the same reason the
-          twin is one: the tuner measures, not a heuristic. Always [false] where [sk_batch_grid] is,
-          and on sites without interior batch loops, where the two orders are the same schedule. *)
   sk_swizzle : LL.swizzle_kind option;
-      (** Staged GPU mma sketches only ([sk_mma] with [sk_bk > 0]): store both cooperative operand
-          tiles in this XOR layout (gh-ocannl-481 item 3, D3). Seeded as a {e twin} of each staged
-          seed — same tile sizes, both operands marked — and only for format triples the backend
-          advertises in {!Ir.Backend_intf.mma_capability.mma_staged_layouts}, so a twin is never
-          proposed where the emission would decline it back to the scalar fallback (gh-ocannl-479).
-          The tuner, not a heuristic, decides whether the bank-conflict fix beats the plain tile:
-          the same "propose both, measure" pattern as hoisted packing. Unstaged seeds have no shared
-          tile to swizzle and are never twinned. *)
   sk_depth : int;
-      (** Staged GPU mma/conv sketches: the cooperative stages' software-pipelining depth
-          ([Schedule.Stage ~pipeline_depth], gh-ocannl-487); 1 = unpipelined. Depths > 1 are seeded
-          as {e twins} of each staged seed — same tile sizes, same pipeline, so a timing difference
-          between the two is the prefetch overlap's (against the halved occupancy from the doubled
-          shared-memory footprint), and nothing else's — for exactly the depths the backend
-          advertises in {!Ir.Backend_intf.mma_capability.mma_pipeline_depths}, and only for staged
-          operands of at least 4-byte storage — the async arms' element floor
-          ([C_syntax_config.async_copy]); a narrower twin could only render the portable synchronous
-          form, whose occupancy cost phase 1 measured. The rendering is bitwise identical to the
-          plain sibling, so the tuner's choice is free of numerics concerns. Unstaged seeds have no
-          cooperative copy to pipeline and are never twinned. *)
   sk_pack_prec : Ir.Ops.prec option;
-      (** CPU packing compositions only: the compute precision the site's register-tiled
-          micro-kernel runs at, resolved by the seeding pre-filter through
-          {!Ir.Numerics.cpu_compute_prec} (gh-ocannl-575). The packing [Stage]s mint their tiles at
-          this precision ([Stage.tile_prec]) where it differs from an operand's storage precision,
-          folding the narrow-storage widening into the packing copy — packed panels become e.g. f32
-          scratch, converted once per element at pack time instead of once per read inside the
-          micro-kernel. [None] for GPU seeds and for CPU sites whose storage already is the compute
-          precision. Recorded in the params (rather than re-derived at build time) because schedule
-          construction has no [hardware_limits] and the instantiated schedule must reproduce the
-          seed-time decision exactly. *)
   sk_tile : Ir.Register_tile.t option;
-      (** CPU tensorized pipelines only: the register-tile geometry the [Tensorize] carries
-          (gh-ocannl-619). [None] lets the renderer's ranking model choose
-          ({!Ir.Register_tile.default}); the family tree twins each CPU tensorized leaf with the
-          {!Ir.Register_tile.alternatives} of its micro-kernel extents (the "register-tile" level),
-          so the width the tuner ships is measured rather than modelled. *)
 }
 
 (* Resolve the tensor-core input format from storage precision before seeding a typed matmul/conv
@@ -1199,10 +1066,10 @@ let hoist_above ~(outer : Idx.symbol) (syms : Idx.symbol list) : Sched.schedule 
    and give the resulting nest a compatible parallel geometry, via [mk_zops] on its two fresh loop
    symbols and — under a [`Grid_inner] layout only — the interior batch zero loops [mk_zops] must
    hoist under the row's block split ([~interior]; empty otherwise). When the site is NOT zeroed — a
-   fission segment's site never is, the [Zero_out] lands in its own [`Zeros] segment — there is
-   nothing to expand and the pipelines are correct without it: [Privatize] init-loads the
-   accumulator tile from the (pre-zeroed) target, and [Tile_mma] loads the accumulator fragment
-   before the reduction. *)
+   fission exposes a covering zero as an ordinary per-cell companion, and other whole-node zeros
+   land in their own [`Zeros] segment — there is nothing to expand here. Companion geometry maps the
+   per-cell zero with the site; [Privatize] can forward it into the accumulator tile using the
+   shared zero-seed proof. Otherwise the tile/fragment loads the initialized target. *)
 let zero_geometry ?(layout : batch_layout = `Serial) (site : matmul_site)
     ~(mk_zops : zi:Idx.symbol -> zj:Idx.symbol -> interior:Idx.symbol list -> Sched.schedule) :
     Sched.schedule =
@@ -2135,13 +2002,12 @@ let reorder_swaps ~current ~target : Sched.schedule =
   List.rev !swaps
 
 (* The segment's real top-level statements as the conv seeding counts them: glue excluded, and the
-   conv site's own [Zero_out] excluded (the pipeline's zero geometry handles it); every other
-   statement is a companion nest. *)
+   conv site's own covering zero initializer excluded (the pipeline's zero geometry handles it);
+   every other statement is a companion nest. *)
 let conv_real_stmts (site : conv_site) (opt : LL.optimized) : LL.t list =
   List.filter (LL.flat_lines [ opt.LL.llc ]) ~f:(function
     | LL.Noop | LL.Comment _ -> false
-    | LL.Zero_out tn -> not (Ir.Tnode.equal tn site.c_d)
-    | _ -> true)
+    | stmt -> not (Option.exists (LL.zero_initializer_target stmt) ~f:(Ir.Tnode.equal site.c_d)))
 
 (* The conv output's epilogue tail (see [epilogue_tail_loop_syms]): the fused twins on
    aligned-merged segments omit the preset's [Retype] on that nest (fuse-before-annotate,
@@ -2202,8 +2068,8 @@ let conv_split_row_current (site : conv_site) ~row_o ~row_i : Idx.symbol list =
    chunk per row-block); on an aligned-merged segment (conv + materialized companions, e.g. lenet's
    conv+bias/relu+pooling) the whole-segment [Grid] geometry comes from [conv_aligned_grid] as for
    the unblocked flavor and the panel loop stays [Serial] — pure cache blocking within each pool
-   chunk. Both cases are unzeroed (the seeds gate accordingly): the [Zero_out] lives in its own
-   [`Zeros] segment, so no zero geometry is needed. *)
+   chunk. Both cases exclude whole-node [Zero_out] (the seeds gate accordingly). A covering per-cell
+   zero companion follows the segment's aligned Grid geometry. *)
 let cpu_conv_sketch_schedule ~(opt : LL.optimized) (site : conv_site)
     { sk_grid; sk_bm; sk_epilogue; sk_pack_prec; _ } : Sched.schedule =
   let stage source tile_loops =
@@ -2296,9 +2162,9 @@ let cpu_conv_sketch_schedule ~(opt : LL.optimized) (site : conv_site)
    cooperative workgroup-shared tiles at the kernel-window anchor (lane-aware [Stage], the lane
    width matching [Tensorize]'s — barrier-strength uniformity). Reusing [Tensorize] inherits the
    accumulator contraction (gh-ocannl-480) unchanged: the [row × oc] fragment stays resident across
-   the whole kernel-window chain (gh-ocannl-501), on Metal in simdgroup registers. Zeroed sites are
-   gated off at the seeds — the GPU leg targets fission segments, whose [Zero_out] lives in its own
-   [`Zeros] segment.
+   the whole kernel-window chain (gh-ocannl-501), on Metal in simdgroup registers. Whole-node
+   [Zero_out] sites are gated off at the seeds. GPU fission expands eligible covering zeros into
+   per-cell companions, which take the same Grid and lane geometry.
 
    With [sk_bm > 0] (gh-ocannl-500) the GEMM row is additionally split into [Grid] blocks of [sk_bm]
    rows: one threadgroup per (outer.., row-block) coordinate instead of one per outer coordinate, so
@@ -2306,10 +2172,11 @@ let cpu_conv_sketch_schedule ~(opt : LL.optimized) (site : conv_site)
    push the cooperative-load barriers under divergent control flow, rejected by
    [validate_parallel]). Only the row is blocked — a 2-D conv already binds two outer [Grid] loops
    (batch, the non-row output spatial axis), so a second [Grid] block on [oc] would exceed the
-   three-slot budget; [oc] stays the tensorized column extent. The block loop [row_o] carries no
-   companion nest here (unzeroed segments), so no cross-nest zero geometry is needed. *)
-let gpu_conv_sketch_schedule (site : conv_site)
-    { sk_simd = w; sk_bm; sk_bn; sk_bk; sk_tm; sk_depth; _ } : Sched.schedule =
+   three-slot budget; [oc] stays the tensorized column extent. Every materialized companion,
+   including the covering zero, follows the site's outer Grid coordinates, row-block split and
+   tensorization lane through [companion_geometry]. *)
+let gpu_conv_sketch_schedule ~(opt : LL.optimized) (site : conv_site)
+    { sk_simd = w; sk_bm; sk_bn; sk_bk; sk_tm; sk_depth; sk_epilogue; _ } : Sched.schedule =
   let stage source tile_loops =
     Sched.Stage
       {
@@ -2323,6 +2190,32 @@ let gpu_conv_sketch_schedule (site : conv_site)
         pipeline_depth = sk_depth;
         tile_prec = None;
       }
+  in
+  (* The expanded zero and other companions use the site's output chain. Tensorize adds one
+     workgroup lane but no column Grid slot: distribute companion columns over that same lane width,
+     keeping any column blocks serial. Outer output coordinates and row blocks have the same Grid
+     roles in every nest. *)
+  let site_syms = site.c_outer @ [ (site.c_row, site.c_nrow); (site.c_oc, site.c_noc) ] in
+  let annotate chain =
+    List.concat_mapi chain ~f:(fun pos (sym, extent) ->
+        if pos < List.length site.c_outer then [ Sched.Retype { axis = sym; ty = LL.Grid } ]
+        else if pos = List.length site.c_outer then
+          if sk_bm = 0 then []
+          else
+            let sp, _, _ = Sched.split ~axis:sym ~factor:sk_bm ~outer:LL.Grid ~inner:LL.Serial in
+            pad_to ~axis:sym ~extent sk_bm @ [ sp ]
+        else
+          let sp, _, _ = Sched.split ~axis:sym ~factor:w ~outer:LL.Serial ~inner:LL.Workgroup in
+          [ sp ])
+  in
+  let companions =
+    match
+      companion_geometry ~site_syms
+        ~skip:(if sk_epilogue then conv_tail_loop_syms site opt else [])
+        ~expanded_zeros:[] ~annotate opt
+    with
+    | Ok ops -> ops
+    | Error why -> companion_coverage_unsupported ~tensorized:true why
   in
   let outer_grid =
     List.map site.c_outer ~f:(fun (s, _) -> Sched.Retype { axis = s; ty = LL.Grid })
@@ -2346,7 +2239,7 @@ let gpu_conv_sketch_schedule (site : conv_site)
       List.map site.c_outer ~f:fst @ [ row_o ] @ site.c_kernel @ [ row_i; site.c_oc; site.c_red ]
     in
     let tz, _lane = Sched.tensorize ~i:row_i ~j:site.c_oc ~k:site.c_red ~simd_width:w () in
-    pads @ (outer_grid @ [ sp_row ]) @ reorder_swaps ~current ~target
+    companions @ pads @ (outer_grid @ [ sp_row ]) @ reorder_swaps ~current ~target
     @ [ stage site.c_a [ row_i; site.c_red ]; stage site.c_b [ site.c_red; site.c_oc ]; tz ]
   else
     let pads =
@@ -2356,7 +2249,7 @@ let gpu_conv_sketch_schedule (site : conv_site)
       List.map site.c_outer ~f:fst @ site.c_kernel @ [ site.c_row; site.c_oc; site.c_red ]
     in
     let tz, _lane = Sched.tensorize ~i:site.c_row ~j:site.c_oc ~k:site.c_red ~simd_width:w () in
-    pads @ outer_grid
+    companions @ pads @ outer_grid
     @ reorder_swaps ~current:site.c_loops ~target:loop_syms
     @ [ stage site.c_a [ site.c_row; site.c_red ]; stage site.c_b [ site.c_red; site.c_oc ]; tz ]
 
@@ -2374,7 +2267,7 @@ let sketch_schedule_unchecked ~accum_prec ~p (opt : LL.optimized) : Sched.schedu
       match detect_conv opt.LL.llc with
       | None -> invalid_arg "Autotune sketch: no convolution site detected"
       | Some site ->
-          ( (if p.sk_gpu then gpu_conv_sketch_schedule site p
+          ( (if p.sk_gpu then gpu_conv_sketch_schedule ~opt site p
              else cpu_conv_sketch_schedule ~opt site p),
             site.c_d )
     else
@@ -2409,9 +2302,8 @@ let sketch_schedule ~accum_prec ~p (opt : LL.optimized) : Sched.schedule =
 (* Sketch seed parameters compatible with the site's extents. Fully staged tensorized pipelines no
    longer require dividing tiles: non-multiple extents seed [(pad, tensorize)] compositions
    (gh-ocannl-485) whose masked edges the tuner measures against scalar alternatives — pipelines
-   that read an operand in place keep their divisibility gates. Unzeroed sites — the norm for fission segments,
-   whose [Zero_out] lives in its own [`Zeros] segment — are proposable too: the pipelines skip the
-   zero geometry (see [zero_geometry]), and a site whose kernel-mates cannot share the parallel
+   that read an operand in place keep their divisibility gates. Sites without whole-node [Zero_out] are proposable too: GPU fission exposes eligible
+   zeros as per-cell companions, while a separate zero segment needs no geometry here, and a site whose kernel-mates cannot share the parallel
    geometry merely fails its candidate compile. *)
 (* Conv seeds (gh-ocannl-493). CPU: the serial implicit-GEMM pipeline plus its Grid-parallel
    variant, pre-filtered by the register tiling's statically decidable rules like the matmul
@@ -2570,12 +2462,9 @@ let conv_seed_params ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits)
             with
             | None -> []
             | Some (tm_t, tn_t, tk_t) ->
-                (* Zeroed sites are gated off: the GPU leg targets fission segments, whose [Zero_out]
-               lives in its own [`Zeros] segment (a whole-routine zeroed GPU flavor would need the
-               zero nest annotated with matching workgroup geometry — a follow-up). Companion
-               gating mirrors the CPU grid flavors: on GPU there is no all-serial fallback, so any
-               uncovered companion write fails [validate_parallel] — the one-companion seed only
-               survives through its fused twin. *)
+                (* Whole-node [Zero_out] sites are gated off. Eligible GPU fission zeros are
+                   per-cell companions; [conv_real_stmts] excludes the site's covering zero,
+                   and the pipeline gives all companions aligned Grid and lane geometry. *)
                 (* The intrinsic-tile divisibility is now a PER-BLOCK property (gh-ocannl-500): the
                tensorized micro-kernel row is [sk_bm] (the block), not the whole [c_nrow], so a
                staged block flavor is proposable whenever [sk_bm] — a multiple of the intrinsic row
@@ -3817,6 +3706,29 @@ let matmul_family_tree ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limit
 let matmul_seed_params ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits) ~opt site :
     sketch_params list =
   Sspace.leaves (matmul_family_tree ~is_gpu ~is_cpu ~limits ~opt site)
+
+(** {2 The composed seed list} *)
+
+(* The families composed into the seed list the search enumerates: the matmul family when a matmul
+   site is detected, else the convolution family, each with its epilogue-fusion twins. *)
+let sketch_seed_params ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits)
+    (opt : LL.optimized) : sketch_params list =
+  (* Fused-epilogue variants (gh-ocannl-486): when the site's output feeds an eligible elementwise
+     tail, every seed gets a fused twin — the tuner measures fused (one kernel) vs. unfused (the
+     fissioned two-kernel form). The check runs on the base code where the plain accumulation-nest
+     fusion site applies; seeds whose scheduled form no longer admits the fusion fail their
+     candidate compile and are skipped. For the matmul family the fusion choice is the tree's root
+     level (gh-ocannl-613), so its leaves already carry the twins, each flavor under its own
+     preconditions; the conv family is not tree-factored yet and flag-flips its seeds. *)
+  match detect_matmul opt.LL.llc with
+  | Some site -> matmul_seed_params ~is_gpu ~is_cpu ~limits ~opt site
+  | None -> (
+      match conv_seed_params ~is_gpu ~is_cpu ~limits opt with
+      | None -> []
+      | Some (seeds, d) ->
+          if (not (List.is_empty seeds)) && Sched.can_fuse_epilogue ~target:d opt then
+            seeds @ List.map seeds ~f:(fun p -> { p with sk_epilogue = true })
+          else seeds)
 
 (* The exported tree view of the matmul family (site detection included); the conv family factors
    the same way as a follow-up. *)

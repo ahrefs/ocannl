@@ -101,6 +101,12 @@ files.
   `Mma_intrinsics` in every layer; the key block 8/16/32 is within noise at seq 128-512 and 16
   wins at seq 1024 (`approximate` takes 16). In training the step is backward-bound
   (gh-ocannl-1124): the fold moves it by 1-2%.
+- `Schedule.expand_reduction_zeros` expands covering zeros before fission when the zero policy
+  distributes them (GPU, above its size threshold; gh-ocannl-1175). The aligned-merge and
+  keep-mapping rules decide whether the per-cell companion can share the accumulation kernel;
+  sketch families must give it the site's geometry through `companion_geometry`. The tuner and
+  model selector still explore a singleton segment when expansion changed its pre-schedule
+  digest, since whole-routine sketches see the original whole-node zero.
 - A GPU schedule must cover EVERY materialized-writing nest of the routine, not only the one the
   pipeline builds. Launch dimensions are kernel-global, so `Low_level.validate_parallel` rejects any
   companion write (a bias/relu tail; the elementwise statements an aligned-merged fission segment
@@ -484,10 +490,12 @@ files.
   back to the untuned default after crowning a winner. Same rule as "crowned is not shipped", one
   level down.
   `mma_staged_layouts` (gh-ocannl-481) is keyed the same way for the same reason: the swizzled
-  staged twin is seeded only where the emission can actually read that layout, which on CUDA is
-  the uniform-bf16 combination and not fp8 (whose B side has no 16-bit `ldmatrix` form at the
-  orientation the staged sketches mint). The census distinguishes `Mma_intrinsics_ldmatrix` from
-  `Mma_intrinsics`, so "tensorized" and "fed at rate" are separable in a sweep.
+  staged twin is seeded only where the emission can actually read that layout. CUDA advertises
+  uniform bf16 and fp8 x fp8 -> f32 (gh-ocannl-1073): bf16 uses `ldmatrix` for both operands;
+  fp8's row-major staged A uses `ldmatrix`, while B's four strided bytes per register gather
+  through the swizzle map. Eligibility remains per operand and orientation. The census
+  distinguishes `Mma_intrinsics_ldmatrix` from `Mma_intrinsics` using the actual load choice,
+  so "tensorized" and "fed at rate" are separable in a sweep.
 - **The register-tile geometry is a schedule decision, not a renderer constant** (gh-ocannl-619).
   `Schedule.Tensorize` carries `tile : Register_tile.t option` (`{rm; rn; lanes}`) into
   `Low_level.Tile_mma`; `C_syntax.try_register_tile` honours a request EXACTLY or declines it to
@@ -694,7 +702,12 @@ files.
   209 timed candidates (the recombination composites delivered the rest), so a final-best rule would
   abandon every flip. `best_steps` is cached like `mma_best_ms`, keyed by every `Search_shaping`
   key's value (`Utils.config_class_fingerprint`, `SC.trajectory`), so a replayed incumbent still
-  has one; a failed one abandons nothing.
+  has one; a failed one abandons nothing. A clean abandoned prefix is also persisted
+  (gh-ocannl-1136), under the unchanged schedule key with an `abandonment-` filename prefix.
+  A replay requires the same search shape and re-evaluates the current incumbent and ratio
+  against those timings; without a qualifying rule it searches normally. It reports
+  `Abandonment_replay` and raises `Search_abandoned` with zero search counters, so a warm
+  flip chain does not re-search its losing flips or mislabel the harness's tuned row.
 - The action menu's loop enumeration is provenance-aimed **by action category**, not by loop
   (gh-ocannl-687). `Local_scope` has two producers — virtualization's inline at a read site, and the
   accumulator localization `Schedule`'s materializing `Unroll` / `Partition` and

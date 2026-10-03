@@ -206,6 +206,7 @@
 (alias
  (name runtest)
  (deps
+  (alias runtest-gh1133_summary)
   (alias runtest-online_softmax_fast_math)
   (alias runtest-online_softmax_block_fast_math)
   (alias runtest-fast_math_libmvec)
@@ -5786,7 +5787,7 @@
 (executable
  (name flip_abandonment)
  (modules flip_abandonment)
- (libraries base ocannl stdio unix arrayjit.verdict ll_test)
+ (libraries base ocannl stdio unix arrayjit.verdict ll_test bench_harness)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -6215,7 +6216,7 @@
   (env_var OCANNL_BACKEND)
   (env_var OCANNL_SIMPLIFY_FP_ALGEBRA))
  (modules bench_self_test)
- (libraries base stdio yojson bench_harness arrayjit.verdict))
+ (libraries base stdio yojson bench_harness ocannl arrayjit.verdict))
 
 ; gh-ocannl-657: the exhaustive half of the e5m2 codec verification, the half that needs no GPU.
 ; 2^32 f32 bit patterns and 17.2e9 doubles, so it belongs on `slow` rather than in `runtest` --
@@ -7115,6 +7116,51 @@
   (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
  (modules gpu_lane_reduction)
  (libraries base ocannl stdio arrayjit.verdict ll_test test_utils))
+
+; Host-only controls for the benchmark driver's report validator.
+
+(rule
+ ; ocannl-backend: none -- runs Python report controls and launches no OCANNL executable.
+ (alias runtest-gh1133_summary)
+ (deps
+  (alias runtest-env_spelling_gate)
+  gh1133_summary.py
+  gh1133_summary.expected
+  ../../benchmarks/gh1133_summary.py)
+ (action
+  (no-infer
+   (progn
+    (with-stdout-to
+     gh1133_summary.actual
+     (run
+      python3
+      %{dep:gh1133_summary.py}
+      %{dep:../../benchmarks/gh1133_summary.py}))
+    (diff gh1133_summary.expected gh1133_summary.actual)))))
+
+(test
+ (name qkv_zero_init)
+ (package neural_nets_lib)
+ (deps
+  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
+  ocannl_config
+  (env_var OCANNL_BACKEND)
+  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
+  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
+  (env_var OCANNL_LARGE_MODELS)
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
+  (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
+  (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
+  (env_var OCANNL_LEGALITY_CROSSCHECK)
+  (env_var OCANNL_PROFILE)
+  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
+ (modules qkv_zero_init)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
 
 (test
  ; ocannl-backend: none -- inspects simplification directly, executes no backend.

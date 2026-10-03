@@ -1,127 +1,67 @@
-(* Diagnostic for the gpt2_mini forward step's default schedule: prints the fission segment census
-   (kinds, launch geometry, statement counts) on the configured backend, then times a few individual
-   steps. Not part of the benchmark protocol; run manually. *)
-
+(* GPT segment diagnostic. Fixture mode selects forward or the real training step (backprop +
+   optimizer); model construction, parameter injection and step compilation are shared with
+   bench_gpt. *)
 open Base
 open Ocannl
 module IDX = Train.IDX
-open Nn_blocks.DSL_modules
-module St = Safetensors
 module H = Bench_harness
 
-let cross_entropy_loss = Nn_blocks.cross_entropy_loss
-let gelu = Nn_blocks.gelu
-
-let ids_of_gen g =
-  let dims = Bigarray.Genarray.dims g in
-  Array.init dims.(0) ~f:(fun s ->
-      Array.init dims.(1) ~f:(fun i -> Int.of_float (Bigarray.Genarray.get g [| s; i |])))
-
-let ids_tensor ~label ints ~n_batches ~batch_size ~seq =
-  let open Bigarray in
-  let g = Genarray.create Int32 c_layout [| n_batches; batch_size; seq |] in
-  Array.iteri ints ~f:(fun idx row ->
-      let b = idx / batch_size and s = idx % batch_size in
-      Array.iteri row ~f:(fun t id -> Genarray.set g [| b; s; t |] (Int32.of_int_trunc id)));
-  TDSL.wrap ~l:label ~b:[ n_batches; batch_size; seq ] ~o:[]
-    (Ir.Ndarray.as_array Ir.Ops.Uint32 g)
-    ()
-
 let () =
-  let fixture = Stdlib.Sys.getenv "BENCH_FIXTURE" in
-  let materialize = H.env_flag "BENCH_MATERIALIZE" in
-  let st = St.read fixture in
-  let batch_size = H.meta_int st "batch_size" in
-  let n_layer = H.meta_int st "n_layer" in
-  let n_head = H.meta_int st "n_head" in
-  let d_model = H.meta_int st "d_model" in
-  let vocab = H.meta_int st "vocab" in
-  let seq = H.meta_int st "seq_len" in
-  let d_head = d_model / n_head in
-  let ids_all = ids_of_gen (St.to_float32 st "ids") in
-  let tgt_all = ids_of_gen (St.to_float32 st "tgt") in
-  let total = Array.length ids_all in
-  let n_batches = total / batch_size in
-  let ids_t = ids_tensor ~label:"ids" ids_all ~n_batches ~batch_size ~seq in
-  let tgt_t = ids_tensor ~label:"tgt" tgt_all ~n_batches ~batch_size ~seq in
-  let batch_n, bindings = IDX.get_static_symbol ~static_range:n_batches IDX.empty in
-  let%op ids_b = ids_t @| batch_n in
-  let%op tgt_b = tgt_t @| batch_n in
-  let wrap name ~i ~o = TDSL.wrap ~l:name ~b:[] ~i ~o (St.to_ndarray st name) () in
-  let wte = wrap "wte" ~i:[ vocab ] ~o:[ d_model ] in
-  let wpe = TDSL.wrap ~l:"wpe" ~b:[ seq ] ~i:[] ~o:[ d_model ] (St.to_ndarray st "wpe") () in
-  let mask =
-    NTDSL.init ~l:"mask" ~prec:Ir.Ops.single ~b:[ seq ] ~i:[ seq ] ~o:[]
-      ~f:(function [| s; t |] -> if s >= t then 1. else 0. | _ -> assert false)
-      ()
+  let st = Safetensors.read (Stdlib.Sys.getenv "BENCH_FIXTURE") in
+  let { Bench_gpt_model.ctx; batch_loss; step_shape; bindings; batch_n; n_batches; mapping; _ } =
+    Bench_gpt_model.prepare ~materialize:(H.env_flag "BENCH_MATERIALIZE") st
   in
-  let onehot_x = Nn_blocks.one_hot_of_ids ~num_classes:vocab ids_b in
-  let%op embedded = (wte * onehot_x) + wpe in
-  let layers =
-    List.init n_layer ~f:(fun i ->
-        let name fmt = Printf.sprintf fmt i in
-        let lbl = Printf.sprintf "l%d" i in
-        let mha =
-          Nn_blocks.multi_head_attention ~label:[ lbl ] ~num_heads:n_head ~d_k:d_head ~d_v:d_head ()
-        in
-        let ln1 = Nn_blocks.layer_norm ~label:[ "ln1"; lbl ] () in
-        let ln2 = Nn_blocks.layer_norm ~label:[ "ln2"; lbl ] () in
-        let fw1 = wrap (name "l%d_ffn_w1") ~i:[ d_model ] ~o:[ H.meta_int st "d_ff" ] in
-        let fb1 = wrap (name "l%d_ffn_b1") ~i:[] ~o:[ H.meta_int st "d_ff" ] in
-        let fw2 = wrap (name "l%d_ffn_w2") ~i:[ H.meta_int st "d_ff" ] ~o:[ d_model ] in
-        let fb2 = wrap (name "l%d_ffn_b2") ~i:[] ~o:[ d_model ] in
-        fun x ->
-          let%op x1 = x + mha ~train_step:None ~mask (ln1 x) in
-          let%op x2 = x1 + ((fw2 * gelu ((fw1 * ln2 x1) + fb1)) + fb2) in
-          x2)
-  in
-  let lnf = Nn_blocks.layer_norm ~label:[ "lnf" ] () in
-  let hfinal = lnf (List.fold layers ~init:embedded ~f:(fun x layer -> layer x)) in
-  let%op logits = wte +* "|v -> d; ... | d => ... | v" hfinal in
-  let targets = Nn_blocks.one_hot_of_ids ~num_classes:vocab tgt_b in
-  let n_positions = batch_size * seq in
-  let%op batch_loss =
-    cross_entropy_loss ~spec:"...|v" ~normalize_by:!..n_positions () ~logits ~targets
-  in
-  ignore tgt_t;
-  if materialize then Train.every_non_literal_materialized batch_loss;
-  let fwd = Train.forward batch_loss in
-  let ctx = Context.auto () in
+  let ctx = H.inject ctx st batch_loss mapping in
   let backend = Context.backend_name ctx in
   let limits = Context.hardware_limits ctx in
-  let ctx = Train.init_params ctx bindings batch_loss in
-  (* Only the lowering is wanted here (an explicit transform replaces the default pipeline, so the
-     routine is discarded); the timed routine is compiled with the regular default pipeline
-     below. *)
-  let opt = H.capture_lowering ctx fwd bindings in
-  let promote_locals =
-    match Stdlib.Sys.getenv_opt "BENCH_PROMOTE" with Some "0" -> Some false | _ -> None
+  (* The reconstruction exists only for the explicit no-promotion inference experiment. *)
+  let forward_opt =
+    match (Stdlib.Sys.getenv_opt "BENCH_PROMOTE", step_shape) with
+    | Some "0", `Forward fwd ->
+        let opt = H.capture_lowering ctx fwd bindings in
+        H.print_census ~promote_locals:false ~backend ~limits ~static_indices:[ batch_n ] opt;
+        Some (fwd, opt)
+    | Some "0", `Train _ ->
+        failwith "BENCH_PROMOTE=0 is forward-only; training diagnostics use the shipped pipeline"
+    | _ -> None
   in
-  H.print_census ?promote_locals ~backend ~limits ~static_indices:[ batch_n ] opt;
   let t0 = Unix.gettimeofday () in
-  let ctx, routine = Context.compile ctx fwd bindings in
-  let compile_s = Unix.gettimeofday () -. t0 in
-  Stdio.printf "backend: %s  compile_s: %.3f\n" backend compile_s;
-  (* Per-segment times: populate intermediates with one full forward, then time each fission segment
-     as its own routine. Mirrors bench_conv_diag; the gpt graph is forward-only, so the populating
-     run is the same [fwd] routine that is then decomposed. *)
-  if H.env_flag "BENCH_SEG_TIMES" then (
-    let batch_ref = IDX.find_exn routine.Context.bindings batch_n in
-    batch_ref := 0;
-    Train.run ctx routine;
-    Context.sync ctx;
-    H.time_segments ?promote_locals ~backend ~limits ~static_indices:[ batch_n ] ~ctx ~comp:fwd
-      ~bindings
-      ~bind:(fun r -> IDX.find_exn r.Context.bindings batch_n := 0)
-      opt);
-  (* Time a few individual steps with a full sync each. *)
+  let ctx, routines =
+    H.compile_step ~tune:false
+      ~tuned:(fun _ _ -> failwith "bench_gpt_diag does not autotune")
+      ctx bindings step_shape
+  in
+  Stdio.printf "mode: %s backend: %s compile_s: %.3f\n%!"
+    (if H.is_training st then "train" else "infer")
+    backend
+    (Unix.gettimeofday () -. t0);
+  let ctx_ref = ref ctx in
+  let batch_ref = IDX.find_exn (H.train_step_bindings routines) batch_n in
+  let run step =
+    batch_ref := step % n_batches;
+    H.run_train_step routines ctx_ref ~step;
+    Context.sync !ctx_ref
+  in
+  (* Full-step controls precede isolated timing, which mutates gradients and parameters. *)
   if H.env_flag "BENCH_STEPS" then
-    let batch_ref = IDX.find_exn routine.Context.bindings batch_n in
     for step = 0 to 2 do
-      batch_ref := step % n_batches;
       let t0 = Unix.gettimeofday () in
-      Train.run ctx routine;
-      Context.sync ctx;
-      Stdio.printf "step %d: %.1f ms\n" step ((Unix.gettimeofday () -. t0) *. 1000.);
-      Stdio.Out_channel.flush Stdio.stdout
+      run step;
+      let open Operation.At in
+      Stdio.printf "step %d: %.1f ms loss: %.7f\n%!" step
+        ((Unix.gettimeofday () -. t0) *. 1000.)
+        (!ctx_ref, batch_loss).@[0]
     done
+  else if H.env_flag "BENCH_SEG_TIMES" then run 0;
+  let shipped = H.compiled_step_routines routines in
+  if Option.is_none forward_opt then H.print_shipped_census shipped;
+  if H.env_flag "BENCH_SEG_TIMES" then
+    match forward_opt with
+    | Some (fwd, opt) ->
+        H.time_segments ~promote_locals:false ~backend ~limits ~static_indices:[ batch_n ]
+          ~ctx:!ctx_ref ~comp:fwd ~bindings
+          ~bind:(fun r -> IDX.find_exn r.Context.bindings batch_n := !batch_ref)
+          opt
+    | None ->
+        ignore
+          (H.time_shipped_segments ~ctx:!ctx_ref ~bindings shipped : (float, string) Result.t list)

@@ -779,13 +779,13 @@ let placement_outcome_digest ?name ?timing_ctx ctx loss comp bindings decision =
 
     The arms differ in which candidates {e exist}, not only in how they rank: a tensorized candidate
     is seeded only when the matmul site's operand and destination storage precisions resolve to a
-    tile the backend advertises ({!Autotune.mma_tile_for_precisions}), and placement decides which
-    nodes the site reads. Under the mixed-precision recipe on a uniform-format backend (Metal's
-    simdgroup matrices) that makes arm A tensorization-free: the reduced-precision cast twins are
-    virtual there, so the site reads f32 masters into a reduced-precision destination — a mixed
-    triple no tile matches — while materialize-all turns the twins into real reduced-precision nodes
-    and the seeds fire. Materializing just the twins ([Mixed_prec.Twin_materialized]) reaches the
-    same seeds at arm A's cost; see benchmarks/report-gh546-metal.md.
+    tile the backend advertises ({!Autotune.tensorized_capability_refutation}), and placement
+    decides which nodes the site reads. Under the mixed-precision recipe on a uniform-format backend
+    (Metal's simdgroup matrices) that makes arm A tensorization-free: the reduced-precision cast
+    twins are virtual there, so the site reads f32 masters into a reduced-precision destination — a
+    mixed triple no tile matches — while materialize-all turns the twins into real reduced-precision
+    nodes and the seeds fire. Materializing just the twins ([Mixed_prec.Twin_materialized]) reaches
+    the same seeds at arm A's cost; see benchmarks/report-gh546-metal.md.
 
     gh-555: the A/B is the coarse level of the hierarchical inlining search — inlining decided
     first, tiling/scheduling within each arm by the nested {!Autotune.tune}. [inline_flips] (config
@@ -818,10 +818,11 @@ let placement_outcome_digest ?name ?timing_ctx ctx loss comp bindings decision =
     gh-ocannl-1110: a flip whose best after its first [beam_width] timed candidates trails the
     incumbent's best after the incumbent's own first as many by more than
     {!Autotune.flip_abandon_ratio} is abandoned there ({!Autotune.tune}'s [?abandon]): its report
-    reaches [flip_report] as {!Autotune.Abandoned}, it loses, and it counts as measured. The
-    incumbent's record is its report's [best_steps], so an arm whose report has none (a cache entry
-    older than the field, or stored under another search shape) leaves the flips to run in full, as
-    does an incumbent that failed: its partial record is no shippable routine's.
+    reaches [flip_report] as {!Autotune.Abandoned} or, on a cache replay,
+    {!Autotune.Abandonment_replay}; it loses, and it counts toward the flip budget. The incumbent's
+    record is its report's [best_steps], so an arm whose report has none (a cache entry older than
+    the field, or stored under another search shape) leaves the flips to run in full, as does an
+    incumbent that failed: its partial record is no shippable routine's.
 
     gh-ocannl-638, [ship_arm] (config [tune_ship_arm], default [Measured_winner]): ship a chosen
     {!placement_arm} instead of the measured winner. It exists for measurement — a profile of arm
@@ -1022,10 +1023,15 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
           (Autotune.progress_ms best_ms) (stopwatch ()));
     (match result with
     | Error (Autotune.Search_abandoned ab, _) ->
+        let timing_source =
+          match r with
+          | Some { Autotune.outcome = Autotune.Abandonment_replay _; _ } -> "cached timings"
+          | _ -> "timed candidates"
+        in
         logf
-          "arm %s ABANDONED after %d timed candidates: its best %.4f ms trails the incumbent's \
-           %.4f ms at the same depth by more than %.4gx"
-          arm ab.Autotune.ab_timed ab.Autotune.ab_best_ms ab.Autotune.ab_incumbent_ms
+          "arm %s ABANDONED after %d %s: its best %.4f ms trails the incumbent's %.4f ms at the \
+           same depth by more than %.4gx"
+          arm ab.Autotune.ab_timed timing_source ab.Autotune.ab_best_ms ab.Autotune.ab_incumbent_ms
           ab.Autotune.ab_ratio
     | Error (exn, _) ->
         logf "arm %s FAILED, it loses the comparison (%s): %s" arm
