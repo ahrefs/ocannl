@@ -1,4 +1,9 @@
 name: ci
+# A dispatch that names a commit says so in its run's name, because the run's
+# head_sha cannot: it is the ref's head at dispatch, which on master may be a
+# later commit than the one built (`expected_sha`, below). Every other run
+# evaluates this to empty, which keeps GitHub's default name.
+run-name: ${{ inputs.expected_sha && format('ci at {0}', inputs.expected_sha) || '' }}
 on:
   push:
     branches:
@@ -8,15 +13,15 @@ on:
   pull_request:
     paths-ignore:
       - "docs/**"
-  # Sunday and Wednesday, 03:00 UTC. Twice weekly rather than weekly because
-  # actions/cache evicts entries not read for 7 days: on an exactly-weekly
-  # cadence the Windows opam cache would sit on that boundary and every sweep
-  # would pay the cold-switch cost (~74min against ~62min warm). The second run
-  # also halves the range to bisect when a sweep goes red, which at ~30 commits
-  # a day on master is the dominant triage cost. Runner minutes are free here
-  # (public repo), so the extra run is paid for in nothing but calendar noise.
+  # Daily, 03:00 UTC, so a scheduled red spans about one day of merges: it
+  # carries the only Windows and OCaml-floor coverage, and at 50-150 merges a
+  # span (the twice-weekly cadence before this) a red named no culprit anyone
+  # could find without a long bisect. A daily read also keeps the Windows opam
+  # cache well inside actions/cache's 7-day eviction, so no sweep pays the
+  # cold-switch cost (~74min against ~62min warm). Runner minutes are free
+  # here (public repo).
   schedule:
-    - cron: "0 3 * * 0,3"
+    - cron: "0 3 * * *"
   workflow_dispatch:
     inputs:
       windows_only:
@@ -24,32 +29,43 @@ on:
         type: boolean
         default: false
       expected_sha:
-        description: "Intended full commit SHA (required for Windows-only dispatch)"
+        description: "Full commit SHA to build: the dispatched ref's head, or on master an ancestor of it (required for Windows-only dispatch)"
         type: string
         default: ""
-# A push superseded by another push to the same ref no longer needs a verdict:
-# runs here serialize on a queue that is often hours deep, so without this a
-# review round of N pushes creates N queued runs and the head commit -- the only
-# one whose verdict anyone will act on -- waits behind N-1 answers to questions
-# nobody is still asking (thirteen runs deep on one PR before this landed).
+# On a pull request, a push superseded by another push no longer needs a
+# verdict: runs here serialize on a queue that is often hours deep, so without
+# cancellation a review round of N pushes creates N queued runs and the head
+# commit -- the only one whose verdict anyone will act on -- waits behind N-1
+# answers to questions nobody is still asking (thirteen runs deep on one PR
+# before this landed).
 #
-# Master pushes are cancellable too, and that is a real trade: at ~30 commits a
-# day a superseded merge commit then gets no verdict of its own, so a break is
-# localized to a span rather than to a commit. It is still the right side of the
-# trade while the queue is hours deep -- what master's HEAD does is the question
-# people act on, and `git bisect` over a span is cheaper than a stale answer.
+# Master's push runs are NOT cancelled, and they share ONE group. A cancelled
+# run answers nothing: under cancel-in-progress, 9 of 16 master pushes on
+# 2026-09-25 were cancelled and produced no verdict (ahrefs/ocannl#1057).
+# Without it, GitHub keeps at most one running and one pending run per group,
+# and a newer push replaces only the PENDING one, never the one running. So a
+# merge burst gets a verdict within about two run lengths, and each verdict
+# covers a span: the merges since the previous push run's head. The same rule
+# bounds the cost -- at most one master run in flight, so a PR's macOS jobs
+# queue behind at most one master macOS job. A per-commit group would buy a
+# verdict per merge with a queue as deep as the burst on the scarce macOS
+# runners. A red span is narrowed by hand, by dispatching this workflow at
+# commits inside it through `expected_sha`.
 #
 # `github.event_name` is in the group so that only like supersedes like. All
-# three non-PR triggers share `refs/heads/master` as their ref, and two of them
-# must not be cancellable by a routine master push: the scheduled sweep carries
-# that period's only Windows and OCaml-floor coverage (the same reasoning as
+# three non-PR triggers share `refs/heads/master` as their ref, and a master
+# push must not displace the other two: the scheduled sweep carries that
+# period's only Windows and OCaml-floor coverage (the same reasoning as
 # `fail-fast: false` below -- cancellation destroys information), and a
-# workflow_dispatch run was launched deliberately for a rerun or a Windows-only check. Scheduled runs cannot overlap each
-# other in practice (74min worst case against a 3-day cadence), so grouping
-# them is harmless.
+# workflow_dispatch run was launched deliberately, for a rerun, a Windows-only
+# check or a probe inside a red span. Dispatches go further and key on the run
+# itself, since in a shared group a newer dispatch would replace an older one
+# still pending, and every dispatch is somebody's open question. Scheduled runs
+# cannot overlap each other in practice (the Windows job's longest runs
+# against a 24-hour cadence), so grouping them is harmless.
 concurrency:
-  group: ci-${{ github.event_name }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.event_name }}-${{ github.ref }}${{ github.event_name == 'workflow_dispatch' && format('-{0}', github.run_id) || '' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   run:
     name: Build
@@ -58,7 +74,7 @@ jobs:
       # you nothing about the others -- and cancelling them destroys exactly the
       # information you need. Concretely: the ~25min OCaml-floor job going red
       # would cancel the 62-74min Windows job mid-run, losing that sweep's only
-      # Windows coverage for three or four days. It has already cost us on the
+      # Windows coverage for a day. It has already cost us on the
       # per-PR side, where a macOS failure cancelled ubuntu and left it unclear
       # whether a dependency-solve break was platform-specific.
       fail-fast: false
@@ -207,16 +223,27 @@ jobs:
     - name: Update apt package index
       if: runner.os == 'Linux'
       run: sudo apt-get update
+    # A dispatch builds the commit it names; with none (every other event)
+    # `ref` is empty and checkout takes the event's own commit.
     - uses: actions/checkout@v7
-    # Bind deliberate platform coverage to the caller's intended head before
-    # dependency setup or test execution. A branch advancing between the SHA
-    # read and dispatch must fail rather than certify a different commit.
+      with:
+        ref: ${{ inputs.expected_sha }}
+    # Bind deliberate coverage to the caller's intended commit before
+    # dependency setup or test execution. On a branch, expected_sha must be the
+    # head the run was dispatched at: the run's checks attach to that head and
+    # gate it, so a branch advancing between the SHA read and dispatch must
+    # fail rather than certify a different commit. On master it may also be an
+    # ancestor of the head, which is how a session narrows a red span without
+    # a branch of its own. That run's checks
+    # still attach to master's head, which is why it is named for the commit it
+    # built (`run-name`) and fires no triage (`notify-triage-routine`).
     - name: Verify dispatch commit
       if: github.event_name == 'workflow_dispatch'
       shell: bash
       env:
         EXPECTED_SHA: ${{ inputs.expected_sha }}
         WINDOWS_ONLY: ${{ inputs.windows_only }}
+        GH_TOKEN: ${{ github.token }}
       run: |
         if [ "$WINDOWS_ONLY" = true ] && [ -z "$EXPECTED_SHA" ]; then
           echo "::error::Windows-only dispatch requires expected_sha"
@@ -224,13 +251,21 @@ jobs:
         fi
         if [ -n "$EXPECTED_SHA" ]; then
           [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]] &&
-            [ "$GITHUB_SHA" = "$EXPECTED_SHA" ] &&
             [ "$(git rev-parse HEAD)" = "$EXPECTED_SHA" ] || {
-            echo "::error::dispatch and checkout must match expected_sha=$EXPECTED_SHA (run=$GITHUB_SHA)"
+            echo "::error::checkout must match expected_sha=$EXPECTED_SHA (checkout=$(git rev-parse HEAD))"
             exit 1
           }
+          if [ "$GITHUB_SHA" != "$EXPECTED_SHA" ]; then
+            relation=""
+            [ "$GITHUB_REF" = refs/heads/master ] &&
+              relation=$(gh api "repos/$GITHUB_REPOSITORY/compare/$EXPECTED_SHA...$GITHUB_SHA" --jq .status) &&
+              [ "$relation" = ahead ] || {
+              echo "::error::expected_sha=$EXPECTED_SHA must be the dispatched head $GITHUB_SHA, or on master an ancestor of it (ref=$GITHUB_REF, compare=${relation:-unread})"
+              exit 1
+            }
+          fi
         fi
-        echo "Dispatch checkout: $(git rev-parse HEAD)"
+        echo "Dispatch checkout: $(git rev-parse HEAD) (dispatched at $GITHUB_SHA)"
     - uses: ocaml/setup-ocaml@v3
       with:
         ocaml-compiler: ${{ matrix.ocaml-compiler }}
@@ -449,8 +484,8 @@ jobs:
     # to build anything.
     #
     # Runs regardless of whether `dune runtest` above passed (but not after a
-    # cancellation): Windows runs twice a week, so letting a golden drift mask
-    # the runner's health would cost three days of signal for nothing. It is
+    # cancellation): Windows runs once a day, so letting a golden drift mask
+    # the runner's health would cost a day of signal for nothing. It is
     # last so that the converse cannot happen either -- a broken runner must
     # not abort the sweep's only Windows test coverage.
     #
@@ -556,6 +591,8 @@ jobs:
     timeout-minutes: 15
     steps:
     - uses: actions/checkout@v7
+      with:
+        ref: ${{ inputs.expected_sha }}
     - uses: ocaml/setup-ocaml@v3
       with:
         ocaml-compiler: 5.5.x
@@ -603,6 +640,8 @@ jobs:
     timeout-minutes: 20
     steps:
     - uses: actions/checkout@v7
+      with:
+        ref: ${{ inputs.expected_sha }}
     - name: Test pin-revisions action
       run: tools/test-pin-revisions.sh
     - name: Test shell harnesses
@@ -626,7 +665,10 @@ jobs:
   # opens a ci-fix/* PR here or posts its diagnosis to the claiming issue.
   # Scheduled sweeps are included on purpose -- their reds (Windows, OCaml
   # floor) are master reds that no merge event announces. PR runs are excluded:
-  # the PR's own session watches those. Until the ROUTINE_FIRE_URL and
+  # the PR's own session watches those. So is a dispatch that names its commit
+  # (`expected_sha`): its dispatcher reads the verdict -- the routine's own
+  # re-run of a red commit among them, which would otherwise fire it again --
+  # and its sha below would be master's head, not the commit built. Until the ROUTINE_FIRE_URL and
   # ROUTINE_FIRE_TOKEN secrets are set this job is a logged no-op, and a failed
   # fire is soft (the routine's daily backstop sweep catches what a lost
   # notification misses; a second red job here would only muddy an already-red
@@ -634,7 +676,9 @@ jobs:
   notify-triage-routine:
     name: Fire CI-red triage routine
     needs: [run, fmt, harnesses]
-    if: failure() && github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+    if: >-
+      failure() && github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+      && !(github.event_name == 'workflow_dispatch' && inputs.expected_sha)
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

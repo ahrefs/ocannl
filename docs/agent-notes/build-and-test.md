@@ -1885,6 +1885,14 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   ahrefs/ocannl is where the issues live anyway (AGENTS.md's two-repository rule) — and either
   opens a `ci-fix/*` PR on staging (it never merges its own PRs) or posts its diagnosis to that
   issue.
+  A master push verdict covers a SPAN, not a merge: push runs share one concurrency group and are
+  never cancelled, so GitHub keeps one running and one pending, and a newer merge replaces only
+  the pending run (ci.yml's `concurrency` comment says why; ahrefs/ocannl#1057 is the 9-of-16
+  cancelled verdicts it ended). A burst gets a verdict within about two run lengths, covering
+  every merge since the previous push run's head; a scheduled red covers about a day of merges.
+  Narrow a red span of more than one merge by hand: dispatch `ci` on `master` with `expected_sha`
+  set to a commit inside it, bisecting. On master an ancestor of the head is accepted, the run is
+  named `ci at <sha>`, and its red fires no triage.
   Merging sessions do not watch CI after landing (roll-forward, ahrefs/ocannl#861); before fixing
   a master red by hand, find the claiming issue and any linked PR, and take over only where triage
   visibly stopped short — saying so on the issue first.
@@ -2255,7 +2263,7 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
 
 ### Windows CI
 
-- Windows CI runs independently on the twice-weekly schedule, together with an ubuntu job
+- Windows CI runs independently on the daily schedule, together with an ubuntu job
   on the OCaml floor the opam files claim (`>= 5.3.0`, against 5.5 everywhere else).
   PR, push and ordinary `workflow_dispatch` runs use the Linux/macOS matrix.
   When a change needs Windows signal, AGENTS.md's *Windows verification placement* says where it
@@ -2300,9 +2308,10 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   remain required.
   `test/operations/ci_matrix.sh` evaluates the actual matrix expressions,
   pins the opt-in default and trigger separation, and exercises the dispatch commit guard.
-  Twice weekly rather than weekly because actions/cache evicts entries unread for 7 days, and an
-  exactly-weekly cadence would pay the cold-switch cost every time. Windows and the OCaml floor
-  ride the same cadence because they fail slowly through the dependency cone or toolchain.
+  Daily, so a scheduled red spans about a day of merges rather than the 50-150 a twice-weekly
+  cadence left, and the Windows opam cache stays well inside actions/cache's 7-day eviction.
+  Windows and the OCaml floor ride the same cadence because they fail slowly through the
+  dependency cone or toolchain.
 - The Windows job ends with a smoke of `tools/test-run.sh` itself, from Git Bash: `run`, `status
   last`, a deliberately failing target, `start`/`wait last`, `list`, each asserted against its
   documented exit code. That script's MSYS branches (unconditional and fatal `opam-env.sh` sourcing,
@@ -2312,7 +2321,7 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   `tools/promote.sh`, a source file dune copies rather than compiles, so it costs a workspace scan;
   the failing-target leg is the load-bearing one, since it is where a dropped `PIPESTATUS` in
   `dune-quiet.sh` would report red runs as green. It runs even when `dune runtest` above went red
-  (Windows runs twice a week; a golden drift must not mask the runner's health for three days) and
+  (Windows runs once a day; a golden drift must not mask the runner's health for a day) and
   it runs last, so a broken runner cannot abort the sweep's only Windows test coverage.
 - That smoke step has itself been run on real MSYS (rog, Git Bash, under GitHub's exact
   `bash --noprofile --norc -eo pipefail`), so it is a confirmed test rather than an untested one.
