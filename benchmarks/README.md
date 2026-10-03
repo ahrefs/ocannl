@@ -109,8 +109,10 @@ for gh-ocannl-680/682), with precision/regime-specific envelopes and untuned ver
 scheduling kept distinct.
 
 The v1.1 transformer [report](report-gh720-transformer.md) analyzes each leg and embeds the
-suite driver's generated tables. HIP gfx1102 (discrete memory) is reported; cc/Metal measurements
-remain pending. Parity failures and the beyond-exact approximate row are retained.
+suite driver's generated tables. HIP gfx1102 (discrete memory) and Metal (M4 Max unified memory)
+are reported, along with ten passing cc cells. Ten cc cells exceeded their protocol time caps;
+28 reduced-format cc cells were skipped and remain outstanding. Metal exact f16 passes every
+endpoint, whereas HIP's invalid exact-f16 and beyond-exact approximate rows are retained.
 
 ## Layout
 
