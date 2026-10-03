@@ -5,10 +5,12 @@ prepare --out DIR: bind the revision, executable bytes and fixture digests, run 
 Torch CPU exact oracle. Build bench_mlp.exe and the selected fixture runners beforehand, outside a timing hold.
 dry --out DIR --backends metal,cc: arms-on/off self-test twice per backend (discard timings).
 The self-test uses the same compilation, execution and emission path with a short protocol.
-run --out DIR --backends metal,cc: three order-balanced rounds of all, none and each family off.
+run --out DIR --backends metal,cc: two reverse-paired rounds of all, none and each family off.
 summarize --out DIR: print the per-workload envelopes against arms-on and the Torch oracle.
 --workloads selects a comma-separated subset (use the same selection for prepare/dry/run).
---rounds selects the repeat count for run (default 3); summarize reads the recorded matrix.
+--rounds selects the repeat count for run (default 2, even); summarize reads the recorded matrix.
+Each pair contributes the geometric mean of its two off/on p50 ratios; the table
+reports the median and range of these pair means.
 The preflight records the host and CPU; cc measurements on different CPUs are separate rows.
 
 Each cell uses the suite's unchanged f32 protocol, untuned default schedule and fixed compiler
@@ -201,12 +203,14 @@ def envelope(got, ref):
 def summarize(out):
     matrix = json.loads((out / 'matrix.json').read_text())
     preflight = json.loads((out / 'preflight.json').read_text())
+    if matrix['rounds'] < 2 or matrix['rounds'] % 2:
+        raise RuntimeError('summary requires complete forward/reverse round pairs')
     print(f"Host: {preflight['host']['host']}; CPU: {preflight['host']['cpu']}; revision: {preflight['revision']}; rounds: {matrix['rounds']}.")
     for workload in matrix['workloads']:
         fixture = preflight['fixtures'][workload]
-        print(f"Fixture {workload}: SHA-256 {fixture['sha256']}; {fixture['size']} bytes; recorded origins: {', '.join(fixture['origins'])}.")
+        print(f"Fixture {workload}: SHA-256 {fixture['sha256']}; {fixture['size']} bytes; recorded origins: {fixture['origins']}.")
     print()
-    print('| backend | workload | arm | off/on p50 median (range) | max abs / rel vs on | changed losses | max abs / rel vs Torch |')
+    print('| backend | workload | arm | off/on paired p50 ratio median (range) | max abs / rel vs on | changed losses | max abs / rel vs Torch |')
     print('|---|---|---|---|---|---|---|')
     for backend in matrix['backends']:
         for workload in matrix['workloads']:
@@ -219,7 +223,8 @@ def summarize(out):
                     ratios.append(row['step_ms']['p50'] / on['step_ms']['p50'])
                     vs_on.append(envelope(row['losses'], on['losses']))
                     vs_torch.append(envelope(row['losses'], oracle))
-                print(f'| {backend} | {workload} | {treatment} | {statistics.median(ratios):.4f} ({min(ratios):.4f}–{max(ratios):.4f}) | '
+                paired = [math.sqrt(a * b) for a, b in zip(ratios[::2], ratios[1::2])]
+                print(f'| {backend} | {workload} | {treatment} | {statistics.median(paired):.4f} ({min(paired):.4f}–{max(paired):.4f}) | '
                       f'{max(v[0] for v in vs_on):.3g} / {max(v[1] for v in vs_on):.3g} | '
                       f'{max(v[2] for v in vs_on)} | {max(v[0] for v in vs_torch):.3g} / {max(v[1] for v in vs_torch):.3g} |')
 
@@ -230,11 +235,11 @@ def main():
     ap.add_argument('--out', type=Path, required=True)
     ap.add_argument('--backends', default='metal,cc')
     ap.add_argument('--workloads', default=','.join(WORKLOADS))
-    ap.add_argument('--rounds', type=int, default=3)
+    ap.add_argument('--rounds', type=int, default=2)
     ap.add_argument('--deadline-seconds', type=int, default=7200)
     args = ap.parse_args()
-    if args.rounds <= 0:
-        ap.error('rounds must be positive')
+    if args.rounds < 2 or args.rounds % 2:
+        ap.error('rounds must be even and at least 2')
     if args.deadline_seconds <= 0:
         ap.error('deadline must be positive')
     global DEADLINE
