@@ -63,12 +63,49 @@ ok: source -- a fragment named through a binding is still that fragment
 ok: source -- same-named literal lets in different scopes each pin their own text
 ok: source -- same-named literal lets pin their text even when the values agree
 ok: source -- a parameter is not a same-named literal let elsewhere in the file
+ok: source -- labelled source and several text parameters match reordered call arguments
+ok: source -- labelled parameters do not shift positional source or text arguments
+ok: source -- a helper reading generated source internally pins its labelled markers
+ok: source -- each test in a helper checks its own haystack
+ok: source -- a helper reading generated source inline pins its labelled marker
+ok: source -- omitted optional markers use their defaults and explicit markers override them
+ok: source -- callbacks retain hard-coded markers whose source the helper validates
+ok: source -- constrained labelled source and marker parameters retain their names
+ok: source -- a shadowed source parameter does not validate the caller marker
+ok: source -- forwarding wrappers with generated defaults stay visibly partial
+ok: source -- anonymous forwarding callbacks stay visibly partial
+ok: source -- generated source stored through mutation stays visibly partial
+ok: source -- a forwarding wrapper used as a callback stays visibly partial
+ok: source -- a forwarding wrapper keeps unresolved caller markers visibly partial
+ok: source -- a helper-local generated read propagates through normalization aliases
+ok: source -- same-named local predicates pin only their in-scope composite context
+ok: source -- a nested predicate capturing an enclosing source parameter stays partial
+ok: source -- a nested predicate reaching its captured source through an alias stays partial
+ok: source -- a nested backend-name predicate does not capture an unrelated source parameter
+ok: source -- nested helpers own their tests independently of enclosing predicates
+ok: source -- validated source aliases propagate into nested predicate calls
+ok: source -- an ordinary direct call does not hide an unresolved generated-source callback
+ok: source -- unfollowed callbacks keep hard-coded predicate text visibly partial
+ok: source -- validated source parameters propagate through nested predicate calls
+ok: source -- marker-first partial applications remain visibly partial
+ok: source -- explicit optional absence selects a generated-source default
+ok: source -- unresolved optional source forwarding remains visibly partial
+ok: source -- explicit optional presence unwraps the supplied generated source
+ok: source -- hard-coded predicate fragments require their own call-site source
+ok: source -- partial applications do not select optional defaults prematurely
+ok: source -- a composite marker retains every caller-supplied parameter
+ok: source -- a later generated binding does not taint an earlier source parameter
+ok: source -- a labelled marker inside an expression keeps its literal context
+ok: source -- a labelled text parameter shadowed by a lambda pattern stays partial
+ok: source -- a local source alias is not generated because another scope uses its name
+ok: source -- labelled predicates over ordinary text pin no generated fragments
 ok: source -- a binding shadowing a literal let is not that literal
 ok: source -- a buffer-writing serializer is an emitter too
 ok: source -- the buffer a serializer writes into carries the text, across bindings
 ok: source -- an emitter bound to a local name is still the emitter
 ok: source -- an alias of that alias is the emitter too
 ok: source -- a wrapper around an emitter carries its caller's buffer
+ok: source -- a compiler-plan annotation does not hide an exported emitter wrapper
 ok: source -- a wrapper whose buffer parameter carries no label is addressed by position
 ok: source -- a buffer this scan did not see filled marks the itemisation partial
 ok: source -- a buffer read through an alias of Buffer marks it partial just the same

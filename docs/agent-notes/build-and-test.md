@@ -1571,9 +1571,28 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   reaches the binding in scope where it is spelled. File-wide lookup failed silently both ways:
   gh-ocannl-1063's inventory recorded another leg's `let body_begin` text for a pin (a labelled
   parameter of that name read as the literal), and staging#855 lost the pins of two same-named
-  bindings outright, equal values included. Taint, emitter value aliases and predicate names stay
-  file-wide on purpose, since there over-reach costs an inventory line rather than naming the
-  wrong fragment. `codegen_text_scan_cases` controls each spelling against the old resolution.
+  bindings outright, equal values included. Predicate callees resolve to the lexical function
+  binding too (gh-ocannl-1150), since their body text must not come from a same-named helper in
+  another scope. Taint and emitter value aliases stay file-wide on purpose, since there over-reach
+  costs an inventory line. `codegen_text_scan_cases` controls each spelling against the old resolution.
+- Predicate parameters use the emitter destination lookup too (gh-ocannl-1150): labelled text
+  and source parameters match by label, while only unlabelled parameters consume positions.
+  Keep every text test in a predicate, since `residency_holds` pins several caller-supplied markers;
+  choosing one loses the rest even after the parameter reader learns labels. Optional defaults
+  must not stop that reader before a later source parameter.
+  A name rebound inside the body is conservatively not a caller-supplied marker; leave that site
+  visible to the pin walk and its partial mark. Distinguish source read inside a helper using local
+  taint resolved at each use, rather than another scope's same-named value. A composite fragment
+  retains its literal context and every caller-supplied component in the inventory. An omitted optional marker uses its default only when a later
+  positional argument selects it; an unfollowed partial application stays marked partial.
+  Static optional forwarding resolves `None` to the selected default and unwraps `Some`.
+  Predicate body literals pass the same call-site source check as caller markers; only validated
+  source parameters propagate into nested helper calls. An unfollowed callback remains partial,
+  as does a nested predicate capturing an enclosing source parameter the scan cannot validate.
+  Ordinary forwarding wrappers and predicate calls whose source cannot be validated remain
+  partial until their provenance can be followed, including optional defaults, anonymous callbacks
+  and mutation. This conservatively includes ordinary-source calls; they still contribute no
+  fragment. Helper-local aliases use a lexical fixed point.
 - **What no file-local rule can follow now says so.** A buffer is where generated text lands with no
   name to carry it, and the ways to fill one do not end (a wrapper reaching its parameter through a
   local binding, PPrint's own `ToBuffer` renderers, a buffer in a record). So a substring test whose

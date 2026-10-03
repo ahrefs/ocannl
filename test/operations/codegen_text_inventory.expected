@@ -141,10 +141,10 @@ test/operations/accum_width.ml
 test/operations/canonical_render.ml [renders generated text in memory]
     "?"
     "s0"
-test/operations/cc_march_census.ml
+test/operations/cc_march_census.ml [also pins text this scan cannot name]
 test/operations/concat_loop_symbols.ml [renders generated text in memory]
 test/operations/cost_model_floor.ml [renders generated text in memory]
-test/operations/cpu_parallel.ml
+test/operations/cpu_parallel.ml [also pins text this scan cannot name]
     "#pragma omp parallel for"
     "Pool-backed Grid rendering"
     "dispatch_apply"
@@ -196,7 +196,7 @@ test/operations/hardware_workgroup_reduce.ml
     "__syncthreads()"
     "threadgroup float partial_sums[64]"
     "threadgroup_barrier"
-test/operations/ll_printer_constants.ml [renders generated text in memory]
+test/operations/ll_printer_constants.ml [renders generated text in memory; also pins text this scan cannot name]
     " := "
 test/operations/narrow_storage_compute.ml
     "HALF_T ocannl_vec"
@@ -215,23 +215,21 @@ test/operations/narrow_storage_compute.ml
 test/operations/online_softmax_block_mma.ml
     "simdgroup_multiply_accumulate"
 test/operations/reduction_accumulator_residency.ml [also pins text this scan cannot name]
-    " = "
-    "["
-    "] = " ^ ...
+    " " ^ ...
     "__rmw_"
     "device volatile float*"
     "volatile float*)res_guard_mask"
     "volatile"
-    ... ^ " = "
 test/operations/reduction_forms.ml [also pins text this scan cannot name]
-    " = "
     "*)"
-    "Vectorized reduction rendering"
-    "] = "
-    "ocannl_shfl_xor"
     "volatile "
-    ... ^ "["
 test/operations/reserved_routine_names.ml
+    "arrayjit_threefry4x32__"
+    "asm__"
+    "exp__"
+    "gh686_bad_name_"
+    "k_686_leading_digit"
+    "printf__"
     "void " ^ "gh686_ordinary_name" ^ "("
     "void " ^ ... ^ "("
 test/operations/scan_loop.ml [renders generated text in memory]
@@ -281,20 +279,28 @@ test/operations/schedule_mma_matmul.ml [also pins text this scan cannot name]
     "(wmma-tf32)"
     "/* mma.sync fragment reduction body begins */"
     "/* mma.sync fragment reduction body ends */"
+    "/* rocwmma fragment reduction body begins */"
+    "/* rocwmma fragment reduction body ends */"
     "/* simdgroup fragment reduction body begins */"
     "/* simdgroup fragment reduction body ends */"
     "/* tile_mma fragment update"
+    "/* wmma fragment reduction body begins */"
+    "/* wmma fragment reduction body ends */"
     "== 0)"
     "Tile_mma register tiling"
+    "[0] = __bfloat162float(__mma_dr0[0]);"
+    "[__mi][__ni][0] = "
     "__builtin_elementwise_fma"
     "__builtin_ia32_vfmadd"
     "__device__ __align__(32) float ocannl_wmma_rc16[256]"
     "__float2bfloat16"
     "__float_to_tf32"
-    "__mma_dr0"
+    "__mma_dr0[0] = "
+    "__mma_dr0[0] = __float2bfloat16(__mma_fragment_"
     "__mma_dstage"
     "__shared__ float tile_"
     "__syncthreads()"
+    "__syncthreads();"
     "col_major"
     "float __mma_fragment_"
     "float fragment_"
@@ -453,7 +459,7 @@ test/operations/test_one_hot_embedding_lookup.ml
     "<= 3"
     "?"
     "double *restrict ids_wide"
-test/operations/test_uniform_virtual_lane.ml
+test/operations/test_uniform_virtual_lane.ml [also pins text this scan cannot name]
     "Main logic"
     "_uniform_lane("
     "_uniform_vec("
@@ -468,13 +474,7 @@ test/operations/tile_mma_declines.ml
 test/operations/tile_mma_geometry.ml [also pins text this scan cannot name]
     "; column tail 3 in 1 vector; row tail 2)"
     "geometry from the schedule"
-    "ocannl_pv__ = {" ^ ...
     "tmma_acc__"
-    "tmma_c_0_0__ = {" ^ ...
-    ... ^ " = ocannl_pv__[2];"
-    ... ^ " = tmma_c_0_0__[2];"
-    ... ^ "};"
-    sprintf "%d, tmma_c_0_0__, (const %s *)&%s);"
 test/operations/tile_mma_narrow.ml [also pins text this scan cannot name]
     "HALF_T tile_"
     "OCANNL_VEC_NARROW_BFLOAT16"
