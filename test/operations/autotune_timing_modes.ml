@@ -369,7 +369,7 @@ let synthetic_call ?(repeats = 3) ?(retry_contended = false) ?walls ~timing ~cap
            Int.incr window_reports;
            window := Some (samples, reused, !launches));
       let reading =
-        Autotune.calibrate_and_time ~retry_contended ~timing ~repeats ~queue_depth_cap:cap ~batch ()
+        Autotune.calibrate_and_time ~retry_contended ~timing ~repeats ~queue_depth_cap:cap ~batch
       in
       let settled_depth, calibration_launches, at_decision = Option.value_exn !decided in
       let window_batches, reused_batches, at_window = Option.value_exn !window in
@@ -482,10 +482,10 @@ let () =
     let timed_batches = ref 0 in
     synthetic_call ~timing
       ~cap:(Autotune.queue_depth_cap_for_backend backend)
-      ~retry_contended:(Autotune.retry_contended_window_for_backend ~timing backend)
+      ~retry_contended:(Autotune.retry_contended_window_for_backend backend)
       ~fixed_ms:0. ~launch_ms:1.
       ~walls:(fun _ d ->
-        if d = 1 then 1.
+        if d = 1 && Poly.equal timing Autotune.Queued then 1.
         else (
           Int.incr timed_batches;
           Float.of_int d
@@ -512,12 +512,17 @@ let () =
       let c = call ~backend ~timing:Autotune.Queued ~persistent:false in
       List.is_empty c.retry_windows && c.reading.contended
       && c.all_launches = c.calibration_launches + (c.settled_depth * c.window_batches));
-  p_all "isolated timing never enables contention retries"
+  p_all "contended isolated timing never retries and dispatches exactly its 16 samples"
     [ "metal"; "cc"; "multidev_cc"; "cuda"; "hip" ] ~f:(fun backend ->
-      not (Autotune.retry_contended_window_for_backend ~timing:Autotune.Isolated backend));
-  p_all "CUDA and HIP queued timing never enable contention retries" [ "cuda"; "hip" ]
+      let c = call ~backend ~timing:Autotune.Isolated ~persistent:false in
+      List.is_empty c.retry_windows && c.reading.contended && c.window_reports = 1
+      && c.all_launches = 16 && c.reading.samples = 16);
+  p_all "contended CUDA and HIP queued timing calibrates but takes no retry" [ "cuda"; "hip" ]
     ~f:(fun backend ->
-      not (Autotune.retry_contended_window_for_backend ~timing:Autotune.Queued backend));
+      let c = call ~backend ~timing:Autotune.Queued ~persistent:true in
+      List.is_empty c.retry_windows && c.reading.contended
+      && (not (List.is_empty c.probes))
+      && c.all_launches = c.calibration_launches + (c.settled_depth * c.window_batches));
   (* A depth-one call initially reuses the singles. Its retry must take new singles, rather than
      resume the very window it just refused. *)
   let slow =

@@ -943,7 +943,7 @@ files.
   retry's own verdict reaches ranking and refusal accounting. Persistent contention still refuses
   once and prevents caching; a recovered window leaves the candidate measured. A depth-one
   retry takes fresh singles instead of resuming the refused calibration window. Only finite
-  positive contention readings qualify, not an unresolved clock or an `unbatched` result.
+  positive contention readings qualify, not an unresolved clock.
   `on_timing_retry` accounts for the discarded window's extra dispatches, while
   `on_timed_window` describes only the returned window; `autotune_measured_refusal` labels the
   retries separately from final host refusals and prints each returned depth and median wall.

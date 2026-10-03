@@ -104,7 +104,7 @@ let () =
   Stdio.eprintf "refused by the seam: %d; by the host: %d [%s]\n%!" !seam_refused
     (List.length host_refused)
     (String.concat ~sep:"; " host_refused);
-  Stdio.eprintf "retried by the host: %d [%s]\n%!" (List.length !retried)
+  Stdio.eprintf "windows retried after host contention: %d [%s]\n%!" (List.length !retried)
     (String.concat ~sep:"; " (List.rev !retried));
   let quiet_host = List.is_empty host_refused in
   let default_reached_seam = not (List.mem host_refused default_seed_label ~equal:String.equal) in

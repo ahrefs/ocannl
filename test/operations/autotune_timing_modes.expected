@@ -38,8 +38,8 @@ a transiently contended Metal window retries once and admits the fresh window: t
 persistent Metal contention retries once and remains refused: true
 the returned window excludes the discarded samples and accounts for every launch: true
 cc queued contention gets no extra dispatches: true
-isolated timing never enables contention retries: true
-CUDA and HIP queued timing never enable contention retries: true
+contended isolated timing never retries and dispatches exactly its 16 samples: true
+contended CUDA and HIP queued timing calibrates but takes no retry: true
 a refused reused depth-one window retries with fresh singles: true
 an admitted Metal window gets no retry or extra dispatches: true
 a degenerate clock is refused without a contention retry: true

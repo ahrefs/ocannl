@@ -1605,23 +1605,23 @@ val on_batch_depth : (int -> calibration_samples:int -> unit) ref
     it. *)
 
 val calibrate_and_time :
-  ?retry_contended:bool ->
+  retry_contended:bool ->
   timing:timing_mode ->
   repeats:int ->
   queue_depth_cap:int ->
   batch:(int -> float) ->
-  unit ->
   timing_result
 (** {!time_routine} after its warmup — the calibration and the timed loop, seams included — with the
     device reduced to [batch depth], which must dispatch [depth] launches back to back, synchronize
     once and return the wall in milliseconds. [queue_depth_cap] is {!queue_depth_cap_for_backend}'s
     value for the backend being modelled; it also selects between the CUDA/HIP affine calibration
     and the historical cc/Metal single estimate. Exposed so a test can drive the whole timing policy
-    on an injected clock and count its launches exactly (gh-ocannl-1074). [retry_contended] defaults
-    to false; {!time_routine} selects it through {!retry_contended_window_for_backend}. *)
+    on an injected clock and count its launches exactly (gh-ocannl-1074). [retry_contended] is
+    {!retry_contended_window_for_backend}'s value for the backend being modelled; it enables one
+    retry only under [Queued], never [Isolated]. *)
 
-val retry_contended_window_for_backend : timing:timing_mode -> string -> bool
-(** One immediate retry is enabled only for Metal queued timing. *)
+val retry_contended_window_for_backend : string -> bool
+(** The backend whose contended queued windows get one immediate retry: Metal only. *)
 
 val on_timing_retry : (samples:int -> reused:int -> unit) ref
 (** A discarded contention window, immediately before its one fresh retry. Counts the batches
