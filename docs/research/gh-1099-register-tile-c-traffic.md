@@ -61,7 +61,7 @@ the tail would count moves the emitter never performs. Neither is adopted.
 ## Exclusive AVX2 measurement
 
 The original evidence is in
-[#947's AVX2 report](https://github.com/ahrefs/ocannl/issues/947#issuecomment-5853633227).
+[gh-ocannl-947's AVX2 report](https://github.com/ahrefs/ocannl/issues/947#issuecomment-5853633227).
 It compared tiny sites with k=n against n=512 with k=256, changing the column
 extent and row block along with k. This investigation adds a comparison at
 **fixed n=512 and bm=64**, changing only the packed k block between 32 and 256
@@ -154,14 +154,14 @@ the already tail-free 4x2 choice at n=32 on AVX2. This is a tie-rule question,
 separate from adding a setup penalty or a mis-summed C-traffic term.
 [gh-ocannl-1180](https://github.com/ahrefs/ocannl/issues/1180) owns validating
 that rule on NEON and AVX2 before changing it. The earlier
-[#947 NEON report](https://github.com/ahrefs/ocannl/issues/947#issuecomment-5852345656)
+[gh-ocannl-947 NEON report](https://github.com/ahrefs/ocannl/issues/947#issuecomment-5852345656)
 already measured a tail-bearing tie at f32 n=56, bm=8: rn6 with a two-vector
 tail versus rn5 with a four-vector tail was neutral within noise. That one
 comparison does not establish the proposed rule across NEON sites; the
 follow-up needs targeted measurement coverage rather than assuming none
 exists.
 
-Keep the model and seeding unchanged here and leave the tie key to #1180's
+Keep the model and seeding unchanged here and leave the tie key to gh-ocannl-1180's
 measurement window. No fresh NEON or AVX-512 measurements are needed to reject
 the C-traffic term: no new heuristic is applied to either target, and the
 traffic cancellation follows from the shared emitter. This makes no new
