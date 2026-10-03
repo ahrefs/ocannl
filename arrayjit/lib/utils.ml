@@ -179,6 +179,7 @@ let known_config_keys =
       "fp16_arithmetic";
       "bf16_arithmetic";
       (* Algebraic rewrites over lowered code *)
+      "simplify_fp_algebra";
       "online_softmax";
       "online_softmax_backward";
       "online_softmax_block";
@@ -209,7 +210,7 @@ type config_key_class =
           ([Ir.Schedule_cache.digest], the ["digest"] key component) that every cache key starts
           with. Nothing to add: the code {e is} the identity. *)
   | Keyed of string
-      (** Invisible to the lowered code, so it has to be carried explicitly — by this named
+      (** Not fully captured by the lowered code, so it has to be carried explicitly — by this named
           component of [Ir.Schedule_cache.key_components]. This is the class gh-ocannl-568 was an
           omission from. *)
   | Search_shaping
@@ -259,6 +260,10 @@ let config_key_classification : (config_key_class * string * string list) list =
       "the numerics policy is consulted at codegen and by the autotune tile-shape choice, never in \
        the lowered code (gh-ocannl-568)",
       [ "tf32_matmuls"; "narrow_compute_f32"; "fp16_arithmetic"; "bf16_arithmetic" ] );
+    ( Keyed "numerics",
+      "simplification also runs after scheduling, where unrolling can expose algebra absent from \
+       the base code digest (gh-ocannl-998)",
+      [ "simplify_fp_algebra" ] );
     ( Keyed "pool",
       "it decides the worker pool timings execute on, and CPU crowns do not transfer across pools \
        (gh-ocannl-530)",

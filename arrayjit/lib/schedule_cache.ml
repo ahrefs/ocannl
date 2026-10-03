@@ -507,9 +507,14 @@ let of_saved canonical (saved : saved_schedule) : Schedule.schedule * registry =
    enters the disk-cache key (and the entry, below), which is where the hazard lives: within one
    process the policy is fixed, across processes only the cache carries schedules. *)
 let numerics_tag () =
-  String.prefix
-    (Stdlib.Digest.to_hex (Stdlib.Digest.string (Numerics.fingerprint (Numerics.get ()))))
-    8
+  let policy = Numerics.fingerprint (Numerics.get ()) in
+  let algebra = Utils.get_global_arg ~default:"all" ~arg_name:"simplify_fp_algebra" in
+  (* Schedule.apply simplifies again after transforms such as materializing unroll. Two identical
+     base programs may expose different algebra there. Preserve existing all-on cache identities. *)
+  let policy =
+    if String.equal algebra "all" then policy else policy ^ ";simplify_fp_algebra=" ^ algebra
+  in
+  String.prefix (Stdlib.Digest.to_hex (Stdlib.Digest.string policy)) 8
 
 (* gh-ocannl-572: the same argument as the numerics tag, for the rest of the settings a backend
    consults when it renders, compiles or dispatches a kernel. They come in two layers: the

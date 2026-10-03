@@ -781,6 +781,13 @@ files.
   artifact rather than silently part of the measurement; it is a fact about the sweep, so the
   report states it even when every cell failed, and rows that disagree on it are refused rather
   than rendered as two unattributable header lines.
+- **The development `simplify_fp_algebra` selector also acts after scheduling** (gh-ocannl-998):
+  `Schedule.apply` reruns `simplify_llc`, so a materializing unroll can expose constant algebra
+  absent from the pre-schedule code digest. Identical base digests can therefore produce different
+  scheduled kernels under different selections. It is `Keyed "numerics"`, not solely `Code_borne`;
+  `Schedule_cache.numerics_tag` carries non-default selections while retaining the existing `all`
+  tag. `simplify_fp_algebra` pins this with an equal-source/different-unrolled-code witness and a
+  cache-tag separation claim. Profiles remain unchanged during the measurement phase.
 - **HIP's wide-f16/bf16 d boundary reads coordinates from the accumulator type, not from a
   second fragment type** (gh-ocannl-789, rewired by gh-ocannl-1064; `arrayjit/lib/hip_backend.ml`'s
   `mma_d_boundary_lines`). Under `Fp16_wide`/`Bf16_wide` the uniform arm pairs a `float` accumulator

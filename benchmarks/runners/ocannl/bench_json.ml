@@ -310,12 +310,19 @@ let dominant_kernel_object ?note ~ceiling (kernel : kernel option) =
     [dominant_kernel] is the already-built {!dominant_kernel_object}, or [None] — [null] on the wire
     — for a cell that did not run the instrument, which the report prints as a dash. *)
 let result_line ~backend ~variant ~precision ~profile ~regime_knobs ~workload ~compile_s ~searched
-    ?tokens_per_step ?tune ~p10 ~p50 ~p90 ~queued_ms ~timed_steps ~peak_memory ?dominant_kernel
-    ~losses () =
+    ?tokens_per_step ?tune ?simplify_fp_algebra ~p10 ~p50 ~p90 ~queued_ms ~timed_steps ~peak_memory
+    ?dominant_kernel ~losses () =
   let tokens_field =
     match tokens_per_step with Some t -> Printf.sprintf {|"tokens_per_step":%d,|} t | None -> ""
   in
   let tune_field = match tune with Some j -> Printf.sprintf {|"tune":%s,|} j | None -> "" in
+  let algebra_field =
+    match simplify_fp_algebra with
+    | None -> ""
+    | Some (value, source) ->
+        Printf.sprintf {|"simplify_fp_algebra":{"value":"%s","source":"%s"},|} (string value)
+          (string source)
+  in
   let profile_field =
     match profile with Some p -> Printf.sprintf {|"%s"|} (string p) | None -> "null"
   in
@@ -328,10 +335,11 @@ let result_line ~backend ~variant ~precision ~profile ~regime_knobs ~workload ~c
           Printf.sprintf {|"%s"|} (string source) )
   in
   Printf.sprintf
-    {|{"framework":"ocannl","backend":"%s","variant":"%s","precision":"%s","profile":%s,"regime_knobs":%s,"workload":"%s","compile_s":%s,"searched":%b,%s%s"step_ms":{"p10":%s,"p50":%s,"p90":%s},"queued_step_ms":%s,"timed_steps":%d,"peak_memory_bytes":%s,"peak_memory_counter":%s,"peak_memory_source":%s,"dominant_kernel":%s,"losses":[%s]}|}
+    {|{"framework":"ocannl","backend":"%s","variant":"%s","precision":"%s","profile":%s,"regime_knobs":%s,"workload":"%s","compile_s":%s,"searched":%b,%s%s%s"step_ms":{"p10":%s,"p50":%s,"p90":%s},"queued_step_ms":%s,"timed_steps":%d,"peak_memory_bytes":%s,"peak_memory_counter":%s,"peak_memory_source":%s,"dominant_kernel":%s,"losses":[%s]}|}
     (string backend) (string variant) (string precision) profile_field
     (regime_knobs_object regime_knobs)
-    (string workload) (fixed compile_s) searched tokens_field tune_field (num p10) (num p50)
-    (num p90) (num queued_ms) timed_steps peak_bytes_field peak_counter_field peak_source_field
+    (string workload) (fixed compile_s) searched tokens_field tune_field algebra_field (num p10)
+    (num p50) (num p90) (num queued_ms) timed_steps peak_bytes_field peak_counter_field
+    peak_source_field
     (Option.value dominant_kernel ~default:"null")
     (nums ~prec:9 losses)

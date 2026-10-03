@@ -9,6 +9,7 @@ backend names the backend the cell ran on: true
 workload names the self-test model, not a benchmark cell: true
 variant names the self-test: true
 precision is f32: true
+float algebra metadata records the resolved selector and its source: true
 compile_s is a non-negative number: true
 searched is false in an untuned cell: true
 step_ms carries all three percentiles: true

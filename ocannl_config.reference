@@ -1287,6 +1287,18 @@
 # Programmatic override: `Ir.Numerics.set_policy`.
 #bf16_arithmetic=auto
 
+# Development ablation of simplify_llc's floating-point algebra (gh-ocannl-998).
+# Comma-separated enabled families: contract (FMA), constants (Add/Mul constant reassociation),
+# sub (subtraction re-parenthesizing), mul_div (division constant folds and mul/div interchange),
+# pow (integer-power unrolling), identities (zero Add/Sub/Mul/Div folds).
+# all keeps today's behaviour; none disables all families. Integer canonicalization and
+# constant-constant folding remain enabled.
+# This is a measurement control, not a promise of strict IEEE evaluation: backend compiler
+# math settings still apply. No profile changes it; the later rewrite-tier split is separate.
+# Post-schedule simplification can expose new algebra (e.g. after unrolling), so the selector
+# also enters the schedule cache's numerics identity. Default all preserves existing cache tags.
+#simplify_fp_algebra=all
+
 # Algebraic rewrite over lowered code (gh-ocannl-483): the online-softmax attention rewrite. The
 # composed softmax's max-reduction and sum-of-exp reduction over one axis become a single scan per
 # row carrying the running max and the rescaled running sum (the online-softmax recurrence, on
