@@ -52,6 +52,23 @@ A possible route to learning OCANNL:
    4. Backend-independent optimizations [docs/lowering_and_inlining.md](docs/lowering_and_inlining.md) -- _lowering_ means translating (compiling) from the high-level representation (as assignments) to the low-level representation.
    5. Schedules and autotuning [docs/schedules_and_autotuning.md](docs/schedules_and_autotuning.md) -- the loop-nest transform layer (parallelization, tiling, staging, tensor cores) and the empirical search over it.
 
+### Configuration profiles and performance
+
+Choose the `reproducible`, `performance` or `approximate` preset, for example with
+`OCANNL_PROFILE=approximate` or `--ocannl_profile=approximate`; see
+[ocannl_config.reference](ocannl_config.reference) for the payloads and override precedence.
+`reproducible` limits machine-dependent schedule choices; `performance` enables a wider
+autotune search and native fp16 arithmetic where supported. `approximate` adds numerics-changing
+options, including TF32 on supported CUDA hardware, fast math on CPU, and attention rewrites
+that reduce intermediate storage. Check the resulting accuracy and speed on your workload.
+
+The approximate profile is opt-in and has no general speedup guarantee. In the
+[October 3 transformer benchmark report](benchmarks/report-gh720-transformer.md), approximate
+f32 improves Metal inference at all three measured sequence lengths, while HIP is slower at
+all eight endpoints and Metal training is neutral or slower. Those are default-schedule,
+whole-profile comparisons. The report retains parity failures, memory measurements and
+incomplete CPU cells alongside the successful results.
+
 ### Using the tracing debugger with CUDA and HIP computations
 
 To use debugging as provided by configuring `Utils.settings.debug_log_from_routines <- true` with the `cuda` or `hip` backend, wrap the code that schedules work and synchronizes the GPU with `Utils.capture_stdout_logs`. Both GPU APIs expose device-side `printf`, but not `fprintf`; the runtime drains the device printing buffer to process `stdout` around synchronization. Synchronize the context inside the capture window so all device output is available before stdout is restored.
@@ -60,11 +77,18 @@ NOTE: debug logging from CUDA or HIP in complex settings is a bit tricky, as it 
 
 ## Milestones
 
-See [ROADMAP.md](ROADMAP.md) for the detailed schedule, its history of rebalances and renumberings, and the venue history of the paper artifacts. GitHub issue assignments are the source of truth for release scope. **v1.0.2 was released on September 16, 2026**; the next target is **v1.1** performance work, October 2, 2026, followed by **v1.1.1** consolidation and **v1.1.2** consumers, with **v1.2** targeted for November 3, 2026. Release dates are now project-internal and aspirational — through v1.0 they were pinned to conference deadlines. The version sequence is `0.7 → 0.8 → 0.9 → 1.0 → 1.0.1 → 1.0.2 → 1.1 → 1.1.1 → 1.1.2 → 1.2`: version-number depth tracks release *scope* (feature releases take a second component, consolidation/robustness releases a third), not semver.
+See [ROADMAP.md](ROADMAP.md) for the detailed schedule, its history of rebalances and renumberings, and the venue history of the paper artifacts. GitHub issue assignments are the source of truth for release scope. **v1.0.2 was released on September 16, 2026**; the next target is **v1.1**, October 5, 2026, with the proposed release focus **fused attention and better transformer scheduling**. It is followed by **v1.1.1** consolidation (October 16), **v1.1.2** non-transformer performance work (October 24), **v1.1.3** consumers (October 31), and **v1.2** (November 15), with follow-up **v1.2.1** and **v1.2.2** milestones still undated. Release dates are project-internal and aspirational — through v1.0 they were pinned to conference deadlines. The version sequence is `0.7 → 0.8 → 0.9 → 1.0 → 1.0.1 → 1.0.2 → 1.1 → 1.1.1 → 1.1.2 → 1.1.3 → 1.2 → 1.2.1 → 1.2.2`: version-number depth tracks release *scope* (feature releases take a second component, consolidation/robustness releases a third), not semver.
 
 ### Releases
 
 For more details, see [CHANGES](CHANGES.md).
+
+* **1.1 (unreleased): Fused attention and better transformer scheduling.**
+  * Default GPU schedules map more of each proved parallel loop chain to hardware; kernel fission preserves a statement's parallel mapping when merging would reduce it. The autotuner also searches an interior-batch grid layout for attention projections ([PR #909](https://github.com/lukstafi/ocannl-staging/pull/909), [PR #913](https://github.com/lukstafi/ocannl-staging/pull/913), [PR #915](https://github.com/lukstafi/ocannl-staging/pull/915)).
+  * Opt-in fused attention backward removes quadratic probability-gradient and score-gradient buffers. A block-tiled online forward can run both contractions on GPU matrix units; automatic block selection keeps the two-pass rewrite on HIP after a measured regression ([PR #885](https://github.com/lukstafi/ocannl-staging/pull/885), [PR #905](https://github.com/lukstafi/ocannl-staging/pull/905), [PR #939](https://github.com/lukstafi/ocannl-staging/pull/939)). These paths trade recomputation and reassociation for storage, with workload-dependent throughput.
+  * CPU SIMD keeps narrow-storage conversions and partial-vector tails in registers; HIP's default bf16 policy uses f32 accumulation, and privatized register tiles follow each backend's accumulator precision ([PR #840](https://github.com/lukstafi/ocannl-staging/pull/840), [PR #845](https://github.com/lukstafi/ocannl-staging/pull/845), [PR #882](https://github.com/lukstafi/ocannl-staging/pull/882), [PR #860](https://github.com/lukstafi/ocannl-staging/pull/860), [PR #880](https://github.com/lukstafi/ocannl-staging/pull/880)).
+  * Host-uploaded parameters share context-owned arenas, allowing larger parameter sets to link within Metal's buffer-binding budget; CPU library-loading and signing failures surface as fatal toolchain errors, and overlapping configuration key names resolve independently ([PR #911](https://github.com/lukstafi/ocannl-staging/pull/911), [PR #928](https://github.com/lukstafi/ocannl-staging/pull/928), [PR #927](https://github.com/lukstafi/ocannl-staging/pull/927)).
+  * A broader transformer benchmark report covers exact/approximate regimes, sequence and batch scaling, and bf16/f16 storage on HIP and Metal, with completed CPU cells and outstanding caps recorded ([PR #940](https://github.com/lukstafi/ocannl-staging/pull/940), [report](benchmarks/report-gh720-transformer.md)). Memory reductions, throughput regressions and accuracy limits are reported together.
 
 * **1.0.2: Robustness pulled forward, plus compiler elegance through shared structure.**
   * One expression of each shared idea, with the differences made explicit: configuration precedence is one resolver, scalar precisions one `Ops`-owned enumeration, `Low_level`'s analyses one ordered access traversal, the C builtins one table that host stubs and cc kernels both compile, the warp-shuffle stages one description its own simulator consumes, and CUDA/HIP scalar semantics one table behind a compilation driver all four backends share.

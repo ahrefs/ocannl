@@ -7,6 +7,86 @@ commits, PR pages (development happens in `lukstafi/ocannl-staging`), and issue 
 
 ## [Unreleased]
 
+### Added
+
+- Online-softmax attention rewrites reduce probability-buffer materialization; the separately
+  gated fused backward removes recognized attention's quadratic gradient intermediates
+  (gh-ocannl-483, gh-ocannl-1002).
+- A single-pass block attention fold avoids the quadratic score buffer when no later reader needs
+  it, as in inference; eligible Metal f32 folds use matrix units. The `approximate` profile
+  enables these numerics-changing rewrites (gh-ocannl-1003).
+- Footprint-scoped materialization serves eligible affine sub-image reads from smaller private
+  scratch instead of a full tensor buffer; `Context.decide_footprint` exposes the choice alongside
+  inline and materialized decisions (gh-ocannl-616).
+- `Train.tune_placements` persists placement decisions beside schedules, so later processes can
+  replay the selected placement and its schedule instead of repeating arm and flip searches
+  (gh-ocannl-786).
+- `bf16_arithmetic=auto|true|false` controls bf16 accumulator width; `false` selects f32 residency
+  on every backend. HIP's default `auto` now selects wide accumulation, while `approximate`
+  explicitly retains the narrow option (gh-ocannl-838, gh-ocannl-1051).
+- Metal tensorizes f16 or bf16 operands into f32 destination storage, and supports f32
+  accumulation for uniform-bf16 matrix operations under the wide policy (gh-ocannl-923).
+- `autotune_progress=true` leaves a flushed record of attempted candidates, compile/timing costs
+  and the best result so far, including when a search is interrupted (gh-ocannl-1061).
+- `simplify_fp_algebra` selects floating-point simplification families for ablation measurements;
+  it preserves integer canonicalization and leaves profile settings unchanged (gh-ocannl-998).
+- Transformer benchmarks cover batch-1 inference, batch-256 training, sequence and batch scaling,
+  and f32/bf16/f16 storage in exact and approximate regimes, with per-leg reports and explicit
+  accuracy and comparison limits (gh-ocannl-720).
+
+### Changed
+
+- Default GPU scheduling maps every loop of a proved parallel chain and fills workgroups across
+  neighboring axes; schedule-aware fission preserves a kernel boundary when merging would reduce
+  a statement's groups or active threads (gh-ocannl-995, gh-ocannl-1133, gh-ocannl-1126).
+- Fused attention backward can compute its per-pair reduction cooperatively on GPU lanes;
+  `gpu_lane_preamble_reduction=auto` chooses this on Metal/CUDA and retains the plain plan on HIP
+  and unmeasured targets (gh-ocannl-1124).
+- `approximate` selects `online_softmax_block=auto`: block 16 on CUDA, Metal and CPU, two-pass
+  online attention on HIP and unmeasured targets. Explicit block sizes remain available; the
+  profile is a numerical tradeoff whose speed depends on the workload and device (gh-ocannl-1171).
+- CPU register-tiled matrix operations keep tails vectorized; GCC and aarch64 narrow-storage
+  bridges retain register residency (gh-ocannl-620, gh-ocannl-1071, gh-ocannl-1072, gh-ocannl-1101;
+  `lukstafi/ocannl-staging` PR #865).
+- Timed schedule and placement caches distinguish concrete devices and observed toolchains;
+  unavailable device identity disables persistence, while conservative construction limits remain
+  backend-wide (gh-ocannl-594).
+- Queued timing reuses depth-one calibration samples and bounds CUDA/HIP calibration probes by
+  wall time; Metal retries one transient contention-refused window before dropping a candidate
+  (gh-ocannl-1074, gh-ocannl-1096, gh-ocannl-1098, gh-ocannl-1060).
+- Placement tuning prices actual inliner instantiations, abandons unpromising flips at equal
+  search depth, and replays clean abandonment records without a new candidate search
+  (gh-ocannl-637, gh-ocannl-1011, gh-ocannl-1110, gh-ocannl-1136).
+- `Schedule.Privatize` requires an accumulator precision; `Schedule.privatize ~accum_prec`
+  constructs it from the backend's policy so tiled and ordinary reductions use the same width
+  (gh-ocannl-1116).
+- `Sketch_families` has a documented interface hiding construction internals; the unused public
+  `Autotune.mma_tile_for_precisions` entry point is removed (gh-ocannl-1139).
+
+### Fixed
+
+- CUDA staged f16 under the wide policy, uniform-bf16, and fp8 matrix operations keep f32
+  accumulators resident across outer reduction blocks instead of repeatedly storing and narrowing
+  partial sums (gh-ocannl-925, gh-ocannl-1063, gh-ocannl-1073).
+- HIP wide f16/bf16 matrix-operation boundaries derive element coordinates from the accumulator
+  fragment type, fixing conversions when operand and accumulator layouts differ (gh-ocannl-1064).
+- Uploading many parameters before linking packs them into shared upload arenas, avoiding Metal
+  binding-budget failures during checkpoint restoration and transformer training (gh-ocannl-1125).
+- Autotune releases admitted candidates when callbacks fail, as well as undispatched GPU
+  baselines and displaced winners, preventing retained backend buffers (gh-ocannl-975).
+- bf16 conversion preserves NaNs instead of rounding some NaN payloads into infinity
+  (gh-ocannl-1069).
+- Command-line configuration resolves overlapping names independently: setting
+  `online_softmax_backward` or `online_softmax_block` no longer accidentally sets `online_softmax`
+  (gh-ocannl-1163).
+- CPU shared-library loading, missing compiled artifacts and signing failures carry fatal typed
+  link diagnostics instead of being absorbed as ordinary autotune candidate refusals
+  (gh-ocannl-1077, gh-ocannl-1142).
+- CPU kernels link libm on ELF platforms so fast-math code reaching libmvec loads successfully
+  (gh-ocannl-1045).
+- HIP destroys device streams at process exit under a bounded teardown, avoiding exit-time
+  hangs from pending stream cleanup (gh-ocannl-1036).
+
 ## [1.0.2] -- 2026-09-16
 
 > Release note: theme — robustness pulled forward, and compiler elegance through shared
