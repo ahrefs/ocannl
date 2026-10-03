@@ -1,6 +1,6 @@
 # OCANNL Roadmap
 
-**v1.0.2 released September 16, 2026. Next: v1.1, targeted for October 2, 2026; followed by v1.1.1 on October 10, v1.1.2 on October 18 and v1.2 around November 3, 2026.**
+**v1.0.2 released September 16, 2026. Next: v1.1, targeted for October 5, 2026; followed by consolidation (v1.1.1, October 16), performance beyond transformers (v1.1.2, October 24), consumers (v1.1.3, October 31) and v1.2 around November 15, 2026. v1.1 remains unreleased.**
 
 This roadmap outlines the development plan for OCANNL through version 1.0 and beyond. Dates indicate **end of period** targets. Through v1.0 the schedule was pinned to conference deadlines; it is now project-internal, and the dates below are aspirational rather than external commitments.
 
@@ -24,7 +24,9 @@ This roadmap outlines the development plan for OCANNL through version 1.0 and be
 >
 > **Rebalance (September 14, 2026):** finish v1.0.2 with a bounded compiler-deduplication set, then start performance work promptly. The deferred consolidation becomes **v1.1.1**, and the former consumers milestone becomes **v1.1.2**. Working backward from **November 3** for v1.2 gives **October 18** for consumers, **October 10** for consolidation and **October 2** for v1.1, after **September 16** for v1.0.2. The 48 days after that cut split 16 : 8 : 8 : 16 (feature : consolidation : consumers : feature), preserving the scope weighting used in September. These are soft end-of-period targets, not requirements to empty each milestone; protect the early-November anchor by reducing scope when necessary.
 >
-> The version sequence is: `0.7 → 0.8 → 0.9 → 1.0 → 1.0.1 → 1.0.2 → 1.1 → 1.1.1 → 1.1.2 → 1.2`. Milestone *scope* below tracks the GitHub milestones, which are the source of truth. The September 14 rebalance below supersedes the September 7 dates and adds a consolidation milestone after v1.1.
+> **Update (October 4, 2026):** the September 29 split keeps **v1.1 focused on transformer workloads**. Convolution and CPU kernel/sketch economy now have their own **v1.1.2** milestone; consumers moved to **v1.1.3**. Live GitHub targets are October 5, 16, 24 and 31, then November 15 for v1.2. Undated v1.2.1/v1.2.2 placeholders allow consolidation and consumers to continue if scope moves again. These dates supersede the September schedule above.
+>
+> The version sequence is: `0.7 → 0.8 → 0.9 → 1.0 → 1.0.1 → 1.0.2 → 1.1 → 1.1.1 → 1.1.2 → 1.1.3 → 1.2`. Milestone *scope* below tracks the GitHub milestones, which are the source of truth. Proposed release wording is identified explicitly; it has not changed the GitHub milestone.
 
 ---
 
@@ -298,85 +300,177 @@ follow-ups the v1.0.2 review cycles filed against it.
 
 ---
 
-## v1.1 — October 2, 2026
-**Theme: Performance-chasing in the approximate profile, demonstrated on benchmarks**
+## v1.1 — October 5, 2026 (unreleased)
+**Proposed theme: Fused attention and better transformer scheduling**
 
-GitHub milestone scope: *"Performance-chasing in the approximate profile, demonstrated on benchmarks."* The `performance` profile is defined as the fastest configuration *at unchanged semantics*; this milestone chases performance past that line, under a third preset whose results differ from the exact profiles by a tolerance the benchmark parity envelope names. An issue here closes with a before/after benchmark cell in a report. Targeted for October 2, 2026, aspirationally; the pace is what the measurements say.
+GitHub currently describes the milestone as *"Performance-chasing in the approximate profile,
+demonstrated on transformer workloads (gpt2_mini and gpt2_mini_train, the only sort-of realistic
+workloads in this release)."* Its scope now excludes convolutional workloads and CPU kernel
+and sketch economy, assigned to v1.1.2. As of October 4 it has 62 closed issues and three open:
+benchmark coverage (#720), the floating-point algebra split (#998), and the controlled
+cross-framework CUDA comparison with an August anchor (#1181).
 
-**Recommended first work, once v1.0.2 is cut:**
+**Proposed replacement description:**
 
-1. Complete a bounded `approximate` acceptance run (#719) and choose the first #720 comparison
-   cells. Diagnose the recorded approximate-CPU load failure and tf32 timeout as measurement
-   blockers, without waiting for the whole benchmark-expansion wishlist.
-2. Use the already-landed `Scan_loop` to implement online-softmax/fused attention (#483), with
-   the sequence-length comparison as its acceptance evidence. The high-level cumulative/top-k
-   surface (#952) is not a prerequisite for this IR rewrite.
-3. Run the register-tile follow-through (#947/#948 → #620 → #627) and substrate-specific MMA
-   improvements (#923/#925/#838) where hardware and clear comparison cells are available.
-   Take Winograd (#505) when the 3×3 convolution cell is ready; avoid opening every design
-   space (#565, #576, #616) at once.
+> Transformer compiler advances and measured performance on `gpt2_mini` inference and training:
+> online-softmax attention, fused backward, block-tiled matrix-unit rendering, improved GPU
+> scheduling and fission, and more reliable tuning and benchmark evidence. The `approximate`
+> profile is an opt-in numerics regime with workload-dependent speed and memory tradeoffs.
+> Reports include regressions, HIP f16 failures (#1182), large-batch scaling gaps (#1183), and
+> incomplete CUDA/CPU coverage. Convolution and CPU kernel economy continue in v1.1.2;
+> unfinished measurements and the algebra-policy split are identified explicitly.
 
-The criterion is a demonstrated compiler improvement, including a useful measured null—not
-throughput measured in closed hygiene issues. Bring forward deferred work when an experiment
-exposes its cost, rather than treating the entire robustness queue as prerequisite infrastructure.
+This wording supports releasing the delivered compiler features while keeping performance
+claims tied to named measurements. Passing a parity envelope establishes acceptance of a
+configuration; it does not establish that the configuration is faster. The benchmark's `exact`
+label is a comparison regime, not a bitwise floating-point guarantee: #998's separation of
+rounding-changing simplifications remains open.
 
-**The regime and its evidence:**
-- The `approximate` profile and benchmark regime column **landed in staging PR #661** (#719); fleet tf32 acceptance remains open. Future algebraic-rewrite gates join the payload as they land. Benchmark rows now record ambient `OCANNL_*` settings too (PR #667, part of #720). The September 14 plan records an acceptance-run timeout and an approximate-CPU library-load failure; profile availability is not completed performance acceptance.
-- The benchmark expansion (#720): sequence-length and batch-size scaling curves, a 3×3 padded conv workload, roofline-attainment and device-memory columns, thread-count parity on the CPU column — each leg the demonstration for named issues below. Gemma 3 (270M/1B) as the real-weights long-context target (#570).
+**Delivered since the September 15 roadmap edit:**
 
-**Algebraic rewrites — the numerics-changing tier:**
-- Fused attention via online softmax (#483): `Low_level.Scan_loop` **landed in staging PR #660** (#696), removing the IR recurrence blocker. The rewrite and its long-sequence measurements remain open; high-level cumulative operations/top-k are a separate surface (#952).
-- Winograd F(2×2, 3×3) (#505), and the zero-nest workgroup geometry that lets whole-routine GPU conv candidates be proposed (#503).
-- fp16 accumulator-width policy (#680/#789) and shared rendering decisions (#754) have landed. Remaining MMA width work is substrate-specific: Metal f16 inputs with f32 storage (#923), CUDA persistent-fragment wide-f16 destinations (#925), and HIP wide bf16 accumulation (#838).
+- **Online-softmax forward, fused backward and block-tiled attention** (#483, #1002, #1003;
+  staging PRs [#737](https://github.com/lukstafi/ocannl-staging/pull/737),
+  [#885](https://github.com/lukstafi/ocannl-staging/pull/885),
+  [#892](https://github.com/lukstafi/ocannl-staging/pull/892),
+  [#905](https://github.com/lukstafi/ocannl-staging/pull/905)). The forward fold renders both
+  contractions on supported GPU matrix units; fused backward removes quadratic gradient buffers.
+  Its portable implementation can trade latency for memory. High-level cumulative/top-k operations
+  (#952) remain consumer work; general scan licences and schedule-chosen block geometry
+  (#1122/#1123) remain in v1.2.
+- **GPU launch geometry and fission** (#995, #728, #1133, #1126, #1124): map longer parallel chains,
+  preserve each statement's mapping when deciding whether to merge kernels, and reach channel
+  lanes through the fused-backward reduction. The cooperative reduction policy is enabled by
+  device capability on Metal/CUDA and conservatively refused on HIP. These improvements also
+  benefit composed attention in the exact regime.
+- **Placement and register-tile follow-through**: footprint-scoped scratch materialization
+  (#616, [PR #750](https://github.com/lukstafi/ocannl-staging/pull/750)), persistent placement
+  decisions (#786), vectorized register-tile remainders (#620), model-ranked register geometry
+  and emitted-geometry census (#947/#948). The #1099 measurement rejected an unhelpful C-traffic
+  ranking term; [PR #933](https://github.com/lukstafi/ocannl-staging/pull/933) changes research
+  documentation, and the tail tie rule remains #1180.
+- **Backend precision and execution**: Metal f16 inputs with f32 storage (#923), CUDA
+  persistent-fragment wide-f16 destinations (#925), HIP wide bf16 accumulation (#838), native
+  HIP matrix-unit support and pool addressing corrections (#1032, #344), plus scoped inline-PTX
+  temporaries (#1073). These are supported rendering paths, not a claim that every benchmark
+  schedule uses matrix units.
+- **Tuning and benchmark evidence**: concrete per-device cache identity (#594), cache-hit benefit
+  measurement (#819), completed timing-objective/session-cost studies (#833/#834), bounded
+  calibration and failed-candidate cleanup, a census of the shipped training step (#1170), timed
+  allocation peaks (#1006), regime/parity provenance and explicit skipped cells. The development
+  `simplify_fp_algebra` selector landed in [PR #935](https://github.com/lukstafi/ocannl-staging/pull/935)
+  for #998's ablation; its default and the production profile policies retain current behavior.
 
-**Exact-numerics performance residue:**
-- Footprint-scoped materialization — a middle ground between inlining and a full buffer (#616); register-tile geometry **landed in staging PR #662** (#619), leaving cost-model-derived ranking and geometry census (#947/#948), the column-remainder peel cliff (#620), and packed GEBP schedules at non-dividing extents so the cost model can be measured where it is questioned (#627).
-- Cost-model fidelity: the advisory envelope's two consumers with opposite biases (#636) and hoisted scope bodies in `sc_flops` (#637).
-- Backend zero-copy from mmap-backed checkpoints (#585) is assigned to **v1.1**, not v1.2; measure loading cost and memory residency separately from steady-state execution. Placement-decision persistence (#786) also remains open.
-- Convolution family search (#697), zero-nest geometry (#503), pad economics (#740/#741), head-axis coalescing (#728), and benchmark/cost-model follow-ups remain a measured backlog rather than completed work.
-- Async-copy staging refinements — Metal `simdgroup_async_copy`, HIP direct-to-LDS, pipeline depths > 2 (#576); device memory management under pressure (#565), whose first consumer the long-context legs are expected to be.
+**What the measurements establish:**
+
+- **Approximate CUDA acceptance is complete** (#719). The September 27 native RTX 5070 Ti
+  tuned row passed both the approximate and exact envelopes, but took **6.900 ms versus
+  6.271 ms exact**. These whole-profile searches differ in program and search settings;
+  the result does not isolate TF32. The [issue's acceptance report](https://github.com/ahrefs/ocannl/issues/719)
+  records the search cost and deliberately skipped CPU tuning cells.
+- **The attention features have useful bounded wins.** The
+  [block-fold ablation](benchmarks/report-gh1003-block-fold.md), on a September 28 M4 Max build,
+  measured seq1024 inference at **0.483× composed latency**, with requested memory **91–96 MiB
+  across the sequence endpoints versus 124–353 MiB composed**. The
+  [fused-backward report](benchmarks/report-gh1002-fused-backward.md) records seq1024 training
+  memory falling from **689 to 305 MiB** with scores stored, alongside a Metal latency regression
+  on that build. Later scheduling fixes and whole-profile sweeps have their own baselines.
+- **The latest transformer sweep is mixed** ([#720 report](benchmarks/report-gh720-transformer.md),
+  October 3). Default f32 approximate is slower on all eight HIP endpoints; base inference is
+  **20.024 versus 17.695 ms exact**. Metal inference improves at the three sequence endpoints,
+  including **22.572 versus 28.784 ms at seq1024**, while base training is **70.631 versus
+  70.162 ms**. These are untuned whole-profile comparisons on separately stamped HIP/Metal
+  revisions, not isolated rewrite effects or a controlled cross-backend ranking.
+- **HIP block-fold policy now uses a measured fallback** (#1171,
+  [PR #939](https://github.com/lukstafi/ocannl-staging/pull/939)). `online_softmax_block=auto`
+  resolves to two-pass on HIP and unmeasured targets, keeping block 16 on CUDA, Metal and CPU.
+  Cached gfx1151 confirmation measured **4.812 ms resolved approximate, 6.937 ms forced block 16,
+  4.552 ms exact**. That evidence is from unified memory; discrete gfx1102 confirmation remains
+  #1184. The fallback avoids the measured regression without promising a profile-wide win.
+
+**Release boundary and remaining work:**
+
+The October 3 sweep found exact HIP f16 failures at base training and seq1024 inference/training
+(#1182), and falling per-token training throughput at batch256 on HIP and Metal (#1183).
+Ten requested CPU f32 cells timed out and 28 reduced-format cells were deliberately skipped;
+#720 remains partially reported. The fresh comparison with an August anchor, PyTorch and tinygrad
+is underway under #1181 as of October 4; its in-progress preparation timings are not release
+evidence. A complete cross-framework matrix or a universal approximate speedup is therefore
+not a release claim.
+
+For #998, measurements support separating optional float algebra from integer-power lowering:
+the latter is currently required for finite CUDA GPT training under NVRTC fast math. The compiler
+split is still outstanding. Q/K/V zero-init folding (#1175, PR #934) was **reverted by
+[PR #941](https://github.com/lukstafi/ocannl-staging/pull/941)** after doubling tuned CUDA forward
+latency; it is excluded from the delivered feature list. Decide explicitly which remaining fixes
+and measurements gate the tag and which become documented follow-ups, then cut a coherent release.
 
 ---
 
-## v1.1.1 — October 10, 2026
-**Theme: Consolidation after the performance work**
+## v1.1.1 — October 16, 2026
+**Theme: Consolidation after the transformer work**
 
-The issues deferred from v1.0.2 — 38 at the September 14 rebalance, 46 open at the September 16
-tag — are listed in the redistribution table above: testing-side
-refactorings, scanner maintenance, diagnostics, stable goldens, test tooling and remaining IR/API
-work. Renderer and backend deduplication shipped in v1.0.2. The
-v1.1 experience can inform the ordering of this later queue. This is a bounded consolidation
-period, not a gate requiring every issue to close before consumers or v1.2 can proceed. The PPX migration (#695) remains upstream-release-gated; legacy-lock
-retirement (#966) reaches its proposed October 10 trigger at this milestone's target.
+GitHub scope remains testing-side refactorings, scanner maintenance, diagnostics, stable goldens,
+test tooling and remaining IR/API work. As of October 4, 88 assigned issues are closed and 109
+remain open: much consolidation has already landed alongside the performance experiments, and
+review continues to add follow-ups. The September redistribution tables above are historical
+snapshots, not the current inventory. Use the measured v1.1 defects to prioritize a bounded
+release; emptying the queue is not a prerequisite to subsequent work. The PPX migration (#695)
+remains upstream-release-gated. Legacy-lock retirement (#966) remains tied to its documented
+trigger rather than to the roadmap date alone.
 
 ---
 
-## v1.1.2 — October 18, 2026
+## v1.1.2 — October 24, 2026
+**Theme: Performance beyond transformers**
+
+Created in the September 29 split, with 11 open issues as of October 4. Each compiler improvement
+should close with a before/after benchmark cell; a measured null result is useful evidence too.
+
+- **Reduced ResNet-style benchmark** (#1161): padded 3×3 convolution, residual adds, strided
+  1×1 shortcuts and batch-1 latency. The full ResNet consumer, with batch norm and `resnet_block`,
+  belongs to v1.1.3.
+- **Convolution compiler work**: Winograd F(2×2, 3×3) (#505), zero-nest workgroup geometry (#503),
+  flavor-indexed convolution family search (#697), second-reader staging (#1147), and batch-1
+  strided 1×1 seeds (#1148).
+- **CPU kernel and sketch economy**: non-dividing packed GEBP (#627), pad profitability (#740),
+  blocktile/packed-scalar padding (#741), per-site flip-chain profitability (#717), and hermetic
+  `bin/` benchmark drivers (#743).
+
+---
+
+## v1.1.3 — October 31, 2026
 **Theme: Consumers and explorations**
 
-GitHub milestone scope: *"Consumers and explorations: models, reproductions, demos, integrations, and the training experience (checkpointing, tracking, plots). Paced by interest."* Everything that consumes the compiler rather than building it. Renamed from v1.1.1 on September 14 to put consolidation immediately after v1.1; its existing 15 issues retain their home, joined by #793 and #777. Hardware-gated and feature-grade items remain in v1.2.
+GitHub scope: models, reproductions, demos, integrations and the training experience
+(checkpointing, tracking, plots). Renamed from v1.1.2 in the September 29 split; 24 open issues
+as of October 4. It can continue in the undated v1.2.2 descendant if scope is deferred.
 
 **Training experience:**
-- Explicit persistent optimizer state (#793) and computed-value observability (#777), moved from consolidation to the consumer-facing work they support.
-- Batch-norm running-stat momentum (#879) and the MobileNet width multiplier (#880), the feature halves behind the currently underscored placeholder options.
-- Resumable checkpoints (#96), experiment tracking — graphs of observables such as loss and device health (#122), plot legends and axis ticks (#103).
+- Explicit persistent optimizer state (#793) and computed-value observability (#777).
+- Batch-norm running-stat momentum (#879), MobileNet width multiplier (#880), and compilable
+  `resnet_block` channel constraints (#1146).
+- Resumable checkpoints (#96), experiment tracking (#122), plot legends and axis ticks (#103).
 
 **Models, reproductions and demos:**
-- Model surgery (#33), LSTM (#60), Bonsai RNN (#182), digit addition (#427), BERT/ModernBERT (#297), DisTrO (#278).
+- Model surgery (#33), LSTM (#60), Bonsai RNN (#182), digit addition (#427), BERT/ModernBERT (#297),
+  DisTrO (#278), and Gemma 3 with real weights and long context (#570).
 
 **Explorations, integrations and deployment:**
-- The Simply/NanoDO study for `lib/` (#435), inference plugins/binaries (#97), Polars integration (#219), and a krnl/autograph study (#277).
+- Simply/NanoDO study (#435), inference plugins/binaries (#97), Polars (#219), krnl/autograph
+  (#277), public `lib/` interfaces (#1010), cumulative/top-k operations (#952), mmap-backed
+  checkpoint zero-copy (#585), async-copy staging (#576), and pressure-aware memory policy (#565).
 
 ---
 
-## v1.2 — November 3, 2026
+## v1.2 — November 15, 2026
 **Proposed theme: Reusable tensor programs on a standalone ArrayJIT compiler**
 
-GitHub currently calls this *"Ambitious feature-grade work"*, with **seven open issues**:
-#404, #903, #852, #444, #477, #170 and #195. The old list omitted the two architectural
-anchors, #852 and #903, and incorrectly included #585, which is now in v1.1. Seven issues
-understates the scope: three are substantial design spaces. November 3 is the early-November anchor used to schedule the preceding milestones,
-not a promise to finish all seven.
+GitHub currently calls this *"Ambitious feature-grade work"*, with **11 open issues as of
+October 4**: #404, #903, #852, #444, #477, #170, #195, #963, #1000, #1122 and #1123.
+The three architectural anchors below remain a proposed core; the later additions concern
+compiler phase order, cross-statement conflict analysis and general scan/scheduling licences.
+#585 is now consumer work in v1.1.3. November 15 is the current soft target, not a promise
+to finish all 11 design spaces.
 
 **Recommended core, with concrete completion criteria:**
 
@@ -409,9 +503,11 @@ These are proposed scope refinements, not newly filed issues.
   wave64 MFMA. Keep it hardware-gated and propose a later backend milestone only when hardware
   access exists, rather than inventing a v1.3 date now.
 
-If the three architectural tracks cannot fit by November 3, finish a coherent subset and defer
-the remainder explicitly, preserving the early-November landing target. A useful v1.2 advances reusable programs and clear ownership; clearing
-seven heterogeneous issue numbers is not its acceptance criterion.
+If the three architectural tracks cannot fit by November 15, finish a coherent subset and defer
+the remainder explicitly, preserving the current landing target. A useful v1.2 advances reusable programs and clear ownership; clearing
+11 heterogeneous issue numbers is not its acceptance criterion. The undated v1.2.1 and v1.2.2
+milestones reserve room for later consolidation and consumers; they are not additional scheduled
+feature releases.
 
 ---
 
@@ -429,10 +525,12 @@ seven heterogeneous issue numbers is not its acceptance criterion.
 | **1.0** | Aug 13, 2026 | **released** | **Branch-and-bound schedule inference, inlining as a searchable decision, graph capture, software pipelining, rematerialization, CPU reduced precision, and the 2x `gpt2_mini` step** |
 | **1.0.1** | Aug 26, 2026 | **released** | **Consolidation after v1.0** (planned as "v1.1"): search follow-through, inlining and reduction soundness, test and benchmark seams that cannot report a false pass, and the training-loop mechanics |
 | **1.0.2** | Sep 16, 2026 | **released** | **Robustness pulled forward, plus compiler elegance through shared structure**: the landed robustness fixes and eight compiler-structure/coverage issues |
-| 1.1    | Oct 2, 2026 | planned | Performance-chasing in the approximate profile, demonstrated on benchmarks: fleet acceptance of the landed `approximate` preset, fused attention and Winograd, the exact-numerics residue, and the benchmark legs that expose wins and losses |
-| 1.1.1  | Oct 10, 2026 | planned | Post-performance consolidation: the issues deferred from v1.0.2 (46 open at the 1.0.2 tag), prioritized by v1.1 experience |
-| 1.1.2  | Oct 18, 2026 | planned | Consumers and explorations: models, reproductions, demos, integrations, and the training experience |
-| 1.2    | Nov 3, 2026 | planned; theme refinement proposed | Standalone ArrayJIT, session transactions and shape schemes; PoPE and hardware features optional |
+| 1.1    | Oct 5, 2026 | unreleased; framing proposed | Transformer compiler advances: online/fused/block attention, GPU scheduling, precision paths and measured speed/memory tradeoffs; approximate performance remains workload-dependent |
+| 1.1.1  | Oct 16, 2026 | planned; work already landing | Consolidation informed by transformer measurements and review findings |
+| 1.1.2  | Oct 24, 2026 | planned | Performance beyond transformers: reduced ResNet-style convs and CPU kernel/sketch economy |
+| 1.1.3  | Oct 31, 2026 | planned | Consumers, models, integrations, checkpointing and observability |
+| 1.2    | Nov 15, 2026 | planned; core refinement proposed | Standalone ArrayJIT, session transactions and shape schemes; broader compiler licences and hardware features remain design spaces |
+| 1.2.1 / 1.2.2 | undated | placeholders | Later consolidation / consumers if scope moves beyond the current ladder |
 
 ---
 
