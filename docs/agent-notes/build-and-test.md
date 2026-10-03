@@ -1885,6 +1885,14 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   ahrefs/ocannl is where the issues live anyway (AGENTS.md's two-repository rule) — and either
   opens a `ci-fix/*` PR on staging (it never merges its own PRs) or posts its diagnosis to that
   issue.
+  A master push verdict covers a SPAN, not a merge: push runs share one concurrency group and are
+  never cancelled, so GitHub keeps one running and one pending, and a newer merge replaces only
+  the pending run (ci.yml's `concurrency` comment says why; ahrefs/ocannl#1057 is the 9-of-16
+  cancelled verdicts it ended). A burst gets a verdict within about two run lengths, covering
+  every merge since the previous push run's head. When a red span holds more than one merge, the
+  routine bisects it by dispatching `ci` on `master` with `expected_sha` set to a commit inside the
+  span — on master an ancestor of the head is accepted, the run is named `ci at <sha>`, and its
+  red fires no triage — before it names a culprit.
   Merging sessions do not watch CI after landing (roll-forward, ahrefs/ocannl#861); before fixing
   a master red by hand, find the claiming issue and any linked PR, and take over only where triage
   visibly stopped short — saying so on the issue first.

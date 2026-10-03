@@ -146,41 +146,74 @@ for label, mutant in (
         raise AssertionError('accepted mutant: ' + label)
 
 
-# Run the exact bash guard from the workflow with git reporting a fixture HEAD.
+# Run the exact bash guard from the workflow with git reporting a fixture HEAD
+# and gh answering the compare API for the one direction the guard must ask:
+# is the intended commit behind the dispatched head?
 step = source.split('    - name: Verify dispatch commit\n', 1)[1].split('    - uses: ', 1)[0]
 assert "if: github.event_name == 'workflow_dispatch'" in step
 script = step.split('      run: |\n', 1)[1]
 script = '\n'.join(line[8:] for line in script.splitlines())
 sha, other = 'a' * 40, 'b' * 40
+master, branch = 'refs/heads/master', 'refs/heads/topic'
 scratch = sys.argv[2]
 git = Path(scratch) / 'git'
 git.write_text('#!/usr/bin/env bash\nprintf "%s\\n" "$CHECKOUT_SHA"\n')
 git.chmod(0o755)
+gh = Path(scratch) / 'gh'
+gh.write_text('#!/usr/bin/env bash\n'
+              '[ "$1 $2" = "api repos/$GITHUB_REPOSITORY/compare/$EXPECTED_SHA...$GITHUB_SHA" ] || exit 1\n'
+              '[ -n "$RELATION" ] || exit 1\n'
+              'printf "%s\\n" "$RELATION"\n')
+gh.chmod(0o755)
 
-def guard(code, expected, run, checkout, only=True):
+def guard(code, expected, run, checkout, only=True, ref=master, relation='ahead'):
     env = dict(os.environ, PATH=scratch + os.pathsep + os.environ['PATH'],
                EXPECTED_SHA=expected, GITHUB_SHA=run, CHECKOUT_SHA=checkout,
-               WINDOWS_ONLY=str(only).lower())
+               WINDOWS_ONLY=str(only).lower(), GITHUB_REF=ref,
+               GITHUB_REPOSITORY='owner/repo', RELATION=relation)
     result = subprocess.run(['bash', '-eo', 'pipefail', '-c', code], env=env,
                             capture_output=True, text=True)
     return result.returncode
 
 assert guard(script, sha, sha, sha) == 0
+assert guard(script, sha, sha, sha, ref=branch) == 0  # a branch's own head
 assert guard(script, '', sha, sha, False) == 0  # ordinary manual dispatch
-for label, expected, run, checkout in (
-    ('missing intended SHA', '', sha, sha), ('malformed SHA', 'abc', sha, sha),
-    ('obsolete run head', sha, other, other), ('wrong checkout', sha, sha, other),
+assert guard(script, sha, other, sha, False) == 0  # bisection probe: an ancestor of master's head
+print('PASS accepts the head, an ordinary dispatch, and an ancestor of master')
+for label, expected, run, checkout, ref, relation in (
+    ('missing intended SHA', '', sha, sha, master, 'ahead'),
+    ('malformed SHA', 'abc', sha, sha, master, 'ahead'),
+    ('wrong checkout', sha, sha, other, master, 'ahead'),
+    ('obsolete branch head', sha, other, sha, branch, 'ahead'),
+    ('commit not behind master', sha, other, sha, master, 'diverged'),
+    ('commit ahead of master', sha, other, sha, master, 'behind'),
+    ('unread ancestry', sha, other, sha, master, ''),
 ):
-    assert guard(script, expected, run, checkout) == 1, label
+    assert guard(script, expected, run, checkout, ref=ref, relation=relation) == 1, label
     print('PASS rejects', label)
 for label, check, args in (
-    ('run identity', '[ "$GITHUB_SHA" = "$EXPECTED_SHA" ] &&', (sha, other, sha)),
-    ('checkout identity', '[ "$(git rev-parse HEAD)" = "$EXPECTED_SHA" ]', (sha, sha, other)),
+    ('master-only ancestry', '[ "$GITHUB_REF" = refs/heads/master ] &&', dict(ref=branch)),
+    ('ancestry', '[ "$relation" = ahead ]', dict(relation='diverged')),
 ):
-    assert check in script
+    assert check in script, label
     mutant = script.replace(check, 'true &&' if check.endswith('&&') else 'true')
-    assert guard(mutant, *args) == 0, label  # proves the refusal owns this case
+    assert guard(mutant, sha, other, sha, **args) == 0, label  # proves the refusal owns this case
     print('PASS negative control exposes removed', label)
+check = '[ "$(git rev-parse HEAD)" = "$EXPECTED_SHA" ]'
+assert check in script
+assert guard(script.replace(check, 'true'), sha, sha, other) == 0, 'checkout identity'
+print('PASS negative control exposes removed checkout identity')
+
+# A bisection probe judges the commit it names only if EVERY job builds that
+# commit: a job checking out the event's commit would test master's head and
+# report it under the probe's name. And a probe's red must not fire triage.
+checkouts = re.findall(r'^    - uses: actions/checkout@v7\n(      with:\n        ref: \$\{\{ inputs\.expected_sha \}\}\n)?',
+                       source, re.M)
+assert len(checkouts) >= 3 and all(checkouts), 'a job checks out the event commit, not the dispatched one'
+notify = re.search(r'^  notify-triage-routine:\n(?:    .*\n)*?    if: >-\n((?:      .*\n)+)', source, re.M)
+assert notify and "!(github.event_name == 'workflow_dispatch' && inputs.expected_sha)" in notify[1], \
+    'a pinned dispatch fires the triage routine'
+print('PASS every job builds the dispatched commit, and a pinned dispatch fires no triage')
 PY
 report "$rc" "ci matrix controls"
 finish
