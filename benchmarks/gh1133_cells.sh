@@ -13,7 +13,7 @@
 #   BASE  a checkout of the base revision (the two-loop presets), built by the `build` step too.
 #   CAP   wall cap in seconds per build and per cell; a capped cell's process group is terminated
 #         and the cell counts as failed.
-#   STEP  build | provenance | step | seg | summary
+#   STEP  build | provenance | step | seg | trainseg | summary
 #     build       dune build of bench_gpt and bench_gpt_diag in both checkouts.
 #     provenance  both revisions, clean-tree checks, the fixtures' digests against the m4-max
 #                 content-v1 rows of fixtures/DIGESTS.txt, and the host state.
@@ -23,9 +23,13 @@
 #     seg         per-fission-segment attribution: bench_gpt_diag with BENCH_SEG_TIMES=1, one cell
 #                 per inference fixture x treatment (min-of-20 per segment, a sync per run, so
 #                 each segment carries a launch floor and the segments do not add up to a step).
+#     trainseg    training-fixture counterpart of seg: the shipped backprop + SGD segments, with
+#                 full-step controls BEFORE isolated timing mutates weights/gradients. Requires a
+#                 runner with gh-ocannl-1170 (an old forward-only diagnostic is refused).
 #     summary     OUT/summary.md from the numbered passes' result lines: median p50 per cell, the
 #                 p50 of each repeat, the widest p90/p10 of the cell's repeats, the ratio to the
 #                 same fixture's base cell, and the losses' largest relative difference from base.
+#                 Appends the trainseg census/timing tables beside the step-time matrix, if run.
 #   A measurement step needs `build` and `provenance` earlier in the same invocation.
 #
 # Treatments (every cell: untuned default pipeline, f32, schedule fission on, online softmax off,
@@ -232,6 +236,19 @@ for step in "$@"; do
         case $f in *train*) continue ;; esac
         for t in $treatments; do SEG=1 BENCH_STEPS=1 cell "$f" "$t" seg bench_gpt_diag; done
       done ;;
+    trainseg)
+      need_identity trainseg || continue
+      for f in $fixtures; do
+        case $f in *train*) ;; *) continue ;; esac
+        for t in $treatments; do
+          SEG=1 BENCH_STEPS=1 cell "$f" "$t" trainseg bench_gpt_diag || continue
+          name="$backend-$f-$t-trainseg"
+          if ! grep -q '^mode: train backend:' "$out/$name.out"; then
+            echo "gh1133: $name did not run a training diagnostic; use a BASE with gh-ocannl-1170"
+            failed=1
+          fi
+        done
+      done ;;
     summary)
       python3 - "$out" "$treatments" "$ref" "${REF_ALL:-}" >"$out/summary.md" <<'PY' || failed=1
 import json, os, re, statistics, sys
@@ -284,6 +301,13 @@ for (backend, fixture, treatment), reps in sorted(cells.items(), key=lambda kv: 
         "%.3fx" % (m / ref) if ref else "", spread, queued, loss))
 for row in missing_refs:
     print("MISSING REFERENCE: %s has no reference cell to compare with" % row)
+for name in sorted(os.listdir(out)):
+    if name.endswith("-trainseg.out"):
+        print("\n### Training segments: %s\n" % name[:-4])
+        print("Isolated min-of-20 launch + sync times; their sum is not a step latency.\n")
+        print("```text")
+        print(open(os.path.join(out, name)).read().rstrip())
+        print("```")
 sys.exit(1 if incomplete or missing_refs else 0)
 PY
       cat "$out/summary.md" ;;

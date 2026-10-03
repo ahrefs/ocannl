@@ -484,6 +484,18 @@ nested-division rewrite; regression test `test/training/virtual_grads_parity.ml`
   `vol:` (how many of its serial accumulations the Metal compiler-bug workaround pinned to memory,
   gh-ocannl-782 — on the shapes where the accumulator is the critical path that is worth up to 4x,
   so a surprising segment time is read together with this).
+  A training fixture (`mode: train`, e.g. `gpt2_mini_train`) selects the real backprop + SGD
+  step in `bench_gpt_diag`, sharing model construction and fixture injection with `bench_gpt`.
+  Its census and timing rows enumerate `Context.routine.segments` as shipped, including gradient
+  zeroing and optimizer work, with identical segment IDs and launch geometry. `BENCH_STEPS=1`
+  prints three full-step controls and losses **before** isolated timings: timing a backward or
+  optimizer segment repeatedly changes gradients and weights. The isolated minima include one
+  launch + sync per kernel; their sum is not a step latency. Classified standalone compilation
+  refusals retain a `DECLINED` row and the total states how many segments were timed.
+  `BENCH_PROMOTE=0` remains an inference-only census experiment.
+  `gh1133_cells.sh ... build provenance step trainseg summary` puts the training census/timing
+  tables beside its step-time matrix; every selected treatment's runner must support training
+  diagnostics (an older forward-only BASE is refused).
   `BENCH_SR_SITES=1` (`bench_conv_diag`) prints what `Autotune.split_reduce_sites` proposes on the
   same graph — the gh-ocannl-484 task-3 seeding can only reach the accumulations listed there, so
   it is the companion to the census above when asking why a seeded split-reduce family did or did

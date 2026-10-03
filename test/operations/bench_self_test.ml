@@ -24,6 +24,7 @@
 open Base
 module H = Bench_harness
 module U = Yojson.Safe.Util
+open Ocannl.Operation.DSL_modules
 
 let field j k = try Some (U.member k j) with _ -> None
 
@@ -41,7 +42,26 @@ let is_str j k expected =
 let () =
   (* Emitted to stderr rather than stdout: the line carries wall-clock digits, and the golden is
      diffed. It is echoed rather than dropped so a failing run is diagnosable from the log. *)
-  let line = H.run_self_test ~out:Stdio.stderr () in
+  let inspect_step ctx bindings loss routines =
+    let kernels = H.shipped_kernels routines in
+    let writes = List.concat_map kernels ~f:(fun (_, seg) -> H.writes_of seg.Ir.Low_level.llc) in
+    let writes_node tn = List.mem writes tn ~equal:Ir.Tnode.equal in
+    Verdict.p "training segment census includes the forward loss"
+      (writes_node loss.Ocannl.Tensor.value);
+    let params = Ocannl.Train.trainable_params loss |> Set.to_list in
+    Verdict.p_all "training segment census includes every parameter gradient and optimizer write"
+      params ~f:(fun p ->
+        writes_node p.Ocannl.Tensor.value
+        && Option.value_map p.Ocannl.Tensor.diff ~default:false ~f:(fun d ->
+            writes_node d.Ocannl.Tensor.grad));
+    H.print_shipped_census ~out:Stdio.stderr routines;
+    let outcomes = H.time_shipped_segments ~out:Stdio.stderr ~repeats:1 ~ctx ~bindings routines in
+    Verdict.p "segment timing retains one ordered outcome per shipped census row"
+      (List.equal Int.equal (List.map outcomes ~f:fst) (List.mapi kernels ~f:(fun i _ -> i)));
+    Verdict.p_all "every tiny training segment executes with a positive standalone time" outcomes
+      ~f:(fun (_, result) -> match result with Ok ms -> Float.(ms > 0.) | Error _ -> false)
+  in
+  let line = H.run_self_test ~out:Stdio.stderr ~inspect_step () in
   let protocol = H.self_test_protocol in
   let parsed =
     match try Some (Yojson.Safe.from_string line) with _ -> None with

@@ -1,3 +1,7 @@
+training segment census includes the forward loss: true
+training segment census includes every parameter gradient and optimizer write: true
+segment timing retains one ordered outcome per shipped census row: true
+every tiny training segment executes with a positive standalone time: true
 the emitted result line parses as one JSON object: true
 framework is ocannl: true
 backend names the backend the cell ran on: true

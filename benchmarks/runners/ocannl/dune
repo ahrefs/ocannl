@@ -24,6 +24,14 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+(library
+ (name bench_gpt_model)
+ (package neural_nets_lib)
+ (modules bench_gpt_model)
+ (libraries base bench_harness ocannl)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 (executables
  (names
   bench_mlp
@@ -42,6 +50,7 @@
  (libraries
   base
   bench_harness
+  bench_gpt_model
   bench_json
   ocannl
   stdio
