@@ -21,15 +21,15 @@
    saved form. - The GPU staged leg: the same re-association with Grid-typed outer loops,
    cooperative shared staging at the kernel-window anchor, and [Tensorize] at the backend lane width
    — value-pinned on metal against the natural form (tolerance tier), and seeded per fission segment
-   on backends with an mma capability (intrinsic-tile divisibility gates, unzeroed segments only). -
-   The Grid conv flavor on aligned-merged segments: with more than one companion nest the pipeline
-   adopts the default preset's whole-segment Grid geometry ([Sched.default_cpu]'s aligned cross-nest
-   analysis), value-pinned on the C backends and seeded per fission segment. - Strided rows
-   (gh-ocannl-502): the compacting [Stage] packs a stride-2 window densely, so the strided site
-   seeds the same flavors as a unit-stride one — pinned by the seed counts, by executing {e every}
-   proposed candidate against the natural form (candidates are timed, not value-checked), and by the
-   tuned stride-2 routine on both legs. - detect_conv's pattern discipline: a plain matmul is not a
-   conv site. *)
+   on backends with an mma capability (intrinsic-tile divisibility gates, segments without
+   whole-node zeros only). - The Grid conv flavor on aligned-merged segments: with more than one
+   companion nest the pipeline adopts the default preset's whole-segment Grid geometry
+   ([Sched.default_cpu]'s aligned cross-nest analysis), value-pinned on the C backends and seeded
+   per fission segment. - Strided rows (gh-ocannl-502): the compacting [Stage] packs a stride-2
+   window densely, so the strided site seeds the same flavors as a unit-stride one — pinned by the
+   seed counts, by executing {e every} proposed candidate against the natural form (candidates are
+   timed, not value-checked), and by the tuned stride-2 routine on both legs. - detect_conv's
+   pattern discipline: a plain matmul is not a conv site. *)
 
 open Base
 open Ocannl
@@ -547,9 +547,9 @@ let () =
 
   (* === The GPU staged leg and the aligned-merged Grid flavor (gh-ocannl-493 follow-ups). Both legs
      use micro-kernel extents divisible by Metal's 8x8x8 intrinsic tile: row = 8, oc = 16, ic = 8.
-     The pipelines run through the fission seam ([Sched.fission_scheduled]) because the conv's
-     [Zero_out] must land in its own [`Zeros] segment for the annotated conv kernel to validate —
-     the same shape the autotune per-segment seeding targets. === *)
+     The hand-built pipelines use the fission seam with whole-node zeros kept separate, so their
+     geometry tests stay independent of automatic zero companions. The tuning legs below exercise
+     the production sketch family, including its expanded-zero companion geometry. === *)
   let make_x8 tag =
     NTDSL.init ~l:(tag ^ "x") ~prec:Ir.Ops.single ~b:[ 2 ] ~o:[ 10; 10; 8 ]
       ~f:(Ll_test.weighted ~weights:[| 1; 1; 2; 3 |] ~modulus:7 ~offset:0. ~stride:1.)
@@ -591,16 +591,15 @@ let () =
     @ [ site.Autotune.c_row; site.Autotune.c_oc; site.Autotune.c_red ]
   in
   (* Compile+run through the fission seam, with [conv_sched] supplying the schedule for the segment
-     containing the detected conv site and every other segment staying unscheduled (zero segments
-     get the default zero expansion on GPU). *)
+     containing the detected conv site and every other segment staying unscheduled. Keep whole-node
+     zeros separate for these hand-built geometry probes; the tuning legs use the default policy. *)
   let run_fiss_sched name y ~conv_sched =
     let ctx = Context.auto () in
-    let limits = Context.hardware_limits ctx in
     let transforms (opt : LL.optimized) =
       let preset (seg : LL.optimized) =
         match Autotune.detect_conv seg.LL.llc with Some site -> conv_sched site seg | None -> []
       in
-      let zero_sched tns = if on_cpu then [] else Sched.zero_expansion ~limits tns in
+      let zero_sched _ = [] in
       Sched.fission_scheduled ~preset ~zero_sched ~static_indices:[] opt
       |> List.map ~f:(fun (_, _, _, post) -> post)
     in

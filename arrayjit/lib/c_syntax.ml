@@ -3930,81 +3930,21 @@ module C_syntax (B : C_syntax_config) = struct
         && Poly.equal ((thread_storage ctx) tn) `Thread
     | None -> false
 
-  (* A whole-node zero immediately before a statement can be forwarded into that statement's
-     localized serial accumulator when the statement owns every cell it closes. The affine check
-     below establishes the dead-store side of the rewrite; [try_localize_serial_reduce] marks the
-     seed consumed only after the localization itself has succeeded. Keeping those two decisions
-     separate is load-bearing: a vector/SIMD rendering or any localizer refusal still needs the
-     original [Zero_out] and opening node read. *)
+  (* A covering zero initializer immediately before a statement can be forwarded into that
+     statement's localized serial accumulator when the statement owns every cell it closes. The
+     affine check below establishes the dead-store side of the rewrite; [try_localize_serial_reduce]
+     marks the seed consumed only after the localization itself has succeeded. Keeping those two
+     decisions separate is load-bearing: a vector/SIMD rendering or any localizer refusal still
+     needs the original initializer and opening node read. *)
 
-  (* Whether [body] contains an effect whose buffer accesses or ordering are deliberately opaque to
-     the affine access list. A zero store may not move through either one. [Tile_mma] is rejected as
-     a unit even though its fallback has an affine footprint: the selected intrinsic need not
-     execute that fallback's scalar closing store. *)
-  let has_opaque_zero_forwarding_effect (body : Low_level.t) =
-    let rec stmt = function
-      | Low_level.Staged_compilation _ | Workgroup_barrier | Tile_mma _ -> true
-      | Seq (a, b) -> stmt a || stmt b
-      | For_loop { body; _ } | If { body; _ } -> stmt body
-      | Scan_loop { carried; body; _ } ->
-          List.exists carried ~f:(fun c -> scalar c.Low_level.init) || stmt body
-      | Set { llsc; _ } | Set_local (_, llsc) -> scalar llsc
-      | Set_dynamic { dyn_value = value, _; llsc; _ } -> scalar value || scalar llsc
-      | Set_from_vec { arg = value, _; _ } -> scalar value
-      | Noop | Comment _ | Zero_out _ | Declare_local _ -> false
-    and scalar = function
-      | Low_level.Local_scope { body; _ } -> stmt body
-      | Get_dynamic { dyn_value = value, _; _ } -> scalar value
-      | Ternop (_, (a, _), (b, _), (c, _)) -> scalar a || scalar b || scalar c
-      | Binop (_, (a, _), (b, _)) -> scalar a || scalar b
-      | Unop (_, (a, _)) -> scalar a
-      | Get _ | Get_local _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ ->
-          false
-    in
-    stmt body
-
-  (* The principled DSE condition for forwarding [Zero_out tn] into [next]: [next]'s only accesses
-     of [tn] are one unconditional, same-statement, same-cell read-modify-write pair, and that
-     statement's affine write map covers the whole node over its enclosing loop box. Loops omitted
-     from the map are recorded as repeated-cell dimensions; the localizer remains the final
-     authority and may consume the seed only when its accepted scope includes all of them. A dead
-     enclosing loop is rejected because it executes no closing store. *)
-  let localized_zero_seed_candidate (tn : Tn.t) (next : Low_level.t) : localized_zero_seed option =
-    if has_opaque_zero_forwarding_effect next then None
-    else
-      let same_map = Array.equal Indexing.equal_axis_index in
-      let accesses =
-        Low_level.affine_accesses next
-        |> List.filter ~f:(fun access -> Tn.equal access.Affine.a_tn tn)
-      in
-      match accesses with
-      | [ ({ Affine.a_write = false; _ } as read); ({ a_write = true; _ } as write) ]
-        when write.a_rmw && (not read.a_guarded) && (not write.a_guarded) && (not read.a_dynamic)
-             && (not write.a_dynamic) && (not read.a_whole) && (not write.a_whole)
-             && (not read.a_vec_last) && (not write.a_vec_last)
-             && Affine.same_statement read.a_path write.a_path
-             && Option.exists read.a_stmt_write ~f:(same_map write.a_map)
-             && same_map read.a_map write.a_map ->
-          let range symbol =
-            List.find_map write.a_loops ~f:(fun (bound, range) ->
-                if Indexing.equal_symbol symbol bound then Some range else None)
-          in
-          if List.exists write.a_loops ~f:(fun (_, (lo, hi)) -> hi < lo) then None
-          else if Affine.covers_box ~range (Affine.view ~dims:(Lazy.force tn.Tn.dims) write.a_map)
-          then
-            let repeated =
-              List.filter_map write.a_loops ~f:(fun (symbol, (lo, hi)) ->
-                  Option.some_if
-                    (hi > lo
-                    && not
-                         (Array.exists write.a_map ~f:(Indexing.axis_index_mentions_symbol symbol))
-                    )
-                    symbol)
-            in
-            Some
-              { lzs_tn = tn; lzs_idcs = write.a_map; lzs_repeated = repeated; lzs_consumed = false }
-          else None
-      | _ -> None
+  let localized_zero_seed_candidate tn next =
+    Option.map (Low_level.zero_seed_candidate tn next) ~f:(fun (write, repeated) ->
+        {
+          lzs_tn = tn;
+          lzs_idcs = write.Affine.a_map;
+          lzs_repeated = repeated;
+          lzs_consumed = false;
+        })
 
   (* Take one top-level statement without flattening the suffix. Optimized programs are commonly
      right-associated [Seq] trees, so this is constant work there; a left-associated prefix costs
@@ -4296,8 +4236,8 @@ module C_syntax (B : C_syntax_config) = struct
               (left_doc, right_doc)
             in
             let d1, d2 =
-              match c1 with
-              | Zero_out tn -> (
+              match Low_level.zero_initializer_target c1 with
+              | Some tn -> (
                   let next, rest = take_first_statement c2 in
                   match localized_zero_seed_candidate tn next with
                   | None -> render_in_order c1 c2
@@ -4328,7 +4268,7 @@ module C_syntax (B : C_syntax_config) = struct
                         else next_doc ^^ hardline ^^ rest_doc
                       in
                       (zero_doc, tail))
-              | _ -> render_in_order c1 c2
+              | None -> render_in_order c1 c2
             in
             (* Avoid extra hardlines if one side is empty *)
             if PPrint.is_empty d1 then d2
