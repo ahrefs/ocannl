@@ -133,6 +133,19 @@ files.
   expression-level volatile device reads inside the accumulating loop: on the standalone
   scalar-loss shape the ratio fell from 4.08x to 1.03x while its reproducer matrix stayed green
   row-for-row.
+- GPT segment diagnostics follow the fixture's mode (gh-ocannl-1170): `gpt2_mini_train` in
+  `bench_gpt_diag` uses `Bench_gpt_model` and `Bench_harness.compile_step`, the same model,
+  injected parameters and backprop + SGD as `bench_gpt`. Census/timing in both modes walks the compiled
+  `Context.routine.segments`, through the same shipped-IR compilation seam as `dominant_kernel`;
+  rebuilding fission from a forward graph omits the very gradient segment the table is for.
+  `BENCH_STEPS=1` runs BEFORE `BENCH_SEG_TIMES=1`: isolated backward/SGD runs mutate gradients and
+  weights, so controls taken afterwards do not follow the fixture trajectory. Each isolated time
+  includes a launch + sync floor, and their sum is not step latency. `gh1133_cells.sh`'s `trainseg`
+  step appends those tables to `summary` beside the step matrix and refuses an older forward-only
+  diagnostic. The driver records per-cell exit statuses; its shared validator excludes forward-only
+  and failed/partial cells from the report. A census inventories both compiled host-gated routines
+  before any execution; the benchmark-window filter is only for the dominant-kernel column.
+  `BENCH_PROMOTE=0` is still a forward-only reconstructed census experiment.
 - That digest covers the compiled result, NOT the diagnostics. When re-measuring a search's
   decline census after changing only an error message or a log line, `rm benchmarks/autotune_cache/*.sexp`
   first — otherwise the second run reports `state=cache-replay`, `timed=0`, `declines=[]` and every

@@ -410,7 +410,7 @@ def run(args):
 # Summaries
 
 KERNEL = re.compile(r"^bench: kernel (\d+)/(\d+) ([0-9.]+) ms grid=\[([0-9;]+)\] block=\[([0-9;]+)\] "
-                    r"mma:(\S+) w: (.*)$")
+                    r"mma:(.*?) (?:vol:.*?)?w: (.*)$")
 
 
 def kernels(base):
