@@ -3,8 +3,9 @@
 On rog-nv-linux's RTX 5070 Ti Laptop GPU (sm_120), holding the m16n8k32
 f32 accumulator across 128 outer reduction blocks cuts kernel time by 28.95%
 in a standalone reproduction of the backend's plain fragment and staging loops.
-That supports extending the register scope: it also lets every inline-PTX shape
-share one destination-boundary mechanism.
+The generated-kernel confirmation cuts kernel time by 37.22% on the staged
+schedule below. That supports extending the register scope: it also lets every
+inline-PTX shape share one destination-boundary mechanism.
 
 ## Standalone mechanism probe
 
@@ -63,3 +64,28 @@ window. It performs the same nine alternating-order paired CUDA-event batches;
 there is no build or host-product oracle in that invocation. OCANNL's emitted
 source is compiled with nvcc for this confirmation, and dispatch bypasses the
 OCANNL runtime, so the number remains a kernel measurement.
+
+## Generated-kernel result
+
+The exclusive confirmation ran both precompiled emitted sources on the same
+sm_120 device, with nine paired batches of 100 launches per arm and alternating
+order. The dry run checked every cell against the exact host product and
+checked the resident replay before the measurement window.
+
+| Statistic | Per-block D | Resident D | Resident / per-block |
+| --- | ---: | ---: | ---: |
+| Median kernel time | 0.338762 ms | 0.212565 ms | 0.627809 (median paired ratio) |
+| Paired ratio range | | | 0.626295–0.628337 |
+
+The median paired reduction is **37.22%**. This confirms the gain in the actual
+emitted plain staged kernel; the capability-derived residency tests also check
+the swizzled twin, whose timing is not measured here. The measurement includes
+register residency, fragment-loop unrolling and moving the leading barrier,
+and remains a kernel result rather than an application speedup.
+
+- Measurement revision: `603396fa8486906feb0cdec526d26eec85f9dc86`.
+- Run: `/home/lukstafi/.ocannl-test-runs/20261003T153353Z-1420901`.
+- Baseline emitted-source SHA-256:
+  `f745cc346712c9b95776899a6ffd2bf2c2242811c17eff23fe5390b527734129`.
+- Resident emitted-source SHA-256:
+  `2842e85da1712b1fc6f4e7769273ee31c9b3fc3b90c496fa0af9b99aaa2c303d`.
