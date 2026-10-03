@@ -671,7 +671,11 @@ let text_test scope expr =
 
 (** The name a simple [let] binds, or [None] for a pattern this scan does not follow. Used for the
     parameter peel, where a position has to be exact. *)
-let bound_name pattern = match pattern.ppat_desc with Ppat_var { txt; _ } -> Some txt | _ -> None
+let rec bound_name pattern =
+  match pattern.ppat_desc with
+  | Ppat_var { txt; _ } -> Some txt
+  | Ppat_constraint (inner, _) -> bound_name inner
+  | _ -> None
 
 (** Every variable a pattern binds, tuple and record patterns included. Used for taint, where
     [let values, src = run () in] must taint [src] -- a source reached through a tuple is a source.

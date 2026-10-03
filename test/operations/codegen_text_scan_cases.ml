@@ -471,6 +471,11 @@ let () =
   String.is_substring (Generated.read routine) ~substring:"callback marker"
 let () = List.iter ["r"] ~f:check|ocaml},
       {|"callback marker" +partial|} );
+    ( "constrained labelled source and marker parameters retain their names",
+      {ocaml|let has ~(src : string) ~(marker : string) =
+  String.is_substring src ~substring:marker
+let () = p "marker" (has ~src:(Generated.read "r") ~marker:"typed marker")|ocaml},
+      {|"typed marker"|} );
     ( "a shadowed source parameter does not validate the caller marker",
       {ocaml|let has ~src ~marker =
   describe src;
