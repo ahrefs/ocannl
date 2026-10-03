@@ -779,13 +779,13 @@ let placement_outcome_digest ?name ?timing_ctx ctx loss comp bindings decision =
 
     The arms differ in which candidates {e exist}, not only in how they rank: a tensorized candidate
     is seeded only when the matmul site's operand and destination storage precisions resolve to a
-    tile the backend advertises ({!Autotune.mma_tile_for_precisions}), and placement decides which
-    nodes the site reads. Under the mixed-precision recipe on a uniform-format backend (Metal's
-    simdgroup matrices) that makes arm A tensorization-free: the reduced-precision cast twins are
-    virtual there, so the site reads f32 masters into a reduced-precision destination — a mixed
-    triple no tile matches — while materialize-all turns the twins into real reduced-precision nodes
-    and the seeds fire. Materializing just the twins ([Mixed_prec.Twin_materialized]) reaches the
-    same seeds at arm A's cost; see benchmarks/report-gh546-metal.md.
+    tile the backend advertises ({!Autotune.tensorized_capability_refutation}), and placement
+    decides which nodes the site reads. Under the mixed-precision recipe on a uniform-format backend
+    (Metal's simdgroup matrices) that makes arm A tensorization-free: the reduced-precision cast
+    twins are virtual there, so the site reads f32 masters into a reduced-precision destination — a
+    mixed triple no tile matches — while materialize-all turns the twins into real reduced-precision
+    nodes and the seeds fire. Materializing just the twins ([Mixed_prec.Twin_materialized]) reaches
+    the same seeds at arm A's cost; see benchmarks/report-gh546-metal.md.
 
     gh-555: the A/B is the coarse level of the hierarchical inlining search — inlining decided
     first, tiling/scheduling within each arm by the nested {!Autotune.tune}. [inline_flips] (config

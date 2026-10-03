@@ -168,9 +168,10 @@ let get () =
 let set_policy p = policy := Some p
 
 (** Whether the current policy is {!Fp16_wide}: f16 reduction accumulators reside in f32 on every
-    backend (gh-ocannl-680). Consulted by every backend's [accum_prec] and by the mma seeding gate
-    in [Sketch_families.mma_tile_for_precisions] — one predicate on both sides of the gh-ocannl-545
-    seam, so seeding and emission cannot drift apart on which f16 sites tensorize. *)
+    backend (gh-ocannl-680). Consulted by every backend's [accum_prec] and by the mma
+    accumulator-scope gate in [Sketch_families.wide_acc_withholding] — one predicate on both sides
+    of the gh-ocannl-545 seam, so seeding and emission cannot drift apart on which f16 sites
+    tensorize. *)
 let fp16_accum_wide () =
   match (get ()).fp16_arithmetic with Fp16_wide -> true | Fp16_auto | Fp16_narrow -> false
 

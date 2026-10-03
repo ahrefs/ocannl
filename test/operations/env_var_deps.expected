@@ -233,6 +233,8 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-cache_dir_ignores
   test/operations/dune                     @runtest-cache_dir_ignores_control
   test/operations/dune                     @runtest-cc_dlopen_cause
+  test/operations/dune                     @runtest-cc_post_compile_cause-artifact_missing
+  test/operations/dune                     @runtest-cc_post_compile_cause-codesign
   test/operations/dune                     @runtest-census_total_ratchet
   test/operations/dune                     @runtest-changelog_unreleased_scan
   test/operations/dune                     @runtest-codegen_text_inventory

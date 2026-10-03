@@ -132,6 +132,6 @@ let uniform1_shape_preservation_test () =
   Stdio.printf "Vectorized expands by factor of %d\n" (Array.length result_vec / input_size)
 
 let () =
-  uniform1_basic_test ();
-  uniform_at1_test ();
-  uniform1_shape_preservation_test ()
+  Verdict.case "uniform1_basic_test" uniform1_basic_test;
+  Verdict.case "uniform_at1_test" uniform_at1_test;
+  Verdict.case "uniform1_shape_preservation_test" uniform1_shape_preservation_test

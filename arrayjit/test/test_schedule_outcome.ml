@@ -72,25 +72,32 @@ let () =
     |> expect_classified
   in
   assert (equal_cause typed.cause illegal_1);
-  (* gh-ocannl-1077: typed, yet fatal. A kernel the host loader refuses is an OCANNL link bug that a
-     search must not absorb as a decline, under any provenance or strictness; the fatal failure
-     keeps its cause and renders it into the public exception. *)
-  let dlopen_rejection = backend_rejection ~stage:dlopen_stage "undefined symbol: sym" in
-  List.iter [ Candidate; Cache_replay; Advisory; User_schedule ] ~f:(fun provenance ->
-      List.iter [ true; false ] ~f:(fun strict ->
-          let fatal =
-            protect ~strict ~classify_backend:no_backend_classification ~provenance ~phase:Transform
-              (fun () -> raise (Cause_at (Backend_link, dlopen_rejection)))
-            |> expect_fatal
-          in
-          assert (equal_phase fatal.phase Backend_link);
-          assert (Option.equal equal_cause fatal.cause (Some dlopen_rejection));
-          assert (
-            match fatal.exn with
-            | Invalid_argument detail -> String.equal detail "undefined symbol: sym"
-            | _ -> false)));
-  (* The escalation is the loader's stage at [Backend_link], not every link-time rejection: the
-     compiler stage at link, and the loader stage raised at another phase, stay declines. *)
+  (* gh-ocannl-1077, gh-ocannl-1142: typed, yet fatal. Post-compile host-boundary failures must not
+     become candidate declines under any provenance or strictness; their fatal records keep the
+     cause and render it into the public exception. *)
+  List.iter [ dlopen_stage; artifact_missing_stage; codesign_stage ] ~f:(fun stage ->
+      let detail = "post-compile diagnostic: " ^ stage in
+      let rejection = backend_rejection ~stage detail in
+      List.iter [ Candidate; Cache_replay; Advisory; User_schedule ] ~f:(fun provenance ->
+          List.iter [ true; false ] ~f:(fun strict ->
+              let fatal =
+                protect ~strict ~classify_backend:no_backend_classification ~provenance
+                  ~phase:Transform (fun () -> raise (Cause_at (Backend_link, rejection)))
+                |> expect_fatal
+              in
+              assert (equal_phase fatal.phase Backend_link);
+              assert (Option.equal equal_cause fatal.cause (Some rejection));
+              assert (
+                match fatal.exn with Invalid_argument msg -> String.equal msg detail | _ -> false);
+              (* The same stage at another phase remains an ordinary decline. *)
+              let contained_elsewhere =
+                protect ~strict ~classify_backend:no_backend_classification ~provenance
+                  ~phase:Transform (fun () -> raise (Cause_at (Backend_compile, rejection)))
+                |> expect_classified
+              in
+              assert (equal_phase contained_elsewhere.phase Backend_compile);
+              assert (equal_cause contained_elsewhere.cause rejection))));
+  (* Nor is every link-time rejection fatal: the compiler stage at link stays a decline. *)
   let link_compiler_rejection = backend_rejection "declined at link" in
   let contained_at_link =
     protect ~strict:true ~classify_backend:no_backend_classification ~provenance:Candidate
@@ -98,12 +105,6 @@ let () =
     |> expect_classified
   in
   assert (equal_cause contained_at_link.cause link_compiler_rejection);
-  let contained_elsewhere =
-    protect ~strict:true ~classify_backend:no_backend_classification ~provenance:Candidate
-      ~phase:Transform (fun () -> raise (Cause_at (Backend_compile, dlopen_rejection)))
-    |> expect_classified
-  in
-  assert (equal_cause contained_elsewhere.cause dlopen_rejection);
   let strict_unknown =
     protect ~strict:true ~classify_backend:no_backend_classification ~provenance:Candidate
       ~phase:Backend_compile (fun () -> failwith "compiler vanished")

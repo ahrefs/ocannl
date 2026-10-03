@@ -151,83 +151,93 @@ let run_backward ?name ids =
   (Context.get_values ctx (grad_of c), update)
 
 let () =
-  (* --- Float ids, all in range --- *)
-  let id_values = [| 1.; 3.; 0. |] in
-  let ids = TDSL.ndarray id_values ~label:[ "ids" ] ~batch_dims:[ positions ] ~output_dims:[] () in
-  let grads, update = run_backward ~name:"onehot_scatter_bwd" ids in
-  p_all2 "float ids: table gradient equals the dense one-hot gradient" grads
-    (expected_grads id_values) ~f:approx;
-  let dyn, vocab_loops, guard_truncs = inspect update in
-  p "optimized IR contains a Set_dynamic scatter" (dyn >= 1);
-  p "vocabulary loop is eliminated from the whole update" (vocab_loops = 0);
-  p "float ids: scatter guard contains the integrality Trunc" (guard_truncs > 0);
-  (* Generated C: the backward writes at a dynamically computed offset (cast to the index
-     precision), and the only loop over the vocabulary axis ([<= 4]) is the gradient's zero-init
-     expansion — the dense reduction nest would add a second one. *)
-  (let src = Generated.read ~ext:".c" "onehot_scatter_bwd" in
-   let has_index_prec_cast =
-     String.is_substring src ~substring:"((int)("
-     || String.is_substring src ~substring:"((long long)("
-   in
-   p "generated C contains a dynamically indexed write" has_index_prec_cast;
-   let vocab_loop_count =
-     List.length (String.substr_index_all src ~may_overlap:false ~pattern:"<= 4")
-   in
-   p "generated C has no vocabulary reduction loop (zero-init only)" (vocab_loop_count <= 1));
+  case "float ids" (fun () ->
+      Tensor.unsafe_reinitialize ();
+      (* --- Float ids, all in range --- *)
+      let id_values = [| 1.; 3.; 0. |] in
+      let ids =
+        TDSL.ndarray id_values ~label:[ "ids" ] ~batch_dims:[ positions ] ~output_dims:[] ()
+      in
+      let grads, update = run_backward ~name:"onehot_scatter_bwd" ids in
+      p_all2 "float ids: table gradient equals the dense one-hot gradient" grads
+        (expected_grads id_values) ~f:approx;
+      let dyn, vocab_loops, guard_truncs = inspect update in
+      p "optimized IR contains a Set_dynamic scatter" (dyn >= 1);
+      p "vocabulary loop is eliminated from the whole update" (vocab_loops = 0);
+      p "float ids: scatter guard contains the integrality Trunc" (guard_truncs > 0);
+      (* Generated C: the backward writes at a dynamically computed offset (cast to the index
+         precision), and the only loop over the vocabulary axis ([<= 4]) is the gradient's zero-init
+         expansion — the dense reduction nest would add a second one. *)
+      let src = Generated.read ~ext:".c" "onehot_scatter_bwd" in
+      let has_index_prec_cast =
+        String.is_substring src ~substring:"((int)("
+        || String.is_substring src ~substring:"((long long)("
+      in
+      p "generated C contains a dynamically indexed write" has_index_prec_cast;
+      let vocab_loop_count =
+        List.length (String.substr_index_all src ~may_overlap:false ~pattern:"<= 4")
+      in
+      p "generated C has no vocabulary reduction loop (zero-init only)" (vocab_loop_count <= 1));
 
-  (* --- Out-of-range and fractional ids contribute nothing --- *)
-  let id_oob = [| 2.; Float.of_int vocab; 1.5 |] in
-  let ids_oob =
-    TDSL.ndarray id_oob ~label:[ "ids_oob" ] ~batch_dims:[ positions ] ~output_dims:[] ()
-  in
-  let grads_oob, _ = run_backward ids_oob in
-  p_all2 "OOB and fractional ids: untouched rows stay zero, in-range rows correct" grads_oob
-    (expected_grads id_oob) ~f:approx;
+  case "out-of-range and fractional ids" (fun () ->
+      Tensor.unsafe_reinitialize ();
+      (* --- Out-of-range and fractional ids contribute nothing --- *)
+      let id_oob = [| 2.; Float.of_int vocab; 1.5 |] in
+      let ids_oob =
+        TDSL.ndarray id_oob ~label:[ "ids_oob" ] ~batch_dims:[ positions ] ~output_dims:[] ()
+      in
+      let grads_oob, _ = run_backward ids_oob in
+      p_all2 "OOB and fractional ids: untouched rows stay zero, in-range rows correct" grads_oob
+        (expected_grads id_oob) ~f:approx);
 
-  (* --- uint32 ids: integer guard flavor (no Trunc), OOB still skipped --- *)
-  let id_ints = [ 1; 3; vocab (* out of [0, vocab) *) ] in
-  let ids_int = Nn_blocks.class_ids_of_int_list ~label:"ids_int" id_ints in
-  let ids_int_oh = Nn_blocks.one_hot_of_ids ~num_classes:vocab ids_int in
-  (* Explicit float table values: with a [uniform ()] init, top-down precision inference would join
-     the table with the uint32 one-hot and make the param integer-precision. *)
-  let c_int =
-    TDSL.param
-      ~values:(Array.init (embed * vocab) ~f:Float.of_int)
-      "c_int" ~input_dims:[ vocab ] ~output_dims:[ embed ] ()
-  in
-  let%op embedded_int = c_int * ids_int_oh in
-  let coeff_int =
-    TDSL.ndarray coeff_values ~label:[ "coeff_int" ] ~batch_dims:[ positions ]
-      ~output_dims:[ embed ] ()
-  in
-  let%op loss_int = (embedded_int *. coeff_int) ++ "...|... => |->0" in
-  let update_int = Train.grad_update loss_int in
-  let ctx = Context.cpu () in
-  let ctx = Train.init_params ctx IDX.empty loss_int in
-  let ctx, routine = Train.to_routine ctx IDX.empty update_int in
-  let ctx = Context.run ctx routine in
-  let c_int = param_by_label loss_int "c_int" in
-  let grads_int = Context.get_values ctx (grad_of c_int) in
-  let expected_int = expected_grads (Array.of_list_map id_ints ~f:Float.of_int) in
-  p_all2 "uint32 ids: table gradient equals the dense one-hot gradient (OOB id skipped)" grads_int
-    expected_int ~f:approx;
-  let dyn_int, vocab_loops_int, guard_truncs_int = inspect update_int in
-  p "uint32 ids: optimized IR contains a Set_dynamic scatter" (dyn_int >= 1);
-  p "uint32 ids: vocabulary loop is eliminated" (vocab_loops_int = 0);
-  p "uint32 ids: scatter guard has no integrality Trunc" (guard_truncs_int = 0);
+  case "uint32 ids" (fun () ->
+      Tensor.unsafe_reinitialize ();
+      (* --- uint32 ids: integer guard flavor (no Trunc), OOB still skipped --- *)
+      let id_ints = [ 1; 3; vocab (* out of [0, vocab) *) ] in
+      let ids_int = Nn_blocks.class_ids_of_int_list ~label:"ids_int" id_ints in
+      let ids_int_oh = Nn_blocks.one_hot_of_ids ~num_classes:vocab ids_int in
+      (* Explicit float table values: with a [uniform ()] init, top-down precision inference would
+         join the table with the uint32 one-hot and make the param integer-precision. *)
+      let c_int =
+        TDSL.param
+          ~values:(Array.init (embed * vocab) ~f:Float.of_int)
+          "c_int" ~input_dims:[ vocab ] ~output_dims:[ embed ] ()
+      in
+      let%op embedded_int = c_int * ids_int_oh in
+      let coeff_int =
+        TDSL.ndarray coeff_values ~label:[ "coeff_int" ] ~batch_dims:[ positions ]
+          ~output_dims:[ embed ] ()
+      in
+      let%op loss_int = (embedded_int *. coeff_int) ++ "...|... => |->0" in
+      let update_int = Train.grad_update loss_int in
+      let ctx = Context.cpu () in
+      let ctx = Train.init_params ctx IDX.empty loss_int in
+      let ctx, routine = Train.to_routine ctx IDX.empty update_int in
+      let ctx = Context.run ctx routine in
+      let c_int = param_by_label loss_int "c_int" in
+      let grads_int = Context.get_values ctx (grad_of c_int) in
+      let expected_int = expected_grads (Array.of_list_map id_ints ~f:Float.of_int) in
+      p_all2 "uint32 ids: table gradient equals the dense one-hot gradient (OOB id skipped)"
+        grads_int expected_int ~f:approx;
+      let dyn_int, vocab_loops_int, guard_truncs_int = inspect update_int in
+      p "uint32 ids: optimized IR contains a Set_dynamic scatter" (dyn_int >= 1);
+      p "uint32 ids: vocabulary loop is eliminated" (vocab_loops_int = 0);
+      p "uint32 ids: scatter guard has no integrality Trunc" (guard_truncs_int = 0));
 
-  (* --- Fallback: an ordinary matmul backward is not rewritten --- *)
-  let x =
-    TDSL.ndarray
-      (Array.init (positions * vocab) ~f:(fun i -> 0.01 *. Float.of_int i))
-      ~label:[ "x" ] ~batch_dims:[ positions ] ~output_dims:[ vocab ] ()
-  in
-  let%op y = { w = uniform (); i = [ vocab ]; o = [ embed ] } * x in
-  let%op loss_mm = y ++ "...|... => |->0" in
-  let update_mm = Train.grad_update loss_mm in
-  let ctx = Context.cpu () in
-  let ctx = Train.init_params ctx IDX.empty loss_mm in
-  let _, routine = Train.to_routine ctx IDX.empty update_mm in
-  ignore (Context.run routine.Context.context routine : Context.t);
-  let dyn_mm, _, _ = inspect update_mm in
-  p "ordinary matmul backward is not rewritten to a scatter" (dyn_mm = 0)
+  case "ordinary matmul" (fun () ->
+      Tensor.unsafe_reinitialize ();
+      (* --- Fallback: an ordinary matmul backward is not rewritten --- *)
+      let x =
+        TDSL.ndarray
+          (Array.init (positions * vocab) ~f:(fun i -> 0.01 *. Float.of_int i))
+          ~label:[ "x" ] ~batch_dims:[ positions ] ~output_dims:[ vocab ] ()
+      in
+      let%op y = { w = uniform (); i = [ vocab ]; o = [ embed ] } * x in
+      let%op loss_mm = y ++ "...|... => |->0" in
+      let update_mm = Train.grad_update loss_mm in
+      let ctx = Context.cpu () in
+      let ctx = Train.init_params ctx IDX.empty loss_mm in
+      let _, routine = Train.to_routine ctx IDX.empty update_mm in
+      ignore (Context.run routine.Context.context routine : Context.t);
+      let dyn_mm, _, _ = inspect update_mm in
+      p "ordinary matmul backward is not rewritten to a scatter" (dyn_mm = 0))
