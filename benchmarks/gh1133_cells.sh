@@ -112,7 +112,7 @@ flags_of() {
     fold*)
       local inner
       inner=$(flags_of "${1#fold}") || return 1
-      echo "--ocannl_online_softmax_block=16 $inner" ;;
+      echo "$inner --ocannl_online_softmax_block=16" ;;
     b[!a]*) flags_of "${1#b}" ;;
     d1*)
       local rest

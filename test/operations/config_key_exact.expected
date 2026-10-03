@@ -1,6 +1,7 @@
 a backward-only command line leaves online_softmax unset: true
 the backward key reads its own command-line value: true
 the registry exercises overlapping key names: true
+every overlapping registered key supplies command-line spellings: true
 longer registered keys own every spelling and value separator: true
 shorter keys retain all separators for unregistered values: true
 an equals sign ends the key even when its value starts with a registered suffix: true

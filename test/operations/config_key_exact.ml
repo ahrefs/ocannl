@@ -17,19 +17,24 @@ let check_grammar () =
               (shorter, longer)))
   in
   p "the registry exercises overlapping key names" (not (List.is_empty pairs));
-  p_all "longer registered keys own every spelling and value separator" pairs
-    ~f:(fun (shorter, longer) ->
-      List.for_all (Utils.cmdline_var_names longer) ~f:(fun name ->
-          List.for_all [ "="; "_"; "-"; "" ] ~f:(fun separator ->
-              let arg = name ^ separator ^ "true" in
-              Option.is_none (Utils.cmdline_arg_value shorter arg)
-              && Option.equal String.equal (Utils.cmdline_arg_value longer arg) (Some "true"))));
-  p_all "shorter keys retain all separators for unregistered values"
-    (Utils.cmdline_var_names "online_softmax") ~f:(fun name ->
-      List.for_all [ "="; "_"; "-"; "" ] ~f:(fun separator ->
-          Option.equal String.equal
-            (Utils.cmdline_arg_value "online_softmax" (name ^ separator ^ "true"))
-            (Some "true")));
+  p_all "every overlapping registered key supplies command-line spellings" pairs
+    ~f:(fun (_, longer) -> not (List.is_empty (Utils.cmdline_var_names longer)));
+  let separators = [ "="; "_"; "-"; "" ] in
+  let cases =
+    List.concat_map pairs ~f:(fun (shorter, longer) ->
+        List.concat_map (Utils.cmdline_var_names longer) ~f:(fun name ->
+            List.map separators ~f:(fun separator -> (shorter, longer, name ^ separator ^ "true"))))
+  in
+  p_all "longer registered keys own every spelling and value separator" cases
+    ~f:(fun (shorter, longer, arg) ->
+      Option.is_none (Utils.cmdline_arg_value shorter arg)
+      && Option.equal String.equal (Utils.cmdline_arg_value longer arg) (Some "true"));
+  let shorter_args =
+    List.concat_map (Utils.cmdline_var_names "online_softmax") ~f:(fun name ->
+        List.map separators ~f:(fun separator -> name ^ separator ^ "true"))
+  in
+  p_all "shorter keys retain all separators for unregistered values" shorter_args ~f:(fun arg ->
+      Option.equal String.equal (Utils.cmdline_arg_value "online_softmax" arg) (Some "true"));
   p "an equals sign ends the key even when its value starts with a registered suffix"
     (Option.equal String.equal
        (Utils.cmdline_arg_value "online_softmax" "--ocannl_online_softmax=backward=true")
