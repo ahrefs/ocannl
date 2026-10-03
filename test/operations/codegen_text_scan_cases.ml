@@ -466,6 +466,11 @@ let () =
   p "default" (has (Generated.read "r") ());
   p "explicit" (explicit (Generated.read "r") ~marker:"explicit marker" ())|ocaml},
       {|"default marker" "explicit marker"|} );
+    ( "callbacks retain hard-coded markers whose source the helper validates",
+      {ocaml|let check routine =
+  String.is_substring (Generated.read routine) ~substring:"callback marker"
+let () = List.iter ["r"] ~f:check|ocaml},
+      {|"callback marker" +partial|} );
     ( "a forwarding wrapper keeps unresolved caller markers visibly partial",
       {ocaml|let has src marker = String.is_substring src ~substring:marker
 let check src marker = has src marker

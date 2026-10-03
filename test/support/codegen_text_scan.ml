@@ -1358,8 +1358,7 @@ let classify_source ~emitters ~path ~contents =
         if not (Hashtbl.mem called predicate.pred_binding) then
           if Option.is_some predicate.source_at then pins := Computed :: !pins
           else
-            Option.iter predicate.body_text ~f:(fun text ->
-                match pin_of_expr scope text with Computed -> pins := Computed :: !pins | _ -> ()));
+            Option.iter predicate.body_text ~f:(fun text -> pins := pin_of_expr scope text :: !pins));
     (* The backstop for every indirection this scan cannot follow. A buffer is where generated text
        lands without a name to carry it, and the ways it can be filled do not end: an emitter behind
        a wrapper whose parameter reaches it through a local binding, a document handed to PPrint's
