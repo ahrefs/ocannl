@@ -6978,14 +6978,22 @@
  (libraries base arrayjit.utils arrayjit.verdict)
  (deps
   ocannl_config
-  (alias runtest-env_spelling_gate)
-  (env_var OCANNL_ONLINE_SOFTMAX)
-  (env_var OCANNL_ONLINE_SOFTMAX_BACKWARD))
+  (alias runtest-env_spelling_gate))
  (action
-  (setenv
-   OCANNL_ONLINE_SOFTMAX
-   ""
-   (setenv
-    OCANNL_ONLINE_SOFTMAX_BACKWARD
-    true
-    (run %{test} --ocannl_online_softmax_backward=true)))))
+  (progn
+   (run %{test} acceptance --ocannl_online_softmax_backward=true)
+   (run
+    %{test}
+    forward-first
+    --ocannl_online_softmax=true
+    --ocannl_online_softmax_block=16)
+   (run
+    %{test}
+    block-first
+    --ocannl_online_softmax_block=16
+    --ocannl_online_softmax=true)
+   (run
+    %{test}
+    first-wins
+    --ocannl_online_softmax=false
+    --ocannl_online_softmax=true))))

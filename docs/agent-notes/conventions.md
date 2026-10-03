@@ -213,15 +213,8 @@ files.
   gates (`mixed_prec_parity`, `precision_policy_parity`) or that distinct inputs give distinct
   outputs (`gpt2_dry_run`'s positions-differ). "All finite" is not such a guard — all-zeros is
   finite.
-- Configuration keys may extend another key's name (gh-ocannl-1163).
-  `Utils.read_cmdline_var` gives a longer registered key ownership of its spelling before
-  interpreting `_`, `-`, or no separator as a value boundary; `=` ends the name unambiguously.
-  Previously `--ocannl_online_softmax_backward=true` was read as `online_softmax` with value
-  `backward=true`; `--ocannl_cc_parallel_grid_private_bytes_cap=N` likewise gave
-  `cc_parallel_grid` the value `private_bytes_cap=N` and had to be renamed. `config_key_exact`
-  now pins the reader across every overlapping registered pair, spelling and separator, so no key-name disjointness ban is needed. First argument wins within
-  each key; ordering different keys does not affect resolution. The environment reader already
-  uses exact variable-name lookup, also pinned by that test.
+- A configuration key may extend another key's name: the longest registered spelling owns the
+  argument (`Utils.cmdline_arg_value`, pinned by `config_key_exact`; gh-ocannl-1163).
 - Stacked PRs: once the base PR merges, RETARGET the stacked one to master BEFORE merging it. A merge
   into the now-stale base branch lands the work on that branch and nowhere else while GitHub still
   reports the PR as "merged" — staging#168's conv sketches were stranded exactly that way and had to

@@ -64,8 +64,6 @@ Configuration keys tracked as ambient dependencies, in the one spelling OCANNL r
   model_default_schedule
   narrow_compute_f32
   no_config_file
-  online_softmax
-  online_softmax_backward
   output_prec_in_ll_files
   profile
   schedule_fission
@@ -111,8 +109,6 @@ and EVERY one of them declares it or pins it with `setenv`, since dune invalidat
 on its own deps.
   OCANNL_DASHED_ONLY_KEY                 test/operations/dune, executable config_var_spellings (3 runs of config_var_spellings.exe)
   OCANNL_DEMO_KEY                        test/operations/dune, executable config_var_spellings (3 runs of config_var_spellings.exe)
-  OCANNL_ONLINE_SOFTMAX                  test/operations/dune, test config_key_exact (1 run of it)
-  OCANNL_ONLINE_SOFTMAX_BACKWARD         test/operations/dune, test config_key_exact (1 run of it)
   OCANNL_PROFILE                         test/operations/dune, test config_profiles (1 run of it)
   OCANNL_AUTOTUNE_BEAM_WIDTH             test/operations/profiles/dune, executable profile_precedence (7 runs of profile_precedence.exe)
   OCANNL_AUTOTUNE_ROUNDS                 test/operations/profiles/dune, executable profile_precedence (7 runs of profile_precedence.exe)

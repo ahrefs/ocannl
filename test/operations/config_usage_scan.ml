@@ -71,7 +71,6 @@ let cli_token_char c =
    occurrences. *)
 let ambiguous_cli_value_mentions =
   [
-    ("arrayjit/lib/utils.ml", "--ocannl_", "log_level_1", "log_level", 1);
     ("docs/agent-notes/build-and-test.md", "--ocannl_", "backend_cuda=true", "backend", 1);
     ("test/operations/config_var_spellings.ml", "--ocannl_", "log_level_0", "log_level", 1);
     ("test/operations/dune", "--ocannl_", "log_level_0", "log_level", 3);
@@ -246,8 +245,6 @@ let prefixed_occurrences ?(start_ok = fun _ _ -> true) ~path ~prefix ~key_char ~
    disappearing as ordinary non-config prose. *)
 let historical_invalid_config_mentions =
   [
-    ("docs/agent-notes/conventions.md", "cc_parallel_grid_private_bytes_cap", 1);
-    ("docs/agent-notes/conventions.md", "private_bytes_cap", 1);
     ("docs/proposals/gh-ocannl-409.md", "bacend", 1);
     ("docs/proposals/gh-ocannl-409.md", "output_debug_files_in_run_directory", 1);
     ("docs/proposals/gh-ocannl-409.md", "randomness_lib", 4);

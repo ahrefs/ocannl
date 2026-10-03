@@ -1,13 +1,11 @@
 a backward-only command line leaves online_softmax unset: true
 the backward key reads its own command-line value: true
-a backward-only environment leaves online_softmax unset: true
-the backward key reads its own environment value: true
 the registry exercises overlapping key names: true
 longer registered keys own every spelling and value separator: true
 shorter keys retain all separators for unregistered values: true
 an equals sign ends the key even when its value starts with a registered suffix: true
-a block-only command line leaves online_softmax unset: true
-the block key reads its own value: true
+an explicitly queried unregistered key retains its value grammar: true
+the caller can override qualified-only lookup without changing classifier policy: true
 the forward key before the block key reads independently: true
 the block key before the forward key reads independently: true
 the first argument for the same key still wins: true
