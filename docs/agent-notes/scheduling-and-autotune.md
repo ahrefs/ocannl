@@ -694,7 +694,12 @@ files.
   209 timed candidates (the recombination composites delivered the rest), so a final-best rule would
   abandon every flip. `best_steps` is cached like `mma_best_ms`, keyed by every `Search_shaping`
   key's value (`Utils.config_class_fingerprint`, `SC.trajectory`), so a replayed incumbent still
-  has one; a failed one abandons nothing.
+  has one; a failed one abandons nothing. A clean abandoned prefix is also persisted
+  (gh-ocannl-1136), under the unchanged schedule key with an `abandonment-` filename prefix.
+  A replay requires the same search shape and re-evaluates the current incumbent and ratio
+  against those timings; without a qualifying rule it searches normally. It reports
+  `Abandonment_replay` and raises `Search_abandoned` with zero search counters, so a warm
+  flip chain does not re-search its losing flips or mislabel the harness's tuned row.
 - The action menu's loop enumeration is provenance-aimed **by action category**, not by loop
   (gh-ocannl-687). `Local_scope` has two producers — virtualization's inline at a read site, and the
   accumulator localization `Schedule`'s materializing `Unroll` / `Partition` and

@@ -29,6 +29,8 @@ type outcome =
   | Search_died of terminal_failure
       (** A search ran and terminated on a fatal failure. The counters hold what it had reached. *)
   | Cache_replay  (** A cached winner replayed; nothing was searched in this process. *)
+  | Abandonment_replay of abandonment
+      (** Cached timings justify abandoning this call; nothing was searched or returned. *)
   | Search_disabled
       (** [autotune_search=false] with nothing to replay: the untuned default ships. *)
   | Pre_search_failure of terminal_failure
@@ -275,6 +277,7 @@ let outcome_name = function
   | Search_disabled -> "search-disabled"
   | Pre_search_failure _ -> "pre-search-failure"
   | Abandoned _ -> "abandoned"
+  | Abandonment_replay _ -> "abandonment-replay"
 
 (** The fatal failure that ended the call, from whichever of the two failing states it was. A
     projection over the outcome, not a re-derivation of it: "did this call fail" is a question that
@@ -282,7 +285,7 @@ let outcome_name = function
 let terminal_failure (r : report) =
   match r.outcome with
   | Search_died tf | Pre_search_failure tf -> Some tf
-  | Searched | Cache_replay | Search_disabled | Abandoned _ -> None
+  | Searched | Cache_replay | Abandonment_replay _ | Search_disabled | Abandoned _ -> None
 
 (* gh-ocannl-1110: the flip chain's early abandonment. *)
 exception Search_abandoned of abandonment
@@ -3990,11 +3993,39 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
         | _ -> None
       else None
     in
-    match cached with
-    | Some result ->
+    (* A winner takes precedence. Without one, replay an abandoned prefix only under the shape that
+       measured it and a current rule that still rejects it. A weaker incumbent, changed margin,
+       absent rule or changed sampling cannot inherit yesterday's verdict. *)
+    let replayed_abandonment =
+      if use_cache && Option.is_none cached then
+        Option.bind abandon ~f:(fun rule ->
+            Option.bind (SC.lookup_abandonment ~dir:cache_dir ~key) ~f:(fun entry ->
+                if
+                  String.equal entry.SC.source_digest base_digest
+                  && String.equal entry.SC.trajectory.SC.search_shape search_shape
+                then
+                  Option.map
+                    (abandon_verdict rule ~k:beam_width ~steps:entry.SC.trajectory.SC.steps)
+                    ~f:(fun ab -> (ab, entry))
+                else None))
+      else None
+    in
+    match (cached, replayed_abandonment) with
+    | Some result, _ ->
         release_baseline ();
         result
-    | None when not search ->
+    | None, Some (ab, entry) ->
+        release_baseline ();
+        emit_report
+          {
+            (census ()) with
+            outcome = Abandonment_replay ab;
+            best_ms = ab.ab_best_ms;
+            best_label = "cached-abandonment";
+            best_steps = entry.SC.trajectory.SC.steps;
+          };
+        raise (Search_abandoned ab)
+    | None, None when not search ->
         logf
           "search disabled (autotune_search=false) and no cache entry: compiling the untuned \
            default";
@@ -4006,7 +4037,7 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
         let result = compile_untuned_default ~base:reached () in
         report_or_release reached ~result;
         result
-    | None ->
+    | None, None ->
         let seen = Hash_set.create (module String) in
         Hash_set.add seen base_digest;
         (* Every gh-ocannl-532 refusal enters the same decline census (gh-ocannl-543). Without it a
@@ -5328,10 +5359,21 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                  at the same depth by more than %.4gx"
                 ab.ab_timed ab.ab_best_ms ab.ab_incumbent_ms ab.ab_ratio;
               (* Built before the sweep, which the report's winner label outlives (see
-                 [release_all_candidates]). Nothing is cached: an abandoned search crowned nothing,
-                 and the store below the rounds was never reached. *)
+                 [release_all_candidates]). No winner is crowned, but the clean measured prefix can
+                 spare a replay this same search (gh-ocannl-1136). *)
               let r = partial_report (Abandoned ab) in
               release_all_candidates ~keep:[] ();
+              if
+                use_cache
+                && search_measurements_cacheable ~nothing_timed:false
+                     ~timings_contended:r.timings_contended
+              then
+                SC.store_abandonment ~dir:cache_dir ~key
+                  {
+                    SC.version = SC.entry_version;
+                    source_digest = base_digest;
+                    trajectory = { SC.search_shape; steps = r.best_steps };
+                  };
               (* The callback's own exception propagates, as on the completion path. *)
               emit_report r;
               raise (Search_abandoned ab)

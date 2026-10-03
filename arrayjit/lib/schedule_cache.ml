@@ -808,9 +808,9 @@ let with_cache_open ~dir f =
               if open_current_regime dir then Some (f ()) else None)
         with Unix.Unix_error _ | Stdlib.Sys_error _ -> None))
 
-(* One entry I/O protocol for both kinds of entry the directory holds: the schedule entries and the
-   placement decisions (gh-ocannl-786) share the lock, the regime stamp and the atomic commit, and
-   differ only in payload and version check. *)
+(* One entry I/O protocol for every kind of entry the directory holds: schedule winners, abandoned
+   searches and placement decisions (gh-ocannl-786) share the lock, the regime stamp and the atomic
+   commit, and differ only in payload and version check. *)
 let store_sexp ~dir ~key sexp =
   Option.iter key ~f:(fun key ->
       ensure_dir dir;
@@ -862,6 +862,22 @@ let store ~dir ~key entry = store_sexp ~dir ~key (sexp_of_entry entry)
 
 let lookup ~dir ~key =
   lookup_sexp ~dir ~key ~of_sexp:entry_of_sexp ~current:(fun e -> e.version = entry_version)
+
+(** {2 Abandoned searches} *)
+
+(* This is timed evidence, not a crowned schedule. Keep it beside the winner, under the very same
+   key with a namespace prefix: adding this record changes no existing identity. *)
+type abandonment_entry = { version : int; source_digest : string; trajectory : trajectory }
+[@@deriving sexp]
+
+let abandonment_key key = Option.map key ~f:(fun key -> "abandonment-" ^ key)
+
+let store_abandonment ~dir ~key entry =
+  store_sexp ~dir ~key:(abandonment_key key) (sexp_of_abandonment_entry entry)
+
+let lookup_abandonment ~dir ~key =
+  lookup_sexp ~dir ~key:(abandonment_key key) ~of_sexp:abandonment_entry_of_sexp ~current:(fun e ->
+      e.version = entry_version)
 
 (** {2 The placement-decision store} *)
 

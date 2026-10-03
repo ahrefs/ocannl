@@ -420,7 +420,7 @@ let collect_search t (r : Autotune.report) =
   match r.Autotune.outcome with
   | Autotune.Searched | Autotune.Search_died _ | Autotune.Abandoned _ ->
       t.searches <- t.searches + 1
-  | Autotune.Cache_replay -> t.replays <- t.replays + 1
+  | Autotune.Cache_replay | Autotune.Abandonment_replay _ -> t.replays <- t.replays + 1
   | Autotune.Search_disabled | Autotune.Pre_search_failure _ -> t.no_searches <- t.no_searches + 1
 
 let collect_arm t (r : Autotune.report) =
@@ -511,7 +511,7 @@ let tune_json t =
         let searched, cache_hit =
           match r.Autotune.outcome with
           | Autotune.Searched | Autotune.Search_died _ | Autotune.Abandoned _ -> (true, false)
-          | Autotune.Cache_replay -> (false, true)
+          | Autotune.Cache_replay | Autotune.Abandonment_replay _ -> (false, true)
           | Autotune.Search_disabled | Autotune.Pre_search_failure _ -> (false, false)
         in
         Bench_json.tune_arm ~name

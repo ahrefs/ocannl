@@ -5706,7 +5706,7 @@
 (executable
  (name flip_abandonment)
  (modules flip_abandonment)
- (libraries base ocannl stdio unix arrayjit.verdict ll_test)
+ (libraries base ocannl stdio unix arrayjit.verdict ll_test bench_harness)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 

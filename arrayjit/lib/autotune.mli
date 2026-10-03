@@ -612,6 +612,10 @@ type outcome =
       (** A cached winner replayed; no search ran in this process. The census is then empty except
           for a declined baseline: the base compile precedes the lookup, so its rejection is real
           information about this process on this device even though nothing was searched. *)
+  | Abandonment_replay of abandonment
+      (** Cached timings under this call's search shape still satisfy its current [?abandon] rule.
+          No search ran, the counters describe only the base compile, and {!tune} raises
+          {!Search_abandoned} without returning a routine. *)
   | Search_disabled
       (** Nothing was searched and there was nothing to replay: config [autotune_search=false] (the
           reproducible profile, gh-ocannl-559) with no chosen cache, or a chosen cache that missed.
@@ -630,7 +634,7 @@ type outcome =
           the incumbent's at the same depth by more than the rule's ratio (gh-ocannl-1110), and
           {!tune} raised {!Search_abandoned}. Not a failure: the counters hold the work it reached,
           [best_ms] is a measurement of the search context, nothing was compiled for the caller and
-          nothing was cached. *)
+          clean measured prefixes are cached for a later {!Abandonment_replay}. *)
 
 type timing_mode =
   | Isolated
@@ -1188,8 +1192,9 @@ val flip_profit_margin_of_string : string -> float
     take) by 1.07x. *)
 
 exception Search_abandoned of abandonment
-(** Raised by {!tune} when its [?abandon] rule decides; its report (outcome {!Abandoned}) has
-    already been delivered, and every candidate the search compiled released. *)
+(** Raised by {!tune} when its [?abandon] rule decides, including from cached evidence. Its report
+    ({!Abandoned} or {!Abandonment_replay}) has already been delivered, and every candidate this
+    call compiled released. *)
 
 type abandon_rule = {
   incumbent_steps : (int * float) list;  (** The incumbent search's {!report.best_steps}. *)
@@ -1777,7 +1782,10 @@ val tune :
   (* gh-ocannl-1110: stop the search, raising {!Search_abandoned} after delivering an {!Abandoned}
      report, when {!abandon_verdict} decides at [k = beam_width] admitted timings. Absent (the
      default), a search always runs to completion. [Train.tune_placements] passes it for flips only,
-     against the incumbent they refine. *)
+     against the incumbent they refine. A clean abandoned prefix is saved under the unchanged
+     schedule key in a separate filename space. With the same search shape, a later call
+     re-evaluates this rule on that prefix and may raise without searching, reporting
+     {!Abandonment_replay}; without a rule, it always searches or replays a winner. *)
   ?report:(report -> unit) ->
   Context.t ->
   Ir.Assignments.comp ->
