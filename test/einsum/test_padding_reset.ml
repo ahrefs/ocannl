@@ -141,9 +141,9 @@ let test_single_operation_padding () =
   Verdict.p_all2 "second pass identical" pooled_v pooled_v2 ~f:Float.equal
 
 let () =
-  test_shared_operand ();
+  Verdict.case "test_shared_operand" test_shared_operand;
   printf "\nShared-operand composition test completed!\n%!";
-  test_separate_copies ();
+  Verdict.case "test_separate_copies" test_separate_copies;
   printf "\nCopy-pattern test completed!\n%!";
-  test_single_operation_padding ();
+  Verdict.case "test_single_operation_padding" test_single_operation_padding;
   printf "\nSingle-operation pooling test completed!\n%!"

@@ -61,49 +61,53 @@ let default_init_weight_values init =
   values
 
 let () =
-  (* The standard default: centered uniform over [-0.25, 0.25), std 0.5/sqrt(12) ~ 0.1443. *)
-  let values = default_init_weight_values Operation.default_uniform1_param_init in
-  check ~name:"default uniform1 [-0.25,0.25): std"
-    ~expected:(0.5 /. Float.sqrt 12.)
-    ~tol:0.03 (std values);
-  check ~name:"default uniform1 [-0.25,0.25): mean" ~expected:0. ~tol:0.04 (mean values);
-  printf "default uniform1 unique values: %d of %d\n" (unique values) (Array.length values)
+  Verdict.case "default uniform1" (fun () ->
+      (* The standard default: centered uniform over [-0.25, 0.25), std 0.5/sqrt(12) ~ 0.1443. *)
+      let values = default_init_weight_values Operation.default_uniform1_param_init in
+      check ~name:"default uniform1 [-0.25,0.25): std"
+        ~expected:(0.5 /. Float.sqrt 12.)
+        ~tol:0.03 (std values);
+      check ~name:"default uniform1 [-0.25,0.25): mean" ~expected:0. ~tol:0.04 (mean values);
+      printf "default uniform1 unique values: %d of %d\n" (unique values) (Array.length values))
 
 let () =
-  (* normal1 has std ~1, so kaiming ~scale_sq:2.0 should realize std sqrt(2/100) ~ 0.1414. Before
-     the row-product fix this was sqrt(2/1) ~ 1.41. *)
-  let values = default_init_weight_values (NTDSL.kaiming ~scale_sq:2.0 TDSL.O.normal1) in
-  check ~name:"default kaiming normal1 scale_sq 2 fan_in 100: std"
-    ~expected:(Float.sqrt (2. /. 100.))
-    ~tol:0.03 (std values);
-  check ~name:"default kaiming normal1 scale_sq 2 fan_in 100: mean" ~expected:0. ~tol:0.06
-    (mean values);
-  printf "default kaiming unique values: %d of %d\n" (unique values) (Array.length values)
+  Verdict.case "default kaiming" (fun () ->
+      (* normal1 has std ~1, so kaiming ~scale_sq:2.0 should realize std sqrt(2/100) ~ 0.1414.
+         Before the row-product fix this was sqrt(2/1) ~ 1.41. *)
+      let values = default_init_weight_values (NTDSL.kaiming ~scale_sq:2.0 TDSL.O.normal1) in
+      check ~name:"default kaiming normal1 scale_sq 2 fan_in 100: std"
+        ~expected:(Float.sqrt (2. /. 100.))
+        ~tol:0.03 (std values);
+      check ~name:"default kaiming normal1 scale_sq 2 fan_in 100: mean" ~expected:0. ~tol:0.06
+        (mean values);
+      printf "default kaiming unique values: %d of %d\n" (unique values) (Array.length values))
 
 let () =
-  (* uniform1 is uniform over [0, 1): mean 0.5, std 1/sqrt(12) ~ 0.2887. xavier ~scale_sq:6.0 with
-     fan_in 100 and fan_out 50 scales by sqrt(6/150) = 0.2. *)
-  let values = default_init_weight_values (NTDSL.xavier ~scale_sq:6.0 TDSL.O.uniform1) in
-  check ~name:"default xavier uniform1 scale_sq 6 fans 100+50: std"
-    ~expected:(0.2 /. Float.sqrt 12.)
-    ~tol:0.012 (std values);
-  check ~name:"default xavier uniform1 scale_sq 6 fans 100+50: mean" ~expected:0.1 ~tol:0.02
-    (mean values);
-  printf "default xavier unique values: %d of %d\n" (unique values) (Array.length values)
+  Verdict.case "default xavier" (fun () ->
+      (* uniform1 is uniform over [0, 1): mean 0.5, std 1/sqrt(12) ~ 0.2887. xavier ~scale_sq:6.0
+         with fan_in 100 and fan_out 50 scales by sqrt(6/150) = 0.2. *)
+      let values = default_init_weight_values (NTDSL.xavier ~scale_sq:6.0 TDSL.O.uniform1) in
+      check ~name:"default xavier uniform1 scale_sq 6 fans 100+50: std"
+        ~expected:(0.2 /. Float.sqrt 12.)
+        ~tol:0.012 (std values);
+      check ~name:"default xavier uniform1 scale_sq 6 fans 100+50: mean" ~expected:0.1 ~tol:0.02
+        (mean values);
+      printf "default xavier unique values: %d of %d\n" (unique values) (Array.length values))
 
 let () =
-  (* Inline-record init path, as in test/training/mlp_bn_names.ml. The default scale_sq is 6, so the
-     realized std is sqrt(6/100) ~ 0.245 — NOT PyTorch's kaiming_normal_ (std sqrt(2/fan_in) =
-     0.1414 for relu), nor Karpathy's tanh-gain (5/3)/sqrt(fan_in) ~ 0.1667: sqrt(6) is the gain of
-     the kaiming UNIFORM bound. *)
-  Tensor.unsafe_reinitialize ();
-  let%op mk_f () x = ({ w1 = kaiming normal1 () } * x) + { b1 = 0.; o = [ 50 ] } in
-  let f = mk_f () in
-  let x = TDSL.range_of_shape ~label:[ "x2" ] ~batch_dims:[ 4 ] ~output_dims:[ 100 ] () in
-  let y = f x in
-  let ctx = Train.forward_once (Context.auto ()) y in
-  let values = weight_values ~ctx y in
-  check ~name:"inline kaiming normal1 default scale_sq 6 fan_in 100: std"
-    ~expected:(Float.sqrt (6. /. 100.))
-    ~tol:0.05 (std values);
-  printf "inline kaiming unique values: %d of %d\n" (unique values) (Array.length values)
+  Verdict.case "inline kaiming" (fun () ->
+      (* Inline-record init path, as in test/training/mlp_bn_names.ml. The default scale_sq is 6, so
+         the realized std is sqrt(6/100) ~ 0.245 — NOT PyTorch's kaiming_normal_ (std sqrt(2/fan_in)
+         = 0.1414 for relu), nor Karpathy's tanh-gain (5/3)/sqrt(fan_in) ~ 0.1667: sqrt(6) is the
+         gain of the kaiming UNIFORM bound. *)
+      Tensor.unsafe_reinitialize ();
+      let%op mk_f () x = ({ w1 = kaiming normal1 () } * x) + { b1 = 0.; o = [ 50 ] } in
+      let f = mk_f () in
+      let x = TDSL.range_of_shape ~label:[ "x2" ] ~batch_dims:[ 4 ] ~output_dims:[ 100 ] () in
+      let y = f x in
+      let ctx = Train.forward_once (Context.auto ()) y in
+      let values = weight_values ~ctx y in
+      check ~name:"inline kaiming normal1 default scale_sq 6 fan_in 100: std"
+        ~expected:(Float.sqrt (6. /. 100.))
+        ~tol:0.05 (std values);
+      printf "inline kaiming unique values: %d of %d\n" (unique values) (Array.length values))

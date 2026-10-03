@@ -131,8 +131,8 @@ let test_unsigned_rounding () =
       Verdict.p ("u64 " ^ decimal ^ " converts to the nearest double") ok)
 
 let () =
-  test_bfloat16_conversions ();
-  test_fp8_conversions ();
-  test_padding ();
-  test_unsigned_extremes ();
-  test_unsigned_rounding ()
+  Verdict.case "test_bfloat16_conversions" test_bfloat16_conversions;
+  Verdict.case "test_fp8_conversions" test_fp8_conversions;
+  Verdict.case "test_padding" test_padding;
+  Verdict.case "test_unsigned_extremes" test_unsigned_extremes;
+  Verdict.case "test_unsigned_rounding" test_unsigned_rounding

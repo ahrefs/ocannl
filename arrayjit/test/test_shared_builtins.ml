@@ -152,5 +152,5 @@ let run mode flags =
               fp8_single x = Ir.Ops.single_to_fp8 x)))
 
 let () =
-  run "default" "";
-  run "emulated" "-U__FLT16_MAX__"
+  Verdict.case "default" (fun () -> run "default" "");
+  Verdict.case "emulated" (fun () -> run "emulated" "-U__FLT16_MAX__")

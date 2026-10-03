@@ -310,12 +310,12 @@ let test_max_pool2d_conflicting_consumers () =
   run_shared "max_pool2d_copy" shared conv_branch pool_branch
 
 let () =
-  test_max_pool2d_basic ();
-  test_max_pool2d_window3 ();
-  test_max_pool2d_output_dim_1 ();
-  test_max_pool2d_channels ();
-  test_max_pool2d_backprop ();
-  test_max_pool2d_padded ();
-  test_max_pool2d_padded_locked_data ();
-  test_max_pool2d_conflicting_consumers ();
+  Verdict.case "test_max_pool2d_basic" test_max_pool2d_basic;
+  Verdict.case "test_max_pool2d_window3" test_max_pool2d_window3;
+  Verdict.case "test_max_pool2d_output_dim_1" test_max_pool2d_output_dim_1;
+  Verdict.case "test_max_pool2d_channels" test_max_pool2d_channels;
+  Verdict.case "test_max_pool2d_backprop" test_max_pool2d_backprop;
+  Verdict.case "test_max_pool2d_padded" test_max_pool2d_padded;
+  Verdict.case "test_max_pool2d_padded_locked_data" test_max_pool2d_padded_locked_data;
+  Verdict.case "test_max_pool2d_conflicting_consumers" test_max_pool2d_conflicting_consumers;
   printf "\nAll max_pool2d tests completed!\n%!"

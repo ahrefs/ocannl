@@ -75,11 +75,12 @@ let test_multi_axis () =
   print_prefix vs 15
 
 let () =
-  test_prec ~name:"single" Ir.Ops.single [ 1; 2; 3; 5; 7; 10 ];
-  test_prec ~name:"half" Ir.Ops.half [ 1; 3; 9; 12 ];
-  test_prec ~name:"double" Ir.Ops.double [ 1; 3 ];
+  Verdict.case "single" (fun () -> test_prec ~name:"single" Ir.Ops.single [ 1; 2; 3; 5; 7; 10 ]);
+  Verdict.case "half" (fun () -> test_prec ~name:"half" Ir.Ops.half [ 1; 3; 9; 12 ]);
+  Verdict.case "double" (fun () -> test_prec ~name:"double" Ir.Ops.double [ 1; 3 ]);
   (* fp8 is the stress case: 16 lanes per block. Its conversion does not target [0,1), so only
      count, prefix stability and the golden reference values are checked. (The test is disabled on
      Metal for the double case above, not for this one.) *)
-  test_prec ~check_range:false ~name:"fp8" Ir.Ops.fp8 [ 1; 7; 15; 17; 33 ];
-  test_multi_axis ()
+  Verdict.case "fp8" (fun () ->
+      test_prec ~check_range:false ~name:"fp8" Ir.Ops.fp8 [ 1; 7; 15; 17; 33 ]);
+  Verdict.case "multi-axis" test_multi_axis

@@ -138,8 +138,8 @@ let run_pooled_values_correct () =
   Verdict.p "pooled q (a*b expect [3.0;8.0]) correct" (Array.equal Float.equal qv [| 3.0; 8.0 |])
 
 let () =
-  run_once "run1";
-  run_once "run2";
-  run_packed ();
-  run_pooled_values_correct ();
+  Verdict.case "run1" (fun () -> run_once "run1");
+  Verdict.case "run2" (fun () -> run_once "run2");
+  Verdict.case "run_packed" run_packed;
+  Verdict.case "run_pooled_values_correct" run_pooled_values_correct;
   Stdio.printf "done\n"

@@ -39,36 +39,39 @@ let () =
   let prec = Ops.single in
   let bytes_of dims = Array.fold dims ~init:1 ~f:( * ) * Ops.prec_in_bytes prec in
   let create_dims = [| 128; 1024 |] in
-  check "create_array" ~n:4 ~bytes_per_array:(bytes_of create_dims) ~alloc:(fun () ->
-      Nd.create_array ~debug:"used_memory" prec ~dims:create_dims ~padding:None);
+  Verdict.case "create_array" (fun () ->
+      check "create_array" ~n:4 ~bytes_per_array:(bytes_of create_dims) ~alloc:(fun () ->
+          Nd.create_array ~debug:"used_memory" prec ~dims:create_dims ~padding:None));
   (* [init_array] is slow (unboxing at each index), hence the smaller arrays. *)
   let init_dims = [| 32; 256 |] in
-  check "init_array" ~n:3 ~bytes_per_array:(bytes_of init_dims) ~alloc:(fun () ->
-      Nd.init_array ~debug:"used_memory" prec ~dims:init_dims ~padding:None ~f:(fun _ -> 1.0));
+  Verdict.case "init_array" (fun () ->
+      check "init_array" ~n:3 ~bytes_per_array:(bytes_of init_dims) ~alloc:(fun () ->
+          Nd.init_array ~debug:"used_memory" prec ~dims:init_dims ~padding:None ~f:(fun _ -> 1.0)));
   (* A reshaped view shares the source's bytes, so accounting must outlive the source wrapper: the
      bytes are still held while only the view is reachable. [Tnode.create_with_reshape] is exactly
      that situation -- it hands out the view and drops the array it reshaped. *)
-  let view_dims = [| 64; 512 |] in
-  let view_bytes = bytes_of view_dims in
-  let make_view () =
-    (* [source] is dead once this returns, so only the view keeps the bytes reachable. *)
-    let source = Nd.create_array ~debug:"used_memory" prec ~dims:[| 32768 |] ~padding:None in
-    Nd.reshape source view_dims
-  in
-  let before = Nd.get_used_memory () in
-  let cell = ref (Some (make_view ())) in
-  Stdlib.Gc.full_major ();
-  Stdlib.Gc.full_major ();
-  (* The view must be read {e after} the collection, not merely stored: a value whose last use has
-     passed is dead to the GC (OCaml's liveness ignores a [ref] that is only assigned from here on),
-     and collecting the view would make this case pass vacuously. *)
-  let view_rank = match !cell with Some view -> Array.length (Nd.dims view) | None -> 0 in
-  let held = Nd.get_used_memory () - before in
-  Stdio.printf "reshape: 1 array of %d bytes\n" view_bytes;
-  Verdict.p "  still counted while only the view is held"
-    (view_rank = Array.length view_dims && held = view_bytes);
-  cell := None;
-  Stdlib.Gc.full_major ();
-  Stdlib.Gc.full_major ();
-  Verdict.p "  gauge returned to baseline after GC"
-    (abs (Nd.get_used_memory () - before) <= view_bytes)
+  Verdict.case "reshape" (fun () ->
+      let view_dims = [| 64; 512 |] in
+      let view_bytes = bytes_of view_dims in
+      let make_view () =
+        (* [source] is dead once this returns, so only the view keeps the bytes reachable. *)
+        let source = Nd.create_array ~debug:"used_memory" prec ~dims:[| 32768 |] ~padding:None in
+        Nd.reshape source view_dims
+      in
+      let before = Nd.get_used_memory () in
+      let cell = ref (Some (make_view ())) in
+      Stdlib.Gc.full_major ();
+      Stdlib.Gc.full_major ();
+      (* The view must be read {e after} the collection, not merely stored: a value whose last use
+         has passed is dead to the GC (OCaml's liveness ignores a [ref] that is only assigned from
+         here on), and collecting the view would make this case pass vacuously. *)
+      let view_rank = match !cell with Some view -> Array.length (Nd.dims view) | None -> 0 in
+      let held = Nd.get_used_memory () - before in
+      Stdio.printf "reshape: 1 array of %d bytes\n" view_bytes;
+      Verdict.p "  still counted while only the view is held"
+        (view_rank = Array.length view_dims && held = view_bytes);
+      cell := None;
+      Stdlib.Gc.full_major ();
+      Stdlib.Gc.full_major ();
+      Verdict.p "  gauge returned to baseline after GC"
+        (abs (Nd.get_used_memory () - before) <= view_bytes))
