@@ -141,10 +141,10 @@ test/operations/accum_width.ml
 test/operations/canonical_render.ml [renders generated text in memory]
     "?"
     "s0"
-test/operations/cc_march_census.ml
+test/operations/cc_march_census.ml [also pins text this scan cannot name]
 test/operations/concat_loop_symbols.ml [renders generated text in memory]
 test/operations/cost_model_floor.ml [renders generated text in memory]
-test/operations/cpu_parallel.ml
+test/operations/cpu_parallel.ml [also pins text this scan cannot name]
     "#pragma omp parallel for"
     "Pool-backed Grid rendering"
     "dispatch_apply"
@@ -196,7 +196,7 @@ test/operations/hardware_workgroup_reduce.ml
     "__syncthreads()"
     "threadgroup float partial_sums[64]"
     "threadgroup_barrier"
-test/operations/ll_printer_constants.ml [renders generated text in memory]
+test/operations/ll_printer_constants.ml [renders generated text in memory; also pins text this scan cannot name]
     " := "
 test/operations/narrow_storage_compute.ml
     "HALF_T ocannl_vec"
@@ -460,7 +460,7 @@ test/operations/test_one_hot_embedding_lookup.ml
     "<= 3"
     "?"
     "double *restrict ids_wide"
-test/operations/test_uniform_virtual_lane.ml
+test/operations/test_uniform_virtual_lane.ml [also pins text this scan cannot name]
     "Main logic"
     "_uniform_lane("
     "_uniform_vec("

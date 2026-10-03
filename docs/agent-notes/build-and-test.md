@@ -1579,8 +1579,10 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   Predicate body literals pass the same call-site source check as caller markers; only validated
   source parameters propagate into nested helper calls. An unfollowed callback remains partial,
   as does a nested predicate capturing an enclosing source parameter the scan cannot validate.
-  Ordinary wrappers forwarding generated source into predicates remain partial until their caller
-  markers can be followed; helper-local aliases use a lexical fixed point.
+  Ordinary forwarding wrappers and predicate calls whose source cannot be validated remain
+  partial until their provenance can be followed, including optional defaults, anonymous callbacks
+  and mutation. This conservatively includes ordinary-source calls; they still contribute no
+  fragment. Helper-local aliases use a lexical fixed point.
 - **What no file-local rule can follow now says so.** A buffer is where generated text lands with no
   name to carry it, and the ways to fill one do not end (a wrapper reaching its parameter through a
   local binding, PPrint's own `ToBuffer` renderers, a buffer in a record). So a substring test whose

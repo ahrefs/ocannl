@@ -1260,7 +1260,8 @@ let classify_source ~emitters ~path ~contents =
       | _ -> []
     in
     (* Ordinary forwarding wrappers do not expose their caller's marker as a predicate parameter.
-       Keep calls supplying generated text visibly partial, including chains of such wrappers. *)
+       Keep unresolved calls visibly partial, including chains of wrappers and generated
+       defaults. *)
     let forwarding = Hashtbl.Poly.create () in
     let function_at callee =
       match Hashtbl.find scope.values (span callee.pexp_loc) with
@@ -1430,7 +1431,6 @@ let classify_source ~emitters ~path ~contents =
                   if
                     List.is_empty (predicates_at callee)
                     && Option.exists (function_at callee) ~f:(Hashtbl.mem forwarding)
-                    && List.exists args ~f:(fun (_, argument) -> mentions_tainted argument)
                   then unattributed := true;
                   List.iter (predicates_at callee) ~f:(fun predicate ->
                       let at parameter = predicate_argument_at parameter args in
@@ -1452,8 +1452,7 @@ let classify_source ~emitters ~path ~contents =
                         | Some text -> record text
                         | None when Option.is_some predicate.text_at -> pins := Computed :: !pins
                         | None -> ())
-                      else if Option.is_none source && Option.is_some predicate.source_at then
-                        pins := Computed :: !pins)
+                      else pins := Computed :: !pins)
               | _ -> ()));
           super#expression e
       end
