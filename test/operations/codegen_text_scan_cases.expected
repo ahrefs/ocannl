@@ -70,6 +70,7 @@ ok: source -- each test in a helper checks its own haystack
 ok: source -- a helper reading generated source inline pins its labelled marker
 ok: source -- omitted optional markers use their defaults and explicit markers override them
 ok: source -- callbacks retain hard-coded markers whose source the helper validates
+ok: source -- a forwarding wrapper used as a callback stays visibly partial
 ok: source -- a forwarding wrapper keeps unresolved caller markers visibly partial
 ok: source -- a helper-local generated read propagates through normalization aliases
 ok: source -- same-named local predicates pin only their in-scope composite context

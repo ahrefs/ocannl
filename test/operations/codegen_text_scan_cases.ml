@@ -471,6 +471,11 @@ let () =
   String.is_substring (Generated.read routine) ~substring:"callback marker"
 let () = List.iter ["r"] ~f:check|ocaml},
       {|"callback marker" +partial|} );
+    ( "a forwarding wrapper used as a callback stays visibly partial",
+      {ocaml|let has src marker = String.is_substring src ~substring:marker
+let check src = has src "callback wrapper marker"
+let () = List.iter [Generated.read "r"] ~f:check|ocaml},
+      "+partial" );
     ( "a forwarding wrapper keeps unresolved caller markers visibly partial",
       {ocaml|let has src marker = String.is_substring src ~substring:marker
 let check src marker = has src marker

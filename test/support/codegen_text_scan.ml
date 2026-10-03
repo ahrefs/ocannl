@@ -1413,7 +1413,10 @@ let classify_source ~emitters ~path ~contents =
         method! value_binding vb = if not (classifies_compiler_plan vb) then super#value_binding vb
 
         method! expression e =
-          if (not (Hashtbl.mem applied (span e.pexp_loc))) && not (List.is_empty (predicates_at e))
+          if
+            (not (Hashtbl.mem applied (span e.pexp_loc)))
+            && ((not (List.is_empty (predicates_at e)))
+               || Option.exists (function_at e) ~f:(Hashtbl.mem forwarding))
           then unattributed := true;
           (match text_test scope e with
           | Some { text; tested; inherent } ->
