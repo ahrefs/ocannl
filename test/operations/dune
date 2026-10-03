@@ -6969,3 +6969,23 @@
   (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
  (modules gpu_lane_reduction)
  (libraries base ocannl stdio arrayjit.verdict ll_test test_utils))
+
+(test
+ ; ocannl-backend: none -- exercises Utils configuration readers without a backend.
+ (name config_key_exact)
+ (package neural_nets_lib)
+ (modules config_key_exact)
+ (libraries base arrayjit.utils arrayjit.verdict)
+ (deps
+  ocannl_config
+  (alias runtest-env_spelling_gate)
+  (env_var OCANNL_ONLINE_SOFTMAX)
+  (env_var OCANNL_ONLINE_SOFTMAX_BACKWARD))
+ (action
+  (setenv
+   OCANNL_ONLINE_SOFTMAX
+   ""
+   (setenv
+    OCANNL_ONLINE_SOFTMAX_BACKWARD
+    true
+    (run %{test} --ocannl_online_softmax_backward=true)))))

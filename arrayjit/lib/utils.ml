@@ -869,21 +869,37 @@ let parse_config_token ?(documentation = false) token =
    argument (gh-ocannl-578). *)
 let qualified_only_config_keys = Set.of_list (module String) [ "profile" ]
 
+(** Read one argument for [n]. A longer registered key owns its spelling, even when the shorter key
+    could interpret its suffix as a value separated by [_], [-], or nothing. [=] ends the name
+    unambiguously. Unregistered suffixes retain the legacy value grammar. *)
+let cmdline_arg_value ?qualified_only n =
+  let qualified_only =
+    Option.value qualified_only ~default:(Set.mem qualified_only_config_keys n)
+  in
+  let normalized = String.tr n ~target:'-' ~replacement:'_' in
+  let longer_names =
+    Set.to_list known_config_keys
+    |> List.filter ~f:(fun key ->
+        String.length key > String.length normalized && String.is_prefix key ~prefix:normalized)
+    |> List.concat_map ~f:(fun key ->
+        cmdline_var_names ~qualified_only:(Set.mem qualified_only_config_keys key) key)
+  in
+  let prefixes = cmdline_var_prefixes ~qualified_only n in
+  fun arg ->
+    if List.exists longer_names ~f:(fun longer -> String.is_prefix arg ~prefix:longer) then None
+    else List.find_map prefixes ~f:(fun prefix -> String.chop_prefix arg ~prefix)
+
 (** The commandline sublevel of {!get_global_arg}: returns the setting's value and the [Sys.argv]
     element it came from. Pure -- the sourcing log lives at the resolution seam, which is the only
     place that knows which sublevel actually won.
 
     [qualified_only] defaults per key from {!qualified_only_config_keys}, so a caller need not
-    remember which keys renounce their prefix-free spellings. *)
+    remember which keys renounce their prefix-free spellings. The first argument for that exact key
+    wins, independent of arguments for longer registered keys. *)
 let read_cmdline_var ?qualified_only n =
-  let qualified_only =
-    Option.value qualified_only ~default:(Set.mem qualified_only_config_keys n)
-  in
-  let cmd_variants = cmdline_var_prefixes ~qualified_only n in
+  let value_of_arg = cmdline_arg_value ?qualified_only n in
   Array.find_map Stdlib.Sys.argv ~f:(fun arg ->
-      List.find_map cmd_variants ~f:(fun p ->
-          Option.some_if (String.is_prefix ~prefix:p arg)
-            (String.drop_prefix arg (String.length p), arg)))
+      Option.map (value_of_arg arg) ~f:(fun value -> (value, arg)))
 
 (** Whether a raw command-line argument addresses a known configuration key under {e any} spelling
     {!read_cmdline_var} accepts — prefixed or prefix-free, dashed or underscored, any separator. For
@@ -891,10 +907,7 @@ let read_cmdline_var ?qualified_only n =
     machinery and should be passed over rather than rejected as unknown, while an argument matching
     no known key under any spelling can still be flagged as a probable typo. *)
 let cmdline_arg_is_config_key arg =
-  Set.exists known_config_keys ~f:(fun k ->
-      let qualified_only = Set.mem qualified_only_config_keys k in
-      List.exists (cmdline_var_prefixes ~qualified_only k) ~f:(fun p ->
-          String.is_prefix arg ~prefix:p))
+  Set.exists known_config_keys ~f:(fun k -> Option.is_some (cmdline_arg_value k arg))
 
 (** The environment sublevel of {!get_global_arg}: returns the setting's value and the variable it
     came from. An empty value counts as unset. *)

@@ -116,9 +116,7 @@ flags_of() {
     fold*)
       local inner
       inner=$(flags_of "${1#fold}") || return 1
-      # Last: the command-line reader takes the FIRST argument beginning with a key's spelling and
-      # a separator, so the block key's argument must follow the forward key's.
-      echo "$inner --ocannl_online_softmax_block=16" ;;
+      echo "--ocannl_online_softmax_block=16 $inner" ;;
     b[!a]*) flags_of "${1#b}" ;;
     d1*)
       local rest
