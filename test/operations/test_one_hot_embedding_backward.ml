@@ -152,6 +152,7 @@ let run_backward ?name ids =
 
 let () =
   case "float ids" (fun () ->
+      Tensor.unsafe_reinitialize ();
       (* --- Float ids, all in range --- *)
       let id_values = [| 1.; 3.; 0. |] in
       let ids =
@@ -179,6 +180,7 @@ let () =
       p "generated C has no vocabulary reduction loop (zero-init only)" (vocab_loop_count <= 1));
 
   case "out-of-range and fractional ids" (fun () ->
+      Tensor.unsafe_reinitialize ();
       (* --- Out-of-range and fractional ids contribute nothing --- *)
       let id_oob = [| 2.; Float.of_int vocab; 1.5 |] in
       let ids_oob =
@@ -189,6 +191,7 @@ let () =
         (expected_grads id_oob) ~f:approx);
 
   case "uint32 ids" (fun () ->
+      Tensor.unsafe_reinitialize ();
       (* --- uint32 ids: integer guard flavor (no Trunc), OOB still skipped --- *)
       let id_ints = [ 1; 3; vocab (* out of [0, vocab) *) ] in
       let ids_int = Nn_blocks.class_ids_of_int_list ~label:"ids_int" id_ints in
@@ -222,6 +225,7 @@ let () =
       p "uint32 ids: scatter guard has no integrality Trunc" (guard_truncs_int = 0));
 
   case "ordinary matmul" (fun () ->
+      Tensor.unsafe_reinitialize ();
       (* --- Fallback: an ordinary matmul backward is not rewritten --- *)
       let x =
         TDSL.ndarray

@@ -245,8 +245,9 @@ let test_max_pool2d_padded_locked_data () =
   let ctx = Train.forward_once ctx output in
   Verdict.p "clamped pool on a locked-layout data node accepted, stays unpadded"
     (match Lazy.force input.value.Ir.Tnode.padding with None -> true | Some _ -> false);
-  check_padded_values ctx output;
+  check_padded_values ctx output
 
+let test_max_pool2d_padded_locked_data_copy () =
   (* The materialized-copy variant keeps working (no margins on the copy either). *)
   Tensor.unsafe_reinitialize ();
   let input = make_negative_input () in
@@ -298,16 +299,15 @@ let test_max_pool2d_conflicting_consumers () =
     Verdict.pf_all2 "%s: pooled shared values correct (0-margins never read)" tag v expected_pool
       ~f:(fun a b -> Float.(a = b))
   in
-  let shared, conv_branch, pool_branch =
-    make_graph (fun x -> max_pool2d ~stride:2 ~window_size:3 ~use_padding:true () x)
+  let run_variant tag pool_block =
+    Verdict.case tag @@ fun () ->
+    Tensor.unsafe_reinitialize ();
+    let shared, conv_branch, pool_branch = make_graph pool_block in
+    run_shared tag shared conv_branch pool_branch
   in
-  run_shared "max_pool2d" shared conv_branch pool_branch;
-
-  Tensor.unsafe_reinitialize ();
-  let shared, conv_branch, pool_branch =
-    make_graph (fun x -> Nn_blocks.max_pool2d_copy ~stride:2 ~window_size:3 ~use_padding:true () x)
-  in
-  run_shared "max_pool2d_copy" shared conv_branch pool_branch
+  run_variant "max_pool2d" (fun x -> max_pool2d ~stride:2 ~window_size:3 ~use_padding:true () x);
+  run_variant "max_pool2d_copy" (fun x ->
+      Nn_blocks.max_pool2d_copy ~stride:2 ~window_size:3 ~use_padding:true () x)
 
 let () =
   Verdict.case "test_max_pool2d_basic" test_max_pool2d_basic;
@@ -317,5 +317,6 @@ let () =
   Verdict.case "test_max_pool2d_backprop" test_max_pool2d_backprop;
   Verdict.case "test_max_pool2d_padded" test_max_pool2d_padded;
   Verdict.case "test_max_pool2d_padded_locked_data" test_max_pool2d_padded_locked_data;
+  Verdict.case "test_max_pool2d_padded_locked_data_copy" test_max_pool2d_padded_locked_data_copy;
   Verdict.case "test_max_pool2d_conflicting_consumers" test_max_pool2d_conflicting_consumers;
   printf "\nAll max_pool2d tests completed!\n%!"

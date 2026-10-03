@@ -29,6 +29,8 @@ let alloc_hold_drop ~n ~alloc =
 
 let check name ~n ~bytes_per_array ~alloc =
   Verdict.case name @@ fun () ->
+  Stdlib.Gc.full_major ();
+  Stdlib.Gc.full_major ();
   let held, residual = alloc_hold_drop ~n ~alloc in
   Stdio.printf "%s: %d arrays of %d bytes each\n" name n bytes_per_array;
   Verdict.p "  delta while held = allocated bytes" (held = n * bytes_per_array);
@@ -50,6 +52,8 @@ let () =
      bytes are still held while only the view is reachable. [Tnode.create_with_reshape] is exactly
      that situation -- it hands out the view and drops the array it reshaped. *)
   Verdict.case "reshape" (fun () ->
+      Stdlib.Gc.full_major ();
+      Stdlib.Gc.full_major ();
       let view_dims = [| 64; 512 |] in
       let view_bytes = bytes_of view_dims in
       let make_view () =
