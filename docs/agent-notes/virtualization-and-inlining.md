@@ -149,12 +149,11 @@ files.
   the recursion, defaulting to `true` for mutually-recursive callers that don't carry it. When a
   codegen decision consults a `traced_array`-style boolean, ask whether it is node-level or
   occurrence-level; they coincide only at first touch on the linear path.
-- The codegen localizer and `Schedule.Privatize` forward a preceding whole-node `Zero_out` (or
-  its unconditional covering `Expand_zero` nest) directly into the accumulator via the shared
-  `Low_level.zero_seed_candidate` proof (gh-ocannl-1175): `Low_level.affine_accesses` must find exactly one same-cell RMW pair and
+- The codegen localizer forwards a preceding whole-node `Zero_out` directly into a serial
+  accumulator local only when `Low_level.affine_accesses` finds exactly one same-cell RMW pair and
   `Affine.covers_box` proves its closing stores cover the whole node (gh-ocannl-821). The zero store
   is dropped only after `try_localize_serial_reduce` actually accepts, every loop that repeats a
-  cell is inside that accepted scope (inside `over` for `Privatize`), no enclosing loop is statically dead, and the covering write
+  cell is inside that accepted scope, no enclosing loop is statically dead, and the covering write
   is unconditional. Those clauses are distinct from geometric coverage: an enclosing reduction
   loop can repeat an otherwise covering output nest, a dead loop executes no closing store, and a
   symbolic-extent guard can make only a prefix execute. A localizer/SIMD decline, partial or

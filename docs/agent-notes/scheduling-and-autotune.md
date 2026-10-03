@@ -110,12 +110,6 @@ files.
   `Code_borne` cache classification. Backend-free lowering conservatively resolves auto to 0.
   In training the step is backward-bound
   (gh-ocannl-1124): the fold moves it by 1-2%.
-- `Schedule.expand_reduction_zeros` expands covering zeros before fission when the zero policy
-  distributes them (GPU, above its size threshold; gh-ocannl-1175). The aligned-merge and
-  keep-mapping rules decide whether the per-cell companion can share the accumulation kernel;
-  sketch families must give it the site's geometry through `companion_geometry`. The tuner and
-  model selector still explore a singleton segment when expansion changed its pre-schedule
-  digest, since whole-routine sketches see the original whole-node zero.
 - A GPU schedule must cover EVERY materialized-writing nest of the routine, not only the one the
   pipeline builds. Launch dimensions are kernel-global, so `Low_level.validate_parallel` rejects any
   companion write (a bias/relu tail; the elementwise statements an aligned-merged fission segment
