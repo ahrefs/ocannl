@@ -57,6 +57,16 @@ let () =
     = 2);
   p "a divisor that is a LEADING factor is not unflattening"
     (count "let a = Array.init (rows * cols) ~f:(fun i -> Float.of_int (i % rows))" = 1);
+  p "a shifted mix masked to one bit is a multi-index site"
+    (count "let f v = (Bench_checksum.mix ~salt:0 v.(0) v.(1) lsr 16) land 1" = 1);
+  p "a shifted flat mix masked to one bit is a flat site"
+    (count
+       "let a = Array.init (m * k) ~f:(fun i -> (Bench_checksum.mix ~salt:0 (i / k) (i % k) lsr 7) \
+        land 1)"
+    = 1);
+  p "a mask matching a trailing factor is still a site"
+    (count "let a = Array.init (rows * cols) ~f:(fun i -> i land cols)" = 1);
+  p "a mask of one literal axis is out of scope" (count "let f v = v.(0) land 1" = 0);
   (* The nearest legitimate text, which a rule that fires on it would get switched off over. *)
   p "a site converted onto the guard has no remainder left"
     (count
@@ -169,6 +179,12 @@ let () =
     ~message:"Source floor:" (run ());
   check "shipping scanner refuses the exemption the conversion left stale" ~exit:1
     ~message:"test/new.ml: stale operand-key exemption" (run ~exempt:true ());
+  write "test/new.ml"
+    "let a = Array.init (m * k) ~f:(fun i -> (Bench_checksum.mix ~salt:0 (i / k) (i % k) lsr 16) \
+     land 1)";
+  check "shipping scanner refuses a shifted mix masked to one bit" ~exit:1
+    ~message:"flat operand key" (run ());
+  write "test/new.ml" "";
   write "arrayjit/test/new.ml" "let av = Array.init (m * k) ~f:(fun i -> Float.of_int (i % 13))\n";
   check "shipping scanner reads the arrayjit test root too" ~exit:1
     ~message:"arrayjit/test/new.ml:1: flat operand key" (run ());

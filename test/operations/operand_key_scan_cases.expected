@@ -10,6 +10,10 @@ the flat spelling over a product length is a flat site: true
 a flat closure spread over several lines is read whole: both remainders are sites: true
 the positional Stdlib form and List.init are read too: true
 a divisor that is a LEADING factor is not unflattening: true
+a shifted mix masked to one bit is a multi-index site: true
+a shifted flat mix masked to one bit is a flat site: true
+a mask matching a trailing factor is still a site: true
+a mask of one literal axis is out of scope: true
 a site converted onto the guard has no remainder left: true
 one literal axis under a remainder is out of scope: true
 unflattening by the trailing factor, or a trailing product, is the correct idiom: true
@@ -27,5 +31,6 @@ shipping scanner refuses the blind hand-rolled fixture: true
 shipping scanner accepts the fixture under a named exemption: true
 shipping scanner accepts the fixture converted onto the guard: true
 shipping scanner refuses the exemption the conversion left stale: true
+shipping scanner refuses a shifted mix masked to one bit: true
 shipping scanner reads the arrayjit test root too: true
 shipping scanner refuses an emptied arrayjit source root: true

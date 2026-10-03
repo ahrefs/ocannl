@@ -13,9 +13,10 @@
 
     The parse tree (ppxlib's, like every scan here), never the text: comments and string literals
     are not code, and a closure spread over several lines is one expression. A {e site} is an
-    application of an integer-remainder operator — any identifier whose last component is [%], [mod]
-    or [rem], so [Int.( % )], [Int.rem] and [Stdlib.( mod )] too — inside the body of a function,
-    whose LEFT operand reads that function's parameter in one of two spellings:
+    application of an integer-remainder or bit-mask operator — any identifier whose last component
+    is [%], [mod] or [rem], or [land], so [Int.( % )], [Int.rem] and [Stdlib.( mod )] too — inside
+    the body of a function, whose LEFT operand reads that function's parameter in one of two
+    spellings:
 
     - {!Multi_index}: the parameter is an index array and the left operand reads two or more
       distinct axes of it ([v.(0)], [Array.get v 1]), or one axis through a non-literal index. Names
@@ -45,7 +46,7 @@
     - Aliases other than a plain [let x = …] inside the body — tuple and array patterns, [match],
       references — and a parameter bound by a pattern rather than a name ([fun [| i; j |] -> …]).
     - Shadowing: a name that rebinds the parameter inside the body is still read as the parameter.
-    - Any value mixer other than the remainder operators (a hash, [land], a multiply-shift).
+    - Any value mixer other than remainder or [land] operators (a hash, a multiply-shift).
 
     The detector does not decide whether a site is blind; that is {!Ll_test.cycle}'s job, and the
     whole point is to route the arithmetic through it. A site is either converted (onto [cycle],
@@ -68,6 +69,16 @@ let remainder_op (e : expression) =
   | Pexp_ident { txt; _ } -> (
       match Longident.last_exn txt with "%" | "mod" | "rem" -> true | _ -> false)
   | _ -> false
+
+let bounding_op (e : expression) =
+  remainder_op e
+  ||
+  match e.pexp_desc with
+  | Pexp_ident { txt; _ } -> String.equal (Longident.last_exn txt) "land"
+  | _ -> false
+
+let is_remainder (e : expression) =
+  match e.pexp_desc with Pexp_apply (op, _) -> remainder_op op | _ -> false
 
 let is_ident name (e : expression) =
   match e.pexp_desc with Pexp_ident { txt = Lident n; _ } -> String.equal n name | _ -> false
@@ -166,13 +177,13 @@ let named_params (e : expression) =
           | _ -> None)
   | _ -> []
 
-(* The remainder applications in [body] whose left operand reads [param], with the reads. [let]
-   bindings extend the alias environment for their body. *)
-let remainders ~param body =
+(* The remainder and mask applications in [body] whose left operand reads [param], with the reads.
+   [let] bindings extend the alias environment for their body. *)
+let bounded_keys ~param body =
   let found = ref [] in
   let rec go env (e : expression) =
     match e.pexp_desc with
-    | Pexp_apply (op, [ (Nolabel, lhs); (Nolabel, rhs) ]) when remainder_op op ->
+    | Pexp_apply (op, [ (Nolabel, lhs); (Nolabel, rhs) ]) when bounding_op op ->
         let rs = reads ~param ~env lhs in
         if not (List.is_empty rs) then found := (e, rs, rhs) :: !found;
         go env lhs;
@@ -232,7 +243,7 @@ let sites source =
 
       method! expression e =
         List.iter (named_params e) ~f:(fun (param, body) ->
-            List.iter (remainders ~param body) ~f:(fun (site, rs, _) ->
+            List.iter (bounded_keys ~param body) ~f:(fun (site, rs, _) ->
                 if multi_axis rs then record Multi_index site));
         (match init_function e with
         | Some (len, fn) -> (
@@ -247,10 +258,10 @@ let sites source =
                   let n = List.length factor_shapes and k = List.length divisor in
                   k < n && List.equal String.equal (List.drop factor_shapes (n - k)) divisor
                 in
-                List.iter (remainders ~param body) ~f:(fun (site, rs, rhs) ->
+                List.iter (bounded_keys ~param body) ~f:(fun (site, rs, rhs) ->
                     if
                       List.exists rs ~f:(function Whole -> true | _ -> false)
-                      && not (unflattens rhs)
+                      && not (is_remainder site && unflattens rhs)
                     then record Flat site)
             | _ -> ())
         | None -> ());

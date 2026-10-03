@@ -278,14 +278,13 @@ let () =
             then Some (a, b, v)
             else None))
   in
-  (* Two geometries, so the class is not read as a property of the narrowest one. The n = 2 one
-     sweeps twice as many rows as the n = 3 one because ma's finer levels moved its first cancelling
-     pair out past 2000 (gh-ocannl-738): a richer operand set makes an accidental cancellation
-     rarer, which is the same improvement the repeat-distance table below measures — it does not
-     remove the class, and this is where that is shown. *)
+  (* Two geometries, so the class is not read as a property of the narrowest one. Drawing even
+     residues from the middle bits (gh-ocannl-1118) moves both first cancelling pairs beyond the old
+     4000/2000-row bounds. A 10000-row sweep still exhibits the class without prescribing either
+     pair: the bounded checksum is a fingerprint, not the guard. *)
   let cancel_cases =
     List.filter_map
-      [ (4000, 2, 2); (2000, 3, 2) ]
+      [ (10000, 2, 2); (10000, 3, 2) ]
       ~f:(fun (m, n, k) ->
         Option.map (cancelling ~m ~n ~k) ~f:(fun (a, b, v) -> (m, n, k, a, b, v)))
   in
@@ -360,6 +359,22 @@ let () =
          List.exists [ 0; 1; 7; 63 ] ~f:(fun column ->
              Option.is_some (first_value_collision pre_fix_mix ~salt ~column ~rows:100_000))));
 
+  (* gh-ocannl-1118: full mix values being distinct does not imply their low bits discriminate. Test
+     both axes of the binary operand at the staged-twin extent. *)
+  let binary_salts = [ 0x5A17; 0x3C6E; 0x00A5 ] in
+  let axes_distinct value ~salt =
+    let row_vectors = List.init 32 ~f:(fun r -> Array.init 64 ~f:(fun c -> value ~salt r c))
+    and column_vectors = List.init 64 ~f:(fun c -> Array.init 32 ~f:(fun r -> value ~salt r c)) in
+    pairwise_distinct row_vectors && pairwise_distinct column_vectors
+  in
+  Verdict.p_all "binary residues have distinct rows and columns at 32x64" binary_salts
+    ~f:(fun salt ->
+      axes_distinct
+        (fun ~salt r c -> Bc.residue ~salt ~row_stride:64 ~modulus:2 ((r * 64) + c))
+        ~salt);
+  Verdict.p_all "the raw mix low bit aliases rows or columns at 32x64 (negative control)"
+    binary_salts ~f:(fun salt -> not (axes_distinct (fun ~salt r c -> Bc.mix ~salt r c % 2) ~salt));
+
   (* Narrow reductions, which the four-row and 12-multiple sweeps above cannot reach. How many rows
      an operand keeps distinct is bounded by [levels ^ row_stride] whatever the generator — 2304 at
      the narrowest reduction this bench accepts, since gh-ocannl-738 took ma to 48 levels of 1/16
@@ -428,7 +443,7 @@ let () =
   (* The arithmetic the weights' exactness argument rests on: a residue is a residue (non-negative,
      below its modulus), so a weight is in [1, 251] and products of the benches' exact-in-binary
      operands stay exact in the double accumulator. *)
-  let moduli = [ 3; 5; 13; 17; Bc.weight_cap ] in
+  let moduli = [ 1; 2; 3; 4; 5; 13; 17; 48; Bc.weight_cap ] in
   let row_strides = List.range 1 40 in
   Verdict.p_all "every residue lands in [0, modulus)" moduli ~f:(fun modulus ->
       List.for_all row_strides ~f:(fun row_stride ->

@@ -64,7 +64,12 @@ open Base
     Masking to 24 bits first removes the class rather than shrinking it: [a * 73856093] is injective
     mod 2^24 (the multiplier is odd), and everything after it is a bijection on 24 bits — an
     xor-shift, a multiply by an odd constant, an xor-shift — so distinct rows below 2^24 differ at
-    every column, and distinct columns likewise. Provable, not swept. *)
+    every column, and distinct columns likewise. Provable, not swept.
+
+    That is a guarantee about FULL values, not their low bits: bits 0--6 can alias whole rows and
+    columns (gh-ocannl-1118). Do not mask them or take an even remainder directly; use {!residue},
+    which draws even-modulus values from bit 7 upwards. Reduced values have a finite space, so their
+    row/column distinctness still needs checking at the fixture's extent. *)
 let mix ~salt a b =
   let x = a * 73856093 lxor (b * 19349663) lxor salt land 0xFFFFFF in
   let x = x lxor (x lsr 13) land 0xFFFFFF in
@@ -74,14 +79,18 @@ let mix ~salt a b =
 (** [residue ~salt ~row_stride ~modulus t] is [mix] of the (row, column) pair that the flat offset
     [t] denotes in a row-major array of the given row stride, reduced mod [modulus]. This is the
     call site to prefer over a hand-written [t % modulus]: same shape, no divisibility collapse.
-    Non-negative, and below [modulus]. *)
+    Non-negative, and below [modulus]. Odd moduli retain the full mix's residue. Even moduli use
+    [mix lsr 7]: the raw low bits alias whole rows and columns, and an even remainder retains that
+    parity defect. This keeps {!mix} and odd-modulus checksum weights unchanged; it does not promise
+    distinct vectors at arbitrary extents in a bounded value space. *)
 let residue ~salt ~row_stride ~modulus t =
   if row_stride <= 0 then
     invalid_arg
       (Printf.sprintf "Bench_checksum.residue: row_stride = %d must be positive" row_stride);
   if modulus <= 0 then
     invalid_arg (Printf.sprintf "Bench_checksum.residue: modulus = %d must be positive" modulus);
-  mix ~salt (t / row_stride) (t % row_stride) % modulus
+  let key = mix ~salt (t / row_stride) (t % row_stride) in
+  (if modulus % 2 = 0 then key lsr 7 else key) % modulus
 
 (** [positive_level ~salt ~row_stride ~levels ~scale t] is a producer value drawn from the [levels]
     multiples of [scale] starting at [scale] — STRICTLY POSITIVE, never the zero an accumulator is
