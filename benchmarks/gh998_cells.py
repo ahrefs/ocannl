@@ -161,7 +161,7 @@ def ocannl(out, backend, workload, treatment, repeat, dry=False):
     artifacts = HERE / 'build_files' / prefix
     if artifacts.exists():
         raise RuntimeError(f'stale artifact directory: {artifacts}')
-    argv = [str(executable(workload)), f'--ocannl_backend={backend}',
+    argv = [str(executable(workload)), '--ocannl_no_config_file=true', f'--ocannl_backend={backend}',
             '--ocannl_default_prec=single', '--ocannl_schedule_fission=true',
             '--ocannl_automatic_gpu_schedule=true', '--ocannl_autotune_search=false',
             '--ocannl_autotune_cache_dir=', '--ocannl_debug_log_from_routines=false',

@@ -25,8 +25,8 @@ let scalar_case ~prec ~first_id label =
 let () =
   let int_llc, input, output = scalar_case ~prec:Ops.int64 ~first_id:8240 "int64" in
   let float_llc, _, _ = scalar_case ~prec:Ops.single ~first_id:8250 "single" in
-  let int_simplified = LL.simplify_llc [] int_llc in
-  let float_simplified = LL.simplify_llc [] float_llc in
+  let int_simplified = LL.simplify_llc ~fp_algebra:"all" [] int_llc in
+  let float_simplified = LL.simplify_llc ~fp_algebra:"all" [] float_llc in
   p "int64 mul-add remains integer arithmetic" (fmas int_simplified = 0);
   p "single-precision mul-add still rewrites to FMA" (fmas float_simplified = 1);
 
