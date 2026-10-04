@@ -556,6 +556,17 @@ class TensorizationTest(unittest.TestCase):
                 orchestrate.tensorization_check([cell])
                 self.assertEqual(cell["tensorization"], verdict)
 
+    def test_mismatch_notice_names_tuned_and_untuned_variants(self):
+        untuned = result("ocannl", "metal", "default", [1.0])
+        untuned["shipped_mma"] = self.mma("scalar-fallback", 2, 2)
+        tuned = self.cell([self.arm("A", True, "scalar-fallback", 2, 2)])
+        mismatches = orchestrate.tensorization_check([untuned, tuned])
+        notice = orchestrate.tensorization_notice(mismatches)
+        self.assertIn("2 cell(s)", notice)
+        self.assertIn("metal/default", notice)
+        self.assertIn("metal/tuned", notice)
+        self.assertNotIn("tuned cell(s)", notice)
+
     def test_top_level_census_overrides_legacy_tuned_census(self):
         cell = self.cell([self.arm("A", True, "tensorized")],
                          shipped_mma=self.mma("tensorized", 4))

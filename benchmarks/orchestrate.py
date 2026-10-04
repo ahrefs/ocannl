@@ -1423,6 +1423,20 @@ def tensorization_check(results):
     return mismatched
 
 
+def tensorization_notice(mismatches):
+    """Describe scalar emission in any variant, including untuned compiled defaults."""
+    labels = ", ".join(
+        f"{r['workload']} {r['backend']}/"
+        f"{cell_name(r['variant'], r.get('precision', 'f32'))}{regime_label(regime_of(r))}"
+        f" ({r['tensorization']})"
+        for r in mismatches
+    )
+    return (
+        f"TENSORIZATION NOTICE: {len(mismatches)} cell(s) emitted scalar fallbacks "
+        f"or omitted requested tensorization: {labels}"
+    )
+
+
 # How a two-pass cell's own verdict maps to the report's `pass` column: only a searching process
 # is a protocol violation, and only a genuine replay may call the carried-over compile cost cached.
 TWO_PASS_VERDICT = {
@@ -2501,17 +2515,7 @@ def main():
         # declining is the correct decision. It is announced because the number is honest only
         # about a scalar kernel, and the row's variant name says otherwise (gh-ocannl-626) — the
         # failure mode is a reader quoting it as a tensor-core measurement.
-        labels = ", ".join(
-            f"{r['workload']} {r['backend']}/"
-            f"{cell_name(r['variant'], r.get('precision', 'f32'))}{regime_label(regime_of(r))}"
-            f" ({r['tensorization']})"
-            for r in tensorization_mismatches
-        )
-        print(
-            f"TENSORIZATION NOTICE: {len(tensorization_mismatches)} tuned cell(s) shipped a "
-            f"schedule asking for tensor cores whose kernels did not emit them: {labels}",
-            flush=True,
-        )
+        print(tensorization_notice(tensorization_mismatches), flush=True)
     if regime_mismatches:
         # A row labelled with a regime its process did not run in is worse than a missing row:
         # its number would be quoted as the other regime's (gh-ocannl-719).

@@ -267,7 +267,8 @@ for (backend, fixture, treatment), reps in sorted(cells.items(), key=lambda kv: 
     spread = max(r["step_ms"]["p90"] / r["step_ms"]["p10"] for _, r in reps)
     comp = med((backend, fixture, "composed"))
     two = med((backend, fixture, "two-pass")) or med((backend, fixture, "two-pass-bwd"))
-    mma = reps[0][1].get("shipped_mma") or (reps[0][1].get("tune") or {}).get("shipped_mma")
+    record = reps[0][1]
+    mma = record["shipped_mma"] if "shipped_mma" in record else (record.get("tune") or {}).get("shipped_mma")
     loss = ""
     cref = cells.get((backend, fixture, "composed"))
     if cref:
