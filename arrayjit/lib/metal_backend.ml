@@ -424,7 +424,7 @@ module Impl = struct
                     mma_f16_wide_acc_scopes =
                       [ Backend_intf.Mma_per_statement; Backend_intf.Mma_fragment_scope ];
                     (* gh-ocannl-923: the uniform-bf16 arm's wide counterpart, the same float
-                       accumulator and converted [thread_elements()] boundary in both hooks. *)
+                       accumulator and coordinate-table boundary in both hooks. *)
                     mma_bf16_wide_acc_scopes =
                       [ Backend_intf.Mma_per_statement; Backend_intf.Mma_fragment_scope ];
                     (* Metal banks too, but [simdgroup_load] takes a plain pointer and leading
@@ -718,7 +718,7 @@ module Impl = struct
          [Bf16_wide] on Metal): [simdgroup_multiply_accumulate] is generic over its operand element
          type, and bfloat operands into a float accumulator compile and execute on Apple silicon
          (schedule_mma_matmul's bf32 and [Bf16_wide] legs, M4 Max). The f32-storage arm needs no
-         conversion; the wide arm converts at the bfloat destination through [thread_elements()]
+         conversion; the wide arm converts at the bfloat destination through the coordinate table
          exactly as the wide-f16 one does. *)
       | Ops.Bfloat16_prec _, Ops.Bfloat16_prec _, Ops.Single_prec _ ->
           Some
@@ -741,12 +741,22 @@ module Impl = struct
               "simdgroup_bfloat8x8" )
       | _ -> None
 
-    (* MSL exposes the distributed fragment elements through [thread_elements()]. On a 32-thread
-       simdgroup each lane owns two elements of an 8x8 matrix, and the mapping depends only on the
-       matrix dimensions, not its element type. A standalone runtime-compiler probe on an Apple M4
-       Max established the half/f32 mixed multiply surface and this elementwise boundary
-       (gh-ocannl-837). The assertion keeps the logical element-count premise adjacent to the copy;
-       unlike a whole-[storage_type] conversion, the scalar spelling is accepted by current MSL. *)
+    (* MSL leaves the element-to-thread mapping unspecified, so a half/bfloat fragment cannot supply
+       the coordinates of a float accumulator (gh-ocannl-1075). Load the row-major table into the
+       accumulator's own type and convert scalar cells at the coordinates it names. [simdgroup_load]
+       accepts only device/threadgroup memory (MSL 4.1 section 6.8.1), so each converted scope
+       initializes 256 bytes of threadgroup storage before its opening barrier. A single thread
+       writes the table even when the workgroup contains several SIMD groups. *)
+    let mma_d_table_lines ~acc_frag ~d_frag =
+      if String.equal acc_frag d_frag then []
+      else
+        [
+          "threadgroup float ocannl_mma_rc8[64];";
+          "if (all(lid == uint3(0))) {";
+          "  for (int __rc = 0; __rc < 64; ++__rc) ocannl_mma_rc8[__rc] = (float)__rc;";
+          "}";
+        ]
+
     let mma_d_boundary_lines ~dir ~acc_frag ~d_frag ~acc ~ptr ~ldd =
       if String.equal acc_frag d_frag then
         [
@@ -755,35 +765,31 @@ module Impl = struct
           | `Store -> Printf.sprintf "simdgroup_store(%s, %s, (ulong)%d);" acc ptr ldd);
         ]
       else
-        let copy dst src cast =
-          [
-            Printf.sprintf "%s.thread_elements()[0] = (%s)%s.thread_elements()[0];" dst cast src;
-            Printf.sprintf "%s.thread_elements()[1] = (%s)%s.thread_elements()[1];" dst cast src;
-          ]
-        in
-        (* The destination fragment's element type: half for the wide-f16 arm, bfloat for the
-           wide-bf16 one (gh-ocannl-923). The accumulator is float on both. *)
         let d_elem =
           match d_frag with
           | "simdgroup_half8x8" -> "half"
           | "simdgroup_bfloat8x8" -> "bfloat"
           | _ -> invalid_arg ("Metal_backend.mma_d_boundary_lines: unconverted " ^ d_frag)
         in
-        let assertion =
+        (* [thread_elements()] returns a pointer, whose sizeof is not the per-lane element count.
+           Divide this fragment's logical storage by the advertised 32-thread SIMD-group width. *)
+        let elt = Printf.sprintf "%s.thread_elements()[__ei]" acc in
+        let cell = Printf.sprintf "(%s)[(__rc >> 3) * %d + (__rc & 7)]" ptr ldd in
+        [
+          "{ /* simdgroup converted d boundary: coordinates from ocannl_mma_rc8 */";
+          Printf.sprintf "  %s __mma_rc;" acc_frag;
+          "  simdgroup_load(__mma_rc, ocannl_mma_rc8, (ulong)8);";
           Printf.sprintf
-            "static_assert(sizeof(%s::storage_type) / sizeof(float) == sizeof(%s::storage_type) / \
-             sizeof(%s), \"wide %s d boundary requires equal fragment element counts\");"
-            acc_frag d_frag d_elem d_elem
-        in
-        match dir with
-        | `Load ->
-            [ Printf.sprintf "%s __mma_dstage;" d_frag; assertion ]
-            @ [ Printf.sprintf "simdgroup_load(__mma_dstage, %s, (ulong)%d);" ptr ldd ]
-            @ copy acc "__mma_dstage" "float"
-        | `Store ->
-            [ Printf.sprintf "%s __mma_dstage;" d_frag; assertion ]
-            @ copy "__mma_dstage" acc d_elem
-            @ [ Printf.sprintf "simdgroup_store(__mma_dstage, %s, (ulong)%d);" ptr ldd ]
+            "  for (int __ei = 0; __ei < (int)(sizeof(%s::storage_type) / sizeof(float) / 32); \
+             ++__ei) {"
+            acc_frag;
+          "    const int __rc = (int)__mma_rc.thread_elements()[__ei];";
+          (match dir with
+          | `Load -> Printf.sprintf "    %s = (float)%s;" elt cell
+          | `Store -> Printf.sprintf "    %s = (%s)%s;" cell d_elem elt);
+          "  }";
+          "}";
+        ]
 
     (* Cooperative tile-MMA emission for [Low_level.Tile_mma] via MSL [simdgroup_matrix]
        (docs/proposals/tensorize-mma.md §4): fragment blocks of 8×8 tiles held jointly by the
@@ -901,12 +907,13 @@ module Impl = struct
                     "threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);"
                   in
                   let body_lines =
-                    [
-                      barrier;
-                      Printf.sprintf "%s __mma_acc[%d][%d];" acc_frag mt nt;
-                      Printf.sprintf "for (int __mi = 0; __mi < %d; ++__mi) {" mt;
-                      Printf.sprintf "  for (int __ni = 0; __ni < %d; ++__ni) {" nt;
-                    ]
+                    mma_d_table_lines ~acc_frag ~d_frag
+                    @ [
+                        barrier;
+                        Printf.sprintf "%s __mma_acc[%d][%d];" acc_frag mt nt;
+                        Printf.sprintf "for (int __mi = 0; __mi < %d; ++__mi) {" mt;
+                        Printf.sprintf "  for (int __ni = 0; __ni < %d; ++__ni) {" nt;
+                      ]
                     @ List.map
                         (mma_d_boundary_lines ~dir:`Load ~acc_frag ~d_frag
                            ~acc:"__mma_acc[__mi][__ni]"
@@ -1013,12 +1020,13 @@ module Impl = struct
               in
               let d_addr = Printf.sprintf "__mma_dp + __mi * %d * %d + __ni * %d" tile ldd tile in
               let lines_before =
-                [
-                  barrier;
-                  Printf.sprintf "%s %s[%d][%d];" acc_frag fragment mt nt;
-                  Printf.sprintf "for (int __mi = 0; __mi < %d; ++__mi) {" mt;
-                  Printf.sprintf "  for (int __ni = 0; __ni < %d; ++__ni) {" nt;
-                ]
+                mma_d_table_lines ~acc_frag ~d_frag
+                @ [
+                    barrier;
+                    Printf.sprintf "%s %s[%d][%d];" acc_frag fragment mt nt;
+                    Printf.sprintf "for (int __mi = 0; __mi < %d; ++__mi) {" mt;
+                    Printf.sprintf "  for (int __ni = 0; __ni < %d; ++__ni) {" nt;
+                  ]
                 @ List.map
                     (mma_d_boundary_lines ~dir:`Load ~acc_frag ~d_frag
                        ~acc:(Printf.sprintf "%s[__mi][__ni]" fragment)
