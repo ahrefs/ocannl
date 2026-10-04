@@ -7,7 +7,7 @@ every index row names a file that carries what it claims: true
 every table is a table, row by row: true
 every notes file is reachable from the index, and links back: true
 no bullet is repeated across the notes: true
-no numeric GitHub citation uses an unqualified bare hash: true
+no source-level GitHub citation uses a bare hash or hashless work label: true
 every note anchor AGENTS.md or a tools script points at is a heading its note has: true
 every rule the scan names is reported over the live tree: true
 every finding carries one of the rules the scan names: true

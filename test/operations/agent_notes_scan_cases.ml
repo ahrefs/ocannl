@@ -850,6 +850,10 @@ let index_cases =
       index [ row "a.md" "the `Widget` seam" ],
       [ ("agent-notes/a.md", file "- A fact about `Widget` first established in #12.\n") ],
       [ "qualified-citations @ agent-notes/a.md:5" ] );
+    ( "a hashless citation reaches the whole scan",
+      index [ row "a.md" "the `Widget` seam" ],
+      [ ("agent-notes/a.md", file "- A fact about `Widget` first established in PR 12.\n") ],
+      [ "qualified-citations @ agent-notes/a.md:5" ] );
     (* Rule 5. A fact promoted into two files is a fact that will be corrected in one of them. *)
     ( "the same bullet in two files",
       index [ row "a.md" "the `Widget` seam"; row "b.md" "the `Gadget` seam" ],
@@ -1174,6 +1178,33 @@ let citation_cases =
     ( "compact PR and issue labels are still unqualified",
       "Regressions: PR#12 and issue#13.\n",
       [ "qualified-citations @ f.md:1"; "qualified-citations @ f.md:1" ] );
+    ( "literal hashless labels",
+      "Landed PR 553, fixing issue 12.\n",
+      [ "qualified-citations @ f.md:1"; "qualified-citations @ f.md:1" ] );
+    ( "hashless labels ignore case and accept spaces or tabs",
+      "pr  12; Issue\t13; ISSUE 14; Pr 15.\n",
+      List.init 4 ~f:(fun _ -> "qualified-citations @ f.md:1") );
+    ( "literal link labels remain unqualified even with a repository destination",
+      "[PR 12](https://github.com/lukstafi/ocannl-staging/pull/12).\n",
+      [ "qualified-citations @ f.md:1" ] );
+    ( "formatting around a whole literal label leaves the token intact",
+      "**issue 12**; (PR 13).\n",
+      [ "qualified-citations @ f.md:1"; "qualified-citations @ f.md:1" ] );
+    ( "hashless labels have whole identifier boundaries",
+      "myissue 12; _PR 13; issues 14; PRs 15; issue 16abc; PR 17_tag; PR18.\n",
+      [] );
+    ( "hashless code examples are inert",
+      "`PR 12` and ``issue 13``.\n```text\nPR 14 and issue 15\n```\n<!-- PR 16 -->\n",
+      [] );
+    ( "a code span may carry a hashless label across a line break",
+      "`example\nPR 12` and issue 13.\n",
+      [ "qualified-citations @ f.md:2" ] );
+    ( "the existing bare-hash rule still reads a decimal entity literally",
+      "PR &#49;2.\n",
+      [ "qualified-citations @ f.md:1" ] );
+    ( "rendered-only hashless labels are outside the source dialect",
+      "PR\n12; issue **13**; PR &#x31;4; PR&nbsp;15; PR\\ 16; <b>issue</b> 17.\n",
+      [] );
     ("the canonical issue and PR forms", "Facts: gh-ocannl-12; staging#12; ahrefs/ocannl#12.\n", []);
     ("a hash inside a code span", "The literal `#12` is example text.\n", []);
     ("a hash inside a fenced block", "```text\n#12 is fixture output\n```\n", []);
