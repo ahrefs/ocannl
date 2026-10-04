@@ -13,13 +13,6 @@ type destination = File | Stdout
 
 let destination_name = function File -> "file" | Stdout -> "stdout"
 
-let describe_status = function
-  | Unix.WEXITED n -> Printf.sprintf "exited %d" n
-  | Unix.WSIGNALED n -> Printf.sprintf "was killed by signal %d" n
-  | Unix.WSTOPPED n -> Printf.sprintf "was stopped by signal %d" n
-
-let ignore_unix f x = try f x with Unix.Unix_error _ -> ()
-
 type child_result = {
   status : Unix.process_status;
   emitted : string;
@@ -31,11 +24,6 @@ type child_result = {
    its debug runtime is first constructed. Capture both streams in files so neither pipe can fill
    while the parent is waiting on the other. *)
 let run_child ~destination ~location_format =
-  let exe =
-    let name = Stdlib.Sys.executable_name in
-    if Stdlib.Filename.is_relative name then Stdlib.Filename.concat (Stdlib.Sys.getcwd ()) name
-    else name
-  in
   let stem =
     Printf.sprintf "flushing_location_format_%s_%s" (destination_name destination) location_format
   in
@@ -53,18 +41,7 @@ let run_child ~destination ~location_format =
       "--ocannl_time_tagged=not_tagged";
     ]
   in
-  let capture suffix = Stdlib.Filename.temp_file "flushing_location_format" suffix in
-  let out_path = capture ".out" and err_path = capture ".err" in
-  let open_capture path = Unix.openfile path [ Unix.O_WRONLY; Unix.O_TRUNC ] 0o600 in
-  let out = open_capture out_path and err = open_capture err_path in
-  let pid = Unix.create_process exe (Array.of_list (exe :: args)) Unix.stdin out err in
-  let _, status = Unix.waitpid [] pid in
-  Unix.close out;
-  Unix.close err;
-  let stdout_text = Stdio.In_channel.read_all out_path in
-  let stderr_text = Stdio.In_channel.read_all err_path in
-  ignore_unix Unix.unlink out_path;
-  ignore_unix Unix.unlink err_path;
+  let status, stdout_text, stderr_text = Fresh_process.run args in
   let emitted =
     match destination with
     | Stdout -> stdout_text
@@ -77,13 +54,12 @@ let run_child ~destination ~location_format =
 let status_ok = function Unix.WEXITED 0 -> true | _ -> false
 
 let report_failure ~destination ~location_format result =
-  Stdio.eprintf
-    "%s flushing child with location_format=%s %s. Captured stdout:\n\
-     %sCaptured stderr:\n\
-     %sEmitted log:\n\
-     %s\n"
-    (destination_name destination) location_format (describe_status result.status)
-    result.stdout_text result.stderr_text result.emitted
+  Fresh_process.report
+    ~label:
+      (Printf.sprintf "%s flushing location_format=%s" (destination_name destination)
+         location_format)
+    (result.status, result.stdout_text, result.stderr_text);
+  Stdio.eprintf "Emitted child log:\n%s\n" (Fresh_process.prefixed result.emitted)
 
 let check_case ~destination ~location_format ~want_location =
   let result = run_child ~destination ~location_format in

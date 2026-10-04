@@ -52,6 +52,7 @@ backend_golden_family_scan.ml has exactly the explicitly assigned refusal contro
 backend_golden_family_scan.ml: [scanner-refusal:2fcd4d491da746e829dc7cec63905091] self-certifying and provenance (claim) is catalogued beside backend_golden_family_scan.expected: true
 bin_smoke_membership_scan.ml has exactly the explicitly assigned refusal controls: true
 bin_smoke_membership_scan.ml: [scanner-refusal:9446215c7b3c2270741bbb1cd8300733] executable exactly once (claim) is catalogued beside bin_smoke_membership_scan.expected, bin_smoke_membership_scan_control.expected: true
+bin_smoke_membership_scan.ml: [scanner-refusal:75093564cde01f102b3c81d2ebde6ccd] synthetic public executable (claim) is catalogued beside bin_smoke_membership_scan.expected, bin_smoke_membership_scan_control.expected: true
 changelog_unreleased_scan.ml has exactly the explicitly assigned refusal controls: true
 changelog_unreleased_scan.ml: [scanner-refusal:29e846ac8743ceba34a4cdcd5c90a431] CHANGES.md (claim) is catalogued beside changelog_unreleased_scan.expected: true
 changelog_unreleased_scan.ml: [scanner-refusal:2a02d6286a27aef4f8d7e61e279f8c4e] a two-space continuation (claim) is catalogued beside changelog_unreleased_scan.expected: true

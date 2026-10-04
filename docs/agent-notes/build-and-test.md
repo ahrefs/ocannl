@@ -3141,6 +3141,12 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
 
 ## Test support and placement
 
+- `Fresh_process` (gh-ocannl-910) owns synchronous fresh-child capture for host-only probes:
+  separate temporary stream files, absolute executable resolution, status-plus-causal-text matching
+  and exception cleanup. `report` prefixes every echoed child line, so its `STOPPED EARLY`, `FAIL:`
+  and `FAILED:` markers cannot be read as the parent's Verdict report by `tools/mutation-run.sh`.
+  Deadline, custom-environment and concurrent-process harnesses keep their own contracts.
+
 - `ll_test_ratchet` (gh-ocannl-964) derives test sources from `Source_inventory`, harness membership
   from owning Dune stanza groups (including parent `subdir` blocks and `select` target-to-arm
   relationships), and constructor names from

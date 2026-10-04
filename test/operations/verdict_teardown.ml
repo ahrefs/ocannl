@@ -17,38 +17,12 @@
 open Base
 open Verdict.Claims
 
-let ignore_unix f x = try f x with Unix.Unix_error _ -> ()
+let run_child mode = Fresh_process.run [ mode ]
 
-(* One child, its status and its two streams, kept apart and captured through temporary files (two
-   pipes read in sequence deadlock once the unread one fills). *)
-let run_child mode =
-  let exe = Stdlib.Sys.executable_name in
-  let capture suffix = Stdlib.Filename.temp_file "vt_child" suffix in
-  let out_path = capture ".out" and err_path = capture ".err" in
-  let open_capture p = Unix.openfile p [ Unix.O_WRONLY; Unix.O_TRUNC ] 0o600 in
-  let out = open_capture out_path and err = open_capture err_path in
-  let pid = Unix.create_process exe [| exe; mode |] Unix.stdin out err in
-  let _, status = Unix.waitpid [] pid in
-  Unix.close out;
-  Unix.close err;
-  let stdout_text = Stdio.In_channel.read_all out_path in
-  let stderr_text = Stdio.In_channel.read_all err_path in
-  ignore_unix Unix.unlink out_path;
-  ignore_unix Unix.unlink err_path;
-  (status, stdout_text, stderr_text)
-
-let describe_status = function
-  | Unix.WEXITED n -> Printf.sprintf "exited %d" n
-  | Unix.WSIGNALED n -> Printf.sprintf "was killed by signal %d" n
-  | Unix.WSTOPPED n -> Printf.sprintf "was stopped by signal %d" n
-
-(* A claim about one child. On failure the child's whole account goes to stderr, since it is what a
-   reader needs and it is withheld from passing runs only. *)
-let about mode claim (status, stdout_text, stderr_text) ~holds =
+(* Echoes are prefixed so a child's Verdict markers cannot become the parent's report. *)
+let about mode claim ((status, stdout_text, stderr_text) as child) ~holds =
   let ok = holds status stdout_text stderr_text in
-  if not ok then
-    Stdio.eprintf "child %s %s. stdout:\n%s\nstderr:\n%s\n" mode (describe_status status)
-      stdout_text stderr_text;
+  if not ok then Fresh_process.report ~label:("child " ^ mode) child;
   p claim ok
 
 let exited n status = Poly.equal status (Unix.WEXITED n)

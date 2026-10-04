@@ -1,0 +1,15 @@
+a refusal requires its exit status and causal diagnostic: true
+the same diagnostic at status 0 is not a refusal: true
+status 1 with another diagnostic is not the expected refusal: true
+diagnostics cannot match through the wrong stream: true
+large streams stay separate and do not fill an unread pipe: true
+capture files are removed after normal and faulted child statuses: true
+a relative executable still runs from another directory: true
+the parent directory is restored after a successful spawn: true
+spawn failure restores the parent directory: true
+spawn failure removes both capture files: true
+a bad child directory preserves the parent directory: true
+a bad child directory removes both capture files: true
+echoed child Verdict markers cannot become a parent's line-initial report: true
+no echoed child marker starts a parent log line: true
+diagnostic reporting also leaves no capture files: true
