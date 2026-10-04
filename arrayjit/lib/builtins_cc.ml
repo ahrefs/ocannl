@@ -50,6 +50,88 @@ let includes =
 |}
 
 (* Each entry is (key, definition, dependencies) *)
+(* One multiplication algorithm across dialects. The exponent is encoded exactly as two
+   unsigned 32-bit words times 2^shift; even the largest integral OCaml float fits without a
+   vendor integer-width assumption or narrowing the exponent to the base's precision. Bitwise
+   exceptional-value handling and final sign restoration survive fast math: HIP otherwise loses
+   (-0)^3 at half precision and turns double 1/0 into NaN (gh-ocannl-1185). *)
+let integer_power_builtins ~prefix ~supports_double ~dialect =
+  let make typ name int_typ sign_mask infinity_mask quiet_mask to_bits from_bits =
+    let read_bits var value =
+      match dialect with
+      | `C -> Printf.sprintf "%s %s; memcpy(&%s, &%s, sizeof(%s));" int_typ var var value var
+      | `Cuda_like | `Metal -> Printf.sprintf "%s %s = %s(%s);" int_typ var to_bits value
+    in
+    let return_bits bits =
+      match dialect with
+      | `C -> Printf.sprintf "%s value; memcpy(&value, &%s, sizeof(value)); return value;" typ bits
+      | `Cuda_like | `Metal -> Printf.sprintf "return %s(%s);" from_bits bits
+    in
+    ( name,
+      Printf.sprintf
+        {|%s %s %s(%s x, unsigned int lo, unsigned int hi, int shift, int negative) {
+  if (lo == 0u && hi == 0u) return (%s)1;
+  %s
+  %s magnitude_bits = bits & ~%s;
+  %s sign = (shift == 0 && (lo & 1u) != 0u) ? (bits & %s) : 0;
+  if (magnitude_bits > %s) {
+    %s result_bits = bits | %s;
+    %s
+  }
+  if (magnitude_bits == 0 || magnitude_bits == %s) {
+    %s result_bits = ((magnitude_bits == 0) == (negative != 0) ? %s : 0) | sign;
+    %s
+  }
+  %s result = (%s)1;
+  for (int i = 0; i < shift; ++i) x = x * x;
+  while (lo != 0u || hi != 0u) {
+    if ((lo & 1u) != 0u) result = result * x;
+    lo = (lo >> 1) | (hi << 31);
+    hi >>= 1;
+    if (lo != 0u || hi != 0u) x = x * x;
+  }
+  %s
+  magnitude_bits = result_bits & ~%s;
+  if (negative) {
+    if (magnitude_bits == 0 || magnitude_bits == %s) {
+      result_bits = (magnitude_bits == 0 ? %s : 0) | sign;
+      %s
+    }
+    result = (%s)1 / result;
+    %s
+    magnitude_bits = inverse_bits & ~%s;
+  }
+  result_bits = magnitude_bits | sign;
+  %s
+}|}
+        prefix typ name typ typ (read_bits "bits" "x") int_typ sign_mask int_typ sign_mask
+        infinity_mask int_typ quiet_mask (return_bits "result_bits") infinity_mask int_typ
+        infinity_mask (return_bits "result_bits") typ typ
+        (read_bits "result_bits" "result")
+        sign_mask infinity_mask infinity_mask (return_bits "result_bits") typ
+        (read_bits "inverse_bits" "result")
+        sign_mask (return_bits "result_bits"),
+      [] )
+  in
+  let f32_to_bits, f32_from_bits, f64_to_bits, f64_from_bits =
+    match dialect with
+    | `C -> ("", "", "", "")
+    | `Cuda_like ->
+        ("__float_as_uint", "__uint_as_float", "__double_as_longlong", "__longlong_as_double")
+    | `Metal -> ("as_type<uint>", "as_type<float>", "", "")
+  in
+  let single =
+    make "float" "ocannl_powi_f32" "unsigned int" "0x80000000u" "0x7f800000u" "0x00400000u"
+      f32_to_bits f32_from_bits
+  in
+  if supports_double then
+    [
+      single;
+      make "double" "ocannl_powi_f64" "unsigned long long" "0x8000000000000000ull"
+        "0x7ff0000000000000ull" "0x0008000000000000ull" f64_to_bits f64_from_bits;
+    ]
+  else [ single ]
+
 let builtins =
   [
     (* Float16 feature detection and type definitions *)
@@ -1587,5 +1669,8 @@ uint64_t uint4x32_to_uint64_uniform_lane(uint4x32_t x, int32_t lane) {
 |},
       [ "uint4x32_t"; "uint4x32_to_uint64_uniform_vec" ] );
   ]
+
+let builtins =
+  integer_power_builtins ~prefix:"static inline" ~supports_double:true ~dialect:`C @ builtins
 
 let source = includes ^ String.concat "" (List.map (fun (_, def, _) -> def) builtins)

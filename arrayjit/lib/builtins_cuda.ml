@@ -635,3 +635,8 @@ __device__ __forceinline__ double ocannl_shfl_xor(double v, int lane_mask) {
 }|},
       [ "uint4x32_t"; "arrayjit_threefry4x32_light" ] );
   ]
+
+let builtins =
+  Builtins_cc.integer_power_builtins ~prefix:"__device__ __forceinline__" ~supports_double:true
+    ~dialect:`Cuda_like
+  @ builtins

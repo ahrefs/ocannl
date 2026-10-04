@@ -7362,3 +7362,14 @@
     first-wins
     --ocannl_online_softmax=false
     --ocannl_online_softmax=true))))
+
+(test
+ (name integer_power_domain)
+ (package neural_nets_lib)
+ (modules integer_power_domain)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND)
+  (env_var OCANNL_BUILD_FILES_PREFIX)
+  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA))
+ (libraries base ocannl stdio arrayjit.verdict ll_test test_utils))

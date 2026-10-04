@@ -4237,6 +4237,13 @@ let simplify_llc ?fp_algebra static_indices llc =
     | Binop (Arg2, _, (llv2, prec2)) -> loop_scalar (llv2, prec2)
     | Binop ((Threefry4x32_crypto | Threefry4x32_light | Uint4x32_to_prec_uniform_lane), _, _) ->
         (llsc, prec)
+    | Binop (ToPowOf, (Constant _, prec1), (Constant exponent, prec2))
+      when Ops.is_float (Ops.promote_prec prec1 prec2)
+           && Float.is_finite exponent && Float.is_integer exponent ->
+        (* Host-float folding would multiply at f64, unlike the target's f32 helper for single and
+           narrow storage. Keep integer powers for codegen so constants and materialized bases share
+           the same multiplication and reciprocal rounding. *)
+        (llsc, prec)
     | Binop (op, (Constant c1, prec1), (Constant c2, prec2)) ->
         (Constant (Ops.interpret_binop op c1 c2), Ops.promote_prec prec1 prec2)
     | Binop (Add, (llsc, prec1), (Constant 0., _))
@@ -4326,10 +4333,31 @@ let simplify_llc ?fp_algebra static_indices llc =
         let ((v1_scalar, _) as v1) = loop_scalar llv1 in
         let v2 = loop_scalar llv2 in
         let result = (Binop (ToPowOf, v1, v2), prec) in
-        if (not !optimize_integer_pow) || not (licensed pow) then result
+        if
+          (not !optimize_integer_pow)
+          || (not (licensed pow))
+          || (Ops.is_float prec && match v1_scalar with Constant _ -> true | _ -> false)
+        then result
         else
           match v2 with
-          | Constant c, _ when Float.is_integer c ->
+          | Constant c, _
+            when Float.is_finite c && Float.is_integer c
+                 (* Negative powers keep the helper's reciprocal-after-positive-power order;
+                    [unroll_pow] instead reciprocates the base before multiplication. *)
+                 && Float.(c >= 0. && c <= 8.)
+                 &&
+                 let rec effect_free = function
+                   | Local_scope _ -> false
+                   | Binop (_, (a, _), (b, _)) -> effect_free a && effect_free b
+                   | Ternop (_, (a, _), (b, _), (c, _)) ->
+                       effect_free a && effect_free b && effect_free c
+                   | Unop (_, (a, _)) -> effect_free a
+                   | Get_dynamic { dyn_value = v, _; _ } -> effect_free v
+                   | Get _ | Get_local _ | Get_merge_buffer _ | Constant _ | Constant_bits _
+                   | Embed_index _ ->
+                       true
+                 in
+                 effect_free v1_scalar ->
               loop_scalar (unroll_pow ~base:v1_scalar ~exp:(Float.to_int c), prec)
           | _ -> result)
     | Binop (Add, (Binop (Mul, llv1, llv2), prec12), llv3)

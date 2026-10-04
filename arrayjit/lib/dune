@@ -113,7 +113,7 @@
  (preprocessor_deps
   (env_var OCANNL_LOG_LEVEL_CUDA_BACKEND))
  (modules cuda_backend builtins_cuda)
- (libraries base cudajit.cuda cudajit.nvrtc utils ir)
+ (libraries base cudajit.cuda cudajit.nvrtc utils ir builtins_cc)
  (preprocess
   (pps
    ppx_compare
@@ -131,7 +131,7 @@
  (preprocessor_deps
   (env_var OCANNL_LOG_LEVEL_HIP_BACKEND))
  (modules hip_backend builtins_hip)
- (libraries base hipjit.hip hipjit.hiprtc utils ir)
+ (libraries base hipjit.hip hipjit.hiprtc utils ir builtins_cc)
  (preprocess
   (pps
    ppx_compare
@@ -156,7 +156,7 @@
  (preprocessor_deps
   (env_var OCANNL_LOG_LEVEL_METAL_BACKEND))
  (modules metal_backend builtins_metal)
- (libraries base metal metal_math_api_runtime utils ir)
+ (libraries base metal metal_math_api_runtime utils ir builtins_cc)
  (preprocess
   (pps
    ppx_compare

@@ -1711,3 +1711,22 @@ files.
   The shared half RNG function returns `HALF_T`, while its OCaml wrapper explicitly extracts bits
   with `HALF_TO_UINT16`. `test_shared_builtins` executes separately compiled default and emulated
   half variants against the shipped stubs, with inlining disabled to exercise the C ABI.
+
+- Known integral `ToPowOf` constants render through `ocannl_powi_f32` or `ocannl_powi_f64`
+  independently of the optional power simplifier (gh-ocannl-1185): CUDA fast-math `powf` loses
+  negative bases even at exponent 2. `C_syntax` preserves all finite
+  integral host floats as two unsigned words and a shift, with one base evaluation. The shared
+  `Builtins_cc.integer_power_builtins` uses rounded squaring/multiplication followed by a reciprocal
+  for negative exponents, computes narrow storage in f32, and defines exponent zero as 1 even for
+  NaN. Bitwise classification and final sign restoration are required under HIP fast math:
+  the arithmetic-only helper lost half `(-0)^3`'s sign and produced NaN for double `0^-1`.
+  This is an integer multiplication policy, not a correctly rounded floating-pow promise;
+  fractional and dynamic exponents retain the vendor operation. Constant integer powers also stay
+  in the IR until codegen: host f64 folding would change the f32 multiplication rounding, so a
+  non-dyadic constant/materialized cubic comparison pins this boundary. Guard: `integer_power_domain`.
+  Recheck the base after recursive simplification too: an `Identity` wrapper can expose a constant
+  after the constant-pair guard. Execution and `debug_float` share `integer_power_doc`, so runtime
+  traces show the actual helper, exponent encoding and conversions rather than a vendor `pow` label.
+  Negative exponents also remain for the helper when power simplification is licensed: the old
+  linear unroller reciprocates the base first, changing overflow/underflow behavior relative to
+  reciprocating the positive power. Positive unrolling is bounded to exponents 0 through 8.

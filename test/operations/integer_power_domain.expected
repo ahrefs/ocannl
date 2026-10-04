@@ -1,0 +1,19 @@
+ipow_f32: integer powers match independent multiplication including exceptional values: true
+ipow_f32: known integers bypass floating pow: true
+constant integer powers remain at target precision through simplification: true
+constant and materialized integer powers share f32 multiplication rounding: true
+non-dyadic cubic rounds each target multiplication: true
+bases simplified to constants retain materialized target-precision rounding: true
+runtime debug trace names the same integer-power helper as executed code: true
+negative powers retain reciprocal-after-positive-power ordering when unrolling is enabled: true
+executed negative powers agree across simplifier configurations after positive-power overflow: true
+ipow_f16: integer powers match independent multiplication including exceptional values: true
+ipow_f16: known integers bypass floating pow: true
+ipow_f64: integer powers match independent multiplication including exceptional values: true
+ipow_f64: known integers bypass floating pow: true
+host interpretation accepts integral float exponents outside the machine-int range: true
+edge exponents preserve exact parity without integer overflow or float narrowing: true
+integer-power simplification retains a scoped base without duplicating its body: true
+scoped integer-power base produces the correct executed value with unrolling enabled: true
+scoped integer-power base remains a single helper argument with unrolling enabled: true
+fractional exponents retain vendor floating pow and its positive-base result: true

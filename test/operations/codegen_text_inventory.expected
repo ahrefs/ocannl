@@ -14,6 +14,7 @@ default_binop_syntax [Ir.C_syntax.default_binop_syntax]
 emit writes into ~buf [Ir.Low_level.Canonical_render.emit]
 function_header_doc [Ir.Low_level.function_header_doc]
 hardware_binding [Ir.C_syntax.C_syntax.hardware_binding]
+integer_power_doc [Ir.C_syntax.C_syntax.integer_power_doc]
 local_array_decl [Ir.C_syntax.C_syntax.local_array_decl]
 localize_or_serial [Ir.C_syntax.C_syntax.localize_or_serial]
 narrow_operand [Ir.C_syntax.C_syntax.narrow_operand]
@@ -196,6 +197,13 @@ test/operations/hardware_workgroup_reduce.ml
     "__syncthreads()"
     "threadgroup float partial_sums[64]"
     "threadgroup_barrier"
+test/operations/integer_power_domain.ml
+    ")["
+    "ipow_once_input["
+    "ocannl_powi_"
+    "ocannl_powi_f32("
+    "pow("
+    "powf("
 test/operations/ll_printer_constants.ml [renders generated text in memory; also pins text this scan cannot name]
     " := "
 test/operations/narrow_storage_compute.ml
