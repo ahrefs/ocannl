@@ -33,3 +33,7 @@ failed sibling release: releasing the first sibling twice changes no census stat
 failed sibling release: the last release frees all four pools exactly once: true
 failed sibling release: both independent leaves are retired: true
 failed sibling release: the last release is idempotent: true
+repeated sibling retirement preserves logarithmic upload pool growth: true
+every surviving upload remains intact after repeated sibling retirement: true
+the routine reads every surviving upload within the pool binding budget: true
+repeated sibling retirement leaves no working pools or context owners: true

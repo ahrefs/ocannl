@@ -103,7 +103,9 @@ files.
   leaves share (gh-ocannl-1173). Linear uploads supersede their intermediate values without retaining
   extra owners. Failed cleanup remembers retired references alongside freed pools, so retry cannot
   decrement twice. Within a lifecycle only a value holding an
-  arena's `last_tenant` extends it, so two sibling uploads cannot reuse the same tail. A failed upload into an existing arena rolls
+  arena's latest tenant extends it, so two sibling uploads cannot reuse the same tail. The arena's
+  tenant history is trimmed against surviving owner maps on retirement, allowing the survivor to
+  reuse a released tail instead of stranding one pool per fork. A failed upload into an existing arena rolls
   its bump back and frees nothing; `finalize` removes an arena only when its last owner frees the
   slab. Release only the latest value in each linear upload chain. Guard: `test/operations/set_values_pool_coalescing.ml`, plus the arena leg of
   `resource_fault_injection`.

@@ -24,13 +24,9 @@ type upload_arena = {
       (** The residency hint the arena's slab was allocated with; only nodes with the same hint
           share it. *)
   capacity : int;
-  mutable used : int;  (** The bump pointer: bytes laid out so far, alignment padding included. *)
-  mutable last_tenant : (Tnode.t[@sexp.opaque]);
-      (** The node laid out last. Only a context value holding it may extend the arena -- and one
-          that does holds every earlier tenant too, since each extension required the same of the
-          value it extended and a derivation never drops a buffer. Appending advances this tenant,
-          so another sibling cannot reuse that same tail. Pool reference counts keep earlier tenants
-          alive until their last upload sibling releases them. *)
+  mutable tenants : ((Tnode.t[@sexp.opaque]) * int) list;
+      (** Newest first: each tenant and the bump pointer just after its allocation. Retirement trims
+          the tail until it reaches a tenant still held by a surviving pool owner. *)
 }
 [@@deriving sexp_of]
 (** A working pool that host uploads of not-yet-allocated nodes are bump-packed into
@@ -41,9 +37,10 @@ type upload_arena = {
 type upload_arenas = {
   mutable arenas : upload_arena list;
   owners_mutex : (Stdlib.Mutex.t[@sexp.opaque]);
-  pool_owners : (int, int) Hashtbl.t;
-      (** Counts upload-lineage leaves that own each working pool. Compile descendants have a
-          separate table and retain the existing leaf-release precondition. *)
+  pool_owners : (int, ctx_buffers ref list) Hashtbl.t;
+      (** Current maps of upload-lineage leaves owning each pool. References let a linear upload
+          update its owner without adding one; forks retain independently. Lifecycle descendants
+          have a separate table and retain the existing leaf-release precondition. *)
 }
 [@@deriving sexp_of]
 (** Upload arenas shared by an upload lineage. Sibling leaves share the pool ownership table, while
@@ -725,6 +722,7 @@ let owned_pool_ids ~device ~owned_elsewhere ctx_buffers =
 let evolve_with_buffer ctx tn loc =
   let ctx_buffers = Map.add_exn ctx.ctx_buffers ~key:tn ~data:loc in
   let fork = not (phys_equal ctx.ctx_buffers !(ctx.upload_tip)) in
+  let upload_tip = if fork then ref ctx_buffers else ctx.upload_tip in
   Stdlib.Mutex.protect ctx.upload_arenas.owners_mutex (fun () ->
       let owners = ctx.upload_arenas.pool_owners in
       if fork then (
@@ -733,10 +731,16 @@ let evolve_with_buffer ctx tn loc =
               Option.exists ctx.parent ~f:(fun pc -> Map.mem pc.ctx_buffers key))
         in
         Set.iter (owned !(ctx.upload_tip)) ~f:(fun pool_id ->
-            Hashtbl.find_or_add owners pool_id ~default:(fun () -> 1) |> (ignore : int -> unit));
+            Hashtbl.find_or_add owners pool_id ~default:(fun () -> [ ctx.upload_tip ])
+            |> (ignore : ctx_buffers ref list -> unit));
         Set.iter (owned ctx_buffers) ~f:(fun pool_id ->
-            Hashtbl.update owners pool_id ~f:(function None -> 1 | Some n -> n + 1)))
-      else Hashtbl.find_or_add owners loc.pool_id ~default:(fun () -> 1) |> (ignore : int -> unit));
+            Hashtbl.update owners pool_id ~f:(function
+              | None -> [ upload_tip ]
+              | Some tips -> upload_tip :: tips)))
+      else (
+        Hashtbl.find_or_add owners loc.pool_id ~default:(fun () -> [ upload_tip ])
+        |> (ignore : ctx_buffers ref list -> unit);
+        upload_tip := ctx_buffers));
   if fork then (
     Alloc_census.count_context_created ();
     {
@@ -744,11 +748,9 @@ let evolve_with_buffer ctx tn loc =
       ctx_buffers;
       finalized = Atomic.make false;
       released_pool_ids = Set.empty (module Int);
-      upload_tip = ref ctx_buffers;
+      upload_tip;
     })
-  else (
-    ctx.upload_tip := ctx_buffers;
-    { ctx with ctx_buffers })
+  else { ctx with ctx_buffers }
 
 module type Device_types = sig
   include Device_config_common

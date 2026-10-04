@@ -501,21 +501,19 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
       [%equal: Tn.memory_mode option] a.arena_mode mode
     in
     let fits (a : Backend_intf.upload_arena) =
+      let last_tenant, used = List.hd_exn a.tenants in
       same_mode a
-      && align_up a.used + size_in_bytes <= a.capacity
-      && Map.mem ctx.ctx_buffers a.last_tenant
+      && align_up used + size_in_bytes <= a.capacity
+      && Map.mem ctx.ctx_buffers last_tenant
     in
     match List.find arenas.arenas ~f:fits with
     | Some a ->
-        let before = a.used and before_tenant = a.last_tenant in
-        let offset = align_up before in
-        a.used <- offset + size_in_bytes;
-        a.last_tenant <- tn;
-        let release () =
-          if a.used = offset + size_in_bytes then (
-            a.used <- before;
-            a.last_tenant <- before_tenant)
-        in
+        let before = a.tenants in
+        let _, used = List.hd_exn before in
+        let offset = align_up used in
+        let appended = (tn, offset + size_in_bytes) :: before in
+        a.tenants <- appended;
+        let release () = if phys_equal a.tenants appended then a.tenants <- before in
         ({ pool_id = a.arena_pool_id; offset }, release)
     | None ->
         let cap = pool_cap () in
@@ -537,8 +535,7 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
             arena_pool_id = pool_id;
             arena_mode = mode;
             capacity;
-            used = size_in_bytes;
-            last_tenant = tn;
+            tenants = [ (tn, size_in_bytes) ];
           }
         in
         arenas.arenas <- a :: arenas.arenas;
@@ -1389,8 +1386,19 @@ let finalize (type dev runner event)
         Stdlib.Mutex.protect ctx.upload_arenas.owners_mutex (fun () ->
             Set.iter pools ~f:(fun pool_id ->
                 if not (Set.mem ctx.released_pool_ids pool_id) then (
-                  let n = Option.value (Hashtbl.find owners pool_id) ~default:1 in
-                  if n > 1 then Hashtbl.set owners ~key:pool_id ~data:(n - 1)
+                  let tips =
+                    Option.value (Hashtbl.find owners pool_id) ~default:[ ctx.upload_tip ]
+                  in
+                  let remaining =
+                    List.filter tips ~f:(fun tip -> not (phys_equal tip ctx.upload_tip))
+                  in
+                  if not (List.is_empty remaining) then (
+                    Hashtbl.set owners ~key:pool_id ~data:remaining;
+                    List.iter ctx.upload_arenas.arenas ~f:(fun a ->
+                        if a.arena_pool_id = pool_id then
+                          a.tenants <-
+                            List.drop_while a.tenants ~f:(fun (tn, _) ->
+                                not (List.exists remaining ~f:(fun tip -> Map.mem !tip tn)))))
                   else (
                     Resource_fault_injection.hit Finalize_before_free;
                     free_and_forget_pool ctx.device ~free_pool pool_id;

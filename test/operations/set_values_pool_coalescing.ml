@@ -201,3 +201,54 @@ let () =
   sibling_release ~reverse:false ~fail:false;
   sibling_release ~reverse:true ~fail:false;
   sibling_release ~reverse:true ~fail:true
+
+(* Review round 1: an abandoned sibling must not pin an arena's last tenant. Repeatedly fork after
+   appending to the current tail, then retire that append's owner. The surviving uploads should
+   reuse restored tails and stay within Metal's binding budget. *)
+let () =
+  let module AC = Ir.Alloc_census in
+  let zeros =
+    Ir.Ndarray.init_array ~debug:"svpc_tail" Ir.Ops.single ~dims:[| len |] ~padding:None
+  in
+  let fresh l = TDSL.wrap_param ~l ~o:[ len ] (zeros ~f:(fun _ -> 0.)) () in
+  let initial = List.init 3 ~f:(fun k -> fresh (Printf.sprintf "svpc_tail_initial%d" k)) in
+  let survivors = List.init n ~f:(fun k -> fresh (Printf.sprintf "svpc_tail_live%d" k)) in
+  let before = AC.snapshot () in
+  let ctx =
+    List.foldi initial ~init:(Context.auto ()) ~f:(fun k ctx p ->
+        Context.set_values ctx p.Tensor.value (values k))
+  in
+  let ctx =
+    List.foldi survivors ~init:ctx ~f:(fun k ctx live ->
+        let abandoned = fresh (Printf.sprintf "svpc_tail_abandoned%d" k) in
+        let discard = Context.set_values ctx abandoned.Tensor.value (values (k + 100)) in
+        let survivor = Context.set_values ctx live.Tensor.value (values (k + 3)) in
+        Context.release discard;
+        survivor)
+  in
+  let held = AC.snapshot () in
+  let params = initial @ survivors in
+  p "repeated sibling retirement preserves logarithmic upload pool growth"
+    (held.live_working_pools - before.live_working_pools <= 2 + ceil_log2 (List.length params));
+  p_alli "every surviving upload remains intact after repeated sibling retirement" params
+    ~f:(fun k p -> Array.equal Float.equal (Context.get_values ctx p.Tensor.value) (values k));
+  let%op sum = List.reduce_exn params ~f:(fun a b -> a + b) in
+  Train.set_materialized sum.Tensor.value;
+  let compiled, routine =
+    Context.compile ~name:"svpc_tail_sum" ctx (Train.forward sum) Ir.Indexing.Empty
+  in
+  let compiled = Context.run compiled routine in
+  let expected =
+    Array.init len ~f:(fun i ->
+        List.sum (module Float) (List.init (List.length params) ~f:Fn.id) ~f:(fun k -> value k i))
+  in
+  p_all2 "the routine reads every surviving upload within the pool binding budget"
+    (Context.get_values compiled sum.Tensor.value)
+    expected ~f:Float.equal;
+  Context.release compiled;
+  Context.release ctx;
+  let after = AC.snapshot () in
+  p "repeated sibling retirement leaves no working pools or context owners"
+    (after.live_working_pools = before.live_working_pools
+    && after.live_working_bytes = before.live_working_bytes
+    && AC.unreleased_contexts after = AC.unreleased_contexts before)
