@@ -1,5 +1,9 @@
 # gh-ocannl-546 on Metal: the placement A/B is right, and it is not where tensorization is decided
 
+> **Fixture provenance: unverifiable** (gh-ocannl-919). Original measured files for this historical Metal report
+> were not recovered. Later `content-v1` M4 baselines do not certify these numbers.
+> See the [historical provenance audit](README.md#historical-metal-fixture-provenance).
+
 Measurement-only report. The subject is the cell [example-report.md](example-report.md) singled out:
 `mlp_small` / metal / tuned / f16, where arm B crowned `F_sketch[mma-gpu 16x32x32 ep]` at 1.6484 ms
 and arm A won the placement A/B at 0.9915 ms, so no Metal shipping artifact contained a `Tensorize`.
