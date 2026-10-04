@@ -31,10 +31,11 @@
 #   tools/ci-durations.sh --event schedule       # the extended (Windows) matrix
 #   tools/ci-durations.sh --branch master --job ubuntu --step 'Run (targets=|opam exec -- dune build)'
 #
-# A step sample requires all matching intervals to be usable. Job/share/rest
+# A step sample requires all executed matching intervals to be usable. Job/share/rest
 # samples additionally require a positive job interval and a sum within it.
 # Failed/cancelled jobs with usable times stay grouped by job conclusion;
-# skipped steps never contribute, even when they have placeholder timestamps.
+# skipped alternatives are excluded, even with placeholder timestamps; an
+# all-skipped selection is unavailable.
 # Step names matched in each group are printed so renames remain visible.
 # The share is calculated per job, then summarized (not a ratio of medians).
 #

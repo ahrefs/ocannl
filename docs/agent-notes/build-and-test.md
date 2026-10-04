@@ -2128,7 +2128,8 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   accepts `--job REGEX` and `--step REGEX` (Python regex search); the latter sums matching steps
   per job and reports step minutes plus paired job/rest minutes and per-job share percentages.
   Select renamed steps with an alternation; matched names and missing/unusable/unpaired counts
-  stay visible. Skipped steps are unavailable; cancelled/failed jobs with usable times remain
+  stay visible. Skipped alternatives are excluded before interval completeness; all-skipped
+  selections stay unavailable. Cancelled/failed jobs with usable times remain
   separate conclusion groups. A share/rest sample needs a positive job interval and a step sum
   no larger than it. Medians summarize per-job shares, not a ratio of aggregate medians.
   `tools/test-ci-durations.sh` runs synthetic cross-run API fixtures in the shell-harness CI step.

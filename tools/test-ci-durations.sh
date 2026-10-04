@@ -47,6 +47,16 @@ for i, (total, seconds, name, conclusion) in enumerate([
     steps = [] if name is None else [dict(name=name, started_at=stamp(0),
         completed_at=None if seconds is None else stamp(seconds),
         conclusion='skipped' if i == 6 else conclusion)]
+    if i == 1:
+        # Two executed matches sum to the same 600s; this pins the combination.
+        steps[0]['completed_at'] = stamp(300)
+        steps.append(dict(name='Dune checks', started_at=stamp(300),
+            completed_at=stamp(600), conclusion='success'))
+    if i == 2:
+        # GitHub lists the other conditional build action as skipped. Even
+        # measurable-looking placeholders must not spoil the executed match.
+        steps.append(dict(name='Build and test', started_at=stamp(0),
+            completed_at=stamp(600), conclusion='skipped'))
     job = dict(name='Ubuntu', status='completed', conclusion=conclusion,
         started_at=stamp(0), completed_at=stamp(total), steps=steps)
     other = dict(job, name='macOS')
@@ -133,4 +143,15 @@ if oracle "$TMP/sign-mutant/ci-durations.sh" negative; then
 elif [ "$(cat "$TMP/runs/negative/rc")" = 0 ] && grep -q 'step: 4 -0.0' "$TMP/runs/negative/stdout"; then
   report 0 "negative control: shared interval sign guard changes measured population"
 else report 1 "sign mutation rejected for unrelated reason"; fi
+# Restoring inclusion of skipped alternatives must change the sample population.
+mkdir -p "$TMP/skip-mutant"
+cp "$HERE/ci-durations.sh" "$TMP/skip-mutant/ci-durations.sh"
+sed 's/selected = \[s for s in selected if s.get("conclusion") != "skipped"\]/selected = selected/' \
+  "$HERE/ci-timing.py" >"$TMP/skip-mutant/ci-timing.py"
+if oracle "$TMP/skip-mutant/ci-durations.sh" skipped-alternative; then
+  report 1 "negative control: skipped alternatives excluded"
+elif [ "$(cat "$TMP/runs/skipped-alternative/rc")" = 0 ] \
+  && grep -q 'step: 3 0.0 10.0 18.0' "$TMP/runs/skipped-alternative/stdout"; then
+  report 0 "negative control: skipped alternatives change the measured population"
+else report 1 "skip mutation rejected for unrelated reason"; fi
 finish

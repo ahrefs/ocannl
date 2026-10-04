@@ -94,7 +94,11 @@ def durations(jobs, header, job_re, step_re):
                 if not selected:
                     counts["missing"] += 1
                     continue
-                values = [duration(s) if s.get("conclusion") != "skipped" else None for s in selected]
+                selected = [s for s in selected if s.get("conclusion") != "skipped"]
+                if not selected:
+                    counts["unusable"] += 1
+                    continue
+                values = [duration(s) for s in selected]
                 if any(d is None for d in values):
                     counts["unusable"] += 1
                     continue
