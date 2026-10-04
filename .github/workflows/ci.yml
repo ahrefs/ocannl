@@ -605,10 +605,10 @@ jobs:
         test -n "$ocamlformat_version"
         test "$ocamlformat_versions" = "$ocamlformat_version"
         opam install dune "ocamlformat=$ocamlformat_version"
-    # After the install: the controls' post-`dune fmt` legs need dune and
-    # ocamlformat, and skip without them (gh-ocannl-1155).
-    - name: Test formatting gate controls
-      run: tools/test-fmt-check.sh
+    # After the install: formatter cache controls need dune and ocamlformat,
+    # and promotion fixtures need dune. The same manifest runs locally.
+    - name: Test toolchain harnesses
+      run: tools/test-harnesses.sh --toolchain
     - name: Check formatting and documentation comments
       run: tools/fmt-check.sh
 
@@ -642,21 +642,8 @@ jobs:
     - uses: actions/checkout@v7
       with:
         ref: ${{ inputs.expected_sha }}
-    - name: Test pin-revisions action
-      run: tools/test-pin-revisions.sh
     - name: Test shell harnesses
-      run: |
-        failures=0
-        scripts/test-harness-support.sh || failures=$((failures + 1))
-        tools/test-test-run.sh || failures=$((failures + 1))
-        tools/test-mutation-run.sh || failures=$((failures + 1))
-        scripts/test-setup-ocaml-env.sh || failures=$((failures + 1))
-        tools/test-ci-times.sh || failures=$((failures + 1))
-        tools/test-ci-durations.sh || failures=$((failures + 1))
-        tools/test-ci-shard.sh || failures=$((failures + 1))
-        test/operations/ci_matrix.sh || failures=$((failures + 1))
-        tools/test-machine-verify.sh || failures=$((failures + 1))
-        exit $((failures > 0 ? 1 : 0))
+      run: tools/test-harnesses.sh --shell
 
   # A red on master is nobody's to sit and watch: merging sessions do not poll
   # CI after landing (roll-forward, ahrefs/ocannl#861). Instead this job fires
