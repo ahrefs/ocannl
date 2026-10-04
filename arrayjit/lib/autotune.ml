@@ -151,6 +151,7 @@ type report = {
   outcome : outcome;
   candidates_timed : int;
   timings_contended : int;
+  timings_retried : int;
   timings_unbatched : int;
   candidates_contended : int;
   default_refused : bool;
@@ -226,6 +227,7 @@ let no_search_report ~timing =
     outcome = Search_disabled;
     candidates_timed = 0;
     timings_contended = 0;
+    timings_retried = 0;
     timings_unbatched = 0;
     candidates_contended = 0;
     default_refused = false;
@@ -834,7 +836,8 @@ let on_calibration_probe : (calibration_probe -> unit) ref = ref (fun _ -> ())
    returns the wall in milliseconds. Separated from [time_routine] so a test can drive the whole
    policy -- which depth a call settles on, which window it times, how many launches each costs --
    on an injected clock, with no device and no machine-dependent routine (gh-ocannl-1074). *)
-let calibrate_and_time ~retry_contended ~timing ~repeats ~queue_depth_cap ~batch =
+let calibrate_and_time_with_retry_observer ~on_retry ~retry_contended ~timing ~repeats
+    ~queue_depth_cap ~batch =
   (* Every finite positive batch minimum the calibration measured, as [(depth, wall)]: the evidence
      that bounds an unresolved calibration's fallback depth. *)
   let observed = ref [] and no_supported_batch = ref false in
@@ -1226,6 +1229,7 @@ let calibrate_and_time ~retry_contended ~timing ~repeats ~queue_depth_cap ~batch
          Metal scheduler burst; mixing windows would instead dilute its refusal evidence. Depth-1
          retries must likewise dispatch fresh singles rather than resume the refused ones. *)
       logf "queued timing retry: contention refused the first window (%d samples)" result.samples;
+      on_retry ();
       !on_timing_retry ~samples:result.samples ~reused:(List.length reused);
       time_window [])
     else window
@@ -1239,9 +1243,16 @@ let calibrate_and_time ~retry_contended ~timing ~repeats ~queue_depth_cap ~batch
     { result with unbatched = true })
   else result
 
+(* Preserve the original all-labelled helper's source interface: an optional observer would not
+   erase without adding a positional argument. *)
+let calibrate_and_time ~retry_contended ~timing ~repeats ~queue_depth_cap ~batch =
+  calibrate_and_time_with_retry_observer
+    ~on_retry:(fun () -> ())
+    ~retry_contended ~timing ~repeats ~queue_depth_cap ~batch
+
 (* [routine.bindings] exposes the routine's live binding refs — restore them after timing (Codex P2
    on PR #103), or the returned winner would stay bound to the tuner's midpoint test values. *)
-let time_routine ?(tag_failures = false) ~timing ~repeats cctx routine =
+let time_routine ?(on_retry = fun () -> ()) ?(tag_failures = false) ~timing ~repeats cctx routine =
   let saved_bindings = List.map routine.Context.bindings ~f:(fun (_ss, r) -> (r, !r)) in
   let run ctx =
     if tag_failures then Outcome.tag Outcome.Launch (fun () -> Context.run ctx routine)
@@ -1280,7 +1291,7 @@ let time_routine ?(tag_failures = false) ~timing ~repeats cctx routine =
         sync !ctx;
         Mtime.Span.to_float_ns (Mtime_clock.count c0) /. 1e6
       in
-      calibrate_and_time ~timing ~repeats
+      calibrate_and_time_with_retry_observer ~on_retry ~timing ~repeats
         ~retry_contended:(retry_contended_window_for_backend (Context.backend_name cctx))
         ~queue_depth_cap:(queue_depth_cap_for_backend (Context.backend_name cctx))
         ~batch)
@@ -3613,9 +3624,11 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
   let emit_report (r : report) =
     progress_line "search_done"
       (Printf.sprintf
-         "outcome=%s timed=%d contended=%d unbatched=%d failed=%d rounds=%d %s best_ms=%s best=%S"
-         (outcome_name r.outcome) r.candidates_timed r.timings_contended r.timings_unbatched
-         r.candidates_failed r.rounds_run (progress_costs ()) (progress_ms r.best_ms) r.best_label);
+         "outcome=%s timed=%d contended=%d timings_retried=%d unbatched=%d failed=%d rounds=%d %s \
+          best_ms=%s best=%S"
+         (outcome_name r.outcome) r.candidates_timed r.timings_contended r.timings_retried
+         r.timings_unbatched r.candidates_failed r.rounds_run (progress_costs ())
+         (progress_ms r.best_ms) r.best_label);
     Option.iter report ~f:(fun f -> f r)
   in
   (* [tune] reports exactly once per call, on every path (gh-ocannl-550). The failures that happen
@@ -3628,8 +3641,16 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
      at launch, at sync — instead of guessing. Reporting is best-effort here, as on the search's own
      fatal path: it must not replace the compiler failure. [base] carries whatever the call did
      learn before failing (e.g. a decline census). *)
+  let n_timings_retried = ref 0 in
+  let on_retry () = Int.incr n_timings_retried in
   let emit_pre_search_failure ?(base = base_report) ~phase ~candidate ~detail () =
-    let r = { base with outcome = Pre_search_failure { phase; candidate; detail } } in
+    let r =
+      {
+        base with
+        outcome = Pre_search_failure { phase; candidate; detail };
+        timings_retried = !n_timings_retried;
+      }
+    in
     try emit_report r
     with report_exn when not (process_fatal_exn report_exn) ->
       Stdio.eprintf "autotune: pre-search failure report callback failed: %s\n%!"
@@ -3948,6 +3969,7 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                     timing;
                     candidates_timed = 0;
                     timings_contended = 0;
+                    timings_retried = 0;
                     timings_unbatched = 0;
                     candidates_contended = 0;
                     default_refused = false;
@@ -4152,7 +4174,7 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                 Outcome.tag Outcome.Preflight (fun () ->
                     Context.check_lineage_runnable b.cctx b.routine);
                 progress_stage "baseline_timing";
-                time_routine ~tag_failures:true ~timing ~repeats b.cctx b.routine
+                time_routine ~on_retry ~tag_failures:true ~timing ~repeats b.cctx b.routine
               with
               | timing_result -> (
                   let timing_result =
@@ -4423,6 +4445,7 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
             timing;
             candidates_timed = !n_timed;
             timings_contended = !n_timings_contended;
+            timings_retried = !n_timings_retried;
             timings_unbatched = !n_timings_unbatched;
             candidates_contended = candidates_contended ();
             default_refused = default_refused ();
@@ -4603,7 +4626,8 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                         ~provenance:Outcome.Candidate ~phase:Outcome.Launch
                         ~candidate:(spec_label spec) (fun () ->
                           timed_into progress_timing_s (fun () ->
-                              time_routine ~tag_failures:true ~timing ~repeats c.cctx c.routine))
+                              time_routine ~on_retry ~tag_failures:true ~timing ~repeats c.cctx
+                                c.routine))
                       (* Outside the boundary: the seam is not a candidate failure to classify. *)
                       |> Result.map
                            ~f:
@@ -5278,6 +5302,7 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
               timing;
               candidates_timed = !n_timed;
               timings_contended = !n_timings_contended;
+              timings_retried = !n_timings_retried;
               timings_unbatched = !n_timings_unbatched;
               candidates_contended = candidates_contended ();
               default_refused = default_refused ();

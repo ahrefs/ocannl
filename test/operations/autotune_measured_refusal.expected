@@ -1,6 +1,7 @@
 the seam saw the default seed's window: true
 the search completed: true
 default_refused: true
+every started retry is retained in the search report: true
 at least one window was refused: true
 every refused window is one the seam or the host refused: true
 the unmeasured candidates are the default and at most the host's refusals: true

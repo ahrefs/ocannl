@@ -443,6 +443,11 @@ let () =
          "search-disabled";
          (if cache_committed then "cache-replay" else "search-disabled");
        ]);
+  p_all "cache replay and search-disabled calls retry no timing windows" named_states
+    ~f:(fun (_, r) ->
+      match r.Autotune.outcome with
+      | Autotune.Cache_replay | Autotune.Search_disabled -> r.timings_retried = 0
+      | _ -> true);
   p_all "a report that neither searched nor replayed timed nothing" named_states ~f:(fun (_, r) ->
       match r.Autotune.outcome with
       | Autotune.Searched | Autotune.Search_died _ | Autotune.Abandoned _ | Autotune.Cache_replay ->

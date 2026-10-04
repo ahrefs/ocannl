@@ -3,6 +3,7 @@ every progress line has the documented shape: true
 wall_s never decreases from one line to the next: true
 one search_start and one search_done per report: true
 each search_done names its report's outcome and timed count: true
+each search_done retains its report's retried timing windows: true
 each search printed one candidate line per attempt it reports: true
 each search names its base compile before starting it: true
 every candidate line names the attempt it starts: true

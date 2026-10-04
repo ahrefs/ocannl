@@ -957,8 +957,11 @@ files.
   `time_routine` instead enables one retry at the same calibrated depth, with the same sample
   budget and 2x-majority rule. The windows are never pooled: the first is discarded and the
   retry's own verdict reaches ranking and refusal accounting. Persistent contention still refuses
-  once and prevents caching; a recovered window leaves the candidate measured. A depth-one
-  retry takes fresh singles instead of resuming the refused calibration window. Only finite
+  once and prevents caching; a recovered window leaves the candidate measured.
+  `report.timings_retried` and the closing log count discarded first windows even when their
+  retries recover (gh-ocannl-1191); final refusals alone still govern cache admission. Retries
+  count as they start, so partial/fatal reports retain them too; diagnostic control timing is
+  excluded. A depth-one retry takes fresh singles instead of resuming the refused calibration window. Only finite
   positive contention readings qualify, not an unresolved clock.
   `on_timing_retry` accounts for the discarded window's extra dispatches, while
   `on_timed_window` describes only the returned window; `autotune_measured_refusal` labels the

@@ -144,6 +144,9 @@ let () =
     (Array.of_list reports) ~f:(fun (_, f) (r : Autotune.report) ->
       Option.equal String.equal (field f "outcome") (Some (Autotune.outcome_name r.outcome))
       && Option.equal Int.equal (int_field f "timed") (Some r.candidates_timed));
+  p_all2 "each search_done retains its report's retried timing windows" (Array.of_list dones)
+    (Array.of_list reports) ~f:(fun (_, f) (r : Autotune.report) ->
+      Option.equal Int.equal (int_field f "timings_retried") (Some r.timings_retried));
   let candidates s = List.filter s ~f:(fun (ev, _) -> String.equal ev "candidate") in
   p_all "each search printed one candidate line per attempt it reports" searches ~f:(fun s ->
       let _, done_fields = List.last_exn s in
