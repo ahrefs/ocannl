@@ -589,6 +589,49 @@ let () =
   ignore (Generated.read "r");
   p "marker" (String.is_substring (read buf) ~substring:"buffer marker")|ocaml},
       "+partial" );
+    ( "a buffer-returning helper preserves inputs used by earlier writes with explicit uncertainty",
+      {ocaml|let render doc =
+  let buf = Buffer.create 100 in
+  PPrint.ToBuffer.pretty 0.7 100 buf doc;
+  Buffer.contents buf
+let src = render (LL.to_doc value)
+let () = p "marker" (String.is_substring src ~substring:"buffered document marker")|ocaml},
+      {|"buffered document marker" +partial +rendered|} );
+    ( "a helper result depends only on its returned formal argument",
+      {ocaml|let first x ignored = x
+let src = first backend_name (Generated.read "r")
+let () = p "ordinary" (String.is_substring src ~substring:"not a returned pin")|ocaml},
+      "" );
+    ( "the returned formal still carries generated provenance past an ignored ordinary argument",
+      {ocaml|let first x ignored = x
+let src = first (Generated.read "r") backend_name
+let () = p "marker" (String.is_substring src ~substring:"returned formal marker")|ocaml},
+      {|"returned formal marker"|} );
+    ( "a constant-returning helper does not borrow generated argument provenance",
+      {ocaml|let ordinary src = backend_name
+let src = ordinary (Generated.read "r")
+let () = p "ordinary" (String.is_substring src ~substring:"constant is not a pin")|ocaml},
+      "" );
+    ( "exception match patterns are independent of the successful generated result",
+      {ocaml|let () = match Generated.read "r" with
+  | src -> p "marker" (String.is_substring src ~substring:"successful result marker")
+  | exception Failure msg -> p "exception" (String.is_substring msg ~substring:"ordinary exception marker")|ocaml},
+      {|"successful result marker"|} );
+    ( "a selected optional default leaves no callable identity on the completed boolean",
+      {ocaml|let has ?(marker = "selected default marker") src () =
+  String.is_substring src ~substring:marker
+let () = let ok = has (Generated.read "r") () in p "marker" ok|ocaml},
+      {|"selected default marker"|} );
+    ( "an ordinary replacement retains uncertainty without contributing a body literal",
+      {ocaml|let has src = let src = backend_name in String.is_substring src ~substring:"cuda"
+let () = p "ordinary" (has (Generated.read "r"))|ocaml},
+      "+partial" );
+    ( "an aliased ordinary replacement retains uncertainty without contributing a body literal",
+      {ocaml|let has src =
+  let src = String.lowercase backend_name in
+  let alias = src in String.is_substring alias ~substring:"cuda"
+let () = p "ordinary" (has (Generated.read "r"))|ocaml},
+      "+partial" );
     ( "a helper-local generated read propagates through normalization aliases",
       {ocaml|let check ~routine ~marker =
   let src = Generated.read routine in

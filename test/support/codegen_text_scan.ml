@@ -557,15 +557,26 @@ let renders_generated_text ~emitters ~aliases expr =
   iterator#expression expr;
   !found
 
+type parameter_destination = {
+  destination : destination;
+  default : expression option;
+  position : int;
+  optional : bool;
+}
 (** How each named parameter is addressed at a call site, with its optional default and the number
     of preceding positional parameters. An omitted default is selected only once a later positional
     argument is supplied. Labels consume no positional index. *)
+
 let param_destinations params =
   List.folding_map params ~init:0 ~f:(fun position (label, name, default) ->
       match label with
-      | Asttypes.Nolabel -> (position + 1, (name, (At_position position, default, position)))
-      | Asttypes.Labelled label | Asttypes.Optional label ->
-          (position, (name, (At_label label, default, position))))
+      | Asttypes.Nolabel ->
+          ( position + 1,
+            (name, { destination = At_position position; default; position; optional = false }) )
+      | Asttypes.Labelled label ->
+          (position, (name, { destination = At_label label; default; position; optional = false }))
+      | Asttypes.Optional label ->
+          (position, (name, { destination = At_label label; default; position; optional = true })))
 
 (** The unlabelled arguments of an application, in order. *)
 let positional args =
@@ -581,6 +592,28 @@ let argument_at ~destination args =
           | (Asttypes.Labelled l | Asttypes.Optional l) when String.equal l label -> Some argument
           | _ -> None)
   | At_position position -> List.nth (positional args) position
+
+(** Resolve a predicate argument, including static optional forwarding and default erasure. *)
+let predicate_argument_at { destination; default; position; optional } args =
+  let selected_default () =
+    if optional && List.length (positional args) > position then default else None
+  in
+  let forwarded =
+    match destination with
+    | At_position _ -> None
+    | At_label label ->
+        List.find_map args ~f:(function
+          | Asttypes.Optional name, expr when String.equal name label -> Some expr
+          | _ -> None)
+  in
+  match forwarded with
+  | Some { pexp_desc = Pexp_construct ({ txt = Lident "None"; _ }, None); _ } -> selected_default ()
+  | Some { pexp_desc = Pexp_construct ({ txt = Lident "Some"; _ }, Some e); _ } -> Some e
+  | Some _ -> None
+  | None -> (
+      match argument_at ~destination args with
+      | Some argument -> Some argument
+      | None -> selected_default ())
 
 (** The names an emitter call deposits generated text INTO: the arguments at an emitter's buffer
     labels.
@@ -811,7 +844,7 @@ let emitter_aliases ~emitters structure =
                       Option.iter (argument_at ~destination args) ~f:(fun argument ->
                           let carried = idents_in argument in
                           List.iter (param_destinations params)
-                            ~f:(fun (name, (destination, _default, _position)) ->
+                            ~f:(fun (name, { destination; _ }) ->
                               if List.mem carried name ~equal:String.equal then
                                 found := destination :: !found)))
               | None -> ())
@@ -843,13 +876,23 @@ let emitter_aliases ~emitters structure =
   done;
   !aliases
 
+type uncertainty = Known | Unresolved | Replaced
+
+let join_uncertainty a b =
+  match (a, b) with
+  | Unresolved, _ | _, Unresolved -> Unresolved
+  | Replaced, _ | _, Replaced -> Replaced
+  | Known, Known -> Known
+
+let parameter_symbol (first, last) name = Printf.sprintf "\000%d:%d:%s" first last name
+
 type provenance = {
   generated : bool;
   parameter_dependent : bool;
       (** The returned data depends on an argument, rather than an internal generated-text read. *)
   parameters : Set.M(String).t;
   buffer : bool;
-  uncertain : bool;
+  uncertainty : uncertainty;
   functions : (int * int) list;
 }
 (** One provenance rule for parameters, bindings and expression uses. A parameter is symbolic until
@@ -866,7 +909,7 @@ let no_provenance =
     parameter_dependent = false;
     parameters = Set.empty (module String);
     buffer = false;
-    uncertain = false;
+    uncertainty = Known;
     functions = [];
   }
 
@@ -879,7 +922,7 @@ let join_provenance a b =
            ((a.generated && not a.parameter_dependent) || (b.generated && not b.parameter_dependent));
     parameters = Set.union a.parameters b.parameters;
     buffer = a.buffer || b.buffer;
-    uncertain = a.uncertain || b.uncertain;
+    uncertainty = join_uncertainty a.uncertainty b.uncertainty;
     functions = List.dedup_and_sort (a.functions @ b.functions) ~compare:Poly.compare;
   }
 
@@ -931,6 +974,13 @@ let scoped_provenance scope ~emitters ~aliases ~seeds ?(parameters = [])
               List.fold cases ~init:no_provenance ~f:(fun acc c ->
                   join_provenance acc (of_expr c.pc_rhs))
         in
+        (* Buffer contents can depend on preceding writes. Keep used body inputs at this unsupported
+           effect boundary instead of pretending the return expression is pure. *)
+        let result =
+          if result.buffer && not result.generated then
+            join_provenance result { !found with uncertainty = Unresolved; functions = [] }
+          else result
+        in
         { result with functions = [ span expr.pexp_loc ] }
     | Pexp_apply (callee, args) ->
         let callee_value = of_expr callee in
@@ -947,29 +997,53 @@ let scoped_provenance scope ~emitters ~aliases ~seeds ?(parameters = [])
               generated = true;
               parameter_dependent = false;
               parameters = Set.empty (module String);
+              uncertainty = Known;
             }
           else if not (List.is_empty callee_value.functions) then
-            let arguments =
-              List.fold args ~init:no_provenance ~f:(fun acc (_, e) ->
-                  join_provenance acc (of_expr e))
+            let formal_parameters =
+              List.concat_map callee_value.functions ~f:(fun id ->
+                  Option.value_map (Hashtbl.find function_parameters id) ~default:[]
+                    ~f:(fun parameters ->
+                      List.map parameters ~f:(fun (name, destination) ->
+                          (parameter_symbol id name, destination))))
             in
-            let arguments = { arguments with buffer = arguments.buffer || callee_value.buffer } in
-            if callee_value.generated && not callee_value.parameter_dependent then
+            let depends_on_argument =
+              List.exists formal_parameters ~f:(fun (symbol, _) ->
+                  Set.mem callee_value.parameters symbol)
+            in
+            let result =
               {
-                arguments with
-                generated = true;
-                parameter_dependent = false;
-                parameters = Set.empty (module String);
+                callee_value with
+                generated =
+                  callee_value.generated
+                  && ((not callee_value.parameter_dependent) || not depends_on_argument);
+                parameter_dependent = callee_value.parameter_dependent && not depends_on_argument;
+                parameters =
+                  List.fold formal_parameters ~init:callee_value.parameters
+                    ~f:(fun acc (symbol, _) -> Set.remove acc symbol);
+                uncertainty =
+                  (if depends_on_argument && not callee_value.buffer then Known
+                   else callee_value.uncertainty);
+                functions = [];
               }
-            else arguments
+            in
+            if callee_value.generated && not callee_value.parameter_dependent then result
+            else
+              List.fold formal_parameters ~init:result ~f:(fun acc (symbol, destination) ->
+                  if Set.mem callee_value.parameters symbol then
+                    Option.value_map (predicate_argument_at destination args) ~default:acc
+                      ~f:(fun e -> join_provenance acc (of_expr e))
+                  else acc)
           else !found
         in
         let functions =
           List.filter callee_value.functions ~f:(fun id ->
               Option.value_map (Hashtbl.find function_parameters id) ~default:false
                 ~f:(fun parameters ->
-                  List.exists parameters ~f:(fun (_name, (destination, _default, _position)) ->
-                      Option.is_none (argument_at ~destination args))))
+                  List.exists parameters ~f:(fun (_name, parameter) ->
+                      Option.is_none (argument_at ~destination:parameter.destination args)
+                      && not
+                           (parameter.optional && List.length (positional args) > parameter.position))))
         in
         { found with functions }
     | Pexp_ident _ -> !found
@@ -1006,7 +1080,12 @@ let scoped_provenance scope ~emitters ~aliases ~seeds ?(parameters = [])
                       && Set.is_empty (Set.inter previous.parameters denotes.parameters)))
             in
             Lexical_scope.bind_values inner (pattern_names vb.pvb_pat)
-              { denotes with uncertain = denotes.uncertain || replaced })
+              {
+                denotes with
+                uncertainty =
+                  (if replaced then join_uncertainty denotes.uncertainty Replaced
+                   else denotes.uncertainty);
+              })
 
       method! expression env e =
         match e.pexp_desc with
@@ -1022,10 +1101,17 @@ let scoped_provenance scope ~emitters ~aliases ~seeds ?(parameters = [])
                             join_provenance acc
                               (Option.value
                                  (Hashtbl.find source_parameters (span e.pexp_loc, name))
-                                 ~default:{ no_provenance with uncertain = true }))
+                                 ~default:{ no_provenance with uncertainty = Unresolved }))
                       in
                       Lexical_scope.bind_values env names
-                        { denotes with parameter_dependent = true }
+                        {
+                          denotes with
+                          parameter_dependent = true;
+                          parameters =
+                            Set.of_list
+                              (module String)
+                              (List.map names ~f:(parameter_symbol (span e.pexp_loc)));
+                        }
                   | _ -> env)
             in
             (match body with
@@ -1041,6 +1127,11 @@ let scoped_provenance scope ~emitters ~aliases ~seeds ?(parameters = [])
               | _ -> of_expr scrutinee
             in
             List.iter cases ~f:(fun case ->
+                let payload =
+                  match case.pc_lhs.ppat_desc with
+                  | Ppat_exception _ -> no_provenance
+                  | _ -> payload
+                in
                 let inner = Lexical_scope.bind_values env (pattern_names case.pc_lhs) payload in
                 Option.iter case.pc_guard ~f:(fun guard ->
                     ignore (self#expression inner guard : expression));
@@ -1060,7 +1151,7 @@ let scoped_provenance scope ~emitters ~aliases ~seeds ?(parameters = [])
             if
               (not (Bool.equal previous.generated denotes.generated))
               || (not (Bool.equal previous.buffer denotes.buffer))
-              || (not (Bool.equal previous.uncertain denotes.uncertain))
+              || (not (Poly.equal previous.uncertainty denotes.uncertainty))
               || (not (Bool.equal previous.parameter_dependent denotes.parameter_dependent))
               || (not (Poly.equal previous.functions denotes.functions))
               || not (Set.equal previous.parameters denotes.parameters)
@@ -1090,36 +1181,16 @@ let scoped_provenance scope ~emitters ~aliases ~seeds ?(parameters = [])
 
 type predicate = {
   pred_binding : int * int;
-  text_at : (destination * expression option * int) option;
+  text_at : parameter_destination option;
       (** The caller-supplied fragment, with its destination and optional default. *)
   body_text : expression option;
       (** A hard-coded or composite fragment in the predicate body, recorded only after the call's
           own source is validated. Composite context is retained alongside caller components. *)
-  source_at : (destination * expression option * int) option;
+  source_at : parameter_destination option;
       (** Label or positional index of the parameter that carries the generated source, when the
           predicate takes it rather than closing over it. Checked at each call site: a predicate is
           only pinning where the haystack it is handed really is generated source. *)
 }
-
-(** Resolve a predicate argument, including static optional forwarding and default erasure. *)
-let predicate_argument_at (destination, default, position) args =
-  let selected_default () = if List.length (positional args) > position then default else None in
-  let forwarded =
-    match destination with
-    | At_position _ -> None
-    | At_label label ->
-        List.find_map args ~f:(function
-          | Asttypes.Optional name, expr when String.equal name label -> Some expr
-          | _ -> None)
-  in
-  match forwarded with
-  | Some { pexp_desc = Pexp_construct ({ txt = Lident "None"; _ }, None); _ } -> selected_default ()
-  | Some { pexp_desc = Pexp_construct ({ txt = Lident "Some"; _ }, Some e); _ } -> Some e
-  | Some _ -> None
-  | None -> (
-      match argument_at ~destination args with
-      | Some argument -> Some argument
-      | None -> selected_default ())
 
 (** Predicates whose literal argument IS a pinned fragment: the
     [let has s = String.is_substring src ~substring:s] idiom and its variants -- one that takes the
@@ -1211,7 +1282,8 @@ let predicates scope ~emitters ~aliases ~seeds ~outer ~function_parameters bindi
                       not (Set.is_empty (derives_from_capture tested)))
                 then uncertain_source := true
                 else if
-                  Option.value_map tested ~default:false ~f:(fun e -> (provenance e).uncertain)
+                  Option.value_map tested ~default:false ~f:(fun e ->
+                      not (Poly.equal (provenance e).uncertainty Known))
                 then uncertain_source := true
               in
               List.iter
@@ -1421,7 +1493,7 @@ let classify_source ~emitters ~path ~contents =
                                 (not (Hashtbl.mem source_parameters (id, name)))
                                 || (not (Bool.equal previous.generated next.generated))
                                 || (not (Bool.equal previous.buffer next.buffer))
-                                || (not (Bool.equal previous.uncertain next.uncertain))
+                                || (not (Poly.equal previous.uncertainty next.uncertainty))
                                 || (not
                                       (Bool.equal previous.parameter_dependent
                                          next.parameter_dependent))
@@ -1547,11 +1619,22 @@ let classify_source ~emitters ~path ~contents =
           then unattributed := true;
           (match text_test scope e with
           | Some { text; tested; inherent } ->
-              if inherent || Option.value_map tested ~default:false ~f:mentions_tainted then
-                record text
-              else if Option.value_map tested ~default:false ~f:(fun e -> (!provenance e).uncertain)
-              then (
+              if inherent || Option.value_map tested ~default:false ~f:mentions_tainted then (
                 record text;
+                if
+                  Option.value_map tested ~default:false ~f:(fun e ->
+                      let source = !provenance e in
+                      source.buffer && Poly.equal source.uncertainty Unresolved)
+                then unattributed := true)
+              else if
+                Option.value_map tested ~default:false ~f:(fun e ->
+                    not (Poly.equal (!provenance e).uncertainty Known))
+              then (
+                if
+                  Option.value_map tested ~default:false ~f:(fun e ->
+                      let source = !provenance e in
+                      (not source.buffer) && Poly.equal source.uncertainty Unresolved)
+                then record text;
                 unattributed := true)
               else if Option.value_map tested ~default:false ~f:reads_a_buffer then
                 unattributed := true
@@ -1588,7 +1671,8 @@ let classify_source ~emitters ~path ~contents =
                            contributes no fragment. *)
                         if
                           Option.value_map source ~default:false ~f:(fun e ->
-                              (!provenance e).uncertain)
+                              let source = !provenance e in
+                              (not source.buffer) && Poly.equal source.uncertainty Unresolved)
                         then (
                           Option.iter predicate.body_text ~f:(fun text ->
                               pins := pin_of_expr scope text :: !pins);

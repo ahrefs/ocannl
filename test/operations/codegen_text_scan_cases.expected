@@ -90,6 +90,14 @@ ok: source -- a completed predicate result is an ordinary value in either condit
 ok: source -- a normalizer never borrows generated provenance from a different call
 ok: source -- a source-returning helper validates an internal read through its routine parameter
 ok: source -- a source-returning buffer helper preserves the unresolved-buffer backstop
+ok: source -- a buffer-returning helper preserves inputs used by earlier writes with explicit uncertainty
+ok: source -- a helper result depends only on its returned formal argument
+ok: source -- the returned formal still carries generated provenance past an ignored ordinary argument
+ok: source -- a constant-returning helper does not borrow generated argument provenance
+ok: source -- exception match patterns are independent of the successful generated result
+ok: source -- a selected optional default leaves no callable identity on the completed boolean
+ok: source -- an ordinary replacement retains uncertainty without contributing a body literal
+ok: source -- an aliased ordinary replacement retains uncertainty without contributing a body literal
 ok: source -- a helper-local generated read propagates through normalization aliases
 ok: source -- same-named local predicates pin only their in-scope composite context
 ok: source -- a nested predicate validates an enclosing source parameter at its call

@@ -127,7 +127,7 @@ arrayjit/test/test_local_scope_init.ml [renders generated text in memory]
 arrayjit/test/test_render_context.ml [renders generated text in memory; also pins text this scan cannot name]
     "] = (float)(0.0)"
     "reentrant_scratch["
-arrayjit/test/test_stage_b_where_debug.ml [renders generated text in memory]
+arrayjit/test/test_stage_b_where_debug.ml [renders generated text in memory; also pins text this scan cannot name]
     "(!("
     "? athen2["
     "? belse2["
@@ -193,7 +193,6 @@ test/operations/hardware_warp_shuffle.ml [also pins text this scan cannot name]
     "__nv_bfloat16 wred_v_"
     "float wred_partials_"
     "float wred_v_"
-    "from more than one thread"
     "half wred_partials_"
     "half wred_v_"
     "ocannl_shfl_xor"
@@ -211,7 +210,7 @@ test/operations/integer_power_domain.ml
     "ocannl_powi_f32("
     "pow("
     "powf("
-test/operations/ll_printer_constants.ml [renders generated text in memory]
+test/operations/ll_printer_constants.ml [renders generated text in memory; also pins text this scan cannot name]
     " := "
 test/operations/narrow_storage_compute.ml
     "HALF_T ocannl_vec"
@@ -261,10 +260,9 @@ test/operations/schedule_batched_mma.ml
     "Tile_mma register tiling"
 test/operations/schedule_contraction_nest.ml [also pins text this scan cannot name]
     "does not divide innermost contraction extent k=12 (of K=48 over 2 loops)"
-test/operations/schedule_conv_gemm.ml [also pins text this scan cannot name]
+test/operations/schedule_conv_gemm.ml
     "Tile_mma register tiling"
     "fragment_"
-    "hoisted staging does not support compacting"
     "tile_"
 test/operations/schedule_cpu_pack_matmul.ml
     "__shared__"
@@ -385,7 +383,7 @@ test/operations/schedule_mma_matmul.ml [also pins text this scan cannot name]
     "tmma_acc__"
     "ulong2(0), true)"
     sprintf "%s; column tail %d in %d vector; row tail %d)"
-test/operations/schedule_ops.ml [renders generated text in memory]
+test/operations/schedule_ops.ml [renders generated text in memory; also pins text this scan cannot name]
     "#pragma"
     "<= 3"
     "<= 7"
@@ -410,11 +408,10 @@ test/operations/schedule_pack_mma_matmul.ml
     "packed_mgb"
     "threadgroup float tile_"
     "tmma_"
-test/operations/schedule_packed_constants.ml [also pins text this scan cannot name]
+test/operations/schedule_packed_constants.ml
     "__shared__"
     "barrier("
     "float tile_"
-    "hoisted staging requires a known-constant source"
     "packed_ma"
     "packed_mb"
     "threadgroup float"

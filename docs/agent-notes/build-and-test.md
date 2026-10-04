@@ -1598,7 +1598,10 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   unused. Validated calls seed the specific helper parameter, so same-named parameters elsewhere
   cannot borrow that evidence. Captured generated bindings use the same scoped rule. A helper
   returning generated text from its own read supplies that evidence independently of its routine
-  argument; a normalizer derives it from the supplied argument at each call. Completed predicates
+  argument; a pure helper substitutes only the formal dependencies of its returned value at
+  each call. Buffer-returning helpers keep inputs used by earlier writes at an explicit uncertainty
+  boundary; the scan does not model memory effects. Known ordinary replacement and unresolved
+  callback input have distinct uncertainty states, so only the latter can retain a named fragment. Completed predicates
   return ordinary booleans, rather than carrying their callable identity into verdict bindings.
   A composite fragment retains its literal context and every caller-supplied component in the
   inventory. An omitted optional marker uses its default only when a later positional argument
