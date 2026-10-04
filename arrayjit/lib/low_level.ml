@@ -2478,10 +2478,10 @@ let instantiate_computations ~(fresh_symbol : unit -> Indexing.symbol)
                     (Embed_index rhs_ind, index_prec) ))
           in
           (* gh-133 Stage B: range guards -- a unit-solved symbol's value must fall within its
-             producer loop range [0, range). The guard never forms a negative intermediate: we
-             compare [rest] and [rhs] (both non-negative) rather than [rhs - rest]. uc=+1: [rest <=
-             rhs] & [rhs < rest+range]; uc=-1: [rhs <= rest] & [rest < rhs+range] -- one canonical
-             shape per role, a direct [Cmple] lower bound and a strict [Cmplt] upper bound. *)
+             producer loop range [0, range). Compare [rest] and [rhs] without subtracting them
+             (either can be negative after substitution). uc=+1: [rest <= rhs] & [rhs < rest+range];
+             uc=-1: [rhs <= rest] & [rest < rhs+range] -- one canonical shape per role, a direct
+             [Cmple] lower bound and a strict [Cmplt] upper bound. *)
           let add_offset (idx : Indexing.axis_index) d : Indexing.axis_index =
             if d = 0 then idx
             else
@@ -2500,6 +2500,9 @@ let instantiate_computations ~(fresh_symbol : unit -> Indexing.symbol)
                   if uc >= 0 then (le rest rhs, lt rhs (add_offset rest range))
                   else (le rhs rest, lt rest (add_offset rhs range))
                 in
+                (* The scoped simplifier can make this pure 0/1 conjunction eager when the active
+                   index domain proves every comparison intermediate total. Otherwise retain
+                   short-circuit evaluation, including its bounded operation price. *)
                 Binop (Ops.And, (lower, index_prec), (upper, index_prec)))
           in
           let conds = eq_conds @ range_conds in
@@ -3851,6 +3854,28 @@ let narrow_sym_env_le sym_env ~terms ~offset =
              sound there, so keep the incoming one rather than fabricating an empty interval. *)
           if lo > hi then env else Map.set env ~key:s ~data:(Interval.of_int_range lo hi))
 
+(* The inliner's eager range conjunction is a product of two pure index comparisons, each 0/1 at
+   signed integer precision. Do not interpret arbitrary numeric multiplication as logical
+   conjunction (e.g. float 0 * infinity is NaN). *)
+let is_pure_index_conjunction (sc : scalar_t) =
+  let signed = function Ops.Int32_prec _ | Ops.Int64_prec _ -> true | _ -> false in
+  let index_value = function
+    | Embed_index _ -> true
+    (* [simplify_llc] turns fixed embedded indices into constants before narrowing. *)
+    | Constant c -> Float.is_finite c && Float.is_integer c
+    | _ -> false
+  in
+  let comparison = function
+    | Constant c when Float.(c = 0. || c = 1.) -> true
+    | Binop ((Ops.Cmplt | Ops.Cmple | Ops.Cmpeq | Ops.Cmpne), (a, pa), (b, pb)) ->
+        signed pa && signed pb && index_value a && index_value b
+    | _ -> false
+  in
+  match sc with
+  | Binop ((Ops.Mul | Ops.And), (a, pa), (b, pb)) ->
+      signed pa && signed pb && comparison a && comparison b
+  | _ -> false
+
 let ienv_narrow_from_cond ienv ~(cprec : Ops.prec) (cond : scalar_t) : ienv =
   (* The machine evaluates each comparison side at the index precision (the [Embed_index] boundary,
      cf. [interval_of]) and converts it to [cprec], the condition's evaluation precision. The
@@ -3891,6 +3916,8 @@ let ienv_narrow_from_cond ienv ~(cprec : Ops.prec) (cond : scalar_t) : ienv =
     match sc with
     (* Both conjuncts hold in the body; a disjunction implies neither. *)
     | Binop (Ops.And, (a, _), (b, _)) -> narrow (narrow sym_env a) b
+    | Binop (Ops.Mul, (a, _), (b, _)) as sc when is_pure_index_conjunction sc ->
+        narrow (narrow sym_env a) b
     | Binop (Ops.Cmplt, (a, _), (b, _)) -> le sym_env a b ~shift:1
     | Binop (Ops.Cmple, (a, _), (b, _)) -> le sym_env a b ~shift:0
     | Binop (Ops.Cmpeq, (a, _), (b, _)) -> le (le sym_env a b ~shift:0) b a ~shift:0
@@ -3914,6 +3941,61 @@ let interval_of_index ienv (idx : Indexing.axis_index) : Interval.t =
       List.fold symbols ~init:(Interval.of_int offset) ~f:(fun acc (coeff, s) ->
           Interval.add acc (Interval.mul (Interval.of_int coeff) (interval_of_symbol ienv s)))
   | Concat _ -> Interval.top (* Eliminated during lowering; conservative if ever reached. *)
+
+(* Eager comparison evaluation must be total, not merely free of reads/effects. Check every
+   multiplication and left-associated addition that [Indexing.Doc_helpers.pp_axis_index] emits,
+   including the final offset: a final in-range sum can hide an overflowing partial sum. Use only
+   exact intervals here; unknown/rounded bounds decline the promotion. This also conservatively
+   declines large int64 domains rather than treating their rounded dtype endpoint as representable.
+   No non-negativity assumption is needed, including for negative solved indices. *)
+let index_comparisons_total ~ienv ~prec (sc : scalar_t) =
+  let safe_at prec iv =
+    let dtype = Interval.dtype_range prec in
+    iv.Interval.exact
+    && Interval.equal (Interval.at_prec prec iv) iv
+    (* The non-exact int64/uint64 upper dtype endpoint is rounded OUT of the type's range. A numeric
+       constant can be an exact float at that endpoint without being a valid integer. *)
+    && (dtype.exact || Float.(iv.hi < dtype.hi))
+  in
+  let ip = Ops.index_prec () in
+  let index_total = function
+    | Indexing.Fixed_idx i -> safe_at ip (Interval.of_int i)
+    | Iterator s -> safe_at ip (interval_of_symbol ienv s)
+    | Affine { symbols; offset } ->
+        let term (coeff, s) =
+          let c = Interval.of_int coeff and v = interval_of_symbol ienv s in
+          let product = Interval.mul c v in
+          if safe_at ip c && safe_at ip v && safe_at ip product then Some product else None
+        in
+        let sum =
+          List.fold symbols
+            ~init:(Some (Interval.of_int 0))
+            ~f:(fun acc item ->
+              match Option.both acc (term item) with
+              | None -> None
+              | Some (a, b) ->
+                  let sum = Interval.add a b in
+                  Option.some_if (safe_at ip sum) sum)
+        in
+        let off = Interval.of_int offset in
+        safe_at ip off
+        && Option.value_map sum ~default:false ~f:(fun sum -> safe_at ip (Interval.add sum off))
+    | Sub_axis | Concat _ -> false
+  in
+  let value_total = function
+    | Embed_index idx -> index_total idx && safe_at prec (interval_of_index ienv idx)
+    | Constant c -> safe_at prec (Interval.point c)
+    | _ -> false
+  in
+  let comparison_total = function
+    | Constant c when Float.(c = 0. || c = 1.) -> true
+    | Binop ((Ops.Cmplt | Ops.Cmple | Ops.Cmpeq | Ops.Cmpne), (a, _), (b, _)) ->
+        value_total a && value_total b
+    | _ -> false
+  in
+  match sc with
+  | Binop (Ops.And, (a, _), (b, _)) -> comparison_total a && comparison_total b
+  | _ -> false
 
 (* Bounds of a tensor-node read: the machine range of the stored precision, narrowed by the node's
    bounds candidate when one exists. The node becomes a source only when the candidate actually
@@ -4369,7 +4451,15 @@ let simplify_llc ?fp_algebra static_indices llc =
         let v1 = loop_scalar llv1 in
         let v2 = loop_scalar llv2 in
         let result = (Binop (op, v1, v2), prec) in
-        if equal_scalar_arg llv1 v1 && equal_scalar_arg llv2 v2 then
+        if
+          Ops.equal_binop op Ops.And
+          && is_pure_index_conjunction (fst result)
+          && index_comparisons_total ~ienv ~prec (fst result)
+        then
+          (* Two total pure comparisons yield 0/1; their product is an eager conjunction. [Where]
+             still gates its arms, so an unmatched solved index never reads a tensor. *)
+          loop_scalar (Binop (Ops.Mul, v1, v2), prec)
+        else if equal_scalar_arg llv1 v1 && equal_scalar_arg llv2 v2 then
           (* At the rewriting fixpoint, try the interval-driven comparison fold. *)
           match try_interval_fold ~ienv ~prec (fst result) with
           | Some c -> (c, prec)

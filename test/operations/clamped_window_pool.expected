@@ -3,6 +3,7 @@ clamped values match the -inf-margins semantics: true
 operand stays unpadded: true
 result stays unpadded: true
 clamp is a single Where range guard, no statement If: true
+clamped pool partition consumes an eager index conjunction: true
 breakpoints delimit the left- and right-truncated boundary segments: true
 interior segment is guard-free (one Where per boundary segment): true
 partitioned pool matches reference: true

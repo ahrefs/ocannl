@@ -370,6 +370,12 @@ module Canonical_render : sig
       the buffer, usually after its own preamble and companion sections. *)
 end
 
+val is_pure_index_conjunction : scalar_t -> bool
+(** Recognizes [And] or eager [Mul] of two signed-index comparisons (or folded 0/1 constants). This
+    identifies the Boolean product used by range guards for narrowing and partitioning; arbitrary
+    numeric multiplication is opaque. It does not prove that index arithmetic is total: the
+    simplifier separately checks the active domains before replacing [And] with [Mul]. *)
+
 val scalar_precision : scalar_t -> Ops.prec
 val apply_op : Ops.op -> scalar_t array -> scalar_t
 val flat_lines : t list -> t list

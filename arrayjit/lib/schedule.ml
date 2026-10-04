@@ -4617,6 +4617,11 @@ let partition_breakpoints ~axis (llc : Low_level.t) : int list =
       | Binop ((Ops.And | Ops.Or), (a, _), (b, _)) ->
           cond ~ranges a;
           cond ~ranges b
+      | Binop (Ops.Mul, (a, _), (b, _)) when is_pure_index_conjunction sc ->
+          (* The simplifier's total range guards use eager 0/1 products (gh-ocannl-1094). Share its
+             classifier: a general numeric product is not a conjunction. *)
+          cond ~ranges a;
+          cond ~ranges b
       (* [a < b] iff [k*axis + off < 0], [off] in [off_lo, off_hi]. Always-true while [k*axis +
          off_hi < 0], always-false once [k*axis + off_lo >= 0]: record both transition points (equal
          when the offset is a single value). *)

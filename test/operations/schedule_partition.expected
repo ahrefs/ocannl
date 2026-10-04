@@ -18,6 +18,10 @@ sp_err_no_such_loop rejected with a targeted error: true
 Cmple lower bound breaks where its Cmplt encoding did: true
 Cmple upper bound breaks where its Cmplt encoding did: true
 Cmple with a scaled axis rounds like its Cmplt encoding: true
+eager index conjunction preserves both range breakpoints: true
+numeric index product stays opaque to breakpoint collection: true
+non-Boolean constant product stays opaque to breakpoint collection: true
+floating product stays opaque to breakpoint collection: true
 the materializing unroll left the inner loop only inside a Local_scope: true
 breakpoints of a scope-nested loop are the pad guard's flip point: true
 partitioning the scope-nested loop folds the pad guard: true

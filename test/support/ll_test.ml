@@ -700,7 +700,7 @@ let count_where (o : LL.optimized) =
   count (fun bump -> walk o.LL.llc ~on_ternop:(function Ops.Where -> bump () | _ -> ()))
 
 (** [(wheres, cmples, cmplts)] in the optimized form. A range guard emitted by unit-coefficient
-    solving renders as [Where (And (Cmple _, Cmplt _), value, Get_local)] — one comparison shape per
+    solving renders as [Where (Mul (Cmple _, Cmplt _), value, Get_local)] — one comparison shape per
     role, a non-strict lower bound and a strict upper bound — whereas a pure structural affine match
     introduces none of the three. *)
 let count_guard_ops (o : LL.optimized) =

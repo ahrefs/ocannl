@@ -13,16 +13,16 @@
    and the lane-extract form of a packed-uniform producer. - The guard-emitting shapes the hand
    rewrite could only mark as bounds (review rounds 1-4 of staging#744): an affine write position, a
    diagonal producer, a two-component concat — guards now priced, each checked against the emitted
-   read: the diagonal's op count EXACT, the range-guarded ones a bound only by [analyze]'s own
-   short-circuit rule for the guard's [&&], exactly as the emitted read is. - [recompute_cost]
-   through a real [optimize]: a two-link chain, the [`Materialize] flip's modeled price, and the
-   proxy-vs-model ordering witness. - The [`Inline] flip of a node a heuristic cap materialized,
-   through the production seam: priced from the computation the virtualizer's own walk stores once
-   the node is not materialized, checked against the read emitted after [prefer_inline] — for a
-   reduction, a packed-uniform producer over a virtual counter, and a consumer whose default setter
-   hosts a footprint scratch. - Pricing is invisible: the lineage's placements and the numbering of
-   symbols and scope ids generated code prints are untouched. - A flip the store refuses prices by
-   the proxy. *)
+   read: the diagonal and pure range guards have exact op counts. The latter use an eager 0/1
+   conjunction; ordinary short-circuit guards remain bounds. - [recompute_cost] through a real
+   [optimize]: a two-link chain, the [`Materialize] flip's modeled price, and the proxy-vs-model
+   ordering witness. - The [`Inline] flip of a node a heuristic cap materialized, through the
+   production seam: priced from the computation the virtualizer's own walk stores once the node is
+   not materialized, checked against the read emitted after [prefer_inline] — for a reduction, a
+   packed-uniform producer over a virtual counter, and a consumer whose default setter hosts a
+   footprint scratch. - Pricing is invisible: the lineage's placements and the numbering of symbols
+   and scope ids generated code prints are untouched. - A flip the store refuses prices by the
+   proxy. *)
 
 open Base
 open Ocannl.Operation.DSL_modules
@@ -211,7 +211,7 @@ let () =
    price must be exactly what the reader statement the optimizer emits costs. *)
 let () =
   Stdio.printf "== guard-emitting shapes: price = emitted read ==\n";
-  let case ~name ~self ~reader ~materialized llc =
+  let case ?expected ~name ~self ~reader ~materialized llc =
     let o = optimize ~materialized ~name llc in
     let priced = CM.recompute_cost o.LL.optimize_ctx self in
     let emitted = emitted_read o ~reader ~self in
@@ -219,13 +219,37 @@ let () =
     show_opt (name ^ ", emitted") emitted;
     p (name ^ ": the producer is inlined at the reader") (known_virtual o self);
     p (name ^ ": the price is the emitted read, counts and exactness") (same_cost priced emitted);
+    p_exists (name ^ ": the Materialize flip uses the exact modeled price") o.LL.flip_candidates
+      ~f:(fun fc ->
+        Tn.equal fc.fc_tn self
+        && List.exists fc.fc_alternatives ~f:(fun fa ->
+            LL.equal_reading fa.fa_flip `Materialize
+            && fa.fa_modeled
+            && Option.exists priced ~f:(fun r -> fa.fa_recompute_cost = r.CM.rc_flops)));
+    List.iter materialized ~f:materialize;
+    Tn.set_observable reader;
+    let seed =
+      List.mapi materialized ~f:(fun k tn ->
+          ( tn,
+            if Tn.equal tn reader then blank (Tn.num_elems tn)
+            else Array.init (Tn.num_elems tn) ~f:(fun i -> Float.of_int (1 + (10 * k) + i)) ))
+    in
+    let virt = execute ~name:("cmt_guard_" ^ Tn.debug_name self) o ~seed ~read:[ reader ] in
+    let mat =
+      execute
+        ~name:("cmt_guard_mat_" ^ Tn.debug_name self)
+        (optimize ~materialized:(self :: materialized) ~name:(name ^ " materialized") llc)
+        ~seed ~read:[ reader ]
+    in
+    p (name ^ ": executed virtual and materialized values agree") (same virt mat);
+    Option.iter expected ~f:(fun values ->
+        p (name ^ ": executed values match the independent reference") (same virt [ values ]));
     priced
   in
   (* Affine write position: T2[2*oh + wh] = A[oh][wh] for oh, wh < 2, read at out[x]. Unit solving
-     binds wh := x - 2*oh', keeps the oh loop and range-guards it. The arm only reads, so every op
-     priced is the guard's; the count stays a bound through the guard's own short-circuiting [&&]
-     (its upper comparison runs only when the lower one holds) — [analyze]'s rule for any gated
-     operand, which the emitted read gets too, not a pricer predicate. *)
+     binds wh := x - 2*oh', keeps the oh loop and range-guards it. The arm only reads; both pure
+     comparisons execute eagerly, so the two comparisons, conjunction and select execute twice:
+     eight exact operations per read. *)
   let t2 = mk "T2" and a = mk ~dims:[| 2; 2 |] "Aff" and out = mk "outA" in
   let oh = sym () and wh = sym () and x = sym () in
   let affine =
@@ -235,10 +259,13 @@ let () =
       (loop_n x 4 (set out [| iter x |] (get t2 [| iter x |])))
   in
   let affine_price =
-    case ~name:"affine position" ~self:t2 ~reader:out ~materialized:[ a; out ] affine
+    case ~expected:[| 1.; 2.; 3.; 4. |] ~name:"affine position" ~self:t2 ~reader:out
+      ~materialized:[ a; out ] affine
   in
-  p "affine position: the kept loop's range guard is priced (the arm itself has no op)"
-    (match affine_price with Some r -> r.CM.rc_flops > 0 | None -> false);
+  p "affine position: two eager range guards cost eight exact operations per read"
+    (match affine_price with
+    | Some r -> r.CM.rc_flops = 8 && flops_exact affine_price
+    | None -> false);
   (* Diagonal producer: D[j, j] = A4[j] over a zeroed D, read at out[x, y]. The first occurrence of
      j binds, the second turns into the consistency guard x = y. *)
   let d = mk ~dims:[| 4; 4 |] "D" and a4 = mk "A4d" and out2 = mk ~dims:[| 4; 4 |] "outD" in
@@ -257,8 +284,9 @@ let () =
     (flops_exact diag_price && match diag_price with Some r -> r.CM.rc_flops > 0 | None -> false);
   (* Two-component concat: B[i] = P[i] for i < 2, B[2 + i] = Q[i] for i < 2, read at out[x]. Every
      component replays at the read, each under its range guard and select — what the hand rewrite
-     summed without (the raw setters have no op at all). A bound, like the affine case, through a
-     range guard's short-circuiting [&&] where the reader's interval does not fold it away. *)
+     summed without (the raw setters have no op at all). The pure comparisons now execute eagerly,
+     giving four exact operations after the simplifier folds known comparisons and eliminates
+     multiplication by 1. *)
   let bc = mk "Bc" and pp = mk ~dims:[| 2 |] "Pc" and q = mk ~dims:[| 2 |] "Qc" in
   let out3 = mk "outC" in
   let i1 = sym () and i2 = sym () and x3 = sym () in
@@ -270,10 +298,142 @@ let () =
          (loop_n x3 4 (set out3 [| iter x3 |] (get bc [| iter x3 |]))))
   in
   let concat_price =
-    case ~name:"two-component concat" ~self:bc ~reader:out3 ~materialized:[ pp; q; out3 ] concat
+    case ~expected:[| 1.; 2.; 11.; 12. |] ~name:"two-component concat" ~self:bc ~reader:out3
+      ~materialized:[ pp; q; out3 ] concat
   in
-  p "two-component concat: the per-component guards and selects are priced (the arms have no op)"
-    (match concat_price with Some r -> r.CM.rc_flops > 0 | None -> false)
+  p "two-component concat: simplified eager guards cost four exact operations per read"
+    (match concat_price with
+    | Some r -> r.CM.rc_flops = 4 && flops_exact concat_price
+    | None -> false);
+  (* Unmatched residual iterations form negative or too-large operand indices. The select must still
+     gate those reads; zero init covers unwritten boundary cells. *)
+  let boundary ~name ~offset ~sign ~expected =
+    let producer = mk ~dims:[| 6 |] (name ^ "_producer") in
+    let input = mk ~dims:[| 2; 2 |] (name ^ "_input") in
+    let reader = mk ~dims:[| 6 |] (name ^ "_reader") in
+    let oh = sym () and wh = sym () and x = sym () in
+    let code =
+      seq (zero producer)
+        (seq
+           (loop_n oh 2
+              (loop_n wh 2
+                 (set producer
+                    [| aff [ (2, oh); (sign, wh) ] offset |]
+                    (get input [| iter oh; iter wh |]))))
+           (loop_n x 6 (set reader [| iter x |] (get producer [| iter x |]))))
+    in
+    ignore
+      (case ~expected ~name ~self:producer ~reader ~materialized:[ input; reader ] code
+        : CM.recompute option)
+  in
+  boundary ~name:"shifted affine boundary" ~offset:1 ~sign:1 ~expected:[| 0.; 1.; 2.; 3.; 4.; 0. |];
+  boundary ~name:"reflected affine boundary" ~offset:2 ~sign:(-1)
+    ~expected:[| 0.; 2.; 1.; 4.; 3.; 0. |]
+
+(* The eager representation is reserved for the inliner's pure index guards. General [&&] and
+   conditional arithmetic retain the cost model's bound contract. *)
+let () =
+  Stdio.printf "== eager index guards and simplifier narrowing ==\n";
+  let x = sym () and target = mk "narrow_target" and input = mk "narrow_input" in
+  let ip = Ops.index_prec () in
+  let cmp op a b = LL.Binop (op, (LL.Embed_index a, ip), (LL.Embed_index b, ip)) in
+  let lower = cmp Ops.Cmple (fixed 1) (iter x) in
+  let upper = cmp Ops.Cmplt (iter x) (fixed 3) in
+  let combine op = LL.Binop (op, (lower, ip), (upper, ip)) in
+  let guarded cond value = set target [| iter x |] (where_ cond value (c 0.)) in
+  let eager = CM.analyze (guarded (combine Ops.Mul) (get input [| iter x |])) in
+  p "pure eager comparisons: two comparisons, conjunction, select = four exact ops"
+    (eager.CM.flops = 4 && not eager.CM.flops_approx);
+  let short = CM.analyze (guarded (combine Ops.And) (get input [| iter x |])) in
+  p "ordinary short-circuit conjunction retains its operation bound" short.CM.flops_approx;
+  let arithmetic = CM.analyze (guarded (combine Ops.Mul) (mul (get input [| iter x |]) (c 2.))) in
+  p "eager guard does not make conditional arm arithmetic exact" arithmetic.CM.flops_approx;
+  let nested cond = loop_n x 4 (if_idx cond (guarded upper (get input [| iter x |]))) in
+  let narrowed = LL.simplify_llc [] (nested (combine Ops.Mul)) in
+  let wheres code =
+    count_scalar code ~f:(function LL.Ternop (Ops.Where, _, _, _) -> true | _ -> false)
+  in
+  p "true eager index conjunction narrows both comparisons in its body" (wheres narrowed = 0);
+  let numeric = LL.Binop (Ops.Mul, (LL.Embed_index (iter x), ip), (upper, ip)) in
+  let unchanged = LL.simplify_llc [] (nested numeric) in
+  p "arbitrary numeric multiplication is not treated as a comparison conjunction"
+    (wheres unchanged > 0)
+
+(* This parameter's domain reaches a signed overflow in the RHS affine expression. The false lower
+   comparison must continue to skip it. Only two one-cell arrays are allocated: the large range is a
+   launch parameter domain, not a tensor extent or an executed loop. *)
+let () =
+  let ip = Ops.index_prec () in
+  let limit, coeff =
+    match ip with Ops.Int32_prec _ -> (2147483647, 1) | _ -> (Int.max_value, 2)
+  in
+  let parameter, bindings =
+    (Idx.get_static_symbol ~static_range:limit Idx.Empty : Idx.static_symbol * Idx.unit_bindings)
+  in
+  let x = parameter.Idx.static_symbol in
+  let input = mk ~dims:[| 1 |] "boundary_input" and out = mk ~dims:[| 1 |] "boundary_out" in
+  let cmp op a b = LL.Binop (op, (LL.Embed_index a, ip), (LL.Embed_index b, ip)) in
+  let lower = cmp Ops.Cmple (iter x) (fixed 5) in
+  let upper = cmp Ops.Cmplt (fixed 5) (aff [ (coeff, x) ] 8) in
+  let cond = LL.Binop (Ops.And, (lower, ip), (upper, ip)) in
+  let code = set out [| fixed 0 |] (where_ cond (get input [| fixed 0 |]) (c 0.)) in
+  let o =
+    optimize ~materialized:[ input; out ] ~static_indices:(Idx.bound_symbols bindings)
+      ~name:"cmt_index_boundary" code
+  in
+  p "near-limit domain retains a short-circuit RHS and bounded operation price"
+    (count_scalar o.LL.llc ~f:(function LL.Binop (Ops.And, _, _) -> true | _ -> false) = 1
+    && (CM.analyze o.LL.llc).CM.flops_approx);
+  let run value name =
+    execute ~bindings
+      ~launch:[ (parameter, value) ]
+      ~name o
+      ~seed:[ (input, [| 37. |]); (out, blank 1) ]
+      ~read:[ out ]
+  in
+  p "near-limit false lower guard skips overflowing RHS and returns the init value"
+    (same (run (limit - 1) "cmt_index_boundary_high") [ [| 0. |] ]);
+  p "the same boundary guard executes its valid matching arm"
+    (same (run 0 "cmt_index_boundary_low") [ [| 37. |] ])
+
+(* Pin literal conversion at signed-32 precision even in a large-model build. The invalid literal is
+   inspected structurally; the preceding executed control covers skipped affine overflow. *)
+let () =
+  let ip = Ops.int32 in
+  let parameter, bindings =
+    (Idx.get_static_symbol ~static_range:9 Idx.Empty : Idx.static_symbol * Idx.unit_bindings)
+  in
+  let x = parameter.Idx.static_symbol in
+  let input = mk ~dims:[| 1 |] "literal_input" and out = mk ~dims:[| 1 |] "literal_out" in
+  let cmp op a b = LL.Binop (op, (a, ip), (b, ip)) in
+  let lower = cmp Ops.Cmple (c 5.) (LL.Embed_index (iter x)) in
+  let simplify bound =
+    let upper = cmp Ops.Cmplt (LL.Embed_index (iter x)) (c bound) in
+    let cond = LL.Binop (Ops.And, (lower, ip), (upper, ip)) in
+    LL.simplify_llc (Idx.bound_symbols bindings)
+      (set out
+         [| fixed 0 |]
+         (LL.Ternop (Ops.Where, (cond, ip), (get input [| fixed 0 |], single), (c 0., single))))
+  in
+  let limit = (Ir.Interval.dtype_range ip).hi in
+  let safe = simplify limit and unsafe = simplify (limit +. 1.) in
+  let ands code = count_scalar code ~f:(function LL.Binop (Ops.And, _, _) -> true | _ -> false) in
+  p "valid boundary literal permits an exact simplified guard price"
+    (ands safe = 0 && (CM.analyze safe).CM.flops = 2 && not (CM.analyze safe).CM.flops_approx);
+  p "out-of-range boundary literal retains short-circuit evaluation and a price bound"
+    (ands unsafe = 1 && (CM.analyze unsafe).CM.flops_approx);
+  let o =
+    optimize ~materialized:[ input; out ] ~static_indices:(Idx.bound_symbols bindings)
+      ~name:"cmt_literal_boundary" safe
+  in
+  p "valid boundary literal executes its matching arm"
+    (same
+       (execute ~bindings
+          ~launch:[ (parameter, 5) ]
+          ~name:"cmt_literal_boundary" o
+          ~seed:[ (input, [| 37. |]); (out, blank 1) ]
+          ~read:[ out ])
+       [ [| 37. |] ])
 
 (* A chain through a real optimization: x1 = x0 + w1 (virtual), x2 = sin(x1) (virtual), out = x2 *
    x2. x2's stored computation already carries x1 inlined as a nested scope: 1 + 1 ops. *)

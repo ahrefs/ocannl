@@ -267,6 +267,38 @@ let () =
   p "Cmple with a scaled axis rounds like its Cmplt encoding"
     (is le_scaled [ 3 ] && is lt_scaled [ 3 ]);
 
+  (* Eager range products carry the same comparison facts as their short-circuit source; numeric
+     products cannot license the same descent (gh-ocannl-1094). *)
+  let range op i =
+    LL.Binop
+      ( op,
+        (LL.Binop (Ir.Ops.Cmple, fixed 3, ivar i), iprec),
+        (LL.Binop (Ir.Ops.Cmplt, ivar i, fixed 7), iprec) )
+  in
+  let and_range = bps_of ~to_:9 (range Ir.Ops.And) in
+  let mul_range = bps_of ~to_:9 (range Ir.Ops.Mul) in
+  p "eager index conjunction preserves both range breakpoints"
+    (is and_range [ 3; 7 ] && is mul_range and_range);
+  let numeric_product =
+    bps_of ~to_:9 (fun i ->
+        LL.Binop (Ir.Ops.Mul, ivar i, (LL.Binop (Ir.Ops.Cmplt, ivar i, fixed 7), iprec)))
+  in
+  let non_boolean_product =
+    bps_of ~to_:9 (fun i ->
+        LL.Binop
+          (Ir.Ops.Mul, (LL.Constant 2., iprec), (LL.Binop (Ir.Ops.Cmplt, ivar i, fixed 7), iprec)))
+  in
+  let float_product =
+    bps_of ~to_:9 (fun i ->
+        LL.Binop
+          ( Ir.Ops.Mul,
+            (LL.Binop (Ir.Ops.Cmple, fixed 3, ivar i), Ir.Ops.single),
+            (LL.Binop (Ir.Ops.Cmplt, ivar i, fixed 7), Ir.Ops.single) ))
+  in
+  p "numeric index product stays opaque to breakpoint collection" (is numeric_product []);
+  p "non-Boolean constant product stays opaque to breakpoint collection" (is non_boolean_product []);
+  p "floating product stays opaque to breakpoint collection" (is float_product []);
+
   (* === 6: Loops inside a [Local_scope] (gh-ocannl-668) — the accumulation mint of a materializing
      [Unroll] wraps the inner reduction loop in the accumulator's scope, and [Sched.apply] keeps
      rewriting loops there. Every probe that LOCATES a loop must reach the same place, or it reports

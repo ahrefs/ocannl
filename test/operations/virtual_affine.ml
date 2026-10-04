@@ -75,7 +75,7 @@ let case_unit_solve_plain () =
   p "unit-solve(plain) producer setter dropped" (count_set o tgt = 0);
   p "unit-solve(plain) consumer setter kept" (count_set o out = 1);
   (* Solving [wh = t - 2*oh] keeps the [oh] loop and range-guards [0 <= t-2*oh < 2]: a [Where] over
-     an [And] of a [Cmple] lower bound and a [Cmplt] upper bound. *)
+     an eager 0/1 product of a [Cmple] lower bound and a [Cmplt] upper bound. *)
   let wh, le, lt = count_guard_ops o in
   p "unit-solve(plain) emits a range guard (Where + Cmple lower + Cmplt upper)"
     (wh >= 1 && le >= 1 && lt >= 1);
