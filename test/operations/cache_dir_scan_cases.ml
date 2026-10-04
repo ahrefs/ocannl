@@ -91,6 +91,20 @@ let f ?cache_dir () =
 let cache_dir = Autotune.resolve_cache_dir ?cache_dir ~search:true () in
 Ir.Schedule_cache.store ~dir:cache_dir k v|ocaml},
       [ "~cache_dir forwards the parameter cache_dir"; "~dir names `cache_dir`" ] );
+    ( "an alias of an unchecked positional parameter remains unresolved",
+      {ocaml|let run dir = let cache_dir = dir in Autotune.tune ~cache_dir f
+let () = run "scratch"|ocaml},
+      [ "~cache_dir names `cache_dir`" ] );
+    ( "a positional parameter named cache_dir remains unresolved",
+      {ocaml|let run cache_dir = Autotune.tune ~cache_dir f
+let () = run "scratch"|ocaml},
+      [ "~cache_dir names `cache_dir`" ] );
+    ( "a renamed censused labelled parameter is forwarded",
+      {ocaml|let run ~cache_dir:dir = Autotune.tune ~cache_dir:dir f|ocaml},
+      [ "~cache_dir forwards the parameter dir" ] );
+    ( "an alias of a censused labelled parameter is forwarded",
+      {ocaml|let run ~cache_dir:dir = let cache_dir = dir in Autotune.tune ~cache_dir f|ocaml},
+      [ "~cache_dir forwards the parameter cache_dir" ] );
     ( "a case binder is unresolved rather than a forwarded function parameter",
       {ocaml|let cache_dir = "autotune_cache_safe"
 let f x = match x with cache_dir -> Autotune.tune ~cache_dir f|ocaml},

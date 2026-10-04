@@ -441,12 +441,12 @@ let declares_own_carrier ~carriers content =
     in [foreign] declares its own [string]-carrying constructor of that name (as [Operand_key_scan]
     declares [Site of string]), so an application qualified by it -- directly or through a chain of
     module bindings in the source ([module Scan = Test_utils.Operand_key_scan]) -- is not a
-    provenance, nor is an unqualified one in [foreign]'s own source. A module name is resolved
-    against the binding in scope where it is used -- structure items bind for the items after them,
-    [let module] for its body, a nested structure for itself -- and a binding resolves its own
-    target when it is made, so a chain needs no second lookup and cannot cycle. The owner's
-    constructors are reached through aliases and opens this reader cannot follow, which is why the
-    rule names what is excluded rather than what is included. *)
+    provenance; an unqualified one changes identity only after its declaration or include. A module
+    name is resolved against the binding in scope where it is used -- structure items bind for the
+    items after them, [let module] for its body, a nested structure for itself -- and a binding
+    resolves its own target when it is made, so a chain needs no second lookup and cannot cycle. The
+    owner's constructors are reached through aliases and opens this reader cannot follow, which is
+    why the rule names what is excluded rather than what is included. *)
 let read_source ~carriers ?(foreign = []) ?(owner = ("", "")) ~source content =
   let mints = ref []
   and malformed = ref []
@@ -457,9 +457,6 @@ let read_source ~carriers ?(foreign = []) ?(owner = ("", "")) ~source content =
   let own_module = module_of_path source in
   let unestablished = "?" in
   let owner_module = if String.is_empty (fst owner) then "Tnode" else module_of_path (fst owner) in
-  let declares_carrier items =
-    List.exists (own_string_constructors items) ~f:(List.mem carriers ~equal:String.equal)
-  in
   let is_foreign m = List.mem foreign m ~equal:String.equal in
   let constructor_key name = "constructor:" ^ name in
   let module_path env path =
@@ -484,6 +481,41 @@ let read_source ~carriers ?(foreign = []) ?(owner = ("", "")) ~source content =
             not
               (is_foreign m || String.equal m "foreign:" || String.is_prefix m ~prefix:unestablished))
     | Lapply _ -> false
+  in
+  let extension_binding env ext =
+    if List.mem carriers ext.pext_name.txt ~equal:String.equal then
+      let denotes =
+        match ext.pext_kind with
+        | Pext_rebind { txt; _ } when is_carrier env txt -> `Own
+        | _ -> `Foreign
+      in
+      Some (ext.pext_name.txt, denotes)
+    else None
+  in
+  let bind_extension env ext =
+    Option.value_map (extension_binding env ext) ~default:env ~f:(fun (name, denotes) ->
+        Lexical_scope.bind_values env [ constructor_key name ] denotes)
+  in
+  let item_bindings ~top env item =
+    let owner_declaration =
+      top
+      && String.equal source (fst owner)
+      &&
+      match item.pstr_desc with
+      | Pstr_type (_, decls) ->
+          List.exists decls ~f:(fun d -> String.equal d.ptype_name.txt (snd owner))
+      | _ -> false
+    in
+    if owner_declaration then
+      List.filter_map (own_string_constructors [ item ]) ~f:(fun name ->
+          Option.some_if (List.mem carriers name ~equal:String.equal) (name, `Own))
+    else
+      match item.pstr_desc with
+      | Pstr_exception exn -> Option.to_list (extension_binding env exn.ptyexn_constructor)
+      | Pstr_typext ext -> List.filter_map ext.ptyext_constructors ~f:(extension_binding env)
+      | _ ->
+          List.filter_map (own_string_constructors [ item ]) ~f:(fun name ->
+              Option.some_if (List.mem carriers name ~equal:String.equal) (name, `Foreign))
   in
   let scope_model () =
     object (self)
@@ -511,8 +543,13 @@ let read_source ~carriers ?(foreign = []) ?(owner = ("", "")) ~source content =
                 method! module_of env me = self#module_of env me
 
                 method! item_scope ~top env item =
-                  if top && declares_carrier [ item ] then exported := Some "foreign:";
-                  env
+                  if top then
+                    List.iter (item_bindings ~top:false env item) ~f:(fun (_, denotes) ->
+                        exported :=
+                          Some (if Poly.equal denotes `Own then owner_module else "foreign:"));
+                  List.fold (item_bindings ~top:false env item) ~init:env
+                    ~f:(fun env (name, denotes) ->
+                      Lexical_scope.bind_values env [ constructor_key name ] denotes)
 
                 method! opened ~top ~include_ env denotation =
                   if top && include_ then
@@ -522,7 +559,7 @@ let read_source ~carriers ?(foreign = []) ?(owner = ("", "")) ~source content =
                     then exported := Some "foreign:"
                     else if Option.equal String.equal denotation (Some owner_module) then
                       exported := Some owner_module;
-                  env
+                  self#opened ~top ~include_ env denotation
               end
             in
             ignore (reader#structure env items : structure);
@@ -539,27 +576,8 @@ let read_source ~carriers ?(foreign = []) ?(owner = ("", "")) ~source content =
         else env
 
       method! item_scope ~top env item =
-        let owner_declaration =
-          top
-          && String.equal source (fst owner)
-          &&
-          match item.pstr_desc with
-          | Pstr_type (_, decls) ->
-              List.exists decls ~f:(fun d -> String.equal d.ptype_name.txt (snd owner))
-          | _ -> false
-        in
-        let names =
-          if owner_declaration then []
-          else
-            match item.pstr_desc with
-            | Pstr_exception exn -> [ exn.ptyexn_constructor.pext_name.txt ]
-            | Pstr_typext ext -> List.map ext.ptyext_constructors ~f:(fun c -> c.pext_name.txt)
-            | _ -> own_string_constructors [ item ]
-        in
-        Lexical_scope.bind_values env
-          (List.filter_map names ~f:(fun c ->
-               Option.some_if (List.mem carriers c ~equal:String.equal) (constructor_key c)))
-          `Foreign
+        List.fold (item_bindings ~top env item) ~init:env ~f:(fun env (name, denotes) ->
+            Lexical_scope.bind_values env [ constructor_key name ] denotes)
     end
   in
   (* What a handler or consumer body [e] does with the variable [v]: the carriers applied to it
@@ -585,12 +603,7 @@ let read_source ~carriers ?(foreign = []) ?(owner = ("", "")) ~source content =
         method! expression env e =
           match e.pexp_desc with
           | Pexp_letexception (ext, body) ->
-              let name = ext.pext_name.txt in
-              let inner =
-                if List.mem carriers name ~equal:String.equal then
-                  Lexical_scope.bind_values env [ constructor_key name ] `Foreign
-                else env
-              in
+              let inner = bind_extension env ext in
               ignore (self#expression inner body : expression);
               e
           | _ ->
@@ -745,14 +758,12 @@ let read_source ~carriers ?(foreign = []) ?(owner = ("", "")) ~source content =
                 }
             in
             scopes <- sc :: List.filter scopes ~f:(fun o -> not (String.equal !o.exn txt));
-            let inner =
-              if List.mem carriers txt ~equal:String.equal then
-                Lexical_scope.bind_values env [ constructor_key txt ] `Foreign
-              else env
-            in
+            let inner = bind_extension env ext in
             ignore (self#expression inner body : expression);
             closed := !sc :: !closed;
             scopes <- saved
+        | Pexp_letexception (ext, body) ->
+            ignore (self#expression (bind_extension env ext) body : expression)
         | Pexp_construct (lid, Some { pexp_desc = Pexp_constraint (arg, _); _ }) ->
             ignore
               (self#expression env { e with pexp_desc = Pexp_construct (lid, Some arg) }
@@ -822,11 +833,6 @@ let read_source ~carriers ?(foreign = []) ?(owner = ("", "")) ~source content =
     end
   in
   let initial = { Lexical_scope.frames = []; modules = Map.empty (module String) } in
-  let initial =
-    if is_foreign own_module then
-      Lexical_scope.bind_values initial (List.map carriers ~f:constructor_key) `Foreign
-    else initial
-  in
   ignore (walker#structure initial structure : structure);
   {
     path = source;

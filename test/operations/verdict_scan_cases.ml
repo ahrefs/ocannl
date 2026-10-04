@@ -233,6 +233,14 @@ let () = skipped "outer"|ocaml},
       ( "computed labels preserve their binding identity",
         {ocaml|let pair = ((fun label -> pass_fail (label ^ " holds") ok), (fun label -> skipped (label ^ " holds")))|ocaml},
         0 );
+      ( "computed labels pair when shadowing inputs resolve to the same literal",
+        {ocaml|let f () = let suffix = "same" in pass_fail ("x" ^ suffix) ok;
+let suffix = "same" in skipped ("x" ^ suffix)|ocaml},
+        1 );
+      ( "computed labels do not pair when literal inputs differ",
+        {ocaml|let f () = let suffix = "first" in pass_fail ("x" ^ suffix) ok;
+let suffix = "second" in skipped ("x" ^ suffix)|ocaml},
+        0 );
       ( "bindings inside a computed expression hide outer names",
         {ocaml|let f label =
 pass_fail (let label = "same" in label) ok;

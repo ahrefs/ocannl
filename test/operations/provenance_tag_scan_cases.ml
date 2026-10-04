@@ -639,6 +639,45 @@ let () =
         exception Site of string\n\
         let b = Site \"12:fixture-key\"";
      ] ~f:(fun text -> strings (tags (read ~source:"test/j.ml" text).mints) [ "13:fixture-owned" ]);
+   p_all "foreign file identity does not precede its declaration"
+     [ "exception Site of string"; "type t = Site of string"; "include Key_scan" ]
+     ~f:(fun declaration ->
+       strings
+         (tags
+            (read ~source:"test/key_scan.ml" ~foreign:[ "Key_scan" ]
+               ("let a = Site \"13:fixture-owned\"\n" ^ declaration
+              ^ "\nlet b = Site \"12:fixture-key\""))
+              .mints)
+         [ "13:fixture-owned" ]);
+   p_all "owner constructor rebindings retain their identity"
+     [
+       "exception Site = Tnode.Site";
+       "type t = ..\ntype t += Site = Tnode.Site";
+       "module Local = struct exception Site = Tnode.Site end\nopen Local";
+       "module Local = struct open Tnode exception Site = Site end\nopen Local";
+     ] ~f:(fun declaration ->
+       strings
+         (tags (read (declaration ^ "\nlet x = Site \"13:fixture-owned\"")).mints)
+         [ "13:fixture-owned" ]);
+   p_all "foreign constructor rebindings retain their identity"
+     [
+       "exception Site = Key_scan.Site";
+       "type t = ..\ntype t += Site = Key_scan.Site";
+       "module Local = struct open Key_scan exception Site = Site end\nopen Local";
+     ] ~f:(fun declaration ->
+       strings
+         (tags
+            (read ~foreign:[ "Key_scan" ] (declaration ^ "\nlet x = Site \"12:fixture-key\"")).mints)
+         []);
+   p_all "local constructor aliases resolve under their lexical scope"
+     [ ("Tnode.Site", [ "13:fixture-owned" ]); ("Key_scan.Site", []) ]
+     ~f:(fun (target, expected) ->
+       strings
+         (tags
+            (read ~foreign:[ "Key_scan" ]
+               ("let x = let exception Site = " ^ target ^ " in Site \"13:fixture-owned\""))
+              .mints)
+         expected);
    p_all "direct exports take effect in declaration order"
      [
        ("module Local = struct exception Site of string include Tnode end", [ "13:fixture-owned" ]);

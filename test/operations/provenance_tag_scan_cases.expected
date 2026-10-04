@@ -86,6 +86,10 @@ the owner's own declaration, in the owner's file, keeps the name the owner's: tr
 a top-level include is read, constrained or not, so a module re-exporting a foreign one can be found: true
 an alias of a longer path is the owner's only when it ends in the owner's module: true
 an exception named like a carrier shadows it where it is in scope: true
+foreign file identity does not precede its declaration: true
+owner constructor rebindings retain their identity: true
+foreign constructor rebindings retain their identity: true
+local constructor aliases resolve under their lexical scope: true
 direct exports take effect in declaration order: true
 foreign exports remain lexical and direct: true
 nested includes preserve their carrier identity: true

@@ -312,7 +312,7 @@ let scan content =
 type label_key =
   | Literal of string
   | Named of string * int
-  | Computed of string * (string * int) list
+  | Computed of string * (string * (string option * int)) list
 
 let label_key_text = function Literal text | Named (text, _) | Computed (text, _) -> text
 
@@ -362,8 +362,12 @@ let dialect_census content =
                       | Some (None, 0) ->
                           () (* Bound inside this expression, whose text already identifies it. *)
                       | bound ->
-                          let identity = Option.value_map bound ~default:0 ~f:snd in
-                          references := (name, identity) :: !references)
+                          let denotation =
+                            match bound with
+                            | Some (Some literal, _) -> (Some literal, 0)
+                            | other -> Option.value other ~default:(None, 0)
+                          in
+                          references := (name, denotation) :: !references)
                   | _ -> ()
               end
             in

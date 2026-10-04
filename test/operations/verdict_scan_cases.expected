@@ -54,6 +54,8 @@ ok: dialect scope -- a later literal does not resolve an earlier use
 ok: dialect scope -- a case binder shadows a literal
 ok: dialect scope -- same-named parameters in one item remain separate
 ok: dialect scope -- computed labels preserve their binding identity
+ok: dialect scope -- computed labels pair when shadowing inputs resolve to the same literal
+ok: dialect scope -- computed labels do not pair when literal inputs differ
 ok: dialect scope -- bindings inside a computed expression hide outer names
 ok: dialect scope -- the same literal still pairs across scopes
 the walk counts every string literal it passes: true

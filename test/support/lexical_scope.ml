@@ -171,6 +171,9 @@ class virtual ['v, 'm] scoped =
     method bind_parameters env patterns = self#bind_patterns env patterns
     (** The parameter-specific form of {!bind_patterns}, defaulting to the same local denotation. *)
 
+    method bind_parameter env (_ : arg_label) pattern = self#bind_parameters env [ pattern ]
+    (** One ordinary function parameter, with its argument label available to a scan. *)
+
     method bind_group env bindings denotes =
       List.fold2_exn
         (List.map bindings ~f:(fun b -> pattern_vars [ b.pvb_pat ]))
@@ -265,10 +268,10 @@ class virtual ['v, 'm] scoped =
           let env =
             List.fold params ~init:env ~f:(fun env param ->
                 match param.pparam_desc with
-                | Pparam_val (_, default, pattern) ->
+                | Pparam_val (label, default, pattern) ->
                     Option.iter default ~f:(fun d -> ignore (self#expression env d : expression));
                     ignore (self#pattern env pattern : pattern);
-                    self#bind_parameters env [ pattern ]
+                    self#bind_parameter env label pattern
                 | Pparam_newtype _ -> env)
           in
           Option.iter constraint_ ~f:(fun c ->

@@ -14,6 +14,10 @@ ok: use -- a functor parameter shadows the cache module
 ok: use -- an unpack shadows the cache module
 ok: use -- the cache resolver forwards a lexical parameter
 ok: use -- a same-named resolver in a shadowing module proves nothing
+ok: use -- an alias of an unchecked positional parameter remains unresolved
+ok: use -- a positional parameter named cache_dir remains unresolved
+ok: use -- a renamed censused labelled parameter is forwarded
+ok: use -- an alias of a censused labelled parameter is forwarded
 ok: use -- a case binder is unresolved rather than a forwarded function parameter
 ok: use -- a for index is unresolved rather than a forwarded function parameter
 ok: use -- a recursive alias never borrows the outer literal

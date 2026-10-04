@@ -23,10 +23,10 @@
 
     {1 What is resolved, and how far}
 
-    Names resolve through [Lexical_scope] at each use. A parameter mentioning [cache_dir] is
-    reported as forwarded; every other unresolved argument fails loudly in the consuming check. Only
-    exact [Schedule_cache], [Ir.Schedule_cache] and [Ocannl.Ir.Schedule_cache] module paths (and
-    their lexical aliases) identify direct cache operations. Unknown opens bring in no names;
+    Names resolve through [Lexical_scope] at each use. A labelled or optional [cache_dir] parameter
+    is reported as forwarded; every other unresolved argument fails loudly in the consuming check.
+    Only exact [Schedule_cache], [Ir.Schedule_cache] and [Ocannl.Ir.Schedule_cache] module paths
+    (and their lexical aliases) identify direct cache operations. Unknown opens bring in no names;
     qualified directory values are unresolved rather than borrowed from a same-named local. The
     library's [Autotune.resolve_cache_dir] preserves forwarding when its argument is a lexical
     parameter: it picks that parameter or the separately censused configuration default. Other
@@ -68,8 +68,6 @@ let flatten_longident = Config_key_scan.flatten_longident
 let label_name = function
   | Asttypes.Labelled name | Asttypes.Optional name -> Some name
   | Asttypes.Nolabel -> None
-
-let mentions_label name = String.is_substring name ~substring:tune_label
 
 (* The string literal an application passes under a given label, where it passes one. *)
 let labelled_literal args wanted =
@@ -148,7 +146,7 @@ let read ?(source = "") content =
         | Pexp_ident { txt = Ppxlib.Longident.Lident name; _ } -> (
             match Lexical_scope.lookup env name with
             | Some (Literal value) -> literal value
-            | Some Parameter when mentions_label name -> Forwarded name
+            | Some Parameter -> Forwarded name
             | _ -> Unresolved ("`" ^ name ^ "`"))
         | Pexp_ident { txt; _ } ->
             Unresolved ("`" ^ String.concat ~sep:"." (flatten_longident txt) ^ "`")
@@ -166,10 +164,14 @@ let read ?(source = "") content =
       inherit [value_denotes, module_denotes] Lexical_scope.scoped as super
       method local = Unknown
 
-      method! bind_parameters env patterns =
+      method! bind_parameter env label pattern =
+        let denotes =
+          if Option.equal String.equal (label_name label) (Some tune_label) then Parameter
+          else Unknown
+        in
         self#forget
-          (Lexical_scope.bind_values env (Lexical_scope.pattern_vars patterns) Parameter)
-          (Lexical_scope.pattern_unpacks patterns)
+          (Lexical_scope.bind_values env (Lexical_scope.pattern_vars [ pattern ]) denotes)
+          (Lexical_scope.pattern_unpacks [ pattern ])
 
       method! shadowed = Some Other
       method module_path env path = module_path env path
