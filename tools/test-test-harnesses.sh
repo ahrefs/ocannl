@@ -6,7 +6,7 @@ set -u
 here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 . "$here/../scripts/harness-support.sh"
 harness_args "$@"
-harness_require python3
+harness_require python3 perl
 harness_scratch test-harnesses
 fixture="$TMP/repository with spaces"
 mkdir -p "$fixture/tools"
@@ -32,7 +32,14 @@ while IFS= read -r script; do
 name=${0#"$FIXTURE/"}
 printf '%s\n' "$name" >>"$RECORD"
 [ "$PWD" = "$FIXTURE" ] || exit 90
-[ "$name" != "${FAIL_MEMBER:-}" ] || exit 7
+if [ "$name" = "${FAIL_MEMBER:-}" ]; then
+  if [ -n "${FAIL_SIGNAL:-}" ]; then
+    # Background launchers can inherit ignored INT; reset the member itself
+    # before the real signal so the oracle is independent of that parent.
+    exec perl -e '$SIG{$ARGV[0]} = "DEFAULT"; kill $ARGV[0], $$;' "$FAIL_SIGNAL"
+  fi
+  exit 7
+fi
 exit 0
 STUB
   chmod +x "$fixture/$script"
@@ -75,7 +82,34 @@ twin_rc=0
 if [ "$twin_rc" = 1 ] && ! cmp -s "$TMP/all" "$RECORD"; then
   report 0 'the fail-fast twin loses the all-members oracle'
 else report 1 'the fail-fast twin loses the all-members oracle'; fi
-unset FAIL_MEMBER
+# Actual signals on the member preserve cancellation and suppress later work.
+export FAIL_SIGNAL FAIL_MEMBER
+FAIL_MEMBER=$(head -n 1 "$TMP/all")
+head -n 1 "$TMP/all" >"$TMP/first"
+python3 - "$subject" "$fixture/tools/continue.sh" <<'PY_INTERRUPT'
+from pathlib import Path
+import sys
+text = Path(sys.argv[1]).read_text()
+assert '129|130|143)' in text
+Path(sys.argv[2]).write_text(text.replace('129|130|143)', '250)'))
+PY_INTERRUPT
+chmod +x "$fixture/tools/continue.sh"
+for signal in HUP INT TERM; do
+  case $signal in HUP) want=129 ;; INT) want=130 ;; TERM) want=143 ;; esac
+  FAIL_SIGNAL=$signal
+  run
+  if [ "$got" = "$want" ] && cmp -s "$TMP/first" "$RECORD" \
+     && grep -q "^harnesses: interrupted (exit $want)$" "$TMP/out"; then
+    report 0 "$signal stops after the interrupted member and preserves exit $want"
+  else report 1 "$signal stops after the interrupted member and preserves exit $want"; fi
+  : >"$RECORD"
+  continuation_rc=0
+  "$fixture/tools/continue.sh" >"$TMP/continuation-out" 2>&1 || continuation_rc=$?
+  if [ "$continuation_rc" = 1 ] && cmp -s "$TMP/all" "$RECORD"; then
+    report 0 "$signal continuation twin launches the later members and loses the interrupt oracle"
+  else report 1 "$signal continuation twin launches the later members and loses the interrupt oracle"; fi
+done
+unset FAIL_MEMBER FAIL_SIGNAL
 # Empty membership is an invocation error, never a vacuous green tier.
 python3 - "$subject" "$fixture/tools/empty.sh" <<'PY_EMPTY'
 from pathlib import Path

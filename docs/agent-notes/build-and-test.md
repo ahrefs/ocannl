@@ -599,8 +599,9 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
 - `tools/test-harnesses.sh` runs the complete hand-run harness tier locally, from any
   working directory. Its manifest is the membership CI uses: the toolchain-free job runs
   `--shell`, the formatting job runs `--toolchain` after installation; omitting the group runs both.
-  `--list` lists the selected paths without executing them. Every selected member runs even
-  after a failure; the footer counts failed harnesses and exits 1 if any failed. Individual
+  `--list` lists the selected paths without executing them. Every selected member runs after
+  an ordinary failure; the footer counts failed harnesses and exits 1 if any failed. A member
+  interrupted by HUP, INT or TERM stops the aggregate and preserves exit 129, 130 or 143. Individual
   harnesses retain their counted capability skips; the formatter's real cache control and
   promotion fixtures need the local toolchain. For a shell change, run this command beside
   `tools/test-run.sh run build @test/operations/scans`: the latter includes configuration

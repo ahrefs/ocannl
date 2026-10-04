@@ -4,7 +4,8 @@
 # With no group, run both. --shell needs no OCaml toolchain; --toolchain
 # runs the formatter and promotion controls, whose missing-toolchain legs
 # report counted skips. CI runs that group after installing its toolchain.
-# Every selected harness runs, even after failures; any failure exits 1.
+# Every selected harness runs after ordinary failures; any failure exits 1.
+# HUP/INT/TERM stop immediately and preserve the interruption status.
 set -u
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd) || exit 2
 group=all list=0
@@ -49,6 +50,11 @@ while read -r tier script; do
   rc=0
   "$root/$script" || rc=$?
   printf 'HARNESS %s exit: %s\n' "$script" "$rc"
+  case $rc in
+    129|130|143)
+      printf 'harnesses: interrupted (exit %s)\n' "$rc" >&2
+      exit "$rc" ;;
+  esac
   [ "$rc" = 0 ] || failures=$((failures + 1))
 done < <(manifest)
 [ "$total" -gt 0 ] || { echo "no harnesses selected" >&2; exit 2; }
