@@ -58,10 +58,10 @@
       generative, so a same-named exception elsewhere proves nothing, and a handler names the local
       exception unqualified. It may take one hop through a result: a handler returning the payload
       wrapped in a constructor ([Non_virtual i -> Error i]), from an unguarded return position,
-      relays when a caller of the declaring function -- the source's one top-level binding of the
-      name, qualified by its module in one component ([Low_level.f], or an alias of it; a local
+      relays when a caller of the declaring function -- the source-level binding reached by the
+      call, qualified by its module in one component ([Low_level.f], or an alias of it; a local
       structure of that name is not the file module), or unqualified in its own source where nothing
-      else binds the name -- matches that constructor into a carrier
+      else shadows that binding -- matches that constructor into a carrier
       ([match instantiate_computations ... with Error i -> ... (Site i)]). A handler or caller body
       is resolved under lexical scope: a rebound payload is not credited, while an untouched payload
       outside that binding still is. A guarded case or caller's [exception] case is unread. A scope
@@ -359,8 +359,9 @@ let exception_keyword = "exception"
 type scope = {
   exn : string;
   declared_in : string;
+  binding : int option;
   top_level : bool;
-      (** Whether [declared_in] is the source's one top-level binding of that name: only then can a
+      (** Whether [declared_in] is a source-level binding, identified by [binding]: only then can a
           caller name it, so only then do [results] relay. *)
   direct : string list;  (** Carriers a handler of THIS scope applies the payload to. *)
   results : string list;
@@ -376,10 +377,11 @@ type read = {
   path : string;  (** The source read. *)
   mints : mint list;  (** [Applied] literals. *)
   scopes : scope list;
-  consumers : (string * string * string * string) list;
-      (** [(m, f, k, carrier)]: a [match f ... with k v -> ... (carrier v)] in this source, [f]
-          being module [m]'s function -- the module qualifying the call as resolved there, or the
-          source's own for an unqualified one. *)
+  exports : (string * int) list;
+  consumers : (string * string * int option * string * string) list;
+      (** [(m, f, binding, k, carrier)]: a [match f ... with k v -> ... (carrier v)] in this source,
+          [f] being module [m]'s function -- the module qualifying the call as resolved there, or
+          the source's own for an unqualified one. *)
   malformed : string list;  (** String literals a carrier is applied to that are no tag. *)
 }
 
@@ -446,7 +448,11 @@ let declares_own_carrier ~carriers content =
     constructors are reached through aliases and opens this reader cannot follow, which is why the
     rule names what is excluded rather than what is included. *)
 let read_source ~carriers ?(foreign = []) ?(owner = ("", "")) ~source content =
-  let mints = ref [] and malformed = ref [] and consumers = ref [] and closed = ref [] in
+  let mints = ref []
+  and malformed = ref []
+  and consumers = ref []
+  and closed = ref []
+  and exports = ref [] in
   let structure = parse content in
   let own_module = module_of_path source in
   let unestablished = "?" in
@@ -481,7 +487,9 @@ let read_source ~carriers ?(foreign = []) ?(owner = ("", "")) ~source content =
   in
   let scope_model () =
     object (self)
-      inherit [[ `Local | `Own | `Payload | `Foreign ], string] Lexical_scope.scoped as super
+      inherit
+        [[ `Local | `Own | `Function of int | `Payload | `Foreign ], string] Lexical_scope.scoped as super
+
       method local = `Local
       method! shadowed = Some unestablished
       method module_path env path = module_path env path
@@ -490,31 +498,35 @@ let read_source ~carriers ?(foreign = []) ?(owner = ("", "")) ~source content =
         match me.pmod_desc with
         | Pmod_constraint (inner, _) -> self#module_of env inner
         | Pmod_structure items ->
-            let foreign_export = ref (declares_carrier items) and owner_export = ref false in
+            let exported = ref None in
             let reader =
               object
-                inherit [[ `Local | `Own | `Payload | `Foreign ], string] Lexical_scope.scoped
+                inherit
+                  [[ `Local | `Own | `Function of int | `Payload | `Foreign ], string] Lexical_scope
+                                                                                       .scoped
+
                 method local = `Local
                 method! shadowed = Some unestablished
                 method module_path env path = module_path env path
                 method! module_of env me = self#module_of env me
 
+                method! item_scope ~top env item =
+                  if top && declares_carrier [ item ] then exported := Some "foreign:";
+                  env
+
                 method! opened ~top ~include_ env denotation =
-                  if top && include_ then (
+                  if top && include_ then
                     if
                       Option.value_map denotation ~default:false ~f:(fun m ->
                           is_foreign m || String.equal m "foreign:")
-                    then foreign_export := true;
-                    if Option.equal String.equal denotation (Some owner_module) then
-                      owner_export := true);
+                    then exported := Some "foreign:"
+                    else if Option.equal String.equal denotation (Some owner_module) then
+                      exported := Some owner_module;
                   env
               end
             in
             ignore (reader#structure env items : structure);
-            Some
-              (if !foreign_export then "foreign:"
-               else if !owner_export then owner_module
-               else unestablished)
+            Some (Option.value !exported ~default:unestablished)
         | _ -> super#module_of env me
 
       method! opened ~top:_ ~include_:_ env target =
@@ -526,9 +538,10 @@ let read_source ~carriers ?(foreign = []) ?(owner = ("", "")) ~source content =
           Lexical_scope.bind_values env (List.map carriers ~f:constructor_key) `Own
         else env
 
-      method! item_scope ~top:_ env item =
+      method! item_scope ~top env item =
         let owner_declaration =
-          String.equal source (fst owner)
+          top
+          && String.equal source (fst owner)
           &&
           match item.pstr_desc with
           | Pstr_type (_, decls) ->
@@ -558,7 +571,9 @@ let read_source ~carriers ?(foreign = []) ?(owner = ("", "")) ~source content =
     let carriers_hit = ref [] in
     let finder =
       object (self)
-        inherit [[ `Local | `Own | `Payload | `Foreign ], string] Lexical_scope.scoped as super
+        inherit
+          [[ `Local | `Own | `Function of int | `Payload | `Foreign ], string] Lexical_scope.scoped as super
+
         method local = `Local
         method! shadowed = Some unestablished
         method module_path env path = module_path env path
@@ -627,7 +642,9 @@ let read_source ~carriers ?(foreign = []) ?(owner = ("", "")) ~source content =
   in
   let walker =
     object (self)
-      inherit [[ `Local | `Own | `Payload | `Foreign ], string] Lexical_scope.scoped as super
+      inherit
+        [[ `Local | `Own | `Function of int | `Payload | `Foreign ], string] Lexical_scope.scoped as super
+
       method local = `Local
       method! shadowed = Some unestablished
       method module_path env path = module_path env path
@@ -635,15 +652,39 @@ let read_source ~carriers ?(foreign = []) ?(owner = ("", "")) ~source content =
       method! opened ~top ~include_ env target = (scope_model ())#opened ~top ~include_ env target
       method! item_scope ~top env item = (scope_model ())#item_scope ~top env item
       val mutable top_bindings = []
-      val mutable enclosing_top = false
+      val mutable enclosing_binding = None
+
+      method! finished env =
+        let names =
+          List.concat_map env.Lexical_scope.frames ~f:Map.keys
+          |> List.dedup_and_sort ~compare:String.compare
+        in
+        exports :=
+          List.filter_map names ~f:(fun name ->
+              match Lexical_scope.lookup env name with
+              | Some (`Function id) -> Some (name, id)
+              | _ -> None)
+
+      method! recursive_denotes ~top _env bindings =
+        List.map bindings ~f:(fun b ->
+            if top then `Function b.pvb_loc.loc_start.pos_cnum else `Local)
 
       method! define ~top env rec_flag bindings ~walk =
         let saved = top_bindings in
         top_bindings <-
           (if top then List.map bindings ~f:(fun b -> b.pvb_loc.loc_start.pos_cnum) else []);
-        ignore (super#define ~top env rec_flag bindings ~walk);
+        let denotes =
+          List.map bindings ~f:(fun b ->
+              if top then `Function b.pvb_loc.loc_start.pos_cnum else `Local)
+        in
+        let inner =
+          match rec_flag with
+          | Recursive -> self#bind_group env bindings denotes
+          | Nonrecursive -> env
+        in
+        List.iter bindings ~f:(walk inner);
         top_bindings <- saved;
-        List.map bindings ~f:(fun _ -> if top then `Own else `Local)
+        denotes
 
       method! attribute _ attr = attr
       val mutable enclosing = "(top level)"
@@ -654,12 +695,15 @@ let read_source ~carriers ?(foreign = []) ?(owner = ("", "")) ~source content =
       val mutable scopes : scope ref list = []
 
       method! value_binding env vb =
-        let saved = enclosing and saved_top = enclosing_top in
-        enclosing_top <- List.mem top_bindings vb.pvb_loc.loc_start.pos_cnum ~equal:Int.equal;
+        let saved = enclosing and saved_binding = enclosing_binding in
+        enclosing_binding <-
+          Option.some_if
+            (List.mem top_bindings vb.pvb_loc.loc_start.pos_cnum ~equal:Int.equal)
+            vb.pvb_loc.loc_start.pos_cnum;
         Option.iter (binding_name vb) ~f:(fun name -> enclosing <- name);
         let result = super#value_binding env vb in
         enclosing <- saved;
-        enclosing_top <- saved_top;
+        enclosing_binding <- saved_binding;
         result
 
       method! case env c =
@@ -692,7 +736,8 @@ let read_source ~carriers ?(foreign = []) ?(owner = ("", "")) ~source content =
                 {
                   exn = txt;
                   declared_in = enclosing;
-                  top_level = enclosing_top;
+                  binding = enclosing_binding;
+                  top_level = Option.is_some enclosing_binding;
                   direct = [];
                   results = [];
                   literals = [];
@@ -718,12 +763,14 @@ let read_source ~carriers ?(foreign = []) ?(owner = ("", "")) ~source content =
             let callee =
               match f with
               | Ldot (Lident q, name) ->
-                  Option.map (module_path env (Lident q)) ~f:(fun m -> (m, name))
-              | Lident name when Poly.equal (Lexical_scope.lookup env name) (Some `Own) ->
-                  Some (own_module, name)
-              | Ldot _ | Lident _ | Lapply _ -> None
+                  Option.map (module_path env (Lident q)) ~f:(fun m -> (m, name, None))
+              | Lident name -> (
+                  match Lexical_scope.lookup env name with
+                  | Some (`Function id) -> Some (own_module, name, Some id)
+                  | _ -> None)
+              | Ldot _ | Lapply _ -> None
             in
-            Option.iter callee ~f:(fun (m, f) ->
+            Option.iter callee ~f:(fun (m, f, binding) ->
                 List.iter cases ~f:(fun (c : case) ->
                     List.iter
                       (if Option.is_some c.pc_guard then [] else caught ~exceptions:false c.pc_lhs)
@@ -731,7 +778,8 @@ let read_source ~carriers ?(foreign = []) ?(owner = ("", "")) ~source content =
                         Option.iter (last_name k) ~f:(fun k ->
                             List.iter
                               (fst (wrappers_of_var env v c.pc_rhs))
-                              ~f:(fun carrier -> consumers := (m, f, k, carrier) :: !consumers)))));
+                              ~f:(fun carrier ->
+                                consumers := (m, f, binding, k, carrier) :: !consumers)))));
             ignore (super#expression env e : expression)
         | Pexp_construct
             ({ txt; _ }, Some { pexp_desc = Pexp_constant (Pconst_string (s, _, _)); _ })
@@ -784,6 +832,7 @@ let read_source ~carriers ?(foreign = []) ?(owner = ("", "")) ~source content =
     path = source;
     mints = List.rev !mints;
     scopes = List.rev_map !closed ~f:(fun sc -> { sc with literals = List.rev sc.literals });
+    exports = !exports;
     consumers = List.rev !consumers;
     malformed = List.rev !malformed;
   }
@@ -796,10 +845,11 @@ let scope_carriers ~consumers ~path (sc : scope) =
   @ List.concat_map
       (if sc.top_level then sc.results else [])
       ~f:(fun k ->
-        List.filter_map consumers ~f:(fun (m, f, k', carrier) ->
+        List.filter_map consumers ~f:(fun (m, _f, binding, k', carrier) ->
             Option.some_if
               (String.equal m (module_of_path path)
-              && String.equal f sc.declared_in && String.equal k k')
+              && Option.equal Int.equal binding sc.binding
+              && Option.is_some binding && String.equal k k')
               carrier))
   |> List.dedup_and_sort ~compare:String.compare
 
@@ -808,7 +858,20 @@ let scope_carriers ~consumers ~path (sc : scope) =
     [(source, literal)] for every string a carrier, or a relaying scope's exception, is applied to
     that is no tag. *)
 let resolve reads =
-  let consumers = List.concat_map reads ~f:(fun r -> r.consumers) in
+  let consumers =
+    List.concat_map reads ~f:(fun r ->
+        List.filter_map r.consumers ~f:(fun (m, f, binding, k, carrier) ->
+            let binding =
+              match binding with
+              | Some _ -> binding
+              | None ->
+                  List.find_map reads ~f:(fun producer ->
+                      if String.equal (module_of_path producer.path) m then
+                        List.Assoc.find producer.exports f ~equal:String.equal
+                      else None)
+            in
+            Option.map binding ~f:(fun id -> (m, f, Some id, k, carrier))))
+  in
   let relayed =
     List.concat_map reads ~f:(fun r ->
         List.concat_map r.scopes ~f:(fun sc ->

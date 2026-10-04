@@ -301,6 +301,31 @@ let () =
      ~f:(fun (m : Scan.mint) -> String.equal m.tag "2:fixture-first"));
   p "a payload wrapped in a result constructor is relayed by a caller matching it into a carrier"
     (Option.equal String.equal (minter_of "4:fixture-consume") (Some "consume"));
+  (let producer =
+     "let produce x = let exception " ^ nv ^ " of string in try raise (" ^ nv
+     ^ " \"4:fixture-produced\") with " ^ nv ^ " i -> Error i"
+   in
+   let caller = "let caller x = match produce x with Error i -> record (Site i) | _ -> ()" in
+   let produced text = resolve [ read text ] in
+   let is_produced (m : Scan.mint) = String.equal m.tag "4:fixture-produced" in
+   p_exists "recursive siblings resolve the producer identity before their RHS walk"
+     (produced
+        (String.substr_replace_first producer ~pattern:"let produce" ~with_:"let rec produce"
+        ^ "\nand caller x = match produce x with Error i -> record (Site i) | _ -> ()"))
+     ~f:is_produced;
+   p_exists "an earlier consumer keeps the original producer after a later shadow"
+     (produced (producer ^ "\n" ^ caller ^ "\nlet produce _ = Ok ()"))
+     ~f:is_produced;
+   p_empty "a later consumer does not reach a shadowed producer" ~over:[ producer; caller ]
+     (produced (producer ^ "\nlet produce _ = Ok ()\n" ^ caller));
+   p_empty "qualified consumers reach only the final exported producer binding"
+     ~over:[ producer; caller ]
+     (resolve
+        [
+          read (producer ^ "\nlet produce _ = Ok ()");
+          read ~source:"lib/caller.ml"
+            "let caller x = match Fixture.produce x with Error i -> record (Site i) | _ -> ()";
+        ]));
   (let unconsumed =
      String.substr_replace_all library ~pattern:"Error i -> record (Site i)"
        ~with_:"Error i -> log i"
@@ -614,6 +639,15 @@ let () =
         exception Site of string\n\
         let b = Site \"12:fixture-key\"";
      ] ~f:(fun text -> strings (tags (read ~source:"test/j.ml" text).mints) [ "13:fixture-owned" ]);
+   p_all "direct exports take effect in declaration order"
+     [
+       ("module Local = struct exception Site of string include Tnode end", [ "13:fixture-owned" ]);
+       ("module Local = struct include Tnode exception Site of string end", []);
+     ]
+     ~f:(fun (declaration, expected) ->
+       strings
+         (tags (read (declaration ^ "\nlet x = Local.Site \"13:fixture-owned\"")).mints)
+         expected);
    p_all "foreign exports remain lexical and direct"
      [
        ( "module K = struct exception Site of string end\n\

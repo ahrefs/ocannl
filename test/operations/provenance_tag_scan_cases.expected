@@ -28,6 +28,10 @@ a handler whose carrier receives some other value than the payload relays nothin
 unshadowed payload uses survive unrelated nested bindings: true
 the same handler shape relays when the carrier does receive the payload: true
 a payload wrapped in a result constructor is relayed by a caller matching it into a carrier: true
+recursive siblings resolve the producer identity before their RHS walk: true
+an earlier consumer keeps the original producer after a later shadow: true
+a later consumer does not reach a shadowed producer: true
+qualified consumers reach only the final exported producer binding: true
 a result constructor no caller hands to a carrier relays nothing: true
 a caller of a same-named function of another module relays nothing: true
 a caller qualifying the declaring module through a binding relays: true
@@ -82,6 +86,7 @@ the owner's own declaration, in the owner's file, keeps the name the owner's: tr
 a top-level include is read, constrained or not, so a module re-exporting a foreign one can be found: true
 an alias of a longer path is the owner's only when it ends in the owner's module: true
 an exception named like a carrier shadows it where it is in scope: true
+direct exports take effect in declaration order: true
 foreign exports remain lexical and direct: true
 nested includes preserve their carrier identity: true
 foreign exception and extension carriers are discovered: true

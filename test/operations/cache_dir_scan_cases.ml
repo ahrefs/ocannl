@@ -103,6 +103,13 @@ let () = for cache_dir = 0 to 1 do Autotune.tune ~cache_dir f done|ocaml},
       {ocaml|let cache_dir = "autotune_cache_safe"
 let f () = let rec cache_dir = cache_dir in Autotune.tune ~cache_dir f|ocaml},
       [ "~cache_dir names `cache_dir`" ] );
+    ( "class constructor parameters are unresolved because instantiations are not censused",
+      {ocaml|class runner cache_dir = object method run = Autotune.tune ~cache_dir f end
+let () = new runner "scratch"|ocaml},
+      [ "~cache_dir names `cache_dir`" ] );
+    ( "a literal inside a class remains resolved",
+      {ocaml|class runner = let cache_dir = "autotune_cache_class" in object method run = Autotune.tune ~cache_dir f end|ocaml},
+      [ "~cache_dir names autotune_cache_class" ] );
     (* The direct-store spelling, whose `~dir` is told from every other `~dir` in the repository
        only by the module it is called through. *)
     ( "a direct store through a structure-level alias",

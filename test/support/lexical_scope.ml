@@ -109,8 +109,16 @@ class virtual ['v, 'm] scoped =
     method binding_denotes (_ : ('v, 'm) env) binding = self#let_denotes binding
     (** The lexical form of {!let_denotes}, for a scan following an identifier in the RHS. *)
 
+    method recursive_denotes ~top:(_ : bool) env bindings = self#denotations env Recursive bindings
+    (** Bindings visible in recursive RHSs; defaults to the group's ordinary denotations. *)
+
     method define ~top:(_ : bool) env rec_flag bindings ~walk =
-      List.iter bindings ~f:(walk env);
+      let inner =
+        match rec_flag with
+        | Nonrecursive -> env
+        | Recursive -> self#bind_group env bindings (self#denotations env rec_flag bindings)
+      in
+      List.iter bindings ~f:(walk inner);
       self#denotations env rec_flag bindings
     (** How a structure's binding group enters scope for the items after it: it walks the group
         itself, through [walk], and returns what each binding's names denote. [top] is whether the
@@ -209,9 +217,9 @@ class virtual ['v, 'm] scoped =
               | Pstr_value (rec_flag, bindings) ->
                   let inner =
                     match rec_flag with
-                    | Recursive ->
-                        self#bind_group env bindings (self#denotations env rec_flag bindings)
                     | Nonrecursive -> env
+                    | Recursive ->
+                        self#bind_group env bindings (self#recursive_denotes ~top env bindings)
                   in
                   let denotes =
                     self#define ~top env rec_flag bindings ~walk:(fun _ b ->
@@ -313,7 +321,7 @@ class virtual ['v, 'm] scoped =
       | Pcl_fun (_, default, pattern, body) ->
           Option.iter default ~f:(fun d -> ignore (self#expression env d : expression));
           ignore (self#pattern env pattern : pattern);
-          ignore (self#class_expr (self#bind_parameters env [ pattern ]) body : class_expr);
+          ignore (self#class_expr (self#bind_patterns env [ pattern ]) body : class_expr);
           ce
       | Pcl_let (rec_flag, bindings, body) ->
           ignore (self#class_expr (self#bindings env rec_flag bindings) body : class_expr);
