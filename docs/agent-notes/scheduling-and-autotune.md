@@ -104,10 +104,12 @@ files.
   and 0 (the two-pass rewrite) on CUDA, HIP and unmeasured targets. CUDA's block fold loses
   on the tuned f32 transformer even with tf32 (gh-ocannl-1194); the two-pass form retains the
   tensorized matmul gain ([ablation report](../../benchmarks/report-gh1194-cuda-approximate.md)).
-  On gfx1151 **unified** memory,
-  the tuned f32 forward's first search sweep measured 7.22 ms at 16 against 4.72 ms at 0
-  (exact 4.75 ms); the losing placement arms of block-off and exact refused timing windows,
-  so the clean three-arm confirmation is pending, including gfx1102 **discrete**. Explicit
+  Clean cached three-arm confirmation (gh-ocannl-1184, runtime `3858b8a5`) measured the
+  tuned f32 forward on
+  gfx1151 **unified** memory at 7.07 ms with 16 against 4.76 ms with auto (exact 4.72 ms),
+  and gfx1102 **discrete** at 9.56 ms against 6.30 ms (exact 6.12 ms). Full unpruned
+  searches and separate cache audits had no timing refusals; three Latin-square replay
+  sweeps per device confirmed that 16 loses on both. Explicit
   integers and `set_block` force their size. The limits travel through backend compilation
   AND analyze-only lowering before the rewrites; the resolved code retains the existing
   `Code_borne` cache classification. Backend-free lowering conservatively resolves auto to 0.
