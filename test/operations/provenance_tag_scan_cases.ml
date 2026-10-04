@@ -284,7 +284,17 @@ let () =
        nv ^ " i -> let open Key_scan in record (Site i)";
        nv ^ " i when false -> record (Site i) | " ^ nv ^ " _ -> ()";
      ]
-     ~f:(fun handler -> List.is_empty (resolve [ read (scope handler) ]));
+     ~f:(fun handler -> List.is_empty (resolve [ read ~foreign:[ "Key_scan" ] (scope handler) ]));
+   p_all "unshadowed payload uses survive unrelated nested bindings"
+     [
+       nv ^ " i -> let h i = record (Site i) in ignore h; record (Site i)";
+       nv ^ " i -> (let i = other in ignore i); record (Site i)";
+       nv ^ " i -> let module P = Tnode in record (P.Site i)";
+     ]
+     ~f:(fun handler ->
+       List.exists
+         (resolve [ read (scope handler) ])
+         ~f:(fun (m : Scan.mint) -> String.equal m.tag "2:fixture-first"));
    p_exists "the same handler shape relays when the carrier does receive the payload"
      (resolve [ read (scope (nv ^ " i -> let j = i in ignore j; record (Site i)")) ])
      ~f:(fun (m : Scan.mint) -> String.equal m.tag "2:fixture-first"));
@@ -603,6 +613,22 @@ let () =
         exception Site of string\n\
         let b = Site \"12:fixture-key\"";
      ] ~f:(fun text -> strings (tags (read ~source:"test/j.ml" text).mints) [ "13:fixture-owned" ]);
+   p_all "foreign exception and extension carriers are discovered"
+     [ "exception Site of string"; "type t = ..\ntype t += Site of string" ] ~f:(fun declaration ->
+       Scan.declares_own_carrier ~carriers declaration
+       && strings
+            (tags
+               (read ~source:"test/x.ml"
+                  ("module Local = struct " ^ declaration
+                 ^ " end\nlet x = Local.Site \"12:fixture-key\"\nlet y = Site \"13:fixture-owned\""
+                  ))
+                 .mints)
+            [ "13:fixture-owned" ]);
+   p_all "functor parameters and unpacks shadow carrier module aliases"
+     [
+       "module P = Tnode\nmodule F (P : S) = struct let x = P.Site \"12:fixture-key\" end";
+       "module P = Tnode\nlet f (module P : S) = P.Site \"12:fixture-key\"";
+     ] ~f:(fun text -> List.is_empty (read text).mints);
    p "a structure re-exporting a foreign module through its own alias is foreign"
      (strings
         (tags

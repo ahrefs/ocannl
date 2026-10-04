@@ -75,6 +75,11 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   counterparts so losing a control is itself a golden change (gh-ocannl-811). Optimizer
   forwarders still need executed oracles — syntactic use proves only that the value was forwarded.
 
+- A scan resolving names in OCaml sources uses `Test_utils.Lexical_scope` and states its fail-loud
+  rule in its header before its first review (gh-ocannl-1140). File-wide literal tables and module
+  alias sets cannot distinguish a parameter or nested binding from a same-named earlier value;
+  controls must exercise shadowing and separate scopes, alongside the nearest honest use.
+
 ### Bringing the base in
 
 - GitHub builds a pull request's MERGE COMMIT, so a repository-wide scan that is green on your

@@ -106,9 +106,12 @@ class virtual ['v, 'm] scoped =
     method let_denotes (_ : value_binding) : 'v = self#local
     (** What the names of one [let] binding denote, for a [let] in expression or class position. *)
 
+    method binding_denotes (_ : ('v, 'm) env) binding = self#let_denotes binding
+    (** The lexical form of {!let_denotes}, for a scan following an identifier in the RHS. *)
+
     method define ~top:(_ : bool) env (_ : rec_flag) bindings ~walk =
       List.iter bindings ~f:(walk env);
-      List.map bindings ~f:self#let_denotes
+      List.map bindings ~f:(self#binding_denotes env)
     (** How a structure's binding group enters scope for the items after it: it walks the group
         itself, through [walk], and returns what each binding's names denote. [top] is whether the
         group is in the file's own structure. *)
@@ -119,6 +122,10 @@ class virtual ['v, 'm] scoped =
     method opened ~top:(_ : bool) ~include_:(_ : bool) env (_ : 'm option) : ('v, 'm) env = env
     (** The scope after an [open] (or, with [include_], a structure's [include]) of a module
         denoting what is given. The default brings nothing in. *)
+
+    method item_scope ~top:(_ : bool) env (_ : structure_item) = env
+    (** Scan-specific declarations entering scope after one structure item, such as constructors.
+        Called after the item's own traversal and ordinary value/module/open bindings. *)
 
     method finished (_ : ('v, 'm) env) = ()
     (** Called with the scope at the end of the top-level structure. *)
@@ -153,6 +160,9 @@ class virtual ['v, 'm] scoped =
     (** A pattern's value variables enter scope as {!local}, and the modules it unpacks
         ([(module B : S)]) shadow whatever those names denoted. *)
 
+    method bind_parameters env patterns = self#bind_patterns env patterns
+    (** The parameter-specific form of {!bind_patterns}, defaulting to the same local denotation. *)
+
     method bind_group env bindings denotes =
       List.fold2_exn
         (List.map bindings ~f:(fun b -> pattern_vars [ b.pvb_pat ]))
@@ -162,7 +172,7 @@ class virtual ['v, 'm] scoped =
     (** A binding group's names, each binding's with what {!let_denotes} gives it. *)
 
     method bindings env rec_flag bindings =
-      let denotes = List.map bindings ~f:self#let_denotes in
+      let denotes = List.map bindings ~f:(self#binding_denotes env) in
       let inner =
         match rec_flag with
         | Recursive -> self#bind_group env bindings denotes
@@ -185,39 +195,43 @@ class virtual ['v, 'm] scoped =
       let top = depth = 1 in
       let final =
         List.fold items ~init:env ~f:(fun env item ->
-            match item.pstr_desc with
-            | Pstr_value (rec_flag, bindings) ->
-                let inner =
-                  match rec_flag with
-                  | Recursive ->
-                      self#bind_group env bindings (List.map bindings ~f:self#let_denotes)
-                  | Nonrecursive -> env
-                in
-                let denotes =
-                  self#define ~top env rec_flag bindings ~walk:(fun _ b ->
-                      ignore (self#value_binding inner b : value_binding))
-                in
-                self#bind_group env bindings denotes
-            | Pstr_primitive ({ pval_name = { txt = name; _ }; _ } as declaration) ->
-                bind_values env [ name ] (self#declare ~top env declaration)
-            | Pstr_recmodule declarations ->
-                let env =
-                  self#forget env (List.filter_map declarations ~f:(fun d -> d.pmb_name.txt))
-                in
-                ignore (self#structure_item env item : structure_item);
-                env
-            | Pstr_module { pmb_name = { txt = Some name; _ }; pmb_expr; _ } ->
-                ignore (self#structure_item env item : structure_item);
-                self#bind_module env name pmb_expr
-            | Pstr_open { popen_expr = m; _ } ->
-                ignore (self#structure_item env item : structure_item);
-                self#opened ~top ~include_:false env (self#module_of env m)
-            | Pstr_include { pincl_mod = m; _ } ->
-                ignore (self#structure_item env item : structure_item);
-                self#opened ~top ~include_:true env (self#module_of env m)
-            | _ ->
-                ignore (self#structure_item env item : structure_item);
-                env)
+            let next =
+              match item.pstr_desc with
+              | Pstr_value (rec_flag, bindings) ->
+                  let inner =
+                    match rec_flag with
+                    | Recursive ->
+                        self#bind_group env bindings
+                          (List.map bindings ~f:(self#binding_denotes env))
+                    | Nonrecursive -> env
+                  in
+                  let denotes =
+                    self#define ~top env rec_flag bindings ~walk:(fun _ b ->
+                        ignore (self#value_binding inner b : value_binding))
+                  in
+                  self#bind_group env bindings denotes
+              | Pstr_primitive ({ pval_name = { txt = name; _ }; _ } as declaration) ->
+                  bind_values env [ name ] (self#declare ~top env declaration)
+              | Pstr_recmodule declarations ->
+                  let env =
+                    self#forget env (List.filter_map declarations ~f:(fun d -> d.pmb_name.txt))
+                  in
+                  ignore (self#structure_item env item : structure_item);
+                  env
+              | Pstr_module { pmb_name = { txt = Some name; _ }; pmb_expr; _ } ->
+                  ignore (self#structure_item env item : structure_item);
+                  self#bind_module env name pmb_expr
+              | Pstr_open { popen_expr = m; _ } ->
+                  ignore (self#structure_item env item : structure_item);
+                  self#opened ~top ~include_:false env (self#module_of env m)
+              | Pstr_include { pincl_mod = m; _ } ->
+                  ignore (self#structure_item env item : structure_item);
+                  self#opened ~top ~include_:true env (self#module_of env m)
+              | _ ->
+                  ignore (self#structure_item env item : structure_item);
+                  env
+            in
+            self#item_scope ~top next item)
       in
       if top then self#finished final;
       depth <- depth - 1;
@@ -238,7 +252,7 @@ class virtual ['v, 'm] scoped =
                 | Pparam_val (_, default, pattern) ->
                     Option.iter default ~f:(fun d -> ignore (self#expression env d : expression));
                     ignore (self#pattern env pattern : pattern);
-                    self#bind_patterns env [ pattern ]
+                    self#bind_parameters env [ pattern ]
                 | Pparam_newtype _ -> env)
           in
           Option.iter constraint_ ~f:(fun c ->
@@ -291,7 +305,7 @@ class virtual ['v, 'm] scoped =
       | Pcl_fun (_, default, pattern, body) ->
           Option.iter default ~f:(fun d -> ignore (self#expression env d : expression));
           ignore (self#pattern env pattern : pattern);
-          ignore (self#class_expr (self#bind_patterns env [ pattern ]) body : class_expr);
+          ignore (self#class_expr (self#bind_parameters env [ pattern ]) body : class_expr);
           ce
       | Pcl_let (rec_flag, bindings, body) ->
           ignore (self#class_expr (self#bindings env rec_flag bindings) body : class_expr);
