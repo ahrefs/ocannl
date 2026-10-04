@@ -768,6 +768,11 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   children that close their locks. The forged publication window records settle sleeps before
   checking reaping; `last` squatter/legacy lock cases end with a byte comparison of the fixture
   tree. Fixtures use `paths`/`lock-status`, identity-checked cleanup and bounded child waits.
+- `supervisor_perl` blocks INT/TERM/HUP/ALRM across its fork expression (gh-ocannl-1141): Perl
+  can deliver a deferred signal before assigning the returned pid. The parent restores the original
+  mask after assignment; the child restores it after resetting all four handlers to DEFAULT.
+  `tools/test-test-run.sh` leg 74 injects TERM into both branches, with unmasked orphan-lock and
+  inherited-handler duplicate-verdict controls. Reader cancellation legs wait for `FAKE_REACH_CALLS`.
 - **`/proc/locks` names a flock's ACQUIRER, not its holders** (gh-ocannl-1107): the lock lives on
   the open file description, so after `take_lock`'s perl exits the line keeps its dead pid (0 from
   inside a pid namespace; some kernels drop the row) while the supervisor, dune and a `setsid`
