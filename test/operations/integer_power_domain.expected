@@ -1,0 +1,12 @@
+ipow_f32: integer powers match independent multiplication including exceptional values: true
+ipow_f32: known integers bypass floating pow: true
+ipow_f16: integer powers match independent multiplication including exceptional values: true
+ipow_f16: known integers bypass floating pow: true
+ipow_f64: integer powers match independent multiplication including exceptional values: true
+ipow_f64: known integers bypass floating pow: true
+constant folding accepts integral float exponents outside the machine-int range: true
+edge exponents preserve exact parity without integer overflow or float narrowing: true
+integer-power simplification retains a scoped base without duplicating its body: true
+scoped integer-power base produces the correct executed value with unrolling enabled: true
+scoped integer-power base remains a single helper argument with unrolling enabled: true
+fractional exponents retain vendor floating pow and its positive-base result: true

@@ -4329,7 +4329,22 @@ let simplify_llc ?fp_algebra static_indices llc =
         if (not !optimize_integer_pow) || not (licensed pow) then result
         else
           match v2 with
-          | Constant c, _ when Float.is_integer c ->
+          | Constant c, _
+            when Float.is_finite c && Float.is_integer c
+                 && Float.(abs c <= 8.)
+                 &&
+                 let rec effect_free = function
+                   | Local_scope _ -> false
+                   | Binop (_, (a, _), (b, _)) -> effect_free a && effect_free b
+                   | Ternop (_, (a, _), (b, _), (c, _)) ->
+                       effect_free a && effect_free b && effect_free c
+                   | Unop (_, (a, _)) -> effect_free a
+                   | Get_dynamic { dyn_value = v, _; _ } -> effect_free v
+                   | Get _ | Get_local _ | Get_merge_buffer _ | Constant _ | Constant_bits _
+                   | Embed_index _ ->
+                       true
+                 in
+                 effect_free v1_scalar ->
               loop_scalar (unroll_pow ~base:v1_scalar ~exp:(Float.to_int c), prec)
           | _ -> result)
     | Binop (Add, (Binop (Mul, llv1, llv2), prec12), llv3)

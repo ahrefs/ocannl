@@ -1711,3 +1711,12 @@ files.
   The shared half RNG function returns `HALF_T`, while its OCaml wrapper explicitly extracts bits
   with `HALF_TO_UINT16`. `test_shared_builtins` executes separately compiled default and emulated
   half variants against the shipped stubs, with inlining disabled to exercise the C ABI.
+
+- Known integral `ToPowOf` constants render through `ocannl_powi_f32` or `ocannl_powi_f64`
+  independently of the optional power simplifier (gh-ocannl-1185): CUDA fast-math `powf` loses
+  negative bases even at exponent 2. `C_syntax` preserves all finite
+  integral host floats as two unsigned words and a shift, with one base evaluation. The shared
+  `Builtins_cc.integer_power_builtins` uses rounded squaring/multiplication followed by a reciprocal
+  for negative exponents, computes narrow storage in f32, and defines exponent zero as 1 even for
+  NaN. This is an integer multiplication policy, not a correctly rounded floating-pow promise;
+  fractional and dynamic exponents retain the vendor operation. Guard: `integer_power_domain`.

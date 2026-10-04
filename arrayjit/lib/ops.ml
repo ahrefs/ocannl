@@ -602,35 +602,51 @@ let neutral_elem = function
   | Uint4x32_to_prec_uniform_lane (* | Shl | Shr *) ->
       0.
 
-let interpret_binop op v1 v2 =
-  let open Float in
-  match op with
-  | Arg1 -> v1
-  | Arg2 -> v2
-  | Add -> v1 + v2
-  | Sub -> v1 - v2
-  | Mul -> v1 * v2
-  | Div -> v1 / v2
-  | ToPowOf when is_integer v2 -> int_pow v1 @@ to_int v2
-  | ToPowOf -> v1 ** v2
-  | Relu_gate -> if v1 > 0.0 then v2 else 0.0
-  | Satur01_gate -> if v1 > 0.0 && v1 < 1.0 then v2 else 0.0
-  | Max -> max v1 v2
-  | Min -> min v1 v2
-  | Mod -> v1 % v2
-  | Cmplt -> if v1 < v2 then 1. else 0.
-  | Cmple -> if v1 <= v2 then 1. else 0.
-  | Cmpeq -> if v1 = v2 then 1. else 0.
-  | Cmpne -> if v1 <> v2 then 1. else 0.
-  (* | Shl -> v1 * (int_pow 2. @@ to_int v2) *)
-  (* | Shr -> v1 / (int_pow 2. @@ to_int v2) *)
-  | Or -> if v1 <> 0. || v2 <> 0. then 1. else 0.
-  | And -> if v1 <> 0. && v2 <> 0. then 1. else 0.
-  | Threefry4x32_crypto | Threefry4x32_light ->
-      invalid_arg "Ops.interpret_binop: Threefry4x32 operations are outside the domain of float"
-  | Uint4x32_to_prec_uniform_lane ->
-      invalid_arg
-        "Ops.interpret_binop: Uint4x32_to_prec_uniform_lane argument outside the domain of float"
+let interpret_binop =
+  (* Exact integral float exponents need no conversion to a machine int. This also defines the
+     constant-folder's large-exponent policy consistently with the generated powi multiplication. *)
+  let integer_power base exponent =
+    let rec loop base magnitude result =
+      if Float.(magnitude = 0.) then result
+      else
+        let result =
+          if Float.(Stdlib.Float.rem magnitude 2. = 1.) then Float.(result * base) else result
+        in
+        let magnitude = Stdlib.Float.floor Float.(magnitude / 2.) in
+        if Float.(magnitude = 0.) then result else loop Float.(base * base) magnitude result
+    in
+    let result = loop base (Float.abs exponent) 1. in
+    if Float.(exponent < 0.) then Float.(1. / result) else result
+  in
+  fun op v1 v2 ->
+    let open Float in
+    match op with
+    | Arg1 -> v1
+    | Arg2 -> v2
+    | Add -> v1 + v2
+    | Sub -> v1 - v2
+    | Mul -> v1 * v2
+    | Div -> v1 / v2
+    | ToPowOf when is_finite v2 && is_integer v2 -> integer_power v1 v2
+    | ToPowOf -> v1 ** v2
+    | Relu_gate -> if v1 > 0.0 then v2 else 0.0
+    | Satur01_gate -> if v1 > 0.0 && v1 < 1.0 then v2 else 0.0
+    | Max -> max v1 v2
+    | Min -> min v1 v2
+    | Mod -> v1 % v2
+    | Cmplt -> if v1 < v2 then 1. else 0.
+    | Cmple -> if v1 <= v2 then 1. else 0.
+    | Cmpeq -> if v1 = v2 then 1. else 0.
+    | Cmpne -> if v1 <> v2 then 1. else 0.
+    (* | Shl -> v1 * (int_pow 2. @@ to_int v2) *)
+    (* | Shr -> v1 / (int_pow 2. @@ to_int v2) *)
+    | Or -> if v1 <> 0. || v2 <> 0. then 1. else 0.
+    | And -> if v1 <> 0. && v2 <> 0. then 1. else 0.
+    | Threefry4x32_crypto | Threefry4x32_light ->
+        invalid_arg "Ops.interpret_binop: Threefry4x32 operations are outside the domain of float"
+    | Uint4x32_to_prec_uniform_lane ->
+        invalid_arg
+          "Ops.interpret_binop: Uint4x32_to_prec_uniform_lane argument outside the domain of float"
 
 let interpret_unop op v =
   let open Float in

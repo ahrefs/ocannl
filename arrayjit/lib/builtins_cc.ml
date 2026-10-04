@@ -50,6 +50,30 @@ let includes =
 |}
 
 (* Each entry is (key, definition, dependencies) *)
+(* One multiplication algorithm across dialects. The exponent is encoded exactly as two
+   unsigned 32-bit words times 2^shift; even the largest integral OCaml float fits without a
+   vendor integer-width assumption or narrowing the exponent to the base's precision. *)
+let integer_power_builtins ~prefix ~supports_double =
+  let make typ name =
+    ( name,
+      Printf.sprintf
+        {|%s %s %s(%s x, unsigned int lo, unsigned int hi, int shift, int negative) {
+  %s result = (%s)1;
+  for (int i = 0; i < shift; ++i) x = x * x;
+  while (lo != 0u || hi != 0u) {
+    if ((lo & 1u) != 0u) result = result * x;
+    lo = (lo >> 1) | (hi << 31);
+    hi >>= 1;
+    if (lo != 0u || hi != 0u) x = x * x;
+  }
+  return negative ? (%s)1 / result : result;
+}|}
+        prefix typ name typ typ typ typ,
+      [] )
+  in
+  let single = make "float" "ocannl_powi_f32" in
+  if supports_double then [ single; make "double" "ocannl_powi_f64" ] else [ single ]
+
 let builtins =
   [
     (* Float16 feature detection and type definitions *)
@@ -1588,4 +1612,5 @@ uint64_t uint4x32_to_uint64_uniform_lane(uint4x32_t x, int32_t lane) {
       [ "uint4x32_t"; "uint4x32_to_uint64_uniform_vec" ] );
   ]
 
+let builtins = integer_power_builtins ~prefix:"static inline" ~supports_double:true @ builtins
 let source = includes ^ String.concat "" (List.map (fun (_, def, _) -> def) builtins)

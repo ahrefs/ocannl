@@ -7047,6 +7047,38 @@ module C_syntax (B : C_syntax_config) = struct
         let defs = List.concat [ d1; d2; d3 ] in
         let expr = group (B.ternop_syntax prec op e1 e2 e3) in
         (defs, expr)
+    | Binop (Ops.ToPowOf, (base, _), (Constant exponent, _))
+      when Ops.is_float prec && Float.is_finite exponent && Float.is_integer exponent ->
+        let defs, base_doc = (pp_scalar ctx) prec base in
+        let pow_prec = match prec with Ops.Double_prec _ -> Ops.double | _ -> Ops.single in
+        let prefix, suffix = B.convert_precision ~from:prec ~to_:pow_prec in
+        let base_doc = string prefix ^^ base_doc ^^ string suffix in
+        (* Binary decomposition avoids [Float.to_int]'s overflow, including at min_int and at the
+           largest finite double. The magnitude is an exact 53-bit significand and a nonnegative
+           shift. *)
+        let integer_power_exponent c =
+          let magnitude = Float.abs c in
+          if Float.(magnitude < 0x1p53) then (Int64.of_float magnitude, 0)
+          else
+            let mantissa, exponent = Float.frexp magnitude in
+            (Int64.of_float Float.(mantissa * 0x1p53), exponent - 53)
+        in
+        let magnitude, shift = integer_power_exponent exponent in
+        let lo = Stdlib.Int64.logand magnitude 0xffffffffL in
+        let hi = Stdlib.Int64.shift_right_logical magnitude 32 in
+        let name =
+          if Ops.equal_prec pow_prec Ops.double then "ocannl_powi_f64" else "ocannl_powi_f32"
+        in
+        let call =
+          string name
+          ^^ parens
+               (base_doc
+               ^^ string
+                    (Printf.sprintf ", %LuU, %LuU, %d, %d" lo hi shift
+                       (if Float.(exponent < 0.) then 1 else 0)))
+        in
+        let prefix, suffix = B.convert_precision ~from:pow_prec ~to_:prec in
+        (defs, group (string prefix ^^ call ^^ string suffix))
     | Binop (op, (v1, v1_prec), (v2, v2_prec)) -> (
         match Ops.binop_conditionality op with
         (* A projection emits its selected operand alone: the operator has no spelling of its own

@@ -196,6 +196,13 @@ test/operations/hardware_workgroup_reduce.ml
     "__syncthreads()"
     "threadgroup float partial_sums[64]"
     "threadgroup_barrier"
+test/operations/integer_power_domain.ml
+    ")["
+    "ipow_once_input["
+    "ocannl_powi_"
+    "ocannl_powi_f32("
+    "pow("
+    "powf("
 test/operations/ll_printer_constants.ml [renders generated text in memory; also pins text this scan cannot name]
     " := "
 test/operations/narrow_storage_compute.ml
