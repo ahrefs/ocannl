@@ -607,6 +607,21 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
 
 ## The harness, shells and processes
 
+- `tools/test-harnesses.sh` runs the complete hand-run harness tier locally, from any
+  working directory. Its manifest is the membership CI uses: the toolchain-free job runs
+  `--shell`, the formatting job runs `--toolchain` after installation; omitting the group runs both.
+  `--list` lists the selected paths without executing them. Every selected member runs after
+  an ordinary failure; the footer counts failed harnesses and exits 1 if any failed. A member
+  interrupted by HUP, INT or TERM stops the aggregate and preserves exit 129, 130 or 143. Individual
+  harnesses retain their counted capability skips; the formatter's real cache control and
+  promotion fixtures need the local toolchain. For a shell change, run this command beside
+  `tools/test-run.sh run build @test/operations/scans`: the latter includes configuration
+  usage and shell parsing, which standalone process fixtures cannot cover (gh-ocannl-988).
+  `tools/test-test-harnesses.sh` drives an isolated copy with derived member stubs, including
+  a fail-fast twin that must lose the all-members oracle. Setup-hook fixtures derive their
+  helper files from the hook's source directives and refuse unknown forms; an injected helper
+  passes through this derivation and fails against the former fixed-list fixture.
+
 - Shell harness checks capture failures with `command || rc=$?`, preserving the caller's
   `errexit` state; an unconditional `set -e` after a check makes later unguarded failures
   terminate a harness that started with only `set -u` (gh-ocannl-1178).

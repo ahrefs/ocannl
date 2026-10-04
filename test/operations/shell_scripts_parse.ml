@@ -2351,11 +2351,12 @@ module Errexit_and_list = struct
 end
 
 module Harness_contract = struct
-  (* test-run.sh is the production supervisor. Standalone harnesses outside the filename convention
-     declare their lifecycle explicitly; Dune actions use the function-only API. *)
+  (* test-run.sh and test-harnesses.sh are production entrypoints, not fixture harnesses. Standalone
+     harnesses outside the filename convention declare their lifecycle explicitly; Dune actions use
+     the function-only API. *)
   let member path text =
     String.is_suffix path ~suffix:".sh"
-    && (not (String.equal path "tools/test-run.sh"))
+    && (not (List.mem [ "tools/test-run.sh"; "tools/test-harnesses.sh" ] path ~equal:String.equal))
     && (String.is_prefix path ~prefix:"tools/test-"
        || String.is_prefix path ~prefix:"scripts/test-"
        || String.is_substring text ~substring:"# ocannl-harness: standalone\n")
@@ -2391,7 +2392,9 @@ module Harness_contract = struct
       && member "test/operations/new.sh" "# ocannl-harness: standalone\n"
       && not (member "test/operations/action.sh" ""));
     Verdict.p "production test-run is outside the harness family"
-      (not (member "tools/test-run.sh" "# ocannl-harness: standalone\n"));
+      ((not (member "tools/test-run.sh" "# ocannl-harness: standalone\n"))
+      && (not (member "tools/test-harnesses.sh" ""))
+      && member "tools/test-test-harnesses.sh" "");
     List.iter [ "report()"; "skip()"; "finish()"; "mutant()"; "expect_rejected()" ] ~f:(fun name ->
         List.iter
           [

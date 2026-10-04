@@ -64,6 +64,61 @@ fi
 # farm would be installed there. Refuse rather than continue.
 zparent=""   # leg (f)'s self-stopping zombie maker; cleanup must resume it
 harness_scratch "test-setup-ocaml-env"
+# Stage every direct source from the hook's literal "$script_dir/<path>"
+# directives. Refuse an unrecognised source form instead of silently omitting
+# it, and retain a floor so a broken extractor cannot stage nothing.
+stage_sourced() { # HOOK FIXTURE_ROOT
+  local hook=$1 dest=$2 rel staged=0 directives
+  directives=$(grep -Ec '^[[:space:]]*(\.|source)[[:space:]]' "$hook") || directives=0
+  while IFS= read -r rel; do
+    mkdir -p "$dest/scripts/$(dirname "$rel")" || return 2
+    cp "$HERE/$rel" "$dest/scripts/$rel" || return 2
+    staged=$((staged + 1))
+  done < <(sed -n 's@^\. "\$script_dir/\([A-Za-z0-9_./-]*\)"$@\1@p' "$hook")
+  [ "$staged" -ge 1 ] && [ "$staged" -eq "$directives" ] || {
+    echo "cannot stage hook sources: $staged recognised of $directives directives" >&2
+    return 2
+  }
+}
+# A newly sourced helper must be copied without updating a fixture file list.
+# Place the injected helper beside a scratch copy of the shipping helpers.
+source_here="$HERE"
+mkdir -p "$TMP/source-fixture/scripts"
+stage_sourced "$HOOK_SRC" "$TMP/source-input" || exit 2
+printf 'fixture_helper_loaded=1\n' >"$TMP/source-input/scripts/injected.sh"
+sed '/^\. "\$script_dir\//a\
+. "$script_dir/injected.sh"
+' "$HOOK_SRC" >"$TMP/source-input/scripts/hook.sh"
+HERE="$TMP/source-input/scripts"
+source_rc=0
+stage_sourced "$HERE/hook.sh" "$TMP/source-fixture" || source_rc=$?
+HERE="$source_here"
+if [ "$source_rc" = 0 ] && [ -f "$TMP/source-fixture/scripts/injected.sh" ]; then
+  report 0 'hook fixtures derive and stage an additional sourced helper'
+else report 1 'hook fixtures derive and stage an additional sourced helper'; fi
+# The former fixed-list fixture demonstrably cannot load that extra helper.
+mkdir -p "$TMP/fixed-fixture/scripts"
+cp "$GROUP_SRC" "$TMP/fixed-fixture/scripts/process-group.sh"
+load_fixture() {
+  bash -c 'script_dir=$1; . "$script_dir/process-group.sh"; . "$script_dir/injected.sh"' bash "$1/scripts"
+}
+if load_fixture "$TMP/source-fixture" >"$TMP/source-good" 2>&1; then
+  report 0 'derived source fixture loads the injected helper'
+else report 1 'derived source fixture loads the injected helper'; fi
+if harness_rejected 1 'injected.sh: No such file or directory' "$TMP/source-bad" \
+   load_fixture "$TMP/fixed-fixture"; then
+  report 0 'the former fixed-list fixture fails to load the injected helper'
+else report 1 'the former fixed-list fixture fails to load the injected helper'; fi
+# Neither an empty extraction nor an unsupported source spelling may silently
+# discard a dependency. Capture the refusal before any hook gets executed.
+printf '# no source directives\n' >"$TMP/no-sources.sh"
+printf 'source "$script_dir/process-group.sh"\n' >"$TMP/unknown-source.sh"
+for control in no-sources unknown-source; do
+  if harness_rejected 2 '^cannot stage hook sources:' "$TMP/$control.out" \
+     stage_sourced "$TMP/$control.sh" "$TMP/$control-fixture"; then
+    report 0 "source staging refuses $control"
+  else report 1 "source staging refuses $control"; fi
+done
 cleanup_fixture() {
   # Leg (f)'s zombie maker STOPS ITSELF and is resumed at the end of the leg.
   # Interrupted in between, nothing else would ever resume it: it would be
@@ -493,7 +548,7 @@ new_clone() { # new_clone NAME -> path of a fresh clone carrying the working-tre
   git_q -C "$d" config user.email test@example.invalid
   mkdir -p "$d/scripts"
   cp "$HOOK_SRC" "$d/scripts/setup-ocaml-env.sh"
-  cp "$GROUP_SRC" "$d/scripts/process-group.sh"
+  stage_sourced "$HOOK_SRC" "$d" || exit 2
   printf '%s\n' "$d"
 }
 
@@ -666,7 +721,7 @@ fi
 
 SSH_BASE="$TMP/ssh-base"
 mkdir -p "$SSH_BASE/scripts"
-cp "$GROUP_SRC" "$SSH_BASE/scripts/process-group.sh"
+stage_sourced "$HOOK_SRC" "$SSH_BASE" || exit 2
 git_q -C "$SSH_BASE" init -q
 git_q -C "$SSH_BASE" commit -q --allow-empty -m base
 git_q -C "$SSH_BASE" remote add origin ssh://git@example.invalid/x.git
