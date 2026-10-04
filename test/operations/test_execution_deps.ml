@@ -97,12 +97,12 @@ let test_wrong_order_raises () =
   let grad_ctx, _grad_routine = Train.to_routine ctx IDX.empty grad in
   let _, sgd_routine = Train.to_routine grad_ctx IDX.empty sgd in
   (* sgd depends on grad — running sgd first must fail *)
-  try
-    ignore (Context.run ctx sgd_routine);
-    printf "Wrong order (sgd before grad): no error (BUG)\n"
-  with Failure msg ->
-    let is_enforcement = String.is_substring msg ~substring:"Context.run:" in
-    Verdict.p "Wrong order raises Failure from Context.run" is_enforcement
+  let is_enforcement =
+    match Context.run ctx sgd_routine with
+    | _ -> false
+    | exception Failure msg -> String.is_substring msg ~substring:"Context.run:"
+  in
+  Verdict.p "Wrong order raises Failure from Context.run" is_enforcement
 
 (* Test 5: Re-execution pattern — grad -> sgd -> grad succeeds without reset *)
 let test_reexecution () =
