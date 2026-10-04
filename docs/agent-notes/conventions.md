@@ -25,7 +25,11 @@ files.
   where Git recorded one). Both endpoints must be on the same first-parent history; the end
   defaults to `HEAD`. Its implicit-module inventory comes from the dead-export census, alongside
   all interfaces in those roots. OCaml parsing preserves multiline signatures, types, record
-  fields, constructors and module declarations while discarding documentation-only edits.
+  fields, constructors and module declarations while discarding documentation-only OCaml edits.
+  Dune supplies the compiled target/interface relationship for select arms and the inputs of
+  public lexer/parser modules. A generator input is a conservative review entry: the editor must
+  inspect its generated interface, since this tool does not regenerate historical modules or
+  typecheck their dependency trees.
   This is a reading aid, not a compatibility gate: implementation bodies are kept because they
   can change an inferred public type, and PPX-generated exports and inferred types still require
   manual review. Record retired or renamed symbols in the resulting bullet so later API-removal

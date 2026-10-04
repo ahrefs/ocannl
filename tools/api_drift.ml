@@ -12,6 +12,17 @@ let git_raw args =
 let git args = String.strip (git_raw args)
 let lines text = if String.is_empty text then [] else String.split_lines text
 let paths rev = git [ "ls-tree"; "-r"; "--name-only"; rev ] |> lines
+
+let source_paths rev =
+  let paths = paths rev in
+  let dunes =
+    List.filter paths ~f:(fun p ->
+        String.equal (Stdlib.Filename.basename p) "dune"
+        && Test_utils.Dead_export_scan.in_scan_root p)
+    |> List.map ~f:(fun p -> (p, git_raw [ "show"; rev ^ ":" ^ p ]))
+  in
+  Surface.sources ~dunes paths
+
 let resolve rev = git [ "rev-parse"; "--verify"; "--end-of-options"; rev ^ "^{commit}" ]
 let read rev source = git_raw [ "show"; rev ^ ":" ^ source ] |> Surface.declarations ~source
 
@@ -30,11 +41,11 @@ let run since until =
   printf "Public source declarations: %s..%s\n" since until;
   printf
     "Editorial aid; .ml bodies flag possible inferred-type drift. PPX exports and inferred types \
-     need manual review.\n";
+     need manual review. Generator input entries require review of the generated interface.\n";
   let parent = ref since and total = ref 0 in
   List.iter commits ~f:(fun commit ->
-      let before = Surface.sources (paths !parent) |> Set.of_list (module String) in
-      let after = Surface.sources (paths commit) |> Set.of_list (module String) in
+      let before = source_paths !parent |> Set.of_list (module String) in
+      let after = source_paths commit |> Set.of_list (module String) in
       let changed =
         git [ "diff"; "--name-only"; !parent; commit; "--" ] |> lines |> Set.of_list (module String)
       in

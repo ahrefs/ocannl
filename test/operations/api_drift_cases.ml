@@ -23,6 +23,43 @@ let () =
     (List.equal String.equal implicit [ "lib/b.ml"; "arrayjit/lib/d.ml" ]
     && List.equal String.equal (Surface.sources inventory)
          [ "arrayjit/lib/d.ml"; "lib/a.mli"; "lib/b.ml"; "tensor/c.mli" ]);
+  let selected_paths =
+    [ "arrayjit/lib/impl.cudajit.ml"; "arrayjit/lib/impl.missing.ml"; "arrayjit/lib/impl.mli" ]
+  in
+  let selected_dune =
+    "(library (name backend) (public_name pkg.backend) (modules impl) (libraries (select impl.ml \
+     from (cuda -> impl.cudajit.ml) (-> impl.missing.ml))))"
+  in
+  Verdict.p "select arms use the compiled target interface relationship"
+    (List.equal String.equal
+       (Surface.sources ~dunes:[ ("arrayjit/lib/dune", selected_dune) ] selected_paths)
+       [ "arrayjit/lib/impl.mli" ]
+    && List.equal String.equal
+         (Surface.sources
+            ~dunes:[ ("arrayjit/lib/dune", selected_dune) ]
+            (List.take selected_paths 2))
+         [ "arrayjit/lib/impl.cudajit.ml"; "arrayjit/lib/impl.missing.ml" ]);
+  let generator_dune =
+    "(ocamllex lexer private_lexer) (menhir (modules parser)) (library (name parserlib) \
+     (public_name pkg.parserlib) (modules lexer parser)) (executable (name private) (modules \
+     private_lexer))"
+  in
+  let generator_paths = [ "tensor/lexer.mll"; "tensor/parser.mly"; "tensor/private_lexer.mll" ] in
+  Verdict.p "public generator inputs follow Dune module ownership and explicit interfaces"
+    (List.equal String.equal
+       (Surface.sources ~dunes:[ ("tensor/dune", generator_dune) ] generator_paths)
+       [ "tensor/lexer.mll"; "tensor/parser.mly" ]
+    && List.equal String.equal
+         (Surface.sources
+            ~dunes:[ ("tensor/dune", generator_dune) ]
+            ("tensor/lexer.mli" :: generator_paths))
+         [ "tensor/lexer.mli"; "tensor/parser.mly" ]);
+  Verdict.p "parser tokens and lexer body changes produce generated-interface review entries"
+    (List.length (changed "tensor/parser.mly" "%token OLD\n%%" "%token NEW\n%%") = 1
+    && List.length
+         (changed "tensor/lexer.mll" "{let v = 1}\nrule token = parse | eof { () }"
+            "{let v = true}\nrule token = parse | eof { () }")
+       = 1);
   Verdict.p "a multiline value signature change is visible"
     (List.length (changed "lib/a.mli" "val run :\n int ->\n int" "val run :\n int ->\n string") = 1);
   Verdict.p "record fields and constructors retain their symbol spellings"
@@ -38,6 +75,29 @@ let () =
   let after = declarations "lib/a.mli" "(** New prose *)\nval run:\nint -> int" in
   Verdict.p_empty "documentation and whitespace changes do not count as declarations" ~over:before
     (Surface.changes before after);
+  let floating =
+    declarations "lib/a.mli"
+      "[@@@ocaml.text \"old floating docs\"]\n\
+       module M : sig [@@@ocaml.doc \"old nested docs\"] val x : int end"
+  in
+  let floating_after =
+    declarations "lib/a.mli"
+      "[@@@ocaml.text \"new floating docs\"]\n\
+       module M : sig [@@@ocaml.doc \"new nested docs\"] val x : int end"
+  in
+  Verdict.p_empty "floating and nested documentation attributes do not count as declarations"
+    ~over:floating
+    (Surface.changes floating floating_after);
+  let floating_ml =
+    declarations "lib/a.ml"
+      "[@@@ocaml.text \"old\"]\nmodule M = struct [@@@ocaml.doc \"old\"] let x = 1 end"
+  in
+  let floating_ml_after =
+    declarations "lib/a.ml"
+      "[@@@ocaml.text \"new\"]\nmodule M = struct [@@@ocaml.doc \"new\"] let x = 1 end"
+  in
+  Verdict.p_empty "floating implementation documentation is discarded recursively" ~over:floating_ml
+    (Surface.changes floating_ml floating_ml_after);
   Verdict.p "nested signatures and includes stay in the checklist"
     (List.length
        (changed "lib/a.mli" "module M : sig val x : int end\ninclude S"
