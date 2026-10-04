@@ -350,6 +350,13 @@
 # Applies to explicitly annotated (schedule-transformed) kernels as well as the automatic
 # schedule; results are bitwise identical to serial execution (grid iterations write disjoint
 # elements).
+# On macOS, millions of dispatch_apply calls in a long cc run can trigger SIGTRAP /
+# EXC_BREAKPOINT with "BUG IN CLIENT OF LIBMALLOC: memory corruption of free block" inside
+# _xzm_xzone_malloc_freelist_outlined / _dispatch_calloc_typed (gh-ocannl-870). The standalone
+# benchmarks/runners/ocannl/dispatch_apply_stress.c probe reproduces this platform trap without
+# OCANNL code (observed on macOS 26.6.2 build 25G83). Set cc_parallel_grid=none in ocannl_config,
+# OCANNL_CC_PARALLEL_GRID=none in the environment, or pass --ocannl_cc_parallel_grid=none to
+# use serial Grid loops and avoid the libdispatch path; this can reduce CPU parallel performance.
 #cc_parallel_grid=auto
 
 # Target chunk count for parallel Grid rendering; the actual count is capped by the loop extent.
