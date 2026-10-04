@@ -20,6 +20,8 @@ a one-digit teardown total is refused as a line, though no number the boundary r
 an entry that allows nothing is stale: true
 the family is a test's golden, a rule's diff, one behind a member's own deps, and a subdir's: true
 a diff under a chdir resolves in the directory the action runs in: true
+per-source adopted IR counts remain review-visible in their own golden: true
+the adopted-count allowance cannot hide aggregate or trailing totals: true
 a quoted-source entry spans the quotation and not the reason written after it: true
 a test outside the family, or with no golden checked in, contributes nothing: true
 
@@ -41,5 +43,7 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:4166c0bca69640c175777244011fc4e2] that allows nothing
   [scanner-refusal:5aac880a61d2880852d33a0856daa83f] behind a member's
   [scanner-refusal:396ecaa5128a1569c6279921019721c1] directory the action
+  [scanner-refusal:ac43499e46e4fb95bbea30412af203b6] counts remain review-visible
+  [scanner-refusal:84d226496601429f470c41aba20a39c2] adopted-count allowance cannot
   [scanner-refusal:531d64a37eb2ccc8b4c3fee2c5a2fac9] quoted-source entry spans
   [scanner-refusal:22c73fdc7f08c48d003aabefe9f59d17] checked in contributes
