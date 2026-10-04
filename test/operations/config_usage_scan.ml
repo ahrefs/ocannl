@@ -105,39 +105,24 @@ let declared_ambiguous_cli_value_key ~path token =
   List.find_map ambiguous_cli_value_mentions ~f:(fun (tracked_path, prefix, suffix, key, _) ->
       Option.some_if (String.equal path tracked_path && String.equal token (prefix ^ suffix)) key)
 
-let registry_ambiguous_cli_value_key token =
-  Set.to_list Utils.known_config_keys
-  |> List.concat_map ~f:(fun key ->
-      Utils.cmdline_var_prefixes ~qualified_only:true key
-      |> List.filter_map ~f:(fun prefix ->
-          Option.some_if
-            (String.is_prefix token ~prefix && String.length token > String.length prefix)
-            (key, String.length prefix)))
-  |> List.max_elt ~compare:(fun (_, left) (_, right) -> Int.compare left right)
-  |> Option.map ~f:fst
-
-let registry_independent_unknown_cli_key token =
-  let name = Option.value_map (String.lsplit2 token ~on:'=') ~default:token ~f:fst in
-  List.find_map cli_name_prefixes ~f:(fun prefix ->
-      Option.bind (String.chop_prefix name ~prefix) ~f:(fun raw_key ->
-          Option.some_if
-            (not (String.is_empty raw_key))
-            (String.lowercase raw_key |> String.tr ~target:'-' ~replacement:'_')))
-
 let cli_key_of_token ~path token =
   match Utils.parse_config_token token with
-  | Some { token_shape = Utils.Command_line_token; token_key } ->
-      Some (Option.value (declared_ambiguous_cli_value_key ~path token) ~default:token_key)
-  | Some
-      { token_shape = Utils.Environment_assignment_token | Utils.Documentation_assignment_token; _ }
-    ->
-      None
-  | None ->
+  | Utils.Accepted { token_shape = Utils.Command_line_token; token_key } -> Some token_key
+  | Utils.Ambiguous
+      { explicit; candidates; fallback = { token_shape = Utils.Command_line_token; token_key } } ->
       Option.first_some
         (declared_ambiguous_cli_value_key ~path token)
         (Option.first_some
-           (registry_ambiguous_cli_value_key token)
-           (registry_independent_unknown_cli_key token))
+           (Option.map explicit ~f:(fun parsed -> parsed.Utils.token_key))
+           (Option.first_some
+              (List.find_map candidates ~f:(fun parsed ->
+                   Option.some_if
+                     (Set.mem Utils.known_config_keys parsed.Utils.token_key)
+                     parsed.token_key))
+              (Some token_key)))
+  | Utils.Rejected { qualified = Some { token_shape = Utils.Command_line_token; token_key }; _ } ->
+      Some token_key
+  | Utils.Accepted _ | Utils.Ambiguous _ | Utils.Rejected _ -> None
 
 (* Prefix-free flags belong to the host application's namespace, so they cannot be discovered
    globally without claiming flags such as [--profile=prod]. Counted site judgments identify the
@@ -222,8 +207,8 @@ let prefixed_occurrences ?(start_ok = fun _ _ -> true) ~path ~prefix ~key_char ~
             then
               let spelling = String.sub line ~pos:start ~len:(!key_stop - start + 1) in
               match Utils.parse_config_token spelling with
-              | None -> from next found
-              | Some parsed ->
+              | Utils.Ambiguous _ | Utils.Rejected _ -> from next found
+              | Utils.Accepted parsed ->
                   from next
                     ({
                        path;
@@ -407,20 +392,16 @@ let one_assignment ~path rendered =
       else
         let parsed_key =
           match Utils.parse_config_token ~documentation:true (name ^ "=" ^ value) with
-          | Some parsed -> Some parsed.token_key
-          | None ->
-              let registered_one_word =
-                (not (String.contains name '_'))
-                && (not (String.is_empty name))
-                && Char.is_lowercase name.[0]
-                && String.for_all name ~f:(fun c -> Char.is_lowercase c || Char.is_digit c)
-                && Set.mem Utils.known_config_keys name
-              in
-              Option.some_if
-                (registered_one_word
-                || tracked_ambiguous_bare_config path name
-                || tracked_historical_config path name)
-                name
+          | Utils.Accepted parsed -> Some parsed.token_key
+          | Utils.Ambiguous { candidates; _ } ->
+              List.find_map candidates ~f:(fun parsed ->
+                  let key = parsed.Utils.token_key in
+                  Option.some_if
+                    (Set.mem Utils.known_config_keys key
+                    || tracked_ambiguous_bare_config path key
+                    || tracked_historical_config path key)
+                    key)
+          | Utils.Rejected _ -> None
         in
         Option.bind parsed_key ~f:(fun key ->
             if
@@ -641,10 +622,12 @@ let has_ambiguous_cli_value occurrence =
   in
   if qualified_cli then
     match Utils.parse_config_token occurrence.spelling with
-    | Some { token_shape = Utils.Command_line_token; token_key } ->
+    | Utils.Accepted { token_shape = Utils.Command_line_token; token_key } ->
         not (String.equal token_key occurrence.key)
-    | Some _ -> false
-    | None -> true
+    | Utils.Ambiguous { explicit = Some parsed; _ } ->
+        not (String.equal parsed.token_key occurrence.key)
+    | Utils.Accepted _ -> false
+    | Utils.Ambiguous _ | Utils.Rejected _ -> true
   else false
 
 let check ?(fail = Verdict.fail) ?(known_keys = Utils.known_config_keys)
@@ -941,14 +924,20 @@ let refusal_control grammar_fixture =
       "--ocannl-print-decimals-precision=7";
       "--OCANNL_PRINT_DECIMALS_PRECISION=7";
       "--OCANNL-PRINT-DECIMALS-PRECISION=7";
-    ] ~f:(fun spelling -> Option.is_some (Utils.parse_config_token spelling));
+    ] ~f:(fun spelling ->
+      match Utils.parse_config_token spelling with
+      | Utils.Accepted _ | Utils.Ambiguous { explicit = Some _; _ } -> true
+      | _ -> false);
   Verdict.p_none "runtime-rejected mixed command-line spellings are not config tokens"
     [
       ("--ocannl-", "print_decimals-precision=7");
       ("--ocannl_", "Print_Decimals_Precision=7");
       ("--OCANNL_", "print_decimals_precision=7");
     ]
-    ~f:(fun (prefix, suffix) -> Option.is_some (Utils.parse_config_token (prefix ^ suffix)));
+    ~f:(fun (prefix, suffix) ->
+      match Utils.parse_config_token (prefix ^ suffix) with
+      | Utils.Accepted _ | Utils.Ambiguous { explicit = Some _; _ } -> true
+      | _ -> false);
   Verdict.p "a counted alternate separator recovers the runtime key/value boundary"
     (Option.equal String.equal
        (cli_key_of_token ~path:"test/operations/config_usage_scan.ml"
@@ -987,9 +976,9 @@ let refusal_control grammar_fixture =
       ~path:(Stdlib.Filename.basename grammar_fixture)
       grammar_text
   in
-  Verdict.p_all ~min:3
+  Verdict.p_all ~min:4
     "each promised non-OCANNL assignment is present in the fixture and rejected as a config token"
-    [ "fastMathEnabled=false"; "mathMode=Safe"; "d=1" ] ~f:(fun spelling ->
+    [ "fastMathEnabled=false"; "mathMode=Safe"; "d=1"; "PARALLEL=0" ] ~f:(fun spelling ->
       List.mem grammar_candidates spelling ~equal:String.equal
       && not
            (List.exists grammar_occurrences ~f:(fun occurrence ->
