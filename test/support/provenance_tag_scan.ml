@@ -39,7 +39,9 @@
       everywhere else, since opens and aliases reach it in ways a reader of one file cannot follow
       -- except behind a qualifier of two or more components, whose identity is not established:
       that is the owner's only when it ends in the owner's module ([Ir.Tnode.Site]), and a module
-      alias of such a path is established the same way.
+      alias of such a path is established the same way. Functor parameters, unpacks, recursive
+      modules and opaque local structures have no established identity and mint nothing through
+      their qualifier; a structure including the owner explicitly retains its identity.
     - A constructor carrying provenances only ([Refined]) composes and mints nothing; its case of
       the renderer -- a [let rec], in a source binding no [( ^ )] of its own -- must return a
       concatenation of string literals and recursive calls rendering each of its arguments exactly
@@ -488,22 +490,31 @@ let read_source ~carriers ?(foreign = []) ?(owner = ("", "")) ~source content =
         match me.pmod_desc with
         | Pmod_constraint (inner, _) -> self#module_of env inner
         | Pmod_structure items ->
-            let foreign_export = ref (declares_carrier items) in
+            let foreign_export = ref (declares_carrier items) and owner_export = ref false in
             let reader =
               object
                 inherit [[ `Local | `Own | `Payload | `Foreign ], string] Lexical_scope.scoped
                 method local = `Local
                 method! shadowed = Some unestablished
                 method module_path env path = module_path env path
+                method! module_of env me = self#module_of env me
 
-                method! opened ~top:_ ~include_ env denotation =
-                  if include_ && Option.value_map denotation ~default:false ~f:is_foreign then
-                    foreign_export := true;
+                method! opened ~top ~include_ env denotation =
+                  if top && include_ then (
+                    if
+                      Option.value_map denotation ~default:false ~f:(fun m ->
+                          is_foreign m || String.equal m "foreign:")
+                    then foreign_export := true;
+                    if Option.equal String.equal denotation (Some owner_module) then
+                      owner_export := true);
                   env
               end
             in
             ignore (reader#structure env items : structure);
-            Some (if !foreign_export then "foreign:" else unestablished)
+            Some
+              (if !foreign_export then "foreign:"
+               else if !owner_export then owner_module
+               else unestablished)
         | _ -> super#module_of env me
 
       method! opened ~top:_ ~include_:_ env target =
@@ -546,7 +557,7 @@ let read_source ~carriers ?(foreign = []) ?(owner = ("", "")) ~source content =
     let observed = Hashtbl.create (module Int) in
     let carriers_hit = ref [] in
     let finder =
-      object
+      object (self)
         inherit [[ `Local | `Own | `Payload | `Foreign ], string] Lexical_scope.scoped as super
         method local = `Local
         method! shadowed = Some unestablished
@@ -557,14 +568,26 @@ let read_source ~carriers ?(foreign = []) ?(owner = ("", "")) ~source content =
         method! attribute _ attr = attr
 
         method! expression env e =
-          (match e.pexp_desc with
-          | Pexp_construct ({ txt; _ }, Some { pexp_desc = Pexp_ident { txt = Lident x; _ }; _ })
-            when String.equal x v && Poly.equal (Lexical_scope.lookup env x) (Some `Payload) ->
-              Hashtbl.set observed ~key:e.pexp_loc.loc_start.pos_cnum ~data:(txt, is_carrier env txt);
-              if is_carrier env txt then
-                Option.iter (last_name txt) ~f:(fun c -> carriers_hit := c :: !carriers_hit)
-          | _ -> ());
-          super#expression env e
+          match e.pexp_desc with
+          | Pexp_letexception (ext, body) ->
+              let name = ext.pext_name.txt in
+              let inner =
+                if List.mem carriers name ~equal:String.equal then
+                  Lexical_scope.bind_values env [ constructor_key name ] `Foreign
+                else env
+              in
+              ignore (self#expression inner body : expression);
+              e
+          | _ ->
+              (match e.pexp_desc with
+              | Pexp_construct ({ txt; _ }, Some { pexp_desc = Pexp_ident { txt = Lident x; _ }; _ })
+                when String.equal x v && Poly.equal (Lexical_scope.lookup env x) (Some `Payload) ->
+                  Hashtbl.set observed ~key:e.pexp_loc.loc_start.pos_cnum
+                    ~data:(txt, is_carrier env txt);
+                  if is_carrier env txt then
+                    Option.iter (last_name txt) ~f:(fun c -> carriers_hit := c :: !carriers_hit)
+              | _ -> ());
+              super#expression env e
       end
     in
     ignore (finder#expression (Lexical_scope.bind_values env [ v ] `Payload) e : expression);

@@ -233,6 +233,11 @@ let () = skipped "outer"|ocaml},
       ( "computed labels preserve their binding identity",
         {ocaml|let pair = ((fun label -> pass_fail (label ^ " holds") ok), (fun label -> skipped (label ^ " holds")))|ocaml},
         0 );
+      ( "bindings inside a computed expression hide outer names",
+        {ocaml|let f label =
+pass_fail (let label = "same" in label) ok;
+let label = other in skipped (let label = "same" in label)|ocaml},
+        1 );
       ( "the same literal still pairs across scopes",
         {ocaml|let label = "same"
 let f () = pass_fail label ok

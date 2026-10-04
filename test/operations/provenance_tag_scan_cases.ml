@@ -281,6 +281,7 @@ let () =
        nv ^ " i -> (match o with Some i -> record (Site i) | None -> ())";
        "Other." ^ nv ^ " i -> record (Site i)";
        nv ^ " i -> let* i = next in record (Site i)";
+       nv ^ " i -> let exception Site of string in record (Site i)";
        nv ^ " i -> let open Key_scan in record (Site i)";
        nv ^ " i when false -> record (Site i) | " ^ nv ^ " _ -> ()";
      ]
@@ -613,6 +614,32 @@ let () =
         exception Site of string\n\
         let b = Site \"12:fixture-key\"";
      ] ~f:(fun text -> strings (tags (read ~source:"test/j.ml" text).mints) [ "13:fixture-owned" ]);
+   p_all "foreign exports remain lexical and direct"
+     [
+       ( "module K = struct exception Site of string end\n\
+          module Local = struct include K end\n\
+          open Local",
+         [] );
+       ( "module Local = struct module Hidden = struct include Key_scan end end\n\
+          open Tnode\n\
+          open Local",
+         [ "13:fixture-owned" ] );
+     ]
+     ~f:(fun (declaration, expected) ->
+       strings
+         (tags
+            (read ~foreign:[ "Key_scan" ] (declaration ^ "\nlet x = Site \"13:fixture-owned\""))
+              .mints)
+         expected);
+   p_all "nested includes preserve their carrier identity"
+     [
+       ("module Local = struct include struct exception Site of string end end", []);
+       ("module Local = struct include Tnode end", [ "13:fixture-owned" ]);
+     ]
+     ~f:(fun (declaration, expected) ->
+       strings
+         (tags (read (declaration ^ "\nlet x = Local.Site \"13:fixture-owned\"")).mints)
+         expected);
    p_all "foreign exception and extension carriers are discovered"
      [ "exception Site of string"; "type t = ..\ntype t += Site of string" ] ~f:(fun declaration ->
        Scan.declares_own_carrier ~carriers declaration

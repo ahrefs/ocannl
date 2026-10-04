@@ -109,9 +109,9 @@ class virtual ['v, 'm] scoped =
     method binding_denotes (_ : ('v, 'm) env) binding = self#let_denotes binding
     (** The lexical form of {!let_denotes}, for a scan following an identifier in the RHS. *)
 
-    method define ~top:(_ : bool) env (_ : rec_flag) bindings ~walk =
+    method define ~top:(_ : bool) env rec_flag bindings ~walk =
       List.iter bindings ~f:(walk env);
-      List.map bindings ~f:(self#binding_denotes env)
+      self#denotations env rec_flag bindings
     (** How a structure's binding group enters scope for the items after it: it walks the group
         itself, through [walk], and returns what each binding's names denote. [top] is whether the
         group is in the file's own structure. *)
@@ -171,8 +171,17 @@ class virtual ['v, 'm] scoped =
         ~f:(fun env names denotes -> bind_values env names denotes)
     (** A binding group's names, each binding's with what {!let_denotes} gives it. *)
 
+    method denotations env rec_flag bindings =
+      let rhs_scope =
+        match rec_flag with
+        | Nonrecursive -> env
+        | Recursive -> self#bind_patterns env (List.map bindings ~f:(fun b -> b.pvb_pat))
+      in
+      List.map bindings ~f:(self#binding_denotes rhs_scope)
+    (** Recursive RHS names shadow the outer group before any RHS-dependent denotation is read. *)
+
     method bindings env rec_flag bindings =
-      let denotes = List.map bindings ~f:(self#binding_denotes env) in
+      let denotes = self#denotations env rec_flag bindings in
       let inner =
         match rec_flag with
         | Recursive -> self#bind_group env bindings denotes
@@ -201,8 +210,7 @@ class virtual ['v, 'm] scoped =
                   let inner =
                     match rec_flag with
                     | Recursive ->
-                        self#bind_group env bindings
-                          (List.map bindings ~f:(self#binding_denotes env))
+                        self#bind_group env bindings (self#denotations env rec_flag bindings)
                     | Nonrecursive -> env
                   in
                   let denotes =

@@ -350,20 +350,24 @@ let dialect_census content =
             let references = ref [] in
             let reader =
               object
-                inherit Ast_traverse.iter as super
+                inherit [string option * int, unit] Lexical_scope.scoped
+                method local = (None, 0)
+                method module_path _ _ = None
+                method! attribute _ attr = attr
 
-                method! expression e =
-                  (match e.pexp_desc with
-                  | Pexp_ident { txt = Ppxlib.Longident.Lident name; _ } ->
-                      let identity =
-                        Option.value_map (Lexical_scope.lookup env name) ~default:0 ~f:snd
-                      in
-                      references := (name, identity) :: !references
-                  | _ -> ());
-                  super#expression e
+                method! ident env ident =
+                  match ident.txt with
+                  | Ppxlib.Longident.Lident name -> (
+                      match Lexical_scope.lookup env name with
+                      | Some (None, 0) ->
+                          () (* Bound inside this expression, whose text already identifies it. *)
+                      | bound ->
+                          let identity = Option.value_map bound ~default:0 ~f:snd in
+                          references := (name, identity) :: !references)
+                  | _ -> ()
               end
             in
-            reader#expression argument;
+            ignore (reader#expression env argument : expression);
             Computed (Ppxlib.Pprintast.string_of_expression argument, List.rev !references))
   in
   let pass_fails = ref [] and skips = ref [] and item = ref 0 in

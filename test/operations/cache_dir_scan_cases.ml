@@ -99,6 +99,10 @@ let f x = match x with cache_dir -> Autotune.tune ~cache_dir f|ocaml},
       {ocaml|let cache_dir = "autotune_cache_safe"
 let () = for cache_dir = 0 to 1 do Autotune.tune ~cache_dir f done|ocaml},
       [ "~cache_dir names `cache_dir`" ] );
+    ( "a recursive alias never borrows the outer literal",
+      {ocaml|let cache_dir = "autotune_cache_safe"
+let f () = let rec cache_dir = cache_dir in Autotune.tune ~cache_dir f|ocaml},
+      [ "~cache_dir names `cache_dir`" ] );
     (* The direct-store spelling, whose `~dir` is told from every other `~dir` in the repository
        only by the module it is called through. *)
     ( "a direct store through a structure-level alias",

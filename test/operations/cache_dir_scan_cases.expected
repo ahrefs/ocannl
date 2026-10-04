@@ -16,6 +16,7 @@ ok: use -- the cache resolver forwards a lexical parameter
 ok: use -- a same-named resolver in a shadowing module proves nothing
 ok: use -- a case binder is unresolved rather than a forwarded function parameter
 ok: use -- a for index is unresolved rather than a forwarded function parameter
+ok: use -- a recursive alias never borrows the outer literal
 ok: use -- a direct store through a structure-level alias
 ok: use -- a direct store through the qualified path
 ok: use -- a direct store through an alias bound in expression position
