@@ -1575,18 +1575,22 @@ val time_routine :
     {!queue_depth_projection_factor} times the deepest batch the calibration probed
     (gh-ocannl-1100): past it a queue cost can jump where nothing measured. A CUDA/HIP routine
     slower than the target is confirmed by a depth-2 probe, stays at depth 1, and is measured
-    identically in both modes. Whenever a queued call settles at depth 1 its timed window resumes
-    the calibration's synchronized singles ({!sample_window}'s [prior]) rather than timing a fresh
-    one (gh-ocannl-1074): at depth 1 they are samples of the very quantity the window measures,
-    taken under the same stopping rule, so the loop dispatches only what the caller's [repeats]
-    floor asks beyond the calibration's sixteen. The calibration always yields a depth; the result
-    of the timed loop reports when most of ITS samples were stalled, and the tuner refuses such a
-    candidate measurement rather than ranking and caching it (gh-ocannl-888). Since the budget is
-    per-launch rather than batch wall, queued timing can spend up to [max 64 repeats] batches on a
-    fast candidate; [max_timing_runs] bounds the top-up beyond the caller's requested floor. Metal
-    queued timing retries a contention-refused window once at the same depth with fresh samples
-    (gh-ocannl-1060). The retry faces the same admission rule; only its outcome reaches the search's
-    refusal accounting. Other backends and isolated timing take no retry.
+    identically in both modes. When singles below the target owe batching, a resolved pair starting
+    at depth 2 whose marginal launch cost fits the target retains that measured batch even if its
+    fixed term puts the fitted depth-1 wall above the target (gh-ocannl-1184). It neither returns to
+    the isolated singles nor refuses an ordinary integer-depth boundary; unresolved or over-target
+    marginal fits keep their refusal. Whenever a queued call settles at depth 1 its timed window
+    resumes the calibration's synchronized singles ({!sample_window}'s [prior]) rather than timing a
+    fresh one (gh-ocannl-1074): at depth 1 they are samples of the very quantity the window
+    measures, taken under the same stopping rule, so the loop dispatches only what the caller's
+    [repeats] floor asks beyond the calibration's sixteen. The calibration always yields a depth;
+    the result of the timed loop reports when most of ITS samples were stalled, and the tuner
+    refuses such a candidate measurement rather than ranking and caching it (gh-ocannl-888). Since
+    the budget is per-launch rather than batch wall, queued timing can spend up to [max 64 repeats]
+    batches on a fast candidate; [max_timing_runs] bounds the top-up beyond the caller's requested
+    floor. Metal queued timing retries a contention-refused window once at the same depth with fresh
+    samples (gh-ocannl-1060). The retry faces the same admission rule; only its outcome reaches the
+    search's refusal accounting. Other backends and isolated timing take no retry.
 
     With [~tag_failures:true] the pre-dispatch validation, the launches and the synchronization are
     wrapped in their {!Ir.Schedule_outcome} phases, which is what lets a caller's

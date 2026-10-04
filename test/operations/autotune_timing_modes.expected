@@ -24,6 +24,14 @@ over-target calibration requires a depth-separated marginal confirmation: true
 
 == a depth-1 settle reuses its calibration ==
 a window resumed after any prefix is the uninterrupted window: true
+
+== a fitted single crossing keeps supported queued work ==
+a supported batched slope keeps depth 2 despite a fitted single above the target: true
+the boundary reading is the queued batch's per-launch cost, with no reused singles: true
+the retained boundary depth is supported by two distinct batched probes: true
+over-target or unresolved batched work remains unbatched and unranked: true
+a comparison of supported boundary candidates can cache: true
+one genuinely refused candidate still vetoes the whole comparison's cache: true
 a slow candidate settles at depth 1 under either calibration: true
 a depth-1 settle times no fresh window: its window is the calibration's singles: true
 a reused window's reading is the per-launch time: true

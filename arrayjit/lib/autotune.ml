@@ -585,8 +585,8 @@ let queued_batch_depth = queued_batch_depth_with_cap ~max_depth:max_queue_depth
    When the marginal term is unresolved, the memory cap is the only honest depth bound. Return the
    predicted whole-batch wall too, so a cap-bound shortfall is logged from this affine model rather
    than from an overhead-polluted per-launch average. *)
-let refine_queued_batch_depth_between_with_cap ~max_depth ~base_depth ~base_ms ~probe_depth
-    ~probe_ms =
+let refine_queued_batch_depth_between_with_cap ~min_depth ~max_depth ~base_depth ~base_ms
+    ~probe_depth ~probe_ms =
   let retry_depth =
     if probe_depth >= max_depth / 2 then max_depth
     else Int.min max_depth (Int.max (probe_depth + 1) (2 * probe_depth))
@@ -605,6 +605,16 @@ let refine_queued_batch_depth_between_with_cap ~max_depth ~base_depth ~base_ms ~
     else
       let fixed_ms = base_ms -. (marginal_ms *. Float.of_int base_depth) in
       let tolerance_ms = fixed_fit_noise_fraction *. Float.max queued_batch_ms base_ms in
+      (* A synchronized single below the target owes a queued batch. Two BATCH observations can
+         nevertheless put the fitted depth-1 wall just above it: their fixed term and the singles'
+         round trip need not agree (gfx1102, gh-ocannl-1184). Keep the measured depth-2 batch when
+         this resolved pair proves that its marginal work still fits the target. Returning to the
+         singles would change the objective; refusing would make these ordinary boundary candidates
+         permanently uncacheable. An unresolved fit, or marginal work above the target, establishes
+         no such supported batch and keeps the existing fallback/refusal. *)
+      let min_depth =
+        if base_depth = 2 && Float.(marginal_ms <= queued_batch_ms) then min_depth else 1
+      in
       if Float.(fixed_ms < -.tolerance_ms) then (retry_depth, Float.nan)
       else if Float.(fixed_ms >= queued_batch_ms) then
         (* The whole-wall target is unattainable, but a positive depth-separated slope still gives a
@@ -614,7 +624,7 @@ let refine_queued_batch_depth_between_with_cap ~max_depth ~base_depth ~base_ms ~
         let wanted = queued_batch_ms /. marginal_ms in
         let depth =
           if (not (Float.is_finite wanted)) || Float.(wanted >= of_int max_depth) then max_depth
-          else Int.max 1 (Float.iround_up_exn wanted)
+          else Int.max min_depth (Float.iround_up_exn wanted)
         in
         (depth, fixed_ms +. (marginal_ms *. Float.of_int depth))
       else if
@@ -630,7 +640,7 @@ let refine_queued_batch_depth_between_with_cap ~max_depth ~base_depth ~base_ms ~
            the answer; the fixed term is below the target here, so the crossing is at least one
            launch and strictly shallower than the base. *)
         let depth =
-          Int.max 1 (Float.iround_up_exn ((queued_batch_ms -. fixed_ms) /. marginal_ms))
+          Int.max min_depth (Float.iround_up_exn ((queued_batch_ms -. fixed_ms) /. marginal_ms))
         in
         (depth, fixed_ms +. (marginal_ms *. Float.of_int depth))
       else
@@ -642,13 +652,13 @@ let refine_queued_batch_depth_between_with_cap ~max_depth ~base_depth ~base_ms ~
         (depth, fixed_ms +. (marginal_ms *. Float.of_int depth))
 
 let refine_queued_batch_depth_between =
-  refine_queued_batch_depth_between_with_cap ~max_depth:max_queue_depth
+  refine_queued_batch_depth_between_with_cap ~min_depth:1 ~max_depth:max_queue_depth
 
 let refine_queued_batch_depth_with_cap ~max_depth ~single_ms ~probe_depth ~probe_ms =
   if probe_depth <= 1 then (1, probe_ms)
   else
-    refine_queued_batch_depth_between_with_cap ~max_depth ~base_depth:1 ~base_ms:single_ms
-      ~probe_depth ~probe_ms
+    refine_queued_batch_depth_between_with_cap ~min_depth:1 ~max_depth ~base_depth:1
+      ~base_ms:single_ms ~probe_depth ~probe_ms
 
 let refine_queued_batch_depth = refine_queued_batch_depth_with_cap ~max_depth:max_queue_depth
 
@@ -906,6 +916,7 @@ let calibrate_and_time_with_retry_observer ~on_retry ~retry_contended ~timing ~r
             let provisional_depth =
               queued_batch_depth_with_cap ~max_depth:queue_depth_cap single_estimate
             in
+            let min_depth = if provisional_depth > 1 then 2 else 1 in
             (* Depth 1 is probed at depth 2 before it is retained: a genuinely slow routine's affine
                pair confirms depth 1, while an inflated synchronized-single window enters the same
                retry path as every other suspect target crossing. *)
@@ -929,7 +940,7 @@ let calibrate_and_time_with_retry_observer ~on_retry ~retry_contended ~timing ~r
                 let measured = probe_batch ~role:Crossing_probe depth in
                 let calibration_dispatches = calibration_dispatches + (measured.samples * depth) in
                 let confirmed_depth, confirmed_wall_ms =
-                  refine_queued_batch_depth_between_with_cap ~max_depth:queue_depth_cap
+                  refine_queued_batch_depth_between_with_cap ~min_depth ~max_depth:queue_depth_cap
                     ~base_depth:depth ~base_ms:measured.ms ~probe_depth:upper_depth
                     ~probe_ms:upper_ms
                 in
@@ -978,7 +989,7 @@ let calibrate_and_time_with_retry_observer ~on_retry ~retry_contended ~timing ~r
                   calibration_dispatches + (confirmation.samples * confirmation_depth)
                 in
                 let confirmed_depth, confirmed_wall_ms =
-                  refine_queued_batch_depth_between_with_cap ~max_depth:queue_depth_cap
+                  refine_queued_batch_depth_between_with_cap ~min_depth ~max_depth:queue_depth_cap
                     ~base_depth:depth ~base_ms:wall_ms ~probe_depth:confirmation_depth
                     ~probe_ms:confirmation.ms
                 in
@@ -1014,8 +1025,8 @@ let calibrate_and_time_with_retry_observer ~on_retry ~retry_contended ~timing ~r
                   calibration_dispatches + (validation.samples * depth)
                 in
                 let next_depth, next_wall_ms =
-                  refine_queued_batch_depth_between_with_cap ~max_depth:queue_depth_cap ~base_depth
-                    ~base_ms ~probe_depth:depth ~probe_ms:validation.ms
+                  refine_queued_batch_depth_between_with_cap ~min_depth ~max_depth:queue_depth_cap
+                    ~base_depth ~base_ms ~probe_depth:depth ~probe_ms:validation.ms
                 in
                 if next_depth = base_depth then
                   (* A valid pair can confirm its earlier, already-target-sized observation. Stop
