@@ -169,6 +169,36 @@ let alias_stanza_name = Scan.alias_stanza_name
    chdir. A name or `(universe)` alone cannot vouch for that startup check. The dedicated
    `arrayjit.utils` dependency distinguishes these lightweight gates from tests linking a backend
    through `ocannl`, such as the unconditionally rerun cc compiler census. *)
+(* A direct archive dependency can be omitted by the OCaml linker when unused. Only an
+   explicit, effective -linkall makes startup independent of the program's own OCaml references.
+   Evaluate grouping/subtraction through the shared ordered-set reader; do not flatten flags. *)
+let force_links_reader stanza =
+  match Scan.field stanza "link_flags" with
+  | None -> false
+  | Some flags ->
+      let unresolved flag =
+        invalid_arg
+          ("ambient gate link_flags cannot be resolved statically: " ^ flag
+         ^ "; use an explicit effective -linkall")
+      in
+      let rec validate ~subtracted = function
+        | Sexp.Atom ":standard" when subtracted -> unresolved ":standard on subtraction's right"
+        | Sexp.Atom ":standard" | Sexp.Atom "\\" -> ()
+        | Sexp.Atom flag
+          when String.is_prefix flag ~prefix:":" || String.is_substring flag ~substring:"%{" ->
+            unresolved flag
+        | Sexp.Atom _ -> ()
+        | Sexp.List terms -> validate_terms ~subtracted terms
+      and validate_terms ~subtracted terms =
+        match List.split_while terms ~f:(fun term -> not (Sexp.equal term (Sexp.Atom "\\"))) with
+        | left, [] -> List.iter left ~f:(validate ~subtracted)
+        | left, _ :: right ->
+            List.iter left ~f:(validate ~subtracted);
+            validate_terms ~subtracted:true right
+      in
+      validate_terms ~subtracted:false flags;
+      List.mem (Scan.eval_ordered_set flags).included "-linkall" ~equal:String.equal
+
 let gate_program stanza =
   List.mem
     [ "test"; "tests"; "executable"; "executables" ]
@@ -176,6 +206,7 @@ let gate_program stanza =
     ~equal:String.equal
   && Option.value_map (Scan.field stanza "libraries") ~default:false ~f:(fun libraries ->
       List.exists libraries ~f:(function Sexp.Atom "arrayjit.utils" -> true | _ -> false))
+  && force_links_reader stanza
 
 let is_gate ?(subdir = "") ?programs ~stanzas stanza =
   let programs = Option.value programs ~default:(List.map stanzas ~f:(fun s -> (subdir, s))) in
@@ -3246,7 +3277,8 @@ let family_gate ~elsewhere =
  (name gate)
  (modules gate)
  (deps ocannl_config (universe))
- (libraries base arrayjit.utils))
+ (libraries base arrayjit.utils)
+ (link_flags -linkall))
 
 (rule
  ; ocannl-backend: none -- the same gate, on the alias the family stanza depends on.
@@ -3335,7 +3367,8 @@ let family_member_stanza ~shape ~metal =
             \  (name childgate)\n\
             \  (modules childgate)\n\
             \  (deps ocannl_config (universe))\n\
-            \  (libraries base arrayjit.utils))\n\
+            \  (libraries base arrayjit.utils)\n\
+            \  (link_flags -linkall))\n\
             \ (rule\n\
             \  ; ocannl-backend: none -- the same gate, on the alias the group's aliases depend on.\n\
             \  (alias runtest-childgate)\n\
@@ -4392,6 +4425,7 @@ let guard_subject ~arm =
          (executable\n\
         \ (name ambient)\n\
         \ (modules ambient)\n\
+        \ (link_flags -linkall)\n\
         \ (libraries arrayjit.utils))\n"
         (Utils.env_var_name guard_key)
   (* The same directive one level down, which the top-level loop did not reach. *)
@@ -4665,7 +4699,8 @@ let inline_alias_subject variant =
  (name gate)
  (modules gate)
  (deps ocannl_config (universe))
- (libraries base arrayjit.utils))
+ (libraries base arrayjit.utils)
+ (link_flags -linkall))
 
 (rule
  ; ocannl-backend: none -- the same gate, on the alias the per-module rules depend on.
@@ -4807,6 +4842,7 @@ let pipeline_subject answer =
      (executable\n\
     \ (name ambient)\n\
     \ (modules ambient)\n\
+    \ (link_flags -linkall)\n\
     \ (libraries arrayjit.utils))\n"
     deps action
 
@@ -4989,7 +5025,9 @@ let gateless_scope_control () =
 let ambient_gate_control () =
   let stanza text = List.hd_exn (Scan.stanzas text) in
   let gate =
-    stanza "(test (name renamed) (modules renamed) (libraries arrayjit.utils) (deps (universe)))"
+    stanza
+      "(test (name renamed) (modules renamed) (libraries arrayjit.utils) (link_flags -linkall) \
+       (deps (universe)))"
   in
   let census = stanza "(test (name census) (libraries ocannl) (deps (universe)))" in
   let free = stanza "(test (name free) (libraries unix) (deps (universe)))" in
@@ -5016,19 +5054,50 @@ let ambient_gate_control () =
   Verdict.p "only the actual gate's test name receives the generated-alias collision exemption"
     (Set.equal (gate_generated_names stanzas) (Set.singleton (module String) "renamed"));
   let external_gate =
-    stanza "(executable (name renamed) (public_name pkg.gate) (libraries arrayjit.utils))"
+    stanza
+      "(executable (name renamed) (public_name pkg.gate) (libraries arrayjit.utils) (link_flags \
+       -linkall))"
   in
   let borrowed = runner "(run %{dep:../other/renamed.exe})" in
   let public = runner "(run %{bin:pkg.gate})" in
   let self =
     stanza
-      "(test (name renamed) (libraries arrayjit.utils) (deps (universe)) (action (run %{test})))"
+      "(test (name renamed) (libraries arrayjit.utils) (link_flags -linkall) (deps (universe)) \
+       (action (run %{test})))"
   in
   Verdict.p
     "a gate borrowed from another dune file, its public name and an explicit self-run resolve"
     (is_gate ~subdir:"t" ~programs:[ ("other", external_gate) ] ~stanzas:[ borrowed ] borrowed
     && is_gate ~subdir:"t" ~programs:[ ("other", external_gate) ] ~stanzas:[ public ] public
     && is_gate ~stanzas:[ self ] self);
+  let ordinary = stanza "(test (name ordinary) (libraries arrayjit.utils) (deps (universe)))" in
+  let removed =
+    stanza
+      "(test (name removed) (libraries arrayjit.utils) (link_flags (-linkall \\ -linkall)) (deps \
+       (universe)))"
+  in
+  let restored =
+    stanza
+      "(test (name restored) (libraries arrayjit.utils) (link_flags (-linkall \\ -linkall) \
+       -linkall) (deps (universe)))"
+  in
+  Verdict.p_none "an ordinary direct-utils test and a subtracted linkall flag do not declare a gate"
+    [ ordinary; removed ]
+    ~f:(is_gate ~stanzas:[ ordinary; removed ]);
+  Verdict.p "a linkall flag restored outside a subtraction is an effective gate declaration"
+    (is_gate ~stanzas:[ restored ] restored);
+  let refuses flags =
+    try
+      ignore
+        (force_links_reader (stanza ("(executable (name unresolved) (link_flags " ^ flags ^ "))")));
+      false
+    with Invalid_argument message ->
+      String.is_substring message ~substring:"ambient gate link_flags cannot be resolved statically"
+  in
+  Verdict.p_all
+    "unresolved flag includes, expansions and subtracted standard sets are refused clearly"
+    [ "(:include flags.sexp)"; "%{read:flags.sexp}"; "-linkall \\ :standard" ]
+    ~f:refuses;
   let reach = gated_aliases [ census; free; unrelated; no_run ] in
   Verdict.p "universe users alone leave their alias entry points ungated" (Set.is_empty reach)
 

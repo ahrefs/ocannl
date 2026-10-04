@@ -409,6 +409,9 @@ let raw_entries =
         "[scanner-refusal:06fb7574357e1a85e9d7da69c19351b3] gate cannot provide";
         "[scanner-refusal:3bacab0b9c1d831e547e7ededd7085e2] generated-alias collision exemption";
         "[scanner-refusal:6d2cc639b272c289c3a79c46561b671f] explicit self-run resolve";
+        "[scanner-refusal:314daa1e6e83eb37702ce6cf4f24cd44] ordinary direct-utils test";
+        "[scanner-refusal:f8fc95de59a65622241eac16f5f1ecf4] effective gate declaration";
+        "[scanner-refusal:0d805a9703eb5f183046f05353ed6587] expansions and subtracted";
         "[scanner-refusal:9fe5330074251fed6b9e5e08a0d663bd] universe users alone";
       ] );
     ( "ocamlformat_ignore_scan.ml",

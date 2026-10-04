@@ -19,6 +19,7 @@
  (package neural_nets_lib)
  (deps ocannl_config (universe))
  (modules env_spelling_gate)
+ (link_flags -linkall)
  (libraries base stdio arrayjit.utils arrayjit.verdict))
 
 ; The same gate for the per-test `runtest-<name>` aliases (gh-ocannl-703, gh-ocannl-726). Every rule

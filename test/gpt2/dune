@@ -19,6 +19,7 @@
  (package neural_nets_lib)
  (deps ocannl_config (universe))
  (modules env_spelling_gate)
+ (link_flags -linkall)
  (libraries base stdio arrayjit.utils arrayjit.verdict))
 
 ; The same gate for the `slow` suite, which is a separate entry point: `dune build @slow` builds no

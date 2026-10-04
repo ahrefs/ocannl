@@ -76,8 +76,11 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   forwarders still need executed oracles — syntactic use proves only that the value was forwarded.
 
 - Ambient gates in `env_var_deps` (gh-ocannl-920) are uncached actions running a program that
-  explicitly links `arrayjit.utils`, resolved through `Dune_stanza_scan.program_runners` plus
-  Dune's self-running test actions. `(universe)` alone identifies no gate: compiler censuses and
+  directly declares `arrayjit.utils` and an effective `(link_flags -linkall)`, resolved through `Dune_stanza_scan.program_runners` plus
+  Dune's self-running test actions. The force-link flag is required because OCaml can omit an
+  unused archive and its startup reader. Grouping and subtraction are evaluated; unresolved
+  flag includes, expansions and subtraction of `:standard` are refused explicitly. `(universe)`
+  alone identifies no gate: compiler censuses and
   OCANNL-free canaries use it too. The same classification owns alias reachability, the gate's
   training lock obligation and the deliberate generated-alias collision exemption. A mixed Dune
   file exempts only its configuration-free aliases, so a new configuration reader cannot inherit

@@ -11,6 +11,7 @@
 (executable
  (name env_spelling_gate)
  (modules env_spelling_gate)
+ (link_flags -linkall)
  (libraries base stdio arrayjit.utils arrayjit.verdict))
 
 (rule
