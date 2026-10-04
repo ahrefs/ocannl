@@ -131,6 +131,19 @@ pipeline; no captured fixture is required by the test. These controls establish
 the broader guard, not the complete model's final acceptance, which must be
 verified separately at the production revision.
 
+At production revision `1c84af7eb6ff7e36017e1f40bce7d6948d25823e`, the TUF
+HIP regressions and all four untuned full-parity endpoints completed. Against
+unique same-fixture CPU-F32 exact reference rows, maximum relative errors were
+`0.0000652923` for base training, `0.0000405403` for each of two s1024 inference
+processes, and `0.0001573344` for s1024 training. Every loss was finite and each
+endpoint met the original `0.002` envelope. Both training endpoints executed
+all six parity optimizer steps at the original loss scale 65536. The two
+inference processes returned identical four-loss sequences. These are bounded
+correctness results; subsequent protocol timings are not a performance claim.
+The retained reference rows omit a precision field, but each workload has one
+CPU/eager/exact row with the float32 policy recorded; their fixture tensors are
+F32 and the historical PyTorch runner does not cast them to reduced precision.
+
 Durable raw scripts, hashes, code objects, disassembly and logs are retained
 under `~/.local/state/issue-wave/wave2-20261004/1182-scratch` on TUF, with
 `1182-forcezero-runs/run-1/{log,rc}` recording the successful control leg.
