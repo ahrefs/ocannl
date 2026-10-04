@@ -29,7 +29,7 @@
 #   tools/ci-durations.sh                        # last 30 completed ci.yml runs
 #   tools/ci-durations.sh --branch master -n 50
 #   tools/ci-durations.sh --event schedule       # the extended (Windows) matrix
-#   tools/ci-durations.sh --branch master --job Ubuntu --step 'Compile|Build and test'
+#   tools/ci-durations.sh --branch master --job ubuntu --step 'Run (targets=|opam exec -- dune build)'
 #
 # A step sample requires all matching intervals to be usable. Job/share/rest
 # samples additionally require a positive job interval and a sum within it.
