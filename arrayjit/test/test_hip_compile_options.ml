@@ -9,7 +9,7 @@
 open Base
 
 let build ~uses_rocwmma ~with_debug =
-  Ir.Compiler_options.hiprtc ~hip_include_options:[ "-Ihip" ]
+  Ir.Compiler_options.hiprtc ~target_arch:None ~hip_include_options:[ "-Ihip" ]
     ~rocwmma_include_options:[ "-Irocwmma" ] ~uses_rocwmma ~with_debug
 
 let () =
@@ -51,4 +51,20 @@ let () =
         (Ir.Compiler_options.render want));
   Verdict.p_all "every HIPRTC variant keeps both fast-math overrides, in order, after the umbrella"
     cases ~f:(fun (uses_rocwmma, with_debug, want) ->
-      List.equal String.equal (build ~uses_rocwmma ~with_debug) want)
+      List.equal String.equal (build ~uses_rocwmma ~with_debug) want);
+  let affected = [ Some "gfx1102"; Some "gfx1102:xnack-" ] in
+  let unaffected = [ None; Some "gfx1100"; Some "gfx1151"; Some "gfx1201"; Some "gfx11020" ] in
+  Verdict.p_all "only the observed gfx1102 target enables conservative HIP load waits" affected
+    ~f:(fun target_arch ->
+      List.equal String.equal
+        (Ir.Compiler_options.hip_load_wait_options ~target_arch)
+        [ "-mllvm"; "-amdgpu-waitcnt-load-forcezero" ]);
+  Verdict.p_all "unmeasured HIP targets retain their compiler load scheduling" unaffected
+    ~f:(fun target_arch -> List.is_empty (Ir.Compiler_options.hip_load_wait_options ~target_arch));
+  Verdict.p_all "the gfx1102 workaround reaches every production HIPRTC variant" cases
+    ~f:(fun (uses_rocwmma, with_debug, _) ->
+      let options =
+        Ir.Compiler_options.hiprtc ~target_arch:(Some "gfx1102") ~hip_include_options:[ "-Ihip" ]
+          ~rocwmma_include_options:[ "-Irocwmma" ] ~uses_rocwmma ~with_debug
+      in
+      List.mem options "-amdgpu-waitcnt-load-forcezero" ~equal:String.equal)

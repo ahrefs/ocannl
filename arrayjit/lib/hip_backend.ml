@@ -356,7 +356,9 @@ end = struct
        after fast math at compiler scope, covering operators parsed in the HIP headers; its complete
        option matrix is tested without hipjit in arrayjit/test. *)
     let options =
-      Compiler_options.hiprtc ~hip_include_options:hip_include_opt
+      Lazy.force ensure_initialized;
+      let target_arch = (H.Device.get_attributes (H.Device.get_current ())).gcn_arch_name in
+      Compiler_options.hiprtc ~target_arch:(Some target_arch) ~hip_include_options:hip_include_opt
         ~rocwmma_include_options:rocwmma_include_opt ~uses_rocwmma
         ~with_debug:(Utils.with_runtime_debug ())
     in
@@ -1614,7 +1616,18 @@ end = struct
          configurable, so the two regimes needed distinct cache entries; it is now unconditional,
          and a constant contributes nothing to a tag. Restore a component here if the guard ever
          becomes conditional again — say on a ROCm version predicate, once upstream fixes it. *)
-      ^ if Utils.with_runtime_debug () then "/device-debug" else "/no-device-debug"
+      ^ (if Utils.with_runtime_debug () then "/device-debug" else "/no-device-debug")
+      (* Derive the cache regime from the same option selector the compiler uses. A pre-workaround
+         crown is not evidence for the conservative load-wait regime. Limits describe this backend's
+         device set, so include every device's policy. *)
+      ^ ( Array.init (num_devices ()) ~f:(fun ordinal ->
+              let arch = (H.Device.get_attributes (H.Device.get ~ordinal)).gcn_arch_name in
+              Compiler_options.hip_load_wait_options ~target_arch:(Some arch))
+        |> Array.to_list |> List.concat
+        |> List.dedup_and_sort ~compare:String.compare
+        |> function
+          | [] -> ""
+          | options -> "/hiprtc-load-wait:" ^ Compiler_options.render options )
       (* No [bf16_accum_wide] component (gh-ocannl-1117): gh-ocannl-1051 added one by hand when
          [Bf16_auto] went wide here with the configured mode unchanged, but what a mode resolves to
          is now cache identity by derivation — [Schedule_cache.codegen_tag] tabulates this backend's
