@@ -150,18 +150,14 @@ let publication_inputs ?(paths = []) ~source contents =
           && not (List.is_empty (Dune_stanza_scan.public_names stanza))
         then
           let fields =
-            [
-              "name";
-              "public_name";
-              "public_names";
-              "modules";
-              "wrapped";
-              "private_modules";
-              "empty_module_interface_if_absent";
-            ]
-            |> List.filter_map ~f:(fun field ->
-                Option.map (Dune_stanza_scan.field stanza field) ~f:(fun value ->
-                    Sexp.List (Sexp.Atom field :: value)))
+            (* Literal configuration evidence, not a Dune evaluator. Ordinary dependencies do not
+               describe declarations; accepted select inputs are retained separately below. *)
+            (match stanza with Sexp.List (_ :: fields) -> fields | _ -> [])
+            |> List.filter ~f:(fun field ->
+                match Dune_stanza_scan.head field with
+                | Some ("libraries" | "synopsis") -> false
+                | _ -> true)
+            |> List.sort ~compare:(fun a b -> String.compare (Sexp.to_string a) (Sexp.to_string b))
           in
           Some
             {

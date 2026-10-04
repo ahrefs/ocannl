@@ -45,7 +45,8 @@ let run since until =
   printf
     "Editorial aid; .ml bodies flag possible inferred-type drift. PPX exports and inferred types \
      need manual review. Generator input entries require review of the generated interface. Dune \
-     publication-input entries require manual review of module ownership.\n";
+     configuration entries retain literal inputs; availability and declaration effects require \
+     manual review. Ordinary library dependencies are excluded.\n";
   let parent = ref since and total = ref 0 in
   List.iter commits ~f:(fun commit ->
       let before = source_paths !parent |> Set.of_list (module String) in

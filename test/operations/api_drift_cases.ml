@@ -85,6 +85,32 @@ let () =
           "(library (name lib) (public_name pkg.lib) (modules a) \
            (empty_module_interface_if_absent))")
     = 1);
+  let public_configuration field =
+    "(library (name backend) (public_name pkg.backend) (modules a) " ^ field ^ ")"
+  in
+  Verdict.p_all "availability preprocessing and driver inputs remain literal review evidence"
+    [
+      ("", "(optional)");
+      ("(enabled_if true)", "(enabled_if false)");
+      ("(preprocess (pps ppx_sexp_conv))", "(preprocess (pps ppx_compare))");
+      ("(preprocessor_deps earlier)", "(preprocessor_deps later)");
+      ("(kind normal)", "(kind ppx_rewriter)");
+      ("(flags :standard)", "(flags :standard -opaque)");
+      ("(modes byte)", "(modes best)");
+      ("(foreign_stubs (language c) (names earlier))", "(foreign_stubs (language c) (names later))");
+      ("(c_library_flags -lpthread)", "(c_library_flags -lother)");
+    ]
+    ~f:(fun (before, after) ->
+      match changed "lib/dune" (public_configuration before) (public_configuration after) with
+      | [ (Some previous, Some entry) ] -> not (String.equal previous.text entry.text)
+      | _ -> false);
+  Verdict.p_empty "independent public configuration field reordering stays quiet"
+    ~over:
+      (declarations "lib/dune" (public_configuration "(optional) (preprocess (pps ppx_compare))"))
+    (changed "lib/dune"
+       (public_configuration "(optional) (preprocess (pps ppx_compare))")
+       "(library (preprocess (pps ppx_compare)) (public_name pkg.backend) (optional) (modules a) \
+        (name backend))");
   let owner_before =
     "(library (name first) (public_name pkg.first) (modules a)) (library (name second) \
      (public_name pkg.second) (modules b))"
@@ -141,14 +167,14 @@ let () =
        (private_config "--code"));
   let publication_before =
     declarations "lib/dune"
-      "(library (name public) (public_name pkg.public) (modules a) (libraries earlier)) (library \
-       (name private) (modules x))"
+      "(library (name public) (public_name pkg.public) (modules a) (libraries earlier) (synopsis \
+       earlier)) (library (name private) (modules x) (preprocess (pps earlier)))"
   in
   let publication_after =
     declarations "lib/dune"
       "; changed prose\n\
-       (library (name public) (public_name pkg.public) (modules a) (libraries later)) (library \
-       (name private) (modules y))"
+       (library (name public) (public_name pkg.public) (modules a) (libraries later) (synopsis \
+       later)) (library (name private) (modules y) (preprocess (pps later)) (optional))"
   in
   Verdict.p_empty "private ownership dependency and prose edits do not change publication entries"
     ~over:publication_before

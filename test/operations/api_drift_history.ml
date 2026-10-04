@@ -276,6 +276,25 @@ let () =
       let changed_select = commit "Change select condition with the same arm paths" in
       p "Dune-only selected-module configuration edits remain visible"
         (has (read ~until:changed_select selected_config) "hip -> impl.cuda.ml");
+      let library_config fields =
+        "(library (name backend) (public_name pkg.backend) (modules impl) " ^ fields ^ ")\n"
+      in
+      write "arrayjit/lib/dune" (library_config "(preprocess (pps ppx_sexp_conv))");
+      let required_library = commit "Required public library preprocessing" in
+      write "arrayjit/lib/dune" (library_config "(optional) (preprocess (pps ppx_sexp_conv))");
+      let optional_library = commit "Make public library optional without changing source" in
+      p "Dune-only optional library changes remain literal review evidence"
+        (has (read ~until:optional_library required_library) "(optional)");
+      write "arrayjit/lib/dune" (library_config "(optional) (preprocess (pps ppx_compare))");
+      let preprocessing = commit "Change public library preprocessing without changing source" in
+      p "Dune-only preprocessing changes remain literal review evidence"
+        (has (read ~until:preprocessing optional_library) "ppx_compare");
+      write "arrayjit/lib/dune"
+        "(library (preprocess (pps ppx_compare)) (modules impl) (optional) (public_name \
+         pkg.backend) (name backend) (libraries dependency) (synopsis \"new prose\"))\n";
+      let config_order = commit "Reorder fields and edit dependencies and prose" in
+      p "public configuration field ordering dependencies and prose stay quiet"
+        (has (read ~until:config_order preprocessing) "0 declaration changes");
       write "arrayjit/lib/cap.mli" "val";
       ignore (commit "Invalid source must refuse" : string);
       p "invalid source refuses the real historical reader"

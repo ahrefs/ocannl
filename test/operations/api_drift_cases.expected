@@ -4,6 +4,8 @@ public generator inputs follow Dune module ownership and explicit interfaces: tr
 parser tokens and lexer body changes produce generated-interface review entries: true
 private generated modules are excluded while public peers remain visible: true
 Dune empty-interface policy changes produce publication-input review entries: true
+availability preprocessing and driver inputs remain literal review evidence: true
+independent public configuration field reordering stays quiet: true
 independent Dune stanza reordering does not create API drift: true
 Dune module ownership moves produce conservative publication-input entries: true
 owning generator configuration changes produce manual-review entries: true

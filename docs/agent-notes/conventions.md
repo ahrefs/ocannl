@@ -41,11 +41,13 @@ files.
   inspect its generated interface, since this tool does not regenerate historical modules or
   typecheck their dependency trees. The owning configuration of accepted generator/select inputs is
   retained as a manual-review entry too; private or explicitly interfaced targets stay excluded.
-  Independent Dune stanza reordering is ignored. Public-library publication fields produce
-  conservative input entries too, surfacing module-set, owner, wrapping or empty-interface policy
-  changes without reconstructing the installed module/type graph. Inspect that publication
-  relationship manually; dependency-only, private-library and prose Dune edits stay outside these
-  entries.
+  Independent Dune stanza and field reordering is ignored. Literal public-library configuration
+  produces conservative input entries too, including module ownership, interface policy,
+  availability, preprocessing and compiler/driver inputs. These entries do not evaluate Dune
+  availability, expand PPXs or reconstruct the installed module/type graph. Inspect their effect
+  manually; ordinary `libraries` dependencies, private-library configuration and comments or
+  `synopsis` prose stay outside these entries. Accepted select configurations inside `libraries`
+  follow the separate target/interface rule above.
   This is a reading aid, not a compatibility gate: implementation bodies are kept because they
   can change an inferred public type, and PPX-generated exports and inferred types still require
   manual review. Record retired or renamed symbols in the resulting bullet so later API-removal
