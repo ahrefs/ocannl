@@ -307,8 +307,12 @@ files.
   Their guard overhead is exact too (affine write positions, multi-setter components); unknown or
   potentially overflowing domains retain `And` and a bound. Negative indices are allowed by the
   proof; it does not assume nonnegative substituted coordinates. `Where` still gates the operand
-  read, whose solved index can be negative or out of range on unmatched iterations. Ordinary
-  short-circuit conjunctions and conditional arm arithmetic remain bounds. Exactly one matching
+  read, whose solved index can be negative or out of range on unmatched iterations.
+  `Schedule.partition_breakpoints` uses `Low_level.is_pure_index_conjunction` to descend these
+  products too; numeric or floating products stay opaque. The shared classifier identifies the
+  Boolean representation, while the arithmetic-totality proof remains private to simplification.
+  Ordinary short-circuit conjunctions and conditional arm arithmetic remain bounds. Exactly one
+  matching
   arm alone cannot prove uniform `&&` overhead: the upper comparison may execute a different
   number of times at different read indices; (c) a flip the store refuses (a scalar reduction's
   operand read escapes the setter it would be captured at, `9:`) is refused by the re-run walk and

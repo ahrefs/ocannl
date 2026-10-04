@@ -130,9 +130,14 @@ let () =
   (* === 2: Partition the output loop at the breakpoints derived from the clamp guard: guard-free
      interior segment, specialized boundary segments, executed parity. === *)
   let bps = ref [] in
+  let eager_guards = ref 0 in
   let part_census = ref (-1, -1, -1) in
   let transform_part (opt : LL.optimized) =
     let axis = Option.value_exn ~here:[%here] (find_pool_loop ~n:4 opt.LL.llc) in
+    eager_guards :=
+      Ll_test.count_scalar opt.LL.llc ~f:(function
+        | LL.Binop (Ir.Ops.Mul, _, _) as sc -> LL.is_pure_index_conjunction sc
+        | _ -> false);
     bps := Sched.partition_breakpoints ~axis opt.LL.llc;
     let op, _segs = Sched.partition ~axis ~breakpoints:!bps in
     let opt = Sched.apply [ op ] opt in
@@ -140,6 +145,7 @@ let () =
     opt
   in
   let _, _, got_part = run_pool "cw_partitioned" transform_part in
+  p "clamped pool partition consumes an eager index conjunction" (!eager_guards = 1);
   p "breakpoints delimit the left- and right-truncated boundary segments"
     (List.equal Int.equal !bps [ 1; 3 ]);
   (let ifs, wheres, _ = !part_census in
