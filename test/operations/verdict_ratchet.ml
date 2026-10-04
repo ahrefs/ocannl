@@ -262,9 +262,6 @@ let exempt_quantified_helpers =
     ( "test/operations/fission_schedule.ml:annotated",
       "the merge-back case deliberately requires the consumer segment to have no hardware axes; \
        the same claim also requires the producer segment to be annotated" );
-    ( "test/operations/ocamlformat_ignore_scan.ml:refused",
-      "the message list is an optional strengthening of the child-exit refusal: an empty list \
-       deliberately means that the nonzero status alone is the passing evidence" );
     ( "test/operations/reduction_forms.ml:changed",
       "an empty schedule deliberately needs no IR change, and an empty per-op result means there \
        were no per-op transformations to validate" );

@@ -334,7 +334,7 @@
  (package neural_nets_lib)
  (deps ocannl_config)
  (modules flushing_location_format)
- (libraries base stdio unix arrayjit.utils arrayjit.verdict)
+ (libraries base stdio unix arrayjit.utils arrayjit.verdict fresh_process)
  (preprocess
   (pps ppx_sexp_conv ppx_minidebug)))
 
@@ -3150,7 +3150,7 @@
 (executable
  (name bin_smoke_membership_scan)
  (modules bin_smoke_membership_scan)
- (libraries base stdio test_utils arrayjit.verdict))
+ (libraries base stdio test_utils arrayjit.verdict fresh_process))
 
 (rule
  ; ocannl-backend: none -- links no backend and parses repository dune files as text.
@@ -3172,16 +3172,8 @@
  (action
   (diff bin_smoke_membership_scan.expected bin_smoke_membership_scan.actual)))
 
-; The same production checker on a synthetic public executable omitted from the smoke alias. Exit
-; 1 is the evidence: if the checker stops detecting the omission, this rule receives 0 and fails.
-;
-; Both of the refused run's streams are dropped, for the reason `generated_provenance` states above
-; (gh-ocannl-692): a refusal announces itself with this repository's failure marker -- `FAIL:` and
-; `FAILED:` -- and this one is DESIGNED to fail, so letting its stderr through printed those words
-; into the log of a green `dune build @test/operations/scans` on every re-run of this target, where
-; it has already sent one reader to file a flake issue against a check that was doing its job.
-; `ignore-stderr` drops the announcement, not the evidence: the evidence is the exit status, which
-; `with-accepted-exit-codes 1` still requires, so a control that stops failing still fails the rule.
+; The production checker runs as a captured child: the parent requires both its exit status
+; and the causal failure text, and reports only a passing Verdict claim on success (gh-ocannl-910).
 
 (rule
  ; ocannl-backend: none -- links no backend and scans an embedded synthetic dune file.
@@ -3191,14 +3183,7 @@
  (action
   (with-stdout-to
    %{target}
-   (progn
-    (ignore-stdout
-     (ignore-stderr
-      (with-accepted-exit-codes
-       1
-       (run %{dep:bin_smoke_membership_scan.exe} --negative-control))))
-    (echo
-     "synthetic public executable omitted from @bin-smoke is refused: true\n")))))
+   (run %{dep:bin_smoke_membership_scan.exe} --refusal-control))))
 
 (rule
  (alias runtest-bin_smoke_membership_scan_control)
@@ -6117,7 +6102,14 @@
 (executable
  (name generated_provenance)
  (modules generated_provenance)
- (libraries base stdio unix arrayjit.utils arrayjit.verdict test_utils))
+ (libraries
+  base
+  stdio
+  unix
+  arrayjit.utils
+  arrayjit.verdict
+  test_utils
+  fresh_process))
 
 (rule
  ; ocannl-backend: none -- links arrayjit.utils, test_utils and unix, and writes its artifacts by
@@ -6161,10 +6153,10 @@
 (executable
  (name verdict_quantified)
  (modules verdict_quantified)
- (libraries base stdio unix arrayjit.verdict))
+ (libraries base stdio unix arrayjit.verdict fresh_process))
 
 (rule
- ; ocannl-backend: none -- links `arrayjit.verdict` and `unix` alone, compiles nothing and runs on
+ ; ocannl-backend: none -- links host-only verdict and fresh-process support, compiles nothing and runs on
  ; three integers: what is under test is what a claim prints and what status it exits with.
  (alias runtest-verdict_quantified)
  (package neural_nets_lib)
@@ -6183,12 +6175,12 @@
 ; does; the golden is the parent's claims about them.
 
 (test
- ; ocannl-backend: none -- links `arrayjit.verdict` and `unix` alone: what is under test is the status and streams a failing child ends with.
+ ; ocannl-backend: none -- host-only verdict and fresh-process support: tests a failing child's status and streams.
  (name verdict_teardown)
  (package neural_nets_lib)
  (deps ocannl_config)
  (modules verdict_teardown)
- (libraries base stdio unix arrayjit.verdict))
+ (libraries base stdio unix arrayjit.verdict fresh_process))
 
 ; The uint4x32 FFI stubs read four lanes out of an [int array], a type that carries no length, so
 ; the C helper has to check the arity rather than assume it (gh-ocannl-688). Links arrayjit.ir
@@ -6260,7 +6252,7 @@
 (executable
  (name ocamlformat_ignore_scan)
  (modules ocamlformat_ignore_scan)
- (libraries base stdio unix test_utils arrayjit.verdict))
+ (libraries base stdio unix test_utils arrayjit.verdict fresh_process))
 
 (rule
  ; ocannl-backend: none -- reads path lists and file existence only, and links no backend.
@@ -6762,7 +6754,7 @@
 (executable
  (name workflow_job_timeouts)
  (modules workflow_job_timeouts)
- (libraries base stdio test_utils arrayjit.verdict))
+ (libraries base stdio test_utils arrayjit.verdict fresh_process))
 
 (rule
  ; ocannl-backend: none -- links no backend: it reads .github/workflows YAML as text.
@@ -7116,7 +7108,7 @@
  (name operand_key_scan_cases)
  (package neural_nets_lib)
  (modules operand_key_scan_cases)
- (libraries base stdio unix test_utils arrayjit.verdict)
+ (libraries base stdio unix test_utils arrayjit.verdict fresh_process)
  (deps ocannl_config operand_key_ratchet.exe)
  (action
   (run %{test} %{dep:operand_key_ratchet.exe})))
@@ -7173,7 +7165,7 @@
  (name ll_test_scan_cases)
  (package neural_nets_lib)
  (modules ll_test_scan_cases)
- (libraries base stdio unix test_utils arrayjit.verdict)
+ (libraries base stdio unix fresh_process test_utils arrayjit.verdict)
  (deps ocannl_config ll_test_ratchet.exe)
  (action
   (run %{test} %{dep:ll_test_ratchet.exe})))
@@ -7414,6 +7406,14 @@
   (env_var OCANNL_BUILD_FILES_PREFIX)
   (env_var OCANNL_SIMPLIFY_FP_ALGEBRA))
  (libraries base ocannl stdio arrayjit.verdict ll_test test_utils))
+
+(test
+ ; ocannl-backend: none -- probes only host processes and temporary stream capture.
+ (name fresh_process_cases)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules fresh_process_cases)
+ (libraries base stdio unix fresh_process arrayjit.verdict))
 
 (test
  ; ocannl-backend: none -- registry-independent config syntax, no backend linked.

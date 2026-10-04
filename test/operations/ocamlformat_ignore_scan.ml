@@ -103,36 +103,12 @@ let rec remove_tree path =
   | _ -> Unix.unlink path
   | exception Unix.Unix_error _ -> ()
 
-let describe_status = function
-  | Unix.WEXITED n -> Printf.sprintf "exited %d" n
-  | Unix.WSIGNALED n -> Printf.sprintf "was killed by signal %d" n
-  | Unix.WSTOPPED n -> Printf.sprintf "was stopped by signal %d" n
-
 let run_child ~root ~exe ~excluded =
-  let capture suffix = Stdlib.Filename.temp_file "fmt_ignore_control" suffix in
-  let out_path = capture ".out" and err_path = capture ".err" in
-  let open_capture path = Unix.openfile path [ Unix.O_WRONLY; Unix.O_TRUNC ] 0o600 in
-  let out = open_capture out_path and err = open_capture err_path in
   let ignore_file = Stdlib.Filename.concat root ".ocamlformat-ignore" in
-  (* Exercise the shipping scan over a declared-input root with no Git metadata. [--scan-only]
-     suppresses only the parent's control driver; without it every child would recursively stage
-     another generation of controls. *)
-  let argv = [| exe; "--scan-only"; root; ignore_file; excluded |] in
-  let pid = Unix.create_process exe argv Unix.stdin out err in
-  let _, status = Unix.waitpid [] pid in
-  Unix.close out;
-  Unix.close err;
-  let text = In_channel.read_all out_path ^ In_channel.read_all err_path in
-  (try Unix.unlink out_path with Unix.Unix_error _ -> ());
-  (try Unix.unlink err_path with Unix.Unix_error _ -> ());
-  (status, text)
+  Fresh_process.run ~exe [ "--scan-only"; root; ignore_file; excluded ]
 
 let control () =
-  let exe =
-    let name = Stdlib.Sys.executable_name in
-    if Stdlib.Filename.is_relative name then Stdlib.Filename.concat (Stdlib.Sys.getcwd ()) name
-    else name
-  in
+  let exe = Fresh_process.executable () in
   let fixture = Stdlib.Filename.temp_dir "fmt ignore control " "" in
   let root = Stdlib.Filename.concat fixture "declared tree" in
   let a = "test/ppx/a_expected.ml" and b = "test/ppx/b_expected.ml" in
@@ -148,20 +124,15 @@ let control () =
     write_file (Stdlib.Filename.concat root ignore) content;
     run_child ~root ~exe ~excluded
   in
-  let report label (status, text) =
-    eprintf "the %s control %s. Its captured output:\n%s\n" label (describe_status status) text
-  in
-  let passed label (status, text) =
-    let ok = match status with Unix.WEXITED 0 -> true | _ -> false in
-    if not ok then report label (status, text);
+  let report label child = Fresh_process.report ~label child in
+  let passed label child =
+    let ok = Fresh_process.matches ~exit:0 ~contains:[] child in
+    if not ok then report label child;
     ok
   in
-  let refused label ~messages (status, text) =
-    let ok =
-      (match status with Unix.WEXITED 1 -> true | _ -> false)
-      && List.for_all messages ~f:(fun message -> String.is_substring text ~substring:message)
-    in
-    if not ok then report label (status, text);
+  let refused label ~messages child =
+    let ok = Fresh_process.matches ~exit:1 ~contains:messages child in
+    if not ok then report label child;
     ok
   in
   let legitimate = run (a ^ "\n" ^ b ^ "\n" ^ extra ^ "\n") in

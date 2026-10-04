@@ -131,10 +131,6 @@ let () =
     | _ -> false);
   (* The shipping scanner on a synthetic tree: the negative control it must refuse. *)
   let exe = Stdlib.Sys.argv.(1) in
-  let exe =
-    if Stdlib.Filename.is_relative exe then Stdlib.Filename.concat (Stdlib.Sys.getcwd ()) exe
-    else exe
-  in
   let root = Stdlib.Filename.temp_dir "operand key control " "" in
   let write path data = Out_channel.write_all (Stdlib.Filename.concat root path) ~data in
   List.iter [ "test"; "arrayjit"; "arrayjit/test" ] ~f:(fun dir ->
@@ -146,25 +142,11 @@ let () =
         write (Printf.sprintf "%s/empty%d.ml" dir i) ""
       done);
   let run ?(exempt = false) () =
-    let out = Stdlib.Filename.temp_file "operand-key" ".out" in
-    let fd = Unix.openfile out [ Unix.O_WRONLY; Unix.O_TRUNC ] 0o600 in
-    let pid =
-      Unix.create_process exe
-        [| exe; (if exempt then "--fixture-exempt" else "--fixture"); root |]
-        Unix.stdin fd fd
-    in
-    let _, status = Unix.waitpid [] pid in
-    Unix.close fd;
-    let text = In_channel.read_all out in
-    Unix.unlink out;
-    (status, text)
+    Fresh_process.run ~exe [ (if exempt then "--fixture-exempt" else "--fixture"); root ]
   in
-  let check label ~exit ~message (status, text) =
-    let ok =
-      (match status with Unix.WEXITED n -> n = exit | _ -> false)
-      && String.is_substring text ~substring:message
-    in
-    if not ok then eprintf "%s captured output:\n%s\n" label text;
+  let check label ~exit ~message child =
+    let ok = Fresh_process.matches ~exit ~contains:[ message ] child in
+    if not ok then Fresh_process.report ~label child;
     p label ok
   in
   let blind =

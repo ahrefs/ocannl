@@ -33,46 +33,12 @@
 open Base
 open Verdict.Claims
 
-let describe_status = function
-  | Unix.WEXITED n -> Printf.sprintf "exited %d" n
-  | Unix.WSIGNALED n -> Printf.sprintf "was killed by signal %d" n
-  | Unix.WSTOPPED n -> Printf.sprintf "was stopped by signal %d" n
+let run_child mode = Fresh_process.run [ mode ]
 
-let ignore_unix f x = try f x with Unix.Unix_error _ -> ()
-
-(* Runs one mode in a child and answers its status with its two streams kept APART: the shape check
-   compares what a child wrote on stdout, which is the stream a `(test)` stanza diffs, and a
-   refusal's stderr echo would drown that comparison. Through temporary files rather than pipes, for
-   the reason `generated_provenance.run_child` gives: reading two pipes in sequence deadlocks once
-   the unread one fills. *)
-let run_child mode =
-  let exe = Stdlib.Sys.executable_name in
-  let capture suffix = Stdlib.Filename.temp_file "vq_child" suffix in
-  let out_path = capture ".out" and err_path = capture ".err" in
-  let open_capture p = Unix.openfile p [ Unix.O_WRONLY; Unix.O_TRUNC ] 0o600 in
-  let out = open_capture out_path and err = open_capture err_path in
-  let pid = Unix.create_process exe [| exe; mode |] Unix.stdin out err in
-  let _, status = Unix.waitpid [] pid in
-  Unix.close out;
-  Unix.close err;
-  let stdout_text = Stdio.In_channel.read_all out_path in
-  let stderr_text = Stdio.In_channel.read_all err_path in
-  ignore_unix Unix.unlink out_path;
-  ignore_unix Unix.unlink err_path;
-  (status, stdout_text, stderr_text)
-
-(* Whether a child refused the way the mode under test is about: exit 1, and [line] among what it
-   printed on stdout -- the stream the golden of a converted test is made of, so it is where the
-   distinct wording has to appear. A failing check prints the whole capture to stderr, because the
-   child's own account is what a reader needs and it is only withheld from PASSING runs. *)
-let refused claim ~line (status, stdout_text, stderr_text) =
-  let ok =
-    (match status with Unix.WEXITED 1 -> true | _ -> false)
-    && String.is_substring stdout_text ~substring:line
-  in
-  if not ok then
-    Stdio.eprintf "the child %s without printing %S on stdout. Its capture:\n%s%s\n"
-      (describe_status status) line stdout_text stderr_text;
+(* Refusal needs both the status and the causal stdout line. *)
+let refused claim ~line child =
+  let ok = Fresh_process.matches ~stream:`Stdout ~exit:1 ~contains:[ line ] child in
+  if not ok then Fresh_process.report ~label:claim child;
   Verdict.p claim ok
 
 let seeds = [ 2; 4; 6 ]

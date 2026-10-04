@@ -41,7 +41,9 @@ default module membership links the owning harness: true
 ordered-set exclusion prevents harness membership: true
 a new subdirectory in either package is in scope: true
 shipping scanner refuses the first unlinked record builder: true
+migration diagnostics stay on stderr: true
 shipping scanner reports remaining adopted records without refusing them: true
+adopted census is confined to stdout: true
 growth of both adopted metrics stays visible and non-refusing: true
 adopted private traversals appear without record construction: true
 adopted sources with no remaining hand-built IR have no census row: true
