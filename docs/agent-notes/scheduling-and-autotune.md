@@ -100,8 +100,11 @@ files.
   3.2-7.7 ms (composed, seq 128-1024) to one kernel of 0.36-0.82 ms, both contractions
   `Mma_intrinsics` in every layer; the key block 8/16/32 is within noise at seq 128-512 and 16
   wins at seq 1024. `approximate` selects `online_softmax_block=auto` (gh-ocannl-1171):
-  the device limits' `online_softmax_auto_block` keeps 16 on CUDA, Metal and CPU,
-  and 0 (the two-pass rewrite) on HIP and unmeasured targets. On gfx1151 **unified** memory,
+  the device limits' `online_softmax_auto_block` keeps 16 on Metal and CPU,
+  and 0 (the two-pass rewrite) on CUDA, HIP and unmeasured targets. CUDA's block fold loses
+  on the tuned f32 transformer even with tf32 (gh-ocannl-1194); the two-pass form retains the
+  tensorized matmul gain ([ablation report](../../benchmarks/report-gh1194-cuda-approximate.md)).
+  On gfx1151 **unified** memory,
   the tuned f32 forward's first search sweep measured 7.22 ms at 16 against 4.72 ms at 0
   (exact 4.75 ms); the losing placement arms of block-off and exact refused timing windows,
   so the clean three-arm confirmation is pending, including gfx1102 **discrete**. Explicit

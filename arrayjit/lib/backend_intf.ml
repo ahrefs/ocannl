@@ -293,11 +293,12 @@ type hardware_limits = {
   online_softmax_auto_block : int;
       (** Automatic key-block size for [online_softmax_block=auto] (gh-ocannl-1171); 0 selects the
           two-pass rewrite. Metal and CPU keep 16 from the gh-ocannl-1003 block sweep
-          ([benchmarks/report-gh1003-block-fold.md]). CUDA preserves the pre-1171 profile's 16: only
-          the whole profile was timed (gh-ocannl-728); the fold was not ablated alone. HIP gfx1151
-          unified measured 7.22 ms at 16 versus 4.72 ms at 0; other HIP and unmeasured targets
-          conservatively select 0. Explicit numeric sizes bypass this policy. Consumed before
-          lowering analyses, so the resolved choice is in the code digest. *)
+          ([benchmarks/report-gh1003-block-fold.md]). CUDA's tuned f32 transformer measured 4.49 ms
+          at 16 versus 2.44 ms at 0 with tf32 retained (gh-ocannl-1194); CUDA and unmeasured devices
+          conservatively select 0. HIP gfx1151 unified measured 7.22 ms at 16 versus 4.72 ms at 0;
+          other HIP and unmeasured targets conservatively select 0. Explicit numeric sizes bypass
+          this policy. Consumed before lowering analyses, so the resolved choice is in the code
+          digest. *)
   worker_pool_tag : string option;
       (** Compact signature of the worker pool timings execute on ([w8P], [w24], ...), filled by the
           CPU backends from the pool-uniformity policy (gh-ocannl-530). Enters the autotune

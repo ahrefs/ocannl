@@ -1513,8 +1513,8 @@
 # online_softmax_backward=true
 # # Its single-pass block fold (gh-ocannl-1003): the scores are read once per key block into a tile
 # # and the value contraction is reassociated as `(sum p * v) / l`. Auto keeps block 16 on
-# # CUDA, Metal and CPU, and the two-pass rewrite on HIP and unmeasured targets (gh-ocannl-1171:
-# # gfx1151 unified, tuned f32 forward 7.22 -> 4.72 ms without the block fold).
+# # Metal and CPU, and the two-pass rewrite on CUDA, HIP and unmeasured targets: the block fold
+# # loses on the measured CUDA and HIP devices (gh-ocannl-1194 and gh-ocannl-1171).
 # online_softmax_block=auto
 # # The C compiler's licence to reassociate (fast-math) and to contract a*b+c into one rounding
 # # across statements (fp-contract=fast). Both change results per compiler and target, which is

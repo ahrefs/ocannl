@@ -158,7 +158,7 @@ explicit block 0 bypasses declining device economics: true
 explicit block 0 bypasses profitable device economics: true
 explicit block 16 bypasses declining device economics: true
 explicit block 16 bypasses profitable device economics: true
-the backend pins the automatic block policy (HIP off; CUDA/Metal/CPU preserved): true
+the backend pins the automatic block policy (CUDA/HIP off; Metal/CPU preserved): true
 backend-free hardware limits conservatively decline the automatic fold: true
 analyze-only lowering honors the run's device economics: true
 backend compilation honors the same device economics: true
