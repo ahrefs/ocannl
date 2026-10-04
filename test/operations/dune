@@ -7414,3 +7414,10 @@
  (name runtest)
  (deps
   (alias runtest-api_drift_history)))
+(test
+ ; ocannl-backend: none -- registry-independent config syntax, no backend linked.
+ (name config_token_parse)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules config_token_parse)
+ (libraries base stdio arrayjit.utils arrayjit.verdict))

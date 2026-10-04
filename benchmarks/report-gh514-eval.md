@@ -1,5 +1,9 @@
 # gh-ocannl-514 phase 6: the branch-and-bound schedule search, evaluated
 
+> **Fixture provenance: unverifiable** (gh-ocannl-919). Original measured files for the historical Metal leg
+> were not recovered. Later `content-v1` M4 baselines do not certify these numbers.
+> See the [historical provenance audit](README.md#historical-metal-fixture-provenance).
+
 Evaluation-as-research-output for the gh-514 arc (schedule inference as branch-and-bound,
 phases 0–5): how much of the schedule space the verdicts and bounds dispatch without pricing or
 timing, what the fitted envelopes and the continuous agreement check say about model-vs-measured

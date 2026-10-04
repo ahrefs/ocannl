@@ -446,7 +446,6 @@ let exempt_unmentioned_types =
     "Parallel.reduction";
     "Train.placement_arm";
     "Utils.config_source";
-    "Utils.config_token";
     "Utils.env_var_class";
     "Utils.requirement";
     "Utils.settings";

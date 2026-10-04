@@ -173,7 +173,7 @@ alias family, slow test or golden format.
 2. Environment variables: `OCANNL_<OPTION>=<value>`
 3. Config file: `ocannl_config` in current or ancestor directories
 
-**Config profiles** (gh-ocannl-559): `profile=reproducible|performance|approximate` applies a preset bundle (embedded in `arrayjit/lib/utils.ml`) just below the explicit keys of the source that picked it: explicit keys beat a profile of equal immediacy, and a CLI-picked profile beats a config file. A new numerics-changing gate lands in the `approximate` payload (gh-ocannl-719), pinned at its default in `reproducible`, and in the schedule cache's identity in the PR that adds its key — which digest, and the checks that pin the payloads: the backend-precision note.
+**Config profiles** (gh-ocannl-559): `profile=reproducible|performance|approximate` applies a preset bundle (embedded in `arrayjit/lib/utils.ml`) just below the explicit keys of the source that picked it: explicit keys beat a profile of equal immediacy, and a CLI-picked profile beats a config file. A new numerics-changing gate lands in the `approximate` payload (gh-ocannl-719), pinned at its default in `reproducible`, and in the schedule cache's identity in the PR that adds its key — which digest, and the checks that pin the payloads: backend-precision-and-simd.md#numerics-policies-and-cache-identity.
 
 **Testing with Different Configurations**:
 

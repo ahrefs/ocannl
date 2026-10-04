@@ -1,0 +1,8 @@
+non-OCANNL documentation assignments have no accepted reading: true
+qualified removed keys retain their explicit normalized name: true
+alternate and concatenated values expose runtime candidates: true
+ambiguous CLI candidates come only from runtime spelling prefixes: true
+mixed CLI names never acquire an explicit accepted reading: true
+syntax rejection reports its reason and diagnostic key: true
+one-word documentation assignments require consumer judgment: true
+bare documentation grammar is opt-in: true

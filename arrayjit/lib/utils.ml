@@ -796,67 +796,111 @@ let config_token_command_line_prefixes =
       String.chop_suffix name ~suffix)
   |> List.dedup_and_sort ~compare:String.compare
 
-(** Classify one observed token without consulting {!known_config_keys}. Command-line and
-    environment assignments are always recognized; [documentation:true] additionally admits the
-    narrowed bare-assignment grammar documented on {!config_token_shape}. A command-line token must
-    use one uniform case and one separator style, as {!cmdline_var_names} does; its key is the
-    maximal name before [=], normalized to underscores. Alternate value separators make shorter
-    readings inherently ambiguous without a key registry; consumers that need one of those readings
-    keep an explicit site judgment. *)
+(** Why an observed token has no configuration reading. These reasons describe syntax only; registry
+    membership is always the consumer's decision. *)
+type config_token_rejection =
+  | Not_configuration_syntax
+  | Empty_qualified_key
+  | Invalid_command_line_key
+  | Invalid_environment_key
+  | Invalid_documentation_key
+
+type config_token_parse =
+  | Accepted of config_token
+  | Ambiguous of {
+      explicit : config_token option;
+      candidates : config_token list;
+      fallback : config_token;
+    }
+  | Rejected of { reason : config_token_rejection; qualified : config_token option }
+
+(** Classify a token without consulting {!known_config_keys}. A uniform command-line name before [=]
+    is the preferred explicit reading, but alternate separators and concatenated values can also
+    give shorter keys. [Ambiguous] carries all those runtime-shaped candidates, longest first, plus
+    the normalized full name for diagnosing removed or invalid keys. Consumers select a candidate
+    through registry membership or an explicit site judgment; they need not re-lex it.
+    [documentation:true] also admits lowercase snake-case assignments. Lowercase one-word names are
+    ambiguous with ordinary prose/API assignments, so their single candidate needs a judgment.
+    Runtime configuration readers are unchanged. *)
 let parse_config_token ?(documentation = false) token =
-  let config_token_name_char c =
-    Char.is_alpha c || Char.is_digit c || Char.equal c '_' || Char.equal c '-'
-  in
-  let command_line_config_token token =
-    let name = Option.value_map (String.lsplit2 token ~on:'=') ~default:token ~f:fst in
-    List.find_map config_token_command_line_prefixes ~f:(fun prefix ->
-        Option.bind (String.chop_prefix name ~prefix) ~f:(fun raw_key ->
-            let uppercase = String.equal prefix (String.uppercase prefix) in
-            let uniform_case =
-              String.for_all raw_key ~f:(fun c ->
-                  (not (Char.is_alpha c))
-                  || if uppercase then Char.is_uppercase c else Char.is_lowercase c)
-            in
-            let uniform_separator =
-              not (String.contains raw_key '_' && String.contains raw_key '-')
-            in
-            if
-              String.is_empty raw_key
-              || (not (String.for_all raw_key ~f:config_token_name_char))
-              || (not uniform_case) || not uniform_separator
-            then None
-            else
-              let key = String.lowercase raw_key |> String.tr ~target:'-' ~replacement:'_' in
-              Some { token_shape = Command_line_token; token_key = key }))
-  in
-  let environment_config_token token =
-    Option.bind (String.lsplit2 token ~on:'=') ~f:(fun (name, _value) ->
-        Option.bind (String.chop_prefix name ~prefix:"OCANNL_") ~f:(fun raw_key ->
-            Option.some_if
-              ((not (String.is_empty raw_key))
-              && String.for_all raw_key ~f:(fun c ->
-                  Char.is_uppercase c || Char.is_digit c || Char.equal c '_'))
-              { token_shape = Environment_assignment_token; token_key = String.lowercase raw_key }))
-  in
-  let documentation_config_token token =
-    Option.bind (String.lsplit2 token ~on:'=') ~f:(fun (raw_name, _value) ->
-        let name = String.strip raw_name in
-        let config_looking =
-          (not (String.is_empty name))
-          && Char.is_lowercase name.[0]
-          && String.for_all name ~f:(fun c ->
-              Char.is_lowercase c || Char.is_digit c || Char.equal c '_')
-          && String.contains name '_'
-        in
-        let key = Option.value (String.chop_prefix name ~prefix:"ocannl_") ~default:name in
-        Option.some_if
-          (config_looking && not (String.is_empty key))
-          { token_shape = Documentation_assignment_token; token_key = key })
-  in
   let token = String.strip token in
-  Option.first_some (command_line_config_token token)
-    (Option.first_some (environment_config_token token)
-       (if documentation then documentation_config_token token else None))
+  let normalize key = String.lowercase key |> String.tr ~target:'-' ~replacement:'_' in
+  let make token_shape token_key = { token_shape; token_key } in
+  let reject ?qualified reason = Rejected { reason; qualified } in
+  let name = Option.value_map (String.lsplit2 token ~on:'=') ~default:token ~f:fst in
+  match
+    List.find_map config_token_command_line_prefixes ~f:(fun prefix ->
+        Option.map (String.chop_prefix name ~prefix) ~f:(fun raw_key -> (prefix, raw_key)))
+  with
+  | Some (prefix, raw_key) -> (
+      let uppercase = String.equal prefix (String.uppercase prefix) in
+      let valid key =
+        (not (String.is_empty key))
+        && String.for_all key ~f:(fun c ->
+            Char.is_digit c || Char.equal c '_' || Char.equal c '-'
+            || if uppercase then Char.is_uppercase c else Char.is_lowercase c)
+        && not (String.contains key '_' && String.contains key '-')
+      in
+      let fallback = make Command_line_token (normalize raw_key) in
+      if String.is_empty raw_key then reject Empty_qualified_key
+      else
+        let explicit = Option.some_if (valid raw_key) fallback in
+        (* Derive candidates from the same prefixes the runtime reader consumes, including its
+           legacy concatenated-value spelling. The scan only resolves these candidates. *)
+        let candidates =
+          List.init (String.length raw_key) ~f:(fun index ->
+              let raw = String.prefix raw_key (index + 1) in
+              if not (valid raw) then None
+              else
+                let key = normalize raw in
+                let matches =
+                  cmdline_var_prefixes ~qualified_only:true key
+                  |> List.exists ~f:(fun candidate ->
+                      String.is_prefix token ~prefix:candidate
+                      && String.length token > String.length candidate)
+                in
+                Option.some_if matches (make Command_line_token key))
+          |> List.filter_opt
+          |> List.dedup_and_sort ~compare:(fun left right ->
+              let length =
+                Int.compare (String.length right.token_key) (String.length left.token_key)
+              in
+              if Int.equal length 0 then String.compare left.token_key right.token_key else length)
+          |> List.filter ~f:(fun candidate ->
+              not (String.equal candidate.token_key fallback.token_key))
+        in
+        match (explicit, candidates) with
+        | Some parsed, [] -> Accepted parsed
+        | _, _ :: _ -> Ambiguous { explicit; candidates; fallback }
+        | None, [] -> reject ~qualified:fallback Invalid_command_line_key)
+  | None -> (
+      match String.lsplit2 token ~on:'=' with
+      | None -> reject Not_configuration_syntax
+      | Some (raw_name, _value) -> (
+          match String.chop_prefix raw_name ~prefix:"OCANNL_" with
+          | Some raw_key ->
+              if String.is_empty raw_key then reject Empty_qualified_key
+              else if
+                String.for_all raw_key ~f:(fun c ->
+                    Char.is_uppercase c || Char.is_digit c || Char.equal c '_')
+              then Accepted (make Environment_assignment_token (String.lowercase raw_key))
+              else reject Invalid_environment_key
+          | None when documentation ->
+              let name = String.strip raw_name in
+              let key = Option.value (String.chop_prefix name ~prefix:"ocannl_") ~default:name in
+              let valid =
+                (not (String.is_empty name))
+                && Char.is_lowercase name.[0]
+                && String.for_all name ~f:(fun c ->
+                    Char.is_lowercase c || Char.is_digit c || Char.equal c '_')
+                && not (String.is_empty key)
+              in
+              if not valid then reject Invalid_documentation_key
+              else
+                let parsed = make Documentation_assignment_token key in
+                if String.contains name '_' then Accepted parsed
+                else Ambiguous { explicit = None; candidates = [ parsed ]; fallback = parsed }
+          | None -> reject Not_configuration_syntax))
 
 (* Keys whose prefix-free command-line spellings are never claimed: common application flags a host
    executable is likely to own ({!cmdline_var_names}' [qualified_only] doc; Codex P2 on PR #291).
