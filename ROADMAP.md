@@ -1,6 +1,6 @@
 # OCANNL Roadmap
 
-**v1.0.2 released September 16, 2026. Next: v1.1, planned for October 4, 2026; followed by consolidation (v1.1.1, October 16), performance beyond transformers (v1.1.2, October 24), consumers (v1.1.3, October 31) and v1.2 around November 15, 2026. v1.1 remains unreleased.**
+**v1.1 released October 4, 2026: fused attention and better transformer scheduling. Next: consolidation (v1.1.1, October 16), performance beyond transformers (v1.1.2, October 24), consumers (v1.1.3, October 31) and v1.2 around November 15, 2026.**
 
 This roadmap outlines the development plan for OCANNL through version 1.0 and beyond. Dates indicate **end of period** targets. Through v1.0 the schedule was pinned to conference deadlines; it is now project-internal, and the dates below are aspirational rather than external commitments.
 
@@ -24,9 +24,9 @@ This roadmap outlines the development plan for OCANNL through version 1.0 and be
 >
 > **Rebalance (September 14, 2026):** finish v1.0.2 with a bounded compiler-deduplication set, then start performance work promptly. The deferred consolidation becomes **v1.1.1**, and the former consumers milestone becomes **v1.1.2**. Working backward from **November 3** for v1.2 gives **October 18** for consumers, **October 10** for consolidation and **October 2** for v1.1, after **September 16** for v1.0.2. The 48 days after that cut split 16 : 8 : 8 : 16 (feature : consolidation : consumers : feature), preserving the scope weighting used in September. These are soft end-of-period targets, not requirements to empty each milestone; protect the early-November anchor by reducing scope when necessary.
 >
-> **Update (October 4, 2026):** the September 29 split keeps **v1.1 focused on transformer workloads**. Convolution and CPU kernel/sketch economy now have their own **v1.1.2** milestone; consumers moved to **v1.1.3**. The release plan now brings v1.1 forward to **October 4**, ahead of its unchanged October 5 GitHub due date. Later GitHub targets remain October 16, 24 and 31, then November 15 for v1.2. Undated v1.2.1/v1.2.2 placeholders allow consolidation and consumers to continue if scope moves again. These dates supersede the September schedule above.
+> **Update (October 4, 2026):** the September 29 split keeps **v1.1 focused on transformer workloads**. Convolution and CPU kernel/sketch economy now have their own **v1.1.2** milestone; consumers moved to **v1.1.3**. **v1.1 released October 4** with fused attention and better transformer scheduling, ahead of its October 5 GitHub due date. Later GitHub targets remain October 16, 24 and 31, then November 15 for v1.2. Undated v1.2.1/v1.2.2 placeholders allow consolidation and consumers to continue if scope moves again. These dates supersede the September schedule above.
 >
-> The version sequence is: `0.7 → 0.8 → 0.9 → 1.0 → 1.0.1 → 1.0.2 → 1.1 → 1.1.1 → 1.1.2 → 1.1.3 → 1.2`. Milestone *scope* below tracks the GitHub milestones, which are the source of truth. Proposed release wording is identified explicitly; it has not changed the GitHub milestone.
+> The version sequence is: `0.7 → 0.8 → 0.9 → 1.0 → 1.0.1 → 1.0.2 → 1.1 → 1.1.1 → 1.1.2 → 1.1.3 → 1.2`. Milestone *scope* below tracks the GitHub milestones, which are the source of truth for issue assignments. Release outcomes distinguish delivered work from unfinished goals; they do not imply that every issue in a released milestone is closed.
 
 ---
 
@@ -300,31 +300,21 @@ follow-ups the v1.0.2 review cycles filed against it.
 
 ---
 
-## v1.1 — planned October 4, 2026 (unreleased)
-**Release theme: Fused attention and better transformer scheduling**
+## v1.1 — October 4, 2026 (released)
+**Theme: Fused attention and better transformer scheduling**
 
-GitHub currently describes the milestone as *"Performance-chasing in the approximate profile,
-demonstrated on transformer workloads (gpt2_mini and gpt2_mini_train, the only sort-of realistic
-workloads in this release)."* Its scope now excludes convolutional workloads and CPU kernel
-and sketch economy, assigned to v1.1.2. As of October 4 it has 62 closed issues and three open:
-benchmark coverage (#720), the floating-point algebra split (#998), and the controlled
-cross-framework CUDA comparison with an August anchor (#1181).
+The release delivers online-softmax attention, fused backward, block-tiled matrix-unit rendering,
+improved GPU scheduling and fission, and more reliable tuning and benchmark evidence.
+Convolutional workloads and CPU kernel and sketch economy continue in v1.1.2.
 
-**Proposed replacement description:**
-
-> Transformer compiler advances and measured performance on `gpt2_mini` inference and training:
-> online-softmax attention, fused backward, block-tiled matrix-unit rendering, improved GPU
-> scheduling and fission, and more reliable tuning and benchmark evidence. The `approximate`
-> profile is an opt-in numerics regime with workload-dependent speed and memory tradeoffs.
-> Reports include regressions, HIP f16 failures (#1182), large-batch scaling gaps (#1183), and
-> incomplete CUDA/CPU coverage. Convolution and CPU kernel economy continue in v1.1.2;
-> unfinished measurements and the algebra-policy split are identified explicitly.
-
-This wording supports releasing the delivered compiler features while keeping performance
-claims tied to named measurements. Passing a parity envelope establishes acceptance of a
-configuration; it does not establish that the configuration is faster. The benchmark's `exact`
-label is a comparison regime, not a bitwise floating-point guarantee: #998's separation of
-rounding-changing simplifications remains open.
+The milestone's original goal — performance-chasing in the `approximate` profile on transformer
+workloads — remains unfinished. The completed measurements support a release of the compiler
+features with bounded speed and memory wins, rather than a universal approximate-profile speedup.
+The profile remains an opt-in numerics regime with workload-dependent tradeoffs. Passing a parity
+envelope establishes acceptance of a configuration; it does not establish that it is faster.
+The benchmark's `exact` label is a comparison regime, not a bitwise floating-point guarantee:
+#998's separation of rounding-changing simplifications remains open, as does #720's broader
+benchmark coverage. Release scope does not close or reassign those issues.
 
 **Delivered since the September 15 roadmap edit:**
 
@@ -362,6 +352,26 @@ rounding-changing simplifications remains open.
 
 **What the measurements establish:**
 
+The completed [cross-framework comparison with a same-night August anchor](benchmarks/report-tagline-gpt2.md)
+(#1181) measured tuned f32 `gpt2_mini` inference at one geometry: batch 8, sequence 128,
+four layers, d_model 256. The October 3/4 campaign rebuilt and re-measured August commit
+`7014dc44` alongside master `a723dc5b` on each box; this is **not a v1.0.2-to-v1.1 comparison**.
+
+| Backend and device | Exact latency | Approximate latency | Approximate vs exact | Exact speedup over same-night August anchor |
+|---|---|---|---|---|
+| CUDA, RTX 5070 Ti Laptop (discrete) | 3.504 ms | 4.493 ms | 28% slower | 2.02× |
+| Metal, M4 Max (unified) | 8.334 ms | 7.457 ms | 11% lower latency | 1.31× |
+| HIP, Radeon 8060S/gfx1151 (unified) | 4.757 ms | 4.692 ms | Effectively neutral | 1.66× |
+| HIP, RX 7700S/gfx1102 (discrete) | Not quotable | Not quotable | Not established | Not established |
+
+With OCANNL exact and PyTorch exact-pinned, CUDA remains 3.41× slower than `torch.compile`
+and 2.18× slower than tinygrad BEAM=2 (which has no exact pin); Metal remains 4.40× and 4.04× slower respectively. Unified-memory HIP is
+1.54× slower than tinygrad BEAM=2, with no PyTorch ratio because that box's ROCm wheel
+segfaulted. Discrete-HIP master timing processes kept searching uncached arms, so none passed
+the clean-replay provenance gate. The report retains those diagnostics without quoting a
+master result. Training was smoke-only, with no controlled training comparison. These are
+whole-profile measurements, not an isolated attribution to fused attention or TF32.
+
 - **Approximate CUDA acceptance is complete** (#719). The September 27 native RTX 5070 Ti
   tuned row passed both the approximate and exact envelopes, but took **6.900 ms versus
   6.271 ms exact**. These whole-profile searches differ in program and search settings;
@@ -392,19 +402,18 @@ rounding-changing simplifications remains open.
 The October 3 sweep found exact HIP f16 failures at base training and seq1024 inference/training
 (#1182), and falling per-token training throughput at batch256 on HIP and Metal (#1183).
 Ten requested CPU f32 cells timed out and 28 reduced-format cells were deliberately skipped;
-#720 remains partially reported. The fresh comparison with an August anchor, PyTorch and tinygrad
-is underway under #1181 as of October 4; its in-progress preparation timings are not release
-evidence. A complete cross-framework matrix or a universal approximate speedup is therefore
-not a release claim.
+#720 remains partially reported. The completed #1181 report adds the controlled inference
+comparison above, while CUDA approximate performance (#1194), discrete-HIP fallback confirmation
+(#1184), HIP f16 failures (#1182), and large-batch scaling (#1183) remain follow-ups. A complete
+cross-framework matrix or a universal approximate speedup is therefore not a release claim.
 
 For #998, measurements support separating optional float algebra from integer-power lowering:
 the latter is currently required for finite CUDA GPT training under NVRTC fast math. The compiler
 split is still outstanding. Q/K/V zero-init folding (#1175, PR #934) was **reverted by
 [PR #941](https://github.com/lukstafi/ocannl-staging/pull/941)** after doubling tuned CUDA forward
-latency; it is excluded from the delivered feature list. Publication is planned for later on
-October 4, with completed measurements available at the cut and remaining limitations stated
-together. Finalize which open items gate the tag and which remain follow-ups before publishing;
-the release plan does not imply that the pending comparison or fixes are complete.
+latency; it is excluded from the delivered feature list. The release includes the completed measurements
+and carries the remaining limitations explicitly; the original approximate-performance goal
+and the pending compiler split are not presented as complete.
 
 ---
 
@@ -527,7 +536,7 @@ feature releases.
 | **1.0** | Aug 13, 2026 | **released** | **Branch-and-bound schedule inference, inlining as a searchable decision, graph capture, software pipelining, rematerialization, CPU reduced precision, and the 2x `gpt2_mini` step** |
 | **1.0.1** | Aug 26, 2026 | **released** | **Consolidation after v1.0** (planned as "v1.1"): search follow-through, inlining and reduction soundness, test and benchmark seams that cannot report a false pass, and the training-loop mechanics |
 | **1.0.2** | Sep 16, 2026 | **released** | **Robustness pulled forward, plus compiler elegance through shared structure**: the landed robustness fixes and eight compiler-structure/coverage issues |
-| 1.1    | Oct 4, 2026 | planned; unreleased | Transformer compiler advances: online/fused/block attention, GPU scheduling, precision paths and measured speed/memory tradeoffs; approximate performance remains workload-dependent |
+| **1.1** | Oct 4, 2026 | **released** | **Fused attention and better transformer scheduling**; tuned f32 inference improves over the same-night August anchor, while approximate performance remains workload-dependent |
 | 1.1.1  | Oct 16, 2026 | planned; work already landing | Consolidation informed by transformer measurements and review findings |
 | 1.1.2  | Oct 24, 2026 | planned | Performance beyond transformers: reduced ResNet-style convs and CPU kernel/sketch economy |
 | 1.1.3  | Oct 31, 2026 | planned | Consumers, models, integrations, checkpointing and observability |

@@ -5,13 +5,20 @@ choices, important bug fixes — not ongoing progress. Finer-grained history liv
 commits, PR pages (development happens in `lukstafi/ocannl-staging`), and issue threads
 (`ahrefs/ocannl`, cited as gh-ocannl-NNN).
 
-The Unreleased changes below are prepared for **v1.1 — Fused attention and better transformer
-scheduling**, planned for October 4, 2026. Publication and tagging remain pending.
-
 ## [Unreleased]
+
+## [1.1] -- 2026-10-04
+
+> Fused attention and better transformer scheduling. This release delivers attention rewrites,
+> GPU scheduling improvements and broader benchmark evidence. The approximate profile remains
+> opt-in, with workload-dependent speed and memory tradeoffs; general approximate acceleration
+> remains follow-up work.
 
 ### Added
 
+- A controlled cross-framework GPT-2-mini inference report compares tuned exact and approximate
+  execution with PyTorch and tinygrad on four devices, including same-machine August anchors
+  and explicit exclusions for failed replay provenance and missing arms (gh-ocannl-1181).
 - Online-softmax attention rewrites reduce probability-buffer materialization; the separately
   gated fused backward removes recognized attention's quadratic gradient intermediates
   (gh-ocannl-483, gh-ocannl-1002).
@@ -89,6 +96,26 @@ scheduling**, planned for October 4, 2026. Publication and tagging remain pendin
   (gh-ocannl-1045).
 - HIP destroys device streams at process exit under a bounded teardown, avoiding exit-time
   hangs from pending stream cleanup (gh-ocannl-1036).
+
+### Measured performance and limitations
+
+The [October 3–4 comparison](benchmarks/report-tagline-gpt2.md) measures tuned `gpt2_mini` f32
+inference. Exact execution is **2.02× faster on CUDA, 1.31× on Metal and 1.66× on unified-memory
+HIP** than the August commit rebuilt on each box in the same measurement window. These are
+August-to-current comparisons, not gains solely over v1.0.2.
+
+Approximate execution is **28% slower than exact on CUDA**, delivers **11% lower latency on
+Metal**, and is essentially neutral on unified-memory HIP. Every quoted row passed parity;
+discrete-HIP master timings failed the clean-replay requirement and have no performance claim.
+The campaign produced no controlled training comparison. CUDA exact inference remains 3.41×
+slower than exact-pinned `torch.compile` and 2.18× slower than tinygrad BEAM=2 on the measured
+fixture; this release does not claim cross-framework performance parity.
+
+The [broader transformer sweep](benchmarks/report-gh720-transformer.md) retains HIP f16 parity
+failures, large-batch scaling regressions and incomplete CPU coverage. CUDA approximate
+performance (gh-ocannl-1194), HIP replay calibration (gh-ocannl-1184), HIP f16 correctness
+(gh-ocannl-1182), batch scaling (gh-ocannl-1183), remaining benchmark coverage (gh-ocannl-720)
+and the floating-point algebra-policy split (gh-ocannl-998) remain follow-up work.
 
 ## [1.0.2] -- 2026-09-16
 
