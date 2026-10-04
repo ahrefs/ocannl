@@ -53,6 +53,18 @@ let describe_failure = function
       Printf.sprintf "Fatal at %s: %s" (phase_name phase) (Stdlib.Printexc.exn_slot_name exn)
 
 let run () =
+  let artifacts = ref [] in
+  let directory = Stdlib.Filename.get_temp_dir_name () in
+  let snapshot () =
+    Stdlib.Sys.readdir directory |> Array.to_list |> List.sort ~compare:String.compare
+  in
+  let before = snapshot () in
+  let debug = Utils.settings.output_debug_files_in_build_directory in
+  let dll_output =
+    Utils.get_global_flag ~default:false ~arg_name:"output_dlls_in_build_directory"
+  in
+  Stdio.printf "library artifacts requested: %s\n" (if dll_output then "yes" else "no");
+  Stdio.printf "debug artifacts requested: %s\n" (if debug then "yes" else "no");
   let ctx = Context.auto () in
   Stdio.printf "backend: %s\n" (Context.backend_name ctx);
   let compiler_command = Utils.get_global_arg ~default:"" ~arg_name:"cc_backend_compiler_command" in
@@ -79,6 +91,7 @@ let run () =
           Stdio.eprintf "candidate compile: %s\n%!" (describe_failure failure);
           match failure with Outcome.Fatal fatal -> Some fatal | Outcome.Classified _ -> None)
   in
+  artifacts := snapshot ();
   let rejection =
     match fatal with
     | Some { cause = Some (Outcome.Backend_rejected { backend; stage; severity; detail }); _ } ->
@@ -119,6 +132,22 @@ let run () =
     | Some _ | None -> None
   in
   let claim = gated ~aggregation:`Environment ~when_:(not Sys.win32) ~on:skip_reason in
+  let added =
+    List.filter !artifacts ~f:(fun path -> not (List.mem before path ~equal:String.equal))
+  in
+  let sources = List.filter added ~f:(String.is_suffix ~suffix:".c") in
+  let libraries = List.filter added ~f:(String.is_suffix ~suffix:".so") in
+  claim "the rejected compile retains exactly its requested temporary artifacts"
+    ((List.length sources = if debug then 1 else 0)
+    && (List.length libraries
+       =
+       if (debug || dll_output) && not (String.equal expected_stage "artifact_missing") then 1
+       else 0)
+    && List.length added = List.length sources + List.length libraries);
+  claim "the unrelated temporary file is preserved"
+    (String.equal
+       (Stdio.In_channel.read_all (Stdlib.Filename.concat directory "unrelated.so"))
+       "unrelated");
   claim "the candidate compile is fatal, not a contained decline" (Option.is_some fatal);
   claim "the fatal failure is at Backend_link"
     (Option.exists fatal ~f:(fun f -> Outcome.equal_phase f.phase Outcome.Backend_link));
@@ -140,8 +169,22 @@ let run () =
   claim "autotune reports a pre-search failure at Backend_link"
     (Option.exists pre_search_phase ~f:(Outcome.equal_phase Outcome.Backend_link))
 
+let run_in_private_directory () =
+  let original = Stdlib.Filename.get_temp_dir_name () in
+  let dir = Stdlib.Filename.temp_file "ocannl-gh1189-" "" in
+  Stdlib.Sys.remove dir;
+  Unix.mkdir dir 0o700;
+  Stdlib.Filename.set_temp_dir_name dir;
+  Stdio.Out_channel.write_all (Stdlib.Filename.concat dir "unrelated.so") ~data:"unrelated";
+  Exn.protect ~f:run ~finally:(fun () ->
+      Stdlib.Filename.set_temp_dir_name original;
+      Array.iter (Stdlib.Sys.readdir dir) ~f:(fun file ->
+          Stdlib.Sys.remove (Stdlib.Filename.concat dir file));
+      Unix.rmdir dir)
+
 let () =
-  if Sys.win32 || not (String.equal expected_stage Outcome.codesign_stage) then run ()
+  if Sys.win32 || not (String.equal expected_stage Outcome.codesign_stage) then
+    run_in_private_directory ()
   else
     let dir = Stdlib.Filename.temp_file "ocannl gh1142 " "" in
     Stdlib.Sys.remove dir;
@@ -151,7 +194,7 @@ let () =
     Unix.chmod codesign 0o700;
     let path = Option.value (Sys.getenv "PATH") ~default:"" in
     Unix.putenv "PATH" (dir ^ ":" ^ path);
-    Exn.protect ~f:run ~finally:(fun () ->
+    Exn.protect ~f:run_in_private_directory ~finally:(fun () ->
         Unix.putenv "PATH" path;
         Stdlib.Sys.remove codesign;
         Unix.rmdir dir)

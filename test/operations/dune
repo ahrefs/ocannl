@@ -211,8 +211,14 @@
   (alias runtest-online_softmax_block_fast_math)
   (alias runtest-fast_math_libmvec)
   (alias runtest-cc_post_compile_cause-artifact_missing)
+  (alias runtest-cc_post_compile_cause-artifact_missing_dll)
+  (alias runtest-cc_post_compile_cause-artifact_missing_debug)
   (alias runtest-cc_post_compile_cause-codesign)
+  (alias runtest-cc_post_compile_cause-codesign_dll)
+  (alias runtest-cc_post_compile_cause-codesign_debug)
   (alias runtest-cc_dlopen_cause)
+  (alias runtest-cc_dlopen_cause_dll)
+  (alias runtest-cc_dlopen_cause_debug)
   (alias runtest-micrograd_demo_logging)
   (alias runtest-n3_fwd_with_prec-unoptimized)
   (alias runtest-top_down_prec-unoptimized)
@@ -668,7 +674,10 @@
     dlopen
     --ocannl_backend=cc
     --ocannl_strict_failure_classification=false
-    "--ocannl_cc_backend_compiler_command=%{ocaml-config:c_compiler} -Dexpf=ocannl_gh1077_undefined_expf -D__DECL_SIMD_ocannl_gh1077_undefined_expf="))))
+    --ocannl_cc_backend_probe_cache=false
+    "--ocannl_cc_backend_compiler_command=%{ocaml-config:c_compiler} -Dexpf=ocannl_gh1077_undefined_expf -D__DECL_SIMD_ocannl_gh1077_undefined_expf="
+    --ocannl_output_debug_files_in_build_directory=false
+    --ocannl_output_dlls_in_build_directory=false))))
 
 (rule
  (alias runtest-cc_dlopen_cause)
@@ -677,6 +686,58 @@
   (alias runtest-env_spelling_gate))
  (action
   (diff cc_dlopen_cause.expected cc_dlopen_cause.actual)))
+
+(rule
+ ; ocannl-backend: cc -- the defect is the cc kernel's dlopen; the command line pins the backend.
+ (target cc_dlopen_cause_dll.actual)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:cc_dlopen_cause.exe}
+    dlopen
+    --ocannl_backend=cc
+    --ocannl_strict_failure_classification=false
+    --ocannl_cc_backend_probe_cache=false
+    "--ocannl_cc_backend_compiler_command=%{ocaml-config:c_compiler} -Dexpf=ocannl_gh1077_undefined_expf -D__DECL_SIMD_ocannl_gh1077_undefined_expf="
+    --ocannl_output_debug_files_in_build_directory=false
+    --ocannl_output_dlls_in_build_directory=true))))
+
+(rule
+ (alias runtest-cc_dlopen_cause_dll)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate))
+ (action
+  (diff cc_dlopen_cause_dll.expected cc_dlopen_cause_dll.actual)))
+
+(rule
+ ; ocannl-backend: cc -- the defect is the cc kernel's dlopen; the command line pins the backend.
+ (target cc_dlopen_cause_debug.actual)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:cc_dlopen_cause.exe}
+    dlopen
+    --ocannl_backend=cc
+    --ocannl_strict_failure_classification=false
+    --ocannl_cc_backend_probe_cache=false
+    "--ocannl_cc_backend_compiler_command=%{ocaml-config:c_compiler} -Dexpf=ocannl_gh1077_undefined_expf -D__DECL_SIMD_ocannl_gh1077_undefined_expf="
+    --ocannl_output_debug_files_in_build_directory=true
+    --ocannl_output_dlls_in_build_directory=false))))
+
+(rule
+ (alias runtest-cc_dlopen_cause_debug)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate))
+ (action
+  (diff cc_dlopen_cause_debug.expected cc_dlopen_cause_debug.actual)))
 
 ; gh-ocannl-1142: deterministic compiler/signing fixtures exercise post-compile failures.
 
@@ -695,7 +756,9 @@
     --ocannl_strict_failure_classification=false
     --ocannl_cc_backend_probe_cache=false
     --ocannl_cc_backend_post_compile_timeout=0
-    "--ocannl_cc_backend_compiler_command=sh '%{dep:cc_post_compile_stub.sh}' artifact_missing"))))
+    "--ocannl_cc_backend_compiler_command=sh '%{dep:cc_post_compile_stub.sh}' artifact_missing"
+    --ocannl_output_debug_files_in_build_directory=false
+    --ocannl_output_dlls_in_build_directory=false))))
 
 (rule
  (alias runtest-cc_post_compile_cause-artifact_missing)
@@ -706,6 +769,64 @@
   (diff
    cc_post_compile_cause-artifact_missing.expected
    cc_post_compile_cause-artifact_missing.actual)))
+
+(rule
+ ; ocannl-backend: cc -- explicitly pinned to the cc post-compile boundary.
+ (target cc_post_compile_cause-artifact_missing_dll.actual)
+ (package neural_nets_lib)
+ (deps ocannl_config cc_post_compile_stub.sh)
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:cc_dlopen_cause.exe}
+    artifact_missing
+    --ocannl_backend=cc
+    --ocannl_strict_failure_classification=false
+    --ocannl_cc_backend_probe_cache=false
+    --ocannl_cc_backend_post_compile_timeout=0
+    "--ocannl_cc_backend_compiler_command=sh '%{dep:cc_post_compile_stub.sh}' artifact_missing"
+    --ocannl_output_debug_files_in_build_directory=false
+    --ocannl_output_dlls_in_build_directory=true))))
+
+(rule
+ (alias runtest-cc_post_compile_cause-artifact_missing_dll)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate))
+ (action
+  (diff
+   cc_post_compile_cause-artifact_missing_dll.expected
+   cc_post_compile_cause-artifact_missing_dll.actual)))
+
+(rule
+ ; ocannl-backend: cc -- explicitly pinned to the cc post-compile boundary.
+ (target cc_post_compile_cause-artifact_missing_debug.actual)
+ (package neural_nets_lib)
+ (deps ocannl_config cc_post_compile_stub.sh)
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:cc_dlopen_cause.exe}
+    artifact_missing
+    --ocannl_backend=cc
+    --ocannl_strict_failure_classification=false
+    --ocannl_cc_backend_probe_cache=false
+    --ocannl_cc_backend_post_compile_timeout=0
+    "--ocannl_cc_backend_compiler_command=sh '%{dep:cc_post_compile_stub.sh}' artifact_missing"
+    --ocannl_output_debug_files_in_build_directory=true
+    --ocannl_output_dlls_in_build_directory=false))))
+
+(rule
+ (alias runtest-cc_post_compile_cause-artifact_missing_debug)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate))
+ (action
+  (diff
+   cc_post_compile_cause-artifact_missing_debug.expected
+   cc_post_compile_cause-artifact_missing_debug.actual)))
 
 (rule
  ; ocannl-backend: cc -- explicitly pinned to the cc post-compile boundary.
@@ -722,7 +843,9 @@
     --ocannl_strict_failure_classification=false
     --ocannl_cc_backend_probe_cache=false
     --ocannl_cc_backend_verify_codesign=true
-    "--ocannl_cc_backend_compiler_command=sh '%{dep:cc_post_compile_stub.sh}' codesign"))))
+    "--ocannl_cc_backend_compiler_command=sh '%{dep:cc_post_compile_stub.sh}' codesign"
+    --ocannl_output_debug_files_in_build_directory=false
+    --ocannl_output_dlls_in_build_directory=false))))
 
 (rule
  (alias runtest-cc_post_compile_cause-codesign)
@@ -733,6 +856,64 @@
   (diff
    cc_post_compile_cause-codesign.expected
    cc_post_compile_cause-codesign.actual)))
+
+(rule
+ ; ocannl-backend: cc -- explicitly pinned to the cc post-compile boundary.
+ (target cc_post_compile_cause-codesign_dll.actual)
+ (package neural_nets_lib)
+ (deps ocannl_config cc_post_compile_stub.sh)
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:cc_dlopen_cause.exe}
+    codesign
+    --ocannl_backend=cc
+    --ocannl_strict_failure_classification=false
+    --ocannl_cc_backend_probe_cache=false
+    --ocannl_cc_backend_verify_codesign=true
+    "--ocannl_cc_backend_compiler_command=sh '%{dep:cc_post_compile_stub.sh}' codesign"
+    --ocannl_output_debug_files_in_build_directory=false
+    --ocannl_output_dlls_in_build_directory=true))))
+
+(rule
+ (alias runtest-cc_post_compile_cause-codesign_dll)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate))
+ (action
+  (diff
+   cc_post_compile_cause-codesign_dll.expected
+   cc_post_compile_cause-codesign_dll.actual)))
+
+(rule
+ ; ocannl-backend: cc -- explicitly pinned to the cc post-compile boundary.
+ (target cc_post_compile_cause-codesign_debug.actual)
+ (package neural_nets_lib)
+ (deps ocannl_config cc_post_compile_stub.sh)
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:cc_dlopen_cause.exe}
+    codesign
+    --ocannl_backend=cc
+    --ocannl_strict_failure_classification=false
+    --ocannl_cc_backend_probe_cache=false
+    --ocannl_cc_backend_verify_codesign=true
+    "--ocannl_cc_backend_compiler_command=sh '%{dep:cc_post_compile_stub.sh}' codesign"
+    --ocannl_output_debug_files_in_build_directory=true
+    --ocannl_output_dlls_in_build_directory=false))))
+
+(rule
+ (alias runtest-cc_post_compile_cause-codesign_debug)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate))
+ (action
+  (diff
+   cc_post_compile_cause-codesign_debug.expected
+   cc_post_compile_cause-codesign_debug.actual)))
 
 (test
  (name half_softmax)

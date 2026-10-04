@@ -1,5 +1,9 @@
+library artifacts requested: no
+debug artifacts requested: no
 backend: cc
 strict failure classification is off: true
+the rejected compile retains exactly its requested temporary artifacts: true
+the unrelated temporary file is preserved: true
 the candidate compile is fatal, not a contained decline: true
 the fatal failure is at Backend_link: true
 the fatal failure carries its Backend_rejected cause: true
