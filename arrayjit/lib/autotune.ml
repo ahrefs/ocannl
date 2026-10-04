@@ -1408,7 +1408,7 @@ let privatize_proposals (post : LL.optimized) : (Ir.Tnode.t * Idx.symbol) list =
                phys_equal t tn && Array.equal Idx.equal_axis_index i idcs) ->
         List.find (List.rev stack) ~f:(fun (index, from_, axis, body) ->
             LL.equal_axis_type axis LL.Serial && from_ = 0
-            && (not (idcs_mention idcs index))
+            && (not (Array.exists idcs ~f:(Idx.axis_index_mentions_symbol index)))
             && not (subtree_has_hardware_loop body))
         |> Option.iter ~f:(fun (index, _, _, _) ->
             if
@@ -1572,7 +1572,8 @@ let split_reduce_sites ?(static_indices = []) (opt : LL.optimized) : sr_site lis
       let path = List.map enclosing ~f:(fun (s, _, _) -> s) in
       let candidates =
         List.filter enclosing ~f:(fun (s, n, ty) ->
-            LL.equal_axis_type ty LL.Serial && n >= sr_red_min && not (idcs_mention idcs s))
+            LL.equal_axis_type ty LL.Serial && n >= sr_red_min
+            && not (Array.exists idcs ~f:(Idx.axis_index_mentions_symbol s)))
         (* Largest extent first: the probe stops at the first legal candidate, and loops enclosing
            an inner reduction loop fail the pinning discipline anyway (an enclosing reduction loop
            pins no component), so outer/larger candidates dominate. *)

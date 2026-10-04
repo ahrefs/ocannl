@@ -275,12 +275,6 @@ type matmul_site = {
           accumulation form, so this is decidable at seeding time. *)
 }
 
-let idcs_mention idcs s =
-  Array.exists idcs ~f:(function
-    | Idx.Iterator s2 -> Idx.equal_symbol s s2
-    | Idx.Affine { symbols; _ } -> List.exists symbols ~f:(fun (_, s2) -> Idx.equal_symbol s s2)
-    | _ -> false)
-
 let strip_stmts stmts =
   List.filter stmts ~f:(function LL.Noop | LL.Comment _ -> false | _ -> true)
 
@@ -308,12 +302,6 @@ let rec collect_gets (sc : LL.scalar_t) : (Ir.Tnode.t * Idx.axis_index array) li
   | LL.Embed_index _ ->
       []
 
-let idx_mentions (idx : Idx.axis_index) s =
-  match idx with
-  | Idx.Iterator s2 -> Idx.equal_symbol s s2
-  | Idx.Affine { symbols; _ } -> List.exists symbols ~f:(fun (_, s2) -> Idx.equal_symbol s s2)
-  | _ -> false
-
 let idx_coeff (idx : Idx.axis_index) sym =
   match idx with
   | Idx.Iterator s when Idx.equal_symbol s sym -> 1
@@ -324,7 +312,9 @@ let idx_coeff (idx : Idx.axis_index) sym =
 (* The unique axis of [idcs] owning [s]: [s] appears in exactly one component, with coefficient 1
    there. Mirrors [Schedule.Tensorize]'s ownership discipline. *)
 let unit_axis (idcs : Idx.axis_index array) s : int option =
-  let ps = Array.filter_mapi idcs ~f:(fun p idx -> Option.some_if (idx_mentions idx s) p) in
+  let ps =
+    Array.filter_mapi idcs ~f:(fun p idx -> Option.some_if (Idx.axis_index_mentions_symbol s idx) p)
+  in
   match Array.to_list ps with [ p ] when idx_coeff idcs.(p) s = 1 -> Some p | _ -> None
 
 (* Batched-site classification shared by the relation-based and procedural matchers (gh-ocannl-528).
@@ -352,7 +342,8 @@ let classify_matmul ~(loops : (Idx.symbol * int) list) ~(d : Ir.Tnode.t)
     ~(o2 : Ir.Tnode.t * Idx.axis_index array) ~(zeroed : bool) ~(fma : bool) : matmul_site option =
   let rank = Array.length di in
   let rev_ks, rev_ws =
-    List.split_while (List.rev loops) ~f:(fun (s, _) -> not (idcs_mention di s))
+    List.split_while (List.rev loops) ~f:(fun (s, _) ->
+        not (Array.exists di ~f:(Idx.axis_index_mentions_symbol s)))
   in
   match (rev_ks, rev_ws) with
   | (k, nk) :: rev_ko, (_ :: _ :: _ as rev_ws : (Idx.symbol * int) list) when rank >= 2 -> (
@@ -396,10 +387,11 @@ let classify_matmul ~(loops : (Idx.symbol * int) list) ~(d : Ir.Tnode.t)
                  loops are only ever iterated, never tiled. *)
               let ko_plain idcs =
                 List.for_all ko ~f:(fun (s, _) ->
-                    Array.for_all idcs ~f:(fun idx -> (not (idx_mentions idx s)) || plain idx))
+                    Array.for_all idcs ~f:(fun idx ->
+                        (not (Idx.axis_index_mentions_symbol s idx)) || plain idx))
               in
               if
-                idcs_mention ai j
+                Array.exists ai ~f:(Idx.axis_index_mentions_symbol j)
                 || Option.is_none (sole_axis ai k)
                 || Option.is_none (sole_axis bi j)
                 || Option.is_none (sole_axis bi k)
@@ -409,7 +401,8 @@ let classify_matmul ~(loops : (Idx.symbol * int) list) ~(d : Ir.Tnode.t)
               else
                 let eligible =
                   List.filter front ~f:(fun ((s, _), _) ->
-                      Option.is_some (sole_axis ai s) && not (idcs_mention bi s))
+                      Option.is_some (sole_axis ai s)
+                      && not (Array.exists bi ~f:(Idx.axis_index_mentions_symbol s)))
                 in
                 Option.map (List.last eligible) ~f:(fun ((i, ni), p_row) ->
                     let before_i = ref true in

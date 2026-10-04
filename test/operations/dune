@@ -7373,3 +7373,13 @@
   (env_var OCANNL_BUILD_FILES_PREFIX)
   (env_var OCANNL_SIMPLIFY_FP_ALGEBRA))
  (libraries base ocannl stdio arrayjit.verdict ll_test test_utils))
+
+(test
+ ; ocannl-backend: none -- pure structural recognition over synthetic IR; no compilation or execution.
+ (name autotune_concat_dependencies)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_LEGALITY_CROSSCHECK))
+ (modules autotune_concat_dependencies)
+ (libraries base ocannl arrayjit.verdict ll_test))
