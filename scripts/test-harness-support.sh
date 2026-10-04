@@ -18,6 +18,9 @@ case $MODE in
   skip) harness_require definitely_missing_harness_tool ;;
   fail) report 1 'injected failure' ;;
   signal) kill -TERM "$$" ;;
+  abort) exit 50 ;;
+  errexit) set -e; (exit 7) ;;
+  unfinished) exit 0 ;;
 esac
 finish
 PROBE
@@ -29,7 +32,7 @@ probe() {
 }
 probe; rc=$?
 path=$(cat "$RECORD")
-if [ "$rc" = 0 ] && [ ! -d "$path" ] && grep -q 'all legs passed (0 skipped)' "$TMP/out"; then
+if [ "$rc" = 0 ] && [ ! -d "$path" ] && grep -q 'all legs passed (0 skipped)' "$TMP/out" && ! grep -q 'aborted before finish' "$TMP/out"; then
   report 0 'success cleans scratch and counts zero skips'
 else report 1 'success cleans scratch and counts zero skips'; fi
 MODE=skip probe; rc=$?
@@ -37,7 +40,7 @@ if [ "$rc" = 0 ] && grep -q '^SKIP ' "$TMP/out" && grep -q 'all legs passed (1 s
   report 0 'missing host capability counts a skip'
 else report 1 'missing host capability counts a skip'; fi
 MODE=fail probe; rc=$?
-if [ "$rc" = 1 ] && grep -q '1 leg(s) failed (0 skipped)' "$TMP/out"; then
+if [ "$rc" = 1 ] && grep -q '1 leg(s) failed (0 skipped)' "$TMP/out" && ! grep -q 'aborted before finish' "$TMP/out"; then
   report 0 'failure controls exit and footer'
 else report 1 'failure controls exit and footer'; fi
 probe --keep; rc=$?
@@ -54,8 +57,24 @@ probe --unknown; rc=$?
 report "$([ "$rc" = 2 ]; echo $?)" 'unknown arguments exit 2'
 MODE=signal probe; rc=$?
 path=$(cat "$RECORD")
-if [ "$rc" = 143 ] && [ ! -d "$path" ]; then report 0 'TERM exits 143 and cleans scratch'
+if [ "$rc" = 143 ] && [ ! -d "$path" ] && grep -q '^aborted before finish (rc=143)$' "$TMP/out"; then report 0 'TERM exits 143 and cleans scratch'
 else report 1 'TERM exits 143 and cleans scratch'; fi
+for mode in abort errexit unfinished; do
+  case $mode in abort) want=50 ;; errexit) want=7 ;; unfinished) want=0 ;; esac
+  MODE=$mode probe; rc=$?
+  path=$(cat "$RECORD")
+  if [ "$rc" = "$want" ] && [ ! -d "$path" ] \
+     && grep -q "^aborted before finish (rc=$want)$" "$TMP/out" \
+     && ! grep -q 'legs passed\|leg(s) failed' "$TMP/out"; then
+    report 0 "$mode reports unfinished harness and preserves exit $want"
+  else report 1 "$mode reports unfinished harness and preserves exit $want"; fi
+done
+MODE=abort probe --keep; rc=$?
+path=$(cat "$RECORD")
+if [ "$rc" = 50 ] && [ -d "$path" ] && grep -q '^aborted before finish (rc=50)$' "$TMP/out"; then
+  report 0 'aborted --keep retains scratch and reports the original status'
+else report 1 'aborted --keep retains scratch and reports the original status'; fi
+rm -rf "$path"
 reason() { echo 'claimed defect'; return 1; }
 wrong_reason() { echo 'unrelated defect'; return 1; }
 wrong_status() { echo 'claimed defect'; return 127; }
