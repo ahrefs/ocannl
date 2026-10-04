@@ -106,6 +106,69 @@ let () =
         (Int32.equal (Int32.bits_of_float got.(0)) 0x3e396287l))
 
 let () =
+  Verdict.case "simplified constant base" (fun () ->
+      let before = !LL.optimize_integer_pow in
+      Exn.protect
+        ~finally:(fun () -> LL.optimize_integer_pow := before)
+        ~f:(fun () ->
+          LL.optimize_integer_pow := true;
+          let base = 0.5657068490982056 in
+          let node = Ll_test.node_factory ~first_id:18550 ~dims:[| 2 |] () in
+          let input = node "ipow_wrap_input" and output = node "ipow_wrap_output" in
+          List.iter [ input; output ] ~f:Ll_test.materialize;
+          let power x = LL.Binop (ToPowOf, (x, Ops.single), (Ll_test.c 3., Ops.single)) in
+          let wrapped = LL.Unop (Identity, (Ll_test.c base, Ops.single)) in
+          let constant =
+            LL.simplify_llc ~fp_algebra:"pow" []
+              (Ll_test.set output [| Ll_test.fixed 0 |] (power wrapped))
+          in
+          let materialized =
+            Ll_test.set output
+              [| Ll_test.fixed 1 |]
+              (power (Ll_test.get input [| Ll_test.fixed 0 |]))
+          in
+          let o = Ll_test.optimize ~name:"ipow_wrap" (Ll_test.seq constant materialized) in
+          let got =
+            List.hd_exn
+              (Ll_test.execute ~name:"ipow_wrap" o
+                 ~seed:[ (input, [| base; base |]); (output, [| 99.; 99. |]) ]
+                 ~read:[ output ])
+          in
+          p "bases simplified to constants retain materialized target-precision rounding"
+            (bitwise got.(0) got.(1) && Int32.equal (Int32.bits_of_float got.(0)) 0x3e396287l)))
+
+let () =
+  Verdict.case "runtime debug rendering" (fun () ->
+      let before = Utils.settings.debug_log_from_routines in
+      let log_level = Utils.settings.log_level in
+      Exn.protect
+        ~finally:(fun () ->
+          Utils.settings.debug_log_from_routines <- before;
+          Utils.set_log_level log_level)
+        ~f:(fun () ->
+          Utils.settings.debug_log_from_routines <- true;
+          Utils.set_log_level 2;
+          let node = Ll_test.node_factory ~first_id:18700 ~dims:[| 1 |] () in
+          let input = node "ipow_debug_input" and output = node "ipow_debug_output" in
+          List.iter [ input; output ] ~f:Ll_test.materialize;
+          let body =
+            Ll_test.set output
+              [| Ll_test.fixed 0 |]
+              (LL.Binop
+                 ( ToPowOf,
+                   (Ll_test.get input [| Ll_test.fixed 0 |], Ops.single),
+                   (Ll_test.c (-2.), Ops.single) ))
+          in
+          let o = Ll_test.optimize ~name:"ipow_debug" body in
+          ignore (Ll_test.link ~name:"ipow_debug" o);
+          let src = Generated.read "ipow_debug" in
+          p "runtime debug trace names the same integer-power helper as executed code"
+            (List.length
+               (String.substr_index_all src ~pattern:"ocannl_powi_f32(" ~may_overlap:false)
+             >= 3
+            && not (String.is_substring src ~substring:"powf("))))
+
+let () =
   Verdict.case "reciprocal ordering" (fun () ->
       LL.optimize_integer_pow := true;
       let node = Ll_test.node_factory ~first_id:18600 ~dims:[| 2 |] () in

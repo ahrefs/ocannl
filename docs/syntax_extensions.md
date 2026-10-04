@@ -157,6 +157,18 @@ let interpret_unop op v =
   | Uint4x32_to_prec_uniform -> failwith "NOT IMPLEMENTED"
 
 let interpret_binop op v1 v2 =
+  let integer_power base exponent =
+    let open Float in
+    let rec loop base magnitude result =
+      if magnitude = 0. then result
+      else
+        let result = if Stdlib.Float.rem magnitude 2. = 1. then result * base else result in
+        let magnitude = Stdlib.Float.floor (magnitude / 2.) in
+        if magnitude = 0. then result else loop (base * base) magnitude result
+    in
+    let result = loop base (Float.abs exponent) 1. in
+    if exponent < 0. then 1. / result else result
+  in
   let open Float in
   match op with
   | Arg1 -> v1
@@ -165,7 +177,7 @@ let interpret_binop op v1 v2 =
   | Sub -> v1 - v2
   | Mul -> v1 * v2
   | Div -> v1 / v2
-  | ToPowOf when is_integer v2 -> int_pow v1 @@ to_int v2
+  | ToPowOf when is_finite v2 && is_integer v2 -> integer_power v1 v2
   | ToPowOf -> v1 ** v2
   | Relu_gate -> if v1 > 0.0 then v2 else 0.0
   | Satur01_gate -> if v1 > 0.0 && v1 < 1.0 then v2 else 0.0
@@ -184,6 +196,16 @@ let interpret_ternop op v1 v2 v3 =
   let open Float in
   match op with Where -> if v1 <> 0. then v2 else v3 | FMA -> (v1 * v2) + v3
 ```
+
+Known finite integral powers use multiplication and squaring, followed by a reciprocal for negative
+exponents. The exponent retains its host-float value without conversion to a machine `int`.
+Exponent zero returns 1 even for zero or NaN bases; nonzero NaN powers propagate NaN, and odd zero
+and infinity powers preserve their sign. Generated arithmetic rounds at f32 for single and narrow
+storage, and at f64 for double storage; this multiplication policy includes its overflow and
+underflow behavior. Host interpretation uses f64, so constant integer powers remain in the IR for
+target-precision code generation, including bases that simplify to constants. Fractional and dynamic
+exponents use the backend's floating-power operation. Optional unrolling applies only to small
+nonnegative exponents and does not duplicate scoped computations.
 
 ## The syntax for %op
 

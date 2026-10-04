@@ -1724,6 +1724,9 @@ files.
   fractional and dynamic exponents retain the vendor operation. Constant integer powers also stay
   in the IR until codegen: host f64 folding would change the f32 multiplication rounding, so a
   non-dyadic constant/materialized cubic comparison pins this boundary. Guard: `integer_power_domain`.
+  Recheck the base after recursive simplification too: an `Identity` wrapper can expose a constant
+  after the constant-pair guard. Execution and `debug_float` share `integer_power_doc`, so runtime
+  traces show the actual helper, exponent encoding and conversions rather than a vendor `pow` label.
   Negative exponents also remain for the helper when power simplification is licensed: the old
   linear unroller reciprocates the base first, changing overflow/underflow behavior relative to
   reciprocating the positive power. Positive unrolling is bounded to exponents 0 through 8.

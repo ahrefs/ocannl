@@ -4333,7 +4333,11 @@ let simplify_llc ?fp_algebra static_indices llc =
         let ((v1_scalar, _) as v1) = loop_scalar llv1 in
         let v2 = loop_scalar llv2 in
         let result = (Binop (ToPowOf, v1, v2), prec) in
-        if (not !optimize_integer_pow) || not (licensed pow) then result
+        if
+          (not !optimize_integer_pow)
+          || (not (licensed pow))
+          || (Ops.is_float prec && match v1_scalar with Constant _ -> true | _ -> false)
+        then result
         else
           match v2 with
           | Constant c, _
