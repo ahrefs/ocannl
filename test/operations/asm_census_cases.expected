@@ -1,3 +1,5 @@
+compiler plans ignore probe paths and GCC's derived dump names: true
+compiler plan normalization retains SDK paths and effective flags: true
 the census models GCC/GAS and Clang assembly on x86-64 and aarch64: true
 both arm64 dialects' instructions are classified, not only their loops found: true
 a libm call spelled the Mach-O way is still counted as one: true
