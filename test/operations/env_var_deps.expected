@@ -125,11 +125,11 @@ on its own deps.
   OCANNL_TF32_MATMULS                    test/operations/profiles/dune, executable profile_precedence (7 runs of profile_precedence.exe)
   OCANNL_TUNE_INLINE_FLIPS               test/operations/profiles/dune, executable profile_precedence (7 runs of profile_precedence.exe)
   OCANNL_VIRTUALIZE_MAX_VISITS           test/operations/profiles/dune, executable profile_precedence (7 runs of profile_precedence.exe)
-  OCANNL_LOG_CONFIG_SOURCING             test/operations/startup_streams/dune, executable startup_streams (4 runs of startup_streams.exe)
-  OCANNL_LOG_LEVEL                       test/operations/startup_streams/dune, executable startup_streams (4 runs of startup_streams.exe)
-  OCANNL_NO_CONFIG_FILE                  test/operations/startup_streams/dune, executable startup_streams (4 runs of startup_streams.exe)
-  OCANNL_PROFILE                         test/operations/startup_streams/dune, executable startup_streams (4 runs of startup_streams.exe)
-  OCANNL_SUPPRESS_WELCOME_MESSAGE        test/operations/startup_streams/dune, executable startup_streams (4 runs of startup_streams.exe)
+  OCANNL_LOG_CONFIG_SOURCING             test/operations/startup_streams/dune, executable startup_streams (5 runs of startup_streams.exe)
+  OCANNL_LOG_LEVEL                       test/operations/startup_streams/dune, executable startup_streams (5 runs of startup_streams.exe)
+  OCANNL_NO_CONFIG_FILE                  test/operations/startup_streams/dune, executable startup_streams (5 runs of startup_streams.exe)
+  OCANNL_PROFILE                         test/operations/startup_streams/dune, executable startup_streams (5 runs of startup_streams.exe)
+  OCANNL_SUPPRESS_WELCOME_MESSAGE        test/operations/startup_streams/dune, executable startup_streams (5 runs of startup_streams.exe)
 
 Programs naming `Ir.Schedule` and the entry points they name, every configuration key of which is
 declared or pinned by every rule running the program (gh-ocannl-1149):

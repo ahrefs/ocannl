@@ -426,11 +426,9 @@ let runner_aliases file_stanzas ~identities:(file, public) =
       if
         List.exists (Scan.executables_run stanza) ~f:(fun (cwd, command) ->
             match command with
-            | Scan.Runs path ->
-                let resolved =
-                  normalize_path (Scan.in_subdir runner_subdir (Scan.in_subdir cwd path))
-                in
-                String.equal resolved file
+            | (Scan.Runs _ | Scan.Runs_dependency _) as command ->
+                Option.exists (Scan.command_file_path ~cwd command) ~f:(fun path ->
+                    String.equal (normalize_path (Scan.in_subdir runner_subdir path)) file)
             (* And a public name only where the command RESOLVED one. `(run ./pkg.probe)` and `(run
                %{bin:pkg.probe})` carry the same string and name different things -- a file here, an
                installed program -- so reading the first as a public-name runner would credit an
@@ -676,8 +674,10 @@ let inline_runner_runs ~libraries stanza =
       List.filter_map (Scan.classified_command_sites_with_pins_preserving_multiplicity stanza)
         ~f:(fun (cwd, _pinned, site, command) ->
           match (site, command) with
-          | Scan.Program (_, args), Scan.Runs path ->
-              let resolved = normalize_path (Scan.in_subdir cwd path) in
+          | Scan.Program (_, args), ((Scan.Runs _ | Scan.Runs_dependency _) as command) ->
+              let resolved =
+                Option.value_exn (Scan.command_file_path ~cwd command) |> normalize_path
+              in
               List.find libraries ~f:(fun library ->
                   String.equal resolved (inline_runner_path library))
               |> Option.map ~f:(fun library -> (library, only_test_operands args))
@@ -1761,11 +1761,11 @@ let main () =
                                 let the merged alias run the generated test AND something unrelated
                                 (Codex P2, round 11). The same resolution the family's runner
                                 matching makes. *)
-                             | Scan.Runs path ->
-                                 String.equal
-                                   (normalize_path
-                                      (Scan.in_subdir subdir (Scan.in_subdir cwd path)))
-                                   (normalize_path (Scan.in_subdir subdir (name ^ ".exe")))
+                             | (Scan.Runs _ | Scan.Runs_dependency _) as command ->
+                                 Option.exists (Scan.command_file_path ~cwd command) ~f:(fun path ->
+                                     String.equal
+                                       (normalize_path (Scan.in_subdir subdir path))
+                                       (normalize_path (Scan.in_subdir subdir (name ^ ".exe"))))
                              | _ -> false) ->
                       ()
                   | Some name when Set.mem generated name ->

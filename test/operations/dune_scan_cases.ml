@@ -1439,6 +1439,31 @@ let artifact_cases =
 (rule (alias only-b) (deps ocannl_config) (action (run %{dep:b.exe})))|dune},
       [ "a" ],
       [ "executables a: declared (a)" ] );
+    (* A dependency expansion resolves from the stanza, even when the action runs elsewhere
+       (gh-ocannl-982). The literal-path case below must keep following the action's cwd. *)
+    ( "a dependency-expanded runner under chdir still runs the stanza's executable",
+      {dune|(executable (name probe) (modules probe))
+(rule (deps (env_var OCANNL_BUILD_FILES_PREFIX))
+ (action (chdir nested (run %{dep:probe.exe}))))|dune},
+      [ "probe" ],
+      [ "executable probe: declared (probe)" ] );
+    ( "the dependency-expanded runner's missing declaration is reported",
+      {dune|(executable (name probe) (modules probe))
+(rule (deps ocannl_config) (action (chdir nested (run %{dep:probe.exe}))))|dune},
+      [ "probe" ],
+      [ "executable probe: undeclared (probe)" ] );
+    ( "a named dependency under chdir also keeps its stanza-relative identity",
+      {dune|(executable (name probe) (modules probe))
+(rule (deps (:runner probe.exe) (env_var OCANNL_BUILD_FILES_PREFIX))
+ (action (chdir nested (run %{runner}))))|dune},
+      [ "probe" ],
+      [ "executable probe: declared (probe)" ] );
+    ( "an executable expansion under chdir keeps its stanza-relative identity",
+      {dune|(executable (name probe) (modules probe))
+(rule (deps (env_var OCANNL_BUILD_FILES_PREFIX))
+ (action (chdir nested (run %{exe:./probe.exe}))))|dune},
+      [ "probe" ],
+      [ "executable probe: declared (probe)" ] );
     (* A `chdir` moves which program a rule runs, so the identity is the resolved path and not the
        written one: this rule runs `a`'s program, and `b`'s same-named local one is untouched by its
        declaration (Codex P2, round 4). *)
@@ -1456,6 +1481,20 @@ let artifact_cases =
    The third element is the subdirectory the executable's group sits in. *)
 let artifact_subdir_cases =
   [
+    ( "a dependency expansion in a subdir keeps that stanza's directory under chdir",
+      {dune|(subdir gen (executable (name probe) (modules probe))
+(rule (deps (env_var OCANNL_BUILD_FILES_PREFIX))
+ (action (chdir ../other (run %{dep:probe.exe})))))|dune},
+      "gen",
+      [ "probe" ],
+      [ "executable probe: declared (probe)" ] );
+    ( "a top-level dependency expansion under chdir runs the qualified nested executable",
+      {dune|(subdir gen (executable (name probe) (modules probe)))
+(rule (deps (env_var OCANNL_BUILD_FILES_PREFIX))
+ (action (chdir elsewhere (run %{dep:gen/../gen/probe.exe}))))|dune},
+      "gen",
+      [ "probe" ],
+      [ "executable probe: declared (probe)" ] );
     ( "a top-level rule is the runner of a nested executable",
       {dune|(subdir gen (executable (name probe) (modules probe)))
 (rule (deps (env_var OCANNL_BUILD_FILES_PREFIX)) (action (run gen/probe.exe)))|dune},
