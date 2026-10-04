@@ -74,8 +74,8 @@ let executable path =
   with Unix.Unix_error _ -> false
 
 let () =
-  if Array.length Sys.argv <> 5 then (
-    prerr_endline "usage: sweep_harness_driver HARNESS SWEEP AGGREGATE_SKIPS VERDICT_PROBE";
+  if Array.length Sys.argv <> 2 && Array.length Sys.argv <> 5 then (
+    prerr_endline "usage: sweep_harness_driver HARNESS [SWEEP AGGREGATE_SKIPS VERDICT_PROBE]";
     exit 2);
   check_resolution ();
   let bash =
@@ -116,16 +116,18 @@ let () =
     |> Ir.Compiler_options.render
   in
   let argv =
-    [|
-      bash;
-      Sys.argv.(1);
-      Sys.argv.(2);
-      Sys.argv.(3);
-      Sys.argv.(4);
-      metal_options;
-      hip_options;
-      nvrtc_options;
-    |]
+    if Array.length Sys.argv = 2 then [| bash; Sys.argv.(1) |]
+    else
+      [|
+        bash;
+        Sys.argv.(1);
+        Sys.argv.(2);
+        Sys.argv.(3);
+        Sys.argv.(4);
+        metal_options;
+        hip_options;
+        nvrtc_options;
+      |]
   in
   let pid = Unix.create_process bash argv Unix.stdin Unix.stdout Unix.stderr in
   match snd (Unix.waitpid [] pid) with

@@ -118,6 +118,25 @@ box_jobs_sweep_cap() { # <machine> <backend> [<ssh-destination>]; prints the cap
   esac
 }
 
+# Dune's job count for the TEST phase of a unit, empty for dune's default (one
+# per core). The cap itself, which boxes it covers and why it is the number it
+# is now live in tools/box-jobs.sh, the single source this and tools/test-run.sh
+# both read: the same bridge overflows a MANUAL GPU suite on such a box, and a
+# cap only the sweep knew about was rediscovered the hard way (gh-ocannl-983).
+# Applied to the test phase only -- the compile phase stays uncapped, since
+# the sweep's `test_cmd` runs `@check` first and the cap bounds GPU-holding processes, not
+# the build. Override for one run with OCANNL_TOOL_SWEEP_JOBS=<n>, which then
+# applies to every unit. The third argument is the unit's ssh destination
+# (empty for a local unit): the two lab boxes dual-boot, and the width a WSL
+# boot's bridge needs is not the one a native boot needs (gh-ocannl-1029).
+box_jobs_sweep_jobs() { # machine backend [ssh-destination]
+  if [ -n "${OCANNL_TOOL_SWEEP_JOBS:-}" ]; then
+    printf '%s' "$OCANNL_TOOL_SWEEP_JOBS"
+    return
+  fi
+  box_jobs_sweep_cap "$1" "$2" "${3:-}"
+}
+
 # The device a dxg host publishes. Overridable so the detection is testable off
 # such a host: tools/test-test-run.sh points it at a file it creates (a faked
 # bridge) and at a path that does not exist (a faked ordinary box). An empty

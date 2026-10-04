@@ -16,7 +16,7 @@
 # It tests the WORKING-TREE copy: `group_alive` is extracted from the shared
 # scripts/process-group.sh; `ps_token`, `proc_identity_matches`, `proc_alive`
 # come from tools/test-run.sh; the dxg legs read the shipping tools/box-jobs.sh
-# and extract tools/sweep.sh's `unit_jobs` and `lab_dest_of`. The `stop` legs drive that same tool as a
+# and tools/lab-map.sh for endpoint lookup. The `stop` legs drive that same tool as a
 # subprocess. Each extraction is asserted structurally before use, so a sed
 # that matched nothing cannot leave every leg passing without testing anything.
 #
@@ -72,10 +72,10 @@
 #      names hip, one reaching a stanza naming cuda, and an unreadable one are
 #      capped, saying why; a named width is only told.
 #  33. hip caps too, and the width is spliced after dune's subcommand.
-#  34. tools/sweep.sh's `unit_jobs` and the injected cap read one table, with
+#  34. the sweep's `box_jobs_sweep_jobs` helper and the injected cap read one table, with
 #      the sweep's own override still winning; the sweep's width follows the
 #      unit's destination (a WSL boot's bridge cap, a native boot's own), and
-#      every unit_jobs call site passes that destination.
+#      every box_jobs_sweep_jobs call site passes that destination.
 #  35. an invocation dune's own parser refuses -- unknown option, unknown
 #      subcommand, malformed operand -- digests as INVOCATION REFUSED quoting
 #      dune's complaint: `run`/`wait` exit 2 over a RECORDED exit 1, `status`
@@ -2625,45 +2625,38 @@ else
   report 1 "dxg: hip is capped too, and the width precedes dune's own separator" "$dxg_detail"
 fi
 
-# The anti-drift half. The cap this script injects and the one tools/sweep.sh
-# gives its dxg unit must be the same number for the same reason, which is why
-# they now come from one table. sweep.sh cannot be sourced (it runs a sweep), so
-# its unit_jobs is EXTRACTED -- and the extraction is asserted to have matched
-# and to delegate, or a sed that caught nothing would leave this leg agreeing
-# with an empty function.
-sed -n '/^unit_jobs() {/,/^}/p' "$SWEEP_SRC" >"$TMP/unit-jobs.sh"
+# The anti-drift half calls the shared shipping sweep helper directly. The
+# sweep and this runner must source that table, and the sweep must pass the
+# resolved destination to every width lookup.
 dxg_detail=
-grep -q 'box_jobs_sweep_cap' "$TMP/unit-jobs.sh" ||
-  dxg_detail="sweep.sh's unit_jobs does not read the shared table: $(cat "$TMP/unit-jobs.sh")"
-[ -n "$dxg_detail" ] || grep -q '^\. "\$SWEEP_TOOLS/box-jobs.sh"$' "$SWEEP_SRC" ||
+grep -q '^\. "\$SWEEP_TOOLS/box-jobs.sh"$' "$SWEEP_SRC" ||
   dxg_detail="sweep.sh does not source tools/box-jobs.sh"
 [ -n "$dxg_detail" ] || grep -q '^\. tools/box-jobs\.sh$' "$SRC" ||
   dxg_detail="test-run.sh does not source tools/box-jobs.sh"
 # The width depends on how the unit reached its box (gh-ocannl-1029): the two
 # lab boxes dual-boot, and only a WSL boot crosses the bridge. Every call site
-# must hand unit_jobs the unit's RESOLVED destination -- the `@<box>`
+# must hand box_jobs_sweep_jobs the unit's RESOLVED destination -- the `@<box>`
 # placeholder is replaced in UNITS before any unit runs -- since a call that
 # dropped it would silently give a native boot the WSL cap. And the
-# destinations are resolved by sweep.sh's own lab_dest_of (with the lab_row it
+# destinations are resolved by the sourced lab-map.sh's lab_dest_of (with the lab_row it
 # reads), over the lab's endpoint map as `wake-lab.sh endpoint-map` printed it
 # on 2026-09-27 -- a FIXTURE, never the live map, which is site data outside the
 # repository and the sweep's only table of aliases (gh-ocannl-1121). So what is
 # pinned is the relationship: whatever alias the sweep picks for a boot,
 # box-jobs.sh classifies it as that boot.
-sed -n -e '/^lab_row() {/,/^}/p' -e '/^lab_dest_of() {/,/^}/p' "$SWEEP_SRC" >"$TMP/lab-dest-of.sh"
+LAB_MAP_SRC=$(dirname "$SWEEP_SRC")/lab-map.sh
 LAB_MAP='rog rog-nv-linux rog-nv-win rog-nv-wsl rog-lan
 minix minix-amd-linux minix-amd-win minix-amd-wsl minix-lan
 tuf tuf-amd-linux tuf-amd-win tuf-amd-wsl'
 if [ -z "$dxg_detail" ]; then
-  unit_jobs_calls=$(grep -c 'unit_jobs "' "$SWEEP_SRC")
-  unit_jobs_dest_calls=$(grep -c 'unit_jobs "$machine" "$backend" "$host"' "$SWEEP_SRC")
+  unit_jobs_calls=$(grep -c 'box_jobs_sweep_jobs "' "$SWEEP_SRC")
+  unit_jobs_dest_calls=$(grep -c 'box_jobs_sweep_jobs "$machine" "$backend" "$host"' "$SWEEP_SRC")
   if [ "$unit_jobs_calls" -eq 0 ] || [ "$unit_jobs_calls" != "$unit_jobs_dest_calls" ]; then
-    dxg_detail="sweep.sh calls unit_jobs $unit_jobs_calls times, $unit_jobs_dest_calls with the unit's destination"
+    dxg_detail="sweep.sh calls box_jobs_sweep_jobs $unit_jobs_calls times, $unit_jobs_dest_calls with the unit's destination"
   fi
 fi
-[ -n "$dxg_detail" ] || { grep -q '^lab_row() {' "$TMP/lab-dest-of.sh" &&
-  grep -q '^lab_dest_of() {' "$TMP/lab-dest-of.sh" && grep -q 'lab_row "\$1"' "$TMP/lab-dest-of.sh"; } ||
-  dxg_detail="lab_row and lab_dest_of did not extract from sweep.sh: $(cat "$TMP/lab-dest-of.sh")"
+[ -n "$dxg_detail" ] || [ -r "$LAB_MAP_SRC" ] ||
+  dxg_detail="cannot read shared endpoint lookups: $LAB_MAP_SRC"
 if [ -z "$dxg_detail" ]; then
   # The values themselves, from the shipping table, in one shell: the sweep's
   # hip unit over each of minix's boots (and with no destination, or one the
@@ -2673,20 +2666,19 @@ if [ -z "$dxg_detail" ]; then
   # two constants.
   sweep_cap=$(
     . "$JOBS_SRC"
-    . "$TMP/unit-jobs.sh"
-    . "$TMP/lab-dest-of.sh"
+    . "$LAB_MAP_SRC"
     printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s' \
-      "$(unit_jobs minix hip)" \
-      "$(unit_jobs minix hip "$(lab_dest_of minix wsl)")" \
-      "$(unit_jobs minix hip "$(lab_dest_of minix linux)")" \
-      "$(unit_jobs minix hip 10.0.0.7)" \
-      "$(unit_jobs rog-nv cuda "$(lab_dest_of rog wsl)")" \
-      "$(unit_jobs rog-nv cuda "$(lab_dest_of rog linux)")" \
-      "$(unit_jobs minix multidev_cc "$(lab_dest_of minix linux)")" \
-      "$(unit_jobs tuf hip "$(lab_dest_of tuf linux)")" \
-      "$(OCANNL_TOOL_SWEEP_JOBS=7 unit_jobs minix hip)" \
-      "$(OCANNL_TOOL_SWEEP_JOBS=7 unit_jobs minix hip "$(lab_dest_of minix linux)")" \
-      "$(unit_jobs m4-max metal)" \
+      "$(box_jobs_sweep_jobs minix hip)" \
+      "$(box_jobs_sweep_jobs minix hip "$(lab_dest_of minix wsl)")" \
+      "$(box_jobs_sweep_jobs minix hip "$(lab_dest_of minix linux)")" \
+      "$(box_jobs_sweep_jobs minix hip 10.0.0.7)" \
+      "$(box_jobs_sweep_jobs rog-nv cuda "$(lab_dest_of rog wsl)")" \
+      "$(box_jobs_sweep_jobs rog-nv cuda "$(lab_dest_of rog linux)")" \
+      "$(box_jobs_sweep_jobs minix multidev_cc "$(lab_dest_of minix linux)")" \
+      "$(box_jobs_sweep_jobs tuf hip "$(lab_dest_of tuf linux)")" \
+      "$(OCANNL_TOOL_SWEEP_JOBS=7 box_jobs_sweep_jobs minix hip)" \
+      "$(OCANNL_TOOL_SWEEP_JOBS=7 box_jobs_sweep_jobs minix hip "$(lab_dest_of minix linux)")" \
+      "$(box_jobs_sweep_jobs m4-max metal)" \
       "$(OCANNL_TOOL_DXG_DEVICE=$dxg_present box_jobs_local_cap cuda)" \
       "$BOX_JOBS_DXG_CAP/$BOX_JOBS_SDMA_CAP"
   )
@@ -2700,7 +2692,7 @@ if [ -z "$dxg_detail" ]; then
   # classifies as the boot lab_dest_of says it is.
   for box in rog minix; do
     for kind in wsl linux; do
-      got=$(. "$JOBS_SRC"; . "$TMP/lab-dest-of.sh"; box_jobs_dest_transport "$(lab_dest_of "$box" "$kind")")
+      got=$(. "$JOBS_SRC"; . "$LAB_MAP_SRC"; box_jobs_dest_transport "$(lab_dest_of "$box" "$kind")")
       case $kind:$got in
         wsl:dxg | linux:native) ;;
         *) dxg_detail="$box's $kind alias classifies as '${got}'" ;;
@@ -2709,9 +2701,9 @@ if [ -z "$dxg_detail" ]; then
   done
 fi
 if [ -z "$dxg_detail" ]; then
-  report 0 "dxg: sweep.sh's unit_jobs and the injected cap come from one table"
+  report 0 "dxg: the sweep's box_jobs_sweep_jobs and the injected cap come from one table"
 else
-  report 1 "dxg: sweep.sh's unit_jobs and the injected cap come from one table" "$dxg_detail"
+  report 1 "dxg: the sweep's box_jobs_sweep_jobs and the injected cap come from one table" "$dxg_detail"
 fi
 
 # ---------------------------------------------------------------------------
