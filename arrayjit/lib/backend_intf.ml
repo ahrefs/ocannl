@@ -24,13 +24,9 @@ type upload_arena = {
       (** The residency hint the arena's slab was allocated with; only nodes with the same hint
           share it. *)
   capacity : int;
-  mutable used : int;  (** The bump pointer: bytes laid out so far, alignment padding included. *)
-  mutable last_tenant : (Tnode.t[@sexp.opaque]);
-      (** The node laid out last. Only a context value holding it may extend the arena -- and one
-          that does holds every earlier tenant too, since each extension required the same of the
-          value it extended and a derivation never drops a buffer. So a sibling value, a second
-          upload into the same earlier value, gets an arena of its own, and releasing one sibling
-          cannot free a slab the other's node lives in. *)
+  mutable tenants : ((Tnode.t[@sexp.opaque]) * int) list;
+      (** Newest first: each tenant and the bump pointer just after its allocation. Retirement trims
+          the tail until it reaches a tenant still held by a surviving pool owner. *)
 }
 [@@deriving sexp_of]
 (** A working pool that host uploads of not-yet-allocated nodes are bump-packed into
@@ -38,13 +34,20 @@ type upload_arena = {
     links them costs a few pools rather than one each -- Metal binds at most [metal_max_pools] per
     routine. *)
 
-type upload_arenas = { mutable arenas : upload_arena list } [@@deriving sexp_of]
-(** The upload arenas of one context lifecycle, shared by reference between the context values that
-    {!evolve_with_buffer} derives -- the values that share one [finalized] flag and so free their
-    pools together. A compile's child starts a fresh set: its pools must never share a slab with its
-    parent's, whose [finalize] frees them independently. *)
+type upload_arenas = {
+  mutable arenas : upload_arena list;
+  owners_mutex : (Stdlib.Mutex.t[@sexp.opaque]);
+  pool_owners : (int, ctx_buffers ref list) Hashtbl.t;
+      (** Current maps of upload-lineage leaves owning each pool. References let a linear upload
+          update its owner without adding one; forks retain independently. Lifecycle descendants
+          have a separate table and retain the existing leaf-release precondition. *)
+}
+[@@deriving sexp_of]
+(** Upload arenas shared by an upload lineage. Sibling leaves share the pool ownership table, while
+    each has its own release flag. A compile starts fresh arenas. *)
 
-let fresh_upload_arenas () = { arenas = [] }
+let fresh_upload_arenas () =
+  { arenas = []; owners_mutex = Stdlib.Mutex.create (); pool_owners = Hashtbl.create (module Int) }
 
 exception Backend_unavailable of { backend : string; detail : string }
 (** Device discovery established that this backend cannot be used on this machine: its library is
@@ -680,9 +683,12 @@ type ('dev, 'runner, 'event) context = {
   mutable released_pool_ids : Set.M(Int).t;
       (** Pools this context has already released. Retained across a failed-finalize retry so a
           cleanup that freed some pools before raising never calls the backend free twice. *)
+  upload_tip : ctx_buffers ref;
+      (** Latest map in this linear upload chain. Uploading from an older map forks its ownership
+          into an independent leaf; linear uploads supersede their argument without an extra owner.
+      *)
   upload_arenas : upload_arenas;
-      (** This lifecycle's host-upload arenas (gh-ocannl-1125): shared with every context value
-          {!evolve_with_buffer} derives from this one, fresh in {!Device.make_child}. *)
+      (** This upload lineage's arenas and pool reference counts, fresh in {!Device.make_child}. *)
   optimize_ctx : Low_level.optimize_ctx;
       (** The optimization context threaded through compilation: all OCANNL backends compile through
           the {!Low_level} IR, so this is concretely {!Low_level.optimize_ctx} (the abstraction for
@@ -697,15 +703,54 @@ type ('dev, 'runner, 'event) context = {
 }
 [@@deriving sexp_of]
 
-(** The one constructor for evolving a context in place of itself with a newly allocated buffer: the
-    result supersedes [ctx] as the lineage leaf while deliberately keeping its lifecycle identity —
-    the same {!field:context.parent} link and the {e same} {!field:context.finalized} flag, so at
-    most one of the pair can ever free the pools they share — and no context creation is counted in
-    [Alloc_census]. The buffer-allocating transfer entry points ([init_from_host],
-    [init_from_device]) go through this; a compile/link result is a new lifecycle node and goes
-    through [Device.make_child] instead. *)
+(** Working pools in a context map, excluding compile ancestors and cached constant locations.
+    Shared by ownership registration and cleanup so both use the same pool classification. *)
+let owned_pool_ids ~device ~owned_elsewhere ctx_buffers =
+  Map.fold ctx_buffers
+    ~init:(Set.empty (module Int))
+    ~f:(fun ~key ~data:loc pools ->
+      if
+        owned_elsewhere key
+        || Option.exists (Hashtbl.find device.constant_buffer_cache key) ~f:(equal_buffer_loc loc)
+      then pools
+      else Set.add pools loc.pool_id)
+
+(** Extend the current upload leaf in place, or fork an older value into an independent leaf. Linear
+    uploads keep one owner, even if callers retain intermediate persistent values. A fork retains
+    only pools present in its result, so releasing either sibling preserves shared data and the last
+    sibling frees it. Registration is the final, non-fallible transfer commit. *)
 let evolve_with_buffer ctx tn loc =
-  { ctx with ctx_buffers = Map.add_exn ctx.ctx_buffers ~key:tn ~data:loc }
+  let ctx_buffers = Map.add_exn ctx.ctx_buffers ~key:tn ~data:loc in
+  let fork = not (phys_equal ctx.ctx_buffers !(ctx.upload_tip)) in
+  let upload_tip = if fork then ref ctx_buffers else ctx.upload_tip in
+  Stdlib.Mutex.protect ctx.upload_arenas.owners_mutex (fun () ->
+      let owners = ctx.upload_arenas.pool_owners in
+      if fork then (
+        let owned =
+          owned_pool_ids ~device:ctx.device ~owned_elsewhere:(fun key ->
+              Option.exists ctx.parent ~f:(fun pc -> Map.mem pc.ctx_buffers key))
+        in
+        Set.iter (owned !(ctx.upload_tip)) ~f:(fun pool_id ->
+            Hashtbl.find_or_add owners pool_id ~default:(fun () -> [ ctx.upload_tip ])
+            |> (ignore : ctx_buffers ref list -> unit));
+        Set.iter (owned ctx_buffers) ~f:(fun pool_id ->
+            Hashtbl.update owners pool_id ~f:(function
+              | None -> [ upload_tip ]
+              | Some tips -> upload_tip :: tips)))
+      else (
+        Hashtbl.find_or_add owners loc.pool_id ~default:(fun () -> [ upload_tip ])
+        |> (ignore : ctx_buffers ref list -> unit);
+        upload_tip := ctx_buffers));
+  if fork then (
+    Alloc_census.count_context_created ();
+    {
+      ctx with
+      ctx_buffers;
+      finalized = Atomic.make false;
+      released_pool_ids = Set.empty (module Int);
+      upload_tip;
+    })
+  else { ctx with ctx_buffers }
 
 module type Device_types = sig
   include Device_config_common
