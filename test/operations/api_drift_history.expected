@@ -13,4 +13,7 @@ Dune-only public module moves produce publication-input review entries: true
 private generator edits stay quiet: true
 public generator peers still produce entries: true
 Dune-only empty-interface policy changes stay visible: true
+Dune stanza reordering stays quiet: true
+Dune-only generator configuration edits remain visible: true
+Dune-only selected-module configuration edits remain visible: true
 invalid source refuses the real historical reader: true

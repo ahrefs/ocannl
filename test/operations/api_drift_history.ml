@@ -246,6 +246,36 @@ let () =
       let empty_interface = commit "Give public generated module an empty interface" in
       p "Dune-only empty-interface policy changes stay visible"
         (has (read ~until:empty_interface public_edit) "empty_module_interface_if_absent");
+      write "lib/dune"
+        "(library (name first) (public_name pkg.first) (modules attributes)) (library (name \
+         second) (public_name pkg.second) (modules pattern))\n";
+      let independent = commit "Independent public owners" in
+      write "lib/dune"
+        "(library (name second) (public_name pkg.second) (modules pattern)) (library (name first) \
+         (public_name pkg.first) (modules attributes))\n";
+      let reordered_dune = commit "Reorder independent Dune stanzas" in
+      p "Dune stanza reordering stays quiet"
+        (has (read ~until:reordered_dune independent) "0 declaration changes");
+      write "tensor/dune"
+        "(menhir (modules parser) (flags --table)) (library (name parserlib) (public_name \
+         pkg.parserlib) (modules parser))\n";
+      let parser_config = commit "Generator configuration" in
+      write "tensor/dune"
+        "(menhir (modules parser) (flags --code)) (library (name parserlib) (public_name \
+         pkg.parserlib) (modules parser))\n";
+      let new_config = commit "Change generator configuration without changing inputs" in
+      p "Dune-only generator configuration edits remain visible"
+        (has (read ~until:new_config parser_config) "--code");
+      let select_config condition =
+        "(library (name backend) (public_name pkg.backend) (modules impl) (libraries (select \
+         impl.ml from (" ^ condition ^ " -> impl.cuda.ml) (-> impl.missing.ml))))\n"
+      in
+      write "arrayjit/lib/dune" (select_config "cuda_alternative");
+      let selected_config = commit "Select configuration" in
+      write "arrayjit/lib/dune" (select_config "hip");
+      let changed_select = commit "Change select condition with the same arm paths" in
+      p "Dune-only selected-module configuration edits remain visible"
+        (has (read ~until:changed_select selected_config) "hip -> impl.cuda.ml");
       write "arrayjit/lib/cap.mli" "val";
       ignore (commit "Invalid source must refuse" : string);
       p "invalid source refuses the real historical reader"

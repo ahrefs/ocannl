@@ -37,18 +37,19 @@ let binding_may_export binding =
   iterator#pattern binding.pvb_pat;
   !extension || not (List.is_empty (binding_names binding.pvb_pat))
 
-let derived_inputs ~paths dunes =
+let derived_module_inputs ~paths dunes =
   let present = Set.of_list (module String) paths in
   List.concat_map dunes ~f:(fun (dune_path, contents) ->
       let directory = Stdlib.Filename.dirname dune_path in
       let path name = directory ^ "/" ^ name in
       let stanzas = Dune_stanza_scan.stanzas contents in
       let rec select_inputs = function
-        | Sexp.List (Sexp.Atom "select" :: Sexp.Atom output :: Sexp.Atom "from" :: clauses) ->
+        | Sexp.List (Sexp.Atom "select" :: Sexp.Atom output :: Sexp.Atom "from" :: clauses) as
+          config ->
             List.map clauses ~f:(function
               | Sexp.List terms -> (
                   match List.rev terms with
-                  | Sexp.Atom input :: Sexp.Atom "->" :: _ -> (path input, path output)
+                  | Sexp.Atom input :: Sexp.Atom "->" :: _ -> (path input, path output, config)
                   | _ -> failwith ("unsupported select clause in " ^ dune_path))
               | _ -> failwith ("unsupported select clause in " ^ dune_path))
         | Sexp.List children -> List.concat_map children ~f:select_inputs
@@ -84,7 +85,9 @@ let derived_inputs ~paths dunes =
                 List.map modules ~f:(function
                   | Sexp.Atom name
                     when Option.is_some (Dead_export_scan.module_name_of_source (name ^ ".ml")) ->
-                      (path (name ^ suffix), path (Option.value output ~default:name ^ ".ml"))
+                      ( path (name ^ suffix),
+                        path (Option.value output ~default:name ^ ".ml"),
+                        stanza )
                   | _ -> failwith ("unsupported generator module set in " ^ dune_path)))
         @ List.concat_map stanzas ~f:select_inputs
       in
@@ -93,7 +96,7 @@ let derived_inputs ~paths dunes =
             if String.equal (Stdlib.Filename.dirname p) directory then
               Dead_export_scan.module_name_of_source p
             else None)
-        @ List.map generators ~f:(fun (_, output) ->
+        @ List.map generators ~f:(fun (_, output, _) ->
             Option.value_exn (Dead_export_scan.module_name_of_source output))
         |> List.map ~f:String.lowercase
         |> List.dedup_and_sort ~compare:String.compare
@@ -126,43 +129,56 @@ let derived_inputs ~paths dunes =
         |> List.map ~f:String.lowercase
         |> Set.of_list (module String)
       in
-      List.filter_map generators ~f:(fun (input, output) ->
+      List.filter_map generators ~f:(fun (input, output, config) ->
           let name =
             Option.value_exn (Dead_export_scan.module_name_of_source output) |> String.lowercase
           in
           let interface = String.chop_suffix_exn output ~suffix:".ml" ^ ".mli" in
           Option.some_if
             (Set.mem present input && Set.mem public_modules name && not (Set.mem present interface))
-            input))
+            (input, output, config)))
 
-let publication_inputs contents =
-  Dune_stanza_scan.stanzas contents
-  |> List.filter_map ~f:(fun stanza ->
-      if
-        Option.equal String.equal (Dune_stanza_scan.head stanza) (Some "library")
-        && not (List.is_empty (Dune_stanza_scan.public_names stanza))
-      then
-        let fields =
-          [
-            "name";
-            "public_name";
-            "public_names";
-            "modules";
-            "wrapped";
-            "private_modules";
-            "empty_module_interface_if_absent";
-          ]
-          |> List.filter_map ~f:(fun field ->
-              Option.map (Dune_stanza_scan.field stanza field) ~f:(fun value ->
-                  Sexp.List (Sexp.Atom field :: value)))
-        in
-        Some
-          {
-            name = "public library " ^ String.concat ~sep:"," (Dune_stanza_scan.names_of stanza);
-            line = 1;
-            text = Sexp.to_string_hum (Sexp.List (Sexp.Atom "library" :: fields));
-          }
-      else None)
+let derived_inputs ~paths dunes =
+  derived_module_inputs ~paths dunes |> List.map ~f:(fun (input, _, _) -> input)
+
+let publication_inputs ?(paths = []) ~source contents =
+  let libraries =
+    Dune_stanza_scan.stanzas contents
+    |> List.filter_map ~f:(fun stanza ->
+        if
+          Option.equal String.equal (Dune_stanza_scan.head stanza) (Some "library")
+          && not (List.is_empty (Dune_stanza_scan.public_names stanza))
+        then
+          let fields =
+            [
+              "name";
+              "public_name";
+              "public_names";
+              "modules";
+              "wrapped";
+              "private_modules";
+              "empty_module_interface_if_absent";
+            ]
+            |> List.filter_map ~f:(fun field ->
+                Option.map (Dune_stanza_scan.field stanza field) ~f:(fun value ->
+                    Sexp.List (Sexp.Atom field :: value)))
+          in
+          Some
+            {
+              name = "public library " ^ String.concat ~sep:"," (Dune_stanza_scan.names_of stanza);
+              line = 1;
+              text = Sexp.to_string_hum (Sexp.List (Sexp.Atom "library" :: fields));
+            }
+        else None)
+  in
+  let configurations =
+    derived_module_inputs ~paths [ (source, contents) ]
+    |> List.map ~f:(fun (_, output, config) ->
+        { name = "derived module " ^ output; line = 1; text = Sexp.to_string_hum config })
+  in
+  (* Independent Dune stanza order has no OCaml name-resolution meaning. *)
+  List.dedup_and_sort (libraries @ configurations) ~compare:(fun a b ->
+      match String.compare a.name b.name with 0 -> String.compare a.text b.text | order -> order)
 
 let sources ?(dunes = []) paths =
   List.filter paths ~f:(fun path ->
@@ -171,11 +187,12 @@ let sources ?(dunes = []) paths =
       Option.is_some (Dead_export_scan.module_name_of_source source))
   @ derived_inputs ~paths dunes
   @ List.filter_map dunes ~f:(fun (path, contents) ->
-      Option.some_if (not (List.is_empty (publication_inputs contents))) path)
+      Option.some_if (not (List.is_empty (publication_inputs ~paths ~source:path contents))) path)
   |> List.dedup_and_sort ~compare:String.compare
 
-let declarations ~source contents =
-  if String.equal (Stdlib.Filename.basename source) "dune" then publication_inputs contents
+let declarations ?(paths = []) ~source contents =
+  if String.equal (Stdlib.Filename.basename source) "dune" then
+    publication_inputs ~paths ~source contents
   else if String.is_suffix source ~suffix:".mll" || String.is_suffix source ~suffix:".mly" then
     (* This is deliberately a review entry for a generator INPUT. Generating and typechecking a
        historical module would require its historical dependency tree and toolchain. Keep all input

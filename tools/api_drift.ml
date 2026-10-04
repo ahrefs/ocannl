@@ -24,7 +24,10 @@ let source_paths rev =
   Surface.sources ~dunes paths
 
 let resolve rev = git [ "rev-parse"; "--verify"; "--end-of-options"; rev ^ "^{commit}" ]
-let read rev source = git_raw [ "show"; rev ^ ":" ^ source ] |> Surface.declarations ~source
+
+let read rev source =
+  let inventory = if String.equal (Stdlib.Filename.basename source) "dune" then paths rev else [] in
+  git_raw [ "show"; rev ^ ":" ^ source ] |> Surface.declarations ~paths:inventory ~source
 
 let print_side prefix = function
   | None -> ()

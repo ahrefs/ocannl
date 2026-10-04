@@ -1,10 +1,10 @@
 open Base
 module Surface = Test_utils.Api_drift
 
-let declarations source text = Surface.declarations ~source text
+let declarations ?(paths = []) source text = Surface.declarations ~paths ~source text
 
-let changed source before after =
-  Surface.changes (declarations source before) (declarations source after)
+let changed ?(paths = []) source before after =
+  Surface.changes (declarations ~paths source before) (declarations ~paths source after)
 
 let () =
   let inventory =
@@ -93,9 +93,52 @@ let () =
     "(library (name first) (public_name pkg.first) (modules b)) (library (name second) \
      (public_name pkg.second) (modules a))"
   in
+  let owner_reordered =
+    "(library (name second) (public_name pkg.second) (modules b)) (library (name first) \
+     (public_name pkg.first) (modules a))"
+  in
+  Verdict.p_empty "independent Dune stanza reordering does not create API drift"
+    ~over:(declarations "lib/dune" owner_before)
+    (changed "lib/dune" owner_before owner_reordered);
   Verdict.p "Dune module ownership moves produce conservative publication-input entries"
     (List.length (changed "lib/dune" owner_before owner_after) = 2
     && List.length (changed "lib/dune" owner_before "(library (name first) (modules a))") = 2);
+  let parser_config flags =
+    "(menhir (modules parser) (flags " ^ flags
+    ^ ")) (library (name parserlib) (public_name pkg.parserlib) (modules parser))"
+  in
+  Verdict.p "owning generator configuration changes produce manual-review entries"
+    (List.length
+       (changed ~paths:[ "tensor/parser.mly" ] "tensor/dune" (parser_config "--table")
+          (parser_config "--code"))
+     = 1
+    && List.length
+         (changed ~paths:[ "tensor/parser.mly" ] "tensor/dune"
+            "(menhir (modules parser) (merge_into earlier)) (library (name lib) (public_name \
+             pkg.lib))"
+            "(menhir (modules parser) (merge_into later)) (library (name lib) (public_name \
+             pkg.lib))")
+       = 2);
+  let select_config condition =
+    "(library (name backend) (public_name pkg.backend) (modules impl) (libraries (select impl.ml \
+     from (" ^ condition ^ " -> impl.cudajit.ml) (-> impl.missing.ml))))"
+  in
+  Verdict.p "select configuration is visible when its target has an implicit interface"
+    (List.length
+       (changed ~paths:(List.take selected_paths 2) "arrayjit/lib/dune" (select_config "cuda")
+          (select_config "hip"))
+    = 1);
+  Verdict.p_empty "select configuration with an explicit target interface stays quiet"
+    ~over:(declarations ~paths:selected_paths "arrayjit/lib/dune" (select_config "cuda"))
+    (changed ~paths:selected_paths "arrayjit/lib/dune" (select_config "cuda") (select_config "hip"));
+  let private_config flag =
+    "(menhir (modules parser) (flags " ^ flag
+    ^ ")) (library (name lib) (public_name pkg.lib) (modules parser) (private_modules parser))"
+  in
+  Verdict.p_empty "private generator configuration edits stay outside publication inputs"
+    ~over:(declarations ~paths:[ "tensor/parser.mly" ] "tensor/dune" (private_config "--table"))
+    (changed ~paths:[ "tensor/parser.mly" ] "tensor/dune" (private_config "--table")
+       (private_config "--code"));
   let publication_before =
     declarations "lib/dune"
       "(library (name public) (public_name pkg.public) (modules a) (libraries earlier)) (library \

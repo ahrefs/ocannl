@@ -24,21 +24,28 @@ files.
   tagging each addition, removal or change with the commit SHA and subject (the merged PR number
   where Git recorded one). Both endpoints must be on the same first-parent history; the end
   defaults to `HEAD`. Its implicit-module inventory comes from the dead-export census, alongside
-  all interfaces in those roots. OCaml parsing preserves multiline signatures, types, record
-  fields, constructors and module declarations while discarding documentation-only OCaml edits.
+  all interfaces in those roots. Ordinary sources follow that census rather than reconstructing
+  Dune ownership: a future ordinary `private_modules` entry needs manual exclusion. OCaml parsing
+  preserves multiline signatures, types, record fields, constructors and module declarations while
+  discarding documentation-only OCaml edits.
   Movement across surviving declarations is reported conservatively because their order can
   change name resolution; inserting an entry does not flag every unchanged entry that follows it.
-  Anonymous initializers are excluded, including inside mixed let groups; pattern PPX inputs
+  Anonymous value initializers are excluded, including inside mixed let groups; pattern PPX inputs
   stay visible for manual review even when their source binds no ordinary name.
-  Attribute PPXs that export from anonymous initializers or bare evaluations are outside this
+  Anonymous module bindings remain conservative source entries; discard their non-exporting edits
+  during review if such bindings are introduced.
+  Attribute PPXs that export from anonymous value initializers or bare evaluations are outside this
   inventory; inspect their inputs manually if such a producer is introduced.
   Dune supplies the compiled target/interface relationship for select arms and the inputs of
   public lexer/parser modules. A generator input is a conservative review entry: the editor must
   inspect its generated interface, since this tool does not regenerate historical modules or
-  typecheck their dependency trees. Public-library publication fields in Dune produce conservative
-  input entries too, surfacing module-set, owner, wrapping or empty-interface policy changes without
-  reconstructing the installed module/type graph. Inspect that publication relationship manually; dependency-only,
-  private-library and prose Dune edits stay outside these entries.
+  typecheck their dependency trees. The owning configuration of accepted generator/select inputs is
+  retained as a manual-review entry too; private or explicitly interfaced targets stay excluded.
+  Independent Dune stanza reordering is ignored. Public-library publication fields produce
+  conservative input entries too, surfacing module-set, owner, wrapping or empty-interface policy
+  changes without reconstructing the installed module/type graph. Inspect that publication
+  relationship manually; dependency-only, private-library and prose Dune edits stay outside these
+  entries.
   This is a reading aid, not a compatibility gate: implementation bodies are kept because they
   can change an inferred public type, and PPX-generated exports and inferred types still require
   manual review. Record retired or renamed symbols in the resulting bullet so later API-removal

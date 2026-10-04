@@ -4,7 +4,12 @@ public generator inputs follow Dune module ownership and explicit interfaces: tr
 parser tokens and lexer body changes produce generated-interface review entries: true
 private generated modules are excluded while public peers remain visible: true
 Dune empty-interface policy changes produce publication-input review entries: true
+independent Dune stanza reordering does not create API drift: true
 Dune module ownership moves produce conservative publication-input entries: true
+owning generator configuration changes produce manual-review entries: true
+select configuration is visible when its target has an implicit interface: true
+select configuration with an explicit target interface stays quiet: true
+private generator configuration edits stay outside publication inputs: true
 private ownership dependency and prose edits do not change publication entries: true
 a multiline value signature change is visible: true
 record fields and constructors retain their symbol spellings: true
