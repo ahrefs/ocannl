@@ -6,6 +6,27 @@ open Ocannl
 module IDX = Train.IDX
 module H = Bench_harness
 
+(* Opt-in replay data: float32 preserves every observed half/single input exactly. The caller
+   creates the destination directory and selects node IDs; ordinary diagnostics write no dumps. *)
+let dump_replay_values phase tn values =
+  match (Stdlib.Sys.getenv_opt "BENCH_DUMP_DIR", Stdlib.Sys.getenv_opt "BENCH_DUMP_NODES") with
+  | Some dir, Some ids when String.equal phase "step0" ->
+      let selected = String.split ids ~on:',' |> List.map ~f:Int.of_string in
+      if List.mem selected tn.Ir.Tnode.id ~equal:Int.equal then
+        let path = Stdlib.Filename.concat dir (Printf.sprintf "node%d.f32" tn.Ir.Tnode.id) in
+        let ch = Stdlib.open_out_bin path in
+        Exn.protect
+          ~f:(fun () ->
+            Array.iter values ~f:(fun value ->
+                let bits = Stdlib.Int32.bits_of_float value in
+                for byte = 0 to 3 do
+                  Stdlib.output_byte ch
+                    (Stdlib.Int32.to_int
+                       (Stdlib.Int32.logand (Stdlib.Int32.shift_right_logical bits (8 * byte)) 255l))
+                done))
+          ~finally:(fun () -> Stdlib.close_out ch)
+  | _ -> ()
+
 (* Investigation-only observer: reads the compiled routine's actual buffers without changing graph
    construction or placement. Buffer aliasing must be disabled for an after-step snapshot. *)
 let snapshot ctx phase nodes =
@@ -25,7 +46,8 @@ let snapshot ctx phase nodes =
       Stdio.printf
         "snapshot %s %d %s count=%d finite=%d hash=%Lx min=%h max=%h sum=%h squares=%h\n%!" phase
         tn.Ir.Tnode.id (Ir.Tnode.debug_name tn) (Array.length values) !finite !hash !lo !hi !sum
-        !squares)
+        !squares;
+      dump_replay_values phase tn values)
 
 let () =
   let st = Safetensors.read (Stdlib.Sys.getenv "BENCH_FIXTURE") in

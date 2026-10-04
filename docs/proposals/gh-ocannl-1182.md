@@ -85,6 +85,21 @@ addresses the independently reproduced load corruption. Parameter snapshots
 and host optimizer-gate state in `bench_gpt_diag` support the bounded follow-up
 on training. Correctness probes disable dominant-kernel instrumentation.
 
+At `1126d85abd286af5cd8522316606140cb888a157`, s1024 training completed
+with six finite losses and maximum relative error `0.000137887`, within that
+same envelope. Base-training default and graph-capture-disabled controls
+launched no optimizer steps in six parity steps: their gradient checksums were
+NaN and all 52 master parameter hashes stayed unchanged while loss scaling
+backed off. The materialized control skipped its first step, then launched five
+optimizer steps; 43 master parameter hashes changed. In the default's final
+buffer observations, the earliest producer with a nonfinite final output was
+segment 155's last-layer softmax denominator gradient (16 of 8192 rows).
+Its stored scores, maxima, denominators and incoming softmax gradients were
+finite. This identifies the next replay boundary; it does not yet establish
+which arithmetic or instruction first produced a nonfinite value.
+`BENCH_DUMP_DIR` with `BENCH_DUMP_NODES` optionally saves selected step-zero
+buffers as little-endian float32 data for exact half/single-input replay.
+
 Durable raw scripts, hashes, code objects, disassembly and logs are retained
 under `~/.local/state/issue-wave/wave2-20261004/1182-scratch` on TUF, with
 `1182-forcezero-runs/run-1/{log,rc}` recording the successful control leg.
