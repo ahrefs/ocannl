@@ -4338,7 +4338,9 @@ let simplify_llc ?fp_algebra static_indices llc =
           match v2 with
           | Constant c, _
             when Float.is_finite c && Float.is_integer c
-                 && Float.(abs c <= 8.)
+                 (* Negative powers keep the helper's reciprocal-after-positive-power order;
+                    [unroll_pow] instead reciprocates the base before multiplication. *)
+                 && Float.(c >= 0. && c <= 8.)
                  &&
                  let rec effect_free = function
                    | Local_scope _ -> false

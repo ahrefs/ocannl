@@ -3,6 +3,8 @@ ipow_f32: known integers bypass floating pow: true
 constant integer powers remain at target precision through simplification: true
 constant and materialized integer powers share f32 multiplication rounding: true
 non-dyadic cubic rounds each target multiplication: true
+negative powers retain reciprocal-after-positive-power ordering when unrolling is enabled: true
+executed negative powers agree across simplifier configurations after positive-power overflow: true
 ipow_f16: integer powers match independent multiplication including exceptional values: true
 ipow_f16: known integers bypass floating pow: true
 ipow_f64: integer powers match independent multiplication including exceptional values: true

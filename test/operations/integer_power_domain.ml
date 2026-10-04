@@ -106,6 +106,37 @@ let () =
         (Int32.equal (Int32.bits_of_float got.(0)) 0x3e396287l))
 
 let () =
+  Verdict.case "reciprocal ordering" (fun () ->
+      LL.optimize_integer_pow := true;
+      let node = Ll_test.node_factory ~first_id:18600 ~dims:[| 2 |] () in
+      let input = node "ipow_recip_input" and output = node "ipow_recip_output" in
+      List.iter [ input; output ] ~f:Ll_test.materialize;
+      let body i =
+        Ll_test.set output
+          [| Ll_test.fixed i |]
+          (LL.Binop
+             ( ToPowOf,
+               (Ll_test.get input [| Ll_test.fixed 0 |], Ops.single),
+               (Ll_test.c (-2.), Ops.single) ))
+      in
+      let without_pow = LL.simplify_llc ~fp_algebra:"none" [] (body 0) in
+      let with_pow = LL.simplify_llc ~fp_algebra:"pow" [] (body 1) in
+      p "negative powers retain reciprocal-after-positive-power ordering when unrolling is enabled"
+        (match with_pow with LL.Set { llsc = LL.Binop (ToPowOf, _, _); _ } -> true | _ -> false);
+      let o = Ll_test.optimize ~name:"ipow_recip" (Ll_test.seq without_pow with_pow) in
+      let got =
+        List.hd_exn
+          (Ll_test.execute ~name:"ipow_recip" o
+             ~seed:[ (input, [| f32 1e20; f32 1e20 |]); (output, [| 99.; 99. |]) ]
+             ~read:[ output ])
+      in
+      p
+        "executed negative powers agree across simplifier configurations after positive-power \
+         overflow"
+        (bitwise got.(0) 0. && bitwise got.(1) got.(0));
+      LL.optimize_integer_pow := false)
+
+let () =
   run ~prec:Ops.half ~name:"ipow_f16" ~narrow:(fun x ->
       Ops.half_to_single (Ops.single_to_half (f32 x)))
 
