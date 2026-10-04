@@ -6,6 +6,49 @@ open Ocannl
 module IDX = Train.IDX
 module H = Bench_harness
 
+(* Opt-in replay data: float32 preserves every observed half/single input exactly. The caller
+   creates the destination directory and selects node IDs; ordinary diagnostics write no dumps. *)
+let dump_replay_values phase tn values =
+  match (Stdlib.Sys.getenv_opt "BENCH_DUMP_DIR", Stdlib.Sys.getenv_opt "BENCH_DUMP_NODES") with
+  | Some dir, Some ids when String.equal phase "step0" ->
+      let selected = String.split ids ~on:',' |> List.map ~f:Int.of_string in
+      if List.mem selected tn.Ir.Tnode.id ~equal:Int.equal then
+        let path = Stdlib.Filename.concat dir (Printf.sprintf "node%d.f32" tn.Ir.Tnode.id) in
+        let ch = Stdlib.open_out_bin path in
+        Exn.protect
+          ~f:(fun () ->
+            Array.iter values ~f:(fun value ->
+                let bits = Stdlib.Int32.bits_of_float value in
+                for byte = 0 to 3 do
+                  Stdlib.output_byte ch
+                    (Stdlib.Int32.to_int
+                       (Stdlib.Int32.logand (Stdlib.Int32.shift_right_logical bits (8 * byte)) 255l))
+                done))
+          ~finally:(fun () -> Stdlib.close_out ch)
+  | _ -> ()
+
+(* Investigation-only observer: reads the compiled routine's actual buffers without changing graph
+   construction or placement. Buffer aliasing must be disabled for an after-step snapshot. *)
+let snapshot ctx phase nodes =
+  Set.iter nodes ~f:(fun tn ->
+      let values = Context.get_values ctx tn in
+      let finite = ref 0 and lo = ref Float.infinity and hi = ref Float.neg_infinity in
+      let sum = ref 0. and squares = ref 0. and hash = ref 0L in
+      Array.iter values ~f:(fun v ->
+          hash :=
+            Stdlib.Int64.add (Stdlib.Int64.mul !hash 1099511628211L) (Stdlib.Int64.bits_of_float v);
+          if Float.is_finite v then (
+            Int.incr finite;
+            lo := Float.min !lo v;
+            hi := Float.max !hi v;
+            sum := !sum +. v;
+            squares := !squares +. (v *. v)));
+      Stdio.printf
+        "snapshot %s %d %s count=%d finite=%d hash=%Lx min=%h max=%h sum=%h squares=%h\n%!" phase
+        tn.Ir.Tnode.id (Ir.Tnode.debug_name tn) (Array.length values) !finite !hash !lo !hi !sum
+        !squares;
+      dump_replay_values phase tn values)
+
 let () =
   let st = Safetensors.read (Stdlib.Sys.getenv "BENCH_FIXTURE") in
   let { Bench_gpt_model.ctx; batch_loss; step_shape; bindings; batch_n; n_batches; mapping; _ } =
@@ -36,6 +79,27 @@ let () =
     backend
     (Unix.gettimeofday () -. t0);
   let ctx_ref = ref ctx in
+  let snapshots = H.env_flag "BENCH_SNAPSHOT" in
+  if snapshots && Utils.get_global_flag ~default:false ~arg_name:"buffer_aliasing" then
+    failwith "BENCH_SNAPSHOT requires buffer_aliasing=false";
+  let shipped = H.compiled_step_routines routines in
+  let inputs =
+    List.fold shipped
+      ~init:(Set.empty (module Ir.Tnode))
+      ~f:(fun nodes r -> Set.union nodes r.Context.inputs)
+  in
+  let outputs =
+    List.fold shipped
+      ~init:(Set.empty (module Ir.Tnode))
+      ~f:(fun nodes r -> Set.union nodes r.Context.outputs)
+  in
+  let params =
+    Set.fold batch_loss.Tensor.params
+      ~init:(Set.empty (module Ir.Tnode))
+      ~f:(fun nodes p -> Set.add nodes p.Tensor.value)
+  in
+  if snapshots then snapshot !ctx_ref "inputs" (Set.diff inputs outputs);
+  if snapshots then snapshot !ctx_ref "parameters-before" params;
   let batch_ref = IDX.find_exn (H.train_step_bindings routines) batch_n in
   let run step =
     batch_ref := step % n_batches;
@@ -43,17 +107,34 @@ let () =
     Context.sync !ctx_ref
   in
   (* Full-step controls precede isolated timing, which mutates gradients and parameters. *)
-  if H.env_flag "BENCH_STEPS" then
-    for step = 0 to 2 do
+  if
+    H.env_flag "BENCH_STEPS"
+    || Option.equal String.equal (Stdlib.Sys.getenv_opt "BENCH_STEPS") (Some "parity")
+  then
+    let steps =
+      match Stdlib.Sys.getenv_opt "BENCH_STEPS" with
+      | Some "parity" -> (H.protocol_of_st st).H.parity_steps
+      | _ -> 3
+    in
+    for step = 0 to steps - 1 do
       let t0 = Unix.gettimeofday () in
       run step;
       let open Operation.At in
       Stdio.printf "step %d: %.1f ms loss: %.7f\n%!" step
         ((Unix.gettimeofday () -. t0) *. 1000.)
-        (!ctx_ref, batch_loss).@[0]
+        (!ctx_ref, batch_loss).@[0];
+      if snapshots then (
+        (match routines with
+        | H.Host_gate (scaler, checksum, _, _) ->
+            Stdio.printf "gate step=%d optimizer_runs=%d scale=%h checksum=%h\n%!" step
+              !H.host_gated_optimizer_runs
+              (Mixed_prec.Loss_scaler.scale_value scaler)
+              (!ctx_ref, checksum).@[0]
+        | _ -> ());
+        snapshot !ctx_ref ("parameters-step" ^ Int.to_string step) params;
+        if step = 0 then snapshot !ctx_ref "step0" outputs)
     done
   else if H.env_flag "BENCH_SEG_TIMES" then run 0;
-  let shipped = H.compiled_step_routines routines in
   if Option.is_none forward_opt then H.print_shipped_census shipped;
   if H.env_flag "BENCH_SEG_TIMES" then
     match forward_opt with

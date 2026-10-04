@@ -917,6 +917,24 @@
    cc_post_compile_cause-codesign_debug.actual)))
 
 (test
+ (name hip_half_load)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules hip_half_load)
+ (libraries base ocannl stdio ll_test arrayjit.verdict))
+
+(test
+ (name hip_half_masked_gradient)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules hip_half_masked_gradient)
+ (libraries base ocannl stdio ll_test arrayjit.verdict))
+
+(test
  (name half_softmax)
  (package neural_nets_lib)
  (deps

@@ -4,14 +4,22 @@
    without linking its optional library or requiring a device. The per-toolchain math-policy
    rationale and measurements live with each builder in the implementation. *)
 
+val hip_wait_options : target_archs:string list -> string list
+(** The conservative wait-counter workaround for the observed gfx1102 half-load hazard. Used by both
+    the compiler and its schedule-cache regime. An empty list selects no workaround. A mixed set
+    containing gfx1102 is covered because HIP compilation is backend-wide and its artifact can link
+    on any device. *)
+
 val hiprtc :
+  target_archs:string list ->
   hip_include_options:string list ->
   rocwmma_include_options:string list ->
   uses_rocwmma:bool ->
   with_debug:bool ->
   string list
 (** The hiprtc (HIP) option vector: includes, then the clang fast-math umbrella with its
-    left-to-right overrides ([-fno-associative-math], [-fhonor-infinities]), then debug. *)
+    left-to-right overrides ([-fno-associative-math], [-fhonor-infinities]), the target's load-wait
+    workaround, then debug. *)
 
 val nvrtc_reassociation_opt_in : string
 (** nvrtc's opt-IN for floating-point reassociation. It exists here only so {!nvrtc} can be checked

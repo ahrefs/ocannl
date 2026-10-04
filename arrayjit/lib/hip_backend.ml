@@ -319,6 +319,15 @@ end = struct
   let mma_supported () =
     Lazy.force all_rdna_wave32 && Option.is_some (Lazy.force rocwmma_include_dir)
 
+  (* Compilation is backend-wide, not per-context. A compiled artifact may link on any device, so
+     the guard must cover the linkable set even when HIPRTC's implicit current-device target is a
+     different ordinal. Querying attributes does not switch that current target. The cache uses this
+     same set and option selector. *)
+  let hiprtc_target_archs () =
+    Array.init (num_devices ()) ~f:(fun ordinal ->
+        (H.Device.get_attributes (H.Device.get ~ordinal)).gcn_arch_name)
+    |> Array.to_list
+
   let%diagn2_sexp hip_to_code ~name hip_src =
     let name_hip = name ^ ".hip" in
     let uses_rocwmma = C_syntax.source_mentions ~marker:"rocwmma::" hip_src in
@@ -356,7 +365,9 @@ end = struct
        after fast math at compiler scope, covering operators parsed in the HIP headers; its complete
        option matrix is tested without hipjit in arrayjit/test. *)
     let options =
-      Compiler_options.hiprtc ~hip_include_options:hip_include_opt
+      Lazy.force ensure_initialized;
+      let target_archs = hiprtc_target_archs () in
+      Compiler_options.hiprtc ~target_archs ~hip_include_options:hip_include_opt
         ~rocwmma_include_options:rocwmma_include_opt ~uses_rocwmma
         ~with_debug:(Utils.with_runtime_debug ())
     in
@@ -1614,7 +1625,15 @@ end = struct
          configurable, so the two regimes needed distinct cache entries; it is now unconditional,
          and a constant contributes nothing to a tag. Restore a component here if the guard ever
          becomes conditional again — say on a ROCm version predicate, once upstream fixes it. *)
-      ^ if Utils.with_runtime_debug () then "/device-debug" else "/no-device-debug"
+      ^ (if Utils.with_runtime_debug () then "/device-debug" else "/no-device-debug")
+      (* Derive the cache regime from the same option selector the compiler uses. A pre-workaround
+         crown is not evidence for the conservative load-wait regime. Limits describe this backend's
+         device set, so include every device's policy. *)
+      ^
+      let target_archs = hiprtc_target_archs () in
+      match Compiler_options.hip_wait_options ~target_archs with
+      | [] -> ""
+      | options -> "/hiprtc-load-wait:" ^ Compiler_options.render options
       (* No [bf16_accum_wide] component (gh-ocannl-1117): gh-ocannl-1051 added one by hand when
          [Bf16_auto] went wide here with the configured mode unchanged, but what a mode resolves to
          is now cache identity by derivation — [Schedule_cache.codegen_tag] tabulates this backend's

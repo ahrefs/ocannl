@@ -145,6 +145,7 @@ Test tags, spelled `N:test-<reason>` and outside the library's number space:
   997:test-setup
   998:test-setup
   999:test-setup
+  1182:test-half-gradient-replay
 The phase table in test/operations/virtual_rejection_boundary.ml is held to those functions:
   Store -- arrayjit/lib/low_level.ml, check_and_store_virtual
   Consumption -- arrayjit/lib/low_level.ml, instantiate_computations

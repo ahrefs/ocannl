@@ -1,0 +1,3 @@
+half-load replay writes every cell with a finite value: true
+half-load replay leaves every masked lane exactly zero: true
+half-load replay preserves max subtraction within half resolution: true

@@ -16,8 +16,13 @@ let claims =
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
 
 let check_hiprtc () =
+  Hip.init ();
+  let target_archs =
+    List.init (Hip.Device.get_count ()) ~f:(fun ordinal ->
+        (Hip.Device.get_attributes (Hip.Device.get ~ordinal)).gcn_arch_name)
+  in
   let expected_options =
-    Ir.Compiler_options.hiprtc
+    Ir.Compiler_options.hiprtc ~target_archs
       ~hip_include_options:(Hip_backend.hip_include_options ())
       ~rocwmma_include_options:[] ~uses_rocwmma:false ~with_debug:(Utils.with_runtime_debug ())
   in

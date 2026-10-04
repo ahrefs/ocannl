@@ -74,6 +74,13 @@ let () =
   let run_step () =
     batch_ref := !step_count % n_batches;
     H.run_train_step routines ctx_ref ~step:!step_count;
+    (if H.env_flag "BENCH_GATE_TRACE" then
+       match routines with
+       | H.Host_gate (scaler, _, _, _) ->
+           Stdio.eprintf "bench: gate step %d optimizer_runs=%d scale=%h\n%!" !step_count
+             !H.host_gated_optimizer_runs
+             (Mixed_prec.Loss_scaler.scale_value scaler)
+       | _ -> ());
     Int.incr step_count
   in
   let open Operation.At in
