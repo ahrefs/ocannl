@@ -26,10 +26,9 @@ In approximate numerics on both sides it is 4.3x slower than PyTorch and 3.6x sl
 August: no August report covers Metal; the August commit re-run here tonight gives 5.8x and 5.3x, and OCANNL's step time fell 10.95 to 8.33 ms (1.31x).
 
 **tuf-amd-linux, HIP, Radeon RX 7700S (gfx1102, discrete VRAM).**
-GPT-2-mini is **1.36x slower than PyTorch** (`torch.compile`; 1.09x *faster* than eager) and **1.32x slower than tinygrad** (BEAM=2; 1.08x slower than its JIT), exact.\*
-In approximate numerics on both sides it is 1.20x slower than PyTorch and 1.17x slower than tinygrad.\*
-August: the August commit re-run here tonight gives 1.59x and 1.55x, and OCANNL's step time fell 7.82 to 6.69 ms (1.17x).
-\*Provenance-flagged: every master timing process on this box re-searched one tuner arm before timing (parity passed; see the tuf section).
+GPT-2-mini is **at most 1.6x slower than PyTorch** (`torch.compile`; about level with eager) and **at most 1.6x slower than tinygrad** (BEAM=2; 1.3x slower than its JIT), exact: those are the August commit's clean figures, and master is faster.
+No clean master figure exists on this box: every master timing process re-searched a tuner arm the tuner refuses to cache here, which the protocol does not quote (the tuf section has the diagnostic readings and why).
+August: the August commit re-run here tonight is that 1.59x and 1.55x; there is no August report for this box.
 
 **minix-amd-linux, HIP, Radeon 8060S (gfx1151, unified memory).**
 No PyTorch figure: the box's PyTorch ROCm wheel segfaults on this GPU. GPT-2-mini is **1.5x slower than tinygrad** (BEAM=2; 1.2x *faster* than its JIT), exact.
@@ -38,19 +37,20 @@ August: the August commit re-run here tonight gives 2.6x slower than tinygrad BE
 
 ## Headline set
 
-The scope comment's headline set is rog, Metal and one HIP row. The HIP row is tuf, the only HIP
-box with a PyTorch figure, and its OCANNL numbers carry the provenance flag; minix supplies a
-clean OCANNL-against-tinygrad figure on HIP. "x" is how many times slower OCANNL is.
+The scope comment's headline set is rog, Metal and one HIP row. No HIP box gives a complete clean
+row: minix (unified) has clean OCANNL figures and no PyTorch, tuf (discrete) has PyTorch and no
+clean OCANNL master figure, only the August commit's, which bounds master from above. Both are
+listed. "x" is how many times slower OCANNL is.
 
 | box | device, memory | OCANNL exact ms | exact: vs PyTorch / vs tinygrad | approximate: vs PyTorch / vs tinygrad | August commit, tonight: vs PyTorch / vs tinygrad | OCANNL since August |
 |---|---|---|---|---|---|---|
 | rog-nv-linux | CUDA RTX 5070 Ti Laptop, discrete | 3.50 | **3.41x / 2.18x** | 8.04x / 2.80x | 6.90x / 4.41x (Aug. report: 6.4x / 4.6x) | 2.02x faster |
 | mac-studio | Metal M4 Max, unified | 8.33 | **4.40x / 4.04x** | 4.30x / 3.61x | 5.78x / 5.31x | 1.31x faster |
-| tuf-amd-linux | HIP gfx1102, discrete | 6.69\* | **1.36x / 1.32x**\* | 1.20x / 1.17x\* | 1.59x / 1.55x | 1.17x faster\* |
+| tuf-amd-linux | HIP gfx1102, discrete | not quotable | **at most 1.59x / 1.55x** (the August commit's) | not quotable | 1.59x / 1.55x | faster, by an unquotable amount |
 | minix-amd-linux | HIP gfx1151, unified | 4.76 | n/a / **1.54x** | n/a / 1.52x | n/a / 2.55x | 1.66x faster |
 
 PyTorch is `torch.compile` (exact-pinned for the exact column, torch defaults for the
-approximate one), tinygrad is BEAM=2 in both. \* provenance-flagged (tuf section).
+approximate one), tinygrad is BEAM=2 in both.
 
 ## What the comparison is, and what changed since August
 
@@ -210,21 +210,23 @@ measured on this box directly, but everything that bears on it says little: on t
 boxes the search pass and the clean replays of the same artifact agree within -1.1% to +3.3%; here,
 the master exact search pass (which searched both arms) read 6.658 ms against 6.685 ms for the
 passes that searched only arm B, and the August arm's clean replays sit within 0.1% of its own
-search pass. The taglines quote the italic figures with the flag attached.
+search pass. Those readings are diagnostics: the taglines and the headline do not use them, and
+quote for this box only the August commit's clean figures, which bound master from above.
 
 | OCANNL is ... slower | than `torch.compile` | than torch eager | than tinygrad BEAM=2 | than tinygrad JIT |
 |---|---|---|---|---|
-| exact, vs exact-pinned torch (*provenance-flagged*) | **1.36x** | 0.92x (1.09x faster) | **1.32x** | 1.08x |
-| approximate, vs torch defaults (*provenance-flagged*) | **1.20x** | 0.80x (1.26x faster) | **1.17x** | 0.95x (1.05x faster) |
-| August `7014dc44`, exact, vs exact-pinned torch | 1.59x | 1.07x | 1.55x | 1.27x |
+| August `7014dc44`, exact, vs exact-pinned torch (clean) | **1.59x** | 1.07x | **1.55x** | 1.27x |
+| *diagnostic, not quotable:* master exact, vs exact-pinned torch | *1.36x* | *0.92x* | *1.32x* | *1.08x* |
+| *diagnostic, not quotable:* master approximate, vs torch defaults | *1.20x* | *0.80x* | *1.17x* | *0.95x* |
 
 - This is the closest race of the four boxes: on a small discrete RDNA3 part neither PyTorch nor
-  tinygrad gets far from OCANNL, and OCANNL beats torch eager in both regimes.
-- OCANNL improved least here, 1.17x (7.82 to 6.69 ms), and the window's one search per arm matters:
+  tinygrad gets far from OCANNL; even the August commit is level with torch eager.
+- On the diagnostic readings OCANNL improved least here, 1.17x (7.82 to 6.69 ms), and the window's
+  one search per arm matters:
   the prep smoke's independent search had found a 5.98 ms exact schedule (shared box, not
   quotable), against the window's 6.69 ms, 12% slower (the approximate arm went the other way,
   6.34 ms in the smoke against 5.89 ms). On the other boxes the smoke and the window differ by 1-6%.
-- The approximate profile helps here (5.89 against 6.69 ms).
+- On the diagnostic readings the approximate profile helps here (5.89 against 6.69 ms).
 - **tinygrad's BEAM search wedged this GPU three times** (`amdgpu ... device wedged, but recovered
   through reset` at 01:53, 02:15 and 03:24): two of those cells died (`HW fault ...
   memory_lost=1`, `MMU fault`), and the 02:15 one finished across the reset with the outlying
@@ -336,8 +338,8 @@ running only the smoke), all parity-passing:
    of their searches. A contention verdict that the same candidates reproduce on an exclusive box
    is a property of those candidates, not of the box, and should not veto the cache.
 2. **The approximate profile slows tuned `gpt2_mini` down on CUDA, the one backend with tf32**:
-   rog 4.49 against 3.50 ms exact, although that arm ships tf32 mma; it helps on tuf (5.89 against
-   6.69) and Metal (7.46 against 8.33) and is neutral on minix (4.69 against 4.76). torch's
+   rog 4.49 against 3.50 ms exact, although that arm ships tf32 mma; it helps on tuf (diagnostic:
+   5.89 against 6.69) and Metal (7.46 against 8.33) and is neutral on minix (4.69 against 4.76). torch's
    defaults gain 2x on rog. For a v1.1 whose goal is performance in the approximate profile on
    transformer workloads, the rog row is the one to look at first.
 3. **minix's bench venv cannot run PyTorch**: torch 2.13.0+rocm7.1 segfaults in its bundled
@@ -366,5 +368,10 @@ cd <master>/benchmarks
 
 On rog, `C_INCLUDE_PATH` pointed at the extracted headers (rog section). The raw records (every row,
 every cell log, the order, the failures, `env.json`) are in `~/.local/state/gh1181/measure/` on
-each box; the driver that produced them is the checked-in one (sha256 `9676a065…`, recorded in
-each `env.json`).
+each box. The driver that produced them is recorded by sha256 in each `env.json` (`9676a065…`, the
+version at the PR's third commit). Review fixes since then change only bookkeeping that nothing
+quoted here reads: completion passes' searches now add to the reported search cost (no completion
+pass ever produced a clean replay), the last allowed completion pass is no longer also written
+once more to `checked.jsonl` (tuf's file has those duplicates; `timings.jsonl` does not),
+`--summarize` keeps the measured `wall_s` and failure count, `--repeats 0` is refused, and a
+wrong-backend row is kept, marked, in `raw.jsonl` (none occurred).

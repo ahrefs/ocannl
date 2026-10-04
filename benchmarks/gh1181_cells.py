@@ -80,6 +80,9 @@ def parse_args(argv=None):
     ap.add_argument("--summarize", action="store_true",
                     help="only (re)write summary.json/summary.md from an existing --out")
     a = ap.parse_args(argv)
+    if a.repeats < 1:
+        # One repeat is the smoke mode (every cell runs and is gated, no medians); none runs nothing.
+        ap.error("--repeats must be at least 1")
     if not a.summarize:
         if not a.backend or not a.box:
             ap.error("--backend and --box are required to measure")
@@ -234,6 +237,7 @@ def measure(a):
     start = time.monotonic()
     failures = []
     searched_once = {}  # (workload, arm) -> the latest search pass, gated with its repeat
+    search_cost = {}  # (workload, arm) -> compile_s of that search plus its completion passes
 
     def fail(workload, arm, repeat, stage, why):
         failures.append({"workload": workload, "arm": arm, "repeat": repeat, "stage": stage,
@@ -256,13 +260,16 @@ def measure(a):
             return None
         framework = row.get("framework")
         want = expected_backend(framework, a.backend, reference=(arm == "reference"))
-        if row.get("backend") != want:
-            fail(workload, arm, repeat, stage,
-                 f"ran on backend {row.get('backend')!r}, expected {want!r}")
-            return None
         tree = ARMS.get(arm, (None, None))[1]
         row.update(stamps[workload], box=a.box, arm=arm, repeat=repeat, stage=stage, regime=regime,
                    revision=shas.get(tree) if framework == "ocannl" else None)
+        if row.get("backend") != want:
+            # Kept in raw.jsonl, marked, as the evidence of where the cell ran; never a timing.
+            row["wrong_backend"] = want
+            append(out, "raw.jsonl", row)
+            fail(workload, arm, repeat, stage,
+                 f"ran on backend {row.get('backend')!r}, expected {want!r}")
+            return None
         append(out, "raw.jsonl", row)
         return row
 
@@ -304,6 +311,7 @@ def measure(a):
                         if search is not None:
                             rows.append(search)
                             searched_once[(workload, arm)] = search
+                            search_cost[(workload, arm)] = search["compile_s"]
                     if search is None:
                         continue
                     # The tuner caches nothing from a search whose timings it found contended
@@ -311,18 +319,23 @@ def measure(a):
                     # arm again. Such a pass is a cache completion, not a timing: it is recorded
                     # and followed by a fresh process, up to COMPLETION_PASSES times; only a
                     # process that replayed every arm supplies the timing.
+                    # A completion's searches are part of what the replayed cache cost, so they
+                    # accumulate into the arm's search cost. The last allowed pass, searched or not,
+                    # is the arm's timing row (and fails the provenance gate if it searched).
                     for attempt in range(COMPLETION_PASSES + 1):
                         stage = "replay" if attempt == 0 else f"replay{attempt + 1}"
                         replay = run(workload, arm, repeat, stage, cmd, env, root / "benchmarks",
                                      regime)
-                        if replay is None or o.search_provenance(replay) != "SEARCHED":
+                        if (replay is None or o.search_provenance(replay) != "SEARCHED"
+                                or attempt == COMPLETION_PASSES):
                             break
                         replay["stage"] = f"completion{attempt + 1}"
                         rows.append(replay)
+                        search_cost[(workload, arm)] += replay["compile_s"]
                     if replay is None:
                         continue
                     rows.append(replay)
-                    replay["search_compile_s"] = search["compile_s"]
+                    replay["search_compile_s"] = search_cost[(workload, arm)]
                     replay["search_pass"] = o.search_provenance(search)
                     replay["provenance_ok"] = (replay["search_pass"] == "SEARCHED"
                                                and o.search_provenance(replay) == "REPLAY")
@@ -459,6 +472,9 @@ def main(argv=None):
     if a.summarize:
         out = a.out.resolve()
         summary = summarize(out)
+        # The run's own facts are not derived from the rows; keep them from the measured summary.
+        old = json.loads((out / "summary.json").read_text()) if (out / "summary.json").exists() else {}
+        summary.update({k: old[k] for k in ("failures", "wall_s") if k in old})
         (out / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
         print((out / "summary.md").read_text())
         return 0
