@@ -35,6 +35,7 @@ search off replays exactly when a complete search committed a cache entry: true
 cache replay under search off gives correct elementwise values: true
 cache replay under search off gives correct matmul values: true
 the four calls report outcomes consistent with contention-aware cacheability: true
+cache replay and search-disabled calls retry no timing windows: true
 a report that neither searched nor replayed timed nothing: true
 search off replays the chosen default cache exactly after a complete search: true
 search off ignores the unchosen default cache directory: true

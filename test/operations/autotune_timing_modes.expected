@@ -36,6 +36,7 @@ a batching depth reuses nothing and dispatches its whole window: true
 == Metal queued contention retry ==
 a transiently contended Metal window retries once and admits the fresh window: true
 persistent Metal contention retries once and remains refused: true
+recovered and refused retries each count one discarded first window: true
 the returned window excludes the discarded samples and accounts for every launch: true
 cc queued contention gets no extra dispatches: true
 contended isolated timing never retries and dispatches exactly its 16 samples: true

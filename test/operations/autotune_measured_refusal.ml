@@ -118,6 +118,8 @@ let () =
         r.Autotune.timings_contended r.candidates_contended r.candidates_timed;
       p "the search completed" (match r.outcome with Autotune.Searched -> true | _ -> false);
       p "default_refused" r.default_refused;
+      p "every started retry is retained in the search report"
+        (r.timings_retried = List.length !retried);
       p "at least one window was refused" (r.timings_contended >= 1);
       p "every refused window is one the seam or the host refused"
         (r.timings_contended = !seam_refused + List.length host_refused);

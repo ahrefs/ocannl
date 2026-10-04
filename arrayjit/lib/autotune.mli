@@ -731,6 +731,11 @@ type report = {
           evidence for "was this search's measurement set complete?", and for nothing narrower — see
           [candidates_contended] and [default_refused] for the per-candidate facts. Includes the
           [timings_unbatched] windows. *)
+  timings_retried : int;
+      (** Baseline and candidate timing calls that started a fresh contention retry (Metal queued
+          timing only). Counts each discarded first window once, whether its retry was admitted,
+          refused or failed. Independent of [timings_contended], which counts final refusals only.
+          Zero on cache replay and search-disabled calls. Excludes diagnostic control timing. *)
   timings_unbatched : int;
       (** Of [timings_contended], the windows refused because queued calibration measured no batch
           within its target ({!field-unbatched}, gh-ocannl-1098) rather than for dispersion or a
@@ -1521,14 +1526,16 @@ val timing_of_setting : string -> timing_mode
     raises [Invalid_argument] on anything else. *)
 
 val time_routine :
+  ?on_retry:(unit -> unit) ->
   ?tag_failures:bool ->
   timing:timing_mode ->
   repeats:int ->
   Context.t ->
   Context.routine ->
   timing_result
-(** The tuner's own instrument, exposed so a harness can rank candidates by exactly what a search
-    ranks them by (gh-ocannl-755) rather than by a re-derivation of it. Binds test values
+(** [on_retry] defaults to a no-op and observes each fresh contention retry as it starts. The
+    tuner's own instrument, exposed so a harness can rank candidates by exactly what a search ranks
+    them by (gh-ocannl-755) rather than by a re-derivation of it. Binds test values
     ({!set_test_bindings}) and restores the routine's bindings afterwards, runs one warmup, then
     minimizes the per-launch time over at least 16 and [repeats] timed runs, topping up until ~25 ms
     of per-launch samples has accumulated (up to 64 runs unless the [repeats] floor is larger) so
@@ -1610,6 +1617,7 @@ val on_batch_depth : (int -> calibration_samples:int -> unit) ref
     it. *)
 
 val calibrate_and_time :
+  on_retry:(unit -> unit) ->
   retry_contended:bool ->
   timing:timing_mode ->
   repeats:int ->
@@ -1623,7 +1631,8 @@ val calibrate_and_time :
     and the historical cc/Metal single estimate. Exposed so a test can drive the whole timing policy
     on an injected clock and count its launches exactly (gh-ocannl-1074). [retry_contended] is
     {!retry_contended_window_for_backend}'s value for the backend being modelled; it enables one
-    retry only under [Queued], never [Isolated]. *)
+    retry only under [Queued], never [Isolated]. [on_retry] runs once when that fresh retry starts,
+    before {!on_timing_retry} and before any retry dispatch, for search accounting. *)
 
 val retry_contended_window_for_backend : string -> bool
 (** The backend whose contended queued windows get one immediate retry: Metal only. *)

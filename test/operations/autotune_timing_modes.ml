@@ -307,6 +307,7 @@ type synthetic_call = {
   window_batches : int;
   reused_batches : int;
   retry_windows : (int * int) list;
+  retries_started : int;
   window_reports : int;
   fresh_launches : int;
   all_launches : int;
@@ -342,7 +343,7 @@ let synthetic_call ?(repeats = 3) ?(retry_contended = false) ?walls ~timing ~cap
     wall
   in
   let window = ref None and unreported = ref [] and retry_windows = ref [] in
-  let window_reports = ref 0 in
+  let window_reports = ref 0 and retries_started = ref 0 in
   let old_depth = !Autotune.on_batch_depth
   and old_window = !Autotune.on_timed_window
   and old_probe = !Autotune.on_calibration_probe
@@ -369,7 +370,9 @@ let synthetic_call ?(repeats = 3) ?(retry_contended = false) ?walls ~timing ~cap
            Int.incr window_reports;
            window := Some (samples, reused, !launches));
       let reading =
-        Autotune.calibrate_and_time ~retry_contended ~timing ~repeats ~queue_depth_cap:cap ~batch
+        Autotune.calibrate_and_time
+          ~on_retry:(fun () -> Int.incr retries_started)
+          ~retry_contended ~timing ~repeats ~queue_depth_cap:cap ~batch
       in
       let settled_depth, calibration_launches, at_decision = Option.value_exn !decided in
       let window_batches, reused_batches, at_window = Option.value_exn !window in
@@ -380,6 +383,7 @@ let synthetic_call ?(repeats = 3) ?(retry_contended = false) ?walls ~timing ~cap
         window_batches;
         reused_batches;
         retry_windows = List.rev !retry_windows;
+        retries_started = !retries_started;
         window_reports = !window_reports;
         fresh_launches = at_window - at_decision;
         all_launches = !launches;
@@ -503,6 +507,8 @@ let () =
     (List.equal Poly.equal refused.retry_windows [ (16, 0) ]
     && Option.is_none (Autotune.admitted_timing_ms refused.reading)
     && refused.reading.contended && refused.window_batches = 16);
+  p_all "recovered and refused retries each count one discarded first window" [ recovered; refused ]
+    ~f:(fun c -> c.retries_started = 1);
   p_all "the returned window excludes the discarded samples and accounts for every launch"
     [ recovered; refused ] ~f:(fun c ->
       c.reading.samples = c.window_batches
@@ -510,17 +516,17 @@ let () =
       && c.all_launches = c.calibration_launches + (c.settled_depth * (16 + c.window_batches)));
   p_all "cc queued contention gets no extra dispatches" [ "cc"; "multidev_cc" ] ~f:(fun backend ->
       let c = call ~backend ~timing:Autotune.Queued ~persistent:false in
-      List.is_empty c.retry_windows && c.reading.contended
+      c.retries_started = 0 && List.is_empty c.retry_windows && c.reading.contended
       && c.all_launches = c.calibration_launches + (c.settled_depth * c.window_batches));
   p_all "contended isolated timing never retries and dispatches exactly its 16 samples"
     [ "metal"; "cc"; "multidev_cc"; "cuda"; "hip" ] ~f:(fun backend ->
       let c = call ~backend ~timing:Autotune.Isolated ~persistent:false in
-      List.is_empty c.retry_windows && c.reading.contended && c.window_reports = 1
-      && c.all_launches = 16 && c.reading.samples = 16);
+      c.retries_started = 0 && List.is_empty c.retry_windows && c.reading.contended
+      && c.window_reports = 1 && c.all_launches = 16 && c.reading.samples = 16);
   p_all "contended CUDA and HIP queued timing calibrates but takes no retry" [ "cuda"; "hip" ]
     ~f:(fun backend ->
       let c = call ~backend ~timing:Autotune.Queued ~persistent:true in
-      List.is_empty c.retry_windows && c.reading.contended
+      c.retries_started = 0 && List.is_empty c.retry_windows && c.reading.contended
       && (not (List.is_empty c.probes))
       && c.all_launches = c.calibration_launches + (c.settled_depth * c.window_batches));
   (* A depth-one call initially reuses the singles. Its retry must take new singles, rather than
@@ -534,8 +540,8 @@ let () =
   in
   p "a refused reused depth-one window retries with fresh singles"
     (List.equal Poly.equal slow.retry_windows [ (16, 16) ]
-    && slow.settled_depth = 1 && slow.reused_batches = 0 && slow.fresh_launches = 16
-    && slow.window_batches = 16
+    && slow.retries_started = 1 && slow.settled_depth = 1 && slow.reused_batches = 0
+    && slow.fresh_launches = 16 && slow.window_batches = 16
     && Option.is_some (Autotune.admitted_timing_ms slow.reading));
   let quiet =
     synthetic_call ~timing:Autotune.Queued
@@ -543,7 +549,7 @@ let () =
       ~retry_contended:true ~fixed_ms:0. ~launch_ms:1. ()
   in
   p_all "an admitted Metal window gets no retry or extra dispatches" [ quiet ] ~f:(fun c ->
-      List.is_empty c.retry_windows
+      c.retries_started = 0 && List.is_empty c.retry_windows
       && Option.is_some (Autotune.admitted_timing_ms c.reading)
       && c.all_launches = c.calibration_launches + (c.settled_depth * c.window_batches));
   let unresolved_clock =
@@ -554,7 +560,8 @@ let () =
       ()
   in
   p_all "a degenerate clock is refused without a contention retry" [ unresolved_clock ] ~f:(fun c ->
-      List.is_empty c.retry_windows && Option.is_none (Autotune.admitted_timing_ms c.reading))
+      c.retries_started = 0 && List.is_empty c.retry_windows
+      && Option.is_none (Autotune.admitted_timing_ms c.reading))
 
 (* {1 The no-verdict fallback is wall-bounded (gh-ocannl-1096)} *)
 
