@@ -1,0 +1,2 @@
+masked half-gradient replay writes only finite rows: true
+masked half-gradient replay stays within its half-rounding bound: true

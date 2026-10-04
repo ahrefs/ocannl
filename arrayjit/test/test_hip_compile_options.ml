@@ -61,14 +61,14 @@ let () =
   Verdict.p_all "every target set containing observed gfx1102 enables conservative HIP load waits"
     affected ~f:(fun target_archs ->
       List.equal String.equal
-        (Ir.Compiler_options.hip_load_wait_options ~target_archs)
-        [ "-mllvm"; "-amdgpu-waitcnt-load-forcezero" ]);
+        (Ir.Compiler_options.hip_wait_options ~target_archs)
+        [ "-mllvm"; "-amdgpu-waitcnt-forcezero" ]);
   Verdict.p_all "unmeasured HIP targets retain their compiler load scheduling" unaffected
-    ~f:(fun target_archs -> List.is_empty (Ir.Compiler_options.hip_load_wait_options ~target_archs));
+    ~f:(fun target_archs -> List.is_empty (Ir.Compiler_options.hip_wait_options ~target_archs));
   Verdict.p_all "the gfx1102 workaround reaches every production HIPRTC variant" cases
     ~f:(fun (uses_rocwmma, with_debug, _) ->
       let options =
         Ir.Compiler_options.hiprtc ~target_archs:[ "gfx1102" ] ~hip_include_options:[ "-Ihip" ]
           ~rocwmma_include_options:[ "-Irocwmma" ] ~uses_rocwmma ~with_debug
       in
-      List.mem options "-amdgpu-waitcnt-load-forcezero" ~equal:String.equal)
+      List.mem options "-amdgpu-waitcnt-forcezero" ~equal:String.equal)

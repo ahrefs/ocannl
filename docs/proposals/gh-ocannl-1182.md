@@ -52,10 +52,12 @@ The successful control's worst error against the double reference was about
 `vmcnt(1)` to `vmcnt(0)` before the subtraction. Disabling subregister liveness
 was also tested and retained both the instruction hazard and the corruption.
 
-The compiler option forces load waits to zero; LLVM's
+The initial compiler control forces vector-load waits to zero; LLVM's
 [wait insertion source](https://github.com/llvm/llvm-project/blob/main/llvm/lib/Target/AMDGPU/SIInsertWaitcnts.cpp)
-defines the option. The workaround preserves storage and arithmetic precision,
-mask semantics and parity envelopes. It conservatively reduces load overlap;
+defines the options. The production workaround now forces all wait counters to
+zero, for the backward masked path described below. It preserves storage and
+arithmetic precision, mask semantics and parity envelopes. It conservatively
+reduces memory overlap;
 these correctness probes make no performance claim. The selector applies to
 device sets containing `gfx1102` (including feature suffixes), and the cache
 regime derives from that same set and selector.
@@ -99,6 +101,35 @@ finite. This identifies the next replay boundary; it does not yet establish
 which arithmetic or instruction first produced a nonfinite value.
 `BENCH_DUMP_DIR` with `BENCH_DUMP_NODES` optionally saves selected step-zero
 buffers as little-endian float32 data for exact half/single-input replay.
+
+An exact replay of segment 155 used those captured direct inputs. They were all
+finite; half-rounded denominator squares were nonzero and at most 10728. The
+reference's largest term and partial sum were about 12.758, far below half
+overflow. The reference uses float FMA followed by half rounding, so its bit
+differences are diagnostic rather than a promise of exact half-FMA ties.
+
+The disassembly's masked path issued a D16 high-half gradient load, then could
+modify the low half before waiting for vector memory. Its scalar mask wait was
+only `lgkmcnt(0)`: strengthening existing vector waits did not drain that load.
+Moving the denominator square to global memory retained both the chain and
+nonfinite outputs. Changing only the wait option gave this result on the same
+source and captured buffers:
+
+| Segment 155 control | Nonfinite rows in three launches (of 8192) |
+| --- | --- |
+| `-amdgpu-waitcnt-load-forcezero` | 0 / 40 / 16 |
+| `-amdgpu-waitcnt-forcezero` | 0 / 0 / 0 |
+
+The all-counter control changed waits to
+`vmcnt(0) expcnt(0) lgkmcnt(0)` and drained pending high-half loads before low-half
+updates. The earlier forward replay also returned zero wrong or nonfinite cells
+in all three launches under this control. A single passing old-policy launch
+is not sufficient evidence: its failures were asynchronous and stochastic.
+`hip_half_masked_gradient` uses synthetic inputs varying with every coordinate,
+bounded denominator squares and six repeated launches through the shipped
+pipeline; no captured fixture is required by the test. These controls establish
+the broader guard, not the complete model's final acceptance, which must be
+verified separately at the production revision.
 
 Durable raw scripts, hashes, code objects, disassembly and logs are retained
 under `~/.local/state/issue-wave/wave2-20261004/1182-scratch` on TUF, with

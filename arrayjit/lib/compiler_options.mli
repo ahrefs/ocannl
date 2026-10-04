@@ -4,8 +4,8 @@
    without linking its optional library or requiring a device. The per-toolchain math-policy
    rationale and measurements live with each builder in the implementation. *)
 
-val hip_load_wait_options : target_archs:string list -> string list
-(** The conservative load-wait workaround for the observed gfx1102 half-load hazard. Used by both
+val hip_wait_options : target_archs:string list -> string list
+(** The conservative wait-counter workaround for the observed gfx1102 half-load hazard. Used by both
     the compiler and its schedule-cache regime. An empty list selects no workaround. A mixed set
     containing gfx1102 is covered because HIP compilation is backend-wide and its artifact can link
     on any device. *)

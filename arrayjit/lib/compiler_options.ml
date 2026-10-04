@@ -22,17 +22,18 @@ let clang_fast_math_options ~reassociate =
 
 (* gh-ocannl-1182: on gfx1102, HIPRTC 9.0 (ROCm runtime 7.1.52801) emitted a half subtraction while
    a D16 high-half load into the same VGPR was outstanding. Replaying the emitted attention-softmax
-   kernel returned exp(+1)/2, including in masked lanes; forcing load waits to zero made all three
-   executed controls correct. This preserves arithmetic precision but conservatively reduces load
-   overlap. Other architectures have not been measured. Keep unsupported-option failures visible
-   through the normal HIPRTC error path; falling back to the corrupting compilation would be
-   unsafe. *)
-let hip_load_wait_options ~target_archs =
+   kernel returned exp(+1)/2, including in masked lanes. Forcing vector-load waits alone repaired
+   that replay but left a backward masked branch corrupting its low half while a high-half load was
+   pending. Forcing all wait counters to zero made both three-launch replays pass. This preserves
+   arithmetic precision but conservatively reduces memory overlap. Other architectures have not been
+   measured. Keep unsupported-option failures visible through the normal HIPRTC error path; falling
+   back to the corrupting compilation would be unsafe. *)
+let hip_wait_options ~target_archs =
   if
     List.exists
       (fun arch -> String.equal (List.hd (String.split_on_char ':' arch)) "gfx1102")
       target_archs
-  then [ "-mllvm"; "-amdgpu-waitcnt-load-forcezero" ]
+  then [ "-mllvm"; "-amdgpu-waitcnt-forcezero" ]
   else []
 
 let hiprtc ~target_archs ~hip_include_options ~rocwmma_include_options ~uses_rocwmma ~with_debug =
@@ -41,7 +42,7 @@ let hiprtc ~target_archs ~hip_include_options ~rocwmma_include_options ~uses_roc
   (* These are compiler options rather than kernel-body pragmas so they also govern the bf16 and f16
      operators while the HIP headers are parsed. *)
   @ clang_fast_math_options ~reassociate:false
-  @ hip_load_wait_options ~target_archs
+  @ hip_wait_options ~target_archs
   @ if with_debug then [ "-g" ] else []
 
 (* nvrtc's opt-IN for floating-point reassociation. nvrtc accepts it (13.3 answers a

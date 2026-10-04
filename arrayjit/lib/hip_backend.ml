@@ -1631,7 +1631,7 @@ end = struct
          device set, so include every device's policy. *)
       ^
       let target_archs = hiprtc_target_archs () in
-      match Compiler_options.hip_load_wait_options ~target_archs with
+      match Compiler_options.hip_wait_options ~target_archs with
       | [] -> ""
       | options -> "/hiprtc-load-wait:" ^ Compiler_options.render options
       (* No [bf16_accum_wide] component (gh-ocannl-1117): gh-ocannl-1051 added one by hand when
