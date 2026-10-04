@@ -2409,6 +2409,14 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
 
 ## The cross-machine sweep
 
+- Sweep endpoint and lock-contract helpers live in `tools/lab-map.sh`, registry reads in
+  `tools/fleet-registry.sh`, diagnostic normalization in `tools/sweep-fingerprint.sh`, and the
+  comparison cursor in `tools/sweep-unit-state.sh` (gh-ocannl-990). Their caller-owned variables
+  and callback dependencies are listed at each file's head. `runtest-sweep_components` exercises
+  the sourced functions without running a sweep; `bash test/operations/sweep_components.sh state`
+  (also `lab`, `fleet`, `fingerprint`) isolates one fixture. The default runs all four plus broken
+  component controls; `runtest-sweep_harness` remains the integration check.
+
 - `tools/sweep.sh` is the coverage for every backend CI does not run: cc and metal locally
   (the macOS host), cuda on rog, hip and then multidev_cc on minix, and hip again on tuf, all pinned
   to ONE resolved commit so a mid-sweep merge cannot leave the machines testing different trees.
@@ -2624,7 +2632,7 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   how): a backend set in `test/config/ocannl_config`, or a reached stanza whose marker names one,
   counts as much as the environment. Under WSL2 `/dev/kfd` and `/dev/dri` are never present and `rocm-smi` always reports
   the driver as uninitialized — neither is evidence of a lost passthrough; `hipGetDeviceCount` is.
-  The cap itself is `tools/box-jobs.sh`, the single source `tools/sweep.sh`'s `unit_jobs` and
+  The cap itself is `tools/box-jobs.sh`, the single source its `box_jobs_sweep_jobs` helper and
   `tools/test-run.sh` both read, so the sweep's width and a manual run's cannot drift
   (`OCANNL_TOOL_SWEEP_JOBS=<n>` still overrides the sweep's for one run). It is applied to the
   test phase only: `test_cmd` compiles under `@check` at full width first, since the cap bounds
@@ -2771,7 +2779,7 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   the HIP column records module-load and stream-creation refusals that did abort stanzas. Read an
   earlier claim that a burst was the box's only one as an artifact of `journalctl -k`, which answers
   for the current boot alone; the census wants `journalctl -b <n>` per boot. Nor is a full-width
-  unit evidence for a `unit_jobs` cap on `rog-nv:cuda`: the 09-11 burst of 10 lost no stanza, and a
+  unit evidence for a `box_jobs_sweep_jobs` cap on `rog-nv:cuda`: the 09-11 burst of 10 lost no stanza, and a
   forced full-scope unit at full width on 2026-09-17 (`--slow --force --only cuda`, 3321 s, ref
   `fa5116209`) passed with zero refusals in its own window. The serial rerun covers the case a cap
   would not.

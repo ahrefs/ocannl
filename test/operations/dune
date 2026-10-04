@@ -278,6 +278,7 @@
   (alias runtest-optional_arg_inventory_control)
   (alias runtest-generated_provenance)
   (alias runtest-verdict_quantified)
+  (alias runtest-sweep_components)
   (alias runtest-sweep_harness)))
 
 (test
@@ -6813,6 +6814,10 @@
   ../../benchmarks/fixture_digest.py
   ../../tools/aggregate-skips.sh
   ../../tools/sweep.sh
+  ../../tools/lab-map.sh
+  ../../tools/fleet-registry.sh
+  ../../tools/sweep-fingerprint.sh
+  ../../tools/sweep-unit-state.sh
   ; the shared width table sweep.sh sources (gh-ocannl-983)
   ../../tools/box-jobs.sh
   ; the kernel-window filters sweep.sh sources and this harness drives (gh-ocannl-979, gh-ocannl-1034)
@@ -6832,6 +6837,31 @@
    %{dep:../../tools/sweep.sh}
    %{dep:../../tools/aggregate-skips.sh}
    %{dep:verdict_skip_probe.exe})))
+
+; The extracted sweep functions have direct, independently runnable fixtures. The
+; existing driver selects Git Bash on Windows rather than the WSL launcher.
+
+(rule
+ ; ocannl-backend: none -- fake registry and a scratch git repository; no backend runs.
+ (alias runtest-sweep_components)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  sweep_components.sh
+  ../../scripts/harness-support.sh
+  ../../tools/lab-map.sh
+  ../../tools/fleet-registry.sh
+  ../../tools/sweep-fingerprint.sh
+  ../../tools/sweep-unit-state.sh
+  ../../tools/box-jobs.sh
+  ../../tools/kernel-window.sh
+  (env_var ProgramFiles)
+  (env_var ProgramW6432)
+  (env_var "ProgramFiles(x86)")
+  (env_var LOCALAPPDATA))
+ (action
+  (run %{dep:sweep_harness_driver.exe} %{dep:sweep_components.sh})))
 
 ; The atomic-file publication helper under concurrent writers (gh-ocannl-780). Domains, fixed
 ; iteration counts and a bounded spin: no wall-clock dependence, and no backend -- it publishes
