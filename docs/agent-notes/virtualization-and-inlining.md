@@ -301,9 +301,16 @@ files.
   `virtual_llc` and `inline_computation` take `?fresh_symbol`/`?fresh_scope`, and pricing passes the
   negative `pricing_symbol`/`pricing_scope`; (b) exactness is per leg (`rc_flops_approx` /
   `rc_bytes_approx`) and the seam gates on the op count only — a read under a guard's arm makes bytes
-  a bound while ops stay exact (a diagonal producer's consistency guard), whereas a range guard's
-  short-circuiting `&&` keeps the op count a bound (affine write positions, multi-setter
-  components), exactly as for the emitted read; (c) a flip the store refuses (a scalar reduction's
+  a bound while ops stay exact (a diagonal producer's consistency guard). Pure range guards use
+  eager 0/1 multiplication of signed-index comparisons (gh-ocannl-1094) when the scoped simplifier
+  proves every affine multiplication and partial sum total over the active loop/static domain.
+  Their guard overhead is exact too (affine write positions, multi-setter components); unknown or
+  potentially overflowing domains retain `And` and a bound. Negative indices are allowed by the
+  proof; it does not assume nonnegative substituted coordinates. `Where` still gates the operand
+  read, whose solved index can be negative or out of range on unmatched iterations. Ordinary
+  short-circuit conjunctions and conditional arm arithmetic remain bounds. Exactly one matching
+  arm alone cannot prove uniform `&&` overhead: the upper comparison may execute a different
+  number of times at different read indices; (c) a flip the store refuses (a scalar reduction's
   operand read escapes the setter it would be captured at, `9:`) is refused by the re-run walk and
   carries the proxy — and, since gh-ocannl-1093, the refusal itself as `fa_refused`, which
   `Autotune.rank_flip_candidates` and `Memory_budget.fit` exclude (the proxy of a scalar reduction

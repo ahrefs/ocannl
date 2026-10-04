@@ -14,21 +14,55 @@ broadcast operands: one add and both cells per read, exact: true
   packed-uniform producer (lane extract)         flops=3 (exact) bytes=16 (bound)
 packed-uniform producer: the lane-extract form, exact ops, dynamic-read bytes a bound: true
 == guard-emitting shapes: price = emitted read ==
-  affine position, priced                        flops=8 (bound) bytes=8 (bound)
-  affine position, emitted                       flops=8 (bound) bytes=8 (bound)
+  affine position, priced                        flops=8 (exact) bytes=8 (bound)
+  affine position, emitted                       flops=8 (exact) bytes=8 (bound)
 affine position: the producer is inlined at the reader: true
 affine position: the price is the emitted read, counts and exactness: true
-affine position: the kept loop's range guard is priced (the arm itself has no op): true
+affine position: the Materialize flip uses the exact modeled price: true
+affine position: executed virtual and materialized values agree: true
+affine position: executed values match the independent reference: true
+affine position: two eager range guards cost eight exact operations per read: true
   diagonal producer, priced                      flops=2 (exact) bytes=4 (bound)
   diagonal producer, emitted                     flops=2 (exact) bytes=4 (bound)
 diagonal producer: the producer is inlined at the reader: true
 diagonal producer: the price is the emitted read, counts and exactness: true
+diagonal producer: the Materialize flip uses the exact modeled price: true
+diagonal producer: executed virtual and materialized values agree: true
 diagonal producer: the consistency guard is counted, the op count exact: true
-  two-component concat, priced                   flops=6 (bound) bytes=8 (bound)
-  two-component concat, emitted                  flops=6 (bound) bytes=8 (bound)
+  two-component concat, priced                   flops=4 (exact) bytes=8 (bound)
+  two-component concat, emitted                  flops=4 (exact) bytes=8 (bound)
 two-component concat: the producer is inlined at the reader: true
 two-component concat: the price is the emitted read, counts and exactness: true
-two-component concat: the per-component guards and selects are priced (the arms have no op): true
+two-component concat: the Materialize flip uses the exact modeled price: true
+two-component concat: executed virtual and materialized values agree: true
+two-component concat: executed values match the independent reference: true
+two-component concat: simplified eager guards cost four exact operations per read: true
+  shifted affine boundary, priced                flops=8 (exact) bytes=8 (bound)
+  shifted affine boundary, emitted               flops=8 (exact) bytes=8 (bound)
+shifted affine boundary: the producer is inlined at the reader: true
+shifted affine boundary: the price is the emitted read, counts and exactness: true
+shifted affine boundary: the Materialize flip uses the exact modeled price: true
+shifted affine boundary: executed virtual and materialized values agree: true
+shifted affine boundary: executed values match the independent reference: true
+  reflected affine boundary, priced              flops=8 (exact) bytes=8 (bound)
+  reflected affine boundary, emitted             flops=8 (exact) bytes=8 (bound)
+reflected affine boundary: the producer is inlined at the reader: true
+reflected affine boundary: the price is the emitted read, counts and exactness: true
+reflected affine boundary: the Materialize flip uses the exact modeled price: true
+reflected affine boundary: executed virtual and materialized values agree: true
+reflected affine boundary: executed values match the independent reference: true
+== eager index guards and simplifier narrowing ==
+pure eager comparisons: two comparisons, conjunction, select = four exact ops: true
+ordinary short-circuit conjunction retains its operation bound: true
+eager guard does not make conditional arm arithmetic exact: true
+true eager index conjunction narrows both comparisons in its body: true
+arbitrary numeric multiplication is not treated as a comparison conjunction: true
+near-limit domain retains a short-circuit RHS and bounded operation price: true
+near-limit false lower guard skips overflowing RHS and returns the init value: true
+the same boundary guard executes its valid matching arm: true
+valid boundary literal permits an exact simplified guard price: true
+out-of-range boundary literal retains short-circuit evaluation and a price bound: true
+valid boundary literal executes its matching arm: true
 == recompute_cost through optimize ==
 chain: both links virtual: true
   x1 = x0 + w1                                   flops=1 (exact) bytes=8 (exact)
