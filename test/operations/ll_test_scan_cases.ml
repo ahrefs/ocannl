@@ -247,8 +247,20 @@ let () =
   check "shipping scanner refuses the first unlinked record builder" ~exit:1
     ~message:"test/new.ml: requires ll_test" (run ());
   write "test/dune" "(test (name new) (modules new) (libraries ll_test))";
-  check "shipping scanner accepts adoption without golden churn" ~exit:0
-    ~message:"Adoption threshold:" (run ());
+  check "shipping scanner reports remaining adopted records without refusing them" ~exit:0
+    ~message:"test/new.ml -- records=1 traversals=0" (run ());
+  write "test/new.ml" (record ^ record ^ walker ^ walker ^ use);
+  check "growth of both adopted metrics stays visible and non-refusing" ~exit:0
+    ~message:"test/new.ml -- records=2 traversals=2" (run ());
+  write "test/new.ml" (walker ^ use);
+  check "adopted private traversals appear without record construction" ~exit:0
+    ~message:"test/new.ml -- records=0 traversals=1" (run ());
+  write "test/new.ml" use;
+  let status, text = run () in
+  p "adopted sources with no remaining hand-built IR have no census row"
+    (Poly.equal status (Unix.WEXITED 0)
+    && not (String.is_substring text ~substring:"test/new.ml -- records="));
+  write "test/new.ml" adopted;
   check "shipping scanner prints the derived operand helpers that adopt nothing" ~exit:0
     ~message:
       "Ll_builders values outside the IR surface (adopt nothing): (none)\n\
@@ -261,6 +273,10 @@ let () =
     ~message:"test/new.ml: links ll_test but calls none of its IR surface" (run ());
   check "a linked-but-unused file is held to its migration row" ~exit:0 ~message:"control exemption"
     (run ~exempt:true ());
+  let status, text = run ~exempt:true () in
+  p "migration debt is not repeated in the adopted census"
+    (Poly.equal status (Unix.WEXITED 0)
+    && not (String.is_substring text ~substring:"test/new.ml -- records="));
   write "test/new.ml" adopted;
   let base_stanza = "(test (name new) (modules new) (libraries ll_test))" in
   let selection ?(modules = "(modules choice)") ?(harness = "ll_test") () =
@@ -398,8 +414,8 @@ let () =
   check "new arrayjit debt requires explicit adoption" ~exit:1
     ~message:"arrayjit/test/new.ml: requires ll_test" (run ());
   write "arrayjit/test/dune" "(test (name new) (modules new) (libraries arrayjit.ll_builders))";
-  check "public arrayjit builders satisfy package adoption" ~exit:0 ~message:"Adoption threshold:"
-    (run ());
+  check "public arrayjit builders satisfy adoption and retain the remaining record census" ~exit:0
+    ~message:"arrayjit/test/new.ml -- records=3 traversals=0" (run ());
   write "arrayjit/test/dune" "(test (name new) (modules new) (libraries ll_builders))";
   check "private builder spelling does not satisfy package adoption" ~exit:1
     ~message:"arrayjit/test/new.ml: requires ll_test" (run ());

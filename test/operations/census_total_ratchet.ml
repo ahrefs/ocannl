@@ -105,6 +105,13 @@ let allowed =
         "a per-root source floor or a per-file exemption cap, hand-written constants of the scan";
     };
     {
+      golden = Golden "test/operations/ll_test_ratchet.expected";
+      pattern = {|^\(test\|arrayjit/test\)/[^ ]+\.ml -- records=[0-9]+ traversals=[0-9]+$|};
+      reason =
+        "per-source residual IR counts deliberately remain review-visible after adoption \
+         (gh-ocannl-1090), not an aggregate over the source corpus";
+    };
+    {
       golden = Golden "test/operations/provenance_tag_inventory.expected";
       pattern = {|^  [0-9]+:[a-z0-9-]+\( ([A-Za-z_]+)\)?$|};
       reason = "a provenance tag as a source mints it; its digits name the tag";
@@ -390,6 +397,18 @@ let controls () =
   (* The live allow-list as a whole, so a wider entry for the same golden cannot hide behind the one
      this is about. *)
   let refused_by golden text = refused ~entries:allowed (numbers_of ~golden text) in
+  let adopted_row = "test/operations/new.ml -- records=19 traversals=12" in
+  p_empty "per-source adopted IR counts remain review-visible in their own golden"
+    ~over:(numbers_of ~golden:"test/operations/ll_test_ratchet.expected" adopted_row)
+    (refused_by "test/operations/ll_test_ratchet.expected" adopted_row);
+  p "the adopted-count allowance cannot hide aggregate or trailing totals"
+    (List.length
+       (refused_by "test/operations/ll_test_ratchet.expected" "Total -- records=19 traversals=12")
+     = 2
+    && List.length
+         (refused_by "test/operations/ll_test_ratchet.expected" (adopted_row ^ " total=170"))
+       = 3
+    && List.length (refused_by "x/a.expected" adopted_row) = 2);
   p "a quoted-source entry spans the quotation and not the reason written after it"
     (at [ 50 ]
        (refused_by "test/operations/verdict_ratchet.expected"

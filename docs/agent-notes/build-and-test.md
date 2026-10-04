@@ -402,7 +402,9 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   entry spans whole. Entries are floors and caps, fixture locations, text quoted from a source and
   citations, each with its reason, and one that allows nothing is stale; the header states the
   line-shaped boundary. When it refuses a line you added, move the count to stderr tagged
-  `(not part of the golden)`; add an entry only for a number that is no quantity of the repository. Its first
+  `(not part of the golden)`; add an entry only for a number that is no quantity of the repository.
+  The deliberate exception is `ll_test_ratchet`'s per-source adopted residual counts (gh-ocannl-1090),
+  whose growth the golden exists to expose; its anchored allowance covers no corpus-wide total. Its first
   catch was the `FAILED: n checks` teardown total in `config_usage_scan_control`: a negative
   control whose failures ARE its golden ends through `Verdict.exit_negative_control`, which exits 1
   without that line. A one-digit count sits below the number boundary, so the scan also refuses the
@@ -1369,6 +1371,10 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
 
 ## Hand-built IR tests
 
+- `ll_test_ratchet` prints an adopted-but-still-hand-building census (gh-ocannl-1090): the same
+  syntactic record and private-traversal counts, sorted by source path, for adopted sources with
+  either count nonzero. These golden rows are informative and promotable, with no growth cap;
+  unadopted migration debt retains its independent refusing caps and stale-exemption checks.
 - `Ll_test`'s traversal is the one place a new `Ir.Low_level` constructor is handled, and it now
   carries the queries the hand-built-IR tests used to write for themselves. `walk` takes a record of
   hooks: the construct-specific ones, a generic `?on_stmt`/`?on_scalar` for a counter that names its
