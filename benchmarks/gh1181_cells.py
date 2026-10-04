@@ -172,6 +172,9 @@ def environment(a, fixtures):
         "cell_timeout_s": a.cell_timeout,
         "total_timeout_s": a.total_timeout,
         "cpus": a.cpus,
+        # Reaches the torch cells unfiltered: where a box's interpreter lacks its dev headers,
+        # inductor's triton build of its launcher finds them through this (gh-ocannl-1181, rog).
+        "c_include_path": os.environ.get("C_INCLUDE_PATH"),
         "beam": BEAM,
         "beam_parallel": o.DEFAULT_BEAM_PARALLEL,
         "started": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
