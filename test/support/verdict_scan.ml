@@ -293,26 +293,32 @@ let scan content =
 
     What it pairs is a LABEL that reaches both a [pass_fail]/[pass_fail_all2] call and a [skipped]
     call in one source. The label is the first positional argument, keyed three ways: a string
-    literal by its value; a name by the literal it is bound to, when every [let] of that name in the
-    source binds the same literal (the [let claim = "…"] shared by the two branches is the shape
-    both sightings had), otherwise by the name itself; anything else by its printed expression, so a
-    label computed the same way on both sides is still one label. A literal pairs across the whole
-    source; a name or an expression pairs only within one top-level item, since equal names in two
-    functions need not be one label. The callees are matched by their last path component, which is
-    how an opened [Verdict.Claims] and the per-test
+    literal by its value; a name by the literal it is bound to, in its lexical scope through
+    [Lexical_scope] (the [let claim = "…"] shared by the two branches is the shape both sightings
+    had), otherwise by the name itself; anything else by its printed expression, so a label computed
+    the same way on both sides is still one label. A literal pairs across the whole source; a name
+    or an expression pairs only within one top-level item, since equal names in two functions need
+    not be one label. Named and computed keys retain their bindings' identities. The callees are
+    matched by their last path component, which is how an opened [Verdict.Claims] and the per-test
     [let skipped = Verdict.skipped ~backend:backend_name] both read.
+
+    Fail-loud boundary: unknown or shadowed labels stay named/computed rather than borrowing a
+    literal elsewhere. Unknown opens bring in no values.
 
     What it cannot see: a skip or a PASS/FAIL claim routed through a wrapper of another name, and
     one label computed by two different expressions. Those are the reason the remedy is an entry
     point rather than this check — [Verdict.gated] has no second dialect to pair. *)
 
-type label_key = Literal of string | Named of string | Computed of string
+type label_key =
+  | Literal of string
+  | Named of string * int
+  | Computed of string * (string * (string option * int)) list
 
-let label_key_text = function Literal text | Named text | Computed text -> text
+let label_key_text = function Literal text | Named (text, _) | Computed (text, _) -> text
 
 type dialect_site = { callee : string; key : label_key; item : int; line : int }
 (** One claim call: the callee as written, the label it reports, the top-level structure item it
-    sits in (counted from 0), and its line. *)
+    sits in (identified by its source position), and its line. *)
 
 type dialect_pairing = { pass_fail : dialect_site; skipped : dialect_site }
 (** A [pass_fail]-family call and a [skipped] call reporting the same label. *)
@@ -328,55 +334,76 @@ type dialect_census = {
 let pass_fail_callees = [ "pass_fail"; "pass_fail_all2" ]
 let skipped_callees = [ "skipped" ]
 
-(* The literal each name is bound to, where every [let] of that name binds the same literal. A name
-   bound to two different literals, or to anything else, is left to be keyed by itself. *)
-let literal_bindings ast =
-  let bound = Hashtbl.create (module String) in
-  let rec bound_name pattern =
-    match pattern.ppat_desc with
-    | Ppat_var { txt; _ } -> Some txt
-    | Ppat_constraint (inner, _) -> bound_name inner
-    | _ -> None
-  in
-  let iterator =
-    object
-      inherit Ast_traverse.iter as super
-      method! attribute _ = ()
-
-      method! value_binding binding =
-        Option.iter (bound_name binding.pvb_pat) ~f:(fun name ->
-            Hashtbl.add_multi bound ~key:name ~data:(Read.string_literal binding.pvb_expr));
-        super#value_binding binding
-    end
-  in
-  iterator#structure ast;
-  Hashtbl.filter_map bound ~f:(function
-    | Some literal :: rest
-      when List.for_all rest ~f:(fun other -> Option.equal String.equal other (Some literal)) ->
-        Some literal
-    | _ -> None)
-
 let dialect_census content =
   let ast = Read.structure_of content in
-  let literals = literal_bindings ast in
-  let key_of argument =
+  let key_of env argument =
     match Read.string_literal argument with
     | Some literal -> Literal literal
     | None -> (
         match argument.pexp_desc with
         | Pexp_ident { txt = Ppxlib.Longident.Lident name; _ } -> (
-            match Hashtbl.find literals name with
-            | Some literal -> Literal literal
-            | None -> Named name)
-        | _ -> Computed (Ppxlib.Pprintast.string_of_expression argument))
+            match Lexical_scope.lookup env name with
+            | Some (Some literal, _) -> Literal literal
+            | Some (None, identity) -> Named (name, identity)
+            | None -> Named (name, 0))
+        | _ ->
+            let references = ref [] in
+            let reader =
+              object
+                inherit [string option * int, unit] Lexical_scope.scoped
+                method local = (None, 0)
+                method module_path _ _ = None
+                method! attribute _ attr = attr
+
+                method! ident env ident =
+                  match ident.txt with
+                  | Ppxlib.Longident.Lident name -> (
+                      match Lexical_scope.lookup env name with
+                      | Some (None, 0) ->
+                          () (* Bound inside this expression, whose text already identifies it. *)
+                      | bound ->
+                          let denotation =
+                            match bound with
+                            | Some (Some literal, _) -> (Some literal, 0)
+                            | other -> Option.value other ~default:(None, 0)
+                          in
+                          references := (name, denotation) :: !references)
+                  | _ -> ()
+              end
+            in
+            ignore (reader#expression env argument : expression);
+            Computed (Ppxlib.Pprintast.string_of_expression argument, List.rev !references))
   in
   let pass_fails = ref [] and skips = ref [] and item = ref 0 in
   let iterator =
-    object
-      inherit Ast_traverse.iter as super
-      method! attribute _ = ()
+    object (self)
+      inherit [string option * int, unit] Lexical_scope.scoped as super
+      val mutable next_binding = 0
 
-      method! expression expr =
+      method local =
+        next_binding <- next_binding - 1;
+        (None, next_binding)
+
+      method module_path _ _ = None
+
+      method! let_denotes binding =
+        match Read.pattern_name binding.pvb_pat with
+        | Some _ -> (Read.string_literal binding.pvb_expr, binding.pvb_loc.loc_start.pos_cnum + 1)
+        | None -> self#local
+
+      method! define ~top env rec_flag bindings ~walk =
+        if top then
+          Option.iter (List.hd bindings) ~f:(fun b -> item := b.pvb_loc.loc_start.pos_cnum);
+        super#define ~top env rec_flag bindings ~walk
+
+      method! attribute _ attr = attr
+
+      method! structure_item env si =
+        if List.exists ast ~f:(fun original -> phys_equal original si) then
+          item := si.pstr_loc.loc_start.pos_cnum;
+        super#structure_item env si
+
+      method! expression env expr =
         (match expr.pexp_desc with
         | Pexp_apply (callee, arguments) -> (
             let label =
@@ -390,7 +417,7 @@ let dialect_census content =
                 let site () =
                   {
                     callee = String.concat ~sep:"." path;
-                    key = key_of label;
+                    key = key_of env label;
                     item = !item;
                     line = expr.pexp_loc.loc_start.pos_lnum;
                   }
@@ -401,12 +428,12 @@ let dialect_census content =
                   skips := site () :: !skips
             | _ -> ())
         | _ -> ());
-        super#expression expr
+        super#expression env expr
     end
   in
-  List.iteri ast ~f:(fun index structure_item ->
-      item := index;
-      iterator#structure_item structure_item);
+  ignore
+    (iterator#structure { Lexical_scope.frames = []; modules = Map.empty (module String) } ast
+      : structure);
   let pass_fails = List.rev !pass_fails and skips = List.rev !skips in
   (* A literal is the same label anywhere in the source. A name, or an expression over names, is
      only the same label within one top-level item: [label] is the parameter name of half the claim

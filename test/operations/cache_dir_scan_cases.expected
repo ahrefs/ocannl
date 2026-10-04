@@ -4,6 +4,25 @@ ok: use -- the empty string turns the cache off
 ok: use -- a parameter is forwarded, and named at its own call sites
 ok: use -- anything else is reported rather than assumed harmless
 ok: use -- an unresolved name is reported by name
+ok: use -- a parameter shadows an earlier literal
+ok: use -- same-named literals remain in separate scopes
+ok: use -- a nonliteral let shadows an earlier literal
+ok: use -- qualified values never borrow a local literal
+ok: use -- an alias shadowed by another module loses its cache identity
+ok: use -- a nested alias dies with its scope
+ok: use -- a functor parameter shadows the cache module
+ok: use -- an unpack shadows the cache module
+ok: use -- the cache resolver forwards a lexical parameter
+ok: use -- a same-named resolver in a shadowing module proves nothing
+ok: use -- an alias of an unchecked positional parameter remains unresolved
+ok: use -- a positional parameter named cache_dir remains unresolved
+ok: use -- a renamed censused labelled parameter is forwarded
+ok: use -- an alias of a censused labelled parameter is forwarded
+ok: use -- a case binder is unresolved rather than a forwarded function parameter
+ok: use -- a for index is unresolved rather than a forwarded function parameter
+ok: use -- a recursive alias never borrows the outer literal
+ok: use -- class constructor parameters are unresolved because instantiations are not censused
+ok: use -- a literal inside a class remains resolved
 ok: use -- a direct store through a structure-level alias
 ok: use -- a direct store through the qualified path
 ok: use -- a direct store through an alias bound in expression position

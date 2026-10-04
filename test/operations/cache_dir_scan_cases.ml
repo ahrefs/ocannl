@@ -49,6 +49,81 @@ let cases =
     ( "an unresolved name is reported by name",
       {ocaml|let () = Autotune.tune ~cache_dir:elsewhere f|ocaml},
       [ "~cache_dir names `elsewhere`" ] );
+    ( "a parameter shadows an earlier literal",
+      {ocaml|let cache_dir = "autotune_cache_safe"
+let run ~cache_dir = Autotune.tune ~cache_dir f|ocaml},
+      [ "~cache_dir forwards the parameter cache_dir" ] );
+    ( "same-named literals remain in separate scopes",
+      {ocaml|let a () = let cache_dir = "autotune_cache_a" in Autotune.tune ~cache_dir f
+let b () = let cache_dir = "autotune_cache_b" in Autotune.tune ~cache_dir f|ocaml},
+      [ "~cache_dir names autotune_cache_a"; "~cache_dir names autotune_cache_b" ] );
+    ( "a nonliteral let shadows an earlier literal",
+      {ocaml|let cache_dir = "autotune_cache_safe"
+let a () = let cache_dir = compute () in Autotune.tune ~cache_dir f|ocaml},
+      [ "~cache_dir names `cache_dir`" ] );
+    ( "qualified values never borrow a local literal",
+      {ocaml|let cache_dir = "autotune_cache_safe"
+let () = Autotune.tune ~cache_dir:Other.cache_dir f|ocaml},
+      [ "~cache_dir names `Other.cache_dir`" ] );
+    ( "an alias shadowed by another module loses its cache identity",
+      {ocaml|module Cache = Ir.Schedule_cache
+module Cache = Other
+let () = Cache.store ~dir:"scratch" k v|ocaml},
+      [] );
+    ( "a nested alias dies with its scope",
+      {ocaml|let () = let module Cache = Ir.Schedule_cache in Cache.store ~dir:"autotune_cache_x" k v
+let () = Cache.store ~dir:"scratch" k v|ocaml},
+      [ "~dir names autotune_cache_x" ] );
+    ( "a functor parameter shadows the cache module",
+      {ocaml|module F (Schedule_cache : S) = struct let () = Schedule_cache.store ~dir:"scratch" k v end|ocaml},
+      [] );
+    ( "an unpack shadows the cache module",
+      {ocaml|let f (module Schedule_cache : S) = Schedule_cache.store ~dir:"scratch" k v|ocaml},
+      [] );
+    ( "the cache resolver forwards a lexical parameter",
+      {ocaml|let f ?cache_dir () =
+let cache_dir = Autotune.resolve_cache_dir ?cache_dir ~search:true () in
+Ir.Schedule_cache.store ~dir:cache_dir k v|ocaml},
+      [ "~cache_dir forwards the parameter cache_dir"; "~dir forwards the parameter cache_dir" ] );
+    ( "a same-named resolver in a shadowing module proves nothing",
+      {ocaml|module Autotune = Other
+let f ?cache_dir () =
+let cache_dir = Autotune.resolve_cache_dir ?cache_dir ~search:true () in
+Ir.Schedule_cache.store ~dir:cache_dir k v|ocaml},
+      [ "~cache_dir forwards the parameter cache_dir"; "~dir names `cache_dir`" ] );
+    ( "an alias of an unchecked positional parameter remains unresolved",
+      {ocaml|let run dir = let cache_dir = dir in Autotune.tune ~cache_dir f
+let () = run "scratch"|ocaml},
+      [ "~cache_dir names `cache_dir`" ] );
+    ( "a positional parameter named cache_dir remains unresolved",
+      {ocaml|let run cache_dir = Autotune.tune ~cache_dir f
+let () = run "scratch"|ocaml},
+      [ "~cache_dir names `cache_dir`" ] );
+    ( "a renamed censused labelled parameter is forwarded",
+      {ocaml|let run ~cache_dir:dir = Autotune.tune ~cache_dir:dir f|ocaml},
+      [ "~cache_dir forwards the parameter dir" ] );
+    ( "an alias of a censused labelled parameter is forwarded",
+      {ocaml|let run ~cache_dir:dir = let cache_dir = dir in Autotune.tune ~cache_dir f|ocaml},
+      [ "~cache_dir forwards the parameter cache_dir" ] );
+    ( "a case binder is unresolved rather than a forwarded function parameter",
+      {ocaml|let cache_dir = "autotune_cache_safe"
+let f x = match x with cache_dir -> Autotune.tune ~cache_dir f|ocaml},
+      [ "~cache_dir names `cache_dir`" ] );
+    ( "a for index is unresolved rather than a forwarded function parameter",
+      {ocaml|let cache_dir = "autotune_cache_safe"
+let () = for cache_dir = 0 to 1 do Autotune.tune ~cache_dir f done|ocaml},
+      [ "~cache_dir names `cache_dir`" ] );
+    ( "a recursive alias never borrows the outer literal",
+      {ocaml|let cache_dir = "autotune_cache_safe"
+let f () = let rec cache_dir = cache_dir in Autotune.tune ~cache_dir f|ocaml},
+      [ "~cache_dir names `cache_dir`" ] );
+    ( "class constructor parameters are unresolved because instantiations are not censused",
+      {ocaml|class runner cache_dir = object method run = Autotune.tune ~cache_dir f end
+let () = new runner "scratch"|ocaml},
+      [ "~cache_dir names `cache_dir`" ] );
+    ( "a literal inside a class remains resolved",
+      {ocaml|class runner = let cache_dir = "autotune_cache_class" in object method run = Autotune.tune ~cache_dir f end|ocaml},
+      [ "~cache_dir names autotune_cache_class" ] );
     (* The direct-store spelling, whose `~dir` is told from every other `~dir` in the repository
        only by the module it is called through. *)
     ( "a direct store through a structure-level alias",
