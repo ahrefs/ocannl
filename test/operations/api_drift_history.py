@@ -111,7 +111,13 @@ with tempfile.TemporaryDirectory(prefix="946-api-drift-") as scratch:
     assert "impl.cuda.ml" in report and "impl.missing.ml" in report
     assert "hidden = true" in report
     print("select arms become visible when the compiled target interface is removed: pass")
+    write("lib/initializer.ml", 'let value = 1\nlet () = print_endline "old";;\nprint_endline "old bare";;\n')
+    initialized = commit("Initial module with unnamed initialization")
+    write("lib/initializer.ml", 'let value = 1\nlet () = print_endline "new";;\nprint_endline "new bare";;\n')
+    quiet = commit("Change non-exporting initialization")
+    assert "0 declaration changes" in read(initialized, quiet)
+    print("non-exporting initializer and evaluation edits do not create API entries: pass")
     write("arrayjit/lib/cap.mli", "val")
     commit("Invalid source must refuse")
-    assert "api-drift:" in read(exposed, success=False)
+    assert "api-drift:" in read(quiet, success=False)
     print("invalid source refuses the real historical reader: pass")

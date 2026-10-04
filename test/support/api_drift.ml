@@ -7,6 +7,22 @@ open Ppxlib.Parsetree
 
 type declaration = { name : string; line : int; text : string }
 
+let binding_names pattern =
+  let modules = ref [] in
+  let iterator =
+    object
+      inherit Ppxlib.Ast_traverse.iter as super
+
+      method! pattern pattern =
+        (match pattern.ppat_desc with
+        | Ppat_unpack { txt = Some name; _ } -> modules := name :: !modules
+        | _ -> ());
+        super#pattern pattern
+    end
+  in
+  iterator#pattern pattern;
+  Dead_export_scan.pattern_names pattern @ !modules
+
 let derived_inputs ~paths dunes =
   let present = Set.of_list (module String) paths in
   List.concat_map dunes ~f:(fun (dune_path, contents) ->
@@ -148,7 +164,7 @@ let declarations ~source contents =
         | Pstr_value (_, bindings) ->
             "let "
             ^ String.concat ~sep:","
-                (List.concat_map bindings ~f:(fun b -> Dead_export_scan.pattern_names b.pvb_pat))
+                (List.concat_map bindings ~f:(fun b -> binding_names b.pvb_pat))
         | Pstr_primitive v -> "external " ^ v.pval_name.txt
         | Pstr_type (_, ts) -> type_names ts
         | Pstr_typext t -> "type extension " ^ Ppxlib.Longident.name t.ptyext_path.txt
@@ -174,6 +190,17 @@ let declarations ~source contents =
     let strip_docs =
       object
         inherit Ppxlib.Ast_traverse.map as super
+        val mutable prune_nonexports = true
+
+        (* An extension may turn any payload into exported declarations. Keep its input visible;
+           dropping a payload evaluation would silently turn [%%publish earlier] and [%%publish
+           later] into the same empty extension. *)
+        method! extension extension =
+          let saved = prune_nonexports in
+          prune_nonexports <- false;
+          Exn.protect
+            ~f:(fun () -> super#extension extension)
+            ~finally:(fun () -> prune_nonexports <- saved)
 
         method! attributes attrs =
           super#attributes
@@ -193,6 +220,10 @@ let declarations ~source contents =
           super#structure
             (List.filter items ~f:(fun item ->
                  match item.pstr_desc with
+                 | Pstr_eval _ when prune_nonexports -> false
+                 | Pstr_value (_, bindings) when prune_nonexports ->
+                     List.exists bindings ~f:(fun binding ->
+                         not (List.is_empty (binding_names binding.pvb_pat)))
                  | Pstr_attribute a ->
                      not
                        (List.mem [ "ocaml.doc"; "ocaml.text" ] a.attr_name.txt ~equal:String.equal)

@@ -5,4 +5,5 @@ adding an interface records retirement of the implicit source surface: pass
 removing an interface exposes the implementation surface: pass
 documentation-only edits, empty windows and invalid endpoints: pass
 select arms become visible when the compiled target interface is removed: pass
+non-exporting initializer and evaluation edits do not create API entries: pass
 invalid source refuses the real historical reader: pass

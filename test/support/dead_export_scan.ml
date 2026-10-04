@@ -83,7 +83,9 @@ let pattern_names pattern =
       inherit Ast_traverse.iter as super
 
       method! pattern pattern =
-        (match pattern.ppat_desc with Ppat_var { txt; _ } -> names := txt :: !names | _ -> ());
+        (match pattern.ppat_desc with
+        | Ppat_var { txt; _ } | Ppat_alias (_, { txt; _ }) -> names := txt :: !names
+        | _ -> ());
         super#pattern pattern
     end
   in

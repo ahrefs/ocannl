@@ -111,6 +111,43 @@ let () =
            external call : string -> int = \"call\"\n\
            type t = B [@@deriving compare]")
     = 3);
+  let named_before =
+    declarations "lib/a.ml"
+      "let exported = 1\n\
+       let () = print_endline \"old\"\n\
+       let _ = 2;;\n\
+       print_endline \"old bare eval\";;\n\
+       module M = struct let visible = 1 let () = print_endline \"old nested\" end"
+  in
+  let named_after =
+    declarations "lib/a.ml"
+      "let exported = 1\n\
+       let () = print_endline \"new\"\n\
+       let _ = 3;;\n\
+       print_endline \"new bare eval\";;\n\
+       module M = struct let visible = 1 let () = print_endline \"new nested\" end"
+  in
+  Verdict.p_empty "unnamed initializers and bare evaluations do not count as exported declarations"
+    ~over:named_before
+    (Surface.changes named_before named_after);
+  Verdict.p "named pattern aliases remain exported declarations"
+    (List.length (changed "lib/a.ml" "let ([] as exported) = []" "let ([] as exported) = [1]") = 1
+    && List.equal String.equal
+         (Test_utils.Dead_export_scan.exports_of_source ~source:"lib/a.ml"
+            "let ([] as exported) = []"
+         |> List.map ~f:Test_utils.Dead_export_scan.export_key)
+         [ "A.exported" ]);
+  Verdict.p "named module unpack bindings remain exported declarations"
+    (match
+       changed "lib/a.ml" "let (module M : S) = package" "let (module M : S) = other_package"
+     with
+    | [ (Some before, Some after) ] ->
+        String.equal before.name "let M[0]" && String.equal after.name "let M[0]"
+    | _ -> false);
+  Verdict.p "extension inputs stay visible even when their payload binds no source name"
+    (List.length (changed "lib/a.ml" "[%%publish earlier]" "[%%publish later]") = 1
+    && List.length (changed "lib/a.ml" "[%%publish let () = earlier]" "[%%publish let () = later]")
+       = 1);
   Verdict.p "declaration removals and additions are distinct"
     (match changed "lib/a.mli" "val old : int" "val fresh : int" with
     | [ (None, Some _); (Some _, None) ] -> true
