@@ -1,4 +1,5 @@
 profile and coverage generation bypass listing memoization: true
+ordinary compiler coverage metadata permits listing memoization: true
 output-name-sensitive profiling bypasses listing memoization: true
 a fresh process reuses an identical-source census listing: true
 a source change invalidates the census listing cache: true

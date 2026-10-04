@@ -1169,8 +1169,17 @@ let plan_has_mutable_codegen_inputs plan =
     [
       (* Generation is output-name sensitive: stripping probe stems without refusing it could serve
          a listing containing another output's .gcda path or checksum. *)
-      "-fprofile";
-      "-fcoverage";
+      "-fprofile-arcs";
+      "-fprofile-generate";
+      "-fprofile-instr-generate";
+      "-fprofile-instrument=";
+      "-fcs-profile-generate";
+      "-fcoverage-mapping";
+      "-femit-coverage-data";
+      "-femit-coverage-notes";
+      "-coverage-data-file";
+      "-coverage-notes-file";
+      "-fprofile-use";
       "-ftest-coverage";
       "--coverage";
       "-fauto-profile";
@@ -1415,7 +1424,7 @@ let cache_reuse_probe ~exe ~root =
     let asm = Stdlib.Filename.concat dir (name ^ ".s") in
     let report = Stdlib.Filename.concat dir (name ^ ".counts") in
     let log = Stdlib.Filename.concat dir (name ^ ".log") in
-    let tmp = Stdlib.Filename.concat dir (name ^ "_tmp") in
+    let tmp = Stdlib.Filename.concat dir (name ^ " tmp") in
     mkdir_p tmp;
     let env =
       Unix.environment () |> Array.to_list
@@ -1456,8 +1465,8 @@ let cache_reuse_probe ~exe ~root =
   let invalidation = "a source change invalidates the census listing cache" in
   if String.equal cold "0 0 1" && String.equal warm "0 0 1" && String.equal changed "0 0 1" then (
     let backend = "configured compiler (listing memoization bypassed)" in
-    Verdict.skipped ~backend reuse;
-    Verdict.skipped ~backend invalidation)
+    Verdict.skipped ~aggregation:`Environment ~backend reuse;
+    Verdict.skipped ~aggregation:`Environment ~backend invalidation)
   else (
     Verdict.p reuse
       (String.equal cold "0 1 0" && String.equal warm "1 0 0" && String.equal first second);
@@ -1471,7 +1480,14 @@ let cache_policy_probes () =
       "-fprofile-instr-generate";
       "-ftest-coverage";
       "--coverage";
+      "-femit-coverage-data";
+      "-femit-coverage-notes";
+      "-coverage-data-file";
+      "-coverage-notes-file";
     ]
+    ~f:plan_has_mutable_codegen_inputs;
+  Verdict.p_none "ordinary compiler coverage metadata permits listing memoization"
+    [ "clang -cc1 -fcoverage-compilation-dir=/build -fprofile-update=atomic" ]
     ~f:plan_has_mutable_codegen_inputs
 
 let half_bridge_cache : (bridge_direction * string * int * int, string option) Hashtbl.t =

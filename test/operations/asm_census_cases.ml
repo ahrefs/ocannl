@@ -585,13 +585,15 @@ let compilation_plan_probe () =
     Printf.sprintf
       "cc1 -O2 -dumpdir %s. -dumpbase %s.c -dumpbase-ext .c %s -o %s -I/sdk/include \
        -fdebug-compilation-dir=%s -dumpdir %s/\n\
-       COLLECT_GCC_OPTIONS='-dumpdir' '%s/'"
+       COLLECT_GCC_OPTIONS='-dumpdir' '%s/'\n\
+       cc1 -dumpdir \"%s/\""
       (Stdlib.Filename.remove_extension asm)
       (Stdlib.Filename.basename (Stdlib.Filename.remove_extension asm))
       src asm cwd (Stdlib.Filename.dirname asm) (Stdlib.Filename.dirname asm)
+      (Stdlib.Filename.dirname asm)
   in
   let normalized ?(flags = "-O2") ?(sdk = "/sdk/include") suffix =
-    let dir = "/tmp/probe" ^ suffix ^ "/" in
+    let dir = "/tmp/probe " ^ suffix ^ "/" in
     let src = dir ^ "ocannl_census_plan_source" ^ suffix ^ ".c" in
     let asm = dir ^ "ocannl_census_plan_output" ^ suffix ^ ".s" in
     let cwd = "/work/tree" ^ suffix in
@@ -609,8 +611,8 @@ let compilation_plan_probe () =
     && (not (String.equal first (normalized ~sdk:"/another-sdk/include" "aaa")))
     && not
          (String.equal
-            (normalized ~sdk:"/tmp/probeaaa/include" "aaa")
-            (normalized ~sdk:"/tmp/probebbb/include" "aaa")))
+            (normalized ~sdk:"/tmp/probe aaa/include" "aaa")
+            (normalized ~sdk:"/tmp/probe bbb/include" "aaa")))
 
 let () =
   compilation_plan_probe ();

@@ -158,8 +158,11 @@ let normalize_compilation_plan ~src ~asm ~cwd out =
       ~init:out
       ~f:(fun out dir ->
         List.fold (spellings dir) ~init:out ~f:(fun out dir ->
-            List.fold [ "-dumpdir "; "-dumpdir '"; "\"-dumpdir\" \""; "'-dumpdir' '" ] ~init:out
-              ~f:(fun out prefix ->
+            let prefixes =
+              List.concat_map [ "-dumpdir"; "'-dumpdir'"; "\"-dumpdir\"" ] ~f:(fun option ->
+                  List.map [ ""; "'"; "\"" ] ~f:(fun quote -> option ^ " " ^ quote))
+            in
+            List.fold prefixes ~init:out ~f:(fun out prefix ->
                 String.substr_replace_all out
                   ~pattern:(prefix ^ dir ^ "/")
                   ~with_:(prefix ^ "<DUMP-DIR>/"))))
