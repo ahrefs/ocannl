@@ -539,7 +539,7 @@ let () =
   String.is_substring src ~substring:marker
 let () = p "ordinary" (has (Generated.read "r") ~marker:"not a pin")|ocaml},
       "+partial" );
-    ( "an unresolved callback keeps its known fragment and explicit uncertainty",
+    ( "a generated collection callback keeps its known fragment and explicit uncertainty",
       {ocaml|let src = Generated.read "r"
 let () = List.iter (String.split_lines src) ~f:(fun line ->
   String.is_substring line ~substring:"known callback marker")|ocaml},
@@ -718,6 +718,83 @@ let () = p "marker" (has ~marker:"case predicate marker" (Generated.read "r"))|o
       {ocaml|let has ~marker = function src -> String.is_substring src ~substring:marker
 let () = ignore (Generated.read "r"); p "ordinary" (has ~marker:"not a case predicate pin" backend_name)|ocaml},
       "+partial" );
+    ( "an untraced diagnostic callback contributes uncertainty but no generated fragment",
+      {ocaml|let () = ignore (Generated.read "r")
+let () = List.iter nodes ~f:(fun node ->
+  String.is_substring (Ir.Tnode.debug_name node) ~substring:"bwd_rowdot")|ocaml},
+      "+partial" );
+    ( "an untraced refutation callback contributes no emitted-text marker",
+      {ocaml|let () = ignore (Generated.read "r")
+let () = p_all "refutation" (Sspace.refutations tree) ~f:(fun wit ->
+  String.is_substring wit ~substring:"does not divide innermost contraction extent k=12")|ocaml},
+      "+partial" );
+    ( "a known helper preserves the predicate callable it returns",
+      {ocaml|let has src marker = String.is_substring src ~substring:marker
+let id f = f
+let check = id has
+let () = p "marker" (check (Generated.read "r") "returned callable marker")|ocaml},
+      {|"returned callable marker" +partial|} );
+    ( "a returned predicate callable on ordinary input contributes no marker",
+      {ocaml|let has src marker = String.is_substring src ~substring:marker
+let id f = f
+let check = id has
+let () = ignore (Generated.read "r"); p "ordinary" (check backend_name "cuda")|ocaml},
+      "+partial" );
+    ( "an opaque function-case ordinary tuple component stays partial without a pin",
+      {ocaml|let second = function src, name -> name
+let name = second (Generated.read "r", backend_name)
+let () = p "ordinary" (String.is_substring name ~substring:"cuda")|ocaml},
+      "+partial" );
+    ( "an opaque function-case generated tuple component remains explicitly uncertain",
+      {ocaml|let first = function src, name -> src
+let src = first (Generated.read "r", backend_name)
+let () = p "marker" (String.is_substring src ~substring:"opaque tuple marker")|ocaml},
+      "+partial" );
+    ( "an opaque function-case ordinary record component stays partial without a pin",
+      {ocaml|let second = function { src; name } -> name
+let name = second { src = Generated.read "r"; name = backend_name }
+let () = p "ordinary" (String.is_substring name ~substring:"cuda")|ocaml},
+      "+partial" );
+    ( "a function-case internal read remains independent of opaque components",
+      {ocaml|let read = function src, name -> Generated.read "internal"
+let src = read (backend_name, backend_name)
+let () = p "marker" (String.is_substring src ~substring:"independent case marker")|ocaml},
+      {|"independent case marker"|} );
+    ( "a source returned through ref mutation remains visibly uncorrelated",
+      {ocaml|let store x = let r = ref "" in r := x; !r
+let src = store (Generated.read "r")
+let () = p "marker" (String.is_substring src ~substring:"mutation marker")|ocaml},
+      "+partial" );
+    ( "ordinary input through ref mutation cannot validate a source marker",
+      {ocaml|let store x = let r = ref "" in r := x; !r
+let src = store backend_name
+let () = ignore (Generated.read "r"); p "ordinary" (String.is_substring src ~substring:"cuda")|ocaml},
+      "+partial" );
+    ( "a discarded record write keeps the source dependency explicitly uncertain",
+      {ocaml|let store x = let r = { value = "" } in r.value <- x; r.value
+let src = store (Generated.read "r")
+let () = p "marker" (String.is_substring src ~substring:"record mutation marker")|ocaml},
+      "+partial" );
+    ( "a let-bound write keeps its source dependency explicitly uncertain",
+      {ocaml|let store x = let r = ref "" in let () = r := x in !r
+let src = store (Generated.read "r")
+let () = p "marker" (String.is_substring src ~substring:"let mutation marker")|ocaml},
+      "+partial" );
+    ( "a generated ref initializer cannot validate text after an ordinary overwrite",
+      {ocaml|let store x = let r = ref (Generated.read "initial") in r := x; !r
+let src = store backend_name
+let () = p "ordinary" (String.is_substring src ~substring:"cuda")|ocaml},
+      "+partial" );
+    ( "a generated record initializer cannot validate an overwritten field",
+      {ocaml|let store x = let r = { value = Generated.read "initial" } in r.value <- x; r.value
+let src = store backend_name
+let () = p "ordinary" (String.is_substring src ~substring:"cuda")|ocaml},
+      "+partial" );
+    ( "an independent generated result survives a preceding write boundary",
+      {ocaml|let store x = let r = ref "" in r := x; Generated.read "internal"
+let src = store backend_name
+let () = p "marker" (String.is_substring src ~substring:"independent mutation marker")|ocaml},
+      {|"independent mutation marker" +partial|} );
     ( "a helper-local generated read propagates through normalization aliases",
       {ocaml|let check ~routine ~marker =
   let src = Generated.read routine in

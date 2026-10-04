@@ -82,7 +82,7 @@ ok: source -- an unused self-sourcing wrapper has no false partial
 ok: source -- a wrapper sourcing through local aliases has no false partial
 ok: source -- same-parameter source normalization preserves real pins despite a callback
 ok: source -- normalizing an unrelated shadow preserves uncertainty without caller pins
-ok: source -- an unresolved callback keeps its known fragment and explicit uncertainty
+ok: source -- a generated collection callback keeps its known fragment and explicit uncertainty
 ok: source -- pattern-bound source fragments inherit the scrutinee provenance
 ok: source -- ordinary arguments forwarded by a known wrapper contribute no fragments
 ok: source -- exception messages do not inherit generated source from the protected computation
@@ -115,6 +115,21 @@ ok: source -- a function-case result inherits its actual positional input
 ok: source -- a function-case constant result does not borrow its generated input
 ok: source -- a function-case predicate validates its source and caller marker
 ok: source -- a function-case predicate on ordinary input contributes no caller marker
+ok: source -- an untraced diagnostic callback contributes uncertainty but no generated fragment
+ok: source -- an untraced refutation callback contributes no emitted-text marker
+ok: source -- a known helper preserves the predicate callable it returns
+ok: source -- a returned predicate callable on ordinary input contributes no marker
+ok: source -- an opaque function-case ordinary tuple component stays partial without a pin
+ok: source -- an opaque function-case generated tuple component remains explicitly uncertain
+ok: source -- an opaque function-case ordinary record component stays partial without a pin
+ok: source -- a function-case internal read remains independent of opaque components
+ok: source -- a source returned through ref mutation remains visibly uncorrelated
+ok: source -- ordinary input through ref mutation cannot validate a source marker
+ok: source -- a discarded record write keeps the source dependency explicitly uncertain
+ok: source -- a let-bound write keeps its source dependency explicitly uncertain
+ok: source -- a generated ref initializer cannot validate text after an ordinary overwrite
+ok: source -- a generated record initializer cannot validate an overwritten field
+ok: source -- an independent generated result survives a preceding write boundary
 ok: source -- a helper-local generated read propagates through normalization aliases
 ok: source -- same-named local predicates pin only their in-scope composite context
 ok: source -- a nested predicate validates an enclosing source parameter at its call

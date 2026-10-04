@@ -145,9 +145,6 @@ test/operations/canonical_render.ml [renders generated text in memory; also pins
     "?"
     "s0"
 test/operations/cc_march_census.ml [also pins text this scan cannot name]
-    ".cfi_endproc"
-    "cvt"
-    ... ^ ".c"
 test/operations/concat_loop_symbols.ml [renders generated text in memory]
 test/operations/cost_model_floor.ml [renders generated text in memory]
 test/operations/cpu_parallel.ml
@@ -177,7 +174,6 @@ test/operations/gpu_lane_reduction.ml [also pins text this scan cannot name]
     " " ^ ... ^ " = 0;"
     "lane all-reduce into a scope local"
 test/operations/gpu_serial_lanes.ml [also pins text this scan cannot name]
-    "bwd_rowdot"
     "for ("
 test/operations/hardware_axes_parity.ml
     " = 0;"
@@ -198,7 +194,6 @@ test/operations/hardware_warp_shuffle.ml [also pins text this scan cannot name]
     "half wred_partials_"
     "half wred_v_"
     "ocannl_shfl_xor"
-    "ocannl_shfl_xor(wred_v_"
     "wred_partials_"
 test/operations/hardware_workgroup_reduce.ml
     "__shared__ float partial_sums[64]"
@@ -261,7 +256,6 @@ test/operations/schedule_batch_grid.ml [also pins text this scan cannot name]
 test/operations/schedule_batched_mma.ml
     "Tile_mma register tiling"
 test/operations/schedule_contraction_nest.ml [also pins text this scan cannot name]
-    "does not divide innermost contraction extent k=12 (of K=48 over 2 loops)"
 test/operations/schedule_conv_gemm.ml
     "Tile_mma register tiling"
     "fragment_"
@@ -427,11 +421,9 @@ test/operations/schedule_pad.ml
 test/operations/schedule_pipelined_matmul.ml [also pins text this scan cannot name]
     "% 2"
     "[" ^ ... ^ "]"
-    "no longer Serial"
     "ocannl_cp_async"
     "ocannl_cp_async4(&"
     "ocannl_cp_async_wait_all();"
-    "outside its rotor loop"
 test/operations/schedule_register_matmul.ml
     "__shared__ float tile_"
     "acc_mc1"

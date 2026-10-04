@@ -1601,7 +1601,15 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   argument; a pure helper substitutes only the formal dependencies of its returned value at
   each call. Buffer-returning helpers keep inputs used by earlier writes at an explicit uncertainty
   boundary; the scan does not model memory effects. Known ordinary replacement and unresolved
-  callback input have distinct uncertainty states, so only the latter can retain a named fragment.
+  callback input have distinct uncertainty states. A named fragment requires generated-source
+  evidence; an untraced callback parameter alone keeps only the partial mark. Unary callbacks
+  for `List.iter`, `map`, `exists`, `for_all`, `filter`, `filter_map` and `count` receive generated evidence
+  only from their actual collection argument, with unresolved execution. Other combinators and
+  callback shapes remain unsupported. Symbolic components
+  of opaque aggregate inputs and results flowing through explicit writes are uncorrelated, so
+  substituting a generated argument cannot pretend that the selected component contains it.
+  Discarded ref, field, array and byte writes preserve source dependencies as uncertain effects;
+  this is a boundary, not a memory model. Independent returned evidence survives that boundary.
   Completed predicates return ordinary booleans, rather than carrying their callable identity into verdict bindings.
   A composite fragment retains its literal context and every caller-supplied component in the
   inventory. An omitted optional marker uses its default only when a later positional argument
@@ -1618,7 +1626,7 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   Ordinary forwarding wrappers, mutation, partial applications and unfollowed callbacks remain
   explicitly partial; this includes ordinary-source calls, which contribute no fragment. Known
   local calls can validate captured parameters and callbacks; unknown higher-order calls keep any
-  known fragments alongside their partial mark.
+  independently validated fragments alongside their partial mark.
 - **What no file-local rule can follow now says so.** A buffer is where generated text lands with no
   name to carry it, and the ways to fill one do not end (a wrapper reaching its parameter through a
   local binding, PPrint's own `ToBuffer` renderers, a buffer in a record). So a substring test whose
