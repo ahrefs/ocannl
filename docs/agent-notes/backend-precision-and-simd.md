@@ -1718,5 +1718,7 @@ files.
   integral host floats as two unsigned words and a shift, with one base evaluation. The shared
   `Builtins_cc.integer_power_builtins` uses rounded squaring/multiplication followed by a reciprocal
   for negative exponents, computes narrow storage in f32, and defines exponent zero as 1 even for
-  NaN. This is an integer multiplication policy, not a correctly rounded floating-pow promise;
+  NaN. Bitwise classification and final sign restoration are required under HIP fast math:
+  the arithmetic-only helper lost half `(-0)^3`'s sign and produced NaN for double `0^-1`.
+  This is an integer multiplication policy, not a correctly rounded floating-pow promise;
   fractional and dynamic exponents retain the vendor operation. Guard: `integer_power_domain`.

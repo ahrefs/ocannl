@@ -584,4 +584,6 @@ inline uint8_t single_to_fp8(float f) {
       [] );
   ]
 
-let builtins = Builtins_cc.integer_power_builtins ~prefix:"inline" ~supports_double:false @ builtins
+let builtins =
+  Builtins_cc.integer_power_builtins ~prefix:"inline" ~supports_double:false ~dialect:`Metal
+  @ builtins
