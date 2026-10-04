@@ -357,16 +357,9 @@ let () = Generated.init ~backend_name|ocaml},
       [ "Test_utils.Generated.init"; "Generated.init" ] );
   ]
 
-(* gh-ocannl-749: which configuration keys a source reads STRAIGHT from the environment, and whether
-   it does so somewhere this scan cannot follow.
-
-   The shape that matters is a guard: a list of key names and an iteration handing each to
-   `Utils.read_env_var`. Its keys never sit next to the call, so a scan that reported only what the
-   call site spells would answer "none" for the very sources the rule is about -- and answering
-   "none" is what an unread guard looks like. The dynamic flag is the answer instead, and the caller
-   falls back to the file's string literals, intersected with the configuration registry.
-
-   Each case is the pair: the keys named literally, and whether some reach is dynamic. *)
+(* gh-ocannl-749/797: direct environment reads and the fixed guard-key contract. A literal call
+   names its key; a dynamic reach must have the adjacent local-list/iteration/match shape.
+   Unsupported forms refuse rather than falling back to incidental string literals. *)
 let env_reader_cases =
   [
     ( "a literal argument names its key",
@@ -387,10 +380,12 @@ let x = read_env_var "profile"|ocaml},
       {ocaml|let message = "Utils.read_env_var \"profile\" is how a guard reads"|ocaml},
       ([], false) );
     (* The guard, which is the shape the rule exists for: the key arrives as a parameter, and the
-       LIST it arrives from is what the scan resolves (see the key-list family below). *)
-    ( "a key taken from a resolvable list is the keys of that list",
-      {ocaml|let guarded = [ "log_level"; "profile" ]
-let () = List.iter (fun arg_name -> ignore (Utils.read_env_var arg_name)) guarded|ocaml},
+       adjacent literal LIST is what the scan reads (see the key-list family below). *)
+    ( "a structural guard names precisely its literal keys",
+      {ocaml|let () =
+  let guarded_keys = [ "log_level"; "profile" ] in
+  Base.List.iter guarded_keys ~f:(fun arg_name ->
+    match Utils.read_env_var arg_name with Some _ -> () | None -> ())|ocaml},
       ([ "log_level"; "profile" ], false) );
     (* Handing the function around as a value is the same loss one layer up: whatever calls it is
        out of reach, so the source cannot be answered for either (the settings predicates above take
@@ -405,8 +400,10 @@ let also = Utils.read_env_var|ocaml},
     (* Both spellings in one file, since a guard commonly sits beside a direct read. *)
     ( "a literal read and a guard in one file",
       {ocaml|let () = ignore (Utils.read_env_var "profile")
-let guarded = [ "log_level" ]
-let () = List.iter (fun arg_name -> ignore (Utils.read_env_var arg_name)) guarded|ocaml},
+let () =
+  let guarded_keys = [ "log_level" ] in
+  Base.List.iter guarded_keys ~f:(fun arg_name ->
+    match Utils.read_env_var arg_name with Some _ -> () | None -> ())|ocaml},
       ([ "log_level"; "profile" ], false) );
     (* A different function of the same module is not the reader: `read_cmdline_or_env_var` consults
        the commandline first, which an ambient variable cannot outrank, so it is not the
@@ -451,178 +448,228 @@ let x = Utils.read_env_var "profile"|ocaml},
       ([ "profile" ], false) );
   ]
 
-(* The LIST a guard iterates, which is what the scan resolves so that everything else can be
-   refused. These are the shapes the guards in this repository are written in; an expression outside
-   them is reported, not approximated. The pair is the keys resolved and whether anything was left
-   unresolved. *)
+(* Keep the old inference fixtures as refusals beside the accepted structural forms. Their
+   list-binding, scope and projection variants now all require migration, without interpretation. *)
 let key_list_cases =
   [
-    ( "a list bound at top level and iterated",
+    ( "a local literal list immediately feeds the structural guard",
+      {ocaml|let guard () =
+  let guarded_keys = [ "log_level"; "profile" ] in
+  Base.List.iter guarded_keys ~f:(fun key ->
+    match Utils.read_env_var key with None -> () | Some _ -> ())|ocaml},
+      ([ "log_level"; "profile" ], false) );
+    ( "a structural empty guard reads no keys",
+      {ocaml|let guard () =
+  let guarded_keys = [] in
+  Base.List.iter guarded_keys ~f:(fun key ->
+    match Utils.read_env_var key with None -> () | Some _ -> ())|ocaml},
+      ([], false) );
+    ( "decoded literals and a following relationship check are supported",
+      {ocaml|let guard () =
+  let guarded_keys = [ {|profile|}; "log\095level" ] in
+  Base.List.iter guarded_keys ~f:(fun key ->
+    match Utils.read_env_var key with None -> () | Some _ -> ());
+  check guarded_keys|ocaml},
+      ([ "log_level"; "profile" ], false) );
+    ( "an extra reader in a match arm is checked independently",
+      {ocaml|let guard () =
+  let guarded_keys = [ "profile" ] in
+  Base.List.iter guarded_keys ~f:(fun key ->
+    match Utils.read_env_var key with None -> ignore (Utils.read_env_var dynamic) | Some _ -> ())|ocaml},
+      ([ "profile" ], true) );
+    ( "qualified parameter basenames cannot supply the callback key",
+      {ocaml|let guard () =
+  let guarded_keys = [ "profile" ] in
+  Base.List.iter guarded_keys ~f:(fun key ->
+    match Utils.read_env_var Other.key with None -> () | Some _ -> ())|ocaml},
+      ([], true) );
+    ( "a local nonliteral list is refused",
+      {ocaml|let guard () =
+  let guarded_keys = [ dynamic ] in
+  Base.List.iter guarded_keys ~f:(fun key ->
+    match Utils.read_env_var key with None -> () | Some _ -> ())|ocaml},
+      ([], true) );
+    ( "a callback rebinding before the read violates the fixed shape",
+      {ocaml|let guard () =
+  let guarded_keys = [ "profile" ] in
+  Base.List.iter guarded_keys ~f:(fun key ->
+    let key = dynamic in
+    match Utils.read_env_var key with None -> () | Some _ -> ())|ocaml},
+      ([], true) );
+    ( "rebinding the structural iterator root is refused without scope resolution",
+      {ocaml|module Base = Other
+let guard () =
+  let guarded_keys = [ "profile" ] in
+  Base.List.iter guarded_keys ~f:(fun key ->
+    match Utils.read_env_var key with None -> () | Some _ -> ())|ocaml},
+      ([], true) );
+    ( "a simultaneous local binding violates the single-list contract",
+      {ocaml|let guard () =
+  let guarded_keys = [ "profile" ] and other = [] in
+  Base.List.iter guarded_keys ~f:(fun key ->
+    match Utils.read_env_var key with None -> () | Some _ -> ())|ocaml},
+      ([], true) );
+    ( "a statement before the iteration violates adjacency",
+      {ocaml|let guard () =
+  let guarded_keys = [ "profile" ] in
+  report guarded_keys;
+  Base.List.iter guarded_keys ~f:(fun key ->
+    match Utils.read_env_var key with None -> () | Some _ -> ())|ocaml},
+      ([], true) );
+    ( "a receiver alias in a dynamic guard requires the canonical spelling",
+      {ocaml|module U = Utils
+let guard () =
+  let guarded_keys = [ "profile" ] in
+  Base.List.iter guarded_keys ~f:(fun key ->
+    match U.read_env_var key with None -> () | Some _ -> ())|ocaml},
+      ([], true) );
+    ( "a local declaration of the iterator root is refused",
+      {ocaml|let guard () =
+  let module Base = Other in
+  let guarded_keys = [ "profile" ] in
+  Base.List.iter guarded_keys ~f:(fun key ->
+    match Utils.read_env_var key with None -> () | Some _ -> ())|ocaml},
+      ([], true) );
+    ( "a functor parameter taking the iterator root is refused",
+      {ocaml|module F (Base : S) = struct
+let guard () =
+  let guarded_keys = [ "profile" ] in
+  Base.List.iter guarded_keys ~f:(fun key ->
+    match Utils.read_env_var key with None -> () | Some _ -> ())
+end|ocaml},
+      ([], true) );
+    ( "legacy form refused -- a list bound at top level and iterated",
       {ocaml|let guarded = [ "log_level"; "profile" ]
 let () = List.iter guarded ~f:(fun k -> ignore (Utils.read_env_var k))|ocaml},
-      ([ "log_level"; "profile" ], false) );
-    ( "the stdlib argument order too",
+      ([], true) );
+    ( "legacy form refused -- the stdlib argument order too",
       {ocaml|let guarded = [ "log_level" ]
 let () = List.iter (fun k -> ignore (Utils.read_env_var k)) guarded|ocaml},
-      ([ "log_level" ], false) );
-    ( "a list written at the iteration",
+      ([], true) );
+    ( "legacy form refused -- a list written at the iteration",
       {ocaml|let () = List.iter [ "log_level" ] ~f:(fun k -> ignore (Utils.read_env_var k))|ocaml},
-      ([ "log_level" ], false) );
-    (* `List.map keys ~f:fst @ [ … ]` is how `profile_precedence` builds its guard list out of the
-       table it also prints. *)
-    ( "a projection of a table, appended to a literal",
+      ([], true) );
+    ( "legacy form refused -- a projection of a table, appended to a literal",
       {ocaml|let keys = [ ("autotune_rounds", "2"); ("tf32_matmuls", "false") ]
 let guarded = List.map keys ~f:fst @ [ "no_config_file" ]
 let () = List.iter guarded ~f:(fun k -> ignore (Utils.read_env_var k))|ocaml},
-      ([ "autotune_rounds"; "no_config_file"; "tf32_matmuls" ], false) );
-    ( "the reader handed straight to the iteration is answered as well",
+      ([], true) );
+    ( "legacy form refused -- the reader handed straight to the iteration is answered as well",
       {ocaml|let guarded = [ "log_level" ]
 let () = List.iter guarded ~f:Utils.read_env_var|ocaml},
-      ([ "log_level" ], false) );
-    (* And the refusals. A list this scan cannot follow is REPORTED, not approximated from whatever
-       literals the file happens to contain -- an incidental `"profile"` elsewhere in the source
-       made an unresolved reach look answered (Codex P2, round 4 of PR #484). *)
-    ( "a list from another compilation unit is unresolved",
+      ([], true) );
+    ( "legacy form refused -- a list from another compilation unit is unresolved",
       {ocaml|let () = List.iter Shared.guarded ~f:(fun k -> ignore (Utils.read_env_var k))|ocaml},
       ([], true) );
-    (* And it stays unresolved when a LOCAL binding shares its basename: resolving `Shared.guarded`
-       through a local `guarded` would answer with the wrong keys and swallow the refusal that
-       reports it (Codex P2, round 6 of PR #484). *)
-    ( "a qualified list does not resolve through a local binding of the same name",
+    ( "legacy form refused -- a qualified list does not resolve through a local binding of the \
+       same name",
       {ocaml|let guarded = [ "profile" ]
 let () = List.iter Shared.guarded ~f:(fun k -> ignore (Utils.read_env_var k))|ocaml},
       ([], true) );
-    (* Only the combinators whose argument semantics this scan knows establish an iteration. A
-       wrapper carrying a decoy list otherwise supplied the keys, blessing the reader with a list it
-       is never handed (Codex P2, round 6). *)
-    ( "an unknown higher-order call establishes nothing, decoy list or not",
+    ( "legacy form refused -- an unknown higher-order call establishes nothing, decoy list or not",
       {ocaml|let guarded = [ "log_level" ]
 let decoy = [ "profile" ]
 let () = apply decoy guarded ~f:(fun k -> ignore (Utils.read_env_var k))|ocaml},
       ([], true) );
-    ( "an incidental literal does not answer for an unresolved reach",
+    ( "legacy form refused -- an incidental literal does not answer for an unresolved reach",
       {ocaml|let label = "profile"
 let () = ignore (Utils.read_env_var Sys.argv.(1))|ocaml},
       ([], true) );
-    ( "a list whose elements are not literals is unresolved",
+    ( "legacy form refused -- a list whose elements are not literals is unresolved",
       {ocaml|let guarded = [ some_key; other_key ]
 let () = List.iter guarded ~f:(fun k -> ignore (Utils.read_env_var k))|ocaml},
       ([], true) );
-    (* The parameter carries its keys over the lambda's BODY and nowhere else, so a same-named
-       variable elsewhere is not silently answered by it. *)
-    (* A name resolves to the binding VISIBLE at the use, not to the file's last one: taking the
-       latest read `let guarded = […] … let guarded = []` as the empty list and asked for no
-       declaration, while the guard really iterates the first (Codex P2, round 5 of PR #484). *)
-    ( "a later rebinding does not reach backwards",
+    ( "legacy form refused -- a later rebinding does not reach backwards",
       {ocaml|let guarded = [ "log_level" ]
 let () = List.iter guarded ~f:(fun k -> ignore (Utils.read_env_var k))
 let guarded = []|ocaml},
-      ([ "log_level" ], false) );
-    ( "and a use after the rebinding sees the new one",
+      ([], true) );
+    ( "legacy form refused -- and a use after the rebinding sees the new one",
       {ocaml|let guarded = [ "log_level" ]
 let guarded = [ "profile" ]
 let () = List.iter guarded ~f:(fun k -> ignore (Utils.read_env_var k))|ocaml},
-      ([ "profile" ], false) );
-    (* A parameter REBOUND inside the callback is not the iterated one: answering it with the
-       iterated list certifies a program that can read any key at all (Codex P2, round 7 of PR
-       #484). *)
-    ( "a parameter rebound inside the callback is not the iterated one",
+      ([], true) );
+    ( "legacy form refused -- a parameter rebound inside the callback is not the iterated one",
       {ocaml|let () = List.iter [ "profile" ] ~f:(fun k -> let k = Sys.argv.(1) in ignore (Utils.read_env_var k))|ocaml},
       ([], true) );
-    ( "and an inner iteration binds its own",
+    ( "legacy form refused -- and an inner iteration binds its own",
       {ocaml|let () =
   List.iter [ "profile" ] ~f:(fun k ->
       ignore (Utils.read_env_var k);
       List.iter [ "log_level" ] ~f:(fun k -> ignore (Utils.read_env_var k)))|ocaml},
-      ([ "log_level"; "profile" ], false) );
-    (* The projection is `List.map` and not any callee whose basename is `map`: a local one that
-       ignores its argument had its input projected as though it were the standard function. *)
-    ( "a local map does not project a table",
+      ([], true) );
+    ( "legacy form refused -- a local map does not project a table",
       {ocaml|let map _ ~f:_ = [ "virtualize_max_visits" ]
 let keys = [ ("profile", "x") ]
 let guarded = map keys ~f:fst
 let () = List.iter guarded ~f:(fun k -> ignore (Utils.read_env_var k))|ocaml},
       ([], true) );
-    (* Everything the resolver follows it matches by NAME, which is sound only while the file has
-       not taken the name for something else -- the one direction a whitelist does not close by
-       itself, and a silent one. A source that rebinds a trusted name gets no resolution at all. *)
-    ( "a file that rebinds List resolves nothing",
+    ( "legacy form refused -- a file that rebinds List resolves nothing",
       {ocaml|module List = Other
 let guarded = [ "profile" ]
 let () = List.iter guarded ~f:(fun k -> ignore (Utils.read_env_var k))|ocaml},
       ([], true) );
-    ( "and one that rebinds fst does not project a table",
+    ( "legacy form refused -- and one that rebinds fst does not project a table",
       {ocaml|let fst _ = "profile"
 let keys = [ ("log_level", "0") ]
 let guarded = List.map keys ~f:fst
 let () = List.iter guarded ~f:(fun k -> ignore (Utils.read_env_var k))|ocaml},
       ([], true) );
-    (* An `open` is not a rebinding: `Base.List.map` is `List.map`, and this repository opens Base
-       everywhere. *)
-    (* A nested module ending in `List` is not the standard one: a custom iterator may call the
-       callback with keys the list does not hold (Codex P2, round 8 of PR #484). *)
-    ( "a nested Other.List.iter is not the standard combinator",
+    ( "legacy form refused -- a nested Other.List.iter is not the standard combinator",
       {ocaml|let guarded = [ "profile" ]
 let () = Other.List.iter guarded ~f:(fun k -> ignore (Utils.read_env_var k))|ocaml},
       ([], true) );
-    ( "but a standard root in front of it is",
+    ( "legacy form refused -- but a standard root in front of it is",
       {ocaml|let guarded = [ "profile" ]
 let () = Base.List.iter guarded ~f:(fun k -> ignore (Utils.read_env_var k))|ocaml},
-      ([ "profile" ], false) );
-    (* The map callee being right does not make its argument right: `~f:Other.fst` may return the
-       other column (Codex P2, round 9 of PR #484). *)
-    ( "a qualified projector that is not the standard fst does not project",
+      ([], true) );
+    ( "legacy form refused -- a qualified projector that is not the standard fst does not project",
       {ocaml|let keys = [ ("profile", "virtualize_max_visits") ]
 let guarded = List.map keys ~f:Other.fst
 let () = List.iter guarded ~f:(fun k -> ignore (Utils.read_env_var k))|ocaml},
       ([], true) );
-    (* Rebinding an approved ROOT leaves the whitelisted path intact and changes what it means. *)
-    ( "a rebound standard root is a rebound trusted name",
+    ( "legacy form refused -- a rebound standard root is a rebound trusted name",
       {ocaml|module Base = Shared
 let guarded = [ "profile" ]
 let () = Base.List.iter guarded ~f:(fun k -> ignore (Utils.read_env_var k))|ocaml},
       ([], true) );
-    ( "a qualified concatenation operator is not the standard one",
+    ( "legacy form refused -- a qualified concatenation operator is not the standard one",
       {ocaml|let left = [ "profile" ]
 let right = [ "log_level" ]
 let guarded = Shared.( @ ) left right
 let () = List.iter guarded ~f:(fun k -> ignore (Utils.read_env_var k))|ocaml},
       ([], true) );
-    ( "an open of a library providing List is not a rebinding",
+    ( "legacy form refused -- an open of a library providing List is not a rebinding",
       {ocaml|open Base
 let guarded = [ "profile" ]
 let () = List.iter guarded ~f:(fun k -> ignore (Utils.read_env_var k))|ocaml},
-      ([ "profile" ], false) );
-    (* A rebinding this scan cannot resolve is a TOMBSTONE, not an absence: reaching past it to the
-       earlier list answers with keys that no longer hold (Codex P2, round 11 of PR #484). *)
-    ( "an unresolvable rebinding is not reached past",
+      ([], true) );
+    ( "legacy form refused -- an unresolvable rebinding is not reached past",
       {ocaml|let guarded = [ "profile" ]
 let guarded = [ Sys.argv.(1) ]
 let () = List.iter guarded ~f:(fun k -> ignore (Utils.read_env_var k))|ocaml},
       ([], true) );
-    ( "and a use BEFORE it still sees the resolvable one",
+    ( "legacy form refused -- and a use BEFORE it still sees the resolvable one",
       {ocaml|let guarded = [ "profile" ]
 let () = List.iter guarded ~f:(fun k -> ignore (Utils.read_env_var k))
 let guarded = [ Sys.argv.(1) ]|ocaml},
-      ([ "profile" ], false) );
-    (* A tombstone is recorded for ANY later binding of a name that once denoted a key list --
-       inferring "list-shaped" from the AST form let this one past, being neither a constructor nor
-       an application (Codex P2, round 12 of PR #484). *)
-    ( "a conditional rebinding is tombstoned too",
+      ([], true) );
+    ( "legacy form refused -- a conditional rebinding is tombstoned too",
       {ocaml|let guarded = [ "profile" ]
 let guarded = if enabled then [ "virtualize_max_visits" ] else []
 let () = List.iter guarded ~f:(fun k -> ignore (Utils.read_env_var k))|ocaml},
       ([], true) );
-    ( "and a name that never denoted a list is not tombstoned by an unrelated binding",
+    ( "legacy form refused -- and a name that never denoted a list is not tombstoned by an \
+       unrelated binding",
       {ocaml|let guarded = [ "profile" ]
 let other = 3
 let () = List.iter guarded ~f:(fun k -> ignore (Utils.read_env_var k))|ocaml},
-      ([ "profile" ], false) );
-    ( "the binding does not escape the lambda it was established at",
+      ([], true) );
+    ( "legacy form refused -- the binding does not escape the lambda it was established at",
       {ocaml|let guarded = [ "log_level" ]
 let () = List.iter guarded ~f:(fun k -> ignore (Utils.read_env_var k))
 let elsewhere k = Utils.read_env_var k|ocaml},
-      ([ "log_level" ], true) );
+      ([], true) );
   ]
 
 let could_read_cases =
@@ -748,6 +795,12 @@ let () =
               dynamic (String.concat ~sep:"; " keys)));
   List.iter key_list_cases ~f:(fun (name, source, (expected_keys, expected_unresolved)) ->
       let found = Scan.env_reader_reads_in_source source in
+      List.iter found.Scan.reader_unresolved ~f:(fun diagnostic ->
+          if
+            not
+              (String.is_substring diagnostic ~substring:"expected `let guarded_keys"
+              && String.is_substring diagnostic ~substring:"line ")
+          then fail "key list -- %s: refusal lacks the required shape or source position" name);
       let unresolved = not (List.is_empty found.Scan.reader_unresolved) in
       let expected_keys = List.sort ~compare:String.compare expected_keys in
       if

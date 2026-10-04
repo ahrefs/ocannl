@@ -4168,26 +4168,15 @@ let guard_non_key = "not_a_config_key"
 (* The same guard with its key SHOUTED. `read_env_var` uppercases to build the variable, so this
    reads the very same `OCANNL_<KEY>`; a case-sensitive look-up against the registry dropped it as
    an unknown key and asked for nothing (Codex P2, round 5). *)
-let shouting_probe =
-  Printf.sprintf
-    "let guarded = [ %S ]\n\
-     let () =\n\
-    \  List.iter\n\
-    \    (fun arg_name ->\n\
-    \      match Utils.read_env_var arg_name with Some _ -> exit 1 | None -> ())\n\
-    \    guarded\n"
-    (String.uppercase guard_key)
-
 let guard_of key =
   Printf.sprintf
-    "let guarded = [ %S ]\n\
-     let () =\n\
-    \  List.iter\n\
-    \    (fun arg_name ->\n\
-    \      match Utils.read_env_var arg_name with Some _ -> exit 1 | None -> ())\n\
-    \    guarded\n"
+    "let () =\n\
+    \  let guarded_keys = [ %S ] in\n\
+    \  Base.List.iter guarded_keys ~f:(fun arg_name ->\n\
+    \    match Utils.read_env_var arg_name with Some _ -> exit 1 | None -> ())\n"
     key
 
+let shouting_probe = guard_of (String.uppercase guard_key)
 let guard_probe = guard_of guard_key
 
 (* A guard on a key the registry does not know. The reader builds and consults `OCANNL_<KEY>`

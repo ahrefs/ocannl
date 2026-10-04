@@ -36,20 +36,22 @@ open Stdio
    environment variable can outrank -- the honest option wherever it is available, a guard being
    only the second best. It is not available for these five: pinning them on the commandline is
    pinning the very defaults under test. *)
-let stderr_shaping_keys =
-  [ "suppress_welcome_message"; "log_config_sourcing"; "log_level"; "no_config_file"; "profile" ]
-
 (* On STDOUT, deliberately: the rule captures this process's stderr into its target, so a diagnostic
    written there would be swallowed by the very redirection it is explaining, leaving dune to report
    a bare "Command exited with code 1". Stdout is where the reason survives. *)
 let guard () =
-  List.iter stderr_shaping_keys ~f:(fun arg_name ->
-      Option.iter (Utils.read_env_var arg_name) ~f:(fun (value, var) ->
+  let guarded_keys =
+    [ "suppress_welcome_message"; "log_config_sourcing"; "log_level"; "no_config_file"; "profile" ]
+  in
+  Base.List.iter guarded_keys ~f:(fun arg_name ->
+      match Utils.read_env_var arg_name with
+      | None -> ()
+      | Some (value, var) ->
           printf
             "startup_streams: %s=%s is set in the environment and would rewrite this test's \
              expected stderr; unset it to run the test.\n"
             var value;
-          Stdlib.exit 1))
+          Stdlib.exit 1)
 
 (* The captured stderr names the config file by the absolute path the walk-up search built, so the
    golden gets the basename instead. The subject ran in this same directory (dune runs both actions
