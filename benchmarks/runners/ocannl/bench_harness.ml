@@ -314,6 +314,23 @@ let install_timing_trace () =
        fun depth ~calibration_samples ->
          depth_at := Some (now (), depth, calibration_samples);
          prev_depth depth ~calibration_samples);
+    let prev_probe = !Autotune.on_calibration_probe in
+    (Autotune.on_calibration_probe :=
+       fun probe ->
+         let role =
+           match probe.Autotune.role with
+           | Provisional_probe -> "provisional"
+           | Validation_probe -> "validation"
+           | Confirmation_probe -> "confirmation"
+           | Stall_retry_probe -> "stall_retry"
+           | Crossing_probe -> "crossing"
+           | Rescue_probe -> "rescue"
+         in
+         pr
+           "timing-trace: calibration probe: role %s, depth %d, %d batches, min %.6f ms, wall %.6f \
+            ms\n"
+           role probe.depth probe.runs probe.min_ms probe.wall_ms;
+         prev_probe probe);
     let prev_window = !Autotune.on_timed_window in
     (* Parenthesized like the three above: an unparenthesized [fun] would swallow the [at_exit]
        below into the callback and register one summary per timing call. *)
