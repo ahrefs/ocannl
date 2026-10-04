@@ -462,12 +462,16 @@ let collect_arm t (r : Autotune.report) =
 
 let collect_ship t what = t.shipped <- Some what
 
-(** The [Tile_mma] renderings of every routine one timed step runs. *)
-let step_census = function
-  | Plain routine -> routine.Context.mma
-  | Host_gate (_, _, grad_routine, sgd_routine) ->
-      Ir.C_syntax.merge_mma_summaries [ grad_routine.Context.mma; sgd_routine.Context.mma ]
-  | Device_gate (_, _, routine, _) -> routine.Context.mma
+(** Census of all compiled step routines, including a host-gated optimizer before execution. Unlike
+    the dominant-kernel filter, this describes compiled work, not which gates passed. *)
+let step_census routines =
+  Ir.C_syntax.merge_mma_summaries
+    (List.map (compiled_step_routines routines) ~f:(fun r -> r.Context.mma))
+
+let mma_wire (m : Ir.C_syntax.mma_summary) =
+  ( Ir.C_syntax.tensorization_name m.Ir.C_syntax.tensorization,
+    m.Ir.C_syntax.statements,
+    m.Ir.C_syntax.scalar_fallbacks )
 
 (** Records what the artifact this cell TIMES actually emitted (gh-ocannl-626). Every runner calls
     it with the routines it goes on to step, right after compiling them.
@@ -566,11 +570,7 @@ let tune_json t =
       Some
         (Bench_json.tune_object ~shipped ~searches:t.searches ~replays:t.replays
            ~no_searches:t.no_searches
-           ~shipped_mma:
-             (Option.map t.shipped_mma ~f:(fun (m : Ir.C_syntax.mma_summary) ->
-                  ( Ir.C_syntax.tensorization_name m.Ir.C_syntax.tensorization,
-                    m.Ir.C_syntax.statements,
-                    m.Ir.C_syntax.scalar_fallbacks )))
+           ~shipped_mma:(Option.map t.shipped_mma ~f:mma_wire)
            ~arms:(List.map named ~f:arm))
 
 let floats_of_gen g =
@@ -1196,8 +1196,8 @@ let protocol_of_st st =
     (the [tune] object's [no_searches] is what tells that apart from a replay — a count of arms
     whose {!Autotune.outcome} was one of the two states that search nothing, rather than an
     inference from two counters that are both zero). *)
-let measure_and_emit ~protocol ~backend ~variant ?(precision = "f32") ~compile_s ?tokens_per_step
-    ?tune ?(out = Stdio.stdout) ?dominant_kernel ~run_step ~read_loss ~sync () =
+let measure_and_emit ~routines ~protocol ~backend ~variant ?(precision = "f32") ~compile_s
+    ?tokens_per_step ?tune ?(out = Stdio.stdout) ?dominant_kernel ~run_step ~read_loss ~sync () =
   let { workload; parity_steps; warmup_steps; timed_steps } = protocol in
   Stdio.eprintf "bench: compiled in %.1fs, starting %d parity steps\n%!" compile_s parity_steps;
   (* Monotonic high-resolution clock (not [Unix.gettimeofday]): on Windows the latter ticks at ~1
@@ -1263,6 +1263,7 @@ let measure_and_emit ~protocol ~backend ~variant ?(precision = "f32") ~compile_s
       ~simplify_fp_algebra:(fp_algebra, Utils.config_source_label fp_source)
       ~workload ~compile_s
       ~searched:(Option.value_map tune ~default:false ~f:searched)
+      ~shipped_mma:(mma_wire (step_census routines))
       ?tokens_per_step ?tune:(Option.bind tune ~f:tune_json) ~p10:(percentile synced 10.)
       ~p50:(percentile synced 50.) ~p90:(percentile synced 90.) ~queued_ms ~timed_steps ~peak_memory
       ?dominant_kernel ~losses ()
@@ -1379,7 +1380,8 @@ let run_self_test ?(out = Stdio.stdout) ?(leg = self_test_leg) ?inspect_compiled
   (* No [~tune]: an untuned cell, so the line's [searched] is false and it carries no [tune] object.
      What the self-test guards is the protocol and the emitter, not the search. *)
   let line =
-    measure_and_emit ~protocol:self_test_protocol ~backend ~variant:"self-test" ~compile_s ~out
+    measure_and_emit ~routines ~protocol:self_test_protocol ~backend ~variant:"self-test" ~compile_s
+      ~out
       ~dominant_kernel:(fun () -> dominant_kernel ~ctx:!ctx_ref ~bindings (step_routines routines))
       ~run_step
       ~read_loss:(fun () -> (!ctx_ref, loss).@[0])

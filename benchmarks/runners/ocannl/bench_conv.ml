@@ -126,7 +126,7 @@ let () =
   in
   let open Operation.At in
   ignore
-    (H.measure_and_emit ~protocol:(H.protocol_of_st st) ~backend
+    (H.measure_and_emit ~routines:(H.Plain routine) ~protocol:(H.protocol_of_st st) ~backend
        ~variant:(if tune then "tuned" else if materialize then "materialized" else "default")
        ~compile_s ~tune:arms
        ~dominant_kernel:(fun () -> H.dominant_kernel ~ctx ~bindings [ routine ])

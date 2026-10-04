@@ -304,6 +304,15 @@ let census ~constructors:(constructors, record_constructors) source =
 
 let needs_harness { records; traversals } = records >= 1 || traversals >= 1
 
+(** Remaining hand-built IR after adoption is informative, not a refusing cap. Keep both metrics
+    visible in the golden, using the same census and adoption boundary as the migration ratchet. *)
+let adopted_census rows =
+  List.filter_map rows ~f:(fun (path, counts, adoption) ->
+      match adoption with
+      | Adopted when needs_harness counts -> Some (path, counts)
+      | Adopted | Unlinked | Linked_unused -> None)
+  |> List.sort ~compare:(fun (a, _) (b, _) -> String.compare a b)
+
 let stanza_owns ~directory_modules ~module_name ~stanzas stanza =
   Option.value_map (Dune.head stanza) ~default:false ~f:(fun head ->
       List.mem Dune.module_bearing_heads head ~equal:String.equal)

@@ -3,6 +3,50 @@ Source floor: arrayjit/test/ >= 20
 Adoption threshold: 1 record construction or 1 private traversal
 Ll_builders values outside the IR surface (adopt nothing): (none)
 Ll_test values outside the IR surface (adopt nothing): base_ctx, blank, blind_axis, close, count, coverage_verified, cycle, cycle_flat, drift, flat, hooks_of, ignore1, max_modulus, no_hooks, place_residues, refused_as_local, same, sentinel, uncovered_residues, unflat, weighted
+Adopted tests still hand-building IR (non-refusing census):
+arrayjit/test/test_cross_cse.ml -- records=2 traversals=2
+arrayjit/test/test_local_scope_init.ml -- records=6 traversals=0
+arrayjit/test/test_one_hot_gather_rewrite.ml -- records=1 traversals=3
+arrayjit/test/test_stage_b_where_debug.ml -- records=3 traversals=0
+test/operations/access_fold.ml -- records=1 traversals=0
+test/operations/accum_max_one_extent.ml -- records=0 traversals=1
+test/operations/accum_width.ml -- records=11 traversals=1
+test/operations/affine_extraction.ml -- records=16 traversals=0
+test/operations/autotune_scope_provenance.ml -- records=1 traversals=0
+test/operations/back_to_back_runs.ml -- records=5 traversals=0
+test/operations/canonical_render.ml -- records=13 traversals=0
+test/operations/cc_march_census.ml -- records=6 traversals=0
+test/operations/cost_model_extraction.ml -- records=4 traversals=0
+test/operations/cost_model_floor.ml -- records=4 traversals=0
+test/operations/cost_model_template.ml -- records=3 traversals=0
+test/operations/cpu_parallel.ml -- records=11 traversals=0
+test/operations/footprint_materialization.ml -- records=4 traversals=0
+test/operations/gpu_lane_reduction.ml -- records=1 traversals=2
+test/operations/gpu_serial_lanes.ml -- records=3 traversals=5
+test/operations/hardware_warp_shuffle.ml -- records=1 traversals=0
+test/operations/integer_power_domain.ml -- records=1 traversals=0
+test/operations/launch_dim_gate.ml -- records=2 traversals=0
+test/operations/online_softmax.ml -- records=8 traversals=4
+test/operations/online_softmax_block.ml -- records=11 traversals=8
+test/operations/peel_census.ml -- records=8 traversals=0
+test/operations/peel_dead_level.ml -- records=10 traversals=0
+test/operations/prelowered_seam.ml -- records=9 traversals=0
+test/operations/reduction_accumulator_residency.ml -- records=4 traversals=1
+test/operations/reduction_forms.ml -- records=19 traversals=2
+test/operations/scan_loop.ml -- records=5 traversals=0
+test/operations/schedule_epilogue_fusion.ml -- records=4 traversals=3
+test/operations/schedule_partition.ml -- records=6 traversals=0
+test/operations/schedule_pipelined_matmul.ml -- records=3 traversals=7
+test/operations/scope_over_materialized.ml -- records=3 traversals=0
+test/operations/set_vec_extent_guard.ml -- records=0 traversals=2
+test/operations/simplify_if_narrowing.ml -- records=1 traversals=0
+test/operations/splice_semantics.ml -- records=1 traversals=0
+test/operations/tile_bf16_row_groups.ml -- records=3 traversals=0
+test/operations/vec_signed_zero.ml -- records=0 traversals=1
+test/operations/virtual_chain_fanin.ml -- records=9 traversals=0
+test/operations/virtual_rejection_boundary.ml -- records=1 traversals=0
+test/operations/virtual_shared_loop.ml -- records=1 traversals=0
+test/support/ll_test.ml -- records=0 traversals=3
 test/operations/affine_lowering.ml -- records<=0 traversals<=3: existing migration debt; adopt ll_test when touched
 test/operations/autotune_smoke.ml -- records<=3 traversals<=1: existing migration debt; adopt ll_test when touched
 test/operations/buffer_aliasing.ml -- records<=1 traversals<=0: links ll_test for operand helpers only; still hand-builds Low_level

@@ -804,7 +804,9 @@ than the driver (`CUDA_ERROR_UNSUPPORTED_PTX_VERSION` at module load), run it wi
   (every emitted `Tile_mma` declined to the lane-0 scalar loop) or `"not-requested"` (codegen
   emitted no `Tile_mma` at all), read off the compiled routine's census rather than re-derived by
   a harness, and `null` when there was no crowned candidate to consult — so an arm that consulted
-  no census can never read as tensorized. The `tune` object additionally carries `shipped_mma` —
+  no census can never read as tensorized. Every OCANNL result carries top-level `shipped_mma`,
+  including untuned cells: it merges every compiled step routine, including conditional host-gated
+  SGD, without extra timing. The `tune` object retains the same census as `tune.shipped_mma` —
   the census of the routine whose steps were TIMED — and that is what `orchestrate.py` reads, not
   the arm named as shipped: a gh-555 flip refinement that wins ships under `shipped: "flip"` and is
   not an arm at all, and on the `timing_ctx` path the tuner recompiles the winner in the production

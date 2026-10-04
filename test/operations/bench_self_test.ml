@@ -42,6 +42,7 @@ let is_str j k expected =
 let () =
   (* Emitted to stderr rather than stdout: the line carries wall-clock digits, and the golden is
      diffed. It is echoed rather than dropped so a failing run is diagnosable from the log. *)
+  let expected_mma = ref None in
   let inspect_step ctx bindings loss routines =
     let kernels = H.shipped_kernels routines in
     let writes = List.concat_map kernels ~f:(fun (_, seg) -> H.writes_of seg.Ir.Low_level.llc) in
@@ -59,7 +60,11 @@ let () =
     Verdict.p_all "every tiny training segment executes with a positive standalone time" outcomes
       ~f:(fun result -> match result with Ok ms -> Float.(ms > 0.) | Error _ -> false)
   in
-  let line = H.run_self_test ~out:Stdio.stderr ~inspect_step () in
+  let line =
+    H.run_self_test ~out:Stdio.stderr ~inspect_step
+      ~inspect_compiled:(fun _ routines -> expected_mma := Some (H.step_census routines))
+      ()
+  in
   (* Before any host-gated step runs, its conditional SGD is nevertheless compiled work. *)
   ignore
     (H.run_self_test ~out:Stdio.stderr
@@ -76,6 +81,12 @@ let () =
                (not (String.equal grad.Context.name sgd.Context.name))
                && List.exists shipped ~f:(fun r -> String.equal r.Context.name sgd.Context.name)
            | _ -> false);
+         let m = H.step_census routines in
+         Verdict.p "MMA census includes both compiled host-gated routines before execution"
+           (List.length shipped = 2
+           && m.statements = List.sum (module Int) shipped ~f:(fun r -> r.Context.mma.statements)
+           && m.scalar_fallbacks
+              = List.sum (module Int) shipped ~f:(fun r -> r.Context.mma.scalar_fallbacks));
          Verdict.p_all "that pre-execution census includes every optimizer parameter write"
            (Ocannl.Train.trainable_params loss |> Set.to_list)
            ~f:(fun p -> List.mem writes p.Ocannl.Tensor.value ~equal:Ir.Tnode.equal))
@@ -92,6 +103,10 @@ let () =
   Verdict.p "the emitted result line parses as one JSON object" (Option.is_some parsed);
   match parsed with
   | Some j ->
+      Verdict.p "untuned result census matches every compiled step routine"
+        (Option.value_map !expected_mma ~default:false ~f:(fun m ->
+             Yojson.Safe.equal (U.member "shipped_mma" j)
+               (Yojson.Safe.from_string (Bench_json.mma_object (Some (H.mma_wire m))))));
       Verdict.p "framework is ocannl" (is_str j "framework" "ocannl");
       Verdict.p "backend names the backend the cell ran on"
         (Option.value_map (string_field j "backend") ~default:false ~f:(Fn.non String.is_empty));

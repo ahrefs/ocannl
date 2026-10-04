@@ -13,6 +13,7 @@ from pathlib import Path
 
 import cell_group
 import gh675_cells
+import gh1002_cells
 
 
 HERE = Path(__file__).resolve().parent.parent
@@ -251,6 +252,155 @@ class CellGroupTest(unittest.TestCase):
         self.assertIs(child.observe(), cell_group.UNKNOWN)
         self.assertIs(observed, cell_group.GONE)
         child.wait()
+
+    def gh1002_driver(self, child_source, pidfile, timeout=30):
+        driver = subprocess.Popen(
+            self.python(
+                "import subprocess, sys, gh1002_cells as driver\n"
+                "driver._cancellation.install()\n"
+                "driver.CELL_TERMINATE_GRACE_S = 0.1\n"
+                f"driver.CELL_TIMEOUT_S = {timeout!r}\n"
+                "status = driver.run_in_own_group([sys.executable, '-c', sys.argv[1], "
+                "sys.argv[2]], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
+                "print(status)\n",
+                child_source,
+                pidfile,
+            ),
+            cwd=HERE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        def cleanup():
+            if driver.poll() is None:
+                driver.kill()
+            driver.communicate(timeout=10)
+
+        self.addCleanup(cleanup)
+        return driver
+
+    @unittest.skipUnless(os.name == "posix", "direct group signals require POSIX")
+    def test_gh1002_cell_receives_direct_group_sigterm(self):
+        pidfile = self.dir / "gh1002-direct.pid"
+        kill_the_group_on_cleanup(self, pidfile)
+        marker = self.dir / "term-received"
+        driver = self.gh1002_driver(
+            "import signal, sys, time, pathlib\n"
+            f"def term(*_): pathlib.Path({str(marker)!r}).write_text('TERM'); sys.exit(0)\n"
+            "signal.signal(signal.SIGTERM, term)\n"
+            + publish_pid("sys.argv[1]", "os.getpid()")
+            + "time.sleep(300)\n",
+            pidfile,
+        )
+        self.wait_file(pidfile)
+        pid = int(pidfile.read_text())
+        os.killpg(pid, signal.SIGTERM)
+        out, err = driver.communicate(timeout=10)
+        self.assertEqual(driver.returncode, 0, err)
+        self.assertEqual(out.strip(), "0")
+        self.assertEqual(marker.read_text(), "TERM")
+        self.assertTrue(self.wait_gone(pid))
+
+    @unittest.skipUnless(os.name == "posix", "driver signal fixtures require POSIX")
+    def test_gh1002_driver_cancellation_collects_the_cell(self):
+        for signum in (signal.SIGTERM, signal.SIGINT):
+            with self.subTest(signal=signum):
+                pidfile = self.dir / f"gh1002-cancel-{signum}.pid"
+                kill_the_group_on_cleanup(self, pidfile)
+                driver = self.gh1002_driver(
+                    "import sys, time\n"
+                    + publish_pid("sys.argv[1]", "os.getpid()")
+                    + "time.sleep(300)\n",
+                    pidfile,
+                )
+                self.wait_file(pidfile)
+                pid = int(pidfile.read_text())
+                driver.send_signal(signum)
+                out, err = driver.communicate(timeout=10)
+                self.assertNotEqual(driver.returncode, 0, (out, err))
+                self.assertTrue(self.wait_gone(pid), "cell outlived driver cancellation")
+
+    def test_gh1002_timeout_collects_the_cell(self):
+        pidfile = self.dir / "gh1002-timeout.pid"
+        kill_the_group_on_cleanup(self, pidfile)
+        driver = self.gh1002_driver(
+            "import sys, time\n"
+            + publish_pid("sys.argv[1]", "os.getpid()")
+            + "time.sleep(300)\n",
+            pidfile,
+            timeout=2,
+        )
+        self.wait_file(pidfile)
+        pid = int(pidfile.read_text())
+        out, err = driver.communicate(timeout=10)
+        self.assertEqual(driver.returncode, 0, err)
+        self.assertEqual(out.strip(), "timeout")
+        self.assertTrue(self.wait_gone(pid))
+
+    def test_gh1002_completed_cell_collects_its_descendant(self):
+        pidfile = self.dir / "gh1002-descendant.pid"
+        kill_the_group_on_cleanup(self, pidfile)
+        driver = self.gh1002_driver(
+            "import subprocess, sys\n"
+            "kid = subprocess.Popen([sys.executable, '-c', "
+            "'import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+            "time.sleep(300)'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
+            + publish_pid("sys.argv[1]", "kid.pid"),
+            pidfile,
+        )
+        self.wait_file(pidfile)
+        pid = int(pidfile.read_text())
+        out, err = driver.communicate(timeout=10)
+        self.assertEqual(driver.returncode, 0, err)
+        self.assertEqual(out.strip(), "0")
+        self.assertTrue(self.wait_gone(pid), "descendant outlived the completed cell")
+
+    def test_gh1002_cleanup_failure_stops_the_matrix(self):
+        group = unittest.mock.Mock()
+        group.wait.return_value = 0
+        group.pid = 123
+        for observation, reaped in ((cell_group.UNKNOWN, True), (cell_group.GONE, False)):
+            with self.subTest(observation=observation, reaped=reaped):
+                result = cell_group.Termination(None, None, observation, reaped)
+                with unittest.mock.patch.object(cell_group, "spawn", return_value=group), \
+                     unittest.mock.patch.object(cell_group, "terminate", return_value=result):
+                    with self.assertRaisesRegex(cell_group.CleanupFailed, "stopping the matrix"):
+                        gh1002_cells.run_in_own_group(["fixture"])
+
+    @unittest.skipUnless(os.name == "posix", "spawn-window signal injection requires POSIX")
+    def test_gh1002_spawn_window_owns_cleanup_before_cancellation(self):
+        pidfile = self.dir / "gh1002-spawn.pid"
+        kill_the_group_on_cleanup(self, pidfile)
+        spawned = []
+        real_popen = subprocess.Popen
+        cancellation = gh1002_cells._cancellation
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            self.addCleanup(signal.signal, sig, signal.getsignal(sig))
+        self.addCleanup(setattr, cancellation, "depth", 0)
+        self.addCleanup(setattr, cancellation, "held_signal", None)
+        self.addCleanup(lambda: [kill_the_group(pid) for pid in spawned])
+        cancellation.install()
+
+        def spawn_then_cancel(*args, **kwargs):
+            proc = real_popen(*args, **kwargs)
+            spawned.append(proc.pid)
+            os.kill(os.getpid(), signal.SIGTERM)
+            return proc
+
+        with unittest.mock.patch.object(cell_group.subprocess, "Popen", side_effect=spawn_then_cancel), \
+             unittest.mock.patch.object(gh1002_cells, "CELL_TERMINATE_GRACE_S", 0.1):
+            with self.assertRaises(SystemExit):
+                gh1002_cells.run_in_own_group(
+                    self.python(
+                        "import sys, time\n"
+                        + publish_pid("sys.argv[1]", "os.getpid()")
+                        + "time.sleep(300)\n",
+                        pidfile,
+                    )
+                )
+        self.assertEqual(len(spawned), 1)
+        self.assertTrue(self.wait_gone(spawned[0]))
 
     def test_sweep_drivers_have_no_unmanaged_spawn_site(self):
         offenders = []

@@ -129,6 +129,8 @@ census_total_ratchet.ml: [scanner-refusal:a0e95a750efaba5e8577d41dae60ceaf] one-
 census_total_ratchet.ml: [scanner-refusal:4166c0bca69640c175777244011fc4e2] that allows nothing (claim) is catalogued beside census_total_ratchet.expected: true
 census_total_ratchet.ml: [scanner-refusal:5aac880a61d2880852d33a0856daa83f] behind a member's (claim) is catalogued beside census_total_ratchet.expected: true
 census_total_ratchet.ml: [scanner-refusal:396ecaa5128a1569c6279921019721c1] directory the action (claim) is catalogued beside census_total_ratchet.expected: true
+census_total_ratchet.ml: [scanner-refusal:ac43499e46e4fb95bbea30412af203b6] counts remain review-visible (claim) is catalogued beside census_total_ratchet.expected: true
+census_total_ratchet.ml: [scanner-refusal:84d226496601429f470c41aba20a39c2] adopted-count allowance cannot (claim) is catalogued beside census_total_ratchet.expected: true
 census_total_ratchet.ml: [scanner-refusal:531d64a37eb2ccc8b4c3fee2c5a2fac9] quoted-source entry spans (claim) is catalogued beside census_total_ratchet.expected: true
 census_total_ratchet.ml: [scanner-refusal:22c73fdc7f08c48d003aabefe9f59d17] checked in contributes (claim) is catalogued beside census_total_ratchet.expected: true
 codegen_text_inventory.ml has exactly the explicitly assigned refusal controls: true

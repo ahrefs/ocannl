@@ -1364,7 +1364,8 @@ def tensorization_verdict(result):
     `Tile_mma` at all), NOT-REQUESTED (nothing about this artifact claims tensor cores — not a
     defect, and the only one of the four that is not worth a mark).
 
-    The emission half comes from `tune.shipped_mma`, the census of the routine whose steps were
+    The emission half comes from top-level `shipped_mma` (tuned and untuned cells),
+    or legacy `tune.shipped_mma`, the census of the routine whose steps were
     TIMED, and not from the arm named as shipped. A crowned arm candidate is not always the shipped
     artifact: a gh-555 flip refinement that wins ships under `shipped: "flip"` and is not an arm at
     all, and on the `timing_ctx` path the tuner recompiles the winner in the production context and
@@ -1378,16 +1379,17 @@ def tensorization_verdict(result):
     NOT-REQUESTED: the artifact demonstrably emitted no `Tile_mma`, which is the fact the column
     reports; what is lost is at most the shout, never a false `tensorized`.
 
-    None for a cell with no tune object at all — an eager framework, an untuned default — which has
-    no census to consult; UNKNOWN for a runner predating either field, or one that reported arms
+    None for a cell carrying neither a census nor tuning — an eager framework or an older
+    untuned default; UNKNOWN for a runner predating either field, or one that reported arms
     without recording the shipped census, so a missing census never reads as a tensorized one.
     """
-    tune = result.get("tune")
-    if not tune:
+    tune = result.get("tune") or {}
+    if not tune and "shipped_mma" not in result:
         return None
     arm = shipped_arm(result) or {}
-    if "shipped_mma" in tune:
-        shipped = tune["shipped_mma"]
+    census = result if "shipped_mma" in result else tune
+    if "shipped_mma" in census:
+        shipped = census["shipped_mma"]
         if not shipped:
             # The key is there and empty: the harness reported arms and recorded no census. Not a
             # finding either way, and emphatically not a passing reading.
@@ -1409,7 +1411,7 @@ def tensorization_verdict(result):
 
 
 def tensorization_check(results):
-    """Annotate each tuned cell with its `tensorization` verdict; return the mismatched ones."""
+    """Annotate each cell with its `tensorization` verdict; return the mismatched ones."""
     mismatched = []
     for r in results:
         verdict = tensorization_verdict(r)
@@ -1419,6 +1421,20 @@ def tensorization_check(results):
         if verdict in TENSORIZATION_MISMATCH:
             mismatched.append(r)
     return mismatched
+
+
+def tensorization_notice(mismatches):
+    """Describe scalar emission in any variant, including untuned compiled defaults."""
+    labels = ", ".join(
+        f"{r['workload']} {r['backend']}/"
+        f"{cell_name(r['variant'], r.get('precision', 'f32'))}{regime_label(regime_of(r))}"
+        f" ({r['tensorization']})"
+        for r in mismatches
+    )
+    return (
+        f"TENSORIZATION NOTICE: {len(mismatches)} cell(s) emitted scalar fallbacks "
+        f"or omitted requested tensorization: {labels}"
+    )
 
 
 # How a two-pass cell's own verdict maps to the report's `pass` column: only a searching process
@@ -2499,17 +2515,7 @@ def main():
         # declining is the correct decision. It is announced because the number is honest only
         # about a scalar kernel, and the row's variant name says otherwise (gh-ocannl-626) — the
         # failure mode is a reader quoting it as a tensor-core measurement.
-        labels = ", ".join(
-            f"{r['workload']} {r['backend']}/"
-            f"{cell_name(r['variant'], r.get('precision', 'f32'))}{regime_label(regime_of(r))}"
-            f" ({r['tensorization']})"
-            for r in tensorization_mismatches
-        )
-        print(
-            f"TENSORIZATION NOTICE: {len(tensorization_mismatches)} tuned cell(s) shipped a "
-            f"schedule asking for tensor cores whose kernels did not emit them: {labels}",
-            flush=True,
-        )
+        print(tensorization_notice(tensorization_mismatches), flush=True)
     if regime_mismatches:
         # A row labelled with a regime its process did not run in is worse than a missing row:
         # its number would be quoted as the other regime's (gh-ocannl-719).
