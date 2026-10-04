@@ -442,7 +442,11 @@ let pieces atom =
     word is a tool on PATH ([python3], [diff]): not something this repository builds, so not a site.
 *)
 type command =
-  | Runs of string  (** the executable, by the path written *)
+  | Runs of string  (** a literal executable path, relative to the action's working directory *)
+  | Runs_dependency of string
+      (** an executable dependency expansion, relative to the stanza's directory. Dune adjusts the
+          expanded path under [chdir]; applying the action's cwd again changes its identity
+          (gh-ocannl-982). Named dependency bindings have the same origin. *)
   | Runs_public of string
       (** the executable, by the PUBLIC name [%{bin:…}] gave. Kept apart from {!Runs} because the
           two carry the same string and mean different things: [%{bin:pkg.probe}] resolves a public
@@ -515,7 +519,7 @@ let classify_command ~named_deps cmd =
   | [ Pform pform ] -> (
       match String.lsplit2 pform ~on:':' with
       | Some (prefix, path) when List.mem path_pforms prefix ~equal:String.equal ->
-          if is_executable path then Runs (program_path path) else Unrecognized cmd
+          if is_executable path then Runs_dependency (program_path path) else Unrecognized cmd
       | Some (prefix, name) when String.equal prefix binary_pform -> Runs_public name
       | Some _ -> Unrecognized cmd
       | None -> (
@@ -527,7 +531,7 @@ let classify_command ~named_deps cmd =
             match List.Assoc.find named_deps pform ~equal:String.equal with
             | Some paths -> (
                 match List.find paths ~f:is_executable with
-                | Some path -> Runs (program_path path)
+                | Some path -> Runs_dependency (program_path path)
                 (* A binding that resolves to no executable is not evidence of an external tool: the
                    action runs whatever it binds, and this scan did not recognise it. *)
                 | None -> Unrecognized cmd)
@@ -747,7 +751,7 @@ let classified_command_sites_with_pins_preserving_multiplicity stanza =
             let handed =
               List.filter args ~f:(fun arg ->
                   match classify_command ~named_deps arg with
-                  | Runs _ | Runs_public _ | Unrecognized _ -> true
+                  | Runs _ | Runs_dependency _ | Runs_public _ | Unrecognized _ -> true
                   | External | Unknown_directory _ | Path_rewritten _ -> false)
             in
             match handed with
@@ -1331,7 +1335,7 @@ let sites_of_stanza subdir stanza =
             | Runs name when is_test && String.equal name test_pform -> None
             (* A public-name run launches a program exactly as a path does; only a CONSUMER matching
                it against a declared executable has to tell the two apart. *)
-            | Runs name | Runs_public name -> Some name
+            | Runs name | Runs_dependency name | Runs_public name -> Some name
             | _ -> None)
         in
         let unreadable = for_cwd (function Unrecognized cmd -> Some cmd | _ -> None) in
@@ -1961,7 +1965,7 @@ let artifact_env_var = "OCANNL_BUILD_FILES_PREFIX"
 let exes_run stanza =
   List.filter_map (executables_run stanza) ~f:(fun (_cwd, command) ->
       match command with
-      | Runs path -> Some (`File path)
+      | Runs path | Runs_dependency path -> Some (`File path)
       | Runs_public name -> Some (`Public name)
       | _ -> None)
   |> List.dedup_and_sort ~compare:Poly.compare
@@ -1979,14 +1983,23 @@ let normalize_path path =
       | part -> part :: acc)
   |> List.rev |> String.concat ~sep:"/"
 
+(** A file command's path relative to its stanza. Literal paths follow [chdir]; dependency
+    expansions retain the stanza-relative path Dune resolves before the action runs. This says
+    nothing about the process's configuration search, which still starts from its action cwd. *)
+let command_file_path ~cwd = function
+  | Runs path -> Some (in_subdir cwd path)
+  | Runs_dependency path -> Some path
+  | Runs_public _ | External | Unrecognized _ | Unknown_directory _ | Path_rewritten _ -> None
+
 (** Every program a stanza runs, resolved to a workspace-relative path, with the variables pinned
     around THAT run.
 
-    The working directory is part of the identity: [(chdir ../a (run probe.exe))] in a rule under
-    [b] runs [a]'s program, not [b]'s, so resolving only the rule's own subdirectory would report
-    the real program as unrun and credit a same-named local one with this rule's declarations (Codex
-    P2, round 4 of PR #484). [commands_in] already tracked the directory for the configuration
-    search; this is the same fact answering a second question. *)
+    For literal paths the working directory is part of the identity: [(chdir ../a (run probe.exe))]
+    in a rule under [b] runs [a]'s program, not [b]'s, so resolving only the rule's own subdirectory
+    would report the real program as unrun and credit a same-named local one with this rule's
+    declarations (Codex P2, round 4 of PR #484). [commands_in] already tracked the directory for the
+    configuration search; this is the same fact answering a second question. Dependency expansions
+    instead keep the stanza-relative path from which Dune resolves them. *)
 let runs_of_with_multiplicity ~subdir stanza =
   List.filter_map (executables_run_with_pins_preserving_multiplicity stanza)
     ~f:(fun (cwd, pinned, command) ->
@@ -1997,7 +2010,9 @@ let runs_of_with_multiplicity ~subdir stanza =
          program from anywhere, and `classify_command` keeps the two apart precisely so a `(run
          ./pkg.probe)` here is not credited to the executable installed under that name
          (gh-ocannl-783). *)
-      | Runs path -> Some (`File (normalize_path (in_subdir subdir (in_subdir cwd path))), pinned)
+      | (Runs _ | Runs_dependency _) as command ->
+          Option.map (command_file_path ~cwd command) ~f:(fun path ->
+              (`File (normalize_path (in_subdir subdir path)), pinned))
       | Runs_public name -> Some (`Public name, pinned)
       | _ -> None)
 

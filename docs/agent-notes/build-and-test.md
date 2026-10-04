@@ -273,6 +273,12 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   puts the risk: a floor that sees a stanza the walk does not fails a correct scan. Mirror the walk's
   own dropping rule at the tag site — a PATH tool is external wherever a `chdir` sends it, so the
   walk places no site and the floor must record nothing.
+  Executable IDENTITY has a different origin from that process's working directory: a literal
+  `./probe.exe` follows `chdir`, while `%{dep:probe.exe}` (or a named dependency) resolves from its
+  stanza. `Dune_stanza_scan.Runs_dependency` preserves that origin, and `command_file_path` is the
+  shared resolution used by runner matching; applying the cwd to an expansion a second time hid
+  `startup_streams`' bootstrap runner from the ambient census (gh-ocannl-982). Configuration search
+  still follows the action cwd, so keep it on the site even for a dependency-expanded program.
   And keep the rule's DECISION somewhere synthetic text can reach it. `env_var_deps`' XOR lived in
   its main loop, so "a rule running its test through `bash` is subject to the rule" could be argued
   and not asserted; `Scan.backend_rule_of` is that decision alone, with the diagnostics and tallies

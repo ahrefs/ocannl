@@ -562,27 +562,18 @@ let smoke_targets_of_stanza ~allow_verified_helper ~dune_path ~subdir stanza =
         | Dune_scan.Shell _ -> None
       in
       match command with
-      | Dune_scan.Runs path when Dune_scan.is_absolute path ->
+      | (Dune_scan.Runs path | Dune_scan.Runs_dependency path) when Dune_scan.is_absolute path ->
           Error (absolute_smoke_error dune_path path)
       | Dune_scan.Runs path
         when Option.exists (program_token site) ~f:Dune_scan.is_path_lookup_token ->
           Error (bare_smoke_error dune_path path)
-      | Dune_scan.Runs _ when Dune_scan.is_absolute cwd ->
+      | (Dune_scan.Runs _ | Dune_scan.Runs_dependency _) when Dune_scan.is_absolute cwd ->
           Error (absolute_chdir_error dune_path cwd)
-      | Dune_scan.Runs path ->
-          let rec anchored_to_stanza = function
-            | Dune_scan.Program (token, _) ->
-                List.exists (Dune_scan.pieces token) ~f:(function
-                  | Dune_scan.Pform _ -> true
-                  | Dune_scan.Literal _ -> false)
-            | Dune_scan.Elsewhere (_, nested) | Dune_scan.Unnameable (_, nested) ->
-                anchored_to_stanza nested
-            | Dune_scan.Shell _ -> false
+      | (Dune_scan.Runs _ | Dune_scan.Runs_dependency _) as command ->
+          let local =
+            Option.value_exn (Dune_scan.command_file_path ~cwd command)
+            |> Dune_scan.in_subdir subdir |> Dune_scan.normalize_path
           in
-          let command_subdir =
-            if anchored_to_stanza site then subdir else Dune_scan.in_subdir subdir cwd
-          in
-          let local = Dune_scan.normalize_path (Dune_scan.in_subdir command_subdir path) in
           if
             allow_verified_helper
             && String.equal local verified_helper_local

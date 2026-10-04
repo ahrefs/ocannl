@@ -100,7 +100,13 @@ ok: artifact declaration -- a public name answers for its own program only
 ok: artifact declaration -- a shared runner's declaration is justified by whichever program needs it
 ok: artifact declaration -- a shared runner declaring it for neither program is stale
 ok: artifact declaration -- a program sharing one runner and having a bare one of its own is not stale
+ok: artifact declaration -- a dependency-expanded runner under chdir still runs the stanza's executable
+ok: artifact declaration -- the dependency-expanded runner's missing declaration is reported
+ok: artifact declaration -- a named dependency under chdir also keeps its stanza-relative identity
+ok: artifact declaration -- an executable expansion under chdir keeps its stanza-relative identity
 ok: artifact declaration -- a chdir names the program in the directory it moves to
+ok: artifact across subdirs -- a dependency expansion in a subdir keeps that stanza's directory under chdir
+ok: artifact across subdirs -- a top-level dependency expansion under chdir runs the qualified nested executable
 ok: artifact across subdirs -- a top-level rule is the runner of a nested executable
 ok: artifact across subdirs -- and the same rule without the declaration is reported, not taken for absent
 ok: artifact across subdirs -- a rule in a sibling subdirectory is not this program's runner
