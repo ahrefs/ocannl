@@ -273,7 +273,7 @@ let () =
 let () =
   let _vals, src = run () in
   p "vec" (String.is_substring src ~substring:"_uniform_vec(")|ocaml},
-      {|"_uniform_vec("|} );
+      {|"_uniform_vec(" +partial|} );
     ( "a test binding its own build_file is not reading the artifact directory",
       {ocaml|let build_file path ~extra_pad entries = write path entries ~extra_pad
 let () =
@@ -617,6 +617,44 @@ let () = p "ordinary" (String.is_substring src ~substring:"constant is not a pin
   | src -> p "marker" (String.is_substring src ~substring:"successful result marker")
   | exception Failure msg -> p "exception" (String.is_substring msg ~substring:"ordinary exception marker")|ocaml},
       {|"successful result marker"|} );
+    ( "an ordinary tuple-match sibling does not borrow generated provenance",
+      {ocaml|let () = match (Generated.read "r", backend_name) with
+  | src, name -> p "ordinary" (String.is_substring name ~substring:"cuda")|ocaml},
+      "" );
+    ( "a generated tuple-match component retains its own marker",
+      {ocaml|let () = match (Generated.read "r", backend_name) with
+  | src, name -> p "marker" (String.is_substring src ~substring:"tuple marker")|ocaml},
+      {|"tuple marker"|} );
+    ( "an ordinary record-match sibling does not borrow generated provenance",
+      {ocaml|let () = match { src = Generated.read "r"; name = backend_name } with
+  | { src; name } -> p "ordinary" (String.is_substring name ~substring:"cuda")|ocaml},
+      "" );
+    ( "a generated record-match component retains its own marker",
+      {ocaml|let () = match { src = Generated.read "r"; name = backend_name } with
+  | { src; name } -> p "marker" (String.is_substring src ~substring:"record marker")|ocaml},
+      {|"record marker"|} );
+    ( "tuple-let components keep generated and ordinary sources separate",
+      {ocaml|let src, name = (Generated.read "r", backend_name)
+let () =
+  p "marker" (String.is_substring src ~substring:"tuple-let marker");
+  p "ordinary" (String.is_substring name ~substring:"cuda")|ocaml},
+      {|"tuple-let marker"|} );
+    ( "record-let components keep generated and ordinary sources separate",
+      {ocaml|let { src; name } = { src = Generated.read "r"; name = backend_name }
+let () =
+  p "marker" (String.is_substring src ~substring:"record-let marker");
+  p "ordinary" (String.is_substring name ~substring:"cuda")|ocaml},
+      {|"record-let marker"|} );
+    ( "a match over a try result retains the successful generated payload",
+      {ocaml|let () = match (try Some (Generated.read "r") with _ -> None) with
+  | Some src -> p "marker" (String.is_substring src ~substring:"try result marker")
+  | None -> ()|ocaml},
+      {|"try result marker"|} );
+    ( "a match over an ordinary try result ignores a preceding generated read",
+      {ocaml|let () = match (try ignore (Generated.read "r"); Some backend_name with _ -> None) with
+  | Some src -> p "ordinary" (String.is_substring src ~substring:"cuda")
+  | None -> ()|ocaml},
+      "" );
     ( "a selected optional default leaves no callable identity on the completed boolean",
       {ocaml|let has ?(marker = "selected default marker") src () =
   String.is_substring src ~substring:marker

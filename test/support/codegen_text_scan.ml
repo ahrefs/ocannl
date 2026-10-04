@@ -1120,6 +1120,39 @@ let scoped_provenance scope ~emitters ~aliases ~seeds ?(parameters = [])
             join_provenance acc (of_expr c.pc_rhs))
     | _ -> { !found with functions = [] }
   in
+  (* Split only components supplied explicitly by syntax. Opaque aggregates retain possible source
+     evidence with uncertainty rather than assigning every component a definite source. *)
+  let rec bind_pattern env pattern expression payload =
+    let bind_all payload = Lexical_scope.bind_values env (pattern_names pattern) payload in
+    match (pattern.ppat_desc, Option.map expression ~f:(fun e -> e.pexp_desc)) with
+    | Ppat_constraint (inner, _), _ -> bind_pattern env inner expression payload
+    | Ppat_alias (inner, { txt = name; _ }), _ ->
+        bind_pattern (Lexical_scope.bind_values env [ name ] payload) inner expression payload
+    | Ppat_tuple patterns, Some (Pexp_tuple expressions)
+      when List.length patterns = List.length expressions ->
+        List.fold2_exn patterns expressions ~init:env ~f:(fun env pattern expression ->
+            bind_pattern env pattern (Some expression) (of_expr expression))
+    | Ppat_record (patterns, _), Some (Pexp_record (expressions, None)) ->
+        List.fold patterns ~init:env ~f:(fun env (label, pattern) ->
+            let expression =
+              List.find_map expressions ~f:(fun (candidate, expression) ->
+                  if Poly.equal label.txt candidate.txt then Some expression else None)
+            in
+            bind_pattern env pattern expression
+              (Option.value_map expression
+                 ~default:{ payload with uncertainty = Unresolved }
+                 ~f:of_expr))
+    | ( Ppat_construct ({ txt = constructor; _ }, Some (_, inner)),
+        Some (Pexp_construct ({ txt = actual; _ }, Some expression)) )
+      when Poly.equal constructor actual ->
+        bind_pattern env inner (Some expression) (of_expr expression)
+    | (Ppat_tuple _ | Ppat_record _), _ ->
+        bind_all
+          (if payload.generated || (not (Set.is_empty payload.parameters)) || payload.buffer then
+             { payload with uncertainty = Unresolved }
+           else payload)
+    | _ -> bind_all payload
+  in
   let resolver =
     object (self)
       inherit [provenance, unit] Lexical_scope.scoped as super
@@ -1127,6 +1160,10 @@ let scoped_provenance scope ~emitters ~aliases ~seeds ?(parameters = [])
       method module_path _ _ = None
       method! attribute _ attribute = attribute
       method! let_denotes vb = of_expr vb.pvb_expr
+
+      method! bind_group env bindings denotes =
+        List.fold2_exn bindings denotes ~init:(super#bind_group env bindings denotes)
+          ~f:(fun env vb payload -> bind_pattern env vb.pvb_pat (Some vb.pvb_expr) payload)
 
       method! bindings env rec_flag bindings =
         let inner = super#bindings env rec_flag bindings in
@@ -1138,7 +1175,7 @@ let scoped_provenance scope ~emitters ~aliases ~seeds ?(parameters = [])
                       (not (Set.is_empty previous.parameters))
                       && Set.is_empty (Set.inter previous.parameters denotes.parameters)))
             in
-            Lexical_scope.bind_values inner (pattern_names vb.pvb_pat)
+            bind_pattern inner vb.pvb_pat (Some vb.pvb_expr)
               {
                 denotes with
                 uncertainty =
@@ -1192,7 +1229,7 @@ let scoped_provenance scope ~emitters ~aliases ~seeds ?(parameters = [])
                   }
                 in
                 List.iter cases ~f:(fun c ->
-                    let inner = Lexical_scope.bind_values env (pattern_names c.pc_lhs) payload in
+                    let inner = bind_pattern env c.pc_lhs None payload in
                     Option.iter c.pc_guard ~f:(fun guard ->
                         ignore (self#expression inner guard : expression));
                     ignore (self#expression inner c.pc_rhs : expression)));
@@ -1200,9 +1237,7 @@ let scoped_provenance scope ~emitters ~aliases ~seeds ?(parameters = [])
         | Pexp_match (scrutinee, cases) | Pexp_try (scrutinee, cases) ->
             ignore (self#expression env scrutinee : expression);
             let payload =
-              match (e.pexp_desc, scrutinee.pexp_desc) with
-              | Pexp_try _, _ | _, Pexp_try _ -> no_provenance
-              | _ -> of_expr scrutinee
+              match e.pexp_desc with Pexp_try _ -> no_provenance | _ -> of_expr scrutinee
             in
             List.iter cases ~f:(fun case ->
                 let payload =
@@ -1210,7 +1245,12 @@ let scoped_provenance scope ~emitters ~aliases ~seeds ?(parameters = [])
                   | Ppat_exception _ -> no_provenance
                   | _ -> payload
                 in
-                let inner = Lexical_scope.bind_values env (pattern_names case.pc_lhs) payload in
+                let expression =
+                  match (e.pexp_desc, case.pc_lhs.ppat_desc) with
+                  | Pexp_try _, _ | _, Ppat_exception _ -> None
+                  | _ -> Some scrutinee
+                in
+                let inner = bind_pattern env case.pc_lhs expression payload in
                 Option.iter case.pc_guard ~f:(fun guard ->
                     ignore (self#expression inner guard : expression));
                 ignore (self#expression inner case.pc_rhs : expression));

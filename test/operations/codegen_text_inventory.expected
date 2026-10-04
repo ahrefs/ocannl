@@ -141,7 +141,7 @@ test/operations/accum_width.ml
     "Vectorized reduction rendering"
     "fmaf("
     "single_to_bfloat16(fmaf("
-test/operations/canonical_render.ml [renders generated text in memory]
+test/operations/canonical_render.ml [renders generated text in memory; also pins text this scan cannot name]
     "?"
     "s0"
 test/operations/cc_march_census.ml [also pins text this scan cannot name]
@@ -487,7 +487,7 @@ test/operations/test_one_hot_embedding_lookup.ml
     "<= 3"
     "?"
     "double *restrict ids_wide"
-test/operations/test_uniform_virtual_lane.ml
+test/operations/test_uniform_virtual_lane.ml [also pins text this scan cannot name]
     "Main logic"
     "_uniform_lane("
     "_uniform_vec("

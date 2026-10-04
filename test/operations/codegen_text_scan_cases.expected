@@ -95,6 +95,14 @@ ok: source -- a helper result depends only on its returned formal argument
 ok: source -- the returned formal still carries generated provenance past an ignored ordinary argument
 ok: source -- a constant-returning helper does not borrow generated argument provenance
 ok: source -- exception match patterns are independent of the successful generated result
+ok: source -- an ordinary tuple-match sibling does not borrow generated provenance
+ok: source -- a generated tuple-match component retains its own marker
+ok: source -- an ordinary record-match sibling does not borrow generated provenance
+ok: source -- a generated record-match component retains its own marker
+ok: source -- tuple-let components keep generated and ordinary sources separate
+ok: source -- record-let components keep generated and ordinary sources separate
+ok: source -- a match over a try result retains the successful generated payload
+ok: source -- a match over an ordinary try result ignores a preceding generated read
 ok: source -- a selected optional default leaves no callable identity on the completed boolean
 ok: source -- an ordinary replacement retains uncertainty without contributing a body literal
 ok: source -- an aliased ordinary replacement retains uncertainty without contributing a body literal

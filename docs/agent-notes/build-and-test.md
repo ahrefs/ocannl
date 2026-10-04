@@ -1608,7 +1608,10 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   selects it; static optional forwarding resolves `None` to the selected default and unwraps
   `Some`. Dynamic forwarding keeps the expression and possible selected default, with uncertainty
   when they can carry source. `function` case inputs use a synthetic positional formal and the
-  same match-payload rule. A partial call keeps unsupplied symbolic dependencies explicitly
+  same match-payload rule. Explicit tuple/record components bind their own source evidence in
+  lets and matches; opaque aggregate destructuring keeps possible fragments with a partial mark.
+  A match over a `try` value retains successful result evidence, while handler and exception
+  patterns remain ordinary. A partial call keeps unsupplied symbolic dependencies explicitly
   unresolved; the scan does not rebase closure argument positions. Rebuild call aggregates at each
   fixed-point step, so an earlier unresolved input cannot poison a later validated chain.
   Predicate body literals pass the same call-site source check as caller markers.
