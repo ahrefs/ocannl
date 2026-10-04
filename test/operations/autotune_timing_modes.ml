@@ -841,6 +841,63 @@ let () =
     device "fast, clean" ~fixed_ms:fast_fixed_ms ~launch_ms:fast_launch_ms (fun d ->
         fast_fixed_ms +. fast_launch_work d)
   in
+  (* gh-ocannl-1144: a sub-5 us launch reaches the target exactly at the GPU cap. The synchronized
+     single includes a larger round trip, so its provisional batch is short. One fixture projects to
+     the cap immediately; the other first validates a shallower projection, whose measured slope
+     then wants the cap. Neither may settle before spending its remaining validations on measured
+     doublings. Dyadic costs keep the target at the cap exact. *)
+  let micro_launch_ms = Autotune.queued_batch_ms /. Float.of_int gpu_cap in
+  let micro_clean d = micro_launch_ms *. Float.of_int d in
+  let micro what single_ms =
+    device what ~launch_ms:single_ms (fun d -> if d = 1 then single_ms else micro_clean d)
+  in
+  let micro_initial = micro "microsecond, its provisional fit wants the cap" 0.03125 in
+  let micro_later =
+    device "microsecond, its validation fit wants the cap" ~launch_ms:0.0625 (fun d ->
+        if d = 1 then 0.0625 else if d = 160 then 1.25 else micro_clean d)
+  in
+  let micro_exhausted = micro "microsecond, its validation probes run out" 0.25 in
+  let micro_wall_stopped =
+    device "microsecond, its cap-directed validation spends the wall budget" ~launch_ms:0.03125
+      (fun d -> if d = 1 then 0.03125 else if d > 320 then 320. else micro_clean d)
+  in
+  p_all "a cap projection uses remaining validation probes to reach the fast kernel's target"
+    [ micro_initial; micro_later ] ~f:(fun c ->
+      c.settled_depth = gpu_cap
+      && Float.equal (micro_clean c.settled_depth) Autotune.queued_batch_ms
+      && Option.is_some (Autotune.admitted_timing_ms c.reading));
+  p_all "the fast kernel's cap is measured within the validation probe budget"
+    [ micro_initial; micro_later ] ~f:(fun c ->
+      List.exists c.probes ~f:(fun pr ->
+          pr.depth = gpu_cap && Float.equal pr.min_ms Autotune.queued_batch_ms)
+      && List.count c.probes ~f:(fun pr -> Poly.equal pr.role Autotune.Validation_probe)
+         <= Autotune.max_depth_validation_probes);
+  p_all "cap-directed validations advance by at most one measured doubling"
+    [ (micro_initial, 0); (micro_later, 1) ]
+    ~f:(fun (c, projected_validations) ->
+      let validations = ref 0 in
+      List.fold c.probes ~init:(1, true) ~f:(fun (deepest, ok) pr ->
+          if Poly.equal pr.role Autotune.Validation_probe then Int.incr validations;
+          ( Int.max deepest pr.depth,
+            ok
+            && ((not (Poly.equal pr.role Autotune.Validation_probe))
+               || !validations <= projected_validations
+               || pr.depth <= Autotune.queue_depth_projection_factor * deepest) ))
+      |> snd);
+  p "a cap-directed calibration stops when its validation probes run out"
+    (List.count micro_exhausted.probes ~f:(fun pr -> Poly.equal pr.role Autotune.Validation_probe)
+     = Autotune.max_depth_validation_probes
+    && micro_exhausted.settled_depth < gpu_cap
+    && List.fold micro_exhausted.probes ~init:1 ~f:(fun deepest pr -> Int.max deepest pr.depth)
+       < gpu_cap);
+  p "a cap-directed validation is charged to the wall budget and starts no further probe"
+    (List.count micro_wall_stopped.probes ~f:(fun pr ->
+         Poly.equal pr.role Autotune.Validation_probe)
+     = 1
+    && Float.(
+         List.sum (module Float) micro_wall_stopped.probes ~f:(fun pr -> pr.wall_ms)
+         >= Autotune.queue_calibration_wall_ms)
+    && micro_wall_stopped.settled_depth = 320);
   (* The longest path [queue_calibration_max_probes] counts, walked by one device: the provisional
      probe, four validations, a confirmation, its stall retry, a sampled shallower crossing, and the
      rescue. Singles at 2.5 ms give provisional depth 4. Its probe (7 ms) and three validations read
@@ -899,6 +956,10 @@ let () =
       ("the last validation's projection", projected);
       ("a confirmation scaled from below the target", scaled);
       ("fast, clean", converging);
+      ("microsecond, initial cap projection", micro_initial);
+      ("microsecond, later cap projection", micro_later);
+      ("microsecond, exhausted validation probes", micro_exhausted);
+      ("microsecond, exhausted wall budget", micro_wall_stopped);
       ("the longest calibration path", longest);
       ("a confirmation stall that spends the budget", stall_at_budget);
     ]

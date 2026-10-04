@@ -1020,9 +1020,19 @@ let calibrate_and_time_with_retry_observer ~on_retry ~retry_contended ~timing ~r
             in
             let rec validate_depth probes_left calibration_dispatches base_depth base_ms depth
                 estimated_wall_ms =
-              if depth = queue_depth_cap then (calibration_dispatches, depth, estimated_wall_ms)
+              if depth = queue_depth_cap && !deepest_probed = queue_depth_cap then
+                (calibration_dispatches, depth, estimated_wall_ms)
               else if probe_budget_spent () then (calibration_dispatches, depth, Float.nan)
               else
+                (* A fit wanting the cap is not evidence at the cap (gh-ocannl-1144). Walk there
+                   through measured doublings while validation probes remain, including when the
+                   provisional pair already projects to the cap. Each probe spends the same wall and
+                   count budgets as every other validation. *)
+                let depth =
+                  if depth = queue_depth_cap then
+                    Int.min queue_depth_cap (queue_depth_projection_factor * !deepest_probed)
+                  else depth
+                in
                 let validation = probe_batch ~role:Validation_probe depth in
                 let calibration_dispatches =
                   calibration_dispatches + (validation.samples * depth)
@@ -1059,6 +1069,10 @@ let calibrate_and_time_with_retry_observer ~on_retry ~retry_contended ~timing ~r
                   else
                     settle_shallower calibration_dispatches next_depth ~upper_depth:depth
                       ~upper_ms:validation.ms
+                else if next_depth = queue_depth_cap && depth < queue_depth_cap && probes_left > 1
+                then
+                  validate_depth (probes_left - 1) calibration_dispatches depth validation.ms
+                    next_depth next_wall_ms
                 else if next_depth = queue_depth_cap then
                   let depth, wall_ms =
                     if

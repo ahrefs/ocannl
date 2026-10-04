@@ -1424,12 +1424,18 @@ val queue_calibration_max_probes : int
     Enforced alongside {!queue_calibration_wall_ms}: once all but the last have started, only the
     rescue may follow. Exposed so {!time_routine}'s dispatch maximum is stated against it. *)
 
+val max_depth_validation_probes : int
+(** The maximum number of queued depth validations (4), including measured doublings toward an
+    unmeasured cap. Exposed so synthetic timing fixtures hold convergence against its probe budget.
+*)
+
 val queue_depth_projection_factor : int
 (** How far past the deepest batch it probed a CUDA/HIP queued calibration may settle, as a multiple
     of that depth (2, one doubling; gh-ocannl-1100). An affine projection or a linear scale can land
     far past every measured batch, where a queue cost may jump unseen; the settled depth is capped
-    here instead of spending a probe on it. Exposed so a test states the bound against the policy's
-    own factor. *)
+    here after calibration ends. A projection to an unmeasured cap in depth validation uses its
+    remaining probes to walk toward it by this factor (gh-ocannl-1144). Exposed so a test states the
+    bound against the policy's own factor. *)
 
 val queue_depth_cap_for_backend : string -> int
 (** Queue-memory bound selected by canonical backend name: 2048 for CUDA/HIP, and the historical 200

@@ -929,8 +929,12 @@ files.
   (gh-ocannl-1100), one chokepoint after the branches rather than a fix per exit: the last
   validation's affine projection, a linear scale from a below-target confirmation and a fit wanting
   the cap all used to settle unmeasured (a pair (2, 12.25) / (3, 12.5) wants depth 40). A bound in
-  depth, not wall, spending no probe; ultra-fast kernels whose fit wanted the cap now batch shorter
-  than the target. Do not replace
+  depth, not wall, spending no extra probe after validation ends. A fit wanting an unmeasured cap
+  spends its remaining validations on measured doublings toward it (gh-ocannl-1144), including an
+  initial cap projection; settling immediately left sub-5 us kernels below the target despite
+  unused probes. Each doubling is charged to the existing wall and count budgets, and a measured
+  cap retains the same fit and fallback checks. `autotune_timing_modes` pins convergence, probe
+  exhaustion and a stalled doubling that spends the wall budget. Do not replace
   this with a bound
   extrapolated through a per-launch cost (least `wall / depth`): the readings that leave the fits
   unresolved cannot tell a host stall from a cost that jumps past a queue threshold, and two review
