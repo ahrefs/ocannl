@@ -401,6 +401,7 @@ let raw_entries =
         "[scanner-refusal:596c956b100d191f1322f23aea4b1186] pipeline reads outside";
         "[scanner-refusal:d04fa9759a77fcd06752e1d4a912eb06] source_tree";
         "[scanner-refusal:760e7621ae0370f92b10878f9d71ee0f] source_tree";
+        "[scanner-refusal:56b7e1396b8287e30b29b436fc729e13] unrelated configuration-reading alias";
         "[scanner-refusal:ca87c0e84f8b051f232796e69330144f] renamed direct-utils universe";
         "[scanner-refusal:eb2b142cf7df4f4e59facf55554fb04e] universe-dependent compiler census";
         "[scanner-refusal:474c2c17b390e6a30e2a618348b20390] another directory's same-named";

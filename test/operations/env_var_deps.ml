@@ -126,12 +126,15 @@ let exempt_declarations =
 let gateless_dirs =
   [
     ( "benchmarks/runners/ocannl/dune",
-      "its bin-smoke action runs metal_queue_probe, linking metal, ctypes and unix without an \
-       OCANNL configuration reader; universe makes the canary rerun, but cannot check spellings" );
+      ( Some [ "bin-smoke"; "metal-codegen" ],
+        "its bin-smoke action runs metal_queue_probe, linking metal, ctypes and unix without an \
+         OCANNL configuration reader; universe makes the canary rerun, but cannot check spellings"
+      ) );
     ( "benchmarks/dune",
-      "its one runtest action runs python3 over the benchmark orchestrator's own unit tests, which \
-       import no OCANNL executable -- there is no startup check in reach to gate, the same reason \
-       `config_dep_completeness` exempts it from the ocannl_config dependency" );
+      ( None,
+        "its one runtest action runs python3 over the benchmark orchestrator's own unit tests, \
+         which import no OCANNL executable -- there is no startup check in reach to gate, the same \
+         reason `config_dep_completeness` exempts it from the ocannl_config dependency" ) );
   ]
 
 (* A universe dependency prevents caching. It does not identify an ambient gate: a compiler census
@@ -1552,8 +1555,12 @@ let main () =
                    `(subdir …)` group of that file is a different directory, whose stanzas the
                    recorded reason says nothing about (Codex P2, round 7). Applying it there would
                    exempt a nested OCANNL-linked test on the strength of its parent's reason. *)
-              else if String.is_empty subdir && Map.mem gateless dune_file then
-                gateless_used := Set.add !gateless_used dune_file
+              else if
+                String.is_empty subdir
+                && Option.exists (Map.find gateless dune_file) ~f:(fun (aliases, _) ->
+                    Option.value_map aliases ~default:true ~f:(fun aliases ->
+                        List.mem aliases alias ~equal:String.equal))
+              then gateless_used := Set.add !gateless_used dune_file
               else
                 fail
                   (Printf.sprintf
@@ -2619,7 +2626,11 @@ let main () =
   List.sort !gated ~compare:(fun (a, x) (b, y) ->
       match String.compare a b with 0 -> String.compare x y | c -> c)
   |> List.iter ~f:(fun (dune_file, alias) -> printf "  %-40s @%s\n" dune_file alias);
-  List.iter gateless_dirs ~f:(fun (dir, why) -> printf "  %s -- no gate: %s\n" dir why);
+  List.iter gateless_dirs ~f:(fun (dir, (aliases, why)) ->
+      printf "  %s%s -- no gate: %s\n" dir
+        (Option.value_map aliases ~default:"" ~f:(fun aliases ->
+             " (" ^ String.concat ~sep:", " aliases ^ ")"))
+        why);
   printf "\nDeclarations of a name OCANNL does not read as a configuration key, exempt by design:\n";
   List.iter exempt_declarations ~f:(fun (key, why) -> printf "  %s -- %s\n" key why);
   printf
@@ -3003,11 +3014,21 @@ let control_context () =
           ^ " )\n (action\n  (with-stdout-to\n   %{target}\n   (echo \"\"))))\n" ))
   in
   let gateless_files =
-    List.map gateless_dirs ~f:(fun (file, _) ->
-        ( file,
-          Printf.sprintf
-            "(test\n (name gateless)\n (deps\n  (universe)\n  (env_var %s))\n (modules gateless))\n"
-            Scan.backend_env_var ))
+    List.map gateless_dirs ~f:(fun (file, (aliases, _)) ->
+        let content =
+          match aliases with
+          | None ->
+              Printf.sprintf
+                "(test (name gateless) (deps (universe) (env_var %s)) (modules gateless))\n"
+                Scan.backend_env_var
+          | Some aliases ->
+              String.concat ~sep:""
+                (List.map aliases ~f:(fun alias ->
+                     Printf.sprintf
+                       "(rule (alias %s) (deps (universe) (env_var %s)) (action (progn)))\n" alias
+                       Scan.backend_env_var))
+        in
+        (file, content))
   in
   exempt_files @ gateless_files
 
@@ -4932,6 +4953,36 @@ let repository_inventory_control () =
     (observes "(target inventory.actual)" "inventories the repository to produce");
   try remove_tree root with Unix.Unix_error _ -> ()
 
+let gateless_scope_control () =
+  let exe =
+    let name = Stdlib.Sys.executable_name in
+    if Stdlib.Filename.is_relative name then Stdlib.Filename.concat (Stdlib.Sys.getcwd ()) name
+    else name
+  in
+  let root = Stdlib.Filename.temp_dir "evd_gateless" "" in
+  let context = control_context () in
+  List.iter context ~f:(fun (file, content) ->
+      write_file (Stdlib.Filename.concat root file) content);
+  let file = "benchmarks/runners/ocannl/dune" in
+  let existing = In_channel.read_all (Stdlib.Filename.concat root file) in
+  write_file
+    (Stdlib.Filename.concat root file)
+    (existing ^ "(executable (name reader) (modules reader) (libraries arrayjit.utils))\n"
+   ^ "(rule\n ; ocannl-backend: none -- only reads configuration, with no backend.\n"
+   ^ " (alias unrelated-reader) (deps ocannl_config) (action (run %{dep:reader.exe})))\n");
+  let source = "benchmarks/runners/ocannl/reader.ml" in
+  write_file (Stdlib.Filename.concat root source) "let () = ignore (Utils.unread_env_vars ())\n";
+  let status, text = run_checker ~root ~exe ("." :: source :: List.map context ~f:fst) in
+  let reported =
+    (match status with Unix.WEXITED 1 -> true | _ -> false)
+    && String.is_substring text ~substring:"`unrelated-reader` alias and no ambient gate reaches it"
+  in
+  if not reported then eprintf "gateless scope control %s:\n%s\n" (describe_status status) text;
+  printf "\nSynthetic controls: mixed-file gateless exemptions apply only to their named aliases.\n";
+  Verdict.p "an unrelated configuration-reading alias cannot inherit the probe's gateless exemption"
+    reported;
+  try remove_tree root with Unix.Unix_error _ -> ()
+
 (* The ambient classifier's nearest legitimate universe users beside a renamed gate. The executable
    identities are deliberately alike; only linkage and the actual runner distinguish them, and all
    three consumers of gate identity use this predicate. *)
@@ -4994,6 +5045,7 @@ let () =
       pipeline_control ();
       ambient_gate_control ();
       repository_inventory_control ();
+      gateless_scope_control ();
       (* Dune's repository-wide rule hands the same source to [main] as [./env_var_deps.ml] after a
          full build has materialized the local build-tree copy. Exercise that spelling here too: the
          manifest identity is repository-relative even when the file used to extract the diagnostics

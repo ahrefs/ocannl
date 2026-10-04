@@ -150,6 +150,9 @@ Synthetic controls: escaping source_tree rules must join the scans aggregate.
 an unaggregated targetless source_tree scan reports that it inventories the repository: true
 an undiffed source_tree output reports that it inventories the repository: true
 
+Synthetic controls: mixed-file gateless exemptions apply only to their named aliases.
+an unrelated configuration-reading alias cannot inherit the probe's gateless exemption: true
+
 Synthetic controls: scanner refusal diagnostics exercised by this control golden:
   [scanner-refusal:2b65edf20e36d983c1a016b72c2aadd1] plugged-in check receives
   [scanner-refusal:35bab4283cd8b87d51ca3476cb0e971e] source_tree
@@ -301,6 +304,7 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:596c956b100d191f1322f23aea4b1186] pipeline reads outside
   [scanner-refusal:d04fa9759a77fcd06752e1d4a912eb06] source_tree
   [scanner-refusal:760e7621ae0370f92b10878f9d71ee0f] source_tree
+  [scanner-refusal:56b7e1396b8287e30b29b436fc729e13] unrelated configuration-reading alias
   [scanner-refusal:ca87c0e84f8b051f232796e69330144f] renamed direct-utils universe
   [scanner-refusal:eb2b142cf7df4f4e59facf55554fb04e] universe-dependent compiler census
   [scanner-refusal:474c2c17b390e6a30e2a618348b20390] another directory's same-named

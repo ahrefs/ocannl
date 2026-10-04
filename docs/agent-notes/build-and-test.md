@@ -79,7 +79,9 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   explicitly links `arrayjit.utils`, resolved through `Dune_stanza_scan.program_runners` plus
   Dune's self-running test actions. `(universe)` alone identifies no gate: compiler censuses and
   OCANNL-free canaries use it too. The same classification owns alias reachability, the gate's
-  training lock obligation and the deliberate generated-alias collision exemption.
+  training lock obligation and the deliberate generated-alias collision exemption. A mixed Dune
+  file exempts only its configuration-free aliases, so a new configuration reader cannot inherit
+  the canary's exemption.
 
 ### Bringing the base in
 
