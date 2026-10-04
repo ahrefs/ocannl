@@ -456,6 +456,13 @@ let () =
       List.equal Int.equal (List.map c.probes ~f:(fun pr -> pr.depth)) [ 2; 3 ]);
   let above = call "marginal work above the target" ~single:9.75 ~fixed:0. ~marginal:10.5 in
   let unresolved = call "every batch unresolved" ~single:9.75 ~fixed:40. ~marginal:0. in
+  let fixed_dominated =
+    call "fixed-dominated marginal at the target" ~single:9.75 ~fixed:200.
+      ~marginal:Autotune.queued_batch_ms
+  in
+  p "a fixed-dominated fit retains its refusal without the boundary floor"
+    (fixed_dominated.reading.unbatched
+    && Option.is_none (Autotune.admitted_timing_ms fixed_dominated.reading));
   let refused = [ ("above-target marginal", above); ("unresolved", unresolved) ] in
   p_all "over-target or unresolved batched work remains unbatched and unranked" refused
     ~f:(fun (_, c) -> c.reading.unbatched && Option.is_none (Autotune.admitted_timing_ms c.reading));
@@ -468,7 +475,9 @@ let () =
   let supported = List.map cases ~f:(fun (_, _, _, c) -> c) in
   p "a comparison of supported boundary candidates can cache" (cacheable supported);
   p_all "one genuinely refused candidate still vetoes the whole comparison's cache" refused
-    ~f:(fun (_, c) -> not (cacheable (c :: supported)))
+    ~f:(fun (_, c) -> not (cacheable (c :: supported)));
+  p "a fixed-dominated refusal still vetoes the comparison's cache"
+    (not (cacheable (fixed_dominated :: supported)))
 
 let () =
   let gpu_cap = Autotune.queue_depth_cap_for_backend "hip"

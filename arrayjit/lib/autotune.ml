@@ -608,12 +608,15 @@ let refine_queued_batch_depth_between_with_cap ~min_depth ~max_depth ~base_depth
       (* A synchronized single below the target owes a queued batch. Two BATCH observations can
          nevertheless put the fitted depth-1 wall just above it: their fixed term and the singles'
          round trip need not agree (gfx1102, gh-ocannl-1184). Keep the measured depth-2 batch when
-         this resolved pair proves that its marginal work still fits the target. Returning to the
-         singles would change the objective; refusing would make these ordinary boundary candidates
-         permanently uncacheable. An unresolved fit, or marginal work above the target, establishes
-         no such supported batch and keeps the existing fallback/refusal. *)
+         this resolved pair proves that its marginal work still fits the target and its fixed term
+         is below it. Fixed-dominated fits retain their existing marginal-work policy. Returning to
+         the singles would change the objective; refusing would make these ordinary boundary
+         candidates permanently uncacheable. An unresolved fit, or marginal work above the target,
+         establishes no such supported batch and keeps the existing fallback/refusal. *)
       let min_depth =
-        if base_depth = 2 && Float.(marginal_ms <= queued_batch_ms) then min_depth else 1
+        if base_depth = 2 && Float.(fixed_ms < queued_batch_ms && marginal_ms <= queued_batch_ms)
+        then min_depth
+        else 1
       in
       if Float.(fixed_ms < -.tolerance_ms) then (retry_depth, Float.nan)
       else if Float.(fixed_ms >= queued_batch_ms) then

@@ -895,7 +895,8 @@ files.
   consumers (the benchmark JSON's per-arm `timings_unbatched`, `gh834_cells.sh`) keep treating it
   as an incomplete measurement; one that repeats on an idle rerun is the threshold. A sampled
   depth-2 batch with a resolved deeper confirmation whose marginal work fits the target stays at
-  depth 2 when synchronized singles owed batching (gh-ocannl-1184): on gfx1102, pairs near
+  depth 2 when synchronized singles owed batching and the fixed term is below the target
+  (gh-ocannl-1184): on gfx1102, pairs near
   `(2, 19.14 ms)` / `(3, 28.28 ms)` fitted a one-launch wall just above 10 ms despite marginal
   work below it, then refused that isolated settle and vetoed every cache. Keep the directly
   measured batch, never an unmeasured depth 2 projected from deeper points; unresolved or
