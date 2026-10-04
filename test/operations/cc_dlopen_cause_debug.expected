@@ -1,4 +1,4 @@
-debug artifacts requested: no
+debug artifacts requested: yes
 backend: cc
 the compiler command renames expf to the undefined symbol: true
 strict failure classification is off: true
