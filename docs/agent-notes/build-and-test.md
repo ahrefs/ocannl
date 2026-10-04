@@ -166,12 +166,15 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   assignment contributes only when it occupies the whole inline span outside benchmark reports and
   its unqualified name has lowercase snake-case shape with an underscore; this registry-independent
   grammar comes from `Utils.parse_config_token`, shared with the command-line and environment forms.
+  Its structured accepted/ambiguous/rejected result carries explicit names, runtime-shaped shorter
+  candidates and normalized diagnostic keys, so this scan resolves registry/site judgments without
+  reconstructing the token grammar (gh-ocannl-916).
   Current one-word config assignments such as `profile=reproducible|performance|approximate` and `backend=cc`
   are file/key/count-pinned judgments because their spelling alone cannot distinguish them from an
   arbitrary API or mathematical assignment.
   Whitespace around `=`, within the value, or an empty example value does not hide the key. The
   permanent negative controls are Metal's `fastMathEnabled=false`, Apple's `mathMode=Safe`, and the
-  mathematical `d=1`; `debug_log_from_routines=true` pins a real documented positive. An outer bare
+  mathematical `d=1`, and tinygrad's `PARALLEL=0`; `debug_log_from_routines=true` pins a real documented positive. An outer bare
   assignment and prefixed tokens embedded in its
   value are both consumers. Config files contribute each uncommented assignment with a nonempty
   value after applying

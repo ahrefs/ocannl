@@ -5,6 +5,8 @@ The storage-vs-compute seam, the software codecs, accumulator widths, and vector
 Part of the agent notes; the [index](../agent-notes.md) carries the scope discipline and the other
 files.
 
+## Narrow formats and conversion oracles
+
 - `check_half_prec_constants_cutoff` (`Ops.exceeds_fp16_cutoff`, enforced from
   `Low_level.simplify_llc.check_constant` during lowering, hence backend-independently) is a
   HEADROOM policy, not a representability check: its default 2^14 sits far below fp16's 65504 max
@@ -204,7 +206,7 @@ files.
   `./_build/default/tools/fp8_soak.exe --sweep=f32` (add `--spelling=both` on HIP) takes about ten
   seconds on either GPU box and exercises every path an arm has. `dune build @check` alone proves
   the arm compiles but never calls it.
-
+## Storage and compute precision
 - A tensor node's precision is its **storage** precision; the precision its arithmetic runs at is a
   separate thing, `C_syntax_config.compute_prec` (gh-ocannl-517). They coincide on the GPU backends
   for the formats those have as types (native `__nv_bfloat16` / MSL `bfloat`/`half`, and the 16-bit
@@ -297,6 +299,7 @@ files.
   take `tile_prec` (exact widenings only) to fold the widening into the pack; seeding resolves the
   same `Numerics.cpu_compute_prec` the emission uses — change either side only through that
   helper, or "timed is not tensorized" returns for narrow sites.
+## Accumulator localization and legality
 - **A reduction accumulator's WIDTH is policy and its RESIDENCY is unconditional; its narrowing
   POINTS are schedule** (gh-ocannl-639, gh-ocannl-693). The plain serial fallback of an
   accumulation nest holds the accumulator in a scope LOCAL at `acc_prec` and stores once after the
@@ -565,6 +568,7 @@ files.
   must DRIFT out of storage exactness — a zero-mean operand random-walks small enough that every
   bf16 partial sum stays exact and per-step narrowing is invisible (`accum_width.ml`'s policy-off
   negative control is the canary).
+## Numerics policies and cache identity
 - **On GPU the accumulator residency follows the backend's tensor-unit formats, per backend**
   (gh-ocannl-663): `C_syntax_config.accum_prec` — the width a recognized reduction accumulator
   resides at given the storage precision — feeds the try_widen gate AND `scope_prec_of`, whose
@@ -831,6 +835,7 @@ files.
   accumulator as its negative control (an f16 destination under `Fp16_auto` returns 2048 in both
   scopes); a half-accumulator mutant of the mixed arm fails the value claims (2048), a declining
   mutant only the structure ones.
+## Warp reductions and hardware ownership
 - **The warp-shuffle rendering stages at the residency, and gates on it** (gh-ocannl-682).
   `C_syntax.try_warp_reduce` holds `wred_v_*`, the `__shared__ wred_partials_*` slots and every
   `ocannl_shfl_xor` stage at `accum_prec` of the storage precision, and renders the contribution
@@ -968,6 +973,7 @@ files.
   the renderings (pin alone, same pin twice, outer pin narrowing the reduce level, `If (i < 16)`
   narrowing, extent one, per-thread scratch, the staged form, dead level, false guard,
   `acc[2 i + j]`, lane-indexed scatter, aligned vector runs).
+## Register-tile benchmark controls
 - **A "packmma" timing is not evidence that anything tensorized.** A `Tile_mma` whose register-tile
   preconditions fail renders the scalar fallback and the run still reports under whatever the
   variant was named — the column extent below the compute vector width is the easiest way in (at
@@ -1004,6 +1010,7 @@ files.
   (width 48 over 512, a 4-column tail) runs 1.15–1.29 ms against 1.40–1.53 ms for the tail-free
   `--rn=4`, i.e. ~20% — the gh-ocannl-620 reuse-only ranking is right here by well more than the
   bench's timing noise, and `--rn=6` is what `Register_tile.default` picks.
+## SIMD operations and rounding
 - **Negative zero is what breaks a "bitwise equal to the scalar twin" claim** (gh-ocannl-615). Two
   spellings normalized it, both fixed but both easy to reintroduce: a scalar-to-vector splat written
   `((vtyp){0} + x)` returns `+0.0` for `x = -0.0` (IEEE `(+0.0) + (-0.0) = +0.0`), so use
@@ -1092,6 +1099,7 @@ files.
   `#elif` lines from the emitted `.c` instead, and keep a positive control: building
   `bin/narrow_gebp_bench` at 97e7d286 (gh-614's parent) still reproduces 12.57 GFLOP/s against
   HEAD's ~128, and its kernel censuses 199 / 52 / 6 at `-O3`.
+## Assembly census and compiler differences
 - **Widths that no local hardware can execute still get checked, three ways.** gh-ocannl-621's
   AVX-512, AVX512-FP16 and aarch64 rows were written on a machine with none of them (QEMU's TCG
   implements neither AVX-512 nor AVX512-FP16 — `query-cpu-model-expansion` on `-cpu max` reports
@@ -1322,6 +1330,7 @@ files.
   without root: `apt-get download clang-18 libclang-cpp18 libllvm18 libclang-common-18-dev`,
   `dpkg-deb -x` each into one prefix, and point `X86_CLANG` at a wrapper exporting
   `LD_LIBRARY_PATH` for `usr/lib/x86_64-linux-gnu` and `usr/lib/llvm-18/lib` under it.
+## Min-max and FMA lowering diagnostics
 - **`Max`/`Min` SIMD reductions were a libm call per lane, on every x86 target** (gh-ocannl-649,
   fixed). The `Vectorized` accumulation loop rendered them as a fixed-trip per-lane loop calling the
   scalar `fmaxf`/`fminf`, on the reasoning that the packed-max builtins have the wrong NaN semantics
@@ -1514,6 +1523,7 @@ files.
   route was broken and deleted it. One more caution: the logged command carries `-o <...>.so`, so
   rerunning it with `-S` added but `-o` unchanged writes assembly over the shared library, possibly
   one a running process still has mapped — repoint `-o` at a fresh `.s`.
+## Integer FMA boundaries
 - **The mul-add → `Ternop (FMA, …)` rewrite is guarded to floating point, and that guard is
   load-bearing rather than a rounding preference** (gh-ocannl-824). Downstream,
   `Ops.ternop_c_syntax` renders `Byte`, `Uint16`, `Int32`, `Uint32`, `Int64`, `Uint64` and `Fp8`
@@ -1531,6 +1541,8 @@ files.
   precision still fused — plus that executed witness. What the guard does NOT cover is the codegen
   boundary: a hand-built integer-precision `Ternop (FMA, …)` is still renderable through the double
   `fma(`, which gh-ocannl-873 tracks rejecting loudly before rendering.
+## SIMD widths and narrow-storage performance
+
 - **"No such hardware" is a claim about a machine, not about the project — so name the machine.**
   The rows above were written from an Arrow Lake-HX box, where AVX-512 is fused off across the
   whole hybrid part, and the note recorded that as if it held everywhere; the machine that actually
@@ -1599,6 +1611,7 @@ files.
   — an order of magnitude below the machine's stream bandwidth — and exactly masks any traffic
   difference. Keep readbacks outside the timed region; the `cc` scheduler is synchronous, so no
   separate await is needed.
+## Fast math and device finiteness
 
 - **CUDA and HIP compile with fast-math umbrellas; Metal pins safe arithmetic while retaining fast
   math functions**: CUDA passes `--use_fast_math`, HIP `-ffast-math`, and Metal selects
@@ -1672,6 +1685,7 @@ files.
   between backends with no OCANNL-side change to point at. When bumping ROCm (or any RTC vendor
   headers), grep the SDK include tree for `__FAST_MATH__` and check whether any header OCANNL
   includes newly conditions on it.
+## FFI bounds and crash diagnosis
 
 - **An `external` typed `int array` carries no length, so a stub reading fixed fields must check
   `Wosize_val` first** (gh-ocannl-688). `builtins.c`'s uint4x32 helpers take an OCaml array and read
@@ -1690,7 +1704,7 @@ files.
   nothing meaningful — load, launcher, concurrency — so do not chase the correlation. To reproduce
   deterministically, put the short block at the top of a fresh minor heap: `Gc.minor (); let a =
   Array.make 1 0 in <call>`. That turns a 3-in-5 flake into 5-in-5 (`test/operations/uint4x32_stub_bounds.ml`).
-
+## Shared precision witnesses and builtins
 - `Ops.all_precs` owns canonical precision witnesses (gh-ocannl-917); its exhaustive sentinel
   makes a new constructor require an enumeration decision beside the list. `Ops.prec_family`
   separates scalar integers, scalar floats, packed `uint4x32` RNG state, and value-less void;

@@ -7373,3 +7373,11 @@
  (deps ocannl_config)
  (modules fresh_process_cases)
  (libraries base stdio unix fresh_process arrayjit.verdict))
+
+(test
+ ; ocannl-backend: none -- registry-independent config syntax, no backend linked.
+ (name config_token_parse)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules config_token_parse)
+ (libraries base stdio arrayjit.utils arrayjit.verdict))
