@@ -309,6 +309,8 @@ tools/opam-env.sh parses: true
 tools/promote.sh parses: true
 tools/remote-verify.sh parses: true
 tools/sweep.sh parses: true
+tools/test-ci-durations.sh uses the shared harness contract: true
+tools/test-ci-durations.sh parses: true
 tools/test-ci-shard.sh uses the shared harness contract: true
 tools/test-ci-shard.sh parses: true
 tools/test-ci-times.sh uses the shared harness contract: true

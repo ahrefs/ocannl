@@ -18,14 +18,27 @@
 #   --event NAME         only runs of this event, e.g. push, pull_request,
 #                        schedule, workflow_dispatch (default: any)
 #   -n N                 how many completed runs to read (default: 30)
+#   --job REGEX         select job names (Python regular expression search)
+#   --step REGEX        sum matching steps per job; print duration, paired job,
+#                        rest-of-job and share distributions (minutes / percent)
+#                        Renames can be selected with 'Old name|New name'.
+#                        Missing/unusable steps are counted, never zero-filled.
 #   -h, --help           this header
 #
 # Examples:
 #   tools/ci-durations.sh                        # last 30 completed ci.yml runs
 #   tools/ci-durations.sh --branch master -n 50
 #   tools/ci-durations.sh --event schedule       # the extended (Windows) matrix
+#   tools/ci-durations.sh --branch master --job Ubuntu --step 'Compile|Build and test'
 #
-# Pure `gh api` + awk; no OCANNL build involved.  Requires an authenticated
+# A step sample requires all matching intervals to be usable. Job/share/rest
+# samples additionally require a positive job interval and a sum within it.
+# Failed/cancelled jobs with usable times stay grouped by job conclusion;
+# skipped steps never contribute, even when they have placeholder timestamps.
+# Step names matched in each group are printed so renames remain visible.
+# The share is calculated per job, then summarized (not a ratio of medians).
+#
+# Pure `gh api` + python3; no OCANNL build involved.  Requires an authenticated
 # `gh`; any API failure aborts, so an empty table is never printed as a result.
 
 set -euo pipefail
@@ -35,6 +48,7 @@ workflow=ci.yml
 branch=
 event=
 runs=30
+selectors=()
 
 die() {
   echo "ci-durations.sh: $*" >&2
@@ -89,6 +103,11 @@ while [ $# -gt 0 ]; do
     event=${2-}
     shift 2 || die "--event needs a value"
     ;;
+  --job | --step)
+    [ $# -ge 2 ] || die "$1 needs a value"
+    selectors+=("$1" "$2")
+    shift 2
+    ;;
   -n)
     runs=${2-}
     shift 2 || die "-n needs a value"
@@ -111,6 +130,8 @@ repo_path=$(urlenc "${repo%%/*}")/$(urlenc "${repo#*/}")
 workflow_path=$(urlenc "$workflow")
 case "$runs" in '' | *[!0-9]*) die "-n wants a positive integer, got: $runs" ;; esac
 [ "$runs" -gt 0 ] || die "-n wants a positive integer, got: $runs"
+
+python3 "$(dirname "$0")/ci-timing.py" validate "${selectors[@]}"
 
 # Every filter goes through `gh api --method GET -f`, which URL-encodes each
 # value, rather than being concatenated into the path: a branch name may legally
@@ -152,61 +173,14 @@ done
 run_ids=$(printf '%s\n' "$run_ids" | awk -v n="$runs" 'NR <= n')
 run_count=$(printf '%s\n' "$run_ids" | awk 'NF { n++ } END { print n + 0 }')
 
-# One `name<TAB>conclusion<TAB>started_at<TAB>completed_at` line per job.  Jobs
-# of a run can exceed one page on the extended matrix, and every page of them is
-# wanted, so `--paginate` is right here in a way it is not above.
-jobs_tsv=$(
+# Jobs are JSON lines, preserving step names and null timestamps without TSV loss.
+jobs_json=$(
   for id in $run_ids; do
     gh api --paginate --method GET "repos/$repo_path/actions/runs/$id/jobs" -f per_page=100 \
-      --jq '.jobs[] | [.name, (.conclusion // "null"), (.started_at // "null"), (.completed_at // "null")] | @tsv' ||
-      die "fetching jobs of run $id failed"
+      --jq '.jobs[]' || die "fetching jobs of run $id failed"
   done
 )
+[ -n "$jobs_json" ] || die "the $run_count matched run(s) reported no jobs"
 
-[ -n "$jobs_tsv" ] || die "the $run_count matched run(s) reported no jobs"
-
-# key<TAB>seconds, sorted by key then duration, so the group scan below reads
-# min off the first row, max off the last, and the median off the middle.
-rows=$(printf '%s\n' "$jobs_tsv" | awk -F'\t' '
-  # Days since 1970-01-01 (Howard Hinnant days_from_civil); BSD awk has no
-  # mktime, so the conversion is spelled out rather than delegated.
-  function days(y, m, d,   era, yoe, doy, doe) {
-    y -= (m <= 2)
-    era = int((y >= 0 ? y : y - 399) / 400)
-    yoe = y - era * 400
-    doy = int((153 * (m + (m > 2 ? -3 : 9)) + 2) / 5) + d - 1
-    doe = yoe * 365 + int(yoe / 4) - int(yoe / 100) + doy
-    return era * 146097 + doe - 719468
-  }
-  function epoch(ts,   p) {
-    if (ts !~ /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$/) return -1
-    split(ts, p, /[-T:Z]/)
-    return days(p[1] + 0, p[2] + 0, p[3] + 0) * 86400 + p[4] * 3600 + p[5] * 60 + p[6]
-  }
-  {
-    name = $1; concl = $2; start = epoch($3); end = epoch($4)
-    if (start < 0 || end < 0) { skipped++; next }
-    d = end - start
-    if (d < 0) { skipped++; next }
-    printf "%s [%s]\t%d\n", name, concl, d
-  }
-  END { if (skipped) printf "ci-durations.sh: skipped %d job(s) with no usable start/finish time\n", skipped > "/dev/stderr" }
-' | sort -t"$(printf '\t')" -k1,1 -k2,2n)
-
-[ -n "$rows" ] || die "no job of the $run_count matched run(s) had a usable start/finish time"
-
-echo "$repo  $workflow  branch=${branch:-any}  event=${event:-any}  runs=$run_count"
-echo
-
-printf '%s\n' "$rows" | awk -F'\t' '
-  function mins(s) { return sprintf("%.1f", s / 60) }
-  function flush(   med) {
-    if (!n) return
-    med = (n % 2) ? v[int(n / 2) + 1] : (v[n / 2] + v[n / 2 + 1]) / 2
-    printf "%-52s %5d %8s %8s %8s\n", key, n, mins(v[1]), mins(med), mins(v[n])
-  }
-  BEGIN { printf "%-52s %5s %8s %8s %8s\n", "job [conclusion]", "n", "min", "median", "max" }
-  $1 != key { flush(); key = $1; n = 0; delete v }
-  { v[++n] = $2 + 0 }
-  END { flush() }
-'
+printf '%s\n' "$jobs_json" | python3 "$(dirname "$0")/ci-timing.py" durations \
+  "$repo  $workflow  branch=${branch:-any}  event=${event:-any}  runs=$run_count" "${selectors[@]}"
