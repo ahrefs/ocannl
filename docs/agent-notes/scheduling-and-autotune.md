@@ -104,10 +104,12 @@ files.
   and 0 (the two-pass rewrite) on CUDA, HIP and unmeasured targets. CUDA's block fold loses
   on the tuned f32 transformer even with tf32 (gh-ocannl-1194); the two-pass form retains the
   tensorized matmul gain ([ablation report](../../benchmarks/report-gh1194-cuda-approximate.md)).
-  On gfx1151 **unified** memory,
-  the tuned f32 forward's first search sweep measured 7.22 ms at 16 against 4.72 ms at 0
-  (exact 4.75 ms); the losing placement arms of block-off and exact refused timing windows,
-  so the clean three-arm confirmation is pending, including gfx1102 **discrete**. Explicit
+  Clean cached three-arm confirmation (gh-ocannl-1184, runtime `3858b8a5`) measured the
+  tuned f32 forward on
+  gfx1151 **unified** memory at 7.07 ms with 16 against 4.76 ms with auto (exact 4.72 ms),
+  and gfx1102 **discrete** at 9.56 ms against 6.30 ms (exact 6.12 ms). Full unpruned
+  searches and separate cache audits had no timing refusals; three Latin-square replay
+  sweeps per device confirmed that 16 loses on both. Explicit
   integers and `set_block` force their size. The limits travel through backend compilation
   AND analyze-only lowering before the rewrites; the resolved code retains the existing
   `Code_borne` cache classification. Backend-free lowering conservatively resolves auto to 0.
@@ -894,6 +896,13 @@ files.
   names what was measured, not a cause: host load stalling every batched probe reads the same, so
   consumers (the benchmark JSON's per-arm `timings_unbatched`, `gh834_cells.sh`) keep treating it
   as an incomplete measurement; one that repeats on an idle rerun is the threshold. A sampled
+  depth-2 batch with a resolved deeper confirmation whose marginal work fits the target stays at
+  depth 2 when synchronized singles owed batching and the fixed term is below the target
+  (gh-ocannl-1184): on gfx1102, pairs near
+  `(2, 19.14 ms)` / `(3, 28.28 ms)` fitted a one-launch wall just above 10 ms despite marginal
+  work below it, then refused that isolated settle and vetoed every cache. Keep the directly
+  measured batch, never an unmeasured depth 2 projected from deeper points; unresolved or
+  over-target marginal work still refuses and suppresses the whole comparison's cache. A sampled
   shallower crossing is refitted against the batch above it and never settles past that batch: a
   fixed-dominated refit projects far deeper, unmeasured, where a queue cost may jump. Every other
   settle is capped at `Autotune.queue_depth_projection_factor` (2) times the deepest batch probed

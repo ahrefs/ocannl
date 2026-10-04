@@ -416,6 +416,69 @@ let describe what c =
          (if c.reading.unbatched then " (unbatched)" else "");
        ])
 
+(* gh-ocannl-1184: gfx1102's refused candidates had resolved depth-2/depth-3 slopes below the
+   target, but their fixed term put the fitted depth-1 wall just above it. Singles below the target
+   still owe a batch. Dyadic nearby costs isolate that boundary from device jitter. *)
+let () =
+  Stdio.printf "\n== a fitted single crossing keeps supported queued work ==\n";
+  let cap = Autotune.queue_depth_cap_for_backend "hip" in
+  let call what ~single ~fixed ~marginal =
+    let c =
+      synthetic_call ~timing:Autotune.Queued ~cap ~fixed_ms:fixed ~launch_ms:marginal
+        ~walls:(fun _nth depth ->
+          if depth = 1 then single else fixed +. (marginal *. Float.of_int depth))
+        ()
+    in
+    describe what c;
+    c
+  in
+  let cases =
+    [
+      ("near the target", 1.25, 9.);
+      ("a larger fixed term", 7., 4.);
+      ("marginal work exactly at the target", 0.5, Autotune.queued_batch_ms);
+    ]
+    |> List.map ~f:(fun (what, fixed, marginal) ->
+        (what, fixed, marginal, call what ~single:9.75 ~fixed ~marginal))
+  in
+  p_all "a supported batched slope keeps depth 2 despite a fitted single above the target" cases
+    ~f:(fun (_, fixed, marginal, c) ->
+      Float.(fixed +. marginal > Autotune.queued_batch_ms)
+      && c.settled_depth = 2 && (not c.reading.unbatched)
+      && Option.is_some (Autotune.admitted_timing_ms c.reading));
+  p_all "the boundary reading is the queued batch's per-launch cost, with no reused singles" cases
+    ~f:(fun (_, fixed, marginal, c) ->
+      Float.equal c.reading.ms (marginal +. (fixed /. 2.))
+      && c.reused_batches = 0
+      && c.fresh_launches = c.window_batches * c.settled_depth);
+  p_all "the retained boundary depth is supported by two distinct batched probes" cases
+    ~f:(fun (_, _, _, c) ->
+      List.equal Int.equal (List.map c.probes ~f:(fun pr -> pr.depth)) [ 2; 3 ]);
+  let above = call "marginal work above the target" ~single:9.75 ~fixed:0. ~marginal:10.5 in
+  let unresolved = call "every batch unresolved" ~single:9.75 ~fixed:40. ~marginal:0. in
+  let fixed_dominated =
+    call "fixed-dominated marginal at the target" ~single:9.75 ~fixed:200.
+      ~marginal:Autotune.queued_batch_ms
+  in
+  p "a fixed-dominated fit retains its refusal without the boundary floor"
+    (fixed_dominated.reading.unbatched
+    && Option.is_none (Autotune.admitted_timing_ms fixed_dominated.reading));
+  let refused = [ ("above-target marginal", above); ("unresolved", unresolved) ] in
+  p_all "over-target or unresolved batched work remains unbatched and unranked" refused
+    ~f:(fun (_, c) -> c.reading.unbatched && Option.is_none (Autotune.admitted_timing_ms c.reading));
+  let cacheable calls =
+    let admitted c = Option.is_some (Autotune.admitted_timing_ms c.reading) in
+    Autotune.search_measurements_cacheable
+      ~nothing_timed:(not (List.exists calls ~f:admitted))
+      ~timings_contended:(List.count calls ~f:(fun c -> c.reading.contended || c.reading.unbatched))
+  in
+  let supported = List.map cases ~f:(fun (_, _, _, c) -> c) in
+  p "a comparison of supported boundary candidates can cache" (cacheable supported);
+  p_all "one genuinely refused candidate still vetoes the whole comparison's cache" refused
+    ~f:(fun (_, c) -> not (cacheable (c :: supported)));
+  p "a fixed-dominated refusal still vetoes the comparison's cache"
+    (not (cacheable (fixed_dominated :: supported)))
+
 let () =
   let gpu_cap = Autotune.queue_depth_cap_for_backend "hip"
   and cc_cap = Autotune.queue_depth_cap_for_backend "cc" in

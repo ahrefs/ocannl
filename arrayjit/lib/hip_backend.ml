@@ -1577,8 +1577,9 @@ end = struct
            simdgroup_width = Some 32;
            (* gh-ocannl-1124: measured false on gfx1151; see the field. *)
            lane_scalar_recompute_cheap = false;
-           (* gh-ocannl-1171: gfx1151 loses with the block fold; other HIP targets are unmeasured.
-              Keep the two-pass rewrite under auto until evidence admits it. *)
+           (* gh-ocannl-1184: clean cached confirmation loses with block 16 on both gfx1151 unified
+              and gfx1102 discrete. Keep the two-pass rewrite under auto; other HIP targets are
+              unmeasured. *)
            online_softmax_auto_block = 0;
            worker_pool_tag = None;
            (* Filled fresh by the accessor below, not here: both inputs are process-mutable
