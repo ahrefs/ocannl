@@ -427,8 +427,8 @@ plan_slot_kind() { # after plan_batch
   else
     what="--gpu (any slot may hold the GPU here): it can hold $(batch_summary)"
   fi
-  slot_announce="taking one of $slot_box's $slot_slots fleet correctness slots for this run (gh-ocannl-1004),
-  waiting up to ${slot_wait}s, as $what."
+  slot_announce="requesting one of $slot_box's $slot_slots fleet correctness slots for this run (gh-ocannl-1004),
+  as $what. Acquisition timeout: ${slot_wait}s; an enclosing slot may be reused immediately."
 }
 
 select_dune() {
