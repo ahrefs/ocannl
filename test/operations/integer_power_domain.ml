@@ -73,6 +73,39 @@ let run ~prec ~name ~narrow =
 let () = run ~prec:Ops.single ~name:"ipow_f32" ~narrow:f32
 
 let () =
+  Verdict.case "constant rounding" (fun () ->
+      let base = 0.5657068490982056 in
+      let node = Ll_test.node_factory ~first_id:18500 ~dims:[| 4 |] () in
+      let input = node "ipow_round_input" and output = node "ipow_round_output" in
+      List.iter [ input; output ] ~f:Ll_test.materialize;
+      let power x n = LL.Binop (ToPowOf, (x, Ops.single), (Ll_test.c n, Ops.single)) in
+      let constant = Ll_test.set output [| Ll_test.fixed 0 |] (power (Ll_test.c base) 3.) in
+      p "constant integer powers remain at target precision through simplification"
+        (match LL.simplify_llc ~fp_algebra:"none" [] constant with
+        | LL.Set { llsc = LL.Binop (ToPowOf, (LL.Constant _, _), _); _ } -> true
+        | _ -> false);
+      let body =
+        List.foldi [ 3.; -3. ] ~init:LL.Noop ~f:(fun i acc n ->
+            Ll_test.seq acc
+              (Ll_test.seq
+                 (Ll_test.set output [| Ll_test.fixed (2 * i) |] (power (Ll_test.c base) n))
+                 (Ll_test.set output
+                    [| Ll_test.fixed ((2 * i) + 1) |]
+                    (power (Ll_test.get input [| Ll_test.fixed 0 |]) n))))
+      in
+      let o = Ll_test.optimize ~name:"ipow_round" body in
+      let got =
+        List.hd_exn
+          (Ll_test.execute ~name:"ipow_round" o
+             ~seed:[ (input, Array.create ~len:4 base); (output, Ll_test.blank 4) ]
+             ~read:[ output ])
+      in
+      p_alli "constant and materialized integer powers share f32 multiplication rounding"
+        [ 3.; -3. ] ~f:(fun i _ -> bitwise got.(2 * i) got.((2 * i) + 1));
+      p "non-dyadic cubic rounds each target multiplication"
+        (Int32.equal (Int32.bits_of_float got.(0)) 0x3e396287l))
+
+let () =
   run ~prec:Ops.half ~name:"ipow_f16" ~narrow:(fun x ->
       Ops.half_to_single (Ops.single_to_half (f32 x)))
 
@@ -123,8 +156,8 @@ let () =
                ]
              ~read:[ output ])
       in
-      p_all "constant folding accepts integral float exponents outside the machine-int range" cases
-        ~f:(fun (x, n, want) -> bitwise (Ops.interpret_binop ToPowOf x n) want);
+      p_all "host interpretation accepts integral float exponents outside the machine-int range"
+        cases ~f:(fun (x, n, want) -> bitwise (Ops.interpret_binop ToPowOf x n) want);
       p_alli "edge exponents preserve exact parity without integer overflow or float narrowing"
         cases ~f:(fun i (_, _, want) -> bitwise got.(i) want))
 

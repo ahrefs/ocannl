@@ -1721,4 +1721,6 @@ files.
   NaN. Bitwise classification and final sign restoration are required under HIP fast math:
   the arithmetic-only helper lost half `(-0)^3`'s sign and produced NaN for double `0^-1`.
   This is an integer multiplication policy, not a correctly rounded floating-pow promise;
-  fractional and dynamic exponents retain the vendor operation. Guard: `integer_power_domain`.
+  fractional and dynamic exponents retain the vendor operation. Constant integer powers also stay
+  in the IR until codegen: host f64 folding would change the f32 multiplication rounding, so a
+  non-dyadic constant/materialized cubic comparison pins this boundary. Guard: `integer_power_domain`.

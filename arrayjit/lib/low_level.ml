@@ -4237,6 +4237,13 @@ let simplify_llc ?fp_algebra static_indices llc =
     | Binop (Arg2, _, (llv2, prec2)) -> loop_scalar (llv2, prec2)
     | Binop ((Threefry4x32_crypto | Threefry4x32_light | Uint4x32_to_prec_uniform_lane), _, _) ->
         (llsc, prec)
+    | Binop (ToPowOf, (Constant _, prec1), (Constant exponent, prec2))
+      when Ops.is_float (Ops.promote_prec prec1 prec2)
+           && Float.is_finite exponent && Float.is_integer exponent ->
+        (* Host-float folding would multiply at f64, unlike the target's f32 helper for single and
+           narrow storage. Keep integer powers for codegen so constants and materialized bases share
+           the same multiplication and reciprocal rounding. *)
+        (llsc, prec)
     | Binop (op, (Constant c1, prec1), (Constant c2, prec2)) ->
         (Constant (Ops.interpret_binop op c1 c2), Ops.promote_prec prec1 prec2)
     | Binop (Add, (llsc, prec1), (Constant 0., _))

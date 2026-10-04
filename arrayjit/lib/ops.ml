@@ -603,8 +603,8 @@ let neutral_elem = function
       0.
 
 let interpret_binop =
-  (* Exact integral float exponents need no conversion to a machine int. This also defines the
-     constant-folder's large-exponent policy consistently with the generated powi multiplication. *)
+  (* Exact integral float exponents need no conversion to a machine int. Host interpretation uses
+     f64 multiplication; lowering leaves integer powers for the target-precision codegen helper. *)
   let integer_power base exponent =
     let rec loop base magnitude result =
       if Float.(magnitude = 0.) then result
