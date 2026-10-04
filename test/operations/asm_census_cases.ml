@@ -578,7 +578,36 @@ let scalar_load_probe () =
      conversion is packed"
     (Poly.equal (c.vector_ops, c.scalar_fp_ops) (3, 3))
 
+(* GCC derives [-dumpbase] and [-dumpdir] from the OUTPUT filename, sometimes with the source
+   extension or no extension, so neither original probe path names it. *)
+let compilation_plan_probe () =
+  let plan ~src ~asm ~cwd =
+    Printf.sprintf
+      "cc1 -O2 -dumpdir %s. -dumpbase %s.c -dumpbase-ext .c %s -o %s -I/sdk/include \
+       -fdebug-compilation-dir=%s"
+      (Stdlib.Filename.remove_extension asm)
+      (Stdlib.Filename.basename (Stdlib.Filename.remove_extension asm))
+      src asm cwd
+  in
+  let normalized ?(flags = "-O2") ?(sdk = "/sdk/include") suffix =
+    let src = "/tmp/ocannl_census_plan_source" ^ suffix ^ ".c" in
+    let asm = "/tmp/ocannl_census_plan_output" ^ suffix ^ ".s" in
+    let cwd = "/work/tree" ^ suffix in
+    let out = plan ~src ~asm ~cwd in
+    let out = String.substr_replace_all out ~pattern:"-O2" ~with_:flags in
+    let out = String.substr_replace_all out ~pattern:"/sdk/include" ~with_:sdk in
+    Census.normalize_compilation_plan ~src ~asm ~cwd out
+  in
+  let first = normalized "aaa" in
+  let second = normalized "bbb" in
+  Verdict.p "compiler plans ignore probe paths and GCC's derived dump names"
+    (String.equal first second);
+  Verdict.p "compiler plan normalization retains SDK paths and effective flags"
+    ((not (String.equal first (normalized ~flags:"-O3" "aaa")))
+    && not (String.equal first (normalized ~sdk:"/another-sdk/include" "aaa")))
+
 let () =
+  compilation_plan_probe ();
   dialect_probes ();
   anchor_precedence_probe ();
   residual_probe ();

@@ -133,6 +133,26 @@ let preprocessed_source t ~opt_level ~source =
   (try Stdlib.Sys.remove src with _ -> ());
   if rc = 0 then Ok out else Error out
 
+(** Remove only probe-owned path spellings, longest first. GCC derives dump names from the assembly
+    stem: [-dumpbase] may append [.c] and [-dumpdir] may append a dot. These names never identify
+    compiler inputs, whereas SDK and option paths still do. *)
+let normalize_compilation_plan ~src ~asm ~cwd out =
+  let spellings path = [ path; String.substr_replace_all path ~pattern:"\\" ~with_:"/" ] in
+  let file_paths path marker =
+    List.concat_map [ path; Stdlib.Filename.basename path ] ~f:spellings
+    |> List.map ~f:(fun path -> (path, marker))
+  in
+  let replacements =
+    file_paths src "<SOURCE>" @ file_paths asm "<ASSEMBLY>"
+    @ file_paths (Stdlib.Filename.remove_extension src) "<SOURCE-STEM>"
+    @ file_paths (Stdlib.Filename.remove_extension asm) "<ASSEMBLY-STEM>"
+    @ List.map (spellings cwd) ~f:(fun path -> (path, "<CWD>"))
+    |> List.filter ~f:(fun (path, _) -> not (String.is_empty path))
+    |> List.sort ~compare:(fun (a, _) (b, _) -> Int.compare (String.length b) (String.length a))
+  in
+  List.fold replacements ~init:out ~f:(fun out (pattern, with_) ->
+      String.substr_replace_all out ~pattern ~with_)
+
 (** [compilation_plan t ~opt_level ~source] asks the compiler driver to expand the effective
     compilation it would run, including response files, GCC specs, wrapper-injected options and
     target subtools. Probe-local paths are normalized out; they name scratch files rather than an
@@ -146,22 +166,7 @@ let compilation_plan t ~opt_level ~source =
       (Printf.sprintf "%s %s -O%d -g -S -### -o %s %s" t.command (flags t) opt_level
          (Stdlib.Filename.quote asm) (Stdlib.Filename.quote src))
   in
-  let normalize_path out path marker =
-    let variants =
-      [
-        path; Stdlib.Filename.basename path; String.substr_replace_all path ~pattern:"\\" ~with_:"/";
-      ]
-      |> List.dedup_and_sort ~compare:String.compare
-      |> List.filter ~f:(fun path -> not (String.is_empty path))
-    in
-    List.fold variants ~init:out ~f:(fun out pattern ->
-        String.substr_replace_all out ~pattern ~with_:marker)
-  in
-  let out =
-    normalize_path out src "<SOURCE>" |> fun out ->
-    normalize_path out asm "<ASSEMBLY>" |> fun out ->
-    normalize_path out (Stdlib.Sys.getcwd ()) "<CWD>"
-  in
+  let out = normalize_compilation_plan ~src ~asm ~cwd:(Stdlib.Sys.getcwd ()) out in
   (try Stdlib.Sys.remove src with _ -> ());
   (try Stdlib.Sys.remove asm with _ -> ());
   if rc = 0 then Ok out else Error out

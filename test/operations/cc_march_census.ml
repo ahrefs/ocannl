@@ -1385,6 +1385,59 @@ let compile_cached (t : Census.toolchain) ~opt_level ~source ~src_path ~asm_path
                    with _ -> ());
                   ok)))
 
+(* Exercise the real cache in fresh processes, so neither the memoized toolchain identity nor an
+   existing user cache can conceal a probe-local name in the persistent key. *)
+let cache_probe_child ~src ~asm ~report =
+  let source = Stdio.In_channel.read_all src in
+  let t : Census.toolchain =
+    { label = "cache probe"; command = Cc_backend.compiler_command (); march = ""; note = "" }
+  in
+  (match
+     compile_cached t ~opt_level:2 ~source ~src_path:src ~asm_path:asm
+       ~validate:(String.is_substring ~substring:"census_cache_probe")
+   with
+  | Ok () -> ()
+  | Error out -> failwith out);
+  Stdio.Out_channel.write_all report
+    ~data:(Printf.sprintf "%d %d %d" !cache_hits !cache_misses !cache_bypasses)
+
+let cache_reuse_probe ~exe ~root =
+  let dir = Stdlib.Filename.concat root "cache_probe" in
+  mkdir_p dir;
+  let src = Stdlib.Filename.concat dir "census_cache_probe.c" in
+  let cache = Stdlib.Filename.concat dir "cache" in
+  let run name =
+    let asm = Stdlib.Filename.concat dir (name ^ ".s") in
+    let report = Stdlib.Filename.concat dir (name ^ ".counts") in
+    let log = Stdlib.Filename.concat dir (name ^ ".log") in
+    let env =
+      Unix.environment () |> Array.to_list
+      |> List.filter ~f:(fun kv ->
+          (not (String.is_prefix kv ~prefix:"OCANNL_TOOL_CC_MARCH_CENSUS_CACHE_DIR="))
+          && not (String.is_prefix kv ~prefix:"CC_MARCH_CENSUS_EMIT="))
+      |> fun env -> Array.of_list (env @ [ "OCANNL_TOOL_CC_MARCH_CENSUS_CACHE_DIR=" ^ cache ])
+    in
+    let out = Unix.openfile log [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_TRUNC ] 0o600 in
+    let pid =
+      Unix.create_process_env exe
+        [| exe; "--cache-probe"; src; asm; report |]
+        env Unix.stdin out out
+    in
+    let _, status = Unix.waitpid [] pid in
+    Unix.close out;
+    (match status with Unix.WEXITED 0 -> () | _ -> failwith (Stdio.In_channel.read_all log));
+    (Stdio.In_channel.read_all report, Stdio.In_channel.read_all asm)
+  in
+  Stdio.Out_channel.write_all src ~data:"int census_cache_probe(int x) { return x + 1; }\n";
+  let cold, first = run "cold" in
+  let warm, second = run "warm" in
+  Verdict.p "a fresh process reuses an identical-source census listing"
+    (String.equal cold "0 1 0" && String.equal warm "1 0 0" && String.equal first second);
+  Stdio.Out_channel.write_all src ~data:"int census_cache_probe(int x) { return x + 2; }\n";
+  let changed, third = run "changed" in
+  Verdict.p "a source change invalidates the census listing cache"
+    (String.equal changed "0 1 0" && not (String.equal first third))
+
 let half_bridge_cache : (bridge_direction * string * int * int, string option) Hashtbl.t =
   Hashtbl.Poly.create ()
 
@@ -1604,14 +1657,16 @@ let emit_all ~exe ~root =
    here are forced precisely so that every arm of the builtin table gets compiled. *)
 
 let () =
-  match Stdlib.Sys.getenv_opt "CC_MARCH_CENSUS_EMIT" with
-  | Some dir -> build dir
-  | None ->
+  match (Array.to_list Stdlib.Sys.argv, Stdlib.Sys.getenv_opt "CC_MARCH_CENSUS_EMIT") with
+  | [ _; "--cache-probe"; src; asm; report ], _ -> cache_probe_child ~src ~asm ~report
+  | _, Some dir -> build dir
+  | _, None ->
       let exe = Stdlib.Sys.executable_name in
       let root = Stdlib.Filename.concat (Stdlib.Sys.getcwd ()) "cc_march_census_kernels" in
       rm_rf root;
       mkdir_p root;
       cache_format_probes ();
+      cache_reuse_probe ~exe ~root;
       let emitted = emit_all ~exe ~root in
       Verdict.p_all "every requested vector width emitted a kernel" widths ~f:(fun w ->
           List.exists emitted ~f:(fun e -> e.width = w));
