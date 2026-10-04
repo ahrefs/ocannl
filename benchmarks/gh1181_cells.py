@@ -160,6 +160,8 @@ def environment(a, fixtures):
     driver = Path(__file__).resolve()
     return {
         "box": a.box,
+        # The label is the caller's; the host is the machine's own name, kept beside it for audit.
+        "hostname": platform.node(),
         "backend": a.backend,
         "platform": platform.platform(),
         "machine": platform.machine(),
@@ -206,6 +208,19 @@ def measure(a):
             if not shas["aug"].startswith("7014dc44"):
                 raise SystemExit(f"--aug is at {shas['aug']}, not the August commit 7014dc44")
 
+    # A row is stamped with its tree's HEAD, so that HEAD must be what runs: a tree with tracked
+    # modifications is refused, and each executable's digest is recorded, so a stale build is at
+    # least visible against the HEAD it is stamped with.
+    executables = {}
+    for name, tree in trees.items():
+        dirty = supporting_output(["git", "-C", str(tree), "status", "--porcelain",
+                                   "--untracked-files=no"]).strip()
+        if dirty:
+            raise SystemExit(f"the {name} tree {tree} has tracked modifications:\n{dirty}")
+        exe = tree / "_build/default/benchmarks/runners/ocannl/bench_gpt.exe"
+        # Absent only when no arm of that tree runs; an OCANNL arm then fails at its cell.
+        executables[name] = {"path": str(exe), "sha256": raw_sha256(exe) if exe.exists() else None}
+
     # The fixture is the box's own copy, gated by DIGESTS.txt as every sweep's is: some declared
     # box's bytes, its content digest and origin stamped on every row. The raw sha256 is recorded
     # beside it, since that is the digest the August report quoted.
@@ -223,6 +238,7 @@ def measure(a):
 
     env_record = environment(a, fixtures)
     env_record["shas"] = shas
+    env_record["executables"] = executables
     env_record["arms_run"] = arms
     (out / "env.json").write_text(json.dumps(env_record, indent=2) + "\n")
     print(json.dumps(env_record), flush=True)

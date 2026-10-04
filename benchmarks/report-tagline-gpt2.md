@@ -5,7 +5,9 @@ tuf-amd-linux (HIP, discrete VRAM) and mac-studio (Metal), each box in its own e
 window.** OCANNL is master `a723dc5b` against the August commit `7014dc44`, both rebuilt and
 re-measured on the same box in the same window. The ratios below are *how many times slower OCANNL
 is*: step time of OCANNL over step time of the other framework, both medians of synced per-step
-p50s over six repeats (four on tuf, whose window ran into its cap).
+p50s over six repeats (four on tuf, whose window ran into its cap), and fewer where a cell
+failed: tinygrad BEAM=2 has five on rog and three on tuf, and each box's table gives every
+cell's count.
 
 ## Taglines
 
@@ -26,9 +28,9 @@ In approximate numerics on both sides it is 4.3x slower than PyTorch and 3.6x sl
 August: no August report covers Metal; the August commit re-run here tonight gives 5.8x and 5.3x, and OCANNL's step time fell 10.95 to 8.33 ms (1.31x).
 
 **tuf-amd-linux, HIP, Radeon RX 7700S (gfx1102, discrete VRAM).**
-GPT-2-mini is **at most 1.6x slower than PyTorch** (`torch.compile`; about level with eager) and **at most 1.6x slower than tinygrad** (BEAM=2; 1.3x slower than its JIT), exact: those are the August commit's clean figures, and master is faster.
-No clean master figure exists on this box: every master timing process re-searched a tuner arm the tuner refuses to cache here, which the protocol does not quote (the tuf section has the diagnostic readings and why).
-August: the August commit re-run here tonight is that 1.59x and 1.55x; there is no August report for this box.
+No quotable figure for master: every master timing process on this box re-searched a tuner arm the tuner refuses to cache here, and the protocol does not quote a timing from a searching process (the tuf section has the diagnostic readings and why).
+The August commit, re-run here tonight, replays cleanly: it is **1.59x slower than PyTorch** (`torch.compile`; 1.07x slower than eager) and **1.55x slower than tinygrad** (BEAM=2; 1.27x slower than its JIT), exact.
+There is no August report for this box, and no quotable August-to-master change.
 
 **minix-amd-linux, HIP, Radeon 8060S (gfx1151, unified memory).**
 No PyTorch figure: the box's PyTorch ROCm wheel segfaults on this GPU. GPT-2-mini is **1.5x slower than tinygrad** (BEAM=2; 1.2x *faster* than its JIT), exact.
@@ -39,14 +41,13 @@ August: the August commit re-run here tonight gives 2.6x slower than tinygrad BE
 
 The scope comment's headline set is rog, Metal and one HIP row. No HIP box gives a complete clean
 row: minix (unified) has clean OCANNL figures and no PyTorch, tuf (discrete) has PyTorch and no
-clean OCANNL master figure, only the August commit's, which bounds master from above. Both are
-listed. "x" is how many times slower OCANNL is.
+clean OCANNL master figure, only the August commit's. Both are listed. "x" is how many times slower OCANNL is.
 
 | box | device, memory | OCANNL exact ms | exact: vs PyTorch / vs tinygrad | approximate: vs PyTorch / vs tinygrad | August commit, tonight: vs PyTorch / vs tinygrad | OCANNL since August |
 |---|---|---|---|---|---|---|
 | rog-nv-linux | CUDA RTX 5070 Ti Laptop, discrete | 3.50 | **3.41x / 2.18x** | 8.04x / 2.80x | 6.90x / 4.41x (Aug. report: 6.4x / 4.6x) | 2.02x faster |
 | mac-studio | Metal M4 Max, unified | 8.33 | **4.40x / 4.04x** | 4.30x / 3.61x | 5.78x / 5.31x | 1.31x faster |
-| tuf-amd-linux | HIP gfx1102, discrete | not quotable | **at most 1.59x / 1.55x** (the August commit's) | not quotable | 1.59x / 1.55x | faster, by an unquotable amount |
+| tuf-amd-linux | HIP gfx1102, discrete | not quotable | not quotable | not quotable | **1.59x / 1.55x** | not quotable |
 | minix-amd-linux | HIP gfx1151, unified | 4.76 | n/a / **1.54x** | n/a / 1.52x | n/a / 2.55x | 1.66x faster |
 
 PyTorch is `torch.compile` (exact-pinned for the exact column, torch defaults for the
@@ -211,7 +212,7 @@ boxes the search pass and the clean replays of the same artifact agree within -1
 the master exact search pass (which searched both arms) read 6.658 ms against 6.685 ms for the
 passes that searched only arm B, and the August arm's clean replays sit within 0.1% of its own
 search pass. Those readings are diagnostics: the taglines and the headline do not use them, and
-quote for this box only the August commit's clean figures, which bound master from above.
+quote for this box only the August commit's clean figures, as the August commit's.
 
 | OCANNL is ... slower | than `torch.compile` | than torch eager | than tinygrad BEAM=2 | than tinygrad JIT |
 |---|---|---|---|---|
@@ -356,11 +357,14 @@ running only the smoke), all parity-passing:
 ## Reproduction
 
 Per box, from a checkout of master with `benchmarks/.venv` linked to the bench venv, the fixture
-copied in, and a second checkout of `7014dc44` with its `bench_gpt.exe` built:
+copied in, and a second checkout of `7014dc44` with its `bench_gpt.exe` built. The driver takes no
+reservation and checks no idleness itself: on a fleet box the measurement runs only inside an
+exclusive `measurement` reservation and its hold, as every window here did:
 
 ```sh
 cd <master>/benchmarks
-.venv/bin/python gh1181_cells.py --backend <cuda|hip|metal> --box <box> \
+~/.claude/skills/issue-wave/scripts/fleet-worker.sh execution hold --request <measurement id> -- \
+  .venv/bin/python gh1181_cells.py --backend <cuda|hip|metal> --box <box> \
   --aug <7014dc44 checkout> --out <results dir> \
   --workloads gpt2_mini --repeats 7 --search-once --cell-timeout 3600 --total-timeout 18000
 .venv/bin/python gh1181_cells.py --summarize --out <results dir>
@@ -373,5 +377,9 @@ version at the PR's third commit). Review fixes since then change only bookkeepi
 quoted here reads: completion passes' searches now add to the reported search cost (no completion
 pass ever produced a clean replay), the last allowed completion pass is no longer also written
 once more to `checked.jsonl` (tuf's file has those duplicates; `timings.jsonl` does not),
-`--summarize` keeps the measured `wall_s` and failure count, `--repeats 0` is refused, and a
-wrong-backend row is kept, marked, in `raw.jsonl` (none occurred).
+`--summarize` keeps the measured `wall_s` and failure count, `--repeats 0` is refused, a
+wrong-backend row is kept, marked, in `raw.jsonl` (none occurred), and `env.json` now also records
+the host's own name, each tree's `bench_gpt.exe` digest, and refuses a tree with tracked
+modifications. For the windows above those facts come from elsewhere: each ran on the host its
+registry reservation names (the GPU names in `env.json` tell the two HIP boxes apart), from
+checkouts the prep reservations created at the stated commits and built there, untouched since.
