@@ -6,6 +6,27 @@ open Ocannl
 module IDX = Train.IDX
 module H = Bench_harness
 
+(* Investigation-only observer: reads the compiled routine's actual buffers without changing graph
+   construction or placement. Buffer aliasing must be disabled for an after-step snapshot. *)
+let snapshot ctx phase nodes =
+  Set.iter nodes ~f:(fun tn ->
+      let values = Context.get_values ctx tn in
+      let finite = ref 0 and lo = ref Float.infinity and hi = ref Float.neg_infinity in
+      let sum = ref 0. and squares = ref 0. and hash = ref 0L in
+      Array.iter values ~f:(fun v ->
+          hash :=
+            Stdlib.Int64.add (Stdlib.Int64.mul !hash 1099511628211L) (Stdlib.Int64.bits_of_float v);
+          if Float.is_finite v then (
+            Int.incr finite;
+            lo := Float.min !lo v;
+            hi := Float.max !hi v;
+            sum := !sum +. v;
+            squares := !squares +. (v *. v)));
+      Stdio.printf
+        "snapshot %s %d %s count=%d finite=%d hash=%Lx min=%h max=%h sum=%h squares=%h\n%!" phase
+        tn.Ir.Tnode.id (Ir.Tnode.debug_name tn) (Array.length values) !finite !hash !lo !hi !sum
+        !squares)
+
 let () =
   let st = Safetensors.read (Stdlib.Sys.getenv "BENCH_FIXTURE") in
   let { Bench_gpt_model.ctx; batch_loss; step_shape; bindings; batch_n; n_batches; mapping; _ } =
@@ -36,6 +57,21 @@ let () =
     backend
     (Unix.gettimeofday () -. t0);
   let ctx_ref = ref ctx in
+  let snapshots = H.env_flag "BENCH_SNAPSHOT" in
+  if snapshots && Utils.get_global_flag ~default:false ~arg_name:"buffer_aliasing" then
+    failwith "BENCH_SNAPSHOT requires buffer_aliasing=false";
+  let shipped = H.compiled_step_routines routines in
+  let inputs =
+    List.fold shipped
+      ~init:(Set.empty (module Ir.Tnode))
+      ~f:(fun nodes r -> Set.union nodes r.Context.inputs)
+  in
+  let outputs =
+    List.fold shipped
+      ~init:(Set.empty (module Ir.Tnode))
+      ~f:(fun nodes r -> Set.union nodes r.Context.outputs)
+  in
+  if snapshots then snapshot !ctx_ref "inputs" (Set.diff inputs outputs);
   let batch_ref = IDX.find_exn (H.train_step_bindings routines) batch_n in
   let run step =
     batch_ref := step % n_batches;
@@ -50,10 +86,10 @@ let () =
       let open Operation.At in
       Stdio.printf "step %d: %.1f ms loss: %.7f\n%!" step
         ((Unix.gettimeofday () -. t0) *. 1000.)
-        (!ctx_ref, batch_loss).@[0]
+        (!ctx_ref, batch_loss).@[0];
+      if snapshots && step = 0 then snapshot !ctx_ref "step0" outputs
     done
   else if H.env_flag "BENCH_SEG_TIMES" then run 0;
-  let shipped = H.compiled_step_routines routines in
   if Option.is_none forward_opt then H.print_shipped_census shipped;
   if H.env_flag "BENCH_SEG_TIMES" then
     match forward_opt with
