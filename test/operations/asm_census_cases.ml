@@ -584,14 +584,16 @@ let compilation_plan_probe () =
   let plan ~src ~asm ~cwd =
     Printf.sprintf
       "cc1 -O2 -dumpdir %s. -dumpbase %s.c -dumpbase-ext .c %s -o %s -I/sdk/include \
-       -fdebug-compilation-dir=%s"
+       -fdebug-compilation-dir=%s -dumpdir %s/\n\
+       COLLECT_GCC_OPTIONS='-dumpdir' '%s/'"
       (Stdlib.Filename.remove_extension asm)
       (Stdlib.Filename.basename (Stdlib.Filename.remove_extension asm))
-      src asm cwd
+      src asm cwd (Stdlib.Filename.dirname asm) (Stdlib.Filename.dirname asm)
   in
   let normalized ?(flags = "-O2") ?(sdk = "/sdk/include") suffix =
-    let src = "/tmp/ocannl_census_plan_source" ^ suffix ^ ".c" in
-    let asm = "/tmp/ocannl_census_plan_output" ^ suffix ^ ".s" in
+    let dir = "/tmp/probe" ^ suffix ^ "/" in
+    let src = dir ^ "ocannl_census_plan_source" ^ suffix ^ ".c" in
+    let asm = dir ^ "ocannl_census_plan_output" ^ suffix ^ ".s" in
     let cwd = "/work/tree" ^ suffix in
     let out = plan ~src ~asm ~cwd in
     let out = String.substr_replace_all out ~pattern:"-O2" ~with_:flags in
@@ -604,7 +606,11 @@ let compilation_plan_probe () =
     (String.equal first second);
   Verdict.p "compiler plan normalization retains SDK paths and effective flags"
     ((not (String.equal first (normalized ~flags:"-O3" "aaa")))
-    && not (String.equal first (normalized ~sdk:"/another-sdk/include" "aaa")))
+    && (not (String.equal first (normalized ~sdk:"/another-sdk/include" "aaa")))
+    && not
+         (String.equal
+            (normalized ~sdk:"/tmp/probeaaa/include" "aaa")
+            (normalized ~sdk:"/tmp/probebbb/include" "aaa")))
 
 let () =
   compilation_plan_probe ();

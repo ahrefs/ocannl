@@ -1167,7 +1167,12 @@ let preprocessing_signature source =
 let plan_has_mutable_codegen_inputs plan =
   List.exists
     [
-      "-fprofile-use";
+      (* Generation is output-name sensitive: stripping probe stems without refusing it could serve
+         a listing containing another output's .gcda path or checksum. *)
+      "-fprofile";
+      "-fcoverage";
+      "-ftest-coverage";
+      "--coverage";
       "-fauto-profile";
       "-fbranch-probabilities";
       "-fprofile-instr-use";
@@ -1406,16 +1411,27 @@ let cache_reuse_probe ~exe ~root =
   mkdir_p dir;
   let src = Stdlib.Filename.concat dir "census_cache_probe.c" in
   let cache = Stdlib.Filename.concat dir "cache" in
-  let run name =
+  let run ?(compiler = Cc_backend.compiler_command ()) name =
     let asm = Stdlib.Filename.concat dir (name ^ ".s") in
     let report = Stdlib.Filename.concat dir (name ^ ".counts") in
     let log = Stdlib.Filename.concat dir (name ^ ".log") in
+    let tmp = Stdlib.Filename.concat dir (name ^ "_tmp") in
+    mkdir_p tmp;
     let env =
       Unix.environment () |> Array.to_list
       |> List.filter ~f:(fun kv ->
           (not (String.is_prefix kv ~prefix:"OCANNL_TOOL_CC_MARCH_CENSUS_CACHE_DIR="))
-          && not (String.is_prefix kv ~prefix:"CC_MARCH_CENSUS_EMIT="))
-      |> fun env -> Array.of_list (env @ [ "OCANNL_TOOL_CC_MARCH_CENSUS_CACHE_DIR=" ^ cache ])
+          && (not (String.is_prefix kv ~prefix:"CC_MARCH_CENSUS_EMIT="))
+          && (not (String.is_prefix kv ~prefix:"TMPDIR="))
+          && not (String.is_prefix kv ~prefix:"OCANNL_CC_BACKEND_COMPILER_COMMAND="))
+      |> fun env ->
+      Array.of_list
+        (env
+        @ [
+            "OCANNL_TOOL_CC_MARCH_CENSUS_CACHE_DIR=" ^ cache;
+            "TMPDIR=" ^ tmp;
+            "OCANNL_CC_BACKEND_COMPILER_COMMAND=" ^ compiler;
+          ])
     in
     let out = Unix.openfile log [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_TRUNC ] 0o600 in
     let pid =
@@ -1431,12 +1447,32 @@ let cache_reuse_probe ~exe ~root =
   Stdio.Out_channel.write_all src ~data:"int census_cache_probe(int x) { return x + 1; }\n";
   let cold, first = run "cold" in
   let warm, second = run "warm" in
-  Verdict.p "a fresh process reuses an identical-source census listing"
-    (String.equal cold "0 1 0" && String.equal warm "1 0 0" && String.equal first second);
   Stdio.Out_channel.write_all src ~data:"int census_cache_probe(int x) { return x + 2; }\n";
   let changed, third = run "changed" in
-  Verdict.p "a source change invalidates the census listing cache"
-    (String.equal changed "0 1 0" && not (String.equal first third))
+  let profiling, _ = run ~compiler:(Cc_backend.compiler_command () ^ " -fprofile-arcs") "profile" in
+  Verdict.p "output-name-sensitive profiling bypasses listing memoization"
+    (String.equal profiling "0 0 1");
+  let reuse = "a fresh process reuses an identical-source census listing" in
+  let invalidation = "a source change invalidates the census listing cache" in
+  if String.equal cold "0 0 1" && String.equal warm "0 0 1" && String.equal changed "0 0 1" then (
+    let backend = "configured compiler (listing memoization bypassed)" in
+    Verdict.skipped ~backend reuse;
+    Verdict.skipped ~backend invalidation)
+  else (
+    Verdict.p reuse
+      (String.equal cold "0 1 0" && String.equal warm "1 0 0" && String.equal first second);
+    Verdict.p invalidation (String.equal changed "0 1 0" && not (String.equal first third)))
+
+let cache_policy_probes () =
+  Verdict.p_all "profile and coverage generation bypass listing memoization"
+    [
+      "-fprofile-arcs";
+      "-fprofile-generate=/tmp/profile";
+      "-fprofile-instr-generate";
+      "-ftest-coverage";
+      "--coverage";
+    ]
+    ~f:plan_has_mutable_codegen_inputs
 
 let half_bridge_cache : (bridge_direction * string * int * int, string option) Hashtbl.t =
   Hashtbl.Poly.create ()
@@ -1666,6 +1702,7 @@ let () =
       rm_rf root;
       mkdir_p root;
       cache_format_probes ();
+      cache_policy_probes ();
       cache_reuse_probe ~exe ~root;
       let emitted = emit_all ~exe ~root in
       Verdict.p_all "every requested vector width emitted a kernel" widths ~f:(fun w ->

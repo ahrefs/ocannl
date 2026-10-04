@@ -150,6 +150,20 @@ let normalize_compilation_plan ~src ~asm ~cwd out =
     |> List.filter ~f:(fun (path, _) -> not (String.is_empty path))
     |> List.sort ~compare:(fun (a, _) (b, _) -> Int.compare (String.length b) (String.length a))
   in
+  (* GCC also prints a directory-only [-dumpdir]. Normalize it only at that option, so an include
+     path or a compiler executable under the same root retains its identity. *)
+  let out =
+    List.fold
+      [ Stdlib.Filename.dirname src; Stdlib.Filename.dirname asm ]
+      ~init:out
+      ~f:(fun out dir ->
+        List.fold (spellings dir) ~init:out ~f:(fun out dir ->
+            List.fold [ "-dumpdir "; "-dumpdir '"; "\"-dumpdir\" \""; "'-dumpdir' '" ] ~init:out
+              ~f:(fun out prefix ->
+                String.substr_replace_all out
+                  ~pattern:(prefix ^ dir ^ "/")
+                  ~with_:(prefix ^ "<DUMP-DIR>/"))))
+  in
   List.fold replacements ~init:out ~f:(fun out (pattern, with_) ->
       String.substr_replace_all out ~pattern ~with_)
 
