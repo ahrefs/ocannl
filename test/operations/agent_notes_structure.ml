@@ -159,7 +159,8 @@ let () =
   report Notes.rule_table_shape "every table is a table, row by row";
   report Notes.rule_reachability "every notes file is reachable from the index, and links back";
   report Notes.rule_no_repetition "no bullet is repeated across the notes";
-  report Notes.rule_qualified_citations "no numeric GitHub citation uses an unqualified bare hash";
+  report Notes.rule_qualified_citations
+    "no source-level GitHub citation uses a bare hash or hashless work label";
   (* Over the pointers rather than the files, with a floor: AGENTS.md anchors about ten rules into
      build-and-test.md, so a reader that finds fewer than five has stopped reading them, and an
      empty finding list over nothing would pass by default. The scripts' pointers have their floor
