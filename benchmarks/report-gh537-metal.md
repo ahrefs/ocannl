@@ -1,5 +1,9 @@
 # gh-ocannl-537 on Metal: the interchange reaches the dominant segment, and the artifact moves on lenet
 
+> **Fixture provenance: unverifiable** (gh-ocannl-919). Original measured files for this historical Metal report
+> were not recovered. Later `content-v1` M4 baselines do not certify these numbers.
+> See the [historical provenance audit](README.md#historical-metal-fixture-provenance).
+
 Measurement-only report. The subject is the `Swap` ∘ `Split_reduce` seeding merged as staging PR
 #257 (ahrefs/ocannl#537), whose test proves the *mechanism* — a bias-gradient site is detected with
 a non-empty interchange and reaches timing — but not that it makes anything faster.

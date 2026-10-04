@@ -151,10 +151,9 @@ endpoint, whereas HIP's invalid exact-f16 and beyond-exact approximate rows are 
   `content-v1`. They are kept visibly legacy until their original files are available; relabelling
   an old raw digest as canonical would invent evidence the digest cannot contain.
   The current declaration names `m4-max` (the Apple M4 Max/macOS measurement host), `minix`, and
-  `rog-nv`, plus `tuf` (HIP gfx1102 with discrete VRAM). Metal reports before gh-ocannl-483
-  predate per-origin recording: their m4-max records covered only `gpt2_mini` and the
-  long-context legs, so absent records elsewhere mean missing attribution, not an omitted
-  measurement host. Later records include more fixtures (for example `lenet`). TUF has
+  `rog-nv`, plus `tuf` (HIP gfx1102 with discrete VRAM). Historical Metal reports have [unverifiable fixture provenance](#historical-metal-fixture-provenance):
+  later m4-max records establish new baselines, not recovered historical measurements.
+  Absent records mean missing attribution, not an omitted measurement host. TUF has
   transformer records only, copied unchanged from m4-max, including the two new batch
   endpoints generated with the mac-studio bench venv; its non-transformer absences are
   likewise explicit missing-record warnings.
@@ -563,6 +562,50 @@ endpoint, whereas HIP's invalid exact-f16 and beyond-exact approximate rows are 
   is the measurement behind
   keeping the predicate wide (gh-ocannl-782). Run it whenever the toolchain moves: a matrix that
   comes up all-`ok` means the defect is gone and the workaround can be retired.
+
+## Historical Metal fixture provenance
+
+The gh-ocannl-919 audit retires the fixture provenance of the historical Apple reports below as
+**unverifiable**. Their numbers remain a record of the reported sessions; they cannot establish
+comparisons with a later session or another box without proof of the measured fixture identity.
+Parity within a session does not supply that proof.
+
+| Historical report | Fixture provenance outcome |
+| --- | --- |
+| [example-report.md](example-report.md) (gh-ocannl-538) | No original M4 fixture identities were recorded; no historically attributable files recovered. |
+| [report-gh537-metal.md](report-gh537-metal.md) | No original M4 fixture identities were recorded; no historically attributable files recovered. |
+| [report-gh546-metal.md](report-gh546-metal.md) | Original `mlp_small` identity unrecorded; original file not recovered. |
+| [report-gh514-eval.md](report-gh514-eval.md), Metal leg | Original `mlp_wide` and `gpt2_mini` identities unrecorded; no historically attributable files recovered. Other backend legs are outside this audit. |
+| [report-gh483-online-softmax.md](report-gh483-online-softmax.md), cc and Metal | Its three M4 `raw-v1` associations remain historical evidence in Git; original matching serializations not recovered. |
+
+The [2026-09-16 investigation](https://github.com/ahrefs/ocannl/issues/919#issuecomment-5700798546)
+found only `DIGESTS.txt` in the Apple host's fixture directory, so regenerating files could not
+recover the older sessions. A read-only follow-up on mac-studio on 2026-10-04 checked the current
+primary checkout's fixture directory, the separate retained benchmark-fixture directory, the
+cleanup archive, and sweep artifacts. Available GPT and lenet files establish no link to those
+older sessions. Neither retained `gpt2_mini` serialization nor the current long-context files
+matches the three raw associations preserved immediately before
+[staging#760](https://github.com/lukstafi/ocannl-staging/pull/760) (parent of `21f1d495c`):
+
+| Fixture | Historical `raw-v1` SHA-256 |
+| --- | --- |
+| `gpt2_mini` | `41c53309c21f4fe4bd3ccef17043cd817a9a9002208c2cf2d39d8e12cde98c28` |
+| `gpt2_mini_s512` | `4cc9fe298b6f0a29798803eb06bf9fd91b195a88021d8ba37a63a9fc98cb0e1c` |
+| `gpt2_mini_s1024` | `f37a58392a970f12af7162c1d53f282be9c4d7a0de4958bfde08bdf37c49f8d1` |
+
+Safetensors metadata order can change a raw hash even when payloads agree (gh-ocannl-1007).
+That explains why a raw mismatch alone cannot prove a content change; it also cannot recover an
+unknown historical canonical digest. These associations must not be relabelled `content-v1`.
+Staging#760 instead established **fresh** reproducible `content-v1` M4 baselines for those three
+GPT fixtures. The later ledger entries, including lenet and training fixtures, likewise certify
+only the runs that explicitly matched them; they do not backfill earlier report provenance.
+[report-gh995-metal.md](report-gh995-metal.md) explicitly uses those fresh GPT baselines.
+
+For any M4 workload still missing a row, its first future measurement must record and report a
+`content-v1` identity before it becomes a provenance baseline. Do not regenerate fixtures to
+complete this historical audit or call new bytes historical. The deliberately unrecorded
+[gh-ocannl-1006 rendering smoke](report-gh1006-kernel-peak.md) already disclaims comparison with
+other runs and is not a provenance baseline.
 
 ## Setup
 
