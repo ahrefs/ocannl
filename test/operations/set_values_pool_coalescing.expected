@@ -7,3 +7,29 @@ the child reads back its own upload: true
 after the child's release the routine still sums every upload: true
 after the child's release every parameter still reads back its own upload: true
 a sibling's upload survives the other sibling's release: true
+left first: siblings hold exactly four working pools: true
+left first: first release frees only its private pools: true
+left first: every shared upload survives the first release: true
+left first: the remaining sibling's own upload survives: true
+left first: releasing the first sibling twice changes no census state: true
+left first: the last release frees all four pools exactly once: true
+left first: both independent leaves are retired: true
+left first: the last release is idempotent: true
+right first: siblings hold exactly four working pools: true
+right first: first release frees only its private pools: true
+right first: every shared upload survives the first release: true
+right first: the remaining sibling's own upload survives: true
+right first: releasing the first sibling twice changes no census state: true
+right first: the last release frees all four pools exactly once: true
+right first: both independent leaves are retired: true
+right first: the last release is idempotent: true
+failed sibling release: siblings hold exactly four working pools: true
+failed sibling release: failure occurs before the private pool free: true
+failed sibling release: failed cleanup frees no pool and commits no context release: true
+failed sibling release: first release frees only its private pools: true
+failed sibling release: every shared upload survives the first release: true
+failed sibling release: the remaining sibling's own upload survives: true
+failed sibling release: releasing the first sibling twice changes no census state: true
+failed sibling release: the last release frees all four pools exactly once: true
+failed sibling release: both independent leaves are retired: true
+failed sibling release: the last release is idempotent: true

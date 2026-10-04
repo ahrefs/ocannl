@@ -457,18 +457,20 @@ val get_used_memory : t -> int
 val release : t -> unit
 (** Eagerly frees the device buffers this context owns — the pools holding nodes it allocated that
     its parent does not have, and that are not per-device constants. Idempotent (a second call is a
-    no-op), and safe to call on a context derived from a still-live parent: sibling contexts never
-    share a working pool, since each [compile] mints its own pool ids.
+    no-op), and safe to call on a context derived from a still-live parent. Compile siblings own
+    separate working pools; upload siblings reference-count their shared pools, freeing each after
+    its last sibling releases it. A linear chain of uploads supersedes its intermediate values:
+    release its latest value, after releasing any compiled descendants.
 
-    {b Precondition, not checked}: the context must have no live descendants. A context compiled
-    {e from} this one inherits its buffer locations while keeping it as their backend parent, so
-    releasing an ancestor leaves the descendant resolving a dropped pool id (or reading a freed
-    pointer). Release leaves, not interior nodes. This is the pre-existing contract of the
+    {b Precondition, not checked}: the context must have no live compiled descendants. A context
+    compiled {e from} this one inherits its buffer locations while keeping it as their backend
+    parent, so releasing an ancestor leaves the descendant resolving a dropped pool id (or reading a
+    freed pointer). Release leaves, not interior nodes. This is the pre-existing contract of the
     underlying {!Backends.finalize} — what is new is that it is reachable from here — and it is
-    deliberately left as a precondition rather than enforced: tracking live descendants would mean
-    refcounting persistent context values, whose whole point is that a child can be derived at any
-    time and outlive the expression that made it. The one caller in-tree ({!Autotune.tune}) releases
-    only leaf siblings of one search context, which is the shape this is for.
+    deliberately left as a precondition rather than enforced: tracking compile descendants would
+    require broader lifetime management of persistent context values. Upload siblings retain their
+    shared pools independently; compiled descendants still require their ancestor to remain live.
+    {!Autotune.tune} releases only leaf siblings of one search context.
 
     A context whose buffers were released must not be run or read again; it is a dead handle,
     exactly as after the finalizer had reclaimed it. Nothing in the context is invalidated for

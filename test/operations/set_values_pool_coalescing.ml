@@ -123,4 +123,81 @@ let () =
   let b = Context.set_values root y.Tensor.value (values 7) in
   Context.release a;
   p "a sibling's upload survives the other sibling's release"
-    (Array.equal Float.equal (Context.get_values b y.Tensor.value) (values 7))
+    (Array.equal Float.equal (Context.get_values b y.Tensor.value) (values 7));
+  Context.release b
+
+(* gh-ocannl-1173: both siblings inherit uploaded data, including a pool that one sibling can
+   extend. The other branch gets its own arena. Assert the pool-table census in both orders, then
+   inject a failure after retiring shared references but before freeing the private pool. *)
+let sibling_release ~reverse ~fail =
+  let module AC = Ir.Alloc_census in
+  let module FI = Ir.Resource_fault_injection in
+  let zeros =
+    Ir.Ndarray.init_array ~debug:"svpc_refs" Ir.Ops.single ~dims:[| len |] ~padding:None
+  in
+  let fresh l = TDSL.wrap_param ~l ~o:[ len ] (zeros ~f:(fun _ -> 0.)) () in
+  let shared = List.init 3 ~f:(fun k -> fresh (Printf.sprintf "svpc_shared%d" k)) in
+  let x = fresh "svpc_left" and y = fresh "svpc_right" in
+  let before = AC.snapshot () in
+  let root = Context.auto () in
+  let parent =
+    List.foldi shared ~init:root ~f:(fun k ctx p ->
+        Context.set_values ctx p.Tensor.value (values k))
+  in
+  let a = Context.set_values parent x.Tensor.value (values 8) in
+  let b = Context.set_values parent y.Tensor.value (values 9) in
+  let held = AC.snapshot () in
+  let prefix =
+    if fail then "failed sibling release" else if reverse then "right first" else "left first"
+  in
+  let claim name value = p (prefix ^ ": " ^ name) value in
+  claim "siblings hold exactly four working pools"
+    (held.live_working_pools - before.live_working_pools = 4);
+  let first, remaining, node, expected_freed = if reverse then (b, a, x, 1) else (a, b, y, 0) in
+  if fail then (
+    let hits = ref 0 in
+    let raised =
+      match
+        FI.with_callback
+          (fun point ->
+            if FI.equal_point point FI.Finalize_before_free then (
+              Int.incr hits;
+              failwith "svpc injected free failure"))
+          ~f:(fun () -> Context.release first)
+      with
+      | () -> false
+      | exception Failure msg -> String.equal msg "svpc injected free failure"
+    in
+    claim "failure occurs before the private pool free" (raised && !hits = 1);
+    let failed = AC.snapshot () in
+    claim "failed cleanup frees no pool and commits no context release"
+      (failed.pools_freed = held.pools_freed && failed.contexts_released = held.contexts_released));
+  Context.release first;
+  let after_first = AC.snapshot () in
+  claim "first release frees only its private pools"
+    (after_first.pools_freed - held.pools_freed = expected_freed
+    && held.live_working_pools - after_first.live_working_pools = expected_freed);
+  p_alli (prefix ^ ": every shared upload survives the first release") shared ~f:(fun k p ->
+      Array.equal Float.equal (Context.get_values remaining p.Tensor.value) (values k));
+  claim "the remaining sibling's own upload survives"
+    (Array.equal Float.equal
+       (Context.get_values remaining node.Tensor.value)
+       (values (if reverse then 8 else 9)));
+  Context.release first;
+  claim "releasing the first sibling twice changes no census state"
+    (AC.equal after_first (AC.snapshot ()));
+  Context.release remaining;
+  let after = AC.snapshot () in
+  claim "the last release frees all four pools exactly once"
+    (after.pools_freed - held.pools_freed = 4
+    && after.live_working_pools = before.live_working_pools
+    && after.live_working_bytes = before.live_working_bytes);
+  claim "both independent leaves are retired"
+    (AC.unreleased_contexts after = AC.unreleased_contexts before);
+  Context.release remaining;
+  claim "the last release is idempotent" (AC.equal after (AC.snapshot ()))
+
+let () =
+  sibling_release ~reverse:false ~fail:false;
+  sibling_release ~reverse:true ~fail:false;
+  sibling_release ~reverse:true ~fail:true
