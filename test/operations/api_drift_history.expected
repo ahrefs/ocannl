@@ -1,9 +1,11 @@
-merge attribution, multiline signatures, implicit exports and exclusions: pass
-select interfaces exclude arm bodies; public generator input changes are visible: pass
-reverted declarations retain both first-parent attribution points: pass
-adding an interface records retirement of the implicit source surface: pass
-removing an interface exposes the implementation surface: pass
-documentation-only edits, empty windows and invalid endpoints: pass
-select arms become visible when the compiled target interface is removed: pass
-non-exporting initializer and evaluation edits do not create API entries: pass
-invalid source refuses the real historical reader: pass
+merge attribution, multiline signatures, implicit exports and exclusions: true
+select interfaces exclude arm bodies; public generator input changes are visible: true
+reverted declarations retain both first-parent attribution points: true
+adding an interface records retirement of the implicit source surface: true
+removing an interface exposes the implementation surface: true
+documentation-only edits, empty windows and invalid endpoints: true
+select arms become visible when the compiled target interface is removed: true
+non-exporting initializer and evaluation edits do not create API entries: true
+pattern PPX input changes remain visible: true
+declaration movement preserves ordering context: true
+invalid source refuses the real historical reader: true

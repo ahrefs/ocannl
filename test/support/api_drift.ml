@@ -23,6 +23,20 @@ let binding_names pattern =
   iterator#pattern pattern;
   Dead_export_scan.pattern_names pattern @ !modules
 
+let binding_may_export binding =
+  let extension = ref false in
+  let iterator =
+    object
+      inherit Ppxlib.Ast_traverse.iter as super
+
+      method! pattern pattern =
+        (match pattern.ppat_desc with Ppat_extension _ -> extension := true | _ -> ());
+        super#pattern pattern
+    end
+  in
+  iterator#pattern binding.pvb_pat;
+  !extension || not (List.is_empty (binding_names binding.pvb_pat))
+
 let derived_inputs ~paths dunes =
   let present = Set.of_list (module String) paths in
   List.concat_map dunes ~f:(fun (dune_path, contents) ->
@@ -218,16 +232,18 @@ let declarations ~source contents =
 
         method! structure items =
           super#structure
-            (List.filter items ~f:(fun item ->
+            (List.filter_map items ~f:(fun item ->
                  match item.pstr_desc with
-                 | Pstr_eval _ when prune_nonexports -> false
-                 | Pstr_value (_, bindings) when prune_nonexports ->
-                     List.exists bindings ~f:(fun binding ->
-                         not (List.is_empty (binding_names binding.pvb_pat)))
-                 | Pstr_attribute a ->
-                     not
-                       (List.mem [ "ocaml.doc"; "ocaml.text" ] a.attr_name.txt ~equal:String.equal)
-                 | _ -> true))
+                 | Pstr_eval _ when prune_nonexports -> None
+                 | Pstr_value (recursive, bindings) when prune_nonexports ->
+                     let bindings = List.filter bindings ~f:binding_may_export in
+                     if List.is_empty bindings then None
+                     else Some { item with pstr_desc = Pstr_value (recursive, bindings) }
+                 | Pstr_attribute a
+                   when List.mem [ "ocaml.doc"; "ocaml.text" ] a.attr_name.txt ~equal:String.equal
+                   ->
+                     None
+                 | _ -> Some item))
       end
     in
     if String.is_suffix source ~suffix:".mli" then
@@ -238,8 +254,21 @@ let changes before after =
   let map declarations =
     Map.of_alist_exn (module String) (List.map declarations ~f:(fun d -> (d.name, d)))
   in
-  Map.merge (map before) (map after) ~f:(fun ~key:_ -> function
-    | `Both (a, b) when String.equal a.text b.text -> None
+  let before_map = map before and after_map = map after in
+  (* Compare the order of surviving entries: additions/removals do not move every following
+     declaration, but moving across an open or another declaration may change name resolution. *)
+  let positions declarations other =
+    List.filter declarations ~f:(fun d -> Map.mem other d.name)
+    |> List.mapi ~f:(fun index d -> (d.name, index))
+    |> Map.of_alist_exn (module String)
+  in
+  let before_positions = positions before after_map
+  and after_positions = positions after before_map in
+  Map.merge before_map after_map ~f:(fun ~key -> function
+    | `Both (a, b)
+      when String.equal a.text b.text
+           && Int.equal (Map.find_exn before_positions key) (Map.find_exn after_positions key) ->
+        None
     | `Both (a, b) -> Some (Some a, Some b)
     | `Left a -> Some (Some a, None)
     | `Right b -> Some (None, Some b))

@@ -13,5 +13,9 @@ unnamed initializers and bare evaluations do not count as exported declarations:
 named pattern aliases remain exported declarations: true
 named module unpack bindings remain exported declarations: true
 extension inputs stay visible even when their payload binds no source name: true
+anonymous bindings inside mixed let groups do not create drift: true
+pattern extension inputs remain visible without an ordinary binder: true
+declaration movement across opens is visible in signatures and implementations: true
+adding a declaration does not report every following unchanged declaration: true
 declaration removals and additions are distinct: true
 invalid OCaml refuses instead of reporting an empty inventory: true

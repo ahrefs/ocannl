@@ -7387,20 +7387,17 @@
 (executable
  (name api_drift_history)
  (modules api_drift_history)
- (libraries unix))
+ (libraries base unix arrayjit.verdict))
 
 (rule
  ; ocannl-backend: none -- runs the editorial reader over a temporary Git history.
  (targets api_drift_history.actual)
  (package neural_nets_lib)
- (deps ocannl_config api_drift_history.py ../../tools/api_drift.exe)
+ (deps ocannl_config ../../tools/api_drift.exe)
  (action
   (with-stdout-to
    api_drift_history.actual
-   (run
-    %{dep:api_drift_history.exe}
-    %{dep:api_drift_history.py}
-    %{dep:../../tools/api_drift.exe}))))
+   (run %{dep:api_drift_history.exe} %{dep:../../tools/api_drift.exe}))))
 
 (rule
  (alias runtest-api_drift_history)
@@ -7414,6 +7411,7 @@
  (name runtest)
  (deps
   (alias runtest-api_drift_history)))
+
 (test
  ; ocannl-backend: none -- registry-independent config syntax, no backend linked.
  (name config_token_parse)

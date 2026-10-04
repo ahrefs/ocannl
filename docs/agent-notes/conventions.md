@@ -26,6 +26,10 @@ files.
   defaults to `HEAD`. Its implicit-module inventory comes from the dead-export census, alongside
   all interfaces in those roots. OCaml parsing preserves multiline signatures, types, record
   fields, constructors and module declarations while discarding documentation-only OCaml edits.
+  Movement across surviving declarations is reported conservatively because their order can
+  change name resolution; inserting an entry does not flag every unchanged entry that follows it.
+  Anonymous initializers are excluded, including inside mixed let groups; pattern PPX inputs
+  stay visible for manual review even when their source binds no ordinary name.
   Dune supplies the compiled target/interface relationship for select arms and the inputs of
   public lexer/parser modules. A generator input is a conservative review entry: the editor must
   inspect its generated interface, since this tool does not regenerate historical modules or

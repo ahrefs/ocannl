@@ -148,6 +148,28 @@ let () =
     (List.length (changed "lib/a.ml" "[%%publish earlier]" "[%%publish later]") = 1
     && List.length (changed "lib/a.ml" "[%%publish let () = earlier]" "[%%publish let () = later]")
        = 1);
+  let mixed_before = declarations "lib/a.ml" "let exported = 1 and () = earlier" in
+  let mixed_after = declarations "lib/a.ml" "let exported = 1 and () = later" in
+  Verdict.p_empty "anonymous bindings inside mixed let groups do not create drift"
+    ~over:mixed_before
+    (Surface.changes mixed_before mixed_after);
+  Verdict.p "pattern extension inputs remain visible without an ordinary binder"
+    (List.length
+       (changed "lib/a.ml" "let [%publish earlier] = package" "let [%publish later] = package")
+     = 1
+    && List.length
+         (changed "lib/a.ml" "let exported = 1 and [%publish earlier] = package"
+            "let exported = 1 and [%publish later] = package")
+       = 1);
+  Verdict.p "declaration movement across opens is visible in signatures and implementations"
+    (List.length (changed "lib/a.mli" "open B open A val x : t" "open B val x : t open A") = 2
+    && List.length
+         (changed "lib/a.ml" "open B open A let x = make ()" "open B let x = make () open A")
+       = 2);
+  Verdict.p "adding a declaration does not report every following unchanged declaration"
+    (List.length
+       (changed "lib/a.mli" "val x : int val y : int" "val fresh : bool val x : int val y : int")
+    = 1);
   Verdict.p "declaration removals and additions are distinct"
     (match changed "lib/a.mli" "val old : int" "val fresh : int" with
     | [ (None, Some _); (Some _, None) ] -> true
