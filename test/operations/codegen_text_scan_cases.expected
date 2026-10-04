@@ -98,6 +98,15 @@ ok: source -- exception match patterns are independent of the successful generat
 ok: source -- a selected optional default leaves no callable identity on the completed boolean
 ok: source -- an ordinary replacement retains uncertainty without contributing a body literal
 ok: source -- an aliased ordinary replacement retains uncertainty without contributing a body literal
+ok: source -- a followed partial call retains its unresolved source dependency and known fragment
+ok: source -- a partial call returning an ordinary supplied argument ignores later generated text
+ok: source -- dynamic optional source forwarding retains generated evidence with uncertainty
+ok: source -- dynamic optional source forwarding preserves its possible generated default
+ok: source -- dynamic ordinary forwarding with an ordinary default contributes no fragment
+ok: source -- a function-case result inherits its actual positional input
+ok: source -- a function-case constant result does not borrow its generated input
+ok: source -- a function-case predicate validates its source and caller marker
+ok: source -- a function-case predicate on ordinary input contributes no caller marker
 ok: source -- a helper-local generated read propagates through normalization aliases
 ok: source -- same-named local predicates pin only their in-scope composite context
 ok: source -- a nested predicate validates an enclosing source parameter at its call

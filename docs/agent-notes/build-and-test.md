@@ -1601,12 +1601,17 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   argument; a pure helper substitutes only the formal dependencies of its returned value at
   each call. Buffer-returning helpers keep inputs used by earlier writes at an explicit uncertainty
   boundary; the scan does not model memory effects. Known ordinary replacement and unresolved
-  callback input have distinct uncertainty states, so only the latter can retain a named fragment. Completed predicates
-  return ordinary booleans, rather than carrying their callable identity into verdict bindings.
+  callback input have distinct uncertainty states, so only the latter can retain a named fragment.
+  Completed predicates return ordinary booleans, rather than carrying their callable identity into verdict bindings.
   A composite fragment retains its literal context and every caller-supplied component in the
   inventory. An omitted optional marker uses its default only when a later positional argument
   selects it; static optional forwarding resolves `None` to the selected default and unwraps
-  `Some`. Predicate body literals pass the same call-site source check as caller markers.
+  `Some`. Dynamic forwarding keeps the expression and possible selected default, with uncertainty
+  when they can carry source. `function` case inputs use a synthetic positional formal and the
+  same match-payload rule. A partial call keeps unsupplied symbolic dependencies explicitly
+  unresolved; the scan does not rebase closure argument positions. Rebuild call aggregates at each
+  fixed-point step, so an earlier unresolved input cannot poison a later validated chain.
+  Predicate body literals pass the same call-site source check as caller markers.
   Ordinary forwarding wrappers, mutation, partial applications and unfollowed callbacks remain
   explicitly partial; this includes ordinary-source calls, which contribute no fragment. Known
   local calls can validate captured parameters and callbacks; unknown higher-order calls keep any

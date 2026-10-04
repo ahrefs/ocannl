@@ -145,6 +145,8 @@ test/operations/canonical_render.ml [renders generated text in memory]
     "?"
     "s0"
 test/operations/cc_march_census.ml [also pins text this scan cannot name]
+    ".cfi_endproc"
+    "cvt"
     ... ^ ".c"
 test/operations/concat_loop_symbols.ml [renders generated text in memory]
 test/operations/cost_model_floor.ml [renders generated text in memory]

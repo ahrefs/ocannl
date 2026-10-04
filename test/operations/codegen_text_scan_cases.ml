@@ -632,6 +632,54 @@ let () = p "ordinary" (has (Generated.read "r"))|ocaml},
   let alias = src in String.is_substring alias ~substring:"cuda"
 let () = p "ordinary" (has (Generated.read "r"))|ocaml},
       "+partial" );
+    ( "a followed partial call retains its unresolved source dependency and known fragment",
+      {ocaml|let second ignored src = src
+let partial = second backend_name
+let src = partial (Generated.read "r")
+let () = p "marker" (String.is_substring src ~substring:"partial source marker")|ocaml},
+      {|"partial source marker" +partial|} );
+    ( "a partial call returning an ordinary supplied argument ignores later generated text",
+      {ocaml|let first src ignored = src
+let partial = first backend_name
+let src = partial (Generated.read "r")
+let () = p "ordinary" (String.is_substring src ~substring:"not a partial pin")|ocaml},
+      "" );
+    ( "dynamic optional source forwarding retains generated evidence with uncertainty",
+      {ocaml|let id ?src () = Option.value_exn src
+let forwarded = Some (Generated.read "r")
+let src = id ?src:forwarded ()
+let () = p "marker" (String.is_substring src ~substring:"forwarded source marker")|ocaml},
+      {|"forwarded source marker" +partial|} );
+    ( "dynamic optional source forwarding preserves its possible generated default",
+      {ocaml|let id ?(src = Generated.read "r") () = src
+let forwarded = None
+let src = id ?src:forwarded ()
+let () = p "marker" (String.is_substring src ~substring:"possible default marker")|ocaml},
+      {|"possible default marker" +partial|} );
+    ( "dynamic ordinary forwarding with an ordinary default contributes no fragment",
+      {ocaml|let id ?(src = backend_name) () = src
+let forwarded = Some backend_name
+let src = id ?src:forwarded ()
+let () = ignore (Generated.read "r"); p "ordinary" (String.is_substring src ~substring:"not a forwarded pin")|ocaml},
+      "" );
+    ( "a function-case result inherits its actual positional input",
+      {ocaml|let id = function src -> src
+let src = id (Generated.read "r")
+let () = p "marker" (String.is_substring src ~substring:"case source marker")|ocaml},
+      {|"case source marker"|} );
+    ( "a function-case constant result does not borrow its generated input",
+      {ocaml|let id = function _ -> backend_name
+let src = id (Generated.read "r")
+let () = p "ordinary" (String.is_substring src ~substring:"not a case pin")|ocaml},
+      "" );
+    ( "a function-case predicate validates its source and caller marker",
+      {ocaml|let has ~marker = function src -> String.is_substring src ~substring:marker
+let () = p "marker" (has ~marker:"case predicate marker" (Generated.read "r"))|ocaml},
+      {|"case predicate marker"|} );
+    ( "a function-case predicate on ordinary input contributes no caller marker",
+      {ocaml|let has ~marker = function src -> String.is_substring src ~substring:marker
+let () = ignore (Generated.read "r"); p "ordinary" (has ~marker:"not a case predicate pin" backend_name)|ocaml},
+      "+partial" );
     ( "a helper-local generated read propagates through normalization aliases",
       {ocaml|let check ~routine ~marker =
   let src = Generated.read routine in
@@ -713,7 +761,7 @@ let () = p "marker" (has ?src:None ~marker:"actual marker" ())|ocaml},
       {ocaml|let absent = None
 let has ?(src = Generated.read "r") ~marker () = String.is_substring src ~substring:marker
 let () = p "marker" (has ?src:absent ~marker:"actual marker" ())|ocaml},
-      "+partial" );
+      {|"actual marker" +partial|} );
     ( "explicit optional presence unwraps the supplied generated source",
       {ocaml|let has ?(src = backend_name) ~marker () = String.is_substring src ~substring:marker
 let () = p "marker" (has ?src:(Some (Generated.read "r")) ~marker:"actual marker" ())|ocaml},

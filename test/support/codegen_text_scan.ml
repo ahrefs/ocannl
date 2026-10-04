@@ -609,11 +609,28 @@ let predicate_argument_at { destination; default; position; optional } args =
   match forwarded with
   | Some { pexp_desc = Pexp_construct ({ txt = Lident "None"; _ }, None); _ } -> selected_default ()
   | Some { pexp_desc = Pexp_construct ({ txt = Lident "Some"; _ }, Some e); _ } -> Some e
-  | Some _ -> None
+  | Some forwarded -> Some forwarded
   | None -> (
       match argument_at ~destination args with
       | Some argument -> Some argument
       | None -> selected_default ())
+
+let parameter_supplied parameter args =
+  Option.is_some (argument_at ~destination:parameter.destination args)
+  || (parameter.optional && List.length (positional args) > parameter.position)
+
+let dynamic_optional parameter args =
+  match parameter.destination with
+  | At_position _ -> None
+  | At_label label ->
+      List.find_map args ~f:(function
+        | Asttypes.Optional name, e when String.equal name label -> (
+            match e.pexp_desc with
+            | Pexp_construct ({ txt = Lident "None"; _ }, None)
+            | Pexp_construct ({ txt = Lident "Some"; _ }, Some _) ->
+                None
+            | _ -> Some e)
+        | _ -> None)
 
 (** The names an emitter call deposits generated text INTO: the arguments at an emitter's buffer
     labels.
@@ -736,6 +753,8 @@ let classifies_compiler_plan (vb : value_binding) =
   List.exists vb.pvb_attributes ~f:(fun attribute ->
       String.equal attribute.attr_name.txt compiler_plan_attribute)
 
+let case_parameter = "\000case"
+
 (** Parameters with their labels, stopping at a pattern this scan cannot name. Labels do not consume
     a positional argument; optional defaults do not change how a caller addresses one. *)
 let peel_params expr =
@@ -758,7 +777,13 @@ let peel_params expr =
         match body with
         | Pfunction_body inner when complete -> go acc inner
         | Pfunction_body inner -> (acc, inner)
-        | Pfunction_cases _ -> (acc, expr))
+        | Pfunction_cases (cases, _, _) ->
+            let loc = expr.pexp_loc in
+            let scrutinee =
+              Ppxlib.Ast_builder.Default.pexp_ident ~loc { txt = Lident case_parameter; loc }
+            in
+            ( acc @ [ (Asttypes.Nolabel, case_parameter, None) ],
+              Ppxlib.Ast_builder.Default.pexp_match ~loc scrutinee cases ))
     | _ -> (acc, expr)
   in
   go [] expr
@@ -926,6 +951,34 @@ let join_provenance a b =
     functions = List.dedup_and_sort (a.functions @ b.functions) ~compare:Poly.compare;
   }
 
+let equal_provenance a b =
+  Bool.equal a.generated b.generated
+  && Bool.equal a.parameter_dependent b.parameter_dependent
+  && Set.equal a.parameters b.parameters
+  && Bool.equal a.buffer b.buffer
+  && Poly.equal a.uncertainty b.uncertainty
+  && Poly.equal a.functions b.functions
+
+let argument_provenance of_expr parameter args =
+  let result =
+    Option.value_map (predicate_argument_at parameter args) ~default:no_provenance ~f:of_expr
+  in
+  match dynamic_optional parameter args with
+  | None -> result
+  | Some _ ->
+      let fallback =
+        if parameter.optional && List.length (positional args) > parameter.position then
+          Option.value_map parameter.default ~default:no_provenance ~f:of_expr
+        else no_provenance
+      in
+      let result = join_provenance result fallback in
+      if
+        result.generated
+        || (not (Set.is_empty result.parameters))
+        || Poly.equal result.uncertainty Unresolved
+      then { result with uncertainty = Unresolved }
+      else result
+
 let scoped_provenance scope ~emitters ~aliases ~seeds ?(parameters = [])
     ?(source_parameters = Hashtbl.Poly.create ()) ?(function_parameters = Hashtbl.Poly.create ())
     ?(outer = fun _ -> no_provenance) collect =
@@ -1011,18 +1064,27 @@ let scoped_provenance scope ~emitters ~aliases ~seeds ?(parameters = [])
               List.exists formal_parameters ~f:(fun (symbol, _) ->
                   Set.mem callee_value.parameters symbol)
             in
+            let unsupplied_dependency =
+              List.exists formal_parameters ~f:(fun (symbol, destination) ->
+                  Set.mem callee_value.parameters symbol
+                  && not (parameter_supplied destination args))
+            in
             let result =
               {
                 callee_value with
                 generated =
                   callee_value.generated
                   && ((not callee_value.parameter_dependent) || not depends_on_argument);
-                parameter_dependent = callee_value.parameter_dependent && not depends_on_argument;
+                parameter_dependent =
+                  callee_value.parameter_dependent
+                  && ((not depends_on_argument) || unsupplied_dependency);
                 parameters =
                   List.fold formal_parameters ~init:callee_value.parameters
-                    ~f:(fun acc (symbol, _) -> Set.remove acc symbol);
+                    ~f:(fun acc (symbol, destination) ->
+                      if parameter_supplied destination args then Set.remove acc symbol else acc);
                 uncertainty =
-                  (if depends_on_argument && not callee_value.buffer then Known
+                  (if unsupplied_dependency then Unresolved
+                   else if depends_on_argument && not callee_value.buffer then Known
                    else callee_value.uncertainty);
                 functions = [];
               }
@@ -1031,8 +1093,7 @@ let scoped_provenance scope ~emitters ~aliases ~seeds ?(parameters = [])
             else
               List.fold formal_parameters ~init:result ~f:(fun acc (symbol, destination) ->
                   if Set.mem callee_value.parameters symbol then
-                    Option.value_map (predicate_argument_at destination args) ~default:acc
-                      ~f:(fun e -> join_provenance acc (of_expr e))
+                    join_provenance acc (argument_provenance of_expr destination args)
                   else acc)
           else !found
         in
@@ -1041,9 +1102,7 @@ let scoped_provenance scope ~emitters ~aliases ~seeds ?(parameters = [])
               Option.value_map (Hashtbl.find function_parameters id) ~default:false
                 ~f:(fun parameters ->
                   List.exists parameters ~f:(fun (_name, parameter) ->
-                      Option.is_none (argument_at ~destination:parameter.destination args)
-                      && not
-                           (parameter.optional && List.length (positional args) > parameter.position))))
+                      not (parameter_supplied parameter args))))
         in
         { found with functions }
     | Pexp_ident _ -> !found
@@ -1117,7 +1176,26 @@ let scoped_provenance scope ~emitters ~aliases ~seeds ?(parameters = [])
             (match body with
             | Pfunction_body body -> ignore (self#expression env body : expression)
             | Pfunction_cases (cases, _, _) ->
-                List.iter cases ~f:(fun c -> ignore (self#case env c : case)));
+                let payload =
+                  Option.value
+                    (Hashtbl.find source_parameters (span e.pexp_loc, case_parameter))
+                    ~default:{ no_provenance with uncertainty = Unresolved }
+                in
+                let payload =
+                  {
+                    payload with
+                    parameter_dependent = true;
+                    parameters =
+                      Set.singleton
+                        (module String)
+                        (parameter_symbol (span e.pexp_loc) case_parameter);
+                  }
+                in
+                List.iter cases ~f:(fun c ->
+                    let inner = Lexical_scope.bind_values env (pattern_names c.pc_lhs) payload in
+                    Option.iter c.pc_guard ~f:(fun guard ->
+                        ignore (self#expression inner guard : expression));
+                    ignore (self#expression inner c.pc_rhs : expression)));
             e
         | Pexp_match (scrutinee, cases) | Pexp_try (scrutinee, cases) ->
             ignore (self#expression env scrutinee : expression);
@@ -1148,14 +1226,7 @@ let scoped_provenance scope ~emitters ~aliases ~seeds ?(parameters = [])
             let previous =
               Option.value (Hashtbl.find uses (span e.pexp_loc)) ~default:no_provenance
             in
-            if
-              (not (Bool.equal previous.generated denotes.generated))
-              || (not (Bool.equal previous.buffer denotes.buffer))
-              || (not (Poly.equal previous.uncertainty denotes.uncertainty))
-              || (not (Bool.equal previous.parameter_dependent denotes.parameter_dependent))
-              || (not (Poly.equal previous.functions denotes.functions))
-              || not (Set.equal previous.parameters denotes.parameters)
-            then changed := true;
+            if not (equal_provenance previous denotes) then changed := true;
             Hashtbl.set uses ~key:(span e.pexp_loc) ~data:denotes;
             e
         | _ -> super#expression env e
@@ -1471,6 +1542,7 @@ let classify_source ~emitters ~path ~contents =
     in
     let provenance = ref (source_provenance ()) in
     let changed = ref true in
+    let next_parameters = Hashtbl.Poly.create () in
     let propagate =
       object
         inherit Ast_traverse.iter as super
@@ -1482,34 +1554,35 @@ let classify_source ~emitters ~path ~contents =
               List.iter (!provenance callee).functions ~f:(fun id ->
                   Option.iter (Hashtbl.find functions id) ~f:(fun parameters ->
                       List.iter parameters ~f:(fun (name, destination) ->
-                          Option.iter (predicate_argument_at destination args) ~f:(fun argument ->
-                              let previous =
-                                Option.value
-                                  (Hashtbl.find source_parameters (id, name))
-                                  ~default:no_provenance
-                              in
-                              let next = join_provenance previous (!provenance argument) in
-                              if
-                                (not (Hashtbl.mem source_parameters (id, name)))
-                                || (not (Bool.equal previous.generated next.generated))
-                                || (not (Bool.equal previous.buffer next.buffer))
-                                || (not (Poly.equal previous.uncertainty next.uncertainty))
-                                || (not
-                                      (Bool.equal previous.parameter_dependent
-                                         next.parameter_dependent))
-                                || (not (Set.equal previous.parameters next.parameters))
-                                || not (Poly.equal previous.functions next.functions)
-                              then (
-                                Hashtbl.set source_parameters ~key:(id, name) ~data:next;
-                                changed := true)))))
+                          if parameter_supplied destination args then
+                            let previous =
+                              Option.value
+                                (Hashtbl.find next_parameters (id, name))
+                                ~default:no_provenance
+                            in
+                            Hashtbl.set next_parameters ~key:(id, name)
+                              ~data:
+                                (join_provenance previous
+                                   (argument_provenance !provenance destination args)))))
           | _ -> ());
           super#expression e
       end
     in
     while !changed do
-      changed := false;
+      Hashtbl.clear next_parameters;
       propagate#structure structure;
-      if !changed then provenance := source_provenance ()
+      changed :=
+        Hashtbl.length source_parameters <> Hashtbl.length next_parameters
+        || not
+             (Hashtbl.for_alli next_parameters ~f:(fun ~key ~data ->
+                  Option.value_map
+                    (Hashtbl.find source_parameters key)
+                    ~default:false ~f:(equal_provenance data)));
+      if !changed then (
+        Hashtbl.clear source_parameters;
+        Hashtbl.iteri next_parameters ~f:(fun ~key ~data ->
+            Hashtbl.set source_parameters ~key ~data);
+        provenance := source_provenance ())
     done;
     let outer = !provenance in
     let predicates, consumed, uncertain_source =
@@ -1624,7 +1697,7 @@ let classify_source ~emitters ~path ~contents =
                 if
                   Option.value_map tested ~default:false ~f:(fun e ->
                       let source = !provenance e in
-                      source.buffer && Poly.equal source.uncertainty Unresolved)
+                      Poly.equal source.uncertainty Unresolved)
                 then unattributed := true)
               else if
                 Option.value_map tested ~default:false ~f:(fun e ->
@@ -1647,18 +1720,28 @@ let classify_source ~emitters ~path ~contents =
                   then unattributed := true;
                   List.iter (predicates_at callee) ~f:(fun predicate ->
                       let at parameter = predicate_argument_at parameter args in
-                      let source = Option.bind predicate.source_at ~f:at in
+                      let source_value =
+                        Option.map predicate.source_at ~f:(fun parameter ->
+                            argument_provenance !provenance parameter args)
+                      in
                       let source_ok =
                         match predicate.source_at with
                         | None -> true
-                        | Some _ -> Option.value_map source ~default:false ~f:mentions_tainted
+                        | Some _ ->
+                            Option.value_map source_value ~default:false ~f:(fun p -> p.generated)
                       in
                       (* The backstop belongs on this path as much as on a direct test: a helper is
                          how a test reads a buffer one indirection further out, and a guard that
                          fires only for the spelling written first is not one (Codex round 5). *)
-                      if (not source_ok) && Option.value_map source ~default:false ~f:reads_a_buffer
+                      if
+                        (not source_ok)
+                        && Option.value_map source_value ~default:false ~f:(fun p -> p.buffer)
                       then unattributed := true;
                       if source_ok then (
+                        if
+                          Option.value_map source_value ~default:false ~f:(fun p ->
+                              Poly.equal p.uncertainty Unresolved)
+                        then unattributed := true;
                         Option.iter predicate.body_text ~f:(fun text ->
                             pins := pin_of_expr scope text :: !pins);
                         match Option.bind predicate.text_at ~f:at with
@@ -1670,8 +1753,7 @@ let classify_source ~emitters ~path ~contents =
                            known text alongside the partial marker, while a known ordinary haystack
                            contributes no fragment. *)
                         if
-                          Option.value_map source ~default:false ~f:(fun e ->
-                              let source = !provenance e in
+                          Option.value_map source_value ~default:false ~f:(fun source ->
                               (not source.buffer) && Poly.equal source.uncertainty Unresolved)
                         then (
                           Option.iter predicate.body_text ~f:(fun text ->
