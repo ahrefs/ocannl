@@ -836,7 +836,8 @@ let on_calibration_probe : (calibration_probe -> unit) ref = ref (fun _ -> ())
    returns the wall in milliseconds. Separated from [time_routine] so a test can drive the whole
    policy -- which depth a call settles on, which window it times, how many launches each costs --
    on an injected clock, with no device and no machine-dependent routine (gh-ocannl-1074). *)
-let calibrate_and_time ~on_retry ~retry_contended ~timing ~repeats ~queue_depth_cap ~batch =
+let calibrate_and_time_with_retry_observer ~on_retry ~retry_contended ~timing ~repeats
+    ~queue_depth_cap ~batch =
   (* Every finite positive batch minimum the calibration measured, as [(depth, wall)]: the evidence
      that bounds an unresolved calibration's fallback depth. *)
   let observed = ref [] and no_supported_batch = ref false in
@@ -1242,6 +1243,13 @@ let calibrate_and_time ~on_retry ~retry_contended ~timing ~repeats ~queue_depth_
     { result with unbatched = true })
   else result
 
+(* Preserve the original all-labelled helper's source interface: an optional observer would not
+   erase without adding a positional argument. *)
+let calibrate_and_time ~retry_contended ~timing ~repeats ~queue_depth_cap ~batch =
+  calibrate_and_time_with_retry_observer
+    ~on_retry:(fun () -> ())
+    ~retry_contended ~timing ~repeats ~queue_depth_cap ~batch
+
 (* [routine.bindings] exposes the routine's live binding refs — restore them after timing (Codex P2
    on PR #103), or the returned winner would stay bound to the tuner's midpoint test values. *)
 let time_routine ?(on_retry = fun () -> ()) ?(tag_failures = false) ~timing ~repeats cctx routine =
@@ -1283,7 +1291,7 @@ let time_routine ?(on_retry = fun () -> ()) ?(tag_failures = false) ~timing ~rep
         sync !ctx;
         Mtime.Span.to_float_ns (Mtime_clock.count c0) /. 1e6
       in
-      calibrate_and_time ~on_retry ~timing ~repeats
+      calibrate_and_time_with_retry_observer ~on_retry ~timing ~repeats
         ~retry_contended:(retry_contended_window_for_backend (Context.backend_name cctx))
         ~queue_depth_cap:(queue_depth_cap_for_backend (Context.backend_name cctx))
         ~batch)

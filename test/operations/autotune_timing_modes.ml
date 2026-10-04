@@ -370,9 +370,13 @@ let synthetic_call ?(repeats = 3) ?(retry_contended = false) ?walls ~timing ~cap
            Int.incr window_reports;
            window := Some (samples, reused, !launches));
       let reading =
-        Autotune.calibrate_and_time
-          ~on_retry:(fun () -> Int.incr retries_started)
-          ~retry_contended ~timing ~repeats ~queue_depth_cap:cap ~batch
+        if retry_contended then
+          Autotune.calibrate_and_time_with_retry_observer
+            ~on_retry:(fun () -> Int.incr retries_started)
+            ~retry_contended ~timing ~repeats ~queue_depth_cap:cap ~batch
+        else
+          (* Compile and execute the original public helper without an observer too. *)
+          Autotune.calibrate_and_time ~retry_contended ~timing ~repeats ~queue_depth_cap:cap ~batch
       in
       let settled_depth, calibration_launches, at_decision = Option.value_exn !decided in
       let window_batches, reused_batches, at_window = Option.value_exn !window in

@@ -1054,8 +1054,8 @@ val no_search_report : timing:timing_mode -> report
       is the rule the stream keeps: every step that can block is named by a line written before it,
       so a killed search is inside the step its last line names.
     - [search_done] ({!tune}, exactly once per call, with its report): [routine], [elapsed_s],
-      [outcome] ({!outcome_name}), [timed], [contended], [unbatched], [failed], [rounds],
-      [attempts], [compile_s], [timing_s], [best_ms], [best].
+      [outcome] ({!outcome_name}), [timed], [contended], [timings_retried], [unbatched], [failed],
+      [rounds], [attempts], [compile_s], [timing_s], [best_ms], [best].
     - [arm_start] / [arm_done] ({!Train.tune_placements}, around each arm's, flip's or replayed
       placement's search): [arm]; a flip's carry [flip=<k>/<budget>]; [arm_done] adds [result]
       ([ok], [failed] or [abandoned]), [best_ms] and [elapsed_s]. An abandoned flip's [best_ms] is
@@ -1617,7 +1617,6 @@ val on_batch_depth : (int -> calibration_samples:int -> unit) ref
     it. *)
 
 val calibrate_and_time :
-  on_retry:(unit -> unit) ->
   retry_contended:bool ->
   timing:timing_mode ->
   repeats:int ->
@@ -1631,8 +1630,19 @@ val calibrate_and_time :
     and the historical cc/Metal single estimate. Exposed so a test can drive the whole timing policy
     on an injected clock and count its launches exactly (gh-ocannl-1074). [retry_contended] is
     {!retry_contended_window_for_backend}'s value for the backend being modelled; it enables one
-    retry only under [Queued], never [Isolated]. [on_retry] runs once when that fresh retry starts,
-    before {!on_timing_retry} and before any retry dispatch, for search accounting. *)
+    retry only under [Queued], never [Isolated]. *)
+
+val calibrate_and_time_with_retry_observer :
+  on_retry:(unit -> unit) ->
+  retry_contended:bool ->
+  timing:timing_mode ->
+  repeats:int ->
+  queue_depth_cap:int ->
+  batch:(int -> float) ->
+  timing_result
+(** {!calibrate_and_time} with the per-call observer that drives search accounting. [on_retry] runs
+    once when a fresh contention retry starts, before {!on_timing_retry} and before any retry
+    dispatch. The original helper remains a no-op-observer wrapper for source compatibility. *)
 
 val retry_contended_window_for_backend : string -> bool
 (** The backend whose contended queued windows get one immediate retry: Metal only. *)
