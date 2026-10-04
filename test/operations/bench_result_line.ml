@@ -150,7 +150,8 @@ let dominant_kernels =
   ]
 
 let ordinary =
-  Bench_json.result_line ~backend:"cc" ~variant:"default" ~precision:"f32" ~profile:None
+  Bench_json.result_line ~shipped_mma:("scalar-fallback", 3, 3) ~backend:"cc" ~variant:"default"
+    ~precision:"f32" ~profile:None
     ~regime_knobs:[ ("tf32_matmuls", None); ("cc_backend_fast_math", None) ]
     ~workload:"mlp3" ~compile_s:2.5 ~searched:false ~p10:0.5 ~p50:0.75 ~p90:1.25 ~queued_ms:0.625
     ~timed_steps:20
@@ -246,6 +247,13 @@ let () =
     && Yojson.Safe.equal (member "tensorization" (arm "B")) (`String "scalar-fallback")
     && Yojson.Safe.equal (member "mma_statements" (arm "B")) (`Int 2)
     && Yojson.Safe.equal (member "mma_scalar_fallbacks" (arm "B")) (`Int 2));
+  let untuned = Yojson.Safe.from_string ordinary in
+  let census = member "shipped_mma" untuned in
+  p "an untuned result carries the compiled MMA census without a tune object"
+    (Yojson.Safe.equal (member "tune" untuned) `Null
+    && Yojson.Safe.equal (member "tensorization" census) (`String "scalar-fallback")
+    && Yojson.Safe.equal (member "statements" census) (`Int 3)
+    && Yojson.Safe.equal (member "scalar_fallbacks" census) (`Int 3));
   (* The shipped artifact's own census, which the arms cannot always speak for. *)
   let shipped_mma = member "shipped_mma" (member "tune" j) in
   p "the shipped artifact's census is carried apart from the arms'"

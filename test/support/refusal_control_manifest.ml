@@ -102,7 +102,10 @@ let raw_entries =
     ( "backend_golden_family_scan.ml",
       [ "[scanner-refusal:2fcd4d491da746e829dc7cec63905091] self-certifying and provenance" ] );
     ( "bin_smoke_membership_scan.ml",
-      [ "[scanner-refusal:9446215c7b3c2270741bbb1cd8300733] executable exactly once" ] );
+      [
+        "[scanner-refusal:9446215c7b3c2270741bbb1cd8300733] executable exactly once";
+        "[scanner-refusal:75093564cde01f102b3c81d2ebde6ccd] synthetic public executable";
+      ] );
     ( "cache_dir_ignores.ml",
       [
         "[scanner-refusal:e2e9d19ffe2ad7688396847bd1ee643a] the repository-root gitignore";
@@ -135,6 +138,8 @@ let raw_entries =
         "[scanner-refusal:4166c0bca69640c175777244011fc4e2] that allows nothing";
         "[scanner-refusal:5aac880a61d2880852d33a0856daa83f] behind a member's";
         "[scanner-refusal:396ecaa5128a1569c6279921019721c1] directory the action";
+        "[scanner-refusal:ac43499e46e4fb95bbea30412af203b6] counts remain review-visible";
+        "[scanner-refusal:84d226496601429f470c41aba20a39c2] adopted-count allowance cannot";
         "[scanner-refusal:531d64a37eb2ccc8b4c3fee2c5a2fac9] quoted-source entry spans";
         "[scanner-refusal:22c73fdc7f08c48d003aabefe9f59d17] checked in contributes";
       ] );

@@ -27,6 +27,14 @@
  (modules verdict)
  (libraries base stdio))
 
+; Fresh-process capture has no IR, tensor or backend dependency (gh-ocannl-910).
+
+(library
+ (name fresh_process)
+ (package neural_nets_lib)
+ (modules fresh_process)
+ (libraries base stdio unix))
+
 (library
  (name test_utils)
  (package neural_nets_lib)

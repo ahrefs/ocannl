@@ -16,7 +16,7 @@
 # It tests the WORKING-TREE copy: `group_alive` is extracted from the shared
 # scripts/process-group.sh; `ps_token`, `proc_identity_matches`, `proc_alive`
 # come from tools/test-run.sh; the dxg legs read the shipping tools/box-jobs.sh
-# and extract tools/sweep.sh's `unit_jobs` and `lab_dest_of`. The `stop` legs drive that same tool as a
+# and tools/lab-map.sh for endpoint lookup. The `stop` legs drive that same tool as a
 # subprocess. Each extraction is asserted structurally before use, so a sed
 # that matched nothing cannot leave every leg passing without testing anything.
 #
@@ -72,10 +72,10 @@
 #      names hip, one reaching a stanza naming cuda, and an unreadable one are
 #      capped, saying why; a named width is only told.
 #  33. hip caps too, and the width is spliced after dune's subcommand.
-#  34. tools/sweep.sh's `unit_jobs` and the injected cap read one table, with
+#  34. the sweep's `box_jobs_sweep_jobs` helper and the injected cap read one table, with
 #      the sweep's own override still winning; the sweep's width follows the
 #      unit's destination (a WSL boot's bridge cap, a native boot's own), and
-#      every unit_jobs call site passes that destination.
+#      every box_jobs_sweep_jobs call site passes that destination.
 #  35. an invocation dune's own parser refuses -- unknown option, unknown
 #      subcommand, malformed operand -- digests as INVOCATION REFUSED quoting
 #      dune's complaint: `run`/`wait` exit 2 over a RECORDED exit 1, `status`
@@ -116,6 +116,8 @@
 #      width; hip and cc beside a small pool on rog take the tighter.
 #  52. the native widths derive from one place: each hip cap is its measured
 #      budget over its slot count, and the numbers are the measured ones.
+#  74. fork TERM is deferred until the parent owns its child pid and the child
+#      resets its handlers; no-mask and inherited-handler controls prove both.
 #  64-65 sit between legs 51 and 52: `plan`, and the run's first phase, in
 #      which the supervisor's child resolves the backends (gh-ocannl-1066,
 #      gh-ocannl-1106).
@@ -532,13 +534,13 @@ else
       # group holds only corpses, so the bare probe happens to agree there. The
       # claim itself holds on both, and the control below runs on both.
       if kill -0 -- "-$zpid" 2>/dev/null; then
-        zwhere="the bare \`kill -0 -- -$zpid\` says ALIVE here -- the misreading this fixes"
+        zwhere="the bare group signal probe says ALIVE here -- the misreading this fixes"
       else
         zwhere="this kernel's killpg already answers dead for a zombie-only group"
       fi
       if group_alive "$zpid"; then
         report 1 "$zlabel" \
-          "group_alive counted a zombie as work -- stop can report a phantom orphaned group"
+          "group_alive counted zombie group $zpid as work -- stop can report a phantom orphaned group"
       else
         report 0 "$zlabel ($zwhere)"
       fi
@@ -2625,45 +2627,38 @@ else
   report 1 "dxg: hip is capped too, and the width precedes dune's own separator" "$dxg_detail"
 fi
 
-# The anti-drift half. The cap this script injects and the one tools/sweep.sh
-# gives its dxg unit must be the same number for the same reason, which is why
-# they now come from one table. sweep.sh cannot be sourced (it runs a sweep), so
-# its unit_jobs is EXTRACTED -- and the extraction is asserted to have matched
-# and to delegate, or a sed that caught nothing would leave this leg agreeing
-# with an empty function.
-sed -n '/^unit_jobs() {/,/^}/p' "$SWEEP_SRC" >"$TMP/unit-jobs.sh"
+# The anti-drift half calls the shared shipping sweep helper directly. The
+# sweep and this runner must source that table, and the sweep must pass the
+# resolved destination to every width lookup.
 dxg_detail=
-grep -q 'box_jobs_sweep_cap' "$TMP/unit-jobs.sh" ||
-  dxg_detail="sweep.sh's unit_jobs does not read the shared table: $(cat "$TMP/unit-jobs.sh")"
-[ -n "$dxg_detail" ] || grep -q '^\. "\$SWEEP_TOOLS/box-jobs.sh"$' "$SWEEP_SRC" ||
+grep -q '^\. "\$SWEEP_TOOLS/box-jobs.sh"$' "$SWEEP_SRC" ||
   dxg_detail="sweep.sh does not source tools/box-jobs.sh"
 [ -n "$dxg_detail" ] || grep -q '^\. tools/box-jobs\.sh$' "$SRC" ||
   dxg_detail="test-run.sh does not source tools/box-jobs.sh"
 # The width depends on how the unit reached its box (gh-ocannl-1029): the two
 # lab boxes dual-boot, and only a WSL boot crosses the bridge. Every call site
-# must hand unit_jobs the unit's RESOLVED destination -- the `@<box>`
+# must hand box_jobs_sweep_jobs the unit's RESOLVED destination -- the `@<box>`
 # placeholder is replaced in UNITS before any unit runs -- since a call that
 # dropped it would silently give a native boot the WSL cap. And the
-# destinations are resolved by sweep.sh's own lab_dest_of (with the lab_row it
+# destinations are resolved by the sourced lab-map.sh's lab_dest_of (with the lab_row it
 # reads), over the lab's endpoint map as `wake-lab.sh endpoint-map` printed it
 # on 2026-09-27 -- a FIXTURE, never the live map, which is site data outside the
 # repository and the sweep's only table of aliases (gh-ocannl-1121). So what is
 # pinned is the relationship: whatever alias the sweep picks for a boot,
 # box-jobs.sh classifies it as that boot.
-sed -n -e '/^lab_row() {/,/^}/p' -e '/^lab_dest_of() {/,/^}/p' "$SWEEP_SRC" >"$TMP/lab-dest-of.sh"
+LAB_MAP_SRC=$(dirname "$SWEEP_SRC")/lab-map.sh
 LAB_MAP='rog rog-nv-linux rog-nv-win rog-nv-wsl rog-lan
 minix minix-amd-linux minix-amd-win minix-amd-wsl minix-lan
 tuf tuf-amd-linux tuf-amd-win tuf-amd-wsl'
 if [ -z "$dxg_detail" ]; then
-  unit_jobs_calls=$(grep -c 'unit_jobs "' "$SWEEP_SRC")
-  unit_jobs_dest_calls=$(grep -c 'unit_jobs "$machine" "$backend" "$host"' "$SWEEP_SRC")
+  unit_jobs_calls=$(grep -c 'box_jobs_sweep_jobs "' "$SWEEP_SRC")
+  unit_jobs_dest_calls=$(grep -c 'box_jobs_sweep_jobs "$machine" "$backend" "$host"' "$SWEEP_SRC")
   if [ "$unit_jobs_calls" -eq 0 ] || [ "$unit_jobs_calls" != "$unit_jobs_dest_calls" ]; then
-    dxg_detail="sweep.sh calls unit_jobs $unit_jobs_calls times, $unit_jobs_dest_calls with the unit's destination"
+    dxg_detail="sweep.sh calls box_jobs_sweep_jobs $unit_jobs_calls times, $unit_jobs_dest_calls with the unit's destination"
   fi
 fi
-[ -n "$dxg_detail" ] || { grep -q '^lab_row() {' "$TMP/lab-dest-of.sh" &&
-  grep -q '^lab_dest_of() {' "$TMP/lab-dest-of.sh" && grep -q 'lab_row "\$1"' "$TMP/lab-dest-of.sh"; } ||
-  dxg_detail="lab_row and lab_dest_of did not extract from sweep.sh: $(cat "$TMP/lab-dest-of.sh")"
+[ -n "$dxg_detail" ] || [ -r "$LAB_MAP_SRC" ] ||
+  dxg_detail="cannot read shared endpoint lookups: $LAB_MAP_SRC"
 if [ -z "$dxg_detail" ]; then
   # The values themselves, from the shipping table, in one shell: the sweep's
   # hip unit over each of minix's boots (and with no destination, or one the
@@ -2673,20 +2668,19 @@ if [ -z "$dxg_detail" ]; then
   # two constants.
   sweep_cap=$(
     . "$JOBS_SRC"
-    . "$TMP/unit-jobs.sh"
-    . "$TMP/lab-dest-of.sh"
+    . "$LAB_MAP_SRC"
     printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s' \
-      "$(unit_jobs minix hip)" \
-      "$(unit_jobs minix hip "$(lab_dest_of minix wsl)")" \
-      "$(unit_jobs minix hip "$(lab_dest_of minix linux)")" \
-      "$(unit_jobs minix hip 10.0.0.7)" \
-      "$(unit_jobs rog-nv cuda "$(lab_dest_of rog wsl)")" \
-      "$(unit_jobs rog-nv cuda "$(lab_dest_of rog linux)")" \
-      "$(unit_jobs minix multidev_cc "$(lab_dest_of minix linux)")" \
-      "$(unit_jobs tuf hip "$(lab_dest_of tuf linux)")" \
-      "$(OCANNL_TOOL_SWEEP_JOBS=7 unit_jobs minix hip)" \
-      "$(OCANNL_TOOL_SWEEP_JOBS=7 unit_jobs minix hip "$(lab_dest_of minix linux)")" \
-      "$(unit_jobs m4-max metal)" \
+      "$(box_jobs_sweep_jobs minix hip)" \
+      "$(box_jobs_sweep_jobs minix hip "$(lab_dest_of minix wsl)")" \
+      "$(box_jobs_sweep_jobs minix hip "$(lab_dest_of minix linux)")" \
+      "$(box_jobs_sweep_jobs minix hip 10.0.0.7)" \
+      "$(box_jobs_sweep_jobs rog-nv cuda "$(lab_dest_of rog wsl)")" \
+      "$(box_jobs_sweep_jobs rog-nv cuda "$(lab_dest_of rog linux)")" \
+      "$(box_jobs_sweep_jobs minix multidev_cc "$(lab_dest_of minix linux)")" \
+      "$(box_jobs_sweep_jobs tuf hip "$(lab_dest_of tuf linux)")" \
+      "$(OCANNL_TOOL_SWEEP_JOBS=7 box_jobs_sweep_jobs minix hip)" \
+      "$(OCANNL_TOOL_SWEEP_JOBS=7 box_jobs_sweep_jobs minix hip "$(lab_dest_of minix linux)")" \
+      "$(box_jobs_sweep_jobs m4-max metal)" \
       "$(OCANNL_TOOL_DXG_DEVICE=$dxg_present box_jobs_local_cap cuda)" \
       "$BOX_JOBS_DXG_CAP/$BOX_JOBS_SDMA_CAP"
   )
@@ -2700,7 +2694,7 @@ if [ -z "$dxg_detail" ]; then
   # classifies as the boot lab_dest_of says it is.
   for box in rog minix; do
     for kind in wsl linux; do
-      got=$(. "$JOBS_SRC"; . "$TMP/lab-dest-of.sh"; box_jobs_dest_transport "$(lab_dest_of "$box" "$kind")")
+      got=$(. "$JOBS_SRC"; . "$LAB_MAP_SRC"; box_jobs_dest_transport "$(lab_dest_of "$box" "$kind")")
       case $kind:$got in
         wsl:dxg | linux:native) ;;
         *) dxg_detail="$box's $kind alias classifies as '${got}'" ;;
@@ -2709,9 +2703,9 @@ if [ -z "$dxg_detail" ]; then
   done
 fi
 if [ -z "$dxg_detail" ]; then
-  report 0 "dxg: sweep.sh's unit_jobs and the injected cap come from one table"
+  report 0 "dxg: the sweep's box_jobs_sweep_jobs and the injected cap come from one table"
 else
-  report 1 "dxg: sweep.sh's unit_jobs and the injected cap come from one table" "$dxg_detail"
+  report 1 "dxg: the sweep's box_jobs_sweep_jobs and the injected cap come from one table" "$dxg_detail"
 fi
 
 # ---------------------------------------------------------------------------
@@ -3029,7 +3023,8 @@ fi
 if [ -z "$native_detail" ]; then
   plan_term_runs=$TMP/argv-runs-plan-term
   mkdir -p "$plan_term_runs"
-  FAKE_REACH_SLEEP=30 FAKE_REACH_IGNORE_TERM=1 FAKE_BACKEND_TEST=hip \
+  : >"$TMP/plan-term.reach"
+  FAKE_REACH_CALLS=$TMP/plan-term.reach FAKE_REACH_SLEEP=30 FAKE_REACH_IGNORE_TERM=1 FAKE_BACKEND_TEST=hip \
   OCANNL_TOOL_TEST_RUNS=$plan_term_runs OCANNL_TOOL_DXG_DEVICE=$dxg_absent \
   OCANNL_TOOL_KFD_TOPOLOGY=$kfd_small OCANNL_TOOL_NVIDIA_DEVICE=$nv_absent PATH=$repeat_bin:$PATH \
     "$repeat_root/tools/test-run.sh" plan build @cheap >"$TMP/plan-term.out" 2>"$TMP/plan-term.err" &
@@ -3037,14 +3032,13 @@ if [ -z "$native_detail" ]; then
   plan_term_marker=
   for _ in $(seq 1 100); do
     plan_term_marker=$(ls "$plan_term_runs"/2*/pid 2>/dev/null | head -n 1)
-    [ -z "$plan_term_marker" ] || break
+    [ -n "$plan_term_marker" ] && [ -s "$TMP/plan-term.reach" ] && break
     sleep 0.1
   done
-  sleep 0.5
   kill -TERM "$plan_term_pid" 2>/dev/null
   wait "$plan_term_pid"
   plan_term_rc=$?
-  { [ -n "$plan_term_marker" ] && [ "$plan_term_rc" = 143 ] && [ ! -e "$(dirname "$plan_term_marker")" ] &&
+  { [ -s "$TMP/plan-term.reach" ] && [ -n "$plan_term_marker" ] && [ "$plan_term_rc" = 143 ] && [ ! -e "$(dirname "$plan_term_marker")" ] &&
     OCANNL_TOOL_TEST_RUNS=$plan_term_runs "$repeat_root/tools/test-run.sh" idle 2>/dev/null; } ||
     native_detail="a cancelled plan: marker ${plan_term_marker:-<none>}; exit $plan_term_rc (want 143); or not idle once it exited: $(cat "$TMP/plan-term.err")"
 fi
@@ -3065,7 +3059,8 @@ plan_stop_detail=
 mkdir -p "$plan_stop_runs"
 : >"$TMP/plan-stop.counter"
 : >"$TMP/plan-stop.calls"
-FAKE_REACH_SLEEP=30 \
+: >"$TMP/plan-stop.reach"
+FAKE_REACH_CALLS=$TMP/plan-stop.reach FAKE_REACH_SLEEP=30 \
 REPEAT_TEST_MODE=stable REPEAT_TEST_COUNTER=$TMP/plan-stop.counter REPEAT_TEST_CALLS=$TMP/plan-stop.calls \
 REPEAT_TEST_WAIT_PREFIX= REPEAT_TEST_WAIT_AT= REPEAT_TEST_ORPHAN_PID= REPEAT_TEST_ORPHAN_REAPED= \
 REPEAT_TEST_DIFF_WAIT_PREFIX= REPEAT_TEST_REAL_DIFF="$(command -v diff)" \
@@ -3076,15 +3071,14 @@ plan_stop_pid=$!
 plan_stop_marker=
 for _ in $(seq 1 100); do
   plan_stop_marker=$(ls "$plan_stop_runs"/2*/pid 2>/dev/null | head -n 1)
-  [ -z "$plan_stop_marker" ] || break
+  [ -n "$plan_stop_marker" ] && [ -s "$TMP/plan-stop.reach" ] && break
   sleep 0.1
 done
-if [ -z "$plan_stop_marker" ]; then
+if [ -z "$plan_stop_marker" ] || [ ! -s "$TMP/plan-stop.reach" ]; then
   plan_stop_detail="the launch never recorded its supervisor: $(cat "$TMP/plan-stop.err")"
   kill -TERM "$plan_stop_pid" 2>/dev/null
   wait "$plan_stop_pid" 2>/dev/null
 else
-  sleep 0.5
   plan_stop_run=$(dirname "$plan_stop_marker")
   plan_stop_out=$(OCANNL_TOOL_TEST_RUNS=$plan_stop_runs "$repeat_root/tools/test-run.sh" stop "$plan_stop_run" 2>&1)
   wait "$plan_stop_pid"
@@ -3150,7 +3144,8 @@ for plan_sig_kind in plain stubborn; do
   : >"$TMP/plan-sig.counter"
   : >"$TMP/plan-sig.calls"
   plan_sig_start=$SECONDS
-  FAKE_REACH_SLEEP=30 FAKE_REACH_IGNORE_TERM=$plan_sig_ignore \
+  : >"$TMP/plan-sig.reach"
+  FAKE_REACH_CALLS=$TMP/plan-sig.reach FAKE_REACH_SLEEP=30 FAKE_REACH_IGNORE_TERM=$plan_sig_ignore \
   REPEAT_TEST_MODE=stable REPEAT_TEST_COUNTER=$TMP/plan-sig.counter REPEAT_TEST_CALLS=$TMP/plan-sig.calls \
   REPEAT_TEST_WAIT_PREFIX= REPEAT_TEST_WAIT_AT= REPEAT_TEST_ORPHAN_PID= REPEAT_TEST_ORPHAN_REAPED= \
   REPEAT_TEST_DIFF_WAIT_PREFIX= REPEAT_TEST_REAL_DIFF="$(command -v diff)" \
@@ -3161,15 +3156,14 @@ for plan_sig_kind in plain stubborn; do
   plan_sig_marker=
   for _ in $(seq 1 100); do
     plan_sig_marker=$(ls "$plan_sig_runs"/2*/pid 2>/dev/null | head -n 1)
-    [ -z "$plan_sig_marker" ] || break
+    [ -n "$plan_sig_marker" ] && [ -s "$TMP/plan-sig.reach" ] && break
     sleep 0.1
   done
-  if [ -z "$plan_sig_marker" ]; then
+  if [ -z "$plan_sig_marker" ] || [ ! -s "$TMP/plan-sig.reach" ]; then
     plan_stop_detail="the signalled launch never recorded its supervisor: $(cat "$TMP/plan-sig.err")"
     kill -TERM "$plan_sig_pid" 2>/dev/null
     wait "$plan_sig_pid" 2>/dev/null
   else
-    sleep 0.5
     kill -TERM "$plan_sig_pid"
     wait "$plan_sig_pid"
     plan_sig_rc=$?
@@ -3857,6 +3851,9 @@ lifecycle_cleanup() {
     harness_kill_recorded "$d/pid" "$d/ptoken"
   done
   harness_kill_recorded "$life_prefix.child" "$life_prefix.child-token"
+  if [ -n "${fork_prefix:-}" ]; then
+    harness_kill_recorded "$fork_prefix.child" "$fork_prefix.child-token"
+  fi
   if [ -n "$life_pid" ]; then kill -KILL "$life_pid" 2>/dev/null; wait "$life_pid" 2>/dev/null; life_pid=; fi
 }
 life_start() {
@@ -3908,6 +3905,76 @@ life_check 143 'verdict: CANCELLED' 'stop records cancellation'
 life_capture stop last
 life_check 0 '^already finished:' 'stop on a completed run is idempotent'
 life_no_survivors 'stop'
+
+# Leg 74: inject a real TERM after fork returns but BEFORE its pid assignment.
+# No seam exists in production: only this fixture copy replaces that expression.
+# The child records its own identity before pausing, so every control survivor
+# is contained even if it never reached the ordinary pgid publication.
+case $(uname -s) in MSYS*|MINGW*) fork_posix=0 ;; *) fork_posix=1 ;; esac
+if [ "$fork_posix" = 1 ] && [ "$have_state" = 1 ]; then
+  for fork_case in parent child no-mask inherited-handler; do
+    fork_prefix=$TMP/fork-$fork_case
+    fork_mode=parent
+    case $fork_case in child|inherited-handler) fork_mode=child ;; esac
+    awk -v mode="$fork_mode" -v control="$fork_case" '
+      /POSIX::sigprocmask/ && control == "no-mask" { dropping=1; next }
+      dropping { dropping=0; next }
+      /\$SIG\{\$_\} = "DEFAULT" for qw\(ALRM INT TERM HUP\)/ && control == "inherited-handler" { next }
+      /^  \$pid = fork\(\);$/ {
+        found++
+        print "  $pid = do {"
+        print "    my $forked = fork();"
+        print "    if (defined $forked && !$forked) {"
+        print "      $write->(\"$ENV{FORK_PREFIX}.child-token\", $self_token->() . \"\\n\");"
+        print "      $write->(\"$ENV{FORK_PREFIX}.child\", \"$$\\n\");"
+        if (mode == "child") print "      kill(\"TERM\", $$);"
+        print "      select undef, undef, undef, .3;"
+        print "    } elsif ($forked) {"
+        print "      for (1 .. 100) { last if -s \"$ENV{FORK_PREFIX}.child\"; select undef, undef, undef, .01 }"
+        if (mode == "parent") print "      kill(\"TERM\", $$);"
+        print "    }"
+        print "    $forked;"
+        print "  };"
+        next
+      }
+      { print }
+      END { if (found != 1) exit 1 }
+    ' "$SRC" >"$life_root/tools/test-run.sh" || { report 1 'fork: seam extraction'; exit 1; }
+    rm -f "$life_prefix.ready" "$life_prefix.release"
+    FORK_PREFIX=$fork_prefix OCANNL_TOOL_TEST_RUNS=$life_runs LIFECYCLE_PREFIX=$life_prefix \
+      LIFECYCLE_TOKEN_HELPER=$TMP/ps_token.sh PATH=$life_bin:$PATH \
+      "$life_root/tools/test-run.sh" run --cap 10 hold >"$TMP/lifecycle.out" 2>"$TMP/lifecycle.err" &
+    life_pid=$!
+    life_wait_child
+    life_run=$(life paths run last)
+    fork_child=$(cat "$fork_prefix.child" 2>/dev/null)
+    fork_ok=0
+    if [ "$life_rc" = 143 ] && [ "$(cat "$life_run/exit" 2>/dev/null)" = 143 ] &&
+       [ "$(grep -c '^exit: 143$' "$life_run/log")" = 1 ] &&
+       [ -n "$fork_child" ] && life_dead "$fork_child" && [ ! -e "$life_prefix.ready" ] &&
+       [ "$(life lock-status "$life_run")" = idle ]; then fork_ok=1; fi
+    case $fork_case in
+      parent|child)
+        report "$((1 - fork_ok))" "fork: $fork_case TERM publishes one verdict, reaps the child and releases the lock" \
+          "exit=$life_rc child=${fork_child:-missing}; $(cat "$life_run/log" "$TMP/lifecycle.err")" ;;
+      no-mask)
+        # Perl safe points really delivered TERM before the assignment: the
+        # supervisor ended while its child lived with the inherited lock.
+        if [ "$fork_ok" = 0 ] && [ "$life_rc" = 143 ] && [ -n "$fork_child" ] &&
+           ! life_dead "$fork_child" && [ "$(life lock-status "$life_run")" = held ]; then
+          report 0 'negative control: unmasked fork TERM leaves a live child holding the lock'
+        else report 1 'negative control: unmasked fork TERM leaves a live child holding the lock'; fi ;;
+      inherited-handler)
+        if [ "$fork_ok" = 0 ] && [ "$(grep -c '^exit: 143$' "$life_run/log")" = 2 ]; then
+          report 0 'negative control: child inherited handler publishes a second supervisor verdict'
+        else report 1 'negative control: child inherited handler publishes a second supervisor verdict' "$(cat "$life_run/log")"; fi ;;
+    esac
+    lifecycle_cleanup
+  done
+  cp "$SRC" "$life_root/tools/test-run.sh"
+else
+  skip 'fork: signal window and negative controls' 'requires POSIX signals and readable process states'
+fi
 
 # POSIX group delivery and ignored-on-entry INT are not native Windows signal
 # semantics. The general start/status/stop contract above still runs there.

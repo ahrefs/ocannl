@@ -1,1 +1,4 @@
 synthetic public executable omitted from @bin-smoke is refused: true
+
+Synthetic controls: scanner refusal diagnostics exercised by this control golden:
+  [scanner-refusal:75093564cde01f102b3c81d2ebde6ccd] synthetic public executable

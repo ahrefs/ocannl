@@ -129,6 +129,10 @@ let case_diagonal_reduction () =
     (not (offers opt a `Footprint));
   p "diagonal: the node's one candidate defaults to the footprint form"
     (defaults_to opt a `Footprint);
+  p_all "diagonal: both valid flips stay unrefused"
+    (List.concat_map opt.LL.flip_candidates ~f:(fun fc ->
+         if Tn.equal fc.LL.fc_tn a then fc.LL.fc_alternatives else []))
+    ~f:(fun fa -> Option.is_none fa.LL.fa_refused);
   p "diagonal: its materialize direction is open, so the placement floor stands"
     (not (Autotune.placement_floor_withheld opt.LL.flip_candidates));
   (* One instantiation per read cell in both readings: the footprint reading prices like the inlined
@@ -675,6 +679,84 @@ let case_rejection_after_footprint () =
     (same got [ column; Array.create ~len:n 0. ]);
   p "rejection: footprint and materialized arms agree" (same got mat)
 
+(* gh-ocannl-1152: the first read footprints the template; the second belongs to a virtual consumer,
+   so its storage pass retracts the footprint to the cap before checking the mismatched column. The
+   default ends materialized, with stored computations retained: the pricing world must validate the
+   inline alternative at BOTH reads even though no setter re-walk is needed. *)
+let case_stored_template_refusal () =
+  let a = mk "asr" and x = mk ~dims:[| n |] "xsr" in
+  let o1 = mk ~dims:[| n |] "osr1" and o2 = mk ~dims:[| n |] "osr2" in
+  let cc = mk ~dims:[| n |] "csr" in
+  List.iter [ x; o1; o2 ] ~f:materialize;
+  let i = sym () and j = sym () and i1 = sym () and i2 = sym () and i3 = sym () in
+  let producer =
+    seq (zero a)
+      (loop i
+         (loop_n j kk
+            (set a
+               [| iter i; fixed 0 |]
+               (add
+                  (get a [| iter i; fixed 0 |])
+                  (add (get x [| iter i |]) (add (tick i) (mul (c 100.) (embed j))))))))
+  in
+  let llc =
+    seq producer
+      (seq
+         (loop i1 (set o1 [| iter i1 |] (get a [| iter i1; fixed 0 |])))
+         (seq
+            (loop i2 (set cc [| iter i2 |] (get a [| iter i2; fixed 1 |])))
+            (loop i3 (set o2 [| iter i3 |] (get cc [| iter i3 |])))))
+  in
+  let opt = optimize ~name:"fp_stored_refused" llc in
+  p "stored-refusal: the footprint retracts to a cap with its template retained"
+    (is_cap opt a Tn.Inline_reduction_cap
+    && defaults_to opt a `Materialize
+    && Hashtbl.mem opt.LL.optimize_ctx.LL.computations a
+    && List.equal (List.equal Int.equal) (scratch_dims opt) [ [ n ] ]);
+  let inline_flip =
+    List.find_map opt.LL.flip_candidates ~f:(fun fc ->
+        if Tn.equal fc.LL.fc_tn a then
+          List.find fc.LL.fc_alternatives ~f:(fun fa -> LL.equal_reading fa.LL.fa_flip `Inline)
+        else None)
+  in
+  let ctx = LL.empty_optimize_ctx () in
+  LL.prefer_inline ctx [ a ];
+  let attempted = optimize_in ctx ~name:"fp_stored_refused_inline" llc in
+  p "stored-refusal: inline attempt refuses the mismatched column"
+    (known_non_virtual attempted a
+    && Option.exists (rejection_code attempted a) ~f:(fun p ->
+        String.equal (Tn.provenance_to_string p) "13:call-site-index-mismatch"));
+  p "stored-refusal: the stored pricing world records the actual inline refusal"
+    (match inline_flip with
+    | Some fa ->
+        Option.is_some fa.LL.fa_refused
+        && Option.equal String.equal fa.LL.fa_refused
+             (Option.map (rejection_code attempted a) ~f:Tn.provenance_to_string)
+    | None -> false);
+  let ranked =
+    Autotune.rank_flip_candidates ~ordering:`Cost
+      ~enablement:(Set.empty (module Tn))
+      ~disablement:(Set.empty (module Tn))
+      opt.LL.flip_candidates
+  in
+  p_empty "stored-refusal: ranking excludes the refused candidate" ~over:opt.LL.flip_candidates
+    (List.filter ranked ~f:(fun fc -> Tn.equal fc.LL.fc_tn a));
+  let xs = Array.init n ~f:(fun i -> Float.of_int (5 + (3 * i))) in
+  let expected =
+    Array.init n ~f:(fun i ->
+        (Float.of_int kk *. xs.(i)) +. Float.of_int ((kk * (1 + i)) + (100 * (kk * (kk - 1) / 2))))
+  in
+  let seed = [ (x, xs); (o1, blank n); (o2, blank n) ] and read = [ o1; o2 ] in
+  let got = execute ~name:"fp_stored_refused" opt ~seed ~read in
+  let mat =
+    execute ~name:"fp_stored_refused_mat"
+      (optimize ~materialized:[ a ] ~name:"fp_stored_refused_mat" llc)
+      ~seed ~read
+  in
+  p "stored-refusal: executed values match the written column and untouched cells"
+    (same got [ expected; Array.create ~len:n 0. ]);
+  p "stored-refusal: footprint retraction and materialized arms agree" (same got mat)
+
 (* === A LOCAL written between two accumulating components: the same hazard as a tensor written
    there, invisible to the access relations — ineligible, the cap materializes. === *)
 let case_local_written_between_setters () =
@@ -912,6 +994,7 @@ let () =
   case "shared-producer" case_producer_statement_writes_input;
   case "between-components" case_input_written_between_setters;
   case "rejection" case_rejection_after_footprint;
+  case "stored-refusal" case_stored_template_refusal;
   case "local-between" case_local_written_between_setters;
   case "preference-ineligible" case_preference_ineligible;
   case "dead-writer" case_dead_loop_writer;

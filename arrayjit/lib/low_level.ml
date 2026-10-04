@@ -8044,6 +8044,32 @@ let rec writes_node (self : Tn.t) (c : t) =
   | Noop | Comment _ | Staged_compilation _ | Workgroup_barrier | Declare_local _ | Set_local _ ->
       false
 
+(* gh-ocannl-1152: stored templates and a setter re-walk must both validate every live read before
+   offering an inline flip. Pricing uses a private placement copy: instantiation may materialize a
+   packed-uniform counter. *)
+let computations_at_reads ~placements ~static_indices ~raw self computations =
+  try
+    (* The flip replays at every read the routine has of [self] — outside its own setters, whose
+       self-reads the store turned into the scope local — and the first read the inliner cannot
+       serve commits the node materialized (a consumption-time rejection, 13 and the like), so each
+       is instantiated here at its own indices. *)
+    let reads =
+      List.concat_map (flat_lines [ raw ]) ~f:(fun stmt ->
+          if writes_node self stmt then []
+          else
+            List.filter (affine_accesses stmt) ~f:(fun (a : Tn.t Affine.access) ->
+                Tn.equal a.a_tn self && (not a.a_write) && Affine.loops_live a.a_loops))
+    in
+    if List.exists reads ~f:(fun a -> a.Affine.a_dynamic) then Error (`Read "dynamic-gather-read")
+    else
+      List.fold_result reads ~init:() ~f:(fun () (a : Tn.t Affine.access) ->
+          Result.map ~f:ignore
+            (instantiate_computations ~fresh_symbol:pricing_symbol ~placements
+               ~id:(pricing_scope self) self computations static_indices a.a_map))
+      |> Result.map ~f:(fun () -> (placements, computations))
+      |> Result.map_error ~f:(fun code -> `Read code)
+  with Utils.User_error m | Invalid_argument m | Failure m -> Error (`Read m)
+
 (* gh-ocannl-1011: the computations the virtualizer stores for [self] when it is NOT materialized —
    for a node a heuristic cap materialized before the walk, whose computation the routine's walk
    therefore never stored — obtained by running that walk ({!virtual_llc}) over the routine's raw
@@ -8089,27 +8115,7 @@ let walked_computations ~(ctx : optimize_ctx) ~placements ~traced_store ~reverse
           : t * Tnode.t Hash_set.t);
       match Hashtbl.find scratch.computations self with
       | Some computations when not (Tn.Placements.known_non_virtual plc self) ->
-          guarded ~tag:(fun m -> `Read m) @@ fun () ->
-          (* The flip replays at every read the routine has of [self] — outside its own setters,
-             whose self-reads the store turned into the scope local — and the first read the inliner
-             cannot serve commits the node materialized (a consumption-time rejection, 13 and the
-             like), so each is instantiated here at its own indices. *)
-          let reads =
-            List.concat_map (flat_lines [ raw ]) ~f:(fun stmt ->
-                if writes_node self stmt then []
-                else
-                  List.filter (affine_accesses stmt) ~f:(fun (a : Tn.t Affine.access) ->
-                      Tn.equal a.a_tn self && (not a.a_write) && Affine.loops_live a.a_loops))
-          in
-          if List.exists reads ~f:(fun a -> a.Affine.a_dynamic) then
-            Error (`Read "dynamic-gather-read")
-          else
-            List.fold_result reads ~init:() ~f:(fun () (a : Tn.t Affine.access) ->
-                Result.map ~f:ignore
-                  (instantiate_computations ~fresh_symbol:pricing_symbol ~placements:plc
-                     ~id:(pricing_scope self) self computations static_indices a.a_map))
-            |> Result.map ~f:(fun () -> (plc, computations))
-            |> Result.map_error ~f:(fun code -> `Read code)
+          computations_at_reads ~placements:plc ~static_indices ~raw self computations
       | _ -> (
           match Tn.Placements.get plc self with
           | Some (_, Site code) -> Error (`Store code)
@@ -8245,7 +8251,10 @@ let%diagn2_sexp specialize_proc (input_ctx : optimize_ctx) (an : analysis) : opt
     let world tn =
       Hashtbl.find_or_add worlds tn ~default:(fun () ->
           match Hashtbl.find input_ctx.computations tn with
-          | Some computations -> Ok (walked_placements, computations)
+          | Some computations ->
+              computations_at_reads
+                ~placements:(Tn.Placements.copy walked_placements)
+                ~static_indices ~raw:an.an_llc tn computations
           | None ->
               walked_computations ~ctx:input_ctx ~placements:walked_placements ~traced_store
                 ~reverse_node_map:an.an_reverse_node_map ~footprint_scoped ~static_indices

@@ -61,8 +61,9 @@ files.
   that its parent does not and that are not per-device constants — so sibling contexts are
   independent (each `compile` mints its own `pool_id`s) but a released context is a dead handle, and
   **release leaves, never interior nodes**: a context compiled from another inherits its buffer
-  locations, so releasing an ancestor leaves the descendant resolving a dropped `pool_id`. Unchecked
-  precondition, deliberately (refcounting persistent context values would defeat their point).
+  locations, so releasing an ancestor leaves the descendant resolving a dropped `pool_id`. This
+  precondition remains for compiled descendants; upload siblings reference-count shared working
+  pools (gh-ocannl-1173) without counting superseded values in a linear upload chain.
 - **Two classes `release` cannot reach, so "bounded" always needs a qualifier.** (a) Per-device
   constants: it skips every `constant_buffer_cache` key by design. That is right for a shared weight
   and wrong for a hoisted `Stage` candidate, whose `apply_stage` mints a FRESH packed-constant tnode
@@ -97,12 +98,16 @@ files.
   such parameters need 20 pools, over Metal's 16-binding budget (`build_pool_binding`), so
   `upload_slot` bump-packs them first-fit into `context.upload_arenas`: first arena exact, later
   ones doubling. The arenas are shared by the values `evolve_with_buffer` derives (one `finalized`
-  flag, so they free together) and fresh in `make_child`: an arena must never span two lifecycles,
-  or the child's `finalize` frees the parent's tenants. Within a lifecycle only a value holding an
-  arena's `last_tenant` extends it, so two sibling uploads into one earlier value never share a
-  slab one sibling's release would free. A failed upload into an existing arena rolls
-  its bump back and frees nothing; `finalize` empties the list so a dead handle cannot bump into a
-  freed slab. Guard: `test/operations/set_values_pool_coalescing.ml`, plus the arena leg of
+  flag along a linear chain) and fresh in `make_child`. Uploading into an earlier value forks an
+  independent release flag; `upload_arenas.pool_owners` reference-counts the pools those sibling
+  leaves share (gh-ocannl-1173). Linear uploads supersede their intermediate values without retaining
+  extra owners. Failed cleanup remembers retired references alongside freed pools, so retry cannot
+  decrement twice. Within a lifecycle only a value holding an
+  arena's latest tenant extends it, so two sibling uploads cannot reuse the same tail. The arena's
+  tenant history is trimmed against surviving owner maps on retirement, allowing the survivor to
+  reuse a released tail instead of stranding one pool per fork. A failed upload into an existing arena rolls
+  its bump back and frees nothing; `finalize` removes an arena only when its last owner frees the
+  slab. Release only the latest value in each linear upload chain. Guard: `test/operations/set_values_pool_coalescing.ml`, plus the arena leg of
   `resource_fault_injection`.
 - Fissioned-step segment batches go through the `sequence_segments` seam
   (`Backend_impl.Lowered_backend`): Metal encodes one serial-dispatch command buffer; CUDA/HIP

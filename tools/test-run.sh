@@ -794,7 +794,20 @@ supervisor_perl='
       $finish->(126);
     }
   }
+  # Perl defers handlers to safe points, including the return from fork
+  # before its assignment. Keep the signals pending until each process has
+  # established its ownership: the parent knows the child pid; the child has
+  # reset the inherited handlers. Restore the original mask, not an empty one.
+  my $fork_signals = POSIX::SigSet->new(POSIX::SIGINT(), POSIX::SIGTERM(),
+    POSIX::SIGHUP(), POSIX::SIGALRM());
+  my $old_mask = POSIX::SigSet->new();
+  POSIX::sigprocmask(POSIX::SIG_BLOCK(), $fork_signals, $old_mask)
+    or die "test-run: block fork signals: $!\n";
   $pid = fork();
+  if (!defined $pid || $pid) {
+    POSIX::sigprocmask(POSIX::SIG_SETMASK(), $old_mask)
+      or die "test-run: restore parent signal mask: $!\n";
+  }
   unless (defined $pid) {
     print STDOUT "test-run: fork: $!\n" if $own;
     $finish->(126);
@@ -804,7 +817,9 @@ supervisor_perl='
     # and the launching shell may have inherited an ignored INT): without this
     # reset dune would start deaf to the very signals the cap and `stop` rely
     # on, degrading every cancellation to the KILL escalation.
-    $SIG{TERM} = "DEFAULT"; $SIG{INT} = "DEFAULT"; $SIG{HUP} = "DEFAULT";
+    $SIG{$_} = "DEFAULT" for qw(ALRM INT TERM HUP);
+    POSIX::sigprocmask(POSIX::SIG_SETMASK(), $old_mask)
+      or die "test-run: restore child signal mask: $!\n";
     # Perl otherwise reserves the right to close inherited descriptors above
     # $^F at exec. fd 9 is the worktree lock and repeat additionally supplies
     # fd 6/8 as its descendant witness; keep that containment state attached

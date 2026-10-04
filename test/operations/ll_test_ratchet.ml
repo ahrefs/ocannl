@@ -130,6 +130,9 @@ let scan ~exemptions root generated =
         (match Scan.members surface module_name ~ir:false with
         | [] -> "(none)"
         | names -> String.concat ~sep:", " names));
+  printf "Adopted tests still hand-building IR (non-refusing census):\n";
+  List.iter (Scan.adopted_census rows) ~f:(fun (path, counts) ->
+      printf "%s -- records=%d traversals=%d\n" path counts.records counts.traversals);
   List.iter exemptions ~f:(fun (path, kind, reason) ->
       match kind with
       | Scan.Permanent -> printf "%s -- permanent: %s\n" path reason

@@ -50,7 +50,7 @@
 #                                      # before its lane, and to sleep it after
 #   OCANNL_TOOL_FLEET_WORKER=none tools/sweep.sh  # do not consult the fleet's execution registry,
 #                                      # which otherwise skips a unit whose box is under an
-#                                      # exclusive measurement (unit_under_measurement)
+#                                      # exclusive measurement (sweep_fleet_under_measurement)
 
 set -uo pipefail
 
@@ -82,13 +82,39 @@ AGGREGATE_SKIPS=$SWEEP_TOOLS/aggregate-skips.sh
 # shellcheck source=kernel-window.sh
 . "$SWEEP_TOOLS/kernel-window.sh"
 # Where this host's fleet-worker.sh might be, shared with tools/test-run.sh: the reader of the
-# fleet's execution registry, which a lane asks before each unit (see unit_under_measurement).
+# fleet's execution registry, which a lane asks before each unit (see sweep_fleet_under_measurement).
 [ -r "$SWEEP_TOOLS/fleet-worker-candidates.sh" ] || {
   echo "sweep: cannot read $SWEEP_TOOLS/fleet-worker-candidates.sh" >&2
   exit 2
 }
 # shellcheck source=fleet-worker-candidates.sh
 . "$SWEEP_TOOLS/fleet-worker-candidates.sh"
+
+# Sourced sweep components; their fixtures use the same functions as a full run.
+[ -r "$SWEEP_TOOLS/lab-map.sh" ] || {
+  echo "sweep: cannot read $SWEEP_TOOLS/lab-map.sh" >&2
+  exit 2
+}
+# shellcheck source=lab-map.sh
+. "$SWEEP_TOOLS/lab-map.sh"
+[ -r "$SWEEP_TOOLS/fleet-registry.sh" ] || {
+  echo "sweep: cannot read $SWEEP_TOOLS/fleet-registry.sh" >&2
+  exit 2
+}
+# shellcheck source=fleet-registry.sh
+. "$SWEEP_TOOLS/fleet-registry.sh"
+[ -r "$SWEEP_TOOLS/sweep-fingerprint.sh" ] || {
+  echo "sweep: cannot read $SWEEP_TOOLS/sweep-fingerprint.sh" >&2
+  exit 2
+}
+# shellcheck source=sweep-fingerprint.sh
+. "$SWEEP_TOOLS/sweep-fingerprint.sh"
+[ -r "$SWEEP_TOOLS/sweep-unit-state.sh" ] || {
+  echo "sweep: cannot read $SWEEP_TOOLS/sweep-unit-state.sh" >&2
+  exit 2
+}
+# shellcheck source=sweep-unit-state.sh
+. "$SWEEP_TOOLS/sweep-unit-state.sh"
 
 # ---------------------------------------------------------------- the lab lock
 # The WSL boxes are shared, and `wsl.exe --shutdown` on one of them is HOST-GLOBAL: it destroys the
@@ -142,55 +168,7 @@ GUEST_IDENTITY_CAP=30
 GUEST_IDENTITY_WINDOW=90
 GUEST_IDENTITY_PAUSE=10
 
-# ------------------------------------------------------------------- the lab's endpoint map
-# Which box an ssh alias belongs to, and which alias reaches a box's native Ubuntu or its WSL guest,
-# are wake-lab.sh's to say: its ENDPOINT_MAP is the one box -> endpoint table the lab has
-# (ludics-lite#314), and `wake-lab.sh endpoint-map` prints it as data, a box name and then that box's
-# ssh aliases on each line (ludics-lite#395), answering only for a map its own row rules pass. The
-# sweep reads it once, at startup, whenever a remote unit is selected, and keeps no table of its own
-# (gh-ocannl-1121). Two hand-written tables beside it, a startup check that the three agree, and a
-# fallback for when the map could not be read were each a restatement of that one table, and the
-# fallback alone took three review rounds to keep complete (staging#868). No map means no remote
-# unit, and the run refuses at startup: a host without wake-lab.sh is one without the site host
-# table too, which lab_dest already refuses a remote unit without, and one without a destroyer
-# to coordinate with.
-#
-# The map carries no OS keys, only aliases; the OS is the alias's suffix. That is wake-lab's own row
-# rule (check_endpoints: `<stem>-linux`, `<stem>-win`, `<stem>-wsl`, and `<box>-lan`), and the
-# suffix is what the rest of this script already reads the boot from -- the remote PATH below
-# run_unit's preparation, and box_jobs_dest_transport's `dxg`/`native` -- so nothing here restates
-# an alias.
 LAB_MAP= # wake-lab.sh endpoint-map's answer: a box name, then its ssh aliases, per line
-
-lab_map() { # -- sets LAB_MAP from wake-lab.sh, or refuses the run
-  [ -x "$WAKE_LAB" ] ||
-    die "no wake-lab.sh at $WAKE_LAB, whose endpoint map names every remote unit's ssh aliases (set OCANNL_TOOL_SWEEP_WAKE_LAB)"
-  ask_capped LAB_MAP 60 "$WAKE_LAB" endpoint-map || LAB_MAP=
-  [ -n "$LAB_MAP" ] ||
-    die "$WAKE_LAB endpoint-map gave no map (a wake-lab.sh from before ludics-lite#395?), so no remote unit has an ssh alias"
-}
-
-lab_row() { # box -- that box's aliases, space-separated; 1 when the map has no row for it
-  awk -v b="$1" '$1 == b { $1 = ""; sub(/^ +/, ""); print; found = 1; exit } END { exit !found }' \
-    <<<"$LAB_MAP"
-}
-
-# The wake-lab box whose lock covers an ssh alias: the box whose row lists it. Both boots of a box
-# share ONE lock -- the box, not the OS it booted, is what a restart or a power verb takes away
-# (gh-ocannl-1030) -- and wake-lab's map refuses an alias listed on two rows (check_map).
-lab_box_of() { # ssh-alias -- 1 when no row lists it
-  awk -v a="$1" '{ for (i = 2; i <= NF; i++) if ($i == a) { print $1; found = 1; exit } }
-    END { exit !found }' <<<"$LAB_MAP"
-}
-
-lab_dest_of() { # box kind -- the ssh alias for that boot of that box; 1 when its row has none
-  local alias
-  case $2 in linux | wsl) ;; *) return 1 ;; esac
-  for alias in $(lab_row "$1"); do
-    case $alias in *-"$2") printf '%s' "$alias"; return 0 ;; esac
-  done
-  return 1
-}
 
 # Which ssh destination reaches a GPU box TODAY (gh-ocannl-1030). The boxes are dual-boot: native
 # Ubuntu answers at the row's `-linux` alias, the WSL guest under Windows at its `-wsl` one, and only
@@ -235,64 +213,6 @@ lab_box_gated() { # box
 # compares against (lab_contract_check). The lock itself is still deliberately a directory, not a
 # command: no lane calls this to take one.
 WAKE_LAB=${OCANNL_TOOL_SWEEP_WAKE_LAB:-$HOME/bin/wake-lab.sh}
-
-# Prints the box's destination, or says on stderr why there is none and returns 1. The table is
-# sourced in a SUBSHELL: it is site shell code, and nothing it defines may reach this script's own
-# functions. Its stdout is discarded so that only kind_of's answer is read as the kind.
-lab_dest() { # box
-  local box=$1 var dest kind row
-  var=OCANNL_TOOL_SWEEP_DEST_$(printf '%s' "$box" | tr '[:lower:]' '[:upper:]')
-  if ! row=$(lab_row "$box"); then
-    echo "sweep: $WAKE_LAB endpoint-map has no row for $box" >&2
-    return 1
-  fi
-  dest=${!var:-}
-  if [ -n "$dest" ]; then
-    # Membership, not a shape check: that closes every way an override could mean something the
-    # rest of the script reads differently -- an alias of another box (the lane would reserve the
-    # wrong lock), the box's Windows or LAN route (no Linux to run a suite on), a `user@` or a second
-    # `@` (the host ssh contacts and the lock lab_box_of derives become two parses of one string),
-    # an option-shaped word. A user or a different address belongs in the alias's ssh config.
-    for kind in linux wsl; do
-      if [ "$dest" = "$(lab_dest_of "$box" "$kind")" ]; then
-        printf '%s' "$dest"
-        return 0
-      fi
-    done
-    echo "sweep: $var='$dest' is not the -linux or -wsl alias on $box's row ($row)" >&2
-    return 1
-  fi
-  if [ ! -r "$LAB_HOSTS" ]; then
-    echo "sweep: cannot read the site host table $LAB_HOSTS for $box's boot kind" \
-      "(set WAKE_LAB_HOSTS, or name the destination with $var)" >&2
-    return 1
-  fi
-  # The kind_of consulted must be the TABLE's: bash imports an exported function from the
-  # environment before this script starts, and an inherited kind_of would otherwise answer for a
-  # table that defines none -- the refusal below exists for exactly that table.
-  kind=$(
-    set +u
-    unset -f kind_of
-    # shellcheck source=/dev/null
-    . "$LAB_HOSTS" >/dev/null </dev/null || exit 1
-    declare -F kind_of >/dev/null || exit 1
-    kind_of "$box" </dev/null
-  ) || kind=
-  case $kind in
-    linux | wsl) ;;
-    *)
-      echo "sweep: the site host table $LAB_HOSTS gives no usable boot kind for $box" \
-        "(kind_of $box: '${kind:-<none>}'; expected linux or wsl)" >&2
-      return 1
-      ;;
-  esac
-  if ! dest=$(lab_dest_of "$box" "$kind"); then
-    echo "sweep: $WAKE_LAB endpoint-map lists no -$kind alias for $box, whose boot kind is $kind" \
-      "(its row: $row)" >&2
-    return 1
-  fi
-  printf '%s' "$dest"
-}
 
 # Reserve a box on fd 8, for as long as this shell lives. Called only in a LANE subshell, so the
 # reservation is released when the lane ends however it ends -- there is nothing to reclaim after a
@@ -365,145 +285,6 @@ ask_capped() { # var budget command...
 
 LAB_CONTRACT=   # the header's verdict
 LAB_LANE_BOXES= # the lab box of each selected remote lane, set with LAB_DESTS
-lab_contract_check() { # -- sets LAB_CONTRACT; refuses the run on a broken contract
-  local box path want broken=
-  [ -n "$LAB_LANE_BOXES" ] || return 0
-  for box in $LAB_LANE_BOXES; do
-    want=$LAB_LOCK_DIR/$box.lock
-    ask_capped path 60 "$WAKE_LAB" lock-path "$box" || path=
-    [ "$path" = "$want" ] ||
-      broken="$broken; lock-path $box answers '$path' where a lane locks $want"
-  done
-  [ -z "$broken" ] ||
-    die "the lab lock contract with $WAKE_LAB is broken${broken/#;/:}; a lane would reserve a box no destroyer checks, so fix the side that moved"
-  LAB_CONTRACT="agree with $WAKE_LAB for $LAB_LANE_BOXES"
-}
-
-# ------------------------------------------------------ the fleet's execution reservations
-# The lab locks say "a lane runs on this box" and "keep this VM alive"; neither says "this box is
-# timing something". That is the fleet's execution registry (lukstafi/ludics-lite's issue-wave
-# skill, references/executions.md): a coordinator RESERVES a box for a run, and a `measurement`
-# reservation is exclusive -- the registry refuses every other reservation on its host while one is
-# outstanding, and every correctness slot there refuses with it. The sweep takes neither, so an
-# exclusive measurement was invisible to it: on 2026-09-27 the rog lane ran `dune clean` and a cuda
-# `@slow` suite into the middle of a 4-7 h tuned measurement there (gh-ocannl-1097), the search froze
-# on its next candidate, and every timing it took from then on was contaminated.
-#
-# So before EACH unit, not just a lane's first (minix's second unit starts long after its first,
-# and a measurement reserved in between is no less exclusive), the lane asks the registry whether
-# an outstanding `measurement` names its box, and on one records `skip (box <box> under an exclusive
-# measurement: <request_id> (<state> on <host>))` instead of running. A skip, like a box another
-# lane holds: nothing was tested and nothing failed, and the run record's skip coverage is already
-# the channel for a backend that went untested. A correctness reservation defers nothing: the
-# fleet's policy lets correctness runs share a box (its run-time slots bound them), and a standing
-# one lasts a worker's whole life, so a sweep that stood aside for those would rarely run at all.
-#
-# The other direction is the registry's. The sweep owns no registry record, so a measurement
-# reserved WHILE a unit runs is refused by the fleet's side: a `measurement` reserve, run or
-# dispatch in fleet-execution.py refuses a box whose wake-lab LANE lock is held, naming the holder,
-# and holds that lock SHARED while it writes its record (lukstafi/ludics-lite#445, since
-# lukstafi/ludics-lite#451). A remote lane takes the lock EXCLUSIVE before it reads the registry
-# for any unit, so for it the race is closed both ways: a measurement that got the lock first has
-# its record written before this read can happen, and one that comes after finds the lock held and
-# is refused. The local lane takes no lab lock (run_lane: it has no host, and the lock is about a
-# box's VM), so nothing refuses a measurement reserved on this host while one of its units runs;
-# there the check stays one read before each unit.
-#
-# A record names its box by an ssh identity, and a box has one per endpoint. A remote lane's names
-# are every alias on its box's row of wake-lab.sh's endpoint map (lab_map), the boots the sweep
-# never addresses included: a measurement booked on a dual-boot box's Windows side, for a
-# verification reboot, holds the box as surely as one on its Linux, and tuf's row lists a `-win`
-# and a `-wsl` its lane never dials. The row is the whole answer -- the map is the one table, and a
-# run with no map has no remote lane to ask for. The local lane's name is the one `execution slot
-# --probe` gives this host -- the fleet's `mac-studio`, not the `m4-max` measurement-box ID the
-# history rows carry.
-#
-# The reader is the registry's own, `fleet-worker.sh execution list --active --compact` -- the
-# supervision read executions.md documents, which asks the anchor over ssh from anywhere else --
-# through the first fleet-worker candidate that answers the probe, as tools/test-run.sh chooses the
-# one it takes its slot through. No candidate answering means this host is outside the fleet, and
-# the header says the registry was NOT CONSULTED. A registry that cannot be read for one unit fails
-# OPEN and loud: the unit runs, under a WARNING line. An outage must not cost a day of the only
-# coverage five backends have; a measurement overlapped by a sweep can be run again, and the
-# fleet's measurement guidance already has its owner check the box's activity before timing.
-#
-# The names are the sweep's own, outside the fleet's FLEET_* namespace: a fleet host's environment
-# EXPORTS FLEET_LOCAL_BOX (and FLEET_BOXES, FLEET_ANCHOR), and an assignment keeps the export, so a
-# global of that name cleared here reaches the probed fleet-worker.sh as an empty box name and the
-# probe dies -- the registry silently NOT CONSULTED on the very host that runs the sweep.
-SWEEP_FLEET_FW=     # the fleet-worker.sh that answered the probe, empty for none
-SWEEP_FLEET_BOX=    # this host's name in the fleet, as that probe gave it
-SWEEP_FLEET_STATUS= # the header's line
-fleet_probe() {
-  local fw probe tag box tokens
-  while IFS= read -r fw; do
-    [ -x "$fw" ] || continue
-    ask_capped probe 30 "$fw" execution slot --probe || continue
-    read -r tag _ _ box _ tokens _ <<<"$probe"
-    if [ "$tag" = EXECUTION ] && [ -n "$box" ] && [ -n "$tokens" ]; then
-      SWEEP_FLEET_FW=$fw
-      SWEEP_FLEET_BOX=$box
-      SWEEP_FLEET_STATUS="consulted before each unit through $fw (this host is $box)"
-      return 0
-    fi
-  done < <(fleet_worker_candidates)
-  if [ "${OCANNL_TOOL_FLEET_WORKER-}" = none ]; then
-    SWEEP_FLEET_STATUS="NOT CONSULTED -- OCANNL_TOOL_FLEET_WORKER=none"
-  else
-    SWEEP_FLEET_STATUS="NOT CONSULTED -- no fleet-worker.sh answered 'execution slot --probe' ($(fleet_worker_candidates | tr '\n' ' ' | sed 's/ $//'))"
-  fi
-}
-
-# The registry names that are this lane's box, space-separated; empty when there is nothing to ask.
-lane_fleet_names() { # ssh-destination (empty for the local lane)
-  if [ -z "$1" ]; then
-    printf '%s' "$SWEEP_FLEET_BOX"
-    return
-  fi
-  lab_row "$(lab_box_of "$1")"
-}
-
-# 0 with MEASUREMENT_HOLDERS set when an outstanding measurement names one of the names; 1 when none
-# does; 2 with REGISTRY_REASON set when the registry could not be read. Through run_capped and a
-# file, not a command substitution, so a cancellation reaches the reader (see remote_guest_id).
-unit_under_measurement() { # names...
-  local out rc
-  MEASUREMENT_HOLDERS=
-  REGISTRY_REASON=
-  out=$(mktemp "$LANE_DIR/registry.XXXXXX") || {
-    REGISTRY_REASON="cannot create a scratch file under $LANE_DIR"
-    return 2
-  }
-  run_capped 120 "$SWEEP_FLEET_FW" execution list --active --compact >"$out" 2>"$out.err" </dev/null
-  rc=$?
-  if [ "$rc" -ne 0 ]; then
-    REGISTRY_REASON="execution list exited $rc: $(tail -1 "$out.err" 2>/dev/null | tr -d '\000-\037' | cut -c1-200)"
-    rm -f "$out" "$out.err"
-    return 2
-  fi
-  MEASUREMENT_HOLDERS=$(perl -MJSON::PP -e '
-    my %names = map { $_ => 1 } @ARGV;
-    local $/;
-    my $list = eval { JSON::PP->new->decode(<STDIN>) };
-    exit 3 unless ref $list eq "ARRAY";
-    my @held;
-    for my $r (@$list) {
-      exit 3 unless ref $r eq "HASH" && ref $r->{request} eq "HASH";
-      my $q = $r->{request};
-      next unless ($q->{kind} // "") eq "measurement" && $names{$q->{execution_host} // ""};
-      push @held, sprintf("%s (%s on %s)", $r->{request_id} // "?", $r->{state} // "?",
-        $q->{execution_host});
-    }
-    print join("; ", @held);' "$@" <"$out")
-  rc=$?
-  rm -f "$out" "$out.err"
-  if [ "$rc" -ne 0 ]; then
-    REGISTRY_REASON="execution list printed no registry this could read"
-    return 2
-  fi
-  [ -n "$MEASUREMENT_HOLDERS" ]
-}
-
 REF=origin/master
 TARGET=
 SLOW=0
@@ -613,25 +394,6 @@ unit_memory() { # machine backend
     *:metal) printf 'unified/apple' ;;
     *) printf '%s' - ;;
   esac
-}
-
-# Dune's job count for the TEST phase of a unit, empty for dune's default (one
-# per core). The cap itself, which boxes it covers and why it is the number it
-# is now live in tools/box-jobs.sh, the single source this and tools/test-run.sh
-# both read: the same bridge overflows a MANUAL GPU suite on such a box, and a
-# cap only the sweep knew about was rediscovered the hard way (gh-ocannl-983).
-# Applied to the test phase only -- the compile phase stays uncapped, since
-# `test_cmd` runs `@check` first and the cap bounds GPU-holding processes, not
-# the build. Override for one run with OCANNL_TOOL_SWEEP_JOBS=<n>, which then
-# applies to every unit. The third argument is the unit's ssh destination
-# (empty for a local unit): the two lab boxes dual-boot, and the width a WSL
-# boot's bridge needs is not the one a native boot needs (gh-ocannl-1029).
-unit_jobs() { # machine backend [ssh-destination]
-  if [ -n "${OCANNL_TOOL_SWEEP_JOBS:-}" ]; then
-    printf '%s' "$OCANNL_TOOL_SWEEP_JOBS"
-    return
-  fi
-  box_jobs_sweep_cap "$1" "$2" "${3:-}"
 }
 
 # The failure names that mean the ENVIRONMENT refused the run rather than a
@@ -1139,7 +901,7 @@ test_cmd() {
 #
 # Emitted as shell text, and run on the machine that OWNS the worktree -- the
 # versions are the ones that just compiled the kernels, not the sweep host's --
-# under the same lock and PATH, appending to `$log`, which `fingerprint` then
+# under the same lock and PATH, appending to `$log`, which `sweep_fingerprint` then
 # carries into the digest.
 #
 # It runs as its OWN phase after the unit's row has been recorded, never inside
@@ -1370,7 +1132,7 @@ collect_kernel_window() { # kind host log remote-start-epoch label start-boot-id
 # reboot in that window produced neither `vm-replaced` evidence nor the warning, on the path least
 # likely to be looked at afterwards. Any future early return from a remote unit belongs here too.
 #
-# Called BEFORE write_fingerprint on each path, so the fingerprint carries the window: a replaced
+# Called BEFORE sweep_fingerprint_write on each path, so the fingerprint carries the window: a replaced
 # guest is part of what distinguishes this failure from the same failure on a healthy box.
 finish_remote_window() { # machine backend host log outcome remote-start-epoch start-boot-id
   local machine=$1 backend=$2 host=$3 log=$4 outcome=$5 remote_start=$6 start_boot=$7 kind=
@@ -1457,7 +1219,7 @@ rtc_context_cmd() {
   if [ -n "$alias_name" ]; then
     # Labelled, because the got/want vectors below are the option POLICY that the
     # GPU-free builder test prints under sentinel inputs -- not the command line of
-    # the compile that just failed. Four lines, not a paragraph: `fingerprint`
+    # the compile that just failed. Four lines, not a paragraph: `sweep_fingerprint`
     # carries this block under a line bound, and prose that crowded the vectors out
     # of it would cost more than it explains.
     # CUDA/HIP builders contain discovered include/architecture slots filled with sentinels by
@@ -1939,146 +1701,6 @@ write_run_record() { # exit-kind -- complete | lane-stopped | cancelled | post-r
 # unit's lines stay contiguous and a line is never split by another lane's.
 say() { printf '%s\n' "$*" >>"$LANE_OUT" || die "cannot buffer sweep output in $LANE_OUT"; }
 
-# The error SITES in a log, one per line, in BOTH of dune's spellings: a
-# diagnostic anchored to one line says `line N`, one anchored to a span --
-# notably a whole stanza whose action exited non-zero, which is how every
-# explicit-rule test here fails -- says `lines N-M`. Shared by `fingerprint`,
-# which sorts and bounds them, and by `rerun_aliases`, which needs every one.
-dune_sites() { # log
-  {
-    # Matching only the singular left a unit whose ONLY failure
-    # had that shape with an EMPTY fingerprint, and empty compares equal to
-    # empty, so the consumer that diffs against the previous non-pass run read a
-    # red suite as "unchanged since the last sweep" and said nothing.
-    #
-    # A location in a dune FILE is additionally reduced to the stanza it names.
-    # Line numbers there shift under any edit to that file, so a fingerprint
-    # keyed on them reports wholesale change whenever an unrelated stanza is
-    # inserted above -- overstating exactly the thing the diff is asked to
-    # measure. The stanza's own alias/name survives such edits, and is what a
-    # reader needs anyway. A stanza is named by whichever of alias/name/target
-    # it declares first -- a bare `(rule (target x.actual) ...)` has no alias to
-    # give. Dune elides the middle of a long excerpt, so nothing identifying is
-    # always quoted; the location stands in when none was.
-    awk '
-      function clear_names( i) {
-        for (i in names) delete names[i]
-        names_count = 0
-      }
-      function flush( i) {
-        if (loc == "") return
-        if (name != "") print prefix ", " name
-        else if (names_count > 0) {
-          for (i = 1; i <= names_count; i++) print prefix ", names " names[i]
-        } else print loc
-        loc = ""; name = ""; want = ""; opened = 0; names_done = 0
-        clear_names()
-      }
-      /^File "[^"]+", lines? [0-9]+/ {
-        flush()
-        match($0, /^File "[^"]+", lines? [0-9]+(-[0-9]+)?/)
-        here = substr($0, 1, RLENGTH)
-        match($0, /^File "[^"]+"/)
-        head = substr($0, 1, RLENGTH)
-        if (head ~ /\/dune"$/ || head == "File \"dune\"") {
-          loc = here; prefix = head; next
-        }
-        print here
-        next
-      }
-      loc != "" {
-        # The quoted excerpt: numbered source lines, plus the elision marker
-        # dune prints for a long one. Anything else ends the excerpt, which
-        # then never named its stanza.
-        if ($0 ~ /^\.\.\.+$/) { want = ""; opened = 0; next }
-        if ($0 !~ /^[0-9 ]*[0-9] \|/) { flush(); next }
-        if (name != "" || names_done) next
-        text = $0
-        sub(/^[0-9 ]*[0-9] \| ?/, "", text)
-        # Tokenized rather than matched as one regex, because the identifier is
-        # not reliably a bare word sitting on its keywords line: it can be
-        # quoted, and dune wraps a long field so that `(targets` ends one line
-        # and its first target begins the next. A same-line regex reads both as
-        # unnamed and falls back to the shifting span -- which is the failure
-        # this normalization exists to avoid.
-        gsub(/\(/, " ( ", text)
-        gsub(/\)/, " ) ", text)
-        n = split(text, tok, /[ \t]+/)
-        for (i = 1; i <= n; i++) {
-          if (tok[i] == "") continue
-          # A dune comment runs to end of line: never the stanzas identifier.
-          if (tok[i] ~ /^;/) break
-          # An opening paren abandons a pending keyword: the field held a
-          # nested form, as `(alias (name slow))` does, and the name is inside.
-          if (tok[i] == "(") {
-            opened = 1
-            if (want != "names") want = ""
-            continue
-          }
-          if (tok[i] == ")") {
-            if (want == "names" && names_count > 0) names_done = 1
-            opened = 0; want = ""
-            if (names_done) break
-            continue
-          }
-          if (want == "names") { names[++names_count] = tok[i]; continue }
-          if (want != "") { name = want " " tok[i]; break }
-          if (opened && tok[i] ~ /^(alias|name|names|target|targets)$/) want = tok[i]
-          opened = 0
-        }
-        next
-      }
-      END { flush() }
-    ' "$1"
-  } 2>/dev/null
-}
-
-# A compact, diffable summary of what went wrong, so a caller can tell a NEW
-# failure from a standing one. Metal's operations suite carries known-red tests,
-# and a sweep that shouts on every red is a sweep nobody reads.
-fingerprint() {
-  {
-    dune_sites "$1"
-    grep -hoE '^(Error|Fatal error|Exception)[^,]*' "$1"
-    # A production compiler option vector appended to the exception message by
-    # `cuda_to_ptx`, `hip_to_code`, or `compile_metal_source`. The selectors above
-    # cannot reach it (it starts neither at an error site nor at
-    # `Error`/`Fatal error`/`Exception`), so match the prefix each backend writes.
-    # A changed option set then appears as a fingerprint diff rather than as a
-    # missing line (gh-ocannl-849; Codex P2 on PR #510).
-    grep -hoE '^(nvrtc|hiprtc|metal) options: .*' "$1"
-  } 2>/dev/null | sort -u | head -60
-  # The rtc-context block a failing GPU unit appended (see rtc_context_cmd),
-  # verbatim and unsorted: it is a small fixed-size report whose ORDER is what
-  # makes it readable, not a set of error sites to deduplicate. Carried into the
-  # fingerprint rather than left in the log because the fingerprint is what a
-  # caller diffs against yesterday's -- a toolkit upgrade or a changed option
-  # vector then shows up as a diff beside the failure it explains, which is the
-  # whole point (gh-ocannl-784).
-  sed -n '/^=== rtc-context /,/^=== end rtc-context ===$/p' "$1" 2>/dev/null | head -40
-  # The kernel window's STABLE half (window_fingerprint_lines): which signatures the
-  # window held, and whether the device was being refused at all. Not the block
-  # verbatim -- the window instants, the kernel timestamps and the exact count all
-  # differ between two equally broken runs, and a fingerprint is compared bytewise
-  # against the previous failure's, so the verbatim block would report `fingerprint
-  # moved` on every repeat of a standing environment red, costing the suppression
-  # that keeps this output readable. The full block stays in the log, and the
-  # window and count are fields of the run record.
-  # UNCAPPED, unlike everything above it, and deliberately: this list is already
-  # deduplicated, so it is bounded by the number of distinct kernel message shapes
-  # the bridge or the drivers can produce -- a handful, where the raw lines it summarises run to
-  # hundreds. A cap here would drop exactly what the list exists for, a signature
-  # never seen before, and would do it to the lexicographically last ones, which is
-  # no one's idea of the least interesting. The verdict follows them for the reason
-  # the serial rerun's line does: it is the one line that must survive.
-  window_fingerprint_lines "$1"
-  # The serial rerun's verdict (serial_rerun), after the sorted block and
-  # outside its bound: which of the red stanzas stayed red on their own is the
-  # first line a reader of an environment-red unit needs, and the one a
-  # 60-entry bound must not be able to drop.
-  grep -h '^serial rerun: ' "$1" 2>/dev/null
-}
-
 # The rerun targets behind a log's dune-file and inline-expectation sites, one
 # per line, each prefixed `alias `, `inline ` or `unmapped `. A `(test (name
 # X))` stanza reruns as
@@ -2090,7 +1712,7 @@ fingerprint() {
 # gets a serial retry without turning a wider red into a serial directory
 # suite. Other source locations, unnamed spans and bare targets stay unmapped.
 rerun_aliases() { # log
-  dune_sites "$1" | sort -u | awk -v log_file="$1" '
+  sweep_fingerprint_sites "$1" | sort -u | awk -v log_file="$1" '
     BEGIN {
       while ((getline raw < log_file) > 0) {
         if (raw ~ /^diff --git a\// && raw ~ /\.ml b\/_build\/default\// &&
@@ -2222,7 +1844,7 @@ run_on_unit_host() { # host wt cmd log path_prefix
 }
 
 # Rerun an environment-red unit's failing stanzas one at a time, appending to
-# its log, then write the `serial rerun:` verdict lines that `fingerprint`
+# its log, then write the `serial rerun:` verdict lines that `sweep_fingerprint`
 # carries and the summary quotes. The shape is collect_rtc_context's: its own
 # phase after the row is recorded, under the worktree lock on whichever side
 # owns the tree, with a status that never reaches the outcome. The budget is the
@@ -2348,165 +1970,6 @@ rerun_cleared() { # log
   [ -n "$clean" ] && [ -n "$completed" ]
 }
 
-# An outcome that is not a pass, with nothing extractable from its log, is its
-# own condition -- not a fingerprint of zero failures. The consumer diffs this
-# file against the previous non-pass run's, and an empty file compares equal to
-# an empty file, so such a unit was filed as "unchanged since the last sweep"
-# and reported to nobody; that is how the missing `lines N-M` spelling above
-# survived two sweeps. The sentinel makes the file differ from a real
-# fingerprint in either direction, and the summary line is what a human
-# actually sees: the scheduled routine quotes sweep output, so a finding that
-# lives only in a written file is one nobody reads (gh-ocannl-792).
-EMPTY_FINGERPRINT='(no fingerprintable diagnostics -- read the log)'
-
-write_fingerprint() {
-  local log=$1 label=$2 fp=${1%.log}.fingerprint
-  fingerprint "$log" >"$fp"
-  if [ ! -s "$fp" ]; then
-    printf '%s\n' "$EMPTY_FINGERPRINT" >"$fp"
-    say "  $label: $EMPTY_FINGERPRINT -- $log"
-  fi
-  WRITTEN_FINGERPRINT=$fp
-}
-
-# The history remains the append-only coverage record. This smaller state is
-# the comparison cursor for one exact unit scope: its immediately previous
-# verdict, and the previous failing fingerprint plus the commit that last
-# touched each failing golden. A target smoke must not become the predecessor
-# of a full sweep (nor a weekday run the predecessor of a slow one), hence all
-# scope columns participate in the key.
-unit_state_path() { # machine backend -> path
-  local raw readable crc
-  # The requested logical ref is part of the experiment scope. A one-off old
-  # or feature ref must not become origin/master's green/red predecessor even
-  # when both happen to resolve to related commits.
-  raw=$(printf '%s\t%s\t%s\t%s\t%s' "$1" "$2" "${TARGET:-<all>}" "$SLOW" "$REF")
-  readable=$(printf '%s' "$1-$2-${TARGET:-all}-$SLOW-$REF" | tr -c 'A-Za-z0-9._-' '_' | cut -c1-96)
-  crc=$(printf '%s' "$raw" | cksum | awk '{print $1}')
-  printf '%s/%s-%s.state' "$UNIT_STATES" "$readable" "$crc"
-}
-
-state_field() { # state key -> first value
-  awk -F '\t' -v key="$2" '$1 == key { print $2; exit }' "$1"
-}
-
-goldens_from_log() { # log destination -- source-tree paths proved to have failed a diff
-  local log=$1 destination=$2 candidates token
-  candidates=$destination.candidates.$$
-  : >"$destination" || die "cannot stage failing golden paths"
-
-  # An ordinary `(test)` failure names its expected file directly. Explicit
-  # rules name only their dune stanza, but a diff that ACTUALLY RAN and found a
-  # mismatch emits a resolved `diff --git` header. Reading that header—rather
-  # than guessing from the stanza—distinguishes a failed diff from an earlier
-  # command in a run-then-diff `progn`, and naturally carries `%{read:...}`
-  # expansions plus PPX's `*_expected.ml` naming.
-  {
-    sed -n 's/^File "\([^"]*\.expected\)".*/\1/p' "$log"
-    sed -n 's|^diff --git a/_build/default/\([^ ]*\) b/_build/default/.*$|\1|p' "$log"
-    # Inline ppx_expect compares the source baseline directly with a generated
-    # .corrected file, so its first operand has no _build/default prefix.
-    sed -n 's|^diff --git a/\([^ ]*\) b/_build/default/[^ ]*\.corrected$|\1|p' "$log"
-  } | sort -u >"$candidates" || die "cannot extract proven failing goldens"
-  while IFS= read -r token; do
-    [ -n "$token" ] || continue
-    token=${token#./}
-    git -C "$MAIN" cat-file -e "$full_sha:$token" 2>/dev/null || continue
-    printf '%s\n' "$token" >>"$destination" ||
-      die "cannot stage failing golden path $token"
-  done <"$candidates"
-  sort -u "$destination" -o "$destination" || die "cannot normalize failing golden paths"
-  rm -f "$candidates"
-}
-
-update_unit_state() { # machine backend outcome [fingerprint] [log]
-  local machine=$1 backend=$2 outcome=$3 fp=${4:-} log=${5:-}
-  local label state stage previous_verdict previous_failure_ref
-  local previous_fp current_goldens golden_paths path commit old_commit short old_short
-  label=$machine/$backend
-  # skip/gate/error/timeout are recorded outcomes but not verdicts: they judged no
-  # test result. Letting one replace a prior green would hide the next red's
-  # regression transition merely because a machine slept or a run timed out.
-  case $outcome in skip | gate | error | timeout) return 0 ;; esac
-  state=$(unit_state_path "$machine" "$backend")
-  stage=$state.stage.$$
-  previous_fp=$state.previous-fingerprint.$$
-  current_goldens=$state.current-goldens.$$
-  golden_paths=$state.golden-paths.$$
-  : >"$current_goldens" || die "cannot stage unit state for $label"
-
-  if [ -f "$state" ]; then
-    [ "$(head -1 "$state")" = "$(printf 'schema\t1')" ] ||
-      die "$state has an unknown unit-state schema"
-    previous_verdict=$(state_field "$state" last_verdict)
-    [ -n "$previous_verdict" ] || die "$state has no last verdict"
-    previous_failure_ref=$(state_field "$state" last_failure_ref)
-    if [ -n "$previous_failure_ref" ] &&
-       ! awk -F '\t' '$1 == "fingerprint" { found=1 } END { exit !found }' "$state"; then
-      die "$state has a previous failure but no fingerprint"
-    fi
-  else
-    previous_verdict=
-    previous_failure_ref=
-  fi
-
-  if [ "$outcome" = fail ]; then
-    [ -n "$fp" ] && [ -s "$fp" ] || die "no current failure fingerprint for $label"
-    [ -n "$log" ] && [ -f "$log" ] || die "no current failure log for $label"
-    case $previous_verdict in
-      pass | incremental-pass | legacy-pass)
-        say "  $label: REGRESSION OR FIX DID NOT TAKE -- previous verdict was $previous_verdict"
-        ;;
-    esac
-
-    # Compare with the previous FAILURE, even if green or unavailable runs sat
-    # between it and this one. That is the experiment whose identity matters:
-    # same failure vs a moving one, not merely same as yesterday's outcome.
-    if [ -n "$previous_failure_ref" ]; then
-      awk -F '\t' '$1 == "fingerprint" { sub(/^[^\t]*\t/, ""); print }' \
-        "$state" >"$previous_fp" || die "cannot read the previous fingerprint for $label"
-      if [ -s "$previous_fp" ] && ! cmp -s "$previous_fp" "$fp"; then
-        short=$(printf '%s' "$previous_failure_ref" | cut -c1-8)
-        say "  $label: fingerprint moved since the previous failure at $short"
-      fi
-    fi
-
-    goldens_from_log "$log" "$golden_paths"
-    while IFS= read -r path; do
-      [ -n "$path" ] || continue
-      commit=$(git -C "$MAIN" log -1 --format=%H "$full_sha" -- "$path" 2>/dev/null) ||
-        die "cannot read golden history for $path"
-      [ -n "$commit" ] || continue
-      printf 'golden\t%s\t%s\n' "$commit" "$path" >>"$current_goldens" ||
-        die "cannot stage golden state for $label"
-      if [ -f "$state" ]; then
-        old_commit=$(awk -F '\t' -v path="$path" \
-          '$1 == "golden" && $3 == path { print $2; exit }' "$state")
-        if [ -n "$old_commit" ] && [ "$old_commit" != "$commit" ]; then
-          short=$(printf '%s' "$commit" | cut -c1-8)
-          old_short=$(printf '%s' "$old_commit" | cut -c1-8)
-          say "  $label: REGRESSION OR FIX DID NOT TAKE -- $path last changed at $short (previous failing copy: $old_short)"
-        fi
-      fi
-    done <"$golden_paths"
-  fi
-
-  {
-    printf 'schema\t1\n'
-    printf 'last_verdict\t%s\n' "$outcome"
-    printf 'last_ref\t%s\n' "$full_sha"
-    if [ "$outcome" = fail ]; then
-      printf 'last_failure_ref\t%s\n' "$full_sha"
-      while IFS= read -r line; do printf 'fingerprint\t%s\n' "$line"; done <"$fp"
-      cat "$current_goldens"
-    elif [ -f "$state" ] && [ -n "$previous_failure_ref" ]; then
-      awk -F '\t' '$1 == "last_failure_ref" || $1 == "fingerprint" || $1 == "golden"' "$state"
-    fi
-  } >"$stage" && mv "$stage" "$state" ||
-    die "cannot publish unit state for $label"
-  rm -f "$previous_fp" "$current_goldens" "$golden_paths"
-}
-
 if [ "$FORCE" = 1 ]; then
   execution=forced
 else
@@ -2581,7 +2044,7 @@ run_unit() { # machine backend host
       LANE_DIALLING=0
       say "  $machine/$backend: $unreachable (unreachable)"
       record "$machine" "$backend" "$unreachable" 0
-      update_unit_state "$machine" "$backend" "$unreachable"
+      sweep_state_update "$machine" "$backend" "$unreachable"
       return 0
     fi
     remote_home=$(printf '%s\n' "$remote_probe" | sed -n 1p)
@@ -2597,7 +2060,7 @@ run_unit() { # machine backend host
     [ -n "$remote_home" ] || {
       say "  $machine/$backend: $unreachable (unreachable)"
       record "$machine" "$backend" "$unreachable" 0
-      update_unit_state "$machine" "$backend" "$unreachable"
+      sweep_state_update "$machine" "$backend" "$unreachable"
       return 0
     }
     # A box whose `date` said nothing leaves no window to bound; the collection
@@ -2653,8 +2116,8 @@ run_unit() { # machine backend host
       # right here -- so this path collects the window exactly like the one below.
       finish_remote_window "$machine" "$backend" "$host" "$log" error \
         "${remote_started:-}" "${remote_boot:-}"
-      write_fingerprint "$log" "$machine/$backend"
-      update_unit_state "$machine" "$backend" error "$WRITTEN_FINGERPRINT"
+      sweep_fingerprint_write "$log" "$machine/$backend"
+      sweep_state_update "$machine" "$backend" error "$WRITTEN_FINGERPRINT"
       return 0
     fi
     # The suite's log replaces the preparation's, so a guard the preparation alone was refused is
@@ -2665,7 +2128,7 @@ run_unit() { # machine backend host
     # supervisor capped() uses locally, see remote_capped -- because a
     # per-dune-call cap would let a --slow unit run for twice the budget the
     # script advertises.
-    remote="$(remote_capped "$CAP" "$path_prefix $(remote_lock_cmd "$wt") $(test_cmd "$backend" "$wt" "$(unit_jobs "$machine" "$backend" "$host")")" \
+    remote="$(remote_capped "$CAP" "$path_prefix $(remote_lock_cmd "$wt") $(test_cmd "$backend" "$wt" "$(box_jobs_sweep_jobs "$machine" "$backend" "$host")")" \
       "$(sleep_guard_why "$host" suite)")"
     # The far-side cap does not bound the LOCAL ssh: if the connection blackholes
     # after the command starts -- the box suspends, the WiFi drops -- the remote
@@ -2702,11 +2165,11 @@ run_unit() { # machine backend host
     if ! /bin/sh -c "$(prep_cmd "$MAIN" "$wt")" >"$log" 2>&1; then
       say "  $machine/$backend: error (cannot pin $wt to $run_sha)"
       record "$machine" "$backend" error "$(( $(date +%s) - started ))" "$log"
-      write_fingerprint "$log" "$machine/$backend"
-      update_unit_state "$machine" "$backend" error "$WRITTEN_FINGERPRINT"
+      sweep_fingerprint_write "$log" "$machine/$backend"
+      sweep_state_update "$machine" "$backend" error "$WRITTEN_FINGERPRINT"
       return 0
     fi
-    run_capped "$CAP" /bin/sh -c "$(test_cmd "$backend" "$wt" "$(unit_jobs "$machine" "$backend" "$host")")" >"$log" 2>&1
+    run_capped "$CAP" /bin/sh -c "$(test_cmd "$backend" "$wt" "$(box_jobs_sweep_jobs "$machine" "$backend" "$host")")" >"$log" 2>&1
     rc=$?
   fi
 
@@ -2790,9 +2253,9 @@ run_unit() { # machine backend host
       die "cannot stage skip evidence for $machine/$backend"
   fi
   case $outcome in
-    fail | timeout | error) write_fingerprint "$log" "$machine/$backend" ;;
+    fail | timeout | error) sweep_fingerprint_write "$log" "$machine/$backend" ;;
   esac
-  update_unit_state "$machine" "$backend" "$outcome" "${WRITTEN_FINGERPRINT:-}" "$log"
+  sweep_state_update "$machine" "$backend" "$outcome" "${WRITTEN_FINGERPRINT:-}" "$log"
   # After the LAST guarded leg (the RTC context and the serial rerun append to the log too), so a
   # guard refused to any of them is reported, not only one refused to the suite.
   say_unguarded "$log" "$machine/$backend"
@@ -2945,7 +2408,7 @@ run_lane() { # machine -- only ever as a background job: it ends in `exit`
         wanted "$backend" || continue
         say "  $machine/$backend: gate ($LAB_GATE_REASON)"
         record "$machine" "$backend" gate 0
-        update_unit_state "$machine" "$backend" gate
+        sweep_state_update "$machine" "$backend" gate
         flush_lane_output || die "cannot publish the $machine/$backend summary to stdout"
       done
       : >"$LANE_DIR/lane-done.$lane" || die "cannot mark the $lane lane finished"
@@ -2968,7 +2431,7 @@ run_lane() { # machine -- only ever as a background job: it ends in `exit`
         wanted "$backend" || continue
         say "  $machine/$backend: skip (box $lab_box reserved by $(lab_lock_holder "$lab_box"))"
         record "$machine" "$backend" skip 0
-        update_unit_state "$machine" "$backend" skip
+        sweep_state_update "$machine" "$backend" skip
         flush_lane_output || die "cannot publish the $machine/$backend summary to stdout"
       done
       : >"$LANE_DIR/lane-done.$lane" || die "cannot mark the $lane lane finished"
@@ -2976,9 +2439,9 @@ run_lane() { # machine -- only ever as a background job: it ends in `exit`
     fi
   fi
   # The fleet's execution registry is asked before every unit, under the lane's reservation: a unit
-  # an exclusive measurement holds the box against is skipped, not run (see unit_under_measurement).
+  # an exclusive measurement holds the box against is skipped, not run (see sweep_fleet_under_measurement).
   lane_names=
-  [ -z "$SWEEP_FLEET_FW" ] || lane_names=$(lane_fleet_names "$lane_host")
+  [ -z "$SWEEP_FLEET_FW" ] || lane_names=$(sweep_fleet_lane_names "$lane_host")
   for unit in "${UNITS[@]}"; do
     IFS=: read -r machine backend host <<<"$unit"
     [ "$machine" = "$lane" ] || continue
@@ -2987,12 +2450,12 @@ run_lane() { # machine -- only ever as a background job: it ends in `exit`
       # Unquoted on purpose: the names are ssh aliases and a fleet box name, which never hold a space
       # or a glob character, and each must reach the reader as its own argument.
       # shellcheck disable=SC2086
-      unit_under_measurement $lane_names
+      sweep_fleet_under_measurement $lane_names
       case $? in
         0)
           say "  $machine/$backend: skip (box ${lab_box:-$SWEEP_FLEET_BOX} under an exclusive measurement: $MEASUREMENT_HOLDERS)"
           record "$machine" "$backend" skip 0
-          update_unit_state "$machine" "$backend" skip
+          sweep_state_update "$machine" "$backend" skip
           flush_lane_output || die "cannot publish the $machine/$backend summary to stdout"
           continue
           ;;
@@ -3057,7 +2520,7 @@ done
 # lock contract (a broken one refuses the run here, with no record), and which fleet-worker.sh reads
 # the execution registry the lanes consult before each unit.
 lab_contract_check
-fleet_probe
+sweep_fleet_probe
 
 # Lanes, in first-appearance order of the table's machine column: a new box or
 # a second backend on an existing box lands in the right lane with no other edit.

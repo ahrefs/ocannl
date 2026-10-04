@@ -224,7 +224,13 @@ files.
   `lukstafi/ocannl-staging`, `gh-ocannl-NNN` for upstream issues cited as facts about the codebase,
   and `ahrefs/ocannl#NNN` for other upstream issue mentions. A bare `#NNN` silently resolves against
   whichever repository renders the note, so the agent-notes scan refuses it outside code examples.
-  Hashless `PR NNN`/`issue NNN` forms name no repository either and do not belong in the notes.
+  The same scan rejects literal hashless `PR NNN`/`issue NNN` labels (gh-ocannl-932): the label is
+  case-insensitive, the separator is one or more ASCII spaces or tabs on the same physical line,
+  and neither end touches an ASCII alphanumeric or underscore. Code spans, fences and HTML comments
+  use the existing lexer exemptions; a literal label inside a link or surrounded by formatting
+  still fails. This is a source-level contract: entities, escapes, intervening markup and soft
+  line breaks are not decoded into labels. Use the canonical qualified spellings even when a
+  rendered-only label would escape this bounded check.
 - For a measurement or report PR, substance stabilizes early: two full review rounds plus one
   verdict-stability check, after which findings are answered rather than actioned unless they touch
   validity, consequence, or arithmetic (validated on the gh-ocannl-530 campaign, where rounds 5–7 were

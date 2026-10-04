@@ -545,6 +545,36 @@ class TensorizationTest(unittest.TestCase):
             "mma_best_ms": 1.0, "terminal_failure": None,
         }
 
+    def test_untuned_compiled_census_reaches_the_verdict(self):
+        for label, verdict in [("tensorized", "TENSORIZED"),
+                               ("scalar-fallback", "SCALAR-FALLBACK"),
+                               ("not-requested", "NOT-REQUESTED")]:
+            with self.subTest(label=label):
+                cell = result("ocannl", "metal", "default", [1.0])
+                cell["shipped_mma"] = self.mma(label, 4, 2)
+                self.assertEqual(orchestrate.tensorization_verdict(cell), verdict)
+                orchestrate.tensorization_check([cell])
+                self.assertEqual(cell["tensorization"], verdict)
+
+    def test_mismatch_notice_names_tuned_and_untuned_variants(self):
+        untuned = result("ocannl", "metal", "default", [1.0])
+        untuned["shipped_mma"] = self.mma("scalar-fallback", 2, 2)
+        tuned = self.cell([self.arm("A", True, "scalar-fallback", 2, 2)])
+        mismatches = orchestrate.tensorization_check([untuned, tuned])
+        notice = orchestrate.tensorization_notice(mismatches)
+        self.assertIn("2 cell(s)", notice)
+        self.assertIn("metal/default", notice)
+        self.assertIn("metal/tuned", notice)
+        self.assertNotIn("tuned cell(s)", notice)
+
+    def test_top_level_census_overrides_legacy_tuned_census(self):
+        cell = self.cell([self.arm("A", True, "tensorized")],
+                         shipped_mma=self.mma("tensorized", 4))
+        cell["shipped_mma"] = self.mma("scalar-fallback", 4, 4)
+        self.assertEqual(orchestrate.tensorization_verdict(cell), "SCALAR-FALLBACK")
+        cell["shipped_mma"] = None
+        self.assertEqual(orchestrate.tensorization_verdict(cell), "UNKNOWN")
+
     def test_a_declined_tensorize_is_not_reported_as_a_tensorized_timing(self):
         # The defect: the schedule asked for tensor cores, every Tile_mma rendered the lane-0
         # scalar loop, and the row still carried a tensorized variant name.

@@ -78,7 +78,7 @@ let () =
   in
   let open Operation.At in
   ignore
-    (H.measure_and_emit ~protocol:(H.protocol_of_st st) ~backend
+    (H.measure_and_emit ~routines ~protocol:(H.protocol_of_st st) ~backend
        ~variant:
          (* Mirror bench_mlp: the scheduling variant alone. orchestrate renders precision as its own
             report column and composes the two axes itself (gh-ocannl-539), so a reduced-precision

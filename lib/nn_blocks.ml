@@ -718,22 +718,45 @@ let%op conv_bn_relu ~label ?(kernel_size = 3) ?(stride = 1) () =
   fun ~train_step x -> relu (bn ~train_step (conv x))
 
 (** Residual block for ResNet-style architectures. Features skip connections that help with gradient
-    flow in deep networks. *)
-let%op resnet_block ~label ?(stride = 1) () =
-  let conv1 = conv2d ~label:("conv1" :: label) ~kernel_size:3 ~stride () in
+    flow in deep networks. Both convolutions use [out_channels], or preserve the input channel row
+    when it is omitted. An explicit [out_channels] selects a projection shortcut, including at
+    stride 1; otherwise the shortcut is projected only when downsampling. *)
+let%op resnet_block ~label ?(stride = 1) ?out_channels () =
+  let conv1 = conv2d ~label:("conv1" :: label) ~kernel_size:3 ~stride ?out_channels () in
   let bn1 = batch_norm2d ~label:("bn1" :: label) () in
-  let conv2 = conv2d ~label:("conv2" :: label) ~kernel_size:3 ~stride:1 () in
+  let conv2 = conv2d ~label:("conv2" :: label) ~kernel_size:3 ~stride:1 ?out_channels () in
   let bn2 = batch_norm2d ~label:("bn2" :: label) () in
   let identity =
-    if Int.( > ) stride 1 then
-      (* Need to downsample the skip connection *)
-      let downsample_conv = conv2d ~label:("downsample" :: label) ~kernel_size:1 ~stride () in
+    if Int.( > ) stride 1 || Option.is_some out_channels then
+      let downsample_conv =
+        conv2d ~label:("downsample" :: label) ~kernel_size:1 ~stride ?out_channels ()
+      in
       let downsample_bn = batch_norm2d ~label:("downsample_bn" :: label) () in
       fun train_step x -> downsample_bn ~train_step (downsample_conv x)
     else fun _train_step x -> x
   in
   fun ~train_step x ->
-    let out = conv1 x |> bn1 ~train_step |> relu |> conv2 |> bn2 ~train_step in
+    (* Capture channel rows without forcing inference: upstream tensors may still have open shapes.
+       The identity permutations retain spatial and batch axes verbatim. *)
+    let x =
+      if Option.is_none out_channels then x ++ "... | h, w, ..ic.. => ... | h, w, ..ic.." [ "ic" ]
+      else x
+    in
+    let hidden = conv1 x in
+    let hidden =
+      if Option.is_none out_channels then
+        hidden ++ "... | h, w, ..hc.. => ... | h, w, ..hc.." [ "hc" ]
+      else hidden
+    in
+    let out = hidden |> bn1 ~train_step |> relu |> conv2 |> bn2 ~train_step in
+    let out =
+      if Option.is_none out_channels then (
+        let out = out ++ "... | h, w, ..oc.. => ... | h, w, ..oc.." [ "oc" ] in
+        Shape.set_equal hc oc;
+        Shape.set_equal ic oc;
+        out)
+      else out
+    in
     relu (out + identity train_step x)
 
 (** LeNet-style architecture for simple image classification (e.g., MNIST). Classic architecture:

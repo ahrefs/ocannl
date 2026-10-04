@@ -306,35 +306,28 @@ else
 fi
 
 
-# Drop the sign guard: the interval arithmetic goes back to reporting whatever
-# the subtraction says, so the two skipped jobs print negative durations.
-sign_mutant=$(mutant negative-durations '
-  index($0, "return d if d >= 0 else None") { dropped++; next }
-  index($0, "d = (datetime.strptime(end") { sub(/d = /, "return "); changed++; print; next }
-  { print }
-  END { if (changed != 1 || dropped != 1) exit 9 }')
-if [ -n "$sign_mutant" ]; then
-  expect_rejected "negative interval printed as a duration" "$sign_mutant" \
-    oracle_explicit_run '^ *-1m59s  Build \(macos'
-else
-  report 1 "negative control: negative interval printed as a duration" \
-    "could not build the mutant"
-fi
-
-# Keep the sign guard but restore the old label, which answered a job with no
-# duration by naming its status -- `(completed)` for a skipped job, which reads
-# as a report rather than as its absence.
-label_mutant=$(mutant status-label '
-  index($0, "label = label_for(job, total)") { print repl; changed++; next }
-  { print }
-  END { if (changed != 1) exit 9 }' \
-  -v "repl=    label = human(total) if total is not None else '(' + str(job.get('status')) + ')'")
-if [ -n "$label_mutant" ]; then
-  expect_rejected "no duration reported as (completed)" "$label_mutant" \
-    oracle_explicit_run '^\(completed\)  Build \(macos'
-else
-  report 1 "negative control: no duration reported as (completed)" \
-    "could not build the mutant"
-fi
+# Mutate the shared reader beside a copy of the real shell entry point.
+make_mutant() {
+  local name=$1
+  mkdir -p "$TMP/$name"
+  cp "$SRC" "$TMP/$name/ci-times.sh"
+  python3 - "$HERE/ci-timing.py" "$TMP/$name/ci-timing.py" "$name" <<'PYTHON'
+from pathlib import Path
+import sys
+source = Path(sys.argv[1]).read_text()
+if sys.argv[3] == "negative-durations":
+    source = source.replace("return d if d >= 0 else None", "return d")
+else:
+    source = source.replace('status != "completed"', 'True')
+Path(sys.argv[2]).write_text(source)
+PYTHON
+  printf '%s' "$TMP/$name/ci-times.sh"
+}
+sign_mutant=$(make_mutant negative-durations)
+expect_rejected "negative interval printed as a duration" "$sign_mutant" \
+  oracle_explicit_run '^ *-1m59s  Build \(macos'
+label_mutant=$(make_mutant status-label)
+expect_rejected "no duration reported as (completed)" "$label_mutant" \
+  oracle_explicit_run '^\(completed\)  Build \(macos'
 
 finish

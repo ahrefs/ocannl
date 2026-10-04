@@ -52,6 +52,7 @@ backend_golden_family_scan.ml has exactly the explicitly assigned refusal contro
 backend_golden_family_scan.ml: [scanner-refusal:2fcd4d491da746e829dc7cec63905091] self-certifying and provenance (claim) is catalogued beside backend_golden_family_scan.expected: true
 bin_smoke_membership_scan.ml has exactly the explicitly assigned refusal controls: true
 bin_smoke_membership_scan.ml: [scanner-refusal:9446215c7b3c2270741bbb1cd8300733] executable exactly once (claim) is catalogued beside bin_smoke_membership_scan.expected, bin_smoke_membership_scan_control.expected: true
+bin_smoke_membership_scan.ml: [scanner-refusal:75093564cde01f102b3c81d2ebde6ccd] synthetic public executable (claim) is catalogued beside bin_smoke_membership_scan.expected, bin_smoke_membership_scan_control.expected: true
 changelog_unreleased_scan.ml has exactly the explicitly assigned refusal controls: true
 changelog_unreleased_scan.ml: [scanner-refusal:29e846ac8743ceba34a4cdcd5c90a431] CHANGES.md (claim) is catalogued beside changelog_unreleased_scan.expected: true
 changelog_unreleased_scan.ml: [scanner-refusal:2a02d6286a27aef4f8d7e61e279f8c4e] a two-space continuation (claim) is catalogued beside changelog_unreleased_scan.expected: true
@@ -128,6 +129,8 @@ census_total_ratchet.ml: [scanner-refusal:a0e95a750efaba5e8577d41dae60ceaf] one-
 census_total_ratchet.ml: [scanner-refusal:4166c0bca69640c175777244011fc4e2] that allows nothing (claim) is catalogued beside census_total_ratchet.expected: true
 census_total_ratchet.ml: [scanner-refusal:5aac880a61d2880852d33a0856daa83f] behind a member's (claim) is catalogued beside census_total_ratchet.expected: true
 census_total_ratchet.ml: [scanner-refusal:396ecaa5128a1569c6279921019721c1] directory the action (claim) is catalogued beside census_total_ratchet.expected: true
+census_total_ratchet.ml: [scanner-refusal:ac43499e46e4fb95bbea30412af203b6] counts remain review-visible (claim) is catalogued beside census_total_ratchet.expected: true
+census_total_ratchet.ml: [scanner-refusal:84d226496601429f470c41aba20a39c2] adopted-count allowance cannot (claim) is catalogued beside census_total_ratchet.expected: true
 census_total_ratchet.ml: [scanner-refusal:531d64a37eb2ccc8b4c3fee2c5a2fac9] quoted-source entry spans (claim) is catalogued beside census_total_ratchet.expected: true
 census_total_ratchet.ml: [scanner-refusal:22c73fdc7f08c48d003aabefe9f59d17] checked in contributes (claim) is catalogued beside census_total_ratchet.expected: true
 codegen_text_inventory.ml has exactly the explicitly assigned refusal controls: true

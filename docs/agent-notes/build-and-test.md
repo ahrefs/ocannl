@@ -276,6 +276,12 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   puts the risk: a floor that sees a stanza the walk does not fails a correct scan. Mirror the walk's
   own dropping rule at the tag site — a PATH tool is external wherever a `chdir` sends it, so the
   walk places no site and the floor must record nothing.
+  Executable IDENTITY has a different origin from that process's working directory: a literal
+  `./probe.exe` follows `chdir`, while `%{dep:probe.exe}` (or a named dependency) resolves from its
+  stanza. `Dune_stanza_scan.Runs_dependency` preserves that origin, and `command_file_path` is the
+  shared resolution used by runner matching; applying the cwd to an expansion a second time hid
+  `startup_streams`' bootstrap runner from the ambient census (gh-ocannl-982). Configuration search
+  still follows the action cwd, so keep it on the site even for a dependency-expanded program.
   And keep the rule's DECISION somewhere synthetic text can reach it. `env_var_deps`' XOR lived in
   its main loop, so "a rule running its test through `bash` is subject to the rule" could be argued
   and not asserted; `Scan.backend_rule_of` is that decision alone, with the diagnostics and tallies
@@ -405,7 +411,9 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   entry spans whole. Entries are floors and caps, fixture locations, text quoted from a source and
   citations, each with its reason, and one that allows nothing is stale; the header states the
   line-shaped boundary. When it refuses a line you added, move the count to stderr tagged
-  `(not part of the golden)`; add an entry only for a number that is no quantity of the repository. Its first
+  `(not part of the golden)`; add an entry only for a number that is no quantity of the repository.
+  The deliberate exception is `ll_test_ratchet`'s per-source adopted residual counts (gh-ocannl-1090),
+  whose growth the golden exists to expose; its anchored allowance covers no corpus-wide total. Its first
   catch was the `FAILED: n checks` teardown total in `config_usage_scan_control`: a negative
   control whose failures ARE its golden ends through `Verdict.exit_negative_control`, which exits 1
   without that line. A one-digit count sits below the number boundary, so the scan also refuses the
@@ -771,6 +779,11 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   children that close their locks. The forged publication window records settle sleeps before
   checking reaping; `last` squatter/legacy lock cases end with a byte comparison of the fixture
   tree. Fixtures use `paths`/`lock-status`, identity-checked cleanup and bounded child waits.
+- `supervisor_perl` blocks INT/TERM/HUP/ALRM across its fork expression (gh-ocannl-1141): Perl
+  can deliver a deferred signal before assigning the returned pid. The parent restores the original
+  mask after assignment; the child restores it after resetting all four handlers to DEFAULT.
+  `tools/test-test-run.sh` leg 74 injects TERM into both branches, with unmasked orphan-lock and
+  inherited-handler duplicate-verdict controls. Reader cancellation legs wait for `FAKE_REACH_CALLS`.
 - **`/proc/locks` names a flock's ACQUIRER, not its holders** (gh-ocannl-1107): the lock lives on
   the open file description, so after `take_lock`'s perl exits the line keeps its dead pid (0 from
   inside a pid namespace; some kernels drop the row) while the supervisor, dune and a `setsid`
@@ -1372,6 +1385,10 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
 
 ## Hand-built IR tests
 
+- `ll_test_ratchet` prints an adopted-but-still-hand-building census (gh-ocannl-1090): the same
+  syntactic record and private-traversal counts, sorted by source path, for adopted sources with
+  either count nonzero. These golden rows are informative and promotable, with no growth cap;
+  unadopted migration debt retains its independent refusing caps and stale-exemption checks.
 - `Ll_test`'s traversal is the one place a new `Ir.Low_level` constructor is handled, and it now
   carries the queries the hand-built-IR tests used to write for themselves. `walk` takes a record of
   hooks: the construct-specific ones, a generic `?on_stmt`/`?on_scalar` for a counter that names its
@@ -2126,6 +2143,16 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   SKIP contract they share), here because the subject invokes `python3` under that exact name,
   which is not what every platform `dune runtest` covers calls it — so a host without one skips
   every leg rather than deciding none of them quietly.
+- Both timing tools use `tools/ci-timing.py` for interval parsing: missing, invalid and reversed
+  timestamps are unavailable, equal timestamps remain zero. Cross-run `tools/ci-durations.sh`
+  accepts `--job REGEX` and `--step REGEX` (Python regex search); the latter sums matching steps
+  per job and reports step minutes plus paired job/rest minutes and per-job share percentages.
+  Select renamed steps with an alternation; matched names and missing/unusable/unpaired counts
+  stay visible. Skipped alternatives are excluded before interval completeness; all-skipped
+  selections stay unavailable. Cancelled/failed jobs with usable times remain
+  separate conclusion groups. A share/rest sample needs a positive job interval and a step sum
+  no larger than it. Medians summarize per-job shares, not a ratio of aggregate medians.
+  `tools/test-ci-durations.sh` runs synthetic cross-run API fixtures in the shell-harness CI step.
 - The regular suite does not run the training integrations. `bigram`, `mlp_names`, `mlp_bn_names`,
   `circles_conv`, `fsm_transformer` and `transformer_names` sit on the `train` alias — a third
   tier beside `runtest` and `slow`, for runs that are toy-sized by intent but serialized on the
@@ -2242,6 +2269,10 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   `opam show --raw` block, so the line that moved between the two runs IS the package whose
   definition changed. That listing costs no extra opam call: it splits the one solver-wide
   `opam show --raw --sort` the digest already runs, on its `opam-version:` block boundary
+  outside quoted strings. Canonical raw output has no comments and indents nested fields;
+  its ordinary and triple-quoted strings still need quote/escape tracking, since descriptions
+  can hold column-zero marker and identity lines (gh-ocannl-921). The harness pins exact
+  hashes for that fixture and rejects both unquoted splitting and identity extraction.
   (~50ms for ~200 packages). A key over
   `hashFiles('*.opam')` alone is blind both to new compatible
   ordinary-package releases and to the
@@ -2393,6 +2424,14 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   pointer file, not a symlink, in anything that must work from Git Bash.
 
 ## The cross-machine sweep
+
+- Sweep endpoint and lock-contract helpers live in `tools/lab-map.sh`, registry reads in
+  `tools/fleet-registry.sh`, diagnostic normalization in `tools/sweep-fingerprint.sh`, and the
+  comparison cursor in `tools/sweep-unit-state.sh` (gh-ocannl-990). Their caller-owned variables
+  and callback dependencies are listed at each file's head. `runtest-sweep_components` exercises
+  the sourced functions without running a sweep; `bash test/operations/sweep_components.sh state`
+  (also `lab`, `fleet`, `fingerprint`) isolates one fixture. The default runs all four plus broken
+  component controls; `runtest-sweep_harness` remains the integration check.
 
 - `tools/sweep.sh` is the coverage for every backend CI does not run: cc and metal locally
   (the macOS host), cuda on rog, hip and then multidev_cc on minix, and hip again on tuf, all pinned
@@ -2609,7 +2648,7 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   how): a backend set in `test/config/ocannl_config`, or a reached stanza whose marker names one,
   counts as much as the environment. Under WSL2 `/dev/kfd` and `/dev/dri` are never present and `rocm-smi` always reports
   the driver as uninitialized — neither is evidence of a lost passthrough; `hipGetDeviceCount` is.
-  The cap itself is `tools/box-jobs.sh`, the single source `tools/sweep.sh`'s `unit_jobs` and
+  The cap itself is `tools/box-jobs.sh`, the single source its `box_jobs_sweep_jobs` helper and
   `tools/test-run.sh` both read, so the sweep's width and a manual run's cannot drift
   (`OCANNL_TOOL_SWEEP_JOBS=<n>` still overrides the sweep's for one run). It is applied to the
   test phase only: `test_cmd` compiles under `@check` at full width first, since the cap bounds
@@ -2756,7 +2795,7 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   the HIP column records module-load and stream-creation refusals that did abort stanzas. Read an
   earlier claim that a burst was the box's only one as an artifact of `journalctl -k`, which answers
   for the current boot alone; the census wants `journalctl -b <n>` per boot. Nor is a full-width
-  unit evidence for a `unit_jobs` cap on `rog-nv:cuda`: the 09-11 burst of 10 lost no stanza, and a
+  unit evidence for a `box_jobs_sweep_jobs` cap on `rog-nv:cuda`: the 09-11 burst of 10 lost no stanza, and a
   forced full-scope unit at full width on 2026-09-17 (`--slow --force --only cuda`, 3321 s, ref
   `fa5116209`) passed with zero refusals in its own window. The serial rerun covers the case a cap
   would not.
@@ -3143,6 +3182,12 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   above an unrelated test's failure and read as its cause.
 
 ## Test support and placement
+
+- `Fresh_process` (gh-ocannl-910) owns synchronous fresh-child capture for host-only probes:
+  separate temporary stream files, absolute executable resolution, status-plus-causal-text matching
+  and exception cleanup. `report` prefixes every echoed child line, so its `STOPPED EARLY`, `FAIL:`
+  and `FAILED:` markers cannot be read as the parent's Verdict report by `tools/mutation-run.sh`.
+  Deadline, custom-environment and concurrent-process harnesses keep their own contracts.
 
 - `ll_test_ratchet` (gh-ocannl-964) derives test sources from `Source_inventory`, harness membership
   from owning Dune stanza groups (including parent `subdir` blocks and `select` target-to-arm

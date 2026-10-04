@@ -155,6 +155,15 @@ ok: exemption -- two bullets agreeing past the display length keep distinct keys
 ok: exemption -- a finished bullet has no finding to key
 ok: citations -- a bare numeric citation
 ok: citations -- compact PR and issue labels are still unqualified
+ok: citations -- literal hashless labels
+ok: citations -- hashless labels ignore case and accept spaces or tabs
+ok: citations -- literal link labels remain unqualified even with a repository destination
+ok: citations -- formatting around a whole literal label leaves the token intact
+ok: citations -- hashless labels have whole identifier boundaries
+ok: citations -- hashless code examples are inert
+ok: citations -- a code span may carry a hashless label across a line break
+ok: citations -- the existing bare-hash rule still reads a decimal entity literally
+ok: citations -- rendered-only hashless labels are outside the source dialect
 ok: citations -- the canonical issue and PR forms
 ok: citations -- a hash inside a code span
 ok: citations -- a hash inside a fenced block
@@ -206,6 +215,7 @@ ok: index -- a file no row links
 ok: index -- two rows for one file
 ok: index -- a file that does not link back to the index
 ok: index -- a bare citation reaches the whole scan
+ok: index -- a hashless citation reaches the whole scan
 ok: index -- the same bullet in two files
 ok: index -- the same bullet re-wrapped
 ok: index -- two bullets opening alike and diverging

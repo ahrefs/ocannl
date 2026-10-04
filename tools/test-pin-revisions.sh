@@ -141,7 +141,17 @@ case " $* " in
         'version: "1.0"' \
         'description: """' \
         'The alpha definition has a multi-line description.' \
-        'Its fields are deliberately out of order.' \
+        'Its fields are deliberately out of order.'
+      if [ "${FAKE_SHOW_FIXTURE:-complete}" = embedded-markers ]; then
+        printf '%s\n' \
+          'A single " and a double "" quote are ordinary text.' \
+          'Escaped terminator: \"""; escaped backslash: \\' \
+          'opam-version: "9.9"' \
+          'name: "spoof-alpha"' \
+          'version: "9.9"' \
+          '# A hash inside this string is text, too.'
+      fi
+      printf '%s\n' \
         '"""' \
         'name: "alpha"' \
         'url {' \
@@ -155,7 +165,14 @@ case " $* " in
         '}' \
         'description: """' \
         'The beta definition puts its URL before its identity.' \
-        'This text keeps the definition realistically multi-line.' \
+        'This text keeps the definition realistically multi-line.'
+      if [ "${FAKE_SHOW_FIXTURE:-complete}" = embedded-markers ]; then
+        printf '%s\n' \
+          'opam-version: "9.9"' \
+          'name: "spoof-beta"' \
+          'version: "9.9"'
+      fi
+      printf '%s\n' \
         '"""' \
         'name: "beta"' \
         'maintainer: "beta@example.invalid"' \
@@ -331,6 +348,19 @@ oracle_partial_definitions_loud() { # oracle_partial_definitions_loud SUBJECT LA
     && lacks_match '^solution-digest=' "$dir/github-output"
 }
 
+oracle_embedded_markers() { # oracle_embedded_markers SUBJECT LABEL
+  local subject=$1 label=$2 dir="$TMP/runs/$2"
+  FAKE_SHOW_FIXTURE=embedded-markers run_subject "$subject" "$label" mixed-a ok
+  [ "$(cat "$dir/status")" -eq 0 ] \
+    && oracle_definition_digests "$dir" \
+    && ! grep -q 'spoof-' "$dir/stdout" \
+    && cmp -s "$TMP/expected-git-calls" "$dir/git.calls" \
+    && [ "$(grep -c -- ' show ' "$dir/opam.calls")" -eq 1 ] \
+    && grep -q '^  alpha\.1\.0 0589249ba6cb$' "$dir/stdout" \
+    && grep -q '^  beta\.2\.0 0210341b021a$' "$dir/stdout" \
+    && grep -q '^solution-digest=fc8f8f0ec7bf$' "$dir/github-output"
+}
+
 if oracle_happy "$SRC" shipping-happy mixed-a; then
   report 0 "opam 2.5.2 output: exact solution and pin digests"
   report 0 "local git+file pins: excluded from resolution and digest"
@@ -349,6 +379,11 @@ if oracle_partial_definitions_loud "$SRC" shipping-partial-definitions; then
   report 0 "partial opam show answer: fails loudly without a solution digest"
 else
   report 1 "partial opam show answer" "see $TMP/runs/shipping-partial-definitions"
+fi
+if oracle_embedded_markers "$SRC" shipping-embedded-markers; then
+  report 0 "multiline markers and escaped quotes: correct package labels and exact digests with one opam show"
+else
+  report 1 "multiline opam fields" "see $TMP/runs/shipping-embedded-markers"
 fi
 if oracle_deterministic "$SRC" shipping-order; then
   report 0 "pin ordering and duplicates: one stable resolution order and digest"
@@ -380,6 +415,14 @@ reason_project_only() {
 reason_definitions() {
   [ "$(cat "$TMP/runs/$1/status")" = 0 ] && lacks_match '^Definition digests:' "$TMP/runs/$1/stdout"
 }
+reason_embedded_split() {
+  [ "$(cat "$TMP/runs/$1/status")" -ne 0 ] \
+    && grep -q '^opam show returned 5 definitions for 3 requested packages$' "$TMP/runs/$1/stderr"
+}
+reason_embedded_identity() {
+  [ "$(cat "$TMP/runs/$1/status")" -eq 0 ] \
+    && grep -qE '^  (spoof-alpha\.1\.0|beta\.9\.9) ' "$TMP/runs/$1/stdout"
+}
 reason_solution_published() {
   [ "$(cat "$TMP/runs/$1/status")" = 0 ] && grep -q '^solution-digest=' "$TMP/runs/$1/github-output"
 }
@@ -399,6 +442,22 @@ if [ -n "$local_mutant" ]; then
   expect_rejected "removing local-pin exclusion is detected" "$local_mutant" oracle_happy "" reason_local_pin
 else
   report 1 "negative control: local-pin mutant constructed"
+fi
+
+split_mutant=$(mutant unquoted-definition-split \
+  '/^  outside && \/\^opam-version:/ { sub(/outside && /, ""); changed++ } { print } END { if (changed != 1) exit 9 }')
+if [ -n "$split_mutant" ]; then
+  expect_rejected "splitting multiline marker text is detected" "$split_mutant" oracle_embedded_markers "" reason_embedded_split
+else
+  report 1 "negative control: multiline-split mutant constructed"
+fi
+
+identity_mutant=$(mutant unquoted-definition-identity \
+  '/^  outside && n > 0 && (name|version) ==/ { sub(/outside && /, ""); changed++ } { print } END { if (changed != 2) exit 9 }')
+if [ -n "$identity_mutant" ]; then
+  expect_rejected "reading identity fields inside strings is detected" "$identity_mutant" oracle_embedded_markers "" reason_embedded_identity
+else
+  report 1 "negative control: multiline-identity mutant constructed"
 fi
 
 project_mutant=$(mutant project-package-filter \

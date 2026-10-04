@@ -196,10 +196,6 @@ let () =
   p "a new subdirectory in either package is in scope"
     (Scan.test_source "test/future/new.ml" && Scan.test_source "arrayjit/test/future/new.ml");
   let exe = Stdlib.Sys.argv.(1) in
-  let exe =
-    if Stdlib.Filename.is_relative exe then Stdlib.Filename.concat (Stdlib.Sys.getcwd ()) exe
-    else exe
-  in
   let root = Stdlib.Filename.temp_dir "ll ratchet control " "" in
   let write path data = Out_channel.write_all (Stdlib.Filename.concat root path) ~data in
   List.iter [ "test"; "arrayjit"; "arrayjit/test"; "arrayjit/lib" ] ~f:(fun dir ->
@@ -216,39 +212,52 @@ let () =
       done);
   write "test/dune" "(test (name new) (modules new))";
   let run ?(exempt = false) ?(permanent = false) () =
-    let out = Stdlib.Filename.temp_file "ll-ratchet" ".out" in
-    let fd = Unix.openfile out [ Unix.O_WRONLY; Unix.O_TRUNC ] 0o600 in
-    let pid =
-      Unix.create_process exe
-        [|
-          exe;
-          (if permanent then "--fixture-permanent"
-           else if exempt then "--fixture-exempt"
-           else "--fixture");
-          root;
-        |]
-        Unix.stdin fd fd
-    in
-    let _, status = Unix.waitpid [] pid in
-    Unix.close fd;
-    let text = In_channel.read_all out in
-    Unix.unlink out;
-    (status, text)
+    Fresh_process.run ~exe
+      [
+        (if permanent then "--fixture-permanent"
+         else if exempt then "--fixture-exempt"
+         else "--fixture");
+        root;
+      ]
   in
-  let check label ~exit ~message (status, text) =
+  let check label ~exit ~message child =
     let ok =
-      (match status with Unix.WEXITED n -> n = exit | _ -> false)
-      && String.is_substring text ~substring:message
+      Fresh_process.matches
+        ~stream:(if exit = 0 then `Stdout else `Stderr)
+        ~exit ~contains:[ message ] child
     in
-    if not ok then eprintf "%s captured output:\n%s\n" label text;
+    if not ok then Fresh_process.report ~label child;
     p label ok
   in
   write "test/new.ml" adopted;
+  let unlinked = run () in
   check "shipping scanner refuses the first unlinked record builder" ~exit:1
-    ~message:"test/new.ml: requires ll_test" (run ());
+    ~message:"test/new.ml: requires ll_test" unlinked;
+  let _, refusal_stdout, _ = unlinked in
+  p "migration diagnostics stay on stderr"
+    (Fresh_process.matches ~stream:`Stderr ~exit:1
+       ~contains:[ "test/new.ml records=1 traversals=0" ]
+       unlinked
+    && not (String.is_substring refusal_stdout ~substring:"test/new.ml records=1 traversals=0"));
   write "test/dune" "(test (name new) (modules new) (libraries ll_test))";
-  check "shipping scanner accepts adoption without golden churn" ~exit:0
-    ~message:"Adoption threshold:" (run ());
+  let census = run () in
+  check "shipping scanner reports remaining adopted records without refusing them" ~exit:0
+    ~message:"test/new.ml -- records=1 traversals=0" census;
+  let _, _, census_stderr = census in
+  p "adopted census is confined to stdout"
+    (not (String.is_substring census_stderr ~substring:"test/new.ml -- records=1 traversals=0"));
+  write "test/new.ml" (record ^ record ^ walker ^ walker ^ use);
+  check "growth of both adopted metrics stays visible and non-refusing" ~exit:0
+    ~message:"test/new.ml -- records=2 traversals=2" (run ());
+  write "test/new.ml" (walker ^ use);
+  check "adopted private traversals appear without record construction" ~exit:0
+    ~message:"test/new.ml -- records=0 traversals=1" (run ());
+  write "test/new.ml" use;
+  let status, text, _ = run () in
+  p "adopted sources with no remaining hand-built IR have no census row"
+    (Poly.equal status (Unix.WEXITED 0)
+    && not (String.is_substring text ~substring:"test/new.ml -- records="));
+  write "test/new.ml" adopted;
   check "shipping scanner prints the derived operand helpers that adopt nothing" ~exit:0
     ~message:
       "Ll_builders values outside the IR surface (adopt nothing): (none)\n\
@@ -261,6 +270,10 @@ let () =
     ~message:"test/new.ml: links ll_test but calls none of its IR surface" (run ());
   check "a linked-but-unused file is held to its migration row" ~exit:0 ~message:"control exemption"
     (run ~exempt:true ());
+  let status, text, _ = run ~exempt:true () in
+  p "migration debt is not repeated in the adopted census"
+    (Poly.equal status (Unix.WEXITED 0)
+    && not (String.is_substring text ~substring:"test/new.ml -- records="));
   write "test/new.ml" adopted;
   let base_stanza = "(test (name new) (modules new) (libraries ll_test))" in
   let selection ?(modules = "(modules choice)") ?(harness = "ll_test") () =
@@ -398,8 +411,8 @@ let () =
   check "new arrayjit debt requires explicit adoption" ~exit:1
     ~message:"arrayjit/test/new.ml: requires ll_test" (run ());
   write "arrayjit/test/dune" "(test (name new) (modules new) (libraries arrayjit.ll_builders))";
-  check "public arrayjit builders satisfy package adoption" ~exit:0 ~message:"Adoption threshold:"
-    (run ());
+  check "public arrayjit builders satisfy adoption and retain the remaining record census" ~exit:0
+    ~message:"arrayjit/test/new.ml -- records=3 traversals=0" (run ());
   write "arrayjit/test/dune" "(test (name new) (modules new) (libraries ll_builders))";
   check "private builder spelling does not satisfy package adoption" ~exit:1
     ~message:"arrayjit/test/new.ml: requires ll_test" (run ());

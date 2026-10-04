@@ -6,6 +6,7 @@ diagonal: the prologue instantiates the reduction (a loop of the reduction exten
 diagonal: both lattice neighbours are offered as flips: true
 diagonal: the footprint form is not offered where it is already chosen: true
 diagonal: the node's one candidate defaults to the footprint form: true
+diagonal: both valid flips stay unrefused: true
 diagonal: its materialize direction is open, so the placement floor stands: true
 diagonal: both flips are priced alike (one instantiation per read cell): true
 diagonal: the inlined arm really inlines (no scratch): true
@@ -89,6 +90,12 @@ rejection: the mismatched read commits the producer materialized: true
 rejection: the stranded prologue is a gather of the buffer (three buffer reads, no scope): true
 rejection: executed values are the column and the untouched zeros: true
 rejection: footprint and materialized arms agree: true
+stored-refusal: the footprint retracts to a cap with its template retained: true
+stored-refusal: inline attempt refuses the mismatched column: true
+stored-refusal: the stored pricing world records the actual inline refusal: true
+stored-refusal: ranking excludes the refused candidate: true
+stored-refusal: executed values match the written column and untouched cells: true
+stored-refusal: footprint retraction and materialized arms agree: true
 local-between: the reduction cap materializes the producer: true
 local-between: no scratch: true
 local-between: executed values fold the local's first value, then its second: true

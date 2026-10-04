@@ -351,8 +351,9 @@ files.
   seeds the site at all. Inside the full block (at 64 channels; at 16 the shortcut's conv is
   virtualized into its norm and is no site) cc does not fission it and every whole-routine seed
   declines — the operand `Stage` meets the 3x3 conv's second read of `x` — so the tuner times no
-  sketch for the shortcut there; GPU fissions it and the segment's seeds run. `resnet_block` itself
-  does not compile (no out-channel knob). `test/operations/schedule_strided_1x1` PINS the role
+  sketch for the shortcut there; GPU fissions it and the segment's seeds run.
+  `test/operations/schedule_strided_1x1` uses the public `resnet_block` with explicit `out_channels`
+  (gh-ocannl-1146) and PINS the role
   structure, the batch-1 refusal and every seed's parity (or typed decline, in the block); which
   seeds decline where it only reports on stderr, and the 16-channel virtualization is a manual
   observation (conv2d into batch_norm2d, 16 channels) that no test exercises.
@@ -499,8 +500,12 @@ files.
   benchmark harness prints it per segment in the per-kernel table, and the result line's `tune`
   arms carry `tensorization` + `mma_statements`, which `orchestrate.py` renders in the report's
   `mma` column (`SCALAR FALLBACK` / `NO MMA EMITTED` shouted) plus a `TENSORIZATION NOTICE`. What
-  that column reads is `tune.shipped_mma`, the census of the routine that was TIMED, not the arm
-  named as shipped — a crowned arm candidate is not always the shipped artifact: a gh-555 flip
+  that column reads is top-level `shipped_mma` for tuned and untuned cells, falling back to
+  `tune.shipped_mma` only in older records where the top-level key is absent (gh-ocannl-1132).
+  A present null census stays unknown. The census merges `compiled_step_routines`, including
+  conditional host-gated SGD before execution, without extra timing; the dominant-kernel filter
+  alone describes work observed in the measured window. It comes from compiled routines, not the
+  arm named as shipped — a crowned arm candidate is not always the shipped artifact: a gh-555 flip
   refinement ships under `shipped: "flip"` and is not an arm, and the `timing_ctx` path can fall
   back to the untuned default after crowning a winner. Same rule as "crowned is not shipped", one
   level down.

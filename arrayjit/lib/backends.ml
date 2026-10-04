@@ -475,15 +475,9 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
     Option.iter Backend.free_pool ~f:(fun free -> free device ~pool_id);
     Alloc_census.forget_pool ~device_id:device.Backend_intf.device_id ~pool_id
 
-  (* gh-ocannl-1125: where a host upload of a node the context does not hold yet lands. Each such
-     node used to get a pool of its own, so loading more parameters than Metal's [metal_max_pools]
-     with [Context.set_values] before any routine linked them left no routine able to bind them all.
-     They are bump-packed instead into the upload arenas of the context's LIFECYCLE -- the context
-     values sharing one [finalized] flag, which free their pools together, so no arena tenant can be
-     freed out from under a pool-mate (a compile's child starts fresh arenas: its parent frees its
-     own pools independently). Within a lifecycle, only a value holding an arena's last tenant
-     extends it ([upload_arena.last_tenant]), so sibling values -- two uploads into the same earlier
-     value -- never share an arena: releasing one frees nothing the other's own uploads live in.
+  (* gh-ocannl-1125: absent host-upload nodes share bump-packed arenas. Upload siblings retain their
+     common pools independently (gh-ocannl-1173). Only a value holding an arena's last tenant may
+     extend it, so branches cannot overlap allocations.
 
      First fit, among arenas of the same residency hint that this value may extend. The first arena
      of a residency hint is sized exactly to its node, so a lone upload costs what it always did;
@@ -496,7 +490,7 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
      Returns the location and the [release] that gives it back if the upload fails: a fresh arena is
      freed and forgotten, a bump into an existing one is rolled back (only if still on top, which it
      is: transfers into a lifecycle are not concurrent) and its pool-mates are left alone. A
-     finalized lifecycle's arenas are gone (see [finalize]), so a dead handle mints a fresh one. *)
+     released pool's arena is removed by [finalize]. Released handles must not be reused. *)
   let upload_slot (ctx : Backend.context) (tn : Tn.t) : Backend_intf.buffer_loc * (unit -> unit) =
     let device = ctx.device in
     let arenas = ctx.upload_arenas in
@@ -507,21 +501,19 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
       [%equal: Tn.memory_mode option] a.arena_mode mode
     in
     let fits (a : Backend_intf.upload_arena) =
+      let last_tenant, used = List.hd_exn a.tenants in
       same_mode a
-      && align_up a.used + size_in_bytes <= a.capacity
-      && Map.mem ctx.ctx_buffers a.last_tenant
+      && align_up used + size_in_bytes <= a.capacity
+      && Map.mem ctx.ctx_buffers last_tenant
     in
     match List.find arenas.arenas ~f:fits with
     | Some a ->
-        let before = a.used and before_tenant = a.last_tenant in
-        let offset = align_up before in
-        a.used <- offset + size_in_bytes;
-        a.last_tenant <- tn;
-        let release () =
-          if a.used = offset + size_in_bytes then (
-            a.used <- before;
-            a.last_tenant <- before_tenant)
-        in
+        let before = a.tenants in
+        let _, used = List.hd_exn before in
+        let offset = align_up used in
+        let appended = (tn, offset + size_in_bytes) :: before in
+        a.tenants <- appended;
+        let release () = if phys_equal a.tenants appended then a.tenants <- before in
         ({ pool_id = a.arena_pool_id; offset }, release)
     | None ->
         let cap = pool_cap () in
@@ -543,8 +535,7 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
             arena_pool_id = pool_id;
             arena_mode = mode;
             capacity;
-            used = size_in_bytes;
-            last_tenant = tn;
+            tenants = [ (tn, size_in_bytes) ];
           }
         in
         arenas.arenas <- a :: arenas.arenas;
@@ -749,38 +740,12 @@ let free_and_forget_pool device ~free_pool pool_id =
   free_pool device ~pool_id;
   Alloc_census.forget_pool ~device_id:device.device_id ~pool_id
 
-(* The one pool-freeing fold behind the context [finalize] and [Raise_backend.free_delta]
-   (gh-ocannl-767, unifying gh-ocannl-550's cleanup sites): frees the pools reachable through
-   [ctx_buffers] that this context/delta owns. Deduped by [pool_id] -- one pool holds several nodes
-   (gh-ocannl-344 bump packing / gh-ocannl-489 arenas), so the same id is reached through several
-   keys, and a second visit would free an already-freed slab. Skips keys for which [owned_elsewhere]
-   holds (the enclosing scope's buffers), and per-device constants -- compared by LOCATION, not key
-   presence: a host upload may give a tnode a context-owned working location even when an earlier
-   compile cached a CONSTANT location for the same key, and mistaking the working pool for that
-   constant leaks it (gh-ocannl-571's transfer negative control). [skip_pool] lets [finalize] honor
-   its retry ledger; [before_free]/[after_free] bracket each successful backend free (fault
-   injection, ledger recording -- [after_free] runs only when [free_pool] returned, so a raising
-   free is not recorded as done). *)
-let free_owned_pools ~device ~free_pool ~owned_elsewhere ?(skip_pool = fun _ -> false)
-    ?(before_free = fun _ -> ()) ?(after_free = fun _ -> ()) (ctx_buffers : ctx_buffers) : unit =
-  Map.fold ctx_buffers
-    ~init:(Set.empty (module Int))
-    ~f:(fun ~key ~data:(loc : buffer_loc) freed ->
-      if
-        (not (owned_elsewhere key))
-        && (not
-              (Option.exists
-                 (Hashtbl.find device.constant_buffer_cache key)
-                 ~f:(equal_buffer_loc loc)))
-        && (not (skip_pool loc.pool_id))
-        && not (Set.mem freed loc.pool_id)
-      then (
-        before_free loc.pool_id;
-        free_and_forget_pool device ~free_pool loc.pool_id;
-        after_free loc.pool_id;
-        Set.add freed loc.pool_id)
-      else freed)
-  |> (ignore : Set.M(Int).t -> unit)
+(* Uncommitted compile deltas have no upload siblings. Use the same owned-pool classification as
+   upload reference registration and context cleanup, freeing each pool once. *)
+let free_owned_pools ~device ~free_pool ~owned_elsewhere (ctx_buffers : ctx_buffers) : unit =
+  Set.iter
+    (owned_pool_ids ~device ~owned_elsewhere ctx_buffers)
+    ~f:(free_and_forget_pool device ~free_pool)
 
 (** Adds a scheduler and brings a lowered no-device backend on par with lowered device backends. *)
 module Add_device
@@ -1408,20 +1373,39 @@ let finalize (type dev runner event)
      retry skips the pool ids whose frees already returned successfully; backend frees are
      idempotent too, but relying on that would still call a raw deallocator twice. *)
   let cleanup () =
-    (* gh-ocannl-1125: the lifecycle's upload arenas die with it -- a later upload through a dead
-       handle of this lifecycle must not bump into a slab freed below. *)
-    ctx.upload_arenas.arenas <- [];
     Option.iter Backend.free_pool ~f:(fun free_pool ->
         Resource_fault_injection.hit Finalize_before_await;
         Backend.await ctx.device;
-        free_owned_pools ~device:ctx.device ~free_pool
-          ~owned_elsewhere:(fun key ->
-            Option.exists ctx.parent ~f:(fun pc -> Map.mem pc.ctx_buffers key))
-          ~skip_pool:(Set.mem ctx.released_pool_ids)
-          ~before_free:(fun _ -> Resource_fault_injection.hit Finalize_before_free)
-          ~after_free:(fun pool_id ->
-            ctx.released_pool_ids <- Set.add ctx.released_pool_ids pool_id)
-          ctx.ctx_buffers)
+        let owners = ctx.upload_arenas.pool_owners in
+        let pools =
+          owned_pool_ids ~device:ctx.device
+            ~owned_elsewhere:(fun key ->
+              Option.exists ctx.parent ~f:(fun pc -> Map.mem pc.ctx_buffers key))
+            ctx.ctx_buffers
+        in
+        Stdlib.Mutex.protect ctx.upload_arenas.owners_mutex (fun () ->
+            Set.iter pools ~f:(fun pool_id ->
+                if not (Set.mem ctx.released_pool_ids pool_id) then (
+                  let tips =
+                    Option.value (Hashtbl.find owners pool_id) ~default:[ ctx.upload_tip ]
+                  in
+                  let remaining =
+                    List.filter tips ~f:(fun tip -> not (phys_equal tip ctx.upload_tip))
+                  in
+                  if not (List.is_empty remaining) then (
+                    Hashtbl.set owners ~key:pool_id ~data:remaining;
+                    List.iter ctx.upload_arenas.arenas ~f:(fun a ->
+                        if a.arena_pool_id = pool_id then
+                          a.tenants <-
+                            List.drop_while a.tenants ~f:(fun (tn, _) ->
+                                not (List.exists remaining ~f:(fun tip -> Map.mem !tip tn)))))
+                  else (
+                    Resource_fault_injection.hit Finalize_before_free;
+                    free_and_forget_pool ctx.device ~free_pool pool_id;
+                    Hashtbl.remove owners pool_id;
+                    ctx.upload_arenas.arenas <-
+                      List.filter ctx.upload_arenas.arenas ~f:(fun a -> a.arena_pool_id <> pool_id));
+                  ctx.released_pool_ids <- Set.add ctx.released_pool_ids pool_id))))
   in
   if Atomic.compare_and_set ctx.finalized false true then
     match cleanup () with

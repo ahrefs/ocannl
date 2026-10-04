@@ -30,8 +30,8 @@
 #     summary     OUT/summary.md from the numbered passes' result lines (not the dry cells): median
 #                 p50 per cell, the p50 of each repeat, the widest p90/p10 of the cell's repeats, the
 #                 ratio to the same fixture's composed cell and to its two-pass cell, the shipped mma
-#                 census where the runner reports one (only a tuned cell carries `tune.shipped_mma`;
-#                 the untuned matrix's per-contraction status is the seg step's census), and the
+#                 census from `shipped_mma` for tuned and untuned compiled steps (falling back to
+#                 `tune.shipped_mma` for older tuned records), and the
 #                 losses' agreement with the composed cell.
 #   A measurement step needs `build` and `provenance` earlier in the same invocation: _build/ is
 #   ignored by git, so the clean-tree check cannot vouch for binaries an earlier checkout left
@@ -267,7 +267,8 @@ for (backend, fixture, treatment), reps in sorted(cells.items(), key=lambda kv: 
     spread = max(r["step_ms"]["p90"] / r["step_ms"]["p10"] for _, r in reps)
     comp = med((backend, fixture, "composed"))
     two = med((backend, fixture, "two-pass")) or med((backend, fixture, "two-pass-bwd"))
-    mma = (reps[0][1].get("tune") or {}).get("shipped_mma")
+    record = reps[0][1]
+    mma = record["shipped_mma"] if "shipped_mma" in record else (record.get("tune") or {}).get("shipped_mma")
     loss = ""
     cref = cells.get((backend, fixture, "composed"))
     if cref:

@@ -284,6 +284,9 @@ let dominant_kernel_object ?note ~ceiling (kernel : kernel option) =
 
 (** The result line [orchestrate.py] parses, as a string without its trailing newline.
 
+    [shipped_mma] inventories every compiled step routine, including conditional host-gated SGD,
+    independently of tuning and without measuring kernels. [None] reaches the wire as [null].
+
     [tune] is the already-built [tune] object (see [Bench_harness.tune_json]) or [None] for an
     untuned cell; [tokens_per_step] is present only for workloads that have one. The percentiles and
     [queued_ms] are milliseconds. [profile] is the name of the configuration profile this process
@@ -310,8 +313,8 @@ let dominant_kernel_object ?note ~ceiling (kernel : kernel option) =
     [dominant_kernel] is the already-built {!dominant_kernel_object}, or [None] — [null] on the wire
     — for a cell that did not run the instrument, which the report prints as a dash. *)
 let result_line ~backend ~variant ~precision ~profile ~regime_knobs ~workload ~compile_s ~searched
-    ?tokens_per_step ?tune ?simplify_fp_algebra ~p10 ~p50 ~p90 ~queued_ms ~timed_steps ~peak_memory
-    ?dominant_kernel ~losses () =
+    ?tokens_per_step ?tune ?shipped_mma ?simplify_fp_algebra ~p10 ~p50 ~p90 ~queued_ms ~timed_steps
+    ~peak_memory ?dominant_kernel ~losses () =
   let tokens_field =
     match tokens_per_step with Some t -> Printf.sprintf {|"tokens_per_step":%d,|} t | None -> ""
   in
@@ -335,11 +338,11 @@ let result_line ~backend ~variant ~precision ~profile ~regime_knobs ~workload ~c
           Printf.sprintf {|"%s"|} (string source) )
   in
   Printf.sprintf
-    {|{"framework":"ocannl","backend":"%s","variant":"%s","precision":"%s","profile":%s,"regime_knobs":%s,"workload":"%s","compile_s":%s,"searched":%b,%s%s%s"step_ms":{"p10":%s,"p50":%s,"p90":%s},"queued_step_ms":%s,"timed_steps":%d,"peak_memory_bytes":%s,"peak_memory_counter":%s,"peak_memory_source":%s,"dominant_kernel":%s,"losses":[%s]}|}
+    {|{"framework":"ocannl","backend":"%s","variant":"%s","precision":"%s","profile":%s,"regime_knobs":%s,"workload":"%s","compile_s":%s,"searched":%b,%s%s%s"step_ms":{"p10":%s,"p50":%s,"p90":%s},"queued_step_ms":%s,"timed_steps":%d,"peak_memory_bytes":%s,"peak_memory_counter":%s,"peak_memory_source":%s,"dominant_kernel":%s,"shipped_mma":%s,"losses":[%s]}|}
     (string backend) (string variant) (string precision) profile_field
     (regime_knobs_object regime_knobs)
     (string workload) (fixed compile_s) searched tokens_field tune_field algebra_field (num p10)
     (num p50) (num p90) (num queued_ms) timed_steps peak_bytes_field peak_counter_field
     peak_source_field
     (Option.value dominant_kernel ~default:"null")
-    (nums ~prec:9 losses)
+    (mma_object shipped_mma) (nums ~prec:9 losses)
