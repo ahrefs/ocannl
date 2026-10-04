@@ -62,12 +62,17 @@ autotune search and native fp16 arithmetic where supported. `approximate` adds n
 options, including TF32 on supported CUDA hardware, fast math on CPU, and attention rewrites
 that reduce intermediate storage. Check the resulting accuracy and speed on your workload.
 
-The approximate profile is opt-in and has no general speedup guarantee. In the
-[October 3 transformer benchmark report](benchmarks/report-gh720-transformer.md), approximate
-f32 improves Metal inference at all three measured sequence lengths, while HIP is slower at
-all eight endpoints and Metal training is neutral or slower. Those are default-schedule,
-whole-profile comparisons. The report retains parity failures, memory measurements and
-incomplete CPU cells alongside the successful results.
+Start with the default numerics; the approximate profile is opt-in and has no general speedup
+guarantee. The [October 3–4 tuned inference comparison](benchmarks/report-tagline-gpt2.md)
+measured `gpt2_mini` f32 at **3.504 ms exact versus 4.493 ms approximate on CUDA** (28% slower),
+**8.334 versus 7.457 ms on Metal** (11% lower latency), and **4.757 versus 4.692 ms on
+unified-memory HIP** (essentially neutral). Discrete-HIP master timings failed the clean-replay
+requirement, and the campaign did not produce controlled training measurements.
+
+The separate [October 3 default-schedule sweep](benchmarks/report-gh720-transformer.md)
+measured approximate f32 slower at all eight HIP endpoints, with Metal inference improvements
+but neutral or slower training. Both reports retain failures and missing cells. These are
+whole-profile comparisons, not isolated rewrite effects.
 
 ### Using the tracing debugger with CUDA and HIP computations
 
@@ -77,13 +82,14 @@ NOTE: debug logging from CUDA or HIP in complex settings is a bit tricky, as it 
 
 ## Milestones
 
-See [ROADMAP.md](ROADMAP.md) for the detailed schedule, its history of rebalances and renumberings, and the venue history of the paper artifacts. GitHub issue assignments are the source of truth for release scope. **v1.0.2 was released on September 16, 2026**; **v1.1 is planned for October 4, 2026**, with the release focus **fused attention and better transformer scheduling**. It is followed by **v1.1.1** consolidation (October 16), **v1.1.2** non-transformer performance work (October 24), **v1.1.3** consumers (October 31), and **v1.2** (November 15), with follow-up **v1.2.1** and **v1.2.2** milestones still undated. Release dates are project-internal and aspirational — through v1.0 they were pinned to conference deadlines. The version sequence is `0.7 → 0.8 → 0.9 → 1.0 → 1.0.1 → 1.0.2 → 1.1 → 1.1.1 → 1.1.2 → 1.1.3 → 1.2 → 1.2.1 → 1.2.2`: version-number depth tracks release *scope* (feature releases take a second component, consolidation/robustness releases a third), not semver.
+See [ROADMAP.md](ROADMAP.md) for the detailed schedule, its history of rebalances and renumberings, and the venue history of the paper artifacts. GitHub issue assignments are the source of truth for release scope. **v1.1 was released on October 4, 2026: fused attention and better transformer scheduling**. It is followed by **v1.1.1** consolidation (October 16), **v1.1.2** non-transformer performance work (October 24), **v1.1.3** consumers (October 31), and **v1.2** (November 15), with follow-up **v1.2.1** and **v1.2.2** milestones still undated. Release dates are project-internal and aspirational — through v1.0 they were pinned to conference deadlines. The version sequence is `0.7 → 0.8 → 0.9 → 1.0 → 1.0.1 → 1.0.2 → 1.1 → 1.1.1 → 1.1.2 → 1.1.3 → 1.2 → 1.2.1 → 1.2.2`: version-number depth tracks release *scope* (feature releases take a second component, consolidation/robustness releases a third), not semver.
 
 ### Releases
 
 For more details, see [CHANGES](CHANGES.md).
 
-* **1.1 (planned October 4, 2026; unreleased): Fused attention and better transformer scheduling.**
+* **1.1 (released October 4, 2026): Fused attention and better transformer scheduling.**
+  * Same-machine reruns of the August commit show tuned exact `gpt2_mini` f32 inference **2.02× faster on CUDA, 1.31× on Metal and 1.66× on unified-memory HIP**. These measure progress since August, not solely since v1.0.2. CUDA remains 3.41× slower than exact-pinned `torch.compile` and 2.18× slower than tinygrad BEAM=2; Metal remains 4.40× and 4.04× slower respectively ([completed comparison](benchmarks/report-tagline-gpt2.md), [PR #944](https://github.com/lukstafi/ocannl-staging/pull/944)).
   * Default GPU schedules map more of each proved parallel loop chain to hardware; kernel fission preserves a statement's parallel mapping when merging would reduce it. The autotuner also searches an interior-batch grid layout for attention projections ([PR #909](https://github.com/lukstafi/ocannl-staging/pull/909), [PR #913](https://github.com/lukstafi/ocannl-staging/pull/913), [PR #915](https://github.com/lukstafi/ocannl-staging/pull/915)).
   * Opt-in fused attention backward removes quadratic probability-gradient and score-gradient buffers. A block-tiled online forward can run both contractions on GPU matrix units; automatic block selection keeps the two-pass rewrite on HIP after a measured regression ([PR #885](https://github.com/lukstafi/ocannl-staging/pull/885), [PR #905](https://github.com/lukstafi/ocannl-staging/pull/905), [PR #939](https://github.com/lukstafi/ocannl-staging/pull/939)). These paths trade recomputation and reassociation for storage, with workload-dependent throughput.
   * CPU SIMD keeps narrow-storage conversions and partial-vector tails in registers; HIP's default bf16 policy uses f32 accumulation, and privatized register tiles follow each backend's accumulator precision ([PR #840](https://github.com/lukstafi/ocannl-staging/pull/840), [PR #845](https://github.com/lukstafi/ocannl-staging/pull/845), [PR #882](https://github.com/lukstafi/ocannl-staging/pull/882), [PR #860](https://github.com/lukstafi/ocannl-staging/pull/860), [PR #880](https://github.com/lukstafi/ocannl-staging/pull/880)).
