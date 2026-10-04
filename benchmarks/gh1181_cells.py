@@ -184,6 +184,9 @@ def environment(a, fixtures):
         "beam": BEAM,
         "beam_parallel": o.DEFAULT_BEAM_PARALLEL,
         "started": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        # Every flag as given, so the protocol (--search-once, caps, arms) is read off the record
+        # whole rather than off whichever of them the keys above happen to name.
+        "args": {k: str(v) if isinstance(v, Path) else v for k, v in vars(a).items()},
     }
 
 
@@ -203,6 +206,8 @@ def measure(a):
     if "ocannl-aug-exact" in arms:
         if a.no_anchor:
             arms.remove("ocannl-aug-exact")
+            if not arms:
+                raise SystemExit("--no-anchor leaves no arm to run")
         else:
             trees["aug"] = a.aug.resolve()
             shas["aug"] = git_sha(trees["aug"])

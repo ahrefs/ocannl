@@ -381,6 +381,7 @@ once more to `checked.jsonl` (tuf's file has those duplicates; `timings.jsonl` d
 wrong-backend row is kept, marked, in `raw.jsonl` (none occurred), `--cell-timeout 0` no longer
 lifts the total cap, `summary.md` lists a requested arm that never timed as `n = 0`, and the
 driver now builds each used tree's `bench_gpt.exe` before any cell, refuses a tree with tracked
-modifications, and records the executable's digest and the host's own name in `env.json`. For the windows above those facts come from elsewhere: each ran on the host its
+modifications, and records the executable's digest, the host's own name and every flag as given in
+`env.json` (the measured records name `--search-once` through their rows and the commands above). For the windows above those facts come from elsewhere: each ran on the host its
 registry reservation names (the GPU names in `env.json` tell the two HIP boxes apart), from
 checkouts the prep reservations created at the stated commits and built there, untouched since.
