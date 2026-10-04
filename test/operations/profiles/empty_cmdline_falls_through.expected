@@ -1,3 +1,4 @@
+profile guard protects precisely the displayed keys and config-file selection: true
 profile                  = performance    (picked via the environment)
 autotune_search          = true           (profile 'performance' via the environment)
 autotune_rounds          = 4              (profile 'performance' via the environment)

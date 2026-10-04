@@ -2384,7 +2384,7 @@
 ;
 ; stderr alone is the subject; the executable's own stdout goes nowhere. Every key that shapes
 ; stderr is pinned on the commandline, which no environment variable can outrank -- the five of
-; `startup_streams.ml`'s `stderr_shaping_keys` less `profile`, whose only route to this stream is
+; `startup_streams.ml`'s `guarded_keys` less `profile`, whose only route to this stream is
 ; through the four that are pinned (a profile cannot beat an explicit key of equal immediacy, and
 ; an unknown ambient profile name aborts every OCANNL executable loudly rather than rewriting a
 ; golden). Pinning the whole list, not just the reported `log_config_sourcing` (Codex P2 on PR

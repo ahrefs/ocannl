@@ -81,7 +81,7 @@ ok: environment read -- the receiver is matched by its last component, so an ali
 ok: environment read -- and so does a bare call under an open
 ok: environment read -- prose naming the reader is not a read
 ok: environment read -- a string literal quoting a call is not a call
-ok: environment read -- a key taken from a resolvable list is the keys of that list
+ok: environment read -- a structural guard names precisely its literal keys
 ok: environment read -- the reader handed on as a value is a dynamic reach
 ok: environment read -- a partial application names no key here
 ok: environment read -- a literal read and a guard in one file
@@ -92,34 +92,47 @@ ok: environment read -- an alias of an alias still reaches it
 ok: environment read -- a local binding shadows the opened name
 ok: environment read -- an expression-scoped open does not reach past its body
 ok: environment read -- a qualified call is the reader whatever the file binds locally
-ok: key list -- a list bound at top level and iterated
-ok: key list -- the stdlib argument order too
-ok: key list -- a list written at the iteration
-ok: key list -- a projection of a table, appended to a literal
-ok: key list -- the reader handed straight to the iteration is answered as well
-ok: key list -- a list from another compilation unit is unresolved
-ok: key list -- a qualified list does not resolve through a local binding of the same name
-ok: key list -- an unknown higher-order call establishes nothing, decoy list or not
-ok: key list -- an incidental literal does not answer for an unresolved reach
-ok: key list -- a list whose elements are not literals is unresolved
-ok: key list -- a later rebinding does not reach backwards
-ok: key list -- and a use after the rebinding sees the new one
-ok: key list -- a parameter rebound inside the callback is not the iterated one
-ok: key list -- and an inner iteration binds its own
-ok: key list -- a local map does not project a table
-ok: key list -- a file that rebinds List resolves nothing
-ok: key list -- and one that rebinds fst does not project a table
-ok: key list -- a nested Other.List.iter is not the standard combinator
-ok: key list -- but a standard root in front of it is
-ok: key list -- a qualified projector that is not the standard fst does not project
-ok: key list -- a rebound standard root is a rebound trusted name
-ok: key list -- a qualified concatenation operator is not the standard one
-ok: key list -- an open of a library providing List is not a rebinding
-ok: key list -- an unresolvable rebinding is not reached past
-ok: key list -- and a use BEFORE it still sees the resolvable one
-ok: key list -- a conditional rebinding is tombstoned too
-ok: key list -- and a name that never denoted a list is not tombstoned by an unrelated binding
-ok: key list -- the binding does not escape the lambda it was established at
+ok: key list -- a local literal list immediately feeds the structural guard
+ok: key list -- a structural empty guard reads no keys
+ok: key list -- decoded literals and a following relationship check are supported
+ok: key list -- an extra reader in a match arm is checked independently
+ok: key list -- qualified parameter basenames cannot supply the callback key
+ok: key list -- a local nonliteral list is refused
+ok: key list -- a callback rebinding before the read violates the fixed shape
+ok: key list -- rebinding the structural iterator root is refused without scope resolution
+ok: key list -- a simultaneous local binding violates the single-list contract
+ok: key list -- a statement before the iteration violates adjacency
+ok: key list -- a receiver alias in a dynamic guard requires the canonical spelling
+ok: key list -- a local declaration of the iterator root is refused
+ok: key list -- a functor parameter taking the iterator root is refused
+ok: key list -- legacy form refused -- a list bound at top level and iterated
+ok: key list -- legacy form refused -- the stdlib argument order too
+ok: key list -- legacy form refused -- a list written at the iteration
+ok: key list -- legacy form refused -- a projection of a table, appended to a literal
+ok: key list -- legacy form refused -- the reader handed straight to the iteration is answered as well
+ok: key list -- legacy form refused -- a list from another compilation unit is unresolved
+ok: key list -- legacy form refused -- a qualified list does not resolve through a local binding of the same name
+ok: key list -- legacy form refused -- an unknown higher-order call establishes nothing, decoy list or not
+ok: key list -- legacy form refused -- an incidental literal does not answer for an unresolved reach
+ok: key list -- legacy form refused -- a list whose elements are not literals is unresolved
+ok: key list -- legacy form refused -- a later rebinding does not reach backwards
+ok: key list -- legacy form refused -- and a use after the rebinding sees the new one
+ok: key list -- legacy form refused -- a parameter rebound inside the callback is not the iterated one
+ok: key list -- legacy form refused -- and an inner iteration binds its own
+ok: key list -- legacy form refused -- a local map does not project a table
+ok: key list -- legacy form refused -- a file that rebinds List resolves nothing
+ok: key list -- legacy form refused -- and one that rebinds fst does not project a table
+ok: key list -- legacy form refused -- a nested Other.List.iter is not the standard combinator
+ok: key list -- legacy form refused -- but a standard root in front of it is
+ok: key list -- legacy form refused -- a qualified projector that is not the standard fst does not project
+ok: key list -- legacy form refused -- a rebound standard root is a rebound trusted name
+ok: key list -- legacy form refused -- a qualified concatenation operator is not the standard one
+ok: key list -- legacy form refused -- an open of a library providing List is not a rebinding
+ok: key list -- legacy form refused -- an unresolvable rebinding is not reached past
+ok: key list -- legacy form refused -- and a use BEFORE it still sees the resolvable one
+ok: key list -- legacy form refused -- a conditional rebinding is tombstoned too
+ok: key list -- legacy form refused -- and a name that never denoted a list is not tombstoned by an unrelated binding
+ok: key list -- legacy form refused -- the binding does not escape the lambda it was established at
 ok: could read the environment -- names the reader
 ok: could read the environment -- does not name it at all
 

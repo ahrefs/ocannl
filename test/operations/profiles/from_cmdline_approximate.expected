@@ -1,3 +1,4 @@
+profile guard protects precisely the displayed keys and config-file selection: true
 profile                  = approximate    (picked via the commandline)
 autotune_search          = true           (profile 'approximate' via the commandline)
 autotune_rounds          = 4              (profile 'approximate' via the commandline)

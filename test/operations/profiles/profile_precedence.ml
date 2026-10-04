@@ -37,20 +37,45 @@ let keys =
    gh-ocannl-605 dropped the dash-prefixed ones). The startup chatter keys
    (`suppress_welcome_message`, `log_config_sourcing`) need no guard: that output goes to stderr
    (gh-ocannl-581) and the rules capture stdout only. *)
-let guarded_keys = List.map keys ~f:fst @ [ "no_config_file" ]
+let guard () =
+  let guarded_keys =
+    [
+      "autotune_search";
+      "autotune_rounds";
+      "autotune_beam_width";
+      "model_default_schedule";
+      "tune_inline_flips";
+      "cc_backend_arch_flags";
+      "cc_backend_simd_flags";
+      "cc_backend_fp_contract";
+      "cc_backend_fast_math";
+      "cc_vector_bytes";
+      "fp16_arithmetic";
+      "tf32_matmuls";
+      "virtualize_max_visits";
+      "no_config_file";
+    ]
+  in
+  Base.List.iter guarded_keys ~f:(fun arg_name ->
+      match Utils.read_env_var arg_name with
+      | None -> ()
+      | Some (value, var) ->
+          eprintf
+            "profile_precedence: %s=%s is set in the environment and would outrank this test's \
+             ocannl_config; unset it to run the test.\n"
+            var value;
+          Stdlib.exit 1);
+  Verdict.p "profile guard protects precisely the displayed keys and config-file selection"
+    (List.equal String.equal
+       (List.sort guarded_keys ~compare:String.compare)
+       (List.sort (List.map keys ~f:fst @ [ "no_config_file" ]) ~compare:String.compare))
 
 let () =
   (* An OCANNL variable in the ambient environment outranks this directory's config file, so it
      would rewrite the golden -- and dune tracks no environment variable but OCANNL_BACKEND, so a
      stale output could be reused besides (Codex P2 on PR #291). Fail with the variable's name
      instead of producing a mystifying diff. `profile` is exempt: the env-picked rule sets it. *)
-  List.iter guarded_keys ~f:(fun arg_name ->
-      Option.iter (Utils.read_env_var arg_name) ~f:(fun (value, var) ->
-          eprintf
-            "profile_precedence: %s=%s is set in the environment and would outrank this test's \
-             ocannl_config; unset it to run the test.\n"
-            var value;
-          Stdlib.exit 1));
+  guard ();
   (match Utils.active_profile with
   | None -> printf "%-24s = %-14s (%s)\n" "profile" "" "unset"
   | Some (level, name, _) ->
