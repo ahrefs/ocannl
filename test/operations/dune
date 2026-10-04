@@ -1578,6 +1578,17 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ (name resnet_block)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules resnet_block)
+ (libraries base ocannl arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
  (name conv_bias_shapes)
  (package neural_nets_lib)
  (deps

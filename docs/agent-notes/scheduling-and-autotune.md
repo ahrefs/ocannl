@@ -351,8 +351,9 @@ files.
   seeds the site at all. Inside the full block (at 64 channels; at 16 the shortcut's conv is
   virtualized into its norm and is no site) cc does not fission it and every whole-routine seed
   declines — the operand `Stage` meets the 3x3 conv's second read of `x` — so the tuner times no
-  sketch for the shortcut there; GPU fissions it and the segment's seeds run. `resnet_block` itself
-  does not compile (no out-channel knob). `test/operations/schedule_strided_1x1` PINS the role
+  sketch for the shortcut there; GPU fissions it and the segment's seeds run.
+  `test/operations/schedule_strided_1x1` uses the public `resnet_block` with explicit `out_channels`
+  (gh-ocannl-1146) and PINS the role
   structure, the batch-1 refusal and every seed's parity (or typed decline, in the block); which
   seeds decline where it only reports on stderr, and the 16-channel virtualization is a manual
   observation (conv2d into batch_norm2d, 16 channels) that no test exercises.

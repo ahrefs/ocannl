@@ -1,0 +1,8 @@
+identity output dimensions: true
+identity executed shortcut matches oracle: true
+downsample output dimensions: true
+downsample executed shortcut matches oracle: true
+channel_change output dimensions: true
+channel_change executed shortcut matches oracle: true
+downsample_channel_change output dimensions: true
+downsample_channel_change executed shortcut matches oracle: true

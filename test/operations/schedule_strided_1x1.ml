@@ -116,24 +116,10 @@ let make s tag =
       let k = NTDSL.init ~l:(tag ^ "k") ~prec:s.prec ~i:[ 1; 1; s.ic ] ~o:[ s.oc ] ~f:fk () in
       (x, NTDSL.O.einsum ~label:[ tag ] spec x k)
   | `Resnet_block ->
-      (* [Nn_blocks.resnet_block ~stride]'s body verbatim — main branch, downsample shortcut,
-         residual add, final activation — except that every conv pins its out-channels. The
-         constructor leaves them to inference, which cannot close them ("You forgot to specify the
-         hidden dimension(s)" on the shortcut's bias), so [resnet_block] itself does not compile
-         standalone; nothing in the tree calls it. *)
-      let label = [ tag ^ "rb" ] and train_step = None in
-      let conv name ~kernel_size ~stride =
-        Nn_blocks.conv2d ~label:(name :: label) ~kernel_size ~stride ~out_channels:s.oc ()
+      let block =
+        Nn_blocks.resnet_block ~label:[ tag ^ "rb" ] ~stride:s.stride ~out_channels:s.oc ()
       in
-      let conv1 = conv "conv1" ~kernel_size:3 ~stride:s.stride in
-      let bn1 = Nn_blocks.batch_norm2d ~label:("bn1" :: label) () in
-      let conv2 = conv "conv2" ~kernel_size:3 ~stride:1 in
-      let bn2 = Nn_blocks.batch_norm2d ~label:("bn2" :: label) () in
-      let downsample_conv = conv "downsample" ~kernel_size:1 ~stride:s.stride in
-      let downsample_bn = Nn_blocks.batch_norm2d ~label:("downsample_bn" :: label) () in
-      let identity = downsample_bn ~train_step (downsample_conv x) in
-      let out = conv1 x |> bn1 ~train_step |> TDSL.O.relu |> conv2 |> bn2 ~train_step in
-      (x, TDSL.O.(relu (out + identity)))
+      (x, block ~train_step:None x)
 
 (* The block's parameters, made deterministic: every one gets small positive values varying with
    each of its indices (the batch norms' [gamma] and [beta] included). *)

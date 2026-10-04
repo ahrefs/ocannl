@@ -70,6 +70,7 @@ non-discard use; `unimplemented` must therefore be visible to callers as an unde
   lib/nn_blocks.ml:multi_head_attention ?mask_fill -- implemented
   lib/nn_blocks.ml:multi_head_attention ?pos_embed -- implemented
   lib/nn_blocks.ml:multi_head_attention ?temperature -- implemented
+  lib/nn_blocks.ml:resnet_block ?out_channels -- implemented
   lib/nn_blocks.ml:resnet_block ?stride -- implemented
   lib/nn_blocks.ml:rope_frequencies ?base -- implemented
   lib/nn_blocks.ml:softmax ?temperature -- implemented
