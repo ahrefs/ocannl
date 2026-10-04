@@ -2,6 +2,8 @@ editorial implicit modules are selected by the dead-export census: true
 select arms use the compiled target interface relationship: true
 public generator inputs follow Dune module ownership and explicit interfaces: true
 parser tokens and lexer body changes produce generated-interface review entries: true
+private generated modules are excluded while public peers remain visible: true
+Dune empty-interface policy changes produce publication-input review entries: true
 Dune module ownership moves produce conservative publication-input entries: true
 private ownership dependency and prose edits do not change publication entries: true
 a multiline value signature change is visible: true

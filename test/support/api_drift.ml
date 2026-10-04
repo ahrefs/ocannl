@@ -109,7 +109,20 @@ let derived_inputs ~paths dunes =
         List.filter owners ~f:(fun s ->
             Option.equal String.equal (Dune_stanza_scan.head s) (Some "library")
             && not (List.is_empty (Dune_stanza_scan.public_names s)))
-        |> List.concat_map ~f:(Dune_stanza_scan.modules_of ~directory_modules owners)
+        |> List.concat_map ~f:(fun owner ->
+            let modules = Dune_stanza_scan.modules_of ~directory_modules owners owner in
+            let private_modules =
+              match Dune_stanza_scan.field owner "private_modules" with
+              | None -> []
+              | Some terms ->
+                  Dune_stanza_scan.modules_of ~directory_modules:modules []
+                    (Sexp.List [ Sexp.Atom "library"; Sexp.List (Sexp.Atom "modules" :: terms) ])
+            in
+            let private_modules =
+              List.map private_modules ~f:String.lowercase |> Set.of_list (module String)
+            in
+            List.filter modules ~f:(fun name ->
+                not (Set.mem private_modules (String.lowercase name))))
         |> List.map ~f:String.lowercase
         |> Set.of_list (module String)
       in
@@ -130,7 +143,15 @@ let publication_inputs contents =
         && not (List.is_empty (Dune_stanza_scan.public_names stanza))
       then
         let fields =
-          [ "name"; "public_name"; "public_names"; "modules"; "wrapped"; "private_modules" ]
+          [
+            "name";
+            "public_name";
+            "public_names";
+            "modules";
+            "wrapped";
+            "private_modules";
+            "empty_module_interface_if_absent";
+          ]
           |> List.filter_map ~f:(fun field ->
               Option.map (Dune_stanza_scan.field stanza field) ~f:(fun value ->
                   Sexp.List (Sexp.Atom field :: value)))

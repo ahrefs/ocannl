@@ -226,6 +226,26 @@ let () =
       p "Dune-only public module moves produce publication-input review entries"
         (has (read ~until:moved owned) "public library first"
         && has (read ~until:moved owned) "public library second");
+      write "lib/dune"
+        "(ocamllex lexer public_lexer) (library (name lib) (public_name pkg.lib) (modules lexer \
+         public_lexer) (private_modules lexer))\n";
+      write "lib/lexer.mll" "{let value = 1}\nrule token = parse | eof { () }\n";
+      write "lib/public_lexer.mll" "{let value = 1}\nrule token = parse | eof { () }\n";
+      let generators = commit "Private and public generated modules" in
+      write "lib/lexer.mll" "{let value = true}\nrule token = parse | eof { () }\n";
+      let private_edit = commit "Change private generator input" in
+      p "private generator edits stay quiet"
+        (has (read ~until:private_edit generators) "0 declaration changes");
+      write "lib/public_lexer.mll" "{let value = true}\nrule token = parse | eof { () }\n";
+      let public_edit = commit "Change public generator input" in
+      p "public generator peers still produce entries"
+        (has (read ~until:public_edit private_edit) "lib/public_lexer.mll");
+      write "lib/dune"
+        "(ocamllex lexer public_lexer) (library (name lib) (public_name pkg.lib) (modules lexer \
+         public_lexer) (private_modules lexer) (empty_module_interface_if_absent))\n";
+      let empty_interface = commit "Give public generated module an empty interface" in
+      p "Dune-only empty-interface policy changes stay visible"
+        (has (read ~until:empty_interface public_edit) "empty_module_interface_if_absent");
       write "arrayjit/lib/cap.mli" "val";
       ignore (commit "Invalid source must refuse" : string);
       p "invalid source refuses the real historical reader"

@@ -60,6 +60,31 @@ let () =
          (changed "tensor/lexer.mll" "{let v = 1}\nrule token = parse | eof { () }"
             "{let v = true}\nrule token = parse | eof { () }")
        = 1);
+  let private_generator_dune =
+    "(ocamllex lexer) (menhir (modules parser)) (library (name parserlib) (public_name \
+     pkg.parserlib) (modules lexer parser) (private_modules Lexer))"
+  in
+  Verdict.p "private generated modules are excluded while public peers remain visible"
+    (List.equal String.equal
+       (Surface.sources ~dunes:[ ("tensor/dune", private_generator_dune) ] generator_paths)
+       [ "tensor/dune"; "tensor/parser.mly" ]
+    && List.equal String.equal
+         (Surface.sources
+            ~dunes:
+              [
+                ( "tensor/dune",
+                  "(ocamllex lexer) (menhir (modules parser)) (library (name parserlib) \
+                   (public_name pkg.parserlib) (modules lexer parser) (private_modules (:standard \
+                   \\ parser)))" );
+              ]
+            generator_paths)
+         [ "tensor/dune"; "tensor/parser.mly" ]);
+  Verdict.p "Dune empty-interface policy changes produce publication-input review entries"
+    (List.length
+       (changed "lib/dune" "(library (name lib) (public_name pkg.lib) (modules a))"
+          "(library (name lib) (public_name pkg.lib) (modules a) \
+           (empty_module_interface_if_absent))")
+    = 1);
   let owner_before =
     "(library (name first) (public_name pkg.first) (modules a)) (library (name second) \
      (public_name pkg.second) (modules b))"

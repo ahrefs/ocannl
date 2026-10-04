@@ -10,4 +10,7 @@ pattern PPX input changes remain visible: true
 declaration movement preserves ordering context: true
 non-documentation attribute payload changes are visible: true
 Dune-only public module moves produce publication-input review entries: true
+private generator edits stay quiet: true
+public generator peers still produce entries: true
+Dune-only empty-interface policy changes stay visible: true
 invalid source refuses the real historical reader: true
