@@ -452,10 +452,6 @@ let exempt_unmentioned_types =
     "Utils.settings";
   ]
 
-let in_scan_root path =
-  let directory = Stdlib.Filename.dirname path in
-  List.mem [ "arrayjit/lib"; "tensor"; "lib" ] directory ~equal:String.equal
-
 let require_implementations ~fail implementations =
   if List.is_empty implementations then (
     fail "no .mli-less implementation modules found under arrayjit/lib, tensor or lib";
@@ -541,17 +537,10 @@ let () =
     List.map source_paths ~f:(fun source ->
         (source, In_channel.read_all (Map.find_exn on_disk source)))
   in
-  let interfaces =
-    List.filter (List.map arguments ~f:fst) ~f:(String.is_suffix ~suffix:".mli")
-    |> Set.of_list (module String)
+  let implicit =
+    Scan.implicit_implementations (List.map arguments ~f:fst) |> Set.of_list (module String)
   in
-  let implementations =
-    List.filter sources ~f:(fun (source, _) -> in_scan_root source)
-    |> List.filter ~f:(fun (source, _) ->
-        match String.chop_suffix source ~suffix:".ml" with
-        | Some stem -> not (Set.mem interfaces (stem ^ ".mli"))
-        | None -> false)
-  in
+  let implementations = List.filter sources ~f:(fun (source, _) -> Set.mem implicit source) in
   if not (require_implementations ~fail:Verdict.fail implementations) then Stdlib.exit 1;
   let exports =
     List.concat_map implementations ~f:(fun (source, contents) ->

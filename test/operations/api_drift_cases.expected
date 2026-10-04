@@ -1,0 +1,8 @@
+editorial implicit modules are selected by the dead-export census: true
+a multiline value signature change is visible: true
+record fields and constructors retain their symbol spellings: true
+documentation and whitespace changes do not count as declarations: true
+nested signatures and includes stay in the checklist: true
+implicit lets externals and types including deriving changes are visible: true
+declaration removals and additions are distinct: true
+invalid OCaml refuses instead of reporting an empty inventory: true

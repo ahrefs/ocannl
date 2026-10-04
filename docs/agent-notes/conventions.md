@@ -19,6 +19,17 @@ files.
   always had — blank lines, `### ` subheadings, `- ` bullets and two-space continuations — and any
   other Markdown in it fails the scan by name rather than being parsed: the scan decides one
   grammar, so its imprecision cannot pass a bullet nobody checked.
+- Before writing an editorial catch-up, run `tools/api-drift.sh <since-rev> [until-rev]`
+  (gh-ocannl-946). It compares committed public source declarations at every first-parent step,
+  tagging each addition, removal or change with the commit SHA and subject (the merged PR number
+  where Git recorded one). Both endpoints must be on the same first-parent history; the end
+  defaults to `HEAD`. Its implicit-module inventory comes from the dead-export census, alongside
+  all interfaces in those roots. OCaml parsing preserves multiline signatures, types, record
+  fields, constructors and module declarations while discarding documentation-only edits.
+  This is a reading aid, not a compatibility gate: implementation bodies are kept because they
+  can change an inferred public type, and PPX-generated exports and inferred types still require
+  manual review. Record retired or renamed symbols in the resulting bullet so later API-removal
+  discussions have symbol-level evidence.
 - API stability is not promised and deprecation cycles are not run: exported surface that is dead,
   superseded or in the way is REMOVED, in whatever release finds it. The README's Development
   section states this for users; the practice behind it is `CHANGES.md`'s 1.0.2 `### Changed`, a

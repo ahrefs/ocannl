@@ -1,0 +1,6 @@
+merge attribution, multiline signatures, implicit exports and exclusions: pass
+reverted declarations retain both first-parent attribution points: pass
+adding an interface records retirement of the implicit source surface: pass
+removing an interface exposes the implementation surface: pass
+documentation-only edits, empty windows and invalid endpoints: pass
+invalid source refuses the real historical reader: pass
