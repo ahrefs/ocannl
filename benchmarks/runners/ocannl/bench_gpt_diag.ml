@@ -71,7 +71,13 @@ let () =
       ~init:(Set.empty (module Ir.Tnode))
       ~f:(fun nodes r -> Set.union nodes r.Context.outputs)
   in
+  let params =
+    Set.fold batch_loss.Tensor.params
+      ~init:(Set.empty (module Ir.Tnode))
+      ~f:(fun nodes p -> Set.add nodes p.Tensor.value)
+  in
   if snapshots then snapshot !ctx_ref "inputs" (Set.diff inputs outputs);
+  if snapshots then snapshot !ctx_ref "parameters-before" params;
   let batch_ref = IDX.find_exn (H.train_step_bindings routines) batch_n in
   let run step =
     batch_ref := step % n_batches;
@@ -79,15 +85,32 @@ let () =
     Context.sync !ctx_ref
   in
   (* Full-step controls precede isolated timing, which mutates gradients and parameters. *)
-  if H.env_flag "BENCH_STEPS" then
-    for step = 0 to 2 do
+  if
+    H.env_flag "BENCH_STEPS"
+    || Option.equal String.equal (Stdlib.Sys.getenv_opt "BENCH_STEPS") (Some "parity")
+  then
+    let steps =
+      match Stdlib.Sys.getenv_opt "BENCH_STEPS" with
+      | Some "parity" -> (H.protocol_of_st st).H.parity_steps
+      | _ -> 3
+    in
+    for step = 0 to steps - 1 do
       let t0 = Unix.gettimeofday () in
       run step;
       let open Operation.At in
       Stdio.printf "step %d: %.1f ms loss: %.7f\n%!" step
         ((Unix.gettimeofday () -. t0) *. 1000.)
         (!ctx_ref, batch_loss).@[0];
-      if snapshots && step = 0 then snapshot !ctx_ref "step0" outputs
+      if snapshots then (
+        (match routines with
+        | H.Host_gate (scaler, checksum, _, _) ->
+            Stdio.printf "gate step=%d optimizer_runs=%d scale=%h checksum=%h\n%!" step
+              !H.host_gated_optimizer_runs
+              (Mixed_prec.Loss_scaler.scale_value scaler)
+              (!ctx_ref, checksum).@[0]
+        | _ -> ());
+        snapshot !ctx_ref ("parameters-step" ^ Int.to_string step) params;
+        if step = 0 then snapshot !ctx_ref "step0" outputs)
     done
   else if H.env_flag "BENCH_SEG_TIMES" then run 0;
   if Option.is_none forward_opt then H.print_shipped_census shipped;

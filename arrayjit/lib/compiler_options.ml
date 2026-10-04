@@ -27,19 +27,21 @@ let clang_fast_math_options ~reassociate =
    overlap. Other architectures have not been measured. Keep unsupported-option failures visible
    through the normal HIPRTC error path; falling back to the corrupting compilation would be
    unsafe. *)
-let hip_load_wait_options ~target_arch =
-  match target_arch with
-  | Some arch when String.equal (List.hd (String.split_on_char ':' arch)) "gfx1102" ->
-      [ "-mllvm"; "-amdgpu-waitcnt-load-forcezero" ]
-  | _ -> []
+let hip_load_wait_options ~target_archs =
+  if
+    List.exists
+      (fun arch -> String.equal (List.hd (String.split_on_char ':' arch)) "gfx1102")
+      target_archs
+  then [ "-mllvm"; "-amdgpu-waitcnt-load-forcezero" ]
+  else []
 
-let hiprtc ~target_arch ~hip_include_options ~rocwmma_include_options ~uses_rocwmma ~with_debug =
+let hiprtc ~target_archs ~hip_include_options ~rocwmma_include_options ~uses_rocwmma ~with_debug =
   hip_include_options
   @ (if uses_rocwmma then rocwmma_include_options @ [ "-std=c++17" ] else [])
   (* These are compiler options rather than kernel-body pragmas so they also govern the bf16 and f16
      operators while the HIP headers are parsed. *)
   @ clang_fast_math_options ~reassociate:false
-  @ hip_load_wait_options ~target_arch
+  @ hip_load_wait_options ~target_archs
   @ if with_debug then [ "-g" ] else []
 
 (* nvrtc's opt-IN for floating-point reassociation. nvrtc accepts it (13.3 answers a

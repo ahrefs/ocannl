@@ -56,9 +56,13 @@ The compiler option forces load waits to zero; LLVM's
 [wait insertion source](https://github.com/llvm/llvm-project/blob/main/llvm/lib/Target/AMDGPU/SIInsertWaitcnts.cpp)
 defines the option. The workaround preserves storage and arithmetic precision,
 mask semantics and parity envelopes. It conservatively reduces load overlap;
-these correctness probes make no performance claim. The selector applies only
-to `gfx1102` (including feature suffixes), and the cache regime derives from
-that same selector. Other architectures have not been established as affected.
+these correctness probes make no performance claim. The selector applies to
+device sets containing `gfx1102` (including feature suffixes), and the cache
+regime derives from that same set and selector.
+Compilation is backend-wide and an artifact can link on any device, so mixed
+sets conservatively apply the guard even when HIPRTC targets another ordinal.
+Sets without `gfx1102` retain their compiler policy. Other architectures have
+not been established as affected.
 
 The flag was accepted by the measured HIPRTC version. An unsupported-option
 error remains a compiler failure with the effective option vector; there is no
@@ -66,6 +70,20 @@ retry with the unsafe option omitted. Removing or narrowing the workaround
 requires executed evidence with the replacement compiler, not just a version
 number. `hip_half_load` replays the consumer through the shipped pipeline three
 times with initialized inputs and NaN-poisoned output.
+
+At implementation `f69f9cb60d6e4f73a9cc8477bd424c96347735f6`, the shipped
+HIP half-load regression and existing half-softmax test passed. Two fresh,
+untuned s1024 inference processes returned the same four losses:
+`[7.1051445, 7.09284115, 7.0877161, 7.11898851]`, within the existing f16
+`0.002` relative envelope against the recorded CPU-F32 reference. Base training
+returned six finite losses but still missed that envelope; its final two losses
+repeated its first two. The s1024 training parity phase returned six finite
+losses, then exceeded its 90-second cap during subsequent dominant-kernel
+instrumentation, before emitting its result. That endpoint is a timeout, not a
+completed acceptance pass. The whole issue remains unresolved; this workaround
+addresses the independently reproduced load corruption. Parameter snapshots
+and host optimizer-gate state in `bench_gpt_diag` support the bounded follow-up
+on training. Correctness probes disable dominant-kernel instrumentation.
 
 Durable raw scripts, hashes, code objects, disassembly and logs are retained
 under `~/.local/state/issue-wave/wave2-20261004/1182-scratch` on TUF, with

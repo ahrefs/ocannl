@@ -100,7 +100,7 @@ let () =
     |> Ir.Compiler_options.render_metal
   in
   let hip_options =
-    Ir.Compiler_options.hiprtc ~target_arch:None ~hip_include_options:[] ~rocwmma_include_options:[]
+    Ir.Compiler_options.hiprtc ~target_archs:[] ~hip_include_options:[] ~rocwmma_include_options:[]
       ~uses_rocwmma:false ~with_debug:false
     |> Ir.Compiler_options.render
   in
