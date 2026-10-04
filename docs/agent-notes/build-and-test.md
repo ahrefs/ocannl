@@ -591,6 +591,12 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
 
 ## The harness, shells and processes
 
+- Shell harness checks capture failures with `command || rc=$?`, preserving the caller's
+  `errexit` state; an unconditional `set -e` after a check makes later unguarded failures
+  terminate a harness that started with only `set -u` (gh-ocannl-1178).
+  Shared `harness_cleanup` prints `aborted before finish (rc=N)` if `finish` never ran,
+  including signal exits, and still cleans scratch or identifies it with `--keep`.
+
 - `tools/test-run.sh` is the one way to run `dune runtest` / `dune build @slow` from a session;
   its header documents usage. It exists because every hand-rolled alternative has failed in
   practice, each differently: piping dune to `tail` reports tail's status (no pipefail), so
@@ -887,6 +893,9 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   formatter-error outcomes separately, each ending in its verdict line, and, where opam has dune
   and ocamlformat (CI's `fmt` job runs it after the install), runs a real project through `dune
   fmt` and then the wrapper, with the unforced build passing the same tree as its negative control.
+  setup-ocaml's switch is local to the checkout: `opam exec` from a scratch directory exits
+  50 (no switch) unless the harness first exports `OPAMSWITCH=$(cd <repo> && opam switch show)`.
+  Resolve the switch before leaving the checkout, as `test-fmt-check.sh` does (gh-ocannl-1178).
   Two files a formatter cannot handle are refused at the site rather than
   discovered in CI:
   a misplaced doc comment (ocamlformat declines the whole file) is a compile error under the root

@@ -40,13 +40,10 @@ chmod +x "$fixture"
 
 
 check() {
-  want=$1
-  label=$2
+  local want=$1 label=$2 output got=0 verdict last
   shift 2
-  set +e
-  output=$("$subject" "$fixture" "$@" 2>&1)
-  got=$?
-  set -e
+  # Capture the subject status without changing the caller's errexit state.
+  output=$("$subject" "$fixture" "$@" 2>&1) || got=$?
   if [ "$got" -ne "$want" ]; then
     echo "FAIL: $label exited $got, expected $want" >&2
     printf '%s\n' "$output" >&2
@@ -62,9 +59,20 @@ check() {
   esac
 }
 
-check 0 "clean formatter output" clean
-check 1 "invalid documentation warning" warning
-check 7 "formatter failure status preservation" failure
+for errexit in off on; do
+  for outcome in clean warning failure; do
+    case $errexit in off) set +e ;; on) set -e ;; esac
+    case $outcome in clean) want=0 ;; warning) want=1 ;; failure) want=7 ;; esac
+    before=$-
+    check "$want" "$outcome formatter output (errexit $errexit)" "$outcome"
+    if [ "$-" = "$before" ]; then
+      report 0 "$outcome preserves errexit $errexit"
+    else
+      report 1 "$outcome preserves errexit $errexit"
+    fi
+  done
+done
+set +e
 
 # A real project whose only fault is an invalid doc comment in otherwise
 # formatted code: `dune fmt` prints the warning once, promotes nothing, and

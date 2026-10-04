@@ -3,7 +3,7 @@
 # can use rejection checks without parsing arguments, installing traps or Dune.
 
 harness_args() {
-  KEEP=0 failures=0 skipped=0
+  KEEP=0 failures=0 skipped=0 harness_finished=0
   for arg in "$@"; do
     case $arg in
       --keep) KEEP=1 ;;
@@ -27,6 +27,7 @@ skip() { # LABEL REASON
   printf 'SKIP  %s\n      %s\n' "$1" "$2"
 }
 finish() {
+  harness_finished=1
   echo
   if [ "$failures" -eq 0 ]; then
     echo "all legs passed ($skipped skipped)"
@@ -36,6 +37,10 @@ finish() {
   exit $((failures > 0 ? 1 : 0))
 }
 harness_cleanup() {
+  local rc=$?
+  if [ "${harness_finished:-0}" != 1 ]; then
+    printf 'aborted before finish (rc=%s)\n' "$rc" >&2
+  fi
   # Callers release their owned children even with --keep.
   if declare -F cleanup_fixture >/dev/null; then cleanup_fixture; fi
   if [ "${KEEP:-0}" = 1 ]; then
