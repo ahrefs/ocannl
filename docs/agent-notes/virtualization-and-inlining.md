@@ -309,7 +309,12 @@ files.
   `Autotune.rank_flip_candidates` and `Memory_budget.fit` exclude (the proxy of a scalar reduction
   is its whole extent, so it used to rank first and take budget slots). The walk tags who refused:
   its own store verdict refuses the `Footprint` flip too, a read site the inliner cannot serve
-  (`13:`) only the `Inline` one. The ordering is otherwise as before: `specialize_proc` multiplies the one-read
+  (`13:`) only the `Inline` one. Stored worlds validate every live read too (gh-ocannl-1152):
+  a footprint may retract inside a virtual consumer's storage pass before instantiating that
+  read, leaving a cap-materialized node with a retained template and an unservable inline flip
+  (`footprint_materialization.ml`, stored-refusal row). Validation uses a per-world placement copy
+  because packed-uniform instantiation can materialize its counter. The ordering is otherwise as
+  before: `specialize_proc` multiplies the one-read
   count by the instantiations (read multiplicity, or `per_cell` for a footprint reading) and falls
   back to the proxy (reduction extent × multiplicity × transitive fan-in, `fa_modeled = false`) when
   the op count is only a bound. A test that stages a "decoy" or a budget cut on cost ORDER must build
