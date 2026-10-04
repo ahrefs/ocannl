@@ -56,6 +56,7 @@ ARMS = {
     "torch-defaults-eager": ("pytorch", None, "approximate", "eager"),
 }
 BEAM = 2
+RUNNER = "_build/default/benchmarks/runners/ocannl/bench_gpt.exe"
 COMPLETION_PASSES = 2
 
 
@@ -209,17 +210,20 @@ def measure(a):
                 raise SystemExit(f"--aug is at {shas['aug']}, not the August commit 7014dc44")
 
     # A row is stamped with its tree's HEAD, so that HEAD must be what runs: a tree with tracked
-    # modifications is refused, and each executable's digest is recorded, so a stale build is at
-    # least visible against the HEAD it is stamped with.
+    # modifications is refused, and the runner of every tree an arm uses is built from it here,
+    # before any cell (a no-op for a fresh build), so a checkout moved without a rebuild cannot
+    # time the previous revision's code. The digest of what then runs is recorded.
+    used = {ARMS[arm][1] for arm in arms if ARMS[arm][0] == "ocannl"}
     executables = {}
     for name, tree in trees.items():
         dirty = supporting_output(["git", "-C", str(tree), "status", "--porcelain",
                                    "--untracked-files=no"]).strip()
         if dirty:
             raise SystemExit(f"the {name} tree {tree} has tracked modifications:\n{dirty}")
-        exe = tree / "_build/default/benchmarks/runners/ocannl/bench_gpt.exe"
-        # Absent only when no arm of that tree runs; an OCANNL arm then fails at its cell.
-        executables[name] = {"path": str(exe), "sha256": raw_sha256(exe) if exe.exists() else None}
+        if name not in used:
+            continue
+        o.run_supporting(["dune", "build", "--root", ".", "./" + RUNNER], cwd=tree, check=True)
+        executables[name] = {"path": str(tree / RUNNER), "sha256": raw_sha256(tree / RUNNER)}
 
     # The fixture is the box's own copy, gated by DIGESTS.txt as every sweep's is: some declared
     # box's bytes, its content digest and origin stamped on every row. The raw sha256 is recorded
@@ -267,7 +271,8 @@ def measure(a):
             return None
         label = f"{workload}-r{repeat}-{arm}-{stage}"
         row, note = o.run_cell(label, [*pin, *cmd], env=env, cwd=cwd,
-                               timeout=min(a.cell_timeout, remaining),
+                               # A zero cell cap disables only the cell's own cap, never the total.
+                               timeout=min(a.cell_timeout, remaining) if a.cell_timeout else remaining,
                                on_incomplete=(o.ocannl_cache_note if arm.startswith("ocannl") else None))
         if row is None:
             fail(workload, arm, repeat, stage, note)
@@ -313,7 +318,7 @@ def measure(a):
                     reuse = a.search_once and repeat > 0
                     tuned_cache = (out / "caches" / workload / "r0" / arm) if a.search_once else cache
                     env["OCANNL_AUTOTUNE_CACHE_DIR"] = str(tuned_cache / "autotune")
-                    cmd = [str(root / "_build/default/benchmarks/runners/ocannl/bench_gpt.exe"),
+                    cmd = [str(root / RUNNER),
                            f"--ocannl_backend={ocannl_backend}", *o.ocannl_regime_args(regime)]
                     if tree == "master":
                         # The August runner predates the progress flag (gh-ocannl-1061).
@@ -418,7 +423,10 @@ def summarize(out):
     env = json.loads((out / "env.json").read_text())
     rows = read_jsonl(out / "timings.jsonl")
     failures = read_jsonl(out / "failures.jsonl")
-    cells = {}
+    # Every requested cell gets a row, so an arm that never produced a timing shows as n = 0
+    # rather than as an arm nobody asked for.
+    cells = {(w, arm): {"ok": [], "rejected": []}
+             for w in env["fixtures"] for arm in env.get("arms_run", env["arms"])}
     for r in rows:
         if r["repeat"] == 0:
             continue

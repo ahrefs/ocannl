@@ -378,8 +378,9 @@ quoted here reads: completion passes' searches now add to the reported search co
 pass ever produced a clean replay), the last allowed completion pass is no longer also written
 once more to `checked.jsonl` (tuf's file has those duplicates; `timings.jsonl` does not),
 `--summarize` keeps the measured `wall_s` and failure count, `--repeats 0` is refused, a
-wrong-backend row is kept, marked, in `raw.jsonl` (none occurred), and `env.json` now also records
-the host's own name, each tree's `bench_gpt.exe` digest, and refuses a tree with tracked
-modifications. For the windows above those facts come from elsewhere: each ran on the host its
+wrong-backend row is kept, marked, in `raw.jsonl` (none occurred), `--cell-timeout 0` no longer
+lifts the total cap, `summary.md` lists a requested arm that never timed as `n = 0`, and the
+driver now builds each used tree's `bench_gpt.exe` before any cell, refuses a tree with tracked
+modifications, and records the executable's digest and the host's own name in `env.json`. For the windows above those facts come from elsewhere: each ran on the host its
 registry reservation names (the GPU names in `env.json` tell the two HIP boxes apart), from
 checkouts the prep reservations created at the stated commits and built there, untouched since.
