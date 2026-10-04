@@ -53,10 +53,14 @@ let run ?exe ?cwd ?temp_dir args =
 
 let output (_, stdout, stderr) = stdout ^ stderr
 
-let matches ?(stream = `Both) ~exit ~contains ((status, stdout, stderr) as result) =
-  let text = match stream with `Stdout -> stdout | `Stderr -> stderr | `Both -> output result in
+let matches ?(stream = `Both) ~exit ~contains (status, stdout, stderr) =
   Poly.equal status (Unix.WEXITED exit)
-  && List.for_all contains ~f:(fun substring -> String.is_substring text ~substring)
+  && List.for_all contains ~f:(fun substring ->
+      let in_stream text = String.is_substring text ~substring in
+      match stream with
+      | `Stdout -> in_stream stdout
+      | `Stderr -> in_stream stderr
+      | `Both -> in_stream stdout || in_stream stderr)
 
 let describe_status = function
   | Unix.WEXITED n -> Printf.sprintf "exited %d" n

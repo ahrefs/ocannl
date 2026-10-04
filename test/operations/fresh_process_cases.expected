@@ -2,6 +2,8 @@ a refusal requires its exit status and causal diagnostic: true
 the same diagnostic at status 0 is not a refusal: true
 status 1 with another diagnostic is not the expected refusal: true
 diagnostics cannot match through the wrong stream: true
+a causal diagnostic cannot be assembled across output streams: true
+complete diagnostic fragments may come from either captured stream: true
 large streams stay separate and do not fill an unread pipe: true
 capture files are removed after normal and faulted child statuses: true
 a relative executable still runs from another directory: true

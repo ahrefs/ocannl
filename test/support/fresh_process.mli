@@ -16,7 +16,8 @@ val output : t -> string
 (** Stdout followed by stderr, for diagnostics whose stream does not matter. *)
 
 val matches : ?stream:[ `Stdout | `Stderr | `Both ] -> exit:int -> contains:string list -> t -> bool
-(** Require both the normal exit code and all causal diagnostic fragments. *)
+(** Require both the normal exit code and all causal diagnostic fragments. Each fragment must occur
+    wholly within one captured stream; [`Both] allows different fragments in either stream. *)
 
 val describe_status : Unix.process_status -> string
 

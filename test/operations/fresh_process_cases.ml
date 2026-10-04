@@ -23,6 +23,11 @@ let test () =
         (not (Fresh_process.matches ~exit:1 ~contains:[ "different refusal" ] refused));
       p "diagnostics cannot match through the wrong stream"
         (not (Fresh_process.matches ~stream:`Stdout ~exit:1 ~contains:[ diagnostic ] refused));
+      let split = run [ "--split" ] in
+      p "a causal diagnostic cannot be assembled across output streams"
+        (not (Fresh_process.matches ~exit:1 ~contains:[ diagnostic ] split));
+      p "complete diagnostic fragments may come from either captured stream"
+        (Fresh_process.matches ~exit:1 ~contains:[ "the planted "; "refusal" ] split);
       let status, stdout, stderr = run [ "--large" ] in
       p "large streams stay separate and do not fill an unread pipe"
         (Poly.equal status (Unix.WEXITED 0)
@@ -86,6 +91,10 @@ let () =
       Stdio.eprintf "%s" diagnostic;
       Stdlib.exit 1
   | [ _; "--pass" ] -> Stdio.eprintf "%s" diagnostic
+  | [ _; "--split" ] ->
+      Stdio.printf "the planted ";
+      Stdio.eprintf "refusal";
+      Stdlib.exit 1
   | [ _; "--large" ] ->
       Stdio.printf "%s" large;
       Stdio.eprintf "stderr:%s" large
