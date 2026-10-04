@@ -2137,6 +2137,16 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   SKIP contract they share), here because the subject invokes `python3` under that exact name,
   which is not what every platform `dune runtest` covers calls it — so a host without one skips
   every leg rather than deciding none of them quietly.
+- Both timing tools use `tools/ci-timing.py` for interval parsing: missing, invalid and reversed
+  timestamps are unavailable, equal timestamps remain zero. Cross-run `tools/ci-durations.sh`
+  accepts `--job REGEX` and `--step REGEX` (Python regex search); the latter sums matching steps
+  per job and reports step minutes plus paired job/rest minutes and per-job share percentages.
+  Select renamed steps with an alternation; matched names and missing/unusable/unpaired counts
+  stay visible. Skipped alternatives are excluded before interval completeness; all-skipped
+  selections stay unavailable. Cancelled/failed jobs with usable times remain
+  separate conclusion groups. A share/rest sample needs a positive job interval and a step sum
+  no larger than it. Medians summarize per-job shares, not a ratio of aggregate medians.
+  `tools/test-ci-durations.sh` runs synthetic cross-run API fixtures in the shell-harness CI step.
 - The regular suite does not run the training integrations. `bigram`, `mlp_names`, `mlp_bn_names`,
   `circles_conv`, `fsm_transformer` and `transformer_names` sit on the `train` alias — a third
   tier beside `runtest` and `slow`, for runs that are toy-sized by intent but serialized on the

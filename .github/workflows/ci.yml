@@ -652,6 +652,7 @@ jobs:
         tools/test-mutation-run.sh || failures=$((failures + 1))
         scripts/test-setup-ocaml-env.sh || failures=$((failures + 1))
         tools/test-ci-times.sh || failures=$((failures + 1))
+        tools/test-ci-durations.sh || failures=$((failures + 1))
         tools/test-ci-shard.sh || failures=$((failures + 1))
         test/operations/ci_matrix.sh || failures=$((failures + 1))
         tools/test-machine-verify.sh || failures=$((failures + 1))
