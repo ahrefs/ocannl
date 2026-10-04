@@ -534,13 +534,13 @@ else
       # group holds only corpses, so the bare probe happens to agree there. The
       # claim itself holds on both, and the control below runs on both.
       if kill -0 -- "-$zpid" 2>/dev/null; then
-        zwhere="the bare \`kill -0 -- -$zpid\` says ALIVE here -- the misreading this fixes"
+        zwhere="the bare group signal probe says ALIVE here -- the misreading this fixes"
       else
         zwhere="this kernel's killpg already answers dead for a zombie-only group"
       fi
       if group_alive "$zpid"; then
         report 1 "$zlabel" \
-          "group_alive counted a zombie as work -- stop can report a phantom orphaned group"
+          "group_alive counted zombie group $zpid as work -- stop can report a phantom orphaned group"
       else
         report 0 "$zlabel ($zwhere)"
       fi
