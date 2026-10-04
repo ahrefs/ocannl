@@ -80,7 +80,8 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   Dune's self-running test actions. The force-link flag is required because OCaml can omit an
   unused archive and its startup reader. Grouping and subtraction are evaluated; unresolved
   flag includes, expansions and subtraction of `:standard` are refused explicitly. `(universe)`
-  alone identifies no gate: compiler censuses and
+  in the action's `deps` prevents caching; preprocessing dependencies do not. It alone identifies
+  no gate: compiler censuses and
   OCANNL-free canaries use it too. The same classification owns alias reachability, the gate's
   training lock obligation and the deliberate generated-alias collision exemption. A mixed Dune
   file exempts only its configuration-free aliases, so a new configuration reader cannot inherit

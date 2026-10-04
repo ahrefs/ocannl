@@ -412,6 +412,8 @@ let raw_entries =
         "[scanner-refusal:6d2cc639b272c289c3a79c46561b671f] explicit self-run resolve";
         "[scanner-refusal:314daa1e6e83eb37702ce6cf4f24cd44] ordinary direct-utils test";
         "[scanner-refusal:f8fc95de59a65622241eac16f5f1ecf4] effective gate declaration";
+        "[scanner-refusal:abc806b50e485449683b10cc952fde9d] preprocessing-only universe \
+         dependencies";
         "[scanner-refusal:0d805a9703eb5f183046f05353ed6587] expansions and subtracted";
         "[scanner-refusal:9fe5330074251fed6b9e5e08a0d663bd] universe users alone";
       ] );

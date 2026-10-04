@@ -211,7 +211,7 @@ let gate_program stanza =
 let is_gate ?(subdir = "") ?programs ~stanzas stanza =
   let programs = Option.value programs ~default:(List.map stanzas ~f:(fun s -> (subdir, s))) in
   let runners = [ (subdir, stanza) ] in
-  depends_on_universe stanza
+  Option.value_map (Scan.field stanza "deps") ~default:false ~f:(List.exists ~f:depends_on_universe)
   && (not (List.is_empty (aliases_of stanza)))
   && (gate_program stanza
       && List.mem [ "test"; "tests" ]
@@ -5116,6 +5116,16 @@ let ambient_gate_control () =
     ~f:(is_gate ~stanzas:[ ordinary; removed ]);
   Verdict.p "a linkall flag restored outside a subtraction is an effective gate declaration"
     (is_gate ~stanzas:[ restored ] restored);
+  let preprocessing_only =
+    List.map [ "(test (name cached))"; "(tests (names cached))" ] ~f:(fun head ->
+        let fields = String.drop_suffix head 1 in
+        stanza
+          (fields
+         ^ " (libraries arrayjit.utils) (link_flags -linkall) (preprocessor_deps (universe)))"))
+  in
+  Verdict.p_none "preprocessing-only universe dependencies leave force-linked tests cached"
+    preprocessing_only
+    ~f:(is_gate ~stanzas:preprocessing_only);
   let refuses flags =
     try
       ignore

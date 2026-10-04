@@ -146,6 +146,7 @@ only the actual gate's test name receives the generated-alias collision exemptio
 a gate borrowed from another dune file, its public name and an explicit self-run resolve: true
 an ordinary direct-utils test and a subtracted linkall flag do not declare a gate: true
 a linkall flag restored outside a subtraction is an effective gate declaration: true
+preprocessing-only universe dependencies leave force-linked tests cached: true
 unresolved flag includes, expansions and subtracted standard sets are refused clearly: true
 universe users alone leave their alias entry points ungated: true
 
@@ -319,5 +320,6 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:6d2cc639b272c289c3a79c46561b671f] explicit self-run resolve
   [scanner-refusal:314daa1e6e83eb37702ce6cf4f24cd44] ordinary direct-utils test
   [scanner-refusal:f8fc95de59a65622241eac16f5f1ecf4] effective gate declaration
+  [scanner-refusal:abc806b50e485449683b10cc952fde9d] preprocessing-only universe dependencies
   [scanner-refusal:0d805a9703eb5f183046f05353ed6587] expansions and subtracted
   [scanner-refusal:9fe5330074251fed6b9e5e08a0d663bd] universe users alone
