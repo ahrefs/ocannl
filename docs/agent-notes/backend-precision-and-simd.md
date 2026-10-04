@@ -627,7 +627,7 @@ files.
   inside the nine-iteration outer loop and returned 2048, while a single wide scope reaches 2057
   and narrows once to 2056. HIP advertises both scopes since gh-ocannl-789 (see the rocWMMA
   d-boundary bullet below). Metal advertises both scopes since gh-ocannl-837: its per-statement and
-  persistent-fragment hooks use an f32 accumulator with converted `thread_elements()` boundaries.
+  persistent-fragment hooks use an f32 accumulator with coordinate-table boundaries (gh-ocannl-1075).
   `Sketch_families.wide_acc_withholds` is keyed on the DESTINATION's storage precision, so
   `(f16,f16,f32-storage)` sites are untouched; `matmul_mma_scope` and `conv_mma_scope` derive the
   scope from the actual outer reduction extents rather than from whether operands happen to be
@@ -660,8 +660,10 @@ files.
   elements have no guaranteed order or locality", and the accumulator's register layout is a
   template of `DataT` (`MmaAcc<MmaDim, DataT, ...>` in `rocwmma/internal/io_layout.hpp`). MSL 4.1
   §2.4: "The mapping of matrix elements to threads in the SIMD-group is unspecified", and
-  `thread_elements()` is not in the spec at all — so Metal's gh-ocannl-837 `thread_elements()` copy
-  still rests on an undocumented coincidence (verified only on an M4 Max). Instead each lane `load_matrix_sync`s the builtin table `ocannl_wmma_rc16` (entry
+  `thread_elements()` is not in the spec at all. Metal's former gh-ocannl-837 cross-type copy
+  therefore also rested on an undocumented coincidence (verified only on an M4 Max); its
+  gh-ocannl-1075 port uses the same coordinate-table principle, with the Metal details below.
+  On CUDA/HIP each lane `load_matrix_sync`s the builtin table `ocannl_wmma_rc16` (entry
   `16*row+col` holds that number) into a fragment of the accumulator's own type, then moves each
   element to or from `d[row][col]` with a scalar conversion. That relies only on `load_matrix_sync`'s
   contract and on the position being fixed per type and lane, which `mma_sync` needs anyway. The
@@ -708,7 +710,7 @@ files.
   a `float` accumulator fragment through the gh-ocannl-789 converted `d` boundary (both scopes),
   leaves CUDA's inline-PTX arm alone (f32 in hardware, both scopes since gh-ocannl-1063), and
   swaps Metal's `simdgroup_bfloat8x8` arm to a `simdgroup_float8x8` accumulator behind the
-  gh-ocannl-837 `thread_elements()` boundary (both scopes, gh-ocannl-923; before it that arm
+  gh-ocannl-1075 coordinate-table boundary (both scopes, gh-ocannl-923; before it that arm
   declined and the scope list was empty).
   `Bf16_narrow` (`true`) resolves as auto everywhere except HIP, where it keeps the
   bf16-accumulate arm — and is what the `approximate` payload names, which is how that regime did
@@ -809,13 +811,20 @@ files.
   storage-format table** (gh-ocannl-837, `arrayjit/lib/metal_backend.ml`'s
   `mma_d_boundary_lines`). A standalone `MTLDevice.makeLibrary(source:)` probe on an Apple M4 Max
   (40-core GPU, Metal 4, macOS 26.6.2 build 25G83, Swift 6.3.3) compiled and ran half A/B fragments
-  with a `simdgroup_float8x8` accumulator. `thread_elements()` exposes the distributed fragment
-  storage: the half destination stages through `simdgroup_half8x8`, and each lane converts indices
-  0 and 1 to/from the float accumulator. An emitted `static_assert` compares the two
-  `storage_type` element counts (64 logical elements each); with the fixed 32-thread capability,
-  that is two elements per lane. A whole-`storage_type` converting constructor crashed the runtime
-  compiler service on this toolchain, while the scalar element copies compiled and executed, so
-  keep the scalar spelling. The k=144 probe/test makes the first 16-wide block contribute 2048 and
+  with a `simdgroup_float8x8` accumulator. Since gh-ocannl-1075 the converted boundary loads
+  `ocannl_mma_rc8` into a float fragment, then widens/narrows each scalar cell at the coordinate
+  that fragment names (the coordinate-table principle above); no half/bfloat staging fragment
+  remains. MSL 4.1 section 6.8.1 accepts only device/threadgroup pointers for `simdgroup_load`, so
+  `mma_d_table_lines` initializes a 64-float threadgroup table with a single writer (`lid == 0`
+  in every dimension) before the existing opening barrier. This costs 256 static bytes per
+  converted scope; `link_proc` checks the compiled kernel's actual allocation.
+  The per-lane count derives from the float fragment's `storage_type` divided by the advertised
+  32-thread width; `sizeof(thread_elements())` counts pointer bytes, not elements. Both scopes
+  keep the old `(float)`, `(half)` and `(bfloat)` casts, preserving conversion rounding.
+  `schedule_mma_matmul`'s `metal_table_boundary` pins the accumulator-typed table load and the
+  absence of cross-type copies in both wide arms/scopes: against the former emitter all four
+  structure claims fail, even while the value discriminators pass. The k=144 probe/test makes the
+  first 16-wide block contribute 2048 and
   each of the remaining eight contribute 1: residency across the reduction returns 2056, whereas
   narrowing at each block boundary returns 2048. The default policy still uses
   `simdgroup_half8x8`; only `Fp16_wide` selects the mixed accumulator. As on HIP, one shared
@@ -824,7 +833,7 @@ files.
   every arm must also be advertised in `mma_format_tiles`, or autotune never seeds it.
   gh-ocannl-923 added the mixed-STORAGE triples `(f16, f16, f32)` and `(bf16, bf16, f32)`: the
   float accumulator is the destination's own type, so they load/store `d` directly (no
-  `__mma_dstage`), are policy-independent, and serve both scopes; and the wide uniform-bf16 arm
+  coordinate table), are policy-independent, and serve both scopes; and the wide uniform-bf16 arm
   (`Bf16_wide`), `bfloat` operands into a float accumulator with the same converted boundary
   (`d_elem` picks the cast). Executed on M4 Max: bf16 k-split 264 wide vs 256 default; the
   width-sensitive bf16 leg's worst excess over the half-ulp bound -0.0234 wide vs 0.0937 default.

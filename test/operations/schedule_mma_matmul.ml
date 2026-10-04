@@ -140,23 +140,18 @@ let residency_holds src ~frag_load ~body_begin ~body_end ~frag_store ~barrier =
    destination pointer first.
 
    [converted_d] names the wide-f16 arms (HIP: gh-ocannl-789; Metal: gh-ocannl-837; CUDA:
-   gh-ocannl-925), where the accumulator array's element type is not the destination's. On Metal the
-   intrinsic loads a STAGING fragment and populates the accumulator array by an elementwise copy, so
-   the "populated once before the body" anchor is that copy rather than a fragment load naming the
-   accumulator array; the staging fragment is stored to [__mma_dp] once, after the body. CUDA and
-   HIP (since gh-ocannl-1064) have no staging fragment: each element crosses the boundary at the
-   coordinate the [ocannl_wmma_rc16] table names, widened on the way in and narrowed on the way
-   out. *)
+   gh-ocannl-925), where the accumulator array's element type is not the destination's. Each element
+   crosses the boundary at the coordinate an accumulator-typed fragment loaded from the coordinate
+   table names, widened on the way in and narrowed on the way out. *)
 let staged_half_resident ?(converted_d = false) src =
   if on_metal then
     residency_holds src
       ~frag_load:
-        (if converted_d then "thread_elements()[0] = (float)__mma_dstage"
+        (if converted_d then ".thread_elements()[__ei] = (float)(__mma_dp"
          else "simdgroup_load(__mma_fragment_")
       ~body_begin:"/* simdgroup fragment reduction body begins */"
       ~body_end:"/* simdgroup fragment reduction body ends */"
-      ~frag_store:
-        (if converted_d then "simdgroup_store(__mma_dstage" else "simdgroup_store(__mma_fragment_")
+      ~frag_store:(if converted_d then "(__rc & 7)] = (" else "simdgroup_store(__mma_fragment_")
       ~barrier:"threadgroup_barrier(mem_flags::mem_threadgroup);"
   else if on_hip then
     residency_holds src
@@ -195,6 +190,22 @@ let hip_table_boundary ~acc src =
   && (not (has "rocwmma::fragment<rocwmma::accumulator, 16, 16, 16, rocwmma::bfloat16_t>"))
   && (not (has ("rocwmma::load_matrix_sync(" ^ acc)))
   && not (has "rocwmma::store_matrix_sync(__mma_dp")
+
+(* Metal's converted boundary uses a float coordinate fragment, with no destination-typed staging
+   fragment and no intrinsic load/store of d (gh-ocannl-1075). *)
+let metal_table_boundary ~acc src =
+  let has s = String.is_substring src ~substring:s in
+  has ("simdgroup_float8x8 " ^ acc)
+  && has "simdgroup_float8x8 __mma_rc;"
+  && has "simdgroup_load(__mma_rc, ocannl_mma_rc8, (ulong)8)"
+  && has "threadgroup float ocannl_mma_rc8[64]"
+  && has "if (all(lid == uint3(0)))"
+  && has "ocannl_mma_rc8[__rc] = (float)__rc"
+  && (not (has "__mma_dstage"))
+  && (not (has ("simdgroup_half8x8 " ^ acc)))
+  && (not (has ("simdgroup_bfloat8x8 " ^ acc)))
+  && (not (has ("simdgroup_load(" ^ acc)))
+  && not (has ("simdgroup_store(" ^ acc))
 
 (* The CUDA wmma f32 accumulator-fragment declaration, the element type every f16 -> f32 and wide
    uniform-f16 wmma leg below pins (gh-ocannl-925). *)
@@ -723,8 +734,9 @@ let () =
    in
    let ok =
      if on_metal then
-       intrinsics && has "simdgroup_float8x8" && has "simdgroup_half8x8" && has "__mma_dstage"
-       && has "thread_elements()[0]" && has "thread_elements()[1]"
+       intrinsics
+       && metal_table_boundary ~acc:"__mma_acc" src
+       && has "simdgroup_half8x8"
        && not (has "== 0)")
      else if on_hip then
        if Lazy.force hip_mma then
@@ -967,8 +979,8 @@ let () =
      its rocWMMA arm to an f32 accumulator fragment over the bf16 STORAGE destination, converting at
      the [d] boundary, and so does Metal's [simdgroup_matrix] arm since gh-ocannl-923 (a
      [simdgroup_float8x8] accumulator over [simdgroup_bfloat8x8] operands, the gh-ocannl-837
-     [thread_elements()] boundary); CUDA's inline-PTX arm is already f32 in hardware; the CPU
-     register tiling renders as under the default policy (its accumulator is f32 either way).
+     coordinate-table boundary); CUDA's inline-PTX arm is already f32 in hardware; the CPU register
+     tiling renders as under the default policy (its accumulator is f32 either way).
 
      The inputs are [mwa]/[mwb]'s WIDTH-SENSITIVE cycles, which are bf16-exact too (at most five
      significant bits): 32-term sums reach ~77, where bf16's spacing (1/2) cannot hold the
@@ -1121,7 +1133,7 @@ let () =
        intrinsics
        && has "simdgroup_float8x8 __mma_acc"
        && has "simdgroup_bfloat8x8 __mma_af"
-       && has "__mma_dstage" && has "thread_elements()[1]"
+       && metal_table_boundary ~acc:"__mma_acc" src
        && not (has "== 0)")
      else if on_hip then
        if Lazy.force hip_mma then
@@ -1675,14 +1687,14 @@ let () =
     (* f16 operands with an f32 accumulator: every tensor-core backend renders the marked
        accumulator as an f32 fragment array resident across [k_o]. On Metal (gh-ocannl-923) the
        fragment is the destination's own type, so it loads and stores [d] directly — no
-       [__mma_dstage], which is the wide-f16 arm's conversion. Metal and HIP are verified, so their
-       pins are strict; CUDA also accepts the pre-sm_70 lane-0 fallback. *)
+       [ocannl_mma_rc8], which is the wide-f16 arm's conversion. Metal and HIP are verified, so
+       their pins are strict; CUDA also accepts the pre-sm_70 lane-0 fallback. *)
     let ok =
       if on_metal then
         staged_half_resident src
         && has "simdgroup_float8x8 __mma_fragment_"
         && has "simdgroup_half8x8 __mma_af"
-        && not (has "__mma_dstage")
+        && not (has "ocannl_mma_rc8")
       else if on_hip then if Lazy.force hip_mma then staged_half_resident src else has "== 0)"
       else staged_half_resident src || has "== 0)"
     in
@@ -1790,9 +1802,7 @@ let () =
     p claim_fw_struct
       (staged_half_resident ~converted_d:true src
       &&
-      if on_metal then
-        has "simdgroup_float8x8" && has "simdgroup_half8x8" && has "thread_elements()"
-        && has "__mma_dstage"
+      if on_metal then metal_table_boundary ~acc:"__mma_fragment_" src && has "simdgroup_half8x8"
       else if on_hip then hip_table_boundary ~acc:"__mma_fragment_" src
       else
         (* The f32 fragment array, the half operand fragments, and the table-addressed boundary —
@@ -1920,9 +1930,10 @@ let () =
     p_none (claim_h32k_control "direct") ctl_direct ~f:(Float.equal 2056.);
     p_none (claim_h32k_control "fragment") ctl_staged ~f:(Float.equal 2056.);
     (* Per backend: the f32 accumulator over half operand fragments, and no conversion at [d] —
-       Metal's [__mma_dstage], CUDA's coordinate table. *)
+       Metal's and CUDA's coordinate tables. *)
     let acc_decl, operand_decl, conversion =
-      if on_metal then ("simdgroup_float8x8 __mma_acc", "simdgroup_half8x8 __mma_af", "__mma_dstage")
+      if on_metal then
+        ("simdgroup_float8x8 __mma_acc", "simdgroup_half8x8 __mma_af", "ocannl_mma_rc8")
       else (wmma_f32_acc ^ " __mma_acc", "matrix_a, 16, 16, 16, __half", "ocannl_wmma_rc16")
     in
     (let has s = String.is_substring src_direct ~substring:s in
@@ -2126,8 +2137,7 @@ let () =
          staged_half_resident ~converted_d:true src
          &&
          if on_metal then
-           has "simdgroup_float8x8 __mma_fragment_"
-           && has "simdgroup_bfloat8x8" && has "thread_elements()" && has "__mma_dstage"
+           metal_table_boundary ~acc:"__mma_fragment_" src && has "simdgroup_bfloat8x8"
          else hip_table_boundary ~acc:"__mma_fragment_" src);
     (* The swizzled twin exists only where an [ldmatrix] arm reads it: Metal and HIP decline the
        layout to the scalar fallback, which is width-correct by construction and not this leg's
