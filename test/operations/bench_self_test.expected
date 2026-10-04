@@ -2,8 +2,10 @@ training segment census includes the forward loss: true
 training segment census includes every parameter gradient and optimizer write: true
 every tiny training segment executes with a positive standalone time: true
 a host-gated census before execution includes its separately compiled optimizer: true
+MMA census includes both compiled host-gated routines before execution: true
 that pre-execution census includes every optimizer parameter write: true
 the emitted result line parses as one JSON object: true
+untuned result census matches every compiled step routine: true
 framework is ocannl: true
 backend names the backend the cell ran on: true
 workload names the self-test model, not a benchmark cell: true
