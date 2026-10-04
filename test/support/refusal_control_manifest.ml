@@ -102,7 +102,10 @@ let raw_entries =
     ( "backend_golden_family_scan.ml",
       [ "[scanner-refusal:2fcd4d491da746e829dc7cec63905091] self-certifying and provenance" ] );
     ( "bin_smoke_membership_scan.ml",
-      [ "[scanner-refusal:9446215c7b3c2270741bbb1cd8300733] executable exactly once" ] );
+      [
+        "[scanner-refusal:9446215c7b3c2270741bbb1cd8300733] executable exactly once";
+        "[scanner-refusal:75093564cde01f102b3c81d2ebde6ccd] synthetic public executable";
+      ] );
     ( "cache_dir_ignores.ml",
       [
         "[scanner-refusal:e2e9d19ffe2ad7688396847bd1ee643a] the repository-root gitignore";
@@ -590,7 +593,7 @@ let raw_direct_evidence =
     ( "config_dep_completeness.ml:328553bf93b184a97ab7d44d97c369a4",
       "ok: raw stanzas -- a library's preprocessor is not a test-running rule" );
     ( "digest_completeness.ml:7cab0a5763f4811f331a4aab327c6784",
-      "ok: key list -- a list written at the iteration" );
+      "ok: key list -- a local literal list immediately feeds the structural guard" );
     ( "digest_completeness.ml:fc3ef3788212f2d1f5a9d9a46be3ca38",
       "ok: predicate call contributes its keys -- with_runtime_debug" );
     ( "digest_completeness.ml:dc9995a5d5b80370dc90971d3fd019df",
@@ -764,7 +767,7 @@ let raw_direct_evidence =
     ( "test_config_consistency.ml:3a6832937329cda23c716c3883e04cb2",
       "ok: Generated.init -- a bare init without the open is somebody else's function" );
     ( "test_config_consistency.ml:8bb76ad7cf948a8181b88ee36b0148c6",
-      "ok: key list -- a list written at the iteration" );
+      "ok: key list -- a local literal list immediately feeds the structural guard" );
     ( "test_config_consistency.ml:11c8ffb35753ffb6f87da20d2ba6654f",
       "ok: settings read -- an unqualified record of the same shape is not a read" );
     ( "test_config_consistency.ml:c56af001748a614d221709bf11098511",
@@ -772,7 +775,7 @@ let raw_direct_evidence =
     ( "test_config_consistency.ml:e583c416783b3632963a66636f20f65e",
       "ok: a record literal is not a quoted string" );
     ( "test_config_consistency.ml:b4c59d5ad7a9c4e591998fccf8f039aa",
-      "ok: key list -- a list written at the iteration" );
+      "ok: key list -- a local literal list immediately feeds the structural guard" );
     ( "verdict_ratchet.ml:0f307832357ee7ca58b9798a86530dac",
       "ok: not a claim -- nothing before it but a blank line" );
     ("verdict_ratchet.ml:f3e306858423827e6575d13a17d57af6", "ok: claim shape -- the plain form");

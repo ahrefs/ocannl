@@ -1,3 +1,4 @@
+profile guard protects precisely the displayed keys and config-file selection: true
 profile                  = reproducible   (picked via the config file)
 autotune_search          = false          (profile 'reproducible' via the config file)
 autotune_rounds          = 7              (config file)

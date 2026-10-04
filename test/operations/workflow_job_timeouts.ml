@@ -458,11 +458,6 @@ let rec remove_tree path =
   | _ -> Unix.unlink path
   | exception Unix.Unix_error _ -> ()
 
-let describe_status = function
-  | Unix.WEXITED n -> Printf.sprintf "exited %d" n
-  | Unix.WSIGNALED n -> Printf.sprintf "was killed by signal %d" n
-  | Unix.WSTOPPED n -> Printf.sprintf "was stopped by signal %d" n
-
 let sound_job ~name =
   Printf.sprintf
     "  %s:\n    runs-on: ubuntu-latest\n    timeout-minutes: 10\n    steps:\n      - run: echo hi\n"
@@ -475,36 +470,15 @@ let workflow jobs = "name: fixture\non: workflow_dispatch\njobs:\n" ^ String.con
    absolute paths instead would make [repo_relative] answer with a filesystem path that starts at
    the temporary directory, and every fixture would look like a tree containing no workflows at
    all. *)
-let run_child ~exe ~root ~files =
-  let capture suffix = Stdlib.Filename.temp_file "workflow_timeouts_control" suffix in
-  let out_path = capture ".out" and err_path = capture ".err" in
-  let open_capture path = Unix.openfile path [ Unix.O_WRONLY; Unix.O_TRUNC ] 0o600 in
-  let out = open_capture out_path and err = open_capture err_path in
-  (* [--scan-only] suppresses the control driver in the child; without it every child would stage
-     another generation of children. *)
-  let argv = Array.of_list (exe :: "--scan-only" :: "." :: files) in
-  let here = Stdlib.Sys.getcwd () in
-  Unix.chdir root;
-  let pid = Unix.create_process exe argv Unix.stdin out err in
-  let _, status = Unix.waitpid [] pid in
-  Unix.chdir here;
-  Unix.close out;
-  Unix.close err;
-  let text = In_channel.read_all out_path ^ In_channel.read_all err_path in
-  (try Unix.unlink out_path with Unix.Unix_error _ -> ());
-  (try Unix.unlink err_path with Unix.Unix_error _ -> ());
-  (status, text)
+(* Relative workflow paths must resolve against the fixture root. *)
+let run_child ~exe ~root ~files = Fresh_process.run ~cwd:root ~exe ("--scan-only" :: "." :: files)
 
 (* Every fixture tree carries the same three sound workflows beside the one under test, so the
    file-population floor the live run makes is the floor the controls run against too: a control
    that quietly ran a weaker claim than the shipping one would prove nothing about the shipping
    one. *)
 let control () =
-  let exe =
-    let name = Stdlib.Sys.executable_name in
-    if Stdlib.Filename.is_relative name then Stdlib.Filename.concat (Stdlib.Sys.getcwd ()) name
-    else name
-  in
+  let exe = Fresh_process.executable () in
   let fixture = Stdlib.Filename.temp_dir "workflow timeouts control " "" in
   let case_index = ref 0 in
   (* One filler is a `.yaml`, so the accepted arms exercise both discovered spellings; a refusing
@@ -526,21 +500,17 @@ let control () =
     in
     run_child ~exe ~root ~files
   in
-  let report label (status, text) =
-    eprintf "the %s control %s. Its captured output:\n%s\n" label (describe_status status) text
-  in
-  let passed label (status, text) =
+  let report label child = Fresh_process.report ~label child in
+  let passed label ((status, _, _) as child) =
     let ok = match status with Unix.WEXITED 0 -> true | _ -> false in
-    if not ok then report label (status, text);
+    if not ok then report label child;
     ok
   in
   (* Split so the emptiness guard sits in the boolean this returns: a refusal nobody named is not
      one this control observed, so an empty message list fails rather than satisfying [for_all]
      vacuously. *)
-  let matched_refusal ~messages (status, text) =
-    (not (List.is_empty messages))
-    && (match status with Unix.WEXITED 1 -> true | _ -> false)
-    && List.for_all messages ~f:(fun message -> String.is_substring text ~substring:message)
+  let matched_refusal ~messages child =
+    (not (List.is_empty messages)) && Fresh_process.matches ~exit:1 ~contains:messages child
   in
   let refused label ~messages outcome =
     let ok = matched_refusal ~messages outcome in

@@ -34,7 +34,6 @@ Quantified bindings exempted because emptiness is their passing meaning:
   test/operations/backend_golden_family_scan.ml:complete -- empty incomplete/error lists are the passing evidence; the non-empty synthetic-control population is guarded in the same binding
   test/operations/autotune_routine_name.ml:contributed -- a contended search may legitimately contribute no rows; its report counters separately prove whether that absence came from refused timings rather than a lost result
   test/operations/fission_schedule.ml:annotated -- the merge-back case deliberately requires the consumer segment to have no hardware axes; the same claim also requires the producer segment to be annotated
-  test/operations/ocamlformat_ignore_scan.ml:refused -- the message list is an optional strengthening of the child-exit refusal: an empty list deliberately means that the nonzero status alone is the passing evidence
   test/operations/reduction_forms.ml:changed -- an empty schedule deliberately needs no IR change, and an empty per-op result means there were no per-op transformations to validate
   test/operations/reduction_forms.ml:extra_ok -- an empty extra-fragment list deliberately means the member requires no additional emitted assignment fragments
   test/operations/autotune_batched_companion.ml:bc: reduction-over-j companion refutes the GPU family pre-proposal -- the empty seed list is the consequence the claim conjoins with the family's coverage-refutation witness on the sketch tree, which is the non-vacuous half and is itself guarded on a non-empty refutation list

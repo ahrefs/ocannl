@@ -68,7 +68,7 @@
 (executable
  (name profile_precedence)
  (modules profile_precedence)
- (libraries base arrayjit.utils stdio))
+ (libraries base arrayjit.utils stdio arrayjit.verdict))
 
 ; An ambient profile variable would outrank this directory's config file and turn the file-picked
 ; rules into env-picked ones, so every rule clears `OCANNL_PROFILE` (an empty value counts as unset

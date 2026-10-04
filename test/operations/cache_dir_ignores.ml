@@ -96,7 +96,7 @@ let refuse_unreadable_patterns ~fail patterns =
            pattern))
 
 let read_source_or_refusal ~fail ~source content =
-  match Or_error.try_with (fun () -> Scan.read content) with
+  match Or_error.try_with (fun () -> Scan.read ~source content) with
   | Ok reading -> Some reading
   | Error error ->
       fail

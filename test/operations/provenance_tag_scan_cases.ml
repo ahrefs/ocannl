@@ -281,15 +281,51 @@ let () =
        nv ^ " i -> (match o with Some i -> record (Site i) | None -> ())";
        "Other." ^ nv ^ " i -> record (Site i)";
        nv ^ " i -> let* i = next in record (Site i)";
+       nv ^ " i -> let exception Site of string in record (Site i)";
        nv ^ " i -> let open Key_scan in record (Site i)";
        nv ^ " i when false -> record (Site i) | " ^ nv ^ " _ -> ()";
      ]
-     ~f:(fun handler -> List.is_empty (resolve [ read (scope handler) ]));
+     ~f:(fun handler -> List.is_empty (resolve [ read ~foreign:[ "Key_scan" ] (scope handler) ]));
+   p_all "unshadowed payload uses survive unrelated nested bindings"
+     [
+       nv ^ " i -> let h i = record (Site i) in ignore h; record (Site i)";
+       nv ^ " i -> (let i = other in ignore i); record (Site i)";
+       nv ^ " i -> let module P = Tnode in record (P.Site i)";
+     ]
+     ~f:(fun handler ->
+       List.exists
+         (resolve [ read (scope handler) ])
+         ~f:(fun (m : Scan.mint) -> String.equal m.tag "2:fixture-first"));
    p_exists "the same handler shape relays when the carrier does receive the payload"
      (resolve [ read (scope (nv ^ " i -> let j = i in ignore j; record (Site i)")) ])
      ~f:(fun (m : Scan.mint) -> String.equal m.tag "2:fixture-first"));
   p "a payload wrapped in a result constructor is relayed by a caller matching it into a carrier"
     (Option.equal String.equal (minter_of "4:fixture-consume") (Some "consume"));
+  (let producer =
+     "let produce x = let exception " ^ nv ^ " of string in try raise (" ^ nv
+     ^ " \"4:fixture-produced\") with " ^ nv ^ " i -> Error i"
+   in
+   let caller = "let caller x = match produce x with Error i -> record (Site i) | _ -> ()" in
+   let produced text = resolve [ read text ] in
+   let is_produced (m : Scan.mint) = String.equal m.tag "4:fixture-produced" in
+   p_exists "recursive siblings resolve the producer identity before their RHS walk"
+     (produced
+        (String.substr_replace_first producer ~pattern:"let produce" ~with_:"let rec produce"
+        ^ "\nand caller x = match produce x with Error i -> record (Site i) | _ -> ()"))
+     ~f:is_produced;
+   p_exists "an earlier consumer keeps the original producer after a later shadow"
+     (produced (producer ^ "\n" ^ caller ^ "\nlet produce _ = Ok ()"))
+     ~f:is_produced;
+   p_empty "a later consumer does not reach a shadowed producer" ~over:[ producer; caller ]
+     (produced (producer ^ "\nlet produce _ = Ok ()\n" ^ caller));
+   p_empty "qualified consumers reach only the final exported producer binding"
+     ~over:[ producer; caller ]
+     (resolve
+        [
+          read (producer ^ "\nlet produce _ = Ok ()");
+          read ~source:"lib/caller.ml"
+            "let caller x = match Fixture.produce x with Error i -> record (Site i) | _ -> ()";
+        ]));
   (let unconsumed =
      String.substr_replace_all library ~pattern:"Error i -> record (Site i)"
        ~with_:"Error i -> log i"
@@ -603,6 +639,96 @@ let () =
         exception Site of string\n\
         let b = Site \"12:fixture-key\"";
      ] ~f:(fun text -> strings (tags (read ~source:"test/j.ml" text).mints) [ "13:fixture-owned" ]);
+   p_all "foreign file identity does not precede its declaration"
+     [ "exception Site of string"; "type t = Site of string"; "include Key_scan" ]
+     ~f:(fun declaration ->
+       strings
+         (tags
+            (read ~source:"test/key_scan.ml" ~foreign:[ "Key_scan" ]
+               ("let a = Site \"13:fixture-owned\"\n" ^ declaration
+              ^ "\nlet b = Site \"12:fixture-key\""))
+              .mints)
+         [ "13:fixture-owned" ]);
+   p_all "owner constructor rebindings retain their identity"
+     [
+       "exception Site = Tnode.Site";
+       "type t = ..\ntype t += Site = Tnode.Site";
+       "module Local = struct exception Site = Tnode.Site end\nopen Local";
+       "module Local = struct open Tnode exception Site = Site end\nopen Local";
+     ] ~f:(fun declaration ->
+       strings
+         (tags (read (declaration ^ "\nlet x = Site \"13:fixture-owned\"")).mints)
+         [ "13:fixture-owned" ]);
+   p_all "foreign constructor rebindings retain their identity"
+     [
+       "exception Site = Key_scan.Site";
+       "type t = ..\ntype t += Site = Key_scan.Site";
+       "module Local = struct open Key_scan exception Site = Site end\nopen Local";
+     ] ~f:(fun declaration ->
+       strings
+         (tags
+            (read ~foreign:[ "Key_scan" ] (declaration ^ "\nlet x = Site \"12:fixture-key\"")).mints)
+         []);
+   p_all "local constructor aliases resolve under their lexical scope"
+     [ ("Tnode.Site", [ "13:fixture-owned" ]); ("Key_scan.Site", []) ]
+     ~f:(fun (target, expected) ->
+       strings
+         (tags
+            (read ~foreign:[ "Key_scan" ]
+               ("let x = let exception Site = " ^ target ^ " in Site \"13:fixture-owned\""))
+              .mints)
+         expected);
+   p_all "direct exports take effect in declaration order"
+     [
+       ("module Local = struct exception Site of string include Tnode end", [ "13:fixture-owned" ]);
+       ("module Local = struct include Tnode exception Site of string end", []);
+     ]
+     ~f:(fun (declaration, expected) ->
+       strings
+         (tags (read (declaration ^ "\nlet x = Local.Site \"13:fixture-owned\"")).mints)
+         expected);
+   p_all "foreign exports remain lexical and direct"
+     [
+       ( "module K = struct exception Site of string end\n\
+          module Local = struct include K end\n\
+          open Local",
+         [] );
+       ( "module Local = struct module Hidden = struct include Key_scan end end\n\
+          open Tnode\n\
+          open Local",
+         [ "13:fixture-owned" ] );
+     ]
+     ~f:(fun (declaration, expected) ->
+       strings
+         (tags
+            (read ~foreign:[ "Key_scan" ] (declaration ^ "\nlet x = Site \"13:fixture-owned\""))
+              .mints)
+         expected);
+   p_all "nested includes preserve their carrier identity"
+     [
+       ("module Local = struct include struct exception Site of string end end", []);
+       ("module Local = struct include Tnode end", [ "13:fixture-owned" ]);
+     ]
+     ~f:(fun (declaration, expected) ->
+       strings
+         (tags (read (declaration ^ "\nlet x = Local.Site \"13:fixture-owned\"")).mints)
+         expected);
+   p_all "foreign exception and extension carriers are discovered"
+     [ "exception Site of string"; "type t = ..\ntype t += Site of string" ] ~f:(fun declaration ->
+       Scan.declares_own_carrier ~carriers declaration
+       && strings
+            (tags
+               (read ~source:"test/x.ml"
+                  ("module Local = struct " ^ declaration
+                 ^ " end\nlet x = Local.Site \"12:fixture-key\"\nlet y = Site \"13:fixture-owned\""
+                  ))
+                 .mints)
+            [ "13:fixture-owned" ]);
+   p_all "functor parameters and unpacks shadow carrier module aliases"
+     [
+       "module P = Tnode\nmodule F (P : S) = struct let x = P.Site \"12:fixture-key\" end";
+       "module P = Tnode\nlet f (module P : S) = P.Site \"12:fixture-key\"";
+     ] ~f:(fun text -> List.is_empty (read text).mints);
    p "a structure re-exporting a foreign module through its own alias is foreign"
      (strings
         (tags
@@ -787,7 +913,49 @@ let () =
   write "arrayjit/lib/user.ml" "let x = Wrapper.Site \"not a tag either\"";
   check "shipping inventory treats a module re-exporting a foreign carrier as foreign" ~exit:0
     ~message:"Read, not part of the checklist:" (run ());
-  List.iter [ "key_scan.ml"; "wrapper.ml"; "user.ml" ] ~f:(fun f ->
+  write "arrayjit/lib/foreign_scan.ml" "exception Site of string";
+  p_all "shipping census respects final owner exports across files"
+    [
+      "exception Site of string\ninclude Tnode";
+      "exception Site of string\nexception Site = Tnode.Site";
+      "type t = Site of string\ninclude Tnode";
+      "type t = ..\ntype t += Site of string\ninclude Tnode";
+      "exception Site = Foreign_scan.Site\nexception Site = Tnode.Site";
+      "include Tnode";
+      "include Tnode\nopen Foreign_scan";
+      "include Tnode\nmodule Hidden = struct include Foreign_scan end";
+    ] ~f:(fun declaration ->
+      write "arrayjit/lib/key_scan.ml" declaration;
+      write "arrayjit/lib/user.ml"
+        "let x = Wrapper.Site \"13:fixture-reexport\"\n\
+         open Key_scan\n\
+         let y = Site \"14:fixture-opened\"";
+      let status, text = run () in
+      let ok =
+        Poly.equal status (Unix.WEXITED 0)
+        && String.is_substring text ~substring:"13:fixture-reexport"
+        && String.is_substring text ~substring:"14:fixture-opened"
+      in
+      if not ok then eprintf "final owner exports captured output:\n%s\n" text;
+      ok);
+  p_all "shipping census respects final foreign exports across files"
+    [
+      "include Tnode\nexception Site of string";
+      "exception Site of string\nopen Tnode";
+      "include Tnode\ntype t = Site of string";
+      "include Tnode\ntype t = ..\ntype t += Site of string";
+      "include Tnode\nexception Site = Foreign_scan.Site";
+    ] ~f:(fun declaration ->
+      write "arrayjit/lib/key_scan.ml" declaration;
+      write "arrayjit/lib/user.ml" "let x = Wrapper.Site \"not a tag either\"";
+      let status, text = run () in
+      let ok =
+        Poly.equal status (Unix.WEXITED 0)
+        && String.is_substring text ~substring:"Read, not part of the checklist:"
+      in
+      if not ok then eprintf "final foreign exports captured output:\n%s\n" text;
+      ok);
+  List.iter [ "key_scan.ml"; "wrapper.ml"; "user.ml"; "foreign_scan.ml" ] ~f:(fun f ->
       Unix.unlink (Stdlib.Filename.concat root ("arrayjit/lib/" ^ f)));
   write "arrayjit/lib/low_level.ml" low_level;
   write boundary "let phase_table = [ (\"4:fixture-consume\", Store) ]\n";

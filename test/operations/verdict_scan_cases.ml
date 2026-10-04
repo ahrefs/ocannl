@@ -205,6 +205,57 @@ let () =
           found expected
       then printf "ok: source -- %s\n" name
       else fail "source -- %s: expected [%s], found [%s]" name (render expected) (render found));
+  List.iter
+    [
+      ( "a parameter does not borrow an outer label",
+        {ocaml|let label = "same"
+let f label = pass_fail label ok
+let () = skipped "same"|ocaml},
+        0 );
+      ( "same-named local literals pair with their own text",
+        {ocaml|let f () = let label = "first" in pass_fail label ok
+let g () = let label = "second" in skipped label
+let () = skipped "first"|ocaml},
+        1 );
+      ( "a later literal does not resolve an earlier use",
+        {ocaml|let f () = pass_fail label ok
+let label = "later"
+let () = skipped "later"|ocaml},
+        0 );
+      ( "a case binder shadows a literal",
+        {ocaml|let label = "outer"
+let f x = match x with label -> pass_fail label ok
+let () = skipped "outer"|ocaml},
+        0 );
+      ( "same-named parameters in one item remain separate",
+        {ocaml|let pair = ((fun label -> pass_fail label ok), (fun label -> skipped label))|ocaml},
+        0 );
+      ( "computed labels preserve their binding identity",
+        {ocaml|let pair = ((fun label -> pass_fail (label ^ " holds") ok), (fun label -> skipped (label ^ " holds")))|ocaml},
+        0 );
+      ( "computed labels pair when shadowing inputs resolve to the same literal",
+        {ocaml|let f () = let suffix = "same" in pass_fail ("x" ^ suffix) ok;
+let suffix = "same" in skipped ("x" ^ suffix)|ocaml},
+        1 );
+      ( "computed labels do not pair when literal inputs differ",
+        {ocaml|let f () = let suffix = "first" in pass_fail ("x" ^ suffix) ok;
+let suffix = "second" in skipped ("x" ^ suffix)|ocaml},
+        0 );
+      ( "bindings inside a computed expression hide outer names",
+        {ocaml|let f label =
+pass_fail (let label = "same" in label) ok;
+let label = other in skipped (let label = "same" in label)|ocaml},
+        1 );
+      ( "the same literal still pairs across scopes",
+        {ocaml|let label = "same"
+let f () = pass_fail label ok
+let () = skipped "same"|ocaml},
+        1 );
+    ]
+    ~f:(fun (name, source, expected) ->
+      let found = List.length (Scan.dialect_census source).Scan.pairings in
+      if found = expected then printf "ok: dialect scope -- %s\n" name
+      else fail "dialect scope -- %s: expected %d pairings, found %d" name expected found);
   (* The census the ratchet leans on to tell "nothing to report" from "nothing read": on a source
      with literals it must count them, and it must place the ones an application receives. *)
   let counted = Scan.scan {ocaml|let unapplied = "c"

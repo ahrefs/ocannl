@@ -2217,6 +2217,16 @@ let report result =
 
 let () =
   match Array.to_list Stdlib.Sys.argv with
+  | [ _; "--refusal-control" ] ->
+      let child = Fresh_process.run [ "--negative-control" ] in
+      let ok =
+        Fresh_process.matches ~exit:1
+          ~contains:[ "bin-smoke covers every public bin executable exactly once: false" ]
+          child
+      in
+      if not ok then Fresh_process.report ~label:"omitted executable refusal" child;
+      p "synthetic public executable omitted from @bin-smoke is refused" ok;
+      Test_utils.Refusal_control_manifest.print "bin_smoke_membership_scan.ml"
   | [ _; "--negative-control" ] -> report (scan_bin_content missing_fixture)
   | _ :: workspace_root :: dune_paths ->
       let base = Dune_scan.base_dir workspace_root in

@@ -53,10 +53,13 @@
     - {b no-repetition}: no two bullets in the notes share their whitespace-normalized text, and no
       two share their first {!near_duplicate_prefix} characters case-insensitively. A fact promoted
       twice is a fact that will be updated once.
-    - {b qualified-citations}: every numeric GitHub reference names its repository. A bare [#NNN]
-      silently resolves against whichever repository renders the note; [staging#NNN],
+    - {b qualified-citations}: literal numeric GitHub references name their repository. A bare
+      [#NNN] silently resolves against whichever repository renders the note; [staging#NNN],
       [gh-ocannl-NNN] and [ahrefs/ocannl#NNN] do not. Inline code, fenced blocks, comments and
-      identifier-attached hashes are inert to this rule.
+      identifier-attached hashes are inert to this rule. The same rule rejects case-insensitive
+      [PR NNN] and [issue NNN] tokens, separated by ASCII spaces or tabs on one physical source
+      line, with identifier boundaries at both ends. It does not resolve rendered Markdown: no
+      decoding entities or escapes, joining line breaks, or stripping formatting or links.
     - {b guide-anchors}: every [<note>.md#<anchor>] pointer in the agent guide ([AGENTS.md]), and in
       the scripts under [tools/], names a notes file and a heading that file has. The guide keeps a
       rule and points at its mechanism; a note long enough to need sections is useless to a pointer
@@ -1712,17 +1715,54 @@ let bare_citation_at line i =
         let prefix = String.sub line ~pos:!start ~len:(i - !start) |> String.lowercase in
         if List.mem [ "pr"; "issue" ] prefix ~equal:String.equal then Some !stop else None
 
-(** Bare [#NNN] citations outside the inert regions of the notes. The same paragraph-aware lexer
-    used by the structural rules owns code spans, fenced blocks and comments, so this rule cannot
-    acquire a second, drifting interpretation of Markdown. *)
+(** Literal hashless work labels, bounded to one source line. Only ASCII space/tab separates the
+    case-insensitive label from its digit run; the same identifier boundaries as the hash rule keep
+    [myissue 12], [issues 12] and [PR 12abc] outside this dialect. No Markdown is decoded here. *)
+let hashless_citation_at line i =
+  let n = String.length line in
+  let identifier_char c = Char.is_alphanum c || Char.equal c '_' in
+  if i > 0 && identifier_char line.[i - 1] then None
+  else
+    let label_stop = ref i in
+    while !label_stop < n && Char.is_alpha line.[!label_stop] do
+      Int.incr label_stop
+    done;
+    let label = String.sub line ~pos:i ~len:(!label_stop - i) |> String.lowercase in
+    if not (List.mem [ "pr"; "issue" ] label ~equal:String.equal) then None
+    else
+      let digit_start = ref !label_stop in
+      while
+        !digit_start < n
+        && (Char.equal line.[!digit_start] ' ' || Char.equal line.[!digit_start] '\t')
+      do
+        Int.incr digit_start
+      done;
+      if !digit_start = !label_stop || !digit_start >= n || not (Char.is_digit line.[!digit_start])
+      then None
+      else
+        let stop = ref !digit_start in
+        while !stop < n && Char.is_digit line.[!stop] do
+          Int.incr stop
+        done;
+        if !stop < n && identifier_char line.[!stop] then None else Some !stop
+
+(** Bare [#NNN] and literal hashless work labels outside the inert regions of the notes. The same
+    paragraph-aware lexer used by the structural rules owns code spans, fenced blocks and comments,
+    so this rule cannot acquire a second, drifting interpretation of Markdown. *)
 let check_citations ~file contents =
   let inert = (inert_by_line contents).ranges in
   List.concat_map (lines contents) ~f:(fun (lineno, line) ->
       let spans = spans_at inert lineno in
       let rec find i acc =
         if i >= String.length line then List.rev acc
-        else if Char.equal line.[i] '#' && not (in_any_span spans i) then
-          match bare_citation_at line i with
+        else if not (in_any_span spans i) then
+          match
+            if Char.equal line.[i] '#' then bare_citation_at line i
+            else if
+              Char.equal (Char.lowercase line.[i]) 'p' || Char.equal (Char.lowercase line.[i]) 'i'
+            then hashless_citation_at line i
+            else None
+          with
           | Some stop ->
               let citation = String.sub line ~pos:i ~len:(stop - i) in
               let f =

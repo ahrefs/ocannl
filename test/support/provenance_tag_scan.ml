@@ -39,7 +39,9 @@
       everywhere else, since opens and aliases reach it in ways a reader of one file cannot follow
       -- except behind a qualifier of two or more components, whose identity is not established:
       that is the owner's only when it ends in the owner's module ([Ir.Tnode.Site]), and a module
-      alias of such a path is established the same way.
+      alias of such a path is established the same way. Functor parameters, unpacks, recursive
+      modules and opaque local structures have no established identity and mint nothing through
+      their qualifier; a structure including the owner explicitly retains its identity.
     - A constructor carrying provenances only ([Refined]) composes and mints nothing; its case of
       the renderer -- a [let rec], in a source binding no [( ^ )] of its own -- must return a
       concatenation of string literals and recursive calls rendering each of its arguments exactly
@@ -56,19 +58,19 @@
       generative, so a same-named exception elsewhere proves nothing, and a handler names the local
       exception unqualified. It may take one hop through a result: a handler returning the payload
       wrapped in a constructor ([Non_virtual i -> Error i]), from an unguarded return position,
-      relays when a caller of the declaring function -- the source's one top-level binding of the
-      name, qualified by its module in one component ([Low_level.f], or an alias of it; a local
+      relays when a caller of the declaring function -- the source-level binding reached by the
+      call, qualified by its module in one component ([Low_level.f], or an alias of it; a local
       structure of that name is not the file module), or unqualified in its own source where nothing
-      else binds the name -- matches that constructor into a carrier
+      else shadows that binding -- matches that constructor into a carrier
       ([match instantiate_computations ... with Error i -> ... (Site i)]). A handler or caller body
-      that rebinds the payload's name anywhere, or changes module scope ([let open], [let module]),
-      is not read, nor is a guarded case, nor a caller's [exception] case. A scope reaching no
-      carrier mints nothing. That covers the literal at a [raise], the one handed to a helper that
-      raises it, and the one a handler records directly; a string the exception itself is applied to
-      that is no tag is refused. The function such a tag is minted in is the innermost value binding
-      enclosing the exception's declaration -- a declaration anew inside the scope opens its own --
-      which is what decides its PHASE, so a relayed tag minted in two functions is refused. A tag
-      computed at run time is not read.
+      is resolved under lexical scope: a rebound payload is not credited, while an untouched payload
+      outside that binding still is. A guarded case or caller's [exception] case is unread. A scope
+      reaching no carrier mints nothing. That covers the literal at a [raise], the one handed to a
+      helper that raises it, and the one a handler records directly; a string the exception itself
+      is applied to that is no tag is refused. The function such a tag is minted in is the innermost
+      value binding enclosing the exception's declaration -- a declaration anew inside the scope
+      opens its own -- which is what decides its PHASE, so a relayed tag minted in two functions is
+      refused. A tag computed at run time is not read.
 
     The minter of a tag of the other families is the innermost value binding around the literal.
 
@@ -357,8 +359,9 @@ let exception_keyword = "exception"
 type scope = {
   exn : string;
   declared_in : string;
+  binding : int option;
   top_level : bool;
-      (** Whether [declared_in] is the source's one top-level binding of that name: only then can a
+      (** Whether [declared_in] is a source-level binding, identified by [binding]: only then can a
           caller name it, so only then do [results] relay. *)
   direct : string list;  (** Carriers a handler of THIS scope applies the payload to. *)
   results : string list;
@@ -374,10 +377,11 @@ type read = {
   path : string;  (** The source read. *)
   mints : mint list;  (** [Applied] literals. *)
   scopes : scope list;
-  consumers : (string * string * string * string) list;
-      (** [(m, f, k, carrier)]: a [match f ... with k v -> ... (carrier v)] in this source, [f]
-          being module [m]'s function -- the module qualifying the call as resolved there, or the
-          source's own for an unqualified one. *)
+  exports : (string * int) list;
+  consumers : (string * string * int option * string * string) list;
+      (** [(m, f, binding, k, carrier)]: a [match f ... with k v -> ... (carrier v)] in this source,
+          [f] being module [m]'s function -- the module qualifying the call as resolved there, or
+          the source's own for an unqualified one. *)
   malformed : string list;  (** String literals a carrier is applied to that are no tag. *)
 }
 
@@ -386,6 +390,13 @@ let module_of_path path =
   String.capitalize (Stdlib.Filename.remove_extension (Stdlib.Filename.basename path))
 
 (* The constructor names [structure] declares with a single [string] argument. *)
+let extension_string_constructor ext =
+  match ext.pext_kind with
+  | Pext_decl
+      (_, Pcstr_tuple [ { ptyp_desc = Ptyp_constr ({ txt = Lident "string"; _ }, []); _ } ], _) ->
+      Some ext.pext_name.txt
+  | _ -> None
+
 let own_string_constructors structure =
   List.concat_map structure ~f:(fun item ->
       match item.pstr_desc with
@@ -400,6 +411,8 @@ let own_string_constructors structure =
                           Some cd.pcd_name.txt
                       | _ -> None)
               | _ -> [])
+      | Pstr_exception exn -> Option.to_list (extension_string_constructor exn.ptyexn_constructor)
+      | Pstr_typext ext -> List.filter_map ext.ptyext_constructors ~f:extension_string_constructor
       | _ -> [])
 
 (** The last components of the modules [content] includes at top level ([include Operand_key_scan]):
@@ -422,23 +435,154 @@ let top_level_includes content =
 let declares_own_carrier ~carriers content =
   List.exists (own_string_constructors (parse content)) ~f:(List.mem carriers ~equal:String.equal)
 
-(* Whether [p] binds the variable [v]. *)
-let pattern_binds v (p : pattern) =
-  let found = ref false in
-  let finder =
-    object
-      inherit Ast_traverse.iter as super
+let unestablished = "?"
 
-      method! pattern p =
-        (match p.ppat_desc with
-        | (Ppat_var { txt; _ } | Ppat_alias (_, { txt; _ })) when String.equal txt v ->
-            found := true
-        | _ -> ());
-        super#pattern p
+(** The ordered constructor namespace shared by local source scanning and file export discovery. *)
+let carrier_model ~carriers ~foreign ~owner ~source =
+  let owner_module = if String.is_empty (fst owner) then "Tnode" else module_of_path (fst owner) in
+  let is_foreign m = List.mem foreign m ~equal:String.equal in
+  let constructor_key name = "constructor:" ^ name in
+  let module_path env path =
+    let rec resolve = function
+      | Lident name -> Option.value (Map.find env.Lexical_scope.modules name) ~default:name
+      | Ldot (prefix, name) ->
+          let root = resolve prefix in
+          if String.is_prefix root ~prefix:unestablished then unestablished
+          else if String.equal name owner_module || is_foreign name then name
+          else unestablished
+      | Lapply _ -> unestablished
+    in
+    Some (resolve path)
+  in
+  let is_carrier env = function
+    | Lident c ->
+        List.mem carriers c ~equal:String.equal
+        && not (Poly.equal (Lexical_scope.lookup env (constructor_key c)) (Some `Foreign))
+    | Ldot (q, c) ->
+        List.mem carriers c ~equal:String.equal
+        && Option.value_map (module_path env q) ~default:false ~f:(fun m ->
+            not
+              (is_foreign m || String.equal m "foreign:" || String.is_prefix m ~prefix:unestablished))
+    | Lapply _ -> false
+  in
+  let extension_binding env ext =
+    if List.mem carriers ext.pext_name.txt ~equal:String.equal then
+      let denotes =
+        match ext.pext_kind with
+        | Pext_rebind { txt; _ } when is_carrier env txt -> `Own
+        | _ -> `Foreign
+      in
+      Some (ext.pext_name.txt, denotes)
+    else None
+  in
+  let bind_extension env ext =
+    Option.value_map (extension_binding env ext) ~default:env ~f:(fun (name, denotes) ->
+        Lexical_scope.bind_values env [ constructor_key name ] denotes)
+  in
+  let item_bindings ~top env item =
+    let owner_declaration =
+      top
+      && String.equal source (fst owner)
+      &&
+      match item.pstr_desc with
+      | Pstr_type (_, decls) ->
+          List.exists decls ~f:(fun d -> String.equal d.ptype_name.txt (snd owner))
+      | _ -> false
+    in
+    if owner_declaration then
+      List.filter_map (own_string_constructors [ item ]) ~f:(fun name ->
+          Option.some_if (List.mem carriers name ~equal:String.equal) (name, `Own))
+    else
+      match item.pstr_desc with
+      | Pstr_exception exn -> Option.to_list (extension_binding env exn.ptyexn_constructor)
+      | Pstr_typext ext -> List.filter_map ext.ptyext_constructors ~f:(extension_binding env)
+      | _ ->
+          List.filter_map (own_string_constructors [ item ]) ~f:(fun name ->
+              Option.some_if (List.mem carriers name ~equal:String.equal) (name, `Foreign))
+  in
+  let scope_model ?(exported = fun _ -> ()) () =
+    object (self)
+      inherit
+        [[ `Local | `Own | `Function of int | `Payload | `Foreign ], string] Lexical_scope.scoped as super
+
+      method local = `Local
+      method! shadowed = Some unestablished
+      method module_path env path = module_path env path
+
+      method! module_of env me =
+        match me.pmod_desc with
+        | Pmod_constraint (inner, _) -> self#module_of env inner
+        | Pmod_structure items ->
+            let exported = ref None in
+            let reader =
+              object
+                inherit
+                  [[ `Local | `Own | `Function of int | `Payload | `Foreign ], string] Lexical_scope
+                                                                                       .scoped
+
+                method local = `Local
+                method! shadowed = Some unestablished
+                method module_path env path = module_path env path
+                method! module_of env me = self#module_of env me
+
+                method! item_scope ~top env item =
+                  if top then
+                    List.iter (item_bindings ~top:false env item) ~f:(fun (_, denotes) ->
+                        exported :=
+                          Some (if Poly.equal denotes `Own then owner_module else "foreign:"));
+                  List.fold (item_bindings ~top:false env item) ~init:env
+                    ~f:(fun env (name, denotes) ->
+                      Lexical_scope.bind_values env [ constructor_key name ] denotes)
+
+                method! opened ~top ~include_ env denotation =
+                  if top && include_ then
+                    if
+                      Option.value_map denotation ~default:false ~f:(fun m ->
+                          is_foreign m || String.equal m "foreign:")
+                    then exported := Some "foreign:"
+                    else if Option.equal String.equal denotation (Some owner_module) then
+                      exported := Some owner_module;
+                  self#opened ~top:false ~include_ env denotation
+              end
+            in
+            ignore (reader#structure env items : structure);
+            Some (Option.value !exported ~default:unestablished)
+        | _ -> super#module_of env me
+
+      method! opened ~top ~include_ env target =
+        let denotes =
+          if
+            Option.value_map target ~default:false ~f:(fun m ->
+                is_foreign m || String.equal m "foreign:")
+          then Some `Foreign
+          else if Option.equal String.equal target (Some owner_module) then Some `Own
+          else None
+        in
+        Option.value_map denotes ~default:env ~f:(fun denotes ->
+            if top && include_ then List.iter carriers ~f:(fun name -> exported (name, denotes));
+            Lexical_scope.bind_values env (List.map carriers ~f:constructor_key) denotes)
+
+      method! item_scope ~top env item =
+        let bindings = item_bindings ~top env item in
+        if top then List.iter bindings ~f:exported;
+        List.fold bindings ~init:env ~f:(fun env (name, denotes) ->
+            Lexical_scope.bind_values env [ constructor_key name ] denotes)
     end
   in
-  finder#pattern p;
-  !found
+  (module_path, is_carrier, bind_extension, scope_model)
+
+(** Carrier names this file finally exports as foreign, after ordered declarations and includes. *)
+let foreign_carriers ~carriers ~foreign ~owner ~source content =
+  let _, _, _, scope_model = carrier_model ~carriers ~foreign ~owner ~source in
+  let exports = ref (Map.empty (module String)) in
+  let reader =
+    scope_model
+      ~exported:(fun (name, denotes) -> exports := Map.set !exports ~key:name ~data:denotes)
+      ()
+  in
+  let initial = { Lexical_scope.frames = []; modules = Map.empty (module String) } in
+  ignore (reader#structure initial (parse content) : structure);
+  List.filter carriers ~f:(fun name -> Poly.equal (Map.find !exports name) (Some `Foreign))
 
 (** One OCaml source's mints, scopes and result consumers, in source order, duplicates kept.
 
@@ -446,166 +590,84 @@ let pattern_binds v (p : pattern) =
     in [foreign] declares its own [string]-carrying constructor of that name (as [Operand_key_scan]
     declares [Site of string]), so an application qualified by it -- directly or through a chain of
     module bindings in the source ([module Scan = Test_utils.Operand_key_scan]) -- is not a
-    provenance, nor is an unqualified one in [foreign]'s own source. A module name is resolved
-    against the binding in scope where it is used -- structure items bind for the items after them,
-    [let module] for its body, a nested structure for itself -- and a binding resolves its own
-    target when it is made, so a chain needs no second lookup and cannot cycle. The owner's
-    constructors are reached through aliases and opens this reader cannot follow, which is why the
-    rule names what is excluded rather than what is included. *)
+    provenance; an unqualified one changes identity only after its declaration or include. A module
+    name is resolved against the binding in scope where it is used -- structure items bind for the
+    items after them, [let module] for its body, a nested structure for itself -- and a binding
+    resolves its own target when it is made, so a chain needs no second lookup and cannot cycle. The
+    owner's constructors are reached through aliases and opens this reader cannot follow, which is
+    why the rule names what is excluded rather than what is included. *)
 let read_source ~carriers ?(foreign = []) ?(owner = ("", "")) ~source content =
-  let mints = ref [] and malformed = ref [] and consumers = ref [] and closed = ref [] in
+  let mints = ref []
+  and malformed = ref []
+  and consumers = ref []
+  and closed = ref []
+  and exports = ref [] in
   let structure = parse content in
   let own_module = module_of_path source in
-  let unestablished = "?" in
-  let owner_module = if String.is_empty (fst owner) then "Tnode" else module_of_path (fst owner) in
-  (* The module bindings in scope, innermost first, each to the module it resolved to. *)
-  let env = ref [] in
-  let resolve q = Option.value (List.Assoc.find !env q ~equal:String.equal) ~default:q in
-  (* A module this source declares with its own carrier-named [string] constructor, under the name
-     it resolves to; a non-alias module expression otherwise resolves to its own name. *)
-  let local_foreign = ref [] in
-  let declares_carrier items =
-    List.exists (own_string_constructors items) ~f:(List.mem carriers ~equal:String.equal)
-  in
-  let is_foreign m =
-    List.mem foreign m ~equal:String.equal || List.mem !local_foreign m ~equal:String.equal
-  in
-  let rec peel_module (me : module_expr) =
-    match me.pmod_desc with Pmod_constraint (me, _) -> peel_module me | _ -> me
-  in
-  (* Whether the module [me] exports a foreign carrier constructor: it is a foreign module (or an
-     alias of one in scope), or a structure declaring one or including a module that does. *)
-  (* [local] is the structure's own module bindings seen so far, each with whether it is foreign:
-     a structure's includes resolve through them, in declaration order, before the outer scope. *)
-  let rec foreign_module ?(local = []) (me : module_expr) =
-    match (peel_module me).pmod_desc with
-    | Pmod_ident { txt = Lident m; _ } -> (
-        match List.Assoc.find local m ~equal:String.equal with
-        | Some foreign -> foreign
-        | None -> is_foreign (resolve m))
-    | Pmod_ident { txt; _ } -> Option.value_map (last_name txt) ~default:false ~f:is_foreign
-    | Pmod_structure items ->
-        declares_carrier items
-        ||
-        let rec go local = function
-          | [] -> false
-          | item :: rest -> (
-              match item.pstr_desc with
-              | Pstr_include { pincl_mod; _ } -> foreign_module ~local pincl_mod || go local rest
-              | Pstr_module { pmb_name = { txt = Some n; _ }; pmb_expr; _ } ->
-                  go ((n, foreign_module ~local pmb_expr) :: local) rest
-              | _ -> go local rest)
-        in
-        go [] items
-    | _ -> false
-  in
-  let bind name (me : module_expr) =
-    Option.iter name ~f:(fun name ->
-        let target =
-          match (peel_module me).pmod_desc with
-          | Pmod_ident { txt = Lident m; _ } -> resolve m
-          (* A longer path's identity is not established here: the owner's when it ends in the
-             owner's module, otherwise unestablished, and nothing is read through it. *)
-          | Pmod_ident { txt; _ } when Option.equal String.equal (last_name txt) (Some owner_module)
-            ->
-              owner_module
-          | Pmod_ident { txt; _ } -> (
-              match last_name txt with Some m when is_foreign m -> m | _ -> unestablished ^ name)
-          | Pmod_structure _ when foreign_module me ->
-              let target = source ^ ":" ^ name in
-              local_foreign := target :: !local_foreign;
-              target
-          (* Any other module expression is this source's own, not the file module of its name. *)
-          | _ -> source ^ ":" ^ name
-        in
-        env := (name, target) :: !env)
-  in
-  (* Whether an unqualified carrier name here is some other constructor: in [foreign]'s own source,
-     or inside a nested structure declaring one of its own. *)
-  let unqualified_foreign = ref false in
-  let is_carrier (lid : longident) =
-    match lid with
-    | Lident c -> List.mem carriers c ~equal:String.equal && not !unqualified_foreign
-    | Ldot (Lident q, c) ->
-        List.mem carriers c ~equal:String.equal
-        &&
-        let m = resolve q in
-        not (is_foreign m || String.is_prefix m ~prefix:unestablished)
-    | Ldot (q, c) ->
-        (* A longer path's identity is not established here: only one ending in the owner's module
-           ([Ir.Tnode.Site]) is taken for the owner's. *)
-        List.mem carriers c ~equal:String.equal
-        && Option.equal String.equal (last_name q) (Some owner_module)
-    | Lapply _ -> false
+  let module_path, is_carrier, bind_extension, scope_model =
+    carrier_model ~carriers ~foreign ~owner ~source
   in
   (* What a handler or consumer body [e] does with the variable [v]: the carriers applied to it
      anywhere -- applying one is what records a provenance -- and the constructors wrapping it in a
-     position [e] returns, the only place a wrapped payload reaches the caller. A body that rebinds
-     [v] ANYWHERE -- [let], [let*], a parameter, a case, a loop index -- is not read at all: which
-     occurrence is the payload is a question of scope this reader does not answer, and relaying
-     nothing is the loud answer (the scope's tags vanish, and every citation of them fails). *)
-  let wrappers_of_var v e =
-    let rebinds = ref false in
-    let binders =
-      object
-        inherit Ast_traverse.iter as super
+     position [e] returns, the only place a wrapped payload reaches the caller. [Lexical_scope]
+     distinguishes the caught payload from every binding that shadows its name. *)
+  let wrappers_of_var env v e =
+    let observed = Hashtbl.create (module Int) in
+    let carriers_hit = ref [] in
+    let finder =
+      object (self)
+        inherit
+          [[ `Local | `Own | `Function of int | `Payload | `Foreign ], string] Lexical_scope.scoped as super
 
-        method! pattern p =
-          if pattern_binds v p then rebinds := true;
-          super#pattern p
+        method local = `Local
+        method! shadowed = Some unestablished
+        method module_path env path = module_path env path
+        method! module_of env me = (scope_model ())#module_of env me
+        method! opened ~top ~include_ env target = (scope_model ())#opened ~top ~include_ env target
+        method! item_scope ~top env item = (scope_model ())#item_scope ~top env item
+        method! attribute _ attr = attr
 
-        (* A body that changes module scope could change what a carrier name refers to. *)
-        method! expression e =
-          (match e.pexp_desc with Pexp_open _ | Pexp_letmodule _ -> rebinds := true | _ -> ());
-          super#expression e
+        method! expression env e =
+          match e.pexp_desc with
+          | Pexp_letexception (ext, body) ->
+              let inner = bind_extension env ext in
+              ignore (self#expression inner body : expression);
+              e
+          | _ ->
+              (match e.pexp_desc with
+              | Pexp_construct ({ txt; _ }, Some { pexp_desc = Pexp_ident { txt = Lident x; _ }; _ })
+                when String.equal x v && Poly.equal (Lexical_scope.lookup env x) (Some `Payload) ->
+                  Hashtbl.set observed ~key:e.pexp_loc.loc_start.pos_cnum
+                    ~data:(txt, is_carrier env txt);
+                  if is_carrier env txt then
+                    Option.iter (last_name txt) ~f:(fun c -> carriers_hit := c :: !carriers_hit)
+              | _ -> ());
+              super#expression env e
       end
     in
-    binders#expression e;
-    if !rebinds then ([], [])
-    else
-      let applied_to_v (e : expression) =
-        match e.pexp_desc with
-        | Pexp_construct ({ txt; _ }, Some { pexp_desc = Pexp_ident { txt = Lident x; _ }; _ })
-          when String.equal x v ->
-            Some txt
-        | _ -> None
-      in
-      let carriers_hit = ref [] in
-      let finder =
-        object
-          inherit Ast_traverse.iter as super
-
-          method! expression e =
-            (match applied_to_v e with
-            | Some txt when is_carrier txt ->
-                Option.iter (last_name txt) ~f:(fun c -> carriers_hit := c :: !carriers_hit)
-            | _ -> ());
-            super#expression e
-        end
-      in
-      finder#expression e;
-      let rec returned (e : expression) =
-        match e.pexp_desc with
-        | Pexp_sequence (_, e)
-        | Pexp_let (_, _, e)
-        | Pexp_letmodule (_, _, e)
-        | Pexp_letexception (_, e)
-        | Pexp_open (_, e)
-        | Pexp_constraint (e, _) ->
-            returned e
-        | Pexp_ifthenelse (_, a, b) -> returned a @ Option.value_map b ~default:[] ~f:returned
-        | Pexp_match (_, cases) -> List.concat_map cases ~f:returned_case
-        | Pexp_try (body, cases) -> returned body @ List.concat_map cases ~f:returned_case
-        | _ -> [ e ]
-      (* A guarded case may never run: its result is not credited. *)
-      and returned_case c = if Option.is_some c.pc_guard then [] else returned c.pc_rhs in
-      let wrapped =
-        List.filter_map (returned e) ~f:(fun e ->
-            match applied_to_v e with
-            | Some txt when not (is_carrier txt) -> last_name txt
-            | _ -> None)
-      in
-      (!carriers_hit, wrapped)
+    ignore (finder#expression (Lexical_scope.bind_values env [ v ] `Payload) e : expression);
+    let rec returned (e : expression) =
+      match e.pexp_desc with
+      | Pexp_sequence (_, e)
+      | Pexp_let (_, _, e)
+      | Pexp_letmodule (_, _, e)
+      | Pexp_letexception (_, e)
+      | Pexp_open (_, e)
+      | Pexp_constraint (e, _) ->
+          returned e
+      | Pexp_ifthenelse (_, a, b) -> returned a @ Option.value_map b ~default:[] ~f:returned
+      | Pexp_match (_, cases) -> List.concat_map cases ~f:returned_case
+      | Pexp_try (body, cases) -> returned body @ List.concat_map cases ~f:returned_case
+      | _ -> [ e ]
+    (* A guarded case may never run: its result is not credited. *)
+    and returned_case c = if Option.is_some c.pc_guard then [] else returned c.pc_rhs in
+    let wrapped =
+      List.filter_map (returned e) ~f:(fun e ->
+          match Hashtbl.find observed e.pexp_loc.loc_start.pos_cnum with
+          | Some (txt, false) -> last_name txt
+          | _ -> None)
+    in
+    (!carriers_hit, wrapped)
   in
   (* [(constructor, v)] for each [C v] a pattern catches, the constructor as written; under
      [exception] only when [exceptions] -- a returned value never reaches an exception case. *)
@@ -618,37 +680,53 @@ let read_source ~carriers ?(foreign = []) ?(owner = ("", "")) ~source content =
     | Ppat_or (a, b) -> caught ~exceptions a @ caught ~exceptions b
     | _ -> []
   in
-  (* An unqualified call names the source's own top-level function only when nothing else in the
-     source binds that name: a local or nested-module definition of it could be what is called. *)
-  let own_function =
-    let bound = Hashtbl.create (module String) in
-    let counter =
-      object
-        inherit Ast_traverse.iter as super
-
-        method! pattern p =
-          (match p.ppat_desc with
-          | Ppat_var { txt; _ } | Ppat_alias (_, { txt; _ }) -> Hashtbl.incr bound txt
-          | _ -> ());
-          super#pattern p
-      end
-    in
-    counter#structure structure;
-    let top_level =
-      List.concat_map structure ~f:(fun item ->
-          match item.pstr_desc with
-          | Pstr_value (_, vbs) -> List.filter_map vbs ~f:binding_name
-          | _ -> [])
-    in
-    fun f ->
-      List.mem top_level f ~equal:String.equal
-      && Option.equal Int.equal (Hashtbl.find bound f) (Some 1)
-  in
-  (* Whether an [open] or [include] of [me] brings a foreign carrier constructor into scope. *)
-  let opens_foreign = foreign_module in
   let walker =
     object (self)
-      inherit Ast_traverse.iter as super
+      inherit
+        [[ `Local | `Own | `Function of int | `Payload | `Foreign ], string] Lexical_scope.scoped as super
+
+      method local = `Local
+      method! shadowed = Some unestablished
+      method module_path env path = module_path env path
+      method! module_of env me = (scope_model ())#module_of env me
+      method! opened ~top ~include_ env target = (scope_model ())#opened ~top ~include_ env target
+      method! item_scope ~top env item = (scope_model ())#item_scope ~top env item
+      val mutable top_bindings = []
+      val mutable enclosing_binding = None
+
+      method! finished env =
+        let names =
+          List.concat_map env.Lexical_scope.frames ~f:Map.keys
+          |> List.dedup_and_sort ~compare:String.compare
+        in
+        exports :=
+          List.filter_map names ~f:(fun name ->
+              match Lexical_scope.lookup env name with
+              | Some (`Function id) -> Some (name, id)
+              | _ -> None)
+
+      method! recursive_denotes ~top _env bindings =
+        List.map bindings ~f:(fun b ->
+            if top then `Function b.pvb_loc.loc_start.pos_cnum else `Local)
+
+      method! define ~top env rec_flag bindings ~walk =
+        let saved = top_bindings in
+        top_bindings <-
+          (if top then List.map bindings ~f:(fun b -> b.pvb_loc.loc_start.pos_cnum) else []);
+        let denotes =
+          List.map bindings ~f:(fun b ->
+              if top then `Function b.pvb_loc.loc_start.pos_cnum else `Local)
+        in
+        let inner =
+          match rec_flag with
+          | Recursive -> self#bind_group env bindings denotes
+          | Nonrecursive -> env
+        in
+        List.iter bindings ~f:(walk inner);
+        top_bindings <- saved;
+        denotes
+
+      method! attribute _ attr = attr
       val mutable enclosing = "(top level)"
 
       (* The local string exceptions the walk is in, innermost first. A helper bound inside a scope
@@ -656,51 +734,19 @@ let read_source ~carriers ?(foreign = []) ?(owner = ("", "")) ~source content =
          the scope shadows it, and does. *)
       val mutable scopes : scope ref list = []
 
-      method! value_binding vb =
-        let saved = enclosing in
+      method! value_binding env vb =
+        let saved = enclosing and saved_binding = enclosing_binding in
+        enclosing_binding <-
+          Option.some_if
+            (List.mem top_bindings vb.pvb_loc.loc_start.pos_cnum ~equal:Int.equal)
+            vb.pvb_loc.loc_start.pos_cnum;
         Option.iter (binding_name vb) ~f:(fun name -> enclosing <- name);
-        super#value_binding vb;
-        enclosing <- saved
+        let result = super#value_binding env vb in
+        enclosing <- saved;
+        enclosing_binding <- saved_binding;
+        result
 
-      val mutable depth = 0
-
-      method! structure items =
-        let saved = !env and saved_foreign = !unqualified_foreign in
-        depth <- depth + 1;
-        List.iter items ~f:self#structure_item;
-        depth <- depth - 1;
-        env := saved;
-        unqualified_foreign := saved_foreign
-
-      method! structure_item item =
-        match item.pstr_desc with
-        | Pstr_module mb ->
-            self#module_binding mb;
-            bind mb.pmb_name.txt mb.pmb_expr
-        | Pstr_recmodule mbs ->
-            List.iter mbs ~f:(fun mb -> bind mb.pmb_name.txt mb.pmb_expr);
-            List.iter mbs ~f:self#module_binding
-        | Pstr_type (_, decls)
-          when declares_carrier [ item ]
-               && not
-                    (String.equal source (fst owner)
-                    && List.exists decls ~f:(fun d -> String.equal d.ptype_name.txt (snd owner))) ->
-            (* From here to the end of the enclosing structure, the unqualified name is this
-               declaration's -- unless it is the owner's own type, in the owner's own file. *)
-            super#structure_item item;
-            unqualified_foreign := true
-        | Pstr_exception { ptyexn_constructor = { pext_name = { txt; _ }; _ }; _ }
-          when List.mem carriers txt ~equal:String.equal ->
-            (* An exception named like a carrier shadows it for the rest of the structure. *)
-            super#structure_item item;
-            unqualified_foreign := true
-        | Pstr_include { pincl_mod = me; _ } | Pstr_open { popen_expr = me; _ } ->
-            super#structure_item item;
-            (* For the rest of the enclosing structure, which restores the flag on exit. *)
-            if opens_foreign me then unqualified_foreign := true
-        | _ -> super#structure_item item
-
-      method! case c =
+      method! case env c =
         (* A handler of an open scope's exception -- spelled unqualified, as a local exception is;
            [M.Non_virtual] is another constructor -- and what it does with the payload. *)
         (* A guarded case is not read: whether its body runs is not a syntactic fact. *)
@@ -711,26 +757,27 @@ let read_source ~carriers ?(foreign = []) ?(owner = ("", "")) ~source content =
             | Lident e -> (
                 match List.find scopes ~f:(fun sc -> String.equal !sc.exn e) with
                 | Some sc ->
-                    let direct, results = wrappers_of_var v c.pc_rhs in
+                    let direct, results = wrappers_of_var env v c.pc_rhs in
                     sc := { !sc with direct = direct @ !sc.direct; results = results @ !sc.results }
                 | None -> ())
             | _ -> ());
-        super#case c
+        super#case env c
 
-      method! expression e =
-        match e.pexp_desc with
+      method! expression env e =
+        (match e.pexp_desc with
         | Pexp_letexception
             ( ({ pext_name = { txt; _ }; pext_kind = Pext_decl (_, Pcstr_tuple [ _ ], None); _ } as
                ext),
               body ) ->
             let saved = scopes in
-            self#extension_constructor ext;
+            ignore (self#extension_constructor env ext : extension_constructor);
             let sc =
               ref
                 {
                   exn = txt;
                   declared_in = enclosing;
-                  top_level = own_function enclosing;
+                  binding = enclosing_binding;
+                  top_level = Option.is_some enclosing_binding;
                   direct = [];
                   results = [];
                   literals = [];
@@ -738,49 +785,43 @@ let read_source ~carriers ?(foreign = []) ?(owner = ("", "")) ~source content =
                 }
             in
             scopes <- sc :: List.filter scopes ~f:(fun o -> not (String.equal !o.exn txt));
-            (* An exception named like a carrier shadows it in its body. *)
-            let saved_foreign = !unqualified_foreign in
-            if List.mem carriers txt ~equal:String.equal then unqualified_foreign := true;
-            self#expression body;
-            unqualified_foreign := saved_foreign;
+            let inner = bind_extension env ext in
+            ignore (self#expression inner body : expression);
             closed := !sc :: !closed;
             scopes <- saved
-        | Pexp_open (({ popen_expr = me; _ } as od), body) when opens_foreign me ->
-            self#open_declaration od;
-            let saved = !unqualified_foreign in
-            unqualified_foreign := true;
-            self#expression body;
-            unqualified_foreign := saved
+        | Pexp_letexception (ext, body) ->
+            ignore (self#expression (bind_extension env ext) body : expression)
         | Pexp_construct (lid, Some { pexp_desc = Pexp_constraint (arg, _); _ }) ->
-            self#expression { e with pexp_desc = Pexp_construct (lid, Some arg) }
-        | Pexp_letmodule ({ txt; _ }, me, body) ->
-            self#module_expr me;
-            let saved = !env in
-            bind txt me;
-            self#expression body;
-            env := saved
+            ignore
+              (self#expression env { e with pexp_desc = Pexp_construct (lid, Some arg) }
+                : expression)
         | Pexp_match
             ({ pexp_desc = Pexp_apply ({ pexp_desc = Pexp_ident { txt = f; _ }; _ }, _); _ }, cases)
           ->
             let callee =
               match f with
-              | Ldot (Lident q, name) -> Some (resolve q, name)
-              | Lident name when own_function name -> Some (own_module, name)
-              | Ldot _ | Lident _ | Lapply _ -> None
+              | Ldot (Lident q, name) ->
+                  Option.map (module_path env (Lident q)) ~f:(fun m -> (m, name, None))
+              | Lident name -> (
+                  match Lexical_scope.lookup env name with
+                  | Some (`Function id) -> Some (own_module, name, Some id)
+                  | _ -> None)
+              | Ldot _ | Lapply _ -> None
             in
-            Option.iter callee ~f:(fun (m, f) ->
+            Option.iter callee ~f:(fun (m, f, binding) ->
                 List.iter cases ~f:(fun (c : case) ->
                     List.iter
                       (if Option.is_some c.pc_guard then [] else caught ~exceptions:false c.pc_lhs)
                       ~f:(fun (k, v) ->
                         Option.iter (last_name k) ~f:(fun k ->
                             List.iter
-                              (fst (wrappers_of_var v c.pc_rhs))
-                              ~f:(fun carrier -> consumers := (m, f, k, carrier) :: !consumers)))));
-            super#expression e
+                              (fst (wrappers_of_var env v c.pc_rhs))
+                              ~f:(fun carrier ->
+                                consumers := (m, f, binding, k, carrier) :: !consumers)))));
+            ignore (super#expression env e : expression)
         | Pexp_construct
             ({ txt; _ }, Some { pexp_desc = Pexp_constant (Pconst_string (s, _, _)); _ })
-          when is_carrier txt -> (
+          when is_carrier env txt -> (
             (match (last_name txt, tag_number s) with
             | Some carrier, Some number ->
                 mints :=
@@ -801,7 +842,8 @@ let read_source ~carriers ?(foreign = []) ?(owner = ("", "")) ~source content =
                 sc := { !sc with not_tags = s :: !sc.not_tags })
         | Pexp_constant (Pconst_string (s, _, _)) -> (
             match tag_number s with Some number -> self#scoped number s | None -> ())
-        | _ -> super#expression e
+        | _ -> ignore (super#expression env e : expression));
+        e
 
       method scoped number tag =
         List.iter scopes ~f:(fun sc ->
@@ -817,11 +859,13 @@ let read_source ~carriers ?(foreign = []) ?(owner = ("", "")) ~source content =
             sc := { !sc with literals = m :: !sc.literals })
     end
   in
-  walker#structure structure;
+  let initial = { Lexical_scope.frames = []; modules = Map.empty (module String) } in
+  ignore (walker#structure initial structure : structure);
   {
     path = source;
     mints = List.rev !mints;
     scopes = List.rev_map !closed ~f:(fun sc -> { sc with literals = List.rev sc.literals });
+    exports = !exports;
     consumers = List.rev !consumers;
     malformed = List.rev !malformed;
   }
@@ -834,10 +878,11 @@ let scope_carriers ~consumers ~path (sc : scope) =
   @ List.concat_map
       (if sc.top_level then sc.results else [])
       ~f:(fun k ->
-        List.filter_map consumers ~f:(fun (m, f, k', carrier) ->
+        List.filter_map consumers ~f:(fun (m, _f, binding, k', carrier) ->
             Option.some_if
               (String.equal m (module_of_path path)
-              && String.equal f sc.declared_in && String.equal k k')
+              && Option.equal Int.equal binding sc.binding
+              && Option.is_some binding && String.equal k k')
               carrier))
   |> List.dedup_and_sort ~compare:String.compare
 
@@ -846,7 +891,20 @@ let scope_carriers ~consumers ~path (sc : scope) =
     [(source, literal)] for every string a carrier, or a relaying scope's exception, is applied to
     that is no tag. *)
 let resolve reads =
-  let consumers = List.concat_map reads ~f:(fun r -> r.consumers) in
+  let consumers =
+    List.concat_map reads ~f:(fun r ->
+        List.filter_map r.consumers ~f:(fun (m, f, binding, k, carrier) ->
+            let binding =
+              match binding with
+              | Some _ -> binding
+              | None ->
+                  List.find_map reads ~f:(fun producer ->
+                      if String.equal (module_of_path producer.path) m then
+                        List.Assoc.find producer.exports f ~equal:String.equal
+                      else None)
+            in
+            Option.map binding ~f:(fun id -> (m, f, Some id, k, carrier))))
+  in
   let relayed =
     List.concat_map reads ~f:(fun r ->
         List.concat_map r.scopes ~f:(fun sc ->

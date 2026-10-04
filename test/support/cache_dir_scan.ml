@@ -23,12 +23,14 @@
 
     {1 What is resolved, and how far}
 
-    Resolution is per FILE and flat: a binding's literal is available to every use in the same
-    source, regardless of scope. A use that resolves to no literal is reported as such rather than
-    dropped, so a spelling this module cannot follow fails the check that uses it instead of quietly
-    shrinking the census. The one such spelling in the tree is a pass-through: a function taking the
-    directory as a parameter and forwarding it, whose value is named at ITS call sites and checked
-    there. *)
+    Names resolve through [Lexical_scope] at each use. A labelled or optional [cache_dir] parameter
+    is reported as forwarded; every other unresolved argument fails loudly in the consuming check.
+    Only exact [Schedule_cache], [Ir.Schedule_cache] and [Ocannl.Ir.Schedule_cache] module paths
+    (and their lexical aliases) identify direct cache operations. Unknown opens bring in no names;
+    qualified directory values are unresolved rather than borrowed from a same-named local. The
+    library's [Autotune.resolve_cache_dir] preserves forwarding when its argument is a lexical
+    parameter: it picks that parameter or the separately censused configuration default. Other
+    computations of a directory remain unresolved. *)
 
 open Base
 open Ppxlib.Parsetree
@@ -67,8 +69,6 @@ let label_name = function
   | Asttypes.Labelled name | Asttypes.Optional name -> Some name
   | Asttypes.Nolabel -> None
 
-let mentions_label name = String.is_substring name ~substring:tune_label
-
 (* The string literal an application passes under a given label, where it passes one. *)
 let labelled_literal args wanted =
   List.find_map args ~f:(fun (lbl, argument) ->
@@ -102,81 +102,26 @@ let describe = function
   | Forwarded name -> "forwards the parameter " ^ name
   | Unresolved how -> "names " ^ how
 
-(* Every binding whose name mentions [cache_dir] and whose right-hand side is a string literal, and
-   every name a function takes as a parameter that mentions it. The first table resolves a use; the
-   second tells a use that resolves to nothing whether it is a pass-through. *)
-let scope ast =
-  let literals = Hashtbl.create (module String) in
-  let parameters = Hash_set.create (module String) in
-  (* The names {!cache_module} goes by in this file. Resolved from the aliases rather than assumed,
-     because the tests bind it three ways -- `module SC = Ir.Schedule_cache`, `module Cache = …`,
-     and the qualified path itself -- and matching on the function name alone would take any `store
-     ~dir:` in the repository for a cache write. *)
-  let cache_modules = Hash_set.of_list (module String) [ cache_module ] in
-  (* An alias of an alias is an alias: `module Cache = SC` names the module as surely as `module SC
-     = Ir.Schedule_cache` does, and structure items are visited in order, so a name already
-     recognised is available to the binding that borrows it (Codex P2, round 4). *)
-  let names_cache_module path =
-    match List.last (flatten_longident path) with
-    | Some last -> String.equal last cache_module || Hash_set.mem cache_modules last
-    | None -> false
+type value_denotes = Parameter | Unknown | Resolver | Literal of string
+type module_denotes = Cache | Ir | Ocannl | Autotune | Other
+
+let module_path env path =
+  let rec resolve = function
+    | Ppxlib.Longident.Lident name -> (
+        match Map.find env.Lexical_scope.modules name with
+        | Some denotation -> denotation
+        | None -> (
+            match name with
+            | "Schedule_cache" -> Cache
+            | "Ir" -> Ir
+            | "Ocannl" -> Ocannl
+            | "Autotune" -> Autotune
+            | _ -> Other))
+    | Ldot (path, "Ir") when Poly.equal (resolve path) Ocannl -> Ir
+    | Ldot (path, "Schedule_cache") when Poly.equal (resolve path) Ir -> Cache
+    | _ -> Other
   in
-  let iterator =
-    object
-      inherit Ast_traverse.iter as super
-
-      method! structure_item item =
-        (match item.pstr_desc with
-        | Pstr_module
-            {
-              pmb_name = { txt = Some alias; _ };
-              pmb_expr = { pmod_desc = Pmod_ident { txt; _ }; _ };
-              _;
-            }
-          when names_cache_module txt ->
-            Hash_set.add cache_modules alias
-        | _ -> ());
-        super#structure_item item
-
-      method! value_binding binding =
-        (match (pattern_name binding.pvb_pat, string_literal binding.pvb_expr) with
-        | Some name, Some value when mentions_label name ->
-            Hashtbl.set literals ~key:name ~data:value
-        | _ -> ());
-        super#value_binding binding
-
-      method! expression expr =
-        (match expr.pexp_desc with
-        (* `let module Cache = Ir.Schedule_cache in …` binds the same name in expression position,
-           which no structure item records.
-
-           Which node that is has moved: through 5.4 the compiler's own tree says [Pexp_letmodule],
-           and 5.5 replaced it with an ordinary [Pstr_module] wrapped in an expression. Reading
-           ppxlib's tree is what lets one arm answer for both -- ppxlib migrates the 5.5 spelling
-           back to this one. *)
-        | Pexp_letmodule ({ txt = Some alias; _ }, { pmod_desc = Pmod_ident { txt; _ }; _ }, _)
-          when names_cache_module txt ->
-            Hash_set.add cache_modules alias
-        | Pexp_function (params, _, _) ->
-            List.iter params ~f:(fun param ->
-                match param.pparam_desc with
-                | Pparam_val (lbl, _, pat) ->
-                    let named =
-                      match (lbl, pattern_name pat) with
-                      | (Asttypes.Labelled name | Asttypes.Optional name), _
-                        when mentions_label name ->
-                          Some name
-                      | _, Some name when mentions_label name -> Some name
-                      | _ -> None
-                    in
-                    Option.iter named ~f:(Hash_set.add parameters)
-                | _ -> ())
-        | _ -> ());
-        super#expression expr
-    end
-  in
-  iterator#structure ast;
-  (literals, parameters, cache_modules)
+  Some (resolve path)
 
 type report = {
   uses : use list;
@@ -188,44 +133,100 @@ type report = {
 
 (** What one source says about schedule cache directories. Parses once: both questions are asked of
     every file in the repository, and each is a walk over the same tree. *)
-let read content =
+let read ?(source = "") content =
   let ast = structure_of content in
-  let literals, parameters, cache_modules = scope ast in
-  (* The empty string disables the cache only where [Autotune.tune] reads it that way: it checks
-     [String.is_empty] before consulting or writing the cache at all. A direct store has no such
-     reading -- [ensure_dir ""] is a no-op and [cache_file] then yields [<key>.sexp], written into
-     the working directory, where the glob does not reach it (Codex P2, round 2). *)
-  let resolve ~disabling_allowed argument =
+  let resolve env ~disabling_allowed argument =
+    let literal value =
+      if String.is_empty value && disabling_allowed then Disabled else Names value
+    in
     match string_literal argument with
-    | Some "" when disabling_allowed -> Disabled
-    | Some value -> Names value
+    | Some value -> literal value
     | None -> (
-        match Option.bind (longident_of argument) ~f:List.last with
-        | None -> Unresolved "an expression"
-        | Some name -> (
-            match Hashtbl.find literals name with
-            | Some value -> Names value
-            | None ->
-                if Hash_set.mem parameters name then Forwarded name
-                else Unresolved ("`" ^ name ^ "`")))
+        match argument.pexp_desc with
+        | Pexp_ident { txt = Ppxlib.Longident.Lident name; _ } -> (
+            match Lexical_scope.lookup env name with
+            | Some (Literal value) -> literal value
+            | Some Parameter -> Forwarded name
+            | _ -> Unresolved ("`" ^ name ^ "`"))
+        | Pexp_ident { txt; _ } ->
+            Unresolved ("`" ^ String.concat ~sep:"." (flatten_longident txt) ^ "`")
+        | _ -> Unresolved "an expression")
   in
-  (* Whether an application is a call INTO the cache module: its callee is a qualified path whose
-     qualifier is one of the module's names here. A bare `store ~dir:` is not one -- inside
-     schedule_cache.ml itself the directory is a parameter, named by whoever called in. *)
-  let calls_cache_module callee =
-    match longident_of callee with
-    | Some path -> (
-        match List.rev path with
-        | _ :: qualifier :: _ -> Hash_set.mem cache_modules qualifier
-        | _ -> false)
-    | None -> false
+  let calls_cache_module env callee =
+    match callee.pexp_desc with
+    | Pexp_ident { txt = Ppxlib.Longident.Ldot (qualifier, _); _ } ->
+        Poly.equal (module_path env qualifier) (Some Cache)
+    | _ -> false
   in
   let found = ref [] and defaults = ref [] in
   let iterator =
-    object
-      inherit Ast_traverse.iter as super
+    object (self)
+      inherit [value_denotes, module_denotes] Lexical_scope.scoped as super
+      method local = Unknown
 
-      method! expression expr =
+      method! bind_parameter env label pattern =
+        let denotes =
+          if Option.equal String.equal (label_name label) (Some tune_label) then Parameter
+          else Unknown
+        in
+        self#forget
+          (Lexical_scope.bind_values env (Lexical_scope.pattern_vars [ pattern ]) denotes)
+          (Lexical_scope.pattern_unpacks [ pattern ])
+
+      method! shadowed = Some Other
+      method module_path env path = module_path env path
+      val mutable resolver_seen = false
+
+      method! define ~top env rec_flag bindings ~walk =
+        let denotes = super#define ~top env rec_flag bindings ~walk in
+        List.map2_exn bindings denotes ~f:(fun binding value ->
+            if
+              top
+              && String.equal source "arrayjit/lib/autotune.ml"
+              && Option.equal String.equal (pattern_name binding.pvb_pat) (Some "resolve_cache_dir")
+            then (
+              let first = not resolver_seen in
+              resolver_seen <- true;
+              if first then Resolver else Unknown)
+            else value)
+
+      method! let_denotes binding =
+        match (pattern_name binding.pvb_pat, string_literal binding.pvb_expr) with
+        | Some _, Some value -> Literal value
+        | _ -> Unknown
+
+      method! binding_denotes env binding =
+        match self#let_denotes binding with
+        | Literal _ as value -> value
+        | _ -> (
+            match binding.pvb_expr.pexp_desc with
+            | Pexp_ident { txt = Ppxlib.Longident.Lident name; _ } ->
+                Option.value (Lexical_scope.lookup env name) ~default:Unknown
+            | Pexp_apply (callee, args) ->
+                let resolver =
+                  match callee.pexp_desc with
+                  | Pexp_ident { txt = Ppxlib.Longident.Lident "resolve_cache_dir"; _ } ->
+                      String.equal source "arrayjit/lib/autotune.ml"
+                      && Poly.equal (Lexical_scope.lookup env "resolve_cache_dir") (Some Resolver)
+                  | Pexp_ident { txt = Ldot (path, "resolve_cache_dir"); _ } ->
+                      Poly.equal (module_path env path) (Some Autotune)
+                  | _ -> false
+                in
+                let forwarding =
+                  List.exists args ~f:(fun (label, arg) ->
+                      Option.equal String.equal (label_name label) (Some tune_label)
+                      &&
+                      match arg.pexp_desc with
+                      | Pexp_ident { txt = Ppxlib.Longident.Lident name; _ } ->
+                          Poly.equal (Lexical_scope.lookup env name) (Some Parameter)
+                      | _ -> false)
+                in
+                if resolver && forwarding then Parameter else Unknown
+            | _ -> Unknown)
+
+      method! attribute _ attr = attr
+
+      method! expression env expr =
         (match expr.pexp_desc with
         | Pexp_apply (callee, args) ->
             (* The built-in default: the [~default:] literal of a read of the key by name. The
@@ -236,7 +237,7 @@ let read content =
             then
               Option.iter (labelled_literal args "default") ~f:(fun value ->
                   if not (String.is_empty value) then defaults := value :: !defaults);
-            let into_cache = calls_cache_module callee in
+            let into_cache = calls_cache_module env callee in
             List.iter args ~f:(fun (lbl, argument) ->
                 (* [Some disabling_allowed] where this argument names a directory. *)
                 let names_a_directory =
@@ -248,16 +249,18 @@ let read content =
                 Option.iter names_a_directory ~f:(fun disabling_allowed ->
                     found :=
                       {
-                        resolution = resolve ~disabling_allowed argument;
+                        resolution = resolve env ~disabling_allowed argument;
                         line = argument.pexp_loc.loc_start.pos_lnum;
                         spelling = "~" ^ Option.value (label_name lbl) ~default:tune_label;
                       }
                       :: !found))
         | _ -> ());
-        super#expression expr
+        super#expression env expr
     end
   in
-  iterator#structure ast;
+  ignore
+    (iterator#structure { Lexical_scope.frames = []; modules = Map.empty (module String) } ast
+      : structure);
   { uses = List.rev !found; builtin_defaults = List.rev !defaults }
 
 type ignore_line = { pattern : string; negated : bool }

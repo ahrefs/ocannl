@@ -76,13 +76,13 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   forwarders still need executed oracles — syntactic use proves only that the value was forwarded.
 
 - Ambient gates in `env_var_deps` (gh-ocannl-920) are uncached actions running a program that
-  directly declares `arrayjit.utils` and an effective `(link_flags -linkall)`, resolved through `Dune_stanza_scan.program_runners` plus
+  directly declares `arrayjit.utils` and an effective `(link_flags -linkall)`, resolved through
+  `Dune_stanza_scan.program_runners` plus
   Dune's self-running test actions. The force-link flag is required because OCaml can omit an
   unused archive and its startup reader. Grouping and subtraction are evaluated; unresolved
   flag includes, expansions and subtraction of `:standard` are refused explicitly. `(universe)`
   in the action's `deps` prevents caching; preprocessing dependencies do not. It alone identifies
-  no gate: compiler censuses and
-  OCANNL-free canaries use it too. The same classification owns alias reachability, the gate's
+  no gate: compiler censuses and OCANNL-free canaries use it too. The same classification owns alias reachability, the gate's
   training lock obligation and the deliberate generated-alias collision exemption. A mixed Dune
   file exempts only its configuration-free aliases, so a new configuration reader cannot inherit
   the canary's exemption. Each scoped alias must remain live; removing one retires its exemption
@@ -90,6 +90,11 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   directly run its one local `metal_queue_probe` owner, with only the declared probe module and
   `metal`, `ctypes`, `unix` libraries; alias-only aggregation is allowed. Opaque launchers,
   unresolvable alias dependencies and a reader added to the same alias require a gate.
+
+- A scan resolving names in OCaml sources uses `Test_utils.Lexical_scope` and states its fail-loud
+  rule in its header before its first review (gh-ocannl-1140). File-wide literal tables and module
+  alias sets cannot distinguish a parameter or nested binding from a same-named earlier value;
+  controls must exercise shadowing and separate scopes, alongside the nearest honest use.
 
 ### Bringing the base in
 
@@ -1032,17 +1037,20 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   the rule, and dune reruns only for a variable the rule DECLARES: a key on the guard's list with no
   `(env_var OCANNL_<KEY>)` beside it is a key the guard never sees, and dune serves the previous
   golden across a change of it. `env_var_deps` pairs the two (gh-ocannl-749) rather than trusting the
-  hand-written list. `Config_key_scan.env_reader_reads_in_source` RESOLVES each reach or REFUSES it:
-  a string literal at the call names its key, and a key taken from a list names the elements of that
-  list, resolved through the shapes the guards here are written in — a top-level `let` of string
-  literals, `a @ b`, `List.map keys ~f:fst` over a table of pairs, iterated by a `List` combinator
-  the scan knows. Anything it cannot follow is reported per reach, not approximated: an earlier
-  version fell back on the source's string literals, which is a superset where the list is in the
-  file and says nothing where it is not, so one incidental literal made an unresolved reach look
-  answered. Every construct it follows is named, every name it trusts (`List`, `fst`, `snd`, `@`,
-  the standard roots) is checked for rebinding, and a file that rebinds one gets no resolution at
-  all. Keys are normalized before the registry is consulted and are asked for KNOWN OR NOT — the
-  reader builds `OCANNL_<KEY>` whatever the registry says — so a key OCANNL does not read must be
+  hand-written list. `Config_key_scan.env_reader_reads_in_source` reads each literal call or
+  refuses it. A dynamic guard follows the structural contract (gh-ocannl-797): a local
+  `let guarded_keys = ["key"; ...] in Base.List.iter guarded_keys ~f:(fun key -> match
+  Utils.read_env_var key with ...)`. The list and iteration must be adjacent, and the callback
+  begins with that match; a following relationship assertion is allowed. Keys are literal strings,
+  including the parser's decoded quoted or escaped forms. List bindings elsewhere, projections,
+  concatenation, wrapper combinators, callback rebindings and function values refuse with the
+  required shape. The scanner never infers their keys. A source declaring its own `Base` module
+  also refuses this reserved spelling, without resolving its scope. Match arms are ordinary
+  reporting code; any additional reader reach in them is checked independently.
+  `profile_precedence` checks its explicit guard list against the settings table it protects, so
+  reshaping the guard does not replace the table relationship with a second unchecked list.
+  Keys are normalized before the registry is consulted and are asked for known or not: the
+  reader builds `OCANNL_<KEY>` whatever the registry says, so a key OCANNL does not read must be
   pinned rather than declared, the sibling check refusing a declaration that names none.
   A variable a run pins with `(setenv …)` is exempt where the pin SCOPES over that run, and pinning
   is the better option wherever it is available; every rule that runs the program must answer, since
@@ -1051,11 +1059,10 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   makes for the initializer. The negative control is a third synthetic tree in
   `env_var_deps --control`, permanent rather than transient, since every guard in the tree declares
   and a corpus-drawn control would record the absence of the shape.
-  What the resolver is FOR is worth knowing before extending it: catching a guard whose declarations
-  drifted from its key list, which it does exactly. It is deliberately not adversary-proof — a source
-  can always put its keys behind an abstraction — and the module header says so. If that trade stops
-  holding, the answer is a structural contract for how a guard spells its keys, matched rather than
-  inferred, not another name in its tables.
+  The receiver census still identifies literal reads through aliases and opens, but it does not
+  establish guard-key membership. The old scoping and list-inference fixtures remain in
+  `config_scan_lexing` as refusal controls alongside the structural forms; `env_var_deps --control`
+  still proves missing declarations, unknown keys, library callers and incorrectly scoped pins.
 - **A test that names the schedule pipeline declares the keys it reaches — derived, not
   hand-listed** (gh-ocannl-1149). A test calling `Ir.Schedule.default_gpu`,
   `maybe_default_schedules`, `zero_expansion`, `fission_keep_mapping` … is one whose subject is the
@@ -3198,6 +3205,12 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   above an unrelated test's failure and read as its cause.
 
 ## Test support and placement
+
+- `Fresh_process` (gh-ocannl-910) owns synchronous fresh-child capture for host-only probes:
+  separate temporary stream files, absolute executable resolution, status-plus-causal-text matching
+  and exception cleanup. `report` prefixes every echoed child line, so its `STOPPED EARLY`, `FAIL:`
+  and `FAILED:` markers cannot be read as the parent's Verdict report by `tools/mutation-run.sh`.
+  Deadline, custom-environment and concurrent-process harnesses keep their own contracts.
 
 - `ll_test_ratchet` (gh-ocannl-964) derives test sources from `Source_inventory`, harness membership
   from owning Dune stanza groups (including parent `subdir` blocks and `select` target-to-arm

@@ -52,45 +52,11 @@ let ignore_unix f x = try f x with Unix.Unix_error _ -> ()
 
 (* Stands in for the backend emitting a kernel. *)
 let emit routine contents = Stdio.Out_channel.write_all (path routine) ~data:contents
+let run_child ?(args = []) mode = Fresh_process.run (mode :: args)
 
-let describe_status = function
-  | Unix.WEXITED n -> Printf.sprintf "exited %d" n
-  | Unix.WSIGNALED n -> Printf.sprintf "was killed by signal %d" n
-  | Unix.WSTOPPED n -> Printf.sprintf "was stopped by signal %d" n
-
-(* [run_child ?args mode] runs one mode in a child process and answers its exit status together with
-   everything it wrote, stdout and stderr concatenated.
-
-   Through temporary FILES rather than pipes: the child writes to both streams, and reading two
-   pipes in sequence deadlocks as soon as the stream not being read fills its buffer. Today's
-   messages are far short of that, but "correct while the output stays small" is not a property this
-   file should be resting on -- and the redirection is the same two file descriptors either way. *)
-let run_child ?(args = []) mode =
-  let exe = Stdlib.Sys.executable_name in
-  let capture suffix = Stdlib.Filename.temp_file "gp_child" suffix in
-  let out_path = capture ".out" and err_path = capture ".err" in
-  let open_capture p = Unix.openfile p [ Unix.O_WRONLY; Unix.O_TRUNC ] 0o600 in
-  let out = open_capture out_path and err = open_capture err_path in
-  let pid = Unix.create_process exe (Array.of_list (exe :: mode :: args)) Unix.stdin out err in
-  let _, status = Unix.waitpid [] pid in
-  Unix.close out;
-  Unix.close err;
-  let text = Stdio.In_channel.read_all out_path ^ Stdio.In_channel.read_all err_path in
-  ignore_unix Unix.unlink out_path;
-  ignore_unix Unix.unlink err_path;
-  (status, text)
-
-(* Whether a child refused the way the mode under test is about: exit 1, AND [message] among what it
-   said. A failing check prints the whole capture to stderr -- the child's own account of what went
-   wrong is exactly what a reader needs, and it is only being withheld from PASSING runs. *)
-let child_refused ~message (status, text) =
-  let ok =
-    (match status with Unix.WEXITED 1 -> true | _ -> false)
-    && String.is_substring text ~substring:message
-  in
-  if not ok then
-    Stdio.eprintf "the child %s without reporting %S. Its captured output:\n%s\n"
-      (describe_status status) message text;
+let child_refused ~message child =
+  let ok = Fresh_process.matches ~exit:1 ~contains:[ message ] child in
+  if not ok then Fresh_process.report ~label:("refusal: " ^ message) child;
   ok
 
 let refused claim ~message child = Verdict.p claim (child_refused ~message child)
