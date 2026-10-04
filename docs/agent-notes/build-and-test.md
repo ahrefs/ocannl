@@ -2242,6 +2242,10 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   `opam show --raw` block, so the line that moved between the two runs IS the package whose
   definition changed. That listing costs no extra opam call: it splits the one solver-wide
   `opam show --raw --sort` the digest already runs, on its `opam-version:` block boundary
+  outside quoted strings. Canonical raw output has no comments and indents nested fields;
+  its ordinary and triple-quoted strings still need quote/escape tracking, since descriptions
+  can hold column-zero marker and identity lines (gh-ocannl-921). The harness pins exact
+  hashes for that fixture and rejects both unquoted splitting and identity extraction.
   (~50ms for ~200 packages). A key over
   `hashFiles('*.opam')` alone is blind both to new compatible
   ordinary-package releases and to the

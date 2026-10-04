@@ -87,14 +87,34 @@ solution_digest=$(
 # diagnosed by local reproduction for exactly this reason). So report a per
 # package digest of that package's own definition -- diffing two runs' listings
 # names the culprit directly. `opam show --raw --sort` concatenates the
-# definitions it was asked for, each opening with `opam-version:` at column 0,
+# definitions it was asked for, each opening with `opam-version:` at column 0
+# outside strings (the same text can occur in a multiline description),
 # so splitting that one solver-wide answer costs no extra opam call; the block's
 # own `name:`/`version:` fields label it, since `--sort` returns them in
 # dependency order rather than the order they were requested in.
 blocks_dir="$work_dir/blocks"
 mkdir -p "$blocks_dir"
 awk -v dir="$blocks_dir" '
-  /^opam-version:/ {
+  # Only recognize fields outside quoted strings. This consumes canonical
+  # opam show --raw output, not arbitrary opam source: comments are discarded
+  # and nested fields indented by opam. Both ordinary and triple-quoted strings
+  # can contain escaped quotes/backslashes; a backslash-newline stays inside
+  # the string but consumes no character on the next line.
+  function scan_quotes(line,    i, c) {
+    for (i = 1; i <= length(line); i += 1) {
+      c = substr(line, i, 1)
+      if (quote && c == "\\") {
+        i += 1
+      } else if (substr(line, i, 3) == "\"\"\"" && quote != 1) {
+        quote = (quote == 3 ? 0 : 3)
+        i += 2
+      } else if (c == "\"" && quote != 3) {
+        quote = (quote == 1 ? 0 : 1)
+      }
+    }
+  }
+  { outside = (quote == 0) }
+  outside && /^opam-version:/ {
     # awk keeps every redirection target open; ~180 of them exhausts the
     # descriptor limit on the awks that do not juggle them.
     if (file != "") close(file)
@@ -104,13 +124,14 @@ awk -v dir="$blocks_dir" '
     version = ""
   }
   n > 0 { print > file }
-  n > 0 && name == "" && /^name: "/ {
+  outside && n > 0 && name == "" && /^name: "/ {
     name = $0; sub(/^name: "/, "", name); sub(/"$/, "", name); names[n] = name
   }
-  n > 0 && version == "" && /^version: "/ {
+  outside && n > 0 && version == "" && /^version: "/ {
     version = $0; sub(/^version: "/, "", version); sub(/"$/, "", version)
     versions[n] = version
   }
+  { scan_quotes($0) }
   END {
     for (i = 1; i <= n; i += 1)
       printf "%s.%s\n", (i in names ? names[i] : "?"), (i in versions ? versions[i] : "?")
