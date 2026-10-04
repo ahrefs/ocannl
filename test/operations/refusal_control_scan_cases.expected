@@ -250,8 +250,8 @@ env_var_deps.ml: [scanner-refusal:07e7987f0d61b10a9fea6c6590c73d59] env_var (dir
 env_var_deps.ml: [scanner-refusal:bbadfd8513559355fedbc54dc3dc678a] serializes its actions (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:eb5d5419b3bd18240469743cbabc58f2] has actions on (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:a06dccc27afe2153a7700609691d3c8d] attaches a rule (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
-env_var_deps.ml: [scanner-refusal:cd2777d83ada3318386d3cd02b39018b] repository a repo-wide (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
-env_var_deps.ml: [scanner-refusal:ffdd3e3b7a0db8da177f376b13f03c45] repository to produce (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:7f157a5478f43aa3d2da34c9975976a9] inventories the repository (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:91751d43d8939e1da724e6f0bcbe8f09] inventories the repository (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:f16784d0b1f52de5e30378cb771ada5c] alias does not (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:4012b24c7623acd977522e8f2eacf2bb] attaches a rule (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:ba5d90fc4bcec944ebd169329c706968] goldens on the (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
@@ -378,6 +378,16 @@ env_var_deps.ml: [scanner-refusal:0ef14060bb3652683a114deb420a5f42] Utils.settin
 env_var_deps.ml: [scanner-refusal:0a556db347940fc8afa67b95bbe681ad] Ir.Schedule (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:dfee69c1373134de53471c5591146cee] another library's Schedule (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:596c956b100d191f1322f23aea4b1186] pipeline reads outside (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:d04fa9759a77fcd06752e1d4a912eb06] source_tree (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:760e7621ae0370f92b10878f9d71ee0f] source_tree (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:ca87c0e84f8b051f232796e69330144f] renamed direct-utils universe (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:eb2b142cf7df4f4e59facf55554fb04e] universe-dependent compiler census (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:474c2c17b390e6a30e2a618348b20390] another directory's same-named (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:64dfdc824dcf91354dbd2abd219db619] universe rule running (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:06fb7574357e1a85e9d7da69c19351b3] gate cannot provide (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:3bacab0b9c1d831e547e7ededd7085e2] generated-alias collision exemption (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:6d2cc639b272c289c3a79c46561b671f] explicit self-run resolve (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:9fe5330074251fed6b9e5e08a0d663bd] universe users alone (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 ll_test_ratchet.ml has exactly the explicitly assigned refusal controls: true
 operand_key_ratchet.ml has exactly the explicitly assigned refusal controls: true
 provenance_tag_inventory.ml has exactly the explicitly assigned refusal controls: true

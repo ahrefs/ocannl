@@ -203,8 +203,6 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   arrayjit/test/dune                       @metal-codegen
   arrayjit/test/dune                       @runtest
   arrayjit/test/dune                       @runtest-env_spelling_gate
-  benchmarks/runners/ocannl/dune           @bin-smoke
-  benchmarks/runners/ocannl/dune           @metal-codegen
   benchmarks/runners/ocannl/dune           @mma-register-scope-emit
   benchmarks/runners/ocannl/dune           @mma-register-scope-emit-env_spelling_gate
   bin/dune                                 @bin-smoke
@@ -351,6 +349,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/training/dune                       @train-mlp_bn_names
   test/training/dune                       @train-mlp_names
   test/training/dune                       @train-transformer_names
+  benchmarks/runners/ocannl/dune -- no gate: its bin-smoke action runs metal_queue_probe, linking metal, ctypes and unix without an OCANNL configuration reader; universe makes the canary rerun, but cannot check spellings
   benchmarks/dune -- no gate: its one runtest action runs python3 over the benchmark orchestrator's own unit tests, which import no OCANNL executable -- there is no startup check in reach to gate, the same reason `config_dep_completeness` exempts it from the ocannl_config dependency
 
 Declarations of a name OCANNL does not read as a configuration key, exempt by design:

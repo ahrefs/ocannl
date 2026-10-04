@@ -75,6 +75,12 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   counterparts so losing a control is itself a golden change (gh-ocannl-811). Optimizer
   forwarders still need executed oracles — syntactic use proves only that the value was forwarded.
 
+- Ambient gates in `env_var_deps` (gh-ocannl-920) are uncached actions running a program that
+  explicitly links `arrayjit.utils`, resolved through `Dune_stanza_scan.program_runners` plus
+  Dune's self-running test actions. `(universe)` alone identifies no gate: compiler censuses and
+  OCANNL-free canaries use it too. The same classification owns alias reachability, the gate's
+  training lock obligation and the deliberate generated-alias collision exemption.
+
 ### Bringing the base in
 
 - GitHub builds a pull request's MERGE COMMIT, so a repository-wide scan that is green on your
