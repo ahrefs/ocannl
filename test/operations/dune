@@ -7124,7 +7124,7 @@
  (name ll_test_scan_cases)
  (package neural_nets_lib)
  (modules ll_test_scan_cases)
- (libraries base stdio unix test_utils arrayjit.verdict)
+ (libraries base stdio unix fresh_process test_utils arrayjit.verdict)
  (deps ocannl_config ll_test_ratchet.exe)
  (action
   (run %{test} %{dep:ll_test_ratchet.exe})))
