@@ -2227,6 +2227,25 @@ let () =
         String.chop_prefix_if_exists ~prefix:"mma_"
           (String.lowercase (Sexp.to_string (BI.sexp_of_mma_input_format f)))
       in
+      (* The register scope's [d] boundary, whatever the accumulator's storage type: the load fills
+         the fragment's registers ([frag[__mi][__ni][0] = widen(__mma_dr0[0]);]) and the store
+         writes the rows back ([__mma_dr0[0] = narrow(frag…)]). The per-[k_o] rendering this
+         replaces reads and writes the same [__mma_dr0] rows inside the body, at every block. *)
+      let register_resident src =
+        residency_holds src ~frag_load:"[__mi][__ni][0] = " ~body_begin:register_body_begin
+          ~body_end:register_body_end ~frag_store:"__mma_dr0[0] = " ~barrier:"__syncthreads();"
+        &&
+        match
+          ( String.substr_index src ~pattern:register_body_begin,
+            String.substr_index src ~pattern:register_body_end )
+        with
+        | Some beg, Some fin ->
+            not
+              (String.is_substring
+                 (String.sub src ~pos:beg ~len:(fin - beg))
+                 ~substring:"__mma_dr0")
+        | _ -> false
+      in
       let run_twins (((fa, fb, fd) as triple), layout) =
         let tag = String.concat ~sep:"_" (List.map [ fa; fb; fd ] ~f:format_tag) in
         let swizzle = match layout with BI.Mma_swizzled_b128 -> LL.Swizzle_b128 in
@@ -2329,7 +2348,8 @@ let () =
           in
           let census = List.map routine.Context.mma.Ir.C_syntax.renderings ~f:snd in
           let ctx = Context.run ctx routine in
-          (nonzero name (Context.get_values ctx t.Tensor.value), census, Generated.read name)
+          let src = Generated.read name in
+          (nonzero name (Context.get_values ctx t.Tensor.value), census, register_resident src)
         in
         let plain = run ~name:("mm_twin_plain_" ^ tag) () in
         let swizzled = run ~swizzle ~name:("mm_twin_swz_" ^ tag) () in
@@ -2352,25 +2372,6 @@ let () =
           | Ir.C_syntax.Mma_intrinsics_ldmatrix -> Ir.C_syntax.Mma_intrinsics
           | rendering -> rendering)
       in
-      (* The register scope's [d] boundary, whatever the accumulator's storage type: the load fills
-         the fragment's registers ([frag[__mi][__ni][0] = widen(__mma_dr0[0]);]) and the store
-         writes the rows back ([__mma_dr0[0] = narrow(frag…)]). The per-[k_o] rendering this
-         replaces reads and writes the same [__mma_dr0] rows inside the body, at every block. *)
-      let register_resident src =
-        residency_holds src ~frag_load:"[__mi][__ni][0] = " ~body_begin:register_body_begin
-          ~body_end:register_body_end ~frag_store:"__mma_dr0[0] = " ~barrier:"__syncthreads();"
-        &&
-        match
-          ( String.substr_index src ~pattern:register_body_begin,
-            String.substr_index src ~pattern:register_body_end )
-        with
-        | Some beg, Some fin ->
-            not
-              (String.is_substring
-                 (String.sub src ~pos:beg ~len:(fin - beg))
-                 ~substring:"__mma_dr0")
-        | _ -> false
-      in
       p_all claim_twin_census twins ~f:(fun (tag, (_, plain, _), (_, swizzled, _), _, _) ->
           let agree =
             (not (List.is_empty plain))
@@ -2390,8 +2391,9 @@ let () =
               (Sexp.to_string (List.sexp_of_t Ir.C_syntax.sexp_of_mma_rendering plain))
               (Sexp.to_string (List.sexp_of_t Ir.C_syntax.sexp_of_mma_rendering swizzled));
           agree);
-      p_all claim_twin_resident twins ~f:(fun (_, (_, _, src_plain), (_, _, src_swizzled), _, _) ->
-          register_resident src_plain && register_resident src_swizzled);
+      p_all claim_twin_resident twins
+        ~f:(fun (_, (_, _, resident_plain), (_, _, resident_swizzled), _, _) ->
+          resident_plain && resident_swizzled);
       (* An independent oracle, not the twins against each other: a defect both paths share (a
          staging index, the fragment mapping) would leave two equal wrong arrays. *)
       p_all claim_twin_values twins

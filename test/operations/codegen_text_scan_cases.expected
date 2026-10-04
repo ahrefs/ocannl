@@ -77,10 +77,63 @@ ok: source -- anonymous forwarding callbacks stay visibly partial
 ok: source -- generated source stored through mutation stays visibly partial
 ok: source -- a forwarding wrapper used as a callback stays visibly partial
 ok: source -- a forwarding wrapper keeps unresolved caller markers visibly partial
+ok: source -- a self-sourcing wrapper has no false partial
+ok: source -- an unused self-sourcing wrapper has no false partial
+ok: source -- a wrapper sourcing through local aliases has no false partial
+ok: source -- same-parameter source normalization preserves real pins despite a callback
+ok: source -- normalizing an unrelated shadow preserves uncertainty without caller pins
+ok: source -- a generated collection callback keeps its known fragment and explicit uncertainty
+ok: source -- pattern-bound source fragments inherit the scrutinee provenance
+ok: source -- ordinary arguments forwarded by a known wrapper contribute no fragments
+ok: source -- exception messages do not inherit generated source from the protected computation
+ok: source -- a completed predicate result is an ordinary value in either conditional branch
+ok: source -- a normalizer never borrows generated provenance from a different call
+ok: source -- a source-returning helper validates an internal read through its routine parameter
+ok: source -- a source-returning buffer helper preserves the unresolved-buffer backstop
+ok: source -- a buffer-returning helper preserves inputs used by earlier writes with explicit uncertainty
+ok: source -- a helper result depends only on its returned formal argument
+ok: source -- the returned formal still carries generated provenance past an ignored ordinary argument
+ok: source -- a constant-returning helper does not borrow generated argument provenance
+ok: source -- exception match patterns are independent of the successful generated result
+ok: source -- an ordinary tuple-match sibling does not borrow generated provenance
+ok: source -- a generated tuple-match component retains its own marker
+ok: source -- an ordinary record-match sibling does not borrow generated provenance
+ok: source -- a generated record-match component retains its own marker
+ok: source -- tuple-let components keep generated and ordinary sources separate
+ok: source -- record-let components keep generated and ordinary sources separate
+ok: source -- a match over a try result retains the successful generated payload
+ok: source -- a match over an ordinary try result ignores a preceding generated read
+ok: source -- a selected optional default leaves no callable identity on the completed boolean
+ok: source -- an ordinary replacement retains uncertainty without contributing a body literal
+ok: source -- an aliased ordinary replacement retains uncertainty without contributing a body literal
+ok: source -- a followed partial call retains its unresolved source dependency and known fragment
+ok: source -- a partial call returning an ordinary supplied argument ignores later generated text
+ok: source -- dynamic optional source forwarding retains generated evidence with uncertainty
+ok: source -- dynamic optional source forwarding preserves its possible generated default
+ok: source -- dynamic ordinary forwarding with an ordinary default contributes no fragment
+ok: source -- a function-case result inherits its actual positional input
+ok: source -- a function-case constant result does not borrow its generated input
+ok: source -- a function-case predicate validates its source and caller marker
+ok: source -- a function-case predicate on ordinary input contributes no caller marker
+ok: source -- an untraced diagnostic callback contributes uncertainty but no generated fragment
+ok: source -- an untraced refutation callback contributes no emitted-text marker
+ok: source -- a known helper preserves the predicate callable it returns
+ok: source -- a returned predicate callable on ordinary input contributes no marker
+ok: source -- an opaque function-case ordinary tuple component stays partial without a pin
+ok: source -- an opaque function-case generated tuple component remains explicitly uncertain
+ok: source -- an opaque function-case ordinary record component stays partial without a pin
+ok: source -- a function-case internal read remains independent of opaque components
+ok: source -- a source returned through ref mutation remains visibly uncorrelated
+ok: source -- ordinary input through ref mutation cannot validate a source marker
+ok: source -- a discarded record write keeps the source dependency explicitly uncertain
+ok: source -- a let-bound write keeps its source dependency explicitly uncertain
+ok: source -- a generated ref initializer cannot validate text after an ordinary overwrite
+ok: source -- a generated record initializer cannot validate an overwritten field
+ok: source -- an independent generated result survives a preceding write boundary
 ok: source -- a helper-local generated read propagates through normalization aliases
 ok: source -- same-named local predicates pin only their in-scope composite context
-ok: source -- a nested predicate capturing an enclosing source parameter stays partial
-ok: source -- a nested predicate reaching its captured source through an alias stays partial
+ok: source -- a nested predicate validates an enclosing source parameter at its call
+ok: source -- a nested predicate validates its captured source through an alias
 ok: source -- a nested backend-name predicate does not capture an unrelated source parameter
 ok: source -- nested helpers own their tests independently of enclosing predicates
 ok: source -- validated source aliases propagate into nested predicate calls

@@ -1609,31 +1609,56 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   parameter of that name read as the literal), and staging#855 lost the pins of two same-named
   bindings outright, equal values included. Predicate callees resolve to the lexical function
   binding too (gh-ocannl-1150), since their body text must not come from a same-named helper in
-  another scope. Taint and emitter value aliases stay file-wide on purpose, since there over-reach
-  costs an inventory line. `codegen_text_scan_cases` controls each spelling against the old resolution.
+  another scope. Source provenance also resolves identifiers at each use (gh-ocannl-1186);
+  emitter value aliases and buffer destination seeds retain their existing conservative name model.
+  `codegen_text_scan_cases` controls each spelling against the old resolution.
 - Predicate parameters use the emitter destination lookup too (gh-ocannl-1150): labelled text
   and source parameters match by label, while only unlabelled parameters consume positions.
   Keep every text test in a predicate, since `residency_holds` pins several caller-supplied markers;
   choosing one loses the rest even after the parameter reader learns labels. Optional defaults
   must not stop that reader before a later source parameter.
-  A name rebound inside the body is conservatively not a caller-supplied marker; leave that site
-  visible to the pin walk and its partial mark. Distinguish source read inside a helper using local
-  taint resolved at each use, rather than another scope's same-named value. A composite fragment
-  retains its literal context and every caller-supplied component in the inventory. An omitted optional marker uses its default only when a later
-  positional argument selects it; an unfollowed partial application stays marked partial.
-  Static optional forwarding resolves `None` to the selected default and unwraps `Some`.
-  Predicate body literals pass the same call-site source check as caller markers; only validated
-  source parameters propagate into nested helper calls. An unfollowed callback remains partial,
-  as does a nested predicate capturing an enclosing source parameter the scan cannot validate.
-  Ordinary forwarding wrappers and predicate calls whose source cannot be validated remain
-  partial until their provenance can be followed, including optional defaults, anonymous callbacks
-  and mutation. This conservatively includes ordinary-source calls; they still contribute no
-  fragment. Helper-local aliases use a lexical fixed point.
+  `Codegen_text_scan.scoped_provenance` carries generated-source evidence, symbolic parameter
+  dependencies and unresolved buffer evidence through one lexical rule for bindings and uses
+  (gh-ocannl-1186). Rebinding a parameter through normalization preserves its dependency; replacing
+  it with unrelated text keeps uncertainty without attributing the caller's fragment. A helper
+  sourcing its own generated text does not become an unresolved forwarding wrapper, even when
+  unused. Validated calls seed the specific helper parameter, so same-named parameters elsewhere
+  cannot borrow that evidence. Captured generated bindings use the same scoped rule. A helper
+  returning generated text from its own read supplies that evidence independently of its routine
+  argument; a pure helper substitutes only the formal dependencies of its returned value at
+  each call. Buffer-returning helpers keep inputs used by earlier writes at an explicit uncertainty
+  boundary; the scan does not model memory effects. Known ordinary replacement and unresolved
+  callback input have distinct uncertainty states. A named fragment requires generated-source
+  evidence; an untraced callback parameter alone keeps only the partial mark. Unary callbacks
+  for `List.iter`, `map`, `exists`, `for_all`, `filter`, `filter_map` and `count` receive generated evidence
+  only from their actual collection argument, with unresolved execution. Other combinators and
+  callback shapes remain unsupported. Symbolic components
+  of opaque aggregate inputs and results flowing through explicit writes are uncorrelated, so
+  substituting a generated argument cannot pretend that the selected component contains it.
+  Discarded ref, field, array and byte writes preserve source dependencies as uncertain effects;
+  this is a boundary, not a memory model. Independent returned evidence survives that boundary.
+  Completed predicates return ordinary booleans, rather than carrying their callable identity into verdict bindings.
+  A composite fragment retains its literal context and every caller-supplied component in the
+  inventory. An omitted optional marker uses its default only when a later positional argument
+  selects it; static optional forwarding resolves `None` to the selected default and unwraps
+  `Some`. Dynamic forwarding keeps the expression and possible selected default, with uncertainty
+  when they can carry source. `function` case inputs use a synthetic positional formal and the
+  same match-payload rule. Explicit tuple/record components bind their own source evidence in
+  lets and matches; opaque aggregate destructuring keeps possible fragments with a partial mark.
+  A match over a `try` value retains successful result evidence, while handler and exception
+  patterns remain ordinary. A partial call keeps unsupplied symbolic dependencies explicitly
+  unresolved; the scan does not rebase closure argument positions. Rebuild call aggregates at each
+  fixed-point step, so an earlier unresolved input cannot poison a later validated chain.
+  Predicate body literals pass the same call-site source check as caller markers.
+  Ordinary forwarding wrappers, mutation, partial applications and unfollowed callbacks remain
+  explicitly partial; this includes ordinary-source calls, which contribute no fragment. Known
+  local calls can validate captured parameters and callbacks; unknown higher-order calls keep any
+  independently validated fragments alongside their partial mark.
 - **What no file-local rule can follow now says so.** A buffer is where generated text lands with no
   name to carry it, and the ways to fill one do not end (a wrapper reaching its parameter through a
   local binding, PPrint's own `ToBuffer` renderers, a buffer in a record). So a substring test whose
   haystack reads a `Buffer.contents` this scan never saw filled — directly, or through the bindings
-  the read travels along, by the same fixed point taint uses — marks that file's itemisation
+  the read travels along, by the same scoped provenance rule — marks that file's itemisation
   **partial** rather than dropping the fragment silently — the file is listed, the fragment is
   unnamed, and the inventory says which.
 - A test that classifies COMPILER-PLAN text rather than generated text marks that one binding with
