@@ -33,12 +33,12 @@ let () =
   Verdict.p "select arms use the compiled target interface relationship"
     (List.equal String.equal
        (Surface.sources ~dunes:[ ("arrayjit/lib/dune", selected_dune) ] selected_paths)
-       [ "arrayjit/lib/impl.mli" ]
+       [ "arrayjit/lib/dune"; "arrayjit/lib/impl.mli" ]
     && List.equal String.equal
          (Surface.sources
             ~dunes:[ ("arrayjit/lib/dune", selected_dune) ]
             (List.take selected_paths 2))
-         [ "arrayjit/lib/impl.cudajit.ml"; "arrayjit/lib/impl.missing.ml" ]);
+         [ "arrayjit/lib/dune"; "arrayjit/lib/impl.cudajit.ml"; "arrayjit/lib/impl.missing.ml" ]);
   let generator_dune =
     "(ocamllex lexer private_lexer) (menhir (modules parser)) (library (name parserlib) \
      (public_name pkg.parserlib) (modules lexer parser)) (executable (name private) (modules \
@@ -48,18 +48,43 @@ let () =
   Verdict.p "public generator inputs follow Dune module ownership and explicit interfaces"
     (List.equal String.equal
        (Surface.sources ~dunes:[ ("tensor/dune", generator_dune) ] generator_paths)
-       [ "tensor/lexer.mll"; "tensor/parser.mly" ]
+       [ "tensor/dune"; "tensor/lexer.mll"; "tensor/parser.mly" ]
     && List.equal String.equal
          (Surface.sources
             ~dunes:[ ("tensor/dune", generator_dune) ]
             ("tensor/lexer.mli" :: generator_paths))
-         [ "tensor/lexer.mli"; "tensor/parser.mly" ]);
+         [ "tensor/dune"; "tensor/lexer.mli"; "tensor/parser.mly" ]);
   Verdict.p "parser tokens and lexer body changes produce generated-interface review entries"
     (List.length (changed "tensor/parser.mly" "%token OLD\n%%" "%token NEW\n%%") = 1
     && List.length
          (changed "tensor/lexer.mll" "{let v = 1}\nrule token = parse | eof { () }"
             "{let v = true}\nrule token = parse | eof { () }")
        = 1);
+  let owner_before =
+    "(library (name first) (public_name pkg.first) (modules a)) (library (name second) \
+     (public_name pkg.second) (modules b))"
+  in
+  let owner_after =
+    "(library (name first) (public_name pkg.first) (modules b)) (library (name second) \
+     (public_name pkg.second) (modules a))"
+  in
+  Verdict.p "Dune module ownership moves produce conservative publication-input entries"
+    (List.length (changed "lib/dune" owner_before owner_after) = 2
+    && List.length (changed "lib/dune" owner_before "(library (name first) (modules a))") = 2);
+  let publication_before =
+    declarations "lib/dune"
+      "(library (name public) (public_name pkg.public) (modules a) (libraries earlier)) (library \
+       (name private) (modules x))"
+  in
+  let publication_after =
+    declarations "lib/dune"
+      "; changed prose\n\
+       (library (name public) (public_name pkg.public) (modules a) (libraries later)) (library \
+       (name private) (modules y))"
+  in
+  Verdict.p_empty "private ownership dependency and prose edits do not change publication entries"
+    ~over:publication_before
+    (Surface.changes publication_before publication_after);
   Verdict.p "a multiline value signature change is visible"
     (List.length (changed "lib/a.mli" "val run :\n int ->\n int" "val run :\n int ->\n string") = 1);
   Verdict.p "record fields and constructors retain their symbol spellings"
@@ -111,6 +136,16 @@ let () =
            external call : string -> int = \"call\"\n\
            type t = B [@@deriving compare]")
     = 3);
+  Verdict.p "non-documentation attribute payload changes stay visible"
+    (List.length
+       (changed "lib/a.ml" "type t = A [@@deriving sexp]" "type t = A [@@deriving compare]")
+     = 1
+    && List.length
+         (changed "lib/a.mli" "type t = A [@@deriving sexp]" "type t = A [@@deriving compare]")
+       = 1
+    && List.length
+         (changed "lib/a.ml" "[@@@publish earlier] let x = 1" "[@@@publish later] let x = 1")
+       = 1);
   let named_before =
     declarations "lib/a.ml"
       "let exported = 1\n\

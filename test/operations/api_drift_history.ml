@@ -209,10 +209,27 @@ let () =
       let reordered = commit "Move public declaration across open" in
       p "declaration movement preserves ordering context"
         (has (read ~until:reordered ordered) "val x");
+      write "lib/attributes.ml" "type t = A [@@deriving sexp]\n";
+      let attributed = commit "First deriving input" in
+      write "lib/attributes.ml" "type t = A [@@deriving compare]\n";
+      let changed_attributes = commit "Change deriving input" in
+      p "non-documentation attribute payload changes are visible"
+        (has (read ~until:changed_attributes attributed) "deriving compare");
+      write "lib/dune"
+        "(library (name first) (public_name pkg.first) (modules attributes)) (library (name \
+         second) (public_name pkg.second) (modules pattern))\n";
+      let owned = commit "Public library owners" in
+      write "lib/dune"
+        "(library (name first) (public_name pkg.first) (modules pattern)) (library (name second) \
+         (public_name pkg.second) (modules attributes))\n";
+      let moved = commit "Move unchanged source between public libraries" in
+      p "Dune-only public module moves produce publication-input review entries"
+        (has (read ~until:moved owned) "public library first"
+        && has (read ~until:moved owned) "public library second");
       write "arrayjit/lib/cap.mli" "val";
       ignore (commit "Invalid source must refuse" : string);
       p "invalid source refuses the real historical reader"
-        (has (read ~success:false reordered) "api-drift:"))
+        (has (read ~success:false moved) "api-drift:"))
     ~finally:(fun () ->
       Unix.chdir previous;
       Unix.unlink git_config;

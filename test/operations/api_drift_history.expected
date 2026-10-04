@@ -8,4 +8,6 @@ select arms become visible when the compiled target interface is removed: true
 non-exporting initializer and evaluation edits do not create API entries: true
 pattern PPX input changes remain visible: true
 declaration movement preserves ordering context: true
+non-documentation attribute payload changes are visible: true
+Dune-only public module moves produce publication-input review entries: true
 invalid source refuses the real historical reader: true

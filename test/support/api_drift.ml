@@ -122,16 +122,40 @@ let derived_inputs ~paths dunes =
             (Set.mem present input && Set.mem public_modules name && not (Set.mem present interface))
             input))
 
+let publication_inputs contents =
+  Dune_stanza_scan.stanzas contents
+  |> List.filter_map ~f:(fun stanza ->
+      if
+        Option.equal String.equal (Dune_stanza_scan.head stanza) (Some "library")
+        && not (List.is_empty (Dune_stanza_scan.public_names stanza))
+      then
+        let fields =
+          [ "name"; "public_name"; "public_names"; "modules"; "wrapped"; "private_modules" ]
+          |> List.filter_map ~f:(fun field ->
+              Option.map (Dune_stanza_scan.field stanza field) ~f:(fun value ->
+                  Sexp.List (Sexp.Atom field :: value)))
+        in
+        Some
+          {
+            name = "public library " ^ String.concat ~sep:"," (Dune_stanza_scan.names_of stanza);
+            line = 1;
+            text = Sexp.to_string_hum (Sexp.List (Sexp.Atom "library" :: fields));
+          }
+      else None)
+
 let sources ?(dunes = []) paths =
   List.filter paths ~f:(fun path ->
       Dead_export_scan.in_scan_root path && String.is_suffix path ~suffix:".mli")
   @ List.filter (Dead_export_scan.implicit_implementations paths) ~f:(fun source ->
       Option.is_some (Dead_export_scan.module_name_of_source source))
   @ derived_inputs ~paths dunes
+  @ List.filter_map dunes ~f:(fun (path, contents) ->
+      Option.some_if (not (List.is_empty (publication_inputs contents))) path)
   |> List.dedup_and_sort ~compare:String.compare
 
 let declarations ~source contents =
-  if String.is_suffix source ~suffix:".mll" || String.is_suffix source ~suffix:".mly" then
+  if String.equal (Stdlib.Filename.basename source) "dune" then publication_inputs contents
+  else if String.is_suffix source ~suffix:".mll" || String.is_suffix source ~suffix:".mly" then
     (* This is deliberately a review entry for a generator INPUT. Generating and typechecking a
        historical module would require its historical dependency tree and toolchain. Keep all input
        changes visible, without claiming to reconstruct its generated/inferred interface. *)
@@ -214,6 +238,15 @@ let declarations ~source contents =
           prune_nonexports <- false;
           Exn.protect
             ~f:(fun () -> super#extension extension)
+            ~finally:(fun () -> prune_nonexports <- saved)
+
+        (* Attributes, like extensions, can consume an arbitrary structure payload to generate
+           exports. Only documentation attributes are discarded by the enclosing filters. *)
+        method! attribute attribute =
+          let saved = prune_nonexports in
+          prune_nonexports <- false;
+          Exn.protect
+            ~f:(fun () -> super#attribute attribute)
             ~finally:(fun () -> prune_nonexports <- saved)
 
         method! attributes attrs =

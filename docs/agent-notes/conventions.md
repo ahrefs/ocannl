@@ -33,7 +33,10 @@ files.
   Dune supplies the compiled target/interface relationship for select arms and the inputs of
   public lexer/parser modules. A generator input is a conservative review entry: the editor must
   inspect its generated interface, since this tool does not regenerate historical modules or
-  typecheck their dependency trees.
+  typecheck their dependency trees. Public-library publication fields in Dune produce conservative
+  input entries too, surfacing module-set, owner or wrapping changes without reconstructing the
+  installed module/type graph. Inspect that publication relationship manually; dependency-only,
+  private-library and prose Dune edits stay outside these entries.
   This is a reading aid, not a compatibility gate: implementation bodies are kept because they
   can change an inferred public type, and PPX-generated exports and inferred types still require
   manual review. Record retired or renamed symbols in the resulting bullet so later API-removal
