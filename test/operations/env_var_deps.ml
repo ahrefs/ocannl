@@ -1151,7 +1151,7 @@ let main () =
   let exemptions = Map.of_alist_exn (module String) exempt_declarations in
   let exemptions_used = ref (Set.empty (module String)) in
   let gateless = Map.of_alist_exn (module String) gateless_dirs in
-  let gateless_used = ref (Set.empty (module String)) in
+  let gateless_used = ref [] in
   let gated = ref [] in
   (* The gh-ocannl-659 half: one line per stanza that runs an executable, and the per-file summary
      the golden holds. *)
@@ -1591,7 +1591,10 @@ let main () =
                 && Option.exists (Map.find gateless dune_file) ~f:(fun (aliases, _) ->
                     Option.value_map aliases ~default:true ~f:(fun aliases ->
                         List.mem aliases alias ~equal:String.equal))
-              then gateless_used := Set.add !gateless_used dune_file
+              then
+                let aliases, _ = Map.find_exn gateless dune_file in
+                gateless_used :=
+                  (dune_file, Option.map aliases ~f:(fun _ -> alias)) :: !gateless_used
               else
                 fail
                   (Printf.sprintf
@@ -2645,14 +2648,23 @@ let main () =
   List.sort !pipeline_table ~compare:(fun (a, _) (b, _) -> String.compare a b)
   |> List.iter ~f:(fun (where, via) -> printf "  %s: %s\n" where via);
   let stale_gateless =
-    Set.diff (Set.of_list (module String) (List.map gateless_dirs ~f:fst)) !gateless_used
+    List.concat_map gateless_dirs ~f:(fun (file, (aliases, _)) ->
+        Option.value_map aliases
+          ~default:[ (file, None) ]
+          ~f:(fun aliases -> List.map aliases ~f:(fun alias -> (file, Some alias))))
+    |> List.filter ~f:(fun expected ->
+        not
+          (List.mem !gateless_used expected ~equal:(fun (file, alias) (used_file, used_alias) ->
+               String.equal file used_file && Option.equal String.equal alias used_alias)))
   in
-  if not (Set.is_empty stale_gateless) then
+  if not (List.is_empty stale_gateless) then
     fail
       (Printf.sprintf
          "directories exempted from the ambient gate that no longer run tests -- drop them from \
           the exemption list: %s"
-         (String.concat ~sep:", " (Set.to_list stale_gateless)));
+         (String.concat ~sep:", "
+            (List.map stale_gateless ~f:(fun (file, alias) ->
+                 file ^ Option.value_map alias ~default:"" ~f:(fun alias -> " @" ^ alias)))));
   printf "\nAmbient environment gates, by dune file and every alias whose build runs one:\n";
   List.sort !gated ~compare:(fun (a, x) (b, y) ->
       match String.compare a b with 0 -> String.compare x y | c -> c)
@@ -5017,6 +5029,24 @@ let gateless_scope_control () =
   printf "\nSynthetic controls: mixed-file gateless exemptions apply only to their named aliases.\n";
   Verdict.p "an unrelated configuration-reading alias cannot inherit the probe's gateless exemption"
     reported;
+  Verdict.p_all "each missing scoped exemption is stale even while its sibling alias remains"
+    [ "bin-smoke"; "metal-codegen" ] ~f:(fun missing ->
+      let remaining =
+        Scan.stanzas existing
+        |> List.filter ~f:(fun stanza ->
+            not (List.mem (aliases_of stanza) missing ~equal:String.equal))
+        |> List.map ~f:Sexp.to_string_hum |> String.concat ~sep:"\n"
+      in
+      write_file (Stdlib.Filename.concat root file) remaining;
+      let status, text = run_checker ~root ~exe ("." :: source :: List.map context ~f:fst) in
+      let stale =
+        (match status with Unix.WEXITED 1 -> true | _ -> false)
+        && String.is_substring text ~substring:"directories exempted from the ambient gate"
+        && String.is_substring text ~substring:(file ^ " @" ^ missing)
+      in
+      if not stale then
+        eprintf "stale alias control %s %s:\n%s\n" missing (describe_status status) text;
+      stale);
   try remove_tree root with Unix.Unix_error _ -> ()
 
 (* The ambient classifier's nearest legitimate universe users beside a renamed gate. The executable

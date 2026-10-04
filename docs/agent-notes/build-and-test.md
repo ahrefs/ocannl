@@ -84,7 +84,8 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   OCANNL-free canaries use it too. The same classification owns alias reachability, the gate's
   training lock obligation and the deliberate generated-alias collision exemption. A mixed Dune
   file exempts only its configuration-free aliases, so a new configuration reader cannot inherit
-  the canary's exemption.
+  the canary's exemption. Each scoped alias must remain live; removing one retires its exemption
+  even if another exempt alias still runs.
 
 ### Bringing the base in
 
