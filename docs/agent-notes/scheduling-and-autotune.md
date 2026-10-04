@@ -5,6 +5,7 @@ Schedule legality and coverage, sketch families, and how to read what a search a
 Part of the agent notes; the [index](../agent-notes.md) carries the scope discipline and the other
 files.
 
+## GPU mapping and companion coverage
 - Small leading GPU axes can starve the default schedule even when later axes have ample work
   (gh-ocannl-995). `gpu_parallel_suffix` chooses a better-populated pair before
   `analyze_parallel_chains` proves ownership, with the original selection as a conservative
@@ -184,6 +185,7 @@ files.
   never seeded, so it never reaches the decline log. gh-569's Part 3 read 25 coverage declines out of
   `schedule_log_declines`; the same workload on current master logs zero
   (`report-gh612-hip.md`). Ask the emitted source and the launch geometry instead.
+## Family decisions and launch geometry
 - **The family tree's decisions are DATA, and reading one back means matching on it — never
   re-parsing a label** (gh-ocannl-591). `Ir.Schedule_space` is parameterized over the decision type
   (`('l, 'a) tree`, paths `(string * 'l) list`); the matmul family instantiates it at
@@ -332,6 +334,7 @@ files.
   `(1024 1024 1024)`, i.e. `max_grid_yz = 65535` and a `max_workgroup_dims` that equals the product
   cap — that device cannot exercise the per-dimension cliff; CUDA's `.z` of 64 is the one that
   can.
+## Contraction detection and strided axes
 - `detect_conv`'s boundary is SINGLETON axes, not rank (gh-ocannl-912). 3-D, 1-D, batchless and
   multi-batch convs are detected and seeded on both legs; what it refuses is any extent-1 axis,
   because lowering drops the loop and indexes the axis at `Fixed_idx 0` while the matcher wants
@@ -353,6 +356,7 @@ files.
   structure, the batch-1 refusal and every seed's parity (or typed decline, in the block); which
   seeds decline where it only reports on stderr, and the 16-channel virtualization is a manual
   observation (conv2d into batch_norm2d, 16 channels) that no test exercises.
+## Dispatch bindings and device properties
 - **A dispatch's launch parameters are read on the HOST, at `Context.run`, and carried to the
   device** — never re-read from the caller's refs when the device gets around to the task. Only
   `Schedulers.Multidev` defers a task at all (`Sync.schedule_task` is `Task.run`, and the GPU
@@ -387,6 +391,7 @@ files.
   is multi-device debugging; Metal and cc wrapped their pairs one nesting level deeper than
   CUDA/HIP. To surface a new per-device fact, add a key to every entry of that backend's dump; do
   not add a backend-level child, and do not restate anything the entries already determine.
+## Staged barriers and asynchronous copies
 - "`Tile_mma` is a barrier" is only half true, and the half that fails is the one barrier elision
   wants. Every rendering form ENDS the intrinsic block with a workgroup barrier, so a staging
   barrier that follows one is always redundant (`Schedule.elide_staged_barriers` drops it, and the
@@ -421,6 +426,7 @@ files.
   deep-K 256×256×2048 = 0.92 with all 9 replicates in 0.906–0.946 against ≤4.4% arm spread — the
   overlap genuinely pays where the k_o loop dominates, reversing the portable form's Metal
   ~1.4–1.5× cost and HIP's null.
+## Renderer failures and fault injection
 - A schedule can pass `Schedule.apply`'s validation and still be one the RENDERER cannot express:
   the pipelined-tile checks in `c_syntax.ml` (a read reached outside its rotor loop; a rotor loop no
   longer `Serial`) are positional facts about the final IR, which schedule application does not
@@ -445,6 +451,7 @@ files.
   grows, and inject relative to that. Relatedly, hoisted (link-time packed) `Stage` candidates are a CPU family only —
   `matmul_seed_params` proposes `sk_hoist` from its `is_cpu` branch — so any test precondition about
   packed-constant pools is false on GPU backends and has to be stated as an equivalence.
+## Search evidence and tensorization
 - "Seeded" is not "timed". An autotune family can be enumerated in bulk and rejected in bulk at
   candidate compile, and a count of proposals then reads as coverage it does not have — assert on
   the *timed* counter (`report.mma_timed`, `fiss_sketch_timed`, `split_reduce_timed`), and follow it
@@ -504,6 +511,7 @@ files.
   through the swizzle map. Eligibility remains per operand and orientation. The census
   distinguishes `Mma_intrinsics_ldmatrix` from `Mma_intrinsics` using the actual load choice,
   so "tensorized" and "fed at rate" are separable in a sweep.
+## Register-tile search and ranking
 - **The register-tile geometry is a schedule decision, not a renderer constant** (gh-ocannl-619).
   `Schedule.Tensorize` carries `tile : Register_tile.t option` (`{rm; rn; lanes}`) into
   `Low_level.Tile_mma`; `C_syntax.try_register_tile` honours a request EXACTLY or declines it to
@@ -542,6 +550,7 @@ files.
   a tail-free-then-smaller-`rn` rule on NEON and AVX2. gh-ocannl-947's NEON n=56 tail-bearing tie was
   neutral; more targeted coverage is needed. Derivation, paired measurements and reproduction
   protocol: [gh-ocannl-1099](../research/gh-1099-register-tile-c-traffic.md).
+## Crowned and shipped artifacts
 - "Crowned" is not "shipped", and neither is reproducible on a small routine. `Train.tune_placements`
   runs two searches and keeps one artifact, so a family can win the arm that is then discarded whole
   — read `report.best_label` / `best_tensorized` / `best_tensorization` / `mma_best_ms` per arm (the A/B calls `?report`
@@ -580,6 +589,7 @@ files.
   the winner replay and the untuned-default fallback compile behind it. Containment tests do not
   need a device that can fail: `Autotune.on_candidate_attempt` injects one
   (`test/operations/autotune_arm_containment`).
+## Failure phases and lineage containment
 - A timing failure's *phase* decides whether the lineage is condemned, so pre-dispatch validation
   needs its own. `Context.run` validates (poisoned lineage, uninitialized inputs, unsatisfied
   execution dependencies, out-of-range static bindings) before dispatching; inside a `Launch`-tagged
@@ -630,6 +640,7 @@ files.
   Windows cannot run the shell fixtures or defer undefined symbols to dlopen. The
   `test_schedule_outcome` unit test pins all three stages across provenance and strictness on
   every platform.
+## Placement and dispatchable baselines
 - Placement decides which tensorized candidates *exist*, not just how they rank, because
   `mma_tile_for_precisions` keys on the storage precisions of the nodes the site actually reads.
   Under the mixed-precision recipe on a uniform-format backend (Metal's `simdgroup_matrix`: no mixed
@@ -658,6 +669,7 @@ files.
   is `report.default_ms` instead — the config-thresholds fissioned seed reproduces the untuned
   pipeline exactly and its time is attributed by digest (so a seed that dedups against a timed twin,
   the CPU serial baseline included, still reports).
+## Placement flips and search depth
 - The flip chain's **enablement prior prices expressibility, and the profitability term is what
   keeps that from costing the run** (gh-ocannl-514 → gh-ocannl-579). The prior promotes a
   `Materialize` flip because materializing that node makes a tensorized family *reachable*, which
@@ -716,6 +728,7 @@ files.
   against those timings; without a qualifying rule it searches normally. It reports
   `Abandonment_replay` and raises `Search_abandoned` with zero search counters, so a warm
   flip chain does not re-search its losing flips or mislabel the harness's tuned row.
+## Action enumeration and budget sharing
 - The action menu's loop enumeration is provenance-aimed **by action category**, not by loop
   (gh-ocannl-687). `Local_scope` has two producers — virtualization's inline at a read site, and the
   accumulator localization `Schedule`'s materializing `Unroll` / `Partition` and
@@ -757,6 +770,7 @@ files.
   all 48 to the tensorizes, so sharing without moving the filter would have been a regression
   exactly where gh-ocannl-685 meant to help. When adding a consumer-side filter over a capped list, ask
   whether the cap should see it.
+## Contraction nests and padded tiles
 - A site contracting over SEVERAL axes is a matmul site whose k-loop lowering has already split
   (gh-ocannl-683): the matcher's contraction nest is the maximal innermost suffix of loops absent
   from the accumulator's index map — `m_k` the innermost, the rest `m_ko` — and every pipeline
@@ -812,6 +826,7 @@ files.
   pipelines stage into stack scratch, so the same argument would let them pad, but they keep the
   gate — which is what still renders the gh-ocannl-683 k-extent label, and where
   `schedule_contraction_nest` reads it off.
+## Timing objectives and calibration
 - **What the tuner's numbers are a measurement OF is a config choice, and the two objectives do not
   crown the same candidate** (gh-ocannl-755). `Autotune.time_routine` takes a `timing_mode`, from
   config `autotune_timing`: `isolated` is the historical one launch plus one host sync — a lone
@@ -1098,6 +1113,7 @@ files.
   against a spinner-generated load ladder (`_build/default/test/operations/`, `OCANNL_BACKEND=...`
   pinned) yields the distribution directly — and CPU-backend depths sit at the 200 cap, Metal's at
   31-80, HIP's at 200-750 and CUDA's at ~1700, so one box cannot stand in for the fleet.
+## Cache regimes and placement replay
 - The schedule-cache directory carries one key-regime stamp, independent of the serialized entry's
   `entry_version` (gh-ocannl-835). Bump `Schedule_cache.cache_regime_version` whenever
   `key_components` changes: the next cache-open deletes every `.sexp` entry under an older or
@@ -1149,6 +1165,8 @@ files.
   directory across two-arm scenarios — set `tune_placement_store=false` (or pass
   `~placement_store:false`; gh-ocannl-1020) rather than deleting `placements-*.sexp` entries:
   `autotune_arm_containment`'s rule passes it on the command line.
+## Scan-loop scheduling
+
 - **A `Scan_loop` is opaque to the schedule ops in both directions and transparent to the
   annotator** (gh-ocannl-696, `test/operations/scan_loop.ml` leg 7): `find_loops_env` and
   `rewrite_loop` do not enter it, so an op naming the scan's own index or a loop nested in its body
@@ -1161,6 +1179,7 @@ files.
   queries the scan index is an ordinary loop symbol: `loop_bounds`, interval analysis, and
   `affine_accesses`, where the inits sit at path `Stmt 0` and the body at `Stmt 1` so program order
   is preserved.
+## Timing identity
 
 - Timed cache evidence uses `Context.timing_identity` separately from conservative construction
   limits (gh-ocannl-594): schedule AND placement keys include concrete device capabilities. CUDA/HIP
@@ -1171,7 +1190,7 @@ files.
   remain preexisting provenance gaps (gh-ocannl-1026), not reasons to disable supported caches. Outer `None` means
   concrete device discovery failed and bypasses all shared cache I/O. Execution/tuning remain
   available. `schedule_cache_device` pins device/metadata separation, bypass, and real-backend replay.
-
+## Capabilities and search diagnostics
 - **HIP's tensor-core capability is gated on the HOST, not only on the device** (gh-ocannl-1032):
   `mma_supported` is `all_rdna_wave32 && rocwmma_include_dir`, and both `hardware_limits.mma` and
   `mma_syntax` consult it, so a gfx11/gfx12 wave32 box whose filesystem has no rocWMMA headers

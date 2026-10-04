@@ -2,3 +2,5 @@ Metal's API property is `fastMathEnabled=false`.
 The changelog names Apple's `mathMode=Safe` selector.
 The shape discussion uses `d=1` as mathematical notation.
 The real OCANNL setting `debug_log_from_routines=true` enables kernel logging.
+
+The tinygrad README uses `PARALLEL=0`.

@@ -1,5 +1,9 @@
 # Benchmark results
 
+> **Fixture provenance: unverifiable** (gh-ocannl-919). Original measured files for this historical Apple report
+> were not recovered. Later `content-v1` M4 baselines do not certify these numbers.
+> See the [historical provenance audit](README.md#historical-metal-fixture-provenance).
+
 platform: macOS-26.5.2-arm64-arm-64bit-Mach-O arm64 | ocannl commit: e687da82 | parity tol: 0.002 (max rel diff over first parity steps vs pytorch/cpu/eager; reduced precisions get their own envelope: bf16 0.004, f16 0.002)
 > Checked-in example output (`results/` itself is generated and gitignored): the macOS/Metal leg of
 > the gh-ocannl-538 re-measurement sweep, run from scratch (wiped `autotune_cache`) at commit
