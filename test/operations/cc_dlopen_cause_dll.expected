@@ -1,4 +1,4 @@
-library artifacts requested: no
+library artifacts requested: yes
 debug artifacts requested: no
 backend: cc
 the compiler command renames expf to the undefined symbol: true

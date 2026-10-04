@@ -1,3 +1,4 @@
+library artifacts requested: no
 debug artifacts requested: no
 backend: cc
 strict failure classification is off: true

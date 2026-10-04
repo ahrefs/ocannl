@@ -968,7 +968,12 @@ let%track7_sexp c_compile_and_load ~f_path =
     (* Only these paths belong to this compilation. Preserve the rejected source and library when
        debugging was requested; cleanup must not replace the typed rejection. *)
     if not Utils.settings.output_debug_files_in_build_directory then
-      List.iter [ f_path; libname ] ~f:(fun path -> try Stdlib.Sys.remove path with _ -> ());
+      List.iter
+        (f_path
+        ::
+        (if Utils.get_global_flag ~default:false ~arg_name:"output_dlls_in_build_directory" then []
+         else [ libname ]))
+        ~f:(fun path -> try Stdlib.Sys.remove path with _ -> ());
     raise
       (Schedule_outcome.Cause_at
          ( Schedule_outcome.Backend_link,

@@ -60,6 +60,10 @@ let run () =
   in
   let before = snapshot () in
   let debug = Utils.settings.output_debug_files_in_build_directory in
+  let dll_output =
+    Utils.get_global_flag ~default:false ~arg_name:"output_dlls_in_build_directory"
+  in
+  Stdio.printf "library artifacts requested: %s\n" (if dll_output then "yes" else "no");
   Stdio.printf "debug artifacts requested: %s\n" (if debug then "yes" else "no");
   let ctx = Context.auto () in
   Stdio.printf "backend: %s\n" (Context.backend_name ctx);
@@ -136,7 +140,9 @@ let run () =
   claim "the rejected compile retains exactly its requested temporary artifacts"
     ((List.length sources = if debug then 1 else 0)
     && (List.length libraries
-       = if debug && not (String.equal expected_stage "artifact_missing") then 1 else 0)
+       =
+       if (debug || dll_output) && not (String.equal expected_stage "artifact_missing") then 1
+       else 0)
     && List.length added = List.length sources + List.length libraries);
   claim "the unrelated temporary file is preserved"
     (String.equal
