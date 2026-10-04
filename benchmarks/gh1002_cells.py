@@ -54,11 +54,12 @@ import json
 import os
 import re
 import shutil
-import signal
 import statistics
 import subprocess
 import sys
 from pathlib import Path
+
+import cell_group
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
@@ -87,6 +88,8 @@ SWEEP_SEQS = [("gpt2_mini_train_b1_s128", 128), ("gpt2_mini_train_b1_s256", 256)
 ORIGIN = "m4-max"
 PHASES = ["preflight", "metal", "metal-sweep", "cc", "cc-sweep", "artifacts"]
 CELL_TIMEOUT_S = 1800
+CELL_TERMINATE_GRACE_S = 5
+_cancellation = cell_group.CancellationDeferral("gh1002_cells")
 # Treatment A against the torch CPU runner, six SGD steps in f32 (measured 2e-7 to 1.3e-6): the
 # cross-framework envelope, generous by an order of magnitude over what the run shows.
 TORCH_PARITY = 1e-5
@@ -195,61 +198,26 @@ def run_cell(out, backend, fixture, treatment, r, artifacts=False):
             f"peak {res['peak_memory_bytes'] / 2**20:.1f} MiB")
 
 
-def group_alive(pgid):
-    try:
-        os.killpg(pgid, 0)
-        return True
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-
-
 def run_in_own_group(argv, **kw):
-    """Run [argv] as the leader of its own process group; on timeout (and after any exit) kill the
-    whole group, so a C compiler or other descendant a cell spawned cannot outlive it and load the
-    cells that follow. Refuses to continue when the group cannot be reaped."""
-    # Cancellation (SIGTERM, SIGINT) is held while the group is spawned and while it is reaped, and
-    # let through only during the wait: a signal between the fork and Popen's return would leave a
-    # detached group with no handle, and a second one mid-reap would abandon the reaping.
-    held = {signal.SIGTERM, signal.SIGINT}
-    signal.pthread_sigmask(signal.SIG_BLOCK, held)
-    try:
-        proc = subprocess.Popen(argv, cwd=HERE, start_new_session=True, **kw)
-    except BaseException:
-        signal.pthread_sigmask(signal.SIG_UNBLOCK, held)
-        raise
-    try:
-        signal.pthread_sigmask(signal.SIG_UNBLOCK, held)
-        status = proc.wait(timeout=CELL_TIMEOUT_S)
-    except subprocess.TimeoutExpired:
-        status = "timeout"
-    finally:
-        # Also on SIGTERM/KeyboardInterrupt: the group is not the driver's, so nothing else would
-        # reap it. A pending signal is delivered once the reaping is done.
-        signal.pthread_sigmask(signal.SIG_BLOCK, held)
+    """Run one cell through the shared supervisor; refuse to time beside an unproven cleanup."""
+    # Hold cancellation until the spawn has a cleanup owner, and throughout cleanup. The wait
+    # opens the intentional cancellation window without giving fork/exec an inherited mask.
+    with _cancellation.deferring():
+        proc = cell_group.spawn(argv, cwd=HERE, **kw)
         try:
-            reap_group(proc, argv)
-        finally:
-            signal.pthread_sigmask(signal.SIG_UNBLOCK, held)
-    return status
-
-
-def reap_group(proc, argv):
-    for _ in range(50):
-        if not group_alive(proc.pid):
-            break
-        try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            break
-        try:
-            proc.wait(timeout=0.2)
+            with _cancellation.cancellable():
+                status = proc.wait(timeout=CELL_TIMEOUT_S)
         except subprocess.TimeoutExpired:
-            pass
-    if group_alive(proc.pid):
-        sys.exit(f"process group {proc.pid} of {argv[0]} survived SIGKILL; stopping the matrix "
-                 "rather than timing the next cells beside it")
+            status = "timeout"
+        finally:
+            result = cell_group.terminate(proc, grace=CELL_TERMINATE_GRACE_S)
+            if result.observation is not cell_group.GONE or not result.reaped:
+                raise cell_group.CleanupFailed(
+                    f"process group {proc.pid} of {argv[0]} was not proven gone and reaped "
+                    f"after cleanup ({result.observation.value}, reaped={result.reaped}); "
+                    "stopping the matrix rather than timing the next cells beside it"
+                )
+        return status
 
 
 def identity():
@@ -361,8 +329,7 @@ def torch_losses(out, fx):
 
 
 def run(args):
-    # SIGTERM unwinds like Ctrl-C, so the running cell's group is reaped by its `finally`.
-    signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))
+    _cancellation.install()
     out = Path(args.out).resolve()
     out.mkdir(parents=True, exist_ok=True)
     backends = args.backends.split(",")
