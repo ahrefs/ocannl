@@ -816,8 +816,8 @@ let () =
       Online_softmax.set_block None;
       let ctx = Train.init_params (Context.auto ()) Ir.Indexing.Empty t in
       let auto_block = (Context.hardware_limits ctx).Ir.Backend_intf.online_softmax_auto_block in
-      p "the backend pins the automatic block policy (HIP off; CUDA/Metal/CPU preserved)"
-        (auto_block = if String.equal backend_name "hip" then 0 else 16);
+      p "the backend pins the automatic block policy (CUDA/HIP off; Metal/CPU preserved)"
+        (auto_block = if List.mem [ "cuda"; "hip" ] backend_name ~equal:String.equal then 0 else 16);
       p "backend-free hardware limits conservatively decline the automatic fold"
         (Ir.Backend_intf.no_hardware_limits.online_softmax_auto_block = 0);
       let analyzed =
