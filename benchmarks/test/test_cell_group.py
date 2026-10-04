@@ -254,7 +254,7 @@ class CellGroupTest(unittest.TestCase):
 
     def test_sweep_drivers_have_no_unmanaged_spawn_site(self):
         offenders = []
-        for path in (HERE / "orchestrate.py", HERE / "gh675_cells.py"):
+        for path in (HERE / "orchestrate.py", HERE / "gh675_cells.py", HERE / "gh1181_cells.py"):
             tree = ast.parse(path.read_text(), filename=str(path))
             for node in ast.walk(tree):
                 if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
