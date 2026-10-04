@@ -922,6 +922,8 @@ let () =
       "type t = ..\ntype t += Site of string\ninclude Tnode";
       "exception Site = Foreign_scan.Site\nexception Site = Tnode.Site";
       "include Tnode";
+      "include Tnode\nopen Foreign_scan";
+      "include Tnode\nmodule Hidden = struct include Foreign_scan end";
     ] ~f:(fun declaration ->
       write "arrayjit/lib/key_scan.ml" declaration;
       write "arrayjit/lib/user.ml"
@@ -939,6 +941,7 @@ let () =
   p_all "shipping census respects final foreign exports across files"
     [
       "include Tnode\nexception Site of string";
+      "exception Site of string\nopen Tnode";
       "include Tnode\ntype t = Site of string";
       "include Tnode\ntype t = ..\ntype t += Site of string";
       "include Tnode\nexception Site = Foreign_scan.Site";

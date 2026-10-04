@@ -500,13 +500,12 @@ let carrier_model ~carriers ~foreign ~owner ~source =
           List.filter_map (own_string_constructors [ item ]) ~f:(fun name ->
               Option.some_if (List.mem carriers name ~equal:String.equal) (name, `Foreign))
   in
-  let scope_model ?(finished = fun _ -> ()) () =
+  let scope_model ?(exported = fun _ -> ()) () =
     object (self)
       inherit
         [[ `Local | `Own | `Function of int | `Payload | `Foreign ], string] Lexical_scope.scoped as super
 
       method local = `Local
-      method! finished env = finished env
       method! shadowed = Some unestablished
       method module_path env path = module_path env path
 
@@ -543,24 +542,30 @@ let carrier_model ~carriers ~foreign ~owner ~source =
                     then exported := Some "foreign:"
                     else if Option.equal String.equal denotation (Some owner_module) then
                       exported := Some owner_module;
-                  self#opened ~top ~include_ env denotation
+                  self#opened ~top:false ~include_ env denotation
               end
             in
             ignore (reader#structure env items : structure);
             Some (Option.value !exported ~default:unestablished)
         | _ -> super#module_of env me
 
-      method! opened ~top:_ ~include_:_ env target =
-        if
-          Option.value_map target ~default:false ~f:(fun m ->
-              is_foreign m || String.equal m "foreign:")
-        then Lexical_scope.bind_values env (List.map carriers ~f:constructor_key) `Foreign
-        else if Option.equal String.equal target (Some owner_module) then
-          Lexical_scope.bind_values env (List.map carriers ~f:constructor_key) `Own
-        else env
+      method! opened ~top ~include_ env target =
+        let denotes =
+          if
+            Option.value_map target ~default:false ~f:(fun m ->
+                is_foreign m || String.equal m "foreign:")
+          then Some `Foreign
+          else if Option.equal String.equal target (Some owner_module) then Some `Own
+          else None
+        in
+        Option.value_map denotes ~default:env ~f:(fun denotes ->
+            if top && include_ then List.iter carriers ~f:(fun name -> exported (name, denotes));
+            Lexical_scope.bind_values env (List.map carriers ~f:constructor_key) denotes)
 
       method! item_scope ~top env item =
-        List.fold (item_bindings ~top env item) ~init:env ~f:(fun env (name, denotes) ->
+        let bindings = item_bindings ~top env item in
+        if top then List.iter bindings ~f:exported;
+        List.fold bindings ~init:env ~f:(fun env (name, denotes) ->
             Lexical_scope.bind_values env [ constructor_key name ] denotes)
     end
   in
@@ -569,18 +574,15 @@ let carrier_model ~carriers ~foreign ~owner ~source =
 (** Carrier names this file finally exports as foreign, after ordered declarations and includes. *)
 let foreign_carriers ~carriers ~foreign ~owner ~source content =
   let _, _, _, scope_model = carrier_model ~carriers ~foreign ~owner ~source in
-  let found = ref [] in
+  let exports = ref (Map.empty (module String)) in
   let reader =
     scope_model
-      ~finished:(fun env ->
-        found :=
-          List.filter carriers ~f:(fun name ->
-              Poly.equal (Lexical_scope.lookup env ("constructor:" ^ name)) (Some `Foreign)))
+      ~exported:(fun (name, denotes) -> exports := Map.set !exports ~key:name ~data:denotes)
       ()
   in
   let initial = { Lexical_scope.frames = []; modules = Map.empty (module String) } in
   ignore (reader#structure initial (parse content) : structure);
-  !found
+  List.filter carriers ~f:(fun name -> Poly.equal (Map.find !exports name) (Some `Foreign))
 
 (** One OCaml source's mints, scopes and result consumers, in source order, duplicates kept.
 
