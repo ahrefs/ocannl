@@ -211,8 +211,8 @@ files.
   fifth completed after 157 s). Therefore `orchestrate.py` defaults `--beam-parallel` to `0` on
   every measurement box — the only setting that removes the spawn pool — while an explicit
   positive value opts back into the pool with the cap as backstop (gh-ocannl-843).
-  `cell_group.py` now gives every child spawned by `orchestrate.py` and
-  `gh675_cells.py` and `gh1002_cells.py` one shared group/job, TERM-to-KILL, output-preserving reap discipline;
+  `cell_group.py` gives benchmark cells in `orchestrate.py`, `gh675_cells.py` and
+  `gh1002_cells.py` one shared group/job, TERM-to-KILL, output-preserving reap discipline;
   `orchestrate.py` puts cells under `--cell-timeout` (default 1800 s) and kills the GROUP on expiry:
   the pool workers hold the cell's
   stdout pipe, so killing the direct child alone moves the hang into the sweep's own
