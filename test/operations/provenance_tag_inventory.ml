@@ -115,33 +115,28 @@ let scan ~records ~pinned root generated =
         unparsed := path :: !unparsed;
         None
   in
-  (* The modules declaring a constructor of a carrier's name that is not the owner's, and -- to a
-     fixpoint -- the modules re-exporting one of those through a top-level [include]. *)
+  (* Final constructor exports, resolved through the same ordered namespace as the source walk.
+     Iterate because a file can re-export another file's foreign constructor. *)
+  let export_candidates = containing ("include" :: Scan.exception_keyword :: carriers) in
   let foreign =
-    let declaring =
-      List.filter_map candidates ~f:(fun ((path, _) as candidate) ->
-          if String.equal path type_source then None
-          else
-            match parses (Scan.declares_own_carrier ~carriers) candidate with
-            | Some true -> Some (Scan.module_of_path path)
-            | _ -> None)
-    in
-    let includers =
-      List.filter_map (containing [ "include" ]) ~f:(fun ((path, _) as candidate) ->
-          Option.map (parses Scan.top_level_includes candidate) ~f:(fun included ->
-              (Scan.module_of_path path, included)))
-    in
     let rec close known =
       let more =
-        List.filter_map includers ~f:(fun (m, included) ->
-            Option.some_if
-              ((not (List.mem known m ~equal:String.equal))
-              && List.exists included ~f:(List.mem known ~equal:String.equal))
-              m)
+        List.filter_map export_candidates ~f:(fun ((path, _) as candidate) ->
+            if String.equal path type_source then None
+            else
+              match
+                parses
+                  (Scan.foreign_carriers ~carriers ~foreign:known ~owner:(type_source, type_name)
+                     ~source:path)
+                  candidate
+              with
+              | Some (_ :: _) -> Some (Scan.module_of_path path)
+              | _ -> None)
+        |> List.dedup_and_sort ~compare:String.compare
       in
-      if List.is_empty more then known else close (more @ known)
+      if List.equal String.equal more known then known else close more
     in
-    close declaring
+    close []
   in
   let unparsed_once = List.dedup_and_sort !unparsed ~compare:String.compare in
   unparsed := unparsed_once;

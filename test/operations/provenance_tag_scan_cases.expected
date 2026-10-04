@@ -122,4 +122,6 @@ shipping inventory refuses a new number collision: true
 shipping inventory reads a relaying source that never spells the carrier: true
 shipping inventory refuses a phase function moved to another source: true
 shipping inventory treats a module re-exporting a foreign carrier as foreign: true
+shipping census respects final owner exports across files: true
+shipping census respects final foreign exports across files: true
 shipping inventory refuses a phase table placing a code in the wrong phase: true

@@ -913,7 +913,46 @@ let () =
   write "arrayjit/lib/user.ml" "let x = Wrapper.Site \"not a tag either\"";
   check "shipping inventory treats a module re-exporting a foreign carrier as foreign" ~exit:0
     ~message:"Read, not part of the checklist:" (run ());
-  List.iter [ "key_scan.ml"; "wrapper.ml"; "user.ml" ] ~f:(fun f ->
+  write "arrayjit/lib/foreign_scan.ml" "exception Site of string";
+  p_all "shipping census respects final owner exports across files"
+    [
+      "exception Site of string\ninclude Tnode";
+      "exception Site of string\nexception Site = Tnode.Site";
+      "type t = Site of string\ninclude Tnode";
+      "type t = ..\ntype t += Site of string\ninclude Tnode";
+      "exception Site = Foreign_scan.Site\nexception Site = Tnode.Site";
+      "include Tnode";
+    ] ~f:(fun declaration ->
+      write "arrayjit/lib/key_scan.ml" declaration;
+      write "arrayjit/lib/user.ml"
+        "let x = Wrapper.Site \"13:fixture-reexport\"\n\
+         open Key_scan\n\
+         let y = Site \"14:fixture-opened\"";
+      let status, text = run () in
+      let ok =
+        Poly.equal status (Unix.WEXITED 0)
+        && String.is_substring text ~substring:"13:fixture-reexport"
+        && String.is_substring text ~substring:"14:fixture-opened"
+      in
+      if not ok then eprintf "final owner exports captured output:\n%s\n" text;
+      ok);
+  p_all "shipping census respects final foreign exports across files"
+    [
+      "include Tnode\nexception Site of string";
+      "include Tnode\ntype t = Site of string";
+      "include Tnode\ntype t = ..\ntype t += Site of string";
+      "include Tnode\nexception Site = Foreign_scan.Site";
+    ] ~f:(fun declaration ->
+      write "arrayjit/lib/key_scan.ml" declaration;
+      write "arrayjit/lib/user.ml" "let x = Wrapper.Site \"not a tag either\"";
+      let status, text = run () in
+      let ok =
+        Poly.equal status (Unix.WEXITED 0)
+        && String.is_substring text ~substring:"Read, not part of the checklist:"
+      in
+      if not ok then eprintf "final foreign exports captured output:\n%s\n" text;
+      ok);
+  List.iter [ "key_scan.ml"; "wrapper.ml"; "user.ml"; "foreign_scan.ml" ] ~f:(fun f ->
       Unix.unlink (Stdlib.Filename.concat root ("arrayjit/lib/" ^ f)));
   write "arrayjit/lib/low_level.ml" low_level;
   write boundary "let phase_table = [ (\"4:fixture-consume\", Store) ]\n";

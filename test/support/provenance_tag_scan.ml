@@ -435,27 +435,10 @@ let top_level_includes content =
 let declares_own_carrier ~carriers content =
   List.exists (own_string_constructors (parse content)) ~f:(List.mem carriers ~equal:String.equal)
 
-(** One OCaml source's mints, scopes and result consumers, in source order, duplicates kept.
+let unestablished = "?"
 
-    A constructor with a carrier's name is taken for the owner's unless it names another: a module
-    in [foreign] declares its own [string]-carrying constructor of that name (as [Operand_key_scan]
-    declares [Site of string]), so an application qualified by it -- directly or through a chain of
-    module bindings in the source ([module Scan = Test_utils.Operand_key_scan]) -- is not a
-    provenance; an unqualified one changes identity only after its declaration or include. A module
-    name is resolved against the binding in scope where it is used -- structure items bind for the
-    items after them, [let module] for its body, a nested structure for itself -- and a binding
-    resolves its own target when it is made, so a chain needs no second lookup and cannot cycle. The
-    owner's constructors are reached through aliases and opens this reader cannot follow, which is
-    why the rule names what is excluded rather than what is included. *)
-let read_source ~carriers ?(foreign = []) ?(owner = ("", "")) ~source content =
-  let mints = ref []
-  and malformed = ref []
-  and consumers = ref []
-  and closed = ref []
-  and exports = ref [] in
-  let structure = parse content in
-  let own_module = module_of_path source in
-  let unestablished = "?" in
+(** The ordered constructor namespace shared by local source scanning and file export discovery. *)
+let carrier_model ~carriers ~foreign ~owner ~source =
   let owner_module = if String.is_empty (fst owner) then "Tnode" else module_of_path (fst owner) in
   let is_foreign m = List.mem foreign m ~equal:String.equal in
   let constructor_key name = "constructor:" ^ name in
@@ -517,12 +500,13 @@ let read_source ~carriers ?(foreign = []) ?(owner = ("", "")) ~source content =
           List.filter_map (own_string_constructors [ item ]) ~f:(fun name ->
               Option.some_if (List.mem carriers name ~equal:String.equal) (name, `Foreign))
   in
-  let scope_model () =
+  let scope_model ?(finished = fun _ -> ()) () =
     object (self)
       inherit
         [[ `Local | `Own | `Function of int | `Payload | `Foreign ], string] Lexical_scope.scoped as super
 
       method local = `Local
+      method! finished env = finished env
       method! shadowed = Some unestablished
       method module_path env path = module_path env path
 
@@ -579,6 +563,47 @@ let read_source ~carriers ?(foreign = []) ?(owner = ("", "")) ~source content =
         List.fold (item_bindings ~top env item) ~init:env ~f:(fun env (name, denotes) ->
             Lexical_scope.bind_values env [ constructor_key name ] denotes)
     end
+  in
+  (module_path, is_carrier, bind_extension, scope_model)
+
+(** Carrier names this file finally exports as foreign, after ordered declarations and includes. *)
+let foreign_carriers ~carriers ~foreign ~owner ~source content =
+  let _, _, _, scope_model = carrier_model ~carriers ~foreign ~owner ~source in
+  let found = ref [] in
+  let reader =
+    scope_model
+      ~finished:(fun env ->
+        found :=
+          List.filter carriers ~f:(fun name ->
+              Poly.equal (Lexical_scope.lookup env ("constructor:" ^ name)) (Some `Foreign)))
+      ()
+  in
+  let initial = { Lexical_scope.frames = []; modules = Map.empty (module String) } in
+  ignore (reader#structure initial (parse content) : structure);
+  !found
+
+(** One OCaml source's mints, scopes and result consumers, in source order, duplicates kept.
+
+    A constructor with a carrier's name is taken for the owner's unless it names another: a module
+    in [foreign] declares its own [string]-carrying constructor of that name (as [Operand_key_scan]
+    declares [Site of string]), so an application qualified by it -- directly or through a chain of
+    module bindings in the source ([module Scan = Test_utils.Operand_key_scan]) -- is not a
+    provenance; an unqualified one changes identity only after its declaration or include. A module
+    name is resolved against the binding in scope where it is used -- structure items bind for the
+    items after them, [let module] for its body, a nested structure for itself -- and a binding
+    resolves its own target when it is made, so a chain needs no second lookup and cannot cycle. The
+    owner's constructors are reached through aliases and opens this reader cannot follow, which is
+    why the rule names what is excluded rather than what is included. *)
+let read_source ~carriers ?(foreign = []) ?(owner = ("", "")) ~source content =
+  let mints = ref []
+  and malformed = ref []
+  and consumers = ref []
+  and closed = ref []
+  and exports = ref [] in
+  let structure = parse content in
+  let own_module = module_of_path source in
+  let module_path, is_carrier, bind_extension, scope_model =
+    carrier_model ~carriers ~foreign ~owner ~source
   in
   (* What a handler or consumer body [e] does with the variable [v]: the carriers applied to it
      anywhere -- applying one is what records a provenance -- and the constructors wrapping it in a
