@@ -402,6 +402,10 @@ let raw_entries =
         "[scanner-refusal:d04fa9759a77fcd06752e1d4a912eb06] source_tree";
         "[scanner-refusal:760e7621ae0370f92b10878f9d71ee0f] source_tree";
         "[scanner-refusal:56b7e1396b8287e30b29b436fc729e13] unrelated configuration-reading alias";
+        "[scanner-refusal:32ebbcf3860e0aeff7ce6014cae7dc77] their configuration-free exemption";
+        "[scanner-refusal:33d6f713bd21678df8dc25c1f94de29e] configuration reader attached";
+        "[scanner-refusal:8e23bc2547246ce32e080d7a985cd246] a configuration-free exemption";
+        "[scanner-refusal:bd0f7175b0bbdb8fff16e6a342879ca3] unresolved alias dependencies";
         "[scanner-refusal:f8f322e105a5e0f26e1dc4dfb4a25c7f] missing scoped exemption";
         "[scanner-refusal:ca87c0e84f8b051f232796e69330144f] renamed direct-utils universe";
         "[scanner-refusal:eb2b142cf7df4f4e59facf55554fb04e] universe-dependent compiler census";

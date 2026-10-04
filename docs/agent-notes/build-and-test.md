@@ -86,7 +86,10 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   training lock obligation and the deliberate generated-alias collision exemption. A mixed Dune
   file exempts only its configuration-free aliases, so a new configuration reader cannot inherit
   the canary's exemption. Each scoped alias must remain live; removing one retires its exemption
-  even if another exempt alias still runs.
+  even if another exempt alias still runs. Every action reachable from a scoped canary alias must
+  directly run its one local `metal_queue_probe` owner, with only the declared probe module and
+  `metal`, `ctypes`, `unix` libraries; alias-only aggregation is allowed. Opaque launchers,
+  unresolvable alias dependencies and a reader added to the same alias require a gate.
 
 ### Bringing the base in
 

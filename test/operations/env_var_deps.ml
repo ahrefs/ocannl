@@ -228,6 +228,77 @@ let is_gate ?(subdir = "") ?programs ~stanzas stanza =
               ~f:(fun (_, runners) ->
                 List.exists runners ~f:(fun (runner, _) -> Sexp.equal runner stanza))))
 
+(* The mixed-file exemption belongs to one configuration-free canary, not to arbitrary members of
+   its aliases. Resolve every reachable action and keep the owner's explicit module/library contract
+   closed. Unsupported launchers cannot inherit the exemption. *)
+let configuration_free_canary_alias ~subdir ~stanzas alias =
+  let atoms field stanza =
+    match Scan.field stanza field with
+    | Some terms ->
+        List.filter_map terms ~f:(function Sexp.Atom atom -> Some atom | _ -> None)
+        |> List.sort ~compare:String.compare
+    | None -> []
+  in
+  let owners =
+    List.filter stanzas ~f:(fun stanza ->
+        List.mem [ "executable"; "executables" ]
+          (Option.value (Scan.head stanza) ~default:"")
+          ~equal:String.equal
+        && List.mem (Scan.names_of stanza) "metal_queue_probe" ~equal:String.equal)
+  in
+  match owners with
+  | [ owner ]
+    when String.equal (Option.value (Scan.head owner) ~default:"") "executable"
+         && List.equal String.equal (Scan.names_of owner) [ "metal_queue_probe" ]
+         && Option.equal (List.equal Sexp.equal) (Scan.field owner "modules")
+              (Some [ Sexp.Atom "metal_queue_probe" ])
+         && List.equal String.equal (atoms "libraries" owner) [ "ctypes"; "metal"; "unix" ]
+         && Option.value_map (Scan.field owner "libraries") ~default:false
+              ~f:(List.for_all ~f:(function Sexp.Atom _ -> true | _ -> false)) ->
+      let reached = Scan.aliases_reached_from stanzas alias in
+      let attached stanza = aliases_of stanza @ Option.to_list (alias_stanza_name stanza) in
+      let subjects =
+        List.filter stanzas ~f:(fun stanza -> List.exists (attached stanza) ~f:(Set.mem reached))
+      in
+      let resolved =
+        Set.for_all reached ~f:(fun alias ->
+            List.exists subjects ~f:(fun stanza ->
+                List.mem (attached stanza) alias ~equal:String.equal))
+      in
+      let transparent_deps stanza =
+        Option.value_map (Scan.field stanza "deps") ~default:true
+          ~f:
+            (List.for_all ~f:(function
+              | Sexp.List [ Sexp.Atom "universe" ]
+              | Sexp.List [ Sexp.Atom "env_var"; Sexp.Atom _ ]
+              | Sexp.List [ Sexp.Atom "alias"; Sexp.Atom _ ] ->
+                  true
+              | _ -> false))
+      in
+      let saw_canary = ref false in
+      let safe =
+        List.for_all subjects ~f:(fun stanza ->
+            transparent_deps stanza
+            &&
+            match (Scan.head stanza, Scan.field stanza "action") with
+            | Some "alias", None -> true
+            | Some "rule", Some [ Sexp.List (Sexp.Atom "run" :: arguments) ]
+              when List.for_all arguments ~f:(function Sexp.Atom _ -> true | _ -> false) ->
+                let runs_owner =
+                  List.exists
+                    (Scan.program_runners ~subdir
+                       ~runner_stanzas:[ (subdir, stanza) ]
+                       stanzas owner)
+                    ~f:(fun (_, runners) ->
+                      List.exists runners ~f:(fun (runner, _) -> Sexp.equal runner stanza))
+                in
+                if runs_owner then saw_canary := true;
+                runs_owner
+            | _ -> false)
+      in
+      resolved && safe && !saw_canary
+  | _ -> false
+
 (* Every alias a build can start from: those rules and tests attach to, and those `(alias …)`
    stanzas define. *)
 let entry_points stanzas =
@@ -1590,7 +1661,9 @@ let main () =
                 String.is_empty subdir
                 && Option.exists (Map.find gateless dune_file) ~f:(fun (aliases, _) ->
                     Option.value_map aliases ~default:true ~f:(fun aliases ->
-                        List.mem aliases alias ~equal:String.equal))
+                        List.mem aliases alias ~equal:String.equal
+                        && configuration_free_canary_alias ~subdir:(Scan.in_subdir dir subdir)
+                             ~stanzas:here alias))
               then
                 let aliases, _ = Map.find_exn gateless dune_file in
                 gateless_used :=
@@ -3065,11 +3138,14 @@ let control_context () =
                 "(test (name gateless) (deps (universe) (env_var %s)) (modules gateless))\n"
                 Scan.backend_env_var
           | Some aliases ->
-              String.concat ~sep:""
-                (List.map aliases ~f:(fun alias ->
-                     Printf.sprintf
-                       "(rule (alias %s) (deps (universe) (env_var %s)) (action (progn)))\n" alias
-                       Scan.backend_env_var))
+              "(executable (name metal_queue_probe) (modules metal_queue_probe) (libraries metal \
+               ctypes unix))\n"
+              ^ String.concat ~sep:""
+                  (List.map aliases ~f:(fun alias ->
+                       Printf.sprintf
+                         "(rule (alias %s) (deps (universe) (env_var %s)) (action (run \
+                          %%{exe:metal_queue_probe.exe})))\n"
+                         alias Scan.backend_env_var))
         in
         (file, content))
   in
@@ -5020,7 +5096,11 @@ let gateless_scope_control () =
    ^ " (alias unrelated-reader) (deps ocannl_config) (action (run %{dep:reader.exe})))\n");
   let source = "benchmarks/runners/ocannl/reader.ml" in
   write_file (Stdlib.Filename.concat root source) "let () = ignore (Utils.unread_env_vars ())\n";
-  let status, text = run_checker ~root ~exe ("." :: source :: List.map context ~f:fst) in
+  let canary_source = "benchmarks/runners/ocannl/metal_queue_probe.ml" in
+  write_file (Stdlib.Filename.concat root canary_source) "let () = ()\n";
+  let status, text =
+    run_checker ~root ~exe ("." :: source :: canary_source :: List.map context ~f:fst)
+  in
   let reported =
     (match status with Unix.WEXITED 1 -> true | _ -> false)
     && String.is_substring text ~substring:"`unrelated-reader` alias and no ambient gate reaches it"
@@ -5029,6 +5109,63 @@ let gateless_scope_control () =
   printf "\nSynthetic controls: mixed-file gateless exemptions apply only to their named aliases.\n";
   Verdict.p "an unrelated configuration-reading alias cannot inherit the probe's gateless exemption"
     reported;
+  let aggregated =
+    Scan.stanzas existing
+    |> List.filter ~f:(fun stanza ->
+        not (List.mem (aliases_of stanza) "metal-codegen" ~equal:String.equal))
+    |> List.map ~f:Sexp.to_string_hum |> String.concat ~sep:"\n"
+  in
+  Verdict.p_all
+    "the original canary and local alias aggregation retain their configuration-free exemption"
+    [ existing; aggregated ^ "\n(alias (name metal-codegen) (deps (alias bin-smoke)))\n" ]
+    ~f:(fun content ->
+      write_file (Stdlib.Filename.concat root file) content;
+      let status, text =
+        run_checker ~root ~exe ("." :: source :: canary_source :: List.map context ~f:fst)
+      in
+      let passed = match status with Unix.WEXITED 0 -> true | _ -> false in
+      if not passed then eprintf "legitimate canary control %s:\n%s\n" (describe_status status) text;
+      passed);
+  let rejects_canary_drift ~content ~alias =
+    write_file (Stdlib.Filename.concat root file) content;
+    let status, text =
+      run_checker ~root ~exe ("." :: source :: canary_source :: List.map context ~f:fst)
+    in
+    let rejected =
+      (match status with Unix.WEXITED 1 -> true | _ -> false)
+      && String.is_substring text ~substring:("`" ^ alias ^ "` alias and no ambient gate reaches it")
+    in
+    if not rejected then
+      eprintf "canary drift control %s %s:\n%s\n" alias (describe_status status) text;
+    rejected
+  in
+  Verdict.p_all
+    "a configuration reader attached to either existing canary alias still requires a gate"
+    [ "bin-smoke"; "metal-codegen" ] ~f:(fun alias ->
+      rejects_canary_drift ~alias
+        ~content:
+          (existing ^ "(executable (name reader) (modules reader) (libraries arrayjit.utils))\n"
+         ^ "(rule\n ; ocannl-backend: none -- only reads configuration.\n" ^ " (alias " ^ alias
+         ^ ") (deps ocannl_config) (action (run %{dep:reader.exe})))\n"));
+  Verdict.p_all "canary owner linkage or module drift cannot inherit a configuration-free exemption"
+    [
+      ("(libraries metal ctypes unix)", "(libraries metal ctypes unix arrayjit.utils)");
+      ("(modules metal_queue_probe)", "(modules metal_queue_probe reader)");
+    ]
+    ~f:(fun (original, replacement) ->
+      rejects_canary_drift ~alias:"bin-smoke"
+        ~content:(String.substr_replace_all existing ~pattern:original ~with_:replacement));
+  Verdict.p_all
+    "unsupported canary launchers or unresolved alias dependencies cannot claim the exemption"
+    [
+      String.substr_replace_all existing ~pattern:"(run %{exe:metal_queue_probe.exe})"
+        ~with_:"(system \"metal_queue_probe.exe\")";
+      existing ^ "(alias (name bin-smoke) (deps (alias unknown)))\n";
+      existing ^ "(alias (name bin-smoke) (deps (alias_rec elsewhere)))\n";
+      existing
+      ^ "(executable (name metal_queue_probe) (modules reader) (libraries arrayjit.utils))\n";
+    ]
+    ~f:(fun content -> rejects_canary_drift ~alias:"bin-smoke" ~content);
   Verdict.p_all "each missing scoped exemption is stale even while its sibling alias remains"
     [ "bin-smoke"; "metal-codegen" ] ~f:(fun missing ->
       let remaining =
@@ -5038,7 +5175,9 @@ let gateless_scope_control () =
         |> List.map ~f:Sexp.to_string_hum |> String.concat ~sep:"\n"
       in
       write_file (Stdlib.Filename.concat root file) remaining;
-      let status, text = run_checker ~root ~exe ("." :: source :: List.map context ~f:fst) in
+      let status, text =
+        run_checker ~root ~exe ("." :: source :: canary_source :: List.map context ~f:fst)
+      in
       let stale =
         (match status with Unix.WEXITED 1 -> true | _ -> false)
         && String.is_substring text ~substring:"directories exempted from the ambient gate"
