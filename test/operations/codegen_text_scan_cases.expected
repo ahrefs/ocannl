@@ -77,10 +77,23 @@ ok: source -- anonymous forwarding callbacks stay visibly partial
 ok: source -- generated source stored through mutation stays visibly partial
 ok: source -- a forwarding wrapper used as a callback stays visibly partial
 ok: source -- a forwarding wrapper keeps unresolved caller markers visibly partial
+ok: source -- a self-sourcing wrapper has no false partial
+ok: source -- an unused self-sourcing wrapper has no false partial
+ok: source -- a wrapper sourcing through local aliases has no false partial
+ok: source -- same-parameter source normalization preserves real pins despite a callback
+ok: source -- normalizing an unrelated shadow preserves uncertainty without caller pins
+ok: source -- an unresolved callback keeps its known fragment and explicit uncertainty
+ok: source -- pattern-bound source fragments inherit the scrutinee provenance
+ok: source -- ordinary arguments forwarded by a known wrapper contribute no fragments
+ok: source -- exception messages do not inherit generated source from the protected computation
+ok: source -- a completed predicate result is an ordinary value in either conditional branch
+ok: source -- a normalizer never borrows generated provenance from a different call
+ok: source -- a source-returning helper validates an internal read through its routine parameter
+ok: source -- a source-returning buffer helper preserves the unresolved-buffer backstop
 ok: source -- a helper-local generated read propagates through normalization aliases
 ok: source -- same-named local predicates pin only their in-scope composite context
-ok: source -- a nested predicate capturing an enclosing source parameter stays partial
-ok: source -- a nested predicate reaching its captured source through an alias stays partial
+ok: source -- a nested predicate validates an enclosing source parameter at its call
+ok: source -- a nested predicate validates its captured source through an alias
 ok: source -- a nested backend-name predicate does not capture an unrelated source parameter
 ok: source -- nested helpers own their tests independently of enclosing predicates
 ok: source -- validated source aliases propagate into nested predicate calls

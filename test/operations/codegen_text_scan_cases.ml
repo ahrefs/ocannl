@@ -491,7 +491,7 @@ let () = p "marker" (check ~marker:"default source marker" ())|ocaml},
     ( "anonymous forwarding callbacks stay visibly partial",
       {ocaml|let barrier src = String.is_substring src ~substring:"eta marker"
 let () = List.iter [Generated.read "r"] ~f:(fun src -> barrier src)|ocaml},
-      "+partial" );
+      {|"eta marker" +partial|} );
     ( "generated source stored through mutation stays visibly partial",
       {ocaml|let has src = String.is_substring src ~substring:"mutated marker"
 let source = ref ""
@@ -501,11 +501,93 @@ let () = source := Generated.read "r"; p "marker" (has !source)|ocaml},
       {ocaml|let has src marker = String.is_substring src ~substring:marker
 let check src = has src "callback wrapper marker"
 let () = List.iter [Generated.read "r"] ~f:check|ocaml},
-      "+partial" );
+      {|"callback wrapper marker" +partial|} );
     ( "a forwarding wrapper keeps unresolved caller markers visibly partial",
       {ocaml|let has src marker = String.is_substring src ~substring:marker
 let check src marker = has src marker
 let () = p "marker" (check (Generated.read "r") "forwarded marker")|ocaml},
+      "+partial" );
+    ( "a self-sourcing wrapper has no false partial",
+      {ocaml|let has src ~marker = String.is_substring src ~substring:marker
+let check name = p "marker" (has (Generated.read name) ~marker:"own marker")
+let () = check "r"|ocaml},
+      {|"own marker"|} );
+    ( "an unused self-sourcing wrapper has no false partial",
+      {ocaml|let has src ~marker = String.is_substring src ~substring:marker
+let check name = p "marker" (has (Generated.read name) ~marker:"unused own marker")
+let unused_check = check|ocaml},
+      {|"unused own marker"|} );
+    ( "a wrapper sourcing through local aliases has no false partial",
+      {ocaml|let has src ~marker = String.is_substring src ~substring:marker
+let check name =
+  let src = Generated.read name in
+  let src = strip_volatile_casts src in
+  p "marker" (has src ~marker:"normalized own marker")
+let () = check "r"|ocaml},
+      {|"normalized own marker"|} );
+    ( "same-parameter source normalization preserves real pins despite a callback",
+      {ocaml|let has src ~marker =
+  let src = strip_volatile_casts src in
+  String.is_substring src ~substring:marker
+let () =
+  p "marker" (has (Generated.read "r") ~marker:"real marker");
+  List.iter [Generated.read "other"] ~f:(has ~marker:"callback marker")|ocaml},
+      {|"real marker" +partial|} );
+    ( "normalizing an unrelated shadow preserves uncertainty without caller pins",
+      {ocaml|let has src ~marker =
+  let src = strip_volatile_casts backend_name in
+  String.is_substring src ~substring:marker
+let () = p "ordinary" (has (Generated.read "r") ~marker:"not a pin")|ocaml},
+      "+partial" );
+    ( "an unresolved callback keeps its known fragment and explicit uncertainty",
+      {ocaml|let src = Generated.read "r"
+let () = List.iter (String.split_lines src) ~f:(fun line ->
+  String.is_substring line ~substring:"known callback marker")|ocaml},
+      {|"known callback marker" +partial|} );
+    ( "pattern-bound source fragments inherit the scrutinee provenance",
+      {ocaml|let src = Generated.read "r"
+let () = match String.split_lines src with
+  | line :: _ -> p "marker" (String.is_substring line ~substring:"first line marker")
+  | [] -> ()|ocaml},
+      {|"first line marker"|} );
+    ( "ordinary arguments forwarded by a known wrapper contribute no fragments",
+      {ocaml|let has src marker = String.is_substring src ~substring:marker
+let check src = has src "ordinary wrapper marker"
+let () = ignore (Generated.read "r"); p "ordinary" (check backend_name)|ocaml},
+      "+partial" );
+    ( "exception messages do not inherit generated source from the protected computation",
+      {ocaml|let () = try
+  ignore (Generated.read "r"); failwith "failure"
+with Failure msg -> p "exception" (String.is_substring msg ~substring:"ordinary failure marker")|ocaml},
+      "" );
+    ( "a completed predicate result is an ordinary value in either conditional branch",
+      {ocaml|let has src = String.is_substring src ~substring:"result marker"
+let () =
+  let src = Generated.read "r" in
+  let ok = if enabled then has src else not (has src) in
+  p "marker" ok|ocaml},
+      {|"result marker"|} );
+    ( "a normalizer never borrows generated provenance from a different call",
+      {ocaml|let normalize src = String.lowercase src
+let has src ~marker =
+  let src = normalize src in
+  String.is_substring src ~substring:marker
+let () =
+  p "kernel" (has (Generated.read "r") ~marker:"kernel marker");
+  p "ordinary" (has backend_name ~marker:"not a kernel marker")|ocaml},
+      {|"kernel marker" +partial|} );
+    ( "a source-returning helper validates an internal read through its routine parameter",
+      {ocaml|let read routine = Generated.read routine
+let check ~routine ~marker =
+  let src = read routine in
+  String.is_substring src ~substring:marker
+let () = p "marker" (check ~routine:"r" ~marker:"returned source marker")|ocaml},
+      {|"returned source marker"|} );
+    ( "a source-returning buffer helper preserves the unresolved-buffer backstop",
+      {ocaml|let read buf = Buffer.contents buf
+let () =
+  ignore (Generated.read "r");
+  p "marker" (String.is_substring (read buf) ~substring:"buffer marker")|ocaml},
       "+partial" );
     ( "a helper-local generated read propagates through normalization aliases",
       {ocaml|let check ~routine ~marker =
@@ -524,13 +606,13 @@ let ordinary () =
   has ~src:backend_name ~marker:"not a pin"
 let () = p "kernel" (kernel ()); p "ordinary" (ordinary ())|ocaml},
       {|"actual marker" "kernel:" ^ ... +partial|} );
-    ( "a nested predicate capturing an enclosing source parameter stays partial",
+    ( "a nested predicate validates an enclosing source parameter at its call",
       {ocaml|let outer src =
   let inner ~marker = String.is_substring src ~substring:marker in
   inner ~marker:"captured marker"
 let () = p "marker" (outer (Generated.read "r"))|ocaml},
-      "+partial" );
-    ( "a nested predicate reaching its captured source through an alias stays partial",
+      {|"captured marker"|} );
+    ( "a nested predicate validates its captured source through an alias",
       {ocaml|let outer src =
   let inner ~marker =
     let alias = String.lowercase src in
@@ -538,7 +620,7 @@ let () = p "marker" (outer (Generated.read "r"))|ocaml},
   in
   inner ~marker:"captured marker"
 let () = p "marker" (outer (Generated.read "r"))|ocaml},
-      "+partial" );
+      {|"captured marker"|} );
     ( "a nested backend-name predicate does not capture an unrelated source parameter",
       {ocaml|let outer src =
   let inner ~marker = String.is_substring backend_name ~substring:marker in

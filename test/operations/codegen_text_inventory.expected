@@ -124,7 +124,9 @@ roots scanned: arrayjit/test, test
 arrayjit/test/test_cross_cse.ml [renders generated text in memory]
 arrayjit/test/test_cuda_like_config.ml [renders generated text in memory]
 arrayjit/test/test_local_scope_init.ml [renders generated text in memory]
-arrayjit/test/test_render_context.ml [renders generated text in memory]
+arrayjit/test/test_render_context.ml [renders generated text in memory; also pins text this scan cannot name]
+    "] = (float)(0.0)"
+    "reentrant_scratch["
 arrayjit/test/test_stage_b_where_debug.ml [renders generated text in memory]
     "(!("
     "? athen2["
@@ -143,9 +145,10 @@ test/operations/canonical_render.ml [renders generated text in memory]
     "?"
     "s0"
 test/operations/cc_march_census.ml [also pins text this scan cannot name]
+    ... ^ ".c"
 test/operations/concat_loop_symbols.ml [renders generated text in memory]
 test/operations/cost_model_floor.ml [renders generated text in memory]
-test/operations/cpu_parallel.ml [also pins text this scan cannot name]
+test/operations/cpu_parallel.ml
     "#pragma omp parallel for"
     "Pool-backed Grid rendering"
     "dispatch_apply"
@@ -167,10 +170,12 @@ test/operations/fission_schedule.ml
     "gid."
 test/operations/float_literal_forms.ml
     "(float)(" ^ ... ^ ")"
-test/operations/gpu_lane_reduction.ml
+test/operations/gpu_lane_reduction.ml [also pins text this scan cannot name]
+    " " ^ ... ^ " = ("
     " " ^ ... ^ " = 0;"
     "lane all-reduce into a scope local"
 test/operations/gpu_serial_lanes.ml [also pins text this scan cannot name]
+    "bwd_rowdot"
     "for ("
 test/operations/hardware_axes_parity.ml
     " = 0;"
@@ -183,14 +188,16 @@ test/operations/hardware_axes_parity.ml
     "if ("
     "lid.x"
     "threadIdx.x"
-test/operations/hardware_warp_shuffle.ml
+test/operations/hardware_warp_shuffle.ml [also pins text this scan cannot name]
     "__nv_bfloat16 wred_partials_"
     "__nv_bfloat16 wred_v_"
     "float wred_partials_"
     "float wred_v_"
+    "from more than one thread"
     "half wred_partials_"
     "half wred_v_"
     "ocannl_shfl_xor"
+    "ocannl_shfl_xor(wred_v_"
     "wred_partials_"
 test/operations/hardware_workgroup_reduce.ml
     "__shared__ float partial_sums[64]"
@@ -204,7 +211,7 @@ test/operations/integer_power_domain.ml
     "ocannl_powi_f32("
     "pow("
     "powf("
-test/operations/ll_printer_constants.ml [renders generated text in memory; also pins text this scan cannot name]
+test/operations/ll_printer_constants.ml [renders generated text in memory]
     " := "
 test/operations/narrow_storage_compute.ml
     "HALF_T ocannl_vec"
@@ -224,13 +231,21 @@ test/operations/online_softmax_block_mma.ml
     "simdgroup_multiply_accumulate"
 test/operations/reduction_accumulator_residency.ml [also pins text this scan cannot name]
     " " ^ ...
+    "["
+    "] = " ^ ...
     "__rmw_"
     "device volatile float*"
     "volatile float*)res_guard_mask"
     "volatile"
+    ... ^ " = "
 test/operations/reduction_forms.ml [also pins text this scan cannot name]
+    " = "
     "*)"
+    "Vectorized reduction rendering"
+    "] = "
+    "ocannl_shfl_xor"
     "volatile "
+    ... ^ "["
 test/operations/reserved_routine_names.ml
     "arrayjit_threefry4x32__"
     "asm__"
@@ -245,9 +260,11 @@ test/operations/schedule_batch_grid.ml [also pins text this scan cannot name]
 test/operations/schedule_batched_mma.ml
     "Tile_mma register tiling"
 test/operations/schedule_contraction_nest.ml [also pins text this scan cannot name]
-test/operations/schedule_conv_gemm.ml
+    "does not divide innermost contraction extent k=12 (of K=48 over 2 loops)"
+test/operations/schedule_conv_gemm.ml [also pins text this scan cannot name]
     "Tile_mma register tiling"
     "fragment_"
+    "hoisted staging does not support compacting"
     "tile_"
 test/operations/schedule_cpu_pack_matmul.ml
     "__shared__"
@@ -303,6 +320,7 @@ test/operations/schedule_mma_matmul.ml [also pins text this scan cannot name]
     "__device__ __align__(32) float ocannl_wmma_rc16[256]"
     "__float2bfloat16"
     "__float_to_tf32"
+    "__mma_dr0"
     "__mma_dr0[0] = "
     "__mma_dr0[0] = __float2bfloat16(__mma_fragment_"
     "__mma_dstage"
@@ -392,10 +410,11 @@ test/operations/schedule_pack_mma_matmul.ml
     "packed_mgb"
     "threadgroup float tile_"
     "tmma_"
-test/operations/schedule_packed_constants.ml
+test/operations/schedule_packed_constants.ml [also pins text this scan cannot name]
     "__shared__"
     "barrier("
     "float tile_"
+    "hoisted staging requires a known-constant source"
     "packed_ma"
     "packed_mb"
     "threadgroup float"
@@ -409,9 +428,11 @@ test/operations/schedule_pad.ml
 test/operations/schedule_pipelined_matmul.ml [also pins text this scan cannot name]
     "% 2"
     "[" ^ ... ^ "]"
+    "no longer Serial"
     "ocannl_cp_async"
     "ocannl_cp_async4(&"
     "ocannl_cp_async_wait_all();"
+    "outside its rotor loop"
 test/operations/schedule_register_matmul.ml
     "__shared__ float tile_"
     "acc_mc1"
@@ -449,12 +470,12 @@ test/operations/schedule_swizzle_matmul.ml [also pins text this scan cannot name
 test/operations/test_bounds_folded_gather.ml
     "!= 0 ?"
     "!= 0.0 ?"
-test/operations/test_metal_guarded_gather_codegen.real.ml [reads build_files/ directly]
+test/operations/test_metal_guarded_gather_codegen.real.ml [reads build_files/ directly; also pins text this scan cannot name]
     "(float)(ids["
     ": (float)(0.0))"
     "? C["
     "double"
-test/operations/test_metal_pool_slot_width.real.ml [reads build_files/ directly]
+test/operations/test_metal_pool_slot_width.real.ml [reads build_files/ directly; also pins text this scan cannot name]
     "uint* __pool_slots"
     "ulong* __pool_slots"
 test/operations/test_one_hot_embedding_backward.ml
@@ -467,7 +488,7 @@ test/operations/test_one_hot_embedding_lookup.ml
     "<= 3"
     "?"
     "double *restrict ids_wide"
-test/operations/test_uniform_virtual_lane.ml [also pins text this scan cannot name]
+test/operations/test_uniform_virtual_lane.ml
     "Main logic"
     "_uniform_lane("
     "_uniform_vec("
@@ -482,7 +503,13 @@ test/operations/tile_mma_declines.ml
 test/operations/tile_mma_geometry.ml [also pins text this scan cannot name]
     "; column tail 3 in 1 vector; row tail 2)"
     "geometry from the schedule"
+    "ocannl_pv__ = {" ^ ...
     "tmma_acc__"
+    "tmma_c_0_0__ = {" ^ ...
+    ... ^ " = ocannl_pv__[2];"
+    ... ^ " = tmma_c_0_0__[2];"
+    ... ^ "};"
+    sprintf "%d, tmma_c_0_0__, (const %s *)&%s);"
 test/operations/tile_mma_narrow.ml [also pins text this scan cannot name]
     "HALF_T tile_"
     "OCANNL_VEC_NARROW_BFLOAT16"

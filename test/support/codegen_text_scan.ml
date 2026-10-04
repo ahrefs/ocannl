@@ -843,86 +843,250 @@ let emitter_aliases ~emitters structure =
   done;
   !aliases
 
-(** Names carrying generated source, to a fixed point: seeded by [Generated.read], by a direct
-    [build_files/] read and by the destinations of a buffer-writing emitter ([seeds]), and spreading
-    along [let] bindings whose right-hand side mentions one.
+type provenance = {
+  generated : bool;
+  parameter_dependent : bool;
+      (** The returned data depends on an argument, rather than an internal generated-text read. *)
+  parameters : Set.M(String).t;
+  buffer : bool;
+  uncertain : bool;
+  functions : (int * int) list;
+}
+(** One provenance rule for parameters, bindings and expression uses. A parameter is symbolic until
+    a validated call seeds it; a let inherits its right-hand side's provenance in the lexical scope
+    where that side is evaluated. Thus [let src = strip src] preserves the original parameter, while
+    [let src = backend_name] and lambda patterns shadow it. Readers, emitter results and emitter
+    buffer destinations seed generated text. Unknown buffer reads retain their own uncertainty. The
+    fixed point only resolves forward dependencies; it never unions bindings that happen to share a
+    spelling. *)
 
-    Scope is deliberately ignored -- a name is tainted for the whole file. Taint only decides
-    WHETHER a test's haystack is generated source, so over-reach costs an extra inventory line and
-    under-reach a missed pin. The fragment a pin names is another matter, and is resolved in scope
-    ({!scope_of}): a literal read from the wrong binding puts the wrong text in the inventory. *)
-let tainted_names scope ~emitters ~aliases ~seeds bindings =
-  let tainted = ref (Set.of_list (module String) seeds) in
-  let seeded body =
-    mentions_generated_read scope body
-    || reads_artifacts_directly scope body
-    || renders_generated_text ~emitters ~aliases body
-  in
-  let changed = ref true in
-  while !changed do
-    changed := false;
-    List.iter bindings ~f:(fun { names; params = _; body; _ } ->
-        if not (List.for_all names ~f:(Set.mem !tainted)) then
-          if seeded body || List.exists (idents_in body) ~f:(fun i -> Set.mem !tainted i) then (
-            tainted := List.fold names ~init:!tainted ~f:Set.add;
-            changed := true))
-  done;
-  !tainted
+let no_provenance =
+  {
+    generated = false;
+    parameter_dependent = false;
+    parameters = Set.empty (module String);
+    buffer = false;
+    uncertain = false;
+    functions = [];
+  }
 
-(** Generated-source identifiers resolved inside one helper, at each use rather than by name.
-    Parameters start untainted; a later or nested read cannot change an earlier binding's meaning.
-*)
-let local_generated_source scope ~emitters ~aliases body =
+let join_provenance a b =
+  {
+    generated = a.generated || b.generated;
+    parameter_dependent =
+      (a.parameter_dependent || b.parameter_dependent)
+      && not
+           ((a.generated && not a.parameter_dependent) || (b.generated && not b.parameter_dependent));
+    parameters = Set.union a.parameters b.parameters;
+    buffer = a.buffer || b.buffer;
+    uncertain = a.uncertain || b.uncertain;
+    functions = List.dedup_and_sort (a.functions @ b.functions) ~compare:Poly.compare;
+  }
+
+let scoped_provenance scope ~emitters ~aliases ~seeds ?(parameters = [])
+    ?(source_parameters = Hashtbl.Poly.create ()) ?(function_parameters = Hashtbl.Poly.create ())
+    ?(outer = fun _ -> no_provenance) collect =
   let uses = Hashtbl.Poly.create () in
-  let mentions_source expr =
-    let found = ref false in
+  let changed = ref false in
+  let produces_position_or_bool e =
+    match e.pexp_desc with
+    | Pexp_apply (callee, _) ->
+        List.exists [ "is_substring"; "substr_index"; "substr_index_all" ] ~f:(fun name ->
+            calls scope callee ~target:"String" ~name)
+    | _ -> false
+  in
+  let rec of_expr expr =
+    let found = ref no_provenance in
     let iterator =
       object
         inherit Ast_traverse.iter as super
+        method! attribute _ = ()
 
         method! expression e =
-          (match e.pexp_desc with
-          | Pexp_ident _ when Hashtbl.mem uses (span e.pexp_loc) -> found := true
-          | _ -> ());
-          super#expression e
+          if not (produces_position_or_bool e) then (
+            (match e.pexp_desc with
+            | Pexp_ident { txt = Lident _; _ } ->
+                found :=
+                  join_provenance !found
+                    (Option.value (Hashtbl.find uses (span e.pexp_loc)) ~default:no_provenance)
+            | _ -> ());
+            if
+              calls scope e ~target:"Generated" ~name:"read"
+              || reads_artifact scope e
+              || Option.is_some
+                   (Option.bind (longident_of e) ~f:(emitter_of_path ~emitters ~aliases))
+            then found := join_provenance !found { no_provenance with generated = true };
+            if calls scope e ~target:"Buffer" ~name:"contents" then
+              found := { !found with buffer = true };
+            super#expression e)
       end
     in
     iterator#expression expr;
-    !found
-  in
-  let generated expr =
-    mentions_generated_read scope expr
-    || reads_artifacts_directly scope expr
-    || renders_generated_text ~emitters ~aliases expr
-    || mentions_source expr
+    match expr.pexp_desc with
+    | Pexp_function (_, _, body) ->
+        let result =
+          match body with
+          | Pfunction_body body -> of_expr body
+          | Pfunction_cases (cases, _, _) ->
+              List.fold cases ~init:no_provenance ~f:(fun acc c ->
+                  join_provenance acc (of_expr c.pc_rhs))
+        in
+        { result with functions = [ span expr.pexp_loc ] }
+    | Pexp_apply (callee, args) ->
+        let callee_value = of_expr callee in
+        let direct_source =
+          calls scope callee ~target:"Generated" ~name:"read"
+          || reads_artifact scope callee
+          || Option.is_some
+               (Option.bind (longident_of callee) ~f:(emitter_of_path ~emitters ~aliases))
+        in
+        let found =
+          if direct_source then
+            {
+              !found with
+              generated = true;
+              parameter_dependent = false;
+              parameters = Set.empty (module String);
+            }
+          else if not (List.is_empty callee_value.functions) then
+            let arguments =
+              List.fold args ~init:no_provenance ~f:(fun acc (_, e) ->
+                  join_provenance acc (of_expr e))
+            in
+            let arguments = { arguments with buffer = arguments.buffer || callee_value.buffer } in
+            if callee_value.generated && not callee_value.parameter_dependent then
+              {
+                arguments with
+                generated = true;
+                parameter_dependent = false;
+                parameters = Set.empty (module String);
+              }
+            else arguments
+          else !found
+        in
+        let functions =
+          List.filter callee_value.functions ~f:(fun id ->
+              Option.value_map (Hashtbl.find function_parameters id) ~default:false
+                ~f:(fun parameters ->
+                  List.exists parameters ~f:(fun (_name, (destination, _default, _position)) ->
+                      Option.is_none (argument_at ~destination args))))
+        in
+        { found with functions }
+    | Pexp_ident _ -> !found
+    | Pexp_let (_, _, body)
+    | Pexp_sequence (_, body)
+    | Pexp_constraint (body, _)
+    | Pexp_open (_, body) ->
+        of_expr body
+    | Pexp_ifthenelse (_, yes, no) ->
+        join_provenance (of_expr yes) (Option.value_map no ~default:no_provenance ~f:of_expr)
+    | Pexp_match (_, cases) ->
+        List.fold cases ~init:no_provenance ~f:(fun acc c -> join_provenance acc (of_expr c.pc_rhs))
+    | Pexp_try (body, cases) ->
+        List.fold cases ~init:(of_expr body) ~f:(fun acc c ->
+            join_provenance acc (of_expr c.pc_rhs))
+    | _ -> { !found with functions = [] }
   in
   let resolver =
-    object
-      inherit [bool, unit] Lexical_scope.scoped as super
-      method local = false
+    object (self)
+      inherit [provenance, unit] Lexical_scope.scoped as super
+      method local = no_provenance
       method module_path _ _ = None
-      method! let_denotes vb = generated vb.pvb_expr
+      method! attribute _ attribute = attribute
+      method! let_denotes vb = of_expr vb.pvb_expr
+
+      method! bindings env rec_flag bindings =
+        let inner = super#bindings env rec_flag bindings in
+        List.fold bindings ~init:inner ~f:(fun inner vb ->
+            let denotes = of_expr vb.pvb_expr in
+            let replaced =
+              List.exists (pattern_names vb.pvb_pat) ~f:(fun name ->
+                  Option.exists (Lexical_scope.lookup env name) ~f:(fun previous ->
+                      (not (Set.is_empty previous.parameters))
+                      && Set.is_empty (Set.inter previous.parameters denotes.parameters)))
+            in
+            Lexical_scope.bind_values inner (pattern_names vb.pvb_pat)
+              { denotes with uncertain = denotes.uncertain || replaced })
 
       method! expression env e =
-        (match e.pexp_desc with
-        | Pexp_ident { txt = Lident name; _ }
-          when Option.value (Lexical_scope.lookup env name) ~default:false ->
-            Hashtbl.set uses ~key:(span e.pexp_loc) ~data:()
-        | _ -> ());
-        super#expression env e
+        match e.pexp_desc with
+        | Pexp_function (params, _, body) ->
+            let env =
+              List.fold params ~init:env ~f:(fun env param ->
+                  match param.pparam_desc with
+                  | Pparam_val (_, default, pat) ->
+                      Option.iter default ~f:(fun d -> ignore (self#expression env d : expression));
+                      let names = pattern_names pat in
+                      let denotes =
+                        List.fold names ~init:no_provenance ~f:(fun acc name ->
+                            join_provenance acc
+                              (Option.value
+                                 (Hashtbl.find source_parameters (span e.pexp_loc, name))
+                                 ~default:{ no_provenance with uncertain = true }))
+                      in
+                      Lexical_scope.bind_values env names
+                        { denotes with parameter_dependent = true }
+                  | _ -> env)
+            in
+            (match body with
+            | Pfunction_body body -> ignore (self#expression env body : expression)
+            | Pfunction_cases (cases, _, _) ->
+                List.iter cases ~f:(fun c -> ignore (self#case env c : case)));
+            e
+        | Pexp_match (scrutinee, cases) | Pexp_try (scrutinee, cases) ->
+            ignore (self#expression env scrutinee : expression);
+            let payload =
+              match (e.pexp_desc, scrutinee.pexp_desc) with
+              | Pexp_try _, _ | _, Pexp_try _ -> no_provenance
+              | _ -> of_expr scrutinee
+            in
+            List.iter cases ~f:(fun case ->
+                let inner = Lexical_scope.bind_values env (pattern_names case.pc_lhs) payload in
+                Option.iter case.pc_guard ~f:(fun guard ->
+                    ignore (self#expression inner guard : expression));
+                ignore (self#expression inner case.pc_rhs : expression));
+            e
+        | Pexp_ident { txt = Lident name; _ } ->
+            let denotes = Option.value (Lexical_scope.lookup env name) ~default:(outer e) in
+            let denotes =
+              {
+                denotes with
+                generated = denotes.generated || List.mem seeds name ~equal:String.equal;
+              }
+            in
+            let previous =
+              Option.value (Hashtbl.find uses (span e.pexp_loc)) ~default:no_provenance
+            in
+            if
+              (not (Bool.equal previous.generated denotes.generated))
+              || (not (Bool.equal previous.buffer denotes.buffer))
+              || (not (Bool.equal previous.uncertain denotes.uncertain))
+              || (not (Bool.equal previous.parameter_dependent denotes.parameter_dependent))
+              || (not (Poly.equal previous.functions denotes.functions))
+              || not (Set.equal previous.parameters denotes.parameters)
+            then changed := true;
+            Hashtbl.set uses ~key:(span e.pexp_loc) ~data:denotes;
+            e
+        | _ -> super#expression env e
     end
   in
-  (* Local let denotations are requested before their right-hand sides are walked. Revisit the
-     lexical walk until identifier provenance stops growing, so aliases can use those resolved
-     right-hand sides without replacing lexical scope with file-wide name taint. *)
-  let changed = ref true in
+  let env =
+    List.fold parameters
+      ~init:{ Lexical_scope.frames = []; modules = Map.empty (module String) }
+      ~f:(fun env name ->
+        Lexical_scope.bind_values env [ name ]
+          {
+            no_provenance with
+            parameter_dependent = true;
+            parameters = Set.singleton (module String) name;
+          })
+  in
+  changed := true;
   while !changed do
-    let previous = Hashtbl.length uses in
-    ignore
-      (resolver#expression { frames = []; modules = Map.empty (module String) } body : expression);
-    changed := Hashtbl.length uses <> previous
+    changed := false;
+    collect resolver env
   done;
-  generated
+  of_expr
 
 type predicate = {
   pred_binding : int * int;
@@ -931,9 +1095,6 @@ type predicate = {
   body_text : expression option;
       (** A hard-coded or composite fragment in the predicate body, recorded only after the call's
           own source is validated. Composite context is retained alongside caller components. *)
-  source_param : string option;
-      (** Propagated to calls inside the helper only after an actual caller supplies generated
-          source. *)
   source_at : (destination * expression option * int) option;
       (** Label or positional index of the parameter that carries the generated source, when the
           predicate takes it rather than closing over it. Checked at each call site: a predicate is
@@ -960,40 +1121,6 @@ let predicate_argument_at (destination, default, position) args =
       | Some argument -> Some argument
       | None -> selected_default ())
 
-(** Which of [params] a name inside [body] derives from, to a fixed point.
-
-    The haystack a predicate tests is not always a parameter spelled at the test:
-    [let has sub s = let body = strip s in String.is_substring body ~substring:sub] reaches it
-    through a local binding. Following that is what tells this predicate -- which pins -- apart from
-    [let has s = String.is_substring backend_name ~substring:s], which tests the backend's NAME and
-    pins nothing. A name deriving from exactly one parameter identifies it; from several, the
-    predicate falls back to the closing-over-a-tainted-name route. *)
-let params_derived_in ~params body =
-  let table = Hashtbl.create (module String) in
-  let of_expr e =
-    List.fold (idents_in e)
-      ~init:(Set.empty (module String))
-      ~f:(fun acc name ->
-        let acc = if List.exists params ~f:(String.equal name) then Set.add acc name else acc in
-        match Hashtbl.find table name with Some s -> Set.union acc s | None -> acc)
-  in
-  let inner = bindings_in_expression body in
-  let changed = ref true in
-  while !changed do
-    changed := false;
-    List.iter inner ~f:(fun { names; params = _; body; _ } ->
-        let from = of_expr body in
-        if not (Set.is_empty from) then
-          List.iter names ~f:(fun name ->
-              let previous =
-                Option.value (Hashtbl.find table name) ~default:(Set.empty (module String))
-              in
-              if not (Set.equal previous (Set.union previous from)) then (
-                Hashtbl.set table ~key:name ~data:(Set.union previous from);
-                changed := true)))
-  done;
-  of_expr
-
 (** Predicates whose literal argument IS a pinned fragment: the
     [let has s = String.is_substring src ~substring:s] idiom and its variants -- one that takes the
     source as a parameter ([let src_has src s = ...]), one that reaches it through a local binding,
@@ -1002,7 +1129,7 @@ let params_derived_in ~params body =
     Also returns the ranges handled by predicate calls. Caller markers, hard-coded body fragments
     and composite context all pass the same source check at those calls; recording them directly in
     the body would attribute literals even when the caller supplies ordinary text. *)
-let predicates scope ~emitters ~aliases ~tainted bindings =
+let predicates scope ~emitters ~aliases ~seeds ~outer ~function_parameters bindings =
   let consumed = ref [] in
   let uncertain_source = ref false in
   let predicates =
@@ -1011,20 +1138,7 @@ let predicates scope ~emitters ~aliases ~tainted bindings =
         | [ _name ], _ :: _ ->
             let destinations = param_destinations params in
             let destination_of p = List.Assoc.find destinations p ~equal:String.equal in
-            let rebound = ref (Set.empty (module String)) in
-            let patterns =
-              object
-                inherit Ast_traverse.iter as super
-
-                method! pattern p =
-                  rebound := List.fold (pattern_names p) ~init:!rebound ~f:Set.add;
-                  super#pattern p
-              end
-            in
-            patterns#expression body;
-            let generated_locally = local_generated_source scope ~emitters ~aliases body in
             let params = List.map params ~f:(fun (_label, name, _default) -> name) in
-            let derived_params = params_derived_in ~params body in
             let captured_params =
               List.concat_map bindings ~f:(fun enclosing ->
                   let first, last = span body.pexp_loc in
@@ -1035,13 +1149,23 @@ let predicates scope ~emitters ~aliases ~tainted bindings =
                   then List.map enclosing.params ~f:(fun (_label, name, _default) -> name)
                   else [])
             in
-            let derives_from_capture = params_derived_in ~params:captured_params body in
+            let provenance =
+              scoped_provenance scope ~emitters ~aliases ~seeds ~outer ~function_parameters
+                ~parameters:(params @ captured_params) (fun resolver env ->
+                  ignore (resolver#expression env body : expression))
+            in
+            let derived_params e =
+              Set.inter (provenance e).parameters (Set.of_list (module String) params)
+            in
+            let generated_locally e =
+              (provenance e).generated || (Set.is_empty (derived_params e) && (outer e).generated)
+            in
+            let derives_from_capture e =
+              Set.inter (provenance e).parameters (Set.of_list (module String) captured_params)
+            in
             let result = ref [] in
             let consider { text; tested; inherent } =
-              let text_params =
-                List.filter params ~f:(fun p ->
-                    (not (Set.mem !rebound p)) && List.exists (idents_in text) ~f:(String.equal p))
-              in
+              let text_params = List.filter params ~f:(fun p -> Set.mem (derived_params text) p) in
               let consider_param text_param =
                 (* Keep each text parameter: one predicate can pin several caller-supplied
                    markers. *)
@@ -1067,7 +1191,6 @@ let predicates scope ~emitters ~aliases ~tainted bindings =
                         (match (text_param, text.pexp_desc) with
                         | Some _, Pexp_ident _ -> None
                         | _ -> Some text);
-                      source_param = source;
                       source_at = Option.bind source ~f:destination_of;
                     }
                     :: !result
@@ -1081,30 +1204,19 @@ let predicates scope ~emitters ~aliases ~tainted bindings =
                   inherent
                   (* A partially applied substring predicate has no explicit haystack; keep the
                      enclosing source evidence for that existing higher-order idiom. *)
-                  || Option.value_map tested
-                       ~default:(List.exists (idents_in body) ~f:(fun name -> Set.mem tainted name))
-                       ~f:(fun tested ->
-                         generated_locally tested
-                         || List.exists (idents_in tested) ~f:(fun name -> Set.mem tainted name))
+                  || Option.value_map tested ~default:(generated_locally body) ~f:generated_locally
                 then record None
                 else if
                   Option.value_map tested ~default:false ~f:(fun tested ->
                       not (Set.is_empty (derives_from_capture tested)))
                 then uncertain_source := true
+                else if
+                  Option.value_map tested ~default:false ~f:(fun e -> (provenance e).uncertain)
+                then uncertain_source := true
               in
-              (* A rebound source name cannot prove that this test uses the caller's parameter. Keep
-                 that uncertainty visible instead of attributing the caller marker to it. *)
-              if
-                Option.value_map tested ~default:false ~f:(fun tested ->
-                    (not (generated_locally tested))
-                    && not (Set.is_empty (Set.inter (derived_params tested) !rebound)))
-              then (
-                consumed := span text.pexp_loc :: !consumed;
-                uncertain_source := true)
-              else
-                List.iter
-                  (match text_params with [] -> [ None ] | ps -> List.map ps ~f:Option.some)
-                  ~f:consider_param
+              List.iter
+                (match text_params with [] -> [ None ] | ps -> List.map ps ~f:Option.some)
+                ~f:consider_param
             in
             let iterator =
               object
@@ -1263,15 +1375,77 @@ let classify_source ~emitters ~path ~contents =
   if not (!reads_generated || !reads_direct || !renders) then None
   else
     let seeds = buffer_destinations ~emitters ~aliases structure in
-    let tainted = tainted_names scope ~emitters ~aliases ~seeds bindings in
+    let functions = Hashtbl.Poly.create () in
+    let collect_functions =
+      object
+        inherit Ast_traverse.iter as super
+        method! value_binding vb = if not (classifies_compiler_plan vb) then super#value_binding vb
+
+        method! expression e =
+          (match e.pexp_desc with
+          | Pexp_function _ ->
+              let params, _ = peel_params e in
+              Hashtbl.set functions ~key:(span e.pexp_loc) ~data:(param_destinations params)
+          | _ -> ());
+          super#expression e
+      end
+    in
+    collect_functions#structure structure;
+    let source_parameters = Hashtbl.Poly.create () in
+    let source_provenance () =
+      scoped_provenance scope ~emitters ~aliases ~seeds ~source_parameters
+        ~function_parameters:functions (fun resolver env ->
+          ignore (resolver#structure env structure : structure))
+    in
+    let provenance = ref (source_provenance ()) in
+    let changed = ref true in
+    let propagate =
+      object
+        inherit Ast_traverse.iter as super
+        method! value_binding vb = if not (classifies_compiler_plan vb) then super#value_binding vb
+
+        method! expression e =
+          (match e.pexp_desc with
+          | Pexp_apply (callee, args) ->
+              List.iter (!provenance callee).functions ~f:(fun id ->
+                  Option.iter (Hashtbl.find functions id) ~f:(fun parameters ->
+                      List.iter parameters ~f:(fun (name, destination) ->
+                          Option.iter (predicate_argument_at destination args) ~f:(fun argument ->
+                              let previous =
+                                Option.value
+                                  (Hashtbl.find source_parameters (id, name))
+                                  ~default:no_provenance
+                              in
+                              let next = join_provenance previous (!provenance argument) in
+                              if
+                                (not (Hashtbl.mem source_parameters (id, name)))
+                                || (not (Bool.equal previous.generated next.generated))
+                                || (not (Bool.equal previous.buffer next.buffer))
+                                || (not (Bool.equal previous.uncertain next.uncertain))
+                                || (not
+                                      (Bool.equal previous.parameter_dependent
+                                         next.parameter_dependent))
+                                || (not (Set.equal previous.parameters next.parameters))
+                                || not (Poly.equal previous.functions next.functions)
+                              then (
+                                Hashtbl.set source_parameters ~key:(id, name) ~data:next;
+                                changed := true)))))
+          | _ -> ());
+          super#expression e
+      end
+    in
+    while !changed do
+      changed := false;
+      propagate#structure structure;
+      if !changed then provenance := source_provenance ()
+    done;
+    let outer = !provenance in
     let predicates, consumed, uncertain_source =
-      predicates scope ~emitters ~aliases ~tainted bindings
+      predicates scope ~emitters ~aliases ~seeds ~outer ~function_parameters:functions bindings
     in
     let predicates_at callee =
-      match Hashtbl.find scope.values (span callee.pexp_loc) with
-      | Some (Function_binding binding_id) ->
-          List.filter predicates ~f:(fun p -> Poly.equal p.pred_binding binding_id)
-      | _ -> []
+      List.filter predicates ~f:(fun p ->
+          List.mem (!provenance callee).functions p.pred_binding ~equal:Poly.equal)
     in
     (* Ordinary forwarding wrappers do not expose their caller's marker as a predicate parameter.
        Keep unresolved calls visibly partial, including chains of wrappers and generated
@@ -1288,15 +1462,24 @@ let classify_source ~emitters ~path ~contents =
       List.iter bindings ~f:(fun binding ->
           if not (Hashtbl.mem forwarding binding.binding_id) then (
             let forwards = ref false in
+            let provenance =
+              scoped_provenance scope ~emitters ~aliases ~seeds ~outer
+                ~function_parameters:functions (fun resolver env ->
+                  ignore (resolver#expression env binding.body : expression))
+            in
             let iterator =
               object
                 inherit Ast_traverse.iter as super
 
                 method! expression e =
                   (match e.pexp_desc with
-                  | Pexp_apply (callee, _) ->
+                  | Pexp_apply (callee, args) ->
                       if
-                        List.exists (predicates_at callee) ~f:(fun p -> Option.is_some p.source_at)
+                        List.exists (predicates_at callee) ~f:(fun p ->
+                            Option.exists p.source_at ~f:(fun source ->
+                                not
+                                  (Option.value_map (predicate_argument_at source args)
+                                     ~default:false ~f:(fun e -> (provenance e).generated))))
                         || Option.exists (function_at callee) ~f:(Hashtbl.mem forwarding)
                       then forwards := true
                   | _ -> ());
@@ -1321,52 +1504,25 @@ let classify_source ~emitters ~path ~contents =
        census through the membership branches, so nothing looked wrong, while grepping the inventory
        for the moved spelling missed the assertion (Codex P2, round 3). The membership rules and the
        pin rules have to know the same routes. *)
-    let source_names = ref tainted in
-    let mentions_tainted e =
-      List.exists (idents_in e) ~f:(fun i -> Set.mem !source_names i)
-      || mentions_generated_read scope e
-      || renders_generated_text ~emitters ~aliases e
-      || reads_artifacts_directly scope e
-    in
-    (* Source parameters carry provenance into nested predicate calls only when a caller actually
-       supplies generated text. This is a fixed point because helpers can call other helpers. *)
+    let mentions_tainted e = (!provenance e).generated in
     let called = Hashtbl.Poly.create () in
     let applied = Hashtbl.Poly.create () in
-    let changed = ref true in
-    let propagate =
+    let calls =
       object
         inherit Ast_traverse.iter as super
         method! value_binding vb = if not (classifies_compiler_plan vb) then super#value_binding vb
 
         method! expression e =
           (match e.pexp_desc with
-          | Pexp_apply (callee, args) ->
+          | Pexp_apply (callee, _) ->
               Hashtbl.set applied ~key:(span callee.pexp_loc) ~data:();
-              List.iter (predicates_at callee) ~f:(fun predicate ->
-                  Hashtbl.set called ~key:predicate.pred_binding ~data:();
-                  match (predicate.source_param, predicate.source_at) with
-                  | Some parameter, Some destination
-                    when (not (Set.mem !source_names parameter))
-                         && Option.value_map
-                              (predicate_argument_at destination args)
-                              ~default:false ~f:mentions_tainted ->
-                      source_names := Set.add !source_names parameter;
-                      changed := true
-                  | _ -> ())
+              List.iter (predicates_at callee) ~f:(fun p ->
+                  Hashtbl.set called ~key:p.pred_binding ~data:())
           | _ -> ());
           super#expression e
       end
     in
-    while !changed do
-      changed := false;
-      propagate#structure structure;
-      let aliases_of_source =
-        tainted_names scope ~emitters ~aliases ~seeds:(Set.to_list !source_names) bindings
-      in
-      if not (Set.equal aliases_of_source !source_names) then (
-        source_names := aliases_of_source;
-        changed := true)
-    done;
+    calls#structure structure;
     (* A helper reached without an explicit call, for example as a callback, has no validated caller
        source. Keep that uncertainty visible rather than silently dropping its body text. *)
     List.iter predicates ~f:(fun predicate ->
@@ -1374,53 +1530,8 @@ let classify_source ~emitters ~path ~contents =
           if Option.is_some predicate.source_at then pins := Computed :: !pins
           else
             Option.iter predicate.body_text ~f:(fun text -> pins := pin_of_expr scope text :: !pins));
-    (* The backstop for every indirection this scan cannot follow. A buffer is where generated text
-       lands without a name to carry it, and the ways it can be filled do not end: an emitter behind
-       a wrapper whose parameter reaches it through a local binding, a document handed to PPrint's
-       own [ToBuffer] renderers, a buffer stored in a record. Each of those leaves a test asserting
-       on [Buffer.contents buf] with [buf] untainted -- and, before this, leaves the FILE listed
-       with the fragment silently missing, which is the shape every miss on gh-ocannl-712 and
-       gh-ocannl-748 took. So a text test whose haystack reads a buffer this scan did not see filled
-       marks the itemisation partial: the file is still listed, the fragment is still unnamed, and
-       the inventory SAYS so. *)
-    let reads_a_buffer_inline e =
-      let found = ref false in
-      let iterator =
-        object
-          inherit Ast_traverse.iter as super
-
-          method! expression inner =
-            if calls scope inner ~target:"Buffer" ~name:"contents" then found := true;
-            super#expression inner
-        end
-      in
-      iterator#expression e;
-      !found
-    in
-    (* And through the bindings the read travels along, to a fixed point, exactly as taint does: a
-       test that writes [let source = Buffer.contents buf] and asserts on [source] later is the same
-       situation one binding removed, and the backstop has to see it or it is a backstop only for
-       the shape someone happened to write first. Nothing here is subtracted from taint -- a name
-       the taint walk reached is recorded as a pin before this is consulted. *)
-    let buffer_derived =
-      let derived = ref (Set.empty (module String)) in
-      let changed = ref true in
-      while !changed do
-        changed := false;
-        List.iter bindings ~f:(fun { names; params = _; body; _ } ->
-            if not (List.for_all names ~f:(Set.mem !derived)) then
-              if
-                reads_a_buffer_inline body
-                || List.exists (idents_in body) ~f:(fun i -> Set.mem !derived i)
-              then (
-                derived := List.fold names ~init:!derived ~f:Set.add;
-                changed := true))
-      done;
-      !derived
-    in
-    let reads_a_buffer e =
-      reads_a_buffer_inline e || List.exists (idents_in e) ~f:(fun i -> Set.mem buffer_derived i)
-    in
+    (* Unresolved buffer flows use the same scoped provenance, including local aliases. *)
+    let reads_a_buffer e = (!provenance e).buffer in
     let unattributed = ref false in
     let iterator =
       object
@@ -1429,7 +1540,8 @@ let classify_source ~emitters ~path ~contents =
 
         method! expression e =
           if
-            (not (Hashtbl.mem applied (span e.pexp_loc)))
+            Option.is_some (longident_of e)
+            && (not (Hashtbl.mem applied (span e.pexp_loc)))
             && ((not (List.is_empty (predicates_at e)))
                || Option.exists (function_at e) ~f:(Hashtbl.mem forwarding))
           then unattributed := true;
@@ -1437,6 +1549,10 @@ let classify_source ~emitters ~path ~contents =
           | Some { text; tested; inherent } ->
               if inherent || Option.value_map tested ~default:false ~f:mentions_tainted then
                 record text
+              else if Option.value_map tested ~default:false ~f:(fun e -> (!provenance e).uncertain)
+              then (
+                record text;
+                unattributed := true)
               else if Option.value_map tested ~default:false ~f:reads_a_buffer then
                 unattributed := true
           | None -> (
@@ -1466,7 +1582,18 @@ let classify_source ~emitters ~path ~contents =
                         | Some text -> record text
                         | None when Option.is_some predicate.text_at -> pins := Computed :: !pins
                         | None -> ())
-                      else pins := Computed :: !pins)
+                      else (
+                        (* An unresolved parameter/callback can still name a real fragment. Keep its
+                           known text alongside the partial marker, while a known ordinary haystack
+                           contributes no fragment. *)
+                        if
+                          Option.value_map source ~default:false ~f:(fun e ->
+                              (!provenance e).uncertain)
+                        then (
+                          Option.iter predicate.body_text ~f:(fun text ->
+                              pins := pin_of_expr scope text :: !pins);
+                          Option.iter (Option.bind predicate.text_at ~f:at) ~f:record);
+                        pins := Computed :: !pins))
               | _ -> ()));
           super#expression e
       end
