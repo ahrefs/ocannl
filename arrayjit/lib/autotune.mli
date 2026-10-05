@@ -37,14 +37,18 @@
       captured has no search to run and propagates.
     - {b Fissioned candidates}: the kernel-fission pipeline ({!Ir.Schedule.fission_scheduled}) with
       per-segment schedules — the same preset sweep per segment, and beam rounds that extend
-      {e one segment at a time}. Per-segment schedules are cached keyed by the pre-schedule
-      segment's canonical digest. [`Zeros] segments keep the default zero-expansion; [`Solo]
-      segments stay unscheduled. One seed uses the config-default thresholds, reproducing the
-      untuned default pipeline exactly — so the winner is never worse than not tuning, even on
-      launch-overhead-bound workloads where every aggressive preset loses to it; its measured time
-      is surfaced as the report's [default_ms] reference (gh-ocannl-552). Each preset is
-      additionally seeded in a {e privatized} variant ({!extend_with_privatize}): per segment, every
-      materialized read-modify-write accumulator is contracted into a per-thread register tile
+      {e one segment at a time}. [`Zeros] segments keep the default zero-expansion; [`Solo] segments
+      stay unscheduled. A fissioned winner is cached with its whole segmentation — each segment's
+      kind, length and pre-schedule canonical digest, and its schedule, zero expansions included
+      ({!Ir.Schedule_cache.saved_segment}, gh-ocannl-1164) — and replays by cutting there
+      ({!Ir.Schedule.fission_segmented}'s [segmentation]) rather than by re-segmenting under the
+      current policy: a segmentation that no longer fits, or a segment whose digest differs from the
+      saved one, fails the replay into a re-search. One seed uses the config-default thresholds,
+      reproducing the untuned default pipeline exactly — so the winner is never worse than not
+      tuning, even on launch-overhead-bound workloads where every aggressive preset loses to it; its
+      measured time is surfaced as the report's [default_ms] reference (gh-ocannl-552). Each preset
+      is additionally seeded in a {e privatized} variant ({!extend_with_privatize}): per segment,
+      every materialized read-modify-write accumulator is contracted into a per-thread register tile
       ({!Ir.Schedule.optop.Privatize}) over its serial reduction loop where the op's preconditions
       permit — a routine-local accumulator beats a device-memory RMW, and on Metal it sidesteps the
       volatile scalar-RMW workaround.
@@ -73,8 +77,8 @@
       max-logits row reduction — has every seed of the shared segment decline on companion coverage,
       and the finer cut frees the site into its own kernel; segments whose digest is new versus the
       coarse segmentation seed [fine]-flagged singles, one composite recombines the fine keys'
-      best-timed singles (coarse-timed bests staff the digest-identical segments), and a fine winner
-      records the mode in its cache entry so replay re-segments identically.
+      best-timed singles (coarse-timed bests staff the digest-identical segments); a fine winner's
+      cached segmentation is the fine one, so its replay needs no record of the mode.
     - {b Convolution sketches} (gh-ocannl-493): when a convolution accumulation site is detected
       ({!detect_conv}), the implicit-GEMM pipeline — the packing [Stage] serving as im2col, the
       micro-kernel the ordinary [Tile_mma]. On the C backends: serial and Grid-parallel flavors, the

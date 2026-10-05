@@ -32,7 +32,6 @@ let entry backend : SC.entry =
     source_digest = "gh884-source";
     saved = [];
     segments = None;
-    finer_fission = None;
     best_ms = 1.;
     baseline_ms = 2.;
     default_ms = None;

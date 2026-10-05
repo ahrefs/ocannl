@@ -239,6 +239,34 @@ type trajectory = {
 [@@deriving sexp]
 (** A search's timed record (gh-ocannl-1110), as a cache entry keeps it. *)
 
+type saved_segment = {
+  seg_kind : [ `Normal | `Zeros | `Solo ];
+  seg_units : int;  (** The segment's length in units ({!Schedule.segmentation}). *)
+  seg_digest : string;
+      (** The {e pre-schedule} segment's structural canonical digest ([with_placements:false]): what
+          a replay checks the segment it cut against before applying [seg_saved]. *)
+  seg_saved : saved_schedule;
+      (** The segment's schedule, resolved against that canonical form — [`Zeros] expansions and the
+          empty schedule of a [`Solo] segment included, so replay derives none of them. *)
+}
+[@@deriving sexp]
+(** One segment of a fissioned winner, in segment order (gh-ocannl-1164). *)
+
+val save_segments :
+  ?static_indices:Indexing.static_symbol list ->
+  Schedule.segmentation ->
+  ([ `Normal | `Zeros | `Solo ] * Low_level.optimized * Schedule.schedule * Low_level.optimized)
+  list ->
+  (saved_segment * registry) list
+(** The saved form of {!Schedule.fission_segmented}'s result, one segment per tuple: each tuple's
+    pre-schedule segment canonicalized structurally, and its schedule saved against that form (the
+    registry is for extending it). Raises [Invalid_argument] as {!to_saved} does, or when the two
+    lists differ in length. *)
+
+val segmentation_of : saved_segment list -> Schedule.segmentation
+(** The segmentation saved segments record: what a replay passes to {!Schedule.fission_segmented}.
+*)
+
 type entry = {
   version : int;
   backend : string;
@@ -257,20 +285,16 @@ type entry = {
           differently, so nothing looks them up. *)
   source_digest : string;
   saved : saved_schedule;
-  segments : (string * saved_schedule) list option; [@sexp.option]
-      (** A fissioned winner (docs: per-fission-segment tuning): per-segment schedules keyed by the
-          {e pre-schedule} segment's canonical digest — replay routes each of
-          {!Schedule.fission_scheduled}'s [`Normal] segments through this association (unmatched
-          segments degrade to the empty schedule). [None] for whole-routine schedules. With
-          [segments] present, [saved] is empty except for a split-reduce winner (gh-ocannl-484 task
-          3), where it holds the whole-routine prelude — resolved against the {e base} canonical
-          form and applied before fission, the segment keys then addressing the {e post-prelude}
-          segmentation. *)
-  finer_fission : bool option; [@sexp.option]
-      (** [Some true]: the [segments] keys address {!Schedule.fission_scheduled}'s [arity_cuts]
-          (finer) segmentation (gh-ocannl-574); replay must re-segment under the same mode or the
-          keys miss wholesale. Omitted when false, so entries stay byte-stable and pre-gh-574
-          entries parse without an [entry_version] bump. *)
+  segments : saved_segment list option; [@sexp.option]
+      (** A fissioned winner: every segment of its fission, in order — the segmentation itself and
+          each segment's schedule (gh-ocannl-1164). Replay cuts the routine where these segments say
+          ({!Schedule.fission_segmented}'s [segmentation]) and applies each schedule after checking
+          the segment's digest, so nothing about the segmentation is re-derived under the replaying
+          process's policy and none of that policy's inputs needs to be in the key. [None] for
+          whole-routine schedules. With [segments] present, [saved] is empty except for a
+          split-reduce winner (gh-ocannl-484 task 3), where it holds the whole-routine prelude —
+          resolved against the {e base} canonical form and applied before fission, the segments then
+          describing the {e post-prelude} routine. *)
   best_ms : float;  (** The winning candidate's measured time, for diagnostics. *)
   baseline_ms : float;
       (** The unscheduled baseline's measured time, for diagnostics; [infinity] on GPU backends,

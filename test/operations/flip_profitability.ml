@@ -148,7 +148,6 @@ let () =
       source_digest = "d";
       saved = [];
       segments = None;
-      finer_fission = None;
       best_ms = 7.5;
       baseline_ms = 9.0;
       mma_best_ms;

@@ -1787,10 +1787,13 @@ type fiss_flavor =
               contains the behavior the user gets without tuning: on launch-overhead-bound workloads
               the aggressive [min_parallel:1] presets can all lose to it. *)
     }
-  | F_saved of { entries : (string * SC.saved_schedule) list; fine : bool }
-      (** [fine]: the segmentation the entries key into is {!Sched.fission_scheduled}'s [arity_cuts]
-          one (gh-ocannl-574) — it must be recorded, or a fine winner's replay would re-segment
-          coarse and trip the drift guard. *)
+  | F_saved of SC.saved_segment list
+      (** Replay of a fissioned winner (gh-ocannl-1164): the routine is cut where the saved segments
+          say ({!Sched.fission_segmented}'s [segmentation]), never re-segmented under the current
+          policy, and each segment gets its saved schedule once its structural digest matches the
+          saved one; a segmentation that no longer fits, or a digest that differs, fails the
+          candidate — for a cache entry, a re-search. Whichever mode derived the winner's
+          segmentation (the finer [arity_cuts] one included, gh-ocannl-574) is in the data. *)
   | F_sketch of { entries : (string * sketch_params) list; fine : bool }
       (** Per-segment matmul sketches: for each listed segment (keyed by its pre-schedule structural
           digest, like [F_saved]), the composed sketch pipeline instantiated with the given
@@ -1798,9 +1801,9 @@ type fiss_flavor =
           seed-time segment enumeration ran, so the segmentation converges. On a key miss
           (segmentation drift) the candidate degrades to the plain fissioned preset and dedups away
           by digest; unlike [F_saved] it never replays a cache entry, so no loud drift guard is
-          needed. [fine] as in [F_saved]: the {e finer} [arity_cuts] segmentation, which frees a
-          matmul site whose segment otherwise carries a companion that cannot follow the site's full
-          arity (the lm_head's max-logits reduction, gh-ocannl-574). *)
+          needed. [fine]: the {e finer} [arity_cuts] segmentation, which frees a matmul site whose
+          segment otherwise carries a companion that cannot follow the site's full arity (the
+          lm_head's max-logits reduction, gh-ocannl-574). *)
   | F_split of { sites : (sr_site * int) list }
       (** Split-reduce seeds (gh-ocannl-484 task 3): per listed site, a
           [Sched.Split_reduce { axis = sr_axis; target = sr_target; num_blocks }] — applied
@@ -1810,20 +1813,19 @@ type fiss_flavor =
           pair is exactly the materialized cross-nest edge fission cuts at. Each resulting segment
           then gets the aggressive default preset — the block loop parallelizes pass 1, the combine
           nest annotates like any small kernel. *)
-  | F_split_saved of SC.saved_schedule * (string * SC.saved_schedule) list
+  | F_split_saved of SC.saved_schedule * SC.saved_segment list
       (** Replay of a split-reduce winner: the whole-routine prelude (resolved against the base
           canonical form, re-minting the partials node and fresh symbols via [SC.of_saved]), then
-          per-segment saved schedules over the {e post-prelude} segmentation, keyed and
-          drift-guarded exactly like [F_saved]. *)
+          the saved segments of the {e post-prelude} routine, replayed exactly like [F_saved]. *)
 
 type spec = Whole of whole_flavor | Fiss of fiss_flavor
 
-(* The replayable/cacheable description of a compiled candidate. [fine] as in [F_saved]: the
-   winner's per-segment schedules address the [arity_cuts] segmentation (gh-ocannl-574). *)
+(* The replayable/cacheable description of a compiled candidate: a fissioned one carries every
+   segment of its segmentation in order (gh-ocannl-1164). *)
 type form =
   | Whole_saved of SC.saved_schedule
-  | Fiss_saved of { segs : (string * SC.saved_schedule) list; fine : bool }
-  | Split_saved of SC.saved_schedule * (string * SC.saved_schedule) list
+  | Fiss_saved of SC.saved_segment list
+  | Split_saved of SC.saved_schedule * SC.saved_segment list
 
 type unit_gen = {
   u_key : string option;  (** [Some pre_digest] for a fission segment; [None] whole-routine. *)
@@ -2085,8 +2087,7 @@ let spec_label = function
       Printf.sprintf "F_preset[bs=%s%s%s]" (bs_label block_size)
         (if privatize then " priv" else "")
         (if config_thresholds then " cfg-thresh" else "")
-  | Fiss (F_saved { entries = assoc; fine }) ->
-      Printf.sprintf "F_saved[%s%d segs]" (if fine then "fine " else "") (List.length assoc)
+  | Fiss (F_saved segs) -> Printf.sprintf "F_saved[%d segs]" (List.length segs)
   | Fiss (F_sketch { entries; fine }) ->
       Printf.sprintf "F_sketch[%s%s]"
         (if fine then "fine " else "")
@@ -2112,9 +2113,9 @@ let spec_label = function
                   (if s.sr_dynamic then " dyn" else "")
                   s.sr_red s.sr_out b
                   (match List.length s.sr_swaps with 0 -> "" | n -> Printf.sprintf " swap%d" n))))
-  | Fiss (F_split_saved (prelude, assoc)) ->
+  | Fiss (F_split_saved (prelude, segs)) ->
       Printf.sprintf "F_split_saved[%d prelude ops, %d segs]" (List.length prelude)
-        (List.length assoc)
+        (List.length segs)
 
 (* Which candidate [tune] attributes as the untuned default, by the label the measurement seam
    receives for it -- and the ONE place that decides it: the [default_seed_digest] attribution in
@@ -2234,13 +2235,15 @@ let compile_candidate ?name ~static_indices ~base_opt ~canon ~limits ~is_gpu ~is
           (* Per-segment schedule matching keys on the STRUCTURAL canon ([with_placements:false]):
              placement classes can render differently across compilation lineages on byte-identical
              segments (decided in one, undecided in the other — e.g. tuning with [timing_ctx]),
-             which used to fail winner replays wholesale. A lookup miss returns the empty schedule:
-             [fission_scheduled] probes {e fine} (pre-coalescing) segments through this closure, and
-             only the empty-on-miss answer lets coalescing re-converge to the saved segmentation,
-             where every final [`Normal] segment's digest hits (the verification after fission below
-             catches genuine drift loudly instead of silently replaying unscheduled segments). *)
+             which used to fail winner replays wholesale. *)
           let seg_key seg =
             SC.digest (SC.canonicalize ~static_indices ~with_placements:false seg)
+          in
+          (* A replay's saved segments: the segmentation it cuts at, and each segment's schedule. *)
+          let replayed =
+            match flavor with
+            | F_saved segs | F_split_saved (_, segs) -> Some segs
+            | F_preset _ | F_sketch _ | F_split _ -> None
           in
           let preset seg =
             match flavor with
@@ -2248,10 +2251,13 @@ let compile_candidate ?name ~static_indices ~base_opt ~canon ~limits ~is_gpu ~is
                 let sched = preset_sched ?block_size ~config_thresholds seg in
                 if privatize then extend_with_privatize ~accum_prec ~static_indices sched seg
                 else sched
-            | F_saved { entries; _ } | F_split_saved (_, entries) -> (
+            | F_saved segs | F_split_saved (_, segs) -> (
+                (* Structurally identical segments carry interchangeable schedules, so the first
+                   with the digest answers; a miss is caught by the check after fission. *)
                 let seg_canon = SC.canonicalize ~static_indices ~with_placements:false seg in
-                match List.Assoc.find entries ~equal:String.equal (SC.digest seg_canon) with
-                | Some saved -> fst (SC.of_saved seg_canon saved)
+                let digest = SC.digest seg_canon in
+                match List.find segs ~f:(fun s -> String.equal s.SC.seg_digest digest) with
+                | Some s -> fst (SC.of_saved seg_canon s.SC.seg_saved)
                 | None -> [])
             | F_sketch { entries; _ } -> (
                 match List.Assoc.find entries ~equal:String.equal (seg_key seg) with
@@ -2260,66 +2266,66 @@ let compile_candidate ?name ~static_indices ~base_opt ~canon ~limits ~is_gpu ~is
             | F_split _ -> preset_sched seg
           in
           (* The [arity_cuts] (finer) segmentation is part of the candidate's identity: the seeds
-             enumerated their keyed segments under it, and a fine winner's saved schedules only
-             resolve against it (gh-ocannl-574). *)
+             enumerated their keyed segments under it (gh-ocannl-574). A replay's segmentation is
+             its data, so the mode does not reach it. *)
           let arity_cuts =
             match flavor with
-            | F_saved { fine; _ } | F_sketch { fine; _ } -> fine
-            | F_preset _ | F_split _ | F_split_saved _ -> false
+            | F_sketch { fine; _ } -> fine
+            | F_preset _ | F_split _ | F_saved _ | F_split_saved _ -> false
           in
-          let tuples =
+          let segmentation, tuples =
             (* Match the default pipeline's placements (statement-crossing [Local]s promoted on
                GPU), so fissioned candidates and the untuned baseline schedule the same code. *)
-            Sched.fission_scheduled ~promote_locals:is_gpu
+            Sched.fission_segmented ~promote_locals:is_gpu
               ?keep_mapping:(Sched.fission_keep_mapping ~is_gpu ~limits)
+              ?segmentation:(Option.map replayed ~f:SC.segmentation_of)
               ~arity_cuts ~preset ~zero_sched ~static_indices opt
           in
-          (* Genuine-drift guard for saved replays (cross-process cache entries): with the
-             empty-on-miss closure above, a saved winner whose segmentation no longer matches would
-             coalesce differently and silently replay some segments unscheduled. Verify instead that
-             every final [`Normal] segment found its saved schedule. *)
-          (match flavor with
-          | F_preset _ | F_sketch _ | F_split _ -> ()
-          | F_saved { entries; _ } | F_split_saved (_, entries) ->
-              List.iter tuples ~f:(fun (kind, pre, _, _) ->
-                  match kind with
-                  | `Zeros | `Solo -> ()
-                  | `Normal ->
-                      if not (List.Assoc.mem entries ~equal:String.equal (seg_key pre)) then
-                        invalid_arg
-                          "Autotune: fissioned replay: no saved schedule for a segment \
-                           (segmentation drifted)"));
+          let segs = SC.save_segments ~static_indices segmentation tuples in
+          (* The replay-validity check: the recorded segmentation was applied as it is, so what is
+             left to drift is the segments' code. Every segment must be the one its schedule was
+             saved against, in order — otherwise the entry no longer applies, and the candidate
+             fails (a cache replay then re-searches) rather than running some segment under another
+             segment's schedule, or none. *)
+          Option.iter replayed ~f:(fun saved ->
+              if
+                not
+                  (List.equal String.equal
+                     (List.map saved ~f:(fun s -> s.SC.seg_digest))
+                     (List.map segs ~f:(fun (s, _) -> s.SC.seg_digest)))
+              then
+                raise
+                  (Outcome.Cause_at
+                     ( Outcome.Transform,
+                       Outcome.Illegal_schedule
+                         {
+                           check = "Autotune.fission_replay";
+                           detail =
+                             "a segment differs from the one its saved schedule was saved against: \
+                              the saved segmentation no longer applies";
+                         } )));
           let posts = List.map tuples ~f:(fun (_, _, _, post) -> post) in
           let units =
-            List.filter_map tuples ~f:(fun (kind, pre, sched, post) ->
-                match kind with
+            List.filter_map (List.zip_exn segs posts) ~f:(fun ((s, registry), post) ->
+                match s.SC.seg_kind with
                 | `Zeros | `Solo -> None
                 | `Normal ->
-                    (* The structural canon: [u_key] must match the replay closure's lookup, and
-                       [of_saved] at replay resolves against the same (placement-independent)
-                       binder/tnode numbering. *)
-                    let pre_canon = SC.canonicalize ~static_indices ~with_placements:false pre in
-                    let saved, registry = SC.to_saved (SC.base_registry pre_canon) sched in
                     Some
                       {
-                        u_key = Some (SC.digest pre_canon);
-                        u_saved = saved;
+                        u_key = Some s.SC.seg_digest;
+                        u_saved = s.SC.seg_saved;
                         u_registry = registry;
                         u_opt = post;
                       })
-          in
-          let assoc =
-            (* One entry per [`Normal] segment in segment order; structurally identical segments
-               share a key and their saved forms are interchangeable, so duplicates are harmless. *)
-            List.map units ~f:(fun u -> (Option.value_exn u.u_key, u.u_saved))
           in
           let digest_after =
             String.concat ~sep:"+"
               (List.map posts ~f:(fun post -> SC.digest (SC.canonicalize ~static_indices post)))
           in
+          let segs = List.map segs ~f:fst in
           let form =
-            if List.is_empty prelude_saved then Fiss_saved { segs = assoc; fine = arity_cuts }
-            else Split_saved (prelude_saved, assoc)
+            if List.is_empty prelude_saved then Fiss_saved segs
+            else Split_saved (prelude_saved, segs)
           in
           captured := Some (form, units, posts, digest_after);
           posts
@@ -2687,30 +2693,18 @@ let menu ?(admits = fun (_ : SC.saved_optop) -> true) ~is_cpu ~is_gpu
          (List.map dropped ~f:(fun (name, d) -> Printf.sprintf "%d %s" d name)));
   kept
 
-(* Extend one unit of a compiled candidate with a menu action. The fissioned entries stay in segment
-   order (the positional replay fallback relies on it); extending by key updates every structurally
-   identical segment — they carry interchangeable saved forms, so extending them uniformly keeps the
-   digest lookup and the positional entries consistent. *)
+(* Extend one unit of a compiled candidate with a menu action. Extending by key updates every
+   structurally identical segment: they carry interchangeable saved forms, and the replay's digest
+   lookup answers each of them with the first. *)
 let extend_spec (elem : compiled) (u : unit_gen) (op : SC.saved_optop) : spec option =
+  let extend segs key =
+    List.map segs ~f:(fun (s : SC.saved_segment) ->
+        if String.equal s.seg_digest key then { s with seg_saved = u.u_saved @ [ op ] } else s)
+  in
   match (elem.form, u.u_key) with
   | Whole_saved _, None -> Some (Whole (W_saved (u.u_saved @ [ op ])))
-  | Fiss_saved { segs = assoc; fine }, Some key ->
-      Some
-        (Fiss
-           (F_saved
-              {
-                entries =
-                  List.map assoc ~f:(fun (k, s) ->
-                      if String.equal k key then (k, u.u_saved @ [ op ]) else (k, s));
-                fine;
-              }))
-  | Split_saved (prelude, assoc), Some key ->
-      Some
-        (Fiss
-           (F_split_saved
-              ( prelude,
-                List.map assoc ~f:(fun (k, s) ->
-                    if String.equal k key then (k, u.u_saved @ [ op ]) else (k, s)) )))
+  | Fiss_saved segs, Some key -> Some (Fiss (F_saved (extend segs key)))
+  | Split_saved (prelude, segs), Some key -> Some (Fiss (F_split_saved (prelude, extend segs key)))
   | _ -> None
 
 (** {2 The placement decision surface (gh-ocannl-514, the placement-space search)}
@@ -3903,8 +3897,8 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
     in
     let flat_schedule = function
       | Whole_saved saved -> saved
-      | Fiss_saved { segs = assoc; _ } -> List.concat_map assoc ~f:snd
-      | Split_saved (prelude, assoc) -> prelude @ List.concat_map assoc ~f:snd
+      | Fiss_saved segs -> List.concat_map segs ~f:(fun s -> s.SC.seg_saved)
+      | Split_saved (prelude, segs) -> prelude @ List.concat_map segs ~f:(fun s -> s.SC.seg_saved)
     in
     let is_fissioned = function Whole_saved _ -> false | Fiss_saved _ | Split_saved _ -> true in
     (* Whether the crowned schedule tensorizes is read off the schedule, not off the winning spec's
@@ -3962,15 +3956,9 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
               match entry.SC.segments with
               (* A fissioned entry with a non-empty [saved] is a split-reduce winner: [saved] is the
                  whole-routine prelude, [segments] the post-prelude per-segment schedules. *)
-              | Some assoc when not (List.is_empty entry.SC.saved) ->
-                  Fiss (F_split_saved (entry.SC.saved, assoc))
-              | Some assoc ->
-                  Fiss
-                    (F_saved
-                       {
-                         entries = assoc;
-                         fine = Option.value entry.SC.finer_fission ~default:false;
-                       })
+              | Some segs when not (List.is_empty entry.SC.saved) ->
+                  Fiss (F_split_saved (entry.SC.saved, segs))
+              | Some segs -> Fiss (F_saved segs)
               | None -> Whole (W_saved entry.SC.saved)
             in
             progress_stage "cache_replay";
@@ -5282,13 +5270,12 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                  logf "%d timing window(s) were refused as unusable: storing no cache entry"
                    !n_timings_contended
              else
-               let saved, segments, finer_fission =
+               let saved, segments =
                  let best_c = Option.value_exn best_c ~message:timed_winner_exists in
                  match best_c.form with
-                 | Whole_saved saved -> (saved, None, None)
-                 | Fiss_saved { segs = assoc; fine } ->
-                     ([], Some assoc, if fine then Some true else None)
-                 | Split_saved (prelude, assoc) -> (prelude, Some assoc, None)
+                 | Whole_saved saved -> (saved, None)
+                 | Fiss_saved segs -> ([], Some segs)
+                 | Split_saved (prelude, segs) -> (prelude, Some segs)
                in
                SC.store ~dir:cache_dir ~key
                  {
@@ -5300,7 +5287,6 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                    source_digest = base_digest;
                    saved;
                    segments;
-                   finer_fission;
                    best_ms;
                    baseline_ms;
                    (* gh-ocannl-579: a measurement of the program, stored like the two above so the
@@ -5413,8 +5399,8 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                 let spec =
                   match best_c.form with
                   | Whole_saved saved -> Whole (W_saved saved)
-                  | Fiss_saved { segs; fine } -> Fiss (F_saved { entries = segs; fine })
-                  | Split_saved (prelude, assoc) -> Fiss (F_split_saved (prelude, assoc))
+                  | Fiss_saved segs -> Fiss (F_saved segs)
+                  | Split_saved (prelude, segs) -> Fiss (F_split_saved (prelude, segs))
                 in
                 (* Nothing the replay needs is an artifact — [spec] above is the winner's saved
                    schedule — so the whole beam goes before the compile that reproduces it
