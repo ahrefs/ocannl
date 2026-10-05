@@ -375,6 +375,7 @@ module Impl = struct
              | _ -> None);
            (* Metal's threadgroups-per-grid dimensions are not 16-bit like CUDA/HIP's gridDim.y/z;
               no practical cap to enforce here. *)
+           max_bound_pools = Some metal_max_pools;
            max_grid_yz = None;
            (* [simdgroup_matrix] (docs/proposals/tensorize-mma.md): 8×8×8 tiles cooperatively held
               by the 32-thread simdgroup, available on Apple7+ (M1 and later). Supported storage
@@ -1423,13 +1424,15 @@ using namespace metal;|}
           let loc = Map.find_exn ctx_buffers tn in
           (idx_of loc.pool_id, loc.offset))
     in
-    if !next > metal_max_pools then
+    let max_pools = Option.value_exn (hardware_limits ()).Backend_intf.max_bound_pools in
+    if !next > max_pools then
       raise
       @@ Utils.User_error
            (Printf.sprintf
               "Metal_backend: routine needs %d distinct pools, over the metal_max_pools=%d binding \
-               budget"
-              !next metal_max_pools);
+               budget. Upload or copy absent nodes into one destination context before compiling; \
+               otherwise reduce the number of independently allocated pools the routine reads."
+              !next max_pools);
     (* The slot-table element width must match the MSL type [C_syntax.pool_slot_msl_typ] declared in
        the shader: 64-bit under [large_models] (offsets may exceed UINT32_MAX once the 4 GB per-pool
        cap is lifted), else 32-bit. [keep] holds the backing [CArray] so it outlives the buffer

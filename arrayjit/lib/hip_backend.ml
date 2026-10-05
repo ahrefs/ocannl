@@ -1535,6 +1535,7 @@ end = struct
            (* One cap for both gated dimensions (see [Backend_intf.max_grid_yz]): the smaller of the
               queried .y and .z components, so the gate is never looser than the device on either.
               On the AMD devices seen so far they coincide. *)
+           max_bound_pools = None;
            max_grid_yz =
              min_over (fun (a : H.Device.attributes) ->
                  let _, y, z = a.max_grid_size in

@@ -11,6 +11,7 @@ type point =
   | Transfer_pool_allocated
   | From_host_before_copy
   | From_host_before_await
+  | Init_from_device_before_await
   | Transfer_cleanup_before_await
   | To_host_before_copy
   | Finalize_before_await

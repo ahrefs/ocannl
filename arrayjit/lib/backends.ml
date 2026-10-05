@@ -382,34 +382,6 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
     |> Option.iter ~f:(fun upd_e ->
         if not (equal_device s d || Backend.is_done upd_e) then Backend.will_wait_for dst upd_e)
 
-  (* Shared allocator seam: mints a deterministic per-device [pool_id] (advancing
-     [device.next_pool_id] in the caller's tnode-iteration order), allocates the slab through the
-     backend's int-in/int-out API, and returns the [buffer_loc]. Phase-1 policy is one pool per
-     tnode at offset 0 -- byte-for-byte equivalent to the old per-tnode allocation. [zero_init] asks
-     for the slab to be zero-filled after it is minted (see the [memset_zero] below); a node the
-     code first-touches ([zero_initialized_by_code]) does not need it. The destination of
-     [init_from_device]; host uploads pack into upload arenas instead ([upload_slot] below). *)
-  let allocate (device : _ Backend_intf.device) (tn : Tn.t) ~zero_init : Backend_intf.buffer_loc =
-    let pool_id = device.next_pool_id in
-    device.next_pool_id <- pool_id + 1;
-    let prec = Lazy.force tn.Tn.storage_prec in
-    (* Compute the byte size from dims*prec rather than forcing [tn.size_in_bytes], to keep the
-       node's debug printout (and lazy-forcing behavior) byte-for-byte as before. *)
-    let size_in_bytes =
-      Array.fold (Lazy.force tn.Tn.dims) ~init:1 ~f:( * ) * Ops.prec_in_bytes prec
-    in
-    let mode = Option.map tn.Tn.memory_mode_intent ~f:fst in
-    Backend.alloc_pool ?mode device ~pool_id ~size_in_bytes ~alignment:(Ops.prec_in_bytes prec);
-    (* gh-ocannl-550: the OTHER shared allocation site — a [from_host] or [copy] whose destination
-       node is not in the context yet allocates here or in [upload_slot], not through
-       [allocate_delta]. Its slabs go into the same backend pool tables and are freed by the same
-       context [finalize], so leaving them uncounted made the census silently underreport in
-       data-loading and context-copy workflows. Not working-vs-constant: this path is a working
-       buffer by construction (a host transfer's destination). *)
-    Alloc_census.record_pool ~device_id:device.device_id ~pool_id ~constant:false ~size_in_bytes;
-    if zero_init then Backend.memset_zero device ~pool_id ~offset:0 ~size_in_bytes;
-    { pool_id; offset = 0 }
-
   let%track3_sexp to_host (ctx : Backend.context) (tn : Tn.t) (hosted : Ndarray.t) =
     match Map.find ctx.ctx_buffers tn with
     | Some loc ->
@@ -449,9 +421,9 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
         true
     | None -> false
 
-  (* gh-ocannl-550: [allocate] roots a pool in the backend table, and the transfer that follows adds
-     its location to the context only on success — so a failing upload leaves a pool no context can
-     ever reach, and therefore no [Context.release] can reclaim. [release] gives back what this
+  (* gh-ocannl-550: [upload_slot] roots a pool in the backend table, and the transfer that follows
+     adds its location to the context only on success — so a failing upload leaves a pool no context
+     can ever reach, and therefore no [Context.release] can reclaim. [release] gives back what this
      operation took: the one pool it minted, or (gh-ocannl-1125) the bytes it bumped in an upload
      arena whose other tenants stay. Unlike [allocate_delta]'s unwind there is no constant-cache
      involvement here (a transfer destination is a working buffer by construction), so this needs
@@ -475,9 +447,9 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
     Option.iter Backend.free_pool ~f:(fun free -> free device ~pool_id);
     Alloc_census.forget_pool ~device_id:device.Backend_intf.device_id ~pool_id
 
-  (* gh-ocannl-1125: absent host-upload nodes share bump-packed arenas. Upload siblings retain their
-     common pools independently (gh-ocannl-1173). Only a value holding an arena's last tenant may
-     extend it, so branches cannot overlap allocations.
+  (* gh-ocannl-1125: absent host-upload and device-copy nodes share bump-packed arenas. Upload
+     siblings retain their common pools independently (gh-ocannl-1173). Only a value holding an
+     arena's last tenant may extend it, so branches cannot overlap allocations.
 
      First fit, among arenas of the same residency hint that this value may extend. The first arena
      of a residency hint is sized exactly to its node, so a lone upload costs what it always did;
@@ -527,7 +499,8 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
         let pool_id = device.next_pool_id in
         device.next_pool_id <- pool_id + 1;
         Backend.alloc_pool ?mode device ~pool_id ~size_in_bytes:capacity ~alignment:align;
-        (* The same census class as [allocate]'s: a transfer destination is a working buffer. *)
+        (* A transfer destination is a working buffer, just like [allocate_delta]'s working
+           slabs. *)
         Alloc_census.record_pool ~device_id:device.device_id ~pool_id ~constant:false
           ~size_in_bytes:capacity;
         let a : Backend_intf.upload_arena =
@@ -668,9 +641,8 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
                 ^ Backend.get_name src.device)
         | None ->
             (* No zero-init: we are immediately copying from another device. *)
-            let d_loc = allocate dst.device tn ~zero_init:false in
-            with_transfer_pool dst.device ~release:(free_transfer_pool dst.device d_loc.pool_id)
-              ~f:(fun () ->
+            let d_loc, release = upload_slot dst tn in
+            with_transfer_pool dst.device ~release ~f:(fun () ->
                 Resource_fault_injection.hit Transfer_pool_allocated;
                 Backend.(
                   device_to_device tn ~into_merge_buffer:No ~dst_loc:(Some d_loc) ~dst
@@ -683,6 +655,10 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
                   Backend.get_name src.device,
                   "to",
                   Backend.get_name dst.device];
+                (* Keep the destination guarded until asynchronous copy errors have surfaced. A
+                   failure must restore an arena bump before any owner is published. *)
+                Resource_fault_injection.hit Init_from_device_before_await;
+                Backend.await dst.device;
                 Backend_intf.evolve_with_buffer dst tn d_loc))
 
   type r = Backend.context routine [@@deriving sexp_of]

@@ -82,8 +82,8 @@ files.
   release work will meet again. (1) There are **two** shared allocation sites, not one:
   `Backends.allocate_delta` for a compile's delta, and the transfer destinations inside
   `Add_buffer_retrieval_and_syncing` for a node not yet in the context (`upload_slot` for
-  `from_host`, `allocate` for `init_from_device`). Both land in the same pool tables and are freed
-  by the same context `finalize`. (2) `allocate_delta` is
+  both `from_host` and `init_from_device`, gh-ocannl-1172). Both land in the same pool tables and
+  are freed by the same context `finalize`. (2) `allocate_delta` is
   **not atomic** — it schedules host uploads and can allocate several segments — so a guard wrapped
   around it from outside cannot see a partial delta; the unwind has to live inside, and must `await`
   before freeing because those uploads are asynchronous. (3) Constant-cache entries **point into**
@@ -93,7 +93,7 @@ files.
   artifact you deliberately kept is the one nobody can reach. Corollary for reviewing such a change:
   each fix adds a container, a guard or a retention decision, i.e. a new path with the same obligation
   — re-examine the failure paths the fix itself created, not just the ones it closed.
-- **Host uploads of absent nodes share upload arenas, owned by the context LIFECYCLE**
+- **Host uploads and device copies of absent nodes share upload arenas, owned by the context LIFECYCLE**
   (gh-ocannl-1125). One pool per `set_values` of a not-yet-linked node made a routine reading 18
   such parameters need 20 pools, over Metal's 16-binding budget (`build_pool_binding`), so
   `upload_slot` bump-packs them first-fit into `context.upload_arenas`: first arena exact, later
@@ -108,7 +108,10 @@ files.
   reuse a released tail instead of stranding one pool per fork. A failed upload into an existing arena rolls
   its bump back and frees nothing; `finalize` removes an arena only when its last owner frees the
   slab. Release only the latest value in each linear upload chain. Guard: `test/operations/set_values_pool_coalescing.ml`, plus the arena leg of
-  `resource_fault_injection`.
+  `resource_fault_injection`. Device copies share the same allocator and await inside its unwind
+  guard before publishing ownership (gh-ocannl-1172); mixed transfers inherit the same rules.
+  Metal publishes its per-routine binding budget as `hardware_limits.max_bound_pools`, and its
+  link error suggests packing absent nodes before compiling.
 - Fissioned-step segment batches go through the `sequence_segments` seam
   (`Backend_impl.Lowered_backend`): Metal encodes one serial-dispatch command buffer; CUDA/HIP
   stream-capture the launch loop into a graph replayed as one `cuGraphLaunch`/`hipGraphLaunch`
