@@ -98,7 +98,10 @@ files.
   would now merge with it and cost the forward its lanes (`lane_geometry` declines a kernel mixing
   lane and plain nests). Gating lanes wholesale was measured and rejected (it threw away the
   forward win). Measured on gfx1151 and gfx1102: training 4-10% over `cut`, inference unchanged.
-  Leg 7 of `gpu_serial_lanes` pins both halves, the training step's own forward included.
+  Leg 7 of `gpu_serial_lanes` pins both halves, the training step's own forward included. `cut`
+  keeps a boundary only where a merge would cost a nest its lanes, never "dV runs apart": where lanes
+  are cheap dK takes them too (the cooperative preamble), on dV's topology, so dQ, dK and dV share
+  one lane kernel on Metal and CUDA (leg 7's executed-step claim).
 - **A contraction inside a scan body is tensorized by rewriting the whole scan's owner, not by
   `Tensorize`** (gh-ocannl-1003, `Schedule.Fold_mma`): `rewrite_loop` does not enter a scan, and
   a lane loop minted inside the body would take a second `Workgroup` slot under the row loop. The
@@ -1260,6 +1263,22 @@ files.
   directory across two-arm scenarios — set `tune_placement_store=false` (or pass
   `~placement_store:false`; gh-ocannl-1020) rather than deleting `placements-*.sexp` entries:
   `autotune_arm_containment`'s rule passes it on the command line.
+- **A test claiming that a store or a replay happened waives on the cache's REPORTED refusal, not
+  on a reference context** (gh-ocannl-1040/1043). Every store and lookup absorbs a filesystem
+  refusal by design: the lock, the regime stamp, the write, or a Windows commit that outlives
+  `Atomic_file`'s one-second retry (Defender holding the staging file is the suspect on CI). So a
+  claim like "a clean cold run records its decision" can fail for a reason its timing predicates
+  never see. Wrap the run in `Schedule_cache.recording_cache_io` and waive on a `refusal` of the
+  operations the claim rests on (a record claim on its placement stores, a replay on its lookups),
+  as an `` `Environment `` skip (`Verdict.gated`), never as a silent `true`. Then add one claim that
+  is NEVER waived by a refusal: of the stores the process attempted under real key names, per
+  cache directory, not all were refused. A deterministic refusal (a rejected filename, a commit that always fails) refuses
+  every store, and without that claim it turns the test into a permanent skip that hosted CI
+  aggregates nowhere. Gate on the timing identity of the run's OWN context, the one the store keys
+  on, never a reference context's. `placement_store`'s `persistence` record, `unless_refused` and
+  its process-wide claim are the exemplar. `schedule_cache_regime` pins the record itself:
+  committed and admitted I/O, the regime, lock, read and commit refusals, keyless calls, and
+  nesting.
 ## Scan-loop scheduling
 
 - **A `Scan_loop` is opaque to the schedule ops in both directions and transparent to the

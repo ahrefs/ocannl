@@ -124,10 +124,10 @@ roots scanned: arrayjit/test, test
 arrayjit/test/test_cross_cse.ml [renders generated text in memory]
 arrayjit/test/test_cuda_like_config.ml [renders generated text in memory]
 arrayjit/test/test_local_scope_init.ml [renders generated text in memory]
-arrayjit/test/test_render_context.ml [renders generated text in memory; also pins text this scan cannot name]
+arrayjit/test/test_render_context.ml [renders generated text in memory; also pins text this scan cannot name: untraced callback, opaque aggregate component]
     "] = (float)(0.0)"
     "reentrant_scratch["
-arrayjit/test/test_stage_b_where_debug.ml [renders generated text in memory; also pins text this scan cannot name]
+arrayjit/test/test_stage_b_where_debug.ml [renders generated text in memory; also pins text this scan cannot name: opaque aggregate component, mutation or unseen buffer write]
     "(!("
     "? athen2["
     "? belse2["
@@ -141,10 +141,10 @@ test/operations/accum_width.ml
     "Vectorized reduction rendering"
     "fmaf("
     "single_to_bfloat16(fmaf("
-test/operations/canonical_render.ml [renders generated text in memory; also pins text this scan cannot name]
+test/operations/canonical_render.ml [renders generated text in memory; also pins text this scan cannot name: opaque aggregate component]
     "?"
     "s0"
-test/operations/cc_march_census.ml [also pins text this scan cannot name]
+test/operations/cc_march_census.ml [also pins text this scan cannot name: untraced callback, opaque aggregate component, unvalidated haystack]
 test/operations/concat_loop_symbols.ml [renders generated text in memory]
 test/operations/cost_model_floor.ml [renders generated text in memory]
 test/operations/cpu_parallel.ml
@@ -170,11 +170,11 @@ test/operations/fission_schedule.ml
     "gid."
 test/operations/float_literal_forms.ml
     "(float)(" ^ ... ^ ")"
-test/operations/gpu_lane_reduction.ml [also pins text this scan cannot name]
+test/operations/gpu_lane_reduction.ml [also pins text this scan cannot name: computed fragment, untraced callback]
     " " ^ ... ^ " = ("
     " " ^ ... ^ " = 0;"
     "lane all-reduce into a scope local"
-test/operations/gpu_serial_lanes.ml [also pins text this scan cannot name]
+test/operations/gpu_serial_lanes.ml [also pins text this scan cannot name: computed fragment, untraced callback]
     "for ("
 test/operations/half_float_power.ml
     "__float2half(powf(__half2float("
@@ -191,7 +191,7 @@ test/operations/hardware_axes_parity.ml
     "if ("
     "lid.x"
     "threadIdx.x"
-test/operations/hardware_warp_shuffle.ml [also pins text this scan cannot name]
+test/operations/hardware_warp_shuffle.ml [also pins text this scan cannot name: untraced callback]
     "__nv_bfloat16 wred_partials_"
     "__nv_bfloat16 wred_v_"
     "float wred_partials_"
@@ -212,7 +212,7 @@ test/operations/integer_power_domain.ml
     "ocannl_powi_f32("
     "pow("
     "powf("
-test/operations/ll_printer_constants.ml [renders generated text in memory; also pins text this scan cannot name]
+test/operations/ll_printer_constants.ml [renders generated text in memory; also pins text this scan cannot name: mutation or unseen buffer write]
     " := "
 test/operations/narrow_storage_compute.ml
     "0x7f800000"
@@ -233,7 +233,7 @@ test/operations/narrow_storage_compute.ml
     "vector_size"
 test/operations/online_softmax_block_mma.ml
     "simdgroup_multiply_accumulate"
-test/operations/reduction_accumulator_residency.ml [also pins text this scan cannot name]
+test/operations/reduction_accumulator_residency.ml [also pins text this scan cannot name: untraced callback]
     " " ^ ...
     "["
     "] = " ^ ...
@@ -242,7 +242,7 @@ test/operations/reduction_accumulator_residency.ml [also pins text this scan can
     "volatile float*)res_guard_mask"
     "volatile"
     ... ^ " = "
-test/operations/reduction_forms.ml [also pins text this scan cannot name]
+test/operations/reduction_forms.ml [also pins text this scan cannot name: untraced callback, forwarded parameter, unsupplied application, mutation or unseen buffer write]
     " = "
     "*)"
     "Vectorized reduction rendering"
@@ -260,10 +260,10 @@ test/operations/reserved_routine_names.ml
     "void " ^ "gh686_ordinary_name" ^ "("
     "void " ^ ... ^ "("
 test/operations/scan_loop.ml [renders generated text in memory]
-test/operations/schedule_batch_grid.ml [also pins text this scan cannot name]
+test/operations/schedule_batch_grid.ml [also pins text this scan cannot name: untraced callback]
 test/operations/schedule_batched_mma.ml
     "Tile_mma register tiling"
-test/operations/schedule_contraction_nest.ml [also pins text this scan cannot name]
+test/operations/schedule_contraction_nest.ml [also pins text this scan cannot name: computed fragment, untraced callback]
 test/operations/schedule_conv_gemm.ml
     "Tile_mma register tiling"
     "fragment_"
@@ -282,7 +282,7 @@ test/operations/schedule_epilogue_fusion.ml
     "simdgroup_multiply_accumulate"
     "simdgroup_store(__mma_fragment_"
     "threadgroup float"
-test/operations/schedule_ldmatrix_matmul.ml [also pins text this scan cannot name]
+test/operations/schedule_ldmatrix_matmul.ml [also pins text this scan cannot name: computed fragment]
     "== 0)"
     "__bfloat16_as_ushort"
     "__mma_g) >> 4) ^ "
@@ -297,7 +297,7 @@ test/operations/schedule_ldmatrix_matmul.ml [also pins text this scan cannot nam
     ... ^ " e5m2 ldmatrix a"
     ... ^ " e5m2 ldmatrix b"
     ... ^ " ldmatrix a,b"
-test/operations/schedule_mma_matmul.ml [also pins text this scan cannot name]
+test/operations/schedule_mma_matmul.ml [also pins text this scan cannot name: computed fragment, opaque aggregate component]
     "#elif "
     "/* mma.sync fragment reduction body begins */"
     "/* mma.sync fragment reduction body ends */"
@@ -394,7 +394,7 @@ test/operations/schedule_mma_matmul.ml [also pins text this scan cannot name]
 test/operations/schedule_mma_scope_scratch.ml
     "ocannl_mma_rc8"
     "threadgroup float ocannl_mma_rc8["
-test/operations/schedule_ops.ml [renders generated text in memory; also pins text this scan cannot name]
+test/operations/schedule_ops.ml [renders generated text in memory; also pins text this scan cannot name: mutation or unseen buffer write]
     "#pragma"
     "<= 3"
     "<= 7"
@@ -433,7 +433,7 @@ test/operations/schedule_pad.ml
     "Tile_mma renders the lane-0 scalar fallback"
     "tmma_"
     sprintf "< (int)(%d.0))) {"
-test/operations/schedule_pipelined_matmul.ml [also pins text this scan cannot name]
+test/operations/schedule_pipelined_matmul.ml [also pins text this scan cannot name: computed fragment, untraced callback, opaque aggregate component]
     "% 2"
     "[" ^ ... ^ "]"
     "ocannl_cp_async"
@@ -453,7 +453,7 @@ test/operations/schedule_smem_matmul.ml
     "if ("
     "threadgroup float tile_"
     "threadgroup_barrier"
-test/operations/schedule_swizzle_matmul.ml [also pins text this scan cannot name]
+test/operations/schedule_swizzle_matmul.ml [also pins text this scan cannot name: computed fragment]
     " & 1)"
     " & 15)"
     " & 3)"
@@ -476,12 +476,12 @@ test/operations/schedule_swizzle_matmul.ml [also pins text this scan cannot name
 test/operations/test_bounds_folded_gather.ml
     "!= 0 ?"
     "!= 0.0 ?"
-test/operations/test_metal_guarded_gather_codegen.real.ml [reads build_files/ directly; also pins text this scan cannot name]
+test/operations/test_metal_guarded_gather_codegen.real.ml [reads build_files/ directly; also pins text this scan cannot name: untraced callback]
     "(float)(ids["
     ": (float)(0.0))"
     "? C["
     "double"
-test/operations/test_metal_pool_slot_width.real.ml [reads build_files/ directly; also pins text this scan cannot name]
+test/operations/test_metal_pool_slot_width.real.ml [reads build_files/ directly; also pins text this scan cannot name: untraced callback]
     "uint* __pool_slots"
     "ulong* __pool_slots"
 test/operations/test_one_hot_embedding_backward.ml
@@ -494,7 +494,7 @@ test/operations/test_one_hot_embedding_lookup.ml
     "<= 3"
     "?"
     "double *restrict ids_wide"
-test/operations/test_uniform_virtual_lane.ml [also pins text this scan cannot name]
+test/operations/test_uniform_virtual_lane.ml [also pins text this scan cannot name: opaque aggregate component]
     "Main logic"
     "_uniform_lane("
     "_uniform_vec("
@@ -506,7 +506,7 @@ test/operations/tile_mma_declines.ml
     "#pragma omp parallel for"
     "dispatch_apply"
     "tile_"
-test/operations/tile_mma_geometry.ml [also pins text this scan cannot name]
+test/operations/tile_mma_geometry.ml [also pins text this scan cannot name: computed fragment, untraced callback]
     "; column tail 3 in 1 vector; row tail 2)"
     "geometry from the schedule"
     "ocannl_pv__ = {" ^ ...
@@ -516,7 +516,7 @@ test/operations/tile_mma_geometry.ml [also pins text this scan cannot name]
     ... ^ " = tmma_c_0_0__[2];"
     ... ^ "};"
     sprintf "%d, tmma_c_0_0__, (const %s *)&%s);"
-test/operations/tile_mma_narrow.ml [also pins text this scan cannot name]
+test/operations/tile_mma_narrow.ml [also pins text this scan cannot name: computed fragment]
     "HALF_T tile_"
     "OCANNL_VEC_NARROW_BFLOAT16"
     "OCANNL_VEC_NARROW_HALF"

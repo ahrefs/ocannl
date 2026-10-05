@@ -103,6 +103,86 @@ let padded limit value =
   values ctx y expected "padded scalar values remain correct on a second run";
   Context.release ctx
 
+(* gh-ocannl-1218: the padding-aware fill writes exactly the interior. Uneven margins on all three
+   axes discriminate every level of the offset arithmetic (in 2-D a dropped scaling of the outer
+   offset goes unnoticed); the second case leaves the innermost axis unpadded, so its runs fold it
+   in. The margins keep the neutral value the buffer was created with. *)
+let padded_fill_offsets label dims pads =
+  let nd =
+    Ir.Ndarray.create_array ~debug:"fill_offsets" Ir.Ops.single ~dims ~padding:(Some (pads, -1.))
+  in
+  Ir.Ndarray.fill_from_float ~padding:pads nd 3.;
+  let numel = Array.fold dims ~init:1 ~f:( * ) in
+  let inside k =
+    (* Decompose the row-major linear index [k], innermost axis first. *)
+    let _, inside =
+      Array.fold_right (Array.zip_exn dims pads) ~init:(k, true)
+        ~f:(fun (d, Ir.Ops.{ left; right }) (rest, inside) ->
+          let i = rest % d in
+          (rest / d, inside && i >= left && i < d - right))
+    in
+    inside
+  in
+  p label
+    (Array.equal Float.equal
+       (Ir.Ndarray.retrieve_flat_values nd)
+       (Array.init numel ~f:(fun k -> if inside k then 3. else -1.)))
+
+(* gh-ocannl-1218: forcing a padded broadcast scalar's host initializer allocates a bounded number
+   of OCaml heap words, independent of its cell count: a full-size float temporary alone is [numel]
+   words, and a view per contiguous run grows with the run count. 512 is about five times what the
+   buffer's own creation costs. Measured while lowering, after shape inference committed the padding
+   and before linking forces it. *)
+let allocation_witness ~name ~numel (x : Tensor.t) y ~check_layout =
+  let measured = ref None in
+  let ctx, _routine =
+    compile name y ~inspect:(fun _ ->
+        if Option.is_none !measured then
+          let init = Option.value_exn (Ir.Host_inits.find x.value) in
+          let forced_before = Lazy.is_val init in
+          let before = Stdlib.Gc.allocated_bytes () in
+          let _ : Ir.Ndarray.t = Lazy.force init in
+          let words =
+            (Stdlib.Gc.allocated_bytes () -. before) /. Float.of_int (Stdlib.Sys.word_size / 8)
+          in
+          measured := Some (forced_before, Ir.Tnode.get_padding x.value, words))
+  in
+  let forced_before, padding, words = Option.value_exn !measured in
+  Stdio.eprintf "allocation witness %s: %.0f words for %d cells (not part of the golden)\n" name
+    words numel;
+  p "witness forces the host initializer itself" (not forced_before);
+  p "witness buffer carries committed padding" (check_layout padding);
+  p "padded scalar host fill allocates under 512 heap words, whatever its cell count"
+    Float.(words < 512.);
+  Context.release ctx
+
+(* A rank-1 halo: the run is the whole interior. *)
+let allocation_witness_rank1 () =
+  let numel = 1 lsl 16 in
+  let x = NTDSL.ndarray [| 3. |] ~output_dims:[ numel ] () in
+  Train.set_materialized x.value;
+  let kernel = NTDSL.ndarray [| 1.; 2.; 3. |] ~output_dims:[ 3 ] () in
+  let%op y = x +* "i=+k; k => i" kernel in
+  allocation_witness ~name:"alloc_witness" ~numel x y ~check_layout:Option.is_some
+
+(* A 2-D halo over an innermost unpadded channel axis of extent 1: [h] contiguous runs, or [h * w]
+   for a fill that issued one per innermost row, as many as there are cells. Over [h = 512] runs,
+   even a 3-word pair allocated per run exceeds the bound. *)
+let allocation_witness_rank3 () =
+  let h = 512 and w = 128 in
+  let x = NTDSL.ndarray [| 3. |] ~output_dims:[ h; w; 1 ] () in
+  Train.set_materialized x.value;
+  let kernel = NTDSL.ndarray (Array.init 9 ~f:Float.of_int) ~output_dims:[ 3; 3 ] () in
+  let%op y = x +* "oh=+kh, ow=+kw, c; kh, kw => oh, ow, c" kernel in
+  allocation_witness ~name:"alloc_witness_hwc" ~numel:(h * w) x y ~check_layout:(function
+    | Some (pads, _) ->
+        let dims = Lazy.force x.value.Ir.Tnode.dims in
+        Array.length dims = 3
+        && dims.(2) = 1
+        && Ir.Ops.equal_axis_padding pads.(2) { left = 0; right = 0 }
+        && pads.(0).left > 0 && pads.(1).left > 0
+    | None -> false)
+
 let parameter_reinit limit =
   let p = TDSL.param ~value:3. ("reinit_scalar_" ^ Int.to_string limit) ~output_dims:[ 3 ] () in
   let q =
@@ -202,4 +282,11 @@ let () =
       parameter_reinit limit;
       dependent_parameter limit;
       independent_parameters limit;
-      List.iter [ 0.; 3. ] ~f:(padded limit))
+      List.iter [ 0.; 3. ] ~f:(padded limit));
+  Ir.Ops.(
+    padded_fill_offsets "padded fill keeps uneven margins on all three axes" [| 4; 5; 6 |]
+      [| { left = 1; right = 0 }; { left = 0; right = 2 }; { left = 2; right = 1 } |];
+    padded_fill_offsets "padded fill folds an unpadded innermost axis into its runs" [| 4; 5; 3 |]
+      [| { left = 1; right = 0 }; { left = 2; right = 1 }; { left = 0; right = 0 } |]);
+  allocation_witness_rank1 ();
+  allocation_witness_rank3 ()

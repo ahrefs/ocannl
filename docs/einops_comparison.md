@@ -187,18 +187,25 @@ einops (structural part only, no learned parameters):
 mean = reduce(x, 'b t d -> b t 1', 'mean')
 ```
 
-OCANNL (from [nn_blocks.ml](../lib/nn_blocks.ml), line 136, complete with learned parameters):
-```ocaml
-let%op layer_norm ~label ?(epsilon = 1e-5) () x =
-  let mean = x ++ " ... | ..d..  => ... | 0 " [ "d" ] in
-  let centered = (x - mean) /. dim d in
-  let variance = (centered *. centered) ++ " ... | ... => ... |  0 " in
-  let std_dev = sqrt (variance + !.epsilon) in
-  let normalized = centered /. std_dev in
-  ({ gamma = 1. } *. normalized) + { beta = 0. }
+OCANNL ships layer normalization, complete with learned parameters, as the library block
+`layer_norm` in [nn_blocks.ml](../lib/nn_blocks.ml). Applied to einops' `b t d` layout (batch
+axes `b t`, feature output axis `d`):
+```ocaml doc-check=layer_norm
+open Ocannl.Nn_blocks.DSL_modules
+
+let ln = Ocannl.Nn_blocks.layer_norm ~label:[ "ln" ] ()
+let x = TDSL.range_of_shape ~batch_dims:[ 2; 3 ] ~output_dims:[ 8 ] ()
+let normalized = ln x
 ```
 
-The `{ gamma = 1. }` and `{ beta = 0. }` are learnable parameters created inline by the `%op` syntax extension.
+Its body spells the computation in einsum notation. The mean is the add-reduce over the feature
+row, `x ++ " ... | ..d.. => ... | 0 " [ "d" ]`, divided by the captured size `dim d` (`++` sums,
+as noted above). The variance reduces the squared centered values `x - mean` the same way, also
+divided by `dim d`. The normalized values `(x - mean) /. sqrt (variance + epsilon)` are then
+scaled by `{ gamma = 1. }` and shifted by `{ beta = 0. }`: learnable parameters created inline by
+the `%op` syntax extension, initialized to the identity transform.
+[layer_norm_numeric.ml](../test/operations/layer_norm_numeric.ml) checks the block's output and
+input gradient against hand-computed LayerNorm values.
 
 ## Summary comparison table
 

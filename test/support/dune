@@ -82,7 +82,7 @@
  ; the ones they cannot reach (a variable-length argument list, a string constant's value, a module
  ; binding) stay written against the constructors.
  (preprocess
-  (pps ppxlib.metaquot)))
+  (pps ppxlib.metaquot ppx_enumerate)))
 
 ; The emitter frontier is derived from the compiler libraries' COMPILED interfaces (gh-ocannl-748),
 ; so this one reads `.cmi` files through `compiler-libs`. It stays out of [test_utils] because
