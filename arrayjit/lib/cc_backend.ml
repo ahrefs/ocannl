@@ -885,17 +885,43 @@ let%track7_sexp c_compile_and_load ~f_path =
      would re-scan argv per kernel compile just to guard an already-memoized force. *)
   ignore (Lazy.force pool_restriction : Utils.Cpu_topology.pool_decision);
   let _base_name : string = Stdlib.Filename.chop_extension f_path in
-  (* There can be only one library with a given name, the object gets cached. Moreover, [Dl.dlclose]
-     is not required to unload the library, although ideally it should. *)
+  (* Temporary-file ownership (gh-ocannl-1197). [f_path] is handed over by [compile_source]: a
+     temporary that only the compiler reads. This compilation also creates the compiler log and,
+     unless library output was requested, the library. The log is always removed; the source and the
+     library are removed on every path, success included, unless a setting asks for them: debug
+     files retain both, library output retains the library. The [build_files/] copy of the source is
+     a debug output written elsewhere, never one of these. *)
+  let retain_debug = Utils.settings.output_debug_files_in_build_directory in
+  let library_requested =
+    Utils.get_global_flag ~default:false ~arg_name:"output_dlls_in_build_directory"
+  in
+  let library_owned = not (retain_debug || library_requested) in
+  (* A path that is already gone counts as removed: a retry could only hit whoever holds the freed
+     name now. *)
+  let removed path =
+    try
+      Unix.unlink path;
+      true
+    with
+    | Unix.Unix_error (Unix.ENOENT, _, _) -> true
+    | Unix.Unix_error _ -> false
+  in
+  let remove path = ignore (removed path : bool) in
+  (* The run id makes every library path unique within the process, even once the file is gone. A
+     dynamic loader (glibc, dyld, LoadLibrary) answers a [dlopen] of a path it already has mapped
+     with that mapping, without reading the file; the library is unlinked while still mapped (below)
+     and [Dl.dlclose] need not unload it, so a later [temp_file] landing on the freed name would
+     otherwise run the earlier kernel. *)
   let run_id = Int.to_string @@ Utils.get_global_run_id () in
   let libname =
     let file_stem = Stdlib.Filename.chop_extension @@ Stdlib.Filename.basename f_path in
-    if Utils.get_global_flag ~default:false ~arg_name:"output_dlls_in_build_directory" then
+    if library_requested then
       (* Use only the path from f_path for the linked library libname *)
       _base_name ^ "_run_id_" ^ run_id ^ if Sys.win32 then ".dll" else ".so"
     else
-      (* Use temp_file without the run_id component *)
-      Stdlib.Filename.temp_file file_stem (if Sys.win32 then ".dll" else ".so")
+      Stdlib.Filename.temp_file
+        (file_stem ^ "_run_id_" ^ run_id ^ "_")
+        (if Sys.win32 then ".dll" else ".so")
   in
   (try Stdlib.Sys.remove libname with _ -> ());
   let kernel_link_flags = Lazy.force kernel_link_flags in
@@ -938,42 +964,45 @@ let%track7_sexp c_compile_and_load ~f_path =
   (* Debug: log the command if debugging is enabled *)
   [%log3 "command", _cmdline];
   let _rc : int = Stdlib.Sys.command _cmdline in
-  (if _rc <> 0 then (
-     let compiler_output =
-       try Stdio.In_channel.read_all temp_log with _ -> "(unable to read compiler output)"
-     in
-     (try Stdlib.Sys.remove temp_log with _ -> ());
-     let detail =
-       Printf.sprintf
-         "OCANNL cc backend: generated code failed to compile (exit code %d).\n\
-          This is a bug in OCANNL. Please file an issue with the generated .c file at %s\n\
-          Compilation command: %s\n\
-          Compiler output:\n\
-          %s"
-         _rc f_path _cmdline compiler_output
-     in
-     raise
-       (Schedule_outcome.Cause_at
-          ( Schedule_outcome.Backend_compile,
-            Schedule_outcome.Backend_rejected
-              {
-                backend = name;
-                stage = "compiler";
-                severity = Schedule_outcome.Compiler_bug;
-                detail;
-              } )))
-   else try Stdlib.Sys.remove temp_log with _ -> ());
+  (* The compiler was the source's only reader. *)
+  if not retain_debug then remove f_path;
+  let source_note =
+    if retain_debug then "the generated .c file at " ^ f_path
+    else
+      "the generated .c file (this compile removed its temporary copy; rerun with \
+       --ocannl_output_debug_files_in_build_directory=true to keep it)"
+  in
+  if _rc <> 0 then (
+    let compiler_output =
+      try Stdio.In_channel.read_all temp_log with _ -> "(unable to read compiler output)"
+    in
+    remove temp_log;
+    (* A compiler can exit non-zero after writing part of its output. *)
+    if library_owned then remove libname;
+    let detail =
+      Printf.sprintf
+        "OCANNL cc backend: generated code failed to compile (exit code %d).\n\
+         This is a bug in OCANNL. Please file an issue with %s\n\
+         Compilation command: %s\n\
+         Compiler output:\n\
+         %s"
+        _rc source_note _cmdline compiler_output
+    in
+    raise
+      (Schedule_outcome.Cause_at
+         ( Schedule_outcome.Backend_compile,
+           Schedule_outcome.Backend_rejected
+             {
+               backend = name;
+               stage = "compiler";
+               severity = Schedule_outcome.Compiler_bug;
+               detail;
+             } )))
+  else remove temp_log;
   (* All three post-compile host-boundary failures are typed, uncontainable link rejections. *)
   let reject_link stage detail =
-    (* Only these paths belong to this compilation. Preserve the rejected source and library when
-       debugging was requested; cleanup must not replace the typed rejection. *)
-    if not Utils.settings.output_debug_files_in_build_directory then
-      List.iter
-        (f_path
-        ::
-        (if Utils.get_global_flag ~default:false ~arg_name:"output_dlls_in_build_directory" then []
-         else [ libname ]))
-        ~f:(fun path -> try Stdlib.Sys.remove path with _ -> ());
+    (* Cleanup must not replace the typed rejection: [remove] swallows its own failure. *)
+    if library_owned then remove libname;
     raise
       (Schedule_outcome.Cause_at
          ( Schedule_outcome.Backend_link,
@@ -1028,14 +1057,20 @@ let%track7_sexp c_compile_and_load ~f_path =
         Printf.sprintf
           "OCANNL cc backend: the compiled kernel failed to load (dlopen).\n\
            This is a bug in OCANNL: the kernel references a symbol that neither its link line nor \
-           the process supplies. Please file an issue with the generated .c file at %s\n\
+           the process supplies. Please file an issue with %s\n\
            dlerror: %s\n\
            Compilation command: %s"
-          f_path dlerror _cmdline
+          source_note dlerror _cmdline
       in
       reject_link Schedule_outcome.dlopen_stage detail
   in
   let result = { lib; libname } in
+  (* The kernel now executes from the mapping, not from the path. POSIX unlinks a mapped file's name
+     and keeps the mapping alive; Windows refuses to delete a mapped DLL, and then the removal waits
+     for the unload below, if one happens before exit. Either outcome is safe, so the code does not
+     ask which platform it is on. Only a removal that failed is retried: once the name is gone,
+     another process's [temp_file] may own it. *)
+  let removal_pending = library_owned && not (removed libname) in
   Alloc_census.count_module_loaded ();
   (* gh-ocannl-550: counted here, next to the unload the OpenMP arm deliberately does not perform,
      so the census reports the mapping as live for as long as it really is. *)
@@ -1045,11 +1080,16 @@ let%track7_sexp c_compile_and_load ~f_path =
          executed is a documented GOMP restriction -- libgomp's pool threads can retain references
          into it, and the dlclose can drop libgomp itself (loaded only as this object's dependency)
          under its parked workers. Observed as a SIGSEGV shortly after a routine was collected
-         (ubuntu CI, PR #97). Leak the mapping instead; kernels are small. *)
+         (ubuntu CI, PR #97). Leak the mapping instead; kernels are small. A Windows library whose
+         removal is pending therefore stays on disk: nothing unmaps it before exit. *)
       ()
   | `Dispatch | `None ->
       let%track7_sexp finalize (lib : library) : unit =
         Dl.dlclose ~handle:lib.lib;
+        (* After the unload, never before: Windows deletes a DLL only once nothing maps it. OCaml
+           runs no finalisers at exit, so on Windows only a routine collected before exit gets its
+           library removed. *)
+        if removal_pending then remove lib.libname;
         Alloc_census.count_module_unloaded ()
       in
       Stdlib.Gc.finalise finalize result);
