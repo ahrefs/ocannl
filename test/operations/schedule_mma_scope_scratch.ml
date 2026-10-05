@@ -1,22 +1,26 @@
 (* gh-ocannl-1205: the schedule-level shared-memory estimate counts the workgroup memory a tile-MMA
    emission scope declares beside the staged tiles. Metal's converted destination boundary (a float
    accumulator over half storage under [Fp16_wide], gh-ocannl-1075) initializes a coordinate table
-   in [threadgroup] memory once per scope; before this the estimate summed the staged tiles alone,
-   so a candidate that fit them but not the table reached backend compilation and was refused only
-   by the post-link allocation check, as a [Backend_link] decline.
+   in [threadgroup] memory once per scope. Before this the estimate summed the staged tiles alone,
+   so a candidate that fit them but not the table reached backend compilation, where
+   [newComputePipelineStateWithFunction] refused it with an untyped [Failure] before the post-link
+   allocation check could classify it: a fatal to a search, not a decline (measured on an M4 Max;
+   the classification gap is gh-ocannl-1226).
 
    The legs work at the device's own limit [L], on a staged + tensorized uniform-half matmul whose
-   accumulator is a resident fragment across two [k_o] blocks (one converted scope):
+   accumulator is a resident fragment across two [k_o] blocks (one converted scope).
 
-   - R, the refusal: staged tiles of exactly [L] bytes. Under [Fp16_auto] the triple converts
-   nothing, so the kernel compiles, links and runs at the limit (the control: the tiles alone fit
+   R, the refusal: staged tiles of exactly [L] bytes. Under [Fp16_auto] the triple converts nothing,
+   so the kernel compiles, links and runs at the limit, tensorized (the control: the tiles alone fit
    and the staged accounting is exact there). Under [Fp16_wide] the same schedule is refused at
-   [Hardware_limits] — before any backend compilation — requesting [L + scratch], where [scratch] is
-   the backend's own [mma_scope_workgroup_bytes] for the triple (positive on Metal). - F, the fit at
-   the limit: under [Fp16_wide], tiles of [L - scratch] bytes (an A-tile stride pad makes the sum
-   land exactly), so the estimate is exactly [L]. It compiles, links and runs: the post-link check,
-   which reads the compiled kernel's own static allocation, did not find more than the estimate. The
-   emitted source declares exactly as many tables as the estimate counted scopes.
+   [Hardware_limits], before any backend compilation, requesting [L + scratch], where [scratch] is
+   the backend's own [mma_scope_workgroup_bytes] for the triple (positive on Metal).
+
+   F, the fit at the limit: under [Fp16_wide], tiles of [L - scratch] bytes (an A-tile stride pad
+   makes the sum land exactly), so the estimate is exactly [L]. It compiles, links and runs, so the
+   compiled kernel's own static allocation is not above the estimate (Metal's pipeline creation
+   would refuse it otherwise). The emitted source declares exactly as many tables as the estimate
+   counted scopes.
 
    The scratch size is never restated here: it is read off the capability the emitter derives it
    from. Only Metal converts at a threadgroup-resident boundary; elsewhere the legs are skipped. *)
@@ -169,7 +173,9 @@ let describe_failure leg =
 let claim_r_control =
   "R control: tiles of exactly the limit, no converted boundary, compile and run"
 
-let claim_r_control_source = "R control: the unconverted kernel declares no coordinate table"
+let claim_r_control_source =
+  "R control: the unconverted kernel is tensorized and declares no coordinate table"
+
 let claim_scratch = "the converted half boundary charges a positive per-scope scratch"
 
 let claim_r_refused =
@@ -241,8 +247,17 @@ let () =
           (r_auto.estimate = limit
           && Option.value_map r_values ~default:false ~f:(fun got ->
               Array.equal Float.equal got expected));
+        (* Without the intrinsic census a scalar-fallback rendering would also lack the table. *)
+        let tensorized =
+          match r_auto.result with
+          | Ok (_, routine) ->
+              let census = List.map routine.Context.mma.Ir.C_syntax.renderings ~f:snd in
+              (not (List.is_empty census))
+              && List.for_all census ~f:(Ir.C_syntax.equal_mma_rendering Ir.C_syntax.Mma_intrinsics)
+          | Error _ -> false
+        in
         p claim_r_control_source
-          (Option.is_some r_values
+          (Option.is_some r_values && tensorized
           && not (String.is_substring (Generated.read r_auto.routine) ~substring:"ocannl_mma_rc8"));
         let r_wide =
           compile_leg ~name:"scratch_r_wide" ~fp16:Numerics.Fp16_wide ~bk:bk_r ~a_pad:None

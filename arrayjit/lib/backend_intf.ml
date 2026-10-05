@@ -384,10 +384,11 @@ type codegen_capabilities = {
           portable synchronous depth-2 pipeline is not this capability. *)
   mma_scope_workgroup_bytes : d_prec:Ops.prec -> a_prec:Ops.prec -> b_prec:Ops.prec -> int;
       (** Static workgroup-shared bytes one tile-MMA emission scope declares beyond the staged
-          tiles, for a [(d, a, b)] storage triple, from the same
-          [C_syntax_config.mma_scope_workgroup_bytes] the emitting hooks read: Metal's converted
-          destination boundary (gh-ocannl-1205), [0] everywhere else.
-          [Schedule.check_hardware_limits_classified] adds it per scope to the staged tiles. *)
+          tiles, for a [(d, a, b)] storage triple: the backend's
+          [C_syntax_config.mma_scope_workgroup_bytes], which it derives from the same combination
+          resolver and declaration its emitting hooks use. Non-zero only for Metal's converted
+          destination boundary (gh-ocannl-1205). [Schedule.check_hardware_limits_classified] adds it
+          per scope to the staged tiles. *)
 }
 (** Stable code-generation facts callers need before compiling. Actual rendering decisions stay on
     the compiled routine's censuses. *)
@@ -414,11 +415,13 @@ let no_codegen_capabilities =
     {!codegen_capabilities} is a compile error here until it is rendered (warning 9).
 
     The one field deliberately not rendered is [mma_scope_workgroup_bytes]: it decides whether a
-    schedule FITS, never what a kernel computes, and a replayed winner passes the same
-    [Schedule.check_hardware_limits_classified] gate (and the backend's post-link allocation check)
-    as a fresh candidate, so a stale entry is refused at compile rather than run. Keying on it would
-    re-tune every Metal schedule for a feasibility estimate (gh-ocannl-572: over-keying is a defect
-    too). *)
+    schedule FITS, never what a kernel computes, and it is a function of the storage triple, the
+    numerics policy and the backend, which the key already carries ([Schedule_cache.numerics_tag]
+    and the backend identity), so rendering it would add no discrimination. An emitter change that
+    grows the scratch is caught without it: a replayed winner passes the same
+    [Schedule.check_hardware_limits_classified] gate as a fresh candidate, so one that no longer
+    fits is refused there as a typed cause, which autotune answers by re-searching (gh-ocannl-572:
+    over-keying is a defect too). *)
 let codegen_capabilities_fingerprint
     {
       supports_f64;
