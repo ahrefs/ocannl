@@ -76,6 +76,7 @@ ok: source -- forwarding wrappers with generated defaults stay visibly partial
 ok: source -- anonymous forwarding callbacks stay visibly partial
 ok: source -- generated source stored through mutation stays visibly partial
 ok: source -- a prefix ! the file binds itself is not a dereference
+ok: source -- an infix := the file binds itself is not a write
 ok: source -- a forwarding wrapper used as a callback stays visibly partial
 ok: source -- a forwarding wrapper keeps unresolved caller markers visibly partial
 ok: source -- a self-sourcing wrapper has no false partial

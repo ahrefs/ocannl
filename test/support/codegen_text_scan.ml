@@ -1078,12 +1078,16 @@ let argument_provenance of_expr parameter args =
       then uncertain Unresolved Unsupplied_application result
       else result
 
-(** A dereference of a mutable cell: [!r], [Array.get], [Bytes.get]. What was stored there is not
-    modelled, so a value read this way carries the [Mutation] boundary. A [!] the file binds itself,
-    where it is spelled, is that binding and not a dereference. *)
-let reads_cell scope callee =
-  Poly.equal (longident_of callee) (Some [ "!" ])
+(** The standard reference operator [name] ([!] or [:=]) at [callee]: an operator the file binds
+    itself, where it is spelled, is that binding, not a read or write of a cell. *)
+let ref_operator scope callee name =
+  Poly.equal (longident_of callee) (Some [ name ])
   && not (Hashtbl.mem scope.values (span callee.pexp_loc))
+
+(** A dereference of a mutable cell: [!r], [Array.get], [Bytes.get]. What was stored there is not
+    modelled, so a value read this way carries the [Mutation] boundary. *)
+let reads_cell scope callee =
+  ref_operator scope callee "!"
   || calls scope callee ~target:"Array" ~name:"get"
   || calls scope callee ~target:"Bytes" ~name:"get"
 
@@ -1113,7 +1117,7 @@ let scoped_provenance scope ~emitters ~aliases ~seeds ?(parameters = [])
             | Pexp_setfield (_, _, rhs) | Pexp_setinstvar (_, rhs) ->
                 written := join_provenance !written (of_expr rhs)
             | Pexp_apply (callee, args)
-              when Poly.equal (longident_of callee) (Some [ ":=" ])
+              when ref_operator scope callee ":="
                    || calls scope callee ~target:"Array" ~name:"set"
                    || calls scope callee ~target:"Bytes" ~name:"set" ->
                 List.iter args ~f:(fun (_, arg) ->

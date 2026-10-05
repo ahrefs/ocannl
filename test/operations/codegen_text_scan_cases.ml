@@ -505,6 +505,12 @@ let () = source := Generated.read "r"; p "marker" (has !source)|ocaml},
 let has src = String.is_substring src ~substring:"bang marker"
 let () = ignore (Generated.read "r"); p "m" (has !backend_name)|ocaml},
       "+partial(unvalidated)" );
+    ( "an infix := the file binds itself is not a write",
+      {ocaml|let ( := ) _ text = text
+let has src = String.is_substring src ~substring:"assign marker"
+let probe () = ignore (dummy := Generated.read "r"); backend_name
+let () = p "m" (has (probe ()))|ocaml},
+      "+partial(unvalidated)" );
     ( "a forwarding wrapper used as a callback stays visibly partial",
       {ocaml|let has src marker = String.is_substring src ~substring:marker
 let check src = has src "callback wrapper marker"
