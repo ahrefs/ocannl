@@ -3129,28 +3129,37 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
 - A forced full-suite sweep also intersects the backend-scoped `Verdict.skipped`
   executable-and-claim keys from every successful unit through `tools/aggregate-skips.sh`
   (gh-ocannl-792), writing
-  `logs/<stamp>-skip-coverage.txt`. Incremental logs are refused because a cached Dune action does
-  not replay its stderr, and failed or interrupted units are refused because they may not have
-  reached every test — except a red whose serial rerun reported `all clean` with nothing
-  unjudged or unmapped, followed by `suite completed`: an incremental `-j 1` pass over the unit's
-  whole suite (no `--force`), which runs exactly the actions that never completed — the dependents
-  a red prerequisite held back, which rerunning the red stanzas alone does not reach. Every action
-  has then completed into the same log, so its records are complete, and the report names the
-  unit on a `red units counted after a clean serial rerun:` line. The retry must also confirm
-  the first attempt: every skip a re-run executable announced before its failure must be announced
-  again by the retry, or the unit is not counted (`serial rerun: first attempt disagrees:`). A
-  record the retry dropped is either stale (the retry executed the claim — a capability probe the
-  refused device answered `no`) or another stanza's genuine skip of the same executable (one
-  executable often runs under several aliases); the log cannot attribute a record to its action,
-  so filtering by executable name would clear the genuine one silently. The retry runs under
-  `--display short`, whose `<program> [alias ]<target>` lines name every executable it re-ran —
-  a directory fallback's included — alongside the alias's own `<family>-<name>`.
-  Dropping those lost minix/hip's evaluations on 2026-09-27 (red only from a ROCr scratch
+  `logs/<stamp>-skip-coverage.txt`. What it intersects is each unit's **per-action verdict
+  records**, never its log (gh-ocannl-1114): the sweep exports `OCANNL_TOOL_VERDICT_RECORDS` (a
+  directory beside the worktree, `<wt>.verdict-records`, emptied when the unit starts) into the
+  suite, the serial rerun and the completion pass alike, and Verdict writes one file per action —
+  keyed by working directory, executable and arguments, so one executable under two stanzas is
+  two actions — truncated when the process starts. Each file therefore holds its action's final
+  attempt by construction: a retry rewrites its own action's records, an action never re-run keeps
+  its own, and nothing depends on attributing lines of a merged stderr stream (five review rounds
+  of lukstafi/ocannl-staging#857 went to that inference, and dune truncating a noisy HIP action's
+  output once dropped records from the log outright). The sweep collects the files, concatenated,
+  into `logs/<stamp>-<machine>-<backend>.verdict-records`; a unit whose records cannot be read or
+  hold no `OCANNL_TOOL_VERDICT_ACTION` header — a swept commit predating them — is reported `skip
+  evidence unavailable` and not counted, since its silence would read as every claim executed.
+  The stderr copy of each record stays in the log for humans. A process whose streams a parent
+  captures as a fixture must not inherit the variable — its records belong to the parent's
+  judgment — so `Fresh_process` clears it, and a shell harness that runs a Verdict-linked fixture
+  unsets it (`sweep_harness.sh`, beside its `OCANNL_BACKEND` neutralization). A record kind the
+  aggregator does not judge (`OCANNL_TOOL_VERDICT_<KIND>`, the room left for gh-ocannl-996's bypass
+  record) passes through it.
+  Incremental runs are refused because a cached Dune action does not run, and failed or
+  interrupted units are refused because they may not have reached every test — except a red whose
+  serial rerun reported `all clean` with nothing unjudged or unmapped, followed by `suite
+  completed`: an incremental `-j 1` pass over the unit's whole suite (no `--force`), which runs
+  exactly the actions that never completed — the dependents a red prerequisite held back, which
+  rerunning the red stanzas alone does not reach. Every action has then completed and written its
+  records, and the report names the unit on a `red units counted after a clean serial rerun:` line.
+  Dropping such units lost minix/hip's evaluations on 2026-09-27 (red only from a ROCr scratch
   assertion at parallel width) and reported its hip-only claims as skipped on every box. An
   intersection over only the completed backends is a loud `POTENTIAL` report; it becomes `FAIL`
   only when every backend in the sweep's own unit vocabulary completed, while the sweep itself
-  still exits zero so later units and their history rows are never suppressed. A `--ref`
-  predating the machine record is refused when its human skip lines have no paired records.
+  still exits zero so later units and their history rows are never suppressed.
   A skip caused by a host or configuration capability rather than the selected backend (a compiler
   target, preprocessing flag or filesystem feature) uses
   ``Verdict.skipped ~aggregation:`Environment``: its human stderr line stays visible, while the
@@ -3160,7 +3169,7 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   scheduled routine's report and notification foremost — see zero-coverage findings without
   opening the report file; the routine diffs the latest report's finding set against the previous
   `*-skip-coverage.txt` and treats `FAIL`, or a changed finding set, as notify-worthy.
-  The same report intersects environment-scoped records across the successful unit logs and judges
+  The same report intersects environment-scoped records across the successful units and judges
   completeness by BOX, not backend: the canonical box set comes from the exact swept commit's
   `# measurement-boxes:` declaration in `benchmarks/fixtures/DIGESTS.txt`, read through
   `fixture_digest.py`'s parser, while each sweep unit supplies its stable box key. The launcher must
@@ -3171,10 +3180,10 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   independent of backend; when a box contributes several units, absence from any one proves the leg
   executed there. Several boxes may contribute the same backend; backend completeness counts that
   backend once, while environment completeness still counts both boxes. A claim present in every
-  completed declared-box log becomes `FAIL` only when every declared box contributed; with missing
+  completed declared-box run becomes `FAIL` only when every declared box contributed; with missing
   boxes it is `POTENTIAL`, and a pre-declaration historical ref is left explicitly unaggregated. A
   claim may be backend-gated in one run and environment-gated in another (the default-policy
-  `autotune_mma_companion` leg is the exemplar). An environment record in any log
+  `autotune_mma_companion` leg is the exemplar). An environment record in any run
   assigns that executable-and-claim key to the environment dimension; backend or environment skip
   records for the same key then both mean their box did not execute it. This ownership-before-
   intersection order prevents a different scope from masquerading as execution. A unit on a box

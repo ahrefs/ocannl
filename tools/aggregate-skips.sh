@@ -1,23 +1,33 @@
 #!/usr/bin/env bash
-# Intersect Verdict.skipped announcements from complete per-backend test logs.
+# Intersect Verdict.skipped records from complete per-backend test runs.
 # Backend-scoped records are judged against the backend vocabulary; environment-
 # scoped records are judged against the declared measurement-box vocabulary.
 #
-# A claim absent from one COMPLETE backend log was evaluated there; a claim
-# present in every complete log was not.  The caller owns completeness -- the
+# A claim absent from one COMPLETE backend run was evaluated there; a claim
+# present in every complete run was not.  The caller owns completeness -- the
 # sweep passes only forced full-suite units that passed, or whose every failure
-# a serial rerun cleared, never incremental logs.
+# a serial rerun cleared, never incremental runs.
 # A box outside the declared matrix is evidence without obligation: a claim it
 # executed is not skipped on every box, but its absence never makes the matrix
 # incomplete and its skips alone never make a finding.
-# A legacy human SKIPPED line without its paired machine record makes the log
-# incompatible rather than turning an old --ref run into false empty evidence.
+#
+# Each run is the unit's PER-ACTION verdict records (gh-ocannl-1114): the files
+# Verdict writes into OCANNL_TOOL_VERDICT_RECORDS, one per action and rewritten
+# by each run of that action, concatenated. Every file opens with its
+# OCANNL_TOOL_VERDICT_ACTION header, so the input holds each action's final
+# attempt and nothing else -- never the merged stderr of a first attempt and its
+# retries. A record kind this script does not judge (OCANNL_TOOL_VERDICT_<KIND>
+# from a newer Verdict) passes through; any other line, a record before the
+# first header, or an input with no header at all -- a swept commit predating
+# the per-action records -- makes the run incompatible rather than empty
+# evidence, which would read as execution.
 #
 # Usage:
 #   tools/aggregate-skips.sh \
 #     --known cc --known multidev_cc --known metal --known cuda --known hip \
 #     --known-box m4-max --known-box minix --known-box rog-nv \
-#     --run cc m4-max /path/to/cc.log --run metal m4-max /path/to/metal.log
+#     --run cc m4-max /path/to/cc.verdict-records \
+#     --run metal m4-max /path/to/metal.verdict-records
 #
 # Exit 1 means a complete backend or declared-box matrix has a claim skipped in
 # every member. Partial coverage is a loud report but exits 0 because an absent
@@ -29,7 +39,7 @@ known=()
 known_boxes=()
 run_backends=()
 run_boxes=()
-run_logs=()
+run_records=()
 
 die() {
   echo "aggregate-skips: $*" >&2
@@ -53,10 +63,10 @@ while [ $# -gt 0 ]; do
       shift 2
       ;;
     --run)
-      [ $# -ge 4 ] || die "--run needs a backend, box and log"
+      [ $# -ge 4 ] || die "--run needs a backend, box and records file"
       run_backends+=("$2")
       run_boxes+=("$3")
-      run_logs+=("$4")
+      run_records+=("$4")
       shift 4
       ;;
     *) die "unknown argument: $1" ;;
@@ -97,13 +107,13 @@ done
 for ((i = 0; i < ${#run_backends[@]}; i++)); do
   backend=${run_backends[$i]}
   box=${run_boxes[$i]}
-  log=${run_logs[$i]}
+  records=${run_records[$i]}
   contains "$backend" "${known[@]}" || die "run names unknown backend '$backend'"
-  [ -r "$log" ] || die "cannot read $backend log $log"
+  [ -r "$records" ] || die "cannot read $backend records $records"
 done
 
 # macOS's Bash 3.2 treats an empty [@] expansion as unbound under nounset even
-# after [a=()]. Handle it before ANY expansion of run_backends or run_logs.
+# after [a=()]. Handle it before ANY expansion of run_backends or run_records.
 if [ ${#run_backends[@]} -eq 0 ]; then
   report_line "completed backends: <none>"
   report_line "missing backends: $(join_by_comma "${known[@]}")"
@@ -135,7 +145,7 @@ done
 completed_boxes=()
 missing_boxes=()
 undeclared_boxes=()
-environment_logs=()
+environment_records=()
 if [ ${#known_boxes[@]} -gt 0 ]; then
   for box in "${known_boxes[@]}"; do
     if contains "$box" "${run_boxes[@]}"; then
@@ -144,10 +154,10 @@ if [ ${#known_boxes[@]} -gt 0 ]; then
       missing_boxes+=("$box")
     fi
   done
-  # Every log is environment evidence, declared box or not: an execution on an
+  # Every run is environment evidence, declared box or not: an execution on an
   # undeclared box (tuf beside minix for hip) proves the claim is reachable.
   # Only completeness is judged against the declaration.
-  environment_logs=("${run_logs[@]}")
+  environment_records=("${run_records[@]}")
   for box in "${run_boxes[@]}"; do
     contains "$box" "${known_boxes[@]}" && continue
     contains "$box" "${undeclared_boxes[@]:-}" || undeclared_boxes+=("$box")
@@ -171,32 +181,35 @@ cleanup() { rm -rf "$tmp"; }
 trap cleanup EXIT
 
 extract_claims() {
-  local scope=$1 log=$2
+  local scope=$1 records=$2
   awk '
-    index($0, "SKIPPED on ") == 1 { human++ }
+    index($0, "OCANNL_TOOL_VERDICT_ACTION\t") == 1 { actions++; next }
     index($0, "OCANNL_TOOL_VERDICT_SKIP\t") == 1 {
+      if (!actions) malformed = 1
       record = substr($0, length("OCANNL_TOOL_VERDICT_SKIP\t") + 1)
       fields = split(record, part, "\t")
-      machine++
       if (fields != 3 || part[2] == "" || part[3] == "") malformed = 1
       else if (part[1] == scope || (scope == "sweep" &&
                (part[1] == "backend" || part[1] == "environment")))
         print part[2] "\t" part[3]
       else if (part[1] != "backend" && part[1] != "environment" && part[1] != "outside-sweep") malformed = 1
+      next
     }
-    END { if (malformed || human != machine) exit 3 }
-  ' scope="$scope" "$log" | LC_ALL=C sort -u
+    /^OCANNL_TOOL_VERDICT_[A-Z][A-Z_]*\t/ { if (!actions) malformed = 1; next }
+    { malformed = 1 }
+    END { if (malformed || !actions) exit 3 }
+  ' scope="$scope" "$records" | LC_ALL=C sort -u
 }
 
 intersect_claims() {
   local scope=$1 destination=$2
   shift 2
-  local logs=("$@")
-  extract_claims "$scope" "${logs[0]}" >"$destination" ||
-    die "cannot extract compatible skip records from ${logs[0]}"
-  for ((i = 1; i < ${#logs[@]}; i++)); do
-    extract_claims "$scope" "${logs[$i]}" >"$tmp/next-$scope" ||
-      die "cannot extract compatible skip records from ${logs[$i]}"
+  local runs=("$@")
+  extract_claims "$scope" "${runs[0]}" >"$destination" ||
+    die "cannot extract compatible skip records from ${runs[0]}"
+  for ((i = 1; i < ${#runs[@]}; i++)); do
+    extract_claims "$scope" "${runs[$i]}" >"$tmp/next-$scope" ||
+      die "cannot extract compatible skip records from ${runs[$i]}"
     LC_ALL=C comm -12 "$destination" "$tmp/next-$scope" >"$tmp/intersection-$scope" ||
       die "cannot intersect skip records"
     mv "$tmp/intersection-$scope" "$destination" || die "cannot advance skip intersection"
@@ -205,19 +218,19 @@ intersect_claims() {
 
 # Scope is an observation, not part of a claim's identity. A claim can be
 # backend-gated in one run and configuration-gated in another. Backend findings
-# still require backend-scoped records in every log. Environment ownership,
-# however, is established by an environment record in ANY log; once owned,
-# either ordinary scope means that log did not execute the claim.
-intersect_claims backend "$tmp/common-backend" "${run_logs[@]}"
-if [ ${#environment_logs[@]} -gt 0 ]; then
+# still require backend-scoped records in every run. Environment ownership,
+# however, is established by an environment record in ANY run; once owned,
+# either ordinary scope means that run did not execute the claim.
+intersect_claims backend "$tmp/common-backend" "${run_records[@]}"
+if [ ${#environment_records[@]} -gt 0 ]; then
   : >"$tmp/environment-owned-unsorted"
-  for log in "${environment_logs[@]}"; do
-    extract_claims environment "$log" >>"$tmp/environment-owned-unsorted" ||
-      die "cannot extract compatible skip records from $log"
+  for records in "${environment_records[@]}"; do
+    extract_claims environment "$records" >>"$tmp/environment-owned-unsorted" ||
+      die "cannot extract compatible skip records from $records"
   done
   LC_ALL=C sort -u "$tmp/environment-owned-unsorted" >"$tmp/environment-owned" ||
     die "cannot collect environment-owned claims"
-  intersect_claims sweep "$tmp/common-sweep" "${environment_logs[@]}"
+  intersect_claims sweep "$tmp/common-sweep" "${environment_records[@]}"
   LC_ALL=C comm -12 "$tmp/environment-owned" "$tmp/common-sweep" \
     >"$tmp/common-environment" || die "cannot select environment-owned skip records"
 else

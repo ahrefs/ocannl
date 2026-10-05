@@ -44,7 +44,7 @@ on_error() {
     environment_executed partial_matrix singleton_fail repeated_backend_fail \
     repeated_backend_pass mixed_scope_fail mixed_scope_cleared historical_matrix \
     undeclared_cleared undeclared_skipped undeclared_only rerun_cleared rerun_red completion_red \
-    retry_agrees retry_disagrees fallback_disagrees local_identity_error unsafe_identity_error only_typo_error matrix_error state_first state_same \
+    retry_agrees retry_executes retry_skips bystander no_records future_kind local_identity_error unsafe_identity_error only_typo_error matrix_error state_first state_same \
     state_other_ref state_green state_unjudged state_regression state_after_fix state_moved \
     capped capped_target remote_opt_in dest_wsl dest_linux dest_missing dest_local_only \
     dest_bogus dest_no_kind_of dest_half dest_override dest_override_wins dest_bad_override \
@@ -103,6 +103,7 @@ unset SWEEP_TEST_CALLS SWEEP_TEST_WAIT_PREFIX SWEEP_TEST_OPAM_RC \
   SWEEP_TEST_OPAM_OUT SWEEP_TEST_OPAM_OUT_CC SWEEP_TEST_OPAM_OUT_MULTIDEV_CC \
   SWEEP_TEST_OPAM_OUT_METAL SWEEP_TEST_LOCAL_BOX SWEEP_TEST_JOBS \
   SWEEP_TEST_OPAM_SERIAL_RED SWEEP_TEST_OPAM_OUT_SERIAL SWEEP_TEST_OPAM_OUT_RETRY \
+  SWEEP_TEST_OPAM_OUT_BYSTANDER SWEEP_TEST_OPAM_RC_METAL SWEEP_TEST_OPAM_NO_RECORDS \
   SWEEP_TEST_SSH_CALLS \
   SWEEP_TEST_SSH_MODE SWEEP_TEST_OWN_GROUP SWEEP_TEST_WAIT_TICKS \
   SWEEP_TEST_HOSTS SWEEP_TEST_DEST_ROG SWEEP_TEST_DEST_MINIX \
@@ -112,6 +113,11 @@ unset SWEEP_TEST_CALLS SWEEP_TEST_WAIT_PREFIX SWEEP_TEST_OPAM_RC \
   SWEEP_TEST_FLEET_WORKER SWEEP_TEST_FLEET_CALLS SWEEP_TEST_FLEET_BOX SWEEP_TEST_REGISTRY \
   SWEEP_TEST_REGISTRY_FROM SWEEP_TEST_REMOTE_DRIVER SWEEP_TEST_REMOTE_ROOT \
   SWEEP_TEST_REMOTE_CASE
+# And the directory the launching sweep collects its own actions' verdict records in
+# (gh-ocannl-1114): the probe runs below are this harness's fixtures, and a skip they record
+# there would reach the OUTER sweep's aggregation as a claim the suite left unexecuted. Unset
+# here rather than only at `run_sweep_args`, because the probe also runs directly.
+unset OCANNL_TOOL_VERDICT_RECORDS
 
 # A direct, focused entrypoint for iterating on the local remote fixtures:
 # bash sweep_harness.sh --remote-only SWEEP AGGREGATE VERDICT METAL HIP NVRTC
@@ -178,23 +184,62 @@ git -C "$main" push -q -u origin master
 cat >"$fake_bin/opam" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >>"$SWEEP_TEST_CALLS"
+# What the unit's test actions record (gh-ocannl-1114). Where the sweep names a
+# records directory, the fixture text's skip records are re-announced by the
+# real Verdict, through a copy of the probe named fixture.exe: `replay` is the
+# suite's one test action, re-run by every serial rerun, and `replay bystander`
+# a second action of the same executable that only the first attempt runs. The
+# fake never prints Verdict's own stderr: the fixture text already carries it.
+replay() { # text [action-tag]
+  [ -n "${OCANNL_TOOL_VERDICT_RECORDS:-}" ] || return 0
+  # A suite whose tests predate the records, or run no Verdict at all.
+  [ -z "${SWEEP_TEST_OPAM_NO_RECORDS:-}" ] || return 0
+  _text=$1
+  shift
+  printf '%s\n' "$_text" | "$(dirname "$0")/fixture.exe" replay "$@" >/dev/null 2>&1 || {
+    echo "fake opam: the verdict replay failed" >&2
+    exit 96
+  }
+}
+suite_text() {
+  printf '%s\n' "${SWEEP_TEST_OPAM_OUT:-}"
+  case ${OCANNL_BACKEND:-} in
+    cc) printf '%s\n' "${SWEEP_TEST_OPAM_OUT_CC:-}" ;;
+    multidev_cc) printf '%s\n' "${SWEEP_TEST_OPAM_OUT_MULTIDEV_CC:-}" ;;
+    metal) printf '%s\n' "${SWEEP_TEST_OPAM_OUT_METAL:-}" ;;
+  esac
+}
 # A serial rerun (gh-ocannl-945) -- the sweep's `-j 1` call for ONE stanza, its
 # alias the last argument -- answers on its own: red exactly when that alias is
 # listed in SWEEP_TEST_OPAM_SERIAL_RED, with SWEEP_TEST_OPAM_OUT_SERIAL as its
 # failure text, so a fixture can hold one stanza red while another clears. A
-# clean one prints SWEEP_TEST_OPAM_OUT_RETRY: what the retry announced.
+# clean one prints SWEEP_TEST_OPAM_OUT_RETRY: what the retry announced. Either
+# way the rerun runs the suite's action again, which records what the retry
+# announced -- by default what the first attempt did, a deterministic test. The
+# completion pass (`@runtest @train`) re-runs nothing that completed, so it
+# records nothing.
 case " $* " in
   *" -j 1 "*)
     # The last positional parameter: `${*##* }` is not it -- pattern removal on
     # `$*` applies to each parameter separately, so it yields the whole line.
     for last; do :; done
+    completion=
+    case " $* " in *" @runtest @train "*) completion=1 ;; esac
     case " ${SWEEP_TEST_OPAM_SERIAL_RED:-} " in
       *" $last "*)
         [ -n "${SWEEP_TEST_OPAM_OUT_SERIAL:-}" ] && printf '%s\n' "$SWEEP_TEST_OPAM_OUT_SERIAL"
+        [ -n "$completion" ] || replay "${SWEEP_TEST_OPAM_OUT_SERIAL:-}"
         exit 1
         ;;
       *)
         [ -n "${SWEEP_TEST_OPAM_OUT_RETRY:-}" ] && printf '%s\n' "$SWEEP_TEST_OPAM_OUT_RETRY"
+        if [ -z "$completion" ]; then
+          if [ -n "${SWEEP_TEST_OPAM_OUT_RETRY:-}" ]; then
+            replay "$SWEEP_TEST_OPAM_OUT_RETRY"
+          else
+            replay "$(suite_text)"
+          fi
+        fi
         exit 0
         ;;
     esac
@@ -236,6 +281,9 @@ case ${OCANNL_BACKEND:-} in
     ;;
   metal) [ -n "${SWEEP_TEST_OPAM_OUT_METAL:-}" ] && printf '%s\n' "$SWEEP_TEST_OPAM_OUT_METAL" ;;
 esac
+[ -n "${SWEEP_TEST_OPAM_OUT_BYSTANDER:-}" ] && printf '%s\n' "$SWEEP_TEST_OPAM_OUT_BYSTANDER"
+replay "$(suite_text)"
+[ -z "${SWEEP_TEST_OPAM_OUT_BYSTANDER:-}" ] || replay "$SWEEP_TEST_OPAM_OUT_BYSTANDER" bystander
 if [ -n "${SWEEP_TEST_WAIT_PREFIX:-}" ]; then
   : >"$SWEEP_TEST_WAIT_PREFIX.ready"
   waited=0
@@ -245,9 +293,29 @@ if [ -n "${SWEEP_TEST_WAIT_PREFIX:-}" ]; then
     [ "$waited" -lt "$SWEEP_TEST_WAIT_TICKS" ] || exit 99
   done
 fi
+# Metal's suite may answer on its own, so one forced run can hold a red unit
+# beside a passing one.
+if [ "${OCANNL_BACKEND:-}" = metal ] && [ -n "${SWEEP_TEST_OPAM_RC_METAL:-}" ]; then
+  exit "$SWEEP_TEST_OPAM_RC_METAL"
+fi
 exit "${SWEEP_TEST_OPAM_RC:-0}"
 EOF
 chmod +x "$fake_bin/opam"
+# The fake opam's test action: the real probe, under the executable name the
+# fixture records carry.
+cp "$verdict_probe" "$fake_bin/fixture.exe"
+
+# What the sweep hands the aggregator for a unit (gh-ocannl-1114): the probe run
+# under a fresh records directory, its per-action file read back. The records
+# come from the real Verdict, so the aggregator's input format is never restated
+# here.
+records_of() { # probe out probe-args...
+  local probe=$1 out=$2 dir
+  shift 2
+  dir=$(mktemp -d "$tmp/records.XXXXXX")
+  OCANNL_TOOL_VERDICT_RECORDS=$dir "$probe" "$@" >/dev/null 2>&1
+  cat "$dir"/*.tsv >"$out"
+}
 
 # The harness never reaches a real sweep box. The default below selects only
 # cc, while tests that mean to exercise remote selection opt in explicitly and
@@ -540,7 +608,7 @@ run_sweep_args() {
   # supported knobs -- would otherwise decide which alias the fake remote lanes are asked for, and
   # the destination cases below assert exactly that.
   local environment=(-u OCANNL_BACKEND -u OCANNL_TOOL_SWEEP_CAP -u OCANNL_TOOL_SWEEP_CONTEXT_CAP \
-    -u OCANNL_TOOL_SWEEP_LOCAL_BOX \
+    -u OCANNL_TOOL_SWEEP_LOCAL_BOX -u OCANNL_TOOL_VERDICT_RECORDS \
     "OCANNL_TOOL_SWEEP_LAB_LOCK_WAIT=${SWEEP_TEST_LAB_LOCK_WAIT:-300}" \
     "OCANNL_TOOL_FLEET_WORKER=${SWEEP_TEST_FLEET_WORKER-$fake_bin/fleet-worker.sh}" \
     "SWEEP_TEST_FLEET_CALLS=$fleet_calls" \
@@ -572,6 +640,9 @@ run_sweep_args() {
     "SWEEP_TEST_OPAM_SERIAL_RED=${SWEEP_TEST_OPAM_SERIAL_RED:-}" \
     "SWEEP_TEST_OPAM_OUT_SERIAL=${SWEEP_TEST_OPAM_OUT_SERIAL:-}" \
     "SWEEP_TEST_OPAM_OUT_RETRY=${SWEEP_TEST_OPAM_OUT_RETRY:-}" \
+    "SWEEP_TEST_OPAM_OUT_BYSTANDER=${SWEEP_TEST_OPAM_OUT_BYSTANDER:-}" \
+    "SWEEP_TEST_OPAM_RC_METAL=${SWEEP_TEST_OPAM_RC_METAL:-}" \
+    "SWEEP_TEST_OPAM_NO_RECORDS=${SWEEP_TEST_OPAM_NO_RECORDS:-}" \
     "SWEEP_TEST_SSH_CALLS=$ssh_calls" \
     "SWEEP_TEST_SSH_MODE=${SWEEP_TEST_SSH_MODE:-}" \
     "SWEEP_TEST_REMOTE_DRIVER=${SWEEP_TEST_REMOTE_DRIVER:-}" \
@@ -847,7 +918,7 @@ aggregate_args=()
 for box in m4-max minix rog-nv; do aggregate_args+=(--known-box "$box"); done
 for backend in cc multidev_cc metal cuda hip; do
   log=$tmp/$backend.log
-  "$verdict_probe" "$backend" >"$log" 2>&1
+  records_of "$verdict_probe" "$log" "$backend"
   aggregate_args+=(--known "$backend")
   case $backend in
     cc | metal) box=m4-max ;;
@@ -874,7 +945,7 @@ grep -q '^FAIL: skipped on every declared box: verdict_skip_probe.exe: common en
 # intersection even though the same box/backend claim remains skipped. The
 # aggregator still exits 1 for that independent backend failure; its environment
 # result must pass and must not carry the all-box finding.
-"$verdict_probe" hip execute-environment >"$tmp/hip.log" 2>&1
+records_of "$verdict_probe" "$tmp/hip.log" hip execute-environment
 set +e
 environment_executed=$("$aggregate" "${aggregate_args[@]}" 2>&1)
 environment_executed_rc=$?
@@ -886,7 +957,7 @@ grep -q '^environment result: PASS -- no claim was skipped on every declared box
   <<<"$environment_executed"
 absent 'FAIL: skipped on every declared box:' <<<"$environment_executed"
 
-printf 'this backend evaluated the common claim\n' >"$tmp/hip.log"
+records_of "$verdict_probe" "$tmp/hip.log" hip execute-all
 complete_pass=$("$aggregate" "${aggregate_args[@]}")
 grep -q '^result: PASS -- no claim was skipped on every known backend$' <<<"$complete_pass"
 grep -q '^environment result: PASS -- no claim was skipped on every declared box$' \
@@ -896,8 +967,8 @@ grep -q '^environment result: PASS -- no claim was skipped on every declared box
 # FAIL: the absent box may execute it. This also proves completeness is counted
 # by distinct box rather than by the number of logs (m4-max and minix each
 # contribute two in the complete case above).
-"$verdict_probe" cc >"$tmp/cc.log" 2>&1
-"$verdict_probe" hip >"$tmp/hip.log" 2>&1
+records_of "$verdict_probe" "$tmp/cc.log" cc
+records_of "$verdict_probe" "$tmp/hip.log" hip
 partial_matrix=$("$aggregate" \
   --known cc --known multidev_cc --known metal --known cuda --known hip \
   --known-box m4-max --known-box minix --known-box rog-nv \
@@ -914,10 +985,10 @@ grep -q '^POTENTIAL: skipped on every completed box: verdict_skip_probe.exe: com
 # absent, every declared box is represented but no successful unit executed the
 # claim. Filtering by scope first falsely reported PASS; claim-and-box evidence
 # must report the complete environment matrix as FAIL.
-"$verdict_probe" cc environment-as-backend >"$tmp/mixed-cc.log" 2>&1
-"$verdict_probe" multidev_cc environment-as-backend >"$tmp/mixed-multidev.log" 2>&1
-"$verdict_probe" cuda >"$tmp/mixed-cuda.log" 2>&1
-"$verdict_probe" hip >"$tmp/mixed-hip.log" 2>&1
+records_of "$verdict_probe" "$tmp/mixed-cc.log" cc environment-as-backend
+records_of "$verdict_probe" "$tmp/mixed-multidev.log" multidev_cc environment-as-backend
+records_of "$verdict_probe" "$tmp/mixed-cuda.log" cuda
+records_of "$verdict_probe" "$tmp/mixed-hip.log" hip
 set +e
 mixed_scope_fail=$("$aggregate" \
   --known cc --known multidev_cc --known metal --known cuda --known hip \
@@ -935,7 +1006,7 @@ grep -q '^FAIL: skipped on every declared box: verdict_skip_probe.exe: common en
 
 # The successful Metal leg is the execution that must clear the same mixed-scope
 # claim. Its other backend-scoped fixture claim remains independent.
-"$verdict_probe" metal execute-environment >"$tmp/mixed-metal.log" 2>&1
+records_of "$verdict_probe" "$tmp/mixed-metal.log" metal execute-environment
 set +e
 mixed_scope_cleared=$("$aggregate" \
   --known cc --known multidev_cc --known metal --known cuda --known hip \
@@ -953,8 +1024,8 @@ absent 'FAIL: skipped on every declared box:' <<<"$mixed_scope_cleared"
 
 # A backend may run on more than one declared box. It counts once toward backend
 # completeness, but each box remains independent environment evidence.
-"$verdict_probe" cc >"$tmp/repeated-m4.log" 2>&1
-"$verdict_probe" cc >"$tmp/repeated-minix.log" 2>&1
+records_of "$verdict_probe" "$tmp/repeated-m4.log" cc
+records_of "$verdict_probe" "$tmp/repeated-minix.log" cc
 set +e
 repeated_backend_fail=$("$aggregate" \
   --known cc --known metal --known-box m4-max --known-box minix \
@@ -969,7 +1040,7 @@ grep -q '^environment status: complete (2 of 2 declared boxes completed)$' \
   <<<"$repeated_backend_fail"
 grep -q '^environment result: FAIL -- 1 claim(s) skipped on every declared box$' \
   <<<"$repeated_backend_fail"
-"$verdict_probe" cc execute-environment >"$tmp/repeated-minix.log" 2>&1
+records_of "$verdict_probe" "$tmp/repeated-minix.log" cc execute-environment
 repeated_backend_pass=$("$aggregate" \
   --known cc --known metal --known-box m4-max --known-box minix \
   --run cc m4-max "$tmp/repeated-m4.log" --run cc minix "$tmp/repeated-minix.log")
@@ -979,7 +1050,7 @@ grep -q '^environment result: PASS -- no claim was skipped on every declared box
 # Completeness outranks the partial-matrix observation floor. A valid singleton
 # declaration must still turn its one box's skip into FAIL, and execution in
 # that same one log must turn it into PASS.
-"$verdict_probe" cc >"$tmp/cc.log" 2>&1
+records_of "$verdict_probe" "$tmp/cc.log" cc
 set +e
 singleton_fail=$("$aggregate" \
   --known cc --known metal --known-box m4-max \
@@ -990,7 +1061,7 @@ set -e
 grep -q '^environment status: complete (1 of 1 declared boxes completed)$' <<<"$singleton_fail"
 grep -q '^FAIL: skipped on every declared box: verdict_skip_probe.exe: common environment-gated claim$' \
   <<<"$singleton_fail"
-"$verdict_probe" cc execute-environment >"$tmp/cc.log" 2>&1
+records_of "$verdict_probe" "$tmp/cc.log" cc execute-environment
 singleton_pass=$("$aggregate" \
   --known cc --known metal --known-box m4-max \
   --run cc m4-max "$tmp/cc.log")
@@ -1001,9 +1072,9 @@ grep -q '^environment result: PASS -- no claim was skipped on every declared box
 # 2026-09-27 shape: tuf ran hip beside the declared boxes and executed the
 # environment-gated leg, so the leg was not skipped on every box.
 for backend in cc cuda multidev_cc; do
-  "$verdict_probe" "$backend" >"$tmp/undeclared-$backend.log" 2>&1
+  records_of "$verdict_probe" "$tmp/undeclared-$backend.log" "$backend"
 done
-"$verdict_probe" hip execute-environment >"$tmp/undeclared-tuf.log" 2>&1
+records_of "$verdict_probe" "$tmp/undeclared-tuf.log" hip execute-environment
 undeclared_matrix=(--known cc --known multidev_cc --known cuda --known hip
   --known-box m4-max --known-box minix --known-box rog-nv
   --run cc m4-max "$tmp/undeclared-cc.log"
@@ -1020,7 +1091,7 @@ grep -q '^undeclared boxes (their executions count, their absence does not): tuf
 grep -q '^environment result: PASS -- no claim was skipped on every declared box$' \
   <<<"$undeclared_cleared"
 # ...while its skips add nothing: skipped there too, the complete matrix FAILs.
-"$verdict_probe" hip >"$tmp/undeclared-tuf.log" 2>&1
+records_of "$verdict_probe" "$tmp/undeclared-tuf.log" hip
 set +e
 undeclared_skipped=$("$aggregate" "${undeclared_matrix[@]}" \
   --run hip tuf "$tmp/undeclared-tuf.log" 2>&1)
@@ -1043,8 +1114,8 @@ grep -q '^environment status: insufficient (1 of 3 declared boxes completed; nee
 # identity emission rather than restating its record format in the fixture.
 other_probe=$tmp/other_skip_probe.exe
 cp "$verdict_probe" "$other_probe"
-"$verdict_probe" cc >"$tmp/identity-cc.log" 2>&1
-"$other_probe" metal >"$tmp/identity-metal.log" 2>&1
+records_of "$verdict_probe" "$tmp/identity-cc.log" cc
+records_of "$other_probe" "$tmp/identity-metal.log" metal
 identity_clear=$("$aggregate" \
   --known cc --known metal \
   --known-box m4-max \
@@ -1089,19 +1160,43 @@ set -e
 [ "$extract_error_rc" -eq 2 ]
 grep -q '^aggregate-skips: cannot extract compatible skip records from ' <<<"$extract_error"
 
-# A supported `sweep.sh --ref` may target a commit from before Verdict emitted
-# machine records. Its legacy human line is evidence of a skip, not evidence of
-# execution; a human/machine count mismatch must make the whole log incompatible.
-printf 'SKIPPED on cc (vacuous): common unevaluated claim\n' >"$tmp/legacy-cc.log"
-set +e
-legacy_error=$("$aggregate" \
+# A supported `sweep.sh --ref` may target a commit from before Verdict wrote
+# per-action records: its run holds no action at all, which is evidence of
+# nothing, never of every claim executed. A log line, or a record no action
+# header precedes, is not a records file either. Each makes the run
+# incompatible.
+for legacy in empty log orphan; do
+  case $legacy in
+    empty) : >"$tmp/legacy-cc.records" ;;
+    log)
+      printf 'SKIPPED on cc (vacuous): common unevaluated claim\n' >"$tmp/legacy-cc.records"
+      grep -v '^OCANNL_TOOL_VERDICT_ACTION' "$tmp/identity-cc.log" >>"$tmp/legacy-cc.records"
+      ;;
+    orphan)
+      grep -v '^OCANNL_TOOL_VERDICT_ACTION' "$tmp/identity-cc.log" >"$tmp/legacy-cc.records"
+      cat "$tmp/identity-cc.log" >>"$tmp/legacy-cc.records"
+      ;;
+  esac
+  set +e
+  legacy_error=$("$aggregate" \
+    --known cc --known metal \
+    --known-box m4-max \
+    --run cc m4-max "$tmp/legacy-cc.records" --run metal m4-max "$tmp/identity-metal.log" 2>&1)
+  legacy_error_rc=$?
+  set -e
+  [ "$legacy_error_rc" -eq 2 ]
+  grep -q '^aggregate-skips: cannot extract compatible skip records from ' <<<"$legacy_error"
+done
+# A record kind this aggregator does not judge -- the bypass record gh-ocannl-996
+# proposes, from a newer swept commit -- passes through, so the same records
+# still aggregate as they did.
+cp "$tmp/identity-cc.log" "$tmp/future-cc.records"
+printf 'OCANNL_TOOL_VERDICT_BYPASS\tcontended\tverdict_skip_probe.exe\ta hatched claim\n' \
+  >>"$tmp/future-cc.records"
+future_kind=$("$aggregate" \
   --known cc --known metal \
-  --known-box m4-max \
-  --run cc m4-max "$tmp/legacy-cc.log" --run metal m4-max "$tmp/identity-metal.log" 2>&1)
-legacy_error_rc=$?
-set -e
-[ "$legacy_error_rc" -eq 2 ]
-grep -q '^aggregate-skips: cannot extract compatible skip records from ' <<<"$legacy_error"
+  --run cc m4-max "$tmp/future-cc.records" --run metal m4-max "$tmp/identity-metal.log")
+grep -q '^result: PASS -- no claim was skipped on every known backend$' <<<"$future_kind"
 
 # A successful analysis whose destination stops accepting bytes is still a
 # harness failure. A read-only descriptor makes the first report write fail
@@ -1588,11 +1683,11 @@ Error: the claim itself' run_sweep_backend cc --target serial-probe)
 grep -q 'm4-max/cc: fail ' <<<"$serial_red"
 # One dune call per stanza, so each has its own verdict; sorted, after the unit.
 [ "$(tail -6 "$calls" | sed -n '1p')" = 'exec -- dune runtest serial-probe' ]
-[ "$(tail -6 "$calls" | sed -n '2p')" = 'exec -- dune build -j 1 --display short @test/runtest-pre-diff-probe' ]
-[ "$(tail -6 "$calls" | sed -n '3p')" = 'exec -- dune build -j 1 --display short @test/runtest-serial-probe' ]
-[ "$(tail -6 "$calls" | sed -n '4p')" = 'exec -- dune build -j 1 --display short @test/runtest-serial-alpha' ]
-[ "$(tail -6 "$calls" | sed -n '5p')" = 'exec -- dune build -j 1 --display short @test/runtest-serial-beta' ]
-[ "$(tail -6 "$calls" | sed -n '6p')" = 'exec -- dune build -j 1 --display short @test/runtest' ]
+[ "$(tail -6 "$calls" | sed -n '2p')" = 'exec -- dune build -j 1 @test/runtest-pre-diff-probe' ]
+[ "$(tail -6 "$calls" | sed -n '3p')" = 'exec -- dune build -j 1 @test/runtest-serial-probe' ]
+[ "$(tail -6 "$calls" | sed -n '4p')" = 'exec -- dune build -j 1 @test/runtest-serial-alpha' ]
+[ "$(tail -6 "$calls" | sed -n '5p')" = 'exec -- dune build -j 1 @test/runtest-serial-beta' ]
+[ "$(tail -6 "$calls" | sed -n '6p')" = 'exec -- dune build -j 1 @test/runtest' ]
 # The verdict reaches all three channels: the summary, the log, the fingerprint.
 grep -q 'm4-max/cc: environment-red, 4 stanzas and 1 directory fallback rerun at -j 1' \
   <<<"$serial_red"
@@ -1633,7 +1728,7 @@ diff --git a/test/inline_two.ml b/_build/default/test/inline_two.ml.corrected'
 serial_two_inline=$(SWEEP_TEST_OPAM_RC=1 SWEEP_TEST_OPAM_OUT=$two_inline_failure \
   run_sweep_backend cc --target two-inline-probe)
 [ "$(tail -2 "$calls" | sed -n '1p')" = 'exec -- dune runtest two-inline-probe' ]
-[ "$(tail -2 "$calls" | sed -n '2p')" = 'exec -- dune build -j 1 --display short @test/runtest' ]
+[ "$(tail -2 "$calls" | sed -n '2p')" = 'exec -- dune build -j 1 @test/runtest' ]
 grep -q 'm4-max/cc: environment-red, 0 stanzas and 1 directory fallback rerun at -j 1' \
   <<<"$serial_two_inline"
 two_inline_log=$(awk -F '\t' '$3 == "cc" { print $9 }' "$state/history.tsv" | tail -1)
@@ -1688,10 +1783,11 @@ grep -q '^red units counted after a clean serial rerun: m4-max/cc m4-max/metal$'
 grep -q '^status: partial (2 of 5 known backends completed)$' "$rerun_cleared_report"
 [ "$(grep -E '^  (result|FAIL|POTENTIAL): ' <<<"$rerun_cleared")" = "$coverage_findings" ]
 
-# The retry must confirm its first attempt. Here fixture.exe's own stanza
-# (`runtest-fixture`) is the one re-run. A retry that announces every skip its
-# first attempt did leaves no record stale, and the unit counts (the real
-# minix/hip shape: all ten schedule_conv_gemm records re-announced).
+# Each action's FINAL attempt is the evidence, read from its own record file
+# (gh-ocannl-1114). Here fixture.exe's own stanza (`runtest-fixture`) is the one
+# the serial rerun re-runs. A retry that announces every skip its first attempt
+# did changes nothing, and the unit counts (the real minix/hip shape: all ten
+# schedule_conv_gemm records re-announced).
 own_stanza_failure='File "test/dune", line 2, characters 7-28:
 2 |  (alias runtest-fixture)
 Fatal error: exception hip_init:
@@ -1700,32 +1796,82 @@ retry_agrees=$(SWEEP_TEST_OPAM_RC=1 SWEEP_TEST_OPAM_OUT_RETRY=$cc_unit_log \
   SWEEP_TEST_OPAM_OUT_CC=$cc_unit_log$'\n'$own_stanza_failure \
   run_sweep_args --force --only cc)
 grep -q 'm4-max/cc: serial rerun: suite completed$' <<<"$retry_agrees"
-absent 'first attempt disagrees' <<<"$retry_agrees"
 retry_agrees_report=$(sed -n 's/^skip coverage: .* -- //p' <<<"$retry_agrees" | tail -1)
 grep -q '^completed backends: cc$' "$retry_agrees_report"
-# A retry that no longer announces the cc-only skip either executed it (the
-# first-attempt record is stale) or never re-ran the stanza that announced it
-# (a genuine skip of the same executable); the log cannot tell which, so the
-# unit is not counted -- neither a stale skip counted nor a genuine one dropped.
-retry_disagrees=$(SWEEP_TEST_OPAM_RC=1 SWEEP_TEST_OPAM_OUT_RETRY=$common \
+
+# The three cases below hold cc red-then-cleared beside a metal unit that passes
+# and skips the cc-only claim too, so cc's FINAL attempt alone decides whether
+# that claim is skipped on every completed backend. Before the per-action
+# records, the merged log could not attribute a first-attempt record the retry
+# no longer announced, and dropped the whole unit instead
+# (`first attempt disagrees`): the first and third cases fail there.
+metal_with_cc_only=$metal_unit_log$'\n'$cc_only
+# Sets final_report rather than printing it: called inside `$(...)`, these
+# assertions would run without errexit and could not fail the harness.
+final_attempt_report() { # sweep-output
+  final_report=$(sed -n 's/^skip coverage: .* -- //p' <<<"$1" | tail -1)
+  [ -f "$final_report" ]
+  grep -q '^red units counted after a clean serial rerun: m4-max/cc$' "$final_report"
+  grep -q '^completed backends: cc, metal$' "$final_report"
+  grep -q '^POTENTIAL: skipped on every completed backend: fixture.exe: common unevaluated claim$' \
+    "$final_report"
+}
+# A first attempt that skipped the claim, whose retry EXECUTED it: the retry
+# rewrote the action's records, so the claim is not skipped on every backend --
+# although the first attempt's record of it is still in the unit's log.
+retry_executes=$(SWEEP_TEST_OPAM_RC=1 SWEEP_TEST_OPAM_RC_METAL=0 \
+  SWEEP_TEST_OPAM_OUT_RETRY=$common \
   SWEEP_TEST_OPAM_OUT_CC=$cc_unit_log$'\n'$own_stanza_failure \
-  run_sweep_args --force --only cc)
-grep -q 'm4-max/cc: serial rerun: first attempt disagrees: fixture.exe$' <<<"$retry_disagrees"
-retry_disagrees_report=$(sed -n 's/^skip coverage: .* -- //p' <<<"$retry_disagrees" | tail -1)
-grep -q '^completed backends: <none>$' "$retry_disagrees_report"
-# A directory fallback names no executable, but Dune's short display names the
-# program each re-run action ran: the inline-only red below re-runs
-# `@test/runtest`, whose retry ran fixture and announced nothing, so fixture's
-# first-attempt skips are unconfirmed and the unit is not counted.
-fallback_disagrees=$(SWEEP_TEST_OPAM_RC=1 \
-  SWEEP_TEST_OPAM_OUT_RETRY='        fixture alias test/runtest' \
-  SWEEP_TEST_OPAM_OUT_CC=$cc_unit_log$'\n'$two_inline_failure \
-  run_sweep_args --force --only cc)
-grep -q 'm4-max/cc: serial rerun: directory fallback (2 inline sites): @test/runtest$' \
-  <<<"$fallback_disagrees"
-grep -q 'm4-max/cc: serial rerun: first attempt disagrees: fixture.exe$' <<<"$fallback_disagrees"
-fallback_disagrees_report=$(sed -n 's/^skip coverage: .* -- //p' <<<"$fallback_disagrees" | tail -1)
-grep -q '^completed backends: <none>$' "$fallback_disagrees_report"
+  SWEEP_TEST_OPAM_OUT_METAL=$metal_with_cc_only \
+  run_sweep_args --force --only cc --only metal)
+grep -q 'm4-max/cc: serial rerun: suite completed$' <<<"$retry_executes"
+grep -q 'm4-max/metal: pass ' <<<"$retry_executes"
+final_attempt_report "$retry_executes"
+retry_executes_report=$final_report
+absent 'cc-only unevaluated claim' "$retry_executes_report"
+retry_executes_log=$(awk -F '\t' '$3 == "cc" { print $9 }' "$state/history.tsv" | tail -1)
+grep -q "^OCANNL_TOOL_VERDICT_SKIP$(printf '\t')backend$(printf '\t')fixture.exe$(printf '\t')cc-only unevaluated claim$" \
+  "$retry_executes_log"
+absent 'cc-only unevaluated claim' "${retry_executes_log%.log}.verdict-records"
+# The reverse: a first attempt that executed the claim, whose retry SKIPPED it.
+retry_skips=$(SWEEP_TEST_OPAM_RC=1 SWEEP_TEST_OPAM_RC_METAL=0 \
+  SWEEP_TEST_OPAM_OUT_RETRY=$common$'\n'$cc_only \
+  SWEEP_TEST_OPAM_OUT_CC=$common$'\n'$own_stanza_failure \
+  SWEEP_TEST_OPAM_OUT_METAL=$metal_with_cc_only \
+  run_sweep_args --force --only cc --only metal)
+final_attempt_report "$retry_skips"
+retry_skips_report=$final_report
+grep -q '^POTENTIAL: skipped on every completed backend: fixture.exe: cc-only unevaluated claim$' \
+  "$retry_skips_report"
+# An action the rerun never re-ran keeps its own records, even when it is the
+# same executable as one that was: `fixture.exe replay bystander` skipped the
+# claim in the first attempt and was not re-run, while `fixture.exe replay`,
+# re-run, executed it. One executable under two stanzas (test_cse.exe under
+# runtest-test_cse and runtest-test_cse-cse_d_fwd) is two actions.
+bystander=$(SWEEP_TEST_OPAM_RC=1 SWEEP_TEST_OPAM_RC_METAL=0 \
+  SWEEP_TEST_OPAM_OUT_RETRY=$common \
+  SWEEP_TEST_OPAM_OUT_CC=$common$'\n'$own_stanza_failure \
+  SWEEP_TEST_OPAM_OUT_BYSTANDER=$cc_only \
+  SWEEP_TEST_OPAM_OUT_METAL=$metal_with_cc_only \
+  run_sweep_args --force --only cc --only metal)
+final_attempt_report "$bystander"
+bystander_report=$final_report
+grep -q '^POTENTIAL: skipped on every completed backend: fixture.exe: cc-only unevaluated claim$' \
+  "$bystander_report"
+bystander_log=$(awk -F '\t' '$3 == "cc" { print $9 }' "$state/history.tsv" | tail -1)
+[ "$(grep -c '^OCANNL_TOOL_VERDICT_ACTION' "${bystander_log%.log}.verdict-records")" -eq 2 ]
+
+# A forced pass whose run left no per-action records -- a swept commit from
+# before Verdict wrote them -- is no evidence, and says so: its silence would
+# read as every claim executed. The suite here runs no Verdict at all.
+no_records=$(SWEEP_TEST_OPAM_NO_RECORDS=1 SWEEP_TEST_OPAM_OUT_CC=$cc_unit_log \
+  SWEEP_TEST_OPAM_OUT_METAL=$metal_unit_log run_sweep_args --force --only cc --only metal)
+grep -q '^  m4-max/cc: pass ' <<<"$no_records"
+grep -q '^  m4-max/cc: skip evidence unavailable -- no per-action verdict records' <<<"$no_records"
+grep -q '^  m4-max/metal: skip evidence unavailable -- no per-action verdict records' <<<"$no_records"
+no_records_report=$(sed -n 's/^skip coverage: .* -- //p' <<<"$no_records" | tail -1)
+grep -q '^completed backends: <none>$' "$no_records_report"
+grep -q '^result: NOT AGGREGATED$' "$no_records_report"
 
 # The opposing controls, in one run: a red whose serial rerun stays red, and a
 # red with no refusal signature (never rerun), both remain excluded.
