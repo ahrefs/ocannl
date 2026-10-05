@@ -144,7 +144,7 @@ test/operations/accum_width.ml
 test/operations/canonical_render.ml [renders generated text in memory; also pins text this scan cannot name: opaque aggregate component]
     "?"
     "s0"
-test/operations/cc_march_census.ml [also pins text this scan cannot name: untraced callback, opaque aggregate component]
+test/operations/cc_march_census.ml [also pins text this scan cannot name: untraced callback, opaque aggregate component, unvalidated haystack]
 test/operations/concat_loop_symbols.ml [renders generated text in memory]
 test/operations/cost_model_floor.ml [renders generated text in memory]
 test/operations/cpu_parallel.ml

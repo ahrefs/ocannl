@@ -511,6 +511,14 @@ let has src = String.is_substring src ~substring:"assign marker"
 let probe () = ignore (dummy := Generated.read "r"); backend_name
 let () = p "m" (has (probe ()))|ocaml},
       "+partial(unvalidated)" );
+    ( "a partial application keeps the callee's own buffer boundary beside its unsupplied one",
+      {ocaml|let render flag src =
+  let b = Buffer.create 8 in
+  Buffer.add_string b src;
+  if flag then Buffer.contents b else src
+let partial = render true
+let () = p "m" (String.is_substring (partial (Generated.read "r")) ~substring:"buffered partial marker")|ocaml},
+      {|"buffered partial marker" +partial(unsupplied, mutation)|} );
     ( "a forwarding wrapper used as a callback stays visibly partial",
       {ocaml|let has src marker = String.is_substring src ~substring:marker
 let check src = has src "callback wrapper marker"

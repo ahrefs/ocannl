@@ -1236,12 +1236,21 @@ let scoped_provenance scope ~emitters ~aliases ~seeds ?(parameters = [])
               }
             in
             (* The level is decided outright here, and its boundaries with it: an unsupplied
-               dependency is that application's boundary, not the untraced default the parameter
-               held inside the callee, and a substituted argument discharges both. *)
+               dependency is that application's boundary, replacing the untraced default the
+               parameter held inside the callee while keeping the callee's other boundaries -- a
+               buffer or mutation it reads stays named after the argument arrives -- and a
+               substituted argument discharges them all. *)
             let result =
               if Poly.equal callee_value.uncertainty Uncorrelated then result
               else if unsupplied_dependency then
-                { result with uncertainty = Unresolved; because = [ Unsupplied_application ] }
+                {
+                  result with
+                  uncertainty = Unresolved;
+                  because =
+                    boundaries_union [ Unsupplied_application ]
+                      (List.filter callee_value.because ~f:(fun b ->
+                           not (Poly.equal b Untraced_callback)));
+                }
               else if depends_on_argument && not callee_value.buffer then certain result
               else result
             in
@@ -1870,45 +1879,46 @@ let classify_source ~emitters ~path ~contents =
       | Some (Function_binding binding_id) -> Some binding_id
       | _ -> None
     in
+    (* A binding's own provenance does not depend on the table, so it is computed once; the table's
+       boundary sets only grow, and the pass repeats until none does. *)
+    let binding_provenance =
+      List.map bindings ~f:(fun binding ->
+          ( binding,
+            scoped_provenance scope ~emitters ~aliases ~seeds ~outer ~function_parameters:functions
+              (fun resolver env -> ignore (resolver#expression env binding.body : expression)) ))
+    in
     let changed = ref true in
     while !changed do
       changed := false;
-      List.iter bindings ~f:(fun binding ->
-          if not (Hashtbl.mem forwarding binding.binding_id) then (
-            let forwards = ref [] in
-            let provenance =
-              scoped_provenance scope ~emitters ~aliases ~seeds ~outer
-                ~function_parameters:functions (fun resolver env ->
-                  ignore (resolver#expression env binding.body : expression))
-            in
-            let iterator =
-              object
-                inherit Ast_traverse.iter as super
+      List.iter binding_provenance ~f:(fun (binding, provenance) ->
+          let forwards = ref [] in
+          let iterator =
+            object
+              inherit Ast_traverse.iter as super
 
-                method! expression e =
-                  (match e.pexp_desc with
-                  | Pexp_apply (callee, args) ->
-                      List.iter (predicates_at callee) ~f:(fun p ->
-                          Option.iter p.source_at ~f:(fun source ->
-                              if
-                                not
-                                  (Option.value_map (predicate_argument_at source args)
-                                     ~default:false ~f:(fun e ->
-                                       names_generated_source (provenance e)))
-                              then
-                                forwards := haystack_boundaries provenance source args @ !forwards));
-                      Option.iter
-                        (Option.bind (function_at callee) ~f:(Hashtbl.find forwarding))
-                        ~f:(fun boundaries -> forwards := boundaries @ !forwards)
-                  | _ -> ());
-                  super#expression e
-              end
-            in
-            iterator#expression binding.body;
-            if not (List.is_empty !forwards) then (
-              Hashtbl.set forwarding ~key:binding.binding_id
-                ~data:(List.dedup_and_sort !forwards ~compare:Poly.compare);
-              changed := true)))
+              method! expression e =
+                (match e.pexp_desc with
+                | Pexp_apply (callee, args) ->
+                    List.iter (predicates_at callee) ~f:(fun p ->
+                        Option.iter p.source_at ~f:(fun source ->
+                            if
+                              not
+                                (Option.value_map (predicate_argument_at source args) ~default:false
+                                   ~f:(fun e -> names_generated_source (provenance e)))
+                            then forwards := haystack_boundaries provenance source args @ !forwards));
+                    Option.iter
+                      (Option.bind (function_at callee) ~f:(Hashtbl.find forwarding))
+                      ~f:(fun boundaries -> forwards := boundaries @ !forwards)
+                | _ -> ());
+                super#expression e
+            end
+          in
+          iterator#expression binding.body;
+          let previous = Option.value (Hashtbl.find forwarding binding.binding_id) ~default:[] in
+          let grown = boundaries_union previous !forwards in
+          if not (Poly.equal grown previous) then (
+            Hashtbl.set forwarding ~key:binding.binding_id ~data:grown;
+            changed := true))
     done;
     let pins = ref [] in
     let is_consumed (e : expression) =
