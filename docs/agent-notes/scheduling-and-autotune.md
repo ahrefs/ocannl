@@ -85,8 +85,9 @@ files.
   enclosing condition built from constants and non-lane index symbols (a local or a memory read
   disqualifies). The renderer and `Schedule.workgroup_memory_bytes` (which counts the slots
   through the `lane_all_reduce_workgroup_bytes` capability) both read it. The schedule retypes at `k` simdgroups only up to
-  `gpu_lane_all_reduce_simdgroups` (`auto` = `hardware_limits.lane_all_reduce_simdgroups`, 1 until
-  a device measures the barriers paying), so GPT-2's 64-wide heads keep the plain plan by default.
+  `gpu_lane_all_reduce_simdgroups` (`auto` = `hardware_limits.lane_all_reduce_simdgroups`: 4 on
+  Metal, where heads of 64 and 128 train 3-31% faster on it; 1 until a device measures the
+  barriers paying).
   Measured on Metal (D1 training, lukstafi/ocannl-staging PR for gh-ocannl-1124): duplicated is a
   1.07-1.45x step REGRESSION (every lane pays the value width per pair), cooperative a 0.94-0.98x
   win, and it lanes dQ too -- fission then cuts dQ from the row dot `D`, whose merge would now cost

@@ -86,6 +86,9 @@ lred_bound32: the emitted kernel binds the reduction loop instead of looping it:
 auto on a device where per-lane recompute is cheap is cooperative: true
 auto on an unmeasured device is refused: true
 auto on the run's backend resolves to its measured mode: true
+auto spans one simdgroup on an unmeasured device: true
+auto on the run's backend spans its measured number of simdgroups: true
+on the run's device a 64-wide head's default schedule is the resolved bound's: true
 on a cheap-recompute device the default schedule is the resolved mode's: true
 on an unmeasured device the default schedule is the resolved mode's: true
 on the run's device the default schedule is the resolved mode's: true

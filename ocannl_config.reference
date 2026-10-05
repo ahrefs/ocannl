@@ -250,8 +250,9 @@
 # past one, each simdgroup's butterfly total goes through workgroup-shared memory between two
 # barriers per (query, key) pair, every lane reading every partial, so a head of 64 or 128 (GPT-2's
 # real widths) can take lanes too (gh-ocannl-1168). A head wider than this many simdgroups keeps
-# the plain plan. `auto` resolves per device to where the barriers were measured to pay: 1
-# everywhere unmeasured, so wider heads keep the plain plan. A positive integer forces that bound.
+# the plain plan. `auto` resolves per device to where the barriers were measured to pay: 4 on
+# Metal (heads of 64 and 128 trained 3-31% faster), 1 everywhere unmeasured, so wider heads keep
+# the plain plan there. A positive integer forces that bound.
 #gpu_lane_all_reduce_simdgroups=auto
 
 # How the default GPU schedule weighs its lane geometry: a parallel loop under a serial loop past

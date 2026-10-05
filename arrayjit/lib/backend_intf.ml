@@ -307,7 +307,10 @@ type hardware_limits = {
           (query, key) pair, which may eat the lanes' win -- so a head wider than [simdgroup_width]
           (GPT-2's 64) gets lanes only where that was measured to pay. [1] (one simdgroup, the
           gh-ocannl-1124 rule) wherever unmeasured, and on the C backends, which run no lane
-          geometry. Read by the default GPU schedule's [gpu_lane_all_reduce_simdgroups = auto]. *)
+          geometry. Measured: 4 on Metal (M4 Max; the D1 training step at head width 64 0.97x /
+          0.92x / 0.82x at seq 128 / 512 / 1024, at width 128 0.69x at seq 512, against the plain
+          plan: benchmarks/gh1133_cells.sh [d1ar4] vs [d1ar1]). Read by the default GPU schedule's
+          [gpu_lane_all_reduce_simdgroups = auto]. *)
   online_softmax_auto_block : int;
       (** Automatic key-block size for [online_softmax_block=auto] (gh-ocannl-1171); 0 selects the
           two-pass rewrite. Metal and CPU keep 16 from the gh-ocannl-1003 block sweep
