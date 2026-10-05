@@ -2072,6 +2072,16 @@ module Shell_context = struct
 
   let is_pipe = function Pipe -> true | And | Or -> false
 
+  (** [text] without the [time] ([-p], [--]) that may stand in front of the [!] of the pipeline it
+      times. *)
+  let untimed text =
+    let strip prefix text = Option.map (String.chop_prefix text ~prefix) ~f:String.lstrip in
+    match strip "time " text with
+    | None -> text
+    | Some rest ->
+        let rest = Option.value (strip "-p " rest) ~default:rest in
+        Option.value (strip "-- " rest) ~default:rest
+
   (** Whether operand [index] of [statement] runs in a shell of its own: a pipeline element, or part
       of a background job. *)
   let runs_apart statement index =
@@ -2096,12 +2106,13 @@ module Shell_context = struct
                 in
                 List.fold branches ~init:sites ~f:(enabling_sites ~functions)))
 
-  (** The first word of every simple command in [branch], anywhere. *)
+  (** Every word of every simple command in [branch], anywhere -- so a command run through
+      [builtin]/[command] is among them too. *)
   let rec command_words (branch : branch) =
     List.concat_map branch.statements ~f:(fun statement ->
         List.concat_map statement.operands ~f:(fun operand ->
             match operand.compound with
-            | None -> Option.to_list (List.hd (L.shell_words operand.text))
+            | None -> L.shell_words operand.text
             | Some compound -> List.concat_map compound.branches ~f:command_words))
 
   (** The names of the functions [branch] defines anywhere. *)
@@ -2133,7 +2144,7 @@ module Shell_context = struct
   let judge top =
     let sites = enabling_sites ~functions:[] [] top in
     (* A [set] that may not be the builtin: shadowed by a function, or switched off by [enable -n]
-       (any [enable] at all is distrusted). *)
+       (an [enable] word in any command at all is distrusted). *)
     let shadowed =
       List.filter (defined_functions top) ~f:(String.equal "set")
       @ if List.mem (command_words top) "enable" ~equal:String.equal then [ "set" ] else []
@@ -2196,7 +2207,7 @@ module Shell_context = struct
                 let ignored =
                   ignored
                   || (match after with Some (And | Or) -> true | Some Pipe | None -> false)
-                  || String.is_prefix operand.text ~prefix:"!"
+                  || String.is_prefix (untimed operand.text) ~prefix:"!"
                 in
                 let exit = enter compound ~entry:errexit ~status_consumed ~discarded ~ignored in
                 match compound.kind with
@@ -2215,9 +2226,12 @@ module Shell_context = struct
                 ignore (branch body ~entry ~hands_on:(not discarded) : bool));
             entry
         | Function shape ->
+            (* A subshell body's own [set -e] cannot leak to its caller, but it reaches a recursive
+               call of the same function. *)
             let entry' =
               List.exists sites ~f:(fun functions ->
-                  not (List.mem functions compound ~equal:phys_equal))
+                  (match shape with `Paren -> true | `Brace -> false)
+                  || not (List.mem functions compound ~equal:phys_equal))
             in
             List.iter compound.branches ~f:(fun body ->
                 (* Where the body runs is unknown: neither the definition's context nor its ignoring
@@ -2260,19 +2274,18 @@ module Shell_context = struct
         | Case ->
             (* An arm ending in [;&]/[;;&] hands nothing on: the arm it falls into overwrites its
                status. *)
-            let rec arms previous joined = function
+            (* [carried]: what arms that fall through may hand on -- with [;;&], past arms whose
+               patterns do not match, so to every later arm. *)
+            let rec arms carried joined = function
               | [] -> joined
               | arm :: rest ->
-                  let start =
-                    match previous with
-                    | Some exit when arm.fallthrough -> entry || exit
-                    | Some _ | None -> entry
-                  in
                   let falls_on = match rest with next :: _ -> next.fallthrough | [] -> false in
-                  let exit = branch arm ~entry:start ~hands_on:(status_consumed && not falls_on) in
-                  arms (Some exit) (joined || exit) rest
+                  let exit =
+                    branch arm ~entry:(entry || carried) ~hands_on:(status_consumed && not falls_on)
+                  in
+                  arms (carried || (falls_on && exit)) (joined || exit) rest
             in
-            arms None entry compound.branches
+            arms false entry compound.branches
       in
       ignore (branch top ~entry:leaky ~hands_on:false ~ignored:false : bool);
       ( Hashtbl.data judgements
@@ -2412,18 +2425,9 @@ module Errexit_negation = struct
         | C.And | C.Or -> index + 1
         | C.Pipe -> start)
     in
-    (* [time] ([-p], [--]) may stand in front of the [!] of the pipeline it times. *)
-    let untimed text =
-      let strip prefix text = Option.map (String.chop_prefix text ~prefix) ~f:String.lstrip in
-      match strip "time " text with
-      | None -> text
-      | Some rest ->
-          let rest = Option.value (strip "-p " rest) ~default:rest in
-          Option.value (strip "-- " rest) ~default:rest
-    in
     match List.drop statement.operands start with
     | { text; _ } :: _ ->
-        let text = untimed text in
+        let text = C.untimed text in
         String.is_prefix text ~prefix:"!"
         && (String.length text = 1
            || Char.is_whitespace text.[1]
@@ -2649,6 +2653,13 @@ module Errexit_negation = struct
       ("negation after an assignment and a ! word", "set -e\nX=y ! set +e || :\n! probe\n", [ 3 ]);
       ("negation after set + an expansion", "set -e\nset +\"$e\" || :\n! probe\n", [ 3 ]);
       ("timed negation", "set -e\ntime ! probe\n", [ 2 ]);
+      ( "negation after builtin enable",
+        "set -e\nbuiltin enable -n set\nset +e || :\n! probe\n",
+        [ 4 ] );
+      ( "negation after a ;;& arm past a nonmatching one",
+        "case x in x) set -e ;;& y) : ;; *) ! probe ;; esac\n",
+        [ 1 ] );
+      ("negation in a recursive subshell function", "f() (\n  ! probe\n  :\n  set -e\n)\n", [ 2 ]);
       ("portably timed negation", "set -e\ntime -p ! probe\n", [ 2 ]);
       ("negation after set +e with an unknown option", "set -e\nset +e -Z || :\n! probe\n", [ 3 ]);
       ( "negation after set +o with an unknown name",
@@ -3001,6 +3012,7 @@ module Errexit_and_list = struct
       ( "function's final pair in the last arm, ending in ;&",
         "set -e\nf() {\n  case $1 in\n    a) : ;;\n    b) [ -e a ] && [ -e b ] ;&\n  esac\n}\n",
         [] );
+      ("pair in a timed negated subshell", "set -e\ntime ! ( [ -e a ] && [ -e b ]; x )\n", []);
       ( "pair after a call that turns errexit on",
         "set -e\nf() { set -e; }\nset +e\nf\n[ -e a ] && [ -e b ]\n",
         [ 5 ] );
