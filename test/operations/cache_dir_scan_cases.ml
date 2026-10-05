@@ -148,6 +148,84 @@ let () = SC.store ~dir:"autotune_cache_z" key value|ocaml},
 module Cache = SC
 let () = Cache.store ~dir:"autotune_cache_c" key value|ocaml},
       [ "~dir names autotune_cache_c" ] );
+    (* A structure carries its named module bindings out with it, so an alias exported from one is
+       reached through its qualified path (gh-ocannl-1206). Each positive arm stands beside the
+       same-named binding that must NOT be taken for it: what the export path reaches is the binding
+       of that name in that structure, last one winning, never another structure's or the file's. *)
+    ( "a direct store through an alias exported from a structure",
+      {ocaml|module M = struct module Cache = Ir.Schedule_cache end
+let () = M.Cache.store ~dir:"scratch" key value|ocaml},
+      [ "~dir names scratch" ] );
+    ( "a same-named export of an unrelated module is not the cache",
+      {ocaml|module M = struct module Cache = Other end
+let () = M.Cache.store ~dir:"scratch" key value|ocaml},
+      [] );
+    ( "an export path reaches its own structure, not a same-named alias elsewhere",
+      {ocaml|module Cache = Ir.Schedule_cache
+module N = struct module Cache = Ir.Schedule_cache end
+module M = struct module Cache = Other end
+let () = M.Cache.store ~dir:"scratch" key value|ocaml},
+      [] );
+    ( "a later binding in the structure shadows an exported alias",
+      {ocaml|module M = struct
+  module Cache = Ir.Schedule_cache
+  module Cache = Other
+end
+let () = M.Cache.store ~dir:"scratch" key value|ocaml},
+      [] );
+    ( "and a later alias shadows an unrelated export",
+      {ocaml|module M = struct
+  module Cache = Other
+  module Cache = Ir.Schedule_cache
+end
+let () = M.Cache.store ~dir:"autotune_cache_s" key value|ocaml},
+      [ "~dir names autotune_cache_s" ] );
+    ( "a rebinding of the structure's own name takes its exports away",
+      {ocaml|module M = struct module Cache = Ir.Schedule_cache end
+module M = Other
+let () = M.Cache.store ~dir:"scratch" key value|ocaml},
+      [] );
+    ( "a recursive module shadows an exported alias",
+      {ocaml|module M = struct
+  module Cache = Ir.Schedule_cache
+  module rec Cache : S = Cache
+end
+let () = M.Cache.store ~dir:"scratch" key value|ocaml},
+      [] );
+    ( "an export resolves in the structure's scope, through outer aliases",
+      {ocaml|module SC = Ir.Schedule_cache
+module M = struct module Cache = SC end
+let () = M.Cache.store ~dir:"autotune_cache_m" key value|ocaml},
+      [ "~dir names autotune_cache_m" ] );
+    ( "exports carry through nested structures and signature constraints",
+      {ocaml|module M : S = struct module N = struct module Cache = Ir.Schedule_cache end end
+let () = M.N.Cache.store ~dir:"autotune_cache_n" key value|ocaml},
+      [ "~dir names autotune_cache_n" ] );
+    ( "a structure bound in expression position exports too",
+      {ocaml|let go () =
+  let module M = struct module Cache = Ir.Schedule_cache end in
+  M.Cache.store ~dir:"autotune_cache_l" key value|ocaml},
+      [ "~dir names autotune_cache_l" ] );
+    ( "an included structure's exports are the includer's",
+      {ocaml|module N = struct module Cache = Ir.Schedule_cache end
+module M = struct include N end
+let () = M.Cache.store ~dir:"autotune_cache_i" key value|ocaml},
+      [ "~dir names autotune_cache_i" ] );
+    ( "an open inside a structure is not an export",
+      {ocaml|module N = struct module Cache = Other end
+module M = struct module Cache = Ir.Schedule_cache open N end
+let () = M.Cache.store ~dir:"autotune_cache_p" key value|ocaml},
+      [ "~dir names autotune_cache_p" ] );
+    ( "opening a structure brings its exported alias into scope",
+      {ocaml|module M = struct module Cache = Ir.Schedule_cache end
+open M
+let () = Cache.store ~dir:"autotune_cache_o" key value|ocaml},
+      [ "~dir names autotune_cache_o" ] );
+    ( "and its unrelated export shadows an outer alias, locally opened too",
+      {ocaml|module Cache = Ir.Schedule_cache
+module M = struct module Cache = Other end
+let () = M.(Cache.store ~dir:"scratch" key value)|ocaml},
+      [] );
     (* Not every `~dir` is a cache write: inside `schedule_cache.ml` itself the directory is a
        parameter, named by whoever called in. *)
     ( "a bare store is not a call into the cache module",
