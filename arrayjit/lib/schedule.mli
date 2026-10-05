@@ -661,11 +661,30 @@ val lane_preamble_reduction_for : Backend_intf.hardware_limits -> lane_preamble_
     [Preamble_refused] otherwise (HIP, the C backends, anything unmeasured), since the lanes
     recompute each pair's scalar preamble once per lane (gh-ocannl-1124). *)
 
+(** How {!default_gpu} weighs its lane geometry (gh-ocannl-1167). Every lane recomputes its nest's
+    per-pair scalar preamble, which the plain plan pays once per thread. [Lanes_cut]: taken wherever
+    a kernel admits it, and {!fission_keep_mapping} cuts a kernel rather than merge a lane nest out
+    of its lanes. [Lanes_admitted]: taken wherever a kernel admits it, but merges are judged on the
+    plain plans, so a merge costing a nest nothing but its lanes is taken. [Lanes_off]: never taken,
+    so the preamble-reduction treatment has nothing to apply to. Config [gpu_serial_lanes], whose
+    [auto] default resolves per device ({!serial_lanes_for}). *)
+type serial_lanes = Lanes_cut | Lanes_admitted | Lanes_off [@@deriving sexp_of, equal]
+
+val gpu_serial_lanes : unit -> serial_lanes option
+(** Config [gpu_serial_lanes] ([auto], the default, is [None] | [cut] | [admitted] | [off]). *)
+
+val serial_lanes_for : Backend_intf.hardware_limits -> serial_lanes
+(** The configured mode, or under [auto] the device's economics: [Lanes_cut] where
+    {!Backend_intf.hardware_limits}' [lane_scalar_recompute_cheap] holds (measured: Metal, CUDA),
+    [Lanes_admitted] otherwise (HIP: the forward value pass wins on lanes in its own kernel, the
+    fused backward's dV loses when cut from dK for them). *)
+
 val default_gpu :
   ?block_size:int ->
   ?min_parallel:int ->
   ?workgroup_fill:int ->
   ?preamble_reduction:lane_preamble_reduction ->
+  ?lanes:bool ->
   ?limits:Backend_intf.hardware_limits ->
   Low_level.optimized ->
   schedule
@@ -695,7 +714,8 @@ val default_gpu :
     fewer grid groups and a larger grid-times-clamped-workgroup product. Skipped leading loops
     remain serial. This choice precedes the race analysis; if it fails, or alignment loses groups,
     active lanes, or the launch threshold, the original outermost pair is used instead. Expanded
-    whole-node zeros ({!zero_expansion}) use the same plans. A lane geometry takes priority over
+    whole-node zeros ({!zero_expansion}) use the same plans. Unless [lanes] is false (default: the
+    {!serial_lanes_for} mode at [limits] is not [Lanes_off]), a lane geometry takes priority over
     both (gh-ocannl-1003): when every nest carrying a chain has a parallel loop under a serial loop
     past loop-free lane-uniform scalar work (declarations and assignments of scope locals -- the
     online-softmax hoist's value pass,
@@ -814,8 +834,10 @@ val fission_keep_mapping :
   is_gpu:bool -> limits:Backend_intf.hardware_limits -> (Low_level.optimized -> schedule) option
 (** The [keep_mapping] schedule {!maybe_default_schedules} passes to {!fission_scheduled}:
     {!default_gpu} at [limits] on a GPU backend while config [gpu_fission_keep_mapping] is on (the
-    default), [None] otherwise. A caller replicating the default segmentation (the autotuner's
-    fissioned candidates) passes the same, so its segments are the untuned pipeline's. *)
+    default), [None] otherwise -- without its lane geometry unless {!serial_lanes_for} is
+    [Lanes_cut], so a merge costing a nest only its lanes is taken. A caller replicating the default
+    segmentation (the autotuner's fissioned candidates) passes the same, so its segments are the
+    untuned pipeline's. *)
 
 val fission_scheduled :
   ?promote_locals:bool ->

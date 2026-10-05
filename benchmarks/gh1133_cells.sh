@@ -48,6 +48,10 @@
 #             duplicated (every lane recomputes it) or cooperative (the lanes all-reduce it) --
 #             the arms of gh-ocannl-1124 over the fused backward's dK nest, so a d1pre<M> cell is
 #             the one that exercises them; BASE may name this checkout for these
+#   serial<S> this checkout's runner, --ocannl_gpu_serial_lanes=<S>, S one of cut (the lane
+#             geometry of gh-ocannl-1003 stage 1, fission cutting kernels to keep it), admitted
+#             (lanes where a kernel admits them, no cuts for them), off (the plain plans) or auto
+#             (per device) -- the same-binary A/B of gh-ocannl-1167; meaningful with a d1 <T>
 #   fold<T>   treatment <T> plus --ocannl_online_softmax_block=16 (the single-pass block fold of
 #             gh-ocannl-1003, the `approximate` profile's setting; meaningful with a d1 <T>)
 #   b<T>      treatment <T> run by BASE's runner, for a same-flags A/B across revisions
@@ -113,6 +117,8 @@ flags_of() {
     prerefused | preduplicated | precooperative)
       echo "--ocannl_online_softmax=false --ocannl_gpu_lane_preamble_reduction=${1#pre}" ;;
     d1base) echo "gh1133: the base runner takes no d1 form" >&2; return 1 ;;
+    serialcut | serialadmitted | serialoff | serialauto)
+      echo "--ocannl_online_softmax=false --ocannl_gpu_serial_lanes=${1#serial}" ;;
     fold*)
       local inner
       inner=$(flags_of "${1#fold}") || return 1

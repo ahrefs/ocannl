@@ -23,7 +23,11 @@
    pipeline every nest of the fused backward (the per-row [D], dQ, dK, dV) and the composed
    backward's [dP] nest carries hardware geometry -- the all-serial kernel the issue reported is a
    toy-size artifact, the kernel's largest chain below the threshold -- and the fused gradients
-   agree with the composed ones on the run's backend. *)
+   agree with the composed ones on the run's backend; 7. the device's economics (gh-ocannl-1167):
+   where per-lane recompute is costly (HIP) a lane nest alone in its kernel still takes its lanes --
+   the hoisted value pass, alone and in the pipeline -- but fission no longer cuts the fused dV from
+   dK to keep them: the two share a kernel on the plain plan; [~lanes:false] keeps the plain plan,
+   values exact; [auto] resolves per device, the run's own included. *)
 
 open Base
 open Stdio
@@ -441,23 +445,34 @@ let train_step ~bwd =
 
 (* The top-level statements of the GPU pipeline's segments that compute a node named by [writes]:
    they write it and read something, which leaves out the gradients' zeroing kernels. *)
-let gpu_statements (o : LL.optimized) ~writes =
-  (* At the economics measured on Metal and CUDA (gh-ocannl-1124): [auto] then gives dK and dQ their
-     lanes, as on those devices. *)
-  let limits =
-    {
-      Ir.Backend_intf.no_hardware_limits with
-      Ir.Backend_intf.simdgroup_width = Some 32;
-      lane_scalar_recompute_cheap = true;
-    }
-  in
+(* At the economics measured on Metal and CUDA (gh-ocannl-1124): [auto] then gives dK and dQ their
+   lanes, as on those devices. *)
+let cheap =
+  {
+    Ir.Backend_intf.no_hardware_limits with
+    Ir.Backend_intf.simdgroup_width = Some 32;
+    lane_scalar_recompute_cheap = true;
+  }
+
+(* At the economics measured on HIP (gh-ocannl-1167). *)
+let costly = { cheap with lane_scalar_recompute_cheap = false }
+
+(* A computing statement writing a node named by [writes]: it writes it and reads something, which
+   leaves out the gradients' zeroing kernels. *)
+let computes stmt ~writes =
+  let accesses = LL.affine_accesses stmt in
+  List.exists accesses ~f:(fun (a : Ir.Tnode.t Ir.Affine.access) -> not a.a_write)
+  && List.exists accesses ~f:(fun (a : Ir.Tnode.t Ir.Affine.access) ->
+      a.a_write && writes (Ir.Tnode.debug_name a.a_tn))
+
+(* The GPU pipeline's segments, as their top-level statements. *)
+let gpu_segments ?(limits = cheap) (o : LL.optimized) =
   S.maybe_default_schedules ~backend_name:"metal" ~limits ~static_indices:[] o
-  |> List.concat_map ~f:(fun (seg : LL.optimized) -> LL.flat_lines [ seg.LL.llc ])
-  |> List.filter ~f:(fun stmt ->
-      let accesses = LL.affine_accesses stmt in
-      List.exists accesses ~f:(fun (a : Ir.Tnode.t Ir.Affine.access) -> not a.a_write)
-      && List.exists accesses ~f:(fun (a : Ir.Tnode.t Ir.Affine.access) ->
-          a.a_write && writes (Ir.Tnode.debug_name a.a_tn)))
+  |> List.map ~f:(fun (seg : LL.optimized) -> LL.flat_lines [ seg.LL.llc ])
+
+(* The top-level statements of the GPU pipeline's segments that compute a node named by [writes]. *)
+let gpu_statements ?limits (o : LL.optimized) ~writes =
+  List.concat (gpu_segments ?limits o) |> List.filter ~f:(computes ~writes)
 
 (* A loop bound to GPU threads: Unrolled and Vectorized loops still run inside one thread. *)
 let rec hardware (llc : LL.t) =
@@ -516,4 +531,72 @@ let () =
   p "the fused step's parameter gradients are not identically zero"
     (Array.exists fused ~f:(fun v -> Float.(v <> 0.)));
   p_all2 "the fused step's parameter gradients agree with the composed ones within 1e-4 relative"
-    fused composed ~f:close
+    fused composed ~f:close;
+  (* dV's preamble is loop-free ([p] alone), so the stage-1 rule alone gives it lanes, in a kernel
+     of its own. *)
+  let writes_dk = String.is_suffix ~suffix:"k.grad"
+  and writes_dv = String.is_suffix ~suffix:"v.grad" in
+  p_all "fused dV: every nest writing it binds a Workgroup lane inside the serial query loop"
+    (gpu_statements fused_opt ~writes:writes_dv)
+    ~f:lane_inside_serial;
+
+  printf "--- leg 7: lanes where per-lane recompute is costly ---\n";
+  let case =
+    hoisted ~name:"lanes_costly" ~lane_body:accumulate ~reference:accumulate_reference ()
+  in
+  let costly_sched =
+    S.default_gpu ~block_size:256 ~min_parallel:64 ~workgroup_fill:1 ~limits:costly case.opt
+  in
+  p "lanes_costly: alone in its kernel, the hoisted value pass still takes the lane geometry"
+    (lane_under_serial (S.apply costly_sched case.opt).llc);
+  let off =
+    S.apply
+      (S.default_gpu ~block_size:256 ~min_parallel:64 ~workgroup_fill:1 ~lanes:false ~limits:costly
+         case.opt)
+      case.opt
+  in
+  p "lanes_costly: with the lanes off, no lane geometry" (not (lane_under_serial off.llc));
+  p "lanes_costly: with the lanes off, the plain plan, Grid (s, b) x Workgroup h"
+    (dims_are (LL.launch_dims off.llc) ~grid:[| s_n; b_n; 1 |] ~block:[| h_n; 1; 1 |]);
+  check_values case (L.execute ~name:case.name off ~seed:case.seed ~read:case.read);
+  let _, optimized = forward ~heads:1 ~on:true in
+  p_exists "attention, costly lanes: a GPU segment schedules the value pass with lanes"
+    (List.map (gpu_segments ~limits:costly optimized) ~f:LL.unflat_lines)
+    ~f:lane_under_serial;
+  let segments = gpu_segments ~limits:costly fused_opt in
+  let dv = List.filter (List.concat segments) ~f:(computes ~writes:writes_dv) in
+  p "fused dV, costly lanes: the GPU pipeline emits its nest" (not (List.is_empty dv));
+  p_all "fused dV, costly lanes: every nest writing it runs under a Grid or Workgroup loop" dv
+    ~f:hardware;
+  p_none "fused dV, costly lanes: no nest writing it binds a lane inside the serial query loop" dv
+    ~f:lane_inside_serial;
+  p_all "fused dV, costly lanes: every segment computing it computes dK too, merged off the lanes"
+    (List.filter segments ~f:(List.exists ~f:(computes ~writes:writes_dv)))
+    ~f:(List.exists ~f:(computes ~writes:writes_dk));
+  (* The control: the same pipeline whose merge probe keeps the lanes -- [cut], what HIP ran before
+     gh-ocannl-1167 -- leaves dV in a kernel without dK. *)
+  let cut =
+    S.fission_scheduled ~promote_locals:true
+      ~keep_mapping:(fun o -> S.default_gpu ~limits:costly o)
+      ~preset:(fun o -> S.default_gpu ~limits:costly o)
+      ~zero_sched:(S.zero_expansion ~limits:costly) ~static_indices:[]
+      {
+        fused_opt with
+        LL.traced_store = Hashtbl.copy fused_opt.LL.traced_store;
+        LL.optimize_ctx = LL.copy_optimize_ctx fused_opt.LL.optimize_ctx;
+      }
+    |> List.map ~f:(fun (_, _, _, (post : LL.optimized)) -> LL.flat_lines [ post.LL.llc ])
+  in
+  let with_dv = List.filter cut ~f:(List.exists ~f:(computes ~writes:writes_dv)) in
+  p "fused dV, cut for its lanes: a segment computes it" (not (List.is_empty with_dv));
+  p_none "fused dV, cut for its lanes: no segment computing it computes dK" with_dv
+    ~f:(List.exists ~f:(computes ~writes:writes_dk));
+  let resolves limits mode = S.equal_serial_lanes (S.serial_lanes_for limits) mode in
+  p "auto where per-lane recompute is cheap cuts for the lanes" (resolves cheap S.Lanes_cut);
+  p "auto where it is not admits them without cutting" (resolves costly S.Lanes_admitted);
+  p "auto on an unmeasured device admits them without cutting"
+    (resolves Ir.Backend_intf.no_hardware_limits S.Lanes_admitted);
+  p "auto on the run's backend resolves to its measured mode"
+    (resolves
+       (Context.hardware_limits (Context.auto ()))
+       (match backend_name with "metal" | "cuda" -> S.Lanes_cut | _ -> S.Lanes_admitted))

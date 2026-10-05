@@ -244,6 +244,20 @@
 # inlined reduction inside an expression stays refused in every mode.
 #gpu_lane_preamble_reduction=auto
 
+# How the default GPU schedule weighs its lane geometry: a parallel loop under a serial loop past
+# loop-free per-pair scalar work -- the online-softmax forward's value pass
+# Grid (b, s, h) -> Serial t -> Workgroup e, the fused attention backward's dV (and its dK and dQ,
+# per gpu_lane_preamble_reduction) -- becomes a Workgroup lane, every lane recomputing that scalar
+# work, where the plain plan runs the channel loop serially in a thread that pays it once
+# (gh-ocannl-1003, gh-ocannl-1167). `cut`: lanes wherever a kernel admits them, and schedule fission
+# cuts a kernel rather than merge a lane nest out of its lanes. `admitted`: lanes wherever a kernel
+# admits them, but fission judges merges on the plain plans, so it merges the fused backward's dV
+# with dK. `off`: never, which also leaves gpu_lane_preamble_reduction nothing to apply to. `auto`
+# resolves per device: cut where redundant per-lane scalar work is cheap (Metal, CUDA), admitted
+# elsewhere (HIP: on gfx1151 the forward value pass won on lanes, while dV cut from dK lost to the
+# two merged on the plain plan; and anything unmeasured).
+#gpu_serial_lanes=auto
+
 # If true, on CPU backends (cc, multidev_cc) kernels compiled without an explicit
 # `lowered_transform` get the default CPU schedule: the same conservative analysis as the GPU
 # schedule, retyping each nest's outermost parallelizable loop to Grid, which the C backend

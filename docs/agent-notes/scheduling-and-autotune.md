@@ -85,6 +85,15 @@ files.
   device from `hardware_limits.lane_scalar_recompute_cheap` (Metal, CUDA true; HIP, cc and anything
   unmeasured false, i.e. refused) -- a device fact on the limits seam, never a backend name. `test/operations/gpu_lane_reduction`, and leg 6 of `gpu_serial_lanes` pins dK's
   own nest.
+- The same field decides whether lanes are worth a kernel BOUNDARY (gh-ocannl-1167, config
+  `gpu_serial_lanes`: `cut` where true, `admitted` where false, or `off`). On gfx1151 the stage-1
+  lanes split by nest: the forward value pass, alone in its kernel, wins on lanes (0.74 vs 1.12 ms
+  per layer at s1024; its plain plan walks a whole row per thread), while the fused dV loses -- not
+  on its own, but because `keeps_mapping` cut it from dK to keep its lanes (dK 1.03 + dV 2.30 ms,
+  against 1.72 ms for the two merged on the plain plan). So `admitted` takes lanes wherever a
+  kernel admits them and has `fission_keep_mapping` probe WITHOUT lanes: a merge costing a nest
+  only its lanes goes through. Gating lanes wholesale was measured and rejected (it threw away the
+  forward win). Leg 7 of `gpu_serial_lanes` pins both halves.
 - **A contraction inside a scan body is tensorized by rewriting the whole scan's owner, not by
   `Tensorize`** (gh-ocannl-1003, `Schedule.Fold_mma`): `rewrite_loop` does not enter a scan, and
   a lane loop minted inside the body would take a second `Workgroup` slot under the row loop. The
