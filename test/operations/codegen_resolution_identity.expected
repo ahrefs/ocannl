@@ -1,7 +1,13 @@
 a changed accumulator resolution moves the codegen identity: true
 a changed compute resolution moves the codegen identity: true
 an extensionally equal resolution leaves the codegen identity alone: true
+an arm the policy enables moves the codegen identity: true
+another arm for the same storage moves the codegen identity: true
+a changed arm accumulator moves the codegen identity: true
+a changed arm floor moves the codegen identity: true
+an extensionally equal arm table leaves the codegen identity alone: true
 across policies, the codegen identity moves exactly when the backend's resolution does: true
 some policy pair resolves apart on this backend: true
 some distinct policy pair resolves alike on this backend: true
+every uniform-storage arm accumulates at the backend's accum_prec: true
 the codegen identity is stable within one policy: true

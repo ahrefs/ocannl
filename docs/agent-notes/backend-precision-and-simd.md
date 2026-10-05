@@ -745,15 +745,28 @@ files.
   author adds no component by hand; the record pattern names every field, so a new capability field
   fails to compile (warning 9) until it is rendered. No per-backend (mode → resolution) golden:
   every backend's capabilities come from its own `C_syntax_config` through `C_syntax.codegen_capabilities`,
-  so derivation reaches all five. What it does NOT reach is a numerics decision outside those two
-  functions: an mma arm chosen from the mode (CUDA's tf32 gate in its combo table) whose accumulator
-  `accum_prec` does not describe — the uniform 16-bit arms are tied to `accum_prec` by the
-  gh-ocannl-663 width-uniformity invariant `accum_width` pins, the tf32 arm is not. Such a change
-  still needs a component in that backend's `codegen_tag`. Pinned by
-  `codegen_resolution_identity`: synthetic records (a changed resolution moves the tag, an
-  extensionally equal closure does not) and the live backend over the fp16 × bf16 × narrow-compute
-  grid (tag equal iff resolution equal, both sides populated); neutralizing the component fails
-  three of its claims on cc.
+  so derivation reaches all five. The mode-chosen mma ARM is part of the record too
+  (gh-ocannl-1153): `codegen_capabilities.mma_arm` answers, per storage triple and emission scope,
+  which arm the backend's mma hooks select under the current policy (name, accumulator precision,
+  the arch floor the arm itself checks), and the fingerprint tabulates it over every precision
+  triple (a backend with no arms, cc and multidev_cc, emits no row, so their keys did not move). It
+  exists for CUDA's tf32 gate: the tf32 arm reads f32 storage as tf32 and accumulates at
+  the same f32 `accum_prec` reports with the gate shut, so a code change to that gate under an
+  unchanged mode moved nothing before. Each backend derives `mma_arm` from the very table its hooks
+  dispatch on — CUDA's `wmma_combo` (whose accumulator is now a precision, `wc_acc_prec`, spelled
+  through `typ_of_prec`) behind the inline-PTX arms in the hooks' own order, HIP's and Metal's
+  `mma_accumulator` tables (from which their fragment spellings now follow) — so a new arm or a
+  changed gate reaches the key with no hand-added component. CUDA's hooks try several tables in an
+  order, and that ORDER is restated in its `mma_arm`; it is pinned against the hooks by
+  `schedule_mma_matmul` and `schedule_ldmatrix_matmul`, which read every arm marker they expect in
+  rendered CUDA from `mma_arm` rather than as literals — a new CUDA arm test does the same. Pinned by
+  `codegen_resolution_identity`: synthetic records (a changed resolution or arm table — an arm
+  appearing, another arm, its accumulator, its floor — moves the tag, an extensionally equal
+  closure does not; dropping the fingerprint's arm row fails the four arm claims on every backend),
+  the live backend over the fp16 × bf16 × narrow-compute × tf32 grid (tag equal iff the TEST's own
+  tabulation of the record is equal, both sides populated; on CUDA the tf32 pair is where an
+  arm-blind fingerprint fails it), and gh-ocannl-663's width uniformity read off the arm table
+  (every uniform-storage arm accumulates at `accum_prec`; skipped where there are no arms).
 - **The `approximate` profile is the one word for the numerics-changing regime** (gh-ocannl-719):
   the `performance` payload plus `tf32_matmuls=true`, `cc_backend_fast_math=true`,
   `cc_backend_fp_contract=fast` and `tune_inline_flips=2`, contract "results differ from the exact

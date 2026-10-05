@@ -904,6 +904,21 @@ module type C_syntax_config = sig
       byte gathers, so layout alone cannot establish [ldmatrix] emission. Backends without that
       instruction inherit [false]. *)
 
+  val mma_arm :
+    a_prec:Ops.prec ->
+    b_prec:Ops.prec ->
+    d_prec:Ops.prec ->
+    scope:Backend_intf.mma_emission_scope ->
+    Backend_intf.mma_arm option
+  (** The arm {!mma_syntax} ([Mma_per_statement]) or {!mma_fragment_syntax} ([Mma_fragment_scope])
+      selects for these storage precisions under the current numerics policy (gh-ocannl-1153),
+      published as {!Backend_intf.codegen_capabilities.mma_arm} and so into the schedule cache's
+      identity. Derive it from the very combination table and floors those hooks dispatch on — a
+      second copy would let a code change to the hooks' arm choice leave the identity alone. Where
+      the hooks try several tables in an order (CUDA), that order is restated here; pin it with
+      tests that read the arm markers they expect in rendered code from this function. [None] for a
+      combination neither hook has an arm for, and everywhere on a backend without them. *)
+
   val mma_fragment_syntax :
     (d_prec:Ops.prec ->
     a_prec:Ops.prec ->
@@ -958,6 +973,7 @@ let codegen_capabilities (module Config : C_syntax_config) =
     compute_prec = Config.compute_prec;
     accum_prec = Config.accum_prec;
     asynchronous_staging_copy = Option.is_some Config.async_copy;
+    mma_arm = Config.mma_arm;
   }
 
 (** Whether [c] lies exactly halfway between two adjacent f32 values, so that narrowing it to f32 is
@@ -1867,6 +1883,7 @@ struct
      == 0] guard. *)
   let mma_syntax = None
   let mma_uses_ldmatrix ~a_prec:_ ~b_prec:_ ~d_prec:_ ~ta:_ ~tb:_ ~a:_ ~b:_ = false
+  let mma_arm ~a_prec:_ ~b_prec:_ ~d_prec:_ ~scope:_ = None
   let mma_fragment_syntax = None
   let float_log_style = if Input.full_printf_support then "%g" else "%de-3"
 

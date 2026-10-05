@@ -36,6 +36,27 @@ let () = Numerics.set_policy { (Numerics.get ()) with tf32_matmuls = false }
 
 open Verdict.Claims
 
+(* gh-ocannl-1153: the arm the backend's capability table names for a storage triple in a scope,
+   under [policy] (the table's closures read the policy when called), and the marker a rendering of
+   it carries — [(<arm_name>)] in its [tile_mma] comment. The CUDA legs read every marker they
+   expect from here rather than restating it, so each arm they render pins
+   [codegen_capabilities.mma_arm] to the hook that rendered it. A combination with no arm spells a
+   marker no rendering carries, failing the claim that expects one. *)
+let mma_arm ?(policy = Numerics.get ()) ~scope a_prec b_prec d_prec =
+  let saved = Numerics.get () in
+  Numerics.set_policy policy;
+  let arm =
+    (Context.codegen_capabilities (Context.auto ())).Ir.Backend_intf.mma_arm ~a_prec ~b_prec ~d_prec
+      ~scope
+  in
+  Numerics.set_policy saved;
+  arm
+
+let arm_marker ?policy ~scope a_prec b_prec d_prec =
+  match mma_arm ?policy ~scope a_prec b_prec d_prec with
+  | Some arm -> "(" ^ arm.Ir.Backend_intf.arm_name ^ ")"
+  | None -> "(no mma arm)"
+
 (* Zeros compare equal to zeros. A fragment mapping that reads outside the staged block, a kernel
    that never ran, or a reference whose own setup silently collapsed all yield all-zeros, and a
    parity check between two zero arrays passes while covering nothing (gh-ocannl-481 item 3). Every
@@ -371,6 +392,10 @@ let () =
       ~a:Ir.Backend_intf.Mma_tf32 ~b:Ir.Backend_intf.Mma_tf32 ~d:Ir.Backend_intf.Mma_f32
   in
   if advertises_tf32 then (
+    let f32 = Ir.Ops.single and statement = Ir.Backend_intf.Mma_per_statement in
+    let tf32_marker =
+      arm_marker ~policy:{ (Numerics.get ()) with tf32_matmuls = true } ~scope:statement f32 f32 f32
+    in
     let a_off, b_off = tf32_inputs ~tag:"tf32_off_" ~k:n in
     let%op c_off_serial = a_off * b_off in
     let%op c_off_mma = a_off * b_off in
@@ -388,7 +413,8 @@ let () =
       (List.for_all census_off ~f:(Ir.C_syntax.equal_mma_rendering Ir.C_syntax.Mma_scalar_fallback)
       && (not (List.is_empty census_off))
       && String.is_substring src_off ~substring:"== 0)"
-      && (not (String.is_substring src_off ~substring:"(wmma-tf32)"))
+      && Option.is_none (mma_arm ~scope:statement f32 f32 f32)
+      && (not (String.is_substring src_off ~substring:tf32_marker))
       && not (String.is_substring src_off ~substring:"precision::tf32"));
     p "tf32 policy-off autotune omits tensorized candidates" (not !off_seeded);
 
@@ -404,7 +430,7 @@ let () =
     p "tf32 policy-on renders and records wmma tf32"
       (List.for_all census_on ~f:(Ir.C_syntax.equal_mma_rendering Ir.C_syntax.Mma_intrinsics)
       && (not (List.is_empty census_on))
-      && String.is_substring src_on ~substring:"(wmma-tf32)"
+      && String.is_substring src_on ~substring:tf32_marker
       && String.is_substring src_on ~substring:"precision::tf32"
       && String.is_substring src_on ~substring:"__float_to_tf32");
 
@@ -422,7 +448,7 @@ let () =
     p_all2 "tf32 k=24 divergent tile matches the serial twin" got_k24 want_k24 ~f:approx_rel;
     p "tf32 k=24 divergent tile emits the wmma intrinsic"
       (List.exists census_k24 ~f:(Ir.C_syntax.equal_mma_rendering Ir.C_syntax.Mma_intrinsics)
-      && String.is_substring src_k24 ~substring:"tile_mma 16x32x24 (wmma-tf32)");
+      && String.is_substring src_k24 ~substring:("tile_mma 16x32x24 " ^ tf32_marker));
     p "tf32 k=24 autotune seeds tensorized candidates" !k24_seeded;
 
     let atv =
@@ -447,7 +473,7 @@ let () =
       (List.exists census_t ~f:(Ir.C_syntax.equal_mma_rendering Ir.C_syntax.Mma_intrinsics)
       && String.is_substring src_t ~substring:"matrix_a, 16, 16, 8"
       && String.is_substring src_t ~substring:"col_major"
-      && String.is_substring src_t ~substring:"(wmma-tf32)");
+      && String.is_substring src_t ~substring:tf32_marker);
     Numerics.set_policy { (Numerics.get ()) with tf32_matmuls = false })
   else (
     skipped "tf32 policy-off matmul matches the serial twin bitwise";
@@ -768,7 +794,11 @@ let () =
        in
        let wide_arm = has_scope Ir.Backend_intf.Mma_per_statement in
        if wide_arm then
-         intrinsics && has "(mma-f16)"
+         intrinsics
+         && has
+              (arm_marker
+                 ~policy:{ (Numerics.get ()) with fp16_arithmetic = Numerics.Fp16_wide }
+                 ~scope:Ir.Backend_intf.Mma_per_statement Ir.Ops.half Ir.Ops.half Ir.Ops.half)
          && has "mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32"
          && not (has "nvcuda::wmma")
        else fallback && (not (has "nvcuda::wmma")) && has "== 0)"
@@ -928,7 +958,9 @@ let () =
       else if on_gpu then
         (* CUDA: the wmma bf16 fragment path. Both bf16 renderings need sm_80, the same floor the
            tf32 legs above already pin strictly. *)
-        has "(wmma-bf16)"
+        has
+          (arm_marker ~scope:Ir.Backend_intf.Mma_per_statement Ir.Ops.bfloat16 Ir.Ops.bfloat16
+             Ir.Ops.single)
       else
         (* gh-ocannl-575: register-tiled at the f32 accumulator precision, the bf16 operands bridged
            at the memory boundary. *)
@@ -2107,6 +2139,12 @@ let () =
     (* CUDA's register fragment: loaded once before the reduction body and stored once after it,
        with nothing narrowed to bf16 in between — the per-[k_o] rendering this replaces stores
        [__float2bfloat16(__mma_d0)] inside the body, at every block. *)
+    (* The register-scope arm both staged Bf16_wide renderings below carry. *)
+    let wide_bf16_marker =
+      arm_marker
+        ~policy:{ (Numerics.get ()) with bf16_arithmetic = Numerics.Bf16_wide }
+        ~scope:Ir.Backend_intf.Mma_fragment_scope Ir.Ops.bfloat16 Ir.Ops.bfloat16 Ir.Ops.bfloat16
+    in
     let cuda_register_resident src =
       residency_holds src ~frag_load:"[0] = __bfloat162float(__mma_dr0[0]);"
         ~body_begin:register_body_begin ~body_end:register_body_end
@@ -2130,7 +2168,7 @@ let () =
     p claim_bw_struct
       (if on_cuda then
          all_are Ir.C_syntax.Mma_intrinsics census_bw
-         && cuda_register_resident src && has "float __mma_fragment_" && has "(mma-bf16)"
+         && cuda_register_resident src && has "float __mma_fragment_" && has wide_bf16_marker
          && has "mma.sync.aligned.m16n8k16.row.col.f32.bf16.bf16.f32"
          && not (has "== 0)")
        else
@@ -2153,7 +2191,8 @@ let () =
       let has s = String.is_substring src ~substring:s in
       p claim_bw_swz_struct
         (all_are Ir.C_syntax.Mma_intrinsics_ldmatrix census_swz
-        && cuda_register_resident src && has "(mma-bf16) ldmatrix a,b"
+        && cuda_register_resident src
+        && has (wide_bf16_marker ^ " ldmatrix a,b")
         && has "ldmatrix.sync.aligned.m8n8"
         && not (has "== 0)")))
     else (

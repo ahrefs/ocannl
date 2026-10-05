@@ -100,7 +100,7 @@ type mma_emission_scope =
   | Mma_fragment_scope
       (** A persistent accumulator emitted by [mma_fragment_syntax], loaded before and stored after
           the enclosing serial reduction. *)
-[@@deriving sexp, compare, equal]
+[@@deriving sexp, compare, equal, enumerate]
 
 type mma_capability = {
   mma_simd_width : int;
@@ -369,6 +369,22 @@ let advertises_mma_format_in_scope (limits : hardware_limits) ~(policy : Numeric
           has mma.mma_bf16_wide_acc_scopes
       | _ -> true)
 
+type mma_arm = {
+  arm_name : string;
+      (** The arm's own marker, as its rendering comment carries it (e.g. [wmma-tf32], [mma-bf16]):
+          which arm, not only what it accumulates at. *)
+  arm_accumulator : Ops.prec;  (** The precision the arm's accumulator resides at. *)
+  arm_floor : int option;
+      (** The device-architecture floor the arm itself checks before emitting, in the backend's own
+          numbering (CUDA compute capability). [None] where the backend gates tensor units at the
+          device level only ({!hardware_limits.mma}). *)
+}
+(** The tensor-unit arm a backend's mma emission resolves one storage-precision triple to, in one
+    emission scope, under the current numerics policy (gh-ocannl-1153). What [accum_prec] cannot
+    say: an arm the policy chooses whose operands are consumed in a format no storage precision
+    names — CUDA's tf32 arm reads f32 storage as tf32, and accumulates at exactly the f32 that
+    [accum_prec] already reports for f32 with the policy off. *)
+
 type codegen_capabilities = {
   supports_f64 : bool;
       (** Whether the backend dialect can represent f64 tensor storage. This is explicit rather than
@@ -382,6 +398,17 @@ type codegen_capabilities = {
   asynchronous_staging_copy : bool;
       (** Whether eligible pipelined staging copies use a dialect-specific asynchronous copy arm. A
           portable synchronous depth-2 pipeline is not this capability. *)
+  mma_arm :
+    a_prec:Ops.prec ->
+    b_prec:Ops.prec ->
+    d_prec:Ops.prec ->
+    scope:mma_emission_scope ->
+    mma_arm option;
+      (** The arm the backend's [mma_syntax] (for {!Mma_per_statement}) or [mma_fragment_syntax]
+          (for {!Mma_fragment_scope}) selects for these storage precisions, derived from the same
+          combination table those hooks consult; [None] where the table has no arm for them. Only
+          the precision- and policy-level choice: extents, strides, address spaces, layouts and the
+          device can still make a call decline. *)
 }
 (** Stable code-generation facts callers need before compiling. Actual rendering decisions stay on
     the compiled routine's censuses. *)
@@ -394,30 +421,58 @@ let no_codegen_capabilities =
     compute_prec = Fn.id;
     accum_prec = Fn.id;
     asynchronous_staging_copy = false;
+    mma_arm = (fun ~a_prec:_ ~b_prec:_ ~d_prec:_ ~scope:_ -> None);
   }
 
 (** A stable, exhaustive rendering of a capability record under the CURRENT numerics policy: its
-    flags, and each precision-resolution function tabulated over every precision ({!Ops.all_precs}).
-    It is what a numerics mode resolves to on this backend (gh-ocannl-1117) — the mode itself is
-    fingerprinted by [Schedule_cache.numerics_tag], but what [Bf16_auto] means on HIP changed in
-    gh-ocannl-1051 with the mode unchanged, and a winner tuned under the old resolution would have
-    replayed. Tabulating the function codegen calls, rather than naming the predicate behind it,
-    makes the cache identity move exactly when the resolution does, on every backend, with nothing
-    to add by hand. The record pattern names every field, so a field added to
-    {!codegen_capabilities} is a compile error here until it is rendered (warning 9). *)
+    flags, each precision-resolution function tabulated over every precision ({!Ops.all_precs}), and
+    its mma arm table over every storage triple and emission scope (gh-ocannl-1153). It is what a
+    numerics mode resolves to on this backend (gh-ocannl-1117) — the mode itself is fingerprinted by
+    [Schedule_cache.numerics_tag], but what [Bf16_auto] means on HIP changed in gh-ocannl-1051 with
+    the mode unchanged, and a winner tuned under the old resolution would have replayed. Tabulating
+    the function codegen calls, rather than naming the predicate behind it, makes the cache identity
+    move exactly when the resolution does, on every backend, with nothing to add by hand. The record
+    pattern names every field, so a field added to {!codegen_capabilities} is a compile error here
+    until it is rendered (warning 9). *)
 let codegen_capabilities_fingerprint
-    { supports_f64; compute_prec; accum_prec; asynchronous_staging_copy } =
+    { supports_f64; compute_prec; accum_prec; asynchronous_staging_copy; mma_arm } =
+  let p = Ops.prec_string in
   let resolution f =
-    String.concat ~sep:","
-      (List.map Ops.all_precs ~f:(fun prec -> Ops.prec_string prec ^ ">" ^ Ops.prec_string (f prec)))
+    String.concat ~sep:"," (List.map Ops.all_precs ~f:(fun prec -> p prec ^ ">" ^ p (f prec)))
   in
+  (* gh-ocannl-1153: the arm table, over every storage triple and scope, listing only the triples
+     that have an arm. A policy-chosen arm [accum_prec] does not describe (CUDA's tf32 gate) moves
+     the identity through this row — and so does a code change to which arm a mode selects, what it
+     accumulates at, or the floor it checks, with the mode unchanged. *)
+  let arms =
+    List.concat_map all_of_mma_emission_scope ~f:(fun scope ->
+        List.concat_map Ops.all_precs ~f:(fun a_prec ->
+            List.concat_map Ops.all_precs ~f:(fun b_prec ->
+                List.filter_map Ops.all_precs ~f:(fun d_prec ->
+                    Option.map (mma_arm ~a_prec ~b_prec ~d_prec ~scope)
+                      ~f:(fun { arm_name; arm_accumulator; arm_floor } ->
+                        String.concat ~sep:" "
+                          [
+                            Sexp.to_string (sexp_of_mma_emission_scope scope);
+                            p a_prec ^ "*" ^ p b_prec ^ ">" ^ p d_prec;
+                            arm_name;
+                            "acc=" ^ p arm_accumulator;
+                            (match arm_floor with
+                            | None -> "no-floor"
+                            | Some floor -> "floor=" ^ Int.to_string floor);
+                          ])))))
+  in
+  (* Only a backend with arms carries the row, so the keys of cc and multidev_cc (and of any backend
+     without tensor units) are the ones they had before it existed. *)
+  let mma_row = if List.is_empty arms then [] else [ "mma:" ^ String.concat ~sep:"," arms ] in
   String.concat ~sep:";"
-    [
-      (if supports_f64 then "f64" else "no-f64");
-      "compute:" ^ resolution compute_prec;
-      "accum:" ^ resolution accum_prec;
-      (if asynchronous_staging_copy then "async-staging" else "no-async-staging");
-    ]
+    ([
+       (if supports_f64 then "f64" else "no-f64");
+       "compute:" ^ resolution compute_prec;
+       "accum:" ^ resolution accum_prec;
+       (if asynchronous_staging_copy then "async-staging" else "no-async-staging");
+     ]
+    @ mma_row)
 
 let no_hardware_limits =
   {
