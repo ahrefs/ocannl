@@ -46,6 +46,16 @@ let compile ~compiler ~interface code =
         [ source; output; source ^ ".cmi"; log ]
         ~f:(fun path -> if Stdlib.Sys.file_exists path then Stdlib.Sys.remove path))
 
+(* The words of a compiler diagnostic line, its punctuation dropped. The error kind and the
+   identifier are the contract; how the compiler delimits an identifier is presentation, and it
+   changed between releases: OCaml 5.3 prints [Unbound value "Context.context"] where 5.4 and 5.5
+   print it bare (gh-ocannl-1223). Matching the [Error:] line, not the whole log, keeps any other
+   failure from passing: the log's source excerpt names the identifier for every error on its
+   line. *)
+let diagnostic_words line =
+  String.split_on_chars line ~on:[ ' '; '\t'; ':'; '"'; '`'; '\'' ]
+  |> List.filter ~f:(fun word -> not (String.is_empty word))
+
 let () =
   let compiler = Stdlib.Sys.argv.(1) in
   let interface = Stdlib.Sys.argv.(2) in
@@ -61,7 +71,9 @@ let () =
   in
   let rejected_api =
     Poly.equal negative (Unix.WEXITED 2)
-    && String.is_substring negative_log ~substring:"Unbound value Context.context"
+    && List.exists (String.split_lines negative_log) ~f:(fun line ->
+        List.equal String.equal (diagnostic_words line)
+          [ "Error"; "Unbound"; "value"; "Context.context" ])
   in
   if not rejected_api then eprintf "%s" negative_log;
   p "the stale accessor fails at name resolution even with ambient colors requested" rejected_api
