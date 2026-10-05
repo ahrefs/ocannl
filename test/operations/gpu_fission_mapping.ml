@@ -99,6 +99,11 @@ let own_threads stmt =
       then n * site.ls_extent
       else n)
 
+(* The [Grid] groups a statement's OWN loops launch. *)
+let own_groups stmt =
+  List.fold (L.loop_sites stmt) ~init:1 ~f:(fun n site ->
+      if is_axis LL.Grid site then n * site.ls_extent else n)
+
 (* Whether a statement runs on lanes (gh-ocannl-1003): a [Workgroup] loop inside a [Serial] loop
    that is itself inside a [Grid] loop -- not merely hardware loops under a serial reduction. *)
 let on_lanes stmt =
@@ -322,8 +327,11 @@ let check_zeros ~what (o : LL.optimized) =
     (List.equal Ir.Tnode.equal (nodes kept) (nodes merged));
   p_exists (what ^ ": some zeroed node carries a parallel chain alone") kept ~f:(fun (tn, _) ->
       own_threads (alone tn) > 1);
-  p_all (what ^ ": schedule-aware fission gives every zeroed node its standalone mapping") kept
-    ~f:(fun (tn, k) -> own_threads k >= own_threads (alone tn));
+  p_all
+    (what
+   ^ ": schedule-aware fission gives every zeroed node no fewer groups and hardware-loop threads \
+      than alone") kept ~f:(fun (tn, k) ->
+      own_groups k >= own_groups (alone tn) && own_threads k >= own_threads (alone tn));
   p_exists (what ^ ": the legality-only segmentation loses some zeroed node's mapping (control)")
     merged ~f:(fun (tn, m) -> own_threads m < own_threads (alone tn));
   p

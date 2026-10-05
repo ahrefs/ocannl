@@ -6857,11 +6857,13 @@ let collect_units ?max_chain plc (opt : Low_level.optimized) (stmts : Low_level.
     | stmt :: tl -> go (index + 1) [] (mk index glue stmt :: acc) tl
   in
   (* Each maximal run of whole-node zeros is stably sorted by the zeroed node's shape
-     (gh-ocannl-1169): the zeros write distinct nodes and read nothing, so they commute, and on GPU
-     a zero segment keeps one launch only while its nodes share a lane-plan topology
-     ({!zeros_keep_mapping}) -- in statement order a backward pass's gradient zeros alternate shapes
-     and would cut at almost every unit. The order is a function of the code alone, like the units,
-     so a recorded segmentation replays onto the same units. *)
+     (gh-ocannl-1169): they are unconditional whole-node constant-zero writes with no reads and no
+     computation between them, so they commute -- even a repeated node or overlapping storage
+     receives the same zeros in any order ([mat_conflict] still keeps a repeated node out of one
+     segment) -- and on GPU a zero segment keeps one launch only while its nodes share a lane-plan
+     topology ({!zeros_keep_mapping}) -- in statement order a backward pass's gradient zeros
+     alternate shapes and would cut at almost every unit. The order is a function of the code alone,
+     like the units, so a recorded segmentation replays onto the same units. *)
   let shape u =
     match u.f_sum with
     | Some { s_top_zero = Some tn; _ } -> Array.to_list (Lazy.force tn.Tn.dims)
