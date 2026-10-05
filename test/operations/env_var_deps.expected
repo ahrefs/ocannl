@@ -225,6 +225,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest
   test/operations/dune                     @runtest-agent_notes_structure
   test/operations/dune                     @runtest-agents_md_size
+  test/operations/dune                     @runtest-api_drift_history
   test/operations/dune                     @runtest-atomic_file_rename_scan
   test/operations/dune                     @runtest-atomic_file_rename_scan_control
   test/operations/dune                     @runtest-autotune_bound_pruning

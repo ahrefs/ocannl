@@ -39,6 +39,19 @@ open Ppxlib.Parsetree
 module Ast_traverse = Ppxlib.Ast_traverse
 module Read = Config_key_scan
 
+(** The source roots owned by the implicit-export census, shared with the editorial API reader. *)
+let in_scan_root path =
+  List.mem [ "arrayjit/lib"; "tensor"; "lib" ] (Stdlib.Filename.dirname path) ~equal:String.equal
+
+let implicit_implementations paths =
+  let present = Set.of_list (module String) paths in
+  List.filter paths ~f:(fun path ->
+      in_scan_root path
+      &&
+      match String.chop_suffix path ~suffix:".ml" with
+      | Some stem -> not (Set.mem present (stem ^ ".mli"))
+      | None -> false)
+
 type export = { module_name : string; value : string; source : string; line : int }
 
 type reference = {
@@ -70,7 +83,9 @@ let pattern_names pattern =
       inherit Ast_traverse.iter as super
 
       method! pattern pattern =
-        (match pattern.ppat_desc with Ppat_var { txt; _ } -> names := txt :: !names | _ -> ());
+        (match pattern.ppat_desc with
+        | Ppat_var { txt; _ } | Ppat_alias (_, { txt; _ }) -> names := txt :: !names
+        | _ -> ());
         super#pattern pattern
     end
   in

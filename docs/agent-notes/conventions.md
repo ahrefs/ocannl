@@ -19,6 +19,45 @@ files.
   always had — blank lines, `### ` subheadings, `- ` bullets and two-space continuations — and any
   other Markdown in it fails the scan by name rather than being parsed: the scan decides one
   grammar, so its imprecision cannot pass a bullet nobody checked.
+- Before writing an editorial catch-up, run `tools/api-drift.sh <since-rev> [until-rev]`
+  (gh-ocannl-946). It compares committed public source declarations at every first-parent step,
+  tagging each addition, removal or change with the commit SHA and subject (the merged PR number
+  where Git recorded one). Both endpoints must be on the same first-parent history; the end
+  defaults to `HEAD`. Its implicit-module inventory comes from the dead-export census, alongside
+  all interfaces in those roots. Ordinary sources follow that census rather than reconstructing
+  Dune ownership: a future ordinary `private_modules` entry needs manual exclusion. OCaml parsing
+  preserves multiline signatures, types, record fields, constructors and module declarations while
+  discarding documentation-only OCaml edits.
+  Movement across surviving declarations is reported conservatively because their order can
+  change name resolution; inserting an entry does not flag every unchanged entry that follows it.
+  Anonymous value initializers are excluded, including inside mixed let groups; pattern PPX inputs
+  stay visible for manual review even when their source binds no ordinary name.
+  Anonymous module bindings remain conservative source entries; discard their non-exporting edits
+  during review if such bindings are introduced.
+  Attribute PPXs that export from anonymous value initializers or bare evaluations are outside this
+  inventory; inspect their inputs manually if such a producer is introduced.
+  Dune supplies the compiled target/interface relationship for select arms and the inputs of
+  public lexer/parser modules. A generator input is a conservative review entry: the editor must
+  inspect its generated interface, since this tool does not regenerate historical modules or
+  typecheck their dependency trees. The owning configuration of accepted generator/select inputs is
+  retained as a manual-review entry too; private or explicitly interfaced targets stay excluded.
+  Independent Dune stanza and field reordering is ignored. Literal public-library configuration
+  produces conservative input entries too, including module ownership, interface policy,
+  availability, preprocessing and compiler/driver inputs. These entries do not evaluate Dune
+  availability, expand PPXs or reconstruct the installed module/type graph. Inspect their effect
+  manually; ordinary `libraries` dependencies, private-library configuration and comments or
+  `synopsis` prose stay outside these entries. Accepted select configurations inside `libraries`
+  follow the separate target/interface rule above.
+  Selected targets currently must be implementations (`.ml`); selected interfaces or non-module
+  targets are unsupported and can refuse the report. External module-list inputs (`:include` or
+  `read-lines`) are not followed, and `re_export` dependencies are excluded with `libraries`.
+  Inspect those inputs manually if introduced; the audited API-root Dune sources and history have
+  no occurrences. These cases and the future anonymous/private source forms above are tracked in
+  gh-ocannl-1201.
+  This is a reading aid, not a compatibility gate: implementation bodies are kept because they
+  can change an inferred public type, and PPX-generated exports and inferred types still require
+  manual review. Record retired or renamed symbols in the resulting bullet so later API-removal
+  discussions have symbol-level evidence.
 - API stability is not promised and deprecation cycles are not run: exported surface that is dead,
   superseded or in the way is REMOVED, in whatever release finds it. The README's Development
   section states this for users; the practice behind it is `CHANGES.md`'s 1.0.2 `### Changed`, a

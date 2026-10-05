@@ -1,0 +1,34 @@
+editorial implicit modules are selected by the dead-export census: true
+select arms use the compiled target interface relationship: true
+public generator inputs follow Dune module ownership and explicit interfaces: true
+parser tokens and lexer body changes produce generated-interface review entries: true
+private generated modules are excluded while public peers remain visible: true
+Dune empty-interface policy changes produce publication-input review entries: true
+availability preprocessing and driver inputs remain literal review evidence: true
+independent public configuration field reordering stays quiet: true
+independent Dune stanza reordering does not create API drift: true
+Dune module ownership moves produce conservative publication-input entries: true
+owning generator configuration changes produce manual-review entries: true
+independent generator configuration field reordering stays quiet: true
+select configuration is visible when its target has an implicit interface: true
+select configuration with an explicit target interface stays quiet: true
+private generator configuration edits stay outside publication inputs: true
+private ownership dependency and prose edits do not change publication entries: true
+a multiline value signature change is visible: true
+record fields and constructors retain their symbol spellings: true
+documentation and whitespace changes do not count as declarations: true
+floating and nested documentation attributes do not count as declarations: true
+floating implementation documentation is discarded recursively: true
+nested signatures and includes stay in the checklist: true
+implicit lets externals and types including deriving changes are visible: true
+non-documentation attribute payload changes stay visible: true
+unnamed initializers and bare evaluations do not count as exported declarations: true
+named pattern aliases remain exported declarations: true
+named module unpack bindings remain exported declarations: true
+extension inputs stay visible even when their payload binds no source name: true
+anonymous bindings inside mixed let groups do not create drift: true
+pattern extension inputs remain visible without an ordinary binder: true
+declaration movement across opens is visible in signatures and implementations: true
+adding a declaration does not report every following unchanged declaration: true
+declaration removals and additions are distinct: true
+invalid OCaml refuses instead of reporting an empty inventory: true

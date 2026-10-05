@@ -4,6 +4,11 @@
  (libraries str))
 
 (executable
+ (name api_drift)
+ (modules api_drift)
+ (libraries base stdio unix test_utils))
+
+(executable
  (name fit_envelope)
  (modules fit_envelope)
  (libraries base stdio utils ir))

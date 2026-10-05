@@ -49,6 +49,8 @@ module Agent_notes_scan = Agent_notes_scan
     agreement, table shape, reachability from the index, and repetition across files. *)
 
 module Dead_export_scan = Dead_export_scan
+
+module Api_drift = Api_drift
 (** Enumerating source-declared values in modules without interfaces and conservatively counting
     external qualified, aliased, opened, and included references to them. *)
 

@@ -7436,6 +7436,44 @@
   (env_var OCANNL_SIMPLIFY_FP_ALGEBRA))
  (libraries base ocannl stdio arrayjit.verdict ll_test test_utils))
 
+; gh-ocannl-946: declaration-reader controls and real first-parent merge attribution.
+
+(test
+ ; ocannl-backend: none -- parses synthetic source declarations, with no backend.
+ (name api_drift_cases)
+ (package neural_nets_lib)
+ (modules api_drift_cases)
+ (deps ocannl_config)
+ (libraries base test_utils arrayjit.verdict))
+
+(executable
+ (name api_drift_history)
+ (modules api_drift_history)
+ (libraries base unix arrayjit.verdict))
+
+(rule
+ ; ocannl-backend: none -- runs the editorial reader over a temporary Git history.
+ (targets api_drift_history.actual)
+ (package neural_nets_lib)
+ (deps ocannl_config ../../tools/api_drift.exe)
+ (action
+  (with-stdout-to
+   api_drift_history.actual
+   (run %{dep:api_drift_history.exe} %{dep:../../tools/api_drift.exe}))))
+
+(rule
+ (alias runtest-api_drift_history)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate))
+ (action
+  (diff api_drift_history.expected api_drift_history.actual)))
+
+(alias
+ (name runtest)
+ (deps
+  (alias runtest-api_drift_history)))
+
 (test
  ; ocannl-backend: none -- probes only host processes and temporary stream capture.
  (name fresh_process_cases)
