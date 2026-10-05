@@ -1789,6 +1789,9 @@ if [ "${1:-}" = --version ]; then
   printf '%s\n' "${REPEAT_TEST_DUNE_VERSION:-3.24.2}"
   exit 0
 fi
+# These list/digest fixtures have no corrected payload; the separate real-Dune
+# test-promotion-record harness tests capture and replay.
+if [ "${1:-}" = promotion ] && [ "${2:-}" = diff ]; then exit 1; fi
 if [ "${1:-}" = promotion ]; then
   [ -z "${REPEAT_TEST_PROMOTION_CALLS:-}" ] || printf '%s\n' "$*" >>"$REPEAT_TEST_PROMOTION_CALLS"
   [ -n "${REPEAT_TEST_PROMOTIONS:-}" ] || exit 1
@@ -3527,7 +3530,7 @@ esac
 esac
 [ -n "$rec_detail" ] || cmp -s "$argv_dir/promotions" "$promo_lists/one" ||
   rec_detail="suppressed diff: the record is not dune's list: $(cat "$argv_dir/promotions" 2>&1)"
-[ -n "$rec_detail" ] || [ "$(cat "$promo_calls")" = "promotion list --trace-file=$argv_dir/promotions.trace" ] ||
+[ -n "$rec_detail" ] || [ "$(cat "$promo_calls")" = "promotion list --diff-command=diff --trace-file=$argv_dir/promotions.trace" ] ||
   rec_detail="the list was not asked for once, with its own trace file: $(cat "$promo_calls")"
 [ -n "$rec_detail" ] || { [ ! -e "$argv_dir/promotions.trace" ] && [ ! -e "$argv_dir/promotions.tmp" ] &&
                           [ ! -e "$argv_dir/promotions.list" ]; } ||

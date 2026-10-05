@@ -17,13 +17,34 @@
 # names the files it would not stage. Outside a merge it is a no-op.
 #
 # Usage: tools/promote.sh [FILES...]
+#        tools/promote.sh --from-run RUN [FILES...]
+#   Replay saved corrected outputs from a finished test-run record in this
+#   worktree. FILES selects exact paths. Refuse incomplete records or changed
+#   source files; the saved originals protect edits made after the run.
 #   Run from anywhere; extra arguments are passed through to dune (e.g. paths
 #   of specific files to promote).
 
 set -eu
 cd "$(dirname "$0")/.."
 
-command -v dune >/dev/null 2>&1 || . tools/opam-env.sh
+die() { echo "promote.sh: $*" >&2; exit 2; }
+matches_correction() { # destination correction; CR normalization is part of promotion
+  cmp -s "$1" "$2" && return 0
+  case $1 in
+    *.expected | test/ppx/*_expected.ml) perl -pe 's/\r$//' "$2" | cmp -s "$1" - ;;
+    *) return 1 ;;
+  esac
+}
+from_run=
+if [ "${1:-}" = --from-run ]; then
+  [ $# -ge 2 ] || die "--from-run requires a run directory"
+  from_run=$2
+  shift 2
+  [ -d "$from_run" ] || die "no such run: $from_run"
+  from_run=$(CDPATH= cd -- "$from_run" && pwd -P)
+else
+  command -v dune >/dev/null 2>&1 || . tools/opam-env.sh
+fi
 
 # Are we mid-merge? `git rev-parse --verify MERGE_HEAD` rather than testing
 # `.git/MERGE_HEAD`: in a linked worktree `.git` is a FILE, and MERGE_HEAD
@@ -38,18 +59,63 @@ fi
 # nothing pending left to name. It is only needed for the guard, so outside a
 # merge the extra dune invocation is skipped entirely. `list` filters its
 # arguments exactly as `apply` does, prints one root-relative path per line on
-# stdout, and sends "Nothing to promote for X." to stderr.
+# stdout since 3.22, stderr before, and sends missing-file warnings to stderr.
 #
 # A `list` that FAILS is kept apart from one that finds nothing: both leave
 # `promoted` empty, but the first means the guard is about to do nothing while
 # believing it did its job -- silently reinstating the trap. Say so instead.
 promoted=""
 listed=1
-if [ "$merging" -eq 1 ]; then
-  promoted="$(dune promotion list --root . "$@" 2>/dev/null)" || listed=0
+if [ -n "$from_run" ]; then
+  saved=$from_run/promotion-files
+  [ -f "$from_run/exit" ] && [ -f "$saved/paths" ] || die "run has no complete saved promotions: $from_run"
+  [ "$(cat "$from_run/wt")" = "$(pwd -P)" ] || die "run belongs to another worktree"
+  # Validate the entire selection before copying any file. Numbered payloads
+  # avoid interpreting a recorded source path as a path inside the run record.
+  n=0
+  selected=()
+  while IFS= read -r f; do
+    n=$((n + 1))
+    case $f in '' | /* | \\* | [A-Za-z]:* | . | .. | ./* | ../* | */./* | */../* | */. | */..) die "invalid saved path: $f" ;; esac
+    parent=${f%/*}
+    [ "$parent" != "$f" ] || parent=.
+    resolved=$(CDPATH= cd -- "$parent" && pwd -P) || die "missing destination directory: $f"
+    case $resolved/ in "$(pwd -P)/"*) ;; *) die "destination escapes worktree: $f" ;; esac
+    [ ! -L "$f" ] || die "destination is a symlink: $f"
+    [ -f "$saved/$n.corrected" ] || die "missing saved correction: $f"
+    choose=0
+    if [ $# -eq 0 ]; then choose=1; else
+      for arg do [ "$arg" != "$f" ] || choose=1; done
+    fi
+    [ "$choose" = 1 ] || continue
+    if [ -f "$saved/$n.original" ]; then
+      cmp -s "$f" "$saved/$n.original" || matches_correction "$f" "$saved/$n.corrected" || die "source changed since run: $f"
+    else
+      [ -f "$saved/$n.absent" ] || die "missing saved original: $f"
+      [ ! -e "$f" ] || matches_correction "$f" "$saved/$n.corrected" || die "source changed since run: $f"
+    fi
+    selected+=("$n")
+    promoted="$promoted$f
+"
+  done <"$saved/paths"
+  for arg do
+    printf '%s' "$promoted" | grep -Fx -- "$arg" >/dev/null || die "no saved promotion for $arg"
+  done
+  n=0
+  while IFS= read -r f; do
+    n=$((n + 1))
+    for pick in "${selected[@]}"; do
+      [ "$pick" != "$n" ] || cp -- "$saved/$n.corrected" "$f"
+    done
+  done <"$saved/paths"
+else
+  if [ "$merging" -eq 1 ]; then
+    # Capture both streams: 3.20/3.21 put paths on stderr. Retain only paths
+    # Dune actually promoted; missing-path warnings must never reach git add.
+    promoted="$(dune promotion list --root . "$@" --diff-command=diff 2>&1)" || listed=0
+  fi
+  dune promotion apply --root . "$@"
 fi
-
-dune promotion apply --root . "$@"
 
 # Strip trailing CRs from a promoted golden. perl -i, not sed -i: BSD sed
 # (macOS) requires a backup-suffix argument for -i, so GNU-style `sed -i`
@@ -69,6 +135,16 @@ git diff --name-only -z -- '*.expected' 'test/ppx/*_expected.ml' \
   | while IFS= read -r -d '' f; do
       strip_crs "$f"
     done
+
+# Recorded new files need normalization too, even outside a merge where
+# git diff cannot name untracked destinations.
+if [ -n "$from_run" ]; then
+  while IFS= read -r f; do
+    [ -z "$f" ] || strip_crs "$f"
+  done <<EOF
+$promoted
+EOF
+fi
 
 [ "$merging" -eq 1 ] || exit 0
 
@@ -91,6 +167,10 @@ staged=()
 unmerged=()
 while IFS= read -r f; do
   [ -n "$f" ] || continue
+  # `list` on the floor shares stderr with diagnostics; only existing
+  # root-relative files can have been promoted. Never stage warning text.
+  case $f in /* | \\* | [A-Za-z]:* | ../* | */../*) continue ;; esac
+  [ -f "$f" ] || continue
   # Promotion may have introduced CRs into a file the `git diff` pass above
   # could not see (a new golden, absent from the index), so re-check here;
   # strip_crs is idempotent and the staged content must be LF either way.

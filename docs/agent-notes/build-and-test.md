@@ -866,6 +866,17 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   survives only for runs with no record: another `--build-dir`/`--root` in the argv, an
   unreadable answer, a nearly spent cap, `repeat`, and runs from before. Legs 71-73 of
   `tools/test-test-run.sh` pin it; legs 68-69 now pin the fallback.
+  Recoverable records also atomically publish `promotion-files` before the verdict (gh-ocannl-1154):
+  numbered corrected bytes, originals, and a path manifest. `tools/promote.sh --from-run RUN [FILES]`
+  accepts an exact selection from a finished record in the same worktree, refuses later source edits,
+  normalizes goldens to LF and preserves the merge staging guard. Capture uses `dune promotion diff`
+  with a literal copy command receiving the correction path: `show` adds a newline and is absent on
+  3.20; the diff interface works for both staged intermediates and declared targets at the floor.
+  Capture failure keeps the list but advertises no replay; every copy/query stays under the run's
+  existing lock, signal handling and remaining cap. `tools/test-promotion-record.sh` owns the byte,
+  recovery and refusal controls; `tools/test-promote.sh` owns the opposing floor-stream controls.
+  Floor Dune also recomputes diffs during `list`, so both wrappers pin its `--diff-command=diff`: a
+  presentation-only `DUNE_DIFF_COMMAND=-` must not hide registered corrections from recovery.
 - **`cmd 2>/dev/null` does not silence a failed REDIRECTION.** The shell reports that before the
   command's own stderr redirection applies, so `read -r line <"$f" 2>/dev/null` prints
   `/proc/NNN/stat: No such file or directory` whenever the entry vanishes mid-scan — routine, not
@@ -909,8 +920,8 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   usual conflict drill (resolve, `git add`, run the suite, promote what moved) puts the promotion
   on the wrong side of the `add` every time, and `git status` shows the file staged, which is what
   you were checking for. `promote.sh` closes it: mid-merge it takes `dune promotion list` BEFORE
-  applying (afterwards nothing pending is left to name), then stages exactly what it promoted and
-  says so. A promoted golden still UNMERGED is deliberately NOT staged and is warned about with the
+  applying (afterwards nothing pending is left to name), reading both streams for the pre-3.22 floor,
+  then stages exactly what it promoted and says so. A promoted golden still UNMERGED is deliberately NOT staged and is warned about with the
   `git add` that would accept it — staging one records a conflict resolution, which is the caller's
   call and not the script's. Outside a merge nothing runs, not even the extra `dune` invocation.
   The merge is detected with `git rev-parse --verify MERGE_HEAD`, never by testing `.git/MERGE_HEAD`

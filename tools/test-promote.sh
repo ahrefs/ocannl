@@ -145,7 +145,7 @@ resolve_and_test() { # resolve_and_test REPO
     dune build @runtest >/dev/null 2>&1
     # The golden diff must be PENDING; a leg that promotes nothing proves
     # nothing, and would let legs 1 and 2 agree for the wrong reason.
-    [ -n "$(dune promotion list --root . 2>/dev/null)" ] || exit 1
+    [ -n "$(dune promotion list --root . 2>&1)" ] || exit 1
   )
 }
 
@@ -210,7 +210,7 @@ else
     g add gen.txt >/dev/null 2>&1 || exit 1
     printf 'from A\n' >foo.expected
     dune build @runtest >/dev/null 2>&1
-    [ -n "$(dune promotion list --root . 2>/dev/null)" ] || exit 1
+    [ -n "$(dune promotion list --root . 2>&1)" ] || exit 1
     [ -n "$(g ls-files --unmerged -- foo.expected)" ] || exit 1
   ) || ok=0
   if [ "$ok" = 0 ]; then
@@ -267,7 +267,7 @@ DUNE
   g commit -qm base >/dev/null 2>&1 || exit 1
   g rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1 && exit 1 # not mid-merge
   dune build @runtest >/dev/null 2>&1
-  [ -n "$(dune promotion list --root . 2>/dev/null)" ] || exit 1
+  [ -n "$(dune promotion list --root . 2>&1)" ] || exit 1
 ) || ok=0
 if [ "$ok" = 0 ]; then
   report 1 "leg 4 setup: non-merge repository with a pending promotion"
@@ -324,7 +324,7 @@ DUNE
     : >bar.expected # empty golden: untracked, so absent from the index
     g add dune gen2.txt >/dev/null 2>&1 || exit 1
     dune build @runtest >/dev/null 2>&1
-    dune promotion list --root . 2>/dev/null | grep -q '^bar\.expected$' || exit 1
+    dune promotion list --root . 2>&1 | grep -q '^bar\.expected$' || exit 1
     [ -z "$(g ls-files -- bar.expected)" ] || exit 1 # genuinely untracked
   ) || ok=0
   if [ "$ok" = 0 ]; then
@@ -393,5 +393,37 @@ SHIM
       ;;
   esac
 fi
+
+# Floor stream control: real Dune builds/apply; a shim moves only the list to
+# stderr, as Dune 3.20/3.21 do. The stdout-only guard must lose the promotion.
+for control in shipping stdout-only; do
+  repo="$(scenario "floor-$control")"
+  if [ -z "$repo" ] || ! resolve_and_test "$repo"; then
+    report 1 "floor stream $control setup"
+    continue
+  fi
+  mkdir -p "$repo/shim"
+  cat >"$repo/shim/dune" <<SHIM
+#!/usr/bin/env bash
+if [ "\${1:-}" = promotion ] && [ "\${2:-}" = list ]; then
+  "$(command -v dune)" "\$@" >&2
+  exit \$?
+fi
+exec "$(command -v dune)" "\$@"
+SHIM
+  chmod +x "$repo/shim/dune"
+  if [ "$control" = stdout-only ]; then
+    # Restrict the mutation to the guard's list capture.
+    perl -i -pe 's/(promoted=.*dune promotion list.*)2>&1/$1 2>\/dev\/null/' "$repo/tools/promote.sh"
+  fi
+  out="$( (cd "$repo" && PATH="$repo/shim:$PATH" tools/promote.sh) 2>&1)"
+  (cd "$repo" && g commit -q --no-edit) >/dev/null 2>&1
+  built="$(cat "$repo/_build/default/foo.output")"
+  committed="$(blob "$repo" HEAD:foo.expected)"
+  if { [ "$control" = shipping ] && [ "$committed" = "$built" ]; } ||
+     { [ "$control" = stdout-only ] && [ "$committed" != "$built" ] && [ "$(cat "$repo/foo.expected")" = "$built" ]; }; then
+    report 0 "floor stderr list: $control guard commits the expected blob"
+  else report 1 "floor stderr list: $control guard commits the expected blob" "$out"; fi
+done
 
 finish

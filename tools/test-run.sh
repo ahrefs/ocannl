@@ -126,8 +126,9 @@
 # record_checkout). The digest prints them as its `source:` line: the commit,
 # then `(clean)` or `+ N uncommitted paths`. At the run's end it records
 # `promotions`: dune's own promotion list, which the digest reports in place
-# of reading the log for diffs, and which outlives the next build's
-# replacement of dune's list (see record_promotions).
+# of reading the log for diffs. `promotion-files` keeps corrected contents and
+# their originals for `tools/promote.sh --from-run RUN`, even after a later build
+# replaces dune's list (see record_promotions).
 #
 # Windows: run it from Git Bash, whose MSYS perl carries the flock and the cap.
 # Best-effort even there -- process-group kills may only reach dune itself, not
@@ -1073,7 +1074,9 @@ record_promotions() { # in `_resolve`, after dune exited, whose SECONDS the cap'
   else
     stream=stderr
   fi
-  set -- "$DUNE" promotion list --trace-file="$run_dir/promotions.trace"
+  # Before 3.22, list recomputes diffs; a presentation command such as `-`
+  # would hide registered corrections. Discovery uses an ordinary diff.
+  set -- "$DUNE" promotion list --diff-command=diff --trace-file="$run_dir/promotions.trace"
   if [ "$stream" = stdout ]; then
     promotion_bounded "$@" >"$run_dir/promotions.tmp" 2>/dev/null
   else
@@ -1081,6 +1084,41 @@ record_promotions() { # in `_resolve`, after dune exited, whose SECONDS the cap'
   fi && promotion_lines <"$run_dir/promotions.tmp" >"$run_dir/promotions.list" &&
     mv -f "$run_dir/promotions.list" "$run_dir/promotions"
   rm -f "$run_dir/promotions.tmp" "$run_dir/promotions.list" "$run_dir/promotions.trace"
+  # Corrected bytes belong to this record too, before the lock is released.
+  # All-or-nothing publication: a query/copy failure keeps the useful list,
+  # but must never advertise an incomplete set as recoverable.
+  [ -s "$run_dir/promotions" ] || return 0
+  case $rc in 0 | 1) ;; *) return 0 ;; esac
+  ! dune_refusal "$run_dir/log" "$(cat "$run_dir/prelude" 2>/dev/null)" >/dev/null || return 0
+  local saved="$run_dir/promotion-files.tmp" line n=0 ok=1
+  mkdir "$saved" || return 0
+  cp "$run_dir/promotions" "$saved/paths" || ok=0
+  while IFS= read -r line; do
+    [ "$ok" = 1 ] || break
+    n=$((n + 1))
+    # `show` adds a framing newline (and is absent on 3.20). The public
+    # diff command receives the actual original/correction paths instead.
+    # Copy bytes via its second argument; exit 1 means "diff found" to Dune.
+    # The destination travels through the environment, never shell source.
+    OCANNL_TOOL_PROMOTION_CAPTURE="$saved/$n.corrected" promotion_bounded "$DUNE" promotion diff \
+      --trace-file="$run_dir/promotions.trace" \
+      --diff-command="perl -MFile::Copy -e 'copy(\$ARGV[1], \$ENV{OCANNL_TOOL_PROMOTION_CAPTURE}) or exit 2; exit 1'" \
+      -- "$line" >/dev/null 2>&1 || ok=0
+    [ -f "$saved/$n.corrected" ] || ok=0
+    if [ -f "$line" ]; then
+      promotion_bounded cp -- "$line" "$saved/$n.original" || ok=0
+    elif [ -e "$line" ] || [ -L "$line" ]; then
+      ok=0
+    else
+      : >"$saved/$n.absent" || ok=0
+    fi
+  done <"$run_dir/promotions"
+  rm -f "$run_dir/promotions.trace"
+  if [ "$ok" = 1 ]; then
+    mv "$saved" "$run_dir/promotion-files" || rm -rf "$saved"
+  else
+    rm -rf "$saved"
+  fi
 }
 # Copies dune's list, failing on the first line that is not a relative path
 # whose directory exists here (every promotion targets a file beside its dune
@@ -1089,7 +1127,7 @@ promotion_lines() {
   local line
   while IFS= read -r line || [ -n "$line" ]; do
     line=${line%$'\r'}
-    case $line in '' | /* | \\* | [A-Za-z]:*) return 1 ;; esac
+    case $line in '' | /* | \\* | [A-Za-z]:* | . | .. | ./* | ../* | */./* | */../* | */. | */..) return 1 ;; esac
     case $line in */*) [ -d "${line%/*}" ] || return 1 ;; esac
     printf '%s\n' "$line" || return 1
   done
@@ -1656,8 +1694,11 @@ digest() {
          "file(s); inspect the log, accept with \`dune promote\` (tools/promote.sh on Windows):"
     sed -n '1,20p' "$dir/promotions" | sed 's/^/  /'
     [ "$promo_n" -le 20 ] || echo "  ... and $((promo_n - 20)) more, in $dir/promotions"
-    echo "  (the next build in this worktree replaces dune's list: if \`dune promote\`" \
-         "finds nothing, run this command again)"
+    if [ -d "$dir/promotion-files" ]; then
+      printf '  saved corrected outputs: tools/promote.sh --from-run %q\n' "$dir"
+    else
+      echo "  (corrected outputs were not saved; promote before another build replaces dune's list)"
+    fi
   elif [ -n "$promo_n" ]; then
     [ "$verdict" != FAIL ] ||
       echo "action failed -- dune's promotion list at the run's end is empty, nothing to" \
