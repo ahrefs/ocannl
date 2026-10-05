@@ -266,6 +266,12 @@ let () =
       let new_config = commit "Change generator configuration without changing inputs" in
       p "Dune-only generator configuration edits remain visible"
         (has (read ~until:new_config parser_config) "--code");
+      write "tensor/dune"
+        "(menhir (flags --code) (modules parser)) (library (name parserlib) (public_name \
+         pkg.parserlib) (modules parser))\n";
+      let generator_order = commit "Reorder generator fields without changing configuration" in
+      p "generator configuration field ordering stays quiet"
+        (has (read ~until:generator_order new_config) "0 declaration changes");
       let select_config condition =
         "(library (name backend) (public_name pkg.backend) (modules impl) (libraries (select \
          impl.ml from (" ^ condition ^ " -> impl.cuda.ml) (-> impl.missing.ml))))\n"

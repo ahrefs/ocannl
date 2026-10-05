@@ -48,6 +48,12 @@ files.
   manually; ordinary `libraries` dependencies, private-library configuration and comments or
   `synopsis` prose stay outside these entries. Accepted select configurations inside `libraries`
   follow the separate target/interface rule above.
+  Selected targets currently must be implementations (`.ml`); selected interfaces or non-module
+  targets are unsupported and can refuse the report. External module-list inputs (`:include` or
+  `read-lines`) are not followed, and `re_export` dependencies are excluded with `libraries`.
+  Inspect those inputs manually if introduced; the audited API-root Dune sources and history have
+  no occurrences. These cases and the future anonymous/private source forms above are tracked in
+  gh-ocannl-1201.
   This is a reading aid, not a compatibility gate: implementation bodies are kept because they
   can change an inferred public type, and PPX-generated exports and inferred types still require
   manual review. Record retired or renamed symbols in the resulting bullet so later API-removal

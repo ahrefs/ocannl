@@ -15,6 +15,7 @@ public generator peers still produce entries: true
 Dune-only empty-interface policy changes stay visible: true
 Dune stanza reordering stays quiet: true
 Dune-only generator configuration edits remain visible: true
+generator configuration field ordering stays quiet: true
 Dune-only selected-module configuration edits remain visible: true
 Dune-only optional library changes remain literal review evidence: true
 Dune-only preprocessing changes remain literal review evidence: true

@@ -9,6 +9,7 @@ independent public configuration field reordering stays quiet: true
 independent Dune stanza reordering does not create API drift: true
 Dune module ownership moves produce conservative publication-input entries: true
 owning generator configuration changes produce manual-review entries: true
+independent generator configuration field reordering stays quiet: true
 select configuration is visible when its target has an implicit interface: true
 select configuration with an explicit target interface stays quiet: true
 private generator configuration edits stay outside publication inputs: true

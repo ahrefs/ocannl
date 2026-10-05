@@ -145,6 +145,11 @@ let () =
             "(menhir (modules parser) (merge_into later)) (library (name lib) (public_name \
              pkg.lib))")
        = 2);
+  Verdict.p_empty "independent generator configuration field reordering stays quiet"
+    ~over:(declarations ~paths:[ "tensor/parser.mly" ] "tensor/dune" (parser_config "--table"))
+    (changed ~paths:[ "tensor/parser.mly" ] "tensor/dune" (parser_config "--table")
+       "(menhir (flags --table) (modules parser)) (library (name parserlib) (public_name \
+        pkg.parserlib) (modules parser))");
   let select_config condition =
     "(library (name backend) (public_name pkg.backend) (modules impl) (libraries (select impl.ml \
      from (" ^ condition ^ " -> impl.cudajit.ml) (-> impl.missing.ml))))"

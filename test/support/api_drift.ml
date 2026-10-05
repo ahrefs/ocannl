@@ -37,6 +37,17 @@ let binding_may_export binding =
   iterator#pattern binding.pvb_pat;
   !extension || not (List.is_empty (binding_names binding.pvb_pat))
 
+let canonical_fields = function
+  | Sexp.List (head :: children) ->
+      let fields, positional =
+        List.partition_tf children ~f:(function Sexp.List _ -> true | _ -> false)
+      in
+      Sexp.List
+        ((head :: positional)
+        @ List.sort fields ~compare:(fun a b ->
+            String.compare (Sexp.to_string a) (Sexp.to_string b)))
+  | atom -> atom
+
 let derived_module_inputs ~paths dunes =
   let present = Set.of_list (module String) paths in
   List.concat_map dunes ~f:(fun (dune_path, contents) ->
@@ -87,7 +98,7 @@ let derived_module_inputs ~paths dunes =
                     when Option.is_some (Dead_export_scan.module_name_of_source (name ^ ".ml")) ->
                       ( path (name ^ suffix),
                         path (Option.value output ~default:name ^ ".ml"),
-                        stanza )
+                        canonical_fields stanza )
                   | _ -> failwith ("unsupported generator module set in " ^ dune_path)))
         @ List.concat_map stanzas ~f:select_inputs
       in
