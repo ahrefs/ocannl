@@ -590,7 +590,8 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
           (** The fragment element type for [matrix_a]/[matrix_b] — a C++ type for the 16-bit
               combinations, the tag type [nvcuda::wmma::precision::tf32] for tf32 (storage stays
               [float]; only the fragments are tagged). *)
-      wc_acc_typ : string;  (** The accumulator fragment element type. *)
+      wc_acc_prec : Ops.prec;
+          (** The accumulator fragment's precision; its element type is [typ_of_prec] of it. *)
       wc_tm : int;
       wc_tn : int;
       wc_tk : int;
@@ -614,13 +615,13 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
     }
 
     let wmma_combo ~a_prec ~b_prec ~d_prec =
-      let mk ?(tile = (16, 16, 16)) ?(marker = "") ?(cvt_tf32 = false) ?d_cvt ab_typ acc_typ ab_ld
+      let mk ?(tile = (16, 16, 16)) ?(marker = "") ?(cvt_tf32 = false) ?d_cvt ab_typ acc_prec ab_ld
           d_ld cc =
         let wc_tm, wc_tn, wc_tk = tile in
         Some
           {
             wc_ab_typ = ab_typ;
-            wc_acc_typ = acc_typ;
+            wc_acc_prec = acc_prec;
             wc_tm;
             wc_tn;
             wc_tk;
@@ -633,13 +634,13 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
           }
       in
       match (a_prec, b_prec, d_prec) with
-      | Ops.Half_prec _, Ops.Half_prec _, Ops.Single_prec _ -> mk "__half" "float" 8 4 70
+      | Ops.Half_prec _, Ops.Half_prec _, Ops.Single_prec _ -> mk "__half" Ops.single 8 4 70
       (* The f16-accumulate wmma triple must not render under [Numerics.Fp16_wide] (gh-ocannl-680):
          the uniform-f16 combination then goes through the f32-accumulate inline-PTX m16n8k16 arm
          instead, or declines to the scalar fallback, whose accumulator follows [accum_prec] —
          width-uniform either way. *)
       | Ops.Half_prec _, Ops.Half_prec _, Ops.Half_prec _ when not (Numerics.fp16_accum_wide ()) ->
-          mk "__half" "__half" 8 8 70
+          mk "__half" Ops.half 8 8 70
       (* gh-ocannl-925: the wide uniform-f16 combination — the f16 x f16 -> f32 fragments above over
          an f16 STORAGE destination, converted once at the [d] boundary by [wmma_d_boundary_lines].
          That boundary is element-wise, so [d] has no wmma stride constraint. Only the fragment
@@ -647,16 +648,16 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
          conditions this arm's imply (see [mma_syntax]). sm_80+ like that arm, the floor the
          capability's [mma_f16_wide_acc_scopes] is verified at. *)
       | Ops.Half_prec _, Ops.Half_prec _, Ops.Half_prec _ ->
-          mk ~marker:"-f16-wide" ~d_cvt:("__half2float", "__float2half") "__half" "float" 8 1 80
+          mk ~marker:"-f16-wide" ~d_cvt:("__half2float", "__float2half") "__half" Ops.single 8 1 80
       | Ops.Bfloat16_prec _, Ops.Bfloat16_prec _, Ops.Single_prec _ ->
-          mk ~marker:"-bf16" "__nv_bfloat16" "float" 8 4 80
+          mk ~marker:"-bf16" "__nv_bfloat16" Ops.single 8 4 80
       | Ops.Single_prec _, Ops.Single_prec _, Ops.Single_prec _
         when (Numerics.get ()).Numerics.tf32_matmuls ->
           (* gh-ocannl-478: uniform-f32 GEMMs compute in tf32 (m16n16k8, sm_80+) when the numerics
              policy opts in; with the policy off this arm is [None] and the scalar fallback keeps
              full f32 numerics. f32's wmma stride constraint is 4 elements. *)
           mk ~tile:(16, 16, 8) ~marker:"-tf32" ~cvt_tf32:true "nvcuda::wmma::precision::tf32"
-            "float" 4 4 80
+            Ops.single 4 4 80
       | _ -> None
 
     (* The converted [d] boundary of a wmma accumulator-fragment array whose element type is not the
@@ -750,6 +751,9 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
           Some ("__half", "__half_as_ushort", "__half2float", "__float2half", "f16", "mma-f16")
       | _ -> None
 
+    (* The fp8 arm's marker, shared by its statement and register-scope renderings and [mma_arm]. *)
+    let mma_fp8_marker = "mma-fp8"
+
     let mma_fp8_combo ~a_prec ~b_prec ~d_prec =
       match (a_prec, b_prec, d_prec) with
       | Ops.Fp8_prec _, Ops.Fp8_prec _, Ops.Single_prec _ -> true
@@ -781,16 +785,21 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
           Option.map (mma16_spellings ~a_prec ~b_prec ~d_prec)
             ~f:(fun (elt_typ, _, widen, narrow, _, marker) ->
               (elt_typ, Some (widen, narrow), marker))
-      | Ops.Fp8_prec _, Ops.Fp8_prec _, Ops.Single_prec _ -> Some ("float", None, "mma-fp8")
+      | Ops.Fp8_prec _, Ops.Fp8_prec _, Ops.Single_prec _ -> Some ("float", None, mma_fp8_marker)
       | _ -> None
 
     (* Shared by statement and scope: the intrinsic divides the block, and every operand is plain or
        shared-swizzled. The 16-bit arms read swizzled operands with [ldmatrix]; fp8 uses it in its
        contiguous orientations and swizzle-aware byte gathers otherwise. Destination conditions
        remain with the callers. *)
+    (* The inline-PTX arms' own arch floors: m16n8k32 over e5m2 is sm_89+ (Ada), m16n8k16 sm_80+. *)
+    let mma16_min_cc ~a_prec ~b_prec ~d_prec =
+      if mma_fp8_combo ~a_prec ~b_prec ~d_prec then 89 else 80
+
     let mma16_operands_ok ~a_prec ~b_prec ~d_prec ~m ~n ~k ~a:(a_space, a_layout)
         ~b:(b_space, b_layout) =
-      let tk, min_cc = if mma_fp8_combo ~a_prec ~b_prec ~d_prec then (32, 89) else (16, 80) in
+      let tk = if mma_fp8_combo ~a_prec ~b_prec ~d_prec then 32 else 16 in
+      let min_cc = mma16_min_cc ~a_prec ~b_prec ~d_prec in
       (mma_plain a_layout || mma_ldm (a_space, a_layout))
       && (mma_plain b_layout || mma_ldm (b_space, b_layout))
       && m % 16 = 0
@@ -798,6 +807,50 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
       && k % tk = 0
       && mma_loadable a_space && mma_loadable b_space
       && min_compute_capability () >= min_cc
+
+    (* gh-ocannl-1153: the arm each hook selects at the precision level, in the hooks' own dispatch
+       order — [mma_syntax]: fp8's m16n8k32, then the m16n8k16 forms, then wmma, whose
+       self-contained statement declines a converted [d] boundary; [mma_fragment_syntax]: the
+       inline-PTX register scope, then wmma. The update-only statement that DOES render wmma's
+       converted [-f16-wide] arm runs inside that fragment scope, so it is the [Mma_fragment_scope]
+       entry's, not a per-statement one. The inline-PTX arms accumulate in f32 per-lane registers
+       whatever the storage ([.f32] in both instructions). The tables are the hooks' own; the ORDER
+       is restated here, and pinned against the hooks by [schedule_mma_matmul] and
+       [schedule_ldmatrix_matmul], which read every arm marker they expect in rendered CUDA from
+       this function. This is how the tf32 gate in [wmma_combo] reaches the schedule cache's
+       identity: [accum_prec] says f32 accumulates at f32 with the policy on or off. *)
+    let mma_arm ~a_prec ~b_prec ~d_prec ~scope =
+      let inline_ptx arm_name =
+        Some
+          {
+            Backend_intf.arm_name;
+            arm_accumulator = Ops.single;
+            arm_floor = Some (mma16_min_cc ~a_prec ~b_prec ~d_prec);
+          }
+      in
+      let wmma () =
+        Option.bind (wmma_combo ~a_prec ~b_prec ~d_prec) ~f:(fun combo ->
+            match (scope, combo.wc_d_cvt) with
+            | Backend_intf.Mma_per_statement, Some _ -> None
+            | (Backend_intf.Mma_per_statement | Backend_intf.Mma_fragment_scope), _ ->
+                Some
+                  {
+                    Backend_intf.arm_name = "wmma" ^ combo.wc_marker;
+                    arm_accumulator = combo.wc_acc_prec;
+                    arm_floor = Some combo.wc_min_cc;
+                  })
+      in
+      match scope with
+      | Backend_intf.Mma_per_statement -> (
+          if mma_fp8_combo ~a_prec ~b_prec ~d_prec then inline_ptx mma_fp8_marker
+          else
+            match mma16_spellings ~a_prec ~b_prec ~d_prec with
+            | Some (_, _, _, _, _, marker) -> inline_ptx marker
+            | None -> wmma ())
+      | Backend_intf.Mma_fragment_scope -> (
+          match mma16_register_scope ~a_prec ~b_prec ~d_prec with
+          | Some (_, _, marker) -> inline_ptx marker
+          | None -> wmma ())
 
     (* Both inline-PTX shapes address and move the same four f32 accumulators. The statement
        declares scalar registers on load; a persistent boundary moves to/from its existing fragment
@@ -1118,9 +1171,9 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
               (fun ~a_ptr ~b_ptr ->
                 group
                   (string
-                     (Printf.sprintf "{ /* tile_mma %s%dx%dx%d (mma-fp8) e5m2%s */"
+                     (Printf.sprintf "{ /* tile_mma %s%dx%dx%d (%s) e5m2%s */"
                         (either ~fragment:"fragment update " ~statement:"")
-                        m n k (ldm_tag ~a:a_ldm ~b:b_ldm))
+                        m n k mma_fp8_marker (ldm_tag ~a:a_ldm ~b:b_ldm))
                   ^^ nest 2 (hardline ^^ body ~a_ptr ~b_ptr)
                   ^^ hardline ^^ rbrace))
           else if
@@ -1308,7 +1361,7 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
             | Some
                 {
                   wc_ab_typ = ab_typ;
-                  wc_acc_typ = acc_typ;
+                  wc_acc_prec = acc_prec;
                   wc_tm;
                   wc_tn;
                   wc_tk;
@@ -1438,8 +1491,9 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
                     let body_lines =
                       [
                         barrier;
-                        Printf.sprintf "%s __mma_acc[%d][%d];" (frag "accumulator" acc_typ None) mt
-                          nt;
+                        Printf.sprintf "%s __mma_acc[%d][%d];"
+                          (frag "accumulator" (typ_of_prec acc_prec) None)
+                          mt nt;
                         Printf.sprintf "for (int __mi = 0; __mi < %d; ++__mi) {" mt;
                         Printf.sprintf "  for (int __ni = 0; __ni < %d; ++__ni) {" nt;
                         Printf.sprintf
@@ -1561,7 +1615,7 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
           | ( None,
               Some
                 {
-                  wc_acc_typ = acc_typ;
+                  wc_acc_prec = acc_prec;
                   wc_tm;
                   wc_tn;
                   wc_tk;
@@ -1582,7 +1636,7 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
               let mt = m / wc_tm and nt = n / wc_tn in
               let acc_frag =
                 Printf.sprintf "nvcuda::wmma::fragment<nvcuda::wmma::accumulator, %d, %d, %d, %s>"
-                  wc_tm wc_tn wc_tk acc_typ
+                  wc_tm wc_tn wc_tk (typ_of_prec acc_prec)
               in
               (* The [d] boundary: the fragment array's own loads and stores, or — for a destination
                  whose storage type is not the accumulator's (gh-ocannl-925) — the element-wise

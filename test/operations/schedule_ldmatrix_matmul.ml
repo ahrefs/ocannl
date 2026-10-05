@@ -47,6 +47,18 @@ let accum_prec =
   let caps = lazy (Context.codegen_capabilities (Context.auto ())) in
   fun p -> (Lazy.force caps).Ir.Backend_intf.accum_prec p
 
+(* gh-ocannl-1153: the marker a rendering carries for an arm — [(<arm_name>)] in its [tile_mma]
+   comment — read from the backend's capability arm table rather than restated, so every arm this
+   test renders pins [codegen_capabilities.mma_arm] to the hook that rendered it. A combination with
+   no arm spells a marker no rendering carries, failing the claim that expects one. *)
+let arm_marker a_prec b_prec d_prec =
+  match
+    (Context.codegen_capabilities (Context.auto ())).Ir.Backend_intf.mma_arm ~a_prec ~b_prec ~d_prec
+      ~scope:Ir.Backend_intf.Mma_per_statement
+  with
+  | Some arm -> "(" ^ arm.Ir.Backend_intf.arm_name ^ ")"
+  | None -> "(no mma arm)"
+
 let () = Utils.settings.output_debug_files_in_build_directory <- true
 
 open Verdict.Claims
@@ -264,7 +276,7 @@ let () =
       in
       has src a_form && has src b_form
       && has src "mma.sync.aligned.m16n8k16"
-      && has src "(mma-bf16) ldmatrix a,b"
+      && has src (arm_marker Ir.Ops.bfloat16 Ir.Ops.bfloat16 Ir.Ops.bfloat16 ^ " ldmatrix a,b")
       (* No gather chain survives for either operand. *)
       && (not (has src "__bfloat16_as_ushort"))
       && ldm_census census
@@ -343,7 +355,7 @@ let () =
       else
         has src "ldmatrix.sync.aligned.m8n8.x4.shared.b16"
         && has src "mma.sync.aligned.m16n8k32"
-        && has src "(mma-fp8) e5m2 ldmatrix a"
+        && has src (arm_marker Ir.Ops.fp8 Ir.Ops.fp8 Ir.Ops.single ^ " e5m2 ldmatrix a")
         && (not (has src "ldmatrix.sync.aligned.m8n8.x2"))
         && ldm_census census)
     ();
@@ -358,7 +370,7 @@ let () =
       else
         has src "ldmatrix.sync.aligned.m8n8.x2.shared.b16"
         && has src "mma.sync.aligned.m16n8k32"
-        && has src "(mma-fp8) e5m2 ldmatrix b"
+        && has src (arm_marker Ir.Ops.fp8 Ir.Ops.fp8 Ir.Ops.single ^ " e5m2 ldmatrix b")
         && (not (has src "ldmatrix.sync.aligned.m8n8.x4"))
         && ldm_census census)
     ();
