@@ -3,7 +3,7 @@ library artifacts requested: yes
 debug artifacts requested: no
 backend: cc
 the compile succeeded: true
-the routine computes 2x + 1 from its unlinked library: true
+the routine computes 2x + 1 from its retained library: true
 the compiler log is removed: true
 the source is retained exactly when debug files are requested: true
 the library is retained exactly when requested: true

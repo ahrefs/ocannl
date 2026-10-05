@@ -89,14 +89,16 @@ let run directory =
   let success = String.equal mode "success" in
   if success then (
     p "the compile succeeded" (Option.is_some values);
-    p_alli "the routine computes 2x + 1 from its unlinked library"
+    p_alli
+      (if debug || dll_output then "the routine computes 2x + 1 from its retained library"
+       else "the routine computes 2x + 1 from its unlinked library")
       (Option.value values ~default:[||] |> Array.to_list)
       ~f:(fun i v -> Float.equal v (Float.of_int ((2 * i) + 1)))
       ~min:16)
   else (
     p "the C compiler rejected the generated code"
       (Option.exists rejection ~f:(fun (stage, _) -> String.equal stage "compiler"));
-    p "the rejection says the source was removed exactly when it was"
+    p "the rejection says the source was removed exactly when debug files are not requested"
       (Option.exists rejection ~f:(fun (_, detail) ->
            Bool.equal (not debug)
              (String.is_substring detail ~substring:"removed its temporary copy"))));

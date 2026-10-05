@@ -1057,8 +1057,9 @@
 # `<source stem>_run_id_<N>` beside the source the compiler read -- the system temp
 # directory, since the compiler reads a private temporary copy even under
 # `output_debug_files_in_build_directory`. If false (the default), each library is a
-# temporary file removed once it is loaded, or after its unload where the platform
-# refuses to delete a loaded library (Windows), unless debug files retain it.
+# temporary file removed once it is loaded, unless debug files retain it. Windows refuses
+# to delete a loaded library: there it is removed only after its routine is collected
+# and unloaded, so libraries of routines alive at exit (and of every OpenMP kernel) stay.
 #output_dlls_in_build_directory=false
 
 # Per-tensor-node cutoff in bytes for considering off-stack allocation, opt-in for backends.

@@ -277,13 +277,17 @@ configuration.
   or `output_dlls_in_build_directory` (library) asks for them (gh-ocannl-1197,
   `test/operations/cc_temp_ownership`). The library is unlinked right after `dlopen`: the kernel
   runs from the mapping, which POSIX keeps alive past the unlink. Windows refuses to delete a
-  mapped DLL, so a failed removal is retried after the finalizer's `dlclose`, never before it; the
-  OpenMP arm never unloads, so a Windows OpenMP kernel's library stays until something outside the
-  process removes it. Unlinking a still-mapped library frees its name, and a loader answers a `dlopen` of a
+  mapped DLL, so a failed removal is retried after the finalizer's `dlclose`, never before it. OCaml
+  runs no finalisers at exit and the OpenMP arm never unloads, so on Windows only routines
+  collected mid-run (autotune candidates, mostly) get their library removed; the libraries of
+  routines alive at exit, and of every OpenMP kernel, stay until something outside the process
+  removes them. Unlinking a still-mapped library frees its name, and a loader answers a `dlopen` of a
   path it has mapped with that mapping without reading the file, which is why every library path
   carries the process-unique run id: drop it and a later `temp_file` landing on the freed name runs
-  the earlier kernel. Only a FAILED removal is retried, because a freed name may already belong to
-  another process.
+  the earlier kernel. Only a FAILED removal is retried (a path already gone counts as removed),
+  because a freed name may already belong to another process. Profilers and crash symbolication
+  that read a kernel's `.so` after the process (`perf report`, macOS crash reports) need
+  `output_dlls_in_build_directory=true` too.
 
 - Repeated inner CPU `Grid` loops require at least 16,384 scalar updates per native dispatch
   (gh-ocannl-933, `C_syntax.grid_update_count`). The estimate multiplies only the Grid and its

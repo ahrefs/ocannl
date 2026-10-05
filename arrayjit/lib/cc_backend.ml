@@ -896,11 +896,15 @@ let%track7_sexp c_compile_and_load ~f_path =
     Utils.get_global_flag ~default:false ~arg_name:"output_dlls_in_build_directory"
   in
   let library_owned = not (retain_debug || library_requested) in
+  (* A path that is already gone counts as removed: a retry could only hit whoever holds the freed
+     name now. *)
   let removed path =
     try
-      Stdlib.Sys.remove path;
+      Unix.unlink path;
       true
-    with Sys_error _ -> false
+    with
+    | Unix.Unix_error (Unix.ENOENT, _, _) -> true
+    | Unix.Unix_error _ -> false
   in
   let remove path = ignore (removed path : bool) in
   (* The run id makes every library path unique within the process, even once the file is gone. A
@@ -1063,9 +1067,9 @@ let%track7_sexp c_compile_and_load ~f_path =
   let result = { lib; libname } in
   (* The kernel now executes from the mapping, not from the path. POSIX unlinks a mapped file's name
      and keeps the mapping alive; Windows refuses to delete a mapped DLL, and then the removal waits
-     for the unload below. Either outcome is safe, so the code does not ask which platform it is on.
-     Only a removal that failed is retried: once the name is gone, another process's [temp_file] may
-     own it. *)
+     for the unload below, if one happens before exit. Either outcome is safe, so the code does not
+     ask which platform it is on. Only a removal that failed is retried: once the name is gone,
+     another process's [temp_file] may own it. *)
   let removal_pending = library_owned && not (removed libname) in
   Alloc_census.count_module_loaded ();
   (* gh-ocannl-550: counted here, next to the unload the OpenMP arm deliberately does not perform,
@@ -1082,7 +1086,9 @@ let%track7_sexp c_compile_and_load ~f_path =
   | `Dispatch | `None ->
       let%track7_sexp finalize (lib : library) : unit =
         Dl.dlclose ~handle:lib.lib;
-        (* After the unload, never before: Windows deletes a DLL only once nothing maps it. *)
+        (* After the unload, never before: Windows deletes a DLL only once nothing maps it. OCaml
+           runs no finalisers at exit, so on Windows only a routine collected before exit gets its
+           library removed. *)
         if removal_pending then remove lib.libname;
         Alloc_census.count_module_unloaded ()
       in
