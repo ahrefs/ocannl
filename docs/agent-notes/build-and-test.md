@@ -1237,18 +1237,6 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
 
 ## Verdict claims
 
-- Executed parity needs a NON-DEGENERATE operating point (gh-ocannl-1135): the raw `0..223`
-  ramp in `test/operations/online_softmax.ml` saturated attention into a one-hot softmax, leaving
-  score-path parameter gradients of order `1e-19`; agreement then said little about the backward.
-  Its `model` now scales the ramp into `[0, 1)`. Leg 6 prints each parameter's reference scale
-  (`max abs` of the composed gradient) beside the worst normalized difference to stderr, tagged
-  `(not part of the golden)`. Read that scale against the ACTUAL comparison: `close` accepts
-  `abs(got - reference) <= tol * max(1, abs(reference))`, so below magnitude one the absolute
-  floor is `tol`, not a purely relative bound. A reference at or below that floor can agree with
-  zero and prove no meaningful parity; merely asserting it is nonzero does not fix this. Choose
-  inputs that exercise the intended values and gradients above the floor, and report their scales
-  alongside the errors; retain saturated or zero cases as separate edge-case coverage. Leg 6's
-  scale report is diagnostic, not an enforced lower-bound claim.
 - A negative control confirms the run REACHED its last row, not only that `FAIL:` lines appeared
   (gh-ocannl-1067): the claims it printed, passed plus failed, number the golden's lines, or the
   rows run under `Verdict.case`. A raise ends a run at the case that raised, and the rows after it
@@ -1432,6 +1420,18 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   makes). The second half of that test is the one that makes a wide sweep safe: it runs `p` and
   `p_all` in two children and requires their stdout to be equal, which is the property "converting
   a site does not move its golden" stated as a check rather than as a hope.
+- Executed parity needs a NON-DEGENERATE operating point (gh-ocannl-1135): the raw `0..223`
+  ramp in `test/operations/online_softmax.ml` saturated attention into a one-hot softmax, leaving
+  score-path parameter gradients of order `1e-19`; agreement then said little about the backward.
+  Its `model` now scales the ramp into `[0, 1)`. Leg 6 prints each parameter's reference scale
+  (`max abs` of the composed gradient) beside the worst normalized difference to stderr, tagged
+  `(not part of the golden)`. Read that scale against the ACTUAL comparison: `close` accepts
+  `abs(got - reference) <= tol * max(1, abs(reference))`, so below magnitude one the absolute
+  floor is `tol`, not a purely relative bound. A reference at or below that floor can agree with
+  zero and prove no meaningful parity; merely asserting it is nonzero does not fix this. Choose
+  inputs that exercise the intended values and gradients above the floor, and report their scales
+  alongside the errors; retain saturated or zero cases as separate edge-case coverage. Leg 6's
+  scale report is diagnostic, not an enforced lower-bound claim.
 
 ## Hand-built IR tests
 
