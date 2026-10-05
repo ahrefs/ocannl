@@ -1628,13 +1628,13 @@ end = struct
          becomes conditional again — say on a ROCm version predicate, once upstream fixes it. *)
       ^ (if Utils.with_runtime_debug () then "/device-debug" else "/no-device-debug")
       (* Derive the cache regime from the same option selector the compiler uses. A pre-workaround
-         crown is not evidence for the conservative load-wait regime. Limits describe this backend's
+         crown is not evidence for the target-workaround regime. Limits describe this backend's
          device set, so include every device's policy. *)
       ^
       let target_archs = hiprtc_target_archs () in
-      match Compiler_options.hip_wait_options ~target_archs with
+      match Compiler_options.hip_target_options ~target_archs with
       | [] -> ""
-      | options -> "/hiprtc-load-wait:" ^ Compiler_options.render options
+      | options -> "/hiprtc-target:" ^ Compiler_options.render options
       (* No [bf16_accum_wide] component (gh-ocannl-1117): gh-ocannl-1051 added one by hand when
          [Bf16_auto] went wide here with the configured mode unchanged, but what a mode resolves to
          is now cache identity by derivation — [Schedule_cache.codegen_tag] tabulates this backend's

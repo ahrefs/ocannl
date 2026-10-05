@@ -1642,6 +1642,15 @@ files.
   and `x - x = 0` fold to a constant, silently disabling an overflow gate (the shape
   `Mixed_prec.gated_scaled_update` needs). It is the same reason `Builtins_metal`'s fp8 codec is
   written in integer/bitcast form rather than float arithmetic.
+- **gfx1102 compiles without `real-true16`, and HIPRTC never gets `-amdgpu-waitcnt-*`**
+  (`Compiler_options.hip_target_options`, gh-ocannl-1182/1222). In true16 mode, 16-bit values live
+  in VGPR halves, and a pending D16 high-half load raced a low-half update of the same register,
+  corrupting masked half softmax and its gradient on TUF. The first workaround,
+  `-mllvm -amdgpu-waitcnt-forcezero`, fixed those but put a wait inside the
+  `s_getpc_b64`/`s_add_u32` pair that addresses a global. Every `__constant__` load then landed 4
+  bytes early, breaking Threefry, fp8 and bf16 kernels on gfx1102 alone. An LLVM debug flag can
+  break correct kernels: check a hiprtc option against the disassembly and the whole suite, not
+  just the replay it was meant to fix.
 - **A cc kernel links its own libm, because fast math can reach libmvec** (gh-ocannl-1045): under
   `__FAST_MATH__` glibc declares `expf`/`logf`/... SIMD-callable and gcc vectorizes the calls into
   `_ZGV*` entry points of `libmvec.so.1`, which nothing in the OCaml process loads — a dlopen

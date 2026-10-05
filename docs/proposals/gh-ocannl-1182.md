@@ -151,3 +151,28 @@ The isolated HIP source SHA256 is
 `4f996f9865ad7e4ee5f9a8ecc6665e0056cc5097ed0179dd76f1b214256f889e`;
 the host replay source SHA256 is
 `f59d3ef898d6ded5363bc593d45f0d7b6ed9a10d2809128c2444d4aae85573d7`.
+
+## Superseded: `real-true16` replaces the forced waits (gh-ocannl-1222)
+
+The all-counter control broke kernels that were correct without it. HIPRTC 9.0
+inserts the forced wait inside the `s_getpc_b64` / `s_add_u32` / `s_addc_u32`
+sequence that addresses a global. The PC-relative offset assumes the add
+directly follows the `getpc`, so every `__constant__` global load lands 4 bytes
+early. In the Threefry kernel of `test_vec_simple`, the rotation table was read
+at `0x618` instead of `0x61c`, deterministically. On TUF, 17 tests failed
+under the policy and passed without it at `2d8835b7d`. They include every Threefry
+golden, `test_fp8_roundtrip` and the bf16 tensorized `schedule_*` parities.
+A first-parent bisect from the last green `94341913e` named the merge of
+this workaround, `756443b29`.
+
+The corruption itself comes from LLVM's `real-true16` allocation, which gives
+16-bit values VGPR halves. A pending D16 high-half load then races a low-half
+update of the same register, which the wait insertion does not see. The
+production option is now `-Xclang -target-feature -Xclang -real-true16`,
+which keeps each 16-bit value in a whole VGPR. On the standalone forward
+replay it removed every `d16_hi` load and returned 0 wrong or masked-nonzero
+cells in three launches, while the default compiler returned 159104 / 142528 /
+137120 wrong cells. Through the shipped pipeline, `hip_half_load`,
+`hip_half_masked_gradient` and `half_softmax` pass. So do the 17 regressions
+and the option tests. `test_hip_compile_options` now claims that no HIPRTC
+variant forces wait counters.
