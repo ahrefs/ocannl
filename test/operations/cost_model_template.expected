@@ -11,7 +11,7 @@ shared loop: the sibling's ops and reads do not price: true
 alpha-equivalent scope bodies price once: true
   broadcast operands, per read                   flops=1 (exact) bytes=8 (exact)
 broadcast operands: one add and both cells per read, exact: true
-  packed-uniform producer (lane extract)         flops=3 (exact) bytes=16 (bound)
+  packed-uniform producer (lane extract)         flops=3 (exact) bytes=4 (bound)
 packed-uniform producer: the lane-extract form, exact ops, dynamic-read bytes a bound: true
 == guard-emitting shapes: price = emitted read ==
 affine position: mutating a resolved world leaves its caller's placements intact: true
