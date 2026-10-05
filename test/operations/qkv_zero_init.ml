@@ -41,11 +41,14 @@ let capture ~name out =
   in
   Option.value_exn !captured
 
-let fission ?zero_sched opt =
+(* The sketch candidates' segmentation folds the zero ([fold_zeros:true], what the autotuner and the
+   model selector pass); the untuned default pipeline does not. *)
+let fission ?(fold_zeros = true) opt =
   let limits = Ir.Backend_intf.no_hardware_limits in
-  let zero_sched = Option.value zero_sched ~default:(fun tns -> Sched.zero_expansion ~limits tns) in
-  Sched.fission_scheduled ~keep_mapping:(Sched.default_gpu ~limits)
-    ~preset:(Sched.default_gpu ~limits) ~zero_sched ~static_indices:[] opt
+  Sched.fission_scheduled ~keep_mapping:(Sched.default_gpu ~limits) ~fold_zeros
+    ~preset:(Sched.default_gpu ~limits)
+    ~zero_sched:(fun tns -> Sched.zero_expansion ~limits tns)
+    ~static_indices:[] opt
 
 (* A synthetic matrix-unit capability (as [launch_predicate_parity]'s), so the tensorized seeds are
    proposed and validated whatever the host backend. *)
@@ -81,6 +84,9 @@ let () =
   let opt = capture ~name:"zi_shape" out in
   let parts = fission opt in
   p "gpt2 qkv projection has one kernel including initialization" (List.length parts = 1);
+  p "the untuned default keeps the projection's zero in its own kernel"
+    (List.map (fission ~fold_zeros:false opt) ~f:(fun (kind, _, _, _) -> kind)
+    |> List.equal Poly.equal [ `Zeros; `Normal ]);
   p_all "qkv kernel retains GPU parallelism" parts ~f:(fun (_, _, _, o) ->
       not (List.is_empty (LL.hardware_axes o.LL.llc)));
   let _, pre, _, _ = List.hd_exn parts in
@@ -191,8 +197,8 @@ let () =
    accumulation's kernel and the segmentation changes in nothing else. An expanded zero joining the
    preceding segment bridged the two projections into one kernel no matmul sketch reaches, doubling
    the tuned CUDA step (staging#934, reverted). The expected segmentation is derived from the
-   unexpanded one (a zero policy that distributes nothing): every whole-node zero segment merged
-   into the segment that follows it. *)
+   untuned default's ([fold_zeros:false], the same zero policy): every whole-node zero segment
+   merged into the segment that follows it. *)
 let () =
   let b = 2 and s = 32 and h = 2 and j = 32 and k = 64 in
   let init ~l ~o ~f = NTDSL.init ~l ~prec:Ir.Ops.single ~o ~f () in
@@ -219,7 +225,7 @@ let () =
     |> Set.of_list (module Ir.Tnode)
   in
   let segments parts = List.map parts ~f:(fun (kind, pre, _, _) -> (kind, writes pre)) in
-  let unexpanded = segments (fission ~zero_sched:(fun _ -> []) opt) in
+  let unexpanded = segments (fission ~fold_zeros:false opt) in
   let folded = segments (fission opt) in
   let rec fold_zeros = function
     | (`Zeros, zs) :: (_, ws) :: rest when Set.is_subset zs ~of_:ws -> ws :: fold_zeros rest
@@ -227,7 +233,7 @@ let () =
     | [] -> []
   in
   let expected = fold_zeros unexpanded in
-  p "the unexpanded segmentation separates every projection zero"
+  p "the untuned default separates every projection zero"
     (List.count unexpanded ~f:(fun (kind, _) -> Poly.equal kind `Zeros) = 3);
   p "folding moves each zero into its own accumulation and changes nothing else"
     (List.equal Set.equal (List.map folded ~f:snd) expected);

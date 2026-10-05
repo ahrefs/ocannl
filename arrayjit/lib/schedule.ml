@@ -7190,8 +7190,8 @@ let keeps_mapping ~mapping (opt : Low_level.optimized) seg (u : funit) standalon
   | Unequal_lengths -> true
   | Ok pairs -> List.for_all pairs ~f:(fun ((g, a), (g0, a0)) -> g >= g0 && a >= a0)
 
-let group_units ?max_chain ?(arity_cuts = false) ?mapping (opt : Low_level.optimized)
-    (units : funit list) : segment list =
+let group_units ?max_chain ?(arity_cuts = false) ?(fold_zeros = false) ?mapping
+    (opt : Low_level.optimized) (units : funit list) : segment list =
   let plc = opt.Low_level.optimize_ctx.placements in
   let close cur acc = match cur with None -> acc | Some seg -> seg :: acc in
   (* One standalone probe per unit, taken only when a merge is judged. An expanded zero shares its
@@ -7250,7 +7250,7 @@ let group_units ?max_chain ?(arity_cuts = false) ?mapping (opt : Low_level.optim
              ~finish:Option.some)
     | `Zeros | `Solo -> false
   in
-  let rec fold_zeros = function
+  let rec fold_pass = function
     | ({ g_kind = `Zeros; g_units = [ { f_fold = Some expand; _ } ]; _ } as zeros)
       :: ({ g_kind = `Normal; _ } as seg)
       :: rest ->
@@ -7258,12 +7258,13 @@ let group_units ?max_chain ?(arity_cuts = false) ?mapping (opt : Low_level.optim
           List.fold seg.g_units
             ~init:(seg_of_unit (expand ()))
             ~f:(fun acc u -> merge_segs ~kind:`Normal acc (seg_of_unit u))
-          :: fold_zeros rest
-        else zeros :: fold_zeros (seg :: rest)
-    | seg :: rest -> seg :: fold_zeros rest
+          :: fold_pass rest
+        else zeros :: fold_pass (seg :: rest)
+    | seg :: rest -> seg :: fold_pass rest
     | [] -> []
   in
-  fold_zeros (go None [] units)
+  let segs = go None [] units in
+  if fold_zeros then fold_pass segs else segs
 
 (** {3 Scope-local replication across segments (option (b) v2)} *)
 
@@ -7597,9 +7598,9 @@ let segments_of_plan (units : funit list) (plan : segmentation) : segment list =
             } )
       | _ -> misfit_segmentation "has an empty segment")
 
-let fission_segmented ?(promote_locals = false) ?(arity_cuts = false) ?keep_mapping ?replay
-    ~(preset : Low_level.optimized -> schedule) ~(zero_sched : Tn.t list -> schedule)
-    ~static_indices (opt : Low_level.optimized) :
+let fission_segmented ?(promote_locals = false) ?(arity_cuts = false) ?(fold_zeros = false)
+    ?keep_mapping ?replay ~(preset : Low_level.optimized -> schedule)
+    ~(zero_sched : Tn.t list -> schedule) ~static_indices (opt : Low_level.optimized) :
     segmentation
     * ([ `Normal | `Zeros | `Solo ] * Low_level.optimized * schedule * Low_level.optimized) list =
   let plc = opt.Low_level.optimize_ctx.placements in
@@ -7627,23 +7628,20 @@ let fission_segmented ?(promote_locals = false) ?(arity_cuts = false) ?keep_mapp
         zero_sched
           (List.filter_map seg.g_units ~f:(fun u -> Option.bind u.f_sum ~f:(fun s -> s.s_top_zero)))
   in
-  let fallback () =
+  let units_arr = Array.of_list units in
+  let fallback seg_units =
     (* Single-kernel compilation, as before fission: no boundary needs the promotions, and placement
-       changes must not leak out of an unfissioned routine. The one kernel is a [`Normal] segment of
-       the whole routine, so a foldable zero at its head is folded exactly as {!segments_of_plan}
-       folds a [`Normal] segment's head: the same code whether derived or replayed. That is the fold
-       collapsing a routine to one kernel (a lone projection), and otherwise harmless -- the
-       per-cell nest is what the kernel's schedule distributes. *)
+       changes must not leak out of an unfissioned routine. [seg_units] are the single segment's
+       units: a zero the fold put at its head (a lone projection folding into one kernel) stays
+       expanded, exactly as {!segments_of_plan} rebuilds a replayed [`Normal] segment's head. *)
     undo_promotions pre_promoted;
     let opt =
-      match units with
-      | { f_fold = Some expand; _ } :: rest ->
-          {
-            opt with
-            llc =
-              Low_level.unflat_lines (List.concat_map (expand () :: rest) ~f:(fun u -> u.f_stmts));
-          }
-      | _ -> opt
+      if List.for_all seg_units ~f:(fun u -> phys_equal u units_arr.(u.f_index)) then opt
+      else
+        {
+          opt with
+          llc = Low_level.unflat_lines (List.concat_map seg_units ~f:(fun u -> u.f_stmts));
+        }
     in
     let sched = schedule_of 0 None opt in
     ([ (`Normal, List.length units) ], [ (`Normal, opt, sched, apply ~static_indices sched opt) ])
@@ -7654,23 +7652,24 @@ let fission_segmented ?(promote_locals = false) ?(arity_cuts = false) ?keep_mapp
         (* The [arity_cuts] mode has its own, stricter merge rule for the sketches' full-arity
            geometry. *)
         let mapping = if arity_cuts then None else keep_mapping in
-        let segs = group_units ?max_chain ~arity_cuts ?mapping opt units in
-        if List.length segs <= 1 then None
+        let segs = group_units ?max_chain ~arity_cuts ~fold_zeros ?mapping opt units in
+        let single segs = Error (List.concat_map segs ~f:(fun g -> g.g_units)) in
+        if List.length segs <= 1 then single segs
         else
-          match resolve_scope_crossings (Array.of_list units) segs with
-          | exception Unfissionable -> None
-          | segs, _ when List.length segs <= 1 -> None
-          | resolved -> Some resolved)
+          match resolve_scope_crossings units_arr segs with
+          | exception Unfissionable -> single segs
+          | segs', _ when List.length segs' <= 1 -> single segs'
+          | resolved -> Ok resolved)
     | Some (plan, _) ->
         (* A recorded plan is applied as it is, or refused: nothing about it is re-derived, so a
            plan that no longer fits the routine must fail loudly rather than degrade to another
            segmentation. *)
         if List.sum (module Int) plan ~f:snd <> List.length units then
           misfit_segmentation "does not cover the routine's statements";
-        if List.length plan <= 1 then None
+        let segs = segments_of_plan units plan in
+        if List.length plan <= 1 then Error (List.concat_map segs ~f:(fun g -> g.g_units))
         else
-          let segs = segments_of_plan units plan in
-          let units = Array.of_list units in
+          let units = units_arr in
           let replicas seg =
             match
               plan_replicas units ~seg_start:(List.hd_exn seg.g_units).f_index
@@ -7680,12 +7679,12 @@ let fission_segmented ?(promote_locals = false) ?(arity_cuts = false) ?keep_mapp
             | None | (exception Unfissionable) ->
                 misfit_segmentation "cuts a scope-local definition from its use"
           in
-          Some (segs, List.map segs ~f:replicas)
+          Ok (segs, List.map segs ~f:replicas)
   in
   let segment () =
     match resolved () with
-    | None -> fallback ()
-    | Some (segs, replicas) ->
+    | Error seg_units -> fallback seg_units
+    | Ok (segs, replicas) ->
         let segs_with_replicas = List.zip_exn segs replicas in
         promoted := pre_promoted @ promote_crossing plc segs_with_replicas;
         let scheduled =
@@ -7707,8 +7706,8 @@ let fission_segmented ?(promote_locals = false) ?(arity_cuts = false) ?keep_mapp
                     let merged = merge_segs ~kind:`Solo pseg seg in
                     let replicas =
                       match
-                        plan_replicas (Array.of_list units)
-                          ~seg_start:(List.hd_exn merged.g_units).f_index (seg_external_ids merged)
+                        plan_replicas units_arr ~seg_start:(List.hd_exn merged.g_units).f_index
+                          (seg_external_ids merged)
                       with
                       | Some defs -> defs
                       | None -> assert false (* Merging only shrinks the validity range. *)
@@ -7722,7 +7721,7 @@ let fission_segmented ?(promote_locals = false) ?(arity_cuts = false) ?keep_mapp
              placements, so undo every promotion (an all-serial small routine must not leak
              observable placement changes; zero2hero's virtual-neuron printouts pinned this). *)
           undo_promotions !promoted;
-          fallback ())
+          fallback (List.concat_map coalesced ~f:(fun (seg, _, _) -> seg.g_units)))
         else
           (* Coalescing may have absorbed a crossing: promotions without a surviving crossing are
              restored. Sound in this direction — the segments' schedules were computed under the
@@ -7742,11 +7741,11 @@ let fission_segmented ?(promote_locals = false) ?(arity_cuts = false) ?keep_mapp
       undo_promotions !promoted;
       Stdlib.Printexc.raise_with_backtrace exn backtrace
 
-let fission_scheduled ?promote_locals ?arity_cuts ?keep_mapping ~preset ~zero_sched ~static_indices
-    opt =
+let fission_scheduled ?promote_locals ?arity_cuts ?fold_zeros ?keep_mapping ~preset ~zero_sched
+    ~static_indices opt =
   snd
-    (fission_segmented ?promote_locals ?arity_cuts ?keep_mapping ~preset ~zero_sched ~static_indices
-       opt)
+    (fission_segmented ?promote_locals ?arity_cuts ?fold_zeros ?keep_mapping ~preset ~zero_sched
+       ~static_indices opt)
 
 let fission_default ?promote_locals ?keep_mapping ~preset ~zero_sched ~static_indices
     (opt : Low_level.optimized) : Low_level.optimized list =

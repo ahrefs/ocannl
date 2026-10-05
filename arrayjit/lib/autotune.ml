@@ -2323,12 +2323,19 @@ let compile_candidate ?name ~static_indices ~base_opt ~canon ~limits ~is_gpu ~is
             | F_sketch { fine; _ } -> fine
             | F_preset _ | F_split _ | F_saved _ | F_split_saved _ -> false
           in
+          (* The zero fold (gh-ocannl-1175) ships only with the sketches, which seeded their keyed
+             segments under it; the preset flavors keep the untuned pipeline's separate zero. *)
+          let fold_zeros =
+            match flavor with
+            | F_sketch _ -> true
+            | F_preset _ | F_split _ | F_saved _ | F_split_saved _ -> false
+          in
           let segmentation, tuples =
             (* Match the default pipeline's placements (statement-crossing [Local]s promoted on
                GPU), so fissioned candidates and the untuned baseline schedule the same code. *)
             Sched.fission_segmented ~promote_locals:is_gpu
               ?keep_mapping:(Sched.fission_keep_mapping ~is_gpu ~limits)
-              ?replay ~arity_cuts ~preset ~zero_sched ~static_indices opt
+              ?replay ~arity_cuts ~fold_zeros ~preset ~zero_sched ~static_indices opt
           in
           let saved_with_registries = SC.save_segments ~static_indices segmentation tuples in
           let posts = List.map tuples ~f:(fun (_, _, _, post) -> post) in
@@ -3250,7 +3257,7 @@ let model_default ?name ?report ctx comp bindings =
                to the default preset. *)
             let fiss =
               match
-                Sched.fission_scheduled ~promote_locals:is_gpu
+                Sched.fission_scheduled ~promote_locals:is_gpu ~fold_zeros:true
                   ?keep_mapping:(Sched.fission_keep_mapping ~is_gpu ~limits)
                   ~preset ~zero_sched ~static_indices (scratch_of opt)
               with
@@ -3291,7 +3298,7 @@ let model_default ?name ?report ctx comp bindings =
                     (* Score the substituted pipeline whole, so it competes on the same footing as
                        the other candidates. *)
                     match
-                      Sched.fission_scheduled ~promote_locals:is_gpu
+                      Sched.fission_scheduled ~promote_locals:is_gpu ~fold_zeros:true
                         ?keep_mapping:(Sched.fission_keep_mapping ~is_gpu ~limits)
                         ~preset:subst_preset ~zero_sched ~static_indices (scratch_of opt)
                     with
@@ -3352,7 +3359,7 @@ let model_default ?name ?report ctx comp bindings =
             in
             validate_segments_for_model
               (List.map
-                 (Sched.fission_scheduled ~promote_locals:is_gpu
+                 (Sched.fission_scheduled ~promote_locals:is_gpu ~fold_zeros:true
                     ?keep_mapping:(Sched.fission_keep_mapping ~is_gpu ~limits)
                     ~preset:subst_preset ~zero_sched ~static_indices opt)
                  ~f:(fun (_, _, _, post) -> post))
@@ -5001,7 +5008,7 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
               in
               let zero_sched tns = if is_gpu then Sched.zero_expansion ~limits tns else [] in
               match
-                Sched.fission_scheduled ~promote_locals:is_gpu
+                Sched.fission_scheduled ~promote_locals:is_gpu ~fold_zeros:true
                   ?keep_mapping:(Sched.fission_keep_mapping ~is_gpu ~limits)
                   ~arity_cuts ~preset ~zero_sched ~static_indices scratch
               with

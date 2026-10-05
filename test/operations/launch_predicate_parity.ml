@@ -28,9 +28,9 @@
    product cap is the one genuinely tight per-dimension cap, and no Apple part reproduces it). The
    lowering is real. The matmul site is captured directly; the conv sites are derived from the
    pre-schedule normal segment of [Schedule.fission_scheduled], including the covering per-cell zero
-   companion GPU fission folds into it (claimed below, so a declined fold cannot pass vacuously).
-   Only [Schedule.apply] and the seeding API consume those sites, so the claims remain
-   backend-independent while the CUDA run exercises the real GPU lowering path. *)
+   companion the sketch candidates' fission folds into it (claimed below, so a declined fold cannot
+   pass vacuously). Only [Schedule.apply] and the seeding API consume those sites, so the claims
+   remain backend-independent while the CUDA run exercises the real GPU lowering path. *)
 
 open Base
 open Ocannl
@@ -340,7 +340,10 @@ let () =
         ~lowered_transform:(fun opt ->
           let preset seg = Sched.default_gpu ~min_parallel:1 ~limits seg in
           let zero_sched tns = Sched.zero_expansion ~limits tns in
-          let segments = Sched.fission_scheduled ~preset ~zero_sched ~static_indices:[] opt in
+          (* The sketch candidates' segmentation: the zero fold ships with them (gh-ocannl-1175). *)
+          let segments =
+            Sched.fission_scheduled ~fold_zeros:true ~preset ~zero_sched ~static_indices:[] opt
+          in
           List.iter segments ~f:(fun (_, pre, _, _) ->
               match Autotune.detect_conv pre.LL.llc with
               | Some _ -> captured := Some pre

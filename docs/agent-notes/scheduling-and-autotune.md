@@ -144,7 +144,11 @@ files.
   as the unexpanded one with zero segments folded forward; seed validity alone did not catch it.
   Sketch families give the folded zero the site's geometry through `companion_geometry`, and the
   tuner and model selector explore a singleton segment whose pre-schedule digest the fold changed,
-  since whole-routine sketches see the original whole-node zero.
+  since whole-routine sketches see the original whole-node zero. The fold is OPT-IN
+  (`fission_scheduled ~fold_zeros`): only the sketch candidates and their seeding pass it. The
+  untuned default keeps the separate zero kernel because an untiled accumulation with its zero
+  register-forwarded measured 7% slower on HIP gfx1151 (unified memory), although its emitted
+  source differs only in that forwarding.
 - A GPU schedule must cover EVERY materialized-writing nest of the routine, not only the one the
   pipeline builds. Launch dimensions are kernel-global, so `Low_level.validate_parallel` rejects any
   companion write (a bias/relu tail; the elementwise statements an aligned-merged fission segment

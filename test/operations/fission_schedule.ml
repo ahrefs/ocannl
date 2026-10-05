@@ -433,7 +433,9 @@ let () =
     | LL.For_loop { body; _ } | LL.If { body; _ } -> writes_tn tn body
     | _ -> false
   in
-  let segments ~arity_cuts opt =
+  (* The sketch candidates' segmentation, which folds each reduction's zero (gh-ocannl-1175); the
+     untuned default ([fold_zeros:false]) keeps it separate. *)
+  let segments ?(fold_zeros = true) ~arity_cuts opt =
     (* A hermetic copy per query: [promote_locals] mutates the lowering's placements, and the modes
        must not observe each other's surviving promotions. *)
     let scratch =
@@ -444,7 +446,7 @@ let () =
       }
     in
     let limits = Ir.Backend_intf.no_hardware_limits in
-    Sched.fission_scheduled ~promote_locals:true ~arity_cuts
+    Sched.fission_scheduled ~promote_locals:true ~arity_cuts ~fold_zeros
       ~preset:(Sched.default_gpu ~min_parallel:1 ~limits)
       ~zero_sched:(Sched.zero_expansion ~min_parallel:1 ~limits)
       ~static_indices:[] scratch
@@ -511,7 +513,11 @@ let () =
           && (not (writes_tn r3.Tensor.value gemm.LL.llc))
           && writes_tn r3.Tensor.value red.LL.llc
           && not (writes_tn z3.Tensor.value red.LL.llc)
-      | _ -> false)
+      | _ -> false);
+  p "arity: the untuned default keeps each sum-reduce zero in its own kernel"
+    (List.equal Poly.equal
+       (seg_kinds (segments ~fold_zeros:false ~arity_cuts:false opt3))
+       [ `Zeros; `Normal; `Zeros; `Normal ])
 
 (* --- 4. Executed: backward pass — Zero_out and reduction statements segment away from the gradient
    accumulation nest. --- *)

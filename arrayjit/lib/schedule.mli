@@ -843,6 +843,7 @@ val fission_keep_mapping :
 val fission_scheduled :
   ?promote_locals:bool ->
   ?arity_cuts:bool ->
+  ?fold_zeros:bool ->
   ?keep_mapping:(Low_level.optimized -> schedule) ->
   preset:(Low_level.optimized -> schedule) ->
   zero_sched:(Tnode.t list -> schedule) ->
@@ -857,15 +858,22 @@ val fission_scheduled :
     [optimized] slice and [zero_sched] on each [`Zeros] segment's nodes, and each result tuple
     carries the segment kind, the pre-schedule segment, the schedule chosen for it, and the
     scheduled segment ({!apply} of the schedule). [`Solo] segments (opaque to the analysis, or
-    coalesced runs of unannotated segments) get the empty schedule. A [`Zeros] segment holding a
-    single zero that initializes the reduction opening the next segment folds into that segment,
-    expanded by [zero_sched]'s [Expand_zero], when the merge rules below re-admit the whole segment
-    with the per-cell zero at its head (gh-ocannl-1175); no other boundary moves, so the fold never
-    merges two reductions the zero kept apart. When fission does not apply (single segment,
-    unfissionable crossings, or everything coalesces back) the result is a single [`Normal] tuple
-    over the whole routine with [preset]'s schedule. Callers compile each scheduled segment as its
-    own kernel in order (the plural transform seam of backend [compile]); see
-    {!maybe_default_schedules} for the synchronization contract.
+    coalesced runs of unannotated segments) get the empty schedule.
+
+    [fold_zeros] (default [false], gh-ocannl-1175): a [`Zeros] segment holding a single zero that
+    initializes the reduction opening the next segment folds into that segment, expanded by
+    [zero_sched]'s [Expand_zero], when the merge rules below re-admit the whole segment with the
+    per-cell zero at its head; no other boundary moves, so the fold never merges two reductions the
+    zero kept apart. Only the autotuner's and model selector's per-segment sketch candidates pass
+    it, so the fold ships only where a timed (or modeled) sketch pipeline carries it: the untuned
+    default keeps the separate zero kernel, because an untiled accumulation with its zero folded
+    measured 7% slower on HIP (unified memory) although its emitted source only drops the opening
+    read. A replayed segmentation refolds where its record says.
+
+    When fission does not apply (single segment, unfissionable crossings, or everything coalesces
+    back) the result is a single [`Normal] tuple over the whole routine with [preset]'s schedule.
+    Callers compile each scheduled segment as its own kernel in order (the plural transform seam of
+    backend [compile]); see {!maybe_default_schedules} for the synchronization contract.
 
     [arity_cuts] (default [false], gh-ocannl-574): segment for the {e full-arity} sketch pipelines
     instead of the default presets. The no-parallelism-loss guard normally compares chains under the
@@ -913,6 +921,7 @@ type segmentation = ([ `Normal | `Zeros | `Solo ] * int) list [@@deriving sexp, 
 val fission_segmented :
   ?promote_locals:bool ->
   ?arity_cuts:bool ->
+  ?fold_zeros:bool ->
   ?keep_mapping:(Low_level.optimized -> schedule) ->
   ?replay:segmentation * (int -> Low_level.optimized -> schedule) ->
   preset:(Low_level.optimized -> schedule) ->
