@@ -341,6 +341,11 @@ let () =
       ( "sandbox wrapper",
         {dune|(alias (name sb) (deps (sandbox (alias runtest-gpu))))|dune},
         "build @d/sb" );
+      ( "alias form outside a dependency field",
+        {dune|(rule
+ ; ocannl-backend: none -- links no backend in this fixture.
+ (alias odd2) (action (run %{dep:d.exe})) (enabled_if (alias x)))|dune},
+        "build @d/odd2" );
     ]
     ~f:(fun (what, dune, argv) ->
       let dune_files = [ ("d", dune); n ] in
@@ -363,6 +368,8 @@ let () =
       ("a top-level include", {dune|(include rules.inc)|dune});
       ("a cram test", {dune|(cram (deps ocannl_config))|dune});
       ("an install stanza", {dune|(install (section share) (files out.dat))|dune});
+      ( "a copy_files attached to an alias",
+        {dune|(copy_files (alias probe) (files ../g/*.dat))|dune} );
       ( "a preprocessing action",
         {dune|(library (name helper) (modules helper) (preprocess (action (run cat %{input-file}))))|dune}
       );
@@ -395,6 +402,18 @@ let () =
  (action (run %{dep:reader.exe})))
 (alias (name probe) (deps output/result))|dune},
         "build @@d/probe" );
+      ( "a bare-star glob",
+        reader ^ {dune|
+(alias (name probe) (deps (glob_files *)))|dune},
+        "build @@d/probe" );
+      ( "an alias in a test's link_deps",
+        reader
+        ^ {dune|
+(rule (alias gpu-input) (deps a.actual) (action (progn)))
+(test
+ ; ocannl-backend: none -- host-only runner in this fixture.
+ (name none) (modules none) (link_deps (alias gpu-input)) (deps ocannl_config))|dune},
+        "build @@d/runtest-none" );
       ( "a character-class glob",
         reader ^ {dune|
 (alias (name probe) (deps (glob_files "[ab].actual")))|dune},
@@ -442,6 +461,35 @@ let () =
      configuration through the [.actual] its diff consumes still does. A new stanza that breaks the
      proof for [scans] -- a construct not modelled exactly, anywhere compilation reaches -- shows
      here, rather than as scans quietly taking a GPU token again. *)
+  (* The inventory goes where dune goes: a [(dirs …)] stanza admits a hidden directory, whose own
+     [(dirs …)] restricts it in turn, and an underscore directory stays out. *)
+  let root = Stdlib.Filename.temp_file "slot_kind_dirs" "" in
+  Stdlib.Sys.remove root;
+  let made = ref [] in
+  let file rel content =
+    let path = Stdlib.Filename.concat root rel in
+    let rec mkdirs d =
+      if not (Stdlib.Sys.file_exists d) then (
+        mkdirs (Stdlib.Filename.dirname d);
+        Stdlib.Sys.mkdir d 0o755;
+        made := d :: !made)
+    in
+    mkdirs (Stdlib.Filename.dirname path);
+    Out_channel.write_all path ~data:content;
+    made := path :: !made
+  in
+  file "dune" "(dirs :standard .x)";
+  file ".x/dune" "(dirs keep)";
+  file ".x/keep/dune" "";
+  file ".x/drop/dune" "";
+  file "_skip/dune" "";
+  file "plain/dune" "";
+  let read = List.map (Slot_kind.dune_files ~root) ~f:fst in
+  List.iter !made ~f:(fun p ->
+      if Stdlib.Sys.is_directory p then Stdlib.Sys.rmdir p else Stdlib.Sys.remove p);
+  printf "dirs: %s\n" (String.concat ~sep:" " (List.map read ~f:(fun d -> "[" ^ d ^ "]")));
+  p "the inventory reads where dirs stanzas send dune, and nowhere else"
+    (List.equal String.equal read [ ""; ".x"; ".x/keep"; "plain" ]);
   let live = Slot_kind.dune_files ~root:"../.." in
   List.iter
     [

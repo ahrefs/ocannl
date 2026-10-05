@@ -53,7 +53,9 @@ let gpu_backends = [ "cuda"; "hip"; "metal" ]
 type need =
   | Alias_need of { dir : string; alias : string; recursive : bool }
   | File_need of string  (** a file's basename *)
-  | Glob_need of string  (** a basename pattern *)
+  | Glob_need of { under : (string * bool) option; pattern : string }
+      (** a basename pattern, matched in one directory (or below it, when recursive), or anywhere
+          when the directory cannot be resolved *)
 
 type role =
   | Runs  (** the stanza itself: its action, run on the alias it sits on or for its targets *)
@@ -217,7 +219,8 @@ let file_needs sexp =
       in
       List.filter_map (atom :: payloads) ~f:(fun a ->
           Option.map (pattern_of a) ~f:(fun b ->
-              if String.exists b ~f:is_wild then Glob_need b else File_need b)))
+              if String.exists b ~f:is_wild then Glob_need { under = None; pattern = b }
+              else File_need b)))
 
 (** The first pform in [sexp] this does not model exactly: one outside the lists above, a named
     binding aside. *)
@@ -244,13 +247,36 @@ let inexact_pform ~bindings sexp =
             in
             if exact then None else Some (Printf.sprintf "pform %%{%s}" p)))
 
+(* The fields written in dune's dependency specification, wherever they sit: a stanza's [deps], an
+   inline-test library's [(inline_tests (deps …))], an executable's [link_deps], a preprocessor's
+   [preprocessor_deps], a foreign stub's [extra_deps] (Codex review on PR #1027). *)
+
 (** A stanza's dependency fields: [deps], and an inline-test library's [(inline_tests (deps …))]. *)
-let dep_fields sexp =
-  Option.to_list (Scan.field sexp "deps")
-  @
-  match Scan.field sexp "inline_tests" with
-  | Some args -> Option.to_list (Scan.field_in args "deps")
-  | None -> []
+let dep_field_names = [ "deps"; "link_deps"; "preprocessor_deps"; "extra_deps" ]
+
+let rec dep_fields = function
+  | Sexp.Atom _ -> []
+  | Sexp.List (Sexp.Atom h :: args) when List.mem dep_field_names h ~equal:String.equal -> [ args ]
+  | Sexp.List l -> List.concat_map l ~f:dep_fields
+
+(** The first [(alias …)]/[(alias_rec …)] form in [sexp] outside a dependency field -- one this
+    cannot place, such as a [copy_files] attaching its copies to an alias -- other than a rule's own
+    [(alias …)] field. *)
+let stray_alias sexp =
+  let rec inner = function
+    | Sexp.Atom _ -> None
+    | Sexp.List (Sexp.Atom h :: _) when List.mem dep_field_names h ~equal:String.equal -> None
+    | Sexp.List (Sexp.Atom ("alias" | "alias_rec") :: _) as form ->
+        Some (Printf.sprintf "alias form %s" (Sexp.to_string form))
+    | Sexp.List l -> List.find_map l ~f:inner
+  in
+  match sexp with
+  | Sexp.List (Sexp.Atom head :: fields) ->
+      List.find_map fields ~f:(function
+        (* A rule's own [(alias …)] is the alias it sits on. *)
+        | Sexp.List [ Sexp.Atom "alias"; Sexp.Atom _ ] when String.equal head "rule" -> None
+        | field -> inner field)
+  | other -> inner other
 
 (** What a stanza's dependency fields need beyond its atoms -- the aliases they name and the globs
     they match -- with the names their bindings give, or the first form this does not model exactly.
@@ -269,8 +295,21 @@ let dep_needs ~dir sexp =
             let dir, alias = Option.value (String.rsplit2 p ~on:'/') ~default:("", p) in
             Ok ([ Alias_need { dir; alias; recursive = String.equal h "alias_rec" } ], [])
         | None -> Error (Printf.sprintf "dependency (%s %s)" h spec))
-    | Sexp.List [ Sexp.Atom ("glob_files" | "glob_files_rec"); Sexp.Atom pattern ] ->
-        Ok (Option.to_list (Option.map (pattern_of pattern) ~f:(fun g -> Glob_need g)), [])
+    | Sexp.List [ Sexp.Atom (("glob_files" | "glob_files_rec") as h); Sexp.Atom spec ] ->
+        (* In the directory it names (and below, for [glob_files_rec]); every pform a wildcard, and
+           a bare [*] kept -- it matches every target there (Codex review on PR #1027). *)
+        let in_dir, base =
+          match String.rsplit2 spec ~on:'/' with Some (d, b) -> (d, b) | None -> ("", spec)
+        in
+        let pattern =
+          String.concat
+            (List.map (Scan.pieces base) ~f:(function Scan.Literal l -> l | Scan.Pform _ -> "*"))
+        in
+        let under =
+          Option.map (resolve ~dir in_dir) ~f:(fun d -> (d, String.equal h "glob_files_rec"))
+        in
+        Ok
+          ([ Glob_need { under; pattern = (if String.is_empty pattern then "*" else pattern) } ], [])
     (* Each in its one shape: atoms only, so a form wrapping another dependency -- a [sandbox]
        around an alias, say -- is not read as carrying none (Codex review on PR #1027). *)
     | Sexp.List (Sexp.Atom ("file" | "source_tree" | "env_var" | "universe" | "sandbox") :: args)
@@ -362,10 +401,14 @@ let views_of ~dir ~named ~reads_config sexp =
       | Error form -> ([], Some form)
     in
     let inexact =
-      Option.first_some inexact
-        (Option.some_if
-           (List.mem (Scan.atoms sexp) "dynamic-run" ~equal:String.equal)
-           "dynamic-run action")
+      List.find_map ~f:Fn.id
+        [
+          inexact;
+          stray_alias sexp;
+          Option.some_if
+            (List.mem (Scan.atoms sexp) "dynamic-run" ~equal:String.equal)
+            "dynamic-run action";
+        ]
     in
     {
       dir;
@@ -398,7 +441,12 @@ let views_of ~dir ~named ~reads_config sexp =
     (* A head the inventory does not model is a hole in it -- an [(include …)] brings in stanzas
        this never reads -- so it is seeded like a compilation, for every batch. *)
     if not known then [ compiled ~needs:[] unknown ]
-    else if not (List.mem compiling_heads head ~equal:String.equal) then []
+    else if not (List.mem compiling_heads head ~equal:String.equal) then
+      (* An inert head attaching anything to an alias -- a [copy_files] long form, say -- is a hole
+         too: no alias here carries it (Codex review on PR #1027). *)
+      if List.mem running_heads head ~equal:String.equal then []
+      else
+        Option.to_list (Option.map (stray_alias sexp) ~f:(fun why -> compiled ~needs:[] (Some why)))
     else
       (* A test's [deps] and [action], and an inline-test library's [inline_tests], are its run. *)
       let fields =
@@ -411,14 +459,27 @@ let views_of ~dir ~named ~reads_config sexp =
                 | _ -> true))
         | other -> other
       in
-      let inexact =
-        Option.first_some
-          (Option.some_if
-             (List.mem (Scan.atoms fields) "action" ~equal:String.equal)
-             "preprocessing action")
-          (inexact_pform ~bindings:[] fields)
+      let aliases, bindings, malformed =
+        match dep_needs ~dir fields with
+        | Ok (needs, bindings) -> (needs, bindings, None)
+        | Error form -> ([], [], Some form)
       in
-      [ compiled ~needs:(List.dedup_and_sort (file_needs fields) ~compare:Poly.compare) inexact ]
+      let inexact =
+        List.find_map ~f:Fn.id
+          [
+            malformed;
+            stray_alias fields;
+            Option.some_if
+              (List.mem (Scan.atoms fields) "action" ~equal:String.equal)
+              "preprocessing action";
+            inexact_pform ~bindings fields;
+          ]
+      in
+      [
+        compiled
+          ~needs:(List.dedup_and_sort (aliases @ file_needs fields) ~compare:Poly.compare)
+          inexact;
+      ]
   in
   run :: compile
 
@@ -617,7 +678,9 @@ let reached stanzas targets =
                   if not (List.is_empty s.attached && List.is_empty s.targets) then add i)
                 else if List.mem s.attached alias ~equal:String.equal then add i))
   in
-  let produce matches = List.iter producers ~f:(fun (i, t) -> if matches t then add i) in
+  let produce matches =
+    List.iter producers ~f:(fun (i, t) -> if matches arr.(i).dir t then add i)
+  in
   List.iter targets ~f:(fun (Alias { dir; alias; recursive }) ->
       request ~root:dir ~alias ~recursive);
   Array.iteri arr ~f:(fun i s ->
@@ -625,9 +688,13 @@ let reached stanzas targets =
   while not (Queue.is_empty queue) do
     List.iter arr.(Queue.dequeue_exn queue).needs ~f:(function
       | Alias_need { dir; alias; recursive } -> request ~root:dir ~alias ~recursive
-      | File_need f -> produce (fun t -> Scan.glob_could_match t ~name:f)
-      | Glob_need g ->
-          produce (fun t -> String.exists t ~f:is_wild || Scan.glob_could_match g ~name:t))
+      | File_need f -> produce (fun _ t -> Scan.glob_could_match t ~name:f)
+      | Glob_need { under; pattern } ->
+          produce (fun dir t ->
+              (match under with
+                | None -> true
+                | Some (root, recursive) -> in_scope ~recursive ~root dir)
+              && (String.exists t ~f:is_wild || Scan.glob_could_match pattern ~name:t)))
   done;
   List.filteri stanzas ~f:(fun i _ -> seen.(i))
 
@@ -652,23 +719,48 @@ let describe s =
   | Compiles -> Printf.sprintf "it reads the dune file in %s" dir
 
 (** Every dune file under [root] that dune itself would read, as [(dir, content)] with [dir]
-    relative to [root] ([""] for [root] itself): dune skips directories whose name starts with [.]
-    or [_] (_build, _opam, .git, ...). Reading more than dune does only widens the answer. *)
+    relative to [root] ([""] for [root] itself). Into a directory's subdirectories as dune goes: by
+    default the ones whose name starts with neither [.] nor [_] (not _build, _opam, .git, ...), and
+    where a [(dirs …)] stanza says otherwise, the ones it names -- [:standard] for that default, a
+    name or a glob for the subdirectories it matches (the root's [(dirs :standard .github .claude)]
+    admits [.claude], whose own [(dirs skills)] keeps its worktrees out; Codex review on PR #1027).
+    A [dirs] stanza in any other shape raises: the caller takes an unreadable tree as every backend.
+    Reading more than dune does only widens the answer. *)
 let dune_files ~root =
+  let standard e = not (String.is_prefix e ~prefix:"." || String.is_prefix e ~prefix:"_") in
+  let admitted content entries =
+    match
+      List.filter_map (Scan.stanzas content) ~f:(function
+        | Sexp.List (Sexp.Atom "dirs" :: args) -> Some args
+        | _ -> None)
+    with
+    | [] -> List.filter entries ~f:standard
+    | [ args ] ->
+        List.filter entries ~f:(fun e ->
+            List.exists args ~f:(function
+              | Sexp.Atom ":standard" -> standard e
+              | Sexp.Atom name -> Scan.glob_could_match name ~name:e
+              | other ->
+                  failwith
+                    (Printf.sprintf "a (dirs …) entry this does not read: %s" (Sexp.to_string other))))
+    | _ -> failwith "more than one (dirs …) stanza"
+  in
   let rec under dir =
     let path = if String.is_empty dir then root else Stdlib.Filename.concat root dir in
     let entries = Stdlib.Sys.readdir path |> Array.to_list |> List.sort ~compare:String.compare in
-    let here =
+    let content =
       if List.mem entries "dune" ~equal:String.equal then
-        [ (dir, Stdio.In_channel.read_all (Stdlib.Filename.concat path "dune")) ]
-      else []
+        Some (Stdio.In_channel.read_all (Stdlib.Filename.concat path "dune"))
+      else None
     in
-    here
-    @ List.concat_map entries ~f:(fun e ->
-        let sub = if String.is_empty dir then e else dir ^ "/" ^ e in
-        if String.is_prefix e ~prefix:"." || String.is_prefix e ~prefix:"_" then []
-        else if Stdlib.Sys.is_directory (Stdlib.Filename.concat root sub) then under sub
-        else [])
+    let subdirs =
+      List.filter entries ~f:(fun e -> Stdlib.Sys.is_directory (Stdlib.Filename.concat path e))
+    in
+    let subdirs =
+      match content with Some c -> admitted c subdirs | None -> List.filter subdirs ~f:standard
+    in
+    Option.to_list (Option.map content ~f:(fun c -> (dir, c)))
+    @ List.concat_map subdirs ~f:(fun e -> under (if String.is_empty dir then e else dir ^ "/" ^ e))
   in
   under ""
 
