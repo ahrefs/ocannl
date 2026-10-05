@@ -11,6 +11,7 @@ Final dev   loss below 2.8: true
 Final test  loss below 2.8: true
 every epoch and evaluation mean is a finite, nonnegative cross-entropy: true
 Generated 3 names, all chars in alphabet: true
-Start-context top-3 next chars are a, e, i in that order: true
-Start-context top-3 probabilities are separated by more than 0.05: true
-Start-context top-3 probabilities lie in their coarse bands (0.15-0.45, 0.08-0.30, 0.04-0.20): true
+Start-context most likely character is a: true
+Leading start-context probability has a margin above 0.03: true
+Start-context top-3 probabilities lie in their coarse bands (0.10-0.45, 0.04-0.30, 0.02-0.20): true
+Inference probabilities depend on the supplied context: true

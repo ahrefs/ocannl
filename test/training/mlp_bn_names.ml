@@ -16,10 +16,8 @@ module type Backend = Ir.Backend_intf.Backend
    from Part 2's in its last two lines: the sampled names are not portable here (see the comment on
    generation below), so they go to stderr and stdout summarizes them instead.
 
-   Note: [batch_norm1d] inherits [batch_norm2d]'s FIXME — running statistics are not yet
-   implemented, so inference falls back to the learned [gamma]/[beta] rather than population
-   estimates. Acceptable for this tutorial example; do not rely on inference correctness for
-   distribution-shifted inputs. *)
+   BatchNorm maintains channel-wise running statistics during training and uses them for evaluation
+   and generation, including the single-example inference batches. *)
 
 let block_size = 3
 let embed_dim = 10
@@ -387,38 +385,18 @@ let () =
     aux 0
   in
 
-  (* The sampled text is deliberately NOT part of the golden output. Two reasons, either one fatal
-     to a byte-exact expectation:
-
-     1. With a single-example inference batch the BatchNorm above collapses to [beta] regardless of
-     input (the running-statistics FIXME in [nn_blocks.ml], spelled out in
-     [docs/makemore_tutorial.md]), so the characters are essentially a readout of the [dice] stream
-     against a near-constant distribution, not of the model reading its context.
-
-     2. They sit on knife-edge boundaries of the sampling CDF. Under this seed, step 15 of the
-     second name draws dice=0.294824 against an 'a'/'b' boundary at 0.294888 — a margin of 6.4e-5. A
-     ~2e-4 wiggle in the trained weights, small enough to leave all three printed losses identical
-     at 4 decimals, moves the boundary past the dice and flips the character; that is exactly what
-     differs between backends, config profiles, and hardware. Re-pinning the text would just
-     relocate the failure to the next machine.
-
-     So the names go to stderr for the reader (the [slow] rule captures only stdout), and stdout
-     keeps what is portable: that sampling stayed inside the alphabet, and the head of the
-     distribution the sampler consumes. *)
+  (* The sampled text goes to stderr: small cross-backend changes in trained probabilities can move
+     a draw across a sampling CDF boundary. The golden retains alphabet membership and the head of
+     the start-context distribution instead. *)
   let names = Array.init 3 ~f:(fun _ -> gen_name ()) in
   Array.iter names ~f:(fun name -> eprintf "sampled name (not part of the golden): %s\n%!" name);
   Verdict.p_all
     (Printf.sprintf "Generated %d names, all chars in alphabet" (Array.length names))
     (Array.to_list names) ~f:(String.for_all ~f:Char.is_alpha);
 
-  (* Head of the learned next-character distribution at the start context. The probabilities
-     themselves drift by ~3e-4 between builds that disagree on the sampled text, and a fixed print
-     precision only moves the boundary at which that drift shows: two decimals of 0.2749 and 0.2750
-     differ (gh-ocannl-725). What is robust here is the RANKING and its margins — the gaps between
-     the top three characters are ~0.08, some 200x the drift — so the digits go to stderr and stdout
-     keeps the ordered letters plus the separation that makes the order meaningful. Both claims
-     discriminate: a model that failed to learn the letter-frequency head would rank differently,
-     and a collapsed (near-uniform) distribution would fail the margin. *)
+  (* Stored BatchNorm statistics make this distribution depend on the supplied context. Print the
+     exact probabilities to stderr and pin the leading character and a broad margin; the second and
+     third ranks can exchange places under small numerical changes. *)
   set_ctx_one_hot (Array.create ~len:block_size dot_idx);
   let start_probs, _dice = next_probs () in
   let ranked =
@@ -431,29 +409,18 @@ let () =
     (top3
     |> Array.map ~f:(fun (p, i) -> Printf.sprintf "%c=%.2f" (letter_of i) p)
     |> String.concat_array ~sep:" ");
-  let letters =
-    top3
-    |> Array.map ~f:(fun (_, i) -> String.of_char (letter_of i))
-    |> String.concat_array ~sep:" "
-  in
-  Verdict.p "Start-context top-3 next chars are a, e, i in that order"
-    (String.equal letters "a e i");
-  let min_gap = 0.05 in
+  Verdict.p "Start-context most likely character is a" (Char.equal (letter_of (snd top3.(0))) 'a');
+  Verdict.p "Leading start-context probability has a margin above 0.03"
+    Float.(fst top3.(0) -. fst top3.(1) > 0.03);
+  (* Coarse bands reject a collapsed or excessively spiked head while allowing backend drift. *)
+  let bands = [| (0.10, 0.45); (0.04, 0.30); (0.02, 0.20) |] in
   Verdict.p_alli
-    (Printf.sprintf "Start-context top-3 probabilities are separated by more than %g" min_gap)
-    (Array.to_list top3) ~f:(fun k (p, _) ->
-      k = 0
-      ||
-      let prev = fst top3.(k - 1) in
-      Float.(prev -. p > min_gap));
-  (* Ranking and separation are both SHAPE claims: a head of 0.70 / 0.20 / 0.08 satisfies each of
-     them while being severely distorted, and the two printed decimals used to rule that out (Codex
-     round 1, P2). So keep a magnitude check too, as coarse per-rank bands -- each is roughly a
-     factor of two wide around the observed 0.28 / 0.17 / 0.10, some hundreds of times the ~3e-4
-     cross-build drift, so it is portable while still rejecting a collapsed or a spiked head. *)
-  let bands = [| (0.15, 0.45); (0.08, 0.30); (0.04, 0.20) |] in
-  Verdict.p_alli
-    "Start-context top-3 probabilities lie in their coarse bands (0.15-0.45, 0.08-0.30, 0.04-0.20)"
+    "Start-context top-3 probabilities lie in their coarse bands (0.10-0.45, 0.04-0.30, 0.02-0.20)"
     (Array.to_list top3) ~f:(fun k (p, _) ->
       let lo, hi = bands.(k) in
-      Float.(p >= lo && p < hi))
+      Float.(p >= lo && p < hi));
+  set_ctx_one_hot (Array.create ~len:block_size (Dataprep.Names.char_index 'a'));
+  let changed_probs, _dice = next_probs () in
+  Verdict.p_exists "Inference probabilities depend on the supplied context"
+    (Array.to_list (Array.mapi changed_probs ~f:(fun i p -> Float.abs (p -. start_probs.(i)))))
+    ~f:(fun difference -> Float.(difference > 0.01))

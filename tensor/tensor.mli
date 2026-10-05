@@ -47,13 +47,13 @@ type diff = {
 
 type t = {
   params : (t, comparator_witness) Base.Set.t;
-      (** Parameters [t.params] are the descendants of [t] whose {!field:diff} is not [None] and
-          whose {!field:forward} code is not included in [t.forward] as it is meant for
-          initialization. This is the {e state} set — what must be initialized, saved and restored
-          for [t]'s forward pass — so a parameter detached behind [Operation.stop_gradient] (a
-          frozen backbone) is deliberately included even though [t]'s backprop never writes its
-          gradient. Optimizer-side consumers want the {e trained} subset instead:
-          [Train.trainable_params] derives it from the backprop code (gh-ocannl-673). *)
+      (** Parameters [t.params] are the descendants of [t] whose {!field:forward} code is not
+          included in [t.forward] as it is meant for initialization. This is the {e state} set —
+          what must be initialized, saved and restored for [t]'s forward pass, including
+          non-differentiable running statistics — so a parameter detached behind
+          [Operation.stop_gradient] (a frozen backbone) is deliberately included even though [t]'s
+          backprop never writes its gradient. Optimizer-side consumers want the {e trained} subset
+          instead: [Train.trainable_params] derives it from the backprop code (gh-ocannl-673). *)
   forward : comp;
   diff : diff option;
   value : tn;

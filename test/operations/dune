@@ -1503,6 +1503,16 @@
   (pps ppx_here ppx_ocannl ppx_sexp_conv)))
 
 (test
+ (name batch_norm_running)
+ (package neural_nets_lib)
+ ; ocannl-backend: cc -- tiny executed momentum and inference oracles
+ (deps ocannl_config)
+ (modules batch_norm_running)
+ (libraries base ocannl stdio arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
  (name layer_norm_numeric)
  (package neural_nets_lib)
  (deps

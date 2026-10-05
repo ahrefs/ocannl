@@ -349,9 +349,9 @@ let exempt_zero_reference_exports =
        (lib/ has no interfaces); this block is its census. *)
     "Calibrate.named";
     "Nn_blocks.avg_pool2d";
-    (* gh-ocannl-1146 replaced the scheduler test's copied residual block with the public
-       constructor; batch_norm2d remains a public building block used inside that constructor. *)
-    "Nn_blocks.batch_norm2d";
+    (* Shared implementation of batch_norm1d/2d, deliberately internal to Nn_blocks; an eventual
+       lib/ interface (gh-ocannl-1010) should hide this state-construction helper. *)
+    "Nn_blocks.batch_norm_state";
     "Nn_blocks.box_muller";
     "Nn_blocks.conv_bn_relu";
     "Nn_blocks.cross_attention";

@@ -197,6 +197,17 @@ let data_parallel ?backend_name ?(reduction = Mean) ?(weight_decay = 0.0) ?(mome
       if Array.length ps <> n_params then
         invalid_arg "Parallel.data_parallel: shards disagree on the parameter count");
   Array.iter params ~f:(Array.iter ~f:(fun p -> Train.set_materialized p.Tensor.value));
+  (* The state set also owns non-differentiable buffers (e.g. BatchNorm running moments) and frozen
+     parameters. Only the subset written by backprop participates in gradient reduction. *)
+  let trainable = Array.map losses ~f:Train.trainable_params in
+  let grad_masks = Array.mapi params ~f:(fun i ps -> Array.map ps ~f:(Set.mem trainable.(i))) in
+  Array.iter grad_masks ~f:(fun mask ->
+      if not (Array.equal Bool.equal mask grad_masks.(0)) then
+        invalid_arg "Parallel.data_parallel: shards disagree on the trainable parameter set");
+  let grad_params =
+    Array.mapi params ~f:(fun i ps -> Array.filteri ps ~f:(fun k _ -> grad_masks.(i).(k)))
+  in
+  let n_grad_params = Array.length grad_params.(0) in
   (* Build the forward+backward comps before the parameter-init comps, matching {!Train.run_once}:
      [grad_update] consumes the forward/backprop roots, and [init_params] must run against the state
      it leaves. *)
@@ -266,8 +277,8 @@ let data_parallel ?backend_name ?(reduction = Mean) ?(weight_decay = 0.0) ?(mome
      src_shard_grad.merge]. *)
   let accum_codes =
     Array.init n_shards ~f:(fun i ->
-        Array.init n_params ~f:(fun k ->
-            let owner_p = params.(0).(k) and src_p = params.(i).(k) in
+        Array.init n_grad_params ~f:(fun k ->
+            let owner_p = grad_params.(0).(k) and src_p = grad_params.(i).(k) in
             let code = [%cd owner_p.grad =+ src_p.grad.merge] in
             Backend.compile owner_ctx.optimize_ctx
               ~name:(Printf.sprintf "grad_allreduce_%d_%d" i k)
@@ -279,18 +290,18 @@ let data_parallel ?backend_name ?(reduction = Mean) ?(weight_decay = 0.0) ?(mome
     | Mean ->
         let inv_n = 1.0 /. Float.of_int n_shards in
         Some
-          (Array.init n_params ~f:(fun k ->
-               let owner_p = params.(0).(k) in
+          (Array.init n_grad_params ~f:(fun k ->
+               let owner_p = grad_params.(0).(k) in
                let code = [%cd owner_p.grad =* !.inv_n] in
                Backend.compile owner_ctx.optimize_ctx ~name:(Printf.sprintf "grad_mean_%d" k)
                  bindings code))
   in
   let grad_of p = (Option.value_exn ~here:[%here] p.Tensor.diff).Tensor.grad in
   let grad_sync () =
-    for k = 0 to n_params - 1 do
+    for k = 0 to n_grad_params - 1 do
       for i = 1 to n_shards - 1 do
         merge_transfer ~dst:owner_ctx ~src:shard_ctx.(i)
-          (grad_of params.(i).(k))
+          (grad_of grad_params.(i).(k))
           accum_codes.(i).(k)
       done
     done;

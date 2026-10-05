@@ -145,7 +145,7 @@ normalizes over the batch axis only (no spatial axes to reduce). Its einsum
 is:
 
 ```ocaml
-let mean = (x ++ "..o.. | ..c.. => 0 | ..c.." [ "o" ]) /. dim o in
+let mean = (x ++ "..o.. | ..c.. => | ..c.." [ "o" ]) /. dim o in
 ```
 
 where `o` is the captured batch-axis length and `..c..` is the channel row
@@ -182,28 +182,18 @@ initializer on `w1` overrides the default centered `uniform` initializer so
 Kaiming's fan-in scale is preserved; `c`, `b1`, `w2`, and `b2` use the default
 `[-0.25, 0.25)` range.
 
-### Known limitation — running statistics
+### Training and inference statistics
 
-`batch_norm1d` inherits `batch_norm2d`'s FIXME: running statistics are not
-implemented, so `momentum` is ignored and the inference path
-(`~train_step:None`) falls through to `(gamma *. normalized) + beta` computed
-from *batch* statistics rather than population statistics. For a single-
-example inference batch, `mean == x`, `centered == 0`, `normalized == 0`, so
-the output collapses to `beta` regardless of input. Generation quality
-degrades accordingly — `mlp_bn_names.ml`'s three sampled names are noticeably
-noisier than Part 2's (`ria`, `ehnlk`, `lc` under the fixed seed). The tutorial
-leaves this as a pedagogical demonstration of why running statistics matter;
-the framework-level fix is tracked as a follow-up to this task.
+`batch_norm1d` normalizes training batches with their channel-wise mean and
+population variance. Each execution updates stored mean and variance using
+`running = momentum * running + (1 - momentum) * batch`, with a retained
+fraction of `0.9` by default. The stored mean and variance initialize to 0
+and 1 and persist with the model parameters. Evaluation and generation use
+these stored statistics, so a single-example batch still reflects its input.
 
-Because of that collapse the Part 3 sample text is a readout of the `dice`
-stream rather than of the model's reading of its context, and its characters
-land on knife-edge boundaries of the sampling CDF — under the fixed seed one
-step of the second name sits 6.4e-5 from the boundary between two characters,
-so a weight wiggle far too small to move the printed losses flips it. Part 3
-therefore prints the names to **stderr** only; its `.expected` golden pins the
-losses, an in-alphabet check, and the top of the start-context distribution.
-Part 2 and Part 6, whose inference paths do read their context, still pin
-their sampled names.
+The sampled names go to stderr because small changes in learned probabilities
+can move a draw across a sampling boundary. The golden checks losses,
+alphabet membership and the head of the start-context distribution.
 
 ## Part 4 — How OCANNL compiles gradients
 

@@ -671,45 +671,91 @@ let%op avg_pool2d ?(stride = 2) ?(window_size = 2) () x =
     before final classification layer. *)
 let%op global_avg_pool2d x = x ++ "... | h, w, ..c.. => ... | 0, 0, ..c.."
 
-(** Batch normalization for CNN layers - normalizes across the batch dimension for each channel.
-    Typically applied after convolutions and before activations. [_momentum] is caller-visible as
-    unimplemented: running statistics do not exist yet, so changing it has no effect. *)
-let%op batch_norm2d ~label ?(epsilon = 1e-5) ?(_momentum = 0.9) () ~train_step x =
-  (* FIXME: implement running statistics, currently using learned params *)
-  (* Compute batch statistics across batch and spatial dimensions for each channel *)
-  let total_size = dim o *. dim h *. dim w in
-  let mean = (x ++ "..o.. | h, w, ..c.. => 0 | 0, 0, ..c.." [ "o"; "h"; "w" ]) /. total_size in
-  let centered = x - mean in
-  let variance = ((centered *. centered) ++ "... | h, w, ..c.. => 0 | 0, 0, ..c..") /. total_size in
-  let std_dev = sqrt (variance + !.epsilon) in
-  let normalized = centered /. std_dev in
-  (* Scale and shift with learnable parameters *)
-  match train_step with
-  | Some _ ->
-      (* During training: update running statistics *)
-      ({ gamma = 1. } *. normalized) + { beta = 0. }
-  | None ->
-      (* During inference: use running statistics (simplified for now) *)
-      (gamma *. normalized) + beta
+(* Running statistics are non-differentiable parameters: this gives them layer-local ownership,
+   materialization, initialization through Train.init_params, and persistence with the model. *)
+let batch_norm_state ~label ~epsilon ~momentum ~inference_spec () =
+  if not Float.(momentum >= 0. && momentum <= 1.) then
+    invalid_arg "batch_norm: momentum must be between 0 and 1";
+  let gamma = TDSL.param ~value:1. "gamma" ~more_label:label () in
+  let beta = TDSL.param ~value:0. "beta" ~more_label:label () in
+  let running_mean = NTDSL.param ~value:0. "running_mean" ~more_label:label () in
+  let running_variance = NTDSL.param ~value:1. "running_variance" ~more_label:label () in
+  List.iter [ gamma; beta; running_variance ] ~f:(fun p ->
+      Shape.infer_equal p.Tensor.shape running_mean.Tensor.shape);
+  fun ~train_step ~moments x ->
+    let mean, variance, update =
+      match train_step with
+      | None -> (running_mean, running_variance, false)
+      | Some _ ->
+          let mean, variance = moments x in
+          Shape.infer_equal running_mean.Tensor.shape mean.Tensor.shape;
+          (mean, variance, true)
+    in
+    let centered = TDSL.sub ~spec:inference_spec x mean () in
+    let%op std_dev = sqrt (variance + !.epsilon) in
+    let normalized = TDSL.pointdiv ~spec:inference_spec centered std_dev () in
+    let scaled = TDSL.pointmul ~spec:inference_spec normalized gamma () in
+    let result = TDSL.add ~spec:inference_spec scaled beta () in
+    if update then
+      let retain = momentum in
+      let incoming = 1. -. momentum in
+      let updates =
+        [%cd
+          running_mean =: (!.retain *. running_mean) + (!.incoming *. mean);
+          running_variance =: (!.retain *. running_variance) + (!.incoming *. variance)]
+      in
+      {
+        result with
+        Tensor.forward = Ir.Assignments.sequence [ result.Tensor.forward; updates ];
+        params = Set.union result.params (Set.union running_mean.params running_variance.params);
+        children =
+          result.children
+          @ [
+              { Tensor.subtensor = running_mean; embedded = false };
+              { Tensor.subtensor = running_variance; embedded = false };
+            ];
+      }
+    else result
 
-(** Batch normalization for MLP layers - normalizes across the batch axis only. Unlike
-    {!batch_norm2d} there are no spatial axes to reduce over; channel axes are carried through
-    unchanged via the [..c..] row variable.
+(** Batch normalization for CNN layers, reducing batch and spatial axes per channel.
 
-    See the FIXME on {!batch_norm2d}: running statistics are not implemented, so [_momentum] is a
-    caller-visible unimplemented option and inference falls back to the learned [gamma]/[beta]
-    parameters rather than population statistics. Acceptable for tutorial examples; do not rely on
-    inference correctness for distribution-shifted inputs. *)
-let%op batch_norm1d ~label ?(epsilon = 1e-5) ?(_momentum = 0.9) () ~train_step x =
-  (* Compute batch statistics across the batch axis only, for each channel *)
-  let mean = (x ++ "..o.. | ..c.. => 0 | ..c.." [ "o" ]) /. dim o in
-  let centered = x - mean in
-  let variance = ((centered *. centered) ++ "..o.. | ..c.. => 0 | ..c..") /. dim o in
-  let std_dev = sqrt (variance + !.epsilon) in
-  let normalized = centered /. std_dev in
-  match train_step with
-  | Some _ -> ({ gamma = 1. } *. normalized) + { beta = 0. }
-  | None -> (gamma *. normalized) + beta
+    [Some train_step] normalizes with the batch mean and population variance and updates stored
+    statistics after each execution. [None] uses the stored statistics without updating them.
+    [momentum] defaults to [0.9] and is the retained fraction:
+    [running = momentum * running + (1 - momentum) * batch]. Running mean/variance initialize to
+    [0]/[1]; gamma/beta initialize to [1]/[0]. Statistics are non-trainable model state, initialized
+    and persisted with the parameters. The variance uses the population divisor in both modes. *)
+let batch_norm2d ~label ?(epsilon = 1e-5) ?(momentum = 0.9) () =
+  let normalize =
+    batch_norm_state ~label ~epsilon ~momentum
+      ~inference_spec:"... | h, w, ..c..; | ..c.. => ... | h, w, ..c.." ()
+  in
+  let%op moments x =
+    let total_size = dim o *. dim h *. dim w in
+    let mean = (x ++ "..o.. | h, w, ..c.. => | ..c.." [ "o"; "h"; "w" ]) /. total_size in
+    let centered =
+      [%oc TDSL.sub ~spec:"... | h, w, ..c..; | ..c.. => ... | h, w, ..c.." x mean ()]
+    in
+    let variance = ((centered *. centered) ++ "... | h, w, ..c.. => | ..c..") /. total_size in
+    (mean, variance)
+  in
+  fun ~train_step x -> normalize ~train_step ~moments x
+
+(** Batch normalization for MLP layers, reducing the batch axes and preserving channel axes.
+    Training/inference behavior, initialization and the [momentum] recurrence are as in
+    {!batch_norm2d}. *)
+let batch_norm1d ~label ?(epsilon = 1e-5) ?(momentum = 0.9) () =
+  let normalize =
+    batch_norm_state ~label ~epsilon ~momentum ~inference_spec:"... | ..c..; | ..c.. => ... | ..c.."
+      ()
+  in
+  let%op moments x =
+    let mean = (x ++ "..o.. | ..c.. => | ..c.." [ "o" ]) /. dim o in
+    let centered = x - mean in
+    let variance = ((centered *. centered) ++ "... | ..c.. => | ..c..") /. dim o in
+    (mean, variance)
+  in
+  fun ~train_step x -> normalize ~train_step ~moments x
 
 (** Conv block with conv -> batch norm -> activation pattern *)
 let%op conv_bn_relu ~label ?(kernel_size = 3) ?(stride = 1) () =
