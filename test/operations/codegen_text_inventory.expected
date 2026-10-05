@@ -175,6 +175,10 @@ test/operations/gpu_lane_reduction.ml [also pins text this scan cannot name]
     "lane all-reduce into a scope local"
 test/operations/gpu_serial_lanes.ml [also pins text this scan cannot name]
     "for ("
+test/operations/half_float_power.ml
+    "__float2half(powf(__half2float("
+    "hexp2("
+    "ocannl_powi_"
 test/operations/hardware_axes_parity.ml
     " = 0;"
     " = 7;"

@@ -1762,3 +1762,14 @@ files.
   Negative exponents also remain for the helper when power simplification is licensed: the old
   linear unroller reciprocates the base first, changing overflow/underflow behavior relative to
   reciprocating the positive power. Positive unrolling is bounded to exponents 0 through 8.
+
+- Fractional and dynamic half powers on CUDA/HIP widen both operands, call f32 `powf` and round
+  back to half once (gh-ocannl-1198), as bf16 already did and as cc's implicit promotion does:
+  neither vendor has a half pow, and the old `hexp2(hlog2(b), e)` spelling passed two arguments
+  to a unary intrinsic, so NVRTC/HIPRTC refused every such kernel. The domain is f32 `powf`'s
+  under the backend's math flags (CUDA compiles `--use_fast_math`): NaN for a negative base under
+  a fractional exponent, and under CUDA fast math also under a run-time integral exponent, which
+  the integer-power helper only reaches when the exponent is a known constant. `half_float_power` executes constant-fractional and buffer-read exponents
+  within one half ulp of an f64 reference, and on CUDA/HIP pins the result bitwise to the same
+  backend's f32 `powf` narrowed on the host. Metal's half `pow` is its own overload, outside that
+  bitwise pin.

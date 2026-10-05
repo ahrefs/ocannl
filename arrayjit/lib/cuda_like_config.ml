@@ -180,11 +180,14 @@ struct
     | ToPowOf, Double_prec _ -> func "pow"
     | ToPowOf, Single_prec _ -> func "powf"
     | ToPowOf, Half_prec _ ->
+        (* No half pow intrinsic exists (both vendors' [hexp2] is unary, gh-ocannl-1198): widen both
+           operands, take f32 [powf] -- its domain, NaN for a negative base under a fractional
+           exponent included -- and round back to half once, the cc path's numerics. Known integer
+           exponents never reach here: [C_syntax.integer_power_doc] takes them. *)
         fun v1 v2 ->
           group
-            (string "hexp2(hlog2(" ^^ v1 ^^ string "),"
-            ^^ ifflat (space ^^ v2) (nest 2 (break 1 ^^ v2))
-            ^^ string ")")
+            (string "__float2half(powf(__half2float("
+            ^^ v1 ^^ string "), __half2float(" ^^ v2 ^^ string ")))")
     | ToPowOf, (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Int64_prec _ | Uint4x32_prec _) ->
         invalid_arg
           (Dialect.error_prefix ^ ".binop_syntax: ToPowOf not supported for integer precisions")
