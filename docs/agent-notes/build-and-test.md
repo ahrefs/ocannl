@@ -923,15 +923,26 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   `[ A ] && [ B ]`: errexit exempts every operand of an `&&` list but the last, so the pair checks
   only `B` and is silent exactly when `A` — usually the point of the assertion — fails
   (gh-ocannl-1023, `cancel_sweep`'s readiness check). One predicate per statement, or end the list
-  with `|| die …` / `|| return 1` (`|| rc=$?` to capture it; a `rc=$?` on the next line is refused). `shell_scripts_parse` refuses both shapes in errexit scripts; its
-  module headers state the logical-line boundary each scan reads, and a function's final pair — not
-  inert, its status is the return value — is refused too, since the scan cannot see function ends.
-  Both arms share `Errexit_negation.numbered_spliced_lines`: it carries multiline quotes and
-  literal outer heredoc delimiters, excluding their bodies, and joins continued condition headers
-  through `then`/`do`. Continued unquoted heredoc bodies are refused because removing their escaped
-  newlines can change delimiter recognition; quoted bodies retain those newlines. This lexical
-  reader does not model option transitions or compound execution;
-  its header names the supported delimiter grammar and its explicit refusals (gh-ocannl-907).
+  with `|| die …` / `|| return 1` (`|| rc=$?` to capture it; a `rc=$?` on the next line is refused). `shell_scripts_parse` refuses both shapes where errexit may be on and nothing consumes the
+  status. `Shell_context` decides both: it reads the compound tree, carries errexit through it in
+  source order as a may-be-on bit (its imprecision can only refuse, never pass), and treats a
+  condition and the LAST statement of a function body or subshell -- also through a final group,
+  branch or arm -- as consuming the status: a function's last command is its return value
+  (gh-ocannl-1220). A status something can overwrite before its consumer is not consumed: a loop
+  body's tail (the next iteration) and a `;&`/`;;&` arm's (the arm it falls into). A function body
+  that may hand errexit back on to a caller that had it off -- also the `set +e … set -e`
+  save-and-restore -- makes the whole file read as errexit-on, since the scan does not follow calls. Its module header states what it reads, refuses and leaves out (loud and
+  silent). `Errexit_execution_controls` measures each context rule: it runs the script under the
+  host's bash (3.2 on macOS, 5 on Linux) and again with a plain `false` in the assertion's place,
+  and a rule bash disagrees with fails there -- add a row when the reader learns a context (a row
+  needing syntax bash 3.2 lacks, like `;&`, is gated on the host's bash and pinned scan-side by an
+  arm fixture). A structure the reader cannot balance is refused as unsupported in a script that may
+  turn errexit on. Both arms read through
+  `Shell_lexer.numbered_spliced_lines`: it carries multiline quotes and literal outer heredoc
+  delimiters, excluding their bodies, and joins continued condition headers through `then`/`do`.
+  Continued unquoted heredoc bodies are refused because removing their escaped newlines can change
+  delimiter recognition; quoted bodies retain those newlines. Its header names the supported
+  delimiter grammar and its explicit refusals (gh-ocannl-907).
 - A child that publishes a value for its parent to poll — a pid, above all — writes a sibling and
   renames it into place: `open(path, 'w')` creates the name EMPTY before the write lands, so a
   parent polling `exists()` reads `''` (gh-ocannl-1041, a per-PR-matrix flake). The benchmarks'
