@@ -147,8 +147,13 @@ let quantified ?min name xs holds =
 
 (** [p_all name xs ~f] claims that every element of [xs] satisfies [f], and that there is an element
     — the guarded form of [p name (List.for_all xs ~f)]. Reach for it wherever the claim reads
-    ["every …"]. *)
-let p_all ?min name xs ~f = quantified ?min name xs (fun () -> List.for_all xs ~f)
+    ["every …"]. Once the population floor is met, [f] runs on every element in list order, even
+    after a refutation, so diagnostic side effects are not lost. *)
+let p_all ?min name xs ~f =
+  quantified ?min name xs (fun () ->
+      List.fold xs ~init:true ~f:(fun holds x ->
+          let element_holds = f x in
+          holds && element_holds))
 
 (** [p_all2 name got want ~f] claims that [got] and [want] agree cell for cell under [f], that they
     have the same length, and that there is a cell — the guarded form of
@@ -198,12 +203,17 @@ let pf_all2 ?min fmt = Printf.ksprintf (fun label got want ~f -> p_all2 ?min lab
     [p name (List.is_empty (List.filter xs ~f))]. The mirror of {!p_all}, and the one the
     ["no X is …"] claims want: filtering an empty collection also yields nothing, so the unguarded
     spelling passes on an empty input just as [List.for_all] does. *)
-let p_none ?min name xs ~f = quantified ?min name xs (fun () -> not (List.exists xs ~f))
+let p_none ?min name xs ~f = p_all ?min name xs ~f:(fun x -> not (f x))
 
 (** [p_alli name xs ~f] is {!p_all} with each element's index beside it -- the guarded form of
     [p name (List.for_alli xs ~f)], for the claims that compare an element with its neighbour or
-    with a reference at the same position. Arrays go through [Array.to_list], as for {!p_all}. *)
-let p_alli ?min name xs ~f = quantified ?min name xs (fun () -> List.for_alli xs ~f)
+    with a reference at the same position. Arrays go through [Array.to_list], as for {!p_all}. Like
+    {!p_all}, it evaluates every element once the population floor is met. *)
+let p_alli ?min name xs ~f =
+  quantified ?min name xs (fun () ->
+      List.foldi xs ~init:true ~f:(fun i holds x ->
+          let element_holds = f i x in
+          holds && element_holds))
 
 (** [p_empty name ~over xs] claims that the derived collection [xs] is empty, and that the
     collection it was derived from, [over], is not — the guarded form of [p name (List.is_empty xs)]
