@@ -98,7 +98,10 @@ files.
   would now merge with it and cost the forward its lanes (`lane_geometry` declines a kernel mixing
   lane and plain nests). Gating lanes wholesale was measured and rejected (it threw away the
   forward win). Measured on gfx1151 and gfx1102: training 4-10% over `cut`, inference unchanged.
-  Leg 7 of `gpu_serial_lanes` pins both halves, the training step's own forward included.
+  Leg 7 of `gpu_serial_lanes` pins both halves, the training step's own forward included. `cut`
+  keeps a boundary only where a merge would cost a nest its lanes, never "dV runs apart": where lanes
+  are cheap dK takes them too (the cooperative preamble), on dV's topology, so dQ, dK and dV share
+  one lane kernel on Metal and CUDA (leg 7's executed-step claim).
 - **A contraction inside a scan body is tensorized by rewriting the whole scan's owner, not by
   `Tensorize`** (gh-ocannl-1003, `Schedule.Fold_mma`): `rewrite_loop` does not enter a scan, and
   a lane loop minted inside the body would take a second `Workgroup` slot under the row loop. The

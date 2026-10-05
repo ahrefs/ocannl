@@ -538,8 +538,7 @@ let () =
     (Array.exists fused ~f:(fun v -> Float.(v <> 0.)));
   p_all2 "the fused step's parameter gradients agree with the composed ones within 1e-4 relative"
     fused composed ~f:close;
-  (* dV's preamble is loop-free ([p] alone), so the stage-1 rule alone gives it lanes, in a kernel
-     of its own. *)
+  (* dV's preamble is loop-free ([p] alone), so the stage-1 rule alone gives it lanes. *)
   let writes_dk = String.is_suffix ~suffix:"k.grad"
   and writes_dv = String.is_suffix ~suffix:"v.grad" in
   p_all "fused dV: every nest writing it binds a Workgroup lane inside the serial query loop"
@@ -612,17 +611,23 @@ let () =
   p "auto on the run's backend resolves to its measured mode"
     (resolves (Context.hardware_limits (Context.auto ())) measured);
   (* The segments leg 6's fused step EXECUTED, whose gradients matched the composed ones: the
-     geometry the run's device ships, so the value check and these claims are about one pipeline. *)
+     geometry the run's device ships, so the value check and these claims are about one pipeline.
+     Under either mode dV shares its kernel with dK. Where per-lane recompute is cheap ([cut]), dK
+     takes its lanes too (the cooperative preamble, gh-ocannl-1124) on dV's topology, so the merge
+     costs no nest its lanes and fission keeps no boundary for them: dV is cut from dK only where dK
+     runs the plain plan, which is the costly control above. *)
   let claim =
-    "executed fused step: every segment computing dV follows the device's mode (cut: its lane, \
-     apart from dK; admitted: beside dK, off the lanes)"
+    "executed fused step: every segment computing dV computes dK beside it, on the device's mode \
+     (cut: both on their lanes; admitted: dV off the lanes)"
   in
   let executed_dv = List.filter fused_executed ~f:(List.exists ~f:(computes ~writes:writes_dv)) in
   if not (S.backend_is_gpu backend_name) then skipped ~backend:backend_name claim
   else
     p_all claim executed_dv ~f:(fun seg ->
         let dv = List.filter seg ~f:(computes ~writes:writes_dv)
-        and with_dk = List.exists seg ~f:(computes ~writes:writes_dk) in
+        and dk = List.filter seg ~f:(computes ~writes:writes_dk) in
+        (not (List.is_empty dk))
+        &&
         match measured with
-        | S.Lanes_cut -> List.for_all dv ~f:lane_inside_serial && not with_dk
-        | _ -> with_dk && not (List.exists dv ~f:lane_inside_serial))
+        | S.Lanes_cut -> List.for_all (dv @ dk) ~f:lane_inside_serial
+        | _ -> not (List.exists dv ~f:lane_inside_serial))
