@@ -1,0 +1,14 @@
+dac_full: the gather is covered, so the table is not read-before-write: true
+dac_full: the table is not an input of the routine: true
+dac_full: the gather reads the row the writes put there: true
+dac_full: the materialized-table twin reads the same values: true
+dac_col0: the gather is covered, so the table is not read-before-write: true
+dac_col0: the table is not an input of the routine: true
+dac_col0: the gather reads the row the writes put there: true
+dac_col0: the materialized-table twin reads the same values: true
+dac_rows: the gather is not covered, so the table stays read-before-write: true
+dac_rows: the table stays an input of the routine: true
+dac_rows: the gather reads the entry values no write replaced: true
+dac_cols: the gather is not covered, so the table stays read-before-write: true
+dac_cols: the table stays an input of the routine: true
+dac_cols: the gather reads the entry values no write replaced: true

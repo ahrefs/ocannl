@@ -232,8 +232,9 @@ let () =
     | Some r -> r.CM.rc_flops = 1 && r.CM.rc_bytes = 8 && flops_exact bc && not r.CM.rc_bytes_approx
     | None -> false);
   (* A packed-uniform producer inlines as the lane-extract form (gh-509 task 4), not its vector
-     store: the counter's block read at a runtime index (a dynamic read, whose bytes are the whole
-     node's bound) and the lane select — its op count, index arithmetic included, is exact. *)
+     store: the counter's block read at a runtime index (a dynamic read: one cell per read site, at
+     a block the data picks, so its bytes stay a bound — gh-ocannl-1174) and the lane select — its
+     op count, index arithmetic included, is exact. *)
   let v = mk "V" and u = mk "U" in
   let vec_body =
     loop_n i 1

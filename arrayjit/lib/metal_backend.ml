@@ -692,74 +692,99 @@ module Impl = struct
       | _, 1 -> typ_of_prec prec
       | _ -> invalid_arg "Metal_backend.vec_typ_of_prec: invalid combination"
 
-    (* The one combination resolver both MMA hooks consult, as [(accumulator, a, b, destination)]
-       fragment types: [mma_d_boundary_lines] converts at the destination boundary exactly where the
-       first and last differ. Arms and [mma_format_tiles]' STORAGE triples must correspond: an
-       advertised triple with no arm makes autotune time seeds that render the scalar fallback, and
-       an arm with no triple is never seeded. [schedule_mma_matmul]'s format-triple leg checks the
-       correspondence over every triple of f32/f16/bf16/fp8, under both policies. *)
-    let mma_fragment_types ~d_prec ~a_prec ~b_prec =
+    (* The one combination resolver both MMA hooks consult: the precision a storage triple's
+       accumulator fragment resides at, every fragment type then following from its precision
+       ([mma_fragment_types]); [mma_d_boundary_lines] converts at the destination boundary exactly
+       where the accumulator's and the destination's differ. Arms and [mma_format_tiles]' STORAGE
+       triples must correspond: an advertised triple with no arm makes autotune time seeds that
+       render the scalar fallback, and an arm with no triple is never seeded.
+       [schedule_mma_matmul]'s format-triple leg checks the correspondence over every triple of
+       f32/f16/bf16/fp8, under both policies. [mma_arm] publishes this table to the schedule cache's
+       identity (gh-ocannl-1153). *)
+    let mma_accumulator ~d_prec ~a_prec ~b_prec =
       match (a_prec, b_prec, d_prec) with
-      | Ops.Single_prec _, Ops.Single_prec _, Ops.Single_prec _ ->
-          Some
-            ("simdgroup_float8x8", "simdgroup_float8x8", "simdgroup_float8x8", "simdgroup_float8x8")
+      | Ops.Single_prec _, Ops.Single_prec _, Ops.Single_prec _ -> Some Ops.single
       (* gh-ocannl-923: half operands into f32 destination STORAGE. The mixed multiply surface is
          gh-ocannl-837's wide-f16 one ([simdgroup_multiply_accumulate] over half A/B fragments and a
          float accumulator), but the destination already is the accumulator's type, so there is no
          staging fragment and no conversion: [simdgroup_load]/[simdgroup_store] move the float tile
          directly, in both emission scopes. Independent of [fp16_arithmetic], which is about f16
          DESTINATIONS. *)
-      | Ops.Half_prec _, Ops.Half_prec _, Ops.Single_prec _ ->
-          Some ("simdgroup_float8x8", "simdgroup_half8x8", "simdgroup_half8x8", "simdgroup_float8x8")
+      | Ops.Half_prec _, Ops.Half_prec _, Ops.Single_prec _ -> Some Ops.single
       | Ops.Half_prec _, Ops.Half_prec _, Ops.Half_prec _ when Numerics.fp16_accum_wide () ->
-          Some ("simdgroup_float8x8", "simdgroup_half8x8", "simdgroup_half8x8", "simdgroup_half8x8")
-      | Ops.Half_prec _, Ops.Half_prec _, Ops.Half_prec _ ->
-          Some ("simdgroup_half8x8", "simdgroup_half8x8", "simdgroup_half8x8", "simdgroup_half8x8")
+          Some Ops.single
+      | Ops.Half_prec _, Ops.Half_prec _, Ops.Half_prec _ -> Some Ops.half
       (* The bf16 twins of the two f16 arms above (gh-ocannl-923, completing gh-ocannl-838's
          [Bf16_wide] on Metal): [simdgroup_multiply_accumulate] is generic over its operand element
          type, and bfloat operands into a float accumulator compile and execute on Apple silicon
          (schedule_mma_matmul's bf32 and [Bf16_wide] legs, M4 Max). The f32-storage arm needs no
          conversion; the wide arm converts at the bfloat destination through the coordinate table
          exactly as the wide-f16 one does. *)
-      | Ops.Bfloat16_prec _, Ops.Bfloat16_prec _, Ops.Single_prec _ ->
-          Some
-            ( "simdgroup_float8x8",
-              "simdgroup_bfloat8x8",
-              "simdgroup_bfloat8x8",
-              "simdgroup_float8x8" )
+      | Ops.Bfloat16_prec _, Ops.Bfloat16_prec _, Ops.Single_prec _ -> Some Ops.single
       | Ops.Bfloat16_prec _, Ops.Bfloat16_prec _, Ops.Bfloat16_prec _
         when Numerics.bf16_accum_wide () ->
-          Some
-            ( "simdgroup_float8x8",
-              "simdgroup_bfloat8x8",
-              "simdgroup_bfloat8x8",
-              "simdgroup_bfloat8x8" )
-      | Ops.Bfloat16_prec _, Ops.Bfloat16_prec _, Ops.Bfloat16_prec _ ->
-          Some
-            ( "simdgroup_bfloat8x8",
-              "simdgroup_bfloat8x8",
-              "simdgroup_bfloat8x8",
-              "simdgroup_bfloat8x8" )
+          Some Ops.single
+      | Ops.Bfloat16_prec _, Ops.Bfloat16_prec _, Ops.Bfloat16_prec _ -> Some Ops.bfloat16
       | _ -> None
+
+    let simdgroup_fragment = function
+      | Ops.Single_prec _ -> "simdgroup_float8x8"
+      | Ops.Half_prec _ -> "simdgroup_half8x8"
+      | Ops.Bfloat16_prec _ -> "simdgroup_bfloat8x8"
+      | prec -> invalid_arg ("Metal_backend.simdgroup_fragment: " ^ Ops.prec_string prec)
+
+    (* [(accumulator, a, b, destination)] fragment types of [mma_accumulator]'s arm. *)
+    let mma_fragment_types ~d_prec ~a_prec ~b_prec =
+      Option.map (mma_accumulator ~d_prec ~a_prec ~b_prec) ~f:(fun acc_prec ->
+          ( simdgroup_fragment acc_prec,
+            simdgroup_fragment a_prec,
+            simdgroup_fragment b_prec,
+            simdgroup_fragment d_prec ))
+
+    (* Both hooks consult one table in both scopes, and the Apple7 gate is the device's
+       ([hardware_limits.mma]), so the arm names no floor. *)
+    let mma_arm ~a_prec ~b_prec ~d_prec ~scope:_ =
+      Option.map (mma_accumulator ~d_prec ~a_prec ~b_prec) ~f:(fun arm_accumulator ->
+          { Backend_intf.arm_name = "simdgroup"; arm_accumulator; arm_floor = None })
 
     (* MSL leaves the element-to-thread mapping unspecified, so a half/bfloat fragment cannot supply
        the coordinates of a float accumulator (gh-ocannl-1075). Load the row-major table into the
        accumulator's own type and convert scalar cells at the coordinates it names. [simdgroup_load]
        accepts only device/threadgroup memory (MSL 4.1 section 6.8.1), so each converted scope
-       initializes 256 bytes of threadgroup storage before its opening barrier. A single thread
-       writes the table even when the workgroup contains several SIMD groups. *)
+       initializes one tile's worth of [float]s (256 bytes) of threadgroup storage before its
+       opening barrier. A single thread writes the table even when the workgroup contains several
+       SIMD groups. *)
+    let mma_rc_table_len = 8 * 8
+    let mma_rc_table_prec = Ops.single
+
+    (* Whether the destination boundary converts: the accumulator fragment type differs from the
+       destination's. The one predicate behind the table, the boundary lines and the table's
+       bytes. *)
+    let mma_d_converts ~acc_frag ~d_frag = not (String.equal acc_frag d_frag)
+
     let mma_d_table_lines ~acc_frag ~d_frag =
-      if String.equal acc_frag d_frag then []
+      if not (mma_d_converts ~acc_frag ~d_frag) then []
       else
+        let typ = typ_of_prec mma_rc_table_prec in
         [
-          "threadgroup float ocannl_mma_rc8[64];";
+          Printf.sprintf "threadgroup %s ocannl_mma_rc8[%d];" typ mma_rc_table_len;
           "if (all(lid == uint3(0))) {";
-          "  for (int __rc = 0; __rc < 64; ++__rc) ocannl_mma_rc8[__rc] = (float)__rc;";
+          Printf.sprintf "  for (int __rc = 0; __rc < %d; ++__rc) ocannl_mma_rc8[__rc] = (%s)__rc;"
+            mma_rc_table_len typ;
           "}";
         ]
 
+    (* The table's bytes, for the schedule-level shared-memory estimate (gh-ocannl-1205): the same
+       combination resolver, predicate and declaration as [mma_d_table_lines], so the estimate
+       counts exactly the scopes the hooks convert. *)
+    let mma_scope_workgroup_bytes ~d_prec ~a_prec ~b_prec =
+      match mma_fragment_types ~d_prec ~a_prec ~b_prec with
+      | Some (acc_frag, _, _, d_frag) when mma_d_converts ~acc_frag ~d_frag ->
+          mma_rc_table_len * Ops.prec_in_bytes mma_rc_table_prec
+      | Some _ | None -> 0
+
     let mma_d_boundary_lines ~dir ~acc_frag ~d_frag ~acc ~ptr ~ldd =
-      if String.equal acc_frag d_frag then
+      if not (mma_d_converts ~acc_frag ~d_frag) then
         [
           (match dir with
           | `Load -> Printf.sprintf "simdgroup_load(%s, %s, (ulong)%d);" acc ptr ldd

@@ -222,10 +222,12 @@ val codegen_tag :
     [limits] record, which describes the device candidates are generated, rendered and timed
     against; and, inside it, the backend's own {!Ir.Backend_intf.hardware_limits.codegen_tag}; and
     the [capabilities] record, whose precision-resolution functions are tabulated over every
-    precision ({!Ir.Backend_intf.codegen_capabilities_fingerprint}), so what a numerics mode
-    RESOLVES to on this backend is identity by derivation rather than by a hand-named component
-    (gh-ocannl-1117). Pass the compiling context's [Context.codegen_capabilities]: a required
-    argument, so no key-minting site can default to a resolution codegen does not use. *)
+    precision and whose mma arm table over every storage triple and emission scope
+    ({!Ir.Backend_intf.codegen_capabilities_fingerprint}), so what a numerics mode RESOLVES to on
+    this backend — including which tensor-unit arm it selects — is identity by derivation rather
+    than by a hand-named component (gh-ocannl-1117, gh-ocannl-1153). Pass the compiling context's
+    [Context.codegen_capabilities]: a required argument, so no key-minting site can default to a
+    resolution codegen does not use. *)
 
 type trajectory = {
   search_shape : string;

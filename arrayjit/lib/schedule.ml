@@ -4711,7 +4711,8 @@ let partition_breakpoints ~axis (llc : Low_level.t) : int list =
   |> List.dedup_and_sort ~compare:Int.compare
 
 let acc_interpretable (a : _ Affine.access) =
-  (not a.Affine.a_dynamic) && (not a.a_whole) && (not a.a_vec_last)
+  Option.is_none a.Affine.a_dyn_axis
+  && (not a.a_whole) && (not a.a_vec_last)
   && not
        (Array.exists a.a_map ~f:(function
          | Indexing.Sub_axis | Indexing.Concat _ -> true
@@ -5103,11 +5104,10 @@ type access = {
   a_tn : Tn.t;
   a_idcs : Indexing.axis_index array;
   a_write : bool;
-  a_dynamic : bool;  (** [Get_dynamic]: the effective index is not statically known. *)
   a_dyn_axis : int option;
       (** The data-dependent component of a dynamic access ([Set_dynamic]/[Get_dynamic]'s
-          [dyn_axis]; [a_idcs] holds a placeholder there) — affine queries must treat that component
-          as opaque ({!query_view}). *)
+          [dyn_axis]; [a_idcs] holds a placeholder there), [None] for a static access — affine
+          queries must treat that component as opaque ({!query_view}). *)
   a_vec : int option;
       (** [Set_from_vec]'s run length: [a_idcs] is the base of a run of that many flat cells, not a
           single cell — affine queries must treat the run as opaque ({!query_view}). *)
@@ -5125,13 +5125,12 @@ exception Bail
 let scan_accesses plc ~local_syms (llc : Low_level.t) : access list =
   let open Low_level in
   let acc = ref [] in
-  let add ~depth:_ ~write ~dynamic ?dyn_axis ?vec ?(val_syms = []) tn idcs =
+  let add ~depth:_ ~write ?dyn_axis ?vec ?(val_syms = []) tn idcs =
     acc :=
       {
         a_tn = tn;
         a_idcs = idcs;
         a_write = write;
-        a_dynamic = dynamic;
         a_dyn_axis = dyn_axis;
         a_vec = vec;
         a_val_syms = val_syms;
@@ -5166,25 +5165,23 @@ let scan_accesses plc ~local_syms (llc : Low_level.t) : access list =
           (* Zeroing per-thread scratch is safe: each thread zeroes its own copy. *)
     | Set { tn; idcs; llsc; _ } ->
         if depth > 0 && Tn.Placements.is_materialized_peek plc tn then raise Bail;
-        add ~depth ~write:true ~dynamic:false ~val_syms:(scalar_syms llsc) tn idcs;
+        add ~depth ~write:true ~val_syms:(scalar_syms llsc) tn idcs;
         scalar ~depth llsc
     | Set_dynamic { tn; idcs; dyn_axis; dyn_value = v, _; llsc; _ } ->
-        (* gh-466: the scatter's effective write index is not statically known. Registering it
-           [~dynamic:true] makes the cross-nest alignment reject it, and the per-nest hazard
+        (* gh-466: the scatter's effective write index is not statically known. Registering it with
+           its [~dyn_axis] makes the cross-nest alignment reject it, and the per-nest hazard
            analysis mask the dynamic component from the affine queries ([query_view]) — the
            deterministic no-atomics invariant: loops driving the dynamic index are never forced
            equal across threads, so they stay serial, while statically-pinning components (gh-484
            task 2: the per-block partials row of [Split_reduce], the embedding-dim column) may
            parallelize. *)
         if depth > 0 && Tn.Placements.is_materialized_peek plc tn then raise Bail;
-        add ~depth ~write:true ~dynamic:true ~dyn_axis
-          ~val_syms:(scalar_syms v @ scalar_syms llsc)
-          tn idcs;
+        add ~depth ~write:true ~dyn_axis ~val_syms:(scalar_syms v @ scalar_syms llsc) tn idcs;
         scalar ~depth v;
         scalar ~depth llsc
     | Set_from_vec { tn; idcs; length; arg = a, _; _ } ->
         if depth > 0 && Tn.Placements.is_materialized_peek plc tn then raise Bail;
-        add ~depth ~write:true ~dynamic:false ~vec:length ~val_syms:(scalar_syms a) tn idcs;
+        add ~depth ~write:true ~vec:length ~val_syms:(scalar_syms a) tn idcs;
         scalar ~depth a
     | Set_local (_, llsc) -> scalar ~depth llsc
     | If { cond = c, _; body } ->
@@ -5194,9 +5191,9 @@ let scan_accesses plc ~local_syms (llc : Low_level.t) : access list =
     match llsc with
     | Local_scope { body; _ } -> code ~depth:(depth + 1) body
     | Get_local _ | Constant _ | Constant_bits _ | Embed_index _ -> ()
-    | Get (tn, idcs) -> add ~depth ~write:false ~dynamic:false tn idcs
+    | Get (tn, idcs) -> add ~depth ~write:false tn idcs
     | Get_dynamic { tn; idcs; dyn_axis; dyn_value = v, _; _ } ->
-        add ~depth ~write:false ~dynamic:true ~dyn_axis tn idcs;
+        add ~depth ~write:false ~dyn_axis tn idcs;
         scalar ~depth v
     | Get_merge_buffer (_, _) -> () (* The merge buffer is a separate read-only input buffer. *)
     | Ternop (_, (a, _), (b, _), (c, _)) ->
@@ -5480,7 +5477,7 @@ let analyze_parallel_chains ?(max_chain = 2) ?(select_chain = Fn.id) ?(lanes = f
        "reads hit exactly the cells the same thread writes" is an order-sensitive per-thread-copy
        fact, not a shared-memory conflict, so it is not subsumed by [Affine.pair_conflict]. *)
     let pair_aligned_procedural ~l gi gj (a : access) (b : access) =
-      (not a.a_dynamic) && (not b.a_dynamic)
+      Option.is_none a.a_dyn_axis && Option.is_none b.a_dyn_axis
       &&
       let syms_i = List.take full_syms.(gi) l and syms_j = List.take full_syms.(gj) l in
       let pos g s =
@@ -5508,7 +5505,7 @@ let analyze_parallel_chains ?(max_chain = 2) ?(select_chain = Fn.id) ?(lanes = f
        be disjoint outright (which also admits pairs the procedural rule could only decline, e.g.
        constant-offset or strided-disjoint slices). *)
     let pair_aligned_query ~l gi gj (a : access) (b : access) =
-      (not a.a_dynamic) && (not b.a_dynamic)
+      Option.is_none a.a_dyn_axis && Option.is_none b.a_dyn_axis
       &&
       let range s =
         match List.Assoc.find env_arr.(gi) s ~equal:Indexing.equal_symbol with
@@ -5621,7 +5618,7 @@ let analyze_parallel_chains ?(max_chain = 2) ?(select_chain = Fn.id) ?(lanes = f
               List.exists accs ~f:(fun a -> Array.exists a.a_idcs ~f:(mentions_sym syms))
             in
             if is_mat || chain_relevant then (
-              let has_dynamic = List.exists accs ~f:(fun a -> a.a_dynamic) in
+              let has_dynamic = List.exists accs ~f:(fun a -> Option.is_some a.a_dyn_axis) in
               (* gh-484 (task 2, unbailing the gh-466 scatter): dynamic accesses of a materialized
                  node no longer bail wholesale. The dynamic component is an unknown coordinate of
                  [query_view], so the conflict query decides from the statically-known ones: a chain
@@ -5733,7 +5730,7 @@ let crosscheck_scratch_containment (opt : Low_level.optimized) (chains : Low_lev
         if
           (not (Tn.Placements.is_materialized_peek plc tn))
           && List.exists accs ~f:(fun a -> a.Affine.a_write)
-          && not (List.exists accs ~f:(fun a -> a.Affine.a_dynamic))
+          && not (List.exists accs ~f:(fun a -> Option.is_some a.Affine.a_dyn_axis))
         then
           let writes = List.filter accs ~f:(fun a -> a.Affine.a_write) in
           let head = Affine.stmt_head in
@@ -7630,7 +7627,46 @@ let maybe_default_schedules ~backend_name ?(limits = Backend_intf.no_hardware_li
         ?keep_mapping:(fission_keep_mapping ~is_gpu:gpu ~limits)
         ~preset ~zero_sched ~static_indices opt
 
-let check_hardware_limits_classified ~name ~(limits : Backend_intf.hardware_limits)
+(* The emission scopes of [opt]'s [Tile_mma] statements, as [(d, a, b)] operand triples: one per
+   statement, wherever it sits — duplicated by a materializing [Unroll] or [Partition], each copy is
+   its own lexical scope and declares its own scratch. A recognized simdgroup-fragment scope is no
+   exception: [C_syntax]'s fragment rendering accepts a reduction holding exactly ONE [Tile_mma]
+   into the fragment, so its scope and that statement are one-to-one (and the fragment carries its
+   target's storage precision, the [d] precision the hook is asked about). Fallbacks are not
+   entered: they render instead of, not beside, the intrinsic. *)
+let mma_emission_scopes (opt : Low_level.optimized) : (Tn.t * Tn.t * Tn.t) list =
+  let open Low_level in
+  let rec go acc = function
+    | Tile_mma { d = d, _; a = a, _; b = b, _; _ } -> (d, a, b) :: acc
+    | Seq (c1, c2) -> go (go acc c1) c2
+    | For_loop { body; _ } | If { body; _ } | Scan_loop { body; _ } -> go acc body
+    | Noop | Comment _ | Staged_compilation _ | Declare_local _ | Workgroup_barrier | Zero_out _
+    | Set _ | Set_dynamic _ | Set_from_vec _ | Set_local _ ->
+        acc
+  in
+  List.rev (go [] opt.llc)
+
+let workgroup_memory_bytes ~(capabilities : Backend_intf.codegen_capabilities)
+    (opt : Low_level.optimized) : int =
+  let staged =
+    Set.fold opt.workgroup_shared ~init:0 ~f:(fun acc tn ->
+        (* A pipelined tile is allocated as [pt_depth] rotating copies (gh-ocannl-487): the IR-level
+           dims stay single-copy, so the accounting multiplies here, matching the codegen
+           declaration. *)
+        let copies =
+          match Map.find opt.Low_level.pipelined tn with
+          | Some { Low_level.pt_depth; _ } -> pt_depth
+          | None -> 1
+        in
+        acc + (copies * Lazy.force tn.Tn.size_in_bytes))
+  in
+  let prec (tn : Tn.t) = Lazy.force tn.Tn.storage_prec in
+  List.fold (mma_emission_scopes opt) ~init:staged ~f:(fun acc (d, a, b) ->
+      acc
+      + capabilities.Backend_intf.mma_scope_workgroup_bytes ~d_prec:(prec d) ~a_prec:(prec a)
+          ~b_prec:(prec b))
+
+let check_hardware_limits_classified ~name ~(limits : Backend_intf.hardware_limits) ~capabilities
     (opt : Low_level.optimized) : unit =
   Option.iter limits.max_threads_per_workgroup ~f:(fun max_threads ->
       let block = (Low_level.launch_dims opt.llc).block in
@@ -7652,23 +7688,12 @@ let check_hardware_limits_classified ~name ~(limits : Backend_intf.hardware_limi
                    detail;
                  } )));
   Option.iter limits.max_workgroup_memory_bytes ~f:(fun max_bytes ->
-      let shared_bytes =
-        Set.fold opt.workgroup_shared ~init:0 ~f:(fun acc tn ->
-            (* A pipelined tile is allocated as [pt_depth] rotating copies (gh-ocannl-487): the
-               IR-level dims stay single-copy, so the accounting multiplies here, matching the
-               codegen declaration. *)
-            let copies =
-              match Map.find opt.Low_level.pipelined tn with
-              | Some { Low_level.pt_depth; _ } -> pt_depth
-              | None -> 1
-            in
-            acc + (copies * Lazy.force tn.Tn.size_in_bytes))
-      in
+      let shared_bytes = workgroup_memory_bytes ~capabilities opt in
       if shared_bytes > max_bytes then
         let detail =
           [%string
-            "Schedule: kernel %{name} stages %{shared_bytes#Int} bytes of workgroup-shared tiles, \
-             exceeding the device limit of %{max_bytes#Int} bytes"]
+            "Schedule: kernel %{name} stages %{shared_bytes#Int} bytes of workgroup-shared tiles \
+             and tile-MMA scope scratch, exceeding the device limit of %{max_bytes#Int} bytes"]
         in
         raise
           (Schedule_outcome.Cause_at
@@ -7706,7 +7731,7 @@ let check_hardware_limits_classified ~name ~(limits : Backend_intf.hardware_limi
                  detail = [%string "Schedule: kernel %{name} %{lx_phrase}"];
                } )))
 
-let check_hardware_limits ~name ~limits opt =
-  match check_hardware_limits_classified ~name ~limits opt with
+let check_hardware_limits ~name ~limits ~capabilities opt =
+  match check_hardware_limits_classified ~name ~limits ~capabilities opt with
   | () -> ()
   | exception Schedule_outcome.Cause_at (_, cause) -> Schedule_outcome.raise_cause cause

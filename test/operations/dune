@@ -1878,6 +1878,20 @@
  (modules gather_table_placement)
  (libraries base ocannl arrayjit.verdict ll_test))
 
+; gh-ocannl-1174: the containment query reads a dynamic gather through its coordinate view -- a
+; table written before the gather stops being read-before-write once the writes cover every row at
+; the gathered columns, and stays an input when they miss a row or a column. Executed legs on the
+; environment's backend, each beside a materialized twin or seeded entry values.
+
+(test
+ (name dynamic_axis_coverage)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules dynamic_axis_coverage)
+ (libraries base ocannl arrayjit.verdict ll_test))
+
 ; gh-ocannl-696: the loop-carried recurrence construct [Scan_loop] on hand-built IR -- executed
 ; cumulative sums in both directions, the online-softmax recurrence, a per-row scan under a Grid
 ; outer loop, the placement and well-formedness contracts, schedule opacity and digest identity.
@@ -7710,6 +7724,29 @@
  (deps ocannl_config)
  (modules config_token_parse)
  (libraries base stdio arrayjit.utils arrayjit.verdict))
+
+; gh-ocannl-1205: the shared-memory estimate counts Metal's converted-boundary coordinate table.
+
+(test
+ (name schedule_mma_scope_scratch)
+ (package neural_nets_lib)
+ (deps
+  (env_var OCANNL_PROFILE)
+  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
+  (env_var OCANNL_BUILD_FILES_PREFIX)
+  ocannl_config
+  (env_var OCANNL_FP16_ARITHMETIC)
+  (env_var OCANNL_BACKEND)
+  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
+  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
+  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
+  (env_var OCANNL_LARGE_MODELS)
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_BIG_MODELS))
+ (modules schedule_mma_scope_scratch)
+ (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
 
 (test
  (name fission_replay_segmentation)

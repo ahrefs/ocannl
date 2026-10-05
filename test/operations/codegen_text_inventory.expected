@@ -283,9 +283,6 @@ test/operations/schedule_epilogue_fusion.ml
     "simdgroup_store(__mma_fragment_"
     "threadgroup float"
 test/operations/schedule_ldmatrix_matmul.ml [also pins text this scan cannot name]
-    "(mma-bf16) ldmatrix a,b"
-    "(mma-fp8) e5m2 ldmatrix a"
-    "(mma-fp8) e5m2 ldmatrix b"
     "== 0)"
     "__bfloat16_as_ushort"
     "__mma_g) >> 4) ^ "
@@ -297,13 +294,11 @@ test/operations/schedule_ldmatrix_matmul.ml [also pins text this scan cannot nam
     "mma.sync.aligned.m16n8k16"
     "mma.sync.aligned.m16n8k32"
     "wmma::mma_sync"
+    ... ^ " e5m2 ldmatrix a"
+    ... ^ " e5m2 ldmatrix b"
+    ... ^ " ldmatrix a,b"
 test/operations/schedule_mma_matmul.ml [also pins text this scan cannot name]
     "#elif "
-    "(mma-bf16) ldmatrix a,b"
-    "(mma-bf16)"
-    "(mma-f16)"
-    "(wmma-bf16)"
-    "(wmma-tf32)"
     "/* mma.sync fragment reduction body begins */"
     "/* mma.sync fragment reduction body ends */"
     "/* rocwmma fragment reduction body begins */"
@@ -390,11 +385,15 @@ test/operations/schedule_mma_matmul.ml [also pins text this scan cannot name]
     "threadgroup_barrier("
     "threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);"
     "threadgroup_barrier(mem_flags::mem_threadgroup);"
-    "tile_mma 16x32x24 (wmma-tf32)"
+    "tile_mma 16x32x24 " ^ ...
     "tile_mma fragment update"
     "tmma_acc__"
     "ulong2(0), true)"
+    ... ^ " ldmatrix a,b"
     sprintf "%s; column tail %d in %d vector; row tail %d)"
+test/operations/schedule_mma_scope_scratch.ml
+    "ocannl_mma_rc8"
+    "threadgroup float ocannl_mma_rc8["
 test/operations/schedule_ops.ml [renders generated text in memory; also pins text this scan cannot name]
     "#pragma"
     "<= 3"

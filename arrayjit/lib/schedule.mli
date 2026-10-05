@@ -985,24 +985,44 @@ val launch_geometry_excess :
     on Metal) exempts its dimensions. The workgroup thread PRODUCT is deliberately not a row: it is
     not a per-dimension geometry question, and only the gate checks it. *)
 
+val workgroup_memory_bytes :
+  capabilities:Backend_intf.codegen_capabilities -> Low_level.optimized -> int
+(** The static workgroup-shared bytes the kernel will declare: its [workgroup_shared] tiles (a
+    pipelined tile counted once per rotating copy) plus, per tile-MMA emission scope, the rendering
+    backend's {!field:Backend_intf.mma_scope_workgroup_bytes} for that scope's storage triple —
+    Metal's converted destination boundary declares a coordinate table there (gh-ocannl-1205). A
+    scope is one [Tile_mma] statement, each copy counted where a loop transform duplicated it; a
+    simdgroup-fragment scope is rendered only around exactly one [Tile_mma], so it is the same
+    count. Pass the compiling context's [Context.codegen_capabilities]; the capability-free
+    {!Backend_intf.no_codegen_capabilities} counts the tiles alone. *)
+
 val check_hardware_limits :
-  name:string -> limits:Backend_intf.hardware_limits -> Low_level.optimized -> unit
+  name:string ->
+  limits:Backend_intf.hardware_limits ->
+  capabilities:Backend_intf.codegen_capabilities ->
+  Low_level.optimized ->
+  unit
 (** Validates the scheduled kernel [name] against the device limits, raising [Utils.User_error] on
     violation: the launch's workgroup size (the product of {!Low_level.launch_dims}' block
-    dimensions) against {!field:Backend_intf.max_threads_per_workgroup}, the total bytes of
-    [workgroup_shared] tiles against {!field:Backend_intf.max_workgroup_memory_bytes}, and then the
-    launch geometry dimension by dimension through the shared {!launch_geometry_excess} — the
-    workgroup's [.x]/[.y]/[.z] extents against {!field:Backend_intf.max_workgroup_dims} (a separate
-    hardware fact from the thread product: CUDA caps [maxThreadsDim.z] at 64 while the product cap
-    is 1024 — gh-ocannl-679), and both 16-bit-capped grid dimensions, the [.y] extent ([grid.(1)], a
-    blocktiled matmul's row-block count) and the folded [.z] extent ([grid.(2)], the product of the
-    Grid slots [>= 2] — gh-ocannl-643), against {!field:Backend_intf.max_grid_yz}. [grid.(0)] is
-    deliberately ungated: it is 2^31-scale wherever hardware axes bind. Backend [compile] calls this
-    after any [?lowered_transform] (or the default annotator, which already respects the limits),
-    turning driver-level launch failures into early, named errors. A no-op for all-[None] limits. *)
+    dimensions) against {!field:Backend_intf.max_threads_per_workgroup}, the
+    {!workgroup_memory_bytes} estimate against {!field:Backend_intf.max_workgroup_memory_bytes}, and
+    then the launch geometry dimension by dimension through the shared {!launch_geometry_excess} —
+    the workgroup's [.x]/[.y]/[.z] extents against {!field:Backend_intf.max_workgroup_dims} (a
+    separate hardware fact from the thread product: CUDA caps [maxThreadsDim.z] at 64 while the
+    product cap is 1024 — gh-ocannl-679), and both 16-bit-capped grid dimensions, the [.y] extent
+    ([grid.(1)], a blocktiled matmul's row-block count) and the folded [.z] extent ([grid.(2)], the
+    product of the Grid slots [>= 2] — gh-ocannl-643), against {!field:Backend_intf.max_grid_yz}.
+    [grid.(0)] is deliberately ungated: it is 2^31-scale wherever hardware axes bind. Backend
+    [compile] calls this after any [?lowered_transform] (or the default annotator, which already
+    respects the limits), turning driver-level launch failures into early, named errors. A no-op for
+    all-[None] limits. *)
 
 val check_hardware_limits_classified :
-  name:string -> limits:Backend_intf.hardware_limits -> Low_level.optimized -> unit
+  name:string ->
+  limits:Backend_intf.hardware_limits ->
+  capabilities:Backend_intf.codegen_capabilities ->
+  Low_level.optimized ->
+  unit
 (** Internal candidate-facing variant of {!check_hardware_limits}; transports excess thread,
     workgroup-memory, per-workgroup-dimension, [.y]-grid or folded-[.z]-grid requests as typed
     {!Schedule_outcome.Resource_exceeded} causes, one variant per launch dimension

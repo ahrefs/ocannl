@@ -904,6 +904,21 @@ module type C_syntax_config = sig
       byte gathers, so layout alone cannot establish [ldmatrix] emission. Backends without that
       instruction inherit [false]. *)
 
+  val mma_arm :
+    a_prec:Ops.prec ->
+    b_prec:Ops.prec ->
+    d_prec:Ops.prec ->
+    scope:Backend_intf.mma_emission_scope ->
+    Backend_intf.mma_arm option
+  (** The arm {!mma_syntax} ([Mma_per_statement]) or {!mma_fragment_syntax} ([Mma_fragment_scope])
+      selects for these storage precisions under the current numerics policy (gh-ocannl-1153),
+      published as {!Backend_intf.codegen_capabilities.mma_arm} and so into the schedule cache's
+      identity. Derive it from the very combination table and floors those hooks dispatch on — a
+      second copy would let a code change to the hooks' arm choice leave the identity alone. Where
+      the hooks try several tables in an order (CUDA), that order is restated here; pin it with
+      tests that read the arm markers they expect in rendered code from this function. [None] for a
+      combination neither hook has an arm for, and everywhere on a backend without them. *)
+
   val mma_fragment_syntax :
     (d_prec:Ops.prec ->
     a_prec:Ops.prec ->
@@ -928,6 +943,17 @@ module type C_syntax_config = sig
       load and store bracketing the reduction). [a] and [b] arrive as {!type-mma_source} — extents,
       space and layout to decide acceptance by, no address — because they are addressed by the
       nested [Tile_mma]s, each at its own position inside the reduction loop. *)
+
+  val mma_scope_workgroup_bytes : d_prec:Ops.prec -> a_prec:Ops.prec -> b_prec:Ops.prec -> int
+  (** Static workgroup-shared bytes that one accepted MMA emission scope declares for this storage
+      triple beyond the staged tiles: one per {!mma_syntax} call outside a fragment scope, one per
+      {!mma_fragment_syntax} scope (its nested update-only call declares none; the scope is rendered
+      only around exactly one [Tile_mma], which is how the schedule estimate counts it). Metal's
+      converted destination boundary is the one non-zero case (gh-ocannl-1205): its coordinate table
+      lives in [threadgroup] memory. The hook that emits the declaration derives this from the same
+      policy, so [Schedule.check_hardware_limits_classified]'s estimate cannot drift from the
+      kernel. An upper bound per scope: a call the hook then declines (extents, spaces, layouts)
+      declares nothing, which the estimate does not try to predict. *)
 
   val kernel_log_param : (string * string) option
   (** Kernel parameter for logging, if any. E.g., (Some ("int", "log_id")) or (Some ("const char*",
@@ -958,6 +984,8 @@ let codegen_capabilities (module Config : C_syntax_config) =
     compute_prec = Config.compute_prec;
     accum_prec = Config.accum_prec;
     asynchronous_staging_copy = Option.is_some Config.async_copy;
+    mma_arm = Config.mma_arm;
+    mma_scope_workgroup_bytes = Config.mma_scope_workgroup_bytes;
   }
 
 (** Whether [c] lies exactly halfway between two adjacent f32 values, so that narrowing it to f32 is
@@ -1867,7 +1895,9 @@ struct
      == 0] guard. *)
   let mma_syntax = None
   let mma_uses_ldmatrix ~a_prec:_ ~b_prec:_ ~d_prec:_ ~ta:_ ~tb:_ ~a:_ ~b:_ = false
+  let mma_arm ~a_prec:_ ~b_prec:_ ~d_prec:_ ~scope:_ = None
   let mma_fragment_syntax = None
+  let mma_scope_workgroup_bytes ~d_prec:_ ~a_prec:_ ~b_prec:_ = 0
   let float_log_style = if Input.full_printf_support then "%g" else "%de-3"
 
   let styled_log_arg doc =
@@ -4030,9 +4060,10 @@ module C_syntax (B : C_syntax_config) = struct
       in
       match accesses with
       | [ ({ Affine.a_write = false; _ } as read); ({ a_write = true; _ } as write) ]
-        when write.a_rmw && (not read.a_guarded) && (not write.a_guarded) && (not read.a_dynamic)
-             && (not write.a_dynamic) && (not read.a_whole) && (not write.a_whole)
-             && (not read.a_vec_last) && (not write.a_vec_last)
+        when write.a_rmw && (not read.a_guarded) && (not write.a_guarded)
+             && Option.is_none read.a_dyn_axis && Option.is_none write.a_dyn_axis
+             && (not read.a_whole) && (not write.a_whole) && (not read.a_vec_last)
+             && (not write.a_vec_last)
              && Affine.same_statement read.a_path write.a_path
              && Option.exists read.a_stmt_write ~f:(same_map write.a_map)
              && same_map read.a_map write.a_map ->

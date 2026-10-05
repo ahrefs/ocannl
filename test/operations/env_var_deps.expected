@@ -182,6 +182,7 @@ declared or pinned by every rule running the program (gh-ocannl-1149):
   test/operations/dune, test schedule_epilogue_fusion: Ir.Schedule.apply
   test/operations/dune, test schedule_ldmatrix_matmul: Ir.Schedule.apply
   test/operations/dune, test schedule_mma_matmul: Ir.Schedule.apply
+  test/operations/dune, test schedule_mma_scope_scratch: Ir.Schedule.apply
   test/operations/dune, test schedule_ops: Ir.Schedule.apply, Ir.Schedule.default_gpu
   test/operations/dune, test schedule_pack_mma_matmul: Ir.Schedule.apply
   test/operations/dune, test schedule_packed_constants: Ir.Schedule.apply

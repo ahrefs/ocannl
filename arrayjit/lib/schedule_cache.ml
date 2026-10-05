@@ -543,11 +543,12 @@ let codegen_tag ~(limits : Backend_intf.hardware_limits)
          in it. *)
       Sexp.to_string (Backend_intf.sexp_of_hardware_limits limits);
       (* What the numerics policy RESOLVES to on this backend (gh-ocannl-1117): the backend's own
-         compute and accumulator resolution functions, tabulated over every precision. The numerics
-         tag hashes the configured mode, which is not the same fact — HIP's [Bf16_auto] went wide in
-         gh-ocannl-1051 with the mode unchanged, and the component that kept its old winners from
-         replaying was added by hand. Derived from the function codegen calls, the identity now
-         moves exactly when some backend's resolution does. *)
+         compute and accumulator resolution functions, tabulated over every precision, and its mma
+         arm table (gh-ocannl-1153: CUDA's tf32 arm, which [accum_prec] cannot tell from no arm).
+         The numerics tag hashes the configured mode, which is not the same fact — HIP's [Bf16_auto]
+         went wide in gh-ocannl-1051 with the mode unchanged, and the component that kept its old
+         winners from replaying was added by hand. Derived from the functions codegen calls, the
+         identity now moves exactly when some backend's resolution does. *)
       Backend_intf.codegen_capabilities_fingerprint capabilities;
       (if Utils.settings.large_models then "wide-index" else "narrow-index");
       (* The EFFECTIVE predicate, not the raw flag (Codex P1 on PR #337): the gate additionally

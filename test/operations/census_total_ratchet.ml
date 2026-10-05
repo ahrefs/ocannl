@@ -80,8 +80,10 @@ let allowed =
     };
     {
       golden = Golden "test/operations/codegen_text_inventory.expected";
-      pattern = {|^    ".*"$|};
-      reason = "a string literal quoted from the source that pins it; its digits are that text";
+      pattern = {|^    ".*"\( \^ \.\.\.\)?$|};
+      reason =
+        "a string literal quoted from the source that pins it, alone or as the literal head of a \
+         concatenation with a computed tail; its digits are that text";
     };
     {
       golden = Golden "test/operations/config_usage_scan_control.expected";

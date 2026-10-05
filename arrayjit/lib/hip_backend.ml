@@ -609,13 +609,47 @@ end = struct
         mma_tile typ
         (match layout with Some l -> ", rocwmma::" ^ l | None -> "")
 
+    (* The combination table both hooks consult: per storage triple, the precision the accumulator
+       fragment resides at and the wmma leading-dimension multiples for a/b and for d. The
+       accumulator and the destination storage coincide on every arm but the wide-f16 and wide-bf16
+       ones; where they differ, [mma_d_boundary_lines] carries the conversion. [mma_arm] publishes
+       this table to the schedule cache's identity (gh-ocannl-1153). *)
+    let mma_accumulator ~a_prec ~b_prec ~d_prec =
+      match (a_prec, b_prec, d_prec) with
+      | Ops.Half_prec _, Ops.Half_prec _, Ops.Single_prec _ -> Some (Ops.single, 8, 4)
+      (* The uniform-f16 arm's accumulator follows the [Numerics] policy, and the two arms are
+         mutually exclusive by construction. Under [Fp16_auto]/[Fp16_narrow] the accumulator
+         fragment is itself f16, so the [d] boundary is rocWMMA's own load/store. Under [Fp16_wide]
+         (gh-ocannl-789) the accumulator is [float] against the same f16 STORAGE, and
+         [mma_d_boundary_lines] converts once at each end -- which is what lets
+         [mma_f16_wide_acc_scopes] advertise both scopes and the uniform-f16 seeds survive the wide
+         policy on this backend. *)
+      | Ops.Half_prec _, Ops.Half_prec _, Ops.Half_prec _ when Numerics.fp16_accum_wide () ->
+          Some (Ops.single, 8, 8)
+      | Ops.Half_prec _, Ops.Half_prec _, Ops.Half_prec _ -> Some (Ops.half, 8, 8)
+      | Ops.Bfloat16_prec _, Ops.Bfloat16_prec _, Ops.Single_prec _ -> Some (Ops.single, 8, 4)
+      (* The uniform-bf16 twin of the wide-f16 arm (gh-ocannl-838): under [Bf16_wide], and since
+         gh-ocannl-1051 under the default [Bf16_auto], a [float] accumulator against the bf16
+         STORAGE destination, converted by [mma_d_boundary_lines]. gfx11's bf16-accumulate WMMA is
+         not exactly rounded (about a bf16 ulp at the partial-sum scale, see schedule_mma_matmul's
+         table; grossly more over long reductions), so this leaves only the narrowing rounding. *)
+      | Ops.Bfloat16_prec _, Ops.Bfloat16_prec _, Ops.Bfloat16_prec _ when bf16_accum_wide () ->
+          Some (Ops.single, 8, 8)
+      (* [Bf16_narrow] only: the bf16-accumulate arm. *)
+      | Ops.Bfloat16_prec _, Ops.Bfloat16_prec _, Ops.Bfloat16_prec _ -> Some (Ops.bfloat16, 8, 8)
+      | _ -> None
+
+    (* rocWMMA's element type for a precision. It need not be textually identical to the node's own
+       C type ([__half] / [__hip_bfloat16]), so the operand pointers are [reinterpret_cast] to it at
+       each call site. *)
+    let rocwmma_elt = function
+      | Ops.Single_prec _ -> "float"
+      | Ops.Half_prec _ -> "rocwmma::float16_t"
+      | Ops.Bfloat16_prec _ -> "rocwmma::bfloat16_t"
+      | prec -> invalid_arg ("Hip_backend.rocwmma_elt: " ^ Ops.prec_string prec)
+
     (* (a/b fragment element type, accumulator fragment element type, [d] STORAGE element type, ld
-       multiple for a/b, ld multiple for d). rocWMMA element types [rocwmma::float16_t] /
-       [rocwmma::bfloat16_t] / [float] need not be textually identical to the node's own C type
-       ([__half] / [__hip_bfloat16]), so the operand pointers are [reinterpret_cast] to them at each
-       call site. The accumulator and the destination storage types coincide on every arm but the
-       wide-f16 and wide-bf16 ones; where they differ, [mma_d_boundary_lines] carries the
-       conversion. *)
+       multiple for a/b, ld multiple for d) of [mma_accumulator]'s arm. *)
     let mma_combo ~a_prec ~b_prec ~d_prec ~d_layout ~a_layout ~b_layout =
       (* rocWMMA fragments are opaque like [nvcuda::wmma]'s: there is no swizzle-aware fragment load
          here, so a swizzled operand layout declines to the caller's scalar fallback (gh-ocannl-481
@@ -623,33 +657,14 @@ end = struct
       let plain = function `Plain -> true | `Swizzled_b128 -> false in
       if not (plain d_layout && plain a_layout && plain b_layout) then None
       else
-        match (a_prec, b_prec, d_prec) with
-        | Ops.Half_prec _, Ops.Half_prec _, Ops.Single_prec _ ->
-            Some ("rocwmma::float16_t", "float", "float", 8, 4)
-        (* The uniform-f16 arm's accumulator follows the [Numerics] policy, and the two arms are
-           mutually exclusive by construction. Under [Fp16_auto]/[Fp16_narrow] the accumulator
-           fragment is itself f16, so the [d] boundary is rocWMMA's own load/store. Under
-           [Fp16_wide] (gh-ocannl-789) the accumulator is [float] against the same f16 STORAGE, and
-           [mma_d_boundary_lines] converts once at each end -- which is what lets
-           [mma_f16_wide_acc_scopes] advertise both scopes and the uniform-f16 seeds survive the
-           wide policy on this backend. *)
-        | Ops.Half_prec _, Ops.Half_prec _, Ops.Half_prec _ when Numerics.fp16_accum_wide () ->
-            Some ("rocwmma::float16_t", "float", "rocwmma::float16_t", 8, 8)
-        | Ops.Half_prec _, Ops.Half_prec _, Ops.Half_prec _ ->
-            Some ("rocwmma::float16_t", "rocwmma::float16_t", "rocwmma::float16_t", 8, 8)
-        | Ops.Bfloat16_prec _, Ops.Bfloat16_prec _, Ops.Single_prec _ ->
-            Some ("rocwmma::bfloat16_t", "float", "float", 8, 4)
-        (* The uniform-bf16 twin of the wide-f16 arm (gh-ocannl-838): under [Bf16_wide], and since
-           gh-ocannl-1051 under the default [Bf16_auto], a [float] accumulator against the bf16
-           STORAGE destination, converted by [mma_d_boundary_lines]. gfx11's bf16-accumulate WMMA is
-           not exactly rounded (about a bf16 ulp at the partial-sum scale, see schedule_mma_matmul's
-           table; grossly more over long reductions), so this leaves only the narrowing rounding. *)
-        | Ops.Bfloat16_prec _, Ops.Bfloat16_prec _, Ops.Bfloat16_prec _ when bf16_accum_wide () ->
-            Some ("rocwmma::bfloat16_t", "float", "rocwmma::bfloat16_t", 8, 8)
-        (* [Bf16_narrow] only: the bf16-accumulate arm. *)
-        | Ops.Bfloat16_prec _, Ops.Bfloat16_prec _, Ops.Bfloat16_prec _ ->
-            Some ("rocwmma::bfloat16_t", "rocwmma::bfloat16_t", "rocwmma::bfloat16_t", 8, 8)
-        | _ -> None
+        Option.map (mma_accumulator ~a_prec ~b_prec ~d_prec) ~f:(fun (acc_prec, ab_ld, d_ld) ->
+            (rocwmma_elt a_prec, rocwmma_elt acc_prec, rocwmma_elt d_prec, ab_ld, d_ld))
+
+    (* Both hooks consult [mma_combo] in both scopes, and the gfx11/gfx12 + rocWMMA gate is the
+       device's ([hardware_limits.mma], [mma_supported]), so the arm names no floor. *)
+    let mma_arm ~a_prec ~b_prec ~d_prec ~scope:_ =
+      Option.map (mma_accumulator ~a_prec ~b_prec ~d_prec) ~f:(fun (arm_accumulator, _, _) ->
+          { Backend_intf.arm_name = "rocwmma"; arm_accumulator; arm_floor = None })
 
     (* The [d] boundary of the [mt] x [nt] accumulator-fragment array [acc]: [`Load] brings the
        destination's 16x16 blocks at [__mma_dp] into [acc[__mi][__ni]], [`Store] writes them back.

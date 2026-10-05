@@ -77,6 +77,11 @@ let cells ~dims env (a : acc) : int list =
   | None -> bases
   | Some len -> List.concat_map bases ~f:(fun b -> List.init len ~f:(fun k -> b + k))
 
+(* The cells one WRITE instance certainly stores to: a dynamic axis names a row the data picks, so
+   unless the axis has one row, no cell is certain. *)
+let definite_cells ~dims env (a : acc) : int list =
+  if Option.exists a.dyn ~f:(fun ax -> dims.(ax) > 1) then [] else cells ~dims env a
+
 let intersects xs ys = List.exists xs ~f:(fun x -> List.mem ys x ~equal:Int.equal)
 let lookup env s = List.Assoc.find env s ~equal:Idx.equal_symbol
 
@@ -478,73 +483,187 @@ let () =
     ~domain:[ (c, 4) ]
     [| sub; aff [ (4, c) ] 0; sub |]
 
+(* An access record as [Low_level.affine_accesses] builds it: the map as the IR holds it, the
+   dynamic axis and the vector run beside it, at statement [path] of a flat sequence. *)
+let access ?(write = true) ~loops ~path (a : acc) : unit Aff.access =
+  {
+    Aff.a_tn = ();
+    a_map = a.map;
+    a_write = write;
+    a_dyn_axis = a.dyn;
+    a_whole = false;
+    a_vec_last = Option.is_some a.vec;
+    a_vec_len = Option.value a.vec ~default:0;
+    a_guarded = false;
+    a_gated = false;
+    a_rmw = false;
+    a_val_syms = [];
+    a_stmt_write = None;
+    a_loops = loops;
+    a_path = [ Aff.Stmt path; (if write then Aff.Write else Aff.Rhs) ];
+  }
+
 (* {2 Containment}: [read_covered_before] compares each prior write with the read in their views'
    common frame, so a flattened write can cover an ordinary read and vice versa. Every write here
    precedes the read and shares no loop with it; covered means every cell the read touches is a cell
    some write instance touches. *)
+(* [~control]: the case is a negative control — the enumeration must find an uncovered cell, so a
+   [Covered] there would fail the soundness claim. *)
+let covered ?(control = false) ~name ~dims ~(read : acc * (Idx.symbol * (int * int)) list)
+    ~(writes : (acc * (Idx.symbol * (int * int)) list) list) () =
+  let read_acc, read_loops = read in
+  let query =
+    Aff.read_covered_before ~dims
+      ~read:(access ~write:false ~loops:read_loops ~path:1 read_acc)
+      ~writes:(List.map writes ~f:(fun (w, loops) -> access ~loops ~path:0 w))
+      ()
+  in
+  let written =
+    List.concat_map writes ~f:(fun (w, loops) ->
+        List.concat_map
+          (envs loops (List.map loops ~f:fst))
+          ~f:(fun env -> definite_cells ~dims env w))
+  in
+  let missing =
+    List.find_map
+      (envs read_loops (List.map read_loops ~f:fst))
+      ~f:(fun env ->
+        List.find (cells ~dims env read_acc) ~f:(fun x -> not (List.mem written x ~equal:Int.equal)))
+  in
+  let oracle = Option.is_none missing in
+  let shown = match query with `Covered -> "Covered" | `Unknown _ -> "Unknown" in
+  Stdio.printf "%-60s query %-12s oracle %s\n" name shown
+    (if oracle then "covered" else "uncovered");
+  if control then claimf "%s: the enumeration finds an uncovered cell" name (not oracle);
+  claimf "%s: a proven coverage agrees with the enumerated cells" name
+    (match query with `Covered -> oracle | `Unknown _ -> true)
+
 let () =
   Stdio.printf "\n=== read_covered_before ===\n";
-  let access ?(write = true) ~loops ~path (a : acc) : unit Aff.access =
-    {
-      Aff.a_tn = ();
-      a_map = a.map;
-      a_write = write;
-      a_dynamic = Option.is_some a.dyn;
-      a_whole = false;
-      a_vec_last = Option.is_some a.vec;
-      a_vec_len = Option.value a.vec ~default:0;
-      a_guarded = false;
-      a_gated = false;
-      a_rmw = false;
-      a_val_syms = [];
-      a_stmt_write = None;
-      a_loops = loops;
-      a_path = [ Aff.Stmt path; (if write then Aff.Write else Aff.Rhs) ];
-    }
-  in
-  let covered ~name ~dims ~(read : acc * (Idx.symbol * (int * int)) list)
-      ~(writes : (acc * (Idx.symbol * (int * int)) list) list) =
-    let read_acc, read_loops = read in
-    let query =
-      Aff.read_covered_before ~dims
-        ~read:(access ~write:false ~loops:read_loops ~path:1 read_acc)
-        ~writes:(List.map writes ~f:(fun (w, loops) -> access ~loops ~path:0 w))
-        ()
-    in
-    let written =
-      List.concat_map writes ~f:(fun (w, loops) ->
-          List.concat_map (envs loops (List.map loops ~f:fst)) ~f:(fun env -> cells ~dims env w))
-    in
-    let missing =
-      List.find_map
-        (envs read_loops (List.map read_loops ~f:fst))
-        ~f:(fun env ->
-          List.find (cells ~dims env read_acc) ~f:(fun x ->
-              not (List.mem written x ~equal:Int.equal)))
-    in
-    let oracle = Option.is_none missing in
-    let shown = match query with `Covered -> "Covered" | `Unknown _ -> "Unknown" in
-    Stdio.printf "%-60s query %-12s oracle %s\n" name shown
-      (if oracle then "covered" else "uncovered");
-    claimf "%s: a proven coverage agrees with the enumerated cells" name
-      (match query with `Covered -> oracle | `Unknown _ -> true)
-  in
   let c = sym () and h = sym () and e = sym () and f = sym () in
   covered ~name:"flat write [Sub;c<8] covers read [h;e] (2x4)" ~dims:[| 2; 4 |]
     ~read:(plain [| it h; it e |], [ (h, (0, 1)); (e, (0, 3)) ])
-    ~writes:[ (plain [| sub; it c |], [ (c, (0, 7)) ]) ];
-  covered ~name:"flat write [Sub;c<4] leaves row 1 of read [h;e]" ~dims:[| 2; 4 |]
+    ~writes:[ (plain [| sub; it c |], [ (c, (0, 7)) ]) ]
+    ();
+  covered ~control:true ~name:"flat write [Sub;c<4] leaves row 1 of read [h;e]" ~dims:[| 2; 4 |]
     ~read:(plain [| it h; it e |], [ (h, (0, 1)); (e, (0, 3)) ])
-    ~writes:[ (plain [| sub; it c |], [ (c, (0, 3)) ]) ];
+    ~writes:[ (plain [| sub; it c |], [ (c, (0, 3)) ]) ]
+    ();
   covered ~name:"write [h;e] covers flat read [Sub;f<8]" ~dims:[| 2; 4 |]
     ~read:(plain [| sub; it f |], [ (f, (0, 7)) ])
-    ~writes:[ (plain [| it h; it e |], [ (h, (0, 1)); (e, (0, 3)) ]) ];
+    ~writes:[ (plain [| it h; it e |], [ (h, (0, 1)); (e, (0, 3)) ]) ]
+    ();
   covered ~name:"flat vec write [Sub;4c] run 4 covers read [h;e]" ~dims:[| 2; 4 |]
     ~read:(plain [| it h; it e |], [ (h, (0, 1)); (e, (0, 3)) ])
-    ~writes:[ (vector ~length:4 [| sub; aff [ (4, c) ] 0 |], [ (c, (0, 1)) ]) ];
+    ~writes:[ (vector ~length:4 [| sub; aff [ (4, c) ] 0 |], [ (c, (0, 1)) ]) ]
+    ();
   covered ~name:"trailing-lane vec [Sub;4c;Sub] covers read [h;e;0]" ~dims:[| 2; 4; 1 |]
     ~read:(plain [| it h; it e; fx 0 |], [ (h, (0, 1)); (e, (0, 3)) ])
-    ~writes:[ (vector ~length:4 [| sub; aff [ (4, c) ] 0; sub |], [ (c, (0, 1)) ]) ];
-  covered ~name:"trailing-lane vec [Sub;4c;Sub] c<1 leaves row 1" ~dims:[| 2; 4; 1 |]
+    ~writes:[ (vector ~length:4 [| sub; aff [ (4, c) ] 0; sub |], [ (c, (0, 1)) ]) ]
+    ();
+  covered ~control:true ~name:"trailing-lane vec [Sub;4c;Sub] c<1 leaves row 1" ~dims:[| 2; 4; 1 |]
     ~read:(plain [| it h; it e; fx 0 |], [ (h, (0, 1)); (e, (0, 3)) ])
     ~writes:[ (vector ~length:4 [| sub; aff [ (4, c) ] 0; sub |], [ (c, (0, 0)) ]) ]
+    ()
+
+let () =
+  (* gh-ocannl-1174: a dynamic read's data-dependent axis is a universal coordinate over its extent
+     (the enumeration reads every row), so a gather is covered exactly when the writes fill every
+     row at the cells its known coordinates name. *)
+  let c = sym () and h = sym () and e = sym () and f = sym () and k = sym () and r = sym () in
+  covered ~name:"gather [?;e] after a full write [h;e] (3x4)" ~dims:[| 3; 4 |]
+    ~read:(dynamic ~axis:0 [| fx 0; it r |], [ (r, (0, 3)) ])
+    ~writes:[ (plain [| it h; it e |], [ (h, (0, 2)); (e, (0, 3)) ]) ]
+    ();
+  covered ~name:"gather [?;0] after a column-0 write [h;0]" ~dims:[| 3; 4 |]
+    ~read:(dynamic ~axis:0 [| fx 0; fx 0 |], [])
+    ~writes:[ (plain [| it h; fx 0 |], [ (h, (0, 2)) ]) ]
+    ();
+  covered ~name:"gather [h;?] (dynamic column) after a full write" ~dims:[| 3; 4 |]
+    ~read:(dynamic ~axis:1 [| it h; fx 0 |], [ (h, (0, 2)) ])
+    ~writes:[ (plain [| it k; it e |], [ (k, (0, 2)); (e, (0, 3)) ]) ]
+    ();
+  covered ~name:"gather [?;e] after rows 0-1 and row 2 (union)" ~dims:[| 3; 4 |]
+    ~read:(dynamic ~axis:0 [| fx 0; it r |], [ (r, (0, 3)) ])
+    ~writes:
+      [
+        (plain [| it h; it e |], [ (h, (0, 1)); (e, (0, 3)) ]);
+        (plain [| fx 2; it f |], [ (f, (0, 3)) ]);
+      ]
+    ();
+  covered ~name:"gather [?;e] after a flat write [Sub;c<12]" ~dims:[| 3; 4 |]
+    ~read:(dynamic ~axis:0 [| fx 0; it r |], [ (r, (0, 3)) ])
+    ~writes:[ (plain [| sub; it c |], [ (c, (0, 11)) ]) ]
+    ();
+  (* The negative controls: a miss on the dynamic axis, then on a known one, then a write that is
+     itself dynamic (a scatter names no definite row). *)
+  covered ~control:true ~name:"control: gather [?;e] after rows 0-1 only" ~dims:[| 3; 4 |]
+    ~read:(dynamic ~axis:0 [| fx 0; it r |], [ (r, (0, 3)) ])
+    ~writes:[ (plain [| it h; it e |], [ (h, (0, 1)); (e, (0, 3)) ]) ]
+    ();
+  covered ~control:true ~name:"control: gather [?;e] after a column-0 write" ~dims:[| 3; 4 |]
+    ~read:(dynamic ~axis:0 [| fx 0; it r |], [ (r, (0, 3)) ])
+    ~writes:[ (plain [| it h; fx 0 |], [ (h, (0, 2)) ]) ]
+    ();
+  covered ~control:true ~name:"control: gather [?;e] after a flat write [Sub;c<11]" ~dims:[| 3; 4 |]
+    ~read:(dynamic ~axis:0 [| fx 0; it r |], [ (r, (0, 3)) ])
+    ~writes:[ (plain [| sub; it c |], [ (c, (0, 10)) ]) ]
+    ();
+  covered ~control:true ~name:"control: read [h;e] after a scatter [?;e]" ~dims:[| 3; 4 |]
+    ~read:(plain [| it h; it e |], [ (h, (0, 2)); (e, (0, 3)) ])
+    ~writes:[ (dynamic ~axis:0 [| fx 0; it r |], [ (r, (0, 3)) ]) ]
+    ()
+
+(* {2 may_touch_same_cell}: each access over its whole loop box, the two boxes iterated
+   independently. A dynamic access's view knows every coordinate but its dynamic axis
+   (gh-ocannl-1174), so two accesses that differ in a known coordinate never meet, whatever row the
+   data names; the enumeration lets a dynamic axis take every row. *)
+let () =
+  Stdio.printf "\n=== may_touch_same_cell ===\n";
+  (* [~control]: the two accesses do meet, so a proven disjointness would fail its claim. *)
+  let touch ?(control = false) ~name ~dims ~(left : acc * (Idx.symbol * (int * int)) list)
+      ~(right : acc * (Idx.symbol * (int * int)) list) () =
+    let side (a, loops) =
+      ( access ~write:false ~loops ~path:0 a,
+        List.concat_map (envs loops (List.map loops ~f:fst)) ~f:(fun env -> cells ~dims env a) )
+    in
+    let la, lcells = side left and ra, rcells = side right in
+    let query = Aff.may_touch_same_cell ~dims la ra in
+    let oracle = intersects lcells rcells in
+    (* Disjointness over a population the enumeration actually produced. *)
+    let disjoint = (not (List.is_empty lcells)) && not (intersects lcells rcells) in
+    Stdio.printf "%-60s query %-12s oracle %s\n" name (Bool.to_string query) (Bool.to_string oracle);
+    if control then claimf "%s: the enumeration finds a common cell" name oracle;
+    claimf "%s: a proven disjointness agrees with the enumerated cells" name (query || disjoint)
+  in
+  let e = sym () and h = sym () and c = sym () in
+  touch ~name:"gather [?;0] vs column write [h;1]" ~dims:[| 3; 4 |]
+    ~left:(dynamic ~axis:0 [| fx 0; fx 0 |], [])
+    ~right:(plain [| it h; fx 1 |], [ (h, (0, 2)) ])
+    ();
+  touch ~name:"gather [?;e<2] vs columns [h;c+2]" ~dims:[| 3; 4 |]
+    ~left:(dynamic ~axis:0 [| fx 0; it e |], [ (e, (0, 1)) ])
+    ~right:(plain [| it h; aff [ (1, c) ] 2 |], [ (h, (0, 2)); (c, (0, 1)) ])
+    ();
+  touch ~name:"gather [?;0] vs scatter [?;3]" ~dims:[| 3; 4 |]
+    ~left:(dynamic ~axis:0 [| fx 0; fx 0 |], [])
+    ~right:(dynamic ~axis:0 [| fx 0; fx 3 |], [])
+    ();
+  touch ~name:"gather [h;?] vs row write [2;e], h<2" ~dims:[| 3; 4 |]
+    ~left:(dynamic ~axis:1 [| it h; fx 0 |], [ (h, (0, 1)) ])
+    ~right:(plain [| fx 2; it e |], [ (e, (0, 3)) ])
+    ();
+  (* The negative controls: the two accesses agree on every known coordinate and meet on the dynamic
+     axis. *)
+  touch ~control:true ~name:"control: gather [?;e] vs cell [2;1]" ~dims:[| 3; 4 |]
+    ~left:(dynamic ~axis:0 [| fx 0; it e |], [ (e, (0, 3)) ])
+    ~right:(plain [| fx 2; fx 1 |], [])
+    ();
+  touch ~control:true ~name:"control: gather [?;1] vs scatter [?;e]" ~dims:[| 3; 4 |]
+    ~left:(dynamic ~axis:0 [| fx 0; fx 1 |], [])
+    ~right:(dynamic ~axis:0 [| fx 0; it e |], [ (e, (0, 3)) ])
+    ();
+  touch ~control:true ~name:"control: gather [h;?] vs row write [1;e], h<2" ~dims:[| 3; 4 |]
+    ~left:(dynamic ~axis:1 [| it h; fx 0 |], [ (h, (0, 1)) ])
+    ~right:(plain [| fx 1; it e |], [ (e, (0, 3)) ])
+    ()
