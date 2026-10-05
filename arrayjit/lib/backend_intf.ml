@@ -29,10 +29,10 @@ type upload_arena = {
           the tail until it reaches a tenant still held by a surviving pool owner. *)
 }
 [@@deriving sexp_of]
-(** A working pool that host uploads of not-yet-allocated nodes are bump-packed into
-    (gh-ocannl-1125), so that loading many parameters with [Context.set_values] before any routine
-    links them costs a few pools rather than one each -- Metal binds at most [metal_max_pools] per
-    routine. *)
+(** A working pool that host uploads and device copies of not-yet-allocated nodes are bump-packed
+    into (gh-ocannl-1125), so that loading many parameters with [Context.set_values] before any
+    routine links them costs a few pools rather than one each -- Metal publishes the per-routine
+    limit as {!field-hardware_limits.max_bound_pools}. *)
 
 type upload_arenas = {
   mutable arenas : upload_arena list;
@@ -184,6 +184,10 @@ type timing_identity = { device_signature : string; toolchain_signature : string
     does not disable caching or claim that all driver/runtime/compiler inputs are represented. *)
 
 type hardware_limits = {
+  max_bound_pools : int option;
+      (** Maximum number of distinct device-memory pools one routine may bind. [None] when the
+          backend imposes no pool binding budget. Counts pools, not tensor nodes: host uploads and
+          device copies into one context share arenas. Metal enforces this at link time. *)
   max_threads_per_workgroup : int option;
       (** Upper bound on the number of threads in one workgroup (CUDA thread block / Metal
           threadgroup); [None] when the backend imposes no limit (the C backends render annotated
@@ -393,6 +397,7 @@ let codegen_capabilities_fingerprint
 
 let no_hardware_limits =
   {
+    max_bound_pools = None;
     max_threads_per_workgroup = None;
     max_workgroup_memory_bytes = None;
     max_workgroup_dims = None;
@@ -909,9 +914,10 @@ module type With_buffer_retrieval_and_syncing = sig
         a consumer of the merge buffer against [r.context] statically verifies the node. *)
 
   val init_from_device : Tnode.t -> dst:context -> src:context -> context
-  (** Schedules a copy from [src] to [dst]: a variant of {!device_to_device} with
-      [into_merge_buffer=No] that requires the input [src] context to not contain the tensor node,
-      and outputs the [dst] context with the tensor node. *)
+  (** Copies from [src] to [dst]: a variant of {!device_to_device} with [into_merge_buffer=No]
+      requiring [src] to contain the node and [dst] not to contain it. The destination shares
+      [dst]'s upload arenas with host uploads, and the copy completes before the updated context is
+      returned, so a stream failure can reclaim the unowned slot. *)
 
   val sync_device : device -> unit
   (** Synchronizes all the streams on a device, and cleans up (removes) all associated events. *)

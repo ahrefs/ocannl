@@ -23,6 +23,20 @@ failed arena append allocates and frees nothing: true
 failed arena append leaves its pool-mates' values intact: true
 arena-append retry lands in the arena without a pool of its own: true
 arena control releases each of its three pools exactly once: true
+Transfer_pool_allocated: fresh device-copy injection fires: true
+Transfer_pool_allocated: failed device copy frees exactly its fresh pool: true
+Init_from_device_before_await: fresh device-copy injection fires: true
+Init_from_device_before_await: failed device copy frees exactly its fresh pool: true
+mixed host and device transfers commit exactly three arenas: true
+Transfer_pool_allocated: device-copy arena append injection fires: true
+Transfer_pool_allocated: failed device-copy append allocates and frees nothing: true
+failed device-copy append preserves every existing pool-mate: true
+Init_from_device_before_await: device-copy arena append injection fires: true
+Init_from_device_before_await: failed device-copy append allocates and frees nothing: true
+failed device-copy append preserves every existing pool-mate: true
+device-copy retry reuses the restored arena bump: true
+copied destination survives releasing its source: true
+mixed transfer destination releases all three pools exactly once: true
 finalize-await injection fired: true
 failed finalize await commits no cleanup state: true
 finalize-await control retry releases exactly once: true

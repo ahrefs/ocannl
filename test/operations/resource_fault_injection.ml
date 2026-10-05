@@ -274,6 +274,66 @@ let () =
     (pools_freed after_retry_append after_arena_release = 3
     && live_working_delta before_arena after_arena_release = 0);
 
+  (* gh-ocannl-1172: device copies share the upload arena and its unwind, including a failure first
+     observed after the queued copy. Fresh destinations free once; append failures restore the bump
+     without freeing pool-mates, and the ordinary retry must reuse the same pool. *)
+  let source = Context.from_host (Context.cpu ()) x.Tensor.value nd in
+  let source = Context.from_host source z.Tensor.value (arena_nd 10.) in
+  let source = Context.from_host source w.Tensor.value nd_w in
+  let source = Context.from_host source v.Tensor.value nd_v in
+  List.iter [ FI.Transfer_pool_allocated; FI.Init_from_device_before_await ] ~f:(fun point ->
+      let label = Sexp.to_string (FI.sexp_of_point point) in
+      let before = AC.snapshot () in
+      let raised, hits =
+        injected point (fun () -> Context.copy x.Tensor.value ~src:source ~dst:(Context.cpu ()))
+      in
+      let after = AC.snapshot () in
+      pf "%s: fresh device-copy injection fires" label (raised && hits = 1);
+      pf "%s: failed device copy frees exactly its fresh pool" label
+        (working_allocated before after = 1
+        && pools_freed before after = 1
+        && live_working_delta before after = 0));
+  let before = AC.snapshot () in
+  let destination = Context.copy x.Tensor.value ~src:source ~dst:(Context.cpu ()) in
+  let destination = Context.from_host destination z.Tensor.value (arena_nd 10.) in
+  let destination = Context.copy w.Tensor.value ~src:source ~dst:destination in
+  let held = AC.snapshot () in
+  p "mixed host and device transfers commit exactly three arenas"
+    (working_allocated before held = 3 && live_working_delta before held = 3);
+  List.iter [ FI.Transfer_pool_allocated; FI.Init_from_device_before_await ] ~f:(fun point ->
+      let label = Sexp.to_string (FI.sexp_of_point point) in
+      let raised, hits =
+        injected point (fun () -> Context.copy v.Tensor.value ~src:source ~dst:destination)
+      in
+      let after = AC.snapshot () in
+      pf "%s: device-copy arena append injection fires" label (raised && hits = 1);
+      pf "%s: failed device-copy append allocates and frees nothing" label
+        (working_allocated held after = 0
+        && pools_freed held after = 0
+        && live_working_delta held after = 0);
+      p_all "failed device-copy append preserves every existing pool-mate"
+        [ (x.Tensor.value, nd); (z.Tensor.value, arena_nd 10.); (w.Tensor.value, nd_w) ]
+        ~f:(fun (tn, nd) ->
+          approx_array (Context.get_values destination tn) (Ir.Ndarray.retrieve_flat_values nd)));
+  let destination = Context.copy v.Tensor.value ~src:source ~dst:destination in
+  let after = AC.snapshot () in
+  p "device-copy retry reuses the restored arena bump"
+    (working_allocated held after = 0
+    && pools_freed held after = 0
+    && approx_array
+         (Context.get_values destination v.Tensor.value)
+         (Ir.Ndarray.retrieve_flat_values nd_v));
+  Context.release source;
+  p "copied destination survives releasing its source"
+    (approx_array
+       (Context.get_values destination v.Tensor.value)
+       (Ir.Ndarray.retrieve_flat_values nd_v));
+  let held = AC.snapshot () in
+  Context.release destination;
+  let after = AC.snapshot () in
+  p "mixed transfer destination releases all three pools exactly once"
+    (pools_freed held after = 3 && live_working_delta held after = -3);
+
   (* Await is the first fallible release action. A failure there commits neither the finalized flag
      nor any free, and the uninjected retry performs the one cleanup. *)
   let await_ctx = Context.from_host (Context.cpu ()) x.Tensor.value nd in

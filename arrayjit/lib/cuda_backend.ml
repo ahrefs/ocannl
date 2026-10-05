@@ -2021,6 +2021,7 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
            (* CUDA's gridDim.y and gridDim.z cap is 65535 on every architecture (the Compute
               Capability tables), unlike the per-device limits queried above — a constant, not an
               attribute. gridDim.x is 2^31-1 and needs no gate. *)
+           max_bound_pools = None;
            max_grid_yz = Some 65535;
            (* Tensor cores (tensorize-mma T3): the 32-thread warp cooperates on 16x16x16 wmma tiles
               from sm_70 up; [mma_format_tiles] advertises the divergent fp8 16x8x32, tf32 16x16x8
