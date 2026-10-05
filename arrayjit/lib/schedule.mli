@@ -874,6 +874,35 @@ val fission_scheduled :
     coalescing) are restored. {!maybe_default_schedules} passes [true] on GPU backends, where a
     serial nest costs orders of magnitude more than on CPU. *)
 
+type segmentation = ([ `Normal | `Zeros | `Solo ] * int) list [@@deriving sexp, equal]
+(** A fission segmentation as data (gh-ocannl-1164): the kind and the length, in units, of each
+    segment in order — a unit being one top-level statement with the comments before it, so the
+    units are a function of the code alone. One segment over every unit is the unfissioned routine.
+    The schedule cache persists it with a fissioned winner, so a replay cuts where the winner was
+    cut instead of re-deriving the cuts under the current policy. *)
+
+val fission_segmented :
+  ?promote_locals:bool ->
+  ?arity_cuts:bool ->
+  ?keep_mapping:(Low_level.optimized -> schedule) ->
+  ?segmentation:segmentation ->
+  preset:(Low_level.optimized -> schedule) ->
+  zero_sched:(Tnode.t list -> schedule) ->
+  static_indices:Indexing.static_symbol list ->
+  Low_level.optimized ->
+  segmentation
+  * ([ `Normal | `Zeros | `Solo ] * Low_level.optimized * schedule * Low_level.optimized) list
+(** {!fission_scheduled}, also returning the segmentation of its result (one element per tuple), or
+    — given [segmentation] — applying that recorded segmentation instead of deriving one. A given
+    segmentation is neither re-grouped nor coalesced, so [arity_cuts] and [keep_mapping] do not
+    reach it; the promotions and scope-local replicas are recomputed for its boundaries exactly as
+    for derived ones, and [preset] is called on {e every} segment whatever its kind ([zero_sched] is
+    not consulted): a replay brings each segment's schedule, zero expansions included. A
+    segmentation that does not fit the routine — its lengths do not sum to the routine's units, a
+    segment is empty, or a boundary separates a scope-local definition from a use it cannot be
+    replicated for — raises {!Schedule_outcome.Cause_at} with an [Illegal_schedule] cause, a
+    candidate's ordinary decline; it is never repaired into another segmentation. *)
+
 val maybe_default_schedules :
   backend_name:string ->
   ?limits:Backend_intf.hardware_limits ->
