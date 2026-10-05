@@ -21,7 +21,10 @@
    discriminating inputs: every cell is a small dyadic, so every partial sum is exact in f32 and
    bitwise equality is required whatever the accumulation order; the inputs are strictly positive,
    so every reference cell is nonzero and a candidate that drops a write cannot pass. GPU backends
-   execute the GPU sketch families, cc the CPU ones; the interchange alone executes everywhere. *)
+   execute the GPU sketch families, and the tensorized one where the device advertises an f32 tile
+   (Metal); cc executes the CPU ones; the interchange alone executes everywhere. The tensorized
+   schedules are pinned structurally (prefix, replay) on every backend under a synthetic f32 mma
+   capability. *)
 
 open Base
 module LL = Ir.Low_level
@@ -164,6 +167,26 @@ let hermetic (o : LL.optimized) =
     LL.optimize_ctx = LL.copy_optimize_ctx o.LL.optimize_ctx;
   }
 
+(* A synthetic f32 mma capability makes the tensorized GPU branch seedable machine-independently, as
+   in schedule_contraction_nest: interchanged sites reach [mma_eligible_sites] and the tensorized
+   pipelines like any other, so their schedules are pinned structurally on every backend. *)
+let mma_limits =
+  {
+    Ir.Backend_intf.no_hardware_limits with
+    mma =
+      Some
+        {
+          Ir.Backend_intf.minimal_mma_capability with
+          mma_tile = (8, 8, 8);
+          mma_format_tiles =
+            [
+              ( (Ir.Backend_intf.Mma_f32, Ir.Backend_intf.Mma_f32, Ir.Backend_intf.Mma_f32),
+                (8, 8, 8) );
+            ];
+          mma_pipeline_depths = [ 2 ];
+        };
+  }
+
 let digest o = SC.digest (SC.canonicalize ~with_placements:false o)
 let is_swap = function Sched.Swap _ -> true | _ -> false
 
@@ -214,11 +237,20 @@ let leg (c : case) ~expect_prefix ~ko_extents ~nk =
       in
       let gpu_seeds = unfused_seeds ~is_gpu:true ~limits:Ir.Backend_intf.no_hardware_limits o in
       let cpu_seeds = unfused_seeds ~is_gpu:false ~limits o in
+      let mma_seeds =
+        unfused_seeds ~is_gpu:true ~limits:mma_limits o
+        |> List.filter ~f:(fun q -> q.Autotune.sk_mma)
+      in
       p (tag ^ ": GPU sketch seeds are proposed") (not (List.is_empty gpu_seeds));
+      p
+        (tag ^ ": tensorized GPU seeds are proposed under an mma capability")
+        (not (List.is_empty mma_seeds));
       p (tag ^ ": CPU sketch seeds are proposed") (not (List.is_empty cpu_seeds));
       let sched q = Autotune.sketch_schedule ~accum_prec ~p:q o in
-      p_all (tag ^ ": every seed's schedule starts with the enabling prefix")
-        (gpu_seeds @ cpu_seeds) ~f:(fun q ->
+      p_all
+        (tag ^ ": every seed's schedule starts with the enabling prefix")
+        (gpu_seeds @ mma_seeds @ cpu_seeds)
+        ~f:(fun q ->
           let s = sched q in
           List.length s > List.length prefix
           && Sexp.equal
@@ -230,8 +262,10 @@ let leg (c : case) ~expect_prefix ~ko_extents ~nk =
       p
         (tag ^ ": a fresh lowering has the same structural identity")
         (String.equal (digest o) (digest fresh));
-      p_all (tag ^ ": every seed's schedule replays from a fresh lowering of the original code")
-        (gpu_seeds @ cpu_seeds) ~f:(fun q ->
+      p_all
+        (tag ^ ": every seed's schedule replays from a fresh lowering of the original code")
+        (gpu_seeds @ mma_seeds @ cpu_seeds)
+        ~f:(fun q ->
           match
             let s = sched q in
             let saved, _ = SC.to_saved (SC.base_registry (SC.canonicalize o)) s in
@@ -262,6 +296,32 @@ let leg (c : case) ~expect_prefix ~ko_extents ~nk =
           | Some got -> Array.equal Float.equal got c.want
           | None -> false)
       in
+      (* The tensorized family through the real mma hook, where the device advertises a tile for the
+         site's f32 operands (Metal's simdgroup matrices; a tf32-lifting environment on CUDA): the
+         gate is the seeder's own capability judgment, never the seeds under test (gh-ocannl-1115).
+         Every input is a dyadic exact in tf32 too, so bitwise still holds. *)
+      let mma_what = "tensorized" in
+      let mma_label =
+        Printf.sprintf "%s: every %s candidate compiles, runs and matches the reference bitwise" tag
+          mma_what
+      in
+      let real_label = tag ^ ": the device's own tensorized seeds are proposed" in
+      (match
+         Ll_test.tensorized_matmul_capability ~is_gpu:true ~is_cpu:false ~limits
+           ~a:site.Autotune.m_a ~b:site.Autotune.m_b ~d:site.Autotune.m_d
+       with
+      | `Advertised when on_gpu ->
+          let real =
+            unfused_seeds ~is_gpu:true ~limits o |> List.filter ~f:(fun q -> q.Autotune.sk_mma)
+          in
+          p real_label (not (List.is_empty real));
+          run_family ~what:mma_what real
+      | `Advertised ->
+          skipped real_label;
+          skipped mma_label
+      | `Withheld aggregation ->
+          Verdict.skipped ~aggregation ~backend:backend_name real_label;
+          Verdict.skipped ~aggregation ~backend:backend_name mma_label);
       if on_gpu then (
         run_family ~what:"gpu" gpu_seeds;
         skipped (tag ^ ": every cpu candidate compiles, runs and matches the reference bitwise"))

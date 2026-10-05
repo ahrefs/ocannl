@@ -10,10 +10,13 @@ wgrad: m_k is the innermost contraction loop: true
 wgrad: the prefix replayed on the original code is the code the site was detected on: true
 wgrad: the interchanged code matches the reference bitwise: true
 wgrad: GPU sketch seeds are proposed: true
+wgrad: tensorized GPU seeds are proposed under an mma capability: true
 wgrad: CPU sketch seeds are proposed: true
 wgrad: every seed's schedule starts with the enabling prefix: true
 wgrad: a fresh lowering has the same structural identity: true
 wgrad: every seed's schedule replays from a fresh lowering of the original code: true
+wgrad: the device's own tensorized seeds are proposed: true
+wgrad: every tensorized candidate compiles, runs and matches the reference bitwise: true
 wgrad: every gpu candidate compiles, runs and matches the reference bitwise: true
 wgrad: every cpu candidate compiles, runs and matches the reference bitwise: true
 dgrad: the plain matcher does not see the backward contraction: true
@@ -26,10 +29,13 @@ dgrad: m_k is the innermost contraction loop: true
 dgrad: the prefix replayed on the original code is the code the site was detected on: true
 dgrad: the interchanged code matches the reference bitwise: true
 dgrad: GPU sketch seeds are proposed: true
+dgrad: tensorized GPU seeds are proposed under an mma capability: true
 dgrad: CPU sketch seeds are proposed: true
 dgrad: every seed's schedule starts with the enabling prefix: true
 dgrad: a fresh lowering has the same structural identity: true
 dgrad: every seed's schedule replays from a fresh lowering of the original code: true
+dgrad: the device's own tensorized seeds are proposed: true
+dgrad: every tensorized candidate compiles, runs and matches the reference bitwise: true
 dgrad: every gpu candidate compiles, runs and matches the reference bitwise: true
 dgrad: every cpu candidate compiles, runs and matches the reference bitwise: true
 fwd: a forward product is a plain site, with no prefix: true
