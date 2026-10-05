@@ -835,10 +835,14 @@ val fission_scheduled :
     [optimized] slice and [zero_sched] on each [`Zeros] segment's nodes, and each result tuple
     carries the segment kind, the pre-schedule segment, the schedule chosen for it, and the
     scheduled segment ({!apply} of the schedule). [`Solo] segments (opaque to the analysis, or
-    coalesced runs of unannotated segments) get the empty schedule. When fission does not apply
-    (single segment, unfissionable crossings, or everything coalesces back) the result is a single
-    [`Normal] tuple over the whole routine with [preset]'s schedule. Callers compile each scheduled
-    segment as its own kernel in order (the plural transform seam of backend [compile]); see
+    coalesced runs of unannotated segments) get the empty schedule. A [`Zeros] segment holding a
+    single zero that initializes the reduction opening the next segment folds into that segment,
+    expanded by [zero_sched]'s [Expand_zero], when the merge rules below re-admit the whole segment
+    with the per-cell zero at its head (gh-ocannl-1175); no other boundary moves, so the fold never
+    merges two reductions the zero kept apart. When fission does not apply (single segment,
+    unfissionable crossings, or everything coalesces back) the result is a single [`Normal] tuple
+    over the whole routine with [preset]'s schedule. Callers compile each scheduled segment as its
+    own kernel in order (the plural transform seam of backend [compile]); see
     {!maybe_default_schedules} for the synchronization contract.
 
     [arity_cuts] (default [false], gh-ocannl-574): segment for the {e full-arity} sketch pipelines

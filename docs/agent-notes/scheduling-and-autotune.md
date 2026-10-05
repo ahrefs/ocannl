@@ -116,12 +116,18 @@ files.
   `Code_borne` cache classification. Backend-free lowering conservatively resolves auto to 0.
   In training the step is backward-bound
   (gh-ocannl-1124): the fold moves it by 1-2%.
-- `Schedule.expand_reduction_zeros` expands covering zeros before fission when the zero policy
-  distributes them (GPU, above its size threshold; gh-ocannl-1175). The aligned-merge and
-  keep-mapping rules decide whether the per-cell companion can share the accumulation kernel;
-  sketch families must give it the site's geometry through `companion_geometry`. The tuner and
-  model selector still explore a singleton segment when expansion changed its pre-schedule
-  digest, since whole-routine sketches see the original whole-node zero.
+- GPU fission folds a reduction's whole-node zero into the reduction's kernel (gh-ocannl-1175) as a
+  pass over the FINISHED segmentation (`group_units`'s `fold_zeros`): a singleton zero segment
+  folds, expanded by the zero policy's `Expand_zero` (GPU, above its size threshold), into the
+  following segment only when that whole segment re-admits every unit with the per-cell zero at
+  its head. The fold must change nothing else. Expanding before grouping (staging#934, reverted)
+  let the zero join the PRECEDING segment and bridge sibling reductions its whole-node form had
+  kept apart: each GPT2 layer's q and k projections merged into one kernel with two matmul sites,
+  which no sketch reaches, and the tuned CUDA step doubled. `qkv_zero_init` pins the segmentation
+  as the unexpanded one with zero segments folded forward; seed validity alone did not catch it.
+  Sketch families give the folded zero the site's geometry through `companion_geometry`, and the
+  tuner and model selector explore a singleton segment whose pre-schedule digest the fold changed,
+  since whole-routine sketches see the original whole-node zero.
 - A GPU schedule must cover EVERY materialized-writing nest of the routine, not only the one the
   pipeline builds. Launch dimensions are kernel-global, so `Low_level.validate_parallel` rejects any
   companion write (a bias/relu tail; the elementwise statements an aligned-merged fission segment

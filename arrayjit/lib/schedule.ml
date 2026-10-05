@@ -6653,11 +6653,12 @@ let default_cpu ?min_parallel (opt : Low_level.optimized) : schedule =
     Segmentation is conservative and total (no [Bail]): a statement opaque to the analysis
     ([Staged_compilation], barriers, pre-annotated loops) or one the annotator can never cover (bare
     materialized writes, materialized writes inside [Local_scope] bodies, non-injective nests) is
-    isolated into its own serial segment rather than poisoning its neighbors' schedules. On GPU,
-    covering reduction zeros expand ({!optop.Expand_zero}) before segmentation: the ordinary
-    alignment and mapping rules may keep them with their accumulation as per-cell companions.
-    Remaining materialized whole-node zeros are isolated, then expanded and annotated with the same
-    geometry policy as ordinary nests.
+    isolated into its own serial segment rather than poisoning its neighbors' schedules.
+    Materialized whole-node [Zero_out]s are likewise isolated and — on GPU — expanded
+    ({!optop.Expand_zero}) and annotated with the same geometry policy as ordinary nests. A zero
+    whose segment holds it alone and initializes the reduction that opens the next segment folds,
+    expanded, into that segment when the ordinary merge rules re-admit the whole segment with it
+    (the fold pass of {!group_units}, gh-ocannl-1175): one launch fewer, no other boundary moved.
 
     Two constructs cross segment boundaries and need repair, because a kernel's locals die at launch
     end:
@@ -6783,13 +6784,17 @@ type funit = {
   f_chains : Low_level.t list list;
       (** The statement's chains analyzed standalone ([[]] for non-[`Normal] units): the
           no-parallelism-loss baseline for aligned segment merging (see {!aligned_merge}). *)
+  f_fold : funit option;
+      (** For a whole-node [`Zeros] unit initializing the reduction that follows it: the same
+          position with the zero expanded ({!optop.Expand_zero}) into a per-cell nest, which
+          {!group_units} may fold into the reduction's segment. *)
 }
 
 (* Units: each real statement with the comments preceding it. Trailing comments attach to the last
    unit. [max_chain] caps the standalone chains; it must match the cap {!aligned_merge}'s merged
    analysis runs under (see there). *)
-let collect_units ?max_chain plc (opt : Low_level.optimized) (stmts : Low_level.t list) : funit list
-    =
+let collect_units ?max_chain ?(fold = fun _ _ -> None) plc (opt : Low_level.optimized)
+    (stmts : Low_level.t list) : funit list =
   let open Low_level in
   let is_glue = function Noop | Comment _ -> true | _ -> false in
   let mk index glue stmt =
@@ -6808,7 +6813,7 @@ let collect_units ?max_chain plc (opt : Low_level.optimized) (stmts : Low_level.
           | chains -> (`Normal, chains)
           | exception Bail -> (`Solo, []))
     in
-    { f_stmts = List.rev (stmt :: glue); f_index = index; f_sum; f_kind; f_chains }
+    { f_stmts = List.rev (stmt :: glue); f_index = index; f_sum; f_kind; f_chains; f_fold = None }
   in
   let rec go index glue acc = function
     | [] -> (
@@ -6820,7 +6825,26 @@ let collect_units ?max_chain plc (opt : Low_level.optimized) (stmts : Low_level.
     | stmt :: tl when is_glue stmt -> go index (stmt :: glue) acc tl
     | stmt :: tl -> go (index + 1) [] (mk index glue stmt :: acc) tl
   in
-  go 0 [] [] stmts
+  (* A unit's statement, between its leading glue and (on the last unit) the trailing glue. *)
+  let stmt_of u = List.find_exn u.f_stmts ~f:(fun st -> not (is_glue st)) in
+  let rec with_folds = function
+    | ({ f_kind = `Zeros; _ } as u) :: (v :: _ as rest) ->
+        let zero = stmt_of u in
+        let f_fold =
+          Option.map
+            (fold zero (stmt_of v))
+            ~f:(fun expanded ->
+              {
+                (mk u.f_index [] expanded) with
+                f_stmts =
+                  List.map u.f_stmts ~f:(fun st -> if phys_equal st zero then expanded else st);
+              })
+        in
+        { u with f_fold } :: with_folds rest
+    | u :: rest -> u :: with_folds rest
+    | [] -> []
+  in
+  with_folds (go 0 [] [] stmts)
 
 type segment = {
   g_units : funit list;
@@ -7140,7 +7164,37 @@ let group_units ?max_chain ?(arity_cuts = false) ?mapping (opt : Low_level.optim
             go (Some (merge_segs ~kind:`Zeros seg (seg_of_unit u))) acc tl
         | _ -> go (Some (seg_of_unit u)) (close cur acc) tl)
   in
-  go None [] units
+  (* The zero fold (gh-ocannl-1175), as a pass over the finished segmentation: a singleton
+     whole-node zero segment folds, expanded, into the segment of the reduction it initializes only
+     when that WHOLE segment re-admits every one of its units with the zero at its head. So the fold
+     removes the zero's launch and changes nothing else -- no segment is cut, no other merge
+     appears. Folding while grouping instead let the expanded zero join the preceding segment and
+     bridge sibling reductions its whole-node form had kept apart: the q and k projections of a GPT2
+     layer, merged into one kernel no matmul sketch reaches, doubled the tuned CUDA step
+     (staging#934, reverted). The probe memo is keyed by [f_index], which the expanded unit shares
+     with its [`Zeros] original; the original is never probed, since [`Zeros] units only group with
+     each other. *)
+  let rec fold_zeros = function
+    | ({ g_kind = `Zeros; g_units = [ { f_fold = Some ({ f_kind = `Normal; _ } as z); _ } ]; _ } as
+       zeros)
+      :: ({ g_kind = `Normal; _ } as seg)
+      :: rest -> (
+        let folded =
+          List.fold_until seg.g_units ~init:(seg_of_unit z)
+            ~f:(fun acc u ->
+              match u.f_sum with
+              | Some s when mergeable acc s u ->
+                  Continue (merge_segs ~kind:`Normal acc (seg_of_unit u))
+              | _ -> Stop None)
+            ~finish:Option.some
+        in
+        match folded with
+        | Some seg -> seg :: fold_zeros rest
+        | None -> zeros :: fold_zeros (seg :: rest))
+    | seg :: rest -> seg :: fold_zeros rest
+    | [] -> []
+  in
+  fold_zeros (go None [] units)
 
 (** {3 Scope-local replication across segments (option (b) v2)} *)
 
@@ -7417,64 +7471,62 @@ let fission_keep_mapping ~is_gpu ~limits =
   if is_gpu && Lazy.force gpu_fission_keep_mapping then Some (fun opt -> default_gpu ~limits opt)
   else None
 
-(* Expose an eligible zero's per-cell ownership before fission. The ordinary aligned-merge and
-   keep-mapping rules now judge it together with the reduction, just like the sketch families' zero
-   companions. Non-covering, conditional and opaque reductions retain their separate zero. *)
-let expand_reduction_zeros ~zero_sched (opt : Low_level.optimized) =
-  let rec expand = function
-    | [] -> []
-    | (Low_level.Zero_out tn as zero) :: rest ->
-        let next = List.find rest ~f:(function Low_level.Noop | Comment _ -> false | _ -> true) in
-        let expanded =
-          if
-            Option.exists next ~f:(fun next ->
-                Option.is_some (Low_level.zero_seed_candidate tn next))
-          then
-            (* Only zeros the supplied policy distributes: CPU and below-threshold zeroing keep
-               their original form. Reuse Expand_zero itself, withholding its hardware geometry
-               until the ordinary aligned-companion analysis has judged the paired nests. *)
-            List.find_map (zero_sched [ tn ]) ~f:(function
-              | Expand_zero { tn = target; _ } as op when Tn.equal tn target ->
-                  Some (apply_opt_op { opt with llc = zero } op).Low_level.llc
-              | _ -> None)
-          else None
-        in
-        Option.value expanded ~default:zero :: expand rest
-    | st :: rest -> st :: expand rest
-  in
-  { opt with llc = Low_level.unflat_lines (expand (Low_level.flat_lines [ opt.llc ])) }
+(* The expanded form of a whole-node [zero] that {!group_units} may fold into the reduction [next]
+   that it initializes: [next] owns every cell under the shared zero-seed proof, and the supplied
+   policy distributes the zero (CPU and below-threshold zeroing keep their whole-node form). It
+   reuses Expand_zero itself, withholding the hardware geometry: the folded segment's own schedule
+   maps the per-cell nest together with the reduction, as the sketch families' zero companions. *)
+let reduction_zero_fold ~zero_sched (opt : Low_level.optimized) (zero : Low_level.t)
+    (next : Low_level.t) : Low_level.t option =
+  match zero with
+  | Low_level.Zero_out tn when Option.is_some (Low_level.zero_seed_candidate tn next) ->
+      List.find_map (zero_sched [ tn ]) ~f:(function
+        | Expand_zero { tn = target; _ } as op when Tn.equal tn target ->
+            Some (apply_opt_op { opt with llc = zero } op).Low_level.llc
+        | _ -> None)
+  | _ -> None
 
 let fission_scheduled ?(promote_locals = false) ?(arity_cuts = false) ?keep_mapping
     ~(preset : Low_level.optimized -> schedule) ~(zero_sched : Tn.t list -> schedule)
     ~static_indices (opt : Low_level.optimized) :
     ([ `Normal | `Zeros | `Solo ] * Low_level.optimized * schedule * Low_level.optimized) list =
-  let opt = expand_reduction_zeros ~zero_sched opt in
   let plc = opt.Low_level.optimize_ctx.placements in
   let stmts = Low_level.flat_lines [ opt.Low_level.llc ] in
   let pre_promoted = if promote_locals then promote_statement_crossing_locals plc stmts else [] in
-  let fallback () =
-    (* Single-kernel compilation after policy-driven zero expansion: no boundary needs promotions,
-       and placement changes must not leak out of an unfissioned routine. *)
-    List.iter pre_promoted ~f:(fun (tn, prior) -> Tn.Placements.unsafe_restore plc tn prior);
-    let sched = preset opt in
-    [ (`Normal, opt, sched, apply ~static_indices sched opt) ]
-  in
   (* The [arity_cuts] mode analyzes chains uncapped: the no-loss guard (and the uniform-shape rule)
      must see each nest's full arity, not the default presets' Grid+Workgroup prefix — under the
      cap, a merge that trims a rank-3 site's minor axis reads as lossless (gh-ocannl-574). *)
   let max_chain = if arity_cuts then Some Int.max_value else None in
-  let units = collect_units ?max_chain plc opt stmts in
+  let units = collect_units ?max_chain ~fold:(reduction_zero_fold ~zero_sched opt) plc opt stmts in
+  let units_arr = Array.of_list units in
+  (* Single-kernel compilation of the segments' code -- the original statements, with any zero the
+     segmentation folded into its reduction: no boundary needs promotions, and placement changes
+     must not leak out of an unfissioned routine. *)
+  let fallback segs =
+    List.iter pre_promoted ~f:(fun (tn, prior) -> Tn.Placements.unsafe_restore plc tn prior);
+    let seg_units = List.concat_map segs ~f:(fun g -> g.g_units) in
+    let opt =
+      if List.for_all seg_units ~f:(fun u -> phys_equal u units_arr.(u.f_index)) then opt
+      else
+        {
+          opt with
+          llc = Low_level.unflat_lines (List.concat_map seg_units ~f:(fun u -> u.f_stmts));
+        }
+    in
+    let sched = preset opt in
+    [ (`Normal, opt, sched, apply ~static_indices sched opt) ]
+  in
   (* The [arity_cuts] mode has its own, stricter merge rule for the sketches' full-arity
      geometry. *)
   let mapping = if arity_cuts then None else keep_mapping in
   let segs = group_units ?max_chain ~arity_cuts ?mapping opt units in
-  if List.length segs <= 1 then fallback ()
+  if List.length segs <= 1 then fallback segs
   else
-    match resolve_scope_crossings (Array.of_list units) segs with
-    | exception Unfissionable -> fallback ()
+    match resolve_scope_crossings units_arr segs with
+    | exception Unfissionable -> fallback segs
     | segs, replicas when List.length segs <= 1 ->
         ignore replicas;
-        fallback ()
+        fallback segs
     | segs, replicas ->
         let segs_with_replicas = List.zip_exn segs replicas in
         let promoted = pre_promoted @ promote_crossing plc segs_with_replicas in
@@ -7505,8 +7557,8 @@ let fission_scheduled ?(promote_locals = false) ?(arity_cuts = false) ?keep_mapp
                   let merged = merge_segs ~kind:`Solo pseg seg in
                   let replicas =
                     match
-                      plan_replicas (Array.of_list units)
-                        ~seg_start:(List.hd_exn merged.g_units).f_index (seg_external_ids merged)
+                      plan_replicas units_arr ~seg_start:(List.hd_exn merged.g_units).f_index
+                        (seg_external_ids merged)
                     with
                     | Some defs -> defs
                     | None -> assert false (* Merging only shrinks the validity range. *)
@@ -7516,11 +7568,11 @@ let fission_scheduled ?(promote_locals = false) ?(arity_cuts = false) ?keep_mapp
           |> List.rev
         in
         if List.length coalesced <= 1 then (
-          (* Everything merged back: one kernel with expanded zeros, restoring original placements,
-             so undo every promotion (an all-serial small routine must not leak observable placement
-             changes; zero2hero's virtual-neuron printouts pinned this). *)
+          (* Everything merged back: one kernel, restoring original placements, so undo every
+             promotion (an all-serial small routine must not leak observable placement changes;
+             zero2hero's virtual-neuron printouts pinned this). *)
           undo_promotions promoted;
-          fallback ())
+          fallback segs)
         else
           (* Coalescing may have absorbed a crossing: promotions without a surviving crossing are
              restored. Sound in this direction — the segments' schedules were computed under the

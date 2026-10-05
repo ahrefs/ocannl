@@ -408,7 +408,7 @@ let () =
    correct for the default annotators, fatal for the full-arity GPU sketches, whose every seed then
    declines on companion coverage. Under [arity_cuts:true] the same code cuts the GEMM into its own
    kernel; shapes whose companions can follow the site's full arity (bias+relu) and shapes already
-   initialized by a covering zero now follow that same arity rule (gh-ocannl-1175). --- *)
+   initialized by a covering zero (a sum-reduce) segment identically in both modes. --- *)
 let () =
   let capture comp =
     let stash = ref None in
@@ -494,28 +494,24 @@ let () =
   p "arity: bias+relu companion stays merged in both modes"
     (List.equal Poly.equal (seg_kinds (segments ~arity_cuts:false opt2)) [ `Normal ]
     && List.equal Poly.equal (seg_kinds (segments ~arity_cuts:true opt2)) [ `Normal ]);
-  (* A sum-reduce's covering zero now stays with its accumulation. The default's capped geometry can
-     keep the GEMM with the row reduction; full-arity sketches need the cut, just like the
-     max-reduce above. *)
+  (* A sum-reduce target is zero-initialized. Each covering zero folds into its OWN accumulation's
+     kernel and the zero no longer separates the two reductions, yet they stay apart in both modes:
+     the fold never merges segments its whole-node form kept apart (gh-ocannl-1175). *)
   let x3 = TDSL.ndarray xv ~label:[ "fx3" ] ~batch_dims:[ b ] ~output_dims:[ n; k ] () in
   let w3 = TDSL.ndarray wv ~label:[ "fw3" ] ~output_dims:[ k; m ] () in
   let%op z3 = x3 +* "b|ik;kj=>b|ij" w3 in
   Train.set_materialized z3.Tensor.value;
   let%op r3 = z3 ++ "b|ij => b|i" in
   let opt3 = capture (named "arity_sum" (Train.forward r3)) in
-  p "arity: covering-zero sum-reduce merges under the default geometry"
-    (match segments ~arity_cuts:false opt3 with
-    | [ (`Normal, pre, _, _) ] ->
-        writes_tn z3.Tensor.value pre.LL.llc && writes_tn r3.Tensor.value pre.LL.llc
-    | _ -> false);
-  p "arity: full-arity geometry separates the GEMM from the sum-reduce"
-    (match segments ~arity_cuts:true opt3 with
-    | [ (`Normal, gemm, _, _); (`Normal, red, _, _) ] ->
-        writes_tn z3.Tensor.value gemm.LL.llc
-        && (not (writes_tn r3.Tensor.value gemm.LL.llc))
-        && writes_tn r3.Tensor.value red.LL.llc
-        && not (writes_tn z3.Tensor.value red.LL.llc)
-    | _ -> false)
+  p_all "arity: each covering zero folds into its own sum-reduce in both modes" [ false; true ]
+    ~f:(fun arity_cuts ->
+      match segments ~arity_cuts opt3 with
+      | [ (`Normal, gemm, _, _); (`Normal, red, _, _) ] ->
+          writes_tn z3.Tensor.value gemm.LL.llc
+          && (not (writes_tn r3.Tensor.value gemm.LL.llc))
+          && writes_tn r3.Tensor.value red.LL.llc
+          && not (writes_tn z3.Tensor.value red.LL.llc)
+      | _ -> false)
 
 (* --- 4. Executed: backward pass — Zero_out and reduction statements segment away from the gradient
    accumulation nest. --- *)

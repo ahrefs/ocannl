@@ -37,11 +37,11 @@ let capture ~name out =
   in
   Option.value_exn !captured
 
-let fission opt =
+let fission ?zero_sched opt =
   let limits = Ir.Backend_intf.no_hardware_limits in
+  let zero_sched = Option.value zero_sched ~default:(fun tns -> Sched.zero_expansion ~limits tns) in
   Sched.fission_scheduled ~keep_mapping:(Sched.default_gpu ~limits)
-    ~preset:(Sched.default_gpu ~limits) ~zero_sched:(Sched.zero_expansion ~limits)
-    ~static_indices:[] opt
+    ~preset:(Sched.default_gpu ~limits) ~zero_sched ~static_indices:[] opt
 
 (* Schedule application registers scratch nodes and placements. Each prototype owns a copy, so
    another prototype's scratch cannot leak into its interface or declarations. *)
@@ -134,6 +134,97 @@ let () =
   p_all2 "fission qkv resets the accumulator on every call"
     (Context.get_values ctx out.Tensor.value)
     want ~f:Float.equal
+
+(* Sibling projections (the q and k of one attention layer): each zero folds into its OWN
+   accumulation's kernel and the segmentation changes in nothing else. An expanded zero joining the
+   preceding segment bridged the two projections into one kernel no matmul sketch reaches, doubling
+   the tuned CUDA step (staging#934, reverted). The expected segmentation is derived from the
+   unexpanded one (a zero policy that distributes nothing): every whole-node zero segment merged
+   into the segment that follows it. *)
+let () =
+  let b = 2 and s = 32 and h = 2 and j = 32 and k = 64 in
+  let init ~l ~o ~f = NTDSL.init ~l ~prec:Ir.Ops.single ~o ~f () in
+  let x =
+    init ~l:"zs_x" ~o:[ b; s; k ] ~f:(fun ix ->
+        Float.of_int (1 + (3 * ix.(0)) + (5 * ix.(1)) + ix.(2)) /. 64.)
+  in
+  let wq =
+    init ~l:"zs_wq" ~o:[ h; j; k ] ~f:(fun ix ->
+        Float.of_int (1 + (7 * ix.(0)) + (3 * ix.(1)) + ix.(2)) /. 128.)
+  in
+  let wk =
+    init ~l:"zs_wk" ~o:[ h; j; k ] ~f:(fun ix ->
+        Float.of_int (2 + (5 * ix.(0)) + ix.(1) + (2 * ix.(2))) /. 128.)
+  in
+  let%op q = x +* "bsk;hjk=>bshj" wq in
+  let%op kp = x +* "bsk;hjk=>bshj" wk in
+  let%op scores = q +* "bshj;bthj=>bhst" kp in
+  List.iter [ q; kp; scores ] ~f:(fun t -> Train.set_materialized t.Tensor.value);
+  let opt = capture ~name:"zs_capture" scores in
+  let writes (pre : LL.optimized) =
+    LL.affine_accesses pre.LL.llc
+    |> List.filter_map ~f:(fun a -> Option.some_if a.Ir.Affine.a_write a.Ir.Affine.a_tn)
+    |> Set.of_list (module Ir.Tnode)
+  in
+  let segments parts = List.map parts ~f:(fun (kind, pre, _, _) -> (kind, writes pre)) in
+  let unexpanded = segments (fission ~zero_sched:(fun _ -> []) opt) in
+  let folded = segments (fission opt) in
+  let rec fold_zeros = function
+    | (`Zeros, zs) :: (_, ws) :: rest when Set.is_subset zs ~of_:ws -> ws :: fold_zeros rest
+    | (_, ws) :: rest -> ws :: fold_zeros rest
+    | [] -> []
+  in
+  let expected = fold_zeros unexpanded in
+  p "the unexpanded segmentation separates every projection zero"
+    (List.count unexpanded ~f:(fun (kind, _) -> Poly.equal kind `Zeros) = 3);
+  p "folding moves each zero into its own accumulation and changes nothing else"
+    (List.equal Set.equal (List.map folded ~f:snd) expected);
+  p_none "no kernel accumulates both sibling projections" folded ~f:(fun (_, ws) ->
+      Set.mem ws q.Tensor.value && Set.mem ws kp.Tensor.value);
+  let projection_segments =
+    List.filter_map (fission opt) ~f:(fun (_, pre, _, _) ->
+        match Autotune.detect_matmul pre.LL.llc with
+        | Some site
+          when Ir.Tnode.equal site.Autotune.m_d q.Tensor.value
+               || Ir.Tnode.equal site.m_d kp.Tensor.value ->
+            Some pre
+        | _ -> None)
+  in
+  p "both projections keep a detectable matmul site of their own"
+    (List.length projection_segments = 2);
+  p_all "every sibling projection keeps tiled sketches that construct and validate"
+    projection_segments ~f:(fun pre ->
+      let seeds =
+        Autotune.sketch_seed_params ~is_gpu:true ~is_cpu:false
+          ~limits:Ir.Backend_intf.no_hardware_limits pre
+      in
+      (not (List.is_empty seeds))
+      && List.for_all seeds ~f:(fun seed ->
+          match apply (Autotune.sketch_schedule ~accum_prec:Fn.id ~p:seed pre) pre with
+          | o -> (
+              match LL.validate_parallel o.LL.optimize_ctx.placements o.LL.llc with
+              | () -> true
+              | exception exn ->
+                  Stdio.eprintf "sibling sketch validation FAILED: %s\n" (Exn.to_string exn);
+                  false)
+          | exception exn ->
+              Stdio.eprintf "sibling sketch construction FAILED: %s\n" (Exn.to_string exn);
+              false));
+  let read = [ q.Tensor.value; kp.Tensor.value; scores.Tensor.value ] in
+  let numel t = Array.fold (Lazy.force t.Ir.Tnode.dims) ~init:1 ~f:( * ) in
+  let seed = List.map read ~f:(fun t -> (t, Array.create ~len:(numel t) (-999.))) in
+  let want = Ll_test.execute ~name:"zs_materialized" opt ~seed ~read in
+  p_all "sibling references differ from zero and the entry sentinel"
+    (List.concat_map want ~f:Array.to_list) ~f:(fun v -> Float.(v > 0.));
+  let ctx, routine =
+    Context.compile ~name:"zs_fission" ~prelowered:opt
+      ~lowered_transform:(fun o -> List.map (fission o) ~f:(fun (_, _, _, scheduled) -> scheduled))
+      (Context.auto ()) Ir.Assignments.empty_comp Ir.Indexing.Empty
+  in
+  let ctx = Ll_test.run_linked (ctx, routine) ~seed in
+  let got = List.map read ~f:(Context.get_values ctx) in
+  p_all2 "folded sibling projections match the materialized run" (Array.concat got)
+    (Array.concat want) ~f:Float.equal
 
 (* An enclosing reduction repeats each cell. Its inner private tile must load the previous partial
    sum, and the whole-node zero remains live. *)

@@ -10,6 +10,13 @@ private qkv matches the materialized run with discriminating operands: true
 staged tiled qkv with zero forwarded matches the materialized run: true
 fission qkv matches the materialized run with discriminating operands: true
 fission qkv resets the accumulator on every call: true
+the unexpanded segmentation separates every projection zero: true
+folding moves each zero into its own accumulation and changes nothing else: true
+no kernel accumulates both sibling projections: true
+both projections keep a detectable matmul site of their own: true
+every sibling projection keeps tiled sketches that construct and validate: true
+sibling references differ from zero and the entry sentinel: true
+folded sibling projections match the materialized run: true
 an enclosing repeated-cell loop retains initialization and opening reads: true
 repeated-cell private reduction preserves earlier contributions: true
 a full per-cell zero is recognized: true
