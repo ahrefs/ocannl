@@ -7763,10 +7763,26 @@ let workgroup_memory_bytes ~(capabilities : Backend_intf.codegen_capabilities)
         acc + (copies * Lazy.force tn.Tn.size_in_bytes))
   in
   let prec (tn : Tn.t) = Lazy.force tn.Tn.storage_prec in
-  List.fold (mma_emission_scopes opt) ~init:staged ~f:(fun acc (d, a, b) ->
-      acc
-      + capabilities.Backend_intf.mma_scope_workgroup_bytes ~d_prec:(prec d) ~a_prec:(prec a)
-          ~b_prec:(prec b))
+  let mma_scratch =
+    List.fold (mma_emission_scopes opt) ~init:staged ~f:(fun acc (d, a, b) ->
+        acc
+        + capabilities.Backend_intf.mma_scope_workgroup_bytes ~d_prec:(prec d) ~a_prec:(prec a)
+            ~b_prec:(prec b))
+  in
+  (* gh-ocannl-1168: the per-simdgroup partials of each lane all-reduce site that may stage them,
+     one declaration per site (a duplicated copy is its own site). The local resides at its compute
+     or its accumulator precision, whichever the renderer's census decides; counting the larger
+     keeps the estimate an upper bound (at f32 the two coincide on every GPU backend). *)
+  List.fold
+    (Low_level.lane_all_reduce_sites ~reassociable:Online_softmax.reassociable_local opt.llc)
+    ~init:mma_scratch ~f:(fun acc site ->
+      if not site.Low_level.lar_cross_simdgroup then acc
+      else
+        let bytes p =
+          capabilities.Backend_intf.lane_all_reduce_workgroup_bytes ~extent:site.lar_extent ~prec:p
+        in
+        let p = prec site.lar_local.Low_level.tn in
+        acc + max (bytes (capabilities.compute_prec p)) (bytes (capabilities.accum_prec p)))
 
 let check_hardware_limits_classified ~name ~(limits : Backend_intf.hardware_limits) ~capabilities
     (opt : Low_level.optimized) : unit =
@@ -7794,8 +7810,9 @@ let check_hardware_limits_classified ~name ~(limits : Backend_intf.hardware_limi
       if shared_bytes > max_bytes then
         let detail =
           [%string
-            "Schedule: kernel %{name} stages %{shared_bytes#Int} bytes of workgroup-shared tiles \
-             and tile-MMA scope scratch, exceeding the device limit of %{max_bytes#Int} bytes"]
+            "Schedule: kernel %{name} stages %{shared_bytes#Int} bytes of workgroup-shared tiles, \
+             tile-MMA scope scratch and lane all-reduce partials, exceeding the device limit of \
+             %{max_bytes#Int} bytes"]
         in
         raise
           (Schedule_outcome.Cause_at

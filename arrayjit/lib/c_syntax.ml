@@ -986,6 +986,24 @@ let codegen_capabilities (module Config : C_syntax_config) =
     asynchronous_staging_copy = Option.is_some Config.async_copy;
     mma_arm = Config.mma_arm;
     mma_scope_workgroup_bytes = Config.mma_scope_workgroup_bytes;
+    (* gh-ocannl-1168: [extent / warp_size] slots where the lane all-reduce spans several whole
+       simdgroups -- a shuffle-capable backend with barriers and shared declarations, an f32/f64
+       residency (the precisions [ocannl_shfl_xor] is overloaded at), routine logging off -- and
+       none otherwise (one simdgroup needs no partials; anything else renders serially). The
+       renderer ([try_lane_all_reduce]) decides by this very field, so the estimate cannot drift
+       from the kernel; the structural half is [Low_level.lane_all_reduce_sites]. *)
+    lane_all_reduce_workgroup_bytes =
+      (fun ~extent ~prec ->
+        let warp = Config.warp_size in
+        match prec with
+        | (Ops.Single_prec _ | Ops.Double_prec _)
+          when warp > 1 && extent > warp
+               && extent % warp = 0
+               && Option.is_some Config.barrier_syntax
+               && Option.is_some Config.shared_decl_prefix
+               && not (Utils.debug_log_from_routines ()) ->
+            extent / warp * Ops.prec_in_bytes prec
+        | _ -> 0);
   }
 
 (** Whether [c] lies exactly halfway between two adjacent f32 values, so that narrowing it to f32 is
@@ -6470,20 +6488,24 @@ module C_syntax (B : C_syntax_config) = struct
      local is updated, so the next execution of this reduction -- the next pair of the serial loop
      around it -- cannot overwrite a slot some lane has not read yet. Every lane of the workgroup
      reaches both barriers: the loop is the whole [.x] dimension (no launch guard), the workgroup
-     has no other dimension, and the rendering sits outside every lane's own guard (the lane
-     geometry places it in the lane-uniform preamble, a sibling of the lane loop, never inside it).
-     Taken when the loop spans whole simdgroups, is the whole [.x] workgroup dimension (so every
-     lane of each simdgroup reaches every shuffle), sits at slot 0 with a bound register, and the
-     local resides at f32/f64 (the precisions [ocannl_shfl_xor] is overloaded at); past one
-     simdgroup also when the backend has barriers and workgroup-shared declarations and the
-     workgroup is one-dimensional ([.x] alone: the slots are indexed by simdgroup along [.x]).
-     Reassociation is the [Workgroup_reduce] annotation's license.
+     has no other dimension, and no workgroup loop or lane-dependent [If] encloses it -- each
+     condition reads only constants and index symbols no workgroup loop binds, never a scope local
+     or memory, which could carry a lane-dependent value ([Low_level.lane_all_reduce_sites]; the
+     lane geometry places it in the lane-uniform preamble, a sibling of the lane loop). A site
+     failing that renders serially in every lane, whatever its width. Taken when the loop spans
+     whole simdgroups, is the whole [.x] workgroup dimension (so every lane of each simdgroup
+     reaches every shuffle), sits at slot 0 with a bound register, and the local resides at f32/f64
+     (the precisions [ocannl_shfl_xor] is overloaded at); past one simdgroup also when the backend
+     has barriers and workgroup-shared declarations and the workgroup is one-dimensional ([.x]
+     alone: the slots are indexed by simdgroup along [.x]). Reassociation is the [Workgroup_reduce]
+     annotation's license.
 
      - otherwise the plain serial loop, in every lane: a partial simdgroup (the shuffle would read
      lanes outside the reduction), a backend without shuffles (cc), a workgroup with a second
-     dimension, a narrow residency, or a logged run. Binding the index like a [Workgroup] axis
-     instead would leave each lane its own term only -- wrong for this local, every reader of which
-     wants the whole sum -- which is why this arm owns it and never falls through to the binding.
+     dimension, a site under lane-dependent control, a narrow residency, or a logged run. Binding
+     the index like a [Workgroup] axis instead would leave each lane its own term only -- wrong for
+     this local, every reader of which wants the whole sum -- which is why this arm owns it and
+     never falls through to the binding.
 
      [None] for any other body or local: those keep [try_warp_reduce]'s cell-target rendering and
      its fallbacks, the hardware binding among them. *)
@@ -6528,18 +6550,19 @@ module C_syntax (B : C_syntax_config) = struct
                      && extent = slot_max
                      && not (Utils.debug_log_from_routines ()) ->
                   let num_warps = extent / B.warp_size in
-                  let one_dimensional =
-                    List.for_all axes ~f:(fun a ->
-                        match a.Low_level.ha_kind with
-                        | `Workgroup -> a.Low_level.ha_slot = 0
-                        | `Grid -> true)
+                  (* Past one simdgroup: the backend half and the structural half of the one
+                     predicate the schedule's memory estimate reads too. *)
+                  let cross_simdgroup () =
+                    (codegen_capabilities (module B)).lane_all_reduce_workgroup_bytes ~extent ~prec
+                    = num_warps * Ops.prec_in_bytes prec
+                    && List.exists
+                         (Low_level.lane_all_reduce_sites
+                            ~reassociable:Online_softmax.reassociable_local
+                            !(ctx.current_kernel_llc)) ~f:(fun site ->
+                           Indexing.equal_symbol site.Low_level.lar_index i
+                           && site.Low_level.lar_cross_simdgroup)
                   in
-                  if
-                    num_warps = 1
-                    || one_dimensional && Option.is_some B.barrier_syntax
-                       && Option.is_some B.shared_decl_prefix
-                  then Some (reg, num_warps)
-                  else None
+                  if num_warps = 1 || cross_simdgroup () then Some (reg, num_warps) else None
               | _ -> None
             in
             Some

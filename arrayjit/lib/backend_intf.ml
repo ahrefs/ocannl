@@ -427,6 +427,15 @@ type codegen_capabilities = {
           resolver and declaration its emitting hooks use. Non-zero only for Metal's converted
           destination boundary (gh-ocannl-1205). [Schedule.check_hardware_limits_classified] adds it
           per scope to the staged tiles. *)
+  lane_all_reduce_workgroup_bytes : extent:int -> prec:Ops.prec -> int;
+      (** Static workgroup-shared bytes one lane all-reduce site declares for its per-simdgroup
+          partials (gh-ocannl-1168): a reduction of [extent] lanes into a scope local residing at
+          [prec], rendered across more than one simdgroup. The renderer
+          ([C_syntax.try_lane_all_reduce]) decides by this same field, so the two cannot drift; 0
+          where the site renders within one simdgroup, serially, or on a backend without shuffles,
+          barriers or shared declarations. Only the backend-level half: whether a site may stage
+          partials at all is [Low_level.lane_all_reduce_sites]' structural predicate, which
+          [Schedule.workgroup_memory_bytes] reads beside it. *)
 }
 (** Stable code-generation facts callers need before compiling. Actual rendering decisions stay on
     the compiled routine's censuses. *)
@@ -441,6 +450,7 @@ let no_codegen_capabilities =
     asynchronous_staging_copy = false;
     mma_arm = (fun ~a_prec:_ ~b_prec:_ ~d_prec:_ ~scope:_ -> None);
     mma_scope_workgroup_bytes = (fun ~d_prec:_ ~a_prec:_ ~b_prec:_ -> 0);
+    lane_all_reduce_workgroup_bytes = (fun ~extent:_ ~prec:_ -> 0);
   }
 
 (** A stable, exhaustive rendering of a capability record under the CURRENT numerics policy: its
@@ -454,7 +464,8 @@ let no_codegen_capabilities =
     pattern names every field, so a field added to {!codegen_capabilities} is a compile error here
     until it is rendered (warning 9).
 
-    The one field deliberately not rendered is [mma_scope_workgroup_bytes]: it decides whether a
+    The fields deliberately not rendered are [mma_scope_workgroup_bytes] and
+    [lane_all_reduce_workgroup_bytes] (the same argument holds for both): it decides whether a
     schedule FITS, never what a kernel computes, and it is a function of the storage triple, the
     numerics policy and the backend, which the key already carries ([Schedule_cache.numerics_tag]
     and the backend identity), so rendering it would add no discrimination. An emitter change that
@@ -470,6 +481,7 @@ let codegen_capabilities_fingerprint
       asynchronous_staging_copy;
       mma_arm;
       mma_scope_workgroup_bytes = _;
+      lane_all_reduce_workgroup_bytes = _;
     } =
   let p = Ops.prec_string in
   let resolution f =

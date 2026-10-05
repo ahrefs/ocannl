@@ -653,6 +653,27 @@ type hardware_axis_info = {
 val hardware_axes : t -> hardware_axis_info list
 (** All hardware-annotated loops in pre-order, with their positional slots. *)
 
+type lane_all_reduce_site = {
+  lar_index : Indexing.symbol;  (** The [Workgroup_reduce] loop's symbol. *)
+  lar_extent : int;
+  lar_local : scope_id;  (** The scope local the reduction accumulates into. *)
+  lar_cross_simdgroup : bool;
+      (** Whether every lane of the workgroup is sure to reach the site, so it may stage
+          per-simdgroup partials between barriers: the loop starts at 0, covers the whole [.x]
+          dimension, the workgroup is one-dimensional, no workgroup loop encloses it, and every
+          enclosing [If] condition reads only constants and index symbols no workgroup loop binds (a
+          scope local or a memory read could carry a lane-dependent value, so either disqualifies
+          the site). *)
+}
+
+val lane_all_reduce_sites : reassociable:(Tnode.t -> bool) -> t -> lane_all_reduce_site list
+(** The lane all-reduce sites of a kernel (gh-ocannl-1168), in pre-order: [Workgroup_reduce] loops
+    whose body (past their own launch guard) is ONE reduce-shaped update of a scope local
+    [reassociable] admits ([Online_softmax.reassociable_local]). [C_syntax.try_lane_all_reduce]
+    renders a site across simdgroups only where [lar_cross_simdgroup] holds, and
+    [Schedule.workgroup_memory_bytes] counts the partials of exactly those sites, so the estimate
+    and the kernel read one predicate. *)
+
 val launch_dims : t -> launch_dims
 (** Per-slot maximum extents over the kernel's annotated loops; [grid.(2)] is the product of the
     per-slot maxima of grid slots [>= 2] (the [.z] fold, see the section comment). *)

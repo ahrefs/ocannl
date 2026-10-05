@@ -1030,8 +1030,12 @@ val workgroup_memory_bytes :
     Metal's converted destination boundary declares a coordinate table there (gh-ocannl-1205). A
     scope is one [Tile_mma] statement, each copy counted where a loop transform duplicated it; a
     simdgroup-fragment scope is rendered only around exactly one [Tile_mma], so it is the same
-    count. Pass the compiling context's [Context.codegen_capabilities]; the capability-free
-    {!Backend_intf.no_codegen_capabilities} counts the tiles alone. *)
+    count. Plus, per lane all-reduce site that stages per-simdgroup partials
+    ([Low_level.lane_all_reduce_sites]' [lar_cross_simdgroup], gh-ocannl-1168), the backend's
+    {!field:Backend_intf.lane_all_reduce_workgroup_bytes} for its extent at the larger of its
+    local's compute and accumulator precisions. Pass the compiling context's
+    [Context.codegen_capabilities]; the capability-free {!Backend_intf.no_codegen_capabilities}
+    counts the tiles alone. *)
 
 val check_hardware_limits :
   name:string ->

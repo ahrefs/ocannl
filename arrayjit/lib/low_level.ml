@@ -6241,6 +6241,94 @@ let accum_local_update_parts ~id (llsc : scalar_t) =
       Some (Ops.Add, Binop (Ops.Mul, (a, pa), (b, pb)))
   | _ -> None
 
+type lane_all_reduce_site = {
+  lar_index : Indexing.symbol;
+  lar_extent : int;
+  lar_local : scope_id;
+  lar_cross_simdgroup : bool;
+}
+
+(* gh-ocannl-1168. The lane all-reduce's sites, and which of them may stage partials between
+   barriers: every lane of the workgroup must reach both, so the site must cover the whole [.x]
+   dimension of a one-dimensional workgroup and sit under workgroup-uniform control. Uniform is
+   judged conservatively: no enclosing workgroup loop, and every enclosing [If] condition built from
+   constants and index symbols no workgroup loop binds -- a scope local or a memory read could carry
+   a lane-dependent value ([flag := lane < 32; if flag { ... }]), so either makes it non-uniform. *)
+let lane_all_reduce_sites ~(reassociable : Tn.t -> bool) (llc : t) : lane_all_reduce_site list =
+  let axes = hardware_axes llc in
+  let lane s =
+    List.exists axes ~f:(fun a ->
+        Poly.equal a.ha_kind `Workgroup && Indexing.equal_symbol a.ha_index s)
+  in
+  let slot_max = slot_max_extent axes `Workgroup 0 in
+  let one_dimensional =
+    List.for_all axes ~f:(fun a ->
+        match a.ha_kind with `Workgroup -> a.ha_slot = 0 | `Grid -> true)
+  in
+  let index_uniform : Indexing.axis_index -> bool = function
+    | Fixed_idx _ | Sub_axis -> true
+    | Iterator s -> not (lane s)
+    | Affine { symbols; _ } -> not (List.exists symbols ~f:(fun (_, s) -> lane s))
+    | Concat syms -> not (List.exists syms ~f:lane)
+  in
+  let rec uniform_scalar (sc : scalar_t) =
+    match sc with
+    | Constant _ | Constant_bits _ -> true
+    | Embed_index idx -> index_uniform idx
+    | Binop (_, (a, _), (b, _)) -> uniform_scalar a && uniform_scalar b
+    | Unop (_, (a, _)) -> uniform_scalar a
+    | Ternop (_, (a, _), (b, _), (c, _)) -> uniform_scalar a && uniform_scalar b && uniform_scalar c
+    | Local_scope _ | Get_local _ | Get _ | Get_dynamic _ | Get_merge_buffer _ -> false
+  in
+  let stmts_of body =
+    List.filter (flat_lines [ body ]) ~f:(function Noop | Comment _ -> false | _ -> true)
+  in
+  let sites = ref [] in
+  let rec walk ~uniform llc =
+    match llc with
+    | For_loop { index; from_; to_; axis; body; _ } -> (
+        let extent = to_ - from_ + 1 in
+        let stmts =
+          match stmts_of body with
+          | [
+           If
+             {
+               cond = Binop (Ops.Cmplt, (Embed_index (Indexing.Iterator s), _), (Constant c, _)), _;
+               body = guarded;
+             };
+          ]
+            when Indexing.equal_symbol s index && Float.equal c (Float.of_int extent) ->
+              stmts_of guarded
+          | stmts -> stmts
+        in
+        match (axis, stmts) with
+        | Workgroup_reduce, [ Set_local (id, llsc) ]
+          when reassociable id.tn && Option.is_some (accum_local_update_parts ~id llsc) ->
+            sites :=
+              {
+                lar_index = index;
+                lar_extent = extent;
+                lar_local = id;
+                lar_cross_simdgroup = uniform && from_ = 0 && extent = slot_max && one_dimensional;
+              }
+              :: !sites
+        | _ ->
+            let lanes_diverge =
+              Option.equal Poly.equal (hardware_kind_of_axis axis) (Some `Workgroup)
+            in
+            walk ~uniform:(uniform && not lanes_diverge) body)
+    | If { cond = c, _; body } -> walk ~uniform:(uniform && uniform_scalar c) body
+    | Seq (a, b) ->
+        walk ~uniform a;
+        walk ~uniform b
+    | Scan_loop { body; _ } -> walk ~uniform body
+    | Noop | Comment _ | Staged_compilation _ | Zero_out _ | Set _ | Set_dynamic _ | Set_from_vec _
+    | Set_local _ | Declare_local _ | Workgroup_barrier | Tile_mma _ ->
+        ()
+  in
+  walk ~uniform:true llc;
+  List.rev !sites
+
 (* A scalar reading only embedded indices and constants — the semantic notion behind
    {!pure_index_guard}, closed over the index arithmetic ([And]-joined range conditions, [Cmpeq]
    unit-solve conditions) that virtualization's guarded reads build. Such an expression cannot

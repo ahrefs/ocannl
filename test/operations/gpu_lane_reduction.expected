@@ -89,3 +89,24 @@ auto on the run's backend resolves to its measured mode: true
 on a cheap-recompute device the default schedule is the resolved mode's: true
 on an unmeasured device the default schedule is the resolved mode's: true
 on the run's device the default schedule is the resolved mode's: true
+--- leg 10: barriers only under workgroup-uniform control ---
+lred_guard_uniform64: a guard on the serial query symbol leaves the site cross-simdgroup: true
+lred_guard_uniform64: every cell of K holds the serial reference's exact value: true
+lred_guard_uniform64: the emitted kernel spells the cross-simdgroup all-reduce: true
+lred_guard_flag64: a guard reading a lane-dependent local leaves the site serial: true
+lred_guard_flag64: the emitted kernel does not spell the all-reduce: true
+lred_guard_flag64: the emitted kernel loops the reduction in every lane: true
+--- leg 11: the schedule's memory estimate counts the partials the kernel declares ---
+lred_coop32: the estimate counts exactly the partials the emitted kernel declares: true
+lred_dup32: the estimate counts exactly the partials the emitted kernel declares: true
+lred_coop16r: the estimate counts exactly the partials the emitted kernel declares: true
+lred_multi64: the estimate counts exactly the partials the emitted kernel declares: true
+lred_multi128: the estimate counts exactly the partials the emitted kernel declares: true
+lred_coop64r: the estimate counts exactly the partials the emitted kernel declares: true
+lred_guard_uniform64: the estimate counts exactly the partials the emitted kernel declares: true
+lred_guard_flag64: the estimate counts exactly the partials the emitted kernel declares: true
+lred_multi64: 8 bytes of partials, admitted at that limit and refused one byte below it: true
+lred_multi128: 16 bytes of partials, admitted at that limit and refused one byte below it: true
+lred_guard_uniform64: 8 bytes of partials, admitted at that limit and refused one byte below it: true
+lred_coop32: 0 bytes of partials, admitted at that limit: true
+lred_guard_flag64: 0 bytes of partials, admitted at that limit: true

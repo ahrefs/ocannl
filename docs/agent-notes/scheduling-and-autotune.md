@@ -79,8 +79,12 @@ files.
   per-simdgroup totals go through a workgroup-shared slot array between TWO barriers per pair:
   the second keeps the next pair's stores off a slot some lane has not read. Every lane reads all
   slots in slot order, so all hold the bitwise-same total. Every lane must reach both barriers,
-  which is why the renderer insists on the whole `.x` dimension (no launch guard) and a
-  one-dimensional workgroup. The schedule retypes at `k` simdgroups only up to
+  and whole-`.x` coverage alone does not prove it: a guard reading a lane-dependent scope local
+  (`flag := lane < 32; if flag { ... }`) parts the lanes. `Low_level.lane_all_reduce_sites` is the
+  one predicate: whole `.x`, a one-dimensional workgroup, no enclosing workgroup loop, and every
+  enclosing condition built from constants and non-lane index symbols (a local or a memory read
+  disqualifies). The renderer and `Schedule.workgroup_memory_bytes` (which counts the slots
+  through the `lane_all_reduce_workgroup_bytes` capability) both read it. The schedule retypes at `k` simdgroups only up to
   `gpu_lane_all_reduce_simdgroups` (`auto` = `hardware_limits.lane_all_reduce_simdgroups`, 1 until
   a device measures the barriers paying), so GPT-2's 64-wide heads keep the plain plan by default.
   Measured on Metal (D1 training, lukstafi/ocannl-staging PR for gh-ocannl-1124): duplicated is a

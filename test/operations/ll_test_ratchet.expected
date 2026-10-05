@@ -22,7 +22,7 @@ test/operations/cost_model_floor.ml -- records=4 traversals=0
 test/operations/cost_model_template.ml -- records=3 traversals=0
 test/operations/cpu_parallel.ml -- records=11 traversals=0
 test/operations/footprint_materialization.ml -- records=4 traversals=0
-test/operations/gpu_lane_reduction.ml -- records=1 traversals=2
+test/operations/gpu_lane_reduction.ml -- records=2 traversals=2
 test/operations/gpu_serial_lanes.ml -- records=3 traversals=5
 test/operations/hardware_warp_shuffle.ml -- records=1 traversals=0
 test/operations/integer_power_domain.ml -- records=1 traversals=0
