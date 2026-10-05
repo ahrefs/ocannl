@@ -268,9 +268,11 @@ type 'tn access = {
       (** The affine map from the loop box into the node's cells. Empty and standing for every cell
           when [a_whole]. *)
   a_write : bool;
-  a_dynamic : bool;
-      (** The effective cell is not statically known (dynamic gather/scatter): the map has a
-          placeholder component, so queries must not interpret it. *)
+  a_dyn_axis : int option;
+      (** The data-dependent axis of a dynamic gather/scatter ([Get_dynamic]/[Set_dynamic]'s
+          [dyn_axis]); [None] for a static access. The map holds a placeholder there, so it is read
+          through {!view} with [~dyn_axis] — that axis an [Unknown] coordinate, every other axis
+          still known — never by interpreting the placeholder (gh-ocannl-1174). *)
   a_whole : bool;  (** A whole-node access ([Zero_out]). *)
   a_vec_last : bool;
       (** A vectorized write ([Set_from_vec]): the map is the base of a run of [a_vec_len]
@@ -390,8 +392,9 @@ val may_touch_same_cell :
     independently between one side's visit and the other's). Symbols bound by neither side's loops
     (static indices) are shared parameters, equal on both sides, bounded by [static_range] when
     known. [dims] is the node's dims (the coordinate view's). Conservative: [false] only when
-    {!pair_conflict} proves disjointness; uninterpretable access kinds (dynamic, whole-node,
-    vectorized) count as overlapping. *)
+    {!pair_conflict} proves disjointness. A dynamic access's data-dependent axis is an [Unknown]
+    coordinate of its view, so its other coordinates still decide (gh-ocannl-1174); whole-node and
+    vectorized accesses count as overlapping. *)
 
 val vec_runs_disjoint : dims:int array -> 'tn access -> bool
 (** Whether the runs of a vectorized access ([a_vec_last]) are pairwise disjoint in the node's flat
@@ -413,10 +416,12 @@ val read_covered_before :
     analysis, and the fifth decision procedure (gh-494 waypoint 2). Unlike the ∃-flavored
     {!pair_conflict} (negated to prove disjointness), containment is a ∀∃ query — for every read
     instance there must exist a covering write instance. Visibility is same-common-iteration program
-    order over {!path_comp} paths; loop-carried coverage is declined, conservatively. With [?thread]
-    naming the parallel (thread-identity) symbols, [`Covered] proves the cell side of the
-    per-thread-copy transform. The full variable treatment, the cross-statement value side
-    condition, and the union rule for partial covers are documented in the implementation.
+    order over {!path_comp} paths; loop-carried coverage is declined, conservatively. An [Unknown]
+    read coordinate (a dynamic gather's row, gh-ocannl-1174) ranges over its whole extent; an
+    [Unknown] write coordinate (a scatter's row) declines that write. With [?thread] naming the
+    parallel (thread-identity) symbols, [`Covered] proves the cell side of the per-thread-copy
+    transform. The full variable treatment, the cross-statement value side condition, and the union
+    rule for partial covers are documented in the implementation.
 
     Guarded writes are the caller's choice: include them to mirror guards-taken analyses
     ([Low_level.trace_node_facts] and the coverage queries take guards unconditionally), pre-filter

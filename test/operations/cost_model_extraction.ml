@@ -5,15 +5,15 @@
    2*M*N*K, bytes = (MK + KN + 2*MN) * 4 (the rmw accumulator charged once per direction); -
    strided/gapped access: the image cardinality counts the touched cells, not the node size; - rmw
    reduction: the accumulator's read/write/rmw split; - guarded write: guards-taken op count
-   ([flops_approx]) and a never-definite write; - dynamic gather: the uninterpretable-component
-   fallback to whole-node bytes; - overlapping writes: the union bound capped by the node's size; -
-   multi-read exactness (gh-ocannl-578): pairwise provably-disjoint exact reads sum exactly,
-   overlapping ones stay a flagged union bound, and conditionally-evaluated reads (Where arms) stay
-   a flagged bound even when disjoint — with the op count flagged too when the arms' costs differ,
-   unless an arm's cost lives entirely in a hoisted scope body, which executes unconditionally
-   (gh-ocannl-637); - vectorized runs (gh-ocannl-578): bases spaced by at least the run length (or
-   on distinct in-bounds rows) count exactly, close-spaced or row-spilling bases stay a flagged
-   upper bound.
+   ([flops_approx]) and a never-definite write; - dynamic gathers: the known-image-times-rows bound,
+   capped by the loop box (gh-ocannl-1174), each count checked against the worst case over all
+   runtime rows; - overlapping writes: the union bound capped by the node's size; - multi-read
+   exactness (gh-ocannl-578): pairwise provably-disjoint exact reads sum exactly, overlapping ones
+   stay a flagged union bound, and conditionally-evaluated reads (Where arms) stay a flagged bound
+   even when disjoint — with the op count flagged too when the arms' costs differ, unless an arm's
+   cost lives entirely in a hoisted scope body, which executes unconditionally (gh-ocannl-637); -
+   vectorized runs (gh-ocannl-578): bases spaced by at least the run length (or on distinct
+   in-bounds rows) count exactly, close-spaced or row-spilling bases stay a flagged upper bound.
 
    The tail asserts the roofline bound is monotone in the envelope constants. *)
 
@@ -23,6 +23,7 @@ module Idx = Ir.Indexing
 module Tn = Ir.Tnode
 module Ops = Ir.Ops
 module CM = Ir.Cost_model
+open Verdict.Claims
 
 let fresh_tn =
   let make = Ll_test.node_factory ~first_id:970_000_000 ~dims:[||] () in
@@ -42,6 +43,37 @@ let show_summary name (s : CM.summary) =
     (if s.CM.flops_approx then "~" else "")
     s.CM.read_bytes s.CM.write_bytes (CM.arithmetic_intensity s)
     (if s.CM.opaque then " OPAQUE" else "")
+
+(* The most distinct cells a gather can read over all runtime data. The cost model may assume
+   nothing of a data-dependent row, so each loop-box point picks any of the [rows] independently
+   ([instances] maps a row to the point's flat cell), and the worst case over those choices is
+   searched exhaustively. *)
+let worst_case_cells ~instances ~rows =
+  let best = ref 0 in
+  let rec go seen remaining = function
+    | [] -> best := max !best (Set.length seen)
+    | cell :: rest ->
+        if Set.length seen + remaining > !best then
+          (* Rows reaching an unseen cell first: the greedy path comes first, and the bound prunes
+             most of the rest once it has been met. *)
+          let fresh, stale =
+            List.partition_tf (List.init rows ~f:Fn.id) ~f:(fun row ->
+                not (Set.mem seen (cell row)))
+          in
+          List.iter (fresh @ stale) ~f:(fun row ->
+              go (Set.add seen (cell row)) (remaining - 1) rest)
+  in
+  go (Set.empty (module Int)) (List.length instances) instances;
+  !best
+
+(* The table's read count must bound the worst case: an upper bound that holds for every row the
+   data could name. *)
+let gather_bound_sound ~name (s : CM.summary) table ~instances ~rows =
+  let fp = List.Assoc.find_exn s.CM.per_node table ~equal:Tn.equal in
+  let counted = fp.CM.fp_read_bytes / 4 and worst = worst_case_cells ~instances ~rows in
+  Stdio.printf "  table: %d cells counted, worst case over the data %d\n" counted worst;
+  claimf "%s: the table count bounds every runtime choice of rows" name
+    (fp.CM.fp_approx && counted >= worst)
 
 let () =
   let i = Idx.get_symbol () and j = Idx.get_symbol () and k = Idx.get_symbol () in
@@ -129,7 +161,9 @@ let () =
   in
   show_summary "guarded write" (CM.analyze guarded);
 
-  (* Dynamic gather: for i: E[i] = A[I[i]][0] — the table read falls back to whole-node bytes. *)
+  (* Dynamic gathers (gh-ocannl-1174): one cell per loop-box point, at a row the data picks — at
+     most the known coordinates' image times the dynamic axis's extent, and at most the box. For i:
+     E[i] = A[I[i]][0] reads column 0 of A, so at most 4 rows x 1 column (16 B, not A's 80). *)
   let e = fresh_tn "E" [| 4 |] in
   let ids = fresh_tn "I" [| 4 |] in
   let gather =
@@ -141,7 +175,75 @@ let () =
             ~dyn_axis:0
             ~dyn_value:(get ids [| it i |], sp)))
   in
-  show_summary "dynamic gather (whole-node fallback)" (CM.analyze gather);
+  let s_gather = CM.analyze gather in
+  show_summary "dynamic gather (known column, any row)" s_gather;
+  gather_bound_sound ~name:"dynamic gather (known column, any row)" s_gather a
+    ~instances:(List.init 4 ~f:(fun _ row -> row * 5))
+    ~rows:4;
+  (* Box-limited: for b < 2: for c < 3: O[b][c] = T[I[b]][c] — 2 rows x 3 columns at most (24 B),
+     where the known image times the extent (3 x 5) is T's whole 60 B. *)
+  let t = fresh_tn "T" [| 5; 3 |] in
+  let o = fresh_tn "O" [| 2; 3 |] in
+  let ids2 = fresh_tn "I2" [| 2 |] in
+  let box_limited =
+    Ll_test.loop_n i 2
+      (Ll_test.loop_n j 3
+         (Ll_test.set o
+            [| it i; it j |]
+            (Ll_test.gather ~tn:t
+               ~idcs:[| Idx.Fixed_idx 0; it j |]
+               ~dyn_axis:0
+               ~dyn_value:(get ids2 [| it i |], sp))))
+  in
+  let s_box = CM.analyze box_limited in
+  show_summary "dynamic gather (box-limited)" s_box;
+  gather_bound_sound ~name:"dynamic gather (box-limited)" s_box t
+    ~instances:
+      (List.concat_map (List.init 2 ~f:Fn.id) ~f:(fun _ ->
+           List.init 3 ~f:(fun c row -> (row * 3) + c)))
+    ~rows:5;
+  (* Image-limited: for r < 4: for c < 2: P[r][c] = U[I[r]][c] over a 3x4 table — the box (8) is
+     larger than the 3 rows x 2 gathered columns (24 B) the known image allows. *)
+  let u = fresh_tn "U" [| 3; 4 |] in
+  let pr = fresh_tn "P" [| 4; 2 |] in
+  let ids3 = fresh_tn "I3" [| 4 |] in
+  let image_limited =
+    Ll_test.loop_n i 4
+      (Ll_test.loop_n j 2
+         (Ll_test.set pr
+            [| it i; it j |]
+            (Ll_test.gather ~tn:u
+               ~idcs:[| Idx.Fixed_idx 0; it j |]
+               ~dyn_axis:0
+               ~dyn_value:(get ids3 [| it i |], sp))))
+  in
+  let s_image = CM.analyze image_limited in
+  show_summary "dynamic gather (image-limited)" s_image;
+  gather_bound_sound ~name:"dynamic gather (image-limited)" s_image u
+    ~instances:
+      (List.concat_map (List.init 4 ~f:Fn.id) ~f:(fun _ ->
+           List.init 2 ~f:(fun c row -> (row * 4) + c)))
+    ~rows:3;
+  (* Flattened: for i < 8: F[i] = V[Sub_axis; I[i]] over a 2x4 table — a component after a
+     [Sub_axis] run indexes the whole run, so the data picks any of 8 cells, not of the dynamic
+     axis's own 4 (32 B; counting by the axis alone under-counted at 16 B). *)
+  let v = fresh_tn "V" [| 2; 4 |] in
+  let f8 = fresh_tn "F" [| 8 |] in
+  let ids4 = fresh_tn "I4" [| 8 |] in
+  let flattened =
+    Ll_test.loop_n i 8
+      (Ll_test.set f8
+         [| it i |]
+         (Ll_test.gather ~tn:v
+            ~idcs:[| Idx.Sub_axis; Idx.Fixed_idx 0 |]
+            ~dyn_axis:1
+            ~dyn_value:(get ids4 [| it i |], sp)))
+  in
+  let s_flat = CM.analyze flattened in
+  show_summary "dynamic gather (flattened over a Sub_axis run)" s_flat;
+  gather_bound_sound ~name:"dynamic gather (flattened over a Sub_axis run)" s_flat v
+    ~instances:(List.init 8 ~f:(fun _ row -> row))
+    ~rows:8;
 
   (* Overlapping writes: Zero_out S2 then a covering pointwise write — the per-direction sum (16 +
      16 B) is a union bound, capped by the node's 16 bytes and flagged approximate. *)

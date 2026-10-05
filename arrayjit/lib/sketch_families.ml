@@ -519,7 +519,7 @@ let fma_form (llc : LL.t) ~stmt_path ~d ~(di : Idx.axis_index array) : bool =
 let serial_kernel_of axes (g : Ir.Tnode.t A.access list) =
   let writes = List.filter g ~f:(fun a -> a.A.a_write) in
   match writes with
-  | [ w ] when (not w.A.a_whole) && (not w.A.a_dynamic) && not w.A.a_vec_last ->
+  | [ w ] when (not w.A.a_whole) && Option.is_none w.A.a_dyn_axis && not w.A.a_vec_last ->
       let serial0 (s, (lo, _)) =
         lo = 0
         &&
