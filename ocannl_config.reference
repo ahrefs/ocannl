@@ -1495,8 +1495,8 @@
 #
 # # Empirical schedule search on, with a wider beam and more rounds than the everyday defaults.
 # # The benchmark runners (benchmarks/runners/ocannl) pass ~rounds:0, so their tuned cells get
-# # this beam width but not these rounds: on gpt2_mini/CUDA one round added 60-150% search time
-# # per arm and never cleared the 1% margin a round needs to be adopted (gh-ocannl-1137).
+# # this beam width but not these rounds: in a partial gpt2_mini/CUDA probe, one round added 150%
+# # to the one arm that finished it, which kept its seed winner (gh-ocannl-1137).
 # autotune_search=true
 # autotune_beam_width=4
 # autotune_rounds=4
