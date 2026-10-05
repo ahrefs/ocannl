@@ -46,8 +46,6 @@ unsupported shell execution context "set -e\necho x )\n" reaches its refusal: tr
 unsupported shell execution context "set -e\n}\n" reaches its refusal: true
 unsupported shell execution context "set -e\nwhile true; do\n  :\n" reaches its refusal: true
 unsupported shell execution context "set -e\ncase x in\n  x) : ;;\n" reaches its refusal: true
-unsupported shell execution context "enable() { set -e; }\n" reaches its refusal: true
-unsupported shell execution context "set -e\ndisable() {\n  set +e\n}\n" reaches its refusal: true
 a script that never turns errexit on is not refused for its structure: true
 errexit-negation fixture multiline single quote is classified as specified: true
 errexit-negation fixture multiline double quote is classified as specified: true
@@ -192,6 +190,11 @@ errexit-negation fixture negation after a guarded set +e is classified as specif
 errexit-negation fixture negation after a subshell set +e is classified as specified: true
 errexit-negation fixture negation after set -e +e is classified as specified: true
 errexit-negation fixture negation after shopt -u -o errexit is classified as specified: true
+errexit-negation fixture function's final negation in a loop body is classified as specified: true
+errexit-negation fixture function's final negation in a fall-through arm is classified as specified: true
+errexit-negation fixture function's final negation in the last arm, ending in ;& is classified as specified: true
+errexit-negation fixture negation after a call that turns errexit on is classified as specified: true
+errexit-negation fixture negation after set +e in a file with a save-and-restore function is classified as specified: true
 the statement-position ! grep fixture reaches the absent()-style refusal: true
 errexit-and-list fixture pair in multiline quote is classified as specified: true
 errexit-and-list fixture pair in heredoc is classified as specified: true
@@ -306,6 +309,11 @@ errexit-and-list fixture function's final pair before break is classified as spe
 errexit-and-list fixture function's final group read by an or-tail is classified as specified: true
 errexit-and-list fixture top-level if branch's final pair is classified as specified: true
 errexit-and-list fixture script's final pair is classified as specified: true
+errexit-and-list fixture function's final pair in a loop body is classified as specified: true
+errexit-and-list fixture function's final pair in a fall-through arm is classified as specified: true
+errexit-and-list fixture function's final pair in a ;;& arm is classified as specified: true
+errexit-and-list fixture function's final pair in the last arm, ending in ;& is classified as specified: true
+errexit-and-list fixture pair after a call that turns errexit on is classified as specified: true
 errexit-and-list fixture condition before a do line is classified as specified: true
 errexit-and-list fixture condition before a then line is classified as specified: true
 errexit-and-list fixture heredoc data line reading as a keyword is classified as specified: true
@@ -354,8 +362,12 @@ errexit execution control after set -e in a case arm, `! true`: flagged; bash ru
 errexit execution control after set -e in a case arm, `[ -n "" ] && [ -n x ]`: flagged; bash runs past its failure where `false` stops: true
 errexit execution control in a loop body before a later set -e, `! true`: flagged; bash runs past its failure where `false` stops: true
 errexit execution control in a loop body before a later set -e, `[ -n "" ] && [ -n x ]`: flagged; bash runs past its failure where `false` stops: true
-errexit execution control after a function that turns errexit on, `! true`: refused as unsupported; bash runs past its failure: true
-errexit execution control after a function that turns errexit on, `[ -n "" ] && [ -n x ]`: refused as unsupported; bash runs past its failure: true
+errexit execution control after a function that turns errexit on, `! true`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control after a function that turns errexit on, `[ -n "" ] && [ -n x ]`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control after a function that turns errexit on, called after set +e, `! true`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control after a function that turns errexit on, called after set +e, `[ -n "" ] && [ -n x ]`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control after set +e, beside an uncalled function that turns errexit on, `! true`: flagged although bash treats its failure as `false` (declared loud): true
+errexit execution control after set +e, beside an uncalled function that turns errexit on, `[ -n "" ] && [ -n x ]`: flagged although bash treats its failure as `false` (declared loud): true
 errexit execution control after eval set -e, `! true`: not flagged although bash runs past its failure (declared silent): true
 errexit execution control after eval set -e, `[ -n "" ] && [ -n x ]`: not flagged although bash runs past its failure (declared silent): true
 errexit execution control as a function's last statement, `! true`: not flagged; bash treats its failure as it treats `false`: true
@@ -364,12 +376,20 @@ errexit execution control before a function's last statement, `! true`: flagged;
 errexit execution control before a function's last statement, `[ -n "" ] && [ -n x ]`: flagged; bash runs past its failure where `false` stops: true
 errexit execution control as a function's last if branch, `! true`: not flagged; bash treats its failure as it treats `false`: true
 errexit execution control as a function's last if branch, `[ -n "" ] && [ -n x ]`: not flagged; bash treats its failure as it treats `false`: true
-errexit execution control as a function's last loop body, `! true`: not flagged; bash treats its failure as it treats `false`: true
-errexit execution control as a function's last loop body, `[ -n "" ] && [ -n x ]`: not flagged; bash treats its failure as it treats `false`: true
+errexit execution control as a function's last loop body, run once, `! true`: flagged although bash treats its failure as `false` (declared loud): true
+errexit execution control as a function's last loop body, run once, `[ -n "" ] && [ -n x ]`: flagged although bash treats its failure as `false` (declared loud): true
+errexit execution control in a function's last loop body, overwritten by a later iteration, `! true`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control in a function's last loop body, overwritten by a later iteration, `[ -n "" ] && [ -n x ]`: flagged; bash runs past its failure where `false` stops: true
 errexit execution control before a break in a function's last loop, `! true`: flagged; bash runs past its failure where `false` stops: true
 errexit execution control before a break in a function's last loop, `[ -n "" ] && [ -n x ]`: flagged; bash runs past its failure where `false` stops: true
 errexit execution control as a function's last case arm, `! true`: not flagged; bash treats its failure as it treats `false`: true
 errexit execution control as a function's last case arm, `[ -n "" ] && [ -n x ]`: not flagged; bash treats its failure as it treats `false`: true
+errexit execution control as a function's case arm falling through with ;&, `! true`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control as a function's case arm falling through with ;&, `[ -n "" ] && [ -n x ]`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control as a function's case arm continuing with ;;&, `! true`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control as a function's case arm continuing with ;;&, `[ -n "" ] && [ -n x ]`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control as a function's last case arm, ending in ;&, `! true`: not flagged; bash treats its failure as it treats `false`: true
+errexit execution control as a function's last case arm, ending in ;&, `[ -n "" ] && [ -n x ]`: not flagged; bash treats its failure as it treats `false`: true
 errexit execution control as a function's last brace group, `! true`: not flagged; bash treats its failure as it treats `false`: true
 errexit execution control as a function's last brace group, `[ -n "" ] && [ -n x ]`: not flagged; bash treats its failure as it treats `false`: true
 errexit execution control as a function's last && operand group, `! true`: not flagged; bash treats its failure as it treats `false`: true

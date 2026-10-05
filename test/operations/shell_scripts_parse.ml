@@ -1462,8 +1462,11 @@ end
       is read again from a head that may be on when one pass may leave it on, so a [set -e] late in
       a body reaches its earlier statements;
     - a function body runs where it is called, which a text scan cannot see: it is entered with
-      errexit on when the file may turn it on anywhere outside that body, and it must leave errexit
-      as it found it.
+      errexit on when the file may turn it on anywhere outside that body. And since the scan does
+      not follow calls, a body that may hand errexit back ON to a caller that called it with errexit
+      off ([enable() { set -e; }], or the [set +e ... set -e] save-and-restore that assumes its
+      caller had it on) makes every off state in the file untrustworthy: such a script is read with
+      errexit on from its first line, and no [set +e] in it turns it off.
 
     Status consumers. A statement's status is consumed -- it is not an assertion errexit has to stop
     on -- when the statement is a condition ([if]/[elif]/[while]/[until]), when its own list
@@ -1472,9 +1475,13 @@ end
     - a function body: its status is the return value the call site weighs;
     - a subshell, whose nonzero exit is a failure of its own, unless a pipeline discards it or it
       runs in the background;
-    - a brace group, [if] branch, loop body or [case] arm whose compound hands its status on in
-      turn: as a non-last operand of an [&&]/[||] list, or as the last operand of the last statement
-      of a context that hands its status on.
+    - a brace group, [if] branch or [case] arm whose compound hands its status on in turn: as a
+      non-last operand of an [&&]/[||] list, or as the last operand of the last statement of a
+      context that hands its status on.
+
+    The genre this guards is a status overwritten before it reaches its consumer, so two contexts
+    hand nothing on: a loop body, whose last statement a later iteration overwrites, and a [case]
+    arm ending in [;&]/[;;&], whose status the arm it falls into overwrites.
 
     {1 What it refuses}
 
@@ -1482,17 +1489,19 @@ end
     on the structure -- loudly, as unsupported: a closer or continuation word that does not fit the
     innermost open construct, a [)] or [}] that closes nothing, a construct still open at the end of
     the file (a script the parse check above accepts is valid shell, so a mismatch means the reading
-    lost the structure, and every judgement after it would be a guess), and a function body that
-    leaves errexit changed for its callers ([enable() { set -e; }]): the scan does not follow calls.
+    lost the structure, and every judgement after it would be a guess).
 
     {1 What it deliberately does not read}
 
     Loud (a live assertion flagged): an errexit transition inside a branch is read as possibly not
-    taken; a function body is judged under errexit even where every call runs with it off; the
-    script's own last statement is not a consumer, since an EXIT trap can replace the exit status --
-    [|| exit 1] is the explicit spelling; a [rc=$?] or a bare [return] on the next statement is not
-    one either -- [|| rc=$?] and [|| return 1] are; and a statement whose status a pipeline discards
-    is flagged although a plain failure there is lost too.
+    taken; a function body is judged under errexit even where every call runs with it off; a
+    function that may turn errexit on discards every off state in the file, called or not; a loop
+    body's last statement is not consumed even where the loop runs once, nor a fall-through arm's
+    where no arm follows it at run time; the script's own last statement is not a consumer, since an
+    EXIT trap can replace the exit status -- [|| exit 1] is the explicit spelling; a [rc=$?] or a
+    bare [return] on the next statement is not one either -- [|| rc=$?] and [|| return 1] are; and a
+    statement whose status a pipeline discards is flagged although a plain failure there is lost
+    too.
 
     Silent (an inert assertion not flagged): errexit turned on by [eval], a sourced file, an
     invocation flag ([bash -e script]; a shebang flag is refused by {!Shebang} already), or a caller
@@ -2015,107 +2024,127 @@ module Shell_context = struct
   (** Every statement of [top] with the errexit state it may run under and whether its status is
       consumed (see the module header), in source order; and whether the script may turn errexit on
       at all. *)
-  let judge ~refuse top =
-    let judgements = Hashtbl.create (module Int) in
+  let judge top =
     let sites = enabling_sites ~functions:[] [] top in
-    let record statement ~errexit ~consumed =
-      Hashtbl.update judgements statement.id ~f:(function
-        | None -> { statement; errexit; consumed }
-        | Some previous -> { previous with errexit = previous.errexit || errexit })
+    (* One reading of the tree. [leaky]: some function body may turn errexit on for a caller that
+       had it off, so no off state can be trusted. Returns the judgements and whether a body was
+       found to be leaky. *)
+    let reading ~leaky =
+      let judgements = Hashtbl.create (module Int) in
+      let leak = ref false in
+      (* Off while a function body's transfer is computed from an entry it is not judged under. *)
+      let recording = ref true in
+      let record statement ~errexit ~consumed =
+        if !recording then
+          Hashtbl.update judgements statement.id ~f:(function
+            | None -> { statement; errexit; consumed }
+            | Some previous -> { previous with errexit = previous.errexit || errexit })
+      in
+      let rec branch (b : branch) ~entry ~hands_on =
+        let last = List.length b.statements - 1 in
+        List.foldi b.statements ~init:entry ~f:(fun index errexit statement ->
+            let consumed = b.condition || (hands_on && index = last) in
+            record statement ~errexit ~consumed;
+            run statement ~errexit ~consumed)
+      and run statement ~errexit ~consumed =
+        List.foldi statement.operands ~init:errexit ~f:(fun index errexit operand ->
+            let apart = runs_apart statement index in
+            let after = List.nth statement.connectors index in
+            match operand.compound with
+            | None -> (
+                match L.command_errexit operand.text with
+                | Some true when not apart -> true
+                | Some false when (not leaky) && (not apart) && index = 0 -> false
+                | _ -> errexit)
+            | Some compound -> (
+                (* The compound's own status: a following [&&]/[||] reads it, a following [|]
+                   discards it, and as the last operand it is the statement's. *)
+                let status_consumed =
+                  match after with
+                  | Some (And | Or) -> true
+                  | Some Pipe -> false
+                  | None -> consumed && not statement.async
+                in
+                let discarded =
+                  statement.async || Option.value_map after ~default:false ~f:is_pipe
+                in
+                let exit = enter compound ~entry:errexit ~status_consumed ~discarded in
+                match compound.kind with
+                | _ when apart -> errexit
+                | Group `Paren | Function _ -> errexit
+                | Group `Brace | If | Loop | Case -> if index = 0 then exit else errexit || exit))
+      and enter compound ~entry ~status_consumed ~discarded =
+        match compound.kind with
+        | Group `Brace ->
+            List.fold compound.branches ~init:entry ~f:(fun entry body ->
+                branch body ~entry ~hands_on:status_consumed)
+        | Group `Paren ->
+            List.iter compound.branches ~f:(fun body ->
+                ignore (branch body ~entry ~hands_on:(not discarded) : bool));
+            entry
+        | Function shape ->
+            let entry' =
+              List.exists sites ~f:(fun functions ->
+                  not (List.mem functions compound ~equal:phys_equal))
+            in
+            List.iter compound.branches ~f:(fun body ->
+                ignore (branch body ~entry:(leaky || entry') ~hands_on:true : bool);
+                (* A call from a caller with errexit off: does the body hand it back on? *)
+                match shape with
+                | `Brace ->
+                    let saved = !recording in
+                    recording := false;
+                    if branch body ~entry:false ~hands_on:true then leak := true;
+                    recording := saved
+                | `Paren -> ());
+            entry
+        | If ->
+            let last_condition, exits, bodies, conditions =
+              List.fold compound.branches ~init:(entry, [], 0, 0)
+                ~f:(fun (state, exits, bodies, conditions) b ->
+                  if b.condition then
+                    (branch b ~entry:state ~hands_on:false, exits, bodies, conditions + 1)
+                  else
+                    ( state,
+                      branch b ~entry:state ~hands_on:status_consumed :: exits,
+                      bodies + 1,
+                      conditions ))
+            in
+            List.exists exits ~f:Fn.id || (bodies <= conditions && last_condition)
+        | Loop ->
+            (* A body hands nothing on: a later iteration overwrites its last statement's status. *)
+            let pass head =
+              List.fold compound.branches ~init:(head, head) ~f:(fun (state, joined) b ->
+                  let exit = branch b ~entry:state ~hands_on:false in
+                  (exit, joined || exit))
+            in
+            let exit, joined = pass entry in
+            let head = entry || exit in
+            if Bool.equal head entry then joined else snd (pass head)
+        | Case ->
+            (* An arm ending in [;&]/[;;&] hands nothing on: the arm it falls into overwrites its
+               status. *)
+            let rec arms previous joined = function
+              | [] -> joined
+              | arm :: rest ->
+                  let start =
+                    match previous with
+                    | Some exit when arm.fallthrough -> entry || exit
+                    | Some _ | None -> entry
+                  in
+                  let falls_on = match rest with next :: _ -> next.fallthrough | [] -> false in
+                  let exit = branch arm ~entry:start ~hands_on:(status_consumed && not falls_on) in
+                  arms (Some exit) (joined || exit) rest
+            in
+            arms None entry compound.branches
+      in
+      ignore (branch top ~entry:leaky ~hands_on:false : bool);
+      ( Hashtbl.data judgements
+        |> List.sort ~compare:(fun a b -> Int.compare a.statement.id b.statement.id),
+        !leak )
     in
-    let rec branch (b : branch) ~entry ~hands_on =
-      let last = List.length b.statements - 1 in
-      List.foldi b.statements ~init:entry ~f:(fun index errexit statement ->
-          let consumed = b.condition || (hands_on && index = last) in
-          record statement ~errexit ~consumed;
-          run statement ~errexit ~consumed)
-    and run statement ~errexit ~consumed =
-      List.foldi statement.operands ~init:errexit ~f:(fun index errexit operand ->
-          let apart = runs_apart statement index in
-          let after = List.nth statement.connectors index in
-          match operand.compound with
-          | None -> (
-              match L.command_errexit operand.text with
-              | Some true when not apart -> true
-              | Some false when (not apart) && index = 0 -> false
-              | _ -> errexit)
-          | Some compound -> (
-              (* The compound's own status: a following [&&]/[||] reads it, a following [|] discards
-                 it, and as the last operand it is the statement's. *)
-              let status_consumed =
-                match after with
-                | Some (And | Or) -> true
-                | Some Pipe -> false
-                | None -> consumed && not statement.async
-              in
-              let discarded = statement.async || Option.value_map after ~default:false ~f:is_pipe in
-              let exit =
-                enter compound ~line:statement.line ~entry:errexit ~status_consumed ~discarded
-              in
-              match compound.kind with
-              | _ when apart -> errexit
-              | Group `Paren | Function _ -> errexit
-              | Group `Brace | If | Loop | Case -> if index = 0 then exit else errexit || exit))
-    and enter compound ~line ~entry ~status_consumed ~discarded =
-      match compound.kind with
-      | Group `Brace ->
-          List.fold compound.branches ~init:entry ~f:(fun entry body ->
-              branch body ~entry ~hands_on:status_consumed)
-      | Group `Paren ->
-          List.iter compound.branches ~f:(fun body ->
-              ignore (branch body ~entry ~hands_on:(not discarded) : bool));
-          entry
-      | Function shape ->
-          let entry' =
-            List.exists sites ~f:(fun functions ->
-                not (List.mem functions compound ~equal:phys_equal))
-          in
-          List.iter compound.branches ~f:(fun body ->
-              let exit = branch body ~entry:entry' ~hands_on:true in
-              match shape with
-              | `Brace when not (Bool.equal exit entry') ->
-                  refuse line
-                    (Printf.sprintf "a function body that leaves errexit %s for its callers"
-                       (if exit then "on" else "off"))
-              | `Brace | `Paren -> ());
-          entry
-      | If ->
-          let last_condition, exits, bodies, conditions =
-            List.fold compound.branches ~init:(entry, [], 0, 0)
-              ~f:(fun (state, exits, bodies, conditions) b ->
-                if b.condition then
-                  (branch b ~entry:state ~hands_on:false, exits, bodies, conditions + 1)
-                else
-                  ( state,
-                    branch b ~entry:state ~hands_on:status_consumed :: exits,
-                    bodies + 1,
-                    conditions ))
-          in
-          List.exists exits ~f:Fn.id || (bodies <= conditions && last_condition)
-      | Loop ->
-          let pass head =
-            List.fold compound.branches ~init:(head, head) ~f:(fun (state, joined) b ->
-                let exit = branch b ~entry:state ~hands_on:((not b.condition) && status_consumed) in
-                (exit, joined || exit))
-          in
-          let exit, joined = pass entry in
-          let head = entry || exit in
-          if Bool.equal head entry then joined else snd (pass head)
-      | Case ->
-          snd
-            (List.fold compound.branches ~init:(None, entry) ~f:(fun (previous, joined) arm ->
-                 let start =
-                   match previous with
-                   | Some exit when arm.fallthrough -> entry || exit
-                   | Some _ | None -> entry
-                 in
-                 let exit = branch arm ~entry:start ~hands_on:status_consumed in
-                 (Some exit, joined || exit)))
-    in
-    ignore (branch top ~entry:false ~hands_on:false : bool);
-    ( Hashtbl.data judgements
-      |> List.sort ~compare:(fun a b -> Int.compare a.statement.id b.statement.id),
-      not (List.is_empty sites) )
+    let _, leaky = reading ~leaky:false in
+    (fst (reading ~leaky), not (List.is_empty sites))
 
   type t = {
     judgements : judgement list;
@@ -2132,7 +2161,7 @@ module Shell_context = struct
           lexical := (line, reason) :: !lexical)
     in
     let refuse line reason = refusals := (line, reason) :: !refusals in
-    let judgements, enables_errexit = judge ~refuse (structure ~refuse lines) in
+    let judgements, enables_errexit = judge (structure ~refuse lines) in
     let refusals =
       if enables_errexit then
         List.dedup_and_sort !refusals ~compare:(fun (line, reason) (line', reason') ->
@@ -2207,10 +2236,6 @@ module Shell_context = struct
           "`}` does not close or continue the innermost open construct (the top level)" );
         ("set -e\nwhile true; do\n  :\n", 2, "a loop still open at the end of the file");
         ("set -e\ncase x in\n  x) : ;;\n", 2, "a `case` still open at the end of the file");
-        ("enable() { set -e; }\n", 1, "a function body that leaves errexit on for its callers");
-        ( "set -e\ndisable() {\n  set +e\n}\n",
-          2,
-          "a function body that leaves errexit off for its callers" );
       ]
       ~f:(fun (text, line, reason) ->
         Verdict.pf "unsupported shell execution context %S reaches its refusal" text
@@ -2453,6 +2478,22 @@ module Errexit_negation = struct
       ("negation after a subshell set +e", "set -e\n( set +e )\n! probe\n", [ 3 ]);
       ("negation after set -e +e", "set -e +e\n! probe\n", []);
       ("negation after shopt -u -o errexit", "set -e\nshopt -u -o errexit\n! probe\n", []);
+      (* A status overwritten before it reaches its consumer, and a call that turns errexit on. *)
+      ( "function's final negation in a loop body",
+        "set -e\nf() {\n  for x in y; do\n    ! probe\n  done\n}\n",
+        [ 4 ] );
+      ( "function's final negation in a fall-through arm",
+        "set -e\nf() {\n  case $1 in\n    a) ! probe ;&\n    b) : ;;\n  esac\n}\n",
+        [ 4 ] );
+      ( "function's final negation in the last arm, ending in ;&",
+        "set -e\nf() {\n  case $1 in\n    a) : ;;\n    b) ! probe ;&\n  esac\n}\n",
+        [] );
+      ( "negation after a call that turns errexit on",
+        "set -e\nf() { set -e; }\nset +e\nf\n! probe\n",
+        [ 5 ] );
+      ( "negation after set +e in a file with a save-and-restore function",
+        "set -e\nf() {\n  set +e\n  x\n  set -e\n}\nset +e\n! probe\n",
+        [ 8 ] );
     ]
 
   let controls () =
@@ -2505,7 +2546,7 @@ end
       [time], assignments and redirections); a compound operand is not one;
     - {!Shell_context} judges that it may run under errexit with nothing consuming its status: not a
       condition, and not the last statement of a function body or a subshell -- directly, or as the
-      last statement of a group, branch, loop body or arm that is itself such a last statement.
+      last statement of a group, branch or arm that is itself such a last statement.
 
     A [||] anywhere in the list is its consumer: [[ A ] && [ B ] || die ...] makes the failure
     explicit, so nothing is exempt. That is the spelling the refusal points at, together with one
@@ -2768,6 +2809,22 @@ module Errexit_and_list = struct
         [] );
       ("top-level if branch's final pair", "set -e\nif x; then\n  [ -e a ] && [ -e b ]\nfi\n", [ 3 ]);
       ("script's final pair", "set -e\nprepare\n[ -e a ] && [ -e b ]\n", [ 3 ]);
+      (* A status overwritten before it reaches its consumer, and a call that turns errexit on. *)
+      ( "function's final pair in a loop body",
+        "set -e\nf() {\n  for x in y; do\n    [ -e a ] && [ -e b ]\n  done\n}\n",
+        [ 4 ] );
+      ( "function's final pair in a fall-through arm",
+        "set -e\nf() {\n  case $1 in\n    a) [ -e a ] && [ -e b ] ;&\n    b) : ;;\n  esac\n}\n",
+        [ 4 ] );
+      ( "function's final pair in a ;;& arm",
+        "set -e\nf() {\n  case $1 in\n    a) [ -e a ] && [ -e b ] ;;&\n    *) : ;;\n  esac\n}\n",
+        [ 4 ] );
+      ( "function's final pair in the last arm, ending in ;&",
+        "set -e\nf() {\n  case $1 in\n    a) : ;;\n    b) [ -e a ] && [ -e b ] ;&\n  esac\n}\n",
+        [] );
+      ( "pair after a call that turns errexit on",
+        "set -e\nf() { set -e; }\nset +e\nf\n[ -e a ] && [ -e b ]\n",
+        [ 5 ] );
       (* The shared reader carries the header to its keyword, and excludes heredoc data. *)
       ("condition before a do line", "set -e\nwhile\n  [ -e a ] && [ -e b ]\ndo :; done\n", []);
       ("condition before a then line", "set -e\nif\n  [ -e a ] && [ -e b ];\nthen :; fi\n", []);
@@ -2843,7 +2900,7 @@ end
     claim on that platform rather than as a golden difference. *)
 module Errexit_execution_controls = struct
   type arm = Negation | Pair
-  type boundary = Inert | Live | Loud | Silent | Refused
+  type boundary = Inert | Live | Loud | Silent
 
   let default = function Negation -> "! true" | Pair -> "[ -n \"\" ] && [ -n x ]"
 
@@ -2852,10 +2909,16 @@ module Errexit_execution_controls = struct
     | Live -> "not flagged; bash treats its failure as it treats `false`"
     | Loud -> "flagged although bash treats its failure as `false` (declared loud)"
     | Silent -> "not flagged although bash runs past its failure (declared silent)"
-    | Refused -> "refused as unsupported; bash runs past its failure"
 
-  let both boundary name template =
-    (name, template, [ (Negation, default Negation, boundary); (Pair, default Pair, boundary) ])
+  (** [;&] and [;;&], which bash 3.2 does not parse: a row that uses them states it, and is measured
+      only where the host's bash runs this probe. *)
+  let fallthrough = ("`;&` and `;;&`", "case x in x) : ;& y) : ;;& esac\n")
+
+  let both ?requires boundary name template =
+    ( name,
+      template,
+      [ (Negation, default Negation, boundary); (Pair, default Pair, boundary) ],
+      requires )
 
   let rows =
     [
@@ -2886,8 +2949,11 @@ module Errexit_execution_controls = struct
         \  set -e\n\
          done\n\
          echo SURVIVED\n";
-      both Refused "after a function that turns errexit on"
-        "f() { set -e; }\nf\n@@\necho SURVIVED\n";
+      both Inert "after a function that turns errexit on" "f() { set -e; }\nf\n@@\necho SURVIVED\n";
+      both Inert "after a function that turns errexit on, called after set +e"
+        "set -e\nf() { set -e; }\nset +e\nf\n@@\necho SURVIVED\n";
+      both Loud "after set +e, beside an uncalled function that turns errexit on"
+        "set -e\nf() { set -e; }\nset +e\n@@\necho SURVIVED\n";
       both Silent "after eval set -e" "eval 'set -e'\n@@\necho SURVIVED\n";
       (* Status consumers. *)
       both Live "as a function's last statement" "set -e\nf() {\n  @@\n}\nf\necho SURVIVED\n";
@@ -2895,12 +2961,31 @@ module Errexit_execution_controls = struct
         "set -e\nf() {\n  @@\n  :\n}\nf\necho SURVIVED\n";
       both Live "as a function's last if branch"
         "set -e\nf() {\n  if [ -n x ]; then\n    @@\n  fi\n}\nf\necho SURVIVED\n";
-      both Live "as a function's last loop body"
+      both Loud "as a function's last loop body, run once"
         "set -e\nf() {\n  for i in 1; do\n    @@\n  done\n}\nf\necho SURVIVED\n";
+      both Inert "in a function's last loop body, overwritten by a later iteration"
+        "set -e\n\
+         f() {\n\
+        \  for i in 1 2; do\n\
+        \    if [ \"$i\" = 1 ]; then\n\
+        \      @@\n\
+        \    else\n\
+        \      :\n\
+        \    fi\n\
+        \  done\n\
+         }\n\
+         f\n\
+         echo SURVIVED\n";
       both Inert "before a break in a function's last loop"
         "set -e\nf() {\n  for i in 1; do\n    @@\n    break\n  done\n}\nf\necho SURVIVED\n";
       both Live "as a function's last case arm"
         "set -e\nf() {\n  case x in\n    x) @@ ;;\n  esac\n}\nf\necho SURVIVED\n";
+      both ~requires:fallthrough Inert "as a function's case arm falling through with ;&"
+        "set -e\nf() {\n  case x in\n    x) @@ ;&\n    y) : ;;\n  esac\n}\nf\necho SURVIVED\n";
+      both ~requires:fallthrough Inert "as a function's case arm continuing with ;;&"
+        "set -e\nf() {\n  case x in\n    x) @@ ;;&\n    x) : ;;\n  esac\n}\nf\necho SURVIVED\n";
+      both ~requires:fallthrough Live "as a function's last case arm, ending in ;&"
+        "set -e\nf() {\n  case x in\n    y) : ;;\n    x) @@ ;&\n  esac\n}\nf\necho SURVIVED\n";
       both Live "as a function's last brace group"
         "set -e\nf() {\n  {\n    @@\n  }\n}\nf\necho SURVIVED\n";
       both Live "as a function's last && operand group"
@@ -2922,13 +3007,16 @@ module Errexit_execution_controls = struct
       (* Wrappers. *)
       ( "through builtin-runners",
         "set -e\n@@\necho SURVIVED\n",
-        [ (Pair, "command [ -n \"\" ] && builtin test -n x", Inert) ] );
+        [ (Pair, "command [ -n \"\" ] && builtin test -n x", Inert) ],
+        None );
       ( "through time",
         "set -e\n@@\necho SURVIVED\n",
-        [ (Pair, "time [ -n \"\" ] && [ -n x ]", Inert) ] );
+        [ (Pair, "time [ -n \"\" ] && [ -n x ]", Inert) ],
+        None );
       ( "through env",
         "set -e\n@@\necho SURVIVED\n",
-        [ (Pair, "env test -n \"\" && env test -n x", Silent) ] );
+        [ (Pair, "env test -n \"\" && env test -n x", Silent) ],
+        None );
     ]
 
   (** The exit status and standard output of [bash] running [text], with stdin and stderr closed to
@@ -2963,9 +3051,10 @@ module Errexit_execution_controls = struct
     match resolve ~rel (Shebang.Via_env { env_path = ""; command = "bash" }) with
     | Error reason -> Verdict.fail (Printf.sprintf "%s: %s" rel reason)
     | Ok bash ->
+        let version = snd (run bash "printf '%s' \"$BASH_VERSION\"\n") in
         eprintf "errexit execution controls run under `%s`, bash %s (not part of the golden)\n" bash
-          (snd (run bash "printf '%s' \"$BASH_VERSION\"\n"));
-        List.iter rows ~f:(fun (name, template, legs) ->
+          version;
+        List.iter rows ~f:(fun (name, template, legs, requires) ->
             let hole =
               1
               + String.count
@@ -2974,6 +3063,13 @@ module Errexit_execution_controls = struct
             in
             let fill assertion =
               String.substr_replace_all template ~pattern:"@@" ~with_:assertion
+            in
+            (* Where the host's bash lacks the syntax a row needs, its bash half cannot be measured;
+               the arms' fixture tables pin the scan's half of such a row on every host. *)
+            let measurable, lacking =
+              match requires with
+              | None -> (true, "")
+              | Some (syntax, probe) -> (Poly.equal (fst (run bash probe)) (Unix.WEXITED 0), syntax)
             in
             let reference = run bash (fill "false") in
             List.iter legs ~f:(fun (arm, assertion, boundary) ->
@@ -2999,10 +3095,9 @@ module Errexit_execution_controls = struct
                   | Live -> (`Unflagged, false)
                   | Loud -> (`Flagged, false)
                   | Silent -> (`Unflagged, true)
-                  | Refused -> (`Refused, true)
                 in
                 let holds = Poly.equal reading expected && Bool.equal differs inert in
-                if not holds then
+                if measurable && not holds then
                   eprintf
                     "errexit execution control %s with `%s`: flagged lines %s (hole %d), refused \
                      %b, bash %s `false`\n"
@@ -3010,8 +3105,11 @@ module Errexit_execution_controls = struct
                     (String.concat ~sep:"," (List.map lines ~f:Int.to_string))
                     hole (Poly.equal reading `Refused)
                     (if differs then "differs from" else "matches");
-                Verdict.pf "errexit execution control %s, `%s`: %s" name assertion
-                  (describe boundary) holds))
+                Verdict.gated ~aggregation:`Environment ~when_:measurable
+                  ~on:(Printf.sprintf "bash %s, which lacks %s" version lacking)
+                  (Printf.sprintf "errexit execution control %s, `%s`: %s" name assertion
+                     (describe boundary))
+                  holds))
 end
 
 module Harness_contract = struct
