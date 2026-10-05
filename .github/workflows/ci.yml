@@ -333,7 +333,10 @@ jobs:
     - name: Unpack opam dependencies (Windows)
       if: runner.os == 'Windows' && steps.windows-opam-cache.outputs.cache-hit == 'true'
       shell: 'C:\Progra~1\Git\bin\bash.exe --noprofile --norc -eo pipefail {0}'
-      run: tools/windows-opam-cache.sh restore "$RUNNER_TEMP/ocannl-opam-cache" _opam "$(opam var root)/.cygwin"
+      run: |
+        # setup-ocaml may put Cygwin bash/tar first on PATH even in this shell.
+        export PATH="/usr/bin:/mingw64/bin:$PATH"
+        /usr/bin/bash tools/windows-opam-cache.sh restore "$RUNNER_TEMP/ocannl-opam-cache" _opam "$(opam var root)/.cygwin"
     - name: Cache opam dependencies
       id: opam-cache
       if: runner.os != 'Windows'
@@ -406,7 +409,16 @@ jobs:
     - name: Pack opam dependency archives (Windows)
       if: runner.os == 'Windows' && steps.windows-opam-cache.outputs.cache-hit != 'true'
       shell: 'C:\Progra~1\Git\bin\bash.exe --noprofile --norc -eo pipefail {0}'
-      run: tools/windows-opam-cache.sh pack "$RUNNER_TEMP/ocannl-opam-cache" _opam "$(opam var root)/.cygwin"
+      run: |
+        # setup-ocaml may put Cygwin bash/tar first on PATH even in this shell.
+        export PATH="/usr/bin:/mingw64/bin:$PATH"
+        /usr/bin/bash tools/windows-opam-cache.sh pack "$RUNNER_TEMP/ocannl-opam-cache" _opam "$(opam var root)/.cygwin"
+    - name: Check Windows opam cache round trip (Git Bash)
+      if: runner.os == 'Windows' && matrix.suite != 'train'
+      shell: 'C:\Progra~1\Git\bin\bash.exe --noprofile --norc -eo pipefail {0}'
+      run: |
+        export PATH="/usr/bin:/mingw64/bin:$PATH"
+        /usr/bin/bash tools/test-windows-opam-cache.sh
     # On the first ubuntu shard only: one leg answers the question.
     - name: Check non-default module log level and trace semantics
       if: matrix.os == 'ubuntu-latest' && matrix.ocaml-compiler == '5.5.x' && startsWith(matrix.shard, '1/')
