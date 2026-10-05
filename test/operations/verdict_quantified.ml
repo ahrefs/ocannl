@@ -99,6 +99,20 @@ let () =
   | "shape_p_pairwise_distinct" ->
       p_pairwise_distinct "the claim" distinct ~equal:Int.equal ~to_string:Int.to_string
   | "shape_p_false" -> Verdict.p "the claim" false
+  (* gh-ocannl-1160: opposing predicates have the same visits, including after the first refutation.
+     The indexed leg records both the supplied index and element. Keep diagnostics on stderr so each
+     child's stdout can still be compared byte-for-byte with [p]. *)
+  | ( "visits_all_true" | "visits_all_false" | "visits_none_true" | "visits_none_false"
+    | "visits_alli_true" | "visits_alli_false" ) as mode ->
+      let holds = String.is_suffix mode ~suffix:"_true" in
+      let visit i n =
+        Stdio.eprintf "visit %d=%d\n%!" i n;
+        holds || n <> 2
+      in
+      if String.is_prefix mode ~prefix:"visits_alli" then Verdict.p_alli "the claim" seeds ~f:visit
+      else if String.is_prefix mode ~prefix:"visits_none" then
+        Verdict.p_none "the claim" seeds ~f:(fun n -> not (visit 0 n))
+      else Verdict.p_all "the claim" seeds ~f:(visit 0)
   (* gh-ocannl-997: a gated claim is [p] where its gate is open and a skip where it is closed, and
      both must print [p]'s passing line. The closed gate is handed a FALSE value and a detail that
      raises, so a skip that evaluated either would show. Children only: a skip announces itself on
@@ -153,6 +167,22 @@ let () =
       p_pairwise_distinct "the source values are pairwise distinct" [ 7; 11; 7 ] ~equal:Int.equal
         ~to_string:Int.to_string
   | "refusals" ->
+      List.iter [ "all"; "none"; "alli" ] ~f:(fun quantifier ->
+          List.iter [ true; false ] ~f:(fun holds ->
+              let mode = Printf.sprintf "visits_%s_%b" quantifier holds in
+              let status, stdout, stderr = run_child mode in
+              let visits =
+                String.split_lines stderr
+                |> List.filter ~f:(fun line -> String.is_prefix line ~prefix:"visit ")
+              in
+              let expected_visits =
+                if String.equal quantifier "alli" then [ "visit 0=2"; "visit 1=4"; "visit 2=6" ]
+                else [ "visit 0=2"; "visit 0=4"; "visit 0=6" ]
+              in
+              Verdict.claimf "%s evaluates every element in order and preserves its verdict" mode
+                (Poly.equal status (Unix.WEXITED (if holds then 0 else 1))
+                && String.equal stdout (if holds then "the claim: true\n" else "the claim: false\n")
+                && List.equal String.equal visits expected_visits)));
       refused "an `every` claim over an empty collection fails rather than passing vacuously"
         ~line:"every seed is even (empty): false" (run_child "all_empty");
       refused "a collection below its stated floor fails, naming the shortfall"
