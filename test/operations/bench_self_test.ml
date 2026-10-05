@@ -56,22 +56,28 @@ let read_and_remove path =
 
 (* The control the checkpoints exist for: a cell killed in its LAST stage, after all its losses were
    observed, the way a driver's cap killed the TUF s1024 cell inside the dominant-kernel instrument.
-   The child runs the real protocol with the instrument replaced by a probe that kills its own
-   process with SIGKILL -- what the cap delivers: nothing unwinds, no [at_exit] flushes a buffer. An
-   argv marker rather than an environment variable, so nothing ambient can put a run into this mode
-   (as in atomic_file_race). The kill is deterministic: no deadline races the compile. *)
+   The child runs the real protocol with the instrument replaced by a probe that ends its process
+   with [Unix._exit]: like the cap's SIGKILL, nothing unwinds and no OCaml channel is flushed -- so
+   a checkpoint the harness left in [stderr]'s buffer is lost here exactly as it would be there, and
+   its status is one the parent can tell from every other exit on every platform. The marker is
+   written straight to the descriptor for the same reason: printing it through [Stdio.eprintf] would
+   flush the very buffer under test. An argv marker rather than an environment variable, so nothing
+   ambient can put a run into this mode (as in atomic_file_race). The kill is deterministic: no
+   deadline races the compile. *)
 let killed_in_diagnostics_arg = "--killed-in-diagnostics"
-let late_probe_marker = "bench_self_test: late probe reached; killing this process"
+let late_probe_marker = "bench_self_test: late probe reached; ending this process unflushed"
+
+(* 128 + SIGKILL, as a shell reports a killed process; any other status is some other exit. *)
+let killed_status = 137
 
 let () =
   if Array.exists Stdlib.Sys.argv ~f:(String.equal killed_in_diagnostics_arg) then (
     ignore
       (H.run_self_test
          ~late_probe:(fun () ->
-           Stdio.eprintf "%s\n%!" late_probe_marker;
-           Unix.kill (Unix.getpid ()) Stdlib.Sys.sigkill;
-           (* Unreachable unless the kill was refused; the parent reads the exit status. *)
-           Stdlib.exit 3)
+           let marker = late_probe_marker ^ "\n" in
+           ignore (Unix.write_substring Unix.stderr marker 0 (String.length marker) : int);
+           Unix._exit killed_status)
          ()
         : string);
     (* Reaching here means the late probe returned: a result line went to stdout, which the parent
@@ -90,8 +96,8 @@ let () =
   let stdout_text = read_and_remove out_path and stderr_text = read_and_remove err_path in
   Stdio.eprintf "bench_self_test: the killed child's stderr follows\n%s\n%!" stderr_text;
   let protocol = H.self_test_protocol in
-  Verdict.p "the child was killed in its late probe rather than exiting"
-    ((match status with Unix.WEXITED 0 | Unix.WSTOPPED _ -> false | _ -> true)
+  Verdict.p "the child ended unflushed in its late probe, with the kill's status"
+    ((match status with Unix.WEXITED n -> n = killed_status | _ -> false)
     && String.is_substring stderr_text ~substring:late_probe_marker);
   (* Over the child's combined output, as [orchestrate.py] reads a cell's: its stdout is expected to
      be empty, so a claim over that alone would rest on an empty population. *)

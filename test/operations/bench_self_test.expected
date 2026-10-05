@@ -1,4 +1,4 @@
-the child was killed in its late probe rather than exiting: true
+the child ended unflushed in its late probe, with the kill's status: true
 no line of the killed child's output is a result line: true
 the killed child checkpointed every parity step, then the timed stages: true
 its last checkpoint says every measured stage completed and the probe was running: true
