@@ -14,8 +14,16 @@ let valid_id id =
 
 let fail path line message = failwith (Printf.sprintf "%s:%d: %s" path line message)
 
+let words info =
+  String.split_on_chars info ~on:[ ' '; '\t' ] |> List.filter ~f:(Fn.non String.is_empty)
+
+let annotated info =
+  String.is_substring info ~substring:"doc-check" || String.is_substring info ~substring:"doc-skip"
+
+let ocaml_info info = match words info with "ocaml" :: _ -> true | _ -> false
+
 let status ~path ~line info =
-  match String.split info ~on:' ' |> List.filter ~f:(Fn.non String.is_empty) with
+  match words info with
   | [ "ocaml" ] -> Unchecked
   | [ "ocaml"; annotation ] when String.is_prefix annotation ~prefix:"doc-check=" ->
       let id = String.drop_prefix annotation 10 in
@@ -56,7 +64,7 @@ let parse ~path text =
             match fence source with
             | Some (c', n', "") when Char.equal c c' && n' >= n ->
                 let acc =
-                  if String.equal info "ocaml" || String.is_prefix info ~prefix:"ocaml " then
+                  if ocaml_info info || annotated info then
                     {
                       path;
                       line = opening + 1;
@@ -76,8 +84,9 @@ let parse ~path text =
                   match String.substr_index source ~pattern:"Doc-check `" with
                   | None ->
                       if
-                        String.is_substring source ~substring:"```ocaml doc-check="
-                        || String.is_substring source ~substring:"~~~ocaml doc-check="
+                        annotated source
+                        && (String.is_substring source ~substring:"```"
+                           || String.is_substring source ~substring:"~~~")
                       then fail path number "doc-check annotation outside a supported fence";
                       acc
                   | Some start ->

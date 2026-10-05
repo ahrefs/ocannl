@@ -4,7 +4,8 @@
 compiles them against OCANNL and its actual `%op`/`%cd` PPX. The alias is part of `runtest`
 and `@test/operations/scans`; `@check` also compiles the generated library. No example runs,
 so backend constructors can be typechecked without needing their devices. This uses the
-existing dependencies, rather than adding a separate Markdown runtime.
+existing dependencies, rather than adding a separate Markdown runtime. Documentation edits
+run the existing CI workflow because the checked snippets are compiler inputs.
 
 Put `ocaml doc-check=group_name` on a fence's opening line. Each group within a document
 becomes a separate module; blocks in the same group share bindings in document order. Different documents have

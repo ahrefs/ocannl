@@ -2,6 +2,8 @@ selected fences preserve order, scope and source locations: true
 shared groups preserve source order: true
 different documents have independent scopes even for the same group name: true
 coverage counts every selected block rather than deduplicating groups: true
+horizontal whitespace in fence metadata keeps the annotation active: true
+an annotation on an unsupported language fails loudly: true
 agent-note code spans are extracted: true
 historical and unselected blocks stay outside compilation: true
 non-OCaml fences do not expose nested fake annotations: true

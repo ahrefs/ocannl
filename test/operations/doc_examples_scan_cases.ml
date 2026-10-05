@@ -29,6 +29,11 @@ let () =
     = 2);
   p "coverage counts every selected block rather than deduplicating groups"
     (List.length (String.split_lines (E.coverage blocks)) = List.length blocks);
+  p "horizontal whitespace in fence metadata keeps the annotation active"
+    (List.length (E.selected (parse "```ocaml\tdoc-check=api\nlet x = 1\n```")) = 1);
+  p "an annotation on an unsupported language fails loudly"
+    (refuses "```ocmal doc-check=api\nlet x = 1\n```"
+    && refuses "> ```ocaml\tdoc-check=api\nlet x = 1\n> ```");
   p "agent-note code spans are extracted"
     (List.length (E.selected (parse "- Doc-check `note`: `let x = 1`.")) = 1);
   let unselected =
