@@ -1,5 +1,6 @@
-(** Which backends a dune invocation can run a stanza on whatever the configuration says
-    (gh-ocannl-1004, gh-ocannl-1066).
+(** Which backends a dune invocation can run a stanza on whatever the configuration says, and
+    whether it reaches a stanza that reads the configuration at all (gh-ocannl-1004, gh-ocannl-1066,
+    gh-ocannl-1095).
 
     tools/batch-backends.sh resolves the backends a [tools/test-run.sh] batch can hold, and from
     them both the dune width the batch runs at and the fleet slot it takes ([--cpu] only when it
@@ -14,6 +15,13 @@
     marker names is reported, a CPU one included: the width a batch runs at is the tightest any of
     its backends meets on the box, and on the fleet's rog-nv-linux a CPU batch has a width of its
     own.
+
+    The configuration's own backend counts only when some reached stanza reads it: one declaring
+    [(env_var OCANNL_BACKEND)], or one carrying neither declaration (which [env_var_deps] fails, and
+    which is read the way it would run: from the configuration). A run reaching only stanzas that
+    name theirs -- [; ocannl-backend: none] ones included, as [@test/operations/scans] does -- holds
+    only what they name, whatever the configurations say (gh-ocannl-1095). A stanza naming a backend
+    twice is not read as naming none: its file is unreadable, which is [Unknown].
 
     What a run reaches is read from a CLOSED set of argv shapes, the ones the runner is used with;
     any other word is unmodelled, and answered as [Unknown] -- every backend. (Codex review rounds
@@ -43,6 +51,7 @@ type stanza = {
   attached : string list;  (** the aliases it attaches to or defines *)
   sexp : Sexplib.Sexp.t;
   named : string list;  (** the backends its marker names, [none] left out *)
+  reads_config : bool;  (** whether it selects its backend from the configuration *)
 }
 
 (** The aliases a stanza sits on, including the per-stanza one dune generates for a test and an
@@ -57,10 +66,20 @@ let attached_aliases sexp =
   in
   Scan.aliases_of sexp @ Option.to_list (Scan.alias_stanza_name sexp) @ generated
 
-let named_of_marker = function
-  | Scan.Names_backend (_, { backend; _ }) | Scan.Declares_and_names (_, { backend; _ }) ->
-      String.split backend ~on:',' |> List.filter ~f:(fun b -> not (String.equal b "none"))
-  | _ -> []
+(** What a stanza's backend declaration says it holds: the backends its marker names, and whether it
+    reads the configuration. Each rule [env_var_deps] fails is read the widening way -- a stanza
+    both declaring and naming holds both, one declaring neither reads the configuration -- except a
+    second marker, which raises like any other marker the contract refuses. *)
+let backend_of_rule rule =
+  let named { Scan.backend; _ } =
+    String.split backend ~on:',' |> List.filter ~f:(fun b -> not (String.equal b "none"))
+  in
+  match rule with
+  | Scan.Runs_nothing -> ([], false)
+  | Scan.Declares_variable | Scan.Names_neither -> ([], true)
+  | Scan.Names_backend (_, m) -> (named m, false)
+  | Scan.Declares_and_names (_, m) -> (named m, true)
+  | Scan.Names_twice _ -> failwith "a stanza carrying two backend markers"
 
 let join dir sub = match (dir, sub) with "", s -> s | d, "" -> d | d, s -> d ^ "/" ^ s
 
@@ -73,11 +92,13 @@ let stanzas_of ~dir content =
   List.map contract.Scan.contract_stanzas ~f:(fun marked ->
       let st = marked.Scan.marker_stanza in
       let sexp = st.Scan.marked_sexp in
+      let named, reads_config = backend_of_rule (Scan.backend_rule_of marked) in
       {
         dir = join dir st.Scan.marked_subdir;
         attached = attached_aliases sexp;
         sexp;
-        named = named_of_marker (Scan.backend_rule_of marked);
+        named;
+        reads_config;
       })
 
 type target = Alias of { dir : string; alias : string; recursive : bool }
@@ -229,20 +250,9 @@ let in_scope ~recursive ~root dir =
   String.equal root dir
   || (recursive && (String.is_empty root || String.is_prefix dir ~prefix:(root ^ "/")))
 
-(** Every stanza [target] reaches that names a backend, as [(dir, names, backends)], in directory
+(** Every stanza [target] reaches that names a backend or reads the configuration, in directory
     order. *)
-let reached_named stanzas target =
-  let named_in stanzas_here reached =
-    List.filter_map stanzas_here ~f:(fun s ->
-        if (not (List.is_empty s.named)) && List.exists s.attached ~f:(Set.mem reached) then
-          let what =
-            match Scan.names_of s.sexp with
-            | [] -> "the rule on " ^ String.concat ~sep:"," (Scan.aliases_of s.sexp)
-            | names -> String.concat ~sep:"," names
-          in
-          Some (s.dir, what, s.named)
-        else None)
-  in
+let reached stanzas target =
   let by_dir = List.sort_and_group stanzas ~compare:(fun a b -> String.compare a.dir b.dir) in
   List.concat_map by_dir ~f:(fun group ->
       let dir = (List.hd_exn group).dir in
@@ -258,13 +268,27 @@ let reached_named stanzas target =
                 Set.of_list (module String) (List.concat_map group ~f:(fun s -> s.attached))
               else Scan.aliases_reached_from sexps alias
             in
-            named_in group reached)
+            List.filter group ~f:(fun s ->
+                ((not (List.is_empty s.named)) || s.reads_config)
+                && List.exists s.attached ~f:(Set.mem reached)))
 
-(** What a dune argv can hold by name: [Names] lists each backend a reached stanza's marker names,
-    once, with the first stanza that names it ([Names []] when the run reaches none, or runs no
-    test); [Unknown why] is an argv this does not model or a dune file it could not read, which the
-    caller takes as every backend. *)
-type answer = Names of (string * string) list | Unknown of string
+(** Where a reached stanza is, for a reason: its names (or a rule's aliases) and its directory. *)
+let describe s =
+  let what =
+    match Scan.names_of s.sexp with
+    | [] -> "the rule on " ^ String.concat ~sep:"," (Scan.aliases_of s.sexp)
+    | names -> String.concat ~sep:"," names
+  in
+  Printf.sprintf "it reaches %s in %s" what (if String.is_empty s.dir then "." else s.dir)
+
+(** What a dune argv can hold. [Reaches] lists in [named] each backend a reached stanza's marker
+    names, once, with the first stanza that names it, and gives in [reads_config] the first reached
+    stanza that selects its backend from the configuration, if any -- both empty when the run
+    reaches no such stanza, or runs no test. [Unknown why] is an argv this does not model or a dune
+    file it could not read, which the caller takes as every backend. *)
+type answer =
+  | Reaches of { named : (string * string) list; reads_config : string option }
+  | Unknown of string
 
 let answer ~dune_files argv =
   match targets argv with
@@ -272,7 +296,7 @@ let answer ~dune_files argv =
       Unknown
         (Printf.sprintf "it carries `%s`, which this does not model (it could change what is built)"
            opt)
-  | Ok None -> Names []
+  | Ok None -> Reaches { named = []; reads_config = None }
   | Ok (Some targets) -> (
       let read =
         List.fold_result dune_files ~init:[] ~f:(fun acc (dir, content) ->
@@ -288,22 +312,26 @@ let answer ~dune_files argv =
       | Error why -> Unknown why
       | Ok stanzas ->
           let stanzas = List.concat stanzas in
-          let found =
-            List.concat_map targets ~f:(fun t ->
-                List.concat_map (reached_named stanzas t) ~f:(fun (dir, names, backends) ->
-                    let why =
-                      Printf.sprintf "it reaches %s in %s, which names %s" names
-                        (if String.is_empty dir then "." else dir)
-                        (String.concat ~sep:"," backends)
-                    in
-                    List.map backends ~f:(fun b -> (b, why))))
+          let found = List.concat_map targets ~f:(reached stanzas) in
+          let named =
+            List.concat_map found ~f:(fun s ->
+                let why =
+                  Printf.sprintf "%s, which names %s" (describe s) (String.concat ~sep:"," s.named)
+                in
+                List.map s.named ~f:(fun b -> (b, why)))
+            |> List.fold ~init:[] ~f:(fun acc (b, why) ->
+                if List.Assoc.mem acc b ~equal:String.equal then acc else (b, why) :: acc)
+            |> List.rev
           in
-          Names
-            (List.fold found ~init:[] ~f:(fun acc (b, why) ->
-                 if List.Assoc.mem acc b ~equal:String.equal then acc else (b, why) :: acc)
-            |> List.rev))
+          let reads_config =
+            List.find_map found ~f:(fun s ->
+                Option.some_if s.reads_config (describe s ^ ", which reads the configuration"))
+          in
+          Reaches { named; reads_config })
 
-(** Whether [answer] can hold a GPU: an unknown answer can. *)
+(** Whether [answer] can hold a GPU by name: an unknown answer can. Whether a configuration a
+    reached stanza reads names one is the caller's question. *)
 let holds_gpu = function
   | Unknown _ -> true
-  | Names named -> List.exists named ~f:(fun (b, _) -> List.mem gpu_backends b ~equal:String.equal)
+  | Reaches { named; _ } ->
+      List.exists named ~f:(fun (b, _) -> List.mem gpu_backends b ~equal:String.equal)

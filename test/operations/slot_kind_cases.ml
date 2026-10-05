@@ -1,8 +1,9 @@
 (** What {!Test_utils.Slot_kind} says a dune argv reaches, on a fixture tree built to separate the
-    cases (gh-ocannl-1004, gh-ocannl-1066): a stanza that NAMES a backend holds it whatever the
-    configuration says, so tools/batch-backends.sh counts every backend a reachable marker names
-    among the batch's -- for the fleet slot ([--cpu] only when none is a GPU) and for the width (the
-    tightest any of them meets). Every verdict below is phrased so that [true] is the passing
+    cases (gh-ocannl-1004, gh-ocannl-1066, gh-ocannl-1095): a stanza that NAMES a backend holds it
+    whatever the configuration says, so tools/batch-backends.sh counts every backend a reachable
+    marker names among the batch's -- for the fleet slot ([--cpu] only when none is a GPU) and for
+    the width (the tightest any of them meets) -- and counts the configurations' backends only when
+    a reachable stanza reads them. Every verdict below is phrased so that [true] is the passing
     reading, and the golden records the backends each argv was judged to reach, so a change of
     answer shows as a diff as well as a failed claim. *)
 
@@ -12,8 +13,9 @@ open Verdict.Claims
 module Slot_kind = Test_utils.Slot_kind
 
 (* A tree with a GPU stanza, a configuration-reading stanza and a CPU-named one side by side in [a];
-   a hip stanza one level down; a metal rule in [b]; and [c] with nothing but a
-   configuration-reading test. The aggregates in [a] reach one member each. *)
+   a hip stanza one level down; a metal rule in [b]; [c] with nothing but a configuration-reading
+   test; and [n] with nothing but a stanza that links no backend, under its own [scans]. The
+   aggregates in [a] reach one member each. *)
 let tree =
   [
     ( "a",
@@ -67,14 +69,29 @@ let tree =
  (name t_only)
  (deps ocannl_config (env_var OCANNL_BACKEND)))
 |dune});
+    ( "n",
+      {dune|
+(test
+ ; ocannl-backend: none -- links no backend in this fixture.
+ (name t_none)
+ (deps ocannl_config))
+
+(alias
+ (name scans)
+ (deps (alias runtest-t_none)))
+|dune}
+    );
   ]
 
 let judge ?(dune_files = tree) argv =
   let answer = Slot_kind.answer ~dune_files (String.split argv ~on:' ') in
   let shown =
     match answer with
-    | Names [] -> "names nothing"
-    | Names named -> "names " ^ String.concat ~sep:"," (List.map named ~f:fst)
+    | Reaches { named; reads_config } ->
+        (match named with
+          | [] -> "names nothing"
+          | _ -> "names " ^ String.concat ~sep:"," (List.map named ~f:fst))
+        ^ if Option.is_some reads_config then " + reads config" else ""
     | Unknown why -> "unknown: " ^ why
   in
   (answer, shown)
@@ -94,6 +111,8 @@ let cases =
     ("runtest a/sub", `Gpu);
     ("runtest a", `Gpu);
     ("runtest c", `Cpu);
+    ("runtest n", `Cpu);
+    ("build @n/scans", `Cpu);
     ("build @b/runtest", `Gpu);
     ("build @b/runtest-m", `Gpu);
     ("runtest", `Gpu);
@@ -131,15 +150,22 @@ let cases =
   ]
 
 (* The whole set, where a GPU answer's backends matter to the width: a suite reaching stanzas that
-   name different GPUs holds each of them, and a marker naming several contributes each. *)
+   name different GPUs holds each of them, and a marker naming several contributes each. And whether
+   the configurations count: only where a reached stanza reads them -- so a run reaching only
+   [none]-marked stanzas holds nothing at all, whatever a test configuration names (gh-ocannl-1095),
+   and neither does a subcommand that runs no test. *)
 let sets =
   [
-    ("runtest a", "names cuda,cc,hip");
-    ("runtest", "names cuda,cc,hip,metal");
+    ("runtest a", "names cuda,cc,hip + reads config");
+    ("runtest", "names cuda,cc,hip,metal + reads config");
     ("build @b/runtest-m", "names cc,metal");
-    ("build @a/gpuagg", "names cuda,cc");
-    ("build @a/scans", "names cc");
-    ("runtest c", "names nothing");
+    ("build @a/gpuagg", "names cuda,cc + reads config");
+    ("build @a/scans", "names cc + reads config");
+    ("build @a/runtest-t_cc", "names cc");
+    ("runtest c", "names nothing + reads config");
+    ("runtest n", "names nothing");
+    ("build @n/scans", "names nothing");
+    ("promote", "names nothing");
   ]
 
 let () =
@@ -164,4 +190,31 @@ let () =
   in
   printf "%-40s %s\n" "runtest d (malformed marker)" malformed;
   p "a malformed marker makes the tree unreadable, never CPU"
-    (String.is_prefix malformed ~prefix:"unknown: the dune file in d is unreadable")
+    (String.is_prefix malformed ~prefix:"unknown: the dune file in d is unreadable");
+  (* The two declarations env_var_deps refuses that the contract does not are read the widening way:
+     a stanza declaring neither reads the configuration, and a second marker is not read as none --
+     it makes the file unreadable, where reading it as naming nothing would now drop the stanza from
+     the batch altogether. *)
+  let _, neither =
+    judge ~dune_files:[ ("d", {dune|(test (name t) (deps ocannl_config))|dune}) ] "runtest d"
+  in
+  printf "%-40s %s\n" "runtest d (no declaration)" neither;
+  p "a stanza declaring neither reads the configuration"
+    (String.equal neither "names nothing + reads config");
+  let _, twice =
+    judge
+      ~dune_files:
+        [
+          ( "d",
+            {dune|(test
+ ; ocannl-backend: none -- one marker.
+ ; ocannl-backend: cuda -- and another.
+ (name t)
+ (deps ocannl_config))|dune}
+          );
+        ]
+      "runtest d"
+  in
+  printf "%-40s %s\n" "runtest d (two markers)" twice;
+  p "a stanza carrying two markers makes the tree unreadable, never names nothing"
+    (String.is_prefix twice ~prefix:"unknown: the dune file in d is unreadable")

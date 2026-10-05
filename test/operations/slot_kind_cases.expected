@@ -1,32 +1,36 @@
-build @a/runtest-t_cfg                   names nothing
+build @a/runtest-t_cfg                   names nothing + reads config
 build @a/runtest-t_cfg reaches no GPU stanza: true
 build @a/runtest-t_cc                    names cc
 build @a/runtest-t_cc reaches no GPU stanza: true
 build @a/runtest-t_cuda                  names cuda
 build @a/runtest-t_cuda can hold a GPU: true
-build @a/scans                           names cc
+build @a/scans                           names cc + reads config
 build @a/scans reaches no GPU stanza: true
-build @a/gpuagg                          names cuda,cc
+build @a/gpuagg                          names cuda,cc + reads config
 build @a/gpuagg can hold a GPU: true
-build @@c/runtest                        names nothing
+build @@c/runtest                        names nothing + reads config
 build @@c/runtest reaches no GPU stanza: true
-build @c/runtest                         names nothing
+build @c/runtest                         names nothing + reads config
 build @c/runtest reaches no GPU stanza: true
-build @@a/runtest                        names cuda,cc
+build @@a/runtest                        names cuda,cc + reads config
 build @@a/runtest can hold a GPU: true
 runtest a/sub                            names hip
 runtest a/sub can hold a GPU: true
-runtest a                                names cuda,cc,hip
+runtest a                                names cuda,cc,hip + reads config
 runtest a can hold a GPU: true
-runtest c                                names nothing
+runtest c                                names nothing + reads config
 runtest c reaches no GPU stanza: true
+runtest n                                names nothing
+runtest n reaches no GPU stanza: true
+build @n/scans                           names nothing
+build @n/scans reaches no GPU stanza: true
 build @b/runtest                         names cc,metal
 build @b/runtest can hold a GPU: true
 build @b/runtest-m                       names cc,metal
 build @b/runtest-m can hold a GPU: true
-runtest                                  names cuda,cc,hip,metal
+runtest                                  names cuda,cc,hip,metal + reads config
 runtest can hold a GPU: true
-build @runtest                           names cuda,cc,hip,metal
+build @runtest                           names cuda,cc,hip,metal + reads config
 build @runtest can hold a GPU: true
 build @@runtest                          names nothing
 build @@runtest reaches no GPU stanza: true
@@ -62,25 +66,33 @@ build ./a/t_cfg.exe                      unknown: it carries `./a/t_cfg.exe`, wh
 build ./a/t_cfg.exe can hold a GPU: true
 build _build/default/c/t_only.exe        unknown: it carries `_build/default/c/t_only.exe`, which this does not model (it could change what is built)
 build _build/default/c/t_only.exe can hold a GPU: true
-build -j 8 @a/runtest-t_cfg              names nothing
+build -j 8 @a/runtest-t_cfg              names nothing + reads config
 build -j 8 @a/runtest-t_cfg reaches no GPU stanza: true
-build -j8 --force --profile=release @c/runtest names nothing
+build -j8 --force --profile=release @c/runtest names nothing + reads config
 build -j8 --force --profile=release @c/runtest reaches no GPU stanza: true
-build --display short @c/runtest         names nothing
+build --display short @c/runtest         names nothing + reads config
 build --display short @c/runtest reaches no GPU stanza: true
-runtest -j 4 c                           names nothing
+runtest -j 4 c                           names nothing + reads config
 runtest -j 4 c reaches no GPU stanza: true
-build                                    names cuda,cc,hip,metal
+build                                    names cuda,cc,hip,metal + reads config
 build can hold a GPU: true
 promote                                  names nothing
 promote reaches no GPU stanza: true
 clean                                    names nothing
 clean reaches no GPU stanza: true
-runtest a reaches exactly names cuda,cc,hip: true
-runtest reaches exactly names cuda,cc,hip,metal: true
+runtest a reaches exactly names cuda,cc,hip + reads config: true
+runtest reaches exactly names cuda,cc,hip,metal + reads config: true
 build @b/runtest-m reaches exactly names cc,metal: true
-build @a/gpuagg reaches exactly names cuda,cc: true
-build @a/scans reaches exactly names cc: true
-runtest c reaches exactly names nothing: true
+build @a/gpuagg reaches exactly names cuda,cc + reads config: true
+build @a/scans reaches exactly names cc + reads config: true
+build @a/runtest-t_cc reaches exactly names cc: true
+runtest c reaches exactly names nothing + reads config: true
+runtest n reaches exactly names nothing: true
+build @n/scans reaches exactly names nothing: true
+promote reaches exactly names nothing: true
 runtest d (malformed marker)             unknown: the dune file in d is unreadable here ((Failure "a backend marker the env_var_deps contract refuses"))
 a malformed marker makes the tree unreadable, never CPU: true
+runtest d (no declaration)               names nothing + reads config
+a stanza declaring neither reads the configuration: true
+runtest d (two markers)                  unknown: the dune file in d is unreadable here ((Failure "a stanza carrying two backend markers"))
+a stanza carrying two markers makes the tree unreadable, never names nothing: true

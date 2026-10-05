@@ -2918,8 +2918,12 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   target, `--root`, an alias-naming or unknown option -- is every backend) answers, so `runtest test/operations` is a GPU batch while
   `@test/operations/runtest-<cpu test>` and `@test/operations/scans` are not; a Metal marker
   counts even on Linux, where its stanza compiles the stub. Second, for the stanzas that read the
-  configuration: resolved, not read off `OCANNL_BACKEND`, because an ordinary cc batch
-  leaves it unset: `ocannl_read_config`
+  configuration -- asked only when the run reaches one (the same tool's `reads config` line:
+  a stanza declaring `(env_var OCANNL_BACKEND)`, or one declaring neither), so a batch reaching
+  only `none`-marked stanzas (`@test/operations/scans`) holds no backend and runs uncapped and
+  `--cpu` whatever a test configuration names (gh-ocannl-1095); a stanza carrying two markers is
+  an unreadable file, not one naming nothing: resolved, not read off `OCANNL_BACKEND`, because an
+  ordinary cc batch leaves it unset: `ocannl_read_config`
   (`test/config`, the same Utils resolution a test run makes) is built and asked from each
   directory whose `ocannl_config` sets a backend — `test/config` (copied by every `test/*`
   directory and `bin/`) and `arrayjit/test`. No backend at all is not cc (`Context.auto` then
