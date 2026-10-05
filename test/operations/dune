@@ -226,6 +226,12 @@
   (alias runtest-cc_dlopen_cause)
   (alias runtest-cc_dlopen_cause_dll)
   (alias runtest-cc_dlopen_cause_debug)
+  (alias runtest-cc_temp_ownership-success)
+  (alias runtest-cc_temp_ownership-success_debug)
+  (alias runtest-cc_temp_ownership-success_dll)
+  (alias runtest-cc_temp_ownership-compiler)
+  (alias runtest-cc_temp_ownership-compiler_debug)
+  (alias runtest-cc_temp_ownership-compiler_dll)
   (alias runtest-micrograd_demo_logging)
   (alias runtest-n3_fwd_with_prec-unoptimized)
   (alias runtest-top_down_prec-unoptimized)
@@ -307,7 +313,7 @@
  (package neural_nets_lib)
  (deps ocannl_config)
  (modules source_inventory_cases)
- (libraries base stdio unix test_utils arrayjit.verdict))
+ (libraries base stdio test_utils arrayjit.verdict))
 
 ; gh-ocannl-859: `@check` proves that a non-default ppx_minidebug gate compiles, but not that a
 ; trace expression resolved the intended binding. The ordinary level-0 suite records an explicit
@@ -605,8 +611,10 @@
  (deps
   ocannl_config
   (env_var OCANNL_BACKEND)
-  ; The fused backward's dK and dQ nests take lanes on a GPU backend per this key (gh-ocannl-1124).
-  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION))
+  ; The fused backward's dK and dQ nests take lanes on a GPU backend per these keys
+  ; (gh-ocannl-1124, gh-ocannl-1167).
+  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_SERIAL_LANES))
  (modules online_softmax)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
@@ -937,6 +945,174 @@
   (diff
    cc_post_compile_cause-codesign_debug.expected
    cc_post_compile_cause-codesign_debug.actual)))
+
+; gh-ocannl-1197: a successful cc compile and a compiler-rejected one leave no temporary source or
+; library behind unless debug files (both) or library output (the library) are requested. The
+; `compiler` rules reject the generated code by renaming `float` to an undeclared type.
+
+(executable
+ (name cc_temp_ownership)
+ (modules cc_temp_ownership)
+ (libraries base ocannl stdio unix arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(rule
+ ; ocannl-backend: cc -- the temporaries are the cc compile's; the command line pins the backend.
+ (target cc_temp_ownership-success.actual)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:cc_temp_ownership.exe}
+    success
+    --ocannl_backend=cc
+    --ocannl_cc_backend_probe_cache=false
+    --ocannl_output_debug_files_in_build_directory=false
+    --ocannl_output_dlls_in_build_directory=false))))
+
+(rule
+ (alias runtest-cc_temp_ownership-success)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate))
+ (action
+  (diff cc_temp_ownership-success.expected cc_temp_ownership-success.actual)))
+
+(rule
+ ; ocannl-backend: cc -- the temporaries are the cc compile's; the command line pins the backend.
+ (target cc_temp_ownership-success_debug.actual)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:cc_temp_ownership.exe}
+    success
+    --ocannl_backend=cc
+    --ocannl_cc_backend_probe_cache=false
+    --ocannl_output_debug_files_in_build_directory=true
+    --ocannl_output_dlls_in_build_directory=false))))
+
+(rule
+ (alias runtest-cc_temp_ownership-success_debug)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate))
+ (action
+  (diff
+   cc_temp_ownership-success_debug.expected
+   cc_temp_ownership-success_debug.actual)))
+
+(rule
+ ; ocannl-backend: cc -- the temporaries are the cc compile's; the command line pins the backend.
+ (target cc_temp_ownership-success_dll.actual)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:cc_temp_ownership.exe}
+    success
+    --ocannl_backend=cc
+    --ocannl_cc_backend_probe_cache=false
+    --ocannl_output_debug_files_in_build_directory=false
+    --ocannl_output_dlls_in_build_directory=true))))
+
+(rule
+ (alias runtest-cc_temp_ownership-success_dll)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate))
+ (action
+  (diff
+   cc_temp_ownership-success_dll.expected
+   cc_temp_ownership-success_dll.actual)))
+
+(rule
+ ; ocannl-backend: cc -- the temporaries are the cc compile's; the command line pins the backend.
+ (target cc_temp_ownership-compiler.actual)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:cc_temp_ownership.exe}
+    compiler
+    --ocannl_backend=cc
+    --ocannl_cc_backend_probe_cache=false
+    "--ocannl_cc_backend_compiler_command=%{ocaml-config:c_compiler} -Dfloat=ocannl_gh1197_undeclared_type"
+    --ocannl_output_debug_files_in_build_directory=false
+    --ocannl_output_dlls_in_build_directory=false))))
+
+(rule
+ (alias runtest-cc_temp_ownership-compiler)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate))
+ (action
+  (diff
+   cc_temp_ownership-compiler.expected
+   cc_temp_ownership-compiler.actual)))
+
+(rule
+ ; ocannl-backend: cc -- the temporaries are the cc compile's; the command line pins the backend.
+ (target cc_temp_ownership-compiler_debug.actual)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:cc_temp_ownership.exe}
+    compiler
+    --ocannl_backend=cc
+    --ocannl_cc_backend_probe_cache=false
+    "--ocannl_cc_backend_compiler_command=%{ocaml-config:c_compiler} -Dfloat=ocannl_gh1197_undeclared_type"
+    --ocannl_output_debug_files_in_build_directory=true
+    --ocannl_output_dlls_in_build_directory=false))))
+
+(rule
+ (alias runtest-cc_temp_ownership-compiler_debug)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate))
+ (action
+  (diff
+   cc_temp_ownership-compiler_debug.expected
+   cc_temp_ownership-compiler_debug.actual)))
+
+(rule
+ ; ocannl-backend: cc -- the temporaries are the cc compile's; the command line pins the backend.
+ (target cc_temp_ownership-compiler_dll.actual)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:cc_temp_ownership.exe}
+    compiler
+    --ocannl_backend=cc
+    --ocannl_cc_backend_probe_cache=false
+    "--ocannl_cc_backend_compiler_command=%{ocaml-config:c_compiler} -Dfloat=ocannl_gh1197_undeclared_type"
+    --ocannl_output_debug_files_in_build_directory=false
+    --ocannl_output_dlls_in_build_directory=true))))
+
+(rule
+ (alias runtest-cc_temp_ownership-compiler_dll)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate))
+ (action
+  (diff
+   cc_temp_ownership-compiler_dll.expected
+   cc_temp_ownership-compiler_dll.actual)))
 
 (test
  (name hip_half_load)
@@ -2685,11 +2861,17 @@
 ; on whatever the library sources happen to contain today.
 
 (test
- ; ocannl-backend: none -- links no backend: it reads embedded OCaml snippets through Config_key_scan as text.
+ ; ocannl-backend: none -- links no backend: it reads embedded OCaml snippets through Config_key_scan as
+ ; text, and runs the two scanners, which link none either, over a synthetic tree.
  (name config_scan_lexing)
  (package neural_nets_lib)
  (deps ocannl_config digest_completeness.ml test_config_consistency.ml)
  (modules config_scan_lexing)
+ (action
+  (run
+   %{test}
+   %{dep:digest_completeness.exe}
+   %{dep:test_config_consistency.exe}))
  (libraries base stdio test_utils arrayjit.verdict))
 
 (test
@@ -2716,11 +2898,14 @@
 ; it rather than on whatever the repository's dune files happen to say today.
 
 (test
- ; ocannl-backend: none -- links no backend: it reads embedded dune-file text through Dune_stanza_scan as text.
+ ; ocannl-backend: none -- links no backend: it reads embedded dune-file text through Dune_stanza_scan as
+ ; text, and runs config_dep_completeness, which links none either, over a synthetic tree.
  (name dune_scan_cases)
  (package neural_nets_lib)
  (deps ocannl_config config_dep_completeness.ml)
  (modules dune_scan_cases)
+ (action
+  (run %{test} %{dep:config_dep_completeness.exe}))
  (libraries base stdio test_utils arrayjit.verdict))
 
 ; gh-ocannl-1005: resolve deliberately refused Verdict runs from their Dune owners, then
@@ -2765,7 +2950,7 @@
  (action
   (run %{test} %{dep:refused_action_streams.exe}))
  (modules refused_action_scan_cases)
- (libraries base stdio unix test_utils fresh_process arrayjit.verdict))
+ (libraries base stdio test_utils arrayjit.verdict))
 
 ; gh-ocannl-800: static scanner refusal formats are related to permanent control goldens. These
 ; cases pin extraction, Printf-hole normalization, the orphan arm, and the covered near miss on
@@ -3494,7 +3679,13 @@
 (executable
  (name codegen_text_inventory)
  (modules codegen_text_inventory)
- (libraries base stdio test_utils emitter_frontier arrayjit.verdict))
+ (libraries
+  base
+  stdio
+  test_utils
+  fresh_process
+  emitter_frontier
+  arrayjit.verdict))
 
 ; The `.cmi` dependencies are the emitter frontier's source (gh-ocannl-748): the set of values that
 ; hand a test generated text is derived from the compiler libraries' compiled interfaces rather than
@@ -3645,11 +3836,14 @@
  (libraries base stdio test_utils arrayjit.verdict))
 
 (test
- ; ocannl-backend: none -- links no backend: it reads embedded format strings through Verdict_scan as text.
+ ; ocannl-backend: none -- links no backend: it reads embedded format strings through Verdict_scan as
+ ; text, and runs verdict_ratchet, which links none either, over a synthetic corpus.
  (name verdict_scan_cases)
  (package neural_nets_lib)
  (deps ocannl_config verdict_ratchet.ml)
  (modules verdict_scan_cases)
+ (action
+  (run %{test} %{dep:verdict_ratchet.exe}))
  (libraries base stdio test_utils arrayjit.verdict))
 
 (test
@@ -4025,6 +4219,7 @@
   ; (gh-ocannl-1149).
   (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_SERIAL_LANES)
   (env_var OCANNL_GPU_FISSION_KEEP_MAPPING)
   (env_var OCANNL_AUTOMATIC_CPU_SCHEDULE)
   (env_var OCANNL_AUTOMATIC_GPU_SCHEDULE)
@@ -4054,6 +4249,7 @@
   (env_var OCANNL_BACKEND)
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_SERIAL_LANES)
   (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
@@ -4085,6 +4281,7 @@
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_SERIAL_LANES)
   (env_var OCANNL_GPU_FISSION_KEEP_MAPPING)
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
@@ -4108,6 +4305,7 @@
   (env_var OCANNL_BACKEND)
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_SERIAL_LANES)
   (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
@@ -4132,6 +4330,7 @@
   (env_var OCANNL_BACKEND)
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_SERIAL_LANES)
   (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
@@ -4180,6 +4379,7 @@
   (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_FISSION_KEEP_MAPPING)
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_SERIAL_LANES)
   (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
@@ -4270,6 +4470,7 @@
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_SERIAL_LANES)
   (env_var OCANNL_GPU_FISSION_KEEP_MAPPING)
   (env_var OCANNL_AUTOMATIC_CPU_SCHEDULE)
   (env_var OCANNL_AUTOMATIC_GPU_SCHEDULE)
@@ -4309,6 +4510,7 @@
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
   (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_SERIAL_LANES)
   (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
@@ -4408,6 +4610,7 @@
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_SERIAL_LANES)
   (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_SCHEDULE_FISSION)
   (env_var OCANNL_BACKEND)
@@ -4488,6 +4691,7 @@
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
   (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_SERIAL_LANES)
   (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
@@ -4537,6 +4741,7 @@
   (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_FISSION_KEEP_MAPPING)
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_SERIAL_LANES)
   (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
@@ -4582,6 +4787,7 @@
   (env_var OCANNL_BACKEND)
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_SERIAL_LANES)
   (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
@@ -4646,6 +4852,7 @@
   (env_var OCANNL_BACKEND)
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_SERIAL_LANES)
   (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
@@ -4672,6 +4879,7 @@
   ocannl_config
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_SERIAL_LANES)
   (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
@@ -5298,6 +5506,7 @@
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_SERIAL_LANES)
   (env_var OCANNL_SCHEDULE_FISSION)
   (env_var OCANNL_SCHEDULE_LOG_LAUNCHES)
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
@@ -5339,6 +5548,7 @@
   (env_var OCANNL_BACKEND)
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_SERIAL_LANES)
   (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
@@ -5869,6 +6079,7 @@
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
   (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_SERIAL_LANES)
   (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
@@ -5895,6 +6106,7 @@
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
   (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_SERIAL_LANES)
   (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
@@ -6775,7 +6987,7 @@
 (executable
  (name shell_scripts_parse)
  (modules shell_scripts_parse)
- (libraries base stdio unix test_utils arrayjit.verdict))
+ (libraries base stdio test_utils arrayjit.verdict))
 
 (rule
  ; ocannl-backend: none -- links no backend: it hands shell scripts to `bash -n`/`sh -n` and runs no kernels.
@@ -7454,8 +7666,10 @@
   (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   ocannl_config
   (env_var OCANNL_BACKEND)
-  ; The fused backward's dK and dQ nests take lanes on a GPU backend per this key (gh-ocannl-1124).
+  ; The fused backward's dK and dQ nests take lanes on a GPU backend per these keys
+  ; (gh-ocannl-1124, gh-ocannl-1167).
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_SERIAL_LANES)
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
   (env_var OCANNL_LARGE_MODELS)
@@ -7509,6 +7723,7 @@
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_SERIAL_LANES)
   (env_var OCANNL_GPU_FISSION_KEEP_MAPPING)
   (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
@@ -7541,6 +7756,7 @@
   (env_var OCANNL_LOG_LEVEL)
   ; Leg 9 reads the configured default (auto).
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_SERIAL_LANES)
   (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
@@ -7763,6 +7979,7 @@
   (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
+  (env_var OCANNL_GPU_SERIAL_LANES)
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
   (env_var OCANNL_LARGE_MODELS)

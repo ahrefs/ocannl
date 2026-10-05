@@ -60,6 +60,8 @@ ok: dialect scope -- bindings inside a computed expression hide outer names
 ok: dialect scope -- the same literal still pairs across scopes
 the walk counts every string literal it passes: true
 and places the ones a named function receives: true
+verdict_ratchet refuses a corpus built to trip its refusals, exiting 1: true
+verdict_ratchet refuses a run handed no source, exiting 1: true
 
 Synthetic controls: scanner refusal diagnostics exercised by this control golden:
   [scanner-refusal:0f307832357ee7ca58b9798a86530dac] arguments the rule's

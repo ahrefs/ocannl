@@ -134,6 +134,7 @@ let known_config_keys =
       "gpu_schedule_min_parallel";
       "gpu_schedule_workgroup_fill";
       "gpu_lane_preamble_reduction";
+      "gpu_serial_lanes";
       "automatic_cpu_schedule";
       "cpu_schedule_min_parallel";
       "schedule_fission";
@@ -329,6 +330,7 @@ let config_key_classification : (config_key_class * string * string list) list =
         "gpu_schedule_min_parallel";
         "gpu_schedule_workgroup_fill";
         "gpu_lane_preamble_reduction";
+        "gpu_serial_lanes";
       ] );
     ( Search_shaping,
       "it steers the search: how wide, how long, what is proposed, what is pruned, how candidates \
@@ -1913,11 +1915,9 @@ let enable_runtime_debug () =
     with it. Process-wide rather than per backend, so that ids never collide across the backends a
     process links. *)
 let get_global_run_id =
-  let next_id = ref 0 in
-  fun () ->
-    Int.incr next_id;
-    if !next_id < 0 then next_id := 0;
-    !next_id
+  (* Atomic: cc library paths rely on these ids being unique within the process (gh-ocannl-1197). *)
+  let next_id = Atomic.make 0 in
+  fun () -> Atomic.fetch_and_add next_id 1 + 1
 
 let rec union_find ~equal map ~key ~rank =
   match Map.find map key with

@@ -1,0 +1,12 @@
+mode: compiler
+library artifacts requested: no
+debug artifacts requested: yes
+backend: cc
+the C compiler rejected the generated code: true
+the rejection says the source was removed exactly when debug files are not requested: true
+the compiler log is removed: true
+the source is retained exactly when debug files are requested: true
+the library is retained exactly when requested: true
+nothing else is added: true
+no file present before the compile is removed: true
+every unrelated sentinel keeps its content: true

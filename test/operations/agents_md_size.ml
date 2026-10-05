@@ -20,8 +20,6 @@ open Base
 open Stdio
 open Verdict.Claims
 
-let printf = Test_utils.Refusal_control_manifest.printf
-
 (** Claude Code's cap on one imported instructions file, in bytes. *)
 let cap = 32 * 1024
 

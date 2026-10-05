@@ -18,9 +18,6 @@
 
 open Base
 open Stdio
-
-let printf = Test_utils.Refusal_control_manifest.printf
-
 module Inventory = Test_utils.Source_inventory
 
 type line = { number : int; entry : string }

@@ -13,7 +13,7 @@
 open Base
 module Scan = Test_utils.Verdict_scan
 
-let printf = Test_utils.Refusal_control_manifest.printf
+let printf = Stdio.printf
 
 (* Failures go through [Verdict], so that a regression exits nonzero instead of being `dune
    promote`d into the golden as the expected output (gh-ocannl-601) -- the rule this whole check is
@@ -153,6 +153,27 @@ let () = eprintf "fused: %b\n" true|ocaml},
       [] );
   ]
 
+(* gh-ocannl-1207: verdict_ratchet's own refusals, executed rather than vouched for by the cases
+   below, which exercise the reader it rests on in process. The ratchet runs as a child over a
+   corpus built to trip them -- a source printing a claim it decided itself, and one that does not
+   parse -- in which every exemption, every exempted fixture source and every planted canary is
+   missing too, and once over no source at all. What each child refused is what
+   `raw_direct_evidence` attributes to the two claims. *)
+let refusal_corpus =
+  [
+    ("test/self_decided.ml", "let () = Stdio.printf \"decided: %b\\n\" true\n");
+    ("test/unparsable.ml", "let =\n");
+  ]
+
+let scanner_refusal_controls exe =
+  let source = "test/operations/verdict_ratchet.ml" in
+  let refuses = Test_utils.Refusal_control_manifest.refuses ~source ~exe in
+  Test_utils.Refusal_control_manifest.with_tree refusal_corpus (fun root ->
+      Verdict.p "verdict_ratchet refuses a corpus built to trip its refusals, exiting 1"
+        (refuses
+           (root :: List.map refusal_corpus ~f:(fun (path, _) -> Stdlib.Filename.concat root path)));
+      Verdict.p "verdict_ratchet refuses a run handed no source, exiting 1" (refuses [ root ]))
+
 let show_printer = Option.value ~default:"<unapplied>"
 
 let () =
@@ -262,4 +283,7 @@ let () = skipped "same"|ocaml},
 let () = printf "a" "b"|ocaml} in
   Verdict.p "the walk counts every string literal it passes" (counted.Scan.literals = 3);
   Verdict.p "and places the ones a named function receives" (counted.Scan.applied_literals = 2);
+  (match Stdlib.Sys.argv with
+  | [| _; exe |] -> scanner_refusal_controls exe
+  | _ -> Verdict.fail "usage: verdict_scan_cases <verdict_ratchet.exe>");
   Test_utils.Refusal_control_manifest.print "verdict_ratchet.ml"
