@@ -59,4 +59,4 @@ auto where per-lane recompute is cheap cuts for the lanes: true
 auto where it is not admits them without cutting: true
 auto on an unmeasured device admits them without cutting: true
 auto on the run's backend resolves to its measured mode: true
-executed fused step: every segment computing dV follows the device's mode (cut: its lane, apart from dK; admitted: beside dK, off the lanes): true
+executed fused step: every segment computing dV computes dK beside it, on the device's mode (cut: both on their lanes; admitted: dV off the lanes): true
