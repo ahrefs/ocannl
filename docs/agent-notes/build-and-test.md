@@ -2507,6 +2507,10 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   the sourced functions without running a sweep; `bash test/operations/sweep_components.sh state`
   (also `lab`, `fleet`, `fingerprint`) isolates one fixture. The default runs all four plus broken
   component controls; `runtest-sweep_harness` remains the integration check.
+  Its `sweep_remote_fixture.sh` local SSH mode executes the emitted commands with isolated
+  homes and cloned repos: prep and real locks, boot-specific PATH and widths, collected kernel
+  evidence, guest-identity retries and serial reruns. The harness header audits unreachable
+  decisions; `sweep_harness.sh --remote-only` isolates these command-path fixtures.
 
 - `tools/sweep.sh` is the coverage for every backend CI does not run: cc and metal locally
   (the macOS host), cuda on rog, hip and then multidev_cc on minix, and hip again on tuf, all pinned

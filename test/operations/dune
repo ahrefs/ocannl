@@ -6858,6 +6858,7 @@
   ; the fleet-worker.sh candidates sweep.sh reads the execution registry through (gh-ocannl-1097)
   ../../tools/fleet-worker-candidates.sh
   sweep_harness.sh
+  sweep_remote_fixture.sh
   ../../scripts/harness-support.sh
   (env_var ProgramFiles)
   (env_var ProgramW6432)
