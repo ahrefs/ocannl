@@ -532,7 +532,13 @@ files.
   `Backend_intf.advertises_mma_format_in_scope`, a pure descriptor judgment with explicit policy
   and accumulator scope; tile divisibility is asserted separately. Missing MMA capability skips
   this both-sides census leg, including HIP's device/header conjunction. `mma_format_scope` covers
-  absent wide scopes and policy combinations a concrete GPU cannot vary.
+  absent wide scopes and policy combinations a concrete GPU cannot vary. The arch-floor axis no
+  fleet GPU can vary either (every box sits above CUDA's 70/80/89 cutoffs) is `cuda_mma_cutoffs`'s
+  (gh-ocannl-1214): CUDA's descriptor and arm resolver live in `Ir.Cuda_mma`, outside the
+  cudajit-gated backend, as functions of the compute capability, and the test evaluates both just
+  below and at every cutoff either owner has, both cutoff sets derived (the descriptor's by
+  sweeping its record, the resolver's from `mma_arm` floors), never listed. A descriptor field
+  whose cutoff no arm checks is caught by the cutoff-set comparison, not by the admission one.
   Where a timing is REPORTED the label is now printed, so a mismatch is legible without re-deriving
   anything: the `autotune_log` NOTE lines lead with it, `Train.tune_placements`' arm lines read
   `[tensorized/<label>]`, `bin/schedule_bench` and `bin/narrow_gebp_bench` print

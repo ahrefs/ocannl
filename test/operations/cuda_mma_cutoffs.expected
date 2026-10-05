@@ -1,0 +1,6 @@
+every resolver floor is a cutoff of the descriptor: true
+the descriptor changes only at a resolver floor or the cp.async floor: true
+the descriptor admits a storage triple, scope and policy exactly where the resolver's arm floor does, just below and at every cutoff: true
+at every resolver floor some admission is refused just below it by both owners: true
+a staged swizzled layout is advertised exactly where the fragment-scope arm is admitted: true
+pipelined depths are proposed exactly at and above the cp.async floor: true

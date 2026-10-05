@@ -281,6 +281,19 @@ val mma_format_triples :
     {!Ir.Numerics.t.tf32_matmuls}. Exposed for tests, which derive the storage precisions of an
     advertised triple from it rather than restating the format table. *)
 
+val mma_tile_for_precisions_in_scope :
+  Ir.Backend_intf.mma_capability ->
+  scope:Ir.Backend_intf.mma_emission_scope ->
+  a_prec:Ir.Ops.prec ->
+  b_prec:Ir.Ops.prec ->
+  d_prec:Ir.Ops.prec ->
+  (int * int * int) option
+(** The advertised intrinsic tile a site with these storage precisions seeds in this emission scope
+    under the current policy, [None] where the descriptor withholds it (no advertised format triple,
+    or a wide-accumulator lifetime the scope lists exclude). Exposed for tests: it is the
+    descriptor's verdict as seeding reads it, which [cuda_mma_cutoffs] compares against the arm
+    resolver's floors at every cutoff (gh-ocannl-1214). *)
+
 val sketch_seed_params :
   is_gpu:bool ->
   is_cpu:bool ->
