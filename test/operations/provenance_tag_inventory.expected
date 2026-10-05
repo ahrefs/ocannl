@@ -104,6 +104,8 @@ Site -- tensor/tensor.ml, number:
   24:literal-constant
 Site -- tensor/tensor.ml, param:
   241:param-value
+Site -- tensor/tensor.ml, v:
+  49:ndarray-backed
 Site via Non_virtual -- arrayjit/lib/low_level.ml, check_and_store_virtual:
   4:lhs-idcs-differ
   5:index-not-groundable

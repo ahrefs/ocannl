@@ -600,7 +600,8 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
   in
   match logic with
   | Terminal { is_param; logic = Fetch Range_over_offsets } -> defaults @@ mark_terminal ~is_param
-  | Terminal { is_param; logic = Fetch (Constant _) } -> defaults @@ mark_terminal ~is_param
+  | Terminal { is_param; logic = Fetch (Constant _) | Data (Broadcast _) } ->
+      defaults @@ mark_terminal ~is_param
   | Terminal { is_param; logic = Fetch (Constant_bits _) } -> defaults @@ mark_terminal ~is_param
   | Terminal { is_param; logic = Data (Reshape nd) } ->
       ( dim_map_empty,

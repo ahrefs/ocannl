@@ -1,0 +1,46 @@
+configured limit is effective: true
+literal fetch follows the configured size limit: true
+host initializer waits for shape inference: true
+broadcast scalar preserves explicit rows and executed values: PASS
+fresh context uploads the scalar after its forward was consumed: PASS
+literal fetch follows the configured size limit: true
+host initializer waits for shape inference: true
+broadcast scalar preserves explicit rows and executed values: PASS
+fresh context uploads the scalar after its forward was consumed: PASS
+rank-zero scalar root keeps its shape: true
+rank-zero scalar root initializes without a consumer: PASS
+host scalar fill accepts dimensions inferred by an einsum: true
+inferred scalar initialization executes: PASS
+padded materialized scalar init survives only with the in-kernel limit: true
+convolution commits scalar halo padding: true
+scalar host buffer fills the interior and neutral margins: true
+padded scalar convolution matches the independent reference: PASS
+padded scalar values remain correct on a second run: PASS
+padded materialized scalar init survives only with the in-kernel limit: true
+convolution commits scalar halo padding: true
+scalar host buffer fills the interior and neutral margins: true
+padded scalar convolution matches the independent reference: PASS
+padded scalar values remain correct on a second run: PASS
+configured limit is effective: true
+literal fetch follows the configured size limit: true
+host initializer waits for shape inference: true
+broadcast scalar preserves explicit rows and executed values: PASS
+fresh context uploads the scalar after its forward was consumed: PASS
+literal fetch follows the configured size limit: true
+host initializer waits for shape inference: true
+broadcast scalar preserves explicit rows and executed values: PASS
+fresh context uploads the scalar after its forward was consumed: PASS
+rank-zero scalar root keeps its shape: true
+rank-zero scalar root initializes without a consumer: PASS
+host scalar fill accepts dimensions inferred by an einsum: true
+inferred scalar initialization executes: PASS
+padded materialized scalar init survives only with the in-kernel limit: true
+convolution commits scalar halo padding: true
+scalar host buffer fills the interior and neutral margins: true
+padded scalar convolution matches the independent reference: PASS
+padded scalar values remain correct on a second run: PASS
+padded materialized scalar init survives only with the in-kernel limit: true
+convolution commits scalar halo padding: true
+scalar host buffer fills the interior and neutral margins: true
+padded scalar convolution matches the independent reference: PASS
+padded scalar values remain correct on a second run: PASS

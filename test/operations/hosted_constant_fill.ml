@@ -94,8 +94,7 @@ let () =
       Printf.sprintf "got [%s]"
         (String.concat ~sep:"; " (Array.to_list (Array.map values2 ~f:Float.to_string))));
   (* Part 3 (gh-633 review round 1, both P2s): a 1-element zero literal broadcast to a matmul
-     operand lowers as whole-node [Zero_out] — a form [--ocannl_limit_constant_fill_size=0] cannot
-     reach, since [constant_fill]'s 1-element arm never consults the limit — and
+     operand lowers as whole-node [Zero_out] with the default size limit, and
      [Train.set_materialized] flips the node's intent from [Effectively_constant] to [On_device], so
      eligibility must ride the persistent [host_constant] marker. Under the same hardware-annotating
      schedule, the [Zero_out] used to be rejected outright by [validate_parallel]'s

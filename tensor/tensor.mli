@@ -221,10 +221,11 @@ val term :
     [init_data] or [fetch_op] should be provided. If [init_data] is provided, it is used to
     initialize the tensor's [value] node. If [fetch_op] is provided, it is used to generate the
     tensor's forward code. If [init_data] is provided, it is also used to verify the shape of the
-    tensor's [value] node: [Reshape] (the default) if the data is not padded and both the tensor's
-    shape and padding are inferred, [Keep_shape_no_padding] if the tensor should not be padded and
-    the shape is as given by the ndarray, and [Padded] if the data is already padded as given, and
-    the shape is as given by the ndarray. *)
+    tensor's [value] node: [Broadcast] fills the inferred shape with a scalar without constraining
+    its element count, [Reshape] (the default) if the data is not padded and both the tensor's shape
+    and padding are inferred, [Keep_shape_no_padding] if the tensor should not be padded and the
+    shape is as given by the ndarray, and [Padded] if the data is already padded as given, and the
+    shape is as given by the ndarray. *)
 
 val number : ?label:string list -> ?axis_basis:string -> ?grad_spec:grad_spec -> float -> t
 (** A number: a tensor with a single axis of one dimension, initialized to the given value.

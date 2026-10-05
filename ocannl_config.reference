@@ -1378,9 +1378,9 @@
 # The threshold only decides inlinability, not where initialization lives: a small constant
 # whose placement lands on materialized also drops its in-kernel init in favor of the
 # link-time upload (gh-ocannl-633), so schedule legality does not depend on operand literal
-# sizes. Setting 0 forces host-side initialization for literals of at least two elements;
-# one-element literals always initialize in kernel (the host-backed path would pin their
-# element count, breaking broadcast shape inference).
+# sizes. Setting 0 forces host-side initialization for every nonempty literal, including
+# one-element literals: their host-backed fill preserves scalar broadcasting and inferred
+# padding without fixing the element count (gh-ocannl-641).
 #limit_constant_fill_size=16
 
 # The timeout for the CC backend to wait for the compilation files to appear, in seconds.
