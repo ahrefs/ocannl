@@ -274,6 +274,28 @@ module M : S = struct module N = struct module Cache = Other end end
 open M.N
 let () = Cache.store ~dir:"scratch" key value|ocaml},
       [ "~dir names scratch" ] );
+    ( "a name a literal signature substitutes away is not declared",
+      {ocaml|module Cache = Ir.Schedule_cache
+module M : sig module Cache : sig end module Cache := Other end = struct module Cache = Other end
+open M
+let () = Cache.store ~dir:"scratch" key value|ocaml},
+      [ "~dir names scratch" ] );
+    ( "a structure an unreadable signature may hide does not shadow a later open",
+      {ocaml|module N = struct module Cache = Ir.Schedule_cache end
+module M : S = struct module N = struct module Cache = Other end end
+open M
+open N
+let () = Cache.store ~dir:"scratch" key value|ocaml},
+      [ "~dir names scratch" ] );
+    ( "a resolver alias an unreadable signature may hide certifies nothing",
+      {ocaml|module A = Autotune
+module Autotune = Other
+module M : S = struct module Autotune = A end
+open M
+let f ?cache_dir () =
+let cache_dir = Autotune.resolve_cache_dir ?cache_dir ~search:true () in
+Ir.Schedule_cache.store ~dir:cache_dir k v|ocaml},
+      [ "~cache_dir forwards the parameter cache_dir"; "~dir names `cache_dir`" ] );
     (* Not every `~dir` is a cache write: inside `schedule_cache.ml` itself the directory is a
        parameter, named by whoever called in. *)
     ( "a bare store is not a call into the cache module",

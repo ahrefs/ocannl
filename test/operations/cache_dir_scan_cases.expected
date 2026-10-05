@@ -49,6 +49,9 @@ ok: use -- a name a literal signature declares still shadows on open
 ok: use -- an unreadable signature may hide an unrelated export, so it shadows nothing
 ok: use -- a nested signature narrows the nested structure's exports
 ok: use -- and an unreadable one may hide names at any depth
+ok: use -- a name a literal signature substitutes away is not declared
+ok: use -- a structure an unreadable signature may hide does not shadow a later open
+ok: use -- a resolver alias an unreadable signature may hide certifies nothing
 ok: use -- a bare store is not a call into the cache module
 ok: use -- nor is a same-named operation on another module
 ok: use -- a traversal keeps its separators, for the prefix rule to reject

@@ -30,7 +30,8 @@
     module bindings out with it ([M.Cache] after [module M = struct module Cache = … end], nested,
     or bound by [let module]), each resolved in the structure's own scope where it is bound, the
     last binding of a name winning; opening or including such a structure brings those names into
-    scope, as far as a signature constraint lets them through ({!visible}). A functor application,
+    scope, as far as a signature constraint lets them through: all of a literal signature's declared
+    names, and none behind a signature the scan cannot read ({!visible}). A functor application,
     first-class module or recursive module exports nothing the scan reads, and a structure's values
     are not exported. Unknown opens bring in no names; qualified directory values are unresolved
     rather than borrowed from a same-named local. The library's [Autotune.resolve_cache_dir]
@@ -120,24 +121,24 @@ type module_denotes =
       (** A local [struct]: every module name it binds, with what the last binding of that name
           denoted where it was made -- the names denoting [Other] included, since opening the
           structure shadows an outer alias with them. *)
+  | May_be_hidden of module_denotes
+      (** An export behind a signature the scan cannot read. A qualified path compiles only where
+          the name is visible, so it reaches the denotation inside; an [open] brings it in no more
+          than an unknown open brings in anything. *)
 
 (* [top]'s entries over [base]'s. *)
 let overlay base top = Map.merge_skewed base top ~combine:(fun ~key:_ _ later -> later)
+let unhide = function May_be_hidden denotes -> denotes | denotes -> denotes
 
-(* Exports seen through a signature that may hide any of them, at every depth: a name that may be
-   hidden must not shadow an outer cache alias on [open], so the entries denoting [Other] go, and
-   the cache entries stay, to be judged loudly if they are in fact hidden. *)
 let rec may_hide exports =
-  Map.filter_map exports ~f:(function
-    | Other -> None
-    | Exports inner -> Some (Exports (may_hide inner))
-    | denotes -> Some denotes)
+  Map.map exports ~f:(fun denotes ->
+      May_be_hidden (match unhide denotes with Exports inner -> Exports (may_hide inner) | d -> d))
 
 (** What a structure's exports become under a signature constraint. A literal [sig … end] keeps
-    exactly the module names it declares, narrowing a declared structure's own exports by its
-    declared type. A signature the scan cannot read -- a name, a [with], an [include] inside a
-    literal one -- may hide any name: {!may_hide}. Qualified paths are unaffected either way: a
-    missing entry is [Other]. *)
+    exactly the module names it declares, net of its [module X := …] substitutions, and narrows a
+    declared structure's own exports by its declared type. A signature the scan cannot read -- a
+    name, a [with], an [include] inside a literal one -- may hide any name, at any depth
+    ({!May_be_hidden}). Qualified paths resolve the same either way: a missing entry is [Other]. *)
 let rec visible signature exports =
   match signature.pmty_desc with
   | Pmty_signature items ->
@@ -147,6 +148,8 @@ let rec visible signature exports =
             match item.psig_desc with
             | Psig_module d -> (Option.to_list (declare d) @ declared, readable)
             | Psig_recmodule ds -> (List.filter_map ds ~f:declare @ declared, readable)
+            | Psig_modsubst { pms_name = { txt = name; _ }; _ } ->
+                (List.Assoc.remove declared name ~equal:String.equal, readable)
             | Psig_include _ -> (declared, false)
             | _ -> (declared, readable))
       in
@@ -154,7 +157,9 @@ let rec visible signature exports =
         Map.filter_mapi exports ~f:(fun ~key ~data ->
             List.Assoc.find declared key ~equal:String.equal
             |> Option.map ~f:(fun declared_type ->
-                match data with Exports inner -> Exports (visible declared_type inner) | d -> d))
+                match unhide data with
+                | Exports inner -> Exports (visible declared_type inner)
+                | d -> d))
       in
       if readable then kept else overlay (may_hide exports) kept
   | _ -> may_hide exports
@@ -173,7 +178,7 @@ let module_path env path =
             | _ -> Other))
     | Ldot (path, name) -> (
         match (resolve path, name) with
-        | Exports exports, _ -> Option.value (Map.find exports name) ~default:Other
+        | Exports exports, _ -> Option.value_map (Map.find exports name) ~f:unhide ~default:Other
         | Ocannl, "Ir" -> Ir
         | Ir, "Schedule_cache" -> Cache
         | _ -> Other)
@@ -271,10 +276,13 @@ let read ?(source = "") content =
         snd (List.fold items ~init:(env, Map.empty (module String)) ~f:step)
 
       (* Opening or including a local structure brings its module names into scope, over whatever
-         they denoted before. Its values are not modelled, as for any other open. *)
+         they denoted before, except those a signature may hide. Its values are not modelled, as for
+         any other open. *)
       method! opened ~top:_ ~include_:_ env =
         function
-        | Some (Exports exports) -> { env with modules = overlay env.modules exports }
+        | Some (Exports exports) ->
+            let certain = Map.filter exports ~f:(function May_be_hidden _ -> false | _ -> true) in
+            { env with modules = overlay env.modules certain }
         | _ -> env
 
       val mutable resolver_seen = false
