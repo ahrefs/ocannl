@@ -76,6 +76,7 @@ recover() { # repo runner promoter version; shipping oracle, reused for negative
   repo=$(project "$name" "$runner" "$promoter") || return 1
   export OCANNL_TOOL_TEST_RUNS=$TMP/$name-runs TEST_PROMOTION_DUNE=$REAL_DUNE TEST_PROMOTION_VERSION=$version
   export PATH=$repo/.shim:$ORIGINAL_PATH
+  if [ "${TEST_PROMOTION_SUPPRESS:-0}" = 1 ]; then export DUNE_DIFF_COMMAND=-; else unset DUNE_DIFF_COMMAND; fi
   record "$repo" || return 1
   # Both controls matter: the later build removes Dune's list and payloads.
   (cd "$repo" && dune build -j 2 dune-project && dune clean) >"$repo/later.log" 2>&1 || return 1
@@ -91,6 +92,9 @@ for version in current 3.20.2 3.21.1; do
   recover "recovery-$version" "$HERE/test-run.sh" "$HERE/promote.sh" "$version"
   report $? "corrected bytes survive a later build and clean ($version)"
 done
+TEST_PROMOTION_SUPPRESS=1 recover recovery-suppressed "$HERE/test-run.sh" "$HERE/promote.sh" current
+report $? 'suppressed diff presentation still records recoverable corrections'
+unset DUNE_DIFF_COMMAND
 # The same shipping oracle must reject the former list-only recording behavior.
 mutant_runner=$(mutant list-only '
   /# Corrected bytes belong to this record too/ { skipping=1 }

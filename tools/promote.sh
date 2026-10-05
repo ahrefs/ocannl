@@ -112,7 +112,7 @@ else
   if [ "$merging" -eq 1 ]; then
     # Capture both streams: 3.20/3.21 put paths on stderr. Retain only paths
     # Dune actually promoted; missing-path warnings must never reach git add.
-    promoted="$(dune promotion list --root . "$@" 2>&1)" || listed=0
+    promoted="$(dune promotion list --root . "$@" --diff-command=diff 2>&1)" || listed=0
   fi
   dune promotion apply --root . "$@"
 fi

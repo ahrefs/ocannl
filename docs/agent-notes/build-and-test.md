@@ -875,6 +875,8 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   Capture failure keeps the list but advertises no replay; every copy/query stays under the run's
   existing lock, signal handling and remaining cap. `tools/test-promotion-record.sh` owns the byte,
   recovery and refusal controls; `tools/test-promote.sh` owns the opposing floor-stream controls.
+  Floor Dune also recomputes diffs during `list`, so both wrappers pin its `--diff-command=diff`: a
+  presentation-only `DUNE_DIFF_COMMAND=-` must not hide registered corrections from recovery.
 - **`cmd 2>/dev/null` does not silence a failed REDIRECTION.** The shell reports that before the
   command's own stderr redirection applies, so `read -r line <"$f" 2>/dev/null` prints
   `/proc/NNN/stat: No such file or directory` whenever the entry vanishes mid-scan — routine, not

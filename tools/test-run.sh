@@ -1074,7 +1074,9 @@ record_promotions() { # in `_resolve`, after dune exited, whose SECONDS the cap'
   else
     stream=stderr
   fi
-  set -- "$DUNE" promotion list --trace-file="$run_dir/promotions.trace"
+  # Before 3.22, list recomputes diffs; a presentation command such as `-`
+  # would hide registered corrections. Discovery uses an ordinary diff.
+  set -- "$DUNE" promotion list --diff-command=diff --trace-file="$run_dir/promotions.trace"
   if [ "$stream" = stdout ]; then
     promotion_bounded "$@" >"$run_dir/promotions.tmp" 2>/dev/null
   else
