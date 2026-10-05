@@ -1874,15 +1874,28 @@ let dshort d =
 
 let bs_label = function None -> "cfg" | Some b -> Int.to_string b
 
-(* How many units of [b] carry a different saved schedule than the same unit of [a]; [None] when the
-   two forms do not segment alike, so no unit-by-unit comparison exists. *)
+(* How many units of [b] carry a different saved schedule than the same unit of [a] (a split-reduce
+   prelude counting as one); [None] when the two forms do not segment alike -- different forms, or a
+   segment whose kind, length or pre-schedule digest differs, the identity a replay checks -- so no
+   unit-by-unit comparison exists. *)
 let units_differing (a : compiled) (b : compiled) =
   let differ x y = if Poly.equal x y then 0 else 1 in
+  let segments xs ys =
+    let same_cut (x : SC.saved_segment) (y : SC.saved_segment) =
+      Poly.equal x.seg_kind y.seg_kind && x.seg_units = y.seg_units
+      && String.equal x.seg_digest y.seg_digest
+    in
+    if List.length xs = List.length ys && List.for_all2_exn xs ys ~f:same_cut then
+      Some
+        (List.fold2_exn xs ys ~init:0 ~f:(fun n (x : SC.saved_segment) (y : SC.saved_segment) ->
+             n + differ x.seg_saved y.seg_saved))
+    else None
+  in
   match (a.form, b.form) with
   | Whole_saved x, Whole_saved y -> Some (differ x y)
-  | (Fiss_saved xs | Split_saved (_, xs)), (Fiss_saved ys | Split_saved (_, ys))
-    when List.length xs = List.length ys ->
-      Some (List.fold2_exn xs ys ~init:0 ~f:(fun n x y -> n + differ x.SC.seg_saved y.SC.seg_saved))
+  | Fiss_saved xs, Fiss_saved ys -> segments xs ys
+  | Split_saved (px, xs), Split_saved (py, ys) ->
+      Option.map (segments xs ys) ~f:(fun n -> n + differ px py)
   | _ -> None
 
 (* Calibration output (gh-ocannl-491 task 4) and the bound-agreement invariant (gh-ocannl-514 phase
