@@ -43,6 +43,7 @@ files.
 - `Train.to_routine` returns `Context.t * Context.routine` (gh-ocannl-772), like `Context.compile`
   and `Train.run_once`. `routine.Context.context` is the same value, so both spellings work; prefer
   chaining the returned context.
+  Doc-check `note_training_context`: `let compile ctx bindings comp = let open Ocannl.Nn_blocks.DSL_modules in let ctx, routine = Ocannl.Train.to_routine ctx bindings comp in ctx, routine.Context.context`.
 - Metal training recipe: `Train.every_non_literal_materialized loss` (kernel fission then cuts
   every cross-nest edge) + `Autotune.tune ~rounds:0 ~timing_ctx:scratch`. `~rounds:0` keeps
   .expected files schedule-invariant (preset seeds preserve reduction order); `?timing_ctx` on a

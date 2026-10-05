@@ -1,0 +1,12 @@
+docs/agent-notes/syntax-extensions.md: checked note_dimension_capture
+docs/agent-notes/training-and-performance.md: checked note_training_context
+docs/agent-notes/virtualization-and-inlining.md: checked prelowered_transform
+docs/migration_guide.md: checked migration_training
+docs/proposals/centered-init-and-to-routine-context.md: checked proposal_routine_context
+docs/proposals/centered-init-and-to-routine-context.md: excluded historical accessor removed by gh-ocannl-590
+docs/slides-basics_backprop_training_codegen.md: checked slides_optimizer
+docs/slides-basics_backprop_training_codegen.md: excluded illustrative abbreviated optimizer implementation; see lib/train.ml
+docs/syntax_extensions.md: checked dimension_capture
+docs/tensors_and_contexts.md: checked context_compile
+docs/tensors_and_contexts.md: checked context_creation
+docs/tensors_and_contexts.md: excluded illustrative partial Tensor record; see tensor/tensor.ml

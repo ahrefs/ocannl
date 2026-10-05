@@ -25,3 +25,6 @@ files.
   is a ppx-level "name clash" error. Gradients (`p.grad`) are readable only as DIRECT operands of
   an assignment: nested `(p.grad * s) + t` expands to `Option.map p.diff ... * s`, which does not
   typecheck — give the scaled read its own statement into an intermediate.
+
+- A dimension capture needs a literal spec containing `=>`; this example captures the reduced axis.
+  Doc-check `note_dimension_capture`: `let sum_last x = let open Ocannl.Nn_blocks.DSL_modules in [%op x ++ "ab => a" ["b"]]`.

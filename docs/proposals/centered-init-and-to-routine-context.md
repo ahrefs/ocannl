@@ -26,6 +26,25 @@
 > default init policy. This lands **after PR #70 merges**. The superseded sections below are
 > retained struck-through for the historical record. Tracked by task-9b0559f5.
 
+## Current API example
+
+This update is present-tense guidance and is compiled. The dated analysis below is retained
+as history; its descriptions of earlier APIs are not current recommendations.
+
+```ocaml doc-check=proposal_routine_context
+open Ocannl.Nn_blocks.DSL_modules
+
+let compile ctx bindings comp =
+  let ctx, routine = Ocannl.Train.to_routine ctx bindings comp in
+  ctx, routine.Context.context
+```
+
+Historical spelling, retained only to explain the accessor migration:
+
+```ocaml doc-skip historical accessor removed by gh-ocannl-590
+let ctx = Context.context routine
+```
+
 ## Status update (2026-06-12)
 
 - gh-ocannl-116 (the Karpathy FSM transformer tutorial, source of discovery) is CLOSED/COMPLETED (milestone v0.6.4); the tutorial landed as `test/training/fsm_transformer.ml`.

@@ -143,7 +143,7 @@ let grad_update loss =
 {pause unfocus down}
 
 {pause focus=def-SGD}
-```ocaml
+```ocaml doc-skip illustrative abbreviated optimizer implementation; see lib/train.ml
 let sgd_one ~learning_rate ?(momentum = 0.0) ?(weight_decay = 0.0)
     ?(nesterov = false) p =
   [%cd
@@ -668,6 +668,17 @@ let grad_update ?(setup_for_parallel = false) loss =
 >     `p =- learning_rate * sgd_momentum`
 
 {pause}
+
+Compilation coverage: complete present-tense examples use `doc-check` annotations; simplified
+implementation excerpts elsewhere in this deck remain illustrative and are inventoried as unchecked.
+
+```ocaml doc-check=slides_optimizer
+open Ocannl.Nn_blocks.DSL_modules
+
+let optimizer loss =
+  let%op learning_rate = 0.01 in
+  Ocannl.Train.sgd_update ~learning_rate loss
+```
 
 The OCANNL code for a single parameter update step, including options for weight decay and momentum:
 

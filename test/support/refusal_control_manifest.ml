@@ -14,6 +14,7 @@ open Stdio
 
 let raw_entries =
   [
+    ("doc_examples_extract.ml", []);
     ("ll_test_ratchet.ml", []);
     ("operand_key_ratchet.ml", []);
     ("provenance_tag_inventory.ml", []);

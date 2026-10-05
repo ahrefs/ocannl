@@ -18,6 +18,7 @@ files.
   It replaces the compile's lowering wholesale, so the analysis layer and the kernels see one IR;
   add `~lowered_transform:(fun o -> [ o ])` to keep the default schedule annotator off hand-built
   code.
+  Doc-check `prelowered_transform`: `let compile = let open Ocannl.Nn_blocks.DSL_modules in Context.compile ~lowered_transform:(fun o -> [ o ])`.
   See `test/operations/prelowered_seam.ml`, and mind the scope-purity contract below.
 - Do not re-derive that harness: `test/support/ll_test.ml` (library `ll_test`, links `ocannl`) holds
   the LL builders, ONE exhaustive `Low_level.t`/`scalar_t` traversal with the counters derived from

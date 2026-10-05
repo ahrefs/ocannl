@@ -41,6 +41,7 @@
  (modules
   test_utils
   agent_notes_scan
+  doc_examples_scan
   dead_export_scan
   api_drift
   codegen_text_scan

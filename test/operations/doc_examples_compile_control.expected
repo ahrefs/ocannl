@@ -1,0 +1,2 @@
+the extracted current record-field example compiles: true
+the extracted stale accessor fails specifically at OCaml name resolution: true

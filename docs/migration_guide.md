@@ -262,21 +262,28 @@ optimizer.step()
 ```
 
 **OCANNL (v0.6.1+ with Context API):**
-```ocaml
-(* Compile once, run many times *)
-let ctx = Context.auto () in
-let%op learning_rate = 0.01 in
-let update = Train.grad_update loss in
-let sgd = Train.sgd_update ~learning_rate loss in
-let ctx = Train.init_params ctx IDX.empty loss in
-let ctx, routine = Train.to_routine ctx IDX.empty 
-  (Asgns.sequence [update; sgd]) in
+```ocaml doc-check=migration_training
+open Ocannl
+open Ocannl.Nn_blocks.DSL_modules
+open Operation.At
+module IDX = Train.IDX
+module Asgns = Ir.Assignments
 
-(* Training loop - reuse compiled routine *)
-for epoch = 1 to 100 do
-  Train.run ctx routine;
-  if epoch mod 10 = 0 then Printf.printf "Loss: %.4f\n" (ctx, loss).@[0]
-done
+let train loss =
+  (* Compile once, run many times *)
+  let ctx = Context.auto () in
+  let%op learning_rate = 0.01 in
+  let update = Train.grad_update loss in
+  let sgd = Train.sgd_update ~learning_rate loss in
+  let ctx = Train.init_params ctx IDX.empty loss in
+  let ctx, routine = Train.to_routine ctx IDX.empty
+    (Asgns.sequence [update; sgd]) in
+
+  (* Training loop - reuse compiled routine *)
+  for epoch = 1 to 100 do
+    Train.run ctx routine;
+    if epoch mod 10 = 0 then Printf.printf "Loss: %.4f\n" (ctx, loss).@[0]
+  done
 ```
 
 ## Training with the Context API (v0.6.1+)
