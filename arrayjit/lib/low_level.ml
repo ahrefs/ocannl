@@ -7695,7 +7695,15 @@ let decide_placements (optim_ctx : optimize_ctx) traced_store ~max_visits ~reads
     in
     Hashtbl.iter_keys traced_store ~f:(fun tn -> ignore (fanin tn : Set.M(Tnode).t))
 
+type recompute_pricer_fn =
+  static_indices:Indexing.static_symbol list ->
+  (Tnode.t -> (Tnode.Placements.t * (Indexing.axis_index array option * t) list, string) Result.t) ->
+  Tnode.t ->
+  int option
+
 type analysis = {
+  an_price_cache : (string * int option) list ref;
+  mutable an_price_pricer : recompute_pricer_fn option;
   an_llc : t;
   an_static_indices : Indexing.static_symbol list;
   an_traced_store : traced_store;
@@ -7730,6 +7738,8 @@ let%diagn2_sexp analyze_proc (static_indices : Indexing.static_symbol list) (llc
   let rels = lazy (affine_relations llc) in
   let accs = lazy (drop_dead_loop_accesses (fst (Lazy.force rels))) in
   {
+    an_price_cache = ref [];
+    an_price_pricer = None;
     an_llc = llc;
     an_static_indices = static_indices;
     an_traced_store = traced_store;
@@ -8281,13 +8291,76 @@ let instantiate_at_synthetic_read ~(placements : Tn.Placements.t) ~static_indice
    where the count is not exact. [Cost_model] sits above this module, so it registers the pricer at
    initialization; until then (or in a program linking no cost model) the traced proxy prices every
    candidate. *)
-let recompute_pricer :
-    (static_indices:Indexing.static_symbol list ->
-    (Tnode.t -> (Tnode.Placements.t * (Indexing.axis_index array option * t) list, string) Result.t) ->
-    Tnode.t ->
-    int option)
-    ref =
-  ref (fun ~static_indices:_ _world _tn -> None)
+let recompute_pricer : recompute_pricer_fn ref = ref (fun ~static_indices:_ _world _tn -> None)
+
+(* gh-ocannl-1113: memoize only the scalar price, after this specialization has validated its
+   private world. Never retain a world's mutable placements. Analysis ownership separates raw
+   routines; snapshot the mutable static domains too. The canonical templates already contain their
+   inlined producers, so only the nodes they reference can affect synthetic instantiation. Include
+   those nodes' effective placements and bounds/host facts the shared pipeline consults. Opaque
+   templates remain uncached, just as opaque raw analyses do. *)
+let recompute_price_key ~static_indices self world =
+  let buf = Buffer.create 1024 in
+  let add = Buffer.add_string buf in
+  add (Sexp.to_string ([%sexp_of: Indexing.static_symbol list] static_indices));
+  add (Int.to_string self.Tn.uid);
+  add ";";
+  match world with
+  | Error code ->
+      add (Sexp.to_string ([%sexp_of: string] code));
+      Some (Buffer.contents buf)
+  | Ok (placements, computations) ->
+      let cacheable = ref true in
+      let emit_tn tn =
+        add
+          (Sexp.to_string
+             ([%sexp_of:
+                int
+                * (Tn.memory_mode * Tn.provenance) option
+                * Interval.t option
+                * bool
+                * bool
+                * bool]
+                ( tn.Tn.uid,
+                  Tn.Placements.get placements tn,
+                  Tn.bounds_candidate tn,
+                  tn.Tn.observable,
+                  tn.Tn.host_constant,
+                  Host_inits.mem tn )))
+      in
+      emit_tn self;
+      List.iter computations ~f:(fun (at, code) ->
+          add (Sexp.to_string ([%sexp_of: Indexing.axis_index array option] at));
+          Canonical_render.emit ~buf
+            {
+              emit_tn;
+              emit_free_sym = (fun s -> add (Indexing.symbol_ident s));
+              on_bind_loop = (fun _ ~id:_ ~shadowed -> if shadowed then cacheable := false);
+              mark_incomplete = (fun () -> cacheable := false);
+              mma = Canonical_render.Opaque_mma;
+              initial_tokens = [];
+            }
+            code);
+      Option.some_if !cacheable (Buffer.contents buf)
+
+let memoized_recompute_price an ~pricer ~static_indices ~world tn =
+  if not (Option.exists an.an_price_pricer ~f:(phys_equal pricer)) then (
+    an.an_price_cache := [];
+    an.an_price_pricer <- Some pricer);
+  let resolved = Result.map_error (world tn) ~f:(function `Store code | `Read code -> code) in
+  let compute () = pricer ~static_indices (fun _ -> resolved) tn in
+  match recompute_price_key ~static_indices tn resolved with
+  | None -> compute ()
+  | Some key -> (
+      match List.Assoc.find !(an.an_price_cache) key ~equal:String.equal with
+      | Some price ->
+          an.an_price_cache :=
+            (key, price) :: List.Assoc.remove !(an.an_price_cache) key ~equal:String.equal;
+          price
+      | None ->
+          let price = compute () in
+          an.an_price_cache := List.take ((key, price) :: !(an.an_price_cache)) 128;
+          price)
 
 let%diagn2_sexp specialize_proc (input_ctx : optimize_ctx) (an : analysis) : optimized =
   let static_indices = an.an_static_indices in
@@ -8350,10 +8423,7 @@ let%diagn2_sexp specialize_proc (input_ctx : optimize_ctx) (an : analysis) : opt
                 ~reverse_node_map:an.an_reverse_node_map ~footprint_scoped ~static_indices
                 ~raw:an.an_llc tn)
     in
-    let price =
-      !recompute_pricer ~static_indices (fun tn ->
-          Result.map_error (world tn) ~f:(function `Store code | `Read code -> code))
-    in
+    let price = memoized_recompute_price an ~pricer:!recompute_pricer ~static_indices ~world in
     (* gh-ocannl-1093: the refusal the world already shows for a recompute reading — the walk's own
        verdict refuses both (the node is captured the same way whichever reading serves its reads),
        an unservable read site only the inlined one, which a footprint-scoped reading serves from
@@ -8536,9 +8606,9 @@ let analysis_digest (static_indices : Indexing.static_symbol list) (llc : t) : s
    schedule candidates of [Train.tune_placements] / [Autotune.tune] each re-lower the routine from
    the same assignments) share one [analyze_proc] result and replay only [specialize_proc]. Safe by
    the gh-555 hermeticity contract: the analysis is decision-independent, [specialize_proc]
-   record-copies the traced store per candidate and only reads the rest. Bounded, process-global,
-   move-to-front on hit; entries keyed by stale [Tn.uid]s can never alias fresh nodes (uids are
-   never reused), they just age out. *)
+   record-copies the traced store per candidate; the bounded scalar-price memo is the only shared
+   specialization state. Bounded, process-global, move-to-front on hit; entries keyed by stale
+   [Tn.uid]s can never alias fresh nodes (uids are never reused), they just age out. *)
 let analysis_cache_capacity = 8
 let analysis_cache : (string * analysis) list ref = ref []
 let analysis_cache_hits = ref 0

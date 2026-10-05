@@ -1022,9 +1022,11 @@ val recompute_pricer :
     [hoist_cross_statement_cse] merges) only lowers what executes, so the product with the per-cell
     read multiplicity is a bound in the same sense the traced proxy's is. [Cost_model] registers it
     at module initialization; the default prices nothing, so every candidate carries the traced
-    proxy. A pricer must be pure: [specialize_proc] consults it once per candidate node of a
-    compile, and resolves each node's world once, which also decides the alternatives' [fa_refused].
-*)
+    proxy. A pricer must be pure and consume only the candidate node's world. [specialize_proc]
+    resolves and validates each node's private world once per compile, also deciding [fa_refused].
+    Its scalar price is memoized across specializations sharing an [analysis], keyed by the resolved
+    computations, effective placements and node facts, and current static domains. Replacing the
+    registered function invalidates its prices. The memo retains no world tables. *)
 
 val post_virtualization_pipeline :
   Tnode.Placements.t ->
@@ -1154,7 +1156,8 @@ val optimize :
 type analysis
 (** Decision-independent analysis of a lowered routine (gh-555 step 1): the structural per-node
     facts and the lazily-materialized affine access metrics — everything the optimization pipeline
-    consumes that does not depend on the lineage's placement decisions. *)
+    consumes that does not depend on the lineage's placement decisions, plus a bounded memo of
+    scalar recompute prices keyed by validated placement worlds (gh-ocannl-1113). *)
 
 val analyze_proc : Indexing.static_symbol list -> t -> analysis
 (** Compute the analysis once for a routine. [optimize] is [analyze_proc] followed by

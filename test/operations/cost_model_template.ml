@@ -81,6 +81,54 @@ let same_cost (a : CM.recompute option) (b : CM.recompute option) =
 
 let flops_exact = function Some r -> not r.CM.rc_flops_approx | None -> false
 
+(* A bounded work witness: the same analysis is specialized six times, then a fresh analysis
+   supplies the independent cold oracle. Surface equality alone would pass without the memo. *)
+let price_replay ~name ~self ~materialized ?(static_indices = []) ?(extra = fun _ _ _ _ _ -> ()) llc
+    =
+  let original = !LL.recompute_pricer and calls = ref 0 in
+  let worlds = ref [] in
+  let counting ~static_indices world tn =
+    if Tn.equal tn self then (
+      Int.incr calls;
+      match world tn with Ok (plc, _) -> worlds := plc :: !worlds | Error _ -> ());
+    original ~static_indices world tn
+  in
+  let surface o =
+    List.find_map o.LL.flip_candidates ~f:(fun fc ->
+        Option.some_if (Tn.equal fc.fc_tn self)
+          (List.map fc.fc_alternatives ~f:(fun fa ->
+               (fa.LL.fa_recompute_cost, fa.fa_modeled, fa.fa_refused))))
+  in
+  let equal = Poly.equal in
+  let run an =
+    let ctx = LL.empty_optimize_ctx () in
+    LL.decide_materialized ctx materialized;
+    LL.specialize_proc ctx an
+  in
+  LL.recompute_pricer := counting;
+  Exn.protect
+    ~finally:(fun () -> LL.recompute_pricer := original)
+    ~f:(fun () ->
+      let an = LL.analyze_proc static_indices llc in
+      let first = run an in
+      let placements = Sexp.to_string (Tn.Placements.sexp_of_t first.LL.optimize_ctx.placements) in
+      List.iter !worlds ~f:(fun plc ->
+          Tn.Placements.unsafe_restore plc self (Some (Tn.Local, Tn.Site "589:test-ll-materialize")));
+      p
+        (name ^ ": mutating a resolved world leaves its caller's placements intact")
+        (String.equal placements
+           (Sexp.to_string (Tn.Placements.sexp_of_t first.LL.optimize_ctx.placements)));
+      let again = List.init 5 ~f:(fun _ -> run an) in
+      p (name ^ ": six specializations invoke the pricer once") (!calls = 1);
+      p_all (name ^ ": warm surfaces preserve price and refusal") again ~f:(fun o ->
+          equal (surface first) (surface o));
+      let cold = run (LL.analyze_proc static_indices llc) in
+      p
+        (name ^ ": warm surface equals independent cold analysis")
+        (Option.is_some (surface first) && equal (surface first) (surface cold));
+      p (name ^ ": independent analyses do not share memo entries") (!calls = 2);
+      extra an run surface first calls)
+
 let () =
   Stdio.printf "== instantiation_cost on hand-built computations ==\n";
   let i = sym () and k = sym () in
@@ -213,6 +261,7 @@ let () =
   Stdio.printf "== guard-emitting shapes: price = emitted read ==\n";
   let case ?expected ~name ~self ~reader ~materialized llc =
     let o = optimize ~materialized ~name llc in
+    price_replay ~name ~self ~materialized llc;
     let priced = CM.recompute_cost o.LL.optimize_ctx self in
     let emitted = emitted_read o ~reader ~self in
     show_opt (name ^ ", priced") priced;
@@ -628,6 +677,7 @@ let () =
                }))
          (loop_n x 4 (loop_n y 2 (set o [| iter x; iter y |] (get v [| iter x |])))))
   in
+  price_replay ~name:"packed-uniform, virtual counter" ~self:v ~materialized:[ wp; o ] llc;
   ignore
     (inline_flip_vs_emitted ~name:"packed-uniform, virtual counter" ~self:v ~reader:o
        ~materialized:[ wp; o ] ~mult:2 llc
@@ -811,3 +861,115 @@ let () =
         && Option.equal String.equal fa.LL.fa_refused
              (Option.map (rejection_code o_pref s) ~f:Tn.provenance_to_string)
     | None -> false)
+
+let () =
+  Stdio.printf "== cross-specialization pricing isolation ==\n";
+  let input = mk ~dims:[| 4; 20 |] "memo_input" and r = mk "memo_reduce" and out = mk "memo_out" in
+  let i = sym () and k = sym () and x = sym () in
+  let code =
+    seq (zero r)
+      (seq
+         (loop_n i 4
+            (loop_n k 20
+               (set r [| iter i |] (add (get r [| iter i |]) (get input [| iter i; iter k |])))))
+         (loop_n x 4 (set out [| iter x |] (get r [| iter x |]))))
+  in
+  price_replay ~name:"cap reduction" ~self:r ~materialized:[ input; out ]
+    ~extra:(fun an run surface first calls ->
+      let before = !calls in
+      let ctx = LL.empty_optimize_ctx () in
+      LL.decide_materialized ~provenance:(Tn.Site "589:test-ll-materialize") ctx [ input; out ];
+      let changed = LL.specialize_proc ctx an in
+      p "same computations under a different producer placement entry miss the memo"
+        (!calls = before + 1 && Poly.equal (surface first) (surface changed));
+      let before = !calls in
+      ignore (run an : LL.optimized);
+      p "returning to the earlier placement vector reuses its own price" (!calls = before))
+    code;
+  let b = mk "memo_producer" and s = mk "memo_stored" and input = mk "memo_stored_input" in
+  let i = sym () and j = sym () and x = sym () in
+  let code =
+    seq
+      (loop_n i 4 (set b [| iter i |] (LL.Unop (Ops.Sin, (get input [| iter i |], single)))))
+      (seq
+         (loop_n j 4 (set s [| iter j |] (add (get b [| iter j |]) (c 2.))))
+         (loop_n x 4 (set out [| iter x |] (get s [| iter x |]))))
+  in
+  price_replay ~name:"stored template" ~self:s ~materialized:[ input; out ]
+    ~extra:(fun an _ surface first calls ->
+      let before = !calls in
+      let run an =
+        let ctx = LL.empty_optimize_ctx () in
+        LL.decide_materialized ctx [ b; input; out ];
+        LL.specialize_proc ctx an
+      in
+      let changed = run an in
+      let equal = Poly.equal in
+      p "producer placement changes its consumer's price and misses the cache"
+        (!calls = before + 1 && not (equal (surface first) (surface changed)));
+      let cold = run (LL.analyze_proc [] code) in
+      p "changed producer placement agrees with a cold specialization"
+        (equal (surface changed) (surface cold)))
+    code;
+  let f = mk ~dims:[| 2 |] "memo_refused"
+  and input = mk ~dims:[| 1 |] "memo_refused_input"
+  and output = mk ~dims:[| 2 |] "memo_refused_out" in
+  let j = sym () in
+  let code =
+    seq (zero f)
+      (seq
+         (set f [| fixed 0 |] (mul (get input [| fixed 0 |]) (c 2.)))
+         (loop_n j 2 (set output [| iter j |] (add (get f [| fixed 0 |]) (get f [| fixed 1 |])))))
+  in
+  price_replay ~name:"refused read" ~self:f ~materialized:[ input; output ]
+    ~extra:(fun _ _ surface first _ ->
+      p "memoized refusal remains a proxy with the actual call-site mismatch"
+        (match surface first with
+        | Some [ (_, false, Some "13:call-site-index-mismatch") ] -> true
+        | _ -> false))
+    code;
+  let ip = Ops.index_prec () in
+  let limit, coeff =
+    match ip with Ops.Int32_prec _ -> (2147483647, 1) | _ -> (Int.max_value, 2)
+  in
+  let parameter, _ =
+    (Idx.get_static_symbol ~static_range:8 Idx.Empty : Idx.static_symbol * Idx.unit_bindings)
+  in
+  let x = parameter.Idx.static_symbol in
+  let input = mk "memo_domain_input" and s = mk "memo_domain" and out = mk "memo_domain_out" in
+  let i = sym () and j = sym () in
+  let cmp op a b = LL.Binop (op, (LL.Embed_index a, ip), (LL.Embed_index b, ip)) in
+  let cond =
+    LL.Binop
+      ( Ops.And,
+        (cmp Ops.Cmple (iter x) (fixed 5), ip),
+        (cmp Ops.Cmplt (fixed 5) (aff [ (coeff, x) ] 8), ip) )
+  in
+  let code =
+    seq
+      (loop_n i 4 (set s [| iter i |] (where_ cond (get input [| iter i |]) (c 0.))))
+      (loop_n j 4 (set out [| iter j |] (get s [| iter j |])))
+  in
+  price_replay ~name:"bounded static domain" ~self:s ~materialized:[ input; out ]
+    ~static_indices:[ parameter ]
+    ~extra:(fun an run surface safe calls ->
+      let before = !calls in
+      parameter.Idx.static_range <- Some limit;
+      let unsafe = run an in
+      p "mutating the active static domain invalidates an exact cached price"
+        (!calls = before + 1
+        &&
+        match (surface safe, surface unsafe) with
+        | Some [ (_, true, None) ], Some [ (_, false, None) ] -> true
+        | _ -> false);
+      let cold = run (LL.analyze_proc [ parameter ] code) in
+      p "near-limit domain preserves the cold bounded-price result"
+        (Poly.equal (surface unsafe) (surface cold));
+      let before = !calls in
+      ignore (run an : LL.optimized);
+      p "inexact prices are cached too" (!calls = before);
+      (LL.recompute_pricer := fun ~static_indices:_ _ _ -> Some 731);
+      let alternate = run an in
+      p "replacing the pricer invalidates its predecessor's prices"
+        (match surface alternate with Some [ (731, true, None) ] -> true | _ -> false))
+    code

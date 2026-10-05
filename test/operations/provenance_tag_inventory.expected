@@ -165,6 +165,7 @@ docs/lowering_and_inlining.md -- 4 5 7 8 9 10 11 12 13 14 16 18 19 39 41 51 52 1
 lib/train.ml -- 28 29
 tensor/tensor.ml -- 24 49 241
 test/operations/cost_model_template.expected -- 9 13
+test/operations/cost_model_template.ml -- 13
 test/operations/footprint_materialization.ml -- 13
 test/operations/gather_table_placement.ml -- 17 152
 test/operations/local_host_access.ml -- 39

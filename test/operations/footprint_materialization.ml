@@ -733,6 +733,26 @@ let case_stored_template_refusal () =
         && Option.equal String.equal fa.LL.fa_refused
              (Option.map (rejection_code attempted a) ~f:Tn.provenance_to_string)
     | None -> false);
+  let pricer = !LL.recompute_pricer and price_calls = ref 0 in
+  (LL.recompute_pricer :=
+     fun ~static_indices world tn ->
+       if Tn.equal tn a then Int.incr price_calls;
+       pricer ~static_indices world tn);
+  let replays =
+    Exn.protect
+      ~finally:(fun () -> LL.recompute_pricer := pricer)
+      ~f:(fun () -> List.init 6 ~f:(fun _ -> optimize ~name:"fp_stored_refused_replay" llc))
+  in
+  p "stored-refusal: six validated stored worlds price the refusal once" (!price_calls = 1);
+  p_all "stored-refusal: warm worlds retain the refusal and private scratch" replays ~f:(fun o ->
+      List.equal (List.equal Int.equal) (scratch_dims o) [ [ n ] ]
+      && List.exists o.LL.flip_candidates ~f:(fun fc ->
+          Tn.equal fc.fc_tn a
+          && List.exists fc.fc_alternatives ~f:(fun fa ->
+              LL.equal_reading fa.fa_flip `Inline
+              && (not fa.fa_modeled)
+              && Option.equal String.equal fa.fa_refused
+                   (Option.bind inline_flip ~f:(fun f -> f.LL.fa_refused)))));
   let ranked =
     Autotune.rank_flip_candidates ~ordering:`Cost
       ~enablement:(Set.empty (module Tn))
