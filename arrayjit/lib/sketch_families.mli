@@ -186,6 +186,11 @@ val detect_matmul : Ir.Low_level.t -> matmul_site option
 (** Recognize an all-serial matmul accumulation; [None] when its access relations cannot supply
     distinct row, column and contraction roles. *)
 
+val detect_matmul_canonical :
+  Ir.Low_level.optimized -> (matmul_site * Ir.Schedule.schedule * Ir.Low_level.optimized) option
+(** The site with its enabling-interchange prefix and the code it was detected on (gh-ocannl-1183);
+    see {!Autotune.detect_matmul_canonical}. *)
+
 type conv_axis = {
   cx_o : Ir.Indexing.symbol;  (** Output spatial iterator. *)
   cx_no : int;

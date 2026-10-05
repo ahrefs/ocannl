@@ -321,19 +321,21 @@ let unit_axis (idcs : Idx.axis_index array) s : int option =
    Inputs: the perfectly nested serial accumulation statement's loops in nest order (with extents),
    the accumulator's index map [di], and the two operand reads. Roles:
 
-   - The contraction nest is the maximal innermost suffix of loops absent from [di] (lowering orders
-   the reduction loops after the output loops, so a multi-axis contraction is exactly such a
-   suffix): [k] is its innermost loop, the rest are [m_ko] (gh-ocannl-683). - Every other loop must
-   own a distinct axis of [di] (unit coefficient, sole occurrence). - [j] owns [di]'s minor axis and
-   must be the innermost of the write loops (how lowering orders them — the sketch pipelines'
-   hoisting normalization only handles batch loops above [j]). - Per operand order, [a] must own
-   [k], must not read [j]; [b] must own [j] and [k]; [i] is the {e deepest} write loop owned by [a]
-   and absent from [b] — the 2-D tile row; a role symbol owns its component alone (a convolution
-   window [ox + kx] is not a tile axis). The exclusions are what keep variance-style self-products
-   [d[b,s] += x[b,s,k] * x[b,s,k]] — whose reads mention every loop — from masquerading as matmuls:
-   they seeded (and always failed candidate compile) before. - Everything else is batch: [m_bo]
-   outside [i], [m_bi] between [i] and [j]; batch symbols and outer contraction symbols may appear
-   in the operands freely (their occurrences form the tile block base).
+   - The contraction nest is the maximal innermost suffix of loops absent from [di] (a forward
+   product lowers its reduction loops after the output loops, so a multi-axis contraction is exactly
+   such a suffix; backprop's contractions do not, and reach this matcher through the enabling
+   interchange of [detect_matmul_canonical], gh-ocannl-1183): [k] is its innermost loop, the rest
+   are [m_ko] (gh-ocannl-683). - Every other loop must own a distinct axis of [di] (unit
+   coefficient, sole occurrence). - [j] owns [di]'s minor axis and must be the innermost of the
+   write loops (how lowering orders them — the sketch pipelines' hoisting normalization only handles
+   batch loops above [j]). - Per operand order, [a] must own [k], must not read [j]; [b] must own
+   [j] and [k]; [i] is the {e deepest} write loop owned by [a] and absent from [b] — the 2-D tile
+   row; a role symbol owns its component alone (a convolution window [ox + kx] is not a tile axis).
+   The exclusions are what keep variance-style self-products [d[b,s] += x[b,s,k] * x[b,s,k]] — whose
+   reads mention every loop — from masquerading as matmuls: they seeded (and always failed candidate
+   compile) before. - Everything else is batch: [m_bo] outside [i], [m_bi] between [i] and [j];
+   batch symbols and outer contraction symbols may appear in the operands freely (their occurrences
+   form the tile block base).
 
    Detection remains permissive about everything else — a mis-detected site fails its candidate
    compile (op preconditions, [validate_parallel], hardware limits) and is skipped. *)
@@ -1007,6 +1009,103 @@ let detect_conv (llc : LL.t) : conv_site option =
            "Autotune.detect_conv crosscheck: the relation-based and procedural matchers diverge — \
             detection must be behavior-preserving");
   site
+
+(** {2 The enabling interchange (gh-ocannl-1183)}
+
+    [classify_matmul] reads the contraction nest off the innermost end of the loop nest, which is
+    how the forward pass lowers a product. Backprop does not: a weight gradient lowers as
+    [for b, s, o, i: dW[o,i] += dy[b,s,o] * x[b,s,i]] (the contraction loops outermost) and a data
+    gradient as [for b, s, o, i: dx[b,s,i] += dy[b,s,o] * w[o,i]] (the contraction loop between
+    write loops), so not one backward contraction of a training step was ever a matmul site, and no
+    tiled, register-tiled or tensorized sketch was ever seeded for the kernels a large batch is
+    dominated by. The answer is the split-reduce precedent's (gh-ocannl-537): an adjacent-[Swap]
+    chain that sinks the contraction loops below the write loops, each [Swap] confirmed [Op_legal]
+    on the code it is applied to, after which the statement is re-detected on the interchanged code.
+    The chain is the prefix of every schedule built from such a site, so replaying it from the
+    original code reproduces the code the site was detected on — and since [Swap] mints no symbol,
+    the site's symbols name the same loops in both.
+
+    Interchanging only reorders whole cells' sequences: for any one accumulator cell the contraction
+    loops still run in their original relative order, so the interchanged code computes the same
+    values bitwise. Sites the plain matcher finds, and segments the conv family claims, are left
+    exactly as before (no prefix, the same seeds); the interchange only adds sites where neither
+    family had one. *)
+
+(* The adjacent-interchange chain taking a statement's loop nest [loops] (outermost first) to its
+   write loops followed by its contraction loops, each group in its original relative order: the
+   first contraction loop directly enclosing a write loop is swapped below it until none is. *)
+let contraction_sink_swaps ~(is_write : Idx.symbol -> bool) (loops : Idx.symbol list) :
+    (Idx.symbol * Idx.symbol) list =
+  let rec step order swaps =
+    let rec find = function
+      | x :: (y :: _ as rest) -> if (not (is_write x)) && is_write y then Some (x, y) else find rest
+      | _ -> None
+    in
+    match find order with
+    | None -> List.rev swaps
+    | Some (x, y) ->
+        let order =
+          List.concat_map order ~f:(fun s ->
+              if Idx.equal_symbol s x then [ y ] else if Idx.equal_symbol s y then [ x ] else [ s ])
+        in
+        step order ((x, y) :: swaps)
+  in
+  step loops []
+
+(* The interchange enabling the first statement of [opt] that is an accumulation of a product of two
+   reads but whose contraction loops are not its innermost suffix: the chain, and the code it
+   produces, once every [Swap] is [Op_legal] and the interchanged code is a matmul site. *)
+let matmul_interchange (opt : LL.optimized) : (Sched.schedule * LL.optimized * matmul_site) option =
+  let candidate stmt =
+    match serial_nest_of stmt with
+    | (_ :: _ :: _ :: _ as loops), LL.Set { tn = d; idcs = di; llsc; _ } -> (
+        let gets = collect_gets llsc in
+        let is_d_read (tn, idcs) = phys_equal tn d && Array.equal Idx.equal_axis_index idcs di in
+        match List.partition_tf gets ~f:is_d_read with
+        | _ :: _, [ _; _ ] ->
+            let is_write s = Array.exists di ~f:(Idx.axis_index_mentions_symbol s) in
+            let swaps = contraction_sink_swaps ~is_write (List.map loops ~f:fst) in
+            if List.is_empty swaps then None
+            else Some (List.map swaps ~f:(fun (outer, inner) -> Sched.Swap { outer; inner }))
+        | _ -> None)
+    | _ -> None
+  in
+  let legal ops =
+    let verdicts = Sched.schedule_legality opt ops in
+    List.length verdicts = List.length ops
+    && List.for_all verdicts ~f:(fun (_, v) -> Sched.equal_op_verdict v Sched.Op_legal)
+  in
+  let hermetic (o : LL.optimized) =
+    {
+      o with
+      LL.traced_store = Hashtbl.copy o.LL.traced_store;
+      LL.optimize_ctx = LL.copy_optimize_ctx o.LL.optimize_ctx;
+    }
+  in
+  List.find_map
+    (strip_stmts (LL.flat_lines [ opt.LL.llc ]))
+    ~f:(fun stmt ->
+      match candidate stmt with
+      | Some ops when legal ops -> (
+          match Sched.apply ops (hermetic opt) with
+          | swapped ->
+              Option.map (detect_matmul swapped.LL.llc) ~f:(fun site -> (ops, swapped, site))
+          | exception Invalid_argument _ -> None)
+      | _ -> None)
+
+(* The matmul site of [opt] as every seeding and schedule-construction entry point sees it: the
+   site, the enabling-interchange prefix its schedules carry, and the code it was detected on (the
+   interchanged code when the prefix is nonempty). A conv site takes precedence over an interchanged
+   one, so the conv family keeps every segment it claimed before. *)
+let detect_matmul_canonical (opt : LL.optimized) :
+    (matmul_site * Sched.schedule * LL.optimized) option =
+  match detect_matmul opt.LL.llc with
+  | Some site -> Some (site, [], opt)
+  | None ->
+      if Option.is_some (detect_conv opt.LL.llc) then None
+      else
+        Option.map (matmul_interchange opt) ~f:(fun (prefix, swapped, site) ->
+            (site, prefix, swapped))
 
 (* The statically-decidable precondition of {!zero_geometry}, shared with the family tree's
    construction-time verdicts (gh-ocannl-577): a zeroed site whose output lacks a row axis before
@@ -2238,9 +2337,11 @@ let sketch_schedule_unchecked ~accum_prec ~p (opt : LL.optimized) : Sched.schedu
              else cpu_conv_sketch_schedule ~opt site p),
             site.c_d )
     else
-      match detect_matmul opt.LL.llc with
+      match detect_matmul_canonical opt with
       | None -> invalid_arg "Autotune sketch: no matmul micro-kernel detected"
-      | Some site ->
+      | Some (site, prefix, opt) ->
+          (* [opt] is now the code the site was detected on; [prefix] (the enabling interchange,
+             empty for a site the plain matcher finds) takes the caller's code there. *)
           let sched =
             if p.sk_mma then
               if p.sk_gpu then gpu_mma_sketch_schedule ~opt site p
@@ -2249,7 +2350,7 @@ let sketch_schedule_unchecked ~accum_prec ~p (opt : LL.optimized) : Sched.schedu
             else if p.sk_gpu then gpu_sketch_schedule ~accum_prec ~opt site p
             else cpu_sketch_schedule ~accum_prec site p
           in
-          (sched, site.m_d)
+          (prefix @ sched, site.m_d)
   in
   if p.sk_epilogue then
     (* [shared] is the fragment-site knob: only the GPU MMA sketches store through the contracted
@@ -3691,8 +3792,8 @@ let sketch_seed_params ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limit
      candidate compile and are skipped. For the matmul family the fusion choice is the tree's root
      level (gh-ocannl-613), so its leaves already carry the twins, each flavor under its own
      preconditions; the conv family is not tree-factored yet and flag-flips its seeds. *)
-  match detect_matmul opt.LL.llc with
-  | Some site -> matmul_seed_params ~is_gpu ~is_cpu ~limits ~opt site
+  match detect_matmul_canonical opt with
+  | Some (site, _, opt) -> matmul_seed_params ~is_gpu ~is_cpu ~limits ~opt site
   | None -> (
       match conv_seed_params ~is_gpu ~is_cpu ~limits opt with
       | None -> []
@@ -3705,7 +3806,8 @@ let sketch_seed_params ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limit
    the same way as a follow-up. *)
 let matmul_sketch_tree ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits)
     (opt : LL.optimized) : family_tree option =
-  Option.map (detect_matmul opt.LL.llc) ~f:(matmul_family_tree ~is_gpu ~is_cpu ~limits ~opt)
+  Option.map (detect_matmul_canonical opt) ~f:(fun (site, _, opt) ->
+      matmul_family_tree ~is_gpu ~is_cpu ~limits ~opt site)
 
 (* gh-ocannl-514 phase 5: lift every tile-lattice exclusion in the family tree, preserving the
    laziness of everything else — a lifted branch remains subject to legality (box refutations), and
@@ -3745,9 +3847,9 @@ let lift_geometry_lattice (tree : family_tree) : family_tree =
    needs the caller's backend kind alongside the path. *)
 let sketch_path_traffic_floor ~(limits : Ir.Backend_intf.hardware_limits) (opt : LL.optimized) :
     Family_decision.path -> int =
-  match detect_matmul opt.LL.llc with
+  match detect_matmul_canonical opt with
   | None -> fun _path -> 0
-  | Some site -> (
+  | Some (site, _, _) -> (
       let a_prec = Lazy.force site.m_a.Ir.Tnode.storage_prec in
       let b_prec = Lazy.force site.m_b.Ir.Tnode.storage_prec in
       let pa = Ir.Ops.prec_in_bytes a_prec and pb = Ir.Ops.prec_in_bytes b_prec in

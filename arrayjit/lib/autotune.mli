@@ -196,6 +196,17 @@ val detect_matmul : Ir.Low_level.t -> matmul_site option
     [classify_matmul]'s operand rules and everything else batch. Reads off the extracted access
     relations like {!detect_conv}, with the same [legality_crosscheck] soak. Exposed for tests. *)
 
+val detect_matmul_canonical :
+  Ir.Low_level.optimized -> (matmul_site * Ir.Schedule.schedule * Ir.Low_level.optimized) option
+(** The matmul site every seeding and schedule-construction entry point uses (gh-ocannl-1183): the
+    site, the enabling-interchange prefix every schedule built from it carries, and the code it was
+    detected on. The prefix is empty, and the code the argument, for a site {!detect_matmul} finds;
+    otherwise it is an adjacent-[Swap] chain, each [Op_legal], sinking the contraction loops of the
+    first accumulation-of-a-product statement below its write loops (the backward contractions
+    backprop lowers with the contraction loops outermost or interleaved), and the code is the
+    interchanged one. [None] when the plain matcher fails and {!detect_conv} succeeds: the conv
+    family keeps its segments. Exposed for tests. *)
+
 type conv_axis = {
   cx_o : Ir.Indexing.symbol;  (** Output spatial symbol (a plain iterator of the output). *)
   cx_no : int;
