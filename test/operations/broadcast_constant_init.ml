@@ -103,36 +103,38 @@ let padded limit value =
   values ctx y expected "padded scalar values remain correct on a second run";
   Context.release ctx
 
-(* gh-ocannl-1218: the padding-aware fill writes exactly the interior, row by row. Asymmetric
-   margins on both axes discriminate the row offsets; the margins keep the neutral value the buffer
-   was created with. *)
-let padded_fill_offsets () =
-  let pads = Ir.Ops.[| { left = 1; right = 0 }; { left = 2; right = 1 } |] in
-  let rows = 4 and cols = 6 in
+(* gh-ocannl-1218: the padding-aware fill writes exactly the interior. Uneven margins on all three
+   axes discriminate every level of the offset arithmetic (in 2-D a dropped scaling of the outer
+   offset goes unnoticed); the second case leaves the innermost axis unpadded, so its runs fold it
+   in. The margins keep the neutral value the buffer was created with. *)
+let padded_fill_offsets label dims pads =
   let nd =
-    Ir.Ndarray.create_array ~debug:"fill_offsets" Ir.Ops.single ~dims:[| rows; cols |]
-      ~padding:(Some (pads, -1.))
+    Ir.Ndarray.create_array ~debug:"fill_offsets" Ir.Ops.single ~dims ~padding:(Some (pads, -1.))
   in
   Ir.Ndarray.fill_from_float ~padding:pads nd 3.;
-  p "padded fill writes the interior and keeps both axes' margins"
+  let numel = Array.fold dims ~init:1 ~f:( * ) in
+  let inside k =
+    (* Decompose the row-major linear index [k], innermost axis first. *)
+    let _, inside =
+      Array.fold_right (Array.zip_exn dims pads) ~init:(k, true)
+        ~f:(fun (d, Ir.Ops.{ left; right }) (rest, inside) ->
+          let i = rest % d in
+          (rest / d, inside && i >= left && i < d - right))
+    in
+    inside
+  in
+  p label
     (Array.equal Float.equal
        (Ir.Ndarray.retrieve_flat_values nd)
-       (Array.init (rows * cols) ~f:(fun k ->
-            let r = k / cols and c = k % cols in
-            if r >= 1 && c >= 2 && c < cols - 1 then 3. else -1.)))
+       (Array.init numel ~f:(fun k -> if inside k then 3. else -1.)))
 
 (* gh-ocannl-1218: forcing a padded broadcast scalar's host initializer allocates nothing the size
    of its buffer on the OCaml heap; a full-size float temporary alone is [numel] words. Measured
    while lowering, after shape inference committed the padding and before linking forces it. *)
-let allocation_witness () =
-  let numel = 1 lsl 16 in
-  let x = NTDSL.ndarray [| 3. |] ~output_dims:[ numel ] () in
-  Train.set_materialized x.value;
-  let kernel = NTDSL.ndarray [| 1.; 2.; 3. |] ~output_dims:[ 3 ] () in
-  let%op y = x +* "i=+k; k => i" kernel in
+let allocation_witness ~name ~numel (x : Tensor.t) y ~check_layout =
   let measured = ref None in
   let ctx, _routine =
-    compile "alloc_witness" y ~inspect:(fun _ ->
+    compile name y ~inspect:(fun _ ->
         if Option.is_none !measured then
           let init = Option.value_exn (Ir.Host_inits.find x.value) in
           let forced_before = Lazy.is_val init in
@@ -141,14 +143,41 @@ let allocation_witness () =
           let words =
             (Stdlib.Gc.allocated_bytes () -. before) /. Float.of_int (Stdlib.Sys.word_size / 8)
           in
-          measured := Some (forced_before, Option.is_some (Ir.Tnode.get_padding x.value), words))
+          measured := Some (forced_before, Ir.Tnode.get_padding x.value, words))
   in
-  let forced_before, padded, words = Option.value_exn !measured in
-  Stdio.eprintf "allocation witness: %.0f words for %d cells (not part of the golden)\n" words numel;
+  let forced_before, padding, words = Option.value_exn !measured in
+  Stdio.eprintf "allocation witness %s: %.0f words for %d cells (not part of the golden)\n" name
+    words numel;
   p "witness forces the host initializer itself" (not forced_before);
-  p "witness buffer carries committed padding" padded;
+  p "witness buffer carries committed padding" (check_layout padding);
   p "padded scalar host fill allocates under numel/8 heap words" Float.(words < of_int numel /. 8.);
   Context.release ctx
+
+(* A rank-1 halo: the run is the whole interior. *)
+let allocation_witness_rank1 () =
+  let numel = 1 lsl 16 in
+  let x = NTDSL.ndarray [| 3. |] ~output_dims:[ numel ] () in
+  Train.set_materialized x.value;
+  let kernel = NTDSL.ndarray [| 1.; 2.; 3. |] ~output_dims:[ 3 ] () in
+  let%op y = x +* "i=+k; k => i" kernel in
+  allocation_witness ~name:"alloc_witness" ~numel x y ~check_layout:Option.is_some
+
+(* A 2-D halo over an innermost unpadded channel axis of extent 1: a fill that issued one run per
+   innermost row would take [h * w] runs, as many as there are cells. *)
+let allocation_witness_rank3 () =
+  let h = 256 and w = 256 in
+  let x = NTDSL.ndarray [| 3. |] ~output_dims:[ h; w; 1 ] () in
+  Train.set_materialized x.value;
+  let kernel = NTDSL.ndarray (Array.init 9 ~f:Float.of_int) ~output_dims:[ 3; 3 ] () in
+  let%op y = x +* "oh=+kh, ow=+kw, c; kh, kw => oh, ow, c" kernel in
+  allocation_witness ~name:"alloc_witness_hwc" ~numel:(h * w) x y ~check_layout:(function
+    | Some (pads, _) ->
+        let dims = Lazy.force x.value.Ir.Tnode.dims in
+        Array.length dims = 3
+        && dims.(2) = 1
+        && Ir.Ops.equal_axis_padding pads.(2) { left = 0; right = 0 }
+        && pads.(0).left > 0 && pads.(1).left > 0
+    | None -> false)
 
 let parameter_reinit limit =
   let p = TDSL.param ~value:3. ("reinit_scalar_" ^ Int.to_string limit) ~output_dims:[ 3 ] () in
@@ -250,5 +279,10 @@ let () =
       dependent_parameter limit;
       independent_parameters limit;
       List.iter [ 0.; 3. ] ~f:(padded limit));
-  padded_fill_offsets ();
-  allocation_witness ()
+  Ir.Ops.(
+    padded_fill_offsets "padded fill keeps uneven margins on all three axes" [| 4; 5; 6 |]
+      [| { left = 1; right = 0 }; { left = 0; right = 2 }; { left = 2; right = 1 } |];
+    padded_fill_offsets "padded fill folds an unpadded innermost axis into its runs" [| 4; 5; 3 |]
+      [| { left = 1; right = 0 }; { left = 2; right = 1 }; { left = 0; right = 0 } |]);
+  allocation_witness_rank1 ();
+  allocation_witness_rank3 ()
