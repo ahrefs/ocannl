@@ -164,6 +164,82 @@ def torch_searched(torch, compiled):
     return False if replayed else None
 
 
+# --- Tensor precision provenance (gh-ocannl-1208) ------------------------------------------
+#
+# The matmul policy a torch row records (`regime_settings`) says how torch may compute a float32
+# matmul, not what the tensors ARE: a weight loaded or cast to bf16, or a forward run under an
+# autocast context, keeps every matmul-policy getter unchanged. So the row also carries what the
+# run's tensors were and whether autocast was on where the step entered the model, each read back
+# from the run itself (the tensors' dtypes, torch's autocast getters inside the step) rather than
+# from a flag. A parity comparison against the CPU reference is then auditable from its rows, which
+# it was not before: establishing that the reference computed in f32 took reading the fixture's
+# dtype headers and the runner's history.
+
+# torch dtype name -> the precision label a report row carries (orchestrate.PRECISION_ORDER).
+PRECISION_LABELS = {"float32": "f32", "bfloat16": "bf16", "float16": "f16", "float64": "f64"}
+
+
+def dtype_name(dtype):
+    """`torch.float32` -> "float32" (torch spells its dtypes with the module prefix)."""
+    name = str(dtype)
+    return name[len("torch.") :] if name.startswith("torch.") else name
+
+
+def is_float_dtype_name(name):
+    """Whether a dtype name is a floating format (token ids and masks are not precision-bearing)."""
+    return name.startswith(("float", "bfloat"))
+
+
+def torch_autocast_state(torch, device_type):
+    """Whether autocast is on for `device_type` where this is CALLED, and to which dtype.
+
+    `{"enabled": bool, "dtype": name or None}`, or None when this torch cannot say: the per-device
+    getters arrived in torch 2.4, and a device autocast does not know raises. None is "cannot
+    tell", never "off" -- a wrong False is exactly the claim the field exists to rule out.
+    """
+    try:
+        enabled = bool(torch.is_autocast_enabled(device_type))
+        dtype = torch.get_autocast_dtype(device_type) if enabled else None
+    except (AttributeError, TypeError, RuntimeError):
+        return None
+    return {"enabled": enabled, "dtype": dtype_name(dtype) if enabled else None}
+
+
+def effective_precision(param_dtypes, input_dtypes):
+    """The precision label the floating tensors of a run share, from their dtype names.
+
+    `f32` when parameters and floating inputs are all float32; `mixed(<names>)` when they
+    disagree; the bare dtype name for a format with no label; None with no floating tensor at all.
+    Autocast is reported beside it, not folded in: it changes what the matmuls compute in, not
+    what the tensors hold.
+    """
+    floating = sorted(
+        {name for name in [*param_dtypes, *input_dtypes.values()] if is_float_dtype_name(name)}
+    )
+    if not floating:
+        return None
+    if len(floating) == 1:
+        return PRECISION_LABELS.get(floating[0], floating[0])
+    return f"mixed({','.join(floating)})"
+
+
+def tensor_precision_fields(params, inputs, autocast):
+    """A result line's precision provenance, from the run's own tensors.
+
+    `params` are every model weight (trainable or not), read when the steps are done; `inputs` maps
+    a role to the batch tensor the step handed the model; `autocast` is `torch_autocast_state` as
+    observed inside the step.
+    """
+    param_dtypes = sorted({dtype_name(p.dtype) for p in params})
+    input_dtypes = {role: dtype_name(t.dtype) for role, t in inputs.items()}
+    return {
+        "param_dtypes": param_dtypes,
+        "input_dtypes": input_dtypes,
+        "autocast": autocast,
+        "effective_precision": effective_precision(param_dtypes, input_dtypes),
+    }
+
+
 # --- Peak device memory (gh-ocannl-1006) --------------------------------------------------
 #
 # The report's memory column is what a footprint-for-time trade (gh-ocannl-616) is read against,

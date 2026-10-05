@@ -116,6 +116,13 @@ files.
   doubles as a gradient oracle. tinygrad: realize the loss BEFORE `opt.step()` or it recomputes
   from updated weights. The autotune schedule cache persists across processes; compiler changes
   invalidate it by digest.
+- A torch row's matmul policy (`regime_settings`, torch's tf32 getters) says nothing about what its
+  tensors ARE: a weight cast on load or an autocast context leaves every policy getter unchanged.
+  The runner therefore reads `param_dtypes`/`input_dtypes` from the tensors and `autocast` from
+  torch's per-device getters INSIDE the step (an autocast entered around the runner is invisible
+  from `main`), and `precision_check` fails a row whose label they contradict (gh-ocannl-1208).
+  Note that `torch.get_autocast_dtype` answers a default dtype even when autocast is off, so the
+  dtype only means something beside `enabled`.
 - **Every Metal number recorded before gh-ocannl-693 carries a ~4x accumulator tax and must not be
   compared against one taken after.** Until then a serial reduction at f32 accumulated in the output
   node's global memory, and `volatile_serial_accumulation` shadowed each step's read-modify-write with a
