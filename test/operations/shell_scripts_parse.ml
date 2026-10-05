@@ -1161,11 +1161,12 @@ module Shell_lexer = struct
       runs in this shell and the words are what they look like: a bare, unquoted [set] with nothing
       in front of it -- no assignment, redirection (a failed one skips the command), [!], [time] (an
       external command under a POSIX shell), [builtin] or [command] (either may itself be a
-      function) -- that the script does not shadow with a function of that name ([~shadowed]), and
-      whose option words, up to the first positional, are literal [-]/[+] letter bundles or
-      [-o]/[+o] with a literal name. Every other spelling ([shopt -u -o errexit], a Bash-only
-      builtin a POSIX shell lacks; [builtin set +e]; [set +"$e"]) may turn it off at run time but is
-      not trusted to -- loud. Turning it on is reported for every spelling, wherever it may run. *)
+      function) -- that the script does not shadow with a function of that name or may switch off
+      with [enable] ([~shadowed]), and whose option words, up to the first positional, are literal
+      [-]/[+] bundles of letters bash knows or [-o]/[+o] with a name it knows (bash rejects the
+      whole command otherwise). Every other spelling ([shopt -u -o errexit], a Bash-only builtin a
+      POSIX shell lacks; [builtin set +e]; [set +"$e"]) may turn it off at run time but is not
+      trusted to -- loud. Turning it on is reported for every spelling, wherever it may run. *)
   let command_errexit ?(shadowed = []) command =
     let rec strip_redirections = function
       | [] -> []
@@ -1205,16 +1206,45 @@ module Shell_lexer = struct
       | words -> unwrap words
     in
     let unwrapped = unwrap words in
-    let plain word =
-      (not (String.is_empty word))
-      && String.for_all word ~f:(fun c -> Char.is_alphanum c || Char.equal c '_')
+    (* Bash rejects a whole [set] whose option letters or names it does not know. *)
+    let letters = "abefhkmnptuvxBCEHPT" in
+    let names =
+      [
+        "allexport";
+        "braceexpand";
+        "emacs";
+        "errexit";
+        "errtrace";
+        "functrace";
+        "hashall";
+        "histexpand";
+        "history";
+        "ignoreeof";
+        "keyword";
+        "monitor";
+        "noclobber";
+        "noexec";
+        "noglob";
+        "nolog";
+        "notify";
+        "nounset";
+        "onecmd";
+        "physical";
+        "pipefail";
+        "posix";
+        "privileged";
+        "verbose";
+        "vi";
+        "xtrace";
+      ]
     in
     let rec plain_options = function
       | [] | ("--" | "-") :: _ -> true
-      | ("-o" | "+o") :: name :: rest -> plain name && plain_options rest
+      | ("-o" | "+o") :: name :: rest ->
+          List.mem names name ~equal:String.equal && plain_options rest
       | option :: rest when String.length option > 1 && Char.(option.[0] = '-' || option.[0] = '+')
         ->
-          plain (String.drop_prefix option 1) && plain_options rest
+          String.for_all (String.drop_prefix option 1) ~f:(String.mem letters) && plain_options rest
       | _ -> (* the first positional ends the options *) true
     in
     let certain =
@@ -2066,6 +2096,14 @@ module Shell_context = struct
                 in
                 List.fold branches ~init:sites ~f:(enabling_sites ~functions)))
 
+  (** The first word of every simple command in [branch], anywhere. *)
+  let rec command_words (branch : branch) =
+    List.concat_map branch.statements ~f:(fun statement ->
+        List.concat_map statement.operands ~f:(fun operand ->
+            match operand.compound with
+            | None -> Option.to_list (List.hd (L.shell_words operand.text))
+            | Some compound -> List.concat_map compound.branches ~f:command_words))
+
   (** The names of the functions [branch] defines anywhere. *)
   let rec defined_functions (branch : branch) =
     List.concat_map branch.statements ~f:(fun statement ->
@@ -2094,8 +2132,11 @@ module Shell_context = struct
       at all. *)
   let judge top =
     let sites = enabling_sites ~functions:[] [] top in
+    (* A [set] that may not be the builtin: shadowed by a function, or switched off by [enable -n]
+       (any [enable] at all is distrusted). *)
     let shadowed =
-      List.filter (defined_functions top) ~f:(List.mem [ "set"; "shopt" ] ~equal:String.equal)
+      List.filter (defined_functions top) ~f:(String.equal "set")
+      @ if List.mem (command_words top) "enable" ~equal:String.equal then [ "set" ] else []
     in
     let errexit_of text = L.command_errexit ~shadowed text in
     (* A loop or function body holding any [set -e] may be left -- by [break], [continue] or
@@ -2371,8 +2412,18 @@ module Errexit_negation = struct
         | C.And | C.Or -> index + 1
         | C.Pipe -> start)
     in
+    (* [time] ([-p], [--]) may stand in front of the [!] of the pipeline it times. *)
+    let untimed text =
+      let strip prefix text = Option.map (String.chop_prefix text ~prefix) ~f:String.lstrip in
+      match strip "time " text with
+      | None -> text
+      | Some rest ->
+          let rest = Option.value (strip "-p " rest) ~default:rest in
+          Option.value (strip "-- " rest) ~default:rest
+    in
     match List.drop statement.operands start with
     | { text; _ } :: _ ->
+        let text = untimed text in
         String.is_prefix text ~prefix:"!"
         && (String.length text = 1
            || Char.is_whitespace text.[1]
@@ -2597,6 +2648,13 @@ module Errexit_negation = struct
         [ 4 ] );
       ("negation after an assignment and a ! word", "set -e\nX=y ! set +e || :\n! probe\n", [ 3 ]);
       ("negation after set + an expansion", "set -e\nset +\"$e\" || :\n! probe\n", [ 3 ]);
+      ("timed negation", "set -e\ntime ! probe\n", [ 2 ]);
+      ("portably timed negation", "set -e\ntime -p ! probe\n", [ 2 ]);
+      ("negation after set +e with an unknown option", "set -e\nset +e -Z || :\n! probe\n", [ 3 ]);
+      ( "negation after set +o with an unknown name",
+        "set -e\nset +o errexit +o nonsense || :\n! probe\n",
+        [ 3 ] );
+      ("negation after enable", "set -e\nenable -n set\nset +e || :\n! probe\n", [ 4 ]);
       ("negation as the last operand of an AND list", "set -e\nprepare && ! probe\n", [ 2 ]);
       ("negation as the last operand of an OR list", "set -e\nprepare || ! probe\n", [ 2 ]);
       ("negation after set -e - +e", "set -e - +e\n! probe\n", [ 2 ]);
@@ -3080,6 +3138,7 @@ module Errexit_execution_controls = struct
         "set -e\nf() { set -e; }\nset +e\n@@\necho SURVIVED\n";
       both Silent "after eval set -e" "eval 'set -e'\n@@\necho SURVIVED\n";
       both Inert "after set -e - +e" "set -e - +e\n@@\necho SURVIVED\n";
+      both Inert "after set +e with an unknown option" "set -e\nset +e -Z || :\n@@\necho SURVIVED\n";
       both Inert "after set -e with a positional before +e"
         "set -e positional +e\n@@\necho SURVIVED\n";
       both Inert "after set +e behind a failed redirection"
@@ -3144,6 +3203,10 @@ module Errexit_execution_controls = struct
         "set -e\n@@\nrc=$?\n[ \"$rc\" -eq 0 ]\necho SURVIVED\n";
       both Live "as an if condition" "set -e\nif @@; then :; fi\necho SURVIVED\n";
       both Live "before an || tail" "set -e\n@@ || echo caught\necho SURVIVED\n";
+      ( "as a timed pipeline",
+        "set -e\n@@\necho SURVIVED\n",
+        [ (Negation, "time ! true", Inert) ],
+        None );
       ( "as the last operand of an && list",
         "set -e\n[ -n x ] && @@\necho SURVIVED\n",
         [ (Negation, default Negation, Inert) ],
