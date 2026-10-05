@@ -226,6 +226,12 @@
   (alias runtest-cc_dlopen_cause)
   (alias runtest-cc_dlopen_cause_dll)
   (alias runtest-cc_dlopen_cause_debug)
+  (alias runtest-cc_temp_ownership-success)
+  (alias runtest-cc_temp_ownership-success_debug)
+  (alias runtest-cc_temp_ownership-success_dll)
+  (alias runtest-cc_temp_ownership-compiler)
+  (alias runtest-cc_temp_ownership-compiler_debug)
+  (alias runtest-cc_temp_ownership-compiler_dll)
   (alias runtest-micrograd_demo_logging)
   (alias runtest-n3_fwd_with_prec-unoptimized)
   (alias runtest-top_down_prec-unoptimized)
@@ -937,6 +943,174 @@
   (diff
    cc_post_compile_cause-codesign_debug.expected
    cc_post_compile_cause-codesign_debug.actual)))
+
+; gh-ocannl-1197: a successful cc compile and a compiler-rejected one leave no temporary source or
+; library behind unless debug files (both) or library output (the library) are requested. The
+; `compiler` rules reject the generated code by renaming `float` to an undeclared type.
+
+(executable
+ (name cc_temp_ownership)
+ (modules cc_temp_ownership)
+ (libraries base ocannl stdio unix arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(rule
+ ; ocannl-backend: cc -- the temporaries are the cc compile's; the command line pins the backend.
+ (target cc_temp_ownership-success.actual)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:cc_temp_ownership.exe}
+    success
+    --ocannl_backend=cc
+    --ocannl_cc_backend_probe_cache=false
+    --ocannl_output_debug_files_in_build_directory=false
+    --ocannl_output_dlls_in_build_directory=false))))
+
+(rule
+ (alias runtest-cc_temp_ownership-success)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate))
+ (action
+  (diff cc_temp_ownership-success.expected cc_temp_ownership-success.actual)))
+
+(rule
+ ; ocannl-backend: cc -- the temporaries are the cc compile's; the command line pins the backend.
+ (target cc_temp_ownership-success_debug.actual)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:cc_temp_ownership.exe}
+    success
+    --ocannl_backend=cc
+    --ocannl_cc_backend_probe_cache=false
+    --ocannl_output_debug_files_in_build_directory=true
+    --ocannl_output_dlls_in_build_directory=false))))
+
+(rule
+ (alias runtest-cc_temp_ownership-success_debug)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate))
+ (action
+  (diff
+   cc_temp_ownership-success_debug.expected
+   cc_temp_ownership-success_debug.actual)))
+
+(rule
+ ; ocannl-backend: cc -- the temporaries are the cc compile's; the command line pins the backend.
+ (target cc_temp_ownership-success_dll.actual)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:cc_temp_ownership.exe}
+    success
+    --ocannl_backend=cc
+    --ocannl_cc_backend_probe_cache=false
+    --ocannl_output_debug_files_in_build_directory=false
+    --ocannl_output_dlls_in_build_directory=true))))
+
+(rule
+ (alias runtest-cc_temp_ownership-success_dll)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate))
+ (action
+  (diff
+   cc_temp_ownership-success_dll.expected
+   cc_temp_ownership-success_dll.actual)))
+
+(rule
+ ; ocannl-backend: cc -- the temporaries are the cc compile's; the command line pins the backend.
+ (target cc_temp_ownership-compiler.actual)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:cc_temp_ownership.exe}
+    compiler
+    --ocannl_backend=cc
+    --ocannl_cc_backend_probe_cache=false
+    "--ocannl_cc_backend_compiler_command=%{ocaml-config:c_compiler} -Dfloat=ocannl_gh1197_undeclared_type"
+    --ocannl_output_debug_files_in_build_directory=false
+    --ocannl_output_dlls_in_build_directory=false))))
+
+(rule
+ (alias runtest-cc_temp_ownership-compiler)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate))
+ (action
+  (diff
+   cc_temp_ownership-compiler.expected
+   cc_temp_ownership-compiler.actual)))
+
+(rule
+ ; ocannl-backend: cc -- the temporaries are the cc compile's; the command line pins the backend.
+ (target cc_temp_ownership-compiler_debug.actual)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:cc_temp_ownership.exe}
+    compiler
+    --ocannl_backend=cc
+    --ocannl_cc_backend_probe_cache=false
+    "--ocannl_cc_backend_compiler_command=%{ocaml-config:c_compiler} -Dfloat=ocannl_gh1197_undeclared_type"
+    --ocannl_output_debug_files_in_build_directory=true
+    --ocannl_output_dlls_in_build_directory=false))))
+
+(rule
+ (alias runtest-cc_temp_ownership-compiler_debug)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate))
+ (action
+  (diff
+   cc_temp_ownership-compiler_debug.expected
+   cc_temp_ownership-compiler_debug.actual)))
+
+(rule
+ ; ocannl-backend: cc -- the temporaries are the cc compile's; the command line pins the backend.
+ (target cc_temp_ownership-compiler_dll.actual)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:cc_temp_ownership.exe}
+    compiler
+    --ocannl_backend=cc
+    --ocannl_cc_backend_probe_cache=false
+    "--ocannl_cc_backend_compiler_command=%{ocaml-config:c_compiler} -Dfloat=ocannl_gh1197_undeclared_type"
+    --ocannl_output_debug_files_in_build_directory=false
+    --ocannl_output_dlls_in_build_directory=true))))
+
+(rule
+ (alias runtest-cc_temp_ownership-compiler_dll)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate))
+ (action
+  (diff
+   cc_temp_ownership-compiler_dll.expected
+   cc_temp_ownership-compiler_dll.actual)))
 
 (test
  (name hip_half_load)

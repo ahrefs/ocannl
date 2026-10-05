@@ -1,0 +1,12 @@
+mode: success
+library artifacts requested: yes
+debug artifacts requested: no
+backend: cc
+the compile succeeded: true
+the routine computes 2x + 1 from its unlinked library: true
+the compiler log is removed: true
+the source is retained exactly when debug files are requested: true
+the library is retained exactly when requested: true
+nothing else is added: true
+no file present before the compile is removed: true
+every unrelated sentinel keeps its content: true

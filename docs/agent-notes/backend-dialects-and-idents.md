@@ -266,11 +266,24 @@ configuration.
 - Two plausible OCANNL-side causes were refuted before the platform was, and re-refuting them costs
   a suite run each. Unloading kernels is not it: with the `Gc.finalise` `Dl.dlclose` in
   `cc_backend.ml`'s `c_compile_and_load` disabled, 5 of 8 runs still trapped. Nor is the trapping
-  kernel's indexing: the cc backend leaves its compiled `.so` in `TMPDIR` under the name the crash
-  report prints, so `objdump -d --disassemble-symbols=_<routine>` on that exact file shows what ran
-  -- here a guarded `p[chunk] += 1.0f` over six cells of a six-cell buffer. Reach for that
-  disassembly rather than for `build_files/`, whose same-named artifacts are overwritten by the next
-  candidate.
+  kernel's indexing: under `--ocannl_output_dlls_in_build_directory=true` the cc backend keeps its
+  compiled `.so` in `TMPDIR` under the name the crash report prints (by default it unlinks the file
+  once loaded, next bullet), so `objdump -d --disassemble-symbols=_<routine>` on that exact file
+  shows what ran -- here a guarded `p[chunk] += 1.0f` over six cells of a six-cell buffer. Reach for
+  that disassembly rather than for `build_files/`, whose same-named artifacts are overwritten by the
+  next candidate.
+- A cc compilation removes its temporary source, log and library on every path, success and
+  compiler rejection included, unless `output_debug_files_in_build_directory` (source and library)
+  or `output_dlls_in_build_directory` (library) asks for them (gh-ocannl-1197,
+  `test/operations/cc_temp_ownership`). The library is unlinked right after `dlopen`: the kernel
+  runs from the mapping, which POSIX keeps alive past the unlink. Windows refuses to delete a
+  mapped DLL, so a failed removal is retried after the finalizer's `dlclose`, never before it; the
+  OpenMP arm never unloads, so a Windows OpenMP kernel's library stays until something outside the
+  process removes it. Unlinking a still-mapped library frees its name, and a loader answers a `dlopen` of a
+  path it has mapped with that mapping without reading the file, which is why every library path
+  carries the process-unique run id: drop it and a later `temp_file` landing on the freed name runs
+  the earlier kernel. Only a FAILED removal is retried, because a freed name may already belong to
+  another process.
 
 - Repeated inner CPU `Grid` loops require at least 16,384 scalar updates per native dispatch
   (gh-ocannl-933, `C_syntax.grid_update_count`). The estimate multiplies only the Grid and its

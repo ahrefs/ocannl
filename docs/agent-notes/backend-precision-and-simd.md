@@ -1544,7 +1544,9 @@ files.
   either way), and an earlier revision of this note concluded from that emptiness that the whole
   route was broken and deleted it. One more caution: the logged command carries `-o <...>.so`, so
   rerunning it with `-S` added but `-o` unchanged writes assembly over the shared library, possibly
-  one a running process still has mapped — repoint `-o` at a fresh `.s`.
+  one a running process still has mapped — repoint `-o` at a fresh `.s`. And the `.c` it names
+  survives the run only under `output_debug_files_in_build_directory`: otherwise the compile removes
+  its temporary source as soon as the compiler exits (gh-ocannl-1197).
 ## Integer FMA boundaries
 - **The mul-add → `Ternop (FMA, …)` rewrite is guarded to floating point, and that guard is
   load-bearing rather than a rounding preference** (gh-ocannl-824). Downstream,
