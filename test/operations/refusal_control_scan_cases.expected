@@ -18,8 +18,12 @@ a passed control claim alone, with no refused run printing the refusal, does not
 a refused run printing a different refusal does not either: true
 the refusal's line alone, with the mapped claim not passed, does not: true
 an observation from the caught branch exercises it with no mapping: true
+a line a more specific sibling format also matches does not exercise the general one: true
+the general refusal's own line still exercises it beside the specific sibling: true
+and the specific sibling owns the line both formats match: true
 a catalogue-only refusal nothing executes stays catalogue-only: true
-a catalogue-only refusal a control executes is reported as both: true
+a catalogue-only refusal a refused child run prints is reported as executed: true
+and so is one its caught branch observes: true
 a manifest source missing from the argument list is named as uncatalogued: true
 an argument-list source outside the manifest is named as extra: true
 a source catalogued twice is a mismatch, not a match: true

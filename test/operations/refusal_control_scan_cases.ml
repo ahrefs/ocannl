@@ -137,10 +137,11 @@ let dynamic reason = Verdict.fail reason
   let refusing_line =
     String.substr_replace_all new_fail.Scan.format ~pattern:"%s" ~with_:"fixture.ml"
   in
-  let standing ?(direct_evidence = [ (key, control ^ ": true") ]) ?(catalogue_only = [])
-      ?(observed = false) ?(refused = [ refusing_line ]) ?(passed_labels = [ control ]) () =
-    Manifest.standing ~direct_evidence ~catalogue_only ~observed ~refused ~passed_labels ~key
-      new_fail
+  let standing ?(diagnostic = new_fail) ?(direct_evidence = [ (key, control ^ ": true") ])
+      ?(catalogue_only = []) ?(observed = false) ?(refused = [ refusing_line ])
+      ?(rivals = [ new_fail.Scan.format ]) ?(passed_labels = [ control ]) () =
+    Manifest.standing ~direct_evidence ~catalogue_only ~observed ~refused ~rivals ~passed_labels
+      ~key diagnostic
   in
   Verdict.p "a passed control claim and the refusal's line from a refused run exercise it"
     (Poly.equal (standing ()) Manifest.Exercised);
@@ -152,13 +153,39 @@ let dynamic reason = Verdict.fail reason
     (Poly.equal (standing ~passed_labels:[] ()) Manifest.Unexercised);
   Verdict.p "an observation from the caught branch exercises it with no mapping"
     (Poly.equal (standing ~direct_evidence:[] ~refused:[] ~observed:true ()) Manifest.Exercised);
+  (* A line belongs to the most specific format that matches it: a general refusal does not live on
+     the output of a sibling whose format fixes more of the same text. *)
+  let general = { new_fail with Scan.format = "keys missing from %s: %s"; identity = "general" }
+  and specific =
+    { new_fail with Scan.format = "keys missing from the registry: %s"; identity = "specific" }
+  in
+  let rivals = [ general.Scan.format; specific.Scan.format ] in
+  Verdict.p "a line a more specific sibling format also matches does not exercise the general one"
+    (Poly.equal
+       (standing ~diagnostic:general ~rivals ~refused:[ "keys missing from the registry: k" ] ())
+       Manifest.Unexercised);
+  Verdict.p "the general refusal's own line still exercises it beside the specific sibling"
+    (Poly.equal
+       (standing ~diagnostic:general ~rivals ~refused:[ "keys missing from reference: k" ] ())
+       Manifest.Exercised);
+  Verdict.p "and the specific sibling owns the line both formats match"
+    (Poly.equal
+       (standing ~diagnostic:specific ~rivals ~refused:[ "keys missing from the registry: k" ] ())
+       Manifest.Exercised);
+  (* A catalogue-only key never has a mapping -- the audit below refuses that -- so whether it ran
+     is read from the lines and the caught branch alone. *)
+  let catalogue_only = [ (key, "unreachable") ] in
   Verdict.p "a catalogue-only refusal nothing executes stays catalogue-only"
     (Poly.equal
-       (standing ~direct_evidence:[] ~catalogue_only:[ (key, "unreachable") ] ())
+       (standing ~direct_evidence:[] ~catalogue_only ~refused:[] ())
        Manifest.Catalogue_only);
-  Verdict.p "a catalogue-only refusal a control executes is reported as both"
+  Verdict.p "a catalogue-only refusal a refused child run prints is reported as executed"
     (Poly.equal
-       (standing ~catalogue_only:[ (key, "unreachable") ] ())
+       (standing ~direct_evidence:[] ~catalogue_only ())
+       Manifest.Executed_yet_catalogue_only);
+  Verdict.p "and so is one its caught branch observes"
+    (Poly.equal
+       (standing ~direct_evidence:[] ~catalogue_only ~refused:[] ~observed:true ())
        Manifest.Executed_yet_catalogue_only);
   let manifest = [ "b.ml"; "a.ml"; "c.ml" ] in
   Verdict.p "a manifest source missing from the argument list is named as uncatalogued"

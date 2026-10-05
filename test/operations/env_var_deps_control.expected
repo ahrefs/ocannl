@@ -195,6 +195,8 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:1aaab6e3cd8f4615e1cd1d0321e309a1] times and only
   [scanner-refusal:dda5b4655f74eda46ec0c60e320d232b] run's generated artifacts
   [scanner-refusal:747372ab4b28cca8978c2b6bd8983005] env_var
+  [scanner-refusal:364d32b22a5cb7a70b569db0d8864170] env_var
+  [scanner-refusal:07e7987f0d61b10a9fea6c6590c73d59] env_var
   [scanner-refusal:bbadfd8513559355fedbc54dc3dc678a] serializes its actions
   [scanner-refusal:eb5d5419b3bd18240469743cbabc58f2] has actions on
   [scanner-refusal:a06dccc27afe2153a7700609691d3c8d] attaches a rule
@@ -205,11 +207,15 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:ba5d90fc4bcec944ebd169329c706968] goldens on the
   [scanner-refusal:c1a398b587b5de3d7d02145dc45274a6] alias <suite>-<name> that
   [scanner-refusal:2b67d02d52c3465bfba40d167802f0a7] env_var
+  [scanner-refusal:0deef0cb94c45615f32ee84ac2e76f8e] declares tracing gates
+  [scanner-refusal:02e183a4105132ec092206c1d35d6247] reads the tracing
   [scanner-refusal:2df546d04b63387a24409b3c4c6a9611] declares the tracing
+  [scanner-refusal:e55f77a62871fb685d23199e95c8f173] the environment variable
   [scanner-refusal:d5f94657407bc4dbf949ba4187e80100] include_subdirs
   [scanner-refusal:ea6e2adedc7afd62fa55afcf859f251d] names the module
   [scanner-refusal:55f2feade4e139b5abb073d0b89c42cb] reaches the environment
   [scanner-refusal:267a42b2812f4679c4463495cc199d36] reads the configuration
+  [scanner-refusal:41d9bc729b5b8b3908a48d45b1e0203c] reads the configuration
   [scanner-refusal:a323f01100bfd685e76c62154cf4eaae] reads the configuration
   [scanner-refusal:ae1b95995f2c4aa10cdeee699ccb3413] which reach
   [scanner-refusal:b0ff4d4e5709299b84685f0fc189cc63] the inline-test runner
@@ -320,13 +326,7 @@ Catalogue-only: direct failures no control executes (reasons in `raw_catalogue_o
   [scanner-refusal:95919586e2a2b25eaaf13ca8093ab584] repository-wide scan rule
   [scanner-refusal:be41f253ce4b808b6b4ec587c304ec08] repository-wide scan rule
   [scanner-refusal:b040632469771b25abb3469878413be3] the repository scanner
-  [scanner-refusal:364d32b22a5cb7a70b569db0d8864170] env_var
-  [scanner-refusal:07e7987f0d61b10a9fea6c6590c73d59] env_var
   [scanner-refusal:941a9fb77d867c7b1576a0f19ee5db3b] declares
-  [scanner-refusal:0deef0cb94c45615f32ee84ac2e76f8e] declares tracing gates
-  [scanner-refusal:02e183a4105132ec092206c1d35d6247] reads the tracing
-  [scanner-refusal:e55f77a62871fb685d23199e95c8f173] the environment variable
-  [scanner-refusal:41d9bc729b5b8b3908a48d45b1e0203c] reads the configuration
   [scanner-refusal:7637eff157ad54e2ce52846535604f2a] scanner refusal
   [scanner-refusal:fe4c53f899eb08a9ae67e7a797a5a841] scanner-refusal exemptions no
   [scanner-refusal:09ce44850cdf45c95e308d6c64aed813] the repository's

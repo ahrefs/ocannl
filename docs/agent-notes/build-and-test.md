@@ -337,20 +337,26 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   own evidence: a claim marker is emitted only after `Verdict` recorded a passing execution of that
   exact format (and each observation is consumed once), while a direct-failure marker requires
   that the refusal RAN: an `observe_failure` from the caught branch itself, or a
-  `raw_direct_evidence` entry naming a control claim that passed AND a `FAIL:` line matching the
-  refusal's format in that scanner's refused child run (`Refusal_control_manifest.refuses`, or
-  `observe_refused_run` over a harness's own capture). Either half alone counts for nothing: a
+  `raw_direct_evidence` entry naming a control claim that passed AND a `FAIL:` line of that
+  scanner's refused child run (exit 1; `Refusal_control_manifest.refuses`, or
+  `observe_refused_run` over a harness's own capture) that is the refusal's OWN -- matched by its
+  format and by no sibling format of the same scanner that fixes more text, so a general refusal
+  cannot live on a specific sibling's line. Either half alone counts for nothing: a
   claim over a fixture the scan ACCEPTS, a prose line, or an unrelated passing claim once stood in
   for every direct failure of the two configuration scanners; printed output is no input to the rule
   (gh-ocannl-1207; `Manifest.standing` holds the rule, `refusal_control_scan_cases` pins each
-  direction). A refusal no control can reach -- a library constant, a malformed repository nobody
-  builds -- goes in `raw_catalogue_only` with its reason and prints under its own `Catalogue-only:`
-  heading, so it stays catalogued without claiming execution; a key in both tables, or a
-  catalogue-only refusal a run does execute, is refused. The cheap way to execute one is a child
-  run of the scanner over a `with_tree` of malformed input (`config_scan_lexing`,
-  `dune_scan_cases`, `verdict_scan_cases`, env_var_deps' `malformed_tree_control`). Marker
-  occurrences are consumed as a multiset, so two identical
-  formats require two exercised controls. A new manifest row therefore
+  direction). The claim is a gate -- incidental refusals keep a malformed tree's child at exit 1 on
+  their own -- and the line is the evidence; map each key to the claim whose run prints it. A
+  refusal no control can reach -- a library constant, a walk defect the raw-text floor exists for
+  -- goes in `raw_catalogue_only` with its reason and prints under its own `Catalogue-only:`
+  heading, so it stays catalogued without claiming execution; a key in both tables is refused by
+  the audit, and a catalogue-only refusal whose own line or caught branch a run shows is refused by
+  `print`. The cheap way to execute one is a child run of the scanner over a `with_tree` of
+  malformed input (`config_scan_lexing`, `dune_scan_cases`, `verdict_scan_cases`, codegen's
+  `--refusal-control`; env_var_deps' `malformed_tree_control` builds its tree beside the shared
+  `control_context` through `run_checker`). Claim markers are consumed as a multiset, so two
+  identical claim formats require two executions; refused lines are not consumed, so two sites of
+  one direct-failure format would share one line. A new manifest row therefore
   prints nothing until its arm supplies runtime evidence. Never compute a marker by hand: while a
   scan's row is missing or empty, its golden run's `print` writes the whole row, ready to paste into
   `raw_entries`, on stderr (the golden keeps only the section header); once the row is stale -- a

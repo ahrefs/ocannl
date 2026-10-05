@@ -3103,8 +3103,10 @@ let run_checker ~root ~exe args =
   let text = In_channel.read_all out_path ^ In_channel.read_all err_path in
   (try Unix.unlink out_path with Unix.Unix_error _ -> ());
   (try Unix.unlink err_path with Unix.Unix_error _ -> ());
-  (* What the child refused is what a mapped control claim may answer for (gh-ocannl-1207). *)
-  Refusal_manifest.observe_refused_run ~source:"test/operations/env_var_deps.ml" text;
+  (* What the child refused -- exited 1, not stopped by an exception -- is what a mapped control
+     claim may answer for (gh-ocannl-1207). *)
+  if Poly.equal status (Unix.WEXITED 1) then
+    Refusal_manifest.observe_refused_run ~source:"test/operations/env_var_deps.ml" text;
   (status, text)
 
 let control () =
@@ -4987,10 +4989,13 @@ let ambient_gate_control () =
    reaches, executed rather than vouched for by a neighbouring control that passes. One dune file
    trips them together -- a marker between stanzas, one naming no backend, one on a stanza that runs
    nothing, two on one stanza, one contradicting an `(env_var OCANNL_BACKEND)`, the marker's text
-   outside a comment, a declaration of a variable nothing reads, one alias diffing two goldens --
-   beside a source that names `Test_utils.Generated` and does not parse. A second run hands the
-   checker nothing at all. What each child refused is what `raw_direct_evidence` attributes to the
-   two claims. *)
+   outside a comment, a declaration of a variable nothing reads, one alias diffing two goldens, the
+   initializer in an executable nothing runs and in a library, an undeclared tracing gate, an
+   undeclared by-name read, a guarded read nothing runs -- beside a source that names
+   `Test_utils.Generated` and does not parse, and a second dune file declaring a gate over a
+   directory the checker was handed no source from. A second run hands the checker nothing at all.
+   The claims are gates -- incidental refusals would keep the child at exit 1 on their own -- and
+   each refusal's own `FAIL:` line is the evidence `raw_direct_evidence` attributes to them. *)
 let malformed_tree_subject =
   {dune|; ocannl-backend: none -- between stanzas, about none of them.
 (rule
@@ -5024,7 +5029,26 @@ let malformed_tree_subject =
 (rule
  (alias runtest-two)
  (action (progn (diff a.expected a.actual) (diff b.expected b.actual))))
+
+(executable (name unrun) (modules unrun))
+(library (name initlib) (modules initlib))
+(library (name gated) (modules gated))
+(test (name envread) (modules envread))
+(executable (name guarded) (modules guarded))
 |dune}
+
+let malformed_tree_sources =
+  [
+    ("t/noop.ml", "let () = ()\n");
+    ("t/broken.ml", "let = Test_utils.Generated.init\n");
+    ("t/unrun.ml", "let () = Test_utils.Generated.init ~backend_name:\"cc\"\n");
+    ("t/initlib.ml", "let () = Test_utils.Generated.init ~backend_name:\"cc\"\n");
+    ("t/gated.ml", "[%%global_debug_log_level_from_env_var \"OCANNL_LOG_LEVEL_PROBE\"]\n");
+    ("t/envread.ml", "let _ = Sys.getenv_opt \"OCANNL_LOG_LEVEL\"\n");
+    ("t/guarded.ml", "let _ = Utils.read_env_var \"log_level\"\n");
+    ( "far/dune",
+      "(library (name far) (modules far) (preprocessor_deps (env_var OCANNL_LOG_LEVEL_PROBE)))\n" );
+  ]
 
 let malformed_tree_control () =
   let exe =
@@ -5034,16 +5058,10 @@ let malformed_tree_control () =
   in
   let root = Stdlib.Filename.temp_dir "evd_malformed" "" in
   let context = control_context () in
-  List.iter context ~f:(fun (file, content) ->
-      write_file (Stdlib.Filename.concat root file) content);
-  write_file (Stdlib.Filename.concat root "t/noop.ml") "let () = ()\n";
-  write_file (Stdlib.Filename.concat root "t/dune") malformed_tree_subject;
-  write_file (Stdlib.Filename.concat root "t/broken.ml") "let = Test_utils.Generated.init\n";
+  let files = (("t/dune", malformed_tree_subject) :: malformed_tree_sources) @ context in
+  List.iter files ~f:(fun (file, content) -> write_file (Stdlib.Filename.concat root file) content);
   let exited n (status, _) = match status with Unix.WEXITED m -> m = n | _ -> false in
-  let malformed =
-    run_checker ~root ~exe
-      ("." :: "t/dune" :: "t/noop.ml" :: "t/broken.ml" :: List.map context ~f:fst)
-  in
+  let malformed = run_checker ~root ~exe ("." :: List.map files ~f:fst) in
   let empty = run_checker ~root ~exe [ "." ] in
   printf
     "The checker is put to one dune file built to trip the marker grammar and the declaration\n\
