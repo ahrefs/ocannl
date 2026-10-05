@@ -12,6 +12,8 @@ a lookup in a directory not yet created is a miss, not a refusal: true
 a call without a key does no I/O and records nothing: true
 a store whose commit the filesystem refused is recorded as a refusal, with its reason: true
 the refused commit leaves the earlier entry in place: true
+a read of an existing entry the filesystem refused is recorded as a lookup refusal: true
+an entry that fails to decode is a miss the lookup decided, not a refusal: true
 a refused lock is recorded as a refusal of both a store and a lookup: true
 recordings nest: the inner one sees its own I/O: true
 recordings nest: the outer one sees the inner one's I/O too: true

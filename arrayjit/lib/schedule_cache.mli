@@ -411,9 +411,9 @@ type cache_io = {
   refusal : string option;
       (** [Some reason] when the filesystem refused the operation: a store that left no entry (the
           lock, the regime stamp, an uncreatable directory, the write or the bounded commit), or a
-          lookup whose cache-open refused. [None] for a store that committed and for a lookup that
-          was admitted, hit or miss -- a missing directory is a lookup's ordinary miss, not a
-          refusal. *)
+          lookup whose cache-open, or whose read of an existing entry, the filesystem refused.
+          [None] for a store that committed and for a lookup that was admitted, hit or miss -- a
+          missing directory is a lookup's ordinary miss, not a refusal. *)
 }
 [@@deriving sexp_of]
 

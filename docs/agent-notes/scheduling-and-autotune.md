@@ -1202,12 +1202,17 @@ files.
   refusal by design: the lock, the regime stamp, the write, or a Windows commit that outlives
   `Atomic_file`'s one-second retry (Defender holding the staging file is the suspect on CI). So a
   claim like "a clean cold run records its decision" can fail for a reason its timing predicates
-  never see. Wrap the run in `Schedule_cache.recording_cache_io` and waive on any `refusal`, as an
-  `` `Environment `` skip (`Verdict.gated`), never as a silent `true`. Gate on the timing identity
-  of the run's OWN context, the one the store keys on, never a reference context's.
-  `placement_store`'s `persistence` record and `unless_refused` are the exemplar.
-  `schedule_cache_regime` pins the record itself: committed and admitted I/O, the regime, lock and
-  commit refusals, keyless calls, and nesting.
+  never see. Wrap the run in `Schedule_cache.recording_cache_io` and waive on a `refusal` of the
+  operations the claim rests on (a record claim on its placement stores, a replay on its lookups),
+  as an `` `Environment `` skip (`Verdict.gated`), never as a silent `true`. Then add one claim that
+  is NEVER waived by a refusal: of the stores the process attempted under real key names, not all
+  were refused. A deterministic refusal (a rejected filename, a commit that always fails) refuses
+  every store, and without that claim it turns the test into a permanent skip that hosted CI
+  aggregates nowhere. Gate on the timing identity of the run's OWN context, the one the store keys
+  on, never a reference context's. `placement_store`'s `persistence` record, `unless_refused` and
+  its process-wide claim are the exemplar. `schedule_cache_regime` pins the record itself:
+  committed and admitted I/O, the regime, lock, read and commit refusals, keyless calls, and
+  nesting.
 ## Scan-loop scheduling
 
 - **A `Scan_loop` is opaque to the schedule ops in both directions and transparent to the

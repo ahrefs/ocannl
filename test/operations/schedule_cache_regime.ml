@@ -8,9 +8,10 @@
    gh-ocannl-1040: every store and lookup notes what it came to to
    [Schedule_cache.recording_cache_io], the record a test reads to tell a refusal the cache absorbed
    from a store or replay that never happened. A committed store and an admitted lookup (hit or
-   miss, a missing directory included) are not refusals; a regime refusal, a refused lock and a
-   filesystem refusal in the staged-but-uncommitted window -- where a Windows commit that outlives
-   its bounded retry fails -- are, each with its reason. *)
+   miss, a missing directory and an undecodable entry included) are not refusals; a regime refusal,
+   a refused lock, a refused read of an existing entry and a filesystem refusal in the
+   staged-but-uncommitted window -- where a Windows commit that outlives its bounded retry fails --
+   are, each with its reason. *)
 
 open Base
 module SC = Ir.Schedule_cache
@@ -163,6 +164,20 @@ let () =
     | _ -> false);
   p "the refused commit leaves the earlier entry in place"
     (String.equal held_before (read (entry_file io_cache_dir "held")));
+  let replay_with exn =
+    recorded (fun () ->
+        FI.with_callback
+          (fun point -> if FI.equal_point point FI.Schedule_cache_before_replay then raise exn)
+          ~f:(fun () -> ignore (SC.lookup ~dir:io_cache_dir ~key:(Some "held") : SC.entry option)))
+  in
+  p "a read of an existing entry the filesystem refused is recorded as a lookup refusal"
+    (equal_record
+       (replay_with (Stdlib.Sys_error "gh1040 injected read refusal"))
+       [ (SC.Lookup, "held", true) ]);
+  p "an entry that fails to decode is a miss the lookup decided, not a refusal"
+    (equal_record
+       (replay_with (Failure "gh1040 injected decode failure"))
+       [ (SC.Lookup, "held", false) ]);
   let lock_refused =
     recorded (fun () ->
         FI.with_callback

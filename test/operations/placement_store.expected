@@ -58,6 +58,7 @@ with a timing context, the recorded outcome digest is the shipped search's own s
 with a timing context, a fresh lowering of the recorded decision in the timing lineage reproduces it: true
 with a timing context, the warm run's routine computes the right values: true
 with a timing context, the warm run replays the recorded decision: one search, no flips, the recorded label, tuning the recorded lowering: true
+of the placement stores the runs attempted, the filesystem refused not every one: true
 under refused commits, the cold run's routine computes the right values: true
 refused commits leave no decision recorded: true
-under refused commits, a clean cold run reports its placement store's refusal: true
+under refused commits, the cold run reports its placement store's refusal: true

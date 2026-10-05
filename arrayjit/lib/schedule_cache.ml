@@ -909,19 +909,27 @@ let lookup_sexp ~dir ~key ~of_sexp ~current =
         open_cache ~dir (fun () ->
             Utils.Atomic_file.cleanup_stale_once dir;
             let file = cache_file ~dir ~key in
-            if not (Stdlib.Sys.file_exists file) then None
+            if not (Stdlib.Sys.file_exists file) then Ok None
             else
               try
                 Resource_fault_injection.hit Schedule_cache_before_replay;
                 let entry = of_sexp (Sexplib.Sexp.load_sexp file) in
-                if current entry then Some entry else None
-              with exn when not (process_level exn) -> None)
+                Ok (if current entry then Some entry else None)
+              with
+              (* The filesystem refusing an entry the directory listing just showed -- a Windows
+                 peer holding it without share-read -- is a refusal; an entry that fails to parse or
+                 decode is a miss the lookup decided. Both read as a miss. *)
+              | Stdlib.Sys_error msg -> Error msg
+              | exn when not (process_level exn) -> Ok None)
       in
-      (* A missing directory is the ordinary miss before the first store; an undecodable or stale
-         entry is a miss the lookup decided. Only a refused open is a refusal. *)
-      let refusal = match opened with Error (Refused_open msg) -> Some msg | _ -> None in
+      (* A missing directory is the ordinary miss before the first store. *)
+      let refusal =
+        match opened with
+        | Ok (Error msg) | Error (Refused_open msg) -> Some msg
+        | Ok (Ok _) | Error Missing_dir -> None
+      in
       note_io { op = Lookup; dir; key; refusal };
-      Option.join (Result.ok opened))
+      match opened with Ok (Ok entry) -> entry | Ok (Error _) | Error _ -> None)
 
 let store ~dir ~key entry = store_sexp ~dir ~key (sexp_of_entry entry)
 
