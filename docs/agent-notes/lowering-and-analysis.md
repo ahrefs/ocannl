@@ -59,8 +59,9 @@ files.
   is `Tn.known_host_constant` — the persistent marker, not the `Effectively_constant` intent, so
   an explicitly `Train.set_materialized` literal still converts — and any literal-constant write
   form is droppable under that contract: unrolled fixed-index `Set`s (`Constant_fill`), loop-borne
-  `Set`s (broadcast `Constant`), and whole-node `Zero_out` (`Constant 0.`, unreachable by the
-  `limit_constant_fill_size=0` escape since 1-element literals never consult the limit). Bail-outs
+  `Set`s (broadcast `Constant`), and whole-node `Zero_out` (`Constant 0.`). The `Broadcast` init-data form (gh-ocannl-641) fills
+  the final inferred shape at link time, so `limit_constant_fill_size=0` also reaches scalar
+  literals, including padded ones, without a `Reshape` element-count constraint. Bail-outs
   that KEEP the in-kernel init: padded constants (their init includes padding-region loops),
   `Local`-placed constants (scratch is fresh per launch, uploads cannot reach it), any
   non-constant write form, and constants the routine never READS — a write-only literal root (the

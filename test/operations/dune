@@ -462,6 +462,18 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ (name broadcast_constant_init)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND)
+  (env_var OCANNL_LIMIT_CONSTANT_FILL_SIZE))
+ (modules broadcast_constant_init)
+ (libraries base ocannl arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
  (name test_param_shape_error)
  (package neural_nets_lib)
  (deps

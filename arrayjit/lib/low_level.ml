@@ -5455,16 +5455,12 @@ let validate_parallel plc (llc : t) : unit =
           (* gh-ocannl-633: a constant's in-kernel init normally moves to a link-time [Host_inits]
              upload before this check ([hosted_constant_inits_to_link_time]); when a bail-out kept
              it (e.g. a padded constant), name the actual culprit — the schedule is not at fault.
-             The flag advice is scoped honestly (review round 2): [Tensor.constant_fill]'s 1-element
-             arm never consults the limit — deliberately, since routing a 1-element literal to the
-             host-backed path would pin its element count and break broadcast shape inference — so
-             for such literals the flag changes nothing, and this frame cannot tell the literal's
-             length (a broadcast scalar's node has the consumer's numel). *)
+             [Broadcast] host-init data preserves scalar shape inference, so the escape also reaches
+             one-element literals (gh-ocannl-641). *)
           if Tn.known_host_constant tn then
             ". The write is the in-kernel initialization of a constant that could not be moved to \
-             link time; for literals of at least two elements, --ocannl_limit_constant_fill_size=0 \
-             forces host-side initialization (one-element literals always initialize in kernel, \
-             keeping broadcast shape inference)"
+             link time; for ndarray literals, --ocannl_limit_constant_fill_size=0 forces host-side \
+             initialization"
           else "")
     in
     let rec check_writes ~covered ~enclosing llc =
@@ -8019,8 +8015,7 @@ let reconcile_traced_store (plc : Tn.Placements.t) (traced_store : traced_store)
    droppable regardless of its indexing — every write such a node carries comes from its own fetch
    lowering and stores the registered values — which covers all three forms the lowering emits:
    unrolled fixed-index [Set]s ([Constant_fill]), loop-borne [Set]s (a broadcast [Constant]), and
-   whole-node [Zero_out] ([Constant 0.], whose 1-element literals the
-   [--ocannl_limit_constant_fill_size=0] escape cannot reach).
+   whole-node [Zero_out] ([Constant 0.]).
 
    Only constants the routine also READS convert: in-routine reads are what motivate materializing
    an operand beside its init, and every gh-633 face has them. A write-only constant — a literal

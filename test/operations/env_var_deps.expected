@@ -57,6 +57,7 @@ Configuration keys tracked as ambient dependencies, in the one spelling OCANNL r
   inline_simple_computations
   large_models
   legality_crosscheck
+  limit_constant_fill_size
   ll_ident_style
   log_config_sourcing
   log_level

@@ -297,6 +297,32 @@ let topo_layers (type a) (tagged : (a * tn_set * tn_set) list)
 
 type grad_spec = Require_grad | Prohibit_grad | If_needed [@@deriving sexp, equal, variants]
 
+(* Registers [values] as [tn]'s host initialization data (gh-ocannl-633). The buffer is shaped only
+   when forced, i.e. after shape inference: interior cells are filled row-major cycling over
+   [values] ([Constant_fill]'s in-kernel semantics; the [Total_elems] shape constraint pins the
+   element count to the values length, so cycling matters only for the 1-element [Constant] case,
+   which broadcasts, including [Broadcast] host-init data), and padding regions are filled with the
+   committed padding value, matching [reset_padding_regions]. *)
+let register_constant_host_init tn values =
+  Ir.Host_inits.register tn
+    (lazy
+      (let prec = Lazy.force tn.Tn.storage_prec in
+       let dims = Lazy.force tn.Tn.dims in
+       let padding = Tn.get_padding tn in
+       let debug = "Host init for " ^ Tn.debug_name tn in
+       let nd = Nd.create_array ~debug prec ~dims ~padding in
+       let interior =
+         match padding with
+         | None -> dims
+         | Some (pads, _) ->
+             Array.map2_exn dims pads ~f:(fun d Ir.Ops.{ left; right } -> d - left - right)
+       in
+       let numel = Array.fold interior ~init:1 ~f:( * ) in
+       let size = Array.length values in
+       let flat = Array.init numel ~f:(fun i -> values.(i % size)) in
+       Nd.set_flat_values ?padding:(Option.map padding ~f:fst) nd flat;
+       nd))
+
 let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
     ?(compose_op = Shape.Pointwise_bin) ?(transpose_op = Shape.Pointwise_un) ?terminal_op
     ?shape_logic ~op_asn ~grad_asn ?(grad_spec = If_needed) ?(top_down_prec = false) make_shape
@@ -418,6 +444,11 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
     (* For ndarray-backed literals the init buffer is no longer stored on the tensor node
        (gh-ocannl-333); we register it in [Host_inits] so each context uploads it at link time. *)
     match terminal_op with
+    | Some (Shape.Data (Asgns.Broadcast value)) ->
+        let tn = Tn.create delayed_prec ~id ~label ~unpadded_dims ~padding () in
+        Tn.update_memory_mode tn On_device (Site "49:ndarray-backed");
+        register_constant_host_init tn [| value |];
+        tn
     | Some (Shape.Data (Asgns.Reshape data)) ->
         let tn, init =
           Tn.create_with_reshape ~id ~label ~unpadded_dims ~padding ~from_padded:false
@@ -784,46 +815,20 @@ let%track7_sexp bits ?(label = []) ?axis_basis ?(grad_spec = Prohibit_grad) i : 
   t
 
 let constant_fill ~debug values =
-  match Array.length values with
-  | 0 -> (None, None)
-  | 1 -> (None, Some (Asgns.Constant values.(0)))
-  | n
-    when n
-         <= Int.of_string @@ Utils.get_global_arg ~default:"16" ~arg_name:"limit_constant_fill_size"
-    ->
-      (None, Some (Asgns.Constant_fill values))
-  | _ ->
-      let nd =
-        Nd.create_array ~debug ~dims:[| Array.length values |] ~padding:None !default_value_prec
-      in
+  let n = Array.length values in
+  if n = 0 then (None, None)
+  else
+    let limit =
+      Int.of_string @@ Utils.get_global_arg ~default:"16" ~arg_name:"limit_constant_fill_size"
+    in
+    if n <= limit then
+      if n = 1 then (None, Some (Asgns.Constant values.(0)))
+      else (None, Some (Asgns.Constant_fill values))
+    else if n = 1 then (Some (Asgns.Broadcast values.(0)), None)
+    else
+      let nd = Nd.create_array ~debug ~dims:[| n |] ~padding:None !default_value_prec in
       Nd.set_flat_values nd values;
       (Some (Asgns.Reshape nd), None)
-
-(* Registers [values] as [tn]'s host initialization data (gh-ocannl-633). The buffer is shaped only
-   when forced, i.e. after shape inference: interior cells are filled row-major cycling over
-   [values] ([Constant_fill]'s in-kernel semantics; the [Total_elems] shape constraint pins the
-   element count to the values length, so cycling matters only for the 1-element [Constant] case,
-   which broadcasts), and padding regions are filled with the committed padding value, matching
-   [reset_padding_regions]. *)
-let register_small_constant_host_init tn values =
-  Ir.Host_inits.register tn
-    (lazy
-      (let prec = Lazy.force tn.Tn.storage_prec in
-       let dims = Lazy.force tn.Tn.dims in
-       let padding = Tn.get_padding tn in
-       let debug = "Host init for " ^ Tn.debug_name tn in
-       let nd = Nd.create_array ~debug prec ~dims ~padding in
-       let interior =
-         match padding with
-         | None -> dims
-         | Some (pads, _) ->
-             Array.map2_exn dims pads ~f:(fun d Ir.Ops.{ left; right } -> d - left - right)
-       in
-       let numel = Array.fold interior ~init:1 ~f:( * ) in
-       let size = Array.length values in
-       let flat = Array.init numel ~f:(fun i -> values.(i % size)) in
-       Nd.set_flat_values ?padding:(Option.map padding ~f:fst) nd flat;
-       nd))
 
 let ndarray ?(grad_spec = Prohibit_grad) values ?(label = []) ?top_down_prec ?batch_dims ?batch_axes
     ?input_dims ?output_dims ?input_axes ?output_axes ?deduced () =
@@ -856,8 +861,7 @@ let ndarray ?(grad_spec = Prohibit_grad) values ?(label = []) ?top_down_prec ?ba
      and hoisted operand packing ([Schedule.hoistable_constant]) can read the values below the size
      cutoff. *)
   (match fetch_op with
-  | Some (Asgns.Constant _ | Asgns.Constant_fill _) ->
-      register_small_constant_host_init t.value values
+  | Some (Asgns.Constant _ | Asgns.Constant_fill _) -> register_constant_host_init t.value values
   | _ -> ());
   let max_abs = Array.fold values ~init:0. ~f:(fun acc v -> Float.(max acc @@ abs v)) in
   Ir.Ops.(
@@ -937,6 +941,7 @@ let%debug7_sexp param ?(require_grad = true) ~t (name : string) ?(more_label = [
   (* Parameters live on device and are materialized; CPU access (init, inspection) is on-demand via
      the context (gh-ocannl-333). *)
   Tn.update_memory_mode v On_device (Site "241:param-value");
+  Tn.set_context_owned v;
   (* Never_virtual audit resolution (context-scoped memory modes): parameter gradients carry
      observation intent, not a materialization requirement -- users print and inspect them, and the
      optimizer step's read is an ordinary cross-routine use the lineage can serve (a fused

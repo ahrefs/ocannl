@@ -14,6 +14,7 @@ test/operations/accum_width.ml -- records=11 traversals=1
 test/operations/affine_extraction.ml -- records=16 traversals=0
 test/operations/autotune_scope_provenance.ml -- records=1 traversals=0
 test/operations/back_to_back_runs.ml -- records=5 traversals=0
+test/operations/broadcast_constant_init.ml -- records=0 traversals=1
 test/operations/canonical_render.ml -- records=13 traversals=0
 test/operations/cc_march_census.ml -- records=6 traversals=0
 test/operations/cost_model_extraction.ml -- records=4 traversals=0

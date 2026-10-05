@@ -13,6 +13,9 @@ let _get_local_debug_runtime = Utils.get_local_debug_runtime
 [%%global_debug_log_level_from_env_var "OCANNL_LOG_LEVEL_ASSIGNMENTS"]
 
 type init_data =
+  | Broadcast of float
+      (** Host-backed scalar fill of the inferred shape, including its committed padding. Unlike
+          [Reshape], this does not constrain the number of elements. *)
   | Reshape of Ndarray.t
   | Keep_shape_no_padding of Ndarray.t
   | Padded of { data : Nd.t; padding : Ops.axis_padding array; padded_value : float }

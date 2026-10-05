@@ -1875,23 +1875,45 @@ let%track7_sexp to_routine (ctx : Context.t) ?(output_cd_file = false) ?budget ?
     the host as appropriate. If [reinit_all] is true, all parameters are reinitialized, otherwise
     only the parameters that are not in [ctx.ctx_buffers] are initialized. *)
 let init_params ?(reinit_all = false) ctx bindings t =
-  let comp =
-    if reinit_all then Tensor.init_params t
+  let skip =
+    if reinit_all then None
     else
-      (* Check which params are already initialized *)
-      let skip = Map.empty (module Tn) in
-      Set.fold t.Tensor.params ~init:skip ~f:(fun skip p ->
-          if Context.is_initialized ctx p.Tensor.value then
-            Map.set skip ~key:p.Tensor.value ~data:()
-          else skip)
-      |> fun skip -> Tensor.init_params ~skip t
+      (* Check which params are already initialized. *)
+      Some
+        (Set.fold t.Tensor.params
+           ~init:(Map.empty (module Tn))
+           ~f:(fun skip p ->
+             if Context.is_initialized ctx p.Tensor.value then
+               Map.set skip ~key:p.Tensor.value ~data:()
+             else skip))
   in
+  let comp = Tensor.init_params ?skip t in
+  (* Mirror the selected parameter initialization graph, including parameters read by another
+     parameter's initializer. Those must be restored before executing the dependent initializer. *)
+  let rec collect_host_params nodes (t : Tensor.t) =
+    Set.fold t.params ~init:nodes ~f:(fun nodes p ->
+        if Option.exists skip ~f:(fun skip -> Map.mem skip p.Tensor.value) then nodes
+        else
+          let nodes =
+            if Ir.Host_inits.mem p.Tensor.value then Set.add nodes p.Tensor.value else nodes
+          in
+          collect_host_params nodes p)
+  in
+  let host_params = collect_host_params (Set.empty (module Tn)) t in
   (* Materialize the parameters being initialized so they persist and are inspectable on demand. *)
   Set.iter (snd @@ Asgns.collect_nodes_guess_output comp.Asgns.asgns) ~f:set_materialized;
-  (* Compile and run the initialization. Literal/ndarray-backed embedded nodes are uploaded into the
-     context automatically at link time from [Host_inits] (gh-ocannl-333); there is no longer a
-     separate host-array copy step here. *)
+  (* Linking initializes newly allocated literal buffers. Reinitialization must also restore
+     existing host-backed parameters (gh-ocannl-641), which have no executable forward initializer.
+     Upload after compilation finalizes shapes, before running computed initializers that may read
+     these parameters. A newly linked buffer needs no second upload during ordinary
+     initialization. *)
   let ctx, routine = Context.compile ctx comp bindings in
+  let ctx =
+    Set.fold host_params ~init:ctx ~f:(fun ctx tn ->
+        if reinit_all || not (Context.is_initialized ctx tn) then
+          Context.from_host ctx tn (Lazy.force (Option.value_exn (Ir.Host_inits.find tn)))
+        else ctx)
+  in
   Context.run ctx routine
 
 (** [run_once] is a wrapper around {!init_params} that additionally runs code of [f t] and returns
