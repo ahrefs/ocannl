@@ -2467,23 +2467,15 @@ let () =
   let%op td1 = mta +* "ik;jk=>ij" mtb in
   check_transposed ~tag:"tb" ~c_tiled:false ~serial:td0 ~tensorized:td1;
 
-  (* --- Metal's advertised formats and its resolver agree (gh-ocannl-923 follow-up): the
-     [mma_format_tiles] triples and the [mma_fragment_types] arms are maintained together by hand,
-     and the comment above the resolver states the invariant — an advertised triple with no arm
-     makes autotune time seeds that render the scalar fallback, an arm with no triple is never
-     seeded. Here both halves are derived from the backend: for every (a, b, d) storage triple over
-     {f32, f16, bf16, fp8}, the unstaged [mma_schedule] matmul's census is all-intrinsics exactly
-     when [advertises_mma_format] holds, under the default policy and again under
-     [Fp16_wide]/[Bf16_wide], whose uniform-narrow arms resolve the same storage triples through a
-     float accumulator. Compiled, not run: the census is the subject. Metal only — the C backends'
-     register tiling does not consult the descriptor, and CUDA/HIP gate their arms on device
-     capabilities this machine cannot vary. --- *)
+  (* --- The GPU format descriptors and resolvers agree (gh-ocannl-1058): every storage triple over
+     {f32, f16, bf16, fp8} is compiled under default, wide and tf32 policies. The descriptor's
+     format tiles, policy gates and per-statement wide scopes predict the census; the backend's
+     resolver produces it independently. The fixed micro-kernel must fit EVERY advertised tile,
+     including CUDA's divergent bf16/fp8/tf32 tiles. CPU register tiling has a different seam.
+     Compiled, not run: execution parity is covered by the format-specific legs above. --- *)
   (let formats =
      [
-       ("f32", Ir.Ops.single, Ir.Backend_intf.Mma_f32);
-       ("f16", Ir.Ops.half, Ir.Backend_intf.Mma_f16);
-       ("bf16", Ir.Ops.bfloat16, Ir.Backend_intf.Mma_bf16);
-       ("fp8", Ir.Ops.fp8, Ir.Backend_intf.Mma_fp8_e5m2);
+       ("f32", Ir.Ops.single); ("f16", Ir.Ops.half); ("bf16", Ir.Ops.bfloat16); ("fp8", Ir.Ops.fp8);
      ]
    in
    let triples =
@@ -2497,13 +2489,30 @@ let () =
        ( "default policy",
          "dflt",
          fun (pol : Numerics.t) ->
-           { pol with fp16_arithmetic = Numerics.Fp16_auto; bf16_arithmetic = Numerics.Bf16_auto }
-       );
+           {
+             pol with
+             fp16_arithmetic = Numerics.Fp16_auto;
+             bf16_arithmetic = Numerics.Bf16_auto;
+             tf32_matmuls = false;
+           } );
        ( "Fp16_wide/Bf16_wide",
          "wide",
          fun (pol : Numerics.t) ->
-           { pol with fp16_arithmetic = Numerics.Fp16_wide; bf16_arithmetic = Numerics.Bf16_wide }
-       );
+           {
+             pol with
+             fp16_arithmetic = Numerics.Fp16_wide;
+             bf16_arithmetic = Numerics.Bf16_wide;
+             tf32_matmuls = false;
+           } );
+       ( "tf32 policy-on",
+         "tf32",
+         fun (pol : Numerics.t) ->
+           {
+             pol with
+             fp16_arithmetic = Numerics.Fp16_auto;
+             bf16_arithmetic = Numerics.Bf16_auto;
+             tf32_matmuls = true;
+           } );
      ]
    in
    let claim_rendered = "every format triple's tensorized matmul renders its Tile_mma statements" in
@@ -2511,9 +2520,14 @@ let () =
    let claim_agree tag =
      Printf.sprintf "%s: census is all-intrinsics exactly for the advertised format triples" tag
    in
-   if on_metal then (
+   let claim_tiles = "the format cross-check micro-kernel fits every advertised format tile" in
+   let limits = Context.hardware_limits (Context.auto ()) in
+   if on_gpu && Option.is_some limits.Ir.Backend_intf.mma then (
+     let mma = Option.value_exn limits.Ir.Backend_intf.mma in
+     p_all claim_tiles mma.Ir.Backend_intf.mma_format_tiles ~f:(fun (_, (tm, tn, tk)) ->
+         tm > 0 && tn > 0 && tk > 0 && bm % tm = 0 && n % tn = 0 && n % tk = 0);
      let ma_of = Hashtbl.create (module String) and mb_of = Hashtbl.create (module String) in
-     let input tbl ~side (tag, prec, _) =
+     let input tbl ~side (tag, prec) =
        Hashtbl.find_or_add tbl tag ~default:(fun () ->
            NTDSL.init
              ~l:("fmt" ^ side ^ "_" ^ tag)
@@ -2525,7 +2539,7 @@ let () =
        List.concat_map policies ~f:(fun (ptag, pslug, adjust) ->
            Test_utils.with_policy adjust (fun () ->
                let limits = Context.hardware_limits (Context.auto ()) in
-               List.map triples ~f:(fun (((at, _, af) as a), ((bt, _, bf) as b), (dt, dprec, df)) ->
+               List.map triples ~f:(fun (((at, aprec) as a), ((bt, bprec) as b), (dt, dprec)) ->
                    let fa = input ma_of ~side:"a" a and fb = input mb_of ~side:"b" b in
                    let%op mcf = fa * fb in
                    Tn.update_prec mcf.Tensor.value dprec;
@@ -2540,7 +2554,12 @@ let () =
                    in
                    let census = List.map routine.Context.mma.Ir.C_syntax.renderings ~f:snd in
                    let advertised =
-                     Ir.Backend_intf.advertises_mma_format limits ~a:af ~b:bf ~d:df
+                     List.exists
+                       (Autotune.mma_format_triples ~a_prec:aprec ~b_prec:bprec ~d_prec:dprec)
+                       ~f:(fun (a, b, d) ->
+                         Ir.Backend_intf.advertises_mma_format_in_scope limits
+                           ~policy:(Numerics.get ()) ~scope:Ir.Backend_intf.Mma_per_statement ~a ~b
+                           ~d)
                    in
                    (ptag, Printf.sprintf "(%s, %s, %s)" at bt dt, advertised, census))))
      in
@@ -2567,6 +2586,9 @@ let () =
                          Sexp.to_string (Ir.C_syntax.sexp_of_mma_rendering r))));
              ok)))
    else (
+     (* A missing HIP capability is the device/header conjunction, so use the ordinary backend skip
+        shared by the existing HIP legs, rather than claiming which half failed. *)
+     skipped claim_tiles;
      skipped claim_rendered;
      skipped claim_both_sides;
      List.iter policies ~f:(fun (ptag, _, _) -> skipped (claim_agree ptag))));

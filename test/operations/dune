@@ -4559,6 +4559,14 @@
  (libraries base arrayjit.ir arrayjit.verdict))
 
 (test
+ ; ocannl-backend: none -- pure descriptor/policy judgment; no device or configuration lookup.
+ (name mma_format_scope)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules mma_format_scope)
+ (libraries base arrayjit.ir arrayjit.verdict))
+
+(test
  (name schedule_mma_matmul)
  (package neural_nets_lib)
  (deps
