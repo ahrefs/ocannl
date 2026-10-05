@@ -52,6 +52,11 @@
 #             geometry of gh-ocannl-1003 stage 1, fission cutting kernels to keep it), admitted
 #             (lanes where a kernel admits them, no cuts for them), off (the plain plans) or auto
 #             (per device) -- the same-binary A/B of gh-ocannl-1167; meaningful with a d1 <T>
+#   ar<K>     this checkout's runner, --ocannl_gpu_lane_all_reduce_simdgroups=<K>, K a positive
+#             count: the most simdgroups the cooperative dp all-reduce may span (gh-ocannl-1168; 1
+#             is the one-simdgroup rule, so a head wider than the simdgroup keeps the plain plan;
+#             2 gives a head of 64 lanes, 4 a head of 128) -- meaningful with a d1 <T> on a
+#             fixture whose head is wider than 32
 #   fold<T>   treatment <T> plus --ocannl_online_softmax_block=16 (the single-pass block fold of
 #             gh-ocannl-1003, the `approximate` profile's setting; meaningful with a d1 <T>)
 #   b<T>      treatment <T> run by BASE's runner, for a same-flags A/B across revisions
@@ -119,6 +124,9 @@ flags_of() {
     d1base) echo "gh1133: the base runner takes no d1 form" >&2; return 1 ;;
     serialcut | serialadmitted | serialoff | serialauto)
       echo "--ocannl_online_softmax=false --ocannl_gpu_serial_lanes=${1#serial}" ;;
+    ar[1-9]*)
+      case ${1#ar} in *[!0-9]*) echo "gh1133: unknown treatment $1" >&2; return 1 ;; esac
+      echo "--ocannl_online_softmax=false --ocannl_gpu_lane_all_reduce_simdgroups=${1#ar}" ;;
     fold*)
       local inner
       inner=$(flags_of "${1#fold}") || return 1
