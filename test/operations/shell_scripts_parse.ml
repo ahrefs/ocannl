@@ -746,6 +746,10 @@ module Shell_lexer = struct
               loop (index + 1) `Single false)
         | `Double ->
             if escaped then (
+              (* Inside double quotes a backslash escapes only these; before anything else it is
+                 itself a character. *)
+              if not (List.mem [ '$'; '`'; '"'; '\\'; '\n' ] character ~equal:Char.equal) then
+                Buffer.add_char decoded '\\';
               Buffer.add_char decoded character;
               loop (index + 1) `Double false)
             else if Char.equal character '\\' then loop (index + 1) `Double true
@@ -779,13 +783,14 @@ module Shell_lexer = struct
 
   (** The errexit effect of a [set] option list: [Some true] when it turns errexit on, [Some false]
       when it turns it off, [None] when it leaves it alone. Options apply left to right, so the last
-      mention wins ([set -e +e] ends off). *)
+      mention wins ([set -e +e] ends off), up to [--], a lone [-] or the first positional. *)
   let options_errexit options =
     let rec go last = function
       | [] | "--" :: _ -> last
       | option :: rest -> (
           let option = literal_shell_word option in
           match (option, rest) with
+          | "-", _ -> last
           | ("-o" | "+o"), name :: rest ->
               go (if is_named_errexit name then Some (String.equal option "-o") else last) rest
           | ("-o" | "+o"), [] -> last
@@ -1224,7 +1229,11 @@ module Shell_lexer = struct
           && List.mem
                (List.filter names ~f:(Fn.non (String.equal "--")))
                "errexit" ~equal:String.equal
-        then if has 'u' then Some false else if has 's' then Some true else None
+        then
+          match (has 's', has 'u') with
+          | true, false -> Some true
+          | false, true -> Some false
+          | _ -> (* Both: bash refuses the command. *) None
         else None
     | _ -> None
 
@@ -2329,21 +2338,27 @@ end
 
     Bash exempts [! command] from errexit because the command's status is being inverted. With
     nothing consuming that inverted status, the spelling looks like a negative assertion but cannot
-    stop a [set -e] harness. A statement is flagged when its pipeline begins with a [!] word (also
-    with a redirection glued to it, [!>file]), no [&&]/[||] in its list consumes the status, and
-    {!Shell_context} judges that it may run under errexit with its status consumed by nothing else:
-    not a condition, not the last statement of a function body or a subshell. A [!] inside a command
-    substitution or a test bracket is not a statement's first word, so those shapes stay valid.
-    Beyond {!Shell_context}'s own boundary nothing is excluded: the arm is the shape above. *)
+    stop a [set -e] harness. A statement is flagged when the pipeline whose status its list hands on
+    -- the last one, after any [&&]/[||], since a connector reads each earlier one -- begins with a
+    [!] word (also with a redirection glued to it, [!>file]), and {!Shell_context} judges that it
+    may run under errexit with its status consumed by nothing else: not a condition, not the last
+    statement of a function body or a subshell. A [!] inside a command substitution or a test
+    bracket is not a statement's first word, so those shapes stay valid. Beyond {!Shell_context}'s
+    own boundary nothing is excluded: the arm is the shape above. *)
 module Errexit_negation = struct
   module C = Shell_context
 
   type finding = { line : int }
 
+  (* The pipeline whose status the list hands on is its last one, after the last [&&]/[||]: an
+     earlier [! cmd] is read by the connector after it. *)
   let negated (statement : C.statement) =
-    (not (List.exists statement.connectors ~f:(function C.And | C.Or -> true | C.Pipe -> false)))
-    &&
-    match statement.operands with
+    let start =
+      List.foldi statement.connectors ~init:0 ~f:(fun index start -> function
+        | C.And | C.Or -> index + 1
+        | C.Pipe -> start)
+    in
+    match List.drop statement.operands start with
     | { text; _ } :: _ ->
         String.is_prefix text ~prefix:"!"
         && (String.length text = 1
@@ -2564,6 +2579,13 @@ module Errexit_negation = struct
       ( "negation after a call that turns errexit on",
         "set -e\nf() { set -e; }\nset +e\nf\n! probe\n",
         [ 5 ] );
+      ("negation as the last operand of an AND list", "set -e\nprepare && ! probe\n", [ 2 ]);
+      ("negation as the last operand of an OR list", "set -e\nprepare || ! probe\n", [ 2 ]);
+      ("negation after set -e - +e", "set -e - +e\n! probe\n", [ 2 ]);
+      ("negation after a conflicting shopt", "set -e\nshopt -s -u -o errexit || :\n! probe\n", [ 3 ]);
+      ( "negation after a double-quoted backslash name",
+        "set -e\n\"s\\et\" +e || :\n! probe\n",
+        [ 3 ] );
       ( "negation after a set -e ending a pipeline",
         "shopt -s lastpipe\n: | set -e\n! probe\n",
         [ 3 ] );
@@ -3039,6 +3061,7 @@ module Errexit_execution_controls = struct
       both Loud "after set +e, beside an uncalled function that turns errexit on"
         "set -e\nf() { set -e; }\nset +e\n@@\necho SURVIVED\n";
       both Silent "after eval set -e" "eval 'set -e'\n@@\necho SURVIVED\n";
+      both Inert "after set -e - +e" "set -e - +e\n@@\necho SURVIVED\n";
       both Inert "after set -e with a positional before +e"
         "set -e positional +e\n@@\necho SURVIVED\n";
       both Inert "after set +e behind a failed redirection"
@@ -3099,6 +3122,10 @@ module Errexit_execution_controls = struct
         "set -e\n@@\nrc=$?\n[ \"$rc\" -eq 0 ]\necho SURVIVED\n";
       both Live "as an if condition" "set -e\nif @@; then :; fi\necho SURVIVED\n";
       both Live "before an || tail" "set -e\n@@ || echo caught\necho SURVIVED\n";
+      ( "as the last operand of an && list",
+        "set -e\n[ -n x ] && @@\necho SURVIVED\n",
+        [ (Negation, default Negation, Inert) ],
+        None );
       both Live "in a group an || tail reads"
         "set -e\n{\n  @@\n  echo AFTER\n} || echo caught\necho SURVIVED\n";
       (* Pair only: the [!] in front is itself a negation statement, which the other arm flags. *)
