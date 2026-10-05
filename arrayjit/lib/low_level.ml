@@ -6327,7 +6327,18 @@ let lane_all_reduce_sites ~(reassociable : Tn.t -> bool) (llc : t) : lane_all_re
         ()
   in
   walk ~uniform:true llc;
-  List.rev !sites
+  (* Admission is per symbol, not per occurrence: a materializing [Unroll] or a [Partition] copies a
+     body with its nested loop symbols, so one symbol can name a copy under uniform control and a
+     copy under a lane-dependent guard (staging#1028 review round 2). The renderer meets a loop by
+     its symbol, so every copy stages partials only when every copy may. *)
+  let refused =
+    List.filter_map !sites ~f:(fun site ->
+        Option.some_if (not site.lar_cross_simdgroup) site.lar_index)
+  in
+  List.rev_map !sites ~f:(fun site ->
+      if List.mem refused site.lar_index ~equal:Indexing.equal_symbol then
+        { site with lar_cross_simdgroup = false }
+      else site)
 
 (* A scalar reading only embedded indices and constants — the semantic notion behind
    {!pure_index_guard}, closed over the index arithmetic ([And]-joined range conditions, [Cmpeq]

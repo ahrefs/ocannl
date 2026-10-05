@@ -74,6 +74,7 @@ type case = {
   opt : LL.optimized;
   e_sym : Ir.Indexing.symbol;
   hw_syms : Ir.Indexing.symbol list;  (** [b], [t], [h] and the lane [d]. *)
+  s_sym : Ir.Indexing.symbol;  (** The serial query loop. *)
   flag_lane : Ir.Indexing.symbol option;
       (** [`Lane_flag]'s workgroup loop computing the lane-dependent flag. *)
   seed : (Ir.Tnode.t * float array) list;
@@ -86,7 +87,8 @@ type case = {
 (* [?guard] wraps the preamble reduction in an [If]: [`Uniform] on the serial query symbol ([s < s_n
    - 2], so the last two queries contribute nothing), [`Lane_flag] on a scope local a workgroup loop
    sets lane-dependently ([flag := a < 32]) -- the shape whose lanes would part ways at the
-   cross-simdgroup barriers. *)
+   cross-simdgroup barriers; [`First_or_flag] on [s < 1 || flag], which a materializing unroll of
+   [s] simplifies away in the first copy only. *)
 let dk_nest ?(minted = true) ?guard ~name ~e_n ~d_n () =
   let a_dims = [| b_n; s_n; h_n; e_n |]
   and bv_dims = [| b_n; t_n; h_n; e_n |]
@@ -127,15 +129,20 @@ let dk_nest ?(minted = true) ?guard ~name ~e_n ~d_n () =
     match guard with
     | None -> (None, [ reduction ])
     | Some `Uniform -> (None, [ L.if_ (L.lt (L.embed s) (L.ic (s_n - 2))) reduction ])
-    | Some `Lane_flag ->
+    | Some ((`Lane_flag | `First_or_flag) as g) ->
         let flag_node = node ~dims:[| 1 |] (name ^ "_flag") in
         L.virtualize flag_node;
         let flag = LL.get_scope flag_node and a = L.sym () in
+        let cond =
+          match g with
+          | `Lane_flag -> LL.Get_local flag
+          | `First_or_flag -> L.binop Ir.Ops.Or (L.lt (L.embed s) (L.ic 1)) (LL.Get_local flag)
+        in
         ( Some a,
           [
             LL.Declare_local { id = flag; needs_init = false };
             L.loop_n a e_n (LL.Set_local (flag, L.lt (L.embed a) (L.ic 32)));
-            L.if_ (LL.Get_local flag) reduction;
+            L.if_ cond reduction;
           ] )
   in
   let llc =
@@ -174,6 +181,7 @@ let dk_nest ?(minted = true) ?guard ~name ~e_n ~d_n () =
     opt;
     e_sym = e;
     hw_syms = [ b; t; h; d ];
+    s_sym = s;
     flag_lane;
     seed =
       [
@@ -441,7 +449,7 @@ let () =
 let sites (opt : LL.optimized) =
   LL.lane_all_reduce_sites ~reassociable:Ir.Online_softmax.reassociable_local opt.llc
 
-let hand_schedule ?(extra_lanes = []) case =
+let hand_schedule ?(extra_lanes = []) ?(unroll_queries = false) case =
   let b, t, h, d = match case.hw_syms with [ b; t; h; d ] -> (b, t, h, d) | _ -> assert false in
   S.apply
     ([
@@ -451,7 +459,8 @@ let hand_schedule ?(extra_lanes = []) case =
        S.Retype { axis = d; ty = LL.Workgroup };
        S.Retype { axis = case.e_sym; ty = LL.Workgroup_reduce };
      ]
-    @ List.map extra_lanes ~f:(fun axis -> S.Retype { axis; ty = LL.Workgroup }))
+    @ List.map extra_lanes ~f:(fun axis -> S.Retype { axis; ty = LL.Workgroup })
+    @ if unroll_queries then [ S.Unroll { axis = case.s_sym; materialize = true } ] else [])
     case.opt
 
 let () =
@@ -486,7 +495,37 @@ let () =
   else (
     Generated.assert_omits ~routine:case.name ~contains:all_reduce_marker omits;
     let ident = Ir.Indexing.symbol_ident case.e_sym in
-    p loops (String.is_substring (Generated.read case.name) ~substring:(" " ^ ident ^ " = 0;")))
+    p loops (String.is_substring (Generated.read case.name) ~substring:(" " ^ ident ^ " = 0;")));
+  (* Copies sharing one reduction symbol (staging#1028 review round 2): unrolling [s] keeps [e] in
+     every copy; the first copy's guard [0 < 1 || flag] simplifies away, the others keep the
+     lane-dependent flag. The renderer meets each copy by its symbol, so admitting the safe copy
+     would admit its unsafe siblings: every copy renders serially. Compiled only. *)
+  let case = dk_nest ~guard:`First_or_flag ~name:"lred_guard_unrolled64" ~e_n:64 ~d_n:64 () in
+  let scheduled =
+    hand_schedule ~extra_lanes:(Option.to_list case.flag_lane) ~unroll_queries:true case
+  in
+  Hashtbl.set scheduled_by_name ~key:case.name ~data:scheduled;
+  (* The scenario itself: a copy of [e] under no guard at all beside copies under one. *)
+  let rec e_copies ~guarded (llc : LL.t) =
+    match llc with
+    | LL.For_loop { index; body; _ } ->
+        if Ir.Indexing.equal_symbol index case.e_sym then [ guarded ] else e_copies ~guarded body
+    | LL.If { body; _ } -> e_copies ~guarded:true body
+    | LL.Seq (a, b) -> e_copies ~guarded a @ e_copies ~guarded b
+    | LL.Scan_loop { body; _ } -> e_copies ~guarded body
+    | _ -> []
+  in
+  let copies = e_copies ~guarded:false scheduled.llc in
+  p
+    "lred_guard_unrolled64: the unroll leaves one copy of the reduction unguarded beside guarded \
+     ones"
+    (List.count copies ~f:not = 1 && List.count copies ~f:Fn.id = s_n - 1);
+  p_none "lred_guard_unrolled64: no copy of the reduction symbol is admitted cross-simdgroup"
+    (sites scheduled) ~f:(fun site -> site.LL.lar_cross_simdgroup);
+  ignore (L.link ~name:case.name scheduled : Context.t * Context.routine);
+  gated ~when_:gpu ~on:backend_name
+    "lred_guard_unrolled64: the emitted kernel spells no all-reduce in any copy"
+    (not (String.is_substring (Generated.read case.name) ~substring:all_reduce_marker))
 
 (* The workgroup-shared bytes of the [lred_partials_*] arrays a generated kernel declares. An
    element type other than float/double reads as an impossible count, so the claim fails. *)
@@ -533,6 +572,7 @@ let () =
       "lred_coop64r";
       "lred_guard_uniform64";
       "lred_guard_flag64";
+      "lred_guard_unrolled64";
     ] ~f:(fun name ->
       p
         (Printf.sprintf "%s: the estimate counts exactly the partials the emitted kernel declares"

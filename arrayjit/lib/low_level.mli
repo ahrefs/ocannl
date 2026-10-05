@@ -663,7 +663,9 @@ type lane_all_reduce_site = {
           dimension, the workgroup is one-dimensional, no workgroup loop encloses it, and every
           enclosing [If] condition reads only constants and index symbols no workgroup loop binds (a
           scope local or a memory read could carry a lane-dependent value, so either disqualifies
-          the site). *)
+          the site). Decided per loop SYMBOL: copies of one body (a materializing [Unroll], a
+          [Partition]) share their nested symbols, and a copy failing the check disqualifies every
+          copy, since the renderer meets each loop by its symbol. *)
 }
 
 val lane_all_reduce_sites : reassociable:(Tnode.t -> bool) -> t -> lane_all_reduce_site list

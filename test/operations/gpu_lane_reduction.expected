@@ -96,6 +96,9 @@ lred_guard_uniform64: the emitted kernel spells the cross-simdgroup all-reduce: 
 lred_guard_flag64: a guard reading a lane-dependent local leaves the site serial: true
 lred_guard_flag64: the emitted kernel does not spell the all-reduce: true
 lred_guard_flag64: the emitted kernel loops the reduction in every lane: true
+lred_guard_unrolled64: the unroll leaves one copy of the reduction unguarded beside guarded ones: true
+lred_guard_unrolled64: no copy of the reduction symbol is admitted cross-simdgroup: true
+lred_guard_unrolled64: the emitted kernel spells no all-reduce in any copy: true
 --- leg 11: the schedule's memory estimate counts the partials the kernel declares ---
 lred_coop32: the estimate counts exactly the partials the emitted kernel declares: true
 lred_dup32: the estimate counts exactly the partials the emitted kernel declares: true
@@ -105,6 +108,7 @@ lred_multi128: the estimate counts exactly the partials the emitted kernel decla
 lred_coop64r: the estimate counts exactly the partials the emitted kernel declares: true
 lred_guard_uniform64: the estimate counts exactly the partials the emitted kernel declares: true
 lred_guard_flag64: the estimate counts exactly the partials the emitted kernel declares: true
+lred_guard_unrolled64: the estimate counts exactly the partials the emitted kernel declares: true
 lred_multi64: 8 bytes of partials, admitted at that limit and refused one byte below it: true
 lred_multi128: 16 bytes of partials, admitted at that limit and refused one byte below it: true
 lred_guard_uniform64: 8 bytes of partials, admitted at that limit and refused one byte below it: true
