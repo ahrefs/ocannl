@@ -1287,11 +1287,11 @@ module Errexit_negation = struct
       not an execution model: quotes and opaque substitutions stay in one line, and outer heredoc
       bodies never become code. Multiple literal delimiters, quoted/escaped delimiters
       (single/double quotes and backslashes) and [<<-] are supported; [<<<] is a here-string.
-      Dollar-quoted delimiters, multiline delimiters and unterminated bodies are refused explicitly:
-      none is guessed at or allowed to hide the rest of the file. The condition grammar is bounded
-      to headers beginning with raw [if]/[elif]/[while]/[until], through a raw [then]/[do] in
-      command position. Compound-command execution, option transitions and heredocs inside
-      substitutions remain the existing scanners' documented boundary.
+      Dollar-quoted delimiters, multiline delimiters, continued unquoted bodies and unterminated
+      bodies are refused explicitly: none is guessed at or allowed to hide the rest of the file. The
+      condition grammar is bounded to headers beginning with raw [if]/[elif]/[while]/[until],
+      through a raw [then]/[do] in command position. Compound-command execution, option transitions
+      and heredocs inside substitutions remain the existing scanners' documented boundary.
 
       Preserve physical start numbers and newline bytes inside quotes. A closing quote followed by
       code must remain visible to the statement scanner, not disappear with its data. *)
@@ -1350,6 +1350,7 @@ module Errexit_negation = struct
       in
       let start = skip start in
       let decoded = Buffer.create 32 in
+      let quoted = ref false in
       let rec word index quote =
         if index >= length then index
         else
@@ -1373,15 +1374,21 @@ module Errexit_negation = struct
               else add ()
           | `None ->
               if starts_at text ~pos:index "$'" || starts_at text ~pos:index "$\"" then (
+                quoted := true;
                 refuse !number "dollar-quoted heredoc delimiter";
                 Buffer.add_char decoded '$';
                 word (index + 2) (if Char.equal text.[index + 1] '\'' then `Single else `Double))
               else if Char.equal c '\\' && index + 1 < length then (
-                if not (Char.equal text.[index + 1] '\n') then
-                  Buffer.add_char decoded text.[index + 1];
+                if not (Char.equal text.[index + 1] '\n') then (
+                  quoted := true;
+                  Buffer.add_char decoded text.[index + 1]);
                 word (index + 2) `None)
-              else if Char.equal c '\'' then word (index + 1) `Single
-              else if Char.equal c '"' then word (index + 1) `Double
+              else if Char.equal c '\'' then (
+                quoted := true;
+                word (index + 1) `Single)
+              else if Char.equal c '"' then (
+                quoted := true;
+                word (index + 1) `Double)
               else if
                 Char.is_whitespace c
                 || List.mem [ ';'; '&'; '|'; '<'; '>'; '('; ')' ] c ~equal:Char.equal
@@ -1389,11 +1396,11 @@ module Errexit_negation = struct
               else add ()
       in
       let finish = word start `None in
-      (finish, Buffer.contents decoded)
+      (finish, Buffer.contents decoded, !quoted)
     in
     let rec skip_bodies index = function
       | [] -> index
-      | (delimiter, strip_tabs) :: rest ->
+      | (delimiter, strip_tabs, quoted) :: rest ->
           let rec body index =
             if index >= length then (
               refuse !number "unterminated outer heredoc";
@@ -1406,6 +1413,17 @@ module Errexit_negation = struct
               in
               let line = String.sub text ~pos:index ~len:(finish - index) in
               let line = if strip_tabs then String.lstrip ~drop:(Char.equal '\t') line else line in
+              (* Unquoted bodies remove escaped newlines before delimiter recognition. Refuse that
+                 form rather than guess which later physical lines remain shell code. *)
+              let rec backslashes index count =
+                if index >= 0 && Char.equal line.[index] '\\' then
+                  backslashes (index - 1) (count + 1)
+                else count
+              in
+              if
+                (not quoted) && finish < length
+                && Int.rem (backslashes (String.length line - 1) 0) 2 = 1
+              then refuse !number "continued unquoted heredoc body";
               let next = if finish < length then finish + 1 else finish in
               if finish < length then Int.incr number;
               if String.equal line delimiter then skip_bodies next rest else body next
@@ -1474,9 +1492,9 @@ module Errexit_negation = struct
             else if starts_at text ~pos:index "<<<" then take (index + 3) `None
             else if starts_at text ~pos:index "<<" then (
               let strip_tabs = index + 2 < length && Char.equal text.[index + 2] '-' in
-              let finish, word = delimiter (index + if strip_tabs then 3 else 2) in
+              let finish, word, quoted = delimiter (index + if strip_tabs then 3 else 2) in
               if String.contains word '\n' then refuse !number "multiline heredoc delimiter";
-              heredocs := (word, strip_tabs) :: !heredocs;
+              heredocs := (word, strip_tabs, quoted) :: !heredocs;
               take finish `None)
             else take (index + 1) `None
     in
@@ -1654,6 +1672,11 @@ module Errexit_negation = struct
       ("negation in if body", "set -e\nif\n! probe\nthen\n! assertion\nfi\n", [ 5 ]);
       ("multiple heredocs", "set -e\ncat <<A <<'B'\n! data\nA\n! data\nB\n! probe\n", [ 7 ]);
       ("escaped delimiter", "set -e\ncat <<E\\ND\n! data\nEND\n! probe\n", [ 5 ]);
+      ("quoted body preserves continuation", "set -e\ncat <<'END'\nEN\\\nD\nEND\n! probe\n", [ 6 ]);
+      ("escaped body preserves continuation", "set -e\ncat <<E\\ND\nEN\\\nD\nEND\n! probe\n", [ 6 ]);
+      ( "unquoted body with paired backslashes",
+        "set -e\ncat <<END\nEN\\\\\nD\nEND\n! probe\n",
+        [ 6 ] );
       ( "double quote preserves ordinary backslash",
         "set -e\ncat <<\"E\\ND\"\n! data\nE\\ND\n! probe\n",
         [ 5 ] );
@@ -1841,11 +1864,25 @@ module Errexit_negation = struct
     Verdict.p "the statement-position ! grep fixture reaches the absent()-style refusal" refused;
     List.iter
       [
+        ("quoted", "cat <<'END'\nEN\\\nD\nEND\n");
+        ("escaped", "cat <<E\\ND\nEN\\\nD\nEND\n");
+        ("paired backslashes", "cat <<END\nEN\\\\\nD\nEND\n");
+      ]
+      ~f:(fun (name, text) ->
+        let messages = ref [] in
+        report ~fail:(fun message -> messages := message :: !messages) ~rel:"fixture.sh" text;
+        Verdict.p_empty
+          (Printf.sprintf "heredoc fixture %s preserves its supported body" name)
+          ~over:[ text ] !messages);
+    List.iter
+      [
         ("cat <<END\ndata\n", 3, "unterminated outer heredoc");
         ("cat <<END", 1, "unterminated outer heredoc");
         ("cat <<$'END'\ndata\nEND\n", 1, "dollar-quoted heredoc delimiter");
         ("cat <<$\"END\"\ndata\nEND\n", 1, "dollar-quoted heredoc delimiter");
         ("cat <<'two\nlines'\ndata\n", 1, "multiline heredoc delimiter");
+        ("set -e\ncat <<END\nEN\\\nD\n! probe\nEND\n", 3, "continued unquoted heredoc body");
+        ("set -e\ncat <<EN\\\nD\nEN\\\nD\n! probe\nEND\n", 4, "continued unquoted heredoc body");
       ]
       ~f:(fun (text, line, reason) ->
         let messages = ref [] in
