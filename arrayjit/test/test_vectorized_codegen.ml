@@ -262,9 +262,10 @@ let () =
   Stdio.printf "\n";
 
   (* --- Register-tiled Tile_mma rendering (gh-ocannl-469, tinyBLAS's mnpack): a hand-built Tile_mma
-     with an FMA-form fallback over awkward extents (6x29x5) renders the 4x3 C-tile of 8-lane
-     vectors (AVX2-class register budget at vector_bytes = 32) held across the k-loop, with the
-     leftover columns a one-vector PARTIAL tail (five lanes: zeroed registers, 20-byte copies) and
+     with an FMA-form fallback over awkward extents (6x29x5) renders the 4x2 C-tile of 8-lane
+     vectors (AVX2-class register budget at vector_bytes = 32; 4x3 ties it on price and the tie goes
+     to the smaller tile, gh-ocannl-1180) held across the k-loop, with the leftover columns a
+     two-vector tail ending in a PARTIAL vector (five lanes: zeroed registers, 20-byte copies) and
      the leftover rows a two-row band — both register tiles rather than scalar loops (gh-ocannl-620)
      — all under the same lane-0 guard as the fallback. --- *)
   let tile_operands () =
