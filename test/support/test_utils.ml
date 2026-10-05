@@ -25,6 +25,7 @@ module Cache_dir_scan = Cache_dir_scan
 (** Scanning OCaml sources for the autotune schedule cache directories they name, so that the one
     root [.gitignore] glob over their shared prefix covers all of them. *)
 
+module Refused_action_scan = Refused_action_scan
 module Refusal_control_scan = Refusal_control_scan
 
 module Refusal_control_manifest = Refusal_control_manifest

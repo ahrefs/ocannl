@@ -110,6 +110,8 @@
   (alias runtest-test_config_consistency)
   (alias runtest-digest_completeness)
   (alias runtest-config_dep_completeness)
+  (alias runtest-refused_action_streams)
+  (alias runtest-refused_action_scan_cases)
   (alias runtest-env_var_deps)
   (alias runtest-env_var_deps_control)
   (alias runtest-source_inventory_cases)
@@ -250,6 +252,7 @@
   (alias runtest-bin_smoke_membership_scan)
   (alias runtest-bin_smoke_membership_scan_control)
   (alias runtest-config_dep_completeness)
+  (alias runtest-refused_action_streams)
   (alias runtest-verdict_ratchet)
   (alias runtest-autotune_bound_pruning)
   (alias runtest-bandwidth_calibration)
@@ -2620,6 +2623,50 @@
  (modules dune_scan_cases)
  (libraries base stdio test_utils arrayjit.verdict))
 
+; gh-ocannl-1005: resolve deliberately refused Verdict runs from their Dune owners, then
+; require both child streams to be captured or dropped on the same action branch.
+
+(executable
+ (name refused_action_streams)
+ (modules refused_action_streams)
+ (libraries base stdio test_utils arrayjit.verdict))
+
+(rule
+ ; ocannl-backend: none -- a source-only Dune action scanner, with no backend linked.
+ (target refused_action_streams.actual)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (sandbox always)
+  (source_tree ../..))
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:refused_action_streams.exe}
+    %{workspace_root}
+    %{target}
+    %{dep:refused_action_streams.exe}
+    %{dep:ocannl_config}))))
+
+(rule
+ (alias runtest-refused_action_streams)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate))
+ (action
+  (diff refused_action_streams.expected refused_action_streams.actual)))
+
+(test
+ ; ocannl-backend: none -- pure Dune action controls and captured fresh-child refusal probes.
+ (name refused_action_scan_cases)
+ (package neural_nets_lib)
+ (deps ocannl_config refused_action_streams.exe)
+ (action
+  (run %{test} %{dep:refused_action_streams.exe}))
+ (modules refused_action_scan_cases)
+ (libraries base stdio unix test_utils fresh_process arrayjit.verdict))
+
 ; gh-ocannl-800: static scanner refusal formats are related to permanent control goldens. These
 ; cases pin extraction, Printf-hole normalization, the orphan arm, and the covered near miss on
 ; synthetic OCaml rather than relying on the currently complete repository relationship. The
@@ -2672,6 +2719,9 @@
   env_var_deps.ml
   env_var_deps_control.expected
   env_var_deps.expected
+  refused_action_streams.ml
+  refused_action_streams.expected
+  refused_action_scan_cases.expected
   ll_test_ratchet.ml
   ll_test_ratchet.expected
   ll_test_scan_cases.expected
@@ -2726,6 +2776,8 @@
    config_scan_lexing.expected,digest_completeness.expected
    env_var_deps.ml
    env_var_deps_control.expected,env_var_deps.expected
+   refused_action_streams.ml
+   refused_action_streams.expected,refused_action_scan_cases.expected
    ll_test_ratchet.ml
    ll_test_ratchet.expected,ll_test_scan_cases.expected
    operand_key_ratchet.ml
