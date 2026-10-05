@@ -1,4 +1,8 @@
 1d: input gradient matches batch-norm oracle: true
+precision policy has two non-trainable state parameters: true
+precision policy assigns half to every running statistic: true
+policy batch-norm forward matches host oracle within 0.01: true
+policy batch-norm inference uses reduced-precision running statistics: true
 1d: four state tensors, two trainable: true
 1d: every state tensor has exactly the channel shape: true
 1d: inference initializes to mean zero / variance one: true
@@ -7,6 +11,7 @@
 1d: inference follows two-step running-stat recurrence: true
 1d: inference leaves statistics unchanged: true
 1d: repeated inference leaves statistics unchanged: true
+1d: ordinary initialization preserves stored statistics: true
 1d: explicit reinitialization resets stored statistics: true
 1d: four state tensors, two trainable: true
 1d: every state tensor has exactly the channel shape: true
@@ -16,6 +21,7 @@
 1d: inference follows two-step running-stat recurrence: true
 1d: inference leaves statistics unchanged: true
 1d: repeated inference leaves statistics unchanged: true
+1d: ordinary initialization preserves stored statistics: true
 1d: explicit reinitialization resets stored statistics: true
 momentum changes executed inference: true
 1d: four state tensors, two trainable: true
@@ -26,6 +32,7 @@ momentum changes executed inference: true
 1d: inference follows two-step running-stat recurrence: true
 1d: inference leaves statistics unchanged: true
 1d: repeated inference leaves statistics unchanged: true
+1d: ordinary initialization preserves stored statistics: true
 1d: explicit reinitialization resets stored statistics: true
 1d: four state tensors, two trainable: true
 1d: every state tensor has exactly the channel shape: true
@@ -35,6 +42,7 @@ momentum changes executed inference: true
 1d: inference follows two-step running-stat recurrence: true
 1d: inference leaves statistics unchanged: true
 1d: repeated inference leaves statistics unchanged: true
+1d: ordinary initialization preserves stored statistics: true
 1d: explicit reinitialization resets stored statistics: true
 1d: four state tensors, two trainable: true
 1d: every state tensor has exactly the channel shape: true
@@ -44,9 +52,14 @@ momentum changes executed inference: true
 1d: inference follows two-step running-stat recurrence: true
 1d: inference leaves statistics unchanged: true
 1d: repeated inference leaves statistics unchanged: true
+1d: ordinary initialization preserves stored statistics: true
 1d: explicit reinitialization resets stored statistics: true
 default retains 0.9 of previous statistics: true
 2d: input gradient matches batch-norm oracle: true
+precision policy has two non-trainable state parameters: true
+precision policy assigns half to every running statistic: true
+policy batch-norm forward matches host oracle within 0.01: true
+policy batch-norm inference uses reduced-precision running statistics: true
 2d: four state tensors, two trainable: true
 2d: every state tensor has exactly the channel shape: true
 2d: inference initializes to mean zero / variance one: true
@@ -55,6 +68,7 @@ default retains 0.9 of previous statistics: true
 2d: inference follows two-step running-stat recurrence: true
 2d: inference leaves statistics unchanged: true
 2d: repeated inference leaves statistics unchanged: true
+2d: ordinary initialization preserves stored statistics: true
 2d: explicit reinitialization resets stored statistics: true
 2d: four state tensors, two trainable: true
 2d: every state tensor has exactly the channel shape: true
@@ -64,6 +78,7 @@ default retains 0.9 of previous statistics: true
 2d: inference follows two-step running-stat recurrence: true
 2d: inference leaves statistics unchanged: true
 2d: repeated inference leaves statistics unchanged: true
+2d: ordinary initialization preserves stored statistics: true
 2d: explicit reinitialization resets stored statistics: true
 momentum changes executed inference: true
 2d: four state tensors, two trainable: true
@@ -74,6 +89,7 @@ momentum changes executed inference: true
 2d: inference follows two-step running-stat recurrence: true
 2d: inference leaves statistics unchanged: true
 2d: repeated inference leaves statistics unchanged: true
+2d: ordinary initialization preserves stored statistics: true
 2d: explicit reinitialization resets stored statistics: true
 2d: four state tensors, two trainable: true
 2d: every state tensor has exactly the channel shape: true
@@ -83,6 +99,7 @@ momentum changes executed inference: true
 2d: inference follows two-step running-stat recurrence: true
 2d: inference leaves statistics unchanged: true
 2d: repeated inference leaves statistics unchanged: true
+2d: ordinary initialization preserves stored statistics: true
 2d: explicit reinitialization resets stored statistics: true
 2d: four state tensors, two trainable: true
 2d: every state tensor has exactly the channel shape: true
@@ -92,5 +109,12 @@ momentum changes executed inference: true
 2d: inference follows two-step running-stat recurrence: true
 2d: inference leaves statistics unchanged: true
 2d: repeated inference leaves statistics unchanged: true
+2d: ordinary initialization preserves stored statistics: true
 2d: explicit reinitialization resets stored statistics: true
 default retains 0.9 of previous statistics: true
+data parallel retains all four model-state parameters: true
+data parallel updates owner running mean: true
+data parallel updates owner running variance: true
+data parallel preserves non-trainable mean across optimizer steps: true
+data parallel preserves non-trainable variance across optimizer steps: true
+data parallel averages only trainable gradients: true

@@ -708,6 +708,12 @@ let batch_norm_state ~label ~epsilon ~momentum ~inference_spec () =
         result with
         Tensor.forward = Ir.Assignments.sequence [ result.Tensor.forward; updates ];
         params = Set.union result.params (Set.union running_mean.params running_variance.params);
+        children =
+          result.children
+          @ [
+              { Tensor.subtensor = running_mean; embedded = false };
+              { Tensor.subtensor = running_variance; embedded = false };
+            ];
       }
     else result
 

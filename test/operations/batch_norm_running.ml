@@ -100,6 +100,8 @@ let trajectory spatial momentum =
   let result = infer shifted "inference follows two-step running-stat recurrence" in
   ignore (infer (values 1 (-9.)) "inference leaves statistics unchanged" : float array);
   ignore (infer shifted "repeated inference leaves statistics unchanged" : float array);
+  ctx := Train.init_params !ctx IDX.empty inference;
+  ignore (infer shifted "ordinary initialization preserves stored statistics" : float array);
   ctx := Train.init_params ~reinit_all:true !ctx IDX.empty inference;
   mean := [| 0.; 0. |];
   variance := [| 1.; 1. |];
@@ -147,12 +149,92 @@ let gradient spatial =
     (Context.get_values ctx dx) expected;
   Context.release ctx
 
+let precision_policy spatial =
+  Tensor.unsafe_reinitialize ();
+  let observations, b, o, make =
+    if spatial then (8, [ 2 ], [ 2; 2; channels ], Ocannl.Nn_blocks.batch_norm2d)
+    else (4, [ 2; 2 ], [ channels ], Ocannl.Nn_blocks.batch_norm1d)
+  in
+  let data = values observations 3. in
+  let lookup ij =
+    data.(Array.fold2_exn ij (Array.of_list (b @ o)) ~init:0 ~f:(fun i j d -> (i * d) + j))
+  in
+  let x = NTDSL.init ~l:"policy_input" ~prec:Ir.Ops.single ~b ~o ~f:lookup () in
+  let layer = make ~label:[ "policy" ] ~epsilon ~momentum:0.5 () in
+  let y = layer ~train_step:(Some 0) x in
+  Ocannl.Precision_policy.apply (Ocannl.Precision_policy.uniform Ir.Ops.half) y;
+  let states = Set.filter y.params ~f:(fun p -> Option.is_none p.Tensor.diff) in
+  p "precision policy has two non-trainable state parameters" (Set.length states = 2);
+  p_all "precision policy assigns half to every running statistic" (Set.to_list states) ~f:(fun p ->
+      Ir.Ops.equal_prec (Lazy.force p.Tensor.value.storage_prec) Ir.Ops.half);
+  Train.set_materialized y.value;
+  let ctx = Train.forward_once (Context.cpu ()) y in
+  let mean, variance = moments data in
+  p_all2 "policy batch-norm forward matches host oracle within 0.01"
+    (Context.get_values ctx y.value) (normalize data mean variance) ~f:(fun actual expected ->
+      Float.(abs (actual -. expected) < 0.01));
+  let inference = layer ~train_step:None x in
+  Train.set_materialized inference.value;
+  let ctx = Train.forward_once ctx inference in
+  p_all2 "policy batch-norm inference uses reduced-precision running statistics"
+    (Context.get_values ctx inference.value)
+    (normalize data
+       (Array.map mean ~f:(fun v -> v *. 0.5))
+       (Array.map variance ~f:(fun v -> (v *. 0.5) +. 0.5)))
+    ~f:(fun actual expected -> Float.(abs (actual -. expected) < 0.01));
+  Context.release ctx
+
+let data_parallel () =
+  Tensor.unsafe_reinitialize ();
+  let input values =
+    NTDSL.init ~l:"parallel_input" ~prec:Ir.Ops.single ~b:[ 4 ] ~o:[ 1 ]
+      ~f:(fun ij -> values.(ij.(0)))
+      ()
+  in
+  let first = input [| 1.; 5.; 9.; 13. |] in
+  let second = input [| 5.; 13.; 21.; 29. |] in
+  let targets = input [| 0.; 0.; 0.; 0. |] in
+  let learning_rate = NTDSL.param ~value:0.01 "learning_rate" () in
+  let loss_of x target =
+    let layer =
+      Ocannl.Nn_blocks.batch_norm1d ~label:[ "parallel" ] ~epsilon:0.25 ~momentum:0.5 ()
+    in
+    let y = layer ~train_step:(Some 0) x in
+    [%op ((y - target) **. 2.) ++ "... | ... => | ->0"]
+  in
+  Ocannl.Parallel.data_parallel ~backend_name:"cc" ~n_shards:2 ~bindings:IDX.empty ~learning_rate
+    ~inputs:first ~targets ~loss_of ~weight_decay:0.2
+    ~f:(fun h ->
+      p "data parallel retains all four model-state parameters" (Array.length h.owner_params = 4);
+      let find name =
+        Array.find_exn h.owner_params ~f:(fun p ->
+            String.equal (Ir.Tnode.debug_name p.Tensor.value) (name ^ "_parallel"))
+      in
+      let running_mean = find "running_mean" and running_variance = find "running_variance" in
+      h.step ();
+      check "data parallel updates owner running mean" (h.read_values running_mean) [| 1.5 |];
+      check "data parallel updates owner running variance" (h.read_values running_variance)
+        [| 2.5 |];
+      h.set_batch ~inputs:second ~targets;
+      h.step ();
+      check "data parallel preserves non-trainable mean across optimizer steps"
+        (h.read_values running_mean) [| 5.25 |];
+      check "data parallel preserves non-trainable variance across optimizer steps"
+        (h.read_values running_variance) [| 9.25 |];
+      let gamma1 = 1. -. (0.01 *. ((16. /. 4.25) +. 0.2)) in
+      let gamma2 = gamma1 *. (1. -. (0.01 *. ((64. /. 16.25) +. 0.2))) in
+      check "data parallel averages only trainable gradients"
+        (h.read_values (find "gamma"))
+        [| gamma2 |])
+    ()
+
 let () =
   List.iter [ false; true ] ~f:(fun spatial ->
       Verdict.case
         (if spatial then "2d" else "1d")
         (fun () ->
           gradient spatial;
+          precision_policy spatial;
           let latest = trajectory spatial (Some 0.) in
           let averaged = trajectory spatial (Some 0.5) in
           p_exists "momentum changes executed inference"
@@ -161,4 +243,5 @@ let () =
           ignore (trajectory spatial (Some 1.) : float array);
           let explicit = trajectory spatial (Some 0.9) in
           let default = trajectory spatial None in
-          check "default retains 0.9 of previous statistics" default explicit))
+          check "default retains 0.9 of previous statistics" default explicit));
+  Verdict.case "data-parallel batch norm" data_parallel
