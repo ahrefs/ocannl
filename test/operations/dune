@@ -1878,6 +1878,20 @@
  (modules gather_table_placement)
  (libraries base ocannl arrayjit.verdict ll_test))
 
+; gh-ocannl-1174: the containment query reads a dynamic gather through its coordinate view -- a
+; table written before the gather stops being read-before-write once the writes cover every row at
+; the gathered columns, and stays an input when they miss a row or a column. Executed legs on the
+; environment's backend, each beside a materialized twin or seeded entry values.
+
+(test
+ (name dynamic_axis_coverage)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules dynamic_axis_coverage)
+ (libraries base ocannl arrayjit.verdict ll_test))
+
 ; gh-ocannl-696: the loop-carried recurrence construct [Scan_loop] on hand-built IR -- executed
 ; cumulative sums in both directions, the online-softmax recurrence, a per-row scan under a Grid
 ; outer loop, the placement and well-formedness contracts, schedule opacity and digest identity.

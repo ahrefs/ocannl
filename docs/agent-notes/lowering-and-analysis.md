@@ -265,6 +265,13 @@ files.
   which is why "mask the last component" missed the trailing unit `Sub_axis` of `Row`'s flat RNG
   store) and may spill into an outer coordinate unless proved not to. `test/operations/
   affine_coordinate_view.ml` checks every proven verdict against enumerated renderer addresses.
+  `Affine.access` carries the dynamic axis itself (`a_dyn_axis`, gh-ocannl-1174), so
+  `may_touch_same_cell`, `read_covered_before` and `Cost_model.access_cells` view a gather or
+  scatter like any other access — refuse one wholesale only where the view cannot answer. In
+  containment the two sides differ: a read's unknown coordinate is universal over its extent (the
+  gather is covered only when every row is), a write's declines (a scatter's row is no definite
+  cell). `test/operations/dynamic_axis_coverage.ml` executes the decision this flips: a table
+  written in full before its gather stops being read-before-write.
   No lowering path was found that pairs a flattened store with an ordinary access in one
   correctness query (the RNG store's `Affine` minor index gives the cross-nest analysis no chain,
   and nothing shares a loop with it), so the hole was latent — keep it that way by construction.

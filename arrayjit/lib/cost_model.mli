@@ -13,11 +13,12 @@
     - Byte counts are upper bounds on compulsory traffic (distinct cells touched, perfect-cache
       assumption): per-access image cardinalities are exact for injective interpretable maps, and
       for vectorized runs whose bases are provably non-overlapping ({!Affine.vec_runs_disjoint});
-      non-injective maps, guarded ([If]) accesses (counted guards-taken), other vectorized runs, and
-      unknown coordinates ([Concat]/dynamic indices — whole-node fallback; a flattened [Sub_axis]
-      run is interpretable, {!Affine.type-coord}) only over-count, as does summing multiple
-      same-direction accesses of one node (a union bound, capped by the node's size) — except that a
-      direction whose accesses are all exact and pairwise provably disjoint
+      non-injective maps, guarded ([If]) accesses (counted guards-taken), other vectorized runs,
+      dynamic accesses (the known coordinates' image times the dynamic axis's extent, capped by the
+      loop box — gh-ocannl-1174), and other unknown coordinates ([Concat] — whole-node fallback; a
+      flattened [Sub_axis] run is interpretable, {!Affine.type-coord}) only over-count, as does
+      summing multiple same-direction accesses of one node (a union bound, capped by the node's
+      size) — except that a direction whose accesses are all exact and pairwise provably disjoint
       ({!Affine.may_touch_same_cell}) sums exactly (gh-ocannl-578). Conditional evaluation also
       over-counts: a read the renderers may skip — a [Where] arm's or a gated right operand's
       ([&&]/[||]/a gate) inline read — or any access under a dead loop keeps its direction

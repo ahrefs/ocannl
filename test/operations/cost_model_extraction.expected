@@ -25,11 +25,24 @@
   G   rd=4    wr=0    rmw=0    approx
   D1  rd=0    wr=4    rmw=0    approx
   flops=1~ read=4 write=4 intensity=0.125
-== dynamic gather (whole-node fallback) ==
-  A   rd=80   wr=0    rmw=0    approx
+== dynamic gather (known column, any row) ==
+  A   rd=16   wr=0    rmw=0    approx
   I   rd=16   wr=0    rmw=0    exact
   E   rd=0    wr=16   rmw=0    exact
-  flops=0 read=96 write=16 intensity=0.000
+  flops=0 read=32 write=16 intensity=0.000
+  table: 4 cells counted, worst case over the data 4
+== dynamic gather (box-limited) ==
+  T   rd=24   wr=0    rmw=0    approx
+  I2  rd=8    wr=0    rmw=0    exact
+  O   rd=0    wr=24   rmw=0    exact
+  flops=0 read=32 write=24 intensity=0.000
+  table: 6 cells counted, worst case over the data 6
+== dynamic gather (image-limited) ==
+  U   rd=24   wr=0    rmw=0    approx
+  I3  rd=16   wr=0    rmw=0    exact
+  P   rd=0    wr=32   rmw=0    exact
+  flops=0 read=40 write=32 intensity=0.000
+  table: 6 cells counted, worst case over the data 6
 == zero-out then overwrite (union bound capped) ==
   S2  rd=0    wr=16   rmw=0    approx
   flops=0 read=0 write=16 intensity=0.000

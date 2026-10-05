@@ -956,9 +956,11 @@ type 'tn access = {
       (** The affine map from the loop box into the node's cells. Empty and standing for every cell
           when [a_whole]. *)
   a_write : bool;
-  a_dynamic : bool;
-      (** The effective cell is not statically known (dynamic gather/scatter): the map has a
-          placeholder component, so queries must not interpret it. *)
+  a_dyn_axis : int option;
+      (** The data-dependent axis of a dynamic gather/scatter ([Get_dynamic]/[Set_dynamic]'s
+          [dyn_axis]); [None] for a static access. The map holds a placeholder there, so it is read
+          through {!view} with [~dyn_axis] — that axis an [Unknown] coordinate, every other axis
+          still known — never by interpreting the placeholder (gh-ocannl-1174). *)
   a_whole : bool;  (** A whole-node access ([Zero_out]). *)
   a_vec_last : bool;
       (** A vectorized write ([Set_from_vec]): the map is the base of a run of [a_vec_len]
@@ -1078,11 +1080,14 @@ let within_statement ~(write : path_comp list) (path : path_comp list) : bool =
     independently between one side's visit and the other's). Symbols bound by neither side's loops
     (static indices) are shared parameters, equal on both sides, bounded by [static_range] when
     known. [dims] is the node's (physical) dims, which the coordinate view reads flattened indices
-    against. Conservative: [false] only when {!pair_conflict} proves disjointness; uninterpretable
-    access kinds (dynamic, whole-node, vectorized) count as overlapping. *)
+    against. Conservative: [false] only when {!pair_conflict} proves disjointness. A dynamic
+    access's data-dependent axis is an [Unknown] coordinate of its view (gh-ocannl-1174), so
+    disjointness is decided from the coordinates both sides know — a gather's rows never meet
+    another column, whatever row the data names; whole-node and vectorized accesses count as
+    overlapping. *)
 let may_touch_same_cell ?(static_range = fun _ -> None) ~dims (a : 'tn access) (b : 'tn access) :
     bool =
-  if a.a_dynamic || b.a_dynamic || a.a_whole || b.a_whole || a.a_vec_last || b.a_vec_last then true
+  if a.a_whole || b.a_whole || a.a_vec_last || b.a_vec_last then true
   else
     let range s =
       match List.Assoc.find a.a_loops s ~equal:Idx.equal_symbol with
@@ -1095,8 +1100,9 @@ let may_touch_same_cell ?(static_range = fun _ -> None) ~dims (a : 'tn access) (
     let dup_left s = List.Assoc.mem a.a_loops s ~equal:Idx.equal_symbol in
     let dup_right s = List.Assoc.mem b.a_loops s ~equal:Idx.equal_symbol in
     match
-      pair_conflict ~range ~dup_left ~dup_right ~pairs:[] ~left:(view ~dims a.a_map)
-        ~right:(view ~dims b.a_map)
+      pair_conflict ~range ~dup_left ~dup_right ~pairs:[]
+        ~left:(view ?dyn_axis:a.a_dyn_axis ~dims a.a_map)
+        ~right:(view ?dyn_axis:b.a_dyn_axis ~dims b.a_map)
     with
     | Disjoint -> false
     | Same_thread | Cross_thread _ -> true
@@ -1123,6 +1129,11 @@ let may_touch_same_cell ?(static_range = fun _ -> None) ~dims (a : 'tn access) (
     common enclosing loops (the write's whole subtree, including its own inner loops, has then
     executed). Loop-carried coverage — a read covered only by earlier iterations of a shared loop —
     is declined, conservatively.
+
+    Accesses are read through their coordinate views. An [Unknown] read coordinate — a dynamic
+    gather's row (gh-ocannl-1174) — is one more universal variable over the coordinate's extent, so
+    the gather is covered exactly when the prior writes cover every row at the cells its known
+    coordinates name; an [Unknown] write coordinate (a scatter's row) declines that write.
 
     With [?thread] naming the parallel (thread-identity) symbols, [`Covered] proves the cell side of
     the per-thread-copy transform: the thread reads only cells it wrote itself, earlier in its own
@@ -1230,15 +1241,9 @@ let read_covered_before ?(thread = fun _ -> false) ?(static_range = fun _ -> Non
   in
   let known = function Known k -> Some (k.terms, k.offset) | Unknown _ -> None in
   try
-    if read.a_dynamic then raise (Fail "dynamic read");
     if read.a_whole || read.a_vec_last then raise (Fail "uninterpretable read kind");
-    let read_view = view ~dims read.a_map in
-    if Array.exists read_view ~f:(fun c -> Option.is_none (known c)) then
-      raise (Fail "opaque read component");
-    let usable =
-      List.filter writes ~f:(fun w ->
-          w.a_write && (not w.a_dynamic) && path_before w.a_path read.a_path)
-    in
+    let read_view = view ?dyn_axis:read.a_dyn_axis ~dims read.a_map in
+    let usable = List.filter writes ~f:(fun w -> w.a_write && path_before w.a_path read.a_path) in
     if List.is_empty usable then raise (Fail "no prior writes");
     if List.exists usable ~f:(fun w -> w.a_whole) then `Covered
     else begin
@@ -1253,7 +1258,7 @@ let read_covered_before ?(thread = fun _ -> false) ?(static_range = fun _ -> Non
           (* A vectorized write's run moves along its minor coordinate, which is then its view's
              last one — the run's own opacity is modelled below, where the run extends the base. *)
           let w_view =
-            let v = view ~dims w.a_map in
+            let v = view ?dyn_axis:w.a_dyn_axis ~dims w.a_map in
             if w.a_vec_last then
               let outer, minor = split_minor v in
               Array.append outer [| minor |]
@@ -1288,9 +1293,19 @@ let read_covered_before ?(thread = fun _ -> false) ?(static_range = fun _ -> Non
           let r_aps = Array.create ~len:rank { ap_lo = 0; ap_hi = 0; ap_step = 0 } in
           let rels =
             Array.init rank ~f:(fun p ->
-                match (known r_view.(p), known w_view.(p)) with
-                | None, _ | _, None -> raise Skip
-                | Some (rts, ro), Some (wts, wo) -> (
+                match known w_view.(p) with
+                | None -> raise Skip
+                | Some (wts, wo) -> (
+                    (* An unknown read coordinate — a dynamic axis, or a group the common frame
+                       merged with an unknown part — is one more universal variable, ranging over
+                       the coordinate's whole extent (coordinates are in bounds, {!type-coord}): a
+                       write covers it only by covering every value. An unknown WRITE coordinate
+                       proves nothing (a scatter's row is not a definite cell). *)
+                    let rts, ro, r_unknown =
+                      match r_view.(p) with
+                      | Known k -> (k.terms, k.offset, [])
+                      | Unknown { size; _ } -> ([], 0, [ (1, (0, size - 1)) ])
+                    in
                     (* Split each side into shared-parameter terms and own terms. *)
                     let shared_of side_own_range (c, s) =
                       if thread s || is_common s || Option.is_none (side_own_range s) then
@@ -1348,7 +1363,7 @@ let read_covered_before ?(thread = fun _ -> false) ?(static_range = fun _ -> Non
                       List.fold terms ~init:([], off) ~f:(fun (ts, off) (c, (lo, hi)) ->
                           if lo = hi then (ts, off + (c * lo)) else ((c, (lo, hi)) :: ts, off))
                     in
-                    let r_terms, r_off = fold_const (r_own @ r_univ) ro in
+                    let r_terms, r_off = fold_const (r_own @ r_univ @ r_unknown) ro in
                     let w_terms, w_off =
                       fold_const (List.map w_own ~f:(fun (c, _, b) -> (c, b))) wo
                     in

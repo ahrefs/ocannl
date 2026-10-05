@@ -27,15 +27,18 @@ type summary = {
 (* Distinct cells one access can touch, with exactness. Interpretable maps: image cardinality =
    loop-box size / fiber size ({!Affine.fiber_cardinality}, which reads a flattened [Sub_axis] run
    in its IR meaning, gh-ocannl-1162); an [`At_least] fiber (non-injective map) makes that an upper
-   bound on the image. An access whose coordinate view has an unknown coordinate (a dynamic index, a
-   [Concat]) falls back to the whole node. Guarded accesses are counted guards-taken. All biases
-   over-count. *)
+   bound on the image. A dynamic access (gh-ocannl-1174) touches one cell per loop-box point, at a
+   row of its dynamic axis the data picks: the image of its map with the placeholder standing still
+   counts the known coordinates' tuples, and each pairs with at most every row — an upper bound,
+   capped by the box. Any other unknown coordinate (a [Concat], a rank mismatch) falls back to the
+   whole node. Guarded accesses are counted guards-taken. All biases over-count. *)
 let access_cells (a : Tn.t Affine.access) : int * bool =
   let node_cells = Tn.num_elems a.a_tn in
   let dims = Lazy.force a.a_tn.Tn.dims in
+  (* Viewed without [~dyn_axis]: the placeholder reads as the fixed index it is spelled as, so only
+     the coordinates no data choice explains are unknown here. *)
   let uninterpretable =
-    a.a_dynamic
-    || Array.exists (Affine.view ~dims a.a_map) ~f:(function
+    Array.exists (Affine.view ~dims a.a_map) ~f:(function
       | Affine.Unknown _ -> true
       | Affine.Known _ -> false)
   in
@@ -49,15 +52,17 @@ let access_cells (a : Tn.t Affine.access) : int * bool =
       | `Exact f -> (box / max 1 f, true)
       | `At_least f -> (box / max 1 f, false)
     in
-    if a.a_vec_last then
-      (* Each map instance is the base of a run along the minor axis. When the base image is exact
-         and the runs are provably pairwise disjoint ({!Affine.vec_runs_disjoint}), the product is
-         the exact distinct-cell count (gh-ocannl-578); otherwise runs may overlap for strided
-         bases, so it is an upper bound. *)
-      let disjoint_runs = Affine.vec_runs_disjoint ~dims a in
-      ( min node_cells (image * max 1 a.a_vec_len),
-        (not (exact_image && disjoint_runs)) || a.a_guarded )
-    else (min node_cells image, (not exact_image) || a.a_guarded)
+    match a.a_dyn_axis with
+    | Some ax -> (min node_cells (min box (image * dims.(ax))), true)
+    | None when a.a_vec_last ->
+        (* Each map instance is the base of a run along the minor axis. When the base image is exact
+           and the runs are provably pairwise disjoint ({!Affine.vec_runs_disjoint}), the product is
+           the exact distinct-cell count (gh-ocannl-578); otherwise runs may overlap for strided
+           bases, so it is an upper bound. *)
+        let disjoint_runs = Affine.vec_runs_disjoint ~dims a in
+        ( min node_cells (image * max 1 a.a_vec_len),
+          (not (exact_image && disjoint_runs)) || a.a_guarded )
+    | None -> (min node_cells image, (not exact_image) || a.a_guarded)
 
 (* Same-node accesses whose images provably share no cell: the union of their images is then the sum
    of their cardinalities. *)

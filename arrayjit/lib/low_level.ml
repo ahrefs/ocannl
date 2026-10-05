@@ -1885,14 +1885,14 @@ let affine_relations (llc : t) : Tn.t Affine.access list * Tn.t Affine.statement
       }
       :: !effs
   in
-  let add ~loops ~path ~guarded ?(gated = false) ?(dynamic = false) ?(whole = false) ?(vec_len = 0)
+  let add ~loops ~path ~guarded ?(gated = false) ?dyn_axis ?(whole = false) ?(vec_len = 0)
       ?(rmw = false) ?(val_syms = []) ?stmt_write ~write tn map =
     acc :=
       {
         Affine.a_tn = tn;
         a_map = map;
         a_write = write;
-        a_dynamic = dynamic;
+        a_dyn_axis = dyn_axis;
         a_whole = whole;
         a_vec_last = vec_len > 0;
         a_vec_len = vec_len;
@@ -1963,10 +1963,10 @@ let affine_relations (llc : t) : Tn.t Affine.access list * Tn.t Affine.statement
         scalar ~loops ~path:(Affine.Rhs :: path) ~guarded ~gated:false ~arg_c ~stmt_write:idcs llsc;
         add ~loops ~path:(Affine.Write :: path) ~guarded ~rmw:(reads_tn tn.Tn.uid llsc)
           ~val_syms:(scalar_syms llsc) ~write:true tn idcs
-    | Set_dynamic { tn; idcs; dyn_value = v, _; llsc; _ } ->
+    | Set_dynamic { tn; idcs; dyn_axis; dyn_value = v, _; llsc; _ } ->
         scalar ~loops ~path:(Affine.Rhs :: path) ~guarded ~gated:false ~arg_c ~stmt_write:idcs v;
         scalar ~loops ~path:(Affine.Rhs :: path) ~guarded ~gated:false ~arg_c ~stmt_write:idcs llsc;
-        add ~loops ~path:(Affine.Write :: path) ~guarded ~dynamic:true
+        add ~loops ~path:(Affine.Write :: path) ~guarded ~dyn_axis
           ~rmw:(reads_tn tn.Tn.uid llsc || reads_tn tn.Tn.uid v)
           ~val_syms:(scalar_syms v @ scalar_syms llsc)
           ~write:true tn idcs
@@ -2001,8 +2001,8 @@ let affine_relations (llc : t) : Tn.t Affine.access list * Tn.t Affine.statement
     | Get_local id -> add_effect ~loops ~path ~guarded ~gated (Affine.Local_read (affine_local id))
     | Constant _ | Constant_bits _ | Embed_index _ -> ()
     | Get (tn, idcs) -> add ~loops ~path ~guarded ~gated ?stmt_write ~write:false tn idcs
-    | Get_dynamic { tn; idcs; dyn_value = v, _; _ } ->
-        add ~loops ~path ~guarded ~gated ~dynamic:true ?stmt_write ~write:false tn idcs;
+    | Get_dynamic { tn; idcs; dyn_axis; dyn_value = v, _; _ } ->
+        add ~loops ~path ~guarded ~gated ~dyn_axis ?stmt_write ~write:false tn idcs;
         operand `Always v
     | Ternop (op, (a, _), (b, _), (c, _)) ->
         let arms =
@@ -7101,10 +7101,10 @@ let reads_covered_query ?(write_eligible = fun ~read:_ ~write:_ -> true)
    a common cell ({!Affine.may_touch_same_cell}) can stack, so a cell's total is bounded by a site's
    own bound plus the bounds of every site overlapping it — maximized over sites. Exemptions mirror
    the tracer: reads at the enclosing statement's write position are skipped ({!rmw_exempt});
-   dynamic reads carry no interpretable map and are skipped like the tracer's defensive
-   [Get_dynamic] arm (the construct postdates this analysis); guarded reads count (guards-taken).
-   The bound over-approximates where the engine cannot prove per-site exactness or pairwise
-   disjointness — erring toward materialization, the safe direction for the visit cap. *)
+   dynamic reads are skipped like the tracer's defensive [Get_dynamic] arm (the construct postdates
+   this analysis); guarded reads count (guards-taken). The bound over-approximates where the engine
+   cannot prove per-site exactness or pairwise disjointness — erring toward materialization, the
+   safe direction for the visit cap. *)
 let read_multiplicity_query (static_indices : Indexing.static_symbol list)
     (accs : Tn.t Affine.access list) : Tn.t -> int =
   let statics_set = statics_set_of static_indices in
@@ -7112,7 +7112,7 @@ let read_multiplicity_query (static_indices : Indexing.static_symbol list)
   let exempt = rmw_exempt ~statics_set in
   let reads_by_tn = Hashtbl.create (module Tn) in
   List.iter accs ~f:(fun a ->
-      if (not a.Affine.a_write) && (not a.a_dynamic) && not (exempt a) then
+      if (not a.Affine.a_write) && Option.is_none a.a_dyn_axis && not (exempt a) then
         Hashtbl.add_multi reads_by_tn ~key:a.a_tn ~data:a);
   fun tn ->
     match Hashtbl.find reads_by_tn tn with
@@ -7266,7 +7266,7 @@ let footprint_eligibility_query (static_indices : Indexing.static_symbol list)
     let site (a : _ Affine.access) =
       if List.exists own_writes ~f:(fun w -> Affine.same_statement w.Affine.a_path a.a_path) then
         Ok (0, 0, Set.empty (module Tn))
-      else if a.a_dynamic then Error "dynamically indexed read"
+      else if Option.is_some a.a_dyn_axis then Error "dynamically indexed read"
       else if a.a_guarded then Error "guarded read"
       else if gated_node then Error "read under a scalar gate"
       else if Set.mem local_effects (Affine.stmt_head a.a_path) then
@@ -8155,7 +8155,8 @@ let computations_at_reads ~placements ~static_indices ~raw self computations =
             List.filter (affine_accesses stmt) ~f:(fun (a : Tn.t Affine.access) ->
                 Tn.equal a.a_tn self && (not a.a_write) && Affine.loops_live a.a_loops))
     in
-    if List.exists reads ~f:(fun a -> a.Affine.a_dynamic) then Error (`Read "dynamic-gather-read")
+    if List.exists reads ~f:(fun a -> Option.is_some a.Affine.a_dyn_axis) then
+      Error (`Read "dynamic-gather-read")
     else
       List.fold_result reads ~init:() ~f:(fun () (a : Tn.t Affine.access) ->
           Result.map ~f:ignore

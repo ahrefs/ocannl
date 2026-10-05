@@ -59,3 +59,21 @@ write [h;e] covers flat read [Sub;f<8]                       query Covered      
 flat vec write [Sub;4c] run 4 covers read [h;e]              query Covered      oracle covered
 trailing-lane vec [Sub;4c;Sub] covers read [h;e;0]           query Covered      oracle covered
 trailing-lane vec [Sub;4c;Sub] c<1 leaves row 1              query Unknown      oracle uncovered
+gather [?;e] after a full write [h;e] (3x4)                  query Covered      oracle covered
+gather [?;0] after a column-0 write [h;0]                    query Covered      oracle covered
+gather [h;?] (dynamic column) after a full write             query Covered      oracle covered
+gather [?;e] after rows 0-1 and row 2 (union)                query Covered      oracle covered
+gather [?;e] after a flat write [Sub;c<12]                   query Covered      oracle covered
+control: gather [?;e] after rows 0-1 only                    query Unknown      oracle uncovered
+control: gather [?;e] after a column-0 write                 query Unknown      oracle uncovered
+control: gather [?;e] after a flat write [Sub;c<11]          query Unknown      oracle uncovered
+control: read [h;e] after a scatter [?;e]                    query Unknown      oracle uncovered
+
+=== may_touch_same_cell ===
+gather [?;0] vs column write [h;1]                           query false        oracle false
+gather [?;e<2] vs columns [h;c+2]                            query false        oracle false
+gather [?;0] vs scatter [?;3]                                query false        oracle false
+gather [h;?] vs row write [2;e], h<2                         query false        oracle false
+control: gather [?;e] vs cell [2;1]                          query true         oracle true
+control: gather [?;1] vs scatter [?;e]                       query true         oracle true
+control: gather [h;?] vs row write [1;e], h<2                query true         oracle true

@@ -4711,7 +4711,8 @@ let partition_breakpoints ~axis (llc : Low_level.t) : int list =
   |> List.dedup_and_sort ~compare:Int.compare
 
 let acc_interpretable (a : _ Affine.access) =
-  (not a.Affine.a_dynamic) && (not a.a_whole) && (not a.a_vec_last)
+  Option.is_none a.Affine.a_dyn_axis
+  && (not a.a_whole) && (not a.a_vec_last)
   && not
        (Array.exists a.a_map ~f:(function
          | Indexing.Sub_axis | Indexing.Concat _ -> true
@@ -5733,7 +5734,7 @@ let crosscheck_scratch_containment (opt : Low_level.optimized) (chains : Low_lev
         if
           (not (Tn.Placements.is_materialized_peek plc tn))
           && List.exists accs ~f:(fun a -> a.Affine.a_write)
-          && not (List.exists accs ~f:(fun a -> a.Affine.a_dynamic))
+          && not (List.exists accs ~f:(fun a -> Option.is_some a.Affine.a_dyn_axis))
         then
           let writes = List.filter accs ~f:(fun a -> a.Affine.a_write) in
           let head = Affine.stmt_head in

@@ -62,7 +62,8 @@ let show (a : Tn.t Aff.access) =
     String.concat ~sep:""
       (List.filter_map
          [
-           (a.a_dynamic, "dyn ");
+           ( Option.is_some a.a_dyn_axis,
+             Printf.sprintf "dyn@%d " (Option.value a.a_dyn_axis ~default:0) );
            (a.a_whole, "whole ");
            (a.a_vec_last, "vec ");
            (a.a_guarded, "guarded ");

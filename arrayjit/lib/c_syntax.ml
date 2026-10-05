@@ -4030,9 +4030,10 @@ module C_syntax (B : C_syntax_config) = struct
       in
       match accesses with
       | [ ({ Affine.a_write = false; _ } as read); ({ a_write = true; _ } as write) ]
-        when write.a_rmw && (not read.a_guarded) && (not write.a_guarded) && (not read.a_dynamic)
-             && (not write.a_dynamic) && (not read.a_whole) && (not write.a_whole)
-             && (not read.a_vec_last) && (not write.a_vec_last)
+        when write.a_rmw && (not read.a_guarded) && (not write.a_guarded)
+             && Option.is_none read.a_dyn_axis && Option.is_none write.a_dyn_axis
+             && (not read.a_whole) && (not write.a_whole) && (not read.a_vec_last)
+             && (not write.a_vec_last)
              && Affine.same_statement read.a_path write.a_path
              && Option.exists read.a_stmt_write ~f:(same_map write.a_map)
              && same_map read.a_map write.a_map ->
