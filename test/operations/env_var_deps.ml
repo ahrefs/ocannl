@@ -125,15 +125,20 @@ let exempt_declarations =
    declaration exemptions above: each is checked for still being needed. *)
 let gateless_dirs =
   [
+    ( "benchmarks/runners/ocannl/dune",
+      ( Some [ "bin-smoke"; "metal-codegen" ],
+        "its bin-smoke action runs metal_queue_probe, linking metal, ctypes and unix without an \
+         OCANNL configuration reader; universe makes the canary rerun, but cannot check spellings"
+      ) );
     ( "benchmarks/dune",
-      "its one runtest action runs python3 over the benchmark orchestrator's own unit tests, which \
-       import no OCANNL executable -- there is no startup check in reach to gate, the same reason \
-       `config_dep_completeness` exempts it from the ocannl_config dependency" );
+      ( None,
+        "its one runtest action runs python3 over the benchmark orchestrator's own unit tests, \
+         which import no OCANNL executable -- there is no startup check in reach to gate, the same \
+         reason `config_dep_completeness` exempts it from the ocannl_config dependency" ) );
   ]
 
-(* A gate is a stanza that depends on the state of the world: that is what makes dune rerun it
-   rather than serve the previous run. Matched structurally rather than by the stanza's name, so a
-   gate that is renamed or rewritten still counts. *)
+(* A universe dependency prevents caching. It does not identify an ambient gate: a compiler census
+   or a backend-free probe can legitimately need unconditional execution too. *)
 let rec depends_on_universe = function
   | Sexp.List [ Sexp.Atom "universe" ] -> true
   | Sexp.List l -> List.exists l ~f:depends_on_universe
@@ -159,8 +164,140 @@ let aliases_of = Scan.aliases_of
 let alias_deps = Scan.alias_deps
 let alias_stanza_name = Scan.alias_stanza_name
 
-(* A gate is a stanza with an action that depends on the state of the world. *)
-let is_gate stanza = depends_on_universe stanza && not (List.is_empty (aliases_of stanza))
+(* gh-ocannl-920: a gate runs a program explicitly linking the startup environment reader. Resolve
+   runners through the shared scanner, including implicit test actions, public names, `%{test}` and
+   chdir. A name or `(universe)` alone cannot vouch for that startup check. The dedicated
+   `arrayjit.utils` dependency distinguishes these lightweight gates from tests linking a backend
+   through `ocannl`, such as the unconditionally rerun cc compiler census. *)
+(* A direct archive dependency can be omitted by the OCaml linker when unused. Only an
+   explicit, effective -linkall makes startup independent of the program's own OCaml references.
+   Evaluate grouping/subtraction through the shared ordered-set reader; do not flatten flags. *)
+let force_links_reader stanza =
+  match Scan.field stanza "link_flags" with
+  | None -> false
+  | Some flags ->
+      let unresolved flag =
+        invalid_arg
+          ("ambient gate link_flags cannot be resolved statically: " ^ flag
+         ^ "; use an explicit effective -linkall")
+      in
+      let rec validate ~subtracted = function
+        | Sexp.Atom ":standard" when subtracted -> unresolved ":standard on subtraction's right"
+        | Sexp.Atom ":standard" | Sexp.Atom "\\" -> ()
+        | Sexp.Atom flag
+          when String.is_prefix flag ~prefix:":" || String.is_substring flag ~substring:"%{" ->
+            unresolved flag
+        | Sexp.Atom _ -> ()
+        | Sexp.List terms -> validate_terms ~subtracted terms
+      and validate_terms ~subtracted terms =
+        match List.split_while terms ~f:(fun term -> not (Sexp.equal term (Sexp.Atom "\\"))) with
+        | left, [] -> List.iter left ~f:(validate ~subtracted)
+        | left, _ :: right ->
+            List.iter left ~f:(validate ~subtracted);
+            validate_terms ~subtracted:true right
+      in
+      validate_terms ~subtracted:false flags;
+      List.mem (Scan.eval_ordered_set flags).included "-linkall" ~equal:String.equal
+
+let gate_program stanza =
+  List.mem
+    [ "test"; "tests"; "executable"; "executables" ]
+    (Option.value (Scan.head stanza) ~default:"")
+    ~equal:String.equal
+  && Option.value_map (Scan.field stanza "libraries") ~default:false ~f:(fun libraries ->
+      List.exists libraries ~f:(function Sexp.Atom "arrayjit.utils" -> true | _ -> false))
+  && force_links_reader stanza
+
+let is_gate ?(subdir = "") ?programs ~stanzas stanza =
+  let programs = Option.value programs ~default:(List.map stanzas ~f:(fun s -> (subdir, s))) in
+  let runners = [ (subdir, stanza) ] in
+  Option.value_map (Scan.field stanza "deps") ~default:false ~f:(List.exists ~f:depends_on_universe)
+  && (not (List.is_empty (aliases_of stanza)))
+  && (gate_program stanza
+      && List.mem [ "test"; "tests" ]
+           (Option.value (Scan.head stanza) ~default:"")
+           ~equal:String.equal
+      && (Option.is_none (Scan.field stanza "action")
+         || List.exists (Scan.executables_run stanza) ~f:(function
+           | _, Scan.Runs "%{test}" -> true
+           | _ -> false))
+     || List.exists programs ~f:(fun (program_dir, program) ->
+         gate_program program
+         && List.exists
+              (Scan.program_runners ~subdir:program_dir ~runner_stanzas:runners stanzas program)
+              ~f:(fun (_, runners) ->
+                List.exists runners ~f:(fun (runner, _) -> Sexp.equal runner stanza))))
+
+(* The mixed-file exemption belongs to one configuration-free canary, not to arbitrary members of
+   its aliases. Resolve every reachable action and keep the owner's explicit module/library contract
+   closed. Unsupported launchers cannot inherit the exemption. *)
+let configuration_free_canary_alias ~subdir ~stanzas alias =
+  let atoms field stanza =
+    match Scan.field stanza field with
+    | Some terms ->
+        List.filter_map terms ~f:(function Sexp.Atom atom -> Some atom | _ -> None)
+        |> List.sort ~compare:String.compare
+    | None -> []
+  in
+  let owners =
+    List.filter stanzas ~f:(fun stanza ->
+        List.mem [ "executable"; "executables" ]
+          (Option.value (Scan.head stanza) ~default:"")
+          ~equal:String.equal
+        && List.mem (Scan.names_of stanza) "metal_queue_probe" ~equal:String.equal)
+  in
+  match owners with
+  | [ owner ]
+    when String.equal (Option.value (Scan.head owner) ~default:"") "executable"
+         && List.equal String.equal (Scan.names_of owner) [ "metal_queue_probe" ]
+         && Option.equal (List.equal Sexp.equal) (Scan.field owner "modules")
+              (Some [ Sexp.Atom "metal_queue_probe" ])
+         && List.equal String.equal (atoms "libraries" owner) [ "ctypes"; "metal"; "unix" ]
+         && Option.value_map (Scan.field owner "libraries") ~default:false
+              ~f:(List.for_all ~f:(function Sexp.Atom _ -> true | _ -> false)) ->
+      let reached = Scan.aliases_reached_from stanzas alias in
+      let attached stanza = aliases_of stanza @ Option.to_list (alias_stanza_name stanza) in
+      let subjects =
+        List.filter stanzas ~f:(fun stanza -> List.exists (attached stanza) ~f:(Set.mem reached))
+      in
+      let resolved =
+        Set.for_all reached ~f:(fun alias ->
+            List.exists subjects ~f:(fun stanza ->
+                List.mem (attached stanza) alias ~equal:String.equal))
+      in
+      let transparent_deps stanza =
+        Option.value_map (Scan.field stanza "deps") ~default:true
+          ~f:
+            (List.for_all ~f:(function
+              | Sexp.List [ Sexp.Atom "universe" ]
+              | Sexp.List [ Sexp.Atom "env_var"; Sexp.Atom _ ]
+              | Sexp.List [ Sexp.Atom "alias"; Sexp.Atom _ ] ->
+                  true
+              | _ -> false))
+      in
+      let saw_canary = ref false in
+      let safe =
+        List.for_all subjects ~f:(fun stanza ->
+            transparent_deps stanza
+            &&
+            match (Scan.head stanza, Scan.field stanza "action") with
+            | Some "alias", None -> true
+            | Some "rule", Some [ Sexp.List (Sexp.Atom "run" :: arguments) ]
+              when List.for_all arguments ~f:(function Sexp.Atom _ -> true | _ -> false) ->
+                let runs_owner =
+                  List.exists
+                    (Scan.program_runners ~subdir
+                       ~runner_stanzas:[ (subdir, stanza) ]
+                       stanzas owner)
+                    ~f:(fun (_, runners) ->
+                      List.exists runners ~f:(fun (runner, _) -> Sexp.equal runner stanza))
+                in
+                if runs_owner then saw_canary := true;
+                runs_owner
+            | _ -> false)
+      in
+      resolved && safe && !saw_canary
+  | _ -> false
 
 (* Every alias a build can start from: those rules and tests attach to, and those `(alias …)`
    stanzas define. *)
@@ -172,11 +309,14 @@ let entry_points stanzas =
    building an alias builds -- the `deps` of every rule attached to it and of the `(alias …)` stanza
    defining it. A slow rule whose `deps` name the gate's alias is gated as much as one the gate sits
    beside, and runs it first. *)
-let gated_aliases stanzas =
+let gated_aliases ?(subdir = "") ?programs stanzas =
   let rec close gated =
     let next =
       List.fold stanzas ~init:gated ~f:(fun gated stanza ->
-          if is_gate stanza || List.exists (alias_deps stanza) ~f:(Set.mem gated) then
+          if
+            is_gate ~subdir ?programs ~stanzas stanza
+            || List.exists (alias_deps stanza) ~f:(Set.mem gated)
+          then
             List.fold
               (aliases_of stanza @ Option.to_list (alias_stanza_name stanza))
               ~init:gated ~f:Set.add
@@ -621,14 +761,16 @@ let is_golden_diff stanza =
    gate, whose whole purpose is to run the same binary the `(test)` stanza does. *)
 let is_test_stanza = function Sexp.List (Sexp.Atom ("test" | "tests") :: _) -> true | _ -> false
 
-(* The generated names that belong to an ambient gate: a `(test)` stanza depending on `(universe)`
-   is the gate, so a rule sharing ITS alias runs the same gate binary, which is the one deliberate
-   collision. Recognized this way rather than by the literal name `env_spelling_gate` (which a
-   rename would silently unexempt) and rather than by the rule alone (which let any
-   universe-dependent rule claim the exemption -- Codex P2, rounds 6 and 7). *)
+(* The generated names that belong to an ambient gate: a `(test)` stanza running the startup
+   environment reader without caching is a gate, so a rule sharing ITS alias runs the same binary,
+   which is the one deliberate collision. Recognized this way rather than by the literal name
+   `env_spelling_gate` (which a rename would silently unexempt) and rather than by the rule alone
+   (which let any universe-dependent rule claim the exemption -- Codex P2, rounds 6 and 7). *)
 let gate_generated_names stanzas =
   List.concat_map stanzas ~f:(fun stanza ->
-      if is_test_stanza stanza && depends_on_universe stanza then Scan.names_of stanza else [])
+      if is_test_stanza stanza && gate_program stanza && is_gate ~stanzas stanza then
+        Scan.names_of stanza
+      else [])
   |> Set.of_list (module String)
 
 let generated_runtest_names stanzas =
@@ -1080,7 +1222,7 @@ let main () =
   let exemptions = Map.of_alist_exn (module String) exempt_declarations in
   let exemptions_used = ref (Set.empty (module String)) in
   let gateless = Map.of_alist_exn (module String) gateless_dirs in
-  let gateless_used = ref (Set.empty (module String)) in
+  let gateless_used = ref [] in
   let gated = ref [] in
   (* The gh-ocannl-659 half: one line per stanza that runs an executable, and the per-file summary
      the golden holds. *)
@@ -1127,6 +1269,15 @@ let main () =
     | Sexp.List (Sexp.Atom (("deps" | "preprocessor_deps") as field) :: args) -> [ (field, args) ]
     | Sexp.List l -> List.concat_map l ~f:dep_fields
     | Sexp.Atom _ -> []
+  in
+  (* Gates can be borrowed across dune files: the optional source exporter runs bin's gate. Preserve
+     every declaration's workspace-relative directory instead of comparing basenames. *)
+  let gate_programs =
+    List.concat_map dune_files ~f:(fun (file, on_disk) ->
+        let dir = Stdlib.Filename.dirname file in
+        Scan.walk dir
+          (Scan.stanzas (In_channel.read_all on_disk))
+          ~f:(fun dir stanza -> if gate_program stanza then [ (dir, stanza) ] else []))
   in
   List.iter dune_files ~f:(fun (dune_file, on_disk) ->
       let dir = match Stdlib.Filename.dirname dune_file with "." -> "" | dir -> dir in
@@ -1474,14 +1625,20 @@ let main () =
             if String.is_empty subdir then dune_file
             else Printf.sprintf "%s, in `(subdir %s …)`" dune_file subdir
           in
-          let gated_here = gated_aliases here in
+          let gated_here =
+            gated_aliases ~subdir:(Scan.in_subdir dir subdir) ~programs:gate_programs here
+          in
           let entries = entry_points here in
           (* The lock (Codex P1 round 4): a gate in a directory whose actions take it has to take it
              too. Since this check receives a directory group, a group's unlocked gate cannot hide
              behind the outer [(subdir ...)] form (Codex P2, round 5). *)
           if List.exists here ~f:takes_training_lock then
             List.iter here ~f:(fun s ->
-                if is_gate s && not (takes_training_lock s) then
+                if
+                  is_gate ~subdir:(Scan.in_subdir dir subdir) ~programs:gate_programs ~stanzas:here
+                    s
+                  && not (takes_training_lock s)
+                then
                   fail
                     (Printf.sprintf
                        "%s%s serializes its actions on `%s` and its gate on `%s` does not take the \
@@ -1500,8 +1657,17 @@ let main () =
                    `(subdir …)` group of that file is a different directory, whose stanzas the
                    recorded reason says nothing about (Codex P2, round 7). Applying it there would
                    exempt a nested OCANNL-linked test on the strength of its parent's reason. *)
-              else if String.is_empty subdir && Map.mem gateless dune_file then
-                gateless_used := Set.add !gateless_used dune_file
+              else if
+                String.is_empty subdir
+                && Option.exists (Map.find gateless dune_file) ~f:(fun (aliases, _) ->
+                    Option.value_map aliases ~default:true ~f:(fun aliases ->
+                        List.mem aliases alias ~equal:String.equal
+                        && configuration_free_canary_alias ~subdir:(Scan.in_subdir dir subdir)
+                             ~stanzas:here alias))
+              then
+                let aliases, _ = Map.find_exn gateless dune_file in
+                gateless_used :=
+                  (dune_file, Option.map aliases ~f:(fun _ -> alias)) :: !gateless_used
               else
                 fail
                   (Printf.sprintf
@@ -1578,10 +1744,11 @@ let main () =
               if not (List.exists (aliases_of producer) ~f:(Set.mem scans_reaches)) then
                 fail
                   (Printf.sprintf
-                     "%s has a rule that globs the repository -- a repo-wide scan -- and declares \
-                      no target, so it checks its own output in its action, and the `%s` alias \
-                      does not aggregate the alias it sits on (%s): `dune build @%s/%s` would skip \
-                      it silently. List its alias in the `(alias (name %s) (deps …))` stanza"
+                     "%s has a rule that inventories the repository -- a repo-wide scan -- and \
+                      declares no target, so it checks its own output in its action, and the `%s` \
+                      alias does not aggregate the alias it sits on (%s): `dune build @%s/%s` \
+                      would skip it silently. List its alias in the `(alias (name %s) (deps …))` \
+                      stanza"
                      dune_file scans_suite
                      (match aliases_of producer with
                      | [] -> "none"
@@ -1601,9 +1768,9 @@ let main () =
                   if not (List.exists aliases ~f:(Set.mem scans_reaches)) then
                     fail
                       (Printf.sprintf
-                         "%s globs the repository to produce `%s` -- a repo-wide scan -- and no \
-                          rule the `%s` alias aggregates diffs it against its golden: `dune build \
-                          @%s/%s` would skip it silently. Give the diff rule `(alias \
+                         "%s inventories the repository to produce `%s` -- a repo-wide scan -- and \
+                          no rule the `%s` alias aggregates diffs it against its golden: `dune \
+                          build @%s/%s` would skip it silently. Give the diff rule `(alias \
                           runtest-<name>)` -- that alias and no other -- and list `(alias \
                           runtest-<name>)` in BOTH the `(alias (name runtest) (deps …))` and the \
                           `(alias (name %s) (deps …))` stanzas"
@@ -1753,7 +1920,9 @@ let main () =
                      that stanza's executable, so the merged alias runs one program either way
                      (Codex P2, rounds 6 to 8). *)
                   | Some name
-                    when is_gate stanza && Set.mem gate_names name
+                    when is_gate ~subdir:(Scan.in_subdir dir subdir) ~programs:gate_programs
+                           ~stanzas:here stanza
+                         && Set.mem gate_names name
                          && List.exists (Scan.executables_run stanza) ~f:(fun (cwd, command) ->
                              match command with
                              (* Resolved, not by basename: `(chdir other (run ./gate.exe))` runs
@@ -2552,19 +2721,32 @@ let main () =
   List.sort !pipeline_table ~compare:(fun (a, _) (b, _) -> String.compare a b)
   |> List.iter ~f:(fun (where, via) -> printf "  %s: %s\n" where via);
   let stale_gateless =
-    Set.diff (Set.of_list (module String) (List.map gateless_dirs ~f:fst)) !gateless_used
+    List.concat_map gateless_dirs ~f:(fun (file, (aliases, _)) ->
+        Option.value_map aliases
+          ~default:[ (file, None) ]
+          ~f:(fun aliases -> List.map aliases ~f:(fun alias -> (file, Some alias))))
+    |> List.filter ~f:(fun expected ->
+        not
+          (List.mem !gateless_used expected ~equal:(fun (file, alias) (used_file, used_alias) ->
+               String.equal file used_file && Option.equal String.equal alias used_alias)))
   in
-  if not (Set.is_empty stale_gateless) then
+  if not (List.is_empty stale_gateless) then
     fail
       (Printf.sprintf
          "directories exempted from the ambient gate that no longer run tests -- drop them from \
           the exemption list: %s"
-         (String.concat ~sep:", " (Set.to_list stale_gateless)));
+         (String.concat ~sep:", "
+            (List.map stale_gateless ~f:(fun (file, alias) ->
+                 file ^ Option.value_map alias ~default:"" ~f:(fun alias -> " @" ^ alias)))));
   printf "\nAmbient environment gates, by dune file and every alias whose build runs one:\n";
   List.sort !gated ~compare:(fun (a, x) (b, y) ->
       match String.compare a b with 0 -> String.compare x y | c -> c)
   |> List.iter ~f:(fun (dune_file, alias) -> printf "  %-40s @%s\n" dune_file alias);
-  List.iter gateless_dirs ~f:(fun (dir, why) -> printf "  %s -- no gate: %s\n" dir why);
+  List.iter gateless_dirs ~f:(fun (dir, (aliases, why)) ->
+      printf "  %s%s -- no gate: %s\n" dir
+        (Option.value_map aliases ~default:"" ~f:(fun aliases ->
+             " (" ^ String.concat ~sep:", " aliases ^ ")"))
+        why);
   printf "\nDeclarations of a name OCANNL does not read as a configuration key, exempt by design:\n";
   List.iter exempt_declarations ~f:(fun (key, why) -> printf "  %s -- %s\n" key why);
   printf
@@ -2948,10 +3130,24 @@ let control_context () =
           ^ " )\n (action\n  (with-stdout-to\n   %{target}\n   (echo \"\"))))\n" ))
   in
   let gateless_files =
-    List.map gateless_dirs ~f:(fun (file, _) ->
-        ( file,
-          Printf.sprintf "(test\n (name gateless)\n (deps\n  (env_var %s))\n (modules gateless))\n"
-            Scan.backend_env_var ))
+    List.map gateless_dirs ~f:(fun (file, (aliases, _)) ->
+        let content =
+          match aliases with
+          | None ->
+              Printf.sprintf
+                "(test (name gateless) (deps (universe) (env_var %s)) (modules gateless))\n"
+                Scan.backend_env_var
+          | Some aliases ->
+              "(executable (name metal_queue_probe) (modules metal_queue_probe) (libraries metal \
+               ctypes unix))\n"
+              ^ String.concat ~sep:""
+                  (List.map aliases ~f:(fun alias ->
+                       Printf.sprintf
+                         "(rule (alias %s) (deps (universe) (env_var %s)) (action (run \
+                          %%{exe:metal_queue_probe.exe})))\n"
+                         alias Scan.backend_env_var))
+        in
+        (file, content))
   in
   exempt_files @ gateless_files
 
@@ -3169,7 +3365,8 @@ let family_gate ~elsewhere =
  (name gate)
  (modules gate)
  (deps ocannl_config (universe))
- (libraries base))
+ (libraries base arrayjit.utils)
+ (link_flags -linkall))
 
 (rule
  ; ocannl-backend: none -- the same gate, on the alias the family stanza depends on.
@@ -3258,7 +3455,8 @@ let family_member_stanza ~shape ~metal =
             \  (name childgate)\n\
             \  (modules childgate)\n\
             \  (deps ocannl_config (universe))\n\
-            \  (libraries base))\n\
+            \  (libraries base arrayjit.utils)\n\
+            \  (link_flags -linkall))\n\
             \ (rule\n\
             \  ; ocannl-backend: none -- the same gate, on the alias the group's aliases depend on.\n\
             \  (alias runtest-childgate)\n\
@@ -4296,10 +4494,16 @@ let guard_subject ~arm =
         \  (setenv %s 1\n\
         \   (run %%{test}))))\n\n\
          (rule\n\
+        \ ; ocannl-backend: none -- runs the direct-utils ambient gate.\n\
         \ (alias runtest)\n\
         \ (deps ocannl_config (universe))\n\
         \ (action\n\
-        \  (progn)))\n"
+        \  (run %%{dep:ambient.exe})))\n\n\
+         (executable\n\
+        \ (name ambient)\n\
+        \ (modules ambient)\n\
+        \ (link_flags -linkall)\n\
+        \ (libraries arrayjit.utils))\n"
         (Utils.env_var_name guard_key)
   (* The same directive one level down, which the top-level loop did not reach. *)
   | `Include_subdirs_nested ->
@@ -4355,12 +4559,14 @@ let guard_control () =
   List.iter context ~f:(fun (file, content) ->
       write_file (Stdlib.Filename.concat root file) content);
   let paths =
-    "t/dune" :: "t/guard.ml" :: "t/gen/guard.ml" :: "t/utils.ml" :: List.map context ~f:fst
+    "t/dune" :: "t/ambient.ml" :: "t/guard.ml" :: "t/gen/guard.ml" :: "t/utils.ml"
+    :: List.map context ~f:fst
   in
   (* The probe goes where the stanza's modules live, which for the subdir arm is one level down.
      Both places are handed to the checker on every run, and the arm that is not using one writes an
      inert source there, so the argument list -- and hence which globs the checker believes it was
      given -- is the same in every arm. *)
+  write_file (Stdlib.Filename.concat root "t/ambient.ml") "let () = ()\n";
   let run ?(probe = guard_probe) ?(at = "t/guard.ml") arm =
     List.iter [ "t/guard.ml"; "t/gen/guard.ml"; "t/utils.ml" ] ~f:(fun path ->
         write_file
@@ -4570,7 +4776,8 @@ let inline_alias_subject variant =
  (name gate)
  (modules gate)
  (deps ocannl_config (universe))
- (libraries base))
+ (libraries base arrayjit.utils)
+ (link_flags -linkall))
 
 (rule
  ; ocannl-backend: none -- the same gate, on the alias the per-module rules depend on.
@@ -4704,10 +4911,16 @@ let pipeline_subject answer =
     \ (deps ocannl_config%s)\n\
     \ (libraries arrayjit.ir)%s)\n\n\
      (rule\n\
+    \ ; ocannl-backend: none -- runs the direct-utils ambient gate.\n\
     \ (alias runtest)\n\
     \ (deps ocannl_config (universe))\n\
     \ (action\n\
-    \  (progn)))\n"
+    \  (run %%{dep:ambient.exe})))\n\n\
+     (executable\n\
+    \ (name ambient)\n\
+    \ (modules ambient)\n\
+    \ (link_flags -linkall)\n\
+    \ (libraries arrayjit.utils))\n"
     deps action
 
 let pipeline_control () =
@@ -4730,9 +4943,10 @@ let pipeline_control () =
     \    get_global_flag ~default:(get_global_flag ~default:false ~arg_name:\"big_models\")\n\
     \      ~arg_name:\"large_models\"\n";
   let paths =
-    "t/dune" :: "t/probe.ml" :: pipeline_home :: pipeline_helper :: env_reader_home
-    :: List.map context ~f:fst
+    "t/dune" :: "t/ambient.ml" :: "t/probe.ml" :: pipeline_home :: pipeline_helper
+    :: env_reader_home :: List.map context ~f:fst
   in
+  write_file (Stdlib.Filename.concat root "t/ambient.ml") "let () = ()\n";
   let run ?(unplaced = false) ~probe answer =
     write_file (Stdlib.Filename.concat root pipeline_home) (pipeline_stub ~unplaced);
     write_file (Stdlib.Filename.concat root "t/probe.ml") probe;
@@ -4815,6 +5029,246 @@ let pipeline_control () =
     unplaced_ok;
   try remove_tree root with Unix.Unix_error _ -> ()
 
+(* Repo-wide inventory diagnostics cover source_tree as well as recursive globs. *)
+let repository_inventory_control () =
+  let exe =
+    let name = Stdlib.Sys.executable_name in
+    if Stdlib.Filename.is_relative name then Stdlib.Filename.concat (Stdlib.Sys.getcwd ()) name
+    else name
+  in
+  let root = Stdlib.Filename.temp_dir "evd_inventory" "" in
+  let context = control_context () in
+  List.iter context ~f:(fun (file, content) ->
+      write_file (Stdlib.Filename.concat root file) content);
+  write_file (Stdlib.Filename.concat root "t/gate.ml") "let () = ()\n";
+  let paths = "t/dune" :: "t/gate.ml" :: List.map context ~f:fst in
+  let run ~target =
+    write_file
+      (Stdlib.Filename.concat root "t/dune")
+      (family_gate ~elsewhere:false
+     ^ "\n(rule (alias audit) (deps (alias runtest-gate) (source_tree ../..)) " ^ target
+     ^ " (action (echo checked)))\n");
+    run_checker ~root ~exe ("." :: paths)
+  in
+  let observes target diagnostic =
+    let status, text = run ~target in
+    let passed =
+      (match status with Unix.WEXITED 1 -> true | _ -> false)
+      && String.is_substring text ~substring:diagnostic
+    in
+    if not passed then eprintf "inventory control %s: %s\n%s\n" target (describe_status status) text;
+    passed
+  in
+  printf "\nSynthetic controls: escaping source_tree rules must join the scans aggregate.\n";
+  Verdict.p "an unaggregated targetless source_tree scan reports that it inventories the repository"
+    (observes "" "has a rule that inventories the repository");
+  Verdict.p "an undiffed source_tree output reports that it inventories the repository"
+    (observes "(target inventory.actual)" "inventories the repository to produce");
+  try remove_tree root with Unix.Unix_error _ -> ()
+
+let gateless_scope_control () =
+  let exe =
+    let name = Stdlib.Sys.executable_name in
+    if Stdlib.Filename.is_relative name then Stdlib.Filename.concat (Stdlib.Sys.getcwd ()) name
+    else name
+  in
+  let root = Stdlib.Filename.temp_dir "evd_gateless" "" in
+  let context = control_context () in
+  List.iter context ~f:(fun (file, content) ->
+      write_file (Stdlib.Filename.concat root file) content);
+  let file = "benchmarks/runners/ocannl/dune" in
+  let existing = In_channel.read_all (Stdlib.Filename.concat root file) in
+  write_file
+    (Stdlib.Filename.concat root file)
+    (existing ^ "(executable (name reader) (modules reader) (libraries arrayjit.utils))\n"
+   ^ "(rule\n ; ocannl-backend: none -- only reads configuration, with no backend.\n"
+   ^ " (alias unrelated-reader) (deps ocannl_config) (action (run %{dep:reader.exe})))\n");
+  let source = "benchmarks/runners/ocannl/reader.ml" in
+  write_file (Stdlib.Filename.concat root source) "let () = ignore (Utils.unread_env_vars ())\n";
+  let canary_source = "benchmarks/runners/ocannl/metal_queue_probe.ml" in
+  write_file (Stdlib.Filename.concat root canary_source) "let () = ()\n";
+  let status, text =
+    run_checker ~root ~exe ("." :: source :: canary_source :: List.map context ~f:fst)
+  in
+  let reported =
+    (match status with Unix.WEXITED 1 -> true | _ -> false)
+    && String.is_substring text ~substring:"`unrelated-reader` alias and no ambient gate reaches it"
+  in
+  if not reported then eprintf "gateless scope control %s:\n%s\n" (describe_status status) text;
+  printf "\nSynthetic controls: mixed-file gateless exemptions apply only to their named aliases.\n";
+  Verdict.p "an unrelated configuration-reading alias cannot inherit the probe's gateless exemption"
+    reported;
+  let aggregated =
+    Scan.stanzas existing
+    |> List.filter ~f:(fun stanza ->
+        not (List.mem (aliases_of stanza) "metal-codegen" ~equal:String.equal))
+    |> List.map ~f:Sexp.to_string_hum |> String.concat ~sep:"\n"
+  in
+  Verdict.p_all
+    "the original canary and local alias aggregation retain their configuration-free exemption"
+    [ existing; aggregated ^ "\n(alias (name metal-codegen) (deps (alias bin-smoke)))\n" ]
+    ~f:(fun content ->
+      write_file (Stdlib.Filename.concat root file) content;
+      let status, text =
+        run_checker ~root ~exe ("." :: source :: canary_source :: List.map context ~f:fst)
+      in
+      let passed = match status with Unix.WEXITED 0 -> true | _ -> false in
+      if not passed then eprintf "legitimate canary control %s:\n%s\n" (describe_status status) text;
+      passed);
+  let rejects_canary_drift ~content ~alias =
+    write_file (Stdlib.Filename.concat root file) content;
+    let status, text =
+      run_checker ~root ~exe ("." :: source :: canary_source :: List.map context ~f:fst)
+    in
+    let rejected =
+      (match status with Unix.WEXITED 1 -> true | _ -> false)
+      && String.is_substring text ~substring:("`" ^ alias ^ "` alias and no ambient gate reaches it")
+    in
+    if not rejected then
+      eprintf "canary drift control %s %s:\n%s\n" alias (describe_status status) text;
+    rejected
+  in
+  Verdict.p_all
+    "a configuration reader attached to either existing canary alias still requires a gate"
+    [ "bin-smoke"; "metal-codegen" ] ~f:(fun alias ->
+      rejects_canary_drift ~alias
+        ~content:
+          (existing ^ "(executable (name reader) (modules reader) (libraries arrayjit.utils))\n"
+         ^ "(rule\n ; ocannl-backend: none -- only reads configuration.\n" ^ " (alias " ^ alias
+         ^ ") (deps ocannl_config) (action (run %{dep:reader.exe})))\n"));
+  Verdict.p_all "canary owner linkage or module drift cannot inherit a configuration-free exemption"
+    [
+      ("(libraries metal ctypes unix)", "(libraries metal ctypes unix arrayjit.utils)");
+      ("(modules metal_queue_probe)", "(modules metal_queue_probe reader)");
+    ]
+    ~f:(fun (original, replacement) ->
+      rejects_canary_drift ~alias:"bin-smoke"
+        ~content:(String.substr_replace_all existing ~pattern:original ~with_:replacement));
+  Verdict.p_all
+    "unsupported canary launchers or unresolved alias dependencies cannot claim the exemption"
+    [
+      String.substr_replace_all existing ~pattern:"(run %{exe:metal_queue_probe.exe})"
+        ~with_:"(system \"metal_queue_probe.exe\")";
+      existing ^ "(alias (name bin-smoke) (deps (alias unknown)))\n";
+      existing ^ "(alias (name bin-smoke) (deps (alias_rec elsewhere)))\n";
+      existing
+      ^ "(executable (name metal_queue_probe) (modules reader) (libraries arrayjit.utils))\n";
+    ]
+    ~f:(fun content -> rejects_canary_drift ~alias:"bin-smoke" ~content);
+  Verdict.p_all "each missing scoped exemption is stale even while its sibling alias remains"
+    [ "bin-smoke"; "metal-codegen" ] ~f:(fun missing ->
+      let remaining =
+        Scan.stanzas existing
+        |> List.filter ~f:(fun stanza ->
+            not (List.mem (aliases_of stanza) missing ~equal:String.equal))
+        |> List.map ~f:Sexp.to_string_hum |> String.concat ~sep:"\n"
+      in
+      write_file (Stdlib.Filename.concat root file) remaining;
+      let status, text =
+        run_checker ~root ~exe ("." :: source :: canary_source :: List.map context ~f:fst)
+      in
+      let stale =
+        (match status with Unix.WEXITED 1 -> true | _ -> false)
+        && String.is_substring text ~substring:"directories exempted from the ambient gate"
+        && String.is_substring text ~substring:(file ^ " @" ^ missing)
+      in
+      if not stale then
+        eprintf "stale alias control %s %s:\n%s\n" missing (describe_status status) text;
+      stale);
+  try remove_tree root with Unix.Unix_error _ -> ()
+
+(* The ambient classifier's nearest legitimate universe users beside a renamed gate. The executable
+   identities are deliberately alike; only linkage and the actual runner distinguish them, and all
+   three consumers of gate identity use this predicate. *)
+let ambient_gate_control () =
+  let stanza text = List.hd_exn (Scan.stanzas text) in
+  let gate =
+    stanza
+      "(test (name renamed) (modules renamed) (libraries arrayjit.utils) (link_flags -linkall) \
+       (deps (universe)))"
+  in
+  let census = stanza "(test (name census) (libraries ocannl) (deps (universe)))" in
+  let free = stanza "(test (name free) (libraries unix) (deps (universe)))" in
+  let runner command =
+    stanza ("(rule (alias runtest-renamed) (deps (universe)) (action " ^ command ^ "))")
+  in
+  let real = runner "(run %{dep:renamed.exe})" in
+  let other = runner "(chdir elsewhere (run ./renamed.exe))" in
+  let unrelated = runner "(run %{dep:free.exe})" in
+  let no_run = runner "(progn)" in
+  let cached = stanza "(rule (alias cached) (action (run %{dep:renamed.exe})))" in
+  let stanzas = [ gate; census; free; real; other; unrelated; no_run; cached ] in
+  printf "\nSynthetic controls: ambient gates derive identity from the program actually run.\n";
+  Verdict.p "a renamed direct-utils universe test and its resolved runner are gates"
+    (is_gate ~stanzas gate && is_gate ~stanzas real);
+  Verdict.p_none "a universe-dependent compiler census and backend-free test are not ambient gates"
+    [ census; free ] ~f:(is_gate ~stanzas);
+  Verdict.p_none "a runner of another directory's same-named binary is not an ambient gate"
+    [ other ] ~f:(is_gate ~stanzas);
+  Verdict.p_none "a universe rule running an unrelated binary or no program is not an ambient gate"
+    [ unrelated; no_run ] ~f:(is_gate ~stanzas);
+  Verdict.p_none "a cached runner of the real gate cannot provide an ambient gate" [ cached ]
+    ~f:(is_gate ~stanzas);
+  Verdict.p "only the actual gate's test name receives the generated-alias collision exemption"
+    (Set.equal (gate_generated_names stanzas) (Set.singleton (module String) "renamed"));
+  let external_gate =
+    stanza
+      "(executable (name renamed) (public_name pkg.gate) (libraries arrayjit.utils) (link_flags \
+       -linkall))"
+  in
+  let borrowed = runner "(run %{dep:../other/renamed.exe})" in
+  let public = runner "(run %{bin:pkg.gate})" in
+  let self =
+    stanza
+      "(test (name renamed) (libraries arrayjit.utils) (link_flags -linkall) (deps (universe)) \
+       (action (run %{test})))"
+  in
+  Verdict.p
+    "a gate borrowed from another dune file, its public name and an explicit self-run resolve"
+    (is_gate ~subdir:"t" ~programs:[ ("other", external_gate) ] ~stanzas:[ borrowed ] borrowed
+    && is_gate ~subdir:"t" ~programs:[ ("other", external_gate) ] ~stanzas:[ public ] public
+    && is_gate ~stanzas:[ self ] self);
+  let ordinary = stanza "(test (name ordinary) (libraries arrayjit.utils) (deps (universe)))" in
+  let removed =
+    stanza
+      "(test (name removed) (libraries arrayjit.utils) (link_flags (-linkall \\ -linkall)) (deps \
+       (universe)))"
+  in
+  let restored =
+    stanza
+      "(test (name restored) (libraries arrayjit.utils) (link_flags (-linkall \\ -linkall) \
+       -linkall) (deps (universe)))"
+  in
+  Verdict.p_none "an ordinary direct-utils test and a subtracted linkall flag do not declare a gate"
+    [ ordinary; removed ]
+    ~f:(is_gate ~stanzas:[ ordinary; removed ]);
+  Verdict.p "a linkall flag restored outside a subtraction is an effective gate declaration"
+    (is_gate ~stanzas:[ restored ] restored);
+  let preprocessing_only =
+    List.map [ "(test (name cached))"; "(tests (names cached))" ] ~f:(fun head ->
+        let fields = String.drop_suffix head 1 in
+        stanza
+          (fields
+         ^ " (libraries arrayjit.utils) (link_flags -linkall) (preprocessor_deps (universe)))"))
+  in
+  Verdict.p_none "preprocessing-only universe dependencies leave force-linked tests cached"
+    preprocessing_only
+    ~f:(is_gate ~stanzas:preprocessing_only);
+  let refuses flags =
+    try
+      ignore
+        (force_links_reader (stanza ("(executable (name unresolved) (link_flags " ^ flags ^ "))")));
+      false
+    with Invalid_argument message ->
+      String.is_substring message ~substring:"ambient gate link_flags cannot be resolved statically"
+  in
+  Verdict.p_all
+    "unresolved flag includes, expansions and subtracted standard sets are refused clearly"
+    [ "(:include flags.sexp)"; "%{read:flags.sexp}"; "-linkall \\ :standard" ]
+    ~f:refuses;
+  let reach = gated_aliases [ census; free; unrelated; no_run ] in
+  Verdict.p "universe users alone leave their alias entry points ungated" (Set.is_empty reach)
+
 let () =
   match Array.to_list argv with
   | _ :: [ "--control" ] ->
@@ -4826,6 +5280,9 @@ let () =
       family_control ();
       inline_alias_control ();
       pipeline_control ();
+      ambient_gate_control ();
+      repository_inventory_control ();
+      gateless_scope_control ();
       (* Dune's repository-wide rule hands the same source to [main] as [./env_var_deps.ml] after a
          full build has materialized the local build-tree copy. Exercise that spelling here too: the
          manifest identity is repository-relative even when the file used to extract the diagnostics

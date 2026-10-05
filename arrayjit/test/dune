@@ -16,6 +16,7 @@
  (package arrayjit)
  (deps ocannl_config (universe))
  (modules env_spelling_gate)
+ (link_flags -linkall)
  (libraries base stdio arrayjit.utils arrayjit.verdict))
 
 ; The same gate on an alias of its own, so that the focused aggregates below can DEPEND on it and

@@ -274,8 +274,8 @@ let raw_entries =
         "[scanner-refusal:bbadfd8513559355fedbc54dc3dc678a] serializes its actions";
         "[scanner-refusal:eb5d5419b3bd18240469743cbabc58f2] has actions on";
         "[scanner-refusal:a06dccc27afe2153a7700609691d3c8d] attaches a rule";
-        "[scanner-refusal:cd2777d83ada3318386d3cd02b39018b] repository a repo-wide";
-        "[scanner-refusal:ffdd3e3b7a0db8da177f376b13f03c45] repository to produce";
+        "[scanner-refusal:7f157a5478f43aa3d2da34c9975976a9] inventories the repository";
+        "[scanner-refusal:91751d43d8939e1da724e6f0bcbe8f09] inventories the repository";
         "[scanner-refusal:f16784d0b1f52de5e30378cb771ada5c] alias does not";
         "[scanner-refusal:4012b24c7623acd977522e8f2eacf2bb] attaches a rule";
         "[scanner-refusal:ba5d90fc4bcec944ebd169329c706968] goldens on the";
@@ -402,6 +402,27 @@ let raw_entries =
         "[scanner-refusal:0a556db347940fc8afa67b95bbe681ad] Ir.Schedule";
         "[scanner-refusal:dfee69c1373134de53471c5591146cee] another library's Schedule";
         "[scanner-refusal:596c956b100d191f1322f23aea4b1186] pipeline reads outside";
+        "[scanner-refusal:d04fa9759a77fcd06752e1d4a912eb06] source_tree";
+        "[scanner-refusal:760e7621ae0370f92b10878f9d71ee0f] source_tree";
+        "[scanner-refusal:56b7e1396b8287e30b29b436fc729e13] unrelated configuration-reading alias";
+        "[scanner-refusal:32ebbcf3860e0aeff7ce6014cae7dc77] their configuration-free exemption";
+        "[scanner-refusal:33d6f713bd21678df8dc25c1f94de29e] configuration reader attached";
+        "[scanner-refusal:8e23bc2547246ce32e080d7a985cd246] a configuration-free exemption";
+        "[scanner-refusal:bd0f7175b0bbdb8fff16e6a342879ca3] unresolved alias dependencies";
+        "[scanner-refusal:f8f322e105a5e0f26e1dc4dfb4a25c7f] missing scoped exemption";
+        "[scanner-refusal:ca87c0e84f8b051f232796e69330144f] renamed direct-utils universe";
+        "[scanner-refusal:eb2b142cf7df4f4e59facf55554fb04e] universe-dependent compiler census";
+        "[scanner-refusal:474c2c17b390e6a30e2a618348b20390] another directory's same-named";
+        "[scanner-refusal:64dfdc824dcf91354dbd2abd219db619] universe rule running";
+        "[scanner-refusal:06fb7574357e1a85e9d7da69c19351b3] gate cannot provide";
+        "[scanner-refusal:3bacab0b9c1d831e547e7ededd7085e2] generated-alias collision exemption";
+        "[scanner-refusal:6d2cc639b272c289c3a79c46561b671f] explicit self-run resolve";
+        "[scanner-refusal:314daa1e6e83eb37702ce6cf4f24cd44] ordinary direct-utils test";
+        "[scanner-refusal:f8fc95de59a65622241eac16f5f1ecf4] effective gate declaration";
+        "[scanner-refusal:abc806b50e485449683b10cc952fde9d] preprocessing-only universe \
+         dependencies";
+        "[scanner-refusal:0d805a9703eb5f183046f05353ed6587] expansions and subtracted";
+        "[scanner-refusal:9fe5330074251fed6b9e5e08a0d663bd] universe users alone";
       ] );
     ( "ocamlformat_ignore_scan.ml",
       [
@@ -652,12 +673,11 @@ let raw_direct_evidence =
     ( "env_var_deps.ml:a06dccc27afe2153a7700609691d3c8d",
       "a public name belongs to its own executable, so a rule running the second unit's public \
        name does not aggregate the first: true" );
-    ( "env_var_deps.ml:cd2777d83ada3318386d3cd02b39018b",
-      "a public name belongs to its own executable, so a rule running the second unit's public \
-       name does not aggregate the first: true" );
-    ( "env_var_deps.ml:ffdd3e3b7a0db8da177f376b13f03c45",
-      "an executable run by a `(test)` stanza's custom action is aggregated through the \
-       `runtest-<name>` dune generates for that test: true" );
+    ( "env_var_deps.ml:7f157a5478f43aa3d2da34c9975976a9",
+      "an unaggregated targetless source_tree scan reports that it inventories the repository: true"
+    );
+    ( "env_var_deps.ml:91751d43d8939e1da724e6f0bcbe8f09",
+      "an undiffed source_tree output reports that it inventories the repository: true" );
     ( "env_var_deps.ml:f16784d0b1f52de5e30378cb771ada5c",
       "a runner that runs another directory's executable of the same name does not aggregate this \
        directory's member: true" );

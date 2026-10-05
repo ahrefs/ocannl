@@ -75,6 +75,22 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   counterparts so losing a control is itself a golden change (gh-ocannl-811). Optimizer
   forwarders still need executed oracles — syntactic use proves only that the value was forwarded.
 
+- Ambient gates in `env_var_deps` (gh-ocannl-920) are uncached actions running a program that
+  directly declares `arrayjit.utils` and an effective `(link_flags -linkall)`, resolved through
+  `Dune_stanza_scan.program_runners` plus
+  Dune's self-running test actions. The force-link flag is required because OCaml can omit an
+  unused archive and its startup reader. Grouping and subtraction are evaluated; unresolved
+  flag includes, expansions and subtraction of `:standard` are refused explicitly. `(universe)`
+  in the action's `deps` prevents caching; preprocessing dependencies do not. It alone identifies
+  no gate: compiler censuses and OCANNL-free canaries use it too. The same classification owns alias reachability, the gate's
+  training lock obligation and the deliberate generated-alias collision exemption. A mixed Dune
+  file exempts only its configuration-free aliases, so a new configuration reader cannot inherit
+  the canary's exemption. Each scoped alias must remain live; removing one retires its exemption
+  even if another exempt alias still runs. Every action reachable from a scoped canary alias must
+  directly run its one local `metal_queue_probe` owner, with only the declared probe module and
+  `metal`, `ctypes`, `unix` libraries; alias-only aggregation is allowed. Opaque launchers,
+  unresolvable alias dependencies and a reader added to the same alias require a gate.
+
 - A scan resolving names in OCaml sources uses `Test_utils.Lexical_scope` and states its fail-loud
   rule in its header before its first review (gh-ocannl-1140). File-wide literal tables and module
   alias sets cannot distinguish a parameter or nested binding from a same-named earlier value;
