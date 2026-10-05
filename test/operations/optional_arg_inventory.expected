@@ -23,10 +23,10 @@ non-discard use; `unimplemented` must therefore be visible to callers as an unde
   lib/mixed_prec.ml:with_master_weights ?placement -- implemented
   lib/nn_blocks.ml:avg_pool2d ?stride -- implemented
   lib/nn_blocks.ml:avg_pool2d ?window_size -- implemented
-  lib/nn_blocks.ml:batch_norm1d ?_momentum -- unimplemented
   lib/nn_blocks.ml:batch_norm1d ?epsilon -- implemented
-  lib/nn_blocks.ml:batch_norm2d ?_momentum -- unimplemented
+  lib/nn_blocks.ml:batch_norm1d ?momentum -- implemented
   lib/nn_blocks.ml:batch_norm2d ?epsilon -- implemented
+  lib/nn_blocks.ml:batch_norm2d ?momentum -- implemented
   lib/nn_blocks.ml:class_ids_of_int_list ?label -- implemented
   lib/nn_blocks.ml:conv2d ?kernel_size -- implemented
   lib/nn_blocks.ml:conv2d ?out_channels -- implemented

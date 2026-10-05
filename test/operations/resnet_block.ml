@@ -24,8 +24,9 @@ let run tag ~stride ?out_channels () =
       Ir.Tnode.set_observable y.Tensor.value;
       let ctx = Context.auto () in
       let ctx = Train.init_params ctx Ir.Indexing.Empty y in
-      (* Zero the main branch. The projection sums input channels, then its batch norm uses unit
-         gamma; the unprojected shortcut retains the positive input. *)
+      (* Zero the main branch. The projection sums input channels, then inference uses zero running
+         mean, unit running variance and unit gamma; the unprojected shortcut retains the positive
+         input. *)
       let ctx =
         Set.fold y.Tensor.params ~init:ctx ~f:(fun ctx p ->
             let tn = p.Tensor.value in
@@ -34,6 +35,7 @@ let run tag ~stride ?out_channels () =
               if
                 String.is_prefix name ~prefix:"kernel_downsample_"
                 || String.is_prefix name ~prefix:"gamma_downsample_bn_"
+                || String.is_prefix name ~prefix:"running_variance_"
               then 1.
               else 0.
             in
@@ -56,16 +58,10 @@ let run tag ~stride ?out_channels () =
             let b = i / (side * side) and h = i / side % side and w = i % side in
             input_value b (stride * h) (stride * w) 0 +. input_value b (stride * h) (stride * w) 1)
       in
-      let mean = Array.fold samples ~init:0. ~f:( +. ) /. Float.of_int (Array.length samples) in
-      let variance =
-        Array.fold samples ~init:0. ~f:(fun acc v -> acc +. ((v -. mean) **. 2.))
-        /. Float.of_int (Array.length samples)
-      in
       p_alli (tag ^ " executed shortcut matches oracle") (Array.to_list values) ~f:(fun i actual ->
           let cell = i / channels in
           let expected =
-            if projected then
-              Float.max 0. ((samples.(cell) -. mean) /. Float.sqrt (variance +. 1e-5))
+            if projected then Float.max 0. (samples.(cell) /. Float.sqrt (1. +. 1e-5))
             else input_value (cell / (side * side)) (cell / side % side) (cell % side) (i % channels)
           in
           if Float.(abs (actual -. expected) >= 1e-4) then
