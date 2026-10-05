@@ -715,7 +715,7 @@ def _run_supporting(cmd, cwd, env, capture_output, check, timeout):
     return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
 
 
-def run_cell(label, cmd, env=None, cwd=None, timeout=None, on_incomplete=None):
+def run_cell(label, cmd, env=None, cwd=None, timeout=None, on_incomplete=None, on_checkpoint=None):
     """Run one cell; return `(result, failure_note)`.
 
     `failure_note` is None when the cell produced a result line, and otherwise says what went
@@ -726,6 +726,12 @@ def run_cell(label, cmd, env=None, cwd=None, timeout=None, on_incomplete=None):
     the cache it was writing; its sentence is appended to the failure note. `killed` separates the
     two cases, because what is safe to DO about them differs: see `quarantine_tinygrad_cache`.
 
+    A cell that ends without a result may still have checkpointed the work it completed before the
+    stage it died in (gh-ocannl-1209; see `last_checkpoint`). On those same paths its last
+    checkpoint is summarized into the failure note and handed to `on_checkpoint(checkpoint)`, so
+    the caller's failure record can keep the losses. It is never returned as the result: the
+    cell still failed.
+
     The whole body runs inside one cancellation-deferral window whose only hole is the
     `communicate` wait. Chasing that protection stretch by stretch is how several review rounds
     went — the spawn, then the kill, then the leftover probe, then the assignments between them —
@@ -734,7 +740,7 @@ def run_cell(label, cmd, env=None, cwd=None, timeout=None, on_incomplete=None):
     the GPU with the sweep gone.
     """
     with _cancellation.deferring():
-        return _run_cell(label, cmd, env, cwd, timeout, on_incomplete)
+        return _run_cell(label, cmd, env, cwd, timeout, on_incomplete, on_checkpoint)
 
 
 def cell_log_name(label):
@@ -768,6 +774,49 @@ def open_cell_log(label):
     return os.fdopen(fd, "wb"), Path(name), True
 
 
+# What an OCANNL runner writes before each checkpoint of a measurement still in progress
+# (gh-ocannl-1209): `Bench_json.checkpoint_prefix`. The golden of test/operations/bench_result_line
+# holds lines the OCaml side built, which test_orchestrate feeds back through `last_checkpoint`.
+CHECKPOINT_PREFIX = "bench: checkpoint "
+
+
+def last_checkpoint(text):
+    """The last checkpoint in a cell's output, parsed, or None.
+
+    A checkpoint records the parity losses a cell observed before a later stage -- the timed steps,
+    or the dominant-kernel instrument -- and is all that is left of them when the cell is killed
+    there. It is not a result line and never stands in for one: it starts with CHECKPOINT_PREFIX,
+    not '{', so the result parser cannot pick it up, and it carries no timing.
+
+    A kill can land in the middle of a write, so a final line that does not parse is skipped for
+    the one before it.
+    """
+    for line in reversed(text.splitlines()):
+        if not line.startswith(CHECKPOINT_PREFIX):
+            continue
+        try:
+            obj = json.loads(line[len(CHECKPOINT_PREFIX):])
+        except ValueError:
+            continue
+        if isinstance(obj, dict) and obj.get("record") == "checkpoint":
+            return obj
+    return None
+
+
+def checkpoint_note(checkpoint):
+    """One sentence for a failure note: what the cell's last checkpoint kept."""
+    stages = checkpoint.get("stages") or {}
+
+    def named(status):
+        return ", ".join(k for k, v in stages.items() if v == status) or "none"
+
+    return (
+        f"its last checkpoint kept {len(checkpoint.get('losses') or [])} of "
+        f"{checkpoint.get('parity_steps')} parity losses (complete: {named('complete')}; "
+        f"running: {named('running')}) -- completed loss work, not an accepted result"
+    )
+
+
 def read_cell_log(path):
     """The cell's output so far, as text: read through a handle of its own, so the read shares
     no file offset with a writer that might still be alive."""
@@ -778,11 +827,13 @@ def read_cell_log(path):
         return f"(the cell's output could not be read back from {path}: {exc})\n"
 
 
-def _run_cell(label, cmd, env, cwd, timeout, on_incomplete):
+def _run_cell(label, cmd, env, cwd, timeout, on_incomplete, on_checkpoint):
     print(f"--- {label}", flush=True)
     log, log_path, temporary = open_cell_log(label)
     try:
-        return _run_logged_cell(label, cmd, env, cwd, timeout, on_incomplete, log, log_path)
+        return _run_logged_cell(
+            label, cmd, env, cwd, timeout, on_incomplete, on_checkpoint, log, log_path
+        )
     finally:
         # Idempotent: the spawn path closes the sweep's copy as soon as the child has its own.
         log.close()
@@ -793,7 +844,7 @@ def _run_cell(label, cmd, env, cwd, timeout, on_incomplete):
                 log_path.unlink()
 
 
-def _run_logged_cell(label, cmd, env, cwd, timeout, on_incomplete, log, log_path):
+def _run_logged_cell(label, cmd, env, cwd, timeout, on_incomplete, on_checkpoint, log, log_path):
     timed_out = False
     remaining = cell_group.GONE
     cache_note = ""
@@ -846,6 +897,16 @@ def _run_logged_cell(label, cmd, env, cwd, timeout, on_incomplete, log, log_path
             raise cleanup_failure
         raise
     stdout = read_cell_log(log_path)
+
+    def with_checkpoint(note):
+        # Every path below that returns no result: what the cell completed before it died.
+        checkpoint = last_checkpoint(stdout)
+        if checkpoint is None:
+            return note
+        if on_checkpoint:
+            on_checkpoint(checkpoint)
+        return f"{note}; {checkpoint_note(checkpoint)}"
+
     leftovers = ""
     stuck = cell_group.GONE
     initial = _group_observation(proc)
@@ -887,6 +948,7 @@ def _run_logged_cell(label, cmd, env, cwd, timeout, on_incomplete, log, log_path
             )
         if cache_note:
             note += f"; {cache_note}"
+        note = with_checkpoint(note)
         print(f"!!! {label} {note}", flush=True)
         if remaining is not cell_group.GONE and _cancellation.held_signal is not None:
             raise cell_group.CleanupFailed(note)
@@ -910,6 +972,7 @@ def _run_logged_cell(label, cmd, env, cwd, timeout, on_incomplete, log, log_path
         stuck_cache_note = (on_incomplete(True) if on_incomplete else "") or ""
         if stuck_cache_note:
             note += f"; {stuck_cache_note}"
+        note = with_checkpoint(note)
         print(f"!!! {label} {note}", flush=True)
         if _cancellation.held_signal is not None:
             raise cell_group.CleanupFailed(note)
@@ -934,7 +997,7 @@ def _run_logged_cell(label, cmd, env, cwd, timeout, on_incomplete, log, log_path
             note += f"; {failed_note}"
         if failed_note:
             print(f"!!! {label}: {failed_note}", flush=True)
-        return None, note
+        return None, with_checkpoint(note)
     result = json.loads(line)
     if leftovers and on_incomplete:
         # The row stands — the cell ran and printed its result — but a member of its group was
@@ -2272,7 +2335,7 @@ def main():
     # rather than leaving it to how the operator ran the sweep.
     stamp = {}
 
-    def record_failure(label, note):
+    def record_failure(label, note, checkpoint=None):
         """The one path a failed cell takes, wherever in the sweep it failed.
 
         Both the in-memory list the report is built from and the checkpoint an interrupted run
@@ -2287,16 +2350,19 @@ def main():
             # leaves no result row to carry it, and the checkpoint an interrupted run leaves is
             # then the only artifact there is. It says what the SWEEP inherited, not what a runner
             # read: a failed cell produced no result line to name its framework.
-            f.write(
-                json.dumps(
-                    {"cell": label, "why": note, "ambient_ocannl_env": ambient}
-                )
-                + "\n"
-            )
+            record = {"cell": label, "why": note, "ambient_ocannl_env": ambient}
+            if checkpoint is not None:
+                # The losses a killed cell completed (gh-ocannl-1209), kept beside the failure and
+                # never among the results.
+                record["checkpoint"] = checkpoint
+            f.write(json.dumps(json_safe(record), allow_nan=False) + "\n")
 
     def collect(label, cmd, override=None, **kwargs):
         t0 = time.monotonic()
-        r, note = run_cell(label, cmd, timeout=args.cell_timeout, **kwargs)
+        kept = []
+        r, note = run_cell(
+            label, cmd, timeout=args.cell_timeout, on_checkpoint=kept.append, **kwargs
+        )
         if r:
             r.update(stamp)
             stamp_ambient_env(r, ambient)
@@ -2309,7 +2375,7 @@ def main():
             with open(partial, "a") as f:
                 f.write(json.dumps(json_safe(r), allow_nan=False) + "\n")
         else:
-            record_failure(label, note)
+            record_failure(label, note, kept[-1] if kept else None)
         print(f"    cell took {time.monotonic() - t0:.0f}s", flush=True)
 
     for fx in fixtures:
@@ -2372,6 +2438,7 @@ def main():
                                 # gh-ocannl-675), so pass 1 runs the search and
                                 # populates autotune_cache (its compile_s is the search cost), and a
                                 # fresh pass-2 process replays the cached winner for the step timings.
+                                kept = []
                                 pass1, note = run_cell(
                                     f"{label} (search pass)",
                                     cmd,
@@ -2379,9 +2446,12 @@ def main():
                                     cwd=HERE,
                                     timeout=args.cell_timeout,
                                     on_incomplete=ocannl_cache_note,
+                                    on_checkpoint=kept.append,
                                 )
                                 if pass1 is None:
-                                    record_failure(f"{label} (search pass)", note)
+                                    record_failure(
+                                        f"{label} (search pass)", note, kept[-1] if kept else None
+                                    )
                                     continue
                                 # What the search pass actually did, which is not derivable from the
                                 # compile_s it hands over: a warm autotune_cache makes it a replay, and

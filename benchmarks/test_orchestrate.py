@@ -230,6 +230,42 @@ class OcannlResultLineTest(unittest.TestCase):
         self.assertEqual(blown["diverged_at"], 1)
 
 
+def golden_checkpoint_lines():
+    """The checkpoint lines `Bench_json` built, with the prefix a runner writes them behind, as the
+    golden of test/operations/bench_result_line holds them (gh-ocannl-1209)."""
+    return [
+        line
+        for line in OcannlResultLineTest.GOLDEN.read_text().splitlines()
+        if line.startswith(orchestrate.CHECKPOINT_PREFIX)
+    ]
+
+
+class CheckpointLineTest(unittest.TestCase):
+    """gh-ocannl-1209: the checkpoints an OCANNL runner writes before its later stages, as the
+    driver reads them."""
+
+    def test_every_emitted_checkpoint_is_read_back_and_is_no_result_line(self):
+        lines = golden_checkpoint_lines()
+        self.assertGreaterEqual(len(lines), 2, OcannlResultLineTest.GOLDEN)
+        for line in lines:
+            with self.subTest(line=line[:60]):
+                strict_loads(line[len(orchestrate.CHECKPOINT_PREFIX):])
+                checkpoint = orchestrate.last_checkpoint(line)
+                self.assertEqual(checkpoint["record"], "checkpoint")
+                self.assertIs(checkpoint["accepted"], False)
+                self.assertNotIn("step_ms", checkpoint)
+                # What run_cell's result parser looks for, which a checkpoint must never be.
+                self.assertFalse(line.startswith("{"))
+
+    def test_the_last_whole_checkpoint_wins_over_a_line_the_kill_cut(self):
+        first, second = golden_checkpoint_lines()[:2]
+        text = "\n".join(["bench: parity step 0 loss 10.4", first, second[: len(second) // 2]])
+
+        self.assertEqual(orchestrate.last_checkpoint(text), strict_loads(
+            first[len(orchestrate.CHECKPOINT_PREFIX):]))
+        self.assertIsNone(orchestrate.last_checkpoint("bench: parity step 0 loss 10.4\n"))
+
+
 class CellIdentityTest(unittest.TestCase):
     """gh-ocannl-539: scheduling variant and storage precision are independent axes."""
 
@@ -3026,6 +3062,75 @@ class CellTimeoutTest(unittest.TestCase):
         self.assertIn("TIMED OUT after 1s", note)
         self.assertIn("--cell-timeout", note)
         self.assertIn("wedged", log)
+        # It checkpointed nothing, so the note names no checkpoint (gh-ocannl-1209).
+        self.assertNotIn("checkpoint", note)
+
+    def golden_checkpoint(self, name):
+        """A checkpoint line as the OCaml emitter built it (see CheckpointLineTest)."""
+        return next(l for l in golden_checkpoint_lines() if f'"dominant_kernel":"{name}"' in l)
+
+    # What a runner writes before its dominant-kernel instrument, as the first line of a child's
+    # source: the golden checkpoint arrives as the child's last argument.
+    WRITE_CHECKPOINT = "import sys; sys.stderr.write(sys.argv[-1] + '\\n'); sys.stderr.flush()\n"
+
+    def test_a_late_timeout_keeps_the_losses_checkpointed_before_it(self):
+        # The TUF s1024 case: every parity loss observed, then the cap expires inside the
+        # dominant-kernel instrument. The cell is a failure; its losses are kept beside it.
+        pidfile = self.dir / "late.pid"
+        kill_the_group_on_cleanup(self, pidfile)
+        cell = self.python(
+            self.WRITE_CHECKPOINT
+            + publish_pid("sys.argv[1]", "os.getpid()")
+            + "import time; time.sleep(300)\n",
+            pidfile,
+            self.golden_checkpoint("running"),
+        )
+        kept = []
+
+        result, note, _ = self.run_cell(
+            "killed in diagnostics", cell, timeout=1.0, on_checkpoint=kept.append
+        )
+
+        self.assertIsNone(result)
+        self.assertIn("TIMED OUT after 1s", note)
+        self.assertIn("kept 6 of 6 parity losses", note)
+        self.assertIn("running: dominant_kernel", note)
+        self.assertIn("not an accepted result", note)
+        self.assertEqual(len(kept), 1)
+        self.assertEqual(kept[0]["losses"], [10.375, 10.25, 10.125, 10.0, 9.875, 9.75])
+        self.assertEqual(kept[0]["stages"]["timing"], "complete")
+
+    def test_a_failed_exit_keeps_its_checkpoint_too(self):
+        cell = self.python(self.WRITE_CHECKPOINT + "sys.exit(2)\n", self.golden_checkpoint("running"))
+        kept = []
+
+        result, note, _ = self.run_cell(
+            "crashed in diagnostics", cell, timeout=60, on_checkpoint=kept.append
+        )
+
+        self.assertIsNone(result)
+        self.assertIn("exit 2", note)
+        self.assertIn("kept 6 of 6 parity losses", note)
+        self.assertEqual(len(kept), 1)
+
+    def test_a_cell_that_finishes_reports_its_result_not_its_checkpoints(self):
+        # Negative control: the checkpoints of a cell that went on to emit its result line are
+        # superseded by it. (A timeout with no checkpoint names none: the cap test above.)
+        cell = self.python(
+            self.WRITE_CHECKPOINT
+            + "import json; print(json.dumps("
+            "{'workload': 'w', 'step_ms': {'p50': 1.0}, 'compile_s': 0.5}))\n",
+            self.golden_checkpoint("running"),
+        )
+        kept = []
+
+        result, note, _ = self.run_cell(
+            "finished after checkpoints", cell, timeout=60, on_checkpoint=kept.append
+        )
+
+        self.assertIsNone(note)
+        self.assertEqual(result["workload"], "w")
+        self.assertEqual(kept, [])
 
     @unittest.skipUnless(os.name == "posix", "process groups are a POSIX notion here")
     def test_the_kill_takes_the_whole_process_group(self):

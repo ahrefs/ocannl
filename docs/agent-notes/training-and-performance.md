@@ -202,6 +202,18 @@ files.
   rather than a numerics one — when a sweep loses only one framework's rows, suspect the emitter's
   spelling before the framework.
 
+- Before its later stages a cell CHECKPOINTS what it completed (gh-ocannl-1209):
+  `measure_and_emit` writes a `bench: checkpoint {...}` line to stderr, flushed, after every
+  parity step and again after the timed steps, before the dominant-kernel instrument -- which
+  compiles and times every shipped kernel alone and can outlast the workload (a TUF
+  `gpt2_mini_train_s1024` cell lost six finite losses to a 90 s cap expiring inside it). A
+  checkpoint carries the losses so far, stage statuses, the step count and the cell's identity, and
+  NO timing: its `result` stage is always `pending` and `accepted` is `false`. `orchestrate.run_cell`
+  folds the last one into a failed cell's note and hands it to `on_checkpoint`, so the sweep's and
+  `gh1181_cells.py`'s failure records keep the losses -- beside the failure, never among the rows.
+  Do not give the line a `{` prefix or move it to stdout: drivers take a cell's result from the
+  last `{`-line of its combined output, and the checkpoint must never be one.
+
 - A benchmark cell can WEDGE, and a wedged cell is a failure rather than a slow one
   (gh-ocannl-760). tinygrad's parallel beam search deadlocks intermittently — its candidate-compile
   pool is `spawn`-based with `maxtasksperchild`, and a worker lost between `imap_unordered` chunks
