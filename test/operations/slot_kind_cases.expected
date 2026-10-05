@@ -105,20 +105,50 @@ runtest d (no declaration)               names nothing + reads config
 a stanza declaring neither reads the configuration: true
 runtest d (two markers)                  unknown: the dune file in d is unreadable here ((Failure "a stanza carrying two backend markers"))
 a stanza carrying two markers makes the tree unreadable, never names nothing: true
-build @d/pkg (package)                   unknown: it reaches pkg in d, whose dependency (package neural_nets_lib) this does not follow
-an unfollowed package is every backend: true
-an unfollowed package is nothing to a batch not reaching it: true
-build @d/inc (include)                   unknown: it reaches inc in d, whose dependency (include deps.sexp) this does not follow
-an unfollowed include is every backend: true
-an unfollowed include is nothing to a batch not reaching it: true
-build @d/up (escape)                     unknown: it reaches up in d, whose dependency (alias ../../elsewhere/runtest) this does not follow
-an unfollowed escape is every backend: true
-an unfollowed escape is nothing to a batch not reaching it: true
-build @d/pf (pform alias)                unknown: it reaches pf in d, whose dependency (alias %{env:A=x}/runtest) this does not follow
-an unfollowed pform alias is every backend: true
-an unfollowed pform alias is nothing to a batch not reaching it: true
-build @d/dyn (dynamic-run)               unknown: it reaches the rule on dyn in d, whose dynamic-run action this does not follow
-an unfollowed dynamic-run is every backend: true
-an unfollowed dynamic-run is nothing to a batch not reaching it: true
+build @d/pkg (package)                   names nothing + reads config
+    it reaches pkg in d, whose dependency (package neural_nets_lib) this does not model exactly, so the configuration counts
+an unmodelled package reads the configuration: true
+an unmodelled package is nothing to a batch not reaching it: true
+build @d/inc (include)                   names nothing + reads config
+    it reaches inc in d, whose dependency (include deps.sexp) this does not model exactly, so the configuration counts
+an unmodelled include reads the configuration: true
+an unmodelled include is nothing to a batch not reaching it: true
+build @d/up (escape)                     names nothing + reads config
+    it reaches up in d, whose dependency (alias ../../elsewhere/runtest) this does not model exactly, so the configuration counts
+an unmodelled escape reads the configuration: true
+an unmodelled escape is nothing to a batch not reaching it: true
+build @d/pf (pform alias)                names nothing + reads config
+    it reaches pf in d, whose dependency (alias %{env:A=x}/runtest) this does not model exactly, so the configuration counts
+an unmodelled pform alias reads the configuration: true
+an unmodelled pform alias is nothing to a batch not reaching it: true
+build @d/odd (pform)                     names nothing + reads config
+    it reaches the rule on odd in d, whose pform %{frobnicate} this does not model exactly, so the configuration counts
+an unmodelled pform reads the configuration: true
+an unmodelled pform is nothing to a batch not reaching it: true
+build @d/dyn (dynamic-run)               names nothing + reads config
+    it reaches the rule on dyn in d, whose dynamic-run action this does not model exactly, so the configuration counts
+an unmodelled dynamic-run reads the configuration: true
+an unmodelled dynamic-run is nothing to a batch not reaching it: true
+build @n/scans (a top-level include)     names nothing + reads config
+    it reads the dune file in d, whose stanza (include …) this does not model exactly, so the configuration counts
+a top-level include beside the tree makes every batch read the configuration: true
+build @n/scans (a cram test)             names nothing + reads config
+    it reads the dune file in d, whose stanza (cram …) this does not model exactly, so the configuration counts
+a cram test beside the tree makes every batch read the configuration: true
+build @n/scans (a preprocessing action)  names nothing + reads config
+    it compiles helper in d, whose preprocessing action this does not model exactly, so the configuration counts
+a preprocessing action beside the tree makes every batch read the configuration: true
+build @@d/probe (a character-class glob) names nothing + reads config
+    it reaches the rule producing a.actual in d, which reads the configuration
+a character-class glob reaches the reader: true
+build @@d/runtest-none (a linked library's preprocessing) names nothing + reads config
+    it reaches the rule producing a.actual in d, which reads the configuration
+a linked library's preprocessing reaches the reader: true
 build @n/scans (beside a generated .ml)  names nothing + reads config
 a configuration-reading generator of a source file is always reached: true
+live: build @test/operations/scans                            names nothing
+    <the configuration does not count>
+live: build @test/operations/scans answers names nothing: true
+live: build @test/operations/runtest-bandwidth_calibration    names nothing + reads config
+    it reaches the rule producing bandwidth_calibration.actual in test/operations, which reads the configuration
+live: build @test/operations/runtest-bandwidth_calibration answers names nothing + reads config: true

@@ -148,7 +148,8 @@
   (alias runtest-optional_arg_inventory)
   (alias runtest-optional_arg_inventory_control)
   (alias runtest-provenance_tag_inventory)
-  (alias runtest-provenance_tag_scan_cases)))
+  (alias runtest-provenance_tag_scan_cases)
+  (alias runtest-slot_kind_cases)))
 
 ; Two focused aggregates beyond `scans` (gh-ocannl-783). Same arrangement and same completeness
 ; check, a different question: `scans` collects the tests that read the REPOSITORY, these collect
@@ -2884,13 +2885,17 @@
 
 ; gh-ocannl-1004: what Test_utils.Slot_kind says a dune argv reaches -- the half of the fleet slot's
 ; --cpu/--gpu decision that reads the backend markers -- on a fixture tree built to separate the
-; cases: per-test and aggregate aliases, @ and @@, runtest directories, path targets.
+; cases: per-test and aggregate aliases, @ and @@, runtest directories, path targets. And, on the
+; repository's own dune files (gh-ocannl-1095), the answer for `@test/operations/scans`, which holds
+; no backend only while everything it builds is modelled exactly and reads no configuration.
 
 (test
- ; ocannl-backend: none -- links no backend: it reads embedded dune-file text through Slot_kind.
+ ; ocannl-backend: none -- links no backend: it reads dune-file text through Slot_kind.
  (name slot_kind_cases)
  (package neural_nets_lib)
- (deps ocannl_config)
+ (deps
+  ocannl_config
+  (glob_files_rec ../../dune))
  (modules slot_kind_cases)
  (libraries base stdio test_utils arrayjit.verdict))
 

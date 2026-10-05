@@ -305,14 +305,28 @@ let () =
   printf "%-40s %s\n" "runtest d (two markers)" twice;
   p "a stanza carrying two markers makes the tree unreadable, never names nothing"
     (String.is_prefix twice ~prefix:"unknown: the dune file in d is unreadable");
-  (* What the closure does not follow is every backend, but only where a reached stanza carries it:
-     a dependency form it does not read, an alias path leaving the tree, a dynamic action. *)
+  (* The configuration is taken off a batch only on a proof (gh-ocannl-1095, review round 2 on PR
+     #1027): a construct the closure does not model exactly on a stanza it reaches makes the batch
+     read the configuration -- the answer every batch had before -- and costs nothing to a batch not
+     reaching it. *)
+  let reason ~dune_files argv =
+    match fst (judge ~dune_files argv) with
+    | Slot_kind.Reaches { reads_config = Some why; _ } -> why
+    | Slot_kind.Reaches { reads_config = None; _ } -> "<the configuration does not count>"
+    | Slot_kind.Unknown why -> "unknown: " ^ why
+  in
+  let n = ("n", List.Assoc.find_exn tree "n" ~equal:String.equal) in
   List.iter
     [
       ("package", {dune|(alias (name pkg) (deps (package neural_nets_lib)))|dune}, "build @d/pkg");
       ("include", {dune|(alias (name inc) (deps (include deps.sexp)))|dune}, "build @d/inc");
       ("escape", {dune|(alias (name up) (deps (alias ../../elsewhere/runtest)))|dune}, "build @d/up");
       ("pform alias", {dune|(alias (name pf) (deps (alias %{env:A=x}/runtest)))|dune}, "build @d/pf");
+      ( "pform",
+        {dune|(rule
+ ; ocannl-backend: none -- links no backend in this fixture.
+ (alias odd) (action (run %{dep:d.exe} %{frobnicate})))|dune},
+        "build @d/odd" );
       ( "dynamic-run",
         {dune|(rule
  ; ocannl-backend: none -- links no backend in this fixture.
@@ -320,23 +334,72 @@ let () =
         "build @d/dyn" );
     ]
     ~f:(fun (what, dune, argv) ->
-      let _, shown =
-        judge
-          ~dune_files:[ ("d", dune); ("n", List.Assoc.find_exn tree "n" ~equal:String.equal) ]
-          argv
-      in
-      printf "%-40s %s\n" (argv ^ " (" ^ what ^ ")") shown;
+      let dune_files = [ ("d", dune); n ] in
+      let _, shown = judge ~dune_files argv in
+      let why = reason ~dune_files argv in
+      printf "%-40s %s\n    %s\n" (argv ^ " (" ^ what ^ ")") shown why;
       p
-        (Printf.sprintf "an unfollowed %s is every backend" what)
-        (String.is_prefix shown ~prefix:"unknown: ");
-      let _, beside =
-        judge
-          ~dune_files:[ ("d", dune); ("n", List.Assoc.find_exn tree "n" ~equal:String.equal) ]
-          "build @n/scans"
-      in
+        (Printf.sprintf "an unmodelled %s reads the configuration" what)
+        (String.equal shown "names nothing + reads config"
+        && String.is_substring why ~substring:"does not model exactly");
+      let _, beside = judge ~dune_files "build @n/scans" in
       p
-        (Printf.sprintf "an unfollowed %s is nothing to a batch not reaching it" what)
+        (Printf.sprintf "an unmodelled %s is nothing to a batch not reaching it" what)
         (String.equal beside "names nothing"));
+  (* Holes in what EVERY batch builds read the configuration everywhere: a top-level include (the
+     stanzas it brings in are never read), a head the inventory does not know, and a preprocessing
+     action -- compilation is followed for every batch, which program links which library is not. *)
+  List.iter
+    [
+      ("a top-level include", {dune|(include rules.inc)|dune});
+      ("a cram test", {dune|(cram (deps ocannl_config))|dune});
+      ( "a preprocessing action",
+        {dune|(library (name helper) (modules helper) (preprocess (action (run cat %{input-file}))))|dune}
+      );
+    ]
+    ~f:(fun (what, dune) ->
+      let dune_files = [ ("d", dune); n ] in
+      let _, shown = judge ~dune_files "build @n/scans" in
+      let why = reason ~dune_files "build @n/scans" in
+      printf "%-40s %s\n    %s\n" ("build @n/scans (" ^ what ^ ")") shown why;
+      p
+        (Printf.sprintf "%s beside the tree makes every batch read the configuration" what)
+        (String.equal shown "names nothing + reads config"));
+  (* The two shapes review round 2 ran end to end, each a configuration reader dune builds first: a
+     character-class glob (matched as a glob, everything), and a host-only test whose linked
+     library's preprocessing reads a configuration reader's output. *)
+  let reader =
+    {dune|(executable (name reader) (modules reader))
+(rule
+ (target a.actual)
+ (deps ocannl_config (env_var OCANNL_BACKEND))
+ (action (with-stdout-to %{target} (run %{dep:reader.exe}))))|dune}
+  in
+  List.iter
+    [
+      ( "a character-class glob",
+        reader ^ {dune|
+(alias (name probe) (deps (glob_files "[ab].actual")))|dune},
+        "build @@d/probe" );
+      ( "a linked library's preprocessing",
+        reader
+        ^ {dune|
+(library (name helper) (modules helper)
+ (preprocess (action (progn (echo %{read:a.actual}) (run cat %{input-file})))))
+(test
+ ; ocannl-backend: none -- host-only runner in this fixture.
+ (name none) (modules none) (libraries helper) (deps ocannl_config))|dune},
+        "build @@d/runtest-none" );
+    ]
+    ~f:(fun (what, dune, argv) ->
+      let _, shown = judge ~dune_files:[ ("d", dune) ] argv in
+      printf "%-40s %s\n    %s\n"
+        (argv ^ " (" ^ what ^ ")")
+        shown
+        (reason ~dune_files:[ ("d", dune) ] argv);
+      p
+        (Printf.sprintf "%s reaches the reader" what)
+        (String.equal shown "names nothing + reads config"));
   (* A rule producing a source-like file is taken as always built: anything compiling may need it,
      so a configuration-reading generator makes even the none-only batch read the configuration. *)
   let _, generated =
@@ -355,4 +418,19 @@ let () =
   in
   printf "%-40s %s\n" "build @n/scans (beside a generated .ml)" generated;
   p "a configuration-reading generator of a source file is always reached"
-    (String.equal generated "names nothing + reads config")
+    (String.equal generated "names nothing + reads config");
+  (* The repository's own tree (its dune files, copied beside this test by the stanza's deps): the
+     batch the issue is about holds no backend, and the one review round 1 found reading the
+     configuration through the [.actual] its diff consumes still does. A new stanza that breaks the
+     proof for [scans] -- a construct not modelled exactly, anywhere compilation reaches -- shows
+     here, rather than as scans quietly taking a GPU token again. *)
+  let live = Slot_kind.dune_files ~root:"../.." in
+  List.iter
+    [
+      ("build @test/operations/scans", "names nothing");
+      ("build @test/operations/runtest-bandwidth_calibration", "names nothing + reads config");
+    ]
+    ~f:(fun (argv, want) ->
+      let _, shown = judge ~dune_files:live argv in
+      printf "live: %-55s %s\n    %s\n" argv shown (reason ~dune_files:live argv);
+      p (Printf.sprintf "live: %s answers %s" argv want) (String.equal shown want))

@@ -16,12 +16,14 @@
     its backends meets on the box, and on the fleet's rog-nv-linux a CPU batch has a width of its
     own.
 
-    The configuration's own backend counts only when some reached stanza reads it: one declaring
-    [(env_var OCANNL_BACKEND)], or one carrying neither declaration (which [env_var_deps] fails, and
-    which is read the way it would run: from the configuration). A run reaching only stanzas that
-    name theirs -- [; ocannl-backend: none] ones included, as [@test/operations/scans] does -- holds
-    only what they name, whatever the configurations say (gh-ocannl-1095). A stanza naming a backend
-    twice is not read as naming none: its file is unreadable, which is [Unknown].
+    The configuration's own backend counts unless it is PROVEN unread (gh-ocannl-1095): nothing the
+    batch builds declares [(env_var OCANNL_BACKEND)] or carries neither declaration (which
+    [env_var_deps] fails, and which is read the way it would run: from the configuration), and
+    everything it builds is modelled exactly (the section on what a batch builds, below). A run
+    reaching only stanzas that name theirs -- [; ocannl-backend: none] ones included, as
+    [@test/operations/scans] does -- then holds only what they name, whatever the configurations
+    say. A stanza naming a backend twice is not read as naming none: its file is unreadable, which
+    is [Unknown].
 
     What a run reaches is read from a CLOSED set of argv shapes, the ones the runner is used with;
     any other word is unmodelled, and answered as [Unknown] -- every backend. (Codex review rounds
@@ -51,10 +53,15 @@ let gpu_backends = [ "cuda"; "hip"; "metal" ]
 type need =
   | Alias_need of { dir : string; alias : string; recursive : bool }
   | File_need of string  (** a file's basename *)
-  | Glob_need of string  (** a basename pattern, in [*] and [?] *)
+  | Glob_need of string  (** a basename pattern *)
+
+type role =
+  | Runs  (** the stanza itself: its action, run on the alias it sits on or for its targets *)
+  | Compiles  (** what compiling a library, an executable or a test's program builds first *)
 
 type stanza = {
   dir : string;  (** the directory dune applies it in, repository-relative, [""] for the root *)
+  role : role;
   attached : string list;  (** the aliases it attaches to or defines *)
   sexp : Sexplib.Sexp.t;
   named : string list;  (** the backends its marker names, [none] left out *)
@@ -63,7 +70,9 @@ type stanza = {
   source_like : bool;
       (** whether one of them is a file dune may build to compile or load anything *)
   needs : need list;
-  opaque : string option;  (** a way it builds something first that this does not follow *)
+  inexact : string option;
+      (** the first construct in it this does not model exactly, which makes a batch reaching it
+          count the configuration *)
 }
 
 (** The aliases a stanza sits on, including the per-stanza one dune generates for a test and an
@@ -95,29 +104,36 @@ let backend_of_rule rule =
 
 let join dir sub = match (dir, sub) with "", s -> s | d, "" -> d | d, s -> d ^ "/" ^ s
 
-(** {1 What building a stanza builds first}
+(** {1 What a batch builds, and when that is proven}
 
-    Taking the configuration's backend off a batch that reaches no configuration reader is only as
-    sound as the reached set is complete (Codex GPT-6.1 Sol review on PR #1027): a diff alias
-    consumes an [.actual] whose producing rule reads the configuration, an alias's deps name an
-    alias in another directory, a test's generated [runtest-<name>] carries deps of its own. So the
-    reached set is the closure of the argv's aliases under every way dune builds one thing before
-    another:
+    The configuration's backend is taken off a batch only on a PROOF that nothing the batch builds
+    reads it; anything short of a proof counts it, as every batch did before gh-ocannl-1095. Two
+    review rounds on PR #1027 (Codex GPT-6.1 Sol) each found dune shapes a closure over dune's
+    dependency semantics missed, so the claim is the inverted one: the closure below is trusted only
+    where every stanza in it is built from constructs it models EXACTLY, and any other construct
+    makes the batch read the configuration. The named backends are read from the same closure, as
+    before, on a best-effort basis.
+
+    The closure, seeded by the argv's aliases:
     - an [(alias …)]/[(alias_rec …)] in a dependency field (a stanza's [deps], an inline-test
       library's [(inline_tests (deps …))]), resolved against the stanza's directory, through the
       same attached-alias inventory the seeds use, generated per-test aliases included;
     - a file: every atom anywhere in the stanza, and the payload of every path pform ([%{dep:…}],
       [%{read:…}], …), taken as a file it may need -- matched by BASENAME against every rule's
-      targets in any directory, a pform elsewhere in the atom read as a wildcard. Over-wide on
-      purpose: a copy ([copy_files], [(copy …)]) keeps the basename, so this follows it to the
-      original producer without modelling it, and a word that names no target matches nothing;
-    - a rule producing a source-like file (an OCaml or C source, a header, a dune include, a sexp)
-      is taken as always built: compiling or loading anything may need it, and which compilation
-      does is not read here.
+      targets in any directory, a pform elsewhere in the atom read as a wildcard, a [glob_files]
+      pattern matched as a glob (a character class or an alternative matching everything). A copy
+      keeps the basename, so this follows it to the original producer without modelling it;
+    - compilation, for every batch that builds anything: every library, executable, test program,
+      lexer, parser and [env] in the tree, its files followed the same way (a test's [deps] and
+      [action] are its run, not its compilation), and every rule producing a source-like file. Which
+      program links which library is not read, so all of them are.
 
-    A dependency form this does not read -- [(package …)], [(include …)], an alias path leaving the
-    tree or carrying a pform, any other head -- and a [dynamic-run] make a reached stanza OPAQUE,
-    which answers [Unknown]: every backend. *)
+    Exactly modelled, and nothing else: the stanza heads listed below (an [(include …)], a [cram]
+    test or any other head is a hole in the inventory); in a dependency field, files, [(file …)],
+    named bindings, [glob_files]/[glob_files_rec], [source_tree], [env_var], [universe], [sandbox],
+    and an alias whose path stays in the tree and carries no pform; the pforms listed below; no
+    [dynamic-run]; and no preprocessing action. A program dune runs to preprocess ([pps]) is taken
+    not to start a backend. *)
 
 let basename p = match String.rsplit2 p ~on:'/' with Some (_, b) -> b | None -> p
 
@@ -139,6 +155,39 @@ let resolve ~dir path =
 
 (* The pforms whose payload is a path dune builds before expanding it. *)
 let path_pforms = [ "dep"; "exe"; "path"; "read"; "read-lines"; "read-strings" ]
+
+(* The pforms with a payload that name no file of the batch's own, or one compilation builds. *)
+let valued_pforms = [ "bin"; "lib"; "lib-available"; "env"; "ocaml-config"; "version" ]
+
+(* The variables that name no file of their own: the stanza's targets and deps, or the context. *)
+let variable_pforms =
+  [
+    "target";
+    "targets";
+    "deps";
+    "test";
+    "workspace_root";
+    "system";
+    "ocaml";
+    "ocamlc";
+    "ocamlopt";
+    "arch_sixtyfour";
+    "ext_obj";
+    "ext_exe";
+    "ext_lib";
+    "ext_dll";
+    "context_name";
+    "profile";
+    "architecture";
+    "os_type";
+    "model";
+    "ocaml_version";
+    "ocaml_bin";
+    "null";
+    "cc";
+    "cxx";
+  ]
+
 let is_wild c = Char.equal c '*' || Char.equal c '?'
 
 (** An atom as a basename pattern: each pform a wildcard. [None] for one naming no file of its own
@@ -158,6 +207,8 @@ let file_needs sexp =
           | Scan.Pform p -> (
               match String.lsplit2 p ~on:':' with
               | Some (k, v) when List.mem path_pforms k ~equal:String.equal -> Some v
+              | Some ("lib", v) ->
+                  Some (Option.value_map (String.rsplit2 v ~on:':') ~f:snd ~default:v)
               | _ -> None)
           | Scan.Literal _ -> None)
       in
@@ -165,35 +216,58 @@ let file_needs sexp =
           Option.map (pattern_of a) ~f:(fun b ->
               if String.exists b ~f:is_wild then Glob_need b else File_need b)))
 
-(** The aliases a stanza's dependency fields name, or the first dependency form this does not read.
+(** The first pform in [sexp] this does not model exactly: one outside the lists above, a named
+    binding aside. *)
+let inexact_pform ~bindings sexp =
+  List.find_map (Scan.atoms sexp) ~f:(fun atom ->
+      List.find_map (Scan.pieces atom) ~f:(function
+        | Scan.Literal _ -> None
+        | Scan.Pform p ->
+            let exact =
+              match String.lsplit2 p ~on:':' with
+              | Some (k, _) ->
+                  List.mem path_pforms k ~equal:String.equal
+                  || List.mem valued_pforms k ~equal:String.equal
+              | None ->
+                  List.mem variable_pforms p ~equal:String.equal
+                  || List.mem bindings p ~equal:String.equal
+            in
+            if exact then None else Some (Printf.sprintf "pform %%{%s}" p)))
+
+(** A stanza's dependency fields: [deps], and an inline-test library's [(inline_tests (deps …))]. *)
+let dep_fields sexp =
+  Option.to_list (Scan.field sexp "deps")
+  @
+  match Scan.field sexp "inline_tests" with
+  | Some args -> Option.to_list (Scan.field_in args "deps")
+  | None -> []
+
+(** What a stanza's dependency fields need beyond its atoms -- the aliases they name and the globs
+    they match -- with the names their bindings give, or the first form this does not model exactly.
 *)
-let alias_needs ~dir sexp =
-  let fields =
-    Option.to_list (Scan.field sexp "deps")
-    @
-    match Scan.field sexp "inline_tests" with
-    | Some args -> Option.to_list (Scan.field_in args "deps")
-    | None -> []
-  in
+let dep_needs ~dir sexp =
   let rec item = function
-    | Sexp.Atom _ -> Ok []
+    | Sexp.Atom _ -> Ok ([], [])
     | Sexp.List (Sexp.Atom h :: rest) when String.is_prefix h ~prefix:":" ->
-        Result.map (Result.all (List.map rest ~f:item)) ~f:List.concat
+        Result.map
+          (Result.all (List.map rest ~f:item))
+          ~f:(fun parts ->
+            (List.concat_map parts ~f:fst, String.drop_prefix h 1 :: List.concat_map parts ~f:snd))
     | Sexp.List [ Sexp.Atom (("alias" | "alias_rec") as h); Sexp.Atom spec ] -> (
         match resolve ~dir spec with
         | Some p ->
             let dir, alias = Option.value (String.rsplit2 p ~on:'/') ~default:("", p) in
-            Ok [ Alias_need { dir; alias; recursive = String.equal h "alias_rec" } ]
-        | None -> Error (Printf.sprintf "(%s %s)" h spec))
-    | Sexp.List
-        (Sexp.Atom
-           ( "file" | "glob_files" | "glob_files_rec" | "source_tree" | "env_var" | "universe"
-           | "sandbox" )
-        :: _) ->
-        Ok []
-    | other -> Error (Sexp.to_string other)
+            Ok ([ Alias_need { dir; alias; recursive = String.equal h "alias_rec" } ], [])
+        | None -> Error (Printf.sprintf "dependency (%s %s)" h spec))
+    | Sexp.List [ Sexp.Atom ("glob_files" | "glob_files_rec"); Sexp.Atom pattern ] ->
+        Ok (Option.to_list (Option.map (pattern_of pattern) ~f:(fun g -> Glob_need g)), [])
+    | Sexp.List (Sexp.Atom ("file" | "source_tree" | "env_var" | "universe" | "sandbox") :: _) ->
+        Ok ([], [])
+    | other -> Error (Printf.sprintf "dependency %s" (Sexp.to_string other))
   in
-  Result.map (Result.all (List.concat_map fields ~f:(List.map ~f:item))) ~f:List.concat
+  Result.map
+    (Result.all (List.concat_map (dep_fields sexp) ~f:(List.map ~f:item)))
+    ~f:(fun parts -> (List.concat_map parts ~f:fst, List.concat_map parts ~f:snd))
 
 (** The basenames, as patterns, of the files a rule produces: its [(target …)]/[(targets …)], or,
     without them and without an alias, every atom it carries -- dune infers such a rule's targets
@@ -232,39 +306,122 @@ let source_like target =
   String.exists target ~f:is_wild
   || List.exists source_suffixes ~f:(fun suffix -> String.is_suffix target ~suffix)
 
+(* The stanza heads the inventory models: the ones that run something on an alias or for a target,
+   the ones that compile, and the ones that build nothing a test runs. *)
+let running_heads = [ "rule"; "alias"; "test"; "tests"; "library" ]
+
+let compiling_heads =
+  [
+    "library";
+    "executable";
+    "executables";
+    "test";
+    "tests";
+    "ocamllex";
+    "ocamlyacc";
+    "menhir";
+    "env";
+    "foreign_library";
+  ]
+
+let inert_heads =
+  [
+    "copy_files";
+    "copy_files#";
+    "dirs";
+    "data_only_dirs";
+    "vendored_dirs";
+    "install";
+    "documentation";
+  ]
+
+(** One stanza, as the closure reads it: run, and -- for a head that compiles -- compiled, which is
+    a stanza of its own here, seeded for every batch. *)
+let views_of ~dir ~named ~reads_config sexp =
+  let head = Option.value (Scan.head sexp) ~default:"<not a stanza>" in
+  let known =
+    List.exists [ running_heads; compiling_heads; inert_heads ] ~f:(fun l ->
+        List.mem l head ~equal:String.equal)
+  in
+  let unknown = Option.some_if (not known) (Printf.sprintf "stanza (%s …)" head) in
+  let run =
+    let targets = targets_of sexp in
+    let deps, inexact =
+      match dep_needs ~dir sexp with
+      | Ok (needs, bindings) -> (needs, inexact_pform ~bindings sexp)
+      | Error form -> ([], Some form)
+    in
+    let inexact =
+      Option.first_some inexact
+        (Option.some_if
+           (List.mem (Scan.atoms sexp) "dynamic-run" ~equal:String.equal)
+           "dynamic-run action")
+    in
+    {
+      dir;
+      role = Runs;
+      attached = attached_aliases sexp;
+      sexp;
+      named;
+      reads_config;
+      targets;
+      source_like = List.exists targets ~f:source_like;
+      needs = List.dedup_and_sort (deps @ file_needs sexp) ~compare:Poly.compare;
+      inexact;
+    }
+  in
+  let compiled ~needs inexact =
+    {
+      dir;
+      role = Compiles;
+      attached = [];
+      sexp;
+      named = [];
+      reads_config = false;
+      targets = [];
+      source_like = false;
+      needs;
+      inexact;
+    }
+  in
+  let compile =
+    (* A head the inventory does not model is a hole in it -- an [(include …)] brings in stanzas
+       this never reads -- so it is seeded like a compilation, for every batch. *)
+    if not known then [ compiled ~needs:[] unknown ]
+    else if not (List.mem compiling_heads head ~equal:String.equal) then []
+    else
+      (* A test's [deps] and [action], and an inline-test library's [inline_tests], are its run. *)
+      let fields =
+        match sexp with
+        | Sexp.List (h :: fields) ->
+            Sexp.List
+              (h
+              :: List.filter fields ~f:(function
+                | Sexp.List (Sexp.Atom ("deps" | "action" | "inline_tests") :: _) -> false
+                | _ -> true))
+        | other -> other
+      in
+      let inexact =
+        Option.first_some
+          (Option.some_if
+             (List.mem (Scan.atoms fields) "action" ~equal:String.equal)
+             "preprocessing action")
+          (inexact_pform ~bindings:[] fields)
+      in
+      [ compiled ~needs:(List.dedup_and_sort (file_needs fields) ~compare:Poly.compare) inexact ]
+  in
+  run :: compile
+
 (** The stanzas of one dune file, in [dir]. A marker the contract refuses is not read as absent: it
     raises, and the caller takes the unreadable file as a GPU answer. *)
 let stanzas_of ~dir content =
   let contract = Scan.backend_marker_contract content in
   if not (List.is_empty contract.Scan.contract_issues) then
     failwith "a backend marker the env_var_deps contract refuses";
-  List.map contract.Scan.contract_stanzas ~f:(fun marked ->
+  List.concat_map contract.Scan.contract_stanzas ~f:(fun marked ->
       let st = marked.Scan.marker_stanza in
-      let sexp = st.Scan.marked_sexp in
       let named, reads_config = backend_of_rule (Scan.backend_rule_of marked) in
-      let dir = join dir st.Scan.marked_subdir in
-      let targets = targets_of sexp in
-      let aliases, opaque =
-        match alias_needs ~dir sexp with
-        | Ok needs -> (needs, None)
-        | Error form -> ([], Some (Printf.sprintf "dependency %s" form))
-      in
-      let opaque =
-        if Option.is_none opaque && List.mem (Scan.atoms sexp) "dynamic-run" ~equal:String.equal
-        then Some "dynamic-run action"
-        else opaque
-      in
-      {
-        dir;
-        attached = attached_aliases sexp;
-        sexp;
-        named;
-        reads_config;
-        targets;
-        source_like = List.exists targets ~f:source_like;
-        needs = List.dedup_and_sort (aliases @ file_needs sexp) ~compare:Poly.compare;
-        opaque;
-      })
+      views_of ~dir:(join dir st.Scan.marked_subdir) ~named ~reads_config st.Scan.marked_sexp)
 
 type target = Alias of { dir : string; alias : string; recursive : bool }
 
@@ -416,7 +573,7 @@ let in_scope ~recursive ~root dir =
   || (recursive && (String.is_empty root || String.is_prefix dir ~prefix:(root ^ "/")))
 
 (** Every stanza building [targets] builds, in the order the tree lists them: the closure of the
-    argv's aliases under {!need}s, seeded with every source-like producer. *)
+    argv's aliases, every compilation and every source-like producer under {!need}s. *)
 let reached stanzas targets =
   let arr = Array.of_list stanzas in
   let producers =
@@ -434,16 +591,20 @@ let reached stanzas targets =
     if not (Hash_set.mem requested (root, alias, recursive)) then (
       Hash_set.add requested (root, alias, recursive);
       Array.iteri arr ~f:(fun i s ->
-          if in_scope ~recursive ~root s.dir then
-            (* `default` builds every target in the directory rather than an alias's members. *)
-            if String.equal alias "default" then (
-              if not (List.is_empty s.attached && List.is_empty s.targets) then add i)
-            else if List.mem s.attached alias ~equal:String.equal then add i))
+          match s.role with
+          | Compiles -> ()
+          | Runs ->
+              if in_scope ~recursive ~root s.dir then
+                (* `default` builds every target in the directory rather than an alias's members. *)
+                if String.equal alias "default" then (
+                  if not (List.is_empty s.attached && List.is_empty s.targets) then add i)
+                else if List.mem s.attached alias ~equal:String.equal then add i))
   in
   let produce matches = List.iter producers ~f:(fun (i, t) -> if matches t then add i) in
   List.iter targets ~f:(fun (Alias { dir; alias; recursive }) ->
       request ~root:dir ~alias ~recursive);
-  Array.iteri arr ~f:(fun i s -> if s.source_like then add i);
+  Array.iteri arr ~f:(fun i s ->
+      match s.role with Compiles -> add i | Runs -> if s.source_like then add i);
   while not (Queue.is_empty queue) do
     List.iter arr.(Queue.dequeue_exn queue).needs ~f:(function
       | Alias_need { dir; alias; recursive } -> request ~root:dir ~alias ~recursive
@@ -453,21 +614,54 @@ let reached stanzas targets =
   done;
   List.filteri stanzas ~f:(fun i _ -> seen.(i))
 
-(** Where a reached stanza is, for a reason: its names (or a rule's aliases) and its directory. *)
+(** Where a reached stanza is, for a reason: its names (or a rule's aliases or targets) and its
+    directory. *)
 let describe s =
   let what =
     match (Scan.names_of s.sexp, Scan.aliases_of s.sexp) with
-    | [], [] -> "the rule producing " ^ String.concat ~sep:"," s.targets
+    | [], [] when not (List.is_empty s.targets) ->
+        "the rule producing " ^ String.concat ~sep:"," s.targets
+    | [], [] -> "a " ^ Option.value (Scan.head s.sexp) ~default:"stanza"
     | [], aliases -> "the rule on " ^ String.concat ~sep:"," aliases
     | names, _ -> String.concat ~sep:"," names
   in
-  Printf.sprintf "it reaches %s in %s" what (if String.is_empty s.dir then "." else s.dir)
+  let dir = if String.is_empty s.dir then "." else s.dir in
+  match s.role with
+  | Runs -> Printf.sprintf "it reaches %s in %s" what dir
+  | Compiles
+    when List.mem compiling_heads (Option.value (Scan.head s.sexp) ~default:"") ~equal:String.equal
+    ->
+      Printf.sprintf "it compiles %s in %s" what dir
+  | Compiles -> Printf.sprintf "it reads the dune file in %s" dir
+
+(** Every dune file under [root] that dune itself would read, as [(dir, content)] with [dir]
+    relative to [root] ([""] for [root] itself): dune skips directories whose name starts with [.]
+    or [_] (_build, _opam, .git, ...). Reading more than dune does only widens the answer. *)
+let dune_files ~root =
+  let rec under dir =
+    let path = if String.is_empty dir then root else Stdlib.Filename.concat root dir in
+    let entries = Stdlib.Sys.readdir path |> Array.to_list |> List.sort ~compare:String.compare in
+    let here =
+      if List.mem entries "dune" ~equal:String.equal then
+        [ (dir, Stdio.In_channel.read_all (Stdlib.Filename.concat path "dune")) ]
+      else []
+    in
+    here
+    @ List.concat_map entries ~f:(fun e ->
+        let sub = if String.is_empty dir then e else dir ^ "/" ^ e in
+        if String.is_prefix e ~prefix:"." || String.is_prefix e ~prefix:"_" then []
+        else if Stdlib.Sys.is_directory (Stdlib.Filename.concat root sub) then under sub
+        else [])
+  in
+  under ""
 
 (** What a dune argv can hold. [Reaches] lists in [named] each backend a reached stanza's marker
-    names, once, with the first stanza that names it, and gives in [reads_config] the first reached
-    stanza that selects its backend from the configuration, if any -- both empty when the run
-    reaches no such stanza, or runs no test. [Unknown why] is an argv this does not model or a dune
-    file it could not read, which the caller takes as every backend. *)
+    names, once, with the first stanza that names it, and gives in [reads_config] why the
+    configuration counts: the first reached stanza that selects its backend from it, or the first
+    construct in what the batch builds that is not modelled exactly -- [None] only on the proof that
+    nothing it builds reads the configuration, or when it runs no test. [Unknown why] is an argv
+    this does not model or a dune file it could not read, which the caller takes as every backend.
+*)
 type answer =
   | Reaches of { named : (string * string) list; reads_config : string option }
   | Unknown of string
@@ -492,33 +686,29 @@ let answer ~dune_files argv =
       in
       match read with
       | Error why -> Unknown why
-      | Ok stanzas -> (
+      | Ok stanzas ->
           let found = reached (List.concat (List.rev stanzas)) targets in
-          match List.find found ~f:(fun s -> Option.is_some s.opaque) with
-          | Some s ->
-              Unknown
-                (Printf.sprintf "%s, whose %s this does not follow" (describe s)
-                   (Option.value_exn s.opaque))
-          | None ->
-              let found =
-                List.filter found ~f:(fun s -> (not (List.is_empty s.named)) || s.reads_config)
-              in
-              let named =
-                List.concat_map found ~f:(fun s ->
-                    let why =
-                      Printf.sprintf "%s, which names %s" (describe s)
-                        (String.concat ~sep:"," s.named)
-                    in
-                    List.map s.named ~f:(fun b -> (b, why)))
-                |> List.fold ~init:[] ~f:(fun acc (b, why) ->
-                    if List.Assoc.mem acc b ~equal:String.equal then acc else (b, why) :: acc)
-                |> List.rev
-              in
-              let reads_config =
-                List.find_map found ~f:(fun s ->
-                    Option.some_if s.reads_config (describe s ^ ", which reads the configuration"))
-              in
-              Reaches { named; reads_config }))
+          let named =
+            List.concat_map found ~f:(fun s ->
+                let why =
+                  Printf.sprintf "%s, which names %s" (describe s) (String.concat ~sep:"," s.named)
+                in
+                List.map s.named ~f:(fun b -> (b, why)))
+            |> List.fold ~init:[] ~f:(fun acc (b, why) ->
+                if List.Assoc.mem acc b ~equal:String.equal then acc else (b, why) :: acc)
+            |> List.rev
+          in
+          let reads_config =
+            Option.first_some
+              (List.find_map found ~f:(fun s ->
+                   Option.some_if s.reads_config (describe s ^ ", which reads the configuration")))
+              (List.find_map found ~f:(fun s ->
+                   Option.map s.inexact ~f:(fun construct ->
+                       Printf.sprintf
+                         "%s, whose %s this does not model exactly, so the configuration counts"
+                         (describe s) construct)))
+          in
+          Reaches { named; reads_config })
 
 (** Whether [answer] can hold a GPU by name: an unknown answer can. Whether a configuration a
     reached stanza reads names one is the caller's question. *)
