@@ -39,14 +39,16 @@
   bench_gpt
   bench_gpt_diag
   bench_conv_diag
-  bench_min_repro)
+  bench_min_repro
+  bench_wgrad)
  (modules
   bench_mlp
   bench_conv
   bench_gpt
   bench_gpt_diag
   bench_conv_diag
-  bench_min_repro)
+  bench_min_repro
+  bench_wgrad)
  (libraries
   base
   bench_harness
