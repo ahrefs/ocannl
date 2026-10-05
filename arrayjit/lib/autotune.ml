@@ -773,12 +773,31 @@ let on_candidate_callback :
 let on_candidate_measured : (label:string -> digest:string -> float -> float) ref =
   ref (fun ~label:_ ~digest:_ ms -> ms)
 
-(* Only an admitted window reaches the seam, so it cannot admit a refused one; its result then
-   passes the same [admitted_timing_ms] gate as a real reading, so a value that gate refuses (zero,
-   negative, NaN, infinite) refuses the window exactly as a degenerate clock reading would --
+(* Explicit test-only admission seam (gh-ocannl-1156). Scripted candidate measurements need their
+   branches to run even when the host stalls every physical window. This scope clears ONLY the
+   contention flag before candidate admission; calibration, dispatch, invalid clock readings and
+   unresolved queued batching retain their ordinary rules. No configuration selects it. Production
+   callers of [on_candidate_measured] still see only admitted windows. Restore the prior mode even
+   on an injected failure, including when test scopes nest. *)
+let test_windows_uncontended = ref false
+
+let with_uncontended_test_windows f =
+  let previous = !test_windows_uncontended in
+  Exn.protect
+    ~finally:(fun () -> test_windows_uncontended := previous)
+    ~f:(fun () ->
+      test_windows_uncontended := true;
+      f ())
+
+(* Unless the test-only scope above is active, only an admitted window reaches the seam; its result
+   then passes the same [admitted_timing_ms] gate as a real reading, so a value that gate refuses
+   (zero, negative, NaN, infinite) refuses the window exactly as a degenerate clock reading would --
    through the caller's ordinary refusal path, with nothing raised outside the search's cleanup
    boundaries. *)
 let apply_measurement_seam ~label ~digest timing_result =
+  let timing_result =
+    if !test_windows_uncontended then { timing_result with contended = false } else timing_result
+  in
   match admitted_timing_ms timing_result with
   | None -> timing_result
   | Some ms -> { timing_result with ms = !on_candidate_measured ~label ~digest ms }

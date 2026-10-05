@@ -7,6 +7,14 @@ trailing by one ulp more is abandoned: true
 the verdict reads the best after k timings, not the first one: true
 an incumbent that timed fewer than k compares at its final best: true
 an incumbent with no timed record abandons nothing: true
+production contention refuses a window before its measurement script: true
+the explicit scripted scope admits contention and preserves the physical sample count: true
+the scripted scope still refuses invalid physical readings: true
+the scripted scope still refuses unresolved queued batching: true
+the scripted scope still refuses invalid scripted readings: true
+an injected failure restores the enclosing scripted scope: true
+leaving the scripted scope restores production contention refusal: true
+an escaping failure also restores production contention refusal: true
 a hopeless search is abandoned after exactly beam_width timed candidates: true
 its report is the abandonment, carrying the verdict's numbers: true
 an abandonment is not a terminal failure: true
@@ -19,16 +27,25 @@ a replayed incumbent carries the storing search's timed record: true
 a replay under another beam width abandons nothing, where the same shape's replay would: true
 a replay under other repeats abandons nothing, where the same shape's replay would: true
 the cached abandonment starts with a search of exactly beam_width timings: true
+the cold abandonment has no refused windows: true
 an abandoned flip is not searched on replay: true
 the harness counts the cold abandonment as a search: true
 the harness counts the abandoned prefix replay as a replay with no search: true
+the invalidation control starts from a cached abandonment: true
 another beam width searches before abandoning at its own depth: true
+the invalidation control starts from a cached abandonment: true
 another sampling shape searches before abandoning: true
+the invalidation control starts from a cached abandonment: true
 a weaker incumbent invalidates the cached abandonment and the full search runs: true
+the completed invalidation search has no refused windows: true
 a completed winner takes precedence over the older abandonment record: true
+the invalidation control starts from a cached abandonment: true
 a looser margin invalidates the cached abandonment: true
+the invalidation control starts from a cached abandonment: true
 a call without an abandonment rule searches normally: true
+the invalidation control starts from a cached abandonment: true
 an incumbent with no record invalidates the cached abandonment: true
+the digest control starts from an abandonment without refused windows: true
 a mismatched abandonment digest is rejected before the flip searches again: true
 an abandonment with a refused window is not cached: true
 autotune_progress is on for this run: true
@@ -41,6 +58,7 @@ flips_done counts the abandonment among the measured flips: true
 the shipped routine computes the plain compile's values: true
 the cold cached flip chain really searches and abandons a distinct flip: true
 the shipped routine computes the plain compile's values: true
+the cold placement arms and flip have no refused windows: true
 the warm flip chain replays both placement arms: true
 the warm flip chain replays the abandonment and ships the same winner: true
 the shipped routine computes the plain compile's values: true

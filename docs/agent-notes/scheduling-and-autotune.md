@@ -452,6 +452,12 @@ files.
   grows, and inject relative to that. Relatedly, hoisted (link-time packed) `Stage` candidates are a CPU family only —
   `matmul_seed_params` proposes `sk_hoist` from its `is_cpu` branch — so any test precondition about
   packed-constant pools is false on GPU backends and has to be stated as an equivalence.
+- Scripted search fixtures opt into `Autotune.with_uncontended_test_windows` (gh-ocannl-1156)
+  around `on_candidate_measured`: the measurement callback alone only sees windows the host already
+  admitted, so a loaded runner could time nothing and leave cache controls vacuous. The scoped seam
+  clears candidate contention only; calibration, invalid readings and unresolved batching keep
+  their admission rules. `flip_abandonment` pins production refusal, nesting and failure restoration
+  with a majority-stalled window, then asserts search, placement and cache branches without skips.
 ## Search evidence and tensorization
 - "Seeded" is not "timed". An autotune family can be enumerated in bulk and rejected in bulk at
   candidate compile, and a count of proposals then reads as coverage it does not have — assert on
