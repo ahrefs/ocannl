@@ -817,6 +817,33 @@ def checkpoint_note(checkpoint):
     )
 
 
+def failure_record(label, note, ambient, checkpoint=None, provenance=None):
+    """One line of partial-failures.jsonl: a failed cell, and what it left behind.
+
+    A checkpoint (gh-ocannl-1209) names its fixture by path and size and its runner by path, both
+    of which a later sweep can reuse for different bytes. So beside it goes `provenance`: the
+    fixture stamp results carry (digest, origin, declared boxes) and the source identity read
+    before dispatch -- under a key of its own, leaving the checkpoint as the runner wrote it.
+    """
+    record = {"cell": label, "why": note, "ambient_ocannl_env": ambient}
+    if checkpoint is not None:
+        # The losses a killed cell completed, kept beside the failure and never among the results.
+        record["checkpoint"] = checkpoint
+        record["provenance"] = provenance
+    return record
+
+
+def source_identity(root):
+    """The checkout's HEAD and whether tracked files differ from it, as stamped on failure records."""
+    revision = run_supporting(
+        ["git", "rev-parse", "HEAD"], cwd=root, capture_output=True
+    ).stdout.strip()
+    dirty = run_supporting(
+        ["git", "status", "--porcelain", "--untracked-files=no"], cwd=root, capture_output=True
+    ).stdout.strip()
+    return {"source_revision": revision or None, "source_tracked_changes": bool(dirty)}
+
+
 def read_cell_log(path):
     """The cell's output so far, as text: read through a handle of its own, so the read shares
     no file offset with a writer that might still be alive."""
@@ -2329,6 +2356,9 @@ def main():
     # the cells inherit this environment, and only the approximate payload's keys are otherwise
     # accounted for.
     ambient = ambient_ocannl_env(os.environ)
+    # What the runners are built from, read before any cell runs: a checkpoint a failed cell
+    # leaves names only its executable's path, which a later rebuild reuses (gh-ocannl-1209).
+    source = source_identity(ROOT)
 
     # The fixture the cells currently being dispatched are measuring — stamped onto every result
     # so a row, and the report built from it, states its own workload identity (gh-ocannl-645)
@@ -2350,11 +2380,9 @@ def main():
             # leaves no result row to carry it, and the checkpoint an interrupted run leaves is
             # then the only artifact there is. It says what the SWEEP inherited, not what a runner
             # read: a failed cell produced no result line to name its framework.
-            record = {"cell": label, "why": note, "ambient_ocannl_env": ambient}
-            if checkpoint is not None:
-                # The losses a killed cell completed (gh-ocannl-1209), kept beside the failure and
-                # never among the results.
-                record["checkpoint"] = checkpoint
+            record = failure_record(
+                label, note, ambient, checkpoint, provenance=dict(stamp, **source)
+            )
             f.write(json.dumps(json_safe(record), allow_nan=False) + "\n")
 
     def collect(label, cmd, override=None, **kwargs):

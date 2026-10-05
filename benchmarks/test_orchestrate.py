@@ -266,6 +266,48 @@ class CheckpointLineTest(unittest.TestCase):
         self.assertIsNone(orchestrate.last_checkpoint("bench: parity step 0 loss 10.4\n"))
 
 
+class FailureRecordTest(unittest.TestCase):
+    """gh-ocannl-1209: a failed cell's checkpoint is persisted with the identity it lacks."""
+
+    def test_a_checkpoint_is_kept_whole_beside_the_fixture_stamp_and_source(self):
+        checkpoint = strict_loads(
+            golden_checkpoint_lines()[1][len(orchestrate.CHECKPOINT_PREFIX):]
+        )
+        stamp = {"fixture": "gpt2_mini_train_s1024.safetensors", "fixture_sha256": "ab" * 32,
+                 "fixture_origin": "tuf"}
+        source = {"source_revision": "cd" * 20, "source_tracked_changes": False}
+
+        record = orchestrate.failure_record(
+            "cell", "TIMED OUT", {}, dict(checkpoint), provenance=dict(stamp, **source)
+        )
+        line = json.dumps(orchestrate.json_safe(record), allow_nan=False)
+
+        back = strict_loads(line)
+        self.assertEqual(back["checkpoint"], checkpoint)  # its own `fixture` object untouched
+        self.assertEqual(back["provenance"], dict(stamp, **source))
+
+    def test_a_failure_without_a_checkpoint_carries_neither(self):
+        record = orchestrate.failure_record("cell", "exit 1", {}, None, provenance={"x": 1})
+
+        self.assertNotIn("checkpoint", record)
+        self.assertNotIn("provenance", record)
+
+    def test_the_source_identity_names_this_checkout(self):
+        got = orchestrate.source_identity(HERE)
+
+        self.assertRegex(got["source_revision"], r"^[0-9a-f]{40}$")
+        self.assertIsInstance(got["source_tracked_changes"], bool)
+
+    def test_the_sweep_records_failures_through_it_with_its_stamp_and_source(self):
+        # main's closure is not callable from here; pin that it composes the two, read before
+        # dispatch, rather than writing a record of its own.
+        source = Path(orchestrate.__file__).read_text()
+        main = source[source.index("\ndef main():") :]
+        self.assertIn("source = source_identity(ROOT)", main)
+        self.assertIn("provenance=dict(stamp, **source)", main)
+        self.assertLess(main.index("source = source_identity(ROOT)"), main.index("def collect("))
+
+
 class CellIdentityTest(unittest.TestCase):
     """gh-ocannl-539: scheduling variant and storage precision are independent axes."""
 

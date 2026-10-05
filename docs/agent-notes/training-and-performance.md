@@ -210,7 +210,9 @@ files.
   checkpoint carries the losses so far, stage statuses, the step count and the cell's identity, and
   NO timing: its `result` stage is always `pending` and `accepted` is `false`. `orchestrate.run_cell`
   folds the last one into a failed cell's note and hands it to `on_checkpoint`, so the sweep's and
-  `gh1181_cells.py`'s failure records keep the losses -- beside the failure, never among the rows.
+  `gh1181_cells.py`'s failure records keep the losses -- beside the failure, never among the rows;
+  the sweep's adds the fixture stamp and the source revision under `provenance`, since the
+  checkpoint names its fixture and runner only by paths a later sweep reuses.
   Do not give the line a `{` prefix or move it to stdout: drivers take a cell's result from the
   last `{`-line of its combined output, and the checkpoint must never be one.
 
