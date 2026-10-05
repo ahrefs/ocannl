@@ -52,6 +52,13 @@ files.
   re-derived one (gh-ocannl-1164, "Cache regimes and placement replay" below). A cut needs no retest after
   scope-local resolution: a cut that resolution merges back is serial either way (the reason is in
   the comment on `keeps_mapping`). `test/operations/gpu_fission_mapping`.
+- A `Zeros` segment is held together by the same rule (gh-ocannl-1169, `zeros_keep_mapping`): one
+  launch serves every node, so a run of zeros with no common lane-plan topology sends ALL of them to
+  the two-loop presets -- the gpt2_mini step's 147 gradient zeros did (`plan_chains` found no
+  topology), the only mixed-shape fallback left in that step once `keeps_mapping` cut the
+  `wte.grad` + final-LN-grad union. Zero runs are stably sorted by shape in `collect_units` (they
+  commute; units stay a function of the code), else the cuts fall at every alternation of a
+  backward pass's shapes. Case 4 of `gpu_fission_mapping`.
 - A parallel loop under a serial loop is reachable only past lane-uniform scalar work
   (gh-ocannl-1003). The presets' chain is the single-child loop path, which stops at the
   online-softmax hoist's preamble (`for t { p := P[s, t]; for e { O[s, e] += p * V[t, e] } }`);
