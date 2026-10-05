@@ -370,6 +370,10 @@ let () =
       ("an install stanza", {dune|(install (section share) (files out.dat))|dune});
       ( "a copy_files attached to an alias",
         {dune|(copy_files (alias probe) (files ../g/*.dat))|dune} );
+      ("an env setting variables", {dune|(env (_ (env-vars (OCANNL_BACKEND cuda))))|dune});
+      ( "a ctypes field",
+        {dune|(library (name stubs) (ctypes (external_library_name m) (generated_entry_point C)))|dune}
+      );
       ( "a preprocessing action",
         {dune|(library (name helper) (modules helper) (preprocess (action (run cat %{input-file}))))|dune}
       );
@@ -456,6 +460,27 @@ let () =
   printf "%-40s %s\n" "build @n/scans (beside a generated .ml)" generated;
   p "a configuration-reading generator of a source file is always reached"
     (String.equal generated "names nothing + reads config");
+  (* A glob matches where it points, so a glob over copies reaches the reader through the copy: a
+     [copy_files] produces its copies in its own directory, and needs the glob it copies from. *)
+  let _, copied =
+    judge
+      ~dune_files:
+        [
+          ( "r",
+            {dune|(executable (name reader) (modules reader))
+(rule
+ (target a.dat)
+ (deps ocannl_config (env_var OCANNL_BACKEND))
+ (action (with-stdout-to %{target} (run %{dep:reader.exe}))))|dune}
+          );
+          ("c", {dune|(copy_files ../r/*.dat)
+(alias (name probe) (deps (glob_files *.dat)))|dune});
+        ]
+      "build @@c/probe"
+  in
+  printf "%-40s %s\n" "build @@c/probe (a glob over copies)" copied;
+  p "a glob over a copy_files' copies reaches the reader they copy"
+    (String.equal copied "names nothing + reads config");
   (* The repository's own tree (its dune files, copied beside this test by the stanza's deps): the
      batch the issue is about holds no backend, and the one review round 1 found reading the
      configuration through the [.actual] its diff consumes still does. A new stanza that breaks the

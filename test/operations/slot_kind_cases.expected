@@ -145,6 +145,10 @@ build @d/sb (sandbox wrapper)            names nothing + reads config
     it reaches sb in d, whose dependency (sandbox(alias runtest-gpu)) this does not model exactly, so the configuration counts
 an unmodelled sandbox wrapper reads the configuration: true
 an unmodelled sandbox wrapper is nothing to a batch not reaching it: true
+build @d/odd2 (alias form outside a dependency field) names nothing + reads config
+    it reaches the rule on odd2 in d, whose alias form (alias x) this does not model exactly, so the configuration counts
+an unmodelled alias form outside a dependency field reads the configuration: true
+an unmodelled alias form outside a dependency field is nothing to a batch not reaching it: true
 build @n/scans (a top-level include)     names nothing + reads config
     it reads the dune file in d, whose stanza (include …) this does not model exactly, so the configuration counts
 a top-level include beside the tree makes every batch read the configuration: true
@@ -154,12 +158,27 @@ a cram test beside the tree makes every batch read the configuration: true
 build @n/scans (an install stanza)       names nothing + reads config
     it reads the dune file in d, whose stanza (install …) this does not model exactly, so the configuration counts
 an install stanza beside the tree makes every batch read the configuration: true
+build @n/scans (a copy_files attached to an alias) names nothing + reads config
+    it reads the dune file in d, whose alias form (alias probe) this does not model exactly, so the configuration counts
+a copy_files attached to an alias beside the tree makes every batch read the configuration: true
+build @n/scans (an env setting variables) names nothing + reads config
+    it compiles the env stanza in d, whose env-vars field this does not model exactly, so the configuration counts
+an env setting variables beside the tree makes every batch read the configuration: true
+build @n/scans (a ctypes field)          names nothing + reads config
+    it compiles stubs in d, whose ctypes field this does not model exactly, so the configuration counts
+a ctypes field beside the tree makes every batch read the configuration: true
 build @n/scans (a preprocessing action)  names nothing + reads config
     it compiles helper in d, whose preprocessing action this does not model exactly, so the configuration counts
 a preprocessing action beside the tree makes every batch read the configuration: true
 build @@d/probe (a directory target)     names nothing + reads config
     it reaches the rule producing * in d, which reads the configuration
 a directory target reaches the reader: true
+build @@d/probe (a bare-star glob)       names nothing + reads config
+    it reaches the rule producing a.actual in d, which reads the configuration
+a bare-star glob reaches the reader: true
+build @@d/runtest-none (an alias in a test's link_deps) names nothing + reads config
+    it reaches the rule producing a.actual in d, which reads the configuration
+an alias in a test's link_deps reaches the reader: true
 build @@d/probe (a character-class glob) names nothing + reads config
     it reaches the rule producing a.actual in d, which reads the configuration
 a character-class glob reaches the reader: true
@@ -168,6 +187,10 @@ build @@d/runtest-none (a linked library's preprocessing) names nothing + reads 
 a linked library's preprocessing reaches the reader: true
 build @n/scans (beside a generated .ml)  names nothing + reads config
 a configuration-reading generator of a source file is always reached: true
+build @@c/probe (a glob over copies)     names nothing + reads config
+a glob over a copy_files' copies reaches the reader they copy: true
+dirs: [] [.x] [.x/keep] [plain]
+the inventory reads where dirs stanzas send dune, and nowhere else: true
 live: build @test/operations/scans                            names nothing
     <the configuration does not count>
 live: build @test/operations/scans answers names nothing: true

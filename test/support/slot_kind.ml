@@ -358,9 +358,10 @@ let source_suffixes =
     ".sexp";
   ]
 
-let source_like target =
-  String.exists target ~f:is_wild
-  || List.exists source_suffixes ~f:(fun suffix -> String.is_suffix target ~suffix)
+let source_named target =
+  List.exists source_suffixes ~f:(fun suffix -> String.is_suffix target ~suffix)
+
+let source_like target = String.exists target ~f:is_wild || source_named target
 
 (* The stanza heads the inventory models: the ones that run something on an alias or for a target,
    the ones that compile, and the ones that build nothing a test runs. Not [install] nor
@@ -384,6 +385,30 @@ let compiling_heads =
 
 let inert_heads = [ "copy_files"; "copy_files#"; "dirs"; "data_only_dirs"; "vendored_dirs" ]
 
+(** What a [copy_files] stanza copies, as a target pattern here and the glob it reads: its short
+    form's path, or its long form's [(files …)]. The copy keeps the basename, so a file need is
+    followed past it to the original producer anyway; this is what a GLOB in the copy's directory
+    needs, since globs are matched where they point (Codex review on PR #1027). *)
+let copies_of ~dir sexp =
+  let spec =
+    match sexp with
+    | Sexp.List [ Sexp.Atom _; Sexp.Atom spec ] -> Some spec
+    | _ -> ( match Scan.field sexp "files" with Some [ Sexp.Atom spec ] -> Some spec | _ -> None)
+  in
+  match spec with
+  | None -> ([], [])
+  | Some spec ->
+      let in_dir, base =
+        match String.rsplit2 spec ~on:'/' with Some (d, b) -> (d, b) | None -> ("", spec)
+      in
+      let pattern =
+        String.concat
+          (List.map (Scan.pieces base) ~f:(function Scan.Literal l -> l | Scan.Pform _ -> "*"))
+      in
+      ( [ pattern ],
+        [ Glob_need { under = Option.map (resolve ~dir in_dir) ~f:(fun d -> (d, false)); pattern } ]
+      )
+
 (** One stanza, as the closure reads it: run, and -- for a head that compiles -- compiled, which is
     a stanza of its own here, seeded for every batch. *)
 let views_of ~dir ~named ~reads_config sexp =
@@ -394,10 +419,14 @@ let views_of ~dir ~named ~reads_config sexp =
   in
   let unknown = Option.some_if (not known) (Printf.sprintf "stanza (%s …)" head) in
   let run =
-    let targets = targets_of sexp in
+    let copies, copied =
+      if String.is_prefix head ~prefix:"copy_files" then copies_of ~dir sexp else ([], [])
+    in
+    let produced = targets_of sexp in
+    let targets = produced @ copies in
     let deps, inexact =
       match dep_needs ~dir sexp with
-      | Ok (needs, bindings) -> (needs, inexact_pform ~bindings sexp)
+      | Ok (needs, bindings) -> (needs @ copied, inexact_pform ~bindings sexp)
       | Error form -> ([], Some form)
     in
     let inexact =
@@ -418,7 +447,8 @@ let views_of ~dir ~named ~reads_config sexp =
       named;
       reads_config;
       targets;
-      source_like = List.exists targets ~f:source_like;
+      (* A copy's wildcard is the glob it copies, not a target this cannot name. *)
+      source_like = List.exists produced ~f:source_like || List.exists copies ~f:source_named;
       needs = List.dedup_and_sort (deps @ file_needs sexp) ~compare:Poly.compare;
       inexact;
     }
@@ -472,6 +502,12 @@ let views_of ~dir ~named ~reads_config sexp =
             Option.some_if
               (List.mem (Scan.atoms fields) "action" ~equal:String.equal)
               "preprocessing action";
+            (* ctypes stubs run generator programs as they build; an [env]'s [env-vars] change what
+               the actions it covers see, the backend variable included. *)
+            Option.map (Scan.field fields "ctypes") ~f:(fun _ -> "ctypes field");
+            Option.some_if
+              (List.mem (Scan.atoms fields) "env-vars" ~equal:String.equal)
+              "env-vars field";
             inexact_pform ~bindings fields;
           ]
       in
@@ -705,7 +741,7 @@ let describe s =
     match (Scan.names_of s.sexp, Scan.aliases_of s.sexp) with
     | [], [] when not (List.is_empty s.targets) ->
         "the rule producing " ^ String.concat ~sep:"," s.targets
-    | [], [] -> "a " ^ Option.value (Scan.head s.sexp) ~default:"stanza"
+    | [], [] -> "the " ^ Option.value (Scan.head s.sexp) ~default:"unnamed" ^ " stanza"
     | [], aliases -> "the rule on " ^ String.concat ~sep:"," aliases
     | names, _ -> String.concat ~sep:"," names
   in
