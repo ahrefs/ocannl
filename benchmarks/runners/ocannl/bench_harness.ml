@@ -1153,14 +1153,19 @@ type protocol = {
   parity_steps : int;  (** Steps whose losses are reported one by one, as the parity checksum. *)
   warmup_steps : int;  (** Untimed steps between the parity window and the timed one. *)
   timed_steps : int;  (** Steps timed twice over: per-step synced, then queued. *)
+  fixture : (string * int) option;
+      (** The fixture's path and size in bytes, for the checkpoints' identity (gh-ocannl-1209);
+          [None] for a model fabricated in memory. *)
 }
 
-let protocol_of_st st =
+(** [fixture] is the path [st] was read from. *)
+let protocol_of_st ~fixture st =
   {
     workload = get_meta st "name";
     parity_steps = meta_int st "parity_steps";
     warmup_steps = meta_int st "warmup_steps";
     timed_steps = meta_int st "timed_steps";
+    fixture = Some (fixture, (Unix.stat fixture).Unix.st_size);
   }
 
 (** Runs the measurement protocol and emits the JSON result line, which it also returns. [run_step]
@@ -1175,6 +1180,13 @@ let protocol_of_st st =
     [dominant_kernel] measures the report's %-of-peak column (see {!dominant_kernel}); it is called
     once, after the timed steps and the memory reading, unless [BENCH_DOMINANT_KERNEL=0]. Without it
     the line carries [null] there.
+
+    Until the result line, the protocol writes {!Bench_json.checkpoint_line}s to [checkpoint_out]
+    (default [stderr]), flushed, behind {!Bench_json.checkpoint_prefix} (gh-ocannl-1209): one after
+    every parity step, and one after the timed steps, before the dominant-kernel instrument. A
+    driver that kills the cell during a later stage — the instrument included — still finds the
+    completed losses in the cell's log. A checkpoint carries no timing: only the result line is a
+    benchmark result, and a cell that never emitted one is a failed cell whatever it checkpointed.
 
     Every number in the line goes through {!Bench_json}, so a non-finite one is [null] rather than
     OCaml's [nan] / [inf]: a training run that diverges is exactly the run whose loss trajectory the
@@ -1197,20 +1209,36 @@ let protocol_of_st st =
     whose {!Autotune.outcome} was one of the two states that search nothing, rather than an
     inference from two counters that are both zero). *)
 let measure_and_emit ~routines ~protocol ~backend ~variant ?(precision = "f32") ~compile_s
-    ?tokens_per_step ?tune ?(out = Stdio.stdout) ?dominant_kernel ~run_step ~read_loss ~sync () =
-  let { workload; parity_steps; warmup_steps; timed_steps } = protocol in
+    ?tokens_per_step ?tune ?(out = Stdio.stdout) ?(checkpoint_out = Stdio.stderr) ?dominant_kernel
+    ~run_step ~read_loss ~sync () =
+  let { workload; parity_steps; warmup_steps; timed_steps; fixture } = protocol in
   Stdio.eprintf "bench: compiled in %.1fs, starting %d parity steps\n%!" compile_s parity_steps;
+  let dominant_kernel = if dominant_kernel_enabled () then dominant_kernel else None in
+  let checkpoint ~completed_steps at losses =
+    Stdio.Out_channel.output_string checkpoint_out
+      (Bench_json.checkpoint_prefix
+      ^ Bench_json.checkpoint_line ~backend ~variant ~precision ~workload ~fixture
+          ~executable:Stdlib.Sys.executable_name ~parity_steps
+          ~dominant_kernel:(Option.is_some dominant_kernel) ~completed_steps ~at ~losses
+      ^ "\n");
+    (* Flushed at once: a kill does not unwind, so a checkpoint still in this process's buffer is
+       one the driver never sees. *)
+    Stdio.Out_channel.flush checkpoint_out
+  in
   (* Monotonic high-resolution clock (not [Unix.gettimeofday]): on Windows the latter ticks at ~1
      ms, which floors sub-millisecond step times to 0. *)
   let elapsed_ms c0 = Mtime.Span.to_float_ns (Mtime_clock.count c0) /. 1e6 in
-  let losses =
-    Array.init parity_steps ~f:(fun i ->
-        let c0 = Mtime_clock.counter () in
-        run_step ();
-        let l = read_loss () in
-        Stdio.eprintf "bench: parity step %d loss %.6g (%.2fs)\n%!" i l (elapsed_ms c0 /. 1000.);
-        l)
-  in
+  let losses = Array.create ~len:parity_steps Float.nan in
+  for i = 0 to parity_steps - 1 do
+    let c0 = Mtime_clock.counter () in
+    run_step ();
+    let l = read_loss () in
+    losses.(i) <- l;
+    Stdio.eprintf "bench: parity step %d loss %.6g (%.2fs)\n%!" i l (elapsed_ms c0 /. 1000.);
+    checkpoint ~completed_steps:(i + 1)
+      (Bench_json.In_parity (i + 1))
+      (Array.sub losses ~pos:0 ~len:(i + 1))
+  done;
   for _ = 1 to warmup_steps do
     run_step ()
   done;
@@ -1243,11 +1271,12 @@ let measure_and_emit ~routines ~protocol ~backend ~variant ?(precision = "f32") 
   in
   (* The %-of-peak column's instrument (gh-ocannl-1006): after the timed steps AND after the memory
      reading, because it compiles one routine per kernel and runs each on its own -- which is
-     neither the workload's step time nor its footprint, and mutates the kernels' outputs. *)
-  let dominant_kernel =
-    if dominant_kernel_enabled () then Option.map dominant_kernel ~f:(fun measure -> measure ())
-    else None
-  in
+     neither the workload's step time nor its footprint, and mutates the kernels' outputs. It can
+     also cost more than the workload, so the completed losses are checkpointed first. *)
+  checkpoint
+    ~completed_steps:(parity_steps + warmup_steps + (2 * timed_steps))
+    Bench_json.Before_diagnostics losses;
+  let dominant_kernel = Option.map dominant_kernel ~f:(fun measure -> measure ()) in
   Array.sort synced ~compare:Float.compare;
   let fp_algebra, fp_source =
     Utils.get_global_arg_with_source ~default:"all" ~arg_name:"simplify_fp_algebra"
@@ -1293,7 +1322,13 @@ let measure_and_emit ~routines ~protocol ~backend ~variant ?(precision = "f32") 
     order, and that argument mapping into [Bench_json.result_line] is the one link between the
     protocol and the wire format that no unit test of either half can reach. *)
 let self_test_protocol =
-  { workload = "selftest-tiny"; parity_steps = 2; warmup_steps = 1; timed_steps = 5 }
+  {
+    workload = "selftest-tiny";
+    parity_steps = 2;
+    warmup_steps = 1;
+    timed_steps = 5;
+    fixture = None;
+  }
 
 (** The f32 leg, built rather than parsed. {!precision_leg} reads [BENCH_PRECISION] and friends from
     the environment, which is right for a runner and wrong here: the self-test's emitted record is
@@ -1316,8 +1351,13 @@ let self_test_leg =
 
     Not a benchmark, and not comparable to one: see {!self_test_protocol}. The backend is chosen the
     usual OCANNL way, so the same call smoke-tests the measurement path on whatever backend the
-    caller is configured for. *)
-let run_self_test ?(out = Stdio.stdout) ?(leg = self_test_leg) ?inspect_compiled ?inspect_step () =
+    caller is configured for.
+
+    [checkpoint_out] is {!measure_and_emit}'s. [late_probe], when given, runs in place of the
+    dominant-kernel instrument — the protocol's last stage — and its result stands in for that
+    column: it is how a test stands a stalled or killed diagnostic where the real one runs. *)
+let run_self_test ?(out = Stdio.stdout) ?checkpoint_out ?(leg = self_test_leg) ?late_probe
+    ?inspect_compiled ?inspect_step () =
   let module TDSL = Operation.DSL_modules.TDSL in
   let module IDX = Train.IDX in
   let n_samples = 8 and n_features = 4 and n_hidden = 5 and n_classes = 3 in
@@ -1381,8 +1421,10 @@ let run_self_test ?(out = Stdio.stdout) ?(leg = self_test_leg) ?inspect_compiled
      What the self-test guards is the protocol and the emitter, not the search. *)
   let line =
     measure_and_emit ~routines ~protocol:self_test_protocol ~backend ~variant:"self-test" ~compile_s
-      ~out
-      ~dominant_kernel:(fun () -> dominant_kernel ~ctx:!ctx_ref ~bindings (step_routines routines))
+      ~out ?checkpoint_out
+      ~dominant_kernel:
+        (Option.value late_probe ~default:(fun () ->
+             dominant_kernel ~ctx:!ctx_ref ~bindings (step_routines routines)))
       ~run_step
       ~read_loss:(fun () -> (!ctx_ref, loss).@[0])
       ~sync:(fun () -> Context.sync !ctx_ref)

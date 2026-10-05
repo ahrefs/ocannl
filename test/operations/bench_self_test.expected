@@ -1,3 +1,10 @@
+the child was killed in its late probe rather than exiting: true
+no line of the killed child's output is a result line: true
+the killed child checkpointed every parity step, then the timed stages: true
+its last checkpoint says every measured stage completed and the probe was running: true
+and it is marked unaccepted: true
+the kill kept one loss per parity step: true
+every loss the kill kept is finite: true
 training segment census includes the forward loss: true
 training segment census includes every parameter gradient and optimizer write: true
 every tiny training segment executes with a positive standalone time: true
@@ -25,3 +32,4 @@ its verdict is one the report renders, and a number is printed exactly when exac
 timed_steps is the count the protocol asked for: true
 losses carries one parity checksum per parity step: true
 every parity checksum is a finite number: true
+the last checkpoint before the instrument holds the result line's own losses: true
