@@ -289,20 +289,49 @@ let set_from_float ?padding arr idx v =
   | Single_nd arr -> A.set arr adjusted_idx v
   | Double_nd arr -> A.set arr adjusted_idx v
 
-let fill_from_float arr v =
+(** Sets every cell of [arr] to [v]; with [~padding], only the cells inside the margins, which keep
+    their contents. *)
+let fill_from_float ?padding arr v =
+  (* The innermost axis's interior is one contiguous run, so a padded fill writes one [Array1.fill]
+     per interior row: no per-cell allocation, and none proportional to the element count
+     (gh-ocannl-1218). *)
+  let fill (type ocaml elt_t) (arr : (ocaml, elt_t) bigarray) (x : ocaml) =
+    let dims = A.dims arr in
+    let n_axes = Array.length dims in
+    match padding with
+    | Some padding when n_axes > 0 ->
+        let flat = Bigarray.reshape_1 arr (Array.fold dims ~init:1 ~f:( * )) in
+        let bounds axis =
+          if axis < Array.length padding then
+            (padding.(axis).Ops.left, dims.(axis) - padding.(axis).Ops.right)
+          else (0, dims.(axis))
+        in
+        (* [base] is the linear offset of index 0 along [axis] under the current prefix. *)
+        let rec go axis base =
+          let lo, hi = bounds axis in
+          if axis = n_axes - 1 then (
+            if hi > lo then Bigarray.Array1.fill (Bigarray.Array1.sub flat (base + lo) (hi - lo)) x)
+          else
+            for i = lo to hi - 1 do
+              go (axis + 1) ((base + i) * dims.(axis + 1))
+            done
+        in
+        go 0 0
+    | _ -> A.fill arr x
+  in
   match arr with
-  | Byte_nd arr -> A.fill arr @@ Char.of_int_exn @@ Int.of_float v
-  | Uint16_nd arr -> A.fill arr @@ Int.of_float v
-  | Int32_nd arr -> A.fill arr @@ Int32.of_float v
-  | Uint32_nd arr -> A.fill arr @@ float_to_uint32 v
-  | Int64_nd arr -> A.fill arr @@ Int64.of_float v
-  | Uint64_nd arr -> A.fill arr @@ float_to_uint64 v
-  | Uint4x32_nd arr -> A.fill arr @@ Stdlib.Complex.{ re = v; im = 0.0 }
-  | Half_nd arr -> A.fill arr v
-  | Bfloat16_nd arr -> A.fill arr @@ Ops.single_to_bfloat16 v
-  | Fp8_nd arr -> A.fill arr @@ Char.of_int_exn @@ Ops.double_to_fp8 v
-  | Single_nd arr -> A.fill arr v
-  | Double_nd arr -> A.fill arr v
+  | Byte_nd arr -> fill arr @@ Char.of_int_exn @@ Int.of_float v
+  | Uint16_nd arr -> fill arr @@ Int.of_float v
+  | Int32_nd arr -> fill arr @@ Int32.of_float v
+  | Uint32_nd arr -> fill arr @@ float_to_uint32 v
+  | Int64_nd arr -> fill arr @@ Int64.of_float v
+  | Uint64_nd arr -> fill arr @@ float_to_uint64 v
+  | Uint4x32_nd arr -> fill arr @@ Stdlib.Complex.{ re = v; im = 0.0 }
+  | Half_nd arr -> fill arr v
+  | Bfloat16_nd arr -> fill arr @@ Ops.single_to_bfloat16 v
+  | Fp8_nd arr -> fill arr @@ Char.of_int_exn @@ Ops.double_to_fp8 v
+  | Single_nd arr -> fill arr v
+  | Double_nd arr -> fill arr v
 
 let fold_bigarray ?padding arr ~init ~f =
   let dims = A.dims arr in

@@ -90,3 +90,7 @@ convolution commits scalar halo padding: true
 scalar host buffer fills the interior and neutral margins: true
 padded scalar convolution matches the independent reference: PASS
 padded scalar values remain correct on a second run: PASS
+padded fill writes the interior and keeps both axes' margins: true
+witness forces the host initializer itself: true
+witness buffer carries committed padding: true
+padded scalar host fill allocates under numel/8 heap words: true

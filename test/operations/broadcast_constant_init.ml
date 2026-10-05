@@ -103,6 +103,53 @@ let padded limit value =
   values ctx y expected "padded scalar values remain correct on a second run";
   Context.release ctx
 
+(* gh-ocannl-1218: the padding-aware fill writes exactly the interior, row by row. Asymmetric
+   margins on both axes discriminate the row offsets; the margins keep the neutral value the buffer
+   was created with. *)
+let padded_fill_offsets () =
+  let pads = Ir.Ops.[| { left = 1; right = 0 }; { left = 2; right = 1 } |] in
+  let rows = 4 and cols = 6 in
+  let nd =
+    Ir.Ndarray.create_array ~debug:"fill_offsets" Ir.Ops.single ~dims:[| rows; cols |]
+      ~padding:(Some (pads, -1.))
+  in
+  Ir.Ndarray.fill_from_float ~padding:pads nd 3.;
+  p "padded fill writes the interior and keeps both axes' margins"
+    (Array.equal Float.equal
+       (Ir.Ndarray.retrieve_flat_values nd)
+       (Array.init (rows * cols) ~f:(fun k ->
+            let r = k / cols and c = k % cols in
+            if r >= 1 && c >= 2 && c < cols - 1 then 3. else -1.)))
+
+(* gh-ocannl-1218: forcing a padded broadcast scalar's host initializer allocates nothing the size
+   of its buffer on the OCaml heap; a full-size float temporary alone is [numel] words. Measured
+   while lowering, after shape inference committed the padding and before linking forces it. *)
+let allocation_witness () =
+  let numel = 1 lsl 16 in
+  let x = NTDSL.ndarray [| 3. |] ~output_dims:[ numel ] () in
+  Train.set_materialized x.value;
+  let kernel = NTDSL.ndarray [| 1.; 2.; 3. |] ~output_dims:[ 3 ] () in
+  let%op y = x +* "i=+k; k => i" kernel in
+  let measured = ref None in
+  let ctx, _routine =
+    compile "alloc_witness" y ~inspect:(fun _ ->
+        if Option.is_none !measured then
+          let init = Option.value_exn (Ir.Host_inits.find x.value) in
+          let forced_before = Lazy.is_val init in
+          let before = Stdlib.Gc.allocated_bytes () in
+          let _ : Ir.Ndarray.t = Lazy.force init in
+          let words =
+            (Stdlib.Gc.allocated_bytes () -. before) /. Float.of_int (Stdlib.Sys.word_size / 8)
+          in
+          measured := Some (forced_before, Option.is_some (Ir.Tnode.get_padding x.value), words))
+  in
+  let forced_before, padded, words = Option.value_exn !measured in
+  Stdio.eprintf "allocation witness: %.0f words for %d cells (not part of the golden)\n" words numel;
+  p "witness forces the host initializer itself" (not forced_before);
+  p "witness buffer carries committed padding" padded;
+  p "padded scalar host fill allocates under numel/8 heap words" Float.(words < of_int numel /. 8.);
+  Context.release ctx
+
 let parameter_reinit limit =
   let p = TDSL.param ~value:3. ("reinit_scalar_" ^ Int.to_string limit) ~output_dims:[ 3 ] () in
   let q =
@@ -202,4 +249,6 @@ let () =
       parameter_reinit limit;
       dependent_parameter limit;
       independent_parameters limit;
-      List.iter [ 0.; 3. ] ~f:(padded limit))
+      List.iter [ 0.; 3. ] ~f:(padded limit));
+  padded_fill_offsets ();
+  allocation_witness ()
