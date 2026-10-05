@@ -357,6 +357,16 @@ files.
   structure, the batch-1 refusal and every seed's parity (or typed decline, in the block); which
   seeds decline where it only reports on stderr, and the 16-channel virtualization is a manual
   observation (conv2d into batch_norm2d, 16 channels) that no test exercises.
+- **A per-segment candidate's executed-parity reference is its own segmentation on the default
+  preset, not the unscheduled form, wherever the values are inexact** (gh-ocannl-1217). The
+  candidate schedules every OTHER segment by the default preset too, so against the unscheduled
+  form it is also charged with that preset's reduction orders. `resnet_block`'s inference-mode batch
+  norm divides by `sqrt` of the stored variance, so the block's outputs reach ~2e5, where an f32 ulp
+  (1/64) is above an "exact" 1e-3 tolerance; on HIP every shortcut seed then "diverged" identically by
+  5 ulps. The signature to recognize is a divergence that does not depend on the seed.
+  `schedule_strided_1x1` compares each seed exactly against `run_default_fission` and checks that
+  reference against the unscheduled form up to f32 rounding. Exact-integer fixtures (its bare
+  einsum legs) can keep the unscheduled reference.
 ## Dispatch bindings and device properties
 - **A dispatch's launch parameters are read on the HOST, at `Context.run`, and carried to the
   device** — never re-read from the caller's refs when the device gets around to the task. Only
