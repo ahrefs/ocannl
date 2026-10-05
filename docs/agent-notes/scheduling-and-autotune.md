@@ -1106,7 +1106,12 @@ files.
   queued: equal timed loops, but 587 s of calibration against 14 s, because 215 of 220 calls settle
   at depth 1 after ~40 calibration launches (sixteen singles plus the depth-2 confirmation) and
   then time exactly what `isolated` would. `BENCH_TIMING_TRACE=1` in the benchmark runners splits a
-  session's wall this way; `benchmarks/gh834_cells.sh` is the per-box driver. A cold schedule cache
+  session's wall this way; `benchmarks/gh834_cells.sh` is the per-box driver. Its per-call
+  `decision` line (gh-ocannl-1199) is `Autotune.on_batch_decision`, built from the calibration's own
+  metadata: each exit of `calibrate_and_time` returns its `batch_settle`, and
+  `fit_queued_batch_depth_between_with_cap` returns the `affine_fit` (fixed, marginal, verdict) behind
+  every depth it chooses — so a new calibration branch must name its settle and verdict, and a
+  diagnosis reads them instead of re-deriving the policy from probe readings. A cold schedule cache
   is not a cold session: the backend's own compiled-code cache persists across processes, and in
   gh-ocannl-834's CUDA pair the second session's compile-and-bookkeeping time was 64 s against the
   first's 406 s from the PTX ComputeCache alone — the driver gives each CUDA session an empty
