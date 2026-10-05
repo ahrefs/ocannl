@@ -148,6 +148,7 @@ declared or pinned by every rule running the program (gh-ocannl-1149):
   test/operations/dune, test autotune_serial_baseline: Ir.Schedule.automatic_schedule_active, Ir.Schedule.maybe_default_schedules
   test/operations/dune, test autotune_smoke: Ir.Schedule.apply
   test/operations/dune, test autotune_split_reduce: Ir.Schedule.apply, Ir.Schedule.default_cpu, Ir.Schedule.default_gpu, Ir.Schedule.fission_scheduled
+  test/operations/dune, test bench_mma_writes: Ir.Schedule.apply
   test/operations/dune, test clamped_window_pool: Ir.Schedule.apply
   test/operations/dune, test conv_detection_boundary: Ir.Schedule.default_gpu, Ir.Schedule.fission_scheduled, Ir.Schedule.zero_expansion
   test/operations/dune, test cpu_parallel: Ir.Schedule.apply
