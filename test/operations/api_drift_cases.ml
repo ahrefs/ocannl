@@ -184,6 +184,69 @@ let () =
   Verdict.p_empty "private ownership dependency and prose edits do not change publication entries"
     ~over:publication_before
     (Surface.changes publication_before publication_after);
+  let dune_refusal dune =
+    match Surface.sources ~dunes:[ ("lib/dune", dune) ] [ "lib/a.ml" ] with
+    | _ -> None
+    | exception Failure message -> Some message
+  in
+  Verdict.p_all "module lists and configuration read from other files refuse"
+    [
+      "(library (name lib) (public_name pkg.lib) (modules (:include modules.sexp)))";
+      "(library (name lib) (public_name pkg.lib) (flags (:include flags.sexp)))";
+      "(executable (name main) (modules %{read-lines:modules.txt}))";
+    ] ~f:(fun dune ->
+      Option.value_map (dune_refusal dune) ~default:false ~f:(fun message ->
+          String.is_substring message ~substring:"lib/dune: "
+          && String.is_substring message ~substring:"gh-ocannl-1201"));
+  Verdict.p "an include outside module owners and generators is not read"
+    (Option.is_none
+       (dune_refusal
+          "(library (name lib) (public_name pkg.lib)) (rule (deps (:include deps.sexp)) (action \
+           (progn)))"));
+  Verdict.p "a selected interface target refuses by name"
+    (Option.value_map
+       (dune_refusal
+          "(library (name lib) (public_name pkg.lib) (libraries (select impl.mli from (cuda -> \
+           impl.cudajit.mli) (-> impl.missing.mli))))")
+       ~default:false
+       ~f:(String.is_substring ~substring:"unsupported select target impl.mli in lib/dune"));
+  let re_export libraries =
+    "(library (name lib) (public_name pkg.lib) (modules a) (libraries " ^ libraries ^ "))"
+  in
+  Verdict.p_all "re-exported dependencies remain publication-input evidence at any depth"
+    [ ("base", "base (re_export stdio)"); ("(re_export stdio) base", "(re_export ppxlib) base") ]
+    ~f:(fun (before, after) ->
+      match changed "lib/dune" (re_export before) (re_export after) with
+      | [ (Some _, Some entry) ] -> String.is_substring entry.text ~substring:"(re_export"
+      | _ -> false);
+  Verdict.p_empty "ordinary dependency edits beside a re-export stay quiet"
+    ~over:(declarations "lib/dune" (re_export "(re_export stdio) base"))
+    (changed "lib/dune" (re_export "(re_export stdio) base") (re_export "(re_export stdio) unix"));
+  let private_paths =
+    [ "lib/a.ml"; "lib/b.ml"; "lib/b.mli"; "lib/c.ml"; "lib/c.mli"; "tensor/d.ml" ]
+  in
+  Verdict.p "ordinary private modules leave the inventory while public peers remain"
+    (List.equal String.equal
+       (Surface.sources
+          ~dunes:
+            [
+              ( "lib/dune",
+                "(library (name lib) (public_name pkg.lib) (modules a b c) (private_modules a b))"
+              );
+            ]
+          private_paths)
+       [ "lib/c.mli"; "lib/dune"; "tensor/d.ml" ]
+    && List.equal String.equal
+         (Surface.sources
+            ~dunes:
+              [
+                ( "lib/dune",
+                  "(library (name lib) (public_name pkg.lib) (private_modules (:standard \\ c)))" );
+              ]
+            private_paths)
+         [ "lib/c.mli"; "lib/dune"; "tensor/d.ml" ]
+    && List.equal String.equal (Surface.sources private_paths)
+         [ "lib/a.ml"; "lib/b.mli"; "lib/c.mli"; "tensor/d.ml" ]);
   Verdict.p "a multiline value signature change is visible"
     (List.length (changed "lib/a.mli" "val run :\n int ->\n int" "val run :\n int ->\n string") = 1);
   Verdict.p "record fields and constructors retain their symbol spellings"
@@ -251,7 +314,10 @@ let () =
        let () = print_endline \"old\"\n\
        let _ = 2;;\n\
        print_endline \"old bare eval\";;\n\
-       module M = struct let visible = 1 let () = print_endline \"old nested\" end"
+       module M = struct let visible = 1 let () = print_endline \"old nested\" end\n\
+       module _ = struct let x = earlier end\n\
+       (** documented *)\n\
+       let () = earlier"
   in
   let named_after =
     declarations "lib/a.ml"
@@ -259,9 +325,14 @@ let () =
        let () = print_endline \"new\"\n\
        let _ = 3;;\n\
        print_endline \"new bare eval\";;\n\
-       module M = struct let visible = 1 let () = print_endline \"new nested\" end"
+       module M = struct let visible = 1 let () = print_endline \"new nested\" end\n\
+       module _ = Make (struct let x = later end)\n\
+       (** documented *)\n\
+       let () = later"
   in
-  Verdict.p_empty "unnamed initializers and bare evaluations do not count as exported declarations"
+  Verdict.p_empty
+    "unnamed initializers anonymous modules and bare evaluations do not count as exported \
+     declarations"
     ~over:named_before
     (Surface.changes named_before named_after);
   Verdict.p "named pattern aliases remain exported declarations"
@@ -282,6 +353,34 @@ let () =
     (List.length (changed "lib/a.ml" "[%%publish earlier]" "[%%publish later]") = 1
     && List.length (changed "lib/a.ml" "[%%publish let () = earlier]" "[%%publish let () = later]")
        = 1);
+  let refusal source text =
+    match declarations source text with _ -> None | exception Failure message -> Some message
+  in
+  Verdict.p_all "non-documentation attributes on anonymous items refuse with their location"
+    [
+      ("let () = setup () [@@publish earlier]", "lib/a.ml:1:", "value binding");
+      ("let x = 1\nlet[@publish] _ = setup ()", "lib/a.ml:2:", "value binding");
+      ("let exported = 1 and () = setup () [@@publish]", "lib/a.ml:1:", "value binding");
+      ("let x = 1;;\nsetup () [@@publish earlier]", "lib/a.ml:2:", "evaluation");
+      ("module _ = struct end [@@publish]", "lib/a.ml:1:", "module binding");
+      ( "module M = struct\n let () = setup () [@@warning \"-8\"] end",
+        "lib/a.ml:2:",
+        "value binding" );
+    ]
+    ~f:(fun (text, location, kind) ->
+      match refusal "lib/a.ml" text with
+      | Some message ->
+          String.is_prefix message ~prefix:location
+          && String.is_substring message ~substring:("anonymous " ^ kind)
+          && String.is_substring message ~substring:"gh-ocannl-1201"
+      | None -> false);
+  Verdict.p_none "named items and extension payloads keep their attributes without refusal"
+    [
+      "let exported = setup () [@@publish]";
+      "module M = struct end [@@publish]";
+      "[%%publish let () = setup () [@@publish]]";
+      "type t = A [@@deriving sexp]";
+    ] ~f:(fun text -> Option.is_some (refusal "lib/a.ml" text));
   let mixed_before = declarations "lib/a.ml" "let exported = 1 and () = earlier" in
   let mixed_after = declarations "lib/a.ml" "let exported = 1 and () = later" in
   Verdict.p_empty "anonymous bindings inside mixed let groups do not create drift"

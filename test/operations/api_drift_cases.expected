@@ -14,6 +14,12 @@ select configuration is visible when its target has an implicit interface: true
 select configuration with an explicit target interface stays quiet: true
 private generator configuration edits stay outside publication inputs: true
 private ownership dependency and prose edits do not change publication entries: true
+module lists and configuration read from other files refuse: true
+an include outside module owners and generators is not read: true
+a selected interface target refuses by name: true
+re-exported dependencies remain publication-input evidence at any depth: true
+ordinary dependency edits beside a re-export stay quiet: true
+ordinary private modules leave the inventory while public peers remain: true
 a multiline value signature change is visible: true
 record fields and constructors retain their symbol spellings: true
 documentation and whitespace changes do not count as declarations: true
@@ -22,10 +28,12 @@ floating implementation documentation is discarded recursively: true
 nested signatures and includes stay in the checklist: true
 implicit lets externals and types including deriving changes are visible: true
 non-documentation attribute payload changes stay visible: true
-unnamed initializers and bare evaluations do not count as exported declarations: true
+unnamed initializers anonymous modules and bare evaluations do not count as exported declarations: true
 named pattern aliases remain exported declarations: true
 named module unpack bindings remain exported declarations: true
 extension inputs stay visible even when their payload binds no source name: true
+non-documentation attributes on anonymous items refuse with their location: true
+named items and extension payloads keep their attributes without refusal: true
 anonymous bindings inside mixed let groups do not create drift: true
 pattern extension inputs remain visible without an ordinary binder: true
 declaration movement across opens is visible in signatures and implementations: true

@@ -301,6 +301,17 @@ let () =
       let config_order = commit "Reorder fields and edit dependencies and prose" in
       p "public configuration field ordering dependencies and prose stay quiet"
         (has (read ~until:config_order preprocessing) "0 declaration changes");
+      write "lib/dune"
+        "(library (name first) (public_name pkg.first) (modules attributes secret) \
+         (private_modules secret)) (library (name second) (public_name pkg.second) (modules \
+         pattern))\n";
+      write "lib/secret.ml" "let hidden = 1\n";
+      let privatized = commit "Private ordinary module" in
+      write "lib/secret.ml" "let hidden = \"private type\"\n";
+      let secret_edit = commit "Change a private ordinary module" in
+      p "ordinary private module edits stay quiet"
+        ((not (has (read ~until:privatized config_order) "lib/secret.ml"))
+        && has (read ~until:secret_edit privatized) "0 declaration changes");
       write "arrayjit/lib/cap.mli" "val";
       ignore (commit "Invalid source must refuse" : string);
       p "invalid source refuses the real historical reader"
