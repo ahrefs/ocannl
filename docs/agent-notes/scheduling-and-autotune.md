@@ -770,6 +770,22 @@ files.
   against those timings; without a qualifying rule it searches normally. It reports
   `Abandonment_replay` and raises `Search_abandoned` with zero search counters, so a warm
   flip chain does not re-search its losing flips or mislabel the harness's tuned row.
+- **A per-segment single is timed against a backdrop, so near-tie singles rank by noise**
+  (gh-ocannl-1166). An `F_sketch` single times the WHOLE routine with every other segment on its
+  untuned preset: on gpt2_mini/CUDA tf32 a q/k/v single measured ~23.2 ms where the composite it
+  staffs ran at 2.4 ms. Two replicate searches put the same single 0.016-0.031 ms apart, as wide
+  as the gap between that site's top four geometries, and the replicates crowned different ones
+  (`mma 32x32x0 bgrid` vs `mma 16x32x0 bgrid-in`) — the "step search crowns weaker geometries
+  than the per-site search" symptom. Exact mode, whose gaps are larger, crowned the per-site best
+  in both. `bench_gpt` tunes with `~rounds:0`, so no refinement ever ran there (gh-ocannl-1137).
+  The composite playoff re-times each key's singles within `playoff_margin` (0.5%) of its best,
+  at most `playoff_width` (2) per key, inside the faster timed composite, as coordinate descent
+  over the keys; its windows count in `report.fiss_sketch_playoff_timed`, not in
+  `fiss_sketch_timed`. With it both tf32 replicates crowned `mma 16x32x0 bgrid-in`; the alternates
+  it beat by ~1.3% inside the composite had tied it within 0.1% as singles, and the replayed step
+  moved 2.474 -> 2.427 ms (replicate means) with the spread narrowed 16x. Before reading a per-key
+  crown as a ranking, compare the singles' gap with their backdrop's replicate spread; the
+  `autotune_log` lines carry both.
 ## Action enumeration and budget sharing
 - The action menu's loop enumeration is provenance-aimed **by action category**, not by loop
   (gh-ocannl-687). `Local_scope` has two producers — virtualization's inline at a read site, and the

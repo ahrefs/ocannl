@@ -673,13 +673,14 @@ type entry = {
 [@@deriving sexp]
 
 (* Bumped on a decode-incompatible payload change — and on a SEARCH-MENU change (gh-ocannl-728, 4 ->
-   5: the [bgrid-in] batch flavor of the GPU matmul sketches). A stored crown is the best of the
-   menu that searched it; once the menu offers a candidate the search never timed, the entry is
-   still a sound schedule but no longer the answer the key asks for, and a warm cache would replay
-   it forever. Non-current entries read as misses, so the next search re-tunes and overwrites. 6: a
-   fissioned winner's [segments] carry the segmentation and every segment's schedule
-   (gh-ocannl-1164). *)
-let entry_version = 6
+   5: the [bgrid-in] batch flavor of the GPU matmul sketches; gh-ocannl-1166, -> 7 (6 was never
+   used): the composite playoff, which times candidates the earlier search never did). A stored
+   crown is the best of the menu that searched it; once the menu offers a candidate the search never
+   timed, the entry is still a sound schedule but no longer the answer the key asks for, and a warm
+   cache would replay it forever. Non-current entries read as misses, so the next search re-tunes
+   and overwrites. 8 (7 landed first): a fissioned winner's [segments] carry the segmentation and
+   every segment's schedule (gh-ocannl-1164). *)
+let entry_version = 8
 
 let sanitize name =
   String.map name ~f:(fun c ->
