@@ -45,6 +45,8 @@ let codegen_stage_modules =
     "cc_backend.ml";
     "cuda_backend.ml";
     "cuda_like_config.ml";
+    (* CUDA's arm tables and descriptor, extracted from cuda_backend.ml (gh-ocannl-1214). *)
+    "cuda_mma.ml";
     "hip_backend.ml";
     "metal_backend.ml";
     "schedule_cache.ml";
