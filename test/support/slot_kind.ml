@@ -75,6 +75,9 @@ type stanza = {
   inexact : string option;
       (** the first construct in it this does not model exactly, which makes a batch reaching it
           count the configuration *)
+  overrides : string option;
+      (** a backend it sets for what it runs, past the configuration: a batch reaching it can hold
+          any backend *)
 }
 
 (** The aliases a stanza sits on, including the per-stanza one dune generates for a test and an
@@ -340,26 +343,30 @@ let targets_of sexp =
           else [])
   | _ -> []
 
-let source_suffixes =
+(* A rule target compilation may need without naming it is source-like: any target but these, the
+   extensions of files only read by name -- inverted after a review on PR #1027 found a source
+   dialect ([.re]) the old list of source suffixes missed. A dialect declared in [dune-project] is
+   assumed not to take one of these extensions. *)
+let data_suffixes =
   [
-    ".ml";
-    ".mli";
-    ".mll";
-    ".mly";
-    ".c";
-    ".h";
-    ".cc";
-    ".cpp";
-    ".cxx";
-    ".hpp";
-    ".s";
-    ".S";
-    ".inc";
-    ".sexp";
+    ".actual";
+    ".expected";
+    ".txt";
+    ".filelist";
+    ".generators";
+    ".generated";
+    ".sources";
+    ".raw";
+    ".log";
+    ".tsv";
+    ".csv";
+    ".json";
+    ".out";
+    ".dat";
   ]
 
 let source_named target =
-  List.exists source_suffixes ~f:(fun suffix -> String.is_suffix target ~suffix)
+  not (List.exists data_suffixes ~f:(fun suffix -> String.is_suffix target ~suffix))
 
 let source_like target = String.exists target ~f:is_wild || source_named target
 
@@ -384,6 +391,36 @@ let compiling_heads =
   ]
 
 let inert_heads = [ "copy_files"; "copy_files#"; "dirs"; "data_only_dirs"; "vendored_dirs" ]
+
+(** The first place [sexp] sets the backend past the configuration -- an [OCANNL_BACKEND] bound by a
+    [setenv] or an [env]'s [env-vars] (in any spelling), a rule generating an [ocannl_config] (one
+    the tracked configurations the runner reads cannot show), or, where the stanza reads the
+    configuration, a command-line [--ocannl_backend] -- which the resolved configuration cannot
+    answer for, so a batch reaching it can hold any backend (Codex review on PR #1027). *)
+let backend_override ~reads_config sexp =
+  let is_backend name =
+    String.equal
+      (String.lowercase (String.map name ~f:(function '-' -> '_' | c -> c)))
+      "ocannl_backend"
+  in
+  let rec go = function
+    | Sexp.Atom a ->
+        let flag = String.lowercase (String.map a ~f:(function '-' -> '_' | c -> c)) in
+        Option.some_if
+          (reads_config && String.is_prefix flag ~prefix:"__ocannl_backend")
+          (Printf.sprintf "flag %s" a)
+    | Sexp.List (Sexp.Atom "setenv" :: Sexp.Atom name :: _) when is_backend name ->
+        Some (Printf.sprintf "(setenv %s …)" name)
+    | Sexp.List (Sexp.Atom "env-vars" :: bindings) ->
+        List.find_map bindings ~f:(function
+          | Sexp.List (Sexp.Atom name :: _) when is_backend name ->
+              Some (Printf.sprintf "(env-vars (%s …))" name)
+          | _ -> None)
+    | Sexp.List l -> List.find_map l ~f:go
+  in
+  if List.exists (targets_of sexp) ~f:(fun t -> Scan.glob_could_match t ~name:Scan.config_file) then
+    Some "generated ocannl_config"
+  else go sexp
 
 (** What a [copy_files] stanza copies, as a target pattern here and the glob it reads: its short
     form's path, or its long form's [(files …)]. The copy keeps the basename, so a file need is
@@ -451,6 +488,7 @@ let views_of ~dir ~named ~reads_config sexp =
       source_like = List.exists produced ~f:source_like || List.exists copies ~f:source_named;
       needs = List.dedup_and_sort (deps @ file_needs sexp) ~compare:Poly.compare;
       inexact;
+      overrides = backend_override ~reads_config sexp;
     }
   in
   let compiled ~needs inexact =
@@ -465,6 +503,7 @@ let views_of ~dir ~named ~reads_config sexp =
       source_like = false;
       needs;
       inexact;
+      overrides = backend_override ~reads_config:false sexp;
     }
   in
   let compile =
@@ -759,27 +798,42 @@ let describe s =
     default the ones whose name starts with neither [.] nor [_] (not _build, _opam, .git, ...), and
     where a [(dirs …)] stanza says otherwise, the ones it names -- [:standard] for that default, a
     name or a glob for the subdirectories it matches (the root's [(dirs :standard .github .claude)]
-    admits [.claude], whose own [(dirs skills)] keeps its worktrees out; Codex review on PR #1027).
-    A [dirs] stanza in any other shape raises: the caller takes an unreadable tree as every backend.
-    Reading more than dune does only widens the answer. *)
+    admits [.claude], whose own [(dirs skills)] keeps its worktrees out; Codex review on PR #1027),
+    less the ones a [(data_only_dirs …)] names -- each stanza applying where dune applies it, a
+    [(subdir …)] scoping it to that subdirectory. A directory stanza in any other shape raises: the
+    caller takes an unreadable tree as every backend. *)
 let dune_files ~root =
   let standard e = not (String.is_prefix e ~prefix:"." || String.is_prefix e ~prefix:"_") in
-  let admitted content entries =
-    match
-      List.filter_map (Scan.stanzas content) ~f:(function
-        | Sexp.List (Sexp.Atom "dirs" :: args) -> Some args
-        | _ -> None)
-    with
-    | [] -> List.filter entries ~f:standard
-    | [ args ] ->
-        List.filter entries ~f:(fun e ->
-            List.exists args ~f:(function
-              | Sexp.Atom ":standard" -> standard e
-              | Sexp.Atom name -> Scan.glob_could_match name ~name:e
-              | other ->
-                  failwith
-                    (Printf.sprintf "a (dirs …) entry this does not read: %s" (Sexp.to_string other))))
-    | _ -> failwith "more than one (dirs …) stanza"
+  let matches args e =
+    List.exists args ~f:(function
+      | Sexp.Atom ":standard" -> standard e
+      | Sexp.Atom name -> Scan.glob_could_match name ~name:e
+      | other ->
+          failwith
+            (Printf.sprintf "a directory-set entry this does not read: %s" (Sexp.to_string other)))
+  in
+  (* The directory stanzas that apply to a directory: its own dune file's, and those a [(subdir …)]
+     in an ancestor's scopes to it (Codex review on PR #1027), keyed by directory. *)
+  let scoped = Hashtbl.create (module String) in
+  let rec collect dir = function
+    | Sexp.List (Sexp.Atom (("dirs" | "data_only_dirs") as kind) :: args) ->
+        Hashtbl.add_multi scoped ~key:dir ~data:(kind, args)
+    | Sexp.List (Sexp.Atom "subdir" :: Sexp.Atom sub :: body) ->
+        List.iter body ~f:(collect (join dir sub))
+    | _ -> ()
+  in
+  let admitted dir entries =
+    let stanzas = Hashtbl.find_multi scoped dir in
+    let dirs =
+      match List.filter_map stanzas ~f:(function "dirs", a -> Some a | _ -> None) with
+      | [] -> List.filter entries ~f:standard
+      | [ args ] -> List.filter entries ~f:(matches args)
+      | _ -> failwith (Printf.sprintf "more than one (dirs …) stanza for %s" dir)
+    in
+    (* A data-only directory's dune file is not read by dune, so it is not read here. *)
+    List.fold stanzas ~init:dirs ~f:(fun dirs -> function
+      | "data_only_dirs", args -> List.filter dirs ~f:(fun e -> not (matches args e))
+      | _ -> dirs)
   in
   let rec under dir =
     let path = if String.is_empty dir then root else Stdlib.Filename.concat root dir in
@@ -789,14 +843,12 @@ let dune_files ~root =
         Some (Stdio.In_channel.read_all (Stdlib.Filename.concat path "dune"))
       else None
     in
+    Option.iter content ~f:(fun c -> List.iter (Scan.stanzas c) ~f:(collect dir));
     let subdirs =
       List.filter entries ~f:(fun e -> Stdlib.Sys.is_directory (Stdlib.Filename.concat path e))
     in
-    let subdirs =
-      match content with Some c -> admitted c subdirs | None -> List.filter subdirs ~f:standard
-    in
     Option.to_list (Option.map content ~f:(fun c -> (dir, c)))
-    @ List.concat_map subdirs ~f:(fun e -> under (if String.is_empty dir then e else dir ^ "/" ^ e))
+    @ List.concat_map (admitted dir subdirs) ~f:(fun e -> under (join dir e))
   in
   under ""
 
@@ -831,29 +883,36 @@ let answer ~dune_files argv =
       in
       match read with
       | Error why -> Unknown why
-      | Ok stanzas ->
+      | Ok stanzas -> (
           let found = reached (List.concat (List.rev stanzas)) targets in
-          let named =
-            List.concat_map found ~f:(fun s ->
-                let why =
-                  Printf.sprintf "%s, which names %s" (describe s) (String.concat ~sep:"," s.named)
-                in
-                List.map s.named ~f:(fun b -> (b, why)))
-            |> List.fold ~init:[] ~f:(fun acc (b, why) ->
-                if List.Assoc.mem acc b ~equal:String.equal then acc else (b, why) :: acc)
-            |> List.rev
-          in
-          let reads_config =
-            Option.first_some
-              (List.find_map found ~f:(fun s ->
-                   Option.some_if s.reads_config (describe s ^ ", which reads the configuration")))
-              (List.find_map found ~f:(fun s ->
-                   Option.map s.inexact ~f:(fun construct ->
-                       Printf.sprintf
-                         "%s, whose %s this does not model exactly, so the configuration counts"
-                         (describe s) construct)))
-          in
-          Reaches { named; reads_config })
+          match List.find found ~f:(fun s -> Option.is_some s.overrides) with
+          | Some s ->
+              Unknown
+                (Printf.sprintf "%s, whose %s sets the backend past the configuration" (describe s)
+                   (Option.value_exn s.overrides))
+          | None ->
+              let named =
+                List.concat_map found ~f:(fun s ->
+                    let why =
+                      Printf.sprintf "%s, which names %s" (describe s)
+                        (String.concat ~sep:"," s.named)
+                    in
+                    List.map s.named ~f:(fun b -> (b, why)))
+                |> List.fold ~init:[] ~f:(fun acc (b, why) ->
+                    if List.Assoc.mem acc b ~equal:String.equal then acc else (b, why) :: acc)
+                |> List.rev
+              in
+              let reads_config =
+                Option.first_some
+                  (List.find_map found ~f:(fun s ->
+                       Option.some_if s.reads_config (describe s ^ ", which reads the configuration")))
+                  (List.find_map found ~f:(fun s ->
+                       Option.map s.inexact ~f:(fun construct ->
+                           Printf.sprintf
+                             "%s, whose %s this does not model exactly, so the configuration counts"
+                             (describe s) construct)))
+              in
+              Reaches { named; reads_config }))
 
 (** Whether [answer] can hold a GPU by name: an unknown answer can. Whether a configuration a
     reached stanza reads names one is the caller's question. *)

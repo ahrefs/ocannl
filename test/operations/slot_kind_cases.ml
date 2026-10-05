@@ -370,7 +370,13 @@ let () =
       ("an install stanza", {dune|(install (section share) (files out.dat))|dune});
       ( "a copy_files attached to an alias",
         {dune|(copy_files (alias probe) (files ../g/*.dat))|dune} );
-      ("an env setting variables", {dune|(env (_ (env-vars (OCANNL_BACKEND cuda))))|dune});
+      ("an env setting variables", {dune|(env (_ (env-vars (FOO bar))))|dune});
+      ( "a generated Reason module",
+        {dune|(rule
+ (target gen.re)
+ (deps ocannl_config (env_var OCANNL_BACKEND))
+ (action (with-stdout-to %{target} (run %{dep:gen.exe}))))|dune}
+      );
       ( "a ctypes field",
         {dune|(library (name stubs) (ctypes (external_library_name m) (generated_entry_point C)))|dune}
       );
@@ -398,14 +404,6 @@ let () =
   in
   List.iter
     [
-      ( "a directory target",
-        {dune|(executable (name reader) (modules reader))
-(rule
- (targets (dir output))
- (deps ocannl_config (env_var OCANNL_BACKEND))
- (action (run %{dep:reader.exe})))
-(alias (name probe) (deps output/result))|dune},
-        "build @@d/probe" );
       ( "a bare-star glob",
         reader ^ {dune|
 (alias (name probe) (deps (glob_files *)))|dune},
@@ -460,6 +458,40 @@ let () =
   printf "%-40s %s\n" "build @n/scans (beside a generated .ml)" generated;
   p "a configuration-reading generator of a source file is always reached"
     (String.equal generated "names nothing + reads config");
+  (* A backend set past the configuration -- an env stanza's or a setenv's OCANNL_BACKEND, or a
+     command-line flag on a stanza that reads the configuration -- is what the resolved
+     configuration cannot answer for: every backend, not merely the configuration's. *)
+  List.iter
+    [
+      ("an env's backend", {dune|(env (_ (env-vars (OCANNL_BACKEND hip))))|dune}, "build @n/scans");
+      ( "a setenv'd backend",
+        {dune|(rule
+ ; ocannl-backend: none -- links no backend in this fixture.
+ (alias se) (action (setenv OCANNL_BACKEND hip (run %{dep:d.exe}))))|dune},
+        "build @d/se" );
+      (* A directory target produces any path below it -- an ocannl_config among them. *)
+      ( "a directory target",
+        {dune|(executable (name reader) (modules reader))
+(rule
+ (targets (dir output))
+ (deps ocannl_config (env_var OCANNL_BACKEND))
+ (action (run %{dep:reader.exe})))
+(alias (name probe) (deps output/result))|dune},
+        "build @@d/probe" );
+      ( "a generated configuration",
+        {dune|(rule (target ocannl_config) (action (write-file %{target} "backend=hip")))
+(alias (name gc) (deps ocannl_config))|dune},
+        "build @d/gc" );
+      ( "a backend flag on a reader",
+        {dune|(rule
+ (alias fl) (deps ocannl_config (env_var OCANNL_BACKEND))
+ (action (run %{dep:d.exe} --ocannl_backend=hip)))|dune},
+        "build @d/fl" );
+    ]
+    ~f:(fun (what, dune, argv) ->
+      let _, shown = judge ~dune_files:[ ("d", dune); n ] argv in
+      printf "%-40s %s\n" (argv ^ " (" ^ what ^ ")") shown;
+      p (Printf.sprintf "%s is every backend" what) (String.is_prefix shown ~prefix:"unknown: "));
   (* A glob matches where it points, so a glob over copies reaches the reader through the copy: a
      [copy_files] produces its copies in its own directory, and needs the glob it copies from. *)
   let _, copied =
@@ -503,18 +535,22 @@ let () =
     Out_channel.write_all path ~data:content;
     made := path :: !made
   in
-  file "dune" "(dirs :standard .x)";
   file ".x/dune" "(dirs keep)";
   file ".x/keep/dune" "";
   file ".x/drop/dune" "";
   file "_skip/dune" "";
   file "plain/dune" "";
+  file "dune"
+    "(dirs :standard .x) (data_only_dirs fixtures) (subdir tools (dirs :standard .hidden))";
+  file "fixtures/dune" "(not a dune file)";
+  file "tools/.hidden/dune" "";
+  file "tools/sub/dune" "";
   let read = List.map (Slot_kind.dune_files ~root) ~f:fst in
   List.iter !made ~f:(fun p ->
       if Stdlib.Sys.is_directory p then Stdlib.Sys.rmdir p else Stdlib.Sys.remove p);
   printf "dirs: %s\n" (String.concat ~sep:" " (List.map read ~f:(fun d -> "[" ^ d ^ "]")));
   p "the inventory reads where dirs stanzas send dune, and nowhere else"
-    (List.equal String.equal read [ ""; ".x"; ".x/keep"; "plain" ]);
+    (List.equal String.equal read [ ""; ".x"; ".x/keep"; "plain"; "tools/.hidden"; "tools/sub" ]);
   let live = Slot_kind.dune_files ~root:"../.." in
   List.iter
     [
