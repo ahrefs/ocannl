@@ -1730,6 +1730,14 @@ let matmul ?(label = []) =
 &lt;/ul&gt;
 &lt;/div&gt;
 &lt;div pause&gt;&lt;/div&gt;
+&lt;p&gt;&lt;span&gt;Compilation coverage: complete present-tense examples use &lt;/span&gt;&lt;code&gt;doc-check&lt;/code&gt;&lt;span&gt; annotations; simplified&lt;/span&gt;
+&lt;span&gt;implementation excerpts elsewhere in this deck remain illustrative and are inventoried as unchecked.&lt;/span&gt;&lt;/p&gt;
+&lt;pre&gt;&lt;code class=&quot;language-ocaml&quot;&gt;open Ocannl.Nn_blocks.DSL_modules
+
+let optimizer loss =
+  let%op learning_rate = 0.01 in
+  Ocannl.Train.sgd_update ~learning_rate loss
+&lt;/code&gt;&lt;/pre&gt;
 &lt;p&gt;&lt;span&gt;The OCANNL code for a single parameter update step, including options for weight decay and momentum:&lt;/span&gt;&lt;/p&gt;
 &lt;pre&gt;&lt;code class=&quot;language-ocaml&quot;&gt;let sgd_one ~learning_rate ?(momentum = 0.0) ?(weight_decay = 0.0)
     p =
