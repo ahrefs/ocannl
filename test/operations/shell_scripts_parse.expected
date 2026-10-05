@@ -337,6 +337,9 @@ tools/test-test-harnesses.sh uses the shared harness contract: true
 tools/test-test-harnesses.sh parses: true
 tools/test-test-run.sh uses the shared harness contract: true
 tools/test-test-run.sh parses: true
+tools/test-windows-opam-cache.sh uses the shared harness contract: true
+tools/test-windows-opam-cache.sh parses: true
+tools/windows-opam-cache.sh parses: true
 the scan reached at least the 12 shell scripts this repository is known to have: true
 the scan reached the session hook and the suite runner: true
 

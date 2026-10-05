@@ -321,17 +321,25 @@ jobs:
     - name: Resolve opam dependency source revisions
       id: pins
       uses: ./.github/actions/pin-revisions
-    - name: Cache opam dependencies
-      id: opam-cache
+    # Cache archives on Windows, rather than extracting a raw Cygwin tree
+    # over setup-ocaml's CA regular files. v2 cannot hit the old raw-tree key.
+    - name: Restore opam dependency archives (Windows)
+      id: windows-opam-cache
+      if: runner.os == 'Windows'
       uses: actions/cache@v6
       with:
-        # On Windows the mingw system libraries live in opam's internal cygwin
-        # root, outside _opam. Without them a restored switch believes its
-        # conf-mingw-w64-* packages are present while their libraries are gone,
-        # and linking fails.
-        path: |
-          _opam
-          ${{ runner.os == 'Windows' && 'C:\.opam\.cygwin' || '' }}
+        path: ${{ runner.temp }}/ocannl-opam-cache
+        key: opam-deps-windows-v2-${{ matrix.os }}-${{ matrix.ocaml-compiler }}-${{ hashFiles('*.opam') }}-${{ steps.pins.outputs.solution-digest }}-${{ steps.pins.outputs.digest }}
+    - name: Unpack opam dependencies (Windows)
+      if: runner.os == 'Windows' && steps.windows-opam-cache.outputs.cache-hit == 'true'
+      shell: 'C:\Progra~1\Git\bin\bash.exe --noprofile --norc -eo pipefail {0}'
+      run: tools/windows-opam-cache.sh restore "$RUNNER_TEMP/ocannl-opam-cache" _opam "$(opam var root)/.cygwin"
+    - name: Cache opam dependencies
+      id: opam-cache
+      if: runner.os != 'Windows'
+      uses: actions/cache@v6
+      with:
+        path: _opam
         key: opam-deps-${{ matrix.os }}-${{ matrix.ocaml-compiler }}-${{ hashFiles('*.opam') }}-${{ steps.pins.outputs.solution-digest }}-${{ steps.pins.outputs.digest }}
     # cygwin's pkgconf 3.0.4-1 (published 2026-07-26) broke
     # `pkgconf --personality=<triplet>` (personality files looked up only in
@@ -351,10 +359,10 @@ jobs:
     # depext handling off) stays: the cygwin system libraries are cached
     # alongside `_opam`, and on a cache hit neither step runs.
     - name: Install system dependencies (Windows)
-      if: runner.os == 'Windows' && steps.opam-cache.outputs.cache-hit != 'true'
+      if: runner.os == 'Windows' && steps.windows-opam-cache.outputs.cache-hit != 'true'
       run: opam install . -y --deps-only --with-test --with-doc --depext-only
     - name: Check cygwin pkgconf loads the mingw personality (Windows)
-      if: runner.os == 'Windows' && steps.opam-cache.outputs.cache-hit != 'true'
+      if: runner.os == 'Windows' && steps.windows-opam-cache.outputs.cache-hit != 'true'
       run: |
         $root = "$(opam var root)\.cygwin\root"
         $version = (& "$root\bin\pkgconf.exe" --version 2>&1 | Out-String).Trim()
@@ -365,7 +373,7 @@ jobs:
           throw "pkgconf $version cannot load the mingw personality: $personality"
         }
     - name: Install opam dependencies (Windows)
-      if: runner.os == 'Windows' && steps.opam-cache.outputs.cache-hit != 'true'
+      if: runner.os == 'Windows' && steps.windows-opam-cache.outputs.cache-hit != 'true'
       run: opam install . -y --deps-only --with-test --with-doc --no-depexts
     # Depexts are SYSTEM packages: they live on the runner, not in the cached
     # `_opam`, so on a cache hit the install step below is skipped and they are
@@ -392,9 +400,13 @@ jobs:
     # also why this only needs to run when a save is going to happen (the save
     # itself is actions/cache's post step, at the end of the job).
     - name: Prune sources from the switch before caching
-      if: steps.opam-cache.outputs.cache-hit != 'true'
+      if: runner.os == 'Windows' && steps.windows-opam-cache.outputs.cache-hit != 'true' || runner.os != 'Windows' && steps.opam-cache.outputs.cache-hit != 'true'
       shell: bash
       run: rm -rf _opam/.opam-switch/sources _opam/.opam-switch/build
+    - name: Pack opam dependency archives (Windows)
+      if: runner.os == 'Windows' && steps.windows-opam-cache.outputs.cache-hit != 'true'
+      shell: 'C:\Progra~1\Git\bin\bash.exe --noprofile --norc -eo pipefail {0}'
+      run: tools/windows-opam-cache.sh pack "$RUNNER_TEMP/ocannl-opam-cache" _opam "$(opam var root)/.cygwin"
     # On the first ubuntu shard only: one leg answers the question.
     - name: Check non-default module log level and trace semantics
       if: matrix.os == 'ubuntu-latest' && matrix.ocaml-compiler == '5.5.x' && startsWith(matrix.shard, '1/')

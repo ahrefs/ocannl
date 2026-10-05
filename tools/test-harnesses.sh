@@ -28,6 +28,7 @@ shell tools/test-pin-revisions.sh
 shell tools/test-test-run.sh
 shell tools/test-mutation-run.sh
 shell scripts/test-setup-ocaml-env.sh
+shell tools/test-windows-opam-cache.sh
 shell tools/test-ci-times.sh
 shell tools/test-ci-durations.sh
 shell tools/test-ci-shard.sh

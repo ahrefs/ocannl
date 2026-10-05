@@ -2298,13 +2298,17 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   is priced by its cache restore, its dune build and, when cold, by building the compiler. Two of
   those are where to look first. The restore is the big one and it is not free even when it works:
   restoring the 893 MB Windows entry costs ~530s on every job, which is what it buys off the 6-10
-  min dependency install. It also has a transition-time failure mode worth recognising rather than
-  re-diagnosing (gh-ocannl-1014): on the first Windows run after an opam or setup-ocaml change,
-  setup-ocaml materialises a fresh internal cygwin, our cache then tries to overlay symlinks onto
-  those now-regular CA files, `tar` exits 2, and the ~9min extraction ends with the key reported
-  as MISSED — while the job still passes on the half-extracted tree, with `Install opam
-  dependencies (Windows)` returning in 3s, which is NOT evidence of a warm switch. The next
-  ordinary run restores the same entry, same key, same bytes, cleanly.
+  min dependency install. The transition-time CA collision (gh-ocannl-1014) is avoided by caching
+  `tools/windows-opam-cache.sh`'s two tar payloads under the Windows v2 key: the switch and
+  Cygwin tree retain the mingw libraries and package metadata, but exclude the derived
+  `root/etc/pki/ca-trust/extracted` subtree at both save and restore. setup-ocaml owns those fresh
+  CA files. actions/cache restores only the payload directory; checked listing and extraction
+  then gate the job, so a partial extraction cannot masquerade as a warm switch. An ordinary
+  cache miss still uses the two-step install, prunes sources, and packs before the post-save.
+  `tools/test-windows-opam-cache.sh`, in the shared shell-harness entrypoint, exercises a real
+  outer-cache round trip, a symlink payload over fresh regular CA files, corruption and extraction
+  refusal, with pack/restore exclusion mutants. Native Git Bash runs the same fixture without
+  touching the user's opam root.
   Our own `_opam` key deliberately does NOT carry the opam version: a switch built by 2.5.2
   restores and runs green under 2.6.0 (the 2026-09-17 master runs hit that cache), so keying on it
   would buy nothing and cost a ~180-package rebuild per platform at every bump.
