@@ -41,9 +41,10 @@ every phase boundary.
 
 Resumable: a cell whose output already holds a result line is not run again. A run directory is
 bound to one revision and one set of fixture bytes (preflight.json): resuming it from a different
-checkout or with different fixtures refuses rather than mixing the two. Each cell runs in its own
-process group, killed whole at its deadline. `summarize` fails on a matrix with a missing cell, a
-missing torch reference or an incomplete kernel table (`--partial` lists missing cells instead).
+checkout or with different fixtures refuses rather than mixing the two. Each cell -- and the
+preflight's Dune build -- runs in its own process group, killed whole at its deadline. `summarize`
+fails on a matrix with a missing cell, a missing torch reference or an incomplete kernel table
+(`--partial` lists missing cells instead).
 """
 
 import argparse
@@ -89,6 +90,10 @@ ORIGIN = "m4-max"
 PHASES = ["preflight", "metal", "metal-sweep", "cc", "cc-sweep", "artifacts"]
 CELL_TIMEOUT_S = 1800
 CELL_TERMINATE_GRACE_S = 5
+# The preflight build of the measured executable, run from ROOT. Its deadline covers a cold build of
+# bench_gpt and everything it links -- minutes, not the hour -- so only a wedged build reaches it.
+BUILD_ARGV = ["dune", "build", "benchmarks/runners/ocannl/bench_gpt.exe"]
+BUILD_TIMEOUT_S = 3600
 _cancellation = cell_group.CancellationDeferral("gh1002_cells")
 # Treatment A against the torch CPU runner, six SGD steps in f32 (measured 2e-7 to 1.3e-6): the
 # cross-framework envelope, generous by an order of magnitude over what the run shows.
@@ -198,15 +203,18 @@ def run_cell(out, backend, fixture, treatment, r, artifacts=False):
             f"peak {res['peak_memory_bytes'] / 2**20:.1f} MiB")
 
 
-def run_in_own_group(argv, **kw):
-    """Run one cell through the shared supervisor; refuse to time beside an unproven cleanup."""
+def run_in_own_group(argv, cwd=HERE, timeout=None, **kw):
+    """Run one child -- a cell, a parity reference, the preflight build -- through the shared
+    supervisor, from `cwd` and killed whole at `timeout` seconds (default `CELL_TIMEOUT_S`); refuse
+    to time beside an unproven cleanup."""
+    timeout = CELL_TIMEOUT_S if timeout is None else timeout
     # Hold cancellation until the spawn has a cleanup owner, and throughout cleanup. The wait
     # opens the intentional cancellation window without giving fork/exec an inherited mask.
     with _cancellation.deferring():
-        proc = cell_group.spawn(argv, cwd=HERE, **kw)
+        proc = cell_group.spawn(argv, cwd=cwd, **kw)
         try:
             with _cancellation.cancellable():
-                status = proc.wait(timeout=CELL_TIMEOUT_S)
+                status = proc.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
             status = "timeout"
         finally:
@@ -218,6 +226,19 @@ def run_in_own_group(argv, **kw):
                     "stopping the matrix rather than timing the next cells beside it"
                 )
         return status
+
+
+def build_bench_gpt():
+    """Build the measured executable under the cells' own supervisor (gh-ocannl-1200).
+
+    Dune forks compilers and linkers. A bare `subprocess.run` kills only its direct child when the
+    driver is cancelled -- the descendants live on beside the cells about to be timed -- and it had
+    no deadline at all. In a group of its own, the build is collected whole on SIGTERM, SIGINT or
+    its deadline, and a cleanup not proven complete stops the run (`cell_group.CleanupFailed`).
+    Its output still goes straight to the driver's terminal."""
+    status = run_in_own_group(BUILD_ARGV, cwd=ROOT, timeout=BUILD_TIMEOUT_S)
+    if status != 0:
+        sys.exit(f"{' '.join(BUILD_ARGV)} failed (status {status})")
 
 
 def identity():
@@ -237,9 +258,7 @@ def identity():
                  f"revision:\n{dirty}")
     # The executable measured is the one built from that revision: build it here, and bind its
     # digest into the identity, so a stale _build cannot run under the recorded revision.
-    if subprocess.run(["dune", "build", "benchmarks/runners/ocannl/bench_gpt.exe"],
-                      cwd=ROOT).returncode != 0:
-        sys.exit("dune build benchmarks/runners/ocannl/bench_gpt.exe failed")
+    build_bench_gpt()
     exe = hashlib.sha256(BENCH_GPT.read_bytes()).hexdigest()
     entries = fixture_digest.read_digests(HERE / "fixtures" / fixture_digest.DIGEST_FILE)
     ids = {}
