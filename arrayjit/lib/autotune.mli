@@ -1563,6 +1563,7 @@ val timing_of_setting : string -> timing_mode
 val time_routine :
   ?on_retry:(unit -> unit) ->
   ?tag_failures:bool ->
+  ?phase:string ->
   timing:timing_mode ->
   repeats:int ->
   Context.t ->
@@ -1628,6 +1629,8 @@ val time_routine :
     admission rule; only its outcome reaches the search's refusal accounting. Other backends and
     isolated timing take no retry.
 
+    [phase] labels the call's {!on_batch_decision} (gh-ocannl-1199); none by default.
+
     With [~tag_failures:true] the pre-dispatch validation, the launches and the synchronization are
     wrapped in their {!Ir.Schedule_outcome} phases, which is what lets a caller's
     {!Ir.Schedule_outcome.protect} attribute a failure to the phase it happened in; without it they
@@ -1674,6 +1677,7 @@ val calibrate_and_time :
 
 val calibrate_and_time_with_retry_observer :
   on_retry:(unit -> unit) ->
+  phase:string option ->
   retry_contended:bool ->
   timing:timing_mode ->
   repeats:int ->
@@ -1682,7 +1686,8 @@ val calibrate_and_time_with_retry_observer :
   timing_result
 (** {!calibrate_and_time} with the per-call observer that drives search accounting. [on_retry] runs
     once when a fresh contention retry starts, before {!on_timing_retry} and before any retry
-    dispatch. The original helper remains a no-op-observer wrapper for source compatibility. *)
+    dispatch. [phase] is reported as {!batch_decision}'s. The original helper remains a
+    no-op-observer, phase-less wrapper for source compatibility. *)
 
 val retry_contended_window_for_backend : string -> bool
 (** The backend whose contended queued windows get one immediate retry: Metal only. *)
@@ -1797,6 +1802,12 @@ type batch_settle =
 type batch_admission = Admitted | Refused_unbatched | Refused_contended | Refused_unreadable
 
 type batch_decision = {
+  phase : string option;
+      (** The caller's [phase]: for a {!tune} candidate, the search phase as its [autotune_progress]
+          lines name it ([seeds], [recombine], [playoff] for the composite playoff of
+          gh-ocannl-1166, or [round<k>]); [None] for the baseline, the untuned control and any other
+          caller. Carried by the call, not read from shared state, so concurrent searches never
+          label each other's decisions. *)
   timing : timing_mode;
   depth : int;  (** The depth the timed window ran at, as {!on_batch_depth} reported it. *)
   cap : int;  (** The call's [queue_depth_cap]. *)
@@ -1833,12 +1844,6 @@ val on_batch_decision : (batch_decision -> unit) ref
     left and the admission verdict, so a consumer such as the benchmarks' [BENCH_TIMING_TRACE] never
     re-derives the calibration policy. Observing it changes nothing measured or ranked. The default
     is a no-op and no configuration selects it. *)
-
-val search_phase : unit -> string option
-(** The phase of the running {!tune} search, as its [autotune_progress] lines name it ([seeds],
-    [recombine], [playoff] for the composite playoff of gh-ocannl-1166, or [round<k>]); [None]
-    outside a search, including the baseline's timing. For a timing trace to attribute a decision to
-    its phase. *)
 
 val on_candidate_attempt : (string -> unit) ref
 (** Fault-injection seam for the containment tests (gh-ocannl-550), called with each candidate's

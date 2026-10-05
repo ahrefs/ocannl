@@ -382,7 +382,7 @@ let synthetic_call ?(repeats = 3) ?(retry_contended = false) ?(observe_decisions
         if retry_contended then
           Autotune.calibrate_and_time_with_retry_observer
             ~on_retry:(fun () -> Int.incr retries_started)
-            ~retry_contended ~timing ~repeats ~queue_depth_cap:cap ~batch
+            ~phase:None ~retry_contended ~timing ~repeats ~queue_depth_cap:cap ~batch
         else
           (* Compile and execute the original public helper without an observer too. *)
           Autotune.calibrate_and_time ~retry_contended ~timing ~repeats ~queue_depth_cap:cap ~batch

@@ -933,6 +933,7 @@ type batch_settle =
 type batch_admission = Admitted | Refused_unbatched | Refused_contended | Refused_unreadable
 
 type batch_decision = {
+  phase : string option;
   timing : timing_mode;
   depth : int;
   cap : int;
@@ -956,18 +957,12 @@ type batch_decision = {
    measures or ranks. Default a no-op; no configuration selects it. *)
 let on_batch_decision : (batch_decision -> unit) ref = ref (fun _ -> ())
 
-(* The search phase a timing call is made in ([seeds], [recombine], [playoff], [round<k>]), for the
-   trace to attribute a decision to the composite playoff (gh-ocannl-1166); [None] outside a
-   search's candidate phases. *)
-let current_search_phase : string option ref = ref None
-let search_phase () = !current_search_phase
-
 (* The measurement proper, after the warmup: the calibration and the timed loop, with the device
    reduced to [batch depth], which dispatches [depth] launches back to back, synchronizes once and
    returns the wall in milliseconds. Separated from [time_routine] so a test can drive the whole
    policy -- which depth a call settles on, which window it times, how many launches each costs --
    on an injected clock, with no device and no machine-dependent routine (gh-ocannl-1074). *)
-let calibrate_and_time_with_retry_observer ~on_retry ~retry_contended ~timing ~repeats
+let calibrate_and_time_with_retry_observer ~on_retry ~phase ~retry_contended ~timing ~repeats
     ~queue_depth_cap ~batch =
   (* Every finite positive batch minimum the calibration measured, as [(depth, wall)]: the evidence
      that bounds an unresolved calibration's fallback depth. *)
@@ -1424,6 +1419,7 @@ let calibrate_and_time_with_retry_observer ~on_retry ~retry_contended ~timing ~r
   in
   !on_batch_decision
     {
+      phase;
       timing;
       depth;
       cap = queue_depth_cap;
@@ -1452,11 +1448,12 @@ let calibrate_and_time_with_retry_observer ~on_retry ~retry_contended ~timing ~r
 let calibrate_and_time ~retry_contended ~timing ~repeats ~queue_depth_cap ~batch =
   calibrate_and_time_with_retry_observer
     ~on_retry:(fun () -> ())
-    ~retry_contended ~timing ~repeats ~queue_depth_cap ~batch
+    ~phase:None ~retry_contended ~timing ~repeats ~queue_depth_cap ~batch
 
 (* [routine.bindings] exposes the routine's live binding refs — restore them after timing (Codex P2
    on PR #103), or the returned winner would stay bound to the tuner's midpoint test values. *)
-let time_routine ?(on_retry = fun () -> ()) ?(tag_failures = false) ~timing ~repeats cctx routine =
+let time_routine ?(on_retry = fun () -> ()) ?(tag_failures = false) ?phase ~timing ~repeats cctx
+    routine =
   let saved_bindings = List.map routine.Context.bindings ~f:(fun (_ss, r) -> (r, !r)) in
   let run ctx =
     if tag_failures then Outcome.tag Outcome.Launch (fun () -> Context.run ctx routine)
@@ -1495,7 +1492,7 @@ let time_routine ?(on_retry = fun () -> ()) ?(tag_failures = false) ~timing ~rep
         sync !ctx;
         Mtime.Span.to_float_ns (Mtime_clock.count c0) /. 1e6
       in
-      calibrate_and_time_with_retry_observer ~on_retry ~timing ~repeats
+      calibrate_and_time_with_retry_observer ~on_retry ~phase ~timing ~repeats
         ~retry_contended:(retry_contended_window_for_backend (Context.backend_name cctx))
         ~queue_depth_cap:(queue_depth_cap_for_backend (Context.backend_name cctx))
         ~batch)
@@ -4726,6 +4723,10 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
         let exception Abandon_now of abandonment in
         let search () =
           progress_stage "seed_enumeration";
+          (* gh-ocannl-1061: where the search is, on the [autotune_progress] stream (the rest of its
+             state is defined with [progress_phase_begin] below), and passed to each candidate's
+             timing call for the trace's decisions (gh-ocannl-1199). *)
+          let progress_phase = ref "seeds" in
           (* gh-ocannl-521: tensorized candidates are counted where they are TIMED, not where they
              are enumerated — a family can be seeded in bulk and rejected in bulk at candidate
              compile, and the enumerated count alone reads as coverage it does not have. Both
@@ -4827,8 +4828,8 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                         ~provenance:Outcome.Candidate ~phase:Outcome.Launch
                         ~candidate:(spec_label spec) (fun () ->
                           timed_into progress_timing_s (fun () ->
-                              time_routine ~on_retry ~tag_failures:true ~timing ~repeats c.cctx
-                                c.routine))
+                              time_routine ~on_retry ~tag_failures:true ~phase:!progress_phase
+                                ~timing ~repeats c.cctx c.routine))
                       (* Outside the boundary: the seam is not a candidate failure to classify. *)
                       |> Result.map
                            ~f:
@@ -5015,10 +5016,7 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
              seed pass, the recombination composites that follow it, the composite playoff
              (gh-ocannl-1166), or one beam round; its candidate total is known up front except for
              the composites' and the playoff's. *)
-          let progress_phase = ref "seeds" and progress_total = ref None in
-          (* Mirrored for the timing trace's decisions (gh-ocannl-1199), cleared when the search
-             returns or raises. *)
-          current_search_phase := Some !progress_phase;
+          let progress_total = ref None in
           let progress_tried = ref 0 in
           let progress_best () =
             let best_c, best_ms = !best_so_far in
@@ -5037,7 +5035,6 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
           in
           let progress_phase_begin phase total =
             progress_phase := phase;
-            current_search_phase := Some phase;
             progress_total := total;
             progress_tried := 0;
             Option.iter total ~f:(fun n ->
@@ -5683,7 +5680,7 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
             if !partial_emitted then Stdlib.Printexc.raise_with_backtrace exn backtrace
             else emit_partial_and_raise { exn; backtrace; phase; candidate = None; cause = None }
           in
-          try Exn.protect ~finally:(fun () -> current_search_phase := None) ~f:search with
+          try search () with
           | Abandon_now ab ->
               logf
                 "abandoned after %d timed candidates: best %.4f ms trails the incumbent's %.4f ms \

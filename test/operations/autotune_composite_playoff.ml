@@ -79,8 +79,7 @@ let search ?(trace = true) ~tag ~single ~composite () =
       Autotune.on_candidate_measured := old_measured;
       Autotune.on_batch_decision := old_decision)
     ~f:(fun () ->
-      (if trace then
-         Autotune.on_batch_decision := fun _ -> phases := Autotune.search_phase () :: !phases);
+      (if trace then Autotune.on_batch_decision := fun d -> phases := d.Autotune.phase :: !phases);
       (Autotune.on_candidate_measured :=
          fun ~label ~digest:_ _ms ->
            if is_single label then (

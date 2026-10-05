@@ -276,7 +276,7 @@ let trace_search_done ~compile_s =
     printed just before it, from the policy's own metadata ({!Autotune.on_batch_decision}) -- the
     search phase, what chose the depth, the fit it rested on, what bounded it, the probe budget used
     and the admission verdict. Pure, so a test pins it against the decision taken. *)
-let decision_line ~call ~phase (d : Autotune.batch_decision) =
+let decision_line ~call (d : Autotune.batch_decision) =
   let ms = Printf.sprintf "%.6f" in
   let opt o ~f = Option.value_map o ~default:"-" ~f in
   let settle =
@@ -319,7 +319,7 @@ let decision_line ~call ~phase (d : Autotune.batch_decision) =
     "timing-trace: decision %d: phase %s, %s, depth %d by %s (cap %d, target %.1f ms, estimated \
      wall %s ms), fit %s, %d cap-directed probes, bounded from %s, fallback from %s, rescue %s, \
      probes %d of %d (%.3f of %.0f ms%s), %s%s"
-    call (opt phase ~f:Fn.id) (Autotune.timing_string d.timing) d.depth settle d.cap d.target_ms
+    call (opt d.phase ~f:Fn.id) (Autotune.timing_string d.timing) d.depth settle d.cap d.target_ms
     (opt d.estimated_wall_ms ~f:ms) fit d.cap_directed_probes
     (opt d.bounded_from ~f:Int.to_string)
     (opt d.fallback_from ~f:Int.to_string)
@@ -433,7 +433,7 @@ let install_timing_trace () =
     let prev_decision = !Autotune.on_batch_decision in
     (Autotune.on_batch_decision :=
        fun d ->
-         pr "%s\n" (decision_line ~call:!calls ~phase:(Autotune.search_phase ()) d);
+         pr "%s\n" (decision_line ~call:!calls d);
          prev_decision d);
     Stdlib.at_exit (fun () ->
         drop_open_call ();

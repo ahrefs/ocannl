@@ -40,8 +40,7 @@ let () =
       ~f:(fun (what, fixed, marginal) ->
         let reading, depth, decisions = call ~fixed ~marginal in
         let lines =
-          List.mapi (List.rev decisions) ~f:(fun i d ->
-              Bench_harness.decision_line ~call:(i + 1) ~phase:None d)
+          List.mapi (List.rev decisions) ~f:(fun i d -> Bench_harness.decision_line ~call:(i + 1) d)
         in
         List.iter lines ~f:(fun line -> Stdio.printf "%s: %s\n" what line);
         (what, reading, depth, lines))
