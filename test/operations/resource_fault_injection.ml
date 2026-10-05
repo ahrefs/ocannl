@@ -53,7 +53,6 @@ let cache_entry backend best_ms : SC.entry =
     source_digest = "gh571-source";
     saved = [];
     segments = None;
-    finer_fission = None;
     best_ms;
     baseline_ms = best_ms +. 1.;
     mma_best_ms = None;

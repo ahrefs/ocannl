@@ -221,7 +221,7 @@ let () =
   let base_opt = capture_base hc_comp in
   let base_canon = SC.canonicalize base_opt in
   let prelude_saved = ref [] in
-  let segments_assoc = ref [] in
+  let saved_segments = ref [] in
   let sctx = Context.auto () in
   let _sctx, _sroutine =
     Context.compile
@@ -233,19 +233,15 @@ let () =
         in
         prelude_saved := fst (SC.to_saved (SC.base_registry (SC.canonicalize opt)) [ op ]);
         let opt' = Sched.apply [ op ] opt in
-        let tuples = Sched.fission_scheduled ~preset ~zero_sched ~static_indices:[] opt' in
-        segments_assoc :=
-          List.filter_map tuples ~f:(fun (kind, pre, sched, _post) ->
-              match kind with
-              | `Normal ->
-                  let pre_canon = SC.canonicalize ~with_placements:false pre in
-                  Some (SC.digest pre_canon, fst (SC.to_saved (SC.base_registry pre_canon) sched))
-              | _ -> None);
+        let segmentation, tuples =
+          Sched.fission_segmented ~preset ~zero_sched ~static_indices:[] opt'
+        in
+        saved_segments := List.map (SC.save_segments segmentation tuples) ~f:fst;
         List.map tuples ~f:(fun (_, _, _, post) -> post))
       sctx hc_comp Ir.Indexing.Empty
   in
   p "the hand-crafted entry has a prelude and per-segment schedules"
-    ((not (List.is_empty !prelude_saved)) && List.length !segments_assoc >= 2);
+    ((not (List.is_empty !prelude_saved)) && List.length !saved_segments >= 2);
   let slimits = Context.hardware_limits sctx in
   let scaps = Context.codegen_capabilities sctx in
   SC.store ~dir:cache_dir
@@ -260,8 +256,7 @@ let () =
       objective = Some (SC.objective_tag ());
       source_digest = SC.digest base_canon;
       saved = !prelude_saved;
-      segments = Some !segments_assoc;
-      finer_fission = None;
+      segments = Some !saved_segments;
       best_ms = 0.;
       baseline_ms = 0.;
       default_ms = None;

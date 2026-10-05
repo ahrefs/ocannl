@@ -1,5 +1,5 @@
 Sources scanned: arrayjit/lib, benchmarks/runners/ocannl, bin, lib, tensor, tools
-Cache-key components (Schedule_cache.key_components): digest, backend, numerics, codegen, fission, pool, device, timing
+Cache-key components (Schedule_cache.key_components): digest, backend, numerics, codegen, pool, device, timing
 Keys read at codegen (c_syntax.ml, cc_backend.ml, cuda_backend.ml, cuda_like_config.ml, hip_backend.ml, metal_backend.ml, schedule_cache.ml): tagged [read at codegen] below
 
 aggregate -- picks the values other keys take; each of those carries its own classification
@@ -69,18 +69,16 @@ keyed: codegen -- it changes the emitted code or the mechanics a search measures
   buffer_aliasing [read at codegen]
   gpu_graph_capture [read at codegen]
 
-keyed: fission -- it decides the default fission segmentation on GPU backends: since gh-ocannl-1126 the merge decision compares the default GPU schedule's per-statement mappings, so these are inputs of the segmentation itself, and a fissioned winner's saved per-segment schedules are keyed by segment digests that replay recomputes -- a winner stored under one setting would find another segmentation under another ([Schedule.default_schedule_fingerprint] also records them for the [default_ms] diagnostic)
+search-shaping -- it defines the untuned default pipeline -- its schedules and, on GPU backends, its fission segmentation (since gh-ocannl-1126 the merge decision compares the default GPU schedule's per-statement mappings) -- which a search seeds from and reports against; a cached winner carries its own ops, and a fissioned one its segmentation and every segment's schedule, zero expansions included, so it replays without consulting these (gh-ocannl-1164; [Schedule.default_schedule_fingerprint] records them for the [default_ms] diagnostic)
+  automatic_cpu_schedule
+  automatic_gpu_schedule
+  cpu_schedule_min_parallel
   gpu_fission_keep_mapping
   gpu_lane_preamble_reduction
   gpu_schedule_block_size
   gpu_schedule_min_parallel
   gpu_schedule_workgroup_fill
   gpu_serial_lanes
-
-search-shaping -- it defines the untuned default pipeline, which a search seeds from and reports against; a cached winner carries its own ops and replays without consulting it ([Schedule.default_schedule_fingerprint] records these for the [default_ms] diagnostic)
-  automatic_cpu_schedule
-  automatic_gpu_schedule
-  cpu_schedule_min_parallel
   schedule_fission
 
 search-shaping -- it steers the search: how wide, how long, what is proposed, what is pruned, how candidates are ranked, and when a candidate's failure ends the search

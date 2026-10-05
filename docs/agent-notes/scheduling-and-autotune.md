@@ -47,8 +47,9 @@ files.
   under `Indexing.discarding_symbols`: `split` mints symbols, and a discarded probe's would shift every
   later minted name. Autotuner fission call sites pass `Schedule.fission_keep_mapping` too, or their
   segmentation stops being the untuned default's (`fission_equivalence`). The segmentation's inputs
-  beyond the code -- the gate, `gpu_schedule_block_size`, `_min_parallel`, `_workgroup_fill` -- are
-  the schedule cache's `fission` key component: a fissioned winner replays by re-segmenting. A cut needs no retest after
+  beyond the code (the gate, `gpu_schedule_block_size`, `_min_parallel`, `_workgroup_fill`) stay
+  out of the schedule-cache key: a fissioned winner replays its persisted segmentation, never a
+  re-derived one (gh-ocannl-1164, "Cache regimes and placement replay" below). A cut needs no retest after
   scope-local resolution: a cut that resolution merges back is serial either way (the reason is in
   the comment on `keeps_mapping`). `test/operations/gpu_fission_mapping`.
 - A parallel loop under a serial loop is reachable only past lane-uniform scalar work
@@ -174,8 +175,8 @@ files.
   merged nests to share one extent list (the init nest is conflict-free with the GEMM, so a pure
   no-loss rule would still merge it and companion coverage would still decline on it). It is a
   candidate-generation mode — the autotuner seeds fine-flagged per-segment sketches when the finer
-  segmentation mints new digests, and a fine winner records `finer_fission` in its cache entry so
-  replay re-segments identically — never the default pipeline, which would pay the extra launches
+  segmentation mints new digests, and a fine winner's cached segmentation is the fine one
+  (gh-ocannl-1164) — never the default pipeline, which would pay the extra launches
   unconditionally; the default cuts only where a merge costs a nest its mapping (gh-ocannl-1126, above). Since gh-ocannl-577 the
   coverage verdict is also a construction-time refutation in the matmul family tree
   (`matmul_coverage_witness`): this is sound because `companion_geometry`'s Ok/Error never depends
@@ -486,11 +487,12 @@ files.
   candidate compile, and a count of proposals then reads as coverage it does not have — assert on
   the *timed* counter (`report.mma_timed`, `fiss_sketch_timed`, `split_reduce_timed`), and follow it
   with an executed value check, since a candidate that compiles is not yet one that computes.
-- The `N segs` in an autotune label such as `F_saved[fine 77 segs]` counts the SAVED PER-SEGMENT
-  PLACEMENT ENTRIES, not kernels: the arm that reports `fine 77 segs` emitted 136 `__global__`s
-  (gpt2_mini on HIP, `report-gh612-hip.md`), and `[58 segs]` emitted 117. Take kernel counts from
+- The `N segs` of `F_saved[N segs]` counts every segment of the persisted segmentation, one kernel
+  each (gh-ocannl-1164). Reports written before then quote `F_saved[fine N segs]`, whose N counted
+  only the `Normal` segments' entries: `fine 77 segs` emitted 136 `__global__`s (gpt2_mini on HIP,
+  `report-gh612-hip.md`), and `[58 segs]` 117 — wrong by ~1.8x as a kernel count. Take kernel counts from
   the launch log (`schedule_log_launches`, whose `seg i/N` names the real fission width) or from the
-  emitted source; a report that quotes the label as a kernel count is wrong by ~1.8x. The launch
+  emitted source. The launch
   log's FIRST fissioned `seg 0/N` (skipping the `N=1` whole-routine probe) is arm A, the next is
   arm B — which is also how to pick the right file out of a content-polling snapshot of
   `<routine>__seg.hip`. The watcher can catch a partially written file, and the kernel count alone
@@ -1195,6 +1197,26 @@ files.
   the op stay valid — no `entry_version` or `cache_regime_version` bump sweeping every winner.
   `Privatize.acc_prec` is the instance; `autotune_privatize` pins that the pre-fix spelling does not
   decode.
+- **A fissioned winner persists its segmentation, and replay applies it** (gh-ocannl-1164). The
+  entry's `segments` list every segment in order — kind, length in units (`Schedule.segmentation`:
+  a unit is one top-level statement with its leading comments, so units are a function of the
+  code), structural pre-schedule digest, and schedule, `Zeros` expansions and `Solo`'s empty one
+  included — and `Autotune.compile_candidate` replays through `Schedule.fission_segmented
+  ~replay`, which cuts there with no grouping, coalescing or `keep_mapping` probe. So no
+  segmentation-policy input belongs in the key: the policy shapes which winner a search finds, not
+  what a found one replays as — `Search_shaping`. **Match saved segments by POSITION, never by
+  digest**: the structural digest leaves placements out, and two segments of one structure can
+  differ in placements, hence in kind (`Solo` vs `Normal`) and schedule — a first-match lookup hands
+  the later one a schedule the search never timed (`fission_replay_segmentation` leg 5; the same
+  holds for `extend_spec`, whose units name their segment index). The replay-validity check rides
+  on the position: segment `i`'s digest must equal the saved `i`th, and a recorded segmentation
+  that does not partition the routine's units, or separates a scope-local definition from a use,
+  is refused by `fission_segmented`. **A candidate transform's failure must be a typed cause**
+  (`Schedule_outcome.Cause_at`, here `Illegal_schedule`), never a bare `invalid_arg`: under the
+  default `strict_failure_classification` an untyped exception is FATAL, ending `tune` instead of
+  declining the candidate (a cache replay into a re-search). Two compiles of one schedule in one
+  process differ in the process-wide `i<n>`/`v<n>_` counters, so a same-process comparison of
+  emitted code renumbers those stems first (the test's `alpha_normalize`).
 - **`Train.tune_placements` persists its decision beside the schedule entries** (gh-ocannl-786,
   `Schedule_cache.store_placements` / `lookup_placements`, same directory, lock, regime stamp and
   key components). Placement stays outside the schedule value — a schedule is keyed by the

@@ -27,7 +27,6 @@ let schedule_entry canon backend =
     source_digest = SC.digest canon;
     saved = [];
     segments = None;
-    finer_fission = None;
     best_ms = 1.;
     baseline_ms = 2.;
     default_ms = None;

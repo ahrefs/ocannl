@@ -7421,81 +7421,142 @@ let fission_keep_mapping ~is_gpu ~limits =
     Some (fun opt -> default_gpu ~lanes:(Lazy.force lanes) ~limits opt)
   else None
 
-let fission_scheduled ?(promote_locals = false) ?(arity_cuts = false) ?keep_mapping
+type segmentation = ([ `Normal | `Zeros | `Solo ] * int) list [@@deriving sexp, equal]
+
+let misfit_segmentation what =
+  raise
+    (Schedule_outcome.Cause_at
+       ( Schedule_outcome.Transform,
+         Schedule_outcome.Illegal_schedule
+           { check = "Schedule.fission_segmented"; detail = "the recorded segmentation " ^ what } ))
+
+(* The segments a recorded plan cuts [units] into ([units] it covers exactly, checked by the
+   caller): consecutive runs of the plan's lengths, each of the plan's kind. *)
+let segments_of_plan (units : funit list) (plan : segmentation) : segment list =
+  snd
+  @@ List.fold_map plan ~init:units ~f:(fun rest (kind, n) ->
+      match List.split_n rest n with
+      | u :: us, rest when n > 0 ->
+          ( rest,
+            {
+              (List.fold us ~init:(seg_of_unit u) ~f:(fun seg u ->
+                   merge_segs ~kind seg (seg_of_unit u)))
+              with
+              g_kind = kind;
+            } )
+      | _ -> misfit_segmentation "has an empty segment")
+
+let fission_segmented ?(promote_locals = false) ?(arity_cuts = false) ?keep_mapping ?replay
     ~(preset : Low_level.optimized -> schedule) ~(zero_sched : Tn.t list -> schedule)
     ~static_indices (opt : Low_level.optimized) :
-    ([ `Normal | `Zeros | `Solo ] * Low_level.optimized * schedule * Low_level.optimized) list =
+    segmentation
+    * ([ `Normal | `Zeros | `Solo ] * Low_level.optimized * schedule * Low_level.optimized) list =
   let plc = opt.Low_level.optimize_ctx.placements in
   let stmts = Low_level.flat_lines [ opt.Low_level.llc ] in
-  let pre_promoted = if promote_locals then promote_statement_crossing_locals plc stmts else [] in
-  let fallback () =
-    (* Single-kernel compilation, exactly as before fission: no boundary needs the promotions, and
-       placement changes must not leak out of an unfissioned routine. *)
-    List.iter pre_promoted ~f:(fun (tn, prior) -> Tn.Placements.unsafe_restore plc tn prior);
-    let sched = preset opt in
-    [ (`Normal, opt, sched, apply ~static_indices sched opt) ]
+  (* Every promotion made so far, restored if anything below raises: a refused segmentation (or a
+     failing schedule) must not leave the caller's placements changed. *)
+  let promoted = ref (if promote_locals then promote_statement_crossing_locals plc stmts else []) in
+  let pre_promoted = !promoted in
+  let undo_promotions which =
+    List.iter which ~f:(fun (tn, prior) -> Tn.Placements.unsafe_restore plc tn prior)
   in
   (* The [arity_cuts] mode analyzes chains uncapped: the no-loss guard (and the uniform-shape rule)
      must see each nest's full arity, not the default presets' Grid+Workgroup prefix — under the
      cap, a merge that trims a rank-3 site's minor axis reads as lossless (gh-ocannl-574). *)
   let max_chain = if arity_cuts then Some Int.max_value else None in
   let units = collect_units ?max_chain plc opt stmts in
-  (* The [arity_cuts] mode has its own, stricter merge rule for the sketches' full-arity
-     geometry. *)
-  let mapping = if arity_cuts then None else keep_mapping in
-  let segs = group_units ?max_chain ~arity_cuts ?mapping opt units in
-  if List.length segs <= 1 then fallback ()
-  else
-    match resolve_scope_crossings (Array.of_list units) segs with
-    | exception Unfissionable -> fallback ()
-    | segs, replicas when List.length segs <= 1 ->
-        ignore replicas;
-        fallback ()
-    | segs, replicas ->
+  (* The schedule of the [i]th segment: a replay's own, by position (segments sharing a structural
+     digest can differ in placements, hence in kind and schedule), or the caller's per-kind ones. *)
+  let schedule_of i (seg : segment option) pre =
+    match (replay, seg) with
+    | Some (_, schedule), _ -> schedule i pre
+    | None, (None | Some { g_kind = `Normal; _ }) -> preset pre
+    | None, Some { g_kind = `Solo; _ } -> []
+    | None, Some ({ g_kind = `Zeros; _ } as seg) ->
+        zero_sched
+          (List.filter_map seg.g_units ~f:(fun u -> Option.bind u.f_sum ~f:(fun s -> s.s_top_zero)))
+  in
+  let fallback () =
+    (* Single-kernel compilation, exactly as before fission: no boundary needs the promotions, and
+       placement changes must not leak out of an unfissioned routine. *)
+    undo_promotions pre_promoted;
+    let sched = schedule_of 0 None opt in
+    ([ (`Normal, List.length units) ], [ (`Normal, opt, sched, apply ~static_indices sched opt) ])
+  in
+  let resolved () =
+    match replay with
+    | None -> (
+        (* The [arity_cuts] mode has its own, stricter merge rule for the sketches' full-arity
+           geometry. *)
+        let mapping = if arity_cuts then None else keep_mapping in
+        let segs = group_units ?max_chain ~arity_cuts ?mapping opt units in
+        if List.length segs <= 1 then None
+        else
+          match resolve_scope_crossings (Array.of_list units) segs with
+          | exception Unfissionable -> None
+          | segs, _ when List.length segs <= 1 -> None
+          | resolved -> Some resolved)
+    | Some (plan, _) ->
+        (* A recorded plan is applied as it is, or refused: nothing about it is re-derived, so a
+           plan that no longer fits the routine must fail loudly rather than degrade to another
+           segmentation. *)
+        if List.sum (module Int) plan ~f:snd <> List.length units then
+          misfit_segmentation "does not cover the routine's statements";
+        if List.length plan <= 1 then None
+        else
+          let segs = segments_of_plan units plan in
+          let units = Array.of_list units in
+          let replicas seg =
+            match
+              plan_replicas units ~seg_start:(List.hd_exn seg.g_units).f_index
+                (seg_external_ids seg)
+            with
+            | Some defs -> defs
+            | None | (exception Unfissionable) ->
+                misfit_segmentation "cuts a scope-local definition from its use"
+          in
+          Some (segs, List.map segs ~f:replicas)
+  in
+  let segment () =
+    match resolved () with
+    | None -> fallback ()
+    | Some (segs, replicas) ->
         let segs_with_replicas = List.zip_exn segs replicas in
-        let promoted = pre_promoted @ promote_crossing plc segs_with_replicas in
-        let undo_promotions which =
-          List.iter which ~f:(fun (tn, prior) -> Tn.Placements.unsafe_restore plc tn prior)
-        in
+        promoted := pre_promoted @ promote_crossing plc segs_with_replicas;
         let scheduled =
-          List.map segs_with_replicas ~f:(fun (seg, replicas) ->
-              let sched =
-                match seg.g_kind with
-                | `Solo -> []
-                | `Zeros ->
-                    zero_sched
-                      (List.filter_map seg.g_units ~f:(fun u ->
-                           Option.bind u.f_sum ~f:(fun s -> s.s_top_zero)))
-                | `Normal -> preset (segment_optimized opt (seg_llc replicas seg))
-              in
-              (seg, replicas, sched))
+          List.mapi segs_with_replicas ~f:(fun i (seg, replicas) ->
+              ( seg,
+                replicas,
+                schedule_of i (Some seg) (segment_optimized opt (seg_llc replicas seg)) ))
         in
         (* Coalesce adjacent unannotated segments: consecutive serial kernels gain nothing from a
            launch boundary. Merged segments are rebuilt from original units and their replicas
            recomputed for the new boundary (the def..start gap only shrinks under merging, so
-           feasibility is preserved). *)
+           feasibility is preserved). A recorded plan was coalesced when it was derived. *)
         let coalesced =
-          List.fold scheduled ~init:[] ~f:(fun acc (seg, replicas, sched) ->
-              match acc with
-              | (pseg, _, []) :: rest when List.is_empty sched ->
-                  let merged = merge_segs ~kind:`Solo pseg seg in
-                  let replicas =
-                    match
-                      plan_replicas (Array.of_list units)
-                        ~seg_start:(List.hd_exn merged.g_units).f_index (seg_external_ids merged)
-                    with
-                    | Some defs -> defs
-                    | None -> assert false (* Merging only shrinks the validity range. *)
-                  in
-                  (merged, replicas, []) :: rest
-              | _ -> (seg, replicas, sched) :: acc)
-          |> List.rev
+          if Option.is_some replay then scheduled
+          else
+            List.fold scheduled ~init:[] ~f:(fun acc (seg, replicas, sched) ->
+                match acc with
+                | (pseg, _, []) :: rest when List.is_empty sched ->
+                    let merged = merge_segs ~kind:`Solo pseg seg in
+                    let replicas =
+                      match
+                        plan_replicas (Array.of_list units)
+                          ~seg_start:(List.hd_exn merged.g_units).f_index (seg_external_ids merged)
+                      with
+                      | Some defs -> defs
+                      | None -> assert false (* Merging only shrinks the validity range. *)
+                    in
+                    (merged, replicas, []) :: rest
+                | _ -> (seg, replicas, sched) :: acc)
+            |> List.rev
         in
         if List.length coalesced <= 1 then (
           (* Everything merged back: single kernel, exactly as before fission — including
              placements, so undo every promotion (an all-serial small routine must not leak
              observable placement changes; zero2hero's virtual-neuron printouts pinned this). *)
-          undo_promotions promoted;
+          undo_promotions !promoted;
           fallback ())
         else
           (* Coalescing may have absorbed a crossing: promotions without a surviving crossing are
@@ -7503,10 +7564,24 @@ let fission_scheduled ?(promote_locals = false) ?(arity_cuts = false) ?keep_mapp
              stricter materialized view (see [promote_crossing]). *)
           let final_swr = List.map coalesced ~f:(fun (seg, replicas, _) -> (seg, replicas)) in
           undo_promotions
-            (List.filter promoted ~f:(fun (tn, _) -> not (crosses_segments final_swr tn)));
-          List.map coalesced ~f:(fun (seg, replicas, sched) ->
-              let pre = segment_optimized opt (seg_llc replicas seg) in
-              (seg.g_kind, pre, sched, apply_classified ~static_indices sched pre))
+            (List.filter !promoted ~f:(fun (tn, _) -> not (crosses_segments final_swr tn)));
+          ( List.map coalesced ~f:(fun (seg, _, _) -> (seg.g_kind, List.length seg.g_units)),
+            List.map coalesced ~f:(fun (seg, replicas, sched) ->
+                let pre = segment_optimized opt (seg_llc replicas seg) in
+                (seg.g_kind, pre, sched, apply_classified ~static_indices sched pre)) )
+  in
+  match segment () with
+  | result -> result
+  | exception exn ->
+      let backtrace = Stdlib.Printexc.get_raw_backtrace () in
+      undo_promotions !promoted;
+      Stdlib.Printexc.raise_with_backtrace exn backtrace
+
+let fission_scheduled ?promote_locals ?arity_cuts ?keep_mapping ~preset ~zero_sched ~static_indices
+    opt =
+  snd
+    (fission_segmented ?promote_locals ?arity_cuts ?keep_mapping ~preset ~zero_sched ~static_indices
+       opt)
 
 let fission_default ?promote_locals ?keep_mapping ~preset ~zero_sched ~static_indices
     (opt : Low_level.optimized) : Low_level.optimized list =

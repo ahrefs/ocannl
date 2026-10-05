@@ -161,6 +161,7 @@ test/operations/cpu_vectorized.ml
     "float4_t"
     "reinterpret_cast"
     "vector_size"
+test/operations/fission_replay_segmentation.ml
 test/operations/fission_schedule.ml
     "#pragma omp parallel for"
     "__seg0"
