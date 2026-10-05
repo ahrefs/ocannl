@@ -305,6 +305,10 @@ class FailureRecordTest(unittest.TestCase):
         main = source[source.index("\ndef main():") :]
         self.assertIn("source = source_identity(ROOT)", main)
         self.assertIn("provenance=dict(stamp, **source)", main)
+        # Both the cell and its search pass go through the helper that records an interrupted
+        # cell's checkpoint before the cancellation propagates.
+        self.assertEqual(main.count("run_cell("), 1)
+        self.assertEqual(main.count("run_kept("), 3)
         self.assertLess(main.index("source = source_identity(ROOT)"), main.index("def collect("))
 
 
@@ -3262,6 +3266,35 @@ class CellTimeoutTest(unittest.TestCase):
 
         self.assertIn("SURVIVED SIGKILL", note)
         self.assertIn("measured against it", note)
+
+    @unittest.skipUnless(os.name == "posix", "SIGALRM and process groups are POSIX here")
+    def test_an_interrupted_cell_hands_over_its_checkpoint_before_propagating(self):
+        # gh-ocannl-1209 review: the cancellation path deletes a temporary log, so the losses must
+        # leave through on_checkpoint before the interrupt does.
+        pidfile = self.dir / "interrupted-late.pid"
+        kill_the_group_on_cleanup(self, pidfile)
+        cell = self.python(
+            self.WRITE_CHECKPOINT
+            + publish_pid("sys.argv[1]", "os.getpid()")
+            + "import time; time.sleep(300)\n",
+            pidfile,
+            self.golden_checkpoint("running"),
+        )
+        kept = []
+
+        def handler(_signum, _frame):
+            raise KeyboardInterrupt
+
+        previous = signal.signal(signal.SIGALRM, handler)
+        self.addCleanup(signal.signal, signal.SIGALRM, previous)
+        signal.setitimer(signal.ITIMER_REAL, 1.0)
+        self.addCleanup(signal.setitimer, signal.ITIMER_REAL, 0)
+
+        with self.assertRaises(KeyboardInterrupt):
+            self.run_cell("interrupted in diagnostics", cell, on_checkpoint=kept.append)
+
+        self.assertEqual(len(kept), 1)
+        self.assertEqual(kept[0]["losses"], [10.375, 10.25, 10.125, 10.0, 9.875, 9.75])
 
     @unittest.skipUnless(os.name == "posix", "SIGALRM and process groups are POSIX here")
     def test_an_interrupted_cell_gets_the_same_cache_treatment_as_a_capped_one(self):

@@ -729,8 +729,8 @@ def run_cell(label, cmd, env=None, cwd=None, timeout=None, on_incomplete=None, o
     A cell that ends without a result may still have checkpointed the work it completed before the
     stage it died in (gh-ocannl-1209; see `last_checkpoint`). On those same paths its last
     checkpoint is summarized into the failure note and handed to `on_checkpoint(checkpoint)`, so
-    the caller's failure record can keep the losses. It is never returned as the result: the
-    cell still failed.
+    the caller's failure record can keep the losses -- on an interrupt too, before the
+    cancellation propagates. It is never returned as the result: the cell still failed.
 
     The whole body runs inside one cancellation-deferral window whose only hole is the
     `communicate` wait. Chasing that protection stretch by stretch is how several review rounds
@@ -920,6 +920,13 @@ def _run_logged_cell(label, cmd, env, cwd, timeout, on_incomplete, on_checkpoint
                 )
             if on_incomplete:
                 print(f"!!! {label} interrupted; {on_incomplete(True)}", flush=True)
+            # The losses the cell completed are worth as much here as on the cap's path, and the
+            # temporary log holding them is deleted on the way out (gh-ocannl-1209 review).
+            checkpoint = last_checkpoint(read_cell_log(log_path))
+            if checkpoint is not None:
+                print(f"!!! {label} interrupted; {checkpoint_note(checkpoint)}", flush=True)
+                if on_checkpoint:
+                    on_checkpoint(checkpoint)
         if cleanup_failure is not None:
             raise cleanup_failure
         raise
@@ -2385,12 +2392,24 @@ def main():
             )
             f.write(json.dumps(json_safe(record), allow_nan=False) + "\n")
 
+    def run_kept(label, cmd, **kwargs):
+        """`run_cell` under the sweep's cap, plus the last checkpoint a failed cell left. An
+        interrupted cell's checkpoint is recorded before the cancellation propagates: the sweep
+        writes nothing else for it."""
+        kept = []
+        try:
+            r, note = run_cell(
+                label, cmd, timeout=args.cell_timeout, on_checkpoint=kept.append, **kwargs
+            )
+        except BaseException:
+            if kept:
+                record_failure(label, "interrupted mid-cell", kept[-1])
+            raise
+        return r, note, (kept[-1] if kept else None)
+
     def collect(label, cmd, override=None, **kwargs):
         t0 = time.monotonic()
-        kept = []
-        r, note = run_cell(
-            label, cmd, timeout=args.cell_timeout, on_checkpoint=kept.append, **kwargs
-        )
+        r, note, checkpoint = run_kept(label, cmd, **kwargs)
         if r:
             r.update(stamp)
             stamp_ambient_env(r, ambient)
@@ -2403,7 +2422,7 @@ def main():
             with open(partial, "a") as f:
                 f.write(json.dumps(json_safe(r), allow_nan=False) + "\n")
         else:
-            record_failure(label, note, kept[-1] if kept else None)
+            record_failure(label, note, checkpoint)
         print(f"    cell took {time.monotonic() - t0:.0f}s", flush=True)
 
     for fx in fixtures:
@@ -2466,20 +2485,15 @@ def main():
                                 # gh-ocannl-675), so pass 1 runs the search and
                                 # populates autotune_cache (its compile_s is the search cost), and a
                                 # fresh pass-2 process replays the cached winner for the step timings.
-                                kept = []
-                                pass1, note = run_cell(
+                                pass1, note, checkpoint = run_kept(
                                     f"{label} (search pass)",
                                     cmd,
                                     env=env,
                                     cwd=HERE,
-                                    timeout=args.cell_timeout,
                                     on_incomplete=ocannl_cache_note,
-                                    on_checkpoint=kept.append,
                                 )
                                 if pass1 is None:
-                                    record_failure(
-                                        f"{label} (search pass)", note, kept[-1] if kept else None
-                                    )
+                                    record_failure(f"{label} (search pass)", note, checkpoint)
                                     continue
                                 # What the search pass actually did, which is not derivable from the
                                 # compile_s it hands over: a warm autotune_cache makes it a replay, and

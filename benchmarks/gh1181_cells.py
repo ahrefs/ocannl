@@ -269,8 +269,13 @@ def measure(a):
                          "why": why})
         if checkpoint is not None:
             # The losses a killed cell completed (gh-ocannl-1209): kept with its failure, never
-            # among the rows the gates and the summary read.
-            failures[-1]["checkpoint"] = checkpoint
+            # among the rows the gates and the summary read, and stamped as a row would be, since
+            # the checkpoint names its fixture and runner only by path.
+            tree = ARMS.get(arm, (None, None))[1]
+            failures[-1].update(
+                checkpoint=checkpoint,
+                provenance=dict(stamps.get(workload, {}), revision=shas.get(tree)),
+            )
         append(out, "failures.jsonl", failures[-1])
 
     def run(workload, arm, repeat, stage, cmd, env, cwd, regime):
@@ -280,11 +285,17 @@ def measure(a):
             return None
         label = f"{workload}-r{repeat}-{arm}-{stage}"
         kept = []
-        row, note = o.run_cell(label, [*pin, *cmd], env=env, cwd=cwd,
-                               # A zero cell cap disables only the cell's own cap, never the total.
-                               timeout=min(a.cell_timeout, remaining) if a.cell_timeout else remaining,
-                               on_incomplete=(o.ocannl_cache_note if arm.startswith("ocannl") else None),
-                               on_checkpoint=kept.append)
+        try:
+            row, note = o.run_cell(
+                label, [*pin, *cmd], env=env, cwd=cwd,
+                # A zero cell cap disables only the cell's own cap, never the total.
+                timeout=min(a.cell_timeout, remaining) if a.cell_timeout else remaining,
+                on_incomplete=(o.ocannl_cache_note if arm.startswith("ocannl") else None),
+                on_checkpoint=kept.append)
+        except BaseException:
+            if kept:  # interrupted: record what the cell completed before propagating
+                fail(workload, arm, repeat, stage, "interrupted mid-cell", kept[-1])
+            raise
         if row is None:
             fail(workload, arm, repeat, stage, note, kept[-1] if kept else None)
             if "SURVIVED SIGKILL" in note or "LIVENESS IS UNKNOWN" in note:
