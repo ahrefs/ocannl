@@ -1,10 +1,23 @@
 #!/usr/bin/env bash
 # Real tar cache round trips, CA collision and checked-extraction controls.
 # Runs on POSIX and native Git Bash; never touches the user's opam root.
-# Usage: tools/test-windows-opam-cache.sh [--keep]
+# Usage: tools/test-windows-opam-cache.sh [--keep] [--real SWITCH CYGWIN]
+# --real adds a read-only pack of existing roots and a disposable restore;
+# requires GNU tar for full archive/content comparison and a mingw OCaml switch.
 set -u
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 . "$HERE/../scripts/harness-support.sh"
+real_switch= real_cygwin=
+fixture_args=()
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --real)
+      [ "$#" -ge 3 ] || { echo '--real needs SWITCH CYGWIN' >&2; exit 2; }
+      real_switch=$2 real_cygwin=$3; shift 3 ;;
+    *) fixture_args+=("$1"); shift ;;
+  esac
+done
+set -- ${fixture_args[@]+"${fixture_args[@]}"}
 harness_args "$@"
 harness_require tar perl
 harness_scratch test-windows-opam-cache
@@ -105,5 +118,35 @@ error_mutant=$(mutant ignores-extraction-error '{sub(/set -euo pipefail/, "set -
 if extraction_refused "$error_mutant" "$TMP/mutant-refusal.log"; then report 1 'negative control: ignored extraction status'; else
   grep -q 'fixture extraction refused' "$TMP/mutant-refusal.log" && grep -q 'restore complete' "$TMP/mutant-refusal.log"
   report $? 'negative control: ignored extraction status'
+fi
+if [ -n "$real_switch" ]; then
+  # Compare every archived member with GNU tar, then execute the restored
+  # compiler. Neither pack nor this witness writes to the existing roots.
+  case "$(uname -s)" in
+    MINGW*|MSYS*) real_switch=$(cygpath -u "$real_switch"); real_cygwin=$(cygpath -u "$real_cygwin") ;;
+  esac
+  printf 'real switch: %s\nreal Cygwin: %s\n' "$real_switch" "$real_cygwin"
+  tar --version
+  real_roundtrip() {
+    tar --version | grep -q 'GNU tar' || { echo 'real comparison requires GNU tar' >&2; return 1; }
+    [ -f "$real_switch/bin/ocamlc.exe" ] && [ -f "$real_cygwin/root/etc/setup/installed.db" ] || {
+      echo 'existing mingw switch/Cygwin metadata unavailable' >&2; return 1;
+    }
+    find "$real_cygwin/root/usr" -path '*mingw*' -name 'lib*.a' -print >"$TMP/real-source-libraries"
+    [ -s "$TMP/real-source-libraries" ] || { echo 'no existing Cygwin/mingw system libraries' >&2; return 1; }
+    bash "$SRC" pack "$TMP/real-payload" "$real_switch" "$real_cygwin" || return 1
+    mkdir "$TMP/real-switch" "$TMP/real-cygwin"
+    mkdir -p "$TMP/real-cygwin/root/etc/pki/ca-trust/extracted/pem/directory-hash"
+    printf 'setup-ocaml transition CA sentinel\n' >"$TMP/real-cygwin/root/etc/pki/ca-trust/extracted/pem/directory-hash/ee37c333.0"
+    bash "$SRC" restore "$TMP/real-payload" "$TMP/real-switch" "$TMP/real-cygwin" || return 1
+    tar -df "$TMP/real-payload/switch.tar" -C "$TMP/real-switch" || return 1
+    tar -df "$TMP/real-payload/cygwin.tar" -C "$TMP/real-cygwin" || return 1
+    cmp "$real_cygwin/root/etc/setup/installed.db" "$TMP/real-cygwin/root/etc/setup/installed.db" || return 1
+    grep -qx 'setup-ocaml transition CA sentinel' "$TMP/real-cygwin/root/etc/pki/ca-trust/extracted/pem/directory-hash/ee37c333.0" || return 1
+    printf 'restored compiler: '
+    "$TMP/real-switch/bin/ocamlc.exe" -version || return 1
+    printf 'retained system libraries: %s\n' "$(wc -l <"$TMP/real-source-libraries")"
+  }
+  real_roundtrip; report $? 'existing switch/Cygwin archive contents, metadata, compiler and fresh CA'
 fi
 finish
