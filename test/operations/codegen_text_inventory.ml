@@ -286,7 +286,14 @@ let () =
       let flags =
         (if s.Scan.direct then [ "reads build_files/ directly" ] else [])
         @ (if s.Scan.rendered then [ "renders generated text in memory" ] else [])
-        @ if s.Scan.partial then [ "also pins text this scan cannot name" ] else []
+        @
+        match s.Scan.partial with
+        | [] -> []
+        | boundaries ->
+            [
+              "also pins text this scan cannot name: "
+              ^ String.concat ~sep:", " (List.map boundaries ~f:Scan.boundary_name);
+            ]
       in
       printf "%s%s\n" s.Scan.site_path
         (match flags with [] -> "" | flags -> " [" ^ String.concat ~sep:"; " flags ^ "]");

@@ -75,6 +75,9 @@ ok: source -- a shadowed source parameter does not validate the caller marker
 ok: source -- forwarding wrappers with generated defaults stay visibly partial
 ok: source -- anonymous forwarding callbacks stay visibly partial
 ok: source -- generated source stored through mutation stays visibly partial
+ok: source -- a prefix ! the file binds itself is not a dereference
+ok: source -- an infix := the file binds itself is not a write
+ok: source -- a partial application keeps the callee's own buffer boundary beside its unsupplied one
 ok: source -- a forwarding wrapper used as a callback stays visibly partial
 ok: source -- a forwarding wrapper keeps unresolved caller markers visibly partial
 ok: source -- a self-sourcing wrapper has no false partial
@@ -169,6 +172,15 @@ ok: source -- a local name bound to something else is not an emitter
 ok: source -- a buffer nobody wrote generated text into carries nothing
 ok: source -- a test that reads no generated source is not a member
 ok: source -- naming the reader in a comment is not reading it
+ok: boundary -- a fragment computed from ordinary values has no spelling to name
+ok: boundary -- a source-taking helper handed to a combinator is an untraced callback
+ok: boundary -- a fragment arriving as a wrapper's parameter is forwarded
+ok: boundary -- generated text read back out of a record field is an opaque component
+ok: boundary -- a partial application leaves the source it depends on unsupplied
+ok: boundary -- a haystack read back out of an array cell is a mutation
+ok: boundary -- a source parameter rebound to other text
+ok: boundary -- a source-taking helper handed ordinary text is unvalidated
+every partial-itemisation boundary has a case meeting it alone: true
 ok: rejection -- opening the reader hides its calls from the qualifier
 ok: rejection -- opening an ALIAS of the reader hides them just the same
 ok: rejection -- opening the emitter's module hides the render

@@ -68,7 +68,9 @@
     through a helper that takes it as a parameter, marks the file's itemisation partial. That is the
     documented limit of the discipline, and the reason it is a limit rather than a hole: the FILE is
     still listed, so a codegen change is still told to re-run it -- only the fragment cannot be
-    named.
+    named. The mark says which {!boundary} stopped it (gh-ocannl-1210), so a reader can tell an
+    ordinary untraced callback from an aggregate or effect the model deliberately leaves alone
+    without re-reading the source.
 
     A compiler-plan classifier in a test that also reads generated source is the one deliberately
     annotated exception, through the [ocannl.codegen_text.compiler_plan] attribute. Its text tests
@@ -903,6 +905,67 @@ let emitter_aliases ~emitters structure =
 
 type uncertainty = Known | Unresolved | Replaced | Uncorrelated
 
+(** Why a site's itemisation is partial: the boundary its provenance could not cross
+    (gh-ocannl-1210).
+
+    A partial site is still listed, so a codegen change still re-runs it; what the category buys is
+    not having to re-read the source to learn WHY a fragment went unnamed -- whether the scan met an
+    ordinary untraced callback, or an aggregate or effect it deliberately does not model. The set is
+    closed and each member names one rule of the provenance model, never a call site:
+
+    - [Computed_fragment]: the fragment has no literal spelling where it is tested, the documented
+      limit of the literal-spelling discipline.
+    - [Untraced_callback]: a function's input is supplied by no call this scan validates -- a helper
+      passed as a value, a lambda handed to a combinator, a parameter no direct call seeds.
+    - [Forwarded_parameter]: the haystack is a parameter of an enclosing or wrapping function, so
+      the text a predicate tests arrives from that function's callers.
+    - [Opaque_component]: generated text reached through a record field or a tuple/record pattern
+      over a value whose components the syntax does not supply.
+    - [Unsupplied_application]: a partial application leaves the argument a result depends on
+      unsupplied, or an optional argument is passed dynamically.
+    - [Mutation]: the text flows through a reference, mutable field, array or a buffer the scan did
+      not see filled; memory is not modelled.
+    - [Replaced_binding]: a name that carried a parameter is rebound to unrelated text.
+    - [Unvalidated_haystack]: a source-taking helper is handed text not shown to be generated, so
+      its fragment cannot be attributed at that call. Usually benign: it is the scan's safe default
+      for a helper called on ordinary text, such as a backend name.
+
+    Provenance carries the set alongside its {!uncertainty}: any level but [Known] holds at least
+    one, a reset to [Known] clears them, and a join unions them. *)
+type boundary =
+  | Computed_fragment
+  | Untraced_callback
+  | Forwarded_parameter
+  | Opaque_component
+  | Unsupplied_application
+  | Mutation
+  | Replaced_binding
+  | Unvalidated_haystack
+[@@deriving enumerate]
+
+let boundary_name = function
+  | Computed_fragment -> "computed fragment"
+  | Untraced_callback -> "untraced callback"
+  | Forwarded_parameter -> "forwarded parameter"
+  | Opaque_component -> "opaque aggregate component"
+  | Unsupplied_application -> "unsupplied application"
+  | Mutation -> "mutation or unseen buffer write"
+  | Replaced_binding -> "rebound parameter"
+  | Unvalidated_haystack -> "unvalidated haystack"
+
+(** The short spelling the classifier's own controls compare against. *)
+let boundary_tag = function
+  | Computed_fragment -> "computed"
+  | Untraced_callback -> "callback"
+  | Forwarded_parameter -> "forwarded"
+  | Opaque_component -> "opaque"
+  | Unsupplied_application -> "unsupplied"
+  | Mutation -> "mutation"
+  | Replaced_binding -> "rebound"
+  | Unvalidated_haystack -> "unvalidated"
+
+let boundaries_union a b = List.dedup_and_sort (a @ b) ~compare:Poly.compare
+
 let join_uncertainty a b =
   match (a, b) with
   | Uncorrelated, _ | _, Uncorrelated -> Uncorrelated
@@ -919,6 +982,9 @@ type provenance = {
   parameters : Set.M(String).t;
   buffer : bool;
   uncertainty : uncertainty;
+  because : boundary list;
+      (** The boundaries behind a non-[Known] [uncertainty], sorted; empty exactly when it is
+          [Known]. *)
   functions : (int * int) list;
 }
 (** One provenance rule for parameters, bindings and expression uses. A parameter is symbolic until
@@ -936,8 +1002,29 @@ let no_provenance =
     parameters = Set.empty (module String);
     buffer = false;
     uncertainty = Known;
+    because = [];
     functions = [];
   }
+
+(** [p] made at least as uncertain as [level], for [boundary]. The only way a level other than
+    [Known] is introduced, so every such level names why. *)
+let uncertain level boundary p =
+  {
+    p with
+    uncertainty = join_uncertainty p.uncertainty level;
+    because = boundaries_union p.because [ boundary ];
+  }
+
+(** [p] with its uncertainty discharged: an argument substituted for the parameter it stood for. *)
+let certain p = { p with uncertainty = Known; because = [] }
+
+(** The boundaries behind [p]'s uncertainty. Raises on a non-[Known] level that names none, which
+    {!uncertain} makes unrepresentable short of a constructor bypassing it. *)
+let boundaries_of p =
+  match (p.uncertainty, p.because) with
+  | Known, _ -> p.because
+  | _, [] -> invalid_arg "Codegen_text_scan: an uncertain provenance names no boundary"
+  | _, boundaries -> boundaries
 
 let names_generated_source p = p.generated && not (Poly.equal p.uncertainty Uncorrelated)
 
@@ -958,6 +1045,7 @@ let join_provenance a b =
             || (names_generated_source b && not b.parameter_dependent))
        then Unresolved
        else joined);
+    because = boundaries_union a.because b.because;
     functions = List.dedup_and_sort (a.functions @ b.functions) ~compare:Poly.compare;
   }
 
@@ -967,6 +1055,7 @@ let equal_provenance a b =
   && Set.equal a.parameters b.parameters
   && Bool.equal a.buffer b.buffer
   && Poly.equal a.uncertainty b.uncertainty
+  && Poly.equal a.because b.because
   && Poly.equal a.functions b.functions
 
 let argument_provenance of_expr parameter args =
@@ -986,8 +1075,21 @@ let argument_provenance of_expr parameter args =
         result.generated
         || (not (Set.is_empty result.parameters))
         || Poly.equal result.uncertainty Unresolved
-      then { result with uncertainty = join_uncertainty result.uncertainty Unresolved }
+      then uncertain Unresolved Unsupplied_application result
       else result
+
+(** The standard reference operator [name] ([!] or [:=]) at [callee]: an operator the file binds
+    itself, where it is spelled, is that binding, not a read or write of a cell. *)
+let ref_operator scope callee name =
+  Poly.equal (longident_of callee) (Some [ name ])
+  && not (Hashtbl.mem scope.values (span callee.pexp_loc))
+
+(** A dereference of a mutable cell: [!r], [Array.get], [Bytes.get]. What was stored there is not
+    modelled, so a value read this way carries the [Mutation] boundary. *)
+let reads_cell scope callee =
+  ref_operator scope callee "!"
+  || calls scope callee ~target:"Array" ~name:"get"
+  || calls scope callee ~target:"Bytes" ~name:"get"
 
 let scoped_provenance scope ~emitters ~aliases ~seeds ?(parameters = [])
     ?(source_parameters = Hashtbl.Poly.create ()) ?(function_parameters = Hashtbl.Poly.create ())
@@ -1015,7 +1117,7 @@ let scoped_provenance scope ~emitters ~aliases ~seeds ?(parameters = [])
             | Pexp_setfield (_, _, rhs) | Pexp_setinstvar (_, rhs) ->
                 written := join_provenance !written (of_expr rhs)
             | Pexp_apply (callee, args)
-              when Poly.equal (longident_of callee) (Some [ ":=" ])
+              when ref_operator scope callee ":="
                    || calls scope callee ~target:"Array" ~name:"set"
                    || calls scope callee ~target:"Bytes" ~name:"set" ->
                 List.iter args ~f:(fun (_, arg) ->
@@ -1026,8 +1128,13 @@ let scoped_provenance scope ~emitters ~aliases ~seeds ?(parameters = [])
       writes#expression discarded;
       if !written.generated || (not (Set.is_empty !written.parameters)) || !written.buffer then
         if result.generated || not (Set.is_empty result.parameters) then
-          { result with uncertainty = join_uncertainty result.uncertainty Unresolved }
-        else { (join_provenance result !written) with uncertainty = Uncorrelated; functions = [] }
+          uncertain Unresolved Mutation result
+        else
+          {
+            (uncertain Uncorrelated Mutation (join_provenance result !written)) with
+            uncertainty = Uncorrelated;
+            functions = [];
+          }
       else result
     in
     let found = ref no_provenance in
@@ -1069,7 +1176,12 @@ let scoped_provenance scope ~emitters ~aliases ~seeds ?(parameters = [])
            effect boundary instead of pretending the return expression is pure. *)
         let result =
           if result.buffer && not result.generated then
-            join_provenance result { !found with uncertainty = Unresolved; functions = [] }
+            join_provenance result
+              {
+                (uncertain Unresolved Mutation !found) with
+                uncertainty = Unresolved;
+                functions = [];
+              }
           else result
         in
         { result with functions = [ span expr.pexp_loc ] }
@@ -1083,13 +1195,13 @@ let scoped_provenance scope ~emitters ~aliases ~seeds ?(parameters = [])
         in
         let found =
           if direct_source then
-            {
-              !found with
-              generated = true;
-              parameter_dependent = false;
-              parameters = Set.empty (module String);
-              uncertainty = Known;
-            }
+            certain
+              {
+                !found with
+                generated = true;
+                parameter_dependent = false;
+                parameters = Set.empty (module String);
+              }
           else if not (List.is_empty callee_value.functions) then
             let formal_parameters =
               List.concat_map callee_value.functions ~f:(fun id ->
@@ -1120,13 +1232,27 @@ let scoped_provenance scope ~emitters ~aliases ~seeds ?(parameters = [])
                   List.fold formal_parameters ~init:callee_value.parameters
                     ~f:(fun acc (symbol, destination) ->
                       if parameter_supplied destination args then Set.remove acc symbol else acc);
-                uncertainty =
-                  (if Poly.equal callee_value.uncertainty Uncorrelated then Uncorrelated
-                   else if unsupplied_dependency then Unresolved
-                   else if depends_on_argument && not callee_value.buffer then Known
-                   else callee_value.uncertainty);
                 functions = [];
               }
+            in
+            (* The level is decided outright here, and its boundaries with it: an unsupplied
+               dependency is that application's boundary, replacing the untraced default the
+               parameter held inside the callee while keeping the callee's other boundaries -- a
+               buffer or mutation it reads stays named after the argument arrives -- and a
+               substituted argument discharges them all. *)
+            let result =
+              if Poly.equal callee_value.uncertainty Uncorrelated then result
+              else if unsupplied_dependency then
+                {
+                  result with
+                  uncertainty = Unresolved;
+                  because =
+                    boundaries_union [ Unsupplied_application ]
+                      (List.filter callee_value.because ~f:(fun b ->
+                           not (Poly.equal b Untraced_callback)));
+                }
+              else if depends_on_argument && not callee_value.buffer then certain result
+              else result
             in
             let result =
               if unsupplied_dependency && not (Poly.equal callee_value.uncertainty Uncorrelated)
@@ -1145,17 +1271,19 @@ let scoped_provenance scope ~emitters ~aliases ~seeds ?(parameters = [])
         in
         let found =
           if Poly.equal callee_value.uncertainty Uncorrelated then
-            { found with uncertainty = Uncorrelated }
+            {
+              found with
+              uncertainty = Uncorrelated;
+              because = boundaries_union found.because callee_value.because;
+            }
           else found
         in
         let found =
           if
             List.is_empty callee_value.functions
-            && (Poly.equal (longident_of callee) (Some [ "!" ])
-               || calls scope callee ~target:"Array" ~name:"get"
-               || calls scope callee ~target:"Bytes" ~name:"get")
+            && reads_cell scope callee
             && (found.generated || (not (Set.is_empty found.parameters)) || found.buffer)
-          then { found with uncertainty = Uncorrelated }
+          then uncertain Uncorrelated Mutation found
           else found
         in
         let functions =
@@ -1177,14 +1305,12 @@ let scoped_provenance scope ~emitters ~aliases ~seeds ?(parameters = [])
         }
     | Pexp_ident _ -> !found
     | Pexp_field _ ->
-        {
-          !found with
-          uncertainty =
-            (if !found.generated || (not (Set.is_empty !found.parameters)) || !found.buffer then
-               Uncorrelated
-             else !found.uncertainty);
-          functions = [];
-        }
+        let found =
+          if !found.generated || (not (Set.is_empty !found.parameters)) || !found.buffer then
+            uncertain Uncorrelated Opaque_component !found
+          else !found
+        in
+        { found with functions = [] }
     | Pexp_let (_, bindings, body) ->
         List.fold bindings ~init:(of_expr body) ~f:(fun result vb ->
             effect_boundary result vb.pvb_expr)
@@ -1219,7 +1345,8 @@ let scoped_provenance scope ~emitters ~aliases ~seeds ?(parameters = [])
             in
             bind_pattern env pattern expression
               (Option.value_map expression
-                 ~default:{ payload with uncertainty = Unresolved }
+                 ~default:
+                   { (uncertain Unresolved Opaque_component payload) with uncertainty = Unresolved }
                  ~f:of_expr))
     | ( Ppat_construct ({ txt = constructor; _ }, Some (_, inner)),
         Some (Pexp_construct ({ txt = actual; _ }, Some expression)) )
@@ -1229,7 +1356,7 @@ let scoped_provenance scope ~emitters ~aliases ~seeds ?(parameters = [])
         bind_all
           (if payload.generated || (not (Set.is_empty payload.parameters)) || payload.buffer then
              {
-               payload with
+               (uncertain Unresolved Opaque_component payload) with
                uncertainty = (if payload.parameter_dependent then Uncorrelated else Unresolved);
              }
            else payload)
@@ -1258,12 +1385,7 @@ let scoped_provenance scope ~emitters ~aliases ~seeds ?(parameters = [])
                       && Set.is_empty (Set.inter previous.parameters denotes.parameters)))
             in
             bind_pattern inner vb.pvb_pat (Some vb.pvb_expr)
-              {
-                denotes with
-                uncertainty =
-                  (if replaced then join_uncertainty denotes.uncertainty Replaced
-                   else denotes.uncertainty);
-              })
+              (if replaced then uncertain Replaced Replaced_binding denotes else denotes))
 
       method! expression env e =
         match e.pexp_desc with
@@ -1279,7 +1401,7 @@ let scoped_provenance scope ~emitters ~aliases ~seeds ?(parameters = [])
                             join_provenance acc
                               (Option.value
                                  (Hashtbl.find source_parameters (span e.pexp_loc, name))
-                                 ~default:{ no_provenance with uncertainty = Unresolved }))
+                                 ~default:(uncertain Unresolved Untraced_callback no_provenance)))
                       in
                       Lexical_scope.bind_values env names
                         {
@@ -1298,7 +1420,7 @@ let scoped_provenance scope ~emitters ~aliases ~seeds ?(parameters = [])
                 let payload =
                   Option.value
                     (Hashtbl.find source_parameters (span e.pexp_loc, case_parameter))
-                    ~default:{ no_provenance with uncertainty = Unresolved }
+                    ~default:(uncertain Unresolved Untraced_callback no_provenance)
                 in
                 let payload =
                   {
@@ -1395,7 +1517,7 @@ type predicate = {
     the body would attribute literals even when the caller supplies ordinary text. *)
 let predicates scope ~emitters ~aliases ~seeds ~outer ~function_parameters bindings =
   let consumed = ref [] in
-  let uncertain_source = ref false in
+  let uncertain_source = ref [] in
   let predicates =
     List.concat_map bindings ~f:(fun { binding_id; names; params; body } ->
         match (names, params) with
@@ -1471,14 +1593,11 @@ let predicates scope ~emitters ~aliases ~seeds ~outer ~function_parameters bindi
                      enclosing source evidence for that existing higher-order idiom. *)
                   || Option.value_map tested ~default:(generated_locally body) ~f:generated_locally
                 then record None
-                else if
-                  Option.value_map tested ~default:false ~f:(fun tested ->
-                      not (Set.is_empty (derives_from_capture tested)))
-                then uncertain_source := true
-                else if
-                  Option.value_map tested ~default:false ~f:(fun e ->
-                      not (Poly.equal (provenance e).uncertainty Known))
-                then uncertain_source := true
+                else
+                  Option.iter tested ~f:(fun tested ->
+                      if not (Set.is_empty (derives_from_capture tested)) then
+                        uncertain_source := Forwarded_parameter :: !uncertain_source
+                      else uncertain_source := boundaries_of (provenance tested) @ !uncertain_source)
               in
               List.iter
                 (match text_params with [] -> [ None ] | ps -> List.map ps ~f:Option.some)
@@ -1553,7 +1672,9 @@ let rec pin_of_expr scope expr =
 type site = {
   site_path : string;
   pins : string list;  (** Sorted, deduplicated, each rendered ready for the inventory. *)
-  partial : bool;  (** Some pinned fragment could not be named at its call site. *)
+  partial : boundary list;
+      (** Why some pinned fragment could not be named at its call site, sorted and deduplicated;
+          empty when the itemisation is complete. *)
   direct : bool;  (** Reads [build_files/] without going through {!Test_utils.Generated}. *)
   rendered : bool;
       (** Renders generated text in memory, through an emitter or a dump printer, rather than
@@ -1701,11 +1822,7 @@ let classify_source ~emitters ~path ~contents =
                           List.iter (!provenance callback).functions ~f:(fun id ->
                               match Hashtbl.find functions id with
                               | Some [ (name, { destination = At_position 0; _ }) ] ->
-                                  add_input id name
-                                    {
-                                      input with
-                                      uncertainty = join_uncertainty input.uncertainty Unresolved;
-                                    }
+                                  add_input id name (uncertain Unresolved Untraced_callback input)
                               | _ -> ())))
           | _ -> ());
           super#expression e
@@ -1735,57 +1852,97 @@ let classify_source ~emitters ~path ~contents =
       List.filter predicates ~f:(fun p ->
           List.mem (!provenance callee).functions p.pred_binding ~equal:Poly.equal)
     in
+    (* Why a source-taking predicate's haystack at one call is not shown to be generated source: the
+       boundaries its provenance carries, or -- where the model is certain about it -- what the
+       argument syntactically is: absent from the application, a read of a mutable cell, a helper's
+       own parameter, or simply ordinary text. *)
+    let haystack_boundaries provenance source args =
+      match predicate_argument_at source args with
+      | None -> [ Unsupplied_application ]
+      | Some argument -> (
+          let p = argument_provenance provenance source args in
+          match (boundaries_of p, p.buffer) with
+          | [], true -> [ Mutation ]
+          | [], false -> (
+              match argument.pexp_desc with
+              | Pexp_apply (callee, _) when reads_cell scope callee -> [ Mutation ]
+              | _ when p.parameter_dependent -> [ Forwarded_parameter ]
+              | _ -> [ Unvalidated_haystack ])
+          | boundaries, buffer -> if buffer then Mutation :: boundaries else boundaries)
+    in
     (* Ordinary forwarding wrappers do not expose their caller's marker as a predicate parameter.
-       Keep unresolved calls visibly partial, including chains of wrappers and generated
-       defaults. *)
+       Keep unresolved calls visibly partial, including chains of wrappers and generated defaults,
+       each with the boundary its own unvalidated predicate call met. *)
     let forwarding = Hashtbl.Poly.create () in
     let function_at callee =
       match Hashtbl.find scope.values (span callee.pexp_loc) with
       | Some (Function_binding binding_id) -> Some binding_id
       | _ -> None
     in
+    (* A binding's own provenance does not depend on the table, so it is computed once; the table's
+       boundary sets only grow, and the pass repeats until none does. *)
+    let binding_provenance =
+      List.map bindings ~f:(fun binding ->
+          ( binding,
+            scoped_provenance scope ~emitters ~aliases ~seeds ~outer ~function_parameters:functions
+              (fun resolver env -> ignore (resolver#expression env binding.body : expression)) ))
+    in
     let changed = ref true in
     while !changed do
       changed := false;
-      List.iter bindings ~f:(fun binding ->
-          if not (Hashtbl.mem forwarding binding.binding_id) then (
-            let forwards = ref false in
-            let provenance =
-              scoped_provenance scope ~emitters ~aliases ~seeds ~outer
-                ~function_parameters:functions (fun resolver env ->
-                  ignore (resolver#expression env binding.body : expression))
-            in
-            let iterator =
-              object
-                inherit Ast_traverse.iter as super
+      List.iter binding_provenance ~f:(fun (binding, provenance) ->
+          let forwards = ref [] in
+          let iterator =
+            object
+              inherit Ast_traverse.iter as super
 
-                method! expression e =
-                  (match e.pexp_desc with
-                  | Pexp_apply (callee, args) ->
-                      if
-                        List.exists (predicates_at callee) ~f:(fun p ->
-                            Option.exists p.source_at ~f:(fun source ->
-                                not
-                                  (Option.value_map (predicate_argument_at source args)
-                                     ~default:false ~f:(fun e ->
-                                       names_generated_source (provenance e)))))
-                        || Option.exists (function_at callee) ~f:(Hashtbl.mem forwarding)
-                      then forwards := true
-                  | _ -> ());
-                  super#expression e
-              end
-            in
-            iterator#expression binding.body;
-            if !forwards then (
-              Hashtbl.set forwarding ~key:binding.binding_id ~data:();
-              changed := true)))
+              method! expression e =
+                (match e.pexp_desc with
+                | Pexp_apply (callee, args) ->
+                    List.iter (predicates_at callee) ~f:(fun p ->
+                        Option.iter p.source_at ~f:(fun source ->
+                            if
+                              not
+                                (Option.value_map (predicate_argument_at source args) ~default:false
+                                   ~f:(fun e -> names_generated_source (provenance e)))
+                            then forwards := haystack_boundaries provenance source args @ !forwards));
+                    Option.iter
+                      (Option.bind (function_at callee) ~f:(Hashtbl.find forwarding))
+                      ~f:(fun boundaries -> forwards := boundaries @ !forwards)
+                | _ -> ());
+                super#expression e
+            end
+          in
+          iterator#expression binding.body;
+          let previous = Option.value (Hashtbl.find forwarding binding.binding_id) ~default:[] in
+          let grown = boundaries_union previous !forwards in
+          if not (Poly.equal grown previous) then (
+            Hashtbl.set forwarding ~key:binding.binding_id ~data:grown;
+            changed := true))
     done;
     let pins = ref [] in
     let is_consumed (e : expression) =
       List.mem consumed (e.pexp_loc.loc_start.pos_cnum, e.pexp_loc.loc_end.pos_cnum)
         ~equal:(fun (a, b) (c, d) -> a = c && b = d)
     in
-    let record text = if not (is_consumed text) then pins := pin_of_expr scope text :: !pins in
+    (* Every reason the itemisation is incomplete, each a {!boundary}; the site is partial exactly
+       when this is non-empty. A trigger that consults provenance reports the boundaries that
+       provenance carries, so the category is the model's, not a guess made here. *)
+    let partial = ref [] in
+    let mark boundaries = partial := boundaries @ !partial in
+    (* A fragment with no literal part is named by why: the boundary its own value met, else a
+       helper parameter it arrives through, else the plain limit of the literal discipline. *)
+    let add_pin text =
+      match pin_of_expr scope text with
+      | Computed ->
+          let p = !provenance text in
+          mark
+            (match boundaries_of p with
+            | [] -> if p.parameter_dependent then [ Forwarded_parameter ] else [ Computed_fragment ]
+            | boundaries -> boundaries)
+      | pin -> Option.iter (render_pin pin) ~f:(fun rendered -> pins := rendered :: !pins)
+    in
+    let record text = if not (is_consumed text) then add_pin text in
     (* Generated source in the haystack, by any of the three routes -- a tainted name, an inline
        [Generated.read], an inline emitter render, an inline [build_files/] read. Naming only the
        first two here left an assertion that renders inline ([String.is_substring (render (LL.to_doc
@@ -1812,16 +1969,15 @@ let classify_source ~emitters ~path ~contents =
       end
     in
     calls#structure structure;
+    mark uncertain_source;
     (* A helper reached without an explicit call, for example as a callback, has no validated caller
        source. Keep that uncertainty visible rather than silently dropping its body text. *)
     List.iter predicates ~f:(fun predicate ->
         if not (Hashtbl.mem called predicate.pred_binding) then
-          if Option.is_some predicate.source_at then pins := Computed :: !pins
-          else
-            Option.iter predicate.body_text ~f:(fun text -> pins := pin_of_expr scope text :: !pins));
+          if Option.is_some predicate.source_at then mark [ Untraced_callback ]
+          else Option.iter predicate.body_text ~f:add_pin);
     (* Unresolved buffer flows use the same scoped provenance, including local aliases. *)
     let reads_a_buffer e = (!provenance e).buffer in
-    let unattributed = ref false in
     let iterator =
       object
         inherit Ast_traverse.iter as super
@@ -1833,76 +1989,67 @@ let classify_source ~emitters ~path ~contents =
             && (not (Hashtbl.mem applied (span e.pexp_loc)))
             && ((not (List.is_empty (predicates_at e)))
                || Option.exists (function_at e) ~f:(Hashtbl.mem forwarding))
-          then unattributed := true;
+          then mark [ Untraced_callback ];
           (match text_test scope e with
-          | Some { text; tested; inherent } ->
+          | Some { text; tested; inherent } -> (
               if inherent || Option.value_map tested ~default:false ~f:mentions_tainted then (
                 record text;
-                if
-                  Option.value_map tested ~default:false ~f:(fun e ->
-                      let source = !provenance e in
-                      Poly.equal source.uncertainty Unresolved)
-                then unattributed := true)
-              else if
-                Option.value_map tested ~default:false ~f:(fun e ->
-                    not (Poly.equal (!provenance e).uncertainty Known))
-              then unattributed := true
-              else if Option.value_map tested ~default:false ~f:reads_a_buffer then
-                unattributed := true
+                Option.iter tested ~f:(fun e ->
+                    let source = !provenance e in
+                    if Poly.equal source.uncertainty Unresolved then mark (boundaries_of source)))
+              else
+                match tested with
+                | Some e when not (Poly.equal (!provenance e).uncertainty Known) ->
+                    mark (boundaries_of (!provenance e))
+                | Some e when reads_a_buffer e -> mark [ Mutation ]
+                | _ -> ())
           | None -> (
               match e.pexp_desc with
               | Pexp_apply (callee, args) ->
-                  if
-                    List.is_empty (predicates_at callee)
-                    && Option.exists (function_at callee) ~f:(Hashtbl.mem forwarding)
-                  then unattributed := true;
+                  if List.is_empty (predicates_at callee) then
+                    Option.iter
+                      (Option.bind (function_at callee) ~f:(Hashtbl.find forwarding))
+                      ~f:mark;
                   List.iter (predicates_at callee) ~f:(fun predicate ->
                       let at parameter = predicate_argument_at parameter args in
                       let source_value =
                         Option.map predicate.source_at ~f:(fun parameter ->
-                            argument_provenance !provenance parameter args)
+                            (parameter, argument_provenance !provenance parameter args))
                       in
                       let source_ok =
                         match predicate.source_at with
                         | None -> true
                         | Some _ ->
-                            Option.value_map source_value ~default:false ~f:names_generated_source
+                            Option.value_map source_value ~default:false ~f:(fun (_, p) ->
+                                names_generated_source p)
                       in
-                      (* The backstop belongs on this path as much as on a direct test: a helper is
-                         how a test reads a buffer one indirection further out, and a guard that
-                         fires only for the spelling written first is not one (Codex round 5). *)
-                      if
-                        (not source_ok)
-                        && Option.value_map source_value ~default:false ~f:(fun p -> p.buffer)
-                      then unattributed := true;
                       if source_ok then (
-                        if
-                          Option.value_map source_value ~default:false ~f:(fun p ->
-                              Poly.equal p.uncertainty Unresolved)
-                        then unattributed := true;
-                        Option.iter predicate.body_text ~f:(fun text ->
-                            pins := pin_of_expr scope text :: !pins);
+                        Option.iter source_value ~f:(fun (_, p) ->
+                            if Poly.equal p.uncertainty Unresolved then mark (boundaries_of p));
+                        Option.iter predicate.body_text ~f:add_pin;
                         match Option.bind predicate.text_at ~f:at with
                         | Some text -> record text
-                        | None when Option.is_some predicate.text_at -> pins := Computed :: !pins
+                        | None when Option.is_some predicate.text_at ->
+                            mark [ Unsupplied_application ]
                         | None -> ())
                       else
                         (* Untraced callback inputs and uncorrelated aggregate/effect results cannot
-                           validate a named fragment. Keep only their uncertainty. *)
-                        pins := Computed :: !pins)
+                           validate a named fragment. Keep only their uncertainty. The buffer
+                           backstop belongs on this path as much as on a direct test: a helper is
+                           how a test reads a buffer one indirection further out, and a guard that
+                           fires only for the spelling written first is not one (Codex round 5). *)
+                        Option.iter source_value ~f:(fun (source, _) ->
+                            mark (haystack_boundaries !provenance source args)))
               | _ -> ()));
           super#expression e
       end
     in
     iterator#structure structure;
-    let all = !pins in
     Some
       {
         site_path = path;
-        pins = List.filter_map all ~f:render_pin |> List.dedup_and_sort ~compare:String.compare;
-        partial =
-          uncertain_source || !unattributed
-          || List.exists all ~f:(function Computed -> true | _ -> false);
+        pins = List.dedup_and_sort !pins ~compare:String.compare;
+        partial = List.dedup_and_sort !partial ~compare:Poly.compare;
         direct = !reads_direct;
         rendered = !renders;
       }
