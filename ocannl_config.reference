@@ -449,7 +449,9 @@
 
 # The maximum number of beam-expansion rounds beyond the seed candidates (the serial baseline and
 # the default-annotator block-size sweep). The search also stops when a round improves the best
-# time by less than 1%.
+# time by less than 1%, and then ships the incumbent, not that round's sub-1% best. The benchmark
+# runners pass ~rounds:0, so this key does not reach their tuned cells (gh-ocannl-1137; each arm's
+# rounds_run on the result line says so).
 #autotune_rounds=2
 
 # Timed runs per tuning candidate (after one warmup run); the minimum is kept. Under
@@ -1492,6 +1494,9 @@
 # # algebraic-rewrite tiers) belong to the numerics axis, not to this one.
 #
 # # Empirical schedule search on, with a wider beam and more rounds than the everyday defaults.
+# # The benchmark runners (benchmarks/runners/ocannl) pass ~rounds:0, so their tuned cells get
+# # this beam width but not these rounds: on gpt2_mini/CUDA one round added 60-150% search time
+# # per arm and never cleared the 1% margin a round needs to be adopted (gh-ocannl-1137).
 # autotune_search=true
 # autotune_beam_width=4
 # autotune_rounds=4
@@ -1520,6 +1525,7 @@
 # # join this payload as they land, each in the PR that adds its key.
 #
 # # The `performance` payload's keys, restated (test_config_consistency checks they agree).
+# # As there, the benchmark runners' tuned cells run none of the rounds (gh-ocannl-1137).
 # autotune_search=true
 # autotune_beam_width=4
 # autotune_rounds=4

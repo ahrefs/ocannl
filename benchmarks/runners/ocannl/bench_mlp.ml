@@ -293,6 +293,8 @@ let () =
     dump_flip_candidates ctx comp;
     let scratch = Train.init_params (Context.auto ()) bindings batch_loss in
     let scratch = if preseed_twins then Context.decide_materialized scratch twin_tns else scratch in
+    (* [~rounds:0]: no beam round whatever [autotune_rounds] says; see bench_gpt.ml for the
+       measurement behind it (gh-ocannl-1137). *)
     Train.tune_placements ?report ?flip_report ~on_ship:(H.collect_ship arms) ~rounds:0
       ~timing_ctx:scratch ctx batch_loss comp bindings
   in

@@ -56,6 +56,13 @@ let () =
     (* [flip_report] only counts the gh-555 refinement searches toward the result line's [searched]
        (gh-ocannl-644): they run whenever [tune_inline_flips] is configured, whether or not a
        callback is wired, and a flip search loads this process like an arm search. *)
+    (* [~rounds:0] overrides [autotune_rounds], the profiles' 4 included; the arms' [rounds_run] on
+       the result line records it. Measured on rog CUDA, approximate profile (gh-ocannl-1137): with
+       rounds=4 each arm ran ONE round -- 635 candidates and +1002 s on arm A's 674 s of seeds,
+       1325 candidates (~42 min projected) on arm B's 528 s -- whose best beat the seed winner by
+       0.50% / 0.31%, under the 1% a round needs to be adopted, so the shipped schedule was the
+       rounds:0 one. The beam it expands is the composite and its playoff near-copies (1-4 of
+       122-150 segments apart). *)
     Train.tune_placements ~report:(H.collect_arm arms) ~flip_report:(H.collect_search arms)
       ~on_ship:(H.collect_ship arms) ~rounds:0 ~timing_ctx:scratch ctx batch_loss comp bindings
   in

@@ -1210,6 +1210,9 @@ let performance_profile_payload =
 # algebraic-rewrite tiers) belong to the numerics axis, not to this one.
 
 # Empirical schedule search on, with a wider beam and more rounds than the everyday defaults.
+# The benchmark runners (benchmarks/runners/ocannl) pass ~rounds:0, so their tuned cells get
+# this beam width but not these rounds: on gpt2_mini/CUDA one round added 60-150% search time
+# per arm and never cleared the 1% margin a round needs to be adopted (gh-ocannl-1137).
 autotune_search=true
 autotune_beam_width=4
 autotune_rounds=4
@@ -1238,6 +1241,7 @@ let approximate_profile_payload =
 # join this payload as they land, each in the PR that adds its key.
 
 # The `performance` payload's keys, restated (test_config_consistency checks they agree).
+# As there, the benchmark runners' tuned cells run none of the rounds (gh-ocannl-1137).
 autotune_search=true
 autotune_beam_width=4
 autotune_rounds=4
