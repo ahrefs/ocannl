@@ -20,20 +20,25 @@ let clang_fast_math_options ~reassociate =
   @ (if reassociate then [] else [ "-fno-associative-math" ])
   @ [ "-fhonor-infinities" ]
 
-(* gh-ocannl-1182: on gfx1102, HIPRTC 9.0 (ROCm runtime 7.1.52801) emitted a half subtraction while
-   a D16 high-half load into the same VGPR was outstanding. Replaying the emitted attention-softmax
-   kernel returned exp(+1)/2, including in masked lanes. Forcing vector-load waits alone repaired
-   that replay but left a backward masked branch corrupting its low half while a high-half load was
-   pending. Forcing all wait counters to zero made both three-launch replays pass. This preserves
-   arithmetic precision but conservatively reduces memory overlap. Other architectures have not been
-   measured. Keep unsupported-option failures visible through the normal HIPRTC error path; falling
-   back to the corrupting compilation would be unsafe. *)
-let hip_wait_options ~target_archs =
+(* gh-ocannl-1182: on gfx1102, HIPRTC 9.0 (ROCm runtime 7.1.52801) compiles 16-bit values into VGPR
+   halves (LLVM's [real-true16] feature) and emitted a half subtraction into the low half while a
+   D16 high-half load into the same VGPR was outstanding. Replaying the emitted attention-softmax
+   kernel returned exp(+1)/2, including in masked lanes, and a backward masked branch corrupted its
+   low half the same way. Without [real-true16] each half value gets a whole VGPR, no high-half
+   loads are emitted, and that replay returns zero wrong cells in three launches.
+
+   The first workaround, [-mllvm -amdgpu-waitcnt-forcezero], repaired both replays but silently
+   miscompiled unrelated integer and bf16 kernels on the same target: Threefry outputs, fp8 round
+   trips and tensorized bf16 matmuls all disagreed with their references (gh-ocannl-1222). Only
+   gfx1102 has been measured; other RDNA3 targets keep the compiler's default. Keep
+   unsupported-option failures visible through the normal HIPRTC error path; falling back to the
+   corrupting compilation would be unsafe. *)
+let hip_target_options ~target_archs =
   if
     List.exists
       (fun arch -> String.equal (List.hd (String.split_on_char ':' arch)) "gfx1102")
       target_archs
-  then [ "-mllvm"; "-amdgpu-waitcnt-forcezero" ]
+  then [ "-Xclang"; "-target-feature"; "-Xclang"; "-real-true16" ]
   else []
 
 let hiprtc ~target_archs ~hip_include_options ~rocwmma_include_options ~uses_rocwmma ~with_debug =
@@ -42,7 +47,7 @@ let hiprtc ~target_archs ~hip_include_options ~rocwmma_include_options ~uses_roc
   (* These are compiler options rather than kernel-body pragmas so they also govern the bf16 and f16
      operators while the HIP headers are parsed. *)
   @ clang_fast_math_options ~reassociate:false
-  @ hip_wait_options ~target_archs
+  @ hip_target_options ~target_archs
   @ if with_debug then [ "-g" ] else []
 
 (* nvrtc's opt-IN for floating-point reassociation. nvrtc accepts it (13.3 answers a
