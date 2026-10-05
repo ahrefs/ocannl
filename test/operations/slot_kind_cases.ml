@@ -337,6 +337,10 @@ let () =
  ; ocannl-backend: none -- links no backend in this fixture.
  (alias dyn) (action (dynamic-run ./d.exe)))|dune},
         "build @d/dyn" );
+      ("env dependency", {dune|(alias (name ev) (deps %{env:INPUT=plain}))|dune}, "build @d/ev");
+      ( "sandbox wrapper",
+        {dune|(alias (name sb) (deps (sandbox (alias runtest-gpu))))|dune},
+        "build @d/sb" );
     ]
     ~f:(fun (what, dune, argv) ->
       let dune_files = [ ("d", dune); n ] in
@@ -358,6 +362,7 @@ let () =
     [
       ("a top-level include", {dune|(include rules.inc)|dune});
       ("a cram test", {dune|(cram (deps ocannl_config))|dune});
+      ("an install stanza", {dune|(install (section share) (files out.dat))|dune});
       ( "a preprocessing action",
         {dune|(library (name helper) (modules helper) (preprocess (action (run cat %{input-file}))))|dune}
       );
@@ -382,6 +387,14 @@ let () =
   in
   List.iter
     [
+      ( "a directory target",
+        {dune|(executable (name reader) (modules reader))
+(rule
+ (targets (dir output))
+ (deps ocannl_config (env_var OCANNL_BACKEND))
+ (action (run %{dep:reader.exe})))
+(alias (name probe) (deps output/result))|dune},
+        "build @@d/probe" );
       ( "a character-class glob",
         reader ^ {dune|
 (alias (name probe) (deps (glob_files "[ab].actual")))|dune},

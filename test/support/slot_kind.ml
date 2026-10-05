@@ -130,10 +130,11 @@ let join dir sub = match (dir, sub) with "", s -> s | d, "" -> d | d, s -> d ^ "
 
     Exactly modelled, and nothing else: the stanza heads listed below (an [(include …)], a [cram]
     test or any other head is a hole in the inventory); in a dependency field, files, [(file …)],
-    named bindings, [glob_files]/[glob_files_rec], [source_tree], [env_var], [universe], [sandbox],
-    and an alias whose path stays in the tree and carries no pform; the pforms listed below; no
-    [dynamic-run]; and no preprocessing action. A program dune runs to preprocess ([pps]) is taken
-    not to start a backend. *)
+    named bindings, [glob_files]/[glob_files_rec], [source_tree], [env_var], [universe], [sandbox]
+    (each with atom arguments only), and an alias whose path stays in the tree and carries no pform;
+    the pforms listed below ([%{env:…}] only inside an [enabled_if]); no [dynamic-run]; and no
+    preprocessing action. A directory target is taken as producing every file. A program dune runs
+    to preprocess ([pps]) is taken not to start a backend. *)
 
 let basename p = match String.rsplit2 p ~on:'/' with Some (_, b) -> b | None -> p
 
@@ -156,8 +157,10 @@ let resolve ~dir path =
 (* The pforms whose payload is a path dune builds before expanding it. *)
 let path_pforms = [ "dep"; "exe"; "path"; "read"; "read-lines"; "read-strings" ]
 
-(* The pforms with a payload that name no file of the batch's own, or one compilation builds. *)
-let valued_pforms = [ "bin"; "lib"; "lib-available"; "env"; "ocaml-config"; "version" ]
+(* The pforms with a payload that name no file of the batch's own, or one compilation builds. An
+   [%{env:…}] can expand to any path, so it is exact only inside an [enabled_if], which adds no
+   dependency (Codex review on PR #1027). *)
+let valued_pforms = [ "bin"; "lib"; "lib-available"; "ocaml-config"; "version" ]
 
 (* The variables that name no file of their own: the stanza's targets and deps, or the context. *)
 let variable_pforms =
@@ -219,12 +222,19 @@ let file_needs sexp =
 (** The first pform in [sexp] this does not model exactly: one outside the lists above, a named
     binding aside. *)
 let inexact_pform ~bindings sexp =
-  List.find_map (Scan.atoms sexp) ~f:(fun atom ->
+  let rec atoms_with ~in_enabled_if = function
+    | Sexp.Atom a -> [ (a, in_enabled_if) ]
+    | Sexp.List (Sexp.Atom "enabled_if" :: rest) ->
+        List.concat_map rest ~f:(atoms_with ~in_enabled_if:true)
+    | Sexp.List l -> List.concat_map l ~f:(atoms_with ~in_enabled_if)
+  in
+  List.find_map (atoms_with ~in_enabled_if:false sexp) ~f:(fun (atom, in_enabled_if) ->
       List.find_map (Scan.pieces atom) ~f:(function
         | Scan.Literal _ -> None
         | Scan.Pform p ->
             let exact =
               match String.lsplit2 p ~on:':' with
+              | Some ("env", _) -> in_enabled_if
               | Some (k, _) ->
                   List.mem path_pforms k ~equal:String.equal
                   || List.mem valued_pforms k ~equal:String.equal
@@ -261,7 +271,10 @@ let dep_needs ~dir sexp =
         | None -> Error (Printf.sprintf "dependency (%s %s)" h spec))
     | Sexp.List [ Sexp.Atom ("glob_files" | "glob_files_rec"); Sexp.Atom pattern ] ->
         Ok (Option.to_list (Option.map (pattern_of pattern) ~f:(fun g -> Glob_need g)), [])
-    | Sexp.List (Sexp.Atom ("file" | "source_tree" | "env_var" | "universe" | "sandbox") :: _) ->
+    (* Each in its one shape: atoms only, so a form wrapping another dependency -- a [sandbox]
+       around an alias, say -- is not read as carrying none (Codex review on PR #1027). *)
+    | Sexp.List (Sexp.Atom ("file" | "source_tree" | "env_var" | "universe" | "sandbox") :: args)
+      when List.for_all args ~f:(function Sexp.Atom _ -> true | Sexp.List _ -> false) ->
         Ok ([], [])
     | other -> Error (Printf.sprintf "dependency %s" (Sexp.to_string other))
   in
@@ -277,7 +290,11 @@ let targets_of sexp =
   | Some "rule" -> (
       match (Scan.field sexp "targets", Scan.field sexp "target") with
       | Some args, _ | None, Some args ->
-          List.filter_map (List.concat_map args ~f:Scan.atoms) ~f:pattern_of
+          (* A directory target produces every path below it, which a basename cannot name: it is
+             taken as producing anything (Codex review on PR #1027). *)
+          List.concat_map args ~f:(function
+            | Sexp.Atom a -> Option.to_list (pattern_of a)
+            | Sexp.List _ -> [ "*" ])
       | None, None ->
           if List.is_empty (Scan.aliases_of sexp) then
             List.filter_map (Scan.atoms sexp) ~f:pattern_of
@@ -307,7 +324,9 @@ let source_like target =
   || List.exists source_suffixes ~f:(fun suffix -> String.is_suffix target ~suffix)
 
 (* The stanza heads the inventory models: the ones that run something on an alias or for a target,
-   the ones that compile, and the ones that build nothing a test runs. *)
+   the ones that compile, and the ones that build nothing a test runs. Not [install] nor
+   [documentation]: dune's generated [@install] and [@doc] build what they list, which no alias here
+   carries, so each is a hole in the inventory (Codex review on PR #1027). *)
 let running_heads = [ "rule"; "alias"; "test"; "tests"; "library" ]
 
 let compiling_heads =
@@ -324,16 +343,7 @@ let compiling_heads =
     "foreign_library";
   ]
 
-let inert_heads =
-  [
-    "copy_files";
-    "copy_files#";
-    "dirs";
-    "data_only_dirs";
-    "vendored_dirs";
-    "install";
-    "documentation";
-  ]
+let inert_heads = [ "copy_files"; "copy_files#"; "dirs"; "data_only_dirs"; "vendored_dirs" ]
 
 (** One stanza, as the closure reads it: run, and -- for a head that compiles -- compiled, which is
     a stanza of its own here, seeded for every batch. *)
@@ -601,8 +611,9 @@ let reached stanzas targets =
           | Compiles -> ()
           | Runs ->
               if in_scope ~recursive ~root s.dir then
-                (* `default` builds every target in the directory rather than an alias's members. *)
-                if String.equal alias "default" then (
+                (* `default` and `all` build every target in the directory, not an alias's
+                   members. *)
+                if String.equal alias "default" || String.equal alias "all" then (
                   if not (List.is_empty s.attached && List.is_empty s.targets) then add i)
                 else if List.mem s.attached alias ~equal:String.equal then add i))
   in

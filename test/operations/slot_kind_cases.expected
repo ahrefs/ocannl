@@ -137,15 +137,29 @@ build @d/dyn (dynamic-run)               names nothing + reads config
     it reaches the rule on dyn in d, whose dynamic-run action this does not model exactly, so the configuration counts
 an unmodelled dynamic-run reads the configuration: true
 an unmodelled dynamic-run is nothing to a batch not reaching it: true
+build @d/ev (env dependency)             names nothing + reads config
+    it reaches ev in d, whose pform %{env:INPUT=plain} this does not model exactly, so the configuration counts
+an unmodelled env dependency reads the configuration: true
+an unmodelled env dependency is nothing to a batch not reaching it: true
+build @d/sb (sandbox wrapper)            names nothing + reads config
+    it reaches sb in d, whose dependency (sandbox(alias runtest-gpu)) this does not model exactly, so the configuration counts
+an unmodelled sandbox wrapper reads the configuration: true
+an unmodelled sandbox wrapper is nothing to a batch not reaching it: true
 build @n/scans (a top-level include)     names nothing + reads config
     it reads the dune file in d, whose stanza (include …) this does not model exactly, so the configuration counts
 a top-level include beside the tree makes every batch read the configuration: true
 build @n/scans (a cram test)             names nothing + reads config
     it reads the dune file in d, whose stanza (cram …) this does not model exactly, so the configuration counts
 a cram test beside the tree makes every batch read the configuration: true
+build @n/scans (an install stanza)       names nothing + reads config
+    it reads the dune file in d, whose stanza (install …) this does not model exactly, so the configuration counts
+an install stanza beside the tree makes every batch read the configuration: true
 build @n/scans (a preprocessing action)  names nothing + reads config
     it compiles helper in d, whose preprocessing action this does not model exactly, so the configuration counts
 a preprocessing action beside the tree makes every batch read the configuration: true
+build @@d/probe (a directory target)     names nothing + reads config
+    it reaches the rule producing * in d, which reads the configuration
+a directory target reaches the reader: true
 build @@d/probe (a character-class glob) names nothing + reads config
     it reaches the rule producing a.actual in d, which reads the configuration
 a character-class glob reaches the reader: true
