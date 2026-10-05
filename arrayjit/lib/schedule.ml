@@ -6227,6 +6227,35 @@ let lane_preamble_reduction_for (limits : Backend_intf.hardware_limits) =
       if limits.Backend_intf.lane_scalar_recompute_cheap then Preamble_cooperative
       else Preamble_refused
 
+(* How the default GPU schedule weighs its lane geometry -- config [gpu_serial_lanes]
+   (gh-ocannl-1167): taken where a kernel admits it, and a reason for fission to cut a kernel
+   ([cut]); taken where a kernel admits it, but no reason to cut ([admitted]); never taken
+   ([off]). *)
+type serial_lanes = Lanes_cut | Lanes_admitted | Lanes_off [@@deriving sexp_of, equal]
+
+let gpu_serial_lanes () =
+  match
+    String.lowercase
+      (String.strip (Utils.get_global_arg ~arg_name:"gpu_serial_lanes" ~default:"auto"))
+  with
+  | "auto" -> None
+  | "cut" -> Some Lanes_cut
+  | "admitted" -> Some Lanes_admitted
+  | "off" -> Some Lanes_off
+  | other -> invalid_arg ("gpu_serial_lanes: expected auto, cut, admitted or off, got " ^ other)
+
+(* [auto] resolves from the same economics as {!lane_preamble_reduction_for}. Every lane recomputes
+   its nest's per-pair scalar preamble, which the plain plan pays once per thread over its channel
+   loop. Where that is cheap (Metal, CUDA) lanes are worth a kernel boundary. Where it is not (HIP,
+   gfx1151) the forward value pass still wins on lanes in its own kernel -- its plain plan walks the
+   whole row in one thread -- but the fused backward's dV loses: cut from dK to keep its lanes, it
+   took 2.30 ms beside dK's 1.03 ms, where the two merged on the plain plan take 1.72 ms
+   (gh-ocannl-1167). *)
+let serial_lanes_for (limits : Backend_intf.hardware_limits) =
+  match gpu_serial_lanes () with
+  | Some mode -> mode
+  | None -> if limits.Backend_intf.lane_scalar_recompute_cheap then Lanes_cut else Lanes_admitted
+
 (* Lane geometry (gh-ocannl-1003 stage 1). A nest whose parallel loop sits under a serial loop past
    a lane-uniform preamble -- the online-softmax hoist's value pass, [for (b, s, h) { for t { p :=
    P[s, t]; for e { O[s, e] += p * V[t, e] } } }] -- has a plain path that stops at the preamble, so
@@ -6252,21 +6281,26 @@ let lane_preamble_reduction_for (limits : Backend_intf.hardware_limits) =
    plan's [standard_threads]. Cheap to ask of every kernel: without a nest whose lane path is longer
    than its plain path, it runs no analysis. GPU only: the CPU preset parallelizes one outermost
    loop across pool chunks, where a lane loop would only add structure that runs serially inside a
-   chunk. *)
+   chunk. Not taken at all unless [enabled] ({!serial_lanes_for}, gh-ocannl-1167). *)
 let lane_geometry ~block_size ~min_parallel ~(limits : Backend_intf.hardware_limits)
-    ~standard_threads ~(preamble_reduction : lane_preamble_reduction Lazy.t)
-    (opt : Low_level.optimized) : schedule option =
+    ~standard_threads ~(enabled : bool Lazy.t)
+    ~(preamble_reduction : lane_preamble_reduction Lazy.t) (opt : Low_level.optimized) :
+    schedule option =
   let open Low_level in
-  (* The treatment is asked for only where the kernel holds a preamble reduction on some lane path
-     -- only the fused backward mints one -- so its configuration is read by exactly the programs it
-     can affect (gh-ocannl-1124). *)
-  let has_reductions =
+  (* Here both treatments are asked for only where they can matter -- the gate where some statement
+     has a lane path at all, the preamble treatment where that path holds a preamble reduction (only
+     the fused backward mints one, gh-ocannl-1124). [gpu_serial_lanes] is also read by
+     {!fission_keep_mapping} on the first merge probe of every fissioned GPU routine. *)
+  let lane_path_beyond shorter =
     List.exists (flat_lines [ opt.llc ]) ~f:(fun stmt ->
         List.length (path_loops ~lanes:true ~preamble_reductions:true stmt)
-        > List.length (path_loops ~lanes:true stmt))
+        > List.length (shorter stmt))
   in
+  let enabled = lane_path_beyond (fun stmt -> path_loops stmt) && Lazy.force enabled in
   let preamble_reduction =
-    if has_reductions then Lazy.force preamble_reduction else Preamble_refused
+    if enabled && lane_path_beyond (fun stmt -> path_loops ~lanes:true stmt) then
+      Lazy.force preamble_reduction
+    else Preamble_refused
   in
   let preamble_reductions =
     match preamble_reduction with
@@ -6277,9 +6311,10 @@ let lane_geometry ~block_size ~min_parallel ~(limits : Backend_intf.hardware_lim
   let loop = function For_loop fc -> Some (fc.index, fc.to_ + 1) | _ -> None in
   if
     not
-      (List.exists (flat_lines [ opt.llc ]) ~f:(fun stmt ->
-           List.length (path_loops ~lanes:true ~preamble_reductions stmt)
-           > List.length (path_loops stmt)))
+      (enabled
+      && List.exists (flat_lines [ opt.llc ]) ~f:(fun stmt ->
+          List.length (path_loops ~lanes:true ~preamble_reductions stmt)
+          > List.length (path_loops stmt)))
   then None
   else
     match
@@ -6420,7 +6455,7 @@ let fold_mma_schedule ~(limits : Backend_intf.hardware_limits) (opt : Low_level.
               (launch_geometry_of_dims (Low_level.launch_dims folded.Low_level.llc))))
         [ op ]
 
-let default_gpu_presets ?block_size ?min_parallel ?workgroup_fill ?preamble_reduction
+let default_gpu_presets ?block_size ?min_parallel ?workgroup_fill ?preamble_reduction ?lanes
     ?(limits = Backend_intf.no_hardware_limits) (opt : Low_level.optimized) : schedule =
   let open Low_level in
   let block_size =
@@ -6553,20 +6588,25 @@ let default_gpu_presets ?block_size ?min_parallel ?workgroup_fill ?preamble_redu
   in
   Option.value ~default:standard
     (lane_geometry ~block_size ~min_parallel ~limits ~standard_threads
+       ~enabled:
+         (match lanes with
+         | Some lanes -> Lazy.from_val lanes
+         | None -> lazy (not (equal_serial_lanes (serial_lanes_for limits) Lanes_off)))
        ~preamble_reduction:
          (match preamble_reduction with
          | Some p -> Lazy.from_val p
          | None -> lazy (lane_preamble_reduction_for limits))
        opt)
 
-let default_gpu ?block_size ?min_parallel ?workgroup_fill ?preamble_reduction
+let default_gpu ?block_size ?min_parallel ?workgroup_fill ?preamble_reduction ?lanes
     ?(limits = Backend_intf.no_hardware_limits) (opt : Low_level.optimized) : schedule =
   (* The block fold on matrix units comes first: its kernel is one fold nest the presets would give
      scalar geometry. *)
   match fold_mma_schedule ~limits opt with
   | Some schedule -> schedule
   | None ->
-      default_gpu_presets ?block_size ?min_parallel ?workgroup_fill ?preamble_reduction ~limits opt
+      default_gpu_presets ?block_size ?min_parallel ?workgroup_fill ?preamble_reduction ?lanes
+        ~limits opt
 
 let default_cpu ?min_parallel (opt : Low_level.optimized) : schedule =
   let min_parallel =
@@ -6604,9 +6644,10 @@ let default_cpu ?min_parallel (opt : Low_level.optimized) : schedule =
     parallelism (see {!aligned_merge}): elementwise chains over one intermediate stay a single
     kernel, while parallelism switches (a batch-parallel producer feeding a reduce-over-batch
     consumer) and alignment-trimming merges still cut. On GPU backends every merge -- dependent or
-    conflict-free -- is also judged against the schedule its statements would actually receive
-    ({!keeps_mapping}, gh-ocannl-1126): one that costs a statement its own mapping keeps the
-    boundary.
+    conflict-free -- is also judged against the default GPU schedule ({!keeps_mapping},
+    gh-ocannl-1126): one that costs a statement its own mapping keeps the boundary. The probe is the
+    schedule the kernel will receive under [gpu_serial_lanes = cut]; under [admitted] or [off] it
+    leaves out the lane geometry, so no boundary is kept for lanes (gh-ocannl-1167).
 
     Segmentation is conservative and total (no [Bail]): a statement opaque to the analysis
     ([Staged_compilation], barriers, pre-annotated loops) or one the annotator can never cover (bare
@@ -7031,17 +7072,19 @@ let gpu_fission_keep_mapping =
   lazy (Utils.get_global_flag ~default:true ~arg_name:"gpu_fission_keep_mapping")
 
 (* The schedule-aware half of the merge decision (gh-ocannl-1126): [mapping] is the per-segment
-   schedule the kernel will actually receive -- the default GPU schedule, lane plans and lane
-   geometry included -- and a merge the legality rules admit is still refused when some statement of
-   the merged kernel gets less of its own mapping than it gets alone: fewer groups, or fewer active
-   threads. Both kinds of merge are judged: a dependent one whose alignment trims a statement's
-   chain to the common prefix (the composed [v.grad] merged with [w_v.grad], which reduces over the
-   positions [v.grad]'s blocks own), and an independent one whose kernel no longer admits a
-   statement's geometry (the fused dV lane nest merged with dK, which is no lane nest; the lm_head
-   logits beside the row max that trims them). A segment's statements were each admitted under this
-   test, so comparing every statement with its standalone mapping is the same as comparing with the
-   segment before the extension. Per statement, never the kernel's largest thread count: one
-   well-mapped nest does not pay for another's lost one.
+   default GPU schedule ({!fission_keep_mapping}): the schedule the kernel will actually receive,
+   lane plans and lane geometry included, under [gpu_serial_lanes = cut]; without the lane geometry
+   under [admitted] or [off], so no boundary is kept for lanes (gh-ocannl-1167) -- and a merge the
+   legality rules admit is still refused when some statement of the merged kernel gets less of its
+   own mapping than it gets alone: fewer groups, or fewer active threads. Both kinds of merge are
+   judged: a dependent one whose alignment trims a statement's chain to the common prefix (the
+   composed [v.grad] merged with [w_v.grad], which reduces over the positions [v.grad]'s blocks
+   own), and an independent one whose kernel no longer admits a statement's geometry (under [cut],
+   the fused dV lane nest merged with dK, which is no lane nest; the lm_head logits beside the row
+   max that trims them). A segment's statements were each admitted under this test, so comparing
+   every statement with its standalone mapping is the same as comparing with the segment before the
+   extension. Per statement, never the kernel's largest thread count: one well-mapped nest does not
+   pay for another's lost one.
 
    A mapping cut needs no retest after scope-local resolution ({!resolve_scope_crossings}). A cut
    whose new segment cannot replicate its scope-local definitions -- a unit between the definition
@@ -7369,8 +7412,13 @@ let promote_statement_crossing_locals plc (stmts : Low_level.t list) :
               (tn, prior) :: undo)
             else undo))
 
+(* Where lanes are only [Lanes_admitted] (gh-ocannl-1167), the merge is judged on the plain plans: a
+   merge that costs a nest nothing but its lanes is taken, and the kernel it lands in keeps them
+   wherever it still admits them. *)
 let fission_keep_mapping ~is_gpu ~limits =
-  if is_gpu && Lazy.force gpu_fission_keep_mapping then Some (fun opt -> default_gpu ~limits opt)
+  if is_gpu && Lazy.force gpu_fission_keep_mapping then
+    let lanes = lazy (equal_serial_lanes (serial_lanes_for limits) Lanes_cut) in
+    Some (fun opt -> default_gpu ~lanes:(Lazy.force lanes) ~limits opt)
   else None
 
 let fission_scheduled ?(promote_locals = false) ?(arity_cuts = false) ?keep_mapping
@@ -7516,8 +7564,18 @@ let default_schedule_fingerprint ~backend_name =
         | Some Preamble_duplicated -> "duplicated"
         | Some Preamble_cooperative -> "cooperative"
       in
+      (* [lane-economics-v1] (gh-ocannl-1167): whether the lane geometry is taken and whether
+         fission cuts for it, per [lanes]; [auto] resolves per device from the limits, as [preamble]
+         does. *)
+      let lanes =
+        match gpu_serial_lanes () with
+        | None -> "auto"
+        | Some Lanes_cut -> "cut"
+        | Some Lanes_admitted -> "admitted"
+        | Some Lanes_off -> "off"
+      in
       [%string
-        "gpu:policy=small-leading-v1+lanes-v1+fold-mma-v1+lane-plans-v1+lane-reductions-v1:fission=%{fission#Bool}:keep_mapping=%{keep#Bool}:block_size=%{bs}:min_parallel=%{mp}:workgroup_fill=%{fill#Int}:preamble=%{preamble}"]
+        "gpu:policy=small-leading-v1+lanes-v1+fold-mma-v1+lane-plans-v1+lane-reductions-v1+lane-economics-v1:fission=%{fission#Bool}:keep_mapping=%{keep#Bool}:block_size=%{bs}:min_parallel=%{mp}:workgroup_fill=%{fill#Int}:preamble=%{preamble}:serial_lanes=%{lanes}"]
     else
       let mp =
         String.strip (Utils.get_global_arg ~arg_name:"cpu_schedule_min_parallel" ~default:"16384")

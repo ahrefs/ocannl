@@ -296,7 +296,10 @@ type hardware_limits = {
           by 2-9%; false on HIP (gfx1151), where the same lanes cost 7-20% against the plain dK
           plan. [false] -- today's behaviour, the plain plan -- wherever unmeasured, and on the C
           backends, which run no lane geometry. Read by the default GPU schedule's
-          [gpu_lane_preamble_reduction = auto]. *)
+          [gpu_lane_preamble_reduction = auto] and its [gpu_serial_lanes = auto] (gh-ocannl-1167):
+          where false, the stage-1 lanes of gh-ocannl-1003 are still taken in a kernel that admits
+          them (the forward value pass won on gfx1151), but are no reason to cut a kernel (the fused
+          backward's dV cut from dK for them lost to the merged plain kernel). *)
   online_softmax_auto_block : int;
       (** Automatic key-block size for [online_softmax_block=auto] (gh-ocannl-1171); 0 selects the
           two-pass rewrite. Metal and CPU keep 16 from the gh-ocannl-1003 block sweep

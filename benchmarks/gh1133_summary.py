@@ -21,9 +21,12 @@ def training_output(out, name):
 
 def summary(out, treatments, ref_treatment, ref_all=""):
     treatments = treatments.split()
+    # The cells of exactly the treatments the driver ran: its TREATMENTS list, not a second copy of
+    # the names its flags_of knows.
+    cell_name = re.compile(r"(\w+)-(gpt2_mini\w*)-(%s)-(r\d+)\.out" % "|".join(map(re.escape, treatments)))
     cells, missing = {}, []
     for name in sorted(os.listdir(out)):
-        m = re.fullmatch(r"(\w+)-(gpt2_mini\w*)-(base|b?(?:fold)?(?:d1)?(?:fill\d+|keep|legacy|pre(?:refused|duplicated|cooperative)))-(r\d+)\.out", name)
+        m = cell_name.fullmatch(name)
         if not m:
             continue
         rec = None

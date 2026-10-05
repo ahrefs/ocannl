@@ -740,8 +740,10 @@ let cache_file ~dir ~key = Stdlib.Filename.concat dir (sanitize key ^ ".sexp")
    default segmentation it stands for changed, so a regime-2 fissioned winner would replay into a
    segmentation it was not saved against. 4: the default GPU schedule gives lanes to nests with a
    preamble reduction (gh-ocannl-1124, config [gpu_lane_preamble_reduction], a [fission] input) --
-   again empty under the defaults while the default mappings, hence segmentation, changed. *)
-let cache_regime_version = 4
+   again empty under the defaults while the default mappings, hence segmentation, changed. 5: the
+   lane geometry is gated per device (gh-ocannl-1167, config [gpu_serial_lanes], a [fission] input):
+   HIP's default mappings, hence segmentation, changed under unchanged keys. *)
+let cache_regime_version = 5
 let regime_stamp_filename = ".ocannl-schedule-cache-regime"
 let regime_lock_filename = ".ocannl-schedule-cache.lock"
 let regime_stamp_file dir = Stdlib.Filename.concat dir regime_stamp_filename

@@ -611,8 +611,10 @@
  (deps
   ocannl_config
   (env_var OCANNL_BACKEND)
-  ; The fused backward's dK and dQ nests take lanes on a GPU backend per this key (gh-ocannl-1124).
-  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION))
+  ; The fused backward's dK and dQ nests take lanes on a GPU backend per these keys
+  ; (gh-ocannl-1124, gh-ocannl-1167).
+  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_SERIAL_LANES))
  (modules online_softmax)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
@@ -4217,6 +4219,7 @@
   ; (gh-ocannl-1149).
   (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_SERIAL_LANES)
   (env_var OCANNL_GPU_FISSION_KEEP_MAPPING)
   (env_var OCANNL_AUTOMATIC_CPU_SCHEDULE)
   (env_var OCANNL_AUTOMATIC_GPU_SCHEDULE)
@@ -4246,6 +4249,7 @@
   (env_var OCANNL_BACKEND)
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_SERIAL_LANES)
   (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
@@ -4277,6 +4281,7 @@
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_SERIAL_LANES)
   (env_var OCANNL_GPU_FISSION_KEEP_MAPPING)
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
@@ -4300,6 +4305,7 @@
   (env_var OCANNL_BACKEND)
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_SERIAL_LANES)
   (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
@@ -4324,6 +4330,7 @@
   (env_var OCANNL_BACKEND)
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_SERIAL_LANES)
   (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
@@ -4372,6 +4379,7 @@
   (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_FISSION_KEEP_MAPPING)
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_SERIAL_LANES)
   (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
@@ -4462,6 +4470,7 @@
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_SERIAL_LANES)
   (env_var OCANNL_GPU_FISSION_KEEP_MAPPING)
   (env_var OCANNL_AUTOMATIC_CPU_SCHEDULE)
   (env_var OCANNL_AUTOMATIC_GPU_SCHEDULE)
@@ -4501,6 +4510,7 @@
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
   (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_SERIAL_LANES)
   (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
@@ -4600,6 +4610,7 @@
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_SERIAL_LANES)
   (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_SCHEDULE_FISSION)
   (env_var OCANNL_BACKEND)
@@ -4680,6 +4691,7 @@
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
   (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_SERIAL_LANES)
   (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
@@ -4729,6 +4741,7 @@
   (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_FISSION_KEEP_MAPPING)
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_SERIAL_LANES)
   (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
@@ -4774,6 +4787,7 @@
   (env_var OCANNL_BACKEND)
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_SERIAL_LANES)
   (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
@@ -4838,6 +4852,7 @@
   (env_var OCANNL_BACKEND)
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_SERIAL_LANES)
   (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
@@ -4864,6 +4879,7 @@
   ocannl_config
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_SERIAL_LANES)
   (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
@@ -5490,6 +5506,7 @@
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_SERIAL_LANES)
   (env_var OCANNL_SCHEDULE_FISSION)
   (env_var OCANNL_SCHEDULE_LOG_LAUNCHES)
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
@@ -5531,6 +5548,7 @@
   (env_var OCANNL_BACKEND)
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_SERIAL_LANES)
   (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
@@ -6061,6 +6079,7 @@
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
   (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_SERIAL_LANES)
   (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
@@ -6087,6 +6106,7 @@
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
   (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_SERIAL_LANES)
   (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
@@ -7646,8 +7666,10 @@
   (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   ocannl_config
   (env_var OCANNL_BACKEND)
-  ; The fused backward's dK and dQ nests take lanes on a GPU backend per this key (gh-ocannl-1124).
+  ; The fused backward's dK and dQ nests take lanes on a GPU backend per these keys
+  ; (gh-ocannl-1124, gh-ocannl-1167).
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_SERIAL_LANES)
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
   (env_var OCANNL_LARGE_MODELS)
@@ -7701,6 +7723,7 @@
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_SERIAL_LANES)
   (env_var OCANNL_GPU_FISSION_KEEP_MAPPING)
   (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
@@ -7733,6 +7756,7 @@
   (env_var OCANNL_LOG_LEVEL)
   ; Leg 9 reads the configured default (auto).
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_SERIAL_LANES)
   (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)

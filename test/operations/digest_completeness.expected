@@ -75,6 +75,7 @@ keyed: fission -- it decides the default fission segmentation on GPU backends: s
   gpu_schedule_block_size
   gpu_schedule_min_parallel
   gpu_schedule_workgroup_fill
+  gpu_serial_lanes
 
 search-shaping -- it defines the untuned default pipeline, which a search seeds from and reports against; a cached winner carries its own ops and replays without consulting it ([Schedule.default_schedule_fingerprint] records these for the [default_ms] diagnostic)
   automatic_cpu_schedule
