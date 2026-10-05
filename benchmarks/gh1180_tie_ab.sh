@@ -88,6 +88,8 @@ for case in cases:
     rounds = cells[case]
     prec, n, bm, bk, reps, rna, rnb = case.split('-')
     rna, rnb = int(rna[2:]), int(rnb[2:])
+    if rna == rnb:
+        bad.append(f'{case}: rn{rna} paired with itself -- both sides read one cell')
     if sorted(rounds) != list(range(expected)):
         bad.append(f'{case}: rounds {sorted(rounds)}, expected 0..{expected - 1}')
     for variant in ('packmma', 'packmma_par'):
