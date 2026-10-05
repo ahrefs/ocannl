@@ -21,6 +21,7 @@ the same sources in another order match: true
 the stanza's scanner sources are exactly Refusal_control_manifest.sources, each once: true
 
 Scanner refusal formats and the permanent control suite assigned to their source:
+doc_examples_extract.ml has exactly the explicitly assigned refusal controls: true
 atomic_file_rename_scan.ml has exactly the explicitly assigned refusal controls: true
 atomic_file_rename_scan.ml: [scanner-refusal:7191f5e19a3640926ad61aeb2d7a349e] source-generation input has (direct failure) is catalogued beside atomic_file_rename_scan.expected, atomic_file_rename_scan_control.expected: true
 atomic_file_rename_scan.ml: [scanner-refusal:c045a29a4e2f18a646143f07d6ec923b] missing corpus section (direct failure) is catalogued beside atomic_file_rename_scan.expected, atomic_file_rename_scan_control.expected: true

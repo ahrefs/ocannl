@@ -15,6 +15,11 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
 
 ## Repository scans
 
+- Selected documentation compiles through `@test/operations/runtest-doc_examples` (gh-ocannl-660).
+  `docs/executable_examples.md` owns the annotation grammar, proposal-history policy and coverage
+  limits; `doc_examples.inventory` records unchecked blocks too. Compilation proves API/type/PPX
+  validity, while behavioral claims still owe source or executed-test evidence.
+
 - A repository-wide scanning check (`config_dep_completeness`, `env_var_deps`, `cache_dir_ignores`)
   is only as good as the distance between what it asserts and what it claims, and a proxy that
   coincides with the property today reads exactly like the property. The working test is: name a
@@ -135,8 +140,8 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   three full CI cycles over an unchanged topic diff before it). The gate reads whatever the head is:
   a merge that adds no commit to the branch restarts nothing, while any commit that moves the head —
   a conflict resolution, a rebase, a merge of the base — waits for its own green run, conflicts or
-  not. A diff the `ci` path filter ignores entirely (`docs/**`) gets no run at all; there an absent
-  check is the filter's answer, not a missing verdict. So **a green head merges as it is**: the
+  not. Documentation edits run CI too: selected snippets are compiler inputs (gh-ocannl-660),
+  so an absent check is not a documentation exemption. So **a green head merges as it is**: the
   `--merge` merge commit combines it with the newer base, and the PR's run already built
   `refs/pull/N/merge`, the head merged with the base as it stood then. An overlap between the base's
   advance and the PR's own files is information, not a reason to rebase — ship-pr's `merge` prints

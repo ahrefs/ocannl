@@ -46,6 +46,8 @@ module Verdict_provenance = Verdict_provenance
     can rest on, through bindings, helpers, wrappers, matches and modules, and which populations are
     witnessed non-empty when it holds. *)
 
+module Doc_examples_scan = Doc_examples_scan
+
 module Agent_notes_scan = Agent_notes_scan
 (** Reading [docs/agent-notes.md] and [docs/agent-notes/] as structure: bullet integrity, index-hook
     agreement, table shape, reachability from the index, and repetition across files. *)

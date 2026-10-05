@@ -8,11 +8,8 @@ on:
   push:
     branches:
       - master
-    paths-ignore:
-      - "docs/**"
+  # Markdown contains compiled examples; documentation edits need this gate too.
   pull_request:
-    paths-ignore:
-      - "docs/**"
   # Daily, 03:00 UTC, so a scheduled red spans about one day of merges: it
   # carries the only Windows and OCaml-floor coverage, and at 50-150 merges a
   # span (the twice-weekly cadence before this) a red named no culprit anyone

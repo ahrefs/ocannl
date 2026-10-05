@@ -52,6 +52,30 @@ def expression(value, event, windows=False):
                 dict(event=event, windows=windows, fromJSON=json.loads))
 
 
+def documentation_triggers(text):
+    # These are compiler inputs now. Ask the actual workflow's event blocks,
+    # rather than maintain a second list of selected documentation paths.
+    trigger = text.split('\non:\n', 1)[1].split('\nconcurrency:', 1)[0]
+    for event in ('push', 'pull_request'):
+        blocks = re.findall(r'^  ' + event + r': *\n(.*?)(?=^  [a-z_]+:|\Z)',
+                            trigger, re.M | re.S)
+        assert len(blocks) == 1, event + ' trigger absent, repeated or unsupported'
+        # Fail on unsupported fields/quoting rather than infer that an unread
+        # paths filter is absent. The current trigger dialect is deliberately small.
+        branches = False
+        for line in blocks[0].splitlines():
+            if not line.strip() or line.lstrip().startswith('#'):
+                continue
+            if event == 'push' and line == '    branches:':
+                assert not branches, 'repeated push branch selection'
+                branches = True
+            elif event == 'push' and branches and re.fullmatch(r'      - .+', line):
+                continue
+            else:
+                raise AssertionError(event + ' trigger has an unsupported field: ' + line)
+
+
+
 def matrix(text, event, windows=False):
     systems = expression(field(text, 'os'), event, windows)
     includes = expression(field(text, 'include'), event, windows)
@@ -108,6 +132,7 @@ def suite_step(text):
 
 
 def controls(text):
+    documentation_triggers(text)
     # Opt-in stays false in the actual dispatch schema, not just this evaluator.
     option = text.split('      windows_only:\n', 1)[1].split('      expected_sha:', 1)[0]
     assert 'default: false' in option, 'fallback must be opt-in'
@@ -121,11 +146,16 @@ def controls(text):
 
 
 controls(source)
+print('PASS documentation compiler inputs are unfiltered on push and PR')
 print('PASS normal, scheduled and explicit Windows fallback matrix selections')
 print('PASS ubuntu main shards are exactly 1/N..N/N, over the aliases ci-shard.sh shards')
 second = '{"os": "ubuntu-latest", "ocaml-compiler": "5.5.x", "suite": "main", "shard": "2/2"},'
 for label, mutant in (
     ('fallback enabled by default', source.replace('default: false', 'default: true')),
+    ('push skips documentation inputs', source.replace('  push:\n', '  push:\n    paths-ignore:\n      - "docs/**"\n', 1)),
+    ('PR skips documentation inputs', source.replace('  pull_request:\n', '  pull_request:\n    paths-ignore:\n      - "docs/**"\n', 1)),
+    ('quoted PR documentation filter', source.replace('  pull_request:\n', '  pull_request:\n    "paths-ignore": ["docs/**"]\n', 1)),
+    ('repeated PR trigger hides documentation filter', source.replace('  pull_request:\n', '  pull_request:\n  pull_request:\n    paths-ignore: ["docs/**"]\n', 1)),
     ('automatic Windows jobs', source.replace("github.event_name == 'schedule'", "github.event_name != 'workflow_dispatch'")),
     ('schedule loses coverage', source.replace("github.event_name == 'schedule'", "github.event_name == 'never'")),
     ('schedule narrowed by dispatch input', source.replace("github.event_name == 'workflow_dispatch' && inputs.windows_only", 'inputs.windows_only')),

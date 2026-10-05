@@ -48,7 +48,7 @@ This separation enables:
 
 A tensor in OCANNL (`Tensor.t`) contains:
 
-```ocaml
+```ocaml doc-skip illustrative partial Tensor record; see tensor/tensor.ml
 type t = {
   params : (t, comparator_witness) Base.Set.t;  (* Learnable parameters *)
   forward : comp;                                (* Forward computation *)
@@ -273,7 +273,9 @@ The `Context` module provides a simplified interface for backend management, int
 
 ### Context Creation
 
-```ocaml
+```ocaml doc-check=context_creation
+open Ocannl.Nn_blocks.DSL_modules
+
 (* Automatic backend selection (respects OCANNL_BACKEND env var) *)
 let ctx = Context.auto ()
 
@@ -285,16 +287,20 @@ let ctx = Context.cpu ~threads:4 ()     (* Multi-threaded CPU *)
 
 ### Compilation and Execution
 
-```ocaml
-(* Compile a computation *)
-let ctx, routine = Context.compile ctx computation bindings
+```ocaml doc-check=context_compile
+open Ocannl.Nn_blocks.DSL_modules
 
-(* Execute the routine *)
-let ctx = Context.run ctx routine
+let compile_and_run ctx computation bindings =
+  (* Compile a computation *)
+  let ctx, routine = Context.compile ctx computation bindings in
 
-(* Routine metadata is read straight off the record (private: readable, not constructible) *)
-let bindings = routine.Context.bindings
-let ctx = routine.Context.context
+  (* Execute the routine *)
+  let ctx = Context.run ctx routine in
+
+  (* Routine metadata is read straight off the record (private: readable, not constructible) *)
+  let bindings = routine.Context.bindings in
+  let routine_context = routine.Context.context in
+  ctx, bindings, routine_context
 ```
 
 ### Node Initialization Tracking

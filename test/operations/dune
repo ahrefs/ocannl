@@ -128,6 +128,9 @@
   (alias runtest-codegen_text_inventory)
   (alias runtest-codegen_text_inventory_control)
   (alias runtest-agent_notes_structure)
+  (alias runtest-doc_examples)
+  (alias runtest-doc_examples_scan_cases)
+  (alias runtest-doc_examples_compile_control)
   (alias runtest-changelog_unreleased_scan)
   (alias runtest-agents_md_size)
   (alias runtest-config_usage_scan)
@@ -265,6 +268,8 @@
   (alias runtest-flip_abandonment)
   (alias runtest-model_default_placements)
   (alias runtest-agent_notes_structure)
+  (alias runtest-doc_examples)
+  (alias runtest-doc_examples_scan_cases)
   (alias runtest-changelog_unreleased_scan)
   (alias runtest-agents_md_size)
   (alias runtest-codegen_text_inventory)
@@ -2605,6 +2610,63 @@
  (action
   (diff test_config_consistency.expected test_config_consistency.actual)))
 
+; Selected Markdown examples are compiled with the real library and PPX. No snippet is run.
+
+(executable
+ (name doc_examples_extract)
+ (modules doc_examples_extract)
+ (libraries base stdio test_utils))
+
+(rule
+ ; ocannl-backend: none -- extracts Markdown as text; no snippet or backend executes.
+ (targets doc_examples.ml doc_examples.coverage doc_examples.inventory)
+ (alias runtest-doc_examples)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (source_tree ../..)
+  (sandbox always))
+ (action
+  (run %{dep:doc_examples_extract.exe} %{workspace_root})))
+
+(library
+ (name doc_examples_checked)
+ (package neural_nets_lib)
+ (wrapped false)
+ (modules doc_examples)
+ (libraries base stdio ocannl)
+ ; Documentation may intentionally demonstrate shadowing and unused values.
+ (flags :standard -w -a)
+ (preprocess
+  (pps ppx_ocannl ppx_here)))
+
+(rule
+ (alias runtest-doc_examples)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  .doc_examples_checked.objs/byte/doc_examples.cmi)
+ (action
+  (diff doc_examples.expected doc_examples.coverage)))
+
+(test
+ ; ocannl-backend: none -- pure Markdown parser controls.
+ (name doc_examples_scan_cases)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules doc_examples_scan_cases)
+ (libraries base test_utils arrayjit.verdict))
+
+(test
+ ; ocannl-backend: none -- invokes ocamlc on extracted API examples; it executes no backend.
+ (name doc_examples_compile_control)
+ (package neural_nets_lib)
+ (deps ocannl_config %{lib:arrayjit.context:context.cmi})
+ (modules doc_examples_compile_control)
+ (libraries base stdio unix test_utils arrayjit.verdict)
+ (action
+  (run %{test} %{ocamlc} %{lib:arrayjit.context:context.cmi})))
+
 ; How both consistency scanners read a source file, exercised on hostile input rather than only
 ; on whatever the library sources happen to contain today.
 
@@ -2704,6 +2766,9 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
+  doc_examples_extract.ml
+  doc_examples_scan_cases.expected
+  doc_examples_compile_control.expected
   atomic_file_rename_scan.ml
   atomic_file_rename_scan.expected
   atomic_file_rename_scan_control.expected
@@ -2772,6 +2837,8 @@
  (action
   (run
    %{test}
+   doc_examples_extract.ml
+   doc_examples_scan_cases.expected,doc_examples_compile_control.expected
    atomic_file_rename_scan.ml
    atomic_file_rename_scan.expected,atomic_file_rename_scan_control.expected
    agents_md_size.ml
