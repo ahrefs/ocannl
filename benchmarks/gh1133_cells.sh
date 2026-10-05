@@ -111,7 +111,7 @@ echo "gh1133: $(date -u +%FT%TZ) root=$root base=$base out=$out cap=$cap backend
 echo "gh1133: fixtures: $fixtures; treatments: $treatments; ref: $ref; kernel table: $kernel_table; fixture dir: $fixture_dir; steps: $*"
 built=0 proven=0 failed=0
 
-runner_root() { case $1 in base | b[!a]*) echo "$base" ;; *) echo "$root" ;; esac; }
+runner_root() { case $1 in base | b[!a]* | bar[1-9]*) echo "$base" ;; *) echo "$root" ;; esac; }
 
 flags_of() {
   case $1 in
@@ -131,7 +131,7 @@ flags_of() {
       local inner
       inner=$(flags_of "${1#fold}") || return 1
       echo "$inner --ocannl_online_softmax_block=16" ;;
-    b[!a]*) flags_of "${1#b}" ;;
+    b[!a]* | bar[1-9]*) flags_of "${1#b}" ;;
     d1*)
       local rest
       rest=$(flags_of "${1#d1}") || return 1
