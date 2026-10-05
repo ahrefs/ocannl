@@ -1534,7 +1534,19 @@ let () =
       String.is_suffix
         (Option.value_exn
            (SC.cache_key ~timing_identity ~objective:"queued" ~limits ~capabilities canon ~backend))
-        ~suffix:"-tqueued-v2");
+        ~suffix:"-tqueued-v3");
+  p_all "CUDA and HIP queued keys cannot replay the prior timing-policy generation"
+    [ "cuda"; "hip" ] ~f:(fun backend ->
+      let key objective =
+        SC.cache_key ~timing_identity ~objective ~limits ~capabilities canon ~backend
+      in
+      not (Option.equal String.equal (key "queued") (key "queued-v2")));
+  p_all "isolated keys retain their unchanged timing generation" [ "cuda"; "hip"; "cc"; "metal" ]
+    ~f:(fun backend ->
+      String.is_suffix
+        (Option.value_exn
+           (SC.cache_key ~timing_identity ~objective:"isolated" ~limits ~capabilities canon ~backend))
+        ~suffix:"-tisolated");
   Verdict.p_all "cc and Metal queued keys retain their unchanged timing generation"
     [ "cc"; "multidev_cc"; "metal" ] ~f:(fun backend ->
       String.is_suffix

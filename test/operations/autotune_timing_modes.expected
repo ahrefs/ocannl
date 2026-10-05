@@ -112,6 +112,8 @@ queued timing either reports contention or stays within the 64-batch dispatch ca
 the cache key is stable within one objective: true
 the cache key separates the two timing objectives: true
 CUDA and HIP queued keys carry the new timing-policy generation: true
+CUDA and HIP queued keys cannot replay the prior timing-policy generation: true
+isolated keys retain their unchanged timing generation: true
 cc and Metal queued keys retain their unchanged timing generation: true
 an omitted objective keys as the configured one: true
 the key's objective spelling round-trips through the mode: true

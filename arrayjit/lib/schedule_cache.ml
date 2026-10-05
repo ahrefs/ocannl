@@ -682,14 +682,14 @@ let cache_key ?objective ~timing_identity ~(limits : Backend_intf.hardware_limit
     canonical ~backend =
   Option.map timing_identity ~f:(fun identity ->
       let objective = match objective with Some o -> sanitize o | None -> objective_tag () in
-      (* gh-ocannl-892 changes what CUDA/HIP [queued] measures: the old depth-200 winner was ranked
-         on a 1--2.5 ms contention window, while generation 2 restores the ~10 ms premise. Keep the
-         public setting and entry self-description as [queued], but version its filename identity on
-         exactly the backends whose policy changed so an old winner cannot bypass the new
-         measurement. *)
+      (* Version the CUDA/HIP queued scale so an old winner cannot bypass its repaired calibration.
+         Generation 2 restored the ~10 ms premise from depth-200 windows (gh-ocannl-892); generation
+         3 spends the remaining cap-directed validations, where the projection bound had left sub-5
+         us kernels at 2--5 ms (gh-ocannl-1144). Keep the public setting and entry description as
+         [queued], and change the filename identity only on these backends. *)
       let objective =
         match (String.lowercase backend, objective) with
-        | ("cuda" | "hip"), "queued" -> "queued-v2"
+        | ("cuda" | "hip"), "queued" -> "queued-v3"
         | _ -> objective
       in
       let component = function
