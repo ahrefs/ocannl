@@ -229,6 +229,9 @@ let cases =
     (* A subcommand that runs no test reaches nothing. *)
     ("promote", `Cpu);
     ("clean", `Cpu);
+    (* Any other subcommand may build workspace code: [install] builds what it installs. *)
+    ("install", `Gpu);
+    ("exec ./x.exe", `Gpu);
   ]
 
 (* The whole set, where a GPU answer's backends matter to the width: a suite reaching stanzas that
@@ -312,8 +315,8 @@ let () =
     (String.is_prefix twice ~prefix:"unknown: the dune file in d is unreadable");
   (* The configuration is taken off a batch only on a proof (gh-ocannl-1095, review round 2 on PR
      #1027): a construct the closure does not model exactly on a stanza it reaches makes the batch
-     read the configuration -- the answer every batch had before -- and costs nothing to a batch not
-     reaching it. *)
+     every backend -- what it builds is unread, its named backends included (round 5) -- and costs
+     nothing to a batch not reaching it. *)
   let reason ~dune_files argv =
     match fst (judge ~dune_files argv) with
     | Slot_kind.Reaches { reads_config = Some why; _ } -> why
@@ -338,6 +341,9 @@ let () =
  (alias dyn) (action (dynamic-run ./d.exe)))|dune},
         "build @d/dyn" );
       ("env dependency", {dune|(alias (name ev) (deps %{env:INPUT=plain}))|dune}, "build @d/ev");
+      ( "dependency field mixing a modelled alias with an unmodelled form",
+        {dune|(alias (name mx) (deps (alias gpu-input) (package helper)))|dune},
+        "build @d/mx" );
       ( "sandbox wrapper",
         {dune|(alias (name sb) (deps (sandbox (alias runtest-gpu))))|dune},
         "build @d/sb" );
@@ -353,21 +359,25 @@ let () =
       let why = reason ~dune_files argv in
       printf "%-40s %s\n    %s\n" (argv ^ " (" ^ what ^ ")") shown why;
       p
-        (Printf.sprintf "an unmodelled %s reads the configuration" what)
-        (String.equal shown "names nothing + reads config"
+        (Printf.sprintf "an unmodelled %s is every backend" what)
+        (String.is_prefix shown ~prefix:"unknown: "
         && String.is_substring why ~substring:"does not model exactly");
       let _, beside = judge ~dune_files "build @n/scans" in
       p
         (Printf.sprintf "an unmodelled %s is nothing to a batch not reaching it" what)
         (String.equal beside "names nothing"));
-  (* Holes in what EVERY batch builds read the configuration everywhere: a top-level include (the
-     stanzas it brings in are never read), a head the inventory does not know, and a preprocessing
-     action -- compilation is followed for every batch, which program links which library is not. *)
+  (* Holes in what EVERY batch builds are every backend everywhere: a top-level include (the stanzas
+     it brings in are never read), a head the inventory does not know, and a preprocessing action --
+     compilation is followed for every batch, which program links which library is not. *)
   List.iter
     [
       ("a top-level include", {dune|(include rules.inc)|dune});
       ("a cram test", {dune|(cram (deps ocannl_config))|dune});
       ("an install stanza", {dune|(install (section share) (files out.dat))|dune});
+      ( "a backend flag in a preprocessing action",
+        {dune|(library (name pp_user) (modules pp_user)
+ (preprocess (action (run %{exe:pp.exe} --ocannl_backend=hip %{input-file}))))|dune}
+      );
       ( "a copy_files attached to an alias",
         {dune|(copy_files (alias probe) (files ../g/*.dat))|dune} );
       ("an env setting variables", {dune|(env (_ (env-vars (FOO bar))))|dune});
@@ -389,9 +399,12 @@ let () =
       let _, shown = judge ~dune_files "build @n/scans" in
       let why = reason ~dune_files "build @n/scans" in
       printf "%-40s %s\n    %s\n" ("build @n/scans (" ^ what ^ ")") shown why;
+      (* The property is soundness -- no batch proven to read nothing -- whichever of the two safe
+         answers the shape draws; the golden records which. *)
       p
-        (Printf.sprintf "%s beside the tree makes every batch read the configuration" what)
-        (String.equal shown "names nothing + reads config"));
+        (Printf.sprintf "%s beside the tree leaves no batch proven to read nothing" what)
+        (String.is_prefix shown ~prefix:"unknown: "
+        || String.equal shown "names nothing + reads config"));
   (* The two shapes review round 2 ran end to end, each a configuration reader dune builds first: a
      character-class glob (matched as a glob, everything), and a host-only test whose linked
      library's preprocessing reads a configuration reader's output. *)
@@ -404,6 +417,14 @@ let () =
   in
   List.iter
     [
+      ( "an inferred target on an alias-attached rule",
+        {dune|(executable (name reader) (modules reader))
+(rule
+ (alias generate)
+ (deps ocannl_config (env_var OCANNL_BACKEND))
+ (action (with-stdout-to table.dat (run %{dep:reader.exe}))))
+(alias (name probe) (deps table.dat))|dune},
+        "build @@d/probe" );
       ( "a bare-star glob",
         reader ^ {dune|
 (alias (name probe) (deps (glob_files *)))|dune},
@@ -437,8 +458,9 @@ let () =
         shown
         (reason ~dune_files:[ ("d", dune) ] argv);
       p
-        (Printf.sprintf "%s reaches the reader" what)
-        (String.equal shown "names nothing + reads config"));
+        (Printf.sprintf "%s reaches the reader, or is every backend" what)
+        (String.is_prefix shown ~prefix:"unknown: "
+        || String.equal shown "names nothing + reads config"));
   (* A rule producing a source-like file is taken as always built: anything compiling may need it,
      so a configuration-reading generator makes even the none-only batch read the configuration. *)
   let _, generated =
@@ -546,11 +568,17 @@ let () =
   file "tools/.hidden/dune" "";
   file "tools/sub/dune" "";
   let read = List.map (Slot_kind.dune_files ~root) ~f:fst in
+  (* An ordered-set operator changes what the rest of a directory set means; it is not read. *)
+  Out_channel.write_all
+    (Stdlib.Filename.concat root "dune")
+    ~data:"(data_only_dirs :standard \\ plain)";
+  let refused = match Slot_kind.dune_files ~root with _ -> false | exception Failure _ -> true in
   List.iter !made ~f:(fun p ->
       if Stdlib.Sys.is_directory p then Stdlib.Sys.rmdir p else Stdlib.Sys.remove p);
   printf "dirs: %s\n" (String.concat ~sep:" " (List.map read ~f:(fun d -> "[" ^ d ^ "]")));
   p "the inventory reads where dirs stanzas send dune, and nowhere else"
     (List.equal String.equal read [ ""; ".x"; ".x/keep"; "plain"; "tools/.hidden"; "tools/sub" ]);
+  p "a directory set with an ordered-set operator makes the tree unreadable" refused;
   let live = Slot_kind.dune_files ~root:"../.." in
   List.iter
     [

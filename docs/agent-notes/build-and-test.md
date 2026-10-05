@@ -2926,8 +2926,9 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   directories, generated `runtest-<name>` included; every file a stanza mentions matched by
   basename to any rule's targets; every compilation in the tree and every source-like producer,
   for any batch), and it is trusted only where every stanza in it uses constructs modelled
-  exactly -- any other pform, dependency form, stanza head (`include`, `cram`), `dynamic-run` or
-  preprocessing action counts the configuration, as every batch did before. `slot_kind_cases`
+  exactly -- any other pform, dependency form, stanza head (`include`, `cram`, `install`),
+  `dynamic-run` or preprocessing action makes the batch every backend, and so does a backend set
+  past the configuration (`setenv`/`env-vars` of `OCANNL_BACKEND`, a generated `ocannl_config`). `slot_kind_cases`
   pins the live `scans` answer, so a stanza that breaks the proof shows as a diff. The configurations are resolved, not read off `OCANNL_BACKEND`, because an
   ordinary cc batch leaves it unset: `ocannl_read_config`
   (`test/config`, the same Utils resolution a test run makes) is built and asked from each

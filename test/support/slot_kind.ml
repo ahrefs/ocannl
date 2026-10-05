@@ -38,8 +38,9 @@
     - [runtest]/[test] with plain directories runs [@runtest] under each, and with none under the
       root.
     - Options only from the listed harmless ones, and no [--].
-    - Any other subcommand runs no test and reaches nothing. [exec] is answered before this is asked
-      (its program may pick any backend), and so is a command-line backend flag.
+    - [promote] and [clean] build nothing and reach nothing; any other subcommand is unmodelled
+      ([install] builds what it installs). [exec] is answered before this is asked (its program may
+      pick any backend), and so is a command-line backend flag.
 
     A dune file this cannot read is itself an [Unknown] answer, for the same reason. *)
 
@@ -74,7 +75,7 @@ type stanza = {
   needs : need list;
   inexact : string option;
       (** the first construct in it this does not model exactly, which makes a batch reaching it
-          count the configuration *)
+          every backend *)
   overrides : string option;
       (** a backend it sets for what it runs, past the configuration: a batch reaching it can hold
           any backend *)
@@ -112,12 +113,12 @@ let join dir sub = match (dir, sub) with "", s -> s | d, "" -> d | d, s -> d ^ "
 (** {1 What a batch builds, and when that is proven}
 
     The configuration's backend is taken off a batch only on a PROOF that nothing the batch builds
-    reads it; anything short of a proof counts it, as every batch did before gh-ocannl-1095. Two
-    review rounds on PR #1027 (Codex GPT-6.1 Sol) each found dune shapes a closure over dune's
-    dependency semantics missed, so the claim is the inverted one: the closure below is trusted only
-    where every stanza in it is built from constructs it models EXACTLY, and any other construct
-    makes the batch read the configuration. The named backends are read from the same closure, as
-    before, on a best-effort basis.
+    reads it. Two review rounds on PR #1027 (Codex GPT-6.1 Sol) each found dune shapes a closure
+    over dune's dependency semantics missed, so the claim is the inverted one: the closure below is
+    trusted only where every stanza in it is built from constructs it models EXACTLY. Any other
+    construct makes the batch [Unknown] -- every backend: what it builds is then unread, the
+    backends it names included (review round 5) -- and so does a backend set past the configuration.
+    Within an exact closure, the named backends and the configuration readers are the whole answer.
 
     The closure, seeded by the argv's aliases:
     - an [(alias …)]/[(alias_rec …)] in a dependency field (a stanza's [deps], an inline-test
@@ -338,9 +339,24 @@ let targets_of sexp =
             | Sexp.Atom a -> Option.to_list (pattern_of a)
             | Sexp.List _ -> [ "*" ])
       | None, None ->
-          if List.is_empty (Scan.aliases_of sexp) then
-            List.filter_map (Scan.atoms sexp) ~f:pattern_of
-          else [])
+          (* Inferred from the action, an alias beside it or not (Codex review on PR #1027): the
+             file each writing form writes. *)
+          let rec written = function
+            | Sexp.List
+                [
+                  Sexp.Atom ("with-stdout-to" | "with-stderr-to" | "with-outputs-to" | "write-file");
+                  Sexp.Atom file;
+                  body;
+                ] ->
+                Option.to_list (pattern_of file) @ written body
+            | Sexp.List
+                [ Sexp.Atom ("copy" | "copy#" | "copy-and-add-line-directive"); _; Sexp.Atom file ]
+              ->
+                Option.to_list (pattern_of file)
+            | Sexp.List l -> List.concat_map l ~f:written
+            | Sexp.Atom _ -> []
+          in
+          written sexp)
   | _ -> []
 
 (* A rule target compilation may need without naming it is source-like: any target but these, the
@@ -368,7 +384,8 @@ let data_suffixes =
 let source_named target =
   not (List.exists data_suffixes ~f:(fun suffix -> String.is_suffix target ~suffix))
 
-let source_like target = String.exists target ~f:is_wild || source_named target
+(* A pattern is judged by its suffix too: [*-0-0.log] names logs, [*] or [x.*] anything. *)
+let source_like = source_named
 
 (* The stanza heads the inventory models: the ones that run something on an alias or for a target,
    the ones that compile, and the ones that build nothing a test runs. Not [install] nor
@@ -513,7 +530,16 @@ let views_of ~dir ~named ~reads_config sexp =
     else if not (List.mem compiling_heads head ~equal:String.equal) then
       (* An inert head attaching anything to an alias -- a [copy_files] long form, say -- is a hole
          too: no alias here carries it (Codex review on PR #1027). *)
-      if List.mem running_heads head ~equal:String.equal then []
+      if
+        String.equal head "rule"
+        && Option.is_none (Scan.field sexp "targets")
+        && Option.is_none (Scan.field sexp "target")
+        && List.is_empty (Scan.aliases_of sexp)
+        && List.is_empty (targets_of sexp)
+      then
+        (* A rule on no alias whose targets no writing form names produces what this cannot name. *)
+        [ compiled ~needs:[] (Some "rule whose targets this cannot infer") ]
+      else if List.mem running_heads head ~equal:String.equal then []
       else
         Option.to_list (Option.map (stray_alias sexp) ~f:(fun why -> compiled ~needs:[] (Some why)))
     else
@@ -690,8 +716,9 @@ let target_of w =
   | Some spec -> alias_in ~recursive:false spec
   | None -> Option.bind (String.chop_prefix w ~prefix:"@") ~f:(alias_in ~recursive:true)
 
-(** The targets a dune argv builds: [Ok None] for a subcommand that runs no test, [Error word] for
-    one carrying a word this does not model. *)
+(** The targets a dune argv builds: [Ok None] for a subcommand known to build nothing ([promote],
+    [clean]), [Error word] for one carrying a word this does not model -- any other subcommand
+    included: [install], say, builds what it installs (Codex review on PR #1027). *)
 let targets argv =
   let split ~target rest =
     let ws = words [] rest in
@@ -718,7 +745,9 @@ let targets argv =
           Some
             (if List.is_empty ts then [ Alias { dir = ""; alias = "default"; recursive = true } ]
              else ts))
-  | _ -> Ok None
+  | ("promote" | "clean") :: _ -> Ok None
+  | sub :: _ -> Error sub
+  | [] -> Error "<no subcommand>"
 
 let in_scope ~recursive ~root dir =
   String.equal root dir
@@ -805,12 +834,20 @@ let describe s =
 let dune_files ~root =
   let standard e = not (String.is_prefix e ~prefix:"." || String.is_prefix e ~prefix:"_") in
   let matches args e =
+    (* Every entry is checked before any is matched: an ordered-set operator ([\\], another [:name])
+       changes what the rest means, so a set carrying one is not read at all. *)
+    List.iter args ~f:(function
+      | Sexp.Atom ":standard" -> ()
+      | Sexp.Atom name
+        when not (String.is_prefix name ~prefix:"\\" || String.is_prefix name ~prefix:":") ->
+          ()
+      | other ->
+          failwith
+            (Printf.sprintf "a directory-set entry this does not read: %s" (Sexp.to_string other)));
     List.exists args ~f:(function
       | Sexp.Atom ":standard" -> standard e
       | Sexp.Atom name -> Scan.glob_could_match name ~name:e
-      | other ->
-          failwith
-            (Printf.sprintf "a directory-set entry this does not read: %s" (Sexp.to_string other)))
+      | Sexp.List _ -> false)
   in
   (* The directory stanzas that apply to a directory: its own dune file's, and those a [(subdir …)]
      in an ancestor's scopes to it (Codex review on PR #1027), keyed by directory. *)
@@ -853,12 +890,11 @@ let dune_files ~root =
   under ""
 
 (** What a dune argv can hold. [Reaches] lists in [named] each backend a reached stanza's marker
-    names, once, with the first stanza that names it, and gives in [reads_config] why the
-    configuration counts: the first reached stanza that selects its backend from it, or the first
-    construct in what the batch builds that is not modelled exactly -- [None] only on the proof that
-    nothing it builds reads the configuration, or when it runs no test. [Unknown why] is an argv
-    this does not model or a dune file it could not read, which the caller takes as every backend.
-*)
+    names, once, with the first stanza that names it, and gives in [reads_config] the first reached
+    stanza that selects its backend from the configuration -- [None] only on the proof that nothing
+    it builds reads it, or when it runs nothing. [Unknown why] is an argv this does not model, a
+    dune file it could not read, a construct in what the batch builds that it does not model
+    exactly, or a backend set past the configuration, which the caller takes as every backend. *)
 type answer =
   | Reaches of { named : (string * string) list; reads_config : string option }
   | Unknown of string
@@ -885,11 +921,18 @@ let answer ~dune_files argv =
       | Error why -> Unknown why
       | Ok stanzas -> (
           let found = reached (List.concat (List.rev stanzas)) targets in
-          match List.find found ~f:(fun s -> Option.is_some s.overrides) with
-          | Some s ->
-              Unknown
-                (Printf.sprintf "%s, whose %s sets the backend past the configuration" (describe s)
-                   (Option.value_exn s.overrides))
+          match
+            List.find_map found ~f:(fun s ->
+                match (s.overrides, s.inexact) with
+                | Some o, _ ->
+                    Some
+                      (Printf.sprintf "%s, whose %s sets the backend past the configuration"
+                         (describe s) o)
+                | None, Some c ->
+                    Some (Printf.sprintf "%s, whose %s this does not model exactly" (describe s) c)
+                | None, None -> None)
+          with
+          | Some why -> Unknown why
           | None ->
               let named =
                 List.concat_map found ~f:(fun s ->
@@ -903,14 +946,8 @@ let answer ~dune_files argv =
                 |> List.rev
               in
               let reads_config =
-                Option.first_some
-                  (List.find_map found ~f:(fun s ->
-                       Option.some_if s.reads_config (describe s ^ ", which reads the configuration")))
-                  (List.find_map found ~f:(fun s ->
-                       Option.map s.inexact ~f:(fun construct ->
-                           Printf.sprintf
-                             "%s, whose %s this does not model exactly, so the configuration counts"
-                             (describe s) construct)))
+                List.find_map found ~f:(fun s ->
+                    Option.some_if s.reads_config (describe s ^ ", which reads the configuration"))
               in
               Reaches { named; reads_config }))
 
