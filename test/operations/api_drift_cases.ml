@@ -196,15 +196,20 @@ let () =
       "(library (name lib) (public_name pkg.lib) (modules (:include modules.sexp)))";
       "(library (name lib) (public_name pkg.lib) (flags (:include flags.sexp)))";
       "(executable (name main) (modules %{read-lines:modules.txt}))";
+      "(library (name lib) (public_name pkg.lib) (flags %{read:flags.txt}))";
+      "(include dune.inc)";
     ] ~f:(fun dune ->
       Option.value_map (dune_refusal dune) ~default:false ~f:(fun message ->
           String.is_substring message ~substring:"lib/dune: "
           && String.is_substring message ~substring:"gh-ocannl-1201"));
-  Verdict.p "a bare include atom and an include outside module owners and generators pass"
+  Verdict.p
+    "a bare include atom, a variable named like a read pform and an include outside module owners \
+     and generators pass"
     (Option.is_none
        (dune_refusal
-          "(library (name lib) (public_name pkg.lib) (preprocess (action (run ./pp.exe \
-           :include)))) (rule (deps (:include deps.sexp)) (action (progn)))"));
+          "(library (name lib) (public_name pkg.lib) (preprocess (action (run ./pp.exe :include \
+           %{reader}))) (preprocessor_deps (:reader config))) (rule (deps (:include deps.sexp)) \
+           (action (progn)))"));
   Verdict.p "a selected interface target refuses by name"
     (Option.value_map
        (dune_refusal
@@ -369,6 +374,8 @@ let () =
         "lib/a.ml:2:",
         "value binding" );
       ("module _ = struct\n let () = () [@@warning \"-8\"] end", "lib/a.ml:2:", "value binding");
+      ("let x = 1\nlet (_ [@publish]) = setup ()", "lib/a.ml:2:", "value binding");
+      ("let x = 1\nlet ((() [@publish]), _) = setup ()", "lib/a.ml:2:", "value binding");
       ( "let () =\n let module M = struct let () = () [@@warning \"-8\"] end in ()",
         "lib/a.ml:2:",
         "value binding" );
@@ -390,6 +397,7 @@ let () =
       "module M = struct end [@@publish]";
       "[%%publish let () = setup () [@@publish]]";
       "module _ = struct [%%publish let () = setup () [@@publish]] end";
+      "let () = (setup () [@inline])";
       "type t = A [@@deriving sexp]";
     ] ~f:(fun text -> Option.is_some (refusal "lib/a.ml" text));
   let mixed_before = declarations "lib/a.ml" "let exported = 1 and () = earlier" in

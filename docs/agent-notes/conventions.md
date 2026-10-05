@@ -33,8 +33,9 @@ files.
   change name resolution; inserting an entry does not flag every unchanged entry that follows it.
   Anonymous items export nothing and are excluded: value initializers (including inside mixed let
   groups), `module _` bindings and bare evaluations. Only an attribute PPX could make one export,
-  and none exists, so a non-documentation item attribute on an anonymous item — compiler
-  built-ins such as `[@@warning]` included, since the reader does not interpret attributes —
+  and none exists, so a non-documentation attribute on an anonymous item or inside its binding
+  pattern (`let (_ [@x]) = …`) — compiler built-ins such as `[@@warning]` included, since the
+  reader does not interpret attributes; attributes inside expressions are not export positions —
   refuses the report with its location (gh-ocannl-1201) rather than being dropped, also when
   nested inside a pruned item; inside an extension payload everything stays visible. A pruned
   initializer can still fix the inferred type of a weakly polymorphic exported value (`let r = ref
@@ -54,10 +55,11 @@ files.
   `synopsis` prose stay outside these entries, while a `(re_export …)` term at any depth of
   `libraries` stays in, since it publishes that library to every user. Accepted select
   configurations inside `libraries` follow the separate target/interface rule above.
-  Three forms refuse the report instead of being misread, none present in the API-root Dune files
+  These forms refuse the report instead of being misread, none present in the API-root Dune files
   or their history (gh-ocannl-1201): a selected interface or non-module target (only `.ml` targets
-  are read), and an `(:include …)` term or `%{read…}` form in a module-owner or generator stanza,
-  whose external file's edits this reader would neither see nor attribute.
+  are read), an `(include …)` stanza, and an `(:include …)` term or `%{read:…}`,
+  `%{read-lines:…}` or `%{read-strings:…}` form in a module-owner or generator stanza, whose
+  external file's edits this reader would neither see nor attribute.
   `--context N` (gh-ocannl-1213) prints an entry changed on both sides compactly: both attribution
   headers, its changed lines as `-`/`+`, N unchanged lines of context indented by two spaces, and
   a `~ K unchanged lines` count for the rest; additions and removals still print in full, and the

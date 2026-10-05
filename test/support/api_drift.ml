@@ -37,6 +37,21 @@ let binding_may_export binding =
   iterator#pattern binding.pvb_pat;
   !extension || not (List.is_empty (binding_names binding.pvb_pat))
 
+(* Every attribute inside a binding pattern: where a pattern PPX would read its input. *)
+let pattern_attributes pattern =
+  let attributes = ref [] in
+  let iterator =
+    object
+      inherit Ppxlib.Ast_traverse.iter as super
+
+      method! pattern pattern =
+        attributes := pattern.ppat_attributes @ !attributes;
+        super#pattern pattern
+    end
+  in
+  iterator#pattern pattern;
+  !attributes
+
 let canonical_fields = function
   | Sexp.List (head :: children) ->
       let fields, positional =
@@ -52,28 +67,37 @@ let canonical_fields = function
 let consumed_heads =
   [ "library"; "executable"; "executables"; "test"; "tests"; "ocamllex"; "menhir" ]
 
-(** Parse [contents], refusing inputs Dune reads from another file. A [(:include f)] term or a
-    [%{read...}] form makes a module list or configuration depend on [f], whose edits this reader
-    would neither see nor attribute; the audited API-root Dune files and their history have none
-    (gh-ocannl-1201). *)
+(* The pforms that expand to a file's contents. *)
+let read_pforms = [ "%{read:"; "%{read-lines:"; "%{read-strings:" ]
+
+(** Parse [contents], refusing inputs Dune reads from another file. An [(include f)] stanza, an
+    [(:include f)] term or a [%{read:f}] form makes stanzas, a module list or configuration depend
+    on [f], whose edits this reader would neither see nor attribute; the audited API-root Dune files
+    and their history have none (gh-ocannl-1201). *)
 let consumed_stanzas dune_path contents =
   let stanzas = Dune_stanza_scan.stanzas contents in
+  let refuse form head =
+    failwith
+      (Printf.sprintf
+         "%s: %s in a %s stanza reads another file, which this reader does not follow \
+          (gh-ocannl-1201)"
+         dune_path form head)
+  in
   List.iter stanzas ~f:(fun stanza ->
       let head = Option.value (Dune_stanza_scan.head stanza) ~default:"" in
-      if List.mem consumed_heads head ~equal:String.equal then
+      if String.equal head "include" then refuse "(include ...)" head
+      else if List.mem consumed_heads head ~equal:String.equal then
         (* Only an [(:include ...)] TERM reads a file: a bare [:include] atom is an ordinary
            argument, e.g. to a preprocessing action. *)
         let rec external_input = function
           | Sexp.List (Sexp.Atom ":include" :: _) -> Some ":include"
           | Sexp.List terms -> List.find_map terms ~f:external_input
-          | Sexp.Atom atom -> Option.some_if (String.is_substring atom ~substring:"%{read") atom
+          | Sexp.Atom atom ->
+              Option.some_if
+                (List.exists read_pforms ~f:(fun pform -> String.is_substring atom ~substring:pform))
+                atom
         in
-        Option.iter (external_input stanza) ~f:(fun form ->
-            failwith
-              (Printf.sprintf
-                 "%s: %s in a %s stanza reads another file, which this reader does not follow \
-                  (gh-ocannl-1201)"
-                 dune_path form head)));
+        Option.iter (external_input stanza) ~f:(fun form -> refuse form head));
   stanzas
 
 type ownership = {
@@ -316,15 +340,17 @@ let declarations ?(paths = []) ~source contents =
     (* An anonymous item exports nothing by itself, so its edits are pruned; only an attribute PPX
        could make it export, and no such producer exists in the API roots or their history. This
        reader does not interpret attribute semantics, so rather than drop an attribute input or
-       guess its effect, it refuses any non-documentation item attribute there (gh-ocannl-1201). *)
+       guess its effect, it refuses any non-documentation attribute on such an item or inside its
+       binding pattern (gh-ocannl-1201). Attributes inside expressions ([@inline], ...) are not
+       export positions and pass. *)
     let anonymous what loc attrs =
       Option.iter
         (List.find attrs ~f:(fun a -> not (is_doc a)))
         ~f:(fun a ->
           failwith
             (Printf.sprintf
-               "%s:%d: attribute [@@%s] on an anonymous %s: attribute PPXs exporting from \
-                anonymous items are outside this source inventory (gh-ocannl-1201)"
+               "%s:%d: attribute %s on an anonymous %s: attribute PPXs exporting from anonymous \
+                items are outside this source inventory (gh-ocannl-1201)"
                loc.Ppxlib.Location.loc_start.pos_fname loc.loc_start.pos_lnum a.attr_name.txt what))
     in
     let strip_docs =
@@ -378,7 +404,8 @@ let declarations ?(paths = []) ~source contents =
                        List.filter bindings ~f:(fun b ->
                            binding_may_export b
                            ||
-                           (anonymous "value binding" b.pvb_loc b.pvb_attributes;
+                           (anonymous "value binding" b.pvb_loc
+                              (b.pvb_attributes @ pattern_attributes b.pvb_pat);
                             ignore (super#value_binding b : value_binding);
                             false))
                      in
