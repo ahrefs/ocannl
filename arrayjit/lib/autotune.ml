@@ -1685,11 +1685,23 @@ let scratch_of (opt : LL.optimized) =
     LL.optimize_ctx = LL.copy_optimize_ctx opt.LL.optimize_ctx;
   }
 
+(* Fission can expose new sketch sites without adding a kernel: GPU zero expansion makes a covering
+   initializer a per-cell companion even when the routine stays in one segment. Only an unchanged
+   singleton is already covered by whole-routine sketches. *)
+let fission_exposes_sites ~static_indices (opt : LL.optimized) tuples =
+  match tuples with
+  | [] -> false
+  | [ (_, pre, _, _) ] ->
+      let key o = SC.digest (SC.canonicalize ~static_indices ~with_placements:false o) in
+      not (String.equal (key pre) (key opt))
+  | _ -> true
+
 (* Per-machine calibrated envelope constants from the config beat the backend's class-level advisory
    constants ([Backend_intf.hardware_limits]'s [peak_flops] / [peak_memory_bandwidth]) — fitting
    them from [autotune_calibration_file] data is the intended workflow. *)
 (* Takes the read as a thunk, both to keep it lazy and to keep the key a literal at its call
    site -- see [int_setting]. *)
+
 let peak_override read =
   lazy
     (let s = String.strip (read ()) in
@@ -3222,64 +3234,63 @@ let model_default ?name ?report ctx comp bindings =
               | Some (p, sc) -> [ (spec_label (Whole (W_sketch p)), sc, `Whole p) ]
               | None -> []
             in
-            (* Per-segment sketch substitution over the default fission segmentation (only when the
-               default actually fissioned; otherwise the whole-routine sketches cover the site).
-               Mirrors [tune]'s [F_sketch] flavor: segments keyed by their structural pre-schedule
-               digest, a key miss degrading to the default preset. *)
+            (* Per-segment sketch substitution when fission splits the routine or exposes a new
+               lowering (a covering GPU zero companion) for sketching. Mirrors [tune]'s [F_sketch]
+               flavor: segments keyed by their structural pre-schedule digest, a key miss degrading
+               to the default preset. *)
             let fiss =
-              if List.length default_scratch <= 1 then None
-              else
-                match
-                  Sched.fission_scheduled ~promote_locals:is_gpu
-                    ?keep_mapping:(Sched.fission_keep_mapping ~is_gpu ~limits)
-                    ~preset ~zero_sched ~static_indices (scratch_of opt)
-                with
-                | exception Outcome.Cause_at _ ->
-                    Int.incr n_rejected;
-                    None
-                | tuples -> (
-                    let entries =
-                      List.filter_map tuples ~f:(fun (kind, pre, _sched, post) ->
-                          match kind with
-                          | `Zeros | `Solo -> None
-                          | `Normal -> (
-                              match score [ post ] with
-                              | None -> None
-                              | Some bs -> (
-                                  (* The segment's family tree searched with the segment's own
-                                     default-preset score as incumbent; conv segments keep the flat
-                                     path. *)
-                                  let best_sketch =
-                                    match tree_search ~incumbent:bs pre with
-                                    | Some tree_best -> tree_best
-                                    | None ->
-                                        best_flat ~threshold:bs pre
-                                          (sketch_seed_params ~is_gpu ~is_cpu ~limits pre)
-                                  in
-                                  match best_sketch with
-                                  | Some (p, _s) -> Some (seg_key pre, p)
-                                  | None -> None)))
+              match
+                Sched.fission_scheduled ~promote_locals:is_gpu
+                  ?keep_mapping:(Sched.fission_keep_mapping ~is_gpu ~limits)
+                  ~preset ~zero_sched ~static_indices (scratch_of opt)
+              with
+              | exception Outcome.Cause_at _ ->
+                  Int.incr n_rejected;
+                  None
+              | tuples when not (fission_exposes_sites ~static_indices opt tuples) -> None
+              | tuples -> (
+                  let entries =
+                    List.filter_map tuples ~f:(fun (kind, pre, _sched, post) ->
+                        match kind with
+                        | `Zeros | `Solo -> None
+                        | `Normal -> (
+                            match score [ post ] with
+                            | None -> None
+                            | Some bs -> (
+                                (* The segment's family tree searched with the segment's own
+                                   default-preset score as incumbent; conv segments keep the flat
+                                   path. *)
+                                let best_sketch =
+                                  match tree_search ~incumbent:bs pre with
+                                  | Some tree_best -> tree_best
+                                  | None ->
+                                      best_flat ~threshold:bs pre
+                                        (sketch_seed_params ~is_gpu ~is_cpu ~limits pre)
+                                in
+                                match best_sketch with
+                                | Some (p, _s) -> Some (seg_key pre, p)
+                                | None -> None)))
+                  in
+                  if List.is_empty entries then None
+                  else
+                    let subst_preset seg =
+                      match List.Assoc.find entries ~equal:String.equal (seg_key seg) with
+                      | Some p -> sketch_schedule ~accum_prec ~p seg
+                      | None -> preset seg
                     in
-                    if List.is_empty entries then None
-                    else
-                      let subst_preset seg =
-                        match List.Assoc.find entries ~equal:String.equal (seg_key seg) with
-                        | Some p -> sketch_schedule ~accum_prec ~p seg
-                        | None -> preset seg
-                      in
-                      (* Score the substituted pipeline whole, so it competes on the same footing as
-                         the other candidates. *)
-                      match
-                        Sched.fission_scheduled ~promote_locals:is_gpu
-                          ?keep_mapping:(Sched.fission_keep_mapping ~is_gpu ~limits)
-                          ~preset:subst_preset ~zero_sched ~static_indices (scratch_of opt)
-                      with
-                      | exception Outcome.Cause_at _ ->
-                          Int.incr n_rejected;
-                          None
-                      | tuples2 ->
-                          let posts = List.map tuples2 ~f:(fun (_, _, _, post) -> post) in
-                          Option.map (score_valid posts) ~f:(fun s -> (entries, s)))
+                    (* Score the substituted pipeline whole, so it competes on the same footing as
+                       the other candidates. *)
+                    match
+                      Sched.fission_scheduled ~promote_locals:is_gpu
+                        ?keep_mapping:(Sched.fission_keep_mapping ~is_gpu ~limits)
+                        ~preset:subst_preset ~zero_sched ~static_indices (scratch_of opt)
+                    with
+                    | exception Outcome.Cause_at _ ->
+                        Int.incr n_rejected;
+                        None
+                    | tuples2 ->
+                        let posts = List.map tuples2 ~f:(fun (_, _, _, post) -> post) in
+                        Option.map (score_valid posts) ~f:(fun s -> (entries, s)))
             in
             let contenders =
               contenders
@@ -4979,7 +4990,7 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                   ~arity_cuts ~preset ~zero_sched ~static_indices scratch
               with
               | exception Outcome.Cause_at _ -> []
-              | [] | [ _ ] -> [] (* Unfissioned: the whole-routine sketches cover the site. *)
+              | tuples when not (fission_exposes_sites ~static_indices base_opt tuples) -> []
               | tuples ->
                   List.filter_map tuples ~f:(fun (kind, pre, _, _) ->
                       match kind with
