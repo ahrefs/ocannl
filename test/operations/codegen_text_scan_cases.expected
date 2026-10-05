@@ -169,6 +169,15 @@ ok: source -- a local name bound to something else is not an emitter
 ok: source -- a buffer nobody wrote generated text into carries nothing
 ok: source -- a test that reads no generated source is not a member
 ok: source -- naming the reader in a comment is not reading it
+ok: boundary -- a fragment computed from ordinary values has no spelling to name
+ok: boundary -- a source-taking helper handed to a combinator is an untraced callback
+ok: boundary -- a fragment arriving as a wrapper's parameter is forwarded
+ok: boundary -- generated text read back out of a record field is an opaque component
+ok: boundary -- a partial application leaves the source it depends on unsupplied
+ok: boundary -- a haystack read back out of an array cell is a mutation
+ok: boundary -- a source parameter rebound to other text is replaced
+ok: boundary -- a source-taking helper handed ordinary text is unvalidated
+every partial-itemisation boundary has a case meeting it alone: true
 ok: rejection -- opening the reader hides its calls from the qualifier
 ok: rejection -- opening an ALIAS of the reader hides them just the same
 ok: rejection -- opening the emitter's module hides the render

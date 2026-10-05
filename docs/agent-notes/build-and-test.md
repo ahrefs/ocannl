@@ -1787,7 +1787,13 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   extension wins over the markers: a `.hip.expected` spells CUDA's `__global__` launch vocabulary
   and is still HIP. A fragment the scan cannot name at its call site — text a helper computes —
   marks that file's itemisation partial rather than dropping it, so the file is still listed and
-  the re-run is still called for. Markers are read only outside `Verdict` claim lines, since a
+  the re-run is still called for. The mark names the provenance boundary that stopped it
+  (gh-ocannl-1210) — computed fragment, untraced callback, forwarded parameter, opaque aggregate
+  component, unsupplied application, mutation, rebound parameter, or unvalidated haystack — carried
+  by the shared provenance result (`Codegen_text_scan.boundary`), never decided at the print site;
+  a new uncertainty source goes through `uncertain`, which always names one (`boundaries_of` raises
+  on a level that names none), and earns a single-boundary case in `codegen_text_scan_cases` (`boundary_cases` must cover
+  `all_boundaries`). Markers are read only outside `Verdict` claim lines, since a
   claim label is prose ABOUT a kernel and freely quotes its vocabulary ("padded GPU intrinsics fire
   against the threadgroup fragment").
 - A golden tagged `[derived] beside <source>` got in by neither route. The markers describe whole
