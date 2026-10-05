@@ -241,7 +241,7 @@ test/operations/reduction_accumulator_residency.ml [also pins text this scan can
     "volatile float*)res_guard_mask"
     "volatile"
     ... ^ " = "
-test/operations/reduction_forms.ml [also pins text this scan cannot name: untraced callback, forwarded through a helper parameter, unsupplied application argument, mutation or unseen buffer write]
+test/operations/reduction_forms.ml [also pins text this scan cannot name: untraced callback, forwarded parameter, unsupplied application, mutation or unseen buffer write]
     " = "
     "*)"
     "Vectorized reduction rendering"

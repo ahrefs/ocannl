@@ -485,7 +485,7 @@ let () = p "marker" (has ~src:(Generated.read "r") ~marker:"typed marker")|ocaml
   let src = backend_name in
   String.is_substring src ~substring:marker
 let () = p "ordinary" (has ~src:(Generated.read "r") ~marker:"not a pin")|ocaml},
-      "+partial(replaced)" );
+      "+partial(rebound)" );
     ( "forwarding wrappers with generated defaults stay visibly partial",
       {ocaml|let has src ~marker = String.is_substring src ~substring:marker
 let check ?(src = Generated.read "r") ~marker () = has src ~marker
@@ -500,6 +500,11 @@ let () = List.iter [Generated.read "r"] ~f:(fun src -> barrier src)|ocaml},
 let source = ref ""
 let () = source := Generated.read "r"; p "marker" (has !source)|ocaml},
       "+partial(mutation)" );
+    ( "a prefix ! the file binds itself is not a dereference",
+      {ocaml|let ( ! ) s = String.lowercase s
+let has src = String.is_substring src ~substring:"bang marker"
+let () = ignore (Generated.read "r"); p "m" (has !backend_name)|ocaml},
+      "+partial(unvalidated)" );
     ( "a forwarding wrapper used as a callback stays visibly partial",
       {ocaml|let has src marker = String.is_substring src ~substring:marker
 let check src = has src "callback wrapper marker"
@@ -541,7 +546,7 @@ let () =
   let src = strip_volatile_casts backend_name in
   String.is_substring src ~substring:marker
 let () = p "ordinary" (has (Generated.read "r") ~marker:"not a pin")|ocaml},
-      "+partial(replaced)" );
+      "+partial(rebound)" );
     ( "a generated collection callback keeps its known fragment and explicit uncertainty",
       {ocaml|let src = Generated.read "r"
 let () = List.iter (String.split_lines src) ~f:(fun line ->
@@ -666,13 +671,13 @@ let () = let ok = has (Generated.read "r") () in p "marker" ok|ocaml},
     ( "an ordinary replacement retains uncertainty without contributing a body literal",
       {ocaml|let has src = let src = backend_name in String.is_substring src ~substring:"cuda"
 let () = p "ordinary" (has (Generated.read "r"))|ocaml},
-      "+partial(replaced)" );
+      "+partial(rebound)" );
     ( "an aliased ordinary replacement retains uncertainty without contributing a body literal",
       {ocaml|let has src =
   let src = String.lowercase backend_name in
   let alias = src in String.is_substring alias ~substring:"cuda"
 let () = p "ordinary" (has (Generated.read "r"))|ocaml},
-      "+partial(replaced)" );
+      "+partial(rebound)" );
     ( "a followed partial call retains its unresolved source dependency and known fragment",
       {ocaml|let second ignored src = src
 let partial = second backend_name
@@ -1068,7 +1073,8 @@ let () = p_all2 "values" got want ~f:Float.equal|ocaml},
     alone: the comparison is exact, so a case reporting its own category beside another one fails as
     surely as one reporting the wrong category. Above, the controls inherited from the provenance
     model pin the category each existing shape earns; these state the categories themselves, and
-    every member of {!Scan.all_boundaries} must have one. Each case is the boundary, a name, the
+    every constructor of {!Scan.boundary} must have one -- quantified over its derived enumeration,
+    so a constructor added without a case fails the claim. Each case is the boundary, a name, the
     source, and the fragments it still names. *)
 let boundary_cases =
   [
@@ -1109,7 +1115,7 @@ let cache = Array.create ~len:1 ""
 let () = cache.(0) <- Generated.read "r"; p "m" (has cache.(0))|ocaml},
       "" );
     ( Scan.Replaced_binding,
-      "a source parameter rebound to other text is replaced",
+      "a source parameter rebound to other text",
       {ocaml|let has src ~marker =
   let src = default_source () in
   String.is_substring src ~substring:marker
@@ -1322,8 +1328,9 @@ let () =
       in
       if String.equal (String.strip found) expected then printf "ok: boundary -- %s\n" name
       else fail "boundary -- %s: expected [%s], found [%s]" name expected found);
-  Verdict.p_all "every partial-itemisation boundary has a case meeting it alone" Scan.all_boundaries
-    ~f:(fun boundary -> List.exists boundary_cases ~f:(fun (b, _, _, _) -> Poly.equal b boundary));
+  Verdict.p_all "every partial-itemisation boundary has a case meeting it alone"
+    Scan.all_of_boundary ~f:(fun boundary ->
+      List.exists boundary_cases ~f:(fun (b, _, _, _) -> Poly.equal b boundary));
   List.iter rejection_cases ~f:(fun (name, source, expected) ->
       let found =
         try List.length (Scan.rejections ~emitters ~path:"case.ml" ~contents:source)

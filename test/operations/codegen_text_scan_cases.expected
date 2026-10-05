@@ -75,6 +75,7 @@ ok: source -- a shadowed source parameter does not validate the caller marker
 ok: source -- forwarding wrappers with generated defaults stay visibly partial
 ok: source -- anonymous forwarding callbacks stay visibly partial
 ok: source -- generated source stored through mutation stays visibly partial
+ok: source -- a prefix ! the file binds itself is not a dereference
 ok: source -- a forwarding wrapper used as a callback stays visibly partial
 ok: source -- a forwarding wrapper keeps unresolved caller markers visibly partial
 ok: source -- a self-sourcing wrapper has no false partial
@@ -175,7 +176,7 @@ ok: boundary -- a fragment arriving as a wrapper's parameter is forwarded
 ok: boundary -- generated text read back out of a record field is an opaque component
 ok: boundary -- a partial application leaves the source it depends on unsupplied
 ok: boundary -- a haystack read back out of an array cell is a mutation
-ok: boundary -- a source parameter rebound to other text is replaced
+ok: boundary -- a source parameter rebound to other text
 ok: boundary -- a source-taking helper handed ordinary text is unvalidated
 every partial-itemisation boundary has a case meeting it alone: true
 ok: rejection -- opening the reader hides its calls from the qualifier

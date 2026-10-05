@@ -927,7 +927,8 @@ type uncertainty = Known | Unresolved | Replaced | Uncorrelated
       not see filled; memory is not modelled.
     - [Replaced_binding]: a name that carried a parameter is rebound to unrelated text.
     - [Unvalidated_haystack]: a source-taking helper is handed text not shown to be generated, so
-      its fragment cannot be attributed at that call.
+      its fragment cannot be attributed at that call. Usually benign: it is the scan's safe default
+      for a helper called on ordinary text, such as a backend name.
 
     Provenance carries the set alongside its {!uncertainty}: any level but [Known] holds at least
     one, a reset to [Known] clears them, and a join unions them. *)
@@ -940,28 +941,17 @@ type boundary =
   | Mutation
   | Replaced_binding
   | Unvalidated_haystack
-
-let all_boundaries =
-  [
-    Computed_fragment;
-    Untraced_callback;
-    Forwarded_parameter;
-    Opaque_component;
-    Unsupplied_application;
-    Mutation;
-    Replaced_binding;
-    Unvalidated_haystack;
-  ]
+[@@deriving enumerate]
 
 let boundary_name = function
   | Computed_fragment -> "computed fragment"
   | Untraced_callback -> "untraced callback"
-  | Forwarded_parameter -> "forwarded through a helper parameter"
+  | Forwarded_parameter -> "forwarded parameter"
   | Opaque_component -> "opaque aggregate component"
-  | Unsupplied_application -> "unsupplied application argument"
+  | Unsupplied_application -> "unsupplied application"
   | Mutation -> "mutation or unseen buffer write"
-  | Replaced_binding -> "rebound source parameter"
-  | Unvalidated_haystack -> "helper handed text not shown generated"
+  | Replaced_binding -> "rebound parameter"
+  | Unvalidated_haystack -> "unvalidated haystack"
 
 (** The short spelling the classifier's own controls compare against. *)
 let boundary_tag = function
@@ -971,7 +961,7 @@ let boundary_tag = function
   | Opaque_component -> "opaque"
   | Unsupplied_application -> "unsupplied"
   | Mutation -> "mutation"
-  | Replaced_binding -> "replaced"
+  | Replaced_binding -> "rebound"
   | Unvalidated_haystack -> "unvalidated"
 
 let boundaries_union a b = List.dedup_and_sort (a @ b) ~compare:Poly.compare
@@ -1089,9 +1079,11 @@ let argument_provenance of_expr parameter args =
       else result
 
 (** A dereference of a mutable cell: [!r], [Array.get], [Bytes.get]. What was stored there is not
-    modelled, so a value read this way carries the [Mutation] boundary. *)
+    modelled, so a value read this way carries the [Mutation] boundary. A [!] the file binds itself,
+    where it is spelled, is that binding and not a dereference. *)
 let reads_cell scope callee =
   Poly.equal (longident_of callee) (Some [ "!" ])
+  && not (Hashtbl.mem scope.values (span callee.pexp_loc))
   || calls scope callee ~target:"Array" ~name:"get"
   || calls scope callee ~target:"Bytes" ~name:"get"
 
@@ -1592,7 +1584,7 @@ let predicates scope ~emitters ~aliases ~seeds ~outer ~function_parameters bindi
                   Option.iter tested ~f:(fun tested ->
                       if not (Set.is_empty (derives_from_capture tested)) then
                         uncertain_source := Forwarded_parameter :: !uncertain_source
-                      else uncertain_source := (provenance tested).because @ !uncertain_source)
+                      else uncertain_source := boundaries_of (provenance tested) @ !uncertain_source)
               in
               List.iter
                 (match text_params with [] -> [ None ] | ps -> List.map ps ~f:Option.some)
