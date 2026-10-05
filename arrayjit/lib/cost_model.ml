@@ -28,10 +28,12 @@ type summary = {
    loop-box size / fiber size ({!Affine.fiber_cardinality}, which reads a flattened [Sub_axis] run
    in its IR meaning, gh-ocannl-1162); an [`At_least] fiber (non-injective map) makes that an upper
    bound on the image. A dynamic access (gh-ocannl-1174) touches one cell per loop-box point, at a
-   row of its dynamic axis the data picks: the image of its map with the placeholder standing still
-   counts the known coordinates' tuples, and each pairs with at most every row — an upper bound,
-   capped by the box. Any other unknown coordinate (a [Concat], a rank mismatch) falls back to the
-   whole node. Guarded accesses are counted guards-taken. All biases over-count. *)
+   value of its dynamic coordinate the data picks (the view's unknown group: the axis, flattened
+   over any [Sub_axis] run before it): the image of its map with the placeholder standing still
+   counts the known coordinates' tuples, and each pairs with at most every value of that coordinate
+   — an upper bound, capped by the box. Any other unknown coordinate (a [Concat], a rank mismatch)
+   falls back to the whole node. Guarded accesses are counted guards-taken. All biases
+   over-count. *)
 let access_cells (a : Tn.t Affine.access) : int * bool =
   let node_cells = Tn.num_elems a.a_tn in
   let dims = Lazy.force a.a_tn.Tn.dims in
@@ -53,7 +55,17 @@ let access_cells (a : Tn.t Affine.access) : int * bool =
       | `At_least f -> (box / max 1 f, false)
     in
     match a.a_dyn_axis with
-    | Some ax -> (min node_cells (min box (image * dims.(ax))), true)
+    | Some _ ->
+        (* The data picks a value of the coordinate the view marks unknown — the dynamic axis with
+           any [Sub_axis] run before it, which the component flattens over (gh-ocannl-1162) — not
+           merely of the axis's own extent. *)
+        let rows =
+          Array.fold (Affine.view ?dyn_axis:a.a_dyn_axis ~dims a.a_map) ~init:1
+            ~f:(fun n -> function
+            | Affine.Unknown { size; _ } -> n * size
+            | Affine.Known _ -> n)
+        in
+        (min node_cells (min box (image * rows)), true)
     | None when a.a_vec_last ->
         (* Each map instance is the base of a run along the minor axis. When the base image is exact
            and the runs are provably pairwise disjoint ({!Affine.vec_runs_disjoint}), the product is

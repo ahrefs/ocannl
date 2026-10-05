@@ -6,7 +6,10 @@
    is then covered exactly when the prior writes fill every row at the cells its known coordinates
    name. That flips a DECISION: a table written in full before the gather is no longer
    read-before-write, so it is no longer an input of the routine whose entry values must be kept —
-   it can become routine scratch.
+   it can become routine scratch. The raw analysis sees a gather only in IR handed to [optimize]
+   already carrying one, as here ([Ll_test]'s supported input class); in the pipeline, gathers are
+   minted after it, and the same coverage reaches [reconcile_traced_store]'s re-judgement of spliced
+   reads instead.
 
    Coverage changes which buffer a cell's value comes from, so each leg is executed, with the table
    writes discriminating ([Ll_test.tag]/[tick] values, clear of the zero-init) and the runtime row

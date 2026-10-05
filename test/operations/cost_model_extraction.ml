@@ -54,9 +54,14 @@ let worst_case_cells ~instances ~rows =
     | [] -> best := max !best (Set.length seen)
     | cell :: rest ->
         if Set.length seen + remaining > !best then
-          for row = 0 to rows - 1 do
-            go (Set.add seen (cell row)) (remaining - 1) rest
-          done
+          (* Rows reaching an unseen cell first: the greedy path comes first, and the bound prunes
+             most of the rest once it has been met. *)
+          let fresh, stale =
+            List.partition_tf (List.init rows ~f:Fn.id) ~f:(fun row ->
+                not (Set.mem seen (cell row)))
+          in
+          List.iter (fresh @ stale) ~f:(fun row ->
+              go (Set.add seen (cell row)) (remaining - 1) rest)
   in
   go (Set.empty (module Int)) (List.length instances) instances;
   !best
@@ -219,6 +224,26 @@ let () =
       (List.concat_map (List.init 4 ~f:Fn.id) ~f:(fun _ ->
            List.init 2 ~f:(fun c row -> (row * 4) + c)))
     ~rows:3;
+  (* Flattened: for i < 8: F[i] = V[Sub_axis; I[i]] over a 2x4 table — a component after a
+     [Sub_axis] run indexes the whole run, so the data picks any of 8 cells, not of the dynamic
+     axis's own 4 (32 B; counting by the axis alone under-counted at 16 B). *)
+  let v = fresh_tn "V" [| 2; 4 |] in
+  let f8 = fresh_tn "F" [| 8 |] in
+  let ids4 = fresh_tn "I4" [| 8 |] in
+  let flattened =
+    Ll_test.loop_n i 8
+      (Ll_test.set f8
+         [| it i |]
+         (Ll_test.gather ~tn:v
+            ~idcs:[| Idx.Sub_axis; Idx.Fixed_idx 0 |]
+            ~dyn_axis:1
+            ~dyn_value:(get ids4 [| it i |], sp)))
+  in
+  let s_flat = CM.analyze flattened in
+  show_summary "dynamic gather (flattened over a Sub_axis run)" s_flat;
+  gather_bound_sound ~name:"dynamic gather (flattened over a Sub_axis run)" s_flat v
+    ~instances:(List.init 8 ~f:(fun _ row -> row))
+    ~rows:8;
 
   (* Overlapping writes: Zero_out S2 then a covering pointwise write — the per-direction sum (16 +
      16 B) is a union bound, capped by the node's 16 bytes and flagged approximate. *)

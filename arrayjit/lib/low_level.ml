@@ -7937,20 +7937,20 @@ let reconcile_traced_store (plc : Tn.Placements.t) (traced_store : traced_store)
      (aliasing-eligible, absent from link-time input verification). Judged on the RAW analysis'
      verdict ([raw_coverage] — review round 4): the fact being closed over is a property of the
      program as analyzed, and the final code can only obscure it — [rewrite_one_hot_reductions]
-     turns a raw copy-position self-read into [Get_dynamic], whose coverage is uninterpretable, so a
-     final-code query both loses real exemption facts (an uninitialized embedding-gradient
-     accumulation) and mints spurious [`Unknown]s (round 3's threefry materialization). ONLY the
-     [`Covered_rmw_exempt] verdict flips: this pass closes the exemption split, it does not
-     re-litigate coverage — genuinely uncovered raw reads were already flipped by
-     [decide_placements], and spliced reads have their own strict path above. A flipped node is also
-     promoted [On_device], like [decide_placements]' own rule (same provenance 36): a late-rejected
-     candidate is otherwise only [Never_virtual], which [is_materialized_force] would default to
-     [Local] — routine scratch with no incoming contents, contradicting the entry values the reads
-     consume. Two bookkeeping consequences of promoting (round 4): a cap-provenance entry (1/39/41)
-     is recorded in [cap_inline_flips] before being overwritten, so the node keeps its [`Inline]
-     flip candidacy (a virtual reading needs no interface classification — the search remains free
-     to try it); and a node an EARLIER routine of the lineage committed [Local] cannot be promoted —
-     its scratch buffer does not persist, so the in-place update is rejected with the
+     turns a raw copy-position self-read into a [Get_dynamic] of a data-chosen row, a different read
+     than the one the exemption is defined on, so a final-code query both loses real exemption facts
+     (an uninitialized embedding-gradient accumulation) and mints spurious [`Unknown]s (round 3's
+     threefry materialization). ONLY the [`Covered_rmw_exempt] verdict flips: this pass closes the
+     exemption split, it does not re-litigate coverage — genuinely uncovered raw reads were already
+     flipped by [decide_placements], and spliced reads have their own strict path above. A flipped
+     node is also promoted [On_device], like [decide_placements]' own rule (same provenance 36): a
+     late-rejected candidate is otherwise only [Never_virtual], which [is_materialized_force] would
+     default to [Local] — routine scratch with no incoming contents, contradicting the entry values
+     the reads consume. Two bookkeeping consequences of promoting (round 4): a cap-provenance entry
+     (1/39/41) is recorded in [cap_inline_flips] before being overwritten, so the node keeps its
+     [`Inline] flip candidacy (a virtual reading needs no interface classification — the search
+     remains free to try it); and a node an EARLIER routine of the lineage committed [Local] cannot
+     be promoted — its scratch buffer does not persist, so the in-place update is rejected with the
      materialize-before-first-use error rather than [Placements.update]'s internal transition
      failure. Deliberately NOT recorded in [flipped_rbw]: these are raw-analysis-genre facts, and
      the prior-context demand override is for splice-created flips only (a raw pattern's entry

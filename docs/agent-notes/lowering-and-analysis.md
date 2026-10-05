@@ -265,16 +265,22 @@ files.
   which is why "mask the last component" missed the trailing unit `Sub_axis` of `Row`'s flat RNG
   store) and may spill into an outer coordinate unless proved not to. `test/operations/
   affine_coordinate_view.ml` checks every proven verdict against enumerated renderer addresses.
-  `Affine.access` carries the dynamic axis itself (`a_dyn_axis`, gh-ocannl-1174), so
-  `may_touch_same_cell`, `read_covered_before` and `Cost_model.access_cells` view a gather or
-  scatter like any other access — refuse one wholesale only where the view cannot answer. In
-  containment the two sides differ: a read's unknown coordinate is universal over its extent (the
-  gather is covered only when every row is), a write's declines (a scatter's row is no definite
-  cell). `test/operations/dynamic_axis_coverage.ml` executes the decision this flips: a table
-  written in full before its gather stops being read-before-write.
   No lowering path was found that pairs a flattened store with an ordinary access in one
   correctness query (the RNG store's `Affine` minor index gives the cross-nest analysis no chain,
   and nothing shares a loop with it), so the hole was latent — keep it that way by construction.
+- **A dynamic access is viewed, not refused** (gh-ocannl-1174): `Affine.access` carries the
+  dynamic axis itself (`a_dyn_axis`), so `may_touch_same_cell`, `read_covered_before` and
+  `Cost_model.access_cells` read a gather or scatter through `view ~dyn_axis` — refuse one
+  wholesale only where the view cannot answer. The unknown coordinate is the view's GROUP (the axis
+  flattened over any `Sub_axis` run before it), so take its extent from the view, never from
+  `dims.(dyn_axis)`. In containment the two sides differ: a read's unknown coordinate is universal
+  over its extent (the gather is covered only when every row is), a write's declines (a scatter's
+  row is no definite cell). Production reach is narrow: `analyze_proc` runs on raw code, where the
+  pipeline has minted no `Get_dynamic` yet (the one-hot rewrite and the lane-extract form come
+  later, and the raw one-hot reduction already reads every row as plain `Get`s), so the decision
+  that changes in production is `reconcile_traced_store`'s re-judgement of spliced reads over the
+  final code — no test executes that path yet. `test/operations/dynamic_axis_coverage.ml` executes
+  the flip on hand-built IR that carries a gather into `optimize`.
 - **The peel's DECISION is carried, not re-derived from the emitted kernel** (gh-ocannl-733). Two
   nests differing only in whether the accumulated cell mentions the enclosing index peel a different
   number of levels under a different guard verdict and emit the SAME localized kernel — one scope,
