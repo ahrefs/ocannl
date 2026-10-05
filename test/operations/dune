@@ -4167,6 +4167,16 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ ; ocannl-backend: none -- pure structural recognition over synthetic IR; no compilation or execution.
+ (name autotune_concat_dependencies)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_LEGALITY_CROSSCHECK))
+ (modules autotune_concat_dependencies)
+ (libraries base ocannl arrayjit.verdict ll_test))
+
+(test
  ; ocannl-backend: none -- exercises the menu's cap-sharing rule over synthetic category lists;
  ; it lowers, compiles and runs nothing, so no backend is selected.
  (name autotune_menu_cap)

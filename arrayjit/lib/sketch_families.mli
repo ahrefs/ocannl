@@ -354,10 +354,6 @@ val sketch_schedule :
     is recognized or the parameters do not fit. [accum_prec] is the rendering backend's accumulator
     resolution, used for scalar privatization. *)
 
-val idcs_mention : Ir.Indexing.axis_index array -> Ir.Indexing.symbol -> bool
-(** Whether a symbol occurs in a plain iterator or affine component of the index map. The harness
-    uses this to distinguish output axes from reduction axes. *)
-
 val collect_gets : Ir.Low_level.scalar_t -> (Ir.Tnode.t * Ir.Indexing.axis_index array) list
 (** Collect ordinary reads through scalar arithmetic, retaining their index maps. Dynamic reads
     contribute the reads of their index expression; local scopes are opaque. Used by the harness's

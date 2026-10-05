@@ -1,0 +1,7 @@
+ordinary matmul remains recognized: true
+Concat operand dependency on the output column refuses matmul: true
+Concat occurrence beside a plain reduction axis refuses matmul: true
+concatenated output is not a matmul contraction: true
+ordinary reduction remains eligible for split-reduce: true
+concatenated output yields no split-reduce site: true
+Concat mentions each constituent and no unrelated symbol: true

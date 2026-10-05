@@ -5949,7 +5949,8 @@ let checked_product = List.fold ~init:(Some 1) ~f:(fun acc n -> Option.bind acc 
    the product of per-slot maxima, not the maximum of per-nest products, which differ as soon as two
    nests peak at different slots. [None] when that product overflows — no device launches it, and a
    wrapped product could read as a small one. The default annotators below and the sketch families'
-   predictions ([Sketch_families.predicted_launch_geometry]) both read it. *)
+   predictions ([Autotune.matmul_launch_geometry] and [Autotune.conv_launch_geometry]) both read
+   it. *)
 let launch_geometry_of_nests (nests : (int list * int list) list) : launch_geometry option =
   let slot_max sel k =
     List.fold nests ~init:1 ~f:(fun m nest ->
