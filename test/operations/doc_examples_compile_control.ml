@@ -49,11 +49,10 @@ let compile ~compiler ~interface code =
 (* The words of a compiler diagnostic line, its punctuation dropped. The error kind and the
    identifier are the contract; how the compiler delimits an identifier is presentation, and it
    changed between releases: OCaml 5.3 prints [Unbound value "Context.context"] where 5.4 and 5.5
-   print it bare (gh-ocannl-1223). Matching the [Error:] line, not the whole log, keeps any other
-   failure from passing: the log's source excerpt names the identifier for every error on its
-   line. *)
+   print it bare (gh-ocannl-1223). The claim reads the [Error:] line rather than any line that names
+   the identifier: the log's source excerpt names it for every error on its line. *)
 let diagnostic_words line =
-  String.split_on_chars line ~on:[ ' '; '\t'; ':'; '"'; '`'; '\'' ]
+  String.split_on_chars line ~on:[ ' '; '\t'; ':'; '"' ]
   |> List.filter ~f:(fun word -> not (String.is_empty word))
 
 let () =
