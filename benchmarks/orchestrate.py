@@ -474,6 +474,52 @@ def regime_check(results):
     return mismatched
 
 
+def precision_check(results):
+    """Rows whose runner ran tensors or an autocast context other than the row's precision label.
+
+    The row's `precision` is what the sweep labels it with (f32 for every torch cell); the runner
+    reports what its run's tensors were (`effective_precision`, from the parameter and floating
+    input dtypes it read back) and whether autocast was on inside the step (gh-ocannl-1208). A
+    label the run contradicts -- a weight cast on load, an autocast context, a requested precision
+    the runner did not apply -- is a number quoted at a precision it was not measured at, and the
+    parity reference is such a row too. `precision_mismatch` says what ran, in words the report
+    prints. Rows whose runner reports no `effective_precision` (OCANNL's, tinygrad's, and torch
+    rows predating the field) are not checked; an autocast state torch could not read (None) is
+    not a mismatch, and the row's `autocast` says it is unknown.
+    """
+    mismatched = []
+    for r in results:
+        ran = r.get("effective_precision")
+        if ran is None:
+            continue
+        found = []
+        if ran != precision_base(r.get("precision", "f32")):
+            found.append(f"{ran} tensors")
+        autocast = r.get("autocast")
+        if autocast and autocast.get("enabled"):
+            found.append(f"autocast to {autocast.get('dtype')}")
+        if found:
+            r["precision_mismatch"] = ", ".join(found)
+            mismatched.append(r)
+    return mismatched
+
+
+def tensor_precision_note(result):
+    """One line of what a torch row's run computed in, for the report's reference line."""
+    if result.get("effective_precision") is None:
+        return "tensor precision not reported by its runner"
+    inputs = ", ".join(f"{role} {dtype}" for role, dtype in result.get("input_dtypes", {}).items())
+    autocast = result.get("autocast")
+    autocast_text = (
+        "autocast unknown"
+        if autocast is None
+        else f"autocast to {autocast.get('dtype')}" if autocast.get("enabled") else "autocast off"
+    )
+    return (
+        f"params {', '.join(result.get('param_dtypes', []))}; inputs {inputs}; {autocast_text}"
+    )
+
+
 def precision_spec(spec):
     """--precision argument: a storage precision, or one of the f16 gate-cost legs."""
     if spec in ("bf16", "f16") or spec in GATE_LEG_ENV or GATED_RE.match(spec):
@@ -1793,6 +1839,14 @@ def report(
                     "**MISSING DIGEST RECORD:** declared measurement box(es) with no entry for "
                     f"`{fixture}`: {', '.join(missing)}\n"
                 )
+        # What the parity reference computed in, read back from its run (gh-ocannl-1208): every
+        # row's parity verdict is against it, so a reader auditing one needs this, and before the
+        # runner reported it the answer was in the fixture's dtype headers and the runner's history.
+        ref = next((r for r in rows if r.get("parity") == "REF"), None)
+        if ref is not None:
+            lines.append(
+                f"parity reference `{'/'.join(REFERENCE)}`: {tensor_precision_note(ref)}\n"
+            )
         # Precision-major, p50-ascending within a precision: scheduling variants are ranked
         # against the others computing in the same format, and a reduced-precision block reads as
         # its own group rather than being interleaved by a speed it owes to its storage format.
@@ -1833,6 +1887,15 @@ def report(
                 "source): its number belongs to neither column and is not comparable with "
                 "anything -- the sweep fails on it, and the row is kept so the failure is "
                 "visible where the numbers are read.\n"
+            )
+        if any(r.get("precision_mismatch") for r in rows):
+            lines.append(
+                "**`PRECISION MISMATCH`** is a row whose runner read back tensors, or an autocast "
+                "context inside its step, other than the precision the row is labelled with "
+                "(gh-ocannl-1208): a weight cast on load, an enclosing autocast, or a requested "
+                "precision the runner did not apply. Its number was not measured at its label's "
+                "precision -- the sweep fails on it, and the row is kept so the failure is visible "
+                "where the numbers are read.\n"
             )
         with_tokens = any(r.get("tokens_per_step") for r in rows)
         # gh-ocannl-644: which process produced the step times. Only a cell that searches or
@@ -1998,9 +2061,15 @@ def report(
                     if mismatch
                     else f"| {regime_of(r)} "
                 )
+            precision = r.get("precision", "f32")
+            if r.get("precision_mismatch"):
+                precision = (
+                    f"**PRECISION MISMATCH** (dispatched {precision}; ran "
+                    f"{r['precision_mismatch']})"
+                )
             lines.append(
                 f"| {r['framework']} | {r['backend']} | {rendered_variant(r)} "
-                f"| {r.get('precision', 'f32')} {regime}"
+                f"| {precision} {regime}"
                 f"| {num(s['p50'], '.3f')} | {num(s['p10'], '.3f')} | {num(s['p90'], '.3f')} "
                 f"| {num(r['queued_step_ms'], '.3f')} | {compile_s} |{peak_memory}"
                 f"{provenance} {parity} |{tokens}"
@@ -2412,7 +2481,10 @@ def main():
                             [str(VENV_PY), str(HERE / "runners/pytorch/run.py"), "--fixture", str(fx), "--device", device]
                             + (["--compile"] if compiled else [])
                             + torch_regime_args(regime),
-                            override={"regime": regime},
+                            # Every torch cell is an f32 cell, stamped as such so the row states
+                            # the precision it was requested at beside the one its runner read back
+                            # (`effective_precision`; `precision_check`, gh-ocannl-1208).
+                            override={"regime": regime, "precision": "f32"},
                         )
         if "tinygrad" in args.only:
             # No exact pin exists for tinygrad, so its cells run once and stand in the approximate
@@ -2463,6 +2535,7 @@ def main():
     provenance_violations = provenance_check(results)
     tensorization_mismatches = tensorization_check(results)
     regime_mismatches = regime_check(results)
+    precision_mismatches = precision_check(results)
     report(results, RESULTS_DIR, unavailable, failures, ambient=ambient, skipped=skipped)
     ok = True
     if unavailable:
@@ -2529,6 +2602,21 @@ def main():
         print(
             f"REGIME GATE: {len(regime_mismatches)} cell(s) ran under a regime other than the "
             f"one dispatched: {labels}",
+            flush=True,
+        )
+    if precision_mismatches:
+        # The same defect as a regime mismatch, one level down (gh-ocannl-1208): the row's
+        # precision label is what its number is quoted at, and the run says otherwise.
+        ok = False
+        labels = ", ".join(
+            f"{r['workload']} {r['framework']}/{r['backend']}/"
+            f"{cell_name(r['variant'], r.get('precision', 'f32'))}{regime_label(regime_of(r))}"
+            f" (runner ran {r['precision_mismatch']})"
+            for r in precision_mismatches
+        )
+        print(
+            f"PRECISION GATE: {len(precision_mismatches)} cell(s) ran at a precision other than "
+            f"their label: {labels}",
             flush=True,
         )
     failed = [r for r in results if r["parity"] == "FAIL"]

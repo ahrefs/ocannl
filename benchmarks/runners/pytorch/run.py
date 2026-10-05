@@ -18,7 +18,15 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from bench_common import emit, read_st_metadata, run_protocol, torch_peak_memory, torch_searched
+from bench_common import (
+    emit,
+    read_st_metadata,
+    run_protocol,
+    tensor_precision_fields,
+    torch_autocast_state,
+    torch_peak_memory,
+    torch_searched,
+)
 
 import torch
 import torch.nn.functional as F
@@ -52,7 +60,7 @@ def build_mlp(meta, data, dev, approximate=False):
         return ce_onehot(forward(xb), yb)
 
     x, y = data["x"].to(dev), data["y"].to(dev)
-    return loss_fn, flat, (x, y), None
+    return loss_fn, flat, flat, (x, y), None
 
 
 def build_conv(meta, data, dev, approximate=False):
@@ -92,7 +100,7 @@ def build_conv(meta, data, dev, approximate=False):
 
     x = data["x"].permute(0, 3, 1, 2).contiguous().to(dev)  # NCHW
     y = data["y"].to(dev)
-    return loss_fn, flat, (x, y), None
+    return loss_fn, flat, flat, (x, y), None
 
 
 def gelu_tanh(x):
@@ -139,9 +147,8 @@ def build_gpt(meta, data, dev, approximate=False):
             }
         )
     gf, bf = leaf(data["lnf_g"]), leaf(data["lnf_b"])
-    flat = (
-        [wte, wpe, gf, bf] + [p for layer in layers for p in layer.values()] if training else []
-    )
+    weights = [wte, wpe, gf, bf] + [p for layer in layers for p in layer.values()]
+    flat = weights if training else []
     mask = torch.tril(torch.ones(seq, seq, dtype=torch.bool, device=dev))  # [s, t]
     # The embedding table is the transpose of the tied lm_head weight. Under training it must be
     # rebuilt inside forward: built once, its autograd graph would be freed by the first backward
@@ -186,7 +193,7 @@ def build_gpt(meta, data, dev, approximate=False):
 
     ids = data["ids"].long().to(dev)
     tgt = F.one_hot(data["tgt"].long(), v).float().to(dev)
-    return loss_fn, flat, (ids, tgt), int(meta["batch_size"]) * seq
+    return loss_fn, flat, weights, (ids, tgt), int(meta["batch_size"]) * seq
 
 
 def main():
@@ -249,7 +256,9 @@ def main():
     dev = torch.device(args.device)
     data = load_file(args.fixture)
     build = {"mlp": build_mlp, "conv": build_conv, "gpt": build_gpt}[model]
-    loss_fn, flat, (x, y), tokens_per_step = build(meta, data, dev, approximate=approximate)
+    loss_fn, flat, weights, (x, y), tokens_per_step = build(
+        meta, data, dev, approximate=approximate
+    )
     n_batches = x.shape[0] // batch_size
     batches = [
         (x[i * batch_size : (i + 1) * batch_size], y[i * batch_size : (i + 1) * batch_size])
@@ -263,10 +272,21 @@ def main():
             else torch.compile(loss_fn)
         )
 
+    # gh-ocannl-1208: the batch the step hands the model and the autocast state where it does so,
+    # captured on the first step -- inside the run, where an enclosing autocast context would show
+    # and a matmul-policy getter would not.
+    observed = {}
+
+    def observe(xb, yb):
+        if not observed:
+            observed["inputs"] = {"input": xb, "target": yb}
+            observed["autocast"] = torch_autocast_state(torch, dev.type)
+
     if mode == "train":
 
         def step(k):
             xb, yb = batches[k % n_batches]
+            observe(xb, yb)
             loss = loss_fn(xb, yb)
             loss.backward()
             with torch.no_grad():
@@ -280,6 +300,7 @@ def main():
 
         def step(k):
             xb, yb = batches[k % n_batches]
+            observe(xb, yb)
             with torch.no_grad():
                 return loss_fn(xb, yb)
 
@@ -313,6 +334,11 @@ def main():
         # would let the stamp mask a runner that ran the other arm.
         "runner_regime": runner_regime,
         "regime_settings": regime_settings,
+        # What the run's tensors were and whether autocast was on, separately from the matmul
+        # policy above (gh-ocannl-1208): parameter dtypes read after the steps, the batch and the
+        # autocast state as the first step met them. The sweep compares `effective_precision`
+        # against the precision it labels the row with (`precision_check`).
+        **tensor_precision_fields(weights, observed["inputs"], observed["autocast"]),
         **measured,
     }
     if args.compile_mode:
