@@ -36,7 +36,16 @@
    operand [Stage] meets the main branch's second read of [x]), so the tuner times no sketch for the
    shortcut; on GPU it fissions and the shortcut's segment seeds and runs. Its claim is that every
    proposed seed either declines with a typed cause or runs and matches. Seed counts and declines
-   vary with the device, so they go to stderr. *)
+   vary with the device, so they go to stderr.
+
+   The block's values are not exact: inference-mode batch norm divides by the square root of its
+   stored variance, and the main branch's two 3x3 convolutions then sum 576 such terms per cell into
+   magnitudes near 2e5. A per-segment candidate also runs every OTHER segment on the default preset,
+   whose reduction orders round those sums differently from the unscheduled form — on HIP by a few
+   ulps in a third of the cells, the same for every seed (gh-ocannl-1217). So a per-segment seed is
+   compared, at the exact tolerance, against its own segmentation on the default preset — the run it
+   replaces one segment's schedule of — and that reference is compared against the unscheduled form
+   up to f32 rounding. *)
 
 open Base
 open Ocannl
@@ -262,6 +271,14 @@ let run_seg_candidate name s ~arity_cuts ~key q =
          List.map tuples ~f:(fun (_, _, _, post) -> post)))
     ~f:(fun got -> (!hit, got))
 
+(* The same segmentation with every segment on the default preset: what a per-segment candidate
+   replaces one segment of. Against it, a seed's run differs only in the segment the seed schedules.
+   Against the unscheduled form, it differs also in the default preset's reduction orders over the
+   other segments, which round differently once the values are inexact. *)
+let run_default_fission name s ~arity_cuts =
+  candidate name s (fun opt ->
+      List.map (fission ~arity_cuts ~preset:default_preset opt) ~f:(fun (_, _, _, post) -> post))
+
 (* The accumulation's read map on the input [x], and its write map: the one read of [x] that shares
    its statement with a read-modify-write — of the matmul site's output when there is a site (the
    block's 3x3 conv accumulates over [x] too). *)
@@ -444,15 +461,47 @@ let leg ?mma ?(declines = false) ~what ~tag s =
         ~f:(fun (a, b) -> Float.(a <> b));
       p_all2 (what ^ ": the unscheduled form matches the host oracle") unscheduled want
         ~f:(fun a b -> Float.(abs (a - b) < 1e-3))
-  | `Resnet_block -> ());
+  | `Resnet_block ->
+      Stdio.eprintf "%s: max |unscheduled| %.6g over %d cells (not part of the golden)\n%!" tag
+        (Array.fold unscheduled ~init:0. ~f:(fun m a -> Float.max m (Float.abs a)))
+        (Array.length unscheduled));
   p
     (what
    ^ ": a matmul site whose stride-2 axes are its interior batch loops, the row read at unit stride"
     )
     (stride_on_batch_loops o);
-  let matches got =
-    Array.length got = Array.length unscheduled
-    && Array.for_all2_exn got unscheduled ~f:(fun a b -> Float.(abs (a - b) < 1e-3))
+  let close ~tol ~want got =
+    Array.length got = Array.length want
+    && Array.for_all2_exn got want ~f:(fun a b -> Float.(abs (a - b) < tol b))
+  in
+  let exact _ = 1e-3 in
+  (* Where values are inexact (the block's batch norms divide by a square root, and its two 3x3
+     convolutions then sum 576 such terms into magnitudes near 2e5, where one f32 ulp is 1/64),
+     forms that reorder a reduction differ by a few ulps: a relative 1e-5 admits about 80 of
+     them. *)
+  let rounding b = 1e-3 +. (1e-5 *. Float.abs b) in
+  let matches_ref ~want got = close ~tol:exact ~want got in
+  let matches got = matches_ref ~want:unscheduled got in
+  (* Which run diverged from which form and by how much, so a red claim names its seed. *)
+  let report ?(tol = exact) ~against ~want name what_ran got =
+    if Array.length got <> Array.length want then
+      Stdio.eprintf "%s (%s): %d cells, the %s form %d (not part of the golden)\n%!" name what_ran
+        (Array.length got) against (Array.length want)
+    else if not (close ~tol ~want got) then (
+      let worst = ref 0 and bad = ref 0 in
+      Array.iteri got ~f:(fun i a ->
+          let d = Float.abs (a -. want.(i)) in
+          if Float.(d >= tol want.(i)) then Int.incr bad;
+          if Float.(d > abs (got.(!worst) -. want.(!worst))) then worst := i);
+      let i = !worst in
+      Stdio.eprintf
+        "%s (%s): %d of %d cells differ from the %s form; worst at %d: %.9g vs %.9g (|diff| %.3g); \
+         max |%s| %.6g (not part of the golden)\n\
+         %!"
+        name what_ran !bad (Array.length got) against i got.(i) want.(i)
+        (Float.abs (got.(i) -. want.(i)))
+        against
+        (Array.fold want ~init:0. ~f:(fun m a -> Float.max m (Float.abs a))))
   in
   let seg_seeds =
     Option.value_map o.segs ~default:[] ~f:(fun l ->
@@ -482,13 +531,57 @@ let leg ?mma ?(declines = false) ~what ~tag s =
       skipped (what ^ ": the per-segment seeds include tensorized ones"));
   (* Declined candidates (see {!candidate}) yield [None]. *)
   let whole_runs =
-    List.mapi o.whole ~f:(fun i q -> run_whole_candidate (Printf.sprintf "%s_w%d" tag i) s q)
+    List.mapi o.whole ~f:(fun i q ->
+        let name = Printf.sprintf "%s_w%d" tag i in
+        let r = run_whole_candidate name s q in
+        Option.iter r ~f:(report ~against:"unscheduled" ~want:unscheduled name (show q));
+        r)
+  in
+  (* The form a per-segment seed is compared against: on the bare sites the unscheduled one, whose
+     values are exact integers; in the block, the default-preset run of the seed's own segmentation
+     (see {!run_default_fission}), since there the values are not exact. *)
+  let seg_baselines =
+    if not declines then []
+    else
+      List.dedup_and_sort ~compare:Bool.compare (List.map seg_seeds ~f:(fun (a, _, _) -> a))
+      |> List.map ~f:(fun arity_cuts ->
+          let name = Printf.sprintf "%s_f%b" tag arity_cuts in
+          let got = run_default_fission name s ~arity_cuts in
+          let what_ran = Printf.sprintf "default preset, arity cuts %b" arity_cuts in
+          Option.iter got ~f:(fun got ->
+              if Array.length got = Array.length unscheduled then
+                Stdio.eprintf
+                  "%s (%s): max |diff| from the unscheduled form %.3g (not part of the golden)\n%!"
+                  name what_ran
+                  (Array.fold2_exn got unscheduled ~init:0. ~f:(fun m a b ->
+                       Float.max m (Float.abs (a -. b))));
+              report ~tol:rounding ~against:"unscheduled" ~want:unscheduled name what_ran got);
+          (arity_cuts, got))
+  in
+  let seg_want arity_cuts =
+    if not declines then Some ("unscheduled", unscheduled)
+    else
+      Option.map
+        (Option.join (List.Assoc.find seg_baselines ~equal:Bool.equal arity_cuts))
+        ~f:(fun want -> ("default-preset segmentation", want))
   in
   let seg_runs =
     List.mapi seg_seeds ~f:(fun i (arity_cuts, key, q) ->
-        run_seg_candidate (Printf.sprintf "%s_s%d" tag i) s ~arity_cuts ~key q)
+        let name = Printf.sprintf "%s_s%d" tag i in
+        let r = run_seg_candidate name s ~arity_cuts ~key q in
+        Option.iter r ~f:(fun (hit, got) ->
+            if not hit then
+              Stdio.eprintf "%s (%s): no final segment carried its key (not part of the golden)\n%!"
+                name (show q);
+            Option.iter (seg_want arity_cuts) ~f:(fun (against, want) ->
+                report ~against ~want name (show q) got));
+        Option.map r ~f:(fun (hit, got) -> (arity_cuts, hit, got)))
   in
-  let seg_ok (hit, got) = hit && matches got in
+  let seg_ok (arity_cuts, hit, got) =
+    hit
+    && Option.value_map (seg_want arity_cuts) ~default:false ~f:(fun (_, want) ->
+        matches_ref ~want got)
+  in
   if not declines then (
     (* The bare sites: each flavor seeds, and every seed runs — a decline fails. *)
     p_all
@@ -501,7 +594,7 @@ let leg ?mma ?(declines = false) ~what ~tag s =
         unscheduled form")
       seg_runs
       ~f:(Option.value_map ~default:false ~f:seg_ok))
-  else
+  else (
     (* The block: which flavor seeds is backend-dependent (whole-routine on the C backends, which do
        not fission it; per-segment on GPU, which gates the zeroed whole-routine site), and inside it
        a seed may decline — on cc every whole-routine seed does, its operand [Stage] meeting the
@@ -513,10 +606,23 @@ let leg ?mma ?(declines = false) ~what ~tag s =
     p_all
       (what
      ^ ": every seed either tuner flavor proposes, applied alone, declines with a typed cause or \
-        runs and matches the unscheduled form")
+        runs and matches the form it replaces one schedule of: the unscheduled form for a \
+        whole-routine seed, its segmentation on the default preset for a per-segment one")
       (List.map whole_runs ~f:(Option.value_map ~default:true ~f:matches)
       @ List.map seg_runs ~f:(Option.value_map ~default:true ~f:seg_ok))
-      ~f:Fn.id
+      ~f:Fn.id;
+    (* The per-segment comparison above is only as good as its reference: each default-preset
+       segmentation must itself compute the block, up to the f32 rounding of reordered inexact sums.
+       On the C backends the block does not fission, so there is no segmentation. *)
+    let label =
+      what
+      ^ ": every segmentation a seed is keyed in, on the default preset, runs and matches the \
+         unscheduled form up to f32 rounding"
+    in
+    if on_cpu then skipped label
+    else
+      p_all label seg_baselines ~f:(fun (_, got) ->
+          Option.value_map got ~default:false ~f:(close ~tol:rounding ~want:unscheduled)))
 
 (* [conv_detection_boundary]'s [cdb_k11s] witness: a valid-mode 1x1 window at stride 2 over a 7x7
    map, 4 in-channels, 8 out-channels. *)
