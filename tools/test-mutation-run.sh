@@ -26,15 +26,23 @@ done < <(sed -n 's/^\. \([A-Za-z0-9_./-]*\)$/\1/p' "$root/tools/test-run.sh")
 cat > "$fixture/bin/dune" <<'DUNE'
 #!/usr/bin/env bash
 set -eu
-[ "$*" = 'build -j 4 @runtest-probe' ]
+case "$*" in
+  'build -j 4 @runtest-probe') name=probe ;;
+  'build -j 4 @runtest-manifest') name=manifest ;;
+  *) exit 98 ;;
+esac
 printf '%s\n' invoked >> "$PROBE_HOME/invocations"
 case "$(cat module.ml)" in *MUTATED*) ;; *) exit 99 ;; esac
 cp module.ml "$PROBE_HOME/observed"
 # The test's stdout, where dune leaves it even when the test exits nonzero; the
-# golden, probe.expected, has three rows.
+# golden, probe.expected, has three rows, and manifest.expected six, two of them
+# refusal-manifest marker rows.
 out=${DUNE_BUILD_DIR:-_build}/default
 mkdir -p "$out"
-rows() { rm -f "$out/probe.exe.output"; printf "$1" > "$out/probe.exe.output"; }
+rows() { rm -f "$out/$name.exe.output"; printf "$1" > "$out/$name.exe.output"; }
+m1='  [scanner-refusal:00000000000000000000000000000001] first refusal\n'
+m2='  [scanner-refusal:00000000000000000000000000000002] last refusal\n'
+section='\nSynthetic controls: scanner refusal diagnostics exercised by this control golden:\n'
 case "$PROBE_MODE" in
   fail)
     rows 'first: false\nnested: label: false\nlast: true\n'
@@ -83,7 +91,19 @@ case "$PROBE_MODE" in
   stale) printf 'FAIL: first: false\n'; exit 1 ;;
   reused) exit 0 ;;
   both) rows 'first: false\nnested: label: true\nlast: true\n'
-    cp "$out/probe.exe.output" "$out/probe.actual"; printf 'FAIL: first: false\n'; exit 1 ;;
+    cp "$out/$name.exe.output" "$out/$name.actual"; printf 'FAIL: first: false\n'; exit 1 ;;
+  # A failed claim's refusal marker is not printed (gh-ocannl-1216): a row short of
+  # the golden, every other row printed -- the failed claim the first or the last.
+  omitted) rows "first: false\n$section$m2"'last: true\n'
+    printf 'FAIL: first: false\nFAILED: 1 check did not hold.\n'; exit 1 ;;
+  omittedlast) rows "first: true\n$section$m1"'last: false\n'
+    printf 'FAIL: last: false\nFAILED: 1 check did not hold.\n'; exit 1 ;;
+  # The same shortfall from a run cut short: the golden's last row never printed,
+  # or every row did but no teardown says the process ended through Verdict.
+  omittedcut) rows "first: false\n$section$m2"
+    printf 'FAIL: first: false\nFAILED: 1 check did not hold.\n'; exit 1 ;;
+  omittedkilled) rows "first: false\n$section$m2"'last: true\n'
+    printf 'FAIL: first: false\nCommand got signal SEGV.\n'; exit 1 ;;
   compile) echo 'Error: injected compile failure'; exit 1 ;;
   refused) printf 'dune: unknown option\nUsage: dune build [OPTION]…\n'; exit 1 ;;
   restore_error) rm module.ml; mkdir module.ml; exit 1 ;;
@@ -102,6 +122,9 @@ export OCANNL_TOOL_FLEET_WORKER=none OCANNL_TOOL_DXG_DEVICE="$fixture/no-such-dx
   OCANNL_TOOL_KFD_TOPOLOGY="$fixture/no-such-kfd" OCANNL_TOOL_NVIDIA_DEVICE="$fixture/no-such-nvidia"
 cd "$fixture/repo"
 printf 'first: true\nnested: label: true\nlast: true\n' > probe.expected
+printf 'first: true\n\nSynthetic controls: scanner refusal diagnostics exercised by this control golden:\n%s\n%s\nlast: true\n' \
+  '  [scanner-refusal:00000000000000000000000000000001] first refusal' \
+  '  [scanner-refusal:00000000000000000000000000000002] last refusal' > manifest.expected
 printf 'prefix\r\nANCHOR\r\nsuffix without newline' > module.ml
 chmod 640 module.ml
 cp module.ml "$fixture/pristine"
@@ -197,6 +220,31 @@ run_case 4
 grep -q '^rows: 1 printed of 3 in probe.expected$' "$fixture/result"
 unset DUNE_BUILD_DIR
 printf 'PASS stopped early, never ran and unattributable runs exit 4 and say why; a raising Verdict.case that reached its last case is caught\n'
+# Rows short only by refusal-manifest markers, the run having printed every other
+# row and ended through Verdict's teardown, reached its last row (gh-ocannl-1216);
+# the same shortfall with the last row missing, or with no teardown, did not.
+for mode in omitted omittedlast; do
+  export PROBE_MODE=$mode
+  PROBE_ALIAS=@runtest-manifest run_case 1
+  grep -q '^rows: 5 printed of 6 in manifest.expected$' "$fixture/result"
+  grep -q "^refusal markers omitted: 1 (a failed claim's marker is not printed; every other row was, so the run reached its last row)$" \
+    "$fixture/result" || { cat "$fixture/result"; echo "$mode: no omitted-markers line"; exit 1; }
+  reached
+done
+for mode in omittedcut omittedkilled; do
+  export PROBE_MODE=$mode
+  PROBE_ALIAS=@runtest-manifest run_case 4
+  case $mode in
+    omittedcut) flagged "STOPPED EARLY: the mutated run printed 4 of the golden's 6 rows" ;;
+    omittedkilled) flagged "STOPPED EARLY: the mutated run printed 5 of the golden's 6 rows" ;;
+  esac
+done
+# The marker row the runner skips is the manifest's own: a rewording there must fail here.
+grep -qF 'Printf.sprintf "[scanner-refusal:%s] %s"' "$root/test/support/refusal_control_scan.ml" ||
+  { echo 'Refusal_control_scan.marker no longer writes "[scanner-refusal:<digest>] <fragment>"'; exit 1; }
+grep -qF 'printf "  %s\n" marker' "$root/test/support/refusal_control_manifest.ml" ||
+  { echo 'Refusal_control_manifest.print no longer indents a marker row by two spaces'; exit 1; }
+printf 'PASS rows short only by a failed claim'"'"'s refusal marker are caught; cut or killed runs with the same shortfall exit 4\n'
 for mode in pass compile refused; do
   export PROBE_MODE=$mode
   case $mode in pass) rc=0 ;; compile) rc=4 ;; refused) rc=2 ;; esac
