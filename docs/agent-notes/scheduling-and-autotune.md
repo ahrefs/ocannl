@@ -493,6 +493,12 @@ files.
   measurement budget keeps going to schedules that never tensorize: `mma_format_tiles` is keyed on
   the whole `(a, b, accumulator)` format triple, with per-entry arch floors, precisely so that a
   combination a backend supports at one accumulator width but not the other cannot be seeded.
+  The GPU descriptor/resolver cross-check in `schedule_mma_matmul` compiles every f32/f16/bf16/fp8
+  storage triple under default, wide and tf32 policies (gh-ocannl-1058). Its expectation uses
+  `Backend_intf.advertises_mma_format_in_scope`, a pure descriptor judgment with explicit policy
+  and accumulator scope; tile divisibility is asserted separately. Missing MMA capability skips
+  this both-sides census leg, including HIP's device/header conjunction. `mma_format_scope` covers
+  absent wide scopes and policy combinations a concrete GPU cannot vary.
   Where a timing is REPORTED the label is now printed, so a mismatch is legible without re-deriving
   anything: the `autotune_log` NOTE lines lead with it, `Train.tune_placements`' arm lines read
   `[tensorized/<label>]`, `bin/schedule_bench` and `bin/narrow_gebp_bench` print

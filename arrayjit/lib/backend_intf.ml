@@ -341,6 +341,30 @@ let advertises_mma_format (limits : hardware_limits) ~a ~b ~d =
   | None -> false
   | Some mma -> List.Assoc.mem mma.mma_format_tiles (a, b, d) ~equal:equal_mma_format_triple
 
+(** Whether the advertised triple is available in this accumulator scope under an explicit numerics
+    policy. This is a descriptor judgment, not a promise that a particular statement emits:
+    geometry, strides, address spaces and logging can still make the backend decline it. [Mma_tf32]
+    describes f32 operand storage; it requires [tf32_matmuls]. Uniform narrow triples additionally
+    require the matching wide-accumulator scope when that policy is selected. *)
+let advertises_mma_format_in_scope (limits : hardware_limits) ~(policy : Numerics.t) ~scope ~a ~b ~d
+    =
+  advertises_mma_format limits ~a ~b ~d
+  && ((not (equal_mma_input_format a Mma_tf32 || equal_mma_input_format b Mma_tf32))
+     || policy.tf32_matmuls)
+  &&
+  match limits.mma with
+  | None -> false
+  | Some mma -> (
+      let has scopes = List.mem scopes scope ~equal:equal_mma_emission_scope in
+      match (a, b, d) with
+      | Mma_f16, Mma_f16, Mma_f16
+        when Numerics.equal_fp16_mode policy.fp16_arithmetic Numerics.Fp16_wide ->
+          has mma.mma_f16_wide_acc_scopes
+      | Mma_bf16, Mma_bf16, Mma_bf16
+        when Numerics.equal_bf16_mode policy.bf16_arithmetic Numerics.Bf16_wide ->
+          has mma.mma_bf16_wide_acc_scopes
+      | _ -> true)
+
 type codegen_capabilities = {
   supports_f64 : bool;
       (** Whether the backend dialect can represent f64 tensor storage. This is explicit rather than

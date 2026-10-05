@@ -56,12 +56,6 @@ let exempt_zero_reference_exports =
     "Backend_intf.compare_mma_staged_layout";
     "Backend_intf.equal_hardware_limits";
     "Backend_intf.equal_mma_capability";
-    (* Not pre-existing. [Backend_intf.equal_mma_format_triple] and [advertises_mma_format] -- the
-       typed way to interrogate the MMA seam of gh-ocannl-822 -- absorbed what used to be open-coded
-       per-constructor comparisons at the call sites, which were this derived equality's only
-       external references. It stays derived because the record equalities exempted above are
-       generated from it, and asking the descriptor is what callers should reach for instead. *)
-    "Backend_intf.equal_mma_input_format";
     "Backend_intf.equal_mma_staged_layout";
     "Backend_intf.hardware_limits_of_sexp";
     "Backend_intf.mma_capability_of_sexp";
