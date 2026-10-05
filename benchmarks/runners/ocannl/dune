@@ -117,7 +117,7 @@
 (executable
  (name bench_mma_register_scope_emit)
  (modules bench_mma_register_scope_emit)
- (libraries base ocannl stdio test_utils ll_test)
+ (libraries base bench_args ocannl stdio test_utils ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl))
  (modes exe))

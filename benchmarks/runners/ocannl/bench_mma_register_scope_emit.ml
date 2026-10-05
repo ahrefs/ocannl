@@ -14,17 +14,19 @@ type layout = Plain | Swizzled
 let layout_name = function Plain -> "plain" | Swizzled -> "swizzled"
 
 let () =
-  let args = List.tl_exn (Array.to_list (Sys.get_argv ())) in
+  let args = Bench_args.create "bench_mma_register_scope_emit" in
   let path =
-    match List.filter args ~f:(fun a -> not (String.is_prefix a ~prefix:"-")) with
+    match Bench_args.positional args with
     | [ path ] -> path
-    | _ -> failwith "usage: bench_mma_register_scope_emit.exe OUTPUT.cu [--layout=plain|swizzled]"
+    | _ ->
+        Bench_args.bad args
+          "usage: OUTPUT.cu [--layout=plain|swizzled] ([--] before an OUTPUT.cu starting with -)"
   in
   let layout =
-    match List.find_map args ~f:(String.chop_prefix ~prefix:"--layout=") with
+    match Bench_args.flag_value args ~flag:"layout" with
     | None | Some "plain" -> Plain
     | Some "swizzled" -> Swizzled
-    | Some other -> failwith ("unknown --layout=" ^ other ^ " (plain|swizzled)")
+    | Some other -> Bench_args.bad args "unknown --layout=%s (plain|swizzled)" other
   in
   (* The load path each layout must render through: the plain twin's per-lane gathers, the swizzled
      twin's ldmatrix A (its row-major B uses swizzle-aware byte gathers, gh-ocannl-1073). A timing
