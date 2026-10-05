@@ -6493,6 +6493,27 @@
  (modules bench_self_test)
  (libraries base stdio yojson bench_harness ocannl arrayjit.verdict))
 
+; Tensor-core kernels must name their accumulator destination in the shipped table, even when
+; their zeroing kernel is separate. This compiles two tiny matmuls; it runs no timing window.
+
+(test
+ (name bench_mma_writes)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND)
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
+  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
+  (env_var OCANNL_LARGE_MODELS)
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_PROFILE)
+  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA))
+ (modules bench_mma_writes)
+ (libraries base stdio bench_harness ocannl arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_ocannl)))
+
 ; gh-ocannl-657: the exhaustive half of the e5m2 codec verification, the half that needs no GPU.
 ; 2^32 f32 bit patterns and 17.2e9 doubles, so it belongs on `slow` rather than in `runtest` --
 ; seconds, not milliseconds -- but `@check` compiles it and `dune build

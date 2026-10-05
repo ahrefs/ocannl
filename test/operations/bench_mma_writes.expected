@@ -1,0 +1,4 @@
+the constructed destinations are distinct: true
+each routine ships separate zeroing and MMA kernels: true
+every shipped kernel attributes exactly its constructed destination: true
+the printed per-kernel rows retain exact destination ownership in launch order: true
