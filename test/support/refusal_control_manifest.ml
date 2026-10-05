@@ -138,6 +138,9 @@ let raw_entries =
         "[scanner-refusal:4166c0bca69640c175777244011fc4e2] that allows nothing";
         "[scanner-refusal:5aac880a61d2880852d33a0856daa83f] behind a member's";
         "[scanner-refusal:396ecaa5128a1569c6279921019721c1] directory the action";
+        "[scanner-refusal:c5c4846ab3c1d492a14be62c4ecbdc6c] allow constructor suffixes";
+        "[scanner-refusal:69eae464e65486966fad9baf77c30d51] provenance constructor allowances";
+        "[scanner-refusal:f9313f61cc480e2fb8d0b3cd6b1ae843] provenance constructor allowances";
         "[scanner-refusal:ac43499e46e4fb95bbea30412af203b6] counts remain review-visible";
         "[scanner-refusal:84d226496601429f470c41aba20a39c2] adopted-count allowance cannot";
         "[scanner-refusal:531d64a37eb2ccc8b4c3fee2c5a2fac9] quoted-source entry spans";
