@@ -69,6 +69,7 @@
   base
   stdio
   unix
+  fresh_process
   arrayjit.utils
   arrayjit.ir
   arrayjit.verdict

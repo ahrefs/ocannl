@@ -134,6 +134,7 @@ let known_config_keys =
       "gpu_schedule_min_parallel";
       "gpu_schedule_workgroup_fill";
       "gpu_lane_preamble_reduction";
+      "gpu_serial_lanes";
       "automatic_cpu_schedule";
       "cpu_schedule_min_parallel";
       "schedule_fission";
@@ -312,29 +313,24 @@ let config_key_classification : (config_key_class * string * string list) list =
        capture fires only for multi-segment routines, so it moves a fissioned candidate's launch \
        overhead relative to a whole-routine one",
       [ "buffer_aliasing"; "gpu_graph_capture" ] );
-    ( Keyed "fission",
-      "it decides the default fission segmentation on GPU backends: since gh-ocannl-1126 the merge \
-       decision compares the default GPU schedule's per-statement mappings, so these are inputs of \
-       the segmentation itself, and a fissioned winner's saved per-segment schedules are keyed by \
-       segment digests that replay recomputes -- a winner stored under one setting would find \
-       another segmentation under another ([Schedule.default_schedule_fingerprint] also records \
-       them for the [default_ms] diagnostic)",
-      [
-        "gpu_fission_keep_mapping";
-        "gpu_schedule_block_size";
-        "gpu_schedule_min_parallel";
-        "gpu_schedule_workgroup_fill";
-        "gpu_lane_preamble_reduction";
-      ] );
     ( Search_shaping,
-      "it defines the untuned default pipeline, which a search seeds from and reports against; a \
-       cached winner carries its own ops and replays without consulting it \
-       ([Schedule.default_schedule_fingerprint] records these for the [default_ms] diagnostic)",
+      "it defines the untuned default pipeline -- its schedules and, on GPU backends, its fission \
+       segmentation (since gh-ocannl-1126 the merge decision compares the default GPU schedule's \
+       per-statement mappings) -- which a search seeds from and reports against; a cached winner \
+       carries its own ops, and a fissioned one its segmentation and every segment's schedule, \
+       zero expansions included, so it replays without consulting these (gh-ocannl-1164; \
+       [Schedule.default_schedule_fingerprint] records them for the [default_ms] diagnostic)",
       [
         "automatic_gpu_schedule";
         "automatic_cpu_schedule";
         "cpu_schedule_min_parallel";
         "schedule_fission";
+        "gpu_fission_keep_mapping";
+        "gpu_schedule_block_size";
+        "gpu_schedule_min_parallel";
+        "gpu_schedule_workgroup_fill";
+        "gpu_lane_preamble_reduction";
+        "gpu_serial_lanes";
       ] );
     ( Search_shaping,
       "it steers the search: how wide, how long, what is proposed, what is pruned, how candidates \
@@ -1919,11 +1915,9 @@ let enable_runtime_debug () =
     with it. Process-wide rather than per backend, so that ids never collide across the backends a
     process links. *)
 let get_global_run_id =
-  let next_id = ref 0 in
-  fun () ->
-    Int.incr next_id;
-    if !next_id < 0 then next_id := 0;
-    !next_id
+  (* Atomic: cc library paths rely on these ids being unique within the process (gh-ocannl-1197). *)
+  let next_id = Atomic.make 0 in
+  fun () -> Atomic.fetch_and_add next_id 1 + 1
 
 let rec union_find ~equal map ~key ~rank =
   match Map.find map key with

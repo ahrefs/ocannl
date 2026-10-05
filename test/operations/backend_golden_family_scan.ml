@@ -26,8 +26,6 @@ open Stdio
 module Backends = Context.Backends
 module Dune_scan = Test_utils.Dune_stanza_scan
 
-let printf = Test_utils.Refusal_control_manifest.printf
-
 type member = { path : string; family : string; backend : string }
 
 type provenance = {

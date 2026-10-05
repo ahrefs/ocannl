@@ -7,9 +7,6 @@ open Stdio
    nonzero exit means dune never writes the redirected stdout, the same lines go to stderr, where
    they survive to be read (gh-ocannl-601). *)
 open Verdict.Claims
-
-let printf = Test_utils.Refusal_control_manifest.printf
-
 module Config_key_scan = Test_utils.Config_key_scan
 
 (* A lower bound on the config keys the call-site scan finds: a floor, not a count, so that adding a

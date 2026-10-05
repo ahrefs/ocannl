@@ -61,9 +61,6 @@
 
 open Base
 open Stdio
-
-let printf = Test_utils.Refusal_control_manifest.printf
-
 module Scan = Test_utils.Verdict_scan
 module Dune = Test_utils.Dune_stanza_scan
 module Sources = Test_utils.Config_key_scan

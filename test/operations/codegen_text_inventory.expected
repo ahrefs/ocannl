@@ -161,6 +161,7 @@ test/operations/cpu_vectorized.ml
     "float4_t"
     "reinterpret_cast"
     "vector_size"
+test/operations/fission_replay_segmentation.ml
 test/operations/fission_schedule.ml
     "#pragma omp parallel for"
     "__seg0"
@@ -553,3 +554,5 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:545694a8ea6e371db823bcc7d2639f85] scanned library interfaces
   [scanner-refusal:327f5dea331c9591f8d59a6da296202d] scanned library declares
   [scanner-refusal:80b2a504ebea9c64f6fcc3c5da12164e] generated text behind
+Catalogue-only: direct failures no control executes (reasons in `raw_catalogue_only`):
+  [scanner-refusal:532d3ed986dd6559fec87d780769ee1f] declares module

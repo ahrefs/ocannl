@@ -37,14 +37,18 @@
       captured has no search to run and propagates.
     - {b Fissioned candidates}: the kernel-fission pipeline ({!Ir.Schedule.fission_scheduled}) with
       per-segment schedules — the same preset sweep per segment, and beam rounds that extend
-      {e one segment at a time}. Per-segment schedules are cached keyed by the pre-schedule
-      segment's canonical digest. [`Zeros] segments keep the default zero-expansion; [`Solo]
-      segments stay unscheduled. One seed uses the config-default thresholds, reproducing the
-      untuned default pipeline exactly — so the winner is never worse than not tuning, even on
-      launch-overhead-bound workloads where every aggressive preset loses to it; its measured time
-      is surfaced as the report's [default_ms] reference (gh-ocannl-552). Each preset is
-      additionally seeded in a {e privatized} variant ({!extend_with_privatize}): per segment, every
-      materialized read-modify-write accumulator is contracted into a per-thread register tile
+      {e one segment at a time}. [`Zeros] segments keep the default zero-expansion; [`Solo] segments
+      stay unscheduled. A fissioned winner is cached with its whole segmentation — each segment's
+      kind, length and pre-schedule canonical digest, and its schedule, zero expansions included
+      ({!Ir.Schedule_cache.saved_segment}, gh-ocannl-1164) — and replays by cutting there
+      ({!Ir.Schedule.fission_segmented}'s [replay]) rather than by re-segmenting under the current
+      policy: a segmentation that no longer fits, or a segment whose digest differs from the saved
+      one, fails the replay into a re-search. One seed uses the config-default thresholds,
+      reproducing the untuned default pipeline exactly — so the winner is never worse than not
+      tuning, even on launch-overhead-bound workloads where every aggressive preset loses to it; its
+      measured time is surfaced as the report's [default_ms] reference (gh-ocannl-552). Each preset
+      is additionally seeded in a {e privatized} variant ({!extend_with_privatize}): per segment,
+      every materialized read-modify-write accumulator is contracted into a per-thread register tile
       ({!Ir.Schedule.optop.Privatize}) over its serial reduction loop where the op's preconditions
       permit — a routine-local accumulator beats a device-memory RMW, and on Metal it sidesteps the
       volatile scalar-RMW workaround.
@@ -74,8 +78,8 @@
       the shared segment decline on companion coverage, and the finer cut frees the site into its
       own kernel; segments whose digest is new versus the coarse segmentation seed [fine]-flagged
       singles, one composite recombines the fine keys' best-timed singles (coarse-timed bests staff
-      the digest-identical segments), and a fine winner records the mode in its cache entry so
-      replay re-segments identically.
+      the digest-identical segments); a fine winner's cached segmentation is the fine one, so its
+      replay needs no record of the mode.
     - {b Convolution sketches} (gh-ocannl-493): when a convolution accumulation site is detected
       ({!detect_conv}), the implicit-GEMM pipeline — the packing [Stage] serving as im2col, the
       micro-kernel the ordinary [Tile_mma]. On the C backends: serial and Grid-parallel flavors, the
@@ -803,6 +807,17 @@ type report = {
           proposal, but it did not complete a timing window; [`Refused] and [`Timed] record that
           proposal's refused or admitted window. Window outcomes are published before post-admission
           callbacks can raise, including in partial reports. *)
+  fiss_sketch_playoff_timed : int;
+      (** The composite playoff's windows (gh-ocannl-1166), counted here and NOT in
+          [fiss_sketch_timed]. A per-segment single is timed against every other segment's untuned
+          preset, a backdrop several times the composite's time, so near-tie singles are re-ranked
+          inside the faster timed composite: per keyed segment, up to [playoff_width] singles within
+          [playoff_margin] of the segment's best single take its place (constants in [autotune.ml]);
+          changing either bumps [Schedule_cache.entry_version]. Includes refused windows, like
+          [fiss_sketch_timed]. *)
+  fiss_sketch_playoff_swaps : int;
+      (** Of [fiss_sketch_playoff_timed], the alternates that ran faster than the incumbent
+          composite and replaced it, so later segments' alternates build on them. *)
   split_reduce_candidates : int;
       (** Split-reduce seeds (gh-ocannl-484 task 3): one candidate per {!split_reduce_sites} site
           within the [max_split_reduce_sites] cap and eligible [num_blocks] value — the two-pass
@@ -826,13 +841,14 @@ type report = {
   mma_candidates : int;
       (** Candidates whose label promises a tensorized ([Schedule.Tensorize]) pipeline that the
           search put through candidate compile: whole-routine and per-fission-segment sketch seeds,
-          the cross-segment recombination composite, and beam-expansion candidates. Counted at the
-          same point as [mma_timed], so the two always describe the same population. *)
+          the cross-segment recombination composite, composite-playoff alternates, and
+          beam-expansion candidates. Counted at the same point as [mma_timed], so the two always
+          describe the same population. *)
   fiss_mma_candidates : int;
       (** Of [mma_candidates], candidates built from per-fission-segment MMA sketches (including
-          their recombination composites). This is counted at candidate compile, not enumeration, so
-          it detects a fission MMA family that disappeared or never reached compilation without
-          borrowing evidence from a whole-routine candidate. *)
+          their recombination composites and composite-playoff alternates). This is counted at
+          candidate compile, not enumeration, so it detects a fission MMA family that disappeared or
+          never reached compilation without borrowing evidence from a whole-routine candidate. *)
   mma_timed : int;
       (** Of [mma_candidates], those that compiled and were actually timed (dedup'd duplicates
           excluded — an identical candidate was already timed). Includes completed timing windows
@@ -1040,13 +1056,13 @@ val no_search_report : timing:timing_mode -> report
       or [round<k>]), [candidates] (the phase's total), [timed], [attempts], [compile_s],
       [timing_s], [best_ms], [best].
     - [candidate] ({!tune}, as EVERY candidate attempt starts): [routine], [elapsed_s], [phase]
-      ([seeds], [recombine] or [round<k>]), [tried=<k>/<total>] (the ordinal of the attempt starting
-      within its phase; [?] when the phase's total is not known up front), [timed], [attempts] (this
-      one included), [compile_s], [timing_s], [best_ms], [best] (all as of the attempt's start), and
-      [attempt], the starting candidate's label. A search killed inside a candidate is therefore
-      inside the one its last [candidate] line names. The rate is bounded by the attempts
-      themselves, not by a clock: a time bound would leave a window in which the candidate being
-      worked on is unnamed.
+      ([seeds], [recombine], [playoff] or [round<k>]), [tried=<k>/<total>] (the ordinal of the
+      attempt starting within its phase; [?] when the phase's total is not known up front), [timed],
+      [attempts] (this one included), [compile_s], [timing_s], [best_ms], [best] (all as of the
+      attempt's start), and [attempt], the starting candidate's label. A search killed inside a
+      candidate is therefore inside the one its last [candidate] line names. The rate is bounded by
+      the attempts themselves, not by a clock: a time bound would leave a window in which the
+      candidate being worked on is unnamed.
     - [stage] ({!tune}): [routine], [elapsed_s], [stage], [attempts], [compile_s], [timing_s],
       written BEFORE each step outside the candidates that can block for long: [base_compile],
       [cache_replay], [baseline_timing], [seed_enumeration] (the lowerings the seeds are derived

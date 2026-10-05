@@ -522,7 +522,7 @@ let () =
           false);
   (* Tune integration: the search on the lm_head shape (fine candidates seeded on GPU backends)
      crowns a winner that computes the right values, and a second tune replays it through the disk
-     cache — exercising the [finer_fission] entry field when a fine candidate won. *)
+     cache — exercising the persisted segmentation (gh-ocannl-1164) when a fine candidate won. *)
   clean_cache "autotune_cache_lm_head";
   let tune_once () =
     let reports = ref [] in

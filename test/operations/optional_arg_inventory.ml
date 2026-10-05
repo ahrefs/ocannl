@@ -10,7 +10,6 @@ module Sources = Test_utils.Config_key_scan
 module Refusal_manifest = Test_utils.Refusal_control_manifest
 
 let read path = Stdlib.In_channel.with_open_bin path Stdlib.In_channel.input_all
-let printf = Refusal_manifest.printf
 
 let require_sources ~fail sources =
   if List.is_empty sources then (

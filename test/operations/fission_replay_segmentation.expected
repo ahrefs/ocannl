@@ -1,0 +1,22 @@
+the stored segmentation fissions the routine: true
+the stored segmentation carries a zeros segment: true
+the stored winner replays from the cache: true
+the replay is fissioned: true
+the replay computes the right values: true
+the current policy segments the routine differently from the stored segmentation: true
+the changed configuration re-derives a different zero expansion than the stored one: true
+the cache key does not move with the segmentation policy: true
+after the policy change the winner still replays from the cache: true
+after the policy change the replay computes the right values: true
+after the policy change the replay emits identical code: true
+a segmentation covering fewer statements than the routine is refused: true
+a segmentation with an empty segment is refused: true
+a segmentation at other boundaries still partitions the routine: true
+its segments are not the ones the schedules were saved against: true
+a stored segmentation that no longer applies declines to a re-search: true
+the re-searched routine computes the right values: true
+the routine has two segments with one structural digest: true
+the twins carry different schedules: true
+the twins' entry replays from the cache: true
+each twin replays its own schedule: true
+the twins' replay computes the right values: true

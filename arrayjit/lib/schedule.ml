@@ -6269,6 +6269,35 @@ let lane_preamble_reduction_for (limits : Backend_intf.hardware_limits) =
       if limits.Backend_intf.lane_scalar_recompute_cheap then Preamble_cooperative
       else Preamble_refused
 
+(* How the default GPU schedule weighs its lane geometry -- config [gpu_serial_lanes]
+   (gh-ocannl-1167): taken where a kernel admits it, and a reason for fission to cut a kernel
+   ([cut]); taken where a kernel admits it, but no reason to cut ([admitted]); never taken
+   ([off]). *)
+type serial_lanes = Lanes_cut | Lanes_admitted | Lanes_off [@@deriving sexp_of, equal]
+
+let gpu_serial_lanes () =
+  match
+    String.lowercase
+      (String.strip (Utils.get_global_arg ~arg_name:"gpu_serial_lanes" ~default:"auto"))
+  with
+  | "auto" -> None
+  | "cut" -> Some Lanes_cut
+  | "admitted" -> Some Lanes_admitted
+  | "off" -> Some Lanes_off
+  | other -> invalid_arg ("gpu_serial_lanes: expected auto, cut, admitted or off, got " ^ other)
+
+(* [auto] resolves from the same economics as {!lane_preamble_reduction_for}. Every lane recomputes
+   its nest's per-pair scalar preamble, which the plain plan pays once per thread over its channel
+   loop. Where that is cheap (Metal, CUDA) lanes are worth a kernel boundary. Where it is not (HIP,
+   gfx1151) the forward value pass still wins on lanes in its own kernel -- its plain plan walks the
+   whole row in one thread -- but the fused backward's dV loses: cut from dK to keep its lanes, it
+   took 2.30 ms beside dK's 1.03 ms, where the two merged on the plain plan take 1.72 ms
+   (gh-ocannl-1167). *)
+let serial_lanes_for (limits : Backend_intf.hardware_limits) =
+  match gpu_serial_lanes () with
+  | Some mode -> mode
+  | None -> if limits.Backend_intf.lane_scalar_recompute_cheap then Lanes_cut else Lanes_admitted
+
 (* Lane geometry (gh-ocannl-1003 stage 1). A nest whose parallel loop sits under a serial loop past
    a lane-uniform preamble -- the online-softmax hoist's value pass, [for (b, s, h) { for t { p :=
    P[s, t]; for e { O[s, e] += p * V[t, e] } } }] -- has a plain path that stops at the preamble, so
@@ -6294,21 +6323,26 @@ let lane_preamble_reduction_for (limits : Backend_intf.hardware_limits) =
    plan's [standard_threads]. Cheap to ask of every kernel: without a nest whose lane path is longer
    than its plain path, it runs no analysis. GPU only: the CPU preset parallelizes one outermost
    loop across pool chunks, where a lane loop would only add structure that runs serially inside a
-   chunk. *)
+   chunk. Not taken at all unless [enabled] ({!serial_lanes_for}, gh-ocannl-1167). *)
 let lane_geometry ~block_size ~min_parallel ~(limits : Backend_intf.hardware_limits)
-    ~standard_threads ~(preamble_reduction : lane_preamble_reduction Lazy.t)
-    (opt : Low_level.optimized) : schedule option =
+    ~standard_threads ~(enabled : bool Lazy.t)
+    ~(preamble_reduction : lane_preamble_reduction Lazy.t) (opt : Low_level.optimized) :
+    schedule option =
   let open Low_level in
-  (* The treatment is asked for only where the kernel holds a preamble reduction on some lane path
-     -- only the fused backward mints one -- so its configuration is read by exactly the programs it
-     can affect (gh-ocannl-1124). *)
-  let has_reductions =
+  (* Here both treatments are asked for only where they can matter -- the gate where some statement
+     has a lane path at all, the preamble treatment where that path holds a preamble reduction (only
+     the fused backward mints one, gh-ocannl-1124). [gpu_serial_lanes] is also read by
+     {!fission_keep_mapping} on the first merge probe of every fissioned GPU routine. *)
+  let lane_path_beyond shorter =
     List.exists (flat_lines [ opt.llc ]) ~f:(fun stmt ->
         List.length (path_loops ~lanes:true ~preamble_reductions:true stmt)
-        > List.length (path_loops ~lanes:true stmt))
+        > List.length (shorter stmt))
   in
+  let enabled = lane_path_beyond (fun stmt -> path_loops stmt) && Lazy.force enabled in
   let preamble_reduction =
-    if has_reductions then Lazy.force preamble_reduction else Preamble_refused
+    if enabled && lane_path_beyond (fun stmt -> path_loops ~lanes:true stmt) then
+      Lazy.force preamble_reduction
+    else Preamble_refused
   in
   let preamble_reductions =
     match preamble_reduction with
@@ -6319,9 +6353,10 @@ let lane_geometry ~block_size ~min_parallel ~(limits : Backend_intf.hardware_lim
   let loop = function For_loop fc -> Some (fc.index, fc.to_ + 1) | _ -> None in
   if
     not
-      (List.exists (flat_lines [ opt.llc ]) ~f:(fun stmt ->
-           List.length (path_loops ~lanes:true ~preamble_reductions stmt)
-           > List.length (path_loops stmt)))
+      (enabled
+      && List.exists (flat_lines [ opt.llc ]) ~f:(fun stmt ->
+          List.length (path_loops ~lanes:true ~preamble_reductions stmt)
+          > List.length (path_loops stmt)))
   then None
   else
     match
@@ -6462,7 +6497,7 @@ let fold_mma_schedule ~(limits : Backend_intf.hardware_limits) (opt : Low_level.
               (launch_geometry_of_dims (Low_level.launch_dims folded.Low_level.llc))))
         [ op ]
 
-let default_gpu_presets ?block_size ?min_parallel ?workgroup_fill ?preamble_reduction
+let default_gpu_presets ?block_size ?min_parallel ?workgroup_fill ?preamble_reduction ?lanes
     ?(limits = Backend_intf.no_hardware_limits) (opt : Low_level.optimized) : schedule =
   let open Low_level in
   let block_size =
@@ -6595,20 +6630,25 @@ let default_gpu_presets ?block_size ?min_parallel ?workgroup_fill ?preamble_redu
   in
   Option.value ~default:standard
     (lane_geometry ~block_size ~min_parallel ~limits ~standard_threads
+       ~enabled:
+         (match lanes with
+         | Some lanes -> Lazy.from_val lanes
+         | None -> lazy (not (equal_serial_lanes (serial_lanes_for limits) Lanes_off)))
        ~preamble_reduction:
          (match preamble_reduction with
          | Some p -> Lazy.from_val p
          | None -> lazy (lane_preamble_reduction_for limits))
        opt)
 
-let default_gpu ?block_size ?min_parallel ?workgroup_fill ?preamble_reduction
+let default_gpu ?block_size ?min_parallel ?workgroup_fill ?preamble_reduction ?lanes
     ?(limits = Backend_intf.no_hardware_limits) (opt : Low_level.optimized) : schedule =
   (* The block fold on matrix units comes first: its kernel is one fold nest the presets would give
      scalar geometry. *)
   match fold_mma_schedule ~limits opt with
   | Some schedule -> schedule
   | None ->
-      default_gpu_presets ?block_size ?min_parallel ?workgroup_fill ?preamble_reduction ~limits opt
+      default_gpu_presets ?block_size ?min_parallel ?workgroup_fill ?preamble_reduction ?lanes
+        ~limits opt
 
 let default_cpu ?min_parallel (opt : Low_level.optimized) : schedule =
   let min_parallel =
@@ -6646,9 +6686,10 @@ let default_cpu ?min_parallel (opt : Low_level.optimized) : schedule =
     parallelism (see {!aligned_merge}): elementwise chains over one intermediate stay a single
     kernel, while parallelism switches (a batch-parallel producer feeding a reduce-over-batch
     consumer) and alignment-trimming merges still cut. On GPU backends every merge -- dependent or
-    conflict-free -- is also judged against the schedule its statements would actually receive
-    ({!keeps_mapping}, gh-ocannl-1126): one that costs a statement its own mapping keeps the
-    boundary.
+    conflict-free -- is also judged against the default GPU schedule ({!keeps_mapping},
+    gh-ocannl-1126): one that costs a statement its own mapping keeps the boundary. The probe is the
+    schedule the kernel will receive under [gpu_serial_lanes = cut]; under [admitted] or [off] it
+    leaves out the lane geometry, so no boundary is kept for lanes (gh-ocannl-1167).
 
     Segmentation is conservative and total (no [Bail]): a statement opaque to the analysis
     ([Staged_compilation], barriers, pre-annotated loops) or one the annotator can never cover (bare
@@ -6790,6 +6831,9 @@ type funit = {
           {!group_units} may fold into the reduction's segment. A thunk because the expansion mints
           loop symbols: the fold probes it under {!Indexing.discarding_symbols} and builds it for
           real only when it commits. *)
+  f_orig : funit option;
+      (** On an expanded zero: the whole-node unit it was expanded from. A [`Solo] (serial) merge
+          restores it, so a serial kernel is the same code whether derived or replayed. *)
 }
 
 (* Units: each real statement with the comments preceding it. Trailing comments attach to the last
@@ -6815,7 +6859,15 @@ let collect_units ?max_chain ?(fold = fun _ _ -> None) plc (opt : Low_level.opti
           | chains -> (`Normal, chains)
           | exception Bail -> (`Solo, []))
     in
-    { f_stmts = List.rev (stmt :: glue); f_index = index; f_sum; f_kind; f_chains; f_fold = None }
+    {
+      f_stmts = List.rev (stmt :: glue);
+      f_index = index;
+      f_sum;
+      f_kind;
+      f_chains;
+      f_fold = None;
+      f_orig = None;
+    }
   in
   let rec go index glue acc = function
     | [] -> (
@@ -6841,6 +6893,7 @@ let collect_units ?max_chain ?(fold = fun _ _ -> None) plc (opt : Low_level.opti
                 (mk u.f_index [] expanded) with
                 f_stmts =
                   List.map u.f_stmts ~f:(fun st -> if phys_equal st zero then expanded else st);
+                f_orig = Some u;
               })
         in
         { u with f_fold } :: with_folds rest
@@ -6868,8 +6921,12 @@ let seg_of_unit u =
   { g_units = [ u ]; g_kind = u.f_kind; g_reads = reads; g_writes = writes; g_chains = u.f_chains }
 
 let merge_segs ~kind a b =
+  let units = a.g_units @ b.g_units in
   {
-    g_units = a.g_units @ b.g_units;
+    g_units =
+      (match kind with
+      | `Solo -> List.map units ~f:(fun u -> Option.value u.f_orig ~default:u)
+      | `Normal | `Zeros -> units);
     g_kind = kind;
     g_reads = Set.union a.g_reads b.g_reads;
     g_writes = Set.union a.g_writes b.g_writes;
@@ -7102,17 +7159,19 @@ let gpu_fission_keep_mapping =
   lazy (Utils.get_global_flag ~default:true ~arg_name:"gpu_fission_keep_mapping")
 
 (* The schedule-aware half of the merge decision (gh-ocannl-1126): [mapping] is the per-segment
-   schedule the kernel will actually receive -- the default GPU schedule, lane plans and lane
-   geometry included -- and a merge the legality rules admit is still refused when some statement of
-   the merged kernel gets less of its own mapping than it gets alone: fewer groups, or fewer active
-   threads. Both kinds of merge are judged: a dependent one whose alignment trims a statement's
-   chain to the common prefix (the composed [v.grad] merged with [w_v.grad], which reduces over the
-   positions [v.grad]'s blocks own), and an independent one whose kernel no longer admits a
-   statement's geometry (the fused dV lane nest merged with dK, which is no lane nest; the lm_head
-   logits beside the row max that trims them). A segment's statements were each admitted under this
-   test, so comparing every statement with its standalone mapping is the same as comparing with the
-   segment before the extension. Per statement, never the kernel's largest thread count: one
-   well-mapped nest does not pay for another's lost one.
+   default GPU schedule ({!fission_keep_mapping}): the schedule the kernel will actually receive,
+   lane plans and lane geometry included, under [gpu_serial_lanes = cut]; without the lane geometry
+   under [admitted] or [off], so no boundary is kept for lanes (gh-ocannl-1167) -- and a merge the
+   legality rules admit is still refused when some statement of the merged kernel gets less of its
+   own mapping than it gets alone: fewer groups, or fewer active threads. Both kinds of merge are
+   judged: a dependent one whose alignment trims a statement's chain to the common prefix (the
+   composed [v.grad] merged with [w_v.grad], which reduces over the positions [v.grad]'s blocks
+   own), and an independent one whose kernel no longer admits a statement's geometry (under [cut],
+   the fused dV lane nest merged with dK, which is no lane nest; the lm_head logits beside the row
+   max that trims them). A segment's statements were each admitted under this test, so comparing
+   every statement with its standalone mapping is the same as comparing with the segment before the
+   extension. Per statement, never the kernel's largest thread count: one well-mapped nest does not
+   pay for another's lost one.
 
    A mapping cut needs no retest after scope-local resolution ({!resolve_scope_crossings}). A cut
    whose new segment cannot replicate its scope-local definitions -- a unit between the definition
@@ -7477,8 +7536,13 @@ let promote_statement_crossing_locals plc (stmts : Low_level.t list) :
               (tn, prior) :: undo)
             else undo))
 
+(* Where lanes are only [Lanes_admitted] (gh-ocannl-1167), the merge is judged on the plain plans: a
+   merge that costs a nest nothing but its lanes is taken, and the kernel it lands in keeps them
+   wherever it still admits them. *)
 let fission_keep_mapping ~is_gpu ~limits =
-  if is_gpu && Lazy.force gpu_fission_keep_mapping then Some (fun opt -> default_gpu ~limits opt)
+  if is_gpu && Lazy.force gpu_fission_keep_mapping then
+    let lanes = lazy (equal_serial_lanes (serial_lanes_for limits) Lanes_cut) in
+    Some (fun opt -> default_gpu ~lanes:(Lazy.force lanes) ~limits opt)
   else None
 
 (* The expanded form of a whole-node [zero] that {!group_units} may fold into the reduction [next]
@@ -7501,103 +7565,188 @@ let reduction_zero_fold ~zero_sched (opt : Low_level.optimized) (zero : Low_leve
       else None
   | _ -> None
 
-let fission_scheduled ?(promote_locals = false) ?(arity_cuts = false) ?keep_mapping
+type segmentation = ([ `Normal | `Zeros | `Solo ] * int) list [@@deriving sexp, equal]
+
+let misfit_segmentation what =
+  raise
+    (Schedule_outcome.Cause_at
+       ( Schedule_outcome.Transform,
+         Schedule_outcome.Illegal_schedule
+           { check = "Schedule.fission_segmented"; detail = "the recorded segmentation " ^ what } ))
+
+(* The segments a recorded plan cuts [units] into ([units] it covers exactly, checked by the
+   caller): consecutive runs of the plan's lengths, each of the plan's kind. *)
+let segments_of_plan (units : funit list) (plan : segmentation) : segment list =
+  snd
+  @@ List.fold_map plan ~init:units ~f:(fun rest (kind, n) ->
+      match List.split_n rest n with
+      | u :: us, rest when n > 0 ->
+          (* A [`Normal] segment opening with a whole-node zero is a folded one ({!group_units}):
+             only the fold puts a [`Zeros] unit at a [`Normal] segment's head. *)
+          let u =
+            match (kind, u) with
+            | `Normal, { f_kind = `Zeros; f_fold = Some expand; _ } -> expand ()
+            | _ -> u
+          in
+          ( rest,
+            {
+              (List.fold us ~init:(seg_of_unit u) ~f:(fun seg u ->
+                   merge_segs ~kind seg (seg_of_unit u)))
+              with
+              g_kind = kind;
+            } )
+      | _ -> misfit_segmentation "has an empty segment")
+
+let fission_segmented ?(promote_locals = false) ?(arity_cuts = false) ?keep_mapping ?replay
     ~(preset : Low_level.optimized -> schedule) ~(zero_sched : Tn.t list -> schedule)
     ~static_indices (opt : Low_level.optimized) :
-    ([ `Normal | `Zeros | `Solo ] * Low_level.optimized * schedule * Low_level.optimized) list =
+    segmentation
+    * ([ `Normal | `Zeros | `Solo ] * Low_level.optimized * schedule * Low_level.optimized) list =
   let plc = opt.Low_level.optimize_ctx.placements in
   let stmts = Low_level.flat_lines [ opt.Low_level.llc ] in
-  let pre_promoted = if promote_locals then promote_statement_crossing_locals plc stmts else [] in
+  (* Every promotion made so far, restored if anything below raises: a refused segmentation (or a
+     failing schedule) must not leave the caller's placements changed. *)
+  let promoted = ref (if promote_locals then promote_statement_crossing_locals plc stmts else []) in
+  let pre_promoted = !promoted in
+  let undo_promotions which =
+    List.iter which ~f:(fun (tn, prior) -> Tn.Placements.unsafe_restore plc tn prior)
+  in
   (* The [arity_cuts] mode analyzes chains uncapped: the no-loss guard (and the uniform-shape rule)
      must see each nest's full arity, not the default presets' Grid+Workgroup prefix — under the
      cap, a merge that trims a rank-3 site's minor axis reads as lossless (gh-ocannl-574). *)
   let max_chain = if arity_cuts then Some Int.max_value else None in
   let units = collect_units ?max_chain ~fold:(reduction_zero_fold ~zero_sched opt) plc opt stmts in
-  let units_arr = Array.of_list units in
-  (* Single-kernel compilation of the segments' code -- the original statements, with any zero the
-     segmentation folded into its reduction: no boundary needs promotions, and placement changes
-     must not leak out of an unfissioned routine. *)
-  let fallback segs =
-    List.iter pre_promoted ~f:(fun (tn, prior) -> Tn.Placements.unsafe_restore plc tn prior);
-    let seg_units = List.concat_map segs ~f:(fun g -> g.g_units) in
-    let opt =
-      if List.for_all seg_units ~f:(fun u -> phys_equal u units_arr.(u.f_index)) then opt
-      else
-        {
-          opt with
-          llc = Low_level.unflat_lines (List.concat_map seg_units ~f:(fun u -> u.f_stmts));
-        }
-    in
-    let sched = preset opt in
-    [ (`Normal, opt, sched, apply ~static_indices sched opt) ]
+  (* The schedule of the [i]th segment: a replay's own, by position (segments sharing a structural
+     digest can differ in placements, hence in kind and schedule), or the caller's per-kind ones. *)
+  let schedule_of i (seg : segment option) pre =
+    match (replay, seg) with
+    | Some (_, schedule), _ -> schedule i pre
+    | None, (None | Some { g_kind = `Normal; _ }) -> preset pre
+    | None, Some { g_kind = `Solo; _ } -> []
+    | None, Some ({ g_kind = `Zeros; _ } as seg) ->
+        zero_sched
+          (List.filter_map seg.g_units ~f:(fun u -> Option.bind u.f_sum ~f:(fun s -> s.s_top_zero)))
   in
-  (* The [arity_cuts] mode has its own, stricter merge rule for the sketches' full-arity
-     geometry. *)
-  let mapping = if arity_cuts then None else keep_mapping in
-  let segs = group_units ?max_chain ~arity_cuts ?mapping opt units in
-  if List.length segs <= 1 then fallback segs
-  else
-    match resolve_scope_crossings units_arr segs with
-    | exception Unfissionable -> fallback segs
-    | segs, replicas when List.length segs <= 1 ->
-        ignore replicas;
-        fallback segs
-    | segs, replicas ->
+  let fallback () =
+    (* Single-kernel compilation, as before fission: no boundary needs the promotions, and placement
+       changes must not leak out of an unfissioned routine. The one kernel is a [`Normal] segment of
+       the whole routine, so a foldable zero at its head is folded exactly as {!segments_of_plan}
+       folds a [`Normal] segment's head: the same code whether derived or replayed. That is the fold
+       collapsing a routine to one kernel (a lone projection), and otherwise harmless -- the
+       per-cell nest is what the kernel's schedule distributes. *)
+    undo_promotions pre_promoted;
+    let opt =
+      match units with
+      | { f_fold = Some expand; _ } :: rest ->
+          {
+            opt with
+            llc =
+              Low_level.unflat_lines (List.concat_map (expand () :: rest) ~f:(fun u -> u.f_stmts));
+          }
+      | _ -> opt
+    in
+    let sched = schedule_of 0 None opt in
+    ([ (`Normal, List.length units) ], [ (`Normal, opt, sched, apply ~static_indices sched opt) ])
+  in
+  let resolved () =
+    match replay with
+    | None -> (
+        (* The [arity_cuts] mode has its own, stricter merge rule for the sketches' full-arity
+           geometry. *)
+        let mapping = if arity_cuts then None else keep_mapping in
+        let segs = group_units ?max_chain ~arity_cuts ?mapping opt units in
+        if List.length segs <= 1 then None
+        else
+          match resolve_scope_crossings (Array.of_list units) segs with
+          | exception Unfissionable -> None
+          | segs, _ when List.length segs <= 1 -> None
+          | resolved -> Some resolved)
+    | Some (plan, _) ->
+        (* A recorded plan is applied as it is, or refused: nothing about it is re-derived, so a
+           plan that no longer fits the routine must fail loudly rather than degrade to another
+           segmentation. *)
+        if List.sum (module Int) plan ~f:snd <> List.length units then
+          misfit_segmentation "does not cover the routine's statements";
+        if List.length plan <= 1 then None
+        else
+          let segs = segments_of_plan units plan in
+          let units = Array.of_list units in
+          let replicas seg =
+            match
+              plan_replicas units ~seg_start:(List.hd_exn seg.g_units).f_index
+                (seg_external_ids seg)
+            with
+            | Some defs -> defs
+            | None | (exception Unfissionable) ->
+                misfit_segmentation "cuts a scope-local definition from its use"
+          in
+          Some (segs, List.map segs ~f:replicas)
+  in
+  let segment () =
+    match resolved () with
+    | None -> fallback ()
+    | Some (segs, replicas) ->
         let segs_with_replicas = List.zip_exn segs replicas in
-        let promoted = pre_promoted @ promote_crossing plc segs_with_replicas in
-        let undo_promotions which =
-          List.iter which ~f:(fun (tn, prior) -> Tn.Placements.unsafe_restore plc tn prior)
-        in
+        promoted := pre_promoted @ promote_crossing plc segs_with_replicas;
         let scheduled =
-          List.map segs_with_replicas ~f:(fun (seg, replicas) ->
-              let sched =
-                match seg.g_kind with
-                | `Solo -> []
-                | `Zeros ->
-                    zero_sched
-                      (List.filter_map seg.g_units ~f:(fun u ->
-                           Option.bind u.f_sum ~f:(fun s -> s.s_top_zero)))
-                | `Normal -> preset (segment_optimized opt (seg_llc replicas seg))
-              in
-              (seg, replicas, sched))
+          List.mapi segs_with_replicas ~f:(fun i (seg, replicas) ->
+              ( seg,
+                replicas,
+                schedule_of i (Some seg) (segment_optimized opt (seg_llc replicas seg)) ))
         in
         (* Coalesce adjacent unannotated segments: consecutive serial kernels gain nothing from a
            launch boundary. Merged segments are rebuilt from original units and their replicas
            recomputed for the new boundary (the def..start gap only shrinks under merging, so
-           feasibility is preserved). *)
+           feasibility is preserved). A recorded plan was coalesced when it was derived. *)
         let coalesced =
-          List.fold scheduled ~init:[] ~f:(fun acc (seg, replicas, sched) ->
-              match acc with
-              | (pseg, _, []) :: rest when List.is_empty sched ->
-                  let merged = merge_segs ~kind:`Solo pseg seg in
-                  let replicas =
-                    match
-                      plan_replicas units_arr ~seg_start:(List.hd_exn merged.g_units).f_index
-                        (seg_external_ids merged)
-                    with
-                    | Some defs -> defs
-                    | None -> assert false (* Merging only shrinks the validity range. *)
-                  in
-                  (merged, replicas, []) :: rest
-              | _ -> (seg, replicas, sched) :: acc)
-          |> List.rev
+          if Option.is_some replay then scheduled
+          else
+            List.fold scheduled ~init:[] ~f:(fun acc (seg, replicas, sched) ->
+                match acc with
+                | (pseg, _, []) :: rest when List.is_empty sched ->
+                    let merged = merge_segs ~kind:`Solo pseg seg in
+                    let replicas =
+                      match
+                        plan_replicas (Array.of_list units)
+                          ~seg_start:(List.hd_exn merged.g_units).f_index (seg_external_ids merged)
+                      with
+                      | Some defs -> defs
+                      | None -> assert false (* Merging only shrinks the validity range. *)
+                    in
+                    (merged, replicas, []) :: rest
+                | _ -> (seg, replicas, sched) :: acc)
+            |> List.rev
         in
         if List.length coalesced <= 1 then (
-          (* Everything merged back: one kernel, restoring original placements, so undo every
-             promotion (an all-serial small routine must not leak observable placement changes;
-             zero2hero's virtual-neuron printouts pinned this). *)
-          undo_promotions promoted;
-          fallback segs)
+          (* Everything merged back: single kernel, exactly as before fission — including
+             placements, so undo every promotion (an all-serial small routine must not leak
+             observable placement changes; zero2hero's virtual-neuron printouts pinned this). *)
+          undo_promotions !promoted;
+          fallback ())
         else
           (* Coalescing may have absorbed a crossing: promotions without a surviving crossing are
              restored. Sound in this direction — the segments' schedules were computed under the
              stricter materialized view (see [promote_crossing]). *)
           let final_swr = List.map coalesced ~f:(fun (seg, replicas, _) -> (seg, replicas)) in
           undo_promotions
-            (List.filter promoted ~f:(fun (tn, _) -> not (crosses_segments final_swr tn)));
-          List.map coalesced ~f:(fun (seg, replicas, sched) ->
-              let pre = segment_optimized opt (seg_llc replicas seg) in
-              (seg.g_kind, pre, sched, apply_classified ~static_indices sched pre))
+            (List.filter !promoted ~f:(fun (tn, _) -> not (crosses_segments final_swr tn)));
+          ( List.map coalesced ~f:(fun (seg, _, _) -> (seg.g_kind, List.length seg.g_units)),
+            List.map coalesced ~f:(fun (seg, replicas, sched) ->
+                let pre = segment_optimized opt (seg_llc replicas seg) in
+                (seg.g_kind, pre, sched, apply_classified ~static_indices sched pre)) )
+  in
+  match segment () with
+  | result -> result
+  | exception exn ->
+      let backtrace = Stdlib.Printexc.get_raw_backtrace () in
+      undo_promotions !promoted;
+      Stdlib.Printexc.raise_with_backtrace exn backtrace
+
+let fission_scheduled ?promote_locals ?arity_cuts ?keep_mapping ~preset ~zero_sched ~static_indices
+    opt =
+  snd
+    (fission_segmented ?promote_locals ?arity_cuts ?keep_mapping ~preset ~zero_sched ~static_indices
+       opt)
 
 let fission_default ?promote_locals ?keep_mapping ~preset ~zero_sched ~static_indices
     (opt : Low_level.optimized) : Low_level.optimized list =
@@ -7655,8 +7804,18 @@ let default_schedule_fingerprint ~backend_name =
         | Some Preamble_duplicated -> "duplicated"
         | Some Preamble_cooperative -> "cooperative"
       in
+      (* [lane-economics-v1] (gh-ocannl-1167): whether the lane geometry is taken and whether
+         fission cuts for it, per [lanes]; [auto] resolves per device from the limits, as [preamble]
+         does. *)
+      let lanes =
+        match gpu_serial_lanes () with
+        | None -> "auto"
+        | Some Lanes_cut -> "cut"
+        | Some Lanes_admitted -> "admitted"
+        | Some Lanes_off -> "off"
+      in
       [%string
-        "gpu:policy=small-leading-v1+lanes-v1+fold-mma-v1+lane-plans-v1+lane-reductions-v1:fission=%{fission#Bool}:keep_mapping=%{keep#Bool}:block_size=%{bs}:min_parallel=%{mp}:workgroup_fill=%{fill#Int}:preamble=%{preamble}"]
+        "gpu:policy=small-leading-v1+lanes-v1+fold-mma-v1+lane-plans-v1+lane-reductions-v1+lane-economics-v1:fission=%{fission#Bool}:keep_mapping=%{keep#Bool}:block_size=%{bs}:min_parallel=%{mp}:workgroup_fill=%{fill#Int}:preamble=%{preamble}:serial_lanes=%{lanes}"]
     else
       let mp =
         String.strip (Utils.get_global_arg ~arg_name:"cpu_schedule_min_parallel" ~default:"16384")

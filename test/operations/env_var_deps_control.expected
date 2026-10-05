@@ -168,6 +168,11 @@ a configuration reader attached to either existing canary alias still requires a
 canary owner linkage or module drift cannot inherit a configuration-free exemption: true
 unsupported canary launchers or unresolved alias dependencies cannot claim the exemption: true
 each missing scoped exemption is stale even while its sibling alias remains: true
+The checker is put to one dune file built to trip the marker grammar and the declaration
+checks, beside a source that does not parse, and to a run handed nothing at all.
+
+a dune file built to trip the marker grammar and the declaration checks is refused: true
+a run handed no dune file and no source is refused: true
 
 Synthetic controls: scanner refusal diagnostics exercised by this control golden:
   [scanner-refusal:2b65edf20e36d983c1a016b72c2aadd1] plugged-in check receives
@@ -188,10 +193,6 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:533fc9999ad0841992e0c1734d9c1f5d] env_var
   [scanner-refusal:7336dd5a712b0c3a578b64d7defb1654] between stanzas declares
   [scanner-refusal:1aaab6e3cd8f4615e1cd1d0321e309a1] times and only
-  [scanner-refusal:f11c09a8318b3a7863444256973f57d4] running an executable
-  [scanner-refusal:95919586e2a2b25eaaf13ca8093ab584] repository-wide scan rule
-  [scanner-refusal:be41f253ce4b808b6b4ec587c304ec08] repository-wide scan rule
-  [scanner-refusal:b040632469771b25abb3469878413be3] the repository scanner
   [scanner-refusal:dda5b4655f74eda46ec0c60e320d232b] run's generated artifacts
   [scanner-refusal:747372ab4b28cca8978c2b6bd8983005] env_var
   [scanner-refusal:364d32b22a5cb7a70b569db0d8864170] env_var
@@ -205,7 +206,6 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:4012b24c7623acd977522e8f2eacf2bb] attaches a rule
   [scanner-refusal:ba5d90fc4bcec944ebd169329c706968] goldens on the
   [scanner-refusal:c1a398b587b5de3d7d02145dc45274a6] alias <suite>-<name> that
-  [scanner-refusal:941a9fb77d867c7b1576a0f19ee5db3b] declares
   [scanner-refusal:2b67d02d52c3465bfba40d167802f0a7] env_var
   [scanner-refusal:0deef0cb94c45615f32ee84ac2e76f8e] declares tracing gates
   [scanner-refusal:02e183a4105132ec092206c1d35d6247] reads the tracing
@@ -221,13 +221,8 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:b0ff4d4e5709299b84685f0fc189cc63] the inline-test runner
   [scanner-refusal:5893c6332b1f903470ec51cad4f20e8f] holds inline tests
   [scanner-refusal:5f2b09efad6e397fb5bd77b84255d0bf] runs inline tests
-  [scanner-refusal:7637eff157ad54e2ce52846535604f2a] scanner refusal
-  [scanner-refusal:fe4c53f899eb08a9ae67e7a797a5a841] scanner-refusal exemptions no
   [scanner-refusal:0b33370125e32eaa4bb0f50c6cc3bc1a] exempted declarations no
   [scanner-refusal:638620a0745d0a136810c5b0256e0ec0] directories exempted from
-  [scanner-refusal:09ce44850cdf45c95e308d6c64aed813] the repository's
-  [scanner-refusal:b35f6c5cf70c9d942c2e42a4c1af9975] Test_utils.Generated.init
-  [scanner-refusal:9ad60261dbb2540d4d7e060be725ad4d] repository's census finds
   [scanner-refusal:96e2132b9ea14b4c19e7573b7725b9ec] omits the declaration
   [scanner-refusal:2eb428f8dfd55908e0cd2236bc4505b4] declaration added passes
   [scanner-refusal:055900a8a1fbefd29b7c64a46953700f] external command handed
@@ -324,3 +319,16 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:abc806b50e485449683b10cc952fde9d] preprocessing-only universe dependencies
   [scanner-refusal:0d805a9703eb5f183046f05353ed6587] expansions and subtracted
   [scanner-refusal:9fe5330074251fed6b9e5e08a0d663bd] universe users alone
+  [scanner-refusal:d29c340cf3960a26e7f234805bcebd18] the declaration checks
+  [scanner-refusal:d896c784ca87717dc5c6d91befbce0e1] source is refused
+Catalogue-only: direct failures no control executes (reasons in `raw_catalogue_only`):
+  [scanner-refusal:f11c09a8318b3a7863444256973f57d4] running an executable
+  [scanner-refusal:95919586e2a2b25eaaf13ca8093ab584] repository-wide scan rule
+  [scanner-refusal:be41f253ce4b808b6b4ec587c304ec08] repository-wide scan rule
+  [scanner-refusal:b040632469771b25abb3469878413be3] the repository scanner
+  [scanner-refusal:941a9fb77d867c7b1576a0f19ee5db3b] declares
+  [scanner-refusal:7637eff157ad54e2ce52846535604f2a] scanner refusal
+  [scanner-refusal:fe4c53f899eb08a9ae67e7a797a5a841] scanner-refusal exemptions no
+  [scanner-refusal:09ce44850cdf45c95e308d6c64aed813] the repository's
+  [scanner-refusal:b35f6c5cf70c9d942c2e42a4c1af9975] Test_utils.Generated.init
+  [scanner-refusal:9ad60261dbb2540d4d7e060be725ad4d] repository's census finds

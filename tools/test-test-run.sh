@@ -118,6 +118,21 @@
 #      budget over its slot count, and the numbers are the measured ones.
 #  74. fork TERM is deferred until the parent owns its child pid and the child
 #      resets its handlers; no-mask and inherited-handler controls prove both.
+#  75-77 sit just before leg 70: a wedged device cannot hold a batch
+#      (gh-ocannl-1211).
+#  75. a test past --test-cap ends the run as TIMEOUT (142) naming it, the test
+#      killed and the worktree idle, blaming a device only on a GPU batch; a
+#      test inside the cap, a lifted cap, a slow dune and the slot's long-lived
+#      holder do not (skipped where a $0-renamed fixture dune does not read
+#      back as `dune` in ps).
+#  76. a GPU batch whose device query does not answer is DEVICE UNHEALTHY (69),
+#      the probe being the slot's command ahead of dune and dune never started;
+#      an answer or a fast failure starts dune once; an unread batch asks every
+#      GPU backend, a CPU batch none; the real probe is bin/device_props, built
+#      inside the slot from DUNE_BUILD_DIR's tree.
+#  77. `plan` reports the probe and the per-test cap as `run` would apply them
+#      (GPU batches only, not @slow, not where run resolves nothing), and asks
+#      no device.
 #  64-65 sit between legs 51 and 52: `plan`, and the run's first phase, in
 #      which the supervisor's child resolves the backends (gh-ocannl-1066,
 #      gh-ocannl-1106).
@@ -1153,6 +1168,14 @@ exit "${FAKE_REACH_EXIT:-0}"
 FAKE
 chmod +x "$batch_reader" "$batch_reach"
 export OCANNL_TOOL_READ_CONFIG=$batch_reader OCANNL_TOOL_SLOT_KIND=$batch_reach
+# Nor does any leg probe a device unless it says so (gh-ocannl-1211): the probe
+# of a GPU batch would build bin/device_props through the fixture dune, and its
+# `_probe` would stand between the slot and dune in every call the slot legs
+# pin. Legs 75-77 name a stand-in. And no caller's bounds leak in: a raised
+# per-test cap (an agent running @slow exports one) would change every run's
+# watcher here and the values legs 75-77 read back.
+export OCANNL_TOOL_DEVICE_PROBE=none
+unset OCANNL_TOOL_PER_TEST_CAP OCANNL_TOOL_DEVICE_PROBE_CAP
 # Read-only query contract: no state store, no first run, and no lock file yet.
 # The fixture root (not the caller's cwd) owns all omitted-RUN queries.
 query_runs=$TMP/query-state/runs
@@ -1947,6 +1970,27 @@ case $REPEAT_TEST_MODE in
   # A dune killed by a signal, not by its caller: the run's last phase must
   # exit with the status an exec'd dune would have had (gh-ocannl-1087).
   self_kill) kill -KILL $$ ;;
+  # The per-test cap (gh-ocannl-1211). An action as dune starts one: a child
+  # leading its own process group, which this dune kills on TERM as dune
+  # does. It runs REPEAT_TEST_ACTION_SECS (60: a hung test) and records its
+  # pid in REPEAT_TEST_ACTION_PID. The parent is perl renamed `dune` -- a
+  # shebang script's process name is its interpreter's, and the watcher
+  # finds tests as the children of a process named dune ($0 sets the name ps
+  # reads on Linux and macOS; where it does not, leg 75 skips).
+  action)
+    exec perl -e '$0 = "dune"; my ($pidf, $secs) = @ARGV;
+      my $c = fork(); die "fork: $!" unless defined $c;
+      if (!$c) { setpgrp(0, 0); open my $f, ">", "$pidf.tmp" or die; print $f "$$\n"; close $f;
+                 rename "$pidf.tmp", $pidf; exec "sleep", $secs; exit 127 }
+      $SIG{TERM} = sub { kill "KILL", -$c; exit 143 };
+      waitpid($c, 0); print "action done\n"; exit 0' \
+      "$REPEAT_TEST_ACTION_PID" "${REPEAT_TEST_ACTION_SECS:-60}"
+    ;;
+  # A dune that is itself slow, starting no action: dune is not a test.
+  slow_dune)
+    exec perl -e '$0 = "dune"; select undef, undef, undef, $ARGV[0]; print "slow dune done\n"' \
+      "${REPEAT_TEST_ACTION_SECS:-3}"
+    ;;
   *) echo "unknown repeat fixture mode: $REPEAT_TEST_MODE" >&2; exit 92 ;;
 esac
 EOF
@@ -2416,6 +2460,7 @@ argv_rc= argv_out= argv_err= argv_calls= argv_dir= argv_mode= argv_runs=
 misplaced_label="an option after the dune arguments is refused before dune runs"
 misplaced_detail=
 for probe in "run:run build @cheap --cap 900" \
+             "run-test-cap:run build @cheap --test-cap 9" \
              "start:start build @cheap --cap=900" \
              "repeat:repeat 2 build @cheap --alone"; do
   argv_probe "misplaced-${probe%%:*}" ${probe#*:}
@@ -4326,6 +4371,16 @@ case ${FAKE_FW_MODE:-} in
     echo "EXECUTION SLOT fakebox: inside measurement M-7, running under the hold: $*" >&2
     echo "EXECUTION SLOT REFUSED fakebox: a nested batch's own refusal"
     exec "$@" ;;
+  # The real slot's sleep inhibitor: a process of its own group, beside the
+  # command for the whole batch, and no child of dune (gh-ocannl-1211).
+  holder)
+    echo "EXECUTION SLOT fakebox: slot 1 of 4, GPU token 1 of 2 held for: $*" >&2
+    perl -e 'setpgrp(0, 0); sleep 30' 9>&- &
+    holder=$!
+    "$@"
+    rc=$?
+    kill -KILL -- "-$holder" 2>/dev/null
+    exit "$rc" ;;
 esac
 echo "EXECUTION SLOT fakebox: slot 1 of 4, GPU token 1 of 2 held for: $*" >&2
 exec "$@"
@@ -4603,6 +4658,246 @@ if [ -z "$slot_detail" ]; then
   report 0 "batch: the readers batch-backends.sh builds are test/config's, answering --read=backend and Slot_kind in its grammar"
 else
   report 1 "batch: the readers batch-backends.sh builds are test/config's, answering --read=backend and Slot_kind in its grammar" "$slot_detail"
+fi
+
+# ---------------------------------------------------------------------------
+# Legs 75-77: a wedged device cannot hold a batch (gh-ocannl-1211)
+# ---------------------------------------------------------------------------
+# A GPU fault on tuf left every later test of a HIP batch spinning in device
+# init, eight at once, for 32 minutes, under a run cap with half an hour to
+# go. Two bounds answer it: the per-test cap ends the run once a test outlives
+# it (75), and a GPU batch's device probe refuses to start dune when a fresh
+# device query does not answer (76); `plan` reports both (77).
+#
+# Leg 75: the per-test cap. A test past it ends the run as the run's cap
+# would -- TIMEOUT, 142, the test named -- long before the test would end, the
+# test killed and the worktree idle. Controls: a test inside the cap passes;
+# OCANNL_TOOL_PER_TEST_CAP is the default, and --test-cap 0 lifts it; and
+# neither a slow dune nor the slot's own long-lived holder, which is no child
+# of dune, is taken for a test (a watcher counting every process group of the
+# run would end both runs). The message blames a device only on a GPU batch,
+# and always names the remedy. A bad value is refused before dune runs. The
+# fixture's dune is perl renamed through $0, which Linux (prctl) and macOS (the
+# argv area BSD ps reads) both show as the process name; the leg skips only
+# where a renamed process does not read back as `dune` (Git Bash, say).
+test_cap_label="test cap: a test past --test-cap ends the run as TIMEOUT naming it; a test inside it, a slow dune and the slot's holder do not"
+perl -e '$0 = "dune"; sleep 10' </dev/null >/dev/null 2>&1 &
+test_cap_named=$!
+sleep 0.3
+test_cap_named_ok=
+ps -A -o pid= -o comm= 2>/dev/null | grep -Eq "^ *$test_cap_named +(.*/)?dune$" && test_cap_named_ok=1
+kill "$test_cap_named" 2>/dev/null
+wait "$test_cap_named" 2>/dev/null
+if [ -z "$test_cap_named_ok" ]; then
+  skip "$test_cap_label" "a process renamed through \$0 does not read back as dune in ps here"
+else
+  test_cap_detail=
+  test_cap_n=0
+  test_cap_start=$SECONDS
+  test_cap_n=$((test_cap_n + 1))
+  export REPEAT_TEST_ACTION_PID=$TMP/test-cap-action-$test_cap_n.pid
+  argv_mode=action argv_probe test-cap-hung run --test-cap 2 build @cheap
+  test_cap_took=$((SECONDS - test_cap_start))
+  test_cap_action=$(cat "$REPEAT_TEST_ACTION_PID" 2>/dev/null)
+  case $argv_out in
+    *"verdict: TIMEOUT (a test outlived the per-test cap; run was killed, not judged) (exit 142)"*"hung test: sleep 60"*"past the 2s per-test cap"*) ;;
+    *) test_cap_detail="hung: digest: $argv_out" ;;
+  esac
+  [ -n "$test_cap_detail" ] || [ "$argv_rc" = 142 ] || test_cap_detail="hung: exit $argv_rc (want 142)"
+  [ -n "$test_cap_detail" ] || [ "$test_cap_took" -lt 20 ] ||
+    test_cap_detail="hung: the run took ${test_cap_took}s under a 2s test cap"
+  [ -n "$test_cap_detail" ] || [ -n "$test_cap_action" ] || test_cap_detail="hung: the test never started"
+  if [ -z "$test_cap_detail" ]; then
+    case $(pstate "$test_cap_action") in
+      '' | Z) ;;
+      *) test_cap_detail="hung: the test (pid $test_cap_action) survived the run"
+         kill -KILL "$test_cap_action" 2>/dev/null ;;
+    esac
+  fi
+  [ -n "$test_cap_detail" ] || grep -q "^test-run: per-test cap: pid $test_cap_action has run" "$argv_dir/log" ||
+    test_cap_detail="hung: the log does not name the test: $(cat "$argv_dir/log")"
+  # A CPU batch is told the remedy and never sent looking for a GPU fault.
+  [ -n "$test_cap_detail" ] || grep -qF "rerun with --test-cap 0" <<<"$argv_out" ||
+    test_cap_detail="hung: the digest names no remedy: $argv_out"
+  if [ -z "$test_cap_detail" ] &&
+     { cat "$argv_dir/log"; printf '%s\n' "$argv_out"; } | grep -qi "wedged device\|kernel journal"; then
+    test_cap_detail="hung: a CPU batch's run blames a device: $argv_out $(cat "$argv_dir/log")"
+  fi
+  [ -n "$test_cap_detail" ] ||
+    OCANNL_TOOL_TEST_RUNS=$TMP/argv-runs-test-cap-hung "$repeat_root/tools/test-run.sh" idle >/dev/null 2>&1 ||
+    test_cap_detail="hung: the worktree is not idle after the run"
+  for probe in "inside:3:1:0" "env-default:1:4:142" "lifted:1:3:0"; do
+    [ -z "$test_cap_detail" ] || break
+    IFS=: read -r tag cap_s secs want <<<"$probe"
+    test_cap_n=$((test_cap_n + 1))
+    REPEAT_TEST_ACTION_PID=$TMP/test-cap-action-$test_cap_n.pid
+    case $tag in
+      inside) REPEAT_TEST_ACTION_SECS=$secs argv_mode=action \
+                argv_probe "test-cap-$tag" run --test-cap "$cap_s" build @cheap ;;
+      lifted) OCANNL_TOOL_PER_TEST_CAP=$cap_s REPEAT_TEST_ACTION_SECS=$secs argv_mode=action \
+                argv_probe "test-cap-$tag" run --test-cap 0 build @cheap ;;
+      *) OCANNL_TOOL_PER_TEST_CAP=$cap_s REPEAT_TEST_ACTION_SECS=$secs argv_mode=action \
+           argv_probe "test-cap-$tag" run build @cheap ;;
+    esac
+    [ "$argv_rc" = "$want" ] || { test_cap_detail="$tag: exit $argv_rc (want $want): $argv_out"; break; }
+    if [ "$want" = 0 ] && [ -e "$argv_dir/test-cap" ]; then
+      test_cap_detail="$tag: a passing run left a test-cap record"
+    fi
+  done
+  if [ -z "$test_cap_detail" ]; then
+    : >"$TMP/test-cap-holder.fw"
+    FAKE_FW_CALLS=$TMP/test-cap-holder.fw FAKE_FW_MODE=holder OCANNL_TOOL_FLEET_WORKER=$slot_fake \
+    REPEAT_TEST_ACTION_SECS=4 argv_mode=slow_dune argv_probe test-cap-holder run --test-cap 1 build @cheap
+    { [ "$argv_rc" = 0 ] && [ "$(grep -c -- '--probe' "$TMP/test-cap-holder.fw")" = 1 ] &&
+      [ "$(grep -vc -- '--probe' "$TMP/test-cap-holder.fw")" = 1 ]; } ||
+      test_cap_detail="slow dune beside the slot's holder: exit $argv_rc (want 0; slot calls: $(cat "$TMP/test-cap-holder.fw")): $argv_out"
+  fi
+  # ...and a GPU batch's hung test is pointed at the kernel journal.
+  if [ -z "$test_cap_detail" ]; then
+    test_cap_n=$((test_cap_n + 1))
+    REPEAT_TEST_ACTION_PID=$TMP/test-cap-action-$test_cap_n.pid
+    argv_mode=action slot_probe test-cap-gpu hold hip cc run --test-cap 2 build @cheap
+    { [ "$argv_rc" = 142 ] && grep -qF "read the kernel journal" <<<"$argv_out" &&
+      grep -q "a wedged device hangs every test after it" "$argv_dir/log"; } ||
+      test_cap_detail="a GPU batch's hung test: exit $argv_rc; digest: $argv_out"
+  fi
+  if [ -z "$test_cap_detail" ]; then
+    argv_probe test-cap-bad run --test-cap 2x build @cheap
+    { [ "$argv_rc" = 2 ] && [ -z "$argv_calls" ] && grep -q -- "--test-cap must be a nonnegative integer" <<<"$argv_err"; } ||
+      test_cap_detail="a bad value: exit $argv_rc; dune calls: ${argv_calls:-<none>}; stderr: $argv_err"
+  fi
+  unset REPEAT_TEST_ACTION_PID
+  if [ -z "$test_cap_detail" ]; then report 0 "$test_cap_label"; else report 1 "$test_cap_label" "$test_cap_detail"; fi
+fi
+
+# Leg 76: the device probe, against a stand-in (OCANNL_TOOL_DEVICE_PROBE) that
+# answers, fails fast, or never answers, per backend. A GPU batch's probe runs
+# inside the slot, ahead of dune; a query that does not answer within the
+# bound refuses the batch as DEVICE UNHEALTHY (69) with dune never started and
+# the query killed, while one that fails fast is recorded and passed over. An
+# unread batch probes every GPU backend; a CPU batch probes nothing and keeps
+# the slot call the other legs pin. The real probe is bin/device_props.
+probe_fake=$TMP/fake-device-probe.sh
+cat >"$probe_fake" <<'FAKE'
+#!/usr/bin/env bash
+b=${1#--ocannl_backend=}
+printf '%s %s\n' "$PWD" "$*" >>"$FAKE_PROBE_CALLS"
+case " ${FAKE_PROBE_HANG:-} " in *" $b "*) printf '%s\n' "$$" >"$FAKE_PROBE_CALLS.pid"; exec sleep 30 ;; esac
+case " ${FAKE_PROBE_ABSENT:-} " in *" $b "*) echo "no $b here" >&2; exit 2 ;; esac
+echo "static.device[0].device_name = fake $b"
+FAKE
+chmod +x "$probe_fake"
+probe_run() { # tag test-backend arrayjit-backend hang absent subcommand [argv...]
+  local tag=$1 bt=$2 ba=$3 hang=$4 absent=$5
+  shift 5
+  : >"$TMP/$tag.probe"
+  FAKE_PROBE_CALLS=$TMP/$tag.probe FAKE_PROBE_HANG=$hang FAKE_PROBE_ABSENT=$absent \
+  OCANNL_TOOL_DEVICE_PROBE=$probe_fake OCANNL_TOOL_DEVICE_PROBE_CAP=1 \
+    slot_probe "$tag" hold "$bt" "$ba" "$@"
+  probe_calls=$(cat "$TMP/$tag.probe")
+}
+probe_calls=
+probe_label="device probe: a GPU batch whose fresh device query does not answer is DEVICE UNHEALTHY, dune never started"
+probe_detail=
+probe_root=$(cd "$repeat_root" && pwd -P)
+probe_start=$SECONDS
+probe_run probe-hang hip cc hip "" run build @cheap
+probe_took=$((SECONDS - probe_start))
+case $argv_out in
+  *"verdict: DEVICE UNHEALTHY (a fresh device query did not answer; nothing ran) (exit 69)"*"hip: NO ANSWER within 1s"*) ;;
+  *) probe_detail="hang: digest: $argv_out" ;;
+esac
+[ -n "$probe_detail" ] || { [ "$argv_rc" = 69 ] && [ -z "$argv_calls" ]; } ||
+  probe_detail="hang: exit $argv_rc (want 69); dune calls: ${argv_calls:-<none>}"
+[ -n "$probe_detail" ] || [ "$probe_took" -lt 15 ] || probe_detail="hang: the refusal took ${probe_took}s under a 1s bound"
+case $slot_calls in
+  "execution slot --wait 600 --gpu -- "*" $probe_root/tools/test-run.sh _probe dune $probe_fake 1 hip -- dune build @cheap") ;;
+  *) [ -n "$probe_detail" ] || probe_detail="hang: the probe is not the slot's command, ahead of dune: $slot_calls" ;;
+esac
+[ -n "$probe_detail" ] || [ "$probe_calls" = "$probe_root/test/config --ocannl_backend=hip" ] ||
+  probe_detail="hang: the query was not asked once, for hip, from test/config: $probe_calls"
+[ -n "$probe_detail" ] || grep -q "did not answer within 1s" "$argv_dir/log" ||
+  probe_detail="hang: the log does not say why dune never started: $(cat "$argv_dir/log")"
+if [ -z "$probe_detail" ]; then
+  probe_pid=$(cat "$TMP/probe-hang.probe.pid" 2>/dev/null)
+  case $(pstate "${probe_pid:-0}") in
+    '' | Z) ;;
+    *) probe_detail="hang: the query (pid $probe_pid) survived its bound"; kill -KILL "$probe_pid" 2>/dev/null ;;
+  esac
+fi
+# An answer, and a fast failure, start dune once under the same slot call.
+for probe in "answer::hip: answered in" "absent:hip:hip: failed fast (exit 2"; do
+  [ -z "$probe_detail" ] || break
+  IFS=: read -r tag absent want <<<"$probe"
+  probe_run "probe-$tag" hip cc "" "$absent" run build @cheap
+  { [ "$argv_rc" = 0 ] && [ "$argv_calls" = "build @cheap" ] && grep -qF -- "$want" <<<"$argv_out" &&
+    [ "$probe_calls" = "$probe_root/test/config --ocannl_backend=hip" ]; } ||
+    probe_detail="$tag: exit $argv_rc; dune calls: ${argv_calls:-<none>}; probes: $probe_calls; digest: $argv_out"
+done
+# An unread batch holds any backend: every GPU one is asked, in order.
+if [ -z "$probe_detail" ]; then
+  probe_run probe-unread cc fail "" "cuda metal" run build @cheap
+  probe_asked=$(sed 's/.*--ocannl_backend=//' <<<"$probe_calls" | paste -s -d ' ' -)
+  { [ "$argv_rc" = 0 ] && [ "$probe_asked" = "cuda hip metal" ]; } ||
+    probe_detail="unread: exit $argv_rc; asked: $probe_asked (want cuda hip metal)"
+fi
+# A CPU batch asks nothing, and its slot call is the bare one.
+if [ -z "$probe_detail" ]; then
+  probe_run probe-cpu cc cc hip "" run build @cheap
+  { [ "$argv_rc" = 0 ] && [ -z "$probe_calls" ] &&
+    [ "$slot_calls" = "execution slot --wait 600 --cpu -- dune build @cheap" ]; } ||
+    probe_detail="cpu: exit $argv_rc; probes: ${probe_calls:-<none>}; slot call: $slot_calls"
+fi
+# Without a stand-in the probe is bin/device_props, built by `_probe` inside
+# the slot -- after the slot call, before the batch's own dune -- from the
+# tree dune is pointed at. The fixture dune builds nothing, so the batch is
+# recorded as not probed and still starts.
+if [ -z "$probe_detail" ] && [ "$(uname -s)" != Darwin ]; then
+  for build_dir in "" elsewhere; do
+    : >"$TMP/probe-build.probe"
+    FAKE_PROBE_CALLS=$TMP/probe-build.probe OCANNL_TOOL_DEVICE_PROBE= DUNE_BUILD_DIR=$build_dir \
+      slot_probe "probe-build${build_dir:+-$build_dir}" hold hip cc run build @cheap
+    want_exe=$probe_root/${build_dir:-_build}/default/bin/device_props.exe
+    { [ "$argv_rc" = 0 ] && [ "$argv_calls" = "build ./bin/device_props.exe
+build @cheap" ] && grep -qF "not probed: $want_exe did not build" "$argv_dir/device-probe" &&
+      [ ! -s "$TMP/probe-build.probe" ]; } ||
+      { probe_detail="the real probe (DUNE_BUILD_DIR=${build_dir:-unset}): exit $argv_rc; dune calls: $argv_calls; record: $(cat "$argv_dir/device-probe" 2>/dev/null)"; break; }
+  done
+fi
+if [ -z "$probe_detail" ]; then report 0 "$probe_label"; else report 1 "$probe_label" "$probe_detail"; fi
+
+# Leg 77: `plan` reports the probe and the per-test cap, and asks no device.
+plan_probe_detail=
+probe_run probe-plan hip cc "" "" plan build @cheap
+{ [ "$argv_rc" = 0 ] && [ -z "$argv_calls" ] && [ -z "$probe_calls" ] &&
+  grep -qF "device probe: hip, bounded at 1s" <<<"$argv_out" &&
+  grep -qF "test cap: 1500s for each process dune starts, the default for a GPU batch" <<<"$argv_out"; } ||
+  plan_probe_detail="gpu: exit $argv_rc; probes: ${probe_calls:-<none>}; plan: $argv_out"
+# The default's scope: no CPU batch, no @slow target; an explicit cap is kept
+# on either, and 0 lifts it.
+for probe in "cpu|cc|build @cheap|test cap: none (no default: a CPU batch)" \
+             "slow|hip|build @test/training/slow-cifar_conv|test cap: none (no default: the targets reach the slow tests (@test/training/slow-cifar_conv))" \
+             "slow-asked|hip|--test-cap 9000 build @slow|test cap: 9000s for each process dune starts, asked for" \
+             "cpu-lifted|cc|--test-cap 0 build @cheap|test cap: none (--test-cap 0)"; do
+  [ -z "$plan_probe_detail" ] || break
+  IFS='|' read -r tag bt argv want <<<"$probe"
+  # shellcheck disable=SC2086  # the argv is word-split on purpose
+  probe_run "probe-plan-$tag" "$bt" cc "" "" plan $argv
+  { [ "$argv_rc" = 0 ] && grep -qF -- "$want" <<<"$argv_out"; } ||
+    plan_probe_detail="$tag: exit $argv_rc; want '$want'; plan: $argv_out"
+done
+# Where run resolves no backends (no fleet slot, no width hazard), plan
+# reports neither bound, however its own resolution reads the batch.
+if [ -z "$plan_probe_detail" ]; then
+  FAKE_BACKEND_TEST=hip OCANNL_TOOL_DEVICE_PROBE=$probe_fake argv_probe probe-plan-unread plan build @cheap
+  { [ "$argv_rc" = 0 ] && grep -qF "device probe: none" <<<"$argv_out" &&
+    grep -qF "test cap: none (no default: run does not resolve" <<<"$argv_out"; } ||
+    plan_probe_detail="no slot, no hazard: exit $argv_rc; plan: $argv_out"
+fi
+if [ -z "$plan_probe_detail" ]; then
+  report 0 "plan: reports the device probe and the per-test cap, asking no device"
+else
+  report 1 "plan: reports the device probe and the per-test cap, asking no device" "$plan_probe_detail"
 fi
 
 # ---------------------------------------------------------------------------

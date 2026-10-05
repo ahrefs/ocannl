@@ -48,8 +48,6 @@ open Verdict.Claims
 module Dune = Test_utils.Dune_stanza_scan
 module Inventory = Test_utils.Source_inventory
 
-let printf = Test_utils.Refusal_control_manifest.printf
-
 type golden = Every_golden | Golden of string
 type entry = { golden : golden; pattern : string; reason : string }
 

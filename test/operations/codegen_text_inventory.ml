@@ -52,7 +52,6 @@ open Stdio
 (* Every file this scan reads arrives as a `@<path>` response file, because the list is longer than
    a Windows command line may be; see [Test_utils.Scan_argv]. *)
 let argv = Test_utils.Scan_argv.expand Stdlib.Sys.argv
-let printf = Test_utils.Refusal_control_manifest.printf
 
 module Scan = Test_utils.Codegen_text_scan
 module Floors = Test_utils.Scan_floors
@@ -118,6 +117,14 @@ let refusal_control () =
   refuse_stale_exclusions ~fail stale;
   Verdict.p "an exclusion absent from the hand-over reaches the stale-exclusion refusal"
     (!refused && List.length stale = 1);
+  (* gh-ocannl-1207: the parse refusal, executed: this scan as a child, handed a source that does
+     not parse. *)
+  Test_utils.Refusal_control_manifest.with_tree
+    [ ("test/unparsable.ml", "let =\n") ]
+    (fun root ->
+      Verdict.p "a scan handed a source that does not parse refuses it, exiting 1"
+        (Test_utils.Refusal_control_manifest.refuses ~source ~exe:(Fresh_process.executable ())
+           [ root; Stdlib.Filename.concat root "test/unparsable.ml" ]));
   Test_utils.Refusal_control_manifest.print source
 
 let () =

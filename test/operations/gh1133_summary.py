@@ -56,3 +56,15 @@ with tempfile.TemporaryDirectory() as scratch:
     check(code == 0 and "### Training segments:" in text and "sentinel-training-table" in text, text)
     check("| hip | gpt2_mini_train | keep |" in text, text)
     print("successful training output appears beside its step-time row: true")
+
+    # The cell names follow the treatments the driver was given, whatever they are called.
+    (out / "hip-gpt2_mini_train-d1serialcut-r1.out").write_text(json.dumps(step) + "\n")
+    (out / "hip-gpt2_mini_train-d1serialoff-r1.out").write_text(json.dumps(step) + "\n")
+    text = io.StringIO()
+    with contextlib.redirect_stdout(text):
+        code = report.summary(str(out), "d1serialcut d1serialoff", "serialoff")
+    text = text.getvalue()
+    check(code == 0 and "| hip | gpt2_mini_train | d1serialcut |" in text, text)
+    check("| 1.000x |" in text and "MISSING REFERENCE" not in text, text)
+    check("| keep |" not in text, text)
+    print("a treatment's cells are summarized by its name, and only the given treatments': true")

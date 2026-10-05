@@ -200,7 +200,15 @@ cmd_search() { (
   # The three claim-bearing lines: the deterministic untuned baseline, the crowned artifact per
   # arm, and which arm shipped.
   grep -E 'untuned-default pipeline|winner replay ok|tune_placements: winner' "$out/search.err"
-  grep -oh 'finer_fission [a-z]*' "$out"/cache/*.sexp 2>/dev/null | sort -u
+  # Each fissioned winner's segmentation: entries persist every segment with its kind
+  # (gh-ocannl-1164), so the count tells a fine winner from a coarse one.
+  local entry kinds
+  for entry in "$out"/cache/*.sexp; do
+    [ -e "$entry" ] || continue
+    kinds=$(grep -o '(seg_kind [A-Za-z]*)' "$entry" | sed 's/(seg_kind \(.*\))/\1/' | sort | uniq -c \
+      | awk '{ printf "%s%s %s", sep, $1, $2; sep = ", " }' || true)
+    [ -n "$kinds" ] && echo "fissioned winner $(basename "$entry"): $kinds"
+  done
   # The crowned arm A candidate's calibration line: analytic FLOPs and bytes at the emitted kernel
   # count. The report's constant-FLOPs check and its 528 -> 472 MB traffic figure are read from here.
   local lbl; lbl=$(sed -n '1,/arm A (default placements) best/p' "$out/search.err" \

@@ -592,6 +592,27 @@ type trajectory = {
 [@@deriving sexp]
 (** A search's timed record (gh-ocannl-1110), as a cache entry keeps it. *)
 
+type saved_segment = {
+  seg_kind : [ `Normal | `Zeros | `Solo ];
+  seg_units : int;  (** The segment's length in units ({!Schedule.segmentation}). *)
+  seg_digest : string;
+      (** The {e pre-schedule} segment's structural canonical digest ([with_placements:false]): what
+          a replay checks the segment it cut against before applying [seg_saved]. *)
+  seg_saved : saved_schedule;
+      (** The segment's schedule, resolved against that canonical form — [`Zeros] expansions and the
+          empty schedule of a [`Solo] segment included, so replay derives none of them. *)
+}
+[@@deriving sexp]
+(** One segment of a fissioned winner, in segment order (gh-ocannl-1164). *)
+
+let save_segments ?static_indices segmentation tuples =
+  List.map2_exn segmentation tuples ~f:(fun (seg_kind, seg_units) (_, pre, sched, _) ->
+      let pre_canon = canonicalize ?static_indices ~with_placements:false pre in
+      let seg_saved, registry = to_saved (base_registry pre_canon) sched in
+      ({ seg_kind; seg_units; seg_digest = digest pre_canon; seg_saved }, registry))
+
+let segmentation_of segs = List.map segs ~f:(fun s -> (s.seg_kind, s.seg_units))
+
 type entry = {
   version : int;
   backend : string;
@@ -611,14 +632,16 @@ type entry = {
           up. *)
   source_digest : string;
   saved : saved_schedule;
-  segments : (string * saved_schedule) list option; [@sexp.option]
-      (** A fissioned winner: per-segment schedules keyed by the {e pre-schedule} segment's
-          canonical digest ([saved] is then empty). [None] for whole-routine schedules. *)
-  finer_fission : bool option; [@sexp.option]
-      (** [Some true]: the [segments] keys address {!Schedule.fission_scheduled}'s [arity_cuts]
-          (finer) segmentation (gh-ocannl-574); replay must re-segment under the same mode or the
-          keys miss wholesale. Omitted when false, so entries stay byte-stable and pre-gh-574
-          entries parse without an [entry_version] bump. *)
+  segments : saved_segment list option; [@sexp.option]
+      (** A fissioned winner: every segment of its fission, in order — the segmentation itself and
+          each segment's schedule (gh-ocannl-1164). Replay cuts the routine where these segments say
+          ({!Schedule.fission_segmented}'s [replay]) and applies each segment's own schedule, by
+          position, after checking the segment's digest, so nothing about the segmentation is
+          re-derived under the replaying process's policy and none of that policy's inputs needs to
+          be in the key. [None] for whole-routine schedules. With [segments] present, [saved] is
+          empty except for a split-reduce winner (gh-ocannl-484 task 3), where it holds the
+          whole-routine prelude — resolved against the {e base} canonical form and applied before
+          fission, the segments then describing the {e post-prelude} routine. *)
   best_ms : float;
   baseline_ms : float;
   default_ms : float option; [@sexp.option]
@@ -650,14 +673,16 @@ type entry = {
 [@@deriving sexp]
 
 (* Bumped on a decode-incompatible payload change — and on a SEARCH-MENU change (gh-ocannl-728, 4 ->
-   5: the [bgrid-in] batch flavor of the GPU matmul sketches; gh-ocannl-1175, -> 8: a reduction's
-   zero folds into its own segment's sketches). 6 is retired: the reverted staging#934 wrote it for
-   a menu that bridged sibling reductions, and those crowns must not read as current. 7 is reserved
-   by a concurrent change. A stored crown is the best of the menu that searched it; once the menu
-   offers a candidate the search never timed, the entry is still a sound schedule but no longer the
-   answer the key asks for, and a warm cache would replay it forever. Non-current entries read as
-   misses, so the next search re-tunes and overwrites. *)
-let entry_version = 8
+   5: the [bgrid-in] batch flavor of the GPU matmul sketches; gh-ocannl-1166, -> 7 (6 was never
+   used): the composite playoff, which times candidates the earlier search never did). A stored
+   crown is the best of the menu that searched it; once the menu offers a candidate the search never
+   timed, the entry is still a sound schedule but no longer the answer the key asks for, and a warm
+   cache would replay it forever. Non-current entries read as misses, so the next search re-tunes
+   and overwrites. 8 (7 landed first): a fissioned winner's [segments] carry the segmentation and
+   every segment's schedule (gh-ocannl-1164). 9: a reduction's zero folds into its own segment's
+   sketches (gh-ocannl-1175); the reverted staging#934 had written 6 for a menu that bridged sibling
+   reductions, so 6 stays retired. *)
+let entry_version = 9
 
 let sanitize name =
   String.map name ~f:(fun c ->
@@ -679,8 +704,7 @@ let objective_tag () =
    {!cache_key} (each name dispatches to an arm below, and an unknown name raises), so the
    enumeration cannot go stale against the implementation — which is what makes it usable as the
    thing the digest-completeness registry classifies config keys against (gh-ocannl-572). *)
-let key_components =
-  [ "digest"; "backend"; "numerics"; "codegen"; "fission"; "pool"; "device"; "timing" ]
+let key_components = [ "digest"; "backend"; "numerics"; "codegen"; "pool"; "device"; "timing" ]
 
 let cache_key ?objective ~timing_identity ~(limits : Backend_intf.hardware_limits) ~capabilities
     canonical ~backend =
@@ -701,15 +725,6 @@ let cache_key ?objective ~timing_identity ~(limits : Backend_intf.hardware_limit
         | "backend" -> sanitize backend
         | "numerics" -> "n" ^ numerics_tag ()
         | "codegen" -> "c" ^ codegen_tag ~limits ~capabilities ()
-        (* The inputs of the default GPU segmentation beyond the code (gh-ocannl-1126): a fissioned
-           winner's saved schedules are keyed by segment digests that replay recomputes, so a winner
-           must not be looked up under settings that segment the routine differently. Only the
-           settings some source sets contribute, so keys minted under the defaults are unchanged. *)
-        | "fission" -> (
-            match Utils.config_class_fingerprint (Utils.Keyed "fission") with
-            | "" -> ""
-            | resolved ->
-                "f" ^ String.prefix (Stdlib.Digest.to_hex (Stdlib.Digest.string resolved)) 8)
         (* The worker-pool signature (gh-ocannl-530): CPU crowns do not transfer across pools, so a
            pool change re-tunes instead of replaying. [None] (GPU backends) contributes nothing. *)
         | "pool" -> (
@@ -743,8 +758,12 @@ let cache_file ~dir ~key = Stdlib.Filename.concat dir (sanitize key ^ ".sexp")
    default segmentation it stands for changed, so a regime-2 fissioned winner would replay into a
    segmentation it was not saved against. 4: the default GPU schedule gives lanes to nests with a
    preamble reduction (gh-ocannl-1124, config [gpu_lane_preamble_reduction], a [fission] input) --
-   again empty under the defaults while the default mappings, hence segmentation, changed. *)
-let cache_regime_version = 4
+   again empty under the defaults while the default mappings, hence segmentation, changed. 5: the
+   lane geometry is gated per device (gh-ocannl-1167, config [gpu_serial_lanes], a [fission] input):
+   HIP's default mappings, hence segmentation, changed under unchanged keys. 6: the [fission]
+   component is gone (gh-ocannl-1164) -- a fissioned winner persists its segmentation, so the
+   segmentation policy's inputs no longer address it. *)
+let cache_regime_version = 6
 let regime_stamp_filename = ".ocannl-schedule-cache-regime"
 let regime_lock_filename = ".ocannl-schedule-cache.lock"
 let regime_stamp_file dir = Stdlib.Filename.concat dir regime_stamp_filename

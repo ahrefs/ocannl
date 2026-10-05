@@ -22,7 +22,7 @@
 open Base
 module Scan = Test_utils.Codegen_text_scan
 
-let printf = Test_utils.Refusal_control_manifest.printf
+let printf = Stdio.printf
 let fail fmt = Printf.ksprintf Verdict.fail fmt
 
 (** How a classified golden reads, for comparison: the families, then where the evidence came from.

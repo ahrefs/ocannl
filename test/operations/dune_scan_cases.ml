@@ -10,7 +10,7 @@
 open Base
 module Scan = Test_utils.Dune_stanza_scan
 
-let printf = Test_utils.Refusal_control_manifest.printf
+let printf = Stdio.printf
 
 (* Failures go through [Verdict], so that a regression exits nonzero instead of being `dune
    promote`d into the golden as the expected output (gh-ocannl-601). *)
@@ -1641,6 +1641,38 @@ let artifact_reader_cases =
       [] );
   ]
 
+(* gh-ocannl-1207: config_dep_completeness's own refusals, executed rather than vouched for by the
+   cases above, which exercise the reading they rest on in process. The scanner runs as a child over
+   a tree built to trip them -- a stanza head and an action head it cannot classify, a binaries
+   mapping, a shell action, a command it cannot read, a test without the config dep, and a test in a
+   directory no config reaches -- and once over no dune file at all. Every exemption is stale in
+   such a tree too. What each child refused is what `raw_direct_evidence` attributes to the two
+   claims. *)
+let refusal_tree =
+  [
+    ("t/ocannl_config", "");
+    ( "t/dune",
+      {dune|(frobnicate (name x))
+(env (_ (binaries (tool.exe as tool))))
+(rule (alias runtest-b) (deps ocannl_config) (action (system "./b.exe")))
+(rule (alias runtest-c) (action (run %{env:TOOL=x})))
+(rule (alias runtest-d) (action (frobnicate ./d.exe)))
+(test (name e) (modules e))
+|dune}
+    );
+    ("unconfigured/dune", "(test (name a) (modules a))\n");
+  ]
+
+let scanner_refusal_controls exe =
+  let source = "test/operations/config_dep_completeness.ml" in
+  let refuses = Test_utils.Refusal_control_manifest.refuses ~source ~exe in
+  Test_utils.Refusal_control_manifest.with_tree refusal_tree (fun root ->
+      Verdict.p "config_dep_completeness refuses a tree built to trip its refusals, exiting 1"
+        (refuses
+           (root :: List.map refusal_tree ~f:(fun (path, _) -> Stdlib.Filename.concat root path)));
+      Verdict.p "config_dep_completeness refuses a run handed no dune file, exiting 1"
+        (refuses [ root ]))
+
 let () =
   let check name expected found =
     if List.equal String.equal found expected then printf "ok: %s\n" name
@@ -1772,4 +1804,7 @@ let () =
       | sites ->
           fail "refused -- %s: read the file as %d sites instead of refusing it" name
             (List.length sites));
+  (match Stdlib.Sys.argv with
+  | [| _; exe |] -> scanner_refusal_controls exe
+  | _ -> Verdict.fail "usage: dune_scan_cases <config_dep_completeness.exe>");
   Test_utils.Refusal_control_manifest.print "config_dep_completeness.ml"

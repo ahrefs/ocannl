@@ -662,11 +662,30 @@ val lane_preamble_reduction_for : Backend_intf.hardware_limits -> lane_preamble_
     [Preamble_refused] otherwise (HIP, the C backends, anything unmeasured), since the lanes
     recompute each pair's scalar preamble once per lane (gh-ocannl-1124). *)
 
+(** How {!default_gpu} weighs its lane geometry (gh-ocannl-1167). Every lane recomputes its nest's
+    per-pair scalar preamble, which the plain plan pays once per thread. [Lanes_cut]: taken wherever
+    a kernel admits it, and {!fission_keep_mapping} cuts a kernel rather than merge a lane nest out
+    of its lanes. [Lanes_admitted]: taken wherever a kernel admits it, but merges are judged on the
+    plain plans, so a merge costing a nest nothing but its lanes is taken. [Lanes_off]: never taken,
+    so the preamble-reduction treatment has nothing to apply to. Config [gpu_serial_lanes], whose
+    [auto] default resolves per device ({!serial_lanes_for}). *)
+type serial_lanes = Lanes_cut | Lanes_admitted | Lanes_off [@@deriving sexp_of, equal]
+
+val gpu_serial_lanes : unit -> serial_lanes option
+(** Config [gpu_serial_lanes] ([auto], the default, is [None] | [cut] | [admitted] | [off]). *)
+
+val serial_lanes_for : Backend_intf.hardware_limits -> serial_lanes
+(** The configured mode, or under [auto] the device's economics: [Lanes_cut] where
+    {!Backend_intf.hardware_limits}' [lane_scalar_recompute_cheap] holds (measured: Metal, CUDA),
+    [Lanes_admitted] otherwise (HIP: the forward value pass wins on lanes in its own kernel, the
+    fused backward's dV loses when cut from dK for them). *)
+
 val default_gpu :
   ?block_size:int ->
   ?min_parallel:int ->
   ?workgroup_fill:int ->
   ?preamble_reduction:lane_preamble_reduction ->
+  ?lanes:bool ->
   ?limits:Backend_intf.hardware_limits ->
   Low_level.optimized ->
   schedule
@@ -696,7 +715,8 @@ val default_gpu :
     fewer grid groups and a larger grid-times-clamped-workgroup product. Skipped leading loops
     remain serial. This choice precedes the race analysis; if it fails, or alignment loses groups,
     active lanes, or the launch threshold, the original outermost pair is used instead. Expanded
-    whole-node zeros ({!zero_expansion}) use the same plans. A lane geometry takes priority over
+    whole-node zeros ({!zero_expansion}) use the same plans. Unless [lanes] is false (default: the
+    {!serial_lanes_for} mode at [limits] is not [Lanes_off]), a lane geometry takes priority over
     both (gh-ocannl-1003): when every nest carrying a chain has a parallel loop under a serial loop
     past loop-free lane-uniform scalar work (declarations and assignments of scope locals -- the
     online-softmax hoist's value pass,
@@ -815,8 +835,10 @@ val fission_keep_mapping :
   is_gpu:bool -> limits:Backend_intf.hardware_limits -> (Low_level.optimized -> schedule) option
 (** The [keep_mapping] schedule {!maybe_default_schedules} passes to {!fission_scheduled}:
     {!default_gpu} at [limits] on a GPU backend while config [gpu_fission_keep_mapping] is on (the
-    default), [None] otherwise. A caller replicating the default segmentation (the autotuner's
-    fissioned candidates) passes the same, so its segments are the untuned pipeline's. *)
+    default), [None] otherwise -- without its lane geometry unless {!serial_lanes_for} is
+    [Lanes_cut], so a merge costing a nest only its lanes is taken. A caller replicating the default
+    segmentation (the autotuner's fissioned candidates) passes the same, so its segments are the
+    untuned pipeline's. *)
 
 val fission_scheduled :
   ?promote_locals:bool ->
@@ -859,14 +881,16 @@ val fission_scheduled :
     does not want to pay unconditionally, so this is a candidate-generation mode (the autotuner
     times it), never the default.
 
-    [keep_mapping] (gh-ocannl-1126): the schedule each candidate kernel would actually receive
-    ({!fission_keep_mapping}). A merge the rules above admit -- an aligned dependent merge, and a
-    conflict-free one, which they admit unconditionally -- is still refused when some statement of
-    the merged kernel gets fewer [Grid] groups or fewer active threads of its OWN loops under
-    [keep_mapping] than it gets in a kernel of its own: the kernel boundary is kept rather than a
-    nest's mapping lost. Only the refused merges add cuts, so a merge that keeps every mapping (an
-    elementwise tail over the same chain) still saves its launch. Ignored under [arity_cuts]. [None]
-    (the default): the legality rules alone decide.
+    [keep_mapping] (gh-ocannl-1126): the default GPU schedule, as {!fission_keep_mapping} probes it
+    -- the schedule each candidate kernel would actually receive, except that where lanes are not
+    [Lanes_cut] the probe leaves out the lane geometry, so no boundary is kept for lanes. A merge
+    the rules above admit -- an aligned dependent merge, and a conflict-free one, which they admit
+    unconditionally -- is still refused when some statement of the merged kernel gets fewer [Grid]
+    groups or fewer active threads of its OWN loops under [keep_mapping] than it gets in a kernel of
+    its own: the kernel boundary is kept rather than a nest's mapping lost. Only the refused merges
+    add cuts, so a merge that keeps every mapping (an elementwise tail over the same chain) still
+    saves its launch. Ignored under [arity_cuts]. [None] (the default): the legality rules alone
+    decide.
 
     [promote_locals] (default [false]): promote statement-crossing [Local] scratch to [On_device]
     before segmentation. A nest whose only writes land in [Local] scratch gets no parallel chain
@@ -878,6 +902,37 @@ val fission_scheduled :
     does not end up needing (single-kernel fallbacks, or all accesses within one segment after
     coalescing) are restored. {!maybe_default_schedules} passes [true] on GPU backends, where a
     serial nest costs orders of magnitude more than on CPU. *)
+
+type segmentation = ([ `Normal | `Zeros | `Solo ] * int) list [@@deriving sexp, equal]
+(** A fission segmentation as data (gh-ocannl-1164): the kind and the length, in units, of each
+    segment in order — a unit being one top-level statement with the comments before it, so the
+    units are a function of the code alone. One segment over every unit is the unfissioned routine.
+    The schedule cache persists it with a fissioned winner, so a replay cuts where the winner was
+    cut instead of re-deriving the cuts under the current policy. *)
+
+val fission_segmented :
+  ?promote_locals:bool ->
+  ?arity_cuts:bool ->
+  ?keep_mapping:(Low_level.optimized -> schedule) ->
+  ?replay:segmentation * (int -> Low_level.optimized -> schedule) ->
+  preset:(Low_level.optimized -> schedule) ->
+  zero_sched:(Tnode.t list -> schedule) ->
+  static_indices:Indexing.static_symbol list ->
+  Low_level.optimized ->
+  segmentation
+  * ([ `Normal | `Zeros | `Solo ] * Low_level.optimized * schedule * Low_level.optimized) list
+(** {!fission_scheduled}, also returning the segmentation of its result (one element per tuple), or
+    — given [replay = (segmentation, schedule)] — applying that recorded segmentation instead of
+    deriving one. A recorded segmentation is neither re-grouped nor coalesced, so [arity_cuts] and
+    [keep_mapping] do not reach it; the promotions and scope-local replicas are recomputed for its
+    boundaries exactly as for derived ones, and the [i]th segment's (pre-schedule) slice gets
+    [schedule i] whatever its kind — by position, because segments of one structure can differ in
+    placements, hence in kind and schedule; [preset] and [zero_sched] are not consulted. A
+    segmentation that does not fit the routine — its lengths do not sum to the routine's units, a
+    segment is empty, or a boundary separates a scope-local definition from a use it cannot be
+    replicated for — raises {!Schedule_outcome.Cause_at} with an [Illegal_schedule] cause, a
+    candidate's ordinary decline; it is never repaired into another segmentation. Whatever raises,
+    the promotions made so far are restored first. *)
 
 val maybe_default_schedules :
   backend_name:string ->

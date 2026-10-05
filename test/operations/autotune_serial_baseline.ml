@@ -201,7 +201,6 @@ let () =
       source_digest = SC.digest canon;
       saved = [];
       segments = None;
-      finer_fission = None;
       best_ms = 1e-6;
       baseline_ms = 1e-6;
       (* A pre-gh-552 entry: written before [default_ms] existed. *)

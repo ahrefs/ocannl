@@ -151,7 +151,7 @@ let () =
   in
   let base_opt = Option.value_exn ~here:[%here] !base_capture in
   let base_canon = SC.canonicalize base_opt in
-  let segments_assoc = ref [] in
+  let saved_segments = ref [] in
   let fctx = Context.auto () in
   let _fctx, _fr =
     Context.compile
@@ -162,17 +162,12 @@ let () =
           else []
         in
         let zero_sched tns = if is_gpu then Sched.zero_expansion ~limits tns else [] in
-        let tuples = Sched.fission_scheduled ~preset ~zero_sched ~static_indices:[] opt in
-        segments_assoc :=
-          List.filter_map tuples ~f:(fun (kind, pre, sched, _post) ->
-              match kind with
-              | `Normal ->
-                  (* Per-segment replay matching keys on the structural canon (see
-                     Schedule_cache.canonicalize's [with_placements]). *)
-                  let pre_canon = SC.canonicalize ~with_placements:false pre in
-                  let saved, _reg = SC.to_saved (SC.base_registry pre_canon) sched in
-                  Some (SC.digest pre_canon, saved)
-              | _ -> None);
+        let segmentation, tuples =
+          Sched.fission_segmented ~preset ~zero_sched ~static_indices:[] opt
+        in
+        (* The saved form keys each segment on its structural canon (see
+           Schedule_cache.canonicalize's [with_placements]). *)
+        saved_segments := List.map (SC.save_segments segmentation tuples) ~f:fst;
         List.map tuples ~f:(fun (_, _, _, post) -> post))
       fctx chain_comp Ir.Indexing.Empty
   in
@@ -190,8 +185,7 @@ let () =
       objective = Some (SC.objective_tag ());
       source_digest = SC.digest base_canon;
       saved = [];
-      segments = Some !segments_assoc;
-      finer_fission = None;
+      segments = Some !saved_segments;
       best_ms = 0.;
       baseline_ms = 0.;
       default_ms = None;
