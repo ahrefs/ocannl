@@ -353,10 +353,12 @@ The `[%oc ...]` syntax allows embedding arbitrary OCaml code without `%op` attem
 
 {pause down #pattern-examples .example title="Real Examples from nn_blocks.ml"}
 ```ocaml
-(* Layer norm - reduce over feature dimensions *)
-let%op layer_norm () x =
-  let mean = x ++ "... | ..d.. => ... | 0" ["d"] in
-  let normalized = (x - mean) /. dim d in
+(* Layer norm - reduce over feature dimensions; ++ sums, so divide by dim d *)
+let%op layer_norm ~label ?(epsilon = 1e-5) () x =
+  let mean = (x ++ "... | ..d.. => ... | 0" ["d"]) /. dim d in
+  let centered = x - mean in
+  let variance = ((centered *. centered) ++ "... | ... => ... | 0") /. dim d in
+  let normalized = centered /. sqrt (variance + !.epsilon) in
   ({ gamma = 1. } *. normalized) + { beta = 0. }
 
 (* Attention scores with flexible batching *)
