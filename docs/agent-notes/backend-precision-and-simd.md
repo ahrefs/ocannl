@@ -699,6 +699,12 @@ files.
   statement is tensorized but has no `ldmatrix`; CUDA's `mma_ldmatrix_operands` drives
   both load emission and `mma_uses_ldmatrix` for the census, rather than inferring the
   instruction from the layout. `schedule_ldmatrix_matmul` pins both gather-only orientations.
+  Timed (gh-ocannl-1190, sm_120, 16x32x32 tile, 128 k_o blocks): in the resident scope the
+  swizzled fp8 twin is 12.2% faster than the plain one (paired ratio 0.8775, every replicate
+  under 0.883), unlike the neutral bf16 twin of gh-481. `tune` times both twins, so it needs no
+  change. `model_default` does: its cost model cannot see the swizzle map, so the twins tie, and
+  its first-strictly-better rule keeps plain. Re-time a layout change with
+  `bench_mma_register_scope_emit --layout` and `mma_register_scope_probe_build.sh`.
 - **bf16 residency is the ternary `bf16_arithmetic` policy's question** (gh-ocannl-838), the same
   shape as `fp16_arithmetic`: `Numerics.bf16_mode`, `Numerics.bf16_accum_wide`, and a per-format
   capability list `mma_bf16_wide_acc_scopes` read by the same seeding gate
