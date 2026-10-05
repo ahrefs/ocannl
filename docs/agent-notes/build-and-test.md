@@ -926,7 +926,7 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   with `|| die …` / `|| return 1` (`|| rc=$?` to capture it; a `rc=$?` on the next line is refused). `shell_scripts_parse` refuses both shapes in errexit scripts; its
   module headers state the logical-line boundary each scan reads, and a function's final pair — not
   inert, its status is the return value — is refused too, since the scan cannot see function ends.
-  Both arms share `Errexit_negation.numbered_spliced_lines`: it carries multiline quotes and
+  Both arms share `Shell_lexer.numbered_spliced_lines`: it carries multiline quotes and
   literal outer heredoc delimiters, excluding their bodies, and joins continued condition headers
   through `then`/`do`. Continued unquoted heredoc bodies are refused because removing their escaped
   newlines can change delimiter recognition; quoted bodies retain those newlines. This lexical

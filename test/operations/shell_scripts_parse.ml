@@ -638,23 +638,11 @@ let rec resolve ~rel ?(ours = false) launch =
 let first_line_of path =
   try In_channel.with_file path ~f:(In_channel.input_line ~fix_win_eol:false) with _ -> None
 
-(** A deliberately textual check for statement-position command negation in scripts that enable
-    errexit (gh-ocannl-895).
-
-    Bash exempts [! command] from errexit because the command's status is being inverted. At the
-    start of a statement, with nothing consuming that inverted status, the spelling therefore looks
-    like a negative assertion but cannot stop a [set -e] harness. Condition positions and AND/OR
-    lists do consume it, and a [!] inside a command substitution or test bracket is not the
-    statement's first token, so those shapes stay valid.
-
-    This is intentionally not a shell parser. The issue's boundary is a logical line whose first
-    token is [!] in a file containing a [set] option that enables errexit. Both errexit arms use
-    {!Errexit_negation.numbered_spliced_lines} for cross-line lexical context. Quote-aware
-    recognition of [&&] and [||] avoids treating an operator printed by the command as a consumer;
-    shell syntax itself remains the parse check above's responsibility. *)
-module Errexit_negation = struct
-  type finding = { line : int }
-
+(** The shared lexical reader of the two errexit checks below: quote, substitution and comment
+    skipping, shell words, the [set]/[shopt] reading of an errexit option, and
+    {!numbered_spliced_lines}, which carries lexical context across physical lines. Both arms read a
+    script through it and nothing else. *)
+module Shell_lexer = struct
   let starts_at text ~pos token =
     let token_length = String.length token in
     pos + token_length <= String.length text
@@ -1506,6 +1494,26 @@ module Errexit_negation = struct
   let line_enables_errexit line =
     List.exists (command_fragments line) ~f:(fun (command, affects_parent) ->
         affects_parent && command_enables_errexit command)
+end
+
+(** A deliberately textual check for statement-position command negation in scripts that enable
+    errexit (gh-ocannl-895).
+
+    Bash exempts [! command] from errexit because the command's status is being inverted. At the
+    start of a statement, with nothing consuming that inverted status, the spelling therefore looks
+    like a negative assertion but cannot stop a [set -e] harness. Condition positions and AND/OR
+    lists do consume it, and a [!] inside a command substitution or test bracket is not the
+    statement's first token, so those shapes stay valid.
+
+    This is intentionally not a shell parser. The issue's boundary is a logical line whose first
+    token is [!] in a file containing a [set] option that enables errexit. Both errexit arms use
+    {!Shell_lexer.numbered_spliced_lines} for cross-line lexical context. Quote-aware recognition of
+    [&&] and [||] avoids treating an operator printed by the command as a consumer; shell syntax
+    itself remains the parse check above's responsibility. *)
+module Errexit_negation = struct
+  open Shell_lexer
+
+  type finding = { line : int }
 
   (* A TOP-LEVEL [&&] or [||] consumes the negated pipeline's value. Ignore spellings inside quotes
      and nested shell constructs: in [! printf '%s\n' 'x || y'] the operator is data, and in [!
@@ -1916,10 +1924,10 @@ end
     [builtin]/[command], [time], assignment and redirection prefixes -- not inside a function body,
     a sourced file or a [bash -e] invocation. The file is read as the shell reads it, with every
     backslash-newline removed, one LOGICAL line at a time, through the shared
-    {!Errexit_negation.numbered_spliced_lines} reader: multiline quoted values/substitutions stay
-    whole, outer heredoc bodies are data, and continued condition headers stay with their
-    [then]/[do]. A line ending in [&&], [||] or [|] is joined with the next, so a list wrapped
-    across lines is read whole. Words are split at unquoted whitespace.
+    {!Shell_lexer.numbered_spliced_lines} reader: multiline quoted values/substitutions stay whole,
+    outer heredoc bodies are data, and continued condition headers stay with their [then]/[do]. A
+    line ending in [&&], [||] or [|] is joined with the next, so a list wrapped across lines is read
+    whole. Words are split at unquoted whitespace.
 
     A logical line is cut into statements at top-level [;], [;;], a lone [&], a comment, and a case
     pattern's [)] -- unmatched, or closing a [(pattern)] because a word follows it, redirections
@@ -1928,10 +1936,10 @@ end
     as a later operand of a list) is a nested statement context whose statements are read on their
     own; so is a function body, except that the command running after the definition is the
     definition itself, not its body. Keywords are matched as written: a quoted [then] is not one.
-    Quotes, [$( )], [${ }] and backticks are skipped as in {!Errexit_negation}, and so is the inside
-    of a [[[ ... ]]], so an [&&] printed as data or written inside [[[ a && b ]]] is not a list
-    operator. A single [\[] needs no tracking: an [&&] between single brackets IS a list operator. A
-    statement is flagged when all of these hold:
+    Quotes, [$( )], [${ }] and backticks are skipped as in {!Shell_lexer}, and so is the inside of a
+    [[[ ... ]]], so an [&&] printed as data or written inside [[[ a && b ]]] is not a list operator.
+    A single [\[] needs no tracking: an [&&] between single brackets IS a list operator. A statement
+    is flagged when all of these hold:
     - it is an [&&]-only list of at least two operands, and every operand is a test command
       ({!is_test}: [\[], [\[\[] or [test], also by path and through [command]/[builtin], after [!],
       [time], assignments and redirections; on the first operand also after [then], [do], [else]);
@@ -1976,7 +1984,7 @@ end
       is flagged too, and [|| return 1] is the explicit spelling it accepts. The same holds for a
       script's final line ([|| exit 1]). (Loud.) *)
 module Errexit_and_list = struct
-  module N = Errexit_negation
+  module N = Shell_lexer
 
   type finding = { line : int }
   type connector = And | Or | Pipe
