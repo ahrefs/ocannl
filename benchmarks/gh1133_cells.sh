@@ -217,7 +217,7 @@ for step in "$@"; do
       done
       if [ "$ok" = 1 ] && python3 fixture_digest.py --check \
         $(for f in $fixtures; do echo "$fixture_dir/$f.safetensors"; done) |
-        tee "$out/fixtures.txt" && [ "$(grep -c "MATCH — m4-max's bytes" "$out/fixtures.txt")" = "$n" ]; then
+        tee "$out/fixtures.txt" && [ "$(grep -cE "MATCH — ([^ ]*,)?m4-max(,[^ ]*)?'s bytes" "$out/fixtures.txt")" = "$n" ]; then
         proven=1
       else
         echo "gh1133: a tree is not clean or the fixtures do not match the m4-max content-v1 records"

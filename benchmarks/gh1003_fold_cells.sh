@@ -185,7 +185,7 @@ for step in "$@"; do
         done
         if [ "$ok" = 1 ] && python3 fixture_digest.py --check \
           $(for f in $fixtures; do echo "$fixture_dir/$f.safetensors"; done) |
-          tee "$out/fixtures.txt" && [ "$(grep -c "MATCH — m4-max's bytes" "$out/fixtures.txt")" = 3 ]; then
+          tee "$out/fixtures.txt" && [ "$(grep -cE "MATCH — ([^ ]*,)?m4-max(,[^ ]*)?'s bytes" "$out/fixtures.txt")" = 3 ]; then
           proven=1
         else
           echo "gh1003: fixtures do not match the m4-max content-v1 records"
@@ -222,7 +222,7 @@ for step in "$@"; do
       done
       if [ "$ok" = 1 ] && python3 fixture_digest.py --check \
         $(for f in $train_fixtures; do echo "$fixture_dir/$f.safetensors"; done) |
-        tee -a "$out/fixtures.txt" | grep -c "MATCH — m4-max's bytes" | grep -qx "$(echo $train_fixtures | wc -w | tr -d ' ')"; then
+        tee -a "$out/fixtures.txt" | grep -cE "MATCH — ([^ ]*,)?m4-max(,[^ ]*)?'s bytes" | grep -qx "$(echo $train_fixtures | wc -w | tr -d ' ')"; then
         for pass in 1 2; do
           for c in $(pass_cells "$pass" "$train_fixtures" "$train_treatments"); do cell metal "${c%%:*}" "${c#*:}" "r$pass"; done
         done
