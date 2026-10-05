@@ -796,8 +796,13 @@ let open_current_regime dir =
         true)
       else false
 
-let with_cache_open ~dir f =
-  if not (Stdlib.Sys.file_exists dir) then None
+(* Why a cache-open did not admit its operation: the directory is absent (a lookup's ordinary miss
+   before the first store, a store's refusal), or the lock, the regime stamp or the sweep of a
+   superseded regime refused it. *)
+type open_refusal = Missing_dir | Refused_open of string
+
+let open_cache ~dir f =
+  if not (Stdlib.Sys.file_exists dir) then Error Missing_dir
   else (
     Stdlib.Mutex.lock cache_open_mutex;
     Stdlib.Fun.protect
@@ -810,8 +815,49 @@ let with_cache_open ~dir f =
             (fun () ->
               Resource_fault_injection.hit Schedule_cache_before_lock;
               Unix.lockf fd Unix.F_LOCK 0;
-              if open_current_regime dir then Some (f ()) else None)
-        with Unix.Unix_error _ | Stdlib.Sys_error _ -> None))
+              if open_current_regime dir then Ok (f ())
+              else
+                Error
+                  (Refused_open
+                     "regime refused: a newer or malformed stamp, or a superseded entry that could \
+                      not be removed"))
+        with
+        | Unix.Unix_error (error, fn, arg) ->
+            Error (Refused_open (Printf.sprintf "%s %s: %s" fn arg (Unix.error_message error)))
+        | Stdlib.Sys_error msg -> Error (Refused_open msg)))
+
+(* {2 The cache-I/O record} (gh-ocannl-1040)
+
+   Every refusal the entry protocol absorbs is invisible by design -- the cache is an optimization
+   -- which is right for a tuning run and wrong for a test that claims a store happened: on Windows
+   a commit can outlive [Atomic_file]'s bounded retry, or the lock can refuse, and the claim then
+   fails for a reason its own predicates never observe. So each store and each lookup notes what it
+   came to, to whoever is recording; with nobody recording, nothing is kept. *)
+type cache_op = Store | Lookup [@@deriving sexp_of]
+
+type cache_io = { op : cache_op; dir : string; key : string; refusal : string option }
+[@@deriving sexp_of]
+
+let io_recorders : cache_io Queue.t list ref = ref []
+let io_recorders_mutex = Stdlib.Mutex.create ()
+
+let note_io io =
+  Stdlib.Mutex.lock io_recorders_mutex;
+  List.iter !io_recorders ~f:(fun q -> Queue.enqueue q io);
+  Stdlib.Mutex.unlock io_recorders_mutex
+
+let recording_cache_io f =
+  let q = Queue.create () in
+  let detach () =
+    Stdlib.Mutex.lock io_recorders_mutex;
+    io_recorders := List.filter !io_recorders ~f:(fun q' -> not (phys_equal q q'));
+    Stdlib.Mutex.unlock io_recorders_mutex
+  in
+  Stdlib.Mutex.lock io_recorders_mutex;
+  io_recorders := q :: !io_recorders;
+  Stdlib.Mutex.unlock io_recorders_mutex;
+  let result = Exn.protect ~f ~finally:detach in
+  (result, Queue.to_list q)
 
 (* One entry I/O protocol for every kind of entry the directory holds: schedule winners, abandoned
    searches and placement decisions (gh-ocannl-786) share the lock, the regime stamp and the atomic
@@ -819,29 +865,37 @@ let with_cache_open ~dir f =
 let store_sexp ~dir ~key sexp =
   Option.iter key ~f:(fun key ->
       ensure_dir dir;
-      ignore
-        (with_cache_open ~dir (fun () ->
-             (* A writer killed between staging and commit leaves its staging file behind; nothing
-                else in the process would ever remove it, and a cache directory is long-lived. Sweep
-                once per process, from the writers rather than on a timer. *)
-             Utils.Atomic_file.cleanup_stale_once dir;
-             let file = cache_file ~dir ~key in
-             (* Uniqueness, failure cleanup and the Windows-safe commit all live in [Atomic_file]:
-                the committed entry is either the old complete file or the new complete file, never
-                an intention. The injection point sits in the staged-but-uncommitted window, which
-                is what makes that guarantee testable. *)
-             try
-               Utils.Atomic_file.write_all ~path:file ~data:(Sexp.to_string_hum sexp)
-                 ~before_commit:(fun () ->
-                   Resource_fault_injection.hit Schedule_cache_before_commit)
-                 ()
-             with Stdlib.Sys_error _ ->
-               (* The cache is an optimization, so a filesystem refusal — a directory that turned
-                  unwritable, a Windows peer still holding this entry open past the bounded commit
-                  retry — means the tuning result is not saved, not that the run fails. [publish]
-                  has already removed the staging file; an earlier complete entry is still in
-                  place. *)
-               ())))
+      let refusal =
+        match
+          open_cache ~dir (fun () ->
+              (* A writer killed between staging and commit leaves its staging file behind; nothing
+                 else in the process would ever remove it, and a cache directory is long-lived.
+                 Sweep once per process, from the writers rather than on a timer. *)
+              Utils.Atomic_file.cleanup_stale_once dir;
+              let file = cache_file ~dir ~key in
+              (* Uniqueness, failure cleanup and the Windows-safe commit all live in [Atomic_file]:
+                 the committed entry is either the old complete file or the new complete file, never
+                 an intention. The injection point sits in the staged-but-uncommitted window, which
+                 is what makes that guarantee testable. *)
+              try
+                Utils.Atomic_file.write_all ~path:file ~data:(Sexp.to_string_hum sexp)
+                  ~before_commit:(fun () ->
+                    Resource_fault_injection.hit Schedule_cache_before_commit)
+                  ();
+                None
+              with Stdlib.Sys_error msg ->
+                (* The cache is an optimization, so a filesystem refusal -- a directory that turned
+                   unwritable, a Windows peer still holding this entry open past the bounded commit
+                   retry -- means the tuning result is not saved, not that the run fails. [publish]
+                   has already removed the staging file; an earlier complete entry is still in
+                   place. *)
+                Some msg)
+        with
+        | Ok refusal -> refusal
+        | Error Missing_dir -> Some (dir ^ ": the cache directory could not be created")
+        | Error (Refused_open msg) -> Some msg
+      in
+      note_io { op = Store; dir; key; refusal })
 
 (* The failures a cache read never absorbs: they are about the process, not the entry, and a miss
    that hides one turns Ctrl-C during a lookup into the start of a search it was meant to stop. *)
@@ -851,17 +905,23 @@ let process_level = function
 
 let lookup_sexp ~dir ~key ~of_sexp ~current =
   Option.bind key ~f:(fun key ->
-      Option.join
-        (with_cache_open ~dir (fun () ->
-             Utils.Atomic_file.cleanup_stale_once dir;
-             let file = cache_file ~dir ~key in
-             if not (Stdlib.Sys.file_exists file) then None
-             else
-               try
-                 Resource_fault_injection.hit Schedule_cache_before_replay;
-                 let entry = of_sexp (Sexplib.Sexp.load_sexp file) in
-                 if current entry then Some entry else None
-               with exn when not (process_level exn) -> None)))
+      let opened =
+        open_cache ~dir (fun () ->
+            Utils.Atomic_file.cleanup_stale_once dir;
+            let file = cache_file ~dir ~key in
+            if not (Stdlib.Sys.file_exists file) then None
+            else
+              try
+                Resource_fault_injection.hit Schedule_cache_before_replay;
+                let entry = of_sexp (Sexplib.Sexp.load_sexp file) in
+                if current entry then Some entry else None
+              with exn when not (process_level exn) -> None)
+      in
+      (* A missing directory is the ordinary miss before the first store; an undecodable or stale
+         entry is a miss the lookup decided. Only a refused open is a refusal. *)
+      let refusal = match opened with Error (Refused_open msg) -> Some msg | _ -> None in
+      note_io { op = Lookup; dir; key; refusal };
+      Option.join (Result.ok opened))
 
 let store ~dir ~key entry = store_sexp ~dir ~key (sexp_of_entry entry)
 

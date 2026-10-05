@@ -375,7 +375,8 @@ val store : dir:string -> key:string option -> entry -> unit
     current stamp; a malformed or newer stamp refuses the operation without changing its stamp or
     entries. Holding that lock through the write prevents a concurrent regime transition from
     deleting the new entry. A filesystem refusal is not propagated: the cache is an optimization,
-    and an entry that could not be written is a future miss rather than a failed run. *)
+    and an entry that could not be written is a future miss rather than a failed run. It is noted,
+    with its reason, to {!recording_cache_io}. *)
 
 val lookup : dir:string -> key:string option -> entry option
 (** [None] on missing file, unparsable content, version/digest mismatch, or a refused cache-open.
@@ -391,6 +392,36 @@ val lookup : dir:string -> key:string option -> entry option
     the record lock on process death; the lock file is never unlinked, avoiding an inode-replacement
     race. A binary predating this protocol does not participate and must not share a live directory
     during an upgrade. *)
+
+(** {2 The cache-I/O record}
+
+    gh-ocannl-1040. The refusals {!store} and {!lookup} absorb are invisible by design, which is
+    right for a tuning run and wrong for a test claiming that a store happened: on Windows a commit
+    can outlive {!Utils.Atomic_file}'s bounded retry, or the lock can refuse, and such a claim then
+    fails for a reason its own predicates never observe. Every store and lookup of this module
+    ({!store}, {!store_abandonment}, {!store_placements} and their lookups) therefore notes what it
+    came to, to whoever is recording. *)
+
+type cache_op = Store | Lookup [@@deriving sexp_of]
+
+type cache_io = {
+  op : cache_op;
+  dir : string;  (** As passed by the caller, not normalized. *)
+  key : string;  (** The full key, namespace prefix included (["placements-"], ["abandonment-"]). *)
+  refusal : string option;
+      (** [Some reason] when the filesystem refused the operation: a store that left no entry (the
+          lock, the regime stamp, an uncreatable directory, the write or the bounded commit), or a
+          lookup whose cache-open refused. [None] for a store that committed and for a lookup that
+          was admitted, hit or miss -- a missing directory is a lookup's ordinary miss, not a
+          refusal. *)
+}
+[@@deriving sexp_of]
+
+val recording_cache_io : (unit -> 'a) -> 'a * cache_io list
+(** [recording_cache_io f] runs [f] and returns, beside its result, every store and lookup with a
+    key that this process made while [f] ran, from any domain, oldest first. A call with
+    [key = None] performs no I/O and is not recorded. Recordings nest; with none active nothing is
+    kept. If [f] raises, the recording is dropped and the exception propagates. *)
 
 (** {2 Abandoned searches} *)
 
