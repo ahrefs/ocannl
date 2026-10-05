@@ -1,5 +1,5 @@
-references are normal halves, so the tolerance is one half ulp: true
-fractional and dynamic half powers are within one half ulp of the f64 reference: true
+references are normal halves, so the tolerance is one ulp at half precision: true
+fractional and dynamic half powers are within one ulp at half precision of the f64 reference: true
 half powers are f32 powf rounded to half once: true
 half powers never call the binary-misused hexp2: true
 fractional and dynamic exponents bypass the integer-power helper: true

@@ -1,13 +1,14 @@
 (* Fractional and dynamic half powers (gh-ocannl-1198). Neither vendor header has a half pow, and
    both vendors' [hexp2] is unary, so CUDA and HIP widen both operands, take f32 [powf], and round
-   back to half once -- the cc path's numerics. The domain is f32 [powf]'s: a negative base under a
+   back to half once, as cc's codegen does. The domain is f32 [powf]'s: a negative base under a
    fractional exponent is NaN. Known integer exponents take the integer-power helper instead
    ([integer_power_domain]); here every exponent is either fractional or only known at run time.
 
-   Tolerance: one half ulp relative to an f64 reference over the half-rounded operands, i.e. [|got -
-   want| <= 2^-10 * |want|]. That admits the f32 [powf] error (a few f32 ulps, fast math included)
-   plus the single rounding to half, and nothing coarser: the reference values are all normal
-   halves, so a 2^-10 relative bound is at most one step of the half grid. *)
+   Tolerance: one ulp at half precision, relative to an f64 reference over the half-rounded
+   operands, i.e. [|got - want| <= 2^-10 * |want|]. That admits the f32 [powf] error (a few f32
+   ulps, fast math included) plus the single rounding to half, and nothing coarser: the reference
+   values are all normal halves, so a 2^-10 relative bound is one step of the half grid (two steps
+   of the finer grid just below a power of two, when [want] is one). *)
 open Base
 open Ocannl.Operation.DSL_modules
 module LL = Ir.Low_level
@@ -21,9 +22,15 @@ let () = Utils.settings.output_debug_files_in_build_directory <- true
 let () = Generated.init ~backend_name
 let f32 x = Int32.float_of_bits (Int32.bits_of_float x)
 let f16 x = Ops.half_to_single (Ops.single_to_half (f32 x))
+
+(* The backends whose half pow is f32 [powf] rounded once; Metal's half [pow] is its own
+   overload. *)
+let widens_to_powf =
+  List.mem [ "cc"; "multidev_cc"; "cuda"; "hip" ] backend_name ~equal:String.equal
+
 let cuda_like = List.mem [ "cuda"; "hip" ] backend_name ~equal:String.equal
 
-(* [Const e]: the exponent is a literal in the kernel; [Dynamic]: it is read from a buffer. *)
+(* [Const]: the exponent is a literal in the kernel; [Dynamic]: it is read from a buffer. *)
 type exponent = Const | Dynamic
 
 let cases =
@@ -72,12 +79,14 @@ let run ~prec ~name ~first_id cases =
 
 let () =
   Verdict.case "half powers" (fun () ->
-      LL.optimize_integer_pow := false;
       let got = run ~prec:Ops.half ~name:"hpow" ~first_id:19100 cases in
       let want = List.map cases ~f:(fun (x, e, _) -> f16 (Float.( ** ) (f16 x) (f16 e))) in
-      p_all "references are normal halves, so the tolerance is one half ulp" want ~f:is_normal_half;
-      p_alli "fractional and dynamic half powers are within one half ulp of the f64 reference" cases
-        ~f:(fun i (x, e, kind) ->
+      p_all "references are normal halves, so the tolerance is one ulp at half precision" want
+        ~f:is_normal_half;
+      p_alli
+        "fractional and dynamic half powers are within one ulp at half precision of the f64 \
+         reference"
+        cases ~f:(fun i (x, e, kind) ->
           let want = List.nth_exn want i in
           let ok = Float.(abs (got.(i) - want) <= 0x1p-10 * abs want) in
           if not ok then
@@ -86,10 +95,10 @@ let () =
               x e got.(i) want;
           ok);
       (* The same operands at f32, narrowed to half on the host: one rounding of the same [powf]
-         result. Pinned where that is the stated policy; Metal's half [pow] is its own overload. *)
+         result. Pinned wherever that is the stated policy. *)
       let single = run ~prec:Ops.single ~name:"hpow_f32" ~first_id:19200 cases in
       let label = "half powers are f32 powf rounded to half once" in
-      if cuda_like then
+      if widens_to_powf then
         p_alli label (Array.to_list got) ~f:(fun i v ->
             let want = f16 single.(i) in
             let ok = Int64.equal (Int64.bits_of_float v) (Int64.bits_of_float want) in
