@@ -128,9 +128,11 @@ let padded_fill_offsets label dims pads =
        (Ir.Ndarray.retrieve_flat_values nd)
        (Array.init numel ~f:(fun k -> if inside k then 3. else -1.)))
 
-(* gh-ocannl-1218: forcing a padded broadcast scalar's host initializer allocates nothing the size
-   of its buffer on the OCaml heap; a full-size float temporary alone is [numel] words. Measured
-   while lowering, after shape inference committed the padding and before linking forces it. *)
+(* gh-ocannl-1218: forcing a padded broadcast scalar's host initializer allocates a bounded number
+   of OCaml heap words, independent of its cell count: a full-size float temporary alone is [numel]
+   words, and a view per contiguous run grows with the run count. 512 is about five times what the
+   buffer's own creation costs. Measured while lowering, after shape inference committed the padding
+   and before linking forces it. *)
 let allocation_witness ~name ~numel (x : Tensor.t) y ~check_layout =
   let measured = ref None in
   let ctx, _routine =
@@ -150,7 +152,8 @@ let allocation_witness ~name ~numel (x : Tensor.t) y ~check_layout =
     words numel;
   p "witness forces the host initializer itself" (not forced_before);
   p "witness buffer carries committed padding" (check_layout padding);
-  p "padded scalar host fill allocates under numel/8 heap words" Float.(words < of_int numel /. 8.);
+  p "padded scalar host fill allocates under 512 heap words, whatever its cell count"
+    Float.(words < 512.);
   Context.release ctx
 
 (* A rank-1 halo: the run is the whole interior. *)
@@ -162,10 +165,11 @@ let allocation_witness_rank1 () =
   let%op y = x +* "i=+k; k => i" kernel in
   allocation_witness ~name:"alloc_witness" ~numel x y ~check_layout:Option.is_some
 
-(* A 2-D halo over an innermost unpadded channel axis of extent 1: a fill that issued one run per
-   innermost row would take [h * w] runs, as many as there are cells. *)
+(* A 2-D halo over an innermost unpadded channel axis of extent 1: [h] contiguous runs, or [h * w]
+   for a fill that issued one per innermost row, as many as there are cells. Over [h = 512] runs,
+   even a 3-word pair allocated per run exceeds the bound. *)
 let allocation_witness_rank3 () =
-  let h = 256 and w = 256 in
+  let h = 512 and w = 128 in
   let x = NTDSL.ndarray [| 3. |] ~output_dims:[ h; w; 1 ] () in
   Train.set_materialized x.value;
   let kernel = NTDSL.ndarray (Array.init 9 ~f:Float.of_int) ~output_dims:[ 3; 3 ] () in

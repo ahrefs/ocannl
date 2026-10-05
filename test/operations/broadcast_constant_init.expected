@@ -94,7 +94,7 @@ padded fill keeps uneven margins on all three axes: true
 padded fill folds an unpadded innermost axis into its runs: true
 witness forces the host initializer itself: true
 witness buffer carries committed padding: true
-padded scalar host fill allocates under numel/8 heap words: true
+padded scalar host fill allocates under 512 heap words, whatever its cell count: true
 witness forces the host initializer itself: true
 witness buffer carries committed padding: true
-padded scalar host fill allocates under numel/8 heap words: true
+padded scalar host fill allocates under 512 heap words, whatever its cell count: true

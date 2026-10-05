@@ -292,22 +292,22 @@ let set_from_float ?padding arr idx v =
 (** Sets every cell of [arr] to [v]; with [~padding], only the cells inside the margins, which keep
     their contents. *)
 let fill_from_float ?padding arr v =
-  (* A padded fill writes contiguous runs: the interior of the last padded axis together with every
-     unpadded axis after it, one [Array1.fill] per run. That allocates nothing per cell, only a
-     small sub-array view per run (gh-ocannl-1218); a halo-padded [h; w; c] buffer takes [h] runs,
-     not [h * w]. *)
+  (* A padded fill writes contiguous runs -- the interior of the last padded axis together with
+     every unpadded axis after it -- cell by cell through a flat view. It allocates nothing per run
+     or per cell (gh-ocannl-1218): an [Array1.sub] view per run would cost about 7 heap words each,
+     which for a short innermost run is proportional to the cell count again. *)
   let fill (type ocaml elt_t) (arr : (ocaml, elt_t) bigarray) (x : ocaml) =
     let dims = A.dims arr in
-    let bounds axis =
+    (* Reads the margins in place: a fresh pair per run would allocate. *)
+    let pad axis =
       match padding with
-      | Some padding when axis < Array.length padding ->
-          (padding.(axis).Ops.left, dims.(axis) - padding.(axis).Ops.right)
-      | _ -> (0, dims.(axis))
+      | Some padding when axis < Array.length padding -> padding.(axis)
+      | _ -> Ops.{ left = 0; right = 0 }
     in
+    let lo axis = (pad axis).left and hi axis = dims.(axis) - (pad axis).right in
     let last_padded =
       Array.foldi dims ~init:(-1) ~f:(fun axis acc d ->
-          let lo, hi = bounds axis in
-          if lo > 0 || hi < d then axis else acc)
+          if lo axis > 0 || hi axis < d then axis else acc)
     in
     if last_padded < 0 then A.fill arr x
     else
@@ -318,14 +318,12 @@ let fill_from_float ?padding arr v =
       (* [base] is the linear index, over the axes before [axis], of the current prefix, scaled by
          [dims.(axis)]: the linear index over axes up to [axis] of position 0 along [axis]. *)
       let rec go axis base =
-        let lo, hi = bounds axis in
-        if axis = last_padded then (
-          if hi > lo then
-            Bigarray.Array1.fill
-              (Bigarray.Array1.sub flat ((base + lo) * run_unit) ((hi - lo) * run_unit))
-              x)
+        if axis = last_padded then
+          for j = (base + lo axis) * run_unit to ((base + hi axis) * run_unit) - 1 do
+            Bigarray.Array1.set flat j x
+          done
         else
-          for i = lo to hi - 1 do
+          for i = lo axis to hi axis - 1 do
             go (axis + 1) ((base + i) * dims.(axis + 1))
           done
       in
