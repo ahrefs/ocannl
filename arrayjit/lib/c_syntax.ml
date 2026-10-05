@@ -914,8 +914,10 @@ module type C_syntax_config = sig
       selects for these storage precisions under the current numerics policy (gh-ocannl-1153),
       published as {!Backend_intf.codegen_capabilities.mma_arm} and so into the schedule cache's
       identity. Derive it from the very combination table and floors those hooks dispatch on — a
-      second copy would let a code change to the hooks' arm choice leave the identity alone. [None]
-      for a combination neither hook has an arm for, and everywhere on a backend without them. *)
+      second copy would let a code change to the hooks' arm choice leave the identity alone. Where
+      the hooks try several tables in an order (CUDA), that order is restated here; pin it with
+      tests that read the arm markers they expect in rendered code from this function. [None] for a
+      combination neither hook has an arm for, and everywhere on a backend without them. *)
 
   val mma_fragment_syntax :
     (d_prec:Ops.prec ->

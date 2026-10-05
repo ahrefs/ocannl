@@ -751,6 +751,9 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
           Some ("__half", "__half_as_ushort", "__half2float", "__float2half", "f16", "mma-f16")
       | _ -> None
 
+    (* The fp8 arm's marker, shared by its statement and register-scope renderings and [mma_arm]. *)
+    let mma_fp8_marker = "mma-fp8"
+
     let mma_fp8_combo ~a_prec ~b_prec ~d_prec =
       match (a_prec, b_prec, d_prec) with
       | Ops.Fp8_prec _, Ops.Fp8_prec _, Ops.Single_prec _ -> true
@@ -782,7 +785,7 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
           Option.map (mma16_spellings ~a_prec ~b_prec ~d_prec)
             ~f:(fun (elt_typ, _, widen, narrow, _, marker) ->
               (elt_typ, Some (widen, narrow), marker))
-      | Ops.Fp8_prec _, Ops.Fp8_prec _, Ops.Single_prec _ -> Some ("float", None, "mma-fp8")
+      | Ops.Fp8_prec _, Ops.Fp8_prec _, Ops.Single_prec _ -> Some ("float", None, mma_fp8_marker)
       | _ -> None
 
     (* Shared by statement and scope: the intrinsic divides the block, and every operand is plain or
@@ -806,11 +809,16 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
       && min_compute_capability () >= min_cc
 
     (* gh-ocannl-1153: the arm each hook selects at the precision level, in the hooks' own dispatch
-       order — [mma_syntax]: fp8's m16n8k32, then the m16n8k16 forms, then wmma, whose statement
-       form declines a converted [d] boundary; [mma_fragment_syntax]: the inline-PTX register scope,
-       then wmma. The inline-PTX arms accumulate in f32 per-lane registers whatever the storage
-       ([.f32] in both instructions). This is how the tf32 gate in [wmma_combo] reaches the schedule
-       cache's identity: [accum_prec] says f32 accumulates at f32 with the policy on or off. *)
+       order — [mma_syntax]: fp8's m16n8k32, then the m16n8k16 forms, then wmma, whose
+       self-contained statement declines a converted [d] boundary; [mma_fragment_syntax]: the
+       inline-PTX register scope, then wmma. The update-only statement that DOES render wmma's
+       converted [-f16-wide] arm runs inside that fragment scope, so it is the [Mma_fragment_scope]
+       entry's, not a per-statement one. The inline-PTX arms accumulate in f32 per-lane registers
+       whatever the storage ([.f32] in both instructions). The tables are the hooks' own; the ORDER
+       is restated here, and pinned against the hooks by [schedule_mma_matmul] and
+       [schedule_ldmatrix_matmul], which read every arm marker they expect in rendered CUDA from
+       this function. This is how the tf32 gate in [wmma_combo] reaches the schedule cache's
+       identity: [accum_prec] says f32 accumulates at f32 with the policy on or off. *)
     let mma_arm ~a_prec ~b_prec ~d_prec ~scope =
       let inline_ptx arm_name =
         Some
@@ -834,7 +842,7 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
       in
       match scope with
       | Backend_intf.Mma_per_statement -> (
-          if mma_fp8_combo ~a_prec ~b_prec ~d_prec then inline_ptx "mma-fp8"
+          if mma_fp8_combo ~a_prec ~b_prec ~d_prec then inline_ptx mma_fp8_marker
           else
             match mma16_spellings ~a_prec ~b_prec ~d_prec with
             | Some (_, _, _, _, _, marker) -> inline_ptx marker
@@ -1163,9 +1171,9 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
               (fun ~a_ptr ~b_ptr ->
                 group
                   (string
-                     (Printf.sprintf "{ /* tile_mma %s%dx%dx%d (mma-fp8) e5m2%s */"
+                     (Printf.sprintf "{ /* tile_mma %s%dx%dx%d (%s) e5m2%s */"
                         (either ~fragment:"fragment update " ~statement:"")
-                        m n k (ldm_tag ~a:a_ldm ~b:b_ldm))
+                        m n k mma_fp8_marker (ldm_tag ~a:a_ldm ~b:b_ldm))
                   ^^ nest 2 (hardline ^^ body ~a_ptr ~b_ptr)
                   ^^ hardline ^^ rbrace))
           else if

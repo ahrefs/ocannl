@@ -14,24 +14,27 @@
    capability record now carries the backend's arm table ([mma_arm], derived from the table its mma
    hooks dispatch on), and the fingerprint tabulates it over every storage triple and scope.
 
-   The controls, all printed as backend-uniform booleans:
+   The controls, all printed as backend-uniform booleans, in three groups.
 
-   - On synthetic capability records (no backend involved): a resolution that changes — the
+   Synthetic capability records (no backend involved): a resolution that changes — the
    accumulator's, the compute precision's, or the arm table's (an arm appearing, another arm, its
    accumulator, its floor) — moves the codegen identity; an extensionally equal one, a different
    closure computing the same table, does not. Neutralizing the arm row of the fingerprint fails the
-   four arm claims on every backend. - On the backend this runs on, over every fp16 x bf16 x
-   narrow-compute x tf32 policy: two policies get the same codegen identity exactly when the backend
-   resolves them the same. The resolution here is the test's own tabulation of the capability
-   record's functions, not the fingerprint, so the equivalence can fail: on CUDA a fingerprint
-   without the arm row gives the tf32 pair one identity while the arm table tells them apart. Both
-   sides are populated on every backend (each has a pair it resolves apart — [Fp16_wide] widens f16
-   everywhere — and a distinct pair it resolves alike), so neither half is vacuous. On HIP this is
-   where [Bf16_auto] against [Bf16_narrow] moves the identity with no hand-named component left to
-   do it. - Every arm a uniform storage triple resolves to accumulates at the backend's [accum_prec]
-   of that storage: gh-ocannl-663's width uniformity, read off the arm table. The population is the
-   policy x scope x storage grid, so a backend without arms (cc) passes on rows with no arm to
-   disagree, not on an empty collection.
+   four arm claims on every backend.
+
+   The backend this runs on, over every fp16 x bf16 x narrow-compute x tf32 policy: two policies get
+   the same codegen identity exactly when the backend resolves them the same. The resolution here is
+   the test's own tabulation of the capability record's functions, not the fingerprint, so the
+   equivalence can fail: on CUDA a fingerprint without the arm row gives the tf32 pair one identity
+   while the arm table tells them apart. Both sides are populated on every backend (each has a pair
+   it resolves apart — [Fp16_wide] widens f16 everywhere — and a distinct pair it resolves alike),
+   so neither half is vacuous. On HIP this is where [Bf16_auto] against [Bf16_narrow] moves the
+   identity with no hand-named component left to do it.
+
+   gh-ocannl-663's width uniformity, read off the arm table: every arm a uniform storage triple
+   resolves to accumulates at the backend's [accum_prec] of that storage, over the policy x scope x
+   storage rows that have an arm. A backend without arms (cc, multidev_cc) reports the claim skipped
+   rather than vacuously true.
 
    The per-policy resolution rows go to stderr, tagged, because they are the backend's own table and
    differ between backends. *)
@@ -179,10 +182,15 @@ let () =
   p_exists "some policy pair resolves apart on this backend" pairs ~f:(fun pair ->
       not (same_resolution pair));
   p_exists "some distinct policy pair resolves alike on this backend" pairs ~f:same_resolution;
-  p_all "every uniform-storage arm accumulates at the backend's accum_prec"
-    (List.concat_map rows ~f:(fun (_, (_, uniform), _) -> uniform))
-    ~f:(fun (_, _, arm, accum) ->
-      match arm with None -> true | Some arm -> Ir.Ops.equal_prec arm.BI.arm_accumulator accum);
+  (let claim = "every uniform-storage arm accumulates at the backend's accum_prec" in
+   match
+     List.concat_map rows ~f:(fun (_, (_, uniform), _) ->
+         List.filter_map uniform ~f:(fun (_, _, arm, accum) ->
+             Option.map arm ~f:(fun arm -> (arm, accum))))
+   with
+   | [] -> Verdict.skipped ~backend:(Context.backend_name ctx) claim
+   | armed ->
+       p_all claim armed ~f:(fun (arm, accum) -> Ir.Ops.equal_prec arm.BI.arm_accumulator accum));
   let first_policy, _, first_identity = List.hd_exn rows in
   Numerics.set_policy first_policy;
   let again =

@@ -462,14 +462,17 @@ let codegen_capabilities_fingerprint
                             | Some floor -> "floor=" ^ Int.to_string floor);
                           ])))))
   in
+  (* Only a backend with arms carries the row, so the keys of cc and multidev_cc (and of any backend
+     without tensor units) are the ones they had before it existed. *)
+  let mma_row = if List.is_empty arms then [] else [ "mma:" ^ String.concat ~sep:"," arms ] in
   String.concat ~sep:";"
-    [
-      (if supports_f64 then "f64" else "no-f64");
-      "compute:" ^ resolution compute_prec;
-      "accum:" ^ resolution accum_prec;
-      (if asynchronous_staging_copy then "async-staging" else "no-async-staging");
-      "mma:" ^ String.concat ~sep:"," arms;
-    ]
+    ([
+       (if supports_f64 then "f64" else "no-f64");
+       "compute:" ^ resolution compute_prec;
+       "accum:" ^ resolution accum_prec;
+       (if asynchronous_staging_copy then "async-staging" else "no-async-staging");
+     ]
+    @ mma_row)
 
 let no_hardware_limits =
   {
