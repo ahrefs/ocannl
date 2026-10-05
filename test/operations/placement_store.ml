@@ -779,8 +779,11 @@ let () =
     (placement_keys ~dir:refused_cache_dir ());
   (* Whether the recorder attempted a store is its own decision ([Train.tune_placements]'s
      [persist], which an abandoned flip does not stop), read from the record rather than re-derived:
-     every placement store run 8 attempted must carry the injected refusal, and a clean run must
-     have attempted one. A contended run that attempted none has nothing to show, and says so. *)
+     every placement store run 8 attempted must be reported refused -- for any reason: on a host
+     that refuses the staging file's creation itself (a Windows path beyond MAX_PATH,
+     gh-ocannl-1040's rog leg) the injected hook never fires, and [schedule_cache_regime] pins the
+     injected reason, and a clean run must have attempted one. A contended run that attempted none
+     has nothing to show, and says so. *)
   let stores8 = placement_stores persisted8 in
   let clean8 =
     List.for_all (arms8 @ flips8) ~f:(fun r ->
@@ -794,7 +797,4 @@ let () =
     ~when_:(persisted8.identity && (clean8 || not (List.is_empty stores8)))
     ~on:"no timing identity, or a contended run that attempted no placement store"
     "under refused commits, the cold run reports its placement store's refusal"
-    ((not (List.is_empty stores8))
-    && List.for_all stores8 ~f:(fun (r : SC.cache_io) ->
-        Option.exists r.SC.refusal ~f:(String.is_substring ~substring:"ps: injected commit refusal"))
-    )
+    ((not (List.is_empty stores8)) && List.for_all stores8 ~f:refused)
