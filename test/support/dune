@@ -6,9 +6,10 @@
 ; [arrayjit.utils] and [arrayjit.verdict] arrived with the generated-artifact reader (gh-ocannl-655),
 ; which resolves [build_files/] paths and reports a missing or overwritten artifact as a verdict.
 ; Neither widens the set of tests that can link [test_utils]: [arrayjit.ir] already depends on
-; [arrayjit.utils], and [arrayjit.verdict] depends on nothing but base and stdio.
+; [arrayjit.utils], and [arrayjit.verdict] depends on nothing but base, stdio and unix.
 ;
-; [verdict] (gh-ocannl-601) depends on nothing but base and stdio, and is PUBLIC because the tests
+; [verdict] (gh-ocannl-601) depends on nothing but base, stdio and unix (which it needs only to
+; empty its per-action record variable for its own children, gh-ocannl-1114), and is PUBLIC because the tests
 ; of both packages report verdicts through it and a
 ; package-filtered build cannot see across the boundary. `dune build -p <pkg>` -- what each .opam
 ; file's with-test command runs -- disables the stanzas of every package it did not select and
@@ -25,7 +26,7 @@
  (name verdict)
  (public_name arrayjit.verdict)
  (modules verdict)
- (libraries base stdio))
+ (libraries base stdio unix))
 
 ; Fresh-process capture has no IR, tensor or backend dependency (gh-ocannl-910).
 

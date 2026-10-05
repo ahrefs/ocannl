@@ -285,11 +285,14 @@ let p_pairwise_distinct name xs ~equal ~to_string =
    would share a file, the later one's records standing -- which matters only if the two skip
    different claims, so arguments, not a `setenv` alone, are what should tell such twins apart.
 
-   A fixture child, whose streams its parent captures and judges, must not inherit the variable: its
-   records describe the parent's control, not a claim the suite left unexecuted, and they would
-   otherwise land beside the parent's as if they were (`Fresh_process` clears it for its children).
-   Opening or writing the file failing is a failed check, never a silently missing record, since a
-   missing record reads as an executed claim. *)
+   Only the action's own process writes. Having read the variable, Verdict EMPTIES it in its own
+   environment, so no descendant -- however it is spawned, whatever helper builds its environment
+   from this one -- sees a directory: a child is the parent's fixture, its records belong to the
+   parent's judgment, and a child relaunching the same executable with the same arguments in the
+   same directory (`cc_march_census` does) would otherwise truncate the parent's own file and erase
+   its skips. A process that is not Verdict-linked, a shell harness running fixtures, must unset it
+   itself (`sweep_harness.sh` does). Opening or writing the file failing is a failed check, never a
+   silently missing record, since a missing record reads as an executed claim. *)
 
 let record_prefix = "OCANNL_TOOL_VERDICT_"
 let record_line kind fields = String.concat ~sep:"\t" ((record_prefix ^ kind) :: fields)
@@ -298,6 +301,9 @@ let action_records =
   match Stdlib.Sys.getenv_opt "OCANNL_TOOL_VERDICT_RECORDS" with
   | None | Some "" -> None
   | Some dir -> (
+      (* Before anything else can spawn: every descendant inherits the emptied value, which reads as
+         unset above. *)
+      Unix.putenv "OCANNL_TOOL_VERDICT_RECORDS" "";
       let exe = Stdlib.Sys.executable_name and cwd = Stdlib.Sys.getcwd () in
       let args = List.tl (Array.to_list Stdlib.Sys.argv) |> Option.value ~default:[] in
       let key =
@@ -374,8 +380,9 @@ type skip_aggregation = [ `Backend | `Environment | `Outside_sweep ]
 
     [~backend] is the run's backend name, as each test already derives it for its own gating
     ([String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")]). It is passed in
-    rather than read here so that this library keeps depending on nothing but [base] and [stdio]:
-    reporting a verdict is not a reason to link OCANNL's configuration machinery. *)
+    rather than read here so that this library keeps depending on no OCANNL library, only [base],
+    [stdio] and [unix]: reporting a verdict is not a reason to link OCANNL's configuration
+    machinery. *)
 
 let skipped ?(aggregation = (`Backend : skip_aggregation)) ~backend name =
   Stdio.eprintf "SKIPPED on %s (vacuous): %s\n%!" backend name;

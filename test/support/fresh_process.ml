@@ -13,17 +13,6 @@ let rec wait pid =
   | _, status -> status
   | exception Unix.Unix_error (Unix.EINTR, _, _) -> wait pid
 
-(* A child here is a fixture: its parent captures its streams and judges them. Its verdict records
-   follow those streams, so it does not inherit the directory that collects the ACTION's records
-   (gh-ocannl-1114, documented in [Verdict]); a deliberately skipping child would otherwise read to
-   the sweep as a claim the suite left unexecuted. Matched without regard to case, since Windows
-   environment names are case-insensitive. *)
-let child_environment () =
-  let records = "OCANNL_TOOL_VERDICT_RECORDS=" in
-  Unix.environment ()
-  |> Array.filter ~f:(fun binding ->
-      not (String.is_prefix (String.uppercase binding) ~prefix:records))
-
 let run ?exe ?cwd ?temp_dir args =
   let exe = absolute (Option.value exe ~default:(executable ())) in
   let paths = ref [] and descriptors = ref [] in
@@ -45,11 +34,7 @@ let run ?exe ?cwd ?temp_dir args =
       in
       let out_path, out = capture ".out" in
       let err_path, err = capture ".err" in
-      let spawn () =
-        Unix.create_process_env exe
-          (Array.of_list (exe :: args))
-          (child_environment ()) Unix.stdin out err
-      in
+      let spawn () = Unix.create_process exe (Array.of_list (exe :: args)) Unix.stdin out err in
       let pid =
         match cwd with
         | None -> spawn ()

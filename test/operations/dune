@@ -7236,7 +7236,7 @@
 (executable
  (name verdict_skip_probe)
  (modules verdict_skip_probe)
- (libraries arrayjit.verdict))
+ (libraries unix arrayjit.verdict))
 
 (rule
  ; ocannl-backend: none -- the harness uses fake opam and a Verdict-only skip probe; neither links a backend.

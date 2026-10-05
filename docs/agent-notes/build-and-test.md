@@ -3142,10 +3142,12 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   into `logs/<stamp>-<machine>-<backend>.verdict-records`; a unit whose records cannot be read or
   hold no `OCANNL_TOOL_VERDICT_ACTION` header — a swept commit predating them — is reported `skip
   evidence unavailable` and not counted, since its silence would read as every claim executed.
-  The stderr copy of each record stays in the log for humans. A process whose streams a parent
-  captures as a fixture must not inherit the variable — its records belong to the parent's
-  judgment — so `Fresh_process` clears it, and a shell harness that runs a Verdict-linked fixture
-  unsets it (`sweep_harness.sh`, beside its `OCANNL_BACKEND` neutralization). A record kind the
+  The stderr copy of each record stays in the log for humans. Only the action's own process
+  writes: Verdict empties the variable in its own environment once it has read it, so no child —
+  however spawned — writes into, or truncates, the action's file (a child is the parent's
+  fixture, and `cc_march_census` relaunches itself with the very arguments, directory and hence
+  key of its parent). A process that is not Verdict-linked must unset it before running a
+  Verdict-linked fixture (`sweep_harness.sh`, beside its `OCANNL_BACKEND` neutralization). A record kind the
   aggregator does not judge (`OCANNL_TOOL_VERDICT_<KIND>`, the room left for gh-ocannl-996's bypass
   record) passes through it.
   Incremental runs are refused because a cached Dune action does not run, and failed or

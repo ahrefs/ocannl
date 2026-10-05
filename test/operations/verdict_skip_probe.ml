@@ -5,7 +5,23 @@
    record file is written by Verdict itself rather than restated by the harness. Its arguments are
    the action's identity -- a rerun replays under the same ones and so rewrites the same file -- and
    the claims come on stdin precisely so that a retry announcing different skips is still the same
-   action. *)
+   action.
+
+   [BACKEND relaunch] skips a claim, then relaunches this executable with the SAME arguments in the
+   same directory -- the record identity of its own action, the `cc_march_census` shape -- marked as
+   the child only by an environment variable no record key reads. The child records nothing of its
+   own; were it handed the records directory, its start would truncate the parent's file and erase
+   the skip the parent already flushed. *)
+
+let child_marker = "VERDICT_SKIP_PROBE_RELAUNCHED"
+
+let relaunch backend =
+  Verdict.skipped ~backend "common unevaluated claim";
+  let exe = Sys.executable_name in
+  let env = Array.append [| child_marker ^ "=1" |] (Unix.environment ()) in
+  let pid = Unix.create_process_env exe Sys.argv env Unix.stdin Unix.stdout Unix.stderr in
+  let _, status = Unix.waitpid [] pid in
+  Verdict.p "the relaunched child exits normally" (status = Unix.WEXITED 0)
 
 let replay () =
   let prefix = "OCANNL_TOOL_VERDICT_SKIP\t" in
@@ -31,6 +47,10 @@ let replay () =
   loop ()
 
 let () =
+  if Sys.getenv_opt child_marker = Some "1" then exit 0;
+  if Array.length Sys.argv = 3 && Sys.argv.(2) = "relaunch" then (
+    relaunch Sys.argv.(1);
+    exit 0);
   if Array.length Sys.argv >= 2 && Sys.argv.(1) = "replay" then (
     if Array.length Sys.argv > 3 then (
       prerr_endline "usage: verdict_skip_probe replay [ACTION]";
@@ -39,7 +59,8 @@ let () =
     exit 0);
   if Array.length Sys.argv < 2 || Array.length Sys.argv > 3 then (
     prerr_endline
-      "usage: verdict_skip_probe BACKEND [execute-environment|environment-as-backend|execute-all]";
+      "usage: verdict_skip_probe BACKEND \
+       [execute-environment|environment-as-backend|execute-all|relaunch]";
     exit 2);
   let mode = if Array.length Sys.argv = 3 then Some Sys.argv.(2) else None in
   if mode = Some "execute-all" then (

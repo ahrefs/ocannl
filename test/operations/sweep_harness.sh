@@ -1122,6 +1122,17 @@ identity_clear=$("$aggregate" \
   --run cc m4-max "$tmp/identity-cc.log" --run metal m4-max "$tmp/identity-metal.log")
 grep -q '^result: PASS -- no claim was skipped on every known backend$' <<<"$identity_clear"
 
+# Only an action's own process writes its records (gh-ocannl-1114). The probe
+# skips a claim and then relaunches itself with the same arguments in the same
+# directory -- its own record identity, the shape `cc_march_census` spawns. A
+# child that inherited the records directory would truncate the parent's file on
+# start and erase the skip already flushed to it, and the claim would read as
+# executed.
+records_of "$verdict_probe" "$tmp/relaunch.records" cc relaunch
+grep -q "^OCANNL_TOOL_VERDICT_SKIP$(printf '\t')backend$(printf '\t')verdict_skip_probe.exe$(printf '\t')common unevaluated claim$" \
+  "$tmp/relaunch.records"
+[ "$(grep -c '^OCANNL_TOOL_VERDICT_ACTION' "$tmp/relaunch.records")" -eq 1 ]
+
 # A historical target from before the declaration keeps its backend answer and
 # says that environment aggregation is unavailable. Treating observed row/log
 # origins as a declared matrix would turn this into invented completeness.
