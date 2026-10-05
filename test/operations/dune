@@ -6831,7 +6831,15 @@
   (env_var OCANNL_BACKEND)
   (env_var OCANNL_SIMPLIFY_FP_ALGEBRA))
  (modules bench_self_test)
- (libraries base stdio yojson bench_harness ocannl arrayjit.verdict))
+ (libraries
+  base
+  stdio
+  unix
+  yojson
+  bench_harness
+  bench_json
+  ocannl
+  arrayjit.verdict))
 
 ; Tensor-core kernels must name their accumulator destination in the shipped table, even when
 ; their zeroing kernel is separate. This compiles two tiny matmuls; it runs no timing window.

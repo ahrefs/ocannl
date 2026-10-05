@@ -330,7 +330,7 @@ let () =
         Stdio.printf "\n");
     Stdlib.exit 0);
   ignore
-    (H.measure_and_emit ~routines ~protocol:(H.protocol_of_st st) ~backend
+    (H.measure_and_emit ~routines ~protocol:(H.protocol_of_st ~fixture st) ~backend
        ~variant:
          (* Scheduling variant only: the storage precision is the "precision" field's business
             (gh-ocannl-539). They are independent axes, and folding a reduced precision into the

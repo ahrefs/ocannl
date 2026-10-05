@@ -343,6 +343,71 @@ let () =
        (member "verdict" (member "dominant_kernel" (Yojson.Safe.from_string ordinary)))
        (`String "exact"))
 
+(* gh-ocannl-1209: the checkpoints a cell writes before its later stages, which is what a cell
+   killed in one of those stages leaves behind. Printed with their prefix, as a runner writes them:
+   [benchmarks/test_orchestrate.py] feeds these very lines to the driver's salvage path, so the
+   prefix and the fields it reads are pinned from both sides. One is taken mid-parity on a diverged
+   trajectory, the other after the timed steps, as the dominant-kernel instrument starts. *)
+let checkpoints =
+  [
+    ( "mid-parity",
+      Bench_json.checkpoint_line ~backend:"hip" ~variant:"default" ~precision:"f16"
+        ~workload:"gpt2_mini_train_s1024"
+        ~fixture:(Some ("fixtures/gpt2_mini_train_s1024.safetensors", 14756136))
+        ~executable:"bench_gpt.exe" ~parity_steps:6 ~dominant_kernel:true ~completed_steps:2
+        ~at:(Bench_json.In_parity 2) ~losses:[| 10.375; Float.nan |] );
+    ( "before diagnostics",
+      Bench_json.checkpoint_line ~backend:"hip" ~variant:"default" ~precision:"f16"
+        ~workload:"gpt2_mini_train_s1024"
+        ~fixture:(Some ("fixtures/gpt2_mini_train_s1024.safetensors", 14756136))
+        ~executable:"bench_gpt.exe" ~parity_steps:6 ~dominant_kernel:true ~completed_steps:46
+        ~at:Bench_json.Before_diagnostics
+        ~losses:[| 10.375; 10.25; 10.125; 10.0; 9.875; 9.75 |] );
+    ( "in memory, instrument off",
+      Bench_json.checkpoint_line ~backend:"cc" ~variant:"self-test" ~precision:"f32"
+        ~workload:"selftest-tiny" ~fixture:None ~executable:"bench_self_test.exe" ~parity_steps:2
+        ~dominant_kernel:false ~completed_steps:13 ~at:Bench_json.Before_diagnostics
+        ~losses:[| 1.25; 1.125 |] );
+  ]
+
+let () =
+  Stdio.printf "\n=== checkpoint lines ===\n";
+  List.iter checkpoints ~f:(fun (_, line) ->
+      Stdio.printf "%s%s\n" Bench_json.checkpoint_prefix line);
+  let parsed = List.map checkpoints ~f:(fun (name, line) -> (name, Yojson.Safe.from_string line)) in
+  let stage name j = member name (member "stages" j) in
+  p "the checkpoint prefix cannot be mistaken for a result line"
+    (not (String.is_prefix Bench_json.checkpoint_prefix ~prefix:"{"));
+  p_all "every checkpoint names itself a checkpoint, unaccepted, with its result still pending"
+    parsed ~f:(fun (_, j) ->
+      Yojson.Safe.equal (member "record" j) (`String "checkpoint")
+      && Yojson.Safe.equal (member "accepted" j) (`Bool false)
+      && Yojson.Safe.equal (stage "result" j) (`String "pending"));
+  p_none "no checkpoint carries a timing" parsed ~f:(fun (_, j) ->
+      List.exists [ "step_ms"; "queued_step_ms"; "compile_s"; "dominant_kernel" ] ~f:(fun k ->
+          not (Yojson.Safe.equal (member k j) `Null)));
+  let mid = List.Assoc.find_exn parsed ~equal:String.equal "mid-parity" in
+  p "a mid-parity checkpoint keeps its completed losses, a diverged one as null"
+    (Yojson.Safe.equal (member "losses" mid) (`List [ `Float 10.375; `Null ])
+    && Yojson.Safe.equal (stage "parity" mid) (`String "running")
+    && Yojson.Safe.equal (stage "timing" mid) (`String "pending")
+    && Yojson.Safe.equal (stage "dominant_kernel" mid) (`String "pending"));
+  let late = List.Assoc.find_exn parsed ~equal:String.equal "before diagnostics" in
+  p "the checkpoint before the instrument says every measured stage is complete and it is running"
+    (Yojson.Safe.equal (member "stages" late)
+       (`Assoc
+          [
+            ("parity", `String "complete");
+            ("warmup", `String "complete");
+            ("timing", `String "complete");
+            ("dominant_kernel", `String "running");
+            ("result", `String "pending");
+          ]));
+  let off = List.Assoc.find_exn parsed ~equal:String.equal "in memory, instrument off" in
+  p "an instrument switched off is skipped, and an in-memory model names no fixture"
+    (Yojson.Safe.equal (stage "dominant_kernel" off) (`String "skipped")
+    && Yojson.Safe.equal (member "fixture" off) `Null)
+
 (* The negative control: without the mapping the line carries OCaml's own spellings, and this oracle
    rejects each of them — which is what makes the verdicts above evidence rather than ceremony. (A
    JSON parser that admits `NaN` as an extension still rejects `nan`.) *)

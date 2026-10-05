@@ -346,3 +346,56 @@ let result_line ~backend ~variant ~precision ~profile ~regime_knobs ~workload ~c
     peak_source_field
     (Option.value dominant_kernel ~default:"null")
     (mma_object shipped_mma) (nums ~prec:9 losses)
+
+(** {1 Checkpoints of a measurement still in progress (gh-ocannl-1209)}
+
+    The result line is emitted once, at the very end, after every stage of the protocol — including
+    the dominant-kernel instrument, which compiles and times each shipped kernel on its own and can
+    cost more than the workload. A cell killed by its driver's cap during that instrument used to
+    leave nothing structured behind: a TUF [gpt2_mini_train_s1024] cell produced six finite parity
+    losses and then lost all of them to a 90 s cap expiring inside the instrument.
+
+    So the protocol checkpoints what it has completed, as it completes it: one line per completed
+    parity step, and one after the timed steps, before any diagnostic runs. A checkpoint carries the
+    losses observed so far, the stages' statuses, the step count and the cell's identity — and NO
+    timing. It is evidence that loss/parity work was done, never an accepted benchmark: its [record]
+    is ["checkpoint"], its [accepted] is [false], its [result] stage is always ["pending"], and it
+    is written behind {!checkpoint_prefix} so that no reader looking for a result line (a line
+    starting with [{]) can pick it up. *)
+
+(** The prefix every checkpoint line carries. [orchestrate.py] matches the same text
+    ([CHECKPOINT_PREFIX]); the golden of [test/operations/bench_result_line] holds lines built here,
+    which [test_orchestrate.py] reads back, so the two cannot drift apart unnoticed. *)
+let checkpoint_prefix = "bench: checkpoint "
+
+(** How far the protocol had got when the checkpoint was written. *)
+type checkpoint_at =
+  | In_parity of int  (** This many parity steps are complete. *)
+  | Before_diagnostics  (** Every timed step is complete; the diagnostics come next. *)
+
+(** One checkpoint, as the JSON object without its prefix. [dominant_kernel] says whether the cell
+    runs the dominant-kernel instrument at all: its stage is ["skipped"] when not, and ["running"]
+    from {!Before_diagnostics} when it does. [fixture] is the fixture's path and size in bytes, or
+    [None] for a model fabricated in memory; the drivers stamp content digests and revisions, as
+    they do on result lines. [losses] are the parity losses completed so far, in the result line's
+    own spelling ([nums ~prec:9]), so a checkpoint and the result line of the same run carry the
+    same bytes for the same step. *)
+let checkpoint_line ~backend ~variant ~precision ~workload ~fixture ~executable ~parity_steps
+    ~dominant_kernel ~completed_steps ~at ~losses =
+  let parity, warmup, timing, instrument =
+    match at with
+    | In_parity k ->
+        ((if k >= parity_steps then "complete" else "running"), "pending", "pending", "pending")
+    | Before_diagnostics -> ("complete", "complete", "complete", "running")
+  in
+  let instrument = if dominant_kernel then instrument else "skipped" in
+  let fixture_field =
+    match fixture with
+    | None -> "null"
+    | Some (path, bytes) -> Printf.sprintf {|{"path":"%s","bytes":%d}|} (string path) bytes
+  in
+  Printf.sprintf
+    {|{"record":"checkpoint","accepted":false,"framework":"ocannl","backend":"%s","variant":"%s","precision":"%s","workload":"%s","fixture":%s,"executable":"%s","stages":{"parity":"%s","warmup":"%s","timing":"%s","dominant_kernel":"%s","result":"pending"},"parity_steps":%d,"completed_steps":%d,"losses":[%s]}|}
+    (string backend) (string variant) (string precision) (string workload) fixture_field
+    (string executable) parity warmup timing instrument parity_steps completed_steps
+    (nums ~prec:9 losses)
