@@ -29,6 +29,7 @@ set -eu
 case "$*" in
   'build -j 4 @runtest-probe') name=probe ;;
   'build -j 4 @runtest-manifest') name=manifest ;;
+  'build -j 4 @runtest-tail') name=tail ;;
   *) exit 98 ;;
 esac
 printf '%s\n' invoked >> "$PROBE_HOME/invocations"
@@ -104,6 +105,15 @@ case "$PROBE_MODE" in
     printf 'FAIL: first: false\nFAILED: 1 check did not hold.\n'; exit 1 ;;
   omittedkilled) rows "first: false\n$section$m2"'last: true\n'
     printf 'FAIL: first: false\nCommand got signal SEGV.\n'; exit 1 ;;
+  # A row swapped for another while a marker is missing: the counts and the last row agree,
+  # the rows do not.
+  omittedswap) rows "first: false\nswapped in$section$m2"'last: true\n'
+    printf 'FAIL: first: false\nFAILED: 1 check did not hold.\n'; exit 1 ;;
+  # tail.expected ends on its markers, as every real manifest golden does: a run cut inside
+  # them with a teardown reads exactly as one whose claim failed. The runner's header names
+  # this residual; only a trailer row after the section would separate the two.
+  tailcut) rows "first: false\n$section$m1"
+    printf 'FAIL: first: false\nFAILED: 1 check did not hold.\n'; exit 1 ;;
   compile) echo 'Error: injected compile failure'; exit 1 ;;
   refused) printf 'dune: unknown option\nUsage: dune build [OPTION]…\n'; exit 1 ;;
   restore_error) rm module.ml; mkdir module.ml; exit 1 ;;
@@ -125,6 +135,9 @@ printf 'first: true\nnested: label: true\nlast: true\n' > probe.expected
 printf 'first: true\n\nSynthetic controls: scanner refusal diagnostics exercised by this control golden:\n%s\n%s\nlast: true\n' \
   '  [scanner-refusal:00000000000000000000000000000001] first refusal' \
   '  [scanner-refusal:00000000000000000000000000000002] last refusal' > manifest.expected
+printf 'first: true\n\nSynthetic controls: scanner refusal diagnostics exercised by this control golden:\n%s\n%s\n' \
+  '  [scanner-refusal:00000000000000000000000000000001] first refusal' \
+  '  [scanner-refusal:00000000000000000000000000000002] last refusal' > tail.expected
 printf 'prefix\r\nANCHOR\r\nsuffix without newline' > module.ml
 chmod 640 module.ml
 cp module.ml "$fixture/pristine"
@@ -231,20 +244,24 @@ for mode in omitted omittedlast; do
     "$fixture/result" || { cat "$fixture/result"; echo "$mode: no omitted-markers line"; exit 1; }
   reached
 done
-for mode in omittedcut omittedkilled; do
+for mode in omittedcut omittedkilled omittedswap; do
   export PROBE_MODE=$mode
   PROBE_ALIAS=@runtest-manifest run_case 4
   case $mode in
     omittedcut) flagged "STOPPED EARLY: the mutated run printed 4 of the golden's 6 rows" ;;
-    omittedkilled) flagged "STOPPED EARLY: the mutated run printed 5 of the golden's 6 rows" ;;
+    omittedkilled|omittedswap) flagged "STOPPED EARLY: the mutated run printed 5 of the golden's 6 rows" ;;
   esac
 done
+# The residual, pinned so that closing it shows here: a cut inside a golden's closing markers.
+export PROBE_MODE=tailcut
+PROBE_ALIAS=@runtest-tail run_case 1
+grep -q '^refusal markers omitted: 1 ' "$fixture/result"
 # The marker row the runner skips is the manifest's own: a rewording there must fail here.
 grep -qF 'Printf.sprintf "[scanner-refusal:%s] %s"' "$root/test/support/refusal_control_scan.ml" ||
   { echo 'Refusal_control_scan.marker no longer writes "[scanner-refusal:<digest>] <fragment>"'; exit 1; }
 grep -qF 'printf "  %s\n" marker' "$root/test/support/refusal_control_manifest.ml" ||
   { echo 'Refusal_control_manifest.print no longer indents a marker row by two spaces'; exit 1; }
-printf 'PASS rows short only by a failed claim'"'"'s refusal marker are caught; cut or killed runs with the same shortfall exit 4\n'
+printf 'PASS rows short only by a failed claim'"'"'s refusal marker are caught; cut, killed or row-swapped runs with the same shortfall exit 4\n'
 for mode in pass compile refused; do
   export PROBE_MODE=$mode
   case $mode in pass) rc=0 ;; compile) rc=4 ;; refused) rc=2 ;; esac

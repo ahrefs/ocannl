@@ -1446,8 +1446,12 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   short only by refusal-manifest marker rows (`  [scanner-refusal:<md5>] …`) count as reached too
   (`refusal markers omitted: K`, gh-ocannl-1216): a claim that failed prints no marker, so a
   complete failing run of a manifest-printing scan is a row short, and it counts when every other
-  row printed, the last of them the golden's (or that claim, failed), and Verdict's teardown ended
-  the process; a run missing its last row, or with no teardown, still exits 4. A test that echoes a child's stderr (`verdict_teardown`)
+  row is the golden's, row for row (a claim of it may read false; the run's own `FAIL:` rows are
+  skipped), and Verdict's teardown ended the process; a run missing or swapping a row, or with no
+  teardown, still exits 4. Residual: a golden ending on its marker section cannot tell a complete
+  run from one cut inside the markers, and a mutant that silences one refusal while every claim
+  passes leaves no teardown, so it reads STOPPED EARLY although the golden caught it -- both want a
+  trailer row after the section. A test that echoes a child's stderr (`verdict_teardown`)
   can carry a child's `STOPPED EARLY` line; read the rows line before discarding such a run.
   Otherwise the exit status remains test-run's, so a killed mutant normally exits 1, and a
   passing mutation exits 0 and needs investigation.
