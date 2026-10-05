@@ -4,6 +4,16 @@
 # fake opam keeps the test small; real git/worktree operations exercise the
 # history migration and the reused-worktree path that made cached GPU passes
 # ambiguous in the first place.
+# Remote reachability audit: sweep_remote_fixture.sh executes the real emitted
+# commands for prep, locks, PATH/jobs, collection and serial reruns. The name,
+# status, runtime-assertion and collected-window arms of environment_red are
+# reachable; the existing corrupted-state fixture reaches lane-stopped.
+# Unreachable from the current unit table: a remote destination without a
+# -linux/-wsl suffix (startup rejects it), and a CPU unit on rog (no such unit).
+# Native/dxg GPU caps, CPU default width and the explicit jobs override are
+# exercised. The guest-identity deadline exhausting all retries is not driven
+# here (it costs 90s); the underlying bounded supervisor has separate controls.
+# Hardware/kernel and actual SSH failures remain fixture inputs.
 
 # -E (errtrace) so the ERR trap below also fires inside helper functions,
 # command substitutions and subshells: without it a failing predicate inside a
@@ -52,10 +62,18 @@ on_error() {
     tuf_unguarded tuf_unguarded_prep tuf_unguarded_wsl tuf_self_refusal tuf_cancelled \
     guard_held guard_refused guard_stalled \
     guard_absent \
-    after_cancel; do
+    after_cancel local_remote local_replaced local_busy local_prep_error local_control; do
     [ -n "${!name:-}" ] || continue
     printf -- '--- %s ---\n%s\n' "$name" "${!name}" >&2
   done
+  if [ -n "${remote_root:-}" ] && [ -f "$remote_root/commands" ]; then
+    printf -- '--- remote commands ---\n' >&2
+    cat "$remote_root/commands" >&2
+  fi
+  if [ -n "${local_log:-}" ] && [ -f "$local_log" ]; then
+    printf -- '--- remote unit log ---\n' >&2
+    cat "$local_log" >&2
+  fi
   return "$rc"
 }
 trap 'on_error "$?" "$LINENO" "$BASH_COMMAND"' ERR
@@ -92,8 +110,13 @@ unset SWEEP_TEST_CALLS SWEEP_TEST_WAIT_PREFIX SWEEP_TEST_OPAM_RC \
   SWEEP_TEST_WAKE_LAB_CALLS SWEEP_TEST_TUF_STATUS SWEEP_TEST_TUF_SLEEP SWEEP_TEST_HOLD_DENIED \
   SWEEP_TEST_PREP_OK SWEEP_TEST_ENDPOINT_MAP SWEEP_TEST_LOCK_PATH_DIR SWEEP_TEST_LAB_LOCK_WAIT \
   SWEEP_TEST_FLEET_WORKER SWEEP_TEST_FLEET_CALLS SWEEP_TEST_FLEET_BOX SWEEP_TEST_REGISTRY \
-  SWEEP_TEST_REGISTRY_FROM
+  SWEEP_TEST_REGISTRY_FROM SWEEP_TEST_REMOTE_DRIVER SWEEP_TEST_REMOTE_ROOT \
+  SWEEP_TEST_REMOTE_CASE
 
+# A direct, focused entrypoint for iterating on the local remote fixtures:
+# bash sweep_harness.sh --remote-only SWEEP AGGREGATE VERDICT METAL HIP NVRTC
+remote_only=0
+if [ "${1:-}" = --remote-only ]; then remote_only=1; shift; fi
 sweep=$1
 aggregate=$2
 verdict_probe=$(cd "$(dirname "$3")" && pwd)/$(basename "$3")
@@ -246,6 +269,7 @@ cat >"$fake_bin/ssh" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >>"$SWEEP_TEST_SSH_CALLS"
 case ${SWEEP_TEST_SSH_MODE:-} in
+  local) exec "$SWEEP_TEST_REMOTE_DRIVER" "$@" ;;
   window)
     # A far side whose supervisor could not take the sleep guard (no polkit grant) says so on the
     # unit's stderr before the unit runs: for every guarded leg (`1`), or for the preparation alone
@@ -550,6 +574,9 @@ run_sweep_args() {
     "SWEEP_TEST_OPAM_OUT_RETRY=${SWEEP_TEST_OPAM_OUT_RETRY:-}" \
     "SWEEP_TEST_SSH_CALLS=$ssh_calls" \
     "SWEEP_TEST_SSH_MODE=${SWEEP_TEST_SSH_MODE:-}" \
+    "SWEEP_TEST_REMOTE_DRIVER=${SWEEP_TEST_REMOTE_DRIVER:-}" \
+    "SWEEP_TEST_REMOTE_ROOT=${SWEEP_TEST_REMOTE_ROOT:-}" \
+    "SWEEP_TEST_REMOTE_CASE=${SWEEP_TEST_REMOTE_CASE:-}" \
     "SWEEP_TEST_KERNEL_LINES=${SWEEP_TEST_KERNEL_LINES:-}" \
     "SWEEP_TEST_BOOT_ID=${SWEEP_TEST_BOOT_ID:-fixture-boot}" \
     "SWEEP_TEST_WAIT_TICKS=$wait_ticks" \
@@ -574,6 +601,14 @@ run_sweep_backend() {
 }
 
 run_sweep() { run_sweep_backend cc "$@"; }
+
+if [ "$remote_only" = 1 ]; then
+  . "$(cd "$(dirname "$sweep")" && pwd)/box-jobs.sh"
+  . "$(cd "$(dirname "$sweep")" && pwd)/kernel-window.sh"
+  . "$(dirname "$0")/sweep_remote_fixture.sh"
+  printf 'local remote sweep command path: PASS\n'
+  exit 0
+fi
 
 incremental=$(run_sweep)
 forced=$(run_sweep --force)
@@ -3185,6 +3220,8 @@ cancel_sweep pid
 cancel_sweep group
 after_cancel=$(run_sweep_args --target cancel-probe)
 grep -q '^  m4-max/cc: incremental-pass ' <<<"$after_cancel"
+
+. "$(dirname "$0")/sweep_remote_fixture.sh"
 
 # A historical target may declare fewer boxes than today's execution map. The
 # extra local unit still proves backend facts, but cannot be counted as a member
