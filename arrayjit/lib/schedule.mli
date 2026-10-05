@@ -641,12 +641,14 @@ val aligned_chains :
     backward's approximate-tier license. [Preamble_refused]: such a nest keeps its plain plan (the
     gh-ocannl-1003 stage-1 rule). [Preamble_duplicated]: the nest takes lanes and every lane
     recomputes the reduction serially, in its summation order. [Preamble_cooperative]: a reduction
-    whose extent is the lane's whole one-loop workgroup and the device's [simdgroup_width] is
-    retyped [Workgroup_reduce], sharing the lane's slot, and renders as a butterfly all-reduce
-    leaving the sum in every lane; a kernel holding any other admitted reduction keeps its plain
-    plan, never duplicated lanes (a renderer that still cannot shuffle runs the loop in every lane,
-    the retype's serial meaning). Config [gpu_lane_preamble_reduction], whose [auto] default
-    resolves per device ({!lane_preamble_reduction_for}). *)
+    whose extent is the lane's whole one-loop workgroup and [k] of the device's [simdgroup_width],
+    [k] at most {!lane_all_reduce_simdgroups_for}, is retyped [Workgroup_reduce], sharing the lane's
+    slot, and renders as an all-reduce leaving the sum in every lane (a butterfly within each
+    simdgroup, then, past one, the partials through workgroup-shared memory between two barriers,
+    gh-ocannl-1168); a kernel holding any other admitted reduction keeps its plain plan, never
+    duplicated lanes (a renderer that still cannot shuffle runs the loop in every lane, the retype's
+    serial meaning). Config [gpu_lane_preamble_reduction], whose [auto] default resolves per device
+    ({!lane_preamble_reduction_for}). *)
 type lane_preamble_reduction = Preamble_refused | Preamble_duplicated | Preamble_cooperative
 [@@deriving sexp_of, equal]
 
@@ -660,6 +662,15 @@ val lane_preamble_reduction_for : Backend_intf.hardware_limits -> lane_preamble_
     {!Backend_intf.hardware_limits}' [lane_scalar_recompute_cheap] holds (measured: Metal, CUDA),
     [Preamble_refused] otherwise (HIP, the C backends, anything unmeasured), since the lanes
     recompute each pair's scalar preamble once per lane (gh-ocannl-1124). *)
+
+val gpu_lane_all_reduce_simdgroups : unit -> int option
+(** Config [gpu_lane_all_reduce_simdgroups] ([auto], the default, is [None] | a positive count). *)
+
+val lane_all_reduce_simdgroups_for : Backend_intf.hardware_limits -> int
+(** The most simdgroups a [Preamble_cooperative] reduction may span at [limits] absent an explicit
+    [?all_reduce_simdgroups]: the configured count, or under [auto] the device's measured
+    {!Backend_intf.hardware_limits}' [lane_all_reduce_simdgroups] (1 wherever unmeasured, so a head
+    wider than one simdgroup keeps its plain plan; gh-ocannl-1168). *)
 
 (** How {!default_gpu} weighs its lane geometry (gh-ocannl-1167). Every lane recomputes its nest's
     per-pair scalar preamble, which the plain plan pays once per thread. [Lanes_cut]: taken wherever
@@ -684,6 +695,7 @@ val default_gpu :
   ?min_parallel:int ->
   ?workgroup_fill:int ->
   ?preamble_reduction:lane_preamble_reduction ->
+  ?all_reduce_simdgroups:int ->
   ?lanes:bool ->
   ?limits:Backend_intf.hardware_limits ->
   Low_level.optimized ->
@@ -721,9 +733,10 @@ val default_gpu :
     online-softmax hoist's value pass,
     [for (b, s, h) { for t { p := P[s, t]; for e { O[s, e] += p * V[t, e] } } }]; a preamble holding
     an inlined reduction is excluded, since every lane would recompute it; a preamble reduction loop
-    into a scope local is admitted per [?preamble_reduction], see {!type-lane_preamble_reduction}),
-    the chain extends through that preamble uncapped: the loops above the serial loop become [Grid]
-    loops (slots [>= 2] fold onto [.z]) and the loop past it a [Workgroup] lane,
+    into a scope local is admitted per [?preamble_reduction], see {!type-lane_preamble_reduction},
+    spanning at most [?all_reduce_simdgroups] simdgroups when cooperative), the chain extends
+    through that preamble uncapped: the loops above the serial loop become [Grid] loops (slots
+    [>= 2] fold onto [.z]) and the loop past it a [Workgroup] lane,
     [Grid (b, s, h) -> Serial t -> Workgroup e] — taken when the planner finds such nests one common
     topology, the launch fits the device's caps, and it has more threads than the plain plan's
     geometry. The race analysis is the same: thread identity is the tuple of chain symbols wherever

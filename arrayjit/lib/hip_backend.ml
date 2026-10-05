@@ -1604,6 +1604,8 @@ end = struct
            simdgroup_width = Some 32;
            (* gh-ocannl-1124: measured false on gfx1151; see the field. *)
            lane_scalar_recompute_cheap = false;
+           (* gh-ocannl-1168: unmeasured beyond one simdgroup; see the field. *)
+           lane_all_reduce_simdgroups = 1;
            (* gh-ocannl-1184: clean cached confirmation loses with block 16 on both gfx1151 unified
               and gfx1102 discrete. Keep the two-pass rewrite under auto; other HIP targets are
               unmeasured. *)

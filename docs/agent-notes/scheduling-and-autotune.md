@@ -75,7 +75,14 @@ files.
   `C_syntax.try_lane_all_reduce` owns EVERY local-target `Workgroup_reduce`: the xor butterfly
   (an all-reduce: the total lands in every lane, no shared scratch, no barrier) at exactly one
   simdgroup, else the serial loop in every lane. Never the `Workgroup` binding: each lane would
-  keep its own term, a wrong value rather than a race. Multi-simdgroup widths decline in v1.
+  keep its own term, a wrong value rather than a race. Past one simdgroup (gh-ocannl-1168) the
+  per-simdgroup totals go through a workgroup-shared slot array between TWO barriers per pair:
+  the second keeps the next pair's stores off a slot some lane has not read. Every lane reads all
+  slots in slot order, so all hold the bitwise-same total. Every lane must reach both barriers,
+  which is why the renderer insists on the whole `.x` dimension (no launch guard) and a
+  one-dimensional workgroup. The schedule retypes at `k` simdgroups only up to
+  `gpu_lane_all_reduce_simdgroups` (`auto` = `hardware_limits.lane_all_reduce_simdgroups`, 1 until
+  a device measures the barriers paying), so GPT-2's 64-wide heads keep the plain plan by default.
   Measured on Metal (D1 training, lukstafi/ocannl-staging PR for gh-ocannl-1124): duplicated is a
   1.07-1.45x step REGRESSION (every lane pays the value width per pair), cooperative a 0.94-0.98x
   win, and it lanes dQ too -- fission then cuts dQ from the row dot `D`, whose merge would now cost

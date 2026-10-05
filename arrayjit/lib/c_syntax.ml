@@ -6461,19 +6461,29 @@ module C_syntax (B : C_syntax_config) = struct
      to the workgroup's [.x] register, the slot it shares with the output lanes -- no lane axis of
      its own), the [ocannl_shfl_xor] tree over [warp_shuffle_stages] leaves the total in every lane
      (an XOR butterfly is an all-reduce: after the last stage each lane holds the combination of
-     every lane), and every lane folds it into its local. No shared memory and no barrier, so no
-     scratch can be overwritten early and no inactive lane can miss a barrier. Taken when the loop
-     spans exactly one simdgroup ([extent = warp_size]), is the whole [.x] workgroup dimension (no
-     launch guard, so every lane of the simdgroup reaches every shuffle), sits at slot 0 with a
-     bound register, and the local resides at f32/f64 (the precisions [ocannl_shfl_xor] is
-     overloaded at). Reassociation is the [Workgroup_reduce] annotation's license.
+     every lane), and every lane folds it into its local. At one simdgroup ([extent = warp_size]):
+     no shared memory and no barrier, so no scratch can be overwritten early and no inactive lane
+     can miss a barrier. Across [k > 1] whole simdgroups (gh-ocannl-1168): lane 0 of each simdgroup
+     stores its butterfly total into a [k]-slot workgroup-shared array, a barrier, every lane reads
+     all [k] slots and combines them in slot order (the same order in every lane, so every lane
+     holds the bitwise-same total, as the butterfly's lanes do), and a SECOND barrier before the
+     local is updated, so the next execution of this reduction -- the next pair of the serial loop
+     around it -- cannot overwrite a slot some lane has not read yet. Every lane of the workgroup
+     reaches both barriers: the loop is the whole [.x] dimension (no launch guard), the workgroup
+     has no other dimension, and the rendering sits outside every lane's own guard (the lane
+     geometry places it in the lane-uniform preamble, a sibling of the lane loop, never inside it).
+     Taken when the loop spans whole simdgroups, is the whole [.x] workgroup dimension (so every
+     lane of each simdgroup reaches every shuffle), sits at slot 0 with a bound register, and the
+     local resides at f32/f64 (the precisions [ocannl_shfl_xor] is overloaded at); past one
+     simdgroup also when the backend has barriers and workgroup-shared declarations and the
+     workgroup is one-dimensional ([.x] alone: the slots are indexed by simdgroup along [.x]).
+     Reassociation is the [Workgroup_reduce] annotation's license.
 
      - otherwise the plain serial loop, in every lane: a partial simdgroup (the shuffle would read
-     lanes outside the reduction), several simdgroups (which need a shared-memory broadcast and
-     barrier this v1 does not render), a backend without shuffles (cc), a narrow residency, or a
-     logged run. Binding the index like a [Workgroup] axis instead would leave each lane its own
-     term only -- wrong for this local, every reader of which wants the whole sum -- which is why
-     this arm owns it and never falls through to the binding.
+     lanes outside the reduction), a backend without shuffles (cc), a workgroup with a second
+     dimension, a narrow residency, or a logged run. Binding the index like a [Workgroup] axis
+     instead would leave each lane its own term only -- wrong for this local, every reader of which
+     wants the whole sum -- which is why this arm owns it and never falls through to the binding.
 
      [None] for any other body or local: those keep [try_warp_reduce]'s cell-target rendering and
      its fallbacks, the hardware binding among them. *)
@@ -6513,15 +6523,29 @@ module C_syntax (B : C_syntax_config) = struct
             let shuffle =
               match (register, prec) with
               | Some reg, (Ops.Single_prec _ | Ops.Double_prec _)
-                when B.warp_size > 1 && from_ = 0 && extent = B.warp_size && extent = slot_max
+                when B.warp_size > 1 && from_ = 0
+                     && extent % B.warp_size = 0
+                     && extent = slot_max
                      && not (Utils.debug_log_from_routines ()) ->
-                  Some reg
+                  let num_warps = extent / B.warp_size in
+                  let one_dimensional =
+                    List.for_all axes ~f:(fun a ->
+                        match a.Low_level.ha_kind with
+                        | `Workgroup -> a.Low_level.ha_slot = 0
+                        | `Grid -> true)
+                  in
+                  if
+                    num_warps = 1
+                    || one_dimensional && Option.is_some B.barrier_syntax
+                       && Option.is_some B.shared_decl_prefix
+                  then Some (reg, num_warps)
+                  else None
               | _ -> None
             in
             Some
               (match shuffle with
               | None -> (serial_loop ctx loop) ()
-              | Some reg ->
+              | Some (reg, num_warps) ->
                   let ident = symbol_ident i in
                   let ctyp = B.typ_of_prec prec in
                   let cast = "(" ^ String.strip B.loop_index_type ^ ")" in
@@ -6540,19 +6564,47 @@ module C_syntax (B : C_syntax_config) = struct
                     ^^ pp_symbol i
                     ^^ string (" = " ^ cast ^ reg ^ ";")
                   in
+                  let warp = B.warp_size in
+                  (* Past one simdgroup: the partials through workgroup-shared memory, between the
+                     two barriers every lane reaches (see the comment above). *)
+                  let across_simdgroups =
+                    if num_warps = 1 then empty
+                    else
+                      let pname = "lred_partials_" ^ ident ^ "__" in
+                      let barrier = string (Option.value_exn ~here:[%here] B.barrier_syntax) in
+                      string
+                        (Printf.sprintf "%s%s %s[%d];"
+                           (Option.value_exn ~here:[%here] B.shared_decl_prefix)
+                           ctyp pname num_warps)
+                      ^^ hardline
+                      ^^ string
+                           (Printf.sprintf "if ((%s & %d) == 0) { %s[%s >> %d] = %s; }" ident
+                              (warp - 1) pname ident (Int.ceil_log2 warp) vname)
+                      ^^ hardline ^^ barrier ^^ hardline
+                      ^^ string (Printf.sprintf "%s = %s[0];" vname pname)
+                      ^^ concat
+                           (List.map (List.range 1 num_warps) ~f:(fun w ->
+                                hardline
+                                ^^ string (vname ^ " = ")
+                                ^^ combine (string vname) (string (Printf.sprintf "%s[%d]" pname w))
+                                ^^ semi))
+                      ^^ hardline ^^ barrier ^^ hardline
+                  in
                   string
                     (Printf.sprintf
-                       "{ /* Workgroup_reduce lane all-reduce into a scope local: extent %d = one \
-                        simdgroup; the total lands in every lane. */"
-                       extent)
+                       "{ /* Workgroup_reduce lane all-reduce into a scope local: extent %d = %s; \
+                        the total lands in every lane. */"
+                       extent
+                       (if num_warps = 1 then "one simdgroup"
+                        else Printf.sprintf "%d simdgroups of %d" num_warps warp))
                   ^^ nest 2
                        (hardline ^^ binding ^^ hardline
                        ^^ (if PPrint.is_empty local_defs then empty else local_defs ^^ hardline)
                        ^^ string (ctyp ^ " " ^ vname ^ " = ")
                        ^^ contrib_doc ^^ semi ^^ hardline
                        ^^ separate hardline
-                            (List.map (warp_shuffle_stages ~width:extent) ~f:shuffle_stage)
-                       ^^ hardline ^^ pp_scope_id id ^^ string " = "
+                            (List.map (warp_shuffle_stages ~width:warp) ~f:shuffle_stage)
+                       ^^ hardline ^^ across_simdgroups ^^ pp_scope_id id ^^ string " = "
                        ^^ combine (pp_scope_id id) (string vname)
                        ^^ semi)
                   ^^ hardline ^^ rbrace))

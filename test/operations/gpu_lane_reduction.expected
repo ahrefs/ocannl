@@ -37,17 +37,39 @@ lred_coop16r: the lane sits inside the serial query loop: true
 lred_coop16r: the reduction loop is Workgroup_reduce: true
 lred_coop16r: every cell of K holds the serial reference's exact value: true
 lred_coop16r: the emitted kernel does not spell the all-reduce: true
---- leg 6: several simdgroups keep the plain plan; the renderer declines them (v1) ---
+--- leg 6: several simdgroups, where the device allows them ---
 lred_coop64: no lane inside the serial query loop: true
 lred_coop64: the reduction loop is Serial: true
 lred_coop64: every cell of K holds the serial reference's exact value: true
 lred_coop64: the emitted kernel does not spell the all-reduce: true
+lred_multi64: the operands tell each lane's own simdgroup's partial from the whole sum: true
+lred_multi64: the operands tell simdgroup 0's partial from the whole sum: true
+lred_multi64: the mapping probe counts 8192 active threads (a reduce lane adds none): true
+lred_multi64: Grid (h, t, b) and a 64-wide lane: true
+lred_multi64: the lane sits inside the serial query loop: true
+lred_multi64: the reduction loop is Workgroup_reduce: true
+lred_multi64: every cell of K holds the serial reference's exact value: true
+lred_multi64: every cell of K equals the materialized, unscheduled run's: true
+lred_multi64: the emitted kernel spells the all-reduce: true
+lred_multi128: the operands tell each lane's own simdgroup's partial from the whole sum: true
+lred_multi128: the operands tell simdgroup 0's partial from the whole sum: true
+lred_multi128: the mapping probe counts 16384 active threads (a reduce lane adds none): true
+lred_multi128: Grid (h, t, b) and a 128-wide lane: true
+lred_multi128: the lane sits inside the serial query loop: true
+lred_multi128: the reduction loop is Workgroup_reduce: true
+lred_multi128: every cell of K holds the serial reference's exact value: true
+lred_multi128: every cell of K equals the materialized, unscheduled run's: true
+lred_multi128: the emitted kernel spells the all-reduce: true
+lred_multi128_cap2: no lane inside the serial query loop: true
+lred_multi128_cap2: the reduction loop is Serial: true
+lred_multi128_cap2: every cell of K holds the serial reference's exact value: true
+lred_multi128_cap2: the emitted kernel does not spell the all-reduce: true
 lred_coop64r: the mapping probe counts 8192 active threads (a reduce lane adds none): true
 lred_coop64r: Grid (h, t, b) and a 64-wide lane: true
 lred_coop64r: the lane sits inside the serial query loop: true
 lred_coop64r: the reduction loop is Workgroup_reduce: true
 lred_coop64r: every cell of K holds the serial reference's exact value: true
-lred_coop64r: the emitted kernel does not spell the all-reduce: true
+lred_coop64r: the emitted kernel spells the all-reduce: true
 --- leg 7: an ordinary local in the same shape keeps the plain plan ---
 the fused backward's dp local is not minted without online_softmax_backward: true
 the dp local minted for the same node at another precision is a node of its own, at that one: true

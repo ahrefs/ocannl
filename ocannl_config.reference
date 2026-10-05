@@ -236,13 +236,23 @@
 # reassociates, licensed by online_softmax_backward, so the key has no effect without it.
 # `refused` keeps such a nest on its plain plan; `duplicated` gives it lanes and every lane
 # recomputes the reduction serially (summation order unchanged); `cooperative` gives it lanes
-# where the reduction spans exactly the lane's workgroup of one simdgroup, the lanes computing it
-# together as a butterfly all-reduce (reassociated), and keeps the plain plan for any other width.
+# where the reduction spans exactly the lane's workgroup, of as many simdgroups as
+# gpu_lane_all_reduce_simdgroups allows, the lanes computing it together as an all-reduce
+# (reassociated), and keeps the plain plan for any other width.
 # `auto` resolves per device: cooperative where redundant per-lane scalar work is cheap (measured
 # on Metal and CUDA),
 # refused elsewhere (HIP, where the lanes lost to the plain plan, and anything unmeasured). An
 # inlined reduction inside an expression stays refused in every mode.
 #gpu_lane_preamble_reduction=auto
+
+# The most simdgroups a cooperative preamble reduction (gpu_lane_preamble_reduction) may span. At
+# one simdgroup (32 lanes on Metal, CUDA and HIP) the lanes all-reduce it as a register butterfly;
+# past one, each simdgroup's butterfly total goes through workgroup-shared memory between two
+# barriers per (query, key) pair, every lane reading every partial, so a head of 64 or 128 (GPT-2's
+# real widths) can take lanes too (gh-ocannl-1168). A head wider than this many simdgroups keeps
+# the plain plan. `auto` resolves per device to where the barriers were measured to pay: 1
+# everywhere unmeasured, so wider heads keep the plain plan. A positive integer forces that bound.
+#gpu_lane_all_reduce_simdgroups=auto
 
 # How the default GPU schedule weighs its lane geometry: a parallel loop under a serial loop past
 # loop-free per-pair scalar work -- the online-softmax forward's value pass

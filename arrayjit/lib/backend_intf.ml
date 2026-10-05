@@ -285,8 +285,8 @@ type hardware_limits = {
       (** The SIMD-group (warp) width the backend's warp-shuffle renderings assume -- its [C_syntax]
           configuration's [warp_size]: 32 on Metal, CUDA and HIP (whose shuffles pass an explicit
           width of 32). [None] where kernels render no shuffles (the C backends). The default GPU
-          schedule retypes a cooperative lane reduction only at exactly this width, the one the lane
-          all-reduce renders (gh-ocannl-1124). *)
+          schedule retypes a cooperative lane reduction only at a multiple of this width, at most
+          [lane_all_reduce_simdgroups] of them (gh-ocannl-1124, gh-ocannl-1168). *)
   lane_scalar_recompute_cheap : bool;
       (** Device economics (gh-ocannl-1124): whether scalar work every lane of a lane geometry
           recomputes redundantly -- the per-pair preamble a lane nest repeats in each of its lanes
@@ -300,6 +300,14 @@ type hardware_limits = {
           where false, the stage-1 lanes of gh-ocannl-1003 are still taken in a kernel that admits
           them (the forward value pass won on gfx1151), but are no reason to cut a kernel (the fused
           backward's dV cut from dK for them lost to the merged plain kernel). *)
+  lane_all_reduce_simdgroups : int;
+      (** Device economics (gh-ocannl-1168): the most simdgroups a cooperative lane all-reduce is
+          worth spanning. At one simdgroup the all-reduce is a register butterfly; across [k > 1] it
+          stages each simdgroup's partial in workgroup-shared memory between two barriers per
+          (query, key) pair, which may eat the lanes' win -- so a head wider than [simdgroup_width]
+          (GPT-2's 64) gets lanes only where that was measured to pay. [1] (one simdgroup, the
+          gh-ocannl-1124 rule) wherever unmeasured, and on the C backends, which run no lane
+          geometry. Read by the default GPU schedule's [gpu_lane_all_reduce_simdgroups = auto]. *)
   online_softmax_auto_block : int;
       (** Automatic key-block size for [online_softmax_block=auto] (gh-ocannl-1171); 0 selects the
           two-pass rewrite. Metal and CPU keep 16 from the gh-ocannl-1003 block sweep
@@ -515,6 +523,7 @@ let no_hardware_limits =
     native_fp16_arithmetic = false;
     simdgroup_width = None;
     lane_scalar_recompute_cheap = false;
+    lane_all_reduce_simdgroups = 1;
     online_softmax_auto_block = 0;
     worker_pool_tag = None;
     codegen_tag = None;

@@ -21,9 +21,14 @@
    reduction every lane would run whole is the duplicated arm, measured as a regression; 5. a
    partial simdgroup (E = D = 16) likewise keeps the plain plan at the devices' 32-lane shuffles,
    and on a device claiming 16-lane ones the retype happens and the renderer (32-lane warps)
-   declines the shuffle, every lane running the loop; 6. several simdgroups (E = D = 64): the same,
-   declined by this v1 (it would need a shared broadcast and barrier); 7. the same nest over an
-   ordinary scope local, not the fused backward's [dp]: the plain plan in every mode -- the
+   declines the shuffle, every lane running the loop; 6. several simdgroups (gh-ocannl-1168): at the
+   default bound of one simdgroup (E = D = 64) the plain plan; allowed two or four simdgroups, E = D
+   = 64 and 128 take lanes and the renderer all-reduces across simdgroups through workgroup-shared
+   partials between two barriers per pair -- executed exact against the serial reference AND the
+   materialized (unscheduled) run, over operands whose per-simdgroup partials discriminate a dropped
+   or misrouted partial -- while a width past the bound keeps the plain plan, and a device claiming
+   64-lane shuffles gets the retype the renderer renders as two 32-lane simdgroups; 7. the same nest
+   over an ordinary scope local, not the fused backward's [dp]: the plain plan in every mode -- the
    reassociation's license is the gate that minted [dp], not the shape; 8. a [Workgroup_reduce]
    hand-retyped over such a local keeps the hardware binding a staged reduction relies on (compiled,
    and read on GPU backends); 9. the configured [auto] resolves from the device's economics --
@@ -46,6 +51,9 @@ let gpu = match backend_name with "metal" | "cuda" | "hip" -> true | _ -> false
 
 (* The comment the all-reduce rendering opens with ([C_syntax.try_lane_all_reduce]). *)
 let all_reduce_marker = "lane all-reduce into a scope local"
+
+(* What the cross-simdgroup form's opening comment adds ([C_syntax.try_lane_all_reduce]). *)
+let multi_marker k = Printf.sprintf "%d simdgroups of 32" k
 let b_n = 2
 let t_n = 16
 let h_n = 4
@@ -69,6 +77,7 @@ type case = {
   seed : (Ir.Tnode.t * float array) list;
   k_tn : Ir.Tnode.t;
   expected : float array;
+  k_with : (int -> int list) -> float array;
   launch_block : int;
 }
 
@@ -121,16 +130,18 @@ let dk_nest ?(minted = true) ~name ~e_n ~d_n () =
          ]
   in
   let opt = L.optimize ~materialized:[ a_tn; bv_tn; q_tn; k_tn ] ~name llc in
-  let expected =
+  (* [K] when lane [d]'s [dp] sums the terms of [e] in [es d]: the whole range is the reference; a
+     subset is what a wrong cross-simdgroup rendering would compute ([discriminates]). *)
+  let k_with es =
     fill ~dims:k_dims (fun i ->
         let b, t, h, d = (i.(0), i.(1), i.(2), i.(3)) in
         List.fold (List.range 0 s_n) ~init:(k_seed b t h d) ~f:(fun acc s ->
             let dp =
-              List.fold (List.range 0 e_n) ~init:0. ~f:(fun dp e ->
-                  dp +. (a_value b s h e *. b_value b t h e))
+              List.fold (es d) ~init:0. ~f:(fun dp e -> dp +. (a_value b s h e *. b_value b t h e))
             in
             acc +. (dp *. q_value b s h d)))
   in
+  let expected = k_with (fun _ -> List.range 0 e_n) in
   {
     name;
     opt;
@@ -145,6 +156,7 @@ let dk_nest ?(minted = true) ~name ~e_n ~d_n () =
       ];
     k_tn;
     expected;
+    k_with;
     launch_block = d_n;
   }
 
@@ -178,14 +190,13 @@ let axis_name = function
 (* A device whose shuffles are [width] lanes wide: the GPU backends state 32. *)
 let simd width = { Ir.Backend_intf.no_hardware_limits with simdgroup_width = Some width }
 
-let run ?(preamble = S.Preamble_cooperative) ?(lanes = true) ?(limits = simd 32) ~reduction_axis
-    ~emits_all_reduce case =
-  let scheduled =
-    S.apply
-      (S.default_gpu ~block_size:256 ~min_parallel:64 ~workgroup_fill:1 ~preamble_reduction:preamble
-         ~limits case.opt)
-      case.opt
+let run ?(preamble = S.Preamble_cooperative) ?(lanes = true) ?(limits = simd 32) ?(all_reduce = 1)
+    ?(marker = all_reduce_marker) ?(materialized = false) ~reduction_axis ~emits_all_reduce case =
+  let schedule () =
+    S.default_gpu ~block_size:256 ~min_parallel:64 ~workgroup_fill:1 ~preamble_reduction:preamble
+      ~all_reduce_simdgroups:all_reduce ~limits case.opt
   in
+  let scheduled = S.apply (schedule ()) case.opt in
   (* What schedule-aware fission reads: the reduce lane is the output lanes' threads, not a
      dimension of its own. *)
   if lanes then
@@ -195,9 +206,7 @@ let run ?(preamble = S.Preamble_cooperative) ?(lanes = true) ?(limits = simd 32)
          (b_n * t_n * h_n * case.launch_block))
       (List.equal
          (fun (g1, a1) (g2, a2) -> g1 = g2 && a1 = a2)
-         (S.statement_mappings case.opt.llc
-            (S.default_gpu ~block_size:256 ~min_parallel:64 ~workgroup_fill:1
-               ~preamble_reduction:preamble ~limits case.opt))
+         (S.statement_mappings case.opt.llc (schedule ()))
          [ (b_n * t_n * h_n, b_n * t_n * h_n * case.launch_block) ]);
   if lanes then (
     p
@@ -218,14 +227,35 @@ let run ?(preamble = S.Preamble_cooperative) ?(lanes = true) ?(limits = simd 32)
   p_all2
     (Printf.sprintf "%s: every cell of K holds the serial reference's exact value" case.name)
     got case.expected ~f:Float.equal;
+  (if materialized then
+     let plain =
+       List.hd_exn
+         (L.execute ~name:(case.name ^ "_mat") case.opt ~seed:case.seed ~read:[ case.k_tn ])
+     in
+     p_all2
+       (Printf.sprintf "%s: every cell of K equals the materialized, unscheduled run's" case.name)
+       got plain ~f:Float.equal);
   let claim =
     Printf.sprintf "%s: the emitted kernel %s the all-reduce" case.name
       (if emits_all_reduce then "spells" else "does not spell")
   in
   if not gpu then skipped ~backend:backend_name claim
-  else if emits_all_reduce then
-    Generated.assert_emits ~routine:case.name ~contains:all_reduce_marker claim
+  else if emits_all_reduce then Generated.assert_emits ~routine:case.name ~contains:marker claim
   else Generated.assert_omits ~routine:case.name ~contains:all_reduce_marker claim
+
+(* The operands discriminate the cross-simdgroup phase: lane [d] summing only its own simdgroup's
+   terms (the phase skipped), or only simdgroup 0's terms in every lane (one partial read for all),
+   gives a different [K] somewhere. *)
+let discriminates case =
+  let simdgroup w = List.range (32 * w) (32 * (w + 1)) in
+  let differs what wrong =
+    p_exists
+      (Printf.sprintf "%s: the operands tell %s from the whole sum" case.name what)
+      (List.zip_exn (Array.to_list wrong) (Array.to_list case.expected))
+      ~f:(fun (a, b) -> not (Float.equal a b))
+  in
+  differs "each lane's own simdgroup's partial" (case.k_with (fun d -> simdgroup (d / 32)));
+  differs "simdgroup 0's partial" (case.k_with (fun _ -> simdgroup 0))
 
 let () =
   eprintf "gpu_lane_reduction backend: %s (not part of the golden)\n%!" backend_name;
@@ -250,10 +280,24 @@ let () =
      declines the shuffle and every lane runs the loop -- still exact. *)
   run ~limits:(simd 16) ~reduction_axis:LL.Workgroup_reduce ~emits_all_reduce:false
     (dk_nest ~name:"lred_coop16r" ~e_n:16 ~d_n:16 ());
-  printf "--- leg 6: several simdgroups keep the plain plan; the renderer declines them (v1) ---\n";
+  printf "--- leg 6: several simdgroups, where the device allows them ---\n";
+  (* The default bound (one simdgroup, every device until measured): the plain plan. *)
   run ~lanes:false ~reduction_axis:LL.Serial ~emits_all_reduce:false
     (dk_nest ~name:"lred_coop64" ~e_n:64 ~d_n:64 ());
-  run ~limits:(simd 64) ~reduction_axis:LL.Workgroup_reduce ~emits_all_reduce:false
+  List.iter
+    [ (64, 2, "lred_multi64"); (128, 4, "lred_multi128") ]
+    ~f:(fun (width, k, name) ->
+      let case = dk_nest ~name ~e_n:width ~d_n:width () in
+      discriminates case;
+      run ~all_reduce:k ~marker:(multi_marker k) ~materialized:true
+        ~reduction_axis:LL.Workgroup_reduce ~emits_all_reduce:true case);
+  (* Past the bound: four simdgroups allowed two keep the plain plan. *)
+  run ~all_reduce:2 ~lanes:false ~reduction_axis:LL.Serial ~emits_all_reduce:false
+    (dk_nest ~name:"lred_multi128_cap2" ~e_n:128 ~d_n:128 ());
+  (* A device claiming 64-lane shuffles retypes at one of its simdgroups; the renderer's 32-lane
+     warps make that two. *)
+  run ~limits:(simd 64) ~marker:(multi_marker 2) ~reduction_axis:LL.Workgroup_reduce
+    ~emits_all_reduce:true
     (dk_nest ~name:"lred_coop64r" ~e_n:64 ~d_n:64 ())
 
 let () =
