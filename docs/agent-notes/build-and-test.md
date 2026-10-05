@@ -649,6 +649,11 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
 - `tools/test-harnesses.sh` runs the complete hand-run harness tier locally, from any
   working directory. Its manifest is the membership CI uses: the toolchain-free job runs
   `--shell`, the formatting job runs `--toolchain` after installation; omitting the group runs both.
+  The formatting job sets `OCANNL_TOOL_HARNESS_STRICT=1`, under which `harness-support.sh`
+  reports a skip as a FAIL: a counted skip is right where a host lacks a capability, and a vacuous
+  green where the step installed it. setup-ocaml's switch is not on a CI step's PATH, so a harness
+  needing `dune` falls back to sourcing `tools/opam-env.sh` before `harness_require dune`; one that
+  omits the fallback skips every leg there, which strict mode turns red.
   `--list` lists the selected paths without executing them. Every selected member runs after
   an ordinary failure; the footer counts failed harnesses and exits 1 if any failed. A member
   interrupted by HUP, INT or TERM stops the aggregate and preserves exit 129, 130 or 143. Individual

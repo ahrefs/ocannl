@@ -627,8 +627,14 @@ jobs:
         test "$ocamlformat_versions" = "$ocamlformat_version"
         opam install dune "ocamlformat=$ocamlformat_version"
     # After the install: formatter cache controls need dune and ocamlformat,
-    # and promotion fixtures need dune. The same manifest runs locally.
+    # and promotion fixtures need dune. The same manifest runs locally. Strict:
+    # this job installed the toolchain, so a leg the harness cannot decide is a
+    # defect, not a host capability -- a fixture that fails to find the
+    # installed dune would otherwise pass as a counted skip behind a green
+    # footer.
     - name: Test toolchain harnesses
+      env:
+        OCANNL_TOOL_HARNESS_STRICT: 1
       run: tools/test-harnesses.sh --toolchain
     - name: Check formatting and documentation comments
       run: tools/fmt-check.sh
