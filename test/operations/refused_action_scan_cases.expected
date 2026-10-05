@@ -1,0 +1,41 @@
+the original stdout-only wrapper refuses its leaking stderr: true
+a stderr-only wrapper refuses its leaking stdout: true
+an unwrapped refusal reports both inherited streams: true
+dropping stdout and capturing stderr is accepted: true
+capturing stdout and dropping stderr is accepted: true
+both-output capture and both-output ignore are accepted: true
+wrappers inside the accepted-status action count too: true
+a captured sibling cannot answer for a leaking run: true
+stream capture does not escape its branch: true
+a zero-only accepted-status action has no refusal-stream obligation: true
+allowing success as well as failure still requires stream protection: true
+an inner zero-only status wrapper replaces the outer predicate: true
+a normal Verdict run may inherit both streams: true
+an executable without a direct Verdict dependency is outside the contract: true
+ownership uses the declared program rather than its name: true
+named dependencies retain their owner under chdir: true
+public names retain ownership across Dune files: true
+dependency expansions preserve stanza origin under chdir: true
+a literal command follows chdir to its distinct owner: true
+parent subdir declarations are attributed to their own directory: true
+multi-program declarations assign the direct dependency to each main program: true
+a custom self-running test action resolves its declared program: true
+a bare external tool with no workspace arguments stays outside the contract: true
+opaque shell and external launchers are refused explicitly: true
+unknown runner ownership and computed commands are refused explicitly: true
+computed predicates and library membership are refused explicitly: true
+environment command-resolution overrides cannot hide a refused owner: true
+action-local PATH rewrites cannot hide a refused owner: true
+accepted-exit actions in preprocessing or nested stanza fields cannot be skipped: true
+include directives cannot silently hide ownership: true
+directory-spanning ownership is refused while include_subdirs no is harmless: true
+absolute capture destinations cannot masquerade as stream protection: true
+unknown action forms in refusal branches are explicit refusals: true
+a pipeline or unknown wrapper around acceptance is refused too: true
+shipping scanner refuses the original stdout-only leak: true
+shipping scanner refuses a stdout leak too: true
+shipping scanner accepts the nearest both-stream correction: true
+shipping scanner accepts a non-Verdict owner: true
+shipping scanner refuses unresolved includes: true
+shipping scanner refuses unreadable Dune input: true
+shipping scanner refuses an empty Dune source inventory: true

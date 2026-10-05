@@ -3258,6 +3258,18 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
 
 ## Test support and placement
 
+- `refused_action_streams` (gh-ocannl-1005) holds accepted-failure Dune actions to the same
+  stream contract as fresh-child controls: a run whose owning executable directly declares
+  `arrayjit.verdict` and accepts a nonzero exit must capture or drop both streams on its own action
+  branch. `Refused_action_scan` derives ownership with `Dune_stanza_scan.program_runners`, preserving
+  dependency origin under `chdir`, public names and parent `subdir` blocks; capture on a sibling
+  counts for nothing. Literal exit predicates (`:standard`, integers and `or`/`and`/`not`) are
+  supported. Includes, directory-spanning ownership, computed library membership, opaque launchers,
+  command-resolution overrides, pipelines and unknown refusal actions fail explicitly; the scan
+  does not evaluate arbitrary Dune or shell syntax or follow transitive library dependencies.
+  `refused_action_scan_cases` holds each boundary beside its nearest legitimate action and runs
+  shipping refusal controls through `Fresh_process`, keeping their failure markers out of green logs.
+
 - `Fresh_process` (gh-ocannl-910) owns synchronous fresh-child capture for host-only probes:
   separate temporary stream files, absolute executable resolution, status-plus-causal-text matching
   and exception cleanup. `report` prefixes every echoed child line, so its `STOPPED EARLY`, `FAIL:`

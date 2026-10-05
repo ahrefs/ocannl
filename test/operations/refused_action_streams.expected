@@ -1,0 +1,5 @@
+Verdict refusal run: test/operations/dune: test/operations/config_var_spellings.exe
+Verdict refusal run: test/operations/dune: test/operations/config_usage_scan.exe
+OK: accepted Verdict failures inherit neither stream.
+
+Synthetic controls: scanner refusal diagnostics exercised by this control golden:

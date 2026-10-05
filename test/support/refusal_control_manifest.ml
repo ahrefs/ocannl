@@ -15,6 +15,7 @@ open Stdio
 let raw_entries =
   [
     ("ll_test_ratchet.ml", []);
+    ("refused_action_streams.ml", []);
     ("operand_key_ratchet.ml", []);
     ("provenance_tag_inventory.ml", []);
     ( "atomic_file_rename_scan.ml",

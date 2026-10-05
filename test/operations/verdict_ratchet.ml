@@ -246,6 +246,9 @@ let canary_sites =
    REFUSE the run; the fix is to give them separate names, or to hoist them into one. *)
 let exempt_quantified_helpers =
   [
+    ( "test/operations/refused_action_scan_cases.ml:clean",
+      "empty findings are the passing evidence for concrete accepted-action fixtures; adjacent \
+       violating fixtures and captured shipping controls prove the scanner sees the obligation" );
     ( "test/operations/shell_scripts_parse.ml:compliant",
       "absence of private helper definitions is the passing evidence; missing lifecycle text is \
        rejected separately, and negative controls deliberately accept malformed or empty text as a \

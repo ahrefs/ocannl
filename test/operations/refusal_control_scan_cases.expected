@@ -402,6 +402,7 @@ env_var_deps.ml: [scanner-refusal:f8fc95de59a65622241eac16f5f1ecf4] effective ga
 env_var_deps.ml: [scanner-refusal:abc806b50e485449683b10cc952fde9d] preprocessing-only universe dependencies (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:0d805a9703eb5f183046f05353ed6587] expansions and subtracted (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:9fe5330074251fed6b9e5e08a0d663bd] universe users alone (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+refused_action_streams.ml has exactly the explicitly assigned refusal controls: true
 ll_test_ratchet.ml has exactly the explicitly assigned refusal controls: true
 operand_key_ratchet.ml has exactly the explicitly assigned refusal controls: true
 provenance_tag_inventory.ml has exactly the explicitly assigned refusal controls: true
