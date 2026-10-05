@@ -1,11 +1,19 @@
 ties: the coarse composite was timed: true
-ties: the playoff timed alternates, at most two per segment: true
+ties: the playoff timed alternates: true
 ties: every composite window is the recombination's or the playoff's: true
 ties: each faster alternate replaced the incumbent: true
+ties: each window differs from the incumbent it challenged in at most one segment: true
+ties: some window visibly changes a segment: true
+ties: no segment is challenged by more than two windows: true
 ties: the crown is the last alternate: true
 ties: the crown's time is the last alternate's: true
 slower: the playoff timed alternates: true
 slower: no slower alternate replaced the incumbent: true
 slower: the crown is the recombined composite: true
+slower: each window differs from the recombined composite in at most one segment: true
+slower: some window visibly changes a segment: true
+slower: no segment is challenged by more than two windows: true
+near: singles 0.3% apart reach the playoff: true
+near: only the single within the margin plays, one per segment: true
 spread: the coarse composite was timed: true
 spread: singles 1% apart leave the playoff nothing to time: true

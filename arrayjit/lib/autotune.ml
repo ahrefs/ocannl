@@ -385,7 +385,8 @@ let min_progress = 0.01
    crowned [mma 32x32x0 bgrid], the other [mma 16x32x0 bgrid-in]). The playoff re-ranks those
    near-ties where the backdrop is small: inside the composite. A single within [playoff_margin] of
    its key's best single is close enough that the backdrop's noise could have inverted the order. At
-   most [playoff_width] of them per key go to the playoff, nearest first. *)
+   most [playoff_width] of them per key go to the playoff, nearest first. Changing either constant
+   changes the search menu, so bump [Schedule_cache.entry_version]. *)
 let playoff_margin = 0.005
 let playoff_width = 2
 
@@ -4884,8 +4885,9 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
             result
           in
           (* gh-ocannl-1061: where the search is, on the [autotune_progress] stream. A phase is the
-             seed pass, the recombination composites that follow it, or one beam round; its
-             candidate total is known up front except for the composites'. *)
+             seed pass, the recombination composites that follow it, the composite playoff
+             (gh-ocannl-1166), or one beam round; its candidate total is known up front except for
+             the composites' and the playoff's. *)
           let progress_phase = ref "seeds" and progress_total = ref None in
           let progress_tried = ref 0 in
           let progress_best () =
@@ -5206,9 +5208,24 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
             if List.length fine_recombined >= 2 then try_composite ~fine:true fine_recombined
             else None
           in
-          (* The composite playoff (gh-ocannl-1166; see [playoff_margin]): starting from the faster
-             timed composite, each key in turn tries its near-tie singles in the composite's place,
-             and a faster alternate becomes the incumbent the later keys build on. Coordinate
+          (* Multi-site split-reduce recombination: apply each detected site's best-timed
+             [num_blocks] simultaneously — the sites are distinct statements, so their preludes
+             compose. Same rationale as the sketch recombination above: singles keep every value
+             unmasked, one composite recovers the combination. *)
+          let recombined =
+            List.filter_map sr_sites ~f:(fun s ->
+                List.filter !sr_single_results ~f:(fun (s2, _, _) ->
+                    Idx.equal_symbol s2.sr_axis s.sr_axis)
+                |> List.min_elt ~compare:(fun (_, _, a) (_, _, b) -> Float.compare a b)
+                |> Option.map ~f:(fun (s2, b, _) -> (s2, b)))
+          in
+          sr_composite_eligible := List.length recombined >= 2;
+          if !sr_composite_eligible then
+            Option.iter (try_spec (Fiss (F_split { sites = recombined }))) ~f:admit;
+          (* The composite playoff (gh-ocannl-1166; see [playoff_margin]), after every recombination
+             composite so the [playoff] progress phase holds only its windows: starting from the
+             faster timed composite, each key in turn tries its near-tie singles in the composite's
+             place, and a faster alternate becomes the incumbent the later keys build on. Coordinate
              descent over the keys, at most [playoff_width] alternates each, so the cost is linear
              in the keyed segments rather than the cartesian product the recombination avoids. *)
           let playoff_contenders ~fine_ok ~current key =
@@ -5247,6 +5264,9 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                          let current = List.Assoc.find_exn incumbent ~equal:String.equal key in
                          List.fold (playoff_contenders ~fine_ok:fine ~current key)
                            ~init:(incumbent, incumbent_ms) ~f:(fun (incumbent, incumbent_ms) p ->
+                             (* What [p] would replace: [current] until an earlier alternate of this
+                                key swapped in. *)
+                             let replaced = List.Assoc.find_exn incumbent ~equal:String.equal key in
                              let alternate =
                                List.map incumbent ~f:(fun (k, q) ->
                                    if String.equal k key then (k, p) else (k, q))
@@ -5256,25 +5276,11 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                                  Int.incr n_playoff_swaps;
                                  logf "playoff: segment %s: %s replaces %s (%.4f ms < %.4f ms)"
                                    (dshort key) (spec_label (Whole (W_sketch p)))
-                                   (spec_label (Whole (W_sketch current)))
+                                   (spec_label (Whole (W_sketch replaced)))
                                    alt_ms incumbent_ms;
                                  (alternate, alt_ms)
                              | Some _ | None -> (incumbent, incumbent_ms)))
                       : (string * sketch_params) list * float)));
-          (* Multi-site split-reduce recombination: apply each detected site's best-timed
-             [num_blocks] simultaneously — the sites are distinct statements, so their preludes
-             compose. Same rationale as the sketch recombination above: singles keep every value
-             unmasked, one composite recovers the combination. *)
-          let recombined =
-            List.filter_map sr_sites ~f:(fun s ->
-                List.filter !sr_single_results ~f:(fun (s2, _, _) ->
-                    Idx.equal_symbol s2.sr_axis s.sr_axis)
-                |> List.min_elt ~compare:(fun (_, _, a) (_, _, b) -> Float.compare a b)
-                |> Option.map ~f:(fun (s2, b, _) -> (s2, b)))
-          in
-          sr_composite_eligible := List.length recombined >= 2;
-          if !sr_composite_eligible then
-            Option.iter (try_spec (Fiss (F_split { sites = recombined }))) ~f:admit;
           (* [None] iff the beam is empty: no candidate timed and the baseline was not eligible (an
              undispatched GPU baseline never enters the beam with a finite rank; a declined one does
              not enter it at all). *)
