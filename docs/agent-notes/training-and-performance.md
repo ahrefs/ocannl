@@ -213,7 +213,9 @@ files.
   every measurement box — the only setting that removes the spawn pool — while an explicit
   positive value opts back into the pool with the cap as backstop (gh-ocannl-843).
   `cell_group.py` gives benchmark cells in `orchestrate.py`, `gh675_cells.py` and
-  `gh1002_cells.py` one shared group/job, TERM-to-KILL, output-preserving reap discipline;
+  `gh1002_cells.py` (and the latter's preflight Dune build, which forks compilers; gh-ocannl-1200)
+  one shared group/job, TERM-to-KILL, output-preserving reap discipline — the drivers start no
+  other child but short `git`/`ps` probes (`test_sweep_drivers_have_no_unmanaged_spawn_site`);
   `orchestrate.py` puts cells under `--cell-timeout` (default 1800 s) and kills the GROUP on expiry:
   the pool workers hold the cell's
   stdout pipe, so killing the direct child alone moves the hang into the sweep's own
