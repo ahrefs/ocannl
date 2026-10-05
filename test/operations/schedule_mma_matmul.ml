@@ -1358,12 +1358,16 @@ let () =
     let src = Generated.read "mm_edge_mma" in
     let has s = String.is_substring src ~substring:s in
     let cov = default_coverage ~m:mi ~n:mj in
+    let vectors = List.length cov.tail_widths in
     p "edge-extent register tiling covers the edges with vector tiles, not scalar code"
       (has
-         (Printf.sprintf "%s; column tail %d in %d vector; row tail %d)"
-            (full_blocks ~m:mi ~n:mj cov) (mj - cov.n_full) (List.length cov.tail_widths)
+         (Printf.sprintf "%s; column tail %d in %d vector%s; row tail %d)"
+            (full_blocks ~m:mi ~n:mj cov) (mj - cov.n_full) vectors
+            (if vectors = 1 then "" else "s")
             (mi - cov.m_full))
-      && List.length cov.tail_widths = 1
+      (* 19 is 3 mod every width: the tail ends in a PARTIAL vector, however many whole ones the
+         default's width leaves before it. *)
+      && Option.equal Int.equal (List.last cov.tail_widths) (Some 3)
       && not (has "tmma_acc__")))
   else (
     skipped "edge-extent tensorized matmul matches the serial twin bitwise";

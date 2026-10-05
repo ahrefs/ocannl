@@ -11,8 +11,9 @@
 
    - The model, backend-independently: the default is a geometry the fit rules accept, the
    alternatives never repeat it and all pass the rules, a column extent below one vector yields
-   nothing, and a descriptive table of what the model says on the shapes the issue argued over (a
-   change detector, not a claim).
+   nothing, the price tie between two tail-bearing tiles goes to the smaller one while the larger
+   stays seeded (gh-ocannl-1180), and a descriptive table of what the model says on the shapes the
+   issue argued over (a change detector, not a claim).
 
    - The emission, on the C backends (every leg is [Verdict.skipped] elsewhere — the register tiling
    is theirs): a requested geometry renders as requested (the emitted header names it and says it
@@ -78,8 +79,9 @@ let () =
   let shapes =
     (* (vector bytes, element bytes, m, n): NEON/AVX2/AVX-512 f32 at the n = 512 the gh-575 sweeps
        measured, the 64-column site the tree test seeds, gh-575's n = 40 step-down, pure-fp16 on
-       32-byte vectors, a two-row site, and a three-row site where the float-priced model broke a
-       tie by rounding (gh-ocannl-947). *)
+       32-byte vectors, a two-row site, a three-row site where the float-priced model broke a tie by
+       rounding (gh-ocannl-947), and the two tail-bearing ties gh-ocannl-1180 timed (AVX2 n = 28,
+       NEON n = 56). *)
     [
       (16, 4, 64, 512);
       (32, 4, 64, 512);
@@ -89,6 +91,8 @@ let () =
       (32, 2, 64, 512);
       (32, 4, 2, 48);
       (16, 4, 3, 53);
+      (32, 4, 64, 28);
+      (16, 4, 64, 56);
     ]
   in
   Stdio.printf "model: vector_bytes elt_bytes m n -> default | alternatives\n";
@@ -114,16 +118,52 @@ let () =
   p_all "every alternative passes the fit rules" shapes ~f:(fun shape ->
       let vector_bytes, elt_bytes, m, n = shape in
       List.for_all (RT.alternatives ~vector_bytes ~elt_bytes ~m ~n) ~f:(fun t -> accepted t shape));
+  (* Pass counts at one width: what the price ranks by, so "ties the default" is "takes as many
+     passes". *)
+  let passes ~n (t : RT.t) = (n + RT.width t - 1) / RT.width t in
   p_all
-    "every alternative is the largest tail-free width, or the register-budget cap with a tail of \
-     at most one vector"
+    "every alternative is the largest tail-free width, the register-budget cap with a tail of at \
+     most one vector, or the largest tile tying a tail-bearing default"
     shapes ~f:(fun (vector_bytes, elt_bytes, m, n) ->
+      let dflt = Option.value_exn (RT.default ~vector_bytes ~elt_bytes ~m ~n) in
       List.for_all (RT.alternatives ~vector_bytes ~elt_bytes ~m ~n) ~f:(fun t ->
           (* The cap: the largest [rn] the budget admits beside [rm] rows, or the column extent. *)
           let cap = min ((RT.budget ~vector_bytes - t.rm) / (t.rm + 1)) (n / t.lanes) in
           let tail_free rn = n % (rn * t.lanes) = 0 in
           (tail_free t.rn && not (List.exists (List.range (t.rn + 1) (cap + 1)) ~f:tail_free))
-          || (t.rn = cap && n % RT.width t <= t.lanes)));
+          || (t.rn = cap && n % RT.width t <= t.lanes)
+          || n % RT.width dflt <> 0
+             && t.lanes = dflt.lanes
+             && passes ~n t = passes ~n dflt
+             && t.rn = min (RT.rn_cap ~vector_bytes) (n / t.lanes)));
+  (* The tie rule (gh-ocannl-1180), as the structure it implies rather than restated picks: on every
+     site a tail-bearing default takes the FEWEST vector columns that reach its pass count (any
+     fewer columns would take another pass), and wherever a larger tile within the model's ceiling
+     ties it -- the pick of the larger-tile rule this replaced -- that larger tile is still seeded.
+     Swept at every row count below four and at four. *)
+  let tie_sites =
+    List.concat_map
+      [ (16, 4); (16, 2); (32, 4); (32, 2); (64, 4); (64, 2) ]
+      ~f:(fun (vb, eb) ->
+        List.concat_map [ 1; 2; 3; 64 ] ~f:(fun m ->
+            List.map (List.range 4 401) ~f:(fun n -> (vb, eb, m, n))))
+  in
+  p_all "a tail-bearing default takes the fewest vector columns its pass count admits" tie_sites
+    ~f:(fun (vector_bytes, elt_bytes, m, n) ->
+      match RT.default ~vector_bytes ~elt_bytes ~m ~n with
+      | None -> true
+      | Some d -> n % RT.width d = 0 || d.rn = 1 || passes ~n { d with rn = d.rn - 1 } > passes ~n d);
+  p_all "the largest tile tying a tail-bearing default is seeded" tie_sites
+    ~f:(fun (vector_bytes, elt_bytes, m, n) ->
+      match RT.default ~vector_bytes ~elt_bytes ~m ~n with
+      | None -> true
+      | Some d ->
+          let top = { d with rn = min (RT.rn_cap ~vector_bytes) (n / d.lanes) } in
+          (* The default holds the fewest passes at its width, so the top tile always ties it. *)
+          n % RT.width d = 0
+          || top.rn = d.rn
+          || passes ~n top = passes ~n d
+             && List.mem (RT.alternatives ~vector_bytes ~elt_bytes ~m ~n) top ~equal:RT.equal);
   (* The ranking's own structure, not a restated pick: every candidate's vector columns cost the
      same [1 + 1/rm] whatever its [rn], so at ONE width the row count scales the columns' term and
      cannot reorder the candidates -- the column choice is the same at every [m]. A 16-byte file
@@ -398,11 +438,14 @@ let () =
         && has (lane 2 ^ " = tmma_c_0_0__[2];")
         && not (has (lane 3)))
       ();
-    (* The narrow legs leave the geometry to the renderer (the lane count follows the COMPUTE
-       precision, f32 for bf16 and — under the default policy — for half too). The partial column's
-       storage bits are staged in a whole vector, three lanes in and three lanes out, and the bridge
-       macro converts it at the full lane count -- for half, bit-cast to a vector of [HALF_T] first,
-       so the macro's per-lane fallback reads [HALF_T]s. *)
+    (* The narrow legs request the f32 leg's geometry at the same lanes: the lane count follows the
+       COMPUTE precision, f32 for bf16 and — under the default policy — for half too, so a width the
+       narrow storage's element size picked would be declined. They used to leave the geometry to
+       the renderer, which stopped meaning a one-vector tail when NEON's 19-column default became
+       the 4x3 tile of a two-vector tail (gh-ocannl-1180). The partial column's storage bits are
+       staged in a whole vector, three lanes in and three lanes out, and the bridge macro converts
+       it at the full lane count -- for half, bit-cast to a vector of [HALF_T] first, so the macro's
+       per-lane fallback reads [HALF_T]s. *)
     let narrow_partial ~bridged ~via has =
       let bits ~qual l =
         Printf.sprintf "((%socannl_u16_alias *)&tmma_d__[(tmma_i__ + 0) * %d + 16 + 0])[%d]" qual nt
@@ -414,10 +457,11 @@ let () =
       && has (Printf.sprintf "%d, tmma_c_0_0__, (const %s *)&%s);" lanes bridged via)
       && not (has (bits ~qual:"const " 3) || has (bits ~qual:"" 3))
     in
-    leg ~tag:"bf16" ~prec:Ir.Ops.bfloat16 ~tile:None
+    let tile16 = Some { RT.rm = 4; rn = 16 / lanes; lanes } in
+    leg ~tag:"bf16" ~prec:Ir.Ops.bfloat16 ~tile:tile16
       ~partial:(narrow_partial ~bridged:"unsigned short" ~via:"ocannl_pv__")
       ();
-    leg ~tag:"half" ~prec:Ir.Ops.half ~tile:None
+    leg ~tag:"half" ~prec:Ir.Ops.half ~tile:tile16
       ~partial:(narrow_partial ~bridged:"HALF_T" ~via:"ocannl_pc__")
       ();
     (* The same half leg with its B operand labeled like the staging typedef the tile declares
@@ -427,7 +471,7 @@ let () =
        parse. *)
     leg
       ~b_label:(Printf.sprintf "ocannl_vec%dhs" lanes)
-      ~tag:"half_ns" ~prec:Ir.Ops.half ~tile:None
+      ~tag:"half_ns" ~prec:Ir.Ops.half ~tile:tile16
       ~partial:(narrow_partial ~bridged:"HALF_T" ~via:"ocannl_pc__")
       ()
   end

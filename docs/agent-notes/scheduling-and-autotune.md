@@ -576,7 +576,8 @@ files.
   consults through the same module: every CPU tensorized leaf gets a `register-tile` level of
   `auto` plus `Register_tile.alternatives` (the LARGEST tail-free `rn >= 2` at the widest fitting
   width — the smaller tail-free widths are dominated on the model's own terms — plus the budget
-  cap when its column tail is at most one vector), only where at least one exists. The default is
+  cap when its column tail is at most one vector, plus the largest tile tying a tail-bearing
+  default), only where at least one exists. The default is
   usually the cap now, so on a non-dividing site the twin is the notch below it: one question per
   leaf (gh-614's register pressure), where the pre-620 rule asked none on a site whose cap peeled
   fat (`tile_mma_declines` 22 -> 32 seeds, `sketch_family_tree`'s AVX2 tree 23 -> 34). The emitted header appends
@@ -594,13 +595,18 @@ files.
   Full passes plus the narrower column tail move `2 * rm * ceil(n/lanes)` C vectors per row
   band, independent of `rn`; charging `2 * rm * rn / k` at full `rn` on the tail pass, or once
   per site, miscounts it. The exclusive AVX2 A/B confirmed a 4x2 serial win at n=28, but 4x3
-  won at fixed n=512 with k=32 as well as k=256. A tail-free tie preference avoids a second
-  tile body; when both candidates have tails, both emit two bodies and equal cost means equal
-  A splats, so the remaining tie keys have no additional issue-slot rationale. Keep them
-  unchanged here; [gh-ocannl-1180](https://github.com/ahrefs/ocannl/issues/1180) owns validating
-  a tail-free-then-smaller-`rn` rule on NEON and AVX2. gh-ocannl-947's NEON n=56 tail-bearing tie was
-  neutral; more targeted coverage is needed. Derivation, paired measurements and reproduction
-  protocol: [gh-ocannl-1099](../research/gh-1099-register-tile-c-traffic.md).
+  won at fixed n=512 with k=32 as well as k=256. Derivation, paired measurements and
+  reproduction protocol: [gh-ocannl-1099](../research/gh-1099-register-tile-c-traffic.md).
+- **A price tie at one width goes tail-free, then to the SMALLER `rn`** (gh-ocannl-1180). Equal
+  price at one width is an equal pass count, and two tail-free tiles never share one, so the `rn`
+  key only ranks two tail-bearing tiles: two bodies each, equal A splats, equal C traffic. Only
+  register pressure (`live_registers`) still differs, and the smallest `rn` reaching the pass
+  count is the most even split of the vector columns. The old "larger `rn` for more A-reuse" key
+  claimed reuse the price shows is not there. The larger tile is not lost: `alternatives` seeds
+  the largest tile tying a tail-bearing default, so the tuner times both sides of every tie. The
+  rule moves picks on AVX2 only at f32 n = 25..31, but on many NEON and AVX-512 sites
+  (`gh1180_tie_ab.sh` in `benchmarks/` times a pair from one build; the A/B table is on
+  lukstafi/ocannl-staging's PR for the issue).
 ## Crowned and shipped artifacts
 - "Crowned" is not "shipped", and neither is reproducible on a small routine. `Train.tune_placements`
   runs two searches and keeps one artifact, so a family can win the arm that is then discarded whole
