@@ -152,6 +152,43 @@ let dependent_parameter limit =
   values ctx y [| 4.; 6.; 8. |] "forward reads the recomputed parameter after reinitialization";
   Context.release ctx
 
+let independent_parameters limit =
+  let p =
+    TDSL.param ~value:2. ("independent_source_" ^ Int.to_string limit) ~output_dims:[ 3 ] ()
+  in
+  let state =
+    NTDSL.param ~value:5. ("independent_state_" ^ Int.to_string limit) ~output_dims:[ 3 ] ()
+  in
+  let derived =
+    TDSL.param ~param_init:(NTDSL.add p state)
+      ("independent_derived_" ^ Int.to_string limit)
+      ~output_dims:[ 3 ] ()
+  in
+  let varying = NTDSL.ndarray [| 1.; 3.; 5. |] ~output_dims:[ 3 ] () in
+  let%op y = derived + varying in
+  let ctx1 = Train.init_params (Context.auto ()) Ir.Indexing.Empty y in
+  let ctx1 = Context.set_values ctx1 p.value [| 11.; 12.; 13. |] in
+  let ctx1 = Context.set_values ctx1 state.value [| 21.; 22.; 23. |] in
+  let ctx2 = Train.init_params (Context.auto ()) Ir.Indexing.Empty y in
+  values ctx1 p [| 11.; 12.; 13. |] "a fresh context preserves another context's parameter edits";
+  values ctx1 state [| 21.; 22.; 23. |]
+    "a fresh context preserves another context's non-differentiable state";
+  values ctx2 p [| 2.; 2.; 2. |] "a fresh context initializes its own nested parameter";
+  values ctx2 state [| 5.; 5.; 5. |] "a fresh context initializes its own nested state";
+  values ctx2 derived [| 7.; 7.; 7. |] "a fresh initializer reads context-owned dependencies";
+  let ctx2 = Context.set_values ctx2 p.value [| 31.; 32.; 33. |] in
+  let ctx2 = Context.set_values ctx2 state.value [| 41.; 42.; 43. |] in
+  values ctx1 p [| 11.; 12.; 13. |] "parameter updates remain independent across contexts";
+  values ctx1 state [| 21.; 22.; 23. |] "state updates remain independent across contexts";
+  let ctx1 = Train.init_params ~reinit_all:true ctx1 Ir.Indexing.Empty y in
+  values ctx1 p [| 2.; 2.; 2. |] "reinitialization restores the selected context's parameter";
+  values ctx2 p [| 31.; 32.; 33. |] "reinitialization preserves another context's parameter";
+  values ctx2 state [| 41.; 42.; 43. |] "reinitialization preserves another context's state";
+  Context.release ctx1;
+  let ctx2 = Train.forward_once ~skip_init:true ctx2 y in
+  values ctx2 y [| 8.; 10.; 12. |] "releasing one context preserves the other context's forward";
+  Context.release ctx2
+
 let () =
   List.iter [ 1; 0 ] ~f:(fun limit ->
       Hashtbl.set Utils.config_file_args ~key:"limit_constant_fill_size" ~data:(Int.to_string limit);
@@ -164,4 +201,5 @@ let () =
       inferred limit;
       parameter_reinit limit;
       dependent_parameter limit;
+      independent_parameters limit;
       List.iter [ 0.; 3. ] ~f:(padded limit))

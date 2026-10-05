@@ -23,6 +23,17 @@ ordinary initialization skips an edited computed parameter: PASS
 reinit_all restores a nested host-backed parameter: PASS
 computed initialization reads the restored dependency: PASS
 forward reads the recomputed parameter after reinitialization: PASS
+a fresh context preserves another context's parameter edits: PASS
+a fresh context preserves another context's non-differentiable state: PASS
+a fresh context initializes its own nested parameter: PASS
+a fresh context initializes its own nested state: PASS
+a fresh initializer reads context-owned dependencies: PASS
+parameter updates remain independent across contexts: PASS
+state updates remain independent across contexts: PASS
+reinitialization restores the selected context's parameter: PASS
+reinitialization preserves another context's parameter: PASS
+reinitialization preserves another context's state: PASS
+releasing one context preserves the other context's forward: PASS
 padded materialized scalar init survives only with the in-kernel limit: true
 convolution commits scalar halo padding: true
 scalar host buffer fills the interior and neutral margins: true
@@ -58,6 +69,17 @@ ordinary initialization skips an edited computed parameter: PASS
 reinit_all restores a nested host-backed parameter: PASS
 computed initialization reads the restored dependency: PASS
 forward reads the recomputed parameter after reinitialization: PASS
+a fresh context preserves another context's parameter edits: PASS
+a fresh context preserves another context's non-differentiable state: PASS
+a fresh context initializes its own nested parameter: PASS
+a fresh context initializes its own nested state: PASS
+a fresh initializer reads context-owned dependencies: PASS
+parameter updates remain independent across contexts: PASS
+state updates remain independent across contexts: PASS
+reinitialization restores the selected context's parameter: PASS
+reinitialization preserves another context's parameter: PASS
+reinitialization preserves another context's state: PASS
+releasing one context preserves the other context's forward: PASS
 padded materialized scalar init survives only with the in-kernel limit: true
 convolution commits scalar halo padding: true
 scalar host buffer fills the interior and neutral margins: true

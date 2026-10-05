@@ -195,6 +195,10 @@ type t = {
           recomputation -- so the only constraint this imposes on placement is: do not resolve the
           node into the [Local]-dependent unobservable class ({!Placements.default_to_most_local}
           resolves [Never_virtual] to [On_device] rather than [Local] for observable nodes). *)
+  mutable context_owned : bool;
+      (** The node can be mutated independently in each context (a model parameter). Even when a
+          routine only reads it, it must use working storage rather than a device-wide constant
+          pool. Set at graph construction and never cleared. *)
   mutable host_constant : bool;
       (** Declared value-constancy: the node's values are fixed at construction and always equal its
           registered host-init data (an ndarray-backed literal). Set by [Tensor.ndarray] (and
@@ -371,6 +375,10 @@ let known_constant tn =
     keep the [Effectively_constant] marking (their creation does not pass through the
     [On_device]-minting ndarray-backed path). *)
 let known_host_constant tn = tn.host_constant || known_constant tn
+
+(** Declares that [tn] needs independently mutable storage in each context. Monotone: set, never
+    cleared. *)
+let set_context_owned tn = tn.context_owned <- true
 
 (** Declares that [tn]'s values are fixed at construction (host-init-backed literal). Monotone: set,
     never cleared. *)
@@ -979,6 +987,7 @@ let create ?namespace delayed_prec ~id ~label ~unpadded_dims ~padding () =
       label;
       memory_mode_intent = None;
       observable = false;
+      context_owned = false;
       host_constant = false;
       alias_of = None;
       slice_of = None;
@@ -1023,6 +1032,7 @@ let create_from_padded ?namespace ~id ~label ~ndarray ~padding () =
       label;
       memory_mode_intent = Some (On_device, Site "49:ndarray-backed");
       observable = false;
+      context_owned = false;
       host_constant = false;
       alias_of = None;
       slice_of = None;
@@ -1106,6 +1116,7 @@ let create_with_reshape ~id ~label ~base_ndarray ~unpadded_dims ~padding ~from_p
       label;
       memory_mode_intent = Some (On_device, Site "49:ndarray-backed");
       observable = false;
+      context_owned = false;
       host_constant = false;
       alias_of = None;
       slice_of = None;
@@ -1134,6 +1145,7 @@ let find_namespaced =
       label = [];
       memory_mode_intent = None;
       observable = false;
+      context_owned = false;
       host_constant = false;
       alias_of = None;
       slice_of = None;

@@ -240,8 +240,10 @@ let partition_layout_groups ~(plc : Tn.Placements.t) ?(skip = fun (_ : Tn.t) -> 
   let working = ref [] and constants = ref [] in
   Hashtbl.iteri store ~f:(fun ~key ~data:node ->
       if Tn.Placements.is_in_context_force plc key (Site "43:layout-group") && not (skip key) then
-        if node.Low_level.read_only || Tn.Placements.known_constant plc key then
-          constants := (key, node) :: !constants
+        if
+          (not key.Tn.context_owned)
+          && (node.Low_level.read_only || Tn.Placements.known_constant plc key)
+        then constants := (key, node) :: !constants
         else working := (key, node) :: !working);
   let canonical l = List.sort !l ~compare:(fun (a, _) (b, _) -> Tn.compare a b) in
   (canonical working, canonical constants)
