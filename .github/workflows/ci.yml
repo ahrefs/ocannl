@@ -620,6 +620,7 @@ jobs:
         allow-prerelease-opam: false
         opam-pin: false
     - name: Install formatting dependencies
+      id: install-formatting-deps
       run: |
         ocamlformat_versions=$(sed -n 's/^version[[:space:]]*=[[:space:]]*//p' .ocamlformat)
         ocamlformat_version=$(printf '%s\n' "$ocamlformat_versions" | sed -n '1p')
@@ -631,13 +632,14 @@ jobs:
     # this job installed the toolchain, so a leg the harness cannot decide is a
     # defect, not a host capability -- a fixture that fails to find the
     # installed dune would otherwise pass as a counted skip behind a green
-    # footer. The promotion step runs even when the formatter controls fail.
+    # footer. The promotion step runs even when the formatter controls fail,
+    # but not when the toolchain it is strict about was never installed.
     - name: Test toolchain harnesses
       env:
         OCANNL_TOOL_HARNESS_STRICT: 1
       run: tools/test-harnesses.sh --toolchain
     - name: Test promotion harnesses
-      if: ${{ !cancelled() }}
+      if: ${{ !cancelled() && steps.install-formatting-deps.outcome == 'success' }}
       env:
         OCANNL_TOOL_HARNESS_STRICT: 1
       run: tools/test-harnesses.sh --promotion
