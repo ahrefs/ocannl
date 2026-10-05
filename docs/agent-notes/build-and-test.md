@@ -3064,6 +3064,57 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   was refused, so no fingerprint could have shown it — only rerunning the 27 red stanzas at
   `-j 1` on the box did, 4 of them staying red. The harness pins the call shape, all three
   verdict channels, and that a red without a signature gets no second run.
+- **A faulted GPU does not fail the tests after it, it hangs them, so `tools/test-run.sh` caps
+  each test and probes the device before a GPU batch** (gh-ocannl-1211). On 2026-10-04 tuf's
+  gfx1102 took a gfxhub/CPC page fault in `bandwidth_calibration` (the test reported
+  `HIP_ERROR_ILLEGAL_ADDRESS`), and every test dune started afterwards spun a core in HIP device
+  init with no output: eight at once, for 32 minutes, until a person cancelled the run, with the
+  run's 3600 s cap still half an hour away. A fresh `bin/device_props` spun the same way, and the
+  box needed a reboot by hand. The revision was the merge that introduced
+  `-amdgpu-waitcnt-forcezero`, under which HIPRTC miscompiled every `__constant__` load on gfx1102
+  4 bytes off (gh-ocannl-1222, removed by staging#1005). The fault is probably that miscompile,
+  but this is not proven: after the removal, `bandwidth_calibration` ran four times alone on tuf
+  (the same 16 rows, golden matched, device queries clean before and after, no kernel line), and
+  it had also passed once with the flag. Two bounds now apply to `run`/`start` (not `repeat`,
+  `tools/sweep.sh` or `tools/machine-verify.sh`, which run their own supervisors). (1) **The
+  per-test cap**: a watcher beside dune times every child of a `dune` process, and the first one
+  past the cap ENDS the run. The supervisor gets the SIGALRM the run's own cap sends, so it is the
+  same reap and the same `TIMEOUT` (142), with the digest naming the test from the run's
+  `test-cap` record and the remedy (`--test-cap 0`, or a larger one); only on a GPU batch does it
+  also point at the kernel journal. Ending the whole run is deliberate: killing only the hung test
+  would let dune start the next one onto the same wedged device. An explicit `--test-cap N` (or
+  `OCANNL_TOOL_PER_TEST_CAP`) applies to any batch; the DEFAULT, 1500 s, applies only to a batch
+  `run` resolves to hold a GPU backend whose targets do not reach the `slow` aliases. 1500 s sits
+  above every runtest/train action in the four boxes' dune traces (the longest 1021 s
+  `fsm_transformer` on minix, 810 s `autotune_smoke` on mac-studio, 757 s `circles_conv` on tuf,
+  all under correctness-slot load, where load stretched tests 5-15x), but no trace holds an `@slow`
+  member: `slow-cifar_conv` runs ~300 s solo plus its dataset download, so at those load ratios it
+  could pass 1500 s legitimately, and CPU batches are not the failure class. So `@slow` and CPU
+  batches keep only the run's cap unless asked; `plan` says which applies and why. Tests are found as children of `dune`, because dune
+  starts each action as its own process-group leader. The run's group kill therefore reaches dune
+  and not the action, but dune's TERM handling kills every action it has running, a
+  TERM-ignoring one included (measured on 3.24). A watcher counting every group in the run would
+  also time the fleet slot's sleep inhibitor, which lives for the whole batch. The watcher reads
+  `ps` (procps or BSD; leg 75 runs wherever a `$0`-renamed process reads back as `dune`, macOS
+  included), and records `test-cap-off` where `ps` cannot list processes (Git Bash). (2) **The
+  device probe**: a batch `run` resolves to hold a GPU backend queries each such backend once,
+  through `bin/device_props --ocannl_backend=<b>` from `test/config`. Build and query both run
+  inside the fleet slot, as the slot's command (`_probe`, which then execs dune): a measurement
+  hold sees neither a compile nor device traffic from a batch it refuses, and the slot's wait
+  stays the only step between `clamp_slot_wait` and the slot, so a busy slot still reports SLOT
+  REFUSED before the cap can report TIMEOUT. There is no real-exe probe on macOS: a freshly
+  linked `device_props` can sit in dlopen for minutes under XProtect (runs over ssh or launchd
+  are not exempt), which would read as a hung device; metal batches keep the per-test cap. A query that does not answer within
+  `OCANNL_TOOL_DEVICE_PROBE_CAP` (60 s; a healthy one takes 0.2-0.3 s) refuses the batch as
+  `DEVICE UNHEALTHY` (exit 69) without starting dune. A query that fails fast (cuda or metal
+  asked on an AMD box, as every unread batch asks) is recorded in `device-probe` and passed over:
+  its tests fail fast too rather than spin. A batch whose backends were never resolved (no width
+  hazard and no fleet slot) is not probed, and gets no default per-test cap. Both bounds are deliberately outside the driver: the
+  recommendation on the issue preferred them to a device-health watchdog inside the batch, which a
+  faulted driver can hang along with everything else. On a 69, or a per-test 142 on a GPU
+  batch, stop GPU work on that box and read `journalctl -k` before retrying. Legs 75-77 of
+  `tools/test-test-run.sh` pin the cap, its controls (a slow dune, the slot's holder), the probe
+  and `plan`'s report.
 
 ### Skip coverage
 
