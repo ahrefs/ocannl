@@ -113,7 +113,7 @@ let allowed =
     };
     {
       golden = Golden "test/operations/provenance_tag_inventory.expected";
-      pattern = {|^  [0-9]+:[a-z0-9-]+\( ([A-Za-z_]+)\)?$|};
+      pattern = {|^  [0-9]+:[a-z0-9-]+\( ([A-Z][A-Za-z0-9_']*)\)?$|};
       reason = "a provenance tag as a source mints it; its digits name the tag";
     };
     {
@@ -397,6 +397,24 @@ let controls () =
   (* The live allow-list as a whole, so a wider entry for the same golden cannot hide behind the one
      this is about. *)
   let refused_by golden text = refused ~entries:allowed (numbers_of ~golden text) in
+  let tag_golden = "test/operations/provenance_tag_inventory.expected" in
+  let tag_line = "  1131:" ^ "fixture-tag" in
+  p_all "provenance tags allow constructor suffixes with digits and apostrophes"
+    [ ""; " (Visit_cap)"; " (Visit_cap2)"; " (Visit_cap')"; " (V2_')" ] ~f:(fun suffix ->
+      let text = tag_line ^ suffix in
+      let numbers = numbers_of ~golden:tag_golden text in
+      (not (List.is_empty numbers)) && List.is_empty (refused_by tag_golden text));
+  p_all "provenance constructor allowances refuse invalid suffixes and trailing totals"
+    [
+      " (visit_cap)";
+      " (_Visit_cap)";
+      " (2Visit_cap)";
+      " (Visit-cap)";
+      " (Visit cap)";
+      " (Visit_cap2) total=170";
+    ] ~f:(fun suffix -> not (List.is_empty (refused_by tag_golden (tag_line ^ suffix))));
+  p "provenance constructor allowances stay in their own golden"
+    (not (List.is_empty (refused_by "x/a.expected" (tag_line ^ " (Visit_cap2)"))));
   let adopted_row = "test/operations/new.ml -- records=19 traversals=12" in
   p_empty "per-source adopted IR counts remain review-visible in their own golden"
     ~over:(numbers_of ~golden:"test/operations/ll_test_ratchet.expected" adopted_row)
