@@ -256,7 +256,6 @@ let raw_entries =
         "[scanner-refusal:e68d9277c8a3a5c061164578baf2f632] the population equality";
         "[scanner-refusal:87659b49df04eee3fc19350b0be6629a] repo-relative scanner paths";
         "[scanner-refusal:490ac5e3405d328c2953c38df4f0974b] arguments the rule's";
-        "[scanner-refusal:1356c3ade8d75f4aeb6332c69e239db3] the resource-lifecycle instrumentation";
         "[scanner-refusal:09e01a62cce1d340393a2244ed33ea10] Test_utils.Generated";
         "[scanner-refusal:22e8c3d320466372ca09214ed5850f4f] reads the configuration";
         "[scanner-refusal:034280d144ee4338406ff5f6a1cf287d] comment that does";
@@ -321,15 +320,22 @@ let raw_entries =
         "[scanner-refusal:055900a8a1fbefd29b7c64a46953700f] external command handed";
         "[scanner-refusal:fac924c455e2114b6e6bdebdc44811fd] same stanza declaring";
         "[scanner-refusal:b4a6c6ad5ae1c0d26b7fe78da5c5aa7f] command handed nothing";
+        "[scanner-refusal:543a9231648ec3ea9aea18b9d4a7a989] plural-unit declaration yields";
+        "[scanner-refusal:879dc483f2a44c38db9d0f5bdacb746c] instrumentation's Dune directory";
+        "[scanner-refusal:adc2daf0a8a1fc0ba72f8f863650f4af] instrumentation ownership invalidates";
+        "[scanner-refusal:e36e9460538a22f74c5e20a589002e2e] dependency path without";
+        "[scanner-refusal:5f90ec9ed44c4e3a43172e41e2ae7503] fabricate instrumentation capability";
         "[scanner-refusal:a6ad129bb27775f8c16abc37c6c39ed6] metal-codegen alias does";
         "[scanner-refusal:d2a4a4c55f9409ff2a808631d0753f27] family stanza passes";
-        "[scanner-refusal:8ebeaee3c8fee72d0c6d5b1df2fa0c34] the resource-lifecycle instrumentation";
+        "[scanner-refusal:d53b323fdb52eefd4e3968dbadf05e65] with instrumentation-capable libraries";
         "[scanner-refusal:da4ac19271accffacfcd9a6bbe210e22] member listed passes";
+        "[scanner-refusal:bb441071afd26790b8593e48298b3afb] local declaration remains";
+        "[scanner-refusal:823899fe97c22285dae0552d086d404b] passes without resolving";
         "[scanner-refusal:3f9f68401bac53be0cbb38ce715e460d] executable whose RUNNER";
         "[scanner-refusal:ed1dfb1acf49ea77d9b2bdd8ad92d312] alias listed passes";
         "[scanner-refusal:ddd1defde5b6df4dab1d802e19cd88ef] generated aliases listed";
         "[scanner-refusal:46c759bca27349aa081cf5efe33bdef0] same plural stanza";
-        "[scanner-refusal:aff85d14fb92bfaa9802e45b964c7292] reads the instrumentation";
+        "[scanner-refusal:60f9c34c0fee7c424caab53c50c2a878] same one-alias listing";
         "[scanner-refusal:38cc9ab62dfcf93c10a811d1a8f37ecb] inline-test library carrying";
         "[scanner-refusal:97233d85a47856acfecb615dd26a3ebc] generated alias passes";
         "[scanner-refusal:e45a490c152af6ca00b7e83c84599d95] recursive build from";
@@ -342,36 +348,16 @@ let raw_entries =
         "[scanner-refusal:7735cb3446daca7f4157aa26d3d583da] names the instrumentation";
         "[scanner-refusal:248545b295fe9393f046d06407875db5] family alias defined";
         "[scanner-refusal:65fecdef5d771aadd55c653ca5f36ccd] group whose actions";
-        "[scanner-refusal:8043b9ea16535c8062dcc52282cdb90a] through another qualifier";
-        "[scanner-refusal:1cb2feb54940b69b22887119d96e5203] Alloc_census.snapshot";
-        "[scanner-refusal:3c9662bb21fae53a6e850ec0b1d533fa] I.Alloc_census.snapshot";
-        "[scanner-refusal:aa4e4d279169f4e2990023a88a8a29fc] Alloc_census";
-        "[scanner-refusal:de5cf6819a64d46d5a27eb8c300af31b] Ir.Alloc_census";
         "[scanner-refusal:84e456282a1ff74968abe67ae2fa4694] executable's public name";
-        "[scanner-refusal:1e238caa905efec1f7ae0cf764033e25] Vendor.Ir";
-        "[scanner-refusal:00e63d0fbcdd91be8bea4b0244c7860e] Vendor.Ir.Alloc_census";
-        "[scanner-refusal:2a67fb33bc312d6cfdc1ce0f15d513bd] Foo.Alloc_census";
-        "[scanner-refusal:f84656abac178f5d2b2d79677353a343] Vendor.I.Alloc_census";
-        "[scanner-refusal:f63c79247666a73ea1dc618899111b77] functor parameter named";
-        "[scanner-refusal:5e4f4234263c64ddf6bc2236f1b4032c] I.Alloc_census";
-        "[scanner-refusal:c4b1b7a8d9409c62e651fec93e8bb1a3] structure defines something";
-        "[scanner-refusal:2d6a378a5a45d9bb99e928532c0226b7] somebody else re-exports";
-        "[scanner-refusal:b4b3077aecacdd13f81ef68627f7e8ff] functor's parameter named";
-        "[scanner-refusal:e34dc9c194473eab7a73109597d033c0] includes the qualifier";
-        "[scanner-refusal:081886dc55c593d16ce4e598ecc604c1] Ir.Alloc_census.t";
-        "[scanner-refusal:5940ea2811e203c19adf2bb49003d448] definition supersedes it";
-        "[scanner-refusal:15b55a16ec2a2d4b14898f888710526f] Alloc_census";
-        "[scanner-refusal:73cf957dbac466cdcb1ed757fcff1aa1] qualifier's name shadows";
-        "[scanner-refusal:b2ffc9450c3e952a03abd091b5abea61] later reference alive";
-        "[scanner-refusal:bb4952563f8b6d5b4e642fe1130df293] alias declared before";
-        "[scanner-refusal:6798c11e122a65375ac4a8b22ddfd20b] includes the qualifier";
-        "[scanner-refusal:8f7f708a45a89228e1e478f3ddb158ae] I.Alloc_census.t";
         "[scanner-refusal:be7f67353f6c0f8782c3b867b1023af5] runtest-<name> dune generates";
-        "[scanner-refusal:dc2fb82ae5ada84e736e180065bc2881] reads the instrumentation";
+        "[scanner-refusal:4a8965b97909e604cda0ce07fd679917] a lifecycle member";
         "[scanner-refusal:27dfb3ff299833db9842614f2e2b5384] local executable's name";
         "[scanner-refusal:0880ce931733097b9e44c86e1f0b7065] ANOTHER directory's binary";
         "[scanner-refusal:93ed6fc086891252db10d64e8dbfeca0] alias dune generates";
         "[scanner-refusal:84a1eda5072c0c3e43ecad5c2af6e561] stanza neither derivation";
+        "[scanner-refusal:5ae6706f247abd51242630658a99a0c1] declaring generated-artifact storage";
+        "[scanner-refusal:c5caa846079a8640d0b93242bba8fd1b] tracing dependency without";
+        "[scanner-refusal:9d94b0b39fc9ad513abc3c717482ae60] whose declaration disappears";
         "[scanner-refusal:e38848b2fb4d8a90933cfe88e13cc04e] guard neither declares";
         "[scanner-refusal:2eb428f8dfd55908e0cd2236bc4505b4] declaration added passes";
         "[scanner-refusal:605b6d65216f3c4fba7184a09d392f05] pinning the variable";
@@ -619,9 +605,6 @@ let raw_direct_evidence =
     ( "env_var_deps.ml:490ac5e3405d328c2953c38df4f0974b",
       "a rule reusing the alias dune generates for a `(test)` in the same `(subdir …)` group is \
        reported there too: true" );
-    ( "env_var_deps.ml:1356c3ade8d75f4aeb6332c69e239db3",
-      "a source that names the instrumentation in a comment, a string and a longer identifier \
-       reads none of it, and is no member: true" );
     ("env_var_deps.ml:09e01a62cce1d340393a2244ed33ea10", "derivation calls a member.");
     ( "env_var_deps.ml:034280d144ee4338406ff5f6a1cf287d",
       "a source that names the instrumentation in a comment, a string and a longer identifier \
@@ -659,8 +642,7 @@ let raw_direct_evidence =
       "an executable run by a `(test)` stanza's custom action is aggregated through the \
        `runtest-<name>` dune generates for that test: true" );
     ( "env_var_deps.ml:747372ab4b28cca8978c2b6bd8983005",
-      "nor does writing `Vendor.Ir.Alloc_census` out in full: a path names the module it starts \
-       at: true" );
+      "declaring generated-artifact storage without an initializer is refused: true" );
     ( "env_var_deps.ml:364d32b22a5cb7a70b569db0d8864170",
       "a runner that runs another directory's executable of the same name does not aggregate this \
        directory's member: true" );
@@ -704,8 +686,7 @@ let raw_direct_evidence =
       "a family alias defined inside a `(subdir …)` group needs that group's own ambient gate, and \
        is reported without one: true" );
     ( "env_var_deps.ml:2df546d04b63387a24409b3c4c6a9611",
-      "two stanzas that omit `(modules …)` get a main each, so only the one whose main reads the \
-       instrumentation is a member: true" );
+      "a tracing dependency without a module reading it is refused: true" );
     ( "env_var_deps.ml:e55f77a62871fb685d23199e95c8f173",
       "an executable run by a `(test)` stanza's custom action is aggregated through the \
        `runtest-<name>` dune generates for that test: true" );
@@ -732,8 +713,7 @@ let raw_direct_evidence =
       "a family alias defined inside a `(subdir …)` group needs that group's own ambient gate, and \
        is reported without one: true" );
     ( "env_var_deps.ml:0b33370125e32eaa4bb0f50c6cc3bc1a",
-      "`open Vendor.Ir` and `module Ir = Vendor.Ir` bind Vendor's module, not the qualifier, so \
-       neither makes their file a member: true" );
+      "an exemption whose declaration disappears is refused: true" );
     ( "env_var_deps.ml:638620a0745d0a136810c5b0256e0ec0",
       "a family alias defined inside a `(subdir …)` group needs that group's own ambient gate, and \
        is reported without one: true" );

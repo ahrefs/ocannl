@@ -57,6 +57,7 @@
   scan_argv
   scan_floors
   dune_stanza_scan
+  lifecycle_scan
   slot_kind
   verdict_scan
   verdict_provenance

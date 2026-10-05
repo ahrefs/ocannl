@@ -13,6 +13,7 @@ module Config_key_scan = Config_key_scan
 (** Scanning OCaml sources for the config keys they read, shared by the configuration-consistency
     tests. *)
 
+module Lifecycle_scan = Lifecycle_scan
 module Dune_stanza_scan = Dune_stanza_scan
 
 (* Which backends a dune argv can reach a stanza naming (gh-ocannl-1004, gh-ocannl-1066): the

@@ -1872,17 +1872,31 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   @foo` builds the alias in the current directory and every directory beneath it. Both run in
   seconds against warm executables, which is the point — the backend-wide directory run that was
   previously the only way to reach these legs is neither.
-  - Membership is DERIVED, not written down twice: `env_var_deps` calls a stanza a Metal member when
-    its `; ocannl-backend:` marker names `metal`, and a lifecycle member when its modules name the
-    instrumentation, and fails on a member the family stanza omits — naming the `runtest-<name>` to
-    list and the `@<family>` that would otherwise have skipped it. The derivation is a FLOOR, so a
-    family may list more: `arrayjit/test`'s `test_slab_free_on_grow` is a lifecycle member by intent
-    and names no instrumentation module, since it drives `Backend_impl.Make_slab` against a mock raw
-    backend of its own.
+  - Metal membership comes from the stanza's `; ocannl-backend:` marker naming `metal`.
+    Lifecycle membership uses an explicit structural contract (gh-ocannl-798): put
+    `; ocannl-lifecycle: <name>[,<name>...] -- <reason>` inside the `(test)`, `(tests)`,
+    `(executable)`, `(executables)` or inline-test `(library)` stanza. Each name must be one that
+    stanza builds, with no empty or repeated entries, and the reason must have at least two words.
+    A plural stanza can declare one unit without claiming its neighbours. The library dependencies
+    must reach the actual instrumentation owner: `Lifecycle_scan` derives its names from the
+    library owning both instrumentation modules in `arrayjit/lib/dune`, then follows local Dune
+    library dependencies. A missing owner, inert library path, ambiguous name, or unsupported
+    dependency form with no established owner path is a clear error. Marked stanzas require literal
+    library lists; optional forms beside a concrete transitive owner path do not erase that proof.
+    Marker strings, comments outside a stanza, rule markers and duplicate declarations are errors.
+    The executable's runner supplies its aliases, so a declaration on an executable with no reached
+    runner fails the same family-completeness check. Membership is declared intent and link
+    capability; it does not prove that a probe exercises instrumentation. Review owns that assertion.
+    The broad `arrayjit.ir` library also serves ordinary tests, so linking it alone declares no
+    lifecycle intent. OCaml opens, aliases, functors and shadowing no longer decide this family.
+    `Config_key_scan.module_references_in_source` remains a separate consumer for the schedule
+    pipeline's configuration-key derivation (gh-ocannl-1149), outside this membership contract.
+    The derived set remains a floor: a family may also include probes such as
+    `arrayjit/test`'s `test_slab_free_on_grow`, which drives a mock raw backend.
   - Writing a new family means giving it the same treatment. The derivation has to be a property the
     member stanza declares for an INDEPENDENT reason (a backend marker, a module it uses, a glob it
-    writes) — a marker comment invented to say "I am in family F" is the second copy of the list
-    again, and a check reading it can only confirm that the copy still says what it says. A family
+    writes). Where no distinct library separates the capability, an explicit declaration may
+    replace source resolution, with structural ownership and link-capability validation as above. A family
     alias is a build entry point, so it depends on `(alias runtest-env_spelling_gate)` first, which
     is why `arrayjit/test/dune` carries that gate rule and an `(alias (name runtest) …)` stanza
     aggregating it back.
