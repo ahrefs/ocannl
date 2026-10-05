@@ -1,20 +1,23 @@
 gpt2 qkv projection has one kernel including initialization: true
 qkv kernel retains GPU parallelism: true
 qkv init companion preserves tiled sketch eligibility: true
-qkv tiled sketches construct and validate: true
+qkv init companion preserves tensorized sketch eligibility: true
+qkv tiled and tensorized sketches construct and validate: true
 a tiled qkv sketch forwards zero into the private accumulator: true
 qkv reference differs from zero and the entry sentinel: true
 private qkv accumulator opens from zero without output reads: true
 private qkv accumulator drops the covering init store: true
 private qkv matches the materialized run with discriminating operands: true
 staged tiled qkv with zero forwarded matches the materialized run: true
+every GPU sketch of the folded qkv matches the materialized run: true
+a tensorized folded qkv sketch matches the materialized run: true
 fission qkv matches the materialized run with discriminating operands: true
 fission qkv resets the accumulator on every call: true
 the unexpanded segmentation separates every projection zero: true
 folding moves each zero into its own accumulation and changes nothing else: true
 no kernel accumulates both sibling projections: true
 both projections keep a detectable matmul site of their own: true
-every sibling projection keeps tiled sketches that construct and validate: true
+every sibling projection keeps tiled and tensorized sketches that construct and validate: true
 sibling references differ from zero and the entry sentinel: true
 folded sibling projections match the materialized run: true
 an enclosing repeated-cell loop retains initialization and opening reads: true

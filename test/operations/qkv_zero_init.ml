@@ -1,6 +1,10 @@
-(* gh-ocannl-1175: expand covering reduction zeros before fission so the existing aligned companion
-   rules can keep them in the accumulation kernel. Forward that zero directly into a private
-   accumulator with the serial localizer's proof, rather than loading the output. *)
+(* gh-ocannl-1175: GPU fission folds a reduction's covering zero, expanded per cell, into the
+   reduction's own kernel, and changes the segmentation in nothing else. The sketches keep the
+   folded projection tiled and tensorized; Privatize forwards the zero directly into its private
+   accumulator with the serial localizer's proof, rather than loading the output. A tensorized
+   accumulator still loads the output the folded zero just wrote, lane-partitioned: every GPU
+   renderer opens that load with a workgroup barrier, and the executed GPU leg below runs every
+   seed, tensorized ones included. *)
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules
@@ -43,6 +47,25 @@ let fission ?zero_sched opt =
   Sched.fission_scheduled ~keep_mapping:(Sched.default_gpu ~limits)
     ~preset:(Sched.default_gpu ~limits) ~zero_sched ~static_indices:[] opt
 
+(* A synthetic matrix-unit capability (as [launch_predicate_parity]'s), so the tensorized seeds are
+   proposed and validated whatever the host backend. *)
+let mma_limits =
+  let module BI = Ir.Backend_intf in
+  {
+    BI.no_hardware_limits with
+    mma =
+      Some
+        {
+          BI.minimal_mma_capability with
+          mma_tile = (8, 8, 8);
+          mma_format_tiles = [ ((BI.Mma_f32, BI.Mma_f32, BI.Mma_f32), (8, 8, 8)) ];
+        };
+  }
+
+let gpu_seeds ~limits pre =
+  Autotune.sketch_seed_params ~is_gpu:true ~is_cpu:false ~limits pre
+  |> List.filter ~f:(fun q -> q.Autotune.sk_gpu)
+
 (* Schedule application registers scratch nodes and placements. Each prototype owns a copy, so
    another prototype's scratch cannot leak into its interface or declarations. *)
 let apply schedule opt =
@@ -61,12 +84,11 @@ let () =
   p_all "qkv kernel retains GPU parallelism" parts ~f:(fun (_, _, _, o) ->
       not (List.is_empty (LL.hardware_axes o.LL.llc)));
   let _, pre, _, _ = List.hd_exn parts in
-  let seeds =
-    Autotune.sketch_seed_params ~is_gpu:true ~is_cpu:false
-      ~limits:Ir.Backend_intf.no_hardware_limits pre
-  in
+  let seeds = gpu_seeds ~limits:mma_limits pre in
   p "qkv init companion preserves tiled sketch eligibility" (not (List.is_empty seeds));
-  p_all "qkv tiled sketches construct and validate" seeds ~f:(fun seed ->
+  p_exists "qkv init companion preserves tensorized sketch eligibility" seeds ~f:(fun q ->
+      q.Autotune.sk_mma);
+  p_all "qkv tiled and tensorized sketches construct and validate" seeds ~f:(fun seed ->
       match apply (Autotune.sketch_schedule ~accum_prec:Fn.id ~p:seed pre) pre with
       | o -> (
           match LL.validate_parallel o.LL.optimize_ctx.placements o.LL.llc with
@@ -121,6 +143,36 @@ let () =
     p_all2 staged_label got want ~f:Float.equal
   end
   else Verdict.skipped ~backend:backend_name staged_label;
+  (* Every sketch the host GPU would seed for the folded segment, executed: the tensorized ones load
+     their accumulator fragment from cells the folded zero nest wrote earlier in the same kernel. *)
+  let every_label = "every GPU sketch of the folded qkv matches the materialized run" in
+  let tensor_label = "a tensorized folded qkv sketch matches the materialized run" in
+  let real =
+    if Sched.backend_is_gpu backend_name then
+      gpu_seeds ~limits:(Context.hardware_limits (Context.auto ())) pre
+    else []
+  in
+  let results =
+    List.mapi real ~f:(fun i q ->
+        let o = apply (Autotune.sketch_schedule ~accum_prec:Fn.id ~p:q pre) pre in
+        let got =
+          List.hd_exn
+            (Ll_test.execute
+               ~name:("zi_seed_" ^ Int.to_string i)
+               o ~seed ~read:[ out.Tensor.value ])
+        in
+        let ok = Array.equal Float.equal got want in
+        if not ok then
+          Stdio.eprintf "folded qkv seed %d (mma=%b) differs from the materialized run\n" i
+            q.Autotune.sk_mma;
+        (q, ok))
+  in
+  if List.is_empty results then Verdict.skipped ~backend:backend_name every_label
+  else p_all every_label results ~f:snd;
+  (* The gate reads the seeding (a hardware-capability fact), never the executed values. *)
+  if List.exists real ~f:(fun q -> q.Autotune.sk_mma) then
+    p_exists tensor_label results ~f:(fun (q, ok) -> q.Autotune.sk_mma && ok)
+  else Verdict.skipped ~backend:backend_name tensor_label;
   let ctx, routine =
     Context.compile ~name:"zi_default" ~prelowered:opt
       ~lowered_transform:(fun o -> List.map (fission o) ~f:(fun (_, _, _, scheduled) -> scheduled))
@@ -192,13 +244,10 @@ let () =
   in
   p "both projections keep a detectable matmul site of their own"
     (List.length projection_segments = 2);
-  p_all "every sibling projection keeps tiled sketches that construct and validate"
+  p_all "every sibling projection keeps tiled and tensorized sketches that construct and validate"
     projection_segments ~f:(fun pre ->
-      let seeds =
-        Autotune.sketch_seed_params ~is_gpu:true ~is_cpu:false
-          ~limits:Ir.Backend_intf.no_hardware_limits pre
-      in
-      (not (List.is_empty seeds))
+      let seeds = gpu_seeds ~limits:mma_limits pre in
+      List.exists seeds ~f:(fun q -> q.Autotune.sk_mma)
       && List.for_all seeds ~f:(fun seed ->
           match apply (Autotune.sketch_schedule ~accum_prec:Fn.id ~p:seed pre) pre with
           | o -> (

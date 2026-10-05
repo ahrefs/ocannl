@@ -1192,11 +1192,15 @@ let rec nest_loop_syms acc (llc : LL.t) =
    full arity (a reduction over the site's minor axis, e.g. the lm_head's max-logits row) still
    trims the component's common prefix below [site_syms] and correctly declines.
 
-   Residual, shared with the zeroing geometry this reuses: a tensorized nest's workgroup slot is the
-   [Tensorize] lane, whose per-lane element ownership is architecture-opaque, so a per-lane
-   companion reads cells other lanes of the same simdgroup produced. The threadgroup is exactly one
-   simd width here (a single [Workgroup] slot of extent [sk_simd]), which is what makes that safe in
-   practice; a cross-nest simdgroup barrier would be the formal fix. *)
+   Ordering, shared with the zeroing geometry this reuses: a tensorized nest's workgroup slot is the
+   [Tensorize] lane, whose per-lane element ownership is architecture-opaque, so the accumulator
+   fragment loads cells other lanes wrote in a companion (the folded zero of gh-ocannl-1175), and a
+   later companion reads cells the fragment store wrote. The GPU renderers order both: every
+   accumulator load of [d] from memory (the per-call intrinsic, the resident-fragment scope opening,
+   the lane-0 fallback) opens with a workgroup barrier, and every store-back closes with one --
+   [threadgroup_barrier(mem_threadgroup | mem_device)] on Metal, [__syncthreads()] on CUDA and HIP.
+   The barrier spans the whole workgroup, so the ordering holds for any lane width the renderer
+   emits; [qkv_zero_init] executes every seed of a folded projection against a materialized run. *)
 let companion_geometry ~(site_syms : (Idx.symbol * int) list) ~(skip : Idx.symbol list)
     ~(expanded_zeros : Ir.Tnode.t list) ~(annotate : (Idx.symbol * int) list -> Sched.schedule)
     (opt : LL.optimized) : (Sched.schedule, string) Result.t =

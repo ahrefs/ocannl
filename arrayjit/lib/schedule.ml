@@ -6784,10 +6784,12 @@ type funit = {
   f_chains : Low_level.t list list;
       (** The statement's chains analyzed standalone ([[]] for non-[`Normal] units): the
           no-parallelism-loss baseline for aligned segment merging (see {!aligned_merge}). *)
-  f_fold : funit option;
-      (** For a whole-node [`Zeros] unit initializing the reduction that follows it: the same
+  f_fold : (unit -> funit) option;
+      (** For a whole-node [`Zeros] unit initializing the reduction that follows it: builds the same
           position with the zero expanded ({!optop.Expand_zero}) into a per-cell nest, which
-          {!group_units} may fold into the reduction's segment. *)
+          {!group_units} may fold into the reduction's segment. A thunk because the expansion mints
+          loop symbols: the fold probes it under {!Indexing.discarding_symbols} and builds it for
+          real only when it commits. *)
 }
 
 (* Units: each real statement with the comments preceding it. Trailing comments attach to the last
@@ -6833,7 +6835,8 @@ let collect_units ?max_chain ?(fold = fun _ _ -> None) plc (opt : Low_level.opti
         let f_fold =
           Option.map
             (fold zero (stmt_of v))
-            ~f:(fun expanded ->
+            ~f:(fun expand () ->
+              let expanded = expand () in
               {
                 (mk u.f_index [] expanded) with
                 f_stmts =
@@ -7132,11 +7135,13 @@ let group_units ?max_chain ?(arity_cuts = false) ?mapping (opt : Low_level.optim
     (units : funit list) : segment list =
   let plc = opt.Low_level.optimize_ctx.placements in
   let close cur acc = match cur with None -> acc | Some seg -> seg :: acc in
-  (* One standalone probe per unit, taken only when a merge is judged. *)
+  (* One standalone probe per unit, taken only when a merge is judged. An expanded zero shares its
+     [f_index] with its whole-node [`Zeros] original, so the key carries the kind. *)
   let standalone =
     let memo = Hashtbl.create (module Int) in
     fun mapping (u : funit) ->
-      Hashtbl.find_or_add memo u.f_index ~default:(fun () ->
+      let key = (2 * u.f_index) + match u.f_kind with `Zeros -> 1 | `Normal | `Solo -> 0 in
+      Hashtbl.find_or_add memo key ~default:(fun () ->
           let llc = Low_level.unflat_lines u.f_stmts in
           match
             dry_run (fun () -> statement_mappings llc (mapping (segment_optimized opt llc)))
@@ -7171,26 +7176,31 @@ let group_units ?max_chain ?(arity_cuts = false) ?mapping (opt : Low_level.optim
      appears. Folding while grouping instead let the expanded zero join the preceding segment and
      bridge sibling reductions its whole-node form had kept apart: the q and k projections of a GPT2
      layer, merged into one kernel no matmul sketch reaches, doubled the tuned CUDA step
-     (staging#934, reverted). The probe memo is keyed by [f_index], which the expanded unit shares
-     with its [`Zeros] original; the original is never probed, since [`Zeros] units only group with
-     each other. *)
+     (staging#934, reverted). The decision is a probe that leaves no symbol trace; only a committed
+     fold builds the expansion for real (the decision does not depend on symbol names). *)
+  let readmits z seg =
+    match z.f_kind with
+    | `Normal ->
+        Option.is_some
+          (List.fold_until seg.g_units ~init:(seg_of_unit z)
+             ~f:(fun acc u ->
+               match u.f_sum with
+               | Some s when mergeable acc s u ->
+                   Continue (merge_segs ~kind:`Normal acc (seg_of_unit u))
+               | _ -> Stop None)
+             ~finish:Option.some)
+    | `Zeros | `Solo -> false
+  in
   let rec fold_zeros = function
-    | ({ g_kind = `Zeros; g_units = [ { f_fold = Some ({ f_kind = `Normal; _ } as z); _ } ]; _ } as
-       zeros)
+    | ({ g_kind = `Zeros; g_units = [ { f_fold = Some expand; _ } ]; _ } as zeros)
       :: ({ g_kind = `Normal; _ } as seg)
-      :: rest -> (
-        let folded =
-          List.fold_until seg.g_units ~init:(seg_of_unit z)
-            ~f:(fun acc u ->
-              match u.f_sum with
-              | Some s when mergeable acc s u ->
-                  Continue (merge_segs ~kind:`Normal acc (seg_of_unit u))
-              | _ -> Stop None)
-            ~finish:Option.some
-        in
-        match folded with
-        | Some seg -> seg :: fold_zeros rest
-        | None -> zeros :: fold_zeros (seg :: rest))
+      :: rest ->
+        if dry_run (fun () -> readmits (expand ()) seg) then
+          List.fold seg.g_units
+            ~init:(seg_of_unit (expand ()))
+            ~f:(fun acc u -> merge_segs ~kind:`Normal acc (seg_of_unit u))
+          :: fold_zeros rest
+        else zeros :: fold_zeros (seg :: rest)
     | seg :: rest -> seg :: fold_zeros rest
     | [] -> []
   in
@@ -7477,13 +7487,18 @@ let fission_keep_mapping ~is_gpu ~limits =
    reuses Expand_zero itself, withholding the hardware geometry: the folded segment's own schedule
    maps the per-cell nest together with the reduction, as the sketch families' zero companions. *)
 let reduction_zero_fold ~zero_sched (opt : Low_level.optimized) (zero : Low_level.t)
-    (next : Low_level.t) : Low_level.t option =
+    (next : Low_level.t) : (unit -> Low_level.t) option =
   match zero with
   | Low_level.Zero_out tn when Option.is_some (Low_level.zero_seed_candidate tn next) ->
-      List.find_map (zero_sched [ tn ]) ~f:(function
-        | Expand_zero { tn = target; _ } as op when Tn.equal tn target ->
-            Some (apply_opt_op { opt with llc = zero } op).Low_level.llc
-        | _ -> None)
+      let expand () =
+        List.find_map (zero_sched [ tn ]) ~f:(function
+          | Expand_zero { tn = target; _ } as op when Tn.equal tn target ->
+              Some (apply_opt_op { opt with llc = zero } op).Low_level.llc
+          | _ -> None)
+      in
+      (* Eligibility asks the policy without keeping the symbols its expansion mints. *)
+      if Option.is_some (dry_run expand) then Some (fun () -> Option.value_exn (expand ()))
+      else None
   | _ -> None
 
 let fission_scheduled ?(promote_locals = false) ?(arity_cuts = false) ?keep_mapping

@@ -28,9 +28,9 @@
    product cap is the one genuinely tight per-dimension cap, and no Apple part reproduces it). The
    lowering is real. The matmul site is captured directly; the conv sites are derived from the
    pre-schedule normal segment of [Schedule.fission_scheduled], including the covering per-cell zero
-   companion exposed before GPU fission. Only [Schedule.apply] and the seeding API consume those
-   sites, so the claims remain backend-independent while the CUDA run exercises the real GPU
-   lowering path. *)
+   companion GPU fission folds into it (claimed below, so a declined fold cannot pass vacuously).
+   Only [Schedule.apply] and the seeding API consume those sites, so the claims remain
+   backend-independent while the CUDA run exercises the real GPU lowering path. *)
 
 open Base
 open Ocannl
@@ -398,6 +398,12 @@ let () =
         Stdio.eprintf "conv construction FAILED: %s\n" (Exn.to_string exn);
         false
   in
+  let carries_folded_zero (pre : LL.optimized) site_out =
+    List.exists (LL.flat_lines [ pre.LL.llc ]) ~f:(fun stmt ->
+        Option.exists (LL.zero_initializer_target stmt) ~f:(Ir.Tnode.equal site_out))
+  in
+  p "conv coverage: the conv segment carries its folded per-cell zero"
+    (carries_folded_zero conv_opt conv_site.Autotune.c_d);
   p_all "conv coverage: every GPU seed maps the covering zero companion" conv_gpu
     ~f:(valid_conv conv_opt);
   let biased_conv = make_conv2 "lpp_cb" in
@@ -414,6 +420,8 @@ let () =
     Autotune.sketch_seed_params ~is_gpu:true ~is_cpu:false ~limits:mma_limits biased_opt
     |> List.filter ~f:(fun q -> q.Autotune.sk_gpu && q.Autotune.sk_conv)
   in
+  p "conv+bias coverage: the conv+bias segment carries the conv's folded per-cell zero"
+    (carries_folded_zero biased_opt biased_conv.Tensor.value);
   p_all "conv+bias coverage: GPU seeds remain eligible and validate with the zero companion"
     biased_gpu ~f:(valid_conv biased_opt);
   let parity_label =
