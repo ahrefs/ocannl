@@ -103,7 +103,6 @@ let exempt_zero_reference_exports =
     "Ndarray.create_bigarray_of_prec";
     "Ndarray.decoded_count";
     "Ndarray.default_kind";
-    "Ndarray.fill_from_float";
     "Ndarray.float_to_uint32";
     "Ndarray.float_to_uint64";
     "Ndarray.fold_bigarray";
