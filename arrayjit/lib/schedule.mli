@@ -876,14 +876,16 @@ val fission_scheduled :
     does not want to pay unconditionally, so this is a candidate-generation mode (the autotuner
     times it), never the default.
 
-    [keep_mapping] (gh-ocannl-1126): the schedule each candidate kernel would actually receive
-    ({!fission_keep_mapping}). A merge the rules above admit -- an aligned dependent merge, and a
-    conflict-free one, which they admit unconditionally -- is still refused when some statement of
-    the merged kernel gets fewer [Grid] groups or fewer active threads of its OWN loops under
-    [keep_mapping] than it gets in a kernel of its own: the kernel boundary is kept rather than a
-    nest's mapping lost. Only the refused merges add cuts, so a merge that keeps every mapping (an
-    elementwise tail over the same chain) still saves its launch. Ignored under [arity_cuts]. [None]
-    (the default): the legality rules alone decide.
+    [keep_mapping] (gh-ocannl-1126): the default GPU schedule, as {!fission_keep_mapping} probes it
+    -- the schedule each candidate kernel would actually receive, except that where lanes are not
+    [Lanes_cut] the probe leaves out the lane geometry, so no boundary is kept for lanes. A merge
+    the rules above admit -- an aligned dependent merge, and a conflict-free one, which they admit
+    unconditionally -- is still refused when some statement of the merged kernel gets fewer [Grid]
+    groups or fewer active threads of its OWN loops under [keep_mapping] than it gets in a kernel of
+    its own: the kernel boundary is kept rather than a nest's mapping lost. Only the refused merges
+    add cuts, so a merge that keeps every mapping (an elementwise tail over the same chain) still
+    saves its launch. Ignored under [arity_cuts]. [None] (the default): the legality rules alone
+    decide.
 
     [promote_locals] (default [false]): promote statement-crossing [Local] scratch to [On_device]
     before segmentation. A nest whose only writes land in [Local] scratch gets no parallel chain

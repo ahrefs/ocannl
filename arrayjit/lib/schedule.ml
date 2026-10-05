@@ -6287,10 +6287,10 @@ let lane_geometry ~block_size ~min_parallel ~(limits : Backend_intf.hardware_lim
     ~(preamble_reduction : lane_preamble_reduction Lazy.t) (opt : Low_level.optimized) :
     schedule option =
   let open Low_level in
-  (* Both treatments are asked for only where they can matter -- the gate where some statement has a
-     lane path at all, the preamble treatment where that path holds a preamble reduction (only the
-     fused backward mints one) -- so their configuration is read by exactly the programs it can
-     affect (gh-ocannl-1124). *)
+  (* Here both treatments are asked for only where they can matter -- the gate where some statement
+     has a lane path at all, the preamble treatment where that path holds a preamble reduction (only
+     the fused backward mints one, gh-ocannl-1124). [gpu_serial_lanes] is also read by
+     {!fission_keep_mapping} on the first merge probe of every fissioned GPU routine. *)
   let lane_path_beyond shorter =
     List.exists (flat_lines [ opt.llc ]) ~f:(fun stmt ->
         List.length (path_loops ~lanes:true ~preamble_reductions:true stmt)
@@ -6644,9 +6644,10 @@ let default_cpu ?min_parallel (opt : Low_level.optimized) : schedule =
     parallelism (see {!aligned_merge}): elementwise chains over one intermediate stay a single
     kernel, while parallelism switches (a batch-parallel producer feeding a reduce-over-batch
     consumer) and alignment-trimming merges still cut. On GPU backends every merge -- dependent or
-    conflict-free -- is also judged against the schedule its statements would actually receive
-    ({!keeps_mapping}, gh-ocannl-1126): one that costs a statement its own mapping keeps the
-    boundary.
+    conflict-free -- is also judged against the default GPU schedule ({!keeps_mapping},
+    gh-ocannl-1126): one that costs a statement its own mapping keeps the boundary. The probe is the
+    schedule the kernel will receive under [gpu_serial_lanes = cut]; under [admitted] or [off] it
+    leaves out the lane geometry, so no boundary is kept for lanes (gh-ocannl-1167).
 
     Segmentation is conservative and total (no [Bail]): a statement opaque to the analysis
     ([Staged_compilation], barriers, pre-annotated loops) or one the annotator can never cover (bare
@@ -7071,17 +7072,19 @@ let gpu_fission_keep_mapping =
   lazy (Utils.get_global_flag ~default:true ~arg_name:"gpu_fission_keep_mapping")
 
 (* The schedule-aware half of the merge decision (gh-ocannl-1126): [mapping] is the per-segment
-   schedule the kernel will actually receive -- the default GPU schedule, lane plans and lane
-   geometry included -- and a merge the legality rules admit is still refused when some statement of
-   the merged kernel gets less of its own mapping than it gets alone: fewer groups, or fewer active
-   threads. Both kinds of merge are judged: a dependent one whose alignment trims a statement's
-   chain to the common prefix (the composed [v.grad] merged with [w_v.grad], which reduces over the
-   positions [v.grad]'s blocks own), and an independent one whose kernel no longer admits a
-   statement's geometry (the fused dV lane nest merged with dK, which is no lane nest; the lm_head
-   logits beside the row max that trims them). A segment's statements were each admitted under this
-   test, so comparing every statement with its standalone mapping is the same as comparing with the
-   segment before the extension. Per statement, never the kernel's largest thread count: one
-   well-mapped nest does not pay for another's lost one.
+   default GPU schedule ({!fission_keep_mapping}): the schedule the kernel will actually receive,
+   lane plans and lane geometry included, under [gpu_serial_lanes = cut]; without the lane geometry
+   under [admitted] or [off], so no boundary is kept for lanes (gh-ocannl-1167) -- and a merge the
+   legality rules admit is still refused when some statement of the merged kernel gets less of its
+   own mapping than it gets alone: fewer groups, or fewer active threads. Both kinds of merge are
+   judged: a dependent one whose alignment trims a statement's chain to the common prefix (the
+   composed [v.grad] merged with [w_v.grad], which reduces over the positions [v.grad]'s blocks
+   own), and an independent one whose kernel no longer admits a statement's geometry (under [cut],
+   the fused dV lane nest merged with dK, which is no lane nest; the lm_head logits beside the row
+   max that trims them). A segment's statements were each admitted under this test, so comparing
+   every statement with its standalone mapping is the same as comparing with the segment before the
+   extension. Per statement, never the kernel's largest thread count: one well-mapped nest does not
+   pay for another's lost one.
 
    A mapping cut needs no retest after scope-local resolution ({!resolve_scope_crossings}). A cut
    whose new segment cannot replicate its scope-local definitions -- a unit between the definition

@@ -251,11 +251,13 @@
 # work, where the plain plan runs the channel loop serially in a thread that pays it once
 # (gh-ocannl-1003, gh-ocannl-1167). `cut`: lanes wherever a kernel admits them, and schedule fission
 # cuts a kernel rather than merge a lane nest out of its lanes. `admitted`: lanes wherever a kernel
-# admits them, but fission judges merges on the plain plans, so it merges the fused backward's dV
-# with dK. `off`: never, which also leaves gpu_lane_preamble_reduction nothing to apply to. `auto`
-# resolves per device: cut where redundant per-lane scalar work is cheap (Metal, CUDA), admitted
-# elsewhere (HIP: on gfx1151 the forward value pass won on lanes, while dV cut from dK lost to the
-# two merged on the plain plan; and anything unmeasured).
+# admits them, but no kernel boundary is kept for lanes -- fission judges merges on the plain plans,
+# so a merge costing a nest only its lanes is taken (it merges the fused backward's dV with dK, and
+# would equally merge a lane nest with any neighbour sharing its plain chain). `off`: never, which
+# also leaves gpu_lane_preamble_reduction nothing to apply to. `auto` resolves per device: cut where
+# redundant per-lane scalar work is cheap (Metal, CUDA), admitted elsewhere (HIP, measured on
+# gfx1151 and gfx1102: the forward value pass wins on lanes in its own kernel, while dV cut from dK
+# for them lost to the two merged on the plain plan; and anything unmeasured).
 #gpu_serial_lanes=auto
 
 # If true, on CPU backends (cc, multidev_cc) kernels compiled without an explicit

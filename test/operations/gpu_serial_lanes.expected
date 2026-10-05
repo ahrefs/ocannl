@@ -48,6 +48,7 @@ lanes_costly: with the lanes off, no lane geometry: true
 lanes_costly: with the lanes off, the plain plan, Grid (s, b) x Workgroup h: true
 lanes_costly: every cell of lanes_costly_o holds the serial order's exact value: true
 attention, costly lanes: a GPU segment schedules the value pass with lanes: true
+training forward, costly lanes: the value pass is scheduled with lanes: true
 fused dV, costly lanes: the GPU pipeline emits its nest: true
 fused dV, costly lanes: every nest writing it runs under a Grid or Workgroup loop: true
 fused dV, costly lanes: no nest writing it binds a lane inside the serial query loop: true
@@ -58,3 +59,4 @@ auto where per-lane recompute is cheap cuts for the lanes: true
 auto where it is not admits them without cutting: true
 auto on an unmeasured device admits them without cutting: true
 auto on the run's backend resolves to its measured mode: true
+executed fused step: every segment computing dV follows the device's mode (cut: its lane, apart from dK; admitted: beside dK, off the lanes): true
