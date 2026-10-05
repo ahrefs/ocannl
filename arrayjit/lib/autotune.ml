@@ -1789,11 +1789,12 @@ type fiss_flavor =
     }
   | F_saved of SC.saved_segment list
       (** Replay of a fissioned winner (gh-ocannl-1164): the routine is cut where the saved segments
-          say ({!Sched.fission_segmented}'s [segmentation]), never re-segmented under the current
-          policy, and each segment gets its saved schedule once its structural digest matches the
-          saved one; a segmentation that no longer fits, or a digest that differs, fails the
-          candidate — for a cache entry, a re-search. Whichever mode derived the winner's
-          segmentation (the finer [arity_cuts] one included, gh-ocannl-574) is in the data. *)
+          say ({!Sched.fission_segmented}'s [replay]), never re-segmented under the current policy,
+          and the [i]th segment gets the [i]th saved schedule — by position, never by digest — once
+          its structural digest matches the saved [i]th; a segmentation that no longer fits, or a
+          digest that differs, fails the candidate — for a cache entry, a re-search. Whichever mode
+          derived the winner's segmentation (the finer [arity_cuts] one included, gh-ocannl-574) is
+          in the data. *)
   | F_sketch of { entries : (string * sketch_params) list; fine : bool }
       (** Per-segment matmul sketches: for each listed segment (keyed by its pre-schedule structural
           digest, like [F_saved]), the composed sketch pipeline instantiated with the given
@@ -1828,7 +1829,8 @@ type form =
   | Split_saved of SC.saved_schedule * SC.saved_segment list
 
 type unit_gen = {
-  u_key : string option;  (** [Some pre_digest] for a fission segment; [None] whole-routine. *)
+  u_segment : int option;
+      (** [Some i] for the [i]th segment of a fissioned form; [None] whole-routine. *)
   u_saved : SC.saved_schedule;
   u_registry : SC.registry;
   u_opt : LL.optimized;  (** The transformed unit, for menu generation. *)
@@ -2193,7 +2195,7 @@ let compile_candidate ?name ~static_indices ~base_opt ~canon ~limits ~is_gpu ~is
           captured :=
             Some
               ( Whole_saved saved,
-                [ { u_key = None; u_saved = saved; u_registry = registry; u_opt = opt' } ],
+                [ { u_segment = None; u_saved = saved; u_registry = registry; u_opt = opt' } ],
                 [ opt' ],
                 digest_after );
           [ opt' ]
@@ -2239,11 +2241,37 @@ let compile_candidate ?name ~static_indices ~base_opt ~canon ~limits ~is_gpu ~is
           let seg_key seg =
             SC.digest (SC.canonicalize ~static_indices ~with_placements:false seg)
           in
-          (* A replay's saved segments: the segmentation it cuts at, and each segment's schedule. *)
-          let replayed =
+          (* A replay cuts where its saved segments say and gives the [i]th segment the [i]th saved
+             schedule — by position, never by digest: the digest leaves placements out, and two
+             segments of one structure can differ in placements, hence in kind and schedule. The
+             replay-validity check rides on the same position: the segment cut there must be the one
+             its schedule was saved against, otherwise the entry no longer applies and the candidate
+             fails (a cache replay then re-searches) rather than running a segment under a schedule
+             saved for other code. *)
+          let replay =
             match flavor with
-            | F_saved segs | F_split_saved (_, segs) -> Some segs
             | F_preset _ | F_sketch _ | F_split _ -> None
+            | F_saved saved | F_split_saved (_, saved) ->
+                let saved = Array.of_list saved in
+                let schedule i seg =
+                  let seg_canon = SC.canonicalize ~static_indices ~with_placements:false seg in
+                  let s = saved.(i) in
+                  if not (String.equal (SC.digest seg_canon) s.SC.seg_digest) then
+                    raise
+                      (Outcome.Cause_at
+                         ( Outcome.Transform,
+                           Outcome.Illegal_schedule
+                             {
+                               check = "Autotune.fission_replay";
+                               detail =
+                                 Printf.sprintf
+                                   "segment %d differs from the one its schedule was saved \
+                                    against: the saved segmentation no longer applies"
+                                   i;
+                             } ));
+                  fst (SC.of_saved seg_canon s.SC.seg_saved)
+                in
+                Some (SC.segmentation_of (Array.to_list saved), schedule)
           in
           let preset seg =
             match flavor with
@@ -2251,14 +2279,7 @@ let compile_candidate ?name ~static_indices ~base_opt ~canon ~limits ~is_gpu ~is
                 let sched = preset_sched ?block_size ~config_thresholds seg in
                 if privatize then extend_with_privatize ~accum_prec ~static_indices sched seg
                 else sched
-            | F_saved segs | F_split_saved (_, segs) -> (
-                (* Structurally identical segments carry interchangeable schedules, so the first
-                   with the digest answers; a miss is caught by the check after fission. *)
-                let seg_canon = SC.canonicalize ~static_indices ~with_placements:false seg in
-                let digest = SC.digest seg_canon in
-                match List.find segs ~f:(fun s -> String.equal s.SC.seg_digest digest) with
-                | Some s -> fst (SC.of_saved seg_canon s.SC.seg_saved)
-                | None -> [])
+            | F_saved _ | F_split_saved _ -> [] (* Never consulted: a replay brings its own. *)
             | F_sketch { entries; _ } -> (
                 match List.Assoc.find entries ~equal:String.equal (seg_key seg) with
                 | Some p -> sketch_schedule ~accum_prec ~p seg
@@ -2278,41 +2299,19 @@ let compile_candidate ?name ~static_indices ~base_opt ~canon ~limits ~is_gpu ~is
                GPU), so fissioned candidates and the untuned baseline schedule the same code. *)
             Sched.fission_segmented ~promote_locals:is_gpu
               ?keep_mapping:(Sched.fission_keep_mapping ~is_gpu ~limits)
-              ?segmentation:(Option.map replayed ~f:SC.segmentation_of)
-              ~arity_cuts ~preset ~zero_sched ~static_indices opt
+              ?replay ~arity_cuts ~preset ~zero_sched ~static_indices opt
           in
-          let segs = SC.save_segments ~static_indices segmentation tuples in
-          (* The replay-validity check: the recorded segmentation was applied as it is, so what is
-             left to drift is the segments' code. Every segment must be the one its schedule was
-             saved against, in order — otherwise the entry no longer applies, and the candidate
-             fails (a cache replay then re-searches) rather than running some segment under another
-             segment's schedule, or none. *)
-          Option.iter replayed ~f:(fun saved ->
-              if
-                not
-                  (List.equal String.equal
-                     (List.map saved ~f:(fun s -> s.SC.seg_digest))
-                     (List.map segs ~f:(fun (s, _) -> s.SC.seg_digest)))
-              then
-                raise
-                  (Outcome.Cause_at
-                     ( Outcome.Transform,
-                       Outcome.Illegal_schedule
-                         {
-                           check = "Autotune.fission_replay";
-                           detail =
-                             "a segment differs from the one its saved schedule was saved against: \
-                              the saved segmentation no longer applies";
-                         } )));
+          let saved_with_registries = SC.save_segments ~static_indices segmentation tuples in
           let posts = List.map tuples ~f:(fun (_, _, _, post) -> post) in
           let units =
-            List.filter_map (List.zip_exn segs posts) ~f:(fun ((s, registry), post) ->
+            List.filter_mapi (List.zip_exn saved_with_registries posts)
+              ~f:(fun i ((s, registry), post) ->
                 match s.SC.seg_kind with
                 | `Zeros | `Solo -> None
                 | `Normal ->
                     Some
                       {
-                        u_key = Some s.SC.seg_digest;
+                        u_segment = Some i;
                         u_saved = s.SC.seg_saved;
                         u_registry = registry;
                         u_opt = post;
@@ -2322,7 +2321,7 @@ let compile_candidate ?name ~static_indices ~base_opt ~canon ~limits ~is_gpu ~is
             String.concat ~sep:"+"
               (List.map posts ~f:(fun post -> SC.digest (SC.canonicalize ~static_indices post)))
           in
-          let segs = List.map segs ~f:fst in
+          let segs = List.map saved_with_registries ~f:fst in
           let form =
             if List.is_empty prelude_saved then Fiss_saved segs
             else Split_saved (prelude_saved, segs)
@@ -2693,18 +2692,18 @@ let menu ?(admits = fun (_ : SC.saved_optop) -> true) ~is_cpu ~is_gpu
          (List.map dropped ~f:(fun (name, d) -> Printf.sprintf "%d %s" d name)));
   kept
 
-(* Extend one unit of a compiled candidate with a menu action. Extending by key updates every
-   structurally identical segment: they carry interchangeable saved forms, and the replay's digest
-   lookup answers each of them with the first. *)
+(* Extend one unit of a compiled candidate with a menu action: a segment's unit extends that segment
+   alone, by position — a structurally identical segment elsewhere can differ in placements and
+   keeps its own schedule. *)
 let extend_spec (elem : compiled) (u : unit_gen) (op : SC.saved_optop) : spec option =
-  let extend segs key =
-    List.map segs ~f:(fun (s : SC.saved_segment) ->
-        if String.equal s.seg_digest key then { s with seg_saved = u.u_saved @ [ op ] } else s)
+  let extend segs i =
+    List.mapi segs ~f:(fun j (s : SC.saved_segment) ->
+        if i = j then { s with seg_saved = u.u_saved @ [ op ] } else s)
   in
-  match (elem.form, u.u_key) with
+  match (elem.form, u.u_segment) with
   | Whole_saved _, None -> Some (Whole (W_saved (u.u_saved @ [ op ])))
-  | Fiss_saved segs, Some key -> Some (Fiss (F_saved (extend segs key)))
-  | Split_saved (prelude, segs), Some key -> Some (Fiss (F_split_saved (prelude, extend segs key)))
+  | Fiss_saved segs, Some i -> Some (Fiss (F_saved (extend segs i)))
+  | Split_saved (prelude, segs), Some i -> Some (Fiss (F_split_saved (prelude, extend segs i)))
   | _ -> None
 
 (** {2 The placement decision surface (gh-ocannl-514, the placement-space search)}
@@ -4150,7 +4149,7 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                 units =
                   [
                     {
-                      u_key = None;
+                      u_segment = None;
                       u_saved = [];
                       u_registry = SC.base_registry canon;
                       u_opt = base_opt;

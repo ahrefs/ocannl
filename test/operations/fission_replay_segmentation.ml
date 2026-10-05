@@ -17,7 +17,9 @@
    same code byte for byte, up to the numbering of fresh names. 4. Validity: a segmentation that
    does not partition the routine is refused by [Schedule.fission_segmented]; one that partitions it
    at other boundaries applies, but its segments are not the ones the schedules were saved against,
-   so the replay declines and the tuner re-searches. *)
+   so the replay declines and the tuner re-searches. 5. Segments are matched by position: two
+   segments with one structural digest (the digest leaves placements out, and placements decide a
+   segment's kind and schedule) keep their own saved schedules through a replay. *)
 
 open Base
 open Ocannl
@@ -93,6 +95,98 @@ let copy (o : LL.optimized) =
     LL.optimize_ctx = LL.copy_optimize_ctx o.LL.optimize_ctx;
   }
 
+(* A routine under test: its base lowering (what [Autotune.tune] replays against) and the context
+   facts its cache key is made of. *)
+type routine = {
+  base_ctx : Context.t;
+  limits : Ir.Backend_intf.hardware_limits;
+  caps : Ir.Backend_intf.codegen_capabilities;
+  base_opt : LL.optimized;
+  base_canon : SC.canonical;
+}
+
+let lower comp =
+  let base_ctx = Context.auto () in
+  let captured = ref None in
+  let _ctx, _routine =
+    Context.compile
+      ~lowered_transform:(fun opt ->
+        captured := Some (copy opt);
+        [ opt ])
+      (Context.auto ()) comp Ir.Indexing.Empty
+  in
+  let base_opt = Option.value_exn ~here:[%here] !captured in
+  {
+    base_ctx;
+    limits = Context.hardware_limits base_ctx;
+    caps = Context.codegen_capabilities base_ctx;
+    base_opt;
+    base_canon = SC.canonicalize base_opt;
+  }
+
+(* The autotuner's fissioned pipeline: its placements ([promote_locals] on GPU) and the search's
+   aggressive presets. *)
+let preset rut o =
+  if is_gpu then Sched.default_gpu ~min_parallel:1 ~limits:rut.limits o
+  else if is_cpu then Sched.default_cpu ~min_parallel:1 o
+  else []
+
+let zero_sched rut tns = if is_gpu then Sched.zero_expansion ~limits:rut.limits tns else []
+
+let fission rut ?arity_cuts ?keep_mapping ?segmentation () =
+  (* A recorded segmentation is applied with empty schedules: these checks are about the cuts. *)
+  let replay = Option.map segmentation ~f:(fun plan -> (plan, fun _ _ -> [])) in
+  Sched.fission_segmented ~promote_locals:is_gpu ?arity_cuts ?keep_mapping ?replay
+    ~preset:(preset rut) ~zero_sched:(zero_sched rut) ~static_indices:[] (copy rut.base_opt)
+
+let cache_key rut =
+  SC.cache_key
+    ~timing_identity:(Context.timing_identity rut.base_ctx)
+    ~limits:rut.limits ~capabilities:rut.caps rut.base_canon
+    ~backend:(Context.backend_name rut.base_ctx)
+
+(* A fissioned winner stored the way [Autotune.tune] stores one. *)
+let store ~cache_dir rut segments =
+  SC.store ~dir:cache_dir ~key:(cache_key rut)
+    {
+      SC.version = SC.entry_version;
+      backend = Context.backend_name rut.base_ctx;
+      numerics = SC.numerics_tag ();
+      codegen = Some (SC.codegen_tag ~limits:rut.limits ~capabilities:rut.caps ());
+      objective = Some (SC.objective_tag ());
+      source_digest = SC.digest rut.base_canon;
+      saved = [];
+      segments = Some segments;
+      best_ms = 0.;
+      baseline_ms = 0.;
+      default_ms = None;
+      mma_best_ms = None;
+      default_fingerprint = None;
+      best_steps = None;
+    }
+
+let tune ~name ~cache_dir comp ~read =
+  let report = ref None in
+  let ctx, routine =
+    Autotune.tune ~name ~beam_width:1 ~rounds:0 ~repeats:1 ~cache_dir
+      ~report:(fun rep -> report := Some rep)
+      (Context.auto ()) comp Ir.Indexing.Empty
+  in
+  let ctx = Context.run ctx routine in
+  let values = read ctx in
+  Context.release ctx;
+  (values, !report)
+
+(* Timed-cache reuse needs a concrete device identity; without one every cache claim is vacuous. *)
+let cache_available = Option.is_some (Context.timing_identity (Context.auto ()))
+
+let () =
+  if not cache_available then
+    Stdio.eprintf "timed-cache reuse unavailable: concrete device identity missing\n"
+
+let cache_claim label value =
+  gated ~aggregation:`Environment ~when_:cache_available ~on:"no-device-identity" label value
+
 let () =
   clean_cache cache_dir;
   let b = 4 and n = 32 and m = 64 and k = 16 in
@@ -129,73 +223,18 @@ let () =
   let%op r = z @^^ "b|ij => b|i" in
   let comp = Train.forward r in
   let name = "seg_replay" in
-  let base_ctx = Context.auto () in
-  let limits = Context.hardware_limits base_ctx in
-  let caps = Context.codegen_capabilities base_ctx in
-  let captured = ref None in
-  let _ctx, _routine =
-    Context.compile
-      ~lowered_transform:(fun opt ->
-        captured := Some (copy opt);
-        [ opt ])
-      (Context.auto ()) comp Ir.Indexing.Empty
-  in
-  let base_opt = Option.value_exn ~here:[%here] !captured in
-  let base_canon = SC.canonicalize base_opt in
-  (* The autotuner's fissioned pipeline: its placements ([promote_locals] on GPU) and the search's
-     aggressive presets. *)
-  let preset o =
-    if is_gpu then Sched.default_gpu ~min_parallel:1 ~limits o
-    else if is_cpu then Sched.default_cpu ~min_parallel:1 o
-    else []
-  in
-  let zero_sched tns = if is_gpu then Sched.zero_expansion ~limits tns else [] in
+  let rut = lower comp in
+  let limits = rut.limits in
+  let zero_sched = zero_sched rut in
   let fission ?arity_cuts ?keep_mapping ?segmentation () =
-    Sched.fission_segmented ~promote_locals:is_gpu ?arity_cuts ?keep_mapping ?segmentation ~preset
-      ~zero_sched ~static_indices:[] (copy base_opt)
+    fission rut ?arity_cuts ?keep_mapping ?segmentation ()
   in
   let fine_segmentation, fine_tuples = fission ~arity_cuts:true () in
   let saved = List.map (SC.save_segments fine_segmentation fine_tuples) ~f:fst in
-  let store segments =
-    SC.store ~dir:cache_dir
-      ~key:
-        (SC.cache_key
-           ~timing_identity:(Context.timing_identity base_ctx)
-           ~limits ~capabilities:caps base_canon ~backend:(Context.backend_name base_ctx))
-      {
-        SC.version = SC.entry_version;
-        backend = Context.backend_name base_ctx;
-        numerics = SC.numerics_tag ();
-        codegen = Some (SC.codegen_tag ~limits ~capabilities:caps ());
-        objective = Some (SC.objective_tag ());
-        source_digest = SC.digest base_canon;
-        saved = [];
-        segments = Some segments;
-        best_ms = 0.;
-        baseline_ms = 0.;
-        default_ms = None;
-        mma_best_ms = None;
-        default_fingerprint = None;
-        best_steps = None;
-      }
-  in
-  let cache_available = Option.is_some (Context.timing_identity base_ctx) in
-  if not cache_available then
-    Stdio.eprintf "timed-cache reuse unavailable: concrete device identity missing\n";
-  let cache_claim label value =
-    gated ~aggregation:`Environment ~when_:cache_available ~on:"no-device-identity" label value
-  in
+  let store = store ~cache_dir rut in
   let tune () =
-    let report = ref None in
-    let ctx, routine =
-      Autotune.tune ~name ~beam_width:1 ~rounds:0 ~repeats:1 ~cache_dir
-        ~report:(fun rep -> report := Some rep)
-        (Context.auto ()) comp Ir.Indexing.Empty
-    in
-    let ctx = Context.run ctx routine in
-    let values = (Context.get_values ctx z.Tensor.value, Context.get_values ctx r.Tensor.value) in
-    Context.release ctx;
-    (values, !report)
+    tune ~name ~cache_dir comp ~read:(fun ctx ->
+        (Context.get_values ctx z.Tensor.value, Context.get_values ctx r.Tensor.value))
   in
   let expected = Array.append z_expected r_expected in
   let correct label (zv, rv) = p_all2 label (Array.append zv rv) expected ~f:approx in
@@ -206,11 +245,7 @@ let () =
   p "the stored segmentation fissions the routine" (List.length saved >= 2);
   p_exists "the stored segmentation carries a zeros segment" saved ~f:(fun s ->
       match s.SC.seg_kind with `Zeros -> true | `Normal | `Solo -> false);
-  let key_before =
-    SC.cache_key
-      ~timing_identity:(Context.timing_identity base_ctx)
-      ~limits ~capabilities:caps base_canon ~backend:(Context.backend_name base_ctx)
-  in
+  let key_before = cache_key rut in
   store saved;
 
   (* --- 2-3. Replay under the configuration the entry was stored under. --- *)
@@ -258,10 +293,7 @@ let () =
     "the changed configuration re-derives a different zero expansion than the stored one"
     (List.exists (List.zip_exn saved fine_tuples) ~f:rederived_zeros_differ);
   p "the cache key does not move with the segmentation policy"
-    (Option.equal String.equal key_before
-       (SC.cache_key
-          ~timing_identity:(Context.timing_identity base_ctx)
-          ~limits ~capabilities:caps base_canon ~backend:(Context.backend_name base_ctx)));
+    (Option.equal String.equal key_before (cache_key rut));
   Generated.arm fissioned_source;
   let values_b, report_b = tune () in
   cache_claim "after the policy change the winner still replays from the cache"
@@ -305,7 +337,85 @@ let () =
              (List.map merged ~f:(fun s -> s.SC.seg_digest)))
     | None -> false);
   store merged;
+  (* Legs 2-3 showed this store path hitting under this key, and the entry differs from that one
+     only in its boundaries, so a search here is the replay declining, not a lookup miss. *)
   let values_c, report_c = tune () in
   cache_claim "a stored segmentation that no longer applies declines to a re-search"
     (Option.value_map report_c ~default:false ~f:completed);
   correct "the re-searched routine computes the right values" values_c
+
+(* --- 5. Segments are matched by position, not by digest. --- *)
+let () =
+  let cache_dir = "autotune_cache_fission_replay_positional" in
+  clean_cache cache_dir;
+  let b = 2 and n = 16 and m = 32 in
+  let xv =
+    Array.init
+      (b * n * m)
+      ~f:(Ll_test.cycle_flat ~dims:[| b; n; m |] ~modulus:7 ~offset:0. ~stride:0.25)
+  in
+  let wv =
+    Array.init (m * m) ~f:(Ll_test.cycle_flat ~dims:[| m; m |] ~modulus:5 ~offset:0. ~stride:0.125)
+  in
+  let matmul a =
+    Array.init
+      (b * n * m)
+      ~f:(fun idx ->
+        let row = idx / m and j = idx % m in
+        let acc = ref 0. in
+        for kk = 0 to m - 1 do
+          acc := !acc +. (a.((row * m) + kk) *. wv.((kk * m) + j))
+        done;
+        !acc)
+  in
+  let z2_expected = matmul (matmul (Array.map xv ~f:(fun v -> 2. *. v))) in
+  let x0 = TDSL.ndarray xv ~label:[ "x0" ] ~batch_dims:[ b ] ~output_dims:[ n; m ] () in
+  let w1 = TDSL.ndarray wv ~label:[ "w1" ] ~output_dims:[ m; m ] () in
+  let w2 = TDSL.ndarray wv ~label:[ "w2" ] ~output_dims:[ m; m ] () in
+  let%op x = x0 + x0 in
+  Train.set_materialized x.Tensor.value;
+  let%op z1 = x +* "b|ik;kj=>b|ij" w1 in
+  Train.set_materialized z1.Tensor.value;
+  let%op z2 = z1 +* "b|ik;kj=>b|ij" w2 in
+  Train.set_materialized z2.Tensor.value;
+  let comp = Train.forward z2 in
+  let rut = lower comp in
+  let segmentation, tuples = fission rut () in
+  let derived = List.map (SC.save_segments segmentation tuples) ~f:fst in
+  (* Two segments with one digest: the zeroings of [z1] and [z2], one shape and precision. *)
+  let twins =
+    List.find_mapi derived ~f:(fun i s ->
+        List.find_mapi derived ~f:(fun j s' ->
+            Option.some_if (j > i && String.equal s.SC.seg_digest s'.SC.seg_digest) (i, j)))
+  in
+  p "the routine has two segments with one structural digest" (Option.is_some twins);
+  let i, j = Option.value twins ~default:(0, 0) in
+  (* The later twin gets a schedule of its own: its zeroing expanded into a plain serial nest, which
+     no preset gives the earlier one. *)
+  let own =
+    let _, pre, _, _ = List.nth_exn tuples j in
+    let expand =
+      List.filter_map (LL.flat_lines [ pre.LL.llc ]) ~f:(function
+        | LL.Zero_out tn -> Some (fst (Sched.expand_zero ~tn))
+        | _ -> None)
+    in
+    fst (SC.to_saved (SC.base_registry (SC.canonicalize ~with_placements:false pre)) expand)
+  in
+  let stored =
+    List.mapi derived ~f:(fun k s -> if k = j then { s with SC.seg_saved = own } else s)
+  in
+  p "the twins carry different schedules"
+    (not
+       (SC.equal_saved_schedule (List.nth_exn stored i).SC.seg_saved
+          (List.nth_exn stored j).SC.seg_saved));
+  store ~cache_dir rut stored;
+  let got, report =
+    tune ~name:"seg_twins" ~cache_dir comp ~read:(fun ctx -> Context.get_values ctx z2.Tensor.value)
+  in
+  cache_claim "the twins' entry replays from the cache"
+    (Option.value_map report ~default:false ~f:replayed);
+  cache_claim "each twin replays its own schedule"
+    (Option.value_map report ~default:false ~f:(fun r ->
+         SC.equal_saved_schedule r.Autotune.best_schedule
+           (List.concat_map stored ~f:(fun s -> s.SC.seg_saved))));
+  p_all2 "the twins' replay computes the right values" got z2_expected ~f:approx

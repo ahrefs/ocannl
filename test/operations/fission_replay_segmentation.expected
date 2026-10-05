@@ -15,3 +15,8 @@ a segmentation at other boundaries still partitions the routine: true
 its segments are not the ones the schedules were saved against: true
 a stored segmentation that no longer applies declines to a re-search: true
 the re-searched routine computes the right values: true
+the routine has two segments with one structural digest: true
+the twins carry different schedules: true
+the twins' entry replays from the cache: true
+each twin replays its own schedule: true
+the twins' replay computes the right values: true

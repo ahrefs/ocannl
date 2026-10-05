@@ -634,13 +634,13 @@ type entry = {
   segments : saved_segment list option; [@sexp.option]
       (** A fissioned winner: every segment of its fission, in order — the segmentation itself and
           each segment's schedule (gh-ocannl-1164). Replay cuts the routine where these segments say
-          ({!Schedule.fission_segmented}'s [segmentation]) and applies each schedule after checking
-          the segment's digest, so nothing about the segmentation is re-derived under the replaying
-          process's policy and none of that policy's inputs needs to be in the key. [None] for
-          whole-routine schedules. With [segments] present, [saved] is empty except for a
-          split-reduce winner (gh-ocannl-484 task 3), where it holds the whole-routine prelude —
-          resolved against the {e base} canonical form and applied before fission, the segments then
-          describing the {e post-prelude} routine. *)
+          ({!Schedule.fission_segmented}'s [replay]) and applies each segment's own schedule, by
+          position, after checking the segment's digest, so nothing about the segmentation is
+          re-derived under the replaying process's policy and none of that policy's inputs needs to
+          be in the key. [None] for whole-routine schedules. With [segments] present, [saved] is
+          empty except for a split-reduce winner (gh-ocannl-484 task 3), where it holds the
+          whole-routine prelude — resolved against the {e base} canonical form and applied before
+          fission, the segments then describing the {e post-prelude} routine. *)
   best_ms : float;
   baseline_ms : float;
   default_ms : float option; [@sexp.option]

@@ -885,7 +885,7 @@ val fission_segmented :
   ?promote_locals:bool ->
   ?arity_cuts:bool ->
   ?keep_mapping:(Low_level.optimized -> schedule) ->
-  ?segmentation:segmentation ->
+  ?replay:segmentation * (int -> Low_level.optimized -> schedule) ->
   preset:(Low_level.optimized -> schedule) ->
   zero_sched:(Tnode.t list -> schedule) ->
   static_indices:Indexing.static_symbol list ->
@@ -893,15 +893,17 @@ val fission_segmented :
   segmentation
   * ([ `Normal | `Zeros | `Solo ] * Low_level.optimized * schedule * Low_level.optimized) list
 (** {!fission_scheduled}, also returning the segmentation of its result (one element per tuple), or
-    — given [segmentation] — applying that recorded segmentation instead of deriving one. A given
-    segmentation is neither re-grouped nor coalesced, so [arity_cuts] and [keep_mapping] do not
-    reach it; the promotions and scope-local replicas are recomputed for its boundaries exactly as
-    for derived ones, and [preset] is called on {e every} segment whatever its kind ([zero_sched] is
-    not consulted): a replay brings each segment's schedule, zero expansions included. A
+    — given [replay = (segmentation, schedule)] — applying that recorded segmentation instead of
+    deriving one. A recorded segmentation is neither re-grouped nor coalesced, so [arity_cuts] and
+    [keep_mapping] do not reach it; the promotions and scope-local replicas are recomputed for its
+    boundaries exactly as for derived ones, and the [i]th segment's (pre-schedule) slice gets
+    [schedule i] whatever its kind — by position, because segments of one structure can differ in
+    placements, hence in kind and schedule; [preset] and [zero_sched] are not consulted. A
     segmentation that does not fit the routine — its lengths do not sum to the routine's units, a
     segment is empty, or a boundary separates a scope-local definition from a use it cannot be
     replicated for — raises {!Schedule_outcome.Cause_at} with an [Illegal_schedule] cause, a
-    candidate's ordinary decline; it is never repaired into another segmentation. *)
+    candidate's ordinary decline; it is never repaired into another segmentation. Whatever raises,
+    the promotions made so far are restored first. *)
 
 val maybe_default_schedules :
   backend_name:string ->

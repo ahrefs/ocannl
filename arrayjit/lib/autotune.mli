@@ -41,9 +41,9 @@
       stay unscheduled. A fissioned winner is cached with its whole segmentation — each segment's
       kind, length and pre-schedule canonical digest, and its schedule, zero expansions included
       ({!Ir.Schedule_cache.saved_segment}, gh-ocannl-1164) — and replays by cutting there
-      ({!Ir.Schedule.fission_segmented}'s [segmentation]) rather than by re-segmenting under the
-      current policy: a segmentation that no longer fits, or a segment whose digest differs from the
-      saved one, fails the replay into a re-search. One seed uses the config-default thresholds,
+      ({!Ir.Schedule.fission_segmented}'s [replay]) rather than by re-segmenting under the current
+      policy: a segmentation that no longer fits, or a segment whose digest differs from the saved
+      one, fails the replay into a re-search. One seed uses the config-default thresholds,
       reproducing the untuned default pipeline exactly — so the winner is never worse than not
       tuning, even on launch-overhead-bound workloads where every aggressive preset loses to it; its
       measured time is surfaced as the report's [default_ms] reference (gh-ocannl-552). Each preset

@@ -1173,22 +1173,21 @@ files.
   a unit is one top-level statement with its leading comments, so units are a function of the
   code), structural pre-schedule digest, and schedule, `Zeros` expansions and `Solo`'s empty one
   included — and `Autotune.compile_candidate` replays through `Schedule.fission_segmented
-  ~segmentation`, which cuts there with no grouping, coalescing or `keep_mapping` probe. So no
-  segmentation-policy input is keyed (the `fission` key component of staging#913's three review rounds is
-  gone, regime 5): the policy shapes which winner a search finds, not what a found one replays as —
-  `Search_shaping`. The zero expansions were a latent instance of the same gap: replay used to
-  re-derive them from `gpu_schedule_*` even while those keys were `Search_shaping`. Replay validity
-  is two checks, and both are typed `Illegal_schedule` causes, never a bare `invalid_arg`: under
-  the default `strict_failure_classification` an untyped exception from a candidate transform is
-  FATAL, so the old drift guard's `invalid_arg` killed `tune` instead of declining into a
-  re-search. `fission_segmented` refuses a segmentation that does not partition the routine's units
-  or separates a scope-local definition from a use; the replay then compares every cut segment's
-  digest with the saved one, in order. `test/operations/fission_replay_segmentation` pins it on the
-  lm_head shape (stored fine segmentation, which the default policy does not derive): replay before
-  and after a `gpu_schedule_*`/`cpu_schedule_min_parallel` change emits the same code up to fresh
-  names — two compiles in one process differ in their `i<n>`/`v<n>_` counters, so a same-process
-  byte comparison must renumber them — and a stored segmentation cut at other boundaries declines
-  to a re-search.
+  ~replay`, which cuts there with no grouping, coalescing or `keep_mapping` probe. So no
+  segmentation-policy input belongs in the key: the policy shapes which winner a search finds, not
+  what a found one replays as — `Search_shaping`. **Match saved segments by POSITION, never by
+  digest**: the structural digest leaves placements out, and two segments of one structure can
+  differ in placements, hence in kind (`Solo` vs `Normal`) and schedule — a first-match lookup hands
+  the later one a schedule the search never timed (`fission_replay_segmentation` leg 5; the same
+  holds for `extend_spec`, whose units name their segment index). The replay-validity check rides
+  on the position: segment `i`'s digest must equal the saved `i`th, and a recorded segmentation
+  that does not partition the routine's units, or separates a scope-local definition from a use,
+  is refused by `fission_segmented`. **A candidate transform's failure must be a typed cause**
+  (`Schedule_outcome.Cause_at`, here `Illegal_schedule`), never a bare `invalid_arg`: under the
+  default `strict_failure_classification` an untyped exception is FATAL, ending `tune` instead of
+  declining the candidate (a cache replay into a re-search). Two compiles of one schedule in one
+  process differ in the process-wide `i<n>`/`v<n>_` counters, so a same-process comparison of
+  emitted code renumbers those stems first (the test's `alpha_normalize`).
 - **`Train.tune_placements` persists its decision beside the schedule entries** (gh-ocannl-786,
   `Schedule_cache.store_placements` / `lookup_placements`, same directory, lock, regime stamp and
   key components). Placement stays outside the schedule value — a schedule is keyed by the
