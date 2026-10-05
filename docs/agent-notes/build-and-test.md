@@ -1172,6 +1172,17 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   reaper is a PID 1 that does not reap — the ordinary container case — the zombie is PERMANENT, so
   the first attempt at this, a short retry loop around the same `kill -0`, would not have helped;
   that is the shape to keep in mind before reaching for a timing fix here again.
+- **A merged session worktree retires with `--regenerable _build`.** ship-pr's
+  `post-merge-cleanup.sh` (lukstafi/ludics-lite) archives a merged session worktree out of the way
+  and refuses one carrying ignored data the base checkout lacks, since an archive would put that
+  data out of sight rather than keep it. A worktree that has ever built carries exactly that: its
+  `_build` (92M on one sighting), so every OCANNL worktree was refused until the flag existed.
+  `--regenerable <dir>` names one top-level directory a rebuild recreates, and the helper deletes it
+  before judging the worktree. The flag has no default and the helper learns no build system from
+  it, so the name comes from here: `_build`. `_opam` is the same shape in a worktree that holds a
+  local switch (the SessionStart hook creates none; it only suggests one when no switch is usable).
+  Benchmark fixtures regenerate only at real cost and are never passed. What a value may name, and the helper's refusals, are ship-pr's SKILL.md, *After it
+  lands* (lukstafi/ludics-lite#534).
 - Dune tracks an environment variable only where a stanza declares it, and the tracking reaches
   further than the stanza: `dune rules test/operations/<name>.exe.output` shows the `(Env
   OCANNL_BACKEND)` dependency travelling from the `(test)` stanza's `(deps ...)` into the

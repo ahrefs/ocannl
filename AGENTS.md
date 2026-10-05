@@ -58,7 +58,7 @@ opam install cudajit  # for CUDA backend
 opam install hipjit   # for AMD HIP backend
 ```
 
-**Worktrees**: nested ones (`.claude/worktrees/`) need a `dune-workspace` at their root or dune builds the PARENT checkout; the SessionStart hook writes it — after a mid-session worktree switch run `scripts/setup-ocaml-env.sh` by hand (build-and-test.md#dune-mechanics). To retire one after its merge, ship-pr's `post-merge-cleanup.sh` takes `--regenerable _build`: dune's build tree, which any build recreates.
+**Worktrees**: nested ones (`.claude/worktrees/`) need a `dune-workspace` at their root or dune builds the PARENT checkout; the SessionStart hook writes it — after a mid-session worktree switch run `scripts/setup-ocaml-env.sh` by hand; to retire one after its merge, ship-pr's `post-merge-cleanup.sh` takes `--regenerable _build` (both: build-and-test.md#dune-mechanics).
 
 **Windows shells**: use **Git Bash** (MSYS), never a Cygwin bash, and source `tools/opam-env.sh` before building (`opam env` emits cygwin-style paths that break linking). Route dune through `tools/dune-quiet.sh`, which filters the benign binutils link warnings while preserving dune's exit status (gh-ocannl-662; build-and-test.md#windows-ci tells the two bashes apart).
 
