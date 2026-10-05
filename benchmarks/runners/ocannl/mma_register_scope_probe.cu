@@ -6,6 +6,7 @@
 // --dry-run validates both arms and runs one replay without reporting timings.
 #include <cuda_runtime.h>
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -143,9 +144,14 @@ int main(int argc, char **argv) {
   std::vector<unsigned char> ha(m*k), hb(k*n);
   // e5m2 encodes 1 and 2 as 0x3c and 0x40. Every sum is an exact f32 integer.
   for (int i = 0; i < m*k; ++i) ha[i] = ((i / k * 17 + i % k * 13) % 7 < 3) ? 0x3c : 0x40;
-  for (int i = 0; i < k*n; ++i) hb[i] = ((i / n * 11 + i % n * 19) % 11 < 5) ? 0x3c : 0x40;
+  // B varies along K, so an A fragment address that permutes K within a row (a dropped swizzle
+  // XOR, say) changes the product instead of summing the same terms in another order.
+  for (int i = 0; i < k*n; ++i) hb[i] = ((i / n * 13 + i % n * 19) % 11 < 5) ? 0x3c : 0x40;
   check(cudaMemcpy(a, ha.data(), ha.size(), cudaMemcpyHostToDevice));
   check(cudaMemcpy(b, hb.data(), hb.size(), cudaMemcpyHostToDevice));
+  // All-ones bytes are a NaN in every cell: a dry-run arm, or the replay, that leaves any cell
+  // unwritten fails instead of inheriting the previous arm's correct product.
+  auto poison = [&] { check(cudaMemset(d, 0xff, m*n*sizeof(float))); };
   auto launch = [&](int arm) {
 #ifdef MMA_GENERATED_ARM0
     if (arm) mma_register_scope_arm1<<<m/16,32>>>((__nv_fp8_e5m2 *)a,(__nv_fp8_e5m2 *)b,d);
@@ -159,7 +165,7 @@ int main(int argc, char **argv) {
   if (dry) {
     std::vector<float> outputs[2];
     for (int arm = 0; arm < 2; ++arm) {
-      launch(arm); check(cudaDeviceSynchronize());
+      poison(); launch(arm); check(cudaDeviceSynchronize());
       outputs[arm].resize(m*n);
       check(cudaMemcpy(outputs[arm].data(), d, m*n*sizeof(float), cudaMemcpyDeviceToHost));
     }
@@ -173,7 +179,7 @@ int main(int argc, char **argv) {
                      outputs[0][i*n+j],outputs[1][i*n+j]); return 1;
       }
     }
-    launch(1); check(cudaDeviceSynchronize());
+    poison(); launch(1); check(cudaDeviceSynchronize());
     std::vector<float> replay(m*n);
     check(cudaMemcpy(replay.data(), d, m*n*sizeof(float), cudaMemcpyDeviceToHost));
     if (replay != outputs[1]) {
@@ -183,14 +189,17 @@ int main(int argc, char **argv) {
     std::printf("dry-run: both arms equal every exact host cell; %s replay passed\n",
                 MMA_ARM1_LABEL);
   } else {
-    const int repeats = 100, pairs = 9;
+    // Pairs alternate their order, and the aggregates are over balanced replicates (one pair in
+    // each order), so a position effect cancels instead of reading as a win for whichever arm
+    // ran second more often (gh-ocannl-1190 review).
+    const int repeats = 100, replicates = 9, pairs = 2 * replicates;
     cudaEvent_t begin, end;
     check(cudaEventCreate(&begin)); check(cudaEventCreate(&end));
     for (int arm = 0; arm < 2; ++arm) for (int i = 0; i < 10; ++i) launch(arm);
     check(cudaDeviceSynchronize());
-    std::printf("shape=%dx%dx%d tile=16x32x32 k_o_blocks=%d repeats=%d paired_replicates=%d\n",
-                m,n,k,k/32,repeats,pairs);
-    std::vector<float> times[2], ratios;
+    std::printf("shape=%dx%dx%d tile=16x32x32 k_o_blocks=%d repeats=%d pairs=%d "
+                "balanced_replicates=%d\n", m,n,k,k/32,repeats,pairs,replicates);
+    std::vector<float> times[2];
     for (int pair = 0; pair < pairs; ++pair) {
       float ms[2];
       for (int order = 0; order < 2; ++order) {
@@ -204,16 +213,32 @@ int main(int argc, char **argv) {
       std::printf("pair=%d first=%s %s_ms=%.6f %s_ms=%.6f %s_over_%s=%.6f\n", pair,
                   (pair & 1) ? MMA_ARM1_LABEL : MMA_ARM0_LABEL, MMA_ARM0_LABEL, ms[0],
                   MMA_ARM1_LABEL, ms[1], MMA_ARM1_LABEL, MMA_ARM0_LABEL, ms[1]/ms[0]);
-      times[0].push_back(ms[0]); times[1].push_back(ms[1]); ratios.push_back(ms[1]/ms[0]);
+      times[0].push_back(ms[0]); times[1].push_back(ms[1]);
     }
-    // pairs is odd, so each median is one measured value.
-    auto median = [](std::vector<float> v) {
+    // Pair 2r runs arm 0 first and pair 2r+1 arm 1 first; each balanced replicate is the geometric
+    // mean of the two, per arm and for the ratio. replicates is odd, so each median is one
+    // replicate's value.
+    std::vector<double> rep_ms[2], rep_ratio;
+    for (int r = 0; r < replicates; ++r) {
+      double g[2];
+      for (int arm = 0; arm < 2; ++arm) {
+        g[arm] = std::sqrt(double(times[arm][2*r]) * times[arm][2*r+1]);
+        rep_ms[arm].push_back(g[arm]);
+      }
+      const double ratio = std::sqrt(double(times[1][2*r]) / times[0][2*r]
+                                     * (double(times[1][2*r+1]) / times[0][2*r+1]));
+      rep_ratio.push_back(ratio);
+      std::printf("replicate=%d %s_ms=%.6f %s_ms=%.6f %s_over_%s=%.6f\n", r, MMA_ARM0_LABEL, g[0],
+                  MMA_ARM1_LABEL, g[1], MMA_ARM1_LABEL, MMA_ARM0_LABEL, ratio);
+    }
+    auto median = [](std::vector<double> v) {
       std::sort(v.begin(), v.end()); return v[v.size() / 2];
     };
-    auto [lo, hi] = std::minmax_element(ratios.begin(), ratios.end());
-    std::printf("median %s_ms=%.6f %s_ms=%.6f paired_%s_over_%s=%.6f range=%.6f-%.6f\n",
-                MMA_ARM0_LABEL, median(times[0]), MMA_ARM1_LABEL, median(times[1]),
-                MMA_ARM1_LABEL, MMA_ARM0_LABEL, median(ratios), *lo, *hi);
+    auto [lo, hi] = std::minmax_element(rep_ratio.begin(), rep_ratio.end());
+    std::printf("median over balanced replicates: %s_ms=%.6f %s_ms=%.6f "
+                "%s_over_%s=%.6f range=%.6f-%.6f\n",
+                MMA_ARM0_LABEL, median(rep_ms[0]), MMA_ARM1_LABEL, median(rep_ms[1]),
+                MMA_ARM1_LABEL, MMA_ARM0_LABEL, median(rep_ratio), *lo, *hi);
     check(cudaEventDestroy(begin)); check(cudaEventDestroy(end));
   }
   check(cudaFree(a)); check(cudaFree(b)); check(cudaFree(d));

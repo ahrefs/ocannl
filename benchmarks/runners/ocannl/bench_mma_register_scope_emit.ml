@@ -38,7 +38,9 @@ let () =
   Generated.init ~backend_name:"cuda";
   let m = 8192 and n = 32 and k = 4096 in
   let fa idx = Float.of_int (1 + (((idx.(0) * 17) + (idx.(1) * 13)) % 7 / 3 % 2)) in
-  let fb idx = Float.of_int (1 + (((idx.(0) * 11) + (idx.(1) * 19)) % 11 / 5 % 2)) in
+  (* B varies along K (gh-ocannl-1190 review): with a K coefficient divisible by 11 every K row of B
+     was equal, so a mis-addressed A fragment that permutes K within a row still summed exactly. *)
+  let fb idx = Float.of_int (1 + (((idx.(0) * 13) + (idx.(1) * 19)) % 11 / 5 % 2)) in
   let a = NTDSL.init ~l:"probe_a" ~prec:Ir.Ops.fp8 ~i:[ k ] ~o:[ m ] ~f:fa () in
   let b = NTDSL.init ~l:"probe_b" ~prec:Ir.Ops.fp8 ~i:[ n ] ~o:[ k ] ~f:fb () in
   let%op t = a * b in
