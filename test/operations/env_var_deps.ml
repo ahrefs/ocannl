@@ -91,6 +91,7 @@ open Verdict.Claims
 let argv = Test_utils.Scan_argv.expand Stdlib.Sys.argv
 
 module Scan = Test_utils.Dune_stanza_scan
+module Lifecycle = Test_utils.Lifecycle_scan
 module Sources = Test_utils.Config_key_scan
 module Refusals = Test_utils.Refusal_control_scan
 module Refusal_manifest = Test_utils.Refusal_control_manifest
@@ -447,34 +448,12 @@ let metal_family =
     family_floor = 3;
   }
 
-(* The library modules that exist to make resource lifetimes observable: a test that refers to one
-   is asking about allocation, free or context lifetime across a cleanup seam, which is what this
-   family collects. Derived from the instrumentation rather than from the test's name or directory,
-   for the reason the whole arrangement is derived -- a probe added tomorrow is asked about the day
-   it lands.
-
-   QUALIFIED, because a bare module name carries no provenance: a local or third-party
-   `Alloc_census` is not this one, and putting its user in the family would demand a focused alias
-   for a test that touches no instrumentation (Codex P2, round 5). `Ir` is how every test outside
-   the implementation reaches these -- `open Ocannl.Operation.DSL_modules` binds it -- and a test
-   that aliases the path (`module AC = Ir.Alloc_census`) names it in the binding, which is what the
-   derivation sees. *)
-let lifecycle_modules = [ [ "Ir"; "Resource_fault_injection" ]; [ "Ir"; "Alloc_census" ] ]
-let lifecycle_module_names = List.map lifecycle_modules ~f:(String.concat ~sep:".")
-
-(* What a source has to SPELL for any reference to reach the instrumentation: the module's own name.
-   The qualifier is not part of that -- `open Ir` then `Alloc_census.snapshot` writes a real
-   reference and no `Ir.Alloc_census` anywhere (Codex P2, round 6) -- so the textual filter narrows
-   on the last component alone and the parse decides. *)
-let lifecycle_module_leaves = List.filter_map lifecycle_modules ~f:(fun path -> List.last path)
-
 let lifecycle_family =
   {
     family_alias = "lifecycle";
     family_is =
-      "has a module that reads the resource-lifecycle instrumentation ("
-      ^ String.concat ~sep:", " lifecycle_module_names
-      ^ "), so it answers for allocation, free or context lifetime across a cleanup seam";
+      "declares a resource-lifecycle probe on a named unit whose libraries reach the \
+       instrumentation";
     (* Two on 2026-08-27. One is the floor that matters -- the failure it guards against is the
        derivation finding NOTHING, and a floor equal to today's count would fail the day a probe is
        retired, which is the tally gh-ocannl-665 took out of the sibling goldens. *)
@@ -622,16 +601,6 @@ let family_units file_stanzas ~subdir stanza =
             (runner_aliases file_stanzas ~identities:(executable_identities stanza ~subdir ~name)))
   | Some _ -> [ unit (List.map (aliases_of stanza) ~f:(fun alias -> (subdir, alias))) ]
   | None -> []
-
-(* The stanza kinds whose units can be asked whether their own modules read the lifecycle
-   instrumentation. A plain `(library)` whose modules read it is the instrumentation's own
-   implementation or a shared helper, not a probe anything runs; an inline-test library is a probe,
-   and is included for that reason. *)
-let has_family_modules stanza =
-  match Scan.head stanza with
-  | Some ("test" | "tests" | "executable" | "executables") -> true
-  | Some "library" -> Option.is_some (Scan.field stanza "inline_tests")
-  | _ -> false
 
 (* Dune's named dependencies: `(deps (:golden foo.expected))` binds `%{golden}` to that path. A
    pform naming one carries no colon, so without the binding `golden_stem` would take the BINDING's
@@ -1039,37 +1008,6 @@ let main () =
     List.Assoc.find sources ~equal:String.equal
       (String.lowercase (Scan.in_subdir dir (module_name ^ ".ml")))
   in
-  (* gh-ocannl-783: every source that REFERS TO one of the resource-lifecycle instrumentation
-     modules, keyed the way `source_of` looks a module up. What makes a test a lifecycle probe is
-     that it asks the instrumentation something -- and reading that off the text would have made
-     this very file a probe, since it has to spell the module names in order to look for them. *)
-  let lifecycle_sources =
-    List.filter_map source_files ~f:(fun (path, on_disk) ->
-        let content = In_channel.read_all on_disk in
-        (* Narrowed textually first -- the module has to be NAMED for any reference to reach it --
-           and then PARSED, because a doc comment, a string literal or a longer identifier names it
-           without reading it, and a family membership derived from a substring would demand a
-           focused alias for a test that never touches the instrumentation (Codex P2, round 4). *)
-        if
-          not
-            (List.exists lifecycle_module_leaves ~f:(fun m ->
-                 String.is_substring content ~substring:m))
-        then None
-        else
-          match Sources.module_references_in_source content ~paths:lifecycle_modules with
-          | [] -> None
-          | _ :: _ -> Some (String.lowercase path)
-          | exception exn ->
-              (* A source this scan cannot read is one it cannot answer for, and answering "no
-                 references" for it would be the silent failure the whole check is against. *)
-              Verdict.fail
-                (Printf.sprintf
-                   "%s names the resource-lifecycle instrumentation and does not parse, so whether \
-                    it reads it cannot be established: %s"
-                   path (Exn.to_string exn));
-              None)
-    |> Set.of_list (module String)
-  in
   (* gh-ocannl-723: every source that calls `Test_utils.Generated.init`, keyed the way `source_of`
      looks a module up, so that a stanza's `(modules …)` field answers for its own sources. Narrowed
      textually before parsing -- the module has to be NAMED for any spelling of the call to reach it
@@ -1279,6 +1217,9 @@ let main () =
           (Scan.stanzas (In_channel.read_all on_disk))
           ~f:(fun dir stanza -> if gate_program stanza then [ (dir, stanza) ] else []))
   in
+  let lifecycle_dune_files =
+    List.map dune_files ~f:(fun (path, on_disk) -> (path, In_channel.read_all on_disk))
+  in
   List.iter dune_files ~f:(fun (dune_file, on_disk) ->
       let dir = match Stdlib.Filename.dirname dune_file with "." -> "" | dir -> dir in
       let content = In_channel.read_all on_disk in
@@ -1448,10 +1389,6 @@ let main () =
          [marked_stanzas] makes the same descent as the backend subject scan; this is the one input
          to [per_directory] below, so every directory-scoped check consumes the same groups. *)
       let file_stanzas = List.map marked ~f:(fun m -> (m.Scan.marked_subdir, m.Scan.marked_sexp)) in
-      let stanzas_in subdir =
-        List.filter_map file_stanzas ~f:(fun (candidate, stanza) ->
-            if String.equal candidate subdir then Some stanza else None)
-      in
       let directory_checks = ref [] in
       let check_per_directory check = directory_checks := check :: !directory_checks in
       (* Runner identities are written relative to the DUNE FILE, so the raw `(subdir …)` path is
@@ -1779,46 +1716,13 @@ let main () =
                          scans_suite scans_suite)));
       (* The focused aggregates (gh-ocannl-783): the same completeness question, asked of two more
          families whose membership is derived from what the member stanza declares. `file_stanzas`
-         and `stanzas_in` are the same per-directory readings the gate check above uses.
+         uses the same per-directory reading the gate check above uses.
 
          Every unit the file builds, each in the subdirectory dune applies it to. The whole file's
          stanzas go in, since the rule that runs an executable need not sit in its group. *)
       let units =
         List.concat_map file_stanzas ~f:(fun (subdir, stanza) ->
             family_units file_stanzas ~subdir stanza)
-      in
-      (* The modules of ONE unit. Dune builds each name of a plural stanza as its own executable --
-         its main module plus the stanza's shared ones, and NOT the other names' mains -- so asking
-         the question of the stanza's whole module list makes one main's use of the instrumentation
-         a claim about its neighbour too (Codex P2, round 2). *)
-      let unit_module_sources { unit_subdir; unit_stanza; unit_name; _ } =
-        let here = Scan.in_subdir dir unit_subdir in
-        let directory = if String.is_empty here then "." else here in
-        let directory_modules =
-          List.filter_map source_files ~f:(fun (path, _) ->
-              if String.equal (Stdlib.Filename.dirname path) directory then
-                Some (Stdlib.Filename.remove_extension (Stdlib.Filename.basename path))
-              else None)
-        in
-        (* Every main module this directory's stanzas name OTHER than this unit's own. Dune gives
-           each named test and executable its own main and shares the rest, so a stanza that omits
-           `(modules …)` does not build its neighbour's main -- and reading it as if it did made one
-           main's use of the instrumentation a claim about every default-module stanza beside it
-           (Codex P2, rounds 2 and 13). *)
-        let siblings =
-          match unit_name with
-          | None -> []
-          | Some name ->
-              List.concat_map (stanzas_in unit_subdir) ~f:(fun stanza ->
-                  if has_family_modules stanza then Scan.names_of stanza else [])
-              |> List.filter ~f:(fun other -> not (String.equal other name))
-              |> List.map ~f:String.lowercase
-        in
-        Scan.modules_of ~directory_modules (stanzas_in unit_subdir) unit_stanza
-        |> List.filter ~f:(fun module_name ->
-            not (List.mem siblings (String.lowercase module_name) ~equal:String.equal))
-        |> List.map ~f:(fun module_name ->
-            String.lowercase (Scan.in_subdir here (module_name ^ ".ml")))
       in
       (* The Metal derivation reads the MARKED stanza, whatever kind it is. For an `(executable)`
          the marker's required placement is the rule that runs it (gh-ocannl-659), so a Metal test
@@ -1846,10 +1750,14 @@ let main () =
             List.exists metal_stanzas ~f:(fun (subdir, stanza) ->
                 String.equal subdir u.unit_subdir && phys_equal stanza u.unit_stanza))
       in
+      let lifecycle_contract = Lifecycle.contract ~files:lifecycle_dune_files content in
+      List.iter (Lifecycle.issues lifecycle_contract) ~f:(fun why -> fail (dune_file ^ ": " ^ why));
+      let declared_lifecycle = Lifecycle.members lifecycle_contract in
       let lifecycle_members =
         List.filter units ~f:(fun u ->
-            has_family_modules u.unit_stanza
-            && List.exists (unit_module_sources u) ~f:(Set.mem lifecycle_sources))
+            List.exists declared_lifecycle ~f:(fun (subdir, stanza, name) ->
+                String.equal subdir u.unit_subdir && Sexp.equal stanza u.unit_stanza
+                && Option.equal String.equal (Some name) u.unit_name))
       in
       let family_reaches = Hashtbl.create (module String) in
       let family_directory family subdir = family.family_alias ^ "\t" ^ subdir in
@@ -3355,7 +3263,7 @@ let floor_control () =
    the alias listing it passes, and a stanza the derivation calls no member is asked for nothing.
 
    Both derivations are exercised, because they are independent: the Metal one reads the stanza's
-   backend marker, the lifecycle one reads its modules' sources, and a control that ran only the
+   backend marker, the lifecycle one validates a local declaration, and a control that ran only the
    first would leave the second able to stop finding anything. *)
 
 let family_gate ~elsewhere =
@@ -3660,193 +3568,135 @@ let family_listed_aliases ~shape ~listing =
   | Plural_tests, Every -> [ "runtest-probe"; "runtest-probe2" ]
 
 (* The subject: one member stanza which is, or is not, a member of the family named -- by its
-   backend marker for `metal-codegen`, by what `probe.ml` names for `lifecycle` -- and, optionally,
-   the family alias stanza that aggregates it. Everything else is held fixed across the runs. *)
-let family_subject ~shape ~metal ~family ~listing =
+   backend marker for `metal-codegen`, by its validated local declaration for `lifecycle` -- and,
+   optionally, the family alias stanza that aggregates it. Everything else is held fixed across the
+   runs. *)
+let family_subject ~shape ~metal ~lifecycle ~family ~listing =
+  let member = family_member_stanza ~shape ~metal in
+  let member =
+    if lifecycle then
+      let name = match shape with Inline_library -> "probelib" | _ -> "probe" in
+      let token =
+        match shape with
+        | Plural_tests | Public_names_crossed -> "(names probe probe2)"
+        | _ -> "(name " ^ name ^ ")"
+      in
+      String.substr_replace_all member ~pattern:token
+        ~with_:(token ^ "\n ; ocannl-lifecycle: " ^ name ^ " -- exercises resource cleanup seams")
+      |> fun member ->
+      String.substr_replace_all member ~pattern:"(libraries base)"
+        ~with_:"(libraries base fixture.ir)"
+    else member
+  in
   Printf.sprintf "%s\n%s%s"
     (family_gate ~elsewhere:(match shape with Gate_elsewhere -> true | _ -> false))
-    (family_member_stanza ~shape ~metal)
+    member
     (match (family, family_listed_aliases ~shape ~listing) with
     | None, _ | _, [] -> ""
     | Some family, aliases ->
         Printf.sprintf "\n(alias\n (name %s)\n (deps\n  (alias runtest-gate)\n%s))\n" family
           (String.concat ~sep:"\n" (List.map aliases ~f:(Printf.sprintf "  (alias %s)"))))
 
-(* The lifecycle derivation reads the module's SOURCE, so the two spellings of `probe.ml` are what
-   makes the stanza a member or not. Syntactically valid OCaml either way: the checker parses the
-   sources it is handed for the variables they read, and a source it cannot read is one it reports
-   rather than passes over. *)
-type family_probe_source =
-  | Reads  (** a real reference to the instrumentation *)
-  | Mentions_only  (** the module named in a comment and a string literal, and nowhere else *)
-  | Same_named  (** a module of the same LAST name, reached through another qualifier *)
-  | Opened  (** `open Ir`, then the module named without its qualifier *)
-  | Qualifier_aliased  (** `module I = Ir`, then the module named through the alias *)
-  | Scoped_open  (** the qualifier opened inside a nested module, and named OUTSIDE it *)
-  | Qualifier_shadowed  (** the qualifier's NAME rebound to another module, then used *)
-  | Nested_qualifier  (** somebody else's module of the qualifier's name, opened and aliased *)
-  | Nested_path  (** somebody else's module of the qualifier's name, written out in full *)
-  | Leaf_shadowed  (** the qualifier opened, and then the LEAF rebound to another module *)
-  | Alias_nested  (** the qualifier aliased, and the alias then reached through another module *)
-  | Functor_parameter  (** the qualifier's name introduced as a functor's parameter *)
-  | Include_wrapper  (** the qualifier re-exported by a structure, then used through it *)
-  | Include_with_definition
-      (** the same wrapper, with an unrelated definition beside the include *)
-  | Open_not_export  (** the qualifier OPENED in a wrapper that includes somebody else *)
-  | Module_type_functor  (** the qualifier's name as a MODULE TYPE functor's parameter *)
-  | Include_then_override  (** the qualifier included, and then one of its leaves redefined *)
-  | Signature_module  (** the qualifier's name declared as a module INSIDE a signature *)
-  | Override_then_include  (** a definition, and then an include that supersedes it *)
-  | Signature_open  (** the qualifier opened inside a signature, then a leaf named unqualified *)
-  | Recursive_module  (** the qualifier's name taken by a recursive module *)
-  | Rebound_wrapper  (** an alias of the qualifier, rebound to a wrapper that overrides the leaf *)
-  | Recursive_group  (** a recursive group binding an alias BEFORE it takes the qualifier's name *)
-  | Include_then_include  (** the qualifier included, and then somebody else included after it *)
-  | Signature_alias  (** a manifest module alias inside a signature, used by a later declaration *)
-  | Neither
+(* Sources do not decide lifecycle membership. A complicated module expression and a prose mention
+   are equally irrelevant to the explicit Dune declaration. *)
+type family_probe_source = Reads | Mentions_only | Neither
 
 let family_probe = function
-  | Reads -> "let () = ignore (Ir.Alloc_census.snapshot ())\n"
-  | Same_named ->
-      (* Somebody else's `Alloc_census`, and a bare one: real references, to a module whose
-         provenance is not the instrumentation's (Codex P2, round 5). *)
-      "module Alloc_census = Foo.Alloc_census\nlet () = ignore (Foo.Alloc_census.snapshot ())\n"
-  | Opened ->
-      (* The same reference with the qualifier opened rather than written: no `Ir.Alloc_census`
-         anywhere in the text (Codex P2, round 6). *)
-      "open Ir\n\nlet () = ignore (Alloc_census.snapshot ())\n"
-  | Qualifier_aliased ->
-      (* And with the qualifier itself bound to a name of the source's choosing. *)
-      "module I = Ir\n\nlet () = ignore (I.Alloc_census.snapshot ())\n"
-  | Qualifier_shadowed ->
-      (* The qualifier's name rebound: what `Ir.Alloc_census` names after this is Other's (Codex P2,
-         round 8). *)
-      "module Ir = Other\n\nlet () = ignore (Ir.Alloc_census.snapshot ())\n"
-  | Nested_qualifier ->
-      (* `Vendor.Ir` is Vendor's, whatever it is called. Both spellings that would bind it: opened,
-         so a bare `Alloc_census` would be in scope, and aliased under the qualifier's own name
-         (Codex P2, round 9). *)
-      "module Ir = Vendor.Ir\n\n\
-       let () = ignore (Ir.Alloc_census.snapshot ())\n\n\
-       module Also = struct\n\
-      \  open Vendor.Ir\n\n\
-      \  let () = ignore (Alloc_census.snapshot ())\n\
-       end\n"
-  | Nested_path ->
-      (* And written out rather than bound: the path names Vendor's module, and our components sit
-         inside it (Codex P2, round 10). *)
-      "let () = ignore (Vendor.Ir.Alloc_census.snapshot ())\n"
-  | Leaf_shadowed ->
-      (* The open is ours and the leaf is not: after the rebinding, `Alloc_census` is Foo's (Codex
-         P2, round 11). *)
-      "open Ir\n\n\
-       module Alloc_census = Foo.Alloc_census\n\n\
-       let () = ignore (Alloc_census.snapshot ())\n"
-  | Alias_nested ->
-      (* The alias is ours and the path is not: `Vendor.I.Alloc_census` resolves from Vendor (Codex
-         P2, round 12). *)
-      "module I = Ir\n\nlet () = ignore (Vendor.I.Alloc_census.snapshot ())\n"
-  | Functor_parameter ->
-      (* The qualifier's NAME as a functor parameter: inside the body it is the parameter. *)
-      "module M (Ir : S) = struct\n  let () = ignore (Ir.Alloc_census.snapshot ())\nend\n"
-  | Include_wrapper ->
-      (* A structure that only re-exports the qualifier IS the qualifier for this purpose (Codex P2,
-         round 13). *)
-      "module I = struct\n  include Ir\nend\n\nlet () = ignore (I.Alloc_census.snapshot ())\n"
-  | Include_with_definition ->
-      (* An include exports its contents whatever sits next to it (Codex P2, round 14). *)
-      "module I = struct\n\
-      \  include Ir\n\n\
-      \  let helper = ()\n\
-       end\n\n\
-       let () = ignore (I.Alloc_census.snapshot ())\n\
-       let () = I.helper\n"
-  | Open_not_export ->
-      (* An `open` changes lookup inside the structure and exports nothing, so what `I` re-exports
-         is Vendor's (Codex P2, round 14). *)
-      "module I = struct\n\
-      \  open Ir\n\n\
-      \  include Vendor\n\
-       end\n\n\
-       let () = ignore (I.Alloc_census.snapshot ())\n"
-  | Module_type_functor ->
-      (* The module-type spelling of a functor: the `Ir` in the result signature is the
-         parameter. *)
-      "module type F = functor (Ir : S) -> sig\n  val x : Ir.Alloc_census.t\nend\n"
-  | Include_then_override ->
-      (* The wrapper re-exports the qualifier and then overrides the leaf, so a reference through
-         the wrapper to THAT leaf is Vendor's (Codex P2, round 15). *)
-      "module I = struct\n\
-      \  include Ir\n\n\
-      \  module Alloc_census = Vendor.Alloc_census\n\
-       end\n\n\
-       let () = ignore (I.Alloc_census.snapshot ())\n"
-  | Signature_module ->
-      (* A signature binds module names for the items after it. *)
-      "module type S = sig\n  module Ir : X\n\n  val x : Ir.Alloc_census.t\nend\n"
-  | Override_then_include ->
-      (* The include comes LAST, so what `I.Alloc_census` names is the qualifier's (Codex P2, round
-         16). A member. *)
-      "module I = struct\n\
-      \  module Alloc_census = Vendor.Alloc_census\n\n\
-      \  include Ir\n\
-       end\n\n\
-       let () = ignore (I.Alloc_census.snapshot ())\n"
-  | Signature_open ->
-      (* A signature's open reaches the items after it, so `AC` is `Ir.Alloc_census`. A member. *)
-      "module type S = sig\n  open Ir\n\n  module AC = Alloc_census\nend\n"
-  | Recursive_module ->
-      (* The recursive group's name is in scope throughout it and after it. *)
-      "module rec Ir : sig\n\
-      \  val x : int\n\
-       end = struct\n\
-      \  let x = 0\n\
-       end\n\n\
-       let () = ignore (Ir.Alloc_census.snapshot ())\n"
-  | Rebound_wrapper ->
-      (* The name first aliases the qualifier and is then rebound to a wrapper that overrides the
-         leaf: the second binding is what stands. *)
-      "module I = Ir\n\n\
-       module I = struct\n\
-      \  include Ir\n\n\
-      \  module Alloc_census = Vendor.Alloc_census\n\
-       end\n\n\
-       let () = ignore (I.Alloc_census.snapshot ())\n"
-  | Recursive_group ->
-      (* Every name of the group is in scope in every body, so `I` here is bound to the group's own
-         `Ir`, not to the qualifier (Codex P2, round 17). *)
-      "module rec I : sig\n\
-      \  val x : int\n\
-       end = Ir\n\n\
-       and Ir : sig\n\
-      \  val x : int\n\
-       end = struct\n\
-      \  let x = 0\n\
-       end\n\n\
-       let () = ignore (I.Alloc_census.snapshot ())\n"
-  | Include_then_include ->
-      (* The later include decides the leaf, and which leaves it brings cannot be read off the tree
-         -- so the wrapper stops naming the qualifier (Codex P2, round 17). *)
-      "module I = struct\n\
-      \  include Ir\n\n\
-      \  include Vendor\n\
-       end\n\n\
-       let () = ignore (I.Alloc_census.snapshot ())\n"
-  | Signature_alias ->
-      (* A manifest alias binds, so the later declaration is a real reference. *)
-      "module type S = sig\n  module I = Ir\n\n  val x : I.Alloc_census.t\nend\n"
-  | Scoped_open ->
-      (* The open is real and so is the reference, and they are in different scopes: what
-         `Alloc_census` names outside `Elsewhere` is somebody else's module (Codex P2, round 7). *)
-      "module Elsewhere = struct\n  open Ir\nend\n\nlet () = ignore (Alloc_census.snapshot ())\n"
-  | Mentions_only ->
-      (* The module NAMED where naming it reads nothing -- the shape a substring derivation calls a
-         probe (Codex P2, round 4). Also as a longer identifier, since that is the third way a text
-         scan mistakes a mention for a use. *)
-      "(* See Ir.Alloc_census for what this test does NOT do. *)\n\
-       let alloc_census_note = \"Ir.Alloc_census\"\n\
-       let () = ignore alloc_census_note\n"
+  | Reads -> "module I = struct include Ir end\nlet () = ignore (I.Alloc_census.snapshot ())\n"
+  | Mentions_only -> "(* Ir.Alloc_census *)\nlet note = \"Ir.Alloc_census\"\nlet () = ignore note\n"
   | Neither -> "let () = ()\n"
+
+let lifecycle_contract_control () =
+  let owner =
+    "(library (name ir) (public_name fixture.ir) (modules alloc_census resource_fault_injection))"
+  in
+  let files =
+    [
+      ("arrayjit/lib/dune", owner); ("helper/dune", "(library (name helper) (libraries fixture.ir))");
+    ]
+  in
+  let marker = "; ocannl-lifecycle: probe -- tests resource cleanup seams\n" in
+  let subject ?(libs = "fixture.ir") ?(kind = "test") ?(names = "(name probe)") marker =
+    "(" ^ kind ^ "\n" ^ marker ^ names ^ " (libraries " ^ libs ^ "))"
+  in
+  let problems ?(files = files) content = Lifecycle.contract ~files content |> Lifecycle.issues in
+  let cases =
+    [
+      ( "a local probe declaration is valid with its actual instrumentation owner",
+        subject marker,
+        false );
+      ( "a transitive library path proves the probe can link instrumentation",
+        subject ~libs:"helper" marker,
+        false );
+      ("linking instrumentation alone does not declare lifecycle intent", subject "", false);
+      ( "a probe without an instrumentation-capable library is refused",
+        subject ~libs:"base" marker,
+        true );
+      ( "an expansion in a marked probe's libraries is refused",
+        subject ~libs:"%{env:LIBS}" marker,
+        true );
+      ( "a select in a marked probe's libraries is explicitly unsupported",
+        subject ~libs:"(select x.ml from (ir -> yes.ml) (-> no.ml))" marker,
+        true );
+      ( "a marker must name a unit its stanza actually builds",
+        subject (String.substr_replace_all marker ~pattern:"probe --" ~with_:"other --"),
+        true );
+      ( "an empty unit entry is refused",
+        subject (String.substr_replace_all marker ~pattern:"probe --" ~with_:"probe, --"),
+        true );
+      ( "a repeated unit is refused",
+        subject (String.substr_replace_all marker ~pattern:"probe --" ~with_:"probe,probe --"),
+        true );
+      ("a repeated marker on one stanza is refused", subject (marker ^ marker), true);
+      ("a marker between stanzas is refused", marker ^ subject "", true);
+      ( "a marker inside a subdir wrapper but outside its children is refused",
+        "(subdir child\n" ^ marker ^ subject "" ^ ")",
+        true );
+      ("a marker on a rule is refused", "(rule\n" ^ marker ^ "(action (echo x)))", true);
+      ("a marker on a library without inline tests is refused", subject ~kind:"library" marker, true);
+      ( "an inline-test library can declare a lifecycle probe",
+        "(library\n" ^ marker ^ "(name probe) (inline_tests) (libraries fixture.ir))",
+        false );
+      ( "a marker inside a string cannot declare a probe",
+        subject "(deps \"ocannl-lifecycle: probe -- tests resource seams\")",
+        true );
+      ("a marker without a reason separator is refused", subject "; ocannl-lifecycle: probe\n", true);
+      ( "a marker with a one-word reason is refused",
+        subject "; ocannl-lifecycle: probe -- cleanup\n",
+        true );
+      ( "a marker may select one unit of a plural stanza",
+        subject ~kind:"tests" ~names:"(names probe other)" marker,
+        false );
+      ( "a marker may select both units of a plural stanza",
+        subject ~kind:"executables" ~names:"(names probe other)"
+          (String.substr_replace_all marker ~pattern:"probe --" ~with_:"probe,other --"),
+        false );
+    ]
+  in
+  List.iter cases ~f:(fun (claim, content, rejected) ->
+      Verdict.p claim (match problems content with [] -> not rejected | _ :: _ -> rejected));
+  let declared =
+    Lifecycle.contract ~files (subject ~kind:"tests" ~names:"(names probe other)" marker)
+    |> Lifecycle.members
+  in
+  Verdict.p "one plural-unit declaration yields exactly that unit's membership"
+    (match declared with [ (_, _, name) ] -> String.equal name "probe" | _ -> false);
+  let unrelated = [ ("elsewhere/dune", owner) ] in
+  Verdict.p "a same-named module outside the instrumentation's Dune directory lends no capability"
+    (not (List.is_empty (problems ~files:unrelated (subject marker))));
+  let removed =
+    [
+      ("arrayjit/lib/dune", String.substr_replace_all owner ~pattern:"alloc_census" ~with_:"other");
+    ]
+  in
+  Verdict.p "removing instrumentation ownership invalidates a probe declaration"
+    (not (List.is_empty (problems ~files:removed (subject marker))));
+  let opaque = ("helper/dune", "(library (name opaque) (libraries %{env:LIBS}))") :: files in
+  Verdict.p "an opaque dependency path without an established owner is refused"
+    (not (List.is_empty (problems ~files:opaque (subject ~libs:"opaque" marker))));
+  let cyclic = ("helper/dune", "(library (name cyclic) (libraries cyclic))") :: files in
+  Verdict.p "a dependency cycle cannot fabricate instrumentation capability"
+    (not (List.is_empty (problems ~files:cyclic (subject ~libs:"cyclic" marker))))
 
 let family_control () =
   let exe =
@@ -3855,7 +3705,12 @@ let family_control () =
     else name
   in
   let root = Stdlib.Filename.temp_dir "evd_family" "" in
-  let context = control_context () in
+  let context =
+    ( "arrayjit/lib/dune",
+      "(library (name fixture_ir) (public_name fixture.ir) (modules alloc_census \
+       resource_fault_injection))\n" )
+    :: control_context ()
+  in
   List.iter context ~f:(fun (file, content) ->
       write_file (Stdlib.Filename.concat root file) content);
   write_file (Stdlib.Filename.concat root "t/gate.ml") "let () = ()\n";
@@ -3872,13 +3727,15 @@ let family_control () =
     "t/dune" :: "t/gate.ml" :: "t/probe.ml" :: "t/probe2.ml" :: "t/child/probe.ml" :: "t/harness.ml"
     :: "t/child/childgate.ml" :: List.map context ~f:fst
   in
-  let run ?(shape = Single_test) ?(listing = Every) ?probe ~metal ~lifecycle ~family () =
+  let run ?(shape = Single_test) ?(listing = Every) ?probe ?(transform = Fn.id) ~metal ~lifecycle
+      ~family () =
+    let declares = lifecycle in
     let probe =
       match probe with Some probe -> probe | None -> if lifecycle then Reads else Neither
     in
     write_file
       (Stdlib.Filename.concat root "t/dune")
-      (family_subject ~shape ~metal ~family ~listing);
+      (transform (family_subject ~shape ~metal ~lifecycle:declares ~family ~listing));
     (* The same source in both directories, so that a shape putting the member in `(subdir child …)`
        is put the same question as one at the top level. *)
     List.iter [ "t/probe.ml"; "t/child/probe.ml" ] ~f:(fun path ->
@@ -3896,14 +3753,16 @@ let family_control () =
   let metal_listed = run ~metal:true ~lifecycle:false ~family:metal () in
   let lifecycle_omitted = run ~metal:false ~lifecycle:true ~family:None () in
   let lifecycle_listed = run ~metal:false ~lifecycle:true ~family:lifecycle () in
+  let marker_only_omitted = run ~probe:Neither ~metal:false ~lifecycle:true ~family:None () in
+  let marker_only_listed = run ~probe:Neither ~metal:false ~lifecycle:true ~family:lifecycle () in
   (* The marker's placement on an `(executable)` is the RULE that runs it, so the derivation has to
      read it there and the alias to list is the rule's. *)
   let runner_omitted = run ~shape:Exe_with_runner ~metal:true ~lifecycle:false ~family:None () in
   let runner_listed = run ~shape:Exe_with_runner ~metal:true ~lifecycle:false ~family:metal () in
   (* A plural stanza is several units: a marker covers both of them, so listing one alias leaves the
-     other out of the family -- while the lifecycle derivation belongs to whichever main actually
-     names the instrumentation, so listing that one alias is COMPLETE. Same stanza, same listing,
-     opposite verdicts: what differs is which derivation put it in the family. *)
+     other out of the family -- while the lifecycle declaration names one unit, so listing that one
+     alias is COMPLETE. Same stanza, same listing, opposite verdicts: what differs is which
+     derivation put it in the family. *)
   let plural_half =
     run ~shape:Plural_tests ~listing:First_only ~metal:true ~lifecycle:false ~family:metal ()
   in
@@ -3941,7 +3800,7 @@ let family_control () =
   in
   (* Naming the instrumentation is not reading it: a doc comment, a string literal and a longer
      identifier put the name in the source and put nothing in the family. *)
-  let mention_only = run ~probe:Mentions_only ~metal:false ~lifecycle:true ~family:None () in
+  let mention_only = run ~probe:Mentions_only ~metal:false ~lifecycle:false ~family:None () in
   (* The group's own ambient gate: an alias defined inside `(subdir child …)` is `child`'s, and a
      gate at the top level does not reach it. *)
   let subdir_ungated = run ~shape:Subdir_ungated ~metal:true ~lifecycle:false ~family:None () in
@@ -3950,66 +3809,11 @@ let family_control () =
   let subdir_unlocked =
     run ~shape:Subdir_unlocked_gate ~metal:true ~lifecycle:false ~family:None ()
   in
-  (* And a module of the same last name reached through another qualifier: a real reference, to
-     something that is not the instrumentation. *)
-  let same_named = run ~probe:Same_named ~metal:false ~lifecycle:true ~family:None () in
-  (* The two spellings that reach the instrumentation without writing its qualifier. Both ARE
-     members, so the tree without a family stanza is the reported one -- the discriminating
-     direction, since a derivation that missed them would pass this tree silently. *)
-  let opened_probe = run ~probe:Opened ~metal:false ~lifecycle:true ~family:None () in
-  let aliased_probe = run ~probe:Qualifier_aliased ~metal:false ~lifecycle:true ~family:None () in
-  (* And the same open, one scope away from the reference. *)
-  let scoped_open = run ~probe:Scoped_open ~metal:false ~lifecycle:true ~family:None () in
-  (* And the qualifier's own name rebound to another module. *)
-  let shadowed_qualifier =
-    run ~probe:Qualifier_shadowed ~metal:false ~lifecycle:true ~family:None ()
-  in
-  (* Somebody else's module of the qualifier's name, opened and aliased. *)
-  let nested_qualifier = run ~probe:Nested_qualifier ~metal:false ~lifecycle:true ~family:None () in
-  let nested_path = run ~probe:Nested_path ~metal:false ~lifecycle:true ~family:None () in
-  (* The qualifier opened and the LEAF then rebound: what follows is Foo's. *)
-  let leaf_shadowed = run ~probe:Leaf_shadowed ~metal:false ~lifecycle:true ~family:None () in
-  (* The alias reached through another module, and the qualifier's name as a functor parameter. *)
-  let alias_nested = run ~probe:Alias_nested ~metal:false ~lifecycle:true ~family:None () in
-  let functor_parameter =
-    run ~probe:Functor_parameter ~metal:false ~lifecycle:true ~family:None ()
-  in
-  (* A structure that only re-exports the qualifier IS one, so its user is a member and the tree
-     without a family stanza is the reported one. *)
-  let include_wrapper = run ~probe:Include_wrapper ~metal:false ~lifecycle:true ~family:None () in
-  (* The same wrapper with a definition beside the include: still a re-export, still a member. *)
-  let include_with_definition =
-    run ~probe:Include_with_definition ~metal:false ~lifecycle:true ~family:None ()
-  in
-  (* An `open` in a wrapper that includes somebody else re-exports the somebody else. *)
-  let open_not_export = run ~probe:Open_not_export ~metal:false ~lifecycle:true ~family:None () in
-  (* And the module-type spelling of a functor parameter. *)
-  let module_type_functor =
-    run ~probe:Module_type_functor ~metal:false ~lifecycle:true ~family:None ()
-  in
-  (* A wrapper that re-exports the qualifier and then overrides the leaf, and a signature that binds
-     the qualifier's name: neither reference is ours. *)
-  let include_then_override =
-    run ~probe:Include_then_override ~metal:false ~lifecycle:true ~family:None ()
-  in
-  let signature_module = run ~probe:Signature_module ~metal:false ~lifecycle:true ~family:None () in
-  (* Two spellings that ARE references and were missed, and two that are not and were accepted. *)
-  let override_then_include =
-    run ~probe:Override_then_include ~metal:false ~lifecycle:true ~family:None ()
-  in
-  let signature_open = run ~probe:Signature_open ~metal:false ~lifecycle:true ~family:None () in
-  let recursive_module = run ~probe:Recursive_module ~metal:false ~lifecycle:true ~family:None () in
-  let rebound_wrapper = run ~probe:Rebound_wrapper ~metal:false ~lifecycle:true ~family:None () in
-  let recursive_group = run ~probe:Recursive_group ~metal:false ~lifecycle:true ~family:None () in
-  let include_then_include =
-    run ~probe:Include_then_include ~metal:false ~lifecycle:true ~family:None ()
-  in
-  let signature_alias = run ~probe:Signature_alias ~metal:false ~lifecycle:true ~family:None () in
   (* And a `(test)` stanza as the runner of a lifecycle executable. *)
   let test_stanza_runner =
     run ~shape:Test_stanza_runner ~metal:false ~lifecycle:true ~family:lifecycle ()
   in
-  (* Two default-module tests, only one of whose mains reads the instrumentation: listing that one
+  (* Two default-module tests, only one of which is declared a lifecycle probe: listing that one
      alias is complete. *)
   let sibling_defaults =
     run ~shape:Sibling_defaults ~metal:false ~lifecycle:true ~family:lifecycle ()
@@ -4033,6 +3837,30 @@ let family_control () =
   (* The negative control: neither derivation calls this stanza a member, so no family alias is
      asked for. A derivation that over-claimed would fail this correct tree. *)
   let no_member = run ~metal:false ~lifecycle:false ~family:None () in
+  let stale_artifact =
+    run ~metal:false ~lifecycle:false ~family:None
+      ~transform:(fun content ->
+        String.substr_replace_all content ~pattern:"(deps ocannl_config)"
+          ~with_:"(deps ocannl_config (env_var OCANNL_BUILD_FILES_PREFIX))")
+      ()
+  in
+  let stale_trace =
+    run ~metal:false ~lifecycle:false ~family:None
+      ~transform:(fun content ->
+        content
+        ^ "\n\
+           (library (name traced) (modules probe) (preprocessor_deps (env_var \
+           OCANNL_LOG_LEVEL_PROBE)))\n")
+      ()
+  in
+  let exemption_file, exemption_content =
+    List.find_exn context ~f:(fun (path, _) -> String.equal path "test/operations/dune")
+  in
+  write_file
+    (Stdlib.Filename.concat root exemption_file)
+    (String.substr_replace_all exemption_content ~pattern:"(env_var ocannl_backedn)" ~with_:"");
+  let stale_exemption = run ~metal:false ~lifecycle:false ~family:None () in
+  write_file (Stdlib.Filename.concat root exemption_file) exemption_content;
   let omitted_ok family (result : Unix.process_status * string) =
     exited 1 result
     && String.is_substring (snd result) ~substring:unreached
@@ -4074,32 +3902,7 @@ let family_control () =
     && String.is_substring (snd subdir_unlocked) ~substring:"does not take the lock"
     && String.is_substring (snd subdir_unlocked) ~substring:"(subdir child"
   in
-  let same_named_ok = listed_ok same_named in
-  let opened_probe_ok = omitted_ok lifecycle_family.family_alias opened_probe in
-  let aliased_probe_ok = omitted_ok lifecycle_family.family_alias aliased_probe in
-  let scoped_open_ok = listed_ok scoped_open in
-  let shadowed_qualifier_ok = listed_ok shadowed_qualifier in
   let public_by_path_ok = omitted_ok lifecycle_family.family_alias public_by_path in
-  let nested_qualifier_ok = listed_ok nested_qualifier in
-  let nested_path_ok = listed_ok nested_path in
-  let leaf_shadowed_ok = listed_ok leaf_shadowed in
-  let alias_nested_ok = listed_ok alias_nested in
-  let functor_parameter_ok = listed_ok functor_parameter in
-  let include_wrapper_ok = omitted_ok lifecycle_family.family_alias include_wrapper in
-  let include_with_definition_ok =
-    omitted_ok lifecycle_family.family_alias include_with_definition
-  in
-  let open_not_export_ok = listed_ok open_not_export in
-  let module_type_functor_ok = listed_ok module_type_functor in
-  let include_then_override_ok = listed_ok include_then_override in
-  let signature_module_ok = listed_ok signature_module in
-  let override_then_include_ok = omitted_ok lifecycle_family.family_alias override_then_include in
-  let signature_open_ok = omitted_ok lifecycle_family.family_alias signature_open in
-  let recursive_module_ok = listed_ok recursive_module in
-  let rebound_wrapper_ok = listed_ok rebound_wrapper in
-  let recursive_group_ok = listed_ok recursive_group in
-  let include_then_include_ok = listed_ok include_then_include in
-  let signature_alias_ok = omitted_ok lifecycle_family.family_alias signature_alias in
   let test_stanza_runner_ok = listed_ok test_stanza_runner in
   let sibling_defaults_ok = listed_ok sibling_defaults in
   let runner_absolute_ok = omitted_ok lifecycle_family.family_alias runner_absolute in
@@ -4134,34 +3937,7 @@ let family_control () =
   if not mention_only_ok then report "the instrumentation named but not read" mention_only;
   if not subdir_ungated_ok then report "family alias in a group with no gate" subdir_ungated;
   if not subdir_unlocked_ok then report "locked group whose gate takes no lock" subdir_unlocked;
-  if not same_named_ok then report "a same-named module of another provenance" same_named;
-  if not opened_probe_ok then report "the qualifier opened rather than written" opened_probe;
-  if not aliased_probe_ok then report "the qualifier bound to another name" aliased_probe;
-  if not scoped_open_ok then report "the qualifier opened in another scope" scoped_open;
-  if not shadowed_qualifier_ok then report "the qualifier's name rebound" shadowed_qualifier;
   if not public_by_path_ok then report "a file sharing the public name" public_by_path;
-  if not nested_qualifier_ok then report "another module named like the qualifier" nested_qualifier;
-  if not nested_path_ok then report "that module's path written out" nested_path;
-  if not leaf_shadowed_ok then report "the opened module's leaf rebound" leaf_shadowed;
-  if not alias_nested_ok then report "the alias reached through another module" alias_nested;
-  if not functor_parameter_ok then
-    report "the qualifier's name as a functor parameter" functor_parameter;
-  if not include_wrapper_ok then report "the qualifier re-exported by a structure" include_wrapper;
-  if not include_with_definition_ok then
-    report "a re-export beside a definition" include_with_definition;
-  if not open_not_export_ok then report "an open mistaken for a re-export" open_not_export;
-  if not module_type_functor_ok then report "a module-type functor parameter" module_type_functor;
-  if not include_then_override_ok then report "an overridden leaf" include_then_override;
-  if not signature_module_ok then report "a module bound inside a signature" signature_module;
-  if not override_then_include_ok then report "an include after a definition" override_then_include;
-  if not signature_open_ok then report "an open inside a signature" signature_open;
-  if not recursive_module_ok then
-    report "a recursive module of the qualifier's name" recursive_module;
-  if not rebound_wrapper_ok then report "an alias rebound to a wrapper" rebound_wrapper;
-  if not recursive_group_ok then
-    report "a recursive group taking the qualifier's name" recursive_group;
-  if not include_then_include_ok then report "an include after the qualifier's" include_then_include;
-  if not signature_alias_ok then report "a manifest alias in a signature" signature_alias;
   if not test_stanza_runner_ok then report "a test stanza as the runner" test_stanza_runner;
   if not sibling_defaults_ok then report "two default-module stanzas" sibling_defaults;
   if not runner_absolute_ok then report "an absolute runner path" runner_absolute;
@@ -4181,10 +3957,14 @@ let family_control () =
     metal_omitted_ok;
   Verdict.p "the same tree with the member listed in the family stanza passes" metal_listed_ok;
   Verdict.p
-    "a stanza whose modules read the resource-lifecycle instrumentation is reported the same way \
-     when the lifecycle alias does not reach it"
+    "a stanza declaring a lifecycle probe with instrumentation-capable libraries is reported the \
+     same way when the lifecycle alias does not reach it"
     lifecycle_omitted_ok;
   Verdict.p "the same tree with that member listed passes too" lifecycle_listed_ok;
+  Verdict.p "a local declaration remains a member without any OCaml module reference"
+    (omitted_ok lifecycle_family.family_alias marker_only_omitted);
+  Verdict.p "the same declared unit with its family alias listed passes without resolving OCaml"
+    (listed_ok marker_only_listed);
   Verdict.p
     "an executable whose RUNNER carries the metal marker is a member too, reported when the family \
      does not reach that rule"
@@ -4196,8 +3976,8 @@ let family_control () =
     plural_half_ok;
   Verdict.p "the same plural stanza with both listed passes" plural_whole_ok;
   Verdict.p
-    "the same one-alias listing is COMPLETE when only that main reads the instrumentation, so the \
-     lifecycle family is not asked for its neighbour"
+    "the same one-alias listing is COMPLETE when only that unit is declared a lifecycle probe, so \
+     the lifecycle family is not asked for its neighbour"
     plural_one_main_ok;
   Verdict.p
     "an inline-test library carrying the metal marker is a member, reported when the family does \
@@ -4241,95 +4021,19 @@ let family_control () =
     "a `(subdir …)` group whose actions take the training lock and whose gate does not is reported \
      there too"
     subdir_unlocked_ok;
-  Verdict.p
-    "a module of the same last name reached through another qualifier is not the instrumentation, \
-     and its user is no member"
-    same_named_ok;
-  Verdict.p
-    "`open Ir` and then a bare `Alloc_census.snapshot` is a reference to the instrumentation, and \
-     its test is a member"
-    opened_probe_ok;
-  Verdict.p "so is `module I = Ir` and then `I.Alloc_census.snapshot`" aliased_probe_ok;
-  Verdict.p
-    "an `open Ir` inside a nested module does not make a bare `Alloc_census` outside it a \
-     reference to the instrumentation"
-    scoped_open_ok;
-  Verdict.p
-    "`module Ir = Other` rebinds the qualifier, so a later `Ir.Alloc_census` is not the \
-     instrumentation"
-    shadowed_qualifier_ok;
+
   Verdict.p
     "a rule running a file that shares the executable's public name is not its runner, however \
      alike the two strings are"
     public_by_path_ok;
-  Verdict.p
-    "`open Vendor.Ir` and `module Ir = Vendor.Ir` bind Vendor's module, not the qualifier, so \
-     neither makes their file a member"
-    nested_qualifier_ok;
-  Verdict.p
-    "nor does writing `Vendor.Ir.Alloc_census` out in full: a path names the module it starts at"
-    nested_path_ok;
-  Verdict.p
-    "`open Ir` and then `module Alloc_census = Foo.Alloc_census` rebinds the leaf, so what follows \
-     is not the instrumentation"
-    leaf_shadowed_ok;
-  Verdict.p
-    "`module I = Ir` does not make `Vendor.I.Alloc_census` ours: an alias-qualified path resolves \
-     from where it starts"
-    alias_nested_ok;
-  Verdict.p "a functor parameter named `Ir` shadows the qualifier inside the functor's body"
-    functor_parameter_ok;
-  Verdict.p
-    "`module I = struct include Ir end` re-exports the qualifier, so `I.Alloc_census` is a \
-     reference to the instrumentation"
-    include_wrapper_ok;
-  Verdict.p "and goes on doing so when the structure defines something beside the include"
-    include_with_definition_ok;
-  Verdict.p
-    "`open Ir` inside a wrapper that includes somebody else re-exports the somebody else, so its \
-     user is no member"
-    open_not_export_ok;
-  Verdict.p
-    "a MODULE TYPE functor's parameter named `Ir` shadows the qualifier in its result signature"
-    module_type_functor_ok;
-  Verdict.p
-    "a wrapper that includes the qualifier and then redefines a leaf does not lend us that leaf"
-    include_then_override_ok;
-  Verdict.p
-    "`module Ir : X` inside a signature binds the name for the items after it, so a later \
-     `Ir.Alloc_census.t` is the signature's"
-    signature_module_ok;
-  Verdict.p
-    "an include AFTER a definition supersedes it, so the wrapper's leaf is the qualifier's again"
-    override_then_include_ok;
-  Verdict.p
-    "an `open` inside a signature reaches the items after it, so `module AC = Alloc_census` there \
-     is a reference"
-    signature_open_ok;
-  Verdict.p
-    "a recursive module taking the qualifier's name shadows it, in its own group and after it"
-    recursive_module_ok;
-  Verdict.p
-    "rebinding an alias replaces what it meant, so the earlier binding does not keep the later \
-     reference alive"
-    rebound_wrapper_ok;
-  Verdict.p
-    "every name of a recursive group is in scope in every body, so an alias declared before the \
-     group takes `Ir` is bound to the group's"
-    recursive_group_ok;
-  Verdict.p
-    "a wrapper that includes the qualifier and then includes somebody else stops naming it, since \
-     which leaves the second include brings cannot be read off the tree"
-    include_then_include_ok;
-  Verdict.p "`module I = Ir` inside a signature binds, so a later `I.Alloc_census.t` is a reference"
-    signature_alias_ok;
+
   Verdict.p
     "an executable run by a `(test)` stanza's custom action is aggregated through the \
      `runtest-<name>` dune generates for that test"
     test_stanza_runner_ok;
   Verdict.p
-    "two stanzas that omit `(modules …)` get a main each, so only the one whose main reads the \
-     instrumentation is a member"
+    "two stanzas that omit `(modules …)` get a main each, so only the declared unit is a lifecycle \
+     member"
     sibling_defaults_ok;
   Verdict.p "an absolute path ending in the local executable's name is not the local executable"
     runner_absolute_ok;
@@ -4342,6 +4046,16 @@ let family_control () =
      reported there too"
     subdir_collision_ok;
   Verdict.p "a stanza neither derivation calls a member is asked for no family alias" no_member_ok;
+  Verdict.p "declaring generated-artifact storage without an initializer is refused"
+    (exited 1 stale_artifact
+    && String.is_substring (snd stale_artifact) ~substring:"no module of it reads");
+  Verdict.p "a tracing dependency without a module reading it is refused"
+    (exited 1 stale_trace
+    && String.is_substring (snd stale_trace) ~substring:"declares the tracing gate");
+  Verdict.p "an exemption whose declaration disappears is refused"
+    (exited 1 stale_exemption
+    && String.is_substring (snd stale_exemption)
+         ~substring:"exempted declarations no dune file makes any more");
   try remove_tree root with Unix.Unix_error _ -> ()
 
 (* gh-ocannl-749's control, and why it is a third tree.
@@ -5277,6 +4991,7 @@ let () =
       control ();
       floor_control ();
       guard_control ();
+      lifecycle_contract_control ();
       family_control ();
       inline_alias_control ();
       pipeline_control ();

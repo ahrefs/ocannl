@@ -155,8 +155,8 @@
 ; wherever it lives -- `arrayjit/test/dune` carries the other half of both of these.
 ;
 ; Membership is DERIVED, never listed twice: `test/operations/env_var_deps` asks each stanza what it
-; IS -- a stanza whose backend marker names `metal` is a Metal member, a stanza whose modules read
-; the resource-lifecycle instrumentation is a lifecycle member -- and fails on one this list omits,
+; IS -- a stanza whose backend marker names `metal` is a Metal member, a stanza declaring a named probe with
+; instrumentation-capable libraries is a lifecycle member -- and fails on one this list omits,
 ; the same way it derives the `scans` family from the rules that glob the repository. A list checked
 ; against a second copy of itself could only ever confirm that the copy still says what it says.
 ;
@@ -1047,6 +1047,7 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ ; ocannl-lifecycle: set_values_pool_coalescing -- checks allocation and cleanup across resource seams
  (name set_values_pool_coalescing)
  (package neural_nets_lib)
  (deps
@@ -4114,6 +4115,7 @@
  (libraries base ocannl stdio arrayjit.verdict))
 
 (test
+ ; ocannl-lifecycle: schedule_cache_device -- checks allocation and cleanup across resource seams
  (name schedule_cache_device)
  (package neural_nets_lib)
  (deps
@@ -4134,6 +4136,7 @@
 
 (test
  ; ocannl-backend: none -- cross-process filesystem exercise of Schedule_cache; no context or compile.
+ ; ocannl-lifecycle: schedule_cache_regime_race -- checks allocation and cleanup across resource seams
  (name schedule_cache_regime_race)
  (package neural_nets_lib)
  (locks ocannl_filesystem_stress_test)
@@ -5920,6 +5923,7 @@
 ; host-observable through Ir.Alloc_census on cc, even though the out-of-memory it caused is not.
 
 (test
+ ; ocannl-lifecycle: autotune_candidate_release -- checks allocation and cleanup across resource seams
  (name autotune_candidate_release)
  (package neural_nets_lib)
  (deps
@@ -5935,6 +5939,7 @@
 
 (test
  ; ocannl-backend: cc -- explicitly constructs Context.cpu and tests shared resource cleanup
+ ; ocannl-lifecycle: resource_fault_injection -- checks allocation and cleanup across resource seams
  (name resource_fault_injection)
  (package neural_nets_lib)
  (deps ocannl_config)
@@ -6466,6 +6471,7 @@
 ; the golden is backend-uniform.
 
 (test
+ ; ocannl-lifecycle: alloc_census_peak -- checks allocation and cleanup across resource seams
  (name alloc_census_peak)
  (package neural_nets_lib)
  (deps
@@ -7311,6 +7317,7 @@
  (libraries base ocannl stdio ll_test arrayjit.verdict))
 
 (test
+ ; ocannl-lifecycle: autotune_callback_release -- checks allocation and cleanup across resource seams
  (name autotune_callback_release)
  (package neural_nets_lib)
  (deps

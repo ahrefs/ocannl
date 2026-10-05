@@ -598,29 +598,11 @@ let generated_init_calls_in_source content =
     source in the tree. *)
 let could_call_generated_init content = String.is_substring content ~substring:generated_module
 
-(** Which of [paths] the source actually REFERS TO, deduplicated and in the order they first appear.
-    Each path is spelled in components — [[ "Ir"; "Alloc_census" ]] — and matches wherever those
-    components appear CONSECUTIVELY inside a real identifier's module path:
-    [Ir.Alloc_census.snapshot ()], [module AC = Ir.Alloc_census], a type [Ir.Alloc_census.t].
+(** Which requested paths an OCaml source names under the scanner's lexical module model.
 
-    Parsed rather than grepped, for the reason the rest of this module is parsed: a source that
-    names the module in a doc comment, in a string literal, or inside a longer identifier is not
-    reading it, and a derivation built on a substring reads all three as uses. The same argument
-    {!generated_init_calls_in_source} makes, and it applies with more force here, since what is
-    derived from the answer is which focused aggregate a test belongs to (gh-ocannl-783).
-
-    Qualified rather than by bare name, and that is what the path is for: a local or third-party
-    module that happens to be called [Alloc_census] is not the instrumentation, and matching the
-    last component alone would put its user in a family it has nothing to do with. The qualifier
-    carries the provenance the AST does not — the parser resolves no paths — so the caller states
-    how much of it to insist on.
-
-    Every longident in the structure is visited, so a reference in an expression, a type, a pattern
-    or a module expression counts alike. What does not count is a module ALIASED to one of these
-    paths and then used under its alias — but the binding that introduces the alias names the path,
-    which this sees, so a file using the alias has already been counted. And a module bound to the
-    qualifier itself ([module Ir = Somewhere_else]) is read as if it were the real one: the same
-    over-reading direction {!receiver_is_generated} accepts, and the safe one here too. *)
+    Used only for schedule-pipeline configuration-key derivation (gh-ocannl-1149). Lifecycle
+    membership instead uses {!Lifecycle_scan}'s resolution-free Dune contract (gh-ocannl-798). This
+    source pass remains an approximation rather than a typed OCaml environment. *)
 let module_references_in_source content ~paths =
   let structure = structure_of content in
   let rec starts_with components path =
