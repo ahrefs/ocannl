@@ -1,5 +1,6 @@
 import argparse
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -277,6 +278,10 @@ class FailureRecordTest(unittest.TestCase):
                  "fixture_origin": "tuf"}
         source = {"source_revision": "cd" * 20, "source_tracked_changes": False}
 
+        runner = Path(tempfile.mkdtemp()) / "bench_gpt.exe"
+        runner.write_bytes(b"the runner that ran")
+        checkpoint["executable"] = str(runner)
+
         record = orchestrate.failure_record(
             "cell", "TIMED OUT", {}, dict(checkpoint), provenance=dict(stamp, **source)
         )
@@ -284,7 +289,12 @@ class FailureRecordTest(unittest.TestCase):
 
         back = strict_loads(line)
         self.assertEqual(back["checkpoint"], checkpoint)  # its own `fixture` object untouched
-        self.assertEqual(back["provenance"], dict(stamp, **source))
+        # The binary's own bytes name it, whatever HEAD or --skip-build said.
+        digest = hashlib.sha256(b"the runner that ran").hexdigest()
+        self.assertEqual(back["provenance"], dict(stamp, **source, executable_sha256=digest))
+        runner.unlink()
+        gone = orchestrate.failure_record("cell", "TIMED OUT", {}, dict(checkpoint), provenance={})
+        self.assertIsNone(gone["provenance"]["executable_sha256"])
 
     def test_a_failure_without_a_checkpoint_carries_neither(self):
         record = orchestrate.failure_record("cell", "exit 1", {}, None, provenance={"x": 1})

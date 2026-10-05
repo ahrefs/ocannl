@@ -22,6 +22,7 @@ the run log and in a report section, rather than quietly not being run (gh-ocann
 
 import argparse
 import contextlib
+import hashlib
 import json
 import math
 import os
@@ -822,15 +823,33 @@ def failure_record(label, note, ambient, checkpoint=None, provenance=None):
 
     A checkpoint (gh-ocannl-1209) names its fixture by path and size and its runner by path, both
     of which a later sweep can reuse for different bytes. So beside it goes `provenance`: the
-    fixture stamp results carry (digest, origin, declared boxes) and the source identity read
-    before dispatch -- under a key of its own, leaving the checkpoint as the runner wrote it.
+    fixture stamp results carry (digest, origin, declared boxes), the source identity read before
+    dispatch, and the content digest of the executable the checkpoint names, read now, right after
+    it ran -- the one identity a `--skip-build` sweep or a dirty tree cannot blur. Under a key of
+    its own, leaving the checkpoint as the runner wrote it.
     """
     record = {"cell": label, "why": note, "ambient_ocannl_env": ambient}
     if checkpoint is not None:
         # The losses a killed cell completed, kept beside the failure and never among the results.
         record["checkpoint"] = checkpoint
-        record["provenance"] = provenance
+        record["provenance"] = dict(
+            provenance or {}, executable_sha256=file_sha256(checkpoint.get("executable"))
+        )
     return record
+
+
+def file_sha256(path):
+    """The sha256 of a file's bytes, or None when there is no readable file at `path`."""
+    if not path:
+        return None
+    h = hashlib.sha256()
+    try:
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                h.update(chunk)
+    except OSError:
+        return None
+    return h.hexdigest()
 
 
 def source_identity(root):

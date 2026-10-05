@@ -274,7 +274,8 @@ def measure(a):
             tree = ARMS.get(arm, (None, None))[1]
             failures[-1].update(
                 checkpoint=checkpoint,
-                provenance=dict(stamps.get(workload, {}), revision=shas.get(tree)),
+                provenance=dict(stamps.get(workload, {}), revision=shas.get(tree),
+                                executable_sha256=executables.get(tree, {}).get("sha256")),
             )
         append(out, "failures.jsonl", failures[-1])
 
