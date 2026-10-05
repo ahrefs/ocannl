@@ -6,11 +6,12 @@ val executable : unit -> string
 (** Absolute path to this process's executable, resolved before changing directories. *)
 
 val run : ?exe:string -> ?cwd:string -> ?temp_dir:string -> string list -> t
-(** Run with inherited stdin and environment. [exe] defaults to [executable ()]; a relative [exe] is
-    resolved against the parent's directory, before [cwd] takes effect. Capture files and file
-    descriptors are cleaned on success and exceptions, and the parent's directory is restored. This
-    is a synchronous direct-child runner; tests needing deadlines, environment overrides or
-    concurrent process orchestration keep their own harness. *)
+(** Run with inherited stdin and environment, less [OCANNL_TOOL_VERDICT_RECORDS]: a captured child's
+    verdict records belong to the parent's judgment, not to the action's record file. [exe] defaults
+    to [executable ()]; a relative [exe] is resolved against the parent's directory, before [cwd]
+    takes effect. Capture files and file descriptors are cleaned on success and exceptions, and the
+    parent's directory is restored. This is a synchronous direct-child runner; tests needing
+    deadlines, environment overrides or concurrent process orchestration keep their own harness. *)
 
 val output : t -> string
 (** Stdout followed by stderr, for diagnostics whose stream does not matter. *)

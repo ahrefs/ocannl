@@ -120,6 +120,21 @@ let exempt_declarations =
        gh-ocannl-605 dropped, which since gh-ocannl-652 aborts the run rather than warning" );
   ]
 
+(* Run-time reads of a reserved tooling variable that deliberately decide nothing a stanza could
+   track, keyed by "<source>:<name>". A declaration buys a rerun when the value changes; a variable
+   naming only WHERE a copy of a run's output goes changes no result, and the reader here is a
+   library, whose stanza has no deps to declare it in -- declaring it on every stanza that links the
+   library would claim a sensitivity none of them has. Each read an entry exempts is listed in the
+   golden, so one that disappears is a reviewable diff -- rather than a refusal, which the synthetic
+   control trees, carrying no library source, would trip on every run. *)
+let exempt_reads =
+  [
+    ( "test/support/verdict.ml:OCANNL_TOOL_VERDICT_RECORDS",
+      "names the directory Verdict copies each action's machine records into (gh-ocannl-1114); the \
+       verdict and the stdout a golden diffs are the same with it set or not, and only a forced \
+       sweep, which reruns every action anyway, reads the copies" );
+  ]
+
 (* Directories with runtest actions that carry no ambient gate, and why. Same shape as the
    declaration exemptions above: each is checked for still being needed. *)
 let gateless_dirs =
@@ -1187,6 +1202,7 @@ let main () =
   let tracked_keys = ref (Set.empty (module String)) in
   let gate_table = ref [] in
   let read_table = ref [] in
+  let exempt_read_table = ref [] in
   let guard_table = ref [] in
   (* The scanner sources are derived from the same repo-wide rule property that makes a rule a
      member of [@scans], but their directory descent comes from [per_directory] below. A new scan
@@ -2087,8 +2103,11 @@ let main () =
                   List.iter sources ~f:(fun (source, content) ->
                       Sources.env_var_reads_in_source content
                       |> List.iter ~f:(fun read ->
+                          let exempt_key = dir ^ "/" ^ source ^ ":" ^ read in
                           match Utils.classify_env_var read with
                           | Utils.Env_not_addressed -> ()
+                          | _ when List.Assoc.mem exempt_reads exempt_key ~equal:String.equal ->
+                              exempt_read_table := exempt_key :: !exempt_read_table
                           | _ ->
                               if not (List.mem declared_for_stanza read ~equal:String.equal) then
                                 fail
@@ -2600,6 +2619,8 @@ let main () =
     "\nAmbient variables a module reads by name at run time, and the stanza that declares each:\n";
   List.sort !read_table ~compare:(fun (_, a, _) (_, b, _) -> String.compare a b)
   |> List.iter ~f:(fun (where, read, source) -> printf "  %-30s %s (%s)\n" read where source);
+  printf "\nRun-time reads exempted from declaration, each for the reason `exempt_reads` gives:\n";
+  List.dedup_and_sort !exempt_read_table ~compare:String.compare |> List.iter ~f:(printf "  %s\n");
   printf
     "\n\
      Configuration keys a program reads straight from the environment through `Utils.%s`, and how\n\

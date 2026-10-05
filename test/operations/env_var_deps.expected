@@ -105,6 +105,9 @@ Ambient variables a module reads by name at run time, and the stanza that declar
   OCANNL_TOOL_CC_MARCH_CENSUS_CACHE_DIR test/operations/dune, test cc_march_census (test/operations/cc_march_census.ml)
   OCANNL_TOOL_TEST_RESTRICT_MASK test/operations/dune, test test_cpu_topology (test/operations/test_cpu_topology.ml)
 
+Run-time reads exempted from declaration, each for the reason `exempt_reads` gives:
+  test/support/verdict.ml:OCANNL_TOOL_VERDICT_RECORDS
+
 Configuration keys a program reads straight from the environment through `Utils.read_env_var`, and how
 many runs of it answer for each (gh-ocannl-749). A key read this way cannot be outranked by
 a commandline flag or a config file, so every run depends on the variable unconditionally --
