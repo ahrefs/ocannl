@@ -63,6 +63,11 @@ a fallback that kept a batch measured within the target is admitted: true
 a slow candidate's unresolved calibration costs no more than its probes: true
 
 == calibration probes are wall-budgeted ==
+a cap projection uses remaining validation probes to reach the fast kernel's target: true
+the fast kernel's cap is measured within the validation probe budget: true
+cap-directed validations advance by at most one measured doubling: true
+a cap-directed calibration stops when its validation probes run out: true
+a cap-directed validation is charged to the wall budget and starts no further probe: true
 no calibration probe but the rescue starts once the probes' wall has reached the budget: true
 a rescue probe is the calibration's last: true
 a stall retry is not started once the stalled confirmation has spent the budget: true
@@ -107,6 +112,8 @@ queued timing either reports contention or stays within the 64-batch dispatch ca
 the cache key is stable within one objective: true
 the cache key separates the two timing objectives: true
 CUDA and HIP queued keys carry the new timing-policy generation: true
+CUDA and HIP queued keys cannot replay the prior timing-policy generation: true
+isolated keys retain their unchanged timing generation: true
 cc and Metal queued keys retain their unchanged timing generation: true
 an omitted objective keys as the configured one: true
 the key's objective spelling round-trips through the mode: true

@@ -929,8 +929,12 @@ files.
   (gh-ocannl-1100), one chokepoint after the branches rather than a fix per exit: the last
   validation's affine projection, a linear scale from a below-target confirmation and a fit wanting
   the cap all used to settle unmeasured (a pair (2, 12.25) / (3, 12.5) wants depth 40). A bound in
-  depth, not wall, spending no probe; ultra-fast kernels whose fit wanted the cap now batch shorter
-  than the target. Do not replace
+  depth, not wall, spending no extra probe after validation ends. A fit wanting an unmeasured cap
+  spends its remaining validations on measured doublings toward it (gh-ocannl-1144), including an
+  initial cap projection; settling immediately left sub-5 us kernels below the target despite
+  unused probes. Each doubling is charged to the existing wall and count budgets, and a measured
+  cap retains the same fit and fallback checks. `autotune_timing_modes` pins convergence, probe
+  exhaustion and a stalled doubling that spends the wall budget. Do not replace
   this with a bound
   extrapolated through a per-launch cost (least `wall / depth`): the readings that leave the fits
   unresolved cannot tell a host stall from a cost that jumps past a queue threshold, and two review
@@ -967,10 +971,11 @@ files.
   calibration grows the batch toward the same wall target. A CUDA/HIP synchronized-single estimate
   at or above the target is likewise checked at depth 2: a genuinely slow routine retains depth 1,
   while a transient single-window stall cannot bypass batch validation.
-  CUDA/HIP cache keys spell this changed queued policy as `queued-v2` while entries and user-facing
-  configuration still say `queued`; otherwise a depth-200 winner already on disk would replay
-  without running any of this calibration. cc/Metal keep the unversioned `queued` key because their
-  policy did not change.
+  CUDA/HIP cache keys spell the current queued policy as `queued-v3` while entries and user-facing
+  configuration still say `queued`. Generation 2 separated the old depth-200 scale (gh-ocannl-892);
+  generation 3 separates the short cap-bounded windows repaired by gh-ocannl-1144, so an old winner
+  cannot bypass the new calibration. cc/Metal keep the unversioned `queued` key because their policy
+  did not change.
   Since gh-ocannl-855 the top-up budget accumulates PER-LAUNCH samples, never queued-batch wall.
   The jitter-sensitive synchronized-single calibration and every timed window have a 16-sample
   floor; the CUDA/HIP-only, already-millisecond batch probes use twelve minima because they choose
