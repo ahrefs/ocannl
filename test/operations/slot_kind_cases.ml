@@ -213,6 +213,11 @@ let cases =
     ("build --frobnicate @c/runtest", `Gpu);
     ("runtest --root /elsewhere c", `Gpu);
     ("build ./a/t_cfg.exe", `Gpu);
+    (* A build-context root is no source directory: dune runs that context's whole suite. *)
+    ("build @_build/default/runtest", `Gpu);
+    ("build @@_build/default/c/runtest", `Gpu);
+    ("runtest _build/default", `Gpu);
+    ("build @.hidden/runtest", `Gpu);
     ("build _build/default/c/t_only.exe", `Gpu);
     (* ...while the listed harmless options, in each spelling, change nothing. *)
     ("build -j 8 @a/runtest-t_cfg", `Cpu);

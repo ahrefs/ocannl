@@ -518,11 +518,17 @@ let rec words acc = function
 (* A directory in the one spelling this reads: relative, its components plain names -- no `.`, `..`
    or empty one, so no leading `/`, `./` or trailing `/`. The repository root is spelled by giving
    no directory at all. Any other spelling is unmodelled rather than normalised (Codex review round
-   4 on PR #803): normalising is exactly where a spelling dune reads one way gets read another. *)
+   4 on PR #803): normalising is exactly where a spelling dune reads one way gets read another. No
+   component starts with [_] or [.] either: those are the directories dune does not read as source
+   ([_build], [.git]), so [@_build/default/runtest] -- a build-context root, which runs the whole
+   context's suite -- names no directory the inventory holds, and is unmodelled rather than read as
+   reaching nothing (Codex review on PR #1027). *)
 let plain_dir d =
   (not (String.is_empty d))
   && List.for_all (String.split d ~on:'/') ~f:(fun c ->
-      (not (String.is_empty c)) && (not (String.equal c ".")) && not (String.equal c ".."))
+      (not (String.is_empty c))
+      && (not (String.is_prefix c ~prefix:"_"))
+      && not (String.is_prefix c ~prefix:"."))
 
 (* An alias target in the spellings this reads: [@alias], [@@alias], [@dir/alias], [@@dir/alias],
    with [dir] plain. A path target, and anything else, is unmodelled. *)

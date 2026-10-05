@@ -64,6 +64,14 @@ runtest --root /elsewhere c              unknown: it carries `--root`, which thi
 runtest --root /elsewhere c can hold a GPU: true
 build ./a/t_cfg.exe                      unknown: it carries `./a/t_cfg.exe`, which this does not model (it could change what is built)
 build ./a/t_cfg.exe can hold a GPU: true
+build @_build/default/runtest            unknown: it carries `@_build/default/runtest`, which this does not model (it could change what is built)
+build @_build/default/runtest can hold a GPU: true
+build @@_build/default/c/runtest         unknown: it carries `@@_build/default/c/runtest`, which this does not model (it could change what is built)
+build @@_build/default/c/runtest can hold a GPU: true
+runtest _build/default                   unknown: it carries `_build/default`, which this does not model (it could change what is built)
+runtest _build/default can hold a GPU: true
+build @.hidden/runtest                   unknown: it carries `@.hidden/runtest`, which this does not model (it could change what is built)
+build @.hidden/runtest can hold a GPU: true
 build _build/default/c/t_only.exe        unknown: it carries `_build/default/c/t_only.exe`, which this does not model (it could change what is built)
 build _build/default/c/t_only.exe can hold a GPU: true
 build -j 8 @a/runtest-t_cfg              names nothing + reads config
