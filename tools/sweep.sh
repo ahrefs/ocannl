@@ -492,17 +492,18 @@ environment_red() { # log
   return 1
 }
 
-# Successful forced full-suite units are the only logs from which absence of a
-# skip announcement means execution. Incremental Dune runs may serve a cached
-# test without replaying its stderr, and a red or interrupted unit may not have
-# reached every test -- unless the serial rerun re-ran every failing stanza
-# clean and its completion pass then ran whatever they had held back, all into
-# the same log (rerun_cleared), which the report names. Keep the qualifying evidence from THIS invocation rather
-# than recovering it by timestamp from history (two invocations can begin in
-# the same second in the integration harness).
+# Successful forced full-suite units are the only runs from which absence of a
+# skip record means execution. Incremental Dune runs serve cached actions
+# without running them, and a red or interrupted unit may not have reached
+# every test -- unless the serial rerun re-ran every failing stanza clean and
+# its completion pass then ran whatever they had held back (rerun_cleared),
+# which the report names. What is read is the unit's per-action verdict
+# records (stage_skip_evidence), never its log. Keep the qualifying evidence
+# from THIS invocation rather than recovering it by timestamp from history (two
+# invocations can begin in the same second in the integration harness).
 SKIP_RUN_BACKENDS=()
 SKIP_RUN_BOXES=()
-SKIP_RUN_LOGS=()
+SKIP_RUN_RECORDS=()
 SKIP_RERUN_CLEARED=()
 
 contains() {
@@ -821,6 +822,21 @@ if [ ${#known_boxes[@]} -gt 0 ]; then
   done
 fi
 
+# Where a unit's per-action verdict records live: beside the worktree, like its
+# far-side lock, so neither `git clean` nor `dune clean` reaches them and the
+# worktree lock covers them. Verdict (test/support/verdict.ml) writes one file
+# per action into the directory OCANNL_TOOL_VERDICT_RECORDS names and rewrites
+# it whenever that action runs again, so after the unit's first attempt, serial
+# rerun and completion pass -- all three export it -- each action's file holds
+# its FINAL attempt by construction: a retry overwrites its own action's
+# records and an action never re-run keeps its own (gh-ocannl-1114). Read back
+# by collect_verdict_records; the stderr copy of each record stays in the log
+# for humans.
+verdict_records_dir() { printf '%s.verdict-records' "$1"; }
+verdict_records_env() { # wt
+  printf 'export OCANNL_TOOL_VERDICT_RECORDS="%s"; ' "$(verdict_records_dir "$1")"
+}
+
 # The dune invocation, shared by the local and remote paths so the two cannot
 # drift. Unpiped inside the shell that runs it: piping dune to anything reports
 # the pipe's status, not dune's, and a promotion diff then reads as green.
@@ -851,6 +867,14 @@ test_cmd() {
   # 127, not a generic failure: a worktree that is not there means nothing ran,
   # which the outcome mapping treats as non-coverage rather than a red suite.
   printf 'cd "%s" || exit 127; ' "$wt"
+  # Every Verdict-linked test action writes its machine records into a file of
+  # its own here (verdict_records_env, gh-ocannl-1114), and this unit starts the
+  # directory empty: the local backends share one worktree, and what a previous
+  # unit's actions recorded is not this unit's evidence. A directory that cannot
+  # be reset is harness non-coverage, like the clean below.
+  printf 'rm -rf "%s" && mkdir -p "%s" || exit 126; ' "$(verdict_records_dir "$wt")" \
+    "$(verdict_records_dir "$wt")"
+  verdict_records_env "$wt"
   # Dune's alias --force does not reliably invalidate ppx_expect inline tests.
   # A forced pass therefore starts from an empty build tree, under the worktree
   # lock already held on both local and remote paths. Failure to establish that
@@ -1757,16 +1781,15 @@ rerun_aliases() { # log
 # The rerun as shell text for the machine that owns the worktree, one dune call
 # per stanza so each has its own status: a single call over all of them would
 # report one verdict for the set. The markers are what serial_rerun reads back.
-# `--display short` makes Dune name the program of every action it runs
-# (`<program> [alias ]<target>`), which is how first_attempt_disagreement knows
-# which executables a retry re-ran -- a directory fallback's included.
+# The actions it re-runs rewrite their own verdict records (verdict_records_dir).
 serial_rerun_cmd() { # backend wt alias...
   local backend=$1 wt=$2 a
   shift 2
   printf 'cd "%s" || exit 127; ' "$wt"
+  verdict_records_env "$wt"
   for a in "$@"; do
     printf 'echo "=== serial rerun %s ==="; ' "$a"
-    printf 'OCANNL_BACKEND=%s opam exec -- dune build -j 1 --display short %s; ' "$backend" "$a"
+    printf 'OCANNL_BACKEND=%s opam exec -- dune build -j 1 %s; ' "$backend" "$a"
     printf 'echo "=== serial rerun %s: exit $? ==="; ' "$a"
   done
   printf 'exit 0'
@@ -1777,55 +1800,17 @@ serial_rerun_cmd() { # backend wt alias...
 # runs exactly the actions that never completed -- the dependents a red
 # prerequisite held back, which rerunning the red stanzas alone does not reach
 # -- and replays nothing that already passed. Its exit 0 is the proof that
-# every action of the suite completed with its stderr in the log, which is what
-# lets rerun_cleared stage the unit as skip evidence.
+# every action of the suite completed, its verdict records written, which is
+# what lets rerun_cleared stage the unit as skip evidence.
 suite_completion_cmd() { # backend wt
   local slow_alias=
   [ "$SLOW" = 1 ] && slow_alias=' @slow'
   printf 'cd "%s" || exit 127; ' "$2"
+  verdict_records_env "$2"
   printf 'echo "=== suite completion ==="; '
   printf 'OCANNL_BACKEND=%s opam exec -- dune build -j 1 @runtest @train%s; ' "$1" "$slow_alias"
   printf 'echo "=== suite completion: exit $? ==="; '
   printf 'exit 0'
-}
-
-# The executables whose first attempt disagrees with their serial retry, one per
-# line: a skip record the first attempt announced for an executable the rerun
-# re-ran, which the retry did not announce again. Such a record is stale (the
-# retry executed the claim) or another stanza's genuine skip of the same
-# executable (test_cse.exe runs under two aliases), and the log cannot tell
-# which, so a disagreeing unit is not counted. Agreement makes every
-# first-attempt record of a re-run executable one the retry confirmed. A
-# re-run executable is any Dune's short display shows the retry running, any
-# its alias names (`<family>-<name>[-<variant>]`; executable names hold no
-# `-`), and any the retry announced a record for. A test-output line of the
-# display's shape only adds an executable to check, which can exclude a unit
-# but never count a stale record; an executable a retry ran only through a
-# shell wrapper goes unattributed, which can only keep a skip, never hide one.
-first_attempt_disagreement() { # log
-  awk '
-    function exe_of(record, f) { split(record, f, "\t"); return f[3] }
-    function add(program) { sub(/\.exe$/, "", program); if (program != "") rerun[program ".exe"] = 1 }
-    /^=== serial rerun: [0-9]+ stanzas at -j 1 ===$/ { after = 1; next }
-    !after && index($0, "OCANNL_TOOL_VERDICT_SKIP\t") == 1 { first[$0] = 1; next }
-    index($0, "=== serial rerun @") == 1 && $0 !~ /: exit [0-9]+ ===$/ {
-      block = 1
-      name = substr($0, length("=== serial rerun ") + 1)
-      sub(/ ===$/, "", name); sub(/.*\//, "", name)
-      if (split(name, part, "-") >= 2) add(part[2])
-      next
-    }
-    index($0, "=== serial rerun @") == 1 { block = 0; next }
-    block && index($0, "OCANNL_TOOL_VERDICT_SKIP\t") == 1 {
-      retry[$0] = 1; add(exe_of($0)); next
-    }
-    block && /^ *[A-Za-z0-9_.-]+ (alias )?[^ ]+$/ { split($0, word, " "); add(word[1]) }
-    END {
-      for (record in first)
-        if ((exe_of(record) in rerun) && !(record in retry)) bad[exe_of(record)] = 1
-      for (exe in bad) print exe
-    }
-  ' "$1" | LC_ALL=C sort
 }
 
 # Run a post-unit shell command where the unit's worktree lives, under its lock
@@ -1856,7 +1841,6 @@ run_on_unit_host() { # host wt cmd log path_prefix
 serial_rerun() { # backend host wt log label [path_prefix]
   local backend=$1 host=$2 wt=$3 log=$4 label=$5 path_prefix=${6:-}
   local line cmd started rc a entry site stanza_count inline_count fallback_suffix=s completion
-  local disagreeing
   local aliases=() fallback_aliases=() inline_entries=() inline_sites=()
   local unmapped=() red=() unjudged=()
   environment_red "$log" || return 0
@@ -1907,12 +1891,7 @@ serial_rerun() { # backend host wt log label [path_prefix]
     line=$(grep -hF -- '=== suite completion: exit ' "$log" | tail -1)
     case $line in
       "") completion='serial rerun: suite completion unjudged' ;;
-      *": exit 0 ==="*)
-        completion='serial rerun: suite completed'
-        disagreeing=$(first_attempt_disagreement "$log" | tr '\n' ' ')
-        [ -z "$disagreeing" ] ||
-          completion="$completion"$'\n'"serial rerun: first attempt disagrees: ${disagreeing% }"
-        ;;
+      *": exit 0 ==="*) completion='serial rerun: suite completed' ;;
       *) completion="serial rerun: suite completion red (${line#=== suite completion: }"
          completion="${completion% ===})" ;;
     esac
@@ -1954,8 +1933,7 @@ serial_rerun() { # backend host wt log label [path_prefix]
 
 # Whether serial_rerun cleared every failure of the log's unit AND proved the
 # rest of the suite complete: `all clean`, `suite completed`, and no verdict
-# line that leaves a site unjudged, unmapped or red, or a first attempt the
-# retry disagreed with. A directory fallback is
+# line that leaves a site unjudged, unmapped or red. A directory fallback is
 # judged inside `all clean`, so it does not disqualify.
 rerun_cleared() { # log
   local line clean= completed=
@@ -1968,6 +1946,57 @@ rerun_cleared() { # log
     esac
   done < <(grep -h '^serial rerun: ' "$1" 2>/dev/null)
   [ -n "$clean" ] && [ -n "$completed" ]
+}
+
+# The unit's per-action verdict records (verdict_records_dir), every action's
+# file concatenated, from whichever side owns the worktree and under its lock --
+# the next unit on that worktree starts the directory empty. Each file opens with
+# its OCANNL_TOOL_VERDICT_ACTION header, so the files stay distinguishable in
+# the concatenation; `awk 1` terminates a final line a killed process left
+# unterminated. Exit 3 is a missing directory.
+verdict_records_cmd() { # wt
+  printf 'records="%s"; [ -d "$records" ] || exit 3; ' "$(verdict_records_dir "$1")"
+  printf 'for f in "$records"/*.tsv; do [ -f "$f" ] || continue; awk 1 "$f" || exit 4; done; exit 0'
+}
+
+collect_verdict_records() { # host wt dest log path_prefix
+  local host=$1 wt=$2 dest=$3 log=$4 path_prefix=$5 cmd
+  cmd=$(verdict_records_cmd "$wt")
+  if [ -n "$host" ]; then
+    run_capped "$(( CONTEXT_CAP + 120 ))" ssh -o BatchMode=yes -o ConnectTimeout=8 \
+      -o ServerAliveInterval=30 -o ServerAliveCountMax=4 \
+      "$host" "$(remote_capped "$CONTEXT_CAP" "$path_prefix $(remote_lock_cmd "$wt") $cmd" \
+        "$(sleep_guard_why "$host" verdict-records)")" \
+      >"$dest" 2>>"$log"
+  else
+    run_capped "$CONTEXT_CAP" /bin/sh -c "$cmd" >"$dest" 2>>"$log"
+  fi
+}
+
+# Stage a qualifying unit's records for the skip aggregation. The lane is a
+# subshell, so the evidence cannot be appended to the top-level SKIP_RUN_ arrays
+# from here; it is left as a per-unit file that the top level reads back, in
+# table order, once every lane has finished. A unit whose records cannot be
+# read, or hold no action at all -- a swept commit whose Verdict predates them
+# -- is not evidence, and says so: its absence of skip records would otherwise
+# read as every claim executed.
+stage_skip_evidence() { # machine backend host wt log path_prefix [cleared]
+  local machine=$1 backend=$2 host=$3 wt=$4 log=$5 path_prefix=$6 cleared=${7:-}
+  local records=${5%.log}.verdict-records
+  if ! collect_verdict_records "$host" "$wt" "$records" "$log" "$path_prefix"; then
+    say "  $machine/$backend: skip evidence unavailable -- its per-action verdict records could not be read"
+    return 0
+  fi
+  if ! grep -q "^OCANNL_TOOL_VERDICT_ACTION$(printf '\t')" "$records"; then
+    say "  $machine/$backend: skip evidence unavailable -- no per-action verdict records (a swept commit predating gh-ocannl-1114?)"
+    return 0
+  fi
+  printf '%s\n' "$records" >"$LANE_DIR/skip-run.$machine.$backend" ||
+    die "cannot stage skip evidence for $machine/$backend"
+  if [ -n "$cleared" ]; then
+    : >"$LANE_DIR/skip-cleared.$machine.$backend" ||
+      die "cannot stage skip evidence for $machine/$backend"
+  fi
 }
 
 if [ "$FORCE" = 1 ]; then
@@ -2203,13 +2232,6 @@ run_unit() { # machine backend host
   esac
   say "  $machine/$backend: $outcome (${elapsed}s; execution=$execution)"
   record "$machine" "$backend" "$outcome" "$elapsed" "$log" "$execution"
-  # The lane is a subshell, so the evidence cannot be appended to the top-level
-  # SKIP_RUN_ arrays from here; it is left as a per-unit file that the top level
-  # reads back, in table order, once every lane has finished.
-  if [ "$outcome" = pass ] && [ -z "$TARGET" ]; then
-    printf '%s\n' "$log" >"$LANE_DIR/skip-run.$machine.$backend" ||
-      die "cannot stage skip evidence for $machine/$backend"
-  fi
   # The kernel's own evidence for THIS unit's window, before the rerun
   # decision that reads it -- and before the RTC diagnostics below, which is not
   # mere ordering: `nvidia-smi` and `rocminfo` cross /dev/dxg themselves, so a
@@ -2240,17 +2262,18 @@ run_unit() { # machine backend host
   case $outcome in
     fail) serial_rerun "$backend" "$host" "$wt" "$log" "$machine/$backend" "${path_prefix:-}" ;;
   esac
-  # A red the serial rerun wholly cleared, and whose completion pass then ran
-  # every action the red had held back, is skip evidence like a pass: every
-  # action completed in the suite, the rerun or the completion pass, all of
-  # which write the same log -- provided each re-run executable's retry
-  # confirmed its first attempt's skips (first_attempt_disagreement), so no
-  # record in the log is one the retry made stale. Dropping it lost minix/hip's evaluations on
-  # 2026-09-27 and reported its hip-only claims as skipped on every box.
-  if [ "$outcome" = fail ] && [ -z "$TARGET" ] && rerun_cleared "$log"; then
-    printf '%s\n' "$log" >"$LANE_DIR/skip-run.$machine.$backend" &&
-      : >"$LANE_DIR/skip-cleared.$machine.$backend" ||
-      die "cannot stage skip evidence for $machine/$backend"
+  # A forced full-suite pass is skip evidence, and so is a red the serial rerun
+  # wholly cleared whose completion pass then ran every action the red had held
+  # back: every action completed in the suite, the rerun or the completion
+  # pass, and each one's record file holds its final attempt. Dropping such a
+  # red lost minix/hip's evaluations on 2026-09-27 and reported its hip-only
+  # claims as skipped on every box.
+  if [ -z "$TARGET" ]; then
+    if [ "$outcome" = pass ]; then
+      stage_skip_evidence "$machine" "$backend" "$host" "$wt" "$log" "${path_prefix:-}"
+    elif [ "$outcome" = fail ] && rerun_cleared "$log"; then
+      stage_skip_evidence "$machine" "$backend" "$host" "$wt" "$log" "${path_prefix:-}" cleared
+    fi
   fi
   case $outcome in
     fail | timeout | error) sweep_fingerprint_write "$log" "$machine/$backend" ;;
@@ -2633,7 +2656,7 @@ for unit in "${UNITS[@]}"; do
   [ -f "$evidence" ] || continue
   SKIP_RUN_BACKENDS+=("$backend")
   SKIP_RUN_BOXES+=("$machine")
-  SKIP_RUN_LOGS+=("$(cat "$evidence")")
+  SKIP_RUN_RECORDS+=("$(cat "$evidence")")
   [ -f "$LANE_DIR/skip-cleared.$machine.$backend" ] &&
     SKIP_RERUN_CLEARED+=("$machine/$backend")
 done
@@ -2650,7 +2673,7 @@ if [ "$FORCE" = 1 ] && [ -z "$TARGET" ]; then
   done
   for ((i = 0; i < ${#SKIP_RUN_BACKENDS[@]}; i++)); do
     aggregate_args+=(--run "${SKIP_RUN_BACKENDS[$i]}" "${SKIP_RUN_BOXES[$i]}" \
-      "${SKIP_RUN_LOGS[$i]}")
+      "${SKIP_RUN_RECORDS[$i]}")
   done
 
   report=$LOGS/$stamp-skip-coverage.txt

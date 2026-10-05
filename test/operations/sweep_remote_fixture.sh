@@ -184,12 +184,17 @@ for boot in linux wsl; do
   grep -q '^=== .* window: 1 ' "$(window_sidecar "$local_log")"
   grep -q '^=== serial rerun @test/runtest-state-probe: exit 0 ===$' "$local_log"
   grep -q '^=== suite completion: exit 0 ===$' "$local_log"
+  # The cleared unit's per-action verdict records came back over the same
+  # transport, from beside the far-side worktree (gh-ocannl-1114).
+  [ -d "$remote_root/minix-amd-$boot/ocannl-staging-worktrees/sweep.verdict-records" ]
+  grep -q '^OCANNL_TOOL_VERDICT_ACTION' "${local_log%.log}.verdict-records"
+  absent 'skip evidence unavailable' <<<"$local_remote"
   [ "$(git -C "$remote_root/minix-amd-$boot/ocannl-staging-worktrees/sweep" rev-parse HEAD)" = \
     "$(git -C "$main" rev-parse HEAD)" ]
   [ "$(awk -F '\t' '$1 == "minix-amd-'"$boot"'" && $6 == "exec -- dune clean" {n++} END {print n+0}' "$remote_root/commands")" -eq 1 ]
   jobs=$(box_jobs_sweep_jobs minix hip minix-amd-$boot)
   awk -F '\t' -v host="minix-amd-$boot" -v jobs="$jobs" -v sha="$(git -C "$main" rev-parse HEAD)" -v cwd="$remote_root/minix-amd-$boot/ocannl-staging-worktrees/sweep" \
-    '$1 == host {if ($4 != sha || $3 != cwd) exit 1; if ($6 == "exec -- dune build -j " jobs " --force @runtest @train") suite++; if ($6 == "exec -- dune build -j 1 --display short @test/runtest-state-probe") serial++; if ($6 == "exec -- dune build -j 1 @runtest @train") completion++} END {if (suite != 1 || serial != 1 || completion != 1) exit 1}' "$remote_root/commands"
+    '$1 == host {if ($4 != sha || $3 != cwd) exit 1; if ($6 == "exec -- dune build -j " jobs " --force @runtest @train") suite++; if ($6 == "exec -- dune build -j 1 @test/runtest-state-probe") serial++; if ($6 == "exec -- dune build -j 1 @runtest @train") completion++} END {if (suite != 1 || serial != 1 || completion != 1) exit 1}' "$remote_root/commands"
   prefix=/usr/local/cuda/bin:
   [ "$boot" != wsl ] || prefix=$prefix/usr/lib/wsl/lib:
   awk -F '\t' -v prefix="$prefix" '$2 == "hip" {if (index($5, prefix) != 1) exit 1; seen++} END {if (!seen) exit 1}' "$remote_root/commands"

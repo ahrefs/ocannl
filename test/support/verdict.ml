@@ -264,6 +264,92 @@ let p_pairwise_distinct name xs ~equal ~to_string =
   | Some (x, y) -> short_fail name (Printf.sprintf "collision: %s = %s" (to_string x) (to_string y))
   | None -> quantified ~min:2 name xs (fun () -> true)
 
+(* Per-action machine records (gh-ocannl-1114). Every machine-readable record this module emits --
+   today the skip record of {!skipped} -- is a line [OCANNL_TOOL_VERDICT_<KIND><TAB><fields>],
+   echoed on stderr where a human reading the log sees it, and, when [OCANNL_TOOL_VERDICT_RECORDS]
+   names a directory, also appended to ONE FILE PER ACTION in it. The file is keyed by what
+   identifies the action that ran this process -- its working directory, executable and arguments,
+   which is how `test_cse.exe` under `runtest-test_cse` and under `runtest-test_cse-cse_d_fwd` stay
+   two actions -- and is TRUNCATED when the process starts, before any record. So the file always
+   holds its action's latest run: a retry of the action rewrites it, one that now records nothing
+   empties it, and an action never re-run keeps its own. `tools/sweep.sh` names the directory for a
+   unit's first attempt, serial rerun and completion pass alike, and reads it back afterwards: each
+   action's final attempt by construction, where the merged stderr of the three phases could only be
+   attributed by inference, and where dune truncating a noisy action's output could drop records
+   outright.
+
+   The file opens with an [OCANNL_TOOL_VERDICT_ACTION] header naming the action, which is also what
+   says the action ran at all; a record kind the sweep's aggregator does not judge -- the bypass
+   record gh-ocannl-996 proposes, say -- is one more [<KIND>] in the same stream, not another file.
+   Two actions identical in directory, executable and arguments but run under different environments
+   would share a file, the later one's records standing -- which matters only if the two skip
+   different claims, so arguments, not a `setenv` alone, are what should tell such twins apart.
+
+   Only the action's own process writes. Having read the variable, Verdict EMPTIES it in its own
+   environment, so no descendant -- however it is spawned, whatever helper builds its environment
+   from this one -- sees a directory: a child is the parent's fixture, its records belong to the
+   parent's judgment, and a child relaunching the same executable with the same arguments in the
+   same directory (`cc_march_census` does) would otherwise truncate the parent's own file and erase
+   its skips. A process that is not Verdict-linked, a shell harness running fixtures, must unset it
+   itself (`sweep_harness.sh` does). Opening or writing the file failing is a failed check, never a
+   silently missing record, since a missing record reads as an executed claim. *)
+
+let record_prefix = "OCANNL_TOOL_VERDICT_"
+let record_line kind fields = String.concat ~sep:"\t" ((record_prefix ^ kind) :: fields)
+
+let action_records =
+  match Stdlib.Sys.getenv_opt "OCANNL_TOOL_VERDICT_RECORDS" with
+  | None | Some "" -> None
+  | Some dir -> (
+      (* Before anything else can spawn: every descendant inherits the emptied value, which reads as
+         unset above. *)
+      Unix.putenv "OCANNL_TOOL_VERDICT_RECORDS" "";
+      let exe = Stdlib.Sys.executable_name and cwd = Stdlib.Sys.getcwd () in
+      let args = List.tl (Array.to_list Stdlib.Sys.argv) |> Option.value ~default:[] in
+      let key =
+        Stdlib.Digest.to_hex (Stdlib.Digest.string (String.concat ~sep:"\000" (cwd :: exe :: args)))
+      in
+      let name = Stdlib.Filename.basename exe in
+      let path = Stdlib.Filename.concat dir (Printf.sprintf "%s-%s.tsv" name key) in
+      (* [Open_append] beside [Open_trunc]: the open empties the file, and every later write lands
+         at its end, so two same-keyed processes overlapping can duplicate a line but never
+         overwrite one or leave a hole. *)
+      match
+        Stdlib.open_out_gen
+          [ Open_wronly; Open_creat; Open_trunc; Open_append; Open_binary ]
+          0o644 path
+      with
+      | channel -> (
+          let escaped = Stdlib.String.escaped in
+          let header =
+            record_line "ACTION"
+              [ escaped name; escaped cwd; String.concat ~sep:" " (List.map args ~f:escaped) ]
+          in
+          match
+            Stdlib.output_string channel (header ^ "\n");
+            Stdlib.flush channel
+          with
+          | () -> Some (path, channel)
+          | exception Sys_error e ->
+              fail (Printf.sprintf "cannot write the per-action verdict records %s: %s" path e);
+              None)
+      | exception Sys_error e ->
+          fail ("cannot open the per-action verdict records: " ^ e);
+          None)
+
+(* One machine record: on stderr, and in this action's record file when there is one. *)
+let emit_record kind fields =
+  let line = record_line kind fields in
+  Stdio.eprintf "%s\n%!" line;
+  Option.iter action_records ~f:(fun (path, channel) ->
+      match
+        Stdlib.output_string channel (line ^ "\n");
+        Stdlib.flush channel
+      with
+      | () -> ()
+      | exception Sys_error e ->
+          fail (Printf.sprintf "cannot write the per-action verdict records %s: %s" path e))
+
 type skip_aggregation = [ `Backend | `Environment | `Outside_sweep ]
 (** [skipped ~backend name] reports a leg the run's backend cannot evaluate: a GPU intrinsic on a
     CPU backend, a tf32 policy outside CUDA. It prints the same stdout line {!p} would — the
@@ -271,8 +357,9 @@ type skip_aggregation = [ `Backend | `Environment | `Outside_sweep ]
     free — and announces the skip on stderr, naming the claim. [grep SKIPPED] over a run then
     enumerates exactly what that hardware did not verify. A second
     [OCANNL_TOOL_VERDICT_SKIP<TAB>scope<TAB>executable<TAB>claim] record on stderr is the
-    machine-readable form; the executable identity keeps equal labels in different test legs
-    distinct when sweep logs are intersected across backends. [scope] is [backend] by default. Pass
+    machine-readable form, and the one the action's record file receives (the per-action records
+    above), which is what the forced sweep intersects across backends; the executable identity keeps
+    equal labels in different test legs distinct there. [scope] is [backend] by default. Pass
     [~aggregation:`Environment] when the leg is gated by a host or configuration capability rather
     than the selected backend, such as a compiler target, preprocessing flag or filesystem feature;
     its human announcement remains visible, and the forced fleet sweep aggregates it across the
@@ -293,8 +380,9 @@ type skip_aggregation = [ `Backend | `Environment | `Outside_sweep ]
 
     [~backend] is the run's backend name, as each test already derives it for its own gating
     ([String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")]). It is passed in
-    rather than read here so that this library keeps depending on nothing but [base] and [stdio]:
-    reporting a verdict is not a reason to link OCANNL's configuration machinery. *)
+    rather than read here so that this library keeps depending on no OCANNL library, only [base],
+    [stdio] and [unix]: reporting a verdict is not a reason to link OCANNL's configuration
+    machinery. *)
 
 let skipped ?(aggregation = (`Backend : skip_aggregation)) ~backend name =
   Stdio.eprintf "SKIPPED on %s (vacuous): %s\n%!" backend name;
@@ -303,13 +391,15 @@ let skipped ?(aggregation = (`Backend : skip_aggregation)) ~backend name =
      basename is stable across worktrees and machines; pairing it with the claim prevents equal
      labels in different tests from being conflated. [String.escaped] keeps each field on one TSV
      line even if a computed label contains a control character. *)
-  Stdio.eprintf "OCANNL_TOOL_VERDICT_SKIP\t%s\t%s\t%s\n%!"
-    (match aggregation with
-    | `Backend -> "backend"
-    | `Environment -> "environment"
-    | `Outside_sweep -> "outside-sweep")
-    (Stdlib.String.escaped (Stdlib.Filename.basename Stdlib.Sys.executable_name))
-    (Stdlib.String.escaped name);
+  emit_record "SKIP"
+    [
+      (match aggregation with
+      | `Backend -> "backend"
+      | `Environment -> "environment"
+      | `Outside_sweep -> "outside-sweep");
+      Stdlib.String.escaped (Stdlib.Filename.basename Stdlib.Sys.executable_name);
+      Stdlib.String.escaped name;
+    ];
   p name true
 
 (** [gated ~when_ ~on label b] is a claim that is evaluated only where the gate [when_] is open:
