@@ -427,13 +427,19 @@ let () =
   let limits_yz n = { Ir.Backend_intf.no_hardware_limits with max_grid_yz = Some n } in
   p "limit gate: a folded .z extent at the device limit passes"
     (match
-       Sched.check_hardware_limits_classified ~name:"qkv_bg" ~limits:(limits_yz (bb * hh)) o
+       Sched.check_hardware_limits_classified ~capabilities:Ir.Backend_intf.no_codegen_capabilities
+         ~name:"qkv_bg"
+         ~limits:(limits_yz (bb * hh))
+         o
      with
     | () -> true
     | exception _ -> false);
   p "limit gate: a folded .z extent beyond the device limit is a typed Resource_exceeded"
     (match
-       Sched.check_hardware_limits_classified ~name:"qkv_bg" ~limits:(limits_yz ((bb * hh) - 1)) o
+       Sched.check_hardware_limits_classified ~capabilities:Ir.Backend_intf.no_codegen_capabilities
+         ~name:"qkv_bg"
+         ~limits:(limits_yz ((bb * hh) - 1))
+         o
      with
     | () -> false
     | exception
@@ -467,12 +473,18 @@ let () =
   let os, sdims = Option.value_exn ~here:[%here] y_ref in
   let grid_y = sdims.LL.grid.(1) in
   p "limit gate: a .y grid extent at the device limit passes"
-    (match Sched.check_hardware_limits_classified ~name:"qkv_y" ~limits:(limits_yz grid_y) os with
+    (match
+       Sched.check_hardware_limits_classified ~capabilities:Ir.Backend_intf.no_codegen_capabilities
+         ~name:"qkv_y" ~limits:(limits_yz grid_y) os
+     with
     | () -> true
     | exception _ -> false);
   p "limit gate: a .y grid extent beyond the device limit is a typed Resource_exceeded"
     (match
-       Sched.check_hardware_limits_classified ~name:"qkv_y" ~limits:(limits_yz (grid_y - 1)) os
+       Sched.check_hardware_limits_classified ~capabilities:Ir.Backend_intf.no_codegen_capabilities
+         ~name:"qkv_y"
+         ~limits:(limits_yz (grid_y - 1))
+         os
      with
     | () -> false
     | exception
@@ -502,7 +514,8 @@ let () =
     (sblock.(1) > 1);
   p "limit gate: per-dimension caps at the seed's own workgroup shape pass"
     (match
-       Sched.check_hardware_limits_classified ~name:"qkv_wg"
+       Sched.check_hardware_limits_classified ~capabilities:Ir.Backend_intf.no_codegen_capabilities
+         ~name:"qkv_wg"
          ~limits:(wg_limits (sblock.(0), sblock.(1), sblock.(2)))
          os
      with
@@ -512,7 +525,8 @@ let () =
     "limit gate: a .y workgroup cap below the seed's extent is a typed Workgroup_y_extent, though \
      the thread product is legal"
     (match
-       Sched.check_hardware_limits_classified ~name:"qkv_wg"
+       Sched.check_hardware_limits_classified ~capabilities:Ir.Backend_intf.no_codegen_capabilities
+         ~name:"qkv_wg"
          ~limits:(wg_limits (sblock.(0), sblock.(1) - 1, sblock.(2)))
          os
      with

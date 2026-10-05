@@ -746,17 +746,33 @@ module Impl = struct
        the coordinates of a float accumulator (gh-ocannl-1075). Load the row-major table into the
        accumulator's own type and convert scalar cells at the coordinates it names. [simdgroup_load]
        accepts only device/threadgroup memory (MSL 4.1 section 6.8.1), so each converted scope
-       initializes 256 bytes of threadgroup storage before its opening barrier. A single thread
-       writes the table even when the workgroup contains several SIMD groups. *)
+       initializes one tile's worth of [float]s (256 bytes) of threadgroup storage before its
+       opening barrier. A single thread writes the table even when the workgroup contains several
+       SIMD groups. *)
+    let mma_rc_table_len = 8 * 8
+
     let mma_d_table_lines ~acc_frag ~d_frag =
       if String.equal acc_frag d_frag then []
       else
         [
-          "threadgroup float ocannl_mma_rc8[64];";
+          Printf.sprintf "threadgroup %s ocannl_mma_rc8[%d];" (typ_of_prec Ops.single)
+            mma_rc_table_len;
           "if (all(lid == uint3(0))) {";
-          "  for (int __rc = 0; __rc < 64; ++__rc) ocannl_mma_rc8[__rc] = (float)__rc;";
+          Printf.sprintf
+            "  for (int __rc = 0; __rc < %d; ++__rc) ocannl_mma_rc8[__rc] = (float)__rc;"
+            mma_rc_table_len;
           "}";
         ]
+
+    (* The table's bytes, for the schedule-level shared-memory estimate (gh-ocannl-1205): read off
+       the same combination resolver and the same declaration as [mma_d_table_lines], so the
+       estimate counts exactly the scopes the hooks convert. *)
+    let mma_scope_workgroup_bytes ~d_prec ~a_prec ~b_prec =
+      match mma_fragment_types ~d_prec ~a_prec ~b_prec with
+      | Some (acc_frag, _, _, d_frag) when not (List.is_empty (mma_d_table_lines ~acc_frag ~d_frag))
+        ->
+          mma_rc_table_len * Ops.prec_in_bytes Ops.single
+      | Some _ | None -> 0
 
     let mma_d_boundary_lines ~dir ~acc_frag ~d_frag ~acc ~ptr ~ldd =
       if String.equal acc_frag d_frag then

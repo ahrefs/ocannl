@@ -382,6 +382,12 @@ type codegen_capabilities = {
   asynchronous_staging_copy : bool;
       (** Whether eligible pipelined staging copies use a dialect-specific asynchronous copy arm. A
           portable synchronous depth-2 pipeline is not this capability. *)
+  mma_scope_workgroup_bytes : d_prec:Ops.prec -> a_prec:Ops.prec -> b_prec:Ops.prec -> int;
+      (** Static workgroup-shared bytes one tile-MMA emission scope declares beyond the staged
+          tiles, for a [(d, a, b)] storage triple, from the same
+          [C_syntax_config.mma_scope_workgroup_bytes] the emitting hooks read: Metal's converted
+          destination boundary (gh-ocannl-1205), [0] everywhere else.
+          [Schedule.check_hardware_limits_classified] adds it per scope to the staged tiles. *)
 }
 (** Stable code-generation facts callers need before compiling. Actual rendering decisions stay on
     the compiled routine's censuses. *)
@@ -394,6 +400,7 @@ let no_codegen_capabilities =
     compute_prec = Fn.id;
     accum_prec = Fn.id;
     asynchronous_staging_copy = false;
+    mma_scope_workgroup_bytes = (fun ~d_prec:_ ~a_prec:_ ~b_prec:_ -> 0);
   }
 
 (** A stable, exhaustive rendering of a capability record under the CURRENT numerics policy: its
@@ -404,9 +411,22 @@ let no_codegen_capabilities =
     replayed. Tabulating the function codegen calls, rather than naming the predicate behind it,
     makes the cache identity move exactly when the resolution does, on every backend, with nothing
     to add by hand. The record pattern names every field, so a field added to
-    {!codegen_capabilities} is a compile error here until it is rendered (warning 9). *)
+    {!codegen_capabilities} is a compile error here until it is rendered (warning 9).
+
+    The one field deliberately not rendered is [mma_scope_workgroup_bytes]: it decides whether a
+    schedule FITS, never what a kernel computes, and a replayed winner passes the same
+    [Schedule.check_hardware_limits_classified] gate (and the backend's post-link allocation check)
+    as a fresh candidate, so a stale entry is refused at compile rather than run. Keying on it would
+    re-tune every Metal schedule for a feasibility estimate (gh-ocannl-572: over-keying is a defect
+    too). *)
 let codegen_capabilities_fingerprint
-    { supports_f64; compute_prec; accum_prec; asynchronous_staging_copy } =
+    {
+      supports_f64;
+      compute_prec;
+      accum_prec;
+      asynchronous_staging_copy;
+      mma_scope_workgroup_bytes = _;
+    } =
   let resolution f =
     String.concat ~sep:","
       (List.map Ops.all_precs ~f:(fun prec -> Ops.prec_string prec ^ ">" ^ Ops.prec_string (f prec)))

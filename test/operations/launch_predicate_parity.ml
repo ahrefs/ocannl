@@ -277,7 +277,10 @@ let () =
 
   (* The gate's verdict on this seed's schedule: the typed resource and the sentence it reports. *)
   let gate q ~limits =
-    match Sched.check_hardware_limits_classified ~name:"lpp" ~limits (applied q) with
+    match
+      Sched.check_hardware_limits_classified ~capabilities:Ir.Backend_intf.no_codegen_capabilities
+        ~name:"lpp" ~limits (applied q)
+    with
     | () -> None
     | exception SO.Cause_at (_, SO.Resource_exceeded { resource; detail; _ }) ->
         Some (resource, detail)

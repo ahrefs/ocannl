@@ -159,6 +159,19 @@ files.
 - Building a test kernel that actually *has* a big scratch frame takes care: write the `Local`
   array in one loop and read it back in REVERSE in another. A forward read in the same order lets
   the compiler forward each store to its load and delete the array, leaving nothing to reject.
+- **On Metal the schedule gate is the only TYPED workgroup-memory refusal** (gh-ocannl-1205). A
+  kernel whose static `threadgroup` allocation exceeds the device limit is refused by
+  `newComputePipelineStateWithFunction` itself, as an untyped `Failure` ("Threadgroup memory size
+  (33024) exceeds the maximum threadgroup memory allowed (32768)"), before the post-link
+  `get_static_threadgroup_memory_length` check can classify it; Metal has no `classify_failure`, so
+  to a tuner that is a fatal, not a decline. So everything a kernel declares in `threadgroup` memory
+  must reach `Schedule.workgroup_memory_bytes`: staged tiles from `workgroup_shared`, and any
+  backend-emitted scratch through `codegen_capabilities.mma_scope_workgroup_bytes`, which the
+  emitting backend derives from the same resolver as its declaration (Metal's converted-boundary
+  coordinate table, 256 B per tile-MMA scope; a fragment scope counts once). A new `threadgroup` or
+  `__shared__` declaration in a backend emitter needs the same route. Guard:
+  `test/operations/schedule_mma_scope_scratch.ml` (tiles of exactly the limit compile; the same
+  tiles plus one converted scope are refused at `Hardware_limits`).
 - `Context.get_used_memory` must report OCANNL's OWN allocation (`Slab.used_memory`, or the
   backend's atomic counter) — never the driver's `total - free`. That is device-global: it counts
   other processes and moves in allocation granules, so it cannot see sub-granule effects like the

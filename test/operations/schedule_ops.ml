@@ -357,7 +357,8 @@ let () =
     (match
        try
          ignore
-           (Sched.check_hardware_limits ~name:"limit_threads"
+           (Sched.check_hardware_limits ~capabilities:Ir.Backend_intf.no_codegen_capabilities
+              ~name:"limit_threads"
               ~limits:
                 {
                   Ir.Backend_intf.no_hardware_limits with
@@ -382,13 +383,15 @@ let () =
   in
   p "shared tiles within the memory limit accepted"
     (try
-       Sched.check_hardware_limits ~name:"limit_smem_ok" ~limits:(smem_limits 128) shared_opt;
+       Sched.check_hardware_limits ~capabilities:Ir.Backend_intf.no_codegen_capabilities
+         ~name:"limit_smem_ok" ~limits:(smem_limits 128) shared_opt;
        true
      with Utils.User_error _ -> false);
   p "shared tiles over the memory limit rejected"
     (match
        try
-         Sched.check_hardware_limits ~name:"limit_smem" ~limits:(smem_limits 64) shared_opt;
+         Sched.check_hardware_limits ~capabilities:Ir.Backend_intf.no_codegen_capabilities
+           ~name:"limit_smem" ~limits:(smem_limits 64) shared_opt;
          None
        with Utils.User_error msg -> Some msg
      with

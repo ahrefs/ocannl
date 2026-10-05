@@ -1,0 +1,7 @@
+the converted half boundary charges a positive per-scope scratch: true
+R control: tiles of exactly the limit, no converted boundary, compile and run: true
+R control: the unconverted kernel declares no coordinate table: true
+R wide: the same tiles plus the scope scratch are refused at Hardware_limits, requesting exactly tiles + scratch: true
+F wide: tiles of limit - scratch make the estimate exactly the limit: true
+F wide: the at-limit estimate compiles, links and runs: true
+F wide: the source declares one table per scope the estimate counted: true

@@ -7697,3 +7697,26 @@
  (deps ocannl_config)
  (modules config_token_parse)
  (libraries base stdio arrayjit.utils arrayjit.verdict))
+
+; gh-ocannl-1205: the shared-memory estimate counts Metal's converted-boundary coordinate table.
+
+(test
+ (name schedule_mma_scope_scratch)
+ (package neural_nets_lib)
+ (deps
+  (env_var OCANNL_PROFILE)
+  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
+  (env_var OCANNL_BUILD_FILES_PREFIX)
+  ocannl_config
+  (env_var OCANNL_FP16_ARITHMETIC)
+  (env_var OCANNL_BACKEND)
+  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
+  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
+  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
+  (env_var OCANNL_LARGE_MODELS)
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_BIG_MODELS))
+ (modules schedule_mma_scope_scratch)
+ (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
