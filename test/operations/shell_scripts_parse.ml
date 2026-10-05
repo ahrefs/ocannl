@@ -1150,8 +1150,14 @@ module Shell_lexer = struct
       in front of the builtin: redirections, assignments, [!], [time] ([-p], [--]), and the
       builtin-runners [builtin] ([--]) and [command] ([-p], [--]). [shopt -s -o errexit] is
       [set -o errexit] by another name and [shopt -u -o errexit] is [set +o errexit]. Nothing else
-      is followed: a [set] behind [eval], [source], [env] or [bash -c] is not read. *)
-  let command_errexit command =
+      is followed: a [set] behind [eval], [source], [env] or [bash -c] is not read.
+
+      Turning errexit OFF is reported only where the builtin certainly runs in this shell: not
+      behind a redirection (a failed one skips the command), not behind [time] (an external command
+      under a POSIX shell), and not as a bare [set]/[shopt] when the script defines a function of
+      that name ([~shadowed]) -- [builtin set +e] and [command set +e] bypass it. Turning it on is
+      reported wherever it may run. *)
+  let command_errexit ?(shadowed = []) command =
     let rec strip_redirections = function
       | [] -> []
       | word :: rest -> (
@@ -1160,25 +1166,29 @@ module Shell_lexer = struct
           | Some false -> strip_redirections (List.drop rest 1)
           | None -> word :: strip_redirections rest)
     in
+    let is_time word = String.equal (literal_shell_word word) "time" in
     let rec drop_command_prefixes = function
       | word :: rest when assignment_prefix word -> drop_command_prefixes rest
       | time :: option :: dashdash :: rest
-        when String.equal (literal_shell_word time) "time"
+        when is_time time
              && String.equal (literal_shell_word option) "-p"
              && String.equal (literal_shell_word dashdash) "--" ->
           drop_command_prefixes rest
       | time :: option :: rest
-        when String.equal (literal_shell_word time) "time"
-             && List.mem [ "-p"; "--" ] (literal_shell_word option) ~equal:String.equal ->
+        when is_time time && List.mem [ "-p"; "--" ] (literal_shell_word option) ~equal:String.equal
+        ->
           drop_command_prefixes rest
       | word :: rest when List.mem [ "!"; "time" ] (literal_shell_word word) ~equal:String.equal ->
           drop_command_prefixes rest
       | words -> words
     in
-    let words =
-      shell_words (String.strip command)
-      |> strip_redirections |> drop_command_prefixes |> List.map ~f:literal_shell_word
+    let all_words = shell_words (String.strip command) in
+    let unredirected = strip_redirections all_words in
+    let bare = drop_command_prefixes unredirected in
+    let timed =
+      List.exists (List.take unredirected (List.length unredirected - List.length bare)) ~f:is_time
     in
+    let words = List.map bare ~f:literal_shell_word in
     let rec unwrap = function
       | "builtin" :: rest -> unwrap_options rest
       | "command" :: rest -> unwrap_command rest
@@ -1188,7 +1198,20 @@ module Shell_lexer = struct
       | ("-p" | "--") :: rest -> unwrap_command rest
       | words -> unwrap words
     in
-    match unwrap words with
+    let unwrapped = unwrap words in
+    let certain =
+      List.length unredirected = List.length all_words
+      && (not timed)
+      &&
+      match unwrapped with
+      | name :: _ ->
+          List.length unwrapped < List.length words
+          || not (List.mem shadowed name ~equal:String.equal)
+      | [] -> true
+    in
+    Option.filter ~f:(fun on -> on || certain)
+    @@
+    match unwrapped with
     | "set" :: options -> options_errexit options
     | "shopt" :: arguments ->
         let flags, names =
@@ -1451,22 +1474,29 @@ end
     simple command turns it on or off through {!Shell_lexer.command_errexit}. Wherever bash could
     have errexit on, the reading has it on, so its imprecision can only refuse a live assertion
     (loud), never pass an inert one (silent):
-    - a transition in a subshell, a pipeline element or a background job changes nothing outside it;
-    - turning errexit off counts only where it certainly runs: as the first operand of its
-      statement, in a brace group or branch the flow is in; turning it on counts wherever it may
-      run, after [&&]/[||] too;
+    - turning errexit off counts only where it certainly runs in this shell: as the first operand of
+      its statement, outside any pipeline or background job, in a brace group or branch the flow is
+      in, and through {!Shell_lexer.command_errexit}'s certainty (no redirection, no [time], no
+      [set]/[shopt] function shadowing the builtin). Turning it on counts wherever it may run: after
+      [&&]/[||], and as a pipeline's last element ([shopt -s lastpipe] runs it here); in any other
+      pipeline element, a subshell or a background job it changes nothing outside;
     - [if]: each condition starts where the previous one ended and each body where its condition
       ended; after [fi] errexit may be on if any body, or (without [else]) the last condition, may
       leave it on. [case]: each arm starts from the state before [case] ([;&]/[;;&] also from the
       arm falling into it); afterwards it may be on if any arm, or no arm, leaves it on. A loop body
       is read again from a head that may be on when one pass may leave it on, so a [set -e] late in
-      a body reaches its earlier statements;
+      a body reaches its earlier statements, and a loop whose body holds a [set -e] anywhere may
+      leave errexit on ([break] can leave right after it);
+    - inside a compound whose status a condition, a [!] or a following [&&]/[||] reads, bash ignores
+      errexit for every command, so nothing there is judged under it;
     - a function body runs where it is called, which a text scan cannot see: it is entered with
-      errexit on when the file may turn it on anywhere outside that body. And since the scan does
-      not follow calls, a body that may hand errexit back ON to a caller that called it with errexit
-      off ([enable() { set -e; }], or the [set +e ... set -e] save-and-restore that assumes its
-      caller had it on) makes every off state in the file untrustworthy: such a script is read with
-      errexit on from its first line, and no [set +e] in it turns it off.
+      errexit on when the file may turn it on anywhere outside that body (a subshell included, where
+      a function defined beside the [set -e] may run). And since the scan does not follow calls, a
+      body that may hand errexit back ON to a caller that called it with errexit off -- any [set -e]
+      in it, since [return] can leave right after one; so [enable() { set -e; }], and the
+      [set +e ... set -e] save-and-restore that assumes its caller had it on -- makes every off
+      state in the file untrustworthy: such a script is read with errexit on from its first line,
+      and no [set +e] in it turns it off.
 
     Status consumers. A statement's status is consumed -- it is not an assertion errexit has to stop
     on -- when the statement is a condition ([if]/[elif]/[while]/[until]), when its own list
@@ -1494,14 +1524,16 @@ end
     {1 What it deliberately does not read}
 
     Loud (a live assertion flagged): an errexit transition inside a branch is read as possibly not
-    taken; a function body is judged under errexit even where every call runs with it off; a
-    function that may turn errexit on discards every off state in the file, called or not; a loop
-    body's last statement is not consumed even where the loop runs once, nor a fall-through arm's
-    where no arm follows it at run time; the script's own last statement is not a consumer, since an
-    EXIT trap can replace the exit status -- [|| exit 1] is the explicit spelling; a [rc=$?] or a
-    bare [return] on the next statement is not one either -- [|| rc=$?] and [|| return 1] are; and a
-    statement whose status a pipeline discards is flagged although a plain failure there is lost
-    too.
+    taken; a [set +e] behind [time] or a redirection is read as possibly not run, and a [set -e]
+    ending a pipeline as possibly run here; a loop that ends by turning errexit off in its condition
+    still reads as possibly leaving it on; a function body is judged under errexit even where every
+    call runs with it off; a function that may turn errexit on discards every off state in the file,
+    called or not; a loop body's last statement is not consumed even where the loop runs once, nor a
+    fall-through arm's where no arm follows it at run time; the script's own last statement is not a
+    consumer, since an EXIT trap can replace the exit status -- [|| exit 1] is the explicit
+    spelling; a [rc=$?] or a bare [return] on the next statement is not one either -- [|| rc=$?] and
+    [|| return 1] are; and a statement whose status a pipeline discards is flagged although a plain
+    failure there is lost too.
 
     Silent (an inert assertion not flagged): errexit turned on by [eval], a sourced file, an
     invocation flag ([bash -e script]; a shebang flag is refused by {!Shebang} already), or a caller
@@ -1996,24 +2028,38 @@ module Shell_context = struct
     || index < List.length statement.connectors
        && is_pipe (List.nth_exn statement.connectors index)
 
-  (** Every command that may turn errexit on in the parent shell, with the function bodies it sits
-      in. *)
+  (** Every command that may turn errexit on anywhere -- in a subshell or pipeline too, where a
+      function defined beside it may run -- with the function bodies it sits in. *)
   let rec enabling_sites ~functions sites (branch : branch) =
     List.fold branch.statements ~init:sites ~f:(fun sites statement ->
-        List.foldi statement.operands ~init:sites ~f:(fun index sites operand ->
-            if runs_apart statement index then sites
-            else
-              match operand.compound with
-              | None -> (
-                  match L.command_errexit operand.text with
-                  | Some true -> functions :: sites
-                  | Some false | None -> sites)
-              | Some { kind = Group `Paren | Function `Paren; _ } -> sites
-              | Some ({ kind; branches } as compound) ->
-                  let functions =
-                    match kind with Function _ -> compound :: functions | _ -> functions
-                  in
-                  List.fold branches ~init:sites ~f:(enabling_sites ~functions)))
+        List.fold statement.operands ~init:sites ~f:(fun sites operand ->
+            match operand.compound with
+            | None -> (
+                match L.command_errexit operand.text with
+                | Some true -> functions :: sites
+                | Some false | None -> sites)
+            | Some ({ kind; branches } as compound) ->
+                let functions =
+                  match kind with Function _ -> compound :: functions | _ -> functions
+                in
+                List.fold branches ~init:sites ~f:(enabling_sites ~functions)))
+
+  (** The names of the functions [branch] defines anywhere. *)
+  let rec defined_functions (branch : branch) =
+    List.concat_map branch.statements ~f:(fun statement ->
+        List.concat_map statement.operands ~f:(fun operand ->
+            match operand.compound with
+            | None -> []
+            | Some compound ->
+                let own =
+                  match (compound.kind, L.shell_words operand.text) with
+                  | ( Function _,
+                      ([ head ] | [ "function"; head ] | [ head; "()" ] | [ "function"; head; "()" ])
+                    ) ->
+                      [ Option.value (String.chop_suffix head ~suffix:"()") ~default:head ]
+                  | _ -> []
+                in
+                own @ List.concat_map compound.branches ~f:defined_functions))
 
   type judgement = {
     statement : statement;
@@ -2026,6 +2072,15 @@ module Shell_context = struct
       at all. *)
   let judge top =
     let sites = enabling_sites ~functions:[] [] top in
+    let shadowed =
+      List.filter (defined_functions top) ~f:(List.mem [ "set"; "shopt" ] ~equal:String.equal)
+    in
+    let errexit_of text = L.command_errexit ~shadowed text in
+    (* A loop or function body holding any [set -e] may be left -- by [break], [continue] or
+       [return] -- right after it, whatever its end state says. *)
+    let may_enable branches =
+      List.exists branches ~f:(fun b -> not (List.is_empty (enabling_sites ~functions:[] [] b)))
+    in
     (* One reading of the tree. [leaky]: some function body may turn errexit on for a caller that
        had it off, so no off state can be trusted. Returns the judgements and whether a body was
        found to be leaky. *)
@@ -2040,20 +2095,27 @@ module Shell_context = struct
             | None -> { statement; errexit; consumed }
             | Some previous -> { previous with errexit = previous.errexit || errexit })
       in
-      let rec branch (b : branch) ~entry ~hands_on =
+      (* [ignored]: inside a compound whose status a condition, a [!] or a following [&&]/[||]
+         reads, where bash ignores errexit for every command (the module header). *)
+      let rec branch (b : branch) ~entry ~hands_on ~ignored =
         let last = List.length b.statements - 1 in
+        let ignored = ignored || b.condition in
         List.foldi b.statements ~init:entry ~f:(fun index errexit statement ->
             let consumed = b.condition || (hands_on && index = last) in
-            record statement ~errexit ~consumed;
-            run statement ~errexit ~consumed)
-      and run statement ~errexit ~consumed =
+            record statement ~errexit:(errexit && not ignored) ~consumed;
+            run statement ~errexit ~consumed ~ignored)
+      and run statement ~errexit ~consumed ~ignored =
         List.foldi statement.operands ~init:errexit ~f:(fun index errexit operand ->
             let apart = runs_apart statement index in
             let after = List.nth statement.connectors index in
+            (* A pipeline's last element may run in this shell ([shopt -s lastpipe]). *)
+            let may_run_here =
+              (not statement.async) && not (Option.value_map after ~default:false ~f:is_pipe)
+            in
             match operand.compound with
             | None -> (
-                match L.command_errexit operand.text with
-                | Some true when not apart -> true
+                match errexit_of operand.text with
+                | Some true when may_run_here -> true
                 | Some false when (not leaky) && (not apart) && index = 0 -> false
                 | _ -> errexit)
             | Some compound -> (
@@ -2068,12 +2130,19 @@ module Shell_context = struct
                 let discarded =
                   statement.async || Option.value_map after ~default:false ~f:is_pipe
                 in
-                let exit = enter compound ~entry:errexit ~status_consumed ~discarded in
+                let ignored =
+                  ignored
+                  || (match after with Some (And | Or) -> true | Some Pipe | None -> false)
+                  || String.is_prefix operand.text ~prefix:"!"
+                in
+                let exit = enter compound ~entry:errexit ~status_consumed ~discarded ~ignored in
                 match compound.kind with
+                | (Group `Brace | If | Loop | Case) when apart && may_run_here -> errexit || exit
                 | _ when apart -> errexit
                 | Group `Paren | Function _ -> errexit
                 | Group `Brace | If | Loop | Case -> if index = 0 then exit else errexit || exit))
-      and enter compound ~entry ~status_consumed ~discarded =
+      and enter compound ~entry ~status_consumed ~discarded ~ignored =
+        let branch ?(ignored = ignored) b ~entry ~hands_on = branch b ~entry ~hands_on ~ignored in
         match compound.kind with
         | Group `Brace ->
             List.fold compound.branches ~init:entry ~f:(fun entry body ->
@@ -2088,13 +2157,16 @@ module Shell_context = struct
                   not (List.mem functions compound ~equal:phys_equal))
             in
             List.iter compound.branches ~f:(fun body ->
-                ignore (branch body ~entry:(leaky || entry') ~hands_on:true : bool);
-                (* A call from a caller with errexit off: does the body hand it back on? *)
+                (* Where the body runs is unknown: neither the definition's context nor its ignoring
+                   applies. *)
+                ignore (branch body ~entry:(leaky || entry') ~hands_on:true ~ignored:false : bool);
+                (* A call from a caller with errexit off: may the body hand it back on? *)
                 match shape with
                 | `Brace ->
                     let saved = !recording in
                     recording := false;
-                    if branch body ~entry:false ~hands_on:true then leak := true;
+                    if branch body ~entry:false ~hands_on:true ~ignored:false || may_enable [ body ]
+                    then leak := true;
                     recording := saved
                 | `Paren -> ());
             entry
@@ -2120,7 +2192,8 @@ module Shell_context = struct
             in
             let exit, joined = pass entry in
             let head = entry || exit in
-            if Bool.equal head entry then joined else snd (pass head)
+            (if Bool.equal head entry then joined else snd (pass head))
+            || may_enable compound.branches
         | Case ->
             (* An arm ending in [;&]/[;;&] hands nothing on: the arm it falls into overwrites its
                status. *)
@@ -2138,7 +2211,7 @@ module Shell_context = struct
             in
             arms None entry compound.branches
       in
-      ignore (branch top ~entry:leaky ~hands_on:false : bool);
+      ignore (branch top ~entry:leaky ~hands_on:false ~ignored:false : bool);
       ( Hashtbl.data judgements
         |> List.sort ~compare:(fun a b -> Int.compare a.statement.id b.statement.id),
         !leak )
@@ -2491,6 +2564,14 @@ module Errexit_negation = struct
       ( "negation after a call that turns errexit on",
         "set -e\nf() { set -e; }\nset +e\nf\n! probe\n",
         [ 5 ] );
+      ( "negation after a set -e ending a pipeline",
+        "shopt -s lastpipe\n: | set -e\n! probe\n",
+        [ 3 ] );
+      ("negation in a group an || tail reads", "set -e\n{ ! probe; x; } || recover\n", []);
+      ("negation after a redirected set +e", "set -e\nset +e 2>/dev/null\n! probe\n", [ 3 ]);
+      ( "negation after a builtin set +e beside a set function",
+        "set -e\nset() { :; }\nbuiltin set +e\n! probe\n",
+        [] );
       ( "negation after set +e in a file with a save-and-restore function",
         "set -e\nf() {\n  set +e\n  x\n  set -e\n}\nset +e\n! probe\n",
         [ 8 ] );
@@ -2661,7 +2742,7 @@ module Errexit_and_list = struct
       ("literal closing-bracket argument", "set -e\n[ x = ] ] && [ -e b ]\n", [ 2 ]);
       ("timed subshell", "set -e\ntime ( [ -e a ] && [ -e b ]; : )\n", [ 2 ]);
       ("portable timed subshell", "set -e\ntime -p ( [ -e a ] && [ -e b ]; : )\n", [ 2 ]);
-      ("negated subshell", "set -e\n! ( [ -e a ] && [ -e b ]; : )\n", [ 2 ]);
+      ("negated subshell", "set -e\n! ( [ -e a ] && [ -e b ]; : )\n", []);
       ("group as a later operand", "set -e\nprobe && { [ -e a ] && [ -e b ]; y; }\n", [ 2 ]);
       ("subshell as a later operand", "set -e\nprobe || ( [ -e a ] && [ -e b ]; y )\n", [ 2 ]);
       ("group in a pipeline", "set -e\n{ [ -e a ] && [ -e b ]; y; } | cat\n", [ 2 ]);
@@ -2914,6 +2995,9 @@ module Errexit_execution_controls = struct
       only where the host's bash runs this probe. *)
   let fallthrough = ("`;&` and `;;&`", "case x in x) : ;& y) : ;;& esac\n")
 
+  (** [shopt -s lastpipe], which bash 3.2 lacks. *)
+  let lastpipe = ("`lastpipe`", "shopt -s lastpipe\n")
+
   let both ?requires boundary name template =
     ( name,
       template,
@@ -2955,6 +3039,19 @@ module Errexit_execution_controls = struct
       both Loud "after set +e, beside an uncalled function that turns errexit on"
         "set -e\nf() { set -e; }\nset +e\n@@\necho SURVIVED\n";
       both Silent "after eval set -e" "eval 'set -e'\n@@\necho SURVIVED\n";
+      both Inert "after set -e with a positional before +e"
+        "set -e positional +e\n@@\necho SURVIVED\n";
+      both Inert "after set +e behind a failed redirection"
+        "set -e\nset +e >/nonexistent-ocannl-dir/out || :\n@@\necho SURVIVED\n";
+      both Inert "after set +e, shadowed by a function named set"
+        "set -e\nset() { :; }\nset +e\n@@\necho SURVIVED\n";
+      both Loud "after time set +e" "set -e\ntime set +e\n@@\necho SURVIVED\n";
+      both ~requires:lastpipe Inert "after set -e ending a lastpipe pipeline"
+        "shopt -s lastpipe\n: | set -e\n@@\necho SURVIVED\n";
+      both Inert "after a loop left by break right after set -e"
+        "for i in 1; do\n  set -e\n  break\n  set +e\ndone\n@@\necho SURVIVED\n";
+      both Inert "in a function defined and called in one subshell"
+        "(\n  set -e\n  f() {\n    @@\n    :\n  }\n  f\n  echo REACHED\n)\necho SURVIVED\n";
       (* Status consumers. *)
       both Live "as a function's last statement" "set -e\nf() {\n  @@\n}\nf\necho SURVIVED\n";
       both Inert "before a function's last statement"
@@ -3002,6 +3099,13 @@ module Errexit_execution_controls = struct
         "set -e\n@@\nrc=$?\n[ \"$rc\" -eq 0 ]\necho SURVIVED\n";
       both Live "as an if condition" "set -e\nif @@; then :; fi\necho SURVIVED\n";
       both Live "before an || tail" "set -e\n@@ || echo caught\necho SURVIVED\n";
+      both Live "in a group an || tail reads"
+        "set -e\n{\n  @@\n  echo AFTER\n} || echo caught\necho SURVIVED\n";
+      (* Pair only: the [!] in front is itself a negation statement, which the other arm flags. *)
+      ( "in a negated subshell",
+        "set -e\n! (\n  @@\n  echo AFTER\n)\necho SURVIVED\n",
+        [ (Pair, default Pair, Live) ],
+        None );
       both Loud "in a function only called with errexit off"
         "set -e\nf() {\n  @@\n  :\n}\nset +e\nf\necho SURVIVED\n";
       (* Wrappers. *)
