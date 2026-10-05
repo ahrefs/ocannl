@@ -6227,6 +6227,32 @@ let lane_preamble_reduction_for (limits : Backend_intf.hardware_limits) =
       if limits.Backend_intf.lane_scalar_recompute_cheap then Preamble_cooperative
       else Preamble_refused
 
+(* The most simdgroups a cooperative lane reduction may span -- config
+   [gpu_lane_all_reduce_simdgroups] (gh-ocannl-1168): [auto] ([None]) or a positive count. At one
+   simdgroup the all-reduce is a register butterfly; past it, each simdgroup's partial goes through
+   workgroup-shared memory between two barriers per pair ([C_syntax.try_lane_all_reduce]). *)
+let gpu_lane_all_reduce_simdgroups () =
+  match
+    String.lowercase
+      (String.strip
+         (Utils.get_global_arg ~arg_name:"gpu_lane_all_reduce_simdgroups" ~default:"auto"))
+  with
+  | "auto" -> None
+  | other -> (
+      match Int.of_string_opt other with
+      | Some k when k >= 1 -> Some k
+      | _ ->
+          invalid_arg
+            ("gpu_lane_all_reduce_simdgroups: expected auto or a positive integer, got " ^ other))
+
+(* [auto] resolves from the device's measured economics ({!Backend_intf.hardware_limits}'s
+   [lane_all_reduce_simdgroups]): one simdgroup wherever the barriers' cost was not measured to be
+   repaid. *)
+let lane_all_reduce_simdgroups_for (limits : Backend_intf.hardware_limits) =
+  match gpu_lane_all_reduce_simdgroups () with
+  | Some k -> k
+  | None -> limits.Backend_intf.lane_all_reduce_simdgroups
+
 (* How the default GPU schedule weighs its lane geometry -- config [gpu_serial_lanes]
    (gh-ocannl-1167): taken where a kernel admits it, and a reason for fission to cut a kernel
    ([cut]); taken where a kernel admits it, but no reason to cut ([admitted]); never taken
@@ -6284,8 +6310,8 @@ let serial_lanes_for (limits : Backend_intf.hardware_limits) =
    chunk. Not taken at all unless [enabled] ({!serial_lanes_for}, gh-ocannl-1167). *)
 let lane_geometry ~block_size ~min_parallel ~(limits : Backend_intf.hardware_limits)
     ~standard_threads ~(enabled : bool Lazy.t)
-    ~(preamble_reduction : lane_preamble_reduction Lazy.t) (opt : Low_level.optimized) :
-    schedule option =
+    ~(preamble_reduction : lane_preamble_reduction Lazy.t) ~(all_reduce_simdgroups : int Lazy.t)
+    (opt : Low_level.optimized) : schedule option =
   let open Low_level in
   (* Here both treatments are asked for only where they can matter -- the gate where some statement
      has a lane path at all, the preamble treatment where that path holds a preamble reduction (only
@@ -6359,28 +6385,36 @@ let lane_geometry ~block_size ~min_parallel ~(limits : Backend_intf.hardware_lim
                   (* The cooperative preamble reductions (gh-ocannl-1124): a reduction whose extent
                      is the lane's whole workgroup (the lane unsplit) is retyped [Workgroup_reduce],
                      so it shares the lane's workgroup slot -- the output lanes' physical layout, no
-                     lane axis of its own -- and the renderer computes it as a butterfly all-reduce
-                     leaving the sum in every lane ([C_syntax.try_lane_all_reduce]), or, where the
+                     lane axis of its own -- and the renderer computes it as an all-reduce leaving the
+                     sum in every lane ([C_syntax.try_lane_all_reduce]: a butterfly per simdgroup,
+                     past one the partials through shared memory), or, where the
                      renderer still cannot shuffle, as the serial loop every lane runs whole. *)
                   (* Under [cooperative] every admitted reduction is retyped or the lanes are
                      declined: a reduction the renderer could not all-reduce -- not exactly the
-                     lane's unsplit one-simdgroup extent ({!Backend_intf.hardware_limits}'
-                     [simdgroup_width]) -- would run serially in every lane, the duplicated arm
-                     measured as a regression, and the plain plan is today's behaviour. *)
+                     lane's unsplit extent, or that extent not [k] whole simdgroups
+                     ({!Backend_intf.hardware_limits}' [simdgroup_width]) for [k] up to
+                     [all_reduce_simdgroups] (gh-ocannl-1168: past one simdgroup the all-reduce
+                     pays two barriers per pair, so a device takes it only where measured) --
+                     would run serially in every lane, the duplicated arm measured as a regression,
+                     and the plain plan is today's behaviour. *)
                   let cooperative =
                     match preamble_reduction with
                     | Preamble_refused | Preamble_duplicated -> Some []
                     | Preamble_cooperative ->
+                        let spans width =
+                          match limits.simdgroup_width with
+                          | Some simd when simd > 0 && width % simd = 0 ->
+                              let k = width / simd in
+                              k >= 1 && k <= Lazy.force all_reduce_simdgroups
+                          | _ -> false
+                        in
                         Option.all
                           (List.concat
                              (List.map2_exn (List.zip_exn carrying lanes) plans
                                 ~f:(fun ((n, _), (_, (lane, _))) p ->
                                   let width =
                                     match (p.lp_split, p.lp_block) with
-                                    | None, [ (_, width) ]
-                                      when Option.equal Int.equal limits.simdgroup_width
-                                             (Some width) ->
-                                        Some width
+                                    | None, [ (_, width) ] when spans width -> Some width
                                     | _ -> None
                                   in
                                   List.map (lane_preamble_reductions ~lane n.n_loops)
@@ -6455,8 +6489,9 @@ let fold_mma_schedule ~(limits : Backend_intf.hardware_limits) (opt : Low_level.
               (launch_geometry_of_dims (Low_level.launch_dims folded.Low_level.llc))))
         [ op ]
 
-let default_gpu_presets ?block_size ?min_parallel ?workgroup_fill ?preamble_reduction ?lanes
-    ?(limits = Backend_intf.no_hardware_limits) (opt : Low_level.optimized) : schedule =
+let default_gpu_presets ?block_size ?min_parallel ?workgroup_fill ?preamble_reduction
+    ?all_reduce_simdgroups ?lanes ?(limits = Backend_intf.no_hardware_limits)
+    (opt : Low_level.optimized) : schedule =
   let open Low_level in
   let block_size =
     Option.value block_size
@@ -6596,17 +6631,21 @@ let default_gpu_presets ?block_size ?min_parallel ?workgroup_fill ?preamble_redu
          (match preamble_reduction with
          | Some p -> Lazy.from_val p
          | None -> lazy (lane_preamble_reduction_for limits))
+       ~all_reduce_simdgroups:
+         (match all_reduce_simdgroups with
+         | Some k -> Lazy.from_val k
+         | None -> lazy (lane_all_reduce_simdgroups_for limits))
        opt)
 
-let default_gpu ?block_size ?min_parallel ?workgroup_fill ?preamble_reduction ?lanes
-    ?(limits = Backend_intf.no_hardware_limits) (opt : Low_level.optimized) : schedule =
+let default_gpu ?block_size ?min_parallel ?workgroup_fill ?preamble_reduction ?all_reduce_simdgroups
+    ?lanes ?(limits = Backend_intf.no_hardware_limits) (opt : Low_level.optimized) : schedule =
   (* The block fold on matrix units comes first: its kernel is one fold nest the presets would give
      scalar geometry. *)
   match fold_mma_schedule ~limits opt with
   | Some schedule -> schedule
   | None ->
-      default_gpu_presets ?block_size ?min_parallel ?workgroup_fill ?preamble_reduction ?lanes
-        ~limits opt
+      default_gpu_presets ?block_size ?min_parallel ?workgroup_fill ?preamble_reduction
+        ?all_reduce_simdgroups ?lanes ~limits opt
 
 let default_cpu ?min_parallel (opt : Low_level.optimized) : schedule =
   let min_parallel =
@@ -7649,8 +7688,13 @@ let default_schedule_fingerprint ~backend_name =
         | Some Lanes_admitted -> "admitted"
         | Some Lanes_off -> "off"
       in
+      (* [lane-all-reduce-v1] (gh-ocannl-1168): how many simdgroups a cooperative reduction may
+         span, per [all_reduce]; [auto] resolves per device from the limits, as [preamble] does. *)
+      let all_reduce =
+        match gpu_lane_all_reduce_simdgroups () with None -> "auto" | Some k -> Int.to_string k
+      in
       [%string
-        "gpu:policy=small-leading-v1+lanes-v1+fold-mma-v1+lane-plans-v1+lane-reductions-v1+lane-economics-v1:fission=%{fission#Bool}:keep_mapping=%{keep#Bool}:block_size=%{bs}:min_parallel=%{mp}:workgroup_fill=%{fill#Int}:preamble=%{preamble}:serial_lanes=%{lanes}"]
+        "gpu:policy=small-leading-v1+lanes-v1+fold-mma-v1+lane-plans-v1+lane-reductions-v1+lane-economics-v1+lane-all-reduce-v1:fission=%{fission#Bool}:keep_mapping=%{keep#Bool}:block_size=%{bs}:min_parallel=%{mp}:workgroup_fill=%{fill#Int}:preamble=%{preamble}:serial_lanes=%{lanes}:all_reduce_simdgroups=%{all_reduce}"]
     else
       let mp =
         String.strip (Utils.get_global_arg ~arg_name:"cpu_schedule_min_parallel" ~default:"16384")
@@ -7719,10 +7763,26 @@ let workgroup_memory_bytes ~(capabilities : Backend_intf.codegen_capabilities)
         acc + (copies * Lazy.force tn.Tn.size_in_bytes))
   in
   let prec (tn : Tn.t) = Lazy.force tn.Tn.storage_prec in
-  List.fold (mma_emission_scopes opt) ~init:staged ~f:(fun acc (d, a, b) ->
-      acc
-      + capabilities.Backend_intf.mma_scope_workgroup_bytes ~d_prec:(prec d) ~a_prec:(prec a)
-          ~b_prec:(prec b))
+  let mma_scratch =
+    List.fold (mma_emission_scopes opt) ~init:staged ~f:(fun acc (d, a, b) ->
+        acc
+        + capabilities.Backend_intf.mma_scope_workgroup_bytes ~d_prec:(prec d) ~a_prec:(prec a)
+            ~b_prec:(prec b))
+  in
+  (* gh-ocannl-1168: the per-simdgroup partials of each lane all-reduce site that may stage them,
+     one declaration per site (a duplicated copy is its own site). The local resides at its compute
+     or its accumulator precision, whichever the renderer's census decides; counting the larger
+     keeps the estimate an upper bound (at f32 the two coincide on every GPU backend). *)
+  List.fold
+    (Low_level.lane_all_reduce_sites ~reassociable:Online_softmax.reassociable_local opt.llc)
+    ~init:mma_scratch ~f:(fun acc site ->
+      if not site.Low_level.lar_cross_simdgroup then acc
+      else
+        let bytes p =
+          capabilities.Backend_intf.lane_all_reduce_workgroup_bytes ~extent:site.lar_extent ~prec:p
+        in
+        let p = prec site.lar_local.Low_level.tn in
+        acc + max (bytes (capabilities.compute_prec p)) (bytes (capabilities.accum_prec p)))
 
 let check_hardware_limits_classified ~name ~(limits : Backend_intf.hardware_limits) ~capabilities
     (opt : Low_level.optimized) : unit =
@@ -7750,8 +7810,9 @@ let check_hardware_limits_classified ~name ~(limits : Backend_intf.hardware_limi
       if shared_bytes > max_bytes then
         let detail =
           [%string
-            "Schedule: kernel %{name} stages %{shared_bytes#Int} bytes of workgroup-shared tiles \
-             and tile-MMA scope scratch, exceeding the device limit of %{max_bytes#Int} bytes"]
+            "Schedule: kernel %{name} stages %{shared_bytes#Int} bytes of workgroup-shared tiles, \
+             tile-MMA scope scratch and lane all-reduce partials, exceeding the device limit of \
+             %{max_bytes#Int} bytes"]
         in
         raise
           (Schedule_outcome.Cause_at

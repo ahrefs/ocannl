@@ -74,6 +74,7 @@ search-shaping -- it defines the untuned default pipeline -- its schedules and, 
   automatic_gpu_schedule
   cpu_schedule_min_parallel
   gpu_fission_keep_mapping
+  gpu_lane_all_reduce_simdgroups
   gpu_lane_preamble_reduction
   gpu_schedule_block_size
   gpu_schedule_min_parallel
