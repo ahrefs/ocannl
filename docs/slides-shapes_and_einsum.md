@@ -256,8 +256,9 @@ is still being designed—the natural `[rhs1; rhs2]` conflicts with block tensor
 > 
 > ```ocaml
 > let%op normalize x =
->   let mean = x ++ "... | ..d.. => ... | 0" ["d"] in
->   let centered = (x - mean) /. dim d in
+>   let mean = (x ++ "... | ..d.. => ... | 0" ["d"]) /. dim d in
+>   let centered = x - mean in
+>   let variance = ((centered *. centered) ++ "... | ... => ... | 0") /. dim d in
 >   centered /. sqrt (variance + !.1e-5)
 > ```
 
