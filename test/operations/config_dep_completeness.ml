@@ -72,6 +72,10 @@ let exempt_sites =
        %{dep:../../benchmarks/gh1133_summary.py}",
       "the training-table report controls import only the stdlib Python summary module and launch \
        no OCANNL executable, so no configuration reader is in reach" );
+    ( "test/operations:python3, handed %{dep:gh1002_kernels.py}, \
+       %{dep:../../benchmarks/gh1002_cells.py}",
+      "the kernel-table controls import only Python modules and parse synthetic stderr; they \
+       launch no OCANNL executable and read no OCANNL configuration" );
     ( "arrayjit/lib:gen_builtins/generate.exe",
       "the builtin header generator links only the OCaml stdlib and a pure C definition table; it \
        reads no OCANNL configuration" );

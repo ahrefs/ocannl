@@ -208,6 +208,7 @@
  (name runtest)
  (deps
   (alias runtest-gh1133_summary)
+  (alias runtest-gh1002_kernels)
   (alias runtest-online_softmax_fast_math)
   (alias runtest-online_softmax_block_fast_math)
   (alias runtest-fast_math_libmvec)
@@ -7380,6 +7381,35 @@
       %{dep:gh1133_summary.py}
       %{dep:../../benchmarks/gh1133_summary.py}))
     (diff gh1133_summary.expected gh1133_summary.actual)))))
+
+; Exercise the shipping per-kernel table reader with and without Python assertions.
+
+(rule
+ ; ocannl-backend: none -- parses synthetic stderr in Python and launches no OCANNL executable.
+ (alias runtest-gh1002_kernels)
+ (deps
+  (alias runtest-env_spelling_gate)
+  gh1002_kernels.py
+  gh1002_kernels.expected
+  ../../benchmarks/gh1002_cells.py
+  ../../benchmarks/cell_group.py)
+ (action
+  (no-infer
+   (progn
+    (with-stdout-to
+     gh1002_kernels.actual
+     (run
+      python3
+      %{dep:gh1002_kernels.py}
+      %{dep:../../benchmarks/gh1002_cells.py}))
+    (with-stdout-to
+     gh1002_kernels.optimized.actual
+     (run
+      python3
+      -O
+      %{dep:gh1002_kernels.py}
+      %{dep:../../benchmarks/gh1002_cells.py}))
+    (diff gh1002_kernels.expected gh1002_kernels.optimized.actual)))))
 
 (test
  ; ocannl-backend: none -- inspects simplification directly, executes no backend.
