@@ -84,8 +84,8 @@ let () =
         ignore (git [ "commit"; "-m"; subject ] : string);
         git [ "rev-parse"; "HEAD" ]
       in
-      let read ?(until = "HEAD") ?(success = true) since =
-        let status, output = command reader [ since; until ] in
+      let read ?(args = []) ?(until = "HEAD") ?(success = true) since =
+        let status, output = command reader (args @ [ since; until ]) in
         if Bool.equal (Poly.equal status (Unix.WEXITED 0)) success then output
         else failwith ("unexpected reader status: " ^ output)
       in
@@ -312,6 +312,35 @@ let () =
       p "ordinary private module edits stay quiet"
         ((not (has (read ~until:privatized config_order) "lib/secret.ml"))
         && has (read ~until:secret_edit privatized) "0 declaration changes");
+      let long_body edited =
+        "module Body = struct\n"
+        ^ String.concat
+            (List.init 40 ~f:(fun i ->
+                 Printf.sprintf "  let step%d = %d\n" i (if edited && i = 20 then 2000 else i)))
+        ^ "end\n"
+      in
+      write "lib/long.ml" (long_body false);
+      let long = commit "Long implementation body" in
+      write "lib/long.ml" (long_body true);
+      let edited = commit "Edit one line of a long body (#629)" in
+      let compact = read ~args:[ "--context"; "1" ] ~until:edited long in
+      let full = read ~until:edited long in
+      p "compact rendering keeps attribution and the changed fragment, and counts the rest"
+        (has compact ("commit " ^ edited ^ " Edit one line of a long body (#629)")
+        && has compact "lib/long.ml"
+        && has compact "- module Body[0] (line 1)"
+        && has compact "+ module Body[0] (line 1)"
+        && has compact "step20 = 20\n" && has compact "step20 = 2000" && has compact "step19 = 19"
+        && has compact "step21 = 21" && has compact "\n~ "
+        && (not (has compact "step5 = 5"))
+        && has compact ("Full declaration text: tools/api-drift.sh " ^ long ^ " " ^ edited));
+      p "full rendering stays the default evidence"
+        (has full "step5 = 5" && has full "step20 = 2000"
+        && (not (has full "\n~ "))
+        && not (has full "Compact rendering"));
+      p "an invalid context count refuses with usage"
+        (has (read ~args:[ "--context"; "-1" ] ~success:false long) "non-negative"
+        && has (read ~args:[ "--context" ] ~success:false long) "Usage");
       write "arrayjit/lib/cap.mli" "val";
       ignore (commit "Invalid source must refuse" : string);
       p "invalid source refuses the real historical reader"

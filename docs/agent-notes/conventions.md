@@ -54,6 +54,11 @@ files.
   or their history (gh-ocannl-1201): a selected interface or non-module target (only `.ml` targets
   are read), and an `(:include …)` term or `%{read…}` form in a module-owner or generator stanza,
   whose external file's edits this reader would neither see nor attribute.
+  `--context N` (gh-ocannl-1213) prints an entry changed on both sides compactly: both attribution
+  headers, its changed lines as `-`/`+`, N unchanged lines of context indented by two spaces, and
+  a `~ K unchanged lines` count for the rest; additions and removals still print in full, and the
+  report header names the full-evidence command for the same window. Use it to scan a window,
+  then read the full report for the entries a bullet will cite.
   This is a reading aid, not a compatibility gate: implementation bodies are kept because they
   can change an inferred public type, and PPX-generated exports and inferred types still require
   manual review. Record retired or renamed symbols in the resulting bullet so later API-removal

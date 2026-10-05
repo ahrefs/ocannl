@@ -436,3 +436,103 @@ let changes before after =
     | `Left a -> Some (Some a, None)
     | `Right b -> Some (None, Some b))
   |> Map.data
+
+type line_edit = Same of string | Removed of string | Added of string
+
+(* Above this many comparison cells the middle that differs is reported as wholly replaced: still a
+   correct edit script, just not a minimal one, and the memory stays bounded. *)
+let max_diff_cells = 1_000_000
+
+(** A line edit script from [before] to [after]: common ends trimmed, then a longest common
+    subsequence over the middle. *)
+let line_edits before after =
+  let before = Array.of_list before and after = Array.of_list after in
+  let n = Array.length before and m = Array.length after in
+  let prefix = ref 0 in
+  while !prefix < n && !prefix < m && String.equal before.(!prefix) after.(!prefix) do
+    Int.incr prefix
+  done;
+  let suffix = ref 0 in
+  while
+    !suffix < n - !prefix
+    && !suffix < m - !prefix
+    && String.equal before.(n - 1 - !suffix) after.(m - 1 - !suffix)
+  do
+    Int.incr suffix
+  done;
+  let same lo hi source = List.init (hi - lo) ~f:(fun i -> Same source.(lo + i)) in
+  let rows = n - !prefix - !suffix and cols = m - !prefix - !suffix in
+  let middle =
+    let a i = before.(!prefix + i) and b j = after.(!prefix + j) in
+    if rows * cols > max_diff_cells then
+      List.init rows ~f:(fun i -> Removed (a i)) @ List.init cols ~f:(fun j -> Added (b j))
+    else
+      (* [lcs.(i).(j)]: the longest common subsequence of the suffixes from [i] and [j]. *)
+      let lcs = Array.make_matrix ~dimx:(rows + 1) ~dimy:(cols + 1) 0 in
+      for i = rows - 1 downto 0 do
+        for j = cols - 1 downto 0 do
+          lcs.(i).(j) <-
+            (if String.equal (a i) (b j) then lcs.(i + 1).(j + 1) + 1
+             else Int.max lcs.(i + 1).(j) lcs.(i).(j + 1))
+        done
+      done;
+      let rec walk acc i j =
+        if i = rows then List.rev_append acc (List.init (cols - j) ~f:(fun k -> Added (b (j + k))))
+        else if j = cols then
+          List.rev_append acc (List.init (rows - i) ~f:(fun k -> Removed (a (i + k))))
+        else if String.equal (a i) (b j) then walk (Same (a i) :: acc) (i + 1) (j + 1)
+        else if lcs.(i + 1).(j) >= lcs.(i).(j + 1) then walk (Removed (a i) :: acc) (i + 1) j
+        else walk (Added (b j) :: acc) i (j + 1)
+      in
+      walk [] 0 0
+  in
+  same 0 !prefix before @ middle @ same (n - !suffix) n before
+
+(** The report lines of one checklist entry. Both sides print in full by default: that is the
+    evidence. With [~context], an entry present on both sides keeps both attribution headers but
+    prints only its changed lines ([-]/[+]), [context] unchanged lines around each ([  ]), and a
+    count of every other unchanged line ([~]). *)
+let render ?context (old, fresh) =
+  let header prefix d = Printf.sprintf "%s %s (line %d)" prefix d.name d.line in
+  let side prefix = function
+    | None -> []
+    | Some d ->
+        header prefix d :: List.map (String.split_lines d.text) ~f:(fun l -> prefix ^ " " ^ l)
+  in
+  match (context, old, fresh) with
+  | Some context, Some before, Some after ->
+      let edits =
+        Array.of_list (line_edits (String.split_lines before.text) (String.split_lines after.text))
+      in
+      let len = Array.length edits in
+      let changed i = match edits.(i) with Same _ -> false | Removed _ | Added _ -> true in
+      (* [near.(i)]: within [context] lines of a changed line, found by one pass each way. *)
+      let near = Array.create ~len false in
+      let mark order =
+        let last = ref None in
+        List.iter order ~f:(fun i ->
+            if changed i then last := Some i;
+            Option.iter !last ~f:(fun c -> if Int.abs (i - c) <= context then near.(i) <- true))
+      in
+      mark (List.range 0 len);
+      mark (List.rev (List.range 0 len));
+      let omitted count =
+        Printf.sprintf "~ %d unchanged line%s" count (if count = 1 then "" else "s")
+      in
+      let flush skipped acc = if skipped > 0 then omitted skipped :: acc else acc in
+      let rec lines acc skipped i =
+        if i = len then List.rev (flush skipped acc)
+        else if not near.(i) then lines acc (skipped + 1) (i + 1)
+        else
+          let line =
+            match edits.(i) with Same l -> "  " ^ l | Removed l -> "- " ^ l | Added l -> "+ " ^ l
+          in
+          lines (line :: flush skipped acc) 0 (i + 1)
+      in
+      let body =
+        if Array.exists edits ~f:(function Same _ -> false | Removed _ | Added _ -> true) then
+          lines [] 0 0
+        else [ omitted len ^ "; only the position among surviving entries changed" ]
+      in
+      header "-" before :: header "+" after :: body
+  | _ -> side "-" old @ side "+" fresh

@@ -21,4 +21,7 @@ Dune-only optional library changes remain literal review evidence: true
 Dune-only preprocessing changes remain literal review evidence: true
 public configuration field ordering dependencies and prose stay quiet: true
 ordinary private module edits stay quiet: true
+compact rendering keeps attribution and the changed fragment, and counts the rest: true
+full rendering stays the default evidence: true
+an invalid context count refuses with usage: true
 invalid source refuses the real historical reader: true

@@ -40,3 +40,8 @@ declaration movement across opens is visible in signatures and implementations: 
 adding a declaration does not report every following unchanged declaration: true
 declaration removals and additions are distinct: true
 invalid OCaml refuses instead of reporting an empty inventory: true
+compact rendering keeps both headers, the changed lines, context and omitted counts: true
+distant edits are separate hunks and near ones share context: true
+full rendering prints both sides; one-sided entries print in full when compact: true
+a moved but unchanged entry says only its position changed: true
+line edit scripts reconstruct both sides, beyond the comparison bound too: true

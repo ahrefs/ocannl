@@ -413,4 +413,92 @@ let () =
       false
     with _ -> true
   in
-  Verdict.p "invalid OCaml refuses instead of reporting an empty inventory" refused
+  Verdict.p "invalid OCaml refuses instead of reporting an empty inventory" refused;
+  let text lines = String.concat ~sep:"\n" lines in
+  let decl line lines = { Surface.name = "let f[0]"; line; text = text lines } in
+  let body = List.init 20 ~f:(fun i -> Printf.sprintf "l%d" (i + 1)) in
+  let edit i replacement = List.mapi body ~f:(fun j l -> if j = i then replacement else l) in
+  Verdict.p "compact rendering keeps both headers, the changed lines, context and omitted counts"
+    (List.equal String.equal
+       (Surface.render ~context:1 (Some (decl 3 body), Some (decl 4 (edit 9 "L10"))))
+       [
+         "- let f[0] (line 3)";
+         "+ let f[0] (line 4)";
+         "~ 8 unchanged lines";
+         "  l9";
+         "- l10";
+         "+ L10";
+         "  l11";
+         "~ 9 unchanged lines";
+       ]);
+  Verdict.p "distant edits are separate hunks and near ones share context"
+    (List.equal String.equal
+       (Surface.render ~context:1
+          ( Some (decl 1 body),
+            Some (decl 1 (edit 1 "L2" |> List.mapi ~f:(fun j l -> if j = 17 then "L18" else l))) ))
+       [
+         "- let f[0] (line 1)";
+         "+ let f[0] (line 1)";
+         "  l1";
+         "- l2";
+         "+ L2";
+         "  l3";
+         "~ 13 unchanged lines";
+         "  l17";
+         "- l18";
+         "+ L18";
+         "  l19";
+         "~ 1 unchanged line";
+       ]
+    && List.equal String.equal
+         (Surface.render ~context:2
+            ( Some (decl 1 body),
+              Some (decl 1 (edit 5 "L6" |> List.mapi ~f:(fun j l -> if j = 9 then "L10" else l))) ))
+         [
+           "- let f[0] (line 1)";
+           "+ let f[0] (line 1)";
+           "~ 3 unchanged lines";
+           "  l4";
+           "  l5";
+           "- l6";
+           "+ L6";
+           "  l7";
+           "  l8";
+           "  l9";
+           "- l10";
+           "+ L10";
+           "  l11";
+           "  l12";
+           "~ 8 unchanged lines";
+         ]);
+  Verdict.p "full rendering prints both sides; one-sided entries print in full when compact"
+    (List.length (Surface.render (Some (decl 3 body), Some (decl 4 (edit 9 "L10")))) = 42
+    && List.length (Surface.render ~context:0 (None, Some (decl 4 body))) = 21
+    && List.length (Surface.render ~context:0 (Some (decl 4 body), None)) = 21);
+  Verdict.p "a moved but unchanged entry says only its position changed"
+    (List.equal String.equal
+       (Surface.render ~context:3 (Some (decl 1 body), Some (decl 9 body)))
+       [
+         "- let f[0] (line 1)";
+         "+ let f[0] (line 9)";
+         "~ 20 unchanged lines; only the position among surviving entries changed";
+       ]);
+  let reconstructs before after =
+    let edits = Surface.line_edits before after in
+    List.equal String.equal before
+      (List.filter_map edits ~f:(function Surface.Same l | Removed l -> Some l | Added _ -> None))
+    && List.equal String.equal after
+         (List.filter_map edits ~f:(function
+           | Surface.Same l | Added l -> Some l
+           | Removed _ -> None))
+  in
+  let wide n tag = List.init n ~f:(fun i -> Printf.sprintf "%s%d" tag i) in
+  Verdict.p_all "line edit scripts reconstruct both sides, beyond the comparison bound too"
+    [
+      (body, edit 9 "L10");
+      ([], body);
+      (body, []);
+      (body, List.rev body);
+      (("x" :: wide 1500 "a") @ [ "y" ], ("x" :: wide 1500 "b") @ [ "y" ]);
+    ]
+    ~f:(fun (before, after) -> reconstructs before after)
