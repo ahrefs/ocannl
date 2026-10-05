@@ -194,6 +194,9 @@ errexit-negation fixture function's final negation in a loop body is classified 
 errexit-negation fixture function's final negation in a fall-through arm is classified as specified: true
 errexit-negation fixture function's final negation in the last arm, ending in ;& is classified as specified: true
 errexit-negation fixture negation after a call that turns errexit on is classified as specified: true
+errexit-negation fixture negation after a builtin shadowed by a function is classified as specified: true
+errexit-negation fixture negation after an assignment and a ! word is classified as specified: true
+errexit-negation fixture negation after set + an expansion is classified as specified: true
 errexit-negation fixture negation as the last operand of an AND list is classified as specified: true
 errexit-negation fixture negation as the last operand of an OR list is classified as specified: true
 errexit-negation fixture negation after set -e - +e is classified as specified: true
@@ -389,6 +392,12 @@ errexit execution control after set +e, shadowed by a function named set, `! tru
 errexit execution control after set +e, shadowed by a function named set, `[ -n "" ] && [ -n x ]`: flagged; bash runs past its failure where `false` stops: true
 errexit execution control after time set +e, `! true`: flagged although bash treats its failure as `false` (declared loud): true
 errexit execution control after time set +e, `[ -n "" ] && [ -n x ]`: flagged although bash treats its failure as `false` (declared loud): true
+errexit execution control after builtin set +e, `! true`: flagged although bash treats its failure as `false` (declared loud): true
+errexit execution control after builtin set +e, `[ -n "" ] && [ -n x ]`: flagged although bash treats its failure as `false` (declared loud): true
+errexit execution control after shopt -u -o errexit, `! true`: flagged although bash treats its failure as `false` (declared loud): true
+errexit execution control after shopt -u -o errexit, `[ -n "" ] && [ -n x ]`: flagged although bash treats its failure as `false` (declared loud): true
+errexit execution control after set + an expansion that is not e, `! true`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control after set + an expansion that is not e, `[ -n "" ] && [ -n x ]`: flagged; bash runs past its failure where `false` stops: true
 errexit execution control after set -e ending a lastpipe pipeline, `! true`: flagged; bash runs past its failure where `false` stops: true
 errexit execution control after set -e ending a lastpipe pipeline, `[ -n "" ] && [ -n x ]`: flagged; bash runs past its failure where `false` stops: true
 errexit execution control after a loop left by break right after set -e, `! true`: flagged; bash runs past its failure where `false` stops: true

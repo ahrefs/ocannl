@@ -1157,11 +1157,15 @@ module Shell_lexer = struct
       [set -o errexit] by another name and [shopt -u -o errexit] is [set +o errexit]. Nothing else
       is followed: a [set] behind [eval], [source], [env] or [bash -c] is not read.
 
-      Turning errexit OFF is reported only where the builtin certainly runs in this shell: not
-      behind a redirection (a failed one skips the command), not behind [time] (an external command
-      under a POSIX shell), and not as a bare [set]/[shopt] when the script defines a function of
-      that name ([~shadowed]) -- [builtin set +e] and [command set +e] bypass it. Turning it on is
-      reported wherever it may run. *)
+      Turning errexit OFF is reported only for the plainest spelling, where the builtin certainly
+      runs in this shell and the words are what they look like: a bare, unquoted [set] with nothing
+      in front of it -- no assignment, redirection (a failed one skips the command), [!], [time] (an
+      external command under a POSIX shell), [builtin] or [command] (either may itself be a
+      function) -- that the script does not shadow with a function of that name ([~shadowed]), and
+      whose option words, up to the first positional, are literal [-]/[+] letter bundles or
+      [-o]/[+o] with a literal name. Every other spelling ([shopt -u -o errexit], a Bash-only
+      builtin a POSIX shell lacks; [builtin set +e]; [set +"$e"]) may turn it off at run time but is
+      not trusted to -- loud. Turning it on is reported for every spelling, wherever it may run. *)
   let command_errexit ?(shadowed = []) command =
     let rec strip_redirections = function
       | [] -> []
@@ -1190,9 +1194,6 @@ module Shell_lexer = struct
     let all_words = shell_words (String.strip command) in
     let unredirected = strip_redirections all_words in
     let bare = drop_command_prefixes unredirected in
-    let timed =
-      List.exists (List.take unredirected (List.length unredirected - List.length bare)) ~f:is_time
-    in
     let words = List.map bare ~f:literal_shell_word in
     let rec unwrap = function
       | "builtin" :: rest -> unwrap_options rest
@@ -1204,15 +1205,25 @@ module Shell_lexer = struct
       | words -> unwrap words
     in
     let unwrapped = unwrap words in
+    let plain word =
+      (not (String.is_empty word))
+      && String.for_all word ~f:(fun c -> Char.is_alphanum c || Char.equal c '_')
+    in
+    let rec plain_options = function
+      | [] | ("--" | "-") :: _ -> true
+      | ("-o" | "+o") :: name :: rest -> plain name && plain_options rest
+      | option :: rest when String.length option > 1 && Char.(option.[0] = '-' || option.[0] = '+')
+        ->
+          plain (String.drop_prefix option 1) && plain_options rest
+      | _ -> (* the first positional ends the options *) true
+    in
     let certain =
       List.length unredirected = List.length all_words
-      && (not timed)
       &&
-      match unwrapped with
-      | name :: _ ->
-          List.length unwrapped < List.length words
-          || not (List.mem shadowed name ~equal:String.equal)
-      | [] -> true
+      match all_words with
+      | "set" :: options ->
+          (not (List.mem shadowed "set" ~equal:String.equal)) && plain_options options
+      | _ -> false
     in
     Option.filter ~f:(fun on -> on || certain)
     @@
@@ -1546,7 +1557,9 @@ end
 
     Silent (an inert assertion not flagged): errexit turned on by [eval], a sourced file, an
     invocation flag ([bash -e script]; a shebang flag is refused by {!Shebang} already), or a caller
-    of a sourced library; commands inside substitutions; and what each arm declares of its own. *)
+    of a sourced library; a function's last statement where every call discards the function's
+    status ([f | cat], [f &]) -- the scan does not follow calls, and takes the return value as read;
+    commands inside substitutions; and what each arm declares of its own. *)
 module Shell_context = struct
   module L = Shell_lexer
 
@@ -2565,7 +2578,7 @@ module Errexit_negation = struct
       ("negation after a guarded set +e", "set -e\nx && set +e\n! probe\n", [ 3 ]);
       ("negation after a subshell set +e", "set -e\n( set +e )\n! probe\n", [ 3 ]);
       ("negation after set -e +e", "set -e +e\n! probe\n", []);
-      ("negation after shopt -u -o errexit", "set -e\nshopt -u -o errexit\n! probe\n", []);
+      ("negation after shopt -u -o errexit", "set -e\nshopt -u -o errexit\n! probe\n", [ 3 ]);
       (* A status overwritten before it reaches its consumer, and a call that turns errexit on. *)
       ( "function's final negation in a loop body",
         "set -e\nf() {\n  for x in y; do\n    ! probe\n  done\n}\n",
@@ -2579,6 +2592,11 @@ module Errexit_negation = struct
       ( "negation after a call that turns errexit on",
         "set -e\nf() { set -e; }\nset +e\nf\n! probe\n",
         [ 5 ] );
+      ( "negation after a builtin shadowed by a function",
+        "set -e\nbuiltin() { :; }\nbuiltin set +e\n! probe\n",
+        [ 4 ] );
+      ("negation after an assignment and a ! word", "set -e\nX=y ! set +e || :\n! probe\n", [ 3 ]);
+      ("negation after set + an expansion", "set -e\nset +\"$e\" || :\n! probe\n", [ 3 ]);
       ("negation as the last operand of an AND list", "set -e\nprepare && ! probe\n", [ 2 ]);
       ("negation as the last operand of an OR list", "set -e\nprepare || ! probe\n", [ 2 ]);
       ("negation after set -e - +e", "set -e - +e\n! probe\n", [ 2 ]);
@@ -2593,7 +2611,7 @@ module Errexit_negation = struct
       ("negation after a redirected set +e", "set -e\nset +e 2>/dev/null\n! probe\n", [ 3 ]);
       ( "negation after a builtin set +e beside a set function",
         "set -e\nset() { :; }\nbuiltin set +e\n! probe\n",
-        [] );
+        [ 4 ] );
       ( "negation after set +e in a file with a save-and-restore function",
         "set -e\nf() {\n  set +e\n  x\n  set -e\n}\nset +e\n! probe\n",
         [ 8 ] );
@@ -3069,6 +3087,10 @@ module Errexit_execution_controls = struct
       both Inert "after set +e, shadowed by a function named set"
         "set -e\nset() { :; }\nset +e\n@@\necho SURVIVED\n";
       both Loud "after time set +e" "set -e\ntime set +e\n@@\necho SURVIVED\n";
+      both Loud "after builtin set +e" "set -e\nbuiltin set +e\n@@\necho SURVIVED\n";
+      both Loud "after shopt -u -o errexit" "set -e\nshopt -u -o errexit\n@@\necho SURVIVED\n";
+      both Inert "after set + an expansion that is not e"
+        "set -e\ne=x\nset +\"$e\" || :\n@@\necho SURVIVED\n";
       both ~requires:lastpipe Inert "after set -e ending a lastpipe pipeline"
         "shopt -s lastpipe\n: | set -e\n@@\necho SURVIVED\n";
       both Inert "after a loop left by break right after set -e"
