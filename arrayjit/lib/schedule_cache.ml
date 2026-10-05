@@ -801,30 +801,42 @@ let open_current_regime dir =
    superseded regime refused it. *)
 type open_refusal = Missing_dir | Refused_open of string
 
+let unix_refusal error fn arg = Printf.sprintf "%s %s: %s" fn arg (Unix.error_message error)
+
+(* Whether [path] exists. [Sys.file_exists] answers [false] also when the filesystem refused the
+   query (an ACL, a transient Windows refusal), which the cache-I/O record must not read as an
+   ordinary absence: only [ENOENT]/[ENOTDIR] are. *)
+let probe path =
+  match Unix.stat path with
+  | _ -> Ok true
+  | exception Unix.Unix_error ((Unix.ENOENT | Unix.ENOTDIR), _, _) -> Ok false
+  | exception Unix.Unix_error (error, fn, arg) -> Error (unix_refusal error fn arg)
+
 let open_cache ~dir f =
-  if not (Stdlib.Sys.file_exists dir) then Error Missing_dir
-  else (
-    Stdlib.Mutex.lock cache_open_mutex;
-    Stdlib.Fun.protect
-      ~finally:(fun () -> Stdlib.Mutex.unlock cache_open_mutex)
-      (fun () ->
-        try
-          let fd = Unix.openfile (regime_lock_file dir) [ Unix.O_CREAT; Unix.O_RDWR ] 0o666 in
-          Stdlib.Fun.protect
-            ~finally:(fun () -> Unix.close fd)
-            (fun () ->
-              Resource_fault_injection.hit Schedule_cache_before_lock;
-              Unix.lockf fd Unix.F_LOCK 0;
-              if open_current_regime dir then Ok (f ())
-              else
-                Error
-                  (Refused_open
-                     "regime refused: a newer or malformed stamp, or a superseded entry that could \
-                      not be removed"))
-        with
-        | Unix.Unix_error (error, fn, arg) ->
-            Error (Refused_open (Printf.sprintf "%s %s: %s" fn arg (Unix.error_message error)))
-        | Stdlib.Sys_error msg -> Error (Refused_open msg)))
+  match probe dir with
+  | Ok false -> Error Missing_dir
+  | Error msg -> Error (Refused_open msg)
+  | Ok true ->
+      Stdlib.Mutex.lock cache_open_mutex;
+      Stdlib.Fun.protect
+        ~finally:(fun () -> Stdlib.Mutex.unlock cache_open_mutex)
+        (fun () ->
+          try
+            let fd = Unix.openfile (regime_lock_file dir) [ Unix.O_CREAT; Unix.O_RDWR ] 0o666 in
+            Stdlib.Fun.protect
+              ~finally:(fun () -> Unix.close fd)
+              (fun () ->
+                Resource_fault_injection.hit Schedule_cache_before_lock;
+                Unix.lockf fd Unix.F_LOCK 0;
+                if open_current_regime dir then Ok (f ())
+                else
+                  Error
+                    (Refused_open
+                       "regime refused: a newer or malformed stamp, or a superseded entry that \
+                        could not be removed"))
+          with
+          | Unix.Unix_error (error, fn, arg) -> Error (Refused_open (unix_refusal error fn arg))
+          | Stdlib.Sys_error msg -> Error (Refused_open msg))
 
 (* {2 The cache-I/O record} (gh-ocannl-1040)
 
@@ -841,21 +853,18 @@ type cache_io = { op : cache_op; dir : string; key : string; refusal : string op
 let io_recorders : cache_io Queue.t list ref = ref []
 let io_recorders_mutex = Stdlib.Mutex.create ()
 
-let note_io io =
-  Stdlib.Mutex.lock io_recorders_mutex;
-  List.iter !io_recorders ~f:(fun q -> Queue.enqueue q io);
-  Stdlib.Mutex.unlock io_recorders_mutex
+(* Every critical section releases the mutex on any exception: an [Out_of_memory] or [Sys.Break]
+   inside one must not leave every later cache operation of the process blocked on it. *)
+let with_recorders f = Stdlib.Mutex.protect io_recorders_mutex f
+let note_io io = with_recorders (fun () -> List.iter !io_recorders ~f:(fun q -> Queue.enqueue q io))
 
 let recording_cache_io f =
   let q = Queue.create () in
   let detach () =
-    Stdlib.Mutex.lock io_recorders_mutex;
-    io_recorders := List.filter !io_recorders ~f:(fun q' -> not (phys_equal q q'));
-    Stdlib.Mutex.unlock io_recorders_mutex
+    with_recorders (fun () ->
+        io_recorders := List.filter !io_recorders ~f:(fun q' -> not (phys_equal q q')))
   in
-  Stdlib.Mutex.lock io_recorders_mutex;
-  io_recorders := q :: !io_recorders;
-  Stdlib.Mutex.unlock io_recorders_mutex;
+  with_recorders (fun () -> io_recorders := q :: !io_recorders);
   let result = Exn.protect ~f ~finally:detach in
   (result, Queue.to_list q)
 
@@ -909,18 +918,20 @@ let lookup_sexp ~dir ~key ~of_sexp ~current =
         open_cache ~dir (fun () ->
             Utils.Atomic_file.cleanup_stale_once dir;
             let file = cache_file ~dir ~key in
-            if not (Stdlib.Sys.file_exists file) then Ok None
-            else
-              try
-                Resource_fault_injection.hit Schedule_cache_before_replay;
-                let entry = of_sexp (Sexplib.Sexp.load_sexp file) in
-                Ok (if current entry then Some entry else None)
-              with
-              (* The filesystem refusing an entry the directory listing just showed -- a Windows
-                 peer holding it without share-read -- is a refusal; an entry that fails to parse or
-                 decode is a miss the lookup decided. Both read as a miss. *)
-              | Stdlib.Sys_error msg -> Error msg
-              | exn when not (process_level exn) -> Ok None)
+            match probe file with
+            | Ok false -> Ok None
+            | Error msg -> Error msg
+            | Ok true -> (
+                try
+                  Resource_fault_injection.hit Schedule_cache_before_replay;
+                  let entry = of_sexp (Sexplib.Sexp.load_sexp file) in
+                  Ok (if current entry then Some entry else None)
+                with
+                (* The filesystem refusing an entry the directory listing just showed -- a Windows
+                   peer holding it without share-read -- is a refusal; an entry that fails to parse
+                   or decode is a miss the lookup decided. Both read as a miss. *)
+                | Stdlib.Sys_error msg -> Error msg
+                | exn when not (process_level exn) -> Ok None))
       in
       (* A missing directory is the ordinary miss before the first store. *)
       let refusal =

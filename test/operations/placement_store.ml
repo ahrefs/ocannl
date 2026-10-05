@@ -634,7 +634,10 @@ let () =
       p_all2
         (Printf.sprintf "after an entry that %s, the routine computes the right values" how)
         got expected ~f:approx;
-      unless_refused [ corrupting ]
+      (* Waived also on a refused read of it: the run then never saw the stale entry, and tunes both
+         arms cold. *)
+      unless_refused
+        [ corrupting; placement_lookups persisted ]
         (Printf.sprintf "an entry that %s is ignored and the placements re-tuned" how)
         (Option.is_none recorded || List.length arms = 2);
       let clean =
@@ -721,11 +724,11 @@ let () =
     | Some _, _ -> false);
   (* --- Every claim above that rests on a store or a lookup is waived when it was refused, which is
      right for a transient refusal and wrong for one that is no accident: a filename the filesystem
-     rejects, a permission, a commit that always fails. Those refuse EVERY store, and would turn
-     this test from red into a permanent skip that hosted CI aggregates nowhere. So, over the
-     placement stores this process and its children attempted under real [placements-<digest>] names
-     (run 8's injected refusals excluded), not all may be refused -- never waived by a refusal, only
-     skipped where fewer than two were attempted. --- *)
+     rejects, a permission, a commit that always fails. Those refuse EVERY store (of a directory),
+     and would turn this test from red into a permanent skip that hosted CI aggregates nowhere. So,
+     over the placement stores this process and its children attempted under real
+     [placements-<digest>] names (run 8's injected refusals excluded), not all of any directory's
+     may be refused -- never waived by a refusal. --- *)
   let attempted =
     !xproc_placement_stores
     @ List.concat_map
@@ -733,13 +736,23 @@ let () =
         ~f:placement_stores
     @ !stale_placement_stores
   in
-  Stdio.eprintf "placement stores attempted (not part of the golden): %d, %d refused\n%!"
-    (List.length attempted) (List.count attempted ~f:refused);
+  (* Per cache directory, so a refusal local to one leg -- the cross-process leg's directory, say,
+     refused for its path or its ACL -- cannot hide behind the other leg's successes. A directory
+     with fewer than two attempts is outside the claim, so one transient refusal cannot fail it. *)
+  let by_dir =
+    List.sort_and_group attempted ~compare:(fun (a : SC.cache_io) (b : SC.cache_io) ->
+        String.compare a.SC.dir b.SC.dir)
+  in
+  List.iter by_dir ~f:(fun group ->
+      Stdio.eprintf "placement stores attempted in %s (not part of the golden): %d, %d refused\n%!"
+        (List.hd_exn group).SC.dir (List.length group) (List.count group ~f:refused));
+  let judged = List.filter by_dir ~f:(fun group -> List.length group >= 2) in
   gated ~aggregation:`Environment
-    ~when_:(List.length attempted >= 2)
-    ~on:"fewer than two placement stores attempted"
-    "of the placement stores the runs attempted, the filesystem refused not every one"
-    (List.exists attempted ~f:(Fn.non refused));
+    ~when_:(not (List.is_empty judged))
+    ~on:"no cache directory with two placement stores attempted"
+    "in each cache directory, the filesystem refused not every placement store the runs attempted"
+    ((not (List.is_empty judged))
+    && List.for_all judged ~f:(fun group -> List.exists group ~f:(Fn.non refused)));
   (* --- Run 8 (gh-ocannl-1040): the waivers above rest on the cache REPORTING a refusal it
      absorbed. A cold run into a fresh directory whose every commit the filesystem refuses -- the
      [Sys_error] a Windows commit raises once its bounded retry runs out -- runs to the right

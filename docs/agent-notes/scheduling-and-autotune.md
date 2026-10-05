@@ -1205,8 +1205,8 @@ files.
   never see. Wrap the run in `Schedule_cache.recording_cache_io` and waive on a `refusal` of the
   operations the claim rests on (a record claim on its placement stores, a replay on its lookups),
   as an `` `Environment `` skip (`Verdict.gated`), never as a silent `true`. Then add one claim that
-  is NEVER waived by a refusal: of the stores the process attempted under real key names, not all
-  were refused. A deterministic refusal (a rejected filename, a commit that always fails) refuses
+  is NEVER waived by a refusal: of the stores the process attempted under real key names, per
+  cache directory, not all were refused. A deterministic refusal (a rejected filename, a commit that always fails) refuses
   every store, and without that claim it turns the test into a permanent skip that hosted CI
   aggregates nowhere. Gate on the timing identity of the run's OWN context, the one the store keys
   on, never a reference context's. `placement_store`'s `persistence` record, `unless_refused` and
