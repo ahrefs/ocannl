@@ -149,9 +149,16 @@
   (env_var OCANNL_LOG_LEVEL)
   (env_var OCANNL_PROFILE)
   (env_var OCANNL_SIMPLIFY_FP_ALGEBRA))
+ ; Both staged layouts (gh-ocannl-1190): the plain twin and its Swizzle_b128 sibling.
  (action
   (no-infer
-   (run
-    %{exe:bench_mma_register_scope_emit.exe}
-    generated-mma-register-scope.cu
-    --ocannl_backend=cuda))))
+   (progn
+    (run
+     %{exe:bench_mma_register_scope_emit.exe}
+     generated-mma-register-scope.cu
+     --ocannl_backend=cuda)
+    (run
+     %{exe:bench_mma_register_scope_emit.exe}
+     generated-mma-register-scope-swizzled.cu
+     --layout=swizzled
+     --ocannl_backend=cuda)))))

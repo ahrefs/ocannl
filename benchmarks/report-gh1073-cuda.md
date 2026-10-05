@@ -49,14 +49,14 @@ kernel to `generated-mma-register-scope.cu` in its build directory; direct
 `dune exec` also accepts an output path as its first argument.
 
 The same CUDA driver can include both emitted sources, renaming only the
-kernel symbol. Build it before timing:
+kernel symbol. Build it before timing with the script beside the driver, which
+pins `nvcc -O3 -gencode arch=compute_89,code=compute_89`, prints the source and
+binary digests, compiles and dry-runs (gh-ocannl-1190; the measurement below
+predates the script and passed the same flags by hand):
 
 ```bash
-nvcc -O3 -gencode arch=compute_89,code=compute_89 \
-  '-DMMA_GENERATED_BASELINE="/absolute/baseline.cu"' \
-  '-DMMA_GENERATED_RESIDENT="/absolute/resident.cu"' \
-  benchmarks/runners/ocannl/mma_register_scope_probe.cu -o /absolute/generated-probe
-/absolute/generated-probe --dry-run
+benchmarks/runners/ocannl/mma_register_scope_probe_build.sh \
+  /absolute/baseline.cu /absolute/resident.cu /absolute/generated-probe
 ```
 
 Run the precompiled binary without `--dry-run` only in an exclusive timing

@@ -1,5 +1,7 @@
 (* gh-ocannl-1073: emit and validate a deep-k staged fp8 kernel before timing its precompiled
-   baseline and register-resident versions. The output path is argv[1]. *)
+   baseline and register-resident versions. gh-ocannl-1190: [--layout=swizzled] stages both operand
+   tiles as [Swizzle_b128], the autotuner's swizzled twin of the same geometry, so the two staged
+   layouts can be timed against each other. The output path is the first non-flag argument. *)
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules
@@ -7,8 +9,31 @@ module LL = Ir.Low_level
 module S = Ir.Schedule
 module Generated = Test_utils.Generated
 
+type layout = Plain | Swizzled
+
+let layout_name = function Plain -> "plain" | Swizzled -> "swizzled"
+
 let () =
-  let path = (Sys.get_argv ()).(1) in
+  let args = List.tl_exn (Array.to_list (Sys.get_argv ())) in
+  let path =
+    match List.filter args ~f:(fun a -> not (String.is_prefix a ~prefix:"-")) with
+    | [ path ] -> path
+    | _ -> failwith "usage: bench_mma_register_scope_emit.exe OUTPUT.cu [--layout=plain|swizzled]"
+  in
+  let layout =
+    match List.find_map args ~f:(String.chop_prefix ~prefix:"--layout=") with
+    | None | Some "plain" -> Plain
+    | Some "swizzled" -> Swizzled
+    | Some other -> failwith ("unknown --layout=" ^ other ^ " (plain|swizzled)")
+  in
+  (* The load path each layout must render through: the plain twin's per-lane gathers, the swizzled
+     twin's ldmatrix A (its row-major B uses swizzle-aware byte gathers, gh-ocannl-1073). A timing
+     whose census disagrees measured some other kernel. *)
+  let expected_rendering =
+    match layout with
+    | Plain -> Ir.C_syntax.Mma_intrinsics
+    | Swizzled -> Ir.C_syntax.Mma_intrinsics_ldmatrix
+  in
   Utils.settings.output_debug_files_in_build_directory <- true;
   Generated.init ~backend_name:"cuda";
   let m = 8192 and n = 32 and k = 4096 in
@@ -38,7 +63,7 @@ let () =
           shared = true;
           cooperative = Some 32;
           hoisted = false;
-          swizzle = None;
+          swizzle = (match layout with Plain -> None | Swizzled -> Some LL.Swizzle_b128);
           pad_stride = None;
           pipeline_depth = 1;
           tile_prec = None;
@@ -67,8 +92,19 @@ let () =
       ~lowered_transform:(fun opt -> [ schedule opt ])
       (Context.auto ()) comp Ir.Indexing.Empty
   in
-  Stdio.eprintf "backend=cuda shape=%dx%dx%d %s\n%!" m n k
-    (Ir.C_syntax.mma_summary_string routine.Context.mma);
+  let mma = routine.Context.mma in
+  Stdio.eprintf "backend=cuda layout=%s shape=%dx%dx%d %s\n%!" (layout_name layout) m n k
+    (Ir.C_syntax.mma_summary_string mma);
+  if
+    List.is_empty mma.Ir.C_syntax.renderings
+    || not
+         (List.for_all mma.renderings ~f:(fun (_, r) ->
+              Ir.C_syntax.equal_mma_rendering r expected_rendering))
+  then
+    failwith
+      (Printf.sprintf "layout=%s rendered %s, expected only %s" (layout_name layout)
+         (Ir.C_syntax.mma_summary_string mma)
+         (Sexp.to_string (Ir.C_syntax.sexp_of_mma_rendering expected_rendering)));
   let ctx = Context.run ctx routine in
   let got = Context.get_values ctx t.Tensor.value in
   (* Every cell's exact reference is indexed by the operands' small independent periods; compute
@@ -84,4 +120,6 @@ let () =
       let want = reference.((cell / n % 7 * 11) + (cell % n % 11)) in
       if not (Float.equal v want) then failwith (Printf.sprintf "probe mismatch at cell %d" cell));
   Stdio.Out_channel.write_all path ~data:(Generated.read name);
-  Stdio.printf "generated kernel validated and exported to %s\n%!" path
+  Stdio.printf "generated %s kernel (%s) validated and exported to %s\n%!" (layout_name layout)
+    (Ir.C_syntax.mma_summary_string mma)
+    path
