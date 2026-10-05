@@ -448,9 +448,11 @@ let raw_entries =
       ] );
     ( "shell_scripts_parse.ml",
       [
+        "[scanner-refusal:918cb75e57498280d25cb0783c645841] context is unsupported";
         "[scanner-refusal:88b12da9841dbf6131676bf4fb0f4686] statement-position ! command";
         "[scanner-refusal:003eba7381c87352fb02cd374fa62ea9] errexit-negation fixture";
         "[scanner-refusal:b67c631ab7ecd7df55fc002761cf99f6] reaches the absent()-style";
+        "[scanner-refusal:f23aa9a38a34c91eadc946f44d66d28a] unsupported shell lexical";
         "[scanner-refusal:b16ef3a2f724269c0b981a25871cbbb3] statement-position A &&";
         "[scanner-refusal:2d086d94d5a797eb9901008d71d5c241] errexit-and-list fixture";
         "[scanner-refusal:3f096017191c7a4d9f63d7a94dcfb6ff] reaches the one-predicate-per-statement";

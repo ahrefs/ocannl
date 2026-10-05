@@ -647,10 +647,11 @@ let first_line_of path =
     lists do consume it, and a [!] inside a command substitution or test bracket is not the
     statement's first token, so those shapes stay valid.
 
-    This is intentionally not a shell parser. The issue's boundary is a line whose first token is
-    [!] in a file containing a [set] option that enables errexit. Quote-aware recognition of [&&]
-    and [||] avoids treating an operator printed by the command as a consumer; shell syntax itself
-    remains the parse check above's responsibility. *)
+    This is intentionally not a shell parser. The issue's boundary is a logical line whose first
+    token is [!] in a file containing a [set] option that enables errexit. Both errexit arms use
+    {!Errexit_negation.numbered_spliced_lines} for cross-line lexical context. Quote-aware
+    recognition of [&&] and [||] avoids treating an operator printed by the command as a consumer;
+    shell syntax itself remains the parse check above's responsibility. *)
 module Errexit_negation = struct
   type finding = { line : int }
 
@@ -1282,52 +1283,204 @@ module Errexit_negation = struct
                  "errexit" ~equal:String.equal
         | _ -> false)
 
-  (* Whether [line] ends in a backslash that escapes the newline: in code or inside double quotes,
-     not inside a comment, single quotes or ANSI-C quotes, where it is literal text. Judged per
-     line: a line that starts inside a quote opened on an earlier line is a construct left open
-     across lines, outside the boundary. *)
+  (** Shared cross-line lexical context for the two errexit checks. This is a logical-line reader,
+      not an execution model: quotes and opaque substitutions stay in one line, and outer heredoc
+      bodies never become code. Multiple literal delimiters, quoted/escaped delimiters
+      (single/double quotes and backslashes) and [<<-] are supported; [<<<] is a here-string.
+      Dollar-quoted delimiters, multiline delimiters and unterminated bodies are refused explicitly:
+      none is guessed at or allowed to hide the rest of the file. The condition grammar is bounded
+      to headers beginning with raw [if]/[elif]/[while]/[until], through a raw [then]/[do] in
+      command position. Compound-command execution, option transitions and heredocs inside
+      substitutions remain the existing scanners' documented boundary.
 
-  let continues_past_newline line =
-    let length = String.length line in
+      Preserve physical start numbers and newline bytes inside quotes. A closing quote followed by
+      code must remain visible to the statement scanner, not disappear with its data. *)
+  let numbered_spliced_lines ?(refuse = fun _line _reason -> ()) text =
+    let length = String.length text in
+    let current = Buffer.create length in
+    let lines = ref [] and first = ref 1 and number = ref 1 in
+    let heredocs = ref [] in
+    let condition = ref false in
+    let starts_comment () =
+      (* Judge word boundaries after backslash-newline removal, not against the original preceding
+         newline: [foo\\] / [#bar] is the single word [foo#bar]. *)
+      let prefix = Buffer.contents current in
+      comment_starts (prefix ^ "#") (String.length prefix)
+    in
+    let condition_closed line =
+      List.exists (command_fragments line) ~f:(fun (fragment, _) ->
+          match shell_words (String.strip fragment) with ("then" | "do") :: _ -> true | _ -> false)
+    in
+    let emit () =
+      let line = Buffer.contents current in
+      let begins_condition =
+        match shell_words (String.strip line) with
+        | ("if" | "elif" | "while" | "until") :: _ -> true
+        | _ -> false
+      in
+      if (!condition || begins_condition) && not (condition_closed line) then (
+        condition := true;
+        (* A newline after the header keyword or a list operator continues its operand; otherwise it
+           separates condition commands, just like a semicolon. *)
+        let words = shell_words (String.strip line) in
+        let last = Option.value (List.last words) ~default:"" in
+        Buffer.add_string current
+          (if List.mem [ "if"; "elif"; "while"; "until"; "&&"; "||"; "|" ] last ~equal:String.equal
+           then " "
+           else "; "))
+      else (
+        lines := (!first, line) :: !lines;
+        Buffer.clear current;
+        condition := false;
+        first := !number + 1)
+    in
+    let add_range start finish =
+      Buffer.add_substring current text ~pos:start ~len:(finish - start);
+      for index = start to finish - 1 do
+        if Char.equal text.[index] '\n' then Int.incr number
+      done
+    in
+    (* Delimiter words undergo quote removal, never expansion. Read that word separately from code
+       so a delimiter's quote does not open a multiline value in the surrounding command. *)
+    let delimiter start =
+      let rec skip index =
+        if index < length && List.mem [ ' '; '\t' ] text.[index] ~equal:Char.equal then
+          skip (index + 1)
+        else index
+      in
+      let start = skip start in
+      let decoded = Buffer.create 32 in
+      let rec word index quote =
+        if index >= length then index
+        else
+          let c = text.[index] in
+          let add () =
+            Buffer.add_char decoded c;
+            word (index + 1) quote
+          in
+          match quote with
+          | `Single -> if Char.equal c '\'' then word (index + 1) `None else add ()
+          | `Double ->
+              if Char.equal c '"' then word (index + 1) `None
+              else if
+                Char.equal c '\\'
+                && index + 1 < length
+                && List.mem [ '$'; '`'; '"'; '\\'; '\n' ] text.[index + 1] ~equal:Char.equal
+              then (
+                if not (Char.equal text.[index + 1] '\n') then
+                  Buffer.add_char decoded text.[index + 1];
+                word (index + 2) `Double)
+              else add ()
+          | `None ->
+              if starts_at text ~pos:index "$'" || starts_at text ~pos:index "$\"" then (
+                refuse !number "dollar-quoted heredoc delimiter";
+                Buffer.add_char decoded '$';
+                word (index + 2) (if Char.equal text.[index + 1] '\'' then `Single else `Double))
+              else if Char.equal c '\\' && index + 1 < length then (
+                if not (Char.equal text.[index + 1] '\n') then
+                  Buffer.add_char decoded text.[index + 1];
+                word (index + 2) `None)
+              else if Char.equal c '\'' then word (index + 1) `Single
+              else if Char.equal c '"' then word (index + 1) `Double
+              else if
+                Char.is_whitespace c
+                || List.mem [ ';'; '&'; '|'; '<'; '>'; '('; ')' ] c ~equal:Char.equal
+              then index
+              else add ()
+      in
+      let finish = word start `None in
+      (finish, Buffer.contents decoded)
+    in
+    let rec skip_bodies index = function
+      | [] -> index
+      | (delimiter, strip_tabs) :: rest ->
+          let rec body index =
+            if index >= length then (
+              refuse !number "unterminated outer heredoc";
+              index)
+            else
+              let finish =
+                match String.index_from text index '\n' with
+                | Some finish -> finish
+                | None -> length
+              in
+              let line = String.sub text ~pos:index ~len:(finish - index) in
+              let line = if strip_tabs then String.lstrip ~drop:(Char.equal '\t') line else line in
+              let next = if finish < length then finish + 1 else finish in
+              if finish < length then Int.incr number;
+              if String.equal line delimiter then skip_bodies next rest else body next
+          in
+          body index
+    in
     let rec loop index quote =
-      if index >= length then false
+      if index >= length then (
+        ignore (skip_bodies index (List.rev !heredocs));
+        if Buffer.length current > 0 then lines := (!first, Buffer.contents current) :: !lines;
+        List.rev !lines)
       else
-        let character = line.[index] in
+        let c = text.[index] in
+        let take finish next_quote =
+          add_range index finish;
+          loop finish next_quote
+        in
         match quote with
-        | `Single -> loop (index + 1) (if Char.equal character '\'' then `None else `Single)
+        | `Single -> take (index + 1) (if Char.equal c '\'' then `None else `Single)
         | `Ansi_c ->
-            if Char.equal character '\\' then loop (index + 2) `Ansi_c
-            else loop (index + 1) (if Char.equal character '\'' then `None else `Ansi_c)
+            if Char.equal c '\\' then take (Int.min length (index + 2)) `Ansi_c
+            else take (index + 1) (if Char.equal c '\'' then `None else `Ansi_c)
         | `Double ->
-            if Char.equal character '\\' then index + 1 >= length || loop (index + 2) `Double
-            else loop (index + 1) (if Char.equal character '"' then `None else `Double)
+            if starts_at text ~pos:index "$(" then
+              take (skip_command_substitution text (index + 2)) `Double
+            else if starts_at text ~pos:index "${" then
+              take (skip_parameter_expansion text (index + 2)) `Double
+            else if Char.equal c '`' then take (index + 1) `Backtick_double
+            else if Char.equal c '\\' && index + 1 < length && Char.equal text.[index + 1] '\n' then (
+              Int.incr number;
+              loop (index + 2) `Double)
+            else if Char.equal c '\\' then take (Int.min length (index + 2)) `Double
+            else take (index + 1) (if Char.equal c '"' then `None else `Double)
+        | (`Backtick_none | `Backtick_double) as backtick ->
+            if Char.equal c '\\' then take (Int.min length (index + 2)) backtick
+            else
+              take (index + 1)
+                (if Char.equal c '`' then
+                   match backtick with `Backtick_double -> `Double | `Backtick_none -> `None
+                 else backtick)
         | `None ->
-            if Char.equal character '\\' then index + 1 >= length || loop (index + 2) `None
-            else if Char.equal character '#' && comment_starts line index then false
-            else if starts_at line ~pos:index "$'" then loop (index + 2) `Ansi_c
-            else if Char.equal character '\'' then loop (index + 1) `Single
-            else if Char.equal character '"' then loop (index + 1) `Double
-            else loop (index + 1) `None
+            if Char.equal c '\n' then (
+              emit ();
+              Int.incr number;
+              let next = skip_bodies (index + 1) (List.rev !heredocs) in
+              heredocs := [];
+              if Buffer.length current = 0 then first := !number;
+              loop next `None)
+            else if Char.equal c '\\' && index + 1 < length && Char.equal text.[index + 1] '\n' then (
+              Int.incr number;
+              loop (index + 2) `None)
+            else if Char.equal c '\\' then take (Int.min length (index + 2)) `None
+            else if Char.equal c '#' && starts_comment () then
+              let finish = Option.value (String.index_from text index '\n') ~default:length in
+              loop finish `None
+            else if starts_at text ~pos:index "$(" then
+              take (skip_command_substitution text (index + 2)) `None
+            else if starts_at text ~pos:index "${" then
+              take (skip_parameter_expansion text (index + 2)) `None
+            else if starts_at text ~pos:index "$'" then take (index + 2) `Ansi_c
+            else if Char.equal c '\'' then take (index + 1) `Single
+            else if Char.equal c '"' then take (index + 1) `Double
+            else if Char.equal c '`' then take (index + 1) `Backtick_none
+            else if starts_at text ~pos:index "((" then
+              take (skip_command_substitution text (index + 1)) `None
+            else if starts_at text ~pos:index "<<<" then take (index + 3) `None
+            else if starts_at text ~pos:index "<<" then (
+              let strip_tabs = index + 2 < length && Char.equal text.[index + 2] '-' in
+              let finish, word = delimiter (index + if strip_tabs then 3 else 2) in
+              if String.contains word '\n' then refuse !number "multiline heredoc delimiter";
+              heredocs := (word, strip_tabs) :: !heredocs;
+              take finish `None)
+            else take (index + 1) `None
     in
     loop 0 `None
-
-  (** The file's lines with every backslash-newline splice removed, as the shell removes them before
-      reading a word: [set] ending its line in a backslash, then [-e] on the next line, is one
-      [set -e]. Each comes with the number of the physical line it starts on. *)
-  let numbered_spliced_lines text =
-    let rec join acc pending number = function
-      | [] -> List.rev (match pending with Some spliced -> spliced :: acc | None -> acc)
-      | line :: rest ->
-          let first, line =
-            match pending with
-            | Some (first, prefix) -> (first, prefix ^ line)
-            | None -> (number, line)
-          in
-          if continues_past_newline line then
-            join acc (Some (first, String.drop_suffix line 1)) (number + 1) rest
-          else join ((first, line) :: acc) None (number + 1) rest
-    in
-    join [] None 1 (String.split_lines text)
 
   (** {!numbered_spliced_lines} without the numbers: each spliced line's first physical line. *)
   let spliced_lines text = List.map (numbered_spliced_lines text) ~f:snd
@@ -1472,12 +1625,14 @@ module Errexit_negation = struct
   let findings text =
     if not (List.exists (spliced_lines text) ~f:line_enables_errexit) then []
     else
-      String.split_lines text
-      |> List.mapi ~f:(fun index text ->
-          if is_statement_negation text then Some { line = index + 1 } else None)
-      |> List.filter_opt
+      numbered_spliced_lines text
+      |> List.filter_map ~f:(fun (line, text) ->
+          if is_statement_negation text then Some { line } else None)
 
   let report ~fail ~rel text =
+    ignore
+      (numbered_spliced_lines text ~refuse:(fun line reason ->
+           fail (Printf.sprintf "%s:%d: shell lexical context is unsupported: %s" rel line reason)));
     List.iter (findings text) ~f:(fun finding ->
         fail
           (Printf.sprintf
@@ -1487,6 +1642,35 @@ module Errexit_negation = struct
 
   let cases =
     [
+      ("multiline single quote", "set -e\nx='data\n! probe\n'\n", []);
+      ("multiline double quote", "set -e\nx=\"data\n! probe\n\"\n", []);
+      ("quoted heredoc", "set -e\ncat <<'END'\n! probe\nEND\n", []);
+      ("tab-stripped heredoc", "set -e\ncat <<-END\n\t! probe\n\tEND\n", []);
+      ("continued if condition", "set -e\nif\n! probe\nthen :; fi\n", []);
+      ("continued while condition", "set -e\nwhile\n! probe\ndo :; done\n", []);
+      ("continued until condition", "set -e\nuntil\n! probe\ndo :; done\n", []);
+      ("negation after heredoc", "set -e\ncat <<END\n! data\nEND\n! probe\n", [ 5 ]);
+      ("negation after quote", "set -e\nx='data\n! data\n'\n! probe\n", [ 5 ]);
+      ("negation in if body", "set -e\nif\n! probe\nthen\n! assertion\nfi\n", [ 5 ]);
+      ("multiple heredocs", "set -e\ncat <<A <<'B'\n! data\nA\n! data\nB\n! probe\n", [ 7 ]);
+      ("escaped delimiter", "set -e\ncat <<E\\ND\n! data\nEND\n! probe\n", [ 5 ]);
+      ( "double quote preserves ordinary backslash",
+        "set -e\ncat <<\"E\\ND\"\n! data\nE\\ND\n! probe\n",
+        [ 5 ] );
+      ( "quoted delimiter has whitespace",
+        "set -e\ncat <<'END HERE'\n! data\nEND HERE\n! probe\n",
+        [ 5 ] );
+      ( "continued condition with heredoc",
+        "set -e\nif cat <<END\n! data\nthen\nEND\n! probe\nthen :; fi\n! assertion\n",
+        [ 8 ] );
+      ("heredoc set text is data", "cat <<END\nset -e\nEND\n! probe\n", []);
+      ("quoted set text is data", "x='data\nset -e\n'\n! probe\n", []);
+      ("here-string resumes code", "set -e\ncat <<<word\n! probe\n", [ 3 ]);
+      ("arithmetic shift resumes code", "set -e\n((x<<1))\n! probe\n", [ 3 ]);
+      ("real comment hides consumer", "set -e\n! probe # || recover\n", [ 2 ]);
+      ("continued consumer", "set -e\n! probe \\\n || recover\n", []);
+      ("hash after spliced word", "set -e\n! probe foo\\\n#bar || recover\n", []);
+      ("comment after spliced whitespace", "set -e\n! probe \\\n# || recover\n", [ 2 ]);
       ("statement-position ! grep", "set -e\n! grep -q missing output\n", [ 2 ]);
       ("combined errexit option", "set -euo pipefail\n! grep -q missing output\n", [ 2 ]);
       ("named errexit option", "set -o errexit\n! grep -q missing output\n", [ 2 ]);
@@ -1654,7 +1838,27 @@ module Errexit_negation = struct
         ~format:
           "%s:%d: statement-position `! command` is inert under errexit; route the assertion \
            through an `absent()`-style helper whose body uses `if`";
-    Verdict.p "the statement-position ! grep fixture reaches the absent()-style refusal" refused
+    Verdict.p "the statement-position ! grep fixture reaches the absent()-style refusal" refused;
+    List.iter
+      [
+        ("cat <<END\ndata\n", 3, "unterminated outer heredoc");
+        ("cat <<END", 1, "unterminated outer heredoc");
+        ("cat <<$'END'\ndata\nEND\n", 1, "dollar-quoted heredoc delimiter");
+        ("cat <<$\"END\"\ndata\nEND\n", 1, "dollar-quoted heredoc delimiter");
+        ("cat <<'two\nlines'\ndata\n", 1, "multiline heredoc delimiter");
+      ]
+      ~f:(fun (text, line, reason) ->
+        let messages = ref [] in
+        report ~fail:(fun message -> messages := message :: !messages) ~rel:"fixture.sh" text;
+        let expected =
+          Printf.sprintf "fixture.sh:%d: shell lexical context is unsupported: %s" line reason
+        in
+        let refused = List.mem !messages expected ~equal:String.equal in
+        if refused then
+          Test_utils.Refusal_control_manifest.observe_failure
+            ~source:"test/operations/shell_scripts_parse.ml"
+            ~format:"%s:%d: shell lexical context is unsupported: %s";
+        Verdict.pf "unsupported shell lexical fixture %s reaches its refusal" reason refused)
 end
 
 (** The second member of the errexit-exempt family: a statement-position AND list of tests,
@@ -1674,9 +1878,11 @@ end
     that enables errexit as a command of its own on some line of the file, after
     [builtin]/[command], [time], assignment and redirection prefixes -- not inside a function body,
     a sourced file or a [bash -e] invocation. The file is read as the shell reads it, with every
-    backslash-newline removed, one LOGICAL line at a time: a line ending in [&&], [||] or [|] is
-    joined with the next, so a list wrapped across lines is read whole. Words are split at unquoted
-    whitespace.
+    backslash-newline removed, one LOGICAL line at a time, through the shared
+    {!Errexit_negation.numbered_spliced_lines} reader: multiline quoted values/substitutions stay
+    whole, outer heredoc bodies are data, and continued condition headers stay with their
+    [then]/[do]. A line ending in [&&], [||] or [|] is joined with the next, so a list wrapped
+    across lines is read whole. Words are split at unquoted whitespace.
 
     A logical line is cut into statements at top-level [;], [;;], a lone [&], a comment, and a case
     pattern's [)] -- unmatched, or closing a [(pattern)] because a word follows it, redirections
@@ -1720,13 +1926,12 @@ end
     - Errexit enabled anywhere but a command of its own on a line: inside a function body
       ([enable() { set -e; }]), in a sourced file, by the shebang or an invocation flag. Such a file
       is not scanned at all. (Silent.)
-    - A condition keyword on a LATER line than the pair ([while] / pair / [do]) is not looked for,
-      and a brace-group condition ([if { x; [ A ] && [ B ]; }; then]) has its statements read as
-      body statements. (Loud.) A lookahead to the next line read a heredoc's data line as the
-      keyword -- silently -- and was removed.
-    - A heredoc body is read as script text. (Loud: it can only add statements.) A construct left
-      open across a physical line -- a multi-line quoted value, a [[[ ... ]]] test -- is lexed from
-      outside it on the line where it closes, so a list on that same line can be hidden. (Silent.)
+    - A brace-group condition ([if { x; [ A ] && [ B ]; }; then]) has its statements read as body
+      statements. (Loud.) Compound nesting across physical lines, including condition subshells,
+      remains outside the logical-line reader's bounded header grammar.
+    - A [[[ ... ]]] test left open across a physical line is lexed from outside it on the line where
+      it closes, so a list on that same line can be hidden. (Silent.) Heredocs inside command
+      substitutions remain outside the opaque substitution skipper's grammar.
     - Scope. The last command of a FUNCTION BODY or a subshell is not inert -- its status becomes
       the function's (the subshell's), which errexit then weighs at the call site (measured under
       bash 3.2 and dash; a brace group, loop body or [if] branch does NOT propagate it). Seeing
@@ -2143,6 +2348,13 @@ module Errexit_and_list = struct
 
   let cases =
     [
+      ("pair in multiline quote", "set -e\nx='data\n[ -e a ] && [ -e b ]\n'\n", []);
+      ("pair in heredoc", "set -e\ncat <<END\n[ -e a ] && [ -e b ]\nEND\n", []);
+      ("pair in continued if", "set -e\nif\n[ -e a ] && [ -e b ]\nthen :; fi\n", []);
+      ("pair in continued while", "set -e\nwhile\n[ -e a ] && [ -e b ]\ndo :; done\n", []);
+      ("pair in continued until", "set -e\nuntil\n[ -e a ] && [ -e b ]\ndo :; done\n", []);
+      ("pair after heredoc", "set -e\ncat <<END\ndata\nEND\n[ -e a ] && [ -e b ]\n", [ 5 ]);
+      ("quote closes before pair", "set -e\nx='data\n' ; [ -e a ] && [ -e b ]\n", [ 2 ]);
       (* Flagged: the shape, and each place a body statement can sit. *)
       ("bare pair", "set -e\n[ -e ready ] && [ -e running ]\n", [ 2 ]);
       ( "the cancel_sweep readiness check",
@@ -2293,10 +2505,9 @@ module Errexit_and_list = struct
         "set -e\nset +e\n[ -e a ] && [ -e b ]\nrc=$?\nset -e\n",
         [ 3 ] );
       ("status captured by an or-tail", "set +e\n[ -e a ] && [ -e b ] || rc=$?\nset -e\n", []);
-      (* Refused by design (loud): a condition keyword on a LATER line than the pair is not looked
-         for -- a lookahead there read a heredoc's data line as the keyword (review round 10). *)
-      ("condition before a do line", "set -e\nwhile\n  [ -e a ] && [ -e b ]\ndo :; done\n", [ 3 ]);
-      ("condition before a then line", "set -e\nif\n  [ -e a ] && [ -e b ];\nthen :; fi\n", [ 3 ]);
+      (* The shared reader carries the header to its keyword, and excludes heredoc data. *)
+      ("condition before a do line", "set -e\nwhile\n  [ -e a ] && [ -e b ]\ndo :; done\n", []);
+      ("condition before a then line", "set -e\nif\n  [ -e a ] && [ -e b ];\nthen :; fi\n", []);
       ( "heredoc data line reading as a keyword",
         "set -e\n[ -e a ] && [ -e b ] <<EOF\nthen\nEOF\n",
         [ 2 ] );
