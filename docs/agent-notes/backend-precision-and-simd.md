@@ -1331,14 +1331,14 @@ files.
   `C_syntax.compile_proc` now emits as `OCANNL_WIDE_VECTOR_KERNEL` on a kernel whose renderings
   declared a vector wider than 32 bytes (keyed on the rendering, not on `cc_vector_bytes`, so kernels
   that vectorize nothing keep one text on every host). It reaches OpenMP-outlined bodies too.
-  CI's clang 18 (ubuntu-latest; this box has 21) then scalarized the fp16-storage `Max`/`Min` rows
-  at `x86-64-v3`/`v4`: it folds the blend's NaN test `v != v` back through `vcvtph2ps` onto the fp16
-  lanes and tests each lane alone (`vpextrw`, `vucomiss`, `cmovp`). That one is clang's, pinned as
-  a class keyed on `__clang__` AND a probe of the widen-then-blend (`C_syntax.vec_minmax_blend`),
-  with a claim that the census agrees wherever the probe excuses a row. Reproduce CI's clang
-  without root: `apt-get download clang-18 libclang-cpp18 libllvm18 libclang-common-18-dev`,
-  `dpkg-deb -x` each into one prefix, and point `X86_CLANG` at a wrapper exporting
-  `LD_LIBRARY_PATH` for `usr/lib/x86_64-linux-gnu` and `usr/lib/llvm-18/lib` under it.
+  clang 18 also scalarized fp16-storage `Max`/`Min` at `x86-64-v3`/`v4`: it folds a floating
+  NaN self-comparison back through `vcvtph2ps` onto the half lanes and tests each lane alone.
+  `C_syntax.vec_minmax_blend` now tests the widened f32 magnitude bits with integer operations
+  (gh-ocannl-1157), so those rows stay under the census's strict scalarization claim. The executed
+  `narrow_storage_compute` twins pin NaN preservation and finite/infinite/zero extrema for both
+  combines. Reproduce CI's clang without root: `apt-get download clang-18 libclang-cpp18 libllvm18
+  libclang-common-18-dev`, `dpkg-deb -x` each into one prefix, and point `X86_CLANG` at a wrapper
+  exporting `LD_LIBRARY_PATH` for `usr/lib/x86_64-linux-gnu` and `usr/lib/llvm-18/lib` under it.
 ## Min-max and FMA lowering diagnostics
 - **`Max`/`Min` SIMD reductions were a libm call per lane, on every x86 target** (gh-ocannl-649,
   fixed). The `Vectorized` accumulation loop rendered them as a fixed-trip per-lane loop calling the

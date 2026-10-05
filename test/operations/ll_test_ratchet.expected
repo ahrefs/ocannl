@@ -26,6 +26,7 @@ test/operations/gpu_serial_lanes.ml -- records=3 traversals=5
 test/operations/hardware_warp_shuffle.ml -- records=1 traversals=0
 test/operations/integer_power_domain.ml -- records=1 traversals=0
 test/operations/launch_dim_gate.ml -- records=2 traversals=0
+test/operations/narrow_storage_compute.ml -- records=0 traversals=1
 test/operations/online_softmax.ml -- records=8 traversals=4
 test/operations/online_softmax_block.ml -- records=11 traversals=8
 test/operations/peel_census.ml -- records=8 traversals=0
@@ -57,7 +58,6 @@ test/operations/fission_schedule.ml -- records<=9 traversals<=2: links ll_test f
 test/operations/hardware_axes_parity.ml -- records<=4 traversals<=4: existing migration debt; adopt ll_test when touched
 test/operations/hip_scratch_budget.ml -- records<=5 traversals<=0: existing migration debt; adopt ll_test when touched
 test/operations/model_default_fallback.ml -- records<=2 traversals<=2: existing migration debt; adopt ll_test when touched
-test/operations/narrow_storage_compute.ml -- records<=0 traversals<=1: existing migration debt; adopt ll_test when touched
 test/operations/op_legality.ml -- records<=4 traversals<=1: links ll_test for operand helpers only; still hand-builds Low_level
 test/operations/schedule_ops.ml -- records<=4 traversals<=1: links ll_test for operand helpers only; still hand-builds Low_level
 test/operations/schedule_split_reduce.ml -- records<=0 traversals<=7: links ll_test for operand helpers only; still hand-builds Low_level

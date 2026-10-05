@@ -29,6 +29,7 @@ module LL = Ir.Low_level
 module Sched = Ir.Schedule
 module Asgns = Ir.Assignments
 module Tn = Ir.Tnode
+module L = Ll_test
 
 let () = Utils.settings.output_debug_files_in_build_directory <- true
 
@@ -169,6 +170,71 @@ let () =
     };
   let bits x = Int64.bits_of_float x in
   let same_bits a b = Int64.equal (bits a) (bits b) in
+  let next_reduce_id = ref 1157000 in
+  (* gh-ocannl-1157: the widened-f32 Max/Min blend tests NaN through integer bits. The planted
+     extremum is in the first vector block and every later lane is NaN, so forgetting the NaN mask
+     destroys it before the scalar fold. Separate rows exercise every IEEE class, including each
+     zero sign without imposing an ordering on equal mixed-sign zeros. 517 trips also exercise the
+     scalar tail. The reference is known independently of either rendering. *)
+  List.iter
+    [ ("max", Ir.Ops.Max, 7.5); ("min", Ir.Ops.Min, -9.25) ]
+    ~f:(fun (name, op, planted) ->
+      let neutral = if String.equal name "max" then Float.neg_infinity else Float.infinity in
+      let cases =
+        [|
+          ((fun i -> if i = 0 then planted else Float.nan), planted);
+          ((fun _ -> Float.nan), neutral);
+          ((fun _ -> Float.infinity), Float.infinity);
+          ((fun _ -> Float.neg_infinity), Float.neg_infinity);
+          ((fun _ -> -0.), -0.);
+          ((fun _ -> 0.), 0.);
+          ( (fun i -> Float.of_int ((i % 23) - 11) *. 0.25),
+            if String.equal name "max" then 2.75 else -2.75 );
+        |]
+      in
+      let rows = Array.length cases in
+      List.iter
+        [ ("half", Ir.Ops.half); ("bf16", Ir.Ops.bfloat16) ]
+        ~f:(fun (storage, prec) ->
+          let run_reduce axis label =
+            let routine = "nsc_" ^ name ^ "_" ^ storage ^ "_" ^ label in
+            next_reduce_id := !next_reduce_id + 10;
+            let make = L.node_factory ~prec ~first_id:!next_reduce_id ~dims:[| rows; n |] () in
+            let input = make (routine ^ "_input") in
+            let output = make ~dims:[| rows |] (routine ^ "_output") in
+            List.iter [ input; output ] ~f:L.materialize;
+            let row = L.sym () and col = L.sym () in
+            let ri = [| L.iter row |] and cell = [| L.iter row; L.iter col |] in
+            let llc =
+              L.loop_n row rows
+                (L.seq
+                   (L.set output ri (L.c neutral))
+                   (L.loop_n ~axis col n
+                      (L.set output ri
+                         (LL.Binop (op, (L.get output ri, prec), (L.get input cell, prec))))))
+            in
+            let optimized = L.optimize ~materialized:[ input; output ] ~name:routine llc in
+            let seed =
+              [ (input, Array.init (rows * n) ~f:(fun i -> (fst cases.(i / n)) (i % n))) ]
+            in
+            let ctx = L.run_linked (L.link ~name:routine optimized) ~seed in
+            Context.get_values ctx output
+          in
+          let twin = run_reduce LL.Serial "serial" in
+          let vec = run_reduce LL.Vectorized "vec" in
+          p_all2
+            (storage ^ " vectorized " ^ name ^ " is bitwise identical to the serial twin")
+            vec twin ~f:same_bits;
+          p_all2
+            (storage ^ " serial " ^ name ^ " preserves NaNs' extrema and IEEE classes")
+            twin (Array.map cases ~f:snd) ~f:same_bits;
+          p
+            (storage ^ " " ^ name ^ " uses the widened integer NaN test")
+            ((not on_cpu)
+            ||
+            let src = read_on_cpu ("nsc_" ^ name ^ "_" ^ storage ^ "_vec") in
+            src_has src "Vectorized reduction rendering"
+            && src_has src "0x7fffffff" && src_has src "0x7f800000")));
   let bf16_value c =
     if c land 0x7F80 = 0x7F80 && c land 0x7F <> 0 then Float.nan
     else Int32.float_of_bits (Int32.of_int_trunc (c lsl 16))
