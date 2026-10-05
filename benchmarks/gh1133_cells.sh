@@ -111,7 +111,15 @@ echo "gh1133: $(date -u +%FT%TZ) root=$root base=$base out=$out cap=$cap backend
 echo "gh1133: fixtures: $fixtures; treatments: $treatments; ref: $ref; kernel table: $kernel_table; fixture dir: $fixture_dir; steps: $*"
 built=0 proven=0 failed=0
 
-runner_root() { case $1 in base | b[!a]* | bar[1-9]*) echo "$base" ;; *) echo "$root" ;; esac; }
+# The runner of a treatment: BASE's for base and b<T>, whatever d1 / fold wrappers enclose it
+# (flags_of strips the same wrappers), this checkout's otherwise.
+runner_root() {
+  local t=$1
+  while :; do
+    case $t in d1*) t=${t#d1} ;; fold*) t=${t#fold} ;; *) break ;; esac
+  done
+  case $t in base | b[!a]* | bar[1-9]*) echo "$base" ;; *) echo "$root" ;; esac
+}
 
 flags_of() {
   case $1 in
