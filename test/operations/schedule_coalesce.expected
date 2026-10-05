@@ -6,6 +6,8 @@ per-head operand: Coalesce declines because a read does not hold the pair: true
 per-head operand: the oracle proves it illegal: true
 padded inner axis: Coalesce declines on the dims: true
 padded inner axis: the oracle proves it illegal: true
+split-reduce: every write of the coalesced cell, the combine's included, stays flattened: true
+split-reduce: the coalesced, split, default-scheduled reduction computes the plain one's values: true
 projection: the serial reference is not all zeros: true
 projection: the coalesced layout's prefix applies: true
 projection: the prefix expands the zeroing, coalesces its pair, then the site's: true

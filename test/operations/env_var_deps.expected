@@ -180,7 +180,7 @@ declared or pinned by every rule running the program (gh-ocannl-1149):
   test/operations/dune, test scan_loop: Ir.Schedule.apply
   test/operations/dune, test schedule_batch_grid: Ir.Schedule.apply
   test/operations/dune, test schedule_batched_mma: Ir.Schedule.apply
-  test/operations/dune, test schedule_coalesce: Ir.Schedule.apply, Ir.Schedule.default_gpu, Ir.Schedule.fission_scheduled, Ir.Schedule.op_legality, Ir.Schedule.schedule_legality, Ir.Schedule.zero_expansion
+  test/operations/dune, test schedule_coalesce: Ir.Schedule.apply, Ir.Schedule.default_gpu, Ir.Schedule.fission_scheduled, Ir.Schedule.maybe_default_schedules, Ir.Schedule.op_legality, Ir.Schedule.schedule_legality, Ir.Schedule.zero_expansion
   test/operations/dune, test schedule_contraction_nest: Ir.Schedule.apply
   test/operations/dune, test schedule_conv_gemm: Ir.Schedule.apply, Ir.Schedule.default_cpu, Ir.Schedule.fission_scheduled, Ir.Schedule.zero_expansion
   test/operations/dune, test schedule_cpu_pack_matmul: Ir.Schedule.apply

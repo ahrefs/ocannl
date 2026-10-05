@@ -275,7 +275,10 @@ files.
   store-backs — a wrong VALUE, caught only by executed parity), and both rebuilt a `Sub_axis` as
   `Fixed_idx 0` (the same rendered address, but an ordinary in-bounds coordinate to the view).
   Per-axis bounds come from `Affine.axis_extents`, the view's group sizes; rebuilt components go
-  through `Schedule.rebuild_index`. A new per-axis consumer of index maps owes the same.
+  through `Schedule.rebuild_index` — `Split_reduce`'s combine cell too, which a tuner
+  composition reaches (review of lukstafi/ocannl-staging#1039). `Tensorize` and `Fuse_epilogue`'s
+  tail relocation decline a flattened access instead (v1). A new per-axis consumer of index maps
+  owes the same: grep for rebuilds from a `terms_of_index` decomposition.
 - **A dynamic access is viewed, not refused** (gh-ocannl-1174): `Affine.access` carries the
   dynamic axis itself (`a_dyn_axis`), so `may_touch_same_cell`, `read_covered_before` and
   `Cost_model.access_cells` read a gather or scatter through `view ~dyn_axis` — refuse one

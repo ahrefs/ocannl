@@ -539,6 +539,16 @@ let tensorize_llc ~(zero_fringe : Tn.t -> bool) ~i ~j ~k ~lane ~simd_width ~tile
                 ("Schedule.Tensorize: the micro-kernel must accumulate a product of reads into "
                ^ Tn.debug_name d_tn ^ " (d[...] += a[...] * b[...], plain-add or FMA form)")
         in
+        (* A flattened access (a coalesced pair, gh-ocannl-1165) is declined in v1: the fragment
+           geometry below reads the tile's roles axis by axis, and nothing here was taught the
+           flattened coordinate a [Sub_axis] run makes of the component after it. *)
+        if
+          List.exists
+            [ d_idcs; snd x_op; snd y_op ]
+            ~f:(Array.exists ~f:(function Indexing.Sub_axis -> true | _ -> false))
+        then
+          invalid_arg
+            "Schedule.Tensorize: a flattened (Sub_axis) micro-kernel access is unsupported (v1)";
         let mentions sym (idx : Indexing.axis_index) =
           match idx with
           | Indexing.Iterator s -> Indexing.equal_symbol s sym
@@ -3107,7 +3117,7 @@ let apply_split_reduce ~axis ~target ~num_blocks ~block_index ~inner_index ~comb
               Array.mapi comp_terms ~f:(fun a (terms, off) ->
                   let ci = List.nth_exn combine_indices a in
                   match terms with
-                  | [] -> Indexing.Fixed_idx off
+                  | [] -> rebuild_index idcs.(a) ~terms ~offset:off
                   | [ (c, s) ] ->
                       let fl = range_of s in
                       combine_loops := (ci, fl.from_, fl.to_) :: !combine_loops;
@@ -3706,10 +3716,14 @@ let apply_fuse_epilogue ~target ~shared (opt : Low_level.optimized) : Low_level.
   let subst_tail ~(site_idcs : Indexing.axis_index array) : Low_level.t =
     let stmt = Set { tn = out; idcs = tail_idcs; llsc = tail_llsc; debug = tail_debug } in
     Array.foldi site_idcs ~init:stmt ~f:(fun ax stmt idx ->
-        match terms_of_index idx with
-        | Some (terms, offset) ->
+        match (idx, terms_of_index idx) with
+        | Indexing.Sub_axis, _ ->
+            (* A flattened site (a coalesced pair, gh-ocannl-1165) has no per-axis index for the
+               tail's own symbol of this axis. *)
+            fail "the store-back site's indices are flattened (Sub_axis)"
+        | _, Some (terms, offset) ->
             map_code ~fidx:(subst_axis_index ~sym:tail_syms.(ax) ~by:{ terms; offset }) stmt
-        | None -> fail "the store-back site's indices must be affine")
+        | _, None -> fail "the store-back site's indices must be affine")
   in
   (* Does [idcs], with symbols ranging over [env] extents (zero-based loops), cover [target]'s index
      space bijectively over all enclosing iterations? Per axis: offset 0 and the (coefficient,

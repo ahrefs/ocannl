@@ -150,6 +150,68 @@ let () =
   p "padded inner axis: the oracle proves it illegal"
     (match Sched.op_legality o op with Sched.Op_illegal _ -> true | _ -> false)
 
+(* {1 Composition: a coalesced pair under [Split_reduce]}
+
+   The coalesced output [d[Sub_axis; f]] of a reduction [d[h,e] += x[k,h,e]] is split over [k]:
+   [Split_reduce] rebuilds the cell for its combine nest from the cell's decomposition, where a
+   [Sub_axis] decomposes to nothing. Rebuilt as [Fixed_idx 0] the combine's write renders the same
+   address but reads to the address queries as an ordinary in-bounds coordinate, under which the
+   flattened component [f] (extent [hh * ee]) is taken to stay below [ee] — the marker the composed
+   form depends on. The executed leg runs the composition through the default (fissioned, on GPU
+   hardware-mapped) schedules. *)
+
+let () =
+  let hh = 3 and ee = 4 and kk = 16 in
+  let mk = L.node_factory ~first_id:116600 ~dims:[||] () in
+  let x = mk ~dims:[| kk; hh; ee |] "cs_x" and d = mk ~dims:[| hh; ee |] "cs_d" in
+  List.iter [ x; d ] ~f:L.materialize;
+  let h = L.sym () and e = L.sym () and k = L.sym () in
+  let at = [| L.iter h; L.iter e |] in
+  let llc =
+    L.seq (L.zero d)
+      (L.loop_n h hh
+         (L.loop_n e ee
+            (L.loop_n k kk
+               (L.set d at (L.add (L.get d at) (L.get x [| L.iter k; L.iter h; L.iter e |]))))))
+  in
+  let seed =
+    [
+      ( x,
+        Array.init
+          (kk * hh * ee)
+          ~f:(L.cycle_flat ~dims:[| kk; hh; ee |] ~modulus:13 ~offset:(-6.) ~stride:0.5) );
+    ]
+  in
+  let o = L.optimize ~name:"cs_plain" llc in
+  let co, _ = Sched.coalesce ~outer:h ~inner:e in
+  let sr, _, _, _ = Sched.split_reduce ~axis:k ~target:d ~num_blocks:4 in
+  let os = Sched.apply [ co; sr ] o in
+  let d_writes = ref [] in
+  L.walk os.LL.llc ~on_stmt:(function
+    | LL.Set { tn; idcs; _ } when Ir.Tnode.equal tn d -> d_writes := idcs :: !d_writes
+    | _ -> ());
+  p_all "split-reduce: every write of the coalesced cell, the combine's included, stays flattened"
+    !d_writes ~f:(fun idcs -> (Ir.Affine.axis_extents ~dims:[| hh; ee |] idcs).(1) = hh * ee);
+  let run name o transform =
+    let ctx, routine =
+      Context.compile ~name ~prelowered:o ~lowered_transform:transform (Context.auto ())
+        Ir.Assignments.empty_comp Ir.Indexing.Empty
+    in
+    let ctx = List.fold seed ~init:ctx ~f:(fun ctx (tn, vs) -> Context.set_values ctx tn vs) in
+    Context.get_values (Context.run ctx routine) d
+  in
+  let want = run "cs_plain_run" o (fun o -> [ o ]) in
+  let got =
+    run "cs_split_run" os
+      (Sched.maybe_default_schedules ~backend_name
+         ~limits:(Context.hardware_limits (Context.auto ()))
+         ~static_indices:[])
+  in
+  p
+    "split-reduce: the coalesced, split, default-scheduled reduction computes the plain one's \
+     values"
+    (Array.exists want ~f:(fun v -> Float.(v <> 0.)) && Array.equal Float.equal want got)
+
 (* {1 The real projection site} *)
 
 let named name (comp : Asgns.comp) : Asgns.comp =

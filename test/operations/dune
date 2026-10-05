@@ -4936,7 +4936,12 @@
   (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
   (env_var OCANNL_GPU_SERIAL_LANES)
   (env_var OCANNL_LEGALITY_CROSSCHECK)
-  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
+  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES)
+  (env_var OCANNL_AUTOMATIC_CPU_SCHEDULE)
+  (env_var OCANNL_AUTOMATIC_GPU_SCHEDULE)
+  (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
+  (env_var OCANNL_GPU_FISSION_KEEP_MAPPING)
+  (env_var OCANNL_SCHEDULE_FISSION))
  (modules schedule_coalesce)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
