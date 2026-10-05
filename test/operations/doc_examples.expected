@@ -1,6 +1,7 @@
 docs/agent-notes/syntax-extensions.md: checked note_dimension_capture
 docs/agent-notes/training-and-performance.md: checked note_training_context
 docs/agent-notes/virtualization-and-inlining.md: checked prelowered_transform
+docs/einops_comparison.md: checked layer_norm
 docs/migration_guide.md: checked migration_training
 docs/proposals/centered-init-and-to-routine-context.md: checked proposal_routine_context
 docs/proposals/centered-init-and-to-routine-context.md: excluded historical accessor removed by gh-ocannl-590
