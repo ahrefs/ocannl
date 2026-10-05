@@ -381,6 +381,8 @@ let () =
       ( "a copy_files attached to an alias",
         {dune|(copy_files (alias probe) (files ../g/*.dat))|dune} );
       ("an env setting variables", {dune|(env (_ (env-vars (FOO bar))))|dune});
+      ("an env_vars backend", {dune|(env (_ (env_vars ((OCANNL_BACKEND hip)))))|dune});
+      ("an env's other settings", {dune|(env (_ (binaries tool.exe)))|dune});
       ( "a generated Reason module",
         {dune|(rule
  (target gen.re)
@@ -423,6 +425,13 @@ let () =
  (alias generate)
  (deps ocannl_config (env_var OCANNL_BACKEND))
  (action (with-stdout-to table.dat (run %{dep:reader.exe}))))
+(alias (name probe) (deps table.dat))|dune},
+        "build @@d/probe" );
+      ( "a target written by an action this does not read",
+        {dune|(rule
+ (alias generate)
+ (deps ocannl_config (env_var OCANNL_BACKEND))
+ (action (format-dune-file input.sexp table.dat)))
 (alias (name probe) (deps table.dat))|dune},
         "build @@d/probe" );
       ( "a bare-star glob",
@@ -572,13 +581,30 @@ let () =
   Out_channel.write_all
     (Stdlib.Filename.concat root "dune")
     ~data:"(data_only_dirs :standard \\ plain)";
-  let refused = match Slot_kind.dune_files ~root with _ -> false | exception Failure _ -> true in
+  let refused_for substring =
+    match Slot_kind.dune_files ~root with
+    | _ -> false
+    | exception Failure msg -> String.is_substring msg ~substring
+  in
+  let refused = refused_for "directory-set" in
+  (* What dune reads beside the dune files: a workspace naming more than its language, and the
+     alternative dune-file name. *)
+  Out_channel.write_all (Stdlib.Filename.concat root "dune") ~data:"(dirs :standard .x)";
+  file "dune-workspace"
+    "(lang dune 3.20)\n(context (default (env (_ (env_vars (OCANNL_BACKEND hip))))))";
+  let refused_workspace = refused_for "dune-workspace" in
+  Stdlib.Sys.remove (Stdlib.Filename.concat root "dune-workspace");
+  made := List.filter !made ~f:(fun p -> not (String.is_suffix p ~suffix:"dune-workspace"));
+  file "plain/dune-file" "";
+  let refused_dune_file = refused_for "dune-file" in
   List.iter !made ~f:(fun p ->
       if Stdlib.Sys.is_directory p then Stdlib.Sys.rmdir p else Stdlib.Sys.remove p);
   printf "dirs: %s\n" (String.concat ~sep:" " (List.map read ~f:(fun d -> "[" ^ d ^ "]")));
   p "the inventory reads where dirs stanzas send dune, and nowhere else"
     (List.equal String.equal read [ ""; ".x"; ".x/keep"; "plain"; "tools/.hidden"; "tools/sub" ]);
   p "a directory set with an ordered-set operator makes the tree unreadable" refused;
+  p "a workspace setting a context environment makes the tree unreadable" refused_workspace;
+  p "an alternative dune-file makes the tree unreadable" refused_dune_file;
   let live = Slot_kind.dune_files ~root:"../.." in
   List.iter
     [

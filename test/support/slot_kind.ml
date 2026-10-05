@@ -428,11 +428,9 @@ let backend_override ~reads_config sexp =
           (Printf.sprintf "flag %s" a)
     | Sexp.List (Sexp.Atom "setenv" :: Sexp.Atom name :: _) when is_backend name ->
         Some (Printf.sprintf "(setenv %s …)" name)
-    | Sexp.List (Sexp.Atom "env-vars" :: bindings) ->
-        List.find_map bindings ~f:(function
-          | Sexp.List (Sexp.Atom name :: _) when is_backend name ->
-              Some (Printf.sprintf "(env-vars (%s …))" name)
-          | _ -> None)
+    | Sexp.List (Sexp.Atom (("env_vars" | "env-vars") as field) :: bindings) ->
+        List.find_map (List.concat_map bindings ~f:Scan.atoms) ~f:(fun name ->
+            Option.some_if (is_backend name) (Printf.sprintf "(%s (%s …))" field name))
     | Sexp.List l -> List.find_map l ~f:go
   in
   if List.exists (targets_of sexp) ~f:(fun t -> Scan.glob_could_match t ~name:Scan.config_file) then
@@ -463,6 +461,99 @@ let copies_of ~dir sexp =
         [ Glob_need { under = Option.map (resolve ~dir in_dir) ~f:(fun d -> (d, false)); pattern } ]
       )
 
+(* The settings an [env] stanza's profiles may carry and stay exact: compiler and linker flags. Any
+   other -- [env_vars] in either spelling, [binaries], ... -- changes what the actions it covers
+   build or see, and is not modelled (Codex review on PR #1027). *)
+let env_settings =
+  [ "flags"; "ocamlc_flags"; "ocamlopt_flags"; "c_flags"; "cxx_flags"; "link_flags" ]
+
+let env_unmodelled = function
+  | Sexp.List (Sexp.Atom "env" :: profiles) ->
+      List.find_map profiles ~f:(function
+        | Sexp.List (Sexp.Atom _ :: settings) ->
+            List.find_map settings ~f:(function
+              | Sexp.List (Sexp.Atom h :: _) when List.mem env_settings h ~equal:String.equal ->
+                  None
+              | other -> Some (Printf.sprintf "env setting %s" (Sexp.to_string other)))
+        | other -> Some (Printf.sprintf "env profile %s" (Sexp.to_string other)))
+  | _ -> None
+
+(* The action heads the closure reads: the ones that write a file it infers ([targets_of]), and the
+   ones that write none. Any other -- [format-dune-file], say -- may write what this cannot name. *)
+let action_heads =
+  [
+    "run";
+    "dynamic-run";
+    "system";
+    "bash";
+    "progn";
+    "concurrent";
+    "echo";
+    "cat";
+    "copy";
+    "copy#";
+    "copy-and-add-line-directive";
+    "write-file";
+    "with-stdout-to";
+    "with-stderr-to";
+    "with-outputs-to";
+    "with-stdin-from";
+    "with-accepted-exit-codes";
+    "ignore-stdout";
+    "ignore-stderr";
+    "ignore-outputs";
+    "chdir";
+    "setenv";
+    "diff";
+    "diff?";
+    "cmp";
+    "no-infer";
+    "pipe-stdout";
+    "pipe-stderr";
+    "pipe-outputs";
+  ]
+
+(** The first action head in a stanza's [action] (or a short-form rule's) this does not read. *)
+let unknown_action_head sexp =
+  let rec action = function
+    | Sexp.Atom _ -> None
+    | Sexp.List (Sexp.Atom "with-accepted-exit-codes" :: _codes :: rest) ->
+        List.find_map rest ~f:action
+    | Sexp.List (Sexp.Atom h :: args) ->
+        if List.mem action_heads h ~equal:String.equal then List.find_map args ~f:action
+        else Some (Printf.sprintf "action (%s …)" h)
+    | Sexp.List _ as other -> Some (Printf.sprintf "action %s" (Sexp.to_string other))
+  in
+  let rule_fields =
+    [
+      "targets";
+      "target";
+      "deps";
+      "action";
+      "alias";
+      "aliases";
+      "package";
+      "locks";
+      "mode";
+      "fallback";
+      "enabled_if";
+    ]
+  in
+  let stray_form =
+    (* A rule's other forms: its short-form action, or a field this does not know. *)
+    match sexp with
+    | Sexp.List (Sexp.Atom "rule" :: fields) ->
+        List.find_map fields ~f:(function
+          | Sexp.List (Sexp.Atom h :: _) when List.mem rule_fields h ~equal:String.equal -> None
+          | form -> Some (action form))
+    | _ -> None
+  in
+  match (Scan.field sexp "action", stray_form) with
+  | _, Some found -> found
+  | Some [ a ], None -> action a
+  | Some _, None -> Some "action field of more than one form"
+  | None, None -> None
+
 (** One stanza, as the closure reads it: run, and -- for a head that compiles -- compiled, which is
     a stanza of its own here, seeded for every batch. *)
 let views_of ~dir ~named ~reads_config sexp =
@@ -488,6 +579,7 @@ let views_of ~dir ~named ~reads_config sexp =
         [
           inexact;
           stray_alias sexp;
+          unknown_action_head sexp;
           Option.some_if
             (List.mem (Scan.atoms sexp) "dynamic-run" ~equal:String.equal)
             "dynamic-run action";
@@ -534,11 +626,12 @@ let views_of ~dir ~named ~reads_config sexp =
         String.equal head "rule"
         && Option.is_none (Scan.field sexp "targets")
         && Option.is_none (Scan.field sexp "target")
-        && List.is_empty (Scan.aliases_of sexp)
-        && List.is_empty (targets_of sexp)
+        && ((List.is_empty (Scan.aliases_of sexp) && List.is_empty (targets_of sexp))
+           || Option.is_some (unknown_action_head sexp))
       then
         (* A rule on no alias whose targets no writing form names produces what this cannot name. *)
-        [ compiled ~needs:[] (Some "rule whose targets this cannot infer") ]
+        (* ... and so does one whose action has a head this does not read. *)
+        [ compiled ~needs:[] (Some "rule with targets no action form names") ]
       else if List.mem running_heads head ~equal:String.equal then []
       else
         Option.to_list (Option.map (stray_alias sexp) ~f:(fun why -> compiled ~needs:[] (Some why)))
@@ -567,12 +660,9 @@ let views_of ~dir ~named ~reads_config sexp =
             Option.some_if
               (List.mem (Scan.atoms fields) "action" ~equal:String.equal)
               "preprocessing action";
-            (* ctypes stubs run generator programs as they build; an [env]'s [env-vars] change what
-               the actions it covers see, the backend variable included. *)
+            (* ctypes stubs run generator programs as they build. *)
             Option.map (Scan.field fields "ctypes") ~f:(fun _ -> "ctypes field");
-            Option.some_if
-              (List.mem (Scan.atoms fields) "env-vars" ~equal:String.equal)
-              "env-vars field";
+            env_unmodelled fields;
             inexact_pform ~bindings fields;
           ]
       in
@@ -872,9 +962,31 @@ let dune_files ~root =
       | "data_only_dirs", args -> List.filter dirs ~f:(fun e -> not (matches args e))
       | _ -> dirs)
   in
+  (* What dune reads beyond the [dune] files is not modelled: a workspace naming more than its
+     language (a context's environment can set the backend), and the alternative [dune-file] name a
+     [dune-project] can enable. Either makes the tree unreadable (Codex review on PR #1027). *)
+  (match Stdlib.Sys.getenv_opt "DUNE_WORKSPACE" with
+  | Some w when not (String.is_empty w) -> failwith "DUNE_WORKSPACE names a workspace"
+  | _ -> ());
+  let rec workspaces dir =
+    let file = Stdlib.Filename.concat dir "dune-workspace" in
+    if Stdlib.Sys.file_exists file then
+      List.iter
+        (Scan.stanzas (Stdio.In_channel.read_all file))
+        ~f:(function
+          | Sexp.List (Sexp.Atom "lang" :: _) -> ()
+          | other -> failwith (Printf.sprintf "%s carries %s" file (Sexp.to_string other)));
+    let up = Stdlib.Filename.dirname dir in
+    if not (String.equal up dir) then workspaces up
+  in
+  workspaces
+    (if Stdlib.Filename.is_relative root then Stdlib.Filename.concat (Stdlib.Sys.getcwd ()) root
+     else root);
   let rec under dir =
     let path = if String.is_empty dir then root else Stdlib.Filename.concat root dir in
     let entries = Stdlib.Sys.readdir path |> Array.to_list |> List.sort ~compare:String.compare in
+    if List.mem entries "dune-file" ~equal:String.equal then
+      failwith (Printf.sprintf "%s holds a dune-file" path);
     let content =
       if List.mem entries "dune" ~equal:String.equal then
         Some (Stdio.In_channel.read_all (Stdlib.Filename.concat path "dune"))

@@ -172,9 +172,15 @@ a backend flag in a preprocessing action beside the tree leaves no batch proven 
 build @n/scans (a copy_files attached to an alias) unknown: it reads the dune file in d, whose alias form (alias probe) this does not model exactly
     unknown: it reads the dune file in d, whose alias form (alias probe) this does not model exactly
 a copy_files attached to an alias beside the tree leaves no batch proven to read nothing: true
-build @n/scans (an env setting variables) unknown: it compiles the env stanza in d, whose env-vars field this does not model exactly
-    unknown: it compiles the env stanza in d, whose env-vars field this does not model exactly
+build @n/scans (an env setting variables) unknown: it compiles the env stanza in d, whose env setting (env-vars(FOO bar)) this does not model exactly
+    unknown: it compiles the env stanza in d, whose env setting (env-vars(FOO bar)) this does not model exactly
 an env setting variables beside the tree leaves no batch proven to read nothing: true
+build @n/scans (an env_vars backend)     unknown: it compiles the env stanza in d, whose (env_vars (OCANNL_BACKEND …)) sets the backend past the configuration
+    unknown: it compiles the env stanza in d, whose (env_vars (OCANNL_BACKEND …)) sets the backend past the configuration
+an env_vars backend beside the tree leaves no batch proven to read nothing: true
+build @n/scans (an env's other settings) unknown: it compiles the env stanza in d, whose env setting (binaries tool.exe) this does not model exactly
+    unknown: it compiles the env stanza in d, whose env setting (binaries tool.exe) this does not model exactly
+an env's other settings beside the tree leaves no batch proven to read nothing: true
 build @n/scans (a generated Reason module) names nothing + reads config
     it reaches the rule producing gen.re in d, which reads the configuration
 a generated Reason module beside the tree leaves no batch proven to read nothing: true
@@ -187,6 +193,9 @@ a preprocessing action beside the tree leaves no batch proven to read nothing: t
 build @@d/probe (an inferred target on an alias-attached rule) names nothing + reads config
     it reaches the rule on generate in d, which reads the configuration
 an inferred target on an alias-attached rule reaches the reader, or is every backend: true
+build @@d/probe (a target written by an action this does not read) unknown: it reads the dune file in d, whose rule with targets no action form names this does not model exactly
+    unknown: it reads the dune file in d, whose rule with targets no action form names this does not model exactly
+a target written by an action this does not read reaches the reader, or is every backend: true
 build @@d/probe (a bare-star glob)       names nothing + reads config
     it reaches the rule producing a.actual in d, which reads the configuration
 a bare-star glob reaches the reader, or is every backend: true
@@ -216,6 +225,8 @@ a glob over a copy_files' copies reaches the reader they copy: true
 dirs: [] [.x] [.x/keep] [plain] [tools/.hidden] [tools/sub]
 the inventory reads where dirs stanzas send dune, and nowhere else: true
 a directory set with an ordered-set operator makes the tree unreadable: true
+a workspace setting a context environment makes the tree unreadable: true
+an alternative dune-file makes the tree unreadable: true
 live: build @test/operations/scans                            names nothing
     <the configuration does not count>
 live: build @test/operations/scans answers names nothing: true
