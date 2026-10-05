@@ -1789,6 +1789,9 @@ if [ "${1:-}" = --version ]; then
   printf '%s\n' "${REPEAT_TEST_DUNE_VERSION:-3.24.2}"
   exit 0
 fi
+# These list/digest fixtures have no corrected payload; the separate real-Dune
+# test-promotion-record harness tests capture and replay.
+if [ "${1:-}" = promotion ] && [ "${2:-}" = diff ]; then exit 1; fi
 if [ "${1:-}" = promotion ]; then
   [ -z "${REPEAT_TEST_PROMOTION_CALLS:-}" ] || printf '%s\n' "$*" >>"$REPEAT_TEST_PROMOTION_CALLS"
   [ -n "${REPEAT_TEST_PROMOTIONS:-}" ] || exit 1

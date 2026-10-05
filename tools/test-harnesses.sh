@@ -35,6 +35,7 @@ shell test/operations/ci_matrix.sh
 shell tools/test-machine-verify.sh
 toolchain tools/test-fmt-check.sh
 toolchain tools/test-promote.sh
+toolchain tools/test-promotion-record.sh
 HARNESS_LIST
 }
 failures=0 total=0

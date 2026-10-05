@@ -332,6 +332,8 @@ tools/test-pin-revisions.sh uses the shared harness contract: true
 tools/test-pin-revisions.sh parses: true
 tools/test-promote.sh uses the shared harness contract: true
 tools/test-promote.sh parses: true
+tools/test-promotion-record.sh uses the shared harness contract: true
+tools/test-promotion-record.sh parses: true
 tools/test-run.sh parses: true
 tools/test-test-harnesses.sh uses the shared harness contract: true
 tools/test-test-harnesses.sh parses: true
