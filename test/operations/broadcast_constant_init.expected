@@ -11,6 +11,18 @@ rank-zero scalar root keeps its shape: true
 rank-zero scalar root initializes without a consumer: PASS
 host scalar fill accepts dimensions inferred by an einsum: true
 inferred scalar initialization executes: PASS
+scalar parameter initializes across its inferred shape: PASS
+host-backed array parameter initializes: PASS
+ordinary initialization preserves an edited scalar parameter: PASS
+ordinary initialization preserves an edited array parameter: PASS
+reinit_all restores the configured scalar parameter value: PASS
+reinit_all restores the configured array parameter values: PASS
+forward reads the restored parameter buffers: PASS
+computed parameter reads its host-backed initializer dependency: PASS
+ordinary initialization skips an edited computed parameter: PASS
+reinit_all restores a nested host-backed parameter: PASS
+computed initialization reads the restored dependency: PASS
+forward reads the recomputed parameter after reinitialization: PASS
 padded materialized scalar init survives only with the in-kernel limit: true
 convolution commits scalar halo padding: true
 scalar host buffer fills the interior and neutral margins: true
@@ -34,6 +46,18 @@ rank-zero scalar root keeps its shape: true
 rank-zero scalar root initializes without a consumer: PASS
 host scalar fill accepts dimensions inferred by an einsum: true
 inferred scalar initialization executes: PASS
+scalar parameter initializes across its inferred shape: PASS
+host-backed array parameter initializes: PASS
+ordinary initialization preserves an edited scalar parameter: PASS
+ordinary initialization preserves an edited array parameter: PASS
+reinit_all restores the configured scalar parameter value: PASS
+reinit_all restores the configured array parameter values: PASS
+forward reads the restored parameter buffers: PASS
+computed parameter reads its host-backed initializer dependency: PASS
+ordinary initialization skips an edited computed parameter: PASS
+reinit_all restores a nested host-backed parameter: PASS
+computed initialization reads the restored dependency: PASS
+forward reads the recomputed parameter after reinitialization: PASS
 padded materialized scalar init survives only with the in-kernel limit: true
 convolution commits scalar halo padding: true
 scalar host buffer fills the interior and neutral margins: true

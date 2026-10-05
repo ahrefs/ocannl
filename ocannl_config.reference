@@ -1373,12 +1373,13 @@
 
 # Limit on the allowed size of unrolled constant tensor nodes
 # (where the initialization code sets the values). At most this many elements, a constant
-# literal is inlinable: it carries in-kernel initialization code that virtualization can
-# dissolve into consumers. Above it, the literal is host-backed data uploaded at link time.
+# literal array (Tensor.ndarray / Tensor.term_init) is inlinable: it carries in-kernel
+# initialization code that virtualization can dissolve into consumers. Above it, the literal
+# is host-backed data uploaded at link time.
 # The threshold only decides inlinability, not where initialization lives: a small constant
 # whose placement lands on materialized also drops its in-kernel init in favor of the
 # link-time upload (gh-ocannl-633), so schedule legality does not depend on operand literal
-# sizes. Setting 0 forces host-side initialization for every nonempty literal, including
+# sizes. Setting 0 forces host-side initialization for every nonempty literal array, including
 # one-element literals: their host-backed fill preserves scalar broadcasting and inferred
 # padding without fixing the element count (gh-ocannl-641).
 #limit_constant_fill_size=16

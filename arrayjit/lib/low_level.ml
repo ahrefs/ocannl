@@ -5459,7 +5459,8 @@ let validate_parallel plc (llc : t) : unit =
              one-element literals (gh-ocannl-641). *)
           if Tn.known_host_constant tn then
             ". The write is the in-kernel initialization of a constant that could not be moved to \
-             link time; --ocannl_limit_constant_fill_size=0 forces host-side initialization"
+             link time; for ndarray literals, --ocannl_limit_constant_fill_size=0 forces host-side \
+             initialization"
           else "")
     in
     let rec check_writes ~covered ~enclosing llc =

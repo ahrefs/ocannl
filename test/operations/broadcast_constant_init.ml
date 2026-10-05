@@ -103,6 +103,55 @@ let padded limit value =
   values ctx y expected "padded scalar values remain correct on a second run";
   Context.release ctx
 
+let parameter_reinit limit =
+  let p = TDSL.param ~value:3. ("reinit_scalar_" ^ Int.to_string limit) ~output_dims:[ 3 ] () in
+  let q =
+    NTDSL.param ~values:[| 2.; 5.; 7. |]
+      ("reinit_array_" ^ Int.to_string limit)
+      ~output_dims:[ 3 ] ()
+  in
+  let%op y = p + q in
+  let ctx = Train.init_params (Context.auto ()) Ir.Indexing.Empty y in
+  values ctx p [| 3.; 3.; 3. |] "scalar parameter initializes across its inferred shape";
+  values ctx q [| 2.; 5.; 7. |] "host-backed array parameter initializes";
+  let edited_p = [| 11.; 12.; 13. |] and edited_q = [| -1.; -2.; -3. |] in
+  let ctx = Context.set_values ctx p.value edited_p in
+  let ctx = Context.set_values ctx q.value edited_q in
+  let ctx = Train.init_params ctx Ir.Indexing.Empty y in
+  values ctx p edited_p "ordinary initialization preserves an edited scalar parameter";
+  values ctx q edited_q "ordinary initialization preserves an edited array parameter";
+  let ctx = Train.init_params ~reinit_all:true ctx Ir.Indexing.Empty y in
+  values ctx p [| 3.; 3.; 3. |] "reinit_all restores the configured scalar parameter value";
+  values ctx q [| 2.; 5.; 7. |] "reinit_all restores the configured array parameter values";
+  let ctx = Train.forward_once ~skip_init:true ctx y in
+  values ctx y [| 5.; 8.; 10. |] "forward reads the restored parameter buffers";
+  Context.release ctx
+
+let dependent_parameter limit =
+  let p = TDSL.param ~value:2. ("reinit_source_" ^ Int.to_string limit) ~output_dims:[ 3 ] () in
+  let derived =
+    TDSL.param
+      ~param_init:(NTDSL.add p (Tensor.number 1.))
+      ("reinit_dependent_" ^ Int.to_string limit)
+      ~output_dims:[ 3 ] ()
+  in
+  let varying = NTDSL.ndarray [| 1.; 3.; 5. |] ~output_dims:[ 3 ] () in
+  let%op y = derived + varying in
+  let ctx = Train.init_params (Context.auto ()) Ir.Indexing.Empty y in
+  values ctx derived [| 3.; 3.; 3. |]
+    "computed parameter reads its host-backed initializer dependency";
+  let ctx = Context.set_values ctx p.value [| 11.; 12.; 13. |] in
+  let edited = [| 21.; 22.; 23. |] in
+  let ctx = Context.set_values ctx derived.value edited in
+  let ctx = Train.init_params ctx Ir.Indexing.Empty y in
+  values ctx derived edited "ordinary initialization skips an edited computed parameter";
+  let ctx = Train.init_params ~reinit_all:true ctx Ir.Indexing.Empty y in
+  values ctx p [| 2.; 2.; 2. |] "reinit_all restores a nested host-backed parameter";
+  values ctx derived [| 3.; 3.; 3. |] "computed initialization reads the restored dependency";
+  let ctx = Train.forward_once ~skip_init:true ctx y in
+  values ctx y [| 4.; 6.; 8. |] "forward reads the recomputed parameter after reinitialization";
+  Context.release ctx
+
 let () =
   List.iter [ 1; 0 ] ~f:(fun limit ->
       Hashtbl.set Utils.config_file_args ~key:"limit_constant_fill_size" ~data:(Int.to_string limit);
@@ -113,4 +162,6 @@ let () =
       List.iter [ 0.; 3. ] ~f:(scalar limit);
       scalar_root limit;
       inferred limit;
+      parameter_reinit limit;
+      dependent_parameter limit;
       List.iter [ 0.; 3. ] ~f:(padded limit))
