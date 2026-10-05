@@ -14,7 +14,12 @@ case "$(uname -s)" in
   MINGW*|MSYS*)
     payload=$(cygpath -u "$payload")
     switch=$(cygpath -u "$switch")
-    cygwin=$(cygpath -u "$cygwin") ;;
+    cygwin=$(cygpath -u "$cygwin")
+    # MSYS defaults to copying symlink targets, which fails for forward and
+    # Cygwin-absolute links. Cygwin-compatible system link files preserve the
+    # POSIX targets without native symlink privilege. Child tar reads this
+    # process-local setting at startup; the caller's environment is untouched.
+    export MSYS=winsymlinks:sys ;;
 esac
 [ -d "$switch" ] && [ -d "$cygwin" ] || {
   echo "cache requires existing switch and Cygwin roots" >&2; exit 2;

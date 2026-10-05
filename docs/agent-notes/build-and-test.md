@@ -2302,13 +2302,17 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   `tools/windows-opam-cache.sh`'s two tar payloads under the Windows v2 key: the switch and
   Cygwin tree retain the mingw libraries and package metadata, but exclude the derived
   `root/etc/pki/ca-trust/extracted` subtree at both save and restore. setup-ocaml owns those fresh
-  CA files. actions/cache restores only the payload directory; checked listing and extraction
+  CA files. Inner tar processes use `MSYS=winsymlinks:sys`: the default MSYS deepcopy mode
+  cannot restore forward symlinks or Cygwin absolute targets into an empty tree. System link
+  files preserve their POSIX targets without native Windows symlink privilege.
+  actions/cache restores only the payload directory; checked listing and extraction
   then gate the job, so a partial extraction cannot masquerade as a warm switch. An ordinary
   cache miss still uses the two-step install, prunes sources, and packs before the post-save.
   `tools/test-windows-opam-cache.sh`, in the shared shell-harness entrypoint, exercises a real
   outer-cache round trip, a symlink payload over fresh regular CA files, corruption and extraction
   refusal, with pack/restore exclusion mutants. Native Git Bash runs the same fixture without
-  touching the user's opam root.
+  touching the user's opam root; its `--real` leg compares a restored existing switch and Cygwin
+  tree, then executes the restored compiler.
   Our own `_opam` key deliberately does NOT carry the opam version: a switch built by 2.5.2
   restores and runs green under 2.6.0 (the 2026-09-17 master runs hit that cache), so keying on it
   would buy nothing and cost a ~180-package rebuild per platform at every bump.
