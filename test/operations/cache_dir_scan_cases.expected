@@ -30,10 +30,12 @@ ok: use -- an alias of an alias is an alias
 ok: use -- a direct store through an alias exported from a structure
 ok: use -- a same-named export of an unrelated module is not the cache
 ok: use -- an export path reaches its own structure, not a same-named alias elsewhere
-ok: use -- a later binding in the structure shadows an exported alias
-ok: use -- and a later alias shadows an unrelated export
+ok: use -- a later binding in the structure shadows an included alias
+ok: use -- and a later alias shadows an included unrelated module
 ok: use -- a rebinding of the structure's own name takes its exports away
-ok: use -- a recursive module shadows an exported alias
+ok: use -- a recursive module shadows an included alias
+ok: use -- a binding in a structure sees the earlier ones beside it
+ok: use -- and the names an earlier open brought into it
 ok: use -- an export resolves in the structure's scope, through outer aliases
 ok: use -- exports carry through nested structures and signature constraints
 ok: use -- a structure bound in expression position exports too
@@ -41,6 +43,12 @@ ok: use -- an included structure's exports are the includer's
 ok: use -- an open inside a structure is not an export
 ok: use -- opening a structure brings its exported alias into scope
 ok: use -- and its unrelated export shadows an outer alias, locally opened too
+ok: use -- a name a literal signature hides does not shadow on open
+ok: use -- nor does the hidden cache alias in the mirror
+ok: use -- a name a literal signature declares still shadows on open
+ok: use -- an unreadable signature may hide an unrelated export, so it shadows nothing
+ok: use -- a nested signature narrows the nested structure's exports
+ok: use -- and an unreadable one may hide names at any depth
 ok: use -- a bare store is not a call into the cache module
 ok: use -- nor is a same-named operation on another module
 ok: use -- a traversal keeps its separators, for the prefix rule to reject

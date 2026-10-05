@@ -166,32 +166,40 @@ module N = struct module Cache = Ir.Schedule_cache end
 module M = struct module Cache = Other end
 let () = M.Cache.store ~dir:"scratch" key value|ocaml},
       [] );
-    ( "a later binding in the structure shadows an exported alias",
-      {ocaml|module M = struct
-  module Cache = Ir.Schedule_cache
-  module Cache = Other
-end
+    (* OCaml lets a later binding in a structure take a name over only from an [include], so the
+       shadowing arms are spelled that way: a duplicate definition is a program no source can
+       contain. *)
+    ( "a later binding in the structure shadows an included alias",
+      {ocaml|module N = struct module Cache = Ir.Schedule_cache end
+module M = struct include N module Cache = Other end
 let () = M.Cache.store ~dir:"scratch" key value|ocaml},
       [] );
-    ( "and a later alias shadows an unrelated export",
-      {ocaml|module M = struct
-  module Cache = Other
-  module Cache = Ir.Schedule_cache
-end
+    ( "and a later alias shadows an included unrelated module",
+      {ocaml|module N = struct module Cache = Other end
+module M = struct include N module Cache = Ir.Schedule_cache end
 let () = M.Cache.store ~dir:"autotune_cache_s" key value|ocaml},
       [ "~dir names autotune_cache_s" ] );
     ( "a rebinding of the structure's own name takes its exports away",
       {ocaml|module M = struct module Cache = Ir.Schedule_cache end
-module M = Other
+let () = let module M = Other in M.Cache.store ~dir:"scratch" key value|ocaml},
+      [] );
+    ( "a recursive module shadows an included alias",
+      {ocaml|module N = struct module Cache = Ir.Schedule_cache end
+module M = struct include N module rec Cache : S = Cache end
 let () = M.Cache.store ~dir:"scratch" key value|ocaml},
       [] );
-    ( "a recursive module shadows an exported alias",
+    ( "a binding in a structure sees the earlier ones beside it",
       {ocaml|module M = struct
-  module Cache = Ir.Schedule_cache
-  module rec Cache : S = Cache
+  module C = Ir.Schedule_cache
+  module Cache = C
 end
-let () = M.Cache.store ~dir:"scratch" key value|ocaml},
-      [] );
+let () = M.Cache.store ~dir:"autotune_cache_b" key value|ocaml},
+      [ "~dir names autotune_cache_b" ] );
+    ( "and the names an earlier open brought into it",
+      {ocaml|module N = struct module C = Ir.Schedule_cache end
+module M = struct open N module Cache = C end
+let () = M.Cache.store ~dir:"autotune_cache_c2" key value|ocaml},
+      [ "~dir names autotune_cache_c2" ] );
     ( "an export resolves in the structure's scope, through outer aliases",
       {ocaml|module SC = Ir.Schedule_cache
 module M = struct module Cache = SC end
@@ -226,6 +234,46 @@ let () = Cache.store ~dir:"autotune_cache_o" key value|ocaml},
 module M = struct module Cache = Other end
 let () = M.(Cache.store ~dir:"scratch" key value)|ocaml},
       [] );
+    (* A signature constraint decides what an [open] of the structure brings in: a name it hides
+       does not shadow the outer alias. A literal signature is read exactly; one the scan cannot
+       read may hide anything, so an unrelated export then shadows nothing, while a cache export
+       stays and is reported. *)
+    ( "a name a literal signature hides does not shadow on open",
+      {ocaml|module Cache = Ir.Schedule_cache
+module M : sig end = struct module Cache = Other end
+open M
+let () = Cache.store ~dir:"scratch" key value|ocaml},
+      [ "~dir names scratch" ] );
+    ( "nor does the hidden cache alias in the mirror",
+      {ocaml|module Cache = Other
+module M : sig end = struct module Cache = Ir.Schedule_cache end
+open M
+let () = Cache.store ~dir:"scratch" key value|ocaml},
+      [] );
+    ( "a name a literal signature declares still shadows on open",
+      {ocaml|module Cache = Ir.Schedule_cache
+module M : sig module Cache : module type of Other end = struct module Cache = Other end
+open M
+let () = Cache.store ~dir:"scratch" key value|ocaml},
+      [] );
+    ( "an unreadable signature may hide an unrelated export, so it shadows nothing",
+      {ocaml|module Cache = Ir.Schedule_cache
+module M : S = struct module Cache = Other end
+open M
+let () = Cache.store ~dir:"scratch" key value|ocaml},
+      [ "~dir names scratch" ] );
+    ( "a nested signature narrows the nested structure's exports",
+      {ocaml|module Cache = Ir.Schedule_cache
+module M : sig module N : sig end end = struct module N = struct module Cache = Other end end
+open M.N
+let () = Cache.store ~dir:"scratch" key value|ocaml},
+      [ "~dir names scratch" ] );
+    ( "and an unreadable one may hide names at any depth",
+      {ocaml|module Cache = Ir.Schedule_cache
+module M : S = struct module N = struct module Cache = Other end end
+open M.N
+let () = Cache.store ~dir:"scratch" key value|ocaml},
+      [ "~dir names scratch" ] );
     (* Not every `~dir` is a cache write: inside `schedule_cache.ml` itself the directory is a
        parameter, named by whoever called in. *)
     ( "a bare store is not a call into the cache module",
