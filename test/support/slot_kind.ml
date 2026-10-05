@@ -718,6 +718,9 @@ let harmless_flags =
     "--no-config";
   ]
 
+(* Not [--build-dir] (a context-rooted alias such as [@out/default/runtest] then reads as a source
+   directory), [--instrument-with] (it adds and runs a ppx) or [--diff-command] (it runs a program):
+   each is unmodelled (Codex review on PR #1027). *)
 let harmless_valued =
   [
     "-j";
@@ -730,9 +733,7 @@ let harmless_valued =
     "--cache";
     "--cache-check-probability";
     "--cache-storage-mode";
-    "--build-dir";
     "--sandbox";
-    "--diff-command";
     "--error-reporting";
     "--action-stdout-on-success";
     "--action-stderr-on-success";
@@ -741,7 +742,6 @@ let harmless_valued =
     "--trace-file";
     "--dump-gc-stats";
     "--watch-exclusions";
-    "--instrument-with";
     "--config-file";
   ]
 
@@ -968,6 +968,15 @@ let dune_files ~root =
   (match Stdlib.Sys.getenv_opt "DUNE_WORKSPACE" with
   | Some w when not (String.is_empty w) -> failwith "DUNE_WORKSPACE names a workspace"
   | _ -> ());
+  (let project = Stdlib.Filename.concat root "dune-project" in
+   if Stdlib.Sys.file_exists project then
+     List.iter
+       (Scan.stanzas (Stdio.In_channel.read_all project))
+       ~f:(function
+         | Sexp.List (Sexp.Atom (("dialect" | "accept_alternative_dune_file_name") as h) :: _) ->
+             (* A dialect can make any extension a source one; the data list assumes none does. *)
+             failwith (Printf.sprintf "dune-project declares (%s …)" h)
+         | _ -> ()));
   let rec workspaces dir =
     let file = Stdlib.Filename.concat dir "dune-workspace" in
     if Stdlib.Sys.file_exists file then
@@ -1011,7 +1020,73 @@ type answer =
   | Reaches of { named : (string * string) list; reads_config : string option }
   | Unknown of string
 
-let answer ~dune_files argv =
+(* The libraries through which a program can reach a backend: OCANNL's own, and the GPU bindings. *)
+let backend_capable lib =
+  List.exists [ "arrayjit"; "ocannl"; "neural_nets_lib"; "cudajit"; "hipjit"; "metal" ] ~f:(fun l ->
+      String.equal lib l || String.is_prefix lib ~prefix:(l ^ "."))
+
+(** The first preprocessor a stanza names that can reach a backend: a [pps]/[staged_pps] entry that
+    is a backend-capable library or a workspace library whose libraries, transitively, include one.
+    A ppx runs while dune compiles, so one that could start a backend is not taken on trust (Codex
+    review on PR #1027). *)
+let ppx_reaching_backend stanzas =
+  let libraries = Hashtbl.create (module String) in
+  List.iter stanzas ~f:(fun s ->
+      match (s.role, Scan.head s.sexp) with
+      | Runs, Some "library" ->
+          let deps =
+            Option.value_map (Scan.field s.sexp "libraries") ~default:[]
+              ~f:(List.concat_map ~f:Scan.atoms)
+          in
+          let public =
+            Option.value_map (Scan.field s.sexp "public_name") ~default:[]
+              ~f:(List.concat_map ~f:Scan.atoms)
+          in
+          List.iter
+            (Scan.names_of s.sexp @ public)
+            ~f:(fun n -> Hashtbl.set libraries ~key:n ~data:deps)
+      | _ -> ());
+  let rec reaches seen lib =
+    backend_capable lib
+    || (not (Set.mem seen lib))
+       && List.exists
+            (Option.value (Hashtbl.find libraries lib) ~default:[])
+            ~f:(reaches (Set.add seen lib))
+  in
+  let rec ppxs = function
+    | Sexp.List (Sexp.Atom ("pps" | "staged_pps") :: args) ->
+        List.filter_map args ~f:(function
+          | Sexp.Atom a when not (String.is_prefix a ~prefix:"-") -> Some a
+          | _ -> None)
+    | Sexp.List l -> List.concat_map l ~f:ppxs
+    | Sexp.Atom _ -> []
+  in
+  List.find_map stanzas ~f:(fun s ->
+      Option.map
+        (List.find (ppxs s.sexp) ~f:(reaches (Set.empty (module String))))
+        ~f:(fun ppx -> (s, ppx)))
+
+let answer ?(build_dir = Option.value (Stdlib.Sys.getenv_opt "DUNE_BUILD_DIR") ~default:"")
+    ~dune_files argv =
+  (* With the build directory moved to a relative [out], [@out/default/runtest] is a context root,
+     not a source directory (Codex review on PR #1027). *)
+  let build_root =
+    if String.is_empty build_dir || not (Stdlib.Filename.is_relative build_dir) then None
+    else List.hd (String.split build_dir ~on:'/')
+  in
+  let targets argv =
+    Result.bind (targets argv) ~f:(function
+      | None -> Ok None
+      | Some ts -> (
+          match
+            List.find ts ~f:(fun (Alias { dir; _ }) ->
+                match build_root with
+                | Some b -> String.equal (List.hd_exn (String.split dir ~on:'/')) b
+                | None -> false)
+          with
+          | Some (Alias { dir; alias; _ }) -> Error (Printf.sprintf "@%s/%s" dir alias)
+          | None -> Ok (Some ts)))
+  in
   match targets argv with
   | Error opt ->
       Unknown
@@ -1032,7 +1107,16 @@ let answer ~dune_files argv =
       match read with
       | Error why -> Unknown why
       | Ok stanzas -> (
-          let found = reached (List.concat (List.rev stanzas)) targets in
+          let stanzas = List.concat (List.rev stanzas) in
+          let found = reached stanzas targets in
+          let found =
+            (* Every compilation is in every batch's closure, so a ppx reaching a backend is too. *)
+            match ppx_reaching_backend stanzas with
+            | Some (s, ppx) ->
+                { s with inexact = Some (Printf.sprintf "ppx %s (it can reach a backend)" ppx) }
+                :: found
+            | None -> found
+          in
           match
             List.find_map found ~f:(fun s ->
                 match (s.overrides, s.inexact) with

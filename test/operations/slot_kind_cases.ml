@@ -231,6 +231,12 @@ let cases =
     ("clean", `Cpu);
     (* Any other subcommand may build workspace code: [install] builds what it installs. *)
     ("install", `Gpu);
+    (* Options that change what is built or run something: a moved build directory (whose
+       context-rooted aliases read as source directories), an instrumentation ppx, a diff
+       program. *)
+    ("build --build-dir out @out/default/runtest", `Gpu);
+    ("build --instrument-with bisect_ppx @c/runtest", `Gpu);
+    ("build --diff-command=cmp @c/runtest", `Gpu);
     ("exec ./x.exe", `Gpu);
   ]
 
@@ -383,6 +389,11 @@ let () =
       ("an env setting variables", {dune|(env (_ (env-vars (FOO bar))))|dune});
       ("an env_vars backend", {dune|(env (_ (env_vars ((OCANNL_BACKEND hip)))))|dune});
       ("an env's other settings", {dune|(env (_ (binaries tool.exe)))|dune});
+      ( "a ppx that can reach a backend",
+        {dune|(library (name evil_ppx) (kind ppx_rewriter) (modules evil_ppx) (libraries ppxlib helper))
+(library (name helper) (modules helper) (libraries arrayjit.backends))
+(library (name user) (modules user) (preprocess (pps evil_ppx)))|dune}
+      );
       ( "a generated Reason module",
         {dune|(rule
  (target gen.re)
@@ -597,6 +608,10 @@ let () =
   made := List.filter !made ~f:(fun p -> not (String.is_suffix p ~suffix:"dune-workspace"));
   file "plain/dune-file" "";
   let refused_dune_file = refused_for "dune-file" in
+  Stdlib.Sys.remove (Stdlib.Filename.concat root "plain/dune-file");
+  made := List.filter !made ~f:(fun p -> not (String.is_suffix p ~suffix:"dune-file"));
+  file "dune-project" "(lang dune 3.20)\n(dialect (name d) (implementation (extension dat)))";
+  let refused_dialect = refused_for "dialect" in
   List.iter !made ~f:(fun p ->
       if Stdlib.Sys.is_directory p then Stdlib.Sys.rmdir p else Stdlib.Sys.remove p);
   printf "dirs: %s\n" (String.concat ~sep:" " (List.map read ~f:(fun d -> "[" ^ d ^ "]")));
@@ -605,6 +620,16 @@ let () =
   p "a directory set with an ordered-set operator makes the tree unreadable" refused;
   p "a workspace setting a context environment makes the tree unreadable" refused_workspace;
   p "an alternative dune-file makes the tree unreadable" refused_dune_file;
+  p "a dialect declared in dune-project makes the tree unreadable" refused_dialect;
+  (* DUNE_BUILD_DIR moves the build directory the same way --build-dir does. *)
+  let moved =
+    match
+      Slot_kind.answer ~build_dir:"out" ~dune_files:tree [ "build"; "@out/default/runtest" ]
+    with
+    | Slot_kind.Unknown _ -> true
+    | Slot_kind.Reaches _ -> false
+  in
+  p "an alias rooted in a moved build directory is every backend" moved;
   let live = Slot_kind.dune_files ~root:"../.." in
   List.iter
     [

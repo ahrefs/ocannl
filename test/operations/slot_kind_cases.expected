@@ -90,6 +90,12 @@ clean                                    names nothing
 clean reaches no GPU stanza: true
 install                                  unknown: it carries `install`, which this does not model (it could change what is built)
 install can hold a GPU: true
+build --build-dir out @out/default/runtest unknown: it carries `--build-dir`, which this does not model (it could change what is built)
+build --build-dir out @out/default/runtest can hold a GPU: true
+build --instrument-with bisect_ppx @c/runtest unknown: it carries `--instrument-with`, which this does not model (it could change what is built)
+build --instrument-with bisect_ppx @c/runtest can hold a GPU: true
+build --diff-command=cmp @c/runtest      unknown: it carries `--diff-command=cmp`, which this does not model (it could change what is built)
+build --diff-command=cmp @c/runtest can hold a GPU: true
 exec ./x.exe                             unknown: it carries `exec`, which this does not model (it could change what is built)
 exec ./x.exe can hold a GPU: true
 runtest a reaches exactly names cuda,cc,hip + reads config: true
@@ -181,6 +187,9 @@ an env_vars backend beside the tree leaves no batch proven to read nothing: true
 build @n/scans (an env's other settings) unknown: it compiles the env stanza in d, whose env setting (binaries tool.exe) this does not model exactly
     unknown: it compiles the env stanza in d, whose env setting (binaries tool.exe) this does not model exactly
 an env's other settings beside the tree leaves no batch proven to read nothing: true
+build @n/scans (a ppx that can reach a backend) unknown: it reaches user in d, whose ppx evil_ppx (it can reach a backend) this does not model exactly
+    unknown: it reaches user in d, whose ppx evil_ppx (it can reach a backend) this does not model exactly
+a ppx that can reach a backend beside the tree leaves no batch proven to read nothing: true
 build @n/scans (a generated Reason module) names nothing + reads config
     it reaches the rule producing gen.re in d, which reads the configuration
 a generated Reason module beside the tree leaves no batch proven to read nothing: true
@@ -227,6 +236,8 @@ the inventory reads where dirs stanzas send dune, and nowhere else: true
 a directory set with an ordered-set operator makes the tree unreadable: true
 a workspace setting a context environment makes the tree unreadable: true
 an alternative dune-file makes the tree unreadable: true
+a dialect declared in dune-project makes the tree unreadable: true
+an alias rooted in a moved build directory is every backend: true
 live: build @test/operations/scans                            names nothing
     <the configuration does not count>
 live: build @test/operations/scans answers names nothing: true
