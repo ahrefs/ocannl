@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Run the shell-harness tier CI runs, from any working directory.
-# Usage: tools/test-harnesses.sh [--shell|--toolchain] [--list]
-# With no group, run both. --shell needs no OCaml toolchain; --toolchain
-# runs the formatter and promotion controls, whose missing-toolchain legs
-# report counted skips. CI runs that group after installing its toolchain.
+# Usage: tools/test-harnesses.sh [--shell|--toolchain|--promotion] [--list]
+# With no group, run all three. --shell needs no OCaml toolchain; --toolchain
+# runs the formatter controls and --promotion the promotion controls, whose
+# missing-toolchain legs report counted skips. CI runs both after installing
+# its toolchain, and --promotion again at the declared Dune floor.
 # Every selected harness runs after ordinary failures; any failure exits 1.
 # HUP/INT/TERM stop immediately and preserve the interruption status.
 set -u
@@ -11,7 +12,7 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd) || exit 2
 group=all list=0
 for arg in "$@"; do
   case $arg in
-    --shell|--toolchain)
+    --shell|--toolchain|--promotion)
       [ "$group" = all ] || { echo "choose one harness group" >&2; exit 2; }
       group=${arg#--} ;;
     --list) list=1 ;;
@@ -35,8 +36,8 @@ shell tools/test-ci-shard.sh
 shell test/operations/ci_matrix.sh
 shell tools/test-machine-verify.sh
 toolchain tools/test-fmt-check.sh
-toolchain tools/test-promote.sh
-toolchain tools/test-promotion-record.sh
+promotion tools/test-promote.sh
+promotion tools/test-promotion-record.sh
 HARNESS_LIST
 }
 failures=0 total=0

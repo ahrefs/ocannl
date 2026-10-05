@@ -648,8 +648,10 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
 
 - `tools/test-harnesses.sh` runs the complete hand-run harness tier locally, from any
   working directory. Its manifest is the membership CI uses: the toolchain-free job runs
-  `--shell`, the formatting job runs `--toolchain` after installation; omitting the group runs both.
-  The formatting job sets `OCANNL_TOOL_HARNESS_STRICT=1`, under which `harness-support.sh`
+  `--shell`, the formatting job runs `--toolchain` and `--promotion` after installation, and the
+  `promotion-floor` job runs `--promotion` again under the Dune that `dune-project`'s
+  `(lang dune X.Y)` declares (gh-ocannl-1215); omitting the group runs all three. Both
+  toolchain-installing jobs set `OCANNL_TOOL_HARNESS_STRICT=1`, under which `harness-support.sh`
   reports a skip as a FAIL: a counted skip is right where a host lacks a capability, and a vacuous
   green where the step installed it. setup-ocaml's switch is not on a CI step's PATH, so a harness
   needing `dune` falls back to sourcing `tools/opam-env.sh` before `harness_require dune`; one that
@@ -903,6 +905,8 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   Capture failure keeps the list but advertises no replay; every copy/query stays under the run's
   existing lock, signal handling and remaining cap. `tools/test-promotion-record.sh` owns the byte,
   recovery and refusal controls; `tools/test-promote.sh` owns the opposing floor-stream controls.
+  Their version legs SIMULATE the floor with shims over the installed Dune; CI's `promotion-floor`
+  job is what runs them against a real floor binary.
   Floor Dune also recomputes diffs during `list`, so both wrappers pin its `--diff-command=diff`: a
   presentation-only `DUNE_DIFF_COMMAND=-` must not hide registered corrections from recovery.
 - **`cmd 2>/dev/null` does not silence a failed REDIRECTION.** The shell reports that before the
