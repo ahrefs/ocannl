@@ -103,7 +103,8 @@
   backend_impl
   compiler_options
   c_syntax
-  cuda_like_config)
+  cuda_like_config
+  cuda_mma)
  (modes best))
 
 (library

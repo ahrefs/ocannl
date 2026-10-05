@@ -753,7 +753,8 @@ files.
   exists for CUDA's tf32 gate: the tf32 arm reads f32 storage as tf32 and accumulates at
   the same f32 `accum_prec` reports with the gate shut, so a code change to that gate under an
   unchanged mode moved nothing before. Each backend derives `mma_arm` from the very table its hooks
-  dispatch on — CUDA's `wmma_combo` (whose accumulator is now a precision, `wc_acc_prec`, spelled
+  dispatch on — CUDA's `wmma_combo` (in `Ir.Cuda_mma` since gh-ocannl-1214, beside the other arm
+  tables and the descriptor; its accumulator is now a precision, `wc_acc_prec`, spelled
   through `typ_of_prec`) behind the inline-PTX arms in the hooks' own order, HIP's and Metal's
   `mma_accumulator` tables (from which their fragment spellings now follow) — so a new arm or a
   changed gate reaches the key with no hand-added component. CUDA's hooks try several tables in an

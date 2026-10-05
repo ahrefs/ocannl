@@ -55,7 +55,6 @@ let exempt_zero_reference_exports =
     "Backend_intf.compare_mma_input_format";
     "Backend_intf.compare_mma_staged_layout";
     "Backend_intf.equal_hardware_limits";
-    "Backend_intf.equal_mma_capability";
     "Backend_intf.equal_mma_staged_layout";
     "Backend_intf.hardware_limits_of_sexp";
     "Backend_intf.mma_capability_of_sexp";

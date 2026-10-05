@@ -8005,3 +8005,14 @@
  (libraries base ocannl stdio unix arrayjit.verdict test_utils ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+(test
+ ; ocannl-backend: none -- links arrayjit.autotune (and so arrayjit.context) for two pure functions
+ ; of it, `Autotune.mma_format_triples` and `mma_tile_for_precisions_in_scope`; the CUDA tables under
+ ; test are `Ir.Cuda_mma`, evaluated at synthetic compute capabilities. Nothing in that closure reads
+ ; the backend key unless get_backend or Context.auto is called.
+ (name cuda_mma_cutoffs)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules cuda_mma_cutoffs)
+ (libraries base stdio arrayjit.ir arrayjit.autotune arrayjit.verdict))
