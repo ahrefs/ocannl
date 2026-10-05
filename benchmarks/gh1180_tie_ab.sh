@@ -24,7 +24,8 @@
 #           or f16a (pure f16 where the target has the arithmetic: --ocannl_fp16_arithmetic=true).
 #           The bench's register-tile site is BM rows by N columns by BK, so RM = min 4 BM.
 #
-# A cell counts only when the bench exited 0 (a required cross-variant disagreement exits 1),
+# The summary also refuses an incomplete design: every case of the driver.log's case list, every
+# round of its rounds=N, both sides of every pair. A cell counts only when the bench exited 0 (a required cross-variant disagreement exits 1),
 # printed the requested geometry on its header, and every packed line's census reads
 # Mma_register_tiled with no scalar fallback; any other cell fails the run and the summary marks it.
 # The summary's percentage is the median of the PAIRED throughput ratios A/B - 1 per round; a
@@ -69,10 +70,31 @@ for path in sorted(glob.glob(os.path.join(out, '*.out'))):
     cells.setdefault(case, {}).setdefault(rnd, {})[rn] = rates
 rows = ['| Case | Variant | A | B | A range (GFLOP/s) | B range (GFLOP/s) | Median A vs B | A wins |',
         '| --- | --- | --- | --- | --- | --- | --- | --- |']
-for case, rounds in cells.items():
+# The round count the run was launched with: a summary over fewer rounds, or over a round missing
+# one side of its pair, would be an unbalanced ABBA design reported as a complete one.
+m = re.search(r' rounds=(\d+)', open(os.path.join(out, 'driver.log')).read()) \
+    if os.path.exists(os.path.join(out, 'driver.log')) else None
+if not m:
+    bad.append('driver.log names no rounds=N: cannot tell a complete run from a partial one')
+expected = int(m.group(1)) if m else 0
+cases = sorted(cells)
+if m:
+    for c in re.search(r'cases: (.*)', open(os.path.join(out, 'driver.log')).read()).group(1).split():
+        prec, n, bm, bk, reps, rna, rnb = c.split(':')
+        name = f'{prec}-{n}-{bm}-{bk}-{reps}-rn{rna}-rn{rnb}'
+        if name not in cells:
+            bad.append(f'{name}: no cells at all')
+for case in cases:
+    rounds = cells[case]
     prec, n, bm, bk, reps, rna, rnb = case.split('-')
     rna, rnb = int(rna[2:]), int(rnb[2:])
+    if sorted(rounds) != list(range(expected)):
+        bad.append(f'{case}: rounds {sorted(rounds)}, expected 0..{expected - 1}')
     for variant in ('packmma', 'packmma_par'):
+        missing = [r for r in sorted(rounds)
+                   if rounds[r].get(rna, {}).get(variant) is None or rounds[r].get(rnb, {}).get(variant) is None]
+        if missing:
+            bad.append(f'{case}: {variant} lacks a side of the pair in rounds {missing}')
         a = [rounds[r].get(rna, {}).get(variant) for r in sorted(rounds)]
         b = [rounds[r].get(rnb, {}).get(variant) for r in sorted(rounds)]
         pairs = [(x, y) for x, y in zip(a, b) if x is not None and y is not None]
@@ -119,6 +141,8 @@ if ((rounds == 0 || rounds % 2 != 0)); then echo "gh1180: ROUNDS must be positiv
 for c in "$@"; do
   [[ $c =~ ^(f32|f16|f16a):[1-9][0-9]*:[1-9][0-9]*:[1-9][0-9]*:[1-9][0-9]*:[1-9][0-9]*:[1-9][0-9]*$ ]] ||
     { echo "gh1180: CASE must be PREC:N:BM:BK:REPEATS:RNA:RNB with PREC f32|f16|f16a, got '$c'" >&2; exit 2; }
+  [ "${c##*:}" != "$(cut -d: -f6 <<<"$c")" ] ||
+    { echo "gh1180: CASE '$c' times rn${c##*:} against itself; RNA and RNB must differ" >&2; exit 2; }
 done
 bench=$root/_build/default/bin/narrow_gebp_bench.exe
 [ -x "$bench" ] || { echo "gh1180: $bench is not built; run the build step first" >&2; exit 2; }
