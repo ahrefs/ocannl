@@ -63,7 +63,10 @@ let cuda_like ~z =
   }
 
 let accepts ~limits opt =
-  match Sched.check_hardware_limits_classified ~name:"ldg" ~limits opt with
+  match
+    Sched.check_hardware_limits_classified ~capabilities:Ir.Backend_intf.no_codegen_capabilities
+      ~name:"ldg" ~limits opt
+  with
   | () -> true
   | exception _ -> false
 
@@ -71,7 +74,10 @@ let accepts ~limits opt =
    claim can say WHICH dimension asked too much: a gate that refuses under the wrong resource would
    group an autotune search's declines under the wrong key. *)
 let refusal ~limits opt =
-  match Sched.check_hardware_limits_classified ~name:"ldg" ~limits opt with
+  match
+    Sched.check_hardware_limits_classified ~capabilities:Ir.Backend_intf.no_codegen_capabilities
+      ~name:"ldg" ~limits opt
+  with
   | () -> None
   | exception SO.Cause_at (_, SO.Resource_exceeded { resource; requested; limit; _ }) ->
       Some (resource, requested, limit)
@@ -141,7 +147,10 @@ let () =
   (* The user-facing half: the raising variant names the dimension, which is the whole difference
      between this and a driver error. *)
   p "the raising variant names the .z workgroup extent"
-    (match Sched.check_hardware_limits ~name:"ldg" ~limits:(cuda_like ~z:64) opt with
+    (match
+       Sched.check_hardware_limits ~capabilities:Ir.Backend_intf.no_codegen_capabilities ~name:"ldg"
+         ~limits:(cuda_like ~z:64) opt
+     with
     | () -> false
     | exception Utils.User_error msg ->
         String.is_substring msg ~substring:".z workgroup extent"

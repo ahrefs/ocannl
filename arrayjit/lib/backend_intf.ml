@@ -409,6 +409,13 @@ type codegen_capabilities = {
           combination table those hooks consult; [None] where the table has no arm for them. Only
           the precision- and policy-level choice: extents, strides, address spaces, layouts and the
           device can still make a call decline. *)
+  mma_scope_workgroup_bytes : d_prec:Ops.prec -> a_prec:Ops.prec -> b_prec:Ops.prec -> int;
+      (** Static workgroup-shared bytes one tile-MMA emission scope declares beyond the staged
+          tiles, for a [(d, a, b)] storage triple: the backend's
+          [C_syntax_config.mma_scope_workgroup_bytes], which it derives from the same combination
+          resolver and declaration its emitting hooks use. Non-zero only for Metal's converted
+          destination boundary (gh-ocannl-1205). [Schedule.check_hardware_limits_classified] adds it
+          per scope to the staged tiles. *)
 }
 (** Stable code-generation facts callers need before compiling. Actual rendering decisions stay on
     the compiled routine's censuses. *)
@@ -422,6 +429,7 @@ let no_codegen_capabilities =
     accum_prec = Fn.id;
     asynchronous_staging_copy = false;
     mma_arm = (fun ~a_prec:_ ~b_prec:_ ~d_prec:_ ~scope:_ -> None);
+    mma_scope_workgroup_bytes = (fun ~d_prec:_ ~a_prec:_ ~b_prec:_ -> 0);
   }
 
 (** A stable, exhaustive rendering of a capability record under the CURRENT numerics policy: its
@@ -433,9 +441,25 @@ let no_codegen_capabilities =
     the function codegen calls, rather than naming the predicate behind it, makes the cache identity
     move exactly when the resolution does, on every backend, with nothing to add by hand. The record
     pattern names every field, so a field added to {!codegen_capabilities} is a compile error here
-    until it is rendered (warning 9). *)
+    until it is rendered (warning 9).
+
+    The one field deliberately not rendered is [mma_scope_workgroup_bytes]: it decides whether a
+    schedule FITS, never what a kernel computes, and it is a function of the storage triple, the
+    numerics policy and the backend, which the key already carries ([Schedule_cache.numerics_tag]
+    and the backend identity), so rendering it would add no discrimination. An emitter change that
+    grows the scratch is caught without it: a replayed winner passes the same
+    [Schedule.check_hardware_limits_classified] gate as a fresh candidate, so one that no longer
+    fits is refused there as a typed cause, which autotune answers by re-searching (gh-ocannl-572:
+    over-keying is a defect too). *)
 let codegen_capabilities_fingerprint
-    { supports_f64; compute_prec; accum_prec; asynchronous_staging_copy; mma_arm } =
+    {
+      supports_f64;
+      compute_prec;
+      accum_prec;
+      asynchronous_staging_copy;
+      mma_arm;
+      mma_scope_workgroup_bytes = _;
+    } =
   let p = Ops.prec_string in
   let resolution f =
     String.concat ~sep:"," (List.map Ops.all_precs ~f:(fun prec -> p prec ^ ">" ^ p (f prec)))

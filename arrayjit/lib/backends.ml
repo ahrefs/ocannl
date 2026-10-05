@@ -926,6 +926,7 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
     in
     let lowered = maybe_sink_zeros lowered in
     let limits = Device.hardware_limits () in
+    let capabilities = Device.codegen_capabilities () in
     let lowereds =
       Schedule_outcome.tag Schedule_outcome.Transform (fun () ->
           match lowered_transform with
@@ -967,7 +968,7 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
       match lowereds with
       | [] -> assert false
       | [ single ] ->
-          Schedule.check_hardware_limits_classified ~name ~limits single;
+          Schedule.check_hardware_limits_classified ~name ~limits ~capabilities single;
           let compiled =
             Schedule_outcome.tag Schedule_outcome.Backend_compile (fun () ->
                 compile ~name bindings single)
@@ -976,7 +977,7 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
       | segments ->
           let seg_names = List.mapi segments ~f:(fun i _ -> name ^ "__seg" ^ Int.to_string i) in
           List.iter2_exn seg_names segments ~f:(fun seg_name seg ->
-              Schedule.check_hardware_limits_classified ~name:seg_name ~limits seg);
+              Schedule.check_hardware_limits_classified ~name:seg_name ~limits ~capabilities seg);
           let batch =
             Schedule_outcome.tag Schedule_outcome.Backend_compile (fun () ->
                 compile_batch ~names:(Array.of_list seg_names) bindings (Array.of_list segments))

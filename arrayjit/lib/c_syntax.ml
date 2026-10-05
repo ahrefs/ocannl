@@ -944,6 +944,17 @@ module type C_syntax_config = sig
       space and layout to decide acceptance by, no address — because they are addressed by the
       nested [Tile_mma]s, each at its own position inside the reduction loop. *)
 
+  val mma_scope_workgroup_bytes : d_prec:Ops.prec -> a_prec:Ops.prec -> b_prec:Ops.prec -> int
+  (** Static workgroup-shared bytes that one accepted MMA emission scope declares for this storage
+      triple beyond the staged tiles: one per {!mma_syntax} call outside a fragment scope, one per
+      {!mma_fragment_syntax} scope (its nested update-only call declares none; the scope is rendered
+      only around exactly one [Tile_mma], which is how the schedule estimate counts it). Metal's
+      converted destination boundary is the one non-zero case (gh-ocannl-1205): its coordinate table
+      lives in [threadgroup] memory. The hook that emits the declaration derives this from the same
+      policy, so [Schedule.check_hardware_limits_classified]'s estimate cannot drift from the
+      kernel. An upper bound per scope: a call the hook then declines (extents, spaces, layouts)
+      declares nothing, which the estimate does not try to predict. *)
+
   val kernel_log_param : (string * string) option
   (** Kernel parameter for logging, if any. E.g., (Some ("int", "log_id")) or (Some ("const char*",
       "log_file_name")). *)
@@ -974,6 +985,7 @@ let codegen_capabilities (module Config : C_syntax_config) =
     accum_prec = Config.accum_prec;
     asynchronous_staging_copy = Option.is_some Config.async_copy;
     mma_arm = Config.mma_arm;
+    mma_scope_workgroup_bytes = Config.mma_scope_workgroup_bytes;
   }
 
 (** Whether [c] lies exactly halfway between two adjacent f32 values, so that narrowing it to f32 is
@@ -1885,6 +1897,7 @@ struct
   let mma_uses_ldmatrix ~a_prec:_ ~b_prec:_ ~d_prec:_ ~ta:_ ~tb:_ ~a:_ ~b:_ = false
   let mma_arm ~a_prec:_ ~b_prec:_ ~d_prec:_ ~scope:_ = None
   let mma_fragment_syntax = None
+  let mma_scope_workgroup_bytes ~d_prec:_ ~a_prec:_ ~b_prec:_ = 0
   let float_log_style = if Input.full_printf_support then "%g" else "%de-3"
 
   let styled_log_arg doc =

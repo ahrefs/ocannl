@@ -7552,7 +7552,46 @@ let maybe_default_schedules ~backend_name ?(limits = Backend_intf.no_hardware_li
         ?keep_mapping:(fission_keep_mapping ~is_gpu:gpu ~limits)
         ~preset ~zero_sched ~static_indices opt
 
-let check_hardware_limits_classified ~name ~(limits : Backend_intf.hardware_limits)
+(* The emission scopes of [opt]'s [Tile_mma] statements, as [(d, a, b)] operand triples: one per
+   statement, wherever it sits — duplicated by a materializing [Unroll] or [Partition], each copy is
+   its own lexical scope and declares its own scratch. A recognized simdgroup-fragment scope is no
+   exception: [C_syntax]'s fragment rendering accepts a reduction holding exactly ONE [Tile_mma]
+   into the fragment, so its scope and that statement are one-to-one (and the fragment carries its
+   target's storage precision, the [d] precision the hook is asked about). Fallbacks are not
+   entered: they render instead of, not beside, the intrinsic. *)
+let mma_emission_scopes (opt : Low_level.optimized) : (Tn.t * Tn.t * Tn.t) list =
+  let open Low_level in
+  let rec go acc = function
+    | Tile_mma { d = d, _; a = a, _; b = b, _; _ } -> (d, a, b) :: acc
+    | Seq (c1, c2) -> go (go acc c1) c2
+    | For_loop { body; _ } | If { body; _ } | Scan_loop { body; _ } -> go acc body
+    | Noop | Comment _ | Staged_compilation _ | Declare_local _ | Workgroup_barrier | Zero_out _
+    | Set _ | Set_dynamic _ | Set_from_vec _ | Set_local _ ->
+        acc
+  in
+  List.rev (go [] opt.llc)
+
+let workgroup_memory_bytes ~(capabilities : Backend_intf.codegen_capabilities)
+    (opt : Low_level.optimized) : int =
+  let staged =
+    Set.fold opt.workgroup_shared ~init:0 ~f:(fun acc tn ->
+        (* A pipelined tile is allocated as [pt_depth] rotating copies (gh-ocannl-487): the IR-level
+           dims stay single-copy, so the accounting multiplies here, matching the codegen
+           declaration. *)
+        let copies =
+          match Map.find opt.Low_level.pipelined tn with
+          | Some { Low_level.pt_depth; _ } -> pt_depth
+          | None -> 1
+        in
+        acc + (copies * Lazy.force tn.Tn.size_in_bytes))
+  in
+  let prec (tn : Tn.t) = Lazy.force tn.Tn.storage_prec in
+  List.fold (mma_emission_scopes opt) ~init:staged ~f:(fun acc (d, a, b) ->
+      acc
+      + capabilities.Backend_intf.mma_scope_workgroup_bytes ~d_prec:(prec d) ~a_prec:(prec a)
+          ~b_prec:(prec b))
+
+let check_hardware_limits_classified ~name ~(limits : Backend_intf.hardware_limits) ~capabilities
     (opt : Low_level.optimized) : unit =
   Option.iter limits.max_threads_per_workgroup ~f:(fun max_threads ->
       let block = (Low_level.launch_dims opt.llc).block in
@@ -7574,23 +7613,12 @@ let check_hardware_limits_classified ~name ~(limits : Backend_intf.hardware_limi
                    detail;
                  } )));
   Option.iter limits.max_workgroup_memory_bytes ~f:(fun max_bytes ->
-      let shared_bytes =
-        Set.fold opt.workgroup_shared ~init:0 ~f:(fun acc tn ->
-            (* A pipelined tile is allocated as [pt_depth] rotating copies (gh-ocannl-487): the
-               IR-level dims stay single-copy, so the accounting multiplies here, matching the
-               codegen declaration. *)
-            let copies =
-              match Map.find opt.Low_level.pipelined tn with
-              | Some { Low_level.pt_depth; _ } -> pt_depth
-              | None -> 1
-            in
-            acc + (copies * Lazy.force tn.Tn.size_in_bytes))
-      in
+      let shared_bytes = workgroup_memory_bytes ~capabilities opt in
       if shared_bytes > max_bytes then
         let detail =
           [%string
-            "Schedule: kernel %{name} stages %{shared_bytes#Int} bytes of workgroup-shared tiles, \
-             exceeding the device limit of %{max_bytes#Int} bytes"]
+            "Schedule: kernel %{name} stages %{shared_bytes#Int} bytes of workgroup-shared tiles \
+             and tile-MMA scope scratch, exceeding the device limit of %{max_bytes#Int} bytes"]
         in
         raise
           (Schedule_outcome.Cause_at
@@ -7628,7 +7656,7 @@ let check_hardware_limits_classified ~name ~(limits : Backend_intf.hardware_limi
                  detail = [%string "Schedule: kernel %{name} %{lx_phrase}"];
                } )))
 
-let check_hardware_limits ~name ~limits opt =
-  match check_hardware_limits_classified ~name ~limits opt with
+let check_hardware_limits ~name ~limits ~capabilities opt =
+  match check_hardware_limits_classified ~name ~limits ~capabilities opt with
   | () -> ()
   | exception Schedule_outcome.Cause_at (_, cause) -> Schedule_outcome.raise_cause cause
