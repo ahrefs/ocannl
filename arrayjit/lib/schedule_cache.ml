@@ -14,6 +14,7 @@ type mint_role =
   | Split_reduce_combine of int
   | Fold_mma_lane
   | Fold_mma_block
+  | Coalesce_merged
 [@@deriving sexp, compare, equal, hash]
 
 type sym_ref = Base of int | Static of int | Minted of int * mint_role
@@ -35,6 +36,7 @@ type saved_optop =
   | Unroll of { axis : sym_ref; materialize : bool }
   | Partition of { axis : sym_ref; breakpoints : int list }
   | Pad of { axis : sym_ref; to_multiple_of : int }
+  | Coalesce of { outer : sym_ref; inner : sym_ref }
   | Stage of {
       source : int;
       tile_loops : sym_ref list;
@@ -326,6 +328,9 @@ let to_saved r (sched : Schedule.schedule) : saved_schedule * registry =
               (r, saved)
           | Schedule.Pad { axis; to_multiple_of } ->
               (r, Pad { axis = resolve_exn r axis; to_multiple_of })
+          | Schedule.Coalesce { outer; inner; merged } ->
+              let saved = Coalesce { outer = resolve_exn r outer; inner = resolve_exn r inner } in
+              (record r merged (Minted (idx, Coalesce_merged)), saved)
           | Schedule.Stage
               {
                 source;
@@ -428,6 +433,11 @@ let of_saved canonical (saved : saved_schedule) : Schedule.schedule * registry =
               (r, op)
           | Pad { axis; to_multiple_of } ->
               (r, Schedule.Pad { axis = unresolve_exn r axis; to_multiple_of })
+          | Coalesce { outer; inner } ->
+              let op, merged =
+                Schedule.coalesce ~outer:(unresolve_exn r outer) ~inner:(unresolve_exn r inner)
+              in
+              (record r merged (Minted (idx, Coalesce_merged)), op)
           | Stage
               {
                 source;

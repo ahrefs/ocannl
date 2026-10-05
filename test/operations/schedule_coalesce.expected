@@ -1,0 +1,8 @@
+control: Coalesce of the head pair is Op_legal: true
+control: the merged loop spans every head's columns: true
+control: the writes read the merged index flattened over the pair: true
+control: the coalesced nest computes the uncoalesced one's values bitwise: true
+per-head operand: Coalesce declines because a read does not hold the pair: true
+per-head operand: the oracle proves it illegal: true
+padded inner axis: Coalesce declines on the dims: true
+padded inner axis: the oracle proves it illegal: true

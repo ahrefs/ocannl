@@ -195,7 +195,7 @@ let precs = [ ("f32", Ops.single); ("bf16", Ops.bfloat16); ("f16", Ops.half) ]
 let is_loop_rewrite (op : Sched.optop) =
   match op with
   | Sched.Split _ | Sched.Swap _ | Sched.Retype _ | Sched.Unroll _ | Sched.Partition _ | Sched.Pad _
-    ->
+  | Sched.Coalesce _ ->
       true
   | Sched.Split_reduce _ | Sched.Tensorize _ | Sched.Stage _ | Sched.Privatize _
   | Sched.Expand_zero _ | Sched.Fuse_epilogue _ | Sched.Fold_mma _ ->
@@ -1619,6 +1619,11 @@ let optop_coverage (op : Sched.optop) : coverage =
       Out_of_scope
         "splices a consumer AFTER the reduction's closing store, so the form it follows is \
          whichever one this table already pins"
+  | Sched.Coalesce _ ->
+      Out_of_scope
+        "re-indexes two perfectly nested loops as one over the same iterations in the same order \
+         (gh-ocannl-1165): a merged reduction pair is one serial reduction loop, whose form serial \
+         pins, and a merged output pair changes no accumulator residency"
   | Sched.Fold_mma _ ->
       Out_of_scope
         "rewrites the online-softmax block fold whole: its two contractions become Tile_mma \

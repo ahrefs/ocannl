@@ -69,6 +69,13 @@ val view :
 val coords_to_string : coord array -> string
 (** The spelling witnesses use for a view. *)
 
+val axis_extents : dims:int array -> Indexing.axis_index array -> int array
+(** Per axis of a full-rank access, the extent of the coordinate its component indexes in the
+    {!view}: a component after a [Sub_axis] run is a flattened index over the run's whole extent
+    product, so an edge guard or an output mask on it compares against that product, never against
+    its own axis's dim (gh-ocannl-1165). Every other axis — the run's own, ordinary components —
+    keeps its dim; a map of another rank is answered with [dims]. *)
+
 (** {2 The pair-conflict query}
 
     Can two accesses touch a common cell from different "threads"? Thread identity is a tuple of

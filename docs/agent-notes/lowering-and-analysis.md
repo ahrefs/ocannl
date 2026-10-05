@@ -268,6 +268,14 @@ files.
   No lowering path was found that pairs a flattened store with an ordinary access in one
   correctness query (the RNG store's `Affine` minor index gives the cross-nest analysis no chain,
   and nothing shares a loop with it), so the hole was latent — keep it that way by construction.
+  `Sched.Coalesce` (gh-ocannl-1165) is the first SCHEDULE producer of the composed form, and it
+  reached two per-axis consumers that had read every component against its own axis's dim:
+  `Stage`'s load edge guard and `Privatize`'s transfer guards and output-mask bound compared the
+  flattened column `f` with the head axis's 32 instead of 256 (zeroed loads, dropped
+  store-backs — a wrong VALUE, caught only by executed parity), and both rebuilt a `Sub_axis` as
+  `Fixed_idx 0` (the same rendered address, but an ordinary in-bounds coordinate to the view).
+  Per-axis bounds come from `Affine.axis_extents`, the view's group sizes; rebuilt components go
+  through `Schedule.rebuild_index`. A new per-axis consumer of index maps owes the same.
 - **A dynamic access is viewed, not refused** (gh-ocannl-1174): `Affine.access` carries the
   dynamic axis itself (`a_dyn_axis`), so `may_touch_same_cell`, `read_covered_before` and
   `Cost_model.access_cells` read a gather or scatter through `view ~dyn_axis` — refuse one

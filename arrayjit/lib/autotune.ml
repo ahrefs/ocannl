@@ -1399,8 +1399,8 @@ let optop_can_bind_hardware (op : SC.saved_optop) =
   | SC.Split { outer; inner; _ } -> axis_type_is_hardware outer || axis_type_is_hardware inner
   | SC.Retype { ty; _ } -> axis_type_is_hardware ty
   | SC.Swap _ | SC.Unroll _ -> false
-  | SC.Tensorize _ | SC.Partition _ | SC.Pad _ | SC.Stage _ | SC.Privatize _ | SC.Expand_zero _
-  | SC.Fuse_epilogue _ | SC.Split_reduce _ | SC.Fold_mma _ ->
+  | SC.Tensorize _ | SC.Partition _ | SC.Pad _ | SC.Coalesce _ | SC.Stage _ | SC.Privatize _
+  | SC.Expand_zero _ | SC.Fuse_epilogue _ | SC.Split_reduce _ | SC.Fold_mma _ ->
       true
 
 let optop_family (op : SC.saved_optop) =
@@ -1411,6 +1411,7 @@ let optop_family (op : SC.saved_optop) =
   | SC.Unroll _ -> "Unroll"
   | SC.Partition _ -> "Partition"
   | SC.Pad _ -> "Pad"
+  | SC.Coalesce _ -> "Coalesce"
   | SC.Stage _ -> "Stage"
   | SC.Privatize _ -> "Privatize"
   | SC.Expand_zero _ -> "Expand_zero"

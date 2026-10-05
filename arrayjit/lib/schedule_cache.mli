@@ -41,6 +41,7 @@ type mint_role =
   | Split_reduce_combine of int  (** The [i]-th combine symbol of a [Split_reduce]. *)
   | Fold_mma_lane
   | Fold_mma_block
+  | Coalesce_merged
 [@@deriving sexp, compare, equal]
 
 (** A process-independent name for a symbol occurring in a schedule. [Base i] is the [i]-th
@@ -64,6 +65,7 @@ type saved_optop =
   | Unroll of { axis : sym_ref; materialize : bool }
   | Partition of { axis : sym_ref; breakpoints : int list }
   | Pad of { axis : sym_ref; to_multiple_of : int }
+  | Coalesce of { outer : sym_ref; inner : sym_ref }
   | Stage of {
       source : int;
       tile_loops : sym_ref list;
