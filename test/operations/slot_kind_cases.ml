@@ -15,7 +15,15 @@ module Slot_kind = Test_utils.Slot_kind
 (* A tree with a GPU stanza, a configuration-reading stanza and a CPU-named one side by side in [a];
    a hip stanza one level down; a metal rule in [b]; [c] with nothing but a configuration-reading
    test; and [n] with nothing but a stanza that links no backend, under its own [scans]. The
-   aggregates in [a] reach one member each. *)
+   aggregates in [a] reach one member each.
+
+   Then one directory per way dune builds a stanza that no alias the argv names carries
+   (gh-ocannl-1095; Codex GPT-6.1 Sol review on PR #1027) -- each a way a configuration reader or a
+   named backend could run in a batch judged to hold neither: [f] reaches producing rules through
+   files (bandwidth_calibration's executable -> generated [.actual] -> diff alias, an explicit file
+   dependency, a [%{read:…}], a glob), [x] reaches [c]'s reader through an alias in another
+   directory (plain and recursive), and [g] reaches a reader through the dependencies of a test's
+   and an inline-test library's GENERATED per-stanza aliases. *)
 let tree =
   [
     ( "a",
@@ -79,6 +87,75 @@ let tree =
 (alias
  (name scans)
  (deps (alias runtest-t_none)))
+|dune}
+    );
+    ( "f",
+      {dune|
+(executable (name probe) (modules probe))
+
+(rule
+ (target probe.actual)
+ (deps ocannl_config (env_var OCANNL_BACKEND))
+ (action (with-stdout-to %{target} (run %{dep:probe.exe}))))
+
+(rule
+ ; ocannl-backend: cuda -- names the CUDA backend by name in this fixture.
+ (target named.actual)
+ (deps ocannl_config)
+ (action (with-stdout-to %{target} (run %{dep:probe.exe}))))
+
+(rule
+ (alias runtest-probe)
+ (action (diff probe.expected probe.actual)))
+
+(rule
+ (alias runtest-named)
+ (deps named.actual)
+ (action (progn)))
+
+(rule
+ (alias runtest-read)
+ (action (echo "%{read:probe.actual}")))
+
+(rule
+ (alias runtest-glob)
+ (deps (glob_files *.actual))
+ (action (progn)))
+|dune}
+    );
+    ( "x",
+      {dune|
+(alias
+ (name cross)
+ (deps (alias ../c/runtest-t_only)))
+
+(alias
+ (name cross_rec)
+ (deps (alias_rec ../c/runtest)))
+|dune}
+    );
+    ( "g",
+      {dune|
+(test
+ ; ocannl-backend: none -- links no backend in this fixture.
+ (name t_gate)
+ (deps ocannl_config (alias runtest-local_reader)))
+
+(test
+ (name local_reader)
+ (deps ocannl_config (env_var OCANNL_BACKEND)))
+
+(test
+ ; ocannl-backend: hip -- names the HIP backend by name in this fixture.
+ (name t_hip_dep)
+ (deps ocannl_config))
+
+(library
+ (name l)
+ (modules l)
+ (inline_tests
+  ; ocannl-backend: none -- links no backend in this fixture.
+  (deps ocannl_config (alias runtest-t_hip_dep))))
 |dune}
     );
   ]
@@ -166,6 +243,16 @@ let sets =
     ("runtest n", "names nothing");
     ("build @n/scans", "names nothing");
     ("promote", "names nothing");
+    (* What no alias the argv names carries, reached all the same. *)
+    ("build @f/runtest-probe", "names nothing + reads config");
+    ("build @f/runtest-named", "names cuda");
+    ("build @f/runtest-read", "names nothing + reads config");
+    ("build @f/runtest-glob", "names cuda + reads config");
+    ("build @@f/default", "names cuda + reads config");
+    ("build @x/cross", "names nothing + reads config");
+    ("build @x/cross_rec", "names nothing + reads config");
+    ("build @g/runtest-t_gate", "names nothing + reads config");
+    ("build @g/runtest-l", "names hip");
   ]
 
 let () =
@@ -217,4 +304,55 @@ let () =
   in
   printf "%-40s %s\n" "runtest d (two markers)" twice;
   p "a stanza carrying two markers makes the tree unreadable, never names nothing"
-    (String.is_prefix twice ~prefix:"unknown: the dune file in d is unreadable")
+    (String.is_prefix twice ~prefix:"unknown: the dune file in d is unreadable");
+  (* What the closure does not follow is every backend, but only where a reached stanza carries it:
+     a dependency form it does not read, an alias path leaving the tree, a dynamic action. *)
+  List.iter
+    [
+      ("package", {dune|(alias (name pkg) (deps (package neural_nets_lib)))|dune}, "build @d/pkg");
+      ("include", {dune|(alias (name inc) (deps (include deps.sexp)))|dune}, "build @d/inc");
+      ("escape", {dune|(alias (name up) (deps (alias ../../elsewhere/runtest)))|dune}, "build @d/up");
+      ("pform alias", {dune|(alias (name pf) (deps (alias %{env:A=x}/runtest)))|dune}, "build @d/pf");
+      ( "dynamic-run",
+        {dune|(rule
+ ; ocannl-backend: none -- links no backend in this fixture.
+ (alias dyn) (action (dynamic-run ./d.exe)))|dune},
+        "build @d/dyn" );
+    ]
+    ~f:(fun (what, dune, argv) ->
+      let _, shown =
+        judge
+          ~dune_files:[ ("d", dune); ("n", List.Assoc.find_exn tree "n" ~equal:String.equal) ]
+          argv
+      in
+      printf "%-40s %s\n" (argv ^ " (" ^ what ^ ")") shown;
+      p
+        (Printf.sprintf "an unfollowed %s is every backend" what)
+        (String.is_prefix shown ~prefix:"unknown: ");
+      let _, beside =
+        judge
+          ~dune_files:[ ("d", dune); ("n", List.Assoc.find_exn tree "n" ~equal:String.equal) ]
+          "build @n/scans"
+      in
+      p
+        (Printf.sprintf "an unfollowed %s is nothing to a batch not reaching it" what)
+        (String.equal beside "names nothing"));
+  (* A rule producing a source-like file is taken as always built: anything compiling may need it,
+     so a configuration-reading generator makes even the none-only batch read the configuration. *)
+  let _, generated =
+    judge
+      ~dune_files:
+        [
+          ( "s",
+            {dune|(rule
+ (target gen.ml)
+ (deps ocannl_config (env_var OCANNL_BACKEND))
+ (action (with-stdout-to %{target} (run %{dep:gen.exe}))))|dune}
+          );
+          ("n", List.Assoc.find_exn tree "n" ~equal:String.equal);
+        ]
+      "build @n/scans"
+  in
+  printf "%-40s %s\n" "build @n/scans (beside a generated .ml)" generated;
+  p "a configuration-reading generator of a source file is always reached"
+    (String.equal generated "names nothing + reads config")

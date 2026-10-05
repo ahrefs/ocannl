@@ -90,9 +90,35 @@ runtest c reaches exactly names nothing + reads config: true
 runtest n reaches exactly names nothing: true
 build @n/scans reaches exactly names nothing: true
 promote reaches exactly names nothing: true
+build @f/runtest-probe reaches exactly names nothing + reads config: true
+build @f/runtest-named reaches exactly names cuda: true
+build @f/runtest-read reaches exactly names nothing + reads config: true
+build @f/runtest-glob reaches exactly names cuda + reads config: true
+build @@f/default reaches exactly names cuda + reads config: true
+build @x/cross reaches exactly names nothing + reads config: true
+build @x/cross_rec reaches exactly names nothing + reads config: true
+build @g/runtest-t_gate reaches exactly names nothing + reads config: true
+build @g/runtest-l reaches exactly names hip: true
 runtest d (malformed marker)             unknown: the dune file in d is unreadable here ((Failure "a backend marker the env_var_deps contract refuses"))
 a malformed marker makes the tree unreadable, never CPU: true
 runtest d (no declaration)               names nothing + reads config
 a stanza declaring neither reads the configuration: true
 runtest d (two markers)                  unknown: the dune file in d is unreadable here ((Failure "a stanza carrying two backend markers"))
 a stanza carrying two markers makes the tree unreadable, never names nothing: true
+build @d/pkg (package)                   unknown: it reaches pkg in d, whose dependency (package neural_nets_lib) this does not follow
+an unfollowed package is every backend: true
+an unfollowed package is nothing to a batch not reaching it: true
+build @d/inc (include)                   unknown: it reaches inc in d, whose dependency (include deps.sexp) this does not follow
+an unfollowed include is every backend: true
+an unfollowed include is nothing to a batch not reaching it: true
+build @d/up (escape)                     unknown: it reaches up in d, whose dependency (alias ../../elsewhere/runtest) this does not follow
+an unfollowed escape is every backend: true
+an unfollowed escape is nothing to a batch not reaching it: true
+build @d/pf (pform alias)                unknown: it reaches pf in d, whose dependency (alias %{env:A=x}/runtest) this does not follow
+an unfollowed pform alias is every backend: true
+an unfollowed pform alias is nothing to a batch not reaching it: true
+build @d/dyn (dynamic-run)               unknown: it reaches the rule on dyn in d, whose dynamic-run action this does not follow
+an unfollowed dynamic-run is every backend: true
+an unfollowed dynamic-run is nothing to a batch not reaching it: true
+build @n/scans (beside a generated .ml)  names nothing + reads config
+a configuration-reading generator of a source file is always reached: true

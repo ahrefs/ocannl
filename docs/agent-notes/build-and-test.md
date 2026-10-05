@@ -2921,8 +2921,14 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   configuration -- asked only when the run reaches one (the same tool's `reads config` line:
   a stanza declaring `(env_var OCANNL_BACKEND)`, or one declaring neither), so a batch reaching
   only `none`-marked stanzas (`@test/operations/scans`) holds no backend and runs uncapped and
-  `--cpu` whatever a test configuration names (gh-ocannl-1095); a stanza carrying two markers is
-  an unreadable file, not one naming nothing: resolved, not read off `OCANNL_BACKEND`, because an
+  `--cpu` whatever a test configuration names (gh-ocannl-1095). That is only as sound as the
+  reached set is complete, so the reach is the closure of the argv's aliases under everything dune
+  builds first: dependency aliases resolved across directories (`alias_rec` too) through the same
+  inventory as the seeds (generated `runtest-<name>` included), every file a stanza mentions
+  (atoms, path pforms, globs) matched by basename to any rule's targets -- a diff alias reaches
+  the rule producing its `.actual` -- and source-like producers always; a dependency form it does
+  not follow (`package`, `include`, a pform alias path, `dynamic-run`) on a reached stanza is
+  every backend, and so is a stanza carrying two markers: resolved, not read off `OCANNL_BACKEND`, because an
   ordinary cc batch leaves it unset: `ocannl_read_config`
   (`test/config`, the same Utils resolution a test run makes) is built and asked from each
   directory whose `ocannl_config` sets a backend — `test/config` (copied by every `test/*`
