@@ -789,6 +789,13 @@ type report = {
       (** Candidate rejections aggregated by stable cause key. Their counts sum to
           [candidates_failed]. Cache-entry replay failures are excluded. *)
   rounds_run : int;  (** Beam-expansion rounds actually executed (0 = seeds only). *)
+  beam_width : int;
+      (** The beam width the search resolved ([?beam_width], else config [autotune_beam_width]): how
+          many of the fastest candidates each round expands, and the admitted-timing depth an
+          [?abandon] rule decides at. 0 in {!no_search_report}'s template, which {!tune} fills. With
+          [rounds_run], what a configured [autotune_rounds] / [autotune_beam_width] actually reached
+          — a caller passing [~rounds:0], as the benchmark runners do, runs no round whatever the
+          configuration says (gh-ocannl-1137). *)
   sketch_candidates : int;
       (** Whole-routine matmul-sketch instantiations seeded (0 when no matmul micro-kernel was
           detected or no tile sizes divide the extents), after the model pre-filter when one is
