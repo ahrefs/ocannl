@@ -1,20 +1,56 @@
-(* gh-ocannl-1165: the [Coalesce] op.
+(* gh-ocannl-1165: the [Coalesce] op and the coalesced tuner branch.
 
    The q/k/v projections' site [d[b,s,h,e] += w[h,e,k] * x[b,s,k]] carries its heads as an interior
-   batch loop right above the column role, so no column tile is wider than one head. Every access
-   reads [h; e] as adjacent plain iterators over unpadded axes, so the pair is ONE loop to the
-   compiler: [Sched.Coalesce] re-indexes it as [Sub_axis; Iterator f].
+   batch loop right above the column role, so no column tile is wider than one head; #915's bgrid-in
+   flavor recovered the heads-merged layout's launch order, and the residual is tile width. Every
+   access reads [h; e] as adjacent plain iterators over unpadded axes, so the pair is ONE loop to
+   the compiler: [Sched.Coalesce] re-indexes it as [Sub_axis; Iterator f], and the coalesced branch
+   ([Autotune.coalesced_seed_params]) enumerates the GPU scalar blocktile family over that lowering,
+   where a 64-wide column tile spans two heads of useful columns.
 
-   On hand-built nests (every backend, executed): the positive control applies, is [Op_legal], and
-   computes the uncoalesced nest's values bitwise; a per-head operand (one symbol of the pair read
-   alone) and a padded inner axis (dim larger than the loop extent: its stride is not the inner
-   extent, so the composed index is not the address) decline, each for its own reason. *)
+   Four parts:
+
+   - The op on hand-built nests (every backend, executed): the positive control applies, is
+   [Op_legal], and computes the uncoalesced nest's values bitwise; a per-head operand (one symbol of
+   the pair read alone) and a padded inner axis (dim larger than the loop extent: its stride is not
+   the inner extent, so the composed index is not the address) decline, each for its own reason.
+
+   - The real projection site through [%op]: the structural prefix, the coalesced site it produces
+   (one column role over every head's columns), the prefix alone executed against a serial
+   reference, and the branch's seeds — offered with column tiles wider than a head, every schedule
+   constructing and validating with the merged column blocks on [.x], every schedule surviving the
+   schedule cache's structural round trip, and on GPU backends every seed executed against the
+   serial reference.
+
+   - The v1 boundary at seeding: a companion nest over the uncoalesced axes (an elementwise tail of
+   the projection) cannot share the merged chain's geometry, so the branch offers nothing there
+   while the ordinary family still does.
+
+   - A fission segment's site, the form the real step searches: its [Zero_out] lands in a segment of
+   its own, and the unzeroed site coalesces by its own [Coalesce] alone.
+
+   Inputs vary with every index and keep every partial sum exactly representable in f32, so bitwise
+   equality is required whatever order a tiling accumulates in. *)
 
 open Base
+open Ocannl
+open Ocannl.Operation.DSL_modules
 module LL = Ir.Low_level
 module Sched = Ir.Schedule
+module SC = Ir.Schedule_cache
+module Asgns = Ir.Assignments
 module L = Ll_test
+
+(* The backend's accumulator residency, which a [Privatize] tile is minted at (gh-ocannl-1116). *)
+let accum_prec =
+  let caps = lazy (Context.codegen_capabilities (Context.auto ())) in
+  fun p -> (Lazy.force caps).Ir.Backend_intf.accum_prec p
+
 open Verdict.Claims
+
+let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
+let skipped = Verdict.skipped ~backend:backend_name
+let on_gpu = Sched.backend_is_gpu backend_name
 
 let raises_with ~substring f =
   match f () with
@@ -54,10 +90,12 @@ let () =
   let seed =
     [
       ( w,
-        Array.init (hh * ee * kk)
+        Array.init
+          (hh * ee * kk)
           ~f:(L.cycle_flat ~dims:[| hh; ee; kk |] ~modulus:11 ~offset:(-5.) ~stride:0.5) );
       ( x,
-        Array.init (bb * ss * kk)
+        Array.init
+          (bb * ss * kk)
           ~f:(L.cycle_flat ~dims:[| bb; ss; kk |] ~modulus:13 ~offset:(-6.) ~stride:0.25) );
       (g, Array.init hh ~f:(fun i -> Float.of_int (i + 1)));
     ]
@@ -111,3 +149,199 @@ let () =
     (raises_with ~substring:"padded axis" (fun () -> Sched.apply [ op ] o));
   p "padded inner axis: the oracle proves it illegal"
     (match Sched.op_legality o op with Sched.Op_illegal _ -> true | _ -> false)
+
+(* {1 The real projection site} *)
+
+let named name (comp : Asgns.comp) : Asgns.comp =
+  { comp with asgns = Asgns.Block_comment (name, comp.asgns) }
+
+let capture fwd =
+  let captured = ref None in
+  let _ctx, _r =
+    Context.compile
+      ~lowered_transform:(fun opt ->
+        captured := Some opt;
+        [ opt ])
+      (Context.auto ()) fwd Ir.Indexing.Empty
+  in
+  Option.value_exn ~here:[%here] !captured
+
+let run_with fwd tensor transform =
+  let ctx, routine =
+    Context.compile
+      ~lowered_transform:(fun o -> [ transform o ])
+      (Context.auto ()) fwd Ir.Indexing.Empty
+  in
+  Context.get_values (Context.run ctx routine) tensor.Tensor.value
+
+let bb = 2
+and ss = 64
+and hh = 4
+and ee = 32
+and kk = 16
+
+let x () =
+  NTDSL.init ~l:"co_x" ~prec:Ir.Ops.single ~o:[ bb; ss; kk ]
+    ~f:(Ll_test.cycle ~dims:[| bb; ss; kk |] ~modulus:13 ~offset:0. ~stride:0.25)
+    ()
+
+let w () =
+  NTDSL.init ~l:"co_w" ~prec:Ir.Ops.single ~o:[ hh; ee; kk ]
+    ~f:(Ll_test.cycle ~dims:[| hh; ee; kk |] ~modulus:11 ~offset:(-5.) ~stride:0.5)
+    ()
+
+(* The gpt2 q/k/v projection's own layout: [d[b,s,h,e] += x[b,s,k] * w[h,e,k]]. *)
+let projection () =
+  let xv = x () and wv = w () in
+  let%op out = xv +* "bsk;hjk=>bshj" wv in
+  out
+
+let blocktile p = p.Autotune.sk_gpu && not p.Autotune.sk_mma
+
+let () =
+  let reference = projection () in
+  let ref_fwd = named "co_ref" (Train.forward reference) in
+  let want = run_with ref_fwd reference Fn.id in
+  p "projection: the serial reference is not all zeros"
+    (Array.exists want ~f:(fun v -> Float.(v <> 0.)));
+  let cand = projection () in
+  let fwd = named "co_sched" (Train.forward cand) in
+  let opt = capture fwd in
+  let prefix = Autotune.coalesce_prefix opt in
+  p "projection: the coalesced layout's prefix applies" (Option.is_some prefix);
+  let prefix = Option.value ~default:[] prefix in
+  p "projection: the prefix expands the zeroing, coalesces its pair, then the site's"
+    (match prefix with
+    | [ Sched.Expand_zero _; Sched.Coalesce _; Sched.Coalesce _ ] -> true
+    | _ -> false);
+  p_all "projection: every Coalesce of the prefix is Op_legal" (Sched.schedule_legality opt prefix)
+    ~f:(fun (op, v) ->
+      match op with Sched.Coalesce _ -> Sched.equal_op_verdict v Sched.Op_legal | _ -> true);
+  let prepared = Sched.apply prefix opt in
+  let site = Autotune.detect_matmul prepared.LL.llc in
+  p "projection: the coalesced site's column role spans every head's columns"
+    (Option.exists site ~f:(fun site -> site.Autotune.m_nj = hh * ee));
+  Option.iter site ~f:(fun site ->
+      p_empty "projection: no interior batch loop is left among the coalesced site's batch loops"
+        ~over:(site.Autotune.m_bo @ site.Autotune.m_bi)
+        site.Autotune.m_bi);
+  p "projection: the prefix alone computes the serial reference bitwise"
+    (Array.equal Float.equal want (run_with fwd cand (fun o -> Sched.apply prefix o)));
+  (* The branch's seeds: synthetic no-limits keep the enumeration machine-independent. *)
+  let limits = Ir.Backend_intf.no_hardware_limits in
+  let seeds = Autotune.coalesced_seed_params ~is_gpu:true ~is_cpu:false ~limits opt in
+  p "projection: the coalesced branch offers seeds" (not (List.is_empty seeds));
+  p_all "projection: every coalesced seed is a scalar blocktile seed stamped coalesced" seeds
+    ~f:(fun q -> q.Autotune.sk_coalesce && blocktile q && not q.Autotune.sk_epilogue);
+  p_exists "projection: some coalesced seed's column tile is wider than one head" seeds ~f:(fun q ->
+      q.Autotune.sk_bn > ee);
+  p_empty "projection: the coalesced branch offers nothing off GPU" ~over:seeds
+    (Autotune.coalesced_seed_params ~is_gpu:false ~is_cpu:true ~limits opt);
+  let canon = SC.canonicalize opt in
+  let schedules = List.map seeds ~f:(fun q -> (q, Autotune.sketch_schedule ~accum_prec ~p:q opt)) in
+  p_all
+    "projection: every coalesced schedule constructs, validates and launches the merged column \
+     blocks on .x"
+    schedules ~f:(fun (q, sched) ->
+      match Sched.apply sched opt with
+      | o -> (
+          match LL.validate_parallel o.LL.optimize_ctx.LL.placements o.LL.llc with
+          | () -> (LL.launch_dims o.LL.llc).LL.grid.(0) = hh * ee / q.Autotune.sk_bn
+          | exception exn ->
+              Stdio.eprintf "validate_parallel FAILED: %s\n" (Exn.to_string exn);
+              false)
+      | exception exn ->
+          Stdio.eprintf "schedule FAILED: %s\n" (Exn.to_string exn);
+          false);
+  (* The persisted form names the merged loop structurally: replaying the saved schedule against the
+     canonical form rebuilds code with the same digest. *)
+  p_all "projection: every coalesced schedule survives the cache's structural round trip" schedules
+    ~f:(fun (_, sched) ->
+      let saved, _ = SC.to_saved (SC.base_registry canon) sched in
+      let replayed, _ = SC.of_saved canon saved in
+      List.exists saved ~f:(function SC.Coalesce _ -> true | _ -> false)
+      && String.equal
+           (SC.digest (SC.canonicalize (Sched.apply sched opt)))
+           (SC.digest (SC.canonicalize (Sched.apply replayed opt))));
+  Stdio.eprintf "schedule_coalesce: backend %s, %d coalesced seed(s): %s (not part of the golden)\n"
+    backend_name (List.length seeds)
+    (String.concat ~sep:", "
+       (List.map seeds ~f:(fun q ->
+            Printf.sprintf "%dx%dx%d/%dx%d%s" q.Autotune.sk_bm q.Autotune.sk_bn q.Autotune.sk_bk
+              q.Autotune.sk_tm q.Autotune.sk_tn
+              (if q.Autotune.sk_batch_grid then " bgrid" else ""))));
+  if on_gpu then begin
+    let n_match = ref 0 in
+    List.iter schedules ~f:(fun (q, _) ->
+        match
+          run_with fwd cand (fun o -> Sched.apply (Autotune.sketch_schedule ~accum_prec ~p:q o) o)
+        with
+        | got -> if Array.equal Float.equal got want then Int.incr n_match
+        | exception exn -> Stdio.eprintf "coalesced seed FAILED: %s\n" (Exn.to_string exn));
+    p "projection: every coalesced seed executes to the serial reference bitwise"
+      (!n_match = List.length schedules && !n_match > 0)
+  end
+  else begin
+    Stdio.eprintf "%s cannot execute workgroup-shared staging — the execution leg is skipped\n"
+      backend_name;
+    skipped "projection: every coalesced seed executes to the serial reference bitwise"
+  end
+
+(* {1 The v1 boundary: a companion over the uncoalesced axes} *)
+
+let () =
+  let cand =
+    let xv = x () and wv = w () in
+    let%op z = xv +* "bsk;hjk=>bshj" wv in
+    Train.set_materialized z.Tensor.value;
+    let%op y = relu z in
+    y
+  in
+  let opt = capture (named "co_companion" (Train.forward cand)) in
+  let limits = Ir.Backend_intf.no_hardware_limits in
+  p "companion: the site's own pair still coalesces" (Option.is_some (Autotune.coalesce_prefix opt));
+  let family = Autotune.sketch_seed_params ~is_gpu:true ~is_cpu:false ~limits opt in
+  p_exists "companion: the ordinary family still covers the tail" family ~f:blocktile;
+  p_empty
+    "companion: the elementwise tail cannot share the merged chain, so the branch offers nothing"
+    ~over:family
+    (Autotune.coalesced_seed_params ~is_gpu:true ~is_cpu:false ~limits opt)
+
+(* {1 A fission segment's site}
+
+   In a routine that fissions, the projection's [Zero_out] lands in a [`Zeros] segment of its own
+   and the site's segment is unzeroed: the per-segment seeds the real step searches see the site's
+   own [Coalesce] alone. A row reduction of the materialized projection is the cross-nest edge that
+   cuts the routine. *)
+
+let () =
+  let cand =
+    let xv = x () and wv = w () in
+    let%op z = xv +* "bsk;hjk=>bshj" wv in
+    Train.set_materialized z.Tensor.value;
+    let%op y = z ++ "bshj=>bs" in
+    y
+  in
+  let opt = capture (named "co_fission" (Train.forward cand)) in
+  let limits = Ir.Backend_intf.no_hardware_limits in
+  (* The search's own segment enumeration (GPU presets: unannotated neighbours coalesce back into
+     one kernel, so an empty preset would never cut). *)
+  let segments =
+    Sched.fission_scheduled ~promote_locals:true
+      ~preset:(Sched.default_gpu ~min_parallel:1 ~limits)
+      ~zero_sched:(Sched.zero_expansion ~limits) ~static_indices:[]
+      {
+        opt with
+        LL.traced_store = Hashtbl.copy opt.LL.traced_store;
+        LL.optimize_ctx = LL.copy_optimize_ctx opt.LL.optimize_ctx;
+      }
+  in
+  p "fission: the routine fissions" (List.length segments > 1);
+  p_exists
+    "fission: the site's unzeroed segment coalesces by its own Coalesce alone, and seeds the branch"
+    segments ~f:(fun (kind, pre, _, _) ->
+      match (kind, Autotune.coalesce_prefix pre) with
+      | `Normal, Some [ Sched.Coalesce _ ] ->
+          not
+            (List.is_empty (Autotune.coalesced_seed_params ~is_gpu:true ~is_cpu:false ~limits pre))
+      | _ -> false)

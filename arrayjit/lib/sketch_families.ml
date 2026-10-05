@@ -47,6 +47,7 @@ type sketch_params = {
   sk_epilogue : bool;
   sk_batch_grid : bool;
   sk_batch_inner : bool;
+  sk_coalesce : bool;
   sk_swizzle : LL.swizzle_kind option;
   sk_depth : int;
   sk_pack_prec : Ir.Ops.prec option;
@@ -2228,7 +2229,7 @@ let gpu_conv_sketch_schedule (site : conv_site)
    family ended the whole search (reproducible on Metal with test/operations/autotune_fission_sketch
    before this). Typing them here rather than around the whole transform closure keeps the boundary
    narrow, which is the point: an arbitrary exception escaping a transform stays fatal. *)
-let sketch_schedule_unchecked ~accum_prec ~p (opt : LL.optimized) : Sched.schedule =
+let family_schedule ~accum_prec ~p (opt : LL.optimized) : Sched.schedule =
   let sched, d =
     if p.sk_conv then
       match detect_conv opt.LL.llc with
@@ -2257,6 +2258,69 @@ let sketch_schedule_unchecked ~accum_prec ~p (opt : LL.optimized) : Sched.schedu
        [shared] outright and the twin would fail for the wrong reason. *)
     sched @ [ Sched.Fuse_epilogue { target = d; shared = p.sk_gpu && p.sk_mma } ]
   else sched
+
+(* {2 The coalesced layout (gh-ocannl-1165)}
+
+   The q/k/v projections' site [d[b,s,h,e] += w[h,e,k] * x[b,s,k]] carries the heads as an interior
+   batch loop ([m_bi]) right above the column role [m_j = e], so its column tile is at most one head
+   wide: #915's bgrid-in flavor recovered the launch order of the heads-merged layout, not its tile
+   width. Every access reads [h; e] as adjacent plain iterators over unpadded axes, so the pair is
+   one loop to the compiler ([Sched.Coalesce]): the merged column role ranges over all the heads'
+   columns, and a 64-wide tile spans two heads of useful columns.
+
+   The coalesced site is a different lowering, so it is prepared once, hermetically, and the family
+   is enumerated over the prepared code: [coalesced] returns the structural prefix and the code it
+   produces. The prefix is a function of the site alone — [Coalesce (last m_bi, m_j)], preceded,
+   where [d]'s whole-node [Zero_out] shares the routine, by its expansion with the zeroing nest's
+   own last two loops coalesced alike: that nest then takes the merged chain's geometry as an
+   ordinary companion ([companion_geometry]), where an unexpanded [Zero_out] would keep the
+   uncoalesced chain. Whether the prefix applies is the op's own verdict, probed: a per-head
+   operand, a padded inner axis or any other access shape declines there, and no coalesced seed
+   exists. *)
+let coalesced (opt : LL.optimized) : (Sched.schedule * LL.optimized) option =
+  match detect_matmul opt.LL.llc with
+  | None -> None
+  | Some site -> (
+      match List.last site.m_bi with
+      | None -> None
+      | Some (h, _) -> (
+          let zero_ops =
+            if not site.m_zeroed then []
+            else
+              (* Rank >= 3 here: an interior batch axis sits between the row and column axes. *)
+              let ez, zsyms = Sched.expand_zero ~tn:site.m_d in
+              let rank = List.length zsyms in
+              [
+                ez;
+                fst
+                  (Sched.coalesce
+                     ~outer:(List.nth_exn zsyms (rank - 2))
+                     ~inner:(List.nth_exn zsyms (rank - 1)));
+              ]
+          in
+          let prefix = zero_ops @ [ fst (Sched.coalesce ~outer:h ~inner:site.m_j) ] in
+          let hermetic =
+            {
+              opt with
+              LL.traced_store = Hashtbl.copy opt.LL.traced_store;
+              LL.optimize_ctx = LL.copy_optimize_ctx opt.LL.optimize_ctx;
+            }
+          in
+          match Sched.apply prefix hermetic with
+          | exception Invalid_argument _ -> None
+          | prepared -> Some (prefix, prepared)))
+
+let coalesce_prefix (opt : LL.optimized) : Sched.schedule option = Option.map (coalesced opt) ~f:fst
+
+let sketch_schedule_unchecked ~accum_prec ~p (opt : LL.optimized) : Sched.schedule =
+  if not p.sk_coalesce then family_schedule ~accum_prec ~p opt
+  else
+    match coalesced opt with
+    | None ->
+        invalid_arg
+          "Autotune sketch: no matmul site whose interior batch loop coalesces into the column \
+           role (gh-ocannl-1165)"
+    | Some (prefix, prepared) -> prefix @ family_schedule ~accum_prec ~p prepared
 
 let sketch_schedule ~accum_prec ~p (opt : LL.optimized) : Sched.schedule =
   match sketch_schedule_unchecked ~accum_prec ~p opt with
@@ -2325,6 +2389,7 @@ let conv_seed_params ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits)
           sk_depth = 1;
           sk_batch_grid = false;
           sk_batch_inner = false;
+          sk_coalesce = false;
           sk_pack_prec = None;
           sk_tile = None;
         }
@@ -2859,6 +2924,7 @@ let matmul_flavor_tree ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limit
       sk_depth = 1;
       sk_batch_grid = false;
       sk_batch_inner = false;
+      sk_coalesce = false;
       sk_pack_prec = None;
       sk_tile = None;
     }
@@ -3700,6 +3766,35 @@ let sketch_seed_params ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limit
           if (not (List.is_empty seeds)) && Sched.can_fuse_epilogue ~target:d opt then
             seeds @ List.map seeds ~f:(fun p -> { p with sk_epilogue = true })
           else seeds)
+
+(* The coalesced branch's seeds (gh-ocannl-1165): the matmul family enumerated over the prepared
+   coalesced code ([coalesced]), so every refutation — launch caps, companion coverage of the merged
+   chain, divisibility — is judged on the site the schedule will actually build, and each leaf is
+   stamped [sk_coalesce]. A separate branch beside {!sketch_seed_params}, not a level of its tree:
+   the tree is over one lowering, this branch over another. GPU scalar blocktile leaves only: the
+   residual the layout targets is the scalar family's tile width (#915 closed the tensorized gap on
+   CUDA tf32, and gfx1151 has no f32 tile shape), and the tensorized pipelines' [Tensorize] reads
+   each operand's last two axes as its tile, which a [Sub_axis] run between the roles is not.
+   Unfused only: [Fuse_epilogue]'s tail is a nest over the target's own dims, which the coalesced
+   accumulation no longer indexes axis by axis (and the projections have no tail). The probe's
+   minted symbols are discarded: the seeds carry none, and a seeding pass must not shift the names
+   every later compile mints. *)
+let coalesced_seed_params ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits)
+    (opt : LL.optimized) : sketch_params list =
+  if not is_gpu then []
+  else
+    Idx.discarding_symbols (fun () ->
+        match coalesced opt with
+        | None -> []
+        | Some (_, prepared) -> (
+            match detect_matmul prepared.LL.llc with
+            | None -> []
+            | Some site ->
+                matmul_seed_params ~is_gpu ~is_cpu ~limits ~opt:prepared site
+                |> List.filter_map ~f:(fun p ->
+                    if p.sk_gpu && (not p.sk_mma) && not p.sk_epilogue then
+                      Some { p with sk_coalesce = true }
+                    else None)))
 
 (* The exported tree view of the matmul family (site detection included); the conv family factors
    the same way as a follow-up. *)

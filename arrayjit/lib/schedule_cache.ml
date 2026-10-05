@@ -689,8 +689,9 @@ type entry = {
    timed, the entry is still a sound schedule but no longer the answer the key asks for, and a warm
    cache would replay it forever. Non-current entries read as misses, so the next search re-tunes
    and overwrites. 8 (7 landed first): a fissioned winner's [segments] carry the segmentation and
-   every segment's schedule (gh-ocannl-1164). *)
-let entry_version = 8
+   every segment's schedule (gh-ocannl-1164). 10 (9 is gh-ocannl-1175's): the coalesced layout's
+   seeds, a search branch beside the sketch families (gh-ocannl-1165). *)
+let entry_version = 10
 
 let sanitize name =
   String.map name ~f:(fun c ->

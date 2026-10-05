@@ -6,3 +6,22 @@ per-head operand: Coalesce declines because a read does not hold the pair: true
 per-head operand: the oracle proves it illegal: true
 padded inner axis: Coalesce declines on the dims: true
 padded inner axis: the oracle proves it illegal: true
+projection: the serial reference is not all zeros: true
+projection: the coalesced layout's prefix applies: true
+projection: the prefix expands the zeroing, coalesces its pair, then the site's: true
+projection: every Coalesce of the prefix is Op_legal: true
+projection: the coalesced site's column role spans every head's columns: true
+projection: no interior batch loop is left among the coalesced site's batch loops: true
+projection: the prefix alone computes the serial reference bitwise: true
+projection: the coalesced branch offers seeds: true
+projection: every coalesced seed is a scalar blocktile seed stamped coalesced: true
+projection: some coalesced seed's column tile is wider than one head: true
+projection: the coalesced branch offers nothing off GPU: true
+projection: every coalesced schedule constructs, validates and launches the merged column blocks on .x: true
+projection: every coalesced schedule survives the cache's structural round trip: true
+projection: every coalesced seed executes to the serial reference bitwise: true
+companion: the site's own pair still coalesces: true
+companion: the ordinary family still covers the tail: true
+companion: the elementwise tail cannot share the merged chain, so the branch offers nothing: true
+fission: the routine fissions: true
+fission: the site's unzeroed segment coalesces by its own Coalesce alone, and seeds the branch: true
