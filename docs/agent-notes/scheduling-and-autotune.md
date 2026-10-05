@@ -1197,6 +1197,17 @@ files.
   directory across two-arm scenarios — set `tune_placement_store=false` (or pass
   `~placement_store:false`; gh-ocannl-1020) rather than deleting `placements-*.sexp` entries:
   `autotune_arm_containment`'s rule passes it on the command line.
+- **A test claiming that a store or a replay happened waives on the cache's REPORTED refusal, not
+  on a reference context** (gh-ocannl-1040/1043). Every store and lookup absorbs a filesystem
+  refusal by design: the lock, the regime stamp, the write, or a Windows commit that outlives
+  `Atomic_file`'s one-second retry (Defender holding the staging file is the suspect on CI). So a
+  claim like "a clean cold run records its decision" can fail for a reason its timing predicates
+  never see. Wrap the run in `Schedule_cache.recording_cache_io` and waive on any `refusal`, as an
+  `` `Environment `` skip (`Verdict.gated`), never as a silent `true`. Gate on the timing identity
+  of the run's OWN context, the one the store keys on, never a reference context's.
+  `placement_store`'s `persistence` record and `unless_refused` are the exemplar.
+  `schedule_cache_regime` pins the record itself: committed and admitted I/O, the regime, lock and
+  commit refusals, keyless calls, and nesting.
 ## Scan-loop scheduling
 
 - **A `Scan_loop` is opaque to the schedule ops in both directions and transparent to the
