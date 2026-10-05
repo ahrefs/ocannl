@@ -164,6 +164,8 @@ type report = {
   fiss_sketch_candidates : int;
   fiss_sketch_timed : int;
   fiss_sketch_composite : [ `Ineligible | `Singles_refused | `Proposed | `Refused | `Timed ];
+  fiss_sketch_playoff_timed : int;
+  fiss_sketch_playoff_swaps : int;
   split_reduce_candidates : int;
   split_reduce_timed : int;
   split_reduce_composite_eligible : bool;
@@ -240,6 +242,8 @@ let no_search_report ~timing =
     fiss_sketch_candidates = 0;
     fiss_sketch_timed = 0;
     fiss_sketch_composite = `Ineligible;
+    fiss_sketch_playoff_timed = 0;
+    fiss_sketch_playoff_swaps = 0;
     split_reduce_candidates = 0;
     split_reduce_timed = 0;
     split_reduce_composite_eligible = false;
@@ -372,6 +376,18 @@ let float_setting ~default s = try Float.of_string (String.strip s) with _ -> de
 
 (* A candidate round-improvement below this fraction of the incumbent ends the search. *)
 let min_progress = 0.01
+
+(* The composite playoff (gh-ocannl-1166). A per-segment single is timed as the WHOLE routine with
+   every other segment on its untuned preset, so its time carries that backdrop: on gpt2_mini/CUDA
+   tf32 the q/k/v singles measure about 23.2 ms where the composite they staff runs at 2.4 ms, and
+   two replicate searches put the same single 0.02-0.03 ms apart, which is as large as the whole gap
+   between the site's top four geometries. The per-key crown among them was a lottery (one replicate
+   crowned [mma 32x32x0 bgrid], the other [mma 16x32x0 bgrid-in]). The playoff re-ranks those
+   near-ties where the backdrop is small: inside the composite. A single within [playoff_margin] of
+   its key's best single is close enough that the backdrop's noise could have inverted the order. At
+   most [playoff_width] of them per key go to the playoff, nearest first. *)
+let playoff_margin = 0.005
+let playoff_width = 2
 
 (* The beam holds no compiled candidate exactly when nothing was timed, which every consumer of the
    winner tests first ([nothing_timed]). *)
@@ -4031,6 +4047,8 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                     fiss_sketch_candidates = 0;
                     fiss_sketch_timed = 0;
                     fiss_sketch_composite = `Ineligible;
+                    fiss_sketch_playoff_timed = 0;
+                    fiss_sketch_playoff_swaps = 0;
                     split_reduce_candidates = 0;
                     split_reduce_timed = 0;
                     split_reduce_composite_eligible = false;
@@ -4347,6 +4365,11 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
         in
         let n_fiss_sketch_timed = ref 0
         and fs_composite = ref `Ineligible
+        (* gh-ocannl-1166: while the composite playoff runs, its F_sketch windows are counted as
+           playoff windows rather than as singles or as the coarse composite's own outcome. *)
+        and in_playoff = ref false
+        and n_playoff_timed = ref 0
+        and n_playoff_swaps = ref 0
         and n_sr_timed = ref 0
         and sr_composite_eligible = ref false
         and sr_composite_timed = ref false in
@@ -4506,6 +4529,8 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
             fiss_sketch_candidates = !n_fiss_sketch_candidates;
             fiss_sketch_timed = !n_fiss_sketch_timed;
             fiss_sketch_composite = !fs_composite;
+            fiss_sketch_playoff_timed = !n_playoff_timed;
+            fiss_sketch_playoff_swaps = !n_playoff_swaps;
             split_reduce_candidates = !n_split_reduce_candidates;
             split_reduce_timed = !n_sr_timed;
             split_reduce_composite_eligible = !sr_composite_eligible;
@@ -4687,6 +4712,7 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                            verdict. Keep that accounting stable under refusal; the historical
                            [timings_contended] counter covers every unusable timing result. *)
                         (match spec with
+                        | Fiss (F_sketch _) when !in_playoff -> Int.incr n_playoff_timed
                         | Fiss (F_sketch { entries; fine }) -> (
                             Int.incr n_fiss_sketch_timed;
                             if not fine then
@@ -4723,6 +4749,7 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                         (* Publish window accounting before the post-admission injection seam: it
                            can raise, and the partial report still owns this completed window. *)
                         (match spec with
+                        | Fiss (F_sketch _) when !in_playoff -> Int.incr n_playoff_timed
                         | Fiss (F_sketch { entries; fine }) -> (
                             Int.incr n_fiss_sketch_timed;
                             if not fine then
@@ -5149,8 +5176,19 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                      && not (Hash_set.mem coarse_single_measured key))
             then `Singles_refused
             else `Ineligible;
-          if Poly.equal !fs_composite `Proposed then
-            Option.iter (try_spec (Fiss (F_sketch { entries = recombined; fine = false }))) ~f:admit;
+          (* A timed composite, as the playoff's starting incumbent: its entries, its segmentation
+             and its time. *)
+          let try_composite ~fine entries =
+            Option.map
+              (try_spec (Fiss (F_sketch { entries; fine })))
+              ~f:(fun ((_, ms) as r) ->
+                admit r;
+                (entries, fine, ms))
+          in
+          let coarse_composite =
+            if Poly.equal !fs_composite `Proposed then try_composite ~fine:false recombined
+            else None
+          in
           (* The fine composite (gh-ocannl-574): the fine winner in a multi-segment routine needs
              the freed site's best AND the other segments' bests in one candidate. Keys address the
              fine segmentation; segments unchanged by the finer cuts share their digest with the
@@ -5164,10 +5202,65 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                   best_single_for ~fine_ok:true key)
             else []
           in
-          if List.length fine_recombined >= 2 then
-            Option.iter
-              (try_spec (Fiss (F_sketch { entries = fine_recombined; fine = true })))
-              ~f:admit;
+          let fine_composite =
+            if List.length fine_recombined >= 2 then try_composite ~fine:true fine_recombined
+            else None
+          in
+          (* The composite playoff (gh-ocannl-1166; see [playoff_margin]): starting from the faster
+             timed composite, each key in turn tries its near-tie singles in the composite's place,
+             and a faster alternate becomes the incumbent the later keys build on. Coordinate
+             descent over the keys, at most [playoff_width] alternates each, so the cost is linear
+             in the keyed segments rather than the cartesian product the recombination avoids. *)
+          let playoff_contenders ~fine_ok ~current key =
+            let singles =
+              List.filter_map !fiss_single_results ~f:(fun (k, fine, (p, ms)) ->
+                  if String.equal k key && (fine_ok || not fine) then Some (p, ms) else None)
+              |> List.sort ~compare:(fun (_, a) (_, b) -> Float.compare a b)
+            in
+            match singles with
+            | [] -> []
+            | (_, best_ms) :: _ ->
+                List.fold singles ~init:[] ~f:(fun acc (p, ms) ->
+                    if
+                      Float.(ms <= best_ms *. (1. +. playoff_margin))
+                      && (not (Poly.equal p current))
+                      && not (List.mem acc p ~equal:Poly.equal)
+                    then p :: acc
+                    else acc)
+                |> List.rev |> Fn.flip List.take playoff_width
+          in
+          (match
+             List.min_elt
+               (List.filter_opt [ coarse_composite; fine_composite ])
+               ~compare:(fun (_, _, a) (_, _, b) -> Float.compare a b)
+           with
+          | None -> ()
+          | Some (entries, fine, ms) ->
+              progress_phase_begin "playoff" None;
+              in_playoff := true;
+              Exn.protect
+                ~finally:(fun () -> in_playoff := false)
+                ~f:(fun () ->
+                  ignore
+                    (List.fold entries ~init:(entries, ms)
+                       ~f:(fun (incumbent, incumbent_ms) (key, _) ->
+                         let current = List.Assoc.find_exn incumbent ~equal:String.equal key in
+                         List.fold (playoff_contenders ~fine_ok:fine ~current key)
+                           ~init:(incumbent, incumbent_ms) ~f:(fun (incumbent, incumbent_ms) p ->
+                             let alternate =
+                               List.map incumbent ~f:(fun (k, q) ->
+                                   if String.equal k key then (k, p) else (k, q))
+                             in
+                             match try_composite ~fine alternate with
+                             | Some (_, _, alt_ms) when Float.(alt_ms < incumbent_ms) ->
+                                 Int.incr n_playoff_swaps;
+                                 logf "playoff: segment %s: %s replaces %s (%.4f ms < %.4f ms)"
+                                   (dshort key) (spec_label (Whole (W_sketch p)))
+                                   (spec_label (Whole (W_sketch current)))
+                                   alt_ms incumbent_ms;
+                                 (alternate, alt_ms)
+                             | Some _ | None -> (incumbent, incumbent_ms)))
+                      : (string * sketch_params) list * float)));
           (* Multi-site split-reduce recombination: apply each detected site's best-timed
              [num_blocks] simultaneously — the sites are distinct statements, so their preludes
              compose. Same rationale as the sketch recombination above: singles keep every value
@@ -5363,6 +5456,8 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
               fiss_sketch_candidates = List.length fiss_sketch_specs;
               fiss_sketch_timed = !n_fiss_sketch_timed;
               fiss_sketch_composite = !fs_composite;
+              fiss_sketch_playoff_timed = !n_playoff_timed;
+              fiss_sketch_playoff_swaps = !n_playoff_swaps;
               split_reduce_candidates = List.length sr_specs;
               split_reduce_timed = !n_sr_timed;
               split_reduce_composite_eligible = !sr_composite_eligible;

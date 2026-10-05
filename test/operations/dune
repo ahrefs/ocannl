@@ -7624,6 +7624,19 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; gh-ocannl-1166: the composite playoff re-ranks near-tie per-segment singles inside the
+; recombined composite. Scripted timings, pinned to cc.
+
+(test
+ (name autotune_composite_playoff)
+ ; ocannl-backend: cc -- Context.cpu (); the scripted ranking is backend-independent
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules autotune_composite_playoff)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 (test
  (name autotune_measured_refusal)
  (package neural_nets_lib)

@@ -1,0 +1,11 @@
+ties: the coarse composite was timed: true
+ties: the playoff timed alternates, at most two per segment: true
+ties: every composite window is the recombination's or the playoff's: true
+ties: each faster alternate replaced the incumbent: true
+ties: the crown is the last alternate: true
+ties: the crown's time is the last alternate's: true
+slower: the playoff timed alternates: true
+slower: no slower alternate replaced the incumbent: true
+slower: the crown is the recombined composite: true
+spread: the coarse composite was timed: true
+spread: singles 1% apart leave the playoff nothing to time: true

@@ -801,6 +801,16 @@ type report = {
           proposal, but it did not complete a timing window; [`Refused] and [`Timed] record that
           proposal's refused or admitted window. Window outcomes are published before post-admission
           callbacks can raise, including in partial reports. *)
+  fiss_sketch_playoff_timed : int;
+      (** The composite playoff's windows (gh-ocannl-1166), counted here and NOT in
+          [fiss_sketch_timed]. A per-segment single is timed against every other segment's untuned
+          preset, a backdrop several times the composite's time, so near-tie singles are re-ranked
+          inside the faster timed composite: per keyed segment, up to two singles within 0.5% of the
+          segment's best single take its place. Includes refused windows, like [fiss_sketch_timed].
+      *)
+  fiss_sketch_playoff_swaps : int;
+      (** Of [fiss_sketch_playoff_timed], the alternates that ran faster than the incumbent
+          composite and replaced it, so later segments' alternates build on them. *)
   split_reduce_candidates : int;
       (** Split-reduce seeds (gh-ocannl-484 task 3): one candidate per {!split_reduce_sites} site
           within the [max_split_reduce_sites] cap and eligible [num_blocks] value — the two-pass

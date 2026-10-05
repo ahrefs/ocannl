@@ -650,11 +650,13 @@ type entry = {
 [@@deriving sexp]
 
 (* Bumped on a decode-incompatible payload change — and on a SEARCH-MENU change (gh-ocannl-728, 4 ->
-   5: the [bgrid-in] batch flavor of the GPU matmul sketches). A stored crown is the best of the
-   menu that searched it; once the menu offers a candidate the search never timed, the entry is
-   still a sound schedule but no longer the answer the key asks for, and a warm cache would replay
-   it forever. Non-current entries read as misses, so the next search re-tunes and overwrites. *)
-let entry_version = 5
+   5: the [bgrid-in] batch flavor of the GPU matmul sketches; gh-ocannl-1166, 6 -> 7, with 6
+   reserved for gh-ocannl-1164: the composite playoff, which times candidates the earlier search
+   never did). A stored crown is the best of the menu that searched it; once the menu offers a
+   candidate the search never timed, the entry is still a sound schedule but no longer the answer
+   the key asks for, and a warm cache would replay it forever. Non-current entries read as misses,
+   so the next search re-tunes and overwrites. *)
+let entry_version = 7
 
 let sanitize name =
   String.map name ~f:(fun c ->
