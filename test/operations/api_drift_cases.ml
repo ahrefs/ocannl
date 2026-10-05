@@ -198,6 +198,7 @@ let () =
       "(executable (name main) (modules %{read-lines:modules.txt}))";
       "(library (name lib) (public_name pkg.lib) (flags %{read:flags.txt}))";
       "(include dune.inc)";
+      "(dynamic_include generated.inc)";
     ] ~f:(fun dune ->
       Option.value_map (dune_refusal dune) ~default:false ~f:(fun message ->
           String.is_substring message ~substring:"lib/dune: "

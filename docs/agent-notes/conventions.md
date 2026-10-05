@@ -57,7 +57,7 @@ files.
   configurations inside `libraries` follow the separate target/interface rule above.
   These forms refuse the report instead of being misread, none present in the API-root Dune files
   or their history (gh-ocannl-1201): a selected interface or non-module target (only `.ml` targets
-  are read), an `(include …)` stanza, and an `(:include …)` term or `%{read:…}`,
+  are read), an `(include …)` or `(dynamic_include …)` stanza, and an `(:include …)` term or `%{read:…}`,
   `%{read-lines:…}` or `%{read-strings:…}` form in a module-owner or generator stanza, whose
   external file's edits this reader would neither see nor attribute.
   `--context N` (gh-ocannl-1213) prints an entry changed on both sides compactly: both attribution

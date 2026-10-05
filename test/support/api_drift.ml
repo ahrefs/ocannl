@@ -70,10 +70,10 @@ let consumed_heads =
 (* The pforms that expand to a file's contents. *)
 let read_pforms = [ "%{read:"; "%{read-lines:"; "%{read-strings:" ]
 
-(** Parse [contents], refusing inputs Dune reads from another file. An [(include f)] stanza, an
-    [(:include f)] term or a [%{read:f}] form makes stanzas, a module list or configuration depend
-    on [f], whose edits this reader would neither see nor attribute; the audited API-root Dune files
-    and their history have none (gh-ocannl-1201). *)
+(** Parse [contents], refusing inputs Dune reads from another file. An [(include f)] or
+    [(dynamic_include f)] stanza, an [(:include f)] term or a [%{read:f}] form makes stanzas, a
+    module list or configuration depend on [f], whose edits this reader would neither see nor
+    attribute; the audited API-root Dune files and their history have none (gh-ocannl-1201). *)
 let consumed_stanzas dune_path contents =
   let stanzas = Dune_stanza_scan.stanzas contents in
   let refuse form head =
@@ -85,7 +85,8 @@ let consumed_stanzas dune_path contents =
   in
   List.iter stanzas ~f:(fun stanza ->
       let head = Option.value (Dune_stanza_scan.head stanza) ~default:"" in
-      if String.equal head "include" then refuse "(include ...)" head
+      if List.mem [ "include"; "dynamic_include" ] head ~equal:String.equal then
+        refuse ("(" ^ head ^ " ...)") head
       else if List.mem consumed_heads head ~equal:String.equal then
         (* Only an [(:include ...)] TERM reads a file: a bare [:include] atom is an ordinary
            argument, e.g. to a preprocessing action. *)
