@@ -7556,18 +7556,16 @@ let maybe_default_schedules ~backend_name ?(limits = Backend_intf.no_hardware_li
         ~preset ~zero_sched ~static_indices opt
 
 (* The emission scopes of [opt]'s [Tile_mma] statements, as [(d, a, b)] operand triples: one per
-   statement, except that the statements accumulating into one marked simdgroup fragment share that
-   fragment's single scope (its hook brackets the whole reduction; the nested calls are
-   update-only). The fragment carries its target's storage precision, so either way [d]'s precision
-   is the one the hook is asked about. Fallbacks are not entered: they render instead of, not
-   beside, the intrinsic. *)
+   statement, wherever it sits — duplicated by a materializing [Unroll] or [Partition], each copy is
+   its own lexical scope and declares its own scratch. A recognized simdgroup-fragment scope is no
+   exception: [C_syntax]'s fragment rendering accepts a reduction holding exactly ONE [Tile_mma]
+   into the fragment, so its scope and that statement are one-to-one (and the fragment carries its
+   target's storage precision, the [d] precision the hook is asked about). Fallbacks are not
+   entered: they render instead of, not beside, the intrinsic. *)
 let mma_emission_scopes (opt : Low_level.optimized) : (Tn.t * Tn.t * Tn.t) list =
   let open Low_level in
   let rec go acc = function
-    | Tile_mma { d = d, _; a = a, _; b = b, _; _ } ->
-        if Set.mem opt.simdgroup_fragments d && List.exists acc ~f:(fun (d', _, _) -> Tn.equal d d')
-        then acc
-        else (d, a, b) :: acc
+    | Tile_mma { d = d, _; a = a, _; b = b, _; _ } -> (d, a, b) :: acc
     | Seq (c1, c2) -> go (go acc c1) c2
     | For_loop { body; _ } | If { body; _ } | Scan_loop { body; _ } -> go acc body
     | Noop | Comment _ | Staged_compilation _ | Declare_local _ | Workgroup_barrier | Zero_out _

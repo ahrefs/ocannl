@@ -168,7 +168,7 @@ files.
   must reach `Schedule.workgroup_memory_bytes`: staged tiles from `workgroup_shared`, and any
   backend-emitted scratch through `codegen_capabilities.mma_scope_workgroup_bytes`, which the
   emitting backend derives from the same resolver as its declaration (Metal's converted-boundary
-  coordinate table, 256 B per tile-MMA scope; a fragment scope counts once). A new `threadgroup` or
+  coordinate table, 256 B per `Tile_mma` statement, each `Unroll`/`Partition` copy included). A new `threadgroup` or
   `__shared__` declaration in a backend emitter needs the same route. Guard:
   `test/operations/schedule_mma_scope_scratch.ml` (tiles of exactly the limit compile; the same
   tiles plus one converted scope are refused at `Hardware_limits`).

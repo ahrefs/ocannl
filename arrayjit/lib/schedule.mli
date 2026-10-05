@@ -960,9 +960,10 @@ val workgroup_memory_bytes :
     pipelined tile counted once per rotating copy) plus, per tile-MMA emission scope, the rendering
     backend's {!field:Backend_intf.mma_scope_workgroup_bytes} for that scope's storage triple —
     Metal's converted destination boundary declares a coordinate table there (gh-ocannl-1205). A
-    scope is one [Tile_mma] statement, or one marked simdgroup fragment however many statements
-    accumulate into it. Pass the compiling context's [Context.codegen_capabilities]; the
-    capability-free {!Backend_intf.no_codegen_capabilities} counts the tiles alone. *)
+    scope is one [Tile_mma] statement, each copy counted where a loop transform duplicated it; a
+    simdgroup-fragment scope is rendered only around exactly one [Tile_mma], so it is the same
+    count. Pass the compiling context's [Context.codegen_capabilities]; the capability-free
+    {!Backend_intf.no_codegen_capabilities} counts the tiles alone. *)
 
 val check_hardware_limits :
   name:string ->

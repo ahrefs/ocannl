@@ -1,3 +1,5 @@
+the staged composition marks its accumulator as a simdgroup fragment: true
+a duplicated fragment region counts one scope per copy: true
 the converted half boundary charges a positive per-scope scratch: true
 R control: tiles of exactly the limit, no converted boundary, compile and run: true
 R control: the unconverted kernel is tensorized and declares no coordinate table: true

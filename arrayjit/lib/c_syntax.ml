@@ -932,12 +932,13 @@ module type C_syntax_config = sig
   val mma_scope_workgroup_bytes : d_prec:Ops.prec -> a_prec:Ops.prec -> b_prec:Ops.prec -> int
   (** Static workgroup-shared bytes that one accepted MMA emission scope declares for this storage
       triple beyond the staged tiles: one per {!mma_syntax} call outside a fragment scope, one per
-      {!mma_fragment_syntax} scope (its nested update-only calls declare none). Metal's converted
-      destination boundary is the one non-zero case (gh-ocannl-1205): its coordinate table lives in
-      [threadgroup] memory. The hook that emits the declaration derives this from the same policy,
-      so [Schedule.check_hardware_limits_classified]'s estimate cannot drift from the kernel. An
-      upper bound per scope: a call the hook then declines (extents, spaces, layouts) declares
-      nothing, which the estimate does not try to predict. *)
+      {!mma_fragment_syntax} scope (its nested update-only call declares none; the scope is rendered
+      only around exactly one [Tile_mma], which is how the schedule estimate counts it). Metal's
+      converted destination boundary is the one non-zero case (gh-ocannl-1205): its coordinate table
+      lives in [threadgroup] memory. The hook that emits the declaration derives this from the same
+      policy, so [Schedule.check_hardware_limits_classified]'s estimate cannot drift from the
+      kernel. An upper bound per scope: a call the hook then declines (extents, spaces, layouts)
+      declares nothing, which the estimate does not try to predict. *)
 
   val kernel_log_param : (string * string) option
   (** Kernel parameter for logging, if any. E.g., (Some ("int", "log_id")) or (Some ("const char*",

@@ -197,6 +197,47 @@ let all_claims =
     claim_f_scopes;
   ]
 
+(* The scope count, structurally and on every backend (Codex round 1 on staging#1010): a
+   materializing loop transform that duplicates a fragment region keeps the same fragment node in
+   each copy, and each copy renders its own scope, so the estimate must count copies rather than
+   fragment nodes. A probe capability charging one byte per uniform-half scope makes the estimate's
+   scope count readable off its value. *)
+let claim_fragment_marked = "the staged composition marks its accumulator as a simdgroup fragment"
+let claim_dup_counted = "a duplicated fragment region counts one scope per copy"
+
+let () =
+  let bk = 16 in
+  let a = NTDSL.init ~l:"dup_a" ~prec:Ir.Ops.half ~i:[ 2 * bk ] ~o:[ m ] ~f:(fun _ -> 1.) () in
+  let b = NTDSL.init ~l:"dup_b" ~prec:Ir.Ops.half ~i:[ n ] ~o:[ 2 * bk ] ~f:(fun _ -> 1.) () in
+  let%op c = a * b in
+  Tn.update_prec c.Tensor.value Ir.Ops.half;
+  let lowered =
+    Context.lowered_for_decisions ~name:"scratch_dup" (Context.auto ())
+      (named "scratch_dup" (Train.forward c))
+      Ir.Indexing.Empty
+  in
+  let opt =
+    Sched.apply
+      (staged_schedule ~bk ~a_pad:None ~out:c.Tensor.value ~src_a:a.Tensor.value
+         ~src_b:b.Tensor.value lowered)
+      lowered
+  in
+  let probe =
+    {
+      Ir.Backend_intf.no_codegen_capabilities with
+      mma_scope_workgroup_bytes =
+        (fun ~d_prec ~a_prec ~b_prec ->
+          if List.for_all [ d_prec; a_prec; b_prec ] ~f:(Ir.Ops.equal_prec Ir.Ops.half) then 1
+          else 0);
+    }
+  in
+  let scopes o =
+    Sched.workgroup_memory_bytes ~capabilities:probe o
+    - Sched.workgroup_memory_bytes ~capabilities:Ir.Backend_intf.no_codegen_capabilities o
+  in
+  p claim_fragment_marked (not (Set.is_empty opt.LL.simdgroup_fragments));
+  p claim_dup_counted (scopes opt = 1 && scopes { opt with LL.llc = LL.Seq (opt.llc, opt.llc) } = 2)
+
 let () =
   let limits = Context.hardware_limits (Context.auto ()) in
   let mma = Option.is_some limits.Ir.Backend_intf.mma in
