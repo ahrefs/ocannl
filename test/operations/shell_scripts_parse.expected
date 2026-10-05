@@ -198,6 +198,9 @@ errexit-negation fixture negation after a builtin shadowed by a function is clas
 errexit-negation fixture negation after an assignment and a ! word is classified as specified: true
 errexit-negation fixture negation after set + an expansion is classified as specified: true
 errexit-negation fixture timed negation is classified as specified: true
+errexit-negation fixture tab-timed negation is classified as specified: true
+errexit-negation fixture negation after a quoted enable is classified as specified: true
+errexit-negation fixture negation after set +e with a long option is classified as specified: true
 errexit-negation fixture negation after builtin enable is classified as specified: true
 errexit-negation fixture negation after a ;;& arm past a nonmatching one is classified as specified: true
 errexit-negation fixture negation in a recursive subshell function is classified as specified: true

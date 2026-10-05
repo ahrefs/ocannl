@@ -1240,6 +1240,9 @@ module Shell_lexer = struct
     in
     let rec plain_options = function
       | [] | ("--" | "-") :: _ -> true
+      | option :: _
+        when String.is_prefix option ~prefix:"--" || String.is_prefix option ~prefix:"++" ->
+          (* A long spelling: bash rejects the whole command. *) false
       | ("-o" | "+o") :: name :: rest ->
           List.mem names name ~equal:String.equal && plain_options rest
       | option :: rest when String.length option > 1 && Char.(option.[0] = '-' || option.[0] = '+')
@@ -2075,12 +2078,17 @@ module Shell_context = struct
   (** [text] without the [time] ([-p], [--]) that may stand in front of the [!] of the pipeline it
       times. *)
   let untimed text =
-    let strip prefix text = Option.map (String.chop_prefix text ~prefix) ~f:String.lstrip in
-    match strip "time " text with
+    let strip word text =
+      match String.chop_prefix text ~prefix:word with
+      | Some rest when (not (String.is_empty rest)) && Char.is_whitespace rest.[0] ->
+          Some (String.lstrip rest)
+      | Some _ | None -> None
+    in
+    match strip "time" text with
     | None -> text
     | Some rest ->
-        let rest = Option.value (strip "-p " rest) ~default:rest in
-        Option.value (strip "-- " rest) ~default:rest
+        let rest = Option.value (strip "-p" rest) ~default:rest in
+        Option.value (strip "--" rest) ~default:rest
 
   (** Whether operand [index] of [statement] runs in a shell of its own: a pipeline element, or part
       of a background job. *)
@@ -2112,7 +2120,7 @@ module Shell_context = struct
     List.concat_map branch.statements ~f:(fun statement ->
         List.concat_map statement.operands ~f:(fun operand ->
             match operand.compound with
-            | None -> L.shell_words operand.text
+            | None -> List.map (L.shell_words operand.text) ~f:L.literal_shell_word
             | Some compound -> List.concat_map compound.branches ~f:command_words))
 
   (** The names of the functions [branch] defines anywhere. *)
@@ -2653,6 +2661,9 @@ module Errexit_negation = struct
       ("negation after an assignment and a ! word", "set -e\nX=y ! set +e || :\n! probe\n", [ 3 ]);
       ("negation after set + an expansion", "set -e\nset +\"$e\" || :\n! probe\n", [ 3 ]);
       ("timed negation", "set -e\ntime ! probe\n", [ 2 ]);
+      ("tab-timed negation", "set -e\ntime\t! probe\n", [ 2 ]);
+      ("negation after a quoted enable", "set -e\n\"enable\" -n set\nset +e || :\n! probe\n", [ 4 ]);
+      ("negation after set +e with a long option", "set -e\nset +e --bad || :\n! probe\n", [ 3 ]);
       ( "negation after builtin enable",
         "set -e\nbuiltin enable -n set\nset +e || :\n! probe\n",
         [ 4 ] );
