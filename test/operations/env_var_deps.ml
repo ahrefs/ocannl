@@ -96,8 +96,6 @@ module Sources = Test_utils.Config_key_scan
 module Refusals = Test_utils.Refusal_control_scan
 module Refusal_manifest = Test_utils.Refusal_control_manifest
 
-let printf = Refusal_manifest.printf
-
 (* Declarations of a name OCANNL does not read as a configuration key. Keyed by "<dune
    file>:<name>", and each entry earns its place on every run (see the staleness check below): a
    rule tracking a variable no key would be read from is normally a typo, which is the whole point
@@ -3105,6 +3103,10 @@ let run_checker ~root ~exe args =
   let text = In_channel.read_all out_path ^ In_channel.read_all err_path in
   (try Unix.unlink out_path with Unix.Unix_error _ -> ());
   (try Unix.unlink err_path with Unix.Unix_error _ -> ());
+  (* What the child refused -- exited 1, not stopped by an exception -- is what a mapped control
+     claim may answer for (gh-ocannl-1207). *)
+  if Poly.equal status (Unix.WEXITED 1) then
+    Refusal_manifest.observe_refused_run ~source:"test/operations/env_var_deps.ml" text;
   (status, text)
 
 let control () =
@@ -4983,6 +4985,92 @@ let ambient_gate_control () =
   let reach = gated_aliases [ census; free; unrelated; no_run ] in
   Verdict.p "universe users alone leave their alias entry points ungated" (Set.is_empty reach)
 
+(* gh-ocannl-1207: refusals of the marker grammar and the declaration checks that no control above
+   reaches, executed rather than vouched for by a neighbouring control that passes. One dune file
+   trips them together -- a marker between stanzas, one naming no backend, one on a stanza that runs
+   nothing, two on one stanza, one contradicting an `(env_var OCANNL_BACKEND)`, the marker's text
+   outside a comment, a declaration of a variable nothing reads, one alias diffing two goldens, the
+   initializer in an executable nothing runs and in a library, an undeclared tracing gate, an
+   undeclared by-name read, a guarded read nothing runs -- beside a source that names
+   `Test_utils.Generated` and does not parse, and a second dune file declaring a gate over a
+   directory the checker was handed no source from. A second run hands the checker nothing at all.
+   The claims are gates -- incidental refusals would keep the child at exit 1 on their own -- and
+   each refusal's own `FAIL:` line is the evidence `raw_direct_evidence` attributes to them. *)
+let malformed_tree_subject =
+  {dune|; ocannl-backend: none -- between stanzas, about none of them.
+(rule
+ ; ocannl-backend: bogus -- no backend this grammar knows.
+ (target a.actual)
+ (deps ocannl_config (env_var OCANNL_DEMO_KEY))
+ (action (with-stdout-to %{target} (run ./noop.exe))))
+
+(library
+ ; ocannl-backend: none -- a library runs nothing.
+ (name noop_lib)
+ (modules noop))
+
+(rule
+ ; ocannl-backend: none -- the first marker.
+ ; ocannl-backend: cc -- a second marker on the same stanza.
+ (target b.actual)
+ (deps ocannl_config)
+ (action (with-stdout-to %{target} (run ./noop.exe))))
+
+(rule
+ ; ocannl-backend: none -- contradicting the declaration below.
+ (target c.actual)
+ (deps ocannl_config (env_var OCANNL_BACKEND))
+ (action (with-stdout-to %{target} (run ./noop.exe))))
+
+(rule
+ (target d.actual)
+ (action (with-stdout-to %{target} (echo "ocannl-backend: none"))))
+
+(rule
+ (alias runtest-two)
+ (action (progn (diff a.expected a.actual) (diff b.expected b.actual))))
+
+(executable (name unrun) (modules unrun))
+(library (name initlib) (modules initlib))
+(library (name gated) (modules gated))
+(test (name envread) (modules envread))
+(executable (name guarded) (modules guarded))
+|dune}
+
+let malformed_tree_sources =
+  [
+    ("t/noop.ml", "let () = ()\n");
+    ("t/broken.ml", "let = Test_utils.Generated.init\n");
+    ("t/unrun.ml", "let () = Test_utils.Generated.init ~backend_name:\"cc\"\n");
+    ("t/initlib.ml", "let () = Test_utils.Generated.init ~backend_name:\"cc\"\n");
+    ("t/gated.ml", "[%%global_debug_log_level_from_env_var \"OCANNL_LOG_LEVEL_PROBE\"]\n");
+    ("t/envread.ml", "let _ = Sys.getenv_opt \"OCANNL_LOG_LEVEL\"\n");
+    ("t/guarded.ml", "let _ = Utils.read_env_var \"log_level\"\n");
+    ( "far/dune",
+      "(library (name far) (modules far) (preprocessor_deps (env_var OCANNL_LOG_LEVEL_PROBE)))\n" );
+  ]
+
+let malformed_tree_control () =
+  let exe =
+    let name = Stdlib.Sys.executable_name in
+    if Stdlib.Filename.is_relative name then Stdlib.Filename.concat (Stdlib.Sys.getcwd ()) name
+    else name
+  in
+  let root = Stdlib.Filename.temp_dir "evd_malformed" "" in
+  let context = control_context () in
+  let files = (("t/dune", malformed_tree_subject) :: malformed_tree_sources) @ context in
+  List.iter files ~f:(fun (file, content) -> write_file (Stdlib.Filename.concat root file) content);
+  let exited n (status, _) = match status with Unix.WEXITED m -> m = n | _ -> false in
+  let malformed = run_checker ~root ~exe ("." :: List.map files ~f:fst) in
+  let empty = run_checker ~root ~exe [ "." ] in
+  printf
+    "The checker is put to one dune file built to trip the marker grammar and the declaration\n\
+     checks, beside a source that does not parse, and to a run handed nothing at all.\n\n";
+  Verdict.p "a dune file built to trip the marker grammar and the declaration checks is refused"
+    (exited 1 malformed);
+  Verdict.p "a run handed no dune file and no source is refused" (exited 1 empty);
+  try remove_tree root with Unix.Unix_error _ -> ()
+
 let () =
   match Array.to_list argv with
   | _ :: [ "--control" ] ->
@@ -4998,6 +5086,7 @@ let () =
       ambient_gate_control ();
       repository_inventory_control ();
       gateless_scope_control ();
+      malformed_tree_control ();
       (* Dune's repository-wide rule hands the same source to [main] as [./env_var_deps.ml] after a
          full build has materialized the local build-tree copy. Exercise that spelling here too: the
          manifest identity is repository-relative even when the file used to extract the diagnostics

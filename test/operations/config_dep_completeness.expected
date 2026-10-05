@@ -48,3 +48,8 @@ OK: every test stanza, inline-test library and exe-running rule in these files d
 Synthetic controls: scanner refusal diagnostics exercised by this control golden:
   [scanner-refusal:c4c555263d62473311fe0cfc7f769958] stanza inline-test library
   [scanner-refusal:bdc9f2c15b8f17359eec6d359dfefbdd] that floor applies
+Catalogue-only: direct failures no control executes (reasons in `raw_catalogue_only`):
+  [scanner-refusal:c35e7bf895b2bfc334caa198f2db4c83] raw text shows
+  [scanner-refusal:a83ec7419ab530468bb3d4143c8c8576] raw text shows
+  [scanner-refusal:28c35655d1568c3c11bdc1893d8847fa] raw text runs
+  [scanner-refusal:929a18d24ebaad373970a360298e3b88] raw text runs

@@ -44,8 +44,6 @@ open Base
 open Stdio
 open Verdict.Claims
 
-let printf = Test_utils.Refusal_control_manifest.printf
-
 type line = { number : int; indent : int; text : string }
 
 type job = {

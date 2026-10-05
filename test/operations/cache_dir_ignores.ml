@@ -59,7 +59,6 @@ let argv = Test_utils.Scan_argv.expand Stdlib.Sys.argv
 
 module Scan = Test_utils.Cache_dir_scan
 
-let printf = Test_utils.Refusal_control_manifest.printf
 let base_dir = Test_utils.Dune_stanza_scan.base_dir
 let repo_relative = Test_utils.Dune_stanza_scan.repo_relative
 

@@ -335,24 +335,42 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   substitutions removed), and requires a unique full-format marker plus its readable fragment in the scanner's
   assigned permanent control golden. `Refusal_control_manifest` is the explicit bridge, but not its
   own evidence: a claim marker is emitted only after `Verdict` recorded a passing execution of that
-  exact format (and each observation is consumed once), while a direct-failure marker requires the
-  exact successful negative-control line assigned to that refusal or an explicit observation from
-  the caught branch itself. Marker occurrences are consumed as a multiset, so two identical
-  formats require two exercised controls. A new manifest row therefore
+  exact format (and each observation is consumed once), while a direct-failure marker requires
+  that the refusal RAN: an `observe_failure` from the caught branch itself, or a
+  `raw_direct_evidence` entry naming a control claim that passed AND a `FAIL:` line of that
+  scanner's refused child run (exit 1; `Refusal_control_manifest.refuses`, or
+  `observe_refused_run` over a harness's own capture) that is the refusal's OWN -- matched by its
+  format and by no sibling format of the same scanner that fixes more text, so a general refusal
+  cannot live on a specific sibling's line. Either half alone counts for nothing: a
+  claim over a fixture the scan ACCEPTS, a prose line, or an unrelated passing claim once stood in
+  for every direct failure of the two configuration scanners; printed output is no input to the rule
+  (gh-ocannl-1207; `Manifest.standing` holds the rule, `refusal_control_scan_cases` pins each
+  direction). The claim is a gate -- incidental refusals keep a malformed tree's child at exit 1 on
+  their own -- and the line is the evidence; map each key to the claim whose run prints it. A
+  refusal no control can reach -- a library constant, a walk defect the raw-text floor exists for
+  -- goes in `raw_catalogue_only` with its reason and prints under its own `Catalogue-only:`
+  heading, so it stays catalogued without claiming execution; a key in both tables is refused by
+  the audit, and a catalogue-only refusal whose own line or caught branch a run shows is refused by
+  `print`. The cheap way to execute one is a child run of the scanner over a `with_tree` of
+  malformed input (`config_scan_lexing`, `dune_scan_cases`, `verdict_scan_cases`, codegen's
+  `--refusal-control`; env_var_deps' `malformed_tree_control` builds its tree beside the shared
+  `control_context` through `run_checker`). Claim markers are consumed as a multiset, so two
+  identical claim formats require two executions; refused lines are not consumed, so two sites of
+  one direct-failure format would share one line. A new manifest row therefore
   prints nothing until its arm supplies runtime evidence. Never compute a marker by hand: while a
   scan's row is missing or empty, its golden run's `print` writes the whole row, ready to paste into
   `raw_entries`, on stderr (the golden keeps only the section header); once the row is stale -- a
   diagnostic gained, lost or reworded -- it writes the added/removed markers and the replacement row
   there instead, and names the `<source>:<md5>` key of each new direct failure with no entry and
   no in-process `observe_failure` (a separate `--control` run's observations are invisible there),
-  whose `raw_direct_evidence` entry stays hand-written.
+  whose `raw_direct_evidence` or `raw_catalogue_only` entry stays hand-written.
   `refusal_control_scan_cases.expected` holds the manifest equal to mechanical extraction, every entry present in the assigned live/case
   golden union, and the manifest's repo-relative source paths equal to `env_var_deps`' derived
   scanner census; the audit's own stanza argument list assigns each source its goldens, and its
   sources are held equal to the manifest's, a missing or extra one named on stderr (gh-ocannl-1088). Rewording a refusal format moves its marker digest: when a row differs, that
   audit writes the markers on each side and the whole replacement row on stderr, and its
-  `raw_direct_evidence` claim names on stderr every `<source>:<md5>` key no current direct failure
-  answers to -- re-key those from the row difference. The
+  `raw_direct_evidence`/`raw_catalogue_only` claim names on stderr every `<source>:<md5>` key no
+  current direct failure answers to -- re-key those from the row difference. The
   audit is itself on `@scans` and excluded from the evidence corpus, so it cannot answer for itself.
   Consequence for authoring: EVERY Verdict claim in a scanner source is a refusal to the ratchet,
   so a claim that is not about the scan's refusals -- a relationship pin between two library values,
@@ -1424,7 +1442,16 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   rows while the cases after it still run, so fewer rows still count as reached (`cases raised:
   K`, gh-ocannl-1084) when a case raised, Verdict's teardown line (`FAILED: n checks …`) shows the
   process ended through `exit` rather than a signal, no `STOPPED EARLY` says that exit came from
-  inside a later case, and the stdout ends on the golden's last row or on a case's raise. A test that echoes a child's stderr (`verdict_teardown`)
+  inside a later case, and the stdout ends on the golden's last row or on a case's raise. Rows
+  short only by refusal-manifest marker rows (`  [scanner-refusal:<md5>] …`) count as reached too
+  (`refusal markers omitted: K`, gh-ocannl-1216): a claim that failed prints no marker, so a
+  complete failing run of a manifest-printing scan is a row short, and it counts when every other
+  row is the golden's, row for row (a claim of it may read false; the run's own `FAIL:` rows are
+  skipped), and Verdict's teardown ended the process; a run missing or swapping a row, or with no
+  teardown, still exits 4. Residual: a golden ending on its marker section cannot tell a complete
+  run from one cut inside the markers, and a mutant that silences one refusal while every claim
+  passes leaves no teardown, so it reads STOPPED EARLY although the golden caught it -- both want a
+  trailer row after the section. A test that echoes a child's stderr (`verdict_teardown`)
   can carry a child's `STOPPED EARLY` line; read the rows line before discarding such a run.
   Otherwise the exit status remains test-run's, so a killed mutant normally exits 1, and a
   passing mutation exits 0 and needs investigation.

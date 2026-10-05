@@ -19,7 +19,7 @@
 open Base
 module Scan = Test_utils.Cache_dir_scan
 
-let printf = Test_utils.Refusal_control_manifest.printf
+let printf = Stdio.printf
 
 (* Failures go through [Verdict], so that a regression exits nonzero instead of being `dune
    promote`d into the golden as the expected output (gh-ocannl-601). *)

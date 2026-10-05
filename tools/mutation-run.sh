@@ -12,7 +12,11 @@
 # an escaping exception, or an exit inside a Verdict.case). Rows short of the
 # golden still count as reached when a Verdict.case raised, Verdict's teardown
 # ended the process, and its stdout ended on the golden's last row or on a case's
-# raise (gh-ocannl-1084). A run
+# raise (gh-ocannl-1084); so do rows short only by refusal-manifest marker rows, the
+# marker of a claim that failed, when every other row is the golden's, row for row (a
+# claim of it may read false), and Verdict's teardown ended the process (gh-ocannl-1216).
+# A golden ending on its marker section cannot tell a complete run from one cut
+# inside the markers; the teardown is all that separates them. A run
 # that stopped early, or never ran (a build failure; an executable the mutation
 # left unchanged, so dune reused its result), prints STOPPED EARLY or NEVER RAN
 # (NOT COUNTED when two candidates changed) and exits 4 in place of test-run's
@@ -105,6 +109,36 @@ sub case_raises {
     return ($n, $last);
 }
 my (undef, $golden_last) = case_raises("$root/$golden");
+# A refusal-manifest marker row, as Test_utils.Refusal_control_manifest.print writes one: a
+# claim's marker prints only once Verdict recorded that claim passing, so a run in which the
+# claim failed is a marker row short of the golden while it still reached its last row
+# (gh-ocannl-1216). The other rows, in order, and how many markers there were. A run's own
+# `FAIL: ` rows are Verdict.fail's, never a golden's, so they are no row of either side.
+my $marker_row = qr/^  \[scanner-refusal:[0-9a-f]{32}\] /;
+sub plain_rows {
+    open my $f, '<:raw', $_[0] or refuse("read $_[0]: $!");
+    my ($markers, @rows) = (0);
+    while (my $line = <$f>) {
+        $line =~ s/\r?\n$//;
+        if ($line =~ $marker_row) { $markers++ } elsif ($line !~ /^FAIL: /) { push @rows, $line }
+    }
+    close $f or refuse("close $_[0]: $!");
+    return ($markers, @rows);
+}
+my ($golden_markers, @golden_plain) = plain_rows("$root/$golden");
+# Whether a run's other rows are the golden's, row for row: each the same, or -- the golden row
+# being a claim -- that claim failed, which is a claim whose marker the run may then lack. A count
+# alone would take an omitted row plus an extra one for a complete run.
+sub same_plain_rows {
+    my @rows = @_;
+    return 0 unless @rows == @golden_plain;
+    for my $i (0 .. $#rows) {
+        next if $rows[$i] eq $golden_plain[$i];
+        my ($label) = $golden_plain[$i] =~ /^(.*): true$/ or return 0;
+        return 0 unless $rows[$i] =~ /^\Q$label\E(?: \(.*\))?: false$/;
+    }
+    return 1;
+}
 my $mutated = $original;
 substr($mutated, $at, length($old), $new);
 system('bash', "$root/tools/test-run.sh", 'idle') == 0
@@ -239,9 +273,16 @@ my $reported = eval {
                 # leaves no teardown line, and an exit inside a later case its own
                 # STOPPED EARLY, taken above.
                 my ($raised, $last) = case_raises($fresh[0]);
+                # Omitted marker rows: every other row printed, the golden's row for row, and the
+                # process ended through Verdict's teardown, so a failed claim did end it.
+                my ($markers, @plain) = plain_rows($fresh[0]);
                 if ($raised && $teardown && ($last eq $golden_last || $last =~ $case_raise)) {
                     print "cases raised: $raised (the rows short of the golden are theirs; "
                         . "the run reached its last case)\n";
+                } elsif ($teardown && $markers < $golden_markers && same_plain_rows(@plain)) {
+                    my $omitted = $golden_markers - $markers;
+                    print "refusal markers omitted: $omitted (a failed claim's marker is not printed; "
+                        . "every other row was, so the run reached its last row)\n";
                 } else {
                     $verdict = "STOPPED EARLY: the mutated run printed $printed of the golden's $golden_rows rows";
                 }

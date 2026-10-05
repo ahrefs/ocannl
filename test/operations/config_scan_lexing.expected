@@ -135,22 +135,24 @@ ok: key list -- legacy form refused -- and a name that never denoted a list is n
 ok: key list -- legacy form refused -- the binding does not escape the lambda it was established at
 ok: could read the environment -- names the reader
 ok: could read the environment -- does not name it at all
+digest_completeness refuses the malformed tree, exiting 1: true
+test_config_consistency refuses the malformed tree, exiting 1: true
 
 Synthetic controls: scanner refusal diagnostics exercised by this control golden:
   [scanner-refusal:7cab0a5763f4811f331a4aab327c6784] which the codegen-stage
+  [scanner-refusal:1825a277ba0eda3313fbe079e465c15d] but classified code-borne
+Catalogue-only: direct failures no control executes (reasons in `raw_catalogue_only`):
   [scanner-refusal:fc3ef3788212f2d1f5a9d9a46be3ca38] keys classified more
   [scanner-refusal:dc9995a5d5b80370dc90971d3fd019df] no cache-identity classification
   [scanner-refusal:a385ae718c8af3ab39a45701b75fda4d] Utils.known_config_keys
   [scanner-refusal:14b02d2180d3814d6746acd827aecbc3] classifications claim cache-key
   [scanner-refusal:8109160f59717560ff5e6f7251a6a2b2] cache-key components no
-  [scanner-refusal:1825a277ba0eda3313fbe079e465c15d] but classified code-borne
 
 Synthetic controls: scanner refusal diagnostics exercised by this control golden:
   [scanner-refusal:40f6a4df02a115c327391e051bacd5c6] call-site keys missing
   [scanner-refusal:dfd9b6901bf188f6500bcc1284778dcd] known_config_keys
   [scanner-refusal:a22f67563f6e58a972758cfb6438b236] known_config_keys
   [scanner-refusal:f183d4fa8451402727499389f65d55a4] known_config_keys
-  [scanner-refusal:9a0c38727d642eb678b4707766f25708] known_config_keys
   [scanner-refusal:1ce67444f994f72961fbc476c23dcd84] sets keys missing
   [scanner-refusal:2651df7744050e9d7f649f390b7c53b1] payload quoted in
   [scanner-refusal:3a6832937329cda23c716c3883e04cb2] has no '
@@ -159,3 +161,5 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:c56af001748a614d221709bf11098511] the empty string
   [scanner-refusal:e583c416783b3632963a66636f20f65e] string literal in
   [scanner-refusal:b4c59d5ad7a9c4e591998fccf8f039aa] exempted functions that
+Catalogue-only: direct failures no control executes (reasons in `raw_catalogue_only`):
+  [scanner-refusal:9a0c38727d642eb678b4707766f25708] known_config_keys

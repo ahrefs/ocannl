@@ -14,7 +14,7 @@
 open Base
 module Scan = Test_utils.Config_key_scan
 
-let printf = Test_utils.Refusal_control_manifest.printf
+let printf = Stdio.printf
 
 (* Failures go through [Verdict], so that a regression exits nonzero instead of being `dune
    promote`d into the golden as the expected output (gh-ocannl-601). *)
@@ -690,6 +690,49 @@ let could_call_cases =
     ("does not name it at all", {ocaml|let () = print_string "hello"|ocaml}, false);
   ]
 
+(* gh-ocannl-1207: the two scanners' own refusals, executed rather than vouched for by the lexer
+   cases above, which pass on input the scanners ACCEPT. Each scanner runs as a child process over
+   one synthetic tree built to trip every refusal its input can reach: two sources sharing a
+   basename, one of them reading an undocumented key, forwarding a key, naming the empty one and
+   handing the settings record on; a codegen-stage module reading a code-borne key; and a reference
+   file that documents nothing the registry knows and misquotes a profile payload. Without
+   `utils.ml` and `tnode.ml` every forwarding exemption is stale too. What each child refused is
+   recorded for the manifest, whose `raw_direct_evidence` maps each refusal to the claim below; the
+   refusals the input cannot reach, over the library's own constants, are catalogue-only. *)
+let malformed_tree =
+  [
+    ( "a/x.ml",
+      {ocaml|let undocumented = get ~arg_name:"refusal_control_undocumented_key" ~default:""
+let empty = get ~arg_name:"" ~default:""
+let forwarded name = get ~arg_name:name ~default:""
+let handed_on = Utils.settings|ocaml}
+    );
+    ("b/x.ml", "let unrelated = 1\n");
+    ( "c/c_syntax.ml",
+      {ocaml|let v = Utils.get_global_arg ~arg_name:"virtualize_max_visits" ~default:""|ocaml} );
+    ( "reference",
+      "#refusal_control_unregistered_key=1\n\
+       # --- BEGIN PROFILE PAYLOAD reproducible ---\n\
+       # not the payload\n\
+       # --- END PROFILE PAYLOAD reproducible ---\n" );
+  ]
+
+let scanner_refusal_controls ~digest_exe ~consistency_exe =
+  let module Manifest = Test_utils.Refusal_control_manifest in
+  Manifest.with_tree malformed_tree (fun root ->
+      let in_tree = Stdlib.Filename.concat root in
+      let sources =
+        List.filter_map malformed_tree ~f:(fun (path, _) ->
+            Option.some_if (String.is_suffix path ~suffix:".ml") (in_tree path))
+      in
+      (* From this directory, where each scanner finds its own source for the manifest section it
+         prints last. *)
+      Verdict.p "digest_completeness refuses the malformed tree, exiting 1"
+        (Manifest.refuses ~source:"test/operations/digest_completeness.ml" ~exe:digest_exe sources);
+      Verdict.p "test_config_consistency refuses the malformed tree, exiting 1"
+        (Manifest.refuses ~source:"test/operations/test_config_consistency.ml" ~exe:consistency_exe
+           (in_tree "reference" :: sources)))
+
 let () =
   List.iter cases ~f:(fun (name, source, expected) ->
       let found =
@@ -819,5 +862,10 @@ let () =
       let found = Scan.could_read_env_var source in
       if Bool.equal found expected then printf "ok: could read the environment -- %s\n" name
       else fail "could read the environment -- %s: expected %b, found %b" name expected found);
+  (match Stdlib.Sys.argv with
+  | [| _; digest_exe; consistency_exe |] -> scanner_refusal_controls ~digest_exe ~consistency_exe
+  | _ ->
+      Verdict.fail
+        "usage: config_scan_lexing <digest_completeness.exe> <test_config_consistency.exe>");
   List.iter [ "digest_completeness.ml"; "test_config_consistency.ml" ] ~f:(fun source ->
       Test_utils.Refusal_control_manifest.print source)
