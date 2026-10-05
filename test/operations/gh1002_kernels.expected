@@ -1,0 +1,5 @@
+legacy rows preserve timing, launch dimensions and writes: true
+multiword mma text with vol preserves the write labels: true
+a complete zero-based table is accepted: true
+missing, duplicate, reordered and inconsistent rows are refused: true
+a missing kernel-table file is refused: true
