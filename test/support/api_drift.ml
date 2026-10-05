@@ -61,21 +61,26 @@ let consumed_stanzas dune_path contents =
   List.iter stanzas ~f:(fun stanza ->
       let head = Option.value (Dune_stanza_scan.head stanza) ~default:"" in
       if List.mem consumed_heads head ~equal:String.equal then
-        Option.iter
-          (List.find (Dune_stanza_scan.atoms stanza) ~f:(fun atom ->
-               String.equal atom ":include" || String.is_substring atom ~substring:"%{read"))
-          ~f:(fun atom ->
+        (* Only an [(:include ...)] TERM reads a file: a bare [:include] atom is an ordinary
+           argument, e.g. to a preprocessing action. *)
+        let rec external_input = function
+          | Sexp.List (Sexp.Atom ":include" :: _) -> Some ":include"
+          | Sexp.List terms -> List.find_map terms ~f:external_input
+          | Sexp.Atom atom -> Option.some_if (String.is_substring atom ~substring:"%{read") atom
+        in
+        Option.iter (external_input stanza) ~f:(fun form ->
             failwith
               (Printf.sprintf
                  "%s: %s in a %s stanza reads another file, which this reader does not follow \
                   (gh-ocannl-1201)"
-                 dune_path atom head)));
+                 dune_path form head)));
   stanzas
 
 type ownership = {
   generators : (string * string * Sexp.t) list;  (** generator input, generated [.ml], config *)
-  public_modules : Set.M(String).t;  (** lowercase modules of public libraries, less private ones *)
-  private_modules : Set.M(String).t;  (** lowercase modules any library declares private *)
+  public_modules : Set.M(String).t;
+      (** lowercase modules of public libraries, [private_modules] included: privacy does not keep a
+          module's declarations out of the public API, which can [include] or alias it *)
 }
 
 let ownership ~paths (dune_path, contents) =
@@ -150,37 +155,20 @@ let ownership ~paths (dune_path, contents) =
           (Option.value (Dune_stanza_scan.head s) ~default:"")
           ~equal:String.equal)
   in
-  let lowercase names = List.map names ~f:String.lowercase |> Set.of_list (module String) in
-  let libraries =
-    List.filter_map owners ~f:(fun owner ->
-        if Option.equal String.equal (Dune_stanza_scan.head owner) (Some "library") then
-          let modules = Dune_stanza_scan.modules_of ~directory_modules owners owner in
-          let private_modules =
-            match Dune_stanza_scan.field owner "private_modules" with
-            | None -> []
-            | Some terms ->
-                Dune_stanza_scan.modules_of ~directory_modules:modules []
-                  (Sexp.List [ Sexp.Atom "library"; Sexp.List (Sexp.Atom "modules" :: terms) ])
-          in
-          Some (owner, modules, lowercase private_modules)
-        else None)
-  in
-  let private_modules =
-    Set.union_list (module String) (List.map libraries ~f:(fun (_, _, hidden) -> hidden))
-  in
   let public_modules =
-    List.filter libraries ~f:(fun (owner, _, _) ->
-        not (List.is_empty (Dune_stanza_scan.public_names owner)))
-    |> List.concat_map ~f:(fun (_, modules, private_modules) ->
-        List.filter modules ~f:(fun name -> not (Set.mem private_modules (String.lowercase name))))
-    |> lowercase
+    List.filter owners ~f:(fun owner ->
+        Option.equal String.equal (Dune_stanza_scan.head owner) (Some "library")
+        && not (List.is_empty (Dune_stanza_scan.public_names owner)))
+    |> List.concat_map ~f:(Dune_stanza_scan.modules_of ~directory_modules owners)
+    |> List.map ~f:String.lowercase
+    |> Set.of_list (module String)
   in
-  { generators; public_modules; private_modules }
+  { generators; public_modules }
 
 let derived_module_inputs ~paths dunes =
   let present = Set.of_list (module String) paths in
   List.concat_map dunes ~f:(fun dune ->
-      let { generators; public_modules; _ } = ownership ~paths dune in
+      let { generators; public_modules } = ownership ~paths dune in
       List.filter_map generators ~f:(fun (input, output, config) ->
           let name =
             Option.value_exn (Dead_export_scan.module_name_of_source output) |> String.lowercase
@@ -240,26 +228,12 @@ let publication_inputs ?(paths = []) ~source contents =
       match String.compare a.name b.name with 0 -> String.compare a.text b.text | order -> order)
 
 let sources ?(dunes = []) paths =
-  (* Ordinary sources follow the dead-export census, less the modules a library declares private:
-     the same subtraction generated inputs get, not a reconstruction of the installed graph. *)
-  let private_modules =
-    List.map dunes ~f:(fun ((dune_path, _) as dune) ->
-        (Stdlib.Filename.dirname dune_path, (ownership ~paths dune).private_modules))
-    |> Map.of_alist_reduce (module String) ~f:Set.union
-  in
-  let public path =
-    (* [a.mli] names the module of [a.ml]. *)
-    let module_name =
-      Dead_export_scan.module_name_of_source (String.chop_suffix_if_exists path ~suffix:"i")
-    in
-    match (module_name, Map.find private_modules (Stdlib.Filename.dirname path)) with
-    | Some name, Some hidden -> not (Set.mem hidden (String.lowercase name))
-    | _ -> true
-  in
+  (* Ordinary sources follow the dead-export census. A module a library declares private stays: a
+     public module can [include] or alias it, and its edits must then remain evidence. *)
   List.filter paths ~f:(fun path ->
-      Dead_export_scan.in_scan_root path && String.is_suffix path ~suffix:".mli" && public path)
+      Dead_export_scan.in_scan_root path && String.is_suffix path ~suffix:".mli")
   @ List.filter (Dead_export_scan.implicit_implementations paths) ~f:(fun source ->
-      Option.is_some (Dead_export_scan.module_name_of_source source) && public source)
+      Option.is_some (Dead_export_scan.module_name_of_source source))
   @ derived_inputs ~paths dunes
   @ List.filter_map dunes ~f:(fun (path, contents) ->
       Option.some_if (not (List.is_empty (publication_inputs ~paths ~source:path contents))) path)
@@ -384,16 +358,20 @@ let declarations ?(paths = []) ~source contents =
             (List.filter items ~f:(fun item ->
                  match item.psig_desc with Psig_attribute a -> not (is_doc a) | _ -> true))
 
+        (* A pruned item is still walked, discarding the result, so that the refusal reaches the
+           attributed anonymous items nested in it ([module _ = struct let () = ... [@@x] end]). *)
         method! structure items =
           super#structure
             (List.filter_map items ~f:(fun item ->
                  match item.pstr_desc with
                  | Pstr_eval (_, attrs) when prune_nonexports ->
                      anonymous "evaluation" item.pstr_loc attrs;
+                     ignore (super#structure_item item : structure_item);
                      None
                  | Pstr_module { pmb_name = { txt = None; _ }; pmb_attributes; pmb_loc; _ }
                    when prune_nonexports ->
                      anonymous "module binding" pmb_loc pmb_attributes;
+                     ignore (super#structure_item item : structure_item);
                      None
                  | Pstr_value (recursive, bindings) when prune_nonexports ->
                      let bindings =
@@ -401,6 +379,7 @@ let declarations ?(paths = []) ~source contents =
                            binding_may_export b
                            ||
                            (anonymous "value binding" b.pvb_loc b.pvb_attributes;
+                            ignore (super#value_binding b : value_binding);
                             false))
                      in
                      if List.is_empty bindings then None

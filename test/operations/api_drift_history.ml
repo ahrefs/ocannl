@@ -234,8 +234,8 @@ let () =
       let generators = commit "Private and public generated modules" in
       write "lib/lexer.mll" "{let value = true}\nrule token = parse | eof { () }\n";
       let private_edit = commit "Change private generator input" in
-      p "private generator edits stay quiet"
-        (has (read ~until:private_edit generators) "0 declaration changes");
+      p "private generator edits of a public library remain evidence"
+        (has (read ~until:private_edit generators) "lib/lexer.mll");
       write "lib/public_lexer.mll" "{let value = true}\nrule token = parse | eof { () }\n";
       let public_edit = commit "Change public generator input" in
       p "public generator peers still produce entries"
@@ -302,16 +302,17 @@ let () =
       p "public configuration field ordering dependencies and prose stay quiet"
         (has (read ~until:config_order preprocessing) "0 declaration changes");
       write "lib/dune"
-        "(library (name first) (public_name pkg.first) (modules attributes secret) \
+        "(library (name first) (public_name pkg.first) (modules attributes secret api) \
          (private_modules secret)) (library (name second) (public_name pkg.second) (modules \
          pattern))\n";
-      write "lib/secret.ml" "let hidden = 1\n";
-      let privatized = commit "Private ordinary module" in
-      write "lib/secret.ml" "let hidden = \"private type\"\n";
+      write "lib/secret.ml" "let exported = 1\n";
+      write "lib/api.ml" "include Secret\n";
+      let privatized = commit "Private ordinary module included by a public one" in
+      write "lib/secret.ml" "let exported = \"changed public type\"\n";
       let secret_edit = commit "Change a private ordinary module" in
-      p "ordinary private module edits stay quiet"
-        ((not (has (read ~until:privatized config_order) "lib/secret.ml"))
-        && has (read ~until:secret_edit privatized) "0 declaration changes");
+      p "a private ordinary module a public one includes remains evidence"
+        (has (read ~until:privatized config_order) "lib/secret.ml"
+        && has (read ~until:secret_edit privatized) "changed public type");
       let long_body edited =
         "module Body = struct\n"
         ^ String.concat

@@ -2,7 +2,7 @@ editorial implicit modules are selected by the dead-export census: true
 select arms use the compiled target interface relationship: true
 public generator inputs follow Dune module ownership and explicit interfaces: true
 parser tokens and lexer body changes produce generated-interface review entries: true
-private generated modules are excluded while public peers remain visible: true
+private generated modules of a public library remain conservative entries: true
 Dune empty-interface policy changes produce publication-input review entries: true
 availability preprocessing and driver inputs remain literal review evidence: true
 independent public configuration field reordering stays quiet: true
@@ -12,14 +12,14 @@ owning generator configuration changes produce manual-review entries: true
 independent generator configuration field reordering stays quiet: true
 select configuration is visible when its target has an implicit interface: true
 select configuration with an explicit target interface stays quiet: true
-private generator configuration edits stay outside publication inputs: true
+private generator configuration edits remain manual-review entries: true
 private ownership dependency and prose edits do not change publication entries: true
 module lists and configuration read from other files refuse: true
-an include outside module owners and generators is not read: true
+a bare include atom and an include outside module owners and generators pass: true
 a selected interface target refuses by name: true
 re-exported dependencies remain publication-input evidence at any depth: true
 ordinary dependency edits beside a re-export stay quiet: true
-ordinary private modules leave the inventory while public peers remain: true
+ordinary private modules remain in the census inventory: true
 a multiline value signature change is visible: true
 record fields and constructors retain their symbol spellings: true
 documentation and whitespace changes do not count as declarations: true

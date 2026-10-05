@@ -64,10 +64,11 @@ let () =
     "(ocamllex lexer) (menhir (modules parser)) (library (name parserlib) (public_name \
      pkg.parserlib) (modules lexer parser) (private_modules Lexer))"
   in
-  Verdict.p "private generated modules are excluded while public peers remain visible"
+  (* A public module can [include] a private one, so privacy does not remove the evidence. *)
+  Verdict.p "private generated modules of a public library remain conservative entries"
     (List.equal String.equal
        (Surface.sources ~dunes:[ ("tensor/dune", private_generator_dune) ] generator_paths)
-       [ "tensor/dune"; "tensor/parser.mly" ]
+       [ "tensor/dune"; "tensor/lexer.mll"; "tensor/parser.mly" ]
     && List.equal String.equal
          (Surface.sources
             ~dunes:
@@ -78,7 +79,7 @@ let () =
                    \\ parser)))" );
               ]
             generator_paths)
-         [ "tensor/dune"; "tensor/parser.mly" ]);
+         [ "tensor/dune"; "tensor/lexer.mll"; "tensor/parser.mly" ]);
   Verdict.p "Dune empty-interface policy changes produce publication-input review entries"
     (List.length
        (changed "lib/dune" "(library (name lib) (public_name pkg.lib) (modules a))"
@@ -166,10 +167,11 @@ let () =
     "(menhir (modules parser) (flags " ^ flag
     ^ ")) (library (name lib) (public_name pkg.lib) (modules parser) (private_modules parser))"
   in
-  Verdict.p_empty "private generator configuration edits stay outside publication inputs"
-    ~over:(declarations ~paths:[ "tensor/parser.mly" ] "tensor/dune" (private_config "--table"))
-    (changed ~paths:[ "tensor/parser.mly" ] "tensor/dune" (private_config "--table")
-       (private_config "--code"));
+  Verdict.p "private generator configuration edits remain manual-review entries"
+    (List.length
+       (changed ~paths:[ "tensor/parser.mly" ] "tensor/dune" (private_config "--table")
+          (private_config "--code"))
+    = 1);
   let publication_before =
     declarations "lib/dune"
       "(library (name public) (public_name pkg.public) (modules a) (libraries earlier) (synopsis \
@@ -198,11 +200,11 @@ let () =
       Option.value_map (dune_refusal dune) ~default:false ~f:(fun message ->
           String.is_substring message ~substring:"lib/dune: "
           && String.is_substring message ~substring:"gh-ocannl-1201"));
-  Verdict.p "an include outside module owners and generators is not read"
+  Verdict.p "a bare include atom and an include outside module owners and generators pass"
     (Option.is_none
        (dune_refusal
-          "(library (name lib) (public_name pkg.lib)) (rule (deps (:include deps.sexp)) (action \
-           (progn)))"));
+          "(library (name lib) (public_name pkg.lib) (preprocess (action (run ./pp.exe \
+           :include)))) (rule (deps (:include deps.sexp)) (action (progn)))"));
   Verdict.p "a selected interface target refuses by name"
     (Option.value_map
        (dune_refusal
@@ -225,7 +227,7 @@ let () =
   let private_paths =
     [ "lib/a.ml"; "lib/b.ml"; "lib/b.mli"; "lib/c.ml"; "lib/c.mli"; "tensor/d.ml" ]
   in
-  Verdict.p "ordinary private modules leave the inventory while public peers remain"
+  Verdict.p "ordinary private modules remain in the census inventory"
     (List.equal String.equal
        (Surface.sources
           ~dunes:
@@ -235,7 +237,7 @@ let () =
               );
             ]
           private_paths)
-       [ "lib/c.mli"; "lib/dune"; "tensor/d.ml" ]
+       [ "lib/a.ml"; "lib/b.mli"; "lib/c.mli"; "lib/dune"; "tensor/d.ml" ]
     && List.equal String.equal
          (Surface.sources
             ~dunes:
@@ -244,7 +246,7 @@ let () =
                   "(library (name lib) (public_name pkg.lib) (private_modules (:standard \\ c)))" );
               ]
             private_paths)
-         [ "lib/c.mli"; "lib/dune"; "tensor/d.ml" ]
+         [ "lib/a.ml"; "lib/b.mli"; "lib/c.mli"; "lib/dune"; "tensor/d.ml" ]
     && List.equal String.equal (Surface.sources private_paths)
          [ "lib/a.ml"; "lib/b.mli"; "lib/c.mli"; "tensor/d.ml" ]);
   Verdict.p "a multiline value signature change is visible"
@@ -315,7 +317,7 @@ let () =
        let _ = 2;;\n\
        print_endline \"old bare eval\";;\n\
        module M = struct let visible = 1 let () = print_endline \"old nested\" end\n\
-       module _ = struct let x = earlier end\n\
+       module _ = struct let x = earlier let () = earlier end\n\
        (** documented *)\n\
        let () = earlier"
   in
@@ -326,7 +328,7 @@ let () =
        let _ = 3;;\n\
        print_endline \"new bare eval\";;\n\
        module M = struct let visible = 1 let () = print_endline \"new nested\" end\n\
-       module _ = Make (struct let x = later end)\n\
+       module _ = Make (struct let x = later let () = later end)\n\
        (** documented *)\n\
        let () = later"
   in
@@ -366,6 +368,14 @@ let () =
       ( "module M = struct\n let () = setup () [@@warning \"-8\"] end",
         "lib/a.ml:2:",
         "value binding" );
+      ("module _ = struct\n let () = () [@@warning \"-8\"] end", "lib/a.ml:2:", "value binding");
+      ( "let () =\n let module M = struct let () = () [@@warning \"-8\"] end in ()",
+        "lib/a.ml:2:",
+        "value binding" );
+      ("module _ = struct\n module _ = struct end [@@publish] end", "lib/a.ml:2:", "module binding");
+      ( "let exported = 1 and () =\n let module M = struct let _ = () [@@x] end in ()",
+        "lib/a.ml:2:",
+        "value binding" );
     ]
     ~f:(fun (text, location, kind) ->
       match refusal "lib/a.ml" text with
@@ -379,6 +389,7 @@ let () =
       "let exported = setup () [@@publish]";
       "module M = struct end [@@publish]";
       "[%%publish let () = setup () [@@publish]]";
+      "module _ = struct [%%publish let () = setup () [@@publish]] end";
       "type t = A [@@deriving sexp]";
     ] ~f:(fun text -> Option.is_some (refusal "lib/a.ml" text));
   let mixed_before = declarations "lib/a.ml" "let exported = 1 and () = earlier" in

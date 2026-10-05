@@ -24,8 +24,9 @@ files.
   tagging each addition, removal or change with the commit SHA and subject (the merged PR number
   where Git recorded one). Both endpoints must be on the same first-parent history; the end
   defaults to `HEAD`. Its implicit-module inventory comes from the dead-export census, alongside
-  all interfaces in those roots, less the modules any library declares in `private_modules` — the
-  same subtraction generated inputs get, not a reconstruction of the installed graph. OCaml parsing
+  all interfaces in those roots. A module a library declares in `private_modules` stays, ordinary
+  or generated: a public module can `include` or alias it, so privacy alone does not keep its
+  declarations out of the public API. OCaml parsing
   preserves multiline signatures, types, record fields, constructors and module declarations while
   discarding documentation-only OCaml edits.
   Movement across surviving declarations is reported conservatively because their order can
@@ -34,14 +35,17 @@ files.
   groups), `module _` bindings and bare evaluations. Only an attribute PPX could make one export,
   and none exists, so a non-documentation item attribute on an anonymous item — compiler
   built-ins such as `[@@warning]` included, since the reader does not interpret attributes —
-  refuses the report with its location (gh-ocannl-1201) rather than being dropped; inside an
-  extension payload everything stays visible. Pattern PPX inputs stay visible for manual review
-  even when their source binds no ordinary name.
+  refuses the report with its location (gh-ocannl-1201) rather than being dropped, also when
+  nested inside a pruned item; inside an extension payload everything stays visible. A pruned
+  initializer can still fix the inferred type of a weakly polymorphic exported value (`let r = ref
+  None` then `let () = r := Some 1`): like other inferred types, that stays with manual review.
+  Pattern PPX inputs stay visible for manual review even when their source binds no ordinary name.
   Dune supplies the compiled target/interface relationship for select arms and the inputs of
   public lexer/parser modules. A generator input is a conservative review entry: the editor must
   inspect its generated interface, since this tool does not regenerate historical modules or
   typecheck their dependency trees. The owning configuration of accepted generator/select inputs is
-  retained as a manual-review entry too; private or explicitly interfaced targets stay excluded.
+  retained as a manual-review entry too; explicitly interfaced targets and private-library
+  generators stay excluded.
   Independent Dune stanza and field reordering is ignored. Literal public-library configuration
   produces conservative input entries too, including module ownership, interface policy,
   availability, preprocessing and compiler/driver inputs. These entries do not evaluate Dune
