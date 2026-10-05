@@ -335,7 +335,7 @@ class CellGroupTest(unittest.TestCase):
 
     @unittest.skipUnless(os.name == "posix", "driver signal fixtures require POSIX")
     def test_gh1002_driver_cancellation_collects_the_cell(self):
-        for signum in (signal.SIGTERM, signal.SIGINT):
+        for signum in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
             with self.subTest(signal=signum):
                 pidfile = self.dir / f"gh1002-cancel-{signum}.pid"
                 kill_the_group_on_cleanup(self, pidfile)
@@ -488,8 +488,10 @@ class CellGroupTest(unittest.TestCase):
             + publish_pid("sys.argv[1]", "kid.pid")
             + "time.sleep(300)\n"
         )
+        # SIGHUP is the hangup of the terminal or ssh session the driver runs in: with the build in
+        # a session of its own, the driver is the only one to receive it.
         for bare in (True, False):
-            for signum in (signal.SIGTERM, signal.SIGINT):
+            for signum in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
                 with self.subTest(bare=bare, signal=signum):
                     published = f"builder-{'bare' if bare else 'managed'}-{signum}.pid"
                     pidfile = self.dir / published
@@ -714,6 +716,20 @@ class CellGroupTest(unittest.TestCase):
         job.close.assert_called_once_with()
         child.kill.assert_called_once_with()
         child.wait.assert_called_once_with(timeout=1)
+
+    @unittest.skipUnless(os.name == "posix", "SIGHUP is POSIX-only")
+    def test_a_nohup_driver_keeps_ignoring_hangups(self):
+        # A driver started under `nohup` asked to outlive the hangup: `install` must not turn the
+        # ignored SIGHUP back into a termination. Two-sided: a default SIGHUP is taken over.
+        self.addCleanup(signal.signal, signal.SIGHUP, signal.getsignal(signal.SIGHUP))
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            self.addCleanup(signal.signal, sig, signal.getsignal(sig))
+        signal.signal(signal.SIGHUP, signal.SIG_IGN)
+        cell_group.CancellationDeferral("nohup driver").install()
+        self.assertIs(signal.getsignal(signal.SIGHUP), signal.SIG_IGN)
+        signal.signal(signal.SIGHUP, signal.SIG_DFL)
+        cell_group.CancellationDeferral("terminal driver").install()
+        self.assertTrue(callable(signal.getsignal(signal.SIGHUP)))
 
     def test_a_held_signal_does_not_replace_a_cleanup_failure(self):
         cancellation = cell_group.CancellationDeferral("test driver")
