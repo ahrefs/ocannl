@@ -307,7 +307,7 @@
  (package neural_nets_lib)
  (deps ocannl_config)
  (modules source_inventory_cases)
- (libraries base stdio unix test_utils arrayjit.verdict))
+ (libraries base stdio test_utils arrayjit.verdict))
 
 ; gh-ocannl-859: `@check` proves that a non-default ppx_minidebug gate compiles, but not that a
 ; trace expression resolved the intended binding. The ordinary level-0 suite records an explicit
@@ -2671,11 +2671,17 @@
 ; on whatever the library sources happen to contain today.
 
 (test
- ; ocannl-backend: none -- links no backend: it reads embedded OCaml snippets through Config_key_scan as text.
+ ; ocannl-backend: none -- links no backend: it reads embedded OCaml snippets through Config_key_scan as
+ ; text, and runs the two scanners, which link none either, over a synthetic tree.
  (name config_scan_lexing)
  (package neural_nets_lib)
  (deps ocannl_config digest_completeness.ml test_config_consistency.ml)
  (modules config_scan_lexing)
+ (action
+  (run
+   %{test}
+   %{dep:digest_completeness.exe}
+   %{dep:test_config_consistency.exe}))
  (libraries base stdio test_utils arrayjit.verdict))
 
 (test
@@ -2702,11 +2708,14 @@
 ; it rather than on whatever the repository's dune files happen to say today.
 
 (test
- ; ocannl-backend: none -- links no backend: it reads embedded dune-file text through Dune_stanza_scan as text.
+ ; ocannl-backend: none -- links no backend: it reads embedded dune-file text through Dune_stanza_scan as
+ ; text, and runs config_dep_completeness, which links none either, over a synthetic tree.
  (name dune_scan_cases)
  (package neural_nets_lib)
  (deps ocannl_config config_dep_completeness.ml)
  (modules dune_scan_cases)
+ (action
+  (run %{test} %{dep:config_dep_completeness.exe}))
  (libraries base stdio test_utils arrayjit.verdict))
 
 ; gh-ocannl-1005: resolve deliberately refused Verdict runs from their Dune owners, then
@@ -2751,7 +2760,7 @@
  (action
   (run %{test} %{dep:refused_action_streams.exe}))
  (modules refused_action_scan_cases)
- (libraries base stdio unix test_utils fresh_process arrayjit.verdict))
+ (libraries base stdio test_utils arrayjit.verdict))
 
 ; gh-ocannl-800: static scanner refusal formats are related to permanent control goldens. These
 ; cases pin extraction, Printf-hole normalization, the orphan arm, and the covered near miss on
@@ -3480,7 +3489,13 @@
 (executable
  (name codegen_text_inventory)
  (modules codegen_text_inventory)
- (libraries base stdio test_utils emitter_frontier arrayjit.verdict))
+ (libraries
+  base
+  stdio
+  test_utils
+  fresh_process
+  emitter_frontier
+  arrayjit.verdict))
 
 ; The `.cmi` dependencies are the emitter frontier's source (gh-ocannl-748): the set of values that
 ; hand a test generated text is derived from the compiler libraries' compiled interfaces rather than
@@ -3631,11 +3646,14 @@
  (libraries base stdio test_utils arrayjit.verdict))
 
 (test
- ; ocannl-backend: none -- links no backend: it reads embedded format strings through Verdict_scan as text.
+ ; ocannl-backend: none -- links no backend: it reads embedded format strings through Verdict_scan as
+ ; text, and runs verdict_ratchet, which links none either, over a synthetic corpus.
  (name verdict_scan_cases)
  (package neural_nets_lib)
  (deps ocannl_config verdict_ratchet.ml)
  (modules verdict_scan_cases)
+ (action
+  (run %{test} %{dep:verdict_ratchet.exe}))
  (libraries base stdio test_utils arrayjit.verdict))
 
 (test
@@ -6761,7 +6779,7 @@
 (executable
  (name shell_scripts_parse)
  (modules shell_scripts_parse)
- (libraries base stdio unix test_utils arrayjit.verdict))
+ (libraries base stdio test_utils arrayjit.verdict))
 
 (rule
  ; ocannl-backend: none -- links no backend: it hands shell scripts to `bash -n`/`sh -n` and runs no kernels.

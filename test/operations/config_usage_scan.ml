@@ -23,8 +23,6 @@ module Markdown = Test_utils.Agent_notes_scan
 module Refusal_manifest = Test_utils.Refusal_control_manifest
 module Inventory = Test_utils.Source_inventory
 
-let printf = Refusal_manifest.printf
-
 type kind =
   | Cli_flag
   | Prefix_free_cli_flag
@@ -576,7 +574,7 @@ let non_config_environment_mentions =
     ("test/operations/config_var_spellings.ml", "print", 1);
     ("test/operations/config_var_spellings.ml", "backedn", 1);
     ("test/operations/env_var_deps.ml", "backedn", 1);
-    ("test/operations/env_var_deps.ml", "demo_key", 1);
+    ("test/operations/env_var_deps.ml", "demo_key", 2);
     ("test/operations/env_var_deps.ml", "dashed_only_key", 1);
     ("test/operations/env_var_deps.ml", "x", 1);
     ("test/operations/env_var_deps.ml", "not_a_config_key", 1);

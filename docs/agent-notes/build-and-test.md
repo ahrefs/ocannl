@@ -335,9 +335,21 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   substitutions removed), and requires a unique full-format marker plus its readable fragment in the scanner's
   assigned permanent control golden. `Refusal_control_manifest` is the explicit bridge, but not its
   own evidence: a claim marker is emitted only after `Verdict` recorded a passing execution of that
-  exact format (and each observation is consumed once), while a direct-failure marker requires the
-  exact successful negative-control line assigned to that refusal or an explicit observation from
-  the caught branch itself. Marker occurrences are consumed as a multiset, so two identical
+  exact format (and each observation is consumed once), while a direct-failure marker requires
+  that the refusal RAN: an `observe_failure` from the caught branch itself, or a
+  `raw_direct_evidence` entry naming a control claim that passed AND a `FAIL:` line matching the
+  refusal's format in that scanner's refused child run (`Refusal_control_manifest.refuses`, or
+  `observe_refused_run` over a harness's own capture). Either half alone counts for nothing: a
+  claim over a fixture the scan ACCEPTS, a prose line, or an unrelated passing claim once stood in
+  for every direct failure of the two configuration scanners; printed output is no input to the rule
+  (gh-ocannl-1207; `Manifest.standing` holds the rule, `refusal_control_scan_cases` pins each
+  direction). A refusal no control can reach -- a library constant, a malformed repository nobody
+  builds -- goes in `raw_catalogue_only` with its reason and prints under its own `Catalogue-only:`
+  heading, so it stays catalogued without claiming execution; a key in both tables, or a
+  catalogue-only refusal a run does execute, is refused. The cheap way to execute one is a child
+  run of the scanner over a `with_tree` of malformed input (`config_scan_lexing`,
+  `dune_scan_cases`, `verdict_scan_cases`, env_var_deps' `malformed_tree_control`). Marker
+  occurrences are consumed as a multiset, so two identical
   formats require two exercised controls. A new manifest row therefore
   prints nothing until its arm supplies runtime evidence. Never compute a marker by hand: while a
   scan's row is missing or empty, its golden run's `print` writes the whole row, ready to paste into
@@ -345,14 +357,14 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   diagnostic gained, lost or reworded -- it writes the added/removed markers and the replacement row
   there instead, and names the `<source>:<md5>` key of each new direct failure with no entry and
   no in-process `observe_failure` (a separate `--control` run's observations are invisible there),
-  whose `raw_direct_evidence` entry stays hand-written.
+  whose `raw_direct_evidence` or `raw_catalogue_only` entry stays hand-written.
   `refusal_control_scan_cases.expected` holds the manifest equal to mechanical extraction, every entry present in the assigned live/case
   golden union, and the manifest's repo-relative source paths equal to `env_var_deps`' derived
   scanner census; the audit's own stanza argument list assigns each source its goldens, and its
   sources are held equal to the manifest's, a missing or extra one named on stderr (gh-ocannl-1088). Rewording a refusal format moves its marker digest: when a row differs, that
   audit writes the markers on each side and the whole replacement row on stderr, and its
-  `raw_direct_evidence` claim names on stderr every `<source>:<md5>` key no current direct failure
-  answers to -- re-key those from the row difference. The
+  `raw_direct_evidence`/`raw_catalogue_only` claim names on stderr every `<source>:<md5>` key no
+  current direct failure answers to -- re-key those from the row difference. The
   audit is itself on `@scans` and excluded from the evidence corpus, so it cannot answer for itself.
   Consequence for authoring: EVERY Verdict claim in a scanner source is a refusal to the ratchet,
   so a claim that is not about the scan's refusals -- a relationship pin between two library values,

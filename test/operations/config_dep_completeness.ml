@@ -58,9 +58,6 @@ open Stdio
    dune never writes the redirected stdout, the same lines go to stderr, where they survive to be
    read (gh-ocannl-601). *)
 open Verdict.Claims
-
-let printf = Test_utils.Refusal_control_manifest.printf
-
 module Scan = Test_utils.Dune_stanza_scan
 
 (* Rules that run something which reads no configuration. Keyed by "<dir>:<what the scan reports>",

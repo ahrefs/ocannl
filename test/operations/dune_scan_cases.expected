@@ -306,6 +306,8 @@ Contained-marker refusal diagnostics exercised by the cases above:
 ok: refused -- a marker nested inside a stanza
 ok: refused -- a block comment
 ok: refused -- a datum comment
+config_dep_completeness refuses a tree built to trip its refusals, exiting 1: true
+config_dep_completeness refuses a run handed no dune file, exiting 1: true
 
 Synthetic controls: scanner refusal diagnostics exercised by this control golden:
   [scanner-refusal:2ade05f14bd972f85a1792722f8a0ab6] arguments the rule's
@@ -316,8 +318,9 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:e11f1dd0ebe8035f6b6bb919c904e611] this check cannot
   [scanner-refusal:e20c1b4ad3881b8147939aef02357ab2] classification for and
   [scanner-refusal:332abda7feebdaa6c1c10670865ea5c6] does not declare
+  [scanner-refusal:328553bf93b184a97ab7d44d97c369a4] exempted sites that
+Catalogue-only: direct failures no control executes (reasons in `raw_catalogue_only`):
   [scanner-refusal:c35e7bf895b2bfc334caa198f2db4c83] raw text shows
   [scanner-refusal:a83ec7419ab530468bb3d4143c8c8576] raw text shows
   [scanner-refusal:28c35655d1568c3c11bdc1893d8847fa] raw text runs
   [scanner-refusal:929a18d24ebaad373970a360298e3b88] raw text runs
-  [scanner-refusal:328553bf93b184a97ab7d44d97c369a4] exempted sites that

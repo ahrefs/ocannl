@@ -30,9 +30,6 @@ open Stdio
    nonzero exit means dune never writes the redirected stdout, the same lines go to stderr, where
    they survive to be read (gh-ocannl-601). *)
 open Verdict.Claims
-
-let printf = Test_utils.Refusal_control_manifest.printf
-
 module SC = Ir.Schedule_cache
 module Config_key_scan = Test_utils.Config_key_scan
 

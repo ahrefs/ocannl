@@ -188,3 +188,9 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:55743888dd2a4a2234ee1d3f031ea47e] meets its source-count
   [scanner-refusal:a9c0305e1a7d7817b8ba147ce52e8f90] classified exactly once
   [scanner-refusal:5e2800ca22fd1c7629755f638e39e542] is classified code-borne
+Catalogue-only: direct failures no control executes (reasons in `raw_catalogue_only`):
+  [scanner-refusal:fc3ef3788212f2d1f5a9d9a46be3ca38] keys classified more
+  [scanner-refusal:dc9995a5d5b80370dc90971d3fd019df] no cache-identity classification
+  [scanner-refusal:a385ae718c8af3ab39a45701b75fda4d] Utils.known_config_keys
+  [scanner-refusal:14b02d2180d3814d6746acd827aecbc3] classifications claim cache-key
+  [scanner-refusal:8109160f59717560ff5e6f7251a6a2b2] cache-key components no

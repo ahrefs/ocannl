@@ -13,6 +13,13 @@ a row holding the same markers in another order names the first misplaced entry:
 a direct failure new to the row, observed by nothing, is named for a direct-evidence entry; a new claim is not: true
 a second occurrence of a listed direct failure is new to the row, and is named: true
 a direct failure the row already lists asks for no new evidence: true
+a passed control claim and the refusal's line from a refused run exercise it: true
+a passed control claim alone, with no refused run printing the refusal, does not: true
+a refused run printing a different refusal does not either: true
+the refusal's line alone, with the mapped claim not passed, does not: true
+an observation from the caught branch exercises it with no mapping: true
+a catalogue-only refusal nothing executes stays catalogue-only: true
+a catalogue-only refusal a control executes is reported as both: true
 a manifest source missing from the argument list is named as uncatalogued: true
 an argument-list source outside the manifest is named as extra: true
 a source catalogued twice is a mismatch, not a match: true
@@ -140,6 +147,7 @@ census_total_ratchet.ml: [scanner-refusal:22c73fdc7f08c48d003aabefe9f59d17] chec
 codegen_text_inventory.ml has exactly the explicitly assigned refusal controls: true
 codegen_text_inventory.ml: [scanner-refusal:83dfdd0395c402128515f27b2f3b1b1c] the exclusion for (direct failure) is catalogued beside codegen_text_scan_cases.expected, codegen_text_inventory_control.expected, codegen_text_inventory.expected: true
 codegen_text_inventory.ml: [scanner-refusal:b1a8055bff15f499f2f143975afca3d7] reaches the stale-exclusion (claim) is catalogued beside codegen_text_scan_cases.expected, codegen_text_inventory_control.expected, codegen_text_inventory.expected: true
+codegen_text_inventory.ml: [scanner-refusal:0e0975906df73fda3897bc10ee9904c0] refuses it exiting (claim) is catalogued beside codegen_text_scan_cases.expected, codegen_text_inventory_control.expected, codegen_text_inventory.expected: true
 codegen_text_inventory.ml: [scanner-refusal:123bedafe19167d3536ddb2ca1115d21] cannot say whether (direct failure) is catalogued beside codegen_text_scan_cases.expected, codegen_text_inventory_control.expected, codegen_text_inventory.expected: true
 codegen_text_inventory.ml: [scanner-refusal:532d3ed986dd6559fec87d780769ee1f] declares module (direct failure) is catalogued beside codegen_text_scan_cases.expected, codegen_text_inventory_control.expected, codegen_text_inventory.expected: true
 codegen_text_inventory.ml: [scanner-refusal:a59159ac0fd0f431da9519f8016e6762] every scanned root (claim) is catalogued beside codegen_text_scan_cases.expected, codegen_text_inventory_control.expected, codegen_text_inventory.expected: true
@@ -389,6 +397,8 @@ env_var_deps.ml: [scanner-refusal:f8fc95de59a65622241eac16f5f1ecf4] effective ga
 env_var_deps.ml: [scanner-refusal:abc806b50e485449683b10cc952fde9d] preprocessing-only universe dependencies (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:0d805a9703eb5f183046f05353ed6587] expansions and subtracted (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:9fe5330074251fed6b9e5e08a0d663bd] universe users alone (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:d29c340cf3960a26e7f234805bcebd18] the declaration checks (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:d896c784ca87717dc5c6d91befbce0e1] source is refused (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 refused_action_streams.ml has exactly the explicitly assigned refusal controls: true
 ll_test_ratchet.ml has exactly the explicitly assigned refusal controls: true
 operand_key_ratchet.ml has exactly the explicitly assigned refusal controls: true
@@ -508,4 +518,5 @@ workflow_job_timeouts.ml: [scanner-refusal:63a7ea671879e6eb8a95504d21ae4856] doc
 workflow_job_timeouts.ml: [scanner-refusal:501e8a68f00d9f02dc169f32d4980a9f] reader measuring indentation (claim) is catalogued beside workflow_job_timeouts.expected: true
 workflow_job_timeouts.ml: [scanner-refusal:de56c44843177e1b1a86d6d0970e8ec9] refused rather than (claim) is catalogued beside workflow_job_timeouts.expected: true
 workflow_job_timeouts.ml: [scanner-refusal:ea2e7502608bb8e1195b7ec15868624a] nested under github/workflows (claim) is catalogued beside workflow_job_timeouts.expected: true
-every `raw_direct_evidence` key names a current direct failure of a catalogued scanner source: true
+every `raw_direct_evidence` and `raw_catalogue_only` key names a current direct failure of a catalogued scanner source: true
+no direct failure is both answered by a control and catalogued as answered by none: true

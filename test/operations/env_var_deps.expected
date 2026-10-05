@@ -442,3 +442,20 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:f1c1e39705142c7bdc92b3f0ede72582] refusal-control manifest source
   [scanner-refusal:1f42d7a2739170c96004439d524c5d96] permanent control-golden corpus
   [scanner-refusal:a2ef9338814a08816bb85a6bab6ac71c] statically recoverable scanner
+Catalogue-only: direct failures no control executes (reasons in `raw_catalogue_only`):
+  [scanner-refusal:f11c09a8318b3a7863444256973f57d4] running an executable
+  [scanner-refusal:95919586e2a2b25eaaf13ca8093ab584] repository-wide scan rule
+  [scanner-refusal:be41f253ce4b808b6b4ec587c304ec08] repository-wide scan rule
+  [scanner-refusal:b040632469771b25abb3469878413be3] the repository scanner
+  [scanner-refusal:364d32b22a5cb7a70b569db0d8864170] env_var
+  [scanner-refusal:07e7987f0d61b10a9fea6c6590c73d59] env_var
+  [scanner-refusal:941a9fb77d867c7b1576a0f19ee5db3b] declares
+  [scanner-refusal:0deef0cb94c45615f32ee84ac2e76f8e] declares tracing gates
+  [scanner-refusal:02e183a4105132ec092206c1d35d6247] reads the tracing
+  [scanner-refusal:e55f77a62871fb685d23199e95c8f173] the environment variable
+  [scanner-refusal:41d9bc729b5b8b3908a48d45b1e0203c] reads the configuration
+  [scanner-refusal:7637eff157ad54e2ce52846535604f2a] scanner refusal
+  [scanner-refusal:fe4c53f899eb08a9ae67e7a797a5a841] scanner-refusal exemptions no
+  [scanner-refusal:09ce44850cdf45c95e308d6c64aed813] the repository's
+  [scanner-refusal:b35f6c5cf70c9d942c2e42a4c1af9975] Test_utils.Generated.init
+  [scanner-refusal:9ad60261dbb2540d4d7e060be725ad4d] repository's census finds

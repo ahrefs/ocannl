@@ -96,8 +96,6 @@ module Sources = Test_utils.Config_key_scan
 module Refusals = Test_utils.Refusal_control_scan
 module Refusal_manifest = Test_utils.Refusal_control_manifest
 
-let printf = Refusal_manifest.printf
-
 (* Declarations of a name OCANNL does not read as a configuration key. Keyed by "<dune
    file>:<name>", and each entry earns its place on every run (see the staleness check below): a
    rule tracking a variable no key would be read from is normally a typo, which is the whole point
@@ -3105,6 +3103,8 @@ let run_checker ~root ~exe args =
   let text = In_channel.read_all out_path ^ In_channel.read_all err_path in
   (try Unix.unlink out_path with Unix.Unix_error _ -> ());
   (try Unix.unlink err_path with Unix.Unix_error _ -> ());
+  (* What the child refused is what a mapped control claim may answer for (gh-ocannl-1207). *)
+  Refusal_manifest.observe_refused_run ~source:"test/operations/env_var_deps.ml" text;
   (status, text)
 
 let control () =
@@ -4983,6 +4983,76 @@ let ambient_gate_control () =
   let reach = gated_aliases [ census; free; unrelated; no_run ] in
   Verdict.p "universe users alone leave their alias entry points ungated" (Set.is_empty reach)
 
+(* gh-ocannl-1207: refusals of the marker grammar and the declaration checks that no control above
+   reaches, executed rather than vouched for by a neighbouring control that passes. One dune file
+   trips them together -- a marker between stanzas, one naming no backend, one on a stanza that runs
+   nothing, two on one stanza, one contradicting an `(env_var OCANNL_BACKEND)`, the marker's text
+   outside a comment, a declaration of a variable nothing reads, one alias diffing two goldens --
+   beside a source that names `Test_utils.Generated` and does not parse. A second run hands the
+   checker nothing at all. What each child refused is what `raw_direct_evidence` attributes to the
+   two claims. *)
+let malformed_tree_subject =
+  {dune|; ocannl-backend: none -- between stanzas, about none of them.
+(rule
+ ; ocannl-backend: bogus -- no backend this grammar knows.
+ (target a.actual)
+ (deps ocannl_config (env_var OCANNL_DEMO_KEY))
+ (action (with-stdout-to %{target} (run ./noop.exe))))
+
+(library
+ ; ocannl-backend: none -- a library runs nothing.
+ (name noop_lib)
+ (modules noop))
+
+(rule
+ ; ocannl-backend: none -- the first marker.
+ ; ocannl-backend: cc -- a second marker on the same stanza.
+ (target b.actual)
+ (deps ocannl_config)
+ (action (with-stdout-to %{target} (run ./noop.exe))))
+
+(rule
+ ; ocannl-backend: none -- contradicting the declaration below.
+ (target c.actual)
+ (deps ocannl_config (env_var OCANNL_BACKEND))
+ (action (with-stdout-to %{target} (run ./noop.exe))))
+
+(rule
+ (target d.actual)
+ (action (with-stdout-to %{target} (echo "ocannl-backend: none"))))
+
+(rule
+ (alias runtest-two)
+ (action (progn (diff a.expected a.actual) (diff b.expected b.actual))))
+|dune}
+
+let malformed_tree_control () =
+  let exe =
+    let name = Stdlib.Sys.executable_name in
+    if Stdlib.Filename.is_relative name then Stdlib.Filename.concat (Stdlib.Sys.getcwd ()) name
+    else name
+  in
+  let root = Stdlib.Filename.temp_dir "evd_malformed" "" in
+  let context = control_context () in
+  List.iter context ~f:(fun (file, content) ->
+      write_file (Stdlib.Filename.concat root file) content);
+  write_file (Stdlib.Filename.concat root "t/noop.ml") "let () = ()\n";
+  write_file (Stdlib.Filename.concat root "t/dune") malformed_tree_subject;
+  write_file (Stdlib.Filename.concat root "t/broken.ml") "let = Test_utils.Generated.init\n";
+  let exited n (status, _) = match status with Unix.WEXITED m -> m = n | _ -> false in
+  let malformed =
+    run_checker ~root ~exe
+      ("." :: "t/dune" :: "t/noop.ml" :: "t/broken.ml" :: List.map context ~f:fst)
+  in
+  let empty = run_checker ~root ~exe [ "." ] in
+  printf
+    "The checker is put to one dune file built to trip the marker grammar and the declaration\n\
+     checks, beside a source that does not parse, and to a run handed nothing at all.\n\n";
+  Verdict.p "a dune file built to trip the marker grammar and the declaration checks is refused"
+    (exited 1 malformed);
+  Verdict.p "a run handed no dune file and no source is refused" (exited 1 empty);
+  try remove_tree root with Unix.Unix_error _ -> ()
+
 let () =
   match Array.to_list argv with
   | _ :: [ "--control" ] ->
@@ -4998,6 +5068,7 @@ let () =
       ambient_gate_control ();
       repository_inventory_control ();
       gateless_scope_control ();
+      malformed_tree_control ();
       (* Dune's repository-wide rule hands the same source to [main] as [./env_var_deps.ml] after a
          full build has materialized the local build-tree copy. Exercise that spelling here too: the
          manifest identity is repository-relative even when the file used to extract the diagnostics

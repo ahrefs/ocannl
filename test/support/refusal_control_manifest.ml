@@ -152,6 +152,7 @@ let raw_entries =
       [
         "[scanner-refusal:83dfdd0395c402128515f27b2f3b1b1c] the exclusion for";
         "[scanner-refusal:b1a8055bff15f499f2f143975afca3d7] reaches the stale-exclusion";
+        "[scanner-refusal:0e0975906df73fda3897bc10ee9904c0] refuses it exiting";
         "[scanner-refusal:123bedafe19167d3536ddb2ca1115d21] cannot say whether";
         "[scanner-refusal:532d3ed986dd6559fec87d780769ee1f] declares module";
         "[scanner-refusal:a59159ac0fd0f431da9519f8016e6762] every scanned root";
@@ -414,6 +415,8 @@ let raw_entries =
          dependencies";
         "[scanner-refusal:0d805a9703eb5f183046f05353ed6587] expansions and subtracted";
         "[scanner-refusal:9fe5330074251fed6b9e5e08a0d663bd] universe users alone";
+        "[scanner-refusal:d29c340cf3960a26e7f234805bcebd18] the declaration checks";
+        "[scanner-refusal:d896c784ca87717dc5c6d91befbce0e1] source is refused";
       ] );
     ( "ocamlformat_ignore_scan.ml",
       [
@@ -556,51 +559,29 @@ let sources = List.map entries ~f:fst
 let raw_direct_evidence =
   [
     ( "codegen_text_inventory.ml:123bedafe19167d3536ddb2ca1115d21",
-      "ok: source -- text the scan cannot name marks the itemisation partial, without losing the \
-       file" );
-    ( "codegen_text_inventory.ml:532d3ed986dd6559fec87d780769ee1f",
-      "ok: rejection -- opening the emitter's module hides the render" );
+      "a scan handed a source that does not parse refuses it, exiting 1: true" );
     ( "config_dep_completeness.ml:2ade05f14bd972f85a1792722f8a0ab6",
-      "ok: a program action's arguments are not actions" );
+      "config_dep_completeness refuses a run handed no dune file, exiting 1: true" );
     ( "config_dep_completeness.ml:6c29eb9b1db92bba229707a7cd8e1b5b",
-      "ok: a rule that copies an executable does not run it" );
+      "config_dep_completeness refuses a tree built to trip its refusals, exiting 1: true" );
     ( "config_dep_completeness.ml:cebf445823df462f70b459a86b20e3d3",
-      "ok: raw stanzas -- a name the stanza binds resolves under one too" );
+      "config_dep_completeness refuses a tree built to trip its refusals, exiting 1: true" );
     ( "config_dep_completeness.ml:6d151bed80a45201e61d096c2c38d210",
-      "ok: copies the config -- no copy_files at all" );
+      "config_dep_completeness refuses a tree built to trip its refusals, exiting 1: true" );
     ( "config_dep_completeness.ml:5509acc7fac8ff0412e3631b49c06dc7",
-      "ok: a test's shell action leaves its directory unestablished too" );
+      "config_dep_completeness refuses a tree built to trip its refusals, exiting 1: true" );
     ( "config_dep_completeness.ml:e11f1dd0ebe8035f6b6bb919c904e611",
-      "ok: a named dep may wrap its path in a dependency form" );
+      "config_dep_completeness refuses a tree built to trip its refusals, exiting 1: true" );
     ( "config_dep_completeness.ml:e20c1b4ad3881b8147939aef02357ab2",
-      "ok: an action head on neither list is reported" );
+      "config_dep_completeness refuses a tree built to trip its refusals, exiting 1: true" );
     ( "config_dep_completeness.ml:332abda7feebdaa6c1c10670865ea5c6",
-      "ok: a library's own deps are not the inline tests' deps" );
-    ( "config_dep_completeness.ml:c35e7bf895b2bfc334caa198f2db4c83",
-      "ok: raw stanzas -- a tool only reading them is the same text" );
-    ( "config_dep_completeness.ml:a83ec7419ab530468bb3d4143c8c8576",
-      "ok: raw stanzas -- a tool only reading them is the same text" );
-    ( "config_dep_completeness.ml:28c35655d1568c3c11bdc1893d8847fa",
-      "ok: raw stanzas -- a bare command under setenv PATH is unnameable" );
-    ( "config_dep_completeness.ml:929a18d24ebaad373970a360298e3b88",
-      "ok: raw stanzas -- a tool only reading them is the same text" );
+      "config_dep_completeness refuses a tree built to trip its refusals, exiting 1: true" );
     ( "config_dep_completeness.ml:328553bf93b184a97ab7d44d97c369a4",
-      "ok: raw stanzas -- a library's preprocessor is not a test-running rule" );
+      "config_dep_completeness refuses a tree built to trip its refusals, exiting 1: true" );
     ( "digest_completeness.ml:7cab0a5763f4811f331a4aab327c6784",
-      "ok: key list -- a local literal list immediately feeds the structural guard" );
-    ( "digest_completeness.ml:fc3ef3788212f2d1f5a9d9a46be3ca38",
-      "ok: predicate call contributes its keys -- with_runtime_debug" );
-    ( "digest_completeness.ml:dc9995a5d5b80370dc90971d3fd019df",
-      "ok: predicate call contributes its keys -- with_runtime_debug" );
-    ( "digest_completeness.ml:a385ae718c8af3ab39a45701b75fda4d",
-      "ok: predicate call contributes its keys -- with_runtime_debug" );
-    ( "digest_completeness.ml:14b02d2180d3814d6746acd827aecbc3",
-      "ok: Generated.init -- a bare init without the open is somebody else's function" );
-    ( "digest_completeness.ml:8109160f59717560ff5e6f7251a6a2b2",
-      "ok: an escape sequence decodes to the real key" );
+      "digest_completeness refuses the malformed tree, exiting 1: true" );
     ( "digest_completeness.ml:1825a277ba0eda3313fbe079e465c15d",
-      "ok: environment read -- a function of the file's own that happens to share the name is not \
-       the reader" );
+      "digest_completeness refuses the malformed tree, exiting 1: true" );
     ( "env_var_deps.ml:b0ff4d4e5709299b84685f0fc189cc63",
       "a rule whose alias names one module and whose run tests another is reported: true" );
     ( "env_var_deps.ml:5893c6332b1f903470ec51cad4f20e8f",
@@ -608,52 +589,29 @@ let raw_direct_evidence =
     ( "env_var_deps.ml:5f2b09efad6e397fb5bd77b84255d0bf",
       "a per-module alias listed in the `runtest` aggregate is reported as a double run: true" );
     ( "env_var_deps.ml:490ac5e3405d328c2953c38df4f0974b",
-      "a rule reusing the alias dune generates for a `(test)` in the same `(subdir …)` group is \
-       reported there too: true" );
-    ("env_var_deps.ml:09e01a62cce1d340393a2244ed33ea10", "derivation calls a member.");
+      "a run handed no dune file and no source is refused: true" );
+    ( "env_var_deps.ml:09e01a62cce1d340393a2244ed33ea10",
+      "a dune file built to trip the marker grammar and the declaration checks is refused: true" );
     ( "env_var_deps.ml:034280d144ee4338406ff5f6a1cf287d",
-      "a source that names the instrumentation in a comment, a string and a longer identifier \
-       reads none of it, and is no member: true" );
+      "a dune file built to trip the marker grammar and the declaration checks is refused: true" );
     ( "env_var_deps.ml:30c88c1631600d7969a9aefd4de74162",
-      "an executable declared in a `(subdir …)` group is aggregated by the top-level family stanza \
-       when the rule that runs it sits at the top level: true" );
+      "a dune file built to trip the marker grammar and the declaration checks is refused: true" );
     ( "env_var_deps.ml:f2633aa4ebd6f2c33fd21e4d69cc9786",
-      "a stanza whose backend marker names metal is reported, naming its family, when the \
-       metal-codegen alias does not reach it: true" );
+      "a dune file built to trip the marker grammar and the declaration checks is refused: true" );
     ( "env_var_deps.ml:2803edcc7de84ea6d928343b9d8c8ad2",
-      "a stanza whose backend marker names metal is reported, naming its family, when the \
-       metal-codegen alias does not reach it: true" );
+      "a dune file built to trip the marker grammar and the declaration checks is refused: true" );
     ( "env_var_deps.ml:533fc9999ad0841992e0c1734d9c1f5d",
       "an executable run by a `(test)` stanza's custom action is aggregated through the \
        `runtest-<name>` dune generates for that test: true" );
     ( "env_var_deps.ml:7336dd5a712b0c3a578b64d7defb1654",
-      "a stanza whose backend marker names metal is reported, naming its family, when the \
-       metal-codegen alias does not reach it: true" );
+      "a dune file built to trip the marker grammar and the declaration checks is refused: true" );
     ( "env_var_deps.ml:1aaab6e3cd8f4615e1cd1d0321e309a1",
-      "a dune file whose module sets this scan cannot place is refused, not approximated: true" );
-    ( "env_var_deps.ml:f11c09a8318b3a7863444256973f57d4",
-      "a rule running a file that shares the executable's public name is not its runner, however \
-       alike the two strings are: true" );
-    ( "env_var_deps.ml:95919586e2a2b25eaaf13ca8093ab584",
-      "a runner that runs another directory's executable of the same name does not aggregate this \
-       directory's member: true" );
-    ( "env_var_deps.ml:be41f253ce4b808b6b4ec587c304ec08",
-      "a runner that runs another directory's executable of the same name does not aggregate this \
-       directory's member: true" );
-    ( "env_var_deps.ml:b040632469771b25abb3469878413be3",
-      "a module the stanza names and this check was handed no source for is reported, not read as \
-       one that makes no reads: true" );
+      "a dune file built to trip the marker grammar and the declaration checks is refused: true" );
     ( "env_var_deps.ml:dda5b4655f74eda46ec0c60e320d232b",
       "an executable run by a `(test)` stanza's custom action is aggregated through the \
        `runtest-<name>` dune generates for that test: true" );
     ( "env_var_deps.ml:747372ab4b28cca8978c2b6bd8983005",
       "declaring generated-artifact storage without an initializer is refused: true" );
-    ( "env_var_deps.ml:364d32b22a5cb7a70b569db0d8864170",
-      "a runner that runs another directory's executable of the same name does not aggregate this \
-       directory's member: true" );
-    ( "env_var_deps.ml:07e7987f0d61b10a9fea6c6590c73d59",
-      "a test directory's own `utils.ml` is not the module that defines the reader, and is not \
-       exempt: true" );
     ( "env_var_deps.ml:bbadfd8513559355fedbc54dc3dc678a",
       "a `(subdir …)` group whose actions take the training lock and whose gate does not is \
        reported there too: true" );
@@ -675,112 +633,158 @@ let raw_direct_evidence =
       "an executable run by a `(test)` stanza's custom action is aggregated through the \
        `runtest-<name>` dune generates for that test: true" );
     ( "env_var_deps.ml:ba5d90fc4bcec944ebd169329c706968",
-      "the same tree with the runner's own alias listed passes: true" );
+      "a dune file built to trip the marker grammar and the declaration checks is refused: true" );
     ( "env_var_deps.ml:c1a398b587b5de3d7d02145dc45274a6",
-      "an executable run by a `(test)` stanza's custom action is aggregated through the \
-       `runtest-<name>` dune generates for that test: true" );
-    ( "env_var_deps.ml:941a9fb77d867c7b1576a0f19ee5db3b",
-      "a guard in a plain library is reported, there being no `deps` field in reach to declare it: \
-       true" );
+      "a dune file built to trip the marker grammar and the declaration checks is refused: true" );
     ( "env_var_deps.ml:2b67d02d52c3465bfba40d167802f0a7",
-      "`(env_var OCANNL_BUILD_FILES_PREFIX)`. Nothing else differs between the two runs." );
-    ( "env_var_deps.ml:0deef0cb94c45615f32ee84ac2e76f8e",
-      "a module the stanza names and this check was handed no source for is reported, not read as \
-       one that makes no reads: true" );
-    ( "env_var_deps.ml:02e183a4105132ec092206c1d35d6247",
-      "a family alias defined inside a `(subdir …)` group needs that group's own ambient gate, and \
-       is reported without one: true" );
+      "a dune file built to trip the marker grammar and the declaration checks is refused: true" );
     ( "env_var_deps.ml:2df546d04b63387a24409b3c4c6a9611",
       "a tracing dependency without a module reading it is refused: true" );
-    ( "env_var_deps.ml:e55f77a62871fb685d23199e95c8f173",
-      "an executable run by a `(test)` stanza's custom action is aggregated through the \
-       `runtest-<name>` dune generates for that test: true" );
     ( "env_var_deps.ml:d5f94657407bc4dbf949ba4187e80100",
       "a dune file whose module sets this scan cannot place is refused, not approximated: true" );
     ( "env_var_deps.ml:ea6e2adedc7afd62fa55afcf859f251d",
       "a module the stanza names and this check was handed no source for is reported, not read as \
        one that makes no reads: true" );
     ( "env_var_deps.ml:55f2feade4e139b5abb073d0b89c42cb",
-      "the key list is resolvable at all. Nothing else differs between the runs." );
+      "a dynamic reach whose keys resolve to nothing is refused rather than passed over in \
+       silence: true" );
     ( "env_var_deps.ml:267a42b2812f4679c4463495cc199d36",
       "and declaring the variable in `(inline_tests (deps …))` is no licence: that invalidates the \
        inline runner alone: true" );
-    ( "env_var_deps.ml:41d9bc729b5b8b3908a48d45b1e0203c",
-      "The guard rule is put to a tree of one `(executable)` whose module reads a configuration key"
-    );
     ( "env_var_deps.ml:a323f01100bfd685e76c62154cf4eaae",
       "the checker reports the key and exits 1 when the rule running the guard neither declares \
        nor pins it: true" );
-    ( "env_var_deps.ml:7637eff157ad54e2ce52846535604f2a",
-      "appears in no permanent control golden in the negative arm, and appears in the positive arm."
-    );
-    ( "env_var_deps.ml:fe4c53f899eb08a9ae67e7a797a5a841",
-      "a family alias defined inside a `(subdir …)` group needs that group's own ambient gate, and \
-       is reported without one: true" );
     ( "env_var_deps.ml:0b33370125e32eaa4bb0f50c6cc3bc1a",
       "an exemption whose declaration disappears is refused: true" );
     ( "env_var_deps.ml:638620a0745d0a136810c5b0256e0ec0",
       "a family alias defined inside a `(subdir …)` group needs that group's own ambient gate, and \
        is reported without one: true" );
-    ( "env_var_deps.ml:09ce44850cdf45c95e308d6c64aed813",
-      "a stanza neither derivation calls a member is asked for no family alias: true" );
-    ( "env_var_deps.ml:b35f6c5cf70c9d942c2e42a4c1af9975",
-      "an external command handed a file this workspace builds is a stanza the rule reaches, \
-       reported by name when it declares neither: true" );
     ( "env_var_deps.ml:22e8c3d320466372ca09214ed5850f4f",
       "a key the pipeline reads outside every named value is refused, not dropped from every \
        requirement: true" );
     ( "env_var_deps.ml:ae1b95995f2c4aa10cdeee699ccb3413",
       "a test naming the pipeline is reported, with the key its value reaches through the module's \
        own calls and the execution-neutral trace key, when its stanza declares neither: true" );
-    ( "env_var_deps.ml:9ad60261dbb2540d4d7e060be725ad4d",
-      "a dynamic reach whose keys resolve to nothing is refused rather than passed over in \
-       silence: true" );
     ( "test_config_consistency.ml:40f6a4df02a115c327391e051bacd5c6",
-      "ok: predicate call contributes its keys -- with_runtime_debug" );
+      "test_config_consistency refuses the malformed tree, exiting 1: true" );
     ( "test_config_consistency.ml:dfd9b6901bf188f6500bcc1284778dcd",
-      "ok: predicate call contributes its keys -- with_runtime_debug" );
+      "test_config_consistency refuses the malformed tree, exiting 1: true" );
     ( "test_config_consistency.ml:a22f67563f6e58a972758cfb6438b236",
-      "ok: environment read -- a function of the file's own that happens to share the name is not \
-       the reader" );
+      "test_config_consistency refuses the malformed tree, exiting 1: true" );
     ( "test_config_consistency.ml:f183d4fa8451402727499389f65d55a4",
-      "ok: environment read -- a function of the file's own that happens to share the name is not \
-       the reader" );
-    ( "test_config_consistency.ml:9a0c38727d642eb678b4707766f25708",
-      "ok: predicate call contributes its keys -- with_runtime_debug" );
+      "test_config_consistency refuses the malformed tree, exiting 1: true" );
     ( "test_config_consistency.ml:1ce67444f994f72961fbc476c23dcd84",
-      "ok: predicate call contributes its keys -- with_runtime_debug" );
+      "test_config_consistency refuses the malformed tree, exiting 1: true" );
     ( "test_config_consistency.ml:2651df7744050e9d7f649f390b7c53b1",
-      "ok: a record literal is not a quoted string" );
+      "test_config_consistency refuses the malformed tree, exiting 1: true" );
     ( "test_config_consistency.ml:3a6832937329cda23c716c3883e04cb2",
-      "ok: Generated.init -- a bare init without the open is somebody else's function" );
+      "test_config_consistency refuses the malformed tree, exiting 1: true" );
     ( "test_config_consistency.ml:8bb76ad7cf948a8181b88ee36b0148c6",
-      "ok: key list -- a local literal list immediately feeds the structural guard" );
+      "test_config_consistency refuses the malformed tree, exiting 1: true" );
     ( "test_config_consistency.ml:11c8ffb35753ffb6f87da20d2ba6654f",
-      "ok: settings read -- an unqualified record of the same shape is not a read" );
+      "test_config_consistency refuses the malformed tree, exiting 1: true" );
     ( "test_config_consistency.ml:c56af001748a614d221709bf11098511",
-      "ok: an empty literal names no key, so no key is read" );
+      "test_config_consistency refuses the malformed tree, exiting 1: true" );
     ( "test_config_consistency.ml:e583c416783b3632963a66636f20f65e",
-      "ok: a record literal is not a quoted string" );
+      "test_config_consistency refuses the malformed tree, exiting 1: true" );
     ( "test_config_consistency.ml:b4c59d5ad7a9c4e591998fccf8f039aa",
-      "ok: key list -- a local literal list immediately feeds the structural guard" );
+      "test_config_consistency refuses the malformed tree, exiting 1: true" );
     ( "verdict_ratchet.ml:0f307832357ee7ca58b9798a86530dac",
-      "ok: not a claim -- nothing before it but a blank line" );
-    ("verdict_ratchet.ml:f3e306858423827e6575d13a17d57af6", "ok: claim shape -- the plain form");
+      "verdict_ratchet refuses a run handed no source, exiting 1: true" );
+    ( "verdict_ratchet.ml:f3e306858423827e6575d13a17d57af6",
+      "verdict_ratchet refuses a corpus built to trip its refusals, exiting 1: true" );
     ( "verdict_ratchet.ml:53b71ea33a69d24c941985f4eb35406b",
-      "ok: not a claim -- nothing before it but a blank line" );
+      "verdict_ratchet refuses a corpus built to trip its refusals, exiting 1: true" );
     ( "verdict_ratchet.ml:7d1962ff34bbe1ed7b89a535dc0cfd7e",
-      "ok: source -- a claim inside a list is reached" );
+      "verdict_ratchet refuses a corpus built to trip its refusals, exiting 1: true" );
     ( "verdict_ratchet.ml:ad023891a3bd7827b3905292c487055b",
-      "the walk counts every string literal it passes: true" );
-    ("verdict_ratchet.ml:e1354d390a356f0c79420c25232b0b42", "ok: claim shape -- the planted canary");
+      "verdict_ratchet refuses a corpus built to trip its refusals, exiting 1: true" );
+    ( "verdict_ratchet.ml:e1354d390a356f0c79420c25232b0b42",
+      "verdict_ratchet refuses a corpus built to trip its refusals, exiting 1: true" );
   ]
 
-let direct_evidence =
-  List.map raw_direct_evidence ~f:(fun (key, evidence) -> ("test/operations/" ^ key, evidence))
+(** Direct failures no control executes, each with the reason none does: a refusal the scanner can
+    reach only through a library constant, or only through a malformed repository no control builds.
+    Such a refusal is still catalogued -- [print] lists it under its own heading, so the catalogue
+    audit finds its marker -- but never as exercised: a positive fixture, a prose line or an
+    unrelated claim is not evidence that a refusal path runs (gh-ocannl-1207). A key here and in
+    [raw_direct_evidence] at once is refused by the catalogue audit, and one a control does execute
+    is refused by [print]. *)
+let raw_catalogue_only : (string * string) list =
+  [
+    ( "digest_completeness.ml:fc3ef3788212f2d1f5a9d9a46be3ca38",
+      "decided by the library constant `Utils.config_key_classification` alone" );
+    ( "digest_completeness.ml:dc9995a5d5b80370dc90971d3fd019df",
+      "decided by two library constants, `Utils.known_config_keys` against \
+       `Utils.config_key_classification`" );
+    ( "digest_completeness.ml:a385ae718c8af3ab39a45701b75fda4d",
+      "decided by two library constants, `Utils.config_key_classification` against \
+       `Utils.known_config_keys`" );
+    ( "digest_completeness.ml:14b02d2180d3814d6746acd827aecbc3",
+      "decided by two library constants, `Utils.config_key_classification` against \
+       `Schedule_cache.key_components`" );
+    ( "digest_completeness.ml:8109160f59717560ff5e6f7251a6a2b2",
+      "decided by two library constants, `Schedule_cache.key_components` against \
+       `Utils.config_key_classification`" );
+    ( "test_config_consistency.ml:9a0c38727d642eb678b4707766f25708",
+      "decided by two library constants, `Utils.profile_payloads` against `Utils.known_config_keys`"
+    );
+    ( "env_var_deps.ml:f11c09a8318b3a7863444256973f57d4",
+      "a disagreement between this scan's two readers of one dune file, which no control builds" );
+    ( "env_var_deps.ml:95919586e2a2b25eaaf13ca8093ab584",
+      "a repository-wide scan rule this check cannot relate to a scanner source; no control builds \
+       one" );
+    ( "env_var_deps.ml:be41f253ce4b808b6b4ec587c304ec08",
+      "a repository-wide scan rule this check cannot relate to a scanner source; no control builds \
+       one" );
+    ( "env_var_deps.ml:b040632469771b25abb3469878413be3",
+      "a repository-wide scan rule this check cannot relate to a scanner source; no control builds \
+       one" );
+    ( "env_var_deps.ml:364d32b22a5cb7a70b569db0d8864170",
+      "a misplaced `Test_utils.Generated.init` call; the generated-artifact controls build only \
+       the declared and the undeclared caller" );
+    ( "env_var_deps.ml:07e7987f0d61b10a9fea6c6590c73d59",
+      "a misplaced `Test_utils.Generated.init` call; the generated-artifact controls build only \
+       the declared and the undeclared caller" );
+    ( "env_var_deps.ml:b35f6c5cf70c9d942c2e42a4c1af9975",
+      "a misplaced `Test_utils.Generated.init` call; the generated-artifact controls build only \
+       the declared and the undeclared caller" );
+    ( "env_var_deps.ml:941a9fb77d867c7b1576a0f19ee5db3b",
+      "a declaration outside every `deps` field; the scan's own reader of those fields is what \
+       would have to miss it" );
+    ("env_var_deps.ml:0deef0cb94c45615f32ee84ac2e76f8e", "a tracing-gate shape no control builds");
+    ("env_var_deps.ml:02e183a4105132ec092206c1d35d6247", "a tracing-gate shape no control builds");
+    ( "env_var_deps.ml:e55f77a62871fb685d23199e95c8f173",
+      "an environment-read shape no control builds" );
+    ( "env_var_deps.ml:41d9bc729b5b8b3908a48d45b1e0203c",
+      "an environment-read shape no control builds" );
+    ( "env_var_deps.ml:7637eff157ad54e2ce52846535604f2a",
+      "the live orphan refusal; `refusal_control` puts the relationship to a synthetic corpus in \
+       process, past this branch" );
+    ( "env_var_deps.ml:fe4c53f899eb08a9ae67e7a797a5a841",
+      "stale entries of `refusal_exemptions`, which is empty" );
+    ( "env_var_deps.ml:09ce44850cdf45c95e308d6c64aed813",
+      "a floor under the repository's own census, which only a repository that lost its members \
+       reaches" );
+    ( "env_var_deps.ml:9ad60261dbb2540d4d7e060be725ad4d",
+      "a floor under the repository's own census, which only a repository that lost its members \
+       reaches" );
+    ( "config_dep_completeness.ml:c35e7bf895b2bfc334caa198f2db4c83",
+      "a disagreement between this scan's two readers of one dune file, which no control builds" );
+    ( "config_dep_completeness.ml:a83ec7419ab530468bb3d4143c8c8576",
+      "a disagreement between this scan's two readers of one dune file, which no control builds" );
+    ( "config_dep_completeness.ml:28c35655d1568c3c11bdc1893d8847fa",
+      "a disagreement between this scan's two readers of one dune file, which no control builds" );
+    ( "config_dep_completeness.ml:929a18d24ebaad373970a360298e3b88",
+      "a disagreement between this scan's two readers of one dune file, which no control builds" );
+    ( "codegen_text_inventory.ml:532d3ed986dd6559fec87d780769ee1f",
+      "a wrapper interface handed over without its members, which no control builds" );
+  ]
 
+let qualify = List.map ~f:(fun (key, value) -> ("test/operations/" ^ key, value))
+let direct_evidence = qualify raw_direct_evidence
+let catalogue_only = qualify raw_catalogue_only
 let observed_failures = Hash_set.create (module String)
-let observed_output = Hash_set.create (module String)
 let failure_key ~source ~identity = source ^ ":" ^ identity
 
 let observe_failure ~source ~format =
@@ -789,17 +793,50 @@ let observe_failure ~source ~format =
   in
   Hash_set.add observed_failures (failure_key ~source ~identity)
 
-let observe_output text =
-  String.split_lines text |> List.map ~f:String.strip
-  |> List.filter ~f:(Fn.non String.is_empty)
-  |> List.iter ~f:(Hash_set.add observed_output)
+(** The refusals a scanner child process printed, by the scanner's source: the [FAIL: ] lines of the
+    captured output of a run a control handed malformed input. *)
+let refused_runs = Hashtbl.create (module String)
 
-let printf format =
-  Printf.ksprintf
-    (fun output ->
-      observe_output output;
-      Stdio.printf "%s%!" output)
-    format
+let observe_refused_run ~source output =
+  String.split_lines output
+  |> List.filter_map ~f:(fun line -> String.chop_prefix (String.strip line) ~prefix:"FAIL: ")
+  |> List.iter ~f:(fun line -> Hashtbl.add_multi refused_runs ~key:source ~data:line)
+
+(** [with_tree files f] writes [files], each a relative path and its contents, under a fresh
+    temporary directory, applies [f] to that directory, and removes the tree again: the malformed
+    input a scanner's refusal control hands it. *)
+let with_tree files f =
+  let root = Stdlib.Filename.temp_dir "refusal_control" "" in
+  let rec directories path =
+    let parent = Stdlib.Filename.dirname path in
+    if String.equal parent Stdlib.Filename.current_dir_name then []
+    else parent :: directories parent
+  in
+  let made =
+    List.concat_map files ~f:(fun (path, _) -> directories path)
+    |> List.dedup_and_sort ~compare:String.compare
+    (* Parents before children: a parent is the shorter path. *)
+    |> List.sort ~compare:(fun a b -> Int.compare (String.length a) (String.length b))
+  in
+  List.iter made ~f:(fun dir -> Unix.mkdir (Stdlib.Filename.concat root dir) 0o755);
+  List.iter files ~f:(fun (path, data) ->
+      Out_channel.write_all (Stdlib.Filename.concat root path) ~data);
+  Exn.protect
+    ~f:(fun () -> f root)
+    ~finally:(fun () ->
+      List.iter files ~f:(fun (path, _) -> Stdlib.Sys.remove (Stdlib.Filename.concat root path));
+      List.iter (List.rev made) ~f:(fun dir -> Unix.rmdir (Stdlib.Filename.concat root dir));
+      Unix.rmdir root)
+
+(** Runs the scanner whose source is [source] as a child process, [exe] over [args], records what it
+    refused through [observe_refused_run], and says whether it refused: exited 1, as Verdict ends a
+    run with a failed check -- not 2, which is a run an exception stopped early. *)
+let refuses ~source ~exe args =
+  let ((status, _, _) as run) = Fresh_process.run ~exe args in
+  observe_refused_run ~source (Fresh_process.output run);
+  let refused = Poly.equal status (Unix.WEXITED 1) in
+  if not refused then Fresh_process.report ~label:source run;
+  refused
 
 let claim_exercises passed_labels diagnostic =
   let rec take_match before = function
@@ -811,12 +848,34 @@ let claim_exercises passed_labels diagnostic =
   in
   take_match [] passed_labels
 
-let evidence_observed ~passed_labels evidence =
-  Hash_set.mem observed_output evidence
-  ||
-  match String.chop_suffix evidence ~suffix:": true" with
-  | Some label -> List.mem passed_labels label ~equal:String.equal
-  | None -> List.mem passed_labels evidence ~equal:String.equal
+(** What a run shows of a direct failure. *)
+type standing =
+  | Exercised  (** Its caught branch was observed, or its control passed and its refusal ran. *)
+  | Catalogue_only  (** Listed in [raw_catalogue_only] and executed by nothing in this run. *)
+  | Executed_yet_catalogue_only  (** Listed there, and executed all the same. *)
+  | Unexercised
+
+(** The [standing] of a direct failure [diagnostic] under [key], from the tables and this run's
+    observations, so that the rule can be pinned on tables the repository does not have to contain.
+    A [direct_evidence] entry names the control claim that answers for the refusal; it counts only
+    when that claim passed AND one of the scanner's [refused] child-run lines matches the
+    diagnostic's format. The claim alone is an accepted fixture as far as this refusal knows, and
+    the line alone is a refusal nothing asserted on; printed output is no input at all. *)
+let standing ~direct_evidence ~catalogue_only ~observed ~refused ~passed_labels ~key diagnostic =
+  let attributed =
+    match List.Assoc.find direct_evidence key ~equal:String.equal with
+    | None -> false
+    | Some claim ->
+        let label = Option.value (String.chop_suffix claim ~suffix:": true") ~default:claim in
+        List.mem passed_labels label ~equal:String.equal
+        && List.exists refused
+             ~f:(Refusal_control_scan.format_matches ~format:diagnostic.Refusal_control_scan.format)
+  in
+  match (observed || attributed, List.Assoc.mem catalogue_only key ~equal:String.equal) with
+  | true, false -> Exercised
+  | true, true -> Executed_yet_catalogue_only
+  | false, true -> Catalogue_only
+  | false, false -> Unexercised
 
 (** The [raw_entries] row for [source] (its key without the [test/operations/] prefix) listing
     [diagnostics]' markers in extraction order, ready to paste. *)
@@ -894,7 +953,8 @@ let unevidenced_failures ~source ~registered diagnostics =
         | Refusal_control_scan.Fail
           when not
                  (Hash_set.mem observed_failures key
-                 || List.Assoc.mem direct_evidence key ~equal:String.equal) ->
+                 || List.Assoc.mem direct_evidence key ~equal:String.equal
+                 || List.Assoc.mem catalogue_only key ~equal:String.equal) ->
             ( remaining,
               Option.value (String.chop_prefix key ~prefix:"test/operations/") ~default:key :: keys
             )
@@ -902,11 +962,12 @@ let unevidenced_failures ~source ~registered diagnostics =
   |> snd
   |> List.dedup_and_sort ~compare:String.compare
 
-(** The [direct_evidence] keys no current direct-failure diagnostic answers to: [diagnostics_of]
-    gives a catalogued source's extracted diagnostics, [None] for a source outside the catalogue. A
-    reworded failure format changes its identity, leaving its old key silently dead. *)
-let stale_direct_evidence ~diagnostics_of =
-  List.filter_map direct_evidence ~f:(fun (key, _) ->
+(** The [direct_evidence] and [catalogue_only] keys no current direct-failure diagnostic answers to:
+    [diagnostics_of] gives a catalogued source's extracted diagnostics, [None] for a source outside
+    the catalogue. A reworded failure format changes its identity, leaving its old key silently
+    dead. *)
+let stale_classifications ~diagnostics_of =
+  List.filter_map (direct_evidence @ catalogue_only) ~f:(fun (key, _) ->
       let source, identity = String.rsplit2_exn key ~on:':' in
       let answered =
         Option.value_map (diagnostics_of source) ~default:false ~f:(fun diagnostics ->
@@ -918,6 +979,11 @@ let stale_direct_evidence ~diagnostics_of =
                 | Refusal_control_scan.Claim -> false))
       in
       if answered then None else Some key)
+
+(** The keys classified both ways: answered by a control and catalogued as answered by none. *)
+let doubly_classified =
+  List.filter_map direct_evidence ~f:(fun (key, _) ->
+      Option.some_if (List.Assoc.mem catalogue_only key ~equal:String.equal) key)
 
 let print source =
   let source_path =
@@ -943,6 +1009,7 @@ let print source =
   in
   let diagnostics = Refusal_control_scan.diagnostics (In_channel.read_all source_path) in
   let passed_labels = ref (Verdict.passed_labels ()) in
+  let catalogued = ref [] in
   printf "\nSynthetic controls: scanner refusal diagnostics exercised by this control golden:\n";
   (* Bootstrap: a scan with no row, or an empty one, gets its row written out on stderr -- never
      into the golden, and never into the manifest, so the census claim in env_var_deps still decides
@@ -988,11 +1055,25 @@ let print source =
             | Some remaining ->
                 passed_labels := remaining;
                 printf "  %s\n" marker)
-        | Refusal_control_scan.Fail ->
+        | Refusal_control_scan.Fail -> (
             let key = failure_key ~source ~identity:diagnostic.Refusal_control_scan.identity in
-            let assigned_evidence = List.Assoc.find direct_evidence key ~equal:String.equal in
-            if
-              Hash_set.mem observed_failures key
-              || Option.value_map assigned_evidence ~default:false
-                   ~f:(evidence_observed ~passed_labels:(Verdict.passed_labels ()))
-            then printf "  %s\n" marker)
+            match
+              standing ~direct_evidence ~catalogue_only
+                ~observed:(Hash_set.mem observed_failures key)
+                ~refused:(Hashtbl.find_multi refused_runs source)
+                ~passed_labels:(Verdict.passed_labels ()) ~key diagnostic
+            with
+            | Exercised -> printf "  %s\n" marker
+            | Catalogue_only -> catalogued := marker :: !catalogued
+            | Executed_yet_catalogue_only ->
+                printf "  %s\n" marker;
+                Verdict.fail
+                  (Printf.sprintf
+                     "%s is listed in `raw_catalogue_only`, yet this run executed it -- move its \
+                      key to `raw_direct_evidence`, or drop it if the control observes it itself"
+                     key)
+            | Unexercised -> ()));
+  if not (List.is_empty !catalogued) then (
+    printf
+      "Catalogue-only: direct failures no control executes (reasons in `raw_catalogue_only`):\n";
+    List.iter (List.rev !catalogued) ~f:(printf "  %s\n"))
