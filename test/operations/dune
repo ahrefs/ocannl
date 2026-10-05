@@ -3735,7 +3735,7 @@
   (env_var OCANNL_LOG_LEVEL)
   (env_var OCANNL_BIG_MODELS))
  (modules narrow_storage_compute)
- (libraries base ocannl stdio arrayjit.verdict test_utils)
+ (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 

@@ -41,9 +41,6 @@ let exemptions =
     ( "test/operations/model_default_fallback.ml",
       Scan.Migration { records = 2; traversals = 2 },
       "existing migration debt; adopt ll_test when touched" );
-    ( "test/operations/narrow_storage_compute.ml",
-      Scan.Migration { records = 0; traversals = 1 },
-      "existing migration debt; adopt ll_test when touched" );
     ( "test/operations/op_legality.ml",
       Scan.Migration { records = 4; traversals = 1 },
       "links ll_test for operand helpers only; still hand-builds Low_level" );

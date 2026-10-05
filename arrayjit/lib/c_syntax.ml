@@ -1338,22 +1338,6 @@ let vec_narrow_macro ~store_prec ~prec ~lanes =
   | Ops.Half_prec _ -> Some (narrow "HALF")
   | _ -> None
 
-(** The portable whole-vector [Max]/[Min] accumulator update [dst = op(dst, src)] that
-    [vec_acc_combine] renders where no target builtin arm applies: a packed compare OR'd with
-    [src]'s NaN test, then a bitwise select, so a NaN lane of [src] propagates as [fmax]/[fmin]
-    would not, and the vectorized and serial renderings agree. Named here, outside the functor, so
-    that [test/operations/cc_march_census] compiles exactly this text in its probe of how a compiler
-    lowers it (gh-ocannl-1103). *)
-let vec_minmax_blend ~op ~dst ~src =
-  let cmp =
-    match op with Ops.Max -> ">=" | Ops.Min -> "<=" | _ -> invalid_arg "vec_minmax_blend"
-  in
-  Printf.sprintf
-    "{ __typeof__(%s %s %s) ocannl_m__ = (%s %s %s) | (%s != %s); %s = \
-     (__typeof__(%s))((ocannl_m__ & (__typeof__(ocannl_m__))%s) | (~ocannl_m__ & \
-     (__typeof__(ocannl_m__))%s)); }"
-    dst cmp src dst cmp src src src dst dst dst src
-
 (** The locals a register tile's PARTIAL bf16/fp16 column is staged through by [vec_bridge]
     (gh-ocannl-1102), as [(bits, conv)]: the whole vector of its storage bits, and for fp16 that
     vector bit-cast to [HALF_T]. Every line of a staging block names one of them or the column's own
@@ -3186,6 +3170,29 @@ module C_syntax (B : C_syntax_config) = struct
     | Ops.Half_prec _, 8 -> [ neon_half "v8hf" ~bytes:16 ]
     | _ -> []
 
+  (** The portable whole-vector [Max]/[Min] accumulator update [dst = op(dst, src)] that
+      [vec_acc_combine] renders where no target builtin arm applies: a packed compare OR'd with
+      [src]'s NaN test, then a bitwise select, so a NaN lane of [src] preserves [dst], as
+      [fmax]/[fmin] do, and the vectorized and serial renderings agree. *)
+  let vec_minmax_blend ~prec ~op ~dst ~src =
+    let cmp =
+      match op with Ops.Max -> ">=" | Ops.Min -> "<=" | _ -> invalid_arg "vec_minmax_blend"
+    in
+    (* clang 18 folds a floating self-comparison of widened fp16 back onto the half lanes and
+       scalarizes it without AVX512-FP16 (gh-ocannl-1157). Inspect the f32 magnitude bits instead:
+       they exceed infinity exactly for a NaN. The comparison's signed integer vector type is also
+       the bit-cast type; masking the sign keeps the integer comparison nonnegative. *)
+    let nan =
+      match prec with
+      | Ops.Single_prec _ ->
+          Printf.sprintf "(((__typeof__(%s %s %s))%s & 0x7fffffff) > 0x7f800000)" dst cmp src src
+      | _ -> Printf.sprintf "(%s != %s)" src src
+    in
+    Printf.sprintf
+      "{ __typeof__(%s %s %s) ocannl_m__ = (%s %s %s) | %s; %s = (__typeof__(%s))((ocannl_m__ & \
+       (__typeof__(ocannl_m__))%s) | (~ocannl_m__ & (__typeof__(ocannl_m__))%s)); }"
+      dst cmp src dst cmp src nan dst dst dst src
+
   let vec_acc_combine ~prec ~lanes ~op ~dst ~src =
     match op with
     | Ops.Add | Ops.Sub | Ops.Mul | Ops.Div ->
@@ -3193,7 +3200,7 @@ module C_syntax (B : C_syntax_config) = struct
         PPrint.string (Printf.sprintf "%s = %s%s%s;" dst dst inf src)
     | Ops.Max | Ops.Min -> (
         let open PPrint in
-        let blend = string (vec_minmax_blend ~op ~dst ~src) in
+        let blend = string (vec_minmax_blend ~prec ~op ~dst ~src) in
         match vec_minmax_builtin ~prec ~lanes ~op with
         | [] -> blend
         | arms ->

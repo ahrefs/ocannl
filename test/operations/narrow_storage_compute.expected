@@ -3,6 +3,18 @@ wide-compute relative error within one bf16 ulp: true
 per-operator relative error exceeds it: true
 bf16 vectorized rendering is bitwise identical to the serial twin: true
 half vectorized rendering is bitwise identical to the serial twin: true
+half vectorized max is bitwise identical to the serial twin: true
+half serial max preserves NaNs' extrema and IEEE classes: true
+half max uses the widened integer NaN test: true
+bf16 vectorized max is bitwise identical to the serial twin: true
+bf16 serial max preserves NaNs' extrema and IEEE classes: true
+bf16 max uses the widened integer NaN test: true
+half vectorized min is bitwise identical to the serial twin: true
+half serial min preserves NaNs' extrema and IEEE classes: true
+half min uses the widened integer NaN test: true
+bf16 vectorized min is bitwise identical to the serial twin: true
+bf16 serial min preserves NaNs' extrema and IEEE classes: true
+bf16 min uses the widened integer NaN test: true
 bf16 vectorized widening of every code is bitwise identical to the serial twin: true
 bf16 serial widening returns every code's exact value, and a NaN for a NaN code: true
 half vectorized widening of every code is bitwise identical to the serial twin: true

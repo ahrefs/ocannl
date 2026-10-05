@@ -210,6 +210,8 @@ test/operations/integer_power_domain.ml
 test/operations/ll_printer_constants.ml [renders generated text in memory; also pins text this scan cannot name]
     " := "
 test/operations/narrow_storage_compute.ml
+    "0x7f800000"
+    "0x7fffffff"
     "HALF_T ocannl_vec"
     "HALF_TO_FLOAT"
     "HALF_TO_FLOAT(a)"
@@ -218,6 +220,7 @@ test/operations/narrow_storage_compute.ml
     "OCANNL_VEC_NARROW_HALF"
     "OCANNL_VEC_WIDEN_BFLOAT16"
     "OCANNL_VEC_WIDEN_HALF"
+    "Vectorized reduction rendering"
     "__builtin_elementwise_fma"
     "bfloat16_to_single(single_to_bfloat16("
     "fmaf("

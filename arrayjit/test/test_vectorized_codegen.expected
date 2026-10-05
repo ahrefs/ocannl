@@ -235,13 +235,13 @@
       ocannl_vec8f vget4__;
       __builtin_memcpy(&vget4__, &ma[i8], sizeof(vget4__));
       ocannl_vec8f vsrc3__ = vget4__;
-      { __typeof__(vred_i8_0_0__ >= vsrc3__) ocannl_m__ = (vred_i8_0_0__ >= vsrc3__) | (vsrc3__ != vsrc3__); vred_i8_0_0__ = (__typeof__(vred_i8_0_0__))((ocannl_m__ & (__typeof__(ocannl_m__))vred_i8_0_0__) | (~ocannl_m__ & (__typeof__(ocannl_m__))vsrc3__)); }
+      { __typeof__(vred_i8_0_0__ >= vsrc3__) ocannl_m__ = (vred_i8_0_0__ >= vsrc3__) | (((__typeof__(vred_i8_0_0__ >= vsrc3__))vsrc3__ & 0x7fffffff) > 0x7f800000); vred_i8_0_0__ = (__typeof__(vred_i8_0_0__))((ocannl_m__ & (__typeof__(ocannl_m__))vred_i8_0_0__) | (~ocannl_m__ & (__typeof__(ocannl_m__))vsrc3__)); }
       ocannl_vec8f vget6__;
       __builtin_memcpy(&vget6__, &ma[i8+8], sizeof(vget6__));
       ocannl_vec8f vsrc5__ = vget6__;
-      { __typeof__(vred_i8_0_1__ >= vsrc5__) ocannl_m__ = (vred_i8_0_1__ >= vsrc5__) | (vsrc5__ != vsrc5__); vred_i8_0_1__ = (__typeof__(vred_i8_0_1__))((ocannl_m__ & (__typeof__(ocannl_m__))vred_i8_0_1__) | (~ocannl_m__ & (__typeof__(ocannl_m__))vsrc5__)); }
+      { __typeof__(vred_i8_0_1__ >= vsrc5__) ocannl_m__ = (vred_i8_0_1__ >= vsrc5__) | (((__typeof__(vred_i8_0_1__ >= vsrc5__))vsrc5__ & 0x7fffffff) > 0x7f800000); vred_i8_0_1__ = (__typeof__(vred_i8_0_1__))((ocannl_m__ & (__typeof__(ocannl_m__))vred_i8_0_1__) | (~ocannl_m__ & (__typeof__(ocannl_m__))vsrc5__)); }
     }
-    { __typeof__(vred_i8_0_0__ >= vred_i8_0_1__) ocannl_m__ = (vred_i8_0_0__ >= vred_i8_0_1__) | (vred_i8_0_1__ != vred_i8_0_1__); vred_i8_0_0__ = (__typeof__(vred_i8_0_0__))((ocannl_m__ & (__typeof__(ocannl_m__))vred_i8_0_0__) | (~ocannl_m__ & (__typeof__(ocannl_m__))vred_i8_0_1__)); }
+    { __typeof__(vred_i8_0_0__ >= vred_i8_0_1__) ocannl_m__ = (vred_i8_0_0__ >= vred_i8_0_1__) | (((__typeof__(vred_i8_0_0__ >= vred_i8_0_1__))vred_i8_0_1__ & 0x7fffffff) > 0x7f800000); vred_i8_0_0__ = (__typeof__(vred_i8_0_0__))((ocannl_m__ & (__typeof__(ocannl_m__))vred_i8_0_0__) | (~ocannl_m__ & (__typeof__(ocannl_m__))vred_i8_0_1__)); }
     float vred_total_i8__ = vred_i8_0_0__[0];
     vred_total_i8__ = fmaxf(vred_total_i8__, vred_i8_0_0__[1]);
     vred_total_i8__ = fmaxf(vred_total_i8__, vred_i8_0_0__[2]);
