@@ -14,6 +14,11 @@ broadcast operands: one add and both cells per read, exact: true
   packed-uniform producer (lane extract)         flops=3 (exact) bytes=16 (bound)
 packed-uniform producer: the lane-extract form, exact ops, dynamic-read bytes a bound: true
 == guard-emitting shapes: price = emitted read ==
+affine position: mutating a resolved world leaves its caller's placements intact: true
+affine position: six specializations invoke the pricer once: true
+affine position: warm surfaces preserve price and refusal: true
+affine position: warm surface equals independent cold analysis: true
+affine position: independent analyses do not share memo entries: true
   affine position, priced                        flops=8 (exact) bytes=8 (bound)
   affine position, emitted                       flops=8 (exact) bytes=8 (bound)
 affine position: the producer is inlined at the reader: true
@@ -22,6 +27,11 @@ affine position: the Materialize flip uses the exact modeled price: true
 affine position: executed virtual and materialized values agree: true
 affine position: executed values match the independent reference: true
 affine position: two eager range guards cost eight exact operations per read: true
+diagonal producer: mutating a resolved world leaves its caller's placements intact: true
+diagonal producer: six specializations invoke the pricer once: true
+diagonal producer: warm surfaces preserve price and refusal: true
+diagonal producer: warm surface equals independent cold analysis: true
+diagonal producer: independent analyses do not share memo entries: true
   diagonal producer, priced                      flops=2 (exact) bytes=4 (bound)
   diagonal producer, emitted                     flops=2 (exact) bytes=4 (bound)
 diagonal producer: the producer is inlined at the reader: true
@@ -29,6 +39,11 @@ diagonal producer: the price is the emitted read, counts and exactness: true
 diagonal producer: the Materialize flip uses the exact modeled price: true
 diagonal producer: executed virtual and materialized values agree: true
 diagonal producer: the consistency guard is counted, the op count exact: true
+two-component concat: mutating a resolved world leaves its caller's placements intact: true
+two-component concat: six specializations invoke the pricer once: true
+two-component concat: warm surfaces preserve price and refusal: true
+two-component concat: warm surface equals independent cold analysis: true
+two-component concat: independent analyses do not share memo entries: true
   two-component concat, priced                   flops=4 (exact) bytes=8 (bound)
   two-component concat, emitted                  flops=4 (exact) bytes=8 (bound)
 two-component concat: the producer is inlined at the reader: true
@@ -37,6 +52,11 @@ two-component concat: the Materialize flip uses the exact modeled price: true
 two-component concat: executed virtual and materialized values agree: true
 two-component concat: executed values match the independent reference: true
 two-component concat: simplified eager guards cost four exact operations per read: true
+shifted affine boundary: mutating a resolved world leaves its caller's placements intact: true
+shifted affine boundary: six specializations invoke the pricer once: true
+shifted affine boundary: warm surfaces preserve price and refusal: true
+shifted affine boundary: warm surface equals independent cold analysis: true
+shifted affine boundary: independent analyses do not share memo entries: true
   shifted affine boundary, priced                flops=8 (exact) bytes=8 (bound)
   shifted affine boundary, emitted               flops=8 (exact) bytes=8 (bound)
 shifted affine boundary: the producer is inlined at the reader: true
@@ -44,6 +64,11 @@ shifted affine boundary: the price is the emitted read, counts and exactness: tr
 shifted affine boundary: the Materialize flip uses the exact modeled price: true
 shifted affine boundary: executed virtual and materialized values agree: true
 shifted affine boundary: executed values match the independent reference: true
+reflected affine boundary: mutating a resolved world leaves its caller's placements intact: true
+reflected affine boundary: six specializations invoke the pricer once: true
+reflected affine boundary: warm surfaces preserve price and refusal: true
+reflected affine boundary: warm surface equals independent cold analysis: true
+reflected affine boundary: independent analyses do not share memo entries: true
   reflected affine boundary, priced              flops=8 (exact) bytes=8 (bound)
   reflected affine boundary, emitted             flops=8 (exact) bytes=8 (bound)
 reflected affine boundary: the producer is inlined at the reader: true
@@ -87,6 +112,11 @@ reduction cap: a heuristic cap materialized the node: true
 reduction cap: preferred inline, the node is inlined at the reader: true
   reduction cap, emitted read once inlined       flops=20 (exact) bytes=80 (exact)
 reduction cap: the Inline flip is modeled and prices the emitted read's ops per instantiation: true
+packed-uniform, virtual counter: mutating a resolved world leaves its caller's placements intact: true
+packed-uniform, virtual counter: six specializations invoke the pricer once: true
+packed-uniform, virtual counter: warm surfaces preserve price and refusal: true
+packed-uniform, virtual counter: warm surface equals independent cold analysis: true
+packed-uniform, virtual counter: independent analyses do not share memo entries: true
 packed-uniform, virtual counter: a heuristic cap materialized the node: true
   packed-uniform, virtual counter, Inline flip   cost 6 (modeled)
 packed-uniform, virtual counter: preferred inline, the node is inlined at the reader: true
@@ -119,3 +149,33 @@ refused flip: offered, and priced by the proxy rather than modeled: true
   preferred inline, the virtualizer's verdict: 9:sibling-escaping-read-index
 refused flip: preferred inline, the virtualizer refuses it all the same: true
 refused flip: the alternative carries the virtualizer's verdict as its refusal: true
+== cross-specialization pricing isolation ==
+cap reduction: mutating a resolved world leaves its caller's placements intact: true
+cap reduction: six specializations invoke the pricer once: true
+cap reduction: warm surfaces preserve price and refusal: true
+cap reduction: warm surface equals independent cold analysis: true
+cap reduction: independent analyses do not share memo entries: true
+same computations under a different producer placement entry miss the memo: true
+returning to the earlier placement vector reuses its own price: true
+stored template: mutating a resolved world leaves its caller's placements intact: true
+stored template: six specializations invoke the pricer once: true
+stored template: warm surfaces preserve price and refusal: true
+stored template: warm surface equals independent cold analysis: true
+stored template: independent analyses do not share memo entries: true
+producer placement changes its consumer's price and misses the cache: true
+changed producer placement agrees with a cold specialization: true
+refused read: mutating a resolved world leaves its caller's placements intact: true
+refused read: six specializations invoke the pricer once: true
+refused read: warm surfaces preserve price and refusal: true
+refused read: warm surface equals independent cold analysis: true
+refused read: independent analyses do not share memo entries: true
+memoized refusal remains a proxy with the actual call-site mismatch: true
+bounded static domain: mutating a resolved world leaves its caller's placements intact: true
+bounded static domain: six specializations invoke the pricer once: true
+bounded static domain: warm surfaces preserve price and refusal: true
+bounded static domain: warm surface equals independent cold analysis: true
+bounded static domain: independent analyses do not share memo entries: true
+mutating the active static domain invalidates an exact cached price: true
+near-limit domain preserves the cold bounded-price result: true
+inexact prices are cached too: true
+replacing the pricer invalidates its predecessor's prices: true

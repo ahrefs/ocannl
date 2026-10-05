@@ -93,6 +93,8 @@ rejection: footprint and materialized arms agree: true
 stored-refusal: the footprint retracts to a cap with its template retained: true
 stored-refusal: inline attempt refuses the mismatched column: true
 stored-refusal: the stored pricing world records the actual inline refusal: true
+stored-refusal: six validated stored worlds price the refusal once: true
+stored-refusal: warm worlds retain the refusal and private scratch: true
 stored-refusal: ranking excludes the refused candidate: true
 stored-refusal: executed values match the written column and untouched cells: true
 stored-refusal: footprint retraction and materialized arms agree: true

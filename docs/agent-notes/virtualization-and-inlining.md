@@ -295,7 +295,12 @@ files.
   node's own computation — capture point, refusals, the raw storage of a packed-uniform producer, a
   footprint read its setter no longer hosts retracting — so imitating any of those rules is the
   wrong fix (an imitation of the capture rules missed both the raw storage and the retraction). No nested
-  expansion: a stored template already carries the producers inlined when it was stored. Three
+  expansion: a stored template already carries the producers inlined when it was stored. The
+  scalar price memo (gh-ocannl-1113) belongs to that analysis, bounded to 128 resolved worlds:
+  `recompute_price_key` captures canonical computations, referenced nodes' effective placements
+  and bounds/host facts, and the mutable static-domain snapshot. Validation and refusal still run
+  in each specialization; the memo retains no private placement table. Both exact counts and
+  inexact `None` results are reusable, and replacing the registered pricer clears the memo. Three
   traps: (a) pricing must not draw on `Indexing.get_symbol` or `get_scope` — generated code prints
   those counters, so a pricer that drew from them would renumber every later routine's goldens;
   `virtual_llc` and `inline_computation` take `?fresh_symbol`/`?fresh_scope`, and pricing passes the
