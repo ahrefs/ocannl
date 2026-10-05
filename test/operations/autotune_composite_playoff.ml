@@ -21,6 +21,10 @@
    segment's runner-up single plays and the one behind it (0.6%) does not; in [spread] they are 1%
    apart, wider than the margin, so the playoff times nothing.
 
+   Every search runs with the timing trace's decision seam observed ([Autotune.on_batch_decision],
+   gh-ocannl-1199), which must attribute each playoff window to the [playoff] phase; [ties] is
+   searched once more with the seam unobserved, and must crown and time exactly the same.
+
    Pinned to cc: the seeding and the scripted ranking are backend-independent, and cc is always
    available. *)
 open Base
@@ -59,16 +63,24 @@ let chain () =
 type observed = {
   report : Autotune.report;
   composite_ms : (string * float) list;  (** Every admitted composite window, in attempt order. *)
+  phases : string option list;
+      (** The search phase of every timing decision, in order; empty when the seam was unobserved.
+      *)
 }
 
 (* One search under a scripted ranking: [single n] is the n-th single's time (0-based, attempt
    order), [composite n] the n-th composite's. *)
-let search ~tag ~single ~composite =
-  let report = ref None and singles = ref 0 and composites = ref [] in
-  let old_measured = !Autotune.on_candidate_measured in
+let search ?(trace = true) ~tag ~single ~composite () =
+  let report = ref None and singles = ref 0 and composites = ref [] and phases = ref [] in
+  let old_measured = !Autotune.on_candidate_measured
+  and old_decision = !Autotune.on_batch_decision in
   Exn.protect
-    ~finally:(fun () -> Autotune.on_candidate_measured := old_measured)
+    ~finally:(fun () ->
+      Autotune.on_candidate_measured := old_measured;
+      Autotune.on_batch_decision := old_decision)
     ~f:(fun () ->
+      (if trace then
+         Autotune.on_batch_decision := fun _ -> phases := Autotune.search_phase () :: !phases);
       (Autotune.on_candidate_measured :=
          fun ~label ~digest:_ _ms ->
            if is_single label then (
@@ -105,7 +117,7 @@ let search ~tag ~single ~composite =
         r.Autotune.best_label r.Autotune.best_ms;
       List.iter (List.rev !composites) ~f:(fun (label, ms) ->
           Stdio.eprintf "  %s window (not part of the golden): %s %.2f ms\n%!" tag label ms);
-      { report; composite_ms = List.rev !composites }
+      { report; composite_ms = List.rev !composites; phases = List.rev !phases }
   | None -> failwith (tag ^ ": the search delivered no report")
 
 (* A composite's per-segment entries: its label lists one per keyed segment, in key order. *)
@@ -131,8 +143,10 @@ let width_claim name ~width positions =
 
 let faster n = 10. -. (0.1 *. Float.of_int n)
 
+(* Bound at the top level: the trace claims at the end compare it with an unobserved rerun. *)
+let ties = search ~tag:"ties" ~single:(fun _ -> 100.) ~composite:faster ()
+
 let () =
-  let ties = search ~tag:"ties" ~single:(fun _ -> 100.) ~composite:faster in
   let r = ties.report in
   p "ties: the coarse composite was timed" (Poly.equal r.Autotune.fiss_sketch_composite `Timed);
   p "ties: the playoff timed alternates" (r.Autotune.fiss_sketch_playoff_timed >= 1);
@@ -167,6 +181,7 @@ let () =
     search ~tag:"slower"
       ~single:(fun _ -> 100.)
       ~composite:(fun n -> 10. +. (0.1 *. Float.of_int n))
+      ()
   in
   let r = slower.report in
   p "slower: the playoff timed alternates" (r.Autotune.fiss_sketch_playoff_timed >= 1);
@@ -186,7 +201,7 @@ let () =
       p "slower: some window visibly changes a segment" false;
       p "slower: no segment is challenged by more than two windows" false);
   let near =
-    search ~tag:"near" ~single:(fun n -> 100. *. Float.int_pow 1.003 n) ~composite:faster
+    search ~tag:"near" ~single:(fun n -> 100. *. Float.int_pow 1.003 n) ~composite:faster ()
   in
   let r = near.report in
   p "near: singles 0.3% apart reach the playoff" (r.Autotune.fiss_sketch_playoff_timed >= 1);
@@ -200,9 +215,25 @@ let () =
   in
   width_claim "near: only the single within the margin plays, one per segment" ~width:1 challenges;
   let spread =
-    search ~tag:"spread" ~single:(fun n -> 100. *. Float.int_pow 1.01 n) ~composite:faster
+    search ~tag:"spread" ~single:(fun n -> 100. *. Float.int_pow 1.01 n) ~composite:faster ()
   in
   let r = spread.report in
   p "spread: the coarse composite was timed" (Poly.equal r.Autotune.fiss_sketch_composite `Timed);
   p "spread: singles 1% apart leave the playoff nothing to time"
     (r.Autotune.fiss_sketch_playoff_timed = 0 && List.length spread.composite_ms = 1)
+
+(* gh-ocannl-1199: the decision trace carries the playoff phase, and observing it moves nothing. *)
+let () =
+  let traced = ties in
+  let quiet = search ~trace:false ~tag:"quiet" ~single:(fun _ -> 100.) ~composite:faster () in
+  let in_phase name = List.count traced.phases ~f:(Option.equal String.equal (Some name)) in
+  Stdio.eprintf "trace (not part of the golden): %s\n%!"
+    (String.concat ~sep:" " (List.map traced.phases ~f:(Option.value ~default:"-")));
+  p "trace: one decision per playoff window says phase playoff"
+    (traced.report.Autotune.fiss_sketch_playoff_timed >= 1
+    && in_phase "playoff" = traced.report.Autotune.fiss_sketch_playoff_timed);
+  p_empty "trace: an unobserved seam reports nothing" ~over:traced.phases quiet.phases;
+  p "trace: the same windows, crown and time with the seam observed and unobserved"
+    (List.equal Poly.equal traced.composite_ms quiet.composite_ms
+    && String.equal traced.report.Autotune.best_label quiet.report.Autotune.best_label
+    && Float.equal traced.report.Autotune.best_ms quiet.report.Autotune.best_ms)

@@ -320,6 +320,10 @@ type synthetic_call = {
   unreported_batches : (int * float) list;
       (** The batches dispatched after the last probe report and before the depth decision. *)
   reading : Autotune.timing_result;
+  decisions : Autotune.batch_decision list;
+      (** What [Autotune.on_batch_decision] reported (gh-ocannl-1199): one per call when observed,
+          none when the call ran with the seam at its default. *)
+  batch_walls : (int * float) list;  (** Every batch the device dispatched, in order. *)
   cap : int;
   repeats : int;
 }
@@ -328,9 +332,10 @@ type synthetic_call = {
    all of them at the end of the budget section. *)
 let synthetic_calls : (string * synthetic_call) list ref = ref []
 
-let synthetic_call ?(repeats = 3) ?(retry_contended = false) ?walls ~timing ~cap ~fixed_ms
-    ~launch_ms () =
+let synthetic_call ?(repeats = 3) ?(retry_contended = false) ?(observe_decisions = true) ?walls
+    ~timing ~cap ~fixed_ms ~launch_ms () =
   let launches = ref 0 and batches = ref 0 and decided = ref None in
+  let decisions = ref [] and batch_walls = ref [] in
   (* [segment] holds the batches since the last probe report, newest first. *)
   let segment = ref [] and probes = ref [] in
   let batch d =
@@ -340,6 +345,7 @@ let synthetic_call ?(repeats = 3) ?(retry_contended = false) ?walls ~timing ~cap
       match walls with Some f -> f !batches d | None -> fixed_ms +. (launch_ms *. Float.of_int d)
     in
     if Option.is_none !decided then segment := (d, wall) :: !segment;
+    batch_walls := (d, wall) :: !batch_walls;
     wall
   in
   let window = ref None and unreported = ref [] and retry_windows = ref [] in
@@ -347,14 +353,17 @@ let synthetic_call ?(repeats = 3) ?(retry_contended = false) ?walls ~timing ~cap
   let old_depth = !Autotune.on_batch_depth
   and old_window = !Autotune.on_timed_window
   and old_probe = !Autotune.on_calibration_probe
-  and old_retry = !Autotune.on_timing_retry in
+  and old_retry = !Autotune.on_timing_retry
+  and old_decision = !Autotune.on_batch_decision in
   Exn.protect
     ~finally:(fun () ->
       Autotune.on_batch_depth := old_depth;
       Autotune.on_timed_window := old_window;
       Autotune.on_calibration_probe := old_probe;
-      Autotune.on_timing_retry := old_retry)
+      Autotune.on_timing_retry := old_retry;
+      Autotune.on_batch_decision := old_decision)
     ~f:(fun () ->
+      (if observe_decisions then Autotune.on_batch_decision := fun d -> decisions := d :: !decisions);
       (Autotune.on_timing_retry :=
          fun ~samples ~reused -> retry_windows := (samples, reused) :: !retry_windows);
       (Autotune.on_calibration_probe :=
@@ -395,6 +404,8 @@ let synthetic_call ?(repeats = 3) ?(retry_contended = false) ?walls ~timing ~cap
         probe_batches;
         unreported_batches = !unreported;
         reading;
+        decisions = List.rev !decisions;
+        batch_walls = List.rev !batch_walls;
         cap;
         repeats;
       })
@@ -422,14 +433,15 @@ let describe what c =
 let () =
   Stdio.printf "\n== a fitted single crossing keeps supported queued work ==\n";
   let cap = Autotune.queue_depth_cap_for_backend "hip" in
-  let call what ~single ~fixed ~marginal =
+  let call ?observe_decisions what ~single ~fixed ~marginal =
     let c =
-      synthetic_call ~timing:Autotune.Queued ~cap ~fixed_ms:fixed ~launch_ms:marginal
+      synthetic_call ?observe_decisions ~timing:Autotune.Queued ~cap ~fixed_ms:fixed
+        ~launch_ms:marginal
         ~walls:(fun _nth depth ->
           if depth = 1 then single else fixed +. (marginal *. Float.of_int depth))
         ()
     in
-    describe what c;
+    if Option.is_none observe_decisions then describe what c;
     c
   in
   let cases =
@@ -466,6 +478,72 @@ let () =
   let refused = [ ("above-target marginal", above); ("unresolved", unresolved) ] in
   p_all "over-target or unresolved batched work remains unbatched and unranked" refused
     ~f:(fun (_, c) -> c.reading.unbatched && Option.is_none (Autotune.admitted_timing_ms c.reading));
+  (* gh-ocannl-1199: the decision trace states what the calibration decided, from its own metadata.
+     The retained boundary and the opposing refusal of marginal work over the target leave through
+     the same shallower-crossing branch of the same depth-2/depth-3 pair; only the gh-ocannl-1184
+     floor, withheld from the latter, tells them apart. *)
+  let decision c = match c.decisions with [ d ] -> Some d | _ -> None in
+  let fit_is verdict ~fixed ~marginal (d : Autotune.batch_decision) =
+    match d.fit with
+    | Some f ->
+        Poly.equal f.verdict verdict && f.base_depth = 2 && f.probe_depth = 3
+        && Float.equal f.fixed_ms fixed
+        && Float.equal f.marginal_ms marginal
+    | None -> false
+  in
+  (* Every call of this section with its parameters, the singles being 9.75 ms throughout. *)
+  let all_calls =
+    cases
+    @ [
+        ("marginal work above the target", 0., 10.5, above);
+        ("every batch unresolved", 40., 0., unresolved);
+        ("fixed-dominated marginal at the target", 200., Autotune.queued_batch_ms, fixed_dominated);
+      ]
+  in
+  p_all "each call reports exactly one decision, at the depth its window ran" all_calls
+    ~f:(fun (_, _, _, c) ->
+      match decision c with Some d -> d.depth = c.settled_depth | None -> false);
+  p_all "a retained boundary's decision is the floor on its measured depth-2 fit, admitted" cases
+    ~f:(fun (_, fixed, marginal, c) ->
+      match decision c with
+      | Some d ->
+          d.depth = 2
+          && Poly.equal d.settle Autotune.Measured_batch
+          && fit_is Autotune.Fit_boundary_floor ~fixed ~marginal d
+          && Option.equal Float.equal d.estimated_wall_ms (Some (fixed +. (2. *. marginal)))
+          && Poly.equal d.admission Autotune.Admitted
+      | None -> false);
+  p "the opposing refusal is the same crossing without the floor, refused unbatched"
+    (match decision above with
+    | Some d ->
+        d.depth = 1
+        && fit_is Autotune.Fit_shallower_crossing ~fixed:0. ~marginal:10.5 d
+        && Option.is_none d.rescue
+        && Poly.equal d.admission Autotune.Refused_unbatched
+    | None -> false);
+  p "a fixed-dominated refusal's decision names the fixed-dominated fit"
+    (match decision fixed_dominated with
+    | Some d ->
+        d.depth = 1
+        && (match d.fit with
+          | Some f -> Poly.equal f.verdict Autotune.Fit_fixed_dominated
+          | None -> false)
+        && Poly.equal d.admission Autotune.Refused_unbatched
+    | None -> false);
+  p "an unresolved refusal's decision says its depth fell back to the singles"
+    (match decision unresolved with
+    | Some d ->
+        d.depth = 1 && Option.is_some d.fallback_from
+        && Poly.equal d.admission Autotune.Refused_unbatched
+    | None -> false);
+  (* Observing the decision changes nothing: the same device, with the seam left at its default,
+     dispatches the same batches and returns the same reading. *)
+  p_all "every call dispatches and reads the same with the decision seam unobserved" all_calls
+    ~f:(fun (what, fixed, marginal, c) ->
+      let quiet = call ~observe_decisions:false what ~single:9.75 ~fixed ~marginal in
+      List.is_empty quiet.decisions
+      && Poly.equal quiet.reading c.reading
+      && List.equal Poly.equal quiet.batch_walls c.batch_walls);
   let cacheable calls =
     let admitted c = Option.is_some (Autotune.admitted_timing_ms c.reading) in
     Autotune.search_measurements_cacheable
