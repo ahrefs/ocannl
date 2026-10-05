@@ -148,6 +148,10 @@ struct
     let func fn v1 v2 =
       group (string fn ^^ parens (v1 ^^ comma ^^ ifflat (space ^^ v2) (nest 2 (break 1 ^^ v2))))
     in
+    let widened_powf ~widen ~narrow v1 v2 =
+      let w v = string widen ^^ parens v in
+      group (string narrow ^^ parens (func "powf" (w v1) (w v2)))
+    in
     match (v, prec) with
     | Ops.Arg1, _ -> invalid_arg (Dialect.error_prefix ^ ".binop_syntax: Arg1 is not an operator")
     | Arg2, _ -> invalid_arg (Dialect.error_prefix ^ ".binop_syntax: Arg2 is not an operator")
@@ -179,20 +183,15 @@ struct
     | Div, _ -> f "/"
     | ToPowOf, Double_prec _ -> func "pow"
     | ToPowOf, Single_prec _ -> func "powf"
-    | ToPowOf, Half_prec _ ->
-        fun v1 v2 ->
-          group
-            (string "hexp2(hlog2(" ^^ v1 ^^ string "),"
-            ^^ ifflat (space ^^ v2) (nest 2 (break 1 ^^ v2))
-            ^^ string ")")
+    (* Neither vendor has a narrow-float pow (and both vendors' [hexp2] is unary, gh-ocannl-1198):
+       widen both operands, take f32 [powf] -- its domain, NaN for a negative base under a
+       fractional exponent included -- and round back once, as cc's codegen does. Known integer
+       exponents never reach here: [C_syntax.integer_power_doc] takes them. *)
+    | ToPowOf, Half_prec _ -> widened_powf ~widen:"__half2float" ~narrow:"__float2half"
+    | ToPowOf, Bfloat16_prec _ -> widened_powf ~widen:"__bfloat162float" ~narrow:"__float2bfloat16"
     | ToPowOf, (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Int64_prec _ | Uint4x32_prec _) ->
         invalid_arg
           (Dialect.error_prefix ^ ".binop_syntax: ToPowOf not supported for integer precisions")
-    | ToPowOf, Bfloat16_prec _ ->
-        fun v1 v2 ->
-          group
-            (string "__float2bfloat16(powf(__bfloat162float("
-            ^^ v1 ^^ string "), __bfloat162float(" ^^ v2 ^^ string ")))")
     | Relu_gate, (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Int64_prec _) ->
         fun v1 v2 ->
           group
