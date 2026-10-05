@@ -122,8 +122,8 @@ lock=\$HOME/ocannl-staging-worktrees/sweep.lock
 # A fresh open must be refused: the real far-side lock remains held during
 # clean, suite, serial rerun and completion, rather than only during prep.
 perl -e 'use Fcntl ":flock"; open(my \$h, ">>", \$ARGV[0]) or exit 96; exit(flock(\$h, LOCK_EX | LOCK_NB) ? 96 : 0)' "\$lock" || exit 96
-printf '%s\t%s\t%s\t%s\t%s\t%s\n' "\$SWEEP_TEST_REMOTE_HOST" "\${OCANNL_BACKEND:--}" \
-  "\$(pwd)" "\$(git rev-parse HEAD)" "\$PATH" "\$*" >>"\$SWEEP_TEST_REMOTE_ROOT/commands"
+# Keep this unquoted heredoc body within the shell scanner's supported contract.
+printf '%s\t%s\t%s\t%s\t%s\t%s\n' "\$SWEEP_TEST_REMOTE_HOST" "\${OCANNL_BACKEND:--}" "\$(pwd)" "\$(git rev-parse HEAD)" "\$PATH" "\$*" >>"\$SWEEP_TEST_REMOTE_ROOT/commands"
 [ -z "\$(git status --porcelain)" ] || exit 95
 exec "$fake_bin/opam" "\$@"
 EOF_OPAM
