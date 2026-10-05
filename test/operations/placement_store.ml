@@ -315,8 +315,8 @@ let spawn_child role =
    replay also when its evidence was contended, and each claim when the cache I/O it rests on was
    refused (gh-ocannl-1040). --- *)
 
-(* The placement stores the children attempted, for the process-wide claim before run 8. *)
-let xproc_placement_stores = ref []
+(* The stores the children attempted, for the process-wide claim before run 8. *)
+let xproc_stores = ref []
 
 let () =
   clean_cache xproc_cache_dir;
@@ -411,7 +411,8 @@ let () =
     (on_control (fun c -> c.arms = 2));
   p "the control process leaves the entry recorded for the other problem untouched"
     (untouched held_before_control);
-  xproc_placement_stores := List.concat_map [ record; replay; control ] ~f:(ops placement_stores)
+  xproc_stores :=
+    List.concat_map [ record; replay; control ] ~f:(ops (fun p -> List.filter p.io ~f:is_store))
 
 let () =
   clean_cache cache_dir;
@@ -726,31 +727,36 @@ let () =
      right for a transient refusal and wrong for one that is no accident: a filename the filesystem
      rejects, a permission, a commit that always fails. Those refuse EVERY store (of a directory),
      and would turn this test from red into a permanent skip that hosted CI aggregates nowhere. So,
-     over the placement stores this process and its children attempted under real
-     [placements-<digest>] names (run 8's injected refusals excluded), not all of any directory's
-     may be refused -- never waived by a refusal. --- *)
+     over the stores this process and its children attempted under real names (run 8's injected
+     refusals excluded), not all of any directory's placement or schedule stores may be refused --
+     never waived by a refusal. --- *)
+  let stores p = List.filter p.io ~f:is_store in
   let attempted =
-    !xproc_placement_stores
+    !xproc_stores
     @ List.concat_map
         [ persisted1; persisted2; persisted2b; persisted3; persisted3b; persisted6; persisted6w ]
-        ~f:placement_stores
+        ~f:stores
     @ !stale_placement_stores
   in
-  (* Per cache directory, so a refusal local to one leg -- the cross-process leg's directory, say,
-     refused for its path or its ACL -- cannot hide behind the other leg's successes. A directory
-     with fewer than two attempts is outside the claim, so one transient refusal cannot fail it. *)
-  let by_dir =
+  (* Per cache directory and per kind of entry, so a refusal local to one leg -- the cross-process
+     leg's directory refused for its path or its ACL, or schedule entries refused while placement
+     entries commit -- cannot hide behind another's successes. A group with fewer than two attempts
+     is outside the claim, so one transient refusal cannot fail it. *)
+  let kind r = if is_placement r then "placement" else "schedule" in
+  let groups =
     List.sort_and_group attempted ~compare:(fun (a : SC.cache_io) (b : SC.cache_io) ->
-        String.compare a.SC.dir b.SC.dir)
+        match String.compare a.SC.dir b.SC.dir with 0 -> String.compare (kind a) (kind b) | c -> c)
   in
-  List.iter by_dir ~f:(fun group ->
-      Stdio.eprintf "placement stores attempted in %s (not part of the golden): %d, %d refused\n%!"
-        (List.hd_exn group).SC.dir (List.length group) (List.count group ~f:refused));
-  let judged = List.filter by_dir ~f:(fun group -> List.length group >= 2) in
+  List.iter groups ~f:(fun group ->
+      let r = List.hd_exn group in
+      Stdio.eprintf "%s stores attempted in %s (not part of the golden): %d, %d refused\n%!"
+        (kind r) r.SC.dir (List.length group) (List.count group ~f:refused));
+  let judged = List.filter groups ~f:(fun group -> List.length group >= 2) in
   gated ~aggregation:`Environment
     ~when_:(not (List.is_empty judged))
-    ~on:"no cache directory with two placement stores attempted"
-    "in each cache directory, the filesystem refused not every placement store the runs attempted"
+    ~on:"no cache directory with two stores of a kind attempted"
+    "in each cache directory, the filesystem refused not every placement store, nor every schedule \
+     store, the runs attempted"
     ((not (List.is_empty judged))
     && List.for_all judged ~f:(fun group -> List.exists group ~f:(Fn.non refused)));
   (* --- Run 8 (gh-ocannl-1040): the waivers above rest on the cache REPORTING a refusal it

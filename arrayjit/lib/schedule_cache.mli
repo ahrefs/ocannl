@@ -419,9 +419,10 @@ type cache_io = {
 
 val recording_cache_io : (unit -> 'a) -> 'a * cache_io list
 (** [recording_cache_io f] runs [f] and returns, beside its result, every store and lookup with a
-    key that this process made while [f] ran, from any domain, oldest first. A call with
-    [key = None] performs no I/O and is not recorded. Recordings nest; with none active nothing is
-    kept. If [f] raises, the recording is dropped and the exception propagates. *)
+    key that this process made while [f] ran, from any domain, in the order they were noted: oldest
+    first within a domain, while two domains' concurrent operations may appear in either order. A
+    call with [key = None] performs no I/O and is not recorded. Recordings nest; with none active
+    nothing is kept. If [f] raises, the recording is dropped and the exception propagates. *)
 
 (** {2 Abandoned searches} *)
 
