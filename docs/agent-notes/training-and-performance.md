@@ -227,6 +227,10 @@ files.
   both add the fixture stamp, the source revision and the runner binary's sha256 under
   `provenance`, since the checkpoint names its fixture and runner only by paths a later sweep
   reuses. An interrupted cell's checkpoint is recorded before the cancellation propagates.
+  The report's "Runner failures" table shows those saved losses' drift from the reference beside
+  the envelope the cell would have been gated at (`saved_loss_parity`) -- a DIAGNOSTIC of whether
+  the work before the failure was on course, worded outside the parity column's vocabulary; the
+  cell still fails the sweep.
   Do not give the line a `{` prefix or move it to stdout: drivers take a cell's result from the
   last `{`-line of its combined output, and the checkpoint must never be one.
 
