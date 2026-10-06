@@ -1415,3 +1415,14 @@ let holds_gpu = function
   | Unknown _ -> true
   | Reaches { named; _ } ->
       List.exists named ~f:(fun (b, _) -> List.mem gpu_backends b ~equal:String.equal)
+
+(** [answer] on one line, as the slot_kind tests' goldens record it: [names <backend>,…] in
+    [named]'s order, or [names nothing], then [ + reads config] when the configuration counts; or
+    [unknown: <why>]. *)
+let summary = function
+  | Unknown why -> "unknown: " ^ why
+  | Reaches { named; reads_config } ->
+      (match named with
+        | [] -> "names nothing"
+        | _ -> "names " ^ String.concat ~sep:"," (List.map named ~f:fst))
+      ^ if Option.is_some reads_config then " + reads config" else ""

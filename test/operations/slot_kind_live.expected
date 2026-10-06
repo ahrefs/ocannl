@@ -1,0 +1,6 @@
+build @test/operations/scans                            names nothing
+    <the configuration does not count>
+build @test/operations/scans answers names nothing: true
+build @test/operations/runtest-bandwidth_calibration    names nothing + reads config
+    it reaches the rule producing bandwidth_calibration.actual in test/operations, which reads the configuration
+build @test/operations/runtest-bandwidth_calibration answers names nothing + reads config: true
