@@ -952,6 +952,11 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   Continued unquoted heredoc bodies are refused because removing their escaped newlines can change
   delimiter recognition; quoted bodies retain those newlines. Its header names the supported
   delimiter grammar and its explicit refusals (gh-ocannl-907).
+- The third inert shape, which no scan refuses: an assertion INSIDE `$(…)`. Outside POSIX mode
+  bash clears `-e` in a command substitution (unless `shopt -s inherit_errexit`, which macOS's bash
+  3.2 lacks), so `out=$(check_a; check_b)` runs on past a failing `check_a`; only the last command's
+  status leaves, and only through a bare `var=$(…)` — as an argument, or under `local`/`export`,
+  even that is discarded. Capture inside the substitution and assert outside it.
 - A child that publishes a value for its parent to poll — a pid, above all — writes a sibling and
   renames it into place: `open(path, 'w')` creates the name EMPTY before the write lands, so a
   parent polling `exists()` reads `''` (gh-ocannl-1041, a per-PR-matrix flake). The benchmarks'
