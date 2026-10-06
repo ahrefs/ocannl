@@ -97,7 +97,10 @@ case "$group" in '' | prog | dir) ;; *) die "--group wants prog or dir, got: $gr
 trace=${trace:-$root/_build/trace.csexp}
 [ -f "$trace" ] || die "no trace at $trace (build something first, or name one)"
 
-python3 - "$trace" "$rows" "$prog_re" "$group" <<'PY'
+# exec, so the reader is ONE process: tools/test-run.sh bounds it with a KILL
+# that must reach the parse itself where a process group cannot be signalled
+# (Git Bash), not just a shell whose python would outlive it.
+exec python3 - "$trace" "$rows" "$prog_re" "$group" <<'PY'
 import os
 import re
 import sys

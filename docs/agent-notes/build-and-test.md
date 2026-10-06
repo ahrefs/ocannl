@@ -3239,9 +3239,11 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   a `TIMEOUT`'s too, where they show how close the rest came — so the data piles up under
   `~/.ocannl-test-runs` with no manual step. The batch's dune gets `--trace-file=<run dir>/trace.csexp`
   (after the recorded `cmd`, for `build`/`runtest`/`test`/`exec` only, never when the argv names its own
-  trace file), so a managed run neither reads nor writes the worktree's `_build/trace.csexp`: deleting
-  that shared file instead, under a build lock the runner does not hold, cost a concurrent manual
-  `dune build` its live trace (review of staging#1079). The supervisor reads the run's trace as the
+  trace file), so the batch neither reads nor writes the worktree's `_build/trace.csexp` (the readers'
+  and device-probe builds still rewrite it, as any dune command does, under dune's own build lock):
+  deleting that shared file instead, outside the build lock, cost a concurrent manual `dune build`
+  its live trace (review of staging#1079). A reader that fails (a dune older than 3.24 writes a trace
+  format it refuses) or times out leaves `slowest-skipped`, and the digest prints its reason. The supervisor reads the run's trace as the
   verdict's last step, on every exit path, the caps' included, and deletes it after; the reader holds
   no descriptor past stdio, is KILLed past its 30 s and abandoned if even KILL does not reap it, so a
   stuck read never withholds the verdict or the worktree lock. Leg 80 of `tools/test-test-run.sh`

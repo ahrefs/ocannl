@@ -816,11 +816,15 @@ supervisor_perl='
   # the child has exited (dune with it), and published as `slowest` only when
   # the reader succeeds. The reader is a child of its own, in a group of its
   # own so its python goes with it, holding no descriptor past stdio (the
-  # worktree lock is fd 9) and with every check of the trace made there, so nothing here can block on
-  # the file system: it is polled for its bound (30 seconds), then KILLed and
-  # polled again, five seconds, and abandoned if even that does not reap it
-  # -- the verdict publishes and the lock clears regardless. The trace is
-  # deleted either way. OCANNL_TOOL_SLOWEST_CAP and OCANNL_TOOL_SLOWEST_READER
+  # worktree lock is fd 9) and with every check of the trace made there, so
+  # nothing here can block on the file system: it is polled for its bound (30
+  # seconds), then KILLed and polled again, five seconds, and abandoned if
+  # even that does not reap it -- the verdict publishes and the lock clears
+  # regardless. A reader that fails or times out leaves `slowest-skipped`,
+  # its last diagnostic line (the reader quotes offsets, never trace bytes) or
+  # the bound it missed, which the digest prints in place of the table -- a
+  # dune older than 3.24 writes a trace format it refuses. The trace is
+  # deleted on every path, a failed fork included. OCANNL_TOOL_SLOWEST_CAP and OCANNL_TOOL_SLOWEST_READER
   # are seams for tools/test-test-run.sh; an ambient value can only shorten
   # the bound (anything but 1-30 reads as 30), and the reader it names is
   # bounded and KILLed like the real one.
@@ -831,14 +835,14 @@ supervisor_perl='
     my $reader = $ENV{OCANNL_TOOL_SLOWEST_READER};
     $reader = "tools/action-durations.sh" unless defined $reader && length $reader;
     my $c = fork();
-    return unless defined $c;
+    unless (defined $c) { unlink $trace; return }
     if (!$c) {
       $SIG{$_} = "DEFAULT" for qw(ALRM INT TERM HUP);
       POSIX::close($_) for 3 .. 255;
       eval { setpgrp(0, 0) };
       POSIX::_exit(1) unless -f $trace;
       open(STDIN, "<", "/dev/null");
-      open(STDERR, ">", "/dev/null");
+      open(STDERR, ">", "$own/slowest.err");
       open(STDOUT, ">", "$own/slowest.tmp") or POSIX::_exit(126);
       exec("bash", $reader, "-n", "5", $trace);
       POSIX::_exit(127);
@@ -855,10 +859,23 @@ supervisor_perl='
         select undef, undef, undef, 0.1;
       }
     }
+    my $why;
     if (defined $st && $st == 0) {
       rename("$own/slowest.tmp", "$own/slowest") or unlink "$own/slowest.tmp";
     } else {
       unlink "$own/slowest.tmp";
+      if (!defined $st) {
+        $why = "the reader did not finish within ${bound}s";
+      } elsif (open(my $ef, "<", "$own/slowest.err")) {
+        my @lines = grep { /\S/ } <$ef>;
+        close $ef;
+        $why = $lines[-1] if @lines;
+      }
+    }
+    unlink "$own/slowest.err";
+    if (defined $why) {
+      chomp $why;
+      $write->("$own/slowest-skipped", substr($why, 0, 300) . "\n");
     }
     unlink $trace;
   };
@@ -1458,8 +1475,12 @@ promotion_bounded() { # command...
 # the batch's dune `--trace-file=<run dir>/trace.csexp`, right after its
 # subcommand, so the worktree's shared `_build/trace.csexp` -- which a
 # concurrent manual dune may be writing, under a build lock this script does
-# not hold -- is neither read nor touched, and a run whose dune never started
-# (a refused or cancelled slot wait) has no trace to misread. The supervisor
+# not hold -- is neither read nor touched by the batch, and a run whose dune
+# never started (a refused or cancelled slot wait) has no trace to misread.
+# (The launch's other dune invocations -- the readers' build in
+# batch_resolve, a GPU batch's device-probe build -- write the shared trace
+# as any dune command does, after taking dune's build lock; what must not
+# happen is a write or unlink outside that lock.) The supervisor
 # reads it as the verdict's last step, once the child has exited, on every
 # exit path -- the caps' included, where `_resolve` itself is killed -- with
 # the caps disarmed, so recording never turns a finished run into a TIMEOUT;
@@ -2023,6 +2044,8 @@ digest() {
       if [ -s "$dir/slowest" ]; then
         echo "slowest actions (this run's dune trace, by tools/action-durations.sh):"
         sed -n '1,7p' "$dir/slowest" | sed 's/^/  /'
+      elif [ -s "$dir/slowest-skipped" ]; then
+        echo "no slowest-actions record: $(head -c 300 "$dir/slowest-skipped" | head -n 1)"
       fi ;;
   esac
   if [ "$digest_rc" = 2 ]; then

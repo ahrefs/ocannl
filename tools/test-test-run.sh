@@ -3898,7 +3898,8 @@ PY
   [ -n "$slow_detail" ] || [ "$argv_calls" = "build @cheap" ] ||
     slow_detail="a green run: dune's other words changed: $argv_calls"
   [ -n "$slow_detail" ] || { [ -s "$argv_dir/slowest" ] && [ ! -e "$argv_dir/slowest.tmp" ] &&
-    [ ! -e "$argv_dir/trace.csexp" ]; } ||
+    [ ! -e "$argv_dir/trace.csexp" ] && [ ! -e "$argv_dir/slowest.err" ] &&
+    [ ! -e "$argv_dir/slowest-skipped" ]; } ||
     slow_detail="a green run: the record is not published cleanly: $(ls "$argv_dir" | tr '\n' ' ')"
   # A run the cap kills records it too: the TIMEOUT digest shows how far the rest got.
   if [ -z "$slow_detail" ]; then
@@ -3922,7 +3923,8 @@ PY
     case $argv_out in
       *"slowest actions"*) slow_detail="the shared trace was read: $argv_out" ;;
     esac
-    [ -n "$slow_detail" ] || { [ ! -e "$argv_dir/slowest" ] && cmp -s "$slow_trace" "$repeat_root/_build/trace.csexp"; } ||
+    [ -n "$slow_detail" ] || { [ ! -e "$argv_dir/slowest" ] && [ ! -e "$argv_dir/slowest-skipped" ] &&
+      cmp -s "$slow_trace" "$repeat_root/_build/trace.csexp"; } ||
       slow_detail="the shared trace: recorded from, or not left as it was"
     rm -f "$repeat_root/_build/trace.csexp"
   fi
@@ -3932,7 +3934,8 @@ PY
     REPEAT_TEST_TRACE=$TMP/slowest-garbage.csexp argv_probe slow-garbage run build @cheap
     case $argv_rc:$argv_out in
       0:*"slowest actions"*) slow_detail="an unreadable trace printed a table: $argv_out" ;;
-      0:*) ;;
+      0:*"no slowest-actions record: action-durations.sh: "*"is not a canonical-S-expression dune trace"*) ;;
+      0:*) slow_detail="an unreadable trace: the digest does not say why there is no record: $argv_out" ;;
       *) slow_detail="an unreadable trace: exit $argv_rc: $argv_out" ;;
     esac
     [ -n "$slow_detail" ] || { [ ! -e "$argv_dir/slowest" ] && [ ! -e "$argv_dir/slowest.tmp" ] &&
@@ -4035,7 +4038,8 @@ PY
       [ -n "$slow_detail" ] || [ -n "$slow_pid" ] || slow_detail="$kind: the stand-in reader never ran"
       [ -n "$slow_detail" ] || case $argv_rc:$argv_out in
         0:*"verdict: pass"*"slowest actions"*) slow_detail="$kind: a stuck reader left a table: $argv_out" ;;
-        0:*"verdict: pass"*) ;;
+        0:*"verdict: pass"*"no slowest-actions record: the reader did not finish within "*s) ;;
+        0:*"verdict: pass"*) slow_detail="$kind: the digest does not say the reader timed out: $argv_out" ;;
         *) slow_detail="$kind: exit $argv_rc (want the run's own 0): $argv_out" ;;
       esac
       [ -n "$slow_detail" ] || [ "$(cat "$argv_dir/exit" 2>/dev/null)" = 0 ] ||
@@ -4044,8 +4048,14 @@ PY
         slow_detail="$kind: the worktree lock is still held: $slow_lock"
       [ -n "$slow_detail" ] || [ "$slow_secs" -le "$slow_limit" ] ||
         slow_detail="$kind: took ${slow_secs}s (limit ${slow_limit}s)"
-      [ -n "$slow_detail" ] || { [ ! -e "$argv_dir/slowest" ] && [ ! -e "$argv_dir/trace.csexp" ]; } ||
+      [ -n "$slow_detail" ] || { [ ! -e "$argv_dir/slowest" ] && [ ! -e "$argv_dir/trace.csexp" ] &&
+        [ ! -e "$argv_dir/slowest.err" ]; } ||
         slow_detail="$kind: left $(ls "$argv_dir" | tr '\n' ' ')"
+      [ -n "$slow_detail" ] || case $kind:$(cat "$argv_dir/slowest-skipped" 2>/dev/null) in
+        ambient:"the reader did not finish within 30s" | bounded:"the reader did not finish within 1s" | \
+          unreapable:"the reader did not finish within 1s") ;;
+        *) slow_detail="$kind: the skip record says: $(cat "$argv_dir/slowest-skipped" 2>&1)" ;;
+      esac
       [ -z "$slow_detail" ] || break
     done
   fi
