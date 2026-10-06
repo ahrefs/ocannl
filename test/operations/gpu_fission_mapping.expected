@@ -69,3 +69,22 @@ lm_head step, batch 2 x seq 128: the legality-only segmentation loses some targe
 lm_head step, batch 2 x seq 128: the gradients are not identically zero: true
 lm_head step, batch 2 x seq 128: the gradients agree with the legality-only segmentation's: true
 lm_head step, batch 2 x seq 128: the updated parameters agree with the legality-only segmentation's: true
+--- case 4: a training step's gradient zeros of mixed shapes (gh-ocannl-1169) ---
+MLP step, batch 2 x seq 128: the step zeros nodes of several shapes: true
+MLP step, batch 2 x seq 128: both pipelines zero the same nodes: true
+MLP step, batch 2 x seq 128: some zeroed node carries a parallel chain alone: true
+MLP step, batch 2 x seq 128: schedule-aware fission gives every zeroed node no fewer groups and hardware-loop threads than alone: true
+MLP step, batch 2 x seq 128: the legality-only segmentation loses some zeroed node's mapping (control): true
+MLP step, batch 2 x seq 128: the shape-sorted zeros take at most one kernel per shape: true
+MLP step, batch 2 x seq 128: the gradients are not identically zero: true
+MLP step, batch 2 x seq 128: the gradients agree with the legality-only segmentation's: true
+MLP step, batch 2 x seq 128: the updated parameters agree with the legality-only segmentation's: true
+MLP step, batch 4 x seq 128: the step zeros nodes of several shapes: true
+MLP step, batch 4 x seq 128: both pipelines zero the same nodes: true
+MLP step, batch 4 x seq 128: some zeroed node carries a parallel chain alone: true
+MLP step, batch 4 x seq 128: schedule-aware fission gives every zeroed node no fewer groups and hardware-loop threads than alone: true
+MLP step, batch 4 x seq 128: the legality-only segmentation loses some zeroed node's mapping (control): true
+MLP step, batch 4 x seq 128: the shape-sorted zeros take at most one kernel per shape: true
+MLP step, batch 4 x seq 128: the gradients are not identically zero: true
+MLP step, batch 4 x seq 128: the gradients agree with the legality-only segmentation's: true
+MLP step, batch 4 x seq 128: the updated parameters agree with the legality-only segmentation's: true

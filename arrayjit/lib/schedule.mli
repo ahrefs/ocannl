@@ -897,8 +897,13 @@ val fission_scheduled :
     groups or fewer active threads of its OWN loops under [keep_mapping] than it gets in a kernel of
     its own: the kernel boundary is kept rather than a nest's mapping lost. Only the refused merges
     add cuts, so a merge that keeps every mapping (an elementwise tail over the same chain) still
-    saves its launch. Ignored under [arity_cuts]. [None] (the default): the legality rules alone
-    decide.
+    saves its launch. The same rule holds a [`Zeros] segment together (gh-ocannl-1169): a zero joins
+    one only when no node of the merged segment gets fewer groups or active threads under
+    [zero_sched] than alone -- a union of zeros with no common lane-plan topology sends every node
+    to the two-loop presets. Each maximal run of whole-node zeros is stably sorted by the zeroed
+    node's rank and dimensions in every mode (the zeros commute), so the cuts fall at shape changes
+    rather than at every alternation of a backward pass's gradient zeros. Ignored under
+    [arity_cuts]. [None] (the default): the legality rules alone decide.
 
     [promote_locals] (default [false]): promote statement-crossing [Local] scratch to [On_device]
     before segmentation. A nest whose only writes land in [Local] scratch gets no parallel chain
@@ -913,10 +918,11 @@ val fission_scheduled :
 
 type segmentation = ([ `Normal | `Zeros | `Solo ] * int) list [@@deriving sexp, equal]
 (** A fission segmentation as data (gh-ocannl-1164): the kind and the length, in units, of each
-    segment in order — a unit being one top-level statement with the comments before it, so the
-    units are a function of the code alone. One segment over every unit is the unfissioned routine.
-    The schedule cache persists it with a fissioned winner, so a replay cuts where the winner was
-    cut instead of re-deriving the cuts under the current policy. *)
+    segment in order — a unit being one top-level statement with the comments before it, with each
+    maximal run of whole-node zeros stably sorted by the zeroed node's shape, so the units are a
+    function of the code alone. One segment over every unit is the unfissioned routine. The schedule
+    cache persists it with a fissioned winner, so a replay cuts where the winner was cut instead of
+    re-deriving the cuts under the current policy. *)
 
 val fission_segmented :
   ?promote_locals:bool ->

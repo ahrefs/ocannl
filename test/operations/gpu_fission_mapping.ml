@@ -13,6 +13,11 @@
    takes dV or dK off its lanes any more; 3. the lm_head's logits accumulation beside the row max
    that reads it: the alignment trims the logits' [(b, s, v)] chain to [(b, s)].
 
+   A fourth merge is the zero segment's (gh-ocannl-1169): 4. a training step's whole-node gradient
+   zeros, of shapes with no common lane-plan topology, merged into one kernel whose launch sends
+   every node to the two-loop presets (the gpt2_mini step's 147 zeros did). The zeros are sorted by
+   shape first, so the schedule-aware pipeline cuts them into at most one kernel per shape.
+
    Per case, structurally on the GPU pipeline (the schedule every hardware loop of the statement
    ITSELF carries, so hardware loops elsewhere in its kernel cannot satisfy the claim): the affected
    statement gets its standalone mapping, and the legality-only segmentation gives it less -- the
@@ -93,6 +98,11 @@ let own_threads stmt =
       if List.exists [ LL.Grid; LL.Workgroup; LL.Workgroup_reduce ] ~f:(fun ty -> is_axis ty site)
       then n * site.ls_extent
       else n)
+
+(* The [Grid] groups a statement's OWN loops launch. *)
+let own_groups stmt =
+  List.fold (L.loop_sites stmt) ~init:1 ~f:(fun n site ->
+      if is_axis LL.Grid site then n * site.ls_extent else n)
 
 (* Whether a statement runs on lanes (gh-ocannl-1003): a [Workgroup] loop inside a [Serial] loop
    that is itself inside a [Grid] loop -- not merely hardware loops under a serial reduction. *)
@@ -264,6 +274,73 @@ let lm_head ~batch ~seq ~d ~vocab () =
   let%op logits = { wte; i = [ vocab ]; o = [ d ] } +* "|v -> d; ... | d => ... | v" hfinal in
   Nn_blocks.cross_entropy_loss ~spec:"...|v" () ~logits ~targets
 
+(* A two-layer MLP over a [(batch, seq, d)] input: its step zeros the weights' and biases' gradients
+   ([(hid, d)], [(hid)], [(d, hid)], [(d)]) and the activations' ([(batch, seq, hid)] ...): rank-1,
+   rank-2 and rank-3 lane plans with no common topology. *)
+let mlp ~batch ~seq ~d ~hid () =
+  let x =
+    TDSL.range_of_shape ~label:[ "x" ] ~batch_dims:[ batch; seq ] ~input_dims:[] ~output_dims:[ d ]
+      ()
+  in
+  let scale = Float.of_int (batch * seq * d) in
+  let l1 = Nn_blocks.mlp_layer ~label:[ "l1" ] ~hid_dim:hid () in
+  let l2 = Nn_blocks.mlp_layer ~label:[ "l2" ] ~hid_dim:d () in
+  let%op y = l2 (l1 (x /. !.scale)) in
+  let%op loss = (y *. y) ++ "... | ... => 0" in
+  loss
+
+(* The [`Zeros] segments of the GPU pipeline, scheduled: per zeroed node, its statement. *)
+let zero_statements ~keep (o : LL.optimized) =
+  let keep_mapping = if keep then S.fission_keep_mapping ~is_gpu:true ~limits else None in
+  let segs =
+    S.fission_scheduled ~promote_locals:true ?keep_mapping ~preset:(S.default_gpu ~limits)
+      ~zero_sched:(S.zero_expansion ~limits) ~static_indices:[] (copy o)
+    |> List.filter_map ~f:(function `Zeros, _, _, post -> Some post | _ -> None)
+  in
+  let written stmt =
+    match stmt with
+    | LL.Zero_out tn -> Some tn
+    | _ ->
+        List.find_map (LL.affine_accesses stmt) ~f:(fun (a : Ir.Tnode.t Ir.Affine.access) ->
+            Option.some_if a.a_write a.a_tn)
+  in
+  ( List.length segs,
+    List.concat_map segs ~f:(fun post ->
+        List.filter_map (non_glue post.LL.llc) ~f:(fun stmt ->
+            Option.map (written stmt) ~f:(fun tn -> (tn, stmt)))) )
+
+let check_zeros ~what (o : LL.optimized) =
+  let n_keep, kept = zero_statements ~keep:true o
+  and n_legacy, merged = zero_statements ~keep:false o in
+  let alone tn =
+    let solo = { o with LL.llc = LL.Zero_out tn } in
+    (S.apply (S.zero_expansion ~limits [ tn ]) solo).LL.llc
+  in
+  let shapes =
+    List.dedup_and_sort ~compare:(Array.compare Int.compare)
+      (List.map kept ~f:(fun (tn, _) -> Lazy.force tn.Ir.Tnode.dims))
+  in
+  let nodes l = List.sort ~compare:Ir.Tnode.compare (List.map l ~f:fst) in
+  p (what ^ ": the step zeros nodes of several shapes") (List.length shapes >= 3);
+  p
+    (what ^ ": both pipelines zero the same nodes")
+    (List.equal Ir.Tnode.equal (nodes kept) (nodes merged));
+  p_exists (what ^ ": some zeroed node carries a parallel chain alone") kept ~f:(fun (tn, _) ->
+      own_threads (alone tn) > 1);
+  p_all
+    (what
+   ^ ": schedule-aware fission gives every zeroed node no fewer groups and hardware-loop threads \
+      than alone") kept ~f:(fun (tn, k) ->
+      own_groups k >= own_groups (alone tn) && own_threads k >= own_threads (alone tn));
+  p_exists (what ^ ": the legality-only segmentation loses some zeroed node's mapping (control)")
+    merged ~f:(fun (tn, m) -> own_threads m < own_threads (alone tn));
+  p
+    (what ^ ": the shape-sorted zeros take at most one kernel per shape")
+    (n_keep <= List.length shapes);
+  eprintf
+    "%s: %d zero kernels schedule-aware, %d legality-only, %d shapes (not part of the golden)\n%!"
+    what n_keep n_legacy (List.length shapes)
+
 let v_grad n = String.is_suffix n ~suffix:"v.grad"
 let logits n = String.equal n "logits"
 
@@ -324,4 +401,13 @@ let () =
       let name = Printf.sprintf "gfm_lm_b%d" batch in
       let build = lm_head ~batch ~seq:128 ~d:64 ~vocab:512 in
       check_mapping ~what ~target:logits (lowering ~name ~build);
+      check_parity ~what ~name ~build);
+  printf "--- case 4: a training step's gradient zeros of mixed shapes (gh-ocannl-1169) ---\n";
+  (* Batch 2 and up: at batch 1 the activations' singleton batch axis leaves them rank-2 plans that
+     share the weights' topology, and the zeros sharing a run keep their mappings merged anyway. *)
+  List.iter [ 2; 4 ] ~f:(fun batch ->
+      let what = Printf.sprintf "MLP step, batch %d x seq 128" batch in
+      let name = Printf.sprintf "gfm_zeros_b%d" batch in
+      let build = mlp ~batch ~seq:128 ~d:64 ~hid:256 in
+      check_zeros ~what (lowering ~name ~build);
       check_parity ~what ~name ~build)

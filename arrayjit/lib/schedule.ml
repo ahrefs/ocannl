@@ -6856,7 +6856,31 @@ let collect_units ?max_chain plc (opt : Low_level.optimized) (stmts : Low_level.
     | stmt :: tl when is_glue stmt -> go index (stmt :: glue) acc tl
     | stmt :: tl -> go (index + 1) [] (mk index glue stmt :: acc) tl
   in
-  go 0 [] [] stmts
+  (* Each maximal run of whole-node zeros is stably sorted by the zeroed node's shape
+     (gh-ocannl-1169): they are unconditional whole-node constant-zero writes with no reads and no
+     computation between them, so they commute -- even a repeated node or overlapping storage
+     receives the same zeros in any order ([mat_conflict] still keeps a repeated node out of one
+     segment) -- and on GPU a zero segment keeps one launch only while its nodes share a lane-plan
+     topology ({!zeros_keep_mapping}) -- in statement order a backward pass's gradient zeros
+     alternate shapes and would cut at almost every unit. The order is a function of the code alone,
+     like the units, so a recorded segmentation replays onto the same units. *)
+  let shape u =
+    match u.f_sum with
+    | Some { s_top_zero = Some tn; _ } -> Array.to_list (Lazy.force tn.Tn.dims)
+    | _ -> []
+  in
+  let sorted =
+    List.group (go 0 [] [] stmts) ~break:(fun a b ->
+        not (Poly.equal a.f_kind `Zeros && Poly.equal b.f_kind `Zeros))
+    |> List.concat_map ~f:(function
+      | { f_kind = `Zeros; _ } :: _ :: _ as run ->
+          List.stable_sort run ~compare:(fun a b ->
+              [%compare: int * int list]
+                (List.length (shape a), shape a)
+                (List.length (shape b), shape b))
+      | run -> run)
+  in
+  List.mapi sorted ~f:(fun f_index u -> { u with f_index })
 
 type segment = {
   g_units : funit list;
@@ -7031,8 +7055,8 @@ let segment_optimized (full : Low_level.optimized) (llc : Low_level.t) : Low_lev
     source = full.Low_level.source;
   }
 
-(* The hardware mapping a schedule gives each top-level statement of [llc] (comments and noops
-   skipped), as [(groups, active)]: the [Grid] groups the statement's own loops launch, and its
+(* The hardware mapping a schedule gives the loops whose extents [extents] holds (one statement's,
+   or one expanded zero's), as [(groups, active)]: the [Grid] groups those loops launch, and their
    iterations executed by distinct threads -- a split lane's padding threads are not work, and the
    [Serial] outer part of a preset split is work one thread repeats. Read off the schedule's ops,
    not the applied code: a probe must not mint the placements or nodes [apply] would. Only a
@@ -7042,11 +7066,52 @@ let segment_optimized (full : Low_level.optimized) (llc : Low_level.t) : Low_lev
    [Workgroup_reduce] retype shares the workgroup slot of the statement's widest [Workgroup] loop
    rather than adding a dimension -- the lane geometry's cooperative preamble reduction is a sibling
    of its lane on the same [.x] threads (gh-ocannl-1124) -- so it adds threads only past that loop's
-   width. *)
-let statement_mappings (llc : Low_level.t) (sched : schedule) : (int * int) list =
+   width. {!statement_mappings} reads it per top-level statement of a kernel. *)
+let mapping_of_loops extents (sched : schedule) : int * int =
   let open Low_level in
   let hw = function Grid | Workgroup | Workgroup_reduce -> true | _ -> false in
   let times a n = Option.value ~default:Int.max_value (checked_mul a n) in
+  let own ty =
+    List.filter_map sched ~f:(function
+      | Retype { axis; ty = ty' } when equal_axis_type ty ty' -> Hashtbl.find extents axis
+      | _ -> None)
+  in
+  let widest l = List.fold l ~init:1 ~f:max in
+  let lane = widest (own Workgroup) and reduce = widest (own Workgroup_reduce) in
+  let g, a =
+    List.fold sched
+      ~init:(1, (reduce + lane - 1) / lane)
+      ~f:(fun (g, a) op ->
+        match op with
+        | Retype { ty = Workgroup_reduce; _ } -> (g, a)
+        | Retype { axis; ty } -> (
+            match Hashtbl.find extents axis with
+            | Some n when equal_axis_type ty Grid -> (times g n, times a n)
+            | Some n when hw ty -> (g, times a n)
+            | _ -> (g, a))
+        | Split { axis; factor; outer; inner; _ } -> (
+            match Hashtbl.find extents axis with
+            | None -> (g, a)
+            | Some n ->
+                let blocks = (n + factor - 1) / factor in
+                let g = if equal_axis_type outer Grid then times g blocks else g in
+                let a =
+                  match (hw outer, hw inner) with
+                  | true, true -> times a n
+                  | false, true -> times a (min factor n)
+                  | true, false -> times a blocks
+                  | false, false -> a
+                in
+                (g, a))
+        | Fold_mma { query; _ } when Hashtbl.mem extents query -> (Int.max_value, Int.max_value)
+        | _ -> (g, a))
+  in
+  (g, a)
+
+(* {!mapping_of_loops} for each top-level statement of [llc] (comments and noops skipped), over the
+   statement's own loops. *)
+let statement_mappings (llc : Low_level.t) (sched : schedule) : (int * int) list =
+  let open Low_level in
   let stmts =
     List.filter (flat_lines [ llc ]) ~f:(function Noop | Comment _ -> false | _ -> true)
   in
@@ -7064,42 +7129,26 @@ let statement_mappings (llc : Low_level.t) (sched : schedule) : (int * int) list
         | _ -> ()
       in
       loops stmt;
-      let own ty =
-        List.filter_map sched ~f:(function
-          | Retype { axis; ty = ty' } when equal_axis_type ty ty' -> Hashtbl.find extents axis
+      mapping_of_loops extents sched)
+
+(* The same pair for each node of a [`Zeros] segment under its zero schedule [sched]
+   ({!zero_expansion} or a caller's replacement): the loops are the ones [sched]'s [Expand_zero]
+   mints for the node, with the node's extents. A node the schedule does not expand stays a
+   whole-node write in a serial kernel, [(1, 1)]. *)
+let zero_mappings (tns : Tn.t list) (sched : schedule) : (int * int) list =
+  List.map tns ~f:(fun tn ->
+      match
+        List.find_map sched ~f:(function
+          | Expand_zero { tn = tn'; indices } when Tn.equal tn tn' -> Some indices
           | _ -> None)
-      in
-      let widest l = List.fold l ~init:1 ~f:max in
-      let lane = widest (own Workgroup) and reduce = widest (own Workgroup_reduce) in
-      let g, a =
-        List.fold sched
-          ~init:(1, (reduce + lane - 1) / lane)
-          ~f:(fun (g, a) op ->
-            match op with
-            | Retype { ty = Workgroup_reduce; _ } -> (g, a)
-            | Retype { axis; ty } -> (
-                match Hashtbl.find extents axis with
-                | Some n when equal_axis_type ty Grid -> (times g n, times a n)
-                | Some n when hw ty -> (g, times a n)
-                | _ -> (g, a))
-            | Split { axis; factor; outer; inner; _ } -> (
-                match Hashtbl.find extents axis with
-                | None -> (g, a)
-                | Some n ->
-                    let blocks = (n + factor - 1) / factor in
-                    let g = if equal_axis_type outer Grid then times g blocks else g in
-                    let a =
-                      match (hw outer, hw inner) with
-                      | true, true -> times a n
-                      | false, true -> times a (min factor n)
-                      | true, false -> times a blocks
-                      | false, false -> a
-                    in
-                    (g, a))
-            | Fold_mma { query; _ } when Hashtbl.mem extents query -> (Int.max_value, Int.max_value)
-            | _ -> (g, a))
-      in
-      (g, a))
+      with
+      | None -> (1, 1)
+      | Some indices ->
+          let extents = Hashtbl.create (module Indexing.Symbol) in
+          List.iter2_exn indices
+            (Array.to_list (Lazy.force tn.Tn.dims))
+            ~f:(fun key data -> Hashtbl.set extents ~key ~data);
+          mapping_of_loops extents sched)
 
 (* A probe of the per-segment schedule leaves no trace: [split] and the lane plans mint loop
    symbols, and a discarded probe's symbols would shift every later minted name -- in the goldens
@@ -7142,10 +7191,33 @@ let keeps_mapping ~mapping (opt : Low_level.optimized) seg (u : funit) standalon
   | Unequal_lengths -> true
   | Ok pairs -> List.for_all pairs ~f:(fun ((g, a), (g0, a0)) -> g >= g0 && a >= a0)
 
-let group_units ?max_chain ?(arity_cuts = false) ?mapping (opt : Low_level.optimized)
+(* The [`Zeros] half (gh-ocannl-1169): a zero segment shares ONE launch too, and {!zero_expansion}'s
+   lane plans need one common topology across its nodes and a union launch within twice the largest
+   node's own, or every node falls back to the two-loop presets -- the training step's 147 gradient
+   zeros, of a dozen shapes, all did. So a zero joins a zero segment only when no node of the merged
+   segment gets less of its own mapping under [zero_sched] than it gets alone, the rule
+   {!keeps_mapping} applies to nests. *)
+let zeros_keep_mapping ~zero_sched seg (u : funit) standalone =
+  let tns =
+    List.filter_map (seg.g_units @ [ u ]) ~f:(fun u' ->
+        Option.bind u'.f_sum ~f:(fun s -> s.s_top_zero))
+  in
+  let merged = dry_run (fun () -> zero_mappings tns (zero_sched tns)) in
+  List.for_all2_exn merged (List.map tns ~f:standalone) ~f:(fun (g, a) (g0, a0) ->
+      g >= g0 && a >= a0)
+
+let group_units ?max_chain ?(arity_cuts = false) ?mapping ?zero_sched (opt : Low_level.optimized)
     (units : funit list) : segment list =
   let plc = opt.Low_level.optimize_ctx.placements in
   let close cur acc = match cur with None -> acc | Some seg -> seg :: acc in
+  (* Zeros are judged only where nests are: the schedule-aware merge rule is on. *)
+  let zero_sched = Option.bind mapping ~f:(fun _ -> zero_sched) in
+  let zero_alone =
+    let memo = Hashtbl.create (module Tn) in
+    fun zero_sched tn ->
+      Hashtbl.find_or_add memo tn ~default:(fun () ->
+          List.hd_exn (dry_run (fun () -> zero_mappings [ tn ] (zero_sched [ tn ]))))
+  in
   (* One standalone probe per unit, taken only when a merge is judged. *)
   let standalone =
     let memo = Hashtbl.create (module Int) in
@@ -7174,7 +7246,10 @@ let group_units ?max_chain ?(arity_cuts = false) ?mapping (opt : Low_level.optim
         match (cur, u.f_kind, u.f_sum) with
         | Some ({ g_kind = `Normal; _ } as seg), `Normal, Some s when mergeable seg s u ->
             go (Some (merge_segs ~kind:`Normal seg (seg_of_unit u))) acc tl
-        | Some ({ g_kind = `Zeros; _ } as seg), `Zeros, Some s when not (mat_conflict plc seg s) ->
+        | Some ({ g_kind = `Zeros; _ } as seg), `Zeros, Some s
+          when (not (mat_conflict plc seg s))
+               && Option.for_all zero_sched ~f:(fun zero_sched ->
+                   zeros_keep_mapping ~zero_sched seg u (zero_alone zero_sched)) ->
             go (Some (merge_segs ~kind:`Zeros seg (seg_of_unit u))) acc tl
         | _ -> go (Some (seg_of_unit u)) (close cur acc) tl)
   in
@@ -7528,7 +7603,7 @@ let fission_segmented ?(promote_locals = false) ?(arity_cuts = false) ?keep_mapp
         (* The [arity_cuts] mode has its own, stricter merge rule for the sketches' full-arity
            geometry. *)
         let mapping = if arity_cuts then None else keep_mapping in
-        let segs = group_units ?max_chain ~arity_cuts ?mapping opt units in
+        let segs = group_units ?max_chain ~arity_cuts ?mapping ~zero_sched opt units in
         if List.length segs <= 1 then None
         else
           match resolve_scope_crossings (Array.of_list units) segs with
@@ -7693,8 +7768,10 @@ let default_schedule_fingerprint ~backend_name =
       let all_reduce =
         match gpu_lane_all_reduce_simdgroups () with None -> "auto" | Some k -> Int.to_string k
       in
+      (* [zero-topology-v1] (gh-ocannl-1169): under [keep_mapping], zero segments cut where a node
+         would lose its lane plan, over shape-sorted zero runs. *)
       [%string
-        "gpu:policy=small-leading-v1+lanes-v1+fold-mma-v1+lane-plans-v1+lane-reductions-v1+lane-economics-v1+lane-all-reduce-v1:fission=%{fission#Bool}:keep_mapping=%{keep#Bool}:block_size=%{bs}:min_parallel=%{mp}:workgroup_fill=%{fill#Int}:preamble=%{preamble}:serial_lanes=%{lanes}:all_reduce_simdgroups=%{all_reduce}"]
+        "gpu:policy=small-leading-v1+lanes-v1+fold-mma-v1+lane-plans-v1+lane-reductions-v1+lane-economics-v1+lane-all-reduce-v1+zero-topology-v1:fission=%{fission#Bool}:keep_mapping=%{keep#Bool}:block_size=%{bs}:min_parallel=%{mp}:workgroup_fill=%{fill#Int}:preamble=%{preamble}:serial_lanes=%{lanes}:all_reduce_simdgroups=%{all_reduce}"]
     else
       let mp =
         String.strip (Utils.get_global_arg ~arg_name:"cpu_schedule_min_parallel" ~default:"16384")
