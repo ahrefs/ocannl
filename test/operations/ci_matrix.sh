@@ -88,11 +88,11 @@ def matrix(text, event, windows=False):
     jobs += [(entry['os'], entry['ocaml-compiler'], entry['suite'], entry.get('shard', ''))
              for entry in includes]
     selected = []
-    for job in ('fmt', 'harnesses', 'promotion-floor'):
+    for job in ('fmt', 'harnesses', 'promotion-floor', 'torch-runner'):
         guard = re.search(r'^  ' + job + r':\n    if: (.*)$', text, re.M)
         assert guard, job + ' selection missing'
         selected.append(bool(expression(guard[1], event, windows)))
-    assert len(set(selected)) == 1, 'formatting and harness jobs select differently'
+    assert len(set(selected)) == 1, 'formatting, harness and torch-runner jobs select differently'
     return unshard(sorted(jobs)), selected[0]
 
 
@@ -162,6 +162,7 @@ for label, mutant in (
     ('duplicate formatting job', source.replace("github.event_name != 'workflow_dispatch' || !inputs.windows_only", "github.event_name != 'never'", 1)),
     ('harnesses in the Windows fallback', source.replace("  harnesses:\n    if: github.event_name != 'workflow_dispatch' || !inputs.windows_only", "  harnesses:\n    if: github.event_name != 'never'")),
     ('Dune-floor promotion harnesses in the Windows fallback', source.replace("  promotion-floor:\n    if: github.event_name != 'workflow_dispatch' || !inputs.windows_only", "  promotion-floor:\n    if: github.event_name != 'never'")),
+    ('CPU-torch benchmark tests in the Windows fallback', source.replace("  torch-runner:\n    if: github.event_name != 'workflow_dispatch' || !inputs.windows_only", "  torch-runner:\n    if: github.event_name != 'never'")),
     ('per-PR shard dropped', source[:source.rindex(second)] + source[source.rindex(second) + len(second):]),
     ('scheduled shard dropped', source.replace(second, '', 1)),
     ('shard renumbered', source.replace('"shard": "2/2"', '"shard": "2/3"', 1)),
