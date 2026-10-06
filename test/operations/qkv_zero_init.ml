@@ -14,19 +14,18 @@ module Sched = Ir.Schedule
 
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
 let () = Stdio.eprintf "qkv_zero_init backend=%s\n" backend_name
+let x_value ~offset ix = Float.of_int (offset + 1 + (3 * ix.(0)) + (5 * ix.(1)) + ix.(2)) /. 16.
+let w_value ~offset ix = Float.of_int (offset + 1 + (7 * ix.(0)) + (3 * ix.(1)) + ix.(2)) /. 32.
 
-let projection ~b ~s ~h ~j ~k =
-  let x =
-    NTDSL.init ~l:"zi_x" ~prec:Ir.Ops.single ~o:[ b; s; k ]
-      ~f:(fun ix -> Float.of_int (1 + (3 * ix.(0)) + (5 * ix.(1)) + ix.(2)) /. 16.)
-      ()
-  in
-  let w =
-    NTDSL.init ~l:"zi_w" ~prec:Ir.Ops.single ~o:[ h; j; k ]
-      ~f:(fun ix -> Float.of_int (1 + (7 * ix.(0)) + (3 * ix.(1)) + ix.(2)) /. 32.)
-      ()
-  in
+(* [prec] is the operands' storage; the output stays f32 whatever it is, so a narrow-operand
+   projection exercises the mixed (narrow, narrow, f32) triple, never a narrow accumulator. [offset]
+   lifts every operand numerator, bounding each contraction term away from zero relative to its
+   cell's sum. *)
+let projection ?(prec = Ir.Ops.single) ?(offset = 0) ~b ~s ~h ~j ~k () =
+  let x = NTDSL.init ~l:"zi_x" ~prec ~o:[ b; s; k ] ~f:(x_value ~offset) () in
+  let w = NTDSL.init ~l:"zi_w" ~prec ~o:[ h; j; k ] ~f:(w_value ~offset) () in
   let%op out = x +* "bsk;hjk=>bshj" w in
+  Ir.Tnode.update_prec out.Tensor.value Ir.Ops.single;
   Train.set_materialized out.Tensor.value;
   out
 
@@ -79,8 +78,60 @@ let apply schedule opt =
       optimize_ctx = LL.copy_optimize_ctx opt.LL.optimize_ctx;
     }
 
+(* Every sketch the host GPU would seed for [pre], executed against the materialized run [want]
+   under [matches]. Seeding reads the backend's tensor-unit formats and the numerics policy, so the
+   population is the host's: tf32 seeds join CUDA's f32 site only under the approximate profile, and
+   HIP's rocWMMA seeds 16-bit operands only. No gate reads the population under test
+   (gh-ocannl-1115): a GPU that seeds nothing fails the first claim, and the tensorized claim is
+   gated on the CAPABILITY the backend advertises for the site's actual operand and destination
+   precisions, so where a tensor tile is advertised a vanished tensorized seed fails rather than
+   skipping. *)
+let folded_seed_claims ~tag ~what ~pre ~out ~seed ~want ~matches =
+  let on_gpu = Sched.backend_is_gpu backend_name in
+  let limits = Context.hardware_limits (Context.auto ()) in
+  let site = Option.value_exn (Autotune.detect_matmul pre.LL.llc) in
+  let capability =
+    if on_gpu then
+      Ll_test.tensorized_matmul_capability ~is_gpu:true ~is_cpu:false ~limits ~a:site.Autotune.m_a
+        ~b:site.m_b ~d:site.m_d
+    else `Withheld `Backend
+  in
+  let real = if on_gpu then gpu_seeds ~limits pre else [] in
+  (* Each result keeps its routine's own [mma] census: a tensorized seed whose [Tile_mma] declined
+     to the scalar fallback at codegen still matches, but it did not run the tensorized path. *)
+  let results =
+    List.mapi real ~f:(fun i q ->
+        let o = apply (Autotune.sketch_schedule ~accum_prec:Fn.id ~p:q pre) pre in
+        let ctx, routine = Ll_test.link ~name:(tag ^ Int.to_string i) o in
+        let got = Context.get_values (Ll_test.run_linked (ctx, routine) ~seed) out.Tensor.value in
+        let ok = matches got want in
+        if not ok then
+          Stdio.eprintf "%s seed %d (mma=%b) differs from the materialized run\n" what i
+            q.Autotune.sk_mma;
+        let rendered =
+          Ir.C_syntax.equal_tensorization routine.Context.mma.tensorization Ir.C_syntax.Tensorized
+        in
+        (q, ok, rendered))
+  in
+  Stdio.eprintf
+    "%s seeds executed (not part of the golden): %d, %d tensorized, %d of those rendered tensorized\n"
+    what (List.length real)
+    (List.count real ~f:(fun q -> q.Autotune.sk_mma))
+    (List.count results ~f:(fun (q, _, rendered) -> q.Autotune.sk_mma && rendered));
+  gated_all ~when_:on_gpu ~on:backend_name
+    ("every GPU sketch of the " ^ what ^ " matches the materialized run")
+    results
+    ~f:(fun (_, ok, _) -> ok);
+  let label =
+    "a tensorized " ^ what ^ " sketch renders tensorized and matches the materialized run"
+  in
+  match capability with
+  | `Advertised ->
+      p_exists label results ~f:(fun (q, ok, rendered) -> q.Autotune.sk_mma && rendered && ok)
+  | `Withheld aggregation -> Verdict.skipped ~aggregation ~backend:backend_name label
+
 let () =
-  let out = projection ~b:32 ~s:32 ~h:4 ~j:32 ~k:128 in
+  let out = projection ~b:32 ~s:32 ~h:4 ~j:32 ~k:128 () in
   let opt = capture ~name:"zi_shape" out in
   let parts = fission opt in
   p "gpt2 qkv projection has one kernel including initialization" (List.length parts = 1);
@@ -110,7 +161,7 @@ let () =
       Ll_test.count_get o out.Tensor.value = 0 && Ll_test.count_set o out.Tensor.value = 1)
 
 let () =
-  let out = projection ~b:2 ~s:32 ~h:2 ~j:32 ~k:64 in
+  let out = projection ~b:2 ~s:32 ~h:2 ~j:32 ~k:64 () in
   let opt = capture ~name:"zi_parity_capture" out in
   let seed = [ (out.Tensor.value, Array.create ~len:(2 * 32 * 2 * 32) (-999.)) ] in
   let want =
@@ -150,35 +201,12 @@ let () =
   end
   else Verdict.skipped ~backend:backend_name staged_label;
   (* Every sketch the host GPU would seed for the folded segment, executed: the tensorized ones load
-     their accumulator fragment from cells the folded zero nest wrote earlier in the same kernel. *)
-  let every_label = "every GPU sketch of the folded qkv matches the materialized run" in
-  let tensor_label = "a tensorized folded qkv sketch matches the materialized run" in
-  let on_gpu = Sched.backend_is_gpu backend_name in
-  let real =
-    if on_gpu then gpu_seeds ~limits:(Context.hardware_limits (Context.auto ())) pre else []
-  in
-  let results =
-    List.mapi real ~f:(fun i q ->
-        let o = apply (Autotune.sketch_schedule ~accum_prec:Fn.id ~p:q pre) pre in
-        let got =
-          List.hd_exn
-            (Ll_test.execute
-               ~name:("zi_seed_" ^ Int.to_string i)
-               o ~seed ~read:[ out.Tensor.value ])
-        in
-        let ok = Array.equal Float.equal got want in
-        if not ok then
-          Stdio.eprintf "folded qkv seed %d (mma=%b) differs from the materialized run\n" i
-            q.Autotune.sk_mma;
-        (q, ok))
-  in
-  (* The gates read the backend and the seeding (hardware-capability facts), never the executed
-     values: a GPU that seeds nothing fails the first claim rather than skipping it. *)
-  gated_all ~when_:on_gpu ~on:backend_name every_label results ~f:snd;
-  gated_exists
-    ~when_:(List.exists real ~f:(fun q -> q.Autotune.sk_mma))
-    ~on:backend_name tensor_label results
-    ~f:(fun (q, ok) -> q.Autotune.sk_mma && ok);
+     their accumulator fragment from cells the folded zero nest wrote earlier in the same kernel.
+     Bitwise, under tf32 too (the [-approximate] run): every operand numerator is below 2^11, inside
+     tf32's significand, and every partial sum is a multiple of 2^-9 below 2^15, so a correct
+     schedule rounds nowhere in any format the f32 site seeds. *)
+  folded_seed_claims ~tag:"zi_seed_" ~what:"folded qkv" ~pre ~out ~seed ~want
+    ~matches:(Array.equal Float.equal);
   let ctx, routine =
     Context.compile ~name:"zi_default" ~prelowered:opt
       ~lowered_transform:(fun o -> List.map (fission o) ~f:(fun (_, _, _, scheduled) -> scheduled))
@@ -192,6 +220,46 @@ let () =
   p_all2 "fission qkv resets the accumulator on every call"
     (Context.get_values ctx out.Tensor.value)
     want ~f:Float.equal
+
+(* The folded projection with f16 operands and its f32 accumulator: the one tensor-unit triple CUDA,
+   HIP and Metal all advertise. HIP's rocWMMA has no f32 tile, tf32 included, so the f32 legs above
+   execute no tensorized seed there under any profile. The operands are still exact (the numerators
+   are below 2^11), but the serial reference may form each product at f16 where the tensor unit
+   forms it exactly, so the claim is a tolerance: |got - want| <= 2^-8 want, four times the bound of
+   one f16 rounding per product (2^-11 on each side, every product positive). The operand offset
+   makes every single contraction term exceed that tolerance against its cell's sum -- claimed below
+   from the operand formulas -- so losing any one term fails the parity claim. *)
+let () =
+  let b = 2 and s = 32 and h = 2 and j = 32 and k = 64 and offset = 255 in
+  let tolerance = 0x1p-8 in
+  let cells =
+    List.concat_map (List.range 0 b) ~f:(fun bi ->
+        List.concat_map (List.range 0 s) ~f:(fun si ->
+            List.concat_map (List.range 0 h) ~f:(fun hi ->
+                List.map (List.range 0 j) ~f:(fun ji ->
+                    List.map (List.range 0 k) ~f:(fun ki ->
+                        x_value ~offset [| bi; si; ki |] *. w_value ~offset [| hi; ji; ki |])))))
+  in
+  p_all "every f16-operand qkv contraction term exceeds the tolerance against its cell's sum" cells
+    ~f:(fun terms ->
+      let sum = List.sum (module Float) terms ~f:Fn.id in
+      List.for_all terms ~f:(fun t -> Float.(t > tolerance * sum)));
+  let out = projection ~prec:Ir.Ops.half ~offset ~b ~s ~h ~j ~k () in
+  let opt = capture ~name:"zh_parity_capture" out in
+  let seed = [ (out.Tensor.value, Array.create ~len:(b * s * h * j) (-999.)) ] in
+  let want =
+    List.hd_exn (Ll_test.execute ~name:"zh_materialized" opt ~seed ~read:[ out.Tensor.value ])
+  in
+  p_all "f16-operand qkv reference differs from zero and the entry sentinel" (Array.to_list want)
+    ~f:(fun v -> Float.(v > 0.));
+  let _, pre, _, _ = List.hd_exn (fission opt) in
+  let worst = ref 0. in
+  folded_seed_claims ~tag:"zh_seed_" ~what:"folded f16-operand qkv" ~pre ~out ~seed ~want
+    ~matches:(fun got want ->
+      Array.iter2_exn got want ~f:(fun g w -> worst := Float.max !worst (Float.abs (g -. w) /. w));
+      Array.for_all2_exn got want ~f:(fun g w -> Float.(abs (g - w) <= w * tolerance)));
+  Stdio.eprintf "f16-operand qkv seeds' max relative deviation (not part of the golden): %h\n"
+    !worst
 
 (* Sibling projections (the q and k of one attention layer): each zero folds into its OWN
    accumulation's kernel and the segmentation changes in nothing else. An expanded zero joining the
