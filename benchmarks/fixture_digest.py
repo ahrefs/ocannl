@@ -820,6 +820,10 @@ def _main(argv=None):
     if args.adopt_legacy is not None:
         if args.check:
             ap.error("--adopt-legacy rewrites the file, so it belongs with --record, not --check")
+        # Here, not only where a legacy row is attributed: with an explicit --origin and no
+        # three-field row in the file, nothing downstream reads the name, and a malformed claim
+        # would be accepted as if it had been checked.
+        check_origin(args.adopt_legacy)
     if args.check and args.origin is not None:
         # Silently accepting it would let automation believe `--check --origin "$BOX"` verified
         # that box's bytes, when the verdict is against every recorded origin.
@@ -827,7 +831,6 @@ def _main(argv=None):
             "--check reports each fixture against EVERY recorded origin, so --origin has no "
             "effect there; drop it, or use --record to write bytes under an origin"
         )
-        check_origin(args.adopt_legacy)
 
     digests = args.digests or args.fixture_dir / DIGEST_FILE
     fixtures = args.fixtures or sorted(args.fixture_dir.glob("*.safetensors"))
