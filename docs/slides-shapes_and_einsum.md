@@ -364,9 +364,9 @@ let%op layer_norm ~label ?(epsilon = 1e-5) () x =
 
 (* Attention scores with flexible batching *)
 let scores = 
-  q +* "...batch.., seq | heads, ..dims..; 
-        ...batch.., time | heads, ..dims.. => 
-        ...batch.., seq | time -> heads" 
+  q +* "..batch.., seq | heads, ..dims..; 
+        ..batch.., time | heads, ..dims.. => 
+        ..batch.., seq | time -> heads" 
     ["heads"; "dims"] k
 ```
 
