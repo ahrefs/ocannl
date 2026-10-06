@@ -36,6 +36,11 @@ seed .z grid fold: at the cap the gate accepts it: true
 seed .z grid fold: over the cap it is not seeded at all: true
 seed .z grid fold: over the cap the gate refuses it as its own typed resource: true
 seed .z grid fold: seeding and the gate refuse it with the same sentence: true
+conv coverage: the conv segment carries its folded per-cell zero: true
+conv coverage: every GPU seed maps the covering zero companion: true
+conv+bias coverage: the conv+bias segment carries the conv's folded per-cell zero: true
+conv+bias coverage: GPU seeds remain eligible and validate with the zero companion: true
+conv+bias coverage: GPU sketches match a materialized run with discriminating operands: true
 conv prediction: the fission segment seeds a whole-extent GPU flavor: true
 conv prediction: the fission segment seeds a row-blocked GPU flavor: true
 conv prediction: no GPU seed predicts a dimension above its applied launch geometry: true

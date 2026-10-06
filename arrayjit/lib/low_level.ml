@@ -6825,6 +6825,95 @@ let peel_accum_nest ?(extra_level = fun _ _ -> false) ?report ~loop_bounds ~free
   Option.iter report ~f:(fun f -> f rep);
   result
 
+(* Whether [body] contains an effect whose buffer accesses or ordering are deliberately opaque to
+   the affine access list. A zero store may not move through either one. [Tile_mma] is rejected as a
+   unit even though its fallback has an affine footprint: the selected intrinsic need not execute
+   that fallback's scalar closing store. *)
+let has_opaque_zero_forwarding_effect ~allow_workgroup_barriers (body : t) =
+  let rec stmt = function
+    | Staged_compilation _ | Tile_mma _ -> true
+    | Workgroup_barrier -> not allow_workgroup_barriers
+    | Seq (a, b) -> stmt a || stmt b
+    | For_loop { body; _ } | If { body; _ } -> stmt body
+    | Scan_loop { carried; body; _ } -> List.exists carried ~f:(fun c -> scalar c.init) || stmt body
+    | Set { llsc; _ } | Set_local (_, llsc) -> scalar llsc
+    | Set_dynamic { dyn_value = value, _; llsc; _ } -> scalar value || scalar llsc
+    | Set_from_vec { arg = value, _; _ } -> scalar value
+    | Noop | Comment _ | Zero_out _ | Declare_local _ -> false
+  and scalar = function
+    | Local_scope { body; _ } -> stmt body
+    | Get_dynamic { dyn_value = value, _; _ } -> scalar value
+    | Ternop (_, (a, _), (b, _), (c, _)) -> scalar a || scalar b || scalar c
+    | Binop (_, (a, _), (b, _)) -> scalar a || scalar b
+    | Unop (_, (a, _)) -> scalar a
+    | Get _ | Get_local _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ ->
+        false
+  in
+  stmt body
+
+let zero_seed_candidate ?(allow_workgroup_barriers = false) (tn : Tn.t) (next : t) :
+    (Tn.t Affine.access * Indexing.symbol list) option =
+  if has_opaque_zero_forwarding_effect ~allow_workgroup_barriers next then None
+  else
+    let same_map = Array.equal Indexing.equal_axis_index in
+    let accesses =
+      affine_accesses next |> List.filter ~f:(fun access -> Tn.equal access.Affine.a_tn tn)
+    in
+    match accesses with
+    | [ ({ Affine.a_write = false; _ } as read); ({ a_write = true; _ } as write) ]
+      when write.a_rmw && (not read.a_guarded) && (not write.a_guarded)
+           && Option.is_none read.a_dyn_axis && Option.is_none write.a_dyn_axis
+           && (not read.a_whole) && (not write.a_whole) && (not read.a_vec_last)
+           && (not write.a_vec_last)
+           && Affine.same_statement read.a_path write.a_path
+           && Option.exists read.a_stmt_write ~f:(same_map write.a_map)
+           && same_map read.a_map write.a_map ->
+        let range symbol =
+          List.find_map write.a_loops ~f:(fun (bound, range) ->
+              if Indexing.equal_symbol symbol bound then Some range else None)
+        in
+        if List.exists write.a_loops ~f:(fun (_, (lo, hi)) -> hi < lo) then None
+        else if Affine.covers_box ~range (Affine.view ~dims:(Lazy.force tn.Tn.dims) write.a_map)
+        then
+          let repeated =
+            List.filter_map write.a_loops ~f:(fun (symbol, (lo, hi)) ->
+                Option.some_if
+                  (hi > lo
+                  && not (Array.exists write.a_map ~f:(Indexing.axis_index_mentions_symbol symbol))
+                  )
+                  symbol)
+          in
+          Some (write, repeated)
+        else None
+    | _ -> None
+
+(* The whole-node zero or its Expand_zero form, with no effects beside the covering store. Hardware
+   annotations do not change the iteration box; guards do, and are refused here. *)
+let zero_initializer_target (stmt : t) : Tn.t option =
+  let rec leaf = function
+    | Zero_out tn -> Some tn
+    | For_loop { from_; to_; body; _ } when to_ >= from_ -> leaf body
+    | Seq _ as body -> (
+        match
+          List.filter (flat_lines [ body ]) ~f:(function Noop | Comment _ -> false | _ -> true)
+        with
+        | [ st ] -> leaf st
+        | _ -> None)
+    | Set { tn; llsc = Constant z; _ } when Int64.equal (Stdlib.Int64.bits_of_float z) 0L -> Some tn
+    | _ -> None
+  in
+  Option.bind (leaf stmt) ~f:(fun tn ->
+      match stmt with
+      | Zero_out _ -> Some tn
+      | _ -> (
+          match affine_accesses stmt with
+          | [ { Affine.a_write = true; a_guarded = false; a_loops; a_map; _ } ] ->
+              let range sym = List.Assoc.find a_loops sym ~equal:Indexing.equal_symbol in
+              Option.some_if
+                (Affine.covers_box ~range (Affine.view ~dims:(Lazy.force tn.Tn.dims) a_map))
+                tn
+          | _ -> None))
+
 (* gh-343: extract the per-iteration one-hot contribution from an accumulation [acc] in which the
    running total is recognized by [acc_is]. Handles the [Binop (Add, total, contribution)] form
    (either operand order) and the fused [Ternop (FMA, a, b, total)] form, where FMA(a,b,total) = a*b

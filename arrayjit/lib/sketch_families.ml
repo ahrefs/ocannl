@@ -1158,10 +1158,10 @@ let hoist_above ~(outer : Idx.symbol) (syms : Idx.symbol list) : Sched.schedule 
    and give the resulting nest a compatible parallel geometry, via [mk_zops] on its two fresh loop
    symbols and — under a [`Grid_inner] layout only — the interior batch zero loops [mk_zops] must
    hoist under the row's block split ([~interior]; empty otherwise). When the site is NOT zeroed — a
-   fission segment's site never is, the [Zero_out] lands in its own [`Zeros] segment — there is
-   nothing to expand and the pipelines are correct without it: [Privatize] init-loads the
-   accumulator tile from the (pre-zeroed) target, and [Tile_mma] loads the accumulator fragment
-   before the reduction. *)
+   fission exposes a covering zero as an ordinary per-cell companion, and other whole-node zeros
+   land in their own [`Zeros] segment — there is nothing to expand here. Companion geometry maps the
+   per-cell zero with the site; [Privatize] can forward it into the accumulator tile using the
+   shared zero-seed proof. Otherwise the tile/fragment loads the initialized target. *)
 let zero_geometry ?(layout : batch_layout = `Serial) (site : matmul_site)
     ~(mk_zops : zi:Idx.symbol -> zj:Idx.symbol -> interior:Idx.symbol list -> Sched.schedule) :
     Sched.schedule =
@@ -1291,11 +1291,15 @@ let rec nest_loop_syms acc (llc : LL.t) =
    full arity (a reduction over the site's minor axis, e.g. the lm_head's max-logits row) still
    trims the component's common prefix below [site_syms] and correctly declines.
 
-   Residual, shared with the zeroing geometry this reuses: a tensorized nest's workgroup slot is the
-   [Tensorize] lane, whose per-lane element ownership is architecture-opaque, so a per-lane
-   companion reads cells other lanes of the same simdgroup produced. The threadgroup is exactly one
-   simd width here (a single [Workgroup] slot of extent [sk_simd]), which is what makes that safe in
-   practice; a cross-nest simdgroup barrier would be the formal fix. *)
+   Ordering, shared with the zeroing geometry this reuses: a tensorized nest's workgroup slot is the
+   [Tensorize] lane, whose per-lane element ownership is architecture-opaque, so the accumulator
+   fragment loads cells other lanes wrote in a companion (the folded zero of gh-ocannl-1175), and a
+   later companion reads cells the fragment store wrote. The GPU renderers order both: every
+   accumulator load of [d] from memory (the per-call intrinsic, the resident-fragment scope opening,
+   the lane-0 fallback) opens with a workgroup barrier, and every store-back closes with one --
+   [threadgroup_barrier(mem_threadgroup | mem_device)] on Metal, [__syncthreads()] on CUDA and HIP.
+   The barrier spans the whole workgroup, so the ordering holds for any lane width the renderer
+   emits; [qkv_zero_init] executes every seed of a folded projection against a materialized run. *)
 let companion_geometry ~(site_syms : (Idx.symbol * int) list) ~(skip : Idx.symbol list)
     ~(expanded_zeros : Ir.Tnode.t list) ~(annotate : (Idx.symbol * int) list -> Sched.schedule)
     (opt : LL.optimized) : (Sched.schedule, string) Result.t =
@@ -2094,13 +2098,12 @@ let reorder_swaps ~current ~target : Sched.schedule =
   List.rev !swaps
 
 (* The segment's real top-level statements as the conv seeding counts them: glue excluded, and the
-   conv site's own [Zero_out] excluded (the pipeline's zero geometry handles it); every other
-   statement is a companion nest. *)
+   conv site's own covering zero initializer excluded (the pipeline's zero geometry handles it);
+   every other statement is a companion nest. *)
 let conv_real_stmts (site : conv_site) (opt : LL.optimized) : LL.t list =
   List.filter (LL.flat_lines [ opt.LL.llc ]) ~f:(function
     | LL.Noop | LL.Comment _ -> false
-    | LL.Zero_out tn -> not (Ir.Tnode.equal tn site.c_d)
-    | _ -> true)
+    | stmt -> not (Option.exists (LL.zero_initializer_target stmt) ~f:(Ir.Tnode.equal site.c_d)))
 
 (* The conv output's epilogue tail (see [epilogue_tail_loop_syms]): the fused twins on
    aligned-merged segments omit the preset's [Retype] on that nest (fuse-before-annotate,
@@ -2161,8 +2164,8 @@ let conv_split_row_current (site : conv_site) ~row_o ~row_i : Idx.symbol list =
    chunk per row-block); on an aligned-merged segment (conv + materialized companions, e.g. lenet's
    conv+bias/relu+pooling) the whole-segment [Grid] geometry comes from [conv_aligned_grid] as for
    the unblocked flavor and the panel loop stays [Serial] — pure cache blocking within each pool
-   chunk. Both cases are unzeroed (the seeds gate accordingly): the [Zero_out] lives in its own
-   [`Zeros] segment, so no zero geometry is needed. *)
+   chunk. Both cases exclude whole-node [Zero_out] (the seeds gate accordingly). A covering per-cell
+   zero companion follows the segment's aligned Grid geometry. *)
 let cpu_conv_sketch_schedule ~(opt : LL.optimized) (site : conv_site)
     { sk_grid; sk_bm; sk_epilogue; sk_pack_prec; _ } : Sched.schedule =
   let stage source tile_loops =
@@ -2255,9 +2258,9 @@ let cpu_conv_sketch_schedule ~(opt : LL.optimized) (site : conv_site)
    cooperative workgroup-shared tiles at the kernel-window anchor (lane-aware [Stage], the lane
    width matching [Tensorize]'s — barrier-strength uniformity). Reusing [Tensorize] inherits the
    accumulator contraction (gh-ocannl-480) unchanged: the [row × oc] fragment stays resident across
-   the whole kernel-window chain (gh-ocannl-501), on Metal in simdgroup registers. Zeroed sites are
-   gated off at the seeds — the GPU leg targets fission segments, whose [Zero_out] lives in its own
-   [`Zeros] segment.
+   the whole kernel-window chain (gh-ocannl-501), on Metal in simdgroup registers. Whole-node
+   [Zero_out] sites are gated off at the seeds. GPU fission expands eligible covering zeros into
+   per-cell companions, which take the same Grid and lane geometry.
 
    With [sk_bm > 0] (gh-ocannl-500) the GEMM row is additionally split into [Grid] blocks of [sk_bm]
    rows: one threadgroup per (outer.., row-block) coordinate instead of one per outer coordinate, so
@@ -2265,10 +2268,11 @@ let cpu_conv_sketch_schedule ~(opt : LL.optimized) (site : conv_site)
    push the cooperative-load barriers under divergent control flow, rejected by
    [validate_parallel]). Only the row is blocked — a 2-D conv already binds two outer [Grid] loops
    (batch, the non-row output spatial axis), so a second [Grid] block on [oc] would exceed the
-   three-slot budget; [oc] stays the tensorized column extent. The block loop [row_o] carries no
-   companion nest here (unzeroed segments), so no cross-nest zero geometry is needed. *)
-let gpu_conv_sketch_schedule (site : conv_site)
-    { sk_simd = w; sk_bm; sk_bn; sk_bk; sk_tm; sk_depth; _ } : Sched.schedule =
+   three-slot budget; [oc] stays the tensorized column extent. Every materialized companion,
+   including the covering zero, follows the site's outer Grid coordinates, row-block split and
+   tensorization lane through [companion_geometry]. *)
+let gpu_conv_sketch_schedule ~(opt : LL.optimized) (site : conv_site)
+    { sk_simd = w; sk_bm; sk_bn; sk_bk; sk_tm; sk_depth; sk_epilogue; _ } : Sched.schedule =
   let stage source tile_loops =
     Sched.Stage
       {
@@ -2282,6 +2286,32 @@ let gpu_conv_sketch_schedule (site : conv_site)
         pipeline_depth = sk_depth;
         tile_prec = None;
       }
+  in
+  (* The expanded zero and other companions use the site's output chain. Tensorize adds one
+     workgroup lane but no column Grid slot: distribute companion columns over that same lane width,
+     keeping any column blocks serial. Outer output coordinates and row blocks have the same Grid
+     roles in every nest. *)
+  let site_syms = site.c_outer @ [ (site.c_row, site.c_nrow); (site.c_oc, site.c_noc) ] in
+  let annotate chain =
+    List.concat_mapi chain ~f:(fun pos (sym, extent) ->
+        if pos < List.length site.c_outer then [ Sched.Retype { axis = sym; ty = LL.Grid } ]
+        else if pos = List.length site.c_outer then
+          if sk_bm = 0 then []
+          else
+            let sp, _, _ = Sched.split ~axis:sym ~factor:sk_bm ~outer:LL.Grid ~inner:LL.Serial in
+            pad_to ~axis:sym ~extent sk_bm @ [ sp ]
+        else
+          let sp, _, _ = Sched.split ~axis:sym ~factor:w ~outer:LL.Serial ~inner:LL.Workgroup in
+          [ sp ])
+  in
+  let companions =
+    match
+      companion_geometry ~site_syms
+        ~skip:(if sk_epilogue then conv_tail_loop_syms site opt else [])
+        ~expanded_zeros:[] ~annotate opt
+    with
+    | Ok ops -> ops
+    | Error why -> companion_coverage_unsupported ~tensorized:true why
   in
   let outer_grid =
     List.map site.c_outer ~f:(fun (s, _) -> Sched.Retype { axis = s; ty = LL.Grid })
@@ -2305,7 +2335,7 @@ let gpu_conv_sketch_schedule (site : conv_site)
       List.map site.c_outer ~f:fst @ [ row_o ] @ site.c_kernel @ [ row_i; site.c_oc; site.c_red ]
     in
     let tz, _lane = Sched.tensorize ~i:row_i ~j:site.c_oc ~k:site.c_red ~simd_width:w () in
-    pads @ (outer_grid @ [ sp_row ]) @ reorder_swaps ~current ~target
+    companions @ pads @ (outer_grid @ [ sp_row ]) @ reorder_swaps ~current ~target
     @ [ stage site.c_a [ row_i; site.c_red ]; stage site.c_b [ site.c_red; site.c_oc ]; tz ]
   else
     let pads =
@@ -2315,7 +2345,7 @@ let gpu_conv_sketch_schedule (site : conv_site)
       List.map site.c_outer ~f:fst @ site.c_kernel @ [ site.c_row; site.c_oc; site.c_red ]
     in
     let tz, _lane = Sched.tensorize ~i:site.c_row ~j:site.c_oc ~k:site.c_red ~simd_width:w () in
-    pads @ outer_grid
+    companions @ pads @ outer_grid
     @ reorder_swaps ~current:site.c_loops ~target:loop_syms
     @ [ stage site.c_a [ site.c_row; site.c_red ]; stage site.c_b [ site.c_red; site.c_oc ]; tz ]
 
@@ -2333,7 +2363,7 @@ let sketch_schedule_unchecked ~accum_prec ~p (opt : LL.optimized) : Sched.schedu
       match detect_conv opt.LL.llc with
       | None -> invalid_arg "Autotune sketch: no convolution site detected"
       | Some site ->
-          ( (if p.sk_gpu then gpu_conv_sketch_schedule site p
+          ( (if p.sk_gpu then gpu_conv_sketch_schedule ~opt site p
              else cpu_conv_sketch_schedule ~opt site p),
             site.c_d )
     else
@@ -2370,9 +2400,8 @@ let sketch_schedule ~accum_prec ~p (opt : LL.optimized) : Sched.schedule =
 (* Sketch seed parameters compatible with the site's extents. Fully staged tensorized pipelines no
    longer require dividing tiles: non-multiple extents seed [(pad, tensorize)] compositions
    (gh-ocannl-485) whose masked edges the tuner measures against scalar alternatives — pipelines
-   that read an operand in place keep their divisibility gates. Unzeroed sites — the norm for fission segments,
-   whose [Zero_out] lives in its own [`Zeros] segment — are proposable too: the pipelines skip the
-   zero geometry (see [zero_geometry]), and a site whose kernel-mates cannot share the parallel
+   that read an operand in place keep their divisibility gates. Sites without whole-node [Zero_out] are proposable too: GPU fission exposes eligible
+   zeros as per-cell companions, while a separate zero segment needs no geometry here, and a site whose kernel-mates cannot share the parallel
    geometry merely fails its candidate compile. *)
 (* Conv seeds (gh-ocannl-493). CPU: the serial implicit-GEMM pipeline plus its Grid-parallel
    variant, pre-filtered by the register tiling's statically decidable rules like the matmul
@@ -2531,12 +2560,9 @@ let conv_seed_params ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits)
             with
             | None -> []
             | Some (tm_t, tn_t, tk_t) ->
-                (* Zeroed sites are gated off: the GPU leg targets fission segments, whose [Zero_out]
-               lives in its own [`Zeros] segment (a whole-routine zeroed GPU flavor would need the
-               zero nest annotated with matching workgroup geometry — a follow-up). Companion
-               gating mirrors the CPU grid flavors: on GPU there is no all-serial fallback, so any
-               uncovered companion write fails [validate_parallel] — the one-companion seed only
-               survives through its fused twin. *)
+                (* Whole-node [Zero_out] sites are gated off. Eligible GPU fission zeros are
+                   per-cell companions; [conv_real_stmts] excludes the site's covering zero,
+                   and the pipeline gives all companions aligned Grid and lane geometry. *)
                 (* The intrinsic-tile divisibility is now a PER-BLOCK property (gh-ocannl-500): the
                tensorized micro-kernel row is [sk_bm] (the block), not the whole [c_nrow], so a
                staged block flavor is proposable whenever [sk_bm] — a multiple of the intrinsic row

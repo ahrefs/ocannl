@@ -178,6 +178,7 @@ declared or pinned by every rule running the program (gh-ocannl-1149):
   test/operations/dune, test online_softmax_block: Ir.Schedule.apply
   test/operations/dune, test online_softmax_block_mma: Ir.Schedule.default_cpu, Ir.Schedule.default_gpu, Ir.Schedule.fission_keep_mapping, Ir.Schedule.fission_scheduled, Ir.Schedule.zero_expansion
   test/operations/dune, test op_legality: Ir.Schedule.apply, Ir.Schedule.op_legality, Ir.Schedule.schedule_legality
+  test/operations/dune, test qkv_zero_init: Ir.Schedule.apply, Ir.Schedule.default_gpu, Ir.Schedule.fission_scheduled, Ir.Schedule.zero_expansion
   test/operations/dune, test reduction_forms: Ir.Schedule.apply
   test/operations/dune, test scan_loop: Ir.Schedule.apply
   test/operations/dune, test schedule_batch_grid: Ir.Schedule.apply
