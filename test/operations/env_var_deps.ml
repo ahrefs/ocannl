@@ -2203,20 +2203,31 @@ let main () =
                       Sources.env_var_reads_in_source content
                       |> List.iter ~f:(fun read ->
                           let exempt_key = dir ^ "/" ^ source ^ ":" ^ read in
-                          match Utils.classify_env_var read with
-                          | Utils.Env_not_addressed -> ()
-                          | _ when List.Assoc.mem exempt_reads exempt_key ~equal:String.equal ->
-                              exempt_read_table := exempt_key :: !exempt_read_table
-                          | _ ->
-                              if not (List.mem declared_for_stanza read ~equal:String.equal) then
-                                fail
-                                  (Printf.sprintf
-                                     "%s/%s reads the environment variable %s by name, and %s does \
-                                      not declare it -- dune then reuses the previous result \
-                                      across a change of the variable that decides what the run \
-                                      does"
-                                     dir source read where)
-                              else read_table := (where, read, dir ^ "/" ^ source) :: !read_table))
+                          (* A credential read by name is refused before the classification, which
+                             would pass it as someone else's variable (gh-ocannl-1280). *)
+                          if is_credential credential_patterns read then
+                            fail
+                              (Printf.sprintf
+                                 "%s/%s reads %s by name, a credential variable on the deny-list \
+                                  of %s (gh-ocannl-1280): the runners strip it from dune's \
+                                  environment, so a test reading one depends on a value no runner \
+                                  passes -- read no credential from a test"
+                                 dir source read credential_env_file)
+                          else
+                            match Utils.classify_env_var read with
+                            | Utils.Env_not_addressed -> ()
+                            | _ when List.Assoc.mem exempt_reads exempt_key ~equal:String.equal ->
+                                exempt_read_table := exempt_key :: !exempt_read_table
+                            | _ ->
+                                if not (List.mem declared_for_stanza read ~equal:String.equal) then
+                                  fail
+                                    (Printf.sprintf
+                                       "%s/%s reads the environment variable %s by name, and %s \
+                                        does not declare it -- dune then reuses the previous \
+                                        result across a change of the variable that decides what \
+                                        the run does"
+                                       dir source read where)
+                                else read_table := (where, read, dir ^ "/" ^ source) :: !read_table))
               | _ -> ()));
       (* gh-ocannl-749: the same question, for the reads OCANNL's own environment reader makes.
          `Sys.getenv "NAME"` above says which variable it reads in the call itself;
@@ -3368,6 +3379,16 @@ let credential_control () =
   let near_miss = run "FOO_API_KEYS" in
   let pform_read = run ~pform:true "GH_TOKEN" in
   let pform_near_miss = run ~pform:true "FOO_API_KEYS" in
+  (* The program itself reading one by name, with nothing declared: its module gains the read, then
+     goes back to the plain probe. *)
+  let source_read =
+    write_file
+      (Stdlib.Filename.concat root "t/probe.ml")
+      (control_probe ^ "let _ = Sys.getenv_opt \"GH_TOKEN\"\n");
+    let result = run "FOO_API_KEYS" in
+    write_file (Stdlib.Filename.concat root "t/probe.ml") control_probe;
+    result
+  in
   let absent = run ~credentials:`Absent "FOO_API_KEYS" in
   let odd_pattern =
     run ~credentials:(`Text "credential_env_patterns='GH_TOKEN|GH_*_KEY'\n") "FOO_API_KEYS"
@@ -3395,6 +3416,10 @@ let credential_control () =
         "pform-near-miss",
         pform_near_miss,
         passed pform_near_miss );
+      ( "a module reading `Sys.getenv_opt \"GH_TOKEN\"`, under the passing tree, is refused by name",
+        "source-read",
+        source_read,
+        refused ~diagnostic:"reads GH_TOKEN by name, a credential variable" source_read );
       ( "a run handed no deny-list is refused rather than passing every declaration",
         "absent",
         absent,
@@ -3409,8 +3434,9 @@ let credential_control () =
   printf
     "The credential rule is put to the declaring tree above plus one rule whose only dependency is\n\
      a single `(env_var ...)`: a deny-listed name, a name matched by a pattern, and a near miss;\n\
-     then to the same rule reading a name through `%%{env:...}` instead, and to the near miss\n\
-     again with no deny-list and with one the reader refuses (gh-ocannl-1280).\n\n";
+     then to the same rule reading a name through `%%{env:...}` instead, to the program's module\n\
+     reading one by name, and to the near miss again with no deny-list and with one the reader\n\
+     refuses (gh-ocannl-1280).\n\n";
   List.iter claims ~f:(fun (claim, _, _, ok) -> Verdict.p claim ok);
   try remove_tree root with Unix.Unix_error _ -> ()
 

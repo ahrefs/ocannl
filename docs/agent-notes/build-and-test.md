@@ -975,25 +975,26 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   environment is applied, since a switch's environment updates could set one too:
   `tools/test-run.sh` scrubs at startup and again in `select_dune` after sourcing
   `tools/opam-env.sh`; `tools/promote.sh` and `tools/dune-quiet.sh` after their own opam-env
-  fallback; `tools/api-drift.sh` at startup; `tools/fmt-check.sh` at startup and inside its default
-  `opam exec`; `tools/sweep.sh` starts every leg's dune as `opam exec -- sh -c <scrub; exec "$@">
-  dune ...` (`switch_dune_cmd`), in the text the far side of the ssh runs, whose login environment
-  holds that box's own token; `tools/machine-verify.sh` passes the text to the far side, which
-  applies it the same way inside every `opam exec` and nowhere else (so git's fetch keeps its
-  credential). The scrub fails CLOSED: listing the environment (`env`, its one external step) is a
-  checked operation, lines are cut by parameter expansion rather than a parser that could fail
-  silently, and a deny-listed name that is not a shell identifier refuses rather than surviving. A
-  script that starts dune itself sources the helper too, and a harness staging such a script derives
-  what it sources from its `. tools/...` lines. `env_var_deps` reads the same line and refuses a
-  stanza declaring a match as `(env_var ...)` or reading one through `%{env:NAME=...}`. A bare
-  `dune` outside these scripts still records whatever the session exports. Pinned by leg 79 of
-  `tools/test-test-run.sh` (a fixture dune's environment, the opam environment `select_dune`
-  sources, `tools/dune-quiet.sh` run directly, and a real dune's trace where one is on PATH),
-  `credential_free` in the sweep harness (local and remote legs, the remote one with credentials the
-  fake switch sets, and a mutation control), the `credentials-ssh`/`credentials-switch` cases of
-  `tools/test-machine-verify.sh`, the credential legs of `tools/test-fmt-check.sh` and
-  `tools/test-promote.sh`, and `env_var_deps_control`; each has a negative control with the scrub
-  cut out.
+  fallback; `tools/api-drift.sh` at startup; `tools/ci-shard.sh` in the subshells of its `dune show`
+  calls; `tools/fmt-check.sh` at startup and inside its default `opam exec`; `tools/sweep.sh` starts
+  every leg's dune as `opam exec -- sh -c <scrub; exec "$@"> dune ...` (`switch_dune_cmd`), in the
+  text the far side of the ssh runs, whose login environment holds that box's own token;
+  `tools/machine-verify.sh` passes the text to the far side, which applies it the same way inside
+  every `opam exec` and nowhere else (so git's fetch keeps its credential). The scrub fails CLOSED:
+  listing the environment (`env`, its one external step) is a checked operation, lines are cut by
+  parameter expansion rather than a parser that could fail silently, and a deny-listed name that is
+  not a shell identifier refuses rather than surviving. A script that starts dune itself sources the
+  helper too, and a harness staging such a script derives what it sources from its `. tools/...`
+  lines. `env_var_deps` reads the same line and refuses a stanza declaring a match as `(env_var
+  ...)` or reading one through `%{env:NAME=...}`, and a test source reading one by name
+  (`Sys.getenv`). A bare `dune` outside these scripts still records whatever the session exports.
+  Pinned by leg 79 of `tools/test-test-run.sh` (a fixture dune's environment, the opam environment
+  `select_dune` sources, `tools/dune-quiet.sh` run directly, and a real dune's trace where one is on
+  PATH), `credential_free` in the sweep harness (local and remote legs, the remote one with
+  credentials the fake switch sets, and a mutation control), the
+  `credentials-ssh`/`credentials-switch` cases of `tools/test-machine-verify.sh`, the credential
+  legs of `tools/test-fmt-check.sh`, `tools/test-promote.sh` and `tools/test-ci-shard.sh`, and
+  `env_var_deps_control`; each has a negative control with the scrub cut out.
 - A child that publishes a value for its parent to poll — a pid, above all — writes a sibling and
   renames it into place: `open(path, 'w')` creates the name EMPTY before the write lands, so a
   parent polling `exists()` reads `''` (gh-ocannl-1041, a per-PR-matrix flake). The benchmarks'

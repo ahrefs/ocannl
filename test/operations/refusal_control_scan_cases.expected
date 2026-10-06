@@ -282,6 +282,7 @@ env_var_deps.ml: [scanner-refusal:2b67d02d52c3465bfba40d167802f0a7] env_var (dir
 env_var_deps.ml: [scanner-refusal:0deef0cb94c45615f32ee84ac2e76f8e] declares tracing gates (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:02e183a4105132ec092206c1d35d6247] reads the tracing (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:2df546d04b63387a24409b3c4c6a9611] declares the tracing (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:a53c6b4b54cc85d2f251e80dd90c855c] credential variable on (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:e55f77a62871fb685d23199e95c8f173] the environment variable (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:d5f94657407bc4dbf949ba4187e80100] include_subdirs (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:ea6e2adedc7afd62fa55afcf859f251d] names the module (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true

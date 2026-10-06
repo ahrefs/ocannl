@@ -67,6 +67,8 @@ PY
   chmod +x "$repo/tools/ci-shard.sh"
 }
 install_subject "$SRC"
+# The credential deny-list it sources beside itself (gh-ocannl-1280).
+cp "$HERE/credential-env.sh" "$repo/tools/credential-env.sh"
 git -C "$repo" init -q
 git -C "$repo" add -- tools lib bin test dune
 
@@ -105,6 +107,9 @@ default_listings
 # stderr too, with no header (one directory asked).
 cat >"$TMP/dune" <<'FAKE_DUNE'
 #!/usr/bin/env bash
+# Which credential fixtures reached this call (gh-ocannl-1280): names only.
+[ -z "${FAKE_DUNE_CREDENTIALS:-}" ] ||
+  printf '%s|%s|%s\n' "${GH_TOKEN+GH_TOKEN}" "${FOO_API_KEY+FOO_API_KEY}" "${CRED_PLAIN+plain}" >>"$FAKE_DUNE_CREDENTIALS"
 if [ "$1 $2 $3" = "show targets test/operations" ]; then
   cat "$FAKE_DUNE_TARGETS" >&2
   exit "${FAKE_DUNE_RC:-0}"
@@ -315,6 +320,27 @@ twin() { # LABEL AWK_PROGRAM EXPECTED_TARGET
 twin "no split exclusion" \
   '/if d == split_dir and a in \(.runtest., .default.\):/ { print "        if False:"; next } { print }' \
   "@@$ops/runtest"
+# Credentials never reach its `dune show` calls (gh-ocannl-1280), while a plain variable does; the
+# negative control is a copy with the scrub cut out of both subshells.
+credentials_clean() { # SUBJECT-LABEL -> 0 when every recorded call saw only the plain variable
+  rm -f "$TMP/credentials.log"
+  GH_TOKEN=fixture-not-a-token FOO_API_KEY=fixture-not-a-key CRED_PLAIN=kept \
+    FAKE_DUNE_CREDENTIALS="$TMP/credentials.log" subject targets 1/1 >/dev/null 2>&1 || return 2
+  [ "$(grep -c . "$TMP/credentials.log")" -ge 2 ] || return 2
+  ! grep -qvxF '||plain' "$TMP/credentials.log"
+}
+credentials_clean
+report $? "dune show runs without GH_TOKEN and FOO_API_KEY, the plain variable kept" "see $TMP/credentials.log"
+cred_rc=0
+path=$(mutant no-credential-scrub '{ gsub(/scrub_credentials && /, ""); print }') && install_subject "$path" ||
+  cred_rc=3
+if [ "$cred_rc" = 0 ]; then credentials_clean || cred_rc=$?; fi
+install_subject "$SRC"
+if [ "$cred_rc" = 1 ]; then
+  report 0 "negative control: without the scrub, dune show sees the credentials"
+else
+  report 1 "negative control: without the scrub, dune show sees the credentials" "exit $cred_rc; see $TMP/credentials.log"
+fi
 twin "rest names default" \
   "/share = 'all' if a == 'default' else a/ { print \"        share = a\"; next } { print }" \
   "@@default"

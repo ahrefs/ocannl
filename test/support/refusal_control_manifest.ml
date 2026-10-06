@@ -297,6 +297,7 @@ let raw_entries =
         "[scanner-refusal:0deef0cb94c45615f32ee84ac2e76f8e] declares tracing gates";
         "[scanner-refusal:02e183a4105132ec092206c1d35d6247] reads the tracing";
         "[scanner-refusal:2df546d04b63387a24409b3c4c6a9611] declares the tracing";
+        "[scanner-refusal:a53c6b4b54cc85d2f251e80dd90c855c] credential variable on";
         "[scanner-refusal:e55f77a62871fb685d23199e95c8f173] the environment variable";
         "[scanner-refusal:d5f94657407bc4dbf949ba4187e80100] include_subdirs";
         "[scanner-refusal:ea6e2adedc7afd62fa55afcf859f251d] names the module";
@@ -606,6 +607,9 @@ let raw_direct_evidence =
     ( "env_var_deps.ml:7aeca22f89e6555c3b97967f8bbdaba4",
       "a stanza declaring `(env_var GH_TOKEN)`, a name on the deny-list, is refused by name: true"
     );
+    ( "env_var_deps.ml:a53c6b4b54cc85d2f251e80dd90c855c",
+      "a module reading `Sys.getenv_opt \"GH_TOKEN\"`, under the passing tree, is refused by name: \
+       true" );
     ( "env_var_deps.ml:09e01a62cce1d340393a2244ed33ea10",
       "a dune file built to trip the marker grammar and the declaration checks is refused: true" );
     ( "env_var_deps.ml:034280d144ee4338406ff5f6a1cf287d",
