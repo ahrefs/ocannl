@@ -12,7 +12,7 @@
 # caller passes in, never timeout(1), which macOS does not ship.
 set -u
 
-[ $# -ge 14 ] || {
+[ $# -ge 15 ] || {
   echo "machine-verify-far.sh: run tools/machine-verify.sh, which supplies this procedure's arguments" >&2
   exit 2
 }
@@ -30,7 +30,8 @@ transport=${11}
 capped_perl=${12}
 box_jobs_source=${13}
 batch_backends_source=${14}
-shift 14
+credential_scrub=${15}
+shift 15
 
 # Non-login SSH shells on rog need both locations; harmless when the
 # directories do not exist (tools/sweep.sh uses the same prefix), as on macOS.
@@ -306,6 +307,16 @@ echo "worktree:      $wt"
 echo "worktree HEAD: $actual_sha"
 echo "source state:  clean, detached, exact commit"
 echo "config boundary: $config_boundary"
+
+# Credentials leave this environment before the first dune of the trip (gh-ocannl-1280): dune
+# records every spawned process's environment in the worktree's `_build/trace.csexp`, and this
+# box's login environment may export its own GitHub token. Every later command inherits the
+# result -- the width resolution, each build and test, and a --run probe. Not earlier: the fetch
+# above may authenticate through one. The text is the caller's tools/credential-env.sh, passed in
+# like the width table. The provenance line below names no variable; a value is never printed.
+eval "$credential_scrub" ||
+  fail "cannot remove credential variables from the environment:$credential_env_left"
+echo "credential variables: removed from the environment (tools/credential-env.sh)"
 
 cd "$wt" || fail "cannot enter $wt"
 

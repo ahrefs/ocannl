@@ -7346,6 +7346,8 @@
   ../../tools/kernel-window.sh
   ; the fleet-worker.sh candidates sweep.sh reads the execution registry through (gh-ocannl-1097)
   ../../tools/fleet-worker-candidates.sh
+  ; the credential deny-list sweep.sh scrubs from every dune leg (gh-ocannl-1280)
+  ../../tools/credential-env.sh
   sweep_harness.sh
   sweep_remote_fixture.sh
   ../../scripts/harness-support.sh

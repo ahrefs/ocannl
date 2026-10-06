@@ -172,7 +172,12 @@ unit.exe: segmentation fault'
 # on both boots. No runtime name buys this rerun: only the kernel refusal can.
 for boot in linux wsl; do
   remote_reset
+  # The box's own environment carries credentials (gh-ocannl-1280): the fixture's remote shell
+  # inherits these, as a box's login environment exports its token, and every leg's emitted text
+  # must scrub them before dune -- clean, @check, suite, serial rerun, completion, RTC context.
   local_remote=$(SWEEP_TEST_HOSTS=$tmp/hosts-$boot.sh SWEEP_TEST_OPAM_RC=1 \
+    GH_TOKEN=fixture-not-a-token FOO_API_KEY=fixture-not-a-key SWEEP_TEST_CREDENTIAL_PLAIN=kept \
+    SWEEP_TEST_CREDENTIALS=$remote_root/credentials \
     SWEEP_TEST_OPAM_OUT="$remote_failure" remote_sweep --only hip --force)
   local_record=$(sed -n 's/^run:  *//p' <<<"$local_remote")
   local_log=$(awk -F '\t' '$1 == "unit" && $2 == "minix" {print $6}' "$local_record")
@@ -199,6 +204,12 @@ for boot in linux wsl; do
   [ "$boot" != wsl ] || prefix=$prefix/usr/lib/wsl/lib:
   awk -F '\t' -v prefix="$prefix" '$2 == "hip" {if (index($5, prefix) != 1) exit 1; seen++} END {if (!seen) exit 1}' "$remote_root/commands"
   if [ "$boot" = linux ]; then absent '/usr/lib/wsl/lib' "$remote_root/commands"; fi
+  # After this boot's other assertions, so the controls below still meet their own oracles first.
+  credential_free "$remote_root/credentials" 6
+  grep -q '^exec -- dune clean	' "$remote_root/credentials"
+  grep -q '^exec -- dune build @arrayjit/test/runtest-test_hip_compile_options --force	' \
+    "$remote_root/credentials"
+  grep -q '^exec -- dune build -j 1 @runtest @train	' "$remote_root/credentials"
   # Dirty reused worktree is reset, including untracked strays.
   remote_wt=$remote_root/minix-amd-$boot/ocannl-staging-worktrees/sweep
   echo dirty >"$remote_wt/fixture"
@@ -307,6 +318,7 @@ controls = [
     ('no-evidence', 'sweep', '  window_red "$1" && return 0', '  : # lost evidence arm', 'serial rerun: all clean'),
     ('no-lock', 'sweep', '''  printf 'mkdir -p "$(dirname "%s")" && exec 9>"%s.lock" && flock -n 9 || exit 126; ' "$1" "$1"''', "  printf ':; '", 'remote_row'),
     ('no-retry', 'sweep', '    [ -n "$GUEST_ID" ] && return 0', '    return 0 # lost identity retry', 'error:vm-replaced:dxg'),
+    ('no-credential-scrub', 'sweep', '''  printf '{ %s; } || exit 126; ' "$(credential_env_scrub_text)"''', "  printf ':; '", 'credentials reached dune'),
 ]
 # Derive sourced helpers from the sweep rather than carrying a second list.
 helpers = re.findall(r'^\. "\$SWEEP_TOOLS/([^"\n]+)"$', sweep.read_text(), re.M)

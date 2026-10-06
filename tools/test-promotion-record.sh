@@ -22,8 +22,15 @@ project() { # name runner promoter
   cp "$2" "$repo/tools/test-run.sh" || return 1
   cp "$3" "$repo/tools/promote.sh" || return 1
   chmod +x "$repo/tools/test-run.sh" "$repo/tools/promote.sh" || return 1
-  cp "$HERE/box-jobs.sh" "$HERE/batch-backends.sh" "$HERE/fleet-worker-candidates.sh" "$repo/tools/" || return 1
-  cp "$HERE/../scripts/process-group.sh" "$repo/scripts/" || return 1
+  # Whatever the runner SOURCES, derived from it rather than listed here, as the sibling harnesses
+  # do: a helper added to test-run.sh would otherwise kill every fixture run at startup. The floor
+  # makes a regex that stopped matching fail loudly instead of staging nothing.
+  local rel staged=0
+  while IFS= read -r rel; do
+    mkdir -p "$repo/$(dirname "$rel")" && cp "$HERE/../$rel" "$repo/$rel" || return 1
+    staged=$((staged + 1))
+  done < <(sed -n 's/^\. \([A-Za-z0-9_./-]*\)$/\1/p' "$2")
+  [ "$staged" -ge 3 ] || return 1
   printf '(lang dune 3.20)\n' >"$repo/dune-project"
   # Separate actions ensure both promotions are registered on a failure.
   cat >"$repo/dune" <<'DUNE'

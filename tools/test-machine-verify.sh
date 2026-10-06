@@ -15,7 +15,8 @@ harness_scratch test-machine-verify
 TMP=$(cd "$TMP" && pwd -P)
 HERE=$(cd "$(dirname "$0")" && pwd)
 REAL_GIT=$(command -v git)
-for f in machine-verify.sh machine-verify-far.sh remote-verify.sh box-jobs.sh batch-backends.sh; do
+for f in machine-verify.sh machine-verify-far.sh remote-verify.sh box-jobs.sh batch-backends.sh \
+  credential-env.sh; do
   printf 'testing %s (cksum %s)\n' "$HERE/$f" "$(cksum <"$HERE/$f")"
 done
 # The subjects run from a scratch copy of tools/: the scripts unchanged, and
@@ -26,13 +27,14 @@ done
 # file can fake a box's GPU; every width decision is still those files' own.
 mkdir -p "$TMP/tools" || exit 2
 cp "$HERE/machine-verify.sh" "$HERE/machine-verify-far.sh" "$HERE/remote-verify.sh" \
-  "$HERE/box-jobs.sh" "$HERE/batch-backends.sh" "$TMP/tools/" || exit 2
+  "$HERE/box-jobs.sh" "$HERE/batch-backends.sh" "$HERE/credential-env.sh" "$TMP/tools/" || exit 2
 printf '. %q\n' "$TMP/fixture.env" >>"$TMP/tools/box-jobs.sh" || exit 2
 SRC=$TMP/tools/machine-verify.sh
 FAR=$TMP/tools/machine-verify-far.sh
 SHIM=$TMP/tools/remote-verify.sh
 BOX_JOBS=$TMP/tools/box-jobs.sh
 BATCH_BACKENDS=$TMP/tools/batch-backends.sh
+CREDENTIAL_ENV=$TMP/tools/credential-env.sh
 # Isolate Git configuration, hooks, identity and URL rewriting. Every Git
 # mutation is confined to this newly allocated scratch directory.
 mkdir -p "$TMP/bin" "$TMP/home" "$TMP/runs"
@@ -77,6 +79,11 @@ case $MODE in
 esac
 # A real SSH session starts from the remote login environment, not the caller's.
 unset OPAMSWITCH DUNE_BUILD_DIR
+# And that environment may export the box's own credentials (gh-ocannl-1280): fake values, beside
+# a plain variable that must still reach the build.
+if [ "${FIXTURE_REMOTE_CREDENTIALS:-}" = 1 ]; then
+  export GH_TOKEN=fixture-not-a-token FOO_API_KEY=fixture-not-a-key FIXTURE_REMOTE_PLAIN=kept
+fi
 # SSH concatenates its command operands; retain the shipped quoting and stdin.
 while [ "$#" -gt 1 ]; do shift; done
 exec /bin/sh -c "$1"
@@ -104,6 +111,12 @@ if [ "$1" = --version ]; then echo "$FIXTURE_DUNE_VERSION"; exit 0; fi
   echo 'fixture: configuration leaked' >&2; exit 93;
 }
 [ -z "${DUNE_BUILD_DIR:-}" ] || { echo 'fixture: caller environment leaked' >&2; exit 89; }
+# No credential reaches dune, whichever environment it came from (gh-ocannl-1280); where the remote
+# login environment exported some, its plain variable did reach it, so the absence means a scrub.
+[ -z "${GH_TOKEN+x}${FOO_API_KEY+x}" ] || { echo 'fixture: credentials reached dune' >&2; exit 88; }
+[ "${FIXTURE_REMOTE_CREDENTIALS:-}" != 1 ] || [ "${FIXTURE_REMOTE_PLAIN:-}" = kept ] || {
+  echo 'fixture: the remote login environment did not reach dune' >&2; exit 87;
+}
 if [ "$1" = build ]; then wanted_backend=$WANT_BACKEND; else wanted_backend=; fi
 [ "${OCANNL_BACKEND:-}" = "$wanted_backend" ] || { echo 'fixture: backend not isolated' >&2; exit 94; }
 [ "$PWD" != "$FIXTURE_REPO" ] && [ "$(git rev-parse HEAD)" = "$FIXTURE_SHA" ] || exit 95
@@ -254,6 +267,8 @@ chmod +x "$TMP/bin/fake-read-config" "$TMP/bin/fake-slot-kind" || exit 2
 # with a prefix assignment on its call.
 ENDPOINT=192.0.2.1 ENDPOINT_PORT=22 ENDPOINT_PROXY= TRANSPORT=ssh BACKEND=cc HIP_TREE=hip-complete
 DXG=absent KFD=absent NVIDIA=absent FLEET_BOX=fixture-box READERS=stand-in NAMES= DUNE_VERSION=3.24.2
+# Whether BOX's login environment exports credentials (the fake ssh reads it).
+REMOTE_CREDS=
 # The BRANCH operand, and the commit the fake dune requires the worktree at.
 REF=fixture WANT_SHA=$SHA
 
@@ -301,7 +316,7 @@ run_case() { # SUBJECT NAME MODE [verifier args]
     OCANNL_TOOL_NVIDIA_DEVICE="$(fixture_device "$NVIDIA")" FLEET_LOCAL_BOX="$FLEET_BOX" \
     OCANNL_TOOL_READ_CONFIG="$(fixture_reader fake-read-config)" \
     OCANNL_TOOL_SLOT_KIND="$(fixture_reader fake-slot-kind)" FIXTURE_NAMES="$NAMES" \
-    FIXTURE_DUNE_VERSION="$DUNE_VERSION"; do
+    FIXTURE_DUNE_VERSION="$DUNE_VERSION" FIXTURE_REMOTE_CREDENTIALS="$REMOTE_CREDS"; do
     printf 'export %s=%q\n' "${var%%=*}" "${var#*=}"
   done >"$TMP/fixture.env"
   # OPAMSWITCH and DUNE_BUILD_DIR stand for the caller's session: an SSH
@@ -573,6 +588,24 @@ ENDPOINT=127.0.0.1 shim_case shim-local
 [ "$(used_transport shim-local)" = local ] && [ "$(used_transport shim-ssh)" = ssh ]
 report $? 'shim: placement is decided by machine-verify.sh, not by the old name'
 
+# Credentials in BOX's login environment reach neither dune nor a --run probe (gh-ocannl-1280),
+# while a plain variable of that environment reaches both. The fake dune refuses a credential on
+# every build of every case; this one is where the far side has some to remove.
+credential_probe='test -z "${GH_TOKEN+x}${FOO_API_KEY+x}" && test "${FIXTURE_REMOTE_PLAIN:-}" = kept && echo "probe credentials: absent, plain variable kept"'
+REMOTE_CREDS=1 check_case credentials-ssh success 0 "verified .*commit=$SHA backend=cc" --test @fixture \
+  --run "$credential_probe"
+grep -qx 'probe credentials: absent, plain variable kept' "$TMP/runs/credentials-ssh/stdout" &&
+  grep -qx 'credential variables: removed from the environment (tools/credential-env.sh)' \
+    "$TMP/runs/credentials-ssh/stdout" &&
+  grep -q '|cc|build -j 4 @fixture' "$TMP/runs/credentials-ssh/audit"
+report $? 'credentials-ssh: the probe and every build ran without the box credentials' "$TMP/runs/credentials-ssh"
+credential_oracle() {
+  local subject=$1 name=$2
+  REMOTE_CREDS=1 run_case "$subject" "$name" success --test @fixture --run "$credential_probe" || return 1
+  [ "$(cat "$TMP/runs/$name/rc")" = 0 ] &&
+    grep -qx 'probe credentials: absent, plain variable kept' "$TMP/runs/$name/stdout"
+}
+
 # Negative controls run the same shipping oracle with one guard disabled. They
 # must reach certification (or the leak the guard exists for) erroneously,
 # rather than merely fail to parse/start. The pair is copied so the driver finds
@@ -580,7 +613,7 @@ report $? 'shim: placement is decided by machine-verify.sh, not by the old name'
 mutant_pair() { # NAME driver|far AWK_PROGRAM -> path of the pair's driver
   local dir=$TMP/mutants/$1 target
   case $2 in driver) target=$SRC ;; far) target=$FAR ;; *) return 1 ;; esac
-  mkdir -p "$dir" && cp "$SRC" "$FAR" "$BOX_JOBS" "$BATCH_BACKENDS" "$dir/" || return 1
+  mkdir -p "$dir" && cp "$SRC" "$FAR" "$BOX_JOBS" "$BATCH_BACKENDS" "$CREDENTIAL_ENV" "$dir/" || return 1
   awk "$3" "$target" >"$dir/${target##*/}" || return 1
   bash -n "$dir/${target##*/}" || return 1
   ! cmp -s "$target" "$dir/${target##*/}" || return 1
@@ -681,4 +714,7 @@ probe_width_oracle() {
 }
 mutated=$(mutant_pair no-probe-width far '{ sub(/ "DUNE_JOBS=\$jobs" sh -c/, " sh -c"); print }') || exit 2
 expect_rejected 'probe width withheld' "$mutated" probe_width_oracle '^probe width: unset$'
+# The credential scrub cut out of the far side: BOX's own token reaches dune and the probe.
+mutated=$(mutant_pair no-credential-scrub far '/^eval "\$credential_scrub" \|\|$/ { getline; next } { print }') || exit 2
+expect_rejected 'credential scrub removed' "$mutated" credential_oracle '^fixture: credentials reached dune$'
 finish

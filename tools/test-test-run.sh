@@ -164,6 +164,11 @@
 #      reads it (gh-ocannl-1095): beside a hip configuration on a small SDMA
 #      pool, a batch reaching only `none` stanzas, or one naming cc, stays
 #      uncapped and --cpu; one reaching a configuration reader is -j 4, --gpu.
+#  79. credentials never reach dune (gh-ocannl-1280): a run exporting GH_TOKEN
+#      and FOO_API_KEY hands dune neither, while a plain variable and the
+#      OCANNL_TOOL_* exports pass -- observed by a fixture dune, and where a
+#      real dune is at hand in its _build/trace.csexp; a copy with the scrub
+#      cut out hands dune both, the negative control for each observer.
 #  59-63 sit after leg 47: the source a run tested, recorded at launch
 #      (gh-ocannl-992), against a committed fixture checkout.
 #  59. a clean checkout records its HEAD as `head` and an empty `dirty`.
@@ -4958,6 +4963,138 @@ if [ -z "$plan_probe_detail" ]; then
   report 0 "plan: reports the device probe and the per-test cap, asking no device"
 else
   report 1 "plan: reports the device probe and the per-test cap, asking no device" "$plan_probe_detail"
+fi
+
+# ---------------------------------------------------------------------------
+# Leg 79: credentials never reach dune (gh-ocannl-1280)
+# ---------------------------------------------------------------------------
+# Dune records the environment of every process it spawns in the worktree's
+# `_build/trace.csexp`, so a token the session exports would sit inside the
+# checkout after every build. The run below carries GH_TOKEN (a deny-listed
+# name) and FOO_API_KEY (matched by a pattern), both with obviously fake
+# values, beside CRED_TEST_PLAIN and the harness's own OCANNL_TOOL_* exports,
+# which must still pass. Two observers: a fixture dune that writes the names of
+# its environment -- decided on every host -- and, where a real dune is at hand,
+# that dune's own trace. The negative control is the shipping script with its
+# scrub cut out, which must hand dune both credentials: an observer that cannot
+# see them proves nothing about the scrub.
+cred_label="credentials: dune runs without GH_TOKEN and FOO_API_KEY, a plain variable and OCANNL_TOOL_* still pass"
+cred_nc_label="negative control: with the scrub cut out, dune sees both credentials"
+cred_trace_label="credentials: real dune's _build/trace.csexp names neither GH_TOKEN nor FOO_API_KEY, and does name the plain variable"
+cred_trace_nc_label="negative control: with the scrub cut out, the real trace names both credentials"
+cred_mutant=$(mutant no-credential-scrub \
+  '/^eval "\$\(credential_env_scrub_text\)" \|\|$/ { getline; next } { print }')
+if [ -z "$cred_mutant" ] || cmp -s "$SRC" "$cred_mutant"; then
+  echo "leg 79: the credential scrub could not be cut out of $SRC; the mutant is broken" >&2
+  exit 2
+fi
+cred_bin=$TMP/cred-bin
+mkdir -p "$cred_bin"
+cat >"$cred_bin/dune" <<'EOF'
+#!/usr/bin/env bash
+# The run's last phase asks for the version and the promotion list: an empty one.
+case ${1:-} in
+  --version) echo 3.24.2; exit 0 ;;
+  promotion) exit 0 ;;
+esac
+env | sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' >"$CRED_TEST_NAMES"
+EOF
+chmod +x "$cred_bin/dune"
+cred_root() { # name script -> a fixture root running SCRIPT as tools/test-run.sh
+  local root=$TMP/$1
+  mkdir -p "$root/tools" "$root/scripts" "$root/_build"
+  cp "$2" "$root/tools/test-run.sh"
+  stage_sourced "$root"
+  chmod +x "$root/tools/test-run.sh"
+  printf '%s' "$root"
+}
+cred_run() { # root runs-dir names-file argv...: the run, with the two credentials exported
+  local root=$1 runs=$2 names=$3
+  shift 3
+  GH_TOKEN=fixture-not-a-token FOO_API_KEY=fixture-not-a-key CRED_TEST_PLAIN=kept \
+    CRED_TEST_NAMES=$names OCANNL_TOOL_TEST_RUNS=$runs \
+    "$root/tools/test-run.sh" run "$@" >"$names.out" 2>&1
+}
+cred_has() { grep -qx -e "$1" "$2"; }
+cred_ship=$(cred_root cred-ship "$SRC")
+cred_cut=$(cred_root cred-cut "$cred_mutant")
+cred_rc=0
+PATH=$cred_bin:$PATH cred_run "$cred_ship" "$TMP/cred-runs" "$TMP/cred-ship.names" build @fixture ||
+  cred_rc=$?
+cred_detail=
+if [ "$cred_rc" != 0 ]; then
+  cred_detail="the run exited $cred_rc: $(tail -5 "$TMP/cred-ship.names.out")"
+elif [ ! -s "$TMP/cred-ship.names" ]; then
+  cred_detail="the fixture dune recorded no environment"
+elif cred_has GH_TOKEN "$TMP/cred-ship.names"; then
+  cred_detail="dune saw GH_TOKEN"
+elif cred_has FOO_API_KEY "$TMP/cred-ship.names"; then
+  cred_detail="dune saw FOO_API_KEY"
+elif ! cred_has CRED_TEST_PLAIN "$TMP/cred-ship.names"; then
+  cred_detail="dune did not see CRED_TEST_PLAIN"
+elif ! cred_has OCANNL_TOOL_DEVICE_PROBE "$TMP/cred-ship.names"; then
+  cred_detail="dune did not see the harness's OCANNL_TOOL_DEVICE_PROBE"
+fi
+report "$([ -z "$cred_detail" ] && echo 0 || echo 1)" "$cred_label" "$cred_detail"
+cred_rc=0
+PATH=$cred_bin:$PATH cred_run "$cred_cut" "$TMP/cred-cut-runs" "$TMP/cred-cut.names" build @fixture ||
+  cred_rc=$?
+if [ "$cred_rc" = 0 ] && cred_has GH_TOKEN "$TMP/cred-cut.names" &&
+  cred_has FOO_API_KEY "$TMP/cred-cut.names"; then
+  report 0 "$cred_nc_label"
+else
+  report 1 "$cred_nc_label" "exit $cred_rc; names: $(tr '\n' ' ' <"$TMP/cred-cut.names" 2>/dev/null)"
+fi
+# The trace itself, which is what the issue found tokens in. A host with no
+# dune skips it (the toolchain-free CI job); a dune that writes no trace there
+# skips it too, since there is then nothing to leak into.
+cred_real=$( (command -v dune >/dev/null 2>&1 || . "$HERE/opam-env.sh" >/dev/null 2>&1
+  command -v dune) 2>/dev/null) || cred_real=
+if [ -z "$cred_real" ]; then
+  skip "$cred_trace_label" "no dune on PATH, nor through tools/opam-env.sh"
+  skip "$cred_trace_nc_label" "no dune on PATH, nor through tools/opam-env.sh"
+else
+  cred_project() { # root: a one-rule dune project whose build spawns a process
+    printf '(lang dune 3.20)\n' >"$1/dune-project"
+    printf '(rule\n (with-stdout-to spawned.txt (run sh -c "echo spawned")))\n' >"$1/dune"
+    rm -rf "$1/_build"
+  }
+  cred_project "$cred_ship"
+  cred_project "$cred_cut"
+  cred_trace() { # root -> 0 when its trace exists, the three names' counts in cred_gh/foo/plain
+    local trace=$1/_build/trace.csexp
+    [ -f "$trace" ] || return 1
+    cred_gh=$(grep -a -c GH_TOKEN "$trace")
+    cred_foo=$(grep -a -c FOO_API_KEY "$trace")
+    cred_plain=$(grep -a -c CRED_TEST_PLAIN "$trace")
+    cred_counts="GH_TOKEN: $cred_gh, FOO_API_KEY: $cred_foo, CRED_TEST_PLAIN: $cred_plain"
+  }
+  cred_real_run() { # root tag
+    (cd "$1" && PATH=$(dirname "$cred_real"):$PATH cred_run "$1" "$TMP/$2-runs" "$TMP/$2.names" \
+      build --cache=disabled ./spawned.txt)
+  }
+  cred_rc=0
+  cred_real_run "$cred_ship" cred-real || cred_rc=$?
+  if [ "$cred_rc" != 0 ]; then
+    report 1 "$cred_trace_label" "the run exited $cred_rc: $(tail -5 "$TMP/cred-real.names.out")"
+  elif ! cred_trace "$cred_ship"; then
+    skip "$cred_trace_label" "$("$cred_real" --version) wrote no _build/trace.csexp"
+  elif [ "$cred_gh" = 0 ] && [ "$cred_foo" = 0 ] && [ "$cred_plain" != 0 ]; then
+    report 0 "$cred_trace_label"
+  else
+    report 1 "$cred_trace_label" "$cred_counts"
+  fi
+  cred_rc=0
+  cred_real_run "$cred_cut" cred-real-cut || cred_rc=$?
+  if [ "$cred_rc" != 0 ]; then
+    report 1 "$cred_trace_nc_label" "the run exited $cred_rc: $(tail -5 "$TMP/cred-real-cut.names.out")"
+  elif ! cred_trace "$cred_cut"; then
+    skip "$cred_trace_nc_label" "$("$cred_real" --version) wrote no _build/trace.csexp"
+  elif [ "$cred_gh" != 0 ] && [ "$cred_foo" != 0 ]; then
+    report 0 "$cred_trace_nc_label"
+  else
+    report 1 "$cred_trace_nc_label" "$cred_counts"
+  fi
 fi
 
 # ---------------------------------------------------------------------------
