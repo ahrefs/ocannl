@@ -7769,7 +7769,12 @@ let fission_segmented ?(promote_locals = false) ?(arity_cuts = false) ?(fold_zer
         }
     in
     let sched = schedule_of 0 None opt in
-    ([ (`Normal, List.length units) ], [ (`Normal, opt, sched, apply ~static_indices sched opt) ])
+    (* Classified like every segment's application below: the single kernel's schedule can be a
+       caller's sketch -- the autotuner's per-segment substitution reaches here when a folded zero
+       collapses the routine to one segment (gh-ocannl-1175) -- and a transform precondition it
+       violates is a declined candidate, never an uncaught [Invalid_argument]. *)
+    ( [ (`Normal, List.length units) ],
+      [ (`Normal, opt, sched, apply_classified ~static_indices sched opt) ] )
   in
   let resolved () =
     match replay with

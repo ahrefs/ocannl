@@ -341,3 +341,62 @@ let () =
   let got = List.hd_exn (execute ~name:"zi_reused_private" priv ~seed ~read:[ out ]) in
   p_all2 "reused final zero preserves executed parity with the materialized run" got want
     ~f:Float.equal
+
+(* A matmul with an elementwise tail (bias + relu): the folded zero collapses the routine to ONE
+   segment, so fission's single-kernel fallback applies the sketch candidate's schedule, fused
+   epilogue twins included. A sketch whose preconditions the segment violates must decline as a
+   classified schedule outcome, exactly as it does in a multi-segment routine -- an uncaught
+   [Invalid_argument] escaped the autotuner (master red at a34634b62, tuf HIP). Structural, so it
+   runs on every backend, cc included. *)
+let () =
+  let n = 32 in
+  let init ~l ~o ~f = NTDSL.init ~l ~prec:Ir.Ops.single ~o ~f () in
+  let ma =
+    init ~l:"ze_a" ~o:[ n; n ] ~f:(fun ix -> Float.of_int (1 + (3 * ix.(0)) + ix.(1)) /. 64.)
+  in
+  let mb =
+    init ~l:"ze_b" ~o:[ n; n ] ~f:(fun ix -> Float.of_int (2 + ix.(0) + (5 * ix.(1))) /. 64.)
+  in
+  let bias = init ~l:"ze_bias" ~o:[ n ] ~f:(fun ix -> Float.of_int (ix.(0) - 7) /. 8.) in
+  let%op prod = ma +* "ik;kj=>ij" mb in
+  Train.set_materialized prod.Tensor.value;
+  let%op out = relu (prod + bias) in
+  Train.set_materialized out.Tensor.value;
+  let opt = capture ~name:"ze_capture" out in
+  let limits = mma_limits in
+  let folded = fission opt in
+  p "the folded matmul and its tail collapse to one segment opening with the zero"
+    (match folded with
+    | [ (`Normal, pre, _, _) ] ->
+        List.exists (LL.flat_lines [ pre.LL.llc ]) ~f:(fun stmt ->
+            Option.exists (LL.zero_initializer_target stmt) ~f:(Ir.Tnode.equal prod.Tensor.value))
+    | _ -> false);
+  let pre = match folded with (_, pre, _, _) :: _ -> pre | [] -> opt in
+  let seeds = gpu_seeds ~limits pre in
+  p_exists "the folded segment seeds fused-epilogue twins" seeds ~f:(fun q ->
+      q.Autotune.sk_epilogue);
+  let outcome q =
+    let preset seg = Autotune.sketch_schedule ~accum_prec:Fn.id ~p:q seg in
+    match
+      Sched.fission_scheduled ~fold_zeros:true ~keep_mapping:(Sched.default_gpu ~limits) ~preset
+        ~zero_sched:(fun tns -> Sched.zero_expansion ~limits tns)
+        ~static_indices:[]
+        {
+          opt with
+          LL.traced_store = Hashtbl.copy opt.LL.traced_store;
+          optimize_ctx = LL.copy_optimize_ctx opt.LL.optimize_ctx;
+        }
+    with
+    | _ -> `Applied
+    | exception Ir.Schedule_outcome.Cause_at _ -> `Declined
+    | exception exn ->
+        Stdio.eprintf "folded sketch (epilogue=%b mma=%b) escaped unclassified: %s\n"
+          q.Autotune.sk_epilogue q.Autotune.sk_mma (Exn.to_string exn);
+        `Escaped
+  in
+  let outcomes = List.map seeds ~f:(fun q -> (q, outcome q)) in
+  Stdio.eprintf "folded single-segment sketches (not part of the golden): %d applied, %d declined\n"
+    (List.count outcomes ~f:(fun (_, o) -> Poly.equal o `Applied))
+    (List.count outcomes ~f:(fun (_, o) -> Poly.equal o `Declined));
+  p_none "no sketch of the folded single segment escapes as an unclassified exception" outcomes
+    ~f:(fun (_, o) -> Poly.equal o `Escaped)
