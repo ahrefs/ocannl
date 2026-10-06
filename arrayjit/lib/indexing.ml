@@ -180,7 +180,18 @@ type axis_index =
           Note: for readability, we use [Fixed_idx] and [Iterator] as separate variants and require
           [Affine] to not be ambiguous: [symbols] should be longer than 1 or have a coefficient
           different from 1 and 0, or a nonzero offset. Construction goes through [affine]. *)
-  | Sub_axis  (** This axis belongs to an adjacent multi-axis index. *)
+  | Sub_axis
+      (** This axis belongs to an adjacent multi-axis index. Rendering rule ([C_syntax]'s row-major
+          Horner sum): the axis contributes no term but keeps its stride, so the accumulated offset
+          is multiplied through by its dim. A [Sub_axis] run BEFORE a component makes that component
+          a flattened index over the run's extent product — [[Sub_axis; Iterator f]] over dims
+          [[H; E]] addresses [f] for [0 <= f < H*E]: the COMPOSED, always-affine direction, written
+          by lowering's flat stores and by [Schedule.Coalesce] (gh-ocannl-1165), and read as one
+          coordinate by [Affine.view]. A trailing [Sub_axis] (no component after it) adds zero:
+          index 0 of its own axis, as in [Row]'s flat stores with a trailing unit axis. Decomposing
+          a merged index ([f / E], [f mod E]) is never expressed — a pair is merged only when no
+          access uses one component alone. Per-axis consumers must not read the flattened component
+          against its own axis's dim ([Affine.axis_extents]). *)
   | Concat of symbol list
       (** This axis is formed by concatenating multiple axes, each represented by an iterator
           symbol. [Concat] indices are eliminated during lowering. *)

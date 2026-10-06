@@ -30,6 +30,7 @@ type optop =
       axis : Indexing.symbol;  (** The loop to pad, identified by its index symbol. *)
       to_multiple_of : int;  (** The padded extent is the least multiple [>=] the loop extent. *)
     }
+  | Coalesce of { outer : Indexing.symbol; inner : Indexing.symbol; merged : Indexing.symbol }
   | Stage of {
       source : Tn.t;
       tile_loops : Indexing.symbol list;
@@ -90,6 +91,10 @@ let fold_mma ~query ~width =
   let lane = Indexing.get_symbol () and block = Indexing.get_symbol () in
   (Fold_mma { query; lane; block; width }, lane, block)
 
+let coalesce ~outer ~inner =
+  let merged = Indexing.get_symbol () in
+  (Coalesce { outer; inner; merged }, merged)
+
 let expand_zero ~tn =
   let rank = Array.length (Lazy.force tn.Tn.dims) in
   let indices = List.init rank ~f:(fun _ -> Indexing.get_symbol ()) in
@@ -117,6 +122,13 @@ let split_reduce ~axis ~target ~num_blocks =
 type affine_subst = { terms : (int * Indexing.symbol) list; offset : int }
 
 let normalize_affine ~terms ~offset = Indexing.affine ~symbols:terms ~offset
+
+(* Rebuild one component of an access from its (possibly substituted) affine decomposition. A
+   [Sub_axis] decomposes to nothing and must stay a [Sub_axis]: written back as [Fixed_idx 0] it
+   would render the same address but read as an ordinary in-bounds coordinate, turning the flattened
+   component after it into an out-of-range one for the address queries (gh-ocannl-1165). *)
+let rebuild_index (orig : Indexing.axis_index) ~terms ~offset =
+  match orig with Indexing.Sub_axis -> Indexing.Sub_axis | _ -> normalize_affine ~terms ~offset
 
 let subst_axis_index ~sym ~(by : affine_subst) (idx : Indexing.axis_index) : Indexing.axis_index =
   match idx with
@@ -527,6 +539,16 @@ let tensorize_llc ~(zero_fringe : Tn.t -> bool) ~i ~j ~k ~lane ~simd_width ~tile
                 ("Schedule.Tensorize: the micro-kernel must accumulate a product of reads into "
                ^ Tn.debug_name d_tn ^ " (d[...] += a[...] * b[...], plain-add or FMA form)")
         in
+        (* A flattened access (a coalesced pair, gh-ocannl-1165) is declined in v1: the fragment
+           geometry below reads the tile's roles axis by axis, and nothing here was taught the
+           flattened coordinate a [Sub_axis] run makes of the component after it. *)
+        if
+          List.exists
+            [ d_idcs; snd x_op; snd y_op ]
+            ~f:(Array.exists ~f:(function Indexing.Sub_axis -> true | _ -> false))
+        then
+          invalid_arg
+            "Schedule.Tensorize: a flattened (Sub_axis) micro-kernel access is unsupported (v1)";
         let mentions sym (idx : Indexing.axis_index) =
           match idx with
           | Indexing.Iterator s -> Indexing.equal_symbol s sym
@@ -739,6 +761,100 @@ let tensorize_llc ~(zero_fringe : Tn.t -> bool) ~i ~j ~k ~lane ~simd_width ~tile
    [Partition] turn its segment seams into narrowing points, so on narrow storage the candidate
    stops agreeing with the serial baseline, which is the very invariant they exist to keep
    (gh-ocannl-693 review rounds 6-7). *)
+(* [Coalesce]'s body rewrite (gh-ocannl-1165): every access mentioning [outer] or [inner] must read
+   them as adjacent plain iterators on axes of dims exactly [p] and [q], and becomes
+   [Sub_axis; Iterator merged] there; any other mention declines. The axes' dims are checked against
+   the LOOP extents because the composed index is only the address when the inner axis's stride is
+   [q] -- a padded inner axis (dim > q, or an offset iterator) is exactly the case that is not. *)
+let coalesce_body ~outer ~inner ~merged ~p ~q (body : Low_level.t) : Low_level.t =
+  let open Low_level in
+  let fail why = invalid_arg ("Schedule.Coalesce: " ^ why) in
+  let pair = Indexing.symbol_ident outer ^ ", " ^ Indexing.symbol_ident inner in
+  let mentions idx = Indexing.axis_index_mentions_any [ outer; inner ] idx in
+  let mentioned idcs = Array.exists idcs ~f:mentions in
+  let show tn idcs =
+    Tn.debug_name tn ^ "["
+    ^ String.concat_array ~sep:"; " (Array.map idcs ~f:Affine.axis_index_to_string)
+    ^ "]"
+  in
+  let access what tn idcs =
+    match
+      Array.to_list (Array.filter_mapi idcs ~f:(fun a idx -> Option.some_if (mentions idx) a))
+    with
+    | [] -> idcs
+    | [ a; a' ]
+      when a' = a + 1
+           && Indexing.equal_axis_index idcs.(a) (Indexing.Iterator outer)
+           && Indexing.equal_axis_index idcs.(a') (Indexing.Iterator inner) ->
+        let dims = Lazy.force tn.Tn.dims in
+        if Array.length dims <> Array.length idcs then
+          fail (Printf.sprintf "the %s %s is not a full-rank access" what (show tn idcs));
+        (* After an existing [Sub_axis] run the outer iterator is already a flattened index over
+           that run, and the merged one would flatten over it too: the view would read [merged] over
+           the run's extent times [p * q], not the [p * q] it ranges over, and every per-axis bound
+           derived from the view ([Affine.axis_extents]: Stage's edge guards, Privatize's transfer
+           guards) would admit neighbouring cells as in range. *)
+        if a > 0 && Indexing.equal_axis_index idcs.(a - 1) Indexing.Sub_axis then
+          fail
+            (Printf.sprintf "the %s %s reads the pair right after a flattened (Sub_axis) run" what
+               (show tn idcs));
+        if dims.(a) <> p || dims.(a') <> q then
+          fail
+            (Printf.sprintf
+               "the %s %s reads the pair on axes of dims %d x %d, not the loop extents %d x %d (a \
+                padded axis has no %d-strided composed index)"
+               what (show tn idcs) dims.(a) dims.(a') p q q);
+        let idcs = Array.copy idcs in
+        idcs.(a) <- Indexing.Sub_axis;
+        idcs.(a') <- Indexing.Iterator merged;
+        idcs
+    | _ ->
+        fail
+          (Printf.sprintf "the %s %s does not read (%s) as two adjacent plain iterators" what
+             (show tn idcs) pair)
+  in
+  let opaque what = fail (Printf.sprintf "%s mentions (%s)" what pair) in
+  let rec code llc =
+    match llc with
+    | Noop | Comment _ | Declare_local _ | Workgroup_barrier | Zero_out _ -> llc
+    | Staged_compilation _ -> fail "opaque Staged_compilation in the nest"
+    | Scan_loop _ -> fail "a Scan_loop in the nest"
+    | Seq (a, b) -> Seq (code a, code b)
+    | For_loop fc -> For_loop { fc with body = code fc.body }
+    | Set { tn; idcs; llsc; debug } ->
+        Set { tn; idcs = access "write" tn idcs; llsc = scalar llsc; debug }
+    | Set_dynamic ({ idcs; dyn_value = v, vp; llsc; _ } as sd) ->
+        if mentioned idcs then opaque "a dynamic write";
+        Set_dynamic { sd with dyn_value = (scalar v, vp); llsc = scalar llsc }
+    | Set_from_vec ({ idcs; arg = a, ap; _ } as sv) ->
+        if mentioned idcs then opaque "a vector write";
+        Set_from_vec { sv with arg = (scalar a, ap) }
+    | Set_local (id, llsc) -> Set_local (id, scalar llsc)
+    | Tile_mma _ -> fail "a Tile_mma in the nest (apply Coalesce before Tensorize)"
+    | If { cond = c, cp; body } -> If { cond = (scalar c, cp); body = code body }
+  and scalar (llsc : scalar_t) : scalar_t =
+    match llsc with
+    | Local_scope ({ id; body; orig_indices; _ } as ls) ->
+        Local_scope
+          { ls with body = code body; orig_indices = access "scope" id.Scope_id.tn orig_indices }
+    | Get (tn, idcs) -> Get (tn, access "read" tn idcs)
+    | Get_dynamic ({ idcs; dyn_value = v, vp; _ } as gd) ->
+        if mentioned idcs then opaque "a dynamic read";
+        Get_dynamic { gd with dyn_value = (scalar v, vp) }
+    | Get_merge_buffer (_, idcs) ->
+        if mentioned idcs then opaque "a merge-buffer read";
+        llsc
+    | Embed_index idx ->
+        if mentions idx then opaque "an index expression";
+        llsc
+    | Get_local _ | Constant _ | Constant_bits _ -> llsc
+    | Ternop (op, (a, pa), (b, pb), (c, pc)) ->
+        Ternop (op, (scalar a, pa), (scalar b, pb), (scalar c, pc))
+    | Binop (op, (a, pa), (b, pb)) -> Binop (op, (scalar a, pa), (scalar b, pb))
+    | Unop (op, (a, pa)) -> Unop (op, (scalar a, pa))
+  in
+  code body
+
 let apply_op (llc : Low_level.t) (op : optop) : Low_level.t =
   let loop_ranges = lazy (Low_level.loop_bounds llc) in
   let open Low_level in
@@ -924,6 +1040,28 @@ let apply_op (llc : Low_level.t) (op : optop) : Low_level.t =
                    ^ Indexing.symbol_ident axis ^ ")")
             in
             for_loop { fc with to_ = m - 1; body = mask fc.body })
+  | Coalesce { outer; inner; merged } ->
+      rewrite_loop ~what:"Schedule.Coalesce" ~sym:outer llc ~f:(fun ofc ->
+          match ofc.body with
+          | For_loop ({ index; _ } as ifc) when Indexing.equal_symbol index inner ->
+              if not (equal_axis_type ofc.axis Serial && equal_axis_type ifc.axis Serial) then
+                invalid_arg "Schedule.Coalesce: both loops must be Serial";
+              if ofc.from_ <> 0 || ifc.from_ <> 0 then
+                invalid_arg "Schedule.Coalesce: both loops must start at 0";
+              let p = ofc.to_ + 1 and q = ifc.to_ + 1 in
+              For_loop
+                {
+                  index = merged;
+                  from_ = 0;
+                  to_ = (p * q) - 1;
+                  axis = Serial;
+                  body = coalesce_body ~outer ~inner ~merged ~p ~q ifc.body;
+                }
+          | _ ->
+              invalid_arg
+                ("Schedule.Coalesce: loops " ^ Indexing.symbol_ident outer ^ " and "
+               ^ Indexing.symbol_ident inner
+               ^ " are not perfectly nested (the outer body must be exactly the inner loop)"))
   | Partition { axis; breakpoints; segment_indices } ->
       (* gh-ocannl-508: index-set splitting. Segment ranges stay absolute (no rebasing to 0), so the
          substitution is a pure rename of the loop symbol and no index arithmetic changes; each
@@ -1489,6 +1627,10 @@ let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_
           invalid_arg
             "Schedule.Stage: hoisted staging does not support compacting a strided tile part (v1) \
              — its blocked outer decomposition assumes the tile part addresses the source densely");
+    if Array.exists idcs0 ~f:(function Indexing.Sub_axis -> true | _ -> false) then
+      invalid_arg
+        "Schedule.Stage: hoisted staging does not support a flattened (Sub_axis) source access \
+         (v1) — its link-time packing program addresses each source axis by its own dim";
     if not (Host_inits.mem source) then
       invalid_arg
         ("Schedule.Stage: hoisted staging requires registered host-init data for "
@@ -1720,8 +1862,8 @@ let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_
     in
     let subst_terms terms = List.map terms ~f:(fun (c, s) -> (c, load_sym s)) in
     let load_src_idcs =
-      Array.map decomp ~f:(fun (tp, op_, off) ->
-          normalize_affine ~terms:(subst_terms tp @ op_) ~offset:off)
+      Array.mapi decomp ~f:(fun a (tp, op_, off) ->
+          rebuild_index idcs0.(a) ~terms:(subst_terms tp @ op_) ~offset:off)
     in
     let tile_store_idcs =
       Array.map tile_axes ~f:(fun (a, _) ->
@@ -1738,7 +1880,9 @@ let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_
           normalize_affine ~terms ~offset:0)
     in
     let iprec = Ops.index_prec () in
-    let src_dims = Lazy.force source.Tn.dims in
+    (* Per axis, the extent its component ranges over: a component flattened over a [Sub_axis] run
+       (a coalesced loop pair, gh-ocannl-1165) addresses the run's whole extent product. *)
+    let src_dims = Affine.axis_extents ~dims:(Lazy.force source.Tn.dims) idcs0 in
     (* Edge guards per tile axis (construct-then-fold: [apply]'s trailing simplify erases the ones
        the loop extents prove, i.e. whenever the tile sizes divide the source extents). The guards
        are [Where]-form rather than statement [If]s: an out-of-range slot stores 0 — the add-reduce
@@ -2139,7 +2283,7 @@ let apply_privatize ~target ~over ~acc_prec (opt : Low_level.optimized) : Low_le
   let open Low_level in
   let acc_prec = exact_widening ~what:"Schedule.Privatize: acc_prec" target acc_prec in
   let iprec = Ops.index_prec () in
-  let tgt_dims = Lazy.force target.Tn.dims in
+  let node_dims = Lazy.force target.Tn.dims in
   (* Every loop of the routine by index symbol, with its axis type. Guard classification below needs
      the axis type of symbols bound OUTSIDE [over] too (a lane restriction is the whole point of the
      rule), and the [rewrite_loop] callback only sees the subtree. *)
@@ -2319,6 +2463,10 @@ let apply_privatize ~target ~over ~acc_prec (opt : Low_level.optimized) : Low_le
             invalid_arg
               ("Schedule.Privatize: v1 requires all accesses of " ^ Tn.debug_name target
              ^ " under the loop to use identical index vectors"));
+      (* Per axis, the extent its component ranges over — a component flattened over a [Sub_axis]
+         run (gh-ocannl-1165) addresses the run's whole extent product — for the transfers' edge
+         guards and the output-mask bound below. *)
+      let tgt_dims = Affine.axis_extents ~dims:node_dims idcs0 in
       (* Guard chains must agree across accesses; each condition is then classified for what it may
          do to the accumulator's lifecycle (PR #91 review; gh-ocannl-730). Three admissible kinds:
 
@@ -2568,8 +2716,8 @@ let apply_privatize ~target ~over ~acc_prec (opt : Low_level.optimized) : Low_le
         let load_sym s = Option.value (Map.find fresh_syms s) ~default:s in
         let subst_terms terms = List.map terms ~f:(fun (c, s) -> (c, load_sym s)) in
         let src_idcs =
-          Array.map decomp ~f:(fun (tp, op_, off) ->
-              normalize_affine ~terms:(subst_terms tp @ op_) ~offset:off)
+          Array.mapi decomp ~f:(fun a (tp, op_, off) ->
+              rebuild_index idcs0.(a) ~terms:(subst_terms tp @ op_) ~offset:off)
         in
         let t_idcs =
           if scalar_acc then [| Indexing.Fixed_idx 0 |]
@@ -3020,7 +3168,7 @@ let apply_split_reduce ~axis ~target ~num_blocks ~block_index ~inner_index ~comb
               Array.mapi comp_terms ~f:(fun a (terms, off) ->
                   let ci = List.nth_exn combine_indices a in
                   match terms with
-                  | [] -> Indexing.Fixed_idx off
+                  | [] -> rebuild_index idcs.(a) ~terms ~offset:off
                   | [ (c, s) ] ->
                       let fl = range_of s in
                       combine_loops := (ci, fl.from_, fl.to_) :: !combine_loops;
@@ -3619,10 +3767,14 @@ let apply_fuse_epilogue ~target ~shared (opt : Low_level.optimized) : Low_level.
   let subst_tail ~(site_idcs : Indexing.axis_index array) : Low_level.t =
     let stmt = Set { tn = out; idcs = tail_idcs; llsc = tail_llsc; debug = tail_debug } in
     Array.foldi site_idcs ~init:stmt ~f:(fun ax stmt idx ->
-        match terms_of_index idx with
-        | Some (terms, offset) ->
+        match (idx, terms_of_index idx) with
+        | Indexing.Sub_axis, _ ->
+            (* A flattened site (a coalesced pair, gh-ocannl-1165) has no per-axis index for the
+               tail's own symbol of this axis. *)
+            fail "the store-back site's indices are flattened (Sub_axis)"
+        | _, Some (terms, offset) ->
             map_code ~fidx:(subst_axis_index ~sym:tail_syms.(ax) ~by:{ terms; offset }) stmt
-        | None -> fail "the store-back site's indices must be affine")
+        | _, None -> fail "the store-back site's indices must be affine")
   in
   (* Does [idcs], with symbols ranging over [env] extents (zero-based loops), cover [target]'s index
      space bijectively over all enclosing iterations? Per axis: offset 0 and the (coefficient,
@@ -4433,7 +4585,8 @@ let apply_opt_op (opt : Low_level.optimized) (op : optop) : Low_level.optimized 
           ^ String.concat ~sep:", " (List.map syms ~f:Indexing.symbol_ident)
           ^ ", which is not bound by a loop enclosing the reduction loop in this statement — Swap \
              it outside " ^ Indexing.symbol_ident axis ^ " first"))
-  | (Split _ | Swap _ | Retype _ | Unroll _ | Partition _ | Pad _ | Expand_zero _) as op ->
+  | (Split _ | Swap _ | Retype _ | Unroll _ | Partition _ | Pad _ | Coalesce _ | Expand_zero _) as
+    op ->
       { opt with llc = apply_op opt.Low_level.llc op }
 
 (* gh-ocannl-537: the recognizer's answer to "which loops would have to enclose the reduction for
@@ -5018,6 +5171,13 @@ let op_legality (opt : Low_level.optimized) (op : optop) : op_verdict =
       (* The pad iterations are no-ops (every effectful leaf statement is guarded), so the padded
          loop runs the original iterations in the original order. *)
       Op_legal
+  | Coalesce _ -> (
+      (* Pure reindexing: the merged loop runs the pair's iterations in the original order at the
+         original addresses, so only applicability is in question -- the recognition is a pure
+         function of the code, probed like [Split_reduce] below. *)
+      match apply_opt_op opt op with
+      | exception Invalid_argument msg -> Op_illegal msg
+      | (_ : Low_level.optimized) -> Op_legal)
   | Swap { outer; inner } -> (
       (* Interchange reorders iterations; the optop contract licenses it for the
          associative-commutative accumulation patterns lowering emits (the rmw self-pairs). Beyond

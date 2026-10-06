@@ -4937,6 +4937,38 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ (name schedule_coalesce)
+ (package neural_nets_lib)
+ (deps
+  (env_var OCANNL_PROFILE)
+  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
+  ocannl_config
+  (env_var OCANNL_BACKEND)
+  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
+  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
+  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
+  (env_var OCANNL_LARGE_MODELS)
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
+  (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
+  (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
+  (env_var OCANNL_GPU_SERIAL_LANES)
+  (env_var OCANNL_LEGALITY_CROSSCHECK)
+  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES)
+  (env_var OCANNL_AUTOMATIC_CPU_SCHEDULE)
+  (env_var OCANNL_AUTOMATIC_GPU_SCHEDULE)
+  (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
+  (env_var OCANNL_GPU_FISSION_KEEP_MAPPING)
+  (env_var OCANNL_SCHEDULE_FISSION)
+  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS))
+ (modules schedule_coalesce)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
  ; ocannl-backend: none -- links arrayjit.ir alone; pure arithmetic over the SIMD lane ladder.
  ; This is the stanza gh-ocannl-659 was found on: correct, and correct by nobody's checking.
  (name simd_lane_choice)

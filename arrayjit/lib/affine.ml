@@ -237,6 +237,19 @@ let view ?(range = fun _ -> None) ?dyn_axis ?vec ~(dims : int array) (idcs : Idx
     let v = Array.of_list_rev !groups in
     match vec with None -> v | Some vec -> apply_vec ~range vec v
 
+(* Per axis, the extent of the coordinate its component indexes: the group's size at the group's
+   last axis (a component after a [Sub_axis] run ranges over the run's whole extent product), the
+   axis's own dim everywhere else. *)
+let axis_extents ~(dims : int array) (idcs : Idx.axis_index array) : int array =
+  let out = Array.copy dims in
+  if Array.length idcs = Array.length dims then begin
+    let last = ref (-1) in
+    Array.iter (view ~dims idcs) ~f:(fun c ->
+        last := !last + coord_span c;
+        out.(!last) <- coord_size c)
+  end;
+  out
+
 (* Group boundaries of a view: the cumulative axis counts at which its coordinates end. *)
 let ends_of (v : coord array) : Set.M(Int).t =
   Array.fold v

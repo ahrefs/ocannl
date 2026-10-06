@@ -154,6 +154,7 @@ type sketch_params = {
   sk_epilogue : bool;
   sk_batch_grid : bool;
   sk_batch_inner : bool;
+  sk_coalesce : bool;
   sk_swizzle : Ir.Low_level.swizzle_kind option;
   sk_depth : int;
   sk_pack_prec : Ir.Ops.prec option;
@@ -326,6 +327,20 @@ val sketch_seed_params :
     list never proposes a candidate that statically must fail its build. For the matmul family this
     list {e is} {!Ir.Schedule_space.leaves} of {!matmul_sketch_tree}, epilogue twins included.
     Exposed for tests. *)
+
+val coalesce_prefix : Ir.Low_level.optimized -> Ir.Schedule.schedule option
+(** See {!Sketch_families.coalesce_prefix} (gh-ocannl-1165). Exposed for tests. *)
+
+val coalesced_seed_params :
+  is_gpu:bool ->
+  is_cpu:bool ->
+  limits:Ir.Backend_intf.hardware_limits ->
+  Ir.Low_level.optimized ->
+  sketch_params list
+(** The coalesced tuner branch (gh-ocannl-1165), which {!tune} seeds beside {!sketch_seed_params}'s
+    candidates, whole-routine and per fission segment: see {!Sketch_families.coalesced_seed_params}.
+    Its winners persist as ordinary saved schedules whose leading
+    {!Ir.Schedule.constructor-Coalesce} ops name their loops structurally. *)
 
 val tensorized_capability_refutation :
   is_gpu:bool ->

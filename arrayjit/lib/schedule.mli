@@ -88,6 +88,27 @@ type optop =
           register-blocktiled GPU family pad too. The surviving guards are exactly the flip points
           {!partition_breakpoints} detects: a later {!constructor-Partition} of an enclosing block
           loop at the last fully valid block specializes them away in the interior segments. *)
+  | Coalesce of {
+      outer : Indexing.symbol;  (** The outer loop of the pair, by its index symbol. *)
+      inner : Indexing.symbol;  (** The inner loop, which must be the outer loop's whole body. *)
+      merged : Indexing.symbol;  (** Fresh symbol for the merged loop; see {!coalesce}. *)
+    }
+      (** Loop coalescing (gh-ocannl-1165): the perfectly nested [Serial] pair
+          [outer in \[0, P) { inner in \[0, Q) { body } }] becomes one [Serial] loop
+          [merged in \[0, P*Q) { body' }], where every access of [body] mentioning either symbol
+          reads [... Iterator outer; Iterator inner ...] on two adjacent axes whose dims are exactly
+          [P] and [Q], and is rewritten to [... Sub_axis; Iterator merged ...]: the composed
+          row-major index [Q*outer + inner], which [Indexing.Sub_axis] expresses affinely (the run
+          adds no term, the merged component ranges over the run's extent product) and
+          {!Affine.view} reads as one flattened coordinate. Anything else declines with
+          [Invalid_argument]: a mention elsewhere (an [Embed_index], a guard, an [Affine] term, one
+          symbol alone, a dynamic or vector access, a [Tile_mma], a [Scan_loop]), a pair right after
+          an existing [Sub_axis] run (whose flattening the merged index would extend), or an axis
+          whose dim differs from its loop extent — a padded inner axis in particular, whose stride
+          is not [Q]. Iteration order and every address are unchanged, so the op is unconditionally
+          semantics-preserving ([op_legality]: [Op_legal] once it applies). Purpose: a tile spanning
+          both loops — the q/k/v projections' head axis merged into the column role, so a 64-wide
+          column tile covers two 32-wide heads of useful columns. *)
   | Stage of {
       source : Tn.t;
       tile_loops : Indexing.symbol list;
@@ -470,6 +491,9 @@ val partition_breakpoints : axis:Indexing.symbol -> Low_level.t -> int list
 
 val fold_mma : query:Indexing.symbol -> width:int -> optop * Indexing.symbol * Indexing.symbol
 (** [fold_mma ~query ~width] mints the lane and block symbols of a {!constructor-Fold_mma}. *)
+
+val coalesce : outer:Indexing.symbol -> inner:Indexing.symbol -> optop * Indexing.symbol
+(** [coalesce ~outer ~inner] mints the merged loop's symbol of a {!constructor-Coalesce}. *)
 
 val expand_zero : tn:Tn.t -> optop * Indexing.symbol list
 (** Builds an {!constructor-Expand_zero} with one fresh symbol per axis of [tn] (forcing [tn]'s

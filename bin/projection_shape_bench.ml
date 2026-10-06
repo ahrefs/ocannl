@@ -33,10 +33,12 @@
    Candidates per site: the untuned shipped default, then every geometry of the GPU blocktile sketch
    family applied as the pure IR transform it is -- plus, under [--with-mma], every tensorized seed
    the backend and numerics policy offer (f32 on CUDA needs [tf32_matmuls], e.g. the [approximate]
-   profile; each site's phase-1 line counts what the menu offered); mode [tune] instead runs a full
-   [Autotune.tune] search per site with [~search:true] and the disk cache DISABLED, so neither shape
-   can replay the other's cached winner and a configuration that disabled searching cannot return
-   the untuned default under a tuned label.
+   profile; each site's phase-1 line counts what the menu offered), and the coalesced layout's seeds
+   the search offers beside the family (gh-ocannl-1165, labelled [coal]: on the split q/k/v site,
+   the head axis merged into the column tile); mode [tune] instead runs a full [Autotune.tune]
+   search per site with [~search:true] and the disk cache DISABLED, so neither shape can replay the
+   other's cached winner and a configuration that disabled searching cannot return the untuned
+   default under a tuned label.
 
    Timing is ROUND-INTERLEAVED, not site-by-site: one round per base tile geometry ([bgrid] twins
    included, since a merged site's plain arm and a batched site's [bgrid] arm are the pair being
@@ -169,7 +171,7 @@ let capture fwd = Context.lowered_for_decisions (Context.auto ()) fwd Ir.Indexin
    flag print only when set, so the historical scalar labels are unchanged; a pair still colliding
    on a field this omits is a counted failure at phase 1, not a merged row. *)
 let geom_label (q : Autotune.sketch_params) =
-  Printf.sprintf "%s%s%s %dx%dx%d/%dx%d%s%s%s%s%s%s%s%s"
+  Printf.sprintf "%s%s%s %dx%dx%d/%dx%d%s%s%s%s%s%s%s%s%s"
     (if q.sk_conv then "conv-" else "")
     (if q.sk_mma then "mma-" else "")
     (if q.sk_gpu then "gpu" else "cpu")
@@ -185,6 +187,7 @@ let geom_label (q : Autotune.sketch_params) =
     (if q.sk_grid then " grid" else "")
     (if q.sk_pack_rest then " packrest" else "")
     (if not q.sk_batch_grid then "" else if q.sk_batch_inner then " bgrid-in" else " bgrid")
+    (if q.sk_coalesce then " coal" else "")
 
 (* A MONOTONIC counter, not a wall-clock timestamp: an NTP step or a VM clock correction during a
    long run would otherwise jump (or invert) an interval, and the corrupted batch feeds the median
@@ -471,8 +474,11 @@ let () =
                  (List.map site.Autotune.m_bo ~f:(fun (_, e) -> Int.to_string e)))
               (String.concat ~sep:","
                  (List.map site.Autotune.m_bi ~f:(fun (_, e) -> Int.to_string e))));
+        (* The search's menu for the site: the family seeds and the coalesced layout's branch beside
+           them (gh-ocannl-1165) -- on the split site, column tiles spanning several heads. *)
         let offered =
           Autotune.sketch_seed_params ~is_gpu:on_gpu ~is_cpu:(not on_gpu) ~limits opt
+          @ Autotune.coalesced_seed_params ~is_gpu:on_gpu ~is_cpu:(not on_gpu) ~limits opt
           |> List.filter ~f:(fun (q : Autotune.sketch_params) -> not q.sk_epilogue)
         in
         let seeds =
@@ -814,8 +820,11 @@ let () =
        [32x32x8/4x4] and a batched site's [32x32x8/4x4 bgrid] are the two arms the experiment
        actually compares -- putting the twins in separate rounds would leave exactly that pair
        un-interleaved. A batched site therefore contributes all of its batch arms to the round (with
-       interior batch loops, the [bgrid-in] order of gh-ocannl-728 is the third). *)
+       interior batch loops, the [bgrid-in] order of gh-ocannl-728 is the third). A coalesced seed
+       (gh-ocannl-1165) joins the round of its tile too: its split site's 64-wide arm and the merged
+       twin's are the comparison the branch exists for. *)
     let base_geom g =
+      let g = String.chop_suffix_if_exists g ~suffix:" coal" in
       String.chop_suffix_if_exists
         (String.chop_suffix_if_exists g ~suffix:" bgrid-in")
         ~suffix:" bgrid"

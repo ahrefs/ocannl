@@ -938,8 +938,9 @@ files.
   a matmul — `ic` as `k`, the `oy + ky` window axis as `i` — and since `sketch_seed_params` tries
   the matmul family FIRST, the conv family silently stops being seeded; `schedule_conv_gemm` is the
   test that catches it (11 claims), so run it whenever the matmul classifier is relaxed.
-  Two things the generalization does NOT do: it cannot coalesce the nest into one loop (the
-  per-axis index maps cannot express `f / M, f mod M`), so a tile's k-extent is judged against the
+  Two things the generalization does NOT do: it does not coalesce the nest into one loop
+  (`Sched.Coalesce` could: every mention of the out projection's `(h, e)` contraction pair is an
+  adjacent plain pair, but no family seeds it), so a tile's k-extent is judged against the
   innermost contraction extent alone and `bk` values above it are refuted by the ordinary
   divisibility gates; and the whole-`m_k` forms (the unstaged `bk = 0` tensorize, the CPU
   whole-triple) keep the outer contraction loops above the block statement. Accumulator contraction
@@ -979,6 +980,28 @@ files.
   pipelines stage into stack scratch, so the same argument would let them pad, but they keep the
   gate — which is what still renders the gh-ocannl-683 k-extent label, and where
   `schedule_contraction_nest` reads it off.
+- **The coalesced layout is a search BRANCH over another lowering, not a level of the family tree**
+  (gh-ocannl-1165). The q/k/v site `d[b,s,h,e] += w[h,e,k] * x[b,s,k]` caps its column tile at one
+  head; `Sched.Coalesce` merges the adjacent `(h, e)` pair into one loop whose accesses read
+  `Sub_axis; Iterator f`. `Sketch_families.coalesced` builds the structural prefix (the site's
+  `Coalesce (last m_bi, m_j)`, preceded where `d`'s `Zero_out` shares the routine by its
+  `Expand_zero` with the zero nest's last two loops coalesced alike, and where a covering per-cell
+  zero nest of `d` does — the folded zero of a GPU fission segment, gh-ocannl-1175 — by that nest's
+  own coalescing) and applies it to a hermetic
+  copy; `coalesced_seed_params` enumerates the ordinary family over THAT code, so every refutation
+  (launch caps, companion coverage, divisibility) is judged on the site the schedule builds, and
+  `sketch_schedule` on an `sk_coalesce` seed re-derives the prefix and prepends it. The expanded
+  zero nest is then an ordinary companion of the merged chain; an unexpanded `Zero_out` would keep
+  the uncoalesced chain. Winners persist as plain saved schedules — the `Coalesce` op names its
+  loops structurally (`Base`/`Minted` refs, `Coalesce_merged` mint role) — and the menu change
+  bumped `entry_version` to 13. v1 boundary, each a decline rather than a wrong value: unfused
+  GPU scalar blocktile leaves only (`Tensorize` reads an operand's last two axes as its tile, and
+  `Fuse_epilogue`'s tail is a nest over the target's own dims); a companion nest over the
+  uncoalesced axes (an elementwise tail) trims the merged chain and refutes the whole branch; one
+  pair per site. Seeding discards its probe's minted symbols (`Indexing.discarding_symbols`); the
+  prefix a schedule carries keeps its own. `test/operations/schedule_coalesce`; the scalar
+  pipeline's flattened operands are why `Stage`/`Privatize` read `Affine.axis_extents`
+  (lowering-and-analysis.md).
 ## Timing objectives and calibration
 - **What the tuner's numbers are a measurement OF is a config choice, and the two objectives do not
   crown the same candidate** (gh-ocannl-755). `Autotune.time_routine` takes a `timing_mode`, from

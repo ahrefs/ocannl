@@ -121,6 +121,13 @@ type sketch_params = {
           third batch flavor rather than the [sk_batch_grid] twin's order, for the same reason the
           twin is one: the tuner measures, not a heuristic. Always [false] where [sk_batch_grid] is,
           and on sites without interior batch loops, where the two orders are the same schedule. *)
+  sk_coalesce : bool;
+      (** GPU scalar blocktile pipeline only (gh-ocannl-1165): the seed was enumerated on — and its
+          schedule is built over — the site with its innermost interior batch loop coalesced into
+          the column role ({!coalesce_prefix}: [Coalesce { outer = last m_bi; inner = m_j }], plus
+          the expanded zeroing nest coalesced alike), so its column tile spans useful columns of
+          several heads. The schedule is that structural prefix followed by the ordinary pipeline
+          over the coalesced site; every tile field of the record describes the coalesced site. *)
   sk_swizzle : Ir.Low_level.swizzle_kind option;
       (** Staged GPU mma sketches only ([sk_mma] with [sk_bk > 0]): store both cooperative operand
           tiles in this XOR layout (gh-ocannl-481 item 3, D3). Seeded as a {e twin} of each staged
@@ -332,6 +339,27 @@ val sketch_seed_params :
   sketch_params list
 (** The composed seed list: matmul tree leaves when a matmul is detected, otherwise convolution
     seeds followed by their eligible epilogue-fusion twins. Empty when neither site is detected. *)
+
+val coalesce_prefix : Ir.Low_level.optimized -> Ir.Schedule.schedule option
+(** The coalesced layout's structural prefix (gh-ocannl-1165), when the detected matmul site has an
+    interior batch loop that coalesces into the column role: [Coalesce (last m_bi, m_j)], preceded,
+    when the site's output is zeroed in the routine, by that [Zero_out]'s expansion with its last
+    two loops coalesced alike — or, for a covering per-cell zero nest (a GPU fission segment's
+    folded zero, gh-ocannl-1175), by that nest's own coalescing. [None] when there is no such loop,
+    or when the op declines (a per-head operand, a padded inner axis, any access not reading the
+    pair as adjacent plain iterators) — probed on a hermetic copy. Mints fresh symbols, which the
+    returned ops carry. *)
+
+val coalesced_seed_params :
+  is_gpu:bool ->
+  is_cpu:bool ->
+  limits:Ir.Backend_intf.hardware_limits ->
+  Ir.Low_level.optimized ->
+  sketch_params list
+(** The coalesced tuner branch (gh-ocannl-1165), beside {!sketch_seed_params}: the matmul family's
+    unfused GPU scalar-blocktile leaves enumerated over the code {!coalesce_prefix} produces — every
+    refutation judged on the coalesced site — each stamped [sk_coalesce]. Empty off GPU and when no
+    prefix applies. *)
 
 val geometry_lattice_witness : string
 (** The exclusion witness for tile-lattice alternatives beyond the curated geometry menus. *)

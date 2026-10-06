@@ -1538,8 +1538,8 @@ let optop_can_bind_hardware (op : SC.saved_optop) =
   | SC.Split { outer; inner; _ } -> axis_type_is_hardware outer || axis_type_is_hardware inner
   | SC.Retype { ty; _ } -> axis_type_is_hardware ty
   | SC.Swap _ | SC.Unroll _ -> false
-  | SC.Tensorize _ | SC.Partition _ | SC.Pad _ | SC.Stage _ | SC.Privatize _ | SC.Expand_zero _
-  | SC.Fuse_epilogue _ | SC.Split_reduce _ | SC.Fold_mma _ ->
+  | SC.Tensorize _ | SC.Partition _ | SC.Pad _ | SC.Coalesce _ | SC.Stage _ | SC.Privatize _
+  | SC.Expand_zero _ | SC.Fuse_epilogue _ | SC.Split_reduce _ | SC.Fold_mma _ ->
       true
 
 let optop_family (op : SC.saved_optop) =
@@ -1550,6 +1550,7 @@ let optop_family (op : SC.saved_optop) =
   | SC.Unroll _ -> "Unroll"
   | SC.Partition _ -> "Partition"
   | SC.Pad _ -> "Pad"
+  | SC.Coalesce _ -> "Coalesce"
   | SC.Stage _ -> "Stage"
   | SC.Privatize _ -> "Privatize"
   | SC.Expand_zero _ -> "Expand_zero"
@@ -2251,9 +2252,11 @@ let pack_prec_label p =
   | None -> ""
 
 (* The batch flavor's label (gh-ocannl-643, gh-ocannl-728): " bgrid" for the batch-grid twin, "
-   bgrid-in" for its interior-batch-inside-the-row-blocks order. *)
+   bgrid-in" for its interior-batch-inside-the-row-blocks order — then " coal" for the coalesced
+   layout's seeds (gh-ocannl-1165), whose tile fields describe the coalesced site. *)
 let batch_label p =
-  if not p.sk_batch_grid then "" else if p.sk_batch_inner then " bgrid-in" else " bgrid"
+  (if not p.sk_batch_grid then "" else if p.sk_batch_inner then " bgrid-in" else " bgrid")
+  ^ if p.sk_coalesce then " coal" else ""
 
 let spec_label = function
   | Whole (W_saved s) -> Printf.sprintf "W_saved[%d ops]" (List.length s)
@@ -5120,6 +5123,13 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                 (Printf.sprintf "%s attempt=%S" (progress_where ()) (spec_label spec));
             try_spec spec
           in
+          (* The search's seeds for one lowering: the family seeds, then the coalesced layout's
+             branch beside them (gh-ocannl-1165) — prepared hermetically from the same lowering, its
+             candidates' schedules carry their structural [Coalesce] prefix. *)
+          let search_seed_params opt =
+            sketch_seed_params ~is_gpu ~is_cpu ~limits opt
+            @ coalesced_seed_params ~is_gpu ~is_cpu ~limits opt
+          in
           let block_size_presets mk =
             mk None
             :: (if is_gpu then List.map seed_block_sizes ~f:(fun bs -> mk (Some bs)) else [])
@@ -5155,7 +5165,7 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
           in
           let sketch_params =
             model_prefilter_params ~seg_opt:base_opt ~family:"whole-routine"
-              (sketch_seed_params ~is_gpu ~is_cpu ~limits base_opt)
+              (search_seed_params base_opt)
           in
           n_sketch_candidates := List.length sketch_params;
           n_epilogue_sketch_candidates := List.count sketch_params ~f:(fun p -> p.sk_epilogue);
@@ -5192,7 +5202,7 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                       match kind with
                       | `Zeros | `Solo -> None
                       | `Normal -> (
-                          match sketch_seed_params ~is_gpu ~is_cpu ~limits pre with
+                          match search_seed_params pre with
                           | [] -> None
                           | params ->
                               Some
