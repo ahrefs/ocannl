@@ -73,7 +73,7 @@ if [[ -n $negative ]]; then
     "$arm1" >"$broken"
   mutated=$(diff "$arm1" "$broken" | grep -c '^>' || true)
   # Every XOR on the faulted lines is gone: a B gather line carries one per byte.
-  remaining=$(perl -ne 'print if /$ENV{LINE}/ && /\^ \(\(/' "$broken" | wc -l | tr -d ' ')
+  remaining=$(LINE=$line perl -ne 'print if /$ENV{LINE}/ && /\^ \(\(/' "$broken" | wc -l | tr -d ' ')
   echo "negative_control=$negative source=$arm1 broken=$broken mutated_lines=$mutated"
   if [[ $mutated != "$lines" || $remaining != 0 ]]; then
     echo "NEGATIVE CONTROL INVALID: expected exactly $lines mutated $what line(s) with no XOR" \
