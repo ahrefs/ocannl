@@ -52,8 +52,8 @@ val mma16_spellings :
   d_prec:Ops.prec ->
   (string * string * string * string * string * string) option
 (** The m16n8k16 arm's element spellings: the C type, the bits-as-ushort intrinsic, the widening and
-    narrowing conversions, the instruction's element infix, and the arch marker. [None]: the triple
-    has no m16n8k16 form (uniform bf16 always, uniform f16 under [Numerics.Fp16_wide]). *)
+    narrowing conversions, the instruction's element infix, and the arch marker. Returns [Some] for
+    uniform bf16 under every policy and uniform f16 under [Numerics.Fp16_wide]; [None] otherwise. *)
 
 val mma_fp8_marker : string
 (** The marker of the fp8 m16n8k32 arm, shared by its statement and register-scope renderings. *)
