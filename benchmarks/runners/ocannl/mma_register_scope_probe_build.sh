@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build and dry-run the precompiled CUDA A/B driver over two emitted kernels (gh-ocannl-1190).
 #
-#   mma_register_scope_probe_build.sh [--negative-control] ARM0.cu ARM1.cu OUTPUT LABEL0 LABEL1
+#   mma_register_scope_probe_build.sh [--negative-control[=a|b]] ARM0.cu ARM1.cu OUTPUT LABEL0 LABEL1
 #
 # ARM0/ARM1 are kernels exported by bench_mma_register_scope_emit (any revision, any layout);
 # the driver reports ARM1 over ARM0 under the labels, which are required: they are what the
@@ -10,22 +10,31 @@
 # both sources and the binary, the load-path census of each source, compiles, and runs the
 # driver's --dry-run, which checks both arms against every exact host product cell. Run it under
 # a correctness reservation; run OUTPUT without --dry-run only in an exclusive timing window.
+# `dune build @benchmarks/runners/ocannl/mma-register-scope-probe` (CUDA only) exports both
+# layouts and runs this script plainly and under both negative controls, as one target.
 #
-# --negative-control proves that dry run can fail. ARM1 must be a swizzled kernel (ldmatrix A);
-# the script writes OUTPUT.broken-a.cu, a copy whose ldmatrix A address drops its swizzle XOR
-# (exactly one line changes), builds the driver over ARM0 and that copy, and succeeds only when
-# the dry run fails the way the fault predicts: a cell where ARM0 equals the exact host product
-# and the broken arm does not. A passing dry run, or any other failure, exits 1. OUTPUT is then
-# the broken driver: never time it.
+# --negative-control proves that dry run can fail. ARM1 must be a swizzled kernel; the script
+# writes OUTPUT.broken-<operand>.cu, a copy with one operand's swizzle XOR dropped, builds the
+# driver over ARM0 and that copy, and succeeds only when the dry run fails the way the fault
+# predicts: a cell where ARM0 equals the exact host product and the broken arm does not. A passing
+# dry run, or any other failure, exits 1. OUTPUT is then the broken driver: never time it.
+#   =a (the default) drops the XOR from the ldmatrix A address (exactly one line changes). The
+#      fault permutes K within an A row, so it is visible only because B varies along K.
+#   =b drops it from every byte of the B gather (exactly the two lines building __mma_b0 and
+#      __mma_b1 change). B is K-row-major, so the XOR is keyed by the K row and permutes N within
+#      it: the fault reads another output column's bytes on odd K rows, not the same terms in
+#      another order.
 set -euo pipefail
 
-negative=false
-if [[ ${1-} == --negative-control ]]; then
-  negative=true
-  shift
-fi
+usage="usage: $0 [--negative-control[=a|b]] ARM0.cu ARM1.cu OUTPUT LABEL0 LABEL1"
+negative=
+case ${1-} in
+  --negative-control | --negative-control=a) negative=a; shift ;;
+  --negative-control=b) negative=b; shift ;;
+  --negative-control=*) echo "$usage" >&2; exit 2 ;;
+esac
 if [[ $# -ne 5 ]]; then
-  echo "usage: $0 [--negative-control] ARM0.cu ARM1.cu OUTPUT LABEL0 LABEL1" >&2
+  echo "$usage" >&2
   exit 2
 fi
 here=$(cd "$(dirname "$0")" && pwd)
@@ -52,17 +61,23 @@ sha256() {
   else shasum -a 256 "$1" | cut -d' ' -f1; fi
 }
 
-if $negative; then
-  # Swizzle_b128 emits the 16-byte chunk index as ((col >> s) ^ (row & m)) << s; dropping the
-  # XOR term on the ldmatrix A address line feeds every lane an unswizzled row address.
-  broken=$out.broken-a.cu
-  perl -pe 's/\^ \(\(.*?\) & \d+\)\) (<< \d+\))/^ 0) $1/ if /__cvta_generic_to_shared\(__mma_ap /' \
+if [[ -n $negative ]]; then
+  # Swizzle_b128 emits the 16-byte chunk index as ((col >> s) ^ (row & m)) << s; dropping the XOR
+  # term feeds the faulted operand's loads unswizzled addresses into the swizzled tile.
+  case $negative in
+    a) line='__cvta_generic_to_shared\(__mma_ap ' what='ldmatrix A address' lines=1 ;;
+    b) line='unsigned __mma_b[01] = \(unsigned\)__mma_bp\[' what='B gather' lines=2 ;;
+  esac
+  broken=$out.broken-$negative.cu
+  LINE=$line perl -pe 's/\^ \(\(.*?\) & \d+\)\) (<< \d+\))/^ 0) $1/g if /$ENV{LINE}/' \
     "$arm1" >"$broken"
   mutated=$(diff "$arm1" "$broken" | grep -c '^>' || true)
-  echo "negative_control: source=$arm1 broken=$broken mutated_lines=$mutated"
-  if [[ $mutated != 1 ]]; then
-    echo "NEGATIVE CONTROL INVALID: expected exactly one mutated ldmatrix A address line" \
-      "(is $arm1 a swizzled kernel?)" >&2
+  # Every XOR on the faulted lines is gone: a B gather line carries one per byte.
+  remaining=$(LINE=$line perl -ne 'print if /$ENV{LINE}/ && /\^ \(\(/' "$broken" | wc -l | tr -d ' ')
+  echo "negative_control=$negative source=$arm1 broken=$broken mutated_lines=$mutated"
+  if [[ $mutated != "$lines" || $remaining != 0 ]]; then
+    echo "NEGATIVE CONTROL INVALID: expected exactly $lines mutated $what line(s) with no XOR" \
+      "left, got $mutated with $remaining still swizzled (is $arm1 a swizzled kernel?)" >&2
     exit 1
   fi
   arm1=$broken
@@ -82,7 +97,7 @@ nvcc "${flags[@]}" \
   "-DMMA_GENERATED_ARM1=\"$arm1\"" "-DMMA_ARM1_LABEL=\"$label1\"" \
   "$here/mma_register_scope_probe.cu" -o "$out"
 echo "binary=$out sha256=$(sha256 "$out")"
-if ! $negative; then
+if [[ -z $negative ]]; then
   exec "$out" --dry-run
 fi
 
@@ -94,11 +109,11 @@ cat "$errlog" >&2
 # The driver's first mismatching cell: mismatch (i,j) want=W A=<arm0> B=<arm1>.
 read -r want got0 got1 < <(sed -n 's/^mismatch ([0-9]*,[0-9]*) want=\([^ ]*\) A=\([^ ]*\) B=\([^ ]*\)$/\1 \2 \3/p' "$errlog") || true
 if [[ $rc == 1 && -n ${want-} && $got0 == "$want" && $got1 != "$want" ]]; then
-  echo "negative control: the broken A address fails the dry run, as designed ($label0 exact, $label1 off)"
+  echo "negative control: the broken $what fails the dry run, as designed ($label0 exact, $label1 off)"
   exit 0
 fi
 if [[ $rc == 0 ]]; then
-  echo "NEGATIVE CONTROL FAILED: the broken A address passed the dry run" >&2
+  echo "NEGATIVE CONTROL FAILED: the broken $what passed the dry run" >&2
 else
   echo "NEGATIVE CONTROL INCONCLUSIVE: dry run exited $rc without a $label1-only cell mismatch" >&2
 fi
