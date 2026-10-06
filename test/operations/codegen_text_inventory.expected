@@ -181,6 +181,8 @@ test/operations/half_float_power.ml
     "__float2half(powf(__half2float("
     "hexp2("
     "ocannl_powi_"
+    "pow("
+    "reinterpret_cast"
 test/operations/hardware_axes_parity.ml
     " = 0;"
     " = 7;"
