@@ -96,7 +96,7 @@ k = rearrange(k, 'b t (h d) -> b h t d', h=num_heads)
 scores = einsum(q, k, 'b h t1 d, b h t2 d -> b h t1 t2')
 ```
 
-OCANNL (from [nn_blocks.ml](../lib/nn_blocks.ml), line 121):
+OCANNL (from `multi_head_attention` in [nn_blocks.ml](../lib/nn_blocks.ml)):
 ```ocaml
 let scores =
   (q +* k " ... s | h d; ... t | h d => ... s | t -> h" [ "h"; "d" ]) /. sqrt (dim d)
@@ -154,7 +154,7 @@ For a true average (not sum), divide by the dimension sizes.
 
 einops has no built-in convolution support.
 
-OCANNL ([syntax_extensions.md](syntax_extensions.md#affine-indexing-for-convolutions-and-pooling), line 499):
+OCANNL ([syntax_extensions.md](syntax_extensions.md#affine-indexing-for-convolutions-and-pooling)):
 ```ocaml
 input +* "...|oh<+wh, ow<+ww, ..ic..; wh, ww, ic => ...|oh, ow, ..oc.." kernel
 ```
