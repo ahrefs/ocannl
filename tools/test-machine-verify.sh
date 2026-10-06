@@ -100,6 +100,10 @@ fi
 }
 shift 3
 export OCANNL_PROFILE=switch-secret OCANNL_BACKEND=hip
+# A switch whose environment updates set credentials (gh-ocannl-1280): fake values.
+if [ "${FIXTURE_SWITCH_CREDENTIALS:-}" = 1 ]; then
+  export GH_TOKEN=fixture-switch-token FOO_API_KEY=fixture-switch-key
+fi
 exec "$@"
 SH
 cat >"$TMP/bin/dune" <<'SH'
@@ -267,8 +271,9 @@ chmod +x "$TMP/bin/fake-read-config" "$TMP/bin/fake-slot-kind" || exit 2
 # with a prefix assignment on its call.
 ENDPOINT=192.0.2.1 ENDPOINT_PORT=22 ENDPOINT_PROXY= TRANSPORT=ssh BACKEND=cc HIP_TREE=hip-complete
 DXG=absent KFD=absent NVIDIA=absent FLEET_BOX=fixture-box READERS=stand-in NAMES= DUNE_VERSION=3.24.2
-# Whether BOX's login environment exports credentials (the fake ssh reads it).
-REMOTE_CREDS=
+# Whether BOX's login environment exports credentials (the fake ssh reads it), and whether its
+# opam switch's environment sets them (the fake opam reads it).
+REMOTE_CREDS= SWITCH_CREDS=
 # The BRANCH operand, and the commit the fake dune requires the worktree at.
 REF=fixture WANT_SHA=$SHA
 
@@ -316,7 +321,8 @@ run_case() { # SUBJECT NAME MODE [verifier args]
     OCANNL_TOOL_NVIDIA_DEVICE="$(fixture_device "$NVIDIA")" FLEET_LOCAL_BOX="$FLEET_BOX" \
     OCANNL_TOOL_READ_CONFIG="$(fixture_reader fake-read-config)" \
     OCANNL_TOOL_SLOT_KIND="$(fixture_reader fake-slot-kind)" FIXTURE_NAMES="$NAMES" \
-    FIXTURE_DUNE_VERSION="$DUNE_VERSION" FIXTURE_REMOTE_CREDENTIALS="$REMOTE_CREDS"; do
+    FIXTURE_DUNE_VERSION="$DUNE_VERSION" FIXTURE_REMOTE_CREDENTIALS="$REMOTE_CREDS" \
+    FIXTURE_SWITCH_CREDENTIALS="$SWITCH_CREDS"; do
     printf 'export %s=%q\n' "${var%%=*}" "${var#*=}"
   done >"$TMP/fixture.env"
   # OPAMSWITCH and DUNE_BUILD_DIR stand for the caller's session: an SSH
@@ -595,13 +601,28 @@ credential_probe='test -z "${GH_TOKEN+x}${FOO_API_KEY+x}" && test "${FIXTURE_REM
 REMOTE_CREDS=1 check_case credentials-ssh success 0 "verified .*commit=$SHA backend=cc" --test @fixture \
   --run "$credential_probe"
 grep -qx 'probe credentials: absent, plain variable kept' "$TMP/runs/credentials-ssh/stdout" &&
-  grep -qx 'credential variables: removed from the environment (tools/credential-env.sh)' \
+  grep -qx 'credential variables: removed inside every opam exec (tools/credential-env.sh)' \
     "$TMP/runs/credentials-ssh/stdout" &&
   grep -q '|cc|build -j 4 @fixture' "$TMP/runs/credentials-ssh/audit"
 report $? 'credentials-ssh: the probe and every build ran without the box credentials' "$TMP/runs/credentials-ssh"
 credential_oracle() {
   local subject=$1 name=$2
   REMOTE_CREDS=1 run_case "$subject" "$name" success --test @fixture --run "$credential_probe" || return 1
+  [ "$(cat "$TMP/runs/$name/rc")" = 0 ] &&
+    grep -qx 'probe credentials: absent, plain variable kept' "$TMP/runs/$name/stdout"
+}
+# And where the opam switch's own environment sets them: `opam exec` rebuilds the environment, so
+# the far side scrubs inside it.
+REMOTE_CREDS=1 SWITCH_CREDS=1 check_case credentials-switch success 0 "verified .*commit=$SHA backend=cc" \
+  --test @fixture --run "$credential_probe"
+grep -qx 'probe credentials: absent, plain variable kept' "$TMP/runs/credentials-switch/stdout" &&
+  grep -q '|cc|build -j 4 @fixture' "$TMP/runs/credentials-switch/audit"
+report $? 'credentials-switch: credentials the opam switch sets reach neither the probe nor a build' \
+  "$TMP/runs/credentials-switch"
+switch_credential_oracle() {
+  local subject=$1 name=$2
+  REMOTE_CREDS=1 SWITCH_CREDS=1 run_case "$subject" "$name" success --test @fixture \
+    --run "$credential_probe" || return 1
   [ "$(cat "$TMP/runs/$name/rc")" = 0 ] &&
     grep -qx 'probe credentials: absent, plain variable kept' "$TMP/runs/$name/stdout"
 }
@@ -714,7 +735,10 @@ probe_width_oracle() {
 }
 mutated=$(mutant_pair no-probe-width far '{ sub(/ "DUNE_JOBS=\$jobs" sh -c/, " sh -c"); print }') || exit 2
 expect_rejected 'probe width withheld' "$mutated" probe_width_oracle '^probe width: unset$'
-# The credential scrub cut out of the far side: BOX's own token reaches dune and the probe.
-mutated=$(mutant_pair no-credential-scrub far '/^eval "\$credential_scrub" \|\|$/ { getline; next } { print }') || exit 2
-expect_rejected 'credential scrub removed' "$mutated" credential_oracle '^fixture: credentials reached dune$'
+# The credential scrub cut out of opam_exec: BOX's own token, and one its switch sets, reach dune.
+mutated=$(mutant_pair no-credential-scrub far '{ sub(/ -- sh -c "\$switch_scrub" machine-verify-switch "\$@"$/, " -- env \"$@\""); print }') || exit 2
+expect_rejected 'credential scrub removed (login environment)' "$mutated" credential_oracle \
+  '^fixture: credentials reached dune$'
+expect_rejected 'credential scrub removed (switch environment)' "$mutated" switch_credential_oracle \
+  '^fixture: credentials reached dune$'
 finish

@@ -4,9 +4,11 @@
 # and quote -- so a token a session exports would land there on every build. The runners remove
 # these from dune's environment on the side where dune runs: tools/test-run.sh for everything it
 # launches, tools/sweep.sh in the shell text of every unit leg (local, or sent to a remote box,
-# whose own environment holds its own token), and tools/machine-verify-far.sh on the verified
-# machine. `test/operations/env_var_deps` reads `credential_env_patterns` below and refuses a dune
-# stanza that declares a match as an `(env_var ...)` dependency, so no test can come to need one.
+# whose own environment holds its own token), tools/machine-verify-far.sh inside every `opam exec`
+# on the verified machine, and every other script here that starts dune itself (fmt-check.sh,
+# promote.sh, api-drift.sh) for its own environment. `test/operations/env_var_deps` reads
+# `credential_env_patterns` below and refuses a dune stanza that declares a match as an
+# `(env_var ...)` dependency, so no test can come to need one.
 #
 # Sourced, never executed. POSIX sh: machine-verify carries the scrub's text to a far side that
 # runs it under dash.

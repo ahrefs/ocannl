@@ -958,16 +958,20 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   mine, from where any transcript or log can carry it on.
   `tools/credential-env.sh` holds the one deny-list (`GH_TOKEN`, `GITHUB_TOKEN`,
   `GH_ENTERPRISE_TOKEN`, `CLAUDE_CODE_MESSAGING_TOKEN`, `*_TOKEN`, `*_API_KEY`) and prints it as
-  shell TEXT, evaluated where dune runs: `tools/test-run.sh` scrubs its own environment at startup;
+  shell TEXT, evaluated where dune runs: `tools/test-run.sh`, `tools/fmt-check.sh`,
+  `tools/promote.sh` and `tools/api-drift.sh` scrub their own environment at startup;
   `tools/sweep.sh` splices it into every unit leg's shell text (`credential_scrub_cmd`), since a
   remote box's login environment holds that box's own token; `tools/machine-verify.sh` passes it
-  to the far side, which evaluates it after the fetch (a fetch may authenticate through one) and
-  before the first dune. `env_var_deps` reads the same line and refuses a stanza declaring a match.
-  A bare `dune` outside the runners still records whatever the session exports. Pinned by leg 79 of
-  `tools/test-test-run.sh` (a fixture dune's environment, and a real dune's trace where one is on
-  PATH), `credential_free` in the sweep harness (local and remote legs, with a mutation control),
-  the `credentials-ssh` case of `tools/test-machine-verify.sh`, and `env_var_deps_control`; each
-  has a negative control with the scrub cut out.
+  to the far side, which evaluates it inside every `opam exec` (so a switch's environment cannot
+  hand one back) and nowhere else (so git's fetch keeps its credential). A script that starts dune
+  itself sources the helper too, and a harness staging such a script derives what it sources from
+  its `. tools/...` lines. `env_var_deps` reads the same line and refuses a stanza declaring a
+  match. A bare `dune` outside these scripts still records whatever the session exports. Pinned by
+  leg 79 of `tools/test-test-run.sh` (a fixture dune's environment, and a real dune's trace where
+  one is on PATH), `credential_free` in the sweep harness (local and remote legs, with a mutation
+  control), the `credentials-ssh`/`credentials-switch` cases of `tools/test-machine-verify.sh`, the
+  credential legs of `tools/test-fmt-check.sh` and `tools/test-promote.sh`, and
+  `env_var_deps_control`; each has a negative control with the scrub cut out.
 - A child that publishes a value for its parent to poll — a pid, above all — writes a sibling and
   renames it into place: `open(path, 'w')` creates the name EMPTY before the write lands, so a
   parent polling `exists()` reads `''` (gh-ocannl-1041, a per-PR-matrix flake). The benchmarks'

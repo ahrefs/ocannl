@@ -201,6 +201,15 @@ if [ -n "$switch_ocannl_names" ]; then
   IFS=$old_ifs
 fi
 
+# Credentials leave the environment of every command started through opam_exec -- every dune of
+# the trip (the width resolution, each build, test and golden), and each --run probe -- because
+# dune records every spawned process's environment in the worktree's `_build/trace.csexp`
+# (gh-ocannl-1280). The scrub runs INSIDE the environment `opam exec` builds, so it removes the
+# box's login copy (which may export its own GitHub token) and anything the switch's environment
+# updates set alike. The text is the caller's tools/credential-env.sh, passed in like the width
+# table; names are matched where it runs. Nothing outside opam_exec is scrubbed, so git's fetch
+# keeps whatever credential it authenticates through. A scrub that fails stops the command.
+switch_scrub="{ $credential_scrub; } || { echo \"machine-verify: cannot remove credential variables the opam switch sets:\$credential_env_left\" >&2; exit 2; }; exec env \"\$@\""
 opam_exec() {
   old_ifs=$IFS
   IFS='
@@ -209,7 +218,7 @@ opam_exec() {
     set -- -u "$name" "$@"
   done
   IFS=$old_ifs
-  capped opam exec --switch="$opam_switch" -- env "$@"
+  capped opam exec --switch="$opam_switch" -- sh -c "$switch_scrub" machine-verify-switch "$@"
 }
 
 sanitized_switch_environment=$(opam_exec env) ||
@@ -239,6 +248,7 @@ echo "expected optional library: ${expect_lib:-none}"
 echo "per-command cap: ${cap}s"
 echo "whole-trip cap: ${trip_cap}s"
 echo "PATH prefix:   /usr/local/cuda/bin:/usr/lib/wsl/lib"
+echo "credential variables: removed inside every opam exec (tools/credential-env.sh)"
 
 # Fetch the named pushed branch explicitly. Resolving an already-present remote
 # tracking ref after a failed fetch would certify stale source.
@@ -307,16 +317,6 @@ echo "worktree:      $wt"
 echo "worktree HEAD: $actual_sha"
 echo "source state:  clean, detached, exact commit"
 echo "config boundary: $config_boundary"
-
-# Credentials leave this environment before the first dune of the trip (gh-ocannl-1280): dune
-# records every spawned process's environment in the worktree's `_build/trace.csexp`, and this
-# box's login environment may export its own GitHub token. Every later command inherits the
-# result -- the width resolution, each build and test, and a --run probe. Not earlier: the fetch
-# above may authenticate through one. The text is the caller's tools/credential-env.sh, passed in
-# like the width table. The provenance line below names no variable; a value is never printed.
-eval "$credential_scrub" ||
-  fail "cannot remove credential variables from the environment:$credential_env_left"
-echo "credential variables: removed from the environment (tools/credential-env.sh)"
 
 cd "$wt" || fail "cannot enter $wt"
 

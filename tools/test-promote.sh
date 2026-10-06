@@ -73,15 +73,23 @@ printf '  dune   %s\n' "$(dune --version 2>/dev/null || echo '?')"
 # legs can commit at all.
 g() { git -c user.name=t -c user.email=t@t -c commit.gpgsign=false "$@"; }
 
+# promote.sh into REPO/tools, with whatever it SOURCES -- derived from its own `. tools/...`
+# lines, so a helper it gains (the credential deny-list) reaches every leg's copy.
+stage_promote() { # stage_promote REPO
+  local rel
+  mkdir -p "$1/tools" && cp "$SRC" "$1/tools/promote.sh" && chmod +x "$1/tools/promote.sh" || return 1
+  for rel in $(sed -n 's/^\. \([A-Za-z0-9_./-]*\)$/\1/p' "$SRC"); do
+    cp "$HERE/../$rel" "$1/$rel" || return 1
+  done
+}
+
 # Build a repository holding a dune rule that diffs `<name>.expected` against
 # the output of `cat gen.txt`, on `main`, plus two branches that each rewrite
 # both files. `gen.txt` is what the test "computes"; the golden is what it is
 # pinned to. Echoes the repo path.
 scenario() { # scenario NAME
   local repo="$TMP/$1"
-  mkdir -p "$repo/tools" || return 1
-  cp "$SRC" "$repo/tools/promote.sh" || return 1
-  chmod +x "$repo/tools/promote.sh" || return 1
+  stage_promote "$repo" || return 1
   (
     cd "$repo" || exit 1
     printf '(lang dune 3.20)\n' >dune-project
@@ -240,7 +248,7 @@ fi
 # ---------------------------------------------------------------- leg 4
 # Outside a merge the guard does nothing: a promotion stays out of the index.
 repo="$TMP/nomerge"
-mkdir -p "$repo/tools" && cp "$SRC" "$repo/tools/promote.sh" && chmod +x "$repo/tools/promote.sh"
+stage_promote "$repo"
 ok=1
 (
   cd "$repo" || exit 1
@@ -425,5 +433,47 @@ SHIM
     report 0 "floor stderr list: $control guard commits the expected blob"
   else report 1 "floor stderr list: $control guard commits the expected blob" "$out"; fi
 done
+
+# ------------------------------------------------------- credentials (gh-ocannl-1280)
+# promote.sh's dune calls run without the caller's credentials, which dune would record in
+# `_build/trace.csexp`, and with its plain variables. A dune shim writes the names in its
+# environment and hands over to the real dune; the run is mid-merge, so both the guard's list
+# and the apply go through it. The negative control is the same scenario through a copy with
+# the scrub cut out, which must hand dune both credentials.
+credential_leg() { # NAME SCRIPT -> the names the shim saw, one per line, in $TMP/NAME.names
+  local repo
+  repo="$(scenario "$1")" && resolve_and_test "$repo" || return 1
+  cp "$2" "$repo/tools/promote.sh" || return 1
+  mkdir -p "$repo/cred-shim" || return 1
+  cat >"$repo/cred-shim/dune" <<SHIM
+#!/usr/bin/env bash
+env | sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' >>"$TMP/$1.names"
+exec "$(command -v dune)" "\$@"
+SHIM
+  chmod +x "$repo/cred-shim/dune" || return 1
+  (cd "$repo" && GH_TOKEN=fixture-not-a-token FOO_API_KEY=fixture-not-a-key PROMOTE_PLAIN=kept \
+    PATH="$repo/cred-shim:$PATH" tools/promote.sh) >"$TMP/$1.out" 2>&1 || return 1
+  [ -s "$TMP/$1.names" ]
+}
+names_have() { grep -qx "$1" "$2"; }
+cred_cut="$TMP/promote-no-scrub.sh"
+awk '/^eval "\$\(credential_env_scrub_text\)" \|\| die / { next } { print }' "$SRC" >"$cred_cut"
+if cmp -s "$SRC" "$cred_cut"; then
+  report 1 "credentials: promote.sh's dune runs without GH_TOKEN and FOO_API_KEY" \
+    "the scrub could not be cut out of $SRC for the negative control"
+elif ! credential_leg cred-ship "$SRC"; then
+  report 1 "credentials: promote.sh's dune runs without GH_TOKEN and FOO_API_KEY" "setup or run failed; see $TMP/cred-ship.out"
+elif names_have GH_TOKEN "$TMP/cred-ship.names" || names_have FOO_API_KEY "$TMP/cred-ship.names" ||
+  ! names_have PROMOTE_PLAIN "$TMP/cred-ship.names"; then
+  report 1 "credentials: promote.sh's dune runs without GH_TOKEN and FOO_API_KEY" "names: $(tr '\n' ' ' <"$TMP/cred-ship.names")"
+else
+  report 0 "credentials: promote.sh's dune runs without GH_TOKEN and FOO_API_KEY"
+  if credential_leg cred-cut "$cred_cut" && names_have GH_TOKEN "$TMP/cred-cut.names" &&
+    names_have FOO_API_KEY "$TMP/cred-cut.names"; then
+    report 0 "negative control: without the scrub, promote.sh's dune sees both credentials"
+  else
+    report 1 "negative control: without the scrub, promote.sh's dune sees both credentials" "see $TMP/cred-cut.out"
+  fi
+fi
 
 finish

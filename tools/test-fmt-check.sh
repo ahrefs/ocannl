@@ -31,6 +31,13 @@ case "$1" in
     echo "Formatter diff" >&2
     exit 7
     ;;
+  credentials)
+    # gh-ocannl-1280: the formatter command runs without the caller's credentials, and with
+    # its plain variables.
+    [ -z "${GH_TOKEN+x}${FOO_API_KEY+x}" ] || { echo "credentials reached the formatter" >&2; exit 3; }
+    [ "${FMT_CHECK_PLAIN:-}" = kept ] || { echo "the plain variable did not reach it" >&2; exit 4; }
+    echo "Formatting is clean"
+    ;;
   *)
     exit 2
     ;;
@@ -73,6 +80,30 @@ for errexit in off on; do
   done
 done
 set +e
+
+# Credentials never reach the formatter command (gh-ocannl-1280): a fake GH_TOKEN and FOO_API_KEY
+# are exported beside a plain variable. The negative control is a copy with the scrub cut out,
+# beside the helper it still sources, which must hand the command both.
+export GH_TOKEN=fixture-not-a-token FOO_API_KEY=fixture-not-a-key FMT_CHECK_PLAIN=kept
+check 0 "a formatter run with credentials exported, which must not see them," credentials
+cp "$script_dir/credential-env.sh" "$fixture_dir/credential-env.sh"
+awk '/^eval "\$\(credential_env_scrub_text\)" \|\| \{$/ { skip = 1 } skip { if ($0 == "}") skip = 0; next } { print }' \
+  "$subject" >"$fixture_dir/fmt-check.sh"
+chmod +x "$fixture_dir/fmt-check.sh"
+got=0
+if cmp -s "$subject" "$fixture_dir/fmt-check.sh"; then
+  report 1 "negative control: fmt-check without the scrub hands the formatter both credentials" \
+    "the scrub could not be cut out of $subject"
+else
+  "$fixture_dir/fmt-check.sh" "$fixture" credentials >"$fixture_dir/no-scrub.log" 2>&1 || got=$?
+  if [ "$got" -eq 3 ]; then
+    report 0 "negative control: fmt-check without the scrub hands the formatter both credentials"
+  else
+    report 1 "negative control: fmt-check without the scrub hands the formatter both credentials" \
+      "exited $got; see $fixture_dir/no-scrub.log"
+  fi
+fi
+unset GH_TOKEN FOO_API_KEY FMT_CHECK_PLAIN
 
 # A real project whose only fault is an invalid doc comment in otherwise
 # formatted code: `dune fmt` prints the warning once, promotes nothing, and
