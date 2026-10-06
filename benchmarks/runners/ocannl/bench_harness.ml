@@ -1282,10 +1282,11 @@ let measure_and_emit ~routines ~protocol ~backend ~variant ?(precision = "f32") 
   let { workload; parity_steps; warmup_steps; timed_steps; fixture } = protocol in
   Stdio.eprintf "bench: compiled in %.1fs, starting %d parity steps\n%!" compile_s parity_steps;
   let dominant_kernel = if dominant_kernel_enabled () then dominant_kernel else None in
+  let profile = Option.map Utils.active_profile ~f:(fun (_, name, _) -> name) in
   let checkpoint ~completed_steps at losses =
     Stdio.Out_channel.output_string checkpoint_out
       (Bench_json.checkpoint_prefix
-      ^ Bench_json.checkpoint_line ~backend ~variant ~precision ~workload ~fixture
+      ^ Bench_json.checkpoint_line ~backend ~variant ~precision ~profile ~workload ~fixture
           ~executable:Stdlib.Sys.executable_name ~parity_steps
           ~dominant_kernel:(Option.is_some dominant_kernel) ~completed_steps ~at ~losses
       ^ "\n");
@@ -1350,8 +1351,7 @@ let measure_and_emit ~routines ~protocol ~backend ~variant ?(precision = "f32") 
     Utils.get_global_arg_with_source ~default:"all" ~arg_name:"simplify_fp_algebra"
   in
   let line =
-    Bench_json.result_line ~backend ~variant ~precision
-      ~profile:(Option.map Utils.active_profile ~f:(fun (_, name, _) -> name))
+    Bench_json.result_line ~backend ~variant ~precision ~profile
       ~regime_knobs:
         (List.map (Utils.profile_payload_sources "approximate") ~f:(fun (key, resolution) ->
              ( key,

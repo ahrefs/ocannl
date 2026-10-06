@@ -351,24 +351,25 @@ let () =
    killed in one of those stages leaves behind. Printed with their prefix, as a runner writes them:
    [benchmarks/test_orchestrate.py] feeds these very lines to the driver's salvage path, so the
    prefix and the fields it reads are pinned from both sides. One is taken mid-parity on a diverged
-   trajectory, the other after the timed steps, as the dominant-kernel instrument starts. *)
+   trajectory under the approximate profile, the other after the timed steps, as the dominant-kernel
+   instrument starts, under no profile. *)
 let checkpoints =
   [
     ( "mid-parity",
       Bench_json.checkpoint_line ~backend:"hip" ~variant:"default" ~precision:"f16"
-        ~workload:"gpt2_mini_train_s1024"
+        ~profile:(Some "approximate") ~workload:"gpt2_mini_train_s1024"
         ~fixture:(Some ("fixtures/gpt2_mini_train_s1024.safetensors", 14756136))
         ~executable:"bench_gpt.exe" ~parity_steps:6 ~dominant_kernel:true ~completed_steps:2
         ~at:(Bench_json.In_parity 2) ~losses:[| 10.375; Float.nan |] );
     ( "before diagnostics",
-      Bench_json.checkpoint_line ~backend:"hip" ~variant:"default" ~precision:"f16"
+      Bench_json.checkpoint_line ~backend:"hip" ~variant:"default" ~precision:"f16" ~profile:None
         ~workload:"gpt2_mini_train_s1024"
         ~fixture:(Some ("fixtures/gpt2_mini_train_s1024.safetensors", 14756136))
         ~executable:"bench_gpt.exe" ~parity_steps:6 ~dominant_kernel:true ~completed_steps:46
         ~at:Bench_json.Before_diagnostics
         ~losses:[| 10.375; 10.25; 10.125; 10.0; 9.875; 9.75 |] );
     ( "in memory, instrument off",
-      Bench_json.checkpoint_line ~backend:"cc" ~variant:"self-test" ~precision:"f32"
+      Bench_json.checkpoint_line ~backend:"cc" ~variant:"self-test" ~precision:"f32" ~profile:None
         ~workload:"selftest-tiny" ~fixture:None ~executable:"bench_self_test.exe" ~parity_steps:2
         ~dominant_kernel:false ~completed_steps:13 ~at:Bench_json.Before_diagnostics
         ~losses:[| 1.25; 1.125 |] );
@@ -391,12 +392,16 @@ let () =
       List.exists [ "step_ms"; "queued_step_ms"; "compile_s"; "dominant_kernel" ] ~f:(fun k ->
           not (Yojson.Safe.equal (member k j) `Null)));
   let mid = List.Assoc.find_exn parsed ~equal:String.equal "mid-parity" in
+  let late = List.Assoc.find_exn parsed ~equal:String.equal "before diagnostics" in
+  p "a checkpoint names the profile its process resolved, and null for none"
+    (Yojson.Safe.equal (member "profile" mid) (`String "approximate")
+    && Yojson.Safe.equal (member "profile" late) `Null
+    && List.Assoc.mem (Yojson.Safe.Util.to_assoc late) ~equal:String.equal "profile");
   p "a mid-parity checkpoint keeps its completed losses, a diverged one as null"
     (Yojson.Safe.equal (member "losses" mid) (`List [ `Float 10.375; `Null ])
     && Yojson.Safe.equal (stage "parity" mid) (`String "running")
     && Yojson.Safe.equal (stage "timing" mid) (`String "pending")
     && Yojson.Safe.equal (stage "dominant_kernel" mid) (`String "pending"));
-  let late = List.Assoc.find_exn parsed ~equal:String.equal "before diagnostics" in
   p "the checkpoint before the instrument says every measured stage is complete and it is running"
     (Yojson.Safe.equal (member "stages" late)
        (`Assoc

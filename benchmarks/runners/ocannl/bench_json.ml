@@ -287,6 +287,9 @@ let dominant_kernel_object ?note ~ceiling (kernel : kernel option) =
     (opt (num ~prec:4) pct)
     (if String.is_empty note then "null" else str note)
 
+(** The [profile] value of a result or checkpoint line: the profile's name, or [null] for none. *)
+let profile_value = function Some p -> Printf.sprintf {|"%s"|} (string p) | None -> "null"
+
 (** The result line [orchestrate.py] parses, as a string without its trailing newline.
 
     [shipped_mma] inventories every compiled step routine, including conditional host-gated SGD,
@@ -331,9 +334,6 @@ let result_line ~backend ~variant ~precision ~profile ~regime_knobs ~workload ~c
         Printf.sprintf {|"simplify_fp_algebra":{"value":"%s","source":"%s"},|} (string value)
           (string source)
   in
-  let profile_field =
-    match profile with Some p -> Printf.sprintf {|"%s"|} (string p) | None -> "null"
-  in
   let peak_bytes_field, peak_counter_field, peak_source_field =
     match peak_memory with
     | None -> ("null", "null", "null")
@@ -344,7 +344,7 @@ let result_line ~backend ~variant ~precision ~profile ~regime_knobs ~workload ~c
   in
   Printf.sprintf
     {|{"framework":"ocannl","backend":"%s","variant":"%s","precision":"%s","profile":%s,"regime_knobs":%s,"workload":"%s","compile_s":%s,"searched":%b,%s%s%s"step_ms":{"p10":%s,"p50":%s,"p90":%s},"queued_step_ms":%s,"timed_steps":%d,"peak_memory_bytes":%s,"peak_memory_counter":%s,"peak_memory_source":%s,"dominant_kernel":%s,"shipped_mma":%s,"losses":[%s]}|}
-    (string backend) (string variant) (string precision) profile_field
+    (string backend) (string variant) (string precision) (profile_value profile)
     (regime_knobs_object regime_knobs)
     (string workload) (fixed compile_s) searched tokens_field tune_field algebra_field (num p10)
     (num p50) (num p90) (num queued_ms) timed_steps peak_bytes_field peak_counter_field
@@ -384,9 +384,12 @@ type checkpoint_at =
     [None] for a model fabricated in memory; the drivers stamp content digests and revisions, as
     they do on result lines. [losses] are the parity losses completed so far, in the result line's
     own spelling ([nums ~prec:9]), so a checkpoint and the result line of the same run carry the
-    same bytes for the same step. *)
-let checkpoint_line ~backend ~variant ~precision ~workload ~fixture ~executable ~parity_steps
-    ~dominant_kernel ~completed_steps ~at ~losses =
+    same bytes for the same step. [profile] is the profile this process resolved, as on the result
+    line: the losses' numerics regime travels with them, so [orchestrate.py]'s saved-loss diagnostic
+    reads the envelope off the checkpoint rather than off what the sweep remembered dispatching, and
+    an offline reader of [partial-failures.jsonl] can recompute it. *)
+let checkpoint_line ~backend ~variant ~precision ~profile ~workload ~fixture ~executable
+    ~parity_steps ~dominant_kernel ~completed_steps ~at ~losses =
   let parity, warmup, timing, instrument =
     match at with
     | In_parity k ->
@@ -400,7 +403,7 @@ let checkpoint_line ~backend ~variant ~precision ~workload ~fixture ~executable 
     | Some (path, bytes) -> Printf.sprintf {|{"path":"%s","bytes":%d}|} (string path) bytes
   in
   Printf.sprintf
-    {|{"record":"checkpoint","accepted":false,"framework":"ocannl","backend":"%s","variant":"%s","precision":"%s","workload":"%s","fixture":%s,"executable":"%s","stages":{"parity":"%s","warmup":"%s","timing":"%s","dominant_kernel":"%s","result":"pending"},"parity_steps":%d,"completed_steps":%d,"losses":[%s]}|}
-    (string backend) (string variant) (string precision) (string workload) fixture_field
-    (string executable) parity warmup timing instrument parity_steps completed_steps
+    {|{"record":"checkpoint","accepted":false,"framework":"ocannl","backend":"%s","variant":"%s","precision":"%s","profile":%s,"workload":"%s","fixture":%s,"executable":"%s","stages":{"parity":"%s","warmup":"%s","timing":"%s","dominant_kernel":"%s","result":"pending"},"parity_steps":%d,"completed_steps":%d,"losses":[%s]}|}
+    (string backend) (string variant) (string precision) (profile_value profile) (string workload)
+    fixture_field (string executable) parity warmup timing instrument parity_steps completed_steps
     (nums ~prec:9 losses)

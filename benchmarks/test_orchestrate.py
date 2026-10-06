@@ -292,22 +292,51 @@ class SavedLossParityTest(unittest.TestCase):
     def test_drift_is_read_against_the_envelope_the_cell_would_have_been_gated_at(self):
         saved = self.checkpoint(complete=True)
         self.assertEqual(saved["precision"], "f16")  # gated at PARITY_TOL_PRECISION["f16"]
+        self.assertIsNone(saved["profile"])  # its runner resolved no profile: the exact regime
         close = [self.reference(saved, 1 + 1e-4)]
         apart = [self.reference(saved, 1.005)]
 
         inside = orchestrate.saved_loss_parity(saved, "exact", close)
         outside = orchestrate.saved_loss_parity(saved, "exact", apart)
-        # The same drift fits the approximate regime's wider envelope: the regime is threaded.
-        approx = orchestrate.saved_loss_parity(saved, "approximate", apart)
+        # The same drift fits the approximate regime's wider envelope. A checkpoint predating the
+        # `profile` field says nothing of its regime, so the dispatched one stands in.
+        legacy = {k: v for k, v in saved.items() if k != "profile"}
+        approx = orchestrate.saved_loss_parity(legacy, "approximate", apart)
 
         self.assertIn("6 of 6 saved losses", inside)
         self.assertIn("inside the envelope 0.002", inside)
         self.assertIn("outside the envelope 0.002", outside)
-        self.assertIn("inside the envelope 0.01", approx)
+        self.assertIn("inside the envelope 0.01 [approximate]", approx)
         for note in (inside, outside, approx):
             # Never in the parity column's vocabulary: a reader must not take it for a verdict.
             for verdict in ("PASS", "FAIL", "REF", "DIVERGED"):
                 self.assertNotIn(verdict, note)
+
+    def test_the_envelope_regime_is_read_off_the_checkpoint_not_the_dispatch(self):
+        cut = self.checkpoint(complete=False)
+        saved = self.checkpoint(complete=True)
+        self.assertEqual(cut["profile"], "approximate")  # as the OCaml emitter wrote it
+        # Step 0, the one finite step both share, is 0.5% off: outside f16's exact envelope,
+        # inside the approximate one.
+        ref = [self.reference(saved, 1.005)]
+
+        # Whatever the call site passes -- nothing, the dispatched regime, or a forgotten
+        # argument -- the losses are read in the regime their runner resolved.
+        for dispatched in (None, "approximate"):
+            with self.subTest(dispatched=dispatched):
+                note = orchestrate.saved_loss_parity(cut, dispatched, ref)
+                self.assertIn("inside the envelope 0.01 [approximate]", note)
+                self.assertNotIn("dispatched", note)
+        # A runner that resolved another regime than the sweep dispatched keeps its own envelope,
+        # and the disagreement is named rather than silently resolved either way.
+        leaked = orchestrate.saved_loss_parity(saved, "approximate", ref)
+        self.assertIn("outside the envelope 0.002", leaked)
+        self.assertIn("the runner resolved the exact regime, the sweep dispatched approximate",
+                      leaked)
+        # A non-approximate profile is still the exact regime, as `runner_regime` reads it.
+        pinned = orchestrate.saved_loss_parity(dict(saved, profile="reproducible"), "exact", ref)
+        self.assertIn("outside the envelope 0.002", pinned)
+        self.assertNotIn("dispatched", pinned)
 
     def test_a_trajectory_that_went_non_finite_reports_where_and_its_drift_before(self):
         cut = self.checkpoint(complete=False)
@@ -404,12 +433,17 @@ class FailureRecordTest(unittest.TestCase):
         checkpoint["executable"] = str(runner)
 
         record = orchestrate.failure_record(
-            "cell", "TIMED OUT", {}, dict(checkpoint), provenance=dict(stamp, **source)
+            "cell", "TIMED OUT", {}, dict(checkpoint), provenance=dict(stamp, **source),
+            regime="approximate",
         )
         line = json.dumps(orchestrate.json_safe(record), allow_nan=False)
 
         back = strict_loads(line)
         self.assertEqual(back["checkpoint"], checkpoint)  # its own `fixture` object untouched
+        # Both sides of the saved-loss diagnostic, for a reader with only this file: the regime the
+        # sweep dispatched, and the profile the runner resolved, inside the checkpoint.
+        self.assertEqual(back["regime"], "approximate")
+        self.assertIn("profile", back["checkpoint"])
         # The binary's own bytes name it, whatever HEAD or --skip-build said.
         digest = hashlib.sha256(b"the runner that ran").hexdigest()
         self.assertEqual(back["provenance"], dict(stamp, **source, executable_sha256=digest))
@@ -422,6 +456,9 @@ class FailureRecordTest(unittest.TestCase):
 
         self.assertNotIn("checkpoint", record)
         self.assertNotIn("provenance", record)
+        # The dispatched regime is the record's own field, stated as null when the caller gave none.
+        self.assertIn("regime", record)
+        self.assertIsNone(record["regime"])
 
     def test_the_source_identity_names_this_checkout(self):
         got = orchestrate.source_identity(HERE)
@@ -435,7 +472,7 @@ class FailureRecordTest(unittest.TestCase):
         source = Path(orchestrate.__file__).read_text()
         main = source[source.index("\ndef main():") :]
         self.assertIn("source = source_identity(ROOT)", main)
-        self.assertIn("provenance=dict(stamp, **source)", main)
+        self.assertIn("provenance=dict(stamp, **source), regime=regime", main)
         # The report's saved-loss diagnostic reads the checkpoint and regime off the failure.
         self.assertIn("failures.append(Failure(label, note, checkpoint, regime))", main)
         # Both the cell and its search pass go through the helper that records an interrupted
