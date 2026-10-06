@@ -6,9 +6,10 @@
 # applied: tools/test-run.sh for everything it launches, tools/sweep.sh inside every `opam exec` of
 # a unit leg's shell text (local, or sent to a remote box, whose own environment holds its own
 # token), tools/machine-verify-far.sh inside every `opam exec` on the verified machine, and every
-# other script here that starts dune itself (fmt-check.sh, promote.sh, api-drift.sh). `test/operations/env_var_deps` reads
-# `credential_env_patterns` below and refuses a dune stanza that declares a match as an
-# `(env_var ...)` dependency, so no test can come to need one.
+# other script here that starts dune itself (fmt-check.sh, promote.sh, dune-quiet.sh,
+# api-drift.sh). `test/operations/env_var_deps` reads `credential_env_patterns` below and refuses
+# a dune stanza that declares a match as an `(env_var ...)` dependency or reads one through
+# `%{env:NAME=...}`, so no test can come to need one.
 #
 # Sourced, never executed. POSIX sh: machine-verify carries the scrub's text to a far side that
 # runs it under dash.

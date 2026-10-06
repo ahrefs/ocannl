@@ -289,7 +289,7 @@ let raw_entries =
         "[scanner-refusal:ba5d90fc4bcec944ebd169329c706968] goldens on the";
         "[scanner-refusal:c1a398b587b5de3d7d02145dc45274a6] alias <suite>-<name> that";
         "[scanner-refusal:941a9fb77d867c7b1576a0f19ee5db3b] declares";
-        "[scanner-refusal:94206cc268c33be0df8fde294e7233cd] env_var";
+        "[scanner-refusal:7aeca22f89e6555c3b97967f8bbdaba4] credential variable on";
         "[scanner-refusal:2b67d02d52c3465bfba40d167802f0a7] env_var";
         "[scanner-refusal:0deef0cb94c45615f32ee84ac2e76f8e] declares tracing gates";
         "[scanner-refusal:02e183a4105132ec092206c1d35d6247] reads the tracing";
@@ -600,7 +600,7 @@ let raw_direct_evidence =
       "a run handed no dune file and no source is refused: true" );
     ( "env_var_deps.ml:8dbf084aae3ed7d3e4ce33fb0d06e710",
       "a run handed no deny-list is refused rather than passing every declaration: true" );
-    ( "env_var_deps.ml:94206cc268c33be0df8fde294e7233cd",
+    ( "env_var_deps.ml:7aeca22f89e6555c3b97967f8bbdaba4",
       "a stanza declaring `(env_var GH_TOKEN)`, a name on the deny-list, is refused by name: true"
     );
     ( "env_var_deps.ml:09e01a62cce1d340393a2244ed33ea10",

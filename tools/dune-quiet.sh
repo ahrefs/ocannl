@@ -15,6 +15,15 @@
 #   e.g. tools/dune-quiet.sh build --root . @check
 
 command -v dune >/dev/null 2>&1 || . "$(dirname "$0")/opam-env.sh"
+# Credentials never reach dune, which records every spawned process's environment in
+# `_build/trace.csexp` (gh-ocannl-1280): the deny-list tools/test-run.sh applies, after the opam
+# environment above, whose updates could set one.
+# shellcheck source=credential-env.sh
+. "$(dirname "$0")/credential-env.sh" || exit 2
+eval "$(credential_env_scrub_text)" || {
+  echo "dune-quiet.sh: cannot remove credential variables:$credential_env_left" >&2
+  exit 2
+}
 
 status=0
 {

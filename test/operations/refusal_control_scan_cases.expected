@@ -274,7 +274,7 @@ env_var_deps.ml: [scanner-refusal:4012b24c7623acd977522e8f2eacf2bb] attaches a r
 env_var_deps.ml: [scanner-refusal:ba5d90fc4bcec944ebd169329c706968] goldens on the (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:c1a398b587b5de3d7d02145dc45274a6] alias <suite>-<name> that (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:941a9fb77d867c7b1576a0f19ee5db3b] declares (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
-env_var_deps.ml: [scanner-refusal:94206cc268c33be0df8fde294e7233cd] env_var (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:7aeca22f89e6555c3b97967f8bbdaba4] credential variable on (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:2b67d02d52c3465bfba40d167802f0a7] env_var (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:0deef0cb94c45615f32ee84ac2e76f8e] declares tracing gates (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:02e183a4105132ec092206c1d35d6247] reads the tracing (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true

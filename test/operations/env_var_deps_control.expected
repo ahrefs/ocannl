@@ -21,12 +21,15 @@ module calls `Test_utils.Generated.init`, run by a rule that does or does not de
 the checker reports the stanza and exits 1 when the rule running it omits the declaration: true
 the same tree with the declaration added passes and says nothing about it: true
 The credential rule is put to the declaring tree above plus one rule whose only dependency is
-a single `(env_var ...)`: a deny-listed name, a name matched by a pattern, and a near miss,
-then the near miss again with no deny-list and with one the reader refuses (gh-ocannl-1280).
+a single `(env_var ...)`: a deny-listed name, a name matched by a pattern, and a near miss;
+then to the same rule reading a name through `%{env:...}` instead, and to the near miss
+again with no deny-list and with one the reader refuses (gh-ocannl-1280).
 
 a stanza declaring `(env_var GH_TOKEN)`, a name on the deny-list, is refused by name: true
 a stanza declaring `(env_var FOO_API_KEY)`, matched by the deny-list's `*_API_KEY`, is refused by name: true
 the same tree declaring `(env_var FOO_API_KEYS)`, which no pattern matches, passes: true
+a stanza reading `%{env:GH_TOKEN=}`, declaring nothing, is refused by name: true
+the same stanza reading `%{env:FOO_API_KEYS=}` passes: true
 a run handed no deny-list is refused rather than passing every declaration: true
 a deny-list pattern of a shape the reader cannot match like the shell is refused: true
 
@@ -216,7 +219,7 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:4012b24c7623acd977522e8f2eacf2bb] attaches a rule
   [scanner-refusal:ba5d90fc4bcec944ebd169329c706968] goldens on the
   [scanner-refusal:c1a398b587b5de3d7d02145dc45274a6] alias <suite>-<name> that
-  [scanner-refusal:94206cc268c33be0df8fde294e7233cd] env_var
+  [scanner-refusal:7aeca22f89e6555c3b97967f8bbdaba4] credential variable on
   [scanner-refusal:2b67d02d52c3465bfba40d167802f0a7] env_var
   [scanner-refusal:0deef0cb94c45615f32ee84ac2e76f8e] declares tracing gates
   [scanner-refusal:02e183a4105132ec092206c1d35d6247] reads the tracing

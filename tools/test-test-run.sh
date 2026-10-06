@@ -170,7 +170,8 @@
 #      real dune is at hand in its _build/trace.csexp; a copy with the scrub
 #      cut out hands dune both, the negative control for each observer. With
 #      no dune on PATH, credentials the opam environment select_dune sources
-#      sets are scrubbed too, against a copy without that second scrub.
+#      sets are scrubbed too, against a copy without that second scrub; and
+#      tools/dune-quiet.sh, run directly, scrubs on its own.
 #  59-63 sit after leg 47: the source a run tested, recorded at launch
 #      (gh-ocannl-992), against a committed fixture checkout.
 #  59. a clean checkout records its HEAD as `head` and an empty `dirty`.
@@ -5096,6 +5097,41 @@ else
   else
     report 1 "$cred_opam_nc_label" "names: $(tr '\n' ' ' <"$TMP/cred-opam-cut.names" 2>/dev/null)"
   fi
+fi
+# The Windows wrapper test-run.sh starts dune through, which AGENTS.md also has a Git Bash session
+# run by hand, scrubs on its own: a copy beside the helper, the fixture dune on PATH, and a copy
+# with the scrub cut out as the negative control.
+cred_quiet_label="credentials: tools/dune-quiet.sh, run directly, starts dune without them"
+cred_quiet_nc_label="negative control: dune-quiet.sh without its scrub hands dune both credentials"
+mkdir -p "$TMP/cred-quiet" "$TMP/cred-quiet-cut"
+cp "$HERE/dune-quiet.sh" "$HERE/credential-env.sh" "$TMP/cred-quiet/"
+cp "$HERE/credential-env.sh" "$TMP/cred-quiet-cut/"
+awk '/^eval "\$\(credential_env_scrub_text\)" \|\| \{$/ { skip = 1 } skip { if ($0 == "}") skip = 0; next } { print }' \
+  "$HERE/dune-quiet.sh" >"$TMP/cred-quiet-cut/dune-quiet.sh"
+cred_quiet_run() { # dir
+  rm -f "$1.names"
+  GH_TOKEN=fixture-not-a-token FOO_API_KEY=fixture-not-a-key CRED_TEST_PLAIN=kept \
+    CRED_TEST_NAMES=$1.names PATH=$cred_bin:$PATH bash "$1/dune-quiet.sh" build @fixture >"$1.out" 2>&1
+}
+if cmp -s "$HERE/dune-quiet.sh" "$TMP/cred-quiet-cut/dune-quiet.sh"; then
+  echo "leg 79: the scrub could not be cut out of tools/dune-quiet.sh; the mutant is broken" >&2
+  exit 2
+fi
+cred_rc=0
+cred_quiet_run "$TMP/cred-quiet" || cred_rc=$?
+if [ "$cred_rc" = 0 ] && [ -s "$TMP/cred-quiet.names" ] && ! cred_has GH_TOKEN "$TMP/cred-quiet.names" &&
+  ! cred_has FOO_API_KEY "$TMP/cred-quiet.names" && cred_has CRED_TEST_PLAIN "$TMP/cred-quiet.names"; then
+  report 0 "$cred_quiet_label"
+else
+  report 1 "$cred_quiet_label" "exit $cred_rc; names: $(tr '\n' ' ' <"$TMP/cred-quiet.names" 2>/dev/null)"
+fi
+cred_rc=0
+cred_quiet_run "$TMP/cred-quiet-cut" || cred_rc=$?
+if [ "$cred_rc" = 0 ] && cred_has GH_TOKEN "$TMP/cred-quiet-cut.names" &&
+  cred_has FOO_API_KEY "$TMP/cred-quiet-cut.names"; then
+  report 0 "$cred_quiet_nc_label"
+else
+  report 1 "$cred_quiet_nc_label" "exit $cred_rc; see $TMP/cred-quiet-cut.out"
 fi
 # The trace itself, which is what the issue found tokens in. A host with no
 # dune skips it (the toolchain-free CI job); a dune that writes no trace there
