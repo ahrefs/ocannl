@@ -1835,7 +1835,7 @@ type affine_fit = {
 type batch_settle =
   | Isolated_objective  (** {!Isolated}: no calibration, depth 1. *)
   | Single_estimate  (** The cc/Metal policy: the synchronized singles' estimate alone. *)
-  | Singles_within_target
+  | Singles_reach_target
       (** The singles reached the target and the provisional depth-2 pair confirmed depth 1. *)
   | Measured_batch  (** A resolved fit confirmed a depth a probe (or the singles) measured. *)
   | Affine_projection  (** A resolved fit's projection to a depth no probe measured. *)
