@@ -171,7 +171,9 @@
 #      cut out hands dune both, the negative control for each observer. With
 #      no dune on PATH, credentials the opam environment select_dune sources
 #      sets are scrubbed too, against a copy without that second scrub; and
-#      tools/dune-quiet.sh, run directly, scrubs on its own.
+#      tools/dune-quiet.sh, run directly, scrubs on its own. The scrub text
+#      itself fails closed, under sh, bash and dash where installed: an
+#      unrunnable env and a deny-listed non-identifier refuse.
 #  59-63 sit after leg 47: the source a run tested, recorded at launch
 #      (gh-ocannl-992), against a committed fixture checkout.
 #  59. a clean checkout records its HEAD as `head` and an empty `dirty`.
@@ -5098,6 +5100,54 @@ else
     report 1 "$cred_opam_nc_label" "names: $(tr '\n' ' ' <"$TMP/cred-opam-cut.names" 2>/dev/null)"
   fi
 fi
+# The scrub text itself fails CLOSED, under every shell at hand (dash where installed): an `env`
+# that cannot run is a refusal, never an empty environment that passes; a deny-listed name a parent
+# passed that is not a shell identifier (`odd-name_TOKEN`) cannot be unset, so it refuses too,
+# naming it. With PATH holding nothing but `env`, valid credentials are removed and a plain variable
+# stays -- the text needs no other external program, so no parser stage can fail open -- and a
+# value spanning lines with a glob character in it neither breaks the walk nor leaks the caller's
+# IFS or `set -f`.
+cred_text_label="credentials: the scrub text refuses when env cannot run, and on a deny-listed non-identifier"
+cred_text_ok_label="credentials: the scrub text, with only env on PATH, removes valid names and restores IFS and set -f"
+cred_text_detail= cred_text_ok_detail=
+cred_nl='
+'
+cred_env_only=$TMP/cred-env-only
+mkdir -p "$cred_env_only"
+ln -s "$(command -v env)" "$cred_env_only/env"
+cred_helper=$HERE/credential-env.sh
+for cred_shell in /bin/sh "$(command -v bash)" "$(command -v dash 2>/dev/null)"; do
+  [ -n "$cred_shell" ] || continue
+  cred_rc=0
+  cred_out=$(env -i PATH=/nonexistent GH_TOKEN=fixture-not-a-token "$cred_shell" -c \
+    '. "$1"; eval "$(credential_env_scrub_text)"' cred "$cred_helper" 2>&1) || cred_rc=$?
+  [ "$cred_rc" != 0 ] || cred_text_detail="$cred_text_detail; $cred_shell passed with env unrunnable"
+  cred_rc=0
+  # Refused by name -- or, where the shell itself drops such an entry at startup (dash), gone from
+  # what its children inherit, which the trailing `env` shows.
+  cred_out=$(env -i "PATH=$cred_env_only" 'odd-name_TOKEN=fixture-not-a-token' "$cred_shell" -c \
+    '. "$1"; eval "$(credential_env_scrub_text)" || { printf "%s\n" "$credential_env_left"; exit 1; }; env' \
+    cred "$cred_helper" 2>&1) || cred_rc=$?
+  case $cred_rc:$cred_out in
+    1:*"odd-name_TOKEN (not a shell identifier)"*) ;;
+    0:*odd-name_TOKEN*) cred_text_detail="$cred_text_detail; $cred_shell passed odd-name_TOKEN to its children" ;;
+    0:*) ;;
+    *) cred_text_detail="$cred_text_detail; $cred_shell on odd-name_TOKEN: exit $cred_rc, said: $cred_out" ;;
+  esac
+  cred_rc=0
+  cred_out=$(env -i "PATH=$cred_env_only" GH_TOKEN=fixture-not-a-token "FOO_API_KEY=fixture
+BAR_TOKEN=* not-a-key" CRED_TEST_PLAIN=kept "$cred_shell" -c \
+    'set -u; IFS=" "; . "$1"; eval "$(credential_env_scrub_text)" || exit 3
+     printf "ifs=[%s] opts=%s\n" "$IFS" "$-"; env' cred "$cred_helper" 2>&1) || cred_rc=$?
+  case $cred_rc in 0) ;; *) cred_text_ok_detail="$cred_text_ok_detail; $cred_shell exited $cred_rc: $cred_out" ;; esac
+  case $cred_out in *GH_TOKEN=* | *FOO_API_KEY=*) cred_text_ok_detail="$cred_text_ok_detail; $cred_shell left a credential" ;; esac
+  case $cred_out in *CRED_TEST_PLAIN=kept*) ;; *) cred_text_ok_detail="$cred_text_ok_detail; $cred_shell lost the plain variable" ;; esac
+  cred_first=${cred_out%%"$cred_nl"*}
+  case $cred_first in "ifs=[ ] opts="*f*) cred_text_ok_detail="$cred_text_ok_detail; $cred_shell left set -f on" ;; "ifs=[ ] opts="*) ;;
+    *) cred_text_ok_detail="$cred_text_ok_detail; $cred_shell did not restore IFS: $cred_first" ;; esac
+done
+report "$([ -z "$cred_text_detail" ] && echo 0 || echo 1)" "$cred_text_label" "${cred_text_detail#; }"
+report "$([ -z "$cred_text_ok_detail" ] && echo 0 || echo 1)" "$cred_text_ok_label" "${cred_text_ok_detail#; }"
 # The Windows wrapper test-run.sh starts dune through, which AGENTS.md also has a Git Bash session
 # run by hand, scrubs on its own: a copy beside the helper, the fixture dune on PATH, and a copy
 # with the scrub cut out as the negative control.
