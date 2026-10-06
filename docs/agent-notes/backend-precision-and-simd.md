@@ -1787,13 +1787,21 @@ files.
   linear unroller reciprocates the base first, changing overflow/underflow behavior relative to
   reciprocating the positive power. Positive unrolling is bounded to exponents 0 through 8.
 
-- Fractional and dynamic half powers on CUDA/HIP widen both operands, call f32 `powf` and round
-  back to half once (gh-ocannl-1198), as bf16 already did and as cc's codegen does: neither vendor
-  has a half pow, and the old `hexp2(hlog2(b), e)` spelling passed two arguments to a unary
-  intrinsic, so NVRTC/HIPRTC refused every such kernel. The domain is f32 `powf`'s under the
-  backend's math flags (CUDA compiles `--use_fast_math`): NaN for a negative base under a
-  fractional exponent, and under CUDA fast math also under a run-time integral exponent (the
-  integer-power helper takes only known constants). `half_float_power` executes
-  constant-fractional and buffer-read exponents within one ulp at half precision of an f64
-  reference, and on cc and CUDA/HIP pins the result bitwise to the same backend's f32 `powf`
-  narrowed on the host. Metal's half `pow` is its own overload, outside that bitwise pin.
+- Fractional and dynamic half powers on CUDA, HIP and Metal widen both operands, call f32 `pow`
+  and round back to half once (gh-ocannl-1198), as bf16 already did and as cc's codegen does:
+  neither CUDA nor HIP has a half pow, and the old `hexp2(hlog2(b), e)` spelling passed two
+  arguments to a unary intrinsic, so NVRTC/HIPRTC refused every such kernel. Metal does have a half
+  `pow` overload, but it renders `(half)pow((float)(b), (float)(e))` instead: the overload's result
+  is the compiler's choice under whichever math policy `Compiler_options.metal` selected (macOS 14
+  takes the legacy `fastMathEnabled=false`), while the widened form is f32 `pow` narrowed under
+  both. On M4 Max under the modern policy the overload's results already matched f32 `pow`
+  narrowed bitwise (573 random fractional and run-time exponents over bases in [0.01, 100]), so
+  the widening moved no value there. The domain is f32 `pow`'s under the backend's math flags
+  (CUDA compiles `--use_fast_math`): NaN for a negative base under a fractional exponent, and
+  under CUDA fast math also under a run-time integral exponent (the integer-power helper takes
+  only known constants). `half_float_power` executes constant-fractional and buffer-read
+  exponents within one ulp at half precision of an f64 reference, pins the result bitwise to the
+  same backend's f32 `pow` narrowed on the host on every backend, and pins the widened spelling
+  on CUDA/HIP and Metal. That is an observation of results, not of the
+  overload's internals, and says nothing about older Apple GPUs; the test enforces the relationship
+  on every backend, so a toolchain or GPU where it fails goes red there.

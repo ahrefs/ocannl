@@ -1,7 +1,11 @@
 (* Fractional and dynamic half powers (gh-ocannl-1198). Neither vendor header has a half pow, and
-   both vendors' [hexp2] is unary, so CUDA and HIP widen both operands, take f32 [powf], and round
-   back to half once, as cc's codegen does. The domain is f32 [powf]'s: a negative base under a
-   fractional exponent is NaN. Known integer exponents take the integer-power helper instead
+   both vendors' [hexp2] is unary, so CUDA, HIP and Metal widen both operands, take f32 [pow], and
+   round back to half once, as cc's codegen does. Metal does it in codegen rather than through MSL's
+   half [pow] overload so that the result does not depend on the compile-option math policy (macOS
+   14 takes a different one). Before the widening, the overload's results on M4 Max (Safe math mode,
+   fast math functions; 573 random fractional and run-time exponents) already matched f32 [pow]
+   narrowed bitwise, so values there did not move. The domain is f32 [powf]'s: a negative base under
+   a fractional exponent is NaN. Known integer exponents take the integer-power helper instead
    ([integer_power_domain]); here every exponent is either fractional or only known at run time.
 
    Tolerance: one ulp at half precision, relative to an f64 reference over the half-rounded
@@ -22,13 +26,8 @@ let () = Utils.settings.output_debug_files_in_build_directory <- true
 let () = Generated.init ~backend_name
 let f32 x = Int32.float_of_bits (Int32.bits_of_float x)
 let f16 x = Ops.half_to_single (Ops.single_to_half (f32 x))
-
-(* The backends whose half pow is f32 [powf] rounded once; Metal's half [pow] is its own
-   overload. *)
-let widens_to_powf =
-  List.mem [ "cc"; "multidev_cc"; "cuda"; "hip" ] backend_name ~equal:String.equal
-
 let cuda_like = List.mem [ "cuda"; "hip" ] backend_name ~equal:String.equal
+let is_metal = String.equal backend_name "metal"
 
 (* [Const]: the exponent is a literal in the kernel; [Dynamic]: it is read from a buffer. *)
 type exponent = Const | Dynamic
@@ -95,10 +94,9 @@ let () =
               x e got.(i) want;
           ok);
       (* The same operands at f32, narrowed to half on the host: one rounding of the same [powf]
-         result. Pinned wherever that is the stated policy. *)
+         result, by codegen on every backend. *)
       let single = run ~prec:Ops.single ~name:"hpow_f32" ~first_id:19200 cases in
-      gated_alli ~when_:widens_to_powf ~on:backend_name
-        "half powers are f32 powf rounded to half once" (Array.to_list got) ~f:(fun i v ->
+      p_alli "half powers are f32 powf rounded to half once" (Array.to_list got) ~f:(fun i v ->
           let want = f16 single.(i) in
           let ok = Int64.equal (Int64.bits_of_float v) (Int64.bits_of_float want) in
           if not ok then
@@ -110,7 +108,9 @@ let () =
       p "fractional and dynamic exponents bypass the integer-power helper"
         (not (String.is_substring src ~substring:"ocannl_powi_"));
       gated ~when_:cuda_like ~on:backend_name "half powers widen both operands into powf"
-        (String.is_substring src ~substring:"__float2half(powf(__half2float("))
+        (String.is_substring src ~substring:"__float2half(powf(__half2float(");
+      gated ~when_:is_metal ~on:backend_name "Metal half powers widen both operands into pow"
+        (String.is_substring src ~substring:"(half)pow((float)("))
 
 let () =
   Verdict.case "negative bases" (fun () ->

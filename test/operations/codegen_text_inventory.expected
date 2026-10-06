@@ -177,6 +177,7 @@ test/operations/gpu_lane_reduction.ml [also pins text this scan cannot name: com
 test/operations/gpu_serial_lanes.ml [also pins text this scan cannot name: computed fragment, untraced callback]
     "for ("
 test/operations/half_float_power.ml
+    "(half)pow((float)("
     "__float2half(powf(__half2float("
     "hexp2("
     "ocannl_powi_"

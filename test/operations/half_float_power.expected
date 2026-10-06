@@ -4,4 +4,5 @@ half powers are f32 powf rounded to half once: true
 half powers never call the binary-misused hexp2: true
 fractional and dynamic exponents bypass the integer-power helper: true
 half powers widen both operands into powf: true
+Metal half powers widen both operands into pow: true
 negative bases under fractional exponents are NaN: true
