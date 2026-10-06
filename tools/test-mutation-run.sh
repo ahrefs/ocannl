@@ -145,10 +145,9 @@ printf 'ANCHOR@@@MUTATED' > patch
 run_case() {
   expected=$1
   shift
-  set +e
-  tools/mutation-run.sh module.ml patch "${PROBE_ALIAS:-@runtest-probe}" > "$fixture/result" 2>&1
-  actual=$?
-  set -e
+  actual=0
+  tools/mutation-run.sh module.ml patch "${PROBE_ALIAS:-@runtest-probe}" > "$fixture/result" 2>&1 ||
+    actual=$?
   if [ "$actual" != "$expected" ]; then cat "$fixture/result"; echo "wrong exit: $actual != $expected"; exit 1; fi
   cmp module.ml "$fixture/pristine"
   recovery=$(sed -n 's/^recovery: //p' "$fixture/result")

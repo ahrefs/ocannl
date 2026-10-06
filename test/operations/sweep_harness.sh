@@ -3126,7 +3126,9 @@ SWEEP_TEST_OWN_GROUP=1 SWEEP_TEST_WAIT_PREFIX=$tuf_cancel_prefix SWEEP_TEST_SSH_
 tuf_cancel_pid=$!
 holder_pid=$tuf_cancel_pid
 waited=0
-until [ "$(wc -l <"$tuf_cancel_prefix.ssh-pids" 2>/dev/null || echo 0)" -ge 2 ]; do
+# Silenced BEFORE the input redirection: redirections apply left to right, so a `2>/dev/null` after
+# the `<` comes too late to quiet the "No such file" of the ticks before the first fake ssh starts.
+until [ "$(wc -l 2>/dev/null <"$tuf_cancel_prefix.ssh-pids" || echo 0)" -ge 2 ]; do
   [ "$waited" -lt "$wait_ticks" ] || break
   sleep 0.05
   waited=$((waited + 1))
@@ -3383,10 +3385,8 @@ cancel_sweep() { # pid|group
     pid) kill -TERM "$pid" ;;
     group) kill -TERM -- "-$pid" ;;
   esac
-  set +e
-  wait "$pid"
-  rc=$?
-  set -e
+  rc=0
+  wait "$pid" || rc=$?
   holder_pid=
   wait_prefix=
   if [ "$rc" -ne 143 ]; then
