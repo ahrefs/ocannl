@@ -76,6 +76,21 @@ def documentation_triggers(text):
 
 
 
+def job_keys(text):
+    # Every line at the job-key indentation is a job ID GitHub accepts or a
+    # refusal: a key this reader skipped would be a job it never compared.
+    section = text.split('\njobs:\n', 1)[1]
+    jobs = []
+    for line in section.splitlines():
+        if not line.strip() or line.lstrip().startswith('#') or line.startswith('   '):
+            continue
+        assert line.startswith('  '), 'a top-level key after jobs: is unsupported here: ' + line
+        job = re.fullmatch(r'  ([A-Za-z_][A-Za-z0-9_-]*):', line)
+        assert job, 'unsupported job key syntax: ' + line
+        jobs.append(job[1])
+    return jobs
+
+
 def matrix(text, event, windows=False):
     systems = expression(field(text, 'os'), event, windows)
     includes = expression(field(text, 'include'), event, windows)
@@ -87,13 +102,18 @@ def matrix(text, event, windows=False):
     jobs = [job + ('',) for job in itertools.product(systems, *axes)]
     jobs += [(entry['os'], entry['ocaml-compiler'], entry['suite'], entry.get('shard', ''))
              for entry in includes]
-    selected = []
-    for job in ('fmt', 'harnesses', 'promotion-floor', 'torch-runner'):
-        guard = re.search(r'^  ' + job + r':\n    if: (.*)$', text, re.M)
+    # Every job but the matrix itself and the triage notifier (which runs
+    # after all of them) is a side job the Windows fallback must skip: read
+    # them from the workflow, so a new job that lacks the guard is refused.
+    side = [job for job in job_keys(text) if job not in ('run', 'notify-triage-routine')]
+    assert side, 'no side jobs found'
+    selected = {}
+    for job in side:
+        guard = re.search(r'^  ' + re.escape(job) + r':\n    if: (.*)$', text, re.M)
         assert guard, job + ' selection missing'
-        selected.append(bool(expression(guard[1], event, windows)))
-    assert len(set(selected)) == 1, 'formatting, harness and torch-runner jobs select differently'
-    return unshard(sorted(jobs)), selected[0]
+        selected[job] = bool(expression(guard[1], event, windows))
+    assert len(set(selected.values())) == 1, 'side jobs select differently: %s' % selected
+    return unshard(sorted(jobs)), selected[side[0]]
 
 
 def unshard(jobs):
@@ -145,9 +165,20 @@ def controls(text):
     suite_step(text)
 
 
+def extra_job(name, guard=''):
+    block = ('  %s:\n%s    runs-on: ubuntu-latest\n    timeout-minutes: 5\n    steps:\n'
+             '    - run: true\n\n' % (name, guard))
+    return source.replace('  notify-triage-routine:\n', block + '  notify-triage-routine:\n', 1)
+
+
 controls(source)
+# The side-job list is read, not restated: a new job carrying the fallback
+# guard joins the selection unremarked (its unguarded twin is a mutant below).
+fallback_guard = re.search(r'^  fmt:\n(    if: .*\n)', source, re.M)[1]
+controls(extra_job('new-side-job', fallback_guard))
 print('PASS documentation compiler inputs are unfiltered on push and PR')
 print('PASS normal, scheduled and explicit Windows fallback matrix selections')
+print('PASS side jobs are read from ci.yml: a new guarded job joins the selection')
 print('PASS ubuntu main shards are exactly 1/N..N/N, over the aliases ci-shard.sh shards')
 second = '{"os": "ubuntu-latest", "ocaml-compiler": "5.5.x", "suite": "main", "shard": "2/2"},'
 for label, mutant in (
@@ -163,6 +194,7 @@ for label, mutant in (
     ('harnesses in the Windows fallback', source.replace("  harnesses:\n    if: github.event_name != 'workflow_dispatch' || !inputs.windows_only", "  harnesses:\n    if: github.event_name != 'never'")),
     ('Dune-floor promotion harnesses in the Windows fallback', source.replace("  promotion-floor:\n    if: github.event_name != 'workflow_dispatch' || !inputs.windows_only", "  promotion-floor:\n    if: github.event_name != 'never'")),
     ('CPU-torch benchmark tests in the Windows fallback', source.replace("  torch-runner:\n    if: github.event_name != 'workflow_dispatch' || !inputs.windows_only", "  torch-runner:\n    if: github.event_name != 'never'")),
+    ('a new side job without the Windows-fallback guard', extra_job('new-side-job')),
     ('per-PR shard dropped', source[:source.rindex(second)] + source[source.rindex(second) + len(second):]),
     ('scheduled shard dropped', source.replace(second, '', 1)),
     ('shard renumbered', source.replace('"shard": "2/2"', '"shard": "2/3"', 1)),
@@ -250,29 +282,13 @@ print('PASS every job builds the dispatched commit, and a pinned dispatch fires 
 # firing it: `failure()` there reads only the jobs it waits for. Derive the
 # job list from the workflow rather than keep a second copy of it here.
 def triage_waits_for_every_job(text):
-    # Every line at the job-key indentation is a job ID GitHub accepts or a
-    # refusal: a key this reader skipped would be a job it never compared.
-    section = text.split('\njobs:\n', 1)[1]
-    jobs = []
-    for line in section.splitlines():
-        if not line.strip() or line.lstrip().startswith('#') or line.startswith('   '):
-            continue
-        assert line.startswith('  '), 'a top-level key after jobs: is unsupported here: ' + line
-        job = re.fullmatch(r'  ([A-Za-z_][A-Za-z0-9_-]*):', line)
-        assert job, 'unsupported job key syntax: ' + line
-        jobs.append(job[1])
+    jobs = job_keys(text)
     needs = re.search(r'^  notify-triage-routine:\n(?:    .*\n)*?    needs: \[([^]]*)\]\n', text, re.M)
     assert needs, 'triage job has no inline needs list'
     others = sorted(job for job in jobs if job != 'notify-triage-routine')
     assert len(others) >= 2, 'found too few jobs: %s' % jobs
     assert sorted(name.strip() for name in needs[1].split(',')) == others, \
         'triage needs [%s], the other jobs are %s' % (needs[1], others)
-
-
-def extra_job(name):
-    block = ('  %s:\n    runs-on: ubuntu-latest\n    timeout-minutes: 5\n    steps:\n'
-             '    - run: true\n\n' % name)
-    return source.replace('  notify-triage-routine:\n', block + '  notify-triage-routine:\n', 1)
 
 
 triage_waits_for_every_job(source)

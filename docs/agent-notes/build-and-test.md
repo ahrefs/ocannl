@@ -2639,7 +2639,9 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   Do not wait for the independent scheduled sweep to merge a PR. Ordinary current-head PR checks
   remain required.
   `test/operations/ci_matrix.sh` evaluates the actual matrix expressions,
-  pins the opt-in default and trigger separation, and exercises the dispatch commit guard.
+  pins the opt-in default and trigger separation, and exercises the dispatch commit guard. It
+  reads the side jobs from `ci.yml` (every job but `run` and `notify-triage-routine`), so a new
+  job lacking the fallback guard fails it with no list to extend.
   Daily, so a scheduled red spans about a day of merges rather than the 50-150 a twice-weekly
   cadence left, and the Windows opam cache stays well inside actions/cache's 7-day eviction.
   Windows and the OCaml floor ride the same cadence because they fail slowly through the
