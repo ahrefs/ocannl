@@ -5,7 +5,8 @@
     the width (the tightest any of them meets) -- and counts the configurations' backends only when
     a reachable stanza reads them. Every verdict below is phrased so that [true] is the passing
     reading, and the golden records the backends each argv was judged to reach, so a change of
-    answer shows as a diff as well as a failed claim. *)
+    answer shows as a diff as well as a failed claim. Every tree here is a fixture; what the
+    repository's own tree answers is [slot_kind_live]'s. *)
 
 open Base
 open Stdio
@@ -162,16 +163,7 @@ let tree =
 
 let judge ?(dune_files = tree) argv =
   let answer = Slot_kind.answer ~dune_files (String.split argv ~on:' ') in
-  let shown =
-    match answer with
-    | Reaches { named; reads_config } ->
-        (match named with
-          | [] -> "names nothing"
-          | _ -> "names " ^ String.concat ~sep:"," (List.map named ~f:fst))
-        ^ if Option.is_some reads_config then " + reads config" else ""
-    | Unknown why -> "unknown: " ^ why
-  in
-  (answer, shown)
+  (answer, Slot_kind.summary answer)
 
 let cases =
   [
@@ -664,11 +656,6 @@ let () =
   printf "%-40s %s\n" "build @@c/probe (a glob over copies)" copied;
   p "a glob over a copy_files' copies reaches the reader they copy"
     (String.equal copied "names nothing + reads config");
-  (* The repository's own tree (its dune files, copied beside this test by the stanza's deps): the
-     batch the issue is about holds no backend, and the one review round 1 found reading the
-     configuration through the [.actual] its diff consumes still does. A new stanza that breaks the
-     proof for [scans] -- a construct not modelled exactly, anywhere compilation reaches -- shows
-     here, rather than as scans quietly taking a GPU token again. *)
   (* The inventory goes where dune goes: a [(dirs …)] stanza admits a hidden directory, whose own
      [(dirs …)] restricts it in turn, and an underscore directory stays out. *)
   let root = Stdlib.Filename.temp_file "slot_kind_dirs" "" in
@@ -808,14 +795,4 @@ let () =
         | Slot_kind.Unknown _ -> true
         | Slot_kind.Reaches _ -> false
       in
-      p (Printf.sprintf "%s set makes a batch every backend" var) unknown);
-  let live = Slot_kind.dune_files ~workspace_root:false ~root:"../.." () in
-  List.iter
-    [
-      ("build @test/operations/scans", "names nothing");
-      ("build @test/operations/runtest-bandwidth_calibration", "names nothing + reads config");
-    ]
-    ~f:(fun (argv, want) ->
-      let _, shown = judge ~dune_files:live argv in
-      printf "live: %-55s %s\n    %s\n" argv shown (reason ~dune_files:live argv);
-      p (Printf.sprintf "live: %s answers %s" argv want) (String.equal shown want))
+      p (Printf.sprintf "%s set makes a batch every backend" var) unknown)
