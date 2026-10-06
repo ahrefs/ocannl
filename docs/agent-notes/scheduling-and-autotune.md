@@ -821,7 +821,21 @@ files.
   A replay requires the same search shape and re-evaluates the current incumbent and ratio
   against those timings; without a qualifying rule it searches normally. It reports
   `Abandonment_replay` and raises `Search_abandoned` with zero search counters, so a warm
-  flip chain does not re-search its losing flips or mislabel the harness's tuned row.
+  flip chain does not re-search its losing flips or mislabel the harness's tuned row. **The
+  trajectory identity holds only what a single search reads**: the keys that steer
+  `Train.tune_placements` above it (`tune_inline_flips`, `tune_flip_ordering`,
+  `tune_flip_profit_margin`, `tune_ship_arm`, `tune_placement_store`) are their own
+  `Placement_shaping` class, outside the fingerprint (gh-ocannl-1192). While they were
+  `Search_shaping`, merely STATING one changed the identity, since the fingerprint renders every
+  key some source sets: on rog's approximate CUDA gpt2_mini cell a warm chain run under
+  `tune_placement_store=false` (gh-1020's way to compare the arms afresh) replayed both arms yet
+  searched each of the eight flips abandoned cold in full (775 s and 310 attempts apiece where the
+  cold abandonment took 19 s), because the replayed incumbent had no record under that shape and no
+  abandonment record matched. Two traps for reproducing that row: a warm run with the placement
+  store on replays the recorded decision as ONE search and never walks the chain; and through
+  `benchmarks/orchestrate.py` the flip budget cannot be raised by `OCANNL_TUNE_INLINE_FLIPS`,
+  because a commandline-picked profile (`--ocannl_profile=approximate`, whose payload sets 2)
+  outranks the environment -- pass `--ocannl_tune_inline_flips=N` on the commandline.
 - **A per-segment single is timed against a backdrop, so near-tie singles rank by noise**
   (gh-ocannl-1166). An `F_sketch` single times the WHOLE routine with every other segment on its
   untuned preset: on gpt2_mini/CUDA tf32 a q/k/v single measured ~23.2 ms where the composite it

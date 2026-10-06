@@ -3785,7 +3785,10 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
      key leaves out by definition), plus every argument of this function that resolves one — each
      resolved value, whether passed or read. A cached [best_steps] replays only under the same
      shape: the flip chain compares at equal depth, which presumes the same candidate order and
-     sampling. *)
+     sampling. The keys that steer the placement level above this call ([Utils.Placement_shaping]:
+     the flip budget and ordering, the shipped arm, the placement store) are not in it: no search
+     reads them, and with them in it a warm chain run under [tune_placement_store=false] searched
+     every abandoned flip in full (gh-ocannl-1192). *)
   let search_shape =
     Printf.sprintf "search=%b beam=%d rounds=%d repeats=%d keep=%h split_sites=%d blocks=%s|%s"
       search beam_width rounds repeats keep_fraction max_split_reduce_sites
