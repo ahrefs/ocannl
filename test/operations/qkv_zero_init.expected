@@ -14,6 +14,9 @@ every GPU sketch of the folded qkv matches the materialized run: true
 a tensorized folded qkv sketch matches the materialized run: true
 fission qkv matches the materialized run with discriminating operands: true
 fission qkv resets the accumulator on every call: true
+f16-operand qkv reference differs from zero and the entry sentinel: true
+every GPU sketch of the folded f16-operand qkv matches the materialized run: true
+a tensorized folded f16-operand qkv sketch matches the materialized run: true
 the untuned default separates every projection zero: true
 folding moves each zero into its own accumulation and changes nothing else: true
 no kernel accumulates both sibling projections: true

@@ -218,6 +218,7 @@
   (alias runtest-gh1002_kernels)
   (alias runtest-online_softmax_fast_math)
   (alias runtest-online_softmax_block_fast_math)
+  (alias runtest-qkv_zero_init-approximate)
   (alias runtest-fast_math_libmvec)
   (alias runtest-cc_post_compile_cause-artifact_missing)
   (alias runtest-cc_post_compile_cause-artifact_missing_dll)
@@ -7973,6 +7974,43 @@
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+; The same claims under the approximate profile: it opens CUDA's tf32 tile to the f32 projection,
+; so the folded tensorized seeds the default profile leaves unseeded there execute too. One golden
+; for both runs: the profile may widen the population a claim covers, never change a claim.
+
+(rule
+ (target qkv_zero_init-approximate.actual)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND)
+  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
+  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
+  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
+  (env_var OCANNL_LARGE_MODELS)
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
+  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_SERIAL_LANES)
+  (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
+  (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
+  (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
+  (env_var OCANNL_LEGALITY_CROSSCHECK)
+  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
+ (action
+  (with-stdout-to
+   %{target}
+   (run %{dep:qkv_zero_init.exe} --ocannl_profile=approximate))))
+
+(rule
+ (alias runtest-qkv_zero_init-approximate)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate))
+ (action
+  (diff qkv_zero_init.expected qkv_zero_init-approximate.actual)))
 
 (test
  ; ocannl-backend: none -- inspects simplification directly, executes no backend.
