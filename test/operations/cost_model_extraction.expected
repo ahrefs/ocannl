@@ -109,6 +109,9 @@
   U   rd=16   wr=0    rmw=0    approx
   W28 rd=0    wr=64   rmw=0    exact
   flops=16 read=16 write=64 intensity=0.200
+== concatenated coordinate (box over fiber bound) ==
+  X16 rd=0    wr=24   rmw=0    approx
+  flops=0 read=0 write=24 intensity=0.000
 
 == roofline over the matmul (flops=120, bytes=236) ==
   no envelope                  no bound

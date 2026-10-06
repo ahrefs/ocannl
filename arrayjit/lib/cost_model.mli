@@ -15,16 +15,17 @@
       for vectorized runs whose bases are provably non-overlapping ({!Affine.vec_runs_disjoint});
       non-injective maps, guarded ([If]) accesses (counted guards-taken), other vectorized runs,
       dynamic accesses (the known coordinates' image times the dynamic axis's extent, capped by the
-      loop box — gh-ocannl-1174), and other unknown coordinates ([Concat] — whole-node fallback; a
-      flattened [Sub_axis] run is interpretable, {!Affine.type-coord}) only over-count, as does
-      summing multiple same-direction accesses of one node (a union bound, capped by the node's
-      size) — except that a direction whose accesses are all exact and pairwise provably disjoint
-      ({!Affine.may_touch_same_cell}) sums exactly (gh-ocannl-578). Conditional evaluation also
-      over-counts: a read the renderers may skip — a [Where] arm's or a gated right operand's
-      ([&&]/[||]/a gate) inline read — or any access under a dead loop keeps its direction
-      approximate, since the image can exceed what executes; a read inside a [Local_scope] body
-      under such an operand is certain, the body being hoisted out of the conditional
-      (gh-ocannl-637). [fp_approx] is [false] only when the count is exact.
+      loop box — gh-ocannl-1174), and other unknown coordinates ([Concat], a rank mismatch — the
+      loop box over the unmentioned symbols' widths, never exact; a flattened [Sub_axis] run is
+      interpretable, {!Affine.type-coord}) only over-count, as does summing multiple same-direction
+      accesses of one node (a union bound, capped by the node's size) — except that a direction
+      whose accesses are all exact and pairwise provably disjoint ({!Affine.may_touch_same_cell})
+      sums exactly (gh-ocannl-578). Conditional evaluation also over-counts: a read the renderers
+      may skip — a [Where] arm's or a gated right operand's ([&&]/[||]/a gate) inline read — or any
+      access under a dead loop keeps its direction approximate, since the image can exceed what
+      executes; a read inside a [Local_scope] body under such an operand is certain, the body being
+      hoisted out of the conditional (gh-ocannl-637). [fp_approx] is [false] only when the count is
+      exact.
     - The op count is an upper bound in the same guards-taken sense, and counts every scalar
       [Unop]/[Binop]/[Ternop] evaluation as one "FLOP" regardless of precision or integerness —
       except the two-operation ternaries [FMA]/[Mul3], which count two (matching [peak_flops]'

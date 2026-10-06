@@ -14,7 +14,8 @@
    cost lives entirely in a hoisted scope body, which executes unconditionally (gh-ocannl-637); -
    vectorized runs (gh-ocannl-578): bases spaced by at least the run length (or on distinct
    in-bounds rows) count exactly, close-spaced or row-spilling bases stay a flagged upper bound, and
-   two stores on distinct rows are provably disjoint, so they sum exactly.
+   two stores on distinct rows are provably disjoint, so they sum exactly; - a [Concat] coordinate:
+   the box-over-fiber bound, flagged, never the whole node.
 
    The tail asserts the roofline bound is monotone in the envelope constants. *)
 
@@ -417,6 +418,25 @@ let () =
   let w28_fp = List.Assoc.find_exn s_vec_pair.CM.per_node w28 ~equal:Tn.equal in
   claim "two vectorized stores on distinct rows sum exactly to the whole node"
     ((not w28_fp.CM.fp_approx) && w28_fp.CM.fp_write_bytes = 16 * 4);
+
+  (* A [Concat] coordinate is uninterpretable to the view, yet every loop-box point still names one
+     cell, which depends only on the symbols the map mentions: for a < 2: for b < 3: for k < 4:
+     X16[a^b] counts at most box / k's width = 6 cells (24 B), flagged, where the whole-node
+     fallback charged all of X16's 64 B. A concatenation of a 2- and a 3-cell segment can name 5
+     cells, which the count must still cover. *)
+  let x16 = fresh_tn "X16" [| 16 |] in
+  let concat =
+    Ll_test.loop_n i 2
+      (Ll_test.loop_n j 3
+         (Ll_test.loop_n k 4 (Ll_test.set x16 [| Idx.Concat [ i; j ] |] (LL.Constant 1.))))
+  in
+  let s_concat = CM.analyze concat in
+  show_summary "concatenated coordinate (box over fiber bound)" s_concat;
+  let x16_fp = List.Assoc.find_exn s_concat.CM.per_node x16 ~equal:Tn.equal in
+  claim "a concatenated coordinate's count covers every cell the segments can name, flagged"
+    (x16_fp.CM.fp_approx && x16_fp.CM.fp_write_bytes >= 5 * 4);
+  claim "a concatenated coordinate's count is tighter than the whole node"
+    (x16_fp.CM.fp_write_bytes < Tn.num_elems x16 * 4);
 
   (* Roofline: monotone in the envelope constants, bandwidth- vs. compute-bound flips. *)
   Stdio.printf "\n== roofline over the matmul (flops=%d, bytes=%d) ==\n" mm.CM.flops
