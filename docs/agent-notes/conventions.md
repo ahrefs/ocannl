@@ -237,8 +237,12 @@ files.
   far as review). Where the boolean is computable off-gate, write
   `Verdict.gated ~when_ ~on ?detail ?aggregation label b` (gh-ocannl-997): it picks the dialect
   itself, and gives the claim back `pass_fail`'s lazy `?detail` as `<claim> (<detail>): false`.
-  `~on` rather than `~backend`, because a host gate is not a backend. A leg that cannot compute its
-  boolean without the gate keeps its branch, with `p` on the evaluated side. `verdict_ratchet`
+  `~on` rather than `~backend`, because a host gate is not a backend. A quantified claim takes
+  `Verdict.gated_all`/`gated_alli`/`gated_exists ~when_ ~on label xs ~f` instead (`gated label
+  (List.for_all …)` is the unguarded quantifier `verdict_ratchet` refuses): a closed gate reads
+  neither `xs` nor `f`, so a population that exists only where the leg ran is passed as the empty
+  list it is off-gate. A leg that cannot compute its boolean or population without the gate (a
+  device readback) keeps its branch, with `p` or a `p_*` combinator on the evaluated side. `verdict_ratchet`
   refuses a label reaching both `pass_fail`/`pass_fail_all2` and `skipped` in one source (keyed by
   literal, by a name bound to one literal, or by a printed expression within one top-level item);
   a wrapper of another name, or one label built two different ways, is outside what it sees.
