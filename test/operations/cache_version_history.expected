@@ -4,6 +4,8 @@ set its current value, so two parallel bumps conflict in git instead of sharing 
 the scan was handed the schedule cache's source: true
 it found the store's version constants, not an empty derivation: true
 every version constant's history is well formed and ends on its current value: true
+the queued timing objective's generation is one of them: true
+no spelling of the queued key hard-codes its generation as a literal queued-v<N>: true
 a history whose last entry is the constant's value passes, a gap included: true
 a retired value cited in a parenthetical passes: true
 a bump without its history line is refused: true
