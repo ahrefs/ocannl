@@ -6,6 +6,7 @@ set -u
 . "$(cd "$(dirname "$0")/../scripts" && pwd)/harness-support.sh"
 harness_args "$@"
 HERE=$(cd "$(dirname "$0")" && pwd)
+command -v dune >/dev/null 2>&1 || . "$HERE/opam-env.sh"
 harness_require dune perl git
 harness_scratch test-promotion-record
 REAL_DUNE=$(command -v dune)

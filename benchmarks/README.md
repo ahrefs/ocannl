@@ -275,8 +275,14 @@ endpoint, whereas HIP's invalid exact-f16 and beyond-exact approximate rows are 
   depth histogram. An untagged call (the untuned control `autotune_log=true` times) has its warmup
   and calibration counted as unattributed rather than as zero. A `timing-trace: search done` line
   marks where the measured compile (`compile_s`) ended, so a cell cut off later is not read as a
-  search still running. It only observes the tuner's seams, so the
-  searched schedules are the ones an untraced run crowns.
+  search still running. Each call line is followed by a `timing-trace: decision` line
+  (gh-ocannl-1199) from `Autotune.on_batch_decision`: the search phase (`playoff` for the composite
+  playoff), the calibration exit that chose the depth (`measured_batch`, `affine_projection`,
+  `cap_measured`, `budget_exhausted`, ...), its latest affine fit with the fitted fixed and marginal
+  costs and the fit's verdict (`boundary_floor` is the gh-ocannl-1184 depth-2 retention), the
+  cap-directed probes, what the projection bound, wall-bounded fallback or rescue changed, the probe
+  budget used, and the admission verdict (`admitted`, `refused unbatched`, ...). It only observes
+  the tuner's seams, so the searched schedules are the ones an untraced run crowns.
 - `runners/pytorch/run.py` — flags: `--device cpu|mps|cuda`, `--regime exact|approximate`
   (exact, the default and the parity reference: `highest` matmul precision, cudnn tf32 off,
   hand-composed attention; approximate: torch's own defaults — `high` matmul precision,
@@ -286,7 +292,16 @@ endpoint, whereas HIP's invalid exact-f16 and beyond-exact approximate rows are 
   `--compile-mode MODE` (a `torch.compile` mode such as `max-autotune` — the honest analogue of a
   tuned cell, since it benchmarks kernels; measured for gh-ocannl-675 but not a matrix cell) and
   `--retime` (time a second block of `timed_steps` in the same process, which is what separates
-  "a process that searched is slower per launch" from first-block warmup).
+  "a process that searched is slower per launch" from first-block warmup). Beside the matmul
+  policy, every result line says what the run's tensors were (gh-ocannl-1208), read back from the
+  run rather than from a flag: `param_dtypes` (every model weight, after the steps),
+  `input_dtypes` (the batch the first step handed the model), `autocast` (`{"enabled", "dtype"}`
+  as torch's per-device getters answer inside that step; null where torch cannot say) and
+  `effective_precision`, the label the floating tensors share (`f32`, `bf16`, ... or
+  `mixed(...)`). The sweep stamps every torch cell `precision: f32` and fails a row the run
+  contradicts — a weight cast on load, an enclosing autocast, a requested precision the runner did
+  not apply — as **`PRECISION MISMATCH`** (`precision_check`); each workload section names what its
+  parity reference computed in.
 - `runners/tinygrad/run.py` — flags: `--device CPU|METAL|CUDA|AMD|CL|HIP`, `--jit 0|1`, `--beam N`
   (BEAM=N kernel search, implies jit; the search cost lands in `compile_s`, and the result line
   reports whether the beam actually searched or replayed `~/.cache/tinygrad`), `--retime` (as

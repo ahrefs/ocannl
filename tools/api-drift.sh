@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Editorial checklist of public source declarations changed on first-parent history.
-# Usage: tools/api-drift.sh <since-rev> [until-rev]
+# Usage: tools/api-drift.sh [--context N] <since-rev> [until-rev]
 set -eu
 root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root"

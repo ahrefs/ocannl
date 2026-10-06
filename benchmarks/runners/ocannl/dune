@@ -39,14 +39,16 @@
   bench_gpt
   bench_gpt_diag
   bench_conv_diag
-  bench_min_repro)
+  bench_min_repro
+  bench_wgrad)
  (modules
   bench_mlp
   bench_conv
   bench_gpt
   bench_gpt_diag
   bench_conv_diag
-  bench_min_repro)
+  bench_min_repro
+  bench_wgrad)
  (libraries
   base
   bench_harness
@@ -117,7 +119,7 @@
 (executable
  (name bench_mma_register_scope_emit)
  (modules bench_mma_register_scope_emit)
- (libraries base ocannl stdio test_utils ll_test)
+ (libraries base bench_args ocannl stdio test_utils ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl))
  (modes exe))
@@ -149,9 +151,16 @@
   (env_var OCANNL_LOG_LEVEL)
   (env_var OCANNL_PROFILE)
   (env_var OCANNL_SIMPLIFY_FP_ALGEBRA))
+ ; Both staged layouts (gh-ocannl-1190): the plain twin and its Swizzle_b128 sibling.
  (action
   (no-infer
-   (run
-    %{exe:bench_mma_register_scope_emit.exe}
-    generated-mma-register-scope.cu
-    --ocannl_backend=cuda))))
+   (progn
+    (run
+     %{exe:bench_mma_register_scope_emit.exe}
+     generated-mma-register-scope.cu
+     --ocannl_backend=cuda)
+    (run
+     %{exe:bench_mma_register_scope_emit.exe}
+     generated-mma-register-scope-swizzled.cu
+     --layout=swizzled
+     --ocannl_backend=cuda)))))

@@ -1,0 +1,18 @@
+{
+  "name": "gpt2_mini_train_h64_s512",
+  "model": "gpt",
+  "mode": "train",
+  "n_layer": 4,
+  "n_head": 4,
+  "d_model": 256,
+  "d_ff": 1024,
+  "vocab": 1024,
+  "seq_len": 512,
+  "batch_size": 2,
+  "n_batches": 4,
+  "lr": 0.01,
+  "seed": 42,
+  "parity_steps": 6,
+  "warmup_steps": 3,
+  "timed_steps": 10
+}

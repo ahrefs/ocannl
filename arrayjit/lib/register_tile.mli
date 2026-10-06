@@ -78,9 +78,11 @@ val default : vector_bytes:int -> elt_bytes:int -> m:int -> n:int -> t option
     plus [ceil(n / (rn * lanes))] A-splat passes, which the ranking computes as an exact integer
     (scaled by [rm]) so that equal prices reach the tie-break rather than being decided by float
     rounding (gh-ocannl-947). At one width the columns' term is the same for every [rn], so the pick
-    is the fewest passes whatever the row count. Ties go to the wider vector, then to the tile with
-    fewer column-tail vectors (a tail-free one first), then to the larger tile. [None] when even the
-    narrowest width exceeds [n] (or [m], [n] < 1). *)
+    is the fewest passes whatever the row count. Ties go to the wider vector, then to a tail-free
+    tile (one tile body rather than two), then to the smaller tile: two tail-bearing tiles of equal
+    price at one width have the same passes, A splats and C-tile traffic (gh-ocannl-1099), and the
+    smaller one holds fewer {!live_registers} (gh-ocannl-1180). [None] when even the narrowest width
+    exceeds [n] (or [m], [n] < 1). *)
 
 val check : vector_bytes:int -> elt_bytes:int -> m:int -> n:int -> t -> (unit, string) Result.t
 (** Whether the renderer can honour [t] on an [m x n] site: [lanes] is a width the file renders and
@@ -95,9 +97,12 @@ val alternatives : vector_bytes:int -> elt_bytes:int -> m:int -> n:int -> t list
     own terms, equal issues at less reuse, so they are not seeded) plus the register-budget cap when
     its column tail is at most one vector (the most A-reuse the file affords — the register-pressure
     corner gh-ocannl-614 found the model cannot see — but not on sites where the tail is a fat
-    second tile the model already prices), minus the default itself and anything {!check} would
-    decline. Deliberately small: at most two alternatives per site, one on the common shapes, none
-    where the width divides the extent. *)
+    second tile the model already prices), plus, where {!default} broke a price tie between two
+    tail-bearing tiles, the largest tile it tied (the model prices no difference there, so the
+    larger-tile side of the tie is timed; gh-ocannl-1180), minus the default itself and anything
+    {!check} would decline. Deliberately small: at most two alternatives per site at four rows
+    (where the tied tile is the budget cap), three below, one on the common shapes, none where the
+    width divides the extent. *)
 
 val rm_twin : vector_bytes:int -> elt_bytes:int -> m:int -> n:int -> t option
 (** The two-row twin of {!default} (gh-ocannl-947), which the sketch seeding proposes beside

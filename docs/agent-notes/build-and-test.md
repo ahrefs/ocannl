@@ -648,7 +648,14 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
 
 - `tools/test-harnesses.sh` runs the complete hand-run harness tier locally, from any
   working directory. Its manifest is the membership CI uses: the toolchain-free job runs
-  `--shell`, the formatting job runs `--toolchain` after installation; omitting the group runs both.
+  `--shell`, the formatting job runs `--toolchain` and `--promotion` after installation, and the
+  `promotion-floor` job runs `--promotion` again under the Dune that `dune-project`'s
+  `(lang dune X.Y)` declares (gh-ocannl-1215); omitting the group runs all three. Both
+  toolchain-installing jobs set `OCANNL_TOOL_HARNESS_STRICT=1`, under which `harness-support.sh`
+  reports a skip as a FAIL: a counted skip is right where a host lacks a capability, and a vacuous
+  green where the step installed it. setup-ocaml's switch is not on a CI step's PATH, so a harness
+  needing `dune` falls back to sourcing `tools/opam-env.sh` before `harness_require dune`; one that
+  omits the fallback skips every leg there, which strict mode turns red.
   `--list` lists the selected paths without executing them. Every selected member runs after
   an ordinary failure; the footer counts failed harnesses and exits 1 if any failed. A member
   interrupted by HUP, INT or TERM stops the aggregate and preserves exit 129, 130 or 143. Individual
@@ -898,6 +905,8 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   Capture failure keeps the list but advertises no replay; every copy/query stays under the run's
   existing lock, signal handling and remaining cap. `tools/test-promotion-record.sh` owns the byte,
   recovery and refusal controls; `tools/test-promote.sh` owns the opposing floor-stream controls.
+  Their version legs SIMULATE the floor with shims over the installed Dune; CI's `promotion-floor`
+  job is what runs them against a real floor binary.
   Floor Dune also recomputes diffs during `list`, so both wrappers pin its `--diff-command=diff`: a
   presentation-only `DUNE_DIFF_COMMAND=-` must not hide registered corrections from recovery.
 - **`cmd 2>/dev/null` does not silence a failed REDIRECTION.** The shell reports that before the
@@ -923,15 +932,26 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   `[ A ] && [ B ]`: errexit exempts every operand of an `&&` list but the last, so the pair checks
   only `B` and is silent exactly when `A` — usually the point of the assertion — fails
   (gh-ocannl-1023, `cancel_sweep`'s readiness check). One predicate per statement, or end the list
-  with `|| die …` / `|| return 1` (`|| rc=$?` to capture it; a `rc=$?` on the next line is refused). `shell_scripts_parse` refuses both shapes in errexit scripts; its
-  module headers state the logical-line boundary each scan reads, and a function's final pair — not
-  inert, its status is the return value — is refused too, since the scan cannot see function ends.
-  Both arms share `Errexit_negation.numbered_spliced_lines`: it carries multiline quotes and
-  literal outer heredoc delimiters, excluding their bodies, and joins continued condition headers
-  through `then`/`do`. Continued unquoted heredoc bodies are refused because removing their escaped
-  newlines can change delimiter recognition; quoted bodies retain those newlines. This lexical
-  reader does not model option transitions or compound execution;
-  its header names the supported delimiter grammar and its explicit refusals (gh-ocannl-907).
+  with `|| die …` / `|| return 1` (`|| rc=$?` to capture it; a `rc=$?` on the next line is refused). `shell_scripts_parse` refuses both shapes where errexit may be on and nothing consumes the
+  status. `Shell_context` decides both: it reads the compound tree, carries errexit through it in
+  source order as a may-be-on bit (its imprecision can only refuse, never pass), and treats a
+  condition and the LAST statement of a function body or subshell -- also through a final group,
+  branch or arm -- as consuming the status: a function's last command is its return value
+  (gh-ocannl-1220). A status something can overwrite before its consumer is not consumed: a loop
+  body's tail (the next iteration) and a `;&`/`;;&` arm's (the arm it falls into). A function body
+  that may hand errexit back on to a caller that had it off -- also the `set +e … set -e`
+  save-and-restore -- makes the whole file read as errexit-on, since the scan does not follow calls. Its module header states what it reads, refuses and leaves out (loud and
+  silent). `Errexit_execution_controls` measures each context rule: it runs the script under the
+  host's bash (3.2 on macOS, 5 on Linux) and again with a plain `false` in the assertion's place,
+  and a rule bash disagrees with fails there -- add a row when the reader learns a context (a row
+  needing syntax bash 3.2 lacks, like `;&`, is gated on the host's bash and pinned scan-side by an
+  arm fixture). A structure the reader cannot balance is refused as unsupported in a script that may
+  turn errexit on. Both arms read through
+  `Shell_lexer.numbered_spliced_lines`: it carries multiline quotes and literal outer heredoc
+  delimiters, excluding their bodies, and joins continued condition headers through `then`/`do`.
+  Continued unquoted heredoc bodies are refused because removing their escaped newlines can change
+  delimiter recognition; quoted bodies retain those newlines. Its header names the supported
+  delimiter grammar and its explicit refusals (gh-ocannl-907).
 - A child that publishes a value for its parent to poll — a pid, above all — writes a sibling and
   renames it into place: `open(path, 'w')` creates the name EMPTY before the write lands, so a
   parent polling `exists()` reads `''` (gh-ocannl-1041, a per-PR-matrix flake). The benchmarks'
@@ -2918,8 +2938,19 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   target, `--root`, an alias-naming or unknown option -- is every backend) answers, so `runtest test/operations` is a GPU batch while
   `@test/operations/runtest-<cpu test>` and `@test/operations/scans` are not; a Metal marker
   counts even on Linux, where its stanza compiles the stub. Second, for the stanzas that read the
-  configuration: resolved, not read off `OCANNL_BACKEND`, because an ordinary cc batch
-  leaves it unset: `ocannl_read_config`
+  configuration -- counted unless the same tool PROVES them unread (no `reads config` line): a
+  batch reaching only `none`-marked stanzas (`@test/operations/scans`) then holds no backend and
+  runs uncapped and `--cpu` whatever a test configuration names (gh-ocannl-1095). The proof is the
+  inverted claim, after two review rounds each found dune shapes a closure missed: the reach is the
+  closure of the argv's aliases under everything dune builds first (dependency aliases across
+  directories, generated `runtest-<name>` included; every file a stanza mentions matched by
+  basename to any rule's targets; every compilation in the tree and every source-like producer,
+  for any batch), and it is trusted only where every stanza in it uses constructs modelled
+  exactly -- any other pform, dependency form, stanza head (`include`, `cram`, `install`),
+  `dynamic-run` or preprocessing action makes the batch every backend, and so does a backend set
+  past the configuration (`setenv`/`env-vars` of `OCANNL_BACKEND`, a generated `ocannl_config`). `slot_kind_cases`
+  pins the live `scans` answer, so a stanza that breaks the proof shows as a diff. The configurations are resolved, not read off `OCANNL_BACKEND`, because an
+  ordinary cc batch leaves it unset: `ocannl_read_config`
   (`test/config`, the same Utils resolution a test run makes) is built and asked from each
   directory whose `ocannl_config` sets a backend — `test/config` (copied by every `test/*`
   directory and `bin/`) and `arrayjit/test`. No backend at all is not cc (`Context.auto` then
@@ -3129,28 +3160,39 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
 - A forced full-suite sweep also intersects the backend-scoped `Verdict.skipped`
   executable-and-claim keys from every successful unit through `tools/aggregate-skips.sh`
   (gh-ocannl-792), writing
-  `logs/<stamp>-skip-coverage.txt`. Incremental logs are refused because a cached Dune action does
-  not replay its stderr, and failed or interrupted units are refused because they may not have
-  reached every test — except a red whose serial rerun reported `all clean` with nothing
-  unjudged or unmapped, followed by `suite completed`: an incremental `-j 1` pass over the unit's
-  whole suite (no `--force`), which runs exactly the actions that never completed — the dependents
-  a red prerequisite held back, which rerunning the red stanzas alone does not reach. Every action
-  has then completed into the same log, so its records are complete, and the report names the
-  unit on a `red units counted after a clean serial rerun:` line. The retry must also confirm
-  the first attempt: every skip a re-run executable announced before its failure must be announced
-  again by the retry, or the unit is not counted (`serial rerun: first attempt disagrees:`). A
-  record the retry dropped is either stale (the retry executed the claim — a capability probe the
-  refused device answered `no`) or another stanza's genuine skip of the same executable (one
-  executable often runs under several aliases); the log cannot attribute a record to its action,
-  so filtering by executable name would clear the genuine one silently. The retry runs under
-  `--display short`, whose `<program> [alias ]<target>` lines name every executable it re-ran —
-  a directory fallback's included — alongside the alias's own `<family>-<name>`.
-  Dropping those lost minix/hip's evaluations on 2026-09-27 (red only from a ROCr scratch
+  `logs/<stamp>-skip-coverage.txt`. What it intersects is each unit's **per-action verdict
+  records**, never its log (gh-ocannl-1114): the sweep exports `OCANNL_TOOL_VERDICT_RECORDS` (a
+  directory beside the worktree, `<wt>.verdict-records`, emptied when the unit starts) into the
+  suite, the serial rerun and the completion pass alike, and Verdict writes one file per action —
+  keyed by working directory, executable and arguments, so one executable under two stanzas is
+  two actions — truncated when the process starts. Each file therefore holds its action's final
+  attempt by construction: a retry rewrites its own action's records, an action never re-run keeps
+  its own, and nothing depends on attributing lines of a merged stderr stream (five review rounds
+  of lukstafi/ocannl-staging#857 went to that inference, and dune truncating a noisy HIP action's
+  output once dropped records from the log outright). The sweep collects the files, concatenated,
+  into `logs/<stamp>-<machine>-<backend>.verdict-records`; a unit whose records cannot be read or
+  hold no `OCANNL_TOOL_VERDICT_ACTION` header — a swept commit predating them — is reported `skip
+  evidence unavailable` and not counted, since its silence would read as every claim executed.
+  The stderr copy of each record stays in the log for humans. Only the action's own process
+  writes: Verdict empties the variable in its own environment once it has read it, so no child —
+  however spawned — writes into, or truncates, the action's file (a child is the parent's
+  fixture, and `cc_march_census` relaunches itself with the very arguments, directory and hence
+  key of its parent). A process that is not Verdict-linked must unset it before running a
+  Verdict-linked fixture (`sweep_harness.sh`, beside its `OCANNL_BACKEND` neutralization). A record kind the
+  aggregator does not judge (`OCANNL_TOOL_VERDICT_<KIND>`, the room left for gh-ocannl-996's bypass
+  record) passes through it.
+  Incremental runs are refused because a cached Dune action does not run, and failed or
+  interrupted units are refused because they may not have reached every test — except a red whose
+  serial rerun reported `all clean` with nothing unjudged or unmapped, followed by `suite
+  completed`: an incremental `-j 1` pass over the unit's whole suite (no `--force`), which runs
+  exactly the actions that never completed — the dependents a red prerequisite held back, which
+  rerunning the red stanzas alone does not reach. Every action has then completed and written its
+  records, and the report names the unit on a `red units counted after a clean serial rerun:` line.
+  Dropping such units lost minix/hip's evaluations on 2026-09-27 (red only from a ROCr scratch
   assertion at parallel width) and reported its hip-only claims as skipped on every box. An
   intersection over only the completed backends is a loud `POTENTIAL` report; it becomes `FAIL`
   only when every backend in the sweep's own unit vocabulary completed, while the sweep itself
-  still exits zero so later units and their history rows are never suppressed. A `--ref`
-  predating the machine record is refused when its human skip lines have no paired records.
+  still exits zero so later units and their history rows are never suppressed.
   A skip caused by a host or configuration capability rather than the selected backend (a compiler
   target, preprocessing flag or filesystem feature) uses
   ``Verdict.skipped ~aggregation:`Environment``: its human stderr line stays visible, while the
@@ -3160,7 +3202,7 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   scheduled routine's report and notification foremost — see zero-coverage findings without
   opening the report file; the routine diffs the latest report's finding set against the previous
   `*-skip-coverage.txt` and treats `FAIL`, or a changed finding set, as notify-worthy.
-  The same report intersects environment-scoped records across the successful unit logs and judges
+  The same report intersects environment-scoped records across the successful units and judges
   completeness by BOX, not backend: the canonical box set comes from the exact swept commit's
   `# measurement-boxes:` declaration in `benchmarks/fixtures/DIGESTS.txt`, read through
   `fixture_digest.py`'s parser, while each sweep unit supplies its stable box key. The launcher must
@@ -3171,10 +3213,10 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   independent of backend; when a box contributes several units, absence from any one proves the leg
   executed there. Several boxes may contribute the same backend; backend completeness counts that
   backend once, while environment completeness still counts both boxes. A claim present in every
-  completed declared-box log becomes `FAIL` only when every declared box contributed; with missing
+  completed declared-box run becomes `FAIL` only when every declared box contributed; with missing
   boxes it is `POTENTIAL`, and a pre-declaration historical ref is left explicitly unaggregated. A
   claim may be backend-gated in one run and environment-gated in another (the default-policy
-  `autotune_mma_companion` leg is the exemplar). An environment record in any log
+  `autotune_mma_companion` leg is the exemplar). An environment record in any run
   assigns that executable-and-claim key to the environment dimension; backend or environment skip
   records for the same key then both mean their box did not execute it. This ownership-before-
   intersection order prevents a different scope from masquerading as execution. A unit on a box

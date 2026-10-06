@@ -699,6 +699,12 @@ files.
   statement is tensorized but has no `ldmatrix`; CUDA's `mma_ldmatrix_operands` drives
   both load emission and `mma_uses_ldmatrix` for the census, rather than inferring the
   instruction from the layout. `schedule_ldmatrix_matmul` pins both gather-only orientations.
+  Timed (gh-ocannl-1190, sm_120, 16x32x32 tile, 128 k_o blocks): in the resident scope the
+  swizzled fp8 twin is 12.2% faster than the plain one (paired ratio 0.8775, every replicate
+  under 0.883), unlike the neutral bf16 twin of gh-481. `tune` times both twins, so it needs no
+  change. `model_default` does: its cost model cannot see the swizzle map, so the twins tie, and
+  its first-strictly-better rule keeps plain. Re-time a layout change with
+  `bench_mma_register_scope_emit --layout` and `mma_register_scope_probe_build.sh`.
 - **bf16 residency is the ternary `bf16_arithmetic` policy's question** (gh-ocannl-838), the same
   shape as `fp16_arithmetic`: `Numerics.bf16_mode`, `Numerics.bf16_accum_wide`, and a per-format
   capability list `mma_bf16_wide_acc_scopes` read by the same seeding gate
@@ -753,7 +759,8 @@ files.
   exists for CUDA's tf32 gate: the tf32 arm reads f32 storage as tf32 and accumulates at
   the same f32 `accum_prec` reports with the gate shut, so a code change to that gate under an
   unchanged mode moved nothing before. Each backend derives `mma_arm` from the very table its hooks
-  dispatch on — CUDA's `wmma_combo` (whose accumulator is now a precision, `wc_acc_prec`, spelled
+  dispatch on — CUDA's `wmma_combo` (in `Ir.Cuda_mma` since gh-ocannl-1214, beside the other arm
+  tables and the descriptor; its accumulator is now a precision, `wc_acc_prec`, spelled
   through `typ_of_prec`) behind the inline-PTX arms in the hooks' own order, HIP's and Metal's
   `mma_accumulator` tables (from which their fragment spellings now follow) — so a new arm or a
   changed gate reaches the key with no hand-added component. CUDA's hooks try several tables in an

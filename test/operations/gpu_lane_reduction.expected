@@ -37,17 +37,39 @@ lred_coop16r: the lane sits inside the serial query loop: true
 lred_coop16r: the reduction loop is Workgroup_reduce: true
 lred_coop16r: every cell of K holds the serial reference's exact value: true
 lred_coop16r: the emitted kernel does not spell the all-reduce: true
---- leg 6: several simdgroups keep the plain plan; the renderer declines them (v1) ---
+--- leg 6: several simdgroups, where the device allows them ---
 lred_coop64: no lane inside the serial query loop: true
 lred_coop64: the reduction loop is Serial: true
 lred_coop64: every cell of K holds the serial reference's exact value: true
 lred_coop64: the emitted kernel does not spell the all-reduce: true
+lred_multi64: the operands tell each lane's own simdgroup's partial from the whole sum: true
+lred_multi64: the operands tell simdgroup 0's partial from the whole sum: true
+lred_multi64: the mapping probe counts 8192 active threads (a reduce lane adds none): true
+lred_multi64: Grid (h, t, b) and a 64-wide lane: true
+lred_multi64: the lane sits inside the serial query loop: true
+lred_multi64: the reduction loop is Workgroup_reduce: true
+lred_multi64: every cell of K holds the serial reference's exact value: true
+lred_multi64: every cell of K equals the materialized, unscheduled run's: true
+lred_multi64: the emitted kernel spells the all-reduce: true
+lred_multi128: the operands tell each lane's own simdgroup's partial from the whole sum: true
+lred_multi128: the operands tell simdgroup 0's partial from the whole sum: true
+lred_multi128: the mapping probe counts 16384 active threads (a reduce lane adds none): true
+lred_multi128: Grid (h, t, b) and a 128-wide lane: true
+lred_multi128: the lane sits inside the serial query loop: true
+lred_multi128: the reduction loop is Workgroup_reduce: true
+lred_multi128: every cell of K holds the serial reference's exact value: true
+lred_multi128: every cell of K equals the materialized, unscheduled run's: true
+lred_multi128: the emitted kernel spells the all-reduce: true
+lred_multi128_cap2: no lane inside the serial query loop: true
+lred_multi128_cap2: the reduction loop is Serial: true
+lred_multi128_cap2: every cell of K holds the serial reference's exact value: true
+lred_multi128_cap2: the emitted kernel does not spell the all-reduce: true
 lred_coop64r: the mapping probe counts 8192 active threads (a reduce lane adds none): true
 lred_coop64r: Grid (h, t, b) and a 64-wide lane: true
 lred_coop64r: the lane sits inside the serial query loop: true
 lred_coop64r: the reduction loop is Workgroup_reduce: true
 lred_coop64r: every cell of K holds the serial reference's exact value: true
-lred_coop64r: the emitted kernel does not spell the all-reduce: true
+lred_coop64r: the emitted kernel spells the all-reduce: true
 --- leg 7: an ordinary local in the same shape keeps the plain plan ---
 the fused backward's dp local is not minted without online_softmax_backward: true
 the dp local minted for the same node at another precision is a node of its own, at that one: true
@@ -64,6 +86,34 @@ lred_bound32: the emitted kernel binds the reduction loop instead of looping it:
 auto on a device where per-lane recompute is cheap is cooperative: true
 auto on an unmeasured device is refused: true
 auto on the run's backend resolves to its measured mode: true
+auto spans one simdgroup on an unmeasured device: true
+auto on the run's backend spans its measured number of simdgroups: true
+on the run's device a 64-wide head's default schedule is the resolved bound's: true
 on a cheap-recompute device the default schedule is the resolved mode's: true
 on an unmeasured device the default schedule is the resolved mode's: true
 on the run's device the default schedule is the resolved mode's: true
+--- leg 10: barriers only under workgroup-uniform control ---
+lred_guard_uniform64: a guard on the serial query symbol leaves the site cross-simdgroup: true
+lred_guard_uniform64: every cell of K holds the serial reference's exact value: true
+lred_guard_uniform64: the emitted kernel spells the cross-simdgroup all-reduce: true
+lred_guard_flag64: a guard reading a lane-dependent local leaves the site serial: true
+lred_guard_flag64: the emitted kernel does not spell the all-reduce: true
+lred_guard_flag64: the emitted kernel loops the reduction in every lane: true
+lred_guard_unrolled64: the unroll leaves one copy of the reduction unguarded beside guarded ones: true
+lred_guard_unrolled64: no copy of the reduction symbol is admitted cross-simdgroup: true
+lred_guard_unrolled64: the emitted kernel spells no all-reduce in any copy: true
+--- leg 11: the schedule's memory estimate counts the partials the kernel declares ---
+lred_coop32: the estimate counts exactly the partials the emitted kernel declares: true
+lred_dup32: the estimate counts exactly the partials the emitted kernel declares: true
+lred_coop16r: the estimate counts exactly the partials the emitted kernel declares: true
+lred_multi64: the estimate counts exactly the partials the emitted kernel declares: true
+lred_multi128: the estimate counts exactly the partials the emitted kernel declares: true
+lred_coop64r: the estimate counts exactly the partials the emitted kernel declares: true
+lred_guard_uniform64: the estimate counts exactly the partials the emitted kernel declares: true
+lred_guard_flag64: the estimate counts exactly the partials the emitted kernel declares: true
+lred_guard_unrolled64: the estimate counts exactly the partials the emitted kernel declares: true
+lred_multi64: 8 bytes of partials, admitted at that limit and refused one byte below it: true
+lred_multi128: 16 bytes of partials, admitted at that limit and refused one byte below it: true
+lred_guard_uniform64: 8 bytes of partials, admitted at that limit and refused one byte below it: true
+lred_coop32: 0 bytes of partials, admitted at that limit: true
+lred_guard_flag64: 0 bytes of partials, admitted at that limit: true

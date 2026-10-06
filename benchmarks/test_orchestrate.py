@@ -1,5 +1,6 @@
 import argparse
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -228,6 +229,97 @@ class OcannlResultLineTest(unittest.TestCase):
 
         self.assertEqual(blown["parity"], "DIVERGED")
         self.assertEqual(blown["diverged_at"], 1)
+
+
+def golden_checkpoint_lines():
+    """The checkpoint lines `Bench_json` built, with the prefix a runner writes them behind, as the
+    golden of test/operations/bench_result_line holds them (gh-ocannl-1209)."""
+    return [
+        line
+        for line in OcannlResultLineTest.GOLDEN.read_text().splitlines()
+        if line.startswith(orchestrate.CHECKPOINT_PREFIX)
+    ]
+
+
+class CheckpointLineTest(unittest.TestCase):
+    """gh-ocannl-1209: the checkpoints an OCANNL runner writes before its later stages, as the
+    driver reads them."""
+
+    def test_every_emitted_checkpoint_is_read_back_and_is_no_result_line(self):
+        lines = golden_checkpoint_lines()
+        self.assertGreaterEqual(len(lines), 2, OcannlResultLineTest.GOLDEN)
+        for line in lines:
+            with self.subTest(line=line[:60]):
+                strict_loads(line[len(orchestrate.CHECKPOINT_PREFIX):])
+                checkpoint = orchestrate.last_checkpoint(line)
+                self.assertEqual(checkpoint["record"], "checkpoint")
+                self.assertIs(checkpoint["accepted"], False)
+                self.assertNotIn("step_ms", checkpoint)
+                # What run_cell's result parser looks for, which a checkpoint must never be.
+                self.assertFalse(line.startswith("{"))
+
+    def test_the_last_whole_checkpoint_wins_over_a_line_the_kill_cut(self):
+        first, second = golden_checkpoint_lines()[:2]
+        text = "\n".join(["bench: parity step 0 loss 10.4", first, second[: len(second) // 2]])
+
+        self.assertEqual(orchestrate.last_checkpoint(text), strict_loads(
+            first[len(orchestrate.CHECKPOINT_PREFIX):]))
+        self.assertIsNone(orchestrate.last_checkpoint("bench: parity step 0 loss 10.4\n"))
+
+
+class FailureRecordTest(unittest.TestCase):
+    """gh-ocannl-1209: a failed cell's checkpoint is persisted with the identity it lacks."""
+
+    def test_a_checkpoint_is_kept_whole_beside_the_fixture_stamp_and_source(self):
+        checkpoint = strict_loads(
+            golden_checkpoint_lines()[1][len(orchestrate.CHECKPOINT_PREFIX):]
+        )
+        stamp = {"fixture": "gpt2_mini_train_s1024.safetensors", "fixture_sha256": "ab" * 32,
+                 "fixture_origin": "tuf"}
+        source = {"source_revision": "cd" * 20, "source_tracked_changes": False}
+
+        runner = Path(tempfile.mkdtemp()) / "bench_gpt.exe"
+        runner.write_bytes(b"the runner that ran")
+        checkpoint["executable"] = str(runner)
+
+        record = orchestrate.failure_record(
+            "cell", "TIMED OUT", {}, dict(checkpoint), provenance=dict(stamp, **source)
+        )
+        line = json.dumps(orchestrate.json_safe(record), allow_nan=False)
+
+        back = strict_loads(line)
+        self.assertEqual(back["checkpoint"], checkpoint)  # its own `fixture` object untouched
+        # The binary's own bytes name it, whatever HEAD or --skip-build said.
+        digest = hashlib.sha256(b"the runner that ran").hexdigest()
+        self.assertEqual(back["provenance"], dict(stamp, **source, executable_sha256=digest))
+        runner.unlink()
+        gone = orchestrate.failure_record("cell", "TIMED OUT", {}, dict(checkpoint), provenance={})
+        self.assertIsNone(gone["provenance"]["executable_sha256"])
+
+    def test_a_failure_without_a_checkpoint_carries_neither(self):
+        record = orchestrate.failure_record("cell", "exit 1", {}, None, provenance={"x": 1})
+
+        self.assertNotIn("checkpoint", record)
+        self.assertNotIn("provenance", record)
+
+    def test_the_source_identity_names_this_checkout(self):
+        got = orchestrate.source_identity(HERE)
+
+        self.assertRegex(got["source_revision"], r"^[0-9a-f]{40}$")
+        self.assertIsInstance(got["source_tracked_changes"], bool)
+
+    def test_the_sweep_records_failures_through_it_with_its_stamp_and_source(self):
+        # main's closure is not callable from here; pin that it composes the two, read before
+        # dispatch, rather than writing a record of its own.
+        source = Path(orchestrate.__file__).read_text()
+        main = source[source.index("\ndef main():") :]
+        self.assertIn("source = source_identity(ROOT)", main)
+        self.assertIn("provenance=dict(stamp, **source)", main)
+        # Both the cell and its search pass go through the helper that records an interrupted
+        # cell's checkpoint before the cancellation propagates.
+        self.assertEqual(main.count("run_cell("), 1)
+        self.assertEqual(main.count("run_kept("), 3)
+        self.assertLess(main.index("source = source_identity(ROOT)"), main.index("def collect("))
 
 
 class CellIdentityTest(unittest.TestCase):
@@ -3026,6 +3118,75 @@ class CellTimeoutTest(unittest.TestCase):
         self.assertIn("TIMED OUT after 1s", note)
         self.assertIn("--cell-timeout", note)
         self.assertIn("wedged", log)
+        # It checkpointed nothing, so the note names no checkpoint (gh-ocannl-1209).
+        self.assertNotIn("checkpoint", note)
+
+    def golden_checkpoint(self, name):
+        """A checkpoint line as the OCaml emitter built it (see CheckpointLineTest)."""
+        return next(l for l in golden_checkpoint_lines() if f'"dominant_kernel":"{name}"' in l)
+
+    # What a runner writes before its dominant-kernel instrument, as the first line of a child's
+    # source: the golden checkpoint arrives as the child's last argument.
+    WRITE_CHECKPOINT = "import sys; sys.stderr.write(sys.argv[-1] + '\\n'); sys.stderr.flush()\n"
+
+    def test_a_late_timeout_keeps_the_losses_checkpointed_before_it(self):
+        # The TUF s1024 case: every parity loss observed, then the cap expires inside the
+        # dominant-kernel instrument. The cell is a failure; its losses are kept beside it.
+        pidfile = self.dir / "late.pid"
+        kill_the_group_on_cleanup(self, pidfile)
+        cell = self.python(
+            self.WRITE_CHECKPOINT
+            + publish_pid("sys.argv[1]", "os.getpid()")
+            + "import time; time.sleep(300)\n",
+            pidfile,
+            self.golden_checkpoint("running"),
+        )
+        kept = []
+
+        result, note, _ = self.run_cell(
+            "killed in diagnostics", cell, timeout=1.0, on_checkpoint=kept.append
+        )
+
+        self.assertIsNone(result)
+        self.assertIn("TIMED OUT after 1s", note)
+        self.assertIn("kept 6 of 6 parity losses", note)
+        self.assertIn("running: dominant_kernel", note)
+        self.assertIn("not an accepted result", note)
+        self.assertEqual(len(kept), 1)
+        self.assertEqual(kept[0]["losses"], [10.375, 10.25, 10.125, 10.0, 9.875, 9.75])
+        self.assertEqual(kept[0]["stages"]["timing"], "complete")
+
+    def test_a_failed_exit_keeps_its_checkpoint_too(self):
+        cell = self.python(self.WRITE_CHECKPOINT + "sys.exit(2)\n", self.golden_checkpoint("running"))
+        kept = []
+
+        result, note, _ = self.run_cell(
+            "crashed in diagnostics", cell, timeout=60, on_checkpoint=kept.append
+        )
+
+        self.assertIsNone(result)
+        self.assertIn("exit 2", note)
+        self.assertIn("kept 6 of 6 parity losses", note)
+        self.assertEqual(len(kept), 1)
+
+    def test_a_cell_that_finishes_reports_its_result_not_its_checkpoints(self):
+        # Negative control: the checkpoints of a cell that went on to emit its result line are
+        # superseded by it. (A timeout with no checkpoint names none: the cap test above.)
+        cell = self.python(
+            self.WRITE_CHECKPOINT
+            + "import json; print(json.dumps("
+            "{'workload': 'w', 'step_ms': {'p50': 1.0}, 'compile_s': 0.5}))\n",
+            self.golden_checkpoint("running"),
+        )
+        kept = []
+
+        result, note, _ = self.run_cell(
+            "finished after checkpoints", cell, timeout=60, on_checkpoint=kept.append
+        )
+
+        self.assertIsNone(note)
+        self.assertEqual(result["workload"], "w")
+        self.assertEqual(kept, [])
 
     @unittest.skipUnless(os.name == "posix", "process groups are a POSIX notion here")
     def test_the_kill_takes_the_whole_process_group(self):
@@ -3115,6 +3276,35 @@ class CellTimeoutTest(unittest.TestCase):
 
         self.assertIn("SURVIVED SIGKILL", note)
         self.assertIn("measured against it", note)
+
+    @unittest.skipUnless(os.name == "posix", "SIGALRM and process groups are POSIX here")
+    def test_an_interrupted_cell_hands_over_its_checkpoint_before_propagating(self):
+        # gh-ocannl-1209 review: the cancellation path deletes a temporary log, so the losses must
+        # leave through on_checkpoint before the interrupt does.
+        pidfile = self.dir / "interrupted-late.pid"
+        kill_the_group_on_cleanup(self, pidfile)
+        cell = self.python(
+            self.WRITE_CHECKPOINT
+            + publish_pid("sys.argv[1]", "os.getpid()")
+            + "import time; time.sleep(300)\n",
+            pidfile,
+            self.golden_checkpoint("running"),
+        )
+        kept = []
+
+        def handler(_signum, _frame):
+            raise KeyboardInterrupt
+
+        previous = signal.signal(signal.SIGALRM, handler)
+        self.addCleanup(signal.signal, signal.SIGALRM, previous)
+        signal.setitimer(signal.ITIMER_REAL, 1.0)
+        self.addCleanup(signal.setitimer, signal.ITIMER_REAL, 0)
+
+        with self.assertRaises(KeyboardInterrupt):
+            self.run_cell("interrupted in diagnostics", cell, on_checkpoint=kept.append)
+
+        self.assertEqual(len(kept), 1)
+        self.assertEqual(kept[0]["losses"], [10.375, 10.25, 10.125, 10.0, 9.875, 9.75])
 
     @unittest.skipUnless(os.name == "posix", "SIGALRM and process groups are POSIX here")
     def test_an_interrupted_cell_gets_the_same_cache_treatment_as_a_capped_one(self):
@@ -4299,6 +4489,269 @@ class RegimeTest(unittest.TestCase):
         self.assertNotIn("| regime |", text)
         self.assertNotIn("exact envelope", text)
         self.assertIn("| PASS (", text)
+
+
+# The fixture the real-runner leg of TensorPrecisionTest measures: a two-layer mlp small enough
+# that each runner process is torch's import and nothing else. Every tensor is stored at the dtype
+# named on the commandline, so a row that reports float32 for a bfloat16 fixture echoed something
+# instead of reading its tensors back.
+PRECISION_PROBE_FIXTURE = """
+import sys
+import torch
+import torch.nn.functional as F
+from safetensors.torch import save_file
+
+path, dtype = sys.argv[1], getattr(torch, sys.argv[2])
+g = torch.Generator().manual_seed(0)
+n, d_in, hidden, d_out = 8, 4, 6, 3
+tensors = {
+    "x": torch.randn(n, d_in, generator=g),
+    "y": F.one_hot(torch.arange(n) % d_out, d_out).float(),
+    "w1": torch.randn(hidden, d_in, generator=g) * 0.5,
+    "b1": torch.zeros(hidden),
+    "w2": torch.randn(d_out, hidden, generator=g) * 0.5,
+    "b2": torch.zeros(d_out),
+}
+meta = {
+    "model": "mlp", "name": "precision_probe", "n_layers": "2", "batch_size": "4", "lr": "0.1",
+    "parity_steps": "3", "warmup_steps": "1", "timed_steps": "2",
+}
+save_file({k: v.to(dtype).contiguous() for k, v in tensors.items()}, path, metadata=meta)
+"""
+
+# Runs the torch runner inside an autocast context the runner knows nothing about: the case a
+# matmul-policy getter cannot see and the step's own autocast read must.
+UNDER_AUTOCAST = """
+import runpy
+import sys
+import torch
+
+run_py, fixture = sys.argv[1], sys.argv[2]
+sys.argv = [run_py, "--fixture", fixture]
+with torch.autocast("cpu", dtype=torch.bfloat16):
+    runpy.run_path(run_py, run_name="__main__")
+"""
+
+
+def torch_venv_python():
+    """The bench venv's interpreter if it can run the torch runner here, else None."""
+    venv = bench_venv.venv_python(HERE)
+    if not venv.exists():
+        return None
+    probe = subprocess.run(
+        [str(venv), "-c", "import torch, safetensors"], capture_output=True, timeout=120
+    )
+    return venv if probe.returncode == 0 else None
+
+
+class TensorPrecisionTest(unittest.TestCase):
+    """gh-ocannl-1208: a torch row says what its tensors and autocast context WERE.
+
+    `regime_settings` is the matmul policy; it cannot tell a bf16 weight or an autocast context
+    from an f32 run. The runner reads the parameter and batch dtypes and the autocast state back
+    from its own run, and the sweep fails a row whose label they contradict.
+    """
+
+    def test_the_effective_precision_is_the_floating_tensors_shared_label(self):
+        f32 = bench_common.effective_precision(["float32"], {"input": "float32", "target": "float32"})
+        self.assertEqual(f32, "f32")
+        # Token ids carry no precision: the gpt fixture's int64 ids leave an f32 run f32.
+        ids = bench_common.effective_precision(["float32"], {"input": "int64", "target": "float32"})
+        self.assertEqual(ids, "f32")
+        self.assertEqual(bench_common.effective_precision(["bfloat16"], {"input": "bfloat16"}), "bf16")
+        self.assertEqual(
+            bench_common.effective_precision(["bfloat16", "float32"], {"input": "float32"}),
+            "mixed(bfloat16,float32)",
+        )
+        # A format with no report label is named, not mapped to the nearest one.
+        self.assertEqual(
+            bench_common.effective_precision(["float8_e4m3fn"], {}), "float8_e4m3fn"
+        )
+        self.assertIsNone(bench_common.effective_precision([], {"input": "int64"}))
+
+    def test_the_fields_are_read_from_the_tensors_handed_in(self):
+        def tensor(dtype):
+            return types.SimpleNamespace(dtype=f"torch.{dtype}")
+
+        fields = bench_common.tensor_precision_fields(
+            [tensor("float32"), tensor("bfloat16"), tensor("float32")],
+            {"input": tensor("int64"), "target": tensor("float32")},
+            {"enabled": False, "dtype": None},
+        )
+
+        self.assertEqual(
+            fields,
+            {
+                "param_dtypes": ["bfloat16", "float32"],
+                "input_dtypes": {"input": "int64", "target": "float32"},
+                "autocast": {"enabled": False, "dtype": None},
+                "effective_precision": "mixed(bfloat16,float32)",
+            },
+        )
+
+    def test_the_autocast_state_is_read_per_device_and_unknown_is_not_off(self):
+        def torch_with(enabled, raises=None):
+            def is_enabled(device_type):
+                if raises:
+                    raise raises
+                return enabled.get(device_type, False)
+
+            return types.SimpleNamespace(
+                is_autocast_enabled=is_enabled,
+                get_autocast_dtype=lambda device_type: "torch.bfloat16",
+            )
+
+        on_cpu = torch_with({"cpu": True})
+        self.assertEqual(
+            bench_common.torch_autocast_state(on_cpu, "cpu"),
+            {"enabled": True, "dtype": "bfloat16"},
+        )
+        # Off reports no dtype: torch's getter answers its default dtype even when autocast is off.
+        self.assertEqual(
+            bench_common.torch_autocast_state(on_cpu, "mps"), {"enabled": False, "dtype": None}
+        )
+        # A torch predating the per-device getters, or a device autocast does not know: None.
+        self.assertIsNone(bench_common.torch_autocast_state(types.SimpleNamespace(), "cpu"))
+        self.assertIsNone(
+            bench_common.torch_autocast_state(torch_with({}, raises=TypeError("no arg")), "cpu")
+        )
+        self.assertIsNone(
+            bench_common.torch_autocast_state(torch_with({}, raises=RuntimeError("xla")), "xla")
+        )
+
+    def torch_row(self, effective, precision="f32", autocast=None):
+        row = cell("pytorch", "cpu", "eager", [2.3, 2.2, 2.1], precision=precision)
+        row.update(
+            param_dtypes=["float32"],
+            input_dtypes={"input": "float32", "target": "float32"},
+            autocast={"enabled": False, "dtype": None} if autocast is None else autocast,
+            effective_precision=effective,
+        )
+        return row
+
+    def test_a_label_the_run_contradicts_is_a_mismatch(self):
+        honest = self.torch_row("f32")
+        # A requested precision the runner did not apply: labelled bf16, tensors read back f32.
+        ignored = self.torch_row("f32", precision="bf16")
+        cast_on_load = self.torch_row("bf16")
+        autocast = self.torch_row("f32", autocast={"enabled": True, "dtype": "float16"})
+        # A gate leg computes in its base precision.
+        gate_leg = self.torch_row("f16", precision="f16-static")
+        # Unknown autocast is reported in the row, not a mismatch.
+        unknown = self.torch_row("f32")
+        unknown["autocast"] = None
+        # Rows whose runner reports no effective precision -- OCANNL's, tinygrad's, a torch
+        # runner predating the field -- are not checked.
+        ocannl = cell("ocannl", "cc", "default", [2.3, 2.2, 2.1])
+        older = cell("pytorch", "cuda", "eager", [2.3, 2.2, 2.1], precision="bf16")
+
+        mismatched = orchestrate.precision_check(
+            [honest, ignored, cast_on_load, autocast, gate_leg, unknown, ocannl, older]
+        )
+
+        self.assertEqual(mismatched, [ignored, cast_on_load, autocast])
+        self.assertEqual(ignored["precision_mismatch"], "f32 tensors")
+        self.assertEqual(cast_on_load["precision_mismatch"], "bf16 tensors")
+        self.assertEqual(autocast["precision_mismatch"], "autocast to float16")
+        for row in (honest, gate_leg, unknown, ocannl, older):
+            self.assertNotIn("precision_mismatch", row)
+
+    def test_the_report_shouts_a_mismatch_and_names_what_the_reference_computed_in(self):
+        ref = self.torch_row("f32")
+        cast = self.torch_row("bf16")
+        cast["backend"] = "mps"
+        rows = [ref, cast]
+        orchestrate.parity_check(rows)
+        orchestrate.precision_check(rows)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            with contextlib.redirect_stdout(io.StringIO()):
+                orchestrate.report(rows, out)
+            text = (out / "report.md").read_text()
+            written = [
+                strict_loads(line) for line in (out / "results.jsonl").read_text().splitlines()
+            ]
+
+        self.assertIn(
+            "parity reference `pytorch/cpu/eager`: params float32; inputs input float32, "
+            "target float32; autocast off",
+            text,
+        )
+        mps = [line for line in text.splitlines() if line.startswith("| pytorch | mps")][0]
+        self.assertIn("**PRECISION MISMATCH** (dispatched f32; ran bf16 tensors)", mps)
+        self.assertEqual(written[1]["precision_mismatch"], "bf16 tensors")
+        self.assertEqual(written[0]["param_dtypes"], ["float32"])
+        self.assertEqual(written[0]["autocast"], {"enabled": False, "dtype": None})
+
+    def test_a_reference_predating_the_fields_says_so(self):
+        ref = cell("pytorch", "cpu", "eager", [2.3, 2.2, 2.1])
+        orchestrate.parity_check([ref])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with contextlib.redirect_stdout(io.StringIO()):
+                orchestrate.report([ref], Path(tmp))
+            text = (Path(tmp) / "report.md").read_text()
+
+        self.assertIn(
+            "parity reference `pytorch/cpu/eager`: tensor precision not reported by its runner",
+            text,
+        )
+
+    def test_the_real_runner_reads_its_precision_back_from_a_cpu_run(self):
+        """The runner end to end on a tiny CPU fixture, where the bench venv has torch.
+
+        Three runs: an f32 fixture (the reference's case), a bf16 fixture (read back, not echoed:
+        nothing on the commandline differs), and the f32 fixture under an autocast context the
+        runner never entered itself. A requested-but-ignored precision is the first run stamped
+        bf16, as the sweep's override would stamp it.
+        """
+        venv = torch_venv_python()
+        if venv is None:
+            self.skipTest(
+                f"no bench venv with torch at {bench_venv.venv_python(HERE)} "
+                "(set BENCH_VENV_PY to run this leg)"
+            )
+        run_py = HERE / "runners/pytorch/run.py"
+
+        def row(*argv):
+            done = subprocess.run(
+                [str(venv), *argv], capture_output=True, text=True, timeout=300
+            )
+            self.assertEqual(done.returncode, 0, done.stderr)
+            return strict_loads(done.stdout.strip().splitlines()[-1])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            fixtures = {}
+            for dtype in ("float32", "bfloat16"):
+                fixtures[dtype] = str(Path(tmp) / f"probe_{dtype}.safetensors")
+                subprocess.run(
+                    [str(venv), "-c", PRECISION_PROBE_FIXTURE, fixtures[dtype], dtype],
+                    check=True,
+                    timeout=300,
+                )
+            f32 = row(str(run_py), "--fixture", fixtures["float32"])
+            bf16 = row(str(run_py), "--fixture", fixtures["bfloat16"])
+            autocast = row("-c", UNDER_AUTOCAST, str(run_py), fixtures["float32"])
+
+        self.assertEqual(f32["param_dtypes"], ["float32"])
+        self.assertEqual(f32["input_dtypes"], {"input": "float32", "target": "float32"})
+        self.assertEqual(f32["autocast"], {"enabled": False, "dtype": None})
+        self.assertEqual(f32["effective_precision"], "f32")
+        self.assertEqual(bf16["param_dtypes"], ["bfloat16"])
+        self.assertEqual(bf16["effective_precision"], "bf16")
+        self.assertEqual(autocast["autocast"], {"enabled": True, "dtype": "bfloat16"})
+        self.assertEqual(autocast["effective_precision"], "f32")
+
+        for r in (f32, bf16, autocast):
+            r["precision"] = "f32"  # as the sweep stamps every torch cell
+        ignored = dict(f32, precision="bf16")
+        mismatched = orchestrate.precision_check([f32, ignored, bf16, autocast])
+
+        self.assertEqual(mismatched, [ignored, bf16, autocast])
+        self.assertEqual(ignored["precision_mismatch"], "f32 tensors")
+        self.assertEqual(bf16["precision_mismatch"], "bf16 tensors")
+        self.assertEqual(autocast["precision_mismatch"], "autocast to bfloat16")
 
 
 class AmbientEnvTest(unittest.TestCase):

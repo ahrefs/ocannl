@@ -1,32 +1,36 @@
-build @a/runtest-t_cfg                   names nothing
+build @a/runtest-t_cfg                   names nothing + reads config
 build @a/runtest-t_cfg reaches no GPU stanza: true
 build @a/runtest-t_cc                    names cc
 build @a/runtest-t_cc reaches no GPU stanza: true
 build @a/runtest-t_cuda                  names cuda
 build @a/runtest-t_cuda can hold a GPU: true
-build @a/scans                           names cc
+build @a/scans                           names cc + reads config
 build @a/scans reaches no GPU stanza: true
-build @a/gpuagg                          names cuda,cc
+build @a/gpuagg                          names cuda,cc + reads config
 build @a/gpuagg can hold a GPU: true
-build @@c/runtest                        names nothing
+build @@c/runtest                        names nothing + reads config
 build @@c/runtest reaches no GPU stanza: true
-build @c/runtest                         names nothing
+build @c/runtest                         names nothing + reads config
 build @c/runtest reaches no GPU stanza: true
-build @@a/runtest                        names cuda,cc
+build @@a/runtest                        names cuda,cc + reads config
 build @@a/runtest can hold a GPU: true
 runtest a/sub                            names hip
 runtest a/sub can hold a GPU: true
-runtest a                                names cuda,cc,hip
+runtest a                                names cuda,cc,hip + reads config
 runtest a can hold a GPU: true
-runtest c                                names nothing
+runtest c                                names nothing + reads config
 runtest c reaches no GPU stanza: true
+runtest n                                names nothing
+runtest n reaches no GPU stanza: true
+build @n/scans                           names nothing
+build @n/scans reaches no GPU stanza: true
 build @b/runtest                         names cc,metal
 build @b/runtest can hold a GPU: true
 build @b/runtest-m                       names cc,metal
 build @b/runtest-m can hold a GPU: true
-runtest                                  names cuda,cc,hip,metal
+runtest                                  names cuda,cc,hip,metal + reads config
 runtest can hold a GPU: true
-build @runtest                           names cuda,cc,hip,metal
+build @runtest                           names cuda,cc,hip,metal + reads config
 build @runtest can hold a GPU: true
 build @@runtest                          names nothing
 build @@runtest reaches no GPU stanza: true
@@ -60,27 +64,224 @@ runtest --root /elsewhere c              unknown: it carries `--root`, which thi
 runtest --root /elsewhere c can hold a GPU: true
 build ./a/t_cfg.exe                      unknown: it carries `./a/t_cfg.exe`, which this does not model (it could change what is built)
 build ./a/t_cfg.exe can hold a GPU: true
+build @_build/default/runtest            unknown: it carries `@_build/default/runtest`, which this does not model (it could change what is built)
+build @_build/default/runtest can hold a GPU: true
+build @@_build/default/c/runtest         unknown: it carries `@@_build/default/c/runtest`, which this does not model (it could change what is built)
+build @@_build/default/c/runtest can hold a GPU: true
+runtest _build/default                   unknown: it carries `_build/default`, which this does not model (it could change what is built)
+runtest _build/default can hold a GPU: true
+build @.hidden/runtest                   unknown: it carries `@.hidden/runtest`, which this does not model (it could change what is built)
+build @.hidden/runtest can hold a GPU: true
 build _build/default/c/t_only.exe        unknown: it carries `_build/default/c/t_only.exe`, which this does not model (it could change what is built)
 build _build/default/c/t_only.exe can hold a GPU: true
-build -j 8 @a/runtest-t_cfg              names nothing
+build -j 8 @a/runtest-t_cfg              names nothing + reads config
 build -j 8 @a/runtest-t_cfg reaches no GPU stanza: true
-build -j8 --force --profile=release @c/runtest names nothing
+build -j8 --force --profile=release @c/runtest names nothing + reads config
 build -j8 --force --profile=release @c/runtest reaches no GPU stanza: true
-build --display short @c/runtest         names nothing
+build --display short @c/runtest         names nothing + reads config
 build --display short @c/runtest reaches no GPU stanza: true
-runtest -j 4 c                           names nothing
+runtest -j 4 c                           names nothing + reads config
 runtest -j 4 c reaches no GPU stanza: true
-build                                    names cuda,cc,hip,metal
+build                                    names cuda,cc,hip,metal + reads config
 build can hold a GPU: true
 promote                                  names nothing
 promote reaches no GPU stanza: true
 clean                                    names nothing
 clean reaches no GPU stanza: true
-runtest a reaches exactly names cuda,cc,hip: true
-runtest reaches exactly names cuda,cc,hip,metal: true
+install                                  unknown: it carries `install`, which this does not model (it could change what is built)
+install can hold a GPU: true
+build @c/revdep-runtest                  unknown: no stanza carries @c/revdep-runtest, and it is no dune alias this models
+build @c/revdep-runtest can hold a GPU: true
+build --build-dir out @out/default/runtest unknown: it carries `--build-dir`, which this does not model (it could change what is built)
+build --build-dir out @out/default/runtest can hold a GPU: true
+build --instrument-with bisect_ppx @c/runtest unknown: it carries `--instrument-with`, which this does not model (it could change what is built)
+build --instrument-with bisect_ppx @c/runtest can hold a GPU: true
+build --diff-command=cmp @c/runtest      unknown: it carries `--diff-command=cmp`, which this does not model (it could change what is built)
+build --diff-command=cmp @c/runtest can hold a GPU: true
+exec ./x.exe                             unknown: it carries `exec`, which this does not model (it could change what is built)
+exec ./x.exe can hold a GPU: true
+runtest a reaches exactly names cuda,cc,hip + reads config: true
+runtest reaches exactly names cuda,cc,hip,metal + reads config: true
 build @b/runtest-m reaches exactly names cc,metal: true
-build @a/gpuagg reaches exactly names cuda,cc: true
-build @a/scans reaches exactly names cc: true
-runtest c reaches exactly names nothing: true
+build @a/gpuagg reaches exactly names cuda,cc + reads config: true
+build @a/scans reaches exactly names cc + reads config: true
+build @a/runtest-t_cc reaches exactly names cc: true
+runtest c reaches exactly names nothing + reads config: true
+runtest n reaches exactly names nothing: true
+build @n/scans reaches exactly names nothing: true
+promote reaches exactly names nothing: true
+build @f/runtest-probe reaches exactly names nothing + reads config: true
+build @f/runtest-named reaches exactly names cuda: true
+build @f/runtest-read reaches exactly names nothing + reads config: true
+build @f/runtest-glob reaches exactly names cuda + reads config: true
+build @@f/default reaches exactly names cuda + reads config: true
+build @x/cross reaches exactly names nothing + reads config: true
+build @x/cross_rec reaches exactly names nothing + reads config: true
+build @g/runtest-t_gate reaches exactly names nothing + reads config: true
+build @g/runtest-l reaches exactly names hip: true
 runtest d (malformed marker)             unknown: the dune file in d is unreadable here ((Failure "a backend marker the env_var_deps contract refuses"))
 a malformed marker makes the tree unreadable, never CPU: true
+runtest d (no declaration)               names nothing + reads config
+a stanza declaring neither reads the configuration: true
+runtest d (two markers)                  unknown: the dune file in d is unreadable here ((Failure "a stanza carrying two backend markers"))
+a stanza carrying two markers makes the tree unreadable, never names nothing: true
+build @d/pkg (package)                   unknown: it reaches pkg in d, whose dependency (package neural_nets_lib) this does not model exactly
+    unknown: it reaches pkg in d, whose dependency (package neural_nets_lib) this does not model exactly
+an unmodelled package is every backend: true
+an unmodelled package is nothing to a batch not reaching it: true
+build @d/inc (include)                   unknown: it reaches inc in d, whose dependency (include deps.sexp) this does not model exactly
+    unknown: it reaches inc in d, whose dependency (include deps.sexp) this does not model exactly
+an unmodelled include is every backend: true
+an unmodelled include is nothing to a batch not reaching it: true
+build @d/up (escape)                     unknown: it reaches up in d, whose dependency (alias ../../elsewhere/runtest) this does not model exactly
+    unknown: it reaches up in d, whose dependency (alias ../../elsewhere/runtest) this does not model exactly
+an unmodelled escape is every backend: true
+an unmodelled escape is nothing to a batch not reaching it: true
+build @d/pf (pform alias)                unknown: it reaches pf in d, whose dependency (alias %{env:A=x}/runtest) this does not model exactly
+    unknown: it reaches pf in d, whose dependency (alias %{env:A=x}/runtest) this does not model exactly
+an unmodelled pform alias is every backend: true
+an unmodelled pform alias is nothing to a batch not reaching it: true
+build @d/odd (pform)                     unknown: it reaches the rule on odd in d, whose pform %{frobnicate} this does not model exactly
+    unknown: it reaches the rule on odd in d, whose pform %{frobnicate} this does not model exactly
+an unmodelled pform is every backend: true
+an unmodelled pform is nothing to a batch not reaching it: true
+build @d/dyn (dynamic-run)               unknown: it reaches the rule on dyn in d, whose dynamic-run action this does not model exactly
+    unknown: it reaches the rule on dyn in d, whose dynamic-run action this does not model exactly
+an unmodelled dynamic-run is every backend: true
+an unmodelled dynamic-run is nothing to a batch not reaching it: true
+build @d/ev (env dependency)             unknown: it reaches ev in d, whose pform %{env:INPUT=plain} this does not model exactly
+    unknown: it reaches ev in d, whose pform %{env:INPUT=plain} this does not model exactly
+an unmodelled env dependency is every backend: true
+an unmodelled env dependency is nothing to a batch not reaching it: true
+build @d/mx (dependency field mixing a modelled alias with an unmodelled form) unknown: it reaches mx in d, whose dependency (package helper) this does not model exactly
+    unknown: it reaches mx in d, whose dependency (package helper) this does not model exactly
+an unmodelled dependency field mixing a modelled alias with an unmodelled form is every backend: true
+an unmodelled dependency field mixing a modelled alias with an unmodelled form is nothing to a batch not reaching it: true
+build @d/sb (sandbox wrapper)            unknown: it reaches sb in d, whose dependency (sandbox(alias runtest-gpu)) this does not model exactly
+    unknown: it reaches sb in d, whose dependency (sandbox(alias runtest-gpu)) this does not model exactly
+an unmodelled sandbox wrapper is every backend: true
+an unmodelled sandbox wrapper is nothing to a batch not reaching it: true
+build @d/odd2 (alias form outside a dependency field) unknown: it reaches the rule on odd2 in d, whose alias form (alias x) this does not model exactly
+    unknown: it reaches the rule on odd2 in d, whose alias form (alias x) this does not model exactly
+an unmodelled alias form outside a dependency field is every backend: true
+an unmodelled alias form outside a dependency field is nothing to a batch not reaching it: true
+build @n/scans (a top-level include)     unknown: it reads the dune file in d, whose stanza (include …) this does not model exactly
+    unknown: it reads the dune file in d, whose stanza (include …) this does not model exactly
+a top-level include beside the tree leaves no batch proven to read nothing: true
+build @n/scans (a cram test)             unknown: it reads the dune file in d, whose stanza (cram …) this does not model exactly
+    unknown: it reads the dune file in d, whose stanza (cram …) this does not model exactly
+a cram test beside the tree leaves no batch proven to read nothing: true
+build @n/scans (an install stanza)       unknown: it reads the dune file in d, whose stanza (install …) this does not model exactly
+    unknown: it reads the dune file in d, whose stanza (install …) this does not model exactly
+an install stanza beside the tree leaves no batch proven to read nothing: true
+build @n/scans (a backend flag in a preprocessing action) unknown: it compiles pp_user in d, whose preprocessing action this does not model exactly
+    unknown: it compiles pp_user in d, whose preprocessing action this does not model exactly
+a backend flag in a preprocessing action beside the tree leaves no batch proven to read nothing: true
+build @n/scans (a copy_files attached to an alias) unknown: it reads the dune file in d, whose alias form (alias probe) this does not model exactly
+    unknown: it reads the dune file in d, whose alias form (alias probe) this does not model exactly
+a copy_files attached to an alias beside the tree leaves no batch proven to read nothing: true
+build @n/scans (an env setting variables) unknown: it compiles the env stanza in d, whose env setting (env-vars(FOO bar)) this does not model exactly
+    unknown: it compiles the env stanza in d, whose env setting (env-vars(FOO bar)) this does not model exactly
+an env setting variables beside the tree leaves no batch proven to read nothing: true
+build @n/scans (an env_vars backend)     unknown: it compiles the env stanza in d, whose env setting (env_vars((OCANNL_BACKEND hip))) this does not model exactly
+    unknown: it compiles the env stanza in d, whose env setting (env_vars((OCANNL_BACKEND hip))) this does not model exactly
+an env_vars backend beside the tree leaves no batch proven to read nothing: true
+build @n/scans (an env's other settings) unknown: it compiles the env stanza in d, whose env setting (binaries tool.exe) this does not model exactly
+    unknown: it compiles the env stanza in d, whose env setting (binaries tool.exe) this does not model exactly
+an env's other settings beside the tree leaves no batch proven to read nothing: true
+build @n/scans (an env's preprocessor flag) unknown: it compiles the env stanza in d, whose compiler flag -pp this does not model exactly
+    unknown: it compiles the env stanza in d, whose compiler flag -pp this does not model exactly
+an env's preprocessor flag beside the tree leaves no batch proven to read nothing: true
+build @n/scans (an included flags file)  unknown: it compiles l3 in d, whose (:include …) form this does not model exactly
+    unknown: it compiles l3 in d, whose (:include …) form this does not model exactly
+an included flags file beside the tree leaves no batch proven to read nothing: true
+build @n/scans (a library's ppx flag)    unknown: it compiles l2 in d, whose compiler flag -ppx this does not model exactly
+    unknown: it compiles l2 in d, whose compiler flag -ppx this does not model exactly
+a library's ppx flag beside the tree leaves no batch proven to read nothing: true
+build @n/scans (a ppx that can reach a backend) unknown: it reaches user in d, whose ppx evil_ppx (it can reach a backend) this does not model exactly
+    unknown: it reaches user in d, whose ppx evil_ppx (it can reach a backend) this does not model exactly
+a ppx that can reach a backend beside the tree leaves no batch proven to read nothing: true
+build @n/scans (a generated Reason module) names nothing + reads config
+    it reaches the rule producing gen.re in d, which reads the configuration
+a generated Reason module beside the tree leaves no batch proven to read nothing: true
+build @n/scans (a ctypes field)          unknown: it compiles stubs in d, whose ctypes field this does not model exactly
+    unknown: it compiles stubs in d, whose ctypes field this does not model exactly
+a ctypes field beside the tree leaves no batch proven to read nothing: true
+build @n/scans (a preprocessing action)  unknown: it compiles helper in d, whose preprocessing action this does not model exactly
+    unknown: it compiles helper in d, whose preprocessing action this does not model exactly
+a preprocessing action beside the tree leaves no batch proven to read nothing: true
+build @@d/probe (an inferred target on an alias-attached rule) names nothing + reads config
+    it reaches the rule on generate in d, which reads the configuration
+an inferred target on an alias-attached rule reaches the reader, or is every backend: true
+build @@d/probe (a target written by an action this does not read) unknown: it reads the dune file in d, whose rule with targets no action form names this does not model exactly
+    unknown: it reads the dune file in d, whose rule with targets no action form names this does not model exactly
+a target written by an action this does not read reaches the reader, or is every backend: true
+build @@d/probe (a bare-star glob)       names nothing + reads config
+    it reaches the rule producing a.actual in d, which reads the configuration
+a bare-star glob reaches the reader, or is every backend: true
+build @@d/runtest-none (an alias in a test's link_deps) names nothing + reads config
+    it reaches the rule producing a.actual in d, which reads the configuration
+an alias in a test's link_deps reaches the reader, or is every backend: true
+build @@d/probe (a character-class glob) names nothing + reads config
+    it reaches the rule producing a.actual in d, which reads the configuration
+a character-class glob reaches the reader, or is every backend: true
+build @@d/runtest-none (a linked library's preprocessing) unknown: it compiles helper in d, whose preprocessing action this does not model exactly
+    unknown: it compiles helper in d, whose preprocessing action this does not model exactly
+a linked library's preprocessing reaches the reader, or is every backend: true
+build @n/scans (beside a generated .ml)  names nothing + reads config
+a configuration-reading generator of a source file is always reached: true
+build @n/scans (an env's backend)        unknown: it compiles the env stanza in d, whose env setting (env-vars(OCANNL_BACKEND hip)) this does not model exactly
+an env's backend is every backend: true
+build @d/se (a setenv'd backend)         unknown: it reaches the rule on se in d, whose (setenv OCANNL_BACKEND …) sets the backend past the configuration
+a setenv'd backend is every backend: true
+build @@d/probe (a directory target)     unknown: it reaches the rule producing * in d, whose generated ocannl_config sets the backend past the configuration
+a directory target is every backend: true
+build @d/gc (a generated configuration)  unknown: it reaches the rule producing ocannl_config in d, whose generated ocannl_config sets the backend past the configuration
+a generated configuration is every backend: true
+build @d/ei (an environment-clearing env on a reader) unknown: it reaches the rule on ei in d, whose word in env sets the backend past the configuration
+an environment-clearing env on a reader is every backend: true
+build @d/ev2 (an env-command assignment on a reader) unknown: it reaches the rule on ev2 in d, whose word in env sets the backend past the configuration
+an env-command assignment on a reader is every backend: true
+build @d/sh (a shell assignment on a reader) unknown: it reaches the rule on sh in d, whose word in OCANNL_BACKEND=hip ./d.exe sets the backend past the configuration
+a shell assignment on a reader is every backend: true
+build @d/nc (a dropped configuration on a reader) unknown: it reaches the rule on nc in d, whose (setenv OCANNL_NO_CONFIG_FILE …) sets the backend past the configuration
+a dropped configuration on a reader is every backend: true
+build @d/fl2 (a prefix-free backend flag on a reader) unknown: it reaches the rule on fl2 in d, whose word in --backend=hip sets the backend past the configuration
+a prefix-free backend flag on a reader is every backend: true
+build @d/fl3 (a single-dash uppercase backend flag on a reader) unknown: it reaches the rule on fl3 in d, whose word in -OCANNL-BACKEND sets the backend past the configuration
+a single-dash uppercase backend flag on a reader is every backend: true
+build @d/fl (a backend flag on a reader) unknown: it reaches the rule on fl in d, whose word in --ocannl_backend=hip sets the backend past the configuration
+a backend flag on a reader is every backend: true
+build @n/scans (a ppx name in two projects) unknown: it reaches u1 in p1, whose ppx my_ppx (it can reach a backend) this does not model exactly
+a ppx name defined twice is read as every definition: true
+build @@r/default (an implicit default recursing) names nothing + reads config
+an implicit default recursing answers names nothing + reads config: true
+build @q/runtest (a reader beside a configuration copied from a directory the runner does not read) unknown: it reaches rq in q, whose configuration, a copy of the ocannl_config in hipcfg (in q) sets the backend past the configuration
+a reader beside a configuration copied from a directory the runner does not read answers unknown: true
+build @q2/runtest (a reader beside a configuration copied from one it does) names nothing + reads config
+a reader beside a configuration copied from one it does answers names nothing + reads config: true
+build @w/wp (a workspace program run by name) unknown: it reaches the rule on wp in w, whose run of the workspace program gpu_tool, unmarked this does not model exactly
+a workspace program run by name answers unknown: true
+build @@c/probe (a glob over copies)     names nothing + reads config
+a glob over a copy_files' copies reaches the reader they copy: true
+dirs: [] [.x] [.x/keep] [plain] [tools/.hidden] [tools/sub]
+the inventory reads where dirs stanzas send dune, and nowhere else: true
+a directory set with an ordered-set operator makes the tree unreadable: true
+a workspace setting a context environment makes the tree unreadable: true
+an alternative dune-file makes the tree unreadable: true
+a dialect declared in dune-project makes the tree unreadable: true
+a dialect declared in a nested dune-project makes the tree unreadable: true
+an implicitly discovered cram test makes the tree unreadable: true
+a data_only_dirs character class makes the tree unreadable: true
+an ancestor dune-project taking dune's root makes the tree unreadable: true
+an alias rooted in a moved build directory is every backend: true
+DUNE_DIFF_COMMAND set makes a batch every backend: true
+DUNE_INSTRUMENT_WITH set makes a batch every backend: true
+DUNE_ROOT set makes a batch every backend: true
+OCAMLPARAM set makes a batch every backend: true
+live: build @test/operations/scans                            names nothing
+    <the configuration does not count>
+live: build @test/operations/scans answers names nothing: true
+live: build @test/operations/runtest-bandwidth_calibration    names nothing + reads config
+    it reaches the rule producing bandwidth_calibration.actual in test/operations, which reads the configuration
+live: build @test/operations/runtest-bandwidth_calibration answers names nothing + reads config: true

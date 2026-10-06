@@ -48,6 +48,7 @@ Configuration keys tracked as ambient dependencies, in the one spelling OCANNL r
   exit_stream_teardown_timeout
   fp16_arithmetic
   gpu_fission_keep_mapping
+  gpu_lane_all_reduce_simdgroups
   gpu_lane_preamble_reduction
   gpu_schedule_block_size
   gpu_schedule_min_parallel
@@ -105,6 +106,9 @@ Ambient variables a module reads by name at run time, and the stanza that declar
   OCANNL_TOOL_CC_MARCH_CENSUS_CACHE_DIR test/operations/dune, test cc_march_census (test/operations/cc_march_census.ml)
   OCANNL_TOOL_TEST_RESTRICT_MASK test/operations/dune, test test_cpu_topology (test/operations/test_cpu_topology.ml)
 
+Run-time reads exempted from declaration, each for the reason `exempt_reads` gives:
+  test/support/verdict.ml:OCANNL_TOOL_VERDICT_RECORDS
+
 Configuration keys a program reads straight from the environment through `Utils.read_env_var`, and how
 many runs of it answer for each (gh-ocannl-749). A key read this way cannot be outranked by
 a commandline flag or a config file, so every run depends on the variable unconditionally --
@@ -135,7 +139,7 @@ on its own deps.
 
 Programs naming `Ir.Schedule` and the entry points they name, every configuration key of which is
 declared or pinned by every rule running the program (gh-ocannl-1149):
-  (the keys its values reach: automatic_cpu_schedule, automatic_gpu_schedule, big_models, check_half_prec_constants_cutoff, cpu_schedule_min_parallel, debug_log_from_routines, gpu_fission_keep_mapping, gpu_lane_preamble_reduction, gpu_schedule_block_size, gpu_schedule_min_parallel, gpu_schedule_workgroup_fill, gpu_serial_lanes, large_models, legality_crosscheck, log_level, profile, schedule_fission, schedule_log_launches, simplify_fp_algebra, stack_threshold_in_bytes)
+  (the keys its values reach: automatic_cpu_schedule, automatic_gpu_schedule, big_models, check_half_prec_constants_cutoff, cpu_schedule_min_parallel, debug_log_from_routines, gpu_fission_keep_mapping, gpu_lane_all_reduce_simdgroups, gpu_lane_preamble_reduction, gpu_schedule_block_size, gpu_schedule_min_parallel, gpu_schedule_workgroup_fill, gpu_serial_lanes, large_models, legality_crosscheck, log_level, profile, schedule_fission, schedule_log_launches, simplify_fp_algebra, stack_threshold_in_bytes)
   benchmarks/runners/ocannl/dune, executable bench_mma_register_scope_emit: Ir.Schedule.apply
   bin/dune, executable narrow_gebp_bench: Ir.Schedule.apply
   bin/dune, executable narrow_storage_bench: Ir.Schedule.apply
@@ -161,13 +165,14 @@ declared or pinned by every rule running the program (gh-ocannl-1149):
   test/operations/dune, test fission_replay_segmentation: Ir.Schedule.default_cpu, Ir.Schedule.default_gpu, Ir.Schedule.fission_keep_mapping, Ir.Schedule.fission_segmented, Ir.Schedule.zero_expansion
   test/operations/dune, test fission_schedule: Ir.Schedule.default_gpu, Ir.Schedule.fission_scheduled, Ir.Schedule.maybe_default_schedules, Ir.Schedule.zero_expansion
   test/operations/dune, test gpu_fission_mapping: Ir.Schedule.apply, Ir.Schedule.default_gpu, Ir.Schedule.fission_keep_mapping, Ir.Schedule.fission_scheduled, Ir.Schedule.zero_expansion
-  test/operations/dune, test gpu_lane_reduction: Ir.Schedule.apply, Ir.Schedule.default_gpu, Ir.Schedule.lane_preamble_reduction_for
+  test/operations/dune, test gpu_lane_reduction: Ir.Schedule.apply, Ir.Schedule.default_gpu, Ir.Schedule.lane_all_reduce_simdgroups_for, Ir.Schedule.lane_preamble_reduction_for
   test/operations/dune, test gpu_parallel_prefix: Ir.Schedule.apply, Ir.Schedule.default_gpu, Ir.Schedule.zero_expansion
   test/operations/dune, test gpu_serial_lanes: Ir.Schedule.apply, Ir.Schedule.default_gpu, Ir.Schedule.fission_scheduled, Ir.Schedule.maybe_default_schedules, Ir.Schedule.serial_lanes_for, Ir.Schedule.zero_expansion
   test/operations/dune, test gpu_small_leading_axis: Ir.Schedule.apply, Ir.Schedule.default_gpu, Ir.Schedule.zero_expansion
   test/operations/dune, test hosted_constant_fill: Ir.Schedule.apply
   test/operations/dune, test launch_dim_gate: Ir.Schedule.apply, Ir.Schedule.default_gpu
   test/operations/dune, test launch_predicate_parity: Ir.Schedule.apply, Ir.Schedule.default_gpu, Ir.Schedule.fission_scheduled, Ir.Schedule.zero_expansion
+  test/operations/dune, test matmul_interchange: Ir.Schedule.apply
   test/operations/dune, test mma_tensorization_label: Ir.Schedule.apply
   test/operations/dune, test narrow_storage_compute: Ir.Schedule.apply
   test/operations/dune, test online_softmax_block: Ir.Schedule.apply

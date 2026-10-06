@@ -679,10 +679,12 @@ type entry = {
    timed, the entry is still a sound schedule but no longer the answer the key asks for, and a warm
    cache would replay it forever. Non-current entries read as misses, so the next search re-tunes
    and overwrites. 8 (7 landed first): a fissioned winner's [segments] carry the segmentation and
-   every segment's schedule (gh-ocannl-1164). 9: a reduction's zero folds into its own segment's
-   sketches (gh-ocannl-1175); the reverted staging#934 had written 6 for a menu that bridged sibling
-   reductions, so 6 stays retired. *)
-let entry_version = 9
+   every segment's schedule (gh-ocannl-1164). 11 (9 and 10 taken by concurrent changes): backprop's
+   contractions become matmul sites through the enabling interchange, so every training step's
+   backward segments gain sketch candidates (gh-ocannl-1183). 12: a reduction's zero folds into its
+   own segment's sketches (gh-ocannl-1175); the reverted staging#934 had written 6 for a menu that
+   bridged sibling reductions, so 6 stays retired. *)
+let entry_version = 12
 
 let sanitize name =
   String.map name ~f:(fun c ->

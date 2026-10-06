@@ -56,6 +56,15 @@ let () =
     (* [flip_report] only counts the gh-555 refinement searches toward the result line's [searched]
        (gh-ocannl-644): they run whenever [tune_inline_flips] is configured, whether or not a
        callback is wired, and a flip search loads this process like an arm search. *)
+    (* [~rounds:0] overrides [autotune_rounds], the profiles' 4 included; the arms' [rounds_run] on
+       the result line records it. Why, from a capped correctness-grade probe on a shared rog box
+       (CUDA, approximate profile, gh-ocannl-1137): with rounds=4, arm A finished one round -- 635
+       candidates, +1002 s on its 674 s of seeds (+150%) -- whose best beat the seed winner by
+       0.50%, under the 1% a round needs to be adopted, so the arm shipped its rounds:0 winner.
+       Arm B was cut off 97 candidates into its 1325-candidate round (~+480% projected on 528 s of
+       seeds), 0.31% ahead at that point; whether a later candidate clears 1% is unmeasured. The
+       beam a round expands is the composite and its playoff near-copies (1-4 of 122-150 segments
+       apart). *)
     Train.tune_placements ~report:(H.collect_arm arms) ~flip_report:(H.collect_search arms)
       ~on_ship:(H.collect_ship arms) ~rounds:0 ~timing_ctx:scratch ctx batch_loss comp bindings
   in
@@ -85,7 +94,7 @@ let () =
   in
   let open Operation.At in
   ignore
-    (H.measure_and_emit ~routines ~protocol:(H.protocol_of_st st) ~backend
+    (H.measure_and_emit ~routines ~protocol:(H.protocol_of_st ~fixture st) ~backend
        ~variant:
          (* Mirror bench_mlp: the scheduling variant alone. orchestrate renders precision as its own
             report column and composes the two axes itself (gh-ocannl-539), so a reduced-precision

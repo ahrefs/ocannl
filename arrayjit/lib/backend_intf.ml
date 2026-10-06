@@ -285,8 +285,8 @@ type hardware_limits = {
       (** The SIMD-group (warp) width the backend's warp-shuffle renderings assume -- its [C_syntax]
           configuration's [warp_size]: 32 on Metal, CUDA and HIP (whose shuffles pass an explicit
           width of 32). [None] where kernels render no shuffles (the C backends). The default GPU
-          schedule retypes a cooperative lane reduction only at exactly this width, the one the lane
-          all-reduce renders (gh-ocannl-1124). *)
+          schedule retypes a cooperative lane reduction only at a multiple of this width, at most
+          [lane_all_reduce_simdgroups] of them (gh-ocannl-1124, gh-ocannl-1168). *)
   lane_scalar_recompute_cheap : bool;
       (** Device economics (gh-ocannl-1124): whether scalar work every lane of a lane geometry
           recomputes redundantly -- the per-pair preamble a lane nest repeats in each of its lanes
@@ -300,6 +300,17 @@ type hardware_limits = {
           where false, the stage-1 lanes of gh-ocannl-1003 are still taken in a kernel that admits
           them (the forward value pass won on gfx1151), but are no reason to cut a kernel (the fused
           backward's dV cut from dK for them lost to the merged plain kernel). *)
+  lane_all_reduce_simdgroups : int;
+      (** Device economics (gh-ocannl-1168): the most simdgroups a cooperative lane all-reduce is
+          worth spanning. At one simdgroup the all-reduce is a register butterfly; across [k > 1] it
+          stages each simdgroup's partial in workgroup-shared memory between two barriers per
+          (query, key) pair, which may eat the lanes' win -- so a head wider than [simdgroup_width]
+          (GPT-2's 64) gets lanes only where that was measured to pay. [1] (one simdgroup, the
+          gh-ocannl-1124 rule) wherever unmeasured, and on the C backends, which run no lane
+          geometry. Measured: 4 on Metal (M4 Max; the D1 training step at head width 64 0.97x /
+          0.92x / 0.82x at seq 128 / 512 / 1024, at width 128 0.69x at seq 512, against the plain
+          plan: benchmarks/gh1133_cells.sh [d1ar4] vs [d1ar1]). Read by the default GPU schedule's
+          [gpu_lane_all_reduce_simdgroups = auto]. *)
   online_softmax_auto_block : int;
       (** Automatic key-block size for [online_softmax_block=auto] (gh-ocannl-1171); 0 selects the
           two-pass rewrite. Metal and CPU keep 16 from the gh-ocannl-1003 block sweep
@@ -419,6 +430,15 @@ type codegen_capabilities = {
           resolver and declaration its emitting hooks use. Non-zero only for Metal's converted
           destination boundary (gh-ocannl-1205). [Schedule.check_hardware_limits_classified] adds it
           per scope to the staged tiles. *)
+  lane_all_reduce_workgroup_bytes : extent:int -> prec:Ops.prec -> int;
+      (** Static workgroup-shared bytes one lane all-reduce site declares for its per-simdgroup
+          partials (gh-ocannl-1168): a reduction of [extent] lanes into a scope local residing at
+          [prec], rendered across more than one simdgroup. The renderer
+          ([C_syntax.try_lane_all_reduce]) decides by this same field, so the two cannot drift; 0
+          where the site renders within one simdgroup, serially, or on a backend without shuffles,
+          barriers or shared declarations. Only the backend-level half: whether a site may stage
+          partials at all is [Low_level.lane_all_reduce_sites]' structural predicate, which
+          [Schedule.workgroup_memory_bytes] reads beside it. *)
 }
 (** Stable code-generation facts callers need before compiling. Actual rendering decisions stay on
     the compiled routine's censuses. *)
@@ -433,6 +453,7 @@ let no_codegen_capabilities =
     asynchronous_staging_copy = false;
     mma_arm = (fun ~a_prec:_ ~b_prec:_ ~d_prec:_ ~scope:_ -> None);
     mma_scope_workgroup_bytes = (fun ~d_prec:_ ~a_prec:_ ~b_prec:_ -> 0);
+    lane_all_reduce_workgroup_bytes = (fun ~extent:_ ~prec:_ -> 0);
   }
 
 (** A stable, exhaustive rendering of a capability record under the CURRENT numerics policy: its
@@ -446,7 +467,8 @@ let no_codegen_capabilities =
     pattern names every field, so a field added to {!codegen_capabilities} is a compile error here
     until it is rendered (warning 9).
 
-    The one field deliberately not rendered is [mma_scope_workgroup_bytes]: it decides whether a
+    The fields deliberately not rendered are [mma_scope_workgroup_bytes] and
+    [lane_all_reduce_workgroup_bytes] (the same argument holds for both): it decides whether a
     schedule FITS, never what a kernel computes, and it is a function of the storage triple, the
     numerics policy and the backend, which the key already carries ([Schedule_cache.numerics_tag]
     and the backend identity), so rendering it would add no discrimination. An emitter change that
@@ -462,6 +484,7 @@ let codegen_capabilities_fingerprint
       asynchronous_staging_copy;
       mma_arm;
       mma_scope_workgroup_bytes = _;
+      lane_all_reduce_workgroup_bytes = _;
     } =
   let p = Ops.prec_string in
   let resolution f =
@@ -515,6 +538,7 @@ let no_hardware_limits =
     native_fp16_arithmetic = false;
     simdgroup_width = None;
     lane_scalar_recompute_cheap = false;
+    lane_all_reduce_simdgroups = 1;
     online_softmax_auto_block = 0;
     worker_pool_tag = None;
     codegen_tag = None;

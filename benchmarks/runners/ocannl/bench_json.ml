@@ -55,6 +55,11 @@ let string s =
     booleans the wire format carried before, kept for readers that predate the field; they are NOT
     complements, and deriving the state from them is the mistake the outcome type exists to stop.
 
+    [rounds_run] and [beam_width] are the search's own record of how far it went (gh-ocannl-1137):
+    the result line's [regime_knobs] carries what the configuration ASKED for, and a runner passing
+    [~rounds:0] — every OCANNL benchmark runner does — runs no beam round whatever [autotune_rounds]
+    says. A replayed or disabled arm ran none either way.
+
     [timings_contended] is the number of timing windows refused because host contention dominated
     their samples (gh-ocannl-855). A nonzero count means the finite winner, if any, came from an
     incomplete candidate set and was deliberately not written to the schedule cache.
@@ -74,13 +79,13 @@ let string s =
     with [tensorized: true] and a [tensorization] other than ["tensorized"] measured scalar code
     under a tensorized label; [orchestrate.py] marks that cell rather than letting the number stand.
 *)
-let tune_arm ~name ~state ~searched ~cache_hit ~timing ~timings_contended ~timings_unbatched
-    ~best_ms ~best_label ~tensorized ~tensorization ~mma_statements ~mma_scalar_fallbacks
-    ~mma_seeded ~mma_timed ~mma_best_ms ~terminal_failure =
+let tune_arm ~name ~state ~searched ~cache_hit ~timing ~rounds_run ~beam_width ~timings_contended
+    ~timings_unbatched ~best_ms ~best_label ~tensorized ~tensorization ~mma_statements
+    ~mma_scalar_fallbacks ~mma_seeded ~mma_timed ~mma_best_ms ~terminal_failure =
   Printf.sprintf
-    {|{"arm":"%s","state":"%s","searched":%b,"cache_hit":%b,"timing":"%s","timings_contended":%d,"timings_unbatched":%d,"best_ms":%s,"best_label":"%s","tensorized":%b,"tensorization":%s,"mma_statements":%d,"mma_scalar_fallbacks":%d,"mma_seeded":%d,"mma_timed":%d,"mma_best_ms":%s,"terminal_failure":%s}|}
-    (string name) (string state) searched cache_hit (string timing) timings_contended
-    timings_unbatched (num best_ms) (string best_label) tensorized
+    {|{"arm":"%s","state":"%s","searched":%b,"cache_hit":%b,"timing":"%s","rounds_run":%d,"beam_width":%d,"timings_contended":%d,"timings_unbatched":%d,"best_ms":%s,"best_label":"%s","tensorized":%b,"tensorization":%s,"mma_statements":%d,"mma_scalar_fallbacks":%d,"mma_seeded":%d,"mma_timed":%d,"mma_best_ms":%s,"terminal_failure":%s}|}
+    (string name) (string state) searched cache_hit (string timing) rounds_run beam_width
+    timings_contended timings_unbatched (num best_ms) (string best_label) tensorized
     (Option.value_map tensorization ~default:"null" ~f:(fun t -> Printf.sprintf {|"%s"|} (string t)))
     mma_statements mma_scalar_fallbacks mma_seeded mma_timed (num mma_best_ms)
     (Option.value_map terminal_failure ~default:"null" ~f:(fun detail ->
@@ -346,3 +351,56 @@ let result_line ~backend ~variant ~precision ~profile ~regime_knobs ~workload ~c
     peak_source_field
     (Option.value dominant_kernel ~default:"null")
     (mma_object shipped_mma) (nums ~prec:9 losses)
+
+(** {1 Checkpoints of a measurement still in progress (gh-ocannl-1209)}
+
+    The result line is emitted once, at the very end, after every stage of the protocol — including
+    the dominant-kernel instrument, which compiles and times each shipped kernel on its own and can
+    cost more than the workload. A cell killed by its driver's cap during that instrument used to
+    leave nothing structured behind: a TUF [gpt2_mini_train_s1024] cell produced six finite parity
+    losses and then lost all of them to a 90 s cap expiring inside the instrument.
+
+    So the protocol checkpoints what it has completed, as it completes it: one line per completed
+    parity step, and one after the timed steps, before any diagnostic runs. A checkpoint carries the
+    losses observed so far, the stages' statuses, the step count and the cell's identity — and NO
+    timing. It is evidence that loss/parity work was done, never an accepted benchmark: its [record]
+    is ["checkpoint"], its [accepted] is [false], its [result] stage is always ["pending"], and it
+    is written behind {!checkpoint_prefix} so that no reader looking for a result line (a line
+    starting with [{]) can pick it up. *)
+
+(** The prefix every checkpoint line carries. [orchestrate.py] matches the same text
+    ([CHECKPOINT_PREFIX]); the golden of [test/operations/bench_result_line] holds lines built here,
+    which [test_orchestrate.py] reads back, so the two cannot drift apart unnoticed. *)
+let checkpoint_prefix = "bench: checkpoint "
+
+(** How far the protocol had got when the checkpoint was written. *)
+type checkpoint_at =
+  | In_parity of int  (** This many parity steps are complete. *)
+  | Before_diagnostics  (** Every timed step is complete; the diagnostics come next. *)
+
+(** One checkpoint, as the JSON object without its prefix. [dominant_kernel] says whether the cell
+    runs the dominant-kernel instrument at all: its stage is ["skipped"] when not, and ["running"]
+    from {!Before_diagnostics} when it does. [fixture] is the fixture's path and size in bytes, or
+    [None] for a model fabricated in memory; the drivers stamp content digests and revisions, as
+    they do on result lines. [losses] are the parity losses completed so far, in the result line's
+    own spelling ([nums ~prec:9]), so a checkpoint and the result line of the same run carry the
+    same bytes for the same step. *)
+let checkpoint_line ~backend ~variant ~precision ~workload ~fixture ~executable ~parity_steps
+    ~dominant_kernel ~completed_steps ~at ~losses =
+  let parity, warmup, timing, instrument =
+    match at with
+    | In_parity k ->
+        ((if k >= parity_steps then "complete" else "running"), "pending", "pending", "pending")
+    | Before_diagnostics -> ("complete", "complete", "complete", "running")
+  in
+  let instrument = if dominant_kernel then instrument else "skipped" in
+  let fixture_field =
+    match fixture with
+    | None -> "null"
+    | Some (path, bytes) -> Printf.sprintf {|{"path":"%s","bytes":%d}|} (string path) bytes
+  in
+  Printf.sprintf
+    {|{"record":"checkpoint","accepted":false,"framework":"ocannl","backend":"%s","variant":"%s","precision":"%s","workload":"%s","fixture":%s,"executable":"%s","stages":{"parity":"%s","warmup":"%s","timing":"%s","dominant_kernel":"%s","result":"pending"},"parity_steps":%d,"completed_steps":%d,"losses":[%s]}|}
+    (string backend) (string variant) (string precision) (string workload) fixture_field
+    (string executable) parity warmup timing instrument parity_steps completed_steps
+    (nums ~prec:9 losses)

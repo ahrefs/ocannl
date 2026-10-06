@@ -236,13 +236,24 @@
 # reassociates, licensed by online_softmax_backward, so the key has no effect without it.
 # `refused` keeps such a nest on its plain plan; `duplicated` gives it lanes and every lane
 # recomputes the reduction serially (summation order unchanged); `cooperative` gives it lanes
-# where the reduction spans exactly the lane's workgroup of one simdgroup, the lanes computing it
-# together as a butterfly all-reduce (reassociated), and keeps the plain plan for any other width.
+# where the reduction spans exactly the lane's workgroup, of as many simdgroups as
+# gpu_lane_all_reduce_simdgroups allows, the lanes computing it together as an all-reduce
+# (reassociated), and keeps the plain plan for any other width.
 # `auto` resolves per device: cooperative where redundant per-lane scalar work is cheap (measured
 # on Metal and CUDA),
 # refused elsewhere (HIP, where the lanes lost to the plain plan, and anything unmeasured). An
 # inlined reduction inside an expression stays refused in every mode.
 #gpu_lane_preamble_reduction=auto
+
+# The most simdgroups a cooperative preamble reduction (gpu_lane_preamble_reduction) may span. At
+# one simdgroup (32 lanes on Metal, CUDA and HIP) the lanes all-reduce it as a register butterfly;
+# past one, each simdgroup's butterfly total goes through workgroup-shared memory between two
+# barriers per (query, key) pair, every lane reading every partial, so a head of 64 or 128 (GPT-2's
+# real widths) can take lanes too (gh-ocannl-1168). A head wider than this many simdgroups keeps
+# the plain plan. `auto` resolves per device to where the barriers were measured to pay: 4 on
+# Metal (heads of 64 and 128 trained 3-31% faster), 1 everywhere unmeasured, so wider heads keep
+# the plain plan there. A positive integer forces that bound.
+#gpu_lane_all_reduce_simdgroups=auto
 
 # How the default GPU schedule weighs its lane geometry: a parallel loop under a serial loop past
 # loop-free per-pair scalar work -- the online-softmax forward's value pass
@@ -449,7 +460,9 @@
 
 # The maximum number of beam-expansion rounds beyond the seed candidates (the serial baseline and
 # the default-annotator block-size sweep). The search also stops when a round improves the best
-# time by less than 1%.
+# time by less than 1%, and then ships the incumbent, not that round's sub-1% best. The benchmark
+# runners pass ~rounds:0, so this key does not reach their tuned cells (gh-ocannl-1137; each arm's
+# rounds_run on the result line says so).
 #autotune_rounds=2
 
 # Timed runs per tuning candidate (after one warmup run); the minimum is kept. Under
@@ -1492,6 +1505,9 @@
 # # algebraic-rewrite tiers) belong to the numerics axis, not to this one.
 #
 # # Empirical schedule search on, with a wider beam and more rounds than the everyday defaults.
+# # The benchmark runners (benchmarks/runners/ocannl) pass ~rounds:0, so their tuned cells get
+# # this beam width but not these rounds: in a partial gpt2_mini/CUDA probe, one round added 150%
+# # to the one arm that finished it, which kept its seed winner (gh-ocannl-1137).
 # autotune_search=true
 # autotune_beam_width=4
 # autotune_rounds=4
@@ -1520,6 +1536,7 @@
 # # join this payload as they land, each in the PR that adds its key.
 #
 # # The `performance` payload's keys, restated (test_config_consistency checks they agree).
+# # As there, the benchmark runners' tuned cells run none of the rounds (gh-ocannl-1137).
 # autotune_search=true
 # autotune_beam_width=4
 # autotune_rounds=4

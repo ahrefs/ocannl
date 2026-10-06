@@ -30,6 +30,23 @@ shebang "#!/usr/bin/env python3" is outside this check's scope: true
 shebang "#!/usr/bin/perl" is outside this check's scope: true
 shebang "" is outside this check's scope: true
 shebang " #!/bin/bash" is outside this check's scope: true
+heredoc fixture quoted preserves its supported body: true
+heredoc fixture escaped preserves its supported body: true
+heredoc fixture paired backslashes preserves its supported body: true
+unsupported shell lexical fixture unterminated outer heredoc reaches its refusal: true
+unsupported shell lexical fixture unterminated outer heredoc reaches its refusal: true
+unsupported shell lexical fixture dollar-quoted heredoc delimiter reaches its refusal: true
+unsupported shell lexical fixture dollar-quoted heredoc delimiter reaches its refusal: true
+unsupported shell lexical fixture multiline heredoc delimiter reaches its refusal: true
+unsupported shell lexical fixture continued unquoted heredoc body reaches its refusal: true
+unsupported shell lexical fixture continued unquoted heredoc body reaches its refusal: true
+unsupported shell execution context "set -e\nfi\n" reaches its refusal: true
+unsupported shell execution context "set -e\nif true; then\n  :\ndone\nfi\n" reaches its refusal: true
+unsupported shell execution context "set -e\necho x )\n" reaches its refusal: true
+unsupported shell execution context "set -e\n}\n" reaches its refusal: true
+unsupported shell execution context "set -e\nwhile true; do\n  :\n" reaches its refusal: true
+unsupported shell execution context "set -e\ncase x in\n  x) : ;;\n" reaches its refusal: true
+a script that never turns errexit on is not refused for its structure: true
 errexit-negation fixture multiline single quote is classified as specified: true
 errexit-negation fixture multiline double quote is classified as specified: true
 errexit-negation fixture quoted heredoc is classified as specified: true
@@ -159,17 +176,49 @@ errexit-negation fixture errexit set through bundled shopt is classified as spec
 errexit-negation fixture errexit unset through shopt is classified as specified: true
 errexit-negation fixture errexit set behind a variable-descriptor redirection is classified as specified: true
 errexit-negation fixture embedded hash before an outer OR is classified as specified: true
+errexit-negation fixture negation after a semicolon is classified as specified: true
+errexit-negation fixture negation on a then line is classified as specified: true
+errexit-negation fixture negation in a brace group is classified as specified: true
+errexit-negation fixture negation before a function's last statement is classified as specified: true
+errexit-negation fixture function's final negation is classified as specified: true
+errexit-negation fixture subshell's final negation is classified as specified: true
+errexit-negation fixture negation before set -e is classified as specified: true
+errexit-negation fixture negation after set +e is classified as specified: true
+errexit-negation fixture negation after set +e and set -e is classified as specified: true
+errexit-negation fixture negation after a conditional set +e is classified as specified: true
+errexit-negation fixture negation after a guarded set +e is classified as specified: true
+errexit-negation fixture negation after a subshell set +e is classified as specified: true
+errexit-negation fixture negation after set -e +e is classified as specified: true
+errexit-negation fixture negation after shopt -u -o errexit is classified as specified: true
+errexit-negation fixture function's final negation in a loop body is classified as specified: true
+errexit-negation fixture function's final negation in a fall-through arm is classified as specified: true
+errexit-negation fixture function's final negation in the last arm, ending in ;& is classified as specified: true
+errexit-negation fixture negation after a call that turns errexit on is classified as specified: true
+errexit-negation fixture negation after a builtin shadowed by a function is classified as specified: true
+errexit-negation fixture negation after an assignment and a ! word is classified as specified: true
+errexit-negation fixture negation after set + an expansion is classified as specified: true
+errexit-negation fixture timed negation is classified as specified: true
+errexit-negation fixture tab-timed negation is classified as specified: true
+errexit-negation fixture negation after a quoted enable is classified as specified: true
+errexit-negation fixture negation after set +e with a long option is classified as specified: true
+errexit-negation fixture negation after builtin enable is classified as specified: true
+errexit-negation fixture negation after a ;;& arm past a nonmatching one is classified as specified: true
+errexit-negation fixture negation in a recursive subshell function is classified as specified: true
+errexit-negation fixture portably timed negation is classified as specified: true
+errexit-negation fixture negation after set +e with an unknown option is classified as specified: true
+errexit-negation fixture negation after set +o with an unknown name is classified as specified: true
+errexit-negation fixture negation after enable is classified as specified: true
+errexit-negation fixture negation as the last operand of an AND list is classified as specified: true
+errexit-negation fixture negation as the last operand of an OR list is classified as specified: true
+errexit-negation fixture negation after set -e - +e is classified as specified: true
+errexit-negation fixture negation after a conflicting shopt is classified as specified: true
+errexit-negation fixture negation after a double-quoted backslash name is classified as specified: true
+errexit-negation fixture negation after a set -e ending a pipeline is classified as specified: true
+errexit-negation fixture negation in a group an || tail reads is classified as specified: true
+errexit-negation fixture negation after a redirected set +e is classified as specified: true
+errexit-negation fixture negation after a builtin set +e beside a set function is classified as specified: true
+errexit-negation fixture negation after set +e in a file with a save-and-restore function is classified as specified: true
 the statement-position ! grep fixture reaches the absent()-style refusal: true
-heredoc fixture quoted preserves its supported body: true
-heredoc fixture escaped preserves its supported body: true
-heredoc fixture paired backslashes preserves its supported body: true
-unsupported shell lexical fixture unterminated outer heredoc reaches its refusal: true
-unsupported shell lexical fixture unterminated outer heredoc reaches its refusal: true
-unsupported shell lexical fixture dollar-quoted heredoc delimiter reaches its refusal: true
-unsupported shell lexical fixture dollar-quoted heredoc delimiter reaches its refusal: true
-unsupported shell lexical fixture multiline heredoc delimiter reaches its refusal: true
-unsupported shell lexical fixture continued unquoted heredoc body reaches its refusal: true
-unsupported shell lexical fixture continued unquoted heredoc body reaches its refusal: true
 errexit-and-list fixture pair in multiline quote is classified as specified: true
 errexit-and-list fixture pair in heredoc is classified as specified: true
 errexit-and-list fixture pair in continued if is classified as specified: true
@@ -269,6 +318,26 @@ errexit-and-list fixture condition keyword on an earlier line is classified as s
 errexit-and-list fixture status captured on the same line is classified as specified: true
 errexit-and-list fixture status captured on the next line is classified as specified: true
 errexit-and-list fixture status captured by an or-tail is classified as specified: true
+errexit-and-list fixture status captured with errexit off is classified as specified: true
+errexit-and-list fixture pair before set -e is classified as specified: true
+errexit-and-list fixture pair after set +e and set -e is classified as specified: true
+errexit-and-list fixture pair after set +e in a piped group is classified as specified: true
+errexit-and-list fixture pair in a loop before a later set -e is classified as specified: true
+errexit-and-list fixture pair in a function whose file turns errexit off is classified as specified: true
+errexit-and-list fixture subshell's final pair is classified as specified: true
+errexit-and-list fixture piped subshell's final pair is classified as specified: true
+errexit-and-list fixture function's final pair in an if branch is classified as specified: true
+errexit-and-list fixture function's final pair in a case arm is classified as specified: true
+errexit-and-list fixture function's final pair before break is classified as specified: true
+errexit-and-list fixture function's final group read by an or-tail is classified as specified: true
+errexit-and-list fixture top-level if branch's final pair is classified as specified: true
+errexit-and-list fixture script's final pair is classified as specified: true
+errexit-and-list fixture function's final pair in a loop body is classified as specified: true
+errexit-and-list fixture function's final pair in a fall-through arm is classified as specified: true
+errexit-and-list fixture function's final pair in a ;;& arm is classified as specified: true
+errexit-and-list fixture function's final pair in the last arm, ending in ;& is classified as specified: true
+errexit-and-list fixture pair in a timed negated subshell is classified as specified: true
+errexit-and-list fixture pair after a call that turns errexit on is classified as specified: true
 errexit-and-list fixture condition before a do line is classified as specified: true
 errexit-and-list fixture condition before a then line is classified as specified: true
 errexit-and-list fixture heredoc data line reading as a keyword is classified as specified: true
@@ -287,6 +356,120 @@ errexit-and-list fixture pair in command substitution is classified as specified
 errexit-and-list fixture assignment then a test is classified as specified: true
 errexit-and-list fixture pair without errexit is classified as specified: true
 the bare [ A ] && [ B ] fixture reaches the one-predicate-per-statement refusal: true
+errexit execution control after set -e, `! true`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control after set -e, `[ -n "" ] && [ -n x ]`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control before set -e, `! true`: not flagged; bash treats its failure as it treats `false`: true
+errexit execution control before set -e, `[ -n "" ] && [ -n x ]`: not flagged; bash treats its failure as it treats `false`: true
+errexit execution control after set +e, `! true`: not flagged; bash treats its failure as it treats `false`: true
+errexit execution control after set +e, `[ -n "" ] && [ -n x ]`: not flagged; bash treats its failure as it treats `false`: true
+errexit execution control after set +e and set -e again, `! true`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control after set +e and set -e again, `[ -n "" ] && [ -n x ]`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control after set +o errexit, `! true`: not flagged; bash treats its failure as it treats `false`: true
+errexit execution control after set +o errexit, `[ -n "" ] && [ -n x ]`: not flagged; bash treats its failure as it treats `false`: true
+errexit execution control after set +e in a subshell, `! true`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control after set +e in a subshell, `[ -n "" ] && [ -n x ]`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control after set +e in a pipeline, `! true`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control after set +e in a pipeline, `[ -n "" ] && [ -n x ]`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control after set +e in a background job, `! true`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control after set +e in a background job, `[ -n "" ] && [ -n x ]`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control after set +e in a brace group, `! true`: not flagged; bash treats its failure as it treats `false`: true
+errexit execution control after set +e in a brace group, `[ -n "" ] && [ -n x ]`: not flagged; bash treats its failure as it treats `false`: true
+errexit execution control after set +e on an untaken branch, `! true`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control after set +e on an untaken branch, `[ -n "" ] && [ -n x ]`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control after set +e on a taken branch, `! true`: flagged although bash treats its failure as `false` (declared loud): true
+errexit execution control after set +e on a taken branch, `[ -n "" ] && [ -n x ]`: flagged although bash treats its failure as `false` (declared loud): true
+errexit execution control after set +e behind a failed &&, `! true`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control after set +e behind a failed &&, `[ -n "" ] && [ -n x ]`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control after set +e behind a passed &&, `! true`: flagged although bash treats its failure as `false` (declared loud): true
+errexit execution control after set +e behind a passed &&, `[ -n "" ] && [ -n x ]`: flagged although bash treats its failure as `false` (declared loud): true
+errexit execution control after set -e in a case arm, `! true`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control after set -e in a case arm, `[ -n "" ] && [ -n x ]`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control in a loop body before a later set -e, `! true`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control in a loop body before a later set -e, `[ -n "" ] && [ -n x ]`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control after a function that turns errexit on, `! true`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control after a function that turns errexit on, `[ -n "" ] && [ -n x ]`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control after a function that turns errexit on, called after set +e, `! true`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control after a function that turns errexit on, called after set +e, `[ -n "" ] && [ -n x ]`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control after set +e, beside an uncalled function that turns errexit on, `! true`: flagged although bash treats its failure as `false` (declared loud): true
+errexit execution control after set +e, beside an uncalled function that turns errexit on, `[ -n "" ] && [ -n x ]`: flagged although bash treats its failure as `false` (declared loud): true
+errexit execution control after eval set -e, `! true`: not flagged although bash runs past its failure (declared silent): true
+errexit execution control after eval set -e, `[ -n "" ] && [ -n x ]`: not flagged although bash runs past its failure (declared silent): true
+errexit execution control after set -e - +e, `! true`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control after set -e - +e, `[ -n "" ] && [ -n x ]`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control after set +e with an unknown option, `! true`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control after set +e with an unknown option, `[ -n "" ] && [ -n x ]`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control after set -e with a positional before +e, `! true`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control after set -e with a positional before +e, `[ -n "" ] && [ -n x ]`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control after set +e behind a failed redirection, `! true`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control after set +e behind a failed redirection, `[ -n "" ] && [ -n x ]`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control after set +e, shadowed by a function named set, `! true`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control after set +e, shadowed by a function named set, `[ -n "" ] && [ -n x ]`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control after time set +e, `! true`: flagged although bash treats its failure as `false` (declared loud): true
+errexit execution control after time set +e, `[ -n "" ] && [ -n x ]`: flagged although bash treats its failure as `false` (declared loud): true
+errexit execution control after builtin set +e, `! true`: flagged although bash treats its failure as `false` (declared loud): true
+errexit execution control after builtin set +e, `[ -n "" ] && [ -n x ]`: flagged although bash treats its failure as `false` (declared loud): true
+errexit execution control after shopt -u -o errexit, `! true`: flagged although bash treats its failure as `false` (declared loud): true
+errexit execution control after shopt -u -o errexit, `[ -n "" ] && [ -n x ]`: flagged although bash treats its failure as `false` (declared loud): true
+errexit execution control after set + an expansion that is not e, `! true`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control after set + an expansion that is not e, `[ -n "" ] && [ -n x ]`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control after set -e ending a lastpipe pipeline, `! true`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control after set -e ending a lastpipe pipeline, `[ -n "" ] && [ -n x ]`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control after a loop left by break right after set -e, `! true`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control after a loop left by break right after set -e, `[ -n "" ] && [ -n x ]`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control in a function defined and called in one subshell, `! true`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control in a function defined and called in one subshell, `[ -n "" ] && [ -n x ]`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control as a function's last statement, `! true`: not flagged; bash treats its failure as it treats `false`: true
+errexit execution control as a function's last statement, `[ -n "" ] && [ -n x ]`: not flagged; bash treats its failure as it treats `false`: true
+errexit execution control before a function's last statement, `! true`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control before a function's last statement, `[ -n "" ] && [ -n x ]`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control as a function's last if branch, `! true`: not flagged; bash treats its failure as it treats `false`: true
+errexit execution control as a function's last if branch, `[ -n "" ] && [ -n x ]`: not flagged; bash treats its failure as it treats `false`: true
+errexit execution control as a function's last loop body, run once, `! true`: flagged although bash treats its failure as `false` (declared loud): true
+errexit execution control as a function's last loop body, run once, `[ -n "" ] && [ -n x ]`: flagged although bash treats its failure as `false` (declared loud): true
+errexit execution control in a function's last loop body, overwritten by a later iteration, `! true`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control in a function's last loop body, overwritten by a later iteration, `[ -n "" ] && [ -n x ]`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control before a break in a function's last loop, `! true`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control before a break in a function's last loop, `[ -n "" ] && [ -n x ]`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control as a function's last case arm, `! true`: not flagged; bash treats its failure as it treats `false`: true
+errexit execution control as a function's last case arm, `[ -n "" ] && [ -n x ]`: not flagged; bash treats its failure as it treats `false`: true
+errexit execution control as a function's case arm falling through with ;&, `! true`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control as a function's case arm falling through with ;&, `[ -n "" ] && [ -n x ]`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control as a function's case arm continuing with ;;&, `! true`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control as a function's case arm continuing with ;;&, `[ -n "" ] && [ -n x ]`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control as a function's last case arm, ending in ;&, `! true`: not flagged; bash treats its failure as it treats `false`: true
+errexit execution control as a function's last case arm, ending in ;&, `[ -n "" ] && [ -n x ]`: not flagged; bash treats its failure as it treats `false`: true
+errexit execution control as a function's last brace group, `! true`: not flagged; bash treats its failure as it treats `false`: true
+errexit execution control as a function's last brace group, `[ -n "" ] && [ -n x ]`: not flagged; bash treats its failure as it treats `false`: true
+errexit execution control as a function's last && operand group, `! true`: not flagged; bash treats its failure as it treats `false`: true
+errexit execution control as a function's last && operand group, `[ -n "" ] && [ -n x ]`: not flagged; bash treats its failure as it treats `false`: true
+errexit execution control as a subshell's last statement, `! true`: not flagged; bash treats its failure as it treats `false`: true
+errexit execution control as a subshell's last statement, `[ -n "" ] && [ -n x ]`: not flagged; bash treats its failure as it treats `false`: true
+errexit execution control as a subshell's last statement in a branch, `! true`: not flagged; bash treats its failure as it treats `false`: true
+errexit execution control as a subshell's last statement in a branch, `[ -n "" ] && [ -n x ]`: not flagged; bash treats its failure as it treats `false`: true
+errexit execution control as the last statement of a piped subshell, `! true`: flagged although bash treats its failure as `false` (declared loud): true
+errexit execution control as the last statement of a piped subshell, `[ -n "" ] && [ -n x ]`: flagged although bash treats its failure as `false` (declared loud): true
+errexit execution control as a top-level if branch's last statement, `! true`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control as a top-level if branch's last statement, `[ -n "" ] && [ -n x ]`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control as a top-level brace group's last statement, `! true`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control as a top-level brace group's last statement, `[ -n "" ] && [ -n x ]`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control as the script's last statement, `! true`: flagged although bash treats its failure as `false` (declared loud): true
+errexit execution control as the script's last statement, `[ -n "" ] && [ -n x ]`: flagged although bash treats its failure as `false` (declared loud): true
+errexit execution control before a statement reading its status, `! true`: flagged although bash treats its failure as `false` (declared loud): true
+errexit execution control before a statement reading its status, `[ -n "" ] && [ -n x ]`: flagged although bash treats its failure as `false` (declared loud): true
+errexit execution control as an if condition, `! true`: not flagged; bash treats its failure as it treats `false`: true
+errexit execution control as an if condition, `[ -n "" ] && [ -n x ]`: not flagged; bash treats its failure as it treats `false`: true
+errexit execution control before an || tail, `! true`: not flagged; bash treats its failure as it treats `false`: true
+errexit execution control before an || tail, `[ -n "" ] && [ -n x ]`: not flagged; bash treats its failure as it treats `false`: true
+errexit execution control as a timed pipeline, `time ! true`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control as the last operand of an && list, `! true`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control in a group an || tail reads, `! true`: not flagged; bash treats its failure as it treats `false`: true
+errexit execution control in a group an || tail reads, `[ -n "" ] && [ -n x ]`: not flagged; bash treats its failure as it treats `false`: true
+errexit execution control in a negated subshell, `[ -n "" ] && [ -n x ]`: not flagged; bash treats its failure as it treats `false`: true
+errexit execution control in a function only called with errexit off, `! true`: flagged although bash treats its failure as `false` (declared loud): true
+errexit execution control in a function only called with errexit off, `[ -n "" ] && [ -n x ]`: flagged although bash treats its failure as `false` (declared loud): true
+errexit execution control through builtin-runners, `command [ -n "" ] && builtin test -n x`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control through time, `time [ -n "" ] && [ -n x ]`: flagged; bash runs past its failure where `false` stops: true
+errexit execution control through env, `env test -n "" && env test -n x`: not flagged although bash runs past its failure (declared silent): true
 shared harness source and lifecycle are accepted: true
 new hand-run harnesses are discovered: true
 production test-run is outside the harness family: true
@@ -316,11 +499,13 @@ benchmarks/gh1003_fold_cells.sh parses: true
 benchmarks/gh1051_bf16_ab.sh parses: true
 benchmarks/gh1051_boundary_split.sh parses: true
 benchmarks/gh1133_cells.sh parses: true
+benchmarks/gh1180_tie_ab.sh parses: true
 benchmarks/gh514_cells.sh parses: true
 benchmarks/gh612_cells.sh parses: true
 benchmarks/gh612v_session.sh parses: true
 benchmarks/gh728_cells.sh parses: true
 benchmarks/gh834_cells.sh parses: true
+benchmarks/runners/ocannl/mma_register_scope_probe_build.sh parses: true
 docs/latex/gen-workshop-tex.sh parses: true
 scripts/harness-support.sh parses: true
 scripts/process-group.sh parses: true
@@ -391,14 +576,18 @@ the scan reached the session hook and the suite runner: true
 
 Synthetic controls: scanner refusal diagnostics exercised by this control golden:
   [scanner-refusal:918cb75e57498280d25cb0783c645841] context is unsupported
+  [scanner-refusal:704f5ea1abc0485c63711f58214bf1bc] shell execution context
+  [scanner-refusal:bf12194d221f2281dedd171e418892fa] heredoc fixture
+  [scanner-refusal:f23aa9a38a34c91eadc946f44d66d28a] unsupported shell lexical
+  [scanner-refusal:d06f79ba9c87a43873089eb160369d9c] unsupported shell execution
+  [scanner-refusal:f472d334deac706e33952da7e799b22a] never turns errexit
   [scanner-refusal:88b12da9841dbf6131676bf4fb0f4686] statement-position ! command
   [scanner-refusal:003eba7381c87352fb02cd374fa62ea9] errexit-negation fixture
   [scanner-refusal:b67c631ab7ecd7df55fc002761cf99f6] reaches the absent()-style
-  [scanner-refusal:bf12194d221f2281dedd171e418892fa] heredoc fixture
-  [scanner-refusal:f23aa9a38a34c91eadc946f44d66d28a] unsupported shell lexical
   [scanner-refusal:b16ef3a2f724269c0b981a25871cbbb3] statement-position A &&
   [scanner-refusal:2d086d94d5a797eb9901008d71d5c241] errexit-and-list fixture
   [scanner-refusal:3f096017191c7a4d9f63d7a94dcfb6ff] reaches the one-predicate-per-statement
+  [scanner-refusal:36dfd5919c0215c23122a0ec198d2739] errexit execution control
   [scanner-refusal:beeb940e51aa3dff752296c0bd236146] lifecycle are accepted
   [scanner-refusal:0d15e8eb18e96635004da2561ab0917c] harnesses are discovered
   [scanner-refusal:2a0fdaf225cc691ffc63804ceb591d29] production test-run is

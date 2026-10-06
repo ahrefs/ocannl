@@ -38,12 +38,18 @@ class CleanupFailed(SystemExit):
 
 
 class CancellationDeferral:
-    """Defer SIGINT/SIGTERM while a managed child has not yet got a safe cleanup path.
+    """Defer SIGINT/SIGTERM/SIGHUP while a managed child has not yet got a safe cleanup path.
 
     ``deferring`` covers spawn and cleanup; ``cancellable`` opens the one intentional hole around
     the blocking wait.  Signal masking is deliberately not used because a forked child would
     inherit the mask and ignore the supervisor's graceful termination phase. ``cleanup_message``
     is the driver-specific fact appended when a deferred SIGTERM is delivered after cleanup.
+
+    SIGHUP is a termination like SIGTERM (gh-ocannl-1200 review).  A managed child leads a session
+    of its own, so a terminal or ssh hangup reaches only the driver's foreground group; left at
+    its default action the driver dies without unwinding, and the child it was waiting on runs on,
+    detached and past its deadline.  A driver started with SIGHUP ignored (``nohup``) asked to
+    outlive the hangup, and keeps that disposition.
     """
 
     def __init__(
@@ -70,7 +76,11 @@ class CancellationDeferral:
                 return
             raise KeyboardInterrupt
 
-        for signum, handler in ((signal.SIGTERM, terminate), (signal.SIGINT, interrupt)):
+        handlers = [(signal.SIGTERM, terminate), (signal.SIGINT, interrupt)]
+        hangup = getattr(signal, "SIGHUP", None)  # POSIX only
+        if hangup is not None and signal.getsignal(hangup) is not signal.SIG_IGN:
+            handlers.append((hangup, terminate))
+        for signum, handler in handlers:
             try:
                 signal.signal(signum, handler)
             except (ValueError, OSError):

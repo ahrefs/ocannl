@@ -25,6 +25,8 @@ esac
 finish
 PROBE
 export SUPPORT=$HERE/harness-support.sh RECORD=$TMP/record MODE=pass
+# The probes' skip verdict is the subject; an ambient strict mode is not.
+unset OCANNL_TOOL_HARNESS_STRICT
 probe() {
   local rc=0
   bash "$TMP/probe.sh" "$@" >"$TMP/out" 2>&1 || rc=$?
@@ -39,6 +41,11 @@ MODE=skip probe; rc=$?
 if [ "$rc" = 0 ] && grep -q '^SKIP ' "$TMP/out" && grep -q 'all legs passed (1 skipped)' "$TMP/out"; then
   report 0 'missing host capability counts a skip'
 else report 1 'missing host capability counts a skip'; fi
+OCANNL_TOOL_HARNESS_STRICT=1 MODE=skip probe; rc=$?
+if [ "$rc" = 1 ] && grep -q '^FAIL  every leg requiring definitely_missing_harness_tool$' "$TMP/out" \
+   && grep -q '1 leg(s) failed (0 skipped)' "$TMP/out"; then
+  report 0 'strict mode turns an undecided leg into a failure'
+else report 1 'strict mode turns an undecided leg into a failure'; fi
 MODE=fail probe; rc=$?
 if [ "$rc" = 1 ] && grep -q '1 leg(s) failed (0 skipped)' "$TMP/out" && ! grep -q 'aborted before finish' "$TMP/out"; then
   report 0 'failure controls exit and footer'

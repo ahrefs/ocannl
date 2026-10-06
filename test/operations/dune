@@ -148,7 +148,8 @@
   (alias runtest-optional_arg_inventory)
   (alias runtest-optional_arg_inventory_control)
   (alias runtest-provenance_tag_inventory)
-  (alias runtest-provenance_tag_scan_cases)))
+  (alias runtest-provenance_tag_scan_cases)
+  (alias runtest-slot_kind_cases)))
 
 ; Two focused aggregates beyond `scans` (gh-ocannl-783). Same arrangement and same completeness
 ; check, a different question: `scans` collects the tests that read the REPOSITORY, these collect
@@ -614,6 +615,7 @@
   ; The fused backward's dK and dQ nests take lanes on a GPU backend per these keys
   ; (gh-ocannl-1124, gh-ocannl-1167).
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
   (env_var OCANNL_GPU_SERIAL_LANES))
  (modules online_softmax)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
@@ -2884,13 +2886,17 @@
 
 ; gh-ocannl-1004: what Test_utils.Slot_kind says a dune argv reaches -- the half of the fleet slot's
 ; --cpu/--gpu decision that reads the backend markers -- on a fixture tree built to separate the
-; cases: per-test and aggregate aliases, @ and @@, runtest directories, path targets.
+; cases: per-test and aggregate aliases, @ and @@, runtest directories, path targets. And, on the
+; repository's own dune files (gh-ocannl-1095), the answer for `@test/operations/scans`, which holds
+; no backend only while everything it builds is modelled exactly and reads no configuration.
 
 (test
- ; ocannl-backend: none -- links no backend: it reads embedded dune-file text through Slot_kind.
+ ; ocannl-backend: none -- links no backend: it reads dune-file text through Slot_kind.
  (name slot_kind_cases)
  (package neural_nets_lib)
- (deps ocannl_config)
+ (deps
+  ocannl_config
+  (glob_files_rec ../../dune))
  (modules slot_kind_cases)
  (libraries base stdio test_utils arrayjit.verdict))
 
@@ -4219,6 +4225,7 @@
   ; (gh-ocannl-1149).
   (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
   (env_var OCANNL_GPU_SERIAL_LANES)
   (env_var OCANNL_GPU_FISSION_KEEP_MAPPING)
   (env_var OCANNL_AUTOMATIC_CPU_SCHEDULE)
@@ -4249,6 +4256,7 @@
   (env_var OCANNL_BACKEND)
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
   (env_var OCANNL_GPU_SERIAL_LANES)
   (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
@@ -4281,6 +4289,7 @@
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
   (env_var OCANNL_GPU_SERIAL_LANES)
   (env_var OCANNL_GPU_FISSION_KEEP_MAPPING)
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
@@ -4305,6 +4314,7 @@
   (env_var OCANNL_BACKEND)
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
   (env_var OCANNL_GPU_SERIAL_LANES)
   (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
@@ -4330,6 +4340,7 @@
   (env_var OCANNL_BACKEND)
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
   (env_var OCANNL_GPU_SERIAL_LANES)
   (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
@@ -4379,6 +4390,7 @@
   (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_FISSION_KEEP_MAPPING)
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
   (env_var OCANNL_GPU_SERIAL_LANES)
   (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
@@ -4470,6 +4482,7 @@
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
   (env_var OCANNL_GPU_SERIAL_LANES)
   (env_var OCANNL_GPU_FISSION_KEEP_MAPPING)
   (env_var OCANNL_AUTOMATIC_CPU_SCHEDULE)
@@ -4510,6 +4523,7 @@
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
   (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
   (env_var OCANNL_GPU_SERIAL_LANES)
   (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
@@ -4610,6 +4624,7 @@
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
   (env_var OCANNL_GPU_SERIAL_LANES)
   (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_SCHEDULE_FISSION)
@@ -4691,6 +4706,7 @@
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
   (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
   (env_var OCANNL_GPU_SERIAL_LANES)
   (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
@@ -4741,6 +4757,7 @@
   (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_FISSION_KEEP_MAPPING)
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
   (env_var OCANNL_GPU_SERIAL_LANES)
   (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
@@ -4787,6 +4804,7 @@
   (env_var OCANNL_BACKEND)
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
   (env_var OCANNL_GPU_SERIAL_LANES)
   (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
@@ -4852,6 +4870,7 @@
   (env_var OCANNL_BACKEND)
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
   (env_var OCANNL_GPU_SERIAL_LANES)
   (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
@@ -4879,6 +4898,7 @@
   ocannl_config
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
   (env_var OCANNL_GPU_SERIAL_LANES)
   (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
@@ -5506,6 +5526,7 @@
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
   (env_var OCANNL_GPU_SERIAL_LANES)
   (env_var OCANNL_SCHEDULE_FISSION)
   (env_var OCANNL_SCHEDULE_LOG_LAUNCHES)
@@ -5548,6 +5569,7 @@
   (env_var OCANNL_BACKEND)
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
   (env_var OCANNL_GPU_SERIAL_LANES)
   (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
@@ -6079,6 +6101,7 @@
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
   (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
   (env_var OCANNL_GPU_SERIAL_LANES)
   (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
@@ -6106,6 +6129,7 @@
   ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
   (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
   (env_var OCANNL_GPU_SERIAL_LANES)
   (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
@@ -6779,6 +6803,29 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+;; gh-ocannl-1183: backward contractions (weight and data gradients, whose contraction loops
+;; backprop lowers outermost or interleaved) become matmul sites through an enabling Swap prefix;
+;; detection, seeding, replay from a fresh lowering, and executed bitwise parity on the backend's
+;; own sketch families. Declares OCANNL_BACKEND: the executed families depend on it.
+
+(test
+ (name matmul_interchange)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND)
+  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
+  (env_var OCANNL_LARGE_MODELS)
+  (env_var OCANNL_PROFILE)
+  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA))
+ (modules matmul_interchange)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here)))
+
 ; gh-ocannl-1006: the device-footprint high-water mark that the benchmark report's memory column is
 ; read from -- that a free does not lower it, that a rebase brackets one window, and that the shared
 ; allocator seam feeds it on whatever backend is configured. Drives a real compile, so it declares
@@ -6812,7 +6859,15 @@
   (env_var OCANNL_BACKEND)
   (env_var OCANNL_SIMPLIFY_FP_ALGEBRA))
  (modules bench_self_test)
- (libraries base stdio yojson bench_harness ocannl arrayjit.verdict))
+ (libraries
+  base
+  stdio
+  unix
+  yojson
+  bench_harness
+  bench_json
+  ocannl
+  arrayjit.verdict))
 
 ; Tensor-core kernels must name their accumulator destination in the shipped table, even when
 ; their zeroing kernel is separate. This compiles two tiny matmuls; it runs no timing window.
@@ -7236,7 +7291,7 @@
 (executable
  (name verdict_skip_probe)
  (modules verdict_skip_probe)
- (libraries arrayjit.verdict))
+ (libraries unix arrayjit.verdict))
 
 (rule
  ; ocannl-backend: none -- the harness uses fake opam and a Verdict-only skip probe; neither links a backend.
@@ -7644,6 +7699,17 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; gh-ocannl-1199: the BENCH_TIMING_TRACE decision line, formatted by Bench_harness from
+; Autotune.on_batch_decision on an injected clock, agrees with the decision each call took.
+
+(test
+ (name timing_trace_decision)
+ ; ocannl-backend: none -- calibrate_and_time on an injected clock dispatches to no device
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules timing_trace_decision)
+ (libraries base stdio bench_harness ocannl test_utils arrayjit.verdict))
+
 ; gh-ocannl-1166: the composite playoff re-ranks near-tie per-segment singles inside the
 ; recombined composite. Scripted timings, pinned to cc.
 
@@ -7682,6 +7748,7 @@
   ; The fused backward's dK and dQ nests take lanes on a GPU backend per these keys
   ; (gh-ocannl-1124, gh-ocannl-1167).
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
   (env_var OCANNL_GPU_SERIAL_LANES)
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
@@ -7736,6 +7803,7 @@
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
   (env_var OCANNL_GPU_SERIAL_LANES)
   (env_var OCANNL_GPU_FISSION_KEEP_MAPPING)
   (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
@@ -7769,6 +7837,7 @@
   (env_var OCANNL_LOG_LEVEL)
   ; Leg 9 reads the configured default (auto).
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
   (env_var OCANNL_GPU_SERIAL_LANES)
   (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
@@ -7844,6 +7913,7 @@
   (env_var OCANNL_LARGE_MODELS)
   (env_var OCANNL_LOG_LEVEL)
   (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
   (env_var OCANNL_GPU_SERIAL_LANES)
   (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
@@ -7925,7 +7995,8 @@
   (env_var OCANNL_SIMPLIFY_FP_ALGEBRA))
  (libraries base ocannl stdio arrayjit.verdict ll_test test_utils))
 
-; gh-ocannl-946: declaration-reader controls and real first-parent merge attribution.
+; gh-ocannl-946: declaration-reader controls and real first-parent merge attribution; gh-ocannl-1201
+; refusals for unread source and Dune forms; gh-ocannl-1213 compact rendering.
 
 (test
  ; ocannl-backend: none -- parses synthetic source declarations, with no backend.
@@ -8014,6 +8085,7 @@
   (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_FISSION_KEEP_MAPPING)
   (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
   (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
@@ -8030,3 +8102,14 @@
  (libraries base ocannl stdio unix arrayjit.verdict test_utils ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+(test
+ ; ocannl-backend: none -- links arrayjit.autotune (and so arrayjit.context) for two pure functions
+ ; of it, `Autotune.mma_format_triples` and `mma_tile_for_precisions_in_scope`; the CUDA tables under
+ ; test are `Ir.Cuda_mma`, evaluated at synthetic compute capabilities. Nothing in that closure reads
+ ; the backend key unless get_backend or Context.auto is called.
+ (name cuda_mma_cutoffs)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules cuda_mma_cutoffs)
+ (libraries base stdio arrayjit.ir arrayjit.autotune arrayjit.verdict))

@@ -22,6 +22,7 @@ the run log and in a report section, rather than quietly not being run (gh-ocann
 
 import argparse
 import contextlib
+import hashlib
 import json
 import math
 import os
@@ -474,6 +475,52 @@ def regime_check(results):
     return mismatched
 
 
+def precision_check(results):
+    """Rows whose runner ran tensors or an autocast context other than the row's precision label.
+
+    The row's `precision` is what the sweep labels it with (f32 for every torch cell); the runner
+    reports what its run's tensors were (`effective_precision`, from the parameter and floating
+    input dtypes it read back) and whether autocast was on inside the step (gh-ocannl-1208). A
+    label the run contradicts -- a weight cast on load, an autocast context, a requested precision
+    the runner did not apply -- is a number quoted at a precision it was not measured at, and the
+    parity reference is such a row too. `precision_mismatch` says what ran, in words the report
+    prints. Rows whose runner reports no `effective_precision` (OCANNL's, tinygrad's, and torch
+    rows predating the field) are not checked; an autocast state torch could not read (None) is
+    not a mismatch, and the row's `autocast` says it is unknown.
+    """
+    mismatched = []
+    for r in results:
+        ran = r.get("effective_precision")
+        if ran is None:
+            continue
+        found = []
+        if ran != precision_base(r.get("precision", "f32")):
+            found.append(f"{ran} tensors")
+        autocast = r.get("autocast")
+        if autocast and autocast.get("enabled"):
+            found.append(f"autocast to {autocast.get('dtype')}")
+        if found:
+            r["precision_mismatch"] = ", ".join(found)
+            mismatched.append(r)
+    return mismatched
+
+
+def tensor_precision_note(result):
+    """One line of what a torch row's run computed in, for the report's reference line."""
+    if result.get("effective_precision") is None:
+        return "tensor precision not reported by its runner"
+    inputs = ", ".join(f"{role} {dtype}" for role, dtype in result.get("input_dtypes", {}).items())
+    autocast = result.get("autocast")
+    autocast_text = (
+        "autocast unknown"
+        if autocast is None
+        else f"autocast to {autocast.get('dtype')}" if autocast.get("enabled") else "autocast off"
+    )
+    return (
+        f"params {', '.join(result.get('param_dtypes', []))}; inputs {inputs}; {autocast_text}"
+    )
+
+
 def precision_spec(spec):
     """--precision argument: a storage precision, or one of the f16 gate-cost legs."""
     if spec in ("bf16", "f16") or spec in GATE_LEG_ENV or GATED_RE.match(spec):
@@ -715,7 +762,7 @@ def _run_supporting(cmd, cwd, env, capture_output, check, timeout):
     return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
 
 
-def run_cell(label, cmd, env=None, cwd=None, timeout=None, on_incomplete=None):
+def run_cell(label, cmd, env=None, cwd=None, timeout=None, on_incomplete=None, on_checkpoint=None):
     """Run one cell; return `(result, failure_note)`.
 
     `failure_note` is None when the cell produced a result line, and otherwise says what went
@@ -726,6 +773,12 @@ def run_cell(label, cmd, env=None, cwd=None, timeout=None, on_incomplete=None):
     the cache it was writing; its sentence is appended to the failure note. `killed` separates the
     two cases, because what is safe to DO about them differs: see `quarantine_tinygrad_cache`.
 
+    A cell that ends without a result may still have checkpointed the work it completed before the
+    stage it died in (gh-ocannl-1209; see `last_checkpoint`). On those same paths its last
+    checkpoint is summarized into the failure note and handed to `on_checkpoint(checkpoint)`, so
+    the caller's failure record can keep the losses -- on an interrupt too, before the
+    cancellation propagates. It is never returned as the result: the cell still failed.
+
     The whole body runs inside one cancellation-deferral window whose only hole is the
     `communicate` wait. Chasing that protection stretch by stretch is how several review rounds
     went — the spawn, then the kill, then the leftover probe, then the assignments between them —
@@ -734,7 +787,7 @@ def run_cell(label, cmd, env=None, cwd=None, timeout=None, on_incomplete=None):
     the GPU with the sweep gone.
     """
     with _cancellation.deferring():
-        return _run_cell(label, cmd, env, cwd, timeout, on_incomplete)
+        return _run_cell(label, cmd, env, cwd, timeout, on_incomplete, on_checkpoint)
 
 
 def cell_log_name(label):
@@ -768,6 +821,94 @@ def open_cell_log(label):
     return os.fdopen(fd, "wb"), Path(name), True
 
 
+# What an OCANNL runner writes before each checkpoint of a measurement still in progress
+# (gh-ocannl-1209): `Bench_json.checkpoint_prefix`. The golden of test/operations/bench_result_line
+# holds lines the OCaml side built, which test_orchestrate feeds back through `last_checkpoint`.
+CHECKPOINT_PREFIX = "bench: checkpoint "
+
+
+def last_checkpoint(text):
+    """The last checkpoint in a cell's output, parsed, or None.
+
+    A checkpoint records the parity losses a cell observed before a later stage -- the timed steps,
+    or the dominant-kernel instrument -- and is all that is left of them when the cell is killed
+    there. It is not a result line and never stands in for one: it starts with CHECKPOINT_PREFIX,
+    not '{', so the result parser cannot pick it up, and it carries no timing.
+
+    A kill can land in the middle of a write, so a final line that does not parse is skipped for
+    the one before it.
+    """
+    for line in reversed(text.splitlines()):
+        if not line.startswith(CHECKPOINT_PREFIX):
+            continue
+        try:
+            obj = json.loads(line[len(CHECKPOINT_PREFIX):])
+        except ValueError:
+            continue
+        if isinstance(obj, dict) and obj.get("record") == "checkpoint":
+            return obj
+    return None
+
+
+def checkpoint_note(checkpoint):
+    """One sentence for a failure note: what the cell's last checkpoint kept."""
+    stages = checkpoint.get("stages") or {}
+
+    def named(status):
+        return ", ".join(k for k, v in stages.items() if v == status) or "none"
+
+    return (
+        f"its last checkpoint kept {len(checkpoint.get('losses') or [])} of "
+        f"{checkpoint.get('parity_steps')} parity losses (complete: {named('complete')}; "
+        f"running: {named('running')}) -- completed loss work, not an accepted result"
+    )
+
+
+def failure_record(label, note, ambient, checkpoint=None, provenance=None):
+    """One line of partial-failures.jsonl: a failed cell, and what it left behind.
+
+    A checkpoint (gh-ocannl-1209) names its fixture by path and size and its runner by path, both
+    of which a later sweep can reuse for different bytes. So beside it goes `provenance`: the
+    fixture stamp results carry (digest, origin, declared boxes), the source identity read before
+    dispatch, and the content digest of the executable the checkpoint names, read now, right after
+    it ran -- the one identity a `--skip-build` sweep or a dirty tree cannot blur. Under a key of
+    its own, leaving the checkpoint as the runner wrote it.
+    """
+    record = {"cell": label, "why": note, "ambient_ocannl_env": ambient}
+    if checkpoint is not None:
+        # The losses a killed cell completed, kept beside the failure and never among the results.
+        record["checkpoint"] = checkpoint
+        record["provenance"] = dict(
+            provenance or {}, executable_sha256=file_sha256(checkpoint.get("executable"))
+        )
+    return record
+
+
+def file_sha256(path):
+    """The sha256 of a file's bytes, or None when there is no readable file at `path`."""
+    if not path:
+        return None
+    h = hashlib.sha256()
+    try:
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                h.update(chunk)
+    except OSError:
+        return None
+    return h.hexdigest()
+
+
+def source_identity(root):
+    """The checkout's HEAD and whether tracked files differ from it, as stamped on failure records."""
+    revision = run_supporting(
+        ["git", "rev-parse", "HEAD"], cwd=root, capture_output=True
+    ).stdout.strip()
+    dirty = run_supporting(
+        ["git", "status", "--porcelain", "--untracked-files=no"], cwd=root, capture_output=True
+    ).stdout.strip()
+    return {"source_revision": revision or None, "source_tracked_changes": bool(dirty)}
+
+
 def read_cell_log(path):
     """The cell's output so far, as text: read through a handle of its own, so the read shares
     no file offset with a writer that might still be alive."""
@@ -778,11 +919,13 @@ def read_cell_log(path):
         return f"(the cell's output could not be read back from {path}: {exc})\n"
 
 
-def _run_cell(label, cmd, env, cwd, timeout, on_incomplete):
+def _run_cell(label, cmd, env, cwd, timeout, on_incomplete, on_checkpoint):
     print(f"--- {label}", flush=True)
     log, log_path, temporary = open_cell_log(label)
     try:
-        return _run_logged_cell(label, cmd, env, cwd, timeout, on_incomplete, log, log_path)
+        return _run_logged_cell(
+            label, cmd, env, cwd, timeout, on_incomplete, on_checkpoint, log, log_path
+        )
     finally:
         # Idempotent: the spawn path closes the sweep's copy as soon as the child has its own.
         log.close()
@@ -793,7 +936,7 @@ def _run_cell(label, cmd, env, cwd, timeout, on_incomplete):
                 log_path.unlink()
 
 
-def _run_logged_cell(label, cmd, env, cwd, timeout, on_incomplete, log, log_path):
+def _run_logged_cell(label, cmd, env, cwd, timeout, on_incomplete, on_checkpoint, log, log_path):
     timed_out = False
     remaining = cell_group.GONE
     cache_note = ""
@@ -842,10 +985,27 @@ def _run_logged_cell(label, cmd, env, cwd, timeout, on_incomplete, log, log_path
                 )
             if on_incomplete:
                 print(f"!!! {label} interrupted; {on_incomplete(True)}", flush=True)
+            # The losses the cell completed are worth as much here as on the cap's path, and the
+            # temporary log holding them is deleted on the way out (gh-ocannl-1209 review).
+            checkpoint = last_checkpoint(read_cell_log(log_path))
+            if checkpoint is not None:
+                print(f"!!! {label} interrupted; {checkpoint_note(checkpoint)}", flush=True)
+                if on_checkpoint:
+                    on_checkpoint(checkpoint)
         if cleanup_failure is not None:
             raise cleanup_failure
         raise
     stdout = read_cell_log(log_path)
+
+    def with_checkpoint(note):
+        # Every path below that returns no result: what the cell completed before it died.
+        checkpoint = last_checkpoint(stdout)
+        if checkpoint is None:
+            return note
+        if on_checkpoint:
+            on_checkpoint(checkpoint)
+        return f"{note}; {checkpoint_note(checkpoint)}"
+
     leftovers = ""
     stuck = cell_group.GONE
     initial = _group_observation(proc)
@@ -887,6 +1047,7 @@ def _run_logged_cell(label, cmd, env, cwd, timeout, on_incomplete, log, log_path
             )
         if cache_note:
             note += f"; {cache_note}"
+        note = with_checkpoint(note)
         print(f"!!! {label} {note}", flush=True)
         if remaining is not cell_group.GONE and _cancellation.held_signal is not None:
             raise cell_group.CleanupFailed(note)
@@ -910,6 +1071,7 @@ def _run_logged_cell(label, cmd, env, cwd, timeout, on_incomplete, log, log_path
         stuck_cache_note = (on_incomplete(True) if on_incomplete else "") or ""
         if stuck_cache_note:
             note += f"; {stuck_cache_note}"
+        note = with_checkpoint(note)
         print(f"!!! {label} {note}", flush=True)
         if _cancellation.held_signal is not None:
             raise cell_group.CleanupFailed(note)
@@ -934,7 +1096,7 @@ def _run_logged_cell(label, cmd, env, cwd, timeout, on_incomplete, log, log_path
             note += f"; {failed_note}"
         if failed_note:
             print(f"!!! {label}: {failed_note}", flush=True)
-        return None, note
+        return None, with_checkpoint(note)
     result = json.loads(line)
     if leftovers and on_incomplete:
         # The row stands — the cell ran and printed its result — but a member of its group was
@@ -1793,6 +1955,14 @@ def report(
                     "**MISSING DIGEST RECORD:** declared measurement box(es) with no entry for "
                     f"`{fixture}`: {', '.join(missing)}\n"
                 )
+        # What the parity reference computed in, read back from its run (gh-ocannl-1208): every
+        # row's parity verdict is against it, so a reader auditing one needs this, and before the
+        # runner reported it the answer was in the fixture's dtype headers and the runner's history.
+        ref = next((r for r in rows if r.get("parity") == "REF"), None)
+        if ref is not None:
+            lines.append(
+                f"parity reference `{'/'.join(REFERENCE)}`: {tensor_precision_note(ref)}\n"
+            )
         # Precision-major, p50-ascending within a precision: scheduling variants are ranked
         # against the others computing in the same format, and a reduced-precision block reads as
         # its own group rather than being interleaved by a speed it owes to its storage format.
@@ -1833,6 +2003,15 @@ def report(
                 "source): its number belongs to neither column and is not comparable with "
                 "anything -- the sweep fails on it, and the row is kept so the failure is "
                 "visible where the numbers are read.\n"
+            )
+        if any(r.get("precision_mismatch") for r in rows):
+            lines.append(
+                "**`PRECISION MISMATCH`** is a row whose runner read back tensors, or an autocast "
+                "context inside its step, other than the precision the row is labelled with "
+                "(gh-ocannl-1208): a weight cast on load, an enclosing autocast, or a requested "
+                "precision the runner did not apply. Its number was not measured at its label's "
+                "precision -- the sweep fails on it, and the row is kept so the failure is visible "
+                "where the numbers are read.\n"
             )
         with_tokens = any(r.get("tokens_per_step") for r in rows)
         # gh-ocannl-644: which process produced the step times. Only a cell that searches or
@@ -1998,9 +2177,15 @@ def report(
                     if mismatch
                     else f"| {regime_of(r)} "
                 )
+            precision = r.get("precision", "f32")
+            if r.get("precision_mismatch"):
+                precision = (
+                    f"**PRECISION MISMATCH** (dispatched {precision}; ran "
+                    f"{r['precision_mismatch']})"
+                )
             lines.append(
                 f"| {r['framework']} | {r['backend']} | {rendered_variant(r)} "
-                f"| {r.get('precision', 'f32')} {regime}"
+                f"| {precision} {regime}"
                 f"| {num(s['p50'], '.3f')} | {num(s['p10'], '.3f')} | {num(s['p90'], '.3f')} "
                 f"| {num(r['queued_step_ms'], '.3f')} | {compile_s} |{peak_memory}"
                 f"{provenance} {parity} |{tokens}"
@@ -2266,13 +2451,16 @@ def main():
     # the cells inherit this environment, and only the approximate payload's keys are otherwise
     # accounted for.
     ambient = ambient_ocannl_env(os.environ)
+    # What the runners are built from, read before any cell runs: a checkpoint a failed cell
+    # leaves names only its executable's path, which a later rebuild reuses (gh-ocannl-1209).
+    source = source_identity(ROOT)
 
     # The fixture the cells currently being dispatched are measuring — stamped onto every result
     # so a row, and the report built from it, states its own workload identity (gh-ocannl-645)
     # rather than leaving it to how the operator ran the sweep.
     stamp = {}
 
-    def record_failure(label, note):
+    def record_failure(label, note, checkpoint=None):
         """The one path a failed cell takes, wherever in the sweep it failed.
 
         Both the in-memory list the report is built from and the checkpoint an interrupted run
@@ -2287,16 +2475,29 @@ def main():
             # leaves no result row to carry it, and the checkpoint an interrupted run leaves is
             # then the only artifact there is. It says what the SWEEP inherited, not what a runner
             # read: a failed cell produced no result line to name its framework.
-            f.write(
-                json.dumps(
-                    {"cell": label, "why": note, "ambient_ocannl_env": ambient}
-                )
-                + "\n"
+            record = failure_record(
+                label, note, ambient, checkpoint, provenance=dict(stamp, **source)
             )
+            f.write(json.dumps(json_safe(record), allow_nan=False) + "\n")
+
+    def run_kept(label, cmd, **kwargs):
+        """`run_cell` under the sweep's cap, plus the last checkpoint a failed cell left. An
+        interrupted cell's checkpoint is recorded before the cancellation propagates: the sweep
+        writes nothing else for it."""
+        kept = []
+        try:
+            r, note = run_cell(
+                label, cmd, timeout=args.cell_timeout, on_checkpoint=kept.append, **kwargs
+            )
+        except BaseException:
+            if kept:
+                record_failure(label, "interrupted mid-cell", kept[-1])
+            raise
+        return r, note, (kept[-1] if kept else None)
 
     def collect(label, cmd, override=None, **kwargs):
         t0 = time.monotonic()
-        r, note = run_cell(label, cmd, timeout=args.cell_timeout, **kwargs)
+        r, note, checkpoint = run_kept(label, cmd, **kwargs)
         if r:
             r.update(stamp)
             stamp_ambient_env(r, ambient)
@@ -2309,7 +2510,7 @@ def main():
             with open(partial, "a") as f:
                 f.write(json.dumps(json_safe(r), allow_nan=False) + "\n")
         else:
-            record_failure(label, note)
+            record_failure(label, note, checkpoint)
         print(f"    cell took {time.monotonic() - t0:.0f}s", flush=True)
 
     for fx in fixtures:
@@ -2372,16 +2573,15 @@ def main():
                                 # gh-ocannl-675), so pass 1 runs the search and
                                 # populates autotune_cache (its compile_s is the search cost), and a
                                 # fresh pass-2 process replays the cached winner for the step timings.
-                                pass1, note = run_cell(
+                                pass1, note, checkpoint = run_kept(
                                     f"{label} (search pass)",
                                     cmd,
                                     env=env,
                                     cwd=HERE,
-                                    timeout=args.cell_timeout,
                                     on_incomplete=ocannl_cache_note,
                                 )
                                 if pass1 is None:
-                                    record_failure(f"{label} (search pass)", note)
+                                    record_failure(f"{label} (search pass)", note, checkpoint)
                                     continue
                                 # What the search pass actually did, which is not derivable from the
                                 # compile_s it hands over: a warm autotune_cache makes it a replay, and
@@ -2412,7 +2612,10 @@ def main():
                             [str(VENV_PY), str(HERE / "runners/pytorch/run.py"), "--fixture", str(fx), "--device", device]
                             + (["--compile"] if compiled else [])
                             + torch_regime_args(regime),
-                            override={"regime": regime},
+                            # Every torch cell is an f32 cell, stamped as such so the row states
+                            # the precision it was requested at beside the one its runner read back
+                            # (`effective_precision`; `precision_check`, gh-ocannl-1208).
+                            override={"regime": regime, "precision": "f32"},
                         )
         if "tinygrad" in args.only:
             # No exact pin exists for tinygrad, so its cells run once and stand in the approximate
@@ -2463,6 +2666,7 @@ def main():
     provenance_violations = provenance_check(results)
     tensorization_mismatches = tensorization_check(results)
     regime_mismatches = regime_check(results)
+    precision_mismatches = precision_check(results)
     report(results, RESULTS_DIR, unavailable, failures, ambient=ambient, skipped=skipped)
     ok = True
     if unavailable:
@@ -2529,6 +2733,21 @@ def main():
         print(
             f"REGIME GATE: {len(regime_mismatches)} cell(s) ran under a regime other than the "
             f"one dispatched: {labels}",
+            flush=True,
+        )
+    if precision_mismatches:
+        # The same defect as a regime mismatch, one level down (gh-ocannl-1208): the row's
+        # precision label is what its number is quoted at, and the run says otherwise.
+        ok = False
+        labels = ", ".join(
+            f"{r['workload']} {r['framework']}/{r['backend']}/"
+            f"{cell_name(r['variant'], r.get('precision', 'f32'))}{regime_label(regime_of(r))}"
+            f" (runner ran {r['precision_mismatch']})"
+            for r in precision_mismatches
+        )
+        print(
+            f"PRECISION GATE: {len(precision_mismatches)} cell(s) ran at a precision other than "
+            f"their label: {labels}",
             flush=True,
         )
     failed = [r for r in results if r["parity"] == "FAIL"]

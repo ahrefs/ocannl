@@ -49,18 +49,27 @@ kernel to `generated-mma-register-scope.cu` in its build directory; direct
 `dune exec` also accepts an output path as its first argument.
 
 The same CUDA driver can include both emitted sources, renaming only the
-kernel symbol. Build it before timing:
+kernel symbol. Build it before timing with the script beside the driver, which
+pins `nvcc -O3 -gencode arch=compute_89,code=compute_89`, prints the source and
+binary digests, compiles and dry-runs (gh-ocannl-1190; the measurement below
+predates the script and passed the same flags by hand):
 
 ```bash
-nvcc -O3 -gencode arch=compute_89,code=compute_89 \
-  '-DMMA_GENERATED_BASELINE="/absolute/baseline.cu"' \
-  '-DMMA_GENERATED_RESIDENT="/absolute/resident.cu"' \
-  benchmarks/runners/ocannl/mma_register_scope_probe.cu -o /absolute/generated-probe
-/absolute/generated-probe --dry-run
+benchmarks/runners/ocannl/mma_register_scope_probe_build.sh \
+  /absolute/baseline.cu /absolute/resident.cu /absolute/generated-probe per_block resident
 ```
 
+The numbers in this report come from the driver's earlier protocol: nine
+alternating-order pairs, median of the nine paired ratios, with B constant
+along K. Since gh-ocannl-1190 the driver varies B along K, poisons D before
+each validated arm, and reports the median over nine balanced replicates
+(eighteen pairs, each replicate the geometric mean of one pair in each order).
+A re-run is not directly comparable to the tables below. The earlier ratio
+ranges were narrow (0.626–0.628 for the generated kernels), so any position
+effect in them is far smaller than the reported reduction.
+
 Run the precompiled binary without `--dry-run` only in an exclusive timing
-window. It performs the same nine alternating-order paired CUDA-event batches;
+window. It runs the paired CUDA-event batches described above;
 there is no build or host-product oracle in that invocation. OCANNL's emitted
 source is compiled with nvcc for this confirmation, and dispatch bypasses the
 OCANNL runtime, so the number remains a kernel measurement.

@@ -39,6 +39,9 @@ let () =
    to infer the case from [searches] and [replays] both being zero, which is exactly the derivation
    the outcome type replaced.
 
+   Arm D ran one beam round and the others none, so [rounds_run] beside [beam_width] reads as the
+   search's own record of how far it went, apart from the configuration (gh-ocannl-1137).
+
    Arms B, D and E carry the three [tensorization] labels (gh-ocannl-626), and A and C carry the
    [null] that says no census was consulted. B is the case the field exists for: [tensorized: true]
    — the crowned schedule carries a [Tensorize] — with every one of its [Tile_mma] statements
@@ -56,37 +59,38 @@ let tune =
           ~cache_hit:false
             (* An arm that timed nothing still names an objective: [tune] resolves it before it can
                construct any report, so every arm on the line carries one. *)
-          ~timing:"queued" ~timings_contended:0 ~timings_unbatched:0 ~best_ms:Float.infinity
-          ~best_label:"tile 32x32" ~tensorized:false ~tensorization:None ~mma_statements:0
-          ~mma_scalar_fallbacks:0 ~mma_seeded:4 ~mma_timed:0 ~mma_best_ms:Float.infinity
+          ~timing:"queued" ~rounds_run:0 ~beam_width:4 ~timings_contended:0 ~timings_unbatched:0
+          ~best_ms:Float.infinity ~best_label:"tile 32x32" ~tensorized:false ~tensorization:None
+          ~mma_statements:0 ~mma_scalar_fallbacks:0 ~mma_seeded:4 ~mma_timed:0
+          ~mma_best_ms:Float.infinity
           ~terminal_failure:
             (Some
                (Printf.sprintf "compile failed: \"kernel\" \\ path%c%c ESC" (Char.of_int_exn 0)
                   (Char.of_int_exn 27)));
         Bench_json.tune_arm ~name:"B" ~state:"cache-replay" ~searched:false ~cache_hit:true
-          ~timing:"queued" ~timings_contended:0 ~timings_unbatched:0 ~best_ms:0.75
-          ~best_label:"grid 128" ~tensorized:true ~tensorization:(Some "scalar-fallback")
-          ~mma_statements:2 ~mma_scalar_fallbacks:2 ~mma_seeded:6 ~mma_timed:3 ~mma_best_ms:0.8
-          ~terminal_failure:None;
+          ~timing:"queued" ~rounds_run:0 ~beam_width:4 ~timings_contended:0 ~timings_unbatched:0
+          ~best_ms:0.75 ~best_label:"grid 128" ~tensorized:true
+          ~tensorization:(Some "scalar-fallback") ~mma_statements:2 ~mma_scalar_fallbacks:2
+          ~mma_seeded:6 ~mma_timed:3 ~mma_best_ms:0.8 ~terminal_failure:None;
         (* Neither searched nor replayed: every counter zero, no winner to name. *)
         Bench_json.tune_arm ~name:"C" ~state:"search-disabled" ~searched:false ~cache_hit:false
-          ~timing:"queued" ~timings_contended:0 ~timings_unbatched:0 ~best_ms:Float.infinity
-          ~best_label:"" ~tensorized:false ~tensorization:None ~mma_statements:0
-          ~mma_scalar_fallbacks:0 ~mma_seeded:0 ~mma_timed:0 ~mma_best_ms:Float.infinity
-          ~terminal_failure:None;
+          ~timing:"queued" ~rounds_run:0 ~beam_width:2 ~timings_contended:0 ~timings_unbatched:0
+          ~best_ms:Float.infinity ~best_label:"" ~tensorized:false ~tensorization:None
+          ~mma_statements:0 ~mma_scalar_fallbacks:0 ~mma_seeded:0 ~mma_timed:0
+          ~mma_best_ms:Float.infinity ~terminal_failure:None;
         (* An honestly tensorized winner, and an ordinary one that never asked. *)
         Bench_json.tune_arm ~name:"D" ~state:"searched" ~searched:true ~cache_hit:false
-          ~timing:"queued" ~timings_contended:2 ~timings_unbatched:1 ~best_ms:0.5
-          ~best_label:"mma-gpu 16x16x16" ~tensorized:true ~tensorization:(Some "tensorized")
-          ~mma_statements:4 ~mma_scalar_fallbacks:0 ~mma_seeded:6 ~mma_timed:5 ~mma_best_ms:0.5
-          ~terminal_failure:None;
+          ~timing:"queued" ~rounds_run:1 ~beam_width:4 ~timings_contended:2 ~timings_unbatched:1
+          ~best_ms:0.5 ~best_label:"mma-gpu 16x16x16" ~tensorized:true
+          ~tensorization:(Some "tensorized") ~mma_statements:4 ~mma_scalar_fallbacks:0 ~mma_seeded:6
+          ~mma_timed:5 ~mma_best_ms:0.5 ~terminal_failure:None;
         Bench_json.tune_arm ~name:"E" ~state:"searched" ~searched:true
           ~cache_hit:false
             (* The other objective, so the golden shows both spellings on one line. *)
-          ~timing:"isolated" ~timings_contended:0 ~timings_unbatched:0 ~best_ms:1.25
-          ~best_label:"grid 64" ~tensorized:false ~tensorization:(Some "not-requested")
-          ~mma_statements:0 ~mma_scalar_fallbacks:0 ~mma_seeded:0 ~mma_timed:0
-          ~mma_best_ms:Float.infinity ~terminal_failure:None;
+          ~timing:"isolated" ~rounds_run:0 ~beam_width:2 ~timings_contended:0 ~timings_unbatched:0
+          ~best_ms:1.25 ~best_label:"grid 64" ~tensorized:false
+          ~tensorization:(Some "not-requested") ~mma_statements:0 ~mma_scalar_fallbacks:0
+          ~mma_seeded:0 ~mma_timed:0 ~mma_best_ms:Float.infinity ~terminal_failure:None;
       ]
 
 (* gh-ocannl-1006: the dominant kernel's %-of-peak, one fabricated kernel per verdict. The constants
@@ -342,6 +346,71 @@ let () =
     (Yojson.Safe.equal
        (member "verdict" (member "dominant_kernel" (Yojson.Safe.from_string ordinary)))
        (`String "exact"))
+
+(* gh-ocannl-1209: the checkpoints a cell writes before its later stages, which is what a cell
+   killed in one of those stages leaves behind. Printed with their prefix, as a runner writes them:
+   [benchmarks/test_orchestrate.py] feeds these very lines to the driver's salvage path, so the
+   prefix and the fields it reads are pinned from both sides. One is taken mid-parity on a diverged
+   trajectory, the other after the timed steps, as the dominant-kernel instrument starts. *)
+let checkpoints =
+  [
+    ( "mid-parity",
+      Bench_json.checkpoint_line ~backend:"hip" ~variant:"default" ~precision:"f16"
+        ~workload:"gpt2_mini_train_s1024"
+        ~fixture:(Some ("fixtures/gpt2_mini_train_s1024.safetensors", 14756136))
+        ~executable:"bench_gpt.exe" ~parity_steps:6 ~dominant_kernel:true ~completed_steps:2
+        ~at:(Bench_json.In_parity 2) ~losses:[| 10.375; Float.nan |] );
+    ( "before diagnostics",
+      Bench_json.checkpoint_line ~backend:"hip" ~variant:"default" ~precision:"f16"
+        ~workload:"gpt2_mini_train_s1024"
+        ~fixture:(Some ("fixtures/gpt2_mini_train_s1024.safetensors", 14756136))
+        ~executable:"bench_gpt.exe" ~parity_steps:6 ~dominant_kernel:true ~completed_steps:46
+        ~at:Bench_json.Before_diagnostics
+        ~losses:[| 10.375; 10.25; 10.125; 10.0; 9.875; 9.75 |] );
+    ( "in memory, instrument off",
+      Bench_json.checkpoint_line ~backend:"cc" ~variant:"self-test" ~precision:"f32"
+        ~workload:"selftest-tiny" ~fixture:None ~executable:"bench_self_test.exe" ~parity_steps:2
+        ~dominant_kernel:false ~completed_steps:13 ~at:Bench_json.Before_diagnostics
+        ~losses:[| 1.25; 1.125 |] );
+  ]
+
+let () =
+  Stdio.printf "\n=== checkpoint lines ===\n";
+  List.iter checkpoints ~f:(fun (_, line) ->
+      Stdio.printf "%s%s\n" Bench_json.checkpoint_prefix line);
+  let parsed = List.map checkpoints ~f:(fun (name, line) -> (name, Yojson.Safe.from_string line)) in
+  let stage name j = member name (member "stages" j) in
+  p "the checkpoint prefix cannot be mistaken for a result line"
+    (not (String.is_prefix Bench_json.checkpoint_prefix ~prefix:"{"));
+  p_all "every checkpoint names itself a checkpoint, unaccepted, with its result still pending"
+    parsed ~f:(fun (_, j) ->
+      Yojson.Safe.equal (member "record" j) (`String "checkpoint")
+      && Yojson.Safe.equal (member "accepted" j) (`Bool false)
+      && Yojson.Safe.equal (stage "result" j) (`String "pending"));
+  p_none "no checkpoint carries a timing" parsed ~f:(fun (_, j) ->
+      List.exists [ "step_ms"; "queued_step_ms"; "compile_s"; "dominant_kernel" ] ~f:(fun k ->
+          not (Yojson.Safe.equal (member k j) `Null)));
+  let mid = List.Assoc.find_exn parsed ~equal:String.equal "mid-parity" in
+  p "a mid-parity checkpoint keeps its completed losses, a diverged one as null"
+    (Yojson.Safe.equal (member "losses" mid) (`List [ `Float 10.375; `Null ])
+    && Yojson.Safe.equal (stage "parity" mid) (`String "running")
+    && Yojson.Safe.equal (stage "timing" mid) (`String "pending")
+    && Yojson.Safe.equal (stage "dominant_kernel" mid) (`String "pending"));
+  let late = List.Assoc.find_exn parsed ~equal:String.equal "before diagnostics" in
+  p "the checkpoint before the instrument says every measured stage is complete and it is running"
+    (Yojson.Safe.equal (member "stages" late)
+       (`Assoc
+          [
+            ("parity", `String "complete");
+            ("warmup", `String "complete");
+            ("timing", `String "complete");
+            ("dominant_kernel", `String "running");
+            ("result", `String "pending");
+          ]));
+  let off = List.Assoc.find_exn parsed ~equal:String.equal "in memory, instrument off" in
+  p "an instrument switched off is skipped, and an in-memory model names no fixture"
+    (Yojson.Safe.equal (stage "dominant_kernel" off) (`String "skipped")
+    && Yojson.Safe.equal (member "fixture" off) `Null)
 
 (* The negative control: without the mapping the line carries OCaml's own spellings, and this oracle
    rejects each of them — which is what makes the verdicts above evidence rather than ceremony. (A

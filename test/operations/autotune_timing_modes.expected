@@ -31,6 +31,12 @@ the boundary reading is the queued batch's per-launch cost, with no reused singl
 the retained boundary depth is supported by two distinct batched probes: true
 a fixed-dominated fit retains its refusal without the boundary floor: true
 over-target or unresolved batched work remains unbatched and unranked: true
+each call reports exactly one decision, at the depth its window ran: true
+a retained boundary's decision is the floor on its measured depth-2 fit, admitted: true
+the opposing refusal is the same crossing without the floor, refused unbatched: true
+a fixed-dominated refusal's decision names the fixed-dominated fit: true
+an unresolved refusal's decision says its depth fell back to the singles: true
+every call dispatches and reads the same with the decision seam unobserved: true
 a comparison of supported boundary candidates can cache: true
 one genuinely refused candidate still vetoes the whole comparison's cache: true
 a fixed-dominated refusal still vetoes the comparison's cache: true
