@@ -3383,10 +3383,8 @@ cancel_sweep() { # pid|group
     pid) kill -TERM "$pid" ;;
     group) kill -TERM -- "-$pid" ;;
   esac
-  set +e
-  wait "$pid"
-  rc=$?
-  set -e
+  rc=0
+  wait "$pid" || rc=$?
   holder_pid=
   wait_prefix=
   if [ "$rc" -ne 143 ]; then
