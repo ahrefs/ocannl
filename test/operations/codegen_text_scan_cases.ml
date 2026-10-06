@@ -21,6 +21,7 @@
 
 open Base
 module Scan = Test_utils.Codegen_text_scan
+module Attempt = Test_utils.Scan_attempt
 
 let printf = Stdio.printf
 let fail fmt = Printf.ksprintf Verdict.fail fmt
@@ -1294,20 +1295,7 @@ let association_cases =
     ("an empty golden is not output either", "", "none");
   ]
 
-(** [f ()], or [default] after a failure naming which way the scan failed on the snippet: a fixture
-    that does not parse is the case's own defect, an exception from a fixture that does is the
-    scanner's. *)
-let attempted ~what ~name ~default f =
-  match Scan.attempt f with
-  | Scan.Scanned found -> found
-  | Scan.Unparsed ->
-      fail "%s -- %s: the snippet does not parse" what name;
-      default
-  | Scan.Raised exn ->
-      fail "%s -- %s: the scan raised %s on a snippet that parses" what name exn;
-      default
-
-(** How {!Scan.attempt} tells the input's fault from the scanner's: the parser's syntax and lexical
+(** How {!Attempt.run} tells the input's fault from the scanner's: the parser's syntax and lexical
     errors are the file's, anything else -- here {!Scan.boundaries_of}'s precondition, broken by a
     provenance no source can produce -- is reported as itself. *)
 let attempt_cases =
@@ -1323,9 +1311,9 @@ let attempt_cases =
   ]
 
 let render_attempt = function
-  | Scan.Scanned () -> "scanned"
-  | Scan.Unparsed -> "unparsed"
-  | Scan.Raised exn -> "raised " ^ exn
+  | Attempt.Scanned () -> "scanned"
+  | Attempt.Unparsed -> "unparsed"
+  | Attempt.Raised exn -> "raised " ^ exn
 
 let render_association = function
   | None -> "none"
@@ -1357,7 +1345,7 @@ let () =
       else fail "golden -- %s: expected [%s], found [%s]" name expected found);
   List.iter source_cases ~f:(fun (name, source, expected) ->
       let found =
-        attempted ~what:"source" ~name ~default:"<unscanned>" (fun () ->
+        Attempt.attempted ~what:"source" ~name ~default:"<unscanned>" (fun () ->
             render_site (Scan.classify_source ~emitters ~path:"case.ml" ~contents:source))
       in
       if String.equal (String.strip found) (String.strip expected) then
@@ -1366,7 +1354,7 @@ let () =
   List.iter boundary_cases ~f:(fun (boundary, name, source, pins) ->
       let expected = String.strip (pins ^ " +partial(" ^ Scan.boundary_tag boundary ^ ")") in
       let found =
-        attempted ~what:"boundary" ~name ~default:"<unscanned>" (fun () ->
+        Attempt.attempted ~what:"boundary" ~name ~default:"<unscanned>" (fun () ->
             render_site (Scan.classify_source ~emitters ~path:"case.ml" ~contents:source))
       in
       if String.equal (String.strip found) expected then printf "ok: boundary -- %s\n" name
@@ -1375,12 +1363,12 @@ let () =
     Scan.all_of_boundary ~f:(fun boundary ->
       List.exists boundary_cases ~f:(fun (b, _, _, _) -> Poly.equal b boundary));
   List.iter attempt_cases ~f:(fun (name, f, expected) ->
-      let found = render_attempt (Scan.attempt f) in
+      let found = render_attempt (Attempt.run f) in
       if String.equal found expected then printf "ok: attempt -- %s\n" name
       else fail "attempt -- %s: expected [%s], found [%s]" name expected found);
   List.iter rejection_cases ~f:(fun (name, source, expected) ->
       let found =
-        attempted ~what:"rejection" ~name ~default:(-1) (fun () ->
+        Attempt.attempted ~what:"rejection" ~name ~default:(-1) (fun () ->
             List.length (Scan.rejections ~emitters ~path:"case.ml" ~contents:source))
       in
       if expected = found then printf "ok: rejection -- %s\n" name

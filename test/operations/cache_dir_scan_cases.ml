@@ -18,6 +18,7 @@
 
 open Base
 module Scan = Test_utils.Cache_dir_scan
+module Attempt = Test_utils.Scan_attempt
 
 let printf = Stdio.printf
 
@@ -384,12 +385,9 @@ let render uses = String.concat ~sep:"; " uses
 let () =
   List.iter cases ~f:(fun (name, source, expected) ->
       let found =
-        try
-          List.map (Scan.read source).Scan.uses ~f:(fun use ->
-              use.Scan.spelling ^ " " ^ Scan.describe use.Scan.resolution)
-        with _ ->
-          fail "use -- %s: the snippet does not parse" name;
-          []
+        Attempt.attempted ~what:"use" ~name ~default:[] (fun () ->
+            List.map (Scan.read source).Scan.uses ~f:(fun use ->
+                use.Scan.spelling ^ " " ^ Scan.describe use.Scan.resolution))
       in
       if List.equal String.equal found expected then printf "ok: use -- %s\n" name
       else fail "use -- %s: expected [%s], found [%s]" name (render expected) (render found));

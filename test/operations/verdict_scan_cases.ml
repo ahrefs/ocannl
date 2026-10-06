@@ -12,6 +12,7 @@
 
 open Base
 module Scan = Test_utils.Verdict_scan
+module Attempt = Test_utils.Scan_attempt
 
 let printf = Stdio.printf
 
@@ -209,12 +210,9 @@ let () =
       | Some found -> fail "not a claim -- %s: read it as the claim %S" name found);
   List.iter source_cases ~f:(fun (name, source, expected) ->
       let found =
-        try
-          List.map (Scan.scan source).Scan.sites ~f:(fun site ->
-              (site.Scan.label, site.Scan.printer))
-        with _ ->
-          fail "source -- %s: the snippet does not parse" name;
-          []
+        Attempt.attempted ~what:"source" ~name ~default:[] (fun () ->
+            List.map (Scan.scan source).Scan.sites ~f:(fun site ->
+                (site.Scan.label, site.Scan.printer)))
       in
       let render sites =
         List.map sites ~f:(fun (label, printer) -> label ^ " (" ^ show_printer printer ^ ")")
