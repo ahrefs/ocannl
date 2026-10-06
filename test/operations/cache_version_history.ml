@@ -224,6 +224,17 @@ let () =
     ~f:(String.is_suffix ~suffix:"version");
   p_empty "every version constant's history is well formed and ends on its current value"
     ~over:names findings;
+  (* The CUDA/HIP queued key's generation is spelled into a key rather than stamped into a store.
+     Inlined back as a literal, it would drop out of [names] while the floor above still held, so
+     both its membership and the absence of a literal generation are claimed. The population of the
+     second is the key's spelling sites, which must exist. *)
+  p "the queued timing objective's generation is one of them"
+    (List.mem names "queued_objective_version" ~equal:String.equal);
+  let quote = "\"queued-v" in
+  p_none "no spelling of the queued key hard-codes its generation as a literal queued-v<N>"
+    (String.substr_index_all text ~may_overlap:false ~pattern:quote) ~f:(fun i ->
+      let j = i + String.length quote in
+      j < String.length text && Char.is_digit text.[j]);
   (* The controls: each refusal on a text built to trip it, beside the nearest text that passes. *)
   let accepted label text = p_empty label ~over:(String.split_lines text) (fst (check text)) in
   accepted "a history whose last entry is the constant's value passes, a gap included" (sample ());
