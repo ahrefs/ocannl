@@ -4718,14 +4718,66 @@ with torch.autocast("cpu", dtype=torch.bfloat16):
 
 
 def torch_venv_python():
-    """The bench venv's interpreter if it can run the torch runner here, else None."""
+    """`(interpreter, None)` if the bench venv can run the torch runner here, else `(None, why)`."""
     venv = bench_venv.venv_python(HERE)
     if not venv.exists():
-        return None
+        return None, f"no bench venv at {venv}"
+    # numpy too: torch does not depend on it, but safetensors' torch save and load convert through
+    # it, so a venv without it imports cleanly and then fails inside the runner.
     probe = subprocess.run(
-        [str(venv), "-c", "import torch, safetensors"], capture_output=True, timeout=120
+        [str(venv), "-c", "import torch, safetensors.torch, numpy"],
+        capture_output=True,
+        text=True,
+        timeout=120,
     )
-    return venv if probe.returncode == 0 else None
+    if probe.returncode != 0:
+        return None, f"the bench venv at {venv} cannot import torch, safetensors and numpy: {probe.stderr}"
+    return venv, None
+
+
+def torch_venv_or_skip(test):
+    """The torch venv's interpreter, else a skip -- or, under `BENCH_TORCH_REQUIRED=1`, a failure.
+
+    Hosts without torch (the dune rule on CI's main legs, most dev checkouts) skip the torch legs.
+    ci.yml's `torch-runner` job provisions a CPU torch venv and sets the variable, because there a
+    missing torch is a broken provisioning step, and a skip would pass it off as green coverage.
+    """
+    venv, why = torch_venv_python()
+    if venv is not None:
+        return venv
+    if os.environ.get("BENCH_TORCH_REQUIRED") == "1":
+        test.fail(f"BENCH_TORCH_REQUIRED=1, but {why}")
+    test.skipTest(f"{why} (set BENCH_VENV_PY to run this leg)")
+
+
+class TorchVenvGateTest(unittest.TestCase):
+    """The torch legs skip where torch is absent, and fail there under `BENCH_TORCH_REQUIRED=1`.
+
+    The CI job that provisions torch reads its own coverage from that failure: if the variable
+    stopped turning the skip into a red, a broken venv would pass as a green torch leg.
+    """
+
+    def gate(self, environ):
+        missing = unittest.mock.patch(
+            f"{__name__}.torch_venv_python", return_value=(None, "no bench venv at /nowhere")
+        )
+        with missing, unittest.mock.patch.dict(os.environ, environ, clear=True):
+            torch_venv_or_skip(self)
+
+    def test_a_host_without_torch_skips(self):
+        with self.assertRaises(unittest.SkipTest) as raised:
+            self.gate({})
+        self.assertIn("/nowhere", str(raised.exception))
+
+    def test_a_host_that_requires_torch_fails_instead(self):
+        with self.assertRaises(self.failureException) as raised:
+            self.gate({"BENCH_TORCH_REQUIRED": "1"})
+        self.assertIn("/nowhere", str(raised.exception))
+
+    def test_a_present_venv_is_returned(self):
+        found = Path("/venv/bin/python")
+        with unittest.mock.patch(f"{__name__}.torch_venv_python", return_value=(found, None)):
+            self.assertEqual(torch_venv_or_skip(self), found)
 
 
 class TensorPrecisionTest(unittest.TestCase):
@@ -4890,12 +4942,7 @@ class TensorPrecisionTest(unittest.TestCase):
         runner never entered itself. A requested-but-ignored precision is the first run stamped
         bf16, as the sweep's override would stamp it.
         """
-        venv = torch_venv_python()
-        if venv is None:
-            self.skipTest(
-                f"no bench venv with torch at {bench_venv.venv_python(HERE)} "
-                "(set BENCH_VENV_PY to run this leg)"
-            )
+        venv = torch_venv_or_skip(self)
         run_py = HERE / "runners/pytorch/run.py"
 
         def row(*argv):

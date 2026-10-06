@@ -641,6 +641,11 @@ A box that keeps one shared venv outside the checkout (the measurement boxes use
 resolves its interpreter through `bench_venv.py`, so the variable wins over the symlink, and a
 Windows venv's `Scripts/python.exe` is found without it.
 
+`test_orchestrate.py`'s legs that run the real torch runner skip where that venv has no torch;
+`BENCH_TORCH_REQUIRED=1` makes them fail instead. CI's `torch-runner` job runs the file that way
+in a CPU-only venv built from `requirements-ci-torch.txt`, which is also the quickest way to give a
+dev checkout those legs.
+
 `gen_fixtures.py` rewrites `fixtures/DIGESTS.txt` for whatever it regenerates, under this box's
 origin. Review that diff before publishing numbers: a changed digest means the workload changed,
 and reports measured on either side of it are not comparable.

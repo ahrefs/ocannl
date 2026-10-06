@@ -720,6 +720,52 @@ jobs:
     - name: Test shell harnesses
       run: tools/test-harnesses.sh --shell
 
+  # The benchmark tests WITH torch. The main legs run benchmarks/test_orchestrate.py
+  # through dune on a runner without torch, so its legs that drive the real torch
+  # runner (gh-ocannl-1208's end-to-end precision read-back, on a tiny CPU
+  # fixture) skip there: a change that breaks `runners/pytorch/run.py` would
+  # reach master green. This job provisions a CPU-only torch venv and runs the
+  # whole file -- about 40s, cheaper than a list of which tests need torch --
+  # with `BENCH_TORCH_REQUIRED=1`, which turns every torch skip into a failure:
+  # a venv the tests cannot use must not pass as coverage. No OCaml toolchain:
+  # the file is Python and reads only sources. ubuntu, beside the build matrix,
+  # not on the scarce macOS runners. The venv is cached on the requirements
+  # file (whose header says why CPU wheels) and the exact Python, since a venv
+  # is bound to the interpreter that made it.
+  torch-runner:
+    if: github.event_name != 'workflow_dispatch' || !inputs.windows_only
+    name: Benchmark tests (CPU torch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        ref: ${{ inputs.expected_sha }}
+    - uses: actions/setup-python@v7
+      id: python
+      with:
+        python-version: "3.12"
+    # `benchmarks/.venv` is the layout `bench_venv.py` finds unprompted, so the
+    # tests resolve this venv by the same rule the sweep drivers use.
+    - name: Restore the torch venv
+      id: torch-venv
+      uses: actions/cache@v6
+      with:
+        path: benchmarks/.venv
+        key: torch-venv-${{ runner.os }}-py${{ steps.python.outputs.python-version }}-${{ hashFiles('benchmarks/requirements-ci-torch.txt') }}
+    - name: Create the torch venv
+      if: steps.torch-venv.outputs.cache-hit != 'true'
+      run: |
+        python -m venv benchmarks/.venv
+        benchmarks/.venv/bin/pip install --no-cache-dir -r benchmarks/requirements-ci-torch.txt
+    - name: Run the benchmark tests with torch required
+      working-directory: benchmarks
+      env:
+        BENCH_TORCH_REQUIRED: 1
+      run: |
+        .venv/bin/python -c 'import numpy, safetensors, torch; print("torch", torch.__version__, "safetensors", safetensors.__version__, "numpy", numpy.__version__)'
+        python test_orchestrate.py -v
+
   # A red on master is nobody's to sit and watch: merging sessions do not poll
   # CI after landing (roll-forward, ahrefs/ocannl#861). Instead this job fires
   # the "ocannl-staging CI-red triage" Claude Code routine, which claims the
@@ -738,7 +784,7 @@ jobs:
   # run).
   notify-triage-routine:
     name: Fire CI-red triage routine
-    needs: [run, fmt, promotion-floor, harnesses]
+    needs: [run, fmt, promotion-floor, harnesses, torch-runner]
     if: >-
       failure() && github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
       && !(github.event_name == 'workflow_dispatch' && inputs.expected_sha)

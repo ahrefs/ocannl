@@ -88,11 +88,11 @@ def matrix(text, event, windows=False):
     jobs += [(entry['os'], entry['ocaml-compiler'], entry['suite'], entry.get('shard', ''))
              for entry in includes]
     selected = []
-    for job in ('fmt', 'harnesses', 'promotion-floor'):
+    for job in ('fmt', 'harnesses', 'promotion-floor', 'torch-runner'):
         guard = re.search(r'^  ' + job + r':\n    if: (.*)$', text, re.M)
         assert guard, job + ' selection missing'
         selected.append(bool(expression(guard[1], event, windows)))
-    assert len(set(selected)) == 1, 'formatting and harness jobs select differently'
+    assert len(set(selected)) == 1, 'formatting, harness and torch-runner jobs select differently'
     return unshard(sorted(jobs)), selected[0]
 
 
@@ -162,6 +162,7 @@ for label, mutant in (
     ('duplicate formatting job', source.replace("github.event_name != 'workflow_dispatch' || !inputs.windows_only", "github.event_name != 'never'", 1)),
     ('harnesses in the Windows fallback', source.replace("  harnesses:\n    if: github.event_name != 'workflow_dispatch' || !inputs.windows_only", "  harnesses:\n    if: github.event_name != 'never'")),
     ('Dune-floor promotion harnesses in the Windows fallback', source.replace("  promotion-floor:\n    if: github.event_name != 'workflow_dispatch' || !inputs.windows_only", "  promotion-floor:\n    if: github.event_name != 'never'")),
+    ('CPU-torch benchmark tests in the Windows fallback', source.replace("  torch-runner:\n    if: github.event_name != 'workflow_dispatch' || !inputs.windows_only", "  torch-runner:\n    if: github.event_name != 'never'")),
     ('per-PR shard dropped', source[:source.rindex(second)] + source[source.rindex(second) + len(second):]),
     ('scheduled shard dropped', source.replace(second, '', 1)),
     ('shard renumbered', source.replace('"shard": "2/2"', '"shard": "2/3"', 1)),
@@ -245,6 +246,53 @@ notify = re.search(r'^  notify-triage-routine:\n(?:    .*\n)*?    if: >-\n((?:  
 assert notify and "!(github.event_name == 'workflow_dispatch' && inputs.expected_sha)" in notify[1], \
     'a pinned dispatch fires the triage routine'
 print('PASS every job builds the dispatched commit, and a pinned dispatch fires no triage')
+# A job missing from the triage job's `needs` can go red on master without
+# firing it: `failure()` there reads only the jobs it waits for. Derive the
+# job list from the workflow rather than keep a second copy of it here.
+def triage_waits_for_every_job(text):
+    # Every line at the job-key indentation is a job ID GitHub accepts or a
+    # refusal: a key this reader skipped would be a job it never compared.
+    section = text.split('\njobs:\n', 1)[1]
+    jobs = []
+    for line in section.splitlines():
+        if not line.strip() or line.lstrip().startswith('#') or line.startswith('   '):
+            continue
+        assert line.startswith('  '), 'a top-level key after jobs: is unsupported here: ' + line
+        job = re.fullmatch(r'  ([A-Za-z_][A-Za-z0-9_-]*):', line)
+        assert job, 'unsupported job key syntax: ' + line
+        jobs.append(job[1])
+    needs = re.search(r'^  notify-triage-routine:\n(?:    .*\n)*?    needs: \[([^]]*)\]\n', text, re.M)
+    assert needs, 'triage job has no inline needs list'
+    others = sorted(job for job in jobs if job != 'notify-triage-routine')
+    assert len(others) >= 2, 'found too few jobs: %s' % jobs
+    assert sorted(name.strip() for name in needs[1].split(',')) == others, \
+        'triage needs [%s], the other jobs are %s' % (needs[1], others)
+
+
+def extra_job(name):
+    block = ('  %s:\n    runs-on: ubuntu-latest\n    timeout-minutes: 5\n    steps:\n'
+             '    - run: true\n\n' % name)
+    return source.replace('  notify-triage-routine:\n', block + '  notify-triage-routine:\n', 1)
+
+
+triage_waits_for_every_job(source)
+last = re.search(r'^    needs: \[.*(, [A-Za-z0-9_-]+)\]$', source, re.M)
+assert last, 'triage needs list unreadable'
+for label, mutant, needle in (
+    ('a job dropped from the triage needs', source.replace(last[0], last[0].replace(last[1], ''), 1),
+     last[1].lstrip(', ')),
+    ('an underscore-named job the triage omits', extra_job('extra_job'), 'extra_job'),
+    ('a quoted job key', extra_job('"extra job"'), 'unsupported job key syntax'),
+):
+    assert mutant != source, label
+    try:
+        triage_waits_for_every_job(mutant)
+    except AssertionError as e:
+        assert needle in str(e), '%s: rejected for another reason: %s' % (label, e)
+        print('PASS rejected mutant:', label)
+    else:
+        raise AssertionError('accepted mutant: ' + label)
+print('PASS the triage job waits for every other job')
 PY
 report "$rc" "ci matrix controls"
 finish

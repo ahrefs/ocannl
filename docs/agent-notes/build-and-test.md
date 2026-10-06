@@ -2136,6 +2136,15 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   closed): Metal is the development Macs' everyday backend and a leg of `tools/sweep.sh`, while a
   hosted leg on the paravirtual device would have to skip simdgroup matrix work and would inherit
   the macOS runners' contention — runner time for a subset of what the reference Mac already runs.
+- The benchmark tests' torch legs run in ONE job, `torch-runner`. The main legs run
+  `benchmarks/test_orchestrate.py` through dune on runners without torch, where the tests that
+  drive `benchmarks/runners/pytorch/run.py` for real skip. `torch-runner` (ubuntu, no OCaml
+  toolchain) builds a CPU-only venv from `benchmarks/requirements-ci-torch.txt`, cached on that
+  file and the exact Python, and runs the whole file with `BENCH_TORCH_REQUIRED=1`, under which a
+  torch skip is a failure. A new torch-dependent test therefore gets that job's coverage by taking
+  its venv through `torch_venv_or_skip`, with no list to extend; a test that probes torch its own
+  way skips there too, unseen. Bumping a pin in the requirements file rebuilds the cached venv.
+  Tinygrad is not provisioned: its runner has no CI leg.
 - A red on merged master is presumptively CLAIMED work. `ci.yml`'s `notify-triage-routine` job
   fires the "ocannl-staging CI-red triage" Claude Code cloud routine on any non-PR master red —
   push and scheduled sweeps alike (a logged no-op until the `ROUTINE_FIRE_URL`/`ROUTINE_FIRE_TOKEN`
