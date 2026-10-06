@@ -63,6 +63,7 @@ let class_name : Utils.config_key_class -> string = function
   | Utils.Code_borne -> "code-borne (digest)"
   | Utils.Keyed component -> "keyed: " ^ component
   | Utils.Search_shaping -> "search-shaping"
+  | Utils.Placement_shaping -> "placement-shaping"
   | Utils.Execution_neutral -> "execution-neutral"
 
 let () =
