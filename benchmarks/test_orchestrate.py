@@ -2281,6 +2281,24 @@ class FixtureDigestTest(unittest.TestCase):
         self.assertEqual([e.origin for e in entries["cifar_conv.safetensors"]], ["minix"])
         self.assertEqual([e.origin for e in entries[fx.name]], ["rog-nv"])
 
+    def test_a_malformed_adopted_name_is_refused_even_with_nothing_to_adopt(self):
+        # With --origin stated and no three-field row in the file, nothing downstream reads the
+        # --adopt-legacy name, so the CLI is the only place that can hold it to the origin rule;
+        # accepting it would report a migration claim as checked when nothing checked it.
+        fx = self.fixture("lenet.safetensors", b"rog-nv bytes")
+        digests = self.dir / fixture_digest.DIGEST_FILE
+        digests.write_text(fixture_digest.HEADER)
+        before = digests.read_text()
+
+        with self.assertRaises(ValueError) as refused:
+            fixture_digest._main(
+                ["--record", str(fx), "--origin", "rog-nv", "--adopt-legacy", "minix,rocm",
+                 "--digests", str(digests)]
+            )
+
+        self.assertIn("minix,rocm", str(refused.exception))
+        self.assertEqual(digests.read_text(), before, "refused before the file is rewritten")
+
     def test_the_legacy_refusal_names_a_command_that_runs_from_the_repo_root(self):
         # The canonical sweep command runs from the repository root, where a bare
         # `fixture_digest.py` names nothing -- the operator cannot paste the remediation.

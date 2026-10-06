@@ -92,7 +92,8 @@ nested-division rewrite; regression test `test/training/virtual_grads_parity.ml`
   ([report-gh1002-fused-backward.md](report-gh1002-fused-backward.md)). `gh1003_fold_cells.sh` runs the
   gh-ocannl-1003 block-fold matrix (the composed, two-pass and fold-B attention forms on the
   inference fixtures, per-segment attribution, cc, and the two training fixtures under the fused
-  backward; [report-gh1003-block-fold.md](report-gh1003-block-fold.md)).
+  backward; [report-gh1003-block-fold.md](report-gh1003-block-fold.md)); like `gh1133_cells.sh`,
+  its cells print the per-kernel table (`BENCH_KERNEL_TABLE=1`) unless `KERNEL_TABLE=0`.
 - **gpt2_mini_b1** (`model: gpt`, `mode: infer`) / **gpt2_mini_train_b256**
   (`model: gpt`, `mode: train`): the same decoder at seq128 with batch1 (128 tokens/step)
   or batch256 (32768 tokens/step), gh-ocannl-720 leg 4. Against the batch8 workload in the
