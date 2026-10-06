@@ -3475,6 +3475,13 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
 
 ## Test support and placement
 
+- Insert a new stanza in `test/operations/dune` beside its topical neighbours, never at the end of
+  the file. The file is grouped by subsystem rather than alphabetized, and the end is where every
+  concurrent branch appends, so two unrelated PRs that both append conflict on rebase. The same
+  holds for a member line in an aggregate alias (`slow`, `scans`): put it among related members,
+  not last, since the last line also carries the list's closing parentheses and every appender
+  edits it.
+
 - `refused_action_streams` (gh-ocannl-1005) holds accepted-failure Dune actions to the same
   stream contract as fresh-child controls: a run whose owning executable directly declares
   `arrayjit.verdict` and accepts a nonzero exit must capture or drop both streams on its own action
