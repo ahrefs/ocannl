@@ -168,7 +168,9 @@ endpoint, whereas HIP's invalid exact-f16 and beyond-exact approximate rows are 
     --record` (add `--origin <box>` when the hostname is not the name the reports use). It is
     stdlib-only — no venv needed — and it leaves every other origin's entry alone.
     `python3 benchmarks/fixture_digest.py --check` reports what is on disk against what is recorded, and
-    exits non-zero on anything that is not a MATCH. Both tools refuse an origin they cannot
+    exits non-zero on anything that is not a MATCH; with `--expect-origin <box>` also on a MATCH
+    that is not `<box>`'s bytes, which is how a driver pinned to one box's records asks (the
+    report's origin field joins every agreeing box, so it is no thing to grep). Both tools refuse an origin they cannot
     trust rather than inventing one: an explicitly empty `--origin` (how `--origin "$BOX"`
     fails when `$BOX` is unset) and a host that reports no name at all, since a shared
     placeholder would let the next such box overwrite this one's entry under it.
