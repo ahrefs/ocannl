@@ -5106,8 +5106,9 @@ fi
 # naming it. With PATH holding nothing but `env`, valid credentials are removed and a plain variable
 # stays -- the text needs no other external program, so no parser stage can fail open -- and a
 # value spanning lines with a glob character in it neither breaks the walk nor leaks the caller's
-# IFS or `set -f`.
-cred_text_label="credentials: the scrub text refuses when env cannot run, and on a deny-listed non-identifier"
+# IFS or `set -f`. A newline-named entry refuses through the second listing, and inherited
+# functions named env, unset or printf are bypassed.
+cred_text_label="credentials: the scrub text refuses when env cannot run, on a deny-listed non-identifier or newline-named entry, and bypasses inherited functions"
 cred_text_ok_label="credentials: the scrub text, with only env on PATH, removes valid names and restores IFS and set -f"
 cred_text_detail= cred_text_ok_detail=
 cred_nl='
@@ -5145,7 +5146,34 @@ BAR_TOKEN=* not-a-key" CRED_TEST_PLAIN=kept "$cred_shell" -c \
   cred_first=${cred_out%%"$cred_nl"*}
   case $cred_first in "ifs=[ ] opts="*f*) cred_text_ok_detail="$cred_text_ok_detail; $cred_shell left set -f on" ;; "ifs=[ ] opts="*) ;;
     *) cred_text_ok_detail="$cred_text_ok_detail; $cred_shell did not restore IFS: $cred_first" ;; esac
+  # A name holding a newline reads, line by line, as a plain `GH_TOKEN`: the second listing
+  # still sees it, so it refuses -- or the shell dropped it at startup (dash) and its children
+  # never see it.
+  cred_rc=0
+  cred_out=$(env -i "PATH=$cred_env_only" "ODD${cred_nl}GH_TOKEN=fixture-not-a-token" "$cred_shell" -c \
+    '. "$1"; eval "$(credential_env_scrub_text)" || { printf "%s\n" "$credential_env_left"; exit 1; }; env' \
+    cred "$cred_helper" 2>&1) || cred_rc=$?
+  case $cred_rc:$cred_out in
+    1:*"GH_TOKEN (still in the environment)"*) ;;
+    0:*"${cred_nl}GH_TOKEN="* | 0:"GH_TOKEN="*) cred_text_detail="$cred_text_detail; $cred_shell passed a newline-named GH_TOKEN to its children" ;;
+    0:*) ;;
+    *) cred_text_detail="$cred_text_detail; $cred_shell on a newline-named GH_TOKEN: exit $cred_rc, said: $cred_out" ;;
+  esac
 done
+# Inherited functions named env, unset and printf (bash imports exported ones) are bypassed: the
+# scrub still removes the credential, rather than asking a function that answers nothing.
+cred_bash=$(command -v bash)
+cred_rc=0
+cred_out=$(env -i "PATH=$cred_env_only" GH_TOKEN=fixture-not-a-token CRED_HELPER="$cred_helper" \
+  CRED_BASH="$cred_bash" "$cred_bash" -c \
+  'env() { :; }; unset() { :; }; printf() { :; }; export -f env unset printf
+   exec "$CRED_BASH" -c '\''. "$CRED_HELPER"; eval "$(credential_env_scrub_text)" || exit 3; command env'\''' \
+  2>&1) || cred_rc=$?
+case $cred_rc:$cred_out in
+  0:*GH_TOKEN=*) cred_text_detail="$cred_text_detail; inherited env/unset/printf functions let GH_TOKEN through" ;;
+  0:*PATH=*) ;;
+  *) cred_text_detail="$cred_text_detail; under inherited functions: exit $cred_rc, said: $cred_out" ;;
+esac
 report "$([ -z "$cred_text_detail" ] && echo 0 || echo 1)" "$cred_text_label" "${cred_text_detail#; }"
 report "$([ -z "$cred_text_ok_detail" ] && echo 0 || echo 1)" "$cred_text_ok_label" "${cred_text_ok_detail#; }"
 # The Windows wrapper test-run.sh starts dune through, which AGENTS.md also has a Git Bash session

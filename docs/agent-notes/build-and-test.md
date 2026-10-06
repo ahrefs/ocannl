@@ -982,12 +982,16 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   `tools/machine-verify.sh` passes the text to the far side, which applies it the same way inside
   every `opam exec` and nowhere else (so git's fetch keeps its credential). The scrub fails CLOSED:
   listing the environment (`env`, its one external step) is a checked operation, lines are cut by
-  parameter expansion rather than a parser that could fail silently, and a deny-listed name that is
-  not a shell identifier refuses rather than surviving. A script that starts dune itself sources the
-  helper too, and a harness staging such a script derives what it sources from its `. tools/...`
-  lines. `env_var_deps` reads the same line and refuses a stanza declaring a match as `(env_var
-  ...)` or reading one through `%{env:NAME=...}`, and a test source reading one by name
-  (`Sys.getenv`). A bare `dune` outside these scripts still records whatever the session exports.
+  parameter expansion rather than a parser that could fail silently, `env`/`unset`/`printf` go
+  through `command` (an inherited function cannot answer for them), a deny-listed name that is not a
+  shell identifier refuses, and a second listing refuses anything deny-listed still present (a name
+  holding a newline, which the line-wise reading cannot see whole). The boundary is those runners
+  and the `tools/` wrappers the agent workflow sanctions; a harness staging one derives what it
+  sources from its `. tools/...` lines. Outside it -- a bare `dune`, or a one-off driver such as the
+  `benchmarks/*.sh` measurement scripts -- dune records whatever the session exports, as the issue
+  scopes it; the fleet-side fix for that is not exporting the token into every session.
+  `env_var_deps` reads the same line and refuses a stanza declaring a match as `(env_var ...)` or
+  reading one through `%{env:NAME=...}`, and a test source reading one by name (`Sys.getenv`).
   Pinned by leg 79 of `tools/test-test-run.sh` (a fixture dune's environment, the opam environment
   `select_dune` sources, `tools/dune-quiet.sh` run directly, and a real dune's trace where one is on
   PATH), `credential_free` in the sweep harness (local and remote legs, the remote one with
