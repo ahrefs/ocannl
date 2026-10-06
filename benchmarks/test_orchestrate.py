@@ -4599,11 +4599,16 @@ def torch_venv_python():
     venv = bench_venv.venv_python(HERE)
     if not venv.exists():
         return None, f"no bench venv at {venv}"
+    # numpy too: torch does not depend on it, but safetensors' torch save and load convert through
+    # it, so a venv without it imports cleanly and then fails inside the runner.
     probe = subprocess.run(
-        [str(venv), "-c", "import torch, safetensors"], capture_output=True, text=True, timeout=120
+        [str(venv), "-c", "import torch, safetensors.torch, numpy"],
+        capture_output=True,
+        text=True,
+        timeout=120,
     )
     if probe.returncode != 0:
-        return None, f"the bench venv at {venv} cannot import torch and safetensors: {probe.stderr}"
+        return None, f"the bench venv at {venv} cannot import torch, safetensors and numpy: {probe.stderr}"
     return venv, None
 
 

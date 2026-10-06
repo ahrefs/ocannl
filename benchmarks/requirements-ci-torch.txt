@@ -1,8 +1,9 @@
 # The CPU-only torch venv of ci.yml's `torch-runner` job, which runs the benchmark tests with the
 # torch legs required rather than skipped. It is not the measurement venv (that one also carries
-# numpy and tinygrad, and a GPU torch where the box has a GPU; README.md says how to build it): it
-# holds only what the torch runner imports. The pins are the mac-studio measurement venv's; the job
-# keys its venv cache on this file, so bumping a pin is what rebuilds it.
+# tinygrad, and a GPU torch where the box has a GPU; README.md says how to build it): it holds only
+# what the torch legs need. That includes numpy, which torch does not install but safetensors'
+# torch `save_file`/`load_file` convert through. The pins are the mac-studio measurement venv's;
+# the job keys its venv cache on this file, so bumping a pin is what rebuilds it.
 #
 # CPU wheels come from PyTorch's own index: PyPI's Linux torch bundles the CUDA libraries, several
 # GB that a deviceless runner would download and never load. `+cpu` names a wheel only that index
@@ -11,3 +12,4 @@
 --extra-index-url https://pypi.org/simple
 torch==2.13.0+cpu
 safetensors==0.8.0
+numpy==2.5.1

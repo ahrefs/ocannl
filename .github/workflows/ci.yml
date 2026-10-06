@@ -763,7 +763,7 @@ jobs:
       env:
         BENCH_TORCH_REQUIRED: 1
       run: |
-        .venv/bin/python -c 'import torch, safetensors; print("torch", torch.__version__, "safetensors", safetensors.__version__)'
+        .venv/bin/python -c 'import numpy, safetensors, torch; print("torch", torch.__version__, "safetensors", safetensors.__version__, "numpy", numpy.__version__)'
         python test_orchestrate.py -v
 
   # A red on master is nobody's to sit and watch: merging sessions do not poll
