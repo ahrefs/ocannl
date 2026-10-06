@@ -541,6 +541,7 @@ test/operations/vec_signed_zero.ml
 every scanned root meets its golden floor: true
 every scanned root meets its source-site floor: true
 every source handed over parsed as OCaml: true
+the scan raised on no source handed over: true
 every exclusion still names a file the globs hand over: true
 every module the scanned library interfaces declare was read: true
 every scanned library declares modules: true
@@ -550,6 +551,7 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:a59159ac0fd0f431da9519f8016e6762] every scanned root
   [scanner-refusal:c995ea0a058a228bf654449befcccb4b] meets its source-site
   [scanner-refusal:d246f03ca5c483db40b94796658cf426] every source handed
+  [scanner-refusal:8879574435d6aa60f13f262f594c3d45] source handed over
   [scanner-refusal:ebeeadb92d10e201894cb4b9fb9021bb] every exclusion still
   [scanner-refusal:545694a8ea6e371db823bcc7d2639f85] scanned library interfaces
   [scanner-refusal:327f5dea331c9591f8d59a6da296202d] scanned library declares

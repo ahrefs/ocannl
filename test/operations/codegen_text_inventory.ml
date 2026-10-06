@@ -103,6 +103,14 @@ let refuse_stale_exclusions ~fail stale =
             fix the path it was meant to name"
            path reason))
 
+let refuse_raised ~fail raised =
+  List.iter raised ~f:(fun (path, exn) ->
+      fail
+        (Printf.sprintf
+           "the scan raised %s on %s -- a defect in the scanner rather than in the file, which \
+            parses, so the census is short by whatever the file pins"
+           exn path))
+
 let refusal_control () =
   let source = "test/operations/codegen_text_inventory.ml" in
   let refused = ref false in
@@ -117,6 +125,31 @@ let refusal_control () =
   refuse_stale_exclusions ~fail stale;
   Verdict.p "an exclusion absent from the hand-over reaches the stale-exclusion refusal"
     (!refused && List.length stale = 1);
+  (* The non-parse path: a scanner defect on a file that parses is reported as the exception it is,
+     not as an unparsable file. The provocation is [boundaries_of]'s own precondition, broken the
+     one way the scan's constructors make unreachable from source. *)
+  let raised = ref false in
+  let fail _message =
+    raised := true;
+    Test_utils.Refusal_control_manifest.observe_failure ~source
+      ~format:
+        "the scan raised %s on %s -- a defect in the scanner rather than in the file, which \
+         parses, so the census is short by whatever the file pins"
+  in
+  let outcome =
+    Scan.attempt (fun () ->
+        Scan.boundaries_of { Scan.no_provenance with Scan.uncertainty = Scan.Unresolved })
+  in
+  (match outcome with
+  | Scan.Raised exn -> refuse_raised ~fail [ ("test/parses.ml", exn) ]
+  | Scan.Scanned _ | Scan.Unparsed -> ());
+  Verdict.p
+    "a scanner exception on a parsing file reaches the scanner-defect refusal, not the parse one"
+    (!raised
+    &&
+    match outcome with
+    | Scan.Raised exn -> String.is_substring exn ~substring:"Invalid_argument"
+    | Scan.Scanned _ | Scan.Unparsed -> false);
   (* gh-ocannl-1207: the parse refusal, executed: this scan as a child, handed a source that does
      not parse. *)
   Test_utils.Refusal_control_manifest.with_tree
@@ -193,18 +226,27 @@ let () =
         if is_excluded name then None else Scan.classify_golden ~path:name ~contents:(read on_disk))
   in
   let unparsed = ref [] in
+  let raised = ref [] in
   let rejected = ref [] in
   let sites =
     List.filter_map source_files ~f:(fun (name, on_disk) ->
         if is_excluded name then None
         else
           let contents = read on_disk in
-          try
-            rejected := Scan.rejections ~emitters ~path:name ~contents @ !rejected;
-            Scan.classify_source ~emitters ~path:name ~contents
-          with _ ->
-            unparsed := name :: !unparsed;
-            None)
+          match
+            Scan.attempt (fun () ->
+                ( Scan.rejections ~emitters ~path:name ~contents,
+                  Scan.classify_source ~emitters ~path:name ~contents ))
+          with
+          | Scan.Scanned (rejections, site) ->
+              rejected := rejections @ !rejected;
+              site
+          | Scan.Unparsed ->
+              unparsed := name :: !unparsed;
+              None
+          | Scan.Raised exn ->
+              raised := (name, exn) :: !raised;
+              None)
   in
   (* Goldens that nothing about the file itself made members, paired with the test beside them. See
      Codegen_text_scan.classify_associated: the markers describe whole dumps, and a golden can hold
@@ -229,6 +271,7 @@ let () =
       Verdict.fail
         (Printf.sprintf
            "%s does not parse as OCaml, so the scan cannot say whether it pins emitted text" path));
+  refuse_raised ~fail:Verdict.fail (List.rev !raised);
   List.iter (List.sort !rejected ~compare:String.compare) ~f:Verdict.fail;
   let golden_paths = List.map goldens ~f:(fun g -> g.Scan.path) in
   let site_paths = List.map sites ~f:(fun s -> s.Scan.site_path) in
@@ -338,6 +381,7 @@ let () =
   Verdict.p_empty "every scanned root meets its source-site floor" ~over:site_paths
     source_violations;
   Verdict.p_empty "every source handed over parsed as OCaml" ~over:source_files !unparsed;
+  Verdict.p_empty "the scan raised on no source handed over" ~over:source_files !raised;
   Verdict.p_empty "every exclusion still names a file the globs hand over" ~over:handed_over stale;
   Verdict.p "every module the scanned library interfaces declare was read"
     (List.equal String.equal declared read_interfaces);
