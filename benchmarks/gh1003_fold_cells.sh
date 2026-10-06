@@ -45,7 +45,10 @@
 #   fold-B     --ocannl_online_softmax=true --ocannl_online_softmax_block=B, B in FOLD_BLOCKS
 # Environment knobs (the driver's own, recorded in driver.log): REPEATS (default 3), FOLD_BLOCKS
 # (default "8 16 32"), TRAIN_FIXTURES (the train step's), FIXTURE_DIR (default
-# benchmarks/fixtures).
+# benchmarks/fixtures), KERNEL_TABLE (default 1: every bench_gpt cell prints the per-kernel table of
+# gh-ocannl-1002 -- each shipped kernel's min-of-20 time, geometry and written nodes -- to its .err,
+# as gh1133_cells.sh does and for the same reason: a fold A/B moves kernels, which one step-time
+# line cannot show; 0 turns it off; the seg step's bench_gpt_diag prints its own segment table).
 #
 # Exit: 0 all steps complete; 1 a cell or step failed; 2 usage; 130 interrupted.
 # The environment is cleared of OCANNL_*, BENCH_* and the OpenMP controls, as in gh834_cells.sh:
@@ -62,6 +65,8 @@ case $cap in '' | *[!0-9]* | 0*) echo "gh1003: CAP must be a positive decimal in
 repeats=${REPEATS:-3}
 fold_blocks=${FOLD_BLOCKS:-"8 16 32"}
 train_fixtures=${TRAIN_FIXTURES:-"gpt2_mini_train_s512 gpt2_mini_train_s1024"}
+kernel_table=${KERNEL_TABLE:-1}
+case $kernel_table in 0 | 1) ;; *) echo "gh1003: KERNEL_TABLE must be 0 or 1, got '$kernel_table'" >&2; exit 2 ;; esac
 case $repeats in '' | *[!0-9]* | 0*) echo "gh1003: REPEATS must be a positive decimal integer, got '$repeats'" >&2; exit 2 ;; esac
 for b in $fold_blocks; do
   case $b in '' | *[!0-9]* | 0*) echo "gh1003: FOLD_BLOCKS must list positive decimal integers, got '$b'" >&2; exit 2 ;; esac
@@ -91,7 +96,7 @@ for b in $fold_blocks; do treatments="$treatments fold-$b"; done
 train_treatments="composed two-pass-bwd"
 for b in $fold_blocks; do train_treatments="$train_treatments fold-$b-bwd"; done
 echo "gh1003: $(date -u +%FT%TZ) root=$root out=$out cap=$cap repeats=$repeats"
-echo "gh1003: fold blocks: $fold_blocks; train fixtures: $train_fixtures; fixture dir: $fixture_dir; steps: $*"
+echo "gh1003: fold blocks: $fold_blocks; train fixtures: $train_fixtures; kernel table: $kernel_table; fixture dir: $fixture_dir; steps: $*"
 built=0 proven=0 failed=0
 
 flags_of() {
@@ -139,7 +144,7 @@ cell() {
   echo "backend=$backend fixture=$fixture treatment=$treatment flags=[$flags]" >"$out/$name.err"
   # shellcheck disable=SC2086 # the treatment's flags are separate words by construction
   BENCH_FIXTURE="$fixture_dir/$fixture.safetensors" BENCH_TUNE=0 BENCH_MATERIALIZE=0 \
-    BENCH_DEBUG=0 BENCH_SEG_TIMES="${SEG:-0}" \
+    BENCH_DEBUG=0 BENCH_SEG_TIMES="${SEG:-0}" BENCH_KERNEL_TABLE="$kernel_table" \
     capped "$name" "$exe" --ocannl_backend="$backend" --ocannl_default_prec=single \
     --ocannl_schedule_fission=true --ocannl_automatic_gpu_schedule=true \
     --ocannl_autotune_search=false --ocannl_debug_log_from_routines=false \
