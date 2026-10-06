@@ -402,6 +402,11 @@ let skipped ?(aggregation = (`Backend : skip_aggregation)) ~backend name =
     ];
   p name true
 
+(* The one place a gate chooses between evaluating a claim and announcing its skip, so every gated
+   form below skips the same way and nothing is evaluated on the closed side. *)
+let gate ?aggregation ~when_ ~on label evaluate =
+  if when_ then evaluate () else skipped ?aggregation ~backend:on label
+
 (** [gated ~when_ ~on label b] is a claim that is evaluated only where the gate [when_] is open:
     there it is {!p} — [label: true], or a failure — and where the gate is closed it is {!skipped}
     [~backend:on], [b] unread. Both outcomes print [label: true] on a passing run, so a host that
@@ -428,13 +433,37 @@ let skipped ?(aggregation = (`Backend : skip_aggregation)) ~backend name =
     [b] is an ordinary [bool], evaluated by the caller whatever the gate says, so it must be
     computable off-gate — which is also what lets [verdict_ratchet]'s quantifier reader treat this
     exactly as {!p}. A leg that cannot even compute its boolean without the gate keeps its own
-    branch and reports through {!p} on one side and {!skipped} on the other: the same dialect. *)
+    branch and reports through {!p} on one side and {!skipped} on the other: the same dialect. A
+    quantified claim goes through {!gated_all} and its siblings. *)
 let gated ?aggregation ?detail ~when_ ~on label b =
-  if not when_ then skipped ?aggregation ~backend:on label
-  else
-    match detail with
-    | Some detail when not b -> short_fail label (detail ())
-    | Some _ | None -> p label b
+  gate ?aggregation ~when_ ~on label (fun () ->
+      match detail with
+      | Some detail when not b -> short_fail label (detail ())
+      | Some _ | None -> p label b)
+
+(** [gated_all ~when_ ~on label xs ~f] is {!gated} for a quantified claim: {!p_all} where the gate
+    is open, {!skipped} [~on] where it is closed. [gated_alli] and [gated_exists] do the same for
+    {!p_alli} and {!p_exists}, and [?min] and [?aggregation] mean what they mean there.
+
+    {!gated} cannot carry these: [gated label (List.for_all xs ~f)] is the unguarded quantifier
+    [verdict_ratchet] refuses in {!p} too, since a gate does not fill the population. Without this
+    family the guarded spelling was a hand-written branch,
+    [if gate then p_alli label xs ~f else skipped ~backend label], repeating the label and the
+    skip's arguments at every site.
+
+    Where the gate is closed, neither [xs] nor [f] is read. A leg whose population exists only where
+    it ran (the seeds a GPU proposes, the files a host could create) can therefore pass the empty
+    list it is left with off-gate, computed unconditionally; the non-emptiness floor applies exactly
+    where the claim is evaluated. A leg whose population cannot be computed off-gate at all (a
+    device readback) keeps its own branch, as {!gated} says of its boolean. *)
+let gated_all ?aggregation ?min ~when_ ~on label xs ~f =
+  gate ?aggregation ~when_ ~on label (fun () -> p_all ?min label xs ~f)
+
+let gated_alli ?aggregation ?min ~when_ ~on label xs ~f =
+  gate ?aggregation ~when_ ~on label (fun () -> p_alli ?min label xs ~f)
+
+let gated_exists ?aggregation ?min ~when_ ~on label xs ~f =
+  gate ?aggregation ~when_ ~on label (fun () -> p_exists ?min label xs ~f)
 
 (** [pass_fail label b] prints [label: PASS] or [label: FAIL], and fails the run in the latter case.
     [?detail] is evaluated only on failure and appended in parentheses — the place for a machine-
@@ -540,6 +569,9 @@ module Claims = struct
   let p_pairwise_distinct = p_pairwise_distinct
   let skipped = skipped
   let gated = gated
+  let gated_all = gated_all
+  let gated_alli = gated_alli
+  let gated_exists = gated_exists
   let pass_fail = pass_fail
   let pass_fail_all2 = pass_fail_all2
   let case = case

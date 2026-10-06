@@ -126,6 +126,28 @@ let () =
       gated ~when_:true ~on:"a fixture backend"
         ~detail:(fun () -> "measured 3 vs bound 2")
         "the gated claim" false
+  (* The quantified gated forms: open, each prints its combinator's line; closed, each is handed an
+     EMPTY population and a predicate that raises, so a skip that read either would show. *)
+  | "gated_all_open" ->
+      gated_all ~when_:true ~on:"a fixture backend" "the gated claim" seeds ~f:even
+  | "gated_alli_open" ->
+      gated_alli ~when_:true ~on:"a fixture backend" "the gated claim" seeds ~f:(fun i n -> n > i)
+  | "gated_exists_open" ->
+      gated_exists ~when_:true ~on:"a fixture backend" "the gated claim" seeds ~f:(fun n -> n > 4)
+  | "gated_all_closed" ->
+      gated_all ~when_:false ~on:"a fixture backend" "the gated claim" [] ~f:(fun _ ->
+          failwith "predicate evaluated")
+  | "gated_alli_closed" ->
+      gated_alli ~when_:false ~on:"a fixture backend" "the gated claim" [] ~f:(fun _ _ ->
+          failwith "predicate evaluated")
+  | "gated_exists_closed" ->
+      gated_exists ~when_:false ~on:"a fixture backend" "the gated claim" [] ~f:(fun _ ->
+          failwith "predicate evaluated")
+  | "gated_all_empty" -> gated_all ~when_:true ~on:"a fixture backend" "the gated claim" [] ~f:even
+  | "gated_alli_empty" ->
+      gated_alli ~when_:true ~on:"a fixture backend" "the gated claim" [] ~f:(fun i n -> n > i)
+  | "gated_exists_empty" ->
+      gated_exists ~when_:true ~on:"a fixture backend" "the gated claim" [] ~f:(fun n -> n > 4)
   | "shape_p_all_false" -> Verdict.p_all "the claim" seeds ~f:odd
   | "shape_p_all2_false" -> Verdict.p_all2 "the claim" got [| 1.0; 9.0; 3.0 |] ~f:Float.equal
   (* === Must be refused: run as children by [refusals]. === *)
@@ -246,6 +268,23 @@ let () =
       Verdict.p "a closed gate announces the skip on stderr, naming what it ran on"
         (String.is_substring closed_stderr
            ~substring:"SKIPPED on a fixture backend (vacuous): the gated claim");
+      (* The quantified gated forms keep both properties, and an open gate keeps the floor. *)
+      List.iter [ "gated_all"; "gated_alli"; "gated_exists" ] ~f:(fun form ->
+          let open_status, opened, _ = run_child (form ^ "_open") in
+          let closed_status, closed, closed_stderr = run_child (form ^ "_closed") in
+          Verdict.claimf "%s prints gated's passing line whether evaluated or skipped" form
+            (String.equal opened gated_open && String.equal closed gated_open);
+          Verdict.claimf
+            "%s's closed gate exits 0, announcing the skip, without reading its population" form
+            (Poly.equal open_status (Unix.WEXITED 0)
+            && Poly.equal closed_status (Unix.WEXITED 0)
+            && String.is_substring closed_stderr
+                 ~substring:"SKIPPED on a fixture backend (vacuous): the gated claim"
+            && not (String.is_substring closed_stderr ~substring:"predicate evaluated"));
+          refused
+            (Printf.sprintf "%s refuses an empty population where its gate is open" form)
+            ~line:"the gated claim (empty): false"
+            (run_child (form ^ "_empty")));
       (* The conversion is golden-neutral exactly to the extent that this holds. *)
       let _, plain_true, _ = run_child "shape_p" in
       let _, all_true, _ = run_child "shape_p_all" in

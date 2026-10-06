@@ -153,10 +153,9 @@ let () =
      their accumulator fragment from cells the folded zero nest wrote earlier in the same kernel. *)
   let every_label = "every GPU sketch of the folded qkv matches the materialized run" in
   let tensor_label = "a tensorized folded qkv sketch matches the materialized run" in
+  let on_gpu = Sched.backend_is_gpu backend_name in
   let real =
-    if Sched.backend_is_gpu backend_name then
-      gpu_seeds ~limits:(Context.hardware_limits (Context.auto ())) pre
-    else []
+    if on_gpu then gpu_seeds ~limits:(Context.hardware_limits (Context.auto ())) pre else []
   in
   let results =
     List.mapi real ~f:(fun i q ->
@@ -173,12 +172,13 @@ let () =
             q.Autotune.sk_mma;
         (q, ok))
   in
-  if List.is_empty results then Verdict.skipped ~backend:backend_name every_label
-  else p_all every_label results ~f:snd;
-  (* The gate reads the seeding (a hardware-capability fact), never the executed values. *)
-  if List.exists real ~f:(fun q -> q.Autotune.sk_mma) then
-    p_exists tensor_label results ~f:(fun (q, ok) -> q.Autotune.sk_mma && ok)
-  else Verdict.skipped ~backend:backend_name tensor_label;
+  (* The gates read the backend and the seeding (hardware-capability facts), never the executed
+     values: a GPU that seeds nothing fails the first claim rather than skipping it. *)
+  gated_all ~when_:on_gpu ~on:backend_name every_label results ~f:snd;
+  gated_exists
+    ~when_:(List.exists real ~f:(fun q -> q.Autotune.sk_mma))
+    ~on:backend_name tensor_label results
+    ~f:(fun (q, ok) -> q.Autotune.sk_mma && ok);
   let ctx, routine =
     Context.compile ~name:"zi_default" ~prelowered:opt
       ~lowered_transform:(fun o -> List.map (fission o) ~f:(fun (_, _, _, scheduled) -> scheduled))

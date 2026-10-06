@@ -1366,7 +1366,8 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   mirror: filtering an empty list
   also yields nothing, so `List.is_empty (List.filter …)` has the same hole), `p_exists`, and
   `p_empty name ~over:population derived` for the sites that keep the derived subset around to
-  report it. A non-empty collection prints exactly what `p` prints, which is what let ~44 files
+  report it; a claim some host skips takes their gated forms, `gated_all`, `gated_alli` and
+  `gated_exists ~when_ ~on` (the conventions note). A non-empty collection prints exactly what `p` prints, which is what let ~44 files
   convert with their goldens unmoved; an empty one prints `<claim> (empty): false`, and `?min:n`
   prints `<claim> (only 1 of 4): false`. Arrays go through `Array.to_list` rather than growing a
   second family. What stays on the unguarded spelling is the claim whose passing reading IS
