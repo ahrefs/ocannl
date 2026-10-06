@@ -1112,11 +1112,11 @@ val no_search_report : timing:timing_mode -> report
     - [stage] ({!tune}): [routine], [elapsed_s], [stage], [attempts], [compile_s], [timing_s],
       written BEFORE each step outside the candidates that can block for long: [base_compile],
       [cache_replay], [baseline_timing], [seed_enumeration] (the lowerings the seeds are derived
-      from), [winner_compile], [untuned_default_compile], [untuned_control] (under [autotune_log]
-      only). From {!Train.tune_placements}, [stage] alone: [placement_store] (the decision problem's
-      lowering and replay check) and [flip_surface]. Together with [candidate] and [arm_start] this
-      is the rule the stream keeps: every step that can block is named by a line written before it,
-      so a killed search is inside the step its last line names.
+      from), [winner_compile], [untuned_default_compile], [untuned_control] (under [autotune_log] or
+      {!tune}'s [?log] only). From {!Train.tune_placements}, [stage] alone: [placement_store] (the
+      decision problem's lowering and replay check) and [flip_surface]. Together with [candidate]
+      and [arm_start] this is the rule the stream keeps: every step that can block is named by a
+      line written before it, so a killed search is inside the step its last line names.
     - [search_done] ({!tune}, exactly once per call, with its report): [routine], [elapsed_s],
       [outcome] ({!outcome_name}), [timed], [contended], [timings_retried], [unbatched], [failed],
       [rounds], [attempts], [compile_s], [timing_s], [best_ms], [best].
@@ -1995,6 +1995,11 @@ val tune :
      schedule key in a separate filename space. With the same search shape, a later call
      re-evaluates this rule on that prefix and may raise without searching, reporting
      {!Abandonment_replay}; without a rule, it always searches or replays a winner. *)
+  ?log:bool ->
+  (* Whether this call writes the [autotune:] diagnostic lines to stderr and, after a search,
+     compiles and times the untuned-default in-process control; default from config [autotune_log]
+     (false), which is read once per process. Scoped to this call and to the calling domain, and
+     restored on return or exception, so a test can turn the diagnostics on for one search. *)
   ?report:(report -> unit) ->
   Context.t ->
   Ir.Assignments.comp ->

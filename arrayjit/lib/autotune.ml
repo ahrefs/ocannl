@@ -78,9 +78,10 @@ type timing_sample = { per_launch_ms : float; contention_ms : float }
    should batch. *)
 type timing_result = { ms : float; contended : bool; unbatched : bool; samples : int }
 
-(* Per-candidate search diagnostics on stderr, gated by config [autotune_log]. Kept above the timing
-   policy because a cap-bound queued batch reports the target wall it could not reach. *)
-let log_enabled =
+(* Per-candidate search diagnostics on stderr, gated by config [autotune_log] -- or, for the
+   duration of one {!tune} call, by its [?log] argument. Kept above the timing policy because a
+   cap-bound queued batch reports the target wall it could not reach. *)
+let log_setting =
   lazy
     (match
        String.lowercase
@@ -89,8 +90,28 @@ let log_enabled =
     | "true" | "1" -> true
     | _ -> false)
 
+(* The [?log] of the {!tune} call running in this domain, if it passed one. Domain-local, like the
+   phase a timing decision carries (gh-ocannl-1199): a per-call argument must not switch the
+   diagnostics of a search running concurrently in another domain. *)
+let log_override : bool option Stdlib.Domain.DLS.key = Stdlib.Domain.DLS.new_key (fun () -> None)
+
+let log_enabled () =
+  match Stdlib.Domain.DLS.get log_override with Some on -> on | None -> Lazy.force log_setting
+
+(* Restores the enclosing setting on return or exception, so nested calls compose. *)
+let with_log log f =
+  match log with
+  | None -> f ()
+  | Some _ ->
+      let previous = Stdlib.Domain.DLS.get log_override in
+      Exn.protect
+        ~finally:(fun () -> Stdlib.Domain.DLS.set log_override previous)
+        ~f:(fun () ->
+          Stdlib.Domain.DLS.set log_override log;
+          f ())
+
 let logf fmt =
-  Printf.ksprintf (fun s -> if Lazy.force log_enabled then Stdio.eprintf "autotune: %s\n%!" s) fmt
+  Printf.ksprintf (fun s -> if log_enabled () then Stdio.eprintf "autotune: %s\n%!" s) fmt
 
 (* gh-ocannl-1061: the search's cost record, gated by config [autotune_progress]. A search can run
    for hours and be killed by a cap before it reports anything, and [autotune_log] is no substitute:
@@ -2125,7 +2146,7 @@ let emit_calibration_unchecked ~backend ~device ~limits ~routine ~label ~digest 
   let named = CM.Calibration.qualified ~routine ~label in
   let peak_flops, peak_memory_bandwidth = envelope ~limits in
   let have_envelope = Option.is_some peak_flops || Option.is_some peak_memory_bandwidth in
-  if Lazy.force log_enabled || (not (String.is_empty file)) || have_envelope then (
+  if log_enabled () || (not (String.is_empty file)) || have_envelope then (
     let summaries = List.map opts ~f:(fun o -> CM.analyze o.LL.llc) in
     let flops = List.sum (module Int) summaries ~f:(fun s -> s.CM.flops) in
     let bytes = List.sum (module Int) summaries ~f:CM.total_bytes in
@@ -3744,8 +3765,9 @@ let resolve_cache_dir ?cache_dir ~search () =
   (* A search-less [tune] replays only a cache someone asked for. *)
   if search || cache_dir_chosen then cache_dir else ""
 
-let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?cache_dir
-    ?keep_fraction ?max_split_reduce_sites ?timing_ctx ?abandon ?report ctx comp bindings =
+let tune_in_log_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes
+    ?cache_dir ?keep_fraction ?max_split_reduce_sites ?timing_ctx ?abandon ?report ctx comp bindings
+    =
   (* gh-ocannl-559: with the search off, [tune] still replays an explicitly provided cache -- a
      pinned schedule is deterministic, and committing one is how a reproducible run keeps a tuned
      schedule -- but never times candidates, whose crowning is the largest cross-machine determinism
@@ -5059,7 +5081,7 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
             let result = try_spec spec in
             (* Gated explicitly, not just by [logf]: [logf]'s arguments are evaluated whether or not
                the flag is on, and both readings here fold a hashtable. *)
-            if Lazy.force log_enabled then
+            if log_enabled () then
               logf "census after %s: %s | device %.1f MiB" (spec_label spec)
                 (Ir.Alloc_census.to_string (Ir.Alloc_census.snapshot ()))
                 (Float.of_int (Context.get_used_memory search_ctx) /. 1048576.);
@@ -5618,12 +5640,12 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                          Sched.default_schedule_fingerprint ~backend_name:backend);
                    best_steps = Some { SC.search_shape; steps = List.rev !best_steps };
                  });
-          (* Diagnostic control (config [autotune_log]): compile and time the UNTUNED default
-             pipeline in this very process, on the search context — discriminates a genuinely slow
-             winner from process-state effects when the winner's code nominally equals the untuned
-             program yet a separately-run untuned process measures faster (PR #140 round 6: same
-             digest, 3.4x runtime difference across processes on cuda). *)
-          (if Lazy.force log_enabled then
+          (* Diagnostic control (config [autotune_log], or [tune]'s [?log]): compile and time the
+             UNTUNED default pipeline in this very process, on the search context — discriminates a
+             genuinely slow winner from process-state effects when the winner's code nominally
+             equals the untuned program yet a separately-run untuned process measures faster (PR
+             #140 round 6: same digest, 3.4x runtime difference across processes on cuda). *)
+          (if log_enabled () then
              match
                progress_stage "untuned_control";
                Context.compile ?name search_ctx comp bindings
@@ -5803,3 +5825,12 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
            exit sweep above deliberately kept this one; nothing is keeping it now. *)
         report_or_release completed_report ~result;
         result
+
+(* [?log] scopes [autotune_log] to this call: every diagnostic the search emits, the untuned control
+   it gates, and the cache-hit and fallback lines read {!log_enabled} inside the scope. *)
+let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?cache_dir
+    ?keep_fraction ?max_split_reduce_sites ?timing_ctx ?abandon ?log ?report ctx comp bindings =
+  with_log log (fun () ->
+      tune_in_log_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes
+        ?cache_dir ?keep_fraction ?max_split_reduce_sites ?timing_ctx ?abandon ?report ctx comp
+        bindings)
