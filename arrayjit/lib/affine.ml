@@ -1092,23 +1092,28 @@ let within_statement ~(write : path_comp list) (path : path_comp list) : bool =
     the sides share (the accesses need not be simultaneous, so a shared loop's symbol varies
     independently between one side's visit and the other's). Symbols bound by neither side's loops
     (static indices) are shared parameters, equal on both sides, bounded by [static_range] when
-    known. [dims] is the node's (physical) dims, which the coordinate view reads flattened indices
-    against. Conservative: [false] only when {!pair_conflict} proves disjointness. A dynamic
-    access's data-dependent axis is an [Unknown] coordinate of its view (gh-ocannl-1174), so
-    disjointness is decided from the coordinates both sides know — a gather's rows never meet
-    another column, whatever row the data names. A vectorized access is the base of a [Run] of flat
-    cells, as [Schedule.query_view] states it: its minor coordinate is [Unknown] when its own loop
-    bounds prove the run stays inside it, the whole map otherwise. Whole-node accesses count as
+    known. A loop symbol both sides bind ranges over the hull of the two sides' bounds. [dims] is
+    the node's (physical) dims, which the coordinate view reads flattened indices against.
+    Conservative: [false] only when {!pair_conflict} proves disjointness. A dynamic access's
+    data-dependent axis is an [Unknown] coordinate of its view (gh-ocannl-1174), so disjointness is
+    decided from the coordinates both sides know — a gather's rows never meet another column,
+    whatever row the data names. A vectorized access is the base of a [Run] of flat cells, as
+    [Schedule.query_view] states it: its minor coordinate is [Unknown] when its own loop bounds
+    prove the run stays inside it, the whole map otherwise. Whole-node accesses count as
     overlapping. *)
 let may_touch_same_cell ?(static_range = fun _ -> None) ~dims (a : 'tn access) (b : 'tn access) :
     bool =
   if a.a_whole || b.a_whole then true
   else
     let find loops s = List.Assoc.find loops s ~equal:Idx.equal_symbol in
+    (* The pair solver reads one range per symbol for both sides' occurrences (it substitutes a
+       width-1 symbol away before telling the sides apart), so a loop symbol both sides bind gets
+       the hull of their bounds: one side's bounds would drop the other side's values. *)
     let range s =
-      match find a.a_loops s with
-      | Some bounds -> Some bounds
-      | None -> ( match find b.a_loops s with Some bounds -> Some bounds | None -> static_range s)
+      match (find a.a_loops s, find b.a_loops s) with
+      | Some (lo, hi), Some (lo', hi') -> Some (min lo lo', max hi hi')
+      | (Some _ as bounds), None | None, (Some _ as bounds) -> bounds
+      | None, None -> static_range s
     in
     (* A run's no-spill proof reads the side's OWN loop bounds first. *)
     let side_view (x : 'tn access) =

@@ -706,4 +706,20 @@ let () =
     ~dims:[| 3; 6 |]
     ~left:(vector ~length:4 [| it h; aff [ (4, c) ] 0 |], [ (h, (0, 1)); (c, (0, 1)) ])
     ~right:(plain [| fx 2; it e |], [ (e, (0, 5)) ])
-    ()
+    ();
+  (* A loop symbol both sides bind with different bounds: [s] is [0..0] on one side and [0..1] on
+     the other, so the pair solver must not read either side's bounds for both. Each pair in both
+     argument orders, vectorized and plain. *)
+  let s = sym () in
+  let row1_vec = (vector ~length:4 [| fx 1; fx 0 |], [ (s, (0, 0)) ])
+  and rows_vec = (vector ~length:4 [| it s; fx 0 |], [ (s, (0, 1)) ])
+  and row1 = (plain [| fx 1; it e |], [ (s, (0, 0)); (e, (0, 3)) ])
+  and rows = (plain [| it s; it e |], [ (s, (0, 1)); (e, (0, 3)) ]) in
+  touch ~control:true ~name:"control: vec4 [1;0] (s<1) vs vec4 [s;0] (s<2)" ~dims:[| 3; 4 |]
+    ~left:row1_vec ~right:rows_vec ();
+  touch ~control:true ~name:"control: vec4 [s;0] (s<2) vs vec4 [1;0] (s<1)" ~dims:[| 3; 4 |]
+    ~left:rows_vec ~right:row1_vec ();
+  touch ~control:true ~name:"control: [1;e] (s<1) vs [s;e] (s<2)" ~dims:[| 3; 4 |] ~left:row1
+    ~right:rows ();
+  touch ~control:true ~name:"control: [s;e] (s<2) vs [1;e] (s<1)" ~dims:[| 3; 4 |] ~left:rows
+    ~right:row1 ()

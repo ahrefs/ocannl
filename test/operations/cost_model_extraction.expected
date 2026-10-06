@@ -109,6 +109,16 @@
   U   rd=16   wr=0    rmw=0    approx
   W28 rd=0    wr=64   rmw=0    exact
   flops=16 read=16 write=64 intensity=0.200
+== vectorized stores with unequal bounds, one row first (bound) ==
+  U   rd=12   wr=0    rmw=0    approx
+  N34 rd=0    wr=48   rmw=0    approx
+  flops=12 read=12 write=48 intensity=0.200
+  floor bytes=40
+== vectorized stores with unequal bounds, two rows first (bound) ==
+  U   rd=12   wr=0    rmw=0    approx
+  N34 rd=0    wr=48   rmw=0    approx
+  flops=12 read=12 write=48 intensity=0.200
+  floor bytes=40
 == concatenated coordinate (box over fiber bound) ==
   X16 rd=0    wr=24   rmw=0    approx
   flops=0 read=0 write=24 intensity=0.000

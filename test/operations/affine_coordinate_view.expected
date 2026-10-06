@@ -84,3 +84,7 @@ vec4 [h;0] vs vec4 [h;4] (same rows, disjoint columns)       query true         
 control: vec4 [1;0] vs cell [1;3]                            query true         oracle true
 control: vec4 [0;2] spills into row 1, vs cell [1;1]         query true         oracle true
 control: vec4 [h;4c] spills at c=1 (6 wide), vs row [2;e]    query true         oracle true
+control: vec4 [1;0] (s<1) vs vec4 [s;0] (s<2)                query true         oracle true
+control: vec4 [s;0] (s<2) vs vec4 [1;0] (s<1)                query true         oracle true
+control: [1;e] (s<1) vs [s;e] (s<2)                          query true         oracle true
+control: [s;e] (s<2) vs [1;e] (s<1)                          query true         oracle true

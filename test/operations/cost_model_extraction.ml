@@ -14,7 +14,8 @@
    cost lives entirely in a hoisted scope body, which executes unconditionally (gh-ocannl-637); -
    vectorized runs (gh-ocannl-578): bases spaced by at least the run length (or on distinct
    in-bounds rows) count exactly, close-spaced or row-spilling bases stay a flagged upper bound, and
-   two stores on distinct rows are provably disjoint, so they sum exactly; - a [Concat] coordinate:
+   two stores on distinct rows are provably disjoint, so they sum exactly, while two binding one
+   loop symbol with different bounds stay a bound in either order; - a [Concat] coordinate:
    the box-over-fiber bound, flagged, never the whole node.
 
    The tail asserts the roofline bound is monotone in the envelope constants. *)
@@ -418,6 +419,27 @@ let () =
   let w28_fp = List.Assoc.find_exn s_vec_pair.CM.per_node w28 ~equal:Tn.equal in
   claim "two vectorized stores on distinct rows sum exactly to the whole node"
     ((not w28_fp.CM.fp_approx) && w28_fp.CM.fp_write_bytes = 16 * 4);
+
+  (* Two vectorized stores binding the same loop symbol with different bounds: setv4 N34[1][0] for i
+     < 1, and setv4 N34[i][0] for i < 2, on a 3x4 node. Together they write rows 0-1 (8 cells, 32 B)
+     and read U[0..1] (8 B), so the union is no exact sum, and no floor may exceed 40 B. In both
+     statement orders: the pair query must not read one store's bounds for the other's symbol. *)
+  let n34 = fresh_tn "N34" [| 3; 4 |] in
+  let one_row = vec_store ~n:1 n34 [| Idx.Fixed_idx 1; Idx.Fixed_idx 0 |]
+  and two_rows = vec_store ~n:2 n34 [| it i; Idx.Fixed_idx 0 |] in
+  List.iter
+    [ ("one row first", [ one_row; two_rows ]); ("two rows first", [ two_rows; one_row ]) ]
+    ~f:(fun (order, stmts) ->
+      let code = LL.unflat_lines stmts in
+      let s = CM.analyze code and floor = CM.completion_floor code in
+      let name = "vectorized stores with unequal bounds, " ^ order in
+      show_summary (name ^ " (bound)") s;
+      Stdio.printf "  floor bytes=%d\n" floor.CM.fr_bytes;
+      let fp = List.Assoc.find_exn s.CM.per_node n34 ~equal:Tn.equal in
+      claimf "%s: the overlapping stores stay a flagged bound covering the union" name
+        (fp.CM.fp_approx && fp.CM.fp_write_bytes >= 8 * 4);
+      claimf "%s: the floor stays within the 40 B the stores and their source touch" name
+        (floor.CM.fr_bytes <= (8 + 2) * 4));
 
   (* A [Concat] coordinate is uninterpretable to the view, yet every loop-box point still names one
      cell, which depends only on the symbols the map mentions: for a < 2: for b < 3: for k < 4:
