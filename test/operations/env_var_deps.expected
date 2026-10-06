@@ -381,6 +381,9 @@ Declarations of a name OCANNL does not read as a configuration key, exempt by de
   test/operations/dune:OCANNL_DASHED_ONLY_KEY -- the same fixture's second synthetic key, tracked for the same reason
   test/operations/dune:ocannl-log_level -- the `config_var_fatal_spelling` fixture: a known key in the dashed spelling that gh-ocannl-605 dropped, which since gh-ocannl-652 aborts the run rather than warning
 
+Credential variables no stanza may declare (tools/credential-env.sh, gh-ocannl-1280):
+  GH_TOKEN | GITHUB_TOKEN | GH_ENTERPRISE_TOKEN | CLAUDE_CODE_MESSAGING_TOKEN | *_TOKEN | *_API_KEY
+
 Artifact-directory declarations, by dune file. A stanza whose modules call
 `Test_utils.Generated.init` declares `(env_var OCANNL_BUILD_FILES_PREFIX)`
 where dune runs it -- in its own `(deps ...)`, or, for an `(executable)` which has none, in

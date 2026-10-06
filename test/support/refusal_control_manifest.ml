@@ -260,6 +260,7 @@ let raw_entries =
         "[scanner-refusal:08ac167f3e68d870e2cfb7f7c85accc3] control marker occurrence";
         "[scanner-refusal:e68d9277c8a3a5c061164578baf2f632] the population equality";
         "[scanner-refusal:87659b49df04eee3fc19350b0be6629a] repo-relative scanner paths";
+        "[scanner-refusal:8dbf084aae3ed7d3e4ce33fb0d06e710] the credential deny-list";
         "[scanner-refusal:490ac5e3405d328c2953c38df4f0974b] arguments the rule's";
         "[scanner-refusal:09e01a62cce1d340393a2244ed33ea10] Test_utils.Generated";
         "[scanner-refusal:22e8c3d320466372ca09214ed5850f4f] reads the configuration";
@@ -288,6 +289,7 @@ let raw_entries =
         "[scanner-refusal:ba5d90fc4bcec944ebd169329c706968] goldens on the";
         "[scanner-refusal:c1a398b587b5de3d7d02145dc45274a6] alias <suite>-<name> that";
         "[scanner-refusal:941a9fb77d867c7b1576a0f19ee5db3b] declares";
+        "[scanner-refusal:94206cc268c33be0df8fde294e7233cd] env_var";
         "[scanner-refusal:2b67d02d52c3465bfba40d167802f0a7] env_var";
         "[scanner-refusal:0deef0cb94c45615f32ee84ac2e76f8e] declares tracing gates";
         "[scanner-refusal:02e183a4105132ec092206c1d35d6247] reads the tracing";
@@ -596,6 +598,11 @@ let raw_direct_evidence =
       "a per-module alias listed in the `runtest` aggregate is reported as a double run: true" );
     ( "env_var_deps.ml:490ac5e3405d328c2953c38df4f0974b",
       "a run handed no dune file and no source is refused: true" );
+    ( "env_var_deps.ml:8dbf084aae3ed7d3e4ce33fb0d06e710",
+      "a run handed no deny-list is refused rather than passing every declaration: true" );
+    ( "env_var_deps.ml:94206cc268c33be0df8fde294e7233cd",
+      "a stanza declaring `(env_var GH_TOKEN)`, a name on the deny-list, is refused by name: true"
+    );
     ( "env_var_deps.ml:09e01a62cce1d340393a2244ed33ea10",
       "a dune file built to trip the marker grammar and the declaration checks is refused: true" );
     ( "env_var_deps.ml:034280d144ee4338406ff5f6a1cf287d",

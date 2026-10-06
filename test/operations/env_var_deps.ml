@@ -151,6 +151,49 @@ let gateless_dirs =
          reason `config_dep_completeness` exempts it from the ocannl_config dependency" ) );
   ]
 
+(* gh-ocannl-1280: the credential variables no stanza may declare. Dune writes the environment of
+   every process it spawns into `_build/trace.csexp`, inside the checkout, so tools/test-run.sh,
+   tools/sweep.sh and tools/machine-verify.sh strip a deny-list of them from dune's environment --
+   and a test declaring one as `(env_var ...)` would depend on a value no runner lets through, or,
+   under a bare `dune`, on a token. The deny-list is READ from the runners' shared helper rather
+   than restated here: its one `credential_env_patterns='...'` line, `|`-separated shell case
+   patterns, each an exact name or `*` and a suffix. A pattern of any other shape is refused rather
+   than approximated, since the shell would match it some way this reader does not. *)
+let credential_env_file = "tools/credential-env.sh"
+
+type credential_pattern = Credential_name of string | Credential_suffix of string
+
+let credential_patterns_of_text text =
+  let prefix = "credential_env_patterns='" in
+  let name_like s =
+    (not (String.is_empty s))
+    && String.for_all s ~f:(fun c -> Char.is_alphanum c || Char.equal c '_')
+  in
+  let parse pattern =
+    match String.chop_prefix pattern ~prefix:"*" with
+    | Some suffix when name_like suffix -> Ok (Credential_suffix suffix)
+    | None when name_like pattern -> Ok (Credential_name pattern)
+    | _ -> Error (Printf.sprintf "`%s` is neither a variable name nor `*` and a suffix" pattern)
+  in
+  match List.filter (String.split_lines text) ~f:(String.is_prefix ~prefix) with
+  | [] -> Error "it has no `credential_env_patterns='...'` line"
+  | _ :: _ :: _ -> Error "it has more than one `credential_env_patterns=` line"
+  | [ line ] -> (
+      match String.chop_suffix (String.chop_prefix_exn line ~prefix) ~suffix:"'" with
+      | None -> Error "its `credential_env_patterns=` line is not one single-quoted word"
+      | Some "" -> Error "its `credential_env_patterns=` line names no pattern"
+      | Some body -> Result.all (List.map (String.split body ~on:'|') ~f:parse))
+
+let credential_pattern_text = function
+  | Credential_name name -> name
+  | Credential_suffix suffix -> "*" ^ suffix
+
+(* Shell case semantics: `*` matches any prefix, the empty one included. *)
+let is_credential patterns name =
+  List.exists patterns ~f:(function
+    | Credential_name exact -> String.equal exact name
+    | Credential_suffix suffix -> String.is_suffix name ~suffix)
+
 (* A universe dependency prevents caching. It does not identify an ambient gate: a compiler census
    or a backend-free probe can legitimately need unconditional execution too. *)
 let rec depends_on_universe = function
@@ -980,6 +1023,22 @@ let main () =
   in
   let dune_files =
     List.filter paths ~f:(fun (path, _) -> String.equal (Stdlib.Filename.basename path) "dune")
+  in
+  let credential_patterns =
+    let read =
+      match List.Assoc.find paths ~equal:String.equal credential_env_file with
+      | None -> Error "it is not among the arguments"
+      | Some on_disk -> credential_patterns_of_text (In_channel.read_all on_disk)
+    in
+    match read with
+    | Ok patterns -> patterns
+    | Error reason ->
+        fail
+          (Printf.sprintf
+             "the credential deny-list in %s cannot be read, so no `(env_var ...)` declaration can \
+              be checked against it: %s"
+             credential_env_file reason);
+        []
   in
   (* Through `Sources.sources_among`, the same filter the sibling scans apply: dune's globs run over
      the BUILD tree, where a preprocessed `<name>.pp.ml` sits beside every ppx-using `<name>.ml`.
@@ -1991,6 +2050,15 @@ let main () =
       List.iter fields ~f:(fun (_field, args) ->
           let names = List.concat_map args ~f:env_vars_in in
           List.iter names ~f:(fun name ->
+              if is_credential credential_patterns name then
+                fail
+                  (Printf.sprintf
+                     "%s declares `(env_var %s)`, a credential variable on the deny-list of %s \
+                      (gh-ocannl-1280): the runners strip it from dune's environment, which dune \
+                      records in `_build/trace.csexp`, so no test may depend on one -- drop the \
+                      declaration and read no credential from a test"
+                     dune_file name credential_env_file));
+          List.iter names ~f:(fun name ->
               let key = dune_file ^ ":" ^ name in
               match Utils.classify_env_var name with
               (* Someone else's variable entirely (`PATH`, `HOME`): not this check's business. *)
@@ -2676,6 +2744,9 @@ let main () =
         why);
   printf "\nDeclarations of a name OCANNL does not read as a configuration key, exempt by design:\n";
   List.iter exempt_declarations ~f:(fun (key, why) -> printf "  %s -- %s\n" key why);
+  printf "\nCredential variables no stanza may declare (%s, gh-ocannl-1280):\n  %s\n"
+    credential_env_file
+    (String.concat ~sep:" | " (List.map credential_patterns ~f:credential_pattern_text));
   printf
     "\n\
      Artifact-directory declarations, by dune file. A stanza whose modules call\n\
@@ -3109,7 +3180,25 @@ let describe_status = function
 (* Through temporary FILES rather than pipes, for the reason `generated_provenance` gives: the child
    writes to both streams, and reading two pipes in sequence deadlocks as soon as the one not being
    read fills its buffer. *)
-let run_checker ~root ~exe args =
+(* Every control tree carries the runners' credential deny-list, without which the checker refuses
+   to run (gh-ocannl-1280): the shipping helper's own text, copied in from the file this rule depends
+   on, so each tree reads the list the repository does. [`Absent] and [`Text] are the credential
+   control's own arms. *)
+let shipped_credential_env =
+  lazy (In_channel.read_all (Stdlib.Filename.concat "../.." credential_env_file))
+
+let run_checker ?(credentials = `Shipped) ~root ~exe args =
+  let args =
+    let place text =
+      write_file (Stdlib.Filename.concat root credential_env_file) text;
+      if List.mem args credential_env_file ~equal:String.equal then args
+      else args @ [ credential_env_file ]
+    in
+    match credentials with
+    | `Shipped -> place (Lazy.force shipped_credential_env)
+    | `Text text -> place text
+    | `Absent -> args
+  in
   let capture suffix = Stdlib.Filename.temp_file "evd_control" suffix in
   let out_path = capture ".out" and err_path = capture ".err" in
   let open_capture p = Unix.openfile p [ Unix.O_WRONLY; Unix.O_TRUNC ] 0o600 in
@@ -3179,6 +3268,95 @@ let control () =
     violating_reported;
   Verdict.p "the same tree with the declaration added passes and says nothing about it"
     legitimate_passed;
+  try remove_tree root with Unix.Unix_error _ -> ()
+
+(* gh-ocannl-1280's control. No stanza in this repository declares a credential, so a control read
+   off today's corpus would pass whether the rule had teeth or not. The tree is the one above with
+   its declaring arm -- which passes -- plus one rule declaring a single `(env_var ...)`; the arms
+   differ in that one name, or in the deny-list the checker is handed, and in nothing else. *)
+
+let credential_subject name =
+  control_subject ~declares:true
+  ^ Printf.sprintf
+      "\n\
+       (rule\n\
+      \ (target credential.fixture)\n\
+      \ (deps\n\
+      \  (env_var %s))\n\
+      \ (action\n\
+      \  (with-stdout-to\n\
+      \   %%{target}\n\
+      \   (echo \"\"))))\n"
+      name
+
+let credential_control () =
+  let exe =
+    let name = Stdlib.Sys.executable_name in
+    if Stdlib.Filename.is_relative name then Stdlib.Filename.concat (Stdlib.Sys.getcwd ()) name
+    else name
+  in
+  let root = Stdlib.Filename.temp_dir "evd_credential" "" in
+  let context = control_context () in
+  List.iter context ~f:(fun (file, content) ->
+      write_file (Stdlib.Filename.concat root file) content);
+  write_file (Stdlib.Filename.concat root "t/probe.ml") control_probe;
+  write_file (Stdlib.Filename.concat root "t/nested/probe2.ml") control_probe;
+  let paths = control_root_paths @ List.map context ~f:fst in
+  let run ?credentials name =
+    write_file (Stdlib.Filename.concat root "t/dune") (credential_subject name);
+    run_checker ?credentials ~root ~exe ("." :: paths)
+  in
+  let refused ~diagnostic (status, text) =
+    Poly.equal status (Unix.WEXITED 1) && String.is_substring text ~substring:diagnostic
+  in
+  let passed (status, text) =
+    Poly.equal status (Unix.WEXITED 0)
+    && not (String.is_substring text ~substring:"a credential variable on the deny-list")
+  in
+  let declared name = Printf.sprintf "declares `(env_var %s)`, a credential variable" name in
+  let unreadable = "the credential deny-list in " ^ credential_env_file ^ " cannot be read" in
+  let report label (status, text) =
+    eprintf "the credential control's %s run %s. Its captured output:\n%s\n" label
+      (describe_status status) text
+  in
+  let exact = run "GH_TOKEN" in
+  let pattern = run "FOO_API_KEY" in
+  let near_miss = run "FOO_API_KEYS" in
+  let absent = run ~credentials:`Absent "FOO_API_KEYS" in
+  let odd_pattern =
+    run ~credentials:(`Text "credential_env_patterns='GH_TOKEN|GH_*_KEY'\n") "FOO_API_KEYS"
+  in
+  let claims =
+    [
+      ( "a stanza declaring `(env_var GH_TOKEN)`, a name on the deny-list, is refused by name",
+        "exact",
+        exact,
+        refused ~diagnostic:(declared "GH_TOKEN") exact );
+      ( "a stanza declaring `(env_var FOO_API_KEY)`, matched by the deny-list's `*_API_KEY`, is \
+         refused by name",
+        "pattern",
+        pattern,
+        refused ~diagnostic:(declared "FOO_API_KEY") pattern );
+      ( "the same tree declaring `(env_var FOO_API_KEYS)`, which no pattern matches, passes",
+        "near-miss",
+        near_miss,
+        passed near_miss );
+      ( "a run handed no deny-list is refused rather than passing every declaration",
+        "absent",
+        absent,
+        refused ~diagnostic:unreadable absent );
+      ( "a deny-list pattern of a shape the reader cannot match like the shell is refused",
+        "odd-pattern",
+        odd_pattern,
+        refused ~diagnostic:unreadable odd_pattern );
+    ]
+  in
+  List.iter claims ~f:(fun (_, label, result, ok) -> if not ok then report label result);
+  printf
+    "The credential rule is put to the declaring tree above plus one rule whose only dependency is\n\
+     a single `(env_var ...)`: a deny-listed name, a name matched by a pattern, and a near miss,\n\
+     then the near miss again with no deny-list and with one the reader refuses (gh-ocannl-1280).\n\n";
+  List.iter claims ~f:(fun (claim, _, _, ok) -> Verdict.p claim ok);
   try remove_tree root with Unix.Unix_error _ -> ()
 
 (* gh-ocannl-708's control, and why it is a second tree rather than a stanza added to the one above.
@@ -5098,6 +5276,7 @@ let () =
       per_directory_control ();
       refusal_control ();
       control ();
+      credential_control ();
       floor_control ();
       guard_control ();
       lifecycle_contract_control ();
