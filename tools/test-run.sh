@@ -144,7 +144,11 @@
 # `promotions`: dune's own promotion list, which the digest reports in place
 # of reading the log for diffs. `promotion-files` keeps corrected contents and
 # their originals for `tools/promote.sh --from-run RUN`, even after a later build
-# replaces dune's list (see record_promotions).
+# replaces dune's list (see record_promotions). And `slowest`, which the digest
+# also prints: the five longest processes in the batch's own dune trace (a
+# trace file of the run's, never the worktree's `_build/trace.csexp`), with
+# their seconds, recorded on every exit path, the caps' included (see
+# explicit_trace_file).
 #
 # Windows: run it from Git Bash, whose MSYS perl carries the flock and the cap.
 # Best-effort even there -- process-group kills may only reach dune itself, not
@@ -501,7 +505,8 @@ plan_device_probe() { # after plan_batch
 # 1021s, under correctness-slot load), but `slow-cifar_conv` runs ~300s solo
 # and loads of 5-15x were measured, plus its dataset download -- so `@slow`
 # and CPU batches keep only the run's cap unless asked. Re-derive it from a
-# box's traces with tools/action-durations.sh.
+# box's traces with tools/action-durations.sh, or from the `slowest` record
+# every run directory keeps (see explicit_trace_file).
 TEST_CAP_DEFAULT=1500
 test_cap_why=
 plan_test_cap() { # <requested, empty for the default> dune-argv
@@ -806,6 +811,74 @@ supervisor_perl='
     close $fh or return 0;
     1;
   };
+  # The slowest actions of the run (see explicit_trace_file): the five longest
+  # processes of the trace the batch wrote into the run directory, read once
+  # the child has exited (dune with it), and published as `slowest` only when
+  # the reader succeeds. The reader is a child of its own, in a group of its
+  # own so its python goes with it, holding no descriptor past stdio (the
+  # worktree lock is fd 9) and with every check of the trace made there, so
+  # nothing here can block on the file system: it is polled for its bound (30
+  # seconds), then KILLed and polled again, five seconds, and abandoned if
+  # even that does not reap it -- the verdict publishes and the lock clears
+  # regardless. A reader that fails or times out leaves `slowest-skipped`,
+  # its last diagnostic line (the reader quotes offsets, never trace bytes) or
+  # the bound it missed, which the digest prints in place of the table -- a
+  # dune older than 3.24 writes a trace format it refuses. The trace is
+  # deleted on every path, a failed fork included. OCANNL_TOOL_SLOWEST_CAP and OCANNL_TOOL_SLOWEST_READER
+  # are seams for tools/test-test-run.sh; an ambient value can only shorten
+  # the bound (anything but 1-30 reads as 30), and the reader it names is
+  # bounded and KILLed like the real one.
+  my $slowest = sub {
+    my $trace = "$own/trace.csexp";
+    my $bound = $ENV{OCANNL_TOOL_SLOWEST_CAP};
+    $bound = 30 unless defined $bound && $bound =~ /^[1-9][0-9]?$/ && $bound <= 30;
+    my $reader = $ENV{OCANNL_TOOL_SLOWEST_READER};
+    $reader = "tools/action-durations.sh" unless defined $reader && length $reader;
+    my $c = fork();
+    unless (defined $c) { unlink $trace; return }
+    if (!$c) {
+      $SIG{$_} = "DEFAULT" for qw(ALRM INT TERM HUP);
+      POSIX::close($_) for 3 .. 255;
+      eval { setpgrp(0, 0) };
+      POSIX::_exit(1) unless -f $trace;
+      open(STDIN, "<", "/dev/null");
+      open(STDERR, ">", "$own/slowest.err");
+      open(STDOUT, ">", "$own/slowest.tmp") or POSIX::_exit(126);
+      exec("bash", $reader, "-n", "5", $trace);
+      POSIX::_exit(127);
+    }
+    my $st;
+    for (1 .. 10 * $bound) {
+      if (waitpid($c, POSIX::WNOHANG()) == $c) { $st = $?; last }
+      select undef, undef, undef, 0.1;
+    }
+    unless (defined $st) {
+      kill("KILL", -$c) or kill("KILL", $c);
+      for (1 .. 50) {
+        last if waitpid($c, POSIX::WNOHANG()) != 0;
+        select undef, undef, undef, 0.1;
+      }
+    }
+    my $why;
+    if (defined $st && $st == 0) {
+      rename("$own/slowest.tmp", "$own/slowest") or unlink "$own/slowest.tmp";
+    } else {
+      unlink "$own/slowest.tmp";
+      if (!defined $st) {
+        $why = "the reader did not finish within ${bound}s";
+      } elsif (open(my $ef, "<", "$own/slowest.err")) {
+        my @lines = grep { /\S/ } <$ef>;
+        close $ef;
+        $why = $lines[-1] if @lines;
+      }
+    }
+    unlink "$own/slowest.err";
+    if (defined $why) {
+      chomp $why;
+      $write->("$own/slowest-skipped", substr($why, 0, 300) . "\n");
+    }
+    unlink $trace;
+  };
   # Every exit path ends here. The verdict file is written aside and renamed:
   # its EXISTENCE is the completion signal status/wait key on, so it must
   # never be observable empty. Retried with backoff -- a filesystem that
@@ -817,6 +890,7 @@ supervisor_perl='
     $SIG{$_} = "IGNORE" for qw(ALRM INT TERM HUP);
     alarm 0;
     if ($own) {
+      $slowest->();
       print STDOUT "exit: $code\n";
       my $ok = 0;
       for my $try (1 .. 3) {
@@ -1391,6 +1465,43 @@ promotion_bounded() { # command...
   perl -e 'alarm shift; exec @ARGV or exit 127' "$bound" "$@" </dev/null
 }
 
+# The run's slowest actions, recorded once it ends: `slowest` holds what
+# tools/action-durations.sh prints for the five longest processes in the
+# batch's own dune trace, and the digest shows it, so per-action duration data
+# (the evidence behind TEST_CAP_DEFAULT) accumulates in every run directory
+# with no manual step, and a TIMEOUT digest shows how close the other tests
+# came. The reader decodes only timing fields, never the environment a trace
+# also records (gh-ocannl-1280). The trace is the run's own: `_resolve` hands
+# the batch's dune `--trace-file=<run dir>/trace.csexp`, right after its
+# subcommand, so the worktree's shared `_build/trace.csexp` -- which a
+# concurrent manual dune may be writing, under a build lock this script does
+# not hold -- is neither read nor touched by the batch, and a run whose dune
+# never started (a refused or cancelled slot wait) has no trace to misread.
+# (The launch's other dune invocations -- the readers' build in
+# batch_resolve, a GPU batch's device-probe build -- write the shared trace
+# as any dune command does, after taking dune's build lock; what must not
+# happen is a write or unlink outside that lock.) The supervisor
+# reads it as the verdict's last step, once the child has exited, on every
+# exit path -- the caps' included, where `_resolve` itself is killed -- with
+# the caps disarmed, so recording never turns a finished run into a TIMEOUT;
+# the reader is bounded (30 seconds, then KILL and a bounded reap) and never
+# holds the worktree lock, so a reader that cannot even be reaped still lets
+# the verdict publish and the lock clear (see supervisor_perl). The trace is
+# then deleted: the record is the five rows, and an environment dump per run
+# would pile up under the runs directory. Nothing is recorded where the argv
+# names a trace file of its own (`--trace-file`, or any abbreviation of it;
+# erring towards "names one" costs only the record), or where the first word
+# is not one of the subcommands known to take the option.
+explicit_trace_file() { # dune argv; 0 iff it names a trace file before dune's `--`
+  for arg do
+    case $arg in
+      --) return 1 ;;
+      --tr*) return 0 ;;
+    esac
+  done
+  return 1
+}
+
 new_run() {
   run_dir=$RUNS/$(date -u +%Y%m%dT%H%M%SZ)-$$
   mkdir "$run_dir" || die "cannot create $run_dir"
@@ -1923,6 +2034,20 @@ digest() {
   fi
   [ ! -s "$dir/test-cap-off" ] ||
     echo "per-test cap: off for this run ($(cat "$dir/test-cap-off")); only the run's cap bounded it"
+  # The batch's slowest processes (see explicit_trace_file), under a verdict
+  # dune's own run produced: a refused slot, invocation or device probe, or a
+  # setup error, ran no batch, so a record beside one is not this verdict's.
+  # `open` marks a process the run's end cut short, its seconds a lower bound.
+  case $digest_rc:$verdict in
+    2:* | *:SLOT* | *:DEVICE* | *:ERROR*) ;;
+    *)
+      if [ -s "$dir/slowest" ]; then
+        echo "slowest actions (this run's dune trace, by tools/action-durations.sh):"
+        sed -n '1,7p' "$dir/slowest" | sed 's/^/  /'
+      elif [ -s "$dir/slowest-skipped" ]; then
+        echo "no slowest-actions record: $(head -c 300 "$dir/slowest-skipped" | head -n 1)"
+      fi ;;
+  esac
   if [ "$digest_rc" = 2 ]; then
     # dune's own words name the fix; nothing below (promotion diffs, the
     # fingerprint, a log tail) could apply to a run in which no rule ran.
@@ -2507,6 +2632,22 @@ case $sub in
     # Decided on the caller's argv, before the slot's words are put in front.
     promotions_recordable=1
     ! explicit_build_root "$@" || promotions_recordable=
+    # The batch's dune writes its trace into the run directory, for the run's
+    # slowest actions (see explicit_trace_file) -- after `cmd` was recorded,
+    # so the command the digest prints is still the caller's. Not where the
+    # argv already sends the trace elsewhere, nor for a subcommand not known
+    # to take the option, where dune would refuse it. Absolute, whatever
+    # `--root` the argv names.
+    if ! explicit_trace_file "$@"; then
+      case $1 in
+        build | runtest | test | exec)
+          trace_file=$run_dir/trace.csexp
+          case $trace_file in /*) ;; *) trace_file=$PWD/$trace_file ;; esac
+          trace_sub=$1
+          shift
+          set -- "$trace_sub" "--trace-file=$trace_file" "$@" ;;
+      esac
+    fi
     # A probed batch's command is `_probe`, which queries the devices and
     # execs dune in its place; under a fleet slot it is fleet-worker.sh, which
     # takes the slot and execs that command in its place. So dune's status is

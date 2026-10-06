@@ -3231,11 +3231,25 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   `tools/test-test-run.sh` pin the cap, its controls (a slow dune, the slot's holder), the probe
   and `plan`'s report.
 - **Revisit a per-action bound from the traces, through `tools/action-durations.sh`**: it reads a
-  dune trace (`_build/trace.csexp` by default, the batch's own after a `tools/test-run.sh run`) and
+  dune trace (`_build/trace.csexp` by default — a bare dune's; a `tools/test-run.sh run` writes its
+  batch's into the run directory and keeps only the five slowest, below) and
   prints the slowest processes dune started, each named by its alias or first target relative to
   the trace's own `build_dir`, or with `--group prog|dir` the max/total per test executable or
   directory; `--prog '\.exe$'` keeps the tests. A process the trace saw start and not finish
-  prints `open`, its seconds a lower bound. Never read a trace by hand to answer this: it also
+  prints `open`, its seconds a lower bound. Every `tools/test-run.sh run`/`start` already keeps
+  the five slowest of its batch as `slowest` in the run directory, and the digest prints them —
+  a `TIMEOUT`'s too, where they show how close the rest came — so the data piles up under
+  `~/.ocannl-test-runs` with no manual step. The batch's dune gets `--trace-file=<run dir>/trace.csexp`
+  (after the recorded `cmd`, for `build`/`runtest`/`test`/`exec` only, never when the argv names its own
+  trace file), so the batch neither reads nor writes the worktree's `_build/trace.csexp` (the readers'
+  and device-probe builds still rewrite it, as any dune command does, under dune's own build lock):
+  deleting that shared file instead, outside the build lock, cost a concurrent manual `dune build`
+  its live trace (review of staging#1079). A reader that fails (a dune older than 3.24 writes a trace
+  format it refuses) or times out leaves `slowest-skipped`, and the digest prints its reason. The supervisor reads the run's trace as the
+  verdict's last step, on every exit path, the caps' included, and deletes it after; the reader holds
+  no descriptor past stdio, is KILLed past its 30 s and abandoned if even KILL does not reap it, so a
+  stuck read never withholds the verdict or the worktree lock. Leg 80 of `tools/test-test-run.sh`
+  pins it. Never read a trace by hand to answer this: it also
   records dune's environment, argv and each process's arguments and captured stdout/stderr, which
   can hold credentials (gh-ocannl-1280). The tool decodes only event kinds, digit-only time slots,
   `config init`'s `build_dir` and five process fields, skipping the rest by length prefix, and its

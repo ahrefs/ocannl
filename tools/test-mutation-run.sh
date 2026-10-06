@@ -26,6 +26,15 @@ done < <(sed -n 's/^\. \([A-Za-z0-9_./-]*\)$/\1/p' "$root/tools/test-run.sh")
 cat > "$fixture/bin/dune" <<'DUNE'
 #!/usr/bin/env bash
 set -eu
+# test-run.sh hands the batch a trace file of the run's own, as the second
+# word; that one word, and only it, is not part of the command this fixture
+# recognises (a second copy, or one anywhere else, still fails the match).
+if [ -n "${OCANNL_TOOL_TESTRUN_OWN:-}" ] && [ $# -ge 2 ] &&
+   [ "$2" = "--trace-file=$OCANNL_TOOL_TESTRUN_OWN/trace.csexp" ]; then
+  sub=$1
+  shift 2
+  set -- "$sub" "$@"
+fi
 case "$*" in
   'build -j 4 @runtest-probe') name=probe ;;
   'build -j 4 @runtest-manifest') name=manifest ;;

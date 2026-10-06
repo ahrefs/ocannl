@@ -9,9 +9,9 @@
 #
 # Usage: tools/action-durations.sh [options] [TRACE]
 #   TRACE              the trace to read (default: _build/trace.csexp at the
-#                      repository root; after `tools/test-run.sh run ...` that
-#                      is the batch's own build, its promotion query traces
-#                      elsewhere)
+#                      repository root, a bare dune's; `tools/test-run.sh run`
+#                      hands its batch a trace file in the run directory and
+#                      keeps this tool's five slowest rows as `slowest`)
 #   -n N               print the N slowest rows (default: 20; 0 prints all)
 #   --prog REGEX       keep processes whose program basename matches (Python
 #                      regular expression search), e.g. '\.exe$' for tests
@@ -97,7 +97,10 @@ case "$group" in '' | prog | dir) ;; *) die "--group wants prog or dir, got: $gr
 trace=${trace:-$root/_build/trace.csexp}
 [ -f "$trace" ] || die "no trace at $trace (build something first, or name one)"
 
-python3 - "$trace" "$rows" "$prog_re" "$group" <<'PY'
+# exec, so the reader is ONE process: tools/test-run.sh bounds it with a KILL
+# that must reach the parse itself where a process group cannot be signalled
+# (Git Bash), not just a shell whose python would outlive it.
+exec python3 - "$trace" "$rows" "$prog_re" "$group" <<'PY'
 import os
 import re
 import sys
