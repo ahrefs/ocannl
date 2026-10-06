@@ -181,6 +181,10 @@ ok: boundary -- a haystack read back out of an array cell is a mutation
 ok: boundary -- a source parameter rebound to other text
 ok: boundary -- a source-taking helper handed ordinary text is unvalidated
 every partial-itemisation boundary has a case meeting it alone: true
+ok: attempt -- a syntax error is the file's
+ok: attempt -- a lexical error is the file's
+ok: attempt -- a source that parses is scanned
+ok: attempt -- a scanner exception is the scanner's, with its text
 ok: rejection -- opening the reader hides its calls from the qualifier
 ok: rejection -- opening an ALIAS of the reader hides them just the same
 ok: rejection -- opening the emitter's module hides the render
