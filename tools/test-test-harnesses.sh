@@ -18,8 +18,9 @@ subject="$fixture/tools/test-harnesses.sh"
 "$subject" --list >"$TMP/all" || exit 2
 "$subject" --shell --list >"$TMP/shell" || exit 2
 "$subject" --toolchain --list >"$TMP/toolchain" || exit 2
-[ -s "$TMP/shell" ] && [ -s "$TMP/toolchain" ] || exit 2
-cat "$TMP/shell" "$TMP/toolchain" | sort >"$TMP/groups"
+"$subject" --promotion --list >"$TMP/promotion" || exit 2
+[ -s "$TMP/shell" ] && [ -s "$TMP/toolchain" ] && [ -s "$TMP/promotion" ] || exit 2
+cat "$TMP/shell" "$TMP/toolchain" "$TMP/promotion" | sort >"$TMP/groups"
 sort "$TMP/all" >"$TMP/sorted"
 if cmp -s "$TMP/groups" "$TMP/sorted" \
    && [ "$(sort -u "$TMP/all" | wc -l)" -eq "$(wc -l <"$TMP/all")" ]; then
@@ -50,7 +51,7 @@ run() {
   got=0
   (cd "$TMP" && "$subject" "$@") >"$TMP/out" 2>&1 || got=$?
 }
-for group in all shell toolchain; do
+for group in all shell toolchain promotion; do
   case $group in all) run ;; *) run "--$group" ;; esac
   if [ "$got" = 0 ] && cmp -s "$TMP/$group" "$RECORD"; then
     report 0 "$group executes every selected member from the repository root"
