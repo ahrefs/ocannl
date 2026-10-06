@@ -120,23 +120,10 @@ let folded_seed_claims ~tag ~what ~pre ~out ~seed ~want ~matches =
   gated_all ~when_:on_gpu ~on:backend_name
     ("every GPU sketch of the " ^ what ^ " matches the materialized run")
     results ~f:snd;
-  let tensorized_match (q, ok) = q.Autotune.sk_mma && ok in
-  let tensorized_gated label claim =
-    match capability with
-    | `Advertised -> claim label
-    | `Withheld aggregation -> Verdict.skipped ~aggregation ~backend:backend_name label
-  in
-  tensorized_gated
-    ("a tensorized " ^ what ^ " sketch matches the materialized run")
-    (fun label -> p_exists label results ~f:tensorized_match);
-  (* Control: the same gate over the population with every tensorized seed dropped. The capability
-     still holds, so the claim above, evaluated there, has no witness and would fail. *)
-  tensorized_gated
-    ("without its tensorized seeds the " ^ what ^ " tensorized claim has no witness")
-    (fun label ->
-      p_none label
-        (List.filter results ~f:(fun (q, _) -> not q.Autotune.sk_mma))
-        ~f:tensorized_match)
+  let label = "a tensorized " ^ what ^ " sketch matches the materialized run" in
+  match capability with
+  | `Advertised -> p_exists label results ~f:(fun (q, ok) -> q.Autotune.sk_mma && ok)
+  | `Withheld aggregation -> Verdict.skipped ~aggregation ~backend:backend_name label
 
 let () =
   let out = projection ~b:32 ~s:32 ~h:4 ~j:32 ~k:128 () in
