@@ -9,9 +9,9 @@
 #
 # Usage: tools/action-durations.sh [options] [TRACE]
 #   TRACE              the trace to read (default: _build/trace.csexp at the
-#                      repository root; after `tools/test-run.sh run ...` that
-#                      is the batch's own build, its promotion query traces
-#                      elsewhere)
+#                      repository root, a bare dune's; `tools/test-run.sh run`
+#                      hands its batch a trace file in the run directory and
+#                      keeps this tool's five slowest rows as `slowest`)
 #   -n N               print the N slowest rows (default: 20; 0 prints all)
 #   --prog REGEX       keep processes whose program basename matches (Python
 #                      regular expression search), e.g. '\.exe$' for tests

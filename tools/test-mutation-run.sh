@@ -26,7 +26,11 @@ done < <(sed -n 's/^\. \([A-Za-z0-9_./-]*\)$/\1/p' "$root/tools/test-run.sh")
 cat > "$fixture/bin/dune" <<'DUNE'
 #!/usr/bin/env bash
 set -eu
-case "$*" in
+# test-run.sh hands the batch a trace file of the run's own; it is not part of
+# the command this fixture recognises.
+args=()
+for arg in "$@"; do case $arg in --trace-file=*) ;; *) args+=("$arg") ;; esac; done
+case "${args[*]}" in
   'build -j 4 @runtest-probe') name=probe ;;
   'build -j 4 @runtest-manifest') name=manifest ;;
   'build -j 4 @runtest-tail') name=tail ;;
