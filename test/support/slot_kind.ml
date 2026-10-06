@@ -660,8 +660,17 @@ let views_of ~dir ~named ~reads_config sexp =
             Option.some_if
               (List.mem (Scan.atoms fields) "action" ~equal:String.equal)
               "preprocessing action";
-            (* ctypes stubs run generator programs as they build. *)
+            (* ctypes stubs run generator programs as they build; a compiler flag naming a program
+               ([-pp], [-ppx], [-cc]) or code ([-plugin]) runs it, from any flags field or an
+               env's. *)
             Option.map (Scan.field fields "ctypes") ~f:(fun _ -> "ctypes field");
+            List.find_map (Scan.atoms fields) ~f:(fun a ->
+                Option.some_if
+                  (List.exists [ "-pp"; "-ppx"; "-cc"; "-plugin" ] ~f:(fun f ->
+                       String.equal a f
+                       || String.is_prefix a ~prefix:(f ^ "=")
+                       || String.is_prefix a ~prefix:(f ^ " ")))
+                  (Printf.sprintf "compiler flag %s" a));
             env_unmodelled fields;
             inexact_pform ~bindings fields;
           ]
@@ -968,15 +977,18 @@ let dune_files ~root =
   (match Stdlib.Sys.getenv_opt "DUNE_WORKSPACE" with
   | Some w when not (String.is_empty w) -> failwith "DUNE_WORKSPACE names a workspace"
   | _ -> ());
-  (let project = Stdlib.Filename.concat root "dune-project" in
-   if Stdlib.Sys.file_exists project then
-     List.iter
-       (Scan.stanzas (Stdio.In_channel.read_all project))
-       ~f:(function
-         | Sexp.List (Sexp.Atom (("dialect" | "accept_alternative_dune_file_name") as h) :: _) ->
-             (* A dialect can make any extension a source one; the data list assumes none does. *)
-             failwith (Printf.sprintf "dune-project declares (%s …)" h)
-         | _ -> ()));
+  (* Every project the walk enters, the root's and any nested one (Codex review on PR #1027). *)
+  let check_project path =
+    let project = Stdlib.Filename.concat path "dune-project" in
+    if Stdlib.Sys.file_exists project then
+      List.iter
+        (Scan.stanzas (Stdio.In_channel.read_all project))
+        ~f:(function
+          | Sexp.List (Sexp.Atom (("dialect" | "accept_alternative_dune_file_name") as h) :: _) ->
+              (* A dialect can make any extension a source one; the data list assumes none does. *)
+              failwith (Printf.sprintf "%s declares (%s …)" project h)
+          | _ -> ())
+  in
   let rec workspaces dir =
     let file = Stdlib.Filename.concat dir "dune-workspace" in
     if Stdlib.Sys.file_exists file then
@@ -996,6 +1008,11 @@ let dune_files ~root =
     let entries = Stdlib.Sys.readdir path |> Array.to_list |> List.sort ~compare:String.compare in
     if List.mem entries "dune-file" ~equal:String.equal then
       failwith (Printf.sprintf "%s holds a dune-file" path);
+    check_project path;
+    (* A [.t] file or directory is a cram test dune discovers with no stanza naming it. *)
+    Option.iter
+      (List.find entries ~f:(String.is_suffix ~suffix:".t"))
+      ~f:(fun t -> failwith (Printf.sprintf "%s holds the cram test %s" path t));
     let content =
       if List.mem entries "dune" ~equal:String.equal then
         Some (Stdio.In_channel.read_all (Stdlib.Filename.concat path "dune"))
@@ -1066,8 +1083,12 @@ let ppx_reaching_backend stanzas =
         (List.find (ppxs s.sexp) ~f:(reaches (Set.empty (module String))))
         ~f:(fun ppx -> (s, ppx)))
 
-let answer ?(build_dir = Option.value (Stdlib.Sys.getenv_opt "DUNE_BUILD_DIR") ~default:"")
-    ~dune_files argv =
+(* The environment variables that run a program or add what is built: dune's, as their options do,
+   and the compiler's [OCAMLPARAM], which can name a preprocessor or a ppx. *)
+let unmodelled_dune_env = [ "DUNE_DIFF_COMMAND"; "DUNE_INSTRUMENT_WITH"; "OCAMLPARAM" ]
+
+let answer ?(getenv = Stdlib.Sys.getenv_opt) ~dune_files argv =
+  let build_dir = Option.value (getenv "DUNE_BUILD_DIR") ~default:"" in
   (* With the build directory moved to a relative [out], [@out/default/runtest] is a context root,
      not a source directory (Codex review on PR #1027). *)
   let build_root =
@@ -1087,65 +1108,74 @@ let answer ?(build_dir = Option.value (Stdlib.Sys.getenv_opt "DUNE_BUILD_DIR") ~
           | Some (Alias { dir; alias; _ }) -> Error (Printf.sprintf "@%s/%s" dir alias)
           | None -> Ok (Some ts)))
   in
-  match targets argv with
-  | Error opt ->
-      Unknown
-        (Printf.sprintf "it carries `%s`, which this does not model (it could change what is built)"
-           opt)
-  | Ok None -> Reaches { named = []; reads_config = None }
-  | Ok (Some targets) -> (
-      let read =
-        List.fold_result dune_files ~init:[] ~f:(fun acc (dir, content) ->
-            match stanzas_of ~dir content with
-            | stanzas -> Ok (stanzas :: acc)
-            | exception exn ->
-                Error
-                  (Printf.sprintf "the dune file in %s is unreadable here (%s)"
-                     (if String.is_empty dir then "." else dir)
-                     (Exn.to_string exn)))
-      in
-      match read with
-      | Error why -> Unknown why
-      | Ok stanzas -> (
-          let stanzas = List.concat (List.rev stanzas) in
-          let found = reached stanzas targets in
-          let found =
-            (* Every compilation is in every batch's closure, so a ppx reaching a backend is too. *)
-            match ppx_reaching_backend stanzas with
-            | Some (s, ppx) ->
-                { s with inexact = Some (Printf.sprintf "ppx %s (it can reach a backend)" ppx) }
-                :: found
-            | None -> found
+  match
+    List.find unmodelled_dune_env ~f:(fun v ->
+        not (String.is_empty (Option.value (getenv v) ~default:"")))
+  with
+  | Some v -> Unknown (Printf.sprintf "%s is set, which this does not model" v)
+  | None -> (
+      match targets argv with
+      | Error opt ->
+          Unknown
+            (Printf.sprintf
+               "it carries `%s`, which this does not model (it could change what is built)" opt)
+      | Ok None -> Reaches { named = []; reads_config = None }
+      | Ok (Some targets) -> (
+          let read =
+            List.fold_result dune_files ~init:[] ~f:(fun acc (dir, content) ->
+                match stanzas_of ~dir content with
+                | stanzas -> Ok (stanzas :: acc)
+                | exception exn ->
+                    Error
+                      (Printf.sprintf "the dune file in %s is unreadable here (%s)"
+                         (if String.is_empty dir then "." else dir)
+                         (Exn.to_string exn)))
           in
-          match
-            List.find_map found ~f:(fun s ->
-                match (s.overrides, s.inexact) with
-                | Some o, _ ->
-                    Some
-                      (Printf.sprintf "%s, whose %s sets the backend past the configuration"
-                         (describe s) o)
-                | None, Some c ->
-                    Some (Printf.sprintf "%s, whose %s this does not model exactly" (describe s) c)
-                | None, None -> None)
-          with
-          | Some why -> Unknown why
-          | None ->
-              let named =
-                List.concat_map found ~f:(fun s ->
-                    let why =
-                      Printf.sprintf "%s, which names %s" (describe s)
-                        (String.concat ~sep:"," s.named)
-                    in
-                    List.map s.named ~f:(fun b -> (b, why)))
-                |> List.fold ~init:[] ~f:(fun acc (b, why) ->
-                    if List.Assoc.mem acc b ~equal:String.equal then acc else (b, why) :: acc)
-                |> List.rev
+          match read with
+          | Error why -> Unknown why
+          | Ok stanzas -> (
+              let stanzas = List.concat (List.rev stanzas) in
+              let found = reached stanzas targets in
+              let found =
+                (* Every compilation is in every batch's closure, so a ppx reaching a backend is
+                   too. *)
+                match ppx_reaching_backend stanzas with
+                | Some (s, ppx) ->
+                    { s with inexact = Some (Printf.sprintf "ppx %s (it can reach a backend)" ppx) }
+                    :: found
+                | None -> found
               in
-              let reads_config =
+              match
                 List.find_map found ~f:(fun s ->
-                    Option.some_if s.reads_config (describe s ^ ", which reads the configuration"))
-              in
-              Reaches { named; reads_config }))
+                    match (s.overrides, s.inexact) with
+                    | Some o, _ ->
+                        Some
+                          (Printf.sprintf "%s, whose %s sets the backend past the configuration"
+                             (describe s) o)
+                    | None, Some c ->
+                        Some
+                          (Printf.sprintf "%s, whose %s this does not model exactly" (describe s) c)
+                    | None, None -> None)
+              with
+              | Some why -> Unknown why
+              | None ->
+                  let named =
+                    List.concat_map found ~f:(fun s ->
+                        let why =
+                          Printf.sprintf "%s, which names %s" (describe s)
+                            (String.concat ~sep:"," s.named)
+                        in
+                        List.map s.named ~f:(fun b -> (b, why)))
+                    |> List.fold ~init:[] ~f:(fun acc (b, why) ->
+                        if List.Assoc.mem acc b ~equal:String.equal then acc else (b, why) :: acc)
+                    |> List.rev
+                  in
+                  let reads_config =
+                    List.find_map found ~f:(fun s ->
+                        Option.some_if s.reads_config
+                          (describe s ^ ", which reads the configuration"))
+                  in
+                  Reaches { named; reads_config })))
 
 (** Whether [answer] can hold a GPU by name: an unknown answer can. Whether a configuration a
     reached stanza reads names one is the caller's question. *)

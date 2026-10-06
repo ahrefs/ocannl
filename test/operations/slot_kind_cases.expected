@@ -187,6 +187,12 @@ an env_vars backend beside the tree leaves no batch proven to read nothing: true
 build @n/scans (an env's other settings) unknown: it compiles the env stanza in d, whose env setting (binaries tool.exe) this does not model exactly
     unknown: it compiles the env stanza in d, whose env setting (binaries tool.exe) this does not model exactly
 an env's other settings beside the tree leaves no batch proven to read nothing: true
+build @n/scans (an env's preprocessor flag) unknown: it compiles the env stanza in d, whose compiler flag -pp this does not model exactly
+    unknown: it compiles the env stanza in d, whose compiler flag -pp this does not model exactly
+an env's preprocessor flag beside the tree leaves no batch proven to read nothing: true
+build @n/scans (a library's ppx flag)    unknown: it compiles l2 in d, whose compiler flag -ppx this does not model exactly
+    unknown: it compiles l2 in d, whose compiler flag -ppx this does not model exactly
+a library's ppx flag beside the tree leaves no batch proven to read nothing: true
 build @n/scans (a ppx that can reach a backend) unknown: it reaches user in d, whose ppx evil_ppx (it can reach a backend) this does not model exactly
     unknown: it reaches user in d, whose ppx evil_ppx (it can reach a backend) this does not model exactly
 a ppx that can reach a backend beside the tree leaves no batch proven to read nothing: true
@@ -237,7 +243,12 @@ a directory set with an ordered-set operator makes the tree unreadable: true
 a workspace setting a context environment makes the tree unreadable: true
 an alternative dune-file makes the tree unreadable: true
 a dialect declared in dune-project makes the tree unreadable: true
+a dialect declared in a nested dune-project makes the tree unreadable: true
+an implicitly discovered cram test makes the tree unreadable: true
 an alias rooted in a moved build directory is every backend: true
+DUNE_DIFF_COMMAND set makes a batch every backend: true
+DUNE_INSTRUMENT_WITH set makes a batch every backend: true
+OCAMLPARAM set makes a batch every backend: true
 live: build @test/operations/scans                            names nothing
     <the configuration does not count>
 live: build @test/operations/scans answers names nothing: true
