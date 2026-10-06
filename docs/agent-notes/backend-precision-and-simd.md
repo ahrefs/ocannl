@@ -1795,7 +1795,9 @@ files.
   constant-fractional and buffer-read exponents within one ulp at half precision of an f64
   reference, and pins the result bitwise to the same backend's f32 `powf` narrowed on the host
   on cc, CUDA/HIP and Metal. Metal's kernel calls the half `pow` overload on half operands with no
-  widening in the source; the overload itself behaves as f32 `pow` rounded once. Measured on M4 Max
-  (Metal fast math functions): 573 random fractional and run-time exponents over bases in
-  [0.01, 100], all bitwise equal to the f32 kernel narrowed, at most one half ulp from the
-  correctly rounded value, like the f32 path.
+  widening in the source. On M4 Max with `MathMode.Safe` and fast math functions, the sampled half
+  results matched f32 `pow` narrowed once: 573 random fractional and run-time exponents over bases
+  in [0.01, 100], all bitwise equal to the f32 kernel narrowed, at most one half ulp from the
+  correctly rounded value, like the f32 path. That is an observation of results, not of the
+  overload's internals, and says nothing about older Apple GPUs; the test enforces the relationship
+  on every backend, so a toolchain or GPU where it fails goes red there.

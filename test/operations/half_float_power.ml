@@ -1,11 +1,12 @@
 (* Fractional and dynamic half powers (gh-ocannl-1198). Neither vendor header has a half pow, and
    both vendors' [hexp2] is unary, so CUDA and HIP widen both operands, take f32 [powf], and round
    back to half once, as cc's codegen does. Metal calls its own half [pow] overload on the half
-   operands, and that overload measured bitwise equal to the same kernel's f32 [pow] narrowed to
-   half (573 random fractional and run-time exponents, M4 Max, Metal fast math functions), so the
-   bitwise pin below holds on every backend. The domain is f32 [powf]'s: a negative base under a
-   fractional exponent is NaN. Known integer exponents take the integer-power helper instead
-   ([integer_power_domain]); here every exponent is either fractional or only known at run time.
+   operands; on M4 Max with Safe math mode and fast math functions, the sampled results (573 random
+   fractional and run-time exponents) matched the same kernel's f32 [pow] narrowed to half bitwise.
+   The bitwise pin below enforces that relationship on every backend. The domain is f32 [powf]'s: a
+   negative base under a fractional exponent is NaN. Known integer exponents take the integer-power
+   helper instead ([integer_power_domain]); here every exponent is either fractional or only known
+   at run time.
 
    Tolerance: one ulp at half precision, relative to an f64 reference over the half-rounded
    operands, i.e. [|got - want| <= 2^-10 * |want|]. That admits the f32 [powf] error (a few f32
@@ -92,8 +93,8 @@ let () =
               x e got.(i) want;
           ok);
       (* The same operands at f32, narrowed to half on the host: one rounding of the same [powf]
-         result. Every backend: by codegen on cc, CUDA and HIP, inside the half [pow] overload on
-         Metal. *)
+         result. Enforced on every backend: by codegen on cc, CUDA and HIP; on Metal, observed of
+         the half [pow] overload's results. *)
       let single = run ~prec:Ops.single ~name:"hpow_f32" ~first_id:19200 cases in
       p_alli "half powers are f32 powf rounded to half once" (Array.to_list got) ~f:(fun i v ->
           let want = f16 single.(i) in
