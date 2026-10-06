@@ -1012,7 +1012,9 @@ let describe s =
     [Sys.file_exists] cannot say that: it answers [false] for every failed stat, an [EACCES] on an
     entry listed in a readable but unsearchable directory included. *)
 let vanished path =
-  match Unix.lstat path with
+  (* [stat], not [lstat]: a directory reached through a link vanishes with its target, which is what
+     {!subdirectories} classified. *)
+  match Unix.stat path with
   | _ -> false
   | exception Unix.Unix_error (Unix.ENOENT, _, _) -> true
   | exception Unix.Unix_error _ -> false
