@@ -798,7 +798,7 @@ files.
   as the gap between that site's top four geometries, and the replicates crowned different ones
   (`mma 32x32x0 bgrid` vs `mma 16x32x0 bgrid-in`) — the "step search crowns weaker geometries
   than the per-site search" symptom. Exact mode, whose gaps are larger, crowned the per-site best
-  in both. `bench_gpt` tunes with `~rounds:0`, so no refinement ever ran there (gh-ocannl-1137).
+  in both. `bench_gpt` tunes with `~rounds:0`, so no beam round refines these crowns (next bullet).
   The composite playoff re-times each key's singles within `playoff_margin` (0.5%) of its best,
   at most `playoff_width` (2) per key, inside the faster timed composite, as coordinate descent
   over the keys; its windows count in `report.fiss_sketch_playoff_timed`, not in
@@ -807,6 +807,19 @@ files.
   moved 2.474 -> 2.427 ms (replicate means) with the spread narrowed 16x. Before reading a per-key
   crown as a ranking, compare the singles' gap with their backdrop's replicate spread; the
   `autotune_log` lines carry both.
+- **Beam rounds after the step search's composites bought nothing measured on gpt2_mini, at +150% search**
+  (gh-ocannl-1137; a capped correctness-grade probe on a shared rog box, CUDA, approximate profile).
+  A round is adopted only when its best beats the incumbent by `min_progress` (1%); a sub-1% best is
+  timed and dropped, and the winner stays the beam head. Arm A finished round 1 (635 candidates,
+  +1002 s on 674 s of seeds) 0.50% ahead and shipped its rounds:0 winner. Arm B was cut off 97
+  candidates into a 1325-candidate round (~1.9 s each, ~+480% projected on 528 s of seeds), 0.31%
+  ahead so far; whether its round clears 1% is unmeasured. A round expands every beam entry by every
+  menu move of every segment unit, and after the composite playoff the beam is the composite plus its
+  near-copies (1-4 of 122-150 segments apart), so the round pays ~4x one entry's moves for little
+  diversity. Hence every benchmark runner keeps `~rounds:0` and records it as each arm's
+  `rounds_run`/`beam_width` on the result line; the `autotune_log` line
+  `round N: K candidate(s) from a beam of W: ...` gives each entry's `units differing` from the
+  incumbent.
 ## Action enumeration and budget sharing
 - The action menu's loop enumeration is provenance-aimed **by action category**, not by loop
   (gh-ocannl-687). `Local_scope` has two producers — virtualization's inline at a read site, and the

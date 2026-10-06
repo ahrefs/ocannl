@@ -159,6 +159,7 @@ type report = {
   baseline_declined : bool;
   declines : decline_summary list;
   rounds_run : int;
+  beam_width : int;
   sketch_candidates : int;
   epilogue_sketch_candidates : int;
   fiss_sketch_candidates : int;
@@ -237,6 +238,7 @@ let no_search_report ~timing =
     baseline_declined = false;
     declines = [];
     rounds_run = 0;
+    beam_width = 0;
     sketch_candidates = 0;
     epilogue_sketch_candidates = 0;
     fiss_sketch_candidates = 0;
@@ -2009,6 +2011,30 @@ let dshort d =
 
 let bs_label = function None -> "cfg" | Some b -> Int.to_string b
 
+(* How many units of [b] carry a different saved schedule than the same unit of [a] (a split-reduce
+   prelude counting as one); [None] when the two forms do not segment alike -- different forms, or a
+   segment whose kind, length or pre-schedule digest differs, the identity a replay checks -- so no
+   unit-by-unit comparison exists. *)
+let units_differing (a : compiled) (b : compiled) =
+  let differ x y = if Poly.equal x y then 0 else 1 in
+  let segments xs ys =
+    let same_cut (x : SC.saved_segment) (y : SC.saved_segment) =
+      Poly.equal x.seg_kind y.seg_kind && x.seg_units = y.seg_units
+      && String.equal x.seg_digest y.seg_digest
+    in
+    if List.length xs = List.length ys && List.for_all2_exn xs ys ~f:same_cut then
+      Some
+        (List.fold2_exn xs ys ~init:0 ~f:(fun n (x : SC.saved_segment) (y : SC.saved_segment) ->
+             n + differ x.seg_saved y.seg_saved))
+    else None
+  in
+  match (a.form, b.form) with
+  | Whole_saved x, Whole_saved y -> Some (differ x y)
+  | Fiss_saved xs, Fiss_saved ys -> segments xs ys
+  | Split_saved (px, xs), Split_saved (py, ys) ->
+      Option.map (segments xs ys) ~f:(fun n -> n + differ px py)
+  | _ -> None
+
 (* Calibration output (gh-ocannl-491 task 4) and the bound-agreement invariant (gh-ocannl-514 phase
    0): the model score next to the measured time — every tuning run is free calibration data for the
    envelope constants, and every timed candidate is a test of the roofline bound's soundness.
@@ -3737,7 +3763,7 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
      a benchmark artifact, otherwise has to guess it from ambient configuration that a [?timing]
      override may not match. Which is why the objective is resolved above this line and not below
      it. *)
-  let base_report = no_search_report ~timing in
+  let base_report = { (no_search_report ~timing) with beam_width } in
   let max_split_reduce_sites =
     max 0
       (Option.value max_split_reduce_sites
@@ -4167,6 +4193,7 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                     baseline_declined = Option.is_some baseline_decline;
                     declines = decline_summaries declines;
                     rounds_run = 0;
+                    beam_width;
                     sketch_candidates = 0;
                     epilogue_sketch_candidates = 0;
                     fiss_sketch_candidates = 0;
@@ -4649,6 +4676,7 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
             baseline_declined = Option.is_some baseline_decline;
             declines = summaries;
             rounds_run = !rounds_run;
+            beam_width;
             sketch_candidates = !n_sketch_candidates;
             epilogue_sketch_candidates = !n_epilogue_sketch_candidates;
             fiss_sketch_candidates = !n_fiss_sketch_candidates;
@@ -5416,8 +5444,8 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
           let continue_ = ref true in
           while !continue_ && !rounds_run < rounds do
             Int.incr rounds_run;
-            let cands =
-              List.concat_map !beam ~f:(fun (elem, _) ->
+            let per_entry =
+              List.map !beam ~f:(fun (elem, ms) ->
                   (* On a GPU backend the beam can hold an incumbent that was never dispatched — the
                      serial baseline, whose [infinity] rank keeps it in the pool when fewer than
                      [beam_width] candidates were timed. Expanding it is worthwhile only through the
@@ -5447,11 +5475,31 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                              (optop_family op));
                       false)
                   in
-                  List.concat_map elem.units ~f:(fun u ->
-                      List.filter_map
-                        (menu ~admits ~is_cpu ~is_gpu ~limits ~registry:u.u_registry u.u_opt)
-                        ~f:(fun op -> extend_spec elem u op)))
+                  ( elem,
+                    ms,
+                    List.concat_map elem.units ~f:(fun u ->
+                        List.filter_map
+                          (menu ~admits ~is_cpu ~is_gpu ~limits ~registry:u.u_registry u.u_opt)
+                          ~f:(fun op -> extend_spec elem u op)) ))
             in
+            let cands = List.concat_map per_entry ~f:(fun (_, _, c) -> c) in
+            (* gh-ocannl-1137: what the round expands. The beam is the [beam_width] fastest timed
+               candidates, and a near-tie sweep (the gh-ocannl-1166 composite playoff, a block-size
+               ladder) can fill it with variants of one schedule; [units differing] counts each
+               entry's units whose saved schedule differs from the incumbent's, so a beam of
+               near-copies reads as a column of small numbers. *)
+            (match per_entry with
+            | [] -> ()
+            | (head, _, _) :: _ ->
+                logf "round %d: %d candidate(s) from a beam of %d: %s" !rounds_run
+                  (List.length cands) (List.length per_entry)
+                  (String.concat ~sep:"; "
+                     (List.map per_entry ~f:(fun (elem, ms, c) ->
+                          Printf.sprintf "%s %.4f ms, %s units differing, %d move(s)"
+                            (dshort elem.digest_after) ms
+                            (Option.value_map (units_differing head elem) ~default:"resegmented"
+                               ~f:Int.to_string)
+                            (List.length c)))));
             (* gh-ocannl-550: bounded like the seed pass, but in a SECOND accumulator, because a
                round's decision compares its own best against the incumbent and, if it wins,
                replaces the beam wholesale — so the previous beam has to stay alive until that
@@ -5583,6 +5631,7 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
               baseline_declined = Option.is_some baseline_decline;
               declines = decline_summaries declines;
               rounds_run = !rounds_run;
+              beam_width;
               sketch_candidates = List.length sketch_params;
               epilogue_sketch_candidates = List.count sketch_params ~f:(fun p -> p.sk_epilogue);
               fiss_sketch_candidates = List.length fiss_sketch_specs;

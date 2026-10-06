@@ -39,6 +39,9 @@ let () =
    to infer the case from [searches] and [replays] both being zero, which is exactly the derivation
    the outcome type replaced.
 
+   Arm D ran one beam round and the others none, so [rounds_run] beside [beam_width] reads as the
+   search's own record of how far it went, apart from the configuration (gh-ocannl-1137).
+
    Arms B, D and E carry the three [tensorization] labels (gh-ocannl-626), and A and C carry the
    [null] that says no census was consulted. B is the case the field exists for: [tensorized: true]
    — the crowned schedule carries a [Tensorize] — with every one of its [Tile_mma] statements
@@ -56,37 +59,38 @@ let tune =
           ~cache_hit:false
             (* An arm that timed nothing still names an objective: [tune] resolves it before it can
                construct any report, so every arm on the line carries one. *)
-          ~timing:"queued" ~timings_contended:0 ~timings_unbatched:0 ~best_ms:Float.infinity
-          ~best_label:"tile 32x32" ~tensorized:false ~tensorization:None ~mma_statements:0
-          ~mma_scalar_fallbacks:0 ~mma_seeded:4 ~mma_timed:0 ~mma_best_ms:Float.infinity
+          ~timing:"queued" ~rounds_run:0 ~beam_width:4 ~timings_contended:0 ~timings_unbatched:0
+          ~best_ms:Float.infinity ~best_label:"tile 32x32" ~tensorized:false ~tensorization:None
+          ~mma_statements:0 ~mma_scalar_fallbacks:0 ~mma_seeded:4 ~mma_timed:0
+          ~mma_best_ms:Float.infinity
           ~terminal_failure:
             (Some
                (Printf.sprintf "compile failed: \"kernel\" \\ path%c%c ESC" (Char.of_int_exn 0)
                   (Char.of_int_exn 27)));
         Bench_json.tune_arm ~name:"B" ~state:"cache-replay" ~searched:false ~cache_hit:true
-          ~timing:"queued" ~timings_contended:0 ~timings_unbatched:0 ~best_ms:0.75
-          ~best_label:"grid 128" ~tensorized:true ~tensorization:(Some "scalar-fallback")
-          ~mma_statements:2 ~mma_scalar_fallbacks:2 ~mma_seeded:6 ~mma_timed:3 ~mma_best_ms:0.8
-          ~terminal_failure:None;
+          ~timing:"queued" ~rounds_run:0 ~beam_width:4 ~timings_contended:0 ~timings_unbatched:0
+          ~best_ms:0.75 ~best_label:"grid 128" ~tensorized:true
+          ~tensorization:(Some "scalar-fallback") ~mma_statements:2 ~mma_scalar_fallbacks:2
+          ~mma_seeded:6 ~mma_timed:3 ~mma_best_ms:0.8 ~terminal_failure:None;
         (* Neither searched nor replayed: every counter zero, no winner to name. *)
         Bench_json.tune_arm ~name:"C" ~state:"search-disabled" ~searched:false ~cache_hit:false
-          ~timing:"queued" ~timings_contended:0 ~timings_unbatched:0 ~best_ms:Float.infinity
-          ~best_label:"" ~tensorized:false ~tensorization:None ~mma_statements:0
-          ~mma_scalar_fallbacks:0 ~mma_seeded:0 ~mma_timed:0 ~mma_best_ms:Float.infinity
-          ~terminal_failure:None;
+          ~timing:"queued" ~rounds_run:0 ~beam_width:2 ~timings_contended:0 ~timings_unbatched:0
+          ~best_ms:Float.infinity ~best_label:"" ~tensorized:false ~tensorization:None
+          ~mma_statements:0 ~mma_scalar_fallbacks:0 ~mma_seeded:0 ~mma_timed:0
+          ~mma_best_ms:Float.infinity ~terminal_failure:None;
         (* An honestly tensorized winner, and an ordinary one that never asked. *)
         Bench_json.tune_arm ~name:"D" ~state:"searched" ~searched:true ~cache_hit:false
-          ~timing:"queued" ~timings_contended:2 ~timings_unbatched:1 ~best_ms:0.5
-          ~best_label:"mma-gpu 16x16x16" ~tensorized:true ~tensorization:(Some "tensorized")
-          ~mma_statements:4 ~mma_scalar_fallbacks:0 ~mma_seeded:6 ~mma_timed:5 ~mma_best_ms:0.5
-          ~terminal_failure:None;
+          ~timing:"queued" ~rounds_run:1 ~beam_width:4 ~timings_contended:2 ~timings_unbatched:1
+          ~best_ms:0.5 ~best_label:"mma-gpu 16x16x16" ~tensorized:true
+          ~tensorization:(Some "tensorized") ~mma_statements:4 ~mma_scalar_fallbacks:0 ~mma_seeded:6
+          ~mma_timed:5 ~mma_best_ms:0.5 ~terminal_failure:None;
         Bench_json.tune_arm ~name:"E" ~state:"searched" ~searched:true
           ~cache_hit:false
             (* The other objective, so the golden shows both spellings on one line. *)
-          ~timing:"isolated" ~timings_contended:0 ~timings_unbatched:0 ~best_ms:1.25
-          ~best_label:"grid 64" ~tensorized:false ~tensorization:(Some "not-requested")
-          ~mma_statements:0 ~mma_scalar_fallbacks:0 ~mma_seeded:0 ~mma_timed:0
-          ~mma_best_ms:Float.infinity ~terminal_failure:None;
+          ~timing:"isolated" ~rounds_run:0 ~beam_width:2 ~timings_contended:0 ~timings_unbatched:0
+          ~best_ms:1.25 ~best_label:"grid 64" ~tensorized:false
+          ~tensorization:(Some "not-requested") ~mma_statements:0 ~mma_scalar_fallbacks:0
+          ~mma_seeded:0 ~mma_timed:0 ~mma_best_ms:Float.infinity ~terminal_failure:None;
       ]
 
 (* gh-ocannl-1006: the dominant kernel's %-of-peak, one fabricated kernel per verdict. The constants
