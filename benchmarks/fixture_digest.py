@@ -804,6 +804,9 @@ def _main(argv=None):
     ap.add_argument("--digests", type=Path, default=None, help=f"path to {DIGEST_FILE}")
     ap.add_argument("--fixture-dir", type=Path, default=here / "fixtures")
     args = ap.parse_args(argv)
+    if args.expect_origin is not None and not args.check:
+        # Before every mode's branch: a mode that returned first would accept the flag and exit 0.
+        ap.error("--expect-origin is a condition on --check's verdict; no other mode reads it")
     if args.list_declared_measurement_boxes:
         if args.fixtures:
             ap.error("--list-declared-measurement-boxes reads only --digests; give no fixtures")
@@ -817,8 +820,6 @@ def _main(argv=None):
     if args.adopt_legacy is not None:
         if args.check:
             ap.error("--adopt-legacy rewrites the file, so it belongs with --record, not --check")
-    if args.expect_origin is not None and not args.check:
-        ap.error("--expect-origin is a condition on --check's verdict; it records nothing")
     if args.check and args.origin is not None:
         # Silently accepting it would let automation believe `--check --origin "$BOX"` verified
         # that box's bytes, when the verdict is against every recorded origin.

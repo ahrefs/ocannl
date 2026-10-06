@@ -2352,10 +2352,13 @@ class FixtureDigestTest(unittest.TestCase):
 
         self.assertEqual(refused.exception.code, 2)
         self.assertIn("m4-max", err.getvalue(), "it names the boxes the file does declare")
-        with contextlib.redirect_stderr(io.StringIO()):
-            with self.assertRaises(SystemExit) as refused:
-                fixture_digest._main(["--record", str(fx), "--expect-origin", "m4-max"])
-        self.assertEqual(refused.exception.code, 2, "--expect-origin is a --check condition")
+        for mode in (["--record", str(fx)], ["--list-declared-measurement-boxes"]):
+            with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
+                with self.assertRaises(SystemExit, msg=mode[0]) as refused:
+                    fixture_digest._main(
+                        [*mode, "--digests", str(digests), "--expect-origin", "m4-max"]
+                    )
+            self.assertEqual(refused.exception.code, 2, f"--expect-origin with {mode[0]}")
 
     def test_a_host_that_cannot_name_itself_is_refused_not_given_a_placeholder(self):
         # A literal `unknown-host` is not an origin, it is every nameless box sharing one name:
