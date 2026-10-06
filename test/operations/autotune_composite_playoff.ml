@@ -128,25 +128,37 @@ let search ?(trace = true) ?(log = false) ?progress ~tag ~single ~composite () =
       { report; composite_ms = List.rev !composites; phases = List.rev !phases }
   | None -> failwith (tag ^ ": the search delivered no report")
 
-(* Runs [f] with stderr routed into a file and returns its result with the lines it wrote, echoed
-   back to stderr afterwards so nothing the run wrote is hidden. *)
+(* Runs [f] with stderr routed into a file and returns its result with the lines it wrote. The
+   captured text is echoed back to stderr once stderr is restored, whether [f] returned or raised
+   (an exception is re-raised with its original backtrace after the echo), so nothing the run wrote
+   is hidden; the file is removed on every path. *)
 let with_stderr_captured f =
   let file = Stdlib.Filename.temp_file "autotune_composite_playoff" ".stderr" in
-  Stdio.Out_channel.flush Stdio.stderr;
-  let saved = Unix.dup Unix.stderr in
-  let fd = Unix.openfile file [ Unix.O_WRONLY; Unix.O_TRUNC ] 0o600 in
-  Unix.dup2 fd Unix.stderr;
-  Unix.close fd;
-  let restore () =
-    Stdio.Out_channel.flush Stdio.stderr;
-    Unix.dup2 saved Unix.stderr;
-    Unix.close saved
-  in
-  let result = Exn.protect ~f ~finally:restore in
-  let text = Stdio.In_channel.read_all file in
-  Stdlib.Sys.remove file;
-  Stdio.eprintf "%s%!" text;
-  (result, String.split_lines text)
+  Exn.protect
+    ~finally:(fun () -> try Stdlib.Sys.remove file with Sys_error _ -> ())
+    ~f:(fun () ->
+      Stdio.Out_channel.flush Stdio.stderr;
+      let saved = Unix.dup Unix.stderr in
+      let outcome =
+        Exn.protect
+          ~finally:(fun () -> Unix.close saved)
+          ~f:(fun () ->
+            let fd = Unix.openfile file [ Unix.O_WRONLY; Unix.O_TRUNC ] 0o600 in
+            Exn.protect ~finally:(fun () -> Unix.close fd) ~f:(fun () -> Unix.dup2 fd Unix.stderr);
+            let outcome =
+              match f () with
+              | result -> Ok result
+              | exception exn -> Error (exn, Stdlib.Printexc.get_raw_backtrace ())
+            in
+            Stdio.Out_channel.flush Stdio.stderr;
+            Unix.dup2 saved Unix.stderr;
+            outcome)
+      in
+      let text = Stdio.In_channel.read_all file in
+      Stdio.eprintf "%s%!" text;
+      match outcome with
+      | Ok result -> (result, String.split_lines text)
+      | Error (exn, backtrace) -> Stdlib.Printexc.raise_with_backtrace exn backtrace)
 
 (* The [autotune-progress:] lines among [lines] that carry every one of [fields] ([key=value] words,
    values unquoted as the stage and event names print). *)
