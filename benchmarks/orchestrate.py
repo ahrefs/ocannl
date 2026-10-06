@@ -865,8 +865,12 @@ def checkpoint_note(checkpoint):
     )
 
 
-def failure_record(label, note, ambient, checkpoint=None, provenance=None):
+def failure_record(label, note, ambient, checkpoint=None, provenance=None, regime=None):
     """One line of partial-failures.jsonl: a failed cell, and what it left behind.
+
+    `regime` is the numerics regime the sweep dispatched the cell in (gh-ocannl-719), null when
+    the caller did not state one; the checkpoint names the profile its runner actually resolved,
+    so a reader of this file has both sides of `saved_loss_parity` without the sweep's memory.
 
     A checkpoint (gh-ocannl-1209) names its fixture by path and size and its runner by path, both
     of which a later sweep can reuse for different bytes. So beside it goes `provenance`: the
@@ -875,7 +879,7 @@ def failure_record(label, note, ambient, checkpoint=None, provenance=None):
     it ran -- the one identity a `--skip-build` sweep or a dirty tree cannot blur. Under a key of
     its own, leaving the checkpoint as the runner wrote it.
     """
-    record = {"cell": label, "why": note, "ambient_ocannl_env": ambient}
+    record = {"cell": label, "why": note, "regime": regime, "ambient_ocannl_env": ambient}
     if checkpoint is not None:
         # The losses a killed cell completed, kept beside the failure and never among the results.
         record["checkpoint"] = checkpoint
@@ -1412,6 +1416,12 @@ def saved_loss_parity(checkpoint, regime, results):
     wrong one -- so the report's runner-failure list shows the drift beside the envelope the cell
     WOULD have been gated at. It never becomes a verdict: the cell has no result line and no timing,
     the sweep fails on it whatever its losses say, and no word the parity column uses is reused.
+
+    The envelope's regime is read off the checkpoint, which names the profile its runner resolved:
+    the regime travels with the losses, so neither a call site that forgets to pass `regime` nor
+    an offline reader of partial-failures.jsonl falls back to the wrong envelope. `regime` is what
+    the sweep dispatched, None when unstated: the envelope for a checkpoint predating the field,
+    and named beside the drift when the runner resolved a different regime.
     """
     if checkpoint is None:
         return "no checkpoint"
@@ -1419,8 +1429,12 @@ def saved_loss_parity(checkpoint, regime, results):
     kept = f"{len(losses)} of {checkpoint.get('parity_steps')} saved losses"
     if not losses:
         return f"{kept}: nothing to compare"
+    ran = runner_regime(checkpoint)
+    gated = ran or regime or "exact"
     ref = reference_row([r for r in results if r["workload"] == checkpoint.get("workload")])
     notes = []
+    if ran is not None and regime is not None and ran != regime:
+        notes.append(f"the runner resolved the {ran} regime, the sweep dispatched {regime}")
     if ref is None or diverged_at(ref["losses"]) is not None:
         # Only the drift needs the reference; what the trajectory says about itself still stands.
         notes.append(f"no usable reference row for `{checkpoint.get('workload')}`")
@@ -1429,10 +1443,11 @@ def saved_loss_parity(checkpoint, regime, results):
         if drift is None:
             notes.append("no step shared with the reference")
         else:
-            tol = parity_tol(checkpoint.get("precision", "f32"), regime)
+            tol = parity_tol(checkpoint.get("precision", "f32"), gated)
             side = "inside" if drift < tol else "outside"
             notes.append(
-                f"drift {drift:.1e} vs `{'/'.join(REFERENCE)}`, {side} the envelope {tol:g}"
+                f"drift {drift:.1e} vs `{'/'.join(REFERENCE)}`, "
+                f"{side} the envelope {tol:g}{regime_label(gated)}"
             )
     cut = diverged_at(losses)
     if cut is not None:
@@ -1816,9 +1831,10 @@ def dominant_kernel_ceilings(rows):
 
 
 # One cell that produced no result: its label, what went wrong, the checkpoint it left (if any) and
-# the numerics regime it was dispatched in -- the last two for `saved_loss_parity`.
+# the numerics regime it was dispatched in (None when unstated) -- the last two for
+# `saved_loss_parity`, which takes the envelope's regime from the checkpoint when it names one.
 Failure = collections.namedtuple(
-    "Failure", "label note checkpoint regime", defaults=(None, "exact")
+    "Failure", "label note checkpoint regime", defaults=(None, None)
 )
 
 
@@ -2531,7 +2547,7 @@ def main():
     # rather than leaving it to how the operator ran the sweep.
     stamp = {}
 
-    def record_failure(label, note, checkpoint=None, regime="exact"):
+    def record_failure(label, note, checkpoint=None, regime=None):
         """The one path a failed cell takes, wherever in the sweep it failed.
 
         Both the in-memory list the report is built from and the checkpoint an interrupted run
@@ -2547,11 +2563,11 @@ def main():
             # then the only artifact there is. It says what the SWEEP inherited, not what a runner
             # read: a failed cell produced no result line to name its framework.
             record = failure_record(
-                label, note, ambient, checkpoint, provenance=dict(stamp, **source)
+                label, note, ambient, checkpoint, provenance=dict(stamp, **source), regime=regime
             )
             f.write(json.dumps(json_safe(record), allow_nan=False) + "\n")
 
-    def run_kept(label, cmd, regime="exact", **kwargs):
+    def run_kept(label, cmd, regime=None, **kwargs):
         """`run_cell` under the sweep's cap, plus the last checkpoint a failed cell left. An
         interrupted cell's checkpoint is recorded before the cancellation propagates: the sweep
         writes nothing else for it."""
@@ -2568,7 +2584,7 @@ def main():
 
     def collect(label, cmd, override=None, **kwargs):
         t0 = time.monotonic()
-        regime = (override or {}).get("regime", "exact")
+        regime = (override or {}).get("regime")
         r, note, checkpoint = run_kept(label, cmd, regime, **kwargs)
         if r:
             r.update(stamp)

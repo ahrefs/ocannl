@@ -230,7 +230,11 @@ files.
   The report's "Runner failures" table shows those saved losses' drift from the reference beside
   the envelope the cell would have been gated at (`saved_loss_parity`) -- a DIAGNOSTIC of whether
   the work before the failure was on course, worded outside the parity column's vocabulary; the
-  cell still fails the sweep.
+  cell still fails the sweep. The envelope's regime comes from the checkpoint's own `profile`
+  (the one its process resolved, as on the result line), not from what the sweep threads down
+  from the dispatch site: a forgotten argument there used to fall back to the exact envelope. The
+  `partial-failures.jsonl` record carries the dispatched `regime` beside it, and the diagnostic
+  names a disagreement between the two.
   Do not give the line a `{` prefix or move it to stdout: drivers take a cell's result from the
   last `{`-line of its combined output, and the checkpoint must never be one.
 
