@@ -600,7 +600,8 @@
 # It also emits one `census` line per candidate attempt (gh-550): the live pools, contexts and
 # loaded code modules of `Ir.Alloc_census` next to the backend's own device-memory figure, so a
 # search's memory growth can be attributed to an allocation class rather than sampled from outside
-# the process. Read once per process; `Autotune.tune ~log` overrides it for one call.
+# the process. Read once per process; `~log` on `Autotune.tune` or `Train.tune_placements`
+# overrides it for that call.
 #autotune_log=false
 
 # gh-ocannl-1061: a tuning search's cost record, for a search that may be killed before it
@@ -612,7 +613,8 @@
 # windows, and the best time so far -- so a search killed inside a candidate names it. Unlike
 # autotune_log it adds no work to the search. The line format is documented at
 # `Autotune.progressf` (arrayjit/lib/autotune.mli). benchmarks/orchestrate.py turns it on for its
-# tuned cells.
+# tuned cells. Read once per process; `~progress` on `Autotune.tune` or `Train.tune_placements`
+# overrides it for that call.
 #autotune_progress=false
 
 # gh-555: budget for the greedy per-node inlining refinement of `Train.tune_placements` — after

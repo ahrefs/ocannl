@@ -27,7 +27,12 @@
 
    Every search passes [tune]'s [?log] explicitly, so none depends on the ambient [autotune_log].
    [ties] is searched once more with [~log:true], which adds the untuned-default in-process control
-   after the crown: exactly one more timing decision, the last, attributed to no phase.
+   after the crown: exactly one more timing decision, the last, attributed to no phase. That search
+   also passes [~progress:true] with stderr captured, so both per-call stream overrides are claimed
+   on what they write -- the [autotune:] diagnostics and the [autotune-progress:] record, including
+   the control's own [untuned_control] stage line -- and on ending with the call. A last leg runs
+   [Train.tune_placements] with both overrides on one matmul: its own arm lines and both nested arm
+   searches must see them.
 
    Pinned to cc: the seeding and the scripted ranking are backend-independent, and cc is always
    available. *)
@@ -74,7 +79,7 @@ type observed = {
 
 (* One search under a scripted ranking: [single n] is the n-th single's time (0-based, attempt
    order), [composite n] the n-th composite's. *)
-let search ?(trace = true) ?(log = false) ~tag ~single ~composite () =
+let search ?(trace = true) ?(log = false) ?progress ~tag ~single ~composite () =
   let report = ref None and singles = ref 0 and composites = ref [] and phases = ref [] in
   let old_measured = !Autotune.on_candidate_measured
   and old_decision = !Autotune.on_batch_decision in
@@ -97,7 +102,7 @@ let search ?(trace = true) ?(log = false) ~tag ~single ~composite () =
            else 1000.);
       let ctx, _routine =
         Autotune.with_uncontended_test_windows (fun () ->
-            Autotune.tune ~beam_width:2 ~rounds:0 ~repeats:1 ~cache_dir:"" ~log
+            Autotune.tune ~beam_width:2 ~rounds:0 ~repeats:1 ~cache_dir:"" ~log ?progress
               ~report:(fun r -> report := Some r)
               (Context.cpu ()) (chain ()) Ir.Indexing.Empty)
       in
@@ -122,6 +127,38 @@ let search ?(trace = true) ?(log = false) ~tag ~single ~composite () =
           Stdio.eprintf "  %s window (not part of the golden): %s %.2f ms\n%!" tag label ms);
       { report; composite_ms = List.rev !composites; phases = List.rev !phases }
   | None -> failwith (tag ^ ": the search delivered no report")
+
+(* Runs [f] with stderr routed into a file and returns its result with the lines it wrote, echoed
+   back to stderr afterwards so nothing the run wrote is hidden. *)
+let with_stderr_captured f =
+  let file = Stdlib.Filename.temp_file "autotune_composite_playoff" ".stderr" in
+  Stdio.Out_channel.flush Stdio.stderr;
+  let saved = Unix.dup Unix.stderr in
+  let fd = Unix.openfile file [ Unix.O_WRONLY; Unix.O_TRUNC ] 0o600 in
+  Unix.dup2 fd Unix.stderr;
+  Unix.close fd;
+  let restore () =
+    Stdio.Out_channel.flush Stdio.stderr;
+    Unix.dup2 saved Unix.stderr;
+    Unix.close saved
+  in
+  let result = Exn.protect ~f ~finally:restore in
+  let text = Stdio.In_channel.read_all file in
+  Stdlib.Sys.remove file;
+  Stdio.eprintf "%s%!" text;
+  (result, String.split_lines text)
+
+(* The [autotune-progress:] lines among [lines] that carry every one of [fields] ([key=value] words,
+   values unquoted as the stage and event names print). *)
+let progress_lines lines fields =
+  List.count lines ~f:(fun line ->
+      match String.chop_prefix line ~prefix:"autotune-progress: " with
+      | None -> false
+      | Some rest ->
+          let words = String.split rest ~on:' ' in
+          List.for_all fields ~f:(fun field -> List.mem words field ~equal:String.equal))
+
+let streams_off () = (not (Autotune.log_enabled ())) && not (Autotune.progress_enabled ())
 
 (* A composite's per-segment entries: its label lists one per keyed segment, in key order. *)
 let entries label =
@@ -245,7 +282,12 @@ let () =
    [ties] did, in the same phases, then the control once more with no phase. Its window is real (the
    measurement seam scripts candidates only), so it moves no crown. *)
 let () =
-  let logged = search ~log:true ~tag:"logged" ~single:(fun _ -> 100.) ~composite:faster () in
+  (* Without this, a line below could come from the ambient config rather than the override. *)
+  p "streams: the ambient config leaves both diagnostic streams off" (streams_off ());
+  let logged, lines =
+    with_stderr_captured (fun () ->
+        search ~log:true ~progress:true ~tag:"logged" ~single:(fun _ -> 100.) ~composite:faster ())
+  in
   Stdio.eprintf "logged trace (not part of the golden): %s\n%!"
     (String.concat ~sep:" " (List.map logged.phases ~f:(Option.value ~default:"-")));
   p "log: the logged search adds exactly one decision, last and phase-less (the untuned control)"
@@ -253,4 +295,44 @@ let () =
   p "log: the same windows, crown and time with the control on and off"
     (List.equal Poly.equal logged.composite_ms ties.composite_ms
     && String.equal logged.report.Autotune.best_label ties.report.Autotune.best_label
-    && Float.equal logged.report.Autotune.best_ms ties.report.Autotune.best_ms)
+    && Float.equal logged.report.Autotune.best_ms ties.report.Autotune.best_ms);
+  p "log: the scoped search wrote autotune: diagnostics"
+    (List.exists lines ~f:(String.is_prefix ~prefix:"autotune: "));
+  p "progress: the scoped search wrote one search_start and one search_done"
+    (progress_lines lines [ "event=search_start" ] = 1
+    && progress_lines lines [ "event=search_done" ] = 1);
+  p "progress: the untuned control, under both overrides, wrote its stage line once"
+    (progress_lines lines [ "event=stage"; "stage=untuned_control" ] = 1);
+  p "streams: both overrides end with the search" (streams_off ())
+
+(* [Train.tune_placements]' [?log] and [?progress] cover the whole call: its own arm lines (no
+   longer a config read of their own) and, by inheritance, both arms' searches. Every window is
+   scripted alike: nothing here is about the ranking. *)
+let () =
+  let pa = matrix ~label:"pa" ~modulus:11 ~offset:0. ~stride:0.125 in
+  let pb = matrix ~label:"pb" ~modulus:7 ~offset:(-3.) ~stride:1. in
+  let%op pc = pa * pb in
+  let comp = Train.forward pc in
+  let old_measured = !Autotune.on_candidate_measured in
+  let (), lines =
+    with_stderr_captured (fun () ->
+        Exn.protect
+          ~finally:(fun () -> Autotune.on_candidate_measured := old_measured)
+          ~f:(fun () ->
+            (Autotune.on_candidate_measured := fun ~label:_ ~digest:_ _ms -> 1.);
+            let ctx, _routine =
+              Autotune.with_uncontended_test_windows (fun () ->
+                  Train.tune_placements ~beam_width:2 ~rounds:0 ~repeats:1 ~cache_dir:"" ~log:true
+                    ~progress:true (Context.cpu ()) pc comp Ir.Indexing.Empty)
+            in
+            Context.release ctx))
+  in
+  let arm_line arm =
+    List.exists lines ~f:(String.is_prefix ~prefix:("tune_placements: arm " ^ arm ^ " "))
+  in
+  p "tune_placements: ~log reached its own arm lines, for both arms" (arm_line "A" && arm_line "B");
+  p "tune_placements: ~progress framed both arms" (progress_lines lines [ "event=arm_start" ] = 2);
+  p "tune_placements: both arm searches inherited both overrides (an untuned-control stage each)"
+    (progress_lines lines [ "event=search_done" ] = 2
+    && progress_lines lines [ "event=stage"; "stage=untuned_control" ] = 2);
+  p "streams: both overrides end with the tune_placements call" (streams_off ())

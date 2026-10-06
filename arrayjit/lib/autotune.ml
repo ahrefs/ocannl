@@ -78,46 +78,55 @@ type timing_sample = { per_launch_ms : float; contention_ms : float }
    should batch. *)
 type timing_result = { ms : float; contended : bool; unbatched : bool; samples : int }
 
-(* Per-candidate search diagnostics on stderr, gated by config [autotune_log] -- or, for the
-   duration of one {!tune} call, by its [?log] argument. Kept above the timing policy because a
-   cap-bound queued batch reports the target wall it could not reach. *)
-let log_setting =
-  lazy
-    (match
-       String.lowercase
-         (String.strip (Utils.get_global_arg ~arg_name:"autotune_log" ~default:"false"))
-     with
-    | "true" | "1" -> true
-    | _ -> false)
+(* A diagnostic stream's switch: a config flag read once per process, which one {!tune} or
+   [Train.tune_placements] call can override for its own duration through its argument. The override
+   is domain-local, like the phase a timing decision carries (gh-ocannl-1199): a per-call argument
+   must not switch the stream of a search running concurrently in another domain. A call that passes
+   nothing inherits the enclosing call's override, so a [tune_placements] argument reaches the
+   searches it runs. *)
+type stream_switch = { setting : bool Lazy.t; override : bool option Stdlib.Domain.DLS.key }
 
-(* The [?log] of the {!tune} call running in this domain, if it passed one. Domain-local, like the
-   phase a timing decision carries (gh-ocannl-1199): a per-call argument must not switch the
-   diagnostics of a search running concurrently in another domain. *)
-let log_override : bool option Stdlib.Domain.DLS.key = Stdlib.Domain.DLS.new_key (fun () -> None)
+let stream_switch setting = { setting; override = Stdlib.Domain.DLS.new_key (fun () -> None) }
 
-let log_enabled () =
-  match Stdlib.Domain.DLS.get log_override with Some on -> on | None -> Lazy.force log_setting
+let stream_enabled { setting; override } =
+  match Stdlib.Domain.DLS.get override with Some on -> on | None -> Lazy.force setting
 
 (* Restores the enclosing setting on return or exception, so nested calls compose. *)
-let with_log log f =
-  match log with
+let with_stream { override; _ } on f =
+  match on with
   | None -> f ()
   | Some _ ->
-      let previous = Stdlib.Domain.DLS.get log_override in
+      let previous = Stdlib.Domain.DLS.get override in
       Exn.protect
-        ~finally:(fun () -> Stdlib.Domain.DLS.set log_override previous)
+        ~finally:(fun () -> Stdlib.Domain.DLS.set override previous)
         ~f:(fun () ->
-          Stdlib.Domain.DLS.set log_override log;
+          Stdlib.Domain.DLS.set override on;
           f ())
+
+(* Per-candidate search diagnostics on stderr, gated by config [autotune_log] -- or, for the
+   duration of one call, by its [?log] argument. Kept above the timing policy because a cap-bound
+   queued batch reports the target wall it could not reach. *)
+let log_switch =
+  stream_switch
+    (lazy
+      (match
+         String.lowercase
+           (String.strip (Utils.get_global_arg ~arg_name:"autotune_log" ~default:"false"))
+       with
+      | "true" | "1" -> true
+      | _ -> false))
+
+let log_enabled () = stream_enabled log_switch
 
 let logf fmt =
   Printf.ksprintf (fun s -> if log_enabled () then Stdio.eprintf "autotune: %s\n%!" s) fmt
 
-(* gh-ocannl-1061: the search's cost record, gated by config [autotune_progress]. A search can run
-   for hours and be killed by a cap before it reports anything, and [autotune_log] is no substitute:
-   it pays for an extra untuned-default control compile, so it moves the cost it would be recording.
-   These lines cost a clock read per candidate, and each is flushed as it is written, so a kill
-   keeps everything up to it.
+(* gh-ocannl-1061: the search's cost record, gated by config [autotune_progress] -- or, for the
+   duration of one call, by its [?progress] argument. A search can run for hours and be killed by a
+   cap before it reports anything, and [autotune_log] is no substitute: it pays for an extra
+   untuned-default control compile, so it moves the cost it would be recording. These lines cost a
+   clock read per candidate, and each is flushed as it is written, so a kill keeps everything up to
+   it.
 
    The per-candidate line is written at EVERY attempt's start, not at a time-bounded rate: the
    candidate a cap kills the search inside is the one the record most needs to name, and without a
@@ -126,9 +135,13 @@ let logf fmt =
    rate is bounded by the attempts themselves -- each is a candidate compile, a timing window or a
    pruning decision -- and the phase, arm and flip lines by the search's own structure. The format
    is the interface's contract; see {!progressf}. *)
-let progress_enabled =
-  let on = lazy (Utils.get_global_flag ~default:false ~arg_name:"autotune_progress") in
-  fun () -> Lazy.force on
+let progress_switch =
+  stream_switch (lazy (Utils.get_global_flag ~default:false ~arg_name:"autotune_progress"))
+
+let progress_enabled () = stream_enabled progress_switch
+
+let with_streams ?log ?progress f =
+  with_stream log_switch log (fun () -> with_stream progress_switch progress f)
 
 (* Taken when this module is initialized, i.e. at program start: [wall_s] places a line within the
    process, which for a benchmark cell is within the cell's own wall clock. *)
@@ -3765,7 +3778,7 @@ let resolve_cache_dir ?cache_dir ~search () =
   (* A search-less [tune] replays only a cache someone asked for. *)
   if search || cache_dir_chosen then cache_dir else ""
 
-let tune_in_log_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes
+let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes
     ?cache_dir ?keep_fraction ?max_split_reduce_sites ?timing_ctx ?abandon ?report ctx comp bindings
     =
   (* gh-ocannl-559: with the search off, [tune] still replays an explicitly provided cache -- a
@@ -5826,11 +5839,13 @@ let tune_in_log_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_b
         report_or_release completed_report ~result;
         result
 
-(* [?log] scopes [autotune_log] to this call: every diagnostic the search emits, the untuned control
-   it gates, and the cache-hit and fallback lines read {!log_enabled} inside the scope. *)
+(* [?log] and [?progress] scope [autotune_log] and [autotune_progress] to this call: every
+   diagnostic the search emits, the untuned control it gates, the cache-hit and fallback lines, and
+   every progress line read {!log_enabled} and {!progress_enabled} inside the scope. *)
 let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?cache_dir
-    ?keep_fraction ?max_split_reduce_sites ?timing_ctx ?abandon ?log ?report ctx comp bindings =
-  with_log log (fun () ->
-      tune_in_log_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes
+    ?keep_fraction ?max_split_reduce_sites ?timing_ctx ?abandon ?log ?progress ?report ctx comp
+    bindings =
+  with_streams ?log ?progress (fun () ->
+      tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes
         ?cache_dir ?keep_fraction ?max_split_reduce_sites ?timing_ctx ?abandon ?report ctx comp
         bindings)
