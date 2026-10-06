@@ -17,3 +17,6 @@ near: singles 0.3% apart reach the playoff: true
 near: only the single within the margin plays, one per segment: true
 spread: the coarse composite was timed: true
 spread: singles 1% apart leave the playoff nothing to time: true
+trace: one decision per playoff window says phase playoff: true
+trace: an unobserved seam reports nothing: true
+trace: the same windows, crown and time with the seam observed and unobserved: true

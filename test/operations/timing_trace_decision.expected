@@ -1,0 +1,8 @@
+retained: timing-trace: decision 1: phase -, queued, depth 2 by measured_batch (cap 2048, target 10.0 ms, estimated wall 19.250000 ms), fit boundary_floor (depths 2/3, fixed 1.250000 ms, marginal 9.000000 ms), 0 cap-directed probes, bounded from -, fallback from -, rescue -, probes 2 of 9 (485.250 of 960 ms), admitted
+refused: timing-trace: decision 1: phase -, queued, depth 1 by measured_batch (cap 2048, target 10.0 ms, estimated wall 9.750000 ms), fit shallower_crossing (depths 2/3, fixed 0.000000 ms, marginal 10.500000 ms), 0 cap-directed probes, bounded from -, fallback from -, rescue -, probes 2 of 9 (504.000 of 960 ms), refused unbatched
+each call prints exactly one decision line: true
+the line's depth is the depth the call timed: true
+the line says admitted exactly when the call's reading is admitted: true
+the line says refused unbatched exactly when the call refused as unbatched: true
+the retained boundary is admitted and its line names the floor: true
+the opposing refusal is unbatched and its line names the same crossing without the floor: true

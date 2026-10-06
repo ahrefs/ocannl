@@ -255,9 +255,13 @@ let percentile sorted p =
     interval over-attributed, which is why [benchmarks/gh834_cells.sh] pins [autotune_log=false]. A
     tagged call that raises (a classified launch or synchronization failure the search survives) is
     closed by no window: it is counted as raised, and a summary with any says INCOMPLETE, since that
-    call's cost is in no total. What is not counted: the cc backend's in-kernel fork/joins per
-    launch are a property of each candidate's rendering, so a launch count bounds them only together
-    with the candidate's parallel-region count. *)
+    call's cost is in no total. Each call line is followed by a [decision] line
+    ({!Autotune.on_batch_decision}, gh-ocannl-1199) carrying the policy's own metadata: the search
+    phase, the exit that chose the depth, the fitted fixed and marginal costs and the fit's verdict,
+    what the post-calibration bounds changed, the probe budget used and the admission verdict, so
+    diagnosing a refusal needs no parser that reimplements the calibration. What is not counted: the
+    cc backend's in-kernel fork/joins per launch are a property of each candidate's rendering, so a
+    launch count bounds them only together with the candidate's parallel-region count. *)
 
 let timing_trace_on = ref false
 
@@ -267,6 +271,64 @@ let timing_trace_on = ref false
 let trace_search_done ~compile_s =
   if !timing_trace_on then
     Stdlib.Printf.eprintf "timing-trace: search done: compile_s %.3f\n%!" compile_s
+
+(** The [decision] line of a traced timing call (gh-ocannl-1199): the decision behind the call line
+    printed just before it, from the policy's own metadata ({!Autotune.on_batch_decision}) -- the
+    search phase, what chose the depth, the fit it rested on, what bounded it, the probe budget used
+    and the admission verdict. Pure, so a test pins it against the decision taken. *)
+let decision_line ~call (d : Autotune.batch_decision) =
+  let ms = Printf.sprintf "%.6f" in
+  let opt o ~f = Option.value_map o ~default:"-" ~f in
+  let settle =
+    match d.settle with
+    | Isolated_objective -> "isolated"
+    | Single_estimate -> "single_estimate"
+    | Singles_within_target -> "singles_within_target"
+    | Measured_batch -> "measured_batch"
+    | Affine_projection -> "affine_projection"
+    | Wall_scaled -> "wall_scaled"
+    | Cap_measured -> "cap_measured"
+    | Cap_unresolved -> "cap_unresolved"
+    | Budget_exhausted -> "budget_exhausted"
+  in
+  let fit =
+    opt d.fit ~f:(fun (f : Autotune.affine_fit) ->
+        let verdict =
+          match f.verdict with
+          | Fit_unordered -> "unordered"
+          | Fit_unreadable -> "unreadable"
+          | Fit_nonpositive_marginal -> "nonpositive_marginal"
+          | Fit_negative_fixed -> "negative_fixed"
+          | Fit_fixed_dominated -> "fixed_dominated"
+          | Fit_base_crossing -> "base_crossing"
+          | Fit_boundary_floor -> "boundary_floor"
+          | Fit_shallower_crossing -> "shallower_crossing"
+          | Fit_deeper_crossing -> "deeper_crossing"
+        in
+        Printf.sprintf "%s (depths %d/%d, fixed %s ms, marginal %s ms)" verdict f.base_depth
+          f.probe_depth (ms f.fixed_ms) (ms f.marginal_ms))
+  in
+  let admission =
+    match d.admission with
+    | Admitted -> "admitted"
+    | Refused_unbatched -> "refused unbatched"
+    | Refused_contended -> "refused contended"
+    | Refused_unreadable -> "refused unreadable"
+  in
+  Printf.sprintf
+    "timing-trace: decision %d: phase %s, %s, depth %d by %s (cap %d, target %.1f ms, estimated \
+     wall %s ms), fit %s, %d cap-directed probes, bounded from %s, fallback from %s, rescue %s, \
+     probes %d of %d (%.3f of %.0f ms%s), %s%s"
+    call (opt d.phase ~f:Fn.id) (Autotune.timing_string d.timing) d.depth settle d.cap d.target_ms
+    (opt d.estimated_wall_ms ~f:ms) fit d.cap_directed_probes
+    (opt d.bounded_from ~f:Int.to_string)
+    (opt d.fallback_from ~f:Int.to_string)
+    (opt d.rescue ~f:(fun (depth, min_ms) -> Printf.sprintf "depth %d min %s ms" depth (ms min_ms)))
+    d.probes Autotune.queue_calibration_max_probes d.probe_wall_ms
+    Autotune.queue_calibration_wall_ms
+    (if d.budget_spent then ", spent" else "")
+    admission
+    (if d.retried then " after a retry" else "")
 
 let install_timing_trace () =
   if env_flag "BENCH_TIMING_TRACE" then begin
@@ -368,6 +430,11 @@ let install_timing_trace () =
          preflight_at := None;
          depth_at := None;
          prev_window ~samples ~reused ~wall_ms ~median_wall_ms);
+    let prev_decision = !Autotune.on_batch_decision in
+    (Autotune.on_batch_decision :=
+       fun d ->
+         pr "%s\n" (decision_line ~call:!calls d);
+         prev_decision d);
     Stdlib.at_exit (fun () ->
         drop_open_call ();
         let hist =

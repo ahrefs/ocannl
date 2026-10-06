@@ -7671,6 +7671,17 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; gh-ocannl-1199: the BENCH_TIMING_TRACE decision line, formatted by Bench_harness from
+; Autotune.on_batch_decision on an injected clock, agrees with the decision each call took.
+
+(test
+ (name timing_trace_decision)
+ ; ocannl-backend: none -- calibrate_and_time on an injected clock dispatches to no device
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules timing_trace_decision)
+ (libraries base stdio bench_harness ocannl test_utils arrayjit.verdict))
+
 ; gh-ocannl-1166: the composite playoff re-ranks near-tie per-segment singles inside the
 ; recombined composite. Scripted timings, pinned to cc.
 

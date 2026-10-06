@@ -275,8 +275,14 @@ endpoint, whereas HIP's invalid exact-f16 and beyond-exact approximate rows are 
   depth histogram. An untagged call (the untuned control `autotune_log=true` times) has its warmup
   and calibration counted as unattributed rather than as zero. A `timing-trace: search done` line
   marks where the measured compile (`compile_s`) ended, so a cell cut off later is not read as a
-  search still running. It only observes the tuner's seams, so the
-  searched schedules are the ones an untraced run crowns.
+  search still running. Each call line is followed by a `timing-trace: decision` line
+  (gh-ocannl-1199) from `Autotune.on_batch_decision`: the search phase (`playoff` for the composite
+  playoff), the calibration exit that chose the depth (`measured_batch`, `affine_projection`,
+  `cap_measured`, `budget_exhausted`, ...), its latest affine fit with the fitted fixed and marginal
+  costs and the fit's verdict (`boundary_floor` is the gh-ocannl-1184 depth-2 retention), the
+  cap-directed probes, what the projection bound, wall-bounded fallback or rescue changed, the probe
+  budget used, and the admission verdict (`admitted`, `refused unbatched`, ...). It only observes
+  the tuner's seams, so the searched schedules are the ones an untraced run crowns.
 - `runners/pytorch/run.py` — flags: `--device cpu|mps|cuda`, `--regime exact|approximate`
   (exact, the default and the parity reference: `highest` matmul precision, cudnn tf32 off,
   hand-composed attention; approximate: torch's own defaults — `high` matmul precision,

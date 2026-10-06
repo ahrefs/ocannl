@@ -601,26 +601,53 @@ let queued_batch_depth = queued_batch_depth_with_cap ~max_depth:max_queue_depth
    term in every launch, so a shallow probe can still select a batch below the contention scale.
    When the marginal term is unresolved, the memory cap is the only honest depth bound. Return the
    predicted whole-batch wall too, so a cap-bound shortfall is logged from this affine model rather
-   than from an overhead-polluted per-launch average. *)
-let refine_queued_batch_depth_between_with_cap ~min_depth ~max_depth ~base_depth ~base_ms
-    ~probe_depth ~probe_ms =
+   than from an overhead-polluted per-launch average.
+
+   The third component is what the fit concluded, the decision metadata the timing trace reports
+   (gh-ocannl-1199): each verdict names the branch below that produced the depth, so a consumer
+   reads the policy's own conclusion rather than re-deriving it from the probe readings. *)
+type fit_verdict =
+  | Fit_unordered
+  | Fit_unreadable
+  | Fit_nonpositive_marginal
+  | Fit_negative_fixed
+  | Fit_fixed_dominated
+  | Fit_base_crossing
+  | Fit_boundary_floor
+  | Fit_shallower_crossing
+  | Fit_deeper_crossing
+
+type affine_fit = {
+  base_depth : int;
+  probe_depth : int;
+  fixed_ms : float;
+  marginal_ms : float;
+  verdict : fit_verdict;
+}
+
+let fit_queued_batch_depth_between_with_cap ~min_depth ~max_depth ~base_depth ~base_ms ~probe_depth
+    ~probe_ms =
   let retry_depth =
     if probe_depth >= max_depth / 2 then max_depth
     else Int.min max_depth (Int.max (probe_depth + 1) (2 * probe_depth))
   in
-  if probe_depth <= base_depth then (retry_depth, Float.nan)
+  let fit ?(fixed_ms = Float.nan) ?(marginal_ms = Float.nan) verdict =
+    { base_depth; probe_depth; fixed_ms; marginal_ms; verdict }
+  in
+  if probe_depth <= base_depth then (retry_depth, Float.nan, fit Fit_unordered)
   else if
     (not (Float.is_finite base_ms))
     || (not (Float.is_positive base_ms))
     || (not (Float.is_finite probe_ms))
     || not (Float.is_positive probe_ms)
-  then (retry_depth, Float.nan)
+  then (retry_depth, Float.nan, fit Fit_unreadable)
   else
     let marginal_ms = (probe_ms -. base_ms) /. Float.of_int (probe_depth - base_depth) in
     if (not (Float.is_finite marginal_ms)) || not (Float.is_positive marginal_ms) then
-      (retry_depth, Float.nan)
+      (retry_depth, Float.nan, fit ~marginal_ms Fit_nonpositive_marginal)
     else
       let fixed_ms = base_ms -. (marginal_ms *. Float.of_int base_depth) in
+      let fit = fit ~fixed_ms ~marginal_ms in
       let tolerance_ms = fixed_fit_noise_fraction *. Float.max queued_batch_ms base_ms in
       (* A synchronized single below the target owes a queued batch. Two BATCH observations can
          nevertheless put the fitted depth-1 wall just above it: their fixed term and the singles'
@@ -635,7 +662,7 @@ let refine_queued_batch_depth_between_with_cap ~min_depth ~max_depth ~base_depth
         then min_depth
         else 1
       in
-      if Float.(fixed_ms < -.tolerance_ms) then (retry_depth, Float.nan)
+      if Float.(fixed_ms < -.tolerance_ms) then (retry_depth, Float.nan, fit Fit_negative_fixed)
       else if Float.(fixed_ms >= queued_batch_ms) then
         (* The whole-wall target is unattainable, but a positive depth-separated slope still gives a
            safe scale. Target one batch-wall worth of marginal launch work: accepting the shallow
@@ -646,12 +673,12 @@ let refine_queued_batch_depth_between_with_cap ~min_depth ~max_depth ~base_depth
           if (not (Float.is_finite wanted)) || Float.(wanted >= of_int max_depth) then max_depth
           else Int.max min_depth (Float.iround_up_exn wanted)
         in
-        (depth, fixed_ms +. (marginal_ms *. Float.of_int depth))
+        (depth, fixed_ms +. (marginal_ms *. Float.of_int depth), fit Fit_fixed_dominated)
       else if
         Float.(base_ms >= queued_batch_ms)
         && (base_depth = 1
            || Float.(fixed_ms +. (marginal_ms *. of_int Int.(base_depth - 1)) < queued_batch_ms))
-      then (base_depth, base_ms)
+      then (base_depth, base_ms, fit Fit_base_crossing)
       else if Float.(base_ms >= queued_batch_ms) then
         (* A base the fit says is not the model's first target crossing: one launch fewer would
            still fill the target. Keeping it kept a batch of any length -- a slow candidate whose
@@ -659,17 +686,26 @@ let refine_queued_batch_depth_between_with_cap ~min_depth ~max_depth ~base_depth
            alone is 25 times the target (gh-ocannl-1098). The pair is resolved, so its crossing is
            the answer; the fixed term is below the target here, so the crossing is at least one
            launch and strictly shallower than the base. *)
-        let depth =
-          Int.max min_depth (Float.iround_up_exn ((queued_batch_ms -. fixed_ms) /. marginal_ms))
-        in
-        (depth, fixed_ms +. (marginal_ms *. Float.of_int depth))
+        let crossing = Float.iround_up_exn ((queued_batch_ms -. fixed_ms) /. marginal_ms) in
+        let depth = Int.max min_depth crossing in
+        ( depth,
+          fixed_ms +. (marginal_ms *. Float.of_int depth),
+          fit (if depth > crossing then Fit_boundary_floor else Fit_shallower_crossing) )
       else
         let wanted = (queued_batch_ms -. fixed_ms) /. marginal_ms in
         let depth =
           if (not (Float.is_finite wanted)) || Float.(wanted >= of_int max_depth) then max_depth
           else Int.max (base_depth + 1) (Float.iround_up_exn wanted)
         in
-        (depth, fixed_ms +. (marginal_ms *. Float.of_int depth))
+        (depth, fixed_ms +. (marginal_ms *. Float.of_int depth), fit Fit_deeper_crossing)
+
+let refine_queued_batch_depth_between_with_cap ~min_depth ~max_depth ~base_depth ~base_ms
+    ~probe_depth ~probe_ms =
+  let depth, wall_ms, _ =
+    fit_queued_batch_depth_between_with_cap ~min_depth ~max_depth ~base_depth ~base_ms ~probe_depth
+      ~probe_ms
+  in
+  (depth, wall_ms)
 
 let refine_queued_batch_depth_between =
   refine_queued_batch_depth_between_with_cap ~min_depth:1 ~max_depth:max_queue_depth
@@ -880,12 +916,53 @@ type calibration_probe = {
    no configuration key selects it. *)
 let on_calibration_probe : (calibration_probe -> unit) ref = ref (fun _ -> ())
 
+(* Which exit of the calibration chose the depth before the post-calibration bounds
+   (gh-ocannl-1199). Each branch of [calibrate_and_time_with_retry_observer] returns its own, so the
+   trace reports the decision taken rather than a reconstruction of it. *)
+type batch_settle =
+  | Isolated_objective
+  | Single_estimate
+  | Singles_within_target
+  | Measured_batch
+  | Affine_projection
+  | Wall_scaled
+  | Cap_measured
+  | Cap_unresolved
+  | Budget_exhausted
+
+type batch_admission = Admitted | Refused_unbatched | Refused_contended | Refused_unreadable
+
+type batch_decision = {
+  phase : string option;
+  timing : timing_mode;
+  depth : int;
+  cap : int;
+  target_ms : float;
+  estimated_wall_ms : float option;
+  settle : batch_settle;
+  fit : affine_fit option;
+  cap_directed_probes : int;
+  bounded_from : int option;
+  fallback_from : int option;
+  rescue : (int * float) option;
+  probes : int;
+  probe_wall_ms : float;
+  budget_spent : bool;
+  admission : batch_admission;
+  retried : bool;
+}
+
+(* Trace-only seam (gh-ocannl-1199), fired once per timing call after its window, with the depth
+   decision's own metadata and the call's admission verdict. Observing it changes nothing a search
+   measures or ranks. Default a no-op; no configuration selects it. *)
+let on_batch_decision : (batch_decision -> unit) ref = ref (fun _ -> ())
+
 (* The measurement proper, after the warmup: the calibration and the timed loop, with the device
    reduced to [batch depth], which dispatches [depth] launches back to back, synchronizes once and
    returns the wall in milliseconds. Separated from [time_routine] so a test can drive the whole
    policy -- which depth a call settles on, which window it times, how many launches each costs --
    on an injected clock, with no device and no machine-dependent routine (gh-ocannl-1074). *)
-let calibrate_and_time_with_retry_observer ~on_retry ~retry_contended ~timing ~repeats
+let calibrate_and_time_with_retry_observer ~on_retry ~phase ~retry_contended ~timing ~repeats
     ~queue_depth_cap ~batch =
   (* Every finite positive batch minimum the calibration measured, as [(depth, wall)]: the evidence
      that bounds an unresolved calibration's fallback depth. *)
@@ -898,6 +975,17 @@ let calibrate_and_time_with_retry_observer ~on_retry ~retry_contended ~timing ~r
      charged: a clock that resolved nothing spends no measurable wall, and must not end a probe on a
      NaN comparison. *)
   let probe_wall_ms = ref 0. and probes_started = ref 0 in
+  (* The decision metadata [on_batch_decision] reports (gh-ocannl-1199): the latest affine fit and
+     the validation probes a fit wanting the unmeasured cap directed (gh-ocannl-1144). *)
+  let last_fit = ref None and cap_directed_probes = ref 0 in
+  let refine ~min_depth ~base_depth ~base_ms ~probe_depth ~probe_ms =
+    let depth, wall_ms, fit =
+      fit_queued_batch_depth_between_with_cap ~min_depth ~max_depth:queue_depth_cap ~base_depth
+        ~base_ms ~probe_depth ~probe_ms
+    in
+    last_fit := Some fit;
+    (depth, wall_ms)
+  in
   (* The deepest batch any probe dispatched, the synchronized singles as depth 1: what
      [queue_depth_projection_factor] multiplies. Every probe counts, whatever it read: a clock that
      resolved nothing still dispatched its provisional probe at the cap, which the bound must not
@@ -929,9 +1017,13 @@ let calibrate_and_time_with_retry_observer ~on_retry ~retry_contended ~timing ~r
   (* [singles] is the calibration's window of synchronized single launches, kept rather than reduced
      to its minimum: they are depth-1 batches, sampled under the timed loop's own stopping rule, so
      when the depth settles at 1 they are the timed window's first samples (below). *)
-  let calibration_dispatches, depth, estimated_batch_wall_ms, singles =
+  let ( calibration_dispatches,
+        depth,
+        estimated_batch_wall_ms,
+        singles,
+        (settle, bounded_from, fallback_from, rescue) ) =
     match timing with
-    | Isolated -> (0, 1, None, [])
+    | Isolated -> (0, 1, None, [], (Isolated_objective, None, None, None))
     | Queued ->
         let singles =
           sample_window ~repeats:queue_calibration_runs
@@ -942,7 +1034,7 @@ let calibrate_and_time_with_retry_observer ~on_retry ~retry_contended ~timing ~r
         in
         let single_estimate = window_result singles in
         observe ~depth:1 single_estimate.ms;
-        let calibration_dispatches, depth, estimated_batch_wall_ms =
+        let calibration_dispatches, depth, estimated_batch_wall_ms, settled =
           if queue_depth_cap <> max_queue_depth then
             (* The affine refinement repairs the CUDA/HIP dispatch-scale defect in gh-ocannl-892.
                Preserve the historical single-estimate policy on cc and Metal: Metal's measured
@@ -950,7 +1042,8 @@ let calibrate_and_time_with_retry_observer ~on_retry ~retry_contended ~timing ~r
                multiplied the repository's CPU autotune-suite wall past its CI ceiling. *)
             ( single_estimate.samples,
               queued_batch_depth_with_cap ~max_depth:queue_depth_cap single_estimate,
-              None )
+              None,
+              (Single_estimate, None, None, None) )
           else
             let provisional_depth =
               queued_batch_depth_with_cap ~max_depth:queue_depth_cap single_estimate
@@ -970,44 +1063,47 @@ let calibrate_and_time_with_retry_observer ~on_retry ~retry_contended ~timing ~r
                measurement, and need not spend 64 whole batches to learn the scale. *)
             let probe = probe_batch ~role:Provisional_probe probe_depth in
             let depth, estimated_batch_wall_ms =
-              refine_queued_batch_depth_with_cap ~max_depth:queue_depth_cap
-                ~single_ms:single_estimate.ms ~probe_depth ~probe_ms:probe.ms
+              (* [probe_depth] is at least 2, so this is [refine_queued_batch_depth_with_cap]'s
+                 affine pair, recorded. *)
+              refine ~min_depth:1 ~base_depth:1 ~base_ms:single_estimate.ms ~probe_depth
+                ~probe_ms:probe.ms
             in
             let confirm_interpolated calibration_dispatches depth ~upper_depth ~upper_ms =
-              if probe_budget_spent () then (calibration_dispatches, depth, Float.nan)
+              if probe_budget_spent () then
+                (calibration_dispatches, depth, Float.nan, Budget_exhausted)
               else
                 let measured = probe_batch ~role:Crossing_probe depth in
                 let calibration_dispatches = calibration_dispatches + (measured.samples * depth) in
                 let confirmed_depth, confirmed_wall_ms =
-                  refine_queued_batch_depth_between_with_cap ~min_depth ~max_depth:queue_depth_cap
-                    ~base_depth:depth ~base_ms:measured.ms ~probe_depth:upper_depth
+                  refine ~min_depth ~base_depth:depth ~base_ms:measured.ms ~probe_depth:upper_depth
                     ~probe_ms:upper_ms
                 in
-                if confirmed_depth = depth then (calibration_dispatches, depth, measured.ms)
+                if confirmed_depth = depth then
+                  (calibration_dispatches, depth, measured.ms, Measured_batch)
                 else if Float.is_finite confirmed_wall_ms && confirmed_depth > upper_depth then
                   (* A resolved fit can project past the upper batch: a fixed-dominated pair targets
                      a batch of marginal work, far deeper than either point (Codex P1, round 2 on PR
                      #847). That depth is unmeasured and beyond every measured one, where a queue
                      cost may jump, and nothing would check it -- neither the wall budget nor the
                      fallback. Stay with the measured upper batch instead. *)
-                  (calibration_dispatches, upper_depth, upper_ms)
+                  (calibration_dispatches, upper_depth, upper_ms, Measured_batch)
                 else if Float.is_finite confirmed_wall_ms then
-                  (calibration_dispatches, confirmed_depth, confirmed_wall_ms)
+                  (calibration_dispatches, confirmed_depth, confirmed_wall_ms, Affine_projection)
                 else if Float.(upper_ms >= queued_batch_ms && upper_ms >= measured.ms) then
-                  (calibration_dispatches, queue_depth_cap, Float.nan)
+                  (calibration_dispatches, queue_depth_cap, Float.nan, Cap_unresolved)
                 else
                   let depth, wall_ms =
                     depth_from_batch_wall_with_cap ~max_depth:queue_depth_cap ~depth:upper_depth
                       ~wall_ms:upper_ms
                   in
-                  (calibration_dispatches, depth, wall_ms)
+                  (calibration_dispatches, depth, wall_ms, Wall_scaled)
             in
             (* A resolved pair whose target crossing is shallower than the batch it was measured
                against (gh-ocannl-1098): sample the crossing and fit it against the shallowest
                measured batch above it, exactly as an interpolation inside a bracket is checked.
                Depth 1 needs no probe -- the synchronized singles are its measurement. *)
             let settle_shallower calibration_dispatches depth ~upper_depth ~upper_ms =
-              if depth = 1 then (calibration_dispatches, 1, single_estimate.ms)
+              if depth = 1 then (calibration_dispatches, 1, single_estimate.ms, Measured_batch)
               else confirm_interpolated calibration_dispatches depth ~upper_depth ~upper_ms
             in
             let rec confirm_or_scale ?(retry_stall = true) calibration_dispatches depth wall_ms =
@@ -1015,8 +1111,9 @@ let calibrate_and_time_with_retry_observer ~on_retry ~retry_contended ~timing ~r
                 (* The cap itself cannot provide a depth-separated confirmation. Its directly
                    measured wall is still the best scale evidence; repeating the same depth only
                    spends another queue and can replace that observation with [nan] on noise. *)
-                (calibration_dispatches, depth, wall_ms)
-              else if probe_budget_spent () then (calibration_dispatches, depth, Float.nan)
+                (calibration_dispatches, depth, wall_ms, Cap_measured)
+              else if probe_budget_spent () then
+                (calibration_dispatches, depth, Float.nan, Budget_exhausted)
               else
                 let confirmation_depth = Int.min queue_depth_cap (depth + Int.max 1 (depth / 4)) in
                 let confirmation =
@@ -1028,11 +1125,11 @@ let calibrate_and_time_with_retry_observer ~on_retry ~retry_contended ~timing ~r
                   calibration_dispatches + (confirmation.samples * confirmation_depth)
                 in
                 let confirmed_depth, confirmed_wall_ms =
-                  refine_queued_batch_depth_between_with_cap ~min_depth ~max_depth:queue_depth_cap
-                    ~base_depth:depth ~base_ms:wall_ms ~probe_depth:confirmation_depth
-                    ~probe_ms:confirmation.ms
+                  refine ~min_depth ~base_depth:depth ~base_ms:wall_ms
+                    ~probe_depth:confirmation_depth ~probe_ms:confirmation.ms
                 in
-                if confirmed_depth = depth then (calibration_dispatches, depth, wall_ms)
+                if confirmed_depth = depth then
+                  (calibration_dispatches, depth, wall_ms, Measured_batch)
                 else if confirmed_depth < depth && Float.is_finite confirmed_wall_ms then
                   settle_shallower calibration_dispatches confirmed_depth ~upper_depth:depth
                     ~upper_ms:wall_ms
@@ -1046,27 +1143,29 @@ let calibrate_and_time_with_retry_observer ~on_retry ~retry_contended ~timing ~r
                        would inflate the timed batch and its 2x refusal threshold precisely when
                        calibration observed the stall that rule is meant to reject. *)
                     confirm_or_scale ~retry_stall:false calibration_dispatches depth wall_ms
-                  else (calibration_dispatches, queue_depth_cap, Float.nan)
+                  else (calibration_dispatches, queue_depth_cap, Float.nan, Cap_unresolved)
                 else
                   let depth, wall_ms =
                     depth_from_batch_wall_with_cap ~max_depth:queue_depth_cap
                       ~depth:confirmation_depth ~wall_ms:confirmation.ms
                   in
-                  (calibration_dispatches, depth, wall_ms)
+                  (calibration_dispatches, depth, wall_ms, Wall_scaled)
             in
             let rec validate_depth probes_left calibration_dispatches base_depth base_ms depth
                 estimated_wall_ms =
               if depth = queue_depth_cap && !deepest_probed = queue_depth_cap then
-                (calibration_dispatches, depth, estimated_wall_ms)
-              else if probe_budget_spent () then (calibration_dispatches, depth, Float.nan)
+                (calibration_dispatches, depth, estimated_wall_ms, Cap_measured)
+              else if probe_budget_spent () then
+                (calibration_dispatches, depth, Float.nan, Budget_exhausted)
               else
                 (* A fit wanting the cap is not evidence at the cap (gh-ocannl-1144). Walk there
                    through measured doublings while validation probes remain, including when the
                    provisional pair already projects to the cap. Each probe spends the same wall and
                    count budgets as every other validation. *)
                 let depth =
-                  if depth = queue_depth_cap then
-                    Int.min queue_depth_cap (queue_depth_projection_factor * !deepest_probed)
+                  if depth = queue_depth_cap then (
+                    Int.incr cap_directed_probes;
+                    Int.min queue_depth_cap (queue_depth_projection_factor * !deepest_probed))
                   else depth
                 in
                 let validation = probe_batch ~role:Validation_probe depth in
@@ -1074,14 +1173,13 @@ let calibrate_and_time_with_retry_observer ~on_retry ~retry_contended ~timing ~r
                   calibration_dispatches + (validation.samples * depth)
                 in
                 let next_depth, next_wall_ms =
-                  refine_queued_batch_depth_between_with_cap ~min_depth ~max_depth:queue_depth_cap
-                    ~base_depth ~base_ms ~probe_depth:depth ~probe_ms:validation.ms
+                  refine ~min_depth ~base_depth ~base_ms ~probe_depth:depth ~probe_ms:validation.ms
                 in
                 if next_depth = base_depth then
                   (* A valid pair can confirm its earlier, already-target-sized observation. Stop
                      there: probing that shallower depth again would reverse the refinement order
                      and can oscillate until unrelated noise forces the cap. *)
-                  (calibration_dispatches, base_depth, base_ms)
+                  (calibration_dispatches, base_depth, base_ms, Measured_batch)
                 else if Float.(base_ms < queued_batch_ms && validation.ms >= queued_batch_ms) then
                   if next_depth < depth then
                     (* The measured pair brackets the target. Interpolate inside that bracket before
@@ -1110,43 +1208,43 @@ let calibrate_and_time_with_retry_observer ~on_retry ~retry_contended ~timing ~r
                   validate_depth (probes_left - 1) calibration_dispatches depth validation.ms
                     next_depth next_wall_ms
                 else if next_depth = queue_depth_cap then
-                  let depth, wall_ms =
-                    if
-                      Float.is_nan next_wall_ms
-                      && Float.(validation.ms >= queued_batch_ms && validation.ms >= base_ms)
-                    then (queue_depth_cap, Float.nan)
-                    else if Float.is_nan next_wall_ms then
+                  if
+                    Float.is_nan next_wall_ms
+                    && Float.(validation.ms >= queued_batch_ms && validation.ms >= base_ms)
+                  then (calibration_dispatches, queue_depth_cap, Float.nan, Cap_unresolved)
+                  else if Float.is_nan next_wall_ms then
+                    let depth, wall_ms =
                       depth_from_batch_wall_with_cap ~max_depth:queue_depth_cap ~depth
                         ~wall_ms:validation.ms
-                    else (next_depth, next_wall_ms)
-                  in
-                  (calibration_dispatches, depth, wall_ms)
+                    in
+                    (calibration_dispatches, depth, wall_ms, Wall_scaled)
+                  else (calibration_dispatches, next_depth, next_wall_ms, Affine_projection)
                 else if probes_left <= 1 && Float.is_nan next_wall_ms then
                   (* Do not fall back to the earlier target crossing: it may be the inflated window
                      this validation was meant to expose. Scale from the deepest measured batch when
                      it is non-monotone; a monotone, fixed-dominated pair still binds at the cap. *)
-                  let depth, wall_ms =
-                    if Float.(validation.ms >= queued_batch_ms && validation.ms >= base_ms) then
-                      (queue_depth_cap, Float.nan)
-                    else
+                  if Float.(validation.ms >= queued_batch_ms && validation.ms >= base_ms) then
+                    (calibration_dispatches, queue_depth_cap, Float.nan, Cap_unresolved)
+                  else
+                    let depth, wall_ms =
                       depth_from_batch_wall_with_cap ~max_depth:queue_depth_cap ~depth
                         ~wall_ms:validation.ms
-                  in
-                  (calibration_dispatches, depth, wall_ms)
+                    in
+                    (calibration_dispatches, depth, wall_ms, Wall_scaled)
                 else if probes_left <= 1 then
                   (* Keep the latest supported affine projection after the bounded validation loop.
                      Jumping to the cap here would turn a noisy near-target probe into a 20--30 ms
                      batch whose 2x contention threshold no longer catches the fixed host stall this
                      policy exists to detect. *)
-                  (calibration_dispatches, next_depth, next_wall_ms)
+                  (calibration_dispatches, next_depth, next_wall_ms, Affine_projection)
                 else
                   validate_depth (probes_left - 1) calibration_dispatches depth validation.ms
                     next_depth next_wall_ms
             in
             let calibration_dispatches = single_estimate.samples + (probe.samples * probe_depth) in
-            let calibration_dispatches, depth, estimated_batch_wall_ms =
+            let calibration_dispatches, depth, estimated_batch_wall_ms, settle =
               if provisional_depth = 1 && depth = 1 then
-                (calibration_dispatches, 1, single_estimate.ms)
+                (calibration_dispatches, 1, single_estimate.ms, Singles_within_target)
               else if Float.(probe.ms >= queued_batch_ms) && depth < probe_depth then
                 validate_depth max_depth_validation_probes calibration_dispatches 1
                   single_estimate.ms depth estimated_batch_wall_ms
@@ -1160,6 +1258,7 @@ let calibrate_and_time_with_retry_observer ~on_retry ~retry_contended ~timing ~r
                settle goes past [queue_depth_projection_factor] times the deepest probe. The wall
                estimate keeps its per-launch share; an unresolved one stays unresolved, for the
                stricter fallback below. *)
+            let bounded_from = depth in
             let depth, estimated_batch_wall_ms =
               let bound = queue_depth_projection_factor * !deepest_probed in
               if depth <= bound then (depth, estimated_batch_wall_ms)
@@ -1172,11 +1271,16 @@ let calibrate_and_time_with_retry_observer ~on_retry ~retry_contended ~timing ~r
             in
             (* An unresolved outcome is the only one whose depth no measured wall or fit supports;
                every resolved one carries its own wall estimate. *)
+            let fallback_from = depth in
             let depth =
               if Float.is_nan estimated_batch_wall_ms then
                 wall_bounded_fallback_depth ~observed:!observed depth
               else depth
             in
+            (* What the two bounds changed, for the trace: the depth each started from, when it
+               moved. *)
+            let bounded_from = Option.some_if (fallback_from < bounded_from) bounded_from
+            and fallback_from = Option.some_if (depth < fallback_from) fallback_from in
             (* A candidate whose single launch owed it a batch, but whose every batched probe read
                over the target, has no depth this calibration can time as [Queued]: the fallback
                leaves only depth 1, whose reading is the isolated objective, and timing it would
@@ -1191,10 +1295,10 @@ let calibrate_and_time_with_retry_observer ~on_retry ~retry_contended ~timing ~r
                repeats on every rerun and a stall does not. Any settle at depth 1 counts, not only
                the unresolved one: a resolved fit that puts the crossing at one launch contradicts
                the singles just the same. *)
-            let calibration_dispatches, depth, estimated_batch_wall_ms =
+            let calibration_dispatches, depth, estimated_batch_wall_ms, rescue =
               if depth = 1 && provisional_depth > 1 then
                 match rescue_depth ~observed:!observed with
-                | None -> (calibration_dispatches, depth, estimated_batch_wall_ms)
+                | None -> (calibration_dispatches, depth, estimated_batch_wall_ms, None)
                 | Some rescue ->
                     (* One rescue probe before refusing (gh-ocannl-1098), charged to no budget: its
                        depth is chosen so that a cost whose per-launch average does not fall with
@@ -1203,17 +1307,21 @@ let calibrate_and_time_with_retry_observer ~on_retry ~retry_contended ~timing ~r
                     let calibration_dispatches =
                       calibration_dispatches + (measured.samples * rescue)
                     in
+                    let probed = Some (rescue, measured.ms) in
                     if
                       Float.is_finite measured.ms && Float.is_positive measured.ms
                       && Float.(measured.ms <= queued_batch_ms)
-                    then (calibration_dispatches, rescue, measured.ms)
-                    else (calibration_dispatches, depth, estimated_batch_wall_ms)
-              else (calibration_dispatches, depth, estimated_batch_wall_ms)
+                    then (calibration_dispatches, rescue, measured.ms, probed)
+                    else (calibration_dispatches, depth, estimated_batch_wall_ms, probed)
+              else (calibration_dispatches, depth, estimated_batch_wall_ms, None)
             in
             if depth = 1 && provisional_depth > 1 then no_supported_batch := true;
-            (calibration_dispatches, depth, Some estimated_batch_wall_ms)
+            ( calibration_dispatches,
+              depth,
+              Some estimated_batch_wall_ms,
+              (settle, bounded_from, fallback_from, rescue) )
         in
-        (calibration_dispatches, depth, estimated_batch_wall_ms, singles)
+        (calibration_dispatches, depth, estimated_batch_wall_ms, singles, settled)
   in
   Option.iter estimated_batch_wall_ms ~f:(fun estimated_wall_ms ->
       if depth = queue_depth_cap then
@@ -1284,11 +1392,12 @@ let calibrate_and_time_with_retry_observer ~on_retry ~retry_contended ~timing ~r
   in
   let reused = if depth = 1 then singles else [] in
   let ((result, _) as window) = time_window reused in
+  let retried =
+    retry_contended && Poly.equal timing Queued && result.contended && Float.is_finite result.ms
+    && Float.is_positive result.ms
+  in
   let result, report =
-    if
-      retry_contended && Poly.equal timing Queued && result.contended && Float.is_finite result.ms
-      && Float.is_positive result.ms
-    then (
+    if retried then (
       (* Keep the depth and the 2x-majority rule. A fresh independent window can outlast a transient
          Metal scheduler burst; mixing windows would instead dilute its refusal evidence. Depth-1
          retries must likewise dispatch fresh singles rather than resume the refused ones. *)
@@ -1299,24 +1408,52 @@ let calibrate_and_time_with_retry_observer ~on_retry ~retry_contended ~timing ~r
     else window
   in
   report ();
-  if !no_supported_batch then (
-    logf
-      "queued timing refused: every batched calibration probe read over the %.1f ms target, so \
-       only an isolated depth-1 reading was left"
-      queued_batch_ms;
-    { result with unbatched = true })
-  else result
+  let result =
+    if !no_supported_batch then (
+      logf
+        "queued timing refused: every batched calibration probe read over the %.1f ms target, so \
+         only an isolated depth-1 reading was left"
+        queued_batch_ms;
+      { result with unbatched = true })
+    else result
+  in
+  !on_batch_decision
+    {
+      phase;
+      timing;
+      depth;
+      cap = queue_depth_cap;
+      target_ms = queued_batch_ms;
+      estimated_wall_ms = estimated_batch_wall_ms;
+      settle;
+      fit = !last_fit;
+      cap_directed_probes = !cap_directed_probes;
+      bounded_from;
+      fallback_from;
+      rescue;
+      probes = !probes_started;
+      probe_wall_ms = !probe_wall_ms;
+      budget_spent = probe_budget_spent ();
+      admission =
+        (if result.unbatched then Refused_unbatched
+         else if result.contended then Refused_contended
+         else if Option.is_none (admitted_timing_ms result) then Refused_unreadable
+         else Admitted);
+      retried;
+    };
+  result
 
 (* Preserve the original all-labelled helper's source interface: an optional observer would not
    erase without adding a positional argument. *)
 let calibrate_and_time ~retry_contended ~timing ~repeats ~queue_depth_cap ~batch =
   calibrate_and_time_with_retry_observer
     ~on_retry:(fun () -> ())
-    ~retry_contended ~timing ~repeats ~queue_depth_cap ~batch
+    ~phase:None ~retry_contended ~timing ~repeats ~queue_depth_cap ~batch
 
 (* [routine.bindings] exposes the routine's live binding refs — restore them after timing (Codex P2
    on PR #103), or the returned winner would stay bound to the tuner's midpoint test values. *)
-let time_routine ?(on_retry = fun () -> ()) ?(tag_failures = false) ~timing ~repeats cctx routine =
+let time_routine ?(on_retry = fun () -> ()) ?(tag_failures = false) ?phase ~timing ~repeats cctx
+    routine =
   let saved_bindings = List.map routine.Context.bindings ~f:(fun (_ss, r) -> (r, !r)) in
   let run ctx =
     if tag_failures then Outcome.tag Outcome.Launch (fun () -> Context.run ctx routine)
@@ -1355,7 +1492,7 @@ let time_routine ?(on_retry = fun () -> ()) ?(tag_failures = false) ~timing ~rep
         sync !ctx;
         Mtime.Span.to_float_ns (Mtime_clock.count c0) /. 1e6
       in
-      calibrate_and_time_with_retry_observer ~on_retry ~timing ~repeats
+      calibrate_and_time_with_retry_observer ~on_retry ~phase ~timing ~repeats
         ~retry_contended:(retry_contended_window_for_backend (Context.backend_name cctx))
         ~queue_depth_cap:(queue_depth_cap_for_backend (Context.backend_name cctx))
         ~batch)
@@ -4586,6 +4723,10 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
         let exception Abandon_now of abandonment in
         let search () =
           progress_stage "seed_enumeration";
+          (* gh-ocannl-1061: where the search is, on the [autotune_progress] stream (the rest of its
+             state is defined with [progress_phase_begin] below), and passed to each candidate's
+             timing call for the trace's decisions (gh-ocannl-1199). *)
+          let progress_phase = ref "seeds" in
           (* gh-ocannl-521: tensorized candidates are counted where they are TIMED, not where they
              are enumerated — a family can be seeded in bulk and rejected in bulk at candidate
              compile, and the enumerated count alone reads as coverage it does not have. Both
@@ -4687,8 +4828,8 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
                         ~provenance:Outcome.Candidate ~phase:Outcome.Launch
                         ~candidate:(spec_label spec) (fun () ->
                           timed_into progress_timing_s (fun () ->
-                              time_routine ~on_retry ~tag_failures:true ~timing ~repeats c.cctx
-                                c.routine))
+                              time_routine ~on_retry ~tag_failures:true ~phase:!progress_phase
+                                ~timing ~repeats c.cctx c.routine))
                       (* Outside the boundary: the seam is not a candidate failure to classify. *)
                       |> Result.map
                            ~f:
@@ -4875,7 +5016,7 @@ let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?c
              seed pass, the recombination composites that follow it, the composite playoff
              (gh-ocannl-1166), or one beam round; its candidate total is known up front except for
              the composites' and the playoff's. *)
-          let progress_phase = ref "seeds" and progress_total = ref None in
+          let progress_total = ref None in
           let progress_tried = ref 0 in
           let progress_best () =
             let best_c, best_ms = !best_so_far in
