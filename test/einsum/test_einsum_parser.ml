@@ -99,6 +99,10 @@ let test_row_variable_spellings () =
   show_labels "..b..|x";
   show_labels "...b..|x";
   show_labels "... batch , .., x";
+  (* Without a multichar trigger, the fix for a multi-letter name also needs one. *)
+  show_labels "...batch..|x";
+  show_labels "..batch..|x";
+  show_labels "..batch,..|x";
   (* The attention spec of the shapes slides, both ways (lukstafi/ocannl-staging#1061). *)
   show_einsum
     "..batch.., seq | heads, ..dims..; ..batch.., time | heads, ..dims.. => ..batch.., seq | time \

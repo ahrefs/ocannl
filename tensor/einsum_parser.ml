@@ -62,10 +62,20 @@ let parse entry spec =
         match misspelled_row_variable spec with
         | None -> ""
         | Some name ->
+            (* In single-char mode a multi-letter name lexes as one axis per letter, so the fix must
+               also switch the spec to multichar mode: the comma in [..name,..] does. *)
+            let multichar_note =
+              if multichar || String.length name = 1 then ""
+              else
+                Printf.sprintf
+                  "; a multi-letter name needs multichar mode: write `..%s,..` and separate the \
+                   other axes with commas"
+                  name
+            in
             Printf.sprintf
               "; hint: `...` is the unnamed context ellipsis; a named row variable is written \
-               `..%s..`, not `...%s..`"
-              name name
+               `..%s..`, not `...%s..`%s"
+              name name multichar_note
       in
       raise
         (Parse_error
