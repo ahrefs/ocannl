@@ -559,13 +559,7 @@ let tensorize_llc ~(zero_fringe : Tn.t -> bool) ~i ~j ~k ~lane ~simd_width ~tile
         then
           invalid_arg
             "Schedule.Tensorize: a flattened (Sub_axis) micro-kernel access is unsupported (v1)";
-        let mentions sym (idx : Indexing.axis_index) =
-          match idx with
-          | Indexing.Iterator s -> Indexing.equal_symbol s sym
-          | Indexing.Affine { symbols; _ } ->
-              List.exists symbols ~f:(fun (_, s) -> Indexing.equal_symbol s sym)
-          | Indexing.Fixed_idx _ | Indexing.Sub_axis | Indexing.Concat _ -> false
-        in
+        let mentions = Indexing.axis_index_mentions_symbol in
         let coeff sym (idx : Indexing.axis_index) =
           match idx with
           | Indexing.Iterator s when Indexing.equal_symbol s sym -> 1
@@ -1231,6 +1225,18 @@ let terms_of_index (idx : Indexing.axis_index) : ((int * Indexing.symbol) list *
   | Indexing.Affine { symbols; offset } -> Some (symbols, offset)
   | Indexing.Sub_axis -> Some ([], 0)
   | Indexing.Concat _ -> None
+
+(* [idx] plus the fresh symbol [s] (coefficient 1): the tile coordinate a cooperative-tile transform
+   adds to an accumulator's base index. [None] for an index with no per-axis affine form to extend,
+   which each caller refuses in its own words: a [Concat], and a [Sub_axis] -- the latter decomposes
+   to the empty sum ({!terms_of_index}) and would come back as [Iterator s], an ordinary coordinate
+   where the flattened component after it carries the address (gh-ocannl-1165). *)
+let add_symbol (idx : Indexing.axis_index) (s : Indexing.symbol) : Indexing.axis_index option =
+  match idx with
+  | Indexing.Sub_axis | Indexing.Concat _ -> None
+  | Indexing.Fixed_idx _ | Indexing.Iterator _ | Indexing.Affine _ ->
+      Option.map (terms_of_index idx) ~f:(fun (terms, offset) ->
+          normalize_affine ~terms:((1, s) :: terms) ~offset)
 
 (* All reads [Get (source, idcs)] with their enclosing statement-level loop stacks (outermost-first;
    [floop.body] is dummied out). Writes to [source] are rejected. *)
@@ -2407,13 +2413,8 @@ let apply_privatize ~target ~over ~acc_prec (opt : Low_level.optimized) : Low_le
               List.iter stack ~f:(fun (fl : floop) ->
                   match fl.axis with
                   | (Grid | Workgroup | Workgroup_reduce)
-                    when not
-                           (Array.exists idcs ~f:(fun idx ->
-                                match terms_of_index idx with
-                                | Some (terms, _) ->
-                                    List.exists terms ~f:(fun (_, s) ->
-                                        Indexing.equal_symbol s fl.index)
-                                | None -> true)) ->
+                    when not (Array.exists idcs ~f:(Indexing.axis_index_mentions_symbol fl.index))
+                    ->
                       invalid_arg
                         ("Schedule.Privatize: the hardware-typed reduction loop "
                        ^ Indexing.symbol_ident fl.index
@@ -2668,13 +2669,7 @@ let apply_privatize ~target ~over ~acc_prec (opt : Low_level.optimized) : Low_le
         in
         match chain fc.body with
         | Some (levels, (Set { idcs; _ } as st)) -> (
-            let mentioned sym =
-              Array.exists idcs ~f:(fun idx ->
-                  match terms_of_index idx with
-                  | Some (terms, _) ->
-                      List.exists terms ~f:(fun (_, s) -> Indexing.equal_symbol s sym)
-                  | None -> true)
-            in
+            let mentioned sym = Array.exists idcs ~f:(Indexing.axis_index_mentions_symbol sym) in
             let nest =
               List.fold_right
                 (`Loop { fc with body = Noop } :: levels)
@@ -3322,11 +3317,7 @@ let contract_tensorized_accumulator ~lane ~(masks : pad_mask list) (opt : Low_le
   let masked = not (List.is_empty masks) in
   let shared_frag = masked && not (Set.is_empty opt.workgroup_shared) in
   let iprec = Ops.index_prec () in
-  let mentions sym idx =
-    match terms_of_index idx with
-    | Some (terms, _) -> List.exists terms ~f:(fun (_, s) -> Indexing.equal_symbol s sym)
-    | None -> false
-  in
+  let mentions = Indexing.axis_index_mentions_symbol in
   let idcs_mention sym = Array.exists ~f:(mentions sym) in
   let same_lane s = Indexing.equal_symbol s lane in
   let rec matching_tiles acc = function
@@ -3392,9 +3383,11 @@ let contract_tensorized_accumulator ~lane ~(masks : pad_mask list) (opt : Low_le
     | _ -> None
   in
   let add_symbol idx s =
-    match terms_of_index idx with
-    | Some (terms, offset) -> normalize_affine ~terms:((1, s) :: terms) ~offset
-    | None -> invalid_arg "Schedule.Tensorize: Concat accumulator indices are unsupported"
+    match add_symbol idx s with
+    | Some idx -> idx
+    | None ->
+        invalid_arg
+          "Schedule.Tensorize: Concat and flattened (Sub_axis) accumulator indices are unsupported"
   in
   let lane0 p body =
     let cond =
@@ -3653,11 +3646,7 @@ let apply_fuse_epilogue ~target ~shared (opt : Low_level.optimized) : Low_level.
   let opt = { opt with llc = simplify_llc [] opt.llc } in
   let dims = Lazy.force target.Tn.dims in
   let rank = Array.length dims in
-  let idx_mentions s idx =
-    match terms_of_index idx with
-    | Some (terms, _) -> List.exists terms ~f:(fun (_, s') -> Indexing.equal_symbol s s')
-    | None -> false
-  in
+  let idx_mentions = Indexing.axis_index_mentions_symbol in
   (* --- Generic statement scanners. --- *)
   let rec writes_tn tn = function
     | Set { tn = t; _ } | Zero_out t | Set_dynamic { tn = t; _ } | Set_from_vec { tn = t; _ } ->
@@ -3906,8 +3895,8 @@ let apply_fuse_epilogue ~target ~shared (opt : Low_level.optimized) : Low_level.
     | _ -> None
   in
   let add_symbol idx s =
-    match terms_of_index idx with
-    | Some (terms, offset) -> normalize_affine ~terms:((1, s) :: terms) ~offset
+    match add_symbol idx s with
+    | Some idx -> idx
     | None -> fail "the accumulator's base indices must be affine"
   in
   let fused = ref false in
