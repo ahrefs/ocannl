@@ -1014,10 +1014,15 @@ let listing path =
   | entries -> Array.to_list entries |> List.sort ~compare:String.compare
   | exception (Sys_error _ as exn) -> if Stdlib.Sys.file_exists path then raise exn else []
 
-(** The [entries] of [path] that are directories; one that no longer exists is not. *)
+(** The [entries] of [path] that are directories; one that no longer exists is not. A stat that
+    fails while the entry still exists raises: the caller takes an unreadable tree as every backend.
+*)
 let subdirectories path entries =
   List.filter entries ~f:(fun e ->
-      try Stdlib.Sys.is_directory (Stdlib.Filename.concat path e) with Sys_error _ -> false)
+      let p = Stdlib.Filename.concat path e in
+      match Stdlib.Sys.is_directory p with
+      | is_dir -> is_dir
+      | exception (Sys_error _ as exn) -> if Stdlib.Sys.file_exists p then raise exn else false)
 
 (** Every dune file under [root] that dune itself would read, as [(dir, content)] with [dir]
     relative to [root] ([""] for [root] itself). Into a directory's subdirectories as dune goes: by
