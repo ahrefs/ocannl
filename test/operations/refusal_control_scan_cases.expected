@@ -534,3 +534,9 @@ workflow_job_timeouts.ml: [scanner-refusal:de56c44843177e1b1a86d6d0970e8ec9] ref
 workflow_job_timeouts.ml: [scanner-refusal:ea2e7502608bb8e1195b7ec15868624a] nested under github/workflows (claim) is catalogued beside workflow_job_timeouts.expected: true
 every `raw_direct_evidence` and `raw_catalogue_only` key names a current direct failure of a catalogued scanner source: true
 no direct failure is both answered by a control and catalogued as answered by none: true
+every Verdict.Claims member is judged refusing or not, once, and every judged name is a member: true
+the paired, formatted-paired and pairwise-distinct claims refuse through their label: true
+a combinator Verdict.Claims gains that neither list judges is named as unjudged: true
+a judged combinator Verdict.Claims no longer binds is named as not a member: true
+a Claims item other than a plain binding is unreadable, never assumed judged: true
+a Verdict source declaring no Claims structure is refused, not read as empty: true

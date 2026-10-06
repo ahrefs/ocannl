@@ -952,12 +952,7 @@ let row ~source diagnostics =
              Printf.sprintf "        %S;\n" (Refusal_control_scan.marker diagnostic))
         @ [ "      ] );\n" ])
 
-(** Multiset difference: [minus xs ys] removes one occurrence per [ys] element, since markers repeat
-    when formats do and an argument list can name a source twice. *)
-let minus xs ys =
-  List.fold ys ~init:xs ~f:(fun remaining y ->
-      let before, after = List.split_while remaining ~f:(Fn.non (String.equal y)) in
-      before @ Option.value (List.tl after) ~default:[])
+let minus = Refusal_control_scan.minus
 
 type row_difference = {
   absent : string list;  (** Extracted markers the row lacks. *)
