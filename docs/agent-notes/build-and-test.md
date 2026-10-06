@@ -3447,6 +3447,17 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   exception the injected arm failure raises, which is why the tuner wraps it) reaching stderr, and
   dune interleaves it with whatever else runs in parallel — in the 09-03 sweep it landed directly
   above an unrelated test's failure and read as its cause.
+- An allocation bound is witnessed by a `Gc.allocated_bytes` delta taken tightly around the one
+  operation under test, its word count printed to stderr `(not part of the golden)` and only the
+  bound claimed on stdout (`broadcast_constant_init`'s `allocation_witness`, gh-ocannl-1218). For
+  a host initializer that operation is forcing its lazy (`Ir.Host_inits.find`), done inside
+  `Context.compile`'s `~lowered_transform` hook: shape inference has committed the dims and padding
+  by then, and linking has not yet forced it — claim `Lazy.is_val` was false beforehand, or the
+  delta measures nothing. Size the shapes so the defect the bound excludes lands well above it: an
+  allocation per run is visible only when the run count times the smallest per-run allocation, a
+  3-word pair, exceeds the bound (512 runs against 512 words). And do not argue from the source
+  that a helper is allocation-free: without flambda, a function returning a tuple allocates it on
+  every call.
 
 ## Test support and placement
 
