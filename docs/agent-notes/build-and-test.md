@@ -2051,8 +2051,9 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
 - The OCaml floor (`>= 5.3.0`) runs only in the scheduled matrix (the Windows CI subsection below),
   never on a PR, so a change whose result depends on the compiler — a compiler message in a golden,
   a parse-tree shape a scan matches — is checked on the floor switch locally:
-  `DUNE_BUILD_DIR=<scratch>/build53 opam exec --switch=5.3.0 -- tools/test-run.sh run build @<alias>`.
-  The separate build directory keeps the two compilers' artifacts apart, so neither run rebuilds
+  `DUNE_BUILD_DIR=<scratch>/build53 opam exec --switch=<floor> -- tools/test-run.sh run build @<alias>`,
+  where `<floor>` is the HANDLE of a 5.3 switch as `opam switch list` prints it — a global `5.3.0`,
+  or the checkout's path for a local switch. The separate build directory keeps the two compilers' artifacts apart, so neither run rebuilds
   the other's tree. It does not make the run concurrent with another: `tools/test-run.sh` holds one
   run per worktree whatever the build directory, so wait for the active run (or use a second
   worktree). The switch needs the project's dependencies installed; with them, a targeted alias
