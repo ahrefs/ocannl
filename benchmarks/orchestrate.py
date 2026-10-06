@@ -21,6 +21,7 @@ the run log and in a report section, rather than quietly not being run (gh-ocann
 """
 
 import argparse
+import collections
 import contextlib
 import hashlib
 import json
@@ -1326,37 +1327,50 @@ def loss_moved(losses):
     return max(prefix) - min(prefix) > LOSS_MOVE_MIN_REL * scale
 
 
+def reference_row(rows):
+    """The parity reference among one workload's rows, or None.
+
+    The reference is the exact torch CPU eager cell in every regime: an approximate torch cell is a
+    counterpart, gated against the exact one like every other approximate row.
+    """
+    return next(
+        (
+            r
+            for r in rows
+            if (r["framework"], r["backend"], r["variant"]) == REFERENCE
+            and regime_of(r) == "exact"
+        ),
+        None,
+    )
+
+
+def trajectory_drift(losses, ref_losses):
+    """The largest relative distance of a loss trajectory from the reference's, or None.
+
+    Compared over the prefix both trajectories reached while still finite, so a DIVERGED
+    trajectory's drift is measured BEFORE it went and nothing else; None when they share no step.
+    """
+    n = min(len(finite_prefix(losses)), len(finite_prefix(ref_losses)))
+    if not n:
+        return None
+    return max(abs(a - b) / max(abs(b), 1e-6) for a, b in zip(losses[:n], ref_losses[:n]))
+
+
 def parity_check(results):
     """Annotate each result with parity vs the reference run of the same workload."""
     by_workload = {}
     for r in results:
         by_workload.setdefault(r["workload"], []).append(r)
     for workload, rs in by_workload.items():
-        # The reference is the exact torch CPU eager cell in every regime: an approximate torch
-        # cell is a counterpart, gated against the exact one like every other approximate row.
-        ref = next(
-            (
-                r
-                for r in rs
-                if (r["framework"], r["backend"], r["variant"]) == REFERENCE
-                and regime_of(r) == "exact"
-            ),
-            None,
-        )
-        ref_prefix = finite_prefix(ref["losses"]) if ref is not None else []
-        ref_diverged = ref is not None and len(ref_prefix) < len(ref["losses"])
+        ref = reference_row(rs)
+        ref_diverged = ref is not None and diverged_at(ref["losses"]) is not None
         for r in rs:
             r["parity_loss_moved"] = loss_moved(r["losses"])
             r["diverged_at"] = diverged_at(r["losses"])
             if ref is not None:
-                # Compared over the prefix both trajectories reached while still finite, so a
-                # DIVERGED row's parity_max_rel is drift measured BEFORE it went and nothing else.
-                n = min(len(finite_prefix(r["losses"])), len(ref_prefix))
-                if n:
-                    r["parity_max_rel"] = max(
-                        abs(a - b) / max(abs(b), 1e-6)
-                        for a, b in zip(r["losses"][:n], ref["losses"][:n])
-                    )
+                drift = trajectory_drift(r["losses"], ref["losses"])
+                if drift is not None:
+                    r["parity_max_rel"] = drift
             if r["diverged_at"] is not None:
                 # The cell ran and its training blew up: a gate failure naming its cause, not a
                 # missing cell and not a stationary one (gh-ocannl-676). Parity is meaningless past
@@ -1387,6 +1401,49 @@ def parity_check(results):
                     # its own, so a stationary row is not misattributed to excessive drift.
                     exact_tol = parity_tol(r.get("precision", "f32"))
                     r["parity_exact_envelope"] = bool(max_rel is not None and max_rel < exact_tol)
+
+
+def saved_loss_parity(checkpoint, regime, results):
+    """What a failed cell's saved losses say against the reference: a DIAGNOSTIC, never acceptance.
+
+    A cell killed after its parity steps keeps the losses it completed in its last checkpoint
+    (gh-ocannl-1209). Whether they track the reference tells a reader if the work before the failure
+    was on course -- a cap that cut a correct cell short reads differently from one that cut a
+    wrong one -- so the report's runner-failure list shows the drift beside the envelope the cell
+    WOULD have been gated at. It never becomes a verdict: the cell has no result line and no timing,
+    the sweep fails on it whatever its losses say, and no word the parity column uses is reused.
+    """
+    if checkpoint is None:
+        return "no checkpoint"
+    losses = checkpoint.get("losses") or []
+    kept = f"{len(losses)} of {checkpoint.get('parity_steps')} saved losses"
+    if not losses:
+        return f"{kept}: nothing to compare"
+    ref = reference_row([r for r in results if r["workload"] == checkpoint.get("workload")])
+    notes = []
+    if ref is None or diverged_at(ref["losses"]) is not None:
+        # Only the drift needs the reference; what the trajectory says about itself still stands.
+        notes.append(f"no usable reference row for `{checkpoint.get('workload')}`")
+    else:
+        drift = trajectory_drift(losses, ref["losses"])
+        if drift is None:
+            notes.append("no step shared with the reference")
+        else:
+            tol = parity_tol(checkpoint.get("precision", "f32"), regime)
+            side = "inside" if drift < tol else "outside"
+            notes.append(
+                f"drift {drift:.1e} vs `{'/'.join(REFERENCE)}`, {side} the envelope {tol:g}"
+            )
+    cut = diverged_at(losses)
+    if cut is not None:
+        notes.append(f"loss non-finite from step {cut}")
+    elif len(losses) < 2:
+        # One observation cannot move: `loss_moved` would say stationary, which is the gate's
+        # reading of a full trajectory, not a fact about a cell cut short after one step.
+        notes.append("movement not assessable from one step")
+    elif not loss_moved(losses):
+        notes.append("loss stationary")
+    return f"{kept}: " + "; ".join(notes)
 
 
 def check_fixture_digests(fixtures, digests_path=None, allow_unpinned=False):
@@ -1758,10 +1815,17 @@ def dominant_kernel_ceilings(rows):
     return seen
 
 
+# One cell that produced no result: its label, what went wrong, the checkpoint it left (if any) and
+# the numerics regime it was dispatched in -- the last two for `saved_loss_parity`.
+Failure = collections.namedtuple(
+    "Failure", "label note checkpoint regime", defaults=(None, "exact")
+)
+
+
 def failure_line(failure):
-    """One `(label, note)` runner failure, as the run log and the report name it."""
-    label, note = failure
-    return f"{label} ({note})" if note else label
+    """One runner failure, as the run log names it."""
+    failure = Failure(*failure)
+    return f"{failure.label} ({failure.note})" if failure.note else failure.label
 
 
 def beam_parallel_arg(text):
@@ -2224,10 +2288,17 @@ def report(
             "Cells that produced no result line. Their absence from the tables above is a "
             "failure, not a measurement — nothing here is comparable with anything.\n"
         )
-        lines.append("| cell | why |")
-        lines.append("|---|---|")
-        for label, note in failures:
-            lines.append(f"| {label} | {note or 'no result line'} |")
+        lines.append(
+            "The last column is a DIAGNOSTIC, never acceptance: the parity losses a killed cell "
+            "saved in its last checkpoint, against the reference and the envelope the cell would "
+            "have been gated at -- whether the work before the failure was on course. The cell "
+            "still has no result and still fails the sweep.\n"
+        )
+        lines.append("| cell | why | saved losses vs reference (diagnostic, never acceptance) |")
+        lines.append("|---|---|---|")
+        for f in map(lambda f: Failure(*f), failures):
+            diagnostic = saved_loss_parity(f.checkpoint, f.regime, results)
+            lines.append(f"| {f.label} | {f.note or 'no result line'} | {diagnostic} |")
     text = "\n".join(lines) + "\n"
     (out_dir / "report.md").write_text(text)
     print("\n" + text)
@@ -2460,7 +2531,7 @@ def main():
     # rather than leaving it to how the operator ran the sweep.
     stamp = {}
 
-    def record_failure(label, note, checkpoint=None):
+    def record_failure(label, note, checkpoint=None, regime="exact"):
         """The one path a failed cell takes, wherever in the sweep it failed.
 
         Both the in-memory list the report is built from and the checkpoint an interrupted run
@@ -2468,7 +2539,7 @@ def main():
         pass's own failure went straight to the list and so vanished from the artifact
         (gh-ocannl-760 review).
         """
-        failures.append((label, note))
+        failures.append(Failure(label, note, checkpoint, regime))
         with open(partial_failures, "a") as f:
             # The ambient environment rides on the failure record too: a sweep whose OCANNL cells
             # all failed -- which is what an ambient setting they cannot run under looks like --
@@ -2480,7 +2551,7 @@ def main():
             )
             f.write(json.dumps(json_safe(record), allow_nan=False) + "\n")
 
-    def run_kept(label, cmd, **kwargs):
+    def run_kept(label, cmd, regime="exact", **kwargs):
         """`run_cell` under the sweep's cap, plus the last checkpoint a failed cell left. An
         interrupted cell's checkpoint is recorded before the cancellation propagates: the sweep
         writes nothing else for it."""
@@ -2491,13 +2562,14 @@ def main():
             )
         except BaseException:
             if kept:
-                record_failure(label, "interrupted mid-cell", kept[-1])
+                record_failure(label, "interrupted mid-cell", kept[-1], regime)
             raise
         return r, note, (kept[-1] if kept else None)
 
     def collect(label, cmd, override=None, **kwargs):
         t0 = time.monotonic()
-        r, note, checkpoint = run_kept(label, cmd, **kwargs)
+        regime = (override or {}).get("regime", "exact")
+        r, note, checkpoint = run_kept(label, cmd, regime, **kwargs)
         if r:
             r.update(stamp)
             stamp_ambient_env(r, ambient)
@@ -2510,7 +2582,7 @@ def main():
             with open(partial, "a") as f:
                 f.write(json.dumps(json_safe(r), allow_nan=False) + "\n")
         else:
-            record_failure(label, note, checkpoint)
+            record_failure(label, note, checkpoint, regime)
         print(f"    cell took {time.monotonic() - t0:.0f}s", flush=True)
 
     for fx in fixtures:
@@ -2576,12 +2648,15 @@ def main():
                                 pass1, note, checkpoint = run_kept(
                                     f"{label} (search pass)",
                                     cmd,
+                                    regime,
                                     env=env,
                                     cwd=HERE,
                                     on_incomplete=ocannl_cache_note,
                                 )
                                 if pass1 is None:
-                                    record_failure(f"{label} (search pass)", note, checkpoint)
+                                    record_failure(
+                                        f"{label} (search pass)", note, checkpoint, regime
+                                    )
                                     continue
                                 # What the search pass actually did, which is not derivable from the
                                 # compile_s it hands over: a warm autotune_cache makes it a replay, and

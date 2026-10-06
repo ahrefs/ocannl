@@ -546,7 +546,9 @@ endpoint, whereas HIP's invalid exact-f16 and beyond-exact approximate rows are 
   tables beside its step-time matrix; every selected treatment's runner must support training
   diagnostics (an older forward-only BASE is refused). The driver records a cell's exit status;
   both `trainseg` and `summary` use one validator, so forward-only, capped and crashed outputs are
-  refused explicitly and never published as training tables.
+  refused explicitly and never published as training tables. Its cells print the per-kernel table
+  (`BENCH_KERNEL_TABLE=1`) by default -- a lane or fission A/B moves kernels, and a step-time line
+  alone hid gh-ocannl-1167's wrong premise -- and `KERNEL_TABLE=0` turns it off.
   `BENCH_SR_SITES=1` (`bench_conv_diag`) prints what `Autotune.split_reduce_sites` proposes on the
   same graph — the gh-ocannl-484 task-3 seeding can only reach the accumulations listed there, so
   it is the companion to the census above when asking why a seeded split-reduce family did or did

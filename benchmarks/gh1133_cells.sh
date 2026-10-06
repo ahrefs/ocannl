@@ -68,9 +68,12 @@
 # FIXTURES (default the three inference and three training fixtures), TREATMENTS (default
 # "base fill1 fill256"), FIXTURE_DIR (default benchmarks/fixtures of this checkout), REF (default
 # base: the treatment the summary's ratio column divides by; a d1 treatment divides by d1REF),
-# KERNEL_TABLE (default 0; 1 prints every shipped kernel's min-of-20 time to the cell's .err, the
-# per-kernel attribution of gh-ocannl-1002), REF_ALL (default unset: a treatment every cell's ratio
-# divides by, overriding REF's d1 pairing -- for the b<T> A/Bs).
+# KERNEL_TABLE (default 1: every shipped kernel's min-of-20 time, geometry and written nodes go to
+# the cell's .err, the per-kernel attribution of gh-ocannl-1002; 0 turns it off -- on by default
+# because a lane or fission A/B moves kernels, and one step-time line hid gh-ocannl-1167's wrong
+# premise where only the table exposed it; it costs nothing extra: the dominant-kernel instrument
+# times every kernel either way, after the timed steps), REF_ALL (default unset: a treatment every
+# cell's ratio divides by, overriding REF's d1 pairing -- for the b<T> A/Bs).
 #
 # Exit: 0 all steps complete; 1 a cell or step failed; 2 usage; 130 interrupted.
 # The environment is cleared of OCANNL_*, BENCH_* and the OpenMP controls: every treatment is
@@ -89,7 +92,8 @@ repeats=${REPEATS:-3}
 fixtures=${FIXTURES:-"gpt2_mini gpt2_mini_s512 gpt2_mini_s1024 gpt2_mini_train gpt2_mini_train_s512 gpt2_mini_train_s1024"}
 treatments=${TREATMENTS:-"base fill1 fill256"}
 ref=${REF:-base}
-kernel_table=${KERNEL_TABLE:-0}
+kernel_table=${KERNEL_TABLE:-1}
+case $kernel_table in 0 | 1) ;; *) echo "gh1133: KERNEL_TABLE must be 0 or 1, got '$kernel_table'" >&2; exit 2 ;; esac
 case $repeats in '' | *[!0-9]* | 0*) echo "gh1133: REPEATS must be a positive decimal integer, got '$repeats'" >&2; exit 2 ;; esac
 [ -d "$base" ] || { echo "gh1133: BASE $base is not a directory" >&2; exit 2; }
 if [ -e "$out" ] && [ -n "$(ls -A "$out" 2>/dev/null)" ]; then

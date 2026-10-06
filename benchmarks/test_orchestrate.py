@@ -267,6 +267,127 @@ class CheckpointLineTest(unittest.TestCase):
         self.assertIsNone(orchestrate.last_checkpoint("bench: parity step 0 loss 10.4\n"))
 
 
+class SavedLossParityTest(unittest.TestCase):
+    """The saved losses of a failed cell, against the reference: a diagnostic, never acceptance.
+
+    Fed the checkpoints `Bench_json` built (the golden of test/operations/bench_result_line), so
+    the reader is pinned to what a runner writes rather than to a fixture of this file's making.
+    """
+
+    def checkpoint(self, complete):
+        lines = [
+            orchestrate.last_checkpoint(line)
+            for line in golden_checkpoint_lines()
+            if orchestrate.last_checkpoint(line)["workload"] == "gpt2_mini_train_s1024"
+        ]
+        found = [c for c in lines if (c["stages"]["parity"] == "complete") == complete]
+        self.assertEqual(len(found), 1, lines)
+        return found[0]
+
+    def reference(self, checkpoint, scale):
+        ref = result("pytorch", "cpu", "eager", [x * scale for x in checkpoint["losses"]])
+        ref["workload"] = checkpoint["workload"]
+        return ref
+
+    def test_drift_is_read_against_the_envelope_the_cell_would_have_been_gated_at(self):
+        saved = self.checkpoint(complete=True)
+        self.assertEqual(saved["precision"], "f16")  # gated at PARITY_TOL_PRECISION["f16"]
+        close = [self.reference(saved, 1 + 1e-4)]
+        apart = [self.reference(saved, 1.005)]
+
+        inside = orchestrate.saved_loss_parity(saved, "exact", close)
+        outside = orchestrate.saved_loss_parity(saved, "exact", apart)
+        # The same drift fits the approximate regime's wider envelope: the regime is threaded.
+        approx = orchestrate.saved_loss_parity(saved, "approximate", apart)
+
+        self.assertIn("6 of 6 saved losses", inside)
+        self.assertIn("inside the envelope 0.002", inside)
+        self.assertIn("outside the envelope 0.002", outside)
+        self.assertIn("inside the envelope 0.01", approx)
+        for note in (inside, outside, approx):
+            # Never in the parity column's vocabulary: a reader must not take it for a verdict.
+            for verdict in ("PASS", "FAIL", "REF", "DIVERGED"):
+                self.assertNotIn(verdict, note)
+
+    def test_a_trajectory_that_went_non_finite_reports_where_and_its_drift_before(self):
+        cut = self.checkpoint(complete=False)
+        self.assertEqual(cut["losses"][1], None)
+        ref = self.reference(self.checkpoint(complete=True), 1.0)
+
+        note = orchestrate.saved_loss_parity(cut, "exact", [ref])
+
+        self.assertIn("2 of 6 saved losses", note)
+        self.assertIn("drift 0.0e+00", note)  # step 0 is the reference's own value
+        self.assertIn("loss non-finite from step 1", note)
+
+    def test_without_a_reference_or_losses_it_says_so_rather_than_inventing_a_drift(self):
+        saved = self.checkpoint(complete=True)
+        other = result("pytorch", "cpu", "eager", saved["losses"])  # workload mlp_wide
+        diverged = self.reference(saved, 1.0)
+        diverged["losses"] = [float("nan")] * 6
+
+        self.assertEqual(orchestrate.saved_loss_parity(None, "exact", [other]), "no checkpoint")
+        self.assertIn(
+            "no usable reference row", orchestrate.saved_loss_parity(saved, "exact", [other])
+        )
+        self.assertIn(
+            "no usable reference row", orchestrate.saved_loss_parity(saved, "exact", [diverged])
+        )
+        empty = dict(saved, losses=[])
+        self.assertIn("nothing to compare", orchestrate.saved_loss_parity(empty, "exact", [other]))
+
+    def test_without_a_usable_reference_the_trajectory_still_speaks_for_itself(self):
+        cut = self.checkpoint(complete=False)  # [10.375, null]
+        other = result("pytorch", "cpu", "eager", cut["losses"][:1] * 6)  # workload mlp_wide
+        diverged = self.reference(self.checkpoint(complete=True), 1.0)
+        diverged["losses"] = [float("nan")] * 6
+
+        for refs in ([], [other], [diverged]):
+            with self.subTest(refs=refs):
+                note = orchestrate.saved_loss_parity(cut, "exact", refs)
+                self.assertIn("no usable reference row", note)
+                self.assertNotIn("drift", note)
+                self.assertIn("loss non-finite from step 1", note)
+
+    def test_one_saved_step_is_not_called_stationary(self):
+        saved = self.checkpoint(complete=True)
+        one = dict(saved, losses=saved["losses"][:1])
+        flat = dict(saved, losses=[saved["losses"][0]] * 3)
+        ref = self.reference(saved, 1.0)
+
+        note = orchestrate.saved_loss_parity(one, "exact", [ref])
+        self.assertIn("1 of 6 saved losses", note)
+        self.assertIn("drift 0.0e+00", note)
+        self.assertNotIn("stationary", note)
+        self.assertIn("movement not assessable from one step", note)
+        # Two or more finite steps that do not move are still reported as such.
+        self.assertIn("loss stationary", orchestrate.saved_loss_parity(flat, "exact", [ref]))
+
+    def test_the_report_shows_it_beside_the_failure_labelled_as_never_acceptance(self):
+        saved = self.checkpoint(complete=True)
+        ref = cell("pytorch", "cpu", "eager", [x * (1 + 1e-4) for x in saved["losses"]])
+        ref["workload"] = saved["workload"]
+        orchestrate.parity_check([ref])
+        label = "gpt2_mini_train_s1024 ocannl/hip/default/f16"
+        failures = [
+            orchestrate.Failure(label, "TIMED OUT after 90s", saved, "exact"),
+            ("mlp_wide ocannl/cc/default", "exit 1"),  # a plain pair still reads
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            with contextlib.redirect_stdout(io.StringIO()):
+                orchestrate.report([ref], out, (), failures)
+            text = (out / "report.md").read_text()
+
+        section = text[text.index("## Runner failures") :]
+        self.assertNotIn(label, text[: text.index("## Runner failures")])
+        self.assertIn("diagnostic, never acceptance", section)
+        row = next(line for line in section.splitlines() if line.startswith(f"| {label} |"))
+        self.assertIn("TIMED OUT after 90s", row)
+        self.assertIn("inside the envelope 0.002", row)
+        self.assertIn("| mlp_wide ocannl/cc/default | exit 1 | no checkpoint |", section)
+
+
 class FailureRecordTest(unittest.TestCase):
     """gh-ocannl-1209: a failed cell's checkpoint is persisted with the identity it lacks."""
 
@@ -315,6 +436,8 @@ class FailureRecordTest(unittest.TestCase):
         main = source[source.index("\ndef main():") :]
         self.assertIn("source = source_identity(ROOT)", main)
         self.assertIn("provenance=dict(stamp, **source)", main)
+        # The report's saved-loss diagnostic reads the checkpoint and regime off the failure.
+        self.assertIn("failures.append(Failure(label, note, checkpoint, regime))", main)
         # Both the cell and its search pass go through the helper that records an interrupted
         # cell's checkpoint before the cancellation propagates.
         self.assertEqual(main.count("run_cell("), 1)
