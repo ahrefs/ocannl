@@ -2,3 +2,6 @@ forward-only output is refused rather than labeled as training: true
 failed, capped and unrecorded outputs are refused rather than published: true
 successful training output appears beside its step-time row: true
 a treatment's cells are summarized by its name, and only the given treatments': true
+a step stage whose cells produced no result line fails: true
+a run without a step stage passes on its training tables alone: true
+a run without a step stage still fails on a refused training table: true

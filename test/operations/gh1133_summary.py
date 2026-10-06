@@ -68,3 +68,32 @@ with tempfile.TemporaryDirectory() as scratch:
     check("| 1.000x |" in text and "MISSING REFERENCE" not in text, text)
     check("| keep |" not in text, text)
     print("a treatment's cells are summarized by its name, and only the given treatments': true")
+
+# A prep or dry run (no step stage) owes no step-time matrix; a step stage's empty matrix fails.
+with tempfile.TemporaryDirectory() as scratch:
+    out = Path(scratch)
+
+    def render(step_stage):
+        text = io.StringIO()
+        with contextlib.redirect_stdout(text):
+            code = report.summary(str(out), "keep", "keep", step_stage=step_stage)
+        return code, text.getvalue()
+
+    code, text = render(step_stage=True)
+    check(code == 1 and "NO MEASUREMENT" in text, text)
+    print("a step stage whose cells produced no result line fails: true")
+
+    code, text = render(step_stage=False)
+    check(code == 0 and "No step stage requested" in text, text)
+    check("NO MEASUREMENT" not in text and "| backend |" not in text, text)
+    name = "hip-gpt2_mini_train-keep-trainseg.out"
+    (out / name).write_text("mode: train backend: hip\nsentinel-prep-table\n")
+    (out / (name[:-4] + ".exit")).write_text("0\n")
+    code, text = render(step_stage=False)
+    check(code == 0 and "sentinel-prep-table" in text and "NO MEASUREMENT" not in text, text)
+    print("a run without a step stage passes on its training tables alone: true")
+
+    (out / (name[:-4] + ".exit")).write_text("124\n")
+    code, text = render(step_stage=False)
+    check(code == 1 and "REFUSED:" in text and "sentinel-prep-table" not in text, text)
+    print("a run without a step stage still fails on a refused training table: true")
