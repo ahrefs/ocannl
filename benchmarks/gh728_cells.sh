@@ -75,9 +75,9 @@ PSB=$TREE/_build/default/bin/projection_shape_bench.exe
 GPT=$TREE/_build/default/benchmarks/runners/ocannl/bench_gpt.exe
 # The workload's bytes must be SOME recorded origin's (benchmarks/fixtures/DIGESTS.txt): numbers
 # on unrecorded bytes compare with nothing, and the raw hash alone cannot say so (entries may be
-# content digests). The verdict line, naming whose bytes these are, goes into the manifest.
-FIXTURE_VERDICT=$(cd "$TREE/benchmarks" && python3 fixture_digest.py --check "$FIXTURE") &&
-  case $FIXTURE_VERDICT in *" — MATCH"*) ;; *) false ;; esac ||
+# content digests). The checker's exit status is the verdict (0 only on a MATCH); its report line,
+# naming whose bytes these are, is for people and goes into the manifest unparsed.
+FIXTURE_VERDICT=$(cd "$TREE/benchmarks" && python3 fixture_digest.py --check "$FIXTURE") ||
   { echo "gh728_cells: fixture is not a recorded origin's bytes: ${FIXTURE_VERDICT:-no verdict}" >&2; exit 2; }
 # Which device the numbers are OF, selected by the backend under test and refused when empty: a
 # manifest that names no device cannot be read or reproduced.
