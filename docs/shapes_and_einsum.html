@@ -1319,8 +1319,9 @@ let%op block = [a; b]
 &lt;div id=&quot;capture-dims&quot; class=&quot;block&quot; title=&quot;Dimension Variables&quot;&gt;
 &lt;p&gt;&lt;span&gt;Capture dimension values for computation:&lt;/span&gt;&lt;/p&gt;
 &lt;pre&gt;&lt;code class=&quot;language-ocaml&quot;&gt;let%op normalize x =
-  let mean = x ++ &amp;quot;... | ..d.. =&amp;gt; ... | 0&amp;quot; [&amp;quot;d&amp;quot;] in
-  let centered = (x - mean) /. dim d in
+  let mean = (x ++ &amp;quot;... | ..d.. =&amp;gt; ... | 0&amp;quot; [&amp;quot;d&amp;quot;]) /. dim d in
+  let centered = x - mean in
+  let variance = ((centered *. centered) ++ &amp;quot;... | ... =&amp;gt; ... | 0&amp;quot;) /. dim d in
   centered /. sqrt (variance + !.1e-5)
 &lt;/code&gt;&lt;/pre&gt;
 &lt;/div&gt;
@@ -1393,10 +1394,12 @@ let%op reduce_last_n ~n ?(keepdim = true) () =
 &lt;li&gt;&lt;code&gt;&amp;quot;...|...-&amp;gt;...; ...|...-&amp;gt;... =&amp;gt; ...|...-&amp;gt;...&amp;quot;&lt;/code&gt;&lt;span&gt; - Pointwise binary op&lt;/span&gt;&lt;/li&gt;
 &lt;/ul&gt;
 &lt;/div&gt;
-&lt;pre id=&quot;pattern-examples&quot; class=&quot;example&quot; title=&quot;Real Examples from nn_blocks.ml&quot; down-at-unpause pause&gt;&lt;code class=&quot;language-ocaml&quot;&gt;(* Layer norm - reduce over feature dimensions *)
-let%op layer_norm () x =
-  let mean = x ++ &amp;quot;... | ..d.. =&amp;gt; ... | 0&amp;quot; [&amp;quot;d&amp;quot;] in
-  let normalized = (x - mean) /. dim d in
+&lt;pre id=&quot;pattern-examples&quot; class=&quot;example&quot; title=&quot;Real Examples from nn_blocks.ml&quot; down-at-unpause pause&gt;&lt;code class=&quot;language-ocaml&quot;&gt;(* Layer norm - reduce over feature dimensions; ++ sums, so divide by dim d *)
+let%op layer_norm ~label ?(epsilon = 1e-5) () x =
+  let mean = (x ++ &amp;quot;... | ..d.. =&amp;gt; ... | 0&amp;quot; [&amp;quot;d&amp;quot;]) /. dim d in
+  let centered = x - mean in
+  let variance = ((centered *. centered) ++ &amp;quot;... | ... =&amp;gt; ... | 0&amp;quot;) /. dim d in
+  let normalized = centered /. sqrt (variance + !.epsilon) in
   ({ gamma = 1. } *. normalized) + { beta = 0. }
 
 (* Attention scores with flexible batching *)
