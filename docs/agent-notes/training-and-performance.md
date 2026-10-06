@@ -177,9 +177,11 @@ files.
   numpy, which retires every published number on the old bytes and does nothing for the other
   measuring boxes. If your copies are merely unrecorded, `python3 benchmarks/fixture_digest.py
   --record` pins them as they are (stdlib-only, no venv, and it leaves other origins alone);
-  `--check` reports disk against record. Regeneration is a cross-box event to be coordinated
-  across every origin in `DIGESTS.txt`'s `# measurement-boxes:` header field at once
-  (gh-ocannl-759, gh-ocannl-850). That list is independent of the entry rows, so
+  `--check` reports disk against record, and `--check --expect-origin <box>` answers a driver
+  pinned to one box's records by its exit status -- never grep the report for the box, since its
+  origin field joins every agreeing box (`m4-max,tuf's bytes`). Regeneration is a cross-box
+  event to be coordinated across every origin in `DIGESTS.txt`'s `# measurement-boxes:` header
+  field at once (gh-ocannl-759, gh-ocannl-850). That list is independent of the entry rows, so
   `divergent_origins` and generated reports name a declared box even when its fixture entry is
   absent; deriving the box set from rows would recreate the silence the field exists to remove.
 - The boxes are **not** on the same fixture bytes, and the digest file says so per origin

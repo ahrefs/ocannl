@@ -201,6 +201,19 @@ need_identity() {
   return 1
 }
 
+# [m4max_fixtures F...]: whether every fixture F (a name in FIXTURE_DIR) is m4-max's recorded
+# bytes, decided by fixture_digest.py's exit status -- never by parsing its report, whose origin
+# field lists every box that agrees (`m4-max,tuf's bytes`) -- with the report appended to
+# OUT/fixtures.txt (OUT starts empty, so a later step's check extends the provenance one's). No
+# names is a failure: given no paths, fixture_digest.py checks every fixture in its default dir.
+m4max_fixtures() {
+  local f paths=()
+  [ $# -gt 0 ] || { echo "${0##*/}: no fixtures named to check"; return 1; }
+  for f in "$@"; do paths+=("$fixture_dir/$f.safetensors"); done
+  python3 fixture_digest.py --check --expect-origin m4-max "${paths[@]}" | tee -a "$out/fixtures.txt"
+  return "${PIPESTATUS[0]}"
+}
+
 clean_tree() {
   local tree=$1 exclude=()
   case $out/ in "$tree"/*) exclude=(":(exclude)${out#"$tree"/}") ;; esac
@@ -226,14 +239,11 @@ for step in "$@"; do
       ok=1
       clean_tree "$root" || ok=0
       clean_tree "$base" || ok=0
-      n=0
       for f in $fixtures; do
-        n=$((n + 1))
         [ -f "$fixture_dir/$f.safetensors" ] || { echo "gh1133: missing fixture $f"; ok=0; }
       done
-      if [ "$ok" = 1 ] && python3 fixture_digest.py --check \
-        $(for f in $fixtures; do echo "$fixture_dir/$f.safetensors"; done) |
-        tee "$out/fixtures.txt" && [ "$(grep -cE "MATCH — ([^ ]*,)?m4-max(,[^ ]*)?'s bytes" "$out/fixtures.txt")" = "$n" ]; then
+      # shellcheck disable=SC2086 # FIXTURES is a list of names, one word each
+      if [ "$ok" = 1 ] && m4max_fixtures $fixtures; then
         proven=1
       else
         echo "gh1133: a tree is not clean or the fixtures do not match the m4-max content-v1 records"

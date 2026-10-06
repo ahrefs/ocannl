@@ -155,6 +155,19 @@ pass_cells() {
   else echo "$list" | tr ' ' '\n' | sed '/^$/d'; fi
 }
 
+# [m4max_fixtures F...]: whether every fixture F (a name in FIXTURE_DIR) is m4-max's recorded
+# bytes, decided by fixture_digest.py's exit status -- never by parsing its report, whose origin
+# field lists every box that agrees (`m4-max,tuf's bytes`) -- with the report appended to
+# OUT/fixtures.txt (OUT starts empty, so a later step's check extends the provenance one's). No
+# names is a failure: given no paths, fixture_digest.py checks every fixture in its default dir.
+m4max_fixtures() {
+  local f paths=()
+  [ $# -gt 0 ] || { echo "${0##*/}: no fixtures named to check"; return 1; }
+  for f in "$@"; do paths+=("$fixture_dir/$f.safetensors"); done
+  python3 fixture_digest.py --check --expect-origin m4-max "${paths[@]}" | tee -a "$out/fixtures.txt"
+  return "${PIPESTATUS[0]}"
+}
+
 need_identity() {
   [ "$built" = 1 ] && [ "$proven" = 1 ] && return 0
   echo "gh1003: step $1 needs build and provenance earlier in the same invocation"
@@ -183,9 +196,8 @@ for step in "$@"; do
         for f in $fixtures; do
           [ -f "$fixture_dir/$f.safetensors" ] || { echo "gh1003: missing fixture $f"; ok=0; }
         done
-        if [ "$ok" = 1 ] && python3 fixture_digest.py --check \
-          $(for f in $fixtures; do echo "$fixture_dir/$f.safetensors"; done) |
-          tee "$out/fixtures.txt" && [ "$(grep -cE "MATCH — ([^ ]*,)?m4-max(,[^ ]*)?'s bytes" "$out/fixtures.txt")" = 3 ]; then
+        # shellcheck disable=SC2086 # a list of names, one word each
+        if [ "$ok" = 1 ] && m4max_fixtures $fixtures; then
           proven=1
         else
           echo "gh1003: fixtures do not match the m4-max content-v1 records"
@@ -220,9 +232,8 @@ for step in "$@"; do
       for f in $train_fixtures; do
         [ -f "$fixture_dir/$f.safetensors" ] || { echo "gh1003: missing fixture $f"; ok=0; }
       done
-      if [ "$ok" = 1 ] && python3 fixture_digest.py --check \
-        $(for f in $train_fixtures; do echo "$fixture_dir/$f.safetensors"; done) |
-        tee -a "$out/fixtures.txt" | grep -cE "MATCH — ([^ ]*,)?m4-max(,[^ ]*)?'s bytes" | grep -qx "$(echo $train_fixtures | wc -w | tr -d ' ')"; then
+      # shellcheck disable=SC2086 # TRAIN_FIXTURES is a list of names, one word each
+      if [ "$ok" = 1 ] && m4max_fixtures $train_fixtures; then
         for pass in 1 2; do
           for c in $(pass_cells "$pass" "$train_fixtures" "$train_treatments"); do cell metal "${c%%:*}" "${c#*:}" "r$pass"; done
         done
