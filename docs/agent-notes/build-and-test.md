@@ -3233,7 +3233,15 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   prints the slowest processes dune started, each named by its alias or first target relative to
   the trace's own `build_dir`, or with `--group prog|dir` the max/total per test executable or
   directory; `--prog '\.exe$'` keeps the tests. A process the trace saw start and not finish
-  prints `open`, its seconds a lower bound. Never read a trace by hand to answer this: it also
+  prints `open`, its seconds a lower bound. Every `tools/test-run.sh run`/`start` already keeps
+  the five slowest of its batch as `slowest` in the run directory, and the digest prints them —
+  a `TIMEOUT`'s too, where they show how close the rest came — so the data piles up under
+  `~/.ocannl-test-runs` with no manual step. The supervisor reads the trace as the verdict's last
+  step, after dune's group is gone on every exit path, the caps' included; the launch removes the
+  trace an older build left first, so a run whose dune never wrote one (a refused or cancelled
+  slot wait) records nothing rather than someone else's table, and none is recorded where dune
+  writes elsewhere (`--build-dir`, `--root`, `--trace-file`). Leg 80 of `tools/test-test-run.sh`
+  pins it. Never read a trace by hand to answer this: it also
   records dune's environment, argv and each process's arguments and captured stdout/stderr, which
   can hold credentials (gh-ocannl-1280). The tool decodes only event kinds, digit-only time slots,
   `config init`'s `build_dir` and five process fields, skipping the rest by length prefix, and its
