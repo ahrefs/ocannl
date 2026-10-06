@@ -85,14 +85,22 @@ let apply schedule opt =
 (* Every sketch the host GPU would seed for [pre], executed against the materialized run [want]
    under [matches]. Seeding reads the backend's tensor-unit formats and the numerics policy, so the
    population is the host's: tf32 seeds join CUDA's f32 site only under the approximate profile, and
-   HIP's rocWMMA seeds 16-bit operands only. The gates read the backend and the seeding
-   (hardware-capability facts), never the executed values: a GPU that seeds nothing fails the first
-   claim rather than skipping it. *)
+   HIP's rocWMMA seeds 16-bit operands only. No gate reads the population under test
+   (gh-ocannl-1115): a GPU that seeds nothing fails the first claim, and the tensorized claim is
+   gated on the CAPABILITY the backend advertises for the site's actual operand and destination
+   precisions, so where a tensor tile is advertised a vanished tensorized seed fails rather than
+   skipping. *)
 let folded_seed_claims ~tag ~what ~pre ~out ~seed ~want ~matches =
   let on_gpu = Sched.backend_is_gpu backend_name in
-  let real =
-    if on_gpu then gpu_seeds ~limits:(Context.hardware_limits (Context.auto ())) pre else []
+  let limits = Context.hardware_limits (Context.auto ()) in
+  let site = Option.value_exn (Autotune.detect_matmul pre.LL.llc) in
+  let capability =
+    if on_gpu then
+      Ll_test.tensorized_matmul_capability ~is_gpu:true ~is_cpu:false ~limits ~a:site.Autotune.m_a
+        ~b:site.m_b ~d:site.m_d
+    else `Withheld `Backend
   in
+  let real = if on_gpu then gpu_seeds ~limits pre else [] in
   let results =
     List.mapi real ~f:(fun i q ->
         let o = apply (Autotune.sketch_schedule ~accum_prec:Fn.id ~p:q pre) pre in
@@ -112,12 +120,23 @@ let folded_seed_claims ~tag ~what ~pre ~out ~seed ~want ~matches =
   gated_all ~when_:on_gpu ~on:backend_name
     ("every GPU sketch of the " ^ what ^ " matches the materialized run")
     results ~f:snd;
-  gated_exists
-    ~when_:(List.exists real ~f:(fun q -> q.Autotune.sk_mma))
-    ~on:backend_name
+  let tensorized_match (q, ok) = q.Autotune.sk_mma && ok in
+  let tensorized_gated label claim =
+    match capability with
+    | `Advertised -> claim label
+    | `Withheld aggregation -> Verdict.skipped ~aggregation ~backend:backend_name label
+  in
+  tensorized_gated
     ("a tensorized " ^ what ^ " sketch matches the materialized run")
-    results
-    ~f:(fun (q, ok) -> q.Autotune.sk_mma && ok)
+    (fun label -> p_exists label results ~f:tensorized_match);
+  (* Control: the same gate over the population with every tensorized seed dropped. The capability
+     still holds, so the claim above, evaluated there, has no witness and would fail. *)
+  tensorized_gated
+    ("without its tensorized seeds the " ^ what ^ " tensorized claim has no witness")
+    (fun label ->
+      p_none label
+        (List.filter results ~f:(fun (q, _) -> not q.Autotune.sk_mma))
+        ~f:tensorized_match)
 
 let () =
   let out = projection ~b:32 ~s:32 ~h:4 ~j:32 ~k:128 () in

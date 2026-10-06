@@ -7969,6 +7969,7 @@
   (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
   (env_var OCANNL_LEGALITY_CROSSCHECK)
   (env_var OCANNL_PROFILE)
+  (env_var OCANNL_TF32_MATMULS)
   (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
  (modules qkv_zero_init)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
@@ -7998,6 +7999,7 @@
   (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
   (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
   (env_var OCANNL_LEGALITY_CROSSCHECK)
+  (env_var OCANNL_TF32_MATMULS)
   (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
  (action
   (with-stdout-to
