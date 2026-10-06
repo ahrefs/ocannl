@@ -37,6 +37,7 @@ When outputs differ between backends:
 - Backends must provide `convert_precision` for type conversions
 - Builtin functions (e.g. type conversions) must be implemented in the per-backend builtin modules prepended to generated code: `builtins_cc.ml` for the C backends, `builtins_cuda.ml` (CUDA), `builtins_hip.ml` (HIP), `builtins_metal.ml` (Metal). `builtins.c` provides the host-side FFI stubs compiled into the library
 - When adding new precision types, ensure conversion functions exist in all backend builtins
+- A change to a codegen default moves emitted text outside `test/` too: `dune build @test/operations/runtest-codegen_text_inventory` lists every pinning file. A change to `Register_tile.default`, for one, re-promotes `arrayjit/test/test_vectorized_codegen`, which a `test/operations`-only batch never reaches
 
 ## Shape Inference Extensions
 

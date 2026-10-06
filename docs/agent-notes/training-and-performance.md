@@ -184,6 +184,10 @@ files.
   field at once (gh-ocannl-759, gh-ocannl-850). That list is independent of the entry rows, so
   `divergent_origins` and generated reports name a declared box even when its fixture entry is
   absent; deriving the box set from rows would recreate the silence the field exists to remove.
+  Rebuilding a fixture that VANISHED is not that regeneration when the rebuild reproduces this
+  box's recorded digest: `gen_fixtures.py --out-dir` into scratch (or copy from another tree),
+  `fixture_digest.py --check` the candidate, and copy it in only on a `MATCH` for this box (recipe
+  and the `raw-v1` caveat in `benchmarks/README.md`).
 - The boxes are **not** on the same fixture bytes, and the digest file says so per origin
   (`<sha256>  <bytes>  <name>  <origin>`, gh-ocannl-759). `mlp_small` and `gpt2_mini` hash
   differently on minix and rog-nv at identical sizes — two venvs, two numpy `Generator` streams,
