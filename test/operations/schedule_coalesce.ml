@@ -150,6 +150,25 @@ let () =
   p "padded inner axis: the oracle proves it illegal"
     (match Sched.op_legality o op with Sched.Op_illegal _ -> true | _ -> false)
 
+(* A pair right after an existing flattened run: [ds[Sub_axis; h; e]] over [[2; hh; ee]] already
+   reads [h] as a flattened index over the run, and the merged one would flatten over it too, so the
+   view would bound [merged] by [2 * hh * ee] rather than the [hh * ee] it ranges over. *)
+let () =
+  let hh = 3 and ee = 4 in
+  let mk = L.node_factory ~first_id:116700 ~dims:[||] () in
+  let ds = mk ~dims:[| 2; hh; ee |] "cr_ds" in
+  L.materialize ds;
+  let h = L.sym () and e = L.sym () in
+  let llc =
+    L.loop_n h hh (L.loop_n e ee (L.set ds [| Ir.Indexing.Sub_axis; L.iter h; L.iter e |] (L.c 1.)))
+  in
+  let o = L.optimize ~name:"cr_after_run" llc in
+  let op = fst (Sched.coalesce ~outer:h ~inner:e) in
+  p "after a flattened run: Coalesce declines because the pair follows a Sub_axis run"
+    (raises_with ~substring:"after a flattened (Sub_axis) run" (fun () -> Sched.apply [ op ] o));
+  p "after a flattened run: the oracle proves it illegal"
+    (match Sched.op_legality o op with Sched.Op_illegal _ -> true | _ -> false)
+
 (* {1 Composition: a coalesced pair under [Split_reduce]}
 
    The coalesced output [d[Sub_axis; f]] of a reduction [d[h,e] += x[k,h,e]] is split over [k]:

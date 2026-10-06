@@ -102,9 +102,10 @@ type optop =
           adds no term, the merged component ranges over the run's extent product) and
           {!Affine.view} reads as one flattened coordinate. Anything else declines with
           [Invalid_argument]: a mention elsewhere (an [Embed_index], a guard, an [Affine] term, one
-          symbol alone, a dynamic or vector access, a [Tile_mma], a [Scan_loop]), or an axis whose
-          dim differs from its loop extent — a padded inner axis in particular, whose stride is not
-          [Q]. Iteration order and every address are unchanged, so the op is unconditionally
+          symbol alone, a dynamic or vector access, a [Tile_mma], a [Scan_loop]), a pair right after
+          an existing [Sub_axis] run (whose flattening the merged index would extend), or an axis
+          whose dim differs from its loop extent — a padded inner axis in particular, whose stride
+          is not [Q]. Iteration order and every address are unchanged, so the op is unconditionally
           semantics-preserving ([op_legality]: [Op_legal] once it applies). Purpose: a tile spanning
           both loops — the q/k/v projections' head axis merged into the column role, so a 64-wide
           column tile covers two 32-wide heads of useful columns. *)

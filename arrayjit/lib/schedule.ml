@@ -789,6 +789,15 @@ let coalesce_body ~outer ~inner ~merged ~p ~q (body : Low_level.t) : Low_level.t
         let dims = Lazy.force tn.Tn.dims in
         if Array.length dims <> Array.length idcs then
           fail (Printf.sprintf "the %s %s is not a full-rank access" what (show tn idcs));
+        (* After an existing [Sub_axis] run the outer iterator is already a flattened index over
+           that run, and the merged one would flatten over it too: the view would read [merged] over
+           the run's extent times [p * q], not the [p * q] it ranges over, and every per-axis bound
+           derived from the view ([Affine.axis_extents]: Stage's edge guards, Privatize's transfer
+           guards) would admit neighbouring cells as in range. *)
+        if a > 0 && Indexing.equal_axis_index idcs.(a - 1) Indexing.Sub_axis then
+          fail
+            (Printf.sprintf "the %s %s reads the pair right after a flattened (Sub_axis) run" what
+               (show tn idcs));
         if dims.(a) <> p || dims.(a') <> q then
           fail
             (Printf.sprintf
