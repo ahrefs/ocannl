@@ -119,6 +119,19 @@ usage() {
 }
 
 root=$(cd "$(dirname "$0")/.." && pwd)
+# The credential deny-list tools/test-run.sh applies (gh-ocannl-1280): dune records every spawned
+# process's environment in `_build/trace.csexp`, so the `dune show` calls below run in a subshell
+# that scrubs first, and fail rather than run when the scrub cannot complete.
+credential_env=$(dirname "$0")/credential-env.sh
+[ -r "$credential_env" ] || die "cannot read $credential_env"
+# shellcheck source=credential-env.sh
+. "$credential_env"
+scrub_credentials() {
+  eval "$(credential_env_scrub_text)" || {
+    echo "ci-shard: cannot remove credential variables:$credential_env_left" >&2
+    return 1
+  }
+}
 
 # Every directory holding a tracked dune file, `.` for the root. Tracked, not
 # found: an untracked checkout under .claude/worktrees/ is not this tree.
@@ -137,9 +150,9 @@ alias_listing() {
   dirs=$(dune_dirs)
   [ -n "$dirs" ] || die "no tracked dune files under $root"
   # shellcheck disable=SC2086 # one argument per directory; none holds a space
-  (cd "$root" && $dune show aliases $dirs 2>&1) || die "dune show aliases failed"
+  (cd "$root" && scrub_credentials && $dune show aliases $dirs 2>&1) || die "dune show aliases failed"
   printf '\n--targets--\n'
-  (cd "$root" && $dune show targets "$SPLIT_DIR" 2>&1) || die "dune show targets failed"
+  (cd "$root" && scrub_credentials && $dune show targets "$SPLIT_DIR" 2>&1) || die "dune show targets failed"
   printf '\n--dirs--\n%s\n' "$dirs"
 }
 

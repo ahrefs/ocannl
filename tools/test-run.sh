@@ -21,6 +21,11 @@
 #     every liveness question here reads process state too (proc_alive,
 #     group_alive). `wait` here polls for the verdict file with a hard timeout,
 #     so it cannot strand.
+#   - No credential in dune's environment: dune records every spawned
+#     process's environment in the worktree's `_build/trace.csexp`, so a
+#     session's GH_TOKEN sat in every checkout an agent greps (gh-ocannl-1280).
+#     The deny-list is tools/credential-env.sh, shared with the sweep and
+#     machine-verify; everything else (opam, PATH, OCANNL_*) passes through.
 #
 # Usage:
 #   tools/test-run.sh run   [--cap N] [--test-cap N] [DUNE ARGS...]   # foreground; digest; dune's status (2: refused)
@@ -540,6 +545,9 @@ select_dune() {
   command -v dune >/dev/null 2>&1 || die "dune not found (opam environment not set up?)"
   # Preserve dune's status while filtering only the known Windows linker noise.
   case ${OSTYPE:-} in msys* | cygwin*) DUNE=tools/dune-quiet.sh ;; *) DUNE=dune ;; esac
+  # Again, now that the switch's environment may have been sourced: its updates can set a
+  # deny-listed variable the startup scrub never saw (gh-ocannl-1280).
+  scrub_credentials
 }
 
 # Pin to the repo containing THIS script (promote.sh convention): dune then runs
@@ -570,6 +578,20 @@ cd -P "$(dirname "$0")/.." || die "cannot cd to repo root"
 [ -r tools/fleet-worker-candidates.sh ] || die "cannot read tools/fleet-worker-candidates.sh"
 # shellcheck source=fleet-worker-candidates.sh
 . tools/fleet-worker-candidates.sh
+# Credentials never reach dune, which records every spawned process's environment in the
+# worktree's `_build/trace.csexp` (gh-ocannl-1280). Removed from this script's own environment,
+# before any subcommand, so dune -- launched by the supervisor, by `_resolve`, `_probe`, `repeat`
+# or a promotion query -- and everything it spawns inherit none; nothing this script runs reads
+# one. select_dune scrubs again after sourcing the opam environment. The deny-list is shared with
+# tools/sweep.sh and tools/machine-verify.sh.
+[ -r tools/credential-env.sh ] || die "cannot read tools/credential-env.sh"
+# shellcheck source=credential-env.sh
+. tools/credential-env.sh
+scrub_credentials() {
+  eval "$(credential_env_scrub_text)" ||
+    die "cannot remove credential variables from the environment:$credential_env_left"
+}
+scrub_credentials
 
 # perl is load-bearing rather than a convenience: the per-worktree flock, the
 # cap supervisor and the atomic rename behind the `last` pointer are all

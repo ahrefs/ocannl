@@ -31,6 +31,13 @@ case "$1" in
     echo "Formatter diff" >&2
     exit 7
     ;;
+  credentials)
+    # gh-ocannl-1280: the formatter command runs without the caller's credentials, and with
+    # its plain variables.
+    [ -z "${GH_TOKEN+x}${FOO_API_KEY+x}" ] || { echo "credentials reached the formatter" >&2; exit 3; }
+    [ "${FMT_CHECK_PLAIN:-}" = kept ] || { echo "the plain variable did not reach it" >&2; exit 4; }
+    echo "Formatting is clean"
+    ;;
   *)
     exit 2
     ;;
@@ -73,6 +80,73 @@ for errexit in off on; do
   done
 done
 set +e
+
+# Credentials never reach the formatter command (gh-ocannl-1280): a fake GH_TOKEN and FOO_API_KEY
+# are exported beside a plain variable. The negative control is a copy with the scrub cut out,
+# beside the helper it still sources, which must hand the command both.
+export GH_TOKEN=fixture-not-a-token FOO_API_KEY=fixture-not-a-key FMT_CHECK_PLAIN=kept
+check 0 "a formatter run with credentials exported, which must not see them," credentials
+cp "$script_dir/credential-env.sh" "$fixture_dir/credential-env.sh"
+awk '/^eval "\$\(credential_env_scrub_text\)" \|\| \{$/ { skip = 1 } skip { if ($0 == "}") skip = 0; next } { print }' \
+  "$subject" >"$fixture_dir/fmt-check.sh"
+chmod +x "$fixture_dir/fmt-check.sh"
+got=0
+if cmp -s "$subject" "$fixture_dir/fmt-check.sh"; then
+  report 1 "negative control: fmt-check without the scrub hands the formatter both credentials" \
+    "the scrub could not be cut out of $subject"
+else
+  "$fixture_dir/fmt-check.sh" "$fixture" credentials >"$fixture_dir/no-scrub.log" 2>&1 || got=$?
+  if [ "$got" -eq 3 ]; then
+    report 0 "negative control: fmt-check without the scrub hands the formatter both credentials"
+  else
+    report 1 "negative control: fmt-check without the scrub hands the formatter both credentials" \
+      "exited $got; see $fixture_dir/no-scrub.log"
+  fi
+fi
+# The default command scrubs again inside `opam exec`, whose switch updates could set one: a fake
+# opam that sets both before running its command, and a fake dune that refuses them. The negative
+# control is a copy whose default command is the bare `opam exec -- dune ...` it replaced.
+fake_switch="$fixture_dir/fake-switch"
+mkdir -p "$fake_switch"
+cat >"$fake_switch/opam" <<'EOF'
+#!/usr/bin/env bash
+[ "${1:-}" = exec ] && [ "${2:-}" = -- ] || exit 9
+shift 2
+export GH_TOKEN=fixture-switch-token FOO_API_KEY=fixture-switch-key
+exec "$@"
+EOF
+cat >"$fake_switch/dune" <<'EOF'
+#!/usr/bin/env bash
+[ "$*" = "build @fmt --force" ] || { echo "unexpected dune argv: $*" >&2; exit 5; }
+[ -z "${GH_TOKEN+x}${FOO_API_KEY+x}" ] || { echo "credentials reached dune" >&2; exit 3; }
+[ "${FMT_CHECK_PLAIN:-}" = kept ] || { echo "the plain variable did not reach dune" >&2; exit 4; }
+EOF
+chmod +x "$fake_switch/opam" "$fake_switch/dune"
+awk '/^  set -- opam exec -- sh -c / { print "  set -- opam exec -- dune build @fmt --force"; getline; next } { print }' \
+  "$subject" >"$fixture_dir/fmt-check-bare.sh"
+chmod +x "$fixture_dir/fmt-check-bare.sh"
+got=0
+FMT_CHECK_PLAIN=kept PATH="$fake_switch:$PATH" "$subject" >"$fixture_dir/switch.log" 2>&1 || got=$?
+if [ "$got" -eq 0 ]; then
+  report 0 "the default command's dune runs without credentials the opam switch sets"
+else
+  report 1 "the default command's dune runs without credentials the opam switch sets" \
+    "exited $got; see $fixture_dir/switch.log"
+fi
+got=0
+if cmp -s "$subject" "$fixture_dir/fmt-check-bare.sh"; then
+  report 1 "negative control: a bare opam exec hands dune the switch's credentials" \
+    "the default command could not be replaced in $subject"
+else
+  FMT_CHECK_PLAIN=kept PATH="$fake_switch:$PATH" "$fixture_dir/fmt-check-bare.sh" \
+    >"$fixture_dir/switch-bare.log" 2>&1 || got=$?
+  if [ "$got" -eq 3 ]; then
+    report 0 "negative control: a bare opam exec hands dune the switch's credentials"
+  else
+    report 1 "negative control: a bare opam exec hands dune the switch's credentials" \
+      "exited $got; see $fixture_dir/switch-bare.log"
+  fi
+fi
 
 # A real project whose only fault is an invalid doc comment in otherwise
 # formatted code: `dune fmt` prints the warning once, promotes nothing, and

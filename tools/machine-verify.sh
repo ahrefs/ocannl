@@ -102,7 +102,10 @@
 # both transports run. Locally it runs under `env -i` keeping only the session
 # basics (HOME, USER, LOGNAME, PATH, SHELL, TMPDIR, LANG, LC_ALL, LC_CTYPE,
 # SSH_AUTH_SOCK) and from $HOME, so a caller's opam, Dune or OCANNL settings
-# reach it no more than they would reach an SSH session.
+# reach it no more than they would reach an SSH session. On either transport the
+# far side removes the credential variables of tools/credential-env.sh inside
+# every `opam exec`, so neither BOX's own token nor one its switch sets reaches
+# dune's `_build/trace.csexp` or a --run probe (gh-ocannl-1280).
 #
 # `--run` is intentionally a shell command: device probes often need several
 # build/run arguments. It is executed by `opam exec -- sh -c` from the pinned
@@ -134,6 +137,15 @@ box_jobs_source=$(cat "$box_jobs") || die "cannot read the width table $box_jobs
 batch_backends=$here/batch-backends.sh
 batch_backends_source=$(cat "$batch_backends") ||
   die "cannot read the backend resolution $batch_backends"
+# And the credential scrub (gh-ocannl-1280): the far side evaluates this text inside every
+# `opam exec`, so that neither dune -- which records every spawned process's environment in the
+# worktree's `_build/trace.csexp` -- nor a --run probe inherits a token from BOX's login
+# environment or its switch. Text from tools/credential-env.sh, the deny-list tools/test-run.sh
+# and tools/sweep.sh apply too.
+credential_env=$here/credential-env.sh
+[ -r "$credential_env" ] || die "cannot read the credential deny-list $credential_env"
+credential_scrub=$(. "$credential_env" && credential_env_scrub_text) && [ -n "$credential_scrub" ] ||
+  die "cannot read the credential scrub from $credential_env"
 
 [ $# -ge 2 ] || usage
 box=$1
@@ -432,7 +444,7 @@ echo "machine-verify: transport: $transport_story"
 remote_command="/bin/sh -c 'exec 3<&0; exec </dev/null; exec /bin/sh /dev/fd/3 \"\$@\"' machine-verify"
 for arg in "$box" "$branch" "$backend" "$expect_lib" "$remote_repo" "$staging_remote" \
   "$worktree_root" "$cap" "$trip_cap" "$jobs" "$transport_story" "$capped_perl" \
-  "$box_jobs_source" "$batch_backends_source"; do
+  "$box_jobs_source" "$batch_backends_source" "$credential_scrub"; do
   remote_command="$remote_command $(sq "$arg")"
 done
 if [ "$operation_count" -gt 0 ]; then

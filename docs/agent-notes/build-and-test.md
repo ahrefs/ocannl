@@ -966,6 +966,39 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   3.2 lacks), so `out=$(check_a; check_b)` runs on past a failing `check_a`; only the last command's
   status leaves, and only through a bare `var=$(…)` — as an argument, or under `local`/`export`,
   even that is discarded. Capture inside the substitution and assert outside it.
+- **No credential reaches dune from a runner** (gh-ocannl-1280). Dune writes the environment of
+  every process it spawns into `_build/trace.csexp`, inside the checkout, and the fleet exports its
+  GitHub PAT as `GH_TOKEN` into every session — so every build copied it into a tree agents grep and
+  mine, from where any transcript or log can carry it on. `tools/credential-env.sh` holds the one
+  deny-list (`GH_TOKEN`, `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`, `CLAUDE_CODE_MESSAGING_TOKEN`,
+  `*_TOKEN`, `*_API_KEY`) and prints it as shell TEXT, evaluated where dune runs and AFTER any opam
+  environment is applied, since a switch's environment updates could set one too:
+  `tools/test-run.sh` scrubs at startup and again in `select_dune` after sourcing
+  `tools/opam-env.sh`; `tools/promote.sh` and `tools/dune-quiet.sh` after their own opam-env
+  fallback; `tools/api-drift.sh` at startup; `tools/ci-shard.sh` in the subshells of its `dune show`
+  calls; `tools/fmt-check.sh` at startup and inside its default `opam exec`; `tools/sweep.sh` starts
+  every leg's dune as `opam exec -- sh -c <scrub; exec "$@"> dune ...` (`switch_dune_cmd`), in the
+  text the far side of the ssh runs, whose login environment holds that box's own token;
+  `tools/machine-verify.sh` passes the text to the far side, which applies it the same way inside
+  every `opam exec` and nowhere else (so git's fetch keeps its credential). The scrub fails CLOSED:
+  listing the environment (`env`, its one external step) is a checked operation, lines are cut by
+  parameter expansion rather than a parser that could fail silently, `env`/`unset`/`printf` go
+  through `command` (an inherited function cannot answer for them), a deny-listed name that is not a
+  shell identifier refuses, and a second listing refuses anything deny-listed still present (a name
+  holding a newline, which the line-wise reading cannot see whole). The boundary is those runners
+  and the `tools/` wrappers the agent workflow sanctions; a harness staging one derives what it
+  sources from its `. tools/...` lines. Outside it -- a bare `dune`, or a one-off driver such as the
+  `benchmarks/*.sh` measurement scripts -- dune records whatever the session exports, as the issue
+  scopes it; the fleet-side fix for that is not exporting the token into every session.
+  `env_var_deps` reads the same line and refuses a stanza declaring a match as `(env_var ...)` or
+  reading one through `%{env:NAME=...}`, and a test source reading one by name (`Sys.getenv`).
+  Pinned by leg 79 of `tools/test-test-run.sh` (a fixture dune's environment, the opam environment
+  `select_dune` sources, `tools/dune-quiet.sh` run directly, and a real dune's trace where one is on
+  PATH), `credential_free` in the sweep harness (local and remote legs, the remote one with
+  credentials the fake switch sets, and a mutation control), the
+  `credentials-ssh`/`credentials-switch` cases of `tools/test-machine-verify.sh`, the credential
+  legs of `tools/test-fmt-check.sh`, `tools/test-promote.sh` and `tools/test-ci-shard.sh`, and
+  `env_var_deps_control`; each has a negative control with the scrub cut out.
 - A child that publishes a value for its parent to poll — a pid, above all — writes a sibling and
   renames it into place: `open(path, 'w')` creates the name EMPTY before the write lands, so a
   parent polling `exists()` reads `''` (gh-ocannl-1041, a per-PR-matrix flake). The benchmarks'

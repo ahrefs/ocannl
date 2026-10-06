@@ -89,6 +89,15 @@ AGGREGATE_SKIPS=$SWEEP_TOOLS/aggregate-skips.sh
 }
 # shellcheck source=fleet-worker-candidates.sh
 . "$SWEEP_TOOLS/fleet-worker-candidates.sh"
+# The credential deny-list, shared with tools/test-run.sh and tools/machine-verify.sh: every dune
+# a leg runs scrubs it first, on the side that runs dune and inside opam's environment
+# (switch_dune_cmd).
+[ -r "$SWEEP_TOOLS/credential-env.sh" ] || {
+  echo "sweep: cannot read $SWEEP_TOOLS/credential-env.sh" >&2
+  exit 2
+}
+# shellcheck source=credential-env.sh
+. "$SWEEP_TOOLS/credential-env.sh"
 
 # Sourced sweep components; their fixtures use the same functions as a full run.
 [ -r "$SWEEP_TOOLS/lab-map.sh" ] || {
@@ -837,6 +846,19 @@ verdict_records_env() { # wt
   printf 'export OCANNL_TOOL_VERDICT_RECORDS="%s"; ' "$(verdict_records_dir "$1")"
 }
 
+# How every leg below starts dune, as shell text: `$(switch_dune_cmd) build ...` runs `dune build
+# ...` through `opam exec`. Dune writes the environment of each process it spawns into the
+# worktree's `_build/trace.csexp`, and a remote box's login environment carries that box's own
+# GitHub token (gh-ocannl-1280). So the deny-list of tools/credential-env.sh is applied where the
+# text runs -- the far side of the ssh, or the local `sh -c` -- and INSIDE the environment `opam
+# exec` builds, so a variable the switch's own updates set is removed too; never to this script's
+# environment, which the remote one does not see. A scrub that cannot complete exits 126, harness
+# non-coverage like the forced clean's failure below.
+switch_dune_cmd() {
+  printf 'opam exec -- sh -c %s sweep-dune dune' \
+    "$(sq "{ $(credential_env_scrub_text); } || exit 126; exec \"\$@\"")"
+}
+
 # The dune invocation, shared by the local and remote paths so the two cannot
 # drift. Unpiped inside the shell that runs it: piping dune to anything reports
 # the pipe's status, not dune's, and a promotion diff then reads as green.
@@ -880,7 +902,7 @@ test_cmd() {
   # lock already held on both local and remote paths. Failure to establish that
   # precondition is harness non-coverage, not a red suite.
   if [ "$FORCE" = 1 ]; then
-    printf 'opam exec -- dune clean; clean_rc=$?; [ $clean_rc -eq 0 ] || exit 126; '
+    printf '%s clean; clean_rc=$?; [ $clean_rc -eq 0 ] || exit 126; ' "$(switch_dune_cmd)"
   fi
   # A full-suite unit also builds @train, the training-integration tier that
   # lives off the runtest path (test/training/dune says why); one dune call, so
@@ -897,18 +919,18 @@ test_cmd() {
   # code the target never reaches, and its cone is small enough to compile under
   # the cap (Codex P2 on PR #658).
   if [ -n "$jobs" ] && [ -z "$TARGET" ]; then
-    printf 'OCANNL_BACKEND=%s opam exec -- dune build @check; ' "$backend"
+    printf 'OCANNL_BACKEND=%s %s build @check; ' "$backend" "$(switch_dune_cmd)"
   fi
   if [ -z "$TARGET" ]; then
-    printf 'OCANNL_BACKEND=%s opam exec -- dune build %s%s @runtest @train; rc1=$?; ' \
-      "$backend" "$jobs_arg${jobs_arg:+ }" "$force_arg"
+    printf 'OCANNL_BACKEND=%s %s build %s%s @runtest @train; rc1=$?; ' \
+      "$backend" "$(switch_dune_cmd)" "$jobs_arg${jobs_arg:+ }" "$force_arg"
   else
-    printf 'OCANNL_BACKEND=%s opam exec -- dune runtest %s%s %s; rc1=$?; ' \
-      "$backend" "$jobs_arg${jobs_arg:+ }" "$force_arg" "$TARGET"
+    printf 'OCANNL_BACKEND=%s %s runtest %s%s %s; rc1=$?; ' \
+      "$backend" "$(switch_dune_cmd)" "$jobs_arg${jobs_arg:+ }" "$force_arg" "$TARGET"
   fi
   if [ "$SLOW" = 1 ]; then
-    printf 'OCANNL_BACKEND=%s opam exec -- dune build %s%s @slow; rc2=$?; ' \
-      "$backend" "$jobs_arg${jobs_arg:+ }" "$force_arg"
+    printf 'OCANNL_BACKEND=%s %s build %s%s @slow; rc2=$?; ' \
+      "$backend" "$(switch_dune_cmd)" "$jobs_arg${jobs_arg:+ }" "$force_arg"
   else
     printf 'rc2=0; '
   fi
@@ -1266,7 +1288,7 @@ rtc_context_cmd() {
         printf 'echo "A failed Metal compile also logged its OWN state, on a \x27metal options:\x27 line."; '
         ;;
     esac
-    printf 'opam exec -- dune build %s --force 2>&1 | sed "s/^/rtc /"; ' "$alias_name"
+    printf '%s build %s --force 2>&1 | sed "s/^/rtc /"; ' "$(switch_dune_cmd)" "$alias_name"
   fi
   printf 'echo "=== end rtc-context ==="; true'
 }
@@ -1789,7 +1811,7 @@ serial_rerun_cmd() { # backend wt alias...
   verdict_records_env "$wt"
   for a in "$@"; do
     printf 'echo "=== serial rerun %s ==="; ' "$a"
-    printf 'OCANNL_BACKEND=%s opam exec -- dune build -j 1 %s; ' "$backend" "$a"
+    printf 'OCANNL_BACKEND=%s %s build -j 1 %s; ' "$backend" "$(switch_dune_cmd)" "$a"
     printf 'echo "=== serial rerun %s: exit $? ==="; ' "$a"
   done
   printf 'exit 0'
@@ -1808,7 +1830,7 @@ suite_completion_cmd() { # backend wt
   printf 'cd "%s" || exit 127; ' "$2"
   verdict_records_env "$2"
   printf 'echo "=== suite completion ==="; '
-  printf 'OCANNL_BACKEND=%s opam exec -- dune build -j 1 @runtest @train%s; ' "$1" "$slow_alias"
+  printf 'OCANNL_BACKEND=%s %s build -j 1 @runtest @train%s; ' "$1" "$(switch_dune_cmd)" "$slow_alias"
   printf 'echo "=== suite completion: exit $? ==="; '
   printf 'exit 0'
 }

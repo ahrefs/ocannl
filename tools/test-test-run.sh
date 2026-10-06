@@ -164,6 +164,16 @@
 #      reads it (gh-ocannl-1095): beside a hip configuration on a small SDMA
 #      pool, a batch reaching only `none` stanzas, or one naming cc, stays
 #      uncapped and --cpu; one reaching a configuration reader is -j 4, --gpu.
+#  79. credentials never reach dune (gh-ocannl-1280): a run exporting GH_TOKEN
+#      and FOO_API_KEY hands dune neither, while a plain variable and the
+#      OCANNL_TOOL_* exports pass -- observed by a fixture dune, and where a
+#      real dune is at hand in its _build/trace.csexp; a copy with the scrub
+#      cut out hands dune both, the negative control for each observer. With
+#      no dune on PATH, credentials the opam environment select_dune sources
+#      sets are scrubbed too, against a copy without that second scrub; and
+#      tools/dune-quiet.sh, run directly, scrubs on its own. The scrub text
+#      itself fails closed, under sh, bash and dash where installed: an
+#      unrunnable env and a deny-listed non-identifier refuse.
 #  59-63 sit after leg 47: the source a run tested, recorded at launch
 #      (gh-ocannl-992), against a committed fixture checkout.
 #  59. a clean checkout records its HEAD as `head` and an empty `dirty`.
@@ -4958,6 +4968,299 @@ if [ -z "$plan_probe_detail" ]; then
   report 0 "plan: reports the device probe and the per-test cap, asking no device"
 else
   report 1 "plan: reports the device probe and the per-test cap, asking no device" "$plan_probe_detail"
+fi
+
+# ---------------------------------------------------------------------------
+# Leg 79: credentials never reach dune (gh-ocannl-1280)
+# ---------------------------------------------------------------------------
+# Dune records the environment of every process it spawns in the worktree's
+# `_build/trace.csexp`, so a token the session exports would sit inside the
+# checkout after every build. The run below carries GH_TOKEN (a deny-listed
+# name) and FOO_API_KEY (matched by a pattern), both with obviously fake
+# values, beside CRED_TEST_PLAIN and the harness's own OCANNL_TOOL_* exports,
+# which must still pass. Two observers: a fixture dune that writes the names of
+# its environment -- decided on every host -- and, where a real dune is at hand,
+# that dune's own trace. The negative control is the shipping script with its
+# scrub cut out, which must hand dune both credentials: an observer that cannot
+# see them proves nothing about the scrub.
+cred_label="credentials: dune runs without GH_TOKEN and FOO_API_KEY, a plain variable and OCANNL_TOOL_* still pass"
+cred_nc_label="negative control: with the scrub cut out, dune sees both credentials"
+cred_trace_label="credentials: real dune's _build/trace.csexp names neither GH_TOKEN nor FOO_API_KEY, and does name the plain variable"
+cred_trace_nc_label="negative control: with the scrub cut out, the real trace names both credentials"
+cred_mutant=$(mutant no-credential-scrub \
+  '/^  eval "\$\(credential_env_scrub_text\)" \|\|$/ { getline; print "  :"; next } { print }')
+if [ -z "$cred_mutant" ] || cmp -s "$SRC" "$cred_mutant"; then
+  echo "leg 79: the credential scrub could not be cut out of $SRC; the mutant is broken" >&2
+  exit 2
+fi
+cred_bin=$TMP/cred-bin
+mkdir -p "$cred_bin"
+cat >"$cred_bin/dune" <<'EOF'
+#!/usr/bin/env bash
+# The run's last phase asks for the version and the promotion list: an empty one.
+case ${1:-} in
+  --version) echo 3.24.2; exit 0 ;;
+  promotion) exit 0 ;;
+esac
+env | sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' >"$CRED_TEST_NAMES"
+EOF
+chmod +x "$cred_bin/dune"
+cred_root() { # name script -> a fixture root running SCRIPT as tools/test-run.sh
+  local root=$TMP/$1
+  mkdir -p "$root/tools" "$root/scripts" "$root/_build"
+  cp "$2" "$root/tools/test-run.sh"
+  stage_sourced "$root"
+  chmod +x "$root/tools/test-run.sh"
+  printf '%s' "$root"
+}
+cred_run() { # root runs-dir names-file subcommand argv...: the launch, with the two credentials exported
+  local root=$1 runs=$2 names=$3
+  shift 3
+  GH_TOKEN=fixture-not-a-token FOO_API_KEY=fixture-not-a-key CRED_TEST_PLAIN=kept \
+    CRED_TEST_NAMES=$names OCANNL_TOOL_TEST_RUNS=$runs \
+    "$root/tools/test-run.sh" "$@" >"$names.out" 2>&1
+}
+cred_has() { grep -qx -e "$1" "$2"; }
+cred_ship=$(cred_root cred-ship "$SRC")
+cred_cut=$(cred_root cred-cut "$cred_mutant")
+cred_rc=0
+PATH=$cred_bin:$PATH cred_run "$cred_ship" "$TMP/cred-runs" "$TMP/cred-ship.names" run build @fixture ||
+  cred_rc=$?
+cred_detail=
+if [ "$cred_rc" != 0 ]; then
+  cred_detail="the run exited $cred_rc: $(tail -5 "$TMP/cred-ship.names.out")"
+elif [ ! -s "$TMP/cred-ship.names" ]; then
+  cred_detail="the fixture dune recorded no environment"
+elif cred_has GH_TOKEN "$TMP/cred-ship.names"; then
+  cred_detail="dune saw GH_TOKEN"
+elif cred_has FOO_API_KEY "$TMP/cred-ship.names"; then
+  cred_detail="dune saw FOO_API_KEY"
+elif ! cred_has CRED_TEST_PLAIN "$TMP/cred-ship.names"; then
+  cred_detail="dune did not see CRED_TEST_PLAIN"
+elif ! cred_has OCANNL_TOOL_DEVICE_PROBE "$TMP/cred-ship.names"; then
+  cred_detail="dune did not see the harness's OCANNL_TOOL_DEVICE_PROBE"
+fi
+report "$([ -z "$cred_detail" ] && echo 0 || echo 1)" "$cred_label" "$cred_detail"
+cred_rc=0
+PATH=$cred_bin:$PATH cred_run "$cred_cut" "$TMP/cred-cut-runs" "$TMP/cred-cut.names" run build @fixture ||
+  cred_rc=$?
+if [ "$cred_rc" = 0 ] && cred_has GH_TOKEN "$TMP/cred-cut.names" &&
+  cred_has FOO_API_KEY "$TMP/cred-cut.names"; then
+  report 0 "$cred_nc_label"
+else
+  report 1 "$cred_nc_label" "exit $cred_rc; names: $(tr '\n' ' ' <"$TMP/cred-cut.names" 2>/dev/null)"
+fi
+# And when dune is not on PATH, select_dune sources tools/opam-env.sh, whose switch environment
+# can set a credential the startup scrub never saw: a fake opam answers `opam env` with both
+# credentials and a PATH reaching the fixture dune. Through `repeat`, whose dune the launching
+# process starts itself (a `run`'s dune is started by a fresh `_resolve`, whose own startup scrub
+# also catches it). The PATH holds only that opam and the system directories; a host whose system
+# directories hold a dune skips (the opam environment would never be asked for). The negative
+# control cuts out select_dune's second scrub alone.
+cred_opam_label="credentials: the opam environment select_dune sources is scrubbed too"
+cred_opam_nc_label="negative control: without select_dune's scrub, dune sees the switch's credentials"
+cred_opam_bin=$TMP/cred-opam-bin
+mkdir -p "$cred_opam_bin"
+cat >"$cred_opam_bin/opam" <<'EOF'
+#!/usr/bin/env bash
+[ "${1:-}" = env ] || exit 9
+: >>"$CRED_TEST_OPAM_ASKED"
+printf "GH_TOKEN='fixture-switch-token'; export GH_TOKEN; FOO_API_KEY='fixture-switch-key'; export FOO_API_KEY; PATH='%s':\"\$PATH\"; export PATH;\n" "$CRED_TEST_DUNE_DIR"
+EOF
+chmod +x "$cred_opam_bin/opam"
+cred_opam_mutant=$(mutant no-select-dune-scrub '/^  scrub_credentials$/ { next } { print }')
+cred_opam_run() { # tag script -> names file; 0 when the opam environment was asked for
+  local root
+  root=$(cred_root "$1" "$2")
+  cp "$HERE/opam-env.sh" "$root/tools/opam-env.sh"
+  rm -f "$TMP/$1.asked"
+  PATH=$cred_opam_bin:/usr/bin:/bin:/usr/sbin:/sbin CRED_TEST_DUNE_DIR=$cred_bin \
+    CRED_TEST_OPAM_ASKED=$TMP/$1.asked cred_run "$root" "$TMP/$1-runs" "$TMP/$1.names" repeat 2 build @fixture
+  [ -e "$TMP/$1.asked" ]
+}
+if [ -z "$cred_opam_mutant" ] || cmp -s "$SRC" "$cred_opam_mutant"; then
+  echo "leg 79: select_dune's scrub could not be cut out of $SRC; the mutant is broken" >&2
+  exit 2
+elif PATH=/usr/bin:/bin:/usr/sbin:/sbin command -v dune >/dev/null 2>&1; then
+  skip "$cred_opam_label" "a dune in the system directories: select_dune never sources the opam environment"
+  skip "$cred_opam_nc_label" "a dune in the system directories: select_dune never sources the opam environment"
+else
+  if ! cred_opam_run cred-opam "$SRC"; then
+    report 1 "$cred_opam_label" "the opam environment was not asked for: $(tail -3 "$TMP/cred-opam.names.out")"
+  elif cred_has GH_TOKEN "$TMP/cred-opam.names" || cred_has FOO_API_KEY "$TMP/cred-opam.names" ||
+    ! cred_has CRED_TEST_PLAIN "$TMP/cred-opam.names"; then
+    report 1 "$cred_opam_label" "names: $(tr '\n' ' ' <"$TMP/cred-opam.names" 2>/dev/null)"
+  else
+    report 0 "$cred_opam_label"
+  fi
+  if cred_opam_run cred-opam-cut "$cred_opam_mutant" && cred_has GH_TOKEN "$TMP/cred-opam-cut.names" &&
+    cred_has FOO_API_KEY "$TMP/cred-opam-cut.names"; then
+    report 0 "$cred_opam_nc_label"
+  else
+    report 1 "$cred_opam_nc_label" "names: $(tr '\n' ' ' <"$TMP/cred-opam-cut.names" 2>/dev/null)"
+  fi
+fi
+# The scrub text itself fails CLOSED, under every shell at hand (dash where installed): an `env`
+# that cannot run is a refusal, never an empty environment that passes; a deny-listed name a parent
+# passed that is not a shell identifier (`odd-name_TOKEN`) cannot be unset, so it refuses too,
+# naming it. With PATH holding nothing but `env`, valid credentials are removed and a plain variable
+# stays -- the text needs no other external program, so no parser stage can fail open -- and a
+# value spanning lines with a glob character in it neither breaks the walk nor leaks the caller's
+# IFS or `set -f`. A newline-named entry refuses through the second listing, and inherited
+# functions named env, unset or printf are bypassed.
+cred_text_label="credentials: the scrub text refuses when env cannot run, on a deny-listed non-identifier or newline-named entry, and bypasses inherited functions"
+cred_text_ok_label="credentials: the scrub text, with only env on PATH, removes valid names and restores IFS and set -f"
+cred_text_detail= cred_text_ok_detail=
+cred_nl='
+'
+cred_env_only=$TMP/cred-env-only
+mkdir -p "$cred_env_only"
+ln -s "$(command -v env)" "$cred_env_only/env"
+cred_helper=$HERE/credential-env.sh
+for cred_shell in /bin/sh "$(command -v bash)" "$(command -v dash 2>/dev/null)"; do
+  [ -n "$cred_shell" ] || continue
+  cred_rc=0
+  cred_out=$(env -i PATH=/nonexistent GH_TOKEN=fixture-not-a-token "$cred_shell" -c \
+    '. "$1"; eval "$(credential_env_scrub_text)"' cred "$cred_helper" 2>&1) || cred_rc=$?
+  [ "$cred_rc" != 0 ] || cred_text_detail="$cred_text_detail; $cred_shell passed with env unrunnable"
+  cred_rc=0
+  # Refused by name -- or, where the shell itself drops such an entry at startup (dash), gone from
+  # what its children inherit, which the trailing `env` shows.
+  cred_out=$(env -i "PATH=$cred_env_only" 'odd-name_TOKEN=fixture-not-a-token' "$cred_shell" -c \
+    '. "$1"; eval "$(credential_env_scrub_text)" || { printf "%s\n" "$credential_env_left"; exit 1; }; env' \
+    cred "$cred_helper" 2>&1) || cred_rc=$?
+  case $cred_rc:$cred_out in
+    1:*"odd-name_TOKEN (not a shell identifier)"*) ;;
+    0:*odd-name_TOKEN*) cred_text_detail="$cred_text_detail; $cred_shell passed odd-name_TOKEN to its children" ;;
+    0:*) ;;
+    *) cred_text_detail="$cred_text_detail; $cred_shell on odd-name_TOKEN: exit $cred_rc, said: $cred_out" ;;
+  esac
+  cred_rc=0
+  cred_out=$(env -i "PATH=$cred_env_only" GH_TOKEN=fixture-not-a-token "FOO_API_KEY=fixture
+BAR_TOKEN=* not-a-key" CRED_TEST_PLAIN=kept "$cred_shell" -c \
+    'set -u; IFS=" "; . "$1"; eval "$(credential_env_scrub_text)" || exit 3
+     printf "ifs=[%s] opts=%s\n" "$IFS" "$-"; env' cred "$cred_helper" 2>&1) || cred_rc=$?
+  case $cred_rc in 0) ;; *) cred_text_ok_detail="$cred_text_ok_detail; $cred_shell exited $cred_rc: $cred_out" ;; esac
+  case $cred_out in *GH_TOKEN=* | *FOO_API_KEY=*) cred_text_ok_detail="$cred_text_ok_detail; $cred_shell left a credential" ;; esac
+  case $cred_out in *CRED_TEST_PLAIN=kept*) ;; *) cred_text_ok_detail="$cred_text_ok_detail; $cred_shell lost the plain variable" ;; esac
+  cred_first=${cred_out%%"$cred_nl"*}
+  case $cred_first in "ifs=[ ] opts="*f*) cred_text_ok_detail="$cred_text_ok_detail; $cred_shell left set -f on" ;; "ifs=[ ] opts="*) ;;
+    *) cred_text_ok_detail="$cred_text_ok_detail; $cred_shell did not restore IFS: $cred_first" ;; esac
+  # A name holding a newline reads, line by line, as a plain `GH_TOKEN`: the second listing
+  # still sees it, so it refuses -- or the shell dropped it at startup (dash) and its children
+  # never see it.
+  cred_rc=0
+  cred_out=$(env -i "PATH=$cred_env_only" "ODD${cred_nl}GH_TOKEN=fixture-not-a-token" "$cred_shell" -c \
+    '. "$1"; eval "$(credential_env_scrub_text)" || { printf "%s\n" "$credential_env_left"; exit 1; }; env' \
+    cred "$cred_helper" 2>&1) || cred_rc=$?
+  case $cred_rc:$cred_out in
+    1:*"GH_TOKEN (still in the environment)"*) ;;
+    0:*"${cred_nl}GH_TOKEN="* | 0:"GH_TOKEN="*) cred_text_detail="$cred_text_detail; $cred_shell passed a newline-named GH_TOKEN to its children" ;;
+    0:*) ;;
+    *) cred_text_detail="$cred_text_detail; $cred_shell on a newline-named GH_TOKEN: exit $cred_rc, said: $cred_out" ;;
+  esac
+done
+# Inherited functions named env, unset and printf (bash imports exported ones) are bypassed: the
+# scrub still removes the credential, rather than asking a function that answers nothing.
+cred_bash=$(command -v bash)
+cred_rc=0
+cred_out=$(env -i "PATH=$cred_env_only" GH_TOKEN=fixture-not-a-token CRED_HELPER="$cred_helper" \
+  CRED_BASH="$cred_bash" "$cred_bash" -c \
+  'env() { :; }; unset() { :; }; printf() { :; }; export -f env unset printf
+   exec "$CRED_BASH" -c '\''. "$CRED_HELPER"; eval "$(credential_env_scrub_text)" || exit 3; command env'\''' \
+  2>&1) || cred_rc=$?
+case $cred_rc:$cred_out in
+  0:*GH_TOKEN=*) cred_text_detail="$cred_text_detail; inherited env/unset/printf functions let GH_TOKEN through" ;;
+  0:*PATH=*) ;;
+  *) cred_text_detail="$cred_text_detail; under inherited functions: exit $cred_rc, said: $cred_out" ;;
+esac
+report "$([ -z "$cred_text_detail" ] && echo 0 || echo 1)" "$cred_text_label" "${cred_text_detail#; }"
+report "$([ -z "$cred_text_ok_detail" ] && echo 0 || echo 1)" "$cred_text_ok_label" "${cred_text_ok_detail#; }"
+# The Windows wrapper test-run.sh starts dune through, which AGENTS.md also has a Git Bash session
+# run by hand, scrubs on its own: a copy beside the helper, the fixture dune on PATH, and a copy
+# with the scrub cut out as the negative control.
+cred_quiet_label="credentials: tools/dune-quiet.sh, run directly, starts dune without them"
+cred_quiet_nc_label="negative control: dune-quiet.sh without its scrub hands dune both credentials"
+mkdir -p "$TMP/cred-quiet" "$TMP/cred-quiet-cut"
+cp "$HERE/dune-quiet.sh" "$HERE/credential-env.sh" "$TMP/cred-quiet/"
+cp "$HERE/credential-env.sh" "$TMP/cred-quiet-cut/"
+awk '/^eval "\$\(credential_env_scrub_text\)" \|\| \{$/ { skip = 1 } skip { if ($0 == "}") skip = 0; next } { print }' \
+  "$HERE/dune-quiet.sh" >"$TMP/cred-quiet-cut/dune-quiet.sh"
+cred_quiet_run() { # dir
+  rm -f "$1.names"
+  GH_TOKEN=fixture-not-a-token FOO_API_KEY=fixture-not-a-key CRED_TEST_PLAIN=kept \
+    CRED_TEST_NAMES=$1.names PATH=$cred_bin:$PATH bash "$1/dune-quiet.sh" build @fixture >"$1.out" 2>&1
+}
+if cmp -s "$HERE/dune-quiet.sh" "$TMP/cred-quiet-cut/dune-quiet.sh"; then
+  echo "leg 79: the scrub could not be cut out of tools/dune-quiet.sh; the mutant is broken" >&2
+  exit 2
+fi
+cred_rc=0
+cred_quiet_run "$TMP/cred-quiet" || cred_rc=$?
+if [ "$cred_rc" = 0 ] && [ -s "$TMP/cred-quiet.names" ] && ! cred_has GH_TOKEN "$TMP/cred-quiet.names" &&
+  ! cred_has FOO_API_KEY "$TMP/cred-quiet.names" && cred_has CRED_TEST_PLAIN "$TMP/cred-quiet.names"; then
+  report 0 "$cred_quiet_label"
+else
+  report 1 "$cred_quiet_label" "exit $cred_rc; names: $(tr '\n' ' ' <"$TMP/cred-quiet.names" 2>/dev/null)"
+fi
+cred_rc=0
+cred_quiet_run "$TMP/cred-quiet-cut" || cred_rc=$?
+if [ "$cred_rc" = 0 ] && cred_has GH_TOKEN "$TMP/cred-quiet-cut.names" &&
+  cred_has FOO_API_KEY "$TMP/cred-quiet-cut.names"; then
+  report 0 "$cred_quiet_nc_label"
+else
+  report 1 "$cred_quiet_nc_label" "exit $cred_rc; see $TMP/cred-quiet-cut.out"
+fi
+# The trace itself, which is what the issue found tokens in. A host with no
+# dune skips it (the toolchain-free CI job); a dune that writes no trace there
+# skips it too, since there is then nothing to leak into.
+cred_real=$( (command -v dune >/dev/null 2>&1 || . "$HERE/opam-env.sh" >/dev/null 2>&1
+  command -v dune) 2>/dev/null) || cred_real=
+if [ -z "$cred_real" ]; then
+  skip "$cred_trace_label" "no dune on PATH, nor through tools/opam-env.sh"
+  skip "$cred_trace_nc_label" "no dune on PATH, nor through tools/opam-env.sh"
+else
+  cred_project() { # root: a one-rule dune project whose build spawns a process
+    printf '(lang dune 3.20)\n' >"$1/dune-project"
+    printf '(rule\n (with-stdout-to spawned.txt (run sh -c "echo spawned")))\n' >"$1/dune"
+    rm -rf "$1/_build"
+  }
+  cred_project "$cred_ship"
+  cred_project "$cred_cut"
+  cred_trace() { # root -> 0 when its trace exists, the three names' counts in cred_gh/foo/plain
+    local trace=$1/_build/trace.csexp
+    [ -f "$trace" ] || return 1
+    cred_gh=$(grep -a -c GH_TOKEN "$trace")
+    cred_foo=$(grep -a -c FOO_API_KEY "$trace")
+    cred_plain=$(grep -a -c CRED_TEST_PLAIN "$trace")
+    cred_counts="GH_TOKEN: $cred_gh, FOO_API_KEY: $cred_foo, CRED_TEST_PLAIN: $cred_plain"
+  }
+  cred_real_run() { # root tag
+    (cd "$1" && PATH=$(dirname "$cred_real"):$PATH cred_run "$1" "$TMP/$2-runs" "$TMP/$2.names" \
+      run build --cache=disabled ./spawned.txt)
+  }
+  cred_rc=0
+  cred_real_run "$cred_ship" cred-real || cred_rc=$?
+  if [ "$cred_rc" != 0 ]; then
+    report 1 "$cred_trace_label" "the run exited $cred_rc: $(tail -5 "$TMP/cred-real.names.out")"
+  elif ! cred_trace "$cred_ship"; then
+    skip "$cred_trace_label" "$("$cred_real" --version) wrote no _build/trace.csexp"
+  elif [ "$cred_gh" = 0 ] && [ "$cred_foo" = 0 ] && [ "$cred_plain" != 0 ]; then
+    report 0 "$cred_trace_label"
+  else
+    report 1 "$cred_trace_label" "$cred_counts"
+  fi
+  cred_rc=0
+  cred_real_run "$cred_cut" cred-real-cut || cred_rc=$?
+  if [ "$cred_rc" != 0 ]; then
+    report 1 "$cred_trace_nc_label" "the run exited $cred_rc: $(tail -5 "$TMP/cred-real-cut.names.out")"
+  elif ! cred_trace "$cred_cut"; then
+    skip "$cred_trace_nc_label" "$("$cred_real" --version) wrote no _build/trace.csexp"
+  elif [ "$cred_gh" != 0 ] && [ "$cred_foo" != 0 ]; then
+    report 0 "$cred_trace_nc_label"
+  else
+    report 1 "$cred_trace_nc_label" "$cred_counts"
+  fi
 fi
 
 # ---------------------------------------------------------------------------
