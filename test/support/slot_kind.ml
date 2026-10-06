@@ -1001,6 +1001,41 @@ let describe s =
       Printf.sprintf "it compiles %s in %s" what dir
   | Compiles -> Printf.sprintf "it reads the dune file in %s" dir
 
+(* Run from inside [_build], the walk shares its tree with the rules dune runs beside it, which
+   create and delete their outputs while it reads: an entry can vanish between the listing that
+   names it and the [stat] that classifies it, or a directory between the [stat] and its own listing
+   (gh-ocannl-1227). What vanished is no directory and holds nothing -- the source tree dune reads
+   never loses an entry mid-build, so only build outputs, which dune does not read as dune files,
+   are passed over (one a rule recreates right after is no exception). *)
+
+(** The entries of [path], sorted; [[]] once [path] no longer exists. The verdict is the failing
+    call's own errno, never a second probe after it -- a probe opens a window of its own, in which a
+    rule can recreate what the listing found gone. [Sys.readdir] carries no errno ([Sys_error] holds
+    only a message), hence [Unix]. Any failure but [ENOENT] raises: the caller takes an unreadable
+    tree as every backend. *)
+let listing path =
+  match Unix.opendir path with
+  | exception Unix.Unix_error (Unix.ENOENT, _, _) -> []
+  | handle ->
+      let rec read acc =
+        match Unix.readdir handle with
+        | "." | ".." -> read acc
+        | entry -> read (entry :: acc)
+        | exception End_of_file -> acc
+      in
+      Exn.protect
+        ~f:(fun () -> List.sort (read []) ~compare:String.compare)
+        ~finally:(fun () -> Unix.closedir handle)
+
+(** The [entries] of [path] that are directories, following links as dune does; one that no longer
+    exists, or a link to nothing, is not. Any other stat failure raises, as in {!listing}. *)
+let subdirectories path entries =
+  List.filter entries ~f:(fun e ->
+      match Unix.stat (Stdlib.Filename.concat path e) with
+      | { Unix.st_kind = Unix.S_DIR; _ } -> true
+      | _ -> false
+      | exception Unix.Unix_error (Unix.ENOENT, _, _) -> false)
+
 (** Every dune file under [root] that dune itself would read, as [(dir, content)] with [dir]
     relative to [root] ([""] for [root] itself). Into a directory's subdirectories as dune goes: by
     default the ones whose name starts with neither [.] nor [_] (not _build, _opam, .git, ...), and
@@ -1111,7 +1146,12 @@ let dune_files ?(workspace_root = true) ~root () =
      ancestors absolute);
   let rec under dir =
     let path = if String.is_empty dir then root else Stdlib.Filename.concat root dir in
-    let entries = Stdlib.Sys.readdir path |> Array.to_list |> List.sort ~compare:String.compare in
+    (* The root itself must be there: only a directory found inside the walk can have vanished. *)
+    let entries =
+      if String.is_empty dir then
+        Stdlib.Sys.readdir path |> Array.to_list |> List.sort ~compare:String.compare
+      else listing path
+    in
     if List.mem entries "dune-file" ~equal:String.equal then
       failwith (Printf.sprintf "%s holds a dune-file" path);
     check_project path;
@@ -1125,9 +1165,7 @@ let dune_files ?(workspace_root = true) ~root () =
       else None
     in
     Option.iter content ~f:(fun c -> List.iter (Scan.stanzas c) ~f:(collect dir));
-    let subdirs =
-      List.filter entries ~f:(fun e -> Stdlib.Sys.is_directory (Stdlib.Filename.concat path e))
-    in
+    let subdirs = subdirectories path entries in
     Option.to_list (Option.map content ~f:(fun c -> (dir, c)))
     @ List.concat_map (admitted dir subdirs) ~f:(fun e -> under (join dir e))
   in
