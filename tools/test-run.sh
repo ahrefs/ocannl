@@ -495,7 +495,8 @@ plan_device_probe() { # after plan_batch
 # clears every runtest/train action in the fleet's dune traces (the longest,
 # 1021s, under correctness-slot load), but `slow-cifar_conv` runs ~300s solo
 # and loads of 5-15x were measured, plus its dataset download -- so `@slow`
-# and CPU batches keep only the run's cap unless asked.
+# and CPU batches keep only the run's cap unless asked. Re-derive it from a
+# box's traces with tools/action-durations.sh.
 TEST_CAP_DEFAULT=1500
 test_cap_why=
 plan_test_cap() { # <requested, empty for the default> dune-argv
