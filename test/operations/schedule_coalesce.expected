@@ -10,6 +10,9 @@ after a flattened run: Coalesce declines because the pair follows a Sub_axis run
 after a flattened run: the oracle proves it illegal: true
 split-reduce: every write of the coalesced cell, the combine's included, stays flattened: true
 split-reduce: the coalesced, split, default-scheduled reduction computes the plain one's values: true
+stage: the load nest's read of the coalesced source stays flattened: true
+privatize: the transfers' accesses of the coalesced target stay flattened: true
+stage+privatize: the coalesced, packed reduction computes the plain one's values bitwise: true
 projection: the serial reference is not all zeros: true
 projection: the coalesced layout's prefix applies: true
 projection: the prefix expands the zeroing, coalesces its pair, then the site's: true

@@ -123,12 +123,22 @@ type affine_subst = { terms : (int * Indexing.symbol) list; offset : int }
 
 let normalize_affine ~terms ~offset = Indexing.affine ~symbols:terms ~offset
 
-(* Rebuild one component of an access from its (possibly substituted) affine decomposition. A
-   [Sub_axis] decomposes to nothing and must stay a [Sub_axis]: written back as [Fixed_idx 0] it
-   would render the same address but read as an ordinary in-bounds coordinate, turning the flattened
-   component after it into an out-of-range one for the address queries (gh-ocannl-1165). *)
-let rebuild_index (orig : Indexing.axis_index) ~terms ~offset =
-  match orig with Indexing.Sub_axis -> Indexing.Sub_axis | _ -> normalize_affine ~terms ~offset
+(* Rename the symbols of one access component. A transform that inserts a nest accessing an existing
+   node at the original access with some loops replaced by fresh ones ([Stage]'s load, [Privatize]'s
+   transfers, [Split_reduce]'s combine) derives that access by renaming the original components,
+   never by rebuilding them from their affine decompositions ({!terms_of_index}): a [Sub_axis]
+   decomposes to nothing and comes back as [Fixed_idx 0], the same address but an ordinary in-bounds
+   coordinate to the address queries, turning the flattened component after it into an out-of-range
+   one (gh-ocannl-1165). A rename has nothing to rewrite in a [Sub_axis] or a [Fixed_idx], so it
+   keeps them by construction. *)
+let rename_index ~(f : Indexing.symbol -> Indexing.symbol) (idx : Indexing.axis_index) :
+    Indexing.axis_index =
+  match idx with
+  | Indexing.Fixed_idx _ | Indexing.Sub_axis -> idx
+  | Indexing.Iterator s -> Indexing.Iterator (f s)
+  | Indexing.Affine { symbols; offset } ->
+      normalize_affine ~terms:(List.map symbols ~f:(fun (c, s) -> (c, f s))) ~offset
+  | Indexing.Concat syms -> Indexing.Concat (List.map syms ~f)
 
 let subst_axis_index ~sym ~(by : affine_subst) (idx : Indexing.axis_index) : Indexing.axis_index =
   match idx with
@@ -1861,10 +1871,8 @@ let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_
       match List.Assoc.find fresh ~equal:Indexing.equal_symbol s with Some s' -> s' | None -> s
     in
     let subst_terms terms = List.map terms ~f:(fun (c, s) -> (c, load_sym s)) in
-    let load_src_idcs =
-      Array.mapi decomp ~f:(fun a (tp, op_, off) ->
-          rebuild_index idcs0.(a) ~terms:(subst_terms tp @ op_) ~offset:off)
-    in
+    (* [load_sym] renames only iterated tile loops, which occur in tile parts alone. *)
+    let load_src_idcs = Array.map idcs0 ~f:(rename_index ~f:load_sym) in
     let tile_store_idcs =
       Array.map tile_axes ~f:(fun (a, _) ->
           let tp, _, _ = decomp.(a) in
@@ -2715,10 +2723,8 @@ let apply_privatize ~target ~over ~acc_prec (opt : Low_level.optimized) : Low_le
         in
         let load_sym s = Option.value (Map.find fresh_syms s) ~default:s in
         let subst_terms terms = List.map terms ~f:(fun (c, s) -> (c, load_sym s)) in
-        let src_idcs =
-          Array.mapi decomp ~f:(fun a (tp, op_, off) ->
-              rebuild_index idcs0.(a) ~terms:(subst_terms tp @ op_) ~offset:off)
-        in
+        (* [load_sym] renames only inner loops, which occur in tile parts alone. *)
+        let src_idcs = Array.map idcs0 ~f:(rename_index ~f:load_sym) in
         let t_idcs =
           if scalar_acc then [| Indexing.Fixed_idx 0 |]
           else
@@ -3163,19 +3169,23 @@ let apply_split_reduce ~axis ~target ~num_blocks ~block_index ~inner_index ~comb
             let range_of s =
               List.find_exn enclosing ~f:(fun fl -> Indexing.equal_symbol fl.index s)
             in
-            let combine_loops = ref [] in
-            let c_idcs =
-              Array.mapi comp_terms ~f:(fun a (terms, off) ->
-                  let ci = List.nth_exn combine_indices a in
-                  match terms with
-                  | [] -> rebuild_index idcs.(a) ~terms ~offset:off
-                  | [ (c, s) ] ->
-                      let fl = range_of s in
-                      combine_loops := (ci, fl.from_, fl.to_) :: !combine_loops;
-                      normalize_affine ~terms:[ (c, ci) ] ~offset:off
-                  | _ -> assert false)
+            (* Each cell symbol with the combine index of the one component it pins, in component
+               order (the combine nest's loop order). *)
+            let to_combine =
+              Array.to_list comp_terms
+              |> List.concat_mapi ~f:(fun a (terms, _) ->
+                  List.map terms ~f:(fun (_, s) -> (s, List.nth_exn combine_indices a)))
             in
-            combine_stmt := build_combine ~partials ~op ~c_idcs ~loops:(List.rev !combine_loops);
+            let c_idcs =
+              Array.map idcs
+                ~f:(rename_index ~f:(List.Assoc.find_exn to_combine ~equal:Indexing.equal_symbol))
+            in
+            let loops =
+              List.map to_combine ~f:(fun (s, ci) ->
+                  let fl = range_of s in
+                  (ci, fl.from_, fl.to_))
+            in
+            combine_stmt := build_combine ~partials ~op ~c_idcs ~loops;
             pass1 ~init:(Some init) (guard body)
         | [], [ (idcs, dyn_axis, dv_scalar, llsc) ] ->
             (* The dynamic (scatter) form, gh-466: [target[.., e, ..] += g] with [e] data-dependent
