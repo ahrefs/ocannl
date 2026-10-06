@@ -547,7 +547,10 @@ endpoint, whereas HIP's invalid exact-f16 and beyond-exact approximate rows are 
   tables beside its step-time matrix; every selected treatment's runner must support training
   diagnostics (an older forward-only BASE is refused). The driver records a cell's exit status;
   both `trainseg` and `summary` use one validator, so forward-only, capped and crashed outputs are
-  refused explicitly and never published as training tables. Its cells print the per-kernel table
+  refused explicitly and never published as training tables. An invocation without `step` (a prep
+  or dry run such as `build provenance trainseg summary`) owes no step-time matrix and exits 0 when
+  its steps pass; a `step` whose cells produced no result line still fails it
+  (`benchmarks/test-gh1133-cells.sh` pins both). Its cells print the per-kernel table
   (`BENCH_KERNEL_TABLE=1`) by default -- a lane or fission A/B moves kernels, and a step-time line
   alone hid gh-ocannl-1167's wrong premise -- and `KERNEL_TABLE=0` turns it off.
   `BENCH_SR_SITES=1` (`bench_conv_diag`) prints what `Autotune.split_reduce_sites` proposes on the

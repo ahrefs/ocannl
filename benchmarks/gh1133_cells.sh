@@ -30,6 +30,9 @@
 #                 p50 of each repeat, the widest p90/p10 of the cell's repeats, the ratio to the
 #                 same fixture's base cell, and the losses' largest relative difference from base.
 #                 Appends the trainseg census/timing tables beside the step-time matrix, if run.
+#                 An invocation without a `step` step (a prep or dry run: build, provenance,
+#                 trainseg, summary) has no matrix to report: summary says so and passes on the
+#                 tables alone, while a `step` step whose cells produced no result line fails.
 #   A measurement step needs `build` and `provenance` earlier in the same invocation.
 #
 # Treatments (every cell: untuned default pipeline, f32, schedule fission on, online softmax off,
@@ -114,6 +117,10 @@ cd "$root/benchmarks" || exit 2
 echo "gh1133: $(date -u +%FT%TZ) root=$root base=$base out=$out cap=$cap backend=$backend repeats=$repeats"
 echo "gh1133: fixtures: $fixtures; treatments: $treatments; ref: $ref; kernel table: $kernel_table; fixture dir: $fixture_dir; steps: $*"
 built=0 proven=0 failed=0
+# Whether the step-time matrix was asked for: summary owes one only then (OUT starts empty, so no
+# earlier invocation's cells can be in it either way).
+step_stage=0
+for step in "$@"; do [ "$step" = step ] && step_stage=1; done
 
 # The runner of a treatment: BASE's for base and b<T>, whatever d1 / fold wrappers enclose it
 # (flags_of strips the same wrappers), this checkout's otherwise.
@@ -278,8 +285,10 @@ for step in "$@"; do
         done
       done ;;
     summary)
-      python3 "$root/benchmarks/gh1133_summary.py" "$out" "$treatments" "$ref" "${REF_ALL:-}" \
-        >"$out/summary.md" || failed=1
+      matrix=()
+      [ "$step_stage" = 1 ] || matrix=(--no-step-stage)
+      python3 "$root/benchmarks/gh1133_summary.py" ${matrix[@]+"${matrix[@]}"} \
+        "$out" "$treatments" "$ref" "${REF_ALL:-}" >"$out/summary.md" || failed=1
       cat "$out/summary.md" ;;
     *) echo "gh1133: unknown step $step"; failed=1 ;;
   esac

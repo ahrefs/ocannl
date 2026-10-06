@@ -36,6 +36,7 @@ shell tools/test-ci-shard.sh
 shell tools/test-action-durations.sh
 shell test/operations/ci_matrix.sh
 shell tools/test-machine-verify.sh
+shell benchmarks/test-gh1133-cells.sh
 toolchain tools/test-fmt-check.sh
 promotion tools/test-promote.sh
 promotion tools/test-promotion-record.sh

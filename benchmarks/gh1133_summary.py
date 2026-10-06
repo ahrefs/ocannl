@@ -19,7 +19,8 @@ def training_output(out, name):
     return content, None
 
 
-def summary(out, treatments, ref_treatment, ref_all=""):
+def step_matrix(out, treatments, ref_treatment, ref_all):
+    """Print the step-time matrix; whether it is incomplete (a missing result or reference)."""
     treatments = treatments.split()
     # The cells of exactly the treatments the driver ran: its TREATMENTS list, not a second copy of
     # the names its flags_of knows.
@@ -71,6 +72,17 @@ def summary(out, treatments, ref_treatment, ref_all=""):
             "%.3fx" % (m / ref) if ref else "", spread, queued, loss))
     for row in missing_refs:
         print("MISSING REFERENCE: %s has no reference cell to compare with" % row)
+    return incomplete or bool(missing_refs)
+
+
+def summary(out, treatments, ref_treatment, ref_all="", step_stage=True):
+    """The report of one driver invocation. Without a step stage there is no matrix to owe: a prep
+    or dry run passes on its training tables alone, and only a step stage's empty matrix fails."""
+    if step_stage:
+        incomplete = step_matrix(out, treatments, ref_treatment, ref_all)
+    else:
+        print("No step stage requested: no step-time matrix.")
+        incomplete = False
     for name in sorted(os.listdir(out)):
         if name.endswith("-trainseg.out"):
             content, reason = training_output(out, name)
@@ -83,7 +95,7 @@ def summary(out, treatments, ref_treatment, ref_all=""):
             print("```text")
             print(content.rstrip())
             print("```")
-    return 1 if incomplete or missing_refs else 0
+    return 1 if incomplete else 0
 
 
 if __name__ == "__main__":
@@ -92,4 +104,6 @@ if __name__ == "__main__":
         if reason:
             print("REFUSED: %s %s" % (sys.argv[3], reason))
         sys.exit(1 if reason else 0)
+    if sys.argv[1] == "--no-step-stage":
+        sys.exit(summary(*sys.argv[2:], step_stage=False))
     sys.exit(summary(*sys.argv[1:]))
