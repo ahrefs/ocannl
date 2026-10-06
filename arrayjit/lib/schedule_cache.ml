@@ -728,18 +728,25 @@ let objective_tag () =
    thing the digest-completeness registry classifies config keys against (gh-ocannl-572). *)
 let key_components = [ "digest"; "backend"; "numerics"; "codegen"; "pool"; "device"; "timing" ]
 
+(* The generation of the CUDA/HIP queued timing policy, which {!cache_key} spells into the [timing]
+   component as [queued-v<N>] so an old winner cannot bypass its repaired calibration. The public
+   setting and the entry description stay [queued]; only the filename identity changes, and only on
+   these backends, whose policy changed (cc and Metal keep the bare [queued]). Generation 1 is that
+   bare spelling, from before the policy was versioned. A bump appends its own line below. *)
+(*= queued_objective_version history -- one line per value, oldest first; a bump appends one:
+   1: gh-ocannl-755 -- the queued objective, spelled bare [queued] on every backend
+   2: gh-ocannl-892 -- the ~10 ms window premise restored from depth-200 windows
+   3: gh-ocannl-1144 -- cap-directed validations; sub-5 us kernels had stayed at 2--5 ms windows
+*)
+let queued_objective_version = 3
+
 let cache_key ?objective ~timing_identity ~(limits : Backend_intf.hardware_limits) ~capabilities
     canonical ~backend =
   Option.map timing_identity ~f:(fun identity ->
       let objective = match objective with Some o -> sanitize o | None -> objective_tag () in
-      (* Version the CUDA/HIP queued scale so an old winner cannot bypass its repaired calibration.
-         Generation 2 restored the ~10 ms premise from depth-200 windows (gh-ocannl-892); generation
-         3 spends the remaining cap-directed validations, where the projection bound had left sub-5
-         us kernels at 2--5 ms (gh-ocannl-1144). Keep the public setting and entry description as
-         [queued], and change the filename identity only on these backends. *)
       let objective =
         match (String.lowercase backend, objective) with
-        | ("cuda" | "hip"), "queued" -> "queued-v3"
+        | ("cuda" | "hip"), "queued" -> "queued-v" ^ Int.to_string queued_objective_version
         | _ -> objective
       in
       let component = function

@@ -1,7 +1,8 @@
 (** Every version constant of the schedule cache names the change that set its current value.
 
     [arrayjit/lib/schedule_cache.ml] stamps its stores with integer versions ([entry_version],
-    [placement_entry_version], [cache_regime_version]), and a bump is how a change says "what was
+    [placement_entry_version], [cache_regime_version]) and spells the CUDA/HIP timing policy's
+    generation into its keys ([queued_objective_version]), and a bump is how a change says "what was
     stored before me is not the answer any more". Two branches bumping the same constant in parallel
     both write the SAME new line -- [let entry_version = 13] becomes [14] on each -- so git merges
     them without a word, and the second change ships under the first one's number: entries the first
