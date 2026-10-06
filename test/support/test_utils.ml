@@ -62,6 +62,10 @@ module Codegen_text_scan = Codegen_text_scan
 (** Deciding what pins the TEXT of generated code: goldens holding emitted kernel or IR source, and
     test sources asserting on it from a string literal. *)
 
+module Scan_attempt = Scan_attempt
+(** Classifying a scan's failure on one source: the input's parse error, or the scanner's own
+    exception with its text -- never the second reported as the first. *)
+
 module Source_inventory = Source_inventory
 (** A source-only repository inventory derived from a clean Dune sandbox. Repository scans select
     their corpus from this shared set instead of maintaining recursive source-root lists. *)

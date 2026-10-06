@@ -13,6 +13,7 @@
 
 open Base
 module Scan = Test_utils.Config_key_scan
+module Attempt = Test_utils.Scan_attempt
 
 let printf = Stdio.printf
 
@@ -736,10 +737,8 @@ let scanner_refusal_controls ~digest_exe ~consistency_exe =
 let () =
   List.iter cases ~f:(fun (name, source, expected) ->
       let found =
-        try List.sort ~compare:String.compare (Scan.keys_in_source source)
-        with _ ->
-          fail "%s -- the snippet does not parse" name;
-          []
+        Attempt.attempted ~what:"keys" ~name ~default:[] (fun () ->
+            List.sort ~compare:String.compare (Scan.keys_in_source source))
       in
       let expected = List.sort ~compare:String.compare expected in
       if List.equal String.equal found expected then printf "ok: %s\n" name
@@ -802,10 +801,8 @@ let () =
           handed_on_count);
   List.iter generated_init_cases ~f:(fun (name, source, expected) ->
       let found =
-        try Scan.generated_init_calls_in_source source
-        with _ ->
-          fail "Generated.init -- %s: the snippet does not parse" name;
-          []
+        Attempt.attempted ~what:"Generated.init" ~name ~default:[] (fun () ->
+            Scan.generated_init_calls_in_source source)
       in
       if List.equal String.equal found expected then printf "ok: Generated.init -- %s\n" name
       else
@@ -818,10 +815,8 @@ let () =
       else fail "could call -- %s: expected %b, found %b" name expected found);
   List.iter env_reader_cases ~f:(fun (name, source, (expected_keys, expected_dynamic)) ->
       let found =
-        try Some (Scan.env_reader_reads_in_source source)
-        with _ ->
-          fail "environment read -- %s: the snippet does not parse" name;
-          None
+        Attempt.attempted ~what:"environment read" ~name ~default:None (fun () ->
+            Some (Scan.env_reader_reads_in_source source))
       in
       Option.iter found ~f:(fun found ->
           let keys = found.Scan.reader_keys in

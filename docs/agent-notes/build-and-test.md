@@ -579,6 +579,11 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   they express the WHOLE shape, since they ignore locations and attributes while keeping arity and
   labels exact. What they cannot reach — a variable-length argument list, a string constant's value,
   a module binding — stays written against the constructors.
+- A scan's failure on a source is classified through `Test_utils.Scan_attempt`, never a
+  `try … with _ ->` that calls every exception "does not parse": `run` tells the parser's errors
+  (the input's fault) from any other exception (the scanner's, kept with its one-line
+  `Printexc.to_string` text), and a case file's per-snippet catch-all is `attempted ~what ~name
+  ~default`, which reports either as a `Verdict.fail`.
 - Type-check every OCaml snippet a scan's cases feed it before trusting the arm. The parser
   accepts programs the type checker rejects — a duplicate top-level `module` parses cleanly — and
   an arm over such a snippet pins the scanner's reading of code no compiler would build, so its

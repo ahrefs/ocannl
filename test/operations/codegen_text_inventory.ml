@@ -55,6 +55,7 @@ let argv = Test_utils.Scan_argv.expand Stdlib.Sys.argv
 
 module Scan = Test_utils.Codegen_text_scan
 module Floors = Test_utils.Scan_floors
+module Attempt = Test_utils.Scan_attempt
 
 (** Lower bounds per scanned root, well below the census of the day they were written. See
     {!Test_utils.Scan_floors}: a glob that breaks goes to zero, a member added moves nothing. *)
@@ -137,19 +138,19 @@ let refusal_control () =
          parses, so the census is short by whatever the file pins"
   in
   let outcome =
-    Scan.attempt (fun () ->
+    Attempt.run (fun () ->
         Scan.boundaries_of { Scan.no_provenance with Scan.uncertainty = Scan.Unresolved })
   in
   (match outcome with
-  | Scan.Raised exn -> refuse_raised ~fail [ ("test/parses.ml", exn) ]
-  | Scan.Scanned _ | Scan.Unparsed -> ());
+  | Attempt.Raised exn -> refuse_raised ~fail [ ("test/parses.ml", exn) ]
+  | Attempt.Scanned _ | Attempt.Unparsed -> ());
   Verdict.p
     "a scanner exception on a parsing file reaches the scanner-defect refusal, not the parse one"
     (!raised
     &&
     match outcome with
-    | Scan.Raised exn -> String.is_substring exn ~substring:"Invalid_argument"
-    | Scan.Scanned _ | Scan.Unparsed -> false);
+    | Attempt.Raised exn -> String.is_substring exn ~substring:"Invalid_argument"
+    | Attempt.Scanned _ | Attempt.Unparsed -> false);
   (* gh-ocannl-1207: the parse refusal, executed: this scan as a child, handed a source that does
      not parse. *)
   Test_utils.Refusal_control_manifest.with_tree
@@ -234,17 +235,17 @@ let () =
         else
           let contents = read on_disk in
           match
-            Scan.attempt (fun () ->
+            Attempt.run (fun () ->
                 ( Scan.rejections ~emitters ~path:name ~contents,
                   Scan.classify_source ~emitters ~path:name ~contents ))
           with
-          | Scan.Scanned (rejections, site) ->
+          | Attempt.Scanned (rejections, site) ->
               rejected := rejections @ !rejected;
               site
-          | Scan.Unparsed ->
+          | Attempt.Unparsed ->
               unparsed := name :: !unparsed;
               None
-          | Scan.Raised exn ->
+          | Attempt.Raised exn ->
               raised := (name, exn) :: !raised;
               None)
   in
