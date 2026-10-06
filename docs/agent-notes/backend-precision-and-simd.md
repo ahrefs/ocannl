@@ -704,9 +704,12 @@ files.
   under 0.883), unlike the neutral bf16 twin of gh-481. `tune` times both twins, so it needs no
   change. `model_default` does: its cost model cannot see the swizzle map, so the twins tie, and
   its first-strictly-better rule keeps plain. Re-time a layout change with
-  `bench_mma_register_scope_emit --layout` and `mma_register_scope_probe_build.sh`, whose
-  `--negative-control` (the swizzled arm with its ldmatrix A XOR dropped) must still fail the dry
-  run: under a K-constant B that fault summed exactly, so a passing dry run alone proves nothing.
+  the CUDA-only `@benchmarks/runners/ocannl/mma-register-scope-probe` alias, which exports both
+  layouts and runs `mma_register_scope_probe_build.sh` plainly and under both
+  `--negative-control=a|b` (the swizzled arm with its ldmatrix A, resp. B gather, XOR dropped),
+  each of which must fail the dry run: under a K-constant B the A fault summed exactly, so a
+  passing dry run alone proves nothing. The B fault has no such blind spot: B is K-row-major, so
+  its XOR permutes N within a K row, and dropping it reads another column's bytes.
 - **bf16 residency is the ternary `bf16_arithmetic` policy's question** (gh-ocannl-838), the same
   shape as `fp16_arithmetic`: `Numerics.bf16_mode`, `Numerics.bf16_accum_wide`, and a per-format
   capability list `mma_bf16_wide_acc_scopes` read by the same seeding gate

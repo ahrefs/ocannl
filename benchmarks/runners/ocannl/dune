@@ -164,3 +164,49 @@
      generated-mma-register-scope-swizzled.cu
      --layout=swizzled
      --ocannl_backend=cuda)))))
+
+; The layout re-time as one target (CUDA only, opt-in): the export above, then the precompiled A/B
+; driver over both layouts, then both negative controls. A passing alias therefore says the dry run
+; checked the twins AND can fail; each build keeps its own binary, and only
+; `generated-mma-register-scope-probe` (plain over swizzled) is the one to time.
+
+(rule
+ ; Runs no OCANNL executable (bash, nvcc, the driver), so it carries no backend marker; the CUDA
+ ; pin is the export rule's.
+ (alias mma-register-scope-probe)
+ (deps
+  (sandbox none)
+  ; A cached alias action is a canary that ran once: the controls must rerun with every build.
+  (universe)
+  (alias mma-register-scope-emit)
+  mma_register_scope_probe_build.sh
+  mma_register_scope_probe.cu)
+ (action
+  (no-infer
+   (progn
+    (run
+     bash
+     mma_register_scope_probe_build.sh
+     generated-mma-register-scope.cu
+     generated-mma-register-scope-swizzled.cu
+     generated-mma-register-scope-probe
+     plain
+     swizzled)
+    (run
+     bash
+     mma_register_scope_probe_build.sh
+     --negative-control=a
+     generated-mma-register-scope.cu
+     generated-mma-register-scope-swizzled.cu
+     generated-mma-register-scope-probe-negative-a
+     plain
+     swizzled)
+    (run
+     bash
+     mma_register_scope_probe_build.sh
+     --negative-control=b
+     generated-mma-register-scope.cu
+     generated-mma-register-scope-swizzled.cu
+     generated-mma-register-scope-probe-negative-b
+     plain
+     swizzled)))))

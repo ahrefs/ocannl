@@ -59,6 +59,14 @@ benchmarks/runners/ocannl/mma_register_scope_probe_build.sh \
   /absolute/baseline.cu /absolute/resident.cu /absolute/generated-probe per_block resident
 ```
 
+For the current revision's layout comparison (plain over swizzled), one opt-in
+CUDA target does all of it: `dune build @benchmarks/runners/ocannl/mma-register-scope-probe`
+exports both layouts, builds and dry-runs the driver over them into
+`generated-mma-register-scope-probe` (the binary to time), then runs both
+negative controls (`--negative-control=a` drops the ldmatrix A swizzle XOR,
+`=b` the B gather's), each into its own binary. The alias passes only when the
+twins match every exact cell and both faults fail the dry run.
+
 The numbers in this report come from the driver's earlier protocol: nine
 alternating-order pairs, median of the nine paired ratios, with B constant
 along K. Since gh-ocannl-1190 the driver varies B along K, poisons D before

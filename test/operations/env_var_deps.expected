@@ -219,6 +219,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   arrayjit/test/dune                       @runtest-env_spelling_gate
   benchmarks/runners/ocannl/dune           @mma-register-scope-emit
   benchmarks/runners/ocannl/dune           @mma-register-scope-emit-env_spelling_gate
+  benchmarks/runners/ocannl/dune           @mma-register-scope-probe
   bin/dune                                 @bin-smoke
   bin/dune                                 @bin-smoke-env_spelling_gate
   test/einsum/dune                         @runtest
