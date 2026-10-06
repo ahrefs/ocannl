@@ -105,6 +105,32 @@
   U   rd=16   wr=0    rmw=0    exact
   W44 rd=0    wr=64   rmw=0    exact
   flops=16 read=16 write=64 intensity=0.200
+== vectorized writes on distinct rows, two stores (exact) ==
+  U   rd=16   wr=0    rmw=0    approx
+  W28 rd=0    wr=64   rmw=0    exact
+  flops=16 read=16 write=64 intensity=0.200
+== vectorized stores with unequal bounds, one row first (bound) ==
+  U   rd=12   wr=0    rmw=0    approx
+  N34 rd=0    wr=48   rmw=0    approx
+  flops=12 read=12 write=48 intensity=0.200
+  floor bytes=40
+== vectorized stores with unequal bounds, two rows first (bound) ==
+  U   rd=12   wr=0    rmw=0    approx
+  N34 rd=0    wr=48   rmw=0    approx
+  flops=12 read=12 write=48 intensity=0.200
+  floor bytes=40
+== concatenated coordinate, segments 2 and 3 (whole node) ==
+  X16 rd=0    wr=64   rmw=0    approx
+  flops=0 read=0 write=64 intensity=0.000
+== concatenated coordinate, segments 1 and 3 (whole node) ==
+  X16 rd=0    wr=64   rmw=0    approx
+  flops=0 read=0 write=64 intensity=0.000
+== concatenated coordinate, segments 1 and 1 (whole node) ==
+  X16 rd=0    wr=64   rmw=0    approx
+  flops=0 read=0 write=64 intensity=0.000
+== map of another rank (box over fiber bound) ==
+  R45 rd=0    wr=16   rmw=0    approx
+  flops=0 read=0 write=16 intensity=0.000
 
 == roofline over the matmul (flops=120, bytes=236) ==
   no envelope                  no bound

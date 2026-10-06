@@ -77,3 +77,14 @@ gather [h;?] vs row write [2;e], h<2                         query false        
 control: gather [?;e] vs cell [2;1]                          query true         oracle true
 control: gather [?;1] vs scatter [?;e]                       query true         oracle true
 control: gather [h;?] vs row write [1;e], h<2                query true         oracle true
+vec4 [0;4c] vs row write [2;e]                               query false        oracle false
+vec4 [0;4c] vs vec4 [2;4d]                                   query false        oracle false
+vec8 [h;0] (whole rows) vs row write [2;e], h<2              query false        oracle false
+vec4 [h;0] vs vec4 [h;4] (same rows, disjoint columns)       query true         oracle false
+control: vec4 [1;0] vs cell [1;3]                            query true         oracle true
+control: vec4 [0;2] spills into row 1, vs cell [1;1]         query true         oracle true
+control: vec4 [h;4c] spills at c=1 (6 wide), vs row [2;e]    query true         oracle true
+control: vec4 [1;0] (s<1) vs vec4 [s;0] (s<2)                query true         oracle true
+control: vec4 [s;0] (s<2) vs vec4 [1;0] (s<1)                query true         oracle true
+control: [1;e] (s<1) vs [s;e] (s<2)                          query true         oracle true
+control: [s;e] (s<2) vs [1;e] (s<1)                          query true         oracle true
