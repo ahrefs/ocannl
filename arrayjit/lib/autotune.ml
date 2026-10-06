@@ -958,7 +958,7 @@ let on_calibration_probe : (calibration_probe -> unit) ref = ref (fun _ -> ())
 type batch_settle =
   | Isolated_objective
   | Single_estimate
-  | Singles_within_target
+  | Singles_reach_target
   | Measured_batch
   | Affine_projection
   | Wall_scaled
@@ -1280,7 +1280,7 @@ let calibrate_and_time_with_retry_observer ~on_retry ~phase ~retry_contended ~ti
             let calibration_dispatches = single_estimate.samples + (probe.samples * probe_depth) in
             let calibration_dispatches, depth, estimated_batch_wall_ms, settle =
               if provisional_depth = 1 && depth = 1 then
-                (calibration_dispatches, 1, single_estimate.ms, Singles_within_target)
+                (calibration_dispatches, 1, single_estimate.ms, Singles_reach_target)
               else if Float.(probe.ms >= queued_batch_ms) && depth < probe_depth then
                 validate_depth max_depth_validation_probes calibration_dispatches 1
                   single_estimate.ms depth estimated_batch_wall_ms

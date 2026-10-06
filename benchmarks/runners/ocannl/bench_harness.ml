@@ -283,7 +283,7 @@ let decision_line ~call (d : Autotune.batch_decision) =
     match d.settle with
     | Isolated_objective -> "isolated"
     | Single_estimate -> "single_estimate"
-    | Singles_within_target -> "singles_within_target"
+    | Singles_reach_target -> "singles_reach_target"
     | Measured_batch -> "measured_batch"
     | Affine_projection -> "affine_projection"
     | Wall_scaled -> "wall_scaled"
