@@ -1,0 +1,16 @@
+Each version constant of the schedule cache ends a verbatim history naming the change that
+set its current value, so two parallel bumps conflict in git instead of sharing one number.
+
+the scan was handed the schedule cache's source: true
+it found the store's version constants, not an empty derivation: true
+every version constant's history is well formed and ends on its current value: true
+a history whose last entry is the constant's value passes, a gap included: true
+a retired value cited in a parenthetical passes: true
+a bump without its history line is refused: true
+a merge that kept both sides' lines for one value is refused: true
+an entry citing no issue is refused, and so is a template's gh-ocannl-<N> placeholder: true
+an entry wrapped onto a continuation line is refused: true
+a blank line between the block and the constant, or no block, is refused: true
+a computed or annotated constant is refused rather than skipped: true
+a constant declared twice is refused: true
+a header naming another constant does not open this one's block: true

@@ -296,8 +296,8 @@ files.
   hoist lands between them. Trap: a NON-dividing `Split` wraps the remainder loop's body in its
   guard, which `Swap` cannot pass, so the zero and companion nests `Pad` the row loop first under
   this flavor (the site nest is padded by the pipeline at such geometries anyway). A menu change
-  like this one bumps `Schedule_cache.entry_version`: a stored crown is only the best of the menu
-  that searched it.
+  like this one bumps `Schedule_cache.entry_version`, appending its history line: a stored crown
+  is only the best of the menu that searched it.
   The gate covers the WORKGROUP's dimensions the same way (gh-ocannl-679):
   `hardware_limits.max_workgroup_dims` is an `(int * int * int) option` of per-dimension caps
   beside — not instead of — `max_threads_per_workgroup`, which caps only the thread PRODUCT.
@@ -1312,6 +1312,14 @@ files.
   old stamp and the next opener retries; power-loss durability is the filesystem's, not an fsync
   guarantee. Pre-gh-835 binaries do not take the lock and must not share a live cache directory
   during an upgrade.
+- **A version bump appends its own history line.** Each version constant in `schedule_cache.ml`
+  (`entry_version`, `placement_entry_version`, `cache_regime_version`) sits under a verbatim
+  `(*= <name> history` comment, one `<value>: gh-ocannl-<N> -- <what changed>` line per value,
+  and `test/operations/cache_version_history` (in `@scans`) refuses a constant its last line does
+  not name. Two parallel bumps used to write the same `let entry_version = N` line and merge
+  silently onto one number (the October 2026 wave did it twice); with the history line they
+  conflict in git. Resolve by renumbering your line AND the constant to the next free value —
+  keeping both lines fails the strictly-increasing rule.
 - **A REQUIRED field in the saved form is the scoped generation bump** (gh-ocannl-1116). Optional
   (`[@sexp.option]`) fields keep old entries readable, which is right when the old meaning is the
   default; when old entries were timed under a rendering the fix removes, give the new field no
