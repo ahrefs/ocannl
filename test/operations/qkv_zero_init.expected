@@ -27,3 +27,6 @@ a full per-cell zero is recognized: true
 partial, guarded, dead and negative-zero initializers are retained: true
 private zero forwarding removes only the proven initializer occurrence: true
 reused final zero preserves executed parity with the materialized run: true
+the folded matmul and its tail collapse to one segment opening with the zero: true
+the folded segment seeds fused-epilogue twins: true
+no sketch of the folded single segment escapes as an unclassified exception: true
