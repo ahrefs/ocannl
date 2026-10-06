@@ -29,14 +29,26 @@
 # up to there, with a warning. Exit 0 on a table, 1 when the trace is
 # malformed or holds no (matching) process, 2 on a usage error.
 #
+# Paths are shown relative to the build context: the build directory is the
+# trace's own `build_dir` (so `--build-dir`/DUNE_BUILD_DIR traces read alike),
+# `_build` when the trace lacks one.
+#
 # SECURITY (gh-ocannl-1280): a trace also records dune's environment, argv,
-# and each process's arguments and captured output, any of which can hold a
-# credential. This reader decodes only event kinds, the time slot (kept only
-# when it is all decimal digits) and the whitelisted fields of process events
-# -- prog, dir, target_files, exit, pid. Everything else is skipped by its
-# length prefixes without being decoded, and no diagnostic quotes trace bytes
-# (only offsets). Keep it that way: tools/test-action-durations.sh plants a
-# canary in every other field and fails on any output that carries it.
+# and each process's arguments and captured stdout/stderr, any of which can
+# hold a credential. This reader decodes only event kinds, the time slot (kept
+# only when it is all decimal digits), `build_dir` of `config init`, and five
+# fields of process events -- prog, dir, target_files, exit, pid (WANTED
+# below). Everything else is skipped by its length prefixes without being
+# decoded, and no diagnostic quotes trace bytes (only offsets). Keep it that
+# way: tools/test-action-durations.sh plants a canary in every other field of
+# the schema it inventories and fails on any output that carries it.
+# The boundary assumes producer-framed csexp, as dune writes it: the length
+# prefixes are what separate a field from the next record, so a corrupted or
+# tampered prefix can swallow a neighbouring record (the environment
+# included) into a whitelisted field, and that prints with exit 0. Nesting
+# checks cannot catch it, since the result is still well-formed csexp.
+# Protection against tampered traces is producer-side scrubbing
+# (ahrefs/ocannl#1280), not this reader; the harness pins the boundary.
 
 set -euo pipefail
 
@@ -99,8 +111,9 @@ except re.error as e:
 data = open(path, 'rb').read()
 n = len(data)
 OPEN, CLOSE, COLON = 40, 41, 58
-KINDS = {(b'process', b'start'), (b'process', b'finish')}
-FIELDS = {b'prog', b'dir', b'target_files', b'exit', b'pid'}
+PROCESS = {b'prog', b'dir', b'target_files', b'exit', b'pid'}
+WANTED = {(b'process', b'start'): PROCESS, (b'process', b'finish'): PROCESS,
+          (b'config', b'init'): {b'build_dir'}}
 
 
 class Short(Exception):
@@ -218,7 +231,8 @@ def event(i):
     if data[i] == CLOSE:
         return None, i + 1
     t, i = time_slot(i)
-    if (cat, name) not in KINDS:
+    wanted = WANTED.get((cat, name))
+    if wanted is None:
         return ((cat, name), t, None), skip_to_close(i)
     fields = {}
     while True:
@@ -230,7 +244,7 @@ def event(i):
             i = skip(i)
             continue
         key, j = head_atom(i + 1)
-        if key in FIELDS:
+        if key in wanted:
             v, j = value(j)
             fields[key.decode()] = v
         i = skip_to_close(j)
@@ -261,28 +275,38 @@ for _, t, _ in events:
         last = max(last, sum(t) if len(t) == 2 else t[0])
 
 
+config = next((f for kind, _, f in events if kind == (b'config', b'init')), {})
+build_dir = config.get('build_dir') if isinstance(config.get('build_dir'), str) else '_build'
+
+
+def in_context(path):
+    # (alias or None, path relative to the build context) for a path under the build directory:
+    # `<build>/<ctx>/...`, a sandbox's `<build>/.sandbox/<hash>/<ctx>/...`, or an alias action's
+    # `<build>/.actions/<ctx>/<dir>/<alias>-<hash>`. Anything else is returned unchanged.
+    prefix = build_dir.rstrip('/') + '/'
+    if not path.startswith(prefix):
+        return None, path
+    rel = path[len(prefix):]
+    m = re.match(r'\.actions/[^/]+/(?:(.*)/)?([^/]+)-[0-9a-f]{32}$', rel)
+    if m:
+        return m.group(2), m.group(1) or '.'
+    m = re.match(r'(?:\.sandbox/[^/]+/)?[^/]+(?:/(.*))?$', rel)
+    return None, (m.group(1) or '.') if m else rel
+
+
 def action(f):
     # (directory, text) naming what the process produced, relative to the build context.
     targets = f.get('target_files')
     targets = [t for t in targets if isinstance(t, str)] if isinstance(targets, list) else []
     if not targets:
-        d = context_dir(f)
+        d = in_context(f['dir'])[1] if isinstance(f.get('dir'), str) else '?'
         return d, '(in %s)' % d
-    m = re.match(r'(?:.*/)?_build/\.actions/[^/]+/(?:(.*)/)?([^/]+)-[0-9a-f]{32}$', targets[0])
-    if m:
-        d = m.group(1) or '.'
-        text = '@%s%s' % (m.group(1) + '/' if m.group(1) else '', m.group(2))
+    alias, rel = in_context(targets[0])
+    if alias is not None:
+        d, text = rel, '@%s%s' % ('' if rel == '.' else rel + '/', alias)
     else:
-        text = re.sub(r'^(?:.*/)?_build/(?:\.sandbox/[^/]+/)?[^/]+/', '', targets[0])
-        d = os.path.dirname(text) or '.'
+        d, text = os.path.dirname(rel) or '.', rel
     return d, text + (' +%d' % (len(targets) - 1) if len(targets) > 1 else '')
-
-
-def context_dir(f):
-    d = f.get('dir') if isinstance(f.get('dir'), str) else ''
-    # The build context's root is the last `default` component: `_build/default`,
-    # a sandbox's `.sandbox/<hash>/default`, or a --build-dir's `<dir>/default`.
-    return re.sub(r'^.*/default(?:/|$)', '', d) or '.'
 
 
 def exit_text(f):
@@ -292,7 +316,7 @@ def exit_text(f):
 
 started, done = {}, []
 for kind, t, f in events:
-    if f is None or not t:
+    if f is None or not t or kind[0] != b'process':
         continue
     key = (f.get('pid'), t[0])
     if kind[1] == b'start':

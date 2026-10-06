@@ -3181,14 +3181,19 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   and `plan`'s report.
 - **Revisit a per-action bound from the traces, through `tools/action-durations.sh`**: it reads a
   dune trace (`_build/trace.csexp` by default, the batch's own after a `tools/test-run.sh run`) and
-  prints the slowest processes dune started, each named by its alias or first target, or with
-  `--group prog|dir` the max/total per test executable or directory; `--prog '\.exe$'` keeps the
-  tests. A process the trace saw start and not finish prints `open`, its seconds a lower bound. Never
-  read a trace by hand to answer this: it also records dune's environment, argv and each process's
-  arguments and captured output, which can hold credentials (gh-ocannl-1280). The tool decodes only
-  event kinds, digit-only time slots and five whitelisted process fields, skipping the rest by
-  length prefix, and its refusals quote offsets, never bytes. `tools/test-action-durations.sh`
-  plants a canary in every other field and rejects two leaking twins with the canary check alone.
+  prints the slowest processes dune started, each named by its alias or first target relative to
+  the trace's own `build_dir`, or with `--group prog|dir` the max/total per test executable or
+  directory; `--prog '\.exe$'` keeps the tests. A process the trace saw start and not finish
+  prints `open`, its seconds a lower bound. Never read a trace by hand to answer this: it also
+  records dune's environment, argv and each process's arguments and captured stdout/stderr, which
+  can hold credentials (gh-ocannl-1280). The tool decodes only event kinds, digit-only time slots,
+  `config init`'s `build_dir` and five process fields, skipping the rest by length prefix, and its
+  refusals quote offsets, never bytes. That boundary assumes producer-framed csexp: a tampered
+  length prefix can swallow the environment into a whitelisted field, still well-formed, so
+  protection against tampered traces is producer-side scrubbing (ahrefs/ocannl#1280), not the
+  reader. `tools/test-action-durations.sh` seeds a canary in every non-read field of the schema it
+  inventories, rejects one decode-and-print twin per such field by the canary alone, and pins the
+  tampered-prefix leak as the documented boundary.
 
 ### Skip coverage
 

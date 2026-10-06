@@ -2,13 +2,29 @@
 # Hermetic legs for tools/action-durations.sh over synthetic dune traces.
 #
 # The fixtures are canonical S-expressions written here, never a real trace:
-# a real one records dune's environment (gh-ocannl-1280). Every field the
-# subject must not decode -- the environment and argv of `config init`, a
-# non-digit time slot, process arguments, captured stdout, rusage, a log
-# message -- carries the CANARY string, and every leg fails on any output that
-# holds it, refusals included. Two fault-injected twins (a refusal quoting the
-# bytes before the bad offset; actions named by their process arguments, as a
-# command line would name them) must be rejected by that canary check alone.
+# a real one records dune's environment (gh-ocannl-1280). The schema they
+# seed is the inventory below: every field of the three event kinds the
+# subject opens that it must NOT decode carries the CANARY string, as do a
+# non-digit time slot and the event kinds it skips whole. Every leg fails on
+# output that holds the canary, refusals included.
+#
+# Inventory (fields seen in dune 3.24 traces across the fleet, plus those
+# dune's process events can carry):
+#   process start/finish  read: prog dir target_files exit pid
+#                         canary: PROCESS_SECRET below (finish adds the
+#                         captured output, error and rusage; start, queued)
+#   config init           read: build_dir; canary: CONFIG_SECRET below
+#   any other kind        skipped whole (log, build, rules, action, thread,
+#                         persistent, config exit, process signal_received);
+#                         three of them carry a canary here
+#
+# Fault-injected twins must each be rejected by the canary check alone: one
+# per inventoried secret field, decoding it and printing it (a row's suffix
+# for a process field, the header for a config field), so a field the
+# fixture forgot to seed fails its twin; and a refusal quoting the bytes
+# before the bad offset. One leg pins the trust boundary instead: a tampered
+# length prefix swallows the environment into `prog`, which the reader cannot
+# tell from a real trace (the protection is producer-side scrubbing).
 #
 #   tools/test-action-durations.sh          # run every leg
 #   tools/test-action-durations.sh --keep   # keep the scratch directory
@@ -23,13 +39,19 @@ harness_scratch test-action-durations
 HERE=$(cd "$(dirname "$0")" && pwd)
 SUBJECT=$HERE/action-durations.sh
 CANARY=CANARY-0c3f-not-for-output
+# The secret halves of the inventory: the fixture seeds exactly these, and
+# the twins iterate exactly these.
+PROCESS_SECRET="process_args categories queued target_dirs name stdout stderr error rusage"
+CONFIG_SECRET="version argv env root initial_cwd start pid"
 mkdir -p "$TMP/runs"
 
-python3 - "$TMP" "$CANARY" <<'PY'
+python3 - "$TMP" "$CANARY" "$PROCESS_SECRET" "$CONFIG_SECRET" <<'PY'
 import sys
 from pathlib import Path
 
 root, canary = Path(sys.argv[1]), sys.argv[2]
+process_secret, config_secret = sys.argv[3].split(), sys.argv[4].split()
+START_ONLY, FINISH_ONLY = {'queued'}, {'stdout', 'stderr', 'error', 'rusage'}
 S = 1_000_000_000
 T0 = 1_791_291_000 * S
 
@@ -43,58 +65,82 @@ def sexp(x):
     return b'(' + b''.join(sexp(e) if isinstance(e, list) else atom(e) for e in x) + b')'
 
 
-def rest(pid, prog, directory, targets, exit_=None):
-    out = [['process_args', ['--ocannl_backend=cc', '--token=' + canary]], ['pid', str(pid)],
-           ['categories', []], ['prog', prog], ['dir', directory]]
-    if exit_ is not None:
+def secret(field):
+    # Lists where dune writes lists, so a twin printing the field prints the canary inside one.
+    return {'process_args': ['--ocannl_backend=cc', '--token=' + canary],
+            'argv': ['dune', 'build', '--x=' + canary],
+            'env': ['FAKE_API_TOKEN=' + canary, 'HOME=/home/' + canary],
+            'categories': [canary], 'target_dirs': [canary],
+            'rusage': [['user_cpu_time', '1'], ['system_cpu_time', canary]]}.get(field, canary)
+
+
+def fields(phase, pid, prog, directory, targets, exit_):
+    out = [['pid', str(pid)], ['prog', prog], ['dir', directory]]
+    if phase == 'finish':
         out.append(['exit', exit_])
     if targets:
         out.append(['target_files', targets])
-    if exit_ is not None:
-        out += [['stdout', canary],
-                ['rusage', [['user_cpu_time', '1'], ['system_cpu_time', canary]]]]
-    return out
+    skip = FINISH_ONLY if phase == 'start' else START_ONLY
+    return out + [[k, secret(k)] for k in process_secret if k not in skip]
 
 
-def proc(pid, start_s, dur_s, prog, directory, targets, exit_='0'):
+def proc(b, pid, start_s, dur_s, prog, directory, targets, exit_='0'):
     start = T0 + int(start_s * S)
-    events = [sexp(['process', 'start', str(start)] + rest(pid, prog, directory, targets)
-                   + [['queued', '1000']])]
+    directory, targets = b + directory, [b + t for t in targets]
+    events = [sexp(['process', 'start', str(start)] + fields('start', pid, prog, directory, targets, exit_))]
     if dur_s is not None:
         events.append(sexp(['process', 'finish', [str(start), str(int(round(dur_s * S)))]]
-                           + rest(pid, prog, directory, targets, exit_)))
+                           + fields('finish', pid, prog, directory, targets, exit_)))
     return events
 
 
-b = '_build/default/'
-head = [
-    sexp(['config', 'init', canary, ['version', '3.24.2'], ['argv', ['dune', 'build', '--x=' + canary]],
-          ['env', ['FAKE_API_TOKEN=' + canary, 'HOME=/home/' + canary]], ['pid', '1']]),
+def config(build_dir):
+    return sexp(['config', 'init', canary, ['build_dir', build_dir]]
+                + [[k, secret(k)] for k in config_secret])
+
+
+def body(b):
+    d = '/default/'
+    return (
+        proc(b, 11, 1, 21.5, '/opt/bin/fsm_transformer.exe', d + 'test/training',
+             [d + 'test/training/fsm_transformer.actual'])
+        + proc(b, 12, 2, 6.72, 'env_var_deps.exe', '/.sandbox/53d3fec81e775d978ce99f0295ebd390/default/test/operations',
+               [d + 'test/operations/env_var_deps.actual', d + 'test/operations/env_var_deps.filelist'])
+        + proc(b, 13, 3, 1.96, 'env_var_deps.exe', d + 'test/operations',
+               [d + 'test/operations/env_var_deps_control.actual'])
+        + proc(b, 14, 4, 3.25, '/opt/bin/ocamlopt.opt', d + 'arrayjit/lib', [])
+        + proc(b, 15, 5, 5.43, '/bin/sh', d + 'test/operations',
+               ['/.actions/default/test/operations/runtest-slot_kind_cases-4050ca3943e5638ece3bbcdcaf49ae6e'], '1')
+        + proc(b, 16, 10, None, 'hung_probe.exe', d + 'test/operations', [d + 'test/operations/hung_probe.exe.output'])
+    )
+
+
+others = [
     sexp(['log', 'info', str(T0), ['message', canary]]),
     sexp(['build', 'build-start', str(T0), ['run_id', '1']]),
+    sexp(['process', 'signal_received', str(T0), ['signal', canary]]),
 ]
-body = (
-    proc(11, 1, 21.5, '/opt/bin/fsm_transformer.exe', b + 'test/training',
-         [b + 'test/training/fsm_transformer.actual'])
-    + proc(12, 2, 6.72, 'env_var_deps.exe', '_build/.sandbox/53d3fec81e775d978ce99f0295ebd390/default/test/operations',
-           [b + 'test/operations/env_var_deps.actual', b + 'test/operations/env_var_deps.filelist'])
-    + proc(13, 3, 1.96, 'env_var_deps.exe', b + 'test/operations',
-           [b + 'test/operations/env_var_deps_control.actual'])
-    + proc(14, 4, 3.25, '/opt/bin/ocamlopt.opt', b + 'arrayjit/lib', [])
-    + proc(15, 5, 5.43, '/bin/sh', b + 'test/operations',
-           ['_build/.actions/default/test/operations/runtest-slot_kind_cases-4050ca3943e5638ece3bbcdcaf49ae6e'], '1')
-    + proc(16, 10, None, 'hung_probe.exe', b + 'test/operations', [b + 'test/operations/hung_probe.exe.output'])
-)
 tail = [sexp(['action', 'write-file', [str(T0 + 50 * S), '1000'], ['file', canary], ['size', '3']])]
-(root / 'trace').write_bytes(b''.join(head + body + tail))
+(root / 'trace').write_bytes(b''.join([config('_build')] + others + body('_build') + tail))
+# The same build under `--build-dir`: paths carry that prefix, and config init names it.
+bd = '/scratch/' + 'bd'
+(root / 'trace-build-dir').write_bytes(b''.join([config(bd)] + others + body(bd) + tail))
+# No config init (its head lost): the build directory falls back to `_build`.
+(root / 'trace-no-config').write_bytes(b''.join(others + body('_build') + tail))
 # Killed mid-event: the finish record of pid 21 is cut short, so pid 21 is open
 # and its lower bound runs to the last complete event, 7 s after its start.
-cut = proc(21, 1, 30, 'slow.exe', b + 'test/operations', [b + 'test/operations/slow.output'])
+cut = proc('_build', 21, 1, 30, 'slow.exe', '/default/test/operations', ['/default/test/operations/slow.output'])
 mark = sexp(['action', 'write-file', [str(T0 + 8 * S), '1000'], ['file', canary], ['size', '3']])
-(root / 'truncated').write_bytes(b''.join(head + [cut[0], mark]) + cut[1][:len(cut[1]) // 2])
+(root / 'truncated').write_bytes(b''.join([config('_build'), cut[0], mark]) + cut[1][:len(cut[1]) // 2])
 # Malformed: a stray byte right after an atom that holds the canary.
-(root / 'malformed').write_bytes(head[0] + b'(3:log4:info' + atom(canary) + b'!)')
-(root / 'no-process').write_bytes(b''.join(head))
+(root / 'malformed').write_bytes(config('_build') + b'(3:log4:info' + atom(canary) + b'!)')
+(root / 'no-process').write_bytes(b''.join([config('_build')] + others))
+# Tampered: `prog`'s length prefix is enlarged to swallow a planted environment record
+# and the field's own close; still well-formed csexp, so the reader cannot see it.
+swallowed = b'tampered.exe)(3:env' + atom('FAKE_API_TOKEN=' + canary) + b')'
+event = (b'(7:process6:finish(' + atom(T0) + atom(S) + b')(3:pid2:31)(4:prog'
+         + str(len(swallowed)).encode() + b':' + swallowed + b')(4:exit1:0))')
+(root / 'tampered').write_bytes(config('_build') + event)
 PY
 
 cat >"$TMP/table.expected" <<'EOF'
@@ -188,6 +234,11 @@ cp "$TMP/trace" "$TMP/repo/_build/trace.csexp"
 leg "the default trace is _build/trace.csexp at the repository root" \
   exact "$TMP/repo/tools/action-durations.sh" default "$TMP/table.expected"
 
+leg "a --build-dir trace reads like a _build one (its config init names the directory)" \
+  exact "$SUBJECT" build-dir "$TMP/table.expected" "$TMP/trace-build-dir"
+leg "a trace without config init falls back to _build" \
+  exact "$SUBJECT" no-config "$TMP/table.expected" "$TMP/trace-no-config"
+
 truncated_leg() {
   run_subject "$SUBJECT" truncated "$TMP/truncated"
   if leaked truncated; then return 1; fi
@@ -246,11 +297,33 @@ twin quoting \
   "'malformed at byte %d near %r' % (path, e.args[0], data[max(0, e.args[0] - 40):e.args[0]]))"
 twin_leg quoting "a refusal quoting the bytes before the bad offset leaks the canary" \
   refused "$TMP/quoting.sh" quoting 1 'malformed at byte' "$TMP/malformed"
-twin by-args \
-  "FIELDS = {b'prog', b'dir', b'target_files', b'exit', b'pid'}" \
-  "FIELDS = {b'prog', b'dir', b'target_files', b'exit', b'pid', b'process_args'}" \
-  "% (s, ex, prog, action(f)[1]))" \
-  "% (s, ex, prog, action(f)[1] + ' ' + ' '.join(f.get('process_args', []))))"
-twin_leg by-args "actions named by their process arguments leak the canary" \
-  exact "$TMP/by-args.sh" by-args "$TMP/table.expected" "$TMP/trace"
+for field in $PROCESS_SECRET; do
+  twin "decode-$field" \
+    "PROCESS = {b'prog', b'dir', b'target_files', b'exit', b'pid'}" \
+    "PROCESS = {b'prog', b'dir', b'target_files', b'exit', b'pid', b'$field'}" \
+    "% (s, ex, prog, action(f)[1]))" \
+    "% (s, ex, prog, action(f)[1] + ' ' + str(f.get('$field'))))"
+  twin_leg "decode-$field" "printing process field $field leaks the canary" \
+    exact "$TMP/decode-$field.sh" "decode-$field" "$TMP/table.expected" "$TMP/trace"
+done
+for field in $CONFIG_SECRET; do
+  twin "decode-config-$field" \
+    "(b'config', b'init'): {b'build_dir'}}" \
+    "(b'config', b'init'): {b'build_dir', b'$field'}}" \
+    "p[1] == 'open')))" \
+    "p[1] == 'open')) + ' ' + str(config.get('$field')))"
+  twin_leg "decode-config-$field" "printing config field $field leaks the canary" \
+    exact "$TMP/decode-config-$field.sh" "decode-config-$field" "$TMP/table.expected" "$TMP/trace"
+done
+
+# The trust boundary, pinned rather than defended: the length prefixes are the
+# framing, so a tampered one leaks into a whitelisted field with exit 0. If
+# this leg fails because the reader started refusing such a trace, update the
+# SECURITY comment and the agent note along with it.
+tampered_leg() {
+  run_subject "$SUBJECT" tampered "$TMP/tampered"
+  if [ "$(cat "$TMP/runs/tampered/rc")" != 0 ]; then return 1; fi
+  grep -qF -- "$CANARY" "$TMP/runs/tampered/stdout"
+}
+leg "boundary: a tampered length prefix swallows the environment into prog (scrub at the producer)" tampered_leg
 finish
