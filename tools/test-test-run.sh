@@ -230,9 +230,12 @@
 #      shared `_build/trace.csexp` is never read nor touched. Nothing is
 #      recorded from a trace the reader cannot read, where the argv names its
 #      own trace file, or where the first word is not a subcommand known to
-#      take one. A reader past its bound is KILLed, and one KILL cannot reap
-#      is abandoned: either way the verdict publishes, the lock clears, and no
-#      record is left. A refused slot or device probe and a setup error never
+#      take one; the runner's option reaches dune exactly once, before its
+#      `--` (mutants doubling it or moving it past `--` show in the pinned
+#      calls). A reader past its bound is KILLed -- an ambient bound hook can
+#      only shorten it -- and one KILL cannot reap (a mutant) is abandoned:
+#      either way the verdict publishes, the lock clears, and no record is
+#      left. A refused slot or device probe and a setup error never
 #      print a record, a cancellation does. Beside it, against a real dune: a
 #      manual build running beside a managed run keeps its live trace.
 #  70 sits at the very end, after every leg that fakes a device: a leg that
@@ -1871,21 +1874,31 @@ n=0
 [ ! -f "$REPEAT_TEST_COUNTER" ] || n=$(cat "$REPEAT_TEST_COUNTER")
 n=$((n + 1))
 printf '%s\n' "$n" >"$REPEAT_TEST_COUNTER"
-# The run's own trace file, which the launch hands every batch it knows takes
-# one (leg 80), is kept out of the calls every leg pins: it goes to
-# REPEAT_TEST_TRACE_ARGS when that is set, and the synthetic trace
-# REPEAT_TEST_TRACE names, when set, is copied to where it points.
-trace_to=
+# The trace options dune was handed, each observed on its own (leg 80): one
+# line per `--trace-file` word to REPEAT_TEST_TRACE_ARGS when set -- its
+# 1-based position, `before` or `after` dune's own `--`, and its value. Only
+# the runner's own is kept out of the calls every leg pins: exactly
+# `--trace-file=<the run's directory>/trace.csexp`, as the second word, right
+# after the subcommand, where the launch puts it. Every other word -- a
+# second copy of that one, a caller's own, a program's argument past `--` --
+# stays in the calls verbatim. The synthetic trace REPEAT_TEST_TRACE names,
+# when set, is copied to where the runner's own points.
+pos=0 side=before
 for arg in "$@"; do
-  case $arg in --trace-file=*) trace_to=${arg#--trace-file=} ;; esac
+  pos=$((pos + 1))
+  if [ "$side" = before ] && [ "$arg" = -- ]; then side=after; continue; fi
+  case $arg in
+    --trace-file | --trace-file=*)
+      [ -z "${REPEAT_TEST_TRACE_ARGS:-}" ] ||
+        printf '%s %s %s\n' "$pos" "$side" "${arg#--trace-file=}" >>"$REPEAT_TEST_TRACE_ARGS" ;;
+  esac
 done
-if [ -n "$trace_to" ]; then
-  [ -z "${REPEAT_TEST_TRACE_ARGS:-}" ] || printf '%s\n' "$trace_to" >>"$REPEAT_TEST_TRACE_ARGS"
-  kept=()
-  for arg in "$@"; do
-    case $arg in --trace-file=*) ;; *) kept+=("$arg") ;; esac
-  done
-  set -- ${kept[@]+"${kept[@]}"}
+if [ -n "${OCANNL_TOOL_TESTRUN_OWN:-}" ] && [ $# -ge 2 ] &&
+   [ "$2" = "--trace-file=$OCANNL_TOOL_TESTRUN_OWN/trace.csexp" ]; then
+  trace_to=${2#--trace-file=}
+  trace_sub=$1
+  shift 2
+  set -- "$trace_sub" "$@"
   [ -z "${REPEAT_TEST_TRACE:-}" ] || cp "$REPEAT_TEST_TRACE" "$trace_to"
 fi
 printf '%s\n' "$*" >>"$REPEAT_TEST_CALLS"
@@ -3878,10 +3891,12 @@ PY
   esac
   [ -n "$slow_detail" ] || [ "$(slow_rows "$argv_out")" = "$slow_want" ] ||
     slow_detail="a green run: rows $(slow_rows "$argv_out" | tr '\n' ';') (want the five slowest, longest first)"
-  # The trace was the run's own file, handed to dune once, and is gone once read.
-  [ -n "$slow_detail" ] || { [ "$(grep -c '' "$slow_args")" = 1 ] &&
-    [ "$(slow_physical "$(cat "$slow_args")")" = "$(slow_physical "$argv_dir/trace.csexp")" ]; } ||
-    slow_detail="a green run: dune was not handed the run's own trace file once: $(cat "$slow_args")"
+  # The trace was the run's own file, handed to dune once, as the second word,
+  # and is gone once read; no other trace option reached dune.
+  [ -n "$slow_detail" ] || [ "$(cat "$slow_args")" = "2 before $(slow_physical "$argv_dir/trace.csexp")" ] ||
+    slow_detail="a green run: dune was not handed exactly the run's own trace file, once: $(cat "$slow_args")"
+  [ -n "$slow_detail" ] || [ "$argv_calls" = "build @cheap" ] ||
+    slow_detail="a green run: dune's other words changed: $argv_calls"
   [ -n "$slow_detail" ] || { [ -s "$argv_dir/slowest" ] && [ ! -e "$argv_dir/slowest.tmp" ] &&
     [ ! -e "$argv_dir/trace.csexp" ]; } ||
     slow_detail="a green run: the record is not published cleanly: $(ls "$argv_dir" | tr '\n' ' ')"
@@ -3924,57 +3939,113 @@ PY
       [ ! -e "$argv_dir/trace.csexp" ]; } ||
       slow_detail="an unreadable trace left a record: $(ls "$argv_dir" | tr '\n' ' ')"
   fi
-  # Where the argv names a trace file of its own, or its first word is not a
-  # subcommand known to take one (a global option ahead of it included), dune
-  # is handed none and nothing is recorded.
+  # Where the argv names a trace file of its own -- either spelling -- or its
+  # first word is not a subcommand known to take one (a global option ahead of
+  # it included), dune is handed none: the caller's option is the only one,
+  # verbatim, and nothing is recorded. Past dune's own `--` the word is a
+  # program's argument: the runner's own still goes before the separator, once,
+  # and the program's reaches it untouched.
   if [ -z "$slow_detail" ]; then
-    for probe in "build --trace-file $TMP/t.csexp @cheap" "describe @cheap" "--display=short build @cheap"; do
+    for probe in "build --trace-file $TMP/t.csexp @cheap|2 before --trace-file" \
+                 "build --trace-file=$TMP/t.csexp @cheap|2 before $TMP/t.csexp" \
+                 "describe @cheap|" "--display=short build @cheap|" \
+                 "exec ./prog.exe -- --trace-file=$TMP/p.csexp|OWN
+5 after $TMP/p.csexp"; do
+      want=${probe#*|} probe=${probe%%|*}
       : >"$slow_args"
       # shellcheck disable=SC2086
-      REPEAT_TEST_TRACE=$slow_trace REPEAT_TEST_TRACE_ARGS=$slow_args argv_probe slow-elsewhere run $probe
-      if [ -s "$slow_args" ] || [ -e "$argv_dir/slowest" ] || [ "$argv_calls" != "$probe" ]; then
-        slow_detail="$probe: handed a trace file ($(cat "$slow_args")), or recorded; calls: $argv_calls"
+      REPEAT_TEST_TRACE_ARGS=$slow_args argv_probe slow-elsewhere run $probe
+      want=${want/OWN/2 before $(slow_physical "$argv_dir/trace.csexp")}
+      if [ "$(cat "$slow_args")" != "$want" ] || [ "$argv_calls" != "$probe" ] || [ -e "$argv_dir/slowest" ]; then
+        slow_detail="$probe: trace options $(tr '\n' ';' <"$slow_args") (want ${want:-none}); calls: $argv_calls"
         break
       fi
     done
   fi
-  # A reader past its bound is KILLed and the verdict still publishes; one
-  # that KILL cannot reap (stood in for by OCANNL_TOOL_SLOWEST_KILL=0, which
-  # signals nothing) is abandoned after a bounded reap: the verdict publishes,
-  # the worktree lock clears, and no record is left.
+  # The observer above is not normalizing a defect away: a runner that hands
+  # dune its option twice, or past the separator, shows in the calls the legs
+  # pin and in the observed options. Each mutant replaces the shipping copy in
+  # the fixture root for one run.
+  slow_mutant() { # tag from to run-argv... -> runs, once, the script with FROM replaced by TO
+    local tag=$1
+    SLOW_FROM=$2 SLOW_TO=$3 perl -pe 's/\Q$ENV{SLOW_FROM}\E/$ENV{SLOW_TO}/' "$SRC" >"$repeat_root/tools/test-run.sh"
+    shift 3
+    if cmp -s "$SRC" "$repeat_root/tools/test-run.sh"; then
+      slow_detail="mutant $tag: the substitution matched nothing in $SRC"
+      cp "$SRC" "$repeat_root/tools/test-run.sh"
+      return 1
+    fi
+    argv_probe "$tag" "$@"
+    cp "$SRC" "$repeat_root/tools/test-run.sh"
+  }
+  slow_inject='set -- "$trace_sub" "--trace-file=$trace_file" "$@" ;;'
+  if [ -z "$slow_detail" ]; then
+    : >"$slow_args"
+    REPEAT_TEST_TRACE_ARGS=$slow_args slow_mutant slow-mutant-twice "$slow_inject" \
+      'set -- "$trace_sub" "--trace-file=$trace_file" "--trace-file=$trace_file" "$@" ;;' run build @cheap
+    [ -n "$slow_detail" ] || { [ "$(grep -c '' "$slow_args")" = 2 ] && [ "$argv_calls" != "build @cheap" ]; } ||
+      slow_detail="a doubled option went unseen: options $(tr '\n' ';' <"$slow_args"); calls: $argv_calls"
+  fi
+  if [ -z "$slow_detail" ]; then
+    : >"$slow_args"
+    REPEAT_TEST_TRACE_ARGS=$slow_args slow_mutant slow-mutant-after "$slow_inject" \
+      'set -- "$trace_sub" "$@" "--trace-file=$trace_file" ;;' run exec ./prog.exe -- x
+    [ -n "$slow_detail" ] || { grep -q '^5 after ' "$slow_args" && [ "$argv_calls" != "exec ./prog.exe -- x" ]; } ||
+      slow_detail="an option past the separator went unseen: options $(tr '\n' ';' <"$slow_args"); calls: $argv_calls"
+  fi
+  # A reader past its bound is KILLed and the verdict still publishes, even
+  # when the caller's environment carries an out-of-range bound (an ambient
+  # hook can only shorten it) and a retired escalation knob: the verdict is
+  # never later than the 30-second bound plus the reap. A reader KILL cannot
+  # reap -- stood in for by a mutant whose escalation signals nothing -- is
+  # abandoned after the bounded reap: the verdict publishes, the worktree
+  # lock clears, and no record is left.
   if [ -z "$slow_detail" ]; then
     slow_reader=$TMP/slowest-stuck-reader.sh
-    printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$$" >"$SLOW_READER_PID"\nexec sleep 60\n' >"$slow_reader"
-    for esc in KILL 0; do
+    printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$$" >"$SLOW_READER_PID"\nexec sleep 120\n' >"$slow_reader"
+    for kind in bounded ambient unreapable; do
       rm -f "$TMP/slowest-reader.pid"
+      case $kind in
+        bounded) slow_cap=1 slow_limit=20 ;;
+        ambient) slow_cap=99999 slow_limit=50 ;;
+        unreapable) slow_cap=1 slow_limit=20 ;;
+      esac
       slow_t0=$SECONDS
-      SLOW_READER_PID=$TMP/slowest-reader.pid OCANNL_TOOL_SLOWEST_READER=$slow_reader \
-        OCANNL_TOOL_SLOWEST_CAP=1 OCANNL_TOOL_SLOWEST_KILL=$esc REPEAT_TEST_TRACE=$slow_trace \
-        argv_probe "slow-stuck-$esc" run build @cheap
+      if [ "$kind" = unreapable ]; then
+        SLOW_READER_PID=$TMP/slowest-reader.pid OCANNL_TOOL_SLOWEST_READER=$slow_reader \
+          OCANNL_TOOL_SLOWEST_CAP=$slow_cap REPEAT_TEST_TRACE=$slow_trace \
+          slow_mutant "slow-stuck-$kind" 'kill("KILL", -$c) or kill("KILL", $c);' 'kill(0, -$c) or kill(0, $c);' \
+          run build @cheap
+      else
+        SLOW_READER_PID=$TMP/slowest-reader.pid OCANNL_TOOL_SLOWEST_READER=$slow_reader \
+          OCANNL_TOOL_SLOWEST_CAP=$slow_cap OCANNL_TOOL_SLOWEST_KILL=0 REPEAT_TEST_TRACE=$slow_trace \
+          argv_probe "slow-stuck-$kind" run build @cheap
+      fi
+      [ -z "$slow_detail" ] || break
       slow_secs=$((SECONDS - slow_t0))
       slow_pid=$(cat "$TMP/slowest-reader.pid" 2>/dev/null)
-      slow_lock=$(OCANNL_TOOL_TEST_RUNS=$TMP/argv-runs-slow-stuck-$esc "$repeat_root/tools/test-run.sh" lock-status 2>&1)
+      slow_lock=$(OCANNL_TOOL_TEST_RUNS=$TMP/argv-runs-slow-stuck-$kind "$repeat_root/tools/test-run.sh" lock-status 2>&1)
       slow_alive=no
       [ -n "$slow_pid" ] && kill -0 "$slow_pid" 2>/dev/null && slow_alive=yes
       [ -z "$slow_pid" ] || kill -KILL "$slow_pid" 2>/dev/null
-      case $esc:$slow_alive in
-        KILL:yes) slow_detail="KILL: the reader survived its bound" ;;
-        0:no) slow_detail="0: the stand-in reader died, so the unreapable path was not taken" ;;
+      case $kind:$slow_alive in
+        bounded:yes | ambient:yes) slow_detail="$kind: the reader survived its bound" ;;
+        unreapable:no) slow_detail="unreapable: the stand-in reader died, so the unreapable path was not taken" ;;
       esac
-      [ -n "$slow_detail" ] || [ -n "$slow_pid" ] || slow_detail="$esc: the stand-in reader never ran"
+      [ -n "$slow_detail" ] || [ -n "$slow_pid" ] || slow_detail="$kind: the stand-in reader never ran"
       [ -n "$slow_detail" ] || case $argv_rc:$argv_out in
-        0:*"verdict: pass"*"slowest actions"*) slow_detail="$esc: a stuck reader left a table: $argv_out" ;;
+        0:*"verdict: pass"*"slowest actions"*) slow_detail="$kind: a stuck reader left a table: $argv_out" ;;
         0:*"verdict: pass"*) ;;
-        *) slow_detail="$esc: exit $argv_rc (want the run's own 0): $argv_out" ;;
+        *) slow_detail="$kind: exit $argv_rc (want the run's own 0): $argv_out" ;;
       esac
       [ -n "$slow_detail" ] || [ "$(cat "$argv_dir/exit" 2>/dev/null)" = 0 ] ||
-        slow_detail="$esc: the verdict was not published"
+        slow_detail="$kind: the verdict was not published"
       [ -n "$slow_detail" ] || [ "$slow_lock" = idle ] ||
-        slow_detail="$esc: the worktree lock is still held: $slow_lock"
-      [ -n "$slow_detail" ] || [ "$slow_secs" -le 20 ] ||
-        slow_detail="$esc: took ${slow_secs}s (bound 1s, then a 5s reap)"
+        slow_detail="$kind: the worktree lock is still held: $slow_lock"
+      [ -n "$slow_detail" ] || [ "$slow_secs" -le "$slow_limit" ] ||
+        slow_detail="$kind: took ${slow_secs}s (limit ${slow_limit}s)"
       [ -n "$slow_detail" ] || { [ ! -e "$argv_dir/slowest" ] && [ ! -e "$argv_dir/trace.csexp" ]; } ||
-        slow_detail="$esc: left $(ls "$argv_dir" | tr '\n' ' ')"
+        slow_detail="$kind: left $(ls "$argv_dir" | tr '\n' ' ')"
       [ -z "$slow_detail" ] || break
     done
   fi
@@ -4649,10 +4720,19 @@ fi
 slot_fake=$TMP/fake-fleet-worker.sh
 cat >"$slot_fake" <<'FAKE'
 #!/usr/bin/env bash
-# The run's own trace file, handed to the batch's dune (leg 80), is kept out of
-# the slot calls these legs pin, as the fixture dune keeps it out of its own.
-shown=()
-for arg in "$@"; do case $arg in --trace-file=*) ;; *) shown+=("$arg") ;; esac; done
+# The runner's own trace option (leg 80) is kept out of the slot calls these
+# legs pin, by the fixture dune's rule: exactly `--trace-file=<the run's
+# directory>/trace.csexp`, once, right after the subcommand that follows the
+# dune it runs. Every other word stays verbatim.
+shown=() prev2= prev1= dropped=
+for arg in "$@"; do
+  if [ -z "$dropped" ] && [ -n "${OCANNL_TOOL_TESTRUN_OWN:-}" ] &&
+     [ "$arg" = "--trace-file=$OCANNL_TOOL_TESTRUN_OWN/trace.csexp" ] && [ "${prev2##*/}" = dune ]; then
+    case $prev1 in build | runtest | test | exec) dropped=1; prev2=$prev1 prev1=$arg; continue ;; esac
+  fi
+  shown+=("$arg")
+  prev2=$prev1 prev1=$arg
+done
 printf '%s\n' "${shown[*]}" >>"$FAKE_FW_CALLS"
 if [ "$1 $2 $3" = "execution slot --probe" ]; then
   [ "${FAKE_FW_MODE:-}" = noprobe ] && { echo "fleet-worker.sh: execution slot [--wait <seconds>] ..." >&2; exit 2; }

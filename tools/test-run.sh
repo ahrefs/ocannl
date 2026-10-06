@@ -817,19 +817,17 @@ supervisor_perl='
   # the reader succeeds. The reader is a child of its own, in a group of its
   # own so its python goes with it, holding no descriptor past stdio (the
   # worktree lock is fd 9) and with every check of the trace made there, so nothing here can block on
-  # the file system: it is polled for its bound (OCANNL_TOOL_SLOWEST_CAP,
-  # 30 seconds), then KILLed and polled again, five seconds, and abandoned if
-  # even that does not reap it -- the verdict publishes and the lock clears
-  # regardless. OCANNL_TOOL_SLOWEST_READER and OCANNL_TOOL_SLOWEST_KILL (the
-  # escalation signal; 0 sends none) are seams for tools/test-test-run.sh,
-  # which stands a reader that KILL cannot reap in with them. The trace is
-  # deleted either way.
+  # the file system: it is polled for its bound (30 seconds), then KILLed and
+  # polled again, five seconds, and abandoned if even that does not reap it
+  # -- the verdict publishes and the lock clears regardless. The trace is
+  # deleted either way. OCANNL_TOOL_SLOWEST_CAP and OCANNL_TOOL_SLOWEST_READER
+  # are seams for tools/test-test-run.sh; an ambient value can only shorten
+  # the bound (anything but 1-30 reads as 30), and the reader it names is
+  # bounded and KILLed like the real one.
   my $slowest = sub {
     my $trace = "$own/trace.csexp";
     my $bound = $ENV{OCANNL_TOOL_SLOWEST_CAP};
-    $bound = 30 unless defined $bound && $bound =~ /^[1-9][0-9]{0,4}$/;
-    my $esc = $ENV{OCANNL_TOOL_SLOWEST_KILL};
-    $esc = "KILL" unless defined $esc && $esc =~ /^(KILL|0)$/;
+    $bound = 30 unless defined $bound && $bound =~ /^[1-9][0-9]?$/ && $bound <= 30;
     my $reader = $ENV{OCANNL_TOOL_SLOWEST_READER};
     $reader = "tools/action-durations.sh" unless defined $reader && length $reader;
     my $c = fork();
@@ -851,7 +849,7 @@ supervisor_perl='
       select undef, undef, undef, 0.1;
     }
     unless (defined $st) {
-      kill($esc, -$c) or kill($esc, $c);
+      kill("KILL", -$c) or kill("KILL", $c);
       for (1 .. 50) {
         last if waitpid($c, POSIX::WNOHANG()) != 0;
         select undef, undef, undef, 0.1;
