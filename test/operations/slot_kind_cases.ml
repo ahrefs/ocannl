@@ -393,6 +393,8 @@ let () =
       ("an env's other settings", {dune|(env (_ (binaries tool.exe)))|dune});
       ( "an env's preprocessor flag",
         {dune|(env (_ (flags (:standard -pp "gpu-preprocessor --ocannl_backend=hip"))))|dune} );
+      ( "an included flags file",
+        {dune|(library (name l3) (modules l3) (flags (:standard (:include flags.sexp))))|dune} );
       ( "a library's ppx flag",
         {dune|(library (name l2) (modules l2) (ocamlopt_flags (:standard -ppx ./gpu.exe)))|dune} );
       ( "a ppx that can reach a backend",
@@ -530,6 +532,11 @@ let () =
         {dune|(rule (target ocannl_config) (action (write-file %{target} "backend=hip")))
 (alias (name gc) (deps ocannl_config))|dune},
         "build @d/gc" );
+      ( "an environment-clearing env on a reader",
+        {dune|(rule
+ (alias ei) (deps ocannl_config (env_var OCANNL_BACKEND))
+ (action (run env -i ./d.exe)))|dune},
+        "build @d/ei" );
       ( "an env-command assignment on a reader",
         {dune|(rule
  (alias ev2) (deps ocannl_config (env_var OCANNL_BACKEND))
@@ -585,6 +592,39 @@ let () =
   printf "%-40s %s\n" "build @n/scans (a ppx name in two projects)" scoped;
   p "a ppx name defined twice is read as every definition"
     (String.is_prefix scoped ~prefix:"unknown: ");
+  (* [default] is [(alias_rec all)] even under [@@]; and a stanza the contract found running nothing
+     can run a workspace program by its public name, which then declares nothing. *)
+  List.iter
+    [
+      ( "an implicit default recursing",
+        [
+          ( "r/sub",
+            {dune|(executable (name p) (modules p))
+(rule
+ (target x.actual)
+ (deps ocannl_config (env_var OCANNL_BACKEND))
+ (action (with-stdout-to %{target} (run %{dep:p.exe}))))|dune}
+          );
+        ],
+        "build @@r/default",
+        "names nothing + reads config" );
+      ( "a workspace program run by name",
+        [
+          ( "w",
+            {dune|(executable (name tool) (public_name gpu_tool) (modules tool))
+(rule (alias wp) (action (run gpu_tool)))|dune}
+          );
+        ],
+        "build @w/wp",
+        "unknown: " );
+    ]
+    ~f:(fun (what, dune_files, argv, want) ->
+      let _, shown = judge ~dune_files argv in
+      printf "%-40s %s\n" (argv ^ " (" ^ what ^ ")") shown;
+      p
+        (Printf.sprintf "%s answers %s" what
+           (String.rstrip want ~drop:(fun c -> Char.equal c ' ' || Char.equal c ':')))
+        (String.is_prefix shown ~prefix:want));
   (* A glob matches where it points, so a glob over copies reaches the reader through the copy: a
      [copy_files] produces its copies in its own directory, and needs the glob it copies from. *)
   let _, copied =
@@ -691,7 +731,7 @@ let () =
   let moved =
     match
       Slot_kind.answer
-        ~getenv:(function "DUNE_BUILD_DIR" -> Some "out" | _ -> None)
+        ~getenv:(function "DUNE_BUILD_DIR" -> Some "./out" | _ -> None)
         ~dune_files:tree
         [ "build"; "@out/default/runtest" ]
     with
@@ -700,7 +740,8 @@ let () =
   in
   p "an alias rooted in a moved build directory is every backend" moved;
   (* ... and the environment twins of the options that run a program. *)
-  List.iter [ "DUNE_DIFF_COMMAND"; "DUNE_INSTRUMENT_WITH"; "OCAMLPARAM" ] ~f:(fun var ->
+  List.iter [ "DUNE_DIFF_COMMAND"; "DUNE_INSTRUMENT_WITH"; "DUNE_ROOT"; "OCAMLPARAM" ]
+    ~f:(fun var ->
       let unknown =
         match
           Slot_kind.answer

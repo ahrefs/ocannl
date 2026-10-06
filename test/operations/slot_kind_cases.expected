@@ -192,6 +192,9 @@ an env's other settings beside the tree leaves no batch proven to read nothing: 
 build @n/scans (an env's preprocessor flag) unknown: it compiles the env stanza in d, whose compiler flag -pp this does not model exactly
     unknown: it compiles the env stanza in d, whose compiler flag -pp this does not model exactly
 an env's preprocessor flag beside the tree leaves no batch proven to read nothing: true
+build @n/scans (an included flags file)  unknown: it compiles l3 in d, whose (:include …) form this does not model exactly
+    unknown: it compiles l3 in d, whose (:include …) form this does not model exactly
+an included flags file beside the tree leaves no batch proven to read nothing: true
 build @n/scans (a library's ppx flag)    unknown: it compiles l2 in d, whose compiler flag -ppx this does not model exactly
     unknown: it compiles l2 in d, whose compiler flag -ppx this does not model exactly
 a library's ppx flag beside the tree leaves no batch proven to read nothing: true
@@ -235,7 +238,9 @@ build @@d/probe (a directory target)     unknown: it reaches the rule producing 
 a directory target is every backend: true
 build @d/gc (a generated configuration)  unknown: it reaches the rule producing ocannl_config in d, whose generated ocannl_config sets the backend past the configuration
 a generated configuration is every backend: true
-build @d/ev2 (an env-command assignment on a reader) unknown: it reaches the rule on ev2 in d, whose word in OCANNL_BACKEND=hip sets the backend past the configuration
+build @d/ei (an environment-clearing env on a reader) unknown: it reaches the rule on ei in d, whose word in env sets the backend past the configuration
+an environment-clearing env on a reader is every backend: true
+build @d/ev2 (an env-command assignment on a reader) unknown: it reaches the rule on ev2 in d, whose word in env sets the backend past the configuration
 an env-command assignment on a reader is every backend: true
 build @d/sh (a shell assignment on a reader) unknown: it reaches the rule on sh in d, whose word in OCANNL_BACKEND=hip ./d.exe sets the backend past the configuration
 a shell assignment on a reader is every backend: true
@@ -249,6 +254,10 @@ build @d/fl (a backend flag on a reader) unknown: it reaches the rule on fl in d
 a backend flag on a reader is every backend: true
 build @n/scans (a ppx name in two projects) unknown: it reaches u1 in p1, whose ppx my_ppx (it can reach a backend) this does not model exactly
 a ppx name defined twice is read as every definition: true
+build @@r/default (an implicit default recursing) names nothing + reads config
+an implicit default recursing answers names nothing + reads config: true
+build @w/wp (a workspace program run by name) unknown: it reaches the rule on wp in w, whose run of the workspace program gpu_tool, unmarked this does not model exactly
+a workspace program run by name answers unknown: true
 build @@c/probe (a glob over copies)     names nothing + reads config
 a glob over a copy_files' copies reaches the reader they copy: true
 dirs: [] [.x] [.x/keep] [plain] [tools/.hidden] [tools/sub]
@@ -263,6 +272,7 @@ a data_only_dirs character class makes the tree unreadable: true
 an alias rooted in a moved build directory is every backend: true
 DUNE_DIFF_COMMAND set makes a batch every backend: true
 DUNE_INSTRUMENT_WITH set makes a batch every backend: true
+DUNE_ROOT set makes a batch every backend: true
 OCAMLPARAM set makes a batch every backend: true
 live: build @test/operations/scans                            names nothing
     <the configuration does not count>
