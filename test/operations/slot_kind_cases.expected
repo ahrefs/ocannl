@@ -90,6 +90,8 @@ clean                                    names nothing
 clean reaches no GPU stanza: true
 install                                  unknown: it carries `install`, which this does not model (it could change what is built)
 install can hold a GPU: true
+build @c/revdep-runtest                  unknown: no stanza carries @c/revdep-runtest, and it is no dune alias this models
+build @c/revdep-runtest can hold a GPU: true
 build --build-dir out @out/default/runtest unknown: it carries `--build-dir`, which this does not model (it could change what is built)
 build --build-dir out @out/default/runtest can hold a GPU: true
 build --instrument-with bisect_ppx @c/runtest unknown: it carries `--instrument-with`, which this does not model (it could change what is built)
@@ -233,8 +235,14 @@ build @@d/probe (a directory target)     unknown: it reaches the rule producing 
 a directory target is every backend: true
 build @d/gc (a generated configuration)  unknown: it reaches the rule producing ocannl_config in d, whose generated ocannl_config sets the backend past the configuration
 a generated configuration is every backend: true
+build @d/fl2 (a prefix-free backend flag on a reader) unknown: it reaches the rule on fl2 in d, whose flag --backend=hip sets the backend past the configuration
+a prefix-free backend flag on a reader is every backend: true
+build @d/fl3 (a single-dash uppercase backend flag on a reader) unknown: it reaches the rule on fl3 in d, whose flag -OCANNL-BACKEND sets the backend past the configuration
+a single-dash uppercase backend flag on a reader is every backend: true
 build @d/fl (a backend flag on a reader) unknown: it reaches the rule on fl in d, whose flag --ocannl_backend=hip sets the backend past the configuration
 a backend flag on a reader is every backend: true
+build @n/scans (a ppx name in two projects) unknown: it reaches u1 in p1, whose ppx my_ppx (it can reach a backend) this does not model exactly
+a ppx name defined twice is read as every definition: true
 build @@c/probe (a glob over copies)     names nothing + reads config
 a glob over a copy_files' copies reaches the reader they copy: true
 dirs: [] [.x] [.x/keep] [plain] [tools/.hidden] [tools/sub]
@@ -245,6 +253,7 @@ an alternative dune-file makes the tree unreadable: true
 a dialect declared in dune-project makes the tree unreadable: true
 a dialect declared in a nested dune-project makes the tree unreadable: true
 an implicitly discovered cram test makes the tree unreadable: true
+a data_only_dirs character class makes the tree unreadable: true
 an alias rooted in a moved build directory is every backend: true
 DUNE_DIFF_COMMAND set makes a batch every backend: true
 DUNE_INSTRUMENT_WITH set makes a batch every backend: true

@@ -231,6 +231,8 @@ let cases =
     ("clean", `Cpu);
     (* Any other subcommand may build workspace code: [install] builds what it installs. *)
     ("install", `Gpu);
+    (* An alias no stanza carries is one of dune's own, modelled only where listed. *)
+    ("build @c/revdep-runtest", `Gpu);
     (* Options that change what is built or run something: a moved build directory (whose
        context-rooted aliases read as source directories), an instrumentation ppx, a diff
        program. *)
@@ -528,6 +530,16 @@ let () =
         {dune|(rule (target ocannl_config) (action (write-file %{target} "backend=hip")))
 (alias (name gc) (deps ocannl_config))|dune},
         "build @d/gc" );
+      ( "a prefix-free backend flag on a reader",
+        {dune|(rule
+ (alias fl2) (deps ocannl_config (env_var OCANNL_BACKEND))
+ (action (run %{dep:d.exe} --backend=hip)))|dune},
+        "build @d/fl2" );
+      ( "a single-dash uppercase backend flag on a reader",
+        {dune|(rule
+ (alias fl3) (deps ocannl_config (env_var OCANNL_BACKEND))
+ (action (run %{dep:d.exe} -OCANNL-BACKEND hip)))|dune},
+        "build @d/fl3" );
       ( "a backend flag on a reader",
         {dune|(rule
  (alias fl) (deps ocannl_config (env_var OCANNL_BACKEND))
@@ -538,6 +550,26 @@ let () =
       let _, shown = judge ~dune_files:[ ("d", dune); n ] argv in
       printf "%-40s %s\n" (argv ^ " (" ^ what ^ ")") shown;
       p (Printf.sprintf "%s is every backend" what) (String.is_prefix shown ~prefix:"unknown: "));
+  (* Private libraries are scoped by project: a ppx name two projects each define is read as
+     both. *)
+  let _, scoped =
+    judge
+      ~dune_files:
+        [
+          ( "p1",
+            {dune|(library (name my_ppx) (kind ppx_rewriter) (modules my_ppx) (libraries ocannl))
+(library (name u1) (modules u1) (preprocess (pps my_ppx)))|dune}
+          );
+          ( "p2",
+            {dune|(library (name my_ppx) (kind ppx_rewriter) (modules my_ppx) (libraries ppxlib))|dune}
+          );
+          n;
+        ]
+      "build @n/scans"
+  in
+  printf "%-40s %s\n" "build @n/scans (a ppx name in two projects)" scoped;
+  p "a ppx name defined twice is read as every definition"
+    (String.is_prefix scoped ~prefix:"unknown: ");
   (* A glob matches where it points, so a glob over copies reaches the reader through the copy: a
      [copy_files] produces its copies in its own directory, and needs the glob it copies from. *)
   let _, copied =
@@ -624,6 +656,10 @@ let () =
   made := List.filter !made ~f:(fun p -> not (String.is_suffix p ~suffix:"/dune-project"));
   file "plain/gpu.t" "  $ ./gpu.exe";
   let refused_cram = refused_for "cram" in
+  Stdlib.Sys.remove (Stdlib.Filename.concat root "plain/gpu.t");
+  made := List.filter !made ~f:(fun p -> not (String.is_suffix p ~suffix:"gpu.t"));
+  Out_channel.write_all (Stdlib.Filename.concat root "dune") ~data:"(data_only_dirs plain[12])";
+  let refused_class = refused_for "data_only_dirs" in
   List.iter !made ~f:(fun p ->
       if Stdlib.Sys.is_directory p then Stdlib.Sys.rmdir p else Stdlib.Sys.remove p);
   printf "dirs: %s\n" (String.concat ~sep:" " (List.map read ~f:(fun d -> "[" ^ d ^ "]")));
@@ -635,6 +671,7 @@ let () =
   p "a dialect declared in dune-project makes the tree unreadable" refused_dialect;
   p "a dialect declared in a nested dune-project makes the tree unreadable" refused_nested_dialect;
   p "an implicitly discovered cram test makes the tree unreadable" refused_cram;
+  p "a data_only_dirs character class makes the tree unreadable" refused_class;
   (* DUNE_BUILD_DIR moves the build directory the same way --build-dir does. *)
   let moved =
     match

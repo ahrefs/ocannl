@@ -422,9 +422,17 @@ let backend_override ~reads_config sexp =
   in
   let rec go = function
     | Sexp.Atom a ->
-        let flag = String.lowercase (String.map a ~f:(function '-' -> '_' | c -> c)) in
+        (* Every spelling [Utils.cmdline_var_names] accepts for the key: one or two dashes, the
+           [ocannl] prefix or none, any case, either separator (Codex review on PR #1027). *)
+        let flag =
+          String.lowercase
+            (String.map
+               (String.lstrip a ~drop:(Char.equal '-'))
+               ~f:(function '-' -> '_' | c -> c))
+        in
+        let key = Option.value (String.chop_prefix flag ~prefix:"ocannl_") ~default:flag in
         Option.some_if
-          (reads_config && String.is_prefix flag ~prefix:"__ocannl_backend")
+          (reads_config && String.is_prefix a ~prefix:"-" && String.is_prefix key ~prefix:"backend")
           (Printf.sprintf "flag %s" a)
     | Sexp.List (Sexp.Atom "setenv" :: Sexp.Atom name :: _) when is_backend name ->
         Some (Printf.sprintf "(setenv %s …)" name)
@@ -968,7 +976,14 @@ let dune_files ~root =
     in
     (* A data-only directory's dune file is not read by dune, so it is not read here. *)
     List.fold stanzas ~init:dirs ~f:(fun dirs -> function
-      | "data_only_dirs", args -> List.filter dirs ~f:(fun e -> not (matches args e))
+      | "data_only_dirs", args ->
+          (* Matched exactly, since it takes directories away: a character class or an alternative,
+             which [Scan.glob_could_match] reads as matching anything, is refused. *)
+          List.iter args ~f:(function
+            | Sexp.Atom a when String.exists a ~f:(fun c -> Char.equal c '[' || Char.equal c '{') ->
+                failwith (Printf.sprintf "a data_only_dirs pattern this does not read: %s" a)
+            | _ -> ());
+          List.filter dirs ~f:(fun e -> not (matches args e))
       | _ -> dirs)
   in
   (* What dune reads beyond the [dune] files is not modelled: a workspace naming more than its
@@ -1059,15 +1074,17 @@ let ppx_reaching_backend stanzas =
             Option.value_map (Scan.field s.sexp "public_name") ~default:[]
               ~f:(List.concat_map ~f:Scan.atoms)
           in
+          (* Every definition of a name kept, so a private name two projects each define is read as
+             both (Codex review on PR #1027). *)
           List.iter
             (Scan.names_of s.sexp @ public)
-            ~f:(fun n -> Hashtbl.set libraries ~key:n ~data:deps)
+            ~f:(fun n -> Hashtbl.add_multi libraries ~key:n ~data:deps)
       | _ -> ());
   let rec reaches seen lib =
     backend_capable lib
     || (not (Set.mem seen lib))
        && List.exists
-            (Option.value (Hashtbl.find libraries lib) ~default:[])
+            (List.concat (Hashtbl.find_multi libraries lib))
             ~f:(reaches (Set.add seen lib))
   in
   let rec ppxs = function
@@ -1086,6 +1103,11 @@ let ppx_reaching_backend stanzas =
 (* The environment variables that run a program or add what is built: dune's, as their options do,
    and the compiler's [OCAMLPARAM], which can name a preprocessor or a ppx. *)
 let unmodelled_dune_env = [ "DUNE_DIFF_COMMAND"; "DUNE_INSTRUMENT_WITH"; "OCAMLPARAM" ]
+
+(* Dune's own aliases this models: [runtest] through the stanzas it attaches, [default] and [all] as
+   every target, and the ones that build what every batch's compilations already cover. *)
+let builtin_aliases =
+  [ "runtest"; "default"; "all"; "check"; "install"; "doc"; "doc-private"; "fmt"; "lint" ]
 
 let answer ?(getenv = Stdlib.Sys.getenv_opt) ~dune_files argv =
   let build_dir = Option.value (getenv "DUNE_BUILD_DIR") ~default:"" in
@@ -1135,47 +1157,72 @@ let answer ?(getenv = Stdlib.Sys.getenv_opt) ~dune_files argv =
           | Error why -> Unknown why
           | Ok stanzas -> (
               let stanzas = List.concat (List.rev stanzas) in
-              let found = reached stanzas targets in
-              let found =
-                (* Every compilation is in every batch's closure, so a ppx reaching a backend is
-                   too. *)
-                match ppx_reaching_backend stanzas with
-                | Some (s, ppx) ->
-                    { s with inexact = Some (Printf.sprintf "ppx %s (it can reach a backend)" ppx) }
-                    :: found
-                | None -> found
+              (* An alias the argv names that no stanza in its scope carries is one of dune's own,
+                 and only the ones listed are modelled ([revdep-runtest] builds what depends on the
+                 directory; Codex review on PR #1027). *)
+              let unmodelled_alias =
+                List.find_map targets ~f:(fun (Alias { dir = root; alias; recursive }) ->
+                    Option.some_if
+                      ((not (List.mem builtin_aliases alias ~equal:String.equal))
+                      && not
+                           (List.exists stanzas ~f:(fun s ->
+                                in_scope ~recursive ~root s.dir
+                                && List.mem s.attached alias ~equal:String.equal)))
+                      (Printf.sprintf "@%s%s"
+                         (if String.is_empty root then "" else root ^ "/")
+                         alias))
               in
-              match
-                List.find_map found ~f:(fun s ->
-                    match (s.overrides, s.inexact) with
-                    | Some o, _ ->
-                        Some
-                          (Printf.sprintf "%s, whose %s sets the backend past the configuration"
-                             (describe s) o)
-                    | None, Some c ->
-                        Some
-                          (Printf.sprintf "%s, whose %s this does not model exactly" (describe s) c)
-                    | None, None -> None)
-              with
-              | Some why -> Unknown why
-              | None ->
-                  let named =
-                    List.concat_map found ~f:(fun s ->
-                        let why =
-                          Printf.sprintf "%s, which names %s" (describe s)
-                            (String.concat ~sep:"," s.named)
-                        in
-                        List.map s.named ~f:(fun b -> (b, why)))
-                    |> List.fold ~init:[] ~f:(fun acc (b, why) ->
-                        if List.Assoc.mem acc b ~equal:String.equal then acc else (b, why) :: acc)
-                    |> List.rev
+              match unmodelled_alias with
+              | Some a ->
+                  Unknown
+                    (Printf.sprintf "no stanza carries %s, and it is no dune alias this models" a)
+              | None -> (
+                  let found = reached stanzas targets in
+                  let found =
+                    (* Every compilation is in every batch's closure, so a ppx reaching a backend is
+                       too. *)
+                    match ppx_reaching_backend stanzas with
+                    | Some (s, ppx) ->
+                        {
+                          s with
+                          inexact = Some (Printf.sprintf "ppx %s (it can reach a backend)" ppx);
+                        }
+                        :: found
+                    | None -> found
                   in
-                  let reads_config =
+                  match
                     List.find_map found ~f:(fun s ->
-                        Option.some_if s.reads_config
-                          (describe s ^ ", which reads the configuration"))
-                  in
-                  Reaches { named; reads_config })))
+                        match (s.overrides, s.inexact) with
+                        | Some o, _ ->
+                            Some
+                              (Printf.sprintf "%s, whose %s sets the backend past the configuration"
+                                 (describe s) o)
+                        | None, Some c ->
+                            Some
+                              (Printf.sprintf "%s, whose %s this does not model exactly"
+                                 (describe s) c)
+                        | None, None -> None)
+                  with
+                  | Some why -> Unknown why
+                  | None ->
+                      let named =
+                        List.concat_map found ~f:(fun s ->
+                            let why =
+                              Printf.sprintf "%s, which names %s" (describe s)
+                                (String.concat ~sep:"," s.named)
+                            in
+                            List.map s.named ~f:(fun b -> (b, why)))
+                        |> List.fold ~init:[] ~f:(fun acc (b, why) ->
+                            if List.Assoc.mem acc b ~equal:String.equal then acc
+                            else (b, why) :: acc)
+                        |> List.rev
+                      in
+                      let reads_config =
+                        List.find_map found ~f:(fun s ->
+                            Option.some_if s.reads_config
+                              (describe s ^ ", which reads the configuration"))
+                      in
+                      Reaches { named; reads_config }))))
 
 (** Whether [answer] can hold a GPU by name: an unknown answer can. Whether a configuration a
     reached stanza reads names one is the caller's question. *)
