@@ -323,7 +323,8 @@ the retained procedural analyses alongside the affine engine and raises on diver
   there reaches every call site. Every config key is classified against these components in
   `Utils.config_key_classification` — code-borne (it reaches the digest through the code), keyed
   (it must be carried), search-shaping, placement-shaping (it steers `Train.tune_placements`
-  above any single search, so not even a search's trajectory identity carries it), or
+  above any single search and no `Autotune.tune` call reads it directly, so not even a search's
+  trajectory identity carries it), or
   execution-neutral, each with its reason —
   and `test/operations/digest_completeness` fails on a key that is not classified, with
   `digest_identity_flips` calibrating one representative of each class against a real compile
