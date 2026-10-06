@@ -15,8 +15,8 @@
    vectorized runs (gh-ocannl-578): bases spaced by at least the run length (or on distinct
    in-bounds rows) count exactly, close-spaced or row-spilling bases stay a flagged upper bound, and
    two stores on distinct rows are provably disjoint, so they sum exactly, while two binding one
-   loop symbol with different bounds stay a bound in either order; - a [Concat] coordinate:
-   the box-over-fiber bound, flagged, never the whole node.
+   loop symbol with different bounds stay a bound in either order; - a [Concat] coordinate: the
+   whole node (segment extents add); a map of another rank: the box-over-fiber bound, flagged.
 
    The tail asserts the roofline bound is monotone in the envelope constants. *)
 
@@ -441,24 +441,42 @@ let () =
       claimf "%s: the floor stays within the 40 B the stores and their source touch" name
         (floor.CM.fr_bytes <= (8 + 2) * 4));
 
-  (* A [Concat] coordinate is uninterpretable to the view, yet every loop-box point still names one
-     cell, which depends only on the symbols the map mentions: for a < 2: for b < 3: for k < 4:
-     X16[a^b] counts at most box / k's width = 6 cells (24 B), flagged, where the whole-node
-     fallback charged all of X16's 64 B. A concatenation of a 2- and a 3-cell segment can name 5
-     cells, which the count must still cover. *)
+  (* A [Concat] coordinate is a choice of segment, each adding its cumulative offset: the segments'
+     extents ADD along the axis, so no product of loop widths bounds the cells named, and the count
+     falls back to the whole node. For a < wa: for b < wb: for k < 4: X16[a^b] names wa + wb cells,
+     derived here from the segment widths alone; the unit-width segments are the cases where the box
+     over the unmentioned width (wa * wb) falls short of that sum. *)
   let x16 = fresh_tn "X16" [| 16 |] in
-  let concat =
-    Ll_test.loop_n i 2
-      (Ll_test.loop_n j 3
-         (Ll_test.loop_n k 4 (Ll_test.set x16 [| Idx.Concat [ i; j ] |] (LL.Constant 1.))))
+  List.iter
+    [ (2, 3); (1, 3); (1, 1) ]
+    ~f:(fun (wa, wb) ->
+      let concat =
+        Ll_test.loop_n i wa
+          (Ll_test.loop_n j wb
+             (Ll_test.loop_n k 4 (Ll_test.set x16 [| Idx.Concat [ i; j ] |] (LL.Constant 1.))))
+      in
+      let name = Printf.sprintf "concatenated coordinate, segments %d and %d" wa wb in
+      let s = CM.analyze concat in
+      show_summary (name ^ " (whole node)") s;
+      let fp = List.Assoc.find_exn s.CM.per_node x16 ~equal:Tn.equal in
+      claimf "%s: the count covers every cell the segments can name, flagged" name
+        (fp.CM.fp_approx && fp.CM.fp_write_bytes >= (wa + wb) * 4));
+
+  (* A map of another rank than its node: R45[i] over a 4x5 node under for i < 4: for k < 3. The
+     renderer's Horner sum over the map's own component names cell i, one per loop-box point and
+     independent of k, so the count is the box over k's width — 4 cells (16 B), flagged — rather
+     than the node's 80 B. *)
+  let r45 = fresh_tn "R45" [| 4; 5 |] in
+  let short_map =
+    Ll_test.loop_n i 4 (Ll_test.loop_n k 3 (Ll_test.set r45 [| it i |] (LL.Constant 1.)))
   in
-  let s_concat = CM.analyze concat in
-  show_summary "concatenated coordinate (box over fiber bound)" s_concat;
-  let x16_fp = List.Assoc.find_exn s_concat.CM.per_node x16 ~equal:Tn.equal in
-  claim "a concatenated coordinate's count covers every cell the segments can name, flagged"
-    (x16_fp.CM.fp_approx && x16_fp.CM.fp_write_bytes >= 5 * 4);
-  claim "a concatenated coordinate's count is tighter than the whole node"
-    (x16_fp.CM.fp_write_bytes < Tn.num_elems x16 * 4);
+  let s_short = CM.analyze short_map in
+  show_summary "map of another rank (box over fiber bound)" s_short;
+  let r45_fp = List.Assoc.find_exn s_short.CM.per_node r45 ~equal:Tn.equal in
+  claim "a map of another rank counts the 4 cells its component names, flagged"
+    (r45_fp.CM.fp_approx && r45_fp.CM.fp_write_bytes >= 4 * 4);
+  claim "a map of another rank's count is tighter than the whole node"
+    (r45_fp.CM.fp_write_bytes < Tn.num_elems r45 * 4);
 
   (* Roofline: monotone in the envelope constants, bandwidth- vs. compute-bound flips. *)
   Stdio.printf "\n== roofline over the matmul (flops=%d, bytes=%d) ==\n" mm.CM.flops

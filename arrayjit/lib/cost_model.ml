@@ -31,12 +31,14 @@ type summary = {
    value of its dynamic coordinate the data picks (the view's unknown group: the axis, flattened
    over any [Sub_axis] run before it): the image of its map with the placeholder standing still
    counts the known coordinates' tuples, and each pairs with at most every value of that coordinate
-   — an upper bound, capped by the box. Any other unknown coordinate (a [Concat], a rank mismatch)
-   keeps the box/fiber bound but never claims exactness: whatever cell the map names, each loop-box
-   point touches one (one run, for a vector store) and the cell depends only on the symbols the map
-   mentions, so the image is at most the box divided by the unmentioned symbols' widths — the
-   injectivity [fiber_cardinality] reports for such a map is not an exact image. Guarded accesses
-   are counted guards-taken. All biases over-count. *)
+   — an upper bound, capped by the box. A map of another rank than its node keeps the box/fiber
+   bound but never claims exactness: the renderer still computes one cell (one run, for a vector
+   store) per loop-box point from the symbols the map mentions, so the image is at most the box
+   divided by the unmentioned symbols' widths, though which cells is unknown. A [Concat] coordinate
+   falls back to the whole node: it is a choice of segment, each adding its cumulative offset, so
+   its extents ADD along the axis and no product of loop widths bounds them (segments of widths 1
+   and 3 name 4 cells where the box holds 3). Guarded accesses are counted guards-taken. All biases
+   over-count. *)
 let access_cells (a : Tn.t Affine.access) : int * bool =
   let node_cells = Tn.num_elems a.a_tn in
   let dims = Lazy.force a.a_tn.Tn.dims in
@@ -47,7 +49,9 @@ let access_cells (a : Tn.t Affine.access) : int * bool =
       | Affine.Unknown _ -> true
       | Affine.Known _ -> false)
   in
+  let concat = Array.exists a.a_map ~f:(function Idx.Concat _ -> true | _ -> false) in
   if a.a_whole then (node_cells, a.a_guarded)
+  else if concat then (node_cells, true)
   else
     let domain = List.map a.a_loops ~f:(fun (s, (lo, hi)) -> (s, hi - lo + 1)) in
     let box = List.fold domain ~init:1 ~f:(fun acc (_, w) -> acc * w) in
