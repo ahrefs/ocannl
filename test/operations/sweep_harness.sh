@@ -130,7 +130,8 @@ unset SWEEP_TEST_CALLS SWEEP_TEST_WAIT_PREFIX SWEEP_TEST_OPAM_RC \
   SWEEP_TEST_PREP_OK SWEEP_TEST_ENDPOINT_MAP SWEEP_TEST_LOCK_PATH_DIR SWEEP_TEST_LAB_LOCK_WAIT \
   SWEEP_TEST_FLEET_WORKER SWEEP_TEST_FLEET_CALLS SWEEP_TEST_FLEET_BOX SWEEP_TEST_REGISTRY \
   SWEEP_TEST_REGISTRY_FROM SWEEP_TEST_REMOTE_DRIVER SWEEP_TEST_REMOTE_ROOT \
-  SWEEP_TEST_REMOTE_CASE SWEEP_TEST_CREDENTIALS SWEEP_TEST_CREDENTIAL_PLAIN
+  SWEEP_TEST_REMOTE_CASE SWEEP_TEST_CREDENTIALS SWEEP_TEST_CREDENTIAL_PLAIN \
+  SWEEP_TEST_SWITCH_CREDENTIALS SWEEP_TEST_OPAM_SELF
 # And the directory the launching sweep collects its own actions' verdict records in
 # (gh-ocannl-1114): the probe runs below are this harness's fixtures, and a skip they record
 # there would reach the OUTER sweep's aggregation as a claim the suite left unexecuted. Unset
@@ -201,6 +202,19 @@ git -C "$main" push -q -u origin master
 
 cat >"$fake_bin/opam" <<'EOF'
 #!/bin/sh
+# The sweep starts dune as `opam exec -- sh -c TEXT NAME dune ...` (gh-ocannl-1280): TEXT scrubs
+# credentials inside opam's environment and execs the rest. This stands in for opam's half --
+# applying the switch's environment, in which SWEEP_TEST_SWITCH_CREDENTIALS sets the two fake
+# credentials -- and runs TEXT, whose `exec "$@"` comes back to SWEEP_TEST_OPAM_SELF (the remote
+# fixture's wrapper) or here, as the plain `exec -- dune ...` every leg reads.
+if [ "${1:-}" = exec ] && [ "${2:-}" = -- ] && [ "${3:-}" = sh ] && [ "${4:-}" = -c ]; then
+  _text=$5 _name=$6
+  shift 6
+  if [ -n "${SWEEP_TEST_SWITCH_CREDENTIALS:-}" ]; then
+    export GH_TOKEN=fixture-switch-token FOO_API_KEY=fixture-switch-key
+  fi
+  exec sh -c "$_text" "$_name" "${SWEEP_TEST_OPAM_SELF:-$0}" exec -- "$@"
+fi
 printf '%s\n' "$*" >>"$SWEEP_TEST_CALLS"
 # Which credential fixtures reached this call (gh-ocannl-1280; credential_free reads it): names only.
 if [ -n "${SWEEP_TEST_CREDENTIALS:-}" ]; then
@@ -672,6 +686,7 @@ run_sweep_args() {
     "SWEEP_TEST_REMOTE_ROOT=${SWEEP_TEST_REMOTE_ROOT:-}" \
     "SWEEP_TEST_REMOTE_CASE=${SWEEP_TEST_REMOTE_CASE:-}" \
     "SWEEP_TEST_CREDENTIALS=${SWEEP_TEST_CREDENTIALS:-}" \
+    "SWEEP_TEST_SWITCH_CREDENTIALS=${SWEEP_TEST_SWITCH_CREDENTIALS:-}" \
     "SWEEP_TEST_KERNEL_LINES=${SWEEP_TEST_KERNEL_LINES:-}" \
     "SWEEP_TEST_BOOT_ID=${SWEEP_TEST_BOOT_ID:-fixture-boot}" \
     "SWEEP_TEST_WAIT_TICKS=$wait_ticks" \
@@ -3403,9 +3418,10 @@ after_cancel=$(run_sweep_args --target cancel-probe)
 grep -q '^  m4-max/cc: incremental-pass ' <<<"$after_cancel"
 
 # Credentials never reach a local unit's dune (gh-ocannl-1280): the forced clean and the suite run
-# from the unit's own shell text, which scrubs the deny-list of tools/credential-env.sh first. The
-# sweep is handed a fake GH_TOKEN and FOO_API_KEY beside a plain variable; the remote legs, which
-# also run the serial rerun, the completion pass and the RTC context, are in sweep_remote_fixture.sh.
+# from the unit's own shell text, which scrubs the deny-list of tools/credential-env.sh inside
+# `opam exec`. The sweep is handed a fake GH_TOKEN and FOO_API_KEY beside a plain variable; the
+# remote legs -- where the switch sets them too, and which also run the serial rerun, the
+# completion pass and the RTC context -- are in sweep_remote_fixture.sh.
 local_credentials=$(GH_TOKEN=fixture-not-a-token FOO_API_KEY=fixture-not-a-key \
   SWEEP_TEST_CREDENTIAL_PLAIN=kept SWEEP_TEST_CREDENTIALS=$tmp/local-credentials \
   run_sweep_args --force --target credential-probe)

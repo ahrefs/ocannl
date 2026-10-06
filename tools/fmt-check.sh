@@ -13,7 +13,9 @@
 set -uo pipefail
 
 # Credentials never reach dune, which records every spawned process's environment in the
-# worktree's `_build/trace.csexp` (gh-ocannl-1280): the deny-list tools/test-run.sh applies.
+# worktree's `_build/trace.csexp` (gh-ocannl-1280): the deny-list tools/test-run.sh applies, to
+# this script's environment and -- for the default command -- again inside the one `opam exec`
+# builds, whose switch updates could set one.
 credential_env=$(dirname "$0")/credential-env.sh
 [ -r "$credential_env" ] || { echo "fmt-check: FAILED (exit 2): cannot read $credential_env"; exit 2; }
 # shellcheck source=credential-env.sh
@@ -24,7 +26,8 @@ eval "$(credential_env_scrub_text)" || {
 }
 
 if [ "$#" -eq 0 ]; then
-  set -- opam exec -- dune build @fmt --force
+  set -- opam exec -- sh -c "{ $(credential_env_scrub_text); } || exit 2; exec \"\$@\"" fmt-check \
+    dune build @fmt --force
 fi
 
 verdict() { # STATUS [REASON]

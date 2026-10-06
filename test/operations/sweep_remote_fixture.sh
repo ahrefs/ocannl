@@ -118,6 +118,10 @@ cat >"$remote_bin/opam" <<EOF_OPAM
 #!/bin/sh
 set -eu
 case \$1 in var) exit 1 ;; esac
+# The scrubbing \`opam exec -- sh -c\` form: the fake opam plays opam's half and comes back here.
+if [ "\$1" = exec ] && [ "\$#" -ge 4 ] && [ "\$3" = sh ] && [ "\$4" = -c ]; then
+  SWEEP_TEST_OPAM_SELF=\$0 exec "$fake_bin/opam" "\$@"
+fi
 lock=\$HOME/ocannl-staging-worktrees/sweep.lock
 # A fresh open must be refused: the real far-side lock remains held during
 # clean, suite, serial rerun and completion, rather than only during prep.
@@ -173,11 +177,12 @@ unit.exe: segmentation fault'
 for boot in linux wsl; do
   remote_reset
   # The box's own environment carries credentials (gh-ocannl-1280): the fixture's remote shell
-  # inherits these, as a box's login environment exports its token, and every leg's emitted text
-  # must scrub them before dune -- clean, @check, suite, serial rerun, completion, RTC context.
+  # inherits these, as a box's login environment exports its token, and the switch's environment
+  # sets them again inside `opam exec`. Every dune the legs' emitted text runs must be scrubbed
+  # inside it -- clean, @check, suite, serial rerun, completion, RTC context.
   local_remote=$(SWEEP_TEST_HOSTS=$tmp/hosts-$boot.sh SWEEP_TEST_OPAM_RC=1 \
     GH_TOKEN=fixture-not-a-token FOO_API_KEY=fixture-not-a-key SWEEP_TEST_CREDENTIAL_PLAIN=kept \
-    SWEEP_TEST_CREDENTIALS=$remote_root/credentials \
+    SWEEP_TEST_CREDENTIALS=$remote_root/credentials SWEEP_TEST_SWITCH_CREDENTIALS=1 \
     SWEEP_TEST_OPAM_OUT="$remote_failure" remote_sweep --only hip --force)
   local_record=$(sed -n 's/^run:  *//p' <<<"$local_remote")
   local_log=$(awk -F '\t' '$1 == "unit" && $2 == "minix" {print $6}' "$local_record")
@@ -318,7 +323,7 @@ controls = [
     ('no-evidence', 'sweep', '  window_red "$1" && return 0', '  : # lost evidence arm', 'serial rerun: all clean'),
     ('no-lock', 'sweep', '''  printf 'mkdir -p "$(dirname "%s")" && exec 9>"%s.lock" && flock -n 9 || exit 126; ' "$1" "$1"''', "  printf ':; '", 'remote_row'),
     ('no-retry', 'sweep', '    [ -n "$GUEST_ID" ] && return 0', '    return 0 # lost identity retry', 'error:vm-replaced:dxg'),
-    ('no-credential-scrub', 'sweep', '''  printf '{ %s; } || exit 126; ' "$(credential_env_scrub_text)"''', "  printf ':; '", 'credentials reached dune'),
+    ('no-credential-scrub', 'sweep', '''  printf 'opam exec -- sh -c %s sweep-dune dune' \\''', "  printf 'opam exec -- dune'; : \\", 'credentials reached dune'),
 ]
 # Derive sourced helpers from the sweep rather than carrying a second list.
 helpers = re.findall(r'^\. "\$SWEEP_TOOLS/([^"\n]+)"$', sweep.read_text(), re.M)

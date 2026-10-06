@@ -2,11 +2,11 @@
 # The credential variables no runner hands to dune (gh-ocannl-1280). Dune writes the environment of
 # every process it spawns into `_build/trace.csexp`, inside the checkout -- a tree agents grep, mine
 # and quote -- so a token a session exports would land there on every build. The runners remove
-# these from dune's environment on the side where dune runs: tools/test-run.sh for everything it
-# launches, tools/sweep.sh in the shell text of every unit leg (local, or sent to a remote box,
-# whose own environment holds its own token), tools/machine-verify-far.sh inside every `opam exec`
-# on the verified machine, and every other script here that starts dune itself (fmt-check.sh,
-# promote.sh, api-drift.sh) for its own environment. `test/operations/env_var_deps` reads
+# these from dune's environment on the side where dune runs, after any opam environment is
+# applied: tools/test-run.sh for everything it launches, tools/sweep.sh inside every `opam exec` of
+# a unit leg's shell text (local, or sent to a remote box, whose own environment holds its own
+# token), tools/machine-verify-far.sh inside every `opam exec` on the verified machine, and every
+# other script here that starts dune itself (fmt-check.sh, promote.sh, api-drift.sh). `test/operations/env_var_deps` reads
 # `credential_env_patterns` below and refuses a dune stanza that declares a match as an
 # `(env_var ...)` dependency, so no test can come to need one.
 #
@@ -19,8 +19,8 @@ credential_env_patterns='GH_TOKEN|GITHUB_TOKEN|GH_ENTERPRISE_TOKEN|CLAUDE_CODE_M
 
 # Prints shell text that unsets, in the shell evaluating it, every exported variable the deny-list
 # matches; the text's status is 0 exactly when none is left. Text rather than a function, so that
-# it runs where dune will: sweep.sh splices it into a unit's remote command and machine-verify
-# passes it to its far side, neither of which can name the far environment's variables from here.
+# it runs where dune will: sweep.sh and machine-verify's far side run it inside `opam exec -- sh
+# -c`, on a remote box, where nothing on this side can name the environment's variables.
 # Only names are read (`env`, cut at the first `=`), never a value. A value spanning lines can
 # make a later line look like `NAME=...`; unsetting a name nothing set is harmless.
 credential_env_scrub_text() {

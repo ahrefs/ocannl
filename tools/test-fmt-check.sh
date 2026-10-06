@@ -103,7 +103,50 @@ else
       "exited $got; see $fixture_dir/no-scrub.log"
   fi
 fi
-unset GH_TOKEN FOO_API_KEY FMT_CHECK_PLAIN
+# The default command scrubs again inside `opam exec`, whose switch updates could set one: a fake
+# opam that sets both before running its command, and a fake dune that refuses them. The negative
+# control is a copy whose default command is the bare `opam exec -- dune ...` it replaced.
+fake_switch="$fixture_dir/fake-switch"
+mkdir -p "$fake_switch"
+cat >"$fake_switch/opam" <<'EOF'
+#!/usr/bin/env bash
+[ "${1:-}" = exec ] && [ "${2:-}" = -- ] || exit 9
+shift 2
+export GH_TOKEN=fixture-switch-token FOO_API_KEY=fixture-switch-key
+exec "$@"
+EOF
+cat >"$fake_switch/dune" <<'EOF'
+#!/usr/bin/env bash
+[ "$*" = "build @fmt --force" ] || { echo "unexpected dune argv: $*" >&2; exit 5; }
+[ -z "${GH_TOKEN+x}${FOO_API_KEY+x}" ] || { echo "credentials reached dune" >&2; exit 3; }
+[ "${FMT_CHECK_PLAIN:-}" = kept ] || { echo "the plain variable did not reach dune" >&2; exit 4; }
+EOF
+chmod +x "$fake_switch/opam" "$fake_switch/dune"
+awk '/^  set -- opam exec -- sh -c / { print "  set -- opam exec -- dune build @fmt --force"; getline; next } { print }' \
+  "$subject" >"$fixture_dir/fmt-check-bare.sh"
+chmod +x "$fixture_dir/fmt-check-bare.sh"
+got=0
+FMT_CHECK_PLAIN=kept PATH="$fake_switch:$PATH" "$subject" >"$fixture_dir/switch.log" 2>&1 || got=$?
+if [ "$got" -eq 0 ]; then
+  report 0 "the default command's dune runs without credentials the opam switch sets"
+else
+  report 1 "the default command's dune runs without credentials the opam switch sets" \
+    "exited $got; see $fixture_dir/switch.log"
+fi
+got=0
+if cmp -s "$subject" "$fixture_dir/fmt-check-bare.sh"; then
+  report 1 "negative control: a bare opam exec hands dune the switch's credentials" \
+    "the default command could not be replaced in $subject"
+else
+  FMT_CHECK_PLAIN=kept PATH="$fake_switch:$PATH" "$fixture_dir/fmt-check-bare.sh" \
+    >"$fixture_dir/switch-bare.log" 2>&1 || got=$?
+  if [ "$got" -eq 3 ]; then
+    report 0 "negative control: a bare opam exec hands dune the switch's credentials"
+  else
+    report 1 "negative control: a bare opam exec hands dune the switch's credentials" \
+      "exited $got; see $fixture_dir/switch-bare.log"
+  fi
+fi
 
 # A real project whose only fault is an invalid doc comment in otherwise
 # formatted code: `dune fmt` prints the warning once, promotes nothing, and

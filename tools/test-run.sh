@@ -544,6 +544,9 @@ select_dune() {
   command -v dune >/dev/null 2>&1 || die "dune not found (opam environment not set up?)"
   # Preserve dune's status while filtering only the known Windows linker noise.
   case ${OSTYPE:-} in msys* | cygwin*) DUNE=tools/dune-quiet.sh ;; *) DUNE=dune ;; esac
+  # Again, now that the switch's environment may have been sourced: its updates can set a
+  # deny-listed variable the startup scrub never saw (gh-ocannl-1280).
+  scrub_credentials
 }
 
 # Pin to the repo containing THIS script (promote.sh convention): dune then runs
@@ -578,12 +581,16 @@ cd -P "$(dirname "$0")/.." || die "cannot cd to repo root"
 # worktree's `_build/trace.csexp` (gh-ocannl-1280). Removed from this script's own environment,
 # before any subcommand, so dune -- launched by the supervisor, by `_resolve`, `_probe`, `repeat`
 # or a promotion query -- and everything it spawns inherit none; nothing this script runs reads
-# one. The deny-list is shared with tools/sweep.sh and tools/machine-verify.sh.
+# one. select_dune scrubs again after sourcing the opam environment. The deny-list is shared with
+# tools/sweep.sh and tools/machine-verify.sh.
 [ -r tools/credential-env.sh ] || die "cannot read tools/credential-env.sh"
 # shellcheck source=credential-env.sh
 . tools/credential-env.sh
-eval "$(credential_env_scrub_text)" ||
-  die "cannot remove credential variables from the environment:$credential_env_left"
+scrub_credentials() {
+  eval "$(credential_env_scrub_text)" ||
+    die "cannot remove credential variables from the environment:$credential_env_left"
+}
+scrub_credentials
 
 # perl is load-bearing rather than a convenience: the per-worktree flock, the
 # cap supervisor and the atomic rename behind the `last` pointer are all

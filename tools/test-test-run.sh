@@ -168,7 +168,9 @@
 #      and FOO_API_KEY hands dune neither, while a plain variable and the
 #      OCANNL_TOOL_* exports pass -- observed by a fixture dune, and where a
 #      real dune is at hand in its _build/trace.csexp; a copy with the scrub
-#      cut out hands dune both, the negative control for each observer.
+#      cut out hands dune both, the negative control for each observer. With
+#      no dune on PATH, credentials the opam environment select_dune sources
+#      sets are scrubbed too, against a copy without that second scrub.
 #  59-63 sit after leg 47: the source a run tested, recorded at launch
 #      (gh-ocannl-992), against a committed fixture checkout.
 #  59. a clean checkout records its HEAD as `head` and an empty `dirty`.
@@ -4983,7 +4985,7 @@ cred_nc_label="negative control: with the scrub cut out, dune sees both credenti
 cred_trace_label="credentials: real dune's _build/trace.csexp names neither GH_TOKEN nor FOO_API_KEY, and does name the plain variable"
 cred_trace_nc_label="negative control: with the scrub cut out, the real trace names both credentials"
 cred_mutant=$(mutant no-credential-scrub \
-  '/^eval "\$\(credential_env_scrub_text\)" \|\|$/ { getline; next } { print }')
+  '/^  eval "\$\(credential_env_scrub_text\)" \|\|$/ { getline; print "  :"; next } { print }')
 if [ -z "$cred_mutant" ] || cmp -s "$SRC" "$cred_mutant"; then
   echo "leg 79: the credential scrub could not be cut out of $SRC; the mutant is broken" >&2
   exit 2
@@ -5008,18 +5010,18 @@ cred_root() { # name script -> a fixture root running SCRIPT as tools/test-run.s
   chmod +x "$root/tools/test-run.sh"
   printf '%s' "$root"
 }
-cred_run() { # root runs-dir names-file argv...: the run, with the two credentials exported
+cred_run() { # root runs-dir names-file subcommand argv...: the launch, with the two credentials exported
   local root=$1 runs=$2 names=$3
   shift 3
   GH_TOKEN=fixture-not-a-token FOO_API_KEY=fixture-not-a-key CRED_TEST_PLAIN=kept \
     CRED_TEST_NAMES=$names OCANNL_TOOL_TEST_RUNS=$runs \
-    "$root/tools/test-run.sh" run "$@" >"$names.out" 2>&1
+    "$root/tools/test-run.sh" "$@" >"$names.out" 2>&1
 }
 cred_has() { grep -qx -e "$1" "$2"; }
 cred_ship=$(cred_root cred-ship "$SRC")
 cred_cut=$(cred_root cred-cut "$cred_mutant")
 cred_rc=0
-PATH=$cred_bin:$PATH cred_run "$cred_ship" "$TMP/cred-runs" "$TMP/cred-ship.names" build @fixture ||
+PATH=$cred_bin:$PATH cred_run "$cred_ship" "$TMP/cred-runs" "$TMP/cred-ship.names" run build @fixture ||
   cred_rc=$?
 cred_detail=
 if [ "$cred_rc" != 0 ]; then
@@ -5037,13 +5039,63 @@ elif ! cred_has OCANNL_TOOL_DEVICE_PROBE "$TMP/cred-ship.names"; then
 fi
 report "$([ -z "$cred_detail" ] && echo 0 || echo 1)" "$cred_label" "$cred_detail"
 cred_rc=0
-PATH=$cred_bin:$PATH cred_run "$cred_cut" "$TMP/cred-cut-runs" "$TMP/cred-cut.names" build @fixture ||
+PATH=$cred_bin:$PATH cred_run "$cred_cut" "$TMP/cred-cut-runs" "$TMP/cred-cut.names" run build @fixture ||
   cred_rc=$?
 if [ "$cred_rc" = 0 ] && cred_has GH_TOKEN "$TMP/cred-cut.names" &&
   cred_has FOO_API_KEY "$TMP/cred-cut.names"; then
   report 0 "$cred_nc_label"
 else
   report 1 "$cred_nc_label" "exit $cred_rc; names: $(tr '\n' ' ' <"$TMP/cred-cut.names" 2>/dev/null)"
+fi
+# And when dune is not on PATH, select_dune sources tools/opam-env.sh, whose switch environment
+# can set a credential the startup scrub never saw: a fake opam answers `opam env` with both
+# credentials and a PATH reaching the fixture dune. Through `repeat`, whose dune the launching
+# process starts itself (a `run`'s dune is started by a fresh `_resolve`, whose own startup scrub
+# also catches it). The PATH holds only that opam and the system directories; a host whose system
+# directories hold a dune skips (the opam environment would never be asked for). The negative
+# control cuts out select_dune's second scrub alone.
+cred_opam_label="credentials: the opam environment select_dune sources is scrubbed too"
+cred_opam_nc_label="negative control: without select_dune's scrub, dune sees the switch's credentials"
+cred_opam_bin=$TMP/cred-opam-bin
+mkdir -p "$cred_opam_bin"
+cat >"$cred_opam_bin/opam" <<'EOF'
+#!/usr/bin/env bash
+[ "${1:-}" = env ] || exit 9
+: >>"$CRED_TEST_OPAM_ASKED"
+printf "GH_TOKEN='fixture-switch-token'; export GH_TOKEN; FOO_API_KEY='fixture-switch-key'; export FOO_API_KEY; PATH='%s':\"\$PATH\"; export PATH;\n" "$CRED_TEST_DUNE_DIR"
+EOF
+chmod +x "$cred_opam_bin/opam"
+cred_opam_mutant=$(mutant no-select-dune-scrub '/^  scrub_credentials$/ { next } { print }')
+cred_opam_run() { # tag script -> names file; 0 when the opam environment was asked for
+  local root
+  root=$(cred_root "$1" "$2")
+  cp "$HERE/opam-env.sh" "$root/tools/opam-env.sh"
+  rm -f "$TMP/$1.asked"
+  PATH=$cred_opam_bin:/usr/bin:/bin:/usr/sbin:/sbin CRED_TEST_DUNE_DIR=$cred_bin \
+    CRED_TEST_OPAM_ASKED=$TMP/$1.asked cred_run "$root" "$TMP/$1-runs" "$TMP/$1.names" repeat 2 build @fixture
+  [ -e "$TMP/$1.asked" ]
+}
+if [ -z "$cred_opam_mutant" ] || cmp -s "$SRC" "$cred_opam_mutant"; then
+  echo "leg 79: select_dune's scrub could not be cut out of $SRC; the mutant is broken" >&2
+  exit 2
+elif PATH=/usr/bin:/bin:/usr/sbin:/sbin command -v dune >/dev/null 2>&1; then
+  skip "$cred_opam_label" "a dune in the system directories: select_dune never sources the opam environment"
+  skip "$cred_opam_nc_label" "a dune in the system directories: select_dune never sources the opam environment"
+else
+  if ! cred_opam_run cred-opam "$SRC"; then
+    report 1 "$cred_opam_label" "the opam environment was not asked for: $(tail -3 "$TMP/cred-opam.names.out")"
+  elif cred_has GH_TOKEN "$TMP/cred-opam.names" || cred_has FOO_API_KEY "$TMP/cred-opam.names" ||
+    ! cred_has CRED_TEST_PLAIN "$TMP/cred-opam.names"; then
+    report 1 "$cred_opam_label" "names: $(tr '\n' ' ' <"$TMP/cred-opam.names" 2>/dev/null)"
+  else
+    report 0 "$cred_opam_label"
+  fi
+  if cred_opam_run cred-opam-cut "$cred_opam_mutant" && cred_has GH_TOKEN "$TMP/cred-opam-cut.names" &&
+    cred_has FOO_API_KEY "$TMP/cred-opam-cut.names"; then
+    report 0 "$cred_opam_nc_label"
+  else
+    report 1 "$cred_opam_nc_label" "names: $(tr '\n' ' ' <"$TMP/cred-opam-cut.names" 2>/dev/null)"
+  fi
 fi
 # The trace itself, which is what the issue found tokens in. A host with no
 # dune skips it (the toolchain-free CI job); a dune that writes no trace there
@@ -5071,7 +5123,7 @@ else
   }
   cred_real_run() { # root tag
     (cd "$1" && PATH=$(dirname "$cred_real"):$PATH cred_run "$1" "$TMP/$2-runs" "$TMP/$2.names" \
-      build --cache=disabled ./spawned.txt)
+      run build --cache=disabled ./spawned.txt)
   }
   cred_rc=0
   cred_real_run "$cred_ship" cred-real || cred_rc=$?

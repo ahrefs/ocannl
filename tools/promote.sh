@@ -28,12 +28,6 @@ set -eu
 cd "$(dirname "$0")/.."
 
 die() { echo "promote.sh: $*" >&2; exit 2; }
-# Credentials never reach dune, which records every spawned process's environment in
-# `_build/trace.csexp` (gh-ocannl-1280): the deny-list tools/test-run.sh applies.
-[ -r tools/credential-env.sh ] || die "cannot read tools/credential-env.sh"
-# shellcheck source=credential-env.sh
-. tools/credential-env.sh
-eval "$(credential_env_scrub_text)" || die "cannot remove credential variables:$credential_env_left"
 matches_correction() { # destination correction; CR normalization is part of promotion
   cmp -s "$1" "$2" && return 0
   case $1 in
@@ -51,6 +45,13 @@ if [ "${1:-}" = --from-run ]; then
 else
   command -v dune >/dev/null 2>&1 || . tools/opam-env.sh
 fi
+# Credentials never reach dune, which records every spawned process's environment in
+# `_build/trace.csexp` (gh-ocannl-1280): the deny-list tools/test-run.sh applies, after the opam
+# environment above, whose updates could set one.
+[ -r tools/credential-env.sh ] || die "cannot read tools/credential-env.sh"
+# shellcheck source=credential-env.sh
+. tools/credential-env.sh
+eval "$(credential_env_scrub_text)" || die "cannot remove credential variables:$credential_env_left"
 
 # Are we mid-merge? `git rev-parse --verify MERGE_HEAD` rather than testing
 # `.git/MERGE_HEAD`: in a linked worktree `.git` is a FILE, and MERGE_HEAD
