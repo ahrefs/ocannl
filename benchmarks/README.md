@@ -659,18 +659,20 @@ Regeneration is a cross-box event: coordinate it across every origin in `DIGESTS
 
 **Rebuilding a fixture that vanished is not regeneration**, provided the bytes come back as
 recorded. When a tree has lost a fixture that this box's `DIGESTS.txt` entry still names (a fresh
-checkout or worktree, a cleaned `fixtures/`), copy it from another tree on the same box first;
-failing that, rebuild it OUTSIDE `fixtures/` and compare before it goes in:
-`benchmarks/.venv/bin/python benchmarks/gen_fixtures.py --out-dir <scratch> benchmarks/workloads/<name>.json`,
-then `python3 benchmarks/fixture_digest.py --check <scratch>/<name>.safetensors`, which looks the
-file name up in `fixtures/DIGESTS.txt`. Copy the file into `fixtures/` only on a `MATCH` naming
-this box's origin; from then on it is the recorded workload, not a smoke fixture. The comparison is
-meaningful only against a `content-v1` row: that digest covers the canonicalized tensors and
-metadata, whereas a rebuilt file's raw bytes vary with safetensors' metadata order, so a `raw-v1`
-row cannot certify one. A `MISMATCH` means this venv no longer reproduces the recorded stream (a
-numpy upgrade, a changed spec or generator): the bytes are lost on this box, and replacing them is
-the cross-box regeneration above. What the rule forbids is replacing recorded bytes, never
-reproducing them.
+checkout or worktree, a cleaned `fixtures/`), get a candidate OUTSIDE `fixtures/` and check it
+before it goes in. The candidate is a copy from another tree on the same box or, failing that, a
+rebuild: `benchmarks/.venv/bin/python benchmarks/gen_fixtures.py --out-dir <scratch> benchmarks/workloads/<name>.json`.
+Either way run `python3 benchmarks/fixture_digest.py --check <scratch>/<name>.safetensors`, which
+looks the file name up in `fixtures/DIGESTS.txt` (another tree may sit at another revision, or
+have regenerated, so a copy is checked as a rebuild is). Copy the file into `fixtures/` only on a
+`MATCH` naming this box's origin; from then on it is the recorded workload, not a smoke fixture.
+A `content-v1` row covers the canonicalized tensors and metadata, so a faithful rebuild matches
+it. A `raw-v1` row hashes the file bytes, which vary with safetensors' metadata order: a `MATCH`
+against one still certifies the candidate, but a `MISMATCH` against one is inconclusive rather
+than a loss. A `MISMATCH` against a `content-v1` row means this venv no longer reproduces the
+recorded stream (a numpy upgrade, a changed spec or generator): the bytes are lost on this box,
+and replacing them is the cross-box regeneration above. What the rule forbids is replacing
+recorded bytes, never reproducing them.
 
 tinygrad's CPU device JIT-compiles kernels with `clang`; on a machine without clang, point
 `CC` at a substitute (a `zig cc` wrapper script from `pip install ziglang` works — translate
