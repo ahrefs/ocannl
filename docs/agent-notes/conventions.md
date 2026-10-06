@@ -19,56 +19,6 @@ files.
   always had — blank lines, `### ` subheadings, `- ` bullets and two-space continuations — and any
   other Markdown in it fails the scan by name rather than being parsed: the scan decides one
   grammar, so its imprecision cannot pass a bullet nobody checked.
-- Before writing an editorial catch-up, run `tools/api-drift.sh <since-rev> [until-rev]`
-  (gh-ocannl-946). It compares committed public source declarations at every first-parent step,
-  tagging each addition, removal or change with the commit SHA and subject (the merged PR number
-  where Git recorded one). Both endpoints must be on the same first-parent history; the end
-  defaults to `HEAD`. Its implicit-module inventory comes from the dead-export census, alongside
-  all interfaces in those roots. A module a library declares in `private_modules` stays, ordinary
-  or generated: a public module can `include` or alias it, so privacy alone does not keep its
-  declarations out of the public API. OCaml parsing
-  preserves multiline signatures, types, record fields, constructors and module declarations while
-  discarding documentation-only OCaml edits.
-  Movement across surviving declarations is reported conservatively because their order can
-  change name resolution; inserting an entry does not flag every unchanged entry that follows it.
-  Anonymous items export nothing and are excluded: value initializers (including inside mixed let
-  groups), `module _` bindings and bare evaluations. Only an attribute PPX could make one export,
-  and none exists, so a non-documentation attribute on an anonymous item or inside its binding
-  pattern (`let (_ [@x]) = …`) — compiler built-ins such as `[@@warning]` included, since the
-  reader does not interpret attributes; attributes inside expressions are not export positions —
-  refuses the report with its location (gh-ocannl-1201) rather than being dropped, also when
-  nested inside a pruned item; inside an extension payload everything stays visible. A pruned
-  initializer can still fix the inferred type of a weakly polymorphic exported value (`let r = ref
-  None` then `let () = r := Some 1`): like other inferred types, that stays with manual review.
-  Pattern PPX inputs stay visible for manual review even when their source binds no ordinary name.
-  Dune supplies the compiled target/interface relationship for select arms and the inputs of
-  public lexer/parser modules. A generator input is a conservative review entry: the editor must
-  inspect its generated interface, since this tool does not regenerate historical modules or
-  typecheck their dependency trees. The owning configuration of accepted generator/select inputs is
-  retained as a manual-review entry too; explicitly interfaced targets and private-library
-  generators stay excluded.
-  Independent Dune stanza and field reordering is ignored. Literal public-library configuration
-  produces conservative input entries too, including module ownership, interface policy,
-  availability, preprocessing and compiler/driver inputs. These entries do not evaluate Dune
-  availability, expand PPXs or reconstruct the installed module/type graph. Inspect their effect
-  manually; ordinary `libraries` dependencies, private-library configuration and comments or
-  `synopsis` prose stay outside these entries, while a `(re_export …)` term at any depth of
-  `libraries` stays in, since it publishes that library to every user. Accepted select
-  configurations inside `libraries` follow the separate target/interface rule above.
-  These forms refuse the report instead of being misread, none present in the API-root Dune files
-  or their history (gh-ocannl-1201): a selected interface or non-module target (only `.ml` targets
-  are read), an `(include …)` or `(dynamic_include …)` stanza, and an `(:include …)` term or `%{read:…}`,
-  `%{read-lines:…}` or `%{read-strings:…}` form in a module-owner or generator stanza, whose
-  external file's edits this reader would neither see nor attribute.
-  `--context N` (gh-ocannl-1213) prints an entry changed on both sides compactly: both attribution
-  headers, its changed lines as `-`/`+`, N unchanged lines of context indented by two spaces, and
-  a `~ K unchanged lines` count for the rest; additions and removals still print in full, and the
-  report header names the full-evidence command for the same window. Use it to scan a window,
-  then read the full report for the entries a bullet will cite.
-  This is a reading aid, not a compatibility gate: implementation bodies are kept because they
-  can change an inferred public type, and PPX-generated exports and inferred types still require
-  manual review. Record retired or renamed symbols in the resulting bullet so later API-removal
-  discussions have symbol-level evidence.
 - API stability is not promised and deprecation cycles are not run: exported surface that is dead,
   superseded or in the way is REMOVED, in whatever release finds it. The README's Development
   section states this for users; the practice behind it is `CHANGES.md`'s 1.0.2 `### Changed`, a
@@ -343,3 +293,55 @@ files.
   profile payloads. Welcome suppression obeys ordinary precedence, including an explicit false
   overriding a file's true. Deferred startup tracing reports the carried `config_source`;
   `resolve_profile_selection` normalizes each source before the same resolver chooses its winner.
+
+## API drift
+
+- Before writing an editorial catch-up, run `tools/api-drift.sh <since-rev> [until-rev]`
+  (gh-ocannl-946). It compares committed public source declarations at every first-parent step,
+  tagging each addition, removal or change with the commit SHA and subject (the merged PR number
+  where Git recorded one). Both endpoints must be on the same first-parent history; the end
+  defaults to `HEAD`. This is a reading aid, not a compatibility gate: implementation bodies are
+  kept because they can change an inferred public type, and PPX-generated exports and inferred
+  types still require manual review. Record retired or renamed symbols in the resulting bullet so
+  later API-removal discussions have symbol-level evidence.
+- `--context N` (gh-ocannl-1213) prints an entry changed on both sides compactly: both attribution
+  headers, its changed lines as `-`/`+`, N unchanged lines of context indented by two spaces, and
+  a `~ K unchanged lines` count for the rest; additions and removals still print in full, and the
+  report header names the full-evidence command for the same window. Use it to scan a window,
+  then read the full report for the entries a bullet will cite.
+- What counts as public: its implicit-module inventory comes from the dead-export census,
+  alongside all interfaces in those roots. A module a library declares in `private_modules` stays,
+  ordinary or generated: a public module can `include` or alias it, so privacy alone does not keep
+  its declarations out of the public API. OCaml parsing preserves multiline signatures, types,
+  record fields, constructors and module declarations while discarding documentation-only OCaml
+  edits. Movement across surviving declarations is reported conservatively because their order can
+  change name resolution; inserting an entry does not flag every unchanged entry that follows it.
+- Anonymous items export nothing and are excluded: value initializers (including inside mixed let
+  groups), `module _` bindings and bare evaluations. Only an attribute PPX could make one export,
+  and none exists, so a non-documentation attribute on an anonymous item or inside its binding
+  pattern (`let (_ [@x]) = …`) — compiler built-ins such as `[@@warning]` included, since the
+  reader does not interpret attributes; attributes inside expressions are not export positions —
+  refuses the report with its location (gh-ocannl-1201) rather than being dropped, also when
+  nested inside a pruned item; inside an extension payload everything stays visible. A pruned
+  initializer can still fix the inferred type of a weakly polymorphic exported value (`let r = ref
+  None` then `let () = r := Some 1`): like other inferred types, that stays with manual review.
+  Pattern PPX inputs stay visible for manual review even when their source binds no ordinary name.
+- Dune supplies the compiled target/interface relationship for select arms and the inputs of
+  public lexer/parser modules. A generator input is a conservative review entry: the editor must
+  inspect its generated interface, since this tool does not regenerate historical modules or
+  typecheck their dependency trees. The owning configuration of accepted generator/select inputs is
+  retained as a manual-review entry too; explicitly interfaced targets and private-library
+  generators stay excluded. Independent Dune stanza and field reordering is ignored. Literal
+  public-library configuration produces conservative input entries too, including module
+  ownership, interface policy, availability, preprocessing and compiler/driver inputs. These
+  entries do not evaluate Dune availability, expand PPXs or reconstruct the installed module/type
+  graph. Inspect their effect manually; ordinary `libraries` dependencies, private-library
+  configuration and comments or `synopsis` prose stay outside these entries, while a
+  `(re_export …)` term at any depth of `libraries` stays in, since it publishes that library to
+  every user. Accepted select configurations inside `libraries` follow the separate
+  target/interface rule above.
+- These forms refuse the report instead of being misread, none present in the API-root Dune files
+  or their history (gh-ocannl-1201): a selected interface or non-module target (only `.ml` targets
+  are read), an `(include …)` or `(dynamic_include …)` stanza, and an `(:include …)` term or
+  `%{read:…}`, `%{read-lines:…}` or `%{read-strings:…}` form in a module-owner or generator
+  stanza, whose external file's edits this reader would neither see nor attribute.
