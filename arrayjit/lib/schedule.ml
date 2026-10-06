@@ -6869,7 +6869,10 @@ type funit = {
           position with the zero expanded ({!optop.Expand_zero}) into a per-cell nest, which
           {!group_units} may fold into the reduction's segment. A thunk because the expansion mints
           loop symbols: the fold probes it under {!Indexing.discarding_symbols} and builds it for
-          real only when it commits. *)
+          real only when it commits. Present whenever the zero-seed proof holds, so a recorded fold
+          replays whatever the current zero policy; [f_fold_proposed] says whether that policy
+          distributes the zero, which only a newly derived fold consults. *)
+  f_fold_proposed : bool;
   f_orig : funit option;
       (** On an expanded zero: the whole-node unit it was expanded from. A [`Solo] (serial) merge
           restores it, so a serial kernel is the same code whether derived or replayed. *)
@@ -6905,6 +6908,7 @@ let collect_units ?max_chain ?(fold = fun _ _ -> None) plc (opt : Low_level.opti
       f_kind;
       f_chains;
       f_fold = None;
+      f_fold_proposed = false;
       f_orig = None;
     }
   in
@@ -6947,10 +6951,10 @@ let collect_units ?max_chain ?(fold = fun _ _ -> None) plc (opt : Low_level.opti
   let rec with_folds = function
     | ({ f_kind = `Zeros; _ } as u) :: (v :: _ as rest) ->
         let zero = stmt_of u in
+        let fold = fold zero (stmt_of v) in
+        let f_fold_proposed = Option.exists fold ~f:snd in
         let f_fold =
-          Option.map
-            (fold zero (stmt_of v))
-            ~f:(fun expand () ->
+          Option.map fold ~f:(fun (expand, _) () ->
               let expanded = expand () in
               {
                 (mk u.f_index [] expanded) with
@@ -6959,7 +6963,7 @@ let collect_units ?max_chain ?(fold = fun _ _ -> None) plc (opt : Low_level.opti
                 f_orig = Some u;
               })
         in
-        { u with f_fold } :: with_folds rest
+        { u with f_fold; f_fold_proposed } :: with_folds rest
     | u :: rest -> u :: with_folds rest
     | [] -> []
   in
@@ -7367,7 +7371,8 @@ let group_units ?max_chain ?(arity_cuts = false) ?(fold_zeros = false) ?mapping 
     | `Zeros | `Solo -> false
   in
   let rec fold_pass = function
-    | ({ g_kind = `Zeros; g_units = [ { f_fold = Some expand; _ } ]; _ } as zeros)
+    | ({ g_kind = `Zeros; g_units = [ { f_fold = Some expand; f_fold_proposed = true; _ } ]; _ } as
+       zeros)
       :: ({ g_kind = `Normal; _ } as seg)
       :: rest ->
         if dry_run (fun () -> readmits (expand ()) seg) then
@@ -7668,18 +7673,22 @@ let fission_keep_mapping ~is_gpu ~limits =
    reuses Expand_zero itself, withholding the hardware geometry: the folded segment's own schedule
    maps the per-cell nest together with the reduction, as the sketch families' zero companions. *)
 let reduction_zero_fold ~zero_sched (opt : Low_level.optimized) (zero : Low_level.t)
-    (next : Low_level.t) : (unit -> Low_level.t) option =
+    (next : Low_level.t) : ((unit -> Low_level.t) * bool) option =
   match zero with
   | Low_level.Zero_out tn when Option.is_some (Low_level.zero_seed_candidate tn next) ->
+      (* The expansion is a function of the proven target alone, so derived and replayed folds mint
+         the same code whatever the policy; the policy (asked without keeping the symbols its
+         schedule mints) only decides whether a NEW fold is proposed. *)
       let expand () =
-        List.find_map (zero_sched [ tn ]) ~f:(function
-          | Expand_zero { tn = target; _ } as op when Tn.equal tn target ->
-              Some (apply_opt_op { opt with llc = zero } op).Low_level.llc
-          | _ -> None)
+        (apply_opt_op { opt with llc = zero } (fst (expand_zero ~tn))).Low_level.llc
       in
-      (* Eligibility asks the policy without keeping the symbols its expansion mints. *)
-      if Option.is_some (dry_run expand) then Some (fun () -> Option.value_exn (expand ()))
-      else None
+      let proposed =
+        dry_run (fun () ->
+            List.exists (zero_sched [ tn ]) ~f:(function
+              | Expand_zero { tn = target; _ } -> Tn.equal tn target
+              | _ -> false))
+      in
+      Some (expand, proposed)
   | _ -> None
 
 type segmentation = ([ `Normal | `Zeros | `Solo ] * int) list [@@deriving sexp, equal]
