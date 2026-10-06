@@ -246,6 +246,29 @@ notify = re.search(r'^  notify-triage-routine:\n(?:    .*\n)*?    if: >-\n((?:  
 assert notify and "!(github.event_name == 'workflow_dispatch' && inputs.expected_sha)" in notify[1], \
     'a pinned dispatch fires the triage routine'
 print('PASS every job builds the dispatched commit, and a pinned dispatch fires no triage')
+# A job missing from the triage job's `needs` can go red on master without
+# firing it: `failure()` there reads only the jobs it waits for. Derive the
+# job list from the workflow rather than keep a second copy of it here.
+def triage_waits_for_every_job(text):
+    jobs = re.findall(r'^  ([a-z][a-z0-9-]*):\n', text.split('\njobs:\n', 1)[1], re.M)
+    needs = re.search(r'^  notify-triage-routine:\n(?:    .*\n)*?    needs: \[([^]]*)\]\n', text, re.M)
+    assert needs, 'triage job has no inline needs list'
+    others = sorted(job for job in jobs if job != 'notify-triage-routine')
+    assert len(others) >= 2, 'found too few jobs: %s' % jobs
+    assert sorted(name.strip() for name in needs[1].split(',')) == others, \
+        'triage needs [%s], the other jobs are %s' % (needs[1], others)
+
+
+triage_waits_for_every_job(source)
+last = re.search(r'^    needs: \[.*(, [a-z-]+)\]$', source, re.M)
+assert last, 'triage needs list unreadable'
+try:
+    triage_waits_for_every_job(source.replace(last[0], last[0].replace(last[1], ''), 1))
+except AssertionError:
+    pass
+else:
+    raise AssertionError('accepted mutant: a job dropped from the triage needs')
+print('PASS the triage job waits for every other job, and a dropped one is rejected')
 PY
 report "$rc" "ci matrix controls"
 finish
