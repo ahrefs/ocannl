@@ -2045,6 +2045,14 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   inside that lazy's own computation; two record types sharing a field name resolve to the
   LAST-defined type, silently mistyping `x.a.b` (which is why the scheduler's event field is
   `dev_state`); and `Base.Float.max_value` is INFINITY — the finite maximum is `max_finite_value`.
+- The OCaml floor (`>= 5.3.0`) runs only in the scheduled matrix (the Windows CI subsection below),
+  never on a PR, so a change whose result depends on the compiler — a compiler message in a golden,
+  a parse-tree shape a scan matches — is checked on the floor switch locally:
+  `DUNE_BUILD_DIR=<scratch>/build53 opam exec --switch=5.3.0 -- tools/test-run.sh run build @<alias>`.
+  The separate build directory keeps the two compilers' artifacts apart, so neither run rebuilds
+  the other's tree, and it holds its own dune lock, so it does not contend with a run in `_build`.
+  The switch needs the project's dependencies installed; with them, a targeted alias takes about a
+  minute.
 
 ## What CI actually covers
 
