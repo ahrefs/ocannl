@@ -400,8 +400,9 @@ val may_touch_same_cell :
     (static indices) are shared parameters, equal on both sides, bounded by [static_range] when
     known. [dims] is the node's dims (the coordinate view's). Conservative: [false] only when
     {!pair_conflict} proves disjointness. A dynamic access's data-dependent axis is an [Unknown]
-    coordinate of its view, so its other coordinates still decide (gh-ocannl-1174); whole-node and
-    vectorized accesses count as overlapping. *)
+    coordinate of its view, so its other coordinates still decide (gh-ocannl-1174); a vectorized
+    access is viewed as a [Run] of its length ({!vec_view}), its own loop bounds proving whether the
+    run stays inside its minor coordinate; whole-node accesses count as overlapping. *)
 
 val vec_runs_disjoint : dims:int array -> 'tn access -> bool
 (** Whether the runs of a vectorized access ([a_vec_last]) are pairwise disjoint in the node's flat

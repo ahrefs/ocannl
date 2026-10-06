@@ -617,14 +617,17 @@ let () =
 (* {2 may_touch_same_cell}: each access over its whole loop box, the two boxes iterated
    independently. A dynamic access's view knows every coordinate but its dynamic axis
    (gh-ocannl-1174), so two accesses that differ in a known coordinate never meet, whatever row the
-   data names; the enumeration lets a dynamic axis take every row. *)
+   data names; the enumeration lets a dynamic axis take every row. A vectorized store is viewed as a
+   [Run] (as [Schedule.query_view] states it): its minor coordinate is unknown when its own loop
+   bounds keep the run inside it, the whole map otherwise; the enumeration covers [length]
+   consecutive flat cells from each base, spilling into the next row where the address does. *)
 let () =
   Stdio.printf "\n=== may_touch_same_cell ===\n";
   (* [~control]: the two accesses do meet, so a proven disjointness would fail its claim. *)
   let touch ?(control = false) ~name ~dims ~(left : acc * (Idx.symbol * (int * int)) list)
       ~(right : acc * (Idx.symbol * (int * int)) list) () =
     let side (a, loops) =
-      ( access ~write:false ~loops ~path:0 a,
+      ( access ~write:(Option.is_some a.vec) ~loops ~path:0 a,
         List.concat_map (envs loops (List.map loops ~f:fst)) ~f:(fun env -> cells ~dims env a) )
     in
     let la, lcells = side left and ra, rcells = side right in
@@ -666,4 +669,41 @@ let () =
   touch ~control:true ~name:"control: gather [h;?] vs row write [1;e], h<2" ~dims:[| 3; 4 |]
     ~left:(dynamic ~axis:1 [| it h; fx 0 |], [ (h, (0, 1)) ])
     ~right:(plain [| fx 1; it e |], [ (e, (0, 3)) ])
+    ();
+  (* Vectorized stores: a run that provably stays in its row leaves the outer coordinates known, so
+     a store meets nothing on another row. [4c] over [c <= 1] in an 8-wide row needs the loop bound
+     to prove no spill. *)
+  let d = sym () in
+  touch ~name:"vec4 [0;4c] vs row write [2;e]" ~dims:[| 3; 8 |]
+    ~left:(vector ~length:4 [| fx 0; aff [ (4, c) ] 0 |], [ (c, (0, 1)) ])
+    ~right:(plain [| fx 2; it e |], [ (e, (0, 7)) ])
+    ();
+  touch ~name:"vec4 [0;4c] vs vec4 [2;4d]" ~dims:[| 3; 8 |]
+    ~left:(vector ~length:4 [| fx 0; aff [ (4, c) ] 0 |], [ (c, (0, 1)) ])
+    ~right:(vector ~length:4 [| fx 2; aff [ (4, d) ] 0 |], [ (d, (0, 1)) ])
+    ();
+  touch ~name:"vec8 [h;0] (whole rows) vs row write [2;e], h<2" ~dims:[| 3; 8 |]
+    ~left:(vector ~length:8 [| it h; fx 0 |], [ (h, (0, 1)) ])
+    ~right:(plain [| fx 2; it e |], [ (e, (0, 7)) ])
+    ();
+  (* Precision left on the table: the run's own coordinate is unknown, so disjoint column ranges of
+     the same rows are not told apart (conservative, printed). *)
+  touch ~name:"vec4 [h;0] vs vec4 [h;4] (same rows, disjoint columns)" ~dims:[| 2; 8 |]
+    ~left:(vector ~length:4 [| it h; fx 0 |], [ (h, (0, 1)) ])
+    ~right:(vector ~length:4 [| it h; fx 4 |], [ (h, (0, 1)) ])
+    ();
+  (* The negative controls: a run meeting a cell of its own row, and runs that spill into the next
+     row — the view must not keep the outer coordinate known for those. *)
+  touch ~control:true ~name:"control: vec4 [1;0] vs cell [1;3]" ~dims:[| 3; 8 |]
+    ~left:(vector ~length:4 [| fx 1; fx 0 |], [])
+    ~right:(plain [| fx 1; fx 3 |], [])
+    ();
+  touch ~control:true ~name:"control: vec4 [0;2] spills into row 1, vs cell [1;1]" ~dims:[| 3; 4 |]
+    ~left:(vector ~length:4 [| fx 0; fx 2 |], [])
+    ~right:(plain [| fx 1; fx 1 |], [])
+    ();
+  touch ~control:true ~name:"control: vec4 [h;4c] spills at c=1 (6 wide), vs row [2;e]"
+    ~dims:[| 3; 6 |]
+    ~left:(vector ~length:4 [| it h; aff [ (4, c) ] 0 |], [ (h, (0, 1)); (c, (0, 1)) ])
+    ~right:(plain [| fx 2; it e |], [ (e, (0, 5)) ])
     ()

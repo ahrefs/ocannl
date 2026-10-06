@@ -1096,26 +1096,31 @@ let within_statement ~(write : path_comp list) (path : path_comp list) : bool =
     against. Conservative: [false] only when {!pair_conflict} proves disjointness. A dynamic
     access's data-dependent axis is an [Unknown] coordinate of its view (gh-ocannl-1174), so
     disjointness is decided from the coordinates both sides know — a gather's rows never meet
-    another column, whatever row the data names; whole-node and vectorized accesses count as
+    another column, whatever row the data names. A vectorized access is the base of a [Run] of flat
+    cells, as [Schedule.query_view] states it: its minor coordinate is [Unknown] when its own loop
+    bounds prove the run stays inside it, the whole map otherwise. Whole-node accesses count as
     overlapping. *)
 let may_touch_same_cell ?(static_range = fun _ -> None) ~dims (a : 'tn access) (b : 'tn access) :
     bool =
-  if a.a_whole || b.a_whole || a.a_vec_last || b.a_vec_last then true
+  if a.a_whole || b.a_whole then true
   else
+    let find loops s = List.Assoc.find loops s ~equal:Idx.equal_symbol in
     let range s =
-      match List.Assoc.find a.a_loops s ~equal:Idx.equal_symbol with
+      match find a.a_loops s with
       | Some bounds -> Some bounds
-      | None -> (
-          match List.Assoc.find b.a_loops s ~equal:Idx.equal_symbol with
-          | Some bounds -> Some bounds
-          | None -> static_range s)
+      | None -> ( match find b.a_loops s with Some bounds -> Some bounds | None -> static_range s)
+    in
+    (* A run's no-spill proof reads the side's OWN loop bounds first. *)
+    let side_view (x : 'tn access) =
+      let range s = match find x.a_loops s with Some _ as r -> r | None -> range s in
+      view ~range ?dyn_axis:x.a_dyn_axis
+        ?vec:(if x.a_vec_last then Some (Run x.a_vec_len) else None)
+        ~dims x.a_map
     in
     let dup_left s = List.Assoc.mem a.a_loops s ~equal:Idx.equal_symbol in
     let dup_right s = List.Assoc.mem b.a_loops s ~equal:Idx.equal_symbol in
     match
-      pair_conflict ~range ~dup_left ~dup_right ~pairs:[]
-        ~left:(view ?dyn_axis:a.a_dyn_axis ~dims a.a_map)
-        ~right:(view ?dyn_axis:b.a_dyn_axis ~dims b.a_map)
+      pair_conflict ~range ~dup_left ~dup_right ~pairs:[] ~left:(side_view a) ~right:(side_view b)
     with
     | Disjoint -> false
     | Same_thread | Cross_thread _ -> true

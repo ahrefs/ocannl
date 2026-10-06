@@ -13,7 +13,8 @@
    even when disjoint — with the op count flagged too when the arms' costs differ, unless an arm's
    cost lives entirely in a hoisted scope body, which executes unconditionally (gh-ocannl-637); -
    vectorized runs (gh-ocannl-578): bases spaced by at least the run length (or on distinct
-   in-bounds rows) count exactly, close-spaced or row-spilling bases stay a flagged upper bound.
+   in-bounds rows) count exactly, close-spaced or row-spilling bases stay a flagged upper bound, and
+   two stores on distinct rows are provably disjoint, so they sum exactly.
 
    The tail asserts the roofline bound is monotone in the envelope constants. *)
 
@@ -373,11 +374,12 @@ let () =
   let v16 = fresh_tn "V16" [| 16 |] in
   let src = fresh_tn "U" [| 4 |] in
   let base4 s = Idx.affine ~symbols:[ (4, s) ] ~offset:0 in
-  let vec_of idcs =
-    Ll_test.loop_n i 4
+  (* for i < n: setv4 tn[idcs] from the random bits U[i]. *)
+  let vec_store ?(n = 4) tn idcs =
+    Ll_test.loop_n i n
       (LL.Set_from_vec
          {
-           tn = v16;
+           tn;
            idcs;
            length = 4;
            vec_unop = Ops.Uint4x32_to_prec_uniform;
@@ -385,6 +387,7 @@ let () =
            debug = "";
          })
   in
+  let vec_of = vec_store v16 in
   show_summary "vectorized writes, disjoint runs (exact)" (CM.analyze (vec_of [| base4 i |]));
 
   (* Close-spaced vec bases: setv4 V16[i] — runs from bases 1 apart may overlap, so the product
@@ -394,36 +397,26 @@ let () =
   (* Row-spilling vec runs: setv4 W46[i][4] on a 4x6 node — each run crosses into the next row,
      where it could meet that row's base, so exactness is declined. *)
   let w46 = fresh_tn "W46" [| 4; 6 |] in
-  let vec_spill =
-    Ll_test.loop_n i 4
-      (LL.Set_from_vec
-         {
-           tn = w46;
-           idcs = [| it i; Idx.Fixed_idx 4 |];
-           length = 4;
-           vec_unop = Ops.Uint4x32_to_prec_uniform;
-           arg = (get src [| it i |], sp);
-           debug = "";
-         })
-  in
+  let vec_spill = vec_store w46 [| it i; Idx.Fixed_idx 4 |] in
   show_summary "vectorized writes, row-spilling runs (bound)" (CM.analyze vec_spill);
 
   (* Constant minor base on distinct rows: setv4 W44[i][0] on a 4x4 node — one in-bounds run per
      row, disjoint by rows, 16 cells exact. *)
   let w44 = fresh_tn "W44" [| 4; 4 |] in
-  let vec_rows =
-    Ll_test.loop_n i 4
-      (LL.Set_from_vec
-         {
-           tn = w44;
-           idcs = [| it i; Idx.Fixed_idx 0 |];
-           length = 4;
-           vec_unop = Ops.Uint4x32_to_prec_uniform;
-           arg = (get src [| it i |], sp);
-           debug = "";
-         })
-  in
+  let vec_rows = vec_store w44 [| it i; Idx.Fixed_idx 0 |] in
   show_summary "vectorized writes, one run per row (exact)" (CM.analyze vec_rows);
+
+  (* Two vectorized stores on distinct rows: setv4 W28[0][4*i] then setv4 W28[1][4*i] on a 2x8 node.
+     Each touches 8 cells exactly, and the pair query views each store as a run that its own loop
+     bounds keep inside its row, so the stores are provably disjoint and the direction sums exactly
+     to all 16 cells (a vectorized pair used to count as overlapping: a flagged bound). *)
+  let w28 = fresh_tn "W28" [| 2; 8 |] in
+  let vec_row r = vec_store ~n:2 w28 [| Idx.Fixed_idx r; base4 i |] in
+  let s_vec_pair = CM.analyze (LL.unflat_lines [ vec_row 0; vec_row 1 ]) in
+  show_summary "vectorized writes on distinct rows, two stores (exact)" s_vec_pair;
+  let w28_fp = List.Assoc.find_exn s_vec_pair.CM.per_node w28 ~equal:Tn.equal in
+  claim "two vectorized stores on distinct rows sum exactly to the whole node"
+    ((not w28_fp.CM.fp_approx) && w28_fp.CM.fp_write_bytes = 16 * 4);
 
   (* Roofline: monotone in the envelope constants, bandwidth- vs. compute-bound flips. *)
   Stdio.printf "\n== roofline over the matmul (flops=%d, bytes=%d) ==\n" mm.CM.flops
