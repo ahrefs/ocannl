@@ -1006,25 +1006,26 @@ let describe s =
    names it and the [stat] that classifies it, or a directory between the [stat] and its own listing
    (gh-ocannl-1227). What vanished is no directory and holds nothing -- the source tree dune reads
    never loses an entry mid-build, so only build outputs, which dune does not read as dune files,
-   are passed over. *)
+   are passed over (one a rule recreates right after is no exception). *)
 
-(** Whether [stat] reports the entry gone ([ENOENT]) -- the one failure the walk passes over.
-    [Sys.file_exists] cannot say that: it answers [false] for every failed stat, an [EACCES] on an
-    entry listed in a readable but unsearchable directory included. *)
-let vanished path =
-  (* [stat], not [lstat]: a directory reached through a link vanishes with its target, which is what
-     {!subdirectories} classified. *)
-  match Unix.stat path with
-  | _ -> false
-  | exception Unix.Unix_error (Unix.ENOENT, _, _) -> true
-  | exception Unix.Unix_error _ -> false
-
-(** The entries of [path], sorted; [[]] once [path] no longer exists. Any other failure raises: the
-    caller takes an unreadable tree as every backend. *)
+(** The entries of [path], sorted; [[]] once [path] no longer exists. The verdict is the failing
+    call's own errno, never a second probe after it -- a probe opens a window of its own, in which a
+    rule can recreate what the listing found gone. [Sys.readdir] carries no errno ([Sys_error] holds
+    only a message), hence [Unix]. Any failure but [ENOENT] raises: the caller takes an unreadable
+    tree as every backend. *)
 let listing path =
-  match Stdlib.Sys.readdir path with
-  | entries -> Array.to_list entries |> List.sort ~compare:String.compare
-  | exception (Sys_error _ as exn) -> if vanished path then [] else raise exn
+  match Unix.opendir path with
+  | exception Unix.Unix_error (Unix.ENOENT, _, _) -> []
+  | handle ->
+      let rec read acc =
+        match Unix.readdir handle with
+        | "." | ".." -> read acc
+        | entry -> read (entry :: acc)
+        | exception End_of_file -> acc
+      in
+      Exn.protect
+        ~f:(fun () -> List.sort (read []) ~compare:String.compare)
+        ~finally:(fun () -> Unix.closedir handle)
 
 (** The [entries] of [path] that are directories, following links as dune does; one that no longer
     exists, or a link to nothing, is not. Any other stat failure raises, as in {!listing}. *)
