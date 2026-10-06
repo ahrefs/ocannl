@@ -664,10 +664,11 @@ recorded. When a tree has lost a fixture that this box's `DIGESTS.txt` entry sti
 checkout or worktree, a cleaned `fixtures/`), get a candidate OUTSIDE `fixtures/` and check it
 before it goes in. The candidate is a copy from another tree on the same box or, failing that, a
 rebuild: `benchmarks/.venv/bin/python benchmarks/gen_fixtures.py --out-dir <scratch> benchmarks/workloads/<name>.json`.
-Either way run `python3 benchmarks/fixture_digest.py --check <scratch>/<name>.safetensors`, which
-looks the file name up in `fixtures/DIGESTS.txt` (another tree may sit at another revision, or
-have regenerated, so a copy is checked as a rebuild is). Copy the file into `fixtures/` only on a
-`MATCH` naming this box's origin; from then on it is the recorded workload, not a smoke fixture.
+Either way run `python3 benchmarks/fixture_digest.py --check --expect-origin <box> <scratch>/<name>.safetensors`,
+which looks the file name up in `fixtures/DIGESTS.txt` (another tree may sit at another revision, or
+have regenerated, so a copy is checked as a rebuild is). Copy the file into `fixtures/` only when it
+exits 0 -- decide by the exit status, never by grepping the report, whose origin field joins every
+agreeing box; from then on it is the recorded workload, not a smoke fixture.
 A `content-v1` row covers the canonicalized tensors and metadata, so a faithful rebuild matches
 it. A `raw-v1` row hashes the file bytes, which vary with safetensors' metadata order: a `MATCH`
 against one still certifies the candidate, but a `MISMATCH` against one is inconclusive rather
