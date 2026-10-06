@@ -527,6 +527,14 @@ val tensorize :
 (** Builds a {!constructor-Tensorize} with a fresh lane symbol (via [Indexing.get_symbol]) and
     returns it. [?tile] is the register-tile geometry request (gh-ocannl-619), absent by default. *)
 
+val add_symbol : Indexing.axis_index -> Indexing.symbol -> Indexing.axis_index option
+(** [add_symbol idx s] is [idx] plus [s] with coefficient 1: the per-tile coordinate
+    {!constructor-Tensorize} and {!constructor-Fuse_epilogue} add to an accumulator's base index.
+    [None] -- which each caller refuses in its own words -- for a [Concat] and for a [Sub_axis]: the
+    latter has no per-axis affine form, and extending its empty decomposition would turn it into an
+    ordinary [Iterator s] coordinate where the flattened component after it carries the address
+    (gh-ocannl-1165). *)
+
 val split_reduce_hoist : Low_level.optimized -> optop -> Indexing.symbol list
 (** The loops that would have to enclose the reduction for this {!constructor-Split_reduce} to be
     recognized: the accumulation cell's symbols that are currently bound {e inside} the reduction

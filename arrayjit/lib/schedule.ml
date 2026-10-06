@@ -1226,6 +1226,18 @@ let terms_of_index (idx : Indexing.axis_index) : ((int * Indexing.symbol) list *
   | Indexing.Sub_axis -> Some ([], 0)
   | Indexing.Concat _ -> None
 
+(* [idx] plus the fresh symbol [s] (coefficient 1): the tile coordinate a cooperative-tile transform
+   adds to an accumulator's base index. [None] for an index with no per-axis affine form to extend,
+   which each caller refuses in its own words: a [Concat], and a [Sub_axis] -- the latter decomposes
+   to the empty sum ({!terms_of_index}) and would come back as [Iterator s], an ordinary coordinate
+   where the flattened component after it carries the address (gh-ocannl-1165). *)
+let add_symbol (idx : Indexing.axis_index) (s : Indexing.symbol) : Indexing.axis_index option =
+  match idx with
+  | Indexing.Sub_axis | Indexing.Concat _ -> None
+  | Indexing.Fixed_idx _ | Indexing.Iterator _ | Indexing.Affine _ ->
+      Option.map (terms_of_index idx) ~f:(fun (terms, offset) ->
+          normalize_affine ~terms:((1, s) :: terms) ~offset)
+
 (* All reads [Get (source, idcs)] with their enclosing statement-level loop stacks (outermost-first;
    [floop.body] is dummied out). Writes to [source] are rejected. *)
 let collect_source_accesses ~source (llc : Low_level.t) :
@@ -3371,9 +3383,11 @@ let contract_tensorized_accumulator ~lane ~(masks : pad_mask list) (opt : Low_le
     | _ -> None
   in
   let add_symbol idx s =
-    match terms_of_index idx with
-    | Some (terms, offset) -> normalize_affine ~terms:((1, s) :: terms) ~offset
-    | None -> invalid_arg "Schedule.Tensorize: Concat accumulator indices are unsupported"
+    match add_symbol idx s with
+    | Some idx -> idx
+    | None ->
+        invalid_arg
+          "Schedule.Tensorize: Concat and flattened (Sub_axis) accumulator indices are unsupported"
   in
   let lane0 p body =
     let cond =
@@ -3881,8 +3895,8 @@ let apply_fuse_epilogue ~target ~shared (opt : Low_level.optimized) : Low_level.
     | _ -> None
   in
   let add_symbol idx s =
-    match terms_of_index idx with
-    | Some (terms, offset) -> normalize_affine ~terms:((1, s) :: terms) ~offset
+    match add_symbol idx s with
+    | Some idx -> idx
     | None -> fail "the accumulator's base indices must be affine"
   in
   let fused = ref false in

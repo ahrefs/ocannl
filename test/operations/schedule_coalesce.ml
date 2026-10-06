@@ -13,7 +13,8 @@
    - The op on hand-built nests (every backend, executed): the positive control applies, is
    [Op_legal], and computes the uncoalesced nest's values bitwise; a per-head operand (one symbol of
    the pair read alone) and a padded inner axis (dim larger than the loop extent: its stride is not
-   the inner extent, so the composed index is not the address) decline, each for its own reason.
+   the inner extent, so the composed index is not the address) decline, each for its own reason; and
+   the per-tile index extension ([Sched.add_symbol]) refuses the flattened component it produced.
 
    - The real projection site through [%op]: the structural prefix, the coalesced site it produces
    (one column role over every head's columns), the prefix alone executed against a serial
@@ -109,7 +110,7 @@ let () =
   p "control: Coalesce of the head pair is Op_legal"
     (Sched.equal_op_verdict (Sched.op_legality o op) Sched.Op_legal);
   let oc = Sched.apply [ op ] o in
-  let merged_extent = ref None and flattened_writes = ref 0 in
+  let merged_extent = ref None and flattened_writes = ref 0 and flattened_pair = ref None in
   L.walk oc.LL.llc ~on_stmt:(function
     | LL.For_loop { index; to_; _ } when Ir.Indexing.equal_symbol index merged ->
         merged_extent := Some (to_ + 1)
@@ -117,11 +118,26 @@ let () =
       when Ir.Tnode.equal tn d
            && Array.equal Ir.Indexing.equal_axis_index (Array.sub idcs ~pos:2 ~len:2)
                 [| Ir.Indexing.Sub_axis; Ir.Indexing.Iterator merged |] ->
-        Int.incr flattened_writes
+        Int.incr flattened_writes;
+        flattened_pair := Some (idcs.(2), idcs.(3))
     | _ -> ());
   p "control: the merged loop spans every head's columns"
     (Poly.equal !merged_extent (Some (hh * ee)));
   p "control: the writes read the merged index flattened over the pair" (!flattened_writes > 0);
+  (* The per-tile index extension [Tensorize] and [Fuse_epilogue] apply to an accumulator's base
+     refuses the flattened component this op produced -- extended, it would read as an ordinary
+     coordinate -- and extends the merged iterator beside it. *)
+  let tile = L.sym () in
+  p "control: add_symbol refuses the flattened (Sub_axis) component of a coalesced write"
+    (match !flattened_pair with
+    | Some (flat, _) -> Option.is_none (Sched.add_symbol flat tile)
+    | None -> false);
+  p "control: add_symbol extends the merged iterator of a coalesced write by the tile symbol"
+    (match !flattened_pair with
+    | Some (_, it) ->
+        Option.equal Ir.Indexing.equal_axis_index (Sched.add_symbol it tile)
+          (Some (Ir.Indexing.affine ~symbols:[ (1, tile); (1, merged) ] ~offset:0))
+    | None -> false);
   let run name o = List.hd_exn (L.execute ~name o ~seed:(List.take seed 2) ~read:[ d ]) in
   let want = run "co_plain_run" o in
   let got = run "co_merged_run" oc in
