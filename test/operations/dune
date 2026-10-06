@@ -2985,6 +2985,7 @@
  (package neural_nets_lib)
  (deps
   ocannl_config
+  ../support/verdict.ml
   doc_examples_extract.ml
   doc_examples_scan_cases.expected
   doc_examples_compile_control.expected

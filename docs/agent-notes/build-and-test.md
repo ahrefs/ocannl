@@ -1482,8 +1482,10 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   since a skip prints `p`'s line and the pair breaks the golden on the host that skips. The rule,
   the remedy (`Verdict.gated`) and what the reader cannot see are in the conventions note. A new
   claim entry point that takes a label and a boolean joins `claim_kinds` in
-  `verdict_provenance.ml` (and `refusal_callees` in `refusal_control_scan.ml`), or the quantifier
-  reader goes blind at its call sites.
+  `verdict_provenance.ml`, or the quantifier reader goes blind at its call sites. The refusal
+  reader cannot go blind that way: `refusal_control_scan_cases` holds `refusing_claims` plus
+  `non_refusing_claims` (`refusal_control_scan.ml`) equal to the members `Verdict.Claims` binds,
+  read from `verdict.ml`, so a new `Claims` member is red until judged in one of them.
 - Boolean operator aliases in `verdict_provenance.ml` (gh-ocannl-968) keep their first
   argument until application, so constant annihilators and partial applications use the same
   conjunction/disjunction algebra as direct syntax. Partial Boolean predicates retain their captured

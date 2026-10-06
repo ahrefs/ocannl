@@ -118,26 +118,82 @@ let fragment_of_format format =
 
 let last_name expression = Option.bind (Read.longident_of expression) ~f:List.last
 
-let refusal_callees =
+(** Multiset difference: [minus xs ys] removes one occurrence per [ys] element, since markers repeat
+    when formats do and an argument list can name a source twice. *)
+let minus xs ys =
+  List.fold ys ~init:xs ~f:(fun remaining y ->
+      let before, after = List.split_while remaining ~f:(Fn.non (String.equal y)) in
+      before @ Option.value (List.tl after) ~default:[])
+
+(** [Verdict.Claims] owns which claim forms there are; these two lists only judge which of them emit
+    their label as a refusal. {!claims_mismatch} holds the two lists together equal to the members
+    [Claims] declares, so a combinator [Claims] gains is a red scan until it is judged here, never a
+    refusal this reader silently stops seeing. *)
+let refusing_claims =
   [
     "fail";
-    "failwith";
     "p";
     "pf";
     "p_all";
     "p_all2";
+    "pf_all2";
     "p_none";
     "p_alli";
     "p_exists";
     "p_empty";
+    "p_pairwise_distinct";
     "claim";
     "claimf";
     "pass_fail";
+    "pass_fail_all2";
     "gated";
     "gated_all";
     "gated_alli";
     "gated_exists";
   ]
+
+(** [skipped] reports a skip, never a refusal; [case]'s label names a row, and what fails inside it
+    reports through the claims it makes or the exception it catches. *)
+let non_refusing_claims = [ "skipped"; "case" ]
+
+(** [failwith] is the one refusing callee outside [Verdict.Claims]. *)
+let refusal_callees = "failwith" :: refusing_claims
+
+(** The members [module Claims] binds in [verdict_source] (the text of [test/support/verdict.ml]),
+    in order; [None] when it declares no such structure. An item other than a plain [let x = ...] is
+    named as unreadable, so it can only ever mismatch: a member it hides is never assumed judged. *)
+let claims_members verdict_source =
+  List.find_map (Read.structure_of verdict_source) ~f:(fun item ->
+      match item.pstr_desc with
+      | Pstr_module
+          {
+            pmb_name = { txt = Some "Claims"; _ };
+            pmb_expr = { pmod_desc = Pmod_structure items; _ };
+            _;
+          } ->
+          Some
+            (List.concat_map items ~f:(fun item ->
+                 let unreadable () =
+                   [ Printf.sprintf "<unreadable item, line %d>" item.pstr_loc.loc_start.pos_lnum ]
+                 in
+                 match item.pstr_desc with
+                 | Pstr_value (_, bindings) ->
+                     List.concat_map bindings ~f:(fun binding ->
+                         match binding.pvb_pat.ppat_desc with
+                         | Ppat_var { txt; _ } -> [ txt ]
+                         | _ -> unreadable ())
+                 | _ -> unreadable ()))
+      | _ -> None)
+
+type claims_mismatch = {
+  unjudged : string list;  (** [Claims] members neither list judges. *)
+  not_members : string list;
+      (** Judged names [Claims] does not bind, or judged twice (as a multiset difference). *)
+}
+
+let claims_mismatch ~members =
+  let judged = refusing_claims @ non_refusing_claims in
+  { unjudged = minus members judged; not_members = minus judged members }
 
 let is_refusal expression =
   Option.value_map (last_name expression) ~default:false ~f:(fun name ->

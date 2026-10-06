@@ -287,3 +287,64 @@ let dynamic reason = Verdict.fail reason
   Verdict.p_empty
     "no direct failure is both answered by a control and catalogued as answered by none"
     ~over:Manifest.direct_evidence Manifest.doubly_classified
+
+(* Which callees refuse is judged against the claim forms [Verdict.Claims] declares, read from its
+   source, so the judgment cannot lag the module. The mutations below edit that same source: a
+   combinator added to [Claims] that the lists do not judge, and a judged one [Claims] dropped, each
+   turn the comparison red. *)
+let () =
+  let verdict_source = In_channel.read_all "../support/verdict.ml" in
+  let mismatch source =
+    Option.map (Scan.claims_members source) ~f:(fun members -> Scan.claims_mismatch ~members)
+  in
+  let members = Option.value_exn (Scan.claims_members verdict_source) in
+  let live = Scan.claims_mismatch ~members in
+  List.iter live.unjudged ~f:(fun name ->
+      eprintf
+        "Verdict.Claims.%s: judged by neither `refusing_claims` nor `non_refusing_claims` in \
+         test/support/refusal_control_scan.ml (not part of the golden)\n"
+        name);
+  List.iter live.not_members ~f:(fun name ->
+      eprintf
+        "%s: judged in test/support/refusal_control_scan.ml but not a member of Verdict.Claims, or \
+         judged twice (not part of the golden)\n"
+        name);
+  Verdict.p_empty
+    "every Verdict.Claims member is judged refusing or not, once, and every judged name is a member"
+    ~over:members
+    (live.unjudged @ live.not_members);
+  Verdict.p_all ~min:3
+    "the paired, formatted-paired and pairwise-distinct claims refuse through their label"
+    [ "pf_all2"; "pass_fail_all2"; "p_pairwise_distinct" ]
+    ~f:(List.mem Scan.refusal_callees ~equal:String.equal);
+  let edit ~pattern ~with_ =
+    let edited = String.substr_replace_first verdict_source ~pattern ~with_ in
+    Option.some_if (not (String.equal edited verdict_source)) edited
+  in
+  let member_line = "  let pf_all2 = pf_all2\n" in
+  Verdict.p "a combinator Verdict.Claims gains that neither list judges is named as unjudged"
+    (match
+       Option.bind
+         (edit ~pattern:member_line ~with_:(member_line ^ "  let p_new = p\n"))
+         ~f:mismatch
+     with
+    | Some { unjudged = [ "p_new" ]; not_members = [] } -> true
+    | _ -> false);
+  Verdict.p "a judged combinator Verdict.Claims no longer binds is named as not a member"
+    (match Option.bind (edit ~pattern:member_line ~with_:"") ~f:mismatch with
+    | Some { unjudged = []; not_members = [ "pf_all2" ] } -> true
+    | _ -> false);
+  Verdict.p "a Claims item other than a plain binding is unreadable, never assumed judged"
+    (match
+       Option.bind
+         (edit ~pattern:member_line ~with_:(member_line ^ "  include struct end\n"))
+         ~f:mismatch
+     with
+    | Some { unjudged = [ unreadable ]; not_members = [] } ->
+        String.is_prefix unreadable ~prefix:"<unreadable item"
+    | _ -> false);
+  Verdict.p "a Verdict source declaring no Claims structure is refused, not read as empty"
+    (Option.is_none
+       (Option.bind
+          (edit ~pattern:"module Claims = struct" ~with_:"module Other = struct")
+          ~f:mismatch))
