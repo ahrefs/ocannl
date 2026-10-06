@@ -97,15 +97,13 @@ let () =
       (* The same operands at f32, narrowed to half on the host: one rounding of the same [powf]
          result. Pinned wherever that is the stated policy. *)
       let single = run ~prec:Ops.single ~name:"hpow_f32" ~first_id:19200 cases in
-      let label = "half powers are f32 powf rounded to half once" in
-      if widens_to_powf then
-        p_alli label (Array.to_list got) ~f:(fun i v ->
-            let want = f16 single.(i) in
-            let ok = Int64.equal (Int64.bits_of_float v) (Int64.bits_of_float want) in
-            if not ok then
-              Stdio.eprintf "(not part of the golden) case %d: half %h, f32 narrowed %h\n" i v want;
-            ok)
-      else skipped ~backend:backend_name label;
+      gated_alli ~when_:widens_to_powf ~on:backend_name
+        "half powers are f32 powf rounded to half once" (Array.to_list got) ~f:(fun i v ->
+          let want = f16 single.(i) in
+          let ok = Int64.equal (Int64.bits_of_float v) (Int64.bits_of_float want) in
+          if not ok then
+            Stdio.eprintf "(not part of the golden) case %d: half %h, f32 narrowed %h\n" i v want;
+          ok);
       let src = Generated.read "hpow" in
       p "half powers never call the binary-misused hexp2"
         (not (String.is_substring src ~substring:"hexp2("));

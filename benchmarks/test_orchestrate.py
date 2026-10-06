@@ -2299,6 +2299,67 @@ class FixtureDigestTest(unittest.TestCase):
         self.assertIn("MATCH — rog-nv's bytes", good.getvalue())
         self.assertIn("MISMATCH", bad.getvalue())
 
+    def expect_origin(self, digests, box, *fixtures):
+        """`--check --expect-origin box` over `fixtures`: (exit status, report)."""
+        argv = ["--check", *map(str, fixtures), "--digests", str(digests), "--expect-origin", box]
+        with contextlib.redirect_stdout(io.StringIO()) as report:
+            code = fixture_digest._main(argv)
+        return code, report.getvalue()
+
+    def test_expect_origin_decides_on_the_named_box_alone(self):
+        # The measurement drivers pin their cells to ONE box's records. They used to count report
+        # lines with a regex, which a second agreeing origin (`m4-max,tuf's bytes`) broke; the
+        # exit status asks the question directly. Single- and multi-origin files both, and a
+        # fixture that MATCHes only some OTHER box's bytes fails, as a MATCH alone would not.
+        mine = self.fixture("gpt2_mini.safetensors", b"m4-max bytes")
+        theirs = self.write_fixture(self.dir / "other" / "gpt2_mini.safetensors", b"minix bytes")
+        single = self.dir / "single.txt"
+        fixture_digest.record(single, [mine], "m4-max")
+        multi = self.dir / "multi.txt"
+        for box in ("tuf", "m4-max"):
+            fixture_digest.record(multi, [mine], box)
+        fixture_digest.record(multi, [theirs], "minix")
+
+        self.assertEqual(self.expect_origin(single, "m4-max", mine)[0], 0)
+        code, report = self.expect_origin(multi, "m4-max", mine)
+        self.assertEqual(code, 0)
+        self.assertIn("MATCH — m4-max,tuf's bytes", report, "control: the joined field is there")
+        self.assertEqual(self.expect_origin(multi, "tuf", mine)[0], 0)
+        code, report = self.expect_origin(multi, "m4-max", theirs)
+        self.assertEqual(code, 1)
+        self.assertIn("MATCH — minix's bytes", report, "control: it MATCHes, just not m4-max's")
+        self.assertIn("not m4-max's bytes", report)
+        self.assertEqual(self.expect_origin(multi, "m4-max", mine, theirs)[0], 1, "every fixture")
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(
+                fixture_digest._main(["--check", str(theirs), "--digests", str(multi)]),
+                0,
+                "control: without --expect-origin, some box's bytes pass",
+            )
+        self.write_fixture(mine, b"perturbed bytes")
+        self.assertEqual(self.expect_origin(multi, "m4-max", mine)[0], 1, "a MISMATCH fails too")
+
+    def test_expect_origin_refuses_a_box_the_file_does_not_declare(self):
+        # No entry can name an undeclared box, so `--expect-origin m4max` would fail every
+        # fixture as if its bytes were wrong; the misspelling is refused as one instead.
+        fx = self.fixture("gpt2_mini.safetensors")
+        digests = self.dir / fixture_digest.DIGEST_FILE
+        fixture_digest.record(digests, [fx], "m4-max")
+
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            with self.assertRaises(SystemExit) as refused:
+                self.expect_origin(digests, "m4max", fx)
+
+        self.assertEqual(refused.exception.code, 2)
+        self.assertIn("m4-max", err.getvalue(), "it names the boxes the file does declare")
+        for mode in (["--record", str(fx)], ["--list-declared-measurement-boxes"]):
+            with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
+                with self.assertRaises(SystemExit, msg=mode[0]) as refused:
+                    fixture_digest._main(
+                        [*mode, "--digests", str(digests), "--expect-origin", "m4-max"]
+                    )
+            self.assertEqual(refused.exception.code, 2, f"--expect-origin with {mode[0]}")
+
     def test_a_host_that_cannot_name_itself_is_refused_not_given_a_placeholder(self):
         # A literal `unknown-host` is not an origin, it is every nameless box sharing one name:
         # the second such box to record different bytes for a fixture would replace the first's

@@ -1,9 +1,12 @@
 an exclusion absent from the hand-over reaches the stale-exclusion refusal: true
+a scanner exception on a parsing file reaches the scanner-defect refusal, not the parse one: true
 a scan handed a source that does not parse refuses it, exiting 1: true
 
 Synthetic controls: scanner refusal diagnostics exercised by this control golden:
   [scanner-refusal:83dfdd0395c402128515f27b2f3b1b1c] the exclusion for
+  [scanner-refusal:3f0b314f29005911be716581fa1a4f10] the scan raised
   [scanner-refusal:b1a8055bff15f499f2f143975afca3d7] reaches the stale-exclusion
+  [scanner-refusal:2c67621c20b4be85e0176da0370f83cb] reaches the scanner-defect
   [scanner-refusal:0e0975906df73fda3897bc10ee9904c0] refuses it exiting
   [scanner-refusal:123bedafe19167d3536ddb2ca1115d21] cannot say whether
 Catalogue-only: direct failures no control executes (reasons in `raw_catalogue_only`):

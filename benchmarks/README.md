@@ -168,7 +168,9 @@ endpoint, whereas HIP's invalid exact-f16 and beyond-exact approximate rows are 
     --record` (add `--origin <box>` when the hostname is not the name the reports use). It is
     stdlib-only — no venv needed — and it leaves every other origin's entry alone.
     `python3 benchmarks/fixture_digest.py --check` reports what is on disk against what is recorded, and
-    exits non-zero on anything that is not a MATCH. Both tools refuse an origin they cannot
+    exits non-zero on anything that is not a MATCH; with `--expect-origin <box>` also on a MATCH
+    that is not `<box>`'s bytes, which is how a driver pinned to one box's records asks (the
+    report's origin field joins every agreeing box, so it is no thing to grep). Both tools refuse an origin they cannot
     trust rather than inventing one: an explicitly empty `--origin` (how `--origin "$BOX"`
     fails when `$BOX` is unset) and a host that reports no name at all, since a shared
     placeholder would let the next such box overwrite this one's entry under it.
@@ -656,6 +658,23 @@ this box's numpy, silently retires every published number on the old bytes, and,
 per-box, leaves the other measuring boxes on a workload that is now different from yours.
 Regeneration is a cross-box event: coordinate it across every origin in `DIGESTS.txt`'s
 `measurement-boxes` header field at once (gh-ocannl-759, gh-ocannl-850).
+
+**Rebuilding a fixture that vanished is not regeneration**, provided the bytes come back as
+recorded. When a tree has lost a fixture that this box's `DIGESTS.txt` entry still names (a fresh
+checkout or worktree, a cleaned `fixtures/`), get a candidate OUTSIDE `fixtures/` and check it
+before it goes in. The candidate is a copy from another tree on the same box or, failing that, a
+rebuild: `benchmarks/.venv/bin/python benchmarks/gen_fixtures.py --out-dir <scratch> benchmarks/workloads/<name>.json`.
+Either way run `python3 benchmarks/fixture_digest.py --check <scratch>/<name>.safetensors`, which
+looks the file name up in `fixtures/DIGESTS.txt` (another tree may sit at another revision, or
+have regenerated, so a copy is checked as a rebuild is). Copy the file into `fixtures/` only on a
+`MATCH` naming this box's origin; from then on it is the recorded workload, not a smoke fixture.
+A `content-v1` row covers the canonicalized tensors and metadata, so a faithful rebuild matches
+it. A `raw-v1` row hashes the file bytes, which vary with safetensors' metadata order: a `MATCH`
+against one still certifies the candidate, but a `MISMATCH` against one is inconclusive rather
+than a loss. A `MISMATCH` against a `content-v1` row means this venv no longer reproduces the
+recorded stream (a numpy upgrade, a changed spec or generator): the bytes are lost on this box,
+and replacing them is the cross-box regeneration above. What the rule forbids is replacing
+recorded bytes, never reproducing them.
 
 tinygrad's CPU device JIT-compiles kernels with `clang`; on a machine without clang, point
 `CC` at a substitute (a `zig cc` wrapper script from `pip install ziglang` works — translate

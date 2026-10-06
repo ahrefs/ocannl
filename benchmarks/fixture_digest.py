@@ -37,6 +37,8 @@ ones whose fixtures predate any venv you could reconstruct.
 
     python3 benchmarks/fixture_digest.py --record   # pin fixtures/*.safetensors as this box's
     python3 benchmarks/fixture_digest.py --check    # what is on disk, against what is recorded
+    python3 benchmarks/fixture_digest.py --check --expect-origin m4-max
+                                                    # ...and exit 0 only if all are m4-max's bytes
     python3 benchmarks/fixture_digest.py --list-declared-measurement-boxes
                                                     # the fleet matrix, one box per line
 """
@@ -670,8 +672,17 @@ def status(fixture, entries):
     Verdict is MATCH, MISMATCH (the name is recorded, but for nobody's bytes these) or UNRECORDED
     (no entry at all: a fixture nothing in the repository describes, which is what a report must
     not quietly be measured on). `origins` names the boxes whose recorded bytes these are -- the
-    answer to "which box's workload is this number on" -- and is None unless the verdict is MATCH.
+    answer to "which box's workload is this number on" -- comma-joined, as result rows and
+    reports carry it (an origin never contains a comma, `check_origin`), and is None unless the
+    verdict is MATCH. `matching_origins` gives the same boxes as a list.
     """
+    verdict, sha, size, origins = matching_origins(fixture, entries)
+    return verdict, sha, size, ",".join(origins) if origins else None
+
+
+def matching_origins(fixture, entries):
+    """`status` with `origins` the sorted list of boxes (None unless MATCH), for a caller that
+    asks whether ONE box is among them -- which the joined field answers only by being parsed."""
     fixture = Path(fixture)
     sha, size = sha256_file(fixture), fixture.stat().st_size
     recorded = entries.get(fixture.name)
@@ -690,7 +701,7 @@ def status(fixture, entries):
         return "MISMATCH", sha, size, None
     # More than one origin here is the boxes agreeing, which is worth seeing as plainly as their
     # disagreeing is.
-    return "MATCH", sha, size, ",".join(sorted(matching))
+    return "MATCH", sha, size, sorted(matching)
 
 
 def divergent_origins(path, names, origin):
@@ -782,9 +793,20 @@ def _main(argv=None):
         "recorded under --origin, which defaults to this host only when this host names itself "
         "BOX -- otherwise say both, so one box does not end up under two origin names.",
     )
+    ap.add_argument(
+        "--expect-origin",
+        metavar="BOX",
+        default=None,
+        help="with --check: exit 0 only if every fixture MATCHes with BOX among the boxes whose "
+        "bytes it is -- the question a driver pinned to one box's records asks, answered by the "
+        "exit status rather than by parsing the report text",
+    )
     ap.add_argument("--digests", type=Path, default=None, help=f"path to {DIGEST_FILE}")
     ap.add_argument("--fixture-dir", type=Path, default=here / "fixtures")
     args = ap.parse_args(argv)
+    if args.expect_origin is not None and not args.check:
+        # Before every mode's branch: a mode that returned first would accept the flag and exit 0.
+        ap.error("--expect-origin is a condition on --check's verdict; no other mode reads it")
     if args.list_declared_measurement_boxes:
         if args.fixtures:
             ap.error("--list-declared-measurement-boxes reads only --digests; give no fixtures")
@@ -817,12 +839,24 @@ def _main(argv=None):
 
     if args.check:
         entries = read_digests(digests)
+        expected = args.expect_origin
+        if expected is not None and expected not in measurement_boxes(digests):
+            # No entry can name an undeclared box (reading refuses one), so the check would fail
+            # every fixture; a misspelled box should read as the misspelling it is.
+            ap.error(
+                f"--expect-origin {expected!r} is not a measurement box of {digests} "
+                f"(those are: {', '.join(measurement_boxes(digests)) or 'none'})"
+            )
         bad = 0
         for fx in fixtures:
-            verdict, sha, size, origins = status(fx, entries)
-            where = f" — {origins}'s bytes" if verdict == "MATCH" else ""
+            verdict, sha, size, origins = matching_origins(fx, entries)
+            where = f" — {','.join(origins)}'s bytes" if verdict == "MATCH" else ""
             print(f"{fx.name}: sha256 {sha} ({size} bytes) — {verdict}{where}")
             if verdict != "MATCH":
+                print(f"    recorded: {describe(fx.name, entries)}")
+                bad += 1
+            elif expected is not None and expected not in origins:
+                print(f"    not {expected}'s bytes (--expect-origin)")
                 print(f"    recorded: {describe(fx.name, entries)}")
                 bad += 1
         return 1 if bad else 0

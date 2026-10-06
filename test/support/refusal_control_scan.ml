@@ -134,6 +134,9 @@ let refusal_callees =
     "claimf";
     "pass_fail";
     "gated";
+    "gated_all";
+    "gated_alli";
+    "gated_exists";
   ]
 
 let is_refusal expression =

@@ -1294,6 +1294,39 @@ let association_cases =
     ("an empty golden is not output either", "", "none");
   ]
 
+(** [f ()], or [default] after a failure naming which way the scan failed on the snippet: a fixture
+    that does not parse is the case's own defect, an exception from a fixture that does is the
+    scanner's. *)
+let attempted ~what ~name ~default f =
+  match Scan.attempt f with
+  | Scan.Scanned found -> found
+  | Scan.Unparsed ->
+      fail "%s -- %s: the snippet does not parse" what name;
+      default
+  | Scan.Raised exn ->
+      fail "%s -- %s: the scan raised %s on a snippet that parses" what name exn;
+      default
+
+(** How {!Scan.attempt} tells the input's fault from the scanner's: the parser's syntax and lexical
+    errors are the file's, anything else -- here {!Scan.boundaries_of}'s precondition, broken by a
+    provenance no source can produce -- is reported as itself. *)
+let attempt_cases =
+  let parse source () = ignore (Scan.rejections ~emitters ~path:"case.ml" ~contents:source) in
+  [
+    ("a syntax error is the file's", parse "let =\n", "unparsed");
+    ("a lexical error is the file's", parse "let s = \"unterminated\n", "unparsed");
+    ("a source that parses is scanned", parse "let x = 1\n", "scanned");
+    ( "a scanner exception is the scanner's, with its text",
+      (fun () ->
+        ignore (Scan.boundaries_of { Scan.no_provenance with Scan.uncertainty = Scan.Unresolved })),
+      "raised Invalid_argument(\"Codegen_text_scan: an uncertain provenance names no boundary\")" );
+  ]
+
+let render_attempt = function
+  | Scan.Scanned () -> "scanned"
+  | Scan.Unparsed -> "unparsed"
+  | Scan.Raised exn -> "raised " ^ exn
+
 let render_association = function
   | None -> "none"
   | Some (g : Scan.golden) ->
@@ -1324,10 +1357,8 @@ let () =
       else fail "golden -- %s: expected [%s], found [%s]" name expected found);
   List.iter source_cases ~f:(fun (name, source, expected) ->
       let found =
-        try render_site (Scan.classify_source ~emitters ~path:"case.ml" ~contents:source)
-        with _ ->
-          fail "source -- %s: the snippet does not parse" name;
-          "<unparsed>"
+        attempted ~what:"source" ~name ~default:"<unscanned>" (fun () ->
+            render_site (Scan.classify_source ~emitters ~path:"case.ml" ~contents:source))
       in
       if String.equal (String.strip found) (String.strip expected) then
         printf "ok: source -- %s\n" name
@@ -1335,22 +1366,22 @@ let () =
   List.iter boundary_cases ~f:(fun (boundary, name, source, pins) ->
       let expected = String.strip (pins ^ " +partial(" ^ Scan.boundary_tag boundary ^ ")") in
       let found =
-        try render_site (Scan.classify_source ~emitters ~path:"case.ml" ~contents:source)
-        with _ ->
-          fail "boundary -- %s: the snippet does not parse" name;
-          "<unparsed>"
+        attempted ~what:"boundary" ~name ~default:"<unscanned>" (fun () ->
+            render_site (Scan.classify_source ~emitters ~path:"case.ml" ~contents:source))
       in
       if String.equal (String.strip found) expected then printf "ok: boundary -- %s\n" name
       else fail "boundary -- %s: expected [%s], found [%s]" name expected found);
   Verdict.p_all "every partial-itemisation boundary has a case meeting it alone"
     Scan.all_of_boundary ~f:(fun boundary ->
       List.exists boundary_cases ~f:(fun (b, _, _, _) -> Poly.equal b boundary));
+  List.iter attempt_cases ~f:(fun (name, f, expected) ->
+      let found = render_attempt (Scan.attempt f) in
+      if String.equal found expected then printf "ok: attempt -- %s\n" name
+      else fail "attempt -- %s: expected [%s], found [%s]" name expected found);
   List.iter rejection_cases ~f:(fun (name, source, expected) ->
       let found =
-        try List.length (Scan.rejections ~emitters ~path:"case.ml" ~contents:source)
-        with _ ->
-          fail "rejection -- %s: the snippet does not parse" name;
-          -1
+        attempted ~what:"rejection" ~name ~default:(-1) (fun () ->
+            List.length (Scan.rejections ~emitters ~path:"case.ml" ~contents:source))
       in
       if expected = found then printf "ok: rejection -- %s\n" name
       else fail "rejection -- %s: expected %d refusals, found %d" name expected found);

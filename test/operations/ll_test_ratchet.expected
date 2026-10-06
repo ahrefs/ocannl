@@ -17,7 +17,7 @@ test/operations/back_to_back_runs.ml -- records=5 traversals=0
 test/operations/broadcast_constant_init.ml -- records=0 traversals=1
 test/operations/canonical_render.ml -- records=13 traversals=0
 test/operations/cc_march_census.ml -- records=6 traversals=0
-test/operations/cost_model_extraction.ml -- records=4 traversals=0
+test/operations/cost_model_extraction.ml -- records=2 traversals=0
 test/operations/cost_model_floor.ml -- records=4 traversals=0
 test/operations/cost_model_template.ml -- records=3 traversals=0
 test/operations/cpu_parallel.ml -- records=11 traversals=0

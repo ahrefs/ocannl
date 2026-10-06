@@ -311,6 +311,21 @@ let longident_of expr =
     report an empty census. *)
 let structure_of content = Parse.implementation (Lexing.from_string content)
 
+(** What became of one source handed to the scan. A file that does not parse is the INPUT's fault;
+    any other exception is the SCANNER's -- {!boundaries_of}'s [Invalid_argument], a [_exn] whose
+    precondition a new idiom broke -- and calling that "does not parse" sends the reader to a file
+    that is fine. *)
+type 'a attempt = Scanned of 'a | Unparsed | Raised of string
+
+(** [f ()], classified. The parser's own errors -- syntax and lexical alike -- are the exceptions
+    the compiler registers a located report for, so that registration is the test rather than a list
+    of the parser's exception constructors, which ppxlib does not re-export. *)
+let attempt f =
+  match f () with
+  | result -> Scanned result
+  | exception exn when Option.is_some (Ppxlib.Location.Error.of_exn exn) -> Unparsed
+  | exception exn -> Raised (Stdlib.Printexc.to_string exn)
+
 let path_ends path ~name = match List.last path with Some n -> String.equal n name | None -> false
 
 (** Every unqualified identifier occurring in [expr]: the names taint can travel along. *)

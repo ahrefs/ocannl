@@ -49,7 +49,6 @@ let accum_prec =
 open Verdict.Claims
 
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
-let skipped = Verdict.skipped ~backend:backend_name
 let on_gpu = Sched.backend_is_gpu backend_name
 
 let raises_with ~substring f =
@@ -172,12 +171,13 @@ let () =
 (* {1 Composition: a coalesced pair under [Split_reduce]}
 
    The coalesced output [d[Sub_axis; f]] of a reduction [d[h,e] += x[k,h,e]] is split over [k]:
-   [Split_reduce] rebuilds the cell for its combine nest from the cell's decomposition, where a
-   [Sub_axis] decomposes to nothing. Rebuilt as [Fixed_idx 0] the combine's write renders the same
-   address but reads to the address queries as an ordinary in-bounds coordinate, under which the
-   flattened component [f] (extent [hh * ee]) is taken to stay below [ee] — the marker the composed
-   form depends on. The executed leg runs the composition through the default (fissioned, on GPU
-   hardware-mapped) schedules. *)
+   [Split_reduce] derives the cell of its combine nest from the original cell with the enclosing
+   loops renamed to the combine indices. Rebuilt instead from the cell's decomposition, where a
+   [Sub_axis] decomposes to nothing, the marker comes back as [Fixed_idx 0]: the combine's write
+   renders the same address but reads to the address queries as an ordinary in-bounds coordinate,
+   under which the flattened component [f] (extent [hh * ee]) is taken to stay below [ee]. The
+   executed leg runs the composition through the default (fissioned, on GPU hardware-mapped)
+   schedules. *)
 
 let () =
   let hh = 3 and ee = 4 and kk = 16 in
@@ -229,6 +229,77 @@ let () =
   p
     "split-reduce: the coalesced, split, default-scheduled reduction computes the plain one's \
      values"
+    (Array.exists want ~f:(fun v -> Float.(v <> 0.)) && Array.equal Float.equal want got)
+
+(* {1 Composition: a coalesced pair under [Stage] and [Privatize]}
+
+   Both insert nests that access the coalesced node itself — [Stage] the source read of its load
+   nest, [Privatize] the target's init-load and store-back transfers — and both derive that access
+   from the original one, renaming the tile loops' symbols to the nest's fresh ones. A [Sub_axis]
+   has no symbols, so the rename keeps it; derived instead by rebuilding each component from its
+   affine decomposition, where a [Sub_axis] decomposes to nothing, it comes back as [Fixed_idx 0]:
+   the same address, read by the address queries as an ordinary coordinate under which the flattened
+   component after it stays below its own axis's dim. After both ops every remaining access of the
+   two nodes is one of those derived accesses (the computation reads the tiles), so the structural
+   claims below read exactly what the derivation wrote. Every backend runs this leg: non-shared
+   [Stage] and [Privatize] are the CPU packing pair. *)
+
+let () =
+  let hh = 3 and ee = 4 and kk = 5 in
+  let mk = L.node_factory ~first_id:116800 ~dims:[||] () in
+  let x = mk ~dims:[| kk; hh; ee |] "cp_x" and d = mk ~dims:[| hh; ee |] "cp_d" in
+  List.iter [ x; d ] ~f:L.materialize;
+  let h = L.sym () and e = L.sym () and k = L.sym () in
+  let at = [| L.iter h; L.iter e |] in
+  let llc =
+    L.seq (L.zero d)
+      (L.loop_n h hh
+         (L.loop_n e ee
+            (L.loop_n k kk
+               (L.set d at (L.add (L.get d at) (L.get x [| L.iter k; L.iter h; L.iter e |]))))))
+  in
+  let seed =
+    [
+      ( x,
+        Array.init
+          (kk * hh * ee)
+          ~f:(L.cycle_flat ~dims:[| kk; hh; ee |] ~modulus:13 ~offset:(-6.) ~stride:0.5) );
+    ]
+  in
+  let o = L.optimize ~name:"cp_plain" llc in
+  let co, f = Sched.coalesce ~outer:h ~inner:e in
+  let sp, _f_o, f_i = Sched.split ~axis:f ~factor:4 ~outer:LL.Serial ~inner:LL.Serial in
+  let stage =
+    Sched.Stage
+      {
+        source = x;
+        tile_loops = [ f_i; k ];
+        shared = false;
+        cooperative = None;
+        hoisted = false;
+        swizzle = None;
+        pad_stride = None;
+        pipeline_depth = 1;
+        tile_prec = None;
+      }
+  in
+  let os = Sched.apply [ co; sp; stage; Sched.privatize ~accum_prec ~target:d ~over:k ] o in
+  let x_reads = ref [] and d_accesses = ref [] in
+  L.walk os.LL.llc
+    ~on_stmt:(function
+      | LL.Set { tn; idcs; _ } when Ir.Tnode.equal tn d -> d_accesses := idcs :: !d_accesses
+      | _ -> ())
+    ~on_scalar:(function
+      | LL.Get (tn, idcs) when Ir.Tnode.equal tn x -> x_reads := idcs :: !x_reads
+      | LL.Get (tn, idcs) when Ir.Tnode.equal tn d -> d_accesses := idcs :: !d_accesses
+      | _ -> ());
+  p_all "stage: the load nest's read of the coalesced source stays flattened" !x_reads
+    ~f:(fun idcs -> (Ir.Affine.axis_extents ~dims:[| kk; hh; ee |] idcs).(2) = hh * ee);
+  p_all "privatize: the transfers' accesses of the coalesced target stay flattened" !d_accesses
+    ~f:(fun idcs -> (Ir.Affine.axis_extents ~dims:[| hh; ee |] idcs).(1) = hh * ee);
+  let want = List.hd_exn (L.execute ~name:"cp_plain_run" o ~seed ~read:[ d ]) in
+  let got = List.hd_exn (L.execute ~name:"cp_packed_run" os ~seed ~read:[ d ]) in
+  p "stage+privatize: the coalesced, packed reduction computes the plain one's values bitwise"
     (Array.exists want ~f:(fun v -> Float.(v <> 0.)) && Array.equal Float.equal want got)
 
 (* {1 The real projection site} *)
@@ -351,22 +422,16 @@ let () =
             Printf.sprintf "%dx%dx%d/%dx%d%s" q.Autotune.sk_bm q.Autotune.sk_bn q.Autotune.sk_bk
               q.Autotune.sk_tm q.Autotune.sk_tn
               (if q.Autotune.sk_batch_grid then " bgrid" else ""))));
-  if on_gpu then begin
-    let n_match = ref 0 in
-    List.iter schedules ~f:(fun (q, _) ->
-        match
-          run_with fwd cand (fun o -> Sched.apply (Autotune.sketch_schedule ~accum_prec ~p:q o) o)
-        with
-        | got -> if Array.equal Float.equal got want then Int.incr n_match
-        | exception exn -> Stdio.eprintf "coalesced seed FAILED: %s\n" (Exn.to_string exn));
-    p "projection: every coalesced seed executes to the serial reference bitwise"
-      (!n_match = List.length schedules && !n_match > 0)
-  end
-  else begin
-    Stdio.eprintf "%s cannot execute workgroup-shared staging — the execution leg is skipped\n"
-      backend_name;
-    skipped "projection: every coalesced seed executes to the serial reference bitwise"
-  end
+  gated_all ~when_:on_gpu ~on:backend_name
+    "projection: every coalesced seed executes to the serial reference bitwise" schedules
+    ~f:(fun (q, _) ->
+      match
+        run_with fwd cand (fun o -> Sched.apply (Autotune.sketch_schedule ~accum_prec ~p:q o) o)
+      with
+      | got -> Array.equal Float.equal got want
+      | exception exn ->
+          Stdio.eprintf "coalesced seed FAILED: %s\n" (Exn.to_string exn);
+          false)
 
 (* {1 The v1 boundary: a companion over the uncoalesced axes} *)
 
@@ -489,17 +554,13 @@ let () =
           | exception exn ->
               Stdio.eprintf "folded schedule FAILED: %s\n" (Exn.to_string exn);
               false);
-      let label = "folded: every coalesced seed executes to the materialized run" in
-      if on_gpu then
-        p_all label
-          (List.mapi seeds ~f:(fun i q -> (i, q)))
-          ~f:(fun (i, q) ->
-            let o = apply (Autotune.sketch_schedule ~accum_prec ~p:q pre) in
-            let got =
-              List.hd_exn
-                (L.execute
-                   ~name:("co_folded_seed_" ^ Int.to_string i)
-                   o ~seed ~read:[ cand.Tensor.value ])
-            in
-            Array.equal Float.equal got want)
-      else skipped label)
+      gated_alli ~when_:on_gpu ~on:backend_name
+        "folded: every coalesced seed executes to the materialized run" seeds ~f:(fun i q ->
+          let o = apply (Autotune.sketch_schedule ~accum_prec ~p:q pre) in
+          let got =
+            List.hd_exn
+              (L.execute
+                 ~name:("co_folded_seed_" ^ Int.to_string i)
+                 o ~seed ~read:[ cand.Tensor.value ])
+          in
+          Array.equal Float.equal got want))

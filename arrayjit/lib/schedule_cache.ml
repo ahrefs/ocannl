@@ -682,19 +682,28 @@ type entry = {
 }
 [@@deriving sexp]
 
-(* Bumped on a decode-incompatible payload change — and on a SEARCH-MENU change (gh-ocannl-728, 4 ->
-   5: the [bgrid-in] batch flavor of the GPU matmul sketches; gh-ocannl-1166, -> 7 (6 was never
-   used): the composite playoff, which times candidates the earlier search never did). A stored
-   crown is the best of the menu that searched it; once the menu offers a candidate the search never
-   timed, the entry is still a sound schedule but no longer the answer the key asks for, and a warm
-   cache would replay it forever. Non-current entries read as misses, so the next search re-tunes
-   and overwrites. 8 (7 landed first): a fissioned winner's [segments] carry the segmentation and
-   every segment's schedule (gh-ocannl-1164). 11 (9 and 10 taken by concurrent changes): backprop's
-   contractions become matmul sites through the enabling interchange, so every training step's
-   backward segments gain sketch candidates (gh-ocannl-1183). 12: a reduction's zero folds into its
-   own segment's sketches (gh-ocannl-1175); the reverted staging#934 had written 6 for a menu that
-   bridged sibling reductions, so 6 stays retired. 13: the coalesced layout's seeds, a search branch
-   beside the sketch families (gh-ocannl-1165). *)
+(* Bumped on a decode-incompatible payload change — and on a SEARCH-MENU change (gh-ocannl-728). A
+   stored crown is the best of the menu that searched it; once the menu offers a candidate the search
+   never timed, the entry is still a sound schedule but no longer the answer the key asks for, and a
+   warm cache would replay it forever. Non-current entries read as misses, so the next search
+   re-tunes and overwrites. A bump appends its own line to the history below, which
+   [test/operations/cache_version_history] holds to the constant: two parallel bumps then conflict
+   in git rather than merging onto one number. A gap is a value claimed by a change that landed
+   under a later one; a retired value keeps its line, since entries stored under it may still be on
+   disk. *)
+(*= entry_version history -- one line per value, oldest first; a bump appends one:
+   1: staging#103 -- the first payload: canonical schedule identities and the disk cache
+   2: staging#104 -- a fissioned winner's per-segment schedules
+   3: gh-ocannl-470 -- the hoisted [Stage] schedule directive
+   4: gh-ocannl-568 -- the numerics policy the entry was tuned under
+   5: gh-ocannl-728 -- the [bgrid-in] batch flavor of the GPU matmul sketches
+   6: retired -- staging#934 (gh-ocannl-1175, reverted): a menu bridging sibling reductions
+   7: gh-ocannl-1166 -- the composite playoff, which times candidates the earlier search never did
+   8: gh-ocannl-1164 -- a fissioned winner's [segments] carry the segmentation and each schedule
+   11: gh-ocannl-1183 -- backprop's contractions become matmul sites through an interchange
+   12: gh-ocannl-1175 -- a reduction's zero folds into its own segment's sketches
+   13: gh-ocannl-1165 -- the coalesced layout's seeds, a search branch beside the sketch families
+*)
 let entry_version = 13
 
 let sanitize name =
@@ -765,17 +774,18 @@ let cache_file ~dir ~key = Stdlib.Filename.concat dir (sanitize key ^ ".sexp")
 
 (* The key REGIME is deliberately independent of [entry_version]. The latter says whether the
    payload at a key can be decoded; this stamp says whether the directory's filenames were minted by
-   the same [key_components] schema. Bump this once when that schema changes. Cache-open then
-   discards the superseded generation wholesale, with no migration arm for each historical schema
-   (gh-ocannl-835). 3: the [fission] component (gh-ocannl-1126) -- empty under the defaults, but the
-   default segmentation it stands for changed, so a regime-2 fissioned winner would replay into a
-   segmentation it was not saved against. 4: the default GPU schedule gives lanes to nests with a
-   preamble reduction (gh-ocannl-1124, config [gpu_lane_preamble_reduction], a [fission] input) --
-   again empty under the defaults while the default mappings, hence segmentation, changed. 5: the
-   lane geometry is gated per device (gh-ocannl-1167, config [gpu_serial_lanes], a [fission] input):
-   HIP's default mappings, hence segmentation, changed under unchanged keys. 6: the [fission]
-   component is gone (gh-ocannl-1164) -- a fissioned winner persists its segmentation, so the
-   segmentation policy's inputs no longer address it. *)
+   the same [key_components] schema. Bump this once when that schema changes — or when an input it
+   leaves out changes what a key stands for. Cache-open then discards the superseded generation
+   wholesale, with no migration arm for each historical schema (gh-ocannl-835). A bump appends its
+   own line to the history below, as [entry_version]'s does. *)
+(*= cache_regime_version history -- one line per value, oldest first; a bump appends one:
+   1: gh-ocannl-835 -- the regime stamp itself
+   2: gh-ocannl-594 -- the [device] component: a concrete timing identity per device
+   3: gh-ocannl-1126 -- the [fission] component; empty by default, but default segmentation moved
+   4: gh-ocannl-1124 -- lanes for nests with a preamble reduction change the default segmentation
+   5: gh-ocannl-1167 -- lane geometry gated per device: HIP segmentation moves under unchanged keys
+   6: gh-ocannl-1164 -- [fission] is gone: a fissioned winner persists its own segmentation
+*)
 let cache_regime_version = 6
 let regime_stamp_filename = ".ocannl-schedule-cache-regime"
 let regime_lock_filename = ".ocannl-schedule-cache.lock"
@@ -1021,6 +1031,10 @@ type placement_entry = {
 }
 [@@deriving sexp]
 
+(* Versions [placement_entry] payloads the way [entry_version] versions schedule entries. *)
+(*= placement_entry_version history -- one line per value, oldest first; a bump appends one:
+   1: gh-ocannl-786 -- the placement decision and the arm timings that chose it
+*)
 let placement_entry_version = 1
 
 let placement_key ?objective ~timing_identity ~limits ~capabilities canonical ~backend =

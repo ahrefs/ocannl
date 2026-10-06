@@ -177,11 +177,17 @@ files.
   numpy, which retires every published number on the old bytes and does nothing for the other
   measuring boxes. If your copies are merely unrecorded, `python3 benchmarks/fixture_digest.py
   --record` pins them as they are (stdlib-only, no venv, and it leaves other origins alone);
-  `--check` reports disk against record. Regeneration is a cross-box event to be coordinated
-  across every origin in `DIGESTS.txt`'s `# measurement-boxes:` header field at once
-  (gh-ocannl-759, gh-ocannl-850). That list is independent of the entry rows, so
+  `--check` reports disk against record, and `--check --expect-origin <box>` answers a driver
+  pinned to one box's records by its exit status -- never grep the report for the box, since its
+  origin field joins every agreeing box (`m4-max,tuf's bytes`). Regeneration is a cross-box
+  event to be coordinated across every origin in `DIGESTS.txt`'s `# measurement-boxes:` header
+  field at once (gh-ocannl-759, gh-ocannl-850). That list is independent of the entry rows, so
   `divergent_origins` and generated reports name a declared box even when its fixture entry is
   absent; deriving the box set from rows would recreate the silence the field exists to remove.
+  Rebuilding a fixture that VANISHED is not that regeneration when the rebuild reproduces this
+  box's recorded digest: `gen_fixtures.py --out-dir` into scratch (or copy from another tree),
+  `fixture_digest.py --check` the candidate, and copy it in only on a `MATCH` for this box (recipe
+  and the `raw-v1` caveat in `benchmarks/README.md`).
 - The boxes are **not** on the same fixture bytes, and the digest file says so per origin
   (`<sha256>  <bytes>  <name>  <origin>`, gh-ocannl-759). `mlp_small` and `gpt2_mini` hash
   differently on minix and rog-nv at identical sizes — two venvs, two numpy `Generator` streams,

@@ -743,6 +743,31 @@ let () =
     | _ -> false
     | exception Failure msg -> String.is_substring msg ~substring:"takes dune's root"
   in
+  (* Rules running beside the walk delete their outputs as it reads (gh-ocannl-1227): an entry gone
+     between the listing and its stat, and a directory gone before its own listing, are passed over
+     rather than ending the walk. *)
+  let vanished_entry =
+    List.equal String.equal
+      (Slot_kind.subdirectories root [ "plain"; "gone.actual"; "dune" ])
+      [ "plain" ]
+  in
+  let gone = Stdlib.Filename.concat root "gone" in
+  let vanished_dir = Slot_kind.listing gone in
+  (* ... but an entry a readable, unsearchable directory lists is not gone: its stat fails with
+     EACCES, which must stay a failure. Where permissions are not enforced (root), the stat succeeds
+     and there is nothing to refuse. *)
+  file "locked/inner/dune" "";
+  let locked = Stdlib.Filename.concat root "locked" in
+  Unix.chmod locked 0o644;
+  let unsearchable_refused =
+    match Unix.stat (Stdlib.Filename.concat locked "inner") with
+    | _ -> true
+    | exception Unix.Unix_error _ -> (
+        match Slot_kind.subdirectories locked [ "inner" ] with
+        | _ -> false
+        | exception Unix.Unix_error (Unix.EACCES, _, _) -> true)
+  in
+  Unix.chmod locked 0o755;
   List.iter !made ~f:(fun p ->
       if Stdlib.Sys.is_directory p then Stdlib.Sys.rmdir p else Stdlib.Sys.remove p);
   printf "dirs: %s\n" (String.concat ~sep:" " (List.map read ~f:(fun d -> "[" ^ d ^ "]")));
@@ -756,6 +781,9 @@ let () =
   p "an implicitly discovered cram test makes the tree unreadable" refused_cram;
   p "a data_only_dirs character class makes the tree unreadable" refused_class;
   p "an ancestor dune-project taking dune's root makes the tree unreadable" ancestor_root;
+  p "an entry that vanished after the listing is no directory" vanished_entry;
+  p_empty "a directory that vanished before its listing holds nothing" ~over:[ gone ] vanished_dir;
+  p "an entry an unsearchable directory lists is not taken for vanished" unsearchable_refused;
   (* DUNE_BUILD_DIR moves the build directory the same way --build-dir does. *)
   let moved =
     match

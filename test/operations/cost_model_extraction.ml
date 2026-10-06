@@ -13,7 +13,10 @@
    even when disjoint — with the op count flagged too when the arms' costs differ, unless an arm's
    cost lives entirely in a hoisted scope body, which executes unconditionally (gh-ocannl-637); -
    vectorized runs (gh-ocannl-578): bases spaced by at least the run length (or on distinct
-   in-bounds rows) count exactly, close-spaced or row-spilling bases stay a flagged upper bound.
+   in-bounds rows) count exactly, close-spaced or row-spilling bases stay a flagged upper bound, and
+   two stores on distinct rows are provably disjoint, so they sum exactly, while two binding one
+   loop symbol with different bounds stay a bound in either order; - a [Concat] coordinate: the
+   whole node (segment extents add); a map of another rank: the box-over-fiber bound, flagged.
 
    The tail asserts the roofline bound is monotone in the envelope constants. *)
 
@@ -373,11 +376,12 @@ let () =
   let v16 = fresh_tn "V16" [| 16 |] in
   let src = fresh_tn "U" [| 4 |] in
   let base4 s = Idx.affine ~symbols:[ (4, s) ] ~offset:0 in
-  let vec_of idcs =
-    Ll_test.loop_n i 4
+  (* for i < n: setv4 tn[idcs] from the random bits U[i]. *)
+  let vec_store ?(n = 4) tn idcs =
+    Ll_test.loop_n i n
       (LL.Set_from_vec
          {
-           tn = v16;
+           tn;
            idcs;
            length = 4;
            vec_unop = Ops.Uint4x32_to_prec_uniform;
@@ -385,6 +389,7 @@ let () =
            debug = "";
          })
   in
+  let vec_of = vec_store v16 in
   show_summary "vectorized writes, disjoint runs (exact)" (CM.analyze (vec_of [| base4 i |]));
 
   (* Close-spaced vec bases: setv4 V16[i] — runs from bases 1 apart may overlap, so the product
@@ -394,36 +399,84 @@ let () =
   (* Row-spilling vec runs: setv4 W46[i][4] on a 4x6 node — each run crosses into the next row,
      where it could meet that row's base, so exactness is declined. *)
   let w46 = fresh_tn "W46" [| 4; 6 |] in
-  let vec_spill =
-    Ll_test.loop_n i 4
-      (LL.Set_from_vec
-         {
-           tn = w46;
-           idcs = [| it i; Idx.Fixed_idx 4 |];
-           length = 4;
-           vec_unop = Ops.Uint4x32_to_prec_uniform;
-           arg = (get src [| it i |], sp);
-           debug = "";
-         })
-  in
+  let vec_spill = vec_store w46 [| it i; Idx.Fixed_idx 4 |] in
   show_summary "vectorized writes, row-spilling runs (bound)" (CM.analyze vec_spill);
 
   (* Constant minor base on distinct rows: setv4 W44[i][0] on a 4x4 node — one in-bounds run per
      row, disjoint by rows, 16 cells exact. *)
   let w44 = fresh_tn "W44" [| 4; 4 |] in
-  let vec_rows =
-    Ll_test.loop_n i 4
-      (LL.Set_from_vec
-         {
-           tn = w44;
-           idcs = [| it i; Idx.Fixed_idx 0 |];
-           length = 4;
-           vec_unop = Ops.Uint4x32_to_prec_uniform;
-           arg = (get src [| it i |], sp);
-           debug = "";
-         })
-  in
+  let vec_rows = vec_store w44 [| it i; Idx.Fixed_idx 0 |] in
   show_summary "vectorized writes, one run per row (exact)" (CM.analyze vec_rows);
+
+  (* Two vectorized stores on distinct rows: setv4 W28[0][4*i] then setv4 W28[1][4*i] on a 2x8 node.
+     Each touches 8 cells exactly, and the pair query views each store as a run that its own loop
+     bounds keep inside its row, so the stores are provably disjoint and the direction sums exactly
+     to all 16 cells (a vectorized pair used to count as overlapping: a flagged bound). *)
+  let w28 = fresh_tn "W28" [| 2; 8 |] in
+  let vec_row r = vec_store ~n:2 w28 [| Idx.Fixed_idx r; base4 i |] in
+  let s_vec_pair = CM.analyze (LL.unflat_lines [ vec_row 0; vec_row 1 ]) in
+  show_summary "vectorized writes on distinct rows, two stores (exact)" s_vec_pair;
+  let w28_fp = List.Assoc.find_exn s_vec_pair.CM.per_node w28 ~equal:Tn.equal in
+  claim "two vectorized stores on distinct rows sum exactly to the whole node"
+    ((not w28_fp.CM.fp_approx) && w28_fp.CM.fp_write_bytes = 16 * 4);
+
+  (* Two vectorized stores binding the same loop symbol with different bounds: setv4 N34[1][0] for i
+     < 1, and setv4 N34[i][0] for i < 2, on a 3x4 node. Together they write rows 0-1 (8 cells, 32 B)
+     and read U[0..1] (8 B), so the union is no exact sum, and no floor may exceed 40 B. In both
+     statement orders: the pair query must not read one store's bounds for the other's symbol. *)
+  let n34 = fresh_tn "N34" [| 3; 4 |] in
+  let one_row = vec_store ~n:1 n34 [| Idx.Fixed_idx 1; Idx.Fixed_idx 0 |]
+  and two_rows = vec_store ~n:2 n34 [| it i; Idx.Fixed_idx 0 |] in
+  List.iter
+    [ ("one row first", [ one_row; two_rows ]); ("two rows first", [ two_rows; one_row ]) ]
+    ~f:(fun (order, stmts) ->
+      let code = LL.unflat_lines stmts in
+      let s = CM.analyze code and floor = CM.completion_floor code in
+      let name = "vectorized stores with unequal bounds, " ^ order in
+      show_summary (name ^ " (bound)") s;
+      Stdio.printf "  floor bytes=%d\n" floor.CM.fr_bytes;
+      let fp = List.Assoc.find_exn s.CM.per_node n34 ~equal:Tn.equal in
+      claimf "%s: the overlapping stores stay a flagged bound covering the union" name
+        (fp.CM.fp_approx && fp.CM.fp_write_bytes >= 8 * 4);
+      claimf "%s: the floor stays within the 40 B the stores and their source touch" name
+        (floor.CM.fr_bytes <= (8 + 2) * 4));
+
+  (* A [Concat] coordinate is a choice of segment, each adding its cumulative offset: the segments'
+     extents ADD along the axis, so no product of loop widths bounds the cells named, and the count
+     falls back to the whole node. For a < wa: for b < wb: for k < 4: X16[a^b] names wa + wb cells,
+     derived here from the segment widths alone; the unit-width segments are the cases where the box
+     over the unmentioned width (wa * wb) falls short of that sum. *)
+  let x16 = fresh_tn "X16" [| 16 |] in
+  List.iter
+    [ (2, 3); (1, 3); (1, 1) ]
+    ~f:(fun (wa, wb) ->
+      let concat =
+        Ll_test.loop_n i wa
+          (Ll_test.loop_n j wb
+             (Ll_test.loop_n k 4 (Ll_test.set x16 [| Idx.Concat [ i; j ] |] (LL.Constant 1.))))
+      in
+      let name = Printf.sprintf "concatenated coordinate, segments %d and %d" wa wb in
+      let s = CM.analyze concat in
+      show_summary (name ^ " (whole node)") s;
+      let fp = List.Assoc.find_exn s.CM.per_node x16 ~equal:Tn.equal in
+      claimf "%s: the count covers every cell the segments can name, flagged" name
+        (fp.CM.fp_approx && fp.CM.fp_write_bytes >= (wa + wb) * 4));
+
+  (* A map of another rank than its node: R45[i] over a 4x5 node under for i < 4: for k < 3. The
+     renderer's Horner sum over the map's own component names cell i, one per loop-box point and
+     independent of k, so the count is the box over k's width — 4 cells (16 B), flagged — rather
+     than the node's 80 B. *)
+  let r45 = fresh_tn "R45" [| 4; 5 |] in
+  let short_map =
+    Ll_test.loop_n i 4 (Ll_test.loop_n k 3 (Ll_test.set r45 [| it i |] (LL.Constant 1.)))
+  in
+  let s_short = CM.analyze short_map in
+  show_summary "map of another rank (box over fiber bound)" s_short;
+  let r45_fp = List.Assoc.find_exn s_short.CM.per_node r45 ~equal:Tn.equal in
+  claim "a map of another rank counts the 4 cells its component names, flagged"
+    (r45_fp.CM.fp_approx && r45_fp.CM.fp_write_bytes >= 4 * 4);
+  claim "a map of another rank's count is tighter than the whole node"
+    (r45_fp.CM.fp_write_bytes < Tn.num_elems r45 * 4);
 
   (* Roofline: monotone in the envelope constants, bandwidth- vs. compute-bound flips. *)
   Stdio.printf "\n== roofline over the matmul (flops=%d, bytes=%d) ==\n" mm.CM.flops

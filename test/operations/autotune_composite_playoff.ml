@@ -25,6 +25,10 @@
    gh-ocannl-1199), which must attribute each playoff window to the [playoff] phase; [ties] is
    searched once more with the seam unobserved, and must crown and time exactly the same.
 
+   Every search passes [tune]'s [?log] explicitly, so none depends on the ambient [autotune_log].
+   [ties] is searched once more with [~log:true], which adds the untuned-default in-process control
+   after the crown: exactly one more timing decision, the last, attributed to no phase.
+
    Pinned to cc: the seeding and the scripted ranking are backend-independent, and cc is always
    available. *)
 open Base
@@ -70,7 +74,7 @@ type observed = {
 
 (* One search under a scripted ranking: [single n] is the n-th single's time (0-based, attempt
    order), [composite n] the n-th composite's. *)
-let search ?(trace = true) ~tag ~single ~composite () =
+let search ?(trace = true) ?(log = false) ~tag ~single ~composite () =
   let report = ref None and singles = ref 0 and composites = ref [] and phases = ref [] in
   let old_measured = !Autotune.on_candidate_measured
   and old_decision = !Autotune.on_batch_decision in
@@ -93,7 +97,7 @@ let search ?(trace = true) ~tag ~single ~composite () =
            else 1000.);
       let ctx, _routine =
         Autotune.with_uncontended_test_windows (fun () ->
-            Autotune.tune ~beam_width:2 ~rounds:0 ~repeats:1 ~cache_dir:""
+            Autotune.tune ~beam_width:2 ~rounds:0 ~repeats:1 ~cache_dir:"" ~log
               ~report:(fun r -> report := Some r)
               (Context.cpu ()) (chain ()) Ir.Indexing.Empty)
       in
@@ -236,3 +240,17 @@ let () =
     (List.equal Poly.equal traced.composite_ms quiet.composite_ms
     && String.equal traced.report.Autotune.best_label quiet.report.Autotune.best_label
     && Float.equal traced.report.Autotune.best_ms quiet.report.Autotune.best_ms)
+
+(* The untuned control under a scoped [~log:true]: the logged search times everything the unlogged
+   [ties] did, in the same phases, then the control once more with no phase. Its window is real (the
+   measurement seam scripts candidates only), so it moves no crown. *)
+let () =
+  let logged = search ~log:true ~tag:"logged" ~single:(fun _ -> 100.) ~composite:faster () in
+  Stdio.eprintf "logged trace (not part of the golden): %s\n%!"
+    (String.concat ~sep:" " (List.map logged.phases ~f:(Option.value ~default:"-")));
+  p "log: the logged search adds exactly one decision, last and phase-less (the untuned control)"
+    (List.equal (Option.equal String.equal) logged.phases (ties.phases @ [ None ]));
+  p "log: the same windows, crown and time with the control on and off"
+    (List.equal Poly.equal logged.composite_ms ties.composite_ms
+    && String.equal logged.report.Autotune.best_label ties.report.Autotune.best_label
+    && Float.equal logged.report.Autotune.best_ms ties.report.Autotune.best_ms)

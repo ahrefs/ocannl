@@ -133,6 +133,7 @@
   (alias runtest-doc_examples_compile_control)
   (alias runtest-changelog_unreleased_scan)
   (alias runtest-agents_md_size)
+  (alias runtest-cache_version_history)
   (alias runtest-config_usage_scan)
   (alias runtest-config_usage_scan_control)
   (alias runtest-config_usage_scan_refusal_control)
@@ -2898,7 +2899,7 @@
   ocannl_config
   (glob_files_rec ../../dune))
  (modules slot_kind_cases)
- (libraries base stdio test_utils arrayjit.verdict))
+ (libraries base stdio unix test_utils arrayjit.verdict))
 
 ; How the dune-file scan behind config_dep_completeness reads a stanza, on input built to break
 ; it rather than on whatever the repository's dune files happen to say today.
@@ -7513,6 +7514,20 @@
   (alias runtest-env_spelling_gate))
  (action
   (diff agents_md_size.expected agents_md_size.actual)))
+
+; The schedule cache's version constants each end a verbatim history naming the change that set
+; their current value, so two branches bumping one constant in parallel conflict in git instead of
+; merging cleanly onto one shared number (the October 2026 wave collided on entry_version twice).
+
+(test
+ ; ocannl-backend: none -- links no backend: it reads schedule_cache.ml as text.
+ (name cache_version_history)
+ (package neural_nets_lib)
+ (modules cache_version_history)
+ (libraries base stdio arrayjit.verdict)
+ (deps ocannl_config ../../arrayjit/lib/schedule_cache.ml)
+ (action
+  (run %{test} ../../arrayjit/lib/schedule_cache.ml)))
 
 ; gh-ocannl-909: consecutive runs of one routine execute in order on every backend without host
 ; synchronization between them -- an executed probe of the queue-ordering invariant each backend's

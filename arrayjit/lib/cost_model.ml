@@ -31,8 +31,13 @@ type summary = {
    value of its dynamic coordinate the data picks (the view's unknown group: the axis, flattened
    over any [Sub_axis] run before it): the image of its map with the placeholder standing still
    counts the known coordinates' tuples, and each pairs with at most every value of that coordinate
-   — an upper bound, capped by the box. Any other unknown coordinate (a [Concat], a rank mismatch)
-   falls back to the whole node. Guarded accesses are counted guards-taken. All biases
+   — an upper bound, capped by the box. A map of another rank than its node keeps the box/fiber
+   bound but never claims exactness: the renderer still computes one cell (one run, for a vector
+   store) per loop-box point from the symbols the map mentions, so the image is at most the box
+   divided by the unmentioned symbols' widths, though which cells is unknown. A [Concat] coordinate
+   falls back to the whole node: it is a choice of segment, each adding its cumulative offset, so
+   its extents ADD along the axis and no product of loop widths bounds them (segments of widths 1
+   and 3 name 4 cells where the box holds 3). Guarded accesses are counted guards-taken. All biases
    over-count. *)
 let access_cells (a : Tn.t Affine.access) : int * bool =
   let node_cells = Tn.num_elems a.a_tn in
@@ -44,14 +49,15 @@ let access_cells (a : Tn.t Affine.access) : int * bool =
       | Affine.Unknown _ -> true
       | Affine.Known _ -> false)
   in
+  let concat = Array.exists a.a_map ~f:(function Idx.Concat _ -> true | _ -> false) in
   if a.a_whole then (node_cells, a.a_guarded)
-  else if uninterpretable then (node_cells, true)
+  else if concat then (node_cells, true)
   else
     let domain = List.map a.a_loops ~f:(fun (s, (lo, hi)) -> (s, hi - lo + 1)) in
     let box = List.fold domain ~init:1 ~f:(fun acc (_, w) -> acc * w) in
     let image, exact_image =
       match Affine.fiber_cardinality ~domain a.a_map with
-      | `Exact f -> (box / max 1 f, true)
+      | `Exact f -> (box / max 1 f, not uninterpretable)
       | `At_least f -> (box / max 1 f, false)
     in
     match a.a_dyn_axis with
