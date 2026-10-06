@@ -1,49 +1,21 @@
-(** CUDA's tensor-core tables as pure functions of storage precisions, the numerics policy and the
-    compute capability: the arm resolver the backend's [mma_syntax] and [mma_fragment_syntax] hooks
-    dispatch on, the arch floors those arms check, and the capability descriptor
-    ({!Backend_intf.mma_capability}) that autotune seeds from.
-
-    They live here, outside the [cudajit]-gated [Cuda_backend], so the agreement between the two
-    owners of the 70/80/89 cutoffs -- the descriptor's [entry ~min_cc] and the resolver's floors
-    ([wc_min_cc], [mma16_min_cc]) -- is tested on both sides of every cutoff wherever OCANNL builds,
-    with no toolkit and no device ([test/operations/cuda_mma_cutoffs], gh-ocannl-1214). The backend
-    consumes these definitions directly: [Cuda_backend.Impl] includes them into its syntax
-    configuration and builds [hardware_limits.mma] as [capability ~cc] at the attached devices'
-    minimum compute capability. Compute capabilities are [major * 10 + minor] throughout. *)
-
 open Base
 
-(* The wmma-supported precision combinations (tensorize-mma T3). Shared by [mma_syntax] and
-   [mma_fragment_syntax] so a fragment scope accepts exactly when its nested update-only MMA calls
-   would — including the numerics-policy gate on the tf32 arm, which lives here for the same
-   reason. *)
+(* The wmma-supported precision combinations (tensorize-mma T3); the fields are documented in the
+   interface. Shared by [mma_syntax] and [mma_fragment_syntax] so a fragment scope accepts exactly
+   when its nested update-only MMA calls would — including the numerics-policy gate on the tf32 arm,
+   which lives here for the same reason. *)
 type wmma_combo_info = {
   wc_ab_typ : string;
-      (** The fragment element type for [matrix_a]/[matrix_b] — a C++ type for the 16-bit
-          combinations, the tag type [nvcuda::wmma::precision::tf32] for tf32 (storage stays
-          [float]; only the fragments are tagged). *)
   wc_acc_prec : Ops.prec;
-      (** The accumulator fragment's precision; its element type is [typ_of_prec] of it. *)
   wc_tm : int;
   wc_tn : int;
   wc_tk : int;
-      (** The intrinsic tile shape: 16×16×16 for the 16-bit combinations, 16×16×8 for tf32 (mirrors
-          [mma_format_tiles] in the capability descriptor). *)
-  wc_ab_ld_mult : int;  (** wmma stride constraint: a/b leading-dim multiple, in elements. *)
-  wc_d_ld_mult : int;  (** wmma stride constraint: d leading-dim multiple, in elements. *)
+  wc_ab_ld_mult : int;
+  wc_d_ld_mult : int;
   wc_min_cc : int;
   wc_marker : string;
-      (** Marker suffix for the rendering comment (["" | "-bf16" | "-tf32"]); [cuda_to_ptx] greps it
-          to select the arch floor. *)
   wc_cvt_tf32 : bool;
-      (** Convert loaded a/b fragment elements with [__float_to_tf32]: tf32 fragments load raw f32
-          bits, the explicit conversion performs the mantissa truncation (per the CUDA programming
-          guide; the intrinsic requires already-converted inputs). *)
   wc_d_cvt : (string * string) option;
-      (** The [(widen, narrow)] conversions of a destination whose storage type is not the
-          accumulator fragment's — the wide-f16 arm, gh-ocannl-925. [None]: [d] loads and stores
-          through [load_matrix_sync]/[store_matrix_sync] directly. [Some]: it crosses the fragment
-          boundary element by element, see [wmma_d_boundary_lines]. *)
 }
 
 let wmma_combo ~a_prec ~b_prec ~d_prec : wmma_combo_info option =
@@ -187,22 +159,21 @@ let mma_arm ~a_prec ~b_prec ~d_prec ~scope =
       | Some (_, _, marker) -> inline_ptx marker
       | None -> wmma ())
 
-(** The [cp.async] staging arm's arch floor (gh-ocannl-487 phase 2): [Cuda_backend]'s
-    [Cuda_syntax_config.async_copy] renders it at and above this compute capability, and
-    {!capability} proposes software-pipelined depths exactly there. *)
+(* The [cp.async] staging arm's arch floor (gh-ocannl-487 phase 2): [Cuda_backend]'s
+   [Cuda_syntax_config.async_copy] renders it at and above this compute capability, and
+   {!capability} proposes software-pipelined depths exactly there. *)
 let async_copy_floor = 80
 
-(** The tile-MMA descriptor of a device of compute capability [cc]; [None] below sm_70.
+(* The tile-MMA descriptor of a device of compute capability [cc]; [None] below sm_70.
 
-    Tensor cores (tensorize-mma T3): the 32-thread warp cooperates on 16x16x16 wmma tiles from sm_70
-    up; [mma_format_tiles] advertises the divergent fp8 16x8x32, tf32 16x16x8 and uniform-bf16
-    16x8x16 shapes to typed autotune seeds. Precision combinations are ultimately decided per call
-    by [mma_syntax] — but each entry here mirrors an arm of that hook, INCLUDING its accumulator
-    format and arch floor (gh-ocannl-545), because a seed the hook will decline is a candidate the
-    tuner times as scalar code under a tensorized label. [test/operations/cuda_mma_cutoffs] checks
-    that mirroring at every compute capability on either side of a cutoff: what this descriptor
-    admits per storage triple, emission scope and policy is what {!mma_arm}'s floors admit
-    (gh-ocannl-1214). *)
+   Tensor cores (tensorize-mma T3): the 32-thread warp cooperates on 16x16x16 wmma tiles from sm_70
+   up; [mma_format_tiles] advertises the divergent fp8 16x8x32, tf32 16x16x8 and uniform-bf16
+   16x8x16 shapes to typed autotune seeds. Precision combinations are ultimately decided per call by
+   [mma_syntax] — but each entry here mirrors an arm of that hook, INCLUDING its accumulator format
+   and arch floor (gh-ocannl-545), because a seed the hook will decline is a candidate the tuner
+   times as scalar code under a tensorized label. [test/operations/cuda_mma_cutoffs] checks that
+   mirroring at every compute capability on either side of a cutoff: what this descriptor admits per
+   storage triple, emission scope and policy is what {!mma_arm}'s floors admit (gh-ocannl-1214). *)
 let capability ~cc =
   let entry ~min_cc key tile = if cc >= min_cc then Some (key, tile) else None in
   if cc >= 70 then
