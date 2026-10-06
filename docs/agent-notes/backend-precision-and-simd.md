@@ -1793,5 +1793,9 @@ files.
   fractional exponent, and under CUDA fast math also under a run-time integral exponent (the
   integer-power helper takes only known constants). `half_float_power` executes
   constant-fractional and buffer-read exponents within one ulp at half precision of an f64
-  reference, and on cc and CUDA/HIP pins the result bitwise to the same backend's f32 `powf`
-  narrowed on the host. Metal's half `pow` is its own overload, outside that bitwise pin.
+  reference, and pins the result bitwise to the same backend's f32 `powf` narrowed on the host
+  on cc, CUDA/HIP and Metal. Metal's kernel calls the half `pow` overload on half operands with no
+  widening in the source; the overload itself behaves as f32 `pow` rounded once. Measured on M4 Max
+  (Metal fast math functions): 573 random fractional and run-time exponents over bases in
+  [0.01, 100], all bitwise equal to the f32 kernel narrowed, at most one half ulp from the
+  correctly rounded value, like the f32 path.
