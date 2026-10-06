@@ -172,6 +172,7 @@ declared or pinned by every rule running the program (gh-ocannl-1149):
   test/operations/dune, test hosted_constant_fill: Ir.Schedule.apply
   test/operations/dune, test launch_dim_gate: Ir.Schedule.apply, Ir.Schedule.default_gpu
   test/operations/dune, test launch_predicate_parity: Ir.Schedule.apply, Ir.Schedule.default_gpu, Ir.Schedule.fission_scheduled, Ir.Schedule.zero_expansion
+  test/operations/dune, test matmul_interchange: Ir.Schedule.apply
   test/operations/dune, test mma_tensorization_label: Ir.Schedule.apply
   test/operations/dune, test narrow_storage_compute: Ir.Schedule.apply
   test/operations/dune, test online_softmax_block: Ir.Schedule.apply

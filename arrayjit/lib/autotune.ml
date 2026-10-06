@@ -2919,7 +2919,8 @@ let mma_eligible_sites ~(limits : Ir.Backend_intf.hardware_limits) ~static_indic
                 match kind with `Normal -> Some pre | `Zeros | `Solo -> None)
         | exception Outcome.Cause_at _ -> [ opt ]
       in
-      List.filter_map segments ~f:(fun seg -> detect_matmul seg.LL.llc)
+      List.filter_map segments ~f:(fun seg ->
+          Option.map (detect_matmul_canonical seg) ~f:(fun (site, _, _) -> site))
       |> List.filter ~f:(fun site ->
           let a_prec = Lazy.force site.m_a.Ir.Tnode.storage_prec in
           let b_prec = Lazy.force site.m_b.Ir.Tnode.storage_prec in

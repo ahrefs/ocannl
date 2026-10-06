@@ -396,6 +396,24 @@ files.
   `schedule_strided_1x1` compares each seed exactly against `run_default_fission` and checks that
   reference against the unscheduled form up to f32 rounding. Exact-integer fixtures (its bare
   einsum legs) can keep the unscheduled reference.
+- **Backprop's contractions reach the matmul family only through the enabling interchange**
+  (gh-ocannl-1183, `Sketch_families.detect_matmul_canonical`). A weight gradient lowers as
+  `for b, s, o, i: dw[o,i] += dy[b,s,o] * x[b,s,i]` (contraction loops outermost) and a data
+  gradient with its contraction loop between write loops, while `classify_matmul` reads the
+  contraction nest off the innermost end: before the interchange, not one of the gpt2_mini training
+  step's backward contractions was a site, so the search never seeded a tile for the kernels that
+  are 76% of the batch-256 step. The canonical form sinks the contraction loops below the write
+  loops by `Op_legal` adjacent `Swap`s (the gh-537 split-reduce precedent), re-detects, and every
+  schedule built from the site carries the chain as its PREFIX, so it applies to the original code
+  and replays from a fresh lowering. A plain site keeps an empty prefix, and a segment `detect_conv`
+  claims is never interchanged, so every seed that existed before is byte-identical. Every entry point that
+  reads a site off `opt` must go through the canonical form (seeding, the family tree, the traffic
+  floor, `mma_eligible_sites`, `sketch_schedule`); one that calls `detect_matmul` directly silently
+  sees no backward site. A forward einsum spelled like a gradient (`"bso;bsi=>oi"`) lowers with
+  the output loops first and is a plain site: reproduce backprop's order with an actual backprop
+  (`benchmarks/runners/ocannl/bench_wgrad.ml`) or hand-built IR (`test/operations/matmul_interchange`).
+  Untuned defaults are unchanged: the default GPU plan still renders every contraction with no
+  operand reuse, which is where the batch-scaling collapse itself lives (ahrefs/ocannl#1183).
 ## Dispatch bindings and device properties
 - **A dispatch's launch parameters are read on the HOST, at `Context.run`, and carried to the
   device** — never re-read from the caller's refs when the device gets around to the task. Only
