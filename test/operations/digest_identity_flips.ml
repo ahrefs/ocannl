@@ -7,7 +7,7 @@
 
    - code-borne: the canonical digest changes (and with it the whole key), - keyed: the digest is
    UNCHANGED — the flip is invisible to the lowered code, which is the hazard — while the cache key
-   separates the regimes, - search-shaping / execution-neutral: neither changes.
+   separates the regimes, - search-shaping / placement-shaping / execution-neutral: neither changes.
 
    The issue's own caution applies: flips are calibration, not the mechanism. Absence of change is
    weak evidence in general, so this covers a handful of representatives rather than every key, and
@@ -140,6 +140,17 @@ let () =
   unset_config "ll_ident_style";
   p "search-shaping and execution-neutral knobs leave the identity untouched"
     (String.equal digest0 digest_n && String.equal key0 key_n);
+
+  (* Placement-shaping (gh-ocannl-1192): it steers [Train.tune_placements], which no compile here
+     calls, so this pins that neither the lowering nor the key derivation ever starts reading it;
+     its exclusion from the search-trajectory identity is [flip_abandonment]'s claim. *)
+  set_config "tune_placement_store" "false";
+  set_config "tune_inline_flips" "7";
+  let digest_p, key_p = identity_of ctx in
+  unset_config "tune_placement_store";
+  unset_config "tune_inline_flips";
+  p "placement-shaping knobs leave the identity untouched"
+    (String.equal digest0 digest_p && String.equal key0 key_p);
 
   (* The debug gates bite only at log_level > 1, so the codegen component hashes the EFFECTIVE
      predicates (Codex P1 on PR #337): the regimes must separate where they change the kernel, and

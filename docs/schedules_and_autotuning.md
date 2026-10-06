@@ -327,7 +327,7 @@ the retained procedural analyses alongside the affine engine and raises on diver
   execution-neutral, each with its reason —
   and `test/operations/digest_completeness` fails on a key that is not classified, with
   `digest_identity_flips` calibrating one representative of each class against a real compile
-  (placement-shaping keys, which no compile reads, are pinned by `flip_abandonment` instead).
+  (`flip_abandonment` pins placement-shaping's exclusion from the search-trajectory identity).
   **Schedule identity pins
   numerics** (gh-ocannl-484): a reduction-reassociating op (`Split_reduce`, `Swap`/`Vectorized`
   over accumulations, `Tensorize`) makes the computed values a function of the schedule — e.g.

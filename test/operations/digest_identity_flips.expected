@@ -7,6 +7,7 @@ while the cache key separates the regimes: true
 a cc codegen knob (cc_vector_bytes) leaves the digest alone: true
 and separates the key exactly on the backend that reads it: true
 search-shaping and execution-neutral knobs leave the identity untouched: true
+placement-shaping knobs leave the identity untouched: true
 raising the log level alone does not churn the key: true
 nor does asking for routine logs the log level keeps switched off: true
 while logs that actually reach the kernel separate the key: true
