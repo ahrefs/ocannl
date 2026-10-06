@@ -336,6 +336,33 @@ class SavedLossParityTest(unittest.TestCase):
         empty = dict(saved, losses=[])
         self.assertIn("nothing to compare", orchestrate.saved_loss_parity(empty, "exact", [other]))
 
+    def test_without_a_usable_reference_the_trajectory_still_speaks_for_itself(self):
+        cut = self.checkpoint(complete=False)  # [10.375, null]
+        other = result("pytorch", "cpu", "eager", cut["losses"][:1] * 6)  # workload mlp_wide
+        diverged = self.reference(self.checkpoint(complete=True), 1.0)
+        diverged["losses"] = [float("nan")] * 6
+
+        for refs in ([], [other], [diverged]):
+            with self.subTest(refs=refs):
+                note = orchestrate.saved_loss_parity(cut, "exact", refs)
+                self.assertIn("no usable reference row", note)
+                self.assertNotIn("drift", note)
+                self.assertIn("loss non-finite from step 1", note)
+
+    def test_one_saved_step_is_not_called_stationary(self):
+        saved = self.checkpoint(complete=True)
+        one = dict(saved, losses=saved["losses"][:1])
+        flat = dict(saved, losses=[saved["losses"][0]] * 3)
+        ref = self.reference(saved, 1.0)
+
+        note = orchestrate.saved_loss_parity(one, "exact", [ref])
+        self.assertIn("1 of 6 saved losses", note)
+        self.assertIn("drift 0.0e+00", note)
+        self.assertNotIn("stationary", note)
+        self.assertIn("movement not assessable from one step", note)
+        # Two or more finite steps that do not move are still reported as such.
+        self.assertIn("loss stationary", orchestrate.saved_loss_parity(flat, "exact", [ref]))
+
     def test_the_report_shows_it_beside_the_failure_labelled_as_never_acceptance(self):
         saved = self.checkpoint(complete=True)
         ref = cell("pytorch", "cpu", "eager", [x * (1 + 1e-4) for x in saved["losses"]])

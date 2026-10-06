@@ -1420,20 +1420,30 @@ def saved_loss_parity(checkpoint, regime, results):
     if not losses:
         return f"{kept}: nothing to compare"
     ref = reference_row([r for r in results if r["workload"] == checkpoint.get("workload")])
-    if ref is None or diverged_at(ref["losses"]) is not None:
-        return f"{kept}: no usable reference row for `{checkpoint.get('workload')}`"
-    drift = trajectory_drift(losses, ref["losses"])
     notes = []
-    if drift is not None:
-        tol = parity_tol(checkpoint.get("precision", "f32"), regime)
-        side = "inside" if drift < tol else "outside"
-        notes.append(f"drift {drift:.1e} vs `{'/'.join(REFERENCE)}`, {side} the envelope {tol:g}")
+    if ref is None or diverged_at(ref["losses"]) is not None:
+        # Only the drift needs the reference; what the trajectory says about itself still stands.
+        notes.append(f"no usable reference row for `{checkpoint.get('workload')}`")
+    else:
+        drift = trajectory_drift(losses, ref["losses"])
+        if drift is None:
+            notes.append("no step shared with the reference")
+        else:
+            tol = parity_tol(checkpoint.get("precision", "f32"), regime)
+            side = "inside" if drift < tol else "outside"
+            notes.append(
+                f"drift {drift:.1e} vs `{'/'.join(REFERENCE)}`, {side} the envelope {tol:g}"
+            )
     cut = diverged_at(losses)
     if cut is not None:
         notes.append(f"loss non-finite from step {cut}")
+    elif len(losses) < 2:
+        # One observation cannot move: `loss_moved` would say stationary, which is the gate's
+        # reading of a full trajectory, not a fact about a cell cut short after one step.
+        notes.append("movement not assessable from one step")
     elif not loss_moved(losses):
         notes.append("loss stationary")
-    return f"{kept}: " + ("; ".join(notes) or "no step shared with the reference")
+    return f"{kept}: " + "; ".join(notes)
 
 
 def check_fixture_digests(fixtures, digests_path=None, allow_unpinned=False):
