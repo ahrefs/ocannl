@@ -1997,9 +1997,11 @@ val tune :
      {!Abandonment_replay}; without a rule, it always searches or replays a winner. *)
   ?log:bool ->
   (* Whether this call writes the [autotune:] diagnostic lines to stderr and, after a search,
-     compiles and times the untuned-default in-process control; default from config [autotune_log]
-     (false), which is read once per process. Scoped to this call and to the calling domain, and
-     restored on return or exception, so a test can turn the diagnostics on for one search. *)
+     compiles and times the untuned-default in-process control. Omitted, it inherits the [?log] of
+     an enclosing [tune] call in the same domain, and only without one falls back to config
+     [autotune_log] (false), which is read once per process. Scoped to this call and to the calling
+     domain, and restored on return or exception, so a test can turn the diagnostics on for one
+     search. *)
   ?report:(report -> unit) ->
   Context.t ->
   Ir.Assignments.comp ->
