@@ -493,7 +493,7 @@ The notation for a row is composed of sequences of row specs, and an optional _r
 The syntax of a row variable:
 
 - `..`variable_id`..`: variable_id stands for the row variable identifier,
-- ellipsis `...` is context dependent: it stands for a reserved row variable specific to the kind of the row it appears in (batch, input or output), shared by every `...` of that kind within one spec. The reserved variables cannot be named, so `batch`, `input`, `output` remain available as ordinary labels and `..batch..` is an ordinary user row variable.
+- ellipsis `...` is context dependent: it stands for a reserved row variable specific to the kind of the row it appears in (batch, input or output), shared by every `...` of that kind within one spec. The reserved variables cannot be named, so `batch`, `input`, `output` remain available as ordinary labels and `..batch..` is an ordinary user row variable. Its three-dot misspelling `...batch..` is a parse error whose message names the fix; `dune exec tools/einsum_check.exe -- '<spec>'` checks a spec without a program around it.
 
 The syntax of an axis spec:
 

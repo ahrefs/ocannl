@@ -20,4 +20,18 @@ Testing multichar mode:
   '2*o+k' -> 1 output axes
   '2*o+3*k, x' -> 2 output axes
 
+Testing row variable spellings:
+  '..batch.., seq | heads' -> batch row: batch, output row: <none>
+  '...batch.., seq | heads' -> Parse error at line 1, column 10 in spec: ...batch.., seq | heads; hint: `...` is the unnamed context ellipsis; a named row variable is written `..batch..`, not `...batch..`
+  '..b..|x' -> batch row: b, output row: <none>
+  '...b..|x' -> Parse error at line 1, column 6 in spec: ...b..|x; hint: `...` is the unnamed context ellipsis; a named row variable is written `..b..`, not `...b..`
+  '... batch , .., x' -> Parse error at line 1, column 14 in spec: ... batch , .., x; hint: `...` is the unnamed context ellipsis; a named row variable is written `..batch..`, not `...batch..`
+  '...batch..|x' -> Parse error at line 1, column 10 in spec: ...batch..|x; hint: `...` is the unnamed context ellipsis; a named row variable is written `..batch..`, not `...batch..`; a multi-letter name needs multichar mode: write `..batch,..` and separate the other axes with commas
+  '..batch..|x' -> Parse error at line 1, column 4 in spec: ..batch..|x
+  '..batch,..|x' -> batch row: batch, output row: <none>
+  '..batch.., seq | heads, ..dims..; ..batch.., time | heads, ..dims.. => ..batch.., seq | time -> heads' -> 2 RHSes, result batch row: batch
+  '...batch.., seq | heads, ..dims..; ...batch.., time | heads, ..dims.. => ...batch.., seq | time -> heads' -> Parse error at line 1, column 10 in spec: ...batch.., seq | heads, ..dims..; ...batch.., time | heads, ..dims.. => ...batch.., seq | time -> heads; hint: `...` is the unnamed context ellipsis; a named row variable is written `..batch..`, not `...batch..`
+  '...|...->x' -> batch row: ...batch, output row: <none>
+  'a|b|c' -> Parse error at line 1, column 4 in spec: a|b|c
+
 All tests passed!

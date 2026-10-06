@@ -61,3 +61,11 @@
  (foreign_stubs
   (language c)
   (names fp8_soak_stubs)))
+
+; Parse a spec string without writing a program around it: the reading the PPXs give a literal
+; spec (einsum first, then axis labels), or the parser's error with its hints.
+
+(executable
+ (name einsum_check)
+ (modules einsum_check)
+ (libraries base stdio einsum_parser))
