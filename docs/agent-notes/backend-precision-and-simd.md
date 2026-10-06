@@ -1804,4 +1804,10 @@ files.
   same backend's f32 `pow` narrowed on the host on every backend, and pins the widened spelling
   on CUDA/HIP and Metal. That is an observation of results, not of the
   overload's internals, and says nothing about older Apple GPUs; the test enforces the relationship
-  on every backend, so a toolchain or GPU where it fails goes red there.
+  on every backend, so a toolchain or GPU where it fails goes red there. Its `Vectorized`-loop case
+  guards Metal's packed route, which no half pow reaches today (`vector_prec_ok` admits f32 only,
+  and `lane_expr` declines `ToPowOf`): whichever route the loop takes, every `pow(` in the kernel
+  must be the widened form, beside an f32 `Mul` twin of the same loop that does pack. Enabling half
+  packing with a per-lane `pow(` that skips `binop_syntax` fails it, and the values alone would not
+  (on M4 Max the half overload matches f32 `pow` narrowed bitwise); routing through
+  `binop_syntax` passes.

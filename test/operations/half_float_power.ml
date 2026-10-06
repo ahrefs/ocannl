@@ -112,6 +112,66 @@ let () =
       gated ~when_:is_metal ~on:backend_name "Metal half powers widen both operands into pow"
         (String.is_substring src ~substring:"(half)pow((float)("))
 
+(* The same operands as one [Vectorized] elementwise loop with both operands read from buffers: the
+   shape the explicit vector renderings take, unlike [run]'s fixed-index statements. On Metal the
+   packed route ([vector_style = `Packed_struct]) is where a pow call could meet a pack operand
+   instead of reaching [binop_syntax]'s widening arm, so this pins that every pow call there stays
+   the widened scalar form, whichever route the loop takes. Today none of it packs at half (Metal's
+   [vector_prec_ok] admits f32 only, and its per-lane [lane_expr] declines [ToPowOf] even at f32),
+   so the case guards the change that enables either. The extent, 27, is not a lane multiple, so a
+   packed rendering also keeps its serial remainder. *)
+let run_vec ~prec ~op ~name ~first_id =
+  let len = List.length cases in
+  let node = Ll_test.node_factory ~prec ~first_id ~dims:[| len |] () in
+  let base = node (name ^ "_base") and exp = node (name ^ "_exp") and out = node (name ^ "_out") in
+  List.iter [ base; exp; out ] ~f:Ll_test.materialize;
+  let s = Ll_test.sym () in
+  let at = [| Ll_test.iter s |] in
+  let body =
+    Ll_test.loop_n ~axis:LL.Vectorized s len
+      (Ll_test.set out at (LL.Binop (op, (Ll_test.get base at, prec), (Ll_test.get exp at, prec))))
+  in
+  let o = Ll_test.optimize ~name body in
+  let seed_of f = Array.of_list_map cases ~f in
+  List.hd_exn
+    (Ll_test.execute ~name o
+       ~seed:
+         [
+           (base, seed_of (fun (x, _, _) -> f16 x));
+           (exp, seed_of (fun (_, e, _) -> f16 e));
+           (out, Ll_test.blank len);
+         ]
+       ~read:[ out ])
+
+let count src ~pattern = List.length (String.substr_index_all src ~may_overlap:false ~pattern)
+
+let () =
+  Verdict.case "vectorized half powers" (fun () ->
+      let got = run_vec ~prec:Ops.half ~op:ToPowOf ~name:"hpow_vec" ~first_id:19400 in
+      let single = run_vec ~prec:Ops.single ~op:ToPowOf ~name:"hpow_vec_f32" ~first_id:19500 in
+      p_alli "a vectorized loop's half powers are f32 pow rounded to half once" (Array.to_list got)
+        ~f:(fun i v ->
+          let want = f16 single.(i) in
+          let ok = Int64.equal (Int64.bits_of_float v) (Int64.bits_of_float want) in
+          if not ok then
+            Stdio.eprintf "(not part of the golden) vectorized case %d: half %h, f32 narrowed %h\n"
+              i v want;
+          ok);
+      (* The loop geometry is one the packed route takes (lane-aligned, device-resident, wider than
+         a pack): the same loop at f32 with a [Mul] packs. Without this the pow leg could be
+         declining for a reason of its own, and would say nothing about the packed route. *)
+      ignore (run_vec ~prec:Ops.single ~op:Mul ~name:"hpow_vec_ctl" ~first_id:19600 : float array);
+      gated ~when_:is_metal ~on:backend_name
+        "the vectorized loop's geometry packs on Metal (its f32 Mul twin renders packed)"
+        (String.is_substring (Generated.read "hpow_vec_ctl") ~substring:"reinterpret_cast");
+      let src = Generated.read "hpow_vec" in
+      let widened = count src ~pattern:"(half)pow((float)(" and calls = count src ~pattern:"pow(" in
+      gated ~when_:is_metal ~on:backend_name
+        ~detail:(fun () -> Printf.sprintf "%d of %d pow calls widened" widened calls)
+        "every pow call in a vectorized half loop on Metal is the widened scalar form, never a \
+         pack or vector operand"
+        (widened > 0 && widened = calls))
+
 let () =
   Verdict.case "negative bases" (fun () ->
       let got = run ~prec:Ops.half ~name:"hpow_neg" ~first_id:19300 nan_cases in
