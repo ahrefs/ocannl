@@ -1202,6 +1202,16 @@ module Impl = struct
                     (parens (v1 ^^ string (" > 0.0" ^ s ^ " && ") ^^ v1 ^^ string (" < 1.0" ^ s)))
                  ^^ space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space
                  ^^ string ("0.0" ^ s)))
+      | ToPowOf, Ops.Half_prec _ ->
+          (* Widen both operands and round back once, as CUDA and HIP do (gh-ocannl-1198), so half
+             pow is f32 [pow] narrowed under either compile-option math policy (the modern split on
+             macOS 15+, the legacy [fastMathEnabled=false] on macOS 14) rather than whatever the
+             half overload does there. *)
+          fun v1 v2 ->
+            group
+              (string "(half)pow("
+              ^^ separate comma_sep [ string "(float)" ^^ parens v1; string "(float)" ^^ parens v2 ]
+              ^^ rparen)
       | ToPowOf, _ -> math "pow"
       (* The RNG ops call the same builtins under the same precision contract on every C-family
          backend, so they render through the shared helper. *)
