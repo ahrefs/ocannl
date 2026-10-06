@@ -76,8 +76,44 @@ let test_mode_detection () =
 
   printf "\n"
 
+let test_row_variable_spellings () =
+  printf "Testing row variable spellings:\n";
+  let row_var = Option.value ~default:"<none>" in
+  let show_labels spec =
+    match Einsum_parser.axis_labels_of_spec spec with
+    | labels ->
+        printf "  '%s' -> batch row: %s, output row: %s\n" spec (row_var labels.bcast_batch)
+          (row_var labels.bcast_output)
+    | exception Einsum_parser.Parse_error msg -> printf "  '%s' -> %s\n" spec msg
+  in
+  let show_einsum spec =
+    match Einsum_parser.einsum_of_spec spec with
+    | rhses, result ->
+        printf "  '%s' -> %d RHSes, result batch row: %s\n" spec (List.length rhses)
+          (row_var result.bcast_batch)
+    | exception Einsum_parser.Parse_error msg -> printf "  '%s' -> %s\n" spec msg
+  in
+  (* The named row variable, and its misspelling with the context ellipsis' three dots. *)
+  show_labels "..batch.., seq | heads";
+  show_labels "...batch.., seq | heads";
+  show_labels "..b..|x";
+  show_labels "...b..|x";
+  show_labels "... batch , .., x";
+  (* The attention spec of the shapes slides, both ways (lukstafi/ocannl-staging#1061). *)
+  show_einsum
+    "..batch.., seq | heads, ..dims..; ..batch.., time | heads, ..dims.. => ..batch.., seq | time \
+     -> heads";
+  show_einsum
+    "...batch.., seq | heads, ..dims..; ...batch.., time | heads, ..dims.. => ...batch.., seq | \
+     time -> heads";
+  (* The context ellipsis itself, and an unrelated error, carry no hint. *)
+  show_labels "...|...->x";
+  show_labels "a|b|c";
+  printf "\n"
+
 let () =
   test_mode_detection ();
   test_single_char ();
   test_multichar ();
+  test_row_variable_spellings ();
   printf "All tests passed!\n"
