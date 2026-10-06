@@ -520,6 +520,7 @@ test/operations/ci_matrix.sh parses: true
 test/operations/sweep_components.sh parses: true
 test/operations/sweep_harness.sh parses: true
 test/operations/sweep_remote_fixture.sh parses: true
+tools/action-durations.sh parses: true
 tools/aggregate-skips.sh parses: true
 tools/api-drift.sh parses: true
 tools/batch-backends.sh parses: true
@@ -544,6 +545,8 @@ tools/remote-verify.sh parses: true
 tools/sweep-fingerprint.sh parses: true
 tools/sweep-unit-state.sh parses: true
 tools/sweep.sh parses: true
+tools/test-action-durations.sh uses the shared harness contract: true
+tools/test-action-durations.sh parses: true
 tools/test-ci-durations.sh uses the shared harness contract: true
 tools/test-ci-durations.sh parses: true
 tools/test-ci-shard.sh uses the shared harness contract: true

@@ -33,6 +33,7 @@ shell tools/test-windows-opam-cache.sh
 shell tools/test-ci-times.sh
 shell tools/test-ci-durations.sh
 shell tools/test-ci-shard.sh
+shell tools/test-action-durations.sh
 shell test/operations/ci_matrix.sh
 shell tools/test-machine-verify.sh
 toolchain tools/test-fmt-check.sh
