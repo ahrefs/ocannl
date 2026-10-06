@@ -1010,7 +1010,7 @@ let describe s =
     less the ones a [(data_only_dirs …)] names -- each stanza applying where dune applies it, a
     [(subdir …)] scoping it to that subdirectory. A directory stanza in any other shape raises: the
     caller takes an unreadable tree as every backend. *)
-let dune_files ~root =
+let dune_files ?(workspace_root = true) ~root () =
   let standard e = not (String.is_prefix e ~prefix:"." || String.is_prefix e ~prefix:"_") in
   let matches args e =
     (* Every entry is checked before any is matched: an ordered-set operator ([\\], another [:name])
@@ -1076,20 +1076,39 @@ let dune_files ~root =
               failwith (Printf.sprintf "%s declares (%s …)" project h)
           | _ -> ())
   in
-  let rec workspaces dir =
-    let file = Stdlib.Filename.concat dir "dune-workspace" in
+  (* The root dune builds is the outermost ancestor holding a dune-workspace, or failing one the
+     outermost holding a dune-project: an ancestor that would take the root from [root] (a nested
+     worktree without its own dune-workspace, say) means dune builds a tree this did not read (Codex
+     review on PR #1027). A workspace file itself names its language only. The ancestors are skipped
+     where [root] is read as a copy, not as the workspace ([~workspace_root:false]). *)
+  let absolute =
+    (* The working directory itself for [.], so that its parent is the first ancestor. *)
+    if List.mem [ "."; "" ] root ~equal:String.equal then Stdlib.Sys.getcwd ()
+    else if Stdlib.Filename.is_relative root then Stdlib.Filename.concat (Stdlib.Sys.getcwd ()) root
+    else root
+  in
+  let check_workspace file =
     if Stdlib.Sys.file_exists file then
       List.iter
         (Scan.stanzas (Stdio.In_channel.read_all file))
         ~f:(function
           | Sexp.List (Sexp.Atom "lang" :: _) -> ()
-          | other -> failwith (Printf.sprintf "%s carries %s" file (Sexp.to_string other)));
-    let up = Stdlib.Filename.dirname dir in
-    if not (String.equal up dir) then workspaces up
+          | other -> failwith (Printf.sprintf "%s carries %s" file (Sexp.to_string other)))
   in
-  workspaces
-    (if Stdlib.Filename.is_relative root then Stdlib.Filename.concat (Stdlib.Sys.getcwd ()) root
-     else root);
+  check_workspace (Stdlib.Filename.concat absolute "dune-workspace");
+  (if workspace_root then
+     let own = Stdlib.Sys.file_exists (Stdlib.Filename.concat absolute "dune-workspace") in
+     let rec ancestors dir =
+       let up = Stdlib.Filename.dirname dir in
+       if not (String.equal up dir) then (
+         List.iter [ "dune-workspace"; "dune-project" ] ~f:(fun f ->
+             if
+               Stdlib.Sys.file_exists (Stdlib.Filename.concat up f)
+               && (String.equal f "dune-workspace" || not own)
+             then failwith (Printf.sprintf "%s holds a %s, which takes dune's root" up f));
+         ancestors up)
+     in
+     ancestors absolute);
   let rec under dir =
     let path = if String.is_empty dir then root else Stdlib.Filename.concat root dir in
     let entries = Stdlib.Sys.readdir path |> Array.to_list |> List.sort ~compare:String.compare in

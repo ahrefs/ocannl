@@ -696,13 +696,13 @@ let () =
   file "fixtures/dune" "(not a dune file)";
   file "tools/.hidden/dune" "";
   file "tools/sub/dune" "";
-  let read = List.map (Slot_kind.dune_files ~root) ~f:fst in
+  let read = List.map (Slot_kind.dune_files ~workspace_root:false ~root ()) ~f:fst in
   (* An ordered-set operator changes what the rest of a directory set means; it is not read. *)
   Out_channel.write_all
     (Stdlib.Filename.concat root "dune")
     ~data:"(data_only_dirs :standard \\ plain)";
   let refused_for substring =
-    match Slot_kind.dune_files ~root with
+    match Slot_kind.dune_files ~workspace_root:false ~root () with
     | _ -> false
     | exception Failure msg -> String.is_substring msg ~substring
   in
@@ -733,6 +733,16 @@ let () =
   made := List.filter !made ~f:(fun p -> not (String.is_suffix p ~suffix:"gpu.t"));
   Out_channel.write_all (Stdlib.Filename.concat root "dune") ~data:"(data_only_dirs plain[12])";
   let refused_class = refused_for "data_only_dirs" in
+  (* An ancestor holding a dune-project takes dune's root from a directory without its own
+     dune-workspace, so dune builds a tree this did not read. *)
+  Out_channel.write_all (Stdlib.Filename.concat root "dune") ~data:"";
+  file "dune-project" "(lang dune 3.20)";
+  file "plain/tree/dune" "";
+  let ancestor_root =
+    match Slot_kind.dune_files ~root:(Stdlib.Filename.concat root "plain/tree") () with
+    | _ -> false
+    | exception Failure msg -> String.is_substring msg ~substring:"takes dune's root"
+  in
   List.iter !made ~f:(fun p ->
       if Stdlib.Sys.is_directory p then Stdlib.Sys.rmdir p else Stdlib.Sys.remove p);
   printf "dirs: %s\n" (String.concat ~sep:" " (List.map read ~f:(fun d -> "[" ^ d ^ "]")));
@@ -745,6 +755,7 @@ let () =
   p "a dialect declared in a nested dune-project makes the tree unreadable" refused_nested_dialect;
   p "an implicitly discovered cram test makes the tree unreadable" refused_cram;
   p "a data_only_dirs character class makes the tree unreadable" refused_class;
+  p "an ancestor dune-project taking dune's root makes the tree unreadable" ancestor_root;
   (* DUNE_BUILD_DIR moves the build directory the same way --build-dir does. *)
   let moved =
     match
@@ -770,7 +781,7 @@ let () =
         | Slot_kind.Reaches _ -> false
       in
       p (Printf.sprintf "%s set makes a batch every backend" var) unknown);
-  let live = Slot_kind.dune_files ~root:"../.." in
+  let live = Slot_kind.dune_files ~workspace_root:false ~root:"../.." () in
   List.iter
     [
       ("build @test/operations/scans", "names nothing");

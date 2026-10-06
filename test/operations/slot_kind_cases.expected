@@ -273,6 +273,7 @@ a dialect declared in dune-project makes the tree unreadable: true
 a dialect declared in a nested dune-project makes the tree unreadable: true
 an implicitly discovered cram test makes the tree unreadable: true
 a data_only_dirs character class makes the tree unreadable: true
+an ancestor dune-project taking dune's root makes the tree unreadable: true
 an alias rooted in a moved build directory is every backend: true
 DUNE_DIFF_COMMAND set makes a batch every backend: true
 DUNE_INSTRUMENT_WITH set makes a batch every backend: true

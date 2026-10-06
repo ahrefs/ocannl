@@ -12,7 +12,7 @@ open Stdio
 
 let () =
   let argv = Array.to_list Stdlib.Sys.argv |> List.tl_exn in
-  match Test_utils.Slot_kind.dune_files ~root:"." with
+  match Test_utils.Slot_kind.dune_files ~root:"." () with
   | exception exn -> printf "unknown: the source tree is unreadable here (%s)\n" (Exn.to_string exn)
   | files -> (
       match Test_utils.Slot_kind.answer ~dune_files:files argv with
