@@ -53,13 +53,13 @@ Verified current state (all on `master` @ `e22a1d69`):
 - **Universal pool allocator** (#344, `arrayjit/lib/backends.ml` planner +
   `Backend_intf.buffer_loc = { pool_id; offset }`): bump-packed pooled buffers
   on all backends, offsets padded to `Ops.buffer_alignment = 32` bytes
-  (`arrayjit/lib/ops.ml:237`).
+  (`arrayjit/lib/ops.ml`).
 - **Interval analysis** (`arrayjit/lib/interval.ml`) folds bounds guards;
   index precision is signed int32/int64 selected by `Ops.index_prec` /
-  `large_models` (`arrayjit/lib/ops.ml:74`).
+  `large_models` (both in `arrayjit/lib/ops.ml`).
 - **Backends renamed** (†): `cc` (default), `multidev_cc` (one domain + FIFO per
   device ordinal), `cuda`, `metal`; old names are `get_backend` aliases
-  (`arrayjit/lib/backends.ml:843-855` on master — this branch's tree still has
+  (the `Backends.get_backend` name match on master — this branch's tree still has
   the pre-rename `sync_cc`/`multicore_cc` surface). Metal encodes fissioned
   segments of one routine into batched dispatches on one command buffer with
   event chains at segment boundaries (†).
@@ -74,12 +74,13 @@ Verified current state (all on `master` @ `e22a1d69`):
 
 Still true from the proposal: **no GELU anywhere in the tree** (`git grep gelu`
 on master is empty outside docs), **no AdamW / LR scheduling / gradient
-clipping** in `lib/train.ml` (only `sgd_one`/`sgd_update`, line 76), **no
+clipping** in `lib/train.ml` (only `sgd_one`/`sgd_update`), **no
 warp-shuffle builtins** (`git grep shfl` matches nothing; `Workgroup_reduce`
 communicates only through workgroup-shared memory + barriers per
 `low_level.mli`), and mixed-precision *training* infrastructure (master
 weights) does not exist — though the precision *types* (`half`, `bfloat16`,
-`fp8`) and per-tensor precision plumbing do (`arrayjit/lib/ops.ml:28-59`).
+`fp8`) and per-tensor precision plumbing do (the `precision` and `prec` types
+in `arrayjit/lib/ops.ml`).
 
 **Driver workload framing.** GPT-2 (and Gemma) end-to-end inference has been
 promoted to a ready task (repo home: `docs/proposals/gh-ocannl-377.md`), and is
@@ -399,7 +400,7 @@ open tasks' proposals:
    rather than `powf` per element; keep weight decay decoupled
    (`p =- lr *. (m_hat /. (sqrt v_hat + eps) + wd *. p)` in `%cd`). Moments are
    per-parameter tensors declared with `{ m } `/`{ v }` inline `%cd`
-   declarations exactly like `sgd_momentum` today (`lib/train.ml:76-90`).
+   declarations exactly like `sgd_momentum` today (`sgd_one` in `lib/train.ml`).
    llm.c keeps m/v in **fp32 even when params are BF16** — the chain's
    mixed-precision step should preserve that default and make lower-precision
    moments the *quantized-AdamW* step, not the baseline.
@@ -468,8 +469,8 @@ open tasks' proposals:
    tempts an atomicAdd shortcut.
 5. **BF16 differs from llm.c's assumptions on the OCANNL side in one spot**:
    `Ops.Bfloat16` is currently represented as uint16 ("Using uint16
-   representation for now", `arrayjit/lib/ops.ml:29`) — the optimizer-chain
-   mixed-precision step lands on top of whatever conversion builtins exist per
+   representation for now", the `Bfloat16` constructor of `Ops.precision`) — the
+   optimizer-chain mixed-precision step lands on top of whatever conversion builtins exist per
    backend, so the BF16 story (and its `check_half_prec_constants_cutoff`
    analog) needs an audit before master-weights work starts.
 6. **Occupancy-driven grid sizing** (llm.c backward LN: grid =

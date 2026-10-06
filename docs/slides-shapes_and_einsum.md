@@ -364,9 +364,9 @@ let%op layer_norm ~label ?(epsilon = 1e-5) () x =
 
 (* Attention scores with flexible batching *)
 let scores = 
-  q +* "...batch.., seq | heads, ..dims..; 
-        ...batch.., time | heads, ..dims.. => 
-        ...batch.., seq | time -> heads" 
+  q +* "..batch.., seq | heads, ..dims..; 
+        ..batch.., time | heads, ..dims.. => 
+        ..batch.., seq | time -> heads" 
     ["heads"; "dims"] k
 ```
 
@@ -526,7 +526,7 @@ Try building a simplified attention mechanism:
 
 {pause}
 
-Check [nn_blocks.ml](https://github.com/ahrefs/ocannl/blob/master/lib/nn_blocks.ml#L68), which uses an input axis in the scores.
+Check `multi_head_attention` in [nn_blocks.ml](https://github.com/ahrefs/ocannl/blob/master/lib/nn_blocks.ml), which uses an input axis in the scores.
 
 {pause up}
 ## Summary
@@ -567,5 +567,5 @@ Check [nn_blocks.ml](https://github.com/ahrefs/ocannl/blob/master/lib/nn_blocks.
 * [OCANNL Documentation](https://ahrefs.github.io/ocannl/docs)
 * [doc/syntax_extensions.md](syntax_extensions.html) - Full `%op` and `%cd` syntax
 * [tensor/shape.mli](../dev/neural_nets_lib/Ocannl/Shape/index.html) - Shape inference internals
-* [lib/nn_blocks.ml](https://github.com/ahrefs/ocannl/blob/master/lib/nn_blocks.ml#L68) - Production examples
+* [lib/nn_blocks.ml](https://github.com/ahrefs/ocannl/blob/master/lib/nn_blocks.ml) - Production examples
 * [test/einsum_trivia.ml](https://github.com/ahrefs/ocannl/blob/master/test/einsum/einsum_trivia.ml) - Einsum test cases

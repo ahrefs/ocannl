@@ -73,13 +73,13 @@ Assignments.comp (high-level)
   --> Task.t (executable unit scheduled on a stream)
 ```
 
-Key files:
-- `arrayjit/lib/assignments.ml` -- `comp` type (lines 85-90), `to_low_level` (line 190)
-- `arrayjit/lib/low_level.ml` -- IR types (lines 33-65), optimization pipeline `optimize_proc` (line 1238)
+Key files (as of the March 2026 tree this study read):
+- `arrayjit/lib/assignments.ml` -- `comp` type, `to_low_level`
+- `arrayjit/lib/low_level.ml` -- IR types (`t`, `scalar_t`), optimization pipeline `optimize_proc`
 - `arrayjit/lib/c_syntax.ml` -- `compile_proc` generates a single C/CUDA/Metal function per routine
-- `arrayjit/lib/cuda_backend.ml` -- kernel launch at `grid_dim_x:1, block_dim_x:1` (line 979), `kernel_prep_line` guard (line 328-329)
-- `arrayjit/lib/metal_backend.ml` -- dispatch with `threadgroups_per_grid: {1,1,1}` (line 793)
-- `arrayjit/lib/backend_intf.ml` -- `routine` type (lines 51-61)
+- `arrayjit/lib/cuda_backend.ml` -- kernel launch at `grid_dim_x:1, block_dim_x:1` in `link_proc`, the `kernel_prep_line` guard
+- `arrayjit/lib/metal_backend.ml` -- dispatch with `threadgroups_per_grid: {1,1,1}` in `link_proc`
+- `arrayjit/lib/backend_intf.ml` -- `routine` type
 
 **What OCANNL already does (megakernel-aligned):**
 
@@ -91,9 +91,9 @@ Key files:
 
 **What OCANNL lacks compared to state-of-the-art megakernels:**
 
-1. **Single-threaded execution.** CUDA kernels launch with `grid_dim=1, block_dim=1` (line 979). The `kernel_prep_line` guard (line 328-329) reads: `"if (threadIdx.x != 0 || blockIdx.x != 0) { return; }"`. Only one GPU thread executes the entire kernel. All megakernel benefits (within-kernel parallelism, SM-level task distribution, pipelining) require multi-threaded execution as a prerequisite.
+1. **Single-threaded execution.** CUDA kernels launch with `grid_dim=1, block_dim=1` (`Cuda_backend.link_proc`). The `kernel_prep_line` guard reads: `"if (threadIdx.x != 0 || blockIdx.x != 0) { return; }"`. Only one GPU thread executes the entire kernel. All megakernel benefits (within-kernel parallelism, SM-level task distribution, pipelining) require multi-threaded execution as a prerequisite.
 
-2. **No within-kernel synchronization.** Operations execute linearly within a routine. There are no barriers, counters, or events for intra-kernel coordination. All synchronization is host-mediated via stream events (see `backends.ml` synchronization section, `backend_intf.ml` lines 91-116).
+2. **No within-kernel synchronization.** Operations execute linearly within a routine. There are no barriers, counters, or events for intra-kernel coordination. All synchronization is host-mediated via stream events (see `backends.ml` synchronization section, and the per-stream event tables of the `device_ref` and `stream_ref` records in `backend_intf.ml`).
 
 3. **No cross-operator pipelining.** Independent operations within a single routine cannot overlap. Layer N's GEMM cannot overlap with layer N-1's activation because execution is strictly sequential.
 

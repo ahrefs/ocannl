@@ -1308,7 +1308,7 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   `<name>.exe.output` rule that runs the executable is served from the memo; a comment appended to the test's `.ml` rebuilds it, but
   the compiled objects are byte-identical, so early cutoff serves the same `.exe.output` again;
   appending to the copied `test/operations/ocannl_config` instead fails with "Multiple rules
-  generated" (it is a `copy_files` target, `test/operations/dune` line 2) and leaves an untracked
+  generated" (it is the target of the `copy_files` stanza at the top of `test/operations/dune`) and leaves an untracked
   file to `rm`. `dune build --sandbox=copy @<dir>/runtest-<name>` does re-execute, but once per
   toggle of the sandbox mode, and each toggle re-runs every rule the alias reaches (over a minute
   for one 35 s test). Deleting `_build/default/<dir>/<name>.exe.output`, with or without

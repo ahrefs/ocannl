@@ -459,7 +459,7 @@ files.
   contribute no information to either query, so they decline rather than admit; a flattened
   `Sub_axis` run is a known coordinate (gh-ocannl-1162, lowering-and-analysis.md).
 - **The gh-490 runtime-extent guard is NOT constant-bounded** — worth knowing, because assuming it
-  was cost a review round: `Assignments.extent_guard` (assignments.ml:225) emits
+  was cost a review round: `Assignments.extent_guard` (`arrayjit/lib/assignments.ml`) emits
   `Cmplt (Embed_index (Iterator index), Embed_index (Iterator sym.static_symbol))`, whose bound is a
   STATIC symbol, a kernel parameter bound at launch. (`Schedule`'s Pad guards ARE constant-bounded;
   the two shapes are easy to conflate.) A static symbol cannot select among enclosing loop
