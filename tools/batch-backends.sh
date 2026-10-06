@@ -21,9 +21,13 @@
 #     -- …`, which env_var_deps enforces on every stanza that does not read the
 #     configuration): they hold it whatever the configuration says.
 #     `ocannl_slot_kind` (test/config, over Test_utils.Slot_kind) lists each
-#     named backend with the first stanza naming it, or answers unknown for an
-#     argv it does not model.
-#   - The configuration the other stanzas read: `ocannl_read_config`
+#     named backend with the first stanza naming it, says whether a reached
+#     stanza reads the configuration (`reads config`), or answers unknown for
+#     an argv it does not model.
+#   - The configuration the reading stanzas read, asked only when the argv
+#     reaches one (gh-ocannl-1095): a batch reaching only stanzas that name
+#     theirs -- `@test/operations/scans`, all `none` -- holds only what they
+#     name, whatever a test configuration says. `ocannl_read_config`
 #     (test/config, the same Utils resolution a test run makes: config file,
 #     environment, command line), asked from each directory whose
 #     `ocannl_config` a test can read -- test/config (copied by every test/*
@@ -85,6 +89,8 @@ batch_say() { # <log> <line>
 batch_summary() { # the batch's backends, for an announcement
   if [ -n "$batch_unknown" ]; then
     printf 'any backend (its backends are unread: %s)' "$batch_unknown"
+  elif [ -z "$batch_holds" ]; then
+    printf 'no backend'
   else
     batch_backends | paste -s -d ' ' - | sed 's/ /, /g'
   fi
@@ -106,7 +112,7 @@ batch_box_has_hazard() {
 # The readers' answers go through files beside <log>, not pipes: a reader that
 # leaves a background descendant holding its output must not hold the read.
 batch_resolve() { # <dune> <log> dune-argv...
-  local dune=$1 log=$2 a v reader reach out line rest b ended= d
+  local dune=$1 log=$2 a v reader reach out line rest b ended= d reads=
   shift 2
   batch_holds= batch_unknown= batch_resolved=1
   if [ "${1:-}" = exec ]; then
@@ -166,6 +172,7 @@ batch_resolve() { # <dune> <log> dune-argv...
             { batch_unknown="ocannl_slot_kind named a backend this does not know: '$line'"; break; }
           batch_add "$b" "${rest#*: }"
           ;;
+        'reads config: '*) reads=${line#reads config: } ;;
         end) ended=1 ;;
         'unknown: '*) batch_unknown=${line#unknown: }; break ;;
         *) batch_unknown="ocannl_slot_kind answered '${line}'"; break ;;
@@ -174,7 +181,8 @@ batch_resolve() { # <dune> <log> dune-argv...
     [ -n "$batch_unknown" ] || [ -n "$ended" ] ||
       batch_unknown="ocannl_slot_kind's answer was cut short: '${out}'"
   fi
-  if [ -z "$batch_unknown" ]; then
+  if [ -z "$batch_unknown" ] && [ -n "$reads" ]; then
+    batch_say "$log" "reads the configuration: $reads"
     for d in $BATCH_CONFIG_DIRS; do
       if ! (cd "$d" && exec "$reader" --read=backend --output=stdout) </dev/null >"$log.read" 2>/dev/null; then
         rm -f "$log.read"
@@ -201,7 +209,11 @@ batch_resolve() { # <dune> <log> dune-argv...
   fi
   if [ -n "$batch_unknown" ]; then
     batch_say "$log" "its backends are unread, so it is taken to hold any: $batch_unknown"
+  elif [ -z "$batch_holds" ]; then
+    batch_say "$log" "holds no backend: it reaches no stanza that names one or reads the configuration"
   else
+    [ -n "$reads" ] ||
+      batch_say "$log" "reads no configuration: no stanza it reaches selects its backend from one"
     while IFS=' ' read -r b rest; do
       [ -z "$b" ] || batch_say "$log" "holds $b: $rest"
     done <<<"$batch_holds"

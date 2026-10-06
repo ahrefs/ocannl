@@ -113,7 +113,7 @@ let () =
   then
     let steps =
       match Stdlib.Sys.getenv_opt "BENCH_STEPS" with
-      | Some "parity" -> (H.protocol_of_st st).H.parity_steps
+      | Some "parity" -> H.meta_int st "parity_steps"
       | _ -> 3
     in
     for step = 0 to steps - 1 do

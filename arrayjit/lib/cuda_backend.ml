@@ -1914,6 +1914,8 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
            simdgroup_width = Some 32;
            (* gh-ocannl-1124: measured true on the RTX of rog-nv; see the field. *)
            lane_scalar_recompute_cheap = true;
+           (* gh-ocannl-1168: unmeasured beyond one simdgroup; see the field. *)
+           lane_all_reduce_simdgroups = 1;
            (* gh-ocannl-1194: the tuned f32 transformer loses with the block fold on the measured
               RTX, while the two-pass rewrite keeps the tf32 gain. Keep unmeasured CUDA devices
               conservative too; an explicit block size still requests the fold. *)

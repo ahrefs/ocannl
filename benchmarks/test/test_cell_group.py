@@ -81,6 +81,37 @@ def kill_the_group_on_cleanup(case, pidfile):
     case.addCleanup(kill_what_is_left)
 
 
+# Short read-only probes a driver may run directly: they finish in moments and fork no workers of
+# their own, unlike a benchmark cell or a build, which go through `cell_group`.
+READ_ONLY_PROBES = ("git", "ps")
+
+
+def unmanaged_spawn_sites(source, filename="<source>"):
+    """The `line subprocess.<call>` sites in `source` that start a child outside `cell_group`,
+    other than a call whose argv is a list literal naming one of `READ_ONLY_PROBES`."""
+    sites = []
+    for node in ast.walk(ast.parse(source, filename=filename)):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+            continue
+        owner = node.func.value
+        if not (
+            isinstance(owner, ast.Name)
+            and owner.id == "subprocess"
+            and node.func.attr in ("Popen", "run", "call", "check_call", "check_output")
+        ):
+            continue
+        argv = node.args[0] if node.args else None
+        if (
+            isinstance(argv, ast.List)
+            and argv.elts
+            and isinstance(argv.elts[0], ast.Constant)
+            and argv.elts[0].value in READ_ONLY_PROBES
+        ):
+            continue
+        sites.append(f"{node.lineno} subprocess.{node.func.attr}")
+    return sites
+
+
 class CellGroupTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -304,7 +335,7 @@ class CellGroupTest(unittest.TestCase):
 
     @unittest.skipUnless(os.name == "posix", "driver signal fixtures require POSIX")
     def test_gh1002_driver_cancellation_collects_the_cell(self):
-        for signum in (signal.SIGTERM, signal.SIGINT):
+        for signum in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
             with self.subTest(signal=signum):
                 pidfile = self.dir / f"gh1002-cancel-{signum}.pid"
                 kill_the_group_on_cleanup(self, pidfile)
@@ -402,20 +433,157 @@ class CellGroupTest(unittest.TestCase):
         self.assertEqual(len(spawned), 1)
         self.assertTrue(self.wait_gone(spawned[0]))
 
+    def gh1002_build_driver(self, builder_source, published, timeout=30, bare=False):
+        """A driver process running gh1002's preflight build, with `builder_source` standing in for
+        Dune and `self.dir` for ROOT. The builder is handed `published`, a path RELATIVE to its
+        working directory, so a build started anywhere but ROOT publishes nowhere the test looks.
+
+        `bare` runs the build the way it ran before gh-ocannl-1200, by a direct `subprocess.run`:
+        the control showing that the fixture's sleeper does outlive a build which is not collected
+        as a group, so that the managed path's reaping is a claim the fixture could have failed.
+        The driver leads a session of its own so that the sleeper the control leaks sits in a group
+        `kill_the_group` will collect, rather than in this test process's own."""
+        build = (
+            "subprocess.run(driver.BUILD_ARGV, cwd=driver.ROOT)"
+            if bare
+            else "driver.build_bench_gpt()"
+        )
+        driver = subprocess.Popen(
+            self.python(
+                "import pathlib, subprocess, sys, gh1002_cells as driver\n"
+                "driver._cancellation.install()\n"
+                "driver.CELL_TERMINATE_GRACE_S = 0.1\n"
+                f"driver.BUILD_TIMEOUT_S = {timeout!r}\n"
+                "driver.ROOT = pathlib.Path(sys.argv[2])\n"
+                "driver.BUILD_ARGV = [sys.executable, '-c', sys.argv[1], sys.argv[3]]\n"
+                f"{build}\n"
+                "print('built')\n",
+                builder_source,
+                self.dir,
+                published,
+            ),
+            cwd=HERE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=os.name == "posix",
+        )
+
+        def cleanup():
+            if driver.poll() is None:
+                driver.kill()
+            driver.communicate(timeout=10)
+
+        self.addCleanup(cleanup)
+        return driver
+
+    @unittest.skipUnless(os.name == "posix", "driver signal fixtures require POSIX")
+    def test_gh1002_build_cancellation_collects_the_builders_descendants(self):
+        # The builder forks a SIGTERM-ignoring sleeper, as Dune forks compilers, and waits on it.
+        builder = (
+            "import subprocess, sys, time\n"
+            "kid = subprocess.Popen([sys.executable, '-c', "
+            "'import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+            "time.sleep(300)'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
+            + publish_pid("sys.argv[1]", "kid.pid")
+            + "time.sleep(300)\n"
+        )
+        # SIGHUP is the hangup of the terminal or ssh session the driver runs in: with the build in
+        # a session of its own, the driver is the only one to receive it.
+        for bare in (True, False):
+            for signum in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+                with self.subTest(bare=bare, signal=signum):
+                    published = f"builder-{'bare' if bare else 'managed'}-{signum}.pid"
+                    pidfile = self.dir / published
+                    kill_the_group_on_cleanup(self, pidfile)
+                    driver = self.gh1002_build_driver(builder, published, bare=bare)
+                    self.wait_file(pidfile)
+                    sleeper = int(pidfile.read_text())
+                    driver.send_signal(signum)
+                    out, err = driver.communicate(timeout=10)
+                    self.assertNotEqual(driver.returncode, 0, (out, err))
+                    self.assertNotIn("built", out)
+                    if bare:
+                        # The control: the old path killed the builder and left its descendant.
+                        self.assertTrue(self.alive(sleeper), "the bare build leaked nothing")
+                    else:
+                        self.assertTrue(self.wait_gone(sleeper), "sleeper outlived cancellation")
+
+    def test_gh1002_build_timeout_collects_the_builders_descendants(self):
+        pidfile = self.dir / "builder-timeout.pid"
+        kill_the_group_on_cleanup(self, pidfile)
+        driver = self.gh1002_build_driver(
+            "import subprocess, sys, time\n"
+            "kid = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(300)'],\n"
+            "  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
+            + publish_pid("sys.argv[1]", "kid.pid")
+            + "time.sleep(300)\n",
+            pidfile.name,
+            timeout=2,
+        )
+        self.wait_file(pidfile)
+        sleeper = int(pidfile.read_text())
+        out, err = driver.communicate(timeout=20)
+        self.assertEqual(driver.returncode, 1, (out, err))
+        self.assertNotIn("built", out)
+        self.assertIn("failed (status timeout)", err)
+        self.assertTrue(self.wait_gone(sleeper), "sleeper outlived the build's deadline")
+
+    def test_gh1002_completed_build_collects_its_descendant(self):
+        pidfile = self.dir / "builder-done.pid"
+        kill_the_group_on_cleanup(self, pidfile)
+        driver = self.gh1002_build_driver(
+            "import subprocess, sys\n"
+            "kid = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(300)'],\n"
+            "  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
+            + publish_pid("sys.argv[1]", "kid.pid"),
+            pidfile.name,
+        )
+        out, err = driver.communicate(timeout=20)
+        self.assertEqual(driver.returncode, 0, err)
+        self.assertEqual(out.strip(), "built")
+        # Published relative to the builder's working directory: the build ran from ROOT.
+        sleeper = int(pidfile.read_text())
+        self.assertTrue(self.wait_gone(sleeper), "descendant outlived the completed build")
+
+    def test_gh1002_build_refuses_an_unproven_cleanup(self):
+        group = unittest.mock.Mock()
+        group.wait.return_value = 0
+        group.pid = 123
+        for observation, reaped in ((cell_group.UNKNOWN, True), (cell_group.GONE, False)):
+            with self.subTest(observation=observation, reaped=reaped):
+                result = cell_group.Termination(None, None, observation, reaped)
+                with unittest.mock.patch.object(cell_group, "spawn", return_value=group) as spawn, \
+                     unittest.mock.patch.object(cell_group, "terminate", return_value=result):
+                    # CleanupFailed, not the build-failure exit: a build that SUCCEEDED beside a
+                    # survivor is no more fit to measure under.
+                    with self.assertRaisesRegex(cell_group.CleanupFailed, "not proven gone"):
+                        gh1002_cells.build_bench_gpt()
+                spawn.assert_called_once_with(gh1002_cells.BUILD_ARGV, cwd=gh1002_cells.ROOT)
+                group.wait.assert_called_with(timeout=gh1002_cells.BUILD_TIMEOUT_S)
+
     def test_sweep_drivers_have_no_unmanaged_spawn_site(self):
-        offenders = []
-        for path in (HERE / "orchestrate.py", HERE / "gh675_cells.py", HERE / "gh1181_cells.py"):
-            tree = ast.parse(path.read_text(), filename=str(path))
-            for node in ast.walk(tree):
-                if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
-                    continue
-                owner = node.func.value
-                if (
-                    isinstance(owner, ast.Name)
-                    and owner.id == "subprocess"
-                    and node.func.attr in ("Popen", "run", "call", "check_call", "check_output")
-                ):
-                    offenders.append(f"{path.name}:{node.lineno} subprocess.{node.func.attr}")
+        # Two-sided: the scan flags the preflight build exactly as gh1002_cells.py spelled it before
+        # gh-ocannl-1200, and passes its read-only probes, so it can neither miss a direct build
+        # nor pass gh1002_cells.py by flagging nothing there.
+        self.assertEqual(
+            unmanaged_spawn_sites(
+                'subprocess.run(["dune", "build", "x.exe"], cwd=ROOT)\n'
+                'subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT)\n'
+                'subprocess.run(["ps", "-Ao", "pcpu,pid,comm", "-r"])\n'
+            ),
+            ["1 subprocess.run"],
+        )
+        offenders = [
+            f"{path.name}:{site}"
+            for path in (
+                HERE / "orchestrate.py",
+                HERE / "gh675_cells.py",
+                HERE / "gh1181_cells.py",
+                HERE / "gh1002_cells.py",
+            )
+            for site in unmanaged_spawn_sites(path.read_text(), str(path))
+        ]
         self.assertEqual(offenders, [], "unmanaged benchmark child sites: " + ", ".join(offenders))
 
     def test_a_published_pid_file_never_exists_without_its_pid(self):
@@ -548,6 +716,20 @@ class CellGroupTest(unittest.TestCase):
         job.close.assert_called_once_with()
         child.kill.assert_called_once_with()
         child.wait.assert_called_once_with(timeout=1)
+
+    @unittest.skipUnless(os.name == "posix", "SIGHUP is POSIX-only")
+    def test_a_nohup_driver_keeps_ignoring_hangups(self):
+        # A driver started under `nohup` asked to outlive the hangup: `install` must not turn the
+        # ignored SIGHUP back into a termination. Two-sided: a default SIGHUP is taken over.
+        self.addCleanup(signal.signal, signal.SIGHUP, signal.getsignal(signal.SIGHUP))
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            self.addCleanup(signal.signal, sig, signal.getsignal(sig))
+        signal.signal(signal.SIGHUP, signal.SIG_IGN)
+        cell_group.CancellationDeferral("nohup driver").install()
+        self.assertIs(signal.getsignal(signal.SIGHUP), signal.SIG_IGN)
+        signal.signal(signal.SIGHUP, signal.SIG_DFL)
+        cell_group.CancellationDeferral("terminal driver").install()
+        self.assertTrue(callable(signal.getsignal(signal.SIGHUP)))
 
     def test_a_held_signal_does_not_replace_a_cleanup_failure(self):
         cancellation = cell_group.CancellationDeferral("test driver")

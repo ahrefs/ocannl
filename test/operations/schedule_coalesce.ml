@@ -407,3 +407,80 @@ let () =
           not
             (List.is_empty (Autotune.coalesced_seed_params ~is_gpu:true ~is_cpu:false ~limits pre))
       | _ -> false)
+
+(* {1 The folded zero of a GPU fission segment}
+
+   The search's segmentation folds a reduction's covering zero, expanded per cell, into the
+   reduction's own segment (gh-ocannl-1175): the q/k/v segment the real step searches carries the
+   zero nest beside the site. The prefix coalesces that nest's pair too, so it takes the merged
+   chain's geometry as a companion; left uncoalesced it would refute the branch on companion
+   coverage. *)
+
+let () =
+  let cand =
+    let xv = x () and wv = w () in
+    let%op z = xv +* "bsk;hjk=>bshj" wv in
+    Train.set_materialized z.Tensor.value;
+    z
+  in
+  let opt = capture (named "co_folded" (Train.forward cand)) in
+  let n = bb * ss * hh * ee in
+  let seed = [ (cand.Tensor.value, Array.create ~len:n (-999.)) ] in
+  let want =
+    List.hd_exn (L.execute ~name:"co_folded_materialized" opt ~seed ~read:[ cand.Tensor.value ])
+  in
+  let limits = Ir.Backend_intf.no_hardware_limits in
+  let segments =
+    Sched.fission_scheduled ~fold_zeros:true ~keep_mapping:(Sched.default_gpu ~limits)
+      ~preset:(Sched.default_gpu ~limits) ~zero_sched:(Sched.zero_expansion ~limits)
+      ~static_indices:[]
+      {
+        opt with
+        LL.traced_store = Hashtbl.copy opt.LL.traced_store;
+        LL.optimize_ctx = LL.copy_optimize_ctx opt.LL.optimize_ctx;
+      }
+  in
+  let folded =
+    List.find_map segments ~f:(fun (kind, pre, _, _) ->
+        match (kind, Autotune.coalesce_prefix pre) with
+        | `Normal, Some [ Sched.Coalesce _; Sched.Coalesce _ ] -> Some pre
+        | _ -> None)
+  in
+  p "folded: the segment's zero nest and site both coalesce" (Option.is_some folded);
+  Option.iter folded ~f:(fun pre ->
+      let seeds = Autotune.coalesced_seed_params ~is_gpu:true ~is_cpu:false ~limits pre in
+      let apply sched =
+        Sched.apply sched
+          {
+            pre with
+            LL.traced_store = Hashtbl.copy pre.LL.traced_store;
+            LL.optimize_ctx = LL.copy_optimize_ctx pre.LL.optimize_ctx;
+          }
+      in
+      p_exists "folded: the branch seeds a column tile wider than one head" seeds ~f:(fun q ->
+          q.Autotune.sk_bn > ee);
+      p_all "folded: every coalesced schedule constructs and validates" seeds ~f:(fun q ->
+          match apply (Autotune.sketch_schedule ~accum_prec ~p:q pre) with
+          | o -> (
+              match LL.validate_parallel o.LL.optimize_ctx.LL.placements o.LL.llc with
+              | () -> true
+              | exception exn ->
+                  Stdio.eprintf "folded validate_parallel FAILED: %s\n" (Exn.to_string exn);
+                  false)
+          | exception exn ->
+              Stdio.eprintf "folded schedule FAILED: %s\n" (Exn.to_string exn);
+              false);
+      let label = "folded: every coalesced seed executes to the materialized run" in
+      if on_gpu then
+        p_all label
+          (List.mapi seeds ~f:(fun i q -> (i, q)))
+          ~f:(fun (i, q) ->
+            let o = apply (Autotune.sketch_schedule ~accum_prec ~p:q pre) in
+            let got =
+              List.hd_exn
+                (L.execute
+                   ~name:("co_folded_seed_" ^ Int.to_string i)
+                   o ~seed ~read:[ cand.Tensor.value ])
+            in
+            Array.equal Float.equal got want)
+      else skipped label)

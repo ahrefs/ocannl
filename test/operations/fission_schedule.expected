@@ -25,6 +25,7 @@ aligned: the scratch is not promoted: true
 arity: default mode merges the GEMM with its row-max companion: true
 arity: arity_cuts frees the GEMM from the row-max companion: true
 arity: bias+relu companion stays merged in both modes: true
-arity: Zero_out-separated sum-reduce segments identically in both modes: true
+arity: each covering zero folds into its own sum-reduce in both modes: true
+arity: the untuned default keeps each sum-reduce zero in its own kernel: true
 backward gradient values correct: true
 backward pass fissioned: true

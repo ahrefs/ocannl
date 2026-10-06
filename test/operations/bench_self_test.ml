@@ -39,6 +39,97 @@ let string_field j k = match field j k with Some (`String s) -> Some s | _ -> No
 let is_str j k expected =
   Option.value_map (string_field j k) ~default:false ~f:(String.equal expected)
 
+(* gh-ocannl-1209: the checkpoints a cell leaves before its later stages, read back the way a driver
+   reads a cell's log -- every line behind the prefix, in order. *)
+let checkpoints_in text =
+  String.split_lines text
+  |> List.filter_map ~f:(fun line ->
+      Option.bind (String.chop_prefix line ~prefix:Bench_json.checkpoint_prefix) ~f:(fun obj ->
+          try Some (Yojson.Safe.from_string obj) with _ -> None))
+
+let capture_file suffix = Stdlib.Filename.temp_file "bench_self_test" suffix
+
+let read_and_remove path =
+  let text = Stdio.In_channel.read_all path in
+  (try Unix.unlink path with Unix.Unix_error _ -> ());
+  text
+
+(* The control the checkpoints exist for: a cell killed in its LAST stage, after all its losses were
+   observed, the way a driver's cap killed the TUF s1024 cell inside the dominant-kernel instrument.
+   The child runs the real protocol with the instrument replaced by a probe that ends its process
+   with [Unix._exit]: like the cap's SIGKILL, nothing unwinds and no OCaml channel is flushed -- so
+   a checkpoint the harness left in [stderr]'s buffer is lost here exactly as it would be there, and
+   its status is one the parent can tell from every other exit on every platform. The marker is
+   written straight to the descriptor for the same reason: printing it through [Stdio.eprintf] would
+   flush the very buffer under test. An argv marker rather than an environment variable, so nothing
+   ambient can put a run into this mode (as in atomic_file_race). The kill is deterministic: no
+   deadline races the compile. *)
+let killed_in_diagnostics_arg = "--killed-in-diagnostics"
+let late_probe_marker = "bench_self_test: late probe reached; ending this process unflushed"
+
+(* 128 + SIGKILL, as a shell reports a killed process; any other status is some other exit. *)
+let killed_status = 137
+
+let () =
+  if Array.exists Stdlib.Sys.argv ~f:(String.equal killed_in_diagnostics_arg) then (
+    ignore
+      (H.run_self_test
+         ~late_probe:(fun () ->
+           let marker = late_probe_marker ^ "\n" in
+           ignore (Unix.write_substring Unix.stderr marker 0 (String.length marker) : int);
+           Unix._exit killed_status)
+         ()
+        : string);
+    (* Reaching here means the late probe returned: a result line went to stdout, which the parent
+       counts against the control. *)
+    Stdlib.exit 0)
+
+let () =
+  let exe = Stdlib.Sys.executable_name in
+  let out_path = capture_file ".out" and err_path = capture_file ".err" in
+  let open_capture path = Unix.openfile path [ Unix.O_WRONLY; Unix.O_TRUNC ] 0o600 in
+  let out = open_capture out_path and err = open_capture err_path in
+  let pid = Unix.create_process exe [| exe; killed_in_diagnostics_arg |] Unix.stdin out err in
+  let _, status = Unix.waitpid [] pid in
+  Unix.close out;
+  Unix.close err;
+  let stdout_text = read_and_remove out_path and stderr_text = read_and_remove err_path in
+  Stdio.eprintf "bench_self_test: the killed child's stderr follows\n%s\n%!" stderr_text;
+  let protocol = H.self_test_protocol in
+  Verdict.p "the child ended unflushed in its late probe, with the kill's status"
+    ((match status with Unix.WEXITED n -> n = killed_status | _ -> false)
+    && String.is_substring stderr_text ~substring:late_probe_marker);
+  (* Over the child's combined output, as [orchestrate.py] reads a cell's: its stdout is expected to
+     be empty, so a claim over that alone would rest on an empty population. *)
+  let output_lines = String.split_lines stdout_text @ String.split_lines stderr_text in
+  Verdict.p_empty "no line of the killed child's output is a result line" ~over:output_lines
+    (List.filter output_lines ~f:(String.is_prefix ~prefix:"{"));
+  let kept = checkpoints_in stderr_text in
+  Verdict.p "the killed child checkpointed every parity step, then the timed stages"
+    (List.length kept = protocol.H.parity_steps + 1);
+  match List.last kept with
+  | None -> Verdict.fail "the killed child left no checkpoint"
+  | Some last ->
+      Verdict.p "its last checkpoint says every measured stage completed and the probe was running"
+        (Option.equal Yojson.Safe.equal (field last "stages")
+           (Some
+              (`Assoc
+                 [
+                   ("parity", `String "complete");
+                   ("warmup", `String "complete");
+                   ("timing", `String "complete");
+                   ("dominant_kernel", `String "running");
+                   ("result", `String "pending");
+                 ])));
+      Verdict.p "and it is marked unaccepted"
+        (match field last "accepted" with Some (`Bool false) -> true | _ -> false);
+      let losses = match field last "losses" with Some (`List l) -> l | _ -> [] in
+      Verdict.p "the kill kept one loss per parity step"
+        (List.length losses = protocol.H.parity_steps);
+      Verdict.p_all "every loss the kill kept is finite" losses ~f:(function
+        | `Float _ | `Int _ -> true
+        | _ -> false)
+
 let () =
   (* Emitted to stderr rather than stdout: the line carries wall-clock digits, and the golden is
      diffed. It is echoed rather than dropped so a failing run is diagnosable from the log. *)
@@ -60,11 +151,14 @@ let () =
     Verdict.p_all "every tiny training segment executes with a positive standalone time" outcomes
       ~f:(fun result -> match result with Ok ms -> Float.(ms > 0.) | Error _ -> false)
   in
+  let checkpoint_path = capture_file ".checkpoints" in
   let line =
-    H.run_self_test ~out:Stdio.stderr ~inspect_step
-      ~inspect_compiled:(fun _ routines -> expected_mma := Some (H.step_census routines))
-      ()
+    Stdio.Out_channel.with_file checkpoint_path ~f:(fun checkpoint_out ->
+        H.run_self_test ~out:Stdio.stderr ~checkpoint_out ~inspect_step
+          ~inspect_compiled:(fun _ routines -> expected_mma := Some (H.step_census routines))
+          ())
   in
+  let kept = checkpoints_in (read_and_remove checkpoint_path) in
   (* Before any host-gated step runs, its conditional SGD is nevertheless compiled work. *)
   ignore
     (H.run_self_test ~out:Stdio.stderr
@@ -179,7 +273,11 @@ let () =
         (List.length losses = protocol.H.parity_steps);
       Verdict.p_all "every parity checksum is a finite number" losses ~f:(function
         | `Float _ | `Int _ -> true
-        | _ -> false)
+        | _ -> false);
+      (* gh-ocannl-1209: what a kill would have kept is what the result line reports. *)
+      Verdict.p "the last checkpoint before the instrument holds the result line's own losses"
+        (Option.value_map (List.last kept) ~default:false ~f:(fun last ->
+             Option.equal Yojson.Safe.equal (field last "losses") (field j "losses")))
   | None ->
       (* The claim above has already failed the run; naming the line is what makes it
          diagnosable. *)

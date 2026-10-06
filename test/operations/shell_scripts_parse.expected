@@ -499,11 +499,13 @@ benchmarks/gh1003_fold_cells.sh parses: true
 benchmarks/gh1051_bf16_ab.sh parses: true
 benchmarks/gh1051_boundary_split.sh parses: true
 benchmarks/gh1133_cells.sh parses: true
+benchmarks/gh1180_tie_ab.sh parses: true
 benchmarks/gh514_cells.sh parses: true
 benchmarks/gh612_cells.sh parses: true
 benchmarks/gh612v_session.sh parses: true
 benchmarks/gh728_cells.sh parses: true
 benchmarks/gh834_cells.sh parses: true
+benchmarks/runners/ocannl/mma_register_scope_probe_build.sh parses: true
 docs/latex/gen-workshop-tex.sh parses: true
 scripts/harness-support.sh parses: true
 scripts/process-group.sh parses: true

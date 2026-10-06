@@ -21,9 +21,14 @@
    reduction every lane would run whole is the duplicated arm, measured as a regression; 5. a
    partial simdgroup (E = D = 16) likewise keeps the plain plan at the devices' 32-lane shuffles,
    and on a device claiming 16-lane ones the retype happens and the renderer (32-lane warps)
-   declines the shuffle, every lane running the loop; 6. several simdgroups (E = D = 64): the same,
-   declined by this v1 (it would need a shared broadcast and barrier); 7. the same nest over an
-   ordinary scope local, not the fused backward's [dp]: the plain plan in every mode -- the
+   declines the shuffle, every lane running the loop; 6. several simdgroups (gh-ocannl-1168): at the
+   default bound of one simdgroup (E = D = 64) the plain plan; allowed two or four simdgroups, E = D
+   = 64 and 128 take lanes and the renderer all-reduces across simdgroups through workgroup-shared
+   partials between two barriers per pair -- executed exact against the serial reference AND the
+   materialized (unscheduled) run, over operands whose per-simdgroup partials discriminate a dropped
+   or misrouted partial -- while a width past the bound keeps the plain plan, and a device claiming
+   64-lane shuffles gets the retype the renderer renders as two 32-lane simdgroups; 7. the same nest
+   over an ordinary scope local, not the fused backward's [dp]: the plain plan in every mode -- the
    reassociation's license is the gate that minted [dp], not the shape; 8. a [Workgroup_reduce]
    hand-retyped over such a local keeps the hardware binding a staged reduction relies on (compiled,
    and read on GPU backends); 9. the configured [auto] resolves from the device's economics --
@@ -46,6 +51,9 @@ let gpu = match backend_name with "metal" | "cuda" | "hip" -> true | _ -> false
 
 (* The comment the all-reduce rendering opens with ([C_syntax.try_lane_all_reduce]). *)
 let all_reduce_marker = "lane all-reduce into a scope local"
+
+(* What the cross-simdgroup form's opening comment adds ([C_syntax.try_lane_all_reduce]). *)
+let multi_marker k = Printf.sprintf "%d simdgroups of 32" k
 let b_n = 2
 let t_n = 16
 let h_n = 4
@@ -66,13 +74,22 @@ type case = {
   opt : LL.optimized;
   e_sym : Ir.Indexing.symbol;
   hw_syms : Ir.Indexing.symbol list;  (** [b], [t], [h] and the lane [d]. *)
+  s_sym : Ir.Indexing.symbol;  (** The serial query loop. *)
+  flag_lane : Ir.Indexing.symbol option;
+      (** [`Lane_flag]'s workgroup loop computing the lane-dependent flag. *)
   seed : (Ir.Tnode.t * float array) list;
   k_tn : Ir.Tnode.t;
   expected : float array;
+  k_with : (int -> int list) -> float array;
   launch_block : int;
 }
 
-let dk_nest ?(minted = true) ~name ~e_n ~d_n () =
+(* [?guard] wraps the preamble reduction in an [If]: [`Uniform] on the serial query symbol ([s < s_n
+   - 2], so the last two queries contribute nothing), [`Lane_flag] on a scope local a workgroup loop
+   sets lane-dependently ([flag := a < 32]) -- the shape whose lanes would part ways at the
+   cross-simdgroup barriers; [`First_or_flag] on [s < 1 || flag], which a materializing unroll of
+   [s] simplifies away in the first copy only. *)
+let dk_nest ?(minted = true) ?guard ~name ~e_n ~d_n () =
   let a_dims = [| b_n; s_n; h_n; e_n |]
   and bv_dims = [| b_n; t_n; h_n; e_n |]
   and q_dims = [| b_n; s_n; h_n; d_n |]
@@ -99,43 +116,73 @@ let dk_nest ?(minted = true) ~name ~e_n ~d_n () =
   let dp = LL.get_scope dp_node in
   let b = L.sym () and t = L.sym () and h = L.sym () and s = L.sym () in
   let e = L.sym () and d = L.sym () in
+  let reduction =
+    L.loop_n e e_n
+      (LL.Set_local
+         ( dp,
+           L.add (LL.Get_local dp)
+             (L.mul
+                (L.get a_tn [| L.iter b; L.iter s; L.iter h; L.iter e |])
+                (L.get bv_tn [| L.iter b; L.iter t; L.iter h; L.iter e |])) ))
+  in
+  let flag_lane, guarded =
+    match guard with
+    | None -> (None, [ reduction ])
+    | Some `Uniform -> (None, [ L.if_ (L.lt (L.embed s) (L.ic (s_n - 2))) reduction ])
+    | Some ((`Lane_flag | `First_or_flag) as g) ->
+        let flag_node = node ~dims:[| 1 |] (name ^ "_flag") in
+        L.virtualize flag_node;
+        let flag = LL.get_scope flag_node and a = L.sym () in
+        let cond =
+          match g with
+          | `Lane_flag -> LL.Get_local flag
+          | `First_or_flag -> L.binop Ir.Ops.Or (L.lt (L.embed s) (L.ic 1)) (LL.Get_local flag)
+        in
+        ( Some a,
+          [
+            LL.Declare_local { id = flag; needs_init = false };
+            L.loop_n a e_n (LL.Set_local (flag, L.lt (L.embed a) (L.ic 32)));
+            L.if_ cond reduction;
+          ] )
+  in
   let llc =
     L.loop_n b b_n @@ L.loop_n t t_n @@ L.loop_n h h_n @@ L.loop_n s s_n
     @@ LL.unflat_lines
-         [
-           LL.Declare_local { id = dp; needs_init = false };
-           LL.Set_local (dp, L.c 0.);
-           L.loop_n e e_n
-             (LL.Set_local
-                ( dp,
-                  L.add (LL.Get_local dp)
-                    (L.mul
-                       (L.get a_tn [| L.iter b; L.iter s; L.iter h; L.iter e |])
-                       (L.get bv_tn [| L.iter b; L.iter t; L.iter h; L.iter e |])) ));
-           (let k_idx = [| L.iter b; L.iter t; L.iter h; L.iter d |] in
-            L.loop_n d d_n
-              (L.set k_tn k_idx
-                 (L.add (L.get k_tn k_idx)
-                    (L.mul (LL.Get_local dp)
-                       (L.get q_tn [| L.iter b; L.iter s; L.iter h; L.iter d |])))));
-         ]
+         ([ LL.Declare_local { id = dp; needs_init = false }; LL.Set_local (dp, L.c 0.) ]
+         @ guarded
+         @ [
+             (let k_idx = [| L.iter b; L.iter t; L.iter h; L.iter d |] in
+              L.loop_n d d_n
+                (L.set k_tn k_idx
+                   (L.add (L.get k_tn k_idx)
+                      (L.mul (LL.Get_local dp)
+                         (L.get q_tn [| L.iter b; L.iter s; L.iter h; L.iter d |])))));
+           ])
   in
   let opt = L.optimize ~materialized:[ a_tn; bv_tn; q_tn; k_tn ] ~name llc in
-  let expected =
+  (* [K] when lane [d]'s [dp] sums the terms of [e] in [es d]: the whole range is the reference; a
+     subset is what a wrong cross-simdgroup rendering would compute ([discriminates]). *)
+  let skipped s = match guard with Some `Uniform -> s >= s_n - 2 | _ -> false in
+  let k_with es =
     fill ~dims:k_dims (fun i ->
         let b, t, h, d = (i.(0), i.(1), i.(2), i.(3)) in
         List.fold (List.range 0 s_n) ~init:(k_seed b t h d) ~f:(fun acc s ->
             let dp =
-              List.fold (List.range 0 e_n) ~init:0. ~f:(fun dp e ->
-                  dp +. (a_value b s h e *. b_value b t h e))
+              List.fold
+                (if skipped s then [] else es d)
+                ~init:0.
+                ~f:(fun dp e -> dp +. (a_value b s h e *. b_value b t h e))
             in
             acc +. (dp *. q_value b s h d)))
   in
+  let expected = k_with (fun _ -> List.range 0 e_n) in
   {
     name;
     opt;
     e_sym = e;
     hw_syms = [ b; t; h; d ];
+    s_sym = s;
+    flag_lane;
     seed =
       [
         (a_tn, fill ~dims:a_dims (fun i -> a_value i.(0) i.(1) i.(2) i.(3)));
@@ -145,6 +192,7 @@ let dk_nest ?(minted = true) ~name ~e_n ~d_n () =
       ];
     k_tn;
     expected;
+    k_with;
     launch_block = d_n;
   }
 
@@ -175,17 +223,20 @@ let axis_name = function
   | LL.Workgroup_reduce -> "Workgroup_reduce"
   | _ -> "another kind"
 
+(* Every case [run] schedules, by name: leg 11 reads the memory estimate off them. *)
+let scheduled_by_name : (string, LL.optimized) Hashtbl.t = Hashtbl.create (module String)
+
 (* A device whose shuffles are [width] lanes wide: the GPU backends state 32. *)
 let simd width = { Ir.Backend_intf.no_hardware_limits with simdgroup_width = Some width }
 
-let run ?(preamble = S.Preamble_cooperative) ?(lanes = true) ?(limits = simd 32) ~reduction_axis
-    ~emits_all_reduce case =
-  let scheduled =
-    S.apply
-      (S.default_gpu ~block_size:256 ~min_parallel:64 ~workgroup_fill:1 ~preamble_reduction:preamble
-         ~limits case.opt)
-      case.opt
+let run ?(preamble = S.Preamble_cooperative) ?(lanes = true) ?(limits = simd 32) ?(all_reduce = 1)
+    ?(marker = all_reduce_marker) ?(materialized = false) ~reduction_axis ~emits_all_reduce case =
+  let schedule () =
+    S.default_gpu ~block_size:256 ~min_parallel:64 ~workgroup_fill:1 ~preamble_reduction:preamble
+      ~all_reduce_simdgroups:all_reduce ~limits case.opt
   in
+  let scheduled = S.apply (schedule ()) case.opt in
+  Hashtbl.set scheduled_by_name ~key:case.name ~data:scheduled;
   (* What schedule-aware fission reads: the reduce lane is the output lanes' threads, not a
      dimension of its own. *)
   if lanes then
@@ -195,9 +246,7 @@ let run ?(preamble = S.Preamble_cooperative) ?(lanes = true) ?(limits = simd 32)
          (b_n * t_n * h_n * case.launch_block))
       (List.equal
          (fun (g1, a1) (g2, a2) -> g1 = g2 && a1 = a2)
-         (S.statement_mappings case.opt.llc
-            (S.default_gpu ~block_size:256 ~min_parallel:64 ~workgroup_fill:1
-               ~preamble_reduction:preamble ~limits case.opt))
+         (S.statement_mappings case.opt.llc (schedule ()))
          [ (b_n * t_n * h_n, b_n * t_n * h_n * case.launch_block) ]);
   if lanes then (
     p
@@ -218,14 +267,35 @@ let run ?(preamble = S.Preamble_cooperative) ?(lanes = true) ?(limits = simd 32)
   p_all2
     (Printf.sprintf "%s: every cell of K holds the serial reference's exact value" case.name)
     got case.expected ~f:Float.equal;
+  (if materialized then
+     let plain =
+       List.hd_exn
+         (L.execute ~name:(case.name ^ "_mat") case.opt ~seed:case.seed ~read:[ case.k_tn ])
+     in
+     p_all2
+       (Printf.sprintf "%s: every cell of K equals the materialized, unscheduled run's" case.name)
+       got plain ~f:Float.equal);
   let claim =
     Printf.sprintf "%s: the emitted kernel %s the all-reduce" case.name
       (if emits_all_reduce then "spells" else "does not spell")
   in
   if not gpu then skipped ~backend:backend_name claim
-  else if emits_all_reduce then
-    Generated.assert_emits ~routine:case.name ~contains:all_reduce_marker claim
+  else if emits_all_reduce then Generated.assert_emits ~routine:case.name ~contains:marker claim
   else Generated.assert_omits ~routine:case.name ~contains:all_reduce_marker claim
+
+(* The operands discriminate the cross-simdgroup phase: lane [d] summing only its own simdgroup's
+   terms (the phase skipped), or only simdgroup 0's terms in every lane (one partial read for all),
+   gives a different [K] somewhere. *)
+let discriminates case =
+  let simdgroup w = List.range (32 * w) (32 * (w + 1)) in
+  let differs what wrong =
+    p_exists
+      (Printf.sprintf "%s: the operands tell %s from the whole sum" case.name what)
+      (List.zip_exn (Array.to_list wrong) (Array.to_list case.expected))
+      ~f:(fun (a, b) -> not (Float.equal a b))
+  in
+  differs "each lane's own simdgroup's partial" (case.k_with (fun d -> simdgroup (d / 32)));
+  differs "simdgroup 0's partial" (case.k_with (fun _ -> simdgroup 0))
 
 let () =
   eprintf "gpu_lane_reduction backend: %s (not part of the golden)\n%!" backend_name;
@@ -250,10 +320,24 @@ let () =
      declines the shuffle and every lane runs the loop -- still exact. *)
   run ~limits:(simd 16) ~reduction_axis:LL.Workgroup_reduce ~emits_all_reduce:false
     (dk_nest ~name:"lred_coop16r" ~e_n:16 ~d_n:16 ());
-  printf "--- leg 6: several simdgroups keep the plain plan; the renderer declines them (v1) ---\n";
+  printf "--- leg 6: several simdgroups, where the device allows them ---\n";
+  (* The default bound (one simdgroup, every device until measured): the plain plan. *)
   run ~lanes:false ~reduction_axis:LL.Serial ~emits_all_reduce:false
     (dk_nest ~name:"lred_coop64" ~e_n:64 ~d_n:64 ());
-  run ~limits:(simd 64) ~reduction_axis:LL.Workgroup_reduce ~emits_all_reduce:false
+  List.iter
+    [ (64, 2, "lred_multi64"); (128, 4, "lred_multi128") ]
+    ~f:(fun (width, k, name) ->
+      let case = dk_nest ~name ~e_n:width ~d_n:width () in
+      discriminates case;
+      run ~all_reduce:k ~marker:(multi_marker k) ~materialized:true
+        ~reduction_axis:LL.Workgroup_reduce ~emits_all_reduce:true case);
+  (* Past the bound: four simdgroups allowed two keep the plain plan. *)
+  run ~all_reduce:2 ~lanes:false ~reduction_axis:LL.Serial ~emits_all_reduce:false
+    (dk_nest ~name:"lred_multi128_cap2" ~e_n:128 ~d_n:128 ());
+  (* A device claiming 64-lane shuffles retypes at one of its simdgroups; the renderer's 32-lane
+     warps make that two. *)
+  run ~limits:(simd 64) ~marker:(multi_marker 2) ~reduction_axis:LL.Workgroup_reduce
+    ~emits_all_reduce:true
     (dk_nest ~name:"lred_coop64r" ~e_n:64 ~d_n:64 ())
 
 let () =
@@ -342,6 +426,21 @@ let () =
   in
   p "auto on the run's backend resolves to its measured mode"
     (S.equal_lane_preamble_reduction (S.lane_preamble_reduction_for device) expected);
+  (* The cross-simdgroup bound (gh-ocannl-1168): four simdgroups where measured to pay (Metal), one
+     simdgroup elsewhere -- and a 64-wide head's default schedule is the resolved bound's. *)
+  p "auto spans one simdgroup on an unmeasured device"
+    (S.lane_all_reduce_simdgroups_for BI.no_hardware_limits = 1);
+  p "auto on the run's backend spans its measured number of simdgroups"
+    (S.lane_all_reduce_simdgroups_for device = match backend_name with "metal" -> 4 | _ -> 1);
+  (let case = dk_nest ~name:"lred_auto64" ~e_n:64 ~d_n:64 () in
+   let sched ?all_reduce_simdgroups () =
+     S.sexp_of_schedule
+       (S.default_gpu ~block_size:256 ~min_parallel:64 ~workgroup_fill:1
+          ~preamble_reduction:S.Preamble_cooperative ?all_reduce_simdgroups ~limits:device case.opt)
+   in
+   p "on the run's device a 64-wide head's default schedule is the resolved bound's"
+     (Sexp.equal (sched ())
+        (sched ~all_reduce_simdgroups:(S.lane_all_reduce_simdgroups_for device) ())));
   let case = dk_nest ~name:"lred_auto32" ~e_n:32 ~d_n:32 () in
   let sched ?preamble_reduction limits =
     S.sexp_of_schedule
@@ -359,3 +458,153 @@ let () =
         (Printf.sprintf "on %s the default schedule is the resolved mode's" what)
         (Sexp.equal (sched limits)
            (sched ~preamble_reduction:(S.lane_preamble_reduction_for limits) limits)))
+
+(* The sites of a scheduled case, as [Low_level.lane_all_reduce_sites] reads them: the predicate the
+   renderer and the schedule's memory estimate share. *)
+let sites (opt : LL.optimized) =
+  LL.lane_all_reduce_sites ~reassociable:Ir.Online_softmax.reassociable_local opt.llc
+
+let hand_schedule ?(extra_lanes = []) ?(unroll_queries = false) case =
+  let b, t, h, d = match case.hw_syms with [ b; t; h; d ] -> (b, t, h, d) | _ -> assert false in
+  S.apply
+    ([
+       S.Retype { axis = b; ty = LL.Grid };
+       S.Retype { axis = t; ty = LL.Grid };
+       S.Retype { axis = h; ty = LL.Grid };
+       S.Retype { axis = d; ty = LL.Workgroup };
+       S.Retype { axis = case.e_sym; ty = LL.Workgroup_reduce };
+     ]
+    @ List.map extra_lanes ~f:(fun axis -> S.Retype { axis; ty = LL.Workgroup })
+    @ if unroll_queries then [ S.Unroll { axis = case.s_sym; materialize = true } ] else [])
+    case.opt
+
+let () =
+  printf "--- leg 10: barriers only under workgroup-uniform control ---\n";
+  (* A guard on the serial query symbol is the same in every lane: the site keeps the
+     cross-simdgroup form, executed exact (the last two queries skip the reduction). *)
+  let case = dk_nest ~guard:`Uniform ~name:"lred_guard_uniform64" ~e_n:64 ~d_n:64 () in
+  let scheduled = hand_schedule case in
+  Hashtbl.set scheduled_by_name ~key:case.name ~data:scheduled;
+  p "lred_guard_uniform64: a guard on the serial query symbol leaves the site cross-simdgroup"
+    (match sites scheduled with [ site ] -> site.LL.lar_cross_simdgroup | _ -> false);
+  let got = List.hd_exn (L.execute ~name:case.name scheduled ~seed:case.seed ~read:[ case.k_tn ]) in
+  p_all2 "lred_guard_uniform64: every cell of K holds the serial reference's exact value" got
+    case.expected ~f:Float.equal;
+  let claim = "lred_guard_uniform64: the emitted kernel spells the cross-simdgroup all-reduce" in
+  if gpu then Generated.assert_emits ~routine:case.name ~contains:(multi_marker 2) claim
+  else skipped ~backend:backend_name claim;
+  (* A flag a workgroup loop sets lane-dependently: lanes 32..63 would skip both barriers. The site
+     renders serially in every lane instead. Compiled only -- under the flag's per-lane binding the
+     reduction runs in half the lanes, which is that program's meaning, not the reference's. *)
+  let case = dk_nest ~guard:`Lane_flag ~name:"lred_guard_flag64" ~e_n:64 ~d_n:64 () in
+  let scheduled = hand_schedule ~extra_lanes:(Option.to_list case.flag_lane) case in
+  Hashtbl.set scheduled_by_name ~key:case.name ~data:scheduled;
+  p "lred_guard_flag64: a guard reading a lane-dependent local leaves the site serial"
+    (match sites scheduled with [ site ] -> not site.LL.lar_cross_simdgroup | _ -> false);
+  ignore (L.link ~name:case.name scheduled : Context.t * Context.routine);
+  let omits = "lred_guard_flag64: the emitted kernel does not spell the all-reduce" in
+  let loops = "lred_guard_flag64: the emitted kernel loops the reduction in every lane" in
+  if not gpu then (
+    skipped ~backend:backend_name omits;
+    skipped ~backend:backend_name loops)
+  else (
+    Generated.assert_omits ~routine:case.name ~contains:all_reduce_marker omits;
+    let ident = Ir.Indexing.symbol_ident case.e_sym in
+    p loops (String.is_substring (Generated.read case.name) ~substring:(" " ^ ident ^ " = 0;")));
+  (* Copies sharing one reduction symbol (staging#1028 review round 2): unrolling [s] keeps [e] in
+     every copy; the first copy's guard [0 < 1 || flag] simplifies away, the others keep the
+     lane-dependent flag. The renderer meets each copy by its symbol, so admitting the safe copy
+     would admit its unsafe siblings: every copy renders serially. Compiled only. *)
+  let case = dk_nest ~guard:`First_or_flag ~name:"lred_guard_unrolled64" ~e_n:64 ~d_n:64 () in
+  let scheduled =
+    hand_schedule ~extra_lanes:(Option.to_list case.flag_lane) ~unroll_queries:true case
+  in
+  Hashtbl.set scheduled_by_name ~key:case.name ~data:scheduled;
+  (* The scenario itself: a copy of [e] under no guard at all beside copies under one. *)
+  let rec e_copies ~guarded (llc : LL.t) =
+    match llc with
+    | LL.For_loop { index; body; _ } ->
+        if Ir.Indexing.equal_symbol index case.e_sym then [ guarded ] else e_copies ~guarded body
+    | LL.If { body; _ } -> e_copies ~guarded:true body
+    | LL.Seq (a, b) -> e_copies ~guarded a @ e_copies ~guarded b
+    | LL.Scan_loop { body; _ } -> e_copies ~guarded body
+    | _ -> []
+  in
+  let copies = e_copies ~guarded:false scheduled.llc in
+  p
+    "lred_guard_unrolled64: the unroll leaves one copy of the reduction unguarded beside guarded \
+     ones"
+    (List.count copies ~f:not = 1 && List.count copies ~f:Fn.id = s_n - 1);
+  p_none "lred_guard_unrolled64: no copy of the reduction symbol is admitted cross-simdgroup"
+    (sites scheduled) ~f:(fun site -> site.LL.lar_cross_simdgroup);
+  ignore (L.link ~name:case.name scheduled : Context.t * Context.routine);
+  gated ~when_:gpu ~on:backend_name
+    "lred_guard_unrolled64: the emitted kernel spells no all-reduce in any copy"
+    (not (String.is_substring (Generated.read case.name) ~substring:all_reduce_marker))
+
+(* The workgroup-shared bytes of the [lred_partials_*] arrays a generated kernel declares. An
+   element type other than float/double reads as an impossible count, so the claim fails. *)
+let declared_partial_bytes src =
+  List.sum
+    (module Int)
+    (String.split_lines src)
+    ~f:(fun line ->
+      let line = String.strip line in
+      match String.substr_index line ~pattern:"lred_partials_" with
+      | Some i when String.is_suffix line ~suffix:"];" && not (String.mem line '=') -> (
+          let ty = List.last_exn (String.split (String.rstrip (String.prefix line i)) ~on:' ') in
+          let lb = String.index_exn line '[' and rb = String.rindex_exn line ']' in
+          let slots = Int.of_string (String.sub line ~pos:(lb + 1) ~len:(rb - lb - 1)) in
+          match ty with "float" -> 4 * slots | "double" -> 8 * slots | _ -> -1_000_000)
+      | _ -> 0)
+
+let () =
+  printf "--- leg 11: the schedule's memory estimate counts the partials the kernel declares ---\n";
+  let capabilities = Context.codegen_capabilities (Lazy.force L.base_ctx) in
+  let estimate name =
+    S.workgroup_memory_bytes ~capabilities (Hashtbl.find_exn scheduled_by_name name)
+    - S.workgroup_memory_bytes ~capabilities:Ir.Backend_intf.no_codegen_capabilities
+        (Hashtbl.find_exn scheduled_by_name name)
+  in
+  let admits name bytes =
+    match
+      S.check_hardware_limits ~name
+        ~limits:{ Ir.Backend_intf.no_hardware_limits with max_workgroup_memory_bytes = Some bytes }
+        ~capabilities
+        (Hashtbl.find_exn scheduled_by_name name)
+    with
+    | () -> true
+    | exception Utils.User_error _ -> false
+  in
+  (* On every backend: the estimate is exactly what the emitted kernel declares (none on cc). *)
+  List.iter
+    [
+      "lred_coop32";
+      "lred_dup32";
+      "lred_coop16r";
+      "lred_multi64";
+      "lred_multi128";
+      "lred_coop64r";
+      "lred_guard_uniform64";
+      "lred_guard_flag64";
+      "lred_guard_unrolled64";
+    ] ~f:(fun name ->
+      p
+        (Printf.sprintf "%s: the estimate counts exactly the partials the emitted kernel declares"
+           name)
+        (estimate name = declared_partial_bytes (Generated.read name)));
+  (* On the GPU backends, the boundaries: 2 f32 slots for 64 lanes, 4 for 128, none within one
+     simdgroup or for a serial site. *)
+  List.iter
+    [
+      ("lred_multi64", 8);
+      ("lred_multi128", 16);
+      ("lred_guard_uniform64", 8);
+      ("lred_coop32", 0);
+      ("lred_guard_flag64", 0);
+    ]
+    ~f:(fun (name, bytes) ->
+      gated ~when_:gpu ~on:backend_name
+        (Printf.sprintf "%s: %d bytes of partials, admitted at that limit%s" name bytes
+           (if bytes > 0 then " and refused one byte below it" else ""))
+        (estimate name = bytes && admits name bytes && (bytes = 0 || not (admits name (bytes - 1)))))

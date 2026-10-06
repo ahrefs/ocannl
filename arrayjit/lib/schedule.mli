@@ -288,9 +288,10 @@ type optop =
           dependent, or mixing a hardware symbol into a comparison that is not [target]'s index — is
           rejected, since it could restrict which threads accumulate while the transfers write back
           an accumulator that never received the update. A [Zero_out] of [target] elsewhere is left
-          in place — the init-load observes it, so semantics are preserved without a surjectivity
-          analysis. Compose as: [Split]s → [Stage]s → [Privatize] → materializing [Unroll]s (the
-          unrolls then turn the tile accesses into constant-indexed, register-allocatable form).
+          in place unless the shared zero-seed proof licenses forwarding it directly into the tile:
+          unconditional whole-node coverage and every repeated-cell loop inside [over]. Compose as:
+          [Split]s → [Stage]s → [Privatize] → materializing [Unroll]s (the unrolls then turn the
+          tile accesses into constant-indexed, register-allocatable form).
 
           The tile is minted at [acc_prec], which must be [target]'s storage precision or an exact
           widening of it (a narrow float to [single]/[double]), else the op is rejected. It is the
@@ -664,12 +665,14 @@ val aligned_chains :
     backward's approximate-tier license. [Preamble_refused]: such a nest keeps its plain plan (the
     gh-ocannl-1003 stage-1 rule). [Preamble_duplicated]: the nest takes lanes and every lane
     recomputes the reduction serially, in its summation order. [Preamble_cooperative]: a reduction
-    whose extent is the lane's whole one-loop workgroup and the device's [simdgroup_width] is
-    retyped [Workgroup_reduce], sharing the lane's slot, and renders as a butterfly all-reduce
-    leaving the sum in every lane; a kernel holding any other admitted reduction keeps its plain
-    plan, never duplicated lanes (a renderer that still cannot shuffle runs the loop in every lane,
-    the retype's serial meaning). Config [gpu_lane_preamble_reduction], whose [auto] default
-    resolves per device ({!lane_preamble_reduction_for}). *)
+    whose extent is the lane's whole one-loop workgroup and [k] of the device's [simdgroup_width],
+    [k] at most {!lane_all_reduce_simdgroups_for}, is retyped [Workgroup_reduce], sharing the lane's
+    slot, and renders as an all-reduce leaving the sum in every lane (a butterfly within each
+    simdgroup, then, past one, the partials through workgroup-shared memory between two barriers,
+    gh-ocannl-1168); a kernel holding any other admitted reduction keeps its plain plan, never
+    duplicated lanes (a renderer that still cannot shuffle runs the loop in every lane, the retype's
+    serial meaning). Config [gpu_lane_preamble_reduction], whose [auto] default resolves per device
+    ({!lane_preamble_reduction_for}). *)
 type lane_preamble_reduction = Preamble_refused | Preamble_duplicated | Preamble_cooperative
 [@@deriving sexp_of, equal]
 
@@ -683,6 +686,15 @@ val lane_preamble_reduction_for : Backend_intf.hardware_limits -> lane_preamble_
     {!Backend_intf.hardware_limits}' [lane_scalar_recompute_cheap] holds (measured: Metal, CUDA),
     [Preamble_refused] otherwise (HIP, the C backends, anything unmeasured), since the lanes
     recompute each pair's scalar preamble once per lane (gh-ocannl-1124). *)
+
+val gpu_lane_all_reduce_simdgroups : unit -> int option
+(** Config [gpu_lane_all_reduce_simdgroups] ([auto], the default, is [None] | a positive count). *)
+
+val lane_all_reduce_simdgroups_for : Backend_intf.hardware_limits -> int
+(** The most simdgroups a [Preamble_cooperative] reduction may span at [limits] absent an explicit
+    [?all_reduce_simdgroups]: the configured count, or under [auto] the device's measured
+    {!Backend_intf.hardware_limits}' [lane_all_reduce_simdgroups] (1 wherever unmeasured, so a head
+    wider than one simdgroup keeps its plain plan; gh-ocannl-1168). *)
 
 (** How {!default_gpu} weighs its lane geometry (gh-ocannl-1167). Every lane recomputes its nest's
     per-pair scalar preamble, which the plain plan pays once per thread. [Lanes_cut]: taken wherever
@@ -707,6 +719,7 @@ val default_gpu :
   ?min_parallel:int ->
   ?workgroup_fill:int ->
   ?preamble_reduction:lane_preamble_reduction ->
+  ?all_reduce_simdgroups:int ->
   ?lanes:bool ->
   ?limits:Backend_intf.hardware_limits ->
   Low_level.optimized ->
@@ -744,9 +757,10 @@ val default_gpu :
     online-softmax hoist's value pass,
     [for (b, s, h) { for t { p := P[s, t]; for e { O[s, e] += p * V[t, e] } } }]; a preamble holding
     an inlined reduction is excluded, since every lane would recompute it; a preamble reduction loop
-    into a scope local is admitted per [?preamble_reduction], see {!type-lane_preamble_reduction}),
-    the chain extends through that preamble uncapped: the loops above the serial loop become [Grid]
-    loops (slots [>= 2] fold onto [.z]) and the loop past it a [Workgroup] lane,
+    into a scope local is admitted per [?preamble_reduction], see {!type-lane_preamble_reduction},
+    spanning at most [?all_reduce_simdgroups] simdgroups when cooperative), the chain extends
+    through that preamble uncapped: the loops above the serial loop become [Grid] loops (slots
+    [>= 2] fold onto [.z]) and the loop past it a [Workgroup] lane,
     [Grid (b, s, h) -> Serial t -> Workgroup e] — taken when the planner finds such nests one common
     topology, the launch fits the device's caps, and it has more threads than the plain plan's
     geometry. The race analysis is the same: thread identity is the tuple of chain symbols wherever
@@ -865,6 +879,7 @@ val fission_keep_mapping :
 val fission_scheduled :
   ?promote_locals:bool ->
   ?arity_cuts:bool ->
+  ?fold_zeros:bool ->
   ?keep_mapping:(Low_level.optimized -> schedule) ->
   preset:(Low_level.optimized -> schedule) ->
   zero_sched:(Tnode.t list -> schedule) ->
@@ -879,11 +894,22 @@ val fission_scheduled :
     [optimized] slice and [zero_sched] on each [`Zeros] segment's nodes, and each result tuple
     carries the segment kind, the pre-schedule segment, the schedule chosen for it, and the
     scheduled segment ({!apply} of the schedule). [`Solo] segments (opaque to the analysis, or
-    coalesced runs of unannotated segments) get the empty schedule. When fission does not apply
-    (single segment, unfissionable crossings, or everything coalesces back) the result is a single
-    [`Normal] tuple over the whole routine with [preset]'s schedule. Callers compile each scheduled
-    segment as its own kernel in order (the plural transform seam of backend [compile]); see
-    {!maybe_default_schedules} for the synchronization contract.
+    coalesced runs of unannotated segments) get the empty schedule.
+
+    [fold_zeros] (default [false], gh-ocannl-1175): a [`Zeros] segment holding a single zero that
+    initializes the reduction opening the next segment folds into that segment, expanded by
+    [zero_sched]'s [Expand_zero], when the merge rules below re-admit the whole segment with the
+    per-cell zero at its head; no other boundary moves, so the fold never merges two reductions the
+    zero kept apart. Only the autotuner's and model selector's per-segment sketch candidates pass
+    it, so the fold ships only where a timed (or modeled) sketch pipeline carries it: the untuned
+    default keeps the separate zero kernel, because an untiled accumulation with its zero folded
+    measured 7% slower on HIP (unified memory) although its emitted source only drops the opening
+    read. A replayed segmentation refolds where its record says.
+
+    When fission does not apply (single segment, unfissionable crossings, or everything coalesces
+    back) the result is a single [`Normal] tuple over the whole routine with [preset]'s schedule.
+    Callers compile each scheduled segment as its own kernel in order (the plural transform seam of
+    backend [compile]); see {!maybe_default_schedules} for the synchronization contract.
 
     [arity_cuts] (default [false], gh-ocannl-574): segment for the {e full-arity} sketch pipelines
     instead of the default presets. The no-parallelism-loss guard normally compares chains under the
@@ -907,8 +933,13 @@ val fission_scheduled :
     groups or fewer active threads of its OWN loops under [keep_mapping] than it gets in a kernel of
     its own: the kernel boundary is kept rather than a nest's mapping lost. Only the refused merges
     add cuts, so a merge that keeps every mapping (an elementwise tail over the same chain) still
-    saves its launch. Ignored under [arity_cuts]. [None] (the default): the legality rules alone
-    decide.
+    saves its launch. The same rule holds a [`Zeros] segment together (gh-ocannl-1169): a zero joins
+    one only when no node of the merged segment gets fewer groups or active threads under
+    [zero_sched] than alone -- a union of zeros with no common lane-plan topology sends every node
+    to the two-loop presets. Each maximal run of whole-node zeros is stably sorted by the zeroed
+    node's rank and dimensions in every mode (the zeros commute), so the cuts fall at shape changes
+    rather than at every alternation of a backward pass's gradient zeros. Ignored under
+    [arity_cuts]. [None] (the default): the legality rules alone decide.
 
     [promote_locals] (default [false]): promote statement-crossing [Local] scratch to [On_device]
     before segmentation. A nest whose only writes land in [Local] scratch gets no parallel chain
@@ -923,14 +954,16 @@ val fission_scheduled :
 
 type segmentation = ([ `Normal | `Zeros | `Solo ] * int) list [@@deriving sexp, equal]
 (** A fission segmentation as data (gh-ocannl-1164): the kind and the length, in units, of each
-    segment in order — a unit being one top-level statement with the comments before it, so the
-    units are a function of the code alone. One segment over every unit is the unfissioned routine.
-    The schedule cache persists it with a fissioned winner, so a replay cuts where the winner was
-    cut instead of re-deriving the cuts under the current policy. *)
+    segment in order — a unit being one top-level statement with the comments before it, with each
+    maximal run of whole-node zeros stably sorted by the zeroed node's shape, so the units are a
+    function of the code alone. One segment over every unit is the unfissioned routine. The schedule
+    cache persists it with a fissioned winner, so a replay cuts where the winner was cut instead of
+    re-deriving the cuts under the current policy. *)
 
 val fission_segmented :
   ?promote_locals:bool ->
   ?arity_cuts:bool ->
+  ?fold_zeros:bool ->
   ?keep_mapping:(Low_level.optimized -> schedule) ->
   ?replay:segmentation * (int -> Low_level.optimized -> schedule) ->
   preset:(Low_level.optimized -> schedule) ->
@@ -1040,8 +1073,12 @@ val workgroup_memory_bytes :
     Metal's converted destination boundary declares a coordinate table there (gh-ocannl-1205). A
     scope is one [Tile_mma] statement, each copy counted where a loop transform duplicated it; a
     simdgroup-fragment scope is rendered only around exactly one [Tile_mma], so it is the same
-    count. Pass the compiling context's [Context.codegen_capabilities]; the capability-free
-    {!Backend_intf.no_codegen_capabilities} counts the tiles alone. *)
+    count. Plus, per lane all-reduce site that stages per-simdgroup partials
+    ([Low_level.lane_all_reduce_sites]' [lar_cross_simdgroup], gh-ocannl-1168), the backend's
+    {!field:Backend_intf.lane_all_reduce_workgroup_bytes} for its extent at the larger of its
+    local's compute and accumulator precisions. Pass the compiling context's
+    [Context.codegen_capabilities]; the capability-free {!Backend_intf.no_codegen_capabilities}
+    counts the tiles alone. *)
 
 val check_hardware_limits :
   name:string ->

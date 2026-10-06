@@ -24,6 +24,7 @@ let cpu_mma_limits () =
     native_fp16_arithmetic = Cc_backend.has_native_fp16_arithmetic ();
     simdgroup_width = None;
     lane_scalar_recompute_cheap = false;
+    lane_all_reduce_simdgroups = 1;
     online_softmax_auto_block = 16;
     worker_pool_tag = Some (Cc_backend.pool_tag ());
     codegen_tag = Some (Cc_backend.codegen_tag ());

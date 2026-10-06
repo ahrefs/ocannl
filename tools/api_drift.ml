@@ -29,13 +29,7 @@ let read rev source =
   let inventory = if String.equal (Stdlib.Filename.basename source) "dune" then paths rev else [] in
   git_raw [ "show"; rev ^ ":" ^ source ] |> Surface.declarations ~paths:inventory ~source
 
-let print_side prefix = function
-  | None -> ()
-  | Some (d : Surface.declaration) ->
-      printf "%s %s (line %d)\n" prefix d.name d.line;
-      List.iter (String.split_lines d.text) ~f:(fun line -> printf "%s %s\n" prefix line)
-
-let run since until =
+let run ?context since until =
   let since = resolve since and until = resolve until in
   let history = git [ "rev-list"; "--first-parent"; until ] |> lines in
   if not (List.mem history since ~equal:String.equal) then
@@ -47,6 +41,12 @@ let run since until =
      need manual review. Generator input entries require review of the generated interface. Dune \
      configuration entries retain literal inputs; availability and declaration effects require \
      manual review. Ordinary library dependencies are excluded.\n";
+  Option.iter context ~f:(fun context ->
+      printf
+        "Compact rendering: an entry changed on both sides prints its changed lines (-/+) with %d \
+         unchanged lines of context (two-space indent) and counts the rest on ~ lines. Full \
+         declaration text: tools/api-drift.sh %s %s\n"
+        context since until);
   let parent = ref since and total = ref 0 in
   List.iter commits ~f:(fun commit ->
       let before = source_paths !parent |> Set.of_list (module String) in
@@ -67,30 +67,43 @@ let run since until =
                 printf "\ncommit %s %s\n" commit (git [ "show"; "-s"; "--format=%s"; commit ]);
                 reported := true);
               printf "\n%s\n" source;
-              List.iter changes ~f:(fun (old, fresh) ->
+              List.iter changes ~f:(fun change ->
                   Int.incr total;
-                  print_side "-" old;
-                  print_side "+" fresh)));
+                  List.iter (Surface.render ?context change) ~f:print_endline)));
       parent := commit);
   printf "\n%d declaration changes across %d first-parent commits.\n" !total (List.length commits)
 
+let usage = "Usage: tools/api-drift.sh [--context N] <since-rev> [until-rev]"
+
 let () =
-  match Array.to_list Stdlib.Sys.argv with
-  | [ _; ("--help" | "-h") ] ->
+  let fail message =
+    eprintf "%s\n" message;
+    Stdlib.exit 2
+  in
+  match List.tl_exn (Array.to_list Stdlib.Sys.argv) with
+  | [ ("--help" | "-h") ] ->
       printf
-        "Usage: tools/api-drift.sh <since-rev> [until-rev]\n\
+        "%s\n\
          Reads committed first-parent history (until defaults to HEAD); does not judge \
-         compatibility.\n"
-  | [ _; since ] -> (
-      try run since "HEAD"
+         compatibility. --context N prints only the changed lines of an entry changed on both \
+         sides, with N unchanged lines around each; without it, both sides print in full.\n"
+        usage
+  | args -> (
+      let context, positional =
+        match args with
+        | "--context" :: count :: rest -> (
+            match Int.of_string_opt count with
+            | Some n when n >= 0 -> (Some n, rest)
+            | _ -> fail ("api-drift: --context needs a non-negative line count\n" ^ usage))
+        | rest -> (None, rest)
+      in
+      let since, until =
+        match positional with
+        | [ since ] -> (since, "HEAD")
+        | [ since; until ] -> (since, until)
+        | _ -> fail usage
+      in
+      try run ?context since until
       with exn ->
         eprintf "api-drift: %s\n" (Exn.to_string exn);
         Stdlib.exit 1)
-  | [ _; since; until ] -> (
-      try run since until
-      with exn ->
-        eprintf "api-drift: %s\n" (Exn.to_string exn);
-        Stdlib.exit 1)
-  | _ ->
-      eprintf "Usage: tools/api-drift.sh <since-rev> [until-rev]\n";
-      Stdlib.exit 2

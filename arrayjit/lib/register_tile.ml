@@ -55,7 +55,13 @@ let coverage ~m ~n t =
    the [1/rn] and [1/rm] terms of two candidates the model prices EQUALLY differ in their last bits,
    which decided such ties by rounding rather than by the documented tie-break -- at rm = 3 or 1 (m
    < 4), on 16- and 64-byte files, the tail-bearing [rn] beat the tail-free one it tied
-   (gh-ocannl-947). Every candidate [default] ranks shares [rm], so the scaling ranks the same. *)
+   (gh-ocannl-947). Every candidate [default] ranks shares [rm], so the scaling ranks the same.
+
+   There is no C-tile term. A pass loads and stores its accumulators once per k block: twice rm*rn
+   vector moves for a full pass. But the column tail's grid has only its own tail_widths columns, so
+   summed over a row band the moves are twice rm*ceil(n/lanes), whatever [rn] is. Counted at its
+   rendered width, the traffic cannot rank columns at one width, at any k (gh-ocannl-1099;
+   docs/research/gh-1099-register-tile-c-traffic.md). *)
 let cost ~n ~rm ~lanes ~rn =
   let ceil_div a b = (a + b - 1) / b in
   (ceil_div n lanes * (rm + 1)) + (rm * ceil_div n (rn * lanes))
@@ -69,10 +75,18 @@ let default ~vector_bytes ~elt_bytes ~m ~n =
           let cap = min (rn_cap ~vector_bytes) (n / lanes) in
           List.range 1 (cap + 1) |> List.map ~f:(fun rn -> { rm; rn; lanes }))
     in
-    let tail t = List.length (coverage ~m ~n t).tail_widths in
+    let tail_free t = List.is_empty (coverage ~m ~n t).tail_widths in
     List.min_elt candidates ~compare:(fun t1 t2 ->
         (* Ties go to the wider vector (more work per issue), then to the tail-free tile (one tile
-           body rather than two), then to the larger tile (more A-reuse). *)
+           body rather than two), then to the smaller tile. At one width an equal price is an equal
+           pass count, and no two tail-free tiles share one ([passes * rn * lanes = n]), so the last
+           key only ever ranks tiles that BOTH carry a column tail: two tile bodies each, the same A
+           splats, and the same C-tile traffic (the tail's accumulators are its own narrower grid,
+           gh-ocannl-1099). What still differs is the register pressure -- [live_registers] grows
+           with [rn] -- so the smaller tile, whose passes are the most even split of the vector
+           columns, is the one the model can justify. The larger-tile key it replaced claimed an
+           A-reuse the price shows is not there, and lost the measured case (AVX2 n = 28, 4x2 over
+           4x3 in 10/10 serial pairs; gh-ocannl-1180). *)
         match
           Int.compare
             (cost ~n ~rm ~lanes:t1.lanes ~rn:t1.rn)
@@ -81,7 +95,9 @@ let default ~vector_bytes ~elt_bytes ~m ~n =
         | 0 -> (
             match Int.compare t2.lanes t1.lanes with
             | 0 -> (
-                match Int.compare (tail t1) (tail t2) with 0 -> Int.compare t2.rn t1.rn | c -> c)
+                match Bool.compare (tail_free t2) (tail_free t1) with
+                | 0 -> Int.compare t1.rn t2.rn
+                | c -> c)
             | c -> c)
         | c -> c)
 
@@ -134,7 +150,24 @@ let alternatives ~vector_bytes ~elt_bytes ~m ~n =
         then Some cap
         else None
       in
-      let rns = List.filter_opt [ tail_free; budget_cap ] in
+      (* The other side of a tie [default] broke: the largest tile it ranked at the same price as a
+         tail-bearing default. The model prices no difference there -- the default took the smaller
+         tile on register pressure alone (gh-ocannl-1180) -- so a timing decides, and the
+         larger-tile pick the tie rule replaced stays reachable. At four rows it is the budget cap
+         whatever its tail. *)
+      let tied_larger =
+        if dflt.lanes <> lanes || n % width dflt = 0 then None
+        else
+          List.range (dflt.rn + 1) (min (rn_cap ~vector_bytes) (n / lanes) + 1)
+          |> List.filter ~f:(fun rn -> cost ~n ~rm ~lanes ~rn = cost ~n ~rm ~lanes ~rn:dflt.rn)
+          |> List.last
+      in
+      let rns =
+        List.fold
+          (List.filter_opt [ tail_free; budget_cap; tied_larger ])
+          ~init:[]
+          ~f:(fun acc rn -> if List.mem acc rn ~equal:Int.equal then acc else acc @ [ rn ])
+      in
       List.map rns ~f:(fun rn -> { rm; rn; lanes })
       |> List.filter ~f:(fun t -> not (equal t dflt))
       |> List.filter ~f:(fun t -> Result.is_ok (check ~vector_bytes ~elt_bytes ~m ~n t))

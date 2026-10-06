@@ -52,6 +52,11 @@
 #             geometry of gh-ocannl-1003 stage 1, fission cutting kernels to keep it), admitted
 #             (lanes where a kernel admits them, no cuts for them), off (the plain plans) or auto
 #             (per device) -- the same-binary A/B of gh-ocannl-1167; meaningful with a d1 <T>
+#   ar<K>     this checkout's runner, --ocannl_gpu_lane_all_reduce_simdgroups=<K>, K a positive
+#             count: the most simdgroups the cooperative dp all-reduce may span (gh-ocannl-1168; 1
+#             is the one-simdgroup rule, so a head wider than the simdgroup keeps the plain plan;
+#             2 gives a head of 64 lanes, 4 a head of 128) -- meaningful with a d1 <T> on a
+#             fixture whose head is wider than 32
 #   fold<T>   treatment <T> plus --ocannl_online_softmax_block=16 (the single-pass block fold of
 #             gh-ocannl-1003, the `approximate` profile's setting; meaningful with a d1 <T>)
 #   b<T>      treatment <T> run by BASE's runner, for a same-flags A/B across revisions
@@ -106,7 +111,15 @@ echo "gh1133: $(date -u +%FT%TZ) root=$root base=$base out=$out cap=$cap backend
 echo "gh1133: fixtures: $fixtures; treatments: $treatments; ref: $ref; kernel table: $kernel_table; fixture dir: $fixture_dir; steps: $*"
 built=0 proven=0 failed=0
 
-runner_root() { case $1 in base | b[!a]*) echo "$base" ;; *) echo "$root" ;; esac; }
+# The runner of a treatment: BASE's for base and b<T>, whatever d1 / fold wrappers enclose it
+# (flags_of strips the same wrappers), this checkout's otherwise.
+runner_root() {
+  local t=$1
+  while :; do
+    case $t in d1*) t=${t#d1} ;; fold*) t=${t#fold} ;; *) break ;; esac
+  done
+  case $t in base | b[!a]* | bar[1-9]*) echo "$base" ;; *) echo "$root" ;; esac
+}
 
 flags_of() {
   case $1 in
@@ -119,11 +132,14 @@ flags_of() {
     d1base) echo "gh1133: the base runner takes no d1 form" >&2; return 1 ;;
     serialcut | serialadmitted | serialoff | serialauto)
       echo "--ocannl_online_softmax=false --ocannl_gpu_serial_lanes=${1#serial}" ;;
+    ar[1-9]*)
+      case ${1#ar} in *[!0-9]*) echo "gh1133: unknown treatment $1" >&2; return 1 ;; esac
+      echo "--ocannl_online_softmax=false --ocannl_gpu_lane_all_reduce_simdgroups=${1#ar}" ;;
     fold*)
       local inner
       inner=$(flags_of "${1#fold}") || return 1
       echo "$inner --ocannl_online_softmax_block=16" ;;
-    b[!a]*) flags_of "${1#b}" ;;
+    b[!a]* | bar[1-9]*) flags_of "${1#b}" ;;
     d1*)
       local rest
       rest=$(flags_of "${1#d1}") || return 1

@@ -648,7 +648,14 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
 
 - `tools/test-harnesses.sh` runs the complete hand-run harness tier locally, from any
   working directory. Its manifest is the membership CI uses: the toolchain-free job runs
-  `--shell`, the formatting job runs `--toolchain` after installation; omitting the group runs both.
+  `--shell`, the formatting job runs `--toolchain` and `--promotion` after installation, and the
+  `promotion-floor` job runs `--promotion` again under the Dune that `dune-project`'s
+  `(lang dune X.Y)` declares (gh-ocannl-1215); omitting the group runs all three. Both
+  toolchain-installing jobs set `OCANNL_TOOL_HARNESS_STRICT=1`, under which `harness-support.sh`
+  reports a skip as a FAIL: a counted skip is right where a host lacks a capability, and a vacuous
+  green where the step installed it. setup-ocaml's switch is not on a CI step's PATH, so a harness
+  needing `dune` falls back to sourcing `tools/opam-env.sh` before `harness_require dune`; one that
+  omits the fallback skips every leg there, which strict mode turns red.
   `--list` lists the selected paths without executing them. Every selected member runs after
   an ordinary failure; the footer counts failed harnesses and exits 1 if any failed. A member
   interrupted by HUP, INT or TERM stops the aggregate and preserves exit 129, 130 or 143. Individual
@@ -898,6 +905,8 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   Capture failure keeps the list but advertises no replay; every copy/query stays under the run's
   existing lock, signal handling and remaining cap. `tools/test-promotion-record.sh` owns the byte,
   recovery and refusal controls; `tools/test-promote.sh` owns the opposing floor-stream controls.
+  Their version legs SIMULATE the floor with shims over the installed Dune; CI's `promotion-floor`
+  job is what runs them against a real floor binary.
   Floor Dune also recomputes diffs during `list`, so both wrappers pin its `--diff-command=diff`: a
   presentation-only `DUNE_DIFF_COMMAND=-` must not hide registered corrections from recovery.
 - **`cmd 2>/dev/null` does not silence a failed REDIRECTION.** The shell reports that before the
@@ -2929,8 +2938,19 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   target, `--root`, an alias-naming or unknown option -- is every backend) answers, so `runtest test/operations` is a GPU batch while
   `@test/operations/runtest-<cpu test>` and `@test/operations/scans` are not; a Metal marker
   counts even on Linux, where its stanza compiles the stub. Second, for the stanzas that read the
-  configuration: resolved, not read off `OCANNL_BACKEND`, because an ordinary cc batch
-  leaves it unset: `ocannl_read_config`
+  configuration -- counted unless the same tool PROVES them unread (no `reads config` line): a
+  batch reaching only `none`-marked stanzas (`@test/operations/scans`) then holds no backend and
+  runs uncapped and `--cpu` whatever a test configuration names (gh-ocannl-1095). The proof is the
+  inverted claim, after two review rounds each found dune shapes a closure missed: the reach is the
+  closure of the argv's aliases under everything dune builds first (dependency aliases across
+  directories, generated `runtest-<name>` included; every file a stanza mentions matched by
+  basename to any rule's targets; every compilation in the tree and every source-like producer,
+  for any batch), and it is trusted only where every stanza in it uses constructs modelled
+  exactly -- any other pform, dependency form, stanza head (`include`, `cram`, `install`),
+  `dynamic-run` or preprocessing action makes the batch every backend, and so does a backend set
+  past the configuration (`setenv`/`env-vars` of `OCANNL_BACKEND`, a generated `ocannl_config`). `slot_kind_cases`
+  pins the live `scans` answer, so a stanza that breaks the proof shows as a diff. The configurations are resolved, not read off `OCANNL_BACKEND`, because an
+  ordinary cc batch leaves it unset: `ocannl_read_config`
   (`test/config`, the same Utils resolution a test run makes) is built and asked from each
   directory whose `ocannl_config` sets a backend — `test/config` (copied by every `test/*`
   directory and `bin/`) and `arrayjit/test`. No backend at all is not cc (`Context.auto` then

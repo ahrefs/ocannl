@@ -20,3 +20,13 @@ the twins carry different schedules: true
 the twins' entry replays from the cache: true
 each twin replays its own schedule: true
 the twins' replay computes the right values: true
+the folded segmentation opens a segment with the projection's zero: true
+the folded winner replays from the cache: true
+the folded replay computes the right values: true
+the raised threshold no longer proposes the fold: true
+under the raised threshold the folded winner replays from the cache, with search: true
+under the raised threshold the folded replay computes the right values, with search: true
+under the raised threshold the folded replay emits identical code, with search: true
+under the raised threshold the folded winner replays from the cache, with search disabled: true
+under the raised threshold the folded replay computes the right values, with search disabled: true
+under the raised threshold the folded replay emits identical code, with search disabled: true

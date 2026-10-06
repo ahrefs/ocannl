@@ -74,6 +74,7 @@ search-shaping -- it defines the untuned default pipeline -- its schedules and, 
   automatic_gpu_schedule
   cpu_schedule_min_parallel
   gpu_fission_keep_mapping
+  gpu_lane_all_reduce_simdgroups
   gpu_lane_preamble_reduction
   gpu_schedule_block_size
   gpu_schedule_min_parallel
@@ -101,15 +102,15 @@ search-shaping -- it steers the search: how wide, how long, what is proposed, wh
 keyed: timing -- it picks the OBJECTIVE a candidate is timed against -- the latency of a lone dispatch, or what the kernel sustains under queue depth -- and the two crown different candidates, measured (gh-ocannl-755). Not Search_shaping, which is where it started and where the neighbouring autotune_* knobs correctly sit: those change how carefully the SAME quantity is measured, so either process's winner answers the other's question, whereas an entry crowned under isolated timing is the answer to a question a queued search did not ask -- and its stored best_ms, baseline_ms and mma_best_ms are readings of a different quantity, which a replay copies into the reading process's report under that process's label. Left unkeyed, a warm cache would also defeat the new default outright, replaying isolated-crowned winners forever (Codex P1 on PR #512)
   autotune_timing [read at codegen]
 
-search-shaping -- it makes the tuner try alternative inlining decisions; each alternative is a different program and keys on its own digest
+placement-shaping -- it makes the tuner try alternative inlining decisions; each alternative is a different program and keys on its own digest
   tune_flip_ordering
   tune_flip_profit_margin
   tune_inline_flips
 
-search-shaping -- it decides which of the two searched placement arms ships, overriding the measured comparison rather than changing either arm: each arm is a different program keyed on its own digest, each arm's crown is cached under that digest either way, and a schedule crowned under one setting is a valid crown under the other (gh-ocannl-638)
+placement-shaping -- it decides which of the two searched placement arms ships, overriding the measured comparison rather than changing either arm: each arm is a different program keyed on its own digest, each arm's crown is cached under that digest either way, and a schedule crowned under one setting is a valid crown under the other (gh-ocannl-638)
   tune_ship_arm
 
-search-shaping -- it decides whether the placement decision is replayed from the placement-decision store or re-derived by comparing the two arms (gh-ocannl-1020): each arm and each flip is a different program keyed on its own digest and cached either way, the store holds only which of them shipped, and a decision re-derived from the arms is as valid a winner as a replayed one
+placement-shaping -- it decides whether the placement decision is replayed from the placement-decision store or re-derived by comparing the two arms (gh-ocannl-1020): each arm and each flip is a different program keyed on its own digest and cached either way, the store holds only which of them shipped, and a decision re-derived from the arms is as valid a winner as a replayed one
   tune_placement_store
 
 execution-neutral -- startup and configuration-sourcing chatter, and which descriptor foreign C-library chatter follows

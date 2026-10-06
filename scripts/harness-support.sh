@@ -23,6 +23,12 @@ report() { # RC LABEL [DETAIL]
   return 0
 }
 skip() { # LABEL REASON
+  # A host expected to decide every leg (a CI step that installed the
+  # toolchain) sets OCANNL_TOOL_HARNESS_STRICT=1: an undecided leg is red.
+  if [ "${OCANNL_TOOL_HARNESS_STRICT:-0}" = 1 ]; then
+    report 1 "$1" "skipped under OCANNL_TOOL_HARNESS_STRICT=1: $2"
+    return 0
+  fi
   skipped=$((skipped + 1))
   printf 'SKIP  %s\n      %s\n' "$1" "$2"
 }

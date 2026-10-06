@@ -322,19 +322,21 @@ let unit_axis (idcs : Idx.axis_index array) s : int option =
    Inputs: the perfectly nested serial accumulation statement's loops in nest order (with extents),
    the accumulator's index map [di], and the two operand reads. Roles:
 
-   - The contraction nest is the maximal innermost suffix of loops absent from [di] (lowering orders
-   the reduction loops after the output loops, so a multi-axis contraction is exactly such a
-   suffix): [k] is its innermost loop, the rest are [m_ko] (gh-ocannl-683). - Every other loop must
-   own a distinct axis of [di] (unit coefficient, sole occurrence). - [j] owns [di]'s minor axis and
-   must be the innermost of the write loops (how lowering orders them — the sketch pipelines'
-   hoisting normalization only handles batch loops above [j]). - Per operand order, [a] must own
-   [k], must not read [j]; [b] must own [j] and [k]; [i] is the {e deepest} write loop owned by [a]
-   and absent from [b] — the 2-D tile row; a role symbol owns its component alone (a convolution
-   window [ox + kx] is not a tile axis). The exclusions are what keep variance-style self-products
-   [d[b,s] += x[b,s,k] * x[b,s,k]] — whose reads mention every loop — from masquerading as matmuls:
-   they seeded (and always failed candidate compile) before. - Everything else is batch: [m_bo]
-   outside [i], [m_bi] between [i] and [j]; batch symbols and outer contraction symbols may appear
-   in the operands freely (their occurrences form the tile block base).
+   - The contraction nest is the maximal innermost suffix of loops absent from [di] (a forward
+   product lowers its reduction loops after the output loops, so a multi-axis contraction is exactly
+   such a suffix; backprop's contractions do not, and reach this matcher through the enabling
+   interchange of [detect_matmul_canonical], gh-ocannl-1183): [k] is its innermost loop, the rest
+   are [m_ko] (gh-ocannl-683). - Every other loop must own a distinct axis of [di] (unit
+   coefficient, sole occurrence). - [j] owns [di]'s minor axis and must be the innermost of the
+   write loops (how lowering orders them — the sketch pipelines' hoisting normalization only handles
+   batch loops above [j]). - Per operand order, [a] must own [k], must not read [j]; [b] must own
+   [j] and [k]; [i] is the {e deepest} write loop owned by [a] and absent from [b] — the 2-D tile
+   row; a role symbol owns its component alone (a convolution window [ox + kx] is not a tile axis).
+   The exclusions are what keep variance-style self-products [d[b,s] += x[b,s,k] * x[b,s,k]] — whose
+   reads mention every loop — from masquerading as matmuls: they seeded (and always failed candidate
+   compile) before. - Everything else is batch: [m_bo] outside [i], [m_bi] between [i] and [j];
+   batch symbols and outer contraction symbols may appear in the operands freely (their occurrences
+   form the tile block base).
 
    Detection remains permissive about everything else — a mis-detected site fails its candidate
    compile (op preconditions, [validate_parallel], hardware limits) and is skipped. *)
@@ -1009,6 +1011,103 @@ let detect_conv (llc : LL.t) : conv_site option =
             detection must be behavior-preserving");
   site
 
+(** {2 The enabling interchange (gh-ocannl-1183)}
+
+    [classify_matmul] reads the contraction nest off the innermost end of the loop nest, which is
+    how the forward pass lowers a product. Backprop does not: a weight gradient lowers as
+    [for b, s, o, i: dW[o,i] += dy[b,s,o] * x[b,s,i]] (the contraction loops outermost) and a data
+    gradient as [for b, s, o, i: dx[b,s,i] += dy[b,s,o] * w[o,i]] (the contraction loop between
+    write loops), so not one backward contraction of a training step was ever a matmul site, and no
+    tiled, register-tiled or tensorized sketch was ever seeded for the kernels a large batch is
+    dominated by. The answer is the split-reduce precedent's (gh-ocannl-537): an adjacent-[Swap]
+    chain that sinks the contraction loops below the write loops, each [Swap] confirmed [Op_legal]
+    on the code it is applied to, after which the statement is re-detected on the interchanged code.
+    The chain is the prefix of every schedule built from such a site, so replaying it from the
+    original code reproduces the code the site was detected on — and since [Swap] mints no symbol,
+    the site's symbols name the same loops in both.
+
+    Interchanging only reorders whole cells' sequences: for any one accumulator cell the contraction
+    loops still run in their original relative order, so the interchanged code computes the same
+    values bitwise. Sites the plain matcher finds, and segments the conv family claims, are left
+    exactly as before (no prefix, the same seeds); the interchange only adds sites where neither
+    family had one. *)
+
+(* The adjacent-interchange chain taking a statement's loop nest [loops] (outermost first) to its
+   write loops followed by its contraction loops, each group in its original relative order: the
+   first contraction loop directly enclosing a write loop is swapped below it until none is. *)
+let contraction_sink_swaps ~(is_write : Idx.symbol -> bool) (loops : Idx.symbol list) :
+    (Idx.symbol * Idx.symbol) list =
+  let rec step order swaps =
+    let rec find = function
+      | x :: (y :: _ as rest) -> if (not (is_write x)) && is_write y then Some (x, y) else find rest
+      | _ -> None
+    in
+    match find order with
+    | None -> List.rev swaps
+    | Some (x, y) ->
+        let order =
+          List.concat_map order ~f:(fun s ->
+              if Idx.equal_symbol s x then [ y ] else if Idx.equal_symbol s y then [ x ] else [ s ])
+        in
+        step order ((x, y) :: swaps)
+  in
+  step loops []
+
+(* The interchange enabling the first statement of [opt] that is an accumulation of a product of two
+   reads but whose contraction loops are not its innermost suffix: the chain, and the code it
+   produces, once every [Swap] is [Op_legal] and the interchanged code is a matmul site. *)
+let matmul_interchange (opt : LL.optimized) : (Sched.schedule * LL.optimized * matmul_site) option =
+  let candidate stmt =
+    match serial_nest_of stmt with
+    | (_ :: _ :: _ :: _ as loops), LL.Set { tn = d; idcs = di; llsc; _ } -> (
+        let gets = collect_gets llsc in
+        let is_d_read (tn, idcs) = phys_equal tn d && Array.equal Idx.equal_axis_index idcs di in
+        match List.partition_tf gets ~f:is_d_read with
+        | _ :: _, [ _; _ ] ->
+            let is_write s = Array.exists di ~f:(Idx.axis_index_mentions_symbol s) in
+            let swaps = contraction_sink_swaps ~is_write (List.map loops ~f:fst) in
+            if List.is_empty swaps then None
+            else Some (List.map swaps ~f:(fun (outer, inner) -> Sched.Swap { outer; inner }))
+        | _ -> None)
+    | _ -> None
+  in
+  let legal ops =
+    let verdicts = Sched.schedule_legality opt ops in
+    List.length verdicts = List.length ops
+    && List.for_all verdicts ~f:(fun (_, v) -> Sched.equal_op_verdict v Sched.Op_legal)
+  in
+  let hermetic (o : LL.optimized) =
+    {
+      o with
+      LL.traced_store = Hashtbl.copy o.LL.traced_store;
+      LL.optimize_ctx = LL.copy_optimize_ctx o.LL.optimize_ctx;
+    }
+  in
+  List.find_map
+    (strip_stmts (LL.flat_lines [ opt.LL.llc ]))
+    ~f:(fun stmt ->
+      match candidate stmt with
+      | Some ops when legal ops -> (
+          match Sched.apply ops (hermetic opt) with
+          | swapped ->
+              Option.map (detect_matmul swapped.LL.llc) ~f:(fun site -> (ops, swapped, site))
+          | exception Invalid_argument _ -> None)
+      | _ -> None)
+
+(* The matmul site of [opt] as every seeding and schedule-construction entry point sees it: the
+   site, the enabling-interchange prefix its schedules carry, and the code it was detected on (the
+   interchanged code when the prefix is nonempty). A conv site takes precedence over an interchanged
+   one, so the conv family keeps every segment it claimed before. *)
+let detect_matmul_canonical (opt : LL.optimized) :
+    (matmul_site * Sched.schedule * LL.optimized) option =
+  match detect_matmul opt.LL.llc with
+  | Some site -> Some (site, [], opt)
+  | None ->
+      if Option.is_some (detect_conv opt.LL.llc) then None
+      else
+        Option.map (matmul_interchange opt) ~f:(fun (prefix, swapped, site) ->
+            (site, prefix, swapped))
+
 (* The statically-decidable precondition of {!zero_geometry}, shared with the family tree's
    construction-time verdicts (gh-ocannl-577): a zeroed site whose output lacks a row axis before
    the minor axis fails every pipeline's zero expansion, whatever the tile geometry. *)
@@ -1060,10 +1159,10 @@ let hoist_above ~(outer : Idx.symbol) (syms : Idx.symbol list) : Sched.schedule 
    and give the resulting nest a compatible parallel geometry, via [mk_zops] on its two fresh loop
    symbols and — under a [`Grid_inner] layout only — the interior batch zero loops [mk_zops] must
    hoist under the row's block split ([~interior]; empty otherwise). When the site is NOT zeroed — a
-   fission segment's site never is, the [Zero_out] lands in its own [`Zeros] segment — there is
-   nothing to expand and the pipelines are correct without it: [Privatize] init-loads the
-   accumulator tile from the (pre-zeroed) target, and [Tile_mma] loads the accumulator fragment
-   before the reduction. *)
+   fission exposes a covering zero as an ordinary per-cell companion, and other whole-node zeros
+   land in their own [`Zeros] segment — there is nothing to expand here. Companion geometry maps the
+   per-cell zero with the site; [Privatize] can forward it into the accumulator tile using the
+   shared zero-seed proof. Otherwise the tile/fragment loads the initialized target. *)
 let zero_geometry ?(layout : batch_layout = `Serial) (site : matmul_site)
     ~(mk_zops : zi:Idx.symbol -> zj:Idx.symbol -> interior:Idx.symbol list -> Sched.schedule) :
     Sched.schedule =
@@ -1193,11 +1292,15 @@ let rec nest_loop_syms acc (llc : LL.t) =
    full arity (a reduction over the site's minor axis, e.g. the lm_head's max-logits row) still
    trims the component's common prefix below [site_syms] and correctly declines.
 
-   Residual, shared with the zeroing geometry this reuses: a tensorized nest's workgroup slot is the
-   [Tensorize] lane, whose per-lane element ownership is architecture-opaque, so a per-lane
-   companion reads cells other lanes of the same simdgroup produced. The threadgroup is exactly one
-   simd width here (a single [Workgroup] slot of extent [sk_simd]), which is what makes that safe in
-   practice; a cross-nest simdgroup barrier would be the formal fix. *)
+   Ordering, shared with the zeroing geometry this reuses: a tensorized nest's workgroup slot is the
+   [Tensorize] lane, whose per-lane element ownership is architecture-opaque, so the accumulator
+   fragment loads cells other lanes wrote in a companion (the folded zero of gh-ocannl-1175), and a
+   later companion reads cells the fragment store wrote. The GPU renderers order both: every
+   accumulator load of [d] from memory (the per-call intrinsic, the resident-fragment scope opening,
+   the lane-0 fallback) opens with a workgroup barrier, and every store-back closes with one --
+   [threadgroup_barrier(mem_threadgroup | mem_device)] on Metal, [__syncthreads()] on CUDA and HIP.
+   The barrier spans the whole workgroup, so the ordering holds for any lane width the renderer
+   emits; [qkv_zero_init] executes every seed of a folded projection against a materialized run. *)
 let companion_geometry ~(site_syms : (Idx.symbol * int) list) ~(skip : Idx.symbol list)
     ~(expanded_zeros : Ir.Tnode.t list) ~(annotate : (Idx.symbol * int) list -> Sched.schedule)
     (opt : LL.optimized) : (Sched.schedule, string) Result.t =
@@ -1996,13 +2099,12 @@ let reorder_swaps ~current ~target : Sched.schedule =
   List.rev !swaps
 
 (* The segment's real top-level statements as the conv seeding counts them: glue excluded, and the
-   conv site's own [Zero_out] excluded (the pipeline's zero geometry handles it); every other
-   statement is a companion nest. *)
+   conv site's own covering zero initializer excluded (the pipeline's zero geometry handles it);
+   every other statement is a companion nest. *)
 let conv_real_stmts (site : conv_site) (opt : LL.optimized) : LL.t list =
   List.filter (LL.flat_lines [ opt.LL.llc ]) ~f:(function
     | LL.Noop | LL.Comment _ -> false
-    | LL.Zero_out tn -> not (Ir.Tnode.equal tn site.c_d)
-    | _ -> true)
+    | stmt -> not (Option.exists (LL.zero_initializer_target stmt) ~f:(Ir.Tnode.equal site.c_d)))
 
 (* The conv output's epilogue tail (see [epilogue_tail_loop_syms]): the fused twins on
    aligned-merged segments omit the preset's [Retype] on that nest (fuse-before-annotate,
@@ -2063,8 +2165,8 @@ let conv_split_row_current (site : conv_site) ~row_o ~row_i : Idx.symbol list =
    chunk per row-block); on an aligned-merged segment (conv + materialized companions, e.g. lenet's
    conv+bias/relu+pooling) the whole-segment [Grid] geometry comes from [conv_aligned_grid] as for
    the unblocked flavor and the panel loop stays [Serial] — pure cache blocking within each pool
-   chunk. Both cases are unzeroed (the seeds gate accordingly): the [Zero_out] lives in its own
-   [`Zeros] segment, so no zero geometry is needed. *)
+   chunk. Both cases exclude whole-node [Zero_out] (the seeds gate accordingly). A covering per-cell
+   zero companion follows the segment's aligned Grid geometry. *)
 let cpu_conv_sketch_schedule ~(opt : LL.optimized) (site : conv_site)
     { sk_grid; sk_bm; sk_epilogue; sk_pack_prec; _ } : Sched.schedule =
   let stage source tile_loops =
@@ -2157,9 +2259,9 @@ let cpu_conv_sketch_schedule ~(opt : LL.optimized) (site : conv_site)
    cooperative workgroup-shared tiles at the kernel-window anchor (lane-aware [Stage], the lane
    width matching [Tensorize]'s — barrier-strength uniformity). Reusing [Tensorize] inherits the
    accumulator contraction (gh-ocannl-480) unchanged: the [row × oc] fragment stays resident across
-   the whole kernel-window chain (gh-ocannl-501), on Metal in simdgroup registers. Zeroed sites are
-   gated off at the seeds — the GPU leg targets fission segments, whose [Zero_out] lives in its own
-   [`Zeros] segment.
+   the whole kernel-window chain (gh-ocannl-501), on Metal in simdgroup registers. Whole-node
+   [Zero_out] sites are gated off at the seeds. GPU fission expands eligible covering zeros into
+   per-cell companions, which take the same Grid and lane geometry.
 
    With [sk_bm > 0] (gh-ocannl-500) the GEMM row is additionally split into [Grid] blocks of [sk_bm]
    rows: one threadgroup per (outer.., row-block) coordinate instead of one per outer coordinate, so
@@ -2167,10 +2269,11 @@ let cpu_conv_sketch_schedule ~(opt : LL.optimized) (site : conv_site)
    push the cooperative-load barriers under divergent control flow, rejected by
    [validate_parallel]). Only the row is blocked — a 2-D conv already binds two outer [Grid] loops
    (batch, the non-row output spatial axis), so a second [Grid] block on [oc] would exceed the
-   three-slot budget; [oc] stays the tensorized column extent. The block loop [row_o] carries no
-   companion nest here (unzeroed segments), so no cross-nest zero geometry is needed. *)
-let gpu_conv_sketch_schedule (site : conv_site)
-    { sk_simd = w; sk_bm; sk_bn; sk_bk; sk_tm; sk_depth; _ } : Sched.schedule =
+   three-slot budget; [oc] stays the tensorized column extent. Every materialized companion,
+   including the covering zero, follows the site's outer Grid coordinates, row-block split and
+   tensorization lane through [companion_geometry]. *)
+let gpu_conv_sketch_schedule ~(opt : LL.optimized) (site : conv_site)
+    { sk_simd = w; sk_bm; sk_bn; sk_bk; sk_tm; sk_depth; sk_epilogue; _ } : Sched.schedule =
   let stage source tile_loops =
     Sched.Stage
       {
@@ -2184,6 +2287,32 @@ let gpu_conv_sketch_schedule (site : conv_site)
         pipeline_depth = sk_depth;
         tile_prec = None;
       }
+  in
+  (* The expanded zero and other companions use the site's output chain. Tensorize adds one
+     workgroup lane but no column Grid slot: distribute companion columns over that same lane width,
+     keeping any column blocks serial. Outer output coordinates and row blocks have the same Grid
+     roles in every nest. *)
+  let site_syms = site.c_outer @ [ (site.c_row, site.c_nrow); (site.c_oc, site.c_noc) ] in
+  let annotate chain =
+    List.concat_mapi chain ~f:(fun pos (sym, extent) ->
+        if pos < List.length site.c_outer then [ Sched.Retype { axis = sym; ty = LL.Grid } ]
+        else if pos = List.length site.c_outer then
+          if sk_bm = 0 then []
+          else
+            let sp, _, _ = Sched.split ~axis:sym ~factor:sk_bm ~outer:LL.Grid ~inner:LL.Serial in
+            pad_to ~axis:sym ~extent sk_bm @ [ sp ]
+        else
+          let sp, _, _ = Sched.split ~axis:sym ~factor:w ~outer:LL.Serial ~inner:LL.Workgroup in
+          [ sp ])
+  in
+  let companions =
+    match
+      companion_geometry ~site_syms
+        ~skip:(if sk_epilogue then conv_tail_loop_syms site opt else [])
+        ~expanded_zeros:[] ~annotate opt
+    with
+    | Ok ops -> ops
+    | Error why -> companion_coverage_unsupported ~tensorized:true why
   in
   let outer_grid =
     List.map site.c_outer ~f:(fun (s, _) -> Sched.Retype { axis = s; ty = LL.Grid })
@@ -2207,7 +2336,7 @@ let gpu_conv_sketch_schedule (site : conv_site)
       List.map site.c_outer ~f:fst @ [ row_o ] @ site.c_kernel @ [ row_i; site.c_oc; site.c_red ]
     in
     let tz, _lane = Sched.tensorize ~i:row_i ~j:site.c_oc ~k:site.c_red ~simd_width:w () in
-    pads @ (outer_grid @ [ sp_row ]) @ reorder_swaps ~current ~target
+    companions @ pads @ (outer_grid @ [ sp_row ]) @ reorder_swaps ~current ~target
     @ [ stage site.c_a [ row_i; site.c_red ]; stage site.c_b [ site.c_red; site.c_oc ]; tz ]
   else
     let pads =
@@ -2217,7 +2346,7 @@ let gpu_conv_sketch_schedule (site : conv_site)
       List.map site.c_outer ~f:fst @ site.c_kernel @ [ site.c_row; site.c_oc; site.c_red ]
     in
     let tz, _lane = Sched.tensorize ~i:site.c_row ~j:site.c_oc ~k:site.c_red ~simd_width:w () in
-    pads @ outer_grid
+    companions @ pads @ outer_grid
     @ reorder_swaps ~current:site.c_loops ~target:loop_syms
     @ [ stage site.c_a [ site.c_row; site.c_red ]; stage site.c_b [ site.c_red; site.c_oc ]; tz ]
 
@@ -2235,13 +2364,15 @@ let family_schedule ~accum_prec ~p (opt : LL.optimized) : Sched.schedule =
       match detect_conv opt.LL.llc with
       | None -> invalid_arg "Autotune sketch: no convolution site detected"
       | Some site ->
-          ( (if p.sk_gpu then gpu_conv_sketch_schedule site p
+          ( (if p.sk_gpu then gpu_conv_sketch_schedule ~opt site p
              else cpu_conv_sketch_schedule ~opt site p),
             site.c_d )
     else
-      match detect_matmul opt.LL.llc with
+      match detect_matmul_canonical opt with
       | None -> invalid_arg "Autotune sketch: no matmul micro-kernel detected"
-      | Some site ->
+      | Some (site, prefix, opt) ->
+          (* [opt] is now the code the site was detected on; [prefix] (the enabling interchange,
+             empty for a site the plain matcher finds) takes the caller's code there. *)
           let sched =
             if p.sk_mma then
               if p.sk_gpu then gpu_mma_sketch_schedule ~opt site p
@@ -2250,7 +2381,7 @@ let family_schedule ~accum_prec ~p (opt : LL.optimized) : Sched.schedule =
             else if p.sk_gpu then gpu_sketch_schedule ~accum_prec ~opt site p
             else cpu_sketch_schedule ~accum_prec site p
           in
-          (sched, site.m_d)
+          (prefix @ sched, site.m_d)
   in
   if p.sk_epilogue then
     (* [shared] is the fragment-site knob: only the GPU MMA sketches store through the contracted
@@ -2272,11 +2403,12 @@ let family_schedule ~accum_prec ~p (opt : LL.optimized) : Sched.schedule =
    is enumerated over the prepared code: [coalesced] returns the structural prefix and the code it
    produces. The prefix is a function of the site alone — [Coalesce (last m_bi, m_j)], preceded,
    where [d]'s whole-node [Zero_out] shares the routine, by its expansion with the zeroing nest's
-   own last two loops coalesced alike: that nest then takes the merged chain's geometry as an
-   ordinary companion ([companion_geometry]), where an unexpanded [Zero_out] would keep the
-   uncoalesced chain. Whether the prefix applies is the op's own verdict, probed: a per-head
-   operand, a padded inner axis or any other access shape declines there, and no coalesced seed
-   exists. *)
+   own last two loops coalesced alike, and where a covering per-cell zero nest of [d] shares it (the
+   folded zero of a GPU fission segment, gh-ocannl-1175), by that nest's coalescing: either way the
+   zeroing takes the merged chain's geometry as an ordinary companion ([companion_geometry]), where
+   an uncoalesced one would keep the old chain. Whether the prefix applies is the op's own verdict,
+   probed: a per-head operand, a padded inner axis or any other access shape declines there, and no
+   coalesced seed exists. *)
 let coalesced (opt : LL.optimized) : (Sched.schedule * LL.optimized) option =
   match detect_matmul opt.LL.llc with
   | None -> None
@@ -2284,19 +2416,26 @@ let coalesced (opt : LL.optimized) : (Sched.schedule * LL.optimized) option =
       match List.last site.m_bi with
       | None -> None
       | Some (h, _) -> (
+          (* A per-cell zeroing nest's own last two loops (rank >= 3 here: an interior batch axis
+             sits between the row and column axes). *)
+          let coalesce_last_two zsyms =
+            match List.rev zsyms with
+            | zj :: zh :: _ -> [ fst (Sched.coalesce ~outer:zh ~inner:zj) ]
+            | _ -> []
+          in
           let zero_ops =
-            if not site.m_zeroed then []
-            else
-              (* Rank >= 3 here: an interior batch axis sits between the row and column axes. *)
+            if site.m_zeroed then
               let ez, zsyms = Sched.expand_zero ~tn:site.m_d in
-              let rank = List.length zsyms in
-              [
-                ez;
-                fst
-                  (Sched.coalesce
-                     ~outer:(List.nth_exn zsyms (rank - 2))
-                     ~inner:(List.nth_exn zsyms (rank - 1)));
-              ]
+              ez :: coalesce_last_two zsyms
+            else
+              (* The covering per-cell zero nest a GPU fission segment carries beside its site
+                 (gh-ocannl-1175's folded zero): coalesced alike, or it would keep the uncoalesced
+                 chain and refute the branch on companion coverage. *)
+              List.concat_map (LL.flat_lines [ opt.LL.llc ]) ~f:(fun stmt ->
+                  match (LL.zero_initializer_target stmt, stmt) with
+                  | Some tn, LL.For_loop _ when Ir.Tnode.equal tn site.m_d ->
+                      coalesce_last_two (List.map (fst (serial_nest_of stmt)) ~f:fst)
+                  | _ -> [])
           in
           let prefix = zero_ops @ [ fst (Sched.coalesce ~outer:h ~inner:site.m_j) ] in
           let hermetic =
@@ -2333,9 +2472,8 @@ let sketch_schedule ~accum_prec ~p (opt : LL.optimized) : Sched.schedule =
 (* Sketch seed parameters compatible with the site's extents. Fully staged tensorized pipelines no
    longer require dividing tiles: non-multiple extents seed [(pad, tensorize)] compositions
    (gh-ocannl-485) whose masked edges the tuner measures against scalar alternatives — pipelines
-   that read an operand in place keep their divisibility gates. Unzeroed sites — the norm for fission segments,
-   whose [Zero_out] lives in its own [`Zeros] segment — are proposable too: the pipelines skip the
-   zero geometry (see [zero_geometry]), and a site whose kernel-mates cannot share the parallel
+   that read an operand in place keep their divisibility gates. Sites without whole-node [Zero_out] are proposable too: GPU fission exposes eligible
+   zeros as per-cell companions, while a separate zero segment needs no geometry here, and a site whose kernel-mates cannot share the parallel
    geometry merely fails its candidate compile. *)
 (* Conv seeds (gh-ocannl-493). CPU: the serial implicit-GEMM pipeline plus its Grid-parallel
    variant, pre-filtered by the register tiling's statically decidable rules like the matmul
@@ -2495,12 +2633,9 @@ let conv_seed_params ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits)
             with
             | None -> []
             | Some (tm_t, tn_t, tk_t) ->
-                (* Zeroed sites are gated off: the GPU leg targets fission segments, whose [Zero_out]
-               lives in its own [`Zeros] segment (a whole-routine zeroed GPU flavor would need the
-               zero nest annotated with matching workgroup geometry — a follow-up). Companion
-               gating mirrors the CPU grid flavors: on GPU there is no all-serial fallback, so any
-               uncovered companion write fails [validate_parallel] — the one-companion seed only
-               survives through its fused twin. *)
+                (* Whole-node [Zero_out] sites are gated off. Eligible GPU fission zeros are
+                   per-cell companions; [conv_real_stmts] excludes the site's covering zero,
+                   and the pipeline gives all companions aligned Grid and lane geometry. *)
                 (* The intrinsic-tile divisibility is now a PER-BLOCK property (gh-ocannl-500): the
                tensorized micro-kernel row is [sk_bm] (the block), not the whole [c_nrow], so a
                staged block flavor is proposable whenever [sk_bm] — a multiple of the intrinsic row
@@ -3757,8 +3892,8 @@ let sketch_seed_params ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limit
      candidate compile and are skipped. For the matmul family the fusion choice is the tree's root
      level (gh-ocannl-613), so its leaves already carry the twins, each flavor under its own
      preconditions; the conv family is not tree-factored yet and flag-flips its seeds. *)
-  match detect_matmul opt.LL.llc with
-  | Some site -> matmul_seed_params ~is_gpu ~is_cpu ~limits ~opt site
+  match detect_matmul_canonical opt with
+  | Some (site, _, opt) -> matmul_seed_params ~is_gpu ~is_cpu ~limits ~opt site
   | None -> (
       match conv_seed_params ~is_gpu ~is_cpu ~limits opt with
       | None -> []
@@ -3800,7 +3935,8 @@ let coalesced_seed_params ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_li
    the same way as a follow-up. *)
 let matmul_sketch_tree ~is_gpu ~is_cpu ~(limits : Ir.Backend_intf.hardware_limits)
     (opt : LL.optimized) : family_tree option =
-  Option.map (detect_matmul opt.LL.llc) ~f:(matmul_family_tree ~is_gpu ~is_cpu ~limits ~opt)
+  Option.map (detect_matmul_canonical opt) ~f:(fun (site, _, opt) ->
+      matmul_family_tree ~is_gpu ~is_cpu ~limits ~opt site)
 
 (* gh-ocannl-514 phase 5: lift every tile-lattice exclusion in the family tree, preserving the
    laziness of everything else — a lifted branch remains subject to legality (box refutations), and
@@ -3840,9 +3976,9 @@ let lift_geometry_lattice (tree : family_tree) : family_tree =
    needs the caller's backend kind alongside the path. *)
 let sketch_path_traffic_floor ~(limits : Ir.Backend_intf.hardware_limits) (opt : LL.optimized) :
     Family_decision.path -> int =
-  match detect_matmul opt.LL.llc with
+  match detect_matmul_canonical opt with
   | None -> fun _path -> 0
-  | Some site -> (
+  | Some (site, _, _) -> (
       let a_prec = Lazy.force site.m_a.Ir.Tnode.storage_prec in
       let b_prec = Lazy.force site.m_b.Ir.Tnode.storage_prec in
       let pa = Ir.Ops.prec_in_bytes a_prec and pb = Ir.Ops.prec_in_bytes b_prec in

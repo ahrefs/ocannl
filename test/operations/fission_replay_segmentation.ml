@@ -19,7 +19,10 @@
    at other boundaries applies, but its segments are not the ones the schedules were saved against,
    so the replay declines and the tuner re-searches. 5. Segments are matched by position: two
    segments with one structural digest (the digest leaves placements out, and placements decide a
-   segment's kind and schedule) keep their own saved schedules through a replay. *)
+   segment's kind and schedule) keep their own saved schedules through a replay. 6. A folded segment
+   (gh-ocannl-1175: a reduction's zero expanded into its kernel) replays after the zero policy stops
+   proposing that fold, with or without search: the recorded fold is rebuilt from its proven target,
+   never re-asked of the current policy. *)
 
 open Base
 open Ocannl
@@ -133,10 +136,10 @@ let preset rut o =
 
 let zero_sched rut tns = if is_gpu then Sched.zero_expansion ~limits:rut.limits tns else []
 
-let fission rut ?arity_cuts ?keep_mapping ?segmentation () =
+let fission rut ?arity_cuts ?fold_zeros ?keep_mapping ?segmentation () =
   (* A recorded segmentation is applied with empty schedules: these checks are about the cuts. *)
   let replay = Option.map segmentation ~f:(fun plan -> (plan, fun _ _ -> [])) in
-  Sched.fission_segmented ~promote_locals:is_gpu ?arity_cuts ?keep_mapping ?replay
+  Sched.fission_segmented ~promote_locals:is_gpu ?arity_cuts ?fold_zeros ?keep_mapping ?replay
     ~preset:(preset rut) ~zero_sched:(zero_sched rut) ~static_indices:[] (copy rut.base_opt)
 
 let cache_key rut =
@@ -165,10 +168,10 @@ let store ~cache_dir rut segments =
       best_steps = None;
     }
 
-let tune ~name ~cache_dir comp ~read =
+let tune ?search ~name ~cache_dir comp ~read =
   let report = ref None in
   let ctx, routine =
-    Autotune.tune ~name ~beam_width:1 ~rounds:0 ~repeats:1 ~cache_dir
+    Autotune.tune ?search ~name ~beam_width:1 ~rounds:0 ~repeats:1 ~cache_dir
       ~report:(fun rep -> report := Some rep)
       (Context.auto ()) comp Ir.Indexing.Empty
   in
@@ -419,3 +422,86 @@ let () =
          SC.equal_saved_schedule r.Autotune.best_schedule
            (List.concat_map stored ~f:(fun s -> s.SC.seg_saved))));
   p_all2 "the twins' replay computes the right values" got z2_expected ~f:approx
+
+(* --- 6. A folded segment replays under a zero policy that no longer proposes the fold. --- *)
+let () =
+  let cache_dir = "autotune_cache_fission_replay_folded" in
+  clean_cache cache_dir;
+  (* Sections 1-4 left the GPU threshold raised; the fold is derived under a permissive one. *)
+  Unix.putenv "OCANNL_GPU_SCHEDULE_MIN_PARALLEL" "1";
+  let b = 2 and s = 16 and h = 2 and j = 16 and k = 32 in
+  let xv =
+    Array.init
+      (b * s * k)
+      ~f:(Ll_test.cycle_flat ~dims:[| b; s; k |] ~modulus:7 ~offset:0. ~stride:0.25)
+  in
+  let wv =
+    Array.init
+      (h * j * k)
+      ~f:(Ll_test.cycle_flat ~dims:[| h; j; k |] ~modulus:5 ~offset:0. ~stride:0.125)
+  in
+  let expected =
+    Array.init
+      (b * s * h * j)
+      ~f:(fun idx ->
+        let o = Ll_test.unflat ~dims:[| b; s; h; j |] idx in
+        let acc = ref 0. in
+        for kk = 0 to k - 1 do
+          acc :=
+            !acc
+            +. 2.
+               *. xv.(Ll_test.flat ~dims:[| b; s; k |] [| o.(0); o.(1); kk |])
+               *. wv.(Ll_test.flat ~dims:[| h; j; k |] [| o.(2); o.(3); kk |])
+        done;
+        !acc)
+  in
+  let x0 = TDSL.ndarray xv ~label:[ "fx0" ] ~output_dims:[ b; s; k ] () in
+  let w = TDSL.ndarray wv ~label:[ "fw" ] ~output_dims:[ h; j; k ] () in
+  let%op x = x0 + x0 in
+  Train.set_materialized x.Tensor.value;
+  let%op q = x +* "bsk;hjk=>bshj" w in
+  Train.set_materialized q.Tensor.value;
+  let comp = Train.forward q in
+  let rut = lower comp in
+  let folded_label = "the folded segmentation opens a segment with the projection's zero" in
+  let segmentation, tuples = fission rut ~fold_zeros:true () in
+  let folded =
+    List.exists tuples ~f:(fun (kind, pre, _, _) ->
+        Poly.equal kind `Normal
+        && List.exists (LL.flat_lines [ pre.LL.llc ]) ~f:(fun stmt ->
+            Option.exists (LL.zero_initializer_target stmt) ~f:(Ir.Tnode.equal q.Tensor.value)))
+  in
+  if not is_gpu then Verdict.skipped ~backend:backend_name folded_label
+  else p folded_label (folded && List.length tuples >= 2);
+  let stored = List.map (SC.save_segments segmentation tuples) ~f:fst in
+  store ~cache_dir rut stored;
+  let name = "seg_folded" in
+  let source = name ^ "__seg" in
+  let tune ?search () =
+    tune ?search ~name ~cache_dir comp ~read:(fun ctx -> Context.get_values ctx q.Tensor.value)
+  in
+  Generated.arm source;
+  let got_a, report_a = tune () in
+  let source_a = if cache_available then Some (Generated.read source) else None in
+  cache_claim "the folded winner replays from the cache"
+    (Option.value_map report_a ~default:false ~f:replayed);
+  p_all2 "the folded replay computes the right values" got_a expected ~f:approx;
+  Unix.putenv "OCANNL_GPU_SCHEDULE_MIN_PARALLEL" "1000000";
+  let refolds, _ = fission rut ~fold_zeros:true () in
+  gated ~when_:is_gpu ~on:backend_name "the raised threshold no longer proposes the fold"
+    (not (Sched.equal_segmentation refolds segmentation));
+  List.iter [ None; Some false ] ~f:(fun search ->
+      let leg = match search with None -> "with search" | Some _ -> "with search disabled" in
+      Generated.arm source;
+      let got, report = tune ?search () in
+      cache_claim
+        ("under the raised threshold the folded winner replays from the cache, " ^ leg)
+        (Option.value_map report ~default:false ~f:replayed);
+      p_all2
+        ("under the raised threshold the folded replay computes the right values, " ^ leg)
+        got expected ~f:approx;
+      cache_claim
+        ("under the raised threshold the folded replay emits identical code, " ^ leg)
+        (match source_a with
+        | Some a -> String.equal (alpha_normalize a) (alpha_normalize (Generated.read source))
+        | None -> false))

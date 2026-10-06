@@ -2255,9 +2255,10 @@ let rec schedule_scratch (llc : Low_level.t) =
     elements) form the tile part sizing that axis; terms over loops outside [over] are the
     per-thread element selection, kept in the init-load and store-back indices. No tile part at all
     yields a scalar accumulator (dims [|1|]). Init/store nests iterate fresh serial symbols with
-    per-axis edge guards (construct-then-fold, as in [Stage]). Any [Zero_out] of [target] elsewhere
-    in the routine is left in place: the init-load observes its effect, so semantics are preserved
-    without a surjectivity analysis (dropping the redundant zeroing is a follow-up).
+    per-axis edge guards (construct-then-fold, as in [Stage]). A preceding covering zero initializer
+    is removed and the tile opens from zero when [zero_seed_candidate] proves the whole target RMW
+    is inside [over], including every loop that repeats a cell. Other zeroings remain in place and
+    the tile init-load observes their effect.
 
     Tile precision: [acc_prec], the backend's accumulator residency for [target]'s storage
     ({!privatize} resolves it), so the tile is the materialized twin of the scope local the serial
@@ -2320,7 +2321,42 @@ let apply_privatize ~target ~over ~acc_prec (opt : Low_level.optimized) : Low_le
     go opt.llc;
     !tbl
   in
-  rewrite_loop ~what:"Schedule.Privatize" ~sym:over opt.llc ~f:(fun fc ->
+  (* The serial localizer's zero-forwarding proof also licenses a private tile's opening value. The
+     entire target RMW must be in [over], including EVERY repeated-cell loop; otherwise resetting
+     the tile would drop contributions made by an enclosing reduction. The original initializer may
+     already be an Expand_zero companion with hardware annotations. *)
+  let stmts = flat_lines [ opt.llc ] in
+  let meaningful =
+    List.filter
+      (List.mapi stmts ~f:(fun pos st -> (pos, st)))
+      ~f:(function _, (Noop | Comment _) -> false | _ -> true)
+  in
+  let rec preceding_zero = function
+    | (pos, init) :: ((_, next) :: _ as rest) -> (
+        match zero_initializer_target init with
+        | Some tn when Tn.equal tn target -> (
+            match zero_seed_candidate ~allow_workgroup_barriers:true target next with
+            | Some (write, repeated) ->
+                let inside =
+                  List.drop_while write.Affine.a_loops ~f:(fun (s, _) ->
+                      not (Indexing.equal_symbol s over))
+                in
+                if
+                  (not (List.is_empty inside))
+                  && List.for_all repeated ~f:(fun s ->
+                      List.Assoc.mem inside s ~equal:Indexing.equal_symbol)
+                then Some pos
+                else preceding_zero rest
+            | None -> preceding_zero rest)
+        | _ -> preceding_zero rest)
+    | _ -> None
+  in
+  let zero_pos = preceding_zero meaningful in
+  let llc =
+    unflat_lines
+      (List.filteri stmts ~f:(fun pos _ -> not (Option.equal Int.equal zero_pos (Some pos))))
+  in
+  rewrite_loop ~what:"Schedule.Privatize" ~sym:over llc ~f:(fun fc ->
       if not (equal_axis_type fc.axis Serial) then
         invalid_arg "Schedule.Privatize: the accumulation loop must be Serial";
       (* Accesses of [target] within the loop's subtree, with their loop stacks and enclosing [If]
@@ -2683,7 +2719,13 @@ let apply_privatize ~target ~over ~acc_prec (opt : Low_level.optimized) : Low_le
         in
         let stmt =
           if into_tile then
-            Set { tn = tile; idcs = t_idcs; llsc = Get (target, src_idcs); debug = "" }
+            Set
+              {
+                tn = tile;
+                idcs = t_idcs;
+                llsc = (if Option.is_some zero_pos then Constant 0. else Get (target, src_idcs));
+                debug = "";
+              }
           else Set { tn = target; idcs = src_idcs; llsc = Get (tile, t_idcs); debug = "" }
         in
         (* Per-axis edge guards (construct-then-fold; they survive only for non-dividing tiles). *)
@@ -6378,6 +6420,32 @@ let lane_preamble_reduction_for (limits : Backend_intf.hardware_limits) =
       if limits.Backend_intf.lane_scalar_recompute_cheap then Preamble_cooperative
       else Preamble_refused
 
+(* The most simdgroups a cooperative lane reduction may span -- config
+   [gpu_lane_all_reduce_simdgroups] (gh-ocannl-1168): [auto] ([None]) or a positive count. At one
+   simdgroup the all-reduce is a register butterfly; past it, each simdgroup's partial goes through
+   workgroup-shared memory between two barriers per pair ([C_syntax.try_lane_all_reduce]). *)
+let gpu_lane_all_reduce_simdgroups () =
+  match
+    String.lowercase
+      (String.strip
+         (Utils.get_global_arg ~arg_name:"gpu_lane_all_reduce_simdgroups" ~default:"auto"))
+  with
+  | "auto" -> None
+  | other -> (
+      match Int.of_string_opt other with
+      | Some k when k >= 1 -> Some k
+      | _ ->
+          invalid_arg
+            ("gpu_lane_all_reduce_simdgroups: expected auto or a positive integer, got " ^ other))
+
+(* [auto] resolves from the device's measured economics ({!Backend_intf.hardware_limits}'s
+   [lane_all_reduce_simdgroups]): one simdgroup wherever the barriers' cost was not measured to be
+   repaid. *)
+let lane_all_reduce_simdgroups_for (limits : Backend_intf.hardware_limits) =
+  match gpu_lane_all_reduce_simdgroups () with
+  | Some k -> k
+  | None -> limits.Backend_intf.lane_all_reduce_simdgroups
+
 (* How the default GPU schedule weighs its lane geometry -- config [gpu_serial_lanes]
    (gh-ocannl-1167): taken where a kernel admits it, and a reason for fission to cut a kernel
    ([cut]); taken where a kernel admits it, but no reason to cut ([admitted]); never taken
@@ -6435,8 +6503,8 @@ let serial_lanes_for (limits : Backend_intf.hardware_limits) =
    chunk. Not taken at all unless [enabled] ({!serial_lanes_for}, gh-ocannl-1167). *)
 let lane_geometry ~block_size ~min_parallel ~(limits : Backend_intf.hardware_limits)
     ~standard_threads ~(enabled : bool Lazy.t)
-    ~(preamble_reduction : lane_preamble_reduction Lazy.t) (opt : Low_level.optimized) :
-    schedule option =
+    ~(preamble_reduction : lane_preamble_reduction Lazy.t) ~(all_reduce_simdgroups : int Lazy.t)
+    (opt : Low_level.optimized) : schedule option =
   let open Low_level in
   (* Here both treatments are asked for only where they can matter -- the gate where some statement
      has a lane path at all, the preamble treatment where that path holds a preamble reduction (only
@@ -6510,28 +6578,36 @@ let lane_geometry ~block_size ~min_parallel ~(limits : Backend_intf.hardware_lim
                   (* The cooperative preamble reductions (gh-ocannl-1124): a reduction whose extent
                      is the lane's whole workgroup (the lane unsplit) is retyped [Workgroup_reduce],
                      so it shares the lane's workgroup slot -- the output lanes' physical layout, no
-                     lane axis of its own -- and the renderer computes it as a butterfly all-reduce
-                     leaving the sum in every lane ([C_syntax.try_lane_all_reduce]), or, where the
+                     lane axis of its own -- and the renderer computes it as an all-reduce leaving the
+                     sum in every lane ([C_syntax.try_lane_all_reduce]: a butterfly per simdgroup,
+                     past one the partials through shared memory), or, where the
                      renderer still cannot shuffle, as the serial loop every lane runs whole. *)
                   (* Under [cooperative] every admitted reduction is retyped or the lanes are
                      declined: a reduction the renderer could not all-reduce -- not exactly the
-                     lane's unsplit one-simdgroup extent ({!Backend_intf.hardware_limits}'
-                     [simdgroup_width]) -- would run serially in every lane, the duplicated arm
-                     measured as a regression, and the plain plan is today's behaviour. *)
+                     lane's unsplit extent, or that extent not [k] whole simdgroups
+                     ({!Backend_intf.hardware_limits}' [simdgroup_width]) for [k] up to
+                     [all_reduce_simdgroups] (gh-ocannl-1168: past one simdgroup the all-reduce
+                     pays two barriers per pair, so a device takes it only where measured) --
+                     would run serially in every lane, the duplicated arm measured as a regression,
+                     and the plain plan is today's behaviour. *)
                   let cooperative =
                     match preamble_reduction with
                     | Preamble_refused | Preamble_duplicated -> Some []
                     | Preamble_cooperative ->
+                        let spans width =
+                          match limits.simdgroup_width with
+                          | Some simd when simd > 0 && width % simd = 0 ->
+                              let k = width / simd in
+                              k >= 1 && k <= Lazy.force all_reduce_simdgroups
+                          | _ -> false
+                        in
                         Option.all
                           (List.concat
                              (List.map2_exn (List.zip_exn carrying lanes) plans
                                 ~f:(fun ((n, _), (_, (lane, _))) p ->
                                   let width =
                                     match (p.lp_split, p.lp_block) with
-                                    | None, [ (_, width) ]
-                                      when Option.equal Int.equal limits.simdgroup_width
-                                             (Some width) ->
-                                        Some width
+                                    | None, [ (_, width) ] when spans width -> Some width
                                     | _ -> None
                                   in
                                   List.map (lane_preamble_reductions ~lane n.n_loops)
@@ -6606,8 +6682,9 @@ let fold_mma_schedule ~(limits : Backend_intf.hardware_limits) (opt : Low_level.
               (launch_geometry_of_dims (Low_level.launch_dims folded.Low_level.llc))))
         [ op ]
 
-let default_gpu_presets ?block_size ?min_parallel ?workgroup_fill ?preamble_reduction ?lanes
-    ?(limits = Backend_intf.no_hardware_limits) (opt : Low_level.optimized) : schedule =
+let default_gpu_presets ?block_size ?min_parallel ?workgroup_fill ?preamble_reduction
+    ?all_reduce_simdgroups ?lanes ?(limits = Backend_intf.no_hardware_limits)
+    (opt : Low_level.optimized) : schedule =
   let open Low_level in
   let block_size =
     Option.value block_size
@@ -6747,17 +6824,21 @@ let default_gpu_presets ?block_size ?min_parallel ?workgroup_fill ?preamble_redu
          (match preamble_reduction with
          | Some p -> Lazy.from_val p
          | None -> lazy (lane_preamble_reduction_for limits))
+       ~all_reduce_simdgroups:
+         (match all_reduce_simdgroups with
+         | Some k -> Lazy.from_val k
+         | None -> lazy (lane_all_reduce_simdgroups_for limits))
        opt)
 
-let default_gpu ?block_size ?min_parallel ?workgroup_fill ?preamble_reduction ?lanes
-    ?(limits = Backend_intf.no_hardware_limits) (opt : Low_level.optimized) : schedule =
+let default_gpu ?block_size ?min_parallel ?workgroup_fill ?preamble_reduction ?all_reduce_simdgroups
+    ?lanes ?(limits = Backend_intf.no_hardware_limits) (opt : Low_level.optimized) : schedule =
   (* The block fold on matrix units comes first: its kernel is one fold nest the presets would give
      scalar geometry. *)
   match fold_mma_schedule ~limits opt with
   | Some schedule -> schedule
   | None ->
-      default_gpu_presets ?block_size ?min_parallel ?workgroup_fill ?preamble_reduction ?lanes
-        ~limits opt
+      default_gpu_presets ?block_size ?min_parallel ?workgroup_fill ?preamble_reduction
+        ?all_reduce_simdgroups ?lanes ~limits opt
 
 let default_cpu ?min_parallel (opt : Low_level.optimized) : schedule =
   let min_parallel =
@@ -6805,7 +6886,10 @@ let default_cpu ?min_parallel (opt : Low_level.optimized) : schedule =
     materialized writes, materialized writes inside [Local_scope] bodies, non-injective nests) is
     isolated into its own serial segment rather than poisoning its neighbors' schedules.
     Materialized whole-node [Zero_out]s are likewise isolated and — on GPU — expanded
-    ({!optop.Expand_zero}) and annotated with the same geometry policy as ordinary nests.
+    ({!optop.Expand_zero}) and annotated with the same geometry policy as ordinary nests. A zero
+    whose segment holds it alone and initializes the reduction that opens the next segment folds,
+    expanded, into that segment when the ordinary merge rules re-admit the whole segment with it
+    (the fold pass of {!group_units}, gh-ocannl-1175): one launch fewer, no other boundary moved.
 
     Two constructs cross segment boundaries and need repair, because a kernel's locals die at launch
     end:
@@ -6931,13 +7015,25 @@ type funit = {
   f_chains : Low_level.t list list;
       (** The statement's chains analyzed standalone ([[]] for non-[`Normal] units): the
           no-parallelism-loss baseline for aligned segment merging (see {!aligned_merge}). *)
+  f_fold : (unit -> funit) option;
+      (** For a whole-node [`Zeros] unit initializing the reduction that follows it: builds the same
+          position with the zero expanded ({!optop.Expand_zero}) into a per-cell nest, which
+          {!group_units} may fold into the reduction's segment. A thunk because the expansion mints
+          loop symbols: the fold probes it under {!Indexing.discarding_symbols} and builds it for
+          real only when it commits. Present whenever the zero-seed proof holds, so a recorded fold
+          replays whatever the current zero policy; [f_fold_proposed] says whether that policy
+          distributes the zero, which only a newly derived fold consults. *)
+  f_fold_proposed : bool;
+  f_orig : funit option;
+      (** On an expanded zero: the whole-node unit it was expanded from. A [`Solo] (serial) merge
+          restores it, so a serial kernel is the same code whether derived or replayed. *)
 }
 
 (* Units: each real statement with the comments preceding it. Trailing comments attach to the last
    unit. [max_chain] caps the standalone chains; it must match the cap {!aligned_merge}'s merged
    analysis runs under (see there). *)
-let collect_units ?max_chain plc (opt : Low_level.optimized) (stmts : Low_level.t list) : funit list
-    =
+let collect_units ?max_chain ?(fold = fun _ _ -> None) plc (opt : Low_level.optimized)
+    (stmts : Low_level.t list) : funit list =
   let open Low_level in
   let is_glue = function Noop | Comment _ -> true | _ -> false in
   let mk index glue stmt =
@@ -6956,7 +7052,16 @@ let collect_units ?max_chain plc (opt : Low_level.optimized) (stmts : Low_level.
           | chains -> (`Normal, chains)
           | exception Bail -> (`Solo, []))
     in
-    { f_stmts = List.rev (stmt :: glue); f_index = index; f_sum; f_kind; f_chains }
+    {
+      f_stmts = List.rev (stmt :: glue);
+      f_index = index;
+      f_sum;
+      f_kind;
+      f_chains;
+      f_fold = None;
+      f_fold_proposed = false;
+      f_orig = None;
+    }
   in
   let rec go index glue acc = function
     | [] -> (
@@ -6968,7 +7073,54 @@ let collect_units ?max_chain plc (opt : Low_level.optimized) (stmts : Low_level.
     | stmt :: tl when is_glue stmt -> go index (stmt :: glue) acc tl
     | stmt :: tl -> go (index + 1) [] (mk index glue stmt :: acc) tl
   in
-  go 0 [] [] stmts
+  (* Each maximal run of whole-node zeros is stably sorted by the zeroed node's shape
+     (gh-ocannl-1169): they are unconditional whole-node constant-zero writes with no reads and no
+     computation between them, so they commute -- even a repeated node or overlapping storage
+     receives the same zeros in any order ([mat_conflict] still keeps a repeated node out of one
+     segment) -- and on GPU a zero segment keeps one launch only while its nodes share a lane-plan
+     topology ({!zeros_keep_mapping}) -- in statement order a backward pass's gradient zeros
+     alternate shapes and would cut at almost every unit. The order is a function of the code alone,
+     like the units, so a recorded segmentation replays onto the same units. *)
+  let shape u =
+    match u.f_sum with
+    | Some { s_top_zero = Some tn; _ } -> Array.to_list (Lazy.force tn.Tn.dims)
+    | _ -> []
+  in
+  let sorted =
+    List.group (go 0 [] [] stmts) ~break:(fun a b ->
+        not (Poly.equal a.f_kind `Zeros && Poly.equal b.f_kind `Zeros))
+    |> List.concat_map ~f:(function
+      | { f_kind = `Zeros; _ } :: _ :: _ as run ->
+          List.stable_sort run ~compare:(fun a b ->
+              [%compare: int * int list]
+                (List.length (shape a), shape a)
+                (List.length (shape b), shape b))
+      | run -> run)
+  in
+  (* A unit's statement, between its leading glue and (on the last unit) the trailing glue. *)
+  let stmt_of u = List.find_exn u.f_stmts ~f:(fun st -> not (is_glue st)) in
+  let rec with_folds = function
+    | ({ f_kind = `Zeros; _ } as u) :: (v :: _ as rest) ->
+        let zero = stmt_of u in
+        let fold = fold zero (stmt_of v) in
+        let f_fold_proposed = Option.exists fold ~f:snd in
+        let f_fold =
+          Option.map fold ~f:(fun (expand, _) () ->
+              let expanded = expand () in
+              {
+                (mk u.f_index [] expanded) with
+                f_stmts =
+                  List.map u.f_stmts ~f:(fun st -> if phys_equal st zero then expanded else st);
+                f_orig = Some u;
+              })
+        in
+        { u with f_fold; f_fold_proposed } :: with_folds rest
+    | u :: rest -> u :: with_folds rest
+    | [] -> []
+  in
+  (* Folds pair each zero with the unit that follows it AFTER the sort, so a zero moved away from
+     its reduction is simply not foldable (the zero-seed proof needs the reduction next). *)
+  with_folds (List.mapi sorted ~f:(fun f_index u -> { u with f_index }))
 
 type segment = {
   g_units : funit list;
@@ -6989,8 +7141,12 @@ let seg_of_unit u =
   { g_units = [ u ]; g_kind = u.f_kind; g_reads = reads; g_writes = writes; g_chains = u.f_chains }
 
 let merge_segs ~kind a b =
+  let units = a.g_units @ b.g_units in
   {
-    g_units = a.g_units @ b.g_units;
+    g_units =
+      (match kind with
+      | `Solo -> List.map units ~f:(fun u -> Option.value u.f_orig ~default:u)
+      | `Normal | `Zeros -> units);
     g_kind = kind;
     g_reads = Set.union a.g_reads b.g_reads;
     g_writes = Set.union a.g_writes b.g_writes;
@@ -7143,8 +7299,8 @@ let segment_optimized (full : Low_level.optimized) (llc : Low_level.t) : Low_lev
     source = full.Low_level.source;
   }
 
-(* The hardware mapping a schedule gives each top-level statement of [llc] (comments and noops
-   skipped), as [(groups, active)]: the [Grid] groups the statement's own loops launch, and its
+(* The hardware mapping a schedule gives the loops whose extents [extents] holds (one statement's,
+   or one expanded zero's), as [(groups, active)]: the [Grid] groups those loops launch, and their
    iterations executed by distinct threads -- a split lane's padding threads are not work, and the
    [Serial] outer part of a preset split is work one thread repeats. Read off the schedule's ops,
    not the applied code: a probe must not mint the placements or nodes [apply] would. Only a
@@ -7154,11 +7310,52 @@ let segment_optimized (full : Low_level.optimized) (llc : Low_level.t) : Low_lev
    [Workgroup_reduce] retype shares the workgroup slot of the statement's widest [Workgroup] loop
    rather than adding a dimension -- the lane geometry's cooperative preamble reduction is a sibling
    of its lane on the same [.x] threads (gh-ocannl-1124) -- so it adds threads only past that loop's
-   width. *)
-let statement_mappings (llc : Low_level.t) (sched : schedule) : (int * int) list =
+   width. {!statement_mappings} reads it per top-level statement of a kernel. *)
+let mapping_of_loops extents (sched : schedule) : int * int =
   let open Low_level in
   let hw = function Grid | Workgroup | Workgroup_reduce -> true | _ -> false in
   let times a n = Option.value ~default:Int.max_value (checked_mul a n) in
+  let own ty =
+    List.filter_map sched ~f:(function
+      | Retype { axis; ty = ty' } when equal_axis_type ty ty' -> Hashtbl.find extents axis
+      | _ -> None)
+  in
+  let widest l = List.fold l ~init:1 ~f:max in
+  let lane = widest (own Workgroup) and reduce = widest (own Workgroup_reduce) in
+  let g, a =
+    List.fold sched
+      ~init:(1, (reduce + lane - 1) / lane)
+      ~f:(fun (g, a) op ->
+        match op with
+        | Retype { ty = Workgroup_reduce; _ } -> (g, a)
+        | Retype { axis; ty } -> (
+            match Hashtbl.find extents axis with
+            | Some n when equal_axis_type ty Grid -> (times g n, times a n)
+            | Some n when hw ty -> (g, times a n)
+            | _ -> (g, a))
+        | Split { axis; factor; outer; inner; _ } -> (
+            match Hashtbl.find extents axis with
+            | None -> (g, a)
+            | Some n ->
+                let blocks = (n + factor - 1) / factor in
+                let g = if equal_axis_type outer Grid then times g blocks else g in
+                let a =
+                  match (hw outer, hw inner) with
+                  | true, true -> times a n
+                  | false, true -> times a (min factor n)
+                  | true, false -> times a blocks
+                  | false, false -> a
+                in
+                (g, a))
+        | Fold_mma { query; _ } when Hashtbl.mem extents query -> (Int.max_value, Int.max_value)
+        | _ -> (g, a))
+  in
+  (g, a)
+
+(* {!mapping_of_loops} for each top-level statement of [llc] (comments and noops skipped), over the
+   statement's own loops. *)
+let statement_mappings (llc : Low_level.t) (sched : schedule) : (int * int) list =
+  let open Low_level in
   let stmts =
     List.filter (flat_lines [ llc ]) ~f:(function Noop | Comment _ -> false | _ -> true)
   in
@@ -7176,42 +7373,26 @@ let statement_mappings (llc : Low_level.t) (sched : schedule) : (int * int) list
         | _ -> ()
       in
       loops stmt;
-      let own ty =
-        List.filter_map sched ~f:(function
-          | Retype { axis; ty = ty' } when equal_axis_type ty ty' -> Hashtbl.find extents axis
+      mapping_of_loops extents sched)
+
+(* The same pair for each node of a [`Zeros] segment under its zero schedule [sched]
+   ({!zero_expansion} or a caller's replacement): the loops are the ones [sched]'s [Expand_zero]
+   mints for the node, with the node's extents. A node the schedule does not expand stays a
+   whole-node write in a serial kernel, [(1, 1)]. *)
+let zero_mappings (tns : Tn.t list) (sched : schedule) : (int * int) list =
+  List.map tns ~f:(fun tn ->
+      match
+        List.find_map sched ~f:(function
+          | Expand_zero { tn = tn'; indices } when Tn.equal tn tn' -> Some indices
           | _ -> None)
-      in
-      let widest l = List.fold l ~init:1 ~f:max in
-      let lane = widest (own Workgroup) and reduce = widest (own Workgroup_reduce) in
-      let g, a =
-        List.fold sched
-          ~init:(1, (reduce + lane - 1) / lane)
-          ~f:(fun (g, a) op ->
-            match op with
-            | Retype { ty = Workgroup_reduce; _ } -> (g, a)
-            | Retype { axis; ty } -> (
-                match Hashtbl.find extents axis with
-                | Some n when equal_axis_type ty Grid -> (times g n, times a n)
-                | Some n when hw ty -> (g, times a n)
-                | _ -> (g, a))
-            | Split { axis; factor; outer; inner; _ } -> (
-                match Hashtbl.find extents axis with
-                | None -> (g, a)
-                | Some n ->
-                    let blocks = (n + factor - 1) / factor in
-                    let g = if equal_axis_type outer Grid then times g blocks else g in
-                    let a =
-                      match (hw outer, hw inner) with
-                      | true, true -> times a n
-                      | false, true -> times a (min factor n)
-                      | true, false -> times a blocks
-                      | false, false -> a
-                    in
-                    (g, a))
-            | Fold_mma { query; _ } when Hashtbl.mem extents query -> (Int.max_value, Int.max_value)
-            | _ -> (g, a))
-      in
-      (g, a))
+      with
+      | None -> (1, 1)
+      | Some indices ->
+          let extents = Hashtbl.create (module Indexing.Symbol) in
+          List.iter2_exn indices
+            (Array.to_list (Lazy.force tn.Tn.dims))
+            ~f:(fun key data -> Hashtbl.set extents ~key ~data);
+          mapping_of_loops extents sched)
 
 (* A probe of the per-segment schedule leaves no trace: [split] and the lane plans mint loop
    symbols, and a discarded probe's symbols would shift every later minted name -- in the goldens
@@ -7254,15 +7435,40 @@ let keeps_mapping ~mapping (opt : Low_level.optimized) seg (u : funit) standalon
   | Unequal_lengths -> true
   | Ok pairs -> List.for_all pairs ~f:(fun ((g, a), (g0, a0)) -> g >= g0 && a >= a0)
 
-let group_units ?max_chain ?(arity_cuts = false) ?mapping (opt : Low_level.optimized)
-    (units : funit list) : segment list =
+(* The [`Zeros] half (gh-ocannl-1169): a zero segment shares ONE launch too, and {!zero_expansion}'s
+   lane plans need one common topology across its nodes and a union launch within twice the largest
+   node's own, or every node falls back to the two-loop presets -- the training step's 147 gradient
+   zeros, of a dozen shapes, all did. So a zero joins a zero segment only when no node of the merged
+   segment gets less of its own mapping under [zero_sched] than it gets alone, the rule
+   {!keeps_mapping} applies to nests. *)
+let zeros_keep_mapping ~zero_sched seg (u : funit) standalone =
+  let tns =
+    List.filter_map (seg.g_units @ [ u ]) ~f:(fun u' ->
+        Option.bind u'.f_sum ~f:(fun s -> s.s_top_zero))
+  in
+  let merged = dry_run (fun () -> zero_mappings tns (zero_sched tns)) in
+  List.for_all2_exn merged (List.map tns ~f:standalone) ~f:(fun (g, a) (g0, a0) ->
+      g >= g0 && a >= a0)
+
+let group_units ?max_chain ?(arity_cuts = false) ?(fold_zeros = false) ?mapping ?zero_sched
+    (opt : Low_level.optimized) (units : funit list) : segment list =
   let plc = opt.Low_level.optimize_ctx.placements in
   let close cur acc = match cur with None -> acc | Some seg -> seg :: acc in
-  (* One standalone probe per unit, taken only when a merge is judged. *)
+  (* Zeros are judged only where nests are: the schedule-aware merge rule is on. *)
+  let zero_sched = Option.bind mapping ~f:(fun _ -> zero_sched) in
+  let zero_alone =
+    let memo = Hashtbl.create (module Tn) in
+    fun zero_sched tn ->
+      Hashtbl.find_or_add memo tn ~default:(fun () ->
+          List.hd_exn (dry_run (fun () -> zero_mappings [ tn ] (zero_sched [ tn ]))))
+  in
+  (* One standalone probe per unit, taken only when a merge is judged. An expanded zero shares its
+     [f_index] with its whole-node [`Zeros] original, so the key carries the kind. *)
   let standalone =
     let memo = Hashtbl.create (module Int) in
     fun mapping (u : funit) ->
-      Hashtbl.find_or_add memo u.f_index ~default:(fun () ->
+      let key = (2 * u.f_index) + match u.f_kind with `Zeros -> 1 | `Normal | `Solo -> 0 in
+      Hashtbl.find_or_add memo key ~default:(fun () ->
           let llc = Low_level.unflat_lines u.f_stmts in
           match
             dry_run (fun () -> statement_mappings llc (mapping (segment_optimized opt llc)))
@@ -7286,11 +7492,51 @@ let group_units ?max_chain ?(arity_cuts = false) ?mapping (opt : Low_level.optim
         match (cur, u.f_kind, u.f_sum) with
         | Some ({ g_kind = `Normal; _ } as seg), `Normal, Some s when mergeable seg s u ->
             go (Some (merge_segs ~kind:`Normal seg (seg_of_unit u))) acc tl
-        | Some ({ g_kind = `Zeros; _ } as seg), `Zeros, Some s when not (mat_conflict plc seg s) ->
+        | Some ({ g_kind = `Zeros; _ } as seg), `Zeros, Some s
+          when (not (mat_conflict plc seg s))
+               && Option.for_all zero_sched ~f:(fun zero_sched ->
+                   zeros_keep_mapping ~zero_sched seg u (zero_alone zero_sched)) ->
             go (Some (merge_segs ~kind:`Zeros seg (seg_of_unit u))) acc tl
         | _ -> go (Some (seg_of_unit u)) (close cur acc) tl)
   in
-  go None [] units
+  (* The zero fold (gh-ocannl-1175), as a pass over the finished segmentation: a singleton
+     whole-node zero segment folds, expanded, into the segment of the reduction it initializes only
+     when that WHOLE segment re-admits every one of its units with the zero at its head. So the fold
+     removes the zero's launch and changes nothing else -- no segment is cut, no other merge
+     appears. Folding while grouping instead let the expanded zero join the preceding segment and
+     bridge sibling reductions its whole-node form had kept apart: the q and k projections of a GPT2
+     layer, merged into one kernel no matmul sketch reaches, doubled the tuned CUDA step
+     (staging#934, reverted). The decision is a probe that leaves no symbol trace; only a committed
+     fold builds the expansion for real (the decision does not depend on symbol names). *)
+  let readmits z seg =
+    match z.f_kind with
+    | `Normal ->
+        Option.is_some
+          (List.fold_until seg.g_units ~init:(seg_of_unit z)
+             ~f:(fun acc u ->
+               match u.f_sum with
+               | Some s when mergeable acc s u ->
+                   Continue (merge_segs ~kind:`Normal acc (seg_of_unit u))
+               | _ -> Stop None)
+             ~finish:Option.some)
+    | `Zeros | `Solo -> false
+  in
+  let rec fold_pass = function
+    | ({ g_kind = `Zeros; g_units = [ { f_fold = Some expand; f_fold_proposed = true; _ } ]; _ } as
+       zeros)
+      :: ({ g_kind = `Normal; _ } as seg)
+      :: rest ->
+        if dry_run (fun () -> readmits (expand ()) seg) then
+          List.fold seg.g_units
+            ~init:(seg_of_unit (expand ()))
+            ~f:(fun acc u -> merge_segs ~kind:`Normal acc (seg_of_unit u))
+          :: fold_pass rest
+        else zeros :: fold_pass (seg :: rest)
+    | seg :: rest -> seg :: fold_pass rest
+    | [] -> []
+  in
+  let segs = go None [] units in
+  if fold_zeros then fold_pass segs else segs
 
 (** {3 Scope-local replication across segments (option (b) v2)} *)
 
@@ -7572,6 +7818,30 @@ let fission_keep_mapping ~is_gpu ~limits =
     Some (fun opt -> default_gpu ~lanes:(Lazy.force lanes) ~limits opt)
   else None
 
+(* The expanded form of a whole-node [zero] that {!group_units} may fold into the reduction [next]
+   that it initializes: [next] owns every cell under the shared zero-seed proof, and the supplied
+   policy distributes the zero (CPU and below-threshold zeroing keep their whole-node form). It
+   reuses Expand_zero itself, withholding the hardware geometry: the folded segment's own schedule
+   maps the per-cell nest together with the reduction, as the sketch families' zero companions. *)
+let reduction_zero_fold ~zero_sched (opt : Low_level.optimized) (zero : Low_level.t)
+    (next : Low_level.t) : ((unit -> Low_level.t) * bool) option =
+  match zero with
+  | Low_level.Zero_out tn when Option.is_some (Low_level.zero_seed_candidate tn next) ->
+      (* The expansion is a function of the proven target alone, so derived and replayed folds mint
+         the same code whatever the policy; the policy (asked without keeping the symbols its
+         schedule mints) only decides whether a NEW fold is proposed. *)
+      let expand () =
+        (apply_opt_op { opt with llc = zero } (fst (expand_zero ~tn))).Low_level.llc
+      in
+      let proposed =
+        dry_run (fun () ->
+            List.exists (zero_sched [ tn ]) ~f:(function
+              | Expand_zero { tn = target; _ } -> Tn.equal tn target
+              | _ -> false))
+      in
+      Some (expand, proposed)
+  | _ -> None
+
 type segmentation = ([ `Normal | `Zeros | `Solo ] * int) list [@@deriving sexp, equal]
 
 let misfit_segmentation what =
@@ -7588,6 +7858,13 @@ let segments_of_plan (units : funit list) (plan : segmentation) : segment list =
   @@ List.fold_map plan ~init:units ~f:(fun rest (kind, n) ->
       match List.split_n rest n with
       | u :: us, rest when n > 0 ->
+          (* A [`Normal] segment opening with a whole-node zero is a folded one ({!group_units}):
+             only the fold puts a [`Zeros] unit at a [`Normal] segment's head. *)
+          let u =
+            match (kind, u) with
+            | `Normal, { f_kind = `Zeros; f_fold = Some expand; _ } -> expand ()
+            | _ -> u
+          in
           ( rest,
             {
               (List.fold us ~init:(seg_of_unit u) ~f:(fun seg u ->
@@ -7597,9 +7874,9 @@ let segments_of_plan (units : funit list) (plan : segmentation) : segment list =
             } )
       | _ -> misfit_segmentation "has an empty segment")
 
-let fission_segmented ?(promote_locals = false) ?(arity_cuts = false) ?keep_mapping ?replay
-    ~(preset : Low_level.optimized -> schedule) ~(zero_sched : Tn.t list -> schedule)
-    ~static_indices (opt : Low_level.optimized) :
+let fission_segmented ?(promote_locals = false) ?(arity_cuts = false) ?(fold_zeros = false)
+    ?keep_mapping ?replay ~(preset : Low_level.optimized -> schedule)
+    ~(zero_sched : Tn.t list -> schedule) ~static_indices (opt : Low_level.optimized) :
     segmentation
     * ([ `Normal | `Zeros | `Solo ] * Low_level.optimized * schedule * Low_level.optimized) list =
   let plc = opt.Low_level.optimize_ctx.placements in
@@ -7615,7 +7892,7 @@ let fission_segmented ?(promote_locals = false) ?(arity_cuts = false) ?keep_mapp
      must see each nest's full arity, not the default presets' Grid+Workgroup prefix — under the
      cap, a merge that trims a rank-3 site's minor axis reads as lossless (gh-ocannl-574). *)
   let max_chain = if arity_cuts then Some Int.max_value else None in
-  let units = collect_units ?max_chain plc opt stmts in
+  let units = collect_units ?max_chain ~fold:(reduction_zero_fold ~zero_sched opt) plc opt stmts in
   (* The schedule of the [i]th segment: a replay's own, by position (segments sharing a structural
      digest can differ in placements, hence in kind and schedule), or the caller's per-kind ones. *)
   let schedule_of i (seg : segment option) pre =
@@ -7627,10 +7904,21 @@ let fission_segmented ?(promote_locals = false) ?(arity_cuts = false) ?keep_mapp
         zero_sched
           (List.filter_map seg.g_units ~f:(fun u -> Option.bind u.f_sum ~f:(fun s -> s.s_top_zero)))
   in
-  let fallback () =
-    (* Single-kernel compilation, exactly as before fission: no boundary needs the promotions, and
-       placement changes must not leak out of an unfissioned routine. *)
+  let units_arr = Array.of_list units in
+  let fallback seg_units =
+    (* Single-kernel compilation, as before fission: no boundary needs the promotions, and placement
+       changes must not leak out of an unfissioned routine. [seg_units] are the single segment's
+       units: a zero the fold put at its head (a lone projection folding into one kernel) stays
+       expanded, exactly as {!segments_of_plan} rebuilds a replayed [`Normal] segment's head. *)
     undo_promotions pre_promoted;
+    let opt =
+      if List.for_all seg_units ~f:(fun u -> phys_equal u units_arr.(u.f_index)) then opt
+      else
+        {
+          opt with
+          llc = Low_level.unflat_lines (List.concat_map seg_units ~f:(fun u -> u.f_stmts));
+        }
+    in
     let sched = schedule_of 0 None opt in
     ([ (`Normal, List.length units) ], [ (`Normal, opt, sched, apply ~static_indices sched opt) ])
   in
@@ -7640,23 +7928,24 @@ let fission_segmented ?(promote_locals = false) ?(arity_cuts = false) ?keep_mapp
         (* The [arity_cuts] mode has its own, stricter merge rule for the sketches' full-arity
            geometry. *)
         let mapping = if arity_cuts then None else keep_mapping in
-        let segs = group_units ?max_chain ~arity_cuts ?mapping opt units in
-        if List.length segs <= 1 then None
+        let segs = group_units ?max_chain ~arity_cuts ~fold_zeros ?mapping ~zero_sched opt units in
+        let single segs = Error (List.concat_map segs ~f:(fun g -> g.g_units)) in
+        if List.length segs <= 1 then single segs
         else
-          match resolve_scope_crossings (Array.of_list units) segs with
-          | exception Unfissionable -> None
-          | segs, _ when List.length segs <= 1 -> None
-          | resolved -> Some resolved)
+          match resolve_scope_crossings units_arr segs with
+          | exception Unfissionable -> single segs
+          | segs', _ when List.length segs' <= 1 -> single segs'
+          | resolved -> Ok resolved)
     | Some (plan, _) ->
         (* A recorded plan is applied as it is, or refused: nothing about it is re-derived, so a
            plan that no longer fits the routine must fail loudly rather than degrade to another
            segmentation. *)
         if List.sum (module Int) plan ~f:snd <> List.length units then
           misfit_segmentation "does not cover the routine's statements";
-        if List.length plan <= 1 then None
+        let segs = segments_of_plan units plan in
+        if List.length plan <= 1 then Error (List.concat_map segs ~f:(fun g -> g.g_units))
         else
-          let segs = segments_of_plan units plan in
-          let units = Array.of_list units in
+          let units = units_arr in
           let replicas seg =
             match
               plan_replicas units ~seg_start:(List.hd_exn seg.g_units).f_index
@@ -7666,12 +7955,12 @@ let fission_segmented ?(promote_locals = false) ?(arity_cuts = false) ?keep_mapp
             | None | (exception Unfissionable) ->
                 misfit_segmentation "cuts a scope-local definition from its use"
           in
-          Some (segs, List.map segs ~f:replicas)
+          Ok (segs, List.map segs ~f:replicas)
   in
   let segment () =
     match resolved () with
-    | None -> fallback ()
-    | Some (segs, replicas) ->
+    | Error seg_units -> fallback seg_units
+    | Ok (segs, replicas) ->
         let segs_with_replicas = List.zip_exn segs replicas in
         promoted := pre_promoted @ promote_crossing plc segs_with_replicas;
         let scheduled =
@@ -7693,8 +7982,8 @@ let fission_segmented ?(promote_locals = false) ?(arity_cuts = false) ?keep_mapp
                     let merged = merge_segs ~kind:`Solo pseg seg in
                     let replicas =
                       match
-                        plan_replicas (Array.of_list units)
-                          ~seg_start:(List.hd_exn merged.g_units).f_index (seg_external_ids merged)
+                        plan_replicas units_arr ~seg_start:(List.hd_exn merged.g_units).f_index
+                          (seg_external_ids merged)
                       with
                       | Some defs -> defs
                       | None -> assert false (* Merging only shrinks the validity range. *)
@@ -7708,7 +7997,7 @@ let fission_segmented ?(promote_locals = false) ?(arity_cuts = false) ?keep_mapp
              placements, so undo every promotion (an all-serial small routine must not leak
              observable placement changes; zero2hero's virtual-neuron printouts pinned this). *)
           undo_promotions !promoted;
-          fallback ())
+          fallback (List.concat_map coalesced ~f:(fun (seg, _, _) -> seg.g_units)))
         else
           (* Coalescing may have absorbed a crossing: promotions without a surviving crossing are
              restored. Sound in this direction — the segments' schedules were computed under the
@@ -7728,11 +8017,11 @@ let fission_segmented ?(promote_locals = false) ?(arity_cuts = false) ?keep_mapp
       undo_promotions !promoted;
       Stdlib.Printexc.raise_with_backtrace exn backtrace
 
-let fission_scheduled ?promote_locals ?arity_cuts ?keep_mapping ~preset ~zero_sched ~static_indices
-    opt =
+let fission_scheduled ?promote_locals ?arity_cuts ?fold_zeros ?keep_mapping ~preset ~zero_sched
+    ~static_indices opt =
   snd
-    (fission_segmented ?promote_locals ?arity_cuts ?keep_mapping ~preset ~zero_sched ~static_indices
-       opt)
+    (fission_segmented ?promote_locals ?arity_cuts ?fold_zeros ?keep_mapping ~preset ~zero_sched
+       ~static_indices opt)
 
 let fission_default ?promote_locals ?keep_mapping ~preset ~zero_sched ~static_indices
     (opt : Low_level.optimized) : Low_level.optimized list =
@@ -7800,8 +8089,15 @@ let default_schedule_fingerprint ~backend_name =
         | Some Lanes_admitted -> "admitted"
         | Some Lanes_off -> "off"
       in
+      (* [lane-all-reduce-v1] (gh-ocannl-1168): how many simdgroups a cooperative reduction may
+         span, per [all_reduce]; [auto] resolves per device from the limits, as [preamble] does. *)
+      let all_reduce =
+        match gpu_lane_all_reduce_simdgroups () with None -> "auto" | Some k -> Int.to_string k
+      in
+      (* [zero-topology-v1] (gh-ocannl-1169): under [keep_mapping], zero segments cut where a node
+         would lose its lane plan, over shape-sorted zero runs. *)
       [%string
-        "gpu:policy=small-leading-v1+lanes-v1+fold-mma-v1+lane-plans-v1+lane-reductions-v1+lane-economics-v1:fission=%{fission#Bool}:keep_mapping=%{keep#Bool}:block_size=%{bs}:min_parallel=%{mp}:workgroup_fill=%{fill#Int}:preamble=%{preamble}:serial_lanes=%{lanes}"]
+        "gpu:policy=small-leading-v1+lanes-v1+fold-mma-v1+lane-plans-v1+lane-reductions-v1+lane-economics-v1+lane-all-reduce-v1+zero-topology-v1:fission=%{fission#Bool}:keep_mapping=%{keep#Bool}:block_size=%{bs}:min_parallel=%{mp}:workgroup_fill=%{fill#Int}:preamble=%{preamble}:serial_lanes=%{lanes}:all_reduce_simdgroups=%{all_reduce}"]
     else
       let mp =
         String.strip (Utils.get_global_arg ~arg_name:"cpu_schedule_min_parallel" ~default:"16384")
@@ -7870,10 +8166,26 @@ let workgroup_memory_bytes ~(capabilities : Backend_intf.codegen_capabilities)
         acc + (copies * Lazy.force tn.Tn.size_in_bytes))
   in
   let prec (tn : Tn.t) = Lazy.force tn.Tn.storage_prec in
-  List.fold (mma_emission_scopes opt) ~init:staged ~f:(fun acc (d, a, b) ->
-      acc
-      + capabilities.Backend_intf.mma_scope_workgroup_bytes ~d_prec:(prec d) ~a_prec:(prec a)
-          ~b_prec:(prec b))
+  let mma_scratch =
+    List.fold (mma_emission_scopes opt) ~init:staged ~f:(fun acc (d, a, b) ->
+        acc
+        + capabilities.Backend_intf.mma_scope_workgroup_bytes ~d_prec:(prec d) ~a_prec:(prec a)
+            ~b_prec:(prec b))
+  in
+  (* gh-ocannl-1168: the per-simdgroup partials of each lane all-reduce site that may stage them,
+     one declaration per site (a duplicated copy is its own site). The local resides at its compute
+     or its accumulator precision, whichever the renderer's census decides; counting the larger
+     keeps the estimate an upper bound (at f32 the two coincide on every GPU backend). *)
+  List.fold
+    (Low_level.lane_all_reduce_sites ~reassociable:Online_softmax.reassociable_local opt.llc)
+    ~init:mma_scratch ~f:(fun acc site ->
+      if not site.Low_level.lar_cross_simdgroup then acc
+      else
+        let bytes p =
+          capabilities.Backend_intf.lane_all_reduce_workgroup_bytes ~extent:site.lar_extent ~prec:p
+        in
+        let p = prec site.lar_local.Low_level.tn in
+        acc + max (bytes (capabilities.compute_prec p)) (bytes (capabilities.accum_prec p)))
 
 let check_hardware_limits_classified ~name ~(limits : Backend_intf.hardware_limits) ~capabilities
     (opt : Low_level.optimized) : unit =
@@ -7901,8 +8213,9 @@ let check_hardware_limits_classified ~name ~(limits : Backend_intf.hardware_limi
       if shared_bytes > max_bytes then
         let detail =
           [%string
-            "Schedule: kernel %{name} stages %{shared_bytes#Int} bytes of workgroup-shared tiles \
-             and tile-MMA scope scratch, exceeding the device limit of %{max_bytes#Int} bytes"]
+            "Schedule: kernel %{name} stages %{shared_bytes#Int} bytes of workgroup-shared tiles, \
+             tile-MMA scope scratch and lane all-reduce partials, exceeding the device limit of \
+             %{max_bytes#Int} bytes"]
         in
         raise
           (Schedule_outcome.Cause_at

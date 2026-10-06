@@ -322,9 +322,13 @@ the retained procedural analyses alongside the affine engine and raises on diver
   their components to `cache_key` as the whole `hardware_limits` record, so a component added
   there reaches every call site. Every config key is classified against these components in
   `Utils.config_key_classification` — code-borne (it reaches the digest through the code), keyed
-  (it must be carried), search-shaping, or execution-neutral, each with its reason —
+  (it must be carried), search-shaping, placement-shaping (it steers `Train.tune_placements`
+  above any single search and no `Autotune.tune` call reads it directly, so not even a search's
+  trajectory identity carries it), or
+  execution-neutral, each with its reason —
   and `test/operations/digest_completeness` fails on a key that is not classified, with
-  `digest_identity_flips` calibrating one representative of each class against a real compile.
+  `digest_identity_flips` calibrating one representative of each class against a real compile
+  (`flip_abandonment` pins placement-shaping's exclusion from the search-trajectory identity).
   **Schedule identity pins
   numerics** (gh-ocannl-484): a reduction-reassociating op (`Split_reduce`, `Swap`/`Vectorized`
   over accumulations, `Tensorize`) makes the computed values a function of the schedule — e.g.

@@ -10,7 +10,7 @@ pattern PPX input changes remain visible: true
 declaration movement preserves ordering context: true
 non-documentation attribute payload changes are visible: true
 Dune-only public module moves produce publication-input review entries: true
-private generator edits stay quiet: true
+private generator edits of a public library remain evidence: true
 public generator peers still produce entries: true
 Dune-only empty-interface policy changes stay visible: true
 Dune stanza reordering stays quiet: true
@@ -20,4 +20,8 @@ Dune-only selected-module configuration edits remain visible: true
 Dune-only optional library changes remain literal review evidence: true
 Dune-only preprocessing changes remain literal review evidence: true
 public configuration field ordering dependencies and prose stay quiet: true
+a private ordinary module a public one includes remains evidence: true
+compact rendering keeps attribution and the changed fragment, and counts the rest: true
+full rendering stays the default evidence: true
+an invalid context count refuses with usage: true
 invalid source refuses the real historical reader: true

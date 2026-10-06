@@ -67,18 +67,19 @@
       before Grid retypes could join it. The sketches are seeded whole-routine {e and} per fission
       segment: on a fissionable computation, the fission segmentation is enumerated once and the
       sketch pipelines are instantiated for each segment where a matmul site is detected (keyed by
-      the segment's pre-schedule digest), the remaining segments keeping the default preset. A
-      segment's site has its [Zero_out] in a separate [`Zeros] segment, so the pipelines skip the
-      zero-expansion geometry there — sound because [Privatize] init-loads the accumulator tile from
-      the (pre-zeroed) target and [Tile_mma] loads the accumulator fragment before the reduction. On
-      GPU backends the segmentation is additionally enumerated under
-      {!Ir.Schedule.fission_scheduled}'s [arity_cuts] (finer) mode (gh-ocannl-574): a segment
-      carrying a companion that cannot follow its site's full arity — the lm_head GEMM with its
-      max-logits row reduction — has every seed of the shared segment decline on companion coverage,
-      and the finer cut frees the site into its own kernel; segments whose digest is new versus the
-      coarse segmentation seed [fine]-flagged singles, one composite recombines the fine keys'
-      best-timed singles (coarse-timed bests staff the digest-identical segments); a fine winner's
-      cached segmentation is the fine one, so its replay needs no record of the mode.
+      the segment's pre-schedule digest), the remaining segments keeping the default preset. GPU
+      segments can carry a covering per-cell zero companion, mapped with the site's geometry;
+      [Privatize] forwards its seed when its scope owns the whole reduction. Whole-node zeros
+      retained by the policy (including CPU zeros) remain separate, and the accumulator init-load
+      observes them. [Tile_mma] loads its accumulator fragment before the reduction. On GPU backends
+      the segmentation is additionally enumerated under {!Ir.Schedule.fission_scheduled}'s
+      [arity_cuts] (finer) mode (gh-ocannl-574): a segment carrying a companion that cannot follow
+      its site's full arity — the lm_head GEMM with its max-logits row reduction — has every seed of
+      the shared segment decline on companion coverage, and the finer cut frees the site into its
+      own kernel; segments whose digest is new versus the coarse segmentation seed [fine]-flagged
+      singles, one composite recombines the fine keys' best-timed singles (coarse-timed bests staff
+      the digest-identical segments); a fine winner's cached segmentation is the fine one, so its
+      replay needs no record of the mode.
     - {b Convolution sketches} (gh-ocannl-493): when a convolution accumulation site is detected
       ({!detect_conv}), the implicit-GEMM pipeline — the packing [Stage] serving as im2col, the
       micro-kernel the ordinary [Tile_mma]. On the C backends: serial and Grid-parallel flavors, the
@@ -196,6 +197,17 @@ val detect_matmul : Ir.Low_level.t -> matmul_site option
     loop owning a distinct accumulator axis, with the 2-D tile roles assigned per
     [classify_matmul]'s operand rules and everything else batch. Reads off the extracted access
     relations like {!detect_conv}, with the same [legality_crosscheck] soak. Exposed for tests. *)
+
+val detect_matmul_canonical :
+  Ir.Low_level.optimized -> (matmul_site * Ir.Schedule.schedule * Ir.Low_level.optimized) option
+(** The matmul site every seeding and schedule-construction entry point uses (gh-ocannl-1183): the
+    site, the enabling-interchange prefix every schedule built from it carries, and the code it was
+    detected on. The prefix is empty, and the code the argument, for a site {!detect_matmul} finds;
+    otherwise it is an adjacent-[Swap] chain, each [Op_legal], sinking the contraction loops of the
+    first accumulation-of-a-product statement below its write loops (the backward contractions
+    backprop lowers with the contraction loops outermost or interleaved), and the code is the
+    interchanged one. [None] when the plain matcher fails and {!detect_conv} succeeds: the conv
+    family keeps its segments. Exposed for tests. *)
 
 type conv_axis = {
   cx_o : Ir.Indexing.symbol;  (** Output spatial symbol (a plain iterator of the output). *)
@@ -804,6 +816,13 @@ type report = {
       (** Candidate rejections aggregated by stable cause key. Their counts sum to
           [candidates_failed]. Cache-entry replay failures are excluded. *)
   rounds_run : int;  (** Beam-expansion rounds actually executed (0 = seeds only). *)
+  beam_width : int;
+      (** The beam width the search resolved ([?beam_width], else config [autotune_beam_width]): how
+          many of the fastest candidates each round expands, and the admitted-timing depth an
+          [?abandon] rule decides at. 0 in {!no_search_report}'s template, which {!tune} fills. With
+          [rounds_run], what a configured [autotune_rounds] / [autotune_beam_width] actually reached
+          — a caller passing [~rounds:0], as the benchmark runners do, runs no round whatever the
+          configuration says (gh-ocannl-1137). *)
   sketch_candidates : int;
       (** Whole-routine matmul-sketch instantiations seeded (0 when no matmul micro-kernel was
           detected or no tile sizes divide the extents), after the model pre-filter when one is
@@ -815,10 +834,11 @@ type report = {
           then proposed both unfused and with [Schedule.Fuse_epilogue] appended, so the tuner
           measures the one-kernel fused form against the fissioned two-kernel form. *)
   fiss_sketch_candidates : int;
-      (** Per-fission-segment sketch candidates seeded (0 when the computation does not fission, or
-          no segment contains a compatible matmul site). Includes the finer-segmentation
-          ([arity_cuts], gh-ocannl-574) singles on GPU backends. Deterministic given the computation
-          and backend. *)
+      (** Per-fission-segment sketch candidates seeded (0 when segmentation neither splits the
+          computation nor exposes a changed lowering, or no segment contains a compatible site). GPU
+          zero expansion can expose a sketchable singleton with a per-cell zero companion. Includes
+          the finer-segmentation ([arity_cuts], gh-ocannl-574) singles on GPU backends.
+          Deterministic given the computation and backend. *)
   fiss_sketch_timed : int;
       (** Of the seeded per-fission-segment sketch candidates, those that compiled and were actually
           timed (not rejected by op preconditions or hardware limits, not deduplicated by digest).
@@ -1578,6 +1598,7 @@ val timing_of_setting : string -> timing_mode
 val time_routine :
   ?on_retry:(unit -> unit) ->
   ?tag_failures:bool ->
+  ?phase:string ->
   timing:timing_mode ->
   repeats:int ->
   Context.t ->
@@ -1643,6 +1664,8 @@ val time_routine :
     admission rule; only its outcome reaches the search's refusal accounting. Other backends and
     isolated timing take no retry.
 
+    [phase] labels the call's {!on_batch_decision} (gh-ocannl-1199); none by default.
+
     With [~tag_failures:true] the pre-dispatch validation, the launches and the synchronization are
     wrapped in their {!Ir.Schedule_outcome} phases, which is what lets a caller's
     {!Ir.Schedule_outcome.protect} attribute a failure to the phase it happened in; without it they
@@ -1689,6 +1712,7 @@ val calibrate_and_time :
 
 val calibrate_and_time_with_retry_observer :
   on_retry:(unit -> unit) ->
+  phase:string option ->
   retry_contended:bool ->
   timing:timing_mode ->
   repeats:int ->
@@ -1697,7 +1721,8 @@ val calibrate_and_time_with_retry_observer :
   timing_result
 (** {!calibrate_and_time} with the per-call observer that drives search accounting. [on_retry] runs
     once when a fresh contention retry starts, before {!on_timing_retry} and before any retry
-    dispatch. The original helper remains a no-op-observer wrapper for source compatibility. *)
+    dispatch. [phase] is reported as {!batch_decision}'s. The original helper remains a
+    no-op-observer, phase-less wrapper for source compatibility. *)
 
 val retry_contended_window_for_backend : string -> bool
 (** The backend whose contended queued windows get one immediate retry: Metal only. *)
@@ -1763,6 +1788,97 @@ val on_calibration_probe : (calibration_probe -> unit) ref
     a stall retry into the confirmation it repeats and counts probes as a lower bound; this reports
     each probe with the branch that started it. The cc/Metal calibration has no batch probes, and
     {!Isolated} no calibration. The default is a no-op and no configuration selects it. *)
+
+(** What one affine fit of a CUDA/HIP {!Queued} calibration concluded about its pair of batch
+    minima: which branch of the refinement produced the depth it returned. *)
+type fit_verdict =
+  | Fit_unordered  (** The probe was not deeper than the base: no slope, a doubled retry. *)
+  | Fit_unreadable  (** A reading was not finite and positive: a doubled retry. *)
+  | Fit_nonpositive_marginal  (** The slope was not positive: unresolved, a doubled retry. *)
+  | Fit_negative_fixed
+      (** The fixed term was more negative than the noise tolerance allows: unresolved. *)
+  | Fit_fixed_dominated
+      (** The fixed term alone fills the target: a depth carrying one target of marginal work. *)
+  | Fit_base_crossing  (** The base is the fit's first target crossing and is kept. *)
+  | Fit_boundary_floor
+      (** The crossing is shallower than the measured depth-2 base, which is kept anyway: singles
+          owed a batch, the fixed term is below the target and the marginal work fits it
+          (gh-ocannl-1184). *)
+  | Fit_shallower_crossing  (** The crossing, shallower than an over-target base. *)
+  | Fit_deeper_crossing
+      (** The crossing, deeper than an under-target base (an unmeasured depth). *)
+
+type affine_fit = {
+  base_depth : int;
+  probe_depth : int;
+  fixed_ms : float;  (** The fitted synchronization term; [nan] when no slope was resolved. *)
+  marginal_ms : float;  (** The fitted per-launch term; [nan] when the readings gave no slope. *)
+  verdict : fit_verdict;
+}
+(** One affine fit of a calibration, as the refinement computed it. *)
+
+(** Which exit of the calibration chose the depth, before the post-calibration bounds
+    ({!batch_decision}'s [bounded_from], [fallback_from], [rescue]) adjusted it. *)
+type batch_settle =
+  | Isolated_objective  (** {!Isolated}: no calibration, depth 1. *)
+  | Single_estimate  (** The cc/Metal policy: the synchronized singles' estimate alone. *)
+  | Singles_within_target
+      (** The singles reached the target and the provisional depth-2 pair confirmed depth 1. *)
+  | Measured_batch  (** A resolved fit confirmed a depth a probe (or the singles) measured. *)
+  | Affine_projection  (** A resolved fit's projection to a depth no probe measured. *)
+  | Wall_scaled  (** A linear scale from the deepest measured batch, the fit being unresolved. *)
+  | Cap_measured  (** The cap, measured by a probe. *)
+  | Cap_unresolved  (** The cap, wanted by an unresolved monotone pair, unmeasured. *)
+  | Budget_exhausted
+      (** The probe wall or count budget ended the calibration unresolved, at the depth in hand. *)
+
+(** The call's admission verdict, in {!admitted_timing_ms}'s terms; a refusal names the first of
+    [unbatched], [contended], an unreadable reading that holds. *)
+type batch_admission = Admitted | Refused_unbatched | Refused_contended | Refused_unreadable
+
+type batch_decision = {
+  phase : string option;
+      (** The caller's [phase]: for a {!tune} candidate, the search phase as its [autotune_progress]
+          lines name it ([seeds], [recombine], [playoff] for the composite playoff of
+          gh-ocannl-1166, or [round<k>]); [None] for the baseline, the untuned control and any other
+          caller. Carried by the call, not read from shared state, so concurrent searches never
+          label each other's decisions. *)
+  timing : timing_mode;
+  depth : int;  (** The depth the timed window ran at, as {!on_batch_depth} reported it. *)
+  cap : int;  (** The call's [queue_depth_cap]. *)
+  target_ms : float;  (** {!queued_batch_ms}. *)
+  estimated_wall_ms : float option;
+      (** The CUDA/HIP calibration's whole-batch wall estimate at [depth], [nan] when unresolved;
+          [None] under {!Isolated} and the cc/Metal policy. *)
+  settle : batch_settle;
+  fit : affine_fit option;  (** The calibration's latest affine fit, if it made one. *)
+  cap_directed_probes : int;
+      (** Validation probes whose depth a fit wanting the unmeasured cap directed: measured
+          doublings toward the cap (gh-ocannl-1144), as against ordinary affine projections. *)
+  bounded_from : int option;
+      (** The depth the exit chose, when {!queue_depth_projection_factor} times the deepest probe
+          bounded it (gh-ocannl-1100). *)
+  fallback_from : int option;
+      (** The depth before the wall-bounded fallback shortened an unresolved outcome
+          (gh-ocannl-1096). *)
+  rescue : (int * float) option;
+      (** The rescue probe's depth and minimum, when one ran (gh-ocannl-1098); [depth] equals it
+          exactly when it read within the target. *)
+  probes : int;  (** Batch probes started, against {!queue_calibration_max_probes}. *)
+  probe_wall_ms : float;  (** Their summed wall, against {!queue_calibration_wall_ms}. *)
+  budget_spent : bool;  (** Whether that budget was spent when the calibration ended. *)
+  admission : batch_admission;
+  retried : bool;  (** Whether a contended first window was discarded for one fresh retry. *)
+}
+(** One timing call's depth decision and admission verdict, from the policy's own metadata. *)
+
+val on_batch_decision : (batch_decision -> unit) ref
+(** Trace-only seam (gh-ocannl-1199), called once per {!time_routine} / {!calibrate_and_time} call
+    that returns, after its {!on_timed_window}, with the decision the call took: the fitted fixed
+    and marginal costs, the exit that chose the depth, the bounds that moved it, the probe budget
+    left and the admission verdict, so a consumer such as the benchmarks' [BENCH_TIMING_TRACE] never
+    re-derives the calibration policy. Observing it changes nothing measured or ranked. The default
+    is a no-op and no configuration selects it. *)
 
 val on_candidate_attempt : (string -> unit) ref
 (** Fault-injection seam for the containment tests (gh-ocannl-550), called with each candidate's

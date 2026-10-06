@@ -134,6 +134,7 @@ let known_config_keys =
       "gpu_schedule_min_parallel";
       "gpu_schedule_workgroup_fill";
       "gpu_lane_preamble_reduction";
+      "gpu_lane_all_reduce_simdgroups";
       "gpu_serial_lanes";
       "automatic_cpu_schedule";
       "cpu_schedule_min_parallel";
@@ -219,6 +220,12 @@ type config_key_class =
           or how fast it then runs: a saved schedule carries its own ops and replay re-derives
           nothing from these. Two processes differing only here may find different winners; each is
           a valid winner for the other. *)
+  | Placement_shaping
+      (** Steers [Train.tune_placements] above any single search: which placement programs it
+          searches (each a different program, keyed on its own digest) and which of them ships. No
+          single [Autotune.tune] call reads it, so it is neither in the cache key nor in the search
+          trajectory's identity ({!config_class_fingerprint} of [Search_shaping]): a search's timed
+          record is the same record whatever the level above it was told (gh-ocannl-1192). *)
   | Execution_neutral
       (** Host-side behavior only: logging, debug artifacts, directories, validation and error
           reporting, allocation layout, launch mechanics. Nothing a kernel does depends on it. *)
@@ -330,6 +337,7 @@ let config_key_classification : (config_key_class * string * string list) list =
         "gpu_schedule_min_parallel";
         "gpu_schedule_workgroup_fill";
         "gpu_lane_preamble_reduction";
+        "gpu_lane_all_reduce_simdgroups";
         "gpu_serial_lanes";
       ] );
     ( Search_shaping,
@@ -364,17 +372,17 @@ let config_key_classification : (config_key_class * string * string list) list =
        unkeyed, a warm cache would also defeat the new default outright, replaying \
        isolated-crowned winners forever (Codex P1 on PR #512)",
       [ "autotune_timing" ] );
-    ( Search_shaping,
+    ( Placement_shaping,
       "it makes the tuner try alternative inlining decisions; each alternative is a different \
        program and keys on its own digest",
       [ "tune_inline_flips"; "tune_flip_ordering"; "tune_flip_profit_margin" ] );
-    ( Search_shaping,
+    ( Placement_shaping,
       "it decides which of the two searched placement arms ships, overriding the measured \
        comparison rather than changing either arm: each arm is a different program keyed on its \
        own digest, each arm's crown is cached under that digest either way, and a schedule crowned \
        under one setting is a valid crown under the other (gh-ocannl-638)",
       [ "tune_ship_arm" ] );
-    ( Search_shaping,
+    ( Placement_shaping,
       "it decides whether the placement decision is replayed from the placement-decision store or \
        re-derived by comparing the two arms (gh-ocannl-1020): each arm and each flip is a \
        different program keyed on its own digest and cached either way, the store holds only which \
@@ -1210,6 +1218,9 @@ let performance_profile_payload =
 # algebraic-rewrite tiers) belong to the numerics axis, not to this one.
 
 # Empirical schedule search on, with a wider beam and more rounds than the everyday defaults.
+# The benchmark runners (benchmarks/runners/ocannl) pass ~rounds:0, so their tuned cells get
+# this beam width but not these rounds: in a partial gpt2_mini/CUDA probe, one round added 150%
+# to the one arm that finished it, which kept its seed winner (gh-ocannl-1137).
 autotune_search=true
 autotune_beam_width=4
 autotune_rounds=4
@@ -1238,6 +1249,7 @@ let approximate_profile_payload =
 # join this payload as they land, each in the PR that adds its key.
 
 # The `performance` payload's keys, restated (test_config_consistency checks they agree).
+# As there, the benchmark runners' tuned cells run none of the rounds (gh-ocannl-1137).
 autotune_search=true
 autotune_beam_width=4
 autotune_rounds=4

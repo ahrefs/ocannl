@@ -17,8 +17,9 @@
    the ratio that then wins, and one far behind the incumbent's FINAL best but not at equal depth)
    run to completion; and the record survives a schedule-cache replay; - [Train.tune_placements] end
    to end, with [autotune_progress] on: a hopeless flip is abandoned and reported in the progress
-   record, and the A/B winner ships; a flip that becomes profitable is searched in full and
-   ships. *)
+   record, and the A/B winner ships; a flip that becomes profitable is searched in full and ships;
+   and a warm chain replays its abandonment even with every placement-level key stated
+   (gh-ocannl-1192). *)
 
 open Base
 open Ocannl
@@ -542,6 +543,53 @@ let () =
   p "the warm flip chain replays the abandonment and ships the same winner"
     ((not (List.is_empty cold_shipped))
     && List.equal String.equal shipped cold_shipped
+    && match flips with [ r ] -> is_abandonment_replay r && r.candidates_timed = 0 | _ -> false);
+  (* gh-ocannl-1192: the keys that steer the placement level above any single search, stated in
+     configuration with values that change nothing here (the arguments outrank them, the rest are
+     their defaults). On rog's CUDA gpt2_mini cell a warm chain run under
+     [tune_placement_store=false] -- the documented way to compare the arms afresh -- searched every
+     abandoned flip in full: the key had entered the trajectory identity, so the replayed incumbent
+     carried no timed record and no abandonment record matched. The list is checked against the
+     class, so a key classified into it later must be stated here too. *)
+  let placement_keys =
+    [
+      ("tune_inline_flips", "7");
+      ("tune_flip_ordering", "profitable");
+      ("tune_flip_profit_margin", "1.25");
+      ("tune_ship_arm", "auto");
+      ("tune_placement_store", "false");
+    ]
+  in
+  p "they are exactly the Placement_shaping class"
+    (List.equal String.equal
+       (List.sort ~compare:String.compare (List.map placement_keys ~f:fst))
+       (List.sort ~compare:String.compare
+          (List.concat_map Utils.config_key_classification ~f:(function
+            | Utils.Placement_shaping, _, keys -> keys
+            | _ -> []))));
+  let shape_before = Utils.config_class_fingerprint Utils.Search_shaping in
+  List.iter placement_keys ~f:(fun (key, data) -> Hashtbl.set Utils.config_file_args ~key ~data);
+  let stated, (arms, flips, shipped, _) =
+    Exn.protect
+      ~finally:(fun () ->
+        List.iter placement_keys ~f:(fun (key, _) -> Hashtbl.remove Utils.config_file_args key))
+      ~f:(fun () ->
+        let stated =
+          List.for_all placement_keys ~f:(fun (key, data) ->
+              Option.equal String.equal
+                (Option.map (Utils.profile_key_source key) ~f:fst)
+                (Some data))
+        in
+        ( (stated, String.equal shape_before (Utils.config_class_fingerprint Utils.Search_shaping)),
+          executed_chain ~cache_dir:chain_cache_dir chain_comp chain_t chain_expected
+            ~flip_script:(fun _ -> 100.0) ))
+  in
+  p "the placement-level keys are stated for the warm chain" (fst stated);
+  p "stating them leaves the search-trajectory identity unchanged" (snd stated);
+  p_all ~min:2 "under them the warm flip chain still replays both placement arms" arms ~f:(fun r ->
+      Poly.equal r.Autotune.outcome Autotune.Cache_replay);
+  p "under them the warm flip chain still replays the abandonment and ships the same winner"
+    (List.equal String.equal shipped cold_shipped
     && match flips with [ r ] -> is_abandonment_replay r && r.candidates_timed = 0 | _ -> false);
   clean_cache chain_cache_dir;
   (* The negative control: within the ratio at depth k, then faster than arm A — searched in full,

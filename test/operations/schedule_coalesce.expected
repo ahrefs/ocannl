@@ -27,3 +27,7 @@ companion: the ordinary family still covers the tail: true
 companion: the elementwise tail cannot share the merged chain, so the branch offers nothing: true
 fission: the routine fissions: true
 fission: the site's unzeroed segment coalesces by its own Coalesce alone, and seeds the branch: true
+folded: the segment's zero nest and site both coalesce: true
+folded: the branch seeds a column tile wider than one head: true
+folded: every coalesced schedule constructs and validates: true
+folded: every coalesced seed executes to the materialized run: true

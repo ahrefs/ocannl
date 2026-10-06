@@ -193,6 +193,11 @@ val detect_matmul : Ir.Low_level.t -> matmul_site option
 (** Recognize an all-serial matmul accumulation; [None] when its access relations cannot supply
     distinct row, column and contraction roles. *)
 
+val detect_matmul_canonical :
+  Ir.Low_level.optimized -> (matmul_site * Ir.Schedule.schedule * Ir.Low_level.optimized) option
+(** The site with its enabling-interchange prefix and the code it was detected on (gh-ocannl-1183);
+    see {!Autotune.detect_matmul_canonical}. *)
+
 type conv_axis = {
   cx_o : Ir.Indexing.symbol;  (** Output spatial iterator. *)
   cx_no : int;
@@ -339,9 +344,11 @@ val coalesce_prefix : Ir.Low_level.optimized -> Ir.Schedule.schedule option
 (** The coalesced layout's structural prefix (gh-ocannl-1165), when the detected matmul site has an
     interior batch loop that coalesces into the column role: [Coalesce (last m_bi, m_j)], preceded,
     when the site's output is zeroed in the routine, by that [Zero_out]'s expansion with its last
-    two loops coalesced alike. [None] when there is no such loop, or when the op declines (a
-    per-head operand, a padded inner axis, any access not reading the pair as adjacent plain
-    iterators) — probed on a hermetic copy. Mints fresh symbols, which the returned ops carry. *)
+    two loops coalesced alike — or, for a covering per-cell zero nest (a GPU fission segment's
+    folded zero, gh-ocannl-1175), by that nest's own coalescing. [None] when there is no such loop,
+    or when the op declines (a per-head operand, a padded inner axis, any access not reading the
+    pair as adjacent plain iterators) — probed on a hermetic copy. Mints fresh symbols, which the
+    returned ops carry. *)
 
 val coalesced_seed_params :
   is_gpu:bool ->

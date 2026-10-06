@@ -116,6 +116,13 @@ files.
   doubles as a gradient oracle. tinygrad: realize the loss BEFORE `opt.step()` or it recomputes
   from updated weights. The autotune schedule cache persists across processes; compiler changes
   invalidate it by digest.
+- A torch row's matmul policy (`regime_settings`, torch's tf32 getters) says nothing about what its
+  tensors ARE: a weight cast on load or an autocast context leaves every policy getter unchanged.
+  The runner therefore reads `param_dtypes`/`input_dtypes` from the tensors and `autocast` from
+  torch's per-device getters INSIDE the step (an autocast entered around the runner is invisible
+  from `main`), and `precision_check` fails a row whose label they contradict (gh-ocannl-1208).
+  Note that `torch.get_autocast_dtype` answers a default dtype even when autocast is off, so the
+  dtype only means something beside `enabled`.
 - **Every Metal number recorded before gh-ocannl-693 carries a ~4x accumulator tax and must not be
   compared against one taken after.** Until then a serial reduction at f32 accumulated in the output
   node's global memory, and `volatile_serial_accumulation` shadowed each step's read-modify-write with a
@@ -202,6 +209,21 @@ files.
   rather than a numerics one — when a sweep loses only one framework's rows, suspect the emitter's
   spelling before the framework.
 
+- Before its later stages a cell CHECKPOINTS what it completed (gh-ocannl-1209):
+  `measure_and_emit` writes a `bench: checkpoint {...}` line to stderr, flushed, after every
+  parity step and again after the timed steps, before the dominant-kernel instrument -- which
+  compiles and times every shipped kernel alone and can outlast the workload (a TUF
+  `gpt2_mini_train_s1024` cell lost six finite losses to a 90 s cap expiring inside it). A
+  checkpoint carries the losses so far, stage statuses, the step count and the cell's identity, and
+  NO timing: its `result` stage is always `pending` and `accepted` is `false`. `orchestrate.run_cell`
+  folds the last one into a failed cell's note and hands it to `on_checkpoint`, so the sweep's and
+  `gh1181_cells.py`'s failure records keep the losses -- beside the failure, never among the rows;
+  both add the fixture stamp, the source revision and the runner binary's sha256 under
+  `provenance`, since the checkpoint names its fixture and runner only by paths a later sweep
+  reuses. An interrupted cell's checkpoint is recorded before the cancellation propagates.
+  Do not give the line a `{` prefix or move it to stdout: drivers take a cell's result from the
+  last `{`-line of its combined output, and the checkpoint must never be one.
+
 - A benchmark cell can WEDGE, and a wedged cell is a failure rather than a slow one
   (gh-ocannl-760). tinygrad's parallel beam search deadlocks intermittently — its candidate-compile
   pool is `spawn`-based with `maxtasksperchild`, and a worker lost between `imap_unordered` chunks
@@ -213,7 +235,9 @@ files.
   every measurement box — the only setting that removes the spawn pool — while an explicit
   positive value opts back into the pool with the cap as backstop (gh-ocannl-843).
   `cell_group.py` gives benchmark cells in `orchestrate.py`, `gh675_cells.py` and
-  `gh1002_cells.py` one shared group/job, TERM-to-KILL, output-preserving reap discipline;
+  `gh1002_cells.py` (and the latter's preflight Dune build, which forks compilers; gh-ocannl-1200)
+  one shared group/job, TERM-to-KILL, output-preserving reap discipline — the drivers start no
+  other child but short `git`/`ps` probes (`test_sweep_drivers_have_no_unmanaged_spawn_site`);
   `orchestrate.py` puts cells under `--cell-timeout` (default 1800 s) and kills the GROUP on expiry:
   the pool workers hold the cell's
   stdout pipe, so killing the direct child alone moves the hang into the sweep's own

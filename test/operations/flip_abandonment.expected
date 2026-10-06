@@ -61,6 +61,12 @@ the shipped routine computes the plain compile's values: true
 the cold placement arms and flip have no refused windows: true
 the warm flip chain replays both placement arms: true
 the warm flip chain replays the abandonment and ships the same winner: true
+they are exactly the Placement_shaping class: true
+the shipped routine computes the plain compile's values: true
+the placement-level keys are stated for the warm chain: true
+stating them leaves the search-trajectory identity unchanged: true
+under them the warm flip chain still replays both placement arms: true
+under them the warm flip chain still replays the abandonment and ships the same winner: true
 the shipped routine computes the plain compile's values: true
 a flip that becomes profitable is searched in full: true
 and the refined placement ships: true

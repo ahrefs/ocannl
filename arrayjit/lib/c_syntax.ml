@@ -986,6 +986,24 @@ let codegen_capabilities (module Config : C_syntax_config) =
     asynchronous_staging_copy = Option.is_some Config.async_copy;
     mma_arm = Config.mma_arm;
     mma_scope_workgroup_bytes = Config.mma_scope_workgroup_bytes;
+    (* gh-ocannl-1168: [extent / warp_size] slots where the lane all-reduce spans several whole
+       simdgroups -- a shuffle-capable backend with barriers and shared declarations, an f32/f64
+       residency (the precisions [ocannl_shfl_xor] is overloaded at), routine logging off -- and
+       none otherwise (one simdgroup needs no partials; anything else renders serially). The
+       renderer ([try_lane_all_reduce]) decides by this very field, so the estimate cannot drift
+       from the kernel; the structural half is [Low_level.lane_all_reduce_sites]. *)
+    lane_all_reduce_workgroup_bytes =
+      (fun ~extent ~prec ->
+        let warp = Config.warp_size in
+        match prec with
+        | (Ops.Single_prec _ | Ops.Double_prec _)
+          when warp > 1 && extent > warp
+               && extent % warp = 0
+               && Option.is_some Config.barrier_syntax
+               && Option.is_some Config.shared_decl_prefix
+               && not (Utils.debug_log_from_routines ()) ->
+            extent / warp * Ops.prec_in_bytes prec
+        | _ -> 0);
   }
 
 (** Whether [c] lies exactly halfway between two adjacent f32 values, so that narrowing it to f32 is
@@ -4011,82 +4029,21 @@ module C_syntax (B : C_syntax_config) = struct
         && Poly.equal ((thread_storage ctx) tn) `Thread
     | None -> false
 
-  (* A whole-node zero immediately before a statement can be forwarded into that statement's
-     localized serial accumulator when the statement owns every cell it closes. The affine check
-     below establishes the dead-store side of the rewrite; [try_localize_serial_reduce] marks the
-     seed consumed only after the localization itself has succeeded. Keeping those two decisions
-     separate is load-bearing: a vector/SIMD rendering or any localizer refusal still needs the
-     original [Zero_out] and opening node read. *)
+  (* A covering zero initializer immediately before a statement can be forwarded into that
+     statement's localized serial accumulator when the statement owns every cell it closes. The
+     affine check below establishes the dead-store side of the rewrite; [try_localize_serial_reduce]
+     marks the seed consumed only after the localization itself has succeeded. Keeping those two
+     decisions separate is load-bearing: a vector/SIMD rendering or any localizer refusal still
+     needs the original initializer and opening node read. *)
 
-  (* Whether [body] contains an effect whose buffer accesses or ordering are deliberately opaque to
-     the affine access list. A zero store may not move through either one. [Tile_mma] is rejected as
-     a unit even though its fallback has an affine footprint: the selected intrinsic need not
-     execute that fallback's scalar closing store. *)
-  let has_opaque_zero_forwarding_effect (body : Low_level.t) =
-    let rec stmt = function
-      | Low_level.Staged_compilation _ | Workgroup_barrier | Tile_mma _ -> true
-      | Seq (a, b) -> stmt a || stmt b
-      | For_loop { body; _ } | If { body; _ } -> stmt body
-      | Scan_loop { carried; body; _ } ->
-          List.exists carried ~f:(fun c -> scalar c.Low_level.init) || stmt body
-      | Set { llsc; _ } | Set_local (_, llsc) -> scalar llsc
-      | Set_dynamic { dyn_value = value, _; llsc; _ } -> scalar value || scalar llsc
-      | Set_from_vec { arg = value, _; _ } -> scalar value
-      | Noop | Comment _ | Zero_out _ | Declare_local _ -> false
-    and scalar = function
-      | Low_level.Local_scope { body; _ } -> stmt body
-      | Get_dynamic { dyn_value = value, _; _ } -> scalar value
-      | Ternop (_, (a, _), (b, _), (c, _)) -> scalar a || scalar b || scalar c
-      | Binop (_, (a, _), (b, _)) -> scalar a || scalar b
-      | Unop (_, (a, _)) -> scalar a
-      | Get _ | Get_local _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ ->
-          false
-    in
-    stmt body
-
-  (* The principled DSE condition for forwarding [Zero_out tn] into [next]: [next]'s only accesses
-     of [tn] are one unconditional, same-statement, same-cell read-modify-write pair, and that
-     statement's affine write map covers the whole node over its enclosing loop box. Loops omitted
-     from the map are recorded as repeated-cell dimensions; the localizer remains the final
-     authority and may consume the seed only when its accepted scope includes all of them. A dead
-     enclosing loop is rejected because it executes no closing store. *)
-  let localized_zero_seed_candidate (tn : Tn.t) (next : Low_level.t) : localized_zero_seed option =
-    if has_opaque_zero_forwarding_effect next then None
-    else
-      let same_map = Array.equal Indexing.equal_axis_index in
-      let accesses =
-        Low_level.affine_accesses next
-        |> List.filter ~f:(fun access -> Tn.equal access.Affine.a_tn tn)
-      in
-      match accesses with
-      | [ ({ Affine.a_write = false; _ } as read); ({ a_write = true; _ } as write) ]
-        when write.a_rmw && (not read.a_guarded) && (not write.a_guarded)
-             && Option.is_none read.a_dyn_axis && Option.is_none write.a_dyn_axis
-             && (not read.a_whole) && (not write.a_whole) && (not read.a_vec_last)
-             && (not write.a_vec_last)
-             && Affine.same_statement read.a_path write.a_path
-             && Option.exists read.a_stmt_write ~f:(same_map write.a_map)
-             && same_map read.a_map write.a_map ->
-          let range symbol =
-            List.find_map write.a_loops ~f:(fun (bound, range) ->
-                if Indexing.equal_symbol symbol bound then Some range else None)
-          in
-          if List.exists write.a_loops ~f:(fun (_, (lo, hi)) -> hi < lo) then None
-          else if Affine.covers_box ~range (Affine.view ~dims:(Lazy.force tn.Tn.dims) write.a_map)
-          then
-            let repeated =
-              List.filter_map write.a_loops ~f:(fun (symbol, (lo, hi)) ->
-                  Option.some_if
-                    (hi > lo
-                    && not
-                         (Array.exists write.a_map ~f:(Indexing.axis_index_mentions_symbol symbol))
-                    )
-                    symbol)
-            in
-            Some
-              { lzs_tn = tn; lzs_idcs = write.a_map; lzs_repeated = repeated; lzs_consumed = false }
-          else None
-      | _ -> None
+  let localized_zero_seed_candidate tn next =
+    Option.map (Low_level.zero_seed_candidate tn next) ~f:(fun (write, repeated) ->
+        {
+          lzs_tn = tn;
+          lzs_idcs = write.Affine.a_map;
+          lzs_repeated = repeated;
+          lzs_consumed = false;
+        })
 
   (* Take one top-level statement without flattening the suffix. Optimized programs are commonly
      right-associated [Seq] trees, so this is constant work there; a left-associated prefix costs
@@ -4378,8 +4335,8 @@ module C_syntax (B : C_syntax_config) = struct
               (left_doc, right_doc)
             in
             let d1, d2 =
-              match c1 with
-              | Zero_out tn -> (
+              match Low_level.zero_initializer_target c1 with
+              | Some tn -> (
                   let next, rest = take_first_statement c2 in
                   match localized_zero_seed_candidate tn next with
                   | None -> render_in_order c1 c2
@@ -4410,7 +4367,7 @@ module C_syntax (B : C_syntax_config) = struct
                         else next_doc ^^ hardline ^^ rest_doc
                       in
                       (zero_doc, tail))
-              | _ -> render_in_order c1 c2
+              | None -> render_in_order c1 c2
             in
             (* Avoid extra hardlines if one side is empty *)
             if PPrint.is_empty d1 then d2
@@ -6461,19 +6418,33 @@ module C_syntax (B : C_syntax_config) = struct
      to the workgroup's [.x] register, the slot it shares with the output lanes -- no lane axis of
      its own), the [ocannl_shfl_xor] tree over [warp_shuffle_stages] leaves the total in every lane
      (an XOR butterfly is an all-reduce: after the last stage each lane holds the combination of
-     every lane), and every lane folds it into its local. No shared memory and no barrier, so no
-     scratch can be overwritten early and no inactive lane can miss a barrier. Taken when the loop
-     spans exactly one simdgroup ([extent = warp_size]), is the whole [.x] workgroup dimension (no
-     launch guard, so every lane of the simdgroup reaches every shuffle), sits at slot 0 with a
-     bound register, and the local resides at f32/f64 (the precisions [ocannl_shfl_xor] is
-     overloaded at). Reassociation is the [Workgroup_reduce] annotation's license.
+     every lane), and every lane folds it into its local. At one simdgroup ([extent = warp_size]):
+     no shared memory and no barrier, so no scratch can be overwritten early and no inactive lane
+     can miss a barrier. Across [k > 1] whole simdgroups (gh-ocannl-1168): lane 0 of each simdgroup
+     stores its butterfly total into a [k]-slot workgroup-shared array, a barrier, every lane reads
+     all [k] slots and combines them in slot order (the same order in every lane, so every lane
+     holds the bitwise-same total, as the butterfly's lanes do), and a SECOND barrier before the
+     local is updated, so the next execution of this reduction -- the next pair of the serial loop
+     around it -- cannot overwrite a slot some lane has not read yet. Every lane of the workgroup
+     reaches both barriers: the loop is the whole [.x] dimension (no launch guard), the workgroup
+     has no other dimension, and no workgroup loop or lane-dependent [If] encloses it -- each
+     condition reads only constants and index symbols no workgroup loop binds, never a scope local
+     or memory, which could carry a lane-dependent value ([Low_level.lane_all_reduce_sites]; the
+     lane geometry places it in the lane-uniform preamble, a sibling of the lane loop). A site
+     failing that renders serially in every lane, whatever its width. Taken when the loop spans
+     whole simdgroups, is the whole [.x] workgroup dimension (so every lane of each simdgroup
+     reaches every shuffle), sits at slot 0 with a bound register, and the local resides at f32/f64
+     (the precisions [ocannl_shfl_xor] is overloaded at); past one simdgroup also when the backend
+     has barriers and workgroup-shared declarations and the workgroup is one-dimensional ([.x]
+     alone: the slots are indexed by simdgroup along [.x]). Reassociation is the [Workgroup_reduce]
+     annotation's license.
 
      - otherwise the plain serial loop, in every lane: a partial simdgroup (the shuffle would read
-     lanes outside the reduction), several simdgroups (which need a shared-memory broadcast and
-     barrier this v1 does not render), a backend without shuffles (cc), a narrow residency, or a
-     logged run. Binding the index like a [Workgroup] axis instead would leave each lane its own
-     term only -- wrong for this local, every reader of which wants the whole sum -- which is why
-     this arm owns it and never falls through to the binding.
+     lanes outside the reduction), a backend without shuffles (cc), a workgroup with a second
+     dimension, a site under lane-dependent control, a narrow residency, or a logged run. Binding
+     the index like a [Workgroup] axis instead would leave each lane its own term only -- wrong for
+     this local, every reader of which wants the whole sum -- which is why this arm owns it and
+     never falls through to the binding.
 
      [None] for any other body or local: those keep [try_warp_reduce]'s cell-target rendering and
      its fallbacks, the hardware binding among them. *)
@@ -6513,15 +6484,30 @@ module C_syntax (B : C_syntax_config) = struct
             let shuffle =
               match (register, prec) with
               | Some reg, (Ops.Single_prec _ | Ops.Double_prec _)
-                when B.warp_size > 1 && from_ = 0 && extent = B.warp_size && extent = slot_max
+                when B.warp_size > 1 && from_ = 0
+                     && extent % B.warp_size = 0
+                     && extent = slot_max
                      && not (Utils.debug_log_from_routines ()) ->
-                  Some reg
+                  let num_warps = extent / B.warp_size in
+                  (* Past one simdgroup: the backend half and the structural half of the one
+                     predicate the schedule's memory estimate reads too. *)
+                  let cross_simdgroup () =
+                    (codegen_capabilities (module B)).lane_all_reduce_workgroup_bytes ~extent ~prec
+                    = num_warps * Ops.prec_in_bytes prec
+                    && List.exists
+                         (Low_level.lane_all_reduce_sites
+                            ~reassociable:Online_softmax.reassociable_local
+                            !(ctx.current_kernel_llc)) ~f:(fun site ->
+                           Indexing.equal_symbol site.Low_level.lar_index i
+                           && site.Low_level.lar_cross_simdgroup)
+                  in
+                  if num_warps = 1 || cross_simdgroup () then Some (reg, num_warps) else None
               | _ -> None
             in
             Some
               (match shuffle with
               | None -> (serial_loop ctx loop) ()
-              | Some reg ->
+              | Some (reg, num_warps) ->
                   let ident = symbol_ident i in
                   let ctyp = B.typ_of_prec prec in
                   let cast = "(" ^ String.strip B.loop_index_type ^ ")" in
@@ -6540,19 +6526,47 @@ module C_syntax (B : C_syntax_config) = struct
                     ^^ pp_symbol i
                     ^^ string (" = " ^ cast ^ reg ^ ";")
                   in
+                  let warp = B.warp_size in
+                  (* Past one simdgroup: the partials through workgroup-shared memory, between the
+                     two barriers every lane reaches (see the comment above). *)
+                  let across_simdgroups =
+                    if num_warps = 1 then empty
+                    else
+                      let pname = "lred_partials_" ^ ident ^ "__" in
+                      let barrier = string (Option.value_exn ~here:[%here] B.barrier_syntax) in
+                      string
+                        (Printf.sprintf "%s%s %s[%d];"
+                           (Option.value_exn ~here:[%here] B.shared_decl_prefix)
+                           ctyp pname num_warps)
+                      ^^ hardline
+                      ^^ string
+                           (Printf.sprintf "if ((%s & %d) == 0) { %s[%s >> %d] = %s; }" ident
+                              (warp - 1) pname ident (Int.ceil_log2 warp) vname)
+                      ^^ hardline ^^ barrier ^^ hardline
+                      ^^ string (Printf.sprintf "%s = %s[0];" vname pname)
+                      ^^ concat
+                           (List.map (List.range 1 num_warps) ~f:(fun w ->
+                                hardline
+                                ^^ string (vname ^ " = ")
+                                ^^ combine (string vname) (string (Printf.sprintf "%s[%d]" pname w))
+                                ^^ semi))
+                      ^^ hardline ^^ barrier ^^ hardline
+                  in
                   string
                     (Printf.sprintf
-                       "{ /* Workgroup_reduce lane all-reduce into a scope local: extent %d = one \
-                        simdgroup; the total lands in every lane. */"
-                       extent)
+                       "{ /* Workgroup_reduce lane all-reduce into a scope local: extent %d = %s; \
+                        the total lands in every lane. */"
+                       extent
+                       (if num_warps = 1 then "one simdgroup"
+                        else Printf.sprintf "%d simdgroups of %d" num_warps warp))
                   ^^ nest 2
                        (hardline ^^ binding ^^ hardline
                        ^^ (if PPrint.is_empty local_defs then empty else local_defs ^^ hardline)
                        ^^ string (ctyp ^ " " ^ vname ^ " = ")
                        ^^ contrib_doc ^^ semi ^^ hardline
                        ^^ separate hardline
-                            (List.map (warp_shuffle_stages ~width:extent) ~f:shuffle_stage)
-                       ^^ hardline ^^ pp_scope_id id ^^ string " = "
+                            (List.map (warp_shuffle_stages ~width:warp) ~f:shuffle_stage)
+                       ^^ hardline ^^ across_simdgroups ^^ pp_scope_id id ^^ string " = "
                        ^^ combine (pp_scope_id id) (string vname)
                        ^^ semi)
                   ^^ hardline ^^ rbrace))

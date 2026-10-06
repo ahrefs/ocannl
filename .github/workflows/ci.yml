@@ -620,6 +620,7 @@ jobs:
         allow-prerelease-opam: false
         opam-pin: false
     - name: Install formatting dependencies
+      id: install-formatting-deps
       run: |
         ocamlformat_versions=$(sed -n 's/^version[[:space:]]*=[[:space:]]*//p' .ocamlformat)
         ocamlformat_version=$(printf '%s\n' "$ocamlformat_versions" | sed -n '1p')
@@ -627,11 +628,64 @@ jobs:
         test "$ocamlformat_versions" = "$ocamlformat_version"
         opam install dune "ocamlformat=$ocamlformat_version"
     # After the install: formatter cache controls need dune and ocamlformat,
-    # and promotion fixtures need dune. The same manifest runs locally.
+    # and promotion fixtures need dune. The same manifest runs locally. Strict:
+    # this job installed the toolchain, so a leg the harness cannot decide is a
+    # defect, not a host capability -- a fixture that fails to find the
+    # installed dune would otherwise pass as a counted skip behind a green
+    # footer. The promotion step runs even when the formatter controls fail,
+    # but not when the toolchain it is strict about was never installed.
     - name: Test toolchain harnesses
+      env:
+        OCANNL_TOOL_HARNESS_STRICT: 1
       run: tools/test-harnesses.sh --toolchain
+    - name: Test promotion harnesses
+      if: ${{ !cancelled() && steps.install-formatting-deps.outcome == 'success' }}
+      env:
+        OCANNL_TOOL_HARNESS_STRICT: 1
+      run: tools/test-harnesses.sh --promotion
     - name: Check formatting and documentation comments
       run: tools/fmt-check.sh
+
+  # The promotion fixtures again, at the declared Dune floor (gh-ocannl-1215).
+  # The `fmt` job runs them on whatever Dune opam calls current, and the floor
+  # is where they drifted before: Dune 3.20/3.21 print `promotion list` on
+  # stderr and recompute diffs under `DUNE_DIFF_COMMAND=-`, which the shims in
+  # the fixtures simulate on current Dune but only a real floor binary pins.
+  # Only those fixtures: nothing else here depends on Dune's version, and a full
+  # matrix at the floor is not what drifted. The floor is read from
+  # `dune-project`'s `(lang dune X.Y)` -- the declaration the opam files'
+  # `"dune" {>= ...}` is generated from -- and the newest X.Y.z is installed
+  # and checked. OCaml is the declared 5.3 floor too: a Dune release predating
+  # the current compiler need not build with it.
+  promotion-floor:
+    if: github.event_name != 'workflow_dispatch' || !inputs.windows_only
+    name: Promotion harnesses (Dune floor)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        ref: ${{ inputs.expected_sha }}
+    - uses: ocaml/setup-ocaml@v3
+      with:
+        ocaml-compiler: 5.3.x
+        allow-prerelease-opam: false
+        opam-pin: false
+    - name: Install the declared Dune floor
+      run: |
+        floor=$(sed -n 's/^(lang dune \([0-9][0-9]*\.[0-9][0-9]*\))$/\1/p' dune-project)
+        test -n "$floor"
+        test "$(printf '%s\n' "$floor" | wc -l)" -eq 1
+        opam install "dune<${floor%.*}.$(( ${floor#*.} + 1 ))"
+        version=$(opam exec -- dune --version)
+        case $version in
+          "$floor".*) echo "Dune floor $floor: testing $version" ;;
+          *) echo "installed Dune $version is not the declared floor $floor" >&2; exit 1 ;;
+        esac
+    - name: Test promotion harnesses
+      env:
+        OCANNL_TOOL_HARNESS_STRICT: 1
+      run: tools/test-harnesses.sh --promotion
 
   # The shell harnesses that sit outside dune, on a job of their own: none of
   # them needs a toolchain, so they answer in minutes beside the build matrix
@@ -684,7 +738,7 @@ jobs:
   # run).
   notify-triage-routine:
     name: Fire CI-red triage routine
-    needs: [run, fmt, harnesses]
+    needs: [run, fmt, promotion-floor, harnesses]
     if: >-
       failure() && github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
       && !(github.event_name == 'workflow_dispatch' && inputs.expected_sha)

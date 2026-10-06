@@ -6241,6 +6241,105 @@ let accum_local_update_parts ~id (llsc : scalar_t) =
       Some (Ops.Add, Binop (Ops.Mul, (a, pa), (b, pb)))
   | _ -> None
 
+type lane_all_reduce_site = {
+  lar_index : Indexing.symbol;
+  lar_extent : int;
+  lar_local : scope_id;
+  lar_cross_simdgroup : bool;
+}
+
+(* gh-ocannl-1168. The lane all-reduce's sites, and which of them may stage partials between
+   barriers: every lane of the workgroup must reach both, so the site must cover the whole [.x]
+   dimension of a one-dimensional workgroup and sit under workgroup-uniform control. Uniform is
+   judged conservatively: no enclosing workgroup loop, and every enclosing [If] condition built from
+   constants and index symbols no workgroup loop binds -- a scope local or a memory read could carry
+   a lane-dependent value ([flag := lane < 32; if flag { ... }]), so either makes it non-uniform. *)
+let lane_all_reduce_sites ~(reassociable : Tn.t -> bool) (llc : t) : lane_all_reduce_site list =
+  let axes = hardware_axes llc in
+  let lane s =
+    List.exists axes ~f:(fun a ->
+        Poly.equal a.ha_kind `Workgroup && Indexing.equal_symbol a.ha_index s)
+  in
+  let slot_max = slot_max_extent axes `Workgroup 0 in
+  let one_dimensional =
+    List.for_all axes ~f:(fun a ->
+        match a.ha_kind with `Workgroup -> a.ha_slot = 0 | `Grid -> true)
+  in
+  let index_uniform : Indexing.axis_index -> bool = function
+    | Fixed_idx _ | Sub_axis -> true
+    | Iterator s -> not (lane s)
+    | Affine { symbols; _ } -> not (List.exists symbols ~f:(fun (_, s) -> lane s))
+    | Concat syms -> not (List.exists syms ~f:lane)
+  in
+  let rec uniform_scalar (sc : scalar_t) =
+    match sc with
+    | Constant _ | Constant_bits _ -> true
+    | Embed_index idx -> index_uniform idx
+    | Binop (_, (a, _), (b, _)) -> uniform_scalar a && uniform_scalar b
+    | Unop (_, (a, _)) -> uniform_scalar a
+    | Ternop (_, (a, _), (b, _), (c, _)) -> uniform_scalar a && uniform_scalar b && uniform_scalar c
+    | Local_scope _ | Get_local _ | Get _ | Get_dynamic _ | Get_merge_buffer _ -> false
+  in
+  let stmts_of body =
+    List.filter (flat_lines [ body ]) ~f:(function Noop | Comment _ -> false | _ -> true)
+  in
+  let sites = ref [] in
+  let rec walk ~uniform llc =
+    match llc with
+    | For_loop { index; from_; to_; axis; body; _ } -> (
+        let extent = to_ - from_ + 1 in
+        let stmts =
+          match stmts_of body with
+          | [
+           If
+             {
+               cond = Binop (Ops.Cmplt, (Embed_index (Indexing.Iterator s), _), (Constant c, _)), _;
+               body = guarded;
+             };
+          ]
+            when Indexing.equal_symbol s index && Float.equal c (Float.of_int extent) ->
+              stmts_of guarded
+          | stmts -> stmts
+        in
+        match (axis, stmts) with
+        | Workgroup_reduce, [ Set_local (id, llsc) ]
+          when reassociable id.tn && Option.is_some (accum_local_update_parts ~id llsc) ->
+            sites :=
+              {
+                lar_index = index;
+                lar_extent = extent;
+                lar_local = id;
+                lar_cross_simdgroup = uniform && from_ = 0 && extent = slot_max && one_dimensional;
+              }
+              :: !sites
+        | _ ->
+            let lanes_diverge =
+              Option.equal Poly.equal (hardware_kind_of_axis axis) (Some `Workgroup)
+            in
+            walk ~uniform:(uniform && not lanes_diverge) body)
+    | If { cond = c, _; body } -> walk ~uniform:(uniform && uniform_scalar c) body
+    | Seq (a, b) ->
+        walk ~uniform a;
+        walk ~uniform b
+    | Scan_loop { body; _ } -> walk ~uniform body
+    | Noop | Comment _ | Staged_compilation _ | Zero_out _ | Set _ | Set_dynamic _ | Set_from_vec _
+    | Set_local _ | Declare_local _ | Workgroup_barrier | Tile_mma _ ->
+        ()
+  in
+  walk ~uniform:true llc;
+  (* Admission is per symbol, not per occurrence: a materializing [Unroll] or a [Partition] copies a
+     body with its nested loop symbols, so one symbol can name a copy under uniform control and a
+     copy under a lane-dependent guard (staging#1028 review round 2). The renderer meets a loop by
+     its symbol, so every copy stages partials only when every copy may. *)
+  let refused =
+    List.filter_map !sites ~f:(fun site ->
+        Option.some_if (not site.lar_cross_simdgroup) site.lar_index)
+  in
+  List.rev_map !sites ~f:(fun site ->
+      if List.mem refused site.lar_index ~equal:Indexing.equal_symbol then
+        { site with lar_cross_simdgroup = false }
+      else site)
+
 (* A scalar reading only embedded indices and constants — the semantic notion behind
    {!pure_index_guard}, closed over the index arithmetic ([And]-joined range conditions, [Cmpeq]
    unit-solve conditions) that virtualization's guarded reads build. Such an expression cannot
@@ -6725,6 +6824,95 @@ let peel_accum_nest ?(extra_level = fun _ _ -> false) ?report ~loop_bounds ~free
   let result, rep = peel ~free_of ~pending:[] ~levels:0 ~guards:[] ~rebuild:(fun b -> b) body in
   Option.iter report ~f:(fun f -> f rep);
   result
+
+(* Whether [body] contains an effect whose buffer accesses or ordering are deliberately opaque to
+   the affine access list. A zero store may not move through either one. [Tile_mma] is rejected as a
+   unit even though its fallback has an affine footprint: the selected intrinsic need not execute
+   that fallback's scalar closing store. *)
+let has_opaque_zero_forwarding_effect ~allow_workgroup_barriers (body : t) =
+  let rec stmt = function
+    | Staged_compilation _ | Tile_mma _ -> true
+    | Workgroup_barrier -> not allow_workgroup_barriers
+    | Seq (a, b) -> stmt a || stmt b
+    | For_loop { body; _ } | If { body; _ } -> stmt body
+    | Scan_loop { carried; body; _ } -> List.exists carried ~f:(fun c -> scalar c.init) || stmt body
+    | Set { llsc; _ } | Set_local (_, llsc) -> scalar llsc
+    | Set_dynamic { dyn_value = value, _; llsc; _ } -> scalar value || scalar llsc
+    | Set_from_vec { arg = value, _; _ } -> scalar value
+    | Noop | Comment _ | Zero_out _ | Declare_local _ -> false
+  and scalar = function
+    | Local_scope { body; _ } -> stmt body
+    | Get_dynamic { dyn_value = value, _; _ } -> scalar value
+    | Ternop (_, (a, _), (b, _), (c, _)) -> scalar a || scalar b || scalar c
+    | Binop (_, (a, _), (b, _)) -> scalar a || scalar b
+    | Unop (_, (a, _)) -> scalar a
+    | Get _ | Get_local _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ ->
+        false
+  in
+  stmt body
+
+let zero_seed_candidate ?(allow_workgroup_barriers = false) (tn : Tn.t) (next : t) :
+    (Tn.t Affine.access * Indexing.symbol list) option =
+  if has_opaque_zero_forwarding_effect ~allow_workgroup_barriers next then None
+  else
+    let same_map = Array.equal Indexing.equal_axis_index in
+    let accesses =
+      affine_accesses next |> List.filter ~f:(fun access -> Tn.equal access.Affine.a_tn tn)
+    in
+    match accesses with
+    | [ ({ Affine.a_write = false; _ } as read); ({ a_write = true; _ } as write) ]
+      when write.a_rmw && (not read.a_guarded) && (not write.a_guarded)
+           && Option.is_none read.a_dyn_axis && Option.is_none write.a_dyn_axis
+           && (not read.a_whole) && (not write.a_whole) && (not read.a_vec_last)
+           && (not write.a_vec_last)
+           && Affine.same_statement read.a_path write.a_path
+           && Option.exists read.a_stmt_write ~f:(same_map write.a_map)
+           && same_map read.a_map write.a_map ->
+        let range symbol =
+          List.find_map write.a_loops ~f:(fun (bound, range) ->
+              if Indexing.equal_symbol symbol bound then Some range else None)
+        in
+        if List.exists write.a_loops ~f:(fun (_, (lo, hi)) -> hi < lo) then None
+        else if Affine.covers_box ~range (Affine.view ~dims:(Lazy.force tn.Tn.dims) write.a_map)
+        then
+          let repeated =
+            List.filter_map write.a_loops ~f:(fun (symbol, (lo, hi)) ->
+                Option.some_if
+                  (hi > lo
+                  && not (Array.exists write.a_map ~f:(Indexing.axis_index_mentions_symbol symbol))
+                  )
+                  symbol)
+          in
+          Some (write, repeated)
+        else None
+    | _ -> None
+
+(* The whole-node zero or its Expand_zero form, with no effects beside the covering store. Hardware
+   annotations do not change the iteration box; guards do, and are refused here. *)
+let zero_initializer_target (stmt : t) : Tn.t option =
+  let rec leaf = function
+    | Zero_out tn -> Some tn
+    | For_loop { from_; to_; body; _ } when to_ >= from_ -> leaf body
+    | Seq _ as body -> (
+        match
+          List.filter (flat_lines [ body ]) ~f:(function Noop | Comment _ -> false | _ -> true)
+        with
+        | [ st ] -> leaf st
+        | _ -> None)
+    | Set { tn; llsc = Constant z; _ } when Int64.equal (Stdlib.Int64.bits_of_float z) 0L -> Some tn
+    | _ -> None
+  in
+  Option.bind (leaf stmt) ~f:(fun tn ->
+      match stmt with
+      | Zero_out _ -> Some tn
+      | _ -> (
+          match affine_accesses stmt with
+          | [ { Affine.a_write = true; a_guarded = false; a_loops; a_map; _ } ] ->
+              let range sym = List.Assoc.find a_loops sym ~equal:Indexing.equal_symbol in
+              Option.some_if
+                (Affine.covers_box ~range (Affine.view ~dims:(Lazy.force tn.Tn.dims) a_map))
+                tn
+          | _ -> None))
 
 (* gh-343: extract the per-iteration one-hot contribution from an accumulation [acc] in which the
    running total is recognized by [acc_is]. Handles the [Binop (Add, total, contribution)] form

@@ -190,7 +190,7 @@ files.
 - **A knob read after lowering cannot reach a digest over lowered code** — it must be carried by a
   cache-key component or the cache replays across regimes (gh-ocannl-568: 5.9x). So every config
   key is classified in `Utils.config_key_classification` as code-borne / `Keyed <component>` /
-  search-shaping / execution-neutral, with the reason, and `test/operations/digest_completeness`
+  search-shaping / placement-shaping / execution-neutral, with the reason, and `test/operations/digest_completeness`
   fails on an unclassified key, on a claimed component that does not exist in
   `Schedule_cache.key_components` (that list DRIVES `cache_key`, so it cannot go stale), and on a
   key read in a codegen-stage module yet classified code-borne. When adding a config key, classify

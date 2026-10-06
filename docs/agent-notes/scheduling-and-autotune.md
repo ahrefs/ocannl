@@ -52,6 +52,13 @@ files.
   re-derived one (gh-ocannl-1164, "Cache regimes and placement replay" below). A cut needs no retest after
   scope-local resolution: a cut that resolution merges back is serial either way (the reason is in
   the comment on `keeps_mapping`). `test/operations/gpu_fission_mapping`.
+- A `Zeros` segment is held together by the same rule (gh-ocannl-1169, `zeros_keep_mapping`): one
+  launch serves every node, so a run of zeros with no common lane-plan topology sends ALL of them to
+  the two-loop presets -- the gpt2_mini step's 147 gradient zeros did (`plan_chains` found no
+  topology), the only mixed-shape fallback left in that step once `keeps_mapping` cut the
+  `wte.grad` + final-LN-grad union. Zero runs are stably sorted by shape in `collect_units` (they
+  commute; units stay a function of the code), else the cuts fall at every alternation of a
+  backward pass's shapes. Case 4 of `gpu_fission_mapping`.
 - A parallel loop under a serial loop is reachable only past lane-uniform scalar work
   (gh-ocannl-1003). The presets' chain is the single-child loop path, which stops at the
   online-softmax hoist's preamble (`for t { p := P[s, t]; for e { O[s, e] += p * V[t, e] } }`);
@@ -75,7 +82,19 @@ files.
   `C_syntax.try_lane_all_reduce` owns EVERY local-target `Workgroup_reduce`: the xor butterfly
   (an all-reduce: the total lands in every lane, no shared scratch, no barrier) at exactly one
   simdgroup, else the serial loop in every lane. Never the `Workgroup` binding: each lane would
-  keep its own term, a wrong value rather than a race. Multi-simdgroup widths decline in v1.
+  keep its own term, a wrong value rather than a race. Past one simdgroup (gh-ocannl-1168) the
+  per-simdgroup totals go through a workgroup-shared slot array between TWO barriers per pair:
+  the second keeps the next pair's stores off a slot some lane has not read. Every lane reads all
+  slots in slot order, so all hold the bitwise-same total. Every lane must reach both barriers,
+  and whole-`.x` coverage alone does not prove it: a guard reading a lane-dependent scope local
+  (`flag := lane < 32; if flag { ... }`) parts the lanes. `Low_level.lane_all_reduce_sites` is the
+  one predicate: whole `.x`, a one-dimensional workgroup, no enclosing workgroup loop, and every
+  enclosing condition built from constants and non-lane index symbols (a local or a memory read
+  disqualifies). The renderer and `Schedule.workgroup_memory_bytes` (which counts the slots
+  through the `lane_all_reduce_workgroup_bytes` capability) both read it. The schedule retypes at `k` simdgroups only up to
+  `gpu_lane_all_reduce_simdgroups` (`auto` = `hardware_limits.lane_all_reduce_simdgroups`: 4 on
+  Metal, where heads of 64 and 128 train 3-31% faster on it; 1 until a device measures the
+  barriers paying).
   Measured on Metal (D1 training, lukstafi/ocannl-staging PR for gh-ocannl-1124): duplicated is a
   1.07-1.45x step REGRESSION (every lane pays the value width per pair), cooperative a 0.94-0.98x
   win, and it lanes dQ too -- fission then cuts dQ from the row dot `D`, whose merge would now cost
@@ -133,6 +152,22 @@ files.
   `Code_borne` cache classification. Backend-free lowering conservatively resolves auto to 0.
   In training the step is backward-bound
   (gh-ocannl-1124): the fold moves it by 1-2%.
+- GPU fission folds a reduction's whole-node zero into the reduction's kernel (gh-ocannl-1175) as a
+  pass over the FINISHED segmentation (`group_units`'s `fold_zeros`): a singleton zero segment
+  folds, expanded by the zero policy's `Expand_zero` (GPU, above its size threshold), into the
+  following segment only when that whole segment re-admits every unit with the per-cell zero at
+  its head. The fold must change nothing else. Expanding before grouping (staging#934, reverted)
+  let the zero join the PRECEDING segment and bridge sibling reductions its whole-node form had
+  kept apart: each GPT2 layer's q and k projections merged into one kernel with two matmul sites,
+  which no sketch reaches, and the tuned CUDA step doubled. `qkv_zero_init` pins the segmentation
+  as the unexpanded one with zero segments folded forward; seed validity alone did not catch it.
+  Sketch families give the folded zero the site's geometry through `companion_geometry`, and the
+  tuner and model selector explore a singleton segment whose pre-schedule digest the fold changed,
+  since whole-routine sketches see the original whole-node zero. The fold is OPT-IN
+  (`fission_scheduled ~fold_zeros`): only the sketch candidates and their seeding pass it. The
+  untuned default keeps the separate zero kernel because an untiled accumulation with its zero
+  register-forwarded measured 7% slower on HIP gfx1151 (unified memory), although its emitted
+  source differs only in that forwarding.
 - A GPU schedule must cover EVERY materialized-writing nest of the routine, not only the one the
   pipeline builds. Launch dimensions are kernel-global, so `Low_level.validate_parallel` rejects any
   companion write (a bias/relu tail; the elementwise statements an aligned-merged fission segment
@@ -384,6 +419,24 @@ files.
   `schedule_strided_1x1` compares each seed exactly against `run_default_fission` and checks that
   reference against the unscheduled form up to f32 rounding. Exact-integer fixtures (its bare
   einsum legs) can keep the unscheduled reference.
+- **Backprop's contractions reach the matmul family only through the enabling interchange**
+  (gh-ocannl-1183, `Sketch_families.detect_matmul_canonical`). A weight gradient lowers as
+  `for b, s, o, i: dw[o,i] += dy[b,s,o] * x[b,s,i]` (contraction loops outermost) and a data
+  gradient with its contraction loop between write loops, while `classify_matmul` reads the
+  contraction nest off the innermost end: before the interchange, not one of the gpt2_mini training
+  step's backward contractions was a site, so the search never seeded a tile for the kernels that
+  are 76% of the batch-256 step. The canonical form sinks the contraction loops below the write
+  loops by `Op_legal` adjacent `Swap`s (the gh-537 split-reduce precedent), re-detects, and every
+  schedule built from the site carries the chain as its PREFIX, so it applies to the original code
+  and replays from a fresh lowering. A plain site keeps an empty prefix, and a segment `detect_conv`
+  claims is never interchanged, so every seed that existed before is byte-identical. Every entry point that
+  reads a site off `opt` must go through the canonical form (seeding, the family tree, the traffic
+  floor, `mma_eligible_sites`, `sketch_schedule`); one that calls `detect_matmul` directly silently
+  sees no backward site. A forward einsum spelled like a gradient (`"bso;bsi=>oi"`) lowers with
+  the output loops first and is a plain site: reproduce backprop's order with an actual backprop
+  (`benchmarks/runners/ocannl/bench_wgrad.ml`) or hand-built IR (`test/operations/matmul_interchange`).
+  Untuned defaults are unchanged: the default GPU plan still renders every contraction with no
+  operand reuse, which is where the batch-scaling collapse itself lives (ahrefs/ocannl#1183).
 ## Dispatch bindings and device properties
 - **A dispatch's launch parameters are read on the HOST, at `Context.run`, and carried to the
   device** — never re-read from the caller's refs when the device gets around to the task. Only
@@ -576,7 +629,8 @@ files.
   consults through the same module: every CPU tensorized leaf gets a `register-tile` level of
   `auto` plus `Register_tile.alternatives` (the LARGEST tail-free `rn >= 2` at the widest fitting
   width — the smaller tail-free widths are dominated on the model's own terms — plus the budget
-  cap when its column tail is at most one vector), only where at least one exists. The default is
+  cap when its column tail is at most one vector, plus the largest tile tying a tail-bearing
+  default), only where at least one exists. The default is
   usually the cap now, so on a non-dividing site the twin is the notch below it: one question per
   leaf (gh-614's register pressure), where the pre-620 rule asked none on a site whose cap peeled
   fat (`tile_mma_declines` 22 -> 32 seeds, `sketch_family_tree`'s AVX2 tree 23 -> 34). The emitted header appends
@@ -594,13 +648,18 @@ files.
   Full passes plus the narrower column tail move `2 * rm * ceil(n/lanes)` C vectors per row
   band, independent of `rn`; charging `2 * rm * rn / k` at full `rn` on the tail pass, or once
   per site, miscounts it. The exclusive AVX2 A/B confirmed a 4x2 serial win at n=28, but 4x3
-  won at fixed n=512 with k=32 as well as k=256. A tail-free tie preference avoids a second
-  tile body; when both candidates have tails, both emit two bodies and equal cost means equal
-  A splats, so the remaining tie keys have no additional issue-slot rationale. Keep them
-  unchanged here; [gh-ocannl-1180](https://github.com/ahrefs/ocannl/issues/1180) owns validating
-  a tail-free-then-smaller-`rn` rule on NEON and AVX2. gh-ocannl-947's NEON n=56 tail-bearing tie was
-  neutral; more targeted coverage is needed. Derivation, paired measurements and reproduction
-  protocol: [gh-ocannl-1099](../research/gh-1099-register-tile-c-traffic.md).
+  won at fixed n=512 with k=32 as well as k=256. Derivation, paired measurements and
+  reproduction protocol: [gh-ocannl-1099](../research/gh-1099-register-tile-c-traffic.md).
+- **A price tie at one width goes tail-free, then to the SMALLER `rn`** (gh-ocannl-1180). Equal
+  price at one width is an equal pass count, and two tail-free tiles never share one, so the `rn`
+  key only ranks two tail-bearing tiles: two bodies each, equal A splats, equal C traffic. Only
+  register pressure (`live_registers`) still differs, and the smallest `rn` reaching the pass
+  count is the most even split of the vector columns. The old "larger `rn` for more A-reuse" key
+  claimed reuse the price shows is not there. The larger tile is not lost: `alternatives` seeds
+  the largest tile tying a tail-bearing default, so the tuner times both sides of every tie. The
+  rule moves picks on AVX2 only at f32 n = 25..31, but on many NEON and AVX-512 sites
+  (`gh1180_tie_ab.sh` in `benchmarks/` times a pair from one build; the A/B table is on
+  lukstafi/ocannl-staging's PR for the issue).
 ## Crowned and shipped artifacts
 - "Crowned" is not "shipped", and neither is reproducible on a small routine. `Train.tune_placements`
   runs two searches and keeps one artifact, so a family can win the arm that is then discarded whole
@@ -778,7 +837,21 @@ files.
   A replay requires the same search shape and re-evaluates the current incumbent and ratio
   against those timings; without a qualifying rule it searches normally. It reports
   `Abandonment_replay` and raises `Search_abandoned` with zero search counters, so a warm
-  flip chain does not re-search its losing flips or mislabel the harness's tuned row.
+  flip chain does not re-search its losing flips or mislabel the harness's tuned row. **The
+  trajectory identity holds only what a single search reads**: the keys that steer
+  `Train.tune_placements` above it (`tune_inline_flips`, `tune_flip_ordering`,
+  `tune_flip_profit_margin`, `tune_ship_arm`, `tune_placement_store`) are their own
+  `Placement_shaping` class, outside the fingerprint (gh-ocannl-1192). While they were
+  `Search_shaping`, merely STATING one changed the identity, since the fingerprint renders every
+  key some source sets: on rog's approximate CUDA gpt2_mini cell a warm chain run under
+  `tune_placement_store=false` (gh-1020's way to compare the arms afresh) replayed both arms yet
+  searched each of the eight flips abandoned cold in full (775 s and 310 attempts apiece where the
+  cold abandonment took 19 s), because the replayed incumbent had no record under that shape and no
+  abandonment record matched. Two traps for reproducing that row: a warm run with the placement
+  store on replays the recorded decision as ONE search and never walks the chain; and through
+  `benchmarks/orchestrate.py` the flip budget cannot be raised by `OCANNL_TUNE_INLINE_FLIPS`,
+  because a commandline-picked profile (`--ocannl_profile=approximate`, whose payload sets 2)
+  outranks the environment -- pass `--ocannl_tune_inline_flips=N` on the commandline.
 - **A per-segment single is timed against a backdrop, so near-tie singles rank by noise**
   (gh-ocannl-1166). An `F_sketch` single times the WHOLE routine with every other segment on its
   untuned preset: on gpt2_mini/CUDA tf32 a q/k/v single measured ~23.2 ms where the composite it
@@ -786,7 +859,7 @@ files.
   as the gap between that site's top four geometries, and the replicates crowned different ones
   (`mma 32x32x0 bgrid` vs `mma 16x32x0 bgrid-in`) — the "step search crowns weaker geometries
   than the per-site search" symptom. Exact mode, whose gaps are larger, crowned the per-site best
-  in both. `bench_gpt` tunes with `~rounds:0`, so no refinement ever ran there (gh-ocannl-1137).
+  in both. `bench_gpt` tunes with `~rounds:0`, so no beam round refines these crowns (next bullet).
   The composite playoff re-times each key's singles within `playoff_margin` (0.5%) of its best,
   at most `playoff_width` (2) per key, inside the faster timed composite, as coordinate descent
   over the keys; its windows count in `report.fiss_sketch_playoff_timed`, not in
@@ -795,6 +868,19 @@ files.
   moved 2.474 -> 2.427 ms (replicate means) with the spread narrowed 16x. Before reading a per-key
   crown as a ranking, compare the singles' gap with their backdrop's replicate spread; the
   `autotune_log` lines carry both.
+- **Beam rounds after the step search's composites bought nothing measured on gpt2_mini, at +150% search**
+  (gh-ocannl-1137; a capped correctness-grade probe on a shared rog box, CUDA, approximate profile).
+  A round is adopted only when its best beats the incumbent by `min_progress` (1%); a sub-1% best is
+  timed and dropped, and the winner stays the beam head. Arm A finished round 1 (635 candidates,
+  +1002 s on 674 s of seeds) 0.50% ahead and shipped its rounds:0 winner. Arm B was cut off 97
+  candidates into a 1325-candidate round (~1.9 s each, ~+480% projected on 528 s of seeds), 0.31%
+  ahead so far; whether its round clears 1% is unmeasured. A round expands every beam entry by every
+  menu move of every segment unit, and after the composite playoff the beam is the composite plus its
+  near-copies (1-4 of 122-150 segments apart), so the round pays ~4x one entry's moves for little
+  diversity. Hence every benchmark runner keeps `~rounds:0` and records it as each arm's
+  `rounds_run`/`beam_width` on the result line; the `autotune_log` line
+  `round N: K candidate(s) from a beam of W: ...` gives each entry's `units differing` from the
+  incumbent.
 ## Action enumeration and budget sharing
 - The action menu's loop enumeration is provenance-aimed **by action category**, not by loop
   (gh-ocannl-687). `Local_scope` has two producers — virtualization's inline at a read site, and the
@@ -899,14 +985,16 @@ files.
   head; `Sched.Coalesce` merges the adjacent `(h, e)` pair into one loop whose accesses read
   `Sub_axis; Iterator f`. `Sketch_families.coalesced` builds the structural prefix (the site's
   `Coalesce (last m_bi, m_j)`, preceded where `d`'s `Zero_out` shares the routine by its
-  `Expand_zero` with the zero nest's last two loops coalesced alike) and applies it to a hermetic
+  `Expand_zero` with the zero nest's last two loops coalesced alike, and where a covering per-cell
+  zero nest of `d` does — the folded zero of a GPU fission segment, gh-ocannl-1175 — by that nest's
+  own coalescing) and applies it to a hermetic
   copy; `coalesced_seed_params` enumerates the ordinary family over THAT code, so every refutation
   (launch caps, companion coverage, divisibility) is judged on the site the schedule builds, and
   `sketch_schedule` on an `sk_coalesce` seed re-derives the prefix and prepends it. The expanded
   zero nest is then an ordinary companion of the merged chain; an unexpanded `Zero_out` would keep
   the uncoalesced chain. Winners persist as plain saved schedules — the `Coalesce` op names its
   loops structurally (`Base`/`Minted` refs, `Coalesce_merged` mint role) — and the menu change
-  bumped `entry_version` to 10. v1 boundary, each a decline rather than a wrong value: unfused
+  bumped `entry_version` to 13. v1 boundary, each a decline rather than a wrong value: unfused
   GPU scalar blocktile leaves only (`Tensorize` reads an operand's last two axes as its tile, and
   `Fuse_epilogue`'s tail is a nest over the target's own dims); a companion nest over the
   uncoalesced axes (an elementwise tail) trims the merged chain and refutes the whole branch; one
@@ -1127,7 +1215,12 @@ files.
   queued: equal timed loops, but 587 s of calibration against 14 s, because 215 of 220 calls settle
   at depth 1 after ~40 calibration launches (sixteen singles plus the depth-2 confirmation) and
   then time exactly what `isolated` would. `BENCH_TIMING_TRACE=1` in the benchmark runners splits a
-  session's wall this way; `benchmarks/gh834_cells.sh` is the per-box driver. A cold schedule cache
+  session's wall this way; `benchmarks/gh834_cells.sh` is the per-box driver. Its per-call
+  `decision` line (gh-ocannl-1199) is `Autotune.on_batch_decision`, built from the calibration's own
+  metadata: each exit of `calibrate_and_time` returns its `batch_settle`, and
+  `fit_queued_batch_depth_between_with_cap` returns the `affine_fit` (fixed, marginal, verdict) behind
+  every depth it chooses — so a new calibration branch must name its settle and verdict, and a
+  diagnosis reads them instead of re-deriving the policy from probe readings. A cold schedule cache
   is not a cold session: the backend's own compiled-code cache persists across processes, and in
   gh-ocannl-834's CUDA pair the second session's compile-and-bookkeeping time was 64 s against the
   first's 406 s from the PTX ComputeCache alone — the driver gives each CUDA session an empty
