@@ -646,19 +646,14 @@ let () =
   Verdict.p_all "every fixture name is a valid component on a 255-byte filesystem"
     [ long_name; utf8_name ] ~f:(fun name -> String.length name <= 255);
   (* Every remaining claim of this leg goes through one of these two: evaluated where the host has
-     the path budget for the fixtures, announced as skipped where it does not. [Verdict.skipped]
-     prints the line [p] would, so the golden stays uniform across hosts while a reader of the run's
-     stderr still sees exactly what was not checked. The collections are thunks because under the
-     gate nothing published, and a quantified claim over the empty list they would then be is a
-     refusal rather than a skip. *)
+     the path budget for the fixtures, announced as skipped where it does not. A skip prints the
+     line [p] would, so the golden stays uniform across hosts while a reader of the run's stderr
+     still sees exactly what was not checked. Under the gate nothing published, so the collections
+     are empty there, and a closed gate does not read them. *)
   let fits = force long_names_fit_here in
-  let long_claim name b =
-    if fits then Verdict.p name (b ())
-    else Verdict.skipped ~aggregation:`Environment ~backend:path_budget_gate name
-  in
-  let long_claim_all ?min name items ~f =
-    if fits then Verdict.p_all ?min name (items ()) ~f
-    else Verdict.skipped ~aggregation:`Environment ~backend:path_budget_gate name
+  let long_claim = Verdict.gated ~aggregation:`Environment ~when_:fits ~on:path_budget_gate in
+  let long_claim_all =
+    Verdict.gated_all ~aggregation:`Environment ~when_:fits ~on:path_budget_gate
   in
   let staged = ref [] in
   let utf8_staged = ref [] in
@@ -668,34 +663,27 @@ let () =
     AF.write_all ~path:utf8_target ~data:"payload"
       ~before_commit:(fun () -> utf8_staged := staging_leftovers () @ !utf8_staged)
       ());
-  long_claim "a target named to the filesystem's limit publishes" (fun () ->
-      Stdlib.Sys.file_exists long_target);
-  long_claim_all "every staging name fits one filesystem component"
-    (fun () -> !staged)
-    ~f:(fun name -> String.length name <= 255);
-  long_claim_all "a long target's staging file is recognized as that target's"
-    (fun () -> !staged)
+  long_claim "a target named to the filesystem's limit publishes"
+    (Stdlib.Sys.file_exists long_target);
+  long_claim_all "every staging name fits one filesystem component" !staged ~f:(fun name ->
+      String.length name <= 255);
+  long_claim_all "a long target's staging file is recognized as that target's" !staged
     ~f:(AF.is_staging_file_for ~path:long_target);
   (* Both fixtures must actually reach the truncating path, or they test the short-name branch under
      a long-looking name: a stem that fit would appear in the staging name verbatim. *)
-  long_claim_all "the long fixtures exercise the truncating stem"
-    (fun () -> !staged @ !utf8_staged)
+  long_claim_all "the long fixtures exercise the truncating stem" (!staged @ !utf8_staged)
     ~f:(fun name ->
       not (String.is_prefix name ~prefix:long_name || String.is_prefix name ~prefix:utf8_name));
-  long_claim "a multibyte target name publishes" (fun () -> Stdlib.Sys.file_exists utf8_target);
-  long_claim_all "every staging name of a multibyte target is itself valid UTF-8"
-    (fun () -> !utf8_staged)
+  long_claim "a multibyte target name publishes" (Stdlib.Sys.file_exists utf8_target);
+  long_claim_all "every staging name of a multibyte target is itself valid UTF-8" !utf8_staged
     ~f:Stdlib.String.is_valid_utf_8;
-  long_claim_all "a multibyte target's staging file fits one filesystem component"
-    (fun () -> !utf8_staged)
+  long_claim_all "a multibyte target's staging file fits one filesystem component" !utf8_staged
     ~f:(fun name -> String.length name <= 255);
-  long_claim_all "a multibyte target's staging file is recognized as that target's"
-    (fun () -> !utf8_staged)
+  long_claim_all "a multibyte target's staging file is recognized as that target's" !utf8_staged
     ~f:(AF.is_staging_file_for ~path:utf8_target);
   (* Case: on Windows and on a default macOS volume these two spellings are one file. *)
   let shouting = Stdlib.Filename.concat dir (String.uppercase long_name) in
-  long_claim_all "a differently-cased spelling of the target claims its staging files"
-    (fun () -> !staged)
+  long_claim_all "a differently-cased spelling of the target claims its staging files" !staged
     ~f:(AF.is_staging_file_for ~path:shouting);
   (* Uniqueness within a process, observed rather than assumed: each attempt's staging file is
      captured in its own commit window, and no name repeats. Uniqueness ACROSS processes rests on

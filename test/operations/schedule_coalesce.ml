@@ -49,7 +49,6 @@ let accum_prec =
 open Verdict.Claims
 
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
-let skipped = Verdict.skipped ~backend:backend_name
 let on_gpu = Sched.backend_is_gpu backend_name
 
 let raises_with ~substring f =
@@ -351,22 +350,16 @@ let () =
             Printf.sprintf "%dx%dx%d/%dx%d%s" q.Autotune.sk_bm q.Autotune.sk_bn q.Autotune.sk_bk
               q.Autotune.sk_tm q.Autotune.sk_tn
               (if q.Autotune.sk_batch_grid then " bgrid" else ""))));
-  if on_gpu then begin
-    let n_match = ref 0 in
-    List.iter schedules ~f:(fun (q, _) ->
-        match
-          run_with fwd cand (fun o -> Sched.apply (Autotune.sketch_schedule ~accum_prec ~p:q o) o)
-        with
-        | got -> if Array.equal Float.equal got want then Int.incr n_match
-        | exception exn -> Stdio.eprintf "coalesced seed FAILED: %s\n" (Exn.to_string exn));
-    p "projection: every coalesced seed executes to the serial reference bitwise"
-      (!n_match = List.length schedules && !n_match > 0)
-  end
-  else begin
-    Stdio.eprintf "%s cannot execute workgroup-shared staging — the execution leg is skipped\n"
-      backend_name;
-    skipped "projection: every coalesced seed executes to the serial reference bitwise"
-  end
+  gated_all ~when_:on_gpu ~on:backend_name
+    "projection: every coalesced seed executes to the serial reference bitwise" schedules
+    ~f:(fun (q, _) ->
+      match
+        run_with fwd cand (fun o -> Sched.apply (Autotune.sketch_schedule ~accum_prec ~p:q o) o)
+      with
+      | got -> Array.equal Float.equal got want
+      | exception exn ->
+          Stdio.eprintf "coalesced seed FAILED: %s\n" (Exn.to_string exn);
+          false)
 
 (* {1 The v1 boundary: a companion over the uncoalesced axes} *)
 
@@ -489,17 +482,13 @@ let () =
           | exception exn ->
               Stdio.eprintf "folded schedule FAILED: %s\n" (Exn.to_string exn);
               false);
-      let label = "folded: every coalesced seed executes to the materialized run" in
-      if on_gpu then
-        p_all label
-          (List.mapi seeds ~f:(fun i q -> (i, q)))
-          ~f:(fun (i, q) ->
-            let o = apply (Autotune.sketch_schedule ~accum_prec ~p:q pre) in
-            let got =
-              List.hd_exn
-                (L.execute
-                   ~name:("co_folded_seed_" ^ Int.to_string i)
-                   o ~seed ~read:[ cand.Tensor.value ])
-            in
-            Array.equal Float.equal got want)
-      else skipped label)
+      gated_alli ~when_:on_gpu ~on:backend_name
+        "folded: every coalesced seed executes to the materialized run" seeds ~f:(fun i q ->
+          let o = apply (Autotune.sketch_schedule ~accum_prec ~p:q pre) in
+          let got =
+            List.hd_exn
+              (L.execute
+                 ~name:("co_folded_seed_" ^ Int.to_string i)
+                 o ~seed ~read:[ cand.Tensor.value ])
+          in
+          Array.equal Float.equal got want))
