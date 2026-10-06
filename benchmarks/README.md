@@ -657,6 +657,21 @@ per-box, leaves the other measuring boxes on a workload that is now different fr
 Regeneration is a cross-box event: coordinate it across every origin in `DIGESTS.txt`'s
 `measurement-boxes` header field at once (gh-ocannl-759, gh-ocannl-850).
 
+**Rebuilding a fixture that vanished is not regeneration**, provided the bytes come back as
+recorded. When a tree has lost a fixture that this box's `DIGESTS.txt` entry still names (a fresh
+checkout or worktree, a cleaned `fixtures/`), copy it from another tree on the same box first;
+failing that, rebuild it OUTSIDE `fixtures/` and compare before it goes in:
+`benchmarks/.venv/bin/python benchmarks/gen_fixtures.py --out-dir <scratch> benchmarks/workloads/<name>.json`,
+then `python3 benchmarks/fixture_digest.py --check <scratch>/<name>.safetensors`, which looks the
+file name up in `fixtures/DIGESTS.txt`. Copy the file into `fixtures/` only on a `MATCH` naming
+this box's origin; from then on it is the recorded workload, not a smoke fixture. The comparison is
+meaningful only against a `content-v1` row: that digest covers the canonicalized tensors and
+metadata, whereas a rebuilt file's raw bytes vary with safetensors' metadata order, so a `raw-v1`
+row cannot certify one. A `MISMATCH` means this venv no longer reproduces the recorded stream (a
+numpy upgrade, a changed spec or generator): the bytes are lost on this box, and replacing them is
+the cross-box regeneration above. What the rule forbids is replacing recorded bytes, never
+reproducing them.
+
 tinygrad's CPU device JIT-compiles kernels with `clang`; on a machine without clang, point
 `CC` at a substitute (a `zig cc` wrapper script from `pip install ziglang` works — translate
 `--target=x86_64-none-unknown-elf` to `--target=x86_64-freestanding-none` and add `-g0`).
