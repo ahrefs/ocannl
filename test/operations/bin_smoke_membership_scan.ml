@@ -592,6 +592,29 @@ let smoke_targets_of_stanza ~allow_verified_helper ~dune_path ~subdir stanza =
 
 let target_name = function Local path -> path | Public name -> "%{bin:" ^ name ^ "}"
 
+(* The per-file walks that run after the main census, each named in its diagnostic so a reader can
+   tell which question the file could not answer. *)
+let path_rewriting_walk = "PATH-rewriting env stanzas"
+let directory_target_walk = "directory targets"
+let target_producer_walk = "target producers"
+let executable_dependency_walk = "executable link dependencies"
+
+let walk_error ~walk dune_path exn =
+  Printf.sprintf "cannot scan %s for %s: %s" dune_path walk (Stdlib.Printexc.to_string exn)
+
+(* [f] over every dune file, concatenated. A file whose walk raises is reported, never dropped: an
+   empty answer would read as "nothing to find there", shrinking the census with nothing failing. A
+   file the main census cannot parse is reported once per walk as well, which is redundant but keeps
+   each walk's coverage its own rather than an inference about what the census caught. *)
+let walk_each dune_files ~walk ~f =
+  let found, errors =
+    List.partition_map dune_files ~f:(fun (dune_path, content) ->
+        match f dune_path content with
+        | found -> First found
+        | exception exn -> Second (walk_error ~walk dune_path exn))
+  in
+  (List.concat found, errors)
+
 let scan dune_files =
   let declarations, _executable_locals, alias_nodes, generated_targets, scan_errors =
     List.fold dune_files ~init:([], [], [], [], [])
@@ -677,31 +700,27 @@ let scan dune_files =
             all_targets,
             Printf.sprintf "cannot parse %s: %s" dune_path (Exn.to_string exn) :: all_errors ))
   in
-  let path_rewriting_directories =
-    List.concat_map dune_files ~f:(fun (dune_path, content) ->
-        try
-          List.map (Dune_scan.path_rewriting_stanza_scopes content) ~f:(fun subdir ->
-              (Dune_scan.in_subdir (path_dirname dune_path) subdir, dune_path))
-        with _ -> [])
+  let path_rewriting_directories, path_rewriting_walk_errors =
+    walk_each dune_files ~walk:path_rewriting_walk ~f:(fun dune_path content ->
+        List.map (Dune_scan.path_rewriting_stanza_scopes content) ~f:(fun subdir ->
+            (Dune_scan.in_subdir (path_dirname dune_path) subdir, dune_path)))
+  in
+  let generated_directory_targets, directory_target_walk_errors =
+    walk_each dune_files ~walk:directory_target_walk ~f:(fun dune_path content ->
+        let directory = path_dirname dune_path in
+        Dune_scan.walk "" (Dune_scan.stanzas content) ~f:(fun subdir stanza ->
+            produced_directory_targets ~subdir:(Dune_scan.in_subdir directory subdir) stanza))
   in
   let generated_directory_targets =
-    List.concat_map dune_files ~f:(fun (dune_path, content) ->
-        try
-          let directory = path_dirname dune_path in
-          Dune_scan.walk "" (Dune_scan.stanzas content) ~f:(fun subdir stanza ->
-              produced_directory_targets ~subdir:(Dune_scan.in_subdir directory subdir) stanza)
-        with _ -> [])
-    |> List.dedup_and_sort ~compare:String.compare
+    List.dedup_and_sort generated_directory_targets ~compare:String.compare
   in
-  let target_producer_sites =
-    List.concat_map dune_files ~f:(fun (dune_path, content) ->
-        try
-          let directory = path_dirname dune_path in
-          Dune_scan.walk "" (Dune_scan.stanzas content) ~f:(fun subdir stanza ->
-              let subdir = Dune_scan.in_subdir directory subdir in
-              let targets = produced_targets ~subdir stanza in
-              if List.is_empty targets then [] else [ (dune_path, subdir, stanza, targets) ])
-        with _ -> [])
+  let target_producer_sites, target_producer_walk_errors =
+    walk_each dune_files ~walk:target_producer_walk ~f:(fun dune_path content ->
+        let directory = path_dirname dune_path in
+        Dune_scan.walk "" (Dune_scan.stanzas content) ~f:(fun subdir stanza ->
+            let subdir = Dune_scan.in_subdir directory subdir in
+            let targets = produced_targets ~subdir stanza in
+            if List.is_empty targets then [] else [ (dune_path, subdir, stanza, targets) ]))
   in
   let target_producers, target_producer_command_errors =
     List.fold target_producer_sites ~init:([], [])
@@ -795,74 +814,69 @@ let scan dune_files =
               let targets, errors = producer_alias_effects (Set.empty (module String)) node in
               List.map targets ~f:(target_producer_dependency_error dune_path) @ errors))
   in
-  let executable_dependency_errors =
-    List.concat_map dune_files ~f:(fun (dune_path, content) ->
+  let executable_dependency_errors, executable_dependency_walk_errors =
+    walk_each dune_files ~walk:executable_dependency_walk ~f:(fun dune_path content ->
         if not (String.equal dune_path "bin/dune" || String.is_prefix dune_path ~prefix:"bin/") then
           []
         else
-          try
-            let directory = path_dirname dune_path in
-            Dune_scan.walk "" (Dune_scan.stanzas content) ~f:(fun subdir stanza ->
-                let subdir = Dune_scan.in_subdir directory subdir in
-                let declarations, _errors = declarations_of_stanza ~subdir stanza in
-                if List.is_empty declarations then []
-                else
-                  List.concat_map [ "link_deps"; "preprocessor_deps" ] ~f:(fun field ->
-                      let dependencies, dependency_errors =
-                        alias_dependencies_in_field ~field ~subdir stanza
-                      in
-                      let target_dependencies =
-                        target_dependencies_in_field ~field ~subdir stanza
-                      in
-                      let found, resolution_errors =
-                        resolve_alias_dependencies dune_path dependencies
-                      in
-                      List.map
-                        (List.rev_append dependency_errors resolution_errors)
-                        ~f:(executable_dependency_spec_error dune_path)
-                      @ List.concat_map found ~f:(fun node ->
-                          let targets, errors =
-                            producer_alias_effects (Set.empty (module String)) node
-                          in
-                          List.map targets ~f:(executable_dependency_error dune_path) @ errors)
-                      @ List.concat_map target_producer_sites
-                          ~f:(fun (producer_path, producer_subdir, producer_stanza, targets) ->
-                            if
-                              not
-                                (List.exists targets ~f:(fun target ->
-                                     List.mem target_dependencies target ~equal:String.equal))
-                            then []
-                            else
-                              let direct_errors =
-                                smoke_targets_of_stanza ~allow_verified_helper:false
-                                  ~dune_path:producer_path ~subdir:producer_subdir producer_stanza
-                                |> List.map ~f:(function
-                                  | Ok (Some target) when target_is_public target ->
-                                      executable_dependency_error dune_path target
-                                  | Ok (Some target) ->
-                                      private_producer_run_error producer_path target
-                                  | Ok None -> ""
-                                  | Error error -> target_producer_command_error producer_path error)
-                                |> List.filter ~f:(Fn.non String.is_empty)
-                              in
-                              let producer_dependencies, producer_dependency_errors =
-                                alias_dependencies ~subdir:producer_subdir producer_stanza
-                              in
-                              let producer_aliases, producer_resolution_errors =
-                                resolve_alias_dependencies producer_path producer_dependencies
-                              in
-                              direct_errors
-                              @ List.map
-                                  (List.rev_append producer_dependency_errors
-                                     producer_resolution_errors)
-                                  ~f:(executable_dependency_spec_error dune_path)
-                              @ List.concat_map producer_aliases ~f:(fun node ->
-                                  let targets, errors =
-                                    producer_alias_effects (Set.empty (module String)) node
-                                  in
-                                  List.map targets ~f:(executable_dependency_error dune_path)
-                                  @ errors))))
-          with _ -> [])
+          let directory = path_dirname dune_path in
+          Dune_scan.walk "" (Dune_scan.stanzas content) ~f:(fun subdir stanza ->
+              let subdir = Dune_scan.in_subdir directory subdir in
+              let declarations, _errors = declarations_of_stanza ~subdir stanza in
+              if List.is_empty declarations then []
+              else
+                List.concat_map [ "link_deps"; "preprocessor_deps" ] ~f:(fun field ->
+                    let dependencies, dependency_errors =
+                      alias_dependencies_in_field ~field ~subdir stanza
+                    in
+                    let target_dependencies = target_dependencies_in_field ~field ~subdir stanza in
+                    let found, resolution_errors =
+                      resolve_alias_dependencies dune_path dependencies
+                    in
+                    List.map
+                      (List.rev_append dependency_errors resolution_errors)
+                      ~f:(executable_dependency_spec_error dune_path)
+                    @ List.concat_map found ~f:(fun node ->
+                        let targets, errors =
+                          producer_alias_effects (Set.empty (module String)) node
+                        in
+                        List.map targets ~f:(executable_dependency_error dune_path) @ errors)
+                    @ List.concat_map target_producer_sites
+                        ~f:(fun (producer_path, producer_subdir, producer_stanza, targets) ->
+                          if
+                            not
+                              (List.exists targets ~f:(fun target ->
+                                   List.mem target_dependencies target ~equal:String.equal))
+                          then []
+                          else
+                            let direct_errors =
+                              smoke_targets_of_stanza ~allow_verified_helper:false
+                                ~dune_path:producer_path ~subdir:producer_subdir producer_stanza
+                              |> List.map ~f:(function
+                                | Ok (Some target) when target_is_public target ->
+                                    executable_dependency_error dune_path target
+                                | Ok (Some target) ->
+                                    private_producer_run_error producer_path target
+                                | Ok None -> ""
+                                | Error error -> target_producer_command_error producer_path error)
+                              |> List.filter ~f:(Fn.non String.is_empty)
+                            in
+                            let producer_dependencies, producer_dependency_errors =
+                              alias_dependencies ~subdir:producer_subdir producer_stanza
+                            in
+                            let producer_aliases, producer_resolution_errors =
+                              resolve_alias_dependencies producer_path producer_dependencies
+                            in
+                            direct_errors
+                            @ List.map
+                                (List.rev_append producer_dependency_errors
+                                   producer_resolution_errors)
+                                ~f:(executable_dependency_spec_error dune_path)
+                            @ List.concat_map producer_aliases ~f:(fun node ->
+                                let targets, errors =
+                                  producer_alias_effects (Set.empty (module String)) node
+                                in
+                                List.map targets ~f:(executable_dependency_error dune_path) @ errors)))))
   in
   let rec visit visited targets errors = function
     | [] -> (targets, errors)
@@ -1014,7 +1028,8 @@ let scan dune_files =
         | Error _ -> None)
   in
   let errors =
-    List.rev scan_errors
+    List.rev scan_errors @ path_rewriting_walk_errors @ directory_target_walk_errors
+    @ target_producer_walk_errors @ executable_dependency_walk_errors
     @ (if Int.equal smoke_stanza_count 0 then [ "the repository defines no @bin-smoke action" ]
        else [])
     @ List.map duplicate_locals ~f:(Printf.sprintf "duplicate public local identity: %s")
@@ -1148,6 +1163,11 @@ let widened_contribution_fixture =
    (run %{exe:other_probe.exe}))))|dune}
 
 let included_fixture = complete_fixture ^ "\n(include extra-stanzas.inc)\n"
+
+(* [#;] is a comment to sexplib and an atom to dune, so [Dune_scan.stanzas] refuses this file: every
+   per-file walk raises on it, and each has to say so rather than return nothing. *)
+let unreadable_fixture =
+  complete_fixture ^ "\n(rule #;(alias bin-smoke) (action (run %{exe:alpha.exe})))\n"
 
 let opaque_smoke_fixture =
   {dune|(executable (name alpha) (public_name alpha-tool))
@@ -1876,6 +1896,13 @@ let controls_hold () =
   let conditional_smoke = scan_bin_content conditional_smoke_fixture in
   let conditional_public = scan_bin_content conditional_public_fixture in
   let included = scan_bin_content included_fixture in
+  let unreadable = scan_bin_content unreadable_fixture in
+  let walk_reported walk =
+    match Dune_scan.stanzas unreadable_fixture with
+    | _ -> false
+    | exception exn ->
+        List.mem unreadable.errors (walk_error ~walk "bin/dune" exn) ~equal:String.equal
+  in
   let opaque = scan_bin_content opaque_smoke_fixture in
   let competing =
     scan [ ("bin/dune", complete_fixture); ("test/synthetic/dune", competing_alias_fixture) ]
@@ -1975,6 +2002,11 @@ let controls_hold () =
   && List.mem conditional_public.errors (public_condition_error [ "alpha" ]) ~equal:String.equal
   && (not (complete included))
   && List.mem included.errors (include_error "bin/dune") ~equal:String.equal
+  && (not (complete unreadable))
+  && walk_reported path_rewriting_walk
+  && walk_reported directory_target_walk
+  && walk_reported target_producer_walk
+  && walk_reported executable_dependency_walk
   && (not (complete opaque))
   && List.mem opaque.errors
        (opaque_smoke_error "bin/dune" "shell: ./alpha.exe --again")
