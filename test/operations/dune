@@ -7941,7 +7941,8 @@
   (env_var OCANNL_SIMPLIFY_FP_ALGEBRA))
  (libraries base ocannl stdio arrayjit.verdict ll_test test_utils))
 
-; gh-ocannl-946: declaration-reader controls and real first-parent merge attribution.
+; gh-ocannl-946: declaration-reader controls and real first-parent merge attribution; gh-ocannl-1201
+; refusals for unread source and Dune forms; gh-ocannl-1213 compact rendering.
 
 (test
  ; ocannl-backend: none -- parses synthetic source declarations, with no backend.
