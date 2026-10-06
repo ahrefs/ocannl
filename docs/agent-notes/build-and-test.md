@@ -2938,8 +2938,19 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   target, `--root`, an alias-naming or unknown option -- is every backend) answers, so `runtest test/operations` is a GPU batch while
   `@test/operations/runtest-<cpu test>` and `@test/operations/scans` are not; a Metal marker
   counts even on Linux, where its stanza compiles the stub. Second, for the stanzas that read the
-  configuration: resolved, not read off `OCANNL_BACKEND`, because an ordinary cc batch
-  leaves it unset: `ocannl_read_config`
+  configuration -- counted unless the same tool PROVES them unread (no `reads config` line): a
+  batch reaching only `none`-marked stanzas (`@test/operations/scans`) then holds no backend and
+  runs uncapped and `--cpu` whatever a test configuration names (gh-ocannl-1095). The proof is the
+  inverted claim, after two review rounds each found dune shapes a closure missed: the reach is the
+  closure of the argv's aliases under everything dune builds first (dependency aliases across
+  directories, generated `runtest-<name>` included; every file a stanza mentions matched by
+  basename to any rule's targets; every compilation in the tree and every source-like producer,
+  for any batch), and it is trusted only where every stanza in it uses constructs modelled
+  exactly -- any other pform, dependency form, stanza head (`include`, `cram`, `install`),
+  `dynamic-run` or preprocessing action makes the batch every backend, and so does a backend set
+  past the configuration (`setenv`/`env-vars` of `OCANNL_BACKEND`, a generated `ocannl_config`). `slot_kind_cases`
+  pins the live `scans` answer, so a stanza that breaks the proof shows as a diff. The configurations are resolved, not read off `OCANNL_BACKEND`, because an
+  ordinary cc batch leaves it unset: `ocannl_read_config`
   (`test/config`, the same Utils resolution a test run makes) is built and asked from each
   directory whose `ocannl_config` sets a backend — `test/config` (copied by every `test/*`
   directory and `bin/`) and `arrayjit/test`. No backend at all is not cc (`Context.auto` then
