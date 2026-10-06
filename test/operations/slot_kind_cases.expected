@@ -183,8 +183,8 @@ a copy_files attached to an alias beside the tree leaves no batch proven to read
 build @n/scans (an env setting variables) unknown: it compiles the env stanza in d, whose env setting (env-vars(FOO bar)) this does not model exactly
     unknown: it compiles the env stanza in d, whose env setting (env-vars(FOO bar)) this does not model exactly
 an env setting variables beside the tree leaves no batch proven to read nothing: true
-build @n/scans (an env_vars backend)     unknown: it compiles the env stanza in d, whose (env_vars (OCANNL_BACKEND …)) sets the backend past the configuration
-    unknown: it compiles the env stanza in d, whose (env_vars (OCANNL_BACKEND …)) sets the backend past the configuration
+build @n/scans (an env_vars backend)     unknown: it compiles the env stanza in d, whose env setting (env_vars((OCANNL_BACKEND hip))) this does not model exactly
+    unknown: it compiles the env stanza in d, whose env setting (env_vars((OCANNL_BACKEND hip))) this does not model exactly
 an env_vars backend beside the tree leaves no batch proven to read nothing: true
 build @n/scans (an env's other settings) unknown: it compiles the env stanza in d, whose env setting (binaries tool.exe) this does not model exactly
     unknown: it compiles the env stanza in d, whose env setting (binaries tool.exe) this does not model exactly
@@ -227,7 +227,7 @@ build @@d/runtest-none (a linked library's preprocessing) unknown: it compiles h
 a linked library's preprocessing reaches the reader, or is every backend: true
 build @n/scans (beside a generated .ml)  names nothing + reads config
 a configuration-reading generator of a source file is always reached: true
-build @n/scans (an env's backend)        unknown: it compiles the env stanza in d, whose (env-vars (OCANNL_BACKEND …)) sets the backend past the configuration
+build @n/scans (an env's backend)        unknown: it compiles the env stanza in d, whose env setting (env-vars(OCANNL_BACKEND hip)) this does not model exactly
 an env's backend is every backend: true
 build @d/se (a setenv'd backend)         unknown: it reaches the rule on se in d, whose (setenv OCANNL_BACKEND …) sets the backend past the configuration
 a setenv'd backend is every backend: true
@@ -235,11 +235,17 @@ build @@d/probe (a directory target)     unknown: it reaches the rule producing 
 a directory target is every backend: true
 build @d/gc (a generated configuration)  unknown: it reaches the rule producing ocannl_config in d, whose generated ocannl_config sets the backend past the configuration
 a generated configuration is every backend: true
-build @d/fl2 (a prefix-free backend flag on a reader) unknown: it reaches the rule on fl2 in d, whose flag --backend=hip sets the backend past the configuration
+build @d/ev2 (an env-command assignment on a reader) unknown: it reaches the rule on ev2 in d, whose word in OCANNL_BACKEND=hip sets the backend past the configuration
+an env-command assignment on a reader is every backend: true
+build @d/sh (a shell assignment on a reader) unknown: it reaches the rule on sh in d, whose word in OCANNL_BACKEND=hip ./d.exe sets the backend past the configuration
+a shell assignment on a reader is every backend: true
+build @d/nc (a dropped configuration on a reader) unknown: it reaches the rule on nc in d, whose (setenv OCANNL_NO_CONFIG_FILE …) sets the backend past the configuration
+a dropped configuration on a reader is every backend: true
+build @d/fl2 (a prefix-free backend flag on a reader) unknown: it reaches the rule on fl2 in d, whose word in --backend=hip sets the backend past the configuration
 a prefix-free backend flag on a reader is every backend: true
-build @d/fl3 (a single-dash uppercase backend flag on a reader) unknown: it reaches the rule on fl3 in d, whose flag -OCANNL-BACKEND sets the backend past the configuration
+build @d/fl3 (a single-dash uppercase backend flag on a reader) unknown: it reaches the rule on fl3 in d, whose word in -OCANNL-BACKEND sets the backend past the configuration
 a single-dash uppercase backend flag on a reader is every backend: true
-build @d/fl (a backend flag on a reader) unknown: it reaches the rule on fl in d, whose flag --ocannl_backend=hip sets the backend past the configuration
+build @d/fl (a backend flag on a reader) unknown: it reaches the rule on fl in d, whose word in --ocannl_backend=hip sets the backend past the configuration
 a backend flag on a reader is every backend: true
 build @n/scans (a ppx name in two projects) unknown: it reaches u1 in p1, whose ppx my_ppx (it can reach a backend) this does not model exactly
 a ppx name defined twice is read as every definition: true

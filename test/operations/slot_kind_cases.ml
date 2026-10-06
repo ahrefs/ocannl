@@ -514,8 +514,8 @@ let () =
       ("an env's backend", {dune|(env (_ (env-vars (OCANNL_BACKEND hip))))|dune}, "build @n/scans");
       ( "a setenv'd backend",
         {dune|(rule
- ; ocannl-backend: none -- links no backend in this fixture.
- (alias se) (action (setenv OCANNL_BACKEND hip (run %{dep:d.exe}))))|dune},
+ (alias se) (deps ocannl_config (env_var OCANNL_BACKEND))
+ (action (setenv OCANNL_BACKEND hip (run %{dep:d.exe}))))|dune},
         "build @d/se" );
       (* A directory target produces any path below it -- an ocannl_config among them. *)
       ( "a directory target",
@@ -530,6 +530,21 @@ let () =
         {dune|(rule (target ocannl_config) (action (write-file %{target} "backend=hip")))
 (alias (name gc) (deps ocannl_config))|dune},
         "build @d/gc" );
+      ( "an env-command assignment on a reader",
+        {dune|(rule
+ (alias ev2) (deps ocannl_config (env_var OCANNL_BACKEND))
+ (action (run env OCANNL_BACKEND=hip %{exe:d.exe})))|dune},
+        "build @d/ev2" );
+      ( "a shell assignment on a reader",
+        {dune|(rule
+ (alias sh) (deps ocannl_config (env_var OCANNL_BACKEND))
+ (action (system "OCANNL_BACKEND=hip ./d.exe")))|dune},
+        "build @d/sh" );
+      ( "a dropped configuration on a reader",
+        {dune|(rule
+ (alias nc) (deps ocannl_config (env_var OCANNL_BACKEND))
+ (action (setenv OCANNL_NO_CONFIG_FILE true (run %{dep:d.exe}))))|dune},
+        "build @d/nc" );
       ( "a prefix-free backend flag on a reader",
         {dune|(rule
  (alias fl2) (deps ocannl_config (env_var OCANNL_BACKEND))

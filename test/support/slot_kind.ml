@@ -409,34 +409,51 @@ let compiling_heads =
 
 let inert_heads = [ "copy_files"; "copy_files#"; "dirs"; "data_only_dirs"; "vendored_dirs" ]
 
-(** The first place [sexp] sets the backend past the configuration -- an [OCANNL_BACKEND] bound by a
-    [setenv] or an [env]'s [env-vars] (in any spelling), a rule generating an [ocannl_config] (one
-    the tracked configurations the runner reads cannot show), or, where the stanza reads the
-    configuration, a command-line [--ocannl_backend] -- which the resolved configuration cannot
-    answer for, so a batch reaching it can hold any backend (Codex review on PR #1027). *)
+(* The configuration keys that decide the backend: the backend itself, and [no_config_file], which
+   drops the configuration (no backend at all is [Context.auto]'s, GPUs first). *)
+let backend_keys = [ "backend"; "no_config_file" ]
+
+(** The first place [sexp] sets the backend past the configuration -- one of {!backend_keys} as an
+    [OCANNL_] variable bound by a [setenv], an [env]'s [env_vars]/[env-vars], an [env] command or a
+    shell assignment, a rule generating an [ocannl_config] (one the tracked configurations the
+    runner reads cannot show), or, where the stanza reads the configuration, a command-line flag in
+    any spelling -- which the resolved configuration cannot answer for, so a batch reaching it can
+    hold any backend (Codex review on PR #1027). *)
 let backend_override ~reads_config sexp =
+  let normal w = String.lowercase (String.map w ~f:(function '-' -> '_' | c -> c)) in
   let is_backend name =
-    String.equal
-      (String.lowercase (String.map name ~f:(function '-' -> '_' | c -> c)))
-      "ocannl_backend"
+    List.exists backend_keys ~f:(fun k -> String.equal (normal name) ("ocannl_" ^ k))
   in
   let rec go = function
     | Sexp.Atom a ->
-        (* Every spelling [Utils.cmdline_var_names] accepts for the key: one or two dashes, the
-           [ocannl] prefix or none, any case, either separator (Codex review on PR #1027). *)
-        let flag =
-          String.lowercase
-            (String.map
-               (String.lstrip a ~drop:(Char.equal '-'))
-               ~f:(function '-' -> '_' | c -> c))
+        (* In a stanza that reads the configuration, any word of any atom -- a shell line's
+           included: the variable in any spelling, bare or assigned ([env OCANNL_BACKEND=hip], a
+           [system] line), or the flag in every spelling [Utils.cmdline_var_names] accepts (one or
+           two dashes, the [ocannl] prefix or none, any case, either separator). *)
+        let words =
+          String.split_on_chars a ~on:[ ' '; '\t'; '\n'; ';'; '&'; '|'; '('; ')'; '"'; '\'' ]
         in
-        let key = Option.value (String.chop_prefix flag ~prefix:"ocannl_") ~default:flag in
         Option.some_if
-          (reads_config && String.is_prefix a ~prefix:"-" && String.is_prefix key ~prefix:"backend")
-          (Printf.sprintf "flag %s" a)
-    | Sexp.List (Sexp.Atom "setenv" :: Sexp.Atom name :: _) when is_backend name ->
+          (reads_config
+          && List.exists words ~f:(fun w ->
+              let n = normal w in
+              let key =
+                let bare = String.lstrip n ~drop:(Char.equal '_') in
+                Option.value (String.chop_prefix bare ~prefix:"ocannl_") ~default:bare
+              in
+              List.exists backend_keys ~f:(fun k ->
+                  String.equal n ("ocannl_" ^ k)
+                  || String.is_prefix n ~prefix:("ocannl_" ^ k ^ "=")
+                  || (String.is_prefix w ~prefix:"-" && String.is_prefix key ~prefix:k))))
+          (Printf.sprintf "word in %s" a)
+    (* The declaration that the stanza reads the variable is not a setting of it. *)
+    | Sexp.List [ Sexp.Atom "env_var"; _ ] -> None
+    (* Only a stanza that reads the configuration is moved by it: one naming its backend (a [none]
+       scan setting [OCANNL_NO_CONFIG_FILE] to read its own fixture, say) holds what it names. An
+       [env] stanza's variables are not modelled at all ([env_unmodelled]). *)
+    | Sexp.List (Sexp.Atom "setenv" :: Sexp.Atom name :: _) when reads_config && is_backend name ->
         Some (Printf.sprintf "(setenv %s …)" name)
-    | Sexp.List (Sexp.Atom (("env_vars" | "env-vars") as field) :: bindings) ->
+    | Sexp.List (Sexp.Atom (("env_vars" | "env-vars") as field) :: bindings) when reads_config ->
         List.find_map (List.concat_map bindings ~f:Scan.atoms) ~f:(fun name ->
             Option.some_if (is_backend name) (Printf.sprintf "(%s (%s …))" field name))
     | Sexp.List l -> List.find_map l ~f:go
