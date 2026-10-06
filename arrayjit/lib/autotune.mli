@@ -1087,8 +1087,9 @@ val no_search_report : timing:timing_mode -> report
 (** {2 Progress lines (gh-ocannl-1061)}
 
     A search's cost record, for a search that may be killed before it reports: with config
-    [autotune_progress=true] (default [false]), {!tune} and {!Train.tune_placements} write single
-    lines to stderr, each flushed as it is written, of the form
+    [autotune_progress=true] (default [false]), or for one call its [~progress:true], {!tune} and
+    {!Train.tune_placements} write single lines to stderr, each flushed as it is written, of the
+    form
 
     {v autotune-progress: wall_s=<s> event=<event> <key>=<value> ... v}
 
@@ -1113,10 +1114,10 @@ val no_search_report : timing:timing_mode -> report
       written BEFORE each step outside the candidates that can block for long: [base_compile],
       [cache_replay], [baseline_timing], [seed_enumeration] (the lowerings the seeds are derived
       from), [winner_compile], [untuned_default_compile], [untuned_control] (under [autotune_log] or
-      {!tune}'s [?log] only). From {!Train.tune_placements}, [stage] alone: [placement_store] (the
-      decision problem's lowering and replay check) and [flip_surface]. Together with [candidate]
-      and [arm_start] this is the rule the stream keeps: every step that can block is named by a
-      line written before it, so a killed search is inside the step its last line names.
+      a [?log] only). From {!Train.tune_placements}, [stage] alone: [placement_store] (the decision
+      problem's lowering and replay check) and [flip_surface]. Together with [candidate] and
+      [arm_start] this is the rule the stream keeps: every step that can block is named by a line
+      written before it, so a killed search is inside the step its last line names.
     - [search_done] ({!tune}, exactly once per call, with its report): [routine], [elapsed_s],
       [outcome] ({!outcome_name}), [timed], [contended], [timings_retried], [unbatched], [failed],
       [rounds], [attempts], [compile_s], [timing_s], [best_ms], [best].
@@ -1135,7 +1136,19 @@ val no_search_report : timing:timing_mode -> report
     whose fatal failure ended the search. *)
 
 val progress_enabled : unit -> bool
-(** Whether config [autotune_progress] turns the progress lines on. *)
+(** Whether the progress lines are on in this domain: the [?progress] of the innermost enclosing
+    {!tune} or {!Train.tune_placements} call that passed one, else config [autotune_progress]. *)
+
+val log_enabled : unit -> bool
+(** Whether the [autotune:] diagnostics (and the untuned-default control they gate) are on in this
+    domain: the [?log] of the innermost enclosing {!tune} or {!Train.tune_placements} call that
+    passed one, else config [autotune_log]. *)
+
+val with_streams : ?log:bool -> ?progress:bool -> (unit -> 'a) -> 'a
+(** [with_streams ?log ?progress f] runs [f] with {!log_enabled} and {!progress_enabled} overridden
+    by whichever of the two is given, in the calling domain only, restoring the enclosing settings
+    on return or exception. It is how {!tune} and {!Train.tune_placements} scope their arguments; an
+    omitted argument leaves the enclosing setting in place. *)
 
 val progressf : ('a, unit, string, unit) format4 -> 'a
 (** Writes one progress line (prefix and [wall_s] added) when {!progress_enabled}; the format
@@ -1998,10 +2011,13 @@ val tune :
   ?log:bool ->
   (* Whether this call writes the [autotune:] diagnostic lines to stderr and, after a search,
      compiles and times the untuned-default in-process control. Omitted, it inherits the [?log] of
-     an enclosing [tune] call in the same domain, and only without one falls back to config
-     [autotune_log] (false), which is read once per process. Scoped to this call and to the calling
-     domain, and restored on return or exception, so a test can turn the diagnostics on for one
-     search. *)
+     an enclosing [tune] or [Train.tune_placements] call in the same domain, and only without one
+     falls back to config [autotune_log] (false), which is read once per process. Scoped to this
+     call and to the calling domain, and restored on return or exception, so a test can turn the
+     diagnostics on for one search. *)
+  ?progress:bool ->
+  (* Whether this call writes the [autotune-progress:] lines (see {!progressf}); inherited and
+     scoped exactly as [?log] is, falling back to config [autotune_progress] (false). *)
   ?report:(report -> unit) ->
   Context.t ->
   Ir.Assignments.comp ->

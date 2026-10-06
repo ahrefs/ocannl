@@ -22,6 +22,8 @@ Configuration keys tracked as ambient dependencies, in the one spelling OCANNL r
   automatic_cpu_schedule
   automatic_gpu_schedule
   autotune_beam_width
+  autotune_log
+  autotune_progress
   autotune_register_tile_rm_twin
   autotune_rounds
   autotune_search

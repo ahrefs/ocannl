@@ -20,5 +20,14 @@ spread: singles 1% apart leave the playoff nothing to time: true
 trace: one decision per playoff window says phase playoff: true
 trace: an unobserved seam reports nothing: true
 trace: the same windows, crown and time with the seam observed and unobserved: true
+streams: the ambient config leaves both diagnostic streams off: true
 log: the logged search adds exactly one decision, last and phase-less (the untuned control): true
 log: the same windows, crown and time with the control on and off: true
+log: the scoped search wrote autotune: diagnostics: true
+progress: the scoped search wrote one search_start and one search_done: true
+progress: the untuned control, under both overrides, wrote its stage line once: true
+streams: both overrides end with the search: true
+tune_placements: ~log reached its own arm lines, for both arms: true
+tune_placements: ~progress framed both arms: true
+tune_placements: both arm searches inherited both overrides (an untuned-control stage each): true
+streams: both overrides end with the tune_placements call: true

@@ -1459,7 +1459,10 @@ files.
   `compile_s` and `timing_s`. First reading, gpt2_mini cc on mac-studio: 79 s before the first
   seed (base compile, analyses, the ~2 s baseline's timing window), then timing windows dominate
   compiles about 9:1 on second-scale candidates — so on cc a candidate's cost is its sample count
-  times its step, not its compile. The format is the interface's (`Autotune.progressf`).
+  times its step, not its compile. The format is the interface's (`Autotune.progressf`). A test
+  turns either stream on for one call with `~log`/`~progress` on `Autotune.tune` or
+  `Train.tune_placements` (domain-local, inherited by nested searches, restored on return) and
+  reads it from captured stderr; `autotune_composite_playoff` claims both.
 - A test claims a tensorized seed's PRESENCE wherever the backend advertises the capability, and
   gates on that capability, never on the seed list its claims are about (gh-ocannl-1115). Gated on
   the seeds, a seeding regression — or a claim asking for a seed the seeder excludes by

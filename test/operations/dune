@@ -7783,9 +7783,12 @@
  (name autotune_composite_playoff)
  ; ocannl-backend: cc -- Context.cpu (); the scripted ranking is backend-independent
  (package neural_nets_lib)
- (deps ocannl_config)
+ (deps
+  ocannl_config
+  (env_var OCANNL_AUTOTUNE_LOG)
+  (env_var OCANNL_AUTOTUNE_PROGRESS))
  (modules autotune_composite_playoff)
- (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (libraries base ocannl stdio unix arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 

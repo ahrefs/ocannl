@@ -748,9 +748,11 @@ let placement_outcome_digest ?name ?timing_ctx ctx loss comp bindings decision =
     That separation is what makes "a [Schedule.Tensorize] was crowned in an arm that did not ship"
     reportable (gh-ocannl-546): [best_tensorized] on the other arm's report, with [mma_best_ms]
     against [best_ms] for the margin. The same conclusion is logged here under config
-    [autotune_log]. Other arguments are forwarded to {!Autotune.tune}; the same caveats apply
-    (notably [timing_ctx] and non-idempotent routines — both arms share [timing_ctx]'s device for
-    their searches). [name] included (gh-ocannl-669): it names both arms' compiles and the flip
+    [autotune_log]. [log] and [progress] override configs [autotune_log] and [autotune_progress] for
+    the whole call -- its own arm lines and every search it runs -- as {!Autotune.tune}'s do for one
+    search. Other arguments are forwarded to {!Autotune.tune}; the same caveats apply (notably
+    [timing_ctx] and non-idempotent routines — both arms share [timing_ctx]'s device for their
+    searches). [name] included (gh-ocannl-669): it names both arms' compiles and the flip
     refinement's decision-surface lowerings, and is what lets a comp carrying no
     {!Ir.Assignments.Block_comment} — one {!Context.compile} would name at the call site — be tuned
     here at all.
@@ -869,19 +871,17 @@ let placement_outcome_digest ?name ?timing_ctx ctx loss comp bindings decision =
     report in position and the measured winner ships, which is the comparison a store hit
     short-circuits into one search. *)
 let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?report ?flip_report
-    ?inline_flips ?ship_arm ?placement_store ?on_ship ctx loss comp bindings =
-  (* Arm attribution on the same stderr trace as Autotune's config [autotune_log] — winner-arm
+    ?inline_flips ?ship_arm ?placement_store ?log ?progress ?on_ship ctx loss comp bindings =
+  (* [?log] and [?progress] scope the two streams over the whole call: the arm lines below and every
+     nested {!Autotune.tune} read them through {!Autotune.log_enabled} and
+     {!Autotune.progress_enabled}. *)
+  Autotune.with_streams ?log ?progress @@ fun () ->
+  (* Arm attribution on the same stderr trace as Autotune's [autotune: ] lines — winner-arm
      ambiguity misdirected the CUDA benchmark debugging on PR #140. *)
-  let log_arms =
-    match
-      String.lowercase
-        (String.strip (Utils.get_global_arg ~arg_name:"autotune_log" ~default:"false"))
-    with
-    | "true" | "1" -> true
-    | _ -> false
-  in
   let logf fmt =
-    Stdlib.Printf.ksprintf (fun s -> if log_arms then Stdio.eprintf "tune_placements: %s\n%!" s) fmt
+    Stdlib.Printf.ksprintf
+      (fun s -> if Autotune.log_enabled () then Stdio.eprintf "tune_placements: %s\n%!" s)
+      fmt
   in
   (* gh-ocannl-638. Resolved before the first search, and announced there rather than only at the
      decision it changes: a search is minutes to hours, and a measurement that set this on the wrong
