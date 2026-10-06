@@ -1008,21 +1008,30 @@ let describe s =
    never loses an entry mid-build, so only build outputs, which dune does not read as dune files,
    are passed over. *)
 
-(** The entries of [path], sorted; [[]] once [path] no longer exists. *)
+(** Whether [stat] reports the entry gone ([ENOENT]) -- the one failure the walk passes over.
+    [Sys.file_exists] cannot say that: it answers [false] for every failed stat, an [EACCES] on an
+    entry listed in a readable but unsearchable directory included. *)
+let vanished path =
+  match Unix.lstat path with
+  | _ -> false
+  | exception Unix.Unix_error (Unix.ENOENT, _, _) -> true
+  | exception Unix.Unix_error _ -> false
+
+(** The entries of [path], sorted; [[]] once [path] no longer exists. Any other failure raises: the
+    caller takes an unreadable tree as every backend. *)
 let listing path =
   match Stdlib.Sys.readdir path with
   | entries -> Array.to_list entries |> List.sort ~compare:String.compare
-  | exception (Sys_error _ as exn) -> if Stdlib.Sys.file_exists path then raise exn else []
+  | exception (Sys_error _ as exn) -> if vanished path then [] else raise exn
 
-(** The [entries] of [path] that are directories; one that no longer exists is not. A stat that
-    fails while the entry still exists raises: the caller takes an unreadable tree as every backend.
-*)
+(** The [entries] of [path] that are directories, following links as dune does; one that no longer
+    exists, or a link to nothing, is not. Any other stat failure raises, as in {!listing}. *)
 let subdirectories path entries =
   List.filter entries ~f:(fun e ->
-      let p = Stdlib.Filename.concat path e in
-      match Stdlib.Sys.is_directory p with
-      | is_dir -> is_dir
-      | exception (Sys_error _ as exn) -> if Stdlib.Sys.file_exists p then raise exn else false)
+      match Unix.stat (Stdlib.Filename.concat path e) with
+      | { Unix.st_kind = Unix.S_DIR; _ } -> true
+      | _ -> false
+      | exception Unix.Unix_error (Unix.ENOENT, _, _) -> false)
 
 (** Every dune file under [root] that dune itself would read, as [(dir, content)] with [dir]
     relative to [root] ([""] for [root] itself). Into a directory's subdirectories as dune goes: by

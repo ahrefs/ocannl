@@ -2898,7 +2898,7 @@
   ocannl_config
   (glob_files_rec ../../dune))
  (modules slot_kind_cases)
- (libraries base stdio test_utils arrayjit.verdict))
+ (libraries base stdio unix test_utils arrayjit.verdict))
 
 ; How the dune-file scan behind config_dep_completeness reads a stanza, on input built to break
 ; it rather than on whatever the repository's dune files happen to say today.
