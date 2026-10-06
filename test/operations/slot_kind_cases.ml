@@ -608,6 +608,24 @@ let () =
         ],
         "build @@r/default",
         "names nothing + reads config" );
+      ( "a reader beside a configuration copied from a directory the runner does not read",
+        [
+          ( "q",
+            {dune|(copy_files ../hipcfg/ocannl_config)
+(test (name rq) (deps ocannl_config (env_var OCANNL_BACKEND)))|dune}
+          );
+        ],
+        "build @q/runtest",
+        "unknown: " );
+      ( "a reader beside a configuration copied from one it does",
+        [
+          ( "q2",
+            {dune|(copy_files ../test/config/ocannl_config)
+(test (name rq2) (deps ocannl_config (env_var OCANNL_BACKEND)))|dune}
+          );
+        ],
+        "build @q2/runtest",
+        "names nothing + reads config" );
       ( "a workspace program run by name",
         [
           ( "w",

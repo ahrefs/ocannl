@@ -53,7 +53,9 @@ let gpu_backends = [ "cuda"; "hip"; "metal" ]
     and the files it mentions, which the rules producing them must build. *)
 type need =
   | Alias_need of { dir : string; alias : string; recursive : bool }
-  | File_need of string  (** a file's basename *)
+  | File_need of { in_dir : string option; base : string }
+      (** a file: its basename, in the directory its path resolves to, or anywhere when that cannot
+          be told *)
   | Glob_need of { under : (string * bool) option; pattern : string }
       (** a basename pattern, matched in one directory (or below it, when recursive), or anywhere
           when the directory cannot be resolved *)
@@ -77,6 +79,9 @@ type stanza = {
   inexact : string option;
       (** the first construct in it this does not model exactly, which makes a batch reaching it
           every backend *)
+  foreign_config : string option;
+      (** for a [copy_files], a configuration it copies from a directory the runner does not read:
+          what a reader in its directory, or below, reads instead *)
   overrides : string option;
       (** a backend it sets for what it runs, past the configuration: a batch reaching it can hold
           any backend *)
@@ -210,22 +215,36 @@ let pattern_of atom =
   in
   if String.is_empty b || String.for_all b ~f:(Char.equal '*') then None else Some b
 
-let file_needs sexp =
+(** The files a stanza may need: every atom, and the payload of every path pform, read as a path. A
+    path pform's payload is relative to the stanza's directory; a literal atom is too, unless the
+    stanza runs anything under a [chdir], when it may be relative to anywhere (Codex review on PR
+    #1027: a basename matched anywhere let a copy in one directory answer for a need in another). *)
+let file_needs ~dir sexp =
+  let chdir = List.mem (Scan.atoms sexp) "chdir" ~equal:String.equal in
+  let placed ~relative path =
+    let in_dir, base =
+      match String.rsplit2 path ~on:'/' with Some (d, b) -> (d, b) | None -> ("", path)
+    in
+    ((if relative then resolve ~dir in_dir else None), base)
+  in
   List.concat_map (Scan.atoms sexp) ~f:(fun atom ->
       let payloads =
         List.filter_map (Scan.pieces atom) ~f:(function
           | Scan.Pform p -> (
               match String.lsplit2 p ~on:':' with
-              | Some (k, v) when List.mem path_pforms k ~equal:String.equal -> Some v
+              | Some (k, v) when List.mem path_pforms k ~equal:String.equal -> Some (v, true)
               | Some ("lib", v) ->
-                  Some (Option.value_map (String.rsplit2 v ~on:':') ~f:snd ~default:v)
+                  Some (Option.value_map (String.rsplit2 v ~on:':') ~f:snd ~default:v, false)
               | _ -> None)
           | Scan.Literal _ -> None)
       in
-      List.filter_map (atom :: payloads) ~f:(fun a ->
+      List.filter_map ((atom, not chdir) :: payloads) ~f:(fun (a, relative) ->
           Option.map (pattern_of a) ~f:(fun b ->
               if String.exists b ~f:is_wild then Glob_need { under = None; pattern = b }
-              else File_need b)))
+              else
+                let in_dir, base = placed ~relative a in
+                let in_dir = if String.equal base b then in_dir else None in
+                File_need { in_dir; base = b })))
 
 (** The first pform in [sexp] this does not model exactly: one outside the lists above, a named
     binding aside. *)
@@ -383,7 +402,9 @@ let data_suffixes =
   ]
 
 let source_named target =
-  not (List.exists data_suffixes ~f:(fun suffix -> String.is_suffix target ~suffix))
+  (* The configuration file is read by name too. *)
+  (not (String.equal target Scan.config_file))
+  && not (List.exists data_suffixes ~f:(fun suffix -> String.is_suffix target ~suffix))
 
 (* A pattern is judged by its suffix too: [*-0-0.log] names logs, [*] or [x.*] anything. *)
 let source_like = source_named
@@ -465,6 +486,12 @@ let backend_override ~reads_config sexp =
   if List.exists (targets_of sexp) ~f:(fun t -> Scan.glob_could_match t ~name:Scan.config_file) then
     Some "generated ocannl_config"
   else go sexp
+
+(* The directories whose [ocannl_config] the runner resolves -- tools/batch-backends.sh's
+   BATCH_CONFIG_DIRS, which tools/test-test-run.sh leg 58 holds equal to this. A copy of any other
+   directory's configuration (the gitignored root one, say) is a backend the runner never reads
+   (Codex review on PR #1027). *)
+let config_dirs = [ "test/config"; "arrayjit/test" ]
 
 (** What a [copy_files] stanza copies, as a target pattern here and the glob it reads: its short
     form's path, or its long form's [(files …)]. The copy keeps the basename, so a file need is
@@ -625,9 +652,18 @@ let views_of ~dir ~named ~reads_config ~unmarked sexp =
       targets;
       (* A copy's wildcard is the glob it copies, not a target this cannot name. *)
       source_like = List.exists produced ~f:source_like || List.exists copies ~f:source_named;
-      needs = List.dedup_and_sort (deps @ file_needs sexp) ~compare:Poly.compare;
+      needs = List.dedup_and_sort (deps @ file_needs ~dir sexp) ~compare:Poly.compare;
       inexact;
       overrides = backend_override ~reads_config sexp;
+      foreign_config =
+        List.find_map copied ~f:(function
+          | Glob_need { under; pattern } when Scan.glob_could_match pattern ~name:Scan.config_file
+            -> (
+              match under with
+              | Some (src, _) when List.mem config_dirs src ~equal:String.equal -> None
+              | Some (src, _) -> Some (Printf.sprintf "a copy of the ocannl_config in %s" src)
+              | None -> Some "a copy of an ocannl_config from a directory this cannot name")
+          | _ -> None);
     }
   in
   let compiled ~needs inexact =
@@ -644,6 +680,7 @@ let views_of ~dir ~named ~reads_config ~unmarked sexp =
       needs;
       inexact;
       overrides = backend_override ~reads_config:false sexp;
+      foreign_config = None;
     }
   in
   let compile =
@@ -712,7 +749,7 @@ let views_of ~dir ~named ~reads_config ~unmarked sexp =
       in
       [
         compiled
-          ~needs:(List.dedup_and_sort (aliases @ file_needs fields) ~compare:Poly.compare)
+          ~needs:(List.dedup_and_sort (aliases @ file_needs ~dir fields) ~compare:Poly.compare)
           inexact;
       ]
   in
@@ -931,7 +968,10 @@ let reached stanzas targets =
   while not (Queue.is_empty queue) do
     List.iter arr.(Queue.dequeue_exn queue).needs ~f:(function
       | Alias_need { dir; alias; recursive } -> request ~root:dir ~alias ~recursive
-      | File_need f -> produce (fun _ t -> Scan.glob_could_match t ~name:f)
+      | File_need { in_dir; base } ->
+          produce (fun dir t ->
+              (match in_dir with None -> true | Some d -> String.equal d dir)
+              && Scan.glob_could_match t ~name:base)
       | Glob_need { under; pattern } ->
           produce (fun dir t ->
               (match under with
@@ -1245,6 +1285,26 @@ let answer ?(getenv = Stdlib.Sys.getenv_opt) ~dune_files argv =
                                     (Printf.sprintf "run of the workspace program %s, unmarked" prog);
                               }
                           | None -> s)
+                  in
+                  (* A reader reads the configuration in its own directory, or the nearest above it:
+                     one a [copy_files] brings there from a directory the runner does not read is a
+                     backend the runner never sees (Codex review on PR #1027). *)
+                  let foreign =
+                    List.filter_map stanzas ~f:(fun s ->
+                        Option.map s.foreign_config ~f:(fun why -> (s.dir, why)))
+                  in
+                  let found =
+                    List.map found ~f:(fun s ->
+                        match
+                          List.find foreign ~f:(fun (d, _) ->
+                              s.reads_config && in_scope ~recursive:true ~root:d s.dir)
+                        with
+                        | Some (d, why) when Option.is_none s.overrides ->
+                            {
+                              s with
+                              overrides = Some (Printf.sprintf "configuration, %s (in %s)" why d);
+                            }
+                        | _ -> s)
                   in
                   let found =
                     (* Every compilation is in every batch's closure, so a ppx reaching a backend is

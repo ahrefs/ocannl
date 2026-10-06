@@ -158,7 +158,8 @@
 #      read from.
 #  58. the readers batch-backends.sh builds are test/config's: ocannl_read_config
 #      answers --read=backend, ocannl_slot_kind asks Test_utils.Slot_kind and
-#      prints the grammar batch_resolve parses.
+#      prints the grammar batch_resolve parses, and Slot_kind's config_dirs is
+#      BATCH_CONFIG_DIRS.
 #  78. a test configuration's backend counts only where a reached stanza
 #      reads it (gh-ocannl-1095): beside a hip configuration on a small SDMA
 #      pool, a batch reaching only `none` stanzas, or one naming cc, stays
@@ -4663,6 +4664,14 @@ for form in 'printf "names %s: %s\n"' 'printf "reads config: %s\n"' 'printf "end
   grep -qF "$form" "$HERE/../$slot_reach_exe.ml" ||
     slot_detail="$slot_reach_exe.ml has no $form"
 done
+# ...and Slot_kind's own list of the directories whose configuration the runner
+# reads -- a copy of any other's makes a reader's batch every backend -- is
+# BATCH_CONFIG_DIRS (gh-ocannl-1095).
+if [ -z "$slot_detail" ]; then
+  slot_kind_dirs=$(sed -n 's/^let config_dirs = \[ \(.*\) \]$/\1/p' "$HERE/../test/support/slot_kind.ml" | tr -d '"' | sed 's/ *; */ /g')
+  [ "$slot_kind_dirs" = "$slot_dirs" ] ||
+    slot_detail="Slot_kind.config_dirs ($slot_kind_dirs) is not BATCH_CONFIG_DIRS ($slot_dirs)"
+fi
 if [ -z "$slot_detail" ]; then
   report 0 "batch: the readers batch-backends.sh builds are test/config's, answering --read=backend and Slot_kind in its grammar"
 else

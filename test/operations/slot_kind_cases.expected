@@ -256,6 +256,10 @@ build @n/scans (a ppx name in two projects) unknown: it reaches u1 in p1, whose 
 a ppx name defined twice is read as every definition: true
 build @@r/default (an implicit default recursing) names nothing + reads config
 an implicit default recursing answers names nothing + reads config: true
+build @q/runtest (a reader beside a configuration copied from a directory the runner does not read) unknown: it reaches rq in q, whose configuration, a copy of the ocannl_config in hipcfg (in q) sets the backend past the configuration
+a reader beside a configuration copied from a directory the runner does not read answers unknown: true
+build @q2/runtest (a reader beside a configuration copied from one it does) names nothing + reads config
+a reader beside a configuration copied from one it does answers names nothing + reads config: true
 build @w/wp (a workspace program run by name) unknown: it reaches the rule on wp in w, whose run of the workspace program gpu_tool, unmarked this does not model exactly
 a workspace program run by name answers unknown: true
 build @@c/probe (a glob over copies)     names nothing + reads config
