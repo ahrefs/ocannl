@@ -138,9 +138,12 @@
 (rule
  ; ocannl-backend: cuda -- pins the backend in the exporter invocation.
  (alias mma-register-scope-emit)
- ; Keep the opt-in source export in this worktree's build directory after the action.
+ ; Keep the opt-in source export in this worktree's build directory after the action. The exports
+ ; are no declared targets, so dune deletes them as stale when it next loads this directory: a
+ ; cached rerun would leave the probe alias below without its sources, hence `(universe)`.
  (deps
   (sandbox none)
+  (universe)
   ocannl_config
   (alias mma-register-scope-emit-env_spelling_gate)
   (env_var OCANNL_BUILD_FILES_PREFIX)
