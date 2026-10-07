@@ -48,10 +48,34 @@
   <span class="xref-unresolved">Base</span>.unit</span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-skipped"><a href="#val-skipped" class="anchor"></a><code><span><span class="keyword">val</span> skipped : <span><span class="optlabel">?aggregation</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span> <span><span class="label">backend</span>:string <span class="arrow">&#45;&gt;</span></span> <span>string <span class="arrow">&#45;&gt;</span></span> <span class="xref-unresolved">Base</span>.unit</span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-gated"><a href="#val-gated" class="anchor"></a><code><span><span class="keyword">val</span> gated : 
   <span><span class="optlabel">?aggregation</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="optlabel">?detail</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
-  <span><span class="label">when_</span>:<span class="xref-unresolved">Base</span>.bool <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">when_</span>:bool <span class="arrow">&#45;&gt;</span></span>
   <span><span class="label">on</span>:string <span class="arrow">&#45;&gt;</span></span>
   <span>string <span class="arrow">&#45;&gt;</span></span>
   <span><span class="xref-unresolved">Base</span>.bool <span class="arrow">&#45;&gt;</span></span>
+  <span class="xref-unresolved">Base</span>.unit</span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-gated_all"><a href="#val-gated_all" class="anchor"></a><code><span><span class="keyword">val</span> gated_all : 
+  <span><span class="optlabel">?aggregation</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?min</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">when_</span>:bool <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">on</span>:string <span class="arrow">&#45;&gt;</span></span>
+  <span>string <span class="arrow">&#45;&gt;</span></span>
+  <span><span><span class="type-var">'a</span> <span class="xref-unresolved">Base</span>.List.t</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">f</span>:<span>(<span><span class="type-var">'a</span> <span class="arrow">&#45;&gt;</span></span> <span class="xref-unresolved">Base</span>.bool)</span> <span class="arrow">&#45;&gt;</span></span>
+  <span class="xref-unresolved">Base</span>.unit</span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-gated_alli"><a href="#val-gated_alli" class="anchor"></a><code><span><span class="keyword">val</span> gated_alli : 
+  <span><span class="optlabel">?aggregation</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?min</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">when_</span>:bool <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">on</span>:string <span class="arrow">&#45;&gt;</span></span>
+  <span>string <span class="arrow">&#45;&gt;</span></span>
+  <span><span><span class="type-var">'a</span> <span class="xref-unresolved">Base</span>.List.t</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">f</span>:<span>(<span>int <span class="arrow">&#45;&gt;</span></span> <span><span class="type-var">'a</span> <span class="arrow">&#45;&gt;</span></span> <span class="xref-unresolved">Base</span>.bool)</span> <span class="arrow">&#45;&gt;</span></span>
+  <span class="xref-unresolved">Base</span>.unit</span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-gated_exists"><a href="#val-gated_exists" class="anchor"></a><code><span><span class="keyword">val</span> gated_exists : 
+  <span><span class="optlabel">?aggregation</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="optlabel">?min</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">when_</span>:bool <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">on</span>:string <span class="arrow">&#45;&gt;</span></span>
+  <span>string <span class="arrow">&#45;&gt;</span></span>
+  <span><span><span class="type-var">'a</span> <span class="xref-unresolved">Base</span>.List.t</span> <span class="arrow">&#45;&gt;</span></span>
+  <span><span class="label">f</span>:<span>(<span><span class="type-var">'a</span> <span class="arrow">&#45;&gt;</span></span> bool)</span> <span class="arrow">&#45;&gt;</span></span>
   <span class="xref-unresolved">Base</span>.unit</span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-pass_fail"><a href="#val-pass_fail" class="anchor"></a><code><span><span class="keyword">val</span> pass_fail : <span><span class="optlabel">?detail</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span> <span>string <span class="arrow">&#45;&gt;</span></span> <span>bool <span class="arrow">&#45;&gt;</span></span> <span class="xref-unresolved">Base</span>.unit</span></code></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-pass_fail_all2"><a href="#val-pass_fail_all2" class="anchor"></a><code><span><span class="keyword">val</span> pass_fail_all2 : 
   <span><span class="optlabel">?min</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
   <span><span class="optlabel">?detail</span>:<span class="error">???</span> <span class="arrow">&#45;&gt;</span></span>
