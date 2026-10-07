@@ -1047,10 +1047,10 @@ branches need not be duplicated just to share one.</p>
 <p>The declaration may appear in only <strong>one</strong> arm, though:
 a second <code>{ x }</code> for the same name is rejected with
 <code>ppx_ocannl %cd: duplicate inline declaration of no-gradient tensor x</code>
-(<code>tensor/ppx_cd.ml:162</code>). Declare the tensor in whichever arm
-reads most naturally – typically the one whose right-hand side carries
-the best label information – and refer to it by bare name in the
-others.</p>
+(raised by <code>assignment</code> in <code>tensor/ppx_cd.ml</code>).
+Declare the tensor in whichever arm reads most naturally – typically the
+one whose right-hand side carries the best label information – and refer
+to it by bare name in the others.</p>
 <p><code>Train.sgd_one</code> in <code>lib/train.ml</code> is the worked
 example: its <code>%cd</code> payload is written once, with
 <code>{ sgd_delta }</code> and <code>{ sgd_momentum }</code> each
@@ -1196,7 +1196,10 @@ reserved row variable specific to the kind of the row it appears in
 within one spec. The reserved variables cannot be named, so
 <code>batch</code>, <code>input</code>, <code>output</code> remain
 available as ordinary labels and <code>..batch..</code> is an ordinary
-user row variable.</li>
+user row variable. Its three-dot misspelling <code>...batch..</code> is
+a parse error whose message names the fix;
+<code>dune exec tools/einsum_check.exe -- &#39;&lt;spec&gt;&#39;</code> checks a
+spec without a program around it.</li>
 </ul>
 <p>The syntax of an axis spec:</p>
 <ul>
