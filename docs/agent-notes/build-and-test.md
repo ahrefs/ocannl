@@ -221,6 +221,10 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   so a clean live corpus is not its only evidence that the rule has teeth.
   File-kind non-vacuity claims keep an empty source class loud; Dune's generated local
   `test/operations/ocannl_config` copy is excluded from source membership.
+  A test or harness fixture's own environment variable therefore takes a name outside the
+  prefix (FAKE_TOKEN, not OCANNL_FAKE_TOKEN), or one under `OCANNL_TOOL_*` when it is harness
+  control: any other prefixed name reads as an unregistered key and fails the scan, which cost a
+  post-wave worker of 2026-10-06 a review round.
 - The `.expected` golden of such a repository-wide check should hold what is TRUE of the repository,
   not how much of it there is. A tally — "170 tests in this directory", "241 test stanzas declare
   the config" — moves on every correct addition anywhere, so every unrelated contributor has to
@@ -681,6 +685,18 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   a fail-fast twin that must lose the all-members oracle. Setup-hook fixtures derive their
   helper files from the hook's source directives and refuse unknown forms; an injected helper
   passes through this derivation and fails against the former fixed-list fixture.
+- On a fleet box a harness run is a test batch like any other, though unlike `tools/test-run.sh`
+  it takes no slot itself, so wrap it:
+  `fleet-worker.sh execution slot --cpu -- tools/test-harnesses.sh --shell`. Until gh-ocannl-1236
+  lands it must also start with SIGHUP at its default. Under `bg-run.sh spawn`,
+  `execution slot --bg` or `nohup` it inherits SIGHUP ignored, which a non-interactive bash
+  cannot trap, so `tools/test-test-run.sh`'s HUP lifecycle legs fail, on master too, and the
+  harness aborts before its later legs (it cost three workers of the 2026-10-05 wave and two of
+  its post-waves a base comparison or a rerun). Run it in the foreground, where a run of four to
+  five minutes (the 2026-10-06 reruns) fits the 600 s tool cap, or reset the signal for the
+  command, `perl -e '$SIG{HUP}="DEFAULT"; exec @ARGV' tools/test-harnesses.sh --shell` after the
+  slot's `--`. Checked on mac-studio under `bg-run.sh spawn`: a bash `trap` on HUP fires behind
+  that reset and not without it, and the run outlives the call that spawned it.
 
 - Shell harness checks capture failures with `command || rc=$?`, preserving the caller's
   `errexit` state; an unconditional `set -e` after a check makes later unguarded failures
