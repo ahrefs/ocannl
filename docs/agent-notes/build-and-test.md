@@ -1510,15 +1510,15 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   `List.exists real` over `results` mapped from `real`). Both sides are compared by lexical identity,
   a name plus its binding. The GATE side is every identifier `~when_` spells, through every `let`
   it reaches. The POPULATION side is the quantified argument and what it is built FROM: `let`
-  right-hand sides, `if`/`match` branches (never the condition or scrutinee), literals, `!`, `@`,
+  right-hand sides, `if`/`match` branches (never the condition or scrutinee), a `try` body, literals, `!`, `@`,
   and the positional arguments of `List.`/`Array.`/... functions — never another call's arguments.
   That asymmetry is the rule: a capability gate may read the program, limits and backend the
   population is computed from, and must not read the population. A `let`-bound partial
   application is completed at each use and `|>`/`@@` read as application; a `gated_*` application
-  it cannot complete is refused as unread. Outside the boundary: a population threaded through a
+  it cannot complete, or a claim handed unapplied to another function, is refused as unread. Outside the boundary: a population threaded through a
   function parameter, record field, unqualified `open List` call or destructured `let`, and
   `Verdict.gated`'s boolean. A gate folded into the claim value (`p "…" ((not on_cpu) || ok)`),
-  which prints `true` where it should report a skip, is a different shape it does not see. Its
+  which prints `true` where it should report a skip, is a different shape it does not see. Most of its
   mutation runs exit 4, not 1: the ratchet's trailing `OK:` row prints only on success (the
   manifest's gh-ocannl-1289 section says how they were read).
 - Boolean operator aliases in `verdict_provenance.ml` (gh-ocannl-968) keep their first

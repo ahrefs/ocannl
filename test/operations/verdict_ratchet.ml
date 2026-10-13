@@ -3385,6 +3385,12 @@ let () =
   let rows = match mode with `Fast -> List.filter raw ~f:Fn.id | `Slow -> [] in
   Verdict.gated_alli ~when_:(List.length raw > 2) ~on:"cc" "rows ascend" rows ~f:(fun i r -> r > i)|ocaml},
       [ "raw" ] );
+    ( "refuses a gate read off a collection a protected try body builds the population from",
+      {ocaml|let () =
+  let raw = probe () in
+  let rows = try List.map raw ~f:run with _ -> [] in
+  Verdict.gated_all ~when_:(not (List.is_empty raw)) ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
+      [ "raw" ] );
     ( "refuses a gate that reads a dereferenced population appended with another",
       {ocaml|let () =
   let staged = ref [] and other = ref [] in
@@ -3440,6 +3446,12 @@ let () =
   let staged = ref [] in
   long_claim_all "every staging name fits one component" !staged ~f:short|ocaml},
       [] );
+    ( "accepts a host gate behind a renamed partially applied wrapper",
+      {ocaml|let () =
+  let check = Verdict.gated_all ~when_:on_gpu ~on:"gpu" in
+  let alias = check in
+  alias "rows pass" rows ~f:Fn.id|ocaml},
+      [] );
     ( "does not take a shadowed binding of the same name for the population",
       {ocaml|let () =
   let rows = probe () in
@@ -3451,6 +3463,13 @@ let () =
       {ocaml|let () =
   List.iter2_exn labels populations ~f:(Verdict.gated_all ~when_:on_gpu ~on:"cc" ~f:Fn.id)|ocaml},
       [ "unread Verdict.gated_all" ] );
+    ( "names a gated wrapper handed to another function beside a use it reads",
+      {ocaml|let () =
+  let raw = probe () in
+  let check = Verdict.gated_all ~when_:(not (List.is_empty raw)) ~on:"cc" ~f:Fn.id in
+  check "other rows pass" [ true ];
+  List.iter2_exn [ "rows pass" ] [ raw ] ~f:check|ocaml},
+      [ "unread check" ] );
   ]
 
 let gate_control_findings source =

@@ -461,36 +461,40 @@ The baseline run `20260925T141810Z-58665` exited 0.
 The gate-population reader (`Verdict_scan.gate_census`) refuses a `gated_all`, `gated_alli` or
 `gated_exists` claim whose `~when_` gate reads the population the claim quantifies, or a
 collection that population is built from. Every run used tools/mutation-run.sh on the named
-module and the focused verdict_ratchet alias, on the commit that introduced the reader, and
-restored the source byte-for-byte with cmp. The baseline run `20261013T133133Z-78380` and the restored run
-`20261013T133339Z-16176` exited 0.
+module and the focused verdict_ratchet alias, on the reader as revised by its local review (comments
+aside, as merged), and restored the source byte-for-byte with cmp. The baseline run `20261013T134905Z-45632` and the restored run `20261013T135139Z-95689` exited 0.
 
-Every mutated run reported the listed false claims, and the runner then exited 4 (STOPPED EARLY,
-by row count) rather than 1. That is the ratchet's shape, not the mutant's: its trailing `OK:` row
-and the blank row before it print only when no claim failed, so any failing run of this test is
-two rows short of its golden, beside the refusal-manifest marker of each failed claim. Each
+Every mutated run reported the listed false claims. The runner exited 4 (STOPPED EARLY, by row
+count) for all but two, rather than 1. That is the ratchet's shape, not the mutant's: its
+trailing `OK:` row and the blank row before it print only when no claim failed, so a failing run
+of this test is two rows short of its golden, beside the refusal-manifest marker of each failed
+claim; the two that exited 1 printed enough corpus refusal rows to outnumber what was missing. Each
 mutated stdout was diffed against the golden after the run: it differed in exactly the listed
 claims (true to false), the corpus refusal's own `FAIL:` row where the corpus claim failed, the
 two trailing rows, and those markers -- every row before the trailer was reached.
 
 | Mechanism | Mutation | Controls | Run |
 |---|---|---|---|
-| A binding both sides share refuses the claim | `verdict_scan.ml`: the shared set is never reported | Failed: `refuses a gate that tests its own population for emptiness`, `refuses a population gate on a wrapper's own parameter`, `refuses a planted gate that reads its population, and a gated claim it cannot read`, and every other refusing control below | `20261013T133140Z-80684` |
-| The population follows a name into its right-hand side | `verdict_scan.ml`: the population side stops at the name | Failed: `refuses a gate read off the collection the population is mapped from`, and the bound-name and match-branch controls below | `20261013T133149Z-83119` |
-| The gate follows a name into its right-hand side | `verdict_scan.ml`: the gate side stops at the names it spells | Failed: `refuses a gate bound to a name that reads the population's source` | `20261013T133157Z-85540` |
-| A match builds the population from its cases | `verdict_scan.ml`: the match arm of the population side visits no case | Failed: `refuses a gate read off a collection a match branch builds the population from` | `20261013T133206Z-88030` |
-| Dereference and append are followed | `verdict_scan.ml`: the operator arm of the population side follows nothing | Failed: `refuses a gate that reads a dereferenced population appended with another` | `20261013T133214Z-90463` |
-| An if condition steers the population and is not part of it | `verdict_scan.ml`: the condition visited with the branches | Failed: `accepts a backend gate that also steers the population's construction`, the capability control below, and the corpus claim, since qkv_zero_init's backend gate then reads its seeds | `20261013T133222Z-92911` |
-| A collection-module call builds the population from its positional arguments | `verdict_scan.ml`: the collection-module arm follows nothing | Failed: the mapped-from, bound-name and match-branch controls above | `20261013T133307Z-6377` |
-| No other call does | `verdict_scan.ml`: every call's positional arguments followed | Failed: `accepts a capability-derived gate over a population built from the same program` | `20261013T133315Z-8867` |
-| A partial application bound to a name is completed at its uses | `verdict_scan.ml`: the name lookup of the claim resolver never answers | Failed: `refuses a population gate behind a partially applied gated wrapper`, `accepts a host gate behind a partially applied gated wrapper`, and the corpus claim through atomic_file_race's wrapper, now unread | `20261013T133231Z-95476` |
-| A pipeline is an application | `verdict_scan.ml`: the pipeline rewrite never answers | Failed: `refuses a population gate applied through a pipeline` | `20261013T133240Z-98059` |
-| Identity is lexical, a name plus its binding | `verdict_scan.ml`: the shared set compared by name alone | Failed: `does not take a shadowed binding of the same name for the population` | `20261013T133249Z-1083` |
-| A claim the reader cannot complete is reported | `verdict_scan.ml`: every unconsumed partial application dropped | Failed: `names a gated claim it cannot complete instead of counting it clean`, and the refusal control above | `20261013T133258Z-3698` |
+| A binding both sides share refuses the claim | `verdict_scan.ml`: the shared set is never reported | Failed: `refuses a gate that tests its own population for emptiness`, `refuses a population gate on a wrapper's own parameter`, `refuses a planted gate that reads its population, and a gated claim it cannot read`, and every other refusing control below | `20261013T134909Z-48110` |
+| The population follows a name into its right-hand side | `verdict_scan.ml`: the population side stops at the name | Failed: `refuses a gate read off the collection the population is mapped from`, and the bound-name, match-branch and try-body controls below | `20261013T134917Z-50701` |
+| The gate follows a name into its right-hand side | `verdict_scan.ml`: the gate side stops at the names it spells | Failed: `refuses a gate bound to a name that reads the population's source` | `20261013T134925Z-53308` |
+| A match builds the population from its cases | `verdict_scan.ml`: the match arm of the population side visits no case | Failed: `refuses a gate read off a collection a match branch builds the population from` | `20261013T134934Z-55917` |
+| A protected try body is the population on success | `verdict_scan.ml`: the try arm visits its handlers only | Failed: `refuses a gate read off a collection a protected try body builds the population from` | `20261013T135107Z-85152` |
+| Dereference and append are followed | `verdict_scan.ml`: the operator arm of the population side follows nothing | Failed: `refuses a gate that reads a dereferenced population appended with another` | `20261013T134942Z-58515` |
+| An if condition steers the population and is not part of it | `verdict_scan.ml`: the condition visited with the branches | Failed: `accepts a backend gate that also steers the population's construction`, the capability control below, and the corpus claim, since qkv_zero_init's backend gate then reads its seeds | `20261013T134950Z-61128` |
+| A collection-module call builds the population from its positional arguments | `verdict_scan.ml`: the collection-module arm follows nothing | Failed: the mapped-from, bound-name, match-branch and try-body controls above | `20261013T135034Z-74571` |
+| No other call does | `verdict_scan.ml`: every call's positional arguments followed | Failed: `accepts a capability-derived gate over a population built from the same program` | `20261013T135042Z-77207` |
+| A partial application bound to a name is completed at its uses | `verdict_scan.ml`: the name lookup of the claim resolver never answers | Failed: `refuses a population gate behind a partially applied gated wrapper`, and the callback control below, whose wrapper then resolves to nothing | `20261013T134959Z-63830` |
+| A claim bound by a let is read at its name's uses, not as a use itself | `verdict_scan.ml`: no let right-hand side is recorded as bound | Failed: `accepts a host gate behind a partially applied gated wrapper`, `accepts a host gate behind a renamed partially applied wrapper`, the two wrapper controls named elsewhere, and the corpus claim, through atomic_file_race's wrapper and the opened claim names | `20261013T135059Z-82498` |
+| The callee of an application is read with it | `verdict_scan.ml`: a resolved callee is not marked consumed | Failed: every control that applies a claim by name, now also reported unread through its own callee, and the corpus claim; the pipeline control, whose callee the rewrite absorbs, stayed green | `20261013T135115Z-87808` |
+| A pipeline is an application | `verdict_scan.ml`: the pipeline rewrite never answers | Failed: `refuses a population gate applied through a pipeline` | `20261013T135008Z-66522` |
+| Identity is lexical, a name plus its binding | `verdict_scan.ml`: the shared set compared by name alone | Failed: `does not take a shadowed binding of the same name for the population` | `20261013T135016Z-69146` |
+| A partial application nothing completes is reported | `verdict_scan.ml`: an unbound partial application is never reported | Failed: `names a gated claim it cannot complete instead of counting it clean`, and the refusal control above | `20261013T135025Z-71864` |
+| A claim named as a value is reported | `verdict_scan.ml`: an unapplied reference is never reported | Failed: `names a gated wrapper handed to another function beside a use it reads` | `20261013T135050Z-79846` |
 
 The two shipped shapes, re-seeded into the corpus rather than into the reader: in
 `test/operations/qkv_zero_init.ml`, the backend gate of the claim over every GPU sketch replaced by
-a gate on its own `results` being non-empty (staging#1049's shape, run `20261013T133324Z-11359`),
+a gate on its own `results` being non-empty (staging#1049's shape, run `20261013T135124Z-90470`),
 and by a gate asking whether the `real` seeds `results` is mapped from hold a tensorized one
-(staging#1063's shape, run `20261013T133332Z-13813`). Each failed the corpus claim, naming
+(staging#1063's shape, run `20261013T135132Z-93158`). Each failed the corpus claim, naming
 qkv_zero_init.ml:121 and the bindings the gate reads, and nothing else.
