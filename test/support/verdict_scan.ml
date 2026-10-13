@@ -454,11 +454,11 @@ let dialect_census content =
     [Verdict.gated_all ~when_ ~on label xs ~f] (and [gated_alli], [gated_exists]) skips its claim
     where [when_] is false. A gate computed from the values under test turns the regression the
     claim exists to catch into a skip: had the population emptied or lost its interesting members,
-    the gate closes, the run prints [p]'s line on stderr's say-so, and the golden stays green. That
-    is the gh-ocannl-1115 trap, and it shipped twice in one wave through these very forms — a gate
-    asking whether the claim's own [results] were non-empty (staging#1049), and one asking whether
-    the [real] seeds [results] was mapped from held a tensorized one (staging#1063). A gate comes
-    from an invariant — the backend, an advertised capability, the configuration — never from the
+    the gate closes, the skip prints [p]'s passing line, and the golden stays green. That is the
+    gh-ocannl-1115 trap, and it shipped twice in one wave through these very forms — a gate asking
+    whether the claim's own [results] were non-empty (staging#1049), and one asking whether the
+    [real] seeds [results] was mapped from held a tensorized one (staging#1063). A gate comes from
+    an invariant — the backend, an advertised capability, the configuration — never from the
     population.
 
     {2 What is read}
@@ -492,11 +492,12 @@ let dialect_census content =
     The population is not followed through a call to any other function (a file-local
     [gpu_seeds pre] stops at the call), through a record field, through a function parameter (the
     caller's argument is not substituted), or through an [open List]-style unqualified collection
-    call; a destructured [let] binds names that are followed no further. A gate threaded into a
-    wrapper as its own parameter ([let check ~when_ label xs = gated_all ~when_ ...]) is read at the
-    wrapper's definition, where it is a parameter, and not at its callers. [Verdict.gated]'s boolean
-    is not a population and is out of scope. Each of these is a place a population gate can hide
-    from this reader; none is a place it reports one that is not there.
+    call; a destructured [let] binds names that are followed no further, and a value reached through
+    a module path ([M.rows]) is an identity on neither side. A gate threaded into a wrapper as its
+    own parameter ([let check ~when_ label xs = gated_all ~when_ ...]) is read at the wrapper's
+    definition, where it is a parameter, and not at its callers. [Verdict.gated]'s boolean is not a
+    population and is out of scope. Each of these is a place a population gate can hide from this
+    reader; none is a place it reports one that is not there.
 
     A [gated_*] application the reader cannot complete — passed un-applied to another function, say
     — is reported as unread rather than counted as clean, so the boundary is loud there. *)

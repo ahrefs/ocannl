@@ -54,6 +54,13 @@
    prints [p]'s [<claim>: true]. [Verdict.gated] picks the dialect itself; the pairing is refused
    here so that the mixed spelling does not regrow ([Verdict_scan.dialect_census]).
 
+   gh-ocannl-1289 adds a fourth, about what a GATE may read. [Verdict.gated_all] and its siblings
+   skip where [~when_] is false, so a gate computed from the population under test turns the
+   regression that empties or changes it into a skip -- the gh-ocannl-1115 trap, shipped twice in
+   one wave through these very forms. [Verdict_scan.gate_census] compares what the gate reads with
+   what the population is built from, by lexical identity, and refuses a shared binding; a gate may
+   still read what the population is COMPUTED from, which is how a capability judgment reads.
+
    Every synthetic control below earned its place by a mutation run -- the scanner mechanism it pins
    disabled, this alias re-run, exactly that control failing. The manifest of those runs, one row
    per mechanism with the control labels and the retained `tools/test-run.sh` run ids, is
