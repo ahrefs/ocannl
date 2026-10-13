@@ -2995,7 +2995,10 @@ class FixtureDigestTest(unittest.TestCase):
 
                 entry = fixtures / "gpt2_mini.safetensors"
                 self.assertTrue(entry.is_symlink())
-                self.assertEqual(os.readlink(entry), str(shared))
+                # Windows' readlink returns the link's substitute name, `\\?\C:\...`, where
+                # the link was created from `C:\...`: compare the files the two spellings name.
+                self.assertTrue(os.path.samefile(os.readlink(entry), shared),
+                                f"{entry} links to {os.readlink(entry)}, not to {shared}")
                 self.assertIn(b"new gpt2_mini", shared.read_bytes())
                 entries = fixture_digest.read_digests(digests)
                 self.assertEqual(fixture_digest.status(entry, entries)[0], "MATCH")
