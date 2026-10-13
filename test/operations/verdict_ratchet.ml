@@ -3704,6 +3704,39 @@ let () =
   Verdict.gated_all ~when_:(Array.length src > 0) ~on:"cc" "all rows pass" (Array.to_list dst)
     ~f:positive|ocaml},
       [ "src" ] );
+    ( "accepts a gate on the bounds of a range population",
+      {ocaml|open Base
+let () =
+  let rows = List.range start stop in
+  Verdict.gated_all ~when_:(stop > start) ~on:"cc" "all rows pass" rows ~f:positive|ocaml},
+      [] );
+    ( "refuses a gate read off a key inserted into the population",
+      {ocaml|open Base
+let () =
+  let rows = Map.to_alist (Map.set table ~key:sample ~data:true) in
+  Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" rows ~f:snd|ocaml},
+      [ "sample" ] );
+    ( "refuses a gate read off the source a transfer drains into the population",
+      {ocaml|open Base
+let () =
+  let dst = Queue.create () in
+  Queue.transfer ~src ~dst;
+  Verdict.gated_all ~when_:(not (Queue.is_empty src)) ~on:"cc" "all rows pass" (Queue.to_list dst)
+    ~f:positive|ocaml},
+      [ "src" ] );
+    ( "does not take a gated_all a local module brings in by open for Verdict's",
+      {ocaml|module Checks = struct
+  let gated_all ~when_ ~on label xs ~f = if when_ then List.iter xs ~f:(fun x -> f x label on)
+end
+open Checks
+let () = gated_all ~when_:(not (List.is_empty rows)) ~on:"cc" "all rows pass" rows ~f:check|ocaml},
+      [] );
+    ( "follows a collection module beneath an alias of Base",
+      {ocaml|module B = Base
+let () =
+  let rows = B.List.map raw ~f:run in
+  Verdict.gated_all ~when_:(not (B.List.is_empty raw)) ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
+      [ "raw" ] );
   ]
 
 let gate_control_findings source =

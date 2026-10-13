@@ -537,6 +537,9 @@ type gate_module =
   | Standard_library of { stdlib : bool }
       (** [Base] or [Core] ([stdlib = false]), [Stdlib] or [Caml] ([true]): an [open] of one rebinds
           the collection modules to its own. *)
+  | Local_structure of string list
+      (** A [struct ... end] of this source, with the value names it binds: an [open] of it brings
+          them into scope as this source's own. *)
   | Other_module
 
 type gate_denotation = {
@@ -638,7 +641,8 @@ let complete arguments =
     [List.mem x l]), so a [Stdlib]-ordered selector takes every positional argument too -- the loud
     direction. A generator's count builds nothing: [make] and [create] build from the value they
     fill in, [init] from what its callback returns (labeled [~f], or positional after the count),
-    and [range] from nothing.
+    and [range] from nothing. An inserting function's labeled [~key] joins the population
+    ([Map.set m ~key ~data]); a selector's does not.
 
     The labeled arguments that carry data rather than steer are followed too: [~default] (the
     fallback [Option.value] returns), [~init] (a fold's seed) and [~data] (a stored element). *)
@@ -673,7 +677,8 @@ let collection_arguments ~stdlib name arguments =
           Some argument
       | _ -> None)
   in
-  if List.exists [ "init"; "range" ] ~f:starts then
+  if starts "range" then (* [List.range start stop]: bounds build nothing. *) []
+  else if starts "init" then
     (* [Array.init n ~f], [Stdlib.Array.init n f]: the elements are what the callback returns
        ({!population} follows a function in data position into its body); the count, the first
        positional argument, builds nothing. *)
@@ -686,11 +691,19 @@ let collection_arguments ~stdlib name arguments =
     (* [Array.make n x], [Array.create ~len x]: the value filled in, not the count before it. *)
     (match positional with _ :: (_ :: _ as values) -> values | values -> values) @ data
   else if (not stdlib) && List.exists selectors ~f:starts then List.take positional 1 @ data
-  else positional @ data
+  else
+    (* An inserting function's labeled key joins the population ([Map.set m ~key ~data]); a
+       selector's selects it, above. *)
+    positional
+    @ List.filter_map arguments ~f:(function
+      | (Ppxlib.Asttypes.Labelled "key" | Optional "key"), key -> Some key
+      | _ -> None)
+    @ data
 
 (** The collection-module functions that write into their first positional argument, a mutable
     container: what they are handed joins it. *)
-let writers = [ "set"; "add"; "push"; "enqueue"; "replace"; "fill"; "blit"; "update"; "change" ]
+let writers =
+  [ "set"; "add"; "push"; "enqueue"; "replace"; "fill"; "blit"; "update"; "change"; "transfer" ]
 
 let gate_census content =
   let ast = Read.structure_of content in
@@ -749,6 +762,15 @@ let gate_census content =
                      List.mem collection_modules c ~equal:String.equal) ->
               (* [List.Assoc] under an [open Base]. *)
               collection
+          | Some (Standard_library { stdlib })
+            when List.for_all (List.tl_exn components) ~f:(fun c ->
+                     List.mem collection_modules c ~equal:String.equal) ->
+              (* [B.List] under [module B = Base]. *)
+              Collection_module
+                {
+                  stdlib;
+                  mutable_ = List.mem mutable_modules (List.last_exn components) ~equal:String.equal;
+                }
           | Some _ -> Other_module
           | None when String.equal head "Verdict" -> Verdict_module
           | None when single && List.mem [ "Base"; "Core" ] head ~equal:String.equal ->
@@ -777,6 +799,19 @@ let gate_census content =
 
       method! shadowed = Some Other_module
 
+      method! module_of env module_expr =
+        match module_expr.pmod_desc with
+        | Pmod_structure items ->
+            Some
+              (Local_structure
+                 (List.concat_map items ~f:(fun item ->
+                      match item.pstr_desc with
+                      | Pstr_value (_, bindings) ->
+                          Lexical_scope.pattern_vars (List.map bindings ~f:(fun b -> b.pvb_pat))
+                      | Pstr_primitive { pval_name = { txt; _ }; _ } -> [ txt ]
+                      | _ -> [])))
+        | _ -> super#module_of env module_expr
+
       (* An [open Base] rebinds every collection module to [Base]'s, and an [open Stdlib] back to
          [Stdlib]'s, from there to the end of its scope. *)
       method! opened ~top:_ ~include_:_ env denotes =
@@ -791,6 +826,9 @@ let gate_census content =
                         (Collection_module
                            { stdlib; mutable_ = List.mem mutable_modules name ~equal:String.equal }));
             }
+        | Some (Local_structure names) ->
+            (* Its names shadow whatever they denoted, a [gated_all] of its own included. *)
+            Lexical_scope.bind_values env names self#local
         | _ -> env
 
       method! binding_denotes env binding =
@@ -976,7 +1014,8 @@ let gate_census content =
                 let data =
                   List.filter_map arguments ~f:(function
                     | (Ppxlib.Asttypes.Labelled label | Optional label), argument
-                      when List.mem [ "data"; "default"; "init" ] label ~equal:String.equal ->
+                      when List.mem [ "data"; "default"; "init"; "key" ] label ~equal:String.equal
+                      ->
                         Some argument
                     | _ -> None)
                 in
