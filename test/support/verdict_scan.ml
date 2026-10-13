@@ -585,6 +585,7 @@ let collection_modules =
     "Bag";
     "Fqueue";
     "Option";
+    "Result";
     "Option_array";
     "Uniform_array";
     "Nonempty_list";
@@ -732,6 +733,12 @@ let writers =
     "transfer";
     "find_or_add";
   ]
+
+(* A callee under type annotations, [(List.map : ...) f xs], is the callee. *)
+let rec strip_constraints expr =
+  match expr.pexp_desc with
+  | Pexp_constraint (inner, _) | Pexp_coerce (inner, _, _) -> strip_constraints inner
+  | _ -> expr
 
 let gate_census content =
   let ast = Read.structure_of content in
@@ -1008,7 +1015,7 @@ let gate_census content =
                       | Ppxlib.Asttypes.Nolabel, argument -> Some argument
                       | _ -> None)
                   in
-                  match callee.pexp_desc with
+                  match (strip_constraints callee).pexp_desc with
                   | Pexp_ident { txt = Ppxlib.Longident.Lident ("!" | "@" | "ref"); _ } ->
                       List.iter positional ~f:(visit env)
                   | Pexp_ident { txt = Ppxlib.Longident.Ldot (prefix, name); _ } -> (
@@ -1050,12 +1057,14 @@ let gate_census content =
         let record identity written =
           List.iter written ~f:(fun e -> Hashtbl.add_multi writes ~key:identity ~data:(e, env))
         in
-        match (callee.pexp_desc, arguments) with
+        match ((strip_constraints callee).pexp_desc, arguments) with
         | ( Pexp_ident { txt = Ppxlib.Longident.Lident ":="; _ },
             [ (Ppxlib.Asttypes.Nolabel, lhs); (Ppxlib.Asttypes.Nolabel, rhs) ] ) ->
             Option.iter (target lhs) ~f:(fun identity -> record identity [ rhs ])
         | Pexp_ident { txt = Ppxlib.Longident.Ldot (prefix, name); _ }, _
-          when List.exists writers ~f:(fun w -> String.is_prefix name ~prefix:w) -> (
+          when List.exists writers ~f:(fun w ->
+                   String.is_prefix (String.chop_prefix_if_exists name ~prefix:"unsafe_") ~prefix:w)
+          -> (
             match self#module_path env prefix with
             | Some (Collection_module { stdlib; mutable_ = true }) ->
                 let positional =
@@ -1157,7 +1166,11 @@ let gate_census content =
       method! expression env expr =
         (if quiet = 0 then
            match expr.pexp_desc with
-           | Pexp_apply (callee, arguments) -> self#record_write env callee arguments
+           | Pexp_apply (callee, arguments) -> (
+               (* [sample |> Queue.enqueue queue] is [Queue.enqueue queue sample]. *)
+               match self#pipeline callee arguments with
+               | Some (callee, arguments, _) -> self#record_write env callee arguments
+               | None -> self#record_write env callee arguments)
            | _ -> ());
         (if quiet = 0 && not (Hash_set.mem consumed (position expr)) then
            match expr.pexp_desc with

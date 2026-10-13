@@ -3778,6 +3778,30 @@ let check rows =
   and inspect () = not (List.is_empty rows) in
   Verdict.gated_all ~when_:(enabled ()) ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
       [ "rows" ] );
+    ( "refuses a gate read off a value piped into a writer",
+      {ocaml|open Base
+let () =
+  let queue = Queue.create () in
+  sample |> Queue.enqueue queue;
+  Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" (Queue.to_list queue) ~f:positive|ocaml},
+      [ "sample" ] );
+    ( "refuses a gate read off a value an unsafe setter writes",
+      {ocaml|open Base
+let () =
+  let cells = Array.create ~len:3 0 in
+  Array.unsafe_set cells 0 sample;
+  Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" (Array.to_list cells) ~f:positive|ocaml},
+      [ "sample" ] );
+    ( "follows a population through Result",
+      {ocaml|let () =
+  let rows = Stdlib.Result.get_ok (Ok raw) in
+  Verdict.gated_all ~when_:(raw <> []) ~on:"cc" "all rows pass" rows ~f:positive|ocaml},
+      [ "raw" ] );
+    ( "follows a collection call under a type annotation",
+      {ocaml|let () =
+  let rows = (Stdlib.List.map : (int -> int) -> int list -> int list) run raw in
+  Verdict.gated_all ~when_:(raw <> []) ~on:"cc" "all rows pass" rows ~f:positive|ocaml},
+      [ "raw" ] );
   ]
 
 let gate_control_findings source =

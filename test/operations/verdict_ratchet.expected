@@ -552,6 +552,10 @@ refuses a gate read off what a map's callback returns: true
 refuses a gate read off what a Map.update callback puts in the population: true
 refuses a gate read off what a Hashtbl.update callback writes into the population: true
 refuses a gate a recursive peer reads the population through: true
+refuses a gate read off a value piped into a writer: true
+refuses a gate read off a value an unsafe setter writes: true
+follows a population through Result: true
+follows a collection call under a type annotation: true
 refuses a planted gate that reads its population, and a gated claim it cannot read: true
 every synthetic control has a row in the mutation-run manifest: true
 every control phrase in the mutation-run manifest names a live control: true
