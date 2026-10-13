@@ -3551,9 +3551,36 @@ let () =
       [ "raw" ] );
     ( "follows a Stdlib-ordered collection call through its last argument",
       {ocaml|let () =
-  let rows = Stdlib.List.map run raw in
-  Verdict.gated_all ~when_:(raw <> []) ~on:"cc" "all rows pass" rows ~f:Fun.id|ocaml},
+  let rows = Stdlib.List.find (fun rows -> rows <> []) groups in
+  Verdict.gated_all ~when_:(groups <> []) ~on:"cc" "all rows pass" rows ~f:Fun.id|ocaml},
+      [ "groups" ] );
+    ( "reads an unqualified collection call before a later open Base in Stdlib's order",
+      {ocaml|let rows = List.find (fun rows -> rows <> []) groups
+open Base
+let () =
+  Verdict.gated_all ~when_:(not (List.is_empty groups)) ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
+      [ "groups" ] );
+    ( "refuses a gate read off an element inserted into the population",
+      {ocaml|open Base
+let () =
+  let rows = Set.to_list (Set.add existing sample) in
+  Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" rows ~f:positive|ocaml},
+      [ "sample" ] );
+    ( "refuses a gate read off a value assigned into a dereferenced population",
+      {ocaml|open Base
+let () =
+  let rows = ref [] in
+  rows := List.map raw ~f:run;
+  Verdict.gated_all ~when_:(not (List.is_empty raw)) ~on:"cc" "all rows pass" !rows ~f:Fn.id|ocaml},
       [ "raw" ] );
+    ( "refuses a gate read off a value pushed into a mutable population",
+      {ocaml|open Base
+let () =
+  let queue = Queue.create () in
+  Queue.enqueue queue sample;
+  Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" (Queue.to_list queue)
+    ~f:positive|ocaml},
+      [ "sample" ] );
   ]
 
 let gate_control_findings source =
@@ -3896,6 +3923,27 @@ let () =
   Verdict.p "and the dialect reader found both skipped and pass_fail claims to pair"
     (!skipped_sites > 0 && !pass_fail_sites > 0);
   Verdict.p "no gated claim's gate reads the population it quantifies" (!gate_offenders = 0);
+  (* The forms the gate reader recognizes, held equal to the quantified gated forms [Verdict.Claims]
+     exports: a new one the reader did not know would be a claim it never compares. *)
+  let exported_gated_forms =
+    Option.bind (Map.find on_disk "test/support/verdict.ml") ~f:(fun path ->
+        Test_utils.Refusal_control_scan.claims_members (In_channel.read_all path))
+    |> Option.value ~default:[ "<no Claims module in test/support/verdict.ml>" ]
+    |> List.filter ~f:(fun member ->
+        String.is_prefix member ~prefix:"gated_" || String.is_prefix member ~prefix:"<")
+    |> List.sort ~compare:String.compare
+  in
+  if
+    not
+      (List.equal String.equal exported_gated_forms
+         (List.sort Scan.gated_forms ~compare:String.compare))
+  then
+    eprintf "Verdict.Claims exports the gated forms [%s]; the gate reader recognizes [%s]\n"
+      (String.concat ~sep:"; " exported_gated_forms)
+      (String.concat ~sep:"; " Scan.gated_forms);
+  Verdict.p "and it recognizes every quantified gated form Verdict.Claims exports"
+    (List.equal String.equal exported_gated_forms
+       (List.sort Scan.gated_forms ~compare:String.compare));
   Verdict.p "and the gate reader completed gated claims to compare" (!gated_sites > 0);
   Verdict.p "the scan found every literal planted for it" (Set.is_empty missing);
   Verdict.p "every exemption on this check's lists is still earned"

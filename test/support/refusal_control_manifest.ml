@@ -509,6 +509,7 @@ let raw_entries =
         "[scanner-refusal:d4d40c92b012f9347593f527cb7ad30d] pass_fail";
         "[scanner-refusal:5378ba5390debc4a8425ccdeb107f2d1] pass_fail";
         "[scanner-refusal:b42517e6f02cc3aa2ca5691ebdd70c62] population it quantifies";
+        "[scanner-refusal:567b8c220b002e1bb52a75940f43f392] Verdict.Claims";
         "[scanner-refusal:a51e429cf1070db9d057a59d7b50c801] reader completed gated";
         "[scanner-refusal:be24b406399ca10a3226fec87a6d2b7f] every literal planted";
         "[scanner-refusal:7b69f1ae79d020bf8ce24352f17dec6d] every exemption on";

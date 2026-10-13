@@ -486,10 +486,14 @@ let dialect_census content =
       and the arguments that carry the collection into a function of a standard collection module
       ([List], [Array], [Hashtbl], [Map], [Option], [String], ... — see {!collection_modules}),
       reached by name, through an alias ([module Rows = List]), and not under a name a local module
-      took over ([module Map = Custom]). Which arguments carry it is {!collection_arguments}': in
-      [Base]'s order the first, keys and indices after it being selectors; for a two-collection
-      function ([append], [zip], ...) all; for a generator none; for a [Stdlib]-ordered call all;
-      and the data-bearing labels [~default], [~init], [~data].
+      took over ([module Map = Custom]); an unqualified [List] is [Stdlib]'s until an [open Base] in
+      scope rebinds it. Which arguments carry it is {!collection_arguments}': every positional one,
+      except that a [Base]-ordered selector ([find], [nth], [take], [remove], ...) contributes its
+      collection alone and a generator none, plus the data-bearing labels [~default], [~init],
+      [~data];
+    - and, for a name it reaches, whatever the source writes into that binding: the right-hand side
+      of [x := e], and what a writer of a collection module ([Queue.enqueue x e],
+      [Hashtbl.set x ~key ~data], ... — see {!writers}) is handed with [x].
 
     The claim is refused when the two share a binding. The asymmetry is the point: a gate may read
     what the population is COMPUTED from (the site, the hardware limits, the backend steering an
@@ -516,7 +520,11 @@ let dialect_census content =
 (** What a module name denotes to this reader. A collection module carries whether its functions
     take arguments in [Stdlib]'s order (the function first, the collection last) rather than
     [Base]'s (the collection first). *)
-type gate_module = Verdict_module | Collection_module of { stdlib : bool } | Other_module
+type gate_module =
+  | Verdict_module
+  | Collection_module of { stdlib : bool }
+  | Base_library  (** [Base] or [Core], whose [open] rebinds the collection modules. *)
+  | Other_module
 
 type gate_denotation = {
   identity : int;
@@ -566,41 +574,40 @@ let complete arguments =
 (** Which arguments of a collection-module function the population is built from, by the function's
     name and the library's argument order.
 
-    In [Base]'s order the collection is the first positional argument (after any first-class module,
-    as in [Map.of_alist_exn (module String) rows]), and everything after it is a key, an index, a
-    count or an element to look for: [Map.find_exn m k], [List.nth_exn xs i], [Map.remove m k],
-    [List.take xs n]. Those select the population, as an [if] condition steers one, and a gate on
-    them is a gate on what was selected, not on what was found. So the first alone, except for the
-    functions that build from two collections ({!multi_collection}: [append], [zip], [map2],
-    [union], [merge], [cons], ...), which take every positional argument. A generator ([init],
-    [range], [make], [create]) takes sizes and builds from none of them. [Stdlib]'s order puts the
-    function first and the collection last, and varies by function, so a [Stdlib]-ordered call takes
-    every positional argument -- the loud direction.
+    Every positional argument by default: [map], [Map.of_alist_exn (module String) rows], [append],
+    [zip], [Set.add s x], [cons] all build the population from whatever they are handed, the
+    collection and the elements put into it alike. The exception is a selector in [Base]'s order
+    ({!selectors}: [find], [nth], [take], [remove], [update], ...), whose first positional argument
+    is the collection and whose later ones are a key, an index or a count: those select the
+    population, as an [if] condition steers one, and a gate on them is a gate on what was selected,
+    not on what was found. In [Stdlib]'s order the collection may come last ([List.assoc k l],
+    [List.mem x l]), so a [Stdlib]-ordered selector takes every positional argument too -- the loud
+    direction. A generator ([init], [range], [make], [create]) takes sizes and builds from none of
+    them.
 
     The labeled arguments that carry data rather than steer are followed too: [~default] (the
     fallback [Option.value] returns), [~init] (a fold's seed) and [~data] (a stored element). *)
-let multi_collection =
+let selectors =
   [
-    "append";
-    "rev_append";
-    "zip";
-    "map2";
-    "mapi2";
-    "fold2";
-    "iter2";
-    "cartesian_product";
-    "union";
-    "inter";
-    "diff";
-    "merge";
-    "cons";
+    "find";
+    "nth";
+    "get";
+    "take";
+    "drop";
+    "sub";
+    "slice";
+    "split_n";
+    "chunks_of";
+    "mem";
+    "remove";
+    "update";
+    "change";
   ]
 
 let collection_arguments ~stdlib name arguments =
   let starts prefix = String.is_prefix name ~prefix in
   let positional =
     List.filter_map arguments ~f:(function
-      | Ppxlib.Asttypes.Nolabel, { pexp_desc = Pexp_pack _; _ } -> None
       | Ppxlib.Asttypes.Nolabel, argument -> Some argument
       | _ -> None)
   in
@@ -612,20 +619,21 @@ let collection_arguments ~stdlib name arguments =
       | _ -> None)
   in
   if List.exists [ "init"; "range"; "make"; "create"; "replicate" ] ~f:starts then []
-  else if stdlib || List.exists multi_collection ~f:starts then positional @ data
-  else List.take positional 1 @ data
+  else if (not stdlib) && List.exists selectors ~f:starts then List.take positional 1 @ data
+  else positional @ data
+
+(** The collection-module functions that write into their first positional argument, a mutable
+    container: what they are handed joins it. *)
+let writers = [ "set"; "add"; "push"; "enqueue"; "replace"; "fill"; "blit"; "update"; "change" ]
 
 let gate_census content =
   let ast = Read.structure_of content in
-  (* Whether an unqualified [List] is [Base]'s: the file opens [Base] or [Core] at top level. *)
-  let opens_base =
-    List.exists ast ~f:(fun item ->
-        match item.pstr_desc with
-        | Pstr_open { popen_expr = { pmod_desc = Pmod_ident { txt; _ }; _ }; _ } ->
-            List.mem [ "Base"; "Core" ] (Lexical_scope.head txt) ~equal:String.equal
-        | _ -> false)
-  in
   let readings = ref [] and gated_sites = ref 0 in
+  (* What is written into a binding after it is made -- [x := e], [Queue.enqueue x e] -- by the
+     binding's identity, with the scope it was written in. *)
+  let writes = Hashtbl.create (module Int) in
+  (* Claims are compared once the walk is over, when every write is known. *)
+  let pending = ref [] in
   let partials = ref [] and bound_partials = ref [] and consumed = Hash_set.create (module Int) in
   let position expr = expr.pexp_loc.loc_start.pos_cnum in
   (* The nodes a claim's resolution went through, made [consumed] only once the claim is read --
@@ -672,6 +680,7 @@ let gate_census content =
           | Some Verdict_module -> Verdict_module
           | Some _ -> Other_module
           | None when String.equal head "Verdict" -> Verdict_module
+          | None when single && List.mem [ "Base"; "Core" ] head ~equal:String.equal -> Base_library
           | None ->
               (* [List], [Base.List], [Stdlib.List], [List.Assoc]: a path through the standard
                  libraries' collection modules alone. *)
@@ -684,13 +693,26 @@ let gate_census content =
               then
                 Collection_module
                   {
-                    stdlib =
-                      List.mem [ "Stdlib"; "Caml" ] head ~equal:String.equal
-                      || ((not (List.mem standard head ~equal:String.equal)) && not opens_base);
+                    (* An unqualified [List] is [Stdlib]'s unless an [open Base] in scope rebound
+                       it, which {!opened} records. *)
+                    stdlib = not (List.mem [ "Base"; "Core" ] head ~equal:String.equal);
                   }
               else Other_module)
 
       method! shadowed = Some Other_module
+
+      (* An [open Base] rebinds every collection module to [Base]'s, from here to the end of its
+         scope. *)
+      method! opened ~top:_ ~include_:_ env denotes =
+        match denotes with
+        | Some Base_library ->
+            {
+              env with
+              Lexical_scope.modules =
+                List.fold collection_modules ~init:env.Lexical_scope.modules ~f:(fun modules name ->
+                    Map.set modules ~key:name ~data:(Collection_module { stdlib = false }));
+            }
+        | _ -> env
 
       method! binding_denotes env binding =
         let identity = binding.pvb_loc.loc_start.pos_cnum + 1 in
@@ -751,7 +773,9 @@ let gate_census content =
                   Hash_set.add found (name, denotation.identity);
                   if not (Hash_set.mem seen denotation.identity) then (
                     Hash_set.add seen denotation.identity;
-                    Option.iter denotation.definition ~f:(fun (rhs, env) -> visit env rhs))
+                    Option.iter denotation.definition ~f:(fun (rhs, env) -> visit env rhs);
+                    List.iter (Hashtbl.find_multi writes denotation.identity)
+                      ~f:(fun (written, env) -> visit env written))
               | None -> Hash_set.add found (name, 0))
           | Pexp_constraint (inner, _)
           | Pexp_coerce (inner, _, _)
@@ -804,6 +828,45 @@ let gate_census content =
         in
         visit env expr;
         found
+
+      (* A write into a binding: [x := e], or a writer of a collection module ({!writers}) handed
+         [x] first. *)
+      method record_write env callee arguments =
+        let target expr =
+          match expr.pexp_desc with
+          | Pexp_ident { txt = Ppxlib.Longident.Lident name; _ } ->
+              Option.map (Lexical_scope.lookup env name) ~f:(fun d -> d.identity)
+          | _ -> None
+        in
+        let record identity written =
+          List.iter written ~f:(fun e -> Hashtbl.add_multi writes ~key:identity ~data:(e, env))
+        in
+        match (callee.pexp_desc, arguments) with
+        | ( Pexp_ident { txt = Ppxlib.Longident.Lident ":="; _ },
+            [ (Ppxlib.Asttypes.Nolabel, lhs); (Ppxlib.Asttypes.Nolabel, rhs) ] ) ->
+            Option.iter (target lhs) ~f:(fun identity -> record identity [ rhs ])
+        | Pexp_ident { txt = Ppxlib.Longident.Ldot (prefix, name); _ }, _
+          when List.exists writers ~f:(fun w -> String.is_prefix name ~prefix:w) -> (
+            match self#module_path env prefix with
+            | Some (Collection_module _) -> (
+                match
+                  List.filter_map arguments ~f:(function
+                    | Ppxlib.Asttypes.Nolabel, argument -> Some argument
+                    | _ -> None)
+                with
+                | container :: rest ->
+                    Option.iter (target container) ~f:(fun identity ->
+                        record identity
+                          (rest
+                          @ List.filter_map arguments ~f:(function
+                            | (Ppxlib.Asttypes.Labelled label | Optional label), argument
+                              when List.mem [ "data"; "default"; "init" ] label ~equal:String.equal
+                              ->
+                                Some argument
+                            | _ -> None)))
+                | [] -> ())
+            | _ -> ())
+        | _ -> ()
 
       (* [x |> f] and [f @@ x], as the application [f x]; with the position of [f] when [f] is
          itself an application, which the rewrite absorbs. *)
@@ -866,6 +929,10 @@ let gate_census content =
         | _ -> None
 
       method! expression env expr =
+        (if quiet = 0 then
+           match expr.pexp_desc with
+           | Pexp_apply (callee, arguments) -> self#record_write env callee arguments
+           | _ -> ());
         (if quiet = 0 && not (Hash_set.mem consumed (position expr)) then
            match expr.pexp_desc with
            | Pexp_ident _ -> (
@@ -900,23 +967,26 @@ let gate_census content =
                      when complete arguments ->
                        commit marks;
                        Int.incr gated_sites;
-                       let reads = self#gate_reads gate_env gate in
-                       let shared =
-                         Hash_set.filter
-                           (self#population population_env population)
-                           ~f:(Hash_set.mem reads)
-                         |> Hash_set.to_list |> List.map ~f:fst
-                         |> List.dedup_and_sort ~compare:String.compare
-                       in
-                       if not (List.is_empty shared) then
-                         readings :=
-                           {
-                             form;
-                             line;
-                             gate = Ppxlib.Pprintast.string_of_expression gate;
-                             reads = shared;
-                           }
-                           :: !readings
+                       pending :=
+                         (fun () ->
+                           let reads = self#gate_reads gate_env gate in
+                           let shared =
+                             Hash_set.filter
+                               (self#population population_env population)
+                               ~f:(Hash_set.mem reads)
+                             |> Hash_set.to_list |> List.map ~f:fst
+                             |> List.dedup_and_sort ~compare:String.compare
+                           in
+                           if not (List.is_empty shared) then
+                             readings :=
+                               {
+                                 form;
+                                 line;
+                                 gate = Ppxlib.Pprintast.string_of_expression gate;
+                                 reads = shared;
+                               }
+                               :: !readings)
+                         :: !pending
                    | _ ->
                        (* A partial application bound by [let] is completed at that name's uses,
                           which are read on their own -- unless none is, below. *)
@@ -932,6 +1002,7 @@ let gate_census content =
   ignore
     (walker#structure { Lexical_scope.frames = []; modules = Map.empty (module String) } ast
       : structure);
+  List.iter (List.rev !pending) ~f:(fun compare -> compare ());
   (* A bound partial application no resolved use completed -- reached only through a module path,
      say, or from another source -- is one this reader never compared. *)
   let uncompleted =
