@@ -87,6 +87,16 @@ HERE=$(cd "$(dirname "$0")" && pwd)   # the driver's own directory: cmd_finger d
 EXE=../_build/default/benchmarks/runners/ocannl/bench_gpt.exe
 ROUTINE=cross_entropy_loss_fwd
 
+# The key a schedule-cache entry is stored under. Its filename is only an MD5 of that key
+# (gh-ocannl-1228), so the key is read from inside the entry: its first field, `((key <key>)`,
+# which is what Schedule_cache.entry_keys reads back. The entry is pretty-printed, and a long key
+# goes on the line AFTER `((key`, so whitespace is squeezed before matching. Keys are spelled from
+# [A-Za-z0-9_-] (sanitized components and hex digests), so they print as bare atoms; a quoted one is
+# unquoted all the same. Prints nothing for an entry that stores no key.
+entry_key() {
+  tr -s '[:space:]' ' ' < "$1" | sed -n 's/^((key "\{0,1\}\([^" ()]*\)"\{0,1\}).*/\1/p'
+}
+
 # The autotune cache dir is per label AND per rep, never shared: a warm cache makes an A/B vacuous by
 # replaying the other arm's crowned schedule (report-gh481-cuda.md measured compile_s 1.76 s warm
 # against 29 s cold, with the "winner" being whatever the other arm found), and a rep that replays is
@@ -202,12 +212,15 @@ cmd_search() { (
   grep -E 'untuned-default pipeline|winner replay ok|tune_placements: winner' "$out/search.err"
   # Each fissioned winner's segmentation: entries persist every segment with its kind
   # (gh-ocannl-1164), so the count tells a fine winner from a coarse one.
-  local entry kinds
+  local entry kinds key
   for entry in "$out"/cache/*.sexp; do
     [ -e "$entry" ] || continue
     kinds=$(grep -o '(seg_kind [A-Za-z]*)' "$entry" | sed 's/(seg_kind \(.*\))/\1/' | sort | uniq -c \
       | awk '{ printf "%s%s %s", sep, $1, $2; sep = ", " }' || true)
-    [ -n "$kinds" ] && echo "fissioned winner $(basename "$entry"): $kinds"
+    [ -n "$kinds" ] || continue
+    # The filename is only a digest of the entry's key (gh-ocannl-1228); name the winner by the key.
+    key=$(entry_key "$entry")
+    echo "fissioned winner ${key:-<no stored key>} (entry $(basename "$entry")): $kinds"
   done
   # The crowned arm A candidate's calibration line: analytic FLOPs and bytes at the emitted kernel
   # count. The report's constant-FLOPs check and its 528 -> 472 MB traffic figure are read from here.
