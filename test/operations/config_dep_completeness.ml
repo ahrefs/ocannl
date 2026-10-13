@@ -203,9 +203,14 @@ let () =
         let rec ancestors directory =
           if String.is_empty directory then []
           else
+            (* A root is its own dirname ("/", or "C:/" on Windows, where a fixture's absolute site
+               reaches it): the walk ends there instead of recursing on it forever. *)
             directory
-            :: ancestors
-                 (match Stdlib.Filename.dirname directory with "." -> "" | parent -> parent)
+            ::
+            (match Stdlib.Filename.dirname directory with
+            | "." -> []
+            | parent when String.equal parent directory -> []
+            | parent -> ancestors parent)
         in
         List.find (ancestors (directory_of site)) ~f:has_config
       in

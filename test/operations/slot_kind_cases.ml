@@ -673,6 +673,13 @@ let () =
     Out_channel.write_all path ~data:content;
     made := path :: !made
   in
+  (* By the exact path [file] recorded: a suffix match on "/dune-project" missed the root's own,
+     which Filename.concat spells with a backslash on Windows, and cleanup removed it twice. *)
+  let unmake rel =
+    let path = Stdlib.Filename.concat root rel in
+    Stdlib.Sys.remove path;
+    made := List.filter !made ~f:(fun p -> not (String.equal p path))
+  in
   file ".x/dune" "(dirs keep)";
   file ".x/keep/dune" "";
   file ".x/drop/dune" "";
@@ -700,24 +707,19 @@ let () =
   file "dune-workspace"
     "(lang dune 3.20)\n(context (default (env (_ (env_vars (OCANNL_BACKEND hip))))))";
   let refused_workspace = refused_for "dune-workspace" in
-  Stdlib.Sys.remove (Stdlib.Filename.concat root "dune-workspace");
-  made := List.filter !made ~f:(fun p -> not (String.is_suffix p ~suffix:"dune-workspace"));
+  unmake "dune-workspace";
   file "plain/dune-file" "";
   let refused_dune_file = refused_for "dune-file" in
-  Stdlib.Sys.remove (Stdlib.Filename.concat root "plain/dune-file");
-  made := List.filter !made ~f:(fun p -> not (String.is_suffix p ~suffix:"dune-file"));
+  unmake "plain/dune-file";
   file "dune-project" "(lang dune 3.20)\n(dialect (name d) (implementation (extension dat)))";
   let refused_dialect = refused_for "dialect" in
-  Stdlib.Sys.remove (Stdlib.Filename.concat root "dune-project");
-  made := List.filter !made ~f:(fun p -> not (String.is_suffix p ~suffix:"/dune-project"));
+  unmake "dune-project";
   file "plain/dune-project" "(lang dune 3.20)\n(dialect (name d) (implementation (extension dat)))";
   let refused_nested_dialect = refused_for "dialect" in
-  Stdlib.Sys.remove (Stdlib.Filename.concat root "plain/dune-project");
-  made := List.filter !made ~f:(fun p -> not (String.is_suffix p ~suffix:"/dune-project"));
+  unmake "plain/dune-project";
   file "plain/gpu.t" "  $ ./gpu.exe";
   let refused_cram = refused_for "cram" in
-  Stdlib.Sys.remove (Stdlib.Filename.concat root "plain/gpu.t");
-  made := List.filter !made ~f:(fun p -> not (String.is_suffix p ~suffix:"gpu.t"));
+  unmake "plain/gpu.t";
   Out_channel.write_all (Stdlib.Filename.concat root "dune") ~data:"(data_only_dirs plain[12])";
   let refused_class = refused_for "data_only_dirs" in
   (* An ancestor holding a dune-project takes dune's root from a directory without its own
