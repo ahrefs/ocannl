@@ -125,10 +125,14 @@ let () =
     (Option.is_none (AF.windows_path_length_note ~win32:true at_limit));
   p "elsewhere, no path gets the note"
     (Option.is_none (AF.windows_path_length_note ~win32:false over));
-  (* A relative name that resolves to exactly 260 characters, past the limit only because of the
-     working directory it is resolved against. *)
+  (* A relative name that resolves past the limit only with the working directory counted: 260
+     characters resolved where the directory is shorter than that, and never under one character, so
+     a deeper working directory still yields a name rather than a negative length. *)
   let cwd_prefix = String.length (Stdlib.Filename.concat (Stdlib.Sys.getcwd ()) "") in
+  let relative_length = Int.max 1 (260 - cwd_prefix) in
   p "a relative path is measured as resolved against the working directory"
-    (match AF.windows_path_length_note ~win32:true (String.make (260 - cwd_prefix) 'r') with
-    | Some note -> String.is_substring note ~substring:"260 characters"
+    (match AF.windows_path_length_note ~win32:true (String.make relative_length 'r') with
+    | Some note ->
+        String.is_substring note
+          ~substring:(Int.to_string (cwd_prefix + relative_length) ^ " characters")
     | None -> false)
