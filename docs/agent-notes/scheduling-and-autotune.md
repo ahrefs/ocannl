@@ -1319,7 +1319,9 @@ files.
   grew with every key component and outgrew Windows' 260-character MAX_PATH (rog's staging paths
   were 268-279, hosted CI's ~263), so every store was refused there. A test or tool that needs the
   keys present reads them with `Schedule_cache.entry_keys`, and derives a path with `cache_file`,
-  never by parsing or spelling a filename.
+  never by parsing or spelling a filename; a shell script reads the key off the entry's first line,
+  `((key <key>)` (`entry_key` in `benchmarks/gh612_cells.sh`), and prints that rather than the
+  opaque `basename`.
 - **A version bump appends its own history line.** Each version constant in `schedule_cache.ml`
   (`entry_version`, `placement_entry_version`, `cache_regime_version`) sits under a verbatim
   `(*= <name> history` comment, one `<value>: gh-ocannl-<N> -- <what changed>` line per value,
