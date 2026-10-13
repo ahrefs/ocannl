@@ -15,8 +15,11 @@
 # raise (gh-ocannl-1084); so do rows short only by refusal-manifest marker rows, the
 # marker of a claim that failed, when every other row is the golden's, row for row (a
 # claim of it may read false), and Verdict's teardown ended the process (gh-ocannl-1216).
+# The same holds for a golden's success trailer, its `OK: ` rows (and the blank row
+# before them), which a scan prints only when no claim failed.
 # A golden ending on its marker section cannot tell a complete run from one cut
-# inside the markers; the teardown is all that separates them. A run
+# inside the markers, nor one ending on its trailer a failing run from one cut
+# before it; the teardown is all that separates them. A run
 # that stopped early, or never ran (a build failure; an executable the mutation
 # left unchanged, so dune reused its result), prints STOPPED EARLY or NEVER RAN
 # (NOT COUNTED when two candidates changed) and exits 4 in place of test-run's
@@ -126,18 +129,45 @@ sub plain_rows {
     return ($markers, @rows);
 }
 my ($golden_markers, @golden_plain) = plain_rows("$root/$golden");
-# Whether a run's other rows are the golden's, row for row: each the same, or -- the golden row
-# being a claim -- that claim failed, which is a claim whose marker the run may then lack. A count
-# alone would take an omitted row plus an extra one for a complete run.
+# A scan's success trailer: its `OK: ` rows, which it prints only once no claim failed (`if not
+# (Verdict.any_failed ()) then printf "\nOK: ..."`, the shape the manifest-printing scans share),
+# so a complete failing run lacks them -- and the blank row a trailer's leading `\n` puts before
+# its first row (gh-ocannl-1083's row count read every failing run of such a scan as stopped
+# early). The forms a complete failing run of the golden can take: the golden's rows as they are,
+# without the trailer, and without the trailer and the blank row before it; each with the number
+# of rows it omits.
+my $ok_row = qr/^OK: /;
+sub without_trailer {
+    my ($drop_blank, @rows) = @_;
+    return map { $rows[$_] } grep {
+        $rows[$_] !~ $ok_row
+            && !($drop_blank && $rows[$_] eq '' && $_ < $#rows && $rows[$_ + 1] =~ $ok_row)
+    } 0 .. $#rows;
+}
+my @golden_forms = ([0, @golden_plain]);
+if (my $trailer_rows = grep { $_ =~ $ok_row } @golden_plain) {
+    my @kept_blank = without_trailer(0, @golden_plain);
+    my @no_blank = without_trailer(1, @golden_plain);
+    push @golden_forms, [$trailer_rows, @kept_blank];
+    push @golden_forms, [@golden_plain - @no_blank, @no_blank] if @no_blank < @kept_blank;
+}
+# Whether a run's other rows are a form of the golden's, row for row: each the same, or -- the
+# golden row being a claim -- that claim failed, which is a claim whose marker the run may then
+# lack. A count alone would take an omitted row plus an extra one for a complete run. Answers the
+# number of trailer rows the matching form omits, or undef when none matches.
 sub same_plain_rows {
     my @rows = @_;
-    return 0 unless @rows == @golden_plain;
-    for my $i (0 .. $#rows) {
-        next if $rows[$i] eq $golden_plain[$i];
-        my ($label) = $golden_plain[$i] =~ /^(.*): true$/ or return 0;
-        return 0 unless $rows[$i] =~ /^\Q$label\E(?: \(.*\))?: false$/;
+    FORM: for my $form (@golden_forms) {
+        my ($omitted, @form_rows) = @$form;
+        next FORM unless @rows == @form_rows;
+        for my $i (0 .. $#rows) {
+            next if $rows[$i] eq $form_rows[$i];
+            my ($label) = $form_rows[$i] =~ /^(.*): true$/ or next FORM;
+            next FORM unless $rows[$i] =~ /^\Q$label\E(?: \(.*\))?: false$/;
+        }
+        return $omitted;
     }
-    return 1;
+    return undef;
 }
 my $mutated = $original;
 substr($mutated, $at, length($old), $new);
@@ -273,16 +303,21 @@ my $reported = eval {
                 # leaves no teardown line, and an exit inside a later case its own
                 # STOPPED EARLY, taken above.
                 my ($raised, $last) = case_raises($fresh[0]);
-                # Omitted marker rows: every other row printed, the golden's row for row, and the
-                # process ended through Verdict's teardown, so a failed claim did end it.
+                # Omitted marker rows and an omitted success trailer: every other row printed, the
+                # golden's row for row, and the process ended through Verdict's teardown, so a
+                # failed claim did end it.
                 my ($markers, @plain) = plain_rows($fresh[0]);
+                my $trailer = $teardown && $markers <= $golden_markers ? same_plain_rows(@plain) : undef;
                 if ($raised && $teardown && ($last eq $golden_last || $last =~ $case_raise)) {
                     print "cases raised: $raised (the rows short of the golden are theirs; "
                         . "the run reached its last case)\n";
-                } elsif ($teardown && $markers < $golden_markers && same_plain_rows(@plain)) {
+                } elsif (defined $trailer && ($trailer || $markers < $golden_markers)) {
                     my $omitted = $golden_markers - $markers;
                     print "refusal markers omitted: $omitted (a failed claim's marker is not printed; "
-                        . "every other row was, so the run reached its last row)\n";
+                        . "every other row was, so the run reached its last row)\n" if $omitted;
+                    print "success trailer omitted: $trailer row" . ($trailer == 1 ? '' : 's')
+                        . " (`OK: ` rows print only when no claim failed; every other row did, so the "
+                        . "run reached its last row)\n" if $trailer;
                 } else {
                     $verdict = "STOPPED EARLY: the mutated run printed $printed of the golden's $golden_rows rows";
                 }
