@@ -2753,9 +2753,13 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
 - **A leg on `rog-nv-win`, driven over ssh** — the recipe the 2026-10-13 wave settled on
   (staging#1086, staging#1088):
   - **Write the leg as a script and feed it to Git Bash on stdin**:
-    `ssh rog-nv-win '"C:/Program Files/Git/usr/bin/bash.exe" --noprofile --norc -s' < leg.sh`,
-    the script opening with the PATH prepend above. Do not quote the command through cmd.exe
-    (`ssh rog-nv-win 'bash.exe -c "..."'`): that adds a quoting layer that does not treat a
+    `ssh rog-nv-win '"C:/Program Files/Git/usr/bin/bash.exe" --noprofile --norc -eo pipefail -s' < leg.sh`,
+    the script opening with the PATH prepend above. `-eo pipefail` is what CI's Git Bash steps
+    run under, and without it a failed step (the cache fixture, say) is masked by a later green
+    one in the leg's exit status. A leg that must go on past a red step records it
+    (`step || rc=1`) and ends with `exit "${rc:-0}"`. The evidence is still each
+    `tools/test-run.sh` run's own verdict and `exit:` sentinel, never the ssh exit alone. Do not
+    quote the command through cmd.exe (`ssh rog-nv-win 'bash.exe -c "..."'`): that adds a quoting layer that does not treat a
     backslash as an escape, so staging#1086's escaped `\$PATH` reached bash literally, the leg's
     PATH lost its inherited entries and `tools/opam-env.sh` found no `opam`. On stdin, bash is the
     only parser, and the script reads exactly as it would run locally.
