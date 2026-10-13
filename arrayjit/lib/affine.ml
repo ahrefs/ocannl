@@ -285,15 +285,44 @@ let common_frame (views : coord array list) : coord array list option =
         let ends = List.fold views ~init:(ends_of v0) ~f:(fun acc v -> Set.inter acc (ends_of v)) in
         Some (List.map views ~f:(regroup ~ends))
 
-(* Linear terms of one known coordinate on one side. Width-1 symbols are substituted by their lower
-   bound: they are constants, and removing them unclutters the matched-pair forcing below. *)
-let terms_of ~range ~dup ~(side : Idx.symbol -> var)
+(* The two sides' range environments. A [Left_v]/[Right_v] variable ranges over its own side's
+   bounds — two sibling loops may bind one symbol with different bounds, and either side's bounds
+   would drop the other's values (gh-ocannl-1282). A [Shared] variable is one value on both sides,
+   so it ranges over the hull of the bounds of every side it is shared on (each a sound superset of
+   its values; [None] when any of them is unknown). *)
+type ranges = {
+  left_range : Idx.symbol -> (int * int) option;
+  right_range : Idx.symbol -> (int * int) option;
+  dup_left : Idx.symbol -> bool;
+  dup_right : Idx.symbol -> bool;
+}
+
+let var_range (r : ranges) = function
+  | Left_v s -> r.left_range s
+  | Right_v s -> r.right_range s
+  | Shared s -> (
+      let sides =
+        (if r.dup_left s then [] else [ r.left_range s ])
+        @ if r.dup_right s then [] else [ r.right_range s ]
+      in
+      match Option.all sides with
+      | Some ((lo, hi) :: rest) ->
+          Some
+            (List.fold rest ~init:(lo, hi) ~f:(fun (lo, hi) (lo', hi') -> (min lo lo', max hi hi')))
+      | Some [] | None -> None)
+
+let tag_left (r : ranges) s = if r.dup_left s then Left_v s else Shared s
+let tag_right (r : ranges) s = if r.dup_right s then Right_v s else Shared s
+
+(* Linear terms of one known coordinate on one side. Width-1 variables are substituted by their
+   lower bound: they are constants, and removing them unclutters the matched-pair forcing below. *)
+let terms_of (r : ranges) ~(tag : Idx.symbol -> var)
     ((terms, offset) : (int * Idx.symbol) list * int) : (int * var) list * int =
-  let tag s = if dup s then side s else Shared s in
   let term (c, s) =
-    match range s with
+    let v = tag s in
+    match var_range r v with
     | Some (lo, hi) when lo = hi -> Either.Second (c * lo)
-    | _ -> Either.First (c, tag s)
+    | _ -> Either.First (c, v)
   in
   let ts, cs = List.partition_map terms ~f:term in
   (ts, offset + List.fold cs ~init:0 ~f:( + ))
@@ -301,12 +330,11 @@ let terms_of ~range ~dup ~(side : Idx.symbol -> var)
 (* Combine left and right coordinates into [Σ d·v = δ] with per-var coalescing (a [Shared] symbol
    appearing with equal coefficients on both sides cancels). [None] when either side is [Unknown]:
    no information, conservatively. *)
-let equation_of ~range ~dup_left ~dup_right (l : coord) (r : coord) :
-    ((int * var) list * int) option =
+let equation_of (rg : ranges) (l : coord) (r : coord) : ((int * var) list * int) option =
   match (l, r) with
   | Known l, Known r ->
-      let lt, lc = terms_of ~range ~dup:dup_left ~side:(fun s -> Left_v s) (l.terms, l.offset) in
-      let rt, rc = terms_of ~range ~dup:dup_right ~side:(fun s -> Right_v s) (r.terms, r.offset) in
+      let lt, lc = terms_of rg ~tag:(tag_left rg) (l.terms, l.offset) in
+      let rt, rc = terms_of rg ~tag:(tag_right rg) (r.terms, r.offset) in
       let combined =
         List.fold
           (lt @ List.map rt ~f:(fun (c, v) -> (-c, v)))
@@ -317,11 +345,9 @@ let equation_of ~range ~dup_left ~dup_right (l : coord) (r : coord) :
       Some (Map.to_alist combined |> List.map ~f:(fun (v, c) -> (c, v)), rc - lc)
   | Unknown _, _ | _, Unknown _ -> None
 
-let range_of_var ~range = function Shared s | Left_v s | Right_v s -> range s
-
 (* No solution within bounds: the gcd of the coefficients does not divide the constant, or the
    interval of the left-hand side (when all variables are bounded) misses it. *)
-let infeasible ~range (terms, rhs) =
+let infeasible (rg : ranges) (terms, rhs) =
   match terms with
   | [] -> rhs <> 0
   | _ -> (
@@ -332,7 +358,7 @@ let infeasible ~range (terms, rhs) =
         List.fold terms
           ~init:(Some (0, 0))
           ~f:(fun acc (c, v) ->
-            match (acc, range_of_var ~range v) with
+            match (acc, var_range rg v) with
             | Some (lo, hi), Some (vlo, vhi) ->
                 Some (lo + min (c * vlo) (c * vhi), hi + max (c * vlo) (c * vhi))
             | _ -> None)
@@ -345,7 +371,7 @@ let infeasible ~range (terms, rhs) =
    of {!Indexing.affine_injective}: sorted by ascending [abs c], every term satisfies [abs c_k >= 1
    + Σ_{i<k} abs c_i·(w_i − 1)]. Equal values of an injective form imply equal arguments, and the
    forcing holds in every solution of the conjunction it is part of. *)
-let forced_pairs ~range (terms, rhs) : (Idx.symbol * Idx.symbol) list =
+let forced_pairs (rg : ranges) (terms, rhs) : (Idx.symbol * Idx.symbol) list =
   if rhs <> 0 then []
   else
     let ls, rest =
@@ -365,7 +391,7 @@ let forced_pairs ~range (terms, rhs) : (Idx.symbol * Idx.symbol) list =
             let sym = function Left_v s | Right_v s | Shared s -> s in
             if cl <> -cr then None
             else
-              match (range_of_var ~range vl, range_of_var ~range vr) with
+              match (var_range rg vl, var_range rg vr) with
               | Some (llo, lhi), Some (rlo, rhi) ->
                   let w = max lhi rhi - min llo rlo + 1 in
                   Some (abs cl, w, (sym vl, sym vr))
@@ -386,37 +412,49 @@ let forced_pairs ~range (terms, rhs) : (Idx.symbol * Idx.symbol) list =
 let axis_index_to_string (idx : Idx.axis_index) =
   Sexp.to_string_hum ([%sexp_of: Idx.axis_index] idx)
 
-(** [pair_conflict ~range ~dup_left ~dup_right ~pairs ~left ~right]: verdict on whether the accesses
-    viewed as [left] and [right] (over the same tensor node, re-coarsened here to a common frame)
-    can touch a common cell from different threads. [range s] gives the inclusive iteration bounds
-    of loop symbol [s] ([None] for static/unknown symbols). [dup_left]/[dup_right] select the
-    symbols iterated independently by each side (its enclosing loops within the analyzed parallel
-    region); other symbols are shared — equal across concurrently executing threads. [pairs] is the
-    thread identity: the parallel symbols of the left copy paired with those of the right copy (for
-    same-nest analyses, pairs of the form [(p, p)]).
+(** [bounds_range env s]: the range of [s] in a loop-bound environment, the hull of every binding of
+    [s] there — sibling loops may rebind one symbol with different bounds, and the first binding
+    alone would drop the others' values (gh-ocannl-1282). *)
+let bounds_range (env : (Idx.symbol * (int * int)) list) s =
+  List.fold env ~init:None ~f:(fun acc (s', (lo, hi)) ->
+      if Idx.equal_symbol s s' then
+        match acc with None -> Some (lo, hi) | Some (lo', hi') -> Some (min lo lo', max hi hi')
+      else acc)
+
+(** [pair_conflict ~left_range ~right_range ~dup_left ~dup_right ~pairs ~left ~right]: verdict on
+    whether the accesses viewed as [left] and [right] (over the same tensor node, re-coarsened here
+    to a common frame) can touch a common cell from different threads. [left_range s] /
+    [right_range s] give the inclusive iteration bounds of loop symbol [s] on that side ([None] for
+    static/unknown symbols): each side's occurrences of a symbol it iterates range over its OWN
+    bounds, a shared symbol over the hull of the sides it is shared on. [dup_left]/[dup_right]
+    select the symbols iterated independently by each side (its enclosing loops within the analyzed
+    parallel region); other symbols are shared — equal across concurrently executing threads.
+    [pairs] is the thread identity: the parallel symbols of the left copy paired with those of the
+    right copy (for same-nest analyses, pairs of the form [(p, p)]).
 
     Sound and conservative: [Disjoint] and [Same_thread] are proven; everything else is
     [Cross_thread]. *)
-let pair_conflict ~range ~dup_left ~dup_right ~(pairs : (Idx.symbol * Idx.symbol) list)
-    ~(left : coord array) ~(right : coord array) : verdict =
+let pair_conflict ~left_range ~right_range ~dup_left ~dup_right
+    ~(pairs : (Idx.symbol * Idx.symbol) list) ~(left : coord array) ~(right : coord array) : verdict
+    =
+  let rg = { left_range; right_range; dup_left; dup_right } in
   let describe witness =
     Printf.sprintf "%s (left %s, right %s)" witness (coords_to_string left) (coords_to_string right)
   in
   match common_frame [ left; right ] with
   | Some [ l; r ] -> (
-      let eqs = Array.to_list (Array.map2_exn l r ~f:(equation_of ~range ~dup_left ~dup_right)) in
-      if List.exists eqs ~f:(fun eq -> Option.value_map eq ~default:false ~f:(infeasible ~range))
-      then Disjoint
+      let eqs = Array.to_list (Array.map2_exn l r ~f:(equation_of rg)) in
+      if List.exists eqs ~f:(fun eq -> Option.value_map eq ~default:false ~f:(infeasible rg)) then
+        Disjoint
       else
         let forced =
-          List.concat_map eqs ~f:(fun eq ->
-              Option.value_map eq ~default:[] ~f:(forced_pairs ~range))
+          List.concat_map eqs ~f:(fun eq -> Option.value_map eq ~default:[] ~f:(forced_pairs rg))
         in
         let pair_forced (p, p') =
           (* A width-1 parallel symbol has a single thread coordinate, so equality across threads
              holds by definition — necessary because {!terms_of} substitutes width-1 symbols away
              before the equation-level forcing can see them. *)
-          (match (range p, range p') with
+          (match (var_range rg (tag_left rg p), var_range rg (tag_right rg p')) with
             | Some (lo, hi), Some (lo', hi') -> lo = hi && lo' = hi' && lo = lo'
             | _ -> false)
           || List.exists forced ~f:(fun (a, b) -> Idx.equal_symbol a p && Idx.equal_symbol b p')
@@ -455,7 +493,7 @@ let separation_failure ~range ~(concurrent : Idx.symbol -> bool) ~(syms : Idx.sy
   if List.is_empty syms then None
   else
     match
-      pair_conflict ~range ~dup_left:concurrent ~dup_right:concurrent
+      pair_conflict ~left_range:range ~right_range:range ~dup_left:concurrent ~dup_right:concurrent
         ~pairs:(List.map syms ~f:(fun s -> (s, s)))
         ~left:coords ~right:coords
     with
@@ -1092,40 +1130,34 @@ let within_statement ~(write : path_comp list) (path : path_comp list) : bool =
     the sides share (the accesses need not be simultaneous, so a shared loop's symbol varies
     independently between one side's visit and the other's). Symbols bound by neither side's loops
     (static indices) are shared parameters, equal on both sides, bounded by [static_range] when
-    known. A loop symbol both sides bind ranges over the hull of the two sides' bounds. [dims] is
-    the node's (physical) dims, which the coordinate view reads flattened indices against.
-    Conservative: [false] only when {!pair_conflict} proves disjointness. A dynamic access's
-    data-dependent axis is an [Unknown] coordinate of its view (gh-ocannl-1174), so disjointness is
-    decided from the coordinates both sides know — a gather's rows never meet another column,
-    whatever row the data names. A vectorized access is the base of a [Run] of flat cells, as
-    [Schedule.query_view] states it: its minor coordinate is [Unknown] when its own loop bounds
-    prove the run stays inside it, the whole map otherwise. Whole-node accesses count as
-    overlapping. *)
+    known. Each side's loop symbols range over that side's own bounds, so a symbol both sides bind
+    with different bounds keeps both ({!pair_conflict}'s per-side ranges). [dims] is the node's
+    (physical) dims, which the coordinate view reads flattened indices against. Conservative:
+    [false] only when {!pair_conflict} proves disjointness. A dynamic access's data-dependent axis
+    is an [Unknown] coordinate of its view (gh-ocannl-1174), so disjointness is decided from the
+    coordinates both sides know — a gather's rows never meet another column, whatever row the data
+    names. A vectorized access is the base of a [Run] of flat cells, as [Schedule.query_view] states
+    it: its minor coordinate is [Unknown] when its own loop bounds prove the run stays inside it,
+    the whole map otherwise. Whole-node accesses count as overlapping. *)
 let may_touch_same_cell ?(static_range = fun _ -> None) ~dims (a : 'tn access) (b : 'tn access) :
     bool =
   if a.a_whole || b.a_whole then true
   else
-    let find loops s = List.Assoc.find loops s ~equal:Idx.equal_symbol in
-    (* The pair solver reads one range per symbol for both sides' occurrences (it substitutes a
-       width-1 symbol away before telling the sides apart), so a loop symbol both sides bind gets
-       the hull of their bounds: one side's bounds would drop the other side's values. *)
-    let range s =
-      match (find a.a_loops s, find b.a_loops s) with
-      | Some (lo, hi), Some (lo', hi') -> Some (min lo lo', max hi hi')
-      | (Some _ as bounds), None | None, (Some _ as bounds) -> bounds
-      | None, None -> static_range s
+    (* Each side's own loop bounds, the static range beyond them: they range the side's symbols in
+       the pair solver and prove its run's no-spill in the view. *)
+    let side_range (x : 'tn access) s =
+      match bounds_range x.a_loops s with Some _ as r -> r | None -> static_range s
     in
-    (* A run's no-spill proof reads the side's OWN loop bounds first. *)
     let side_view (x : 'tn access) =
-      let range s = match find x.a_loops s with Some _ as r -> r | None -> range s in
-      view ~range ?dyn_axis:x.a_dyn_axis
+      view ~range:(side_range x) ?dyn_axis:x.a_dyn_axis
         ?vec:(if x.a_vec_last then Some (Run x.a_vec_len) else None)
         ~dims x.a_map
     in
     let dup_left s = List.Assoc.mem a.a_loops s ~equal:Idx.equal_symbol in
     let dup_right s = List.Assoc.mem b.a_loops s ~equal:Idx.equal_symbol in
     match
-      pair_conflict ~range ~dup_left ~dup_right ~pairs:[] ~left:(side_view a) ~right:(side_view b)
+      pair_conflict ~left_range:(side_range a) ~right_range:(side_range b) ~dup_left ~dup_right
+        ~pairs:[] ~left:(side_view a) ~right:(side_view b)
     with
     | Disjoint -> false
     | Same_thread | Cross_thread _ -> true

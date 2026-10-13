@@ -95,21 +95,27 @@ type verdict =
 [@@deriving sexp_of]
 
 val pair_conflict :
-  range:(Indexing.symbol -> (int * int) option) ->
+  left_range:(Indexing.symbol -> (int * int) option) ->
+  right_range:(Indexing.symbol -> (int * int) option) ->
   dup_left:(Indexing.symbol -> bool) ->
   dup_right:(Indexing.symbol -> bool) ->
   pairs:(Indexing.symbol * Indexing.symbol) list ->
   left:coord array ->
   right:coord array ->
   verdict
-(** [pair_conflict ~range ~dup_left ~dup_right ~pairs ~left ~right]: verdict on whether the accesses
-    viewed as [left] and [right] (over the same tensor node; re-coarsened to their common frame,
-    declined when they span different axes) can touch a common cell from different threads.
-    [range s] gives the inclusive iteration bounds of loop symbol [s] ([None] for static/unknown
-    symbols). [dup_left]/[dup_right] select the symbols iterated independently by each side (its
-    enclosing loops within the analyzed parallel region); other symbols are shared — equal across
-    concurrently executing threads. [pairs] is the thread identity: the parallel symbols of the left
-    copy paired with those of the right copy (for same-nest analyses, pairs of the form [(p, p)]).
+(** [pair_conflict ~left_range ~right_range ~dup_left ~dup_right ~pairs ~left ~right]: verdict on
+    whether the accesses viewed as [left] and [right] (over the same tensor node; re-coarsened to
+    their common frame, declined when they span different axes) can touch a common cell from
+    different threads. [left_range s] / [right_range s] give the inclusive iteration bounds of loop
+    symbol [s] on that side ([None] for static/unknown symbols). Each side's occurrences of a symbol
+    it iterates range over that side's OWN bounds — two sibling loops binding one symbol with
+    different bounds must not lend either's bounds to the other (gh-ocannl-1282) — and a shared
+    symbol, one value on both sides, over the hull of the bounds of the sides it is shared on. A
+    same-nest analysis passes one environment as both. [dup_left]/[dup_right] select the symbols
+    iterated independently by each side (its enclosing loops within the analyzed parallel region);
+    other symbols are shared — equal across concurrently executing threads. [pairs] is the thread
+    identity: the parallel symbols of the left copy paired with those of the right copy (for
+    same-nest analyses, pairs of the form [(p, p)]).
 
     Sound and conservative: [Disjoint] and [Same_thread] are proven; everything else is
     [Cross_thread]. *)
@@ -130,6 +136,12 @@ val separates :
     those of [syms]: with [idcs = acc[w1 + w2]] and [syms = [w1]], holding [w2] equal would "prove"
     that a common cell forces [w1] equal, while instances [(0, 1)] and [(1, 0)] share [acc[1]].
     [syms] is then the subset the caller needs told apart. *)
+
+val bounds_range : (Indexing.symbol * (int * int)) list -> Indexing.symbol -> (int * int) option
+(** [bounds_range env s]: the range of loop symbol [s] in a loop-bound environment (such as
+    [Low_level.loop_bounds]), the hull of EVERY binding of [s] there: sibling loops may rebind one
+    symbol with different bounds, and the first binding alone would drop the others' values
+    (gh-ocannl-1282). The environment a {!pair_conflict} side is ranged by. *)
 
 val axis_index_to_string : Indexing.axis_index -> string
 (** The rendering of one index component the engine's witnesses use, for messages that quote a cell

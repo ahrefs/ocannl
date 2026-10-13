@@ -2125,6 +2125,12 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   is red on your head too, and the merge needs `--override` naming the master red's issue —
   compare the failing rules with the scheduled run's first. The guard step refuses a floor
   dispatch without `expected_sha`, and one combined with `windows_only`.
+- A scan's synthetic fixtures are parsed by the parser of the compiler RUNNING the scan, so a
+  fixture spelled in syntax newer than the floor fails only on the floor leg, as a bare
+  `Syntaxerr.Error` from the scanner's `parse` (5.4's `let exception E = M.E in`, gh-ocannl-1271).
+  The parse tree is version-stable where the grammar is not: to cover such a construct, parse a
+  floor-legal spelling and rewrite the tree (`local_rebinding` in
+  `test/operations/provenance_tag_scan_cases.ml`), with the scanner taking a structure.
 
 ## What CI actually covers
 
@@ -2234,6 +2240,10 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   Merging sessions do not watch CI after landing (roll-forward, ahrefs/ocannl#861); before fixing
   a master red by hand, find the claiming issue and any linked PR, and take over only where triage
   visibly stopped short — saying so on the issue first.
+  In a red `dune build` log, the failing rule is the one under dune's `File "<dir>/dune", line N`
+  header (grep the job log for `File "`), never simply the last test to print: dune keeps running
+  the other rules after a failure, and a test's chatty stderr can land last on a step whose only
+  red is far earlier (gh-ocannl-1271).
 - The first shard of the Ubuntu/OCaml 5.5 main suite preprocesses `cc_backend.ml` with
   `OCANNL_LOG_LEVEL_CC_BACKEND=3` and builds both `@check` and
   `@test/operations/runtest-cc_backend_trace_name` in that environment. The focused runtime test

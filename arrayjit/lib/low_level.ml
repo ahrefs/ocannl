@@ -6692,12 +6692,7 @@ let peel_accum_nest ?(extra_level = fun _ _ -> false) ?report ~loop_bounds ~free
      symbols it can only admit conditionally are carried in [pending] until the base, where the
      accumulated cell is finally in hand and {!Affine.separates} decides whether each of those
      instances owns a distinct cell. *)
-  let range s =
-    List.fold loop_bounds ~init:None ~f:(fun acc (s', (blo, bhi)) ->
-        if Indexing.equal_symbol s s' then
-          match acc with None -> Some (blo, bhi) | Some (lo, hi) -> Some (min lo blo, max hi bhi)
-        else acc)
-  in
+  let range = Affine.bounds_range loop_bounds in
   let loop_bound s = Option.is_some (range s) in
   let peeled ~free_of s = List.exists free_of ~f:(Indexing.equal_symbol s) in
   let guard_symbols (llsc : scalar_t) =

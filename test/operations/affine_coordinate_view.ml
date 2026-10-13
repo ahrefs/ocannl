@@ -97,7 +97,8 @@ module Q = struct
 
   let pair_conflict ~dims ~range ~dup_left ~dup_right ~pairs left right =
     let view = view ~range ~vec:(fun l -> Aff.Run l) ~dims in
-    Aff.pair_conflict ~range ~dup_left ~dup_right ~pairs ~left:(view left) ~right:(view right)
+    Aff.pair_conflict ~left_range:range ~right_range:range ~dup_left ~dup_right ~pairs
+      ~left:(view left) ~right:(view right)
 
   let separates ~dims ~range ~concurrent ~syms a =
     Aff.separates ~range ~concurrent ~syms

@@ -250,6 +250,13 @@ files.
   environment both take (do not add a second walker for it — round 7 of gh-693 did, and gh-722
   removed the duplicate). Soundness direction, as everywhere in the engine: a proven "separated" is
   proven, and anything it cannot interpret declines.
+- **A pair query ranges each side by its own bounds** (gh-ocannl-1282): `Affine.pair_conflict`
+  takes `~left_range ~right_range`, ranging a side's `Left_v`/`Right_v` variables by that side and a
+  `Shared` one by the hull of the sides sharing it. Loop symbols are not unique: sibling loops (two
+  nests, or two inner loops of one nest) may rebind one symbol with different bounds, and lending
+  one side's bounds to the other once let `aligned_chains` accept a cross-thread dependence. Build a
+  side's range from a loop environment with `Affine.bounds_range` (the hull of every binding), never
+  `List.Assoc.find`, whose first binding drops the siblings'; `aligned_chains_shared_symbol.ml` pins it.
 - **`Sub_axis` has ONE meaning, and "unknown" is never written into a map** (gh-ocannl-1162): the
   axis adds zero to the row-major offset while keeping its stride, so a `Sub_axis` run makes the
   component after it a flattened index over the run (lowering's flat stores, `Row`'s strided
@@ -278,11 +285,14 @@ files.
   derives from an original one (`Stage`'s load, `Privatize`'s transfers, `Split_reduce`'s combine
   cell, which a tuner composition reaches) is the original with loops renamed,
   `Schedule.rename_index`, which keeps a `Sub_axis` by construction — never a rebuild from the
-  components' `terms_of_index` decompositions, where `Sub_axis` and `Fixed_idx 0` read alike.
-  `Tensorize` and `Fuse_epilogue`'s tail relocation decline a flattened access instead (v1). No
-  scan guards this: a fresh tile's coordinates are legitimately built from those same
-  decompositions (its tile parts), and only the node being addressed tells the two apart. A new
-  transform that re-addresses an existing node renames.
+  components' `terms_of_index` decompositions. Those used to read a `Sub_axis` as the empty sum at
+  offset 0, i.e. as `Fixed_idx 0`; it is now the `Flattened` case of the decomposition's own variant
+  (gh-ocannl-1293), so each caller's match states what a flattened run means to it: no symbol of
+  its own, the access renamed (`Stage`, `Privatize`, `Split_reduce`), or a refusal naming the
+  flattening (`Fuse_epilogue`'s tail relocation and cover check, `add_symbol`, hence `Tensorize`).
+  No scan guards the rename itself: a fresh tile's coordinates are legitimately built from those
+  same decompositions (its tile parts), and only the node being addressed tells the two apart. A
+  new transform that re-addresses an existing node renames.
 - **A dynamic access is viewed, not refused** (gh-ocannl-1174): `Affine.access` carries the
   dynamic axis itself (`a_dyn_axis`), so `may_touch_same_cell`, `read_covered_before` and
   `Cost_model.access_cells` read a gather or scatter through `view ~dyn_axis` — refuse one

@@ -184,7 +184,8 @@ let () =
               if (x.Aff.a_write || y.Aff.a_write) && x.Aff.a_tn.Tn.uid = y.Aff.a_tn.Tn.uid then
                 let dims = Lazy.force x.Aff.a_tn.Tn.dims in
                 Some
-                  (Aff.pair_conflict ~range ~dup_left:dup ~dup_right:dup
+                  (Aff.pair_conflict ~left_range:range ~right_range:range ~dup_left:dup
+                     ~dup_right:dup
                      ~pairs:[ (sym, sym) ]
                      ~left:(Aff.view ~dims x.Aff.a_map) ~right:(Aff.view ~dims y.Aff.a_map))
               else None))

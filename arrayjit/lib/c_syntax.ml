@@ -3822,7 +3822,7 @@ module C_syntax (B : C_syntax_config) = struct
          dispatch execute under the same outer-iteration values, with a join before the next), which
          is exactly the query's treatment of unlisted symbols. *)
       let env = (sym, grid_range) :: Low_level.loop_bounds body in
-      let range s = List.Assoc.find env s ~equal:Indexing.equal_symbol in
+      let range = Affine.bounds_range env in
       let dup s = List.Assoc.mem env s ~equal:Indexing.equal_symbol in
       let feasible =
         Hashtbl.for_all locals ~f:(fun info ->
@@ -3877,7 +3877,8 @@ module C_syntax (B : C_syntax_config) = struct
                         match (interp (kx, mx), interp (ky, my)) with
                         | Some l, Some r -> (
                             match
-                              Affine.pair_conflict ~range ~dup_left:dup ~dup_right:dup
+                              Affine.pair_conflict ~left_range:range ~right_range:range
+                                ~dup_left:dup ~dup_right:dup
                                 ~pairs:[ (sym, sym) ]
                                 ~left:l ~right:r
                             with

@@ -151,6 +151,7 @@ declared or pinned by every rule running the program (gh-ocannl-1149):
   test/operations/dune, executable autotune_fission_sketch: Ir.Schedule.default_cpu, Ir.Schedule.default_gpu, Ir.Schedule.default_pipeline_fissions, Ir.Schedule.fission_scheduled, Ir.Schedule.fission_segmented, Ir.Schedule.zero_expansion
   test/operations/dune, executable autotune_mma_companion: Ir.Schedule.apply
   test/operations/dune, test accum_width: Ir.Schedule.apply
+  test/operations/dune, test aligned_chains_shared_symbol: Ir.Schedule.aligned_chains
   test/operations/dune, test autotune_privatize: Ir.Schedule.apply, Ir.Schedule.default_cpu, Ir.Schedule.default_gpu
   test/operations/dune, test autotune_scope_menu: Ir.Schedule.apply
   test/operations/dune, test autotune_serial_baseline: Ir.Schedule.automatic_schedule_active, Ir.Schedule.maybe_default_schedules
@@ -185,7 +186,7 @@ declared or pinned by every rule running the program (gh-ocannl-1149):
   test/operations/dune, test scan_loop: Ir.Schedule.apply
   test/operations/dune, test schedule_batch_grid: Ir.Schedule.apply
   test/operations/dune, test schedule_batched_mma: Ir.Schedule.apply
-  test/operations/dune, test schedule_coalesce: Ir.Schedule.apply, Ir.Schedule.default_gpu, Ir.Schedule.fission_scheduled, Ir.Schedule.maybe_default_schedules, Ir.Schedule.op_legality, Ir.Schedule.schedule_legality, Ir.Schedule.zero_expansion
+  test/operations/dune, test schedule_coalesce: Ir.Schedule.apply, Ir.Schedule.default_gpu, Ir.Schedule.fission_scheduled, Ir.Schedule.fuse_epilogue_witness, Ir.Schedule.maybe_default_schedules, Ir.Schedule.op_legality, Ir.Schedule.schedule_legality, Ir.Schedule.zero_expansion
   test/operations/dune, test schedule_contraction_nest: Ir.Schedule.apply
   test/operations/dune, test schedule_conv_gemm: Ir.Schedule.apply, Ir.Schedule.default_cpu, Ir.Schedule.fission_scheduled, Ir.Schedule.zero_expansion
   test/operations/dune, test schedule_cpu_pack_matmul: Ir.Schedule.apply
