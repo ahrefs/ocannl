@@ -39,14 +39,16 @@ case "$*" in
   'build -j 4 @runtest-probe') name=probe ;;
   'build -j 4 @runtest-manifest') name=manifest ;;
   'build -j 4 @runtest-tail') name=tail ;;
+  'build -j 4 @runtest-trailer') name=trailer ;;
   *) exit 98 ;;
 esac
 printf '%s\n' invoked >> "$PROBE_HOME/invocations"
 case "$(cat module.ml)" in *MUTATED*) ;; *) exit 99 ;; esac
 cp module.ml "$PROBE_HOME/observed"
 # The test's stdout, where dune leaves it even when the test exits nonzero; the
-# golden, probe.expected, has three rows, and manifest.expected six, two of them
-# refusal-manifest marker rows.
+# golden, probe.expected, has three rows, manifest.expected six, two of them
+# refusal-manifest marker rows, and trailer.expected eight: manifest.expected's
+# with a blank row and a success trailer (`OK: `) before its section.
 out=${DUNE_BUILD_DIR:-_build}/default
 mkdir -p "$out"
 rows() { rm -f "$out/$name.exe.output"; printf "$1" > "$out/$name.exe.output"; }
@@ -123,6 +125,20 @@ case "$PROBE_MODE" in
   # this residual; only a trailer row after the section would separate the two.
   tailcut) rows "first: false\n$section$m1"
     printf 'FAIL: first: false\nFAILED: 1 check did not hold.\n'; exit 1 ;;
+  # A failed claim leaves no success trailer (`OK: ` rows a scan prints only when no claim
+  # failed), nor the blank row before it; nor, here, its own marker. The blank row kept, and
+  # every marker printed (a failed claim with none). Then the same shortfall cut short, with
+  # no teardown, or with a row swapped.
+  trailer) rows "first: false\n$section$m2"'last: true\n'
+    printf 'FAIL: first: false\nFAILED: 1 check did not hold.\n'; exit 1 ;;
+  trailerblank) rows "first: false\n\n$section$m1$m2"'last: true\n'
+    printf 'FAIL: first: false\nFAILED: 1 check did not hold.\n'; exit 1 ;;
+  trailercut) rows "first: false\n$section$m2"
+    printf 'FAIL: first: false\nFAILED: 1 check did not hold.\n'; exit 1 ;;
+  trailerkilled) rows "first: false\n$section$m2"'last: true\n'
+    printf 'FAIL: first: false\nCommand got signal SEGV.\n'; exit 1 ;;
+  trailerswap) rows "first: false\nswapped in$section$m2"'last: true\n'
+    printf 'FAIL: first: false\nFAILED: 1 check did not hold.\n'; exit 1 ;;
   compile) echo 'Error: injected compile failure'; exit 1 ;;
   refused) printf 'dune: unknown option\nUsage: dune build [OPTION]…\n'; exit 1 ;;
   restore_error) rm module.ml; mkdir module.ml; exit 1 ;;
@@ -147,6 +163,9 @@ printf 'first: true\n\nSynthetic controls: scanner refusal diagnostics exercised
 printf 'first: true\n\nSynthetic controls: scanner refusal diagnostics exercised by this control golden:\n%s\n%s\n' \
   '  [scanner-refusal:00000000000000000000000000000001] first refusal' \
   '  [scanner-refusal:00000000000000000000000000000002] last refusal' > tail.expected
+printf 'first: true\n\nOK: every claim held.\n\nSynthetic controls: scanner refusal diagnostics exercised by this control golden:\n%s\n%s\nlast: true\n' \
+  '  [scanner-refusal:00000000000000000000000000000001] first refusal' \
+  '  [scanner-refusal:00000000000000000000000000000002] last refusal' > trailer.expected
 printf 'prefix\r\nANCHOR\r\nsuffix without newline' > module.ml
 chmod 640 module.ml
 cp module.ml "$fixture/pristine"
@@ -270,6 +289,38 @@ grep -qF 'Printf.sprintf "[scanner-refusal:%s] %s"' "$root/test/support/refusal_
 grep -qF 'printf "  %s\n" marker' "$root/test/support/refusal_control_manifest.ml" ||
   { echo 'Refusal_control_manifest.print no longer indents a marker row by two spaces'; exit 1; }
 printf 'PASS rows short only by a failed claim'"'"'s refusal marker are caught; cut, killed or row-swapped runs with the same shortfall exit 4\n'
+# A failing run of a scan lacks its success trailer, the `OK: ` rows printed only when no claim
+# failed, and the blank row before it when that is the trailer's own: still its last row reached,
+# alone or beside an omitted marker; cut, killed or row-swapped, still no evidence.
+export PROBE_MODE=trailer
+PROBE_ALIAS=@runtest-trailer run_case 1
+grep -q '^rows: 5 printed of 8 in trailer.expected$' "$fixture/result"
+grep -q "^refusal markers omitted: 1 " "$fixture/result"
+grep -q '^success trailer omitted: 2 rows (`OK: ` rows print only when no claim failed; every other row did, so the run reached its last row)$' \
+  "$fixture/result" || { cat "$fixture/result"; echo "trailer: no omitted-trailer line"; exit 1; }
+reached
+export PROBE_MODE=trailerblank
+PROBE_ALIAS=@runtest-trailer run_case 1
+grep -q '^rows: 7 printed of 8 in trailer.expected$' "$fixture/result"
+grep -q '^success trailer omitted: 1 row ' "$fixture/result"
+if grep -q '^refusal markers omitted:' "$fixture/result"; then
+  cat "$fixture/result"; echo "trailerblank: every marker printed, yet one reads omitted"; exit 1
+fi
+reached
+for mode in trailercut trailerkilled trailerswap; do
+  export PROBE_MODE=$mode
+  PROBE_ALIAS=@runtest-trailer run_case 4
+  case $mode in
+    trailercut) flagged "STOPPED EARLY: the mutated run printed 4 of the golden's 8 rows" ;;
+    trailerkilled|trailerswap) flagged "STOPPED EARLY: the mutated run printed 5 of the golden's 8 rows" ;;
+  esac
+done
+# The trailer the runner skips is the scans' own: the ratchet whose failing runs it was written
+# for prints its `OK: ` row only when no claim failed, and its golden carries that row.
+grep -qF 'if not (Verdict.any_failed ()) then' "$root/test/operations/verdict_ratchet.ml" &&
+  grep -q '^OK: ' "$root/test/operations/verdict_ratchet.expected" ||
+  { echo 'verdict_ratchet no longer prints a success trailer `OK: ` row under Verdict.any_failed'; exit 1; }
+printf 'PASS a failing run short by its success trailer is caught; cut, killed or row-swapped runs with the same shortfall exit 4\n'
 for mode in pass compile refused; do
   export PROBE_MODE=$mode
   case $mode in pass) rc=0 ;; compile) rc=4 ;; refused) rc=2 ;; esac

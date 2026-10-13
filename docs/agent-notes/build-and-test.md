@@ -1563,8 +1563,15 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   complete failing run of a manifest-printing scan is a row short, and it counts when every other
   row is the golden's, row for row (a claim of it may read false; the run's own `FAIL:` rows are
   skipped), and Verdict's teardown ended the process; a run missing or swapping a row, or with no
-  teardown, still exits 4. Residual: a golden ending on its marker section cannot tell a complete
-  run from one cut inside the markers, and a mutant that silences one refusal while every claim
+  teardown, still exits 4. A golden's success trailer is read the same way (`success trailer
+  omitted: K rows`): the scans print their `OK: ` rows under `if not (Verdict.any_failed ())`,
+  most of them behind a blank row of the trailer's own (`printf "\nOK: …"`), so every complete
+  failing run of `verdict_ratchet`, `env_var_deps`, `config_dep_completeness` and the rest is
+  that many rows short; the runner matches the run against the golden without its `OK: ` rows,
+  with or without the blank row before them, under the same row-for-row and teardown conditions.
+  A new scan that keeps the `OK: ` prefix for its conditional rows inherits this. Residual: a golden ending on its marker section cannot tell a complete
+  run from one cut inside the markers (nor one ending on its trailer a failing run from one cut
+  before it), and a mutant that silences one refusal while every claim
   passes leaves no teardown, so it reads STOPPED EARLY although the golden caught it -- both want a
   trailer row after the section. A test that echoes a child's stderr (`verdict_teardown`)
   can carry a child's `STOPPED EARLY` line; read the rows line before discarding such a run.

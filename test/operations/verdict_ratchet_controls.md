@@ -471,7 +471,10 @@ of this test is two rows short of its golden, beside the refusal-manifest marker
 claim; the one that exited 1 printed enough corpus refusal rows to outnumber what was missing. Each
 mutated stdout was diffed against the golden after the run: it differed in exactly the listed
 claims (true to false), the corpus refusal's own `FAIL:` row where the corpus claim failed, the
-two trailing rows, and those markers -- every row before the trailer was reached.
+two trailing rows, and those markers -- every row before the trailer was reached. The runner now
+reads that shape itself (it prints "success trailer omitted: 2 rows"), so such a run exits 1: the
+first row of the table below, rerun with the report guarded by a constant false, exited 1 on the
+same 51 claims as run 20261013T201519Z-14871.
 
 | Mechanism | Mutation | Controls | Run |
 |---|---|---|---|
