@@ -655,7 +655,7 @@
 # compares the two arms again, both schedules replaying, both arms reporting in position, and ships
 # the measured winner. That is the placement A/B a warm benchmark pass measures, and what a test
 # sharing a warm cache directory across two-arm scenarios wants instead of sweeping the store's
-# `placements-*.sexp` entries by hand.
+# `placements-` entries by hand.
 #tune_placement_store=true
 
 # gh-ocannl-514: the ranking of the flip chain's candidates. `enablement` sorts the

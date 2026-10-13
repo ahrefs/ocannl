@@ -1,0 +1,14 @@
+the keys span the 255-byte component limit: true
+every entry name has the same length, whatever its key's length: true
+every entry name is a .sexp file in the cache directory: true
+storing under every key, the longest included, is refused nowhere: true
+every stored key replays its own entry: true
+the entries store their keys: entry_keys reads back exactly the keys stored: true
+keys the old naming collapsed onto one file stay distinct entries: true
+another key's entry under this key's name is a miss: true
+the collision miss is the lookup's own decision, not a refusal: true
+the entry the colliding file belongs to still replays: true
+on Windows, a path past 259 characters gets a note naming its length: true
+on Windows, a path of 259 characters gets no note: true
+elsewhere, no path gets the note: true
+a relative path is measured as resolved against the working directory: true

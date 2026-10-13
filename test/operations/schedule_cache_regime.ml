@@ -46,13 +46,13 @@ let make_dir dir =
   Stdlib.Sys.mkdir dir 0o755
 
 let stamp_file dir = Stdlib.Filename.concat dir SC.regime_stamp_filename
-let entry_file dir key = Stdlib.Filename.concat dir (key ^ ".sexp")
+let entry_file ~cache_dir key = SC.cache_file ~dir:cache_dir ~key
 
 let write_stamp dir version =
   Stdio.Out_channel.write_all (stamp_file dir) ~data:(Int.to_string version ^ "\n")
 
-let write_entry dir key value =
-  Stdio.Out_channel.write_all (entry_file dir key)
+let write_entry ~cache_dir key value =
+  Stdio.Out_channel.write_all (entry_file ~cache_dir key)
     ~data:(Sexp.to_string_hum (SC.sexp_of_entry value))
 
 let read path = Stdio.In_channel.read_all path
@@ -73,12 +73,12 @@ let () =
   let old_cache_dir = "autotune_cache_regime" in
   make_dir old_cache_dir;
   let old_keys = [ "old-a"; "old-b" ] in
-  List.iter old_keys ~f:(fun key -> write_entry old_cache_dir key (entry key));
+  List.iter old_keys ~f:(fun key -> write_entry ~cache_dir:old_cache_dir key (entry key));
   write_stamp old_cache_dir (SC.cache_regime_version - 1);
   p "an old stamped generation opens as a cache miss"
     (Option.is_none (SC.lookup ~dir:old_cache_dir ~key:(Some "old-a")));
   Verdict.p_none ~min:2 "every old-regime entry is swept" old_keys ~f:(fun key ->
-      Stdlib.Sys.file_exists (entry_file old_cache_dir key));
+      Stdlib.Sys.file_exists (entry_file ~cache_dir:old_cache_dir key));
   p "the completed sweep atomically advances the regime stamp"
     (String.equal
        (String.strip (read (stamp_file old_cache_dir)))
@@ -98,10 +98,10 @@ let () =
      reason to preserve the entries that motivated this transition. *)
   let legacy_cache_dir = "autotune_cache_regime_legacy" in
   make_dir legacy_cache_dir;
-  write_entry legacy_cache_dir "legacy" (entry "legacy");
+  write_entry ~cache_dir:legacy_cache_dir "legacy" (entry "legacy");
   p "an unstamped legacy generation is swept and stamped current"
     (Option.is_none (SC.lookup ~dir:legacy_cache_dir ~key:(Some "legacy"))
-    && (not (Stdlib.Sys.file_exists (entry_file legacy_cache_dir "legacy")))
+    && (not (Stdlib.Sys.file_exists (entry_file ~cache_dir:legacy_cache_dir "legacy")))
     && String.equal
          (String.strip (read (stamp_file legacy_cache_dir)))
          (Int.to_string SC.cache_regime_version));
@@ -109,8 +109,8 @@ let () =
   let future_cache_dir = "autotune_cache_regime_refusal" in
   make_dir future_cache_dir;
   let kept = entry "future-owned" in
-  write_entry future_cache_dir "kept" kept;
-  let kept_before = read (entry_file future_cache_dir "kept") in
+  write_entry ~cache_dir:future_cache_dir "kept" kept;
+  let kept_before = read (entry_file ~cache_dir:future_cache_dir "kept") in
   let future_version = SC.cache_regime_version + 1 in
   write_stamp future_cache_dir future_version;
   let refused_io =
@@ -122,8 +122,8 @@ let () =
   p "a regime-refused lookup and store are each recorded as a refusal"
     (equal_record refused_io [ (SC.Lookup, "kept", true); (SC.Store, "refused-write", true) ]);
   p "a refused future-regime open changes no entries"
-    (String.equal kept_before (read (entry_file future_cache_dir "kept"))
-    && not (Stdlib.Sys.file_exists (entry_file future_cache_dir "refused-write")));
+    (String.equal kept_before (read (entry_file ~cache_dir:future_cache_dir "kept"))
+    && not (Stdlib.Sys.file_exists (entry_file ~cache_dir:future_cache_dir "refused-write")));
   p "a refused future-regime open does not rewrite its stamp"
     (String.equal
        (String.strip (read (stamp_file future_cache_dir)))
@@ -143,7 +143,7 @@ let () =
             ignore (SC.lookup ~dir:io_cache_dir ~key:None : SC.entry option)))
        []);
   SC.store ~dir:io_cache_dir ~key:(Some "held") (entry "held");
-  let held_before = read (entry_file io_cache_dir "held") in
+  let held_before = read (entry_file ~cache_dir:io_cache_dir "held") in
   (* What a Windows commit raises once its bounded retry runs out ([Atomic_file.publish_staged]): a
      [Sys_error] in the staged-but-uncommitted window. *)
   let commit_refusal = "gh1040 injected sharing violation" in
@@ -162,7 +162,7 @@ let () =
         && String.is_substring reason ~substring:commit_refusal
     | _ -> false);
   p "the refused commit leaves the earlier entry in place"
-    (String.equal held_before (read (entry_file io_cache_dir "held")));
+    (String.equal held_before (read (entry_file ~cache_dir:io_cache_dir "held")));
   let replay_with exn =
     recorded (fun () ->
         FI.with_callback

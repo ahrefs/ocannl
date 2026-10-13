@@ -833,7 +833,7 @@ files.
   abandon every flip. `best_steps` is cached like `mma_best_ms`, keyed by every `Search_shaping`
   key's value (`Utils.config_class_fingerprint`, `SC.trajectory`), so a replayed incumbent still
   has one; a failed one abandons nothing. A clean abandoned prefix is also persisted
-  (gh-ocannl-1136), under the unchanged schedule key with an `abandonment-` filename prefix.
+  (gh-ocannl-1136), under the unchanged schedule key with an `abandonment-` key prefix.
   A replay requires the same search shape and re-evaluates the current incumbent and ratio
   against those timings; without a qualifying rule it searches normally. It reports
   `Abandonment_replay` and raises `Search_abandoned` with zero search counters, so a warm
@@ -1313,6 +1313,13 @@ files.
   old stamp and the next opener retries; power-loss durability is the filesystem's, not an fsync
   guarantee. Pre-gh-835 binaries do not take the lock and must not share a live cache directory
   during an upgrade.
+- **An entry's filename is a digest of its key, never the key** (gh-ocannl-1228):
+  `Schedule_cache.cache_file` names it by the key's 32-hex MD5, the entry stores the full key
+  beside its payload, and a lookup whose stored key differs reads as a miss. A key-spelling name
+  grew with every key component and outgrew Windows' 260-character MAX_PATH (rog's staging paths
+  were 268-279, hosted CI's ~263), so every store was refused there. A test or tool that needs the
+  keys present reads them with `Schedule_cache.entry_keys`, and derives a path with `cache_file`,
+  never by parsing or spelling a filename.
 - **A version bump appends its own history line.** Each version constant in `schedule_cache.ml`
   (`entry_version`, `placement_entry_version`, `cache_regime_version`) sits under a verbatim
   `(*= <name> history` comment, one `<value>: gh-ocannl-<N> -- <what changed>` line per value,
@@ -1378,7 +1385,7 @@ files.
   directory disables both stores together. To bypass the placement store ALONE — a warm-cache
   placement A/B (both arms reporting, both schedules replaying), or a test sharing one warm
   directory across two-arm scenarios — set `tune_placement_store=false` (or pass
-  `~placement_store:false`; gh-ocannl-1020) rather than deleting `placements-*.sexp` entries:
+  `~placement_store:false`; gh-ocannl-1020) rather than deleting the `placements-` entries:
   `autotune_arm_containment`'s rule passes it on the command line.
 - **A test claiming that a store or a replay happened waives on the cache's REPORTED refusal, not
   on a reference context** (gh-ocannl-1040/1043). Every store and lookup absorbs a filesystem

@@ -192,13 +192,13 @@ let clean_cache dir =
     Array.iter (Stdlib.Sys.readdir dir) ~f:(fun f ->
         Stdlib.Sys.remove (Stdlib.Filename.concat dir f))
 
+(* The keys come from inside the entries: a filename is a digest of its key (gh-ocannl-1228). *)
 let abandonment_entry ~cache_dir =
-  Array.to_list (Stdlib.Sys.readdir cache_dir)
-  |> List.find_map ~f:(fun name ->
-      Option.bind (String.chop_prefix name ~prefix:"abandonment-") ~f:(fun rest ->
-          Option.bind (String.chop_suffix rest ~suffix:".sexp") ~f:(fun key ->
-              Option.map (Ir.Schedule_cache.lookup_abandonment ~dir:cache_dir ~key:(Some key))
-                ~f:(fun entry -> (key, entry)))))
+  Ir.Schedule_cache.entry_keys ~dir:cache_dir
+  |> List.find_map ~f:(fun stored ->
+      Option.bind (String.chop_prefix stored ~prefix:"abandonment-") ~f:(fun key ->
+          Option.map (Ir.Schedule_cache.lookup_abandonment ~dir:cache_dir ~key:(Some key))
+            ~f:(fun entry -> (key, entry))))
 
 (* gh-ocannl-1136: the first run really searches and stops at k; replay may compile its baseline to
    derive the digest, but must attempt no search candidates or timings. *)

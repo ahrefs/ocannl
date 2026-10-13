@@ -55,15 +55,10 @@ let clean_cache dir =
     Array.iter (Stdlib.Sys.readdir dir) ~f:(fun f ->
         Stdlib.Sys.remove (Stdlib.Filename.concat dir f))
 
-(* The placement entries in the directory, by key (the filename without its extension is the key:
-   [Schedule_cache.cache_file] sanitizes a key that is already filename-safe). *)
-let placement_keys ?(dir = cache_dir) () =
-  if not (Stdlib.Sys.file_exists dir) then []
-  else
-    Stdlib.Sys.readdir dir |> Array.to_list
-    |> List.filter_map ~f:(fun f ->
-        if String.is_prefix f ~prefix:"placements-" then String.chop_suffix f ~suffix:".sexp"
-        else None)
+(* The placement entries in the directory, by key: the keys the entries store, since a filename is a
+   digest of its key (gh-ocannl-1228). *)
+let placement_keys ?(cache_dir = cache_dir) () =
+  List.filter (SC.entry_keys ~dir:cache_dir) ~f:(String.is_prefix ~prefix:"placements-")
 
 let read_entry key = Option.value_exn (SC.lookup_placements ~dir:cache_dir ~key:(Some key))
 
@@ -322,7 +317,7 @@ let () =
   clean_cache xproc_cache_dir;
   (* The one placement entry the directory holds, with its rendering; [None] for none or several. *)
   let held () =
-    match placement_keys ~dir:xproc_cache_dir () with
+    match placement_keys ~cache_dir:xproc_cache_dir () with
     | [ k ] ->
         Option.map (SC.lookup_placements ~dir:xproc_cache_dir ~key:(Some k)) ~f:(fun e ->
             (k, e, SC.sexp_of_placement_entry e))
@@ -391,7 +386,7 @@ let () =
      own, free to record what its evidence allows. *)
   p "a cross-process replay leaves the recorded decision untouched, and records nothing beside it"
     (Option.is_none recorded
-    || (untouched recorded && List.length (placement_keys ~dir:xproc_cache_dir ()) = 1));
+    || (untouched recorded && List.length (placement_keys ~cache_dir:xproc_cache_dir ()) = 1));
   (* The control: a too-coarse identity -- one blind to what the lineage decided -- would hand it
      the entry the store now holds for the recorded problem (the recorder's, or, when the recorder's
      evidence was unclean, the replaying child's re-tune): one search where the arms belong. With no
@@ -776,7 +771,7 @@ let () =
     ~f:approx;
   (* Over the arms the run tuned: the decision it reached is what must have left no entry. *)
   p_empty "refused commits leave no decision recorded" ~over:arms8
-    (placement_keys ~dir:refused_cache_dir ());
+    (placement_keys ~cache_dir:refused_cache_dir ());
   (* Whether the recorder attempted a store is its own decision ([Train.tune_placements]'s
      [persist], which an abandoned flip does not stop), read from the record rather than re-derived:
      every placement store run 8 attempted must be reported refused -- for any reason: on a host

@@ -132,6 +132,32 @@ let staging_path path =
 
 let staging_attempts = 8
 
+(* Without [LongPathsEnabled], Win32 refuses a path of MAX_PATH (260) characters or more, its
+   terminating NUL included, and says so only as [ENOENT] -- "No such file or directory" for a
+   directory that plainly exists (gh-ocannl-1228). The length is measured on the path Windows
+   resolves, so a relative one is taken against the working directory. Bytes stand in for UTF-16
+   units, which they equal for an ASCII path and overstate otherwise. *)
+let windows_max_path_chars = 259
+
+let windows_path_length_note ?(win32 = Stdlib.Sys.win32) path =
+  if not win32 then None
+  else
+    let resolved =
+      if Stdlib.Filename.is_relative path then
+        match Stdlib.Sys.getcwd () with
+        | cwd -> Stdlib.Filename.concat cwd path
+        | exception Stdlib.Sys_error _ -> path
+      else path
+    in
+    let length = String.length resolved in
+    if length <= windows_max_path_chars then None
+    else
+      Some
+        (Printf.sprintf
+           "the path is %d characters, past the %d Windows accepts unless long paths are enabled \
+            (LongPathsEnabled)"
+           length windows_max_path_chars)
+
 (* Exclusive creation is what turns "no two writers pick the same name" from a probability into a
    guarantee: a collision — same host, same pid namespace, or an old artifact that happens to
    collide — fails the open rather than sharing the file. *)
@@ -151,9 +177,14 @@ let open_staging path ~binary =
        abort a tuning run (Codex P2, round 3). Only the filesystem's own errors are converted;
        whatever [f] or [before_commit] raise passes through untouched. *)
     | exception Unix.Unix_error (error, fn, arg) ->
+        let length_note =
+          Option.value_map (windows_path_length_note staging) ~default:"" ~f:(fun note ->
+              "; " ^ note)
+        in
         raise
           (Stdlib.Sys_error
-             (Printf.sprintf "%s: %s %s (%s)" staging fn arg (Unix.error_message error)))
+             (Printf.sprintf "%s: %s %s (%s%s)" staging fn arg (Unix.error_message error)
+                length_note))
   in
   attempt 1
 
