@@ -101,6 +101,21 @@ let claim_tensorized label ok =
   | `Advertised -> p label ok
   | `Withheld aggregation -> Verdict.skipped ~aggregation ~backend:backend_name label
 
+(* Whether the tile the device advertises for an f32 site, under the current policy, divides a
+   hand-built micro-kernel of these extents. An unpadded pipeline the tile does not divide declines
+   by construction (CUDA's 16x16x8 tf32 tile against an 8-row kernel), so its census claim is
+   reported skipped there rather than required. *)
+let advertised_tile_divides ~m ~n ~k =
+  match (Context.hardware_limits (Context.auto ())).Ir.Backend_intf.mma with
+  | None -> false
+  | Some mma -> (
+      match
+        Autotune.mma_tile_for_precisions_in_scope mma ~scope:Ir.Backend_intf.Mma_per_statement
+          ~a_prec:Ir.Ops.single ~b_prec:Ir.Ops.single ~d_prec:Ir.Ops.single
+      with
+      | Some (tm, tn, tk) -> m % tm = 0 && n % tn = 0 && k % tk = 0
+      | None -> false)
+
 (* Deterministic operands so sibling graphs compute identical values (forward code is consumed by
    compilation, so each leg builds its own graph). *)
 let make_x tag =
@@ -754,7 +769,9 @@ let () =
   in
   if has_f32_input_mma then (
     let x, kern, y = make_conv8_s2 "cvu2_g" in
+    let kernel_extents = ref None in
     let conv_sched (site : Autotune.conv_site) _seg =
+      kernel_extents := Some (site.Autotune.c_nrow, site.Autotune.c_noc, site.Autotune.c_nred);
       let w =
         match (Context.hardware_limits (Context.auto ())).Ir.Backend_intf.mma with
         | Some m -> m.Ir.Backend_intf.mma_simd_width
@@ -789,8 +806,16 @@ let () =
     let got, census = run_fiss_sched "cvu2_gpu" y ~conv_sched in
     p_all2 "cvu2: GPU staged stride-2 conv (compacted) matches the natural form within tolerance"
       got want8s2 ~f:(fun a b -> Float.(abs (a - b) < 1e-3));
-    claim_tensorized "cvu2: the GPU staged stride-2 conv pipeline's routine is labeled tensorized"
-      (rendered_tensorized census))
+    let rendered_label =
+      "cvu2: the GPU staged stride-2 conv pipeline's routine is labeled tensorized"
+    in
+    match !kernel_extents with
+    | Some (m, n, k) when not (advertised_tile_divides ~m ~n ~k) ->
+        Stdio.eprintf
+          "cvu2: the advertised f32-site tile does not divide the %dx%dx%d micro-kernel\n" m n k;
+        skipped rendered_label
+    | Some _ -> claim_tensorized rendered_label (rendered_tensorized census)
+    | None -> p rendered_label false)
   else (
     skipped "cvu2: GPU staged stride-2 conv (compacted) matches the natural form within tolerance";
     skipped "cvu2: the GPU staged stride-2 conv pipeline's routine is labeled tensorized");
