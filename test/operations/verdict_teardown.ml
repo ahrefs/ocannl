@@ -30,8 +30,11 @@ let has text ~substring = String.is_substring text ~substring
 let escaped_after_fail = "escaped after a failed check"
 let formatted = "printed through Format, never flushed by the test"
 
-(* Byte-for-byte comparisons below, so stdout is binary (Windows would rewrite "\n"). *)
-let () = Stdlib.set_binary_mode_out Stdlib.stdout true
+(* Byte-for-byte comparisons below, so both streams are binary (Windows would rewrite "\n"): the
+   children's stderr is matched line-exactly too. *)
+let () =
+  Stdlib.set_binary_mode_out Stdlib.stdout true;
+  Stdlib.set_binary_mode_out Stdlib.stderr true
 
 let () =
   match Array.to_list Stdlib.Sys.argv with

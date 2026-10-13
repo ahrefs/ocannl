@@ -136,7 +136,11 @@ let scan ~exemptions root generated =
       | Scan.Migration cap ->
           printf "%s -- records<=%d traversals<=%d: %s\n" path cap.records cap.traversals reason)
 
+(* Binary streams: the fixture cases match multi-line reports byte for byte, and Windows' text mode
+   would end each line "\r\n". Dune's diff of this scanner's own golden ignores the line ending. *)
 let () =
+  Stdlib.set_binary_mode_out Stdlib.stdout true;
+  Stdlib.set_binary_mode_out Stdlib.stderr true;
   match Array.to_list Stdlib.Sys.argv with
   | [ _; "--fixture"; root ] -> scan ~exemptions:[] root []
   | [ _; "--fixture-exempt"; root ] ->

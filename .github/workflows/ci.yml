@@ -364,14 +364,16 @@ jobs:
       id: pins
       uses: ./.github/actions/pin-revisions
     # Cache archives on Windows, rather than extracting a raw Cygwin tree
-    # over setup-ocaml's CA regular files. v2 cannot hit the old raw-tree key.
+    # over setup-ocaml's CA regular files. v2 cannot hit the old raw-tree key;
+    # v3 retires v2's payloads, whose switch kept its symlinks and restored them
+    # as Cygwin link files that dune cannot run (flexlink.exe; gh-ocannl-1271).
     - name: Restore opam dependency archives (Windows)
       id: windows-opam-cache
       if: runner.os == 'Windows'
       uses: actions/cache@v6
       with:
         path: ${{ runner.temp }}/ocannl-opam-cache
-        key: opam-deps-windows-v2-${{ matrix.os }}-${{ matrix.ocaml-compiler }}-${{ hashFiles('*.opam') }}-${{ steps.pins.outputs.solution-digest }}-${{ steps.pins.outputs.digest }}
+        key: opam-deps-windows-v3-${{ matrix.os }}-${{ matrix.ocaml-compiler }}-${{ hashFiles('*.opam') }}-${{ steps.pins.outputs.solution-digest }}-${{ steps.pins.outputs.digest }}
     - name: Unpack opam dependencies (Windows)
       if: runner.os == 'Windows' && steps.windows-opam-cache.outputs.cache-hit == 'true'
       shell: 'C:\Progra~1\Git\bin\bash.exe --noprofile --norc -eo pipefail {0}'

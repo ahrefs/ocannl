@@ -54,7 +54,8 @@ fleet_fixture() {
   . "$TOOLS/fleet-registry.sh"
   LAB_MAP='alpha renamed-linux renamed-win renamed-wsl'
   fleet_worker_candidates() { printf '%s\n' "$TMP/fleet"; }
-  touch "$TMP/fleet"; chmod +x "$TMP/fleet"
+  # A shebang, not just the mode bit: MSYS decides -x from a file's content on NTFS.
+  printf '#!/bin/sh\n' >"$TMP/fleet"; chmod +x "$TMP/fleet"
   ask_capped() { printf -v "$1" '%s' 'EXECUTION slot on local-fixture with 4 tokens'; }
   sweep_fleet_probe
   equal 'fleet: probe retains the host identity' "$SWEEP_FLEET_BOX" local-fixture

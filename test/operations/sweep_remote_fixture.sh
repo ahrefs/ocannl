@@ -311,13 +311,18 @@ grep -q '^  minix/hip: error (cannot pin ' <<<"$local_prep_error"
 # The former SSH fake and broken shipping commands must lose these oracles.
 # Children isolate the remote cases and never recurse into the controls.
 if [ "$remote_only" = 0 ]; then
-  python3 - "$0" "$sweep" "$aggregate" "$verdict_probe" "$tmp/remote-controls" <<'PY_CONTROLS'
+  # The children run under this very bash, by path: on Windows a bare `bash` from Python resolves
+  # to System32's WSL launcher, not Git Bash.
+  this_bash=$BASH
+  if command -v cygpath >/dev/null 2>&1; then this_bash=$(cygpath -w "$BASH"); fi
+  python3 - "$this_bash" "$0" "$sweep" "$aggregate" "$verdict_probe" "$tmp/remote-controls" <<'PY_CONTROLS'
 from pathlib import Path
 import re
 import shutil
 import subprocess
 import sys
-harness, sweep, aggregate, verdict, scratch = map(lambda p: Path(p).resolve(), sys.argv[1:])
+this_bash = sys.argv[1]
+harness, sweep, aggregate, verdict, scratch = map(lambda p: Path(p).resolve(), sys.argv[2:])
 controls = [
     ('old-ssh', 'harness', 'local) exec "$SWEEP_TEST_REMOTE_DRIVER" "$@" ;;', 'local) exit 1 ;;', 'remote_row'),
     ('no-evidence', 'sweep', '  window_red "$1" && return 0', '  : # lost evidence arm', 'serial rerun: all clean'),
@@ -346,8 +351,9 @@ for name, target, old, new, oracle in controls:
         raise RuntimeError('ambiguous mutation anchor: ' + name)
     file.chmod(file.stat().st_mode | 0o200)
     file.write_text(text.replace(old, new))
-    command = ['bash', str(dest / 'test/operations' / harness.name), '--remote-only',
-               str(dest / 'tools' / sweep.name), str(aggregate), str(verdict), 'fixture', 'fixture', 'fixture']
+    command = [this_bash, (dest / 'test/operations' / harness.name).as_posix(), '--remote-only',
+               (dest / 'tools' / sweep.name).as_posix(), aggregate.as_posix(), verdict.as_posix(),
+               'fixture', 'fixture', 'fixture']
     result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     (scratch / (name + '.log')).write_text(result.stdout)
     if result.returncode != 1 or oracle not in result.stdout:

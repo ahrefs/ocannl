@@ -715,7 +715,8 @@ let grads_agree ~tol ~what (fused : (string * float array) list) composed =
         "%s %s.grad: worst relative difference %.3g at scale %.3g (not part of the golden)\n%!" what
         name (worst_relative gf gc) scale;
       p_all2
-        (Printf.sprintf "%s: %s.grad agrees within %g relative" what name tol)
+        (Printf.sprintf "%s: %s.grad agrees within %s relative" what name
+           (Utils.normalize_exponent (Printf.sprintf "%g" tol)))
         gf gc ~f:(close ~tol);
       p
         (Printf.sprintf "%s: %s.grad is not identically zero" what name)

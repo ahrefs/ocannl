@@ -5,10 +5,12 @@ open Verdict.Claims
 let command program args =
   let output = Stdlib.Filename.temp_file "946-output-" "" in
   let errors = Stdlib.Filename.temp_file "946-errors-" "" in
+  (* In text mode, as the reports are text: on Windows the reader's stdout ends lines "\r\n", and
+     the claims below match fragments spanning a line end. *)
   let read path =
-    let channel = Stdlib.open_in_bin path in
+    let channel = Stdlib.open_in path in
     Exn.protect
-      ~f:(fun () -> Stdlib.really_input_string channel (Stdlib.in_channel_length channel))
+      ~f:(fun () -> Stdlib.In_channel.input_all channel)
       ~finally:(fun () -> Stdlib.close_in channel)
   in
   Exn.protect

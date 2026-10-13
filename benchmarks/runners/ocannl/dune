@@ -8,7 +8,8 @@
  ; is `(package neural_nets_lib)`.
  (package neural_nets_lib)
  (modules bench_json)
- (libraries base))
+ ; arrayjit.utils for its exponent normalization, so a number prints the same on Windows.
+ (libraries base arrayjit.utils))
 
 ; The measurement protocol and everything the runners share, likewise a library rather than a
 ; module of the executables (gh-ocannl-702): test/operations/bench_self_test drives
