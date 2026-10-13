@@ -448,3 +448,807 @@ let dialect_census content =
             if same_label pass_fail skipped then Some { pass_fail; skipped } else None))
   in
   { pairings; skipped_sites = List.length skips; pass_fail_sites = List.length pass_fails }
+
+(** {1 A gate that reads the population it quantifies (gh-ocannl-1289)}
+
+    [Verdict.gated_all ~when_ ~on label xs ~f] (and [gated_alli], [gated_exists]) skips its claim
+    where [when_] is false. A gate computed from the values under test turns the regression the
+    claim exists to catch into a skip: had the population emptied or lost its interesting members,
+    the gate closes, the skip prints [p]'s passing line, and the golden stays green. That is the
+    gh-ocannl-1115 trap, and it shipped twice in one wave through these very forms — a gate asking
+    whether the claim's own [results] were non-empty (staging#1049), and one asking whether the
+    [real] seeds [results] was mapped from held a tensorized one (staging#1063). A gate comes from
+    an invariant — the backend, an advertised capability, the configuration — never from the
+    population.
+
+    {2 What is read}
+
+    Every application of [gated_all], [gated_alli] or [gated_exists] that carries its [~when_] and
+    both positional arguments: unqualified where no binding of the source gives the name (an open of
+    [Verdict.Claims] is how it arrives), or qualified by a module that denotes [Verdict] -- the name
+    itself, unless a [module Verdict = ...] took it over, or an alias of it ([module V = Verdict]).
+    A file's own [gated_all] is its own. A partial application bound by [let] to a name, under any
+    number of further partial applications, is completed at each application of that name, and
+    [x |> f] and [f @@ x] are read as [f x]; so the
+    [let check = Verdict.gated_all ~when_ ~on in check label xs] wrapper is one site per use. The
+    two sides are then compared by LEXICAL identity, a name plus the binding it resolves to through
+    {!Lexical_scope}, so a shadowed name is a different value; a name no binding of the source gives
+    (a global, or one an unmodelled [open] brought in) is one identity, the same on both sides:
+
+    - the GATE is every value identifier the [~when_] expression spells, and transitively every one
+      spelled by the right-hand side of a [let] it resolves to (function bodies included), or by
+      what the source writes into that binding (below), in any position;
+    - the POPULATION is the identifier the quantified argument spells, and the collections it is
+      BUILT from: following a [let]-bound name into its right-hand side, the branches (not the
+      condition) of an [if], the cases of a [match] (the scrutinee only through a name a case
+      pattern binds and the case returns), the body of a function in data position (a
+      [~default:(fun () -> ...)] thunk), the body and handlers of a [try], the body of a [let],
+      [let module], local [open] or sequence, the elements of a list, array or tuple literal or
+      constructor payload, the operand of [!] and of [ref] and both operands of [@], and the
+      arguments that carry the collection into a function of a standard collection module ([List],
+      [Array], [Hashtbl], [Map], [Option], [String], ... — see {!collection_modules}), reached by
+      name, through an alias ([module Rows = List]), and not under a name a local module took over
+      ([module Map = Custom]); an unqualified [List] is [Stdlib]'s until an [open Base] in scope
+      rebinds it. Which arguments carry it is {!collection_arguments}': every positional one, except
+      that a [Base]-ordered selector ([find], [nth], [take], [remove], ...) contributes its
+      collection alone, a [make]/[create] the value it fills in and not its count, an [init] what
+      its callback returns, and a [range] nothing, plus the data-bearing labels [~default], [~init],
+      [~data];
+    - the body of a binding operator ([let+ x = e in body]), where [x] is a part of [e];
+    - and, for a name it reaches, whatever the source writes into that binding, directly or through
+      a [let alias = name] renaming: the right-hand side of [x := e], and what a writer of a mutable
+      collection module ({!mutable_modules}: [Queue.enqueue x e], [Hashtbl.set x ~key ~data], ... —
+      see {!writers}) is handed with [x], where [x] is the first positional argument in [Base]'s
+      order and any of them in [Stdlib]'s. [x] is a name the source binds; a container only an
+      [open] brought in is not tracked.
+
+    The claim is refused when the two share a binding. The asymmetry is the point: a gate may read
+    what the population is COMPUTED from (the site, the hardware limits, the backend steering an
+    [if]), which is how a capability judgment over the same program reads, and must not read the
+    population or a collection it is mapped, filtered or appended from.
+
+    {2 What is not read}
+
+    The forms above are a closed list: any other expression form ends the population side there, and
+    a population reached only through one is not compared. The ones known to matter:
+
+    The population is not followed through a call to any other function (a file-local
+    [gpu_seeds pre] stops at the call), through a record field, through a function parameter (the
+    caller's argument is not substituted), or through an [open List]-style unqualified collection
+    call; a destructured [let] binds names that are followed no further, and a value reached through
+    a module path ([M.rows]) is an identity on neither side. A gate threaded into a wrapper as its
+    own parameter ([let check ~when_ label xs = gated_all ~when_ ...]) is read at the wrapper's
+    definition, where it is a parameter, and not at its callers. [Verdict.gated]'s boolean is not a
+    population and is out of scope. Each of these is a place a population gate can hide from this
+    reader; none is a place it reports one that is not there.
+
+    A [gated_*] application the reader cannot complete — a partial application no [let] binds, a
+    [let]-bound one that no use the reader resolves completes (reached only through a module path,
+    say), or a claim (or a [let]-bound wrapper of one) named as a value, handed to [List.iter] say —
+    is reported as unread rather than counted as clean, so the boundary is loud there. *)
+
+(** What a module name denotes to this reader. A collection module carries whether its functions
+    take arguments in [Stdlib]'s order (the function first, the collection last) rather than
+    [Base]'s (the collection first). *)
+type gate_module =
+  | Verdict_module
+  | Collection_module of { stdlib : bool; mutable_ : bool }
+      (** [mutable_]: its values are mutable containers ({!mutable_modules}). *)
+  | Standard_library of { stdlib : bool }
+      (** [Base] or [Core] ([stdlib = false]), [Stdlib] or [Caml] ([true]): an [open] of one rebinds
+          the collection modules to its own. *)
+  | Local_structure of string list
+      (** A [struct ... end] of this source, with the value names it binds: an [open] of it brings
+          them into scope as this source's own. *)
+  | Other_module
+
+type gate_denotation = {
+  identity : int;
+  mutable definition : (expression * (gate_denotation, gate_module) Lexical_scope.env) option;
+      (** Mutable only so that a recursive group's definitions can see each other: they are set once
+          the group's own scope exists. *)
+}
+
+type gate_reading = {
+  form : string;  (** The callee as written: [gated_all], [Verdict.gated_exists], a wrapper. *)
+  line : int;
+  gate : string;  (** The [~when_] expression, printed. *)
+  reads : string list;  (** The population bindings the gate reads, by name, sorted. *)
+}
+
+type gate_census = {
+  readings : gate_reading list;  (** Claims whose gate reads their population, in source order. *)
+  gated_sites : int;  (** Every completed [gated_*] claim the reader compared. *)
+  unread : (string * int) list;  (** [gated_*] applications it could not complete: callee, line. *)
+}
+
+let gated_forms = [ "gated_all"; "gated_alli"; "gated_exists" ]
+
+(** The modules whose functions build a collection from their positional arguments, by the module
+    component just before the function's name ([List.map], [Base.List.map], [Stdlib.List.map]). *)
+let collection_modules =
+  [
+    (* Base and Core *)
+    "List";
+    "Array";
+    "Sequence";
+    "Hashtbl";
+    "Hash_set";
+    "Hash_queue";
+    "Map";
+    "Set";
+    "Queue";
+    "Linked_queue";
+    "Stack";
+    "Deque";
+    "Doubly_linked";
+    "Bag";
+    "Fqueue";
+    "Option";
+    "Result";
+    "Option_array";
+    "Uniform_array";
+    "Nonempty_list";
+    "String";
+    "Bytes";
+    (* Stdlib *)
+    "ListLabels";
+    "ArrayLabels";
+    "StringLabels";
+    "BytesLabels";
+    "Seq";
+    "Dynarray";
+    (* submodules *)
+    "Assoc";
+    "Poly";
+  ]
+
+(** The collection modules whose values are mutable containers: only a writer of one of these writes
+    into its argument; [Set.add] or [Map.update] returns a new collection and leaves its argument as
+    it was. *)
+let mutable_modules =
+  [
+    "Array";
+    "ArrayLabels";
+    "Bytes";
+    "BytesLabels";
+    "Hashtbl";
+    "Hash_set";
+    "Hash_queue";
+    "Queue";
+    "Linked_queue";
+    "Stack";
+    "Deque";
+    "Doubly_linked";
+    "Bag";
+    "Option_array";
+    "Uniform_array";
+    "Dynarray";
+  ]
+
+(* Whether a claim's arguments so far are all it takes: its gate, and its label and population. *)
+let complete arguments =
+  List.exists arguments ~f:(function Ppxlib.Asttypes.Labelled "when_", _, _ -> true | _ -> false)
+  && List.count arguments ~f:(function Ppxlib.Asttypes.Nolabel, _, _ -> true | _ -> false) >= 2
+
+(** Which arguments of a collection-module function the population is built from, by the function's
+    name and the library's argument order.
+
+    Every positional argument by default: [map], [Map.of_alist_exn (module String) rows], [append],
+    [zip], [Set.add s x], [cons] all build the population from whatever they are handed, the
+    collection and the elements put into it alike. The exception is a selector in [Base]'s order
+    ({!selectors}: [find], [nth], [take], [remove], [update], ...), whose first positional argument
+    is the collection and whose later ones are a key, an index or a count: those select the
+    population, as an [if] condition steers one, and a gate on them is a gate on what was selected,
+    not on what was found. In [Stdlib]'s order the collection may come last ([List.assoc k l],
+    [List.mem x l]), so a [Stdlib]-ordered selector takes every positional argument too -- the loud
+    direction. A generator's count builds nothing: [make] and [create] build from the value they
+    fill in, [init] from what its callback returns (labeled [~f], or positional after the count),
+    and [range] from nothing. An inserting function's labeled [~key] joins the population
+    ([Map.set m ~key ~data]), and so does what a transforming function's [~f] returns
+    ([List.map xs ~f]), or an update-like selector's ([Map.update m k ~f], [find_map]); a selector's
+    key and a [find] predicate do not. A writer's [~f] is written into its container.
+
+    The labeled arguments that carry data rather than steer are followed too: [~default] (the
+    fallback [Option.value] returns), [~init] (a fold's seed) and [~data] (a stored element). *)
+let selectors =
+  [
+    "find";
+    "nth";
+    "get";
+    "take";
+    "drop";
+    "sub";
+    "slice";
+    "split_n";
+    "chunks_of";
+    "mem";
+    "remove";
+    "update";
+    "change";
+  ]
+
+let collection_arguments ~stdlib name arguments =
+  let starts prefix = String.is_prefix name ~prefix in
+  let positional =
+    List.filter_map arguments ~f:(function
+      | Ppxlib.Asttypes.Nolabel, argument -> Some argument
+      | _ -> None)
+  in
+  let data =
+    List.filter_map arguments ~f:(function
+      | (Ppxlib.Asttypes.Labelled label | Optional label), argument
+        when List.mem [ "default"; "init"; "data" ] label ~equal:String.equal ->
+          Some argument
+      | _ -> None)
+  in
+  if starts "range" then (* [List.range start stop]: bounds build nothing. *) []
+  else if starts "init" then
+    (* [Array.init n ~f], [Stdlib.Array.init n f]: the elements are what the callback returns
+       ({!population} follows a function in data position into its body); the count, the first
+       positional argument, builds nothing. *)
+    List.drop positional 1
+    @ List.filter_map arguments ~f:(function
+      | (Ppxlib.Asttypes.Labelled "f" | Optional "f"), callback -> Some callback
+      | _ -> None)
+    @ data
+  else if List.exists [ "make"; "create"; "replicate" ] ~f:starts then
+    (* [Array.make n x], [Array.create ~len x]: the value filled in, not the count before it. *)
+    (match positional with _ :: (_ :: _ as values) -> values | values -> values) @ data
+  else if (not stdlib) && List.exists selectors ~f:starts then
+    List.take positional 1
+    (* [Map.update m k ~f], [List.find_map xs ~f]: the callback's result is the population's, a
+       [find] predicate's is not. *)
+    @ (if List.exists [ "update"; "change"; "find_map" ] ~f:starts then
+         List.filter_map arguments ~f:(function
+           | (Ppxlib.Asttypes.Labelled "f" | Optional "f"), callback -> Some callback
+           | _ -> None)
+       else [])
+    @ data
+  else
+    (* An inserting function's labeled key joins the population ([Map.set m ~key ~data]); a
+       selector's selects it, above. *)
+    positional
+    @ List.filter_map arguments ~f:(function
+      | (Ppxlib.Asttypes.Labelled "key" | Optional "key"), key -> Some key
+      (* [List.map xs ~f]: what the callback returns is the population's elements ({!population}
+         follows a function in data position into its body); a selector's [~f] is a predicate. *)
+      | (Ppxlib.Asttypes.Labelled "f" | Optional "f"), callback -> Some callback
+      | _ -> None)
+    @ data
+
+(** The collection-module functions that write into their first positional argument, a mutable
+    container: what they are handed joins it. *)
+let writers =
+  [
+    "set";
+    "add";
+    "push";
+    "enqueue";
+    "replace";
+    "fill";
+    "blit";
+    "update";
+    "change";
+    "transfer";
+    "find_or_add";
+  ]
+
+(* A callee under type annotations, [(List.map : ...) f xs], is the callee. *)
+let rec strip_constraints expr =
+  match expr.pexp_desc with
+  | Pexp_constraint (inner, _) | Pexp_coerce (inner, _, _) -> strip_constraints inner
+  | _ -> expr
+
+let gate_census content =
+  let ast = Read.structure_of content in
+  let readings = ref [] and gated_sites = ref 0 in
+  (* What is written into a binding after it is made -- [x := e], [Queue.enqueue x e] -- by the
+     binding's identity, with the scope it was written in. *)
+  let writes = Hashtbl.create (module Int) in
+  (* Claims are compared once the walk is over, when every write is known. *)
+  let pending = ref [] in
+  let partials = ref [] and bound_partials = ref [] and consumed = Hash_set.create (module Int) in
+  let position expr = expr.pexp_loc.loc_start.pos_cnum in
+  (* The nodes a claim's resolution went through, made [consumed] only once the claim is read --
+     compared, or reported unread -- so that a binding no read claim reaches stays uncompleted. *)
+  let commit marks = Hash_set.iter marks ~f:(Hash_set.add consumed) in
+  (* The right-hand side of every [let], under any type constraint: a gated claim bound there,
+     partially applied or merely renamed, is read at the uses of the name it is bound to. *)
+  let bound = Hash_set.create (module Int) in
+  let rec bind expr =
+    Hash_set.add bound (position expr);
+    match expr.pexp_desc with Pexp_constraint (inner, _) -> bind inner | _ -> ()
+  in
+  let binder =
+    object
+      inherit Ast_traverse.iter as super
+
+      method! value_binding binding =
+        bind binding.pvb_expr;
+        super#value_binding binding
+    end
+  in
+  binder#structure ast;
+  let walker =
+    object (self)
+      inherit [gate_denotation, gate_module] Lexical_scope.scoped as super
+      val mutable next_local = 0
+      val mutable quiet = 0
+      val mutable collecting : (string * gate_denotation) list ref option = None
+
+      method local =
+        next_local <- next_local - 1;
+        { identity = next_local; definition = None }
+
+      (* A module denotes [true] when it is [Verdict] or reaches into it ([Verdict.Claims], a
+         [module V = Verdict] alias), [false] when it is anything else; a name some binding the scan
+         cannot see into takes over denotes something else. *)
+      method module_path env path =
+        let components = Read.flatten_longident path in
+        let head = Lexical_scope.head path in
+        let single = List.length components = 1 in
+        Some
+          (match Map.find env.Lexical_scope.modules head with
+          | Some denotes when single -> denotes
+          | Some Verdict_module -> Verdict_module
+          | Some (Collection_module _ as collection)
+            when List.for_all (List.tl_exn components) ~f:(fun c ->
+                     List.mem collection_modules c ~equal:String.equal) ->
+              (* [List.Assoc] under an [open Base]. *)
+              collection
+          | Some (Standard_library { stdlib })
+            when List.for_all (List.tl_exn components) ~f:(fun c ->
+                     List.mem collection_modules c ~equal:String.equal) ->
+              (* [B.List] under [module B = Base]. *)
+              Collection_module
+                {
+                  stdlib;
+                  mutable_ = List.mem mutable_modules (List.last_exn components) ~equal:String.equal;
+                }
+          | Some _ -> Other_module
+          | None when String.equal head "Verdict" -> Verdict_module
+          | None when single && List.mem [ "Base"; "Core" ] head ~equal:String.equal ->
+              Standard_library { stdlib = false }
+          | None when single && List.mem [ "Stdlib"; "Caml" ] head ~equal:String.equal ->
+              Standard_library { stdlib = true }
+          | None ->
+              (* [List], [Base.List], [Stdlib.List], [List.Assoc]: a path through the standard
+                 libraries' collection modules alone. *)
+              let standard = [ "Base"; "Core"; "Stdlib"; "Caml" ] in
+              if
+                List.for_all components ~f:(fun c ->
+                    List.mem collection_modules c ~equal:String.equal
+                    || List.mem standard c ~equal:String.equal)
+                && List.mem collection_modules (List.last_exn components) ~equal:String.equal
+              then
+                Collection_module
+                  {
+                    (* An unqualified [List] is [Stdlib]'s unless an [open Base] in scope rebound
+                       it, which {!opened} records. *)
+                    stdlib = not (List.mem [ "Base"; "Core" ] head ~equal:String.equal);
+                    mutable_ =
+                      List.mem mutable_modules (List.last_exn components) ~equal:String.equal;
+                  }
+              else Other_module)
+
+      method! shadowed = Some Other_module
+
+      method! module_of env module_expr =
+        match module_expr.pmod_desc with
+        | Pmod_structure items ->
+            Some
+              (Local_structure
+                 (List.concat_map items ~f:(fun item ->
+                      match item.pstr_desc with
+                      | Pstr_value (_, bindings) ->
+                          Lexical_scope.pattern_vars (List.map bindings ~f:(fun b -> b.pvb_pat))
+                      | Pstr_primitive { pval_name = { txt; _ }; _ } -> [ txt ]
+                      | _ -> [])))
+        | _ -> super#module_of env module_expr
+
+      (* An [open Base] rebinds every collection module to [Base]'s, and an [open Stdlib] back to
+         [Stdlib]'s, from there to the end of its scope. *)
+      method! opened ~top:_ ~include_:_ env denotes =
+        match denotes with
+        | Some (Standard_library { stdlib }) ->
+            {
+              env with
+              Lexical_scope.modules =
+                List.fold collection_modules ~init:env.Lexical_scope.modules ~f:(fun modules name ->
+                    Map.set modules ~key:name
+                      ~data:
+                        (Collection_module
+                           { stdlib; mutable_ = List.mem mutable_modules name ~equal:String.equal }));
+            }
+        | Some (Local_structure names) ->
+            (* Its names shadow whatever they denoted, a [gated_all] of its own included. *)
+            Lexical_scope.bind_values env names self#local
+        | _ -> env
+
+      method! binding_denotes env binding =
+        let identity = binding.pvb_loc.loc_start.pos_cnum + 1 in
+        match Read.pattern_name binding.pvb_pat with
+        | Some _ -> { identity; definition = Some (binding.pvb_expr, env) }
+        | None -> { identity; definition = None }
+
+      (* A recursive group's names see one another's definitions: each definition's scope is the
+         group's own, which exists only once the group's denotations do. *)
+      method! denotations env rec_flag bindings =
+        match rec_flag with
+        | Nonrecursive -> super#denotations env rec_flag bindings
+        | Recursive ->
+            let denotes =
+              List.map bindings ~f:(fun binding ->
+                  { identity = binding.pvb_loc.loc_start.pos_cnum + 1; definition = None })
+            in
+            let scope = self#bind_group env bindings denotes in
+            List.iter2_exn denotes bindings ~f:(fun denotation binding ->
+                if Option.is_some (Read.pattern_name binding.pvb_pat) then
+                  denotation.definition <- Some (binding.pvb_expr, scope));
+            denotes
+
+      method! attribute _ attr = attr
+
+      method! ident env ident =
+        match (collecting, ident.txt) with
+        | Some found, Ppxlib.Longident.Lident name ->
+            (* A name no binding of this source gives, one an unmodelled [open] may have brought in,
+               is still a name: identity 0, the same on both sides. *)
+            let denotation =
+              Option.value (Lexical_scope.lookup env name)
+                ~default:{ identity = 0; definition = None }
+            in
+            found := (name, denotation) :: !found
+        | _ -> ()
+
+      (* Every value identifier [expr] spells, resolved in [env], without recording sites. *)
+      method identifiers env expr =
+        let saved = collecting in
+        let found = ref [] in
+        collecting <- Some found;
+        quiet <- quiet + 1;
+        Exn.protect
+          ~f:(fun () -> ignore (self#expression env expr : expression))
+          ~finally:(fun () ->
+            collecting <- saved;
+            quiet <- quiet - 1);
+        List.rev !found
+
+      (* The gate's side: everything it spells, through every [let] it reaches. *)
+      method gate_reads env expr =
+        let seen = Hash_set.create (module Int) in
+        let reads = Hash_set.Poly.create () in
+        let rec visit env expr =
+          List.iter (self#identifiers env expr) ~f:(fun (name, denotation) ->
+              Hash_set.add reads (name, denotation.identity);
+              if denotation.identity <> 0 && not (Hash_set.mem seen denotation.identity) then (
+                Hash_set.add seen denotation.identity;
+                Option.iter denotation.definition ~f:(fun (rhs, env) -> visit env rhs);
+                List.iter (Hashtbl.find_multi writes denotation.identity) ~f:(fun (written, env) ->
+                    visit env written)))
+        in
+        visit env expr;
+        reads
+
+      (* The population's side: the collections it is built from. *)
+      method population env expr =
+        let seen = Hash_set.create (module Int) in
+        let found = Hash_set.Poly.create () in
+        let rec visit env expr =
+          match expr.pexp_desc with
+          | Pexp_ident { txt = Ppxlib.Longident.Lident name; _ } -> (
+              match Lexical_scope.lookup env name with
+              | Some denotation ->
+                  Hash_set.add found (name, denotation.identity);
+                  if not (Hash_set.mem seen denotation.identity) then (
+                    Hash_set.add seen denotation.identity;
+                    Option.iter denotation.definition ~f:(fun (rhs, env) -> visit env rhs);
+                    List.iter (Hashtbl.find_multi writes denotation.identity)
+                      ~f:(fun (written, env) -> visit env written))
+              | None -> Hash_set.add found (name, 0))
+          | Pexp_constraint (inner, _)
+          | Pexp_coerce (inner, _, _)
+          | Pexp_sequence (_, inner)
+          | Pexp_letexception (_, inner)
+          | Pexp_newtype (_, inner) ->
+              visit env inner
+          | Pexp_open ({ popen_expr; _ }, inner) ->
+              visit
+                (self#opened ~top:false ~include_:false env (self#module_of env popen_expr))
+                inner
+          | Pexp_letmodule ({ txt = Some name; _ }, module_expr, inner) ->
+              visit (self#bind_module env name module_expr) inner
+          | Pexp_letmodule ({ txt = None; _ }, _, inner) -> visit env inner
+          | Pexp_letop { let_; ands; body } ->
+              (* [let+ x = e in body]: [x] is a part of [e], as a match case's name is of its
+                 scrutinee. *)
+              visit
+                (List.fold (let_ :: ands) ~init:env ~f:(fun scope operand ->
+                     Lexical_scope.bind_values scope
+                       (Lexical_scope.pattern_vars [ operand.pbop_pat ])
+                       { (self#local) with definition = Some (operand.pbop_exp, env) }))
+                body
+          | Pexp_ifthenelse (_, yes, no) ->
+              visit env yes;
+              Option.iter no ~f:(visit env)
+          | Pexp_match (scrutinee, cases) ->
+              (* The scrutinee steers; a name a case pattern binds is a part of it, so a case that
+                 returns one is built from the scrutinee. *)
+              List.iter cases ~f:(fun case ->
+                  let part = { (self#local) with definition = Some (scrutinee, env) } in
+                  visit
+                    (Lexical_scope.bind_values env
+                       (Lexical_scope.pattern_vars [ case.pc_lhs ])
+                       part)
+                    case.pc_rhs)
+          | Pexp_function (params, _, body) -> (
+              (* A thunk or callback in data position ([~default:(fun () -> ...)]): what it returns,
+                 in either syntax. *)
+              let env =
+                List.fold params ~init:env ~f:(fun env param ->
+                    match param.pparam_desc with
+                    | Pparam_val (_, _, pattern) -> self#bind_patterns env [ pattern ]
+                    | Pparam_newtype _ -> env)
+              in
+              match body with
+              | Pfunction_body body -> visit env body
+              | Pfunction_cases (cases, _, _) ->
+                  List.iter cases ~f:(fun case ->
+                      visit (self#bind_patterns env [ case.pc_lhs ]) case.pc_rhs))
+          | Pexp_try (body, cases) ->
+              (* Unlike a scrutinee, a protected body IS the value on success. *)
+              visit env body;
+              List.iter cases ~f:(fun case ->
+                  visit (self#bind_patterns env [ case.pc_lhs ]) case.pc_rhs)
+          | Pexp_let (rec_flag, bindings, body) ->
+              visit (self#bind_group env bindings (self#denotations env rec_flag bindings)) body
+          | Pexp_tuple elements | Pexp_array elements -> List.iter elements ~f:(visit env)
+          | Pexp_construct (_, Some payload) | Pexp_variant (_, Some payload) -> visit env payload
+          | Pexp_apply (callee, arguments) -> (
+              match self#pipeline callee arguments with
+              | Some (callee, arguments, _) ->
+                  visit env { expr with pexp_desc = Pexp_apply (callee, arguments) }
+              | None -> (
+                  let positional =
+                    List.filter_map arguments ~f:(function
+                      | Ppxlib.Asttypes.Nolabel, argument -> Some argument
+                      | _ -> None)
+                  in
+                  match (strip_constraints callee).pexp_desc with
+                  | Pexp_ident { txt = Ppxlib.Longident.Lident ("!" | "@" | "ref"); _ } ->
+                      List.iter positional ~f:(visit env)
+                  | Pexp_ident { txt = Ppxlib.Longident.Ldot (prefix, name); _ } -> (
+                      match self#module_path env prefix with
+                      | Some (Collection_module { stdlib; _ }) ->
+                          List.iter (collection_arguments ~stdlib name arguments) ~f:(visit env)
+                      | _ -> ())
+                  | _ -> ()))
+          | _ -> ()
+        in
+        visit env expr;
+        found
+
+      (* A write into a binding: [x := e], or a writer of a collection module ({!writers}) handed
+         [x] first. *)
+      method record_write env callee arguments =
+        (* The binding written into, through any [let alias = rows] renaming on the way: a write
+           through an alias is a write into what it names. *)
+        let rec target env expr =
+          match expr.pexp_desc with
+          | Pexp_ident { txt = Ppxlib.Longident.Lident name; _ } -> (
+              match Lexical_scope.lookup env name with
+              | Some
+                  {
+                    definition =
+                      Some
+                        ( ({ pexp_desc = Pexp_ident _ | Pexp_constraint _ | Pexp_coerce _; _ } as
+                           aliased),
+                          env );
+                    _;
+                  } ->
+                  target env aliased
+              | Some { identity; _ } -> Some identity
+              | None -> None)
+          | Pexp_constraint (inner, _) | Pexp_coerce (inner, _, _) -> target env inner
+          | _ -> None
+        in
+        let target = target env in
+        let record identity written =
+          List.iter written ~f:(fun e -> Hashtbl.add_multi writes ~key:identity ~data:(e, env))
+        in
+        match ((strip_constraints callee).pexp_desc, arguments) with
+        | ( Pexp_ident { txt = Ppxlib.Longident.Lident ":="; _ },
+            [ (Ppxlib.Asttypes.Nolabel, lhs); (Ppxlib.Asttypes.Nolabel, rhs) ] ) ->
+            Option.iter (target lhs) ~f:(fun identity -> record identity [ rhs ])
+        | Pexp_ident { txt = Ppxlib.Longident.Ldot (prefix, name); _ }, _
+          when List.exists writers ~f:(fun w ->
+                   String.is_prefix (String.chop_prefix_if_exists name ~prefix:"unsafe_") ~prefix:w)
+          -> (
+            match self#module_path env prefix with
+            | Some (Collection_module { stdlib; mutable_ = true }) ->
+                let positional =
+                  List.filter_map arguments ~f:(function
+                    | Ppxlib.Asttypes.Nolabel, argument -> Some argument
+                    | _ -> None)
+                in
+                let data =
+                  List.filter_map arguments ~f:(function
+                    | (Ppxlib.Asttypes.Labelled label | Optional label), argument
+                      when List.mem [ "data"; "default"; "init"; "key" ] label ~equal:String.equal
+                      ->
+                        Some argument
+                    | _ -> None)
+                in
+                (* In [Base]'s order the container comes first. [Stdlib]'s varies by function
+                   ([Queue.add x q], [Hashtbl.add t k v]), so there every positional argument is a
+                   possible container of all the others -- the loud direction. *)
+                (* A labeled destination is a container and a labeled source written into it:
+                   [Array.blit ~src ~src_pos ~dst ~dst_pos ~len]. *)
+                let labeled name =
+                  List.filter_map arguments ~f:(function
+                    | (Ppxlib.Asttypes.Labelled label | Optional label), argument
+                      when String.equal label name ->
+                        Some argument
+                    | _ -> None)
+                in
+                let containers =
+                  (if stdlib then positional else List.take positional 1) @ labeled "dst"
+                in
+                List.iter containers ~f:(fun container ->
+                    Option.iter (target container) ~f:(fun identity ->
+                        record identity
+                          (List.filter positional ~f:(fun other -> not (phys_equal other container))
+                          @ labeled "src" @ labeled "f" @ data)))
+            | _ -> ())
+        | _ -> ()
+
+      (* [x |> f] and [f @@ x], as the application [f x]; with the position of [f] when [f] is
+         itself an application, which the rewrite absorbs. *)
+      method pipeline callee arguments =
+        match (Read.longident_of callee, arguments) with
+        | Some [ "|>" ], [ (Ppxlib.Asttypes.Nolabel, x); (Ppxlib.Asttypes.Nolabel, f) ]
+        | Some [ "@@" ], [ (Ppxlib.Asttypes.Nolabel, f); (Ppxlib.Asttypes.Nolabel, x) ] -> (
+            match f.pexp_desc with
+            | Pexp_apply (inner, inner_arguments) ->
+                Some (inner, inner_arguments @ [ (Ppxlib.Asttypes.Nolabel, x) ], Some (position f))
+            | _ -> Some (f, [ (Ppxlib.Asttypes.Nolabel, x) ], None))
+        | _ -> None
+
+      (* The [gated_*] claim an expression reaches, with every argument it has been handed so far,
+         each with the scope it was written in. The nodes it absorbs -- the callee of an
+         application, an application a pipeline rewrites -- are marked [consumed]: read here, they
+         are not read again on their own. *)
+      method gated env expr ~through ~marks =
+        match expr.pexp_desc with
+        | Pexp_constraint (inner, _) -> self#gated env inner ~through ~marks
+        | Pexp_ident { txt; _ } -> (
+            let form () = Option.map (Read.longident_of expr) ~f:(String.concat ~sep:".") in
+            match txt with
+            | Ppxlib.Longident.Lident name -> (
+                (* A local binding of the name comes first: a file's own [gated_all] is not
+                   [Verdict]'s, and a [let check = Verdict.gated_all ...] is followed. *)
+                match Lexical_scope.lookup env name with
+                | Some { identity; definition = Some (rhs, rhs_env) }
+                  when not (Hash_set.mem through identity) ->
+                    Hash_set.add through identity;
+                    (* The binding this use completes, through every renaming on the way. *)
+                    Hash_set.add marks (position rhs);
+                    Option.map (self#gated rhs_env rhs ~through ~marks) ~f:(fun (_, arguments) ->
+                        (name, arguments))
+                | Some _ -> None
+                | None ->
+                    if List.mem gated_forms name ~equal:String.equal then
+                      Option.map (form ()) ~f:(fun form -> (form, []))
+                    else None)
+            | Ppxlib.Longident.Ldot (prefix, name)
+              when List.mem gated_forms name ~equal:String.equal
+                   && Poly.equal (self#module_path env prefix) (Some Verdict_module) ->
+                Option.map (form ()) ~f:(fun form -> (form, []))
+            | _ -> None)
+        | Pexp_apply (callee, arguments) -> (
+            let callee, arguments, absorbed =
+              match self#pipeline callee arguments with
+              | Some rewritten -> rewritten
+              | None -> (callee, arguments, None)
+            in
+            match self#gated env callee ~through ~marks with
+            | Some (form, prior) ->
+                Option.iter absorbed ~f:(Hash_set.add marks);
+                Hash_set.add marks (position callee);
+                Some
+                  ( form,
+                    prior @ List.map arguments ~f:(fun (label, argument) -> (label, argument, env))
+                  )
+            | None -> None)
+        | _ -> None
+
+      method! expression env expr =
+        (if quiet = 0 then
+           match expr.pexp_desc with
+           | Pexp_apply (callee, arguments) -> (
+               (* [sample |> Queue.enqueue queue] is [Queue.enqueue queue sample]. *)
+               match self#pipeline callee arguments with
+               | Some (callee, arguments, _) -> self#record_write env callee arguments
+               | None -> self#record_write env callee arguments)
+           | _ -> ());
+        (if quiet = 0 && not (Hash_set.mem consumed (position expr)) then
+           match expr.pexp_desc with
+           | Pexp_ident _ -> (
+               (* A claim named as a value rather than applied -- handed to [List.iter], say -- is
+                  one this reader cannot complete. A [let] binding it to another name is not a use;
+                  that name's own uses are. *)
+               let marks = Hash_set.create (module Int) in
+               match self#gated env expr ~through:(Hash_set.create (module Int)) ~marks with
+               | Some (form, arguments)
+                 when (not (complete arguments)) && not (Hash_set.mem bound (position expr)) ->
+                   commit marks;
+                   partials := (form, expr.pexp_loc.loc_start.pos_lnum) :: !partials
+               | _ -> ())
+           | Pexp_apply _ -> (
+               let marks = Hash_set.create (module Int) in
+               match self#gated env expr ~through:(Hash_set.create (module Int)) ~marks with
+               | None -> ()
+               | Some (form, arguments) -> (
+                   let gate =
+                     List.find_map arguments ~f:(function
+                       | Ppxlib.Asttypes.Labelled "when_", argument, env -> Some (argument, env)
+                       | _ -> None)
+                   in
+                   let positional =
+                     List.filter_map arguments ~f:(function
+                       | Ppxlib.Asttypes.Nolabel, argument, env -> Some (argument, env)
+                       | _ -> None)
+                   in
+                   let line = expr.pexp_loc.loc_start.pos_lnum in
+                   match (gate, List.nth positional 1) with
+                   | Some (gate, gate_env), Some (population, population_env)
+                     when complete arguments ->
+                       commit marks;
+                       Int.incr gated_sites;
+                       pending :=
+                         (fun () ->
+                           let reads = self#gate_reads gate_env gate in
+                           let shared =
+                             Hash_set.filter
+                               (self#population population_env population)
+                               ~f:(Hash_set.mem reads)
+                             |> Hash_set.to_list |> List.map ~f:fst
+                             |> List.dedup_and_sort ~compare:String.compare
+                           in
+                           if not (List.is_empty shared) then
+                             readings :=
+                               {
+                                 form;
+                                 line;
+                                 gate = Ppxlib.Pprintast.string_of_expression gate;
+                                 reads = shared;
+                               }
+                               :: !readings)
+                         :: !pending
+                   | _ ->
+                       (* A partial application bound by [let] is completed at that name's uses,
+                          which are read on their own -- unless none is, below. *)
+                       if Hash_set.mem bound (position expr) then
+                         bound_partials := (position expr, form, line) :: !bound_partials
+                       else (
+                         commit marks;
+                         partials := (form, line) :: !partials)))
+           | _ -> ());
+        super#expression env expr
+    end
+  in
+  ignore
+    (walker#structure { Lexical_scope.frames = []; modules = Map.empty (module String) } ast
+      : structure);
+  List.iter (List.rev !pending) ~f:(fun compare -> compare ());
+  (* A bound partial application no resolved use completed -- reached only through a module path,
+     say, or from another source -- is one this reader never compared. *)
+  let uncompleted =
+    List.filter_map !bound_partials ~f:(fun (at, form, line) ->
+        if Hash_set.mem consumed at then None else Some (form, line))
+  in
+  let unread =
+    List.sort (!partials @ uncompleted) ~compare:(fun (_, a) (_, b) -> Int.compare a b)
+  in
+  { readings = List.rev !readings; gated_sites = !gated_sites; unread }

@@ -54,6 +54,13 @@
    prints [p]'s [<claim>: true]. [Verdict.gated] picks the dialect itself; the pairing is refused
    here so that the mixed spelling does not regrow ([Verdict_scan.dialect_census]).
 
+   gh-ocannl-1289 adds a fourth, about what a GATE may read. [Verdict.gated_all] and its siblings
+   skip where [~when_] is false, so a gate computed from the population under test turns the
+   regression that empties or changes it into a skip -- the gh-ocannl-1115 trap, shipped twice in
+   one wave through these very forms. [Verdict_scan.gate_census] compares what the gate reads with
+   what the population is built from, by lexical identity, and refuses a shared binding; a gate may
+   still read what the population is COMPUTED from, which is how a capability judgment reads.
+
    Every synthetic control below earned its place by a mutation run -- the scanner mechanism it pins
    disabled, this alias re-run, exactly that control failing. The manifest of those runs, one row
    per mechanism with the control labels and the retained `tools/test-run.sh` run ids, is
@@ -3335,6 +3342,569 @@ let run_dialect_refusal_control () =
     ~f:(refuse_dialect_pairing ~fail ~source:"fixture.ml");
   ("refuses a planted pass_fail and skipped pairing, naming the gated remedy", !refused)
 
+(* {1 A gate never reads the population it quantifies (gh-ocannl-1289)}
+
+   [Verdict.gated_all ~when_ ~on label xs ~f] skips where [when_] is false. A gate computed from
+   [xs], or from the collection [xs] is mapped from, turns the regression the claim exists for into
+   a skip -- the gh-ocannl-1115 trap, which shipped twice in one wave through these forms. The
+   reader is [Verdict_scan.gate_census]; its header states what it follows and what it does not. The
+   controls are the readings it must report (the population bindings each gate reads, or [unread
+   <form>] for a claim it cannot complete) and the near misses it must accept: above all a gate that
+   reads what the population is COMPUTED from -- the program, the limits, the backend that steers
+   the population's [if] -- which is how a capability judgment reads. *)
+let gate_population_controls =
+  [
+    ( "refuses a gate that tests its own population for emptiness",
+      {ocaml|open Verdict.Claims
+let () =
+  let results = List.map seeds ~f:run in
+  gated_all ~when_:(not (List.is_empty results)) ~on:backend_name
+    "every GPU sketch matches the materialized run" results ~f:snd|ocaml},
+      [ "results, run, seeds" ] );
+    ( "refuses a gate read off the collection the population is mapped from",
+      {ocaml|open Verdict.Claims
+let () =
+  let real = if on_gpu then gpu_seeds ~limits pre else [] in
+  let results = List.mapi real ~f:(fun i q -> (q, run i q)) in
+  gated_exists
+    ~when_:(List.exists real ~f:(fun q -> q.Autotune.sk_mma))
+    ~on:backend_name "a tensorized sketch matches the materialized run" results
+    ~f:(fun (q, ok) -> q.Autotune.sk_mma && ok)|ocaml},
+      [ "real" ] );
+    ( "refuses a gate bound to a name that reads the population's source",
+      {ocaml|let () =
+  let real = if on_gpu then gpu_seeds ~limits pre else [] in
+  let has_mma = List.exists real ~f:(fun q -> q.Autotune.sk_mma) in
+  let results = List.filter_map real ~f:run in
+  Verdict.gated_exists ~when_:has_mma ~on:backend_name "a tensorized sketch matches" results
+    ~f:snd|ocaml},
+      [ "real" ] );
+    ( "refuses a gate read off a collection a match branch builds the population from",
+      {ocaml|let () =
+  let raw = probe () in
+  let rows = match mode with `Fast -> List.filter raw ~f:Fn.id | `Slow -> [] in
+  Verdict.gated_alli ~when_:(List.length raw > 2) ~on:"cc" "rows ascend" rows ~f:(fun i r -> r > i)|ocaml},
+      [ "raw" ] );
+    ( "refuses a gate read off a collection a protected try body builds the population from",
+      {ocaml|let () =
+  let raw = probe () in
+  let rows = try List.map raw ~f:run with _ -> [] in
+  Verdict.gated_all ~when_:(not (List.is_empty raw)) ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
+      [ "raw" ] );
+    ( "refuses a gate that reads a dereferenced population appended with another",
+      {ocaml|let () =
+  let staged = ref [] and other = ref [] in
+  publish staged other;
+  Verdict.gated_all ~when_:(not (List.is_empty !staged)) ~on:"cc" "every staged name fits"
+    (!staged @ !other) ~f:fits|ocaml},
+      [ "staged" ] );
+    ( "refuses a population gate behind a partially applied gated wrapper",
+      {ocaml|let () =
+  let rows = probe () in
+  let check = Verdict.gated_all ~when_:(not (List.is_empty rows)) ~on:"cc" in
+  check "all rows pass" rows ~f:Fn.id|ocaml},
+      [ "rows" ] );
+    ( "refuses a population gate applied through a pipeline",
+      {ocaml|open Verdict.Claims
+let () =
+  let rows = probe () in
+  rows |> gated_all ~when_:(List.length rows > 0) ~on:"cc" "all rows pass" ~f:Fn.id|ocaml},
+      [ "rows" ] );
+    ( "refuses a population gate on a wrapper's own parameter",
+      {ocaml|open Verdict.Claims
+let check label xs = gated_all ~when_:(not (List.is_empty xs)) ~on:"cc" label xs ~f:Fn.id
+let () = check "all rows pass" (probe ())|ocaml},
+      [ "xs" ] );
+    ( "accepts a capability-derived gate over a population built from the same program",
+      {ocaml|open Verdict.Claims
+let folded_seed_claims ~pre ~on_gpu ~run =
+  let limits = Context.hardware_limits (Context.auto ()) in
+  let site = Option.value_exn (Autotune.detect_matmul pre.LL.llc) in
+  let capability =
+    if on_gpu then Ll_test.tensorized_matmul_capability ~limits ~a:site.Autotune.m_a
+    else `Withheld `Backend
+  in
+  let real = if on_gpu then gpu_seeds limits pre else [] in
+  let results = List.mapi real ~f:(fun i q -> (q, run i q)) in
+  gated_exists
+    ~when_:(Poly.equal capability `Advertised)
+    ~on:backend_name "a tensorized sketch matches the materialized run" results
+    ~f:(fun (q, ok) -> q.Autotune.sk_mma && ok)|ocaml},
+      [] );
+    ( "accepts a backend gate that also steers the population's construction",
+      {ocaml|open Verdict.Claims
+let on_gpu = Sched.backend_is_gpu backend_name
+let () =
+  let real = if on_gpu then gpu_seeds pre else [] in
+  let results = List.map real ~f:run in
+  gated_all ~when_:on_gpu ~on:backend_name "every GPU sketch matches" results ~f:snd|ocaml},
+      [] );
+    ( "accepts a host gate behind a partially applied gated wrapper",
+      {ocaml|let () =
+  let fits = force long_names_fit_here in
+  let long_claim_all = Verdict.gated_all ~aggregation:`Environment ~when_:fits ~on:"path budget" in
+  let staged = ref [] in
+  long_claim_all "every staging name fits one component" !staged ~f:short|ocaml},
+      [] );
+    ( "accepts a host gate behind a renamed partially applied wrapper",
+      {ocaml|let () =
+  let check = Verdict.gated_all ~when_:on_gpu ~on:"gpu" in
+  let alias = check in
+  alias "rows pass" rows ~f:Fn.id|ocaml},
+      [] );
+    ( "does not take a shadowed binding of the same name for the population",
+      {ocaml|let () =
+  let rows = probe () in
+  let gate = not (List.is_empty rows) in
+  let rows = List.filter all_rows ~f:Fn.id in
+  Verdict.gated_all ~when_:gate ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
+      [] );
+    ( "names a gated claim it cannot complete instead of counting it clean",
+      {ocaml|let () =
+  List.iter2_exn labels populations ~f:(Verdict.gated_all ~when_:on_gpu ~on:"cc" ~f:Fn.id)|ocaml},
+      [ "unread Verdict.gated_all" ] );
+    ( "names a gated wrapper handed to another function beside a use it reads",
+      {ocaml|let () =
+  let raw = probe () in
+  let check = Verdict.gated_all ~when_:(not (List.is_empty raw)) ~on:"cc" ~f:Fn.id in
+  check "other rows pass" [ true ];
+  List.iter2_exn [ "rows pass" ] [ raw ] ~f:check|ocaml},
+      [ "unread check" ] );
+    ( "names a bound partial claim whose only use goes through a module path",
+      {ocaml|module Checks = struct
+  let check = Verdict.gated_all ~when_:(not (List.is_empty rows)) ~on:"cc"
+end
+let () = Checks.check "all rows pass" rows ~f:Fn.id|ocaml},
+      [ "unread Verdict.gated_all" ] );
+    ( "refuses a gate on a population name an unmodelled open brings in",
+      {ocaml|open Fixture
+let () = Verdict.gated_all ~when_:(not (List.is_empty rows)) ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
+      [ "rows" ] );
+    ( "accepts a backend gate on the key that selects the population",
+      {ocaml|open Base
+let () =
+  let rows = Map.find_exn results backend_name in
+  Verdict.gated_all ~when_:(String.equal backend_name "cuda") ~on:backend_name "all rows pass" rows
+    ~f:Fn.id|ocaml},
+      [] );
+    ( "does not take a file's own gated_all for Verdict's",
+      {ocaml|let gated_all ~when_ ~on label xs ~f = if when_ then List.iter xs ~f:(fun x -> f x label on)
+let () = gated_all ~when_:(not (List.is_empty rows)) ~on:"cc" "all rows pass" rows ~f:check|ocaml},
+      [] );
+    ( "does not take another module's gated_all for Verdict's",
+      {ocaml|module Verdict = Local_verdict
+let () =
+  Verdict.gated_all ~when_:(not (List.is_empty rows)) ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
+      [] );
+    ( "refuses a population gate through a module alias of Verdict",
+      {ocaml|module V = Verdict
+let () = V.gated_all ~when_:(not (List.is_empty rows)) ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
+      [ "rows" ] );
+    ( "accepts a backend gate on the key a Map.remove drops from the population",
+      {ocaml|open Base
+let () =
+  let rows = Map.data (Map.remove results backend_name) in
+  Verdict.gated_all ~when_:(String.equal backend_name "cuda") ~on:backend_name "all rows pass" rows
+    ~f:Fn.id|ocaml},
+      [] );
+    ( "refuses a gate read off the default the population falls back to",
+      {ocaml|open Base
+let () =
+  let rows = Option.value maybe_rows ~default:fallback in
+  Verdict.gated_all ~when_:(not (List.is_empty fallback)) ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
+      [ "fallback" ] );
+    ( "refuses a gate read off a collection a local module expression builds the population from",
+      {ocaml|open Base
+let () =
+  let rows =
+    let module M = Impl in
+    List.map raw ~f:M.run
+  in
+  Verdict.gated_all ~when_:(not (List.is_empty raw)) ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
+      [ "raw" ] );
+    ( "follows a collection module through its alias",
+      {ocaml|open Base
+module Rows = List
+let () =
+  let rows = Rows.map raw ~f:run in
+  Verdict.gated_all ~when_:(not (Rows.is_empty raw)) ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
+      [ "raw" ] );
+    ( "does not take a shadowed collection module for the standard one",
+      {ocaml|open Base
+module Map = Custom_selectors
+let () =
+  let rows = Map.merge all_rows backend_name in
+  Verdict.gated_all ~when_:(String.equal backend_name "cuda") ~on:backend_name "all rows pass" rows
+    ~f:Fn.id|ocaml},
+      [] );
+    ( "follows the collection a Base function takes after a first-class module",
+      {ocaml|open Base
+let () =
+  let rows = Map.data (Map.of_alist_exn (module String) raw) in
+  Verdict.gated_all ~when_:(not (List.is_empty raw)) ~on:"cc" "all rows pass" rows ~f:snd|ocaml},
+      [ "raw" ] );
+    ( "refuses a gate read off the second list a population is appended from",
+      {ocaml|open Base
+let () =
+  let rows = List.append first raw in
+  Verdict.gated_all ~when_:(not (List.is_empty raw)) ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
+      [ "raw" ] );
+    ( "follows a Stdlib-ordered collection call through its last argument",
+      {ocaml|let () =
+  let rows = Stdlib.List.find (fun rows -> rows <> []) groups in
+  Verdict.gated_all ~when_:(groups <> []) ~on:"cc" "all rows pass" rows ~f:Fun.id|ocaml},
+      [ "groups" ] );
+    ( "reads an unqualified collection call before a later open Base in Stdlib's order",
+      {ocaml|let rows = List.find (fun rows -> rows <> []) groups
+open Base
+let () =
+  Verdict.gated_all ~when_:(not (List.is_empty groups)) ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
+      [ "groups" ] );
+    ( "refuses a gate read off an element inserted into the population",
+      {ocaml|open Base
+let () =
+  let rows = Set.to_list (Set.add existing sample) in
+  Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" rows ~f:positive|ocaml},
+      [ "sample" ] );
+    ( "refuses a gate read off a value assigned into a dereferenced population",
+      {ocaml|open Base
+let () =
+  let rows = ref [] in
+  rows := List.map raw ~f:run;
+  Verdict.gated_all ~when_:(not (List.is_empty raw)) ~on:"cc" "all rows pass" !rows ~f:Fn.id|ocaml},
+      [ "raw" ] );
+    ( "refuses a gate read off a value pushed into a mutable population",
+      {ocaml|open Base
+let () =
+  let queue = Queue.create () in
+  Queue.enqueue queue sample;
+  Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" (Queue.to_list queue)
+    ~f:positive|ocaml},
+      [ "sample" ] );
+    ( "refuses a gate read off a ref's initializer",
+      {ocaml|open Base
+let () =
+  let rows = ref (List.map raw ~f:run) in
+  Verdict.gated_all ~when_:(not (List.is_empty raw)) ~on:"cc" "all rows pass" !rows ~f:Fn.id|ocaml},
+      [ "raw" ] );
+    ( "refuses a gate read off a value a Stdlib writer adds before its container",
+      {ocaml|let () =
+  let queue = Queue.create () in
+  Queue.add sample queue;
+  Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" (List.of_seq (Queue.to_seq queue))
+    ~f:positive|ocaml},
+      [ "sample" ] );
+    ( "follows List.Assoc under an open Base",
+      {ocaml|open Base
+let () =
+  let rows = List.Assoc.find_exn entries ~equal:String.equal backend_name in
+  Verdict.gated_all ~when_:(not (List.is_empty entries)) ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
+      [ "entries" ] );
+    ( "accepts a gate on an element a persistent Set.add leaves out of the original",
+      {ocaml|open Base
+let () =
+  let existing = Set.of_list (module Int) raw in
+  let bigger = Set.add existing sample in
+  report bigger;
+  Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" (Set.to_list existing)
+    ~f:positive|ocaml},
+      [] );
+    ( "accepts a gate and a population destructured from one pattern",
+      {ocaml|let check (enabled, rows) = Verdict.gated_all ~when_:enabled ~on:"cc" "rows pass" rows ~f:Fn.id
+let () = check (on_gpu, probe ())|ocaml},
+      [] );
+    ( "refuses a gate read off the hash set a population is listed from",
+      {ocaml|open Base
+let () =
+  let rows = Hash_set.to_list seen in
+  Verdict.gated_all ~when_:(not (Hash_set.is_empty seen)) ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
+      [ "seen" ] );
+    ( "refuses a gate read off a value pushed through an alias of a mutable module",
+      {ocaml|open Base
+module Q = Queue
+let () =
+  let queue = Q.create () in
+  Q.enqueue queue sample;
+  Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" (Q.to_list queue) ~f:positive|ocaml},
+      [ "sample" ] );
+    ( "refuses a gate read off the value a constructor fills the population with",
+      {ocaml|open Base
+let () =
+  let rows = Array.to_list (Array.create ~len:3 sample) in
+  Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" rows ~f:positive|ocaml},
+      [ "sample" ] );
+    ( "refuses a gate read off the scrutinee a match case returns a part of",
+      {ocaml|open Base
+let () =
+  let rows = match raw with [] -> [] | _ :: tail -> tail in
+  Verdict.gated_all ~when_:(not (List.is_empty raw)) ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
+      [ "raw" ] );
+    ( "reads a collection call after open Stdlib in Stdlib's order",
+      {ocaml|open Base
+open Stdlib
+let () =
+  let rows = List.find (fun rows -> rows <> []) groups in
+  Verdict.gated_all ~when_:(groups <> []) ~on:"cc" "all rows pass" rows ~f:Fun.id|ocaml},
+      [ "groups" ] );
+    ( "refuses a gate read off a thunk the population defaults to",
+      {ocaml|open Base
+let () =
+  let rows = Hashtbl.find_or_add table key ~default:(fun () -> List.map raw ~f:run) in
+  Verdict.gated_all ~when_:(not (List.is_empty raw)) ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
+      [ "raw" ] );
+    ( "refuses a gate a later write computes from the population",
+      {ocaml|open Base
+let () =
+  let rows = probe () in
+  let enabled = ref false in
+  enabled := not (List.is_empty rows);
+  Verdict.gated_all ~when_:!enabled ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
+      [ "rows" ] );
+    ( "refuses a gate read off what an initializer's callback fills the population with",
+      {ocaml|open Base
+let () =
+  let rows = Array.to_list (Array.init 3 ~f:(fun _ -> sample)) in
+  Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" rows ~f:positive|ocaml},
+      [ "sample" ] );
+    ( "refuses a gate read off a value written through an alias of the population",
+      {ocaml|open Base
+let () =
+  let rows = ref [] in
+  let alias = rows in
+  alias := List.map raw ~f:run;
+  Verdict.gated_all ~when_:(not (List.is_empty raw)) ~on:"cc" "all rows pass" !rows ~f:Fn.id|ocaml},
+      [ "raw" ] );
+    ( "refuses a gate read off what a binding operator builds the population from",
+      {ocaml|open Base
+let () =
+  let maybe =
+    let open Option.Let_syntax in
+    let+ found = maybe_rows in
+    found
+  in
+  Verdict.gated_all ~when_:(Option.is_some maybe_rows) ~on:"cc" "all rows pass"
+    (Option.value maybe ~default:[]) ~f:Fn.id|ocaml},
+      [ "maybe_rows" ] );
+    ( "refuses a gate read off a positional Stdlib initializer callback",
+      {ocaml|let () =
+  let rows = Stdlib.List.init 3 (fun _ -> sample) in
+  Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" rows ~f:positive|ocaml},
+      [ "sample" ] );
+    ( "refuses a gate read off a function-case callback",
+      {ocaml|open Base
+let () =
+  let rows = Array.to_list (Array.init 3 ~f:(function _ -> sample)) in
+  Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" rows ~f:positive|ocaml},
+      [ "sample" ] );
+    ( "refuses a gate read off the source a labeled blit copies into the population",
+      {ocaml|open Base
+let () =
+  let dst = Array.create ~len:3 0 in
+  Array.blit ~src ~src_pos:0 ~dst ~dst_pos:0 ~len:3;
+  Verdict.gated_all ~when_:(Array.length src > 0) ~on:"cc" "all rows pass" (Array.to_list dst)
+    ~f:positive|ocaml},
+      [ "src" ] );
+    ( "accepts a gate on the bounds of a range population",
+      {ocaml|open Base
+let () =
+  let rows = List.range start stop in
+  Verdict.gated_all ~when_:(stop > start) ~on:"cc" "all rows pass" rows ~f:positive|ocaml},
+      [] );
+    ( "refuses a gate read off a key inserted into the population",
+      {ocaml|open Base
+let () =
+  let rows = Map.to_alist (Map.set table ~key:sample ~data:true) in
+  Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" rows ~f:snd|ocaml},
+      [ "sample" ] );
+    ( "refuses a gate read off the source a transfer drains into the population",
+      {ocaml|open Base
+let () =
+  let dst = Queue.create () in
+  Queue.transfer ~src ~dst;
+  Verdict.gated_all ~when_:(not (Queue.is_empty src)) ~on:"cc" "all rows pass" (Queue.to_list dst)
+    ~f:positive|ocaml},
+      [ "src" ] );
+    ( "does not take a gated_all a local module brings in by open for Verdict's",
+      {ocaml|module Checks = struct
+  let gated_all ~when_ ~on label xs ~f = if when_ then List.iter xs ~f:(fun x -> f x label on)
+end
+open Checks
+let () = gated_all ~when_:(not (List.is_empty rows)) ~on:"cc" "all rows pass" rows ~f:check|ocaml},
+      [] );
+    ( "follows a collection module beneath an alias of Base",
+      {ocaml|module B = Base
+let () =
+  let rows = B.List.map raw ~f:run in
+  Verdict.gated_all ~when_:(not (B.List.is_empty raw)) ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
+      [ "raw" ] );
+    ( "refuses a gate read off a default find_or_add inserts into the population",
+      {ocaml|open Base
+let () =
+  let table = Hashtbl.create (module String) in
+  ignore (Hashtbl.find_or_add table key ~default:(fun () -> sample) : int);
+  Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" (Hashtbl.data table) ~f:positive|ocaml},
+      [ "sample" ] );
+    ( "refuses a gate read off a value written through a constrained alias",
+      {ocaml|open Base
+let () =
+  let rows = ref [] in
+  let alias = (rows : int list ref) in
+  alias := List.map raw ~f:run;
+  Verdict.gated_all ~when_:(not (List.is_empty raw)) ~on:"cc" "all rows pass" !rows ~f:positive|ocaml},
+      [ "raw" ] );
+    ( "refuses a gate read off what a map's callback returns",
+      {ocaml|open Base
+let () =
+  let rows = List.map [ () ] ~f:(fun _ -> sample) in
+  Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" rows ~f:positive|ocaml},
+      [ "sample" ] );
+    ( "refuses a gate read off what a Map.update callback puts in the population",
+      {ocaml|open Base
+let () =
+  let rows = Map.data (Map.update table key ~f:(fun _ -> sample)) in
+  Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" rows ~f:positive|ocaml},
+      [ "sample" ] );
+    ( "refuses a gate read off what a Hashtbl.update callback writes into the population",
+      {ocaml|open Base
+let () =
+  let table = Hashtbl.create (module String) in
+  Hashtbl.update table key ~f:(fun _ -> sample);
+  Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" (Hashtbl.data table) ~f:positive|ocaml},
+      [ "sample" ] );
+    ( "refuses a gate a recursive peer reads the population through",
+      {ocaml|open Base
+let check rows =
+  let rec enabled () = inspect ()
+  and inspect () = not (List.is_empty rows) in
+  Verdict.gated_all ~when_:(enabled ()) ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
+      [ "rows" ] );
+    ( "refuses a gate read off a value piped into a writer",
+      {ocaml|open Base
+let () =
+  let queue = Queue.create () in
+  sample |> Queue.enqueue queue;
+  Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" (Queue.to_list queue) ~f:positive|ocaml},
+      [ "sample" ] );
+    ( "refuses a gate read off a value an unsafe setter writes",
+      {ocaml|open Base
+let () =
+  let cells = Array.create ~len:3 0 in
+  Array.unsafe_set cells 0 sample;
+  Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" (Array.to_list cells) ~f:positive|ocaml},
+      [ "sample" ] );
+    ( "follows a population through Result",
+      {ocaml|let () =
+  let rows = Stdlib.Result.get_ok (Ok raw) in
+  Verdict.gated_all ~when_:(raw <> []) ~on:"cc" "all rows pass" rows ~f:positive|ocaml},
+      [ "raw" ] );
+    ( "follows a collection call under a type annotation",
+      {ocaml|let () =
+  let rows = (Stdlib.List.map : (int -> int) -> int list -> int list) run raw in
+  Verdict.gated_all ~when_:(raw <> []) ~on:"cc" "all rows pass" rows ~f:positive|ocaml},
+      [ "raw" ] );
+  ]
+
+let gate_control_findings source =
+  let census = Scan.gate_census source in
+  List.map census.Scan.readings ~f:(fun (reading : Scan.gate_reading) ->
+      String.concat ~sep:", " reading.reads)
+  @ List.map census.Scan.unread ~f:(fun (form, _) -> "unread " ^ form)
+
+let run_gate_population_controls () =
+  List.map gate_population_controls ~f:(fun (label, source, expected) ->
+      let found = gate_control_findings source in
+      let ok = List.equal String.equal found expected in
+      if not ok then
+        eprintf "gate-population control %S expected [%s], found [%s]\n" label
+          (String.concat ~sep:"; " expected)
+          (String.concat ~sep:"; " found);
+      (label, ok))
+
+let refuse_gate_reading ~fail ~source (reading : Scan.gate_reading) =
+  fail
+    (Printf.sprintf
+       "%s:%d gates `%s` on `%s`, which reads `%s` -- the population the claim quantifies, or a \
+        collection it is built from -- so a regression that empties or changes that population \
+        closes the gate and turns the failure into a skip (gh-ocannl-1115). Gate on an invariant \
+        the population does not decide: the backend, an advertised capability, the configuration"
+       source reading.line reading.form reading.gate
+       (String.concat ~sep:"`, `" reading.reads))
+
+(* The gate reader over one source, its failures told apart (gh-ocannl-1289 review): a source that
+   does not parse is reported by the catch-all the other readers share, and an exception from a
+   source that parses is the gate reader's own defect, named as such rather than as a syntax
+   error. *)
+let read_gates ~fail ~source ~census content =
+  match Test_utils.Scan_attempt.run (fun () -> census content) with
+  | Test_utils.Scan_attempt.Scanned gates -> gates
+  | Unparsed -> { Scan.readings = []; gated_sites = 0; unread = [] }
+  | Raised exn ->
+      fail
+        (Printf.sprintf
+           "the gate reader raised %s on %s, which parses -- a defect of Verdict_scan.gate_census, \
+            not of the source, and the source's gated claims went uncompared"
+           exn source);
+      { Scan.readings = []; gated_sites = 0; unread = [] }
+
+let refuse_unread_gate ~fail ~source (form, line) =
+  fail
+    (Printf.sprintf
+       "%s:%d applies `%s` in a form the gate reader cannot complete, so it cannot say whether the \
+        gate reads the population. Apply the claim, or a `let`-bound partial application of it, to \
+        its label and population directly"
+       source line form)
+
+(* The wiring from a finding to the failure, exercised on a refusing control of each kind: the
+   controls above say what the reader finds, this says that a finding refuses the run. *)
+let run_gate_refusal_control () =
+  let source = "test/operations/verdict_ratchet.ml" in
+  let reading_format =
+    "%s:%d gates `%s` on `%s`, which reads `%s` -- the population the claim quantifies, or a \
+     collection it is built from -- so a regression that empties or changes that population closes \
+     the gate and turns the failure into a skip (gh-ocannl-1115). Gate on an invariant the \
+     population does not decide: the backend, an advertised capability, the configuration"
+  and unread_format =
+    "%s:%d applies `%s` in a form the gate reader cannot complete, so it cannot say whether the \
+     gate reads the population. Apply the claim, or a `let`-bound partial application of it, to \
+     its label and population directly"
+  in
+  let fixture label =
+    List.find_map_exn gate_population_controls ~f:(fun (found, source, _) ->
+        if String.equal found label then Some source else None)
+  in
+  let refused_reading = ref false and refused_unread = ref false in
+  let census =
+    Scan.gate_census (fixture "refuses a gate that tests its own population for emptiness")
+  in
+  List.iter census.Scan.readings
+    ~f:
+      (refuse_gate_reading ~source:"fixture.ml" ~fail:(fun _ ->
+           refused_reading := true;
+           Test_utils.Refusal_control_manifest.observe_failure ~source ~format:reading_format));
+  let census =
+    Scan.gate_census (fixture "names a gated claim it cannot complete instead of counting it clean")
+  in
+  List.iter census.Scan.unread
+    ~f:
+      (refuse_unread_gate ~source:"fixture.ml" ~fail:(fun _ ->
+           refused_unread := true;
+           Test_utils.Refusal_control_manifest.observe_failure ~source ~format:unread_format));
+  let raised_format =
+    "the gate reader raised %s on %s, which parses -- a defect of Verdict_scan.gate_census, not of \
+     the source, and the source's gated claims went uncompared"
+  in
+  let refused_raise = ref false in
+  ignore
+    (read_gates ~source:"fixture.ml"
+       ~fail:(fun _ ->
+         refused_raise := true;
+         Test_utils.Refusal_control_manifest.observe_failure ~source ~format:raised_format)
+       ~census:(fun _ -> raise Stdlib.Exit)
+       "let () = ()"
+      : Scan.gate_census);
+  ( "refuses a planted gate that reads its population, and a gated claim it cannot read",
+    !refused_reading && !refused_unread && !refused_raise )
+
 let base_dir = Dune.base_dir
 let repo_relative = Dune.repo_relative
 
@@ -3387,6 +3957,7 @@ let () =
   let literals = ref 0 and applied = ref 0 and offenders = ref 0 in
   let quantified_offenders = ref 0 in
   let dialect_offenders = ref 0 and skipped_sites = ref 0 and pass_fail_sites = ref 0 in
+  let gate_offenders = ref 0 and gated_sites = ref 0 in
   let manifest =
     List.find_map arguments ~f:(fun (relative, path) ->
         if String.is_suffix relative ~suffix:("/" ^ manifest_file) then
@@ -3399,6 +3970,8 @@ let () =
     @ run_shadowed_quantified_controls ()
     @ run_colliding_site_controls () @ run_dialect_pairing_controls ()
     @ [ run_dialect_refusal_control () ]
+    @ run_gate_population_controls ()
+    @ [ run_gate_refusal_control () ]
   in
   let matrix_rows = run_syntax_matrix () in
   let matrix_results =
@@ -3435,6 +4008,14 @@ let () =
             [],
             { Scan.pairings = []; skipped_sites = 0; pass_fail_sites = 0 } )
       in
+      let gates = read_gates ~fail ~source ~census:Scan.gate_census content in
+      gated_sites := !gated_sites + gates.Scan.gated_sites;
+      List.iter gates.Scan.readings ~f:(fun reading ->
+          Int.incr gate_offenders;
+          refuse_gate_reading ~fail ~source reading);
+      List.iter gates.Scan.unread ~f:(fun unread ->
+          Int.incr gate_offenders;
+          refuse_unread_gate ~fail ~source unread);
       skipped_sites := !skipped_sites + dialects.Scan.skipped_sites;
       pass_fail_sites := !pass_fail_sites + dialects.Scan.pass_fail_sites;
       List.iter dialects.Scan.pairings ~f:(fun pairing ->
@@ -3581,6 +4162,7 @@ let () =
         (if found = 1 then "" else "s"));
   eprintf "Totals: %d sources, %d string literals (%d of them an argument of a named function).\n"
     (List.length sources) !literals !applied;
+  eprintf "Gated quantified claims whose gate and population were compared: %d.\n" !gated_sites;
   printf "\n";
   (* Stated so that `true` is the passing reading, as every line of a golden should be. *)
   Verdict.p "every test source decides its claims through Verdict" (!offenders = 0);
@@ -3589,6 +4171,29 @@ let () =
   Verdict.p "no claim label is reported through both pass_fail and skipped" (!dialect_offenders = 0);
   Verdict.p "and the dialect reader found both skipped and pass_fail claims to pair"
     (!skipped_sites > 0 && !pass_fail_sites > 0);
+  Verdict.p "no gated claim's gate reads the population it quantifies" (!gate_offenders = 0);
+  (* The forms the gate reader recognizes, held equal to the quantified gated forms [Verdict.Claims]
+     exports: a new one the reader did not know would be a claim it never compares. *)
+  let exported_gated_forms =
+    Option.bind (Map.find on_disk "test/support/verdict.ml") ~f:(fun path ->
+        Test_utils.Refusal_control_scan.claims_members (In_channel.read_all path))
+    |> Option.value ~default:[ "<no Claims module in test/support/verdict.ml>" ]
+    |> List.filter ~f:(fun member ->
+        String.is_prefix member ~prefix:"gated_" || String.is_prefix member ~prefix:"<")
+    |> List.sort ~compare:String.compare
+  in
+  if
+    not
+      (List.equal String.equal exported_gated_forms
+         (List.sort Scan.gated_forms ~compare:String.compare))
+  then
+    eprintf "Verdict.Claims exports the gated forms [%s]; the gate reader recognizes [%s]\n"
+      (String.concat ~sep:"; " exported_gated_forms)
+      (String.concat ~sep:"; " Scan.gated_forms);
+  Verdict.p "and it recognizes every quantified gated form Verdict.Claims exports"
+    (List.equal String.equal exported_gated_forms
+       (List.sort Scan.gated_forms ~compare:String.compare));
+  Verdict.p "and the gate reader completed gated claims to compare" (!gated_sites > 0);
   Verdict.p "the scan found every literal planted for it" (Set.is_empty missing);
   Verdict.p "every exemption on this check's lists is still earned"
     (Set.is_empty unread && Set.is_empty stale && Set.is_empty stale_quantified);

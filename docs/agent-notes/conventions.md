@@ -192,7 +192,11 @@ files.
   (List.for_all …)` is the unguarded quantifier `verdict_ratchet` refuses): a closed gate reads
   neither `xs` nor `f`, so a population that exists only where the leg ran is passed as the empty
   list it is off-gate. A leg that cannot compute its boolean or population without the gate (a
-  device readback) keeps its branch, with `p` or a `p_*` combinator on the evaluated side. `verdict_ratchet`
+  device readback) keeps its branch, with `p` or a `p_*` combinator on the evaluated side. The gate
+  itself comes from an invariant (backend, advertised capability, configuration), never from the
+  population: a gate read off the values under test turns an emptied population into a skip, and
+  `verdict_ratchet` refuses a `gated_*` whose `~when_` reads its population or what it is mapped
+  from (gh-ocannl-1289). `verdict_ratchet`
   refuses a label reaching both `pass_fail`/`pass_fail_all2` and `skipped` in one source (keyed by
   literal, by a name bound to one literal, or by a printed expression within one top-level item);
   a wrapper of another name, or one label built two different ways, is outside what it sees.
