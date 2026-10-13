@@ -17,6 +17,7 @@ wgrad: a fresh lowering has the same structural identity: true
 wgrad: every seed's schedule replays from a fresh lowering of the original code: true
 wgrad: the device's own tensorized seeds are proposed: true
 wgrad: every tensorized candidate compiles, runs and matches the reference bitwise: true
+wgrad: every tensorized candidate renders tensorized per its mma census: true
 wgrad: every gpu candidate compiles, runs and matches the reference bitwise: true
 wgrad: every cpu candidate compiles, runs and matches the reference bitwise: true
 dgrad: the plain matcher does not see the backward contraction: true
@@ -36,6 +37,7 @@ dgrad: a fresh lowering has the same structural identity: true
 dgrad: every seed's schedule replays from a fresh lowering of the original code: true
 dgrad: the device's own tensorized seeds are proposed: true
 dgrad: every tensorized candidate compiles, runs and matches the reference bitwise: true
+dgrad: every tensorized candidate renders tensorized per its mma census: true
 dgrad: every gpu candidate compiles, runs and matches the reference bitwise: true
 dgrad: every cpu candidate compiles, runs and matches the reference bitwise: true
 fwd: a forward product is a plain site, with no prefix: true

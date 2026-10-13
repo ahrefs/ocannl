@@ -479,6 +479,13 @@ let check_launch ~bindings ~launch =
     (List.filter_map launch ~f:(fun (sym, _) ->
          Option.some_if (not (List.mem bound sym ~equal:Idx.equal_static_symbol)) sym))
 
+(* {!run}, keeping the routine for the census {!execute_with_census} returns. *)
+let run_routine ?ctx ?(bindings = Idx.Empty) ?(launch = []) ~name (o : LL.optimized) ~seed =
+  check_launch ~bindings ~launch;
+  let ctx, routine = link ?ctx ~bindings ~name o in
+  List.iter launch ~f:(fun (sym, v) -> Idx.find_exn routine.Context.bindings sym := v);
+  (run_linked (ctx, routine) ~seed, routine)
+
 (** [run ~name o ~seed] is {!link} followed by {!run_linked}, for the tests that have no use for the
     routine itself. Same materialization requirement on [seed].
 
@@ -487,16 +494,29 @@ let check_launch ~bindings ~launch =
     launch parameter, and {!check_launch} requires it to give each of [~bindings]' bound symbols
     exactly one value. A case that also needs [~static_indices] on the optimization, or the routine
     itself, calls {!link} directly. *)
-let run ?ctx ?(bindings = Idx.Empty) ?(launch = []) ~name (o : LL.optimized) ~seed =
-  check_launch ~bindings ~launch;
-  let ctx, routine = link ?ctx ~bindings ~name o in
-  List.iter launch ~f:(fun (sym, v) -> Idx.find_exn routine.Context.bindings sym := v);
-  run_linked (ctx, routine) ~seed
+let run ?ctx ?bindings ?launch ~name o ~seed =
+  fst (run_routine ?ctx ?bindings ?launch ~name o ~seed)
 
-(** {!run}, then read back [read] in order. Same materialization requirement, on both lists. *)
-let execute ?ctx ?bindings ?launch ~name (o : LL.optimized) ~seed ~(read : Tn.t list) =
-  let ctx = run ?ctx ?bindings ?launch ~name o ~seed in
-  List.map read ~f:(Context.get_values ctx)
+(** {!execute}, also returning the compiled routine's mma census ([Context.routine.mma],
+    gh-ocannl-1283). A schedule that requests tensorization and declines at codegen renders its
+    scalar fallback, which computes the same values: parity alone cannot tell the two apart, so a
+    claim about an executed TENSORIZED candidate requires {!rendered_tensorized} of this census
+    beside its values. *)
+let execute_with_census ?ctx ?bindings ?launch ~name (o : LL.optimized) ~seed ~(read : Tn.t list) =
+  let ctx, routine = run_routine ?ctx ?bindings ?launch ~name o ~seed in
+  (List.map read ~f:(Context.get_values ctx), routine.Context.mma)
+
+(** {!run}, then read back [read] in order. Same materialization requirement, on both lists. The
+    routine, and with it the mma census, is discarded: a test executing a tensorized candidate calls
+    {!execute_with_census} instead. *)
+let execute ?ctx ?bindings ?launch ~name o ~seed ~read =
+  fst (execute_with_census ?ctx ?bindings ?launch ~name o ~seed ~read)
+
+(** Whether a compile's mma census records at least one real tensor-core / SIMD-register-tile
+    emission ([Ir.C_syntax.Tensorized]) — not a wholly declined [Tile_mma] ([Scalar_fallback]), nor
+    a routine that emitted none ([Not_requested]). *)
+let rendered_tensorized (census : Ir.C_syntax.mma_summary) =
+  Ir.C_syntax.equal_tensorization census.Ir.C_syntax.tensorization Ir.C_syntax.Tensorized
 
 (** Whether [f] was refused because the node it touched is placed [Local] — routine-scoped scratch
     whose values never reach a context buffer (gh-ocannl-599). *)
