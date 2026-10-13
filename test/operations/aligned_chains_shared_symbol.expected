@@ -1,0 +1,11 @@
+=== cross-nest: two nests bind the same inner symbol ===
+shared s, writer nest first: aligned_chains declines: true
+shared s, reader nest first: aligned_chains declines: true
+control: fresh reader symbol, writer nest first: aligned_chains declines: true
+control: fresh reader symbol, reader nest first: aligned_chains declines: true
+control: shared s, reader on its own row: aligned_chains accepts: true
+
+=== within one nest: sibling loops bind the same symbol ===
+shared s, sibling loops under p: aligned_chains declines: true
+control: fresh second sibling symbol: aligned_chains declines: true
+control: shared s, reader on its own row: aligned_chains accepts: true
