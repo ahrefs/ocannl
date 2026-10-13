@@ -3581,6 +3581,25 @@ let () =
   Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" (Queue.to_list queue)
     ~f:positive|ocaml},
       [ "sample" ] );
+    ( "refuses a gate read off a ref's initializer",
+      {ocaml|open Base
+let () =
+  let rows = ref (List.map raw ~f:run) in
+  Verdict.gated_all ~when_:(not (List.is_empty raw)) ~on:"cc" "all rows pass" !rows ~f:Fn.id|ocaml},
+      [ "raw" ] );
+    ( "refuses a gate read off a value a Stdlib writer adds before its container",
+      {ocaml|let () =
+  let queue = Queue.create () in
+  Queue.add sample queue;
+  Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" (List.of_seq (Queue.to_seq queue))
+    ~f:positive|ocaml},
+      [ "sample" ] );
+    ( "follows List.Assoc under an open Base",
+      {ocaml|open Base
+let () =
+  let rows = List.Assoc.find_exn entries ~equal:String.equal backend_name in
+  Verdict.gated_all ~when_:(not (List.is_empty entries)) ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
+      [ "entries" ] );
   ]
 
 let gate_control_findings source =

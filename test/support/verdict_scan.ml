@@ -482,18 +482,19 @@ let dialect_census content =
       BUILT from: following a [let]-bound name into its right-hand side, the branches (not the
       condition) of an [if], the cases (not the scrutinee) of a [match], the body and handlers of a
       [try], the body of a [let], [let module], local [open] or sequence, the elements of a list,
-      array or tuple literal or constructor payload, the operand of [!] and both operands of [@],
-      and the arguments that carry the collection into a function of a standard collection module
-      ([List], [Array], [Hashtbl], [Map], [Option], [String], ... — see {!collection_modules}),
-      reached by name, through an alias ([module Rows = List]), and not under a name a local module
-      took over ([module Map = Custom]); an unqualified [List] is [Stdlib]'s until an [open Base] in
-      scope rebinds it. Which arguments carry it is {!collection_arguments}': every positional one,
-      except that a [Base]-ordered selector ([find], [nth], [take], [remove], ...) contributes its
-      collection alone and a generator none, plus the data-bearing labels [~default], [~init],
-      [~data];
+      array or tuple literal or constructor payload, the operand of [!] and of [ref] and both
+      operands of [@], and the arguments that carry the collection into a function of a standard
+      collection module ([List], [Array], [Hashtbl], [Map], [Option], [String], ... — see
+      {!collection_modules}), reached by name, through an alias ([module Rows = List]), and not
+      under a name a local module took over ([module Map = Custom]); an unqualified [List] is
+      [Stdlib]'s until an [open Base] in scope rebinds it. Which arguments carry it is
+      {!collection_arguments}': every positional one, except that a [Base]-ordered selector ([find],
+      [nth], [take], [remove], ...) contributes its collection alone and a generator none, plus the
+      data-bearing labels [~default], [~init], [~data];
     - and, for a name it reaches, whatever the source writes into that binding: the right-hand side
       of [x := e], and what a writer of a collection module ([Queue.enqueue x e],
-      [Hashtbl.set x ~key ~data], ... — see {!writers}) is handed with [x].
+      [Hashtbl.set x ~key ~data], ... — see {!writers}) is handed with [x], where [x] is the first
+      positional argument in [Base]'s order and any of them in [Stdlib]'s.
 
     The claim is refused when the two share a binding. The asymmetry is the point: a gate may read
     what the population is COMPUTED from (the site, the hardware limits, the backend steering an
@@ -678,6 +679,11 @@ let gate_census content =
           (match Map.find env.Lexical_scope.modules head with
           | Some denotes when single -> denotes
           | Some Verdict_module -> Verdict_module
+          | Some (Collection_module _ as collection)
+            when List.for_all (List.tl_exn components) ~f:(fun c ->
+                     List.mem collection_modules c ~equal:String.equal) ->
+              (* [List.Assoc] under an [open Base]. *)
+              collection
           | Some _ -> Other_module
           | None when String.equal head "Verdict" -> Verdict_module
           | None when single && List.mem [ "Base"; "Core" ] head ~equal:String.equal -> Base_library
@@ -816,7 +822,7 @@ let gate_census content =
                       | _ -> None)
                   in
                   match callee.pexp_desc with
-                  | Pexp_ident { txt = Ppxlib.Longident.Lident ("!" | "@"); _ } ->
+                  | Pexp_ident { txt = Ppxlib.Longident.Lident ("!" | "@" | "ref"); _ } ->
                       List.iter positional ~f:(visit env)
                   | Pexp_ident { txt = Ppxlib.Longident.Ldot (prefix, name); _ } -> (
                       match self#module_path env prefix with
@@ -848,23 +854,28 @@ let gate_census content =
         | Pexp_ident { txt = Ppxlib.Longident.Ldot (prefix, name); _ }, _
           when List.exists writers ~f:(fun w -> String.is_prefix name ~prefix:w) -> (
             match self#module_path env prefix with
-            | Some (Collection_module _) -> (
-                match
+            | Some (Collection_module { stdlib }) ->
+                let positional =
                   List.filter_map arguments ~f:(function
                     | Ppxlib.Asttypes.Nolabel, argument -> Some argument
                     | _ -> None)
-                with
-                | container :: rest ->
+                in
+                let data =
+                  List.filter_map arguments ~f:(function
+                    | (Ppxlib.Asttypes.Labelled label | Optional label), argument
+                      when List.mem [ "data"; "default"; "init" ] label ~equal:String.equal ->
+                        Some argument
+                    | _ -> None)
+                in
+                (* In [Base]'s order the container comes first. [Stdlib]'s varies by function
+                   ([Queue.add x q], [Hashtbl.add t k v]), so there every positional argument is a
+                   possible container of all the others -- the loud direction. *)
+                let containers = if stdlib then positional else List.take positional 1 in
+                List.iter containers ~f:(fun container ->
                     Option.iter (target container) ~f:(fun identity ->
                         record identity
-                          (rest
-                          @ List.filter_map arguments ~f:(function
-                            | (Ppxlib.Asttypes.Labelled label | Optional label), argument
-                              when List.mem [ "data"; "default"; "init" ] label ~equal:String.equal
-                              ->
-                                Some argument
-                            | _ -> None)))
-                | [] -> ())
+                          (List.filter positional ~f:(fun other -> not (phys_equal other container))
+                          @ data)))
             | _ -> ())
         | _ -> ()
 

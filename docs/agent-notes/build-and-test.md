@@ -1512,7 +1512,7 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   a name plus its binding. The GATE side is every identifier `~when_` spells, through every `let`
   it reaches. The POPULATION side is the quantified argument and what it is built FROM: `let`
   right-hand sides, `if`/`match` branches (never the condition or scrutinee), a `try` body, a
-  `let module` body, literals, `!`, `@`, and the arguments that carry the collection into a
+  `let module` body, literals, `!`, `ref`, `@`, and the arguments that carry the collection into a
   standard collection module's function, resolved through module aliases, shadowing and a lexical
   `open Base`: every positional argument, except that a Base-ordered selector (`find`, `nth`,
   `take`, `remove`, ...) contributes its collection alone (the key after it selects) and an `init`
