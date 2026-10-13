@@ -2126,8 +2126,10 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   DECREASING index order, so building a list of runs with it executes them backwards (use an explicit
   loop when the elements have effects); Base's ARRAY quantifiers — `Array.for_all`, `for_alli`,
   `exists`, `existsi`, `for_all2_exn`, `exists2_exn` — likewise walk from the LAST index down to 0
-  and stop at the first decisive element, so when the predicate raises or records a reason the one
-  reported is the highest-index failure's, not the first's (Base v0.17 `array.ml`; Base's `List`
+  and stop at the first decisive element: a `for_all*` stops at the HIGHEST-index failure, so a
+  predicate that raises or records a reason on failure reports that one, not the first's, while an
+  `exists*` stops at the highest-index success, having visited every failure above it (Base v0.17
+  `array.ml`; Base's `List`
   quantifiers, `Array.find`/`findi`/`find_map` and `Stdlib.Array.for_all` go first-to-last). In
   `Fuse_epilogue`'s `covers_bijectively` (staging#1084, gh-ocannl-1293) a refusal that had to name a
   flattened component fired on the last axis's ordinary failure instead; when one failure must win,
