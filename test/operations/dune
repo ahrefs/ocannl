@@ -7709,7 +7709,7 @@
  (name provenance_tag_scan_cases)
  (package neural_nets_lib)
  (modules provenance_tag_scan_cases)
- (libraries base stdio unix test_utils arrayjit.verdict)
+ (libraries base stdio unix ppxlib test_utils arrayjit.verdict)
  (deps ocannl_config provenance_tag_inventory.exe)
  (action
   (run %{test} %{dep:provenance_tag_inventory.exe})))
