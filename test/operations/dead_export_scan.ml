@@ -76,7 +76,6 @@ let exempt_zero_reference_exports =
     "C_syntax.equal_peel_skip";
     "C_syntax.extract_idents";
     "C_syntax.is_f32_tie";
-    "C_syntax.is_tensorized_rendering";
     "C_syntax.log_declines";
     "C_syntax.mma_census_enabled";
     "C_syntax.mma_rendering_of_sexp";

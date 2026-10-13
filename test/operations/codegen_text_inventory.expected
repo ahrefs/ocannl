@@ -312,7 +312,6 @@ test/operations/schedule_mma_matmul.ml [also pins text this scan cannot name: co
     "/* wmma fragment reduction body begins */"
     "/* wmma fragment reduction body ends */"
     "== 0)"
-    "Tile_mma register tiling"
     "[0] = __bfloat162float(__mma_dr0[0]);"
     "[__mi][__ni][0] = "
     "__builtin_elementwise_fma"
@@ -361,7 +360,6 @@ test/operations/schedule_mma_matmul.ml [also pins text this scan cannot name: co
     "rocwmma::load_matrix_sync(__mma_rc, ocannl_wmma_rc16, 16"
     "rocwmma::mma_sync"
     "rocwmma::store_matrix_sync(__mma_dp"
-    "simdgroup"
     "simdgroup_bfloat8x8 " ^ ...
     "simdgroup_bfloat8x8 __mma_af"
     "simdgroup_bfloat8x8"
