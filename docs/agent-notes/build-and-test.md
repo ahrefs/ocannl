@@ -1503,33 +1503,29 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   `non_refusing_claims` (`refusal_control_scan.ml`) equal to the members `Verdict.Claims` binds,
   read from `verdict.ml`, so a new `Claims` member is red until judged in one of them.
 - `verdict_ratchet`'s fourth reader is about GATES (gh-ocannl-1289): `Verdict_scan.gate_census`
-  refuses a `gated_all`/`gated_alli`/`gated_exists` claim whose `~when_` reads the population it
-  quantifies or a collection that population is built from. Only `Verdict`'s forms count: a
-  file's own `gated_all`, or one under a `module Verdict = …` that took the name, does not. Such a gate closes when a regression
-  empties or changes the population, so the failure reads as a skip — the gh-ocannl-1115 trap,
-  shipped twice in wave 2026-10-05 (a gate on the claim's own `results` being non-empty; one on
-  `List.exists real` over `results` mapped from `real`). Both sides are compared by lexical identity,
-  a name plus its binding. The GATE side is every identifier `~when_` spells, through every `let`
-  it reaches. The POPULATION side is the quantified argument and what it is built FROM: `let`
-  right-hand sides, `if`/`match` branches (never the condition or scrutinee), a `try` body, a
-  `let module` body, literals, `!`, `ref`, `@`, and the arguments that carry the collection into a
-  standard collection module's function, resolved through module aliases, shadowing and a lexical
-  `open Base`: every positional argument, except that a Base-ordered selector (`find`, `nth`,
-  `take`, `remove`, ...) contributes its collection alone (the key after it selects) and an `init`
-  generator none, plus `~default`/`~init`/`~data` — never another call's arguments — and whatever
-  is written into a binding it reaches (`x := e`, `Queue.enqueue x e` on a mutable container). A name the source never
-  binds is one identity on both sides. The forms it recognizes are held equal to the `gated_*`
-  members `Verdict.Claims` exports.
+  refuses a `Verdict` `gated_all`/`gated_alli`/`gated_exists` claim whose `~when_` reads the
+  population it quantifies or a collection that population is built from. Such a gate closes when
+  a regression empties or changes the population, so the failure reads as a skip — the
+  gh-ocannl-1115 trap, shipped twice in wave 2026-10-05 (a gate on the claim's own `results` being
+  non-empty; one on `List.exists real` over `results` mapped from `real`). Both sides are compared
+  by lexical identity, a name plus its binding. The GATE side is everything `~when_` reads, through
+  every `let` and every write it reaches. The POPULATION side is what the quantified argument is
+  BUILT from — `let` right-hand sides, branches and cases but never a condition or scrutinee, data
+  thunks, `!`/`ref`/`@`, writes into a mutable container (`x := e`, `Queue.enqueue x e`), and the
+  collection-carrying arguments of a standard collection module's functions, resolved through
+  aliases, shadowing and lexical `open Base`/`open Stdlib` — but never another call's arguments.
   That asymmetry is the rule: a capability gate may read the program, limits and backend the
-  population is computed from, and must not read the population. A `let`-bound partial
-  application is completed at each use and `|>`/`@@` read as application; a `gated_*` application
-  it cannot complete — a bound one no resolved use completes included — or a claim handed
-  unapplied to another function, is refused as unread. Outside the boundary: a population threaded through a
-  function parameter, record field, unqualified `open List` call or destructured `let`, and
-  `Verdict.gated`'s boolean. A gate folded into the claim value (`p "…" ((not on_cpu) || ok)`),
-  which prints `true` where it should report a skip, is a different shape it does not see. Most of its
-  mutation runs exit 4, not 1: the ratchet's trailing `OK:` row prints only on success (the
-  manifest's gh-ocannl-1289 section says how they were read).
+  population is computed FROM, never the population. The reader's header in
+  `test/support/verdict_scan.ml` states the exact forms, which arguments of which library
+  functions count (selectors, generators, Stdlib order), and the boundary: a population threaded
+  through a function parameter, a record field, an unqualified call under `open List` or a
+  destructured `let`, and `Verdict.gated`'s boolean, are not read; a `gated_*` application the
+  reader cannot complete is refused as unread rather than counted clean. Its recognized forms are
+  held equal to the `gated_*` members of `Verdict.Claims`. A gate folded into the claim's value
+  (`p "…" ((not on_cpu) || ok)`), which prints `true` where it should report a skip, is a
+  different shape it does not see. Most of its mutation runs exit 4, not 1: the ratchet's trailing
+  `OK:` row prints only on success (the manifest's gh-ocannl-1289 section says how they were
+  read).
 - Boolean operator aliases in `verdict_provenance.ml` (gh-ocannl-968) keep their first
   argument until application, so constant annihilators and partial applications use the same
   conjunction/disjunction algebra as direct syntax. Partial Boolean predicates retain their captured

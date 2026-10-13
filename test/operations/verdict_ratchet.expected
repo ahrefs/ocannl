@@ -530,6 +530,11 @@ accepts a gate on an element a persistent Set.add leaves out of the original: tr
 accepts a gate and a population destructured from one pattern: true
 refuses a gate read off the hash set a population is listed from: true
 refuses a gate read off a value pushed through an alias of a mutable module: true
+refuses a gate read off the value a constructor fills the population with: true
+refuses a gate read off the scrutinee a match case returns a part of: true
+reads a collection call after open Stdlib in Stdlib's order: true
+refuses a gate read off a thunk the population defaults to: true
+refuses a gate a later write computes from the population: true
 refuses a planted gate that reads its population, and a gated claim it cannot read: true
 every synthetic control has a row in the mutation-run manifest: true
 every control phrase in the mutation-run manifest names a live control: true

@@ -3627,6 +3627,39 @@ let () =
   Q.enqueue queue sample;
   Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" (Q.to_list queue) ~f:positive|ocaml},
       [ "sample" ] );
+    ( "refuses a gate read off the value a constructor fills the population with",
+      {ocaml|open Base
+let () =
+  let rows = Array.to_list (Array.create ~len:3 sample) in
+  Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" rows ~f:positive|ocaml},
+      [ "sample" ] );
+    ( "refuses a gate read off the scrutinee a match case returns a part of",
+      {ocaml|open Base
+let () =
+  let rows = match raw with [] -> [] | _ :: tail -> tail in
+  Verdict.gated_all ~when_:(not (List.is_empty raw)) ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
+      [ "raw" ] );
+    ( "reads a collection call after open Stdlib in Stdlib's order",
+      {ocaml|open Base
+open Stdlib
+let () =
+  let rows = List.find (fun rows -> rows <> []) groups in
+  Verdict.gated_all ~when_:(groups <> []) ~on:"cc" "all rows pass" rows ~f:Fun.id|ocaml},
+      [ "groups" ] );
+    ( "refuses a gate read off a thunk the population defaults to",
+      {ocaml|open Base
+let () =
+  let rows = Hashtbl.find_or_add table key ~default:(fun () -> List.map raw ~f:run) in
+  Verdict.gated_all ~when_:(not (List.is_empty raw)) ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
+      [ "raw" ] );
+    ( "refuses a gate a later write computes from the population",
+      {ocaml|open Base
+let () =
+  let rows = probe () in
+  let enabled = ref false in
+  enabled := not (List.is_empty rows);
+  Verdict.gated_all ~when_:!enabled ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
+      [ "rows" ] );
   ]
 
 let gate_control_findings source =

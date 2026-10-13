@@ -476,21 +476,23 @@ let dialect_census content =
     (a global, or one an unmodelled [open] brought in) is one identity, the same on both sides:
 
     - the GATE is every value identifier the [~when_] expression spells, and transitively every one
-      spelled by the right-hand side of a [let] it resolves to (function bodies included), in any
-      position;
+      spelled by the right-hand side of a [let] it resolves to (function bodies included), or by
+      what the source writes into that binding (below), in any position;
     - the POPULATION is the identifier the quantified argument spells, and the collections it is
       BUILT from: following a [let]-bound name into its right-hand side, the branches (not the
-      condition) of an [if], the cases (not the scrutinee) of a [match], the body and handlers of a
-      [try], the body of a [let], [let module], local [open] or sequence, the elements of a list,
-      array or tuple literal or constructor payload, the operand of [!] and of [ref] and both
-      operands of [@], and the arguments that carry the collection into a function of a standard
-      collection module ([List], [Array], [Hashtbl], [Map], [Option], [String], ... — see
-      {!collection_modules}), reached by name, through an alias ([module Rows = List]), and not
-      under a name a local module took over ([module Map = Custom]); an unqualified [List] is
-      [Stdlib]'s until an [open Base] in scope rebinds it. Which arguments carry it is
-      {!collection_arguments}': every positional one, except that a [Base]-ordered selector ([find],
-      [nth], [take], [remove], ...) contributes its collection alone and a generator none, plus the
-      data-bearing labels [~default], [~init], [~data];
+      condition) of an [if], the cases of a [match] (the scrutinee only through a name a case
+      pattern binds and the case returns), the body of a function in data position (a
+      [~default:(fun () -> ...)] thunk), the body and handlers of a [try], the body of a [let],
+      [let module], local [open] or sequence, the elements of a list, array or tuple literal or
+      constructor payload, the operand of [!] and of [ref] and both operands of [@], and the
+      arguments that carry the collection into a function of a standard collection module ([List],
+      [Array], [Hashtbl], [Map], [Option], [String], ... — see {!collection_modules}), reached by
+      name, through an alias ([module Rows = List]), and not under a name a local module took over
+      ([module Map = Custom]); an unqualified [List] is [Stdlib]'s until an [open Base] in scope
+      rebinds it. Which arguments carry it is {!collection_arguments}': every positional one, except
+      that a [Base]-ordered selector ([find], [nth], [take], [remove], ...) contributes its
+      collection alone, a [make]/[create] the value it fills in and not its count, and an
+      [init]/[range] none, plus the data-bearing labels [~default], [~init], [~data];
     - and, for a name it reaches, whatever the source writes into that binding: the right-hand side
       of [x := e], and what a writer of a mutable collection module ({!mutable_modules}:
       [Queue.enqueue x e], [Hashtbl.set x ~key ~data], ... — see {!writers}) is handed with [x],
@@ -526,7 +528,9 @@ type gate_module =
   | Verdict_module
   | Collection_module of { stdlib : bool; mutable_ : bool }
       (** [mutable_]: its values are mutable containers ({!mutable_modules}). *)
-  | Base_library  (** [Base] or [Core], whose [open] rebinds the collection modules. *)
+  | Standard_library of { stdlib : bool }
+      (** [Base] or [Core] ([stdlib = false]), [Stdlib] or [Caml] ([true]): an [open] of one rebinds
+          the collection modules to its own. *)
   | Other_module
 
 type gate_denotation = {
@@ -662,7 +666,10 @@ let collection_arguments ~stdlib name arguments =
           Some argument
       | _ -> None)
   in
-  if List.exists [ "init"; "range"; "make"; "create"; "replicate" ] ~f:starts then []
+  if List.exists [ "init"; "range" ] ~f:starts then []
+  else if List.exists [ "make"; "create"; "replicate" ] ~f:starts then
+    (* [Array.make n x], [Array.create ~len x]: the value filled in, not the count before it. *)
+    (match positional with _ :: (_ :: _ as values) -> values | values -> values) @ data
   else if (not stdlib) && List.exists selectors ~f:starts then List.take positional 1 @ data
   else positional @ data
 
@@ -729,7 +736,10 @@ let gate_census content =
               collection
           | Some _ -> Other_module
           | None when String.equal head "Verdict" -> Verdict_module
-          | None when single && List.mem [ "Base"; "Core" ] head ~equal:String.equal -> Base_library
+          | None when single && List.mem [ "Base"; "Core" ] head ~equal:String.equal ->
+              Standard_library { stdlib = false }
+          | None when single && List.mem [ "Stdlib"; "Caml" ] head ~equal:String.equal ->
+              Standard_library { stdlib = true }
           | None ->
               (* [List], [Base.List], [Stdlib.List], [List.Assoc]: a path through the standard
                  libraries' collection modules alone. *)
@@ -752,11 +762,11 @@ let gate_census content =
 
       method! shadowed = Some Other_module
 
-      (* An [open Base] rebinds every collection module to [Base]'s, from here to the end of its
-         scope. *)
+      (* An [open Base] rebinds every collection module to [Base]'s, and an [open Stdlib] back to
+         [Stdlib]'s, from there to the end of its scope. *)
       method! opened ~top:_ ~include_:_ env denotes =
         match denotes with
-        | Some Base_library ->
+        | Some (Standard_library { stdlib }) ->
             {
               env with
               Lexical_scope.modules =
@@ -764,10 +774,7 @@ let gate_census content =
                     Map.set modules ~key:name
                       ~data:
                         (Collection_module
-                           {
-                             stdlib = false;
-                             mutable_ = List.mem mutable_modules name ~equal:String.equal;
-                           }));
+                           { stdlib; mutable_ = List.mem mutable_modules name ~equal:String.equal }));
             }
         | _ -> env
 
@@ -813,7 +820,9 @@ let gate_census content =
               Hash_set.add reads (name, denotation.identity);
               if denotation.identity <> 0 && not (Hash_set.mem seen denotation.identity) then (
                 Hash_set.add seen denotation.identity;
-                Option.iter denotation.definition ~f:(fun (rhs, env) -> visit env rhs)))
+                Option.iter denotation.definition ~f:(fun (rhs, env) -> visit env rhs);
+                List.iter (Hashtbl.find_multi writes denotation.identity) ~f:(fun (written, env) ->
+                    visit env written)))
         in
         visit env expr;
         reads
@@ -850,9 +859,25 @@ let gate_census content =
           | Pexp_ifthenelse (_, yes, no) ->
               visit env yes;
               Option.iter no ~f:(visit env)
-          | Pexp_match (_, cases) ->
+          | Pexp_match (scrutinee, cases) ->
+              (* The scrutinee steers; a name a case pattern binds is a part of it, so a case that
+                 returns one is built from the scrutinee. *)
               List.iter cases ~f:(fun case ->
-                  visit (self#bind_patterns env [ case.pc_lhs ]) case.pc_rhs)
+                  let part = { (self#local) with definition = Some (scrutinee, env) } in
+                  visit
+                    (Lexical_scope.bind_values env
+                       (Lexical_scope.pattern_vars [ case.pc_lhs ])
+                       part)
+                    case.pc_rhs)
+          | Pexp_function (params, _, Pfunction_body body) ->
+              (* A thunk or callback in data position ([~default:(fun () -> ...)]): what it
+                 returns. *)
+              visit
+                (List.fold params ~init:env ~f:(fun env param ->
+                     match param.pparam_desc with
+                     | Pparam_val (_, _, pattern) -> self#bind_patterns env [ pattern ]
+                     | Pparam_newtype _ -> env))
+                body
           | Pexp_try (body, cases) ->
               (* Unlike a scrutinee, a protected body IS the value on success. *)
               visit env body;
