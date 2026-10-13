@@ -492,7 +492,7 @@ let dialect_census content =
       rebinds it. Which arguments carry it is {!collection_arguments}': every positional one, except
       that a [Base]-ordered selector ([find], [nth], [take], [remove], ...) contributes its
       collection alone, a [make]/[create] the value it fills in and not its count, an [init] what
-      its [~f] returns, and a [range] nothing, plus the data-bearing labels [~default], [~init],
+      its callback returns, and a [range] nothing, plus the data-bearing labels [~default], [~init],
       [~data];
     - the body of a binding operator ([let+ x = e in body]), where [x] is a part of [e];
     - and, for a name it reaches, whatever the source writes into that binding, directly or through
@@ -636,8 +636,9 @@ let complete arguments =
     population, as an [if] condition steers one, and a gate on them is a gate on what was selected,
     not on what was found. In [Stdlib]'s order the collection may come last ([List.assoc k l],
     [List.mem x l]), so a [Stdlib]-ordered selector takes every positional argument too -- the loud
-    direction. A generator ([init], [range], [make], [create]) takes sizes and builds from none of
-    them.
+    direction. A generator's count builds nothing: [make] and [create] build from the value they
+    fill in, [init] from what its callback returns (labeled [~f], or positional after the count),
+    and [range] from nothing.
 
     The labeled arguments that carry data rather than steer are followed too: [~default] (the
     fallback [Option.value] returns), [~init] (a fold's seed) and [~data] (a stored element). *)
@@ -673,9 +674,11 @@ let collection_arguments ~stdlib name arguments =
       | _ -> None)
   in
   if List.exists [ "init"; "range" ] ~f:starts then
-    (* [Array.init n ~f]: the elements are what [~f] returns ({!population} follows a function in
-       data position into its body); the count builds nothing. *)
-    List.filter_map arguments ~f:(function
+    (* [Array.init n ~f], [Stdlib.Array.init n f]: the elements are what the callback returns
+       ({!population} follows a function in data position into its body); the count, the first
+       positional argument, builds nothing. *)
+    List.drop positional 1
+    @ List.filter_map arguments ~f:(function
       | (Ppxlib.Asttypes.Labelled "f" | Optional "f"), callback -> Some callback
       | _ -> None)
     @ data
@@ -890,15 +893,20 @@ let gate_census content =
                        (Lexical_scope.pattern_vars [ case.pc_lhs ])
                        part)
                     case.pc_rhs)
-          | Pexp_function (params, _, Pfunction_body body) ->
-              (* A thunk or callback in data position ([~default:(fun () -> ...)]): what it
-                 returns. *)
-              visit
-                (List.fold params ~init:env ~f:(fun env param ->
-                     match param.pparam_desc with
-                     | Pparam_val (_, _, pattern) -> self#bind_patterns env [ pattern ]
-                     | Pparam_newtype _ -> env))
-                body
+          | Pexp_function (params, _, body) -> (
+              (* A thunk or callback in data position ([~default:(fun () -> ...)]): what it returns,
+                 in either syntax. *)
+              let env =
+                List.fold params ~init:env ~f:(fun env param ->
+                    match param.pparam_desc with
+                    | Pparam_val (_, _, pattern) -> self#bind_patterns env [ pattern ]
+                    | Pparam_newtype _ -> env)
+              in
+              match body with
+              | Pfunction_body body -> visit env body
+              | Pfunction_cases (cases, _, _) ->
+                  List.iter cases ~f:(fun case ->
+                      visit (self#bind_patterns env [ case.pc_lhs ]) case.pc_rhs))
           | Pexp_try (body, cases) ->
               (* Unlike a scrutinee, a protected body IS the value on success. *)
               visit env body;
@@ -975,12 +983,23 @@ let gate_census content =
                 (* In [Base]'s order the container comes first. [Stdlib]'s varies by function
                    ([Queue.add x q], [Hashtbl.add t k v]), so there every positional argument is a
                    possible container of all the others -- the loud direction. *)
-                let containers = if stdlib then positional else List.take positional 1 in
+                (* A labeled destination is a container and a labeled source written into it:
+                   [Array.blit ~src ~src_pos ~dst ~dst_pos ~len]. *)
+                let labeled name =
+                  List.filter_map arguments ~f:(function
+                    | (Ppxlib.Asttypes.Labelled label | Optional label), argument
+                      when String.equal label name ->
+                        Some argument
+                    | _ -> None)
+                in
+                let containers =
+                  (if stdlib then positional else List.take positional 1) @ labeled "dst"
+                in
                 List.iter containers ~f:(fun container ->
                     Option.iter (target container) ~f:(fun identity ->
                         record identity
                           (List.filter positional ~f:(fun other -> not (phys_equal other container))
-                          @ data)))
+                          @ labeled "src" @ data)))
             | _ -> ())
         | _ -> ()
 

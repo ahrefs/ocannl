@@ -3685,6 +3685,25 @@ let () =
   Verdict.gated_all ~when_:(Option.is_some maybe_rows) ~on:"cc" "all rows pass"
     (Option.value maybe ~default:[]) ~f:Fn.id|ocaml},
       [ "maybe_rows" ] );
+    ( "refuses a gate read off a positional Stdlib initializer callback",
+      {ocaml|let () =
+  let rows = Stdlib.List.init 3 (fun _ -> sample) in
+  Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" rows ~f:positive|ocaml},
+      [ "sample" ] );
+    ( "refuses a gate read off a function-case callback",
+      {ocaml|open Base
+let () =
+  let rows = Array.to_list (Array.init 3 ~f:(function _ -> sample)) in
+  Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" rows ~f:positive|ocaml},
+      [ "sample" ] );
+    ( "refuses a gate read off the source a labeled blit copies into the population",
+      {ocaml|open Base
+let () =
+  let dst = Array.create ~len:3 0 in
+  Array.blit ~src ~src_pos:0 ~dst ~dst_pos:0 ~len:3;
+  Verdict.gated_all ~when_:(Array.length src > 0) ~on:"cc" "all rows pass" (Array.to_list dst)
+    ~f:positive|ocaml},
+      [ "src" ] );
   ]
 
 let gate_control_findings source =
