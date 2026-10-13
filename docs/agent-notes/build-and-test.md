@@ -2120,11 +2120,12 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   `gh workflow run ci.yml --repo lukstafi/ocannl-staging --ref <branch> -f ocaml_compiler=5.3.x -f expected_sha=<full head SHA>`.
   That runs ONE job, `Build (ubuntu-latest, 5.3.x, main)`, the scheduled floor job's full suite,
   and its check attaches to the head like the PR run's; no formatting, harness or macOS job runs.
-  Its verdict is a check on the head, so a red one is a red `pr-review.sh merge` reads: when the
-  floor is already red on master for another cause (the scheduled sweep says so), the floor job
-  is red on your head too, and the merge needs `--override` naming the master red's issue —
-  compare the failing rules with the scheduled run's first. The guard step refuses a floor
-  dispatch without `expected_sha`, and one combined with `windows_only`.
+  Its verdict is a check on the head, so a red one is a red `pr-review.sh merge` reads. When the
+  floor is red on master for another cause (the scheduled sweep says so), compare the failing
+  rules with the scheduled run's: if master has since fixed it, bring the base in and dispatch
+  again at the new head; otherwise the merge needs `--override` naming the master red's issue.
+  The guard step refuses a floor dispatch without `expected_sha`, and one combined with
+  `windows_only`.
 - A scan's synthetic fixtures are parsed by the parser of the compiler RUNNING the scan, so a
   fixture spelled in syntax newer than the floor fails only on the floor leg, as a bare
   `Syntaxerr.Error` from the scanner's `parse` (5.4's `let exception E = M.E in`, gh-ocannl-1271).
