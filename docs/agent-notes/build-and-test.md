@@ -34,6 +34,19 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   is anchored to the directory that generates them. And where the premise is "this value happens to
   equal that constant", read the constant from where it is defined rather than restating the
   coincidence: an unchecked default is the one name no call site spells.
+- **What reaches the scans is wider than what looks like infrastructure.** Two members of
+  `@test/operations/scans` census sources across the tree, tests included, so a test-only edit can
+  turn them red with no config key, stanza or new file in the diff. `codegen_text_inventory`
+  itemises every fragment of emitted text a test pins, string literals in its `.ml` as well as its
+  goldens: a test that stops (or starts) pinning a spelling changes the inventory's golden, which
+  then wants a re-promote. `dead_export_scan` counts a test's qualified reference to a library value
+  as a caller: a test that starts referencing an exempted zero-reference export makes that
+  exemption stale, which fails until it is deleted, and one that drops a value's last reference
+  makes it a new finding. lukstafi/ocannl-staging#1095 lost a CI round to both at once: moving
+  `schedule_mma_matmul` from emitted-text matching to the mma census dropped two inventory lines
+  and gave `C_syntax.is_tensorized_rendering` its first caller. Neither shows in the diff's file
+  list, so the `AGENTS.md` trigger names the edit's effect rather than its location; the scans run
+  in seconds, which is what makes running them on that trigger cheap.
 - `AGENTS.md` stays under 32 KiB, and `test/operations/agents_md_size` holds it there. Claude Code
   truncates an imported instructions file at that size -- silently, from the end, which is where
   the PR, configuration and syntax sections sit -- and the guide crossed the line one review-fix
