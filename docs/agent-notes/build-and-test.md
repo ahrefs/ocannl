@@ -1986,10 +1986,10 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
 - Every rule that diffs a golden — the repo-wide scans, the codegen snapshots, the config-precedence
   rules, the ppx-output diffs — carries its own `runtest-<name>` alias (gh-ocannl-726), so
   `dune build @test/operations/runtest-verdict_ratchet` runs that one test, applies its diff and is
-  promotable, and a misspelling exits 1 (`Alias … is empty`) rather than doing nothing. The seven
+  promotable, and a misspelling exits 1 (`Alias … is empty`) rather than doing nothing. The
   repo-wide scans additionally share `dune build @test/operations/scans` (gh-ocannl-703): the family
-  runs in seconds, and is what to run after touching a config key, a dune stanza, a printed claim or
-  an agent note. Two properties of dune shape how those aliases are written, and both are silent
+  runs in seconds, and WHEN to run it is stated once, in `AGENTS.md`'s Testing bullet on the scans,
+  with the test-only edits it covers explained under *Repository scans* above. Two properties of dune shape how those aliases are written, and both are silent
   when got wrong:
   - **A rule attached to two aliases makes building EITHER build BOTH.** So a golden-diff rule sits
     on `runtest-<name>` *alone*, never on `(aliases runtest runtest-<name>)` — that spelling type-checks,
