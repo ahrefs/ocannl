@@ -3758,6 +3758,26 @@ let () =
   let rows = List.map [ () ] ~f:(fun _ -> sample) in
   Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" rows ~f:positive|ocaml},
       [ "sample" ] );
+    ( "refuses a gate read off what a Map.update callback puts in the population",
+      {ocaml|open Base
+let () =
+  let rows = Map.data (Map.update table key ~f:(fun _ -> sample)) in
+  Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" rows ~f:positive|ocaml},
+      [ "sample" ] );
+    ( "refuses a gate read off what a Hashtbl.update callback writes into the population",
+      {ocaml|open Base
+let () =
+  let table = Hashtbl.create (module String) in
+  Hashtbl.update table key ~f:(fun _ -> sample);
+  Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" (Hashtbl.data table) ~f:positive|ocaml},
+      [ "sample" ] );
+    ( "refuses a gate a recursive peer reads the population through",
+      {ocaml|open Base
+let check rows =
+  let rec enabled () = inspect ()
+  and inspect () = not (List.is_empty rows) in
+  Verdict.gated_all ~when_:(enabled ()) ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
+      [ "rows" ] );
   ]
 
 let gate_control_findings source =

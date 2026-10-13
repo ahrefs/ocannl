@@ -544,7 +544,9 @@ type gate_module =
 
 type gate_denotation = {
   identity : int;
-  definition : (expression * (gate_denotation, gate_module) Lexical_scope.env) option;
+  mutable definition : (expression * (gate_denotation, gate_module) Lexical_scope.env) option;
+      (** Mutable only so that a recursive group's definitions can see each other: they are set once
+          the group's own scope exists. *)
 }
 
 type gate_reading = {
@@ -643,7 +645,8 @@ let complete arguments =
     fill in, [init] from what its callback returns (labeled [~f], or positional after the count),
     and [range] from nothing. An inserting function's labeled [~key] joins the population
     ([Map.set m ~key ~data]), and so does what a transforming function's [~f] returns
-    ([List.map xs ~f]); a selector's key and predicate do not.
+    ([List.map xs ~f]), or an update-like selector's ([Map.update m k ~f], [find_map]); a selector's
+    key and a [find] predicate do not. A writer's [~f] is written into its container.
 
     The labeled arguments that carry data rather than steer are followed too: [~default] (the
     fallback [Option.value] returns), [~init] (a fold's seed) and [~data] (a stored element). *)
@@ -691,7 +694,16 @@ let collection_arguments ~stdlib name arguments =
   else if List.exists [ "make"; "create"; "replicate" ] ~f:starts then
     (* [Array.make n x], [Array.create ~len x]: the value filled in, not the count before it. *)
     (match positional with _ :: (_ :: _ as values) -> values | values -> values) @ data
-  else if (not stdlib) && List.exists selectors ~f:starts then List.take positional 1 @ data
+  else if (not stdlib) && List.exists selectors ~f:starts then
+    List.take positional 1
+    (* [Map.update m k ~f], [List.find_map xs ~f]: the callback's result is the population's, a
+       [find] predicate's is not. *)
+    @ (if List.exists [ "update"; "change"; "find_map" ] ~f:starts then
+         List.filter_map arguments ~f:(function
+           | (Ppxlib.Asttypes.Labelled "f" | Optional "f"), callback -> Some callback
+           | _ -> None)
+       else [])
+    @ data
   else
     (* An inserting function's labeled key joins the population ([Map.set m ~key ~data]); a
        selector's selects it, above. *)
@@ -852,6 +864,22 @@ let gate_census content =
         match Read.pattern_name binding.pvb_pat with
         | Some _ -> { identity; definition = Some (binding.pvb_expr, env) }
         | None -> { identity; definition = None }
+
+      (* A recursive group's names see one another's definitions: each definition's scope is the
+         group's own, which exists only once the group's denotations do. *)
+      method! denotations env rec_flag bindings =
+        match rec_flag with
+        | Nonrecursive -> super#denotations env rec_flag bindings
+        | Recursive ->
+            let denotes =
+              List.map bindings ~f:(fun binding ->
+                  { identity = binding.pvb_loc.loc_start.pos_cnum + 1; definition = None })
+            in
+            let scope = self#bind_group env bindings denotes in
+            List.iter2_exn denotes bindings ~f:(fun denotation binding ->
+                if Option.is_some (Read.pattern_name binding.pvb_pat) then
+                  denotation.definition <- Some (binding.pvb_expr, scope));
+            denotes
 
       method! attribute _ attr = attr
 
@@ -1062,7 +1090,7 @@ let gate_census content =
                     Option.iter (target container) ~f:(fun identity ->
                         record identity
                           (List.filter positional ~f:(fun other -> not (phys_equal other container))
-                          @ labeled "src" @ data)))
+                          @ labeled "src" @ labeled "f" @ data)))
             | _ -> ())
         | _ -> ()
 
