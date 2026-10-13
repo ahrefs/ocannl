@@ -1587,7 +1587,8 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   (`refusal markers omitted: K`, gh-ocannl-1216): a claim that failed prints no marker, so a
   complete failing run of a manifest-printing scan is a row short, and it counts when every other
   row is the golden's, row for row (a claim of it may read false; the run's own `FAIL:` rows are
-  skipped), and Verdict's teardown ended the process; a run missing or swapping a row, or with no
+  skipped -- `Verdict.fail` prefixes EVERY line of a multi-line message, so an "expected/got"
+  continuation is skipped too rather than read as a row the golden lacks), and Verdict's teardown ended the process; a run missing or swapping a row, or with no
   teardown, still exits 4. A golden's success trailer is read the same way (`success trailer
   omitted: K rows`): the scans print their `OK: ` rows under `if not (Verdict.any_failed ())`,
   most of them behind a blank row of the trailer's own (`printf "\nOK: …"`), so every complete

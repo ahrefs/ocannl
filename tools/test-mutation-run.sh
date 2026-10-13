@@ -139,6 +139,13 @@ case "$PROBE_MODE" in
     printf 'FAIL: first: false\nCommand got signal SEGV.\n'; exit 1 ;;
   trailerswap) rows "first: false\nswapped in$section$m2"'last: true\n'
     printf 'FAIL: first: false\nFAILED: 1 check did not hold.\n'; exit 1 ;;
+  # A failed claim elaborated by a multi-line Verdict.fail, on a run short by its success
+  # trailer: every row of the message carries `FAIL: `, as Verdict.fail prints it; then the
+  # shape it printed before, a continuation row with no prefix -- a row the golden lacks.
+  trailermulti) rows "first: false\nFAIL: first: the emit child failed:\nFAIL:   detail one\n$section$m2"'last: true\n'
+    printf 'FAIL: first: false\nFAILED: 2 checks did not hold.\n'; exit 1 ;;
+  trailermultibare) rows "first: false\nFAIL: first: the emit child failed:\n  detail one\n$section$m2"'last: true\n'
+    printf 'FAIL: first: false\nFAILED: 2 checks did not hold.\n'; exit 1 ;;
   compile) echo 'Error: injected compile failure'; exit 1 ;;
   refused) printf 'dune: unknown option\nUsage: dune build [OPTION]…\n'; exit 1 ;;
   restore_error) rm module.ml; mkdir module.ml; exit 1 ;;
@@ -321,6 +328,20 @@ grep -qF 'if not (Verdict.any_failed ()) then' "$root/test/operations/verdict_ra
   grep -q '^OK: ' "$root/test/operations/verdict_ratchet.expected" ||
   { echo 'verdict_ratchet no longer prints a success trailer `OK: ` row under Verdict.any_failed'; exit 1; }
 printf 'PASS a failing run short by its success trailer is caught; cut, killed or row-swapped runs with the same shortfall exit 4\n'
+# A failure message spanning lines: Verdict.fail prefixes every line, so the runner skips each row
+# of it as it skips any `FAIL: ` row, and a run short by its trailer is still caught. Each
+# unprefixed continuation row, the shape Verdict.fail printed before, is a row the golden lacks.
+export PROBE_MODE=trailermulti
+PROBE_ALIAS=@runtest-trailer run_case 1
+grep -q '^rows: 7 printed of 8 in trailer.expected$' "$fixture/result"
+grep -q '^success trailer omitted: 2 rows ' "$fixture/result"
+reached
+export PROBE_MODE=trailermultibare
+PROBE_ALIAS=@runtest-trailer run_case 4
+flagged "STOPPED EARLY: the mutated run printed 7 of the golden's 8 rows"
+grep -qF 'List.map lines ~f:(fun line -> "FAIL: " ^ line ^ "\n")' "$root/test/support/verdict.ml" ||
+  { echo 'Verdict.fail no longer prefixes every line of its message with "FAIL: "'; exit 1; }
+printf 'PASS a multi-line failure, every row prefixed, is caught on a trailer-short run; an unprefixed continuation row exits 4\n'
 for mode in pass compile refused; do
   export PROBE_MODE=$mode
   case $mode in pass) rc=0 ;; compile) rc=4 ;; refused) rc=2 ;; esac

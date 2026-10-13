@@ -41,13 +41,27 @@ let passed_labels () = List.rev !passed_label_history
 
 let record_pass label = passed_label_history := label :: !passed_label_history
 
+(* [msg] with every line of it prefixed by ["FAIL: "]. A [FAIL: ] row is a run's own, never a
+   golden's, and [tools/mutation-run.sh] matches a mutated run's other rows against the golden row
+   by row: an unprefixed continuation line -- an "expected/got" pair, a child's captured output --
+   would be a row the golden lacks, and turn a caught mutant into one that "stopped early". A
+   trailing newline adds no empty row. *)
+let fail_lines msg =
+  let lines =
+    match String.split msg ~on:'\n' with
+    | lines when String.is_suffix msg ~suffix:"\n" -> List.drop_last_exn lines
+    | lines -> lines
+  in
+  String.concat (List.map lines ~f:(fun line -> "FAIL: " ^ line ^ "\n"))
+
 (** Records a failure, on stdout (where the golden sees it) and stderr (where it survives the
-    nonzero exit). [msg] should read as the thing that is wrong, without a "FAIL" prefix of its own.
-*)
+    nonzero exit). [msg] should read as the thing that is wrong, without a "FAIL" prefix of its own;
+    it may span lines, each of which is printed with the prefix. *)
 let fail msg =
   Int.incr failures;
-  Stdio.printf "FAIL: %s\n" msg;
-  Stdio.eprintf "FAIL: %s\n" msg
+  let text = fail_lines msg in
+  Stdio.print_string text;
+  Stdio.eprintf "%s" text
 
 (** [claim name b] fails the run when [b] is false, printing nothing on stdout: for a test that
     renders the boolean itself, in a column layout of its own. Prefer {!p}, which does both. *)

@@ -13,4 +13,5 @@ a case that raises is a failed claim naming the case and the exception: true
 the case after a raising case still runs: true
 an exit inside a case ends the run rather than failing the case: true
 an exit inside a case after a failed check says which case stopped the run: true
+every line of a multi-line failure carries the FAIL prefix: true
 a case that returns prints only what its claims print: true

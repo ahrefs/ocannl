@@ -116,7 +116,8 @@ my (undef, $golden_last) = case_raises("$root/$golden");
 # claim's marker prints only once Verdict recorded that claim passing, so a run in which the
 # claim failed is a marker row short of the golden while it still reached its last row
 # (gh-ocannl-1216). The other rows, in order, and how many markers there were. A run's own
-# `FAIL: ` rows are Verdict.fail's, never a golden's, so they are no row of either side.
+# `FAIL: ` rows are Verdict.fail's (every line of a multi-line message carries the prefix),
+# never a golden's, so they are no row of either side.
 my $marker_row = qr/^  \[scanner-refusal:[0-9a-f]{32}\] /;
 sub plain_rows {
     open my $f, '<:raw', $_[0] or refuse("read $_[0]: $!");
