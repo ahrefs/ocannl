@@ -34,6 +34,26 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   is anchored to the directory that generates them. And where the premise is "this value happens to
   equal that constant", read the constant from where it is defined rather than restating the
   coincidence: an unchecked default is the one name no call site spells.
+- **What reaches the scans is wider than what looks like infrastructure.** Two members of
+  `@test/operations/scans` census sources across the tree, tests included, so a test-only edit can
+  turn them red with no config key, stanza or new file in the diff. `codegen_text_inventory`
+  lists each golden holding emitted text at FILE level, with its backend families and the content
+  markers it recognises there, and itemises a test SOURCE's pins fragment by fragment, the string
+  literals it asserts on included. So any edit that touches pinned emitted text can move the
+  inventory's golden and want a re-promote: a test `.ml` that starts or stops pinning a spelling, a
+  golden that starts or stops holding emitted text, or a re-promoted golden whose recognised
+  markers change. A spelling change inside a listed golden that leaves its markers alone moves
+  nothing there, so a green scan is no spelling-level coverage of goldens. `dead_export_scan`
+  counts a test's qualified reference to a library value as a caller, and a test's type path as a
+  mention of a library type: a test that starts referencing an exempted zero-reference export (or
+  an exempted unmentioned type) makes that exemption stale, which fails until it is deleted, and
+  one that drops a value's last reference or a type's last mention makes it a new finding.
+  lukstafi/ocannl-staging#1095 lost a CI round to both at once: moving `schedule_mma_matmul` from
+  emitted-text matching to the mma census dropped two inventory lines and gave
+  `C_syntax.is_tensorized_rendering` its first caller. Neither shows in the diff's file list, so
+  the `AGENTS.md` trigger names the edit's effect, as broadly as "touches", rather than its
+  location or an enumeration of the ways an inventory line can move; the scans run in seconds,
+  which is what makes running them on that trigger cheap.
 - `AGENTS.md` stays under 32 KiB, and `test/operations/agents_md_size` holds it there. Claude Code
   truncates an imported instructions file at that size -- silently, from the end, which is where
   the PR, configuration and syntax sections sit -- and the guide crossed the line one review-fix
@@ -1970,10 +1990,10 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
 - Every rule that diffs a golden — the repo-wide scans, the codegen snapshots, the config-precedence
   rules, the ppx-output diffs — carries its own `runtest-<name>` alias (gh-ocannl-726), so
   `dune build @test/operations/runtest-verdict_ratchet` runs that one test, applies its diff and is
-  promotable, and a misspelling exits 1 (`Alias … is empty`) rather than doing nothing. The seven
+  promotable, and a misspelling exits 1 (`Alias … is empty`) rather than doing nothing. The
   repo-wide scans additionally share `dune build @test/operations/scans` (gh-ocannl-703): the family
-  runs in seconds, and is what to run after touching a config key, a dune stanza, a printed claim or
-  an agent note. Two properties of dune shape how those aliases are written, and both are silent
+  runs in seconds, and WHEN to run it is stated once, in `AGENTS.md`'s Testing bullet on the scans,
+  with the test-only edits it covers explained under *Repository scans* above. Two properties of dune shape how those aliases are written, and both are silent
   when got wrong:
   - **A rule attached to two aliases makes building EITHER build BOTH.** So a golden-diff rule sits
     on `runtest-<name>` *alone*, never on `(aliases runtest runtest-<name>)` — that spelling type-checks,
