@@ -2501,12 +2501,24 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   those are where to look first. The restore is the big one and it is not free even when it works:
   restoring the 893 MB Windows entry costs ~530s on every job, which is what it buys off the 6-10
   min dependency install. The transition-time CA collision (gh-ocannl-1014) is avoided by caching
-  `tools/windows-opam-cache.sh`'s two tar payloads under the Windows v2 key: the switch and
+  `tools/windows-opam-cache.sh`'s two tar payloads under the Windows v3 key: the switch and
   Cygwin tree retain the mingw libraries and package metadata, but exclude the derived
   `root/etc/pki/ca-trust/extracted` subtree at both save and restore. setup-ocaml owns those fresh
   CA files. Inner tar processes use `MSYS=winsymlinks:sys`: the default MSYS deepcopy mode
   cannot restore forward symlinks or Cygwin absolute targets into an empty tree. System link
-  files preserve their POSIX targets without native Windows symlink privilege.
+  files preserve their POSIX targets without native Windows symlink privilege — but only Cygwin
+  and MSYS programs follow them. **Anything a native program runs must restore as a file**: on
+  the hosted runner the compiler install (under setup-ocaml's `CYGWIN=winsymlinks:native`)
+  leaves `bin/flexlink.exe`, `ocamllex.exe` and friends as links to their `.opt` twins (inferred
+  from a cache miss building green and every hit failing on exactly those names; reproduced on
+  rog with a crafted link member), and restored as system link files they fail dune's `CreateProcess` with `This version of ... is not compatible with the version
+  of Windows you're running` — every scheduled Windows job from the first v2 cache hit on
+  (2026-10-06) died linking ppx drivers, masking the whole suite (gh-ocannl-1271). So the switch
+  is packed with `tar -h` (links resolved, on the host where they work) and restore refuses a
+  switch payload that still carries a link; the Cygwin tree keeps its links, which only Cygwin
+  follows. `cygpath -w` resolves links too, so a native check must spell the link's own path
+  (`cmd //c "$(cygpath -w dir)\\name"`), as the fixture's `native_run` does. A rog switch built
+  without that `CYGWIN` setting holds copies, not links, so the `--real` leg cannot show this.
   actions/cache restores only the payload directory; checked listing and extraction
   then gate the job, so a partial extraction cannot masquerade as a warm switch. An ordinary
   cache miss still uses the two-step install, prunes sources, and packs before the post-save.

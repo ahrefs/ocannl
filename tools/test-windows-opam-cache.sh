@@ -34,6 +34,25 @@ perl -e '
   }
   print "\0" x 1024;
 ' >"$TMP/links.tar"
+# The switch's own link, as the hosted runner's compiler install leaves
+# bin/flexlink.exe -> flexlink.opt.exe: forward, so its target lands later.
+perl -e '
+  $h=pack("a100a8a8a8a12a12a8a1a100a6a2a32a32a8a8a155a12",
+    "./bin/tool.exe","0000777","0000000","0000000","00000000000","00000000000",
+    "        ","2","tool.opt.exe","ustar","00","","","","","","");
+  $sum=0; $sum+=$_ for unpack("C*",$h);
+  substr($h,148,8)=sprintf("%06o\0 ",$sum); print $h, "\0" x 1024;
+' >"$TMP/switch-links.tar"
+case "$(uname -s)" in
+  # A native program, so the restored link can be run the way dune runs
+  # flexlink.exe: by CreateProcess, not through the MSYS runtime.
+  MINGW*|MSYS*) msys=1; cp "$(cygpath -S)/hostname.exe" "$TMP/tool.opt.exe" ;;
+  *) msys=0; printf 'switch tool\n' >"$TMP/tool.opt.exe" ;;
+esac
+native_run() { # FILE [ARG...]: run through cmd.exe, which does not follow MSYS link files
+  local file=$1; shift
+  cmd //c "$(cygpath -w "$(dirname "$file")")\\$(basename "$file")" "$@" 2>&1
+}
 
 real_tar=$(command -v tar)
 printf 'cache fixture host: %s; %s\n' "$(uname -s)" "$(git --version)"
@@ -53,6 +72,8 @@ roundtrip() {
   seed "$base/source"
   MSYS=winsymlinks:sys tar -xf "$TMP/links.tar" -C "$base/source/cygwin" || return 1
   printf 'later symlink target\n' >"$base/source/cygwin/root/bin/z_target.exe"
+  MSYS=winsymlinks:sys tar -xf "$TMP/switch-links.tar" -C "$base/source/switch" || return 1
+  cp "$TMP/tool.opt.exe" "$base/source/switch/bin/tool.opt.exe"
   bash "$subject" pack "$base/payload" "$base/source/switch" "$base/source/cygwin" >"$base/pack.log" 2>&1 || return 1
   tar -tf "$base/payload/cygwin.tar" >"$base/members"
   if grep -q 'ca-trust/extracted' "$base/members"; then return 1; fi
@@ -68,11 +89,17 @@ roundtrip() {
     [ -L "$base/fresh/cygwin/root/etc/a_absolute" ] &&
     [ "$(readlink "$base/fresh/cygwin/root/etc/a_absolute")" = /usr/share/cache-fixture-missing ] &&
     cmp "$base/source/switch/lib/dependency" "$base/fresh/switch/lib/dependency" &&
+    [ ! -L "$base/fresh/switch/bin/tool.exe" ] &&
+    cmp "$TMP/tool.opt.exe" "$base/fresh/switch/bin/tool.exe" &&
+    { [ "$msys" = 0 ] || native_run "$base/fresh/switch/bin/tool.exe" >"$base/native.log"; } &&
     cmp "$base/source/cygwin/root/usr/x86_64-w64-mingw32/lib/libfixture.a" "$base/fresh/cygwin/root/usr/x86_64-w64-mingw32/lib/libfixture.a" &&
     cmp "$base/source/cygwin/root/etc/setup/installed.db" "$base/fresh/cygwin/root/etc/setup/installed.db" &&
     cmp "$base/source/cygwin/root/etc/pki/ca-trust/extracted/pem/directory-hash/ee37c333.0" "$base/fresh/cygwin/root/etc/pki/ca-trust/extracted/pem/directory-hash/ee37c333.0"
 }
 roundtrip "$SRC" roundtrip; report $? 'archive round trip retains dependencies, mingw, symlinks and fresh CA'
+[ "$(tar -tvf "$TMP/roundtrip/payload/switch.tar" | awk '/^l/' | wc -l)" -eq 0 ] &&
+  [ -L "$TMP/roundtrip/source/switch/bin/tool.exe" ]
+report $? 'the switch payload stores its linked binary as a file'
 # A legacy payload with an actual tar symlink member, independent of Git Bash's
 # ln -s copy emulation or the user's Windows symlink privilege.
 perl -e '
@@ -133,6 +160,22 @@ if ca_collision "$restore_mutant" mutant-restore; then report 1 'negative contro
     ! grep -qx 'setup-ocaml fresh CA' "$TMP/mutant-restore/cygwin/root/etc/pki/ca-trust/extracted/pem/directory-hash/ee37c333.0"
   report $? 'negative control: omitted restore exclusion'
 fi
+links_mutant=$(mutant pack-keeps-switch-links '{sub(/tar -h -cf/, "tar -cf"); print}')
+if roundtrip "$links_mutant" mutant-links; then report 1 'negative control: switch packed with its symlinks'; else
+  grep -q 'switch payload carries a symlink' "$TMP/mutant-links/restore.log"
+  report $? 'negative control: switch packed with its symlinks'
+fi
+if [ "$msys" = 1 ]; then
+  # Without the refusal too, the link restores as an MSYS system link file,
+  # which cmd.exe -- like dune's CreateProcess -- cannot execute.
+  unguarded=$(mutant restores-switch-links '{sub(/tar -h -cf/, "tar -cf"); sub(/links=\$\(tar -tvf[^)]*\)/, "links="); print}')
+  if roundtrip "$unguarded" mutant-unguarded; then report 1 'negative control: switch restored with system link files'; else
+    native_run "$TMP/mutant-unguarded/fresh/switch/bin/tool.exe" | grep -q 'not compatible with the version of Windows'
+    report $? 'negative control: switch restored with system link files'
+  fi
+else
+  skip 'negative control: switch restored with system link files' 'MSYS system link files exist only under Git Bash'
+fi
 error_mutant=$(mutant ignores-extraction-error '{sub(/set -euo pipefail/, "set -uo pipefail"); print}')
 if extraction_refused "$error_mutant" "$TMP/mutant-refusal.log"; then report 1 'negative control: ignored extraction status'; else
   grep -q 'fixture extraction refused' "$TMP/mutant-refusal.log" && grep -q 'restore complete' "$TMP/mutant-refusal.log"
@@ -172,7 +215,8 @@ if [ -n "$real_switch" ]; then
     cmp "$real_cygwin/root/etc/setup/installed.db" "$TMP/real-cygwin/root/etc/setup/installed.db" || return 1
     grep -qx 'setup-ocaml transition CA sentinel' "$TMP/real-cygwin/root/etc/pki/ca-trust/extracted/pem/directory-hash/ee37c333.0" || return 1
     printf 'restored compiler: '
-    "$TMP/real-switch/bin/ocamlc.exe" -version || return 1
+    if [ "$msys" = 1 ]; then native_run "$TMP/real-switch/bin/ocamlc.exe" -version || return 1
+    else "$TMP/real-switch/bin/ocamlc.exe" -version || return 1; fi
     printf 'retained system libraries: %s\n' "$(wc -l <"$TMP/real-source-libraries")"
   }
   real_roundtrip; report $? 'existing switch/Cygwin archive contents, metadata, compiler and fresh CA'
