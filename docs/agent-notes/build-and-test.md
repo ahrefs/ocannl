@@ -2772,16 +2772,20 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
     `Set git to use LF`), and under `true` `refusal_control_scan_cases` fails, since it edits
     `verdict.ml` by `\n`-anchored patterns (ahrefs/ocannl#1311 tracks making such tests
     line-ending-proof). A leg on a CRLF tree is not the check CI runs.
-  - **Run `tools/test-windows-opam-cache.sh` before sourcing `tools/opam-env.sh`** (or in a
-    subshell that never sources it): the switch's `bin/` holds opam's Cygwin `cygpath.exe`, and
-    once `opam-env.sh` puts that directory on PATH it shadows Git Bash's, answering with
-    `/cygdrive/...` paths Git Bash cannot open. staging#1088's first leg ran the fixture after
-    sourcing and had to discard its result. CI's cache steps never source `opam-env.sh`, so this
-    order is also CI's.
+  - **Run `tools/test-windows-opam-cache.sh` before sourcing `tools/opam-env.sh`**, or confine
+    the sourcing and the build to a subshell of their own; a subshell started AFTER the leg's
+    shell sourced it inherits the modified PATH and does not help. The switch's `bin/` holds
+    opam's Cygwin `cygpath.exe`, and once `opam-env.sh` puts that directory on PATH it shadows Git
+    Bash's, answering with `/cygdrive/...` paths Git Bash cannot open. staging#1088's first leg ran
+    the fixture after sourcing and had to discard its result. CI's cache steps never source
+    `opam-env.sh`, so this order is also CI's.
 - **A Windows opam-cache key bump is verified only by the SECOND hosted run after it.** The first
   run misses the new key, so it builds the dependencies and exercises `windows-opam-cache.sh pack`
   and the save; only the next run restores the entry, and the restore is where the v2 payload
-  broke (the links above). So a change to the key, to what is packed or to how it is restored
+  broke (the links above). A change to what is packed (with any restore that depends on it)
+  must therefore bump the key itself: `ci.yml` runs the pack step only on a miss, so under the
+  old key both runs hit the existing entry and neither exercises the new pack path. The bumping
+  change then
   dispatches `windows_only` twice at its head, the second only after the first has finished (the
   entry is saved in a job's post step), and counts the second run's cache hit, read in its
   `Restore opam dependency archives (Windows)` step. staging#1088 needed runs 38399107756 (miss,
