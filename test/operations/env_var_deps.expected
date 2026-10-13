@@ -151,6 +151,7 @@ declared or pinned by every rule running the program (gh-ocannl-1149):
   test/operations/dune, executable autotune_fission_sketch: Ir.Schedule.default_cpu, Ir.Schedule.default_gpu, Ir.Schedule.default_pipeline_fissions, Ir.Schedule.fission_scheduled, Ir.Schedule.fission_segmented, Ir.Schedule.zero_expansion
   test/operations/dune, executable autotune_mma_companion: Ir.Schedule.apply
   test/operations/dune, test accum_width: Ir.Schedule.apply
+  test/operations/dune, test aligned_chains_shared_symbol: Ir.Schedule.aligned_chains
   test/operations/dune, test autotune_privatize: Ir.Schedule.apply, Ir.Schedule.default_cpu, Ir.Schedule.default_gpu
   test/operations/dune, test autotune_scope_menu: Ir.Schedule.apply
   test/operations/dune, test autotune_serial_baseline: Ir.Schedule.automatic_schedule_active, Ir.Schedule.maybe_default_schedules

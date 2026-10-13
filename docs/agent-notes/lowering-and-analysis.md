@@ -250,6 +250,13 @@ files.
   environment both take (do not add a second walker for it — round 7 of gh-693 did, and gh-722
   removed the duplicate). Soundness direction, as everywhere in the engine: a proven "separated" is
   proven, and anything it cannot interpret declines.
+- **A pair query ranges each side by its own bounds** (gh-ocannl-1282): `Affine.pair_conflict`
+  takes `~left_range ~right_range`, ranging a side's `Left_v`/`Right_v` variables by that side and a
+  `Shared` one by the hull of the sides sharing it. Loop symbols are not unique: sibling loops (two
+  nests, or two inner loops of one nest) may rebind one symbol with different bounds, and lending
+  one side's bounds to the other once let `aligned_chains` accept a cross-thread dependence. Build a
+  side's range from a loop environment with `Affine.bounds_range` (the hull of every binding), never
+  `List.Assoc.find`, whose first binding drops the siblings'; `aligned_chains_shared_symbol.ml` pins it.
 - **`Sub_axis` has ONE meaning, and "unknown" is never written into a map** (gh-ocannl-1162): the
   axis adds zero to the row-major offset while keeping its stride, so a `Sub_axis` run makes the
   component after it a flattened index over the run (lowering's flat stores, `Row`'s strided

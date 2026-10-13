@@ -4984,7 +4984,7 @@ let loops_independent (opt : Low_level.optimized) ~(syms : Indexing.symbol list)
   let verdict_of loop =
     let accs = Low_level.affine_accesses loop in
     let env = Low_level.loop_bounds loop in
-    let range s = List.Assoc.find env s ~equal:Indexing.equal_symbol in
+    let range = Affine.bounds_range env in
     let dup s = List.Assoc.mem env s ~equal:Indexing.equal_symbol in
     let pairs = List.map syms ~f:(fun s -> (s, s)) in
     let extent s = match range s with Some (lo, hi) -> hi - lo + 1 | None -> 1 in
@@ -5036,7 +5036,8 @@ let loops_independent (opt : Low_level.optimized) ~(syms : Indexing.symbol list)
                       else
                         let dims = Lazy.force tn.Tn.dims in
                         match
-                          Affine.pair_conflict ~range ~dup_left:dup ~dup_right:dup ~pairs
+                          Affine.pair_conflict ~left_range:range ~right_range:range ~dup_left:dup
+                            ~dup_right:dup ~pairs
                             ~left:(Affine.view ~dims w.Affine.a_map)
                             ~right:(Affine.view ~dims x.Affine.a_map)
                         with
@@ -5708,16 +5709,16 @@ let analyze_parallel_chains ?(max_chain = 2) ?(select_chain = Fn.id) ?(lanes = f
     let pair_aligned_query ~l gi gj (a : access) (b : access) =
       Option.is_none a.a_dyn_axis && Option.is_none b.a_dyn_axis
       &&
-      let range s =
-        match List.Assoc.find env_arr.(gi) s ~equal:Indexing.equal_symbol with
-        | Some _ as r -> r
-        | None -> List.Assoc.find env_arr.(gj) s ~equal:Indexing.equal_symbol
-      in
+      (* Each nest ranges its own symbols: two nests may bind one symbol with different bounds, and
+         one nest's bounds would drop the other's values (gh-ocannl-1282). *)
+      let range g = Affine.bounds_range env_arr.(g) in
       let dup g s = List.Assoc.mem env_arr.(g) s ~equal:Indexing.equal_symbol in
       let pairs = List.zip_exn (List.take full_syms.(gi) l) (List.take full_syms.(gj) l) in
       let verdict =
-        Affine.pair_conflict ~range ~dup_left:(dup gi) ~dup_right:(dup gj) ~pairs
-          ~left:(query_view ~range a) ~right:(query_view ~range b)
+        Affine.pair_conflict ~left_range:(range gi) ~right_range:(range gj) ~dup_left:(dup gi)
+          ~dup_right:(dup gj) ~pairs
+          ~left:(query_view ~range:(range gi) a)
+          ~right:(query_view ~range:(range gj) b)
       in
       let query_safe = match verdict with Affine.Cross_thread _ -> false | _ -> true in
       Affine.crosscheck ~site:"schedule cross-nest alignment" ~context:(Tn.debug_name a.a_tn)
@@ -5786,7 +5787,7 @@ let analyze_parallel_chains ?(max_chain = 2) ?(select_chain = Fn.id) ?(lanes = f
   List.iter2_exn nests chains ~f:(fun n chain ->
       let syms = chain_syms chain in
       let env = Low_level.loop_bounds n.n_loops in
-      let range s = List.Assoc.find env s ~equal:Indexing.equal_symbol in
+      let range = Affine.bounds_range env in
       let dup s = List.Assoc.mem env s ~equal:Indexing.equal_symbol in
       let pairs = List.map syms ~f:(fun s -> (s, s)) in
       (* The agreement rule: all accesses agree on every component that mentions a parallel symbol.
@@ -5840,8 +5841,9 @@ let analyze_parallel_chains ?(max_chain = 2) ?(select_chain = Fn.id) ?(lanes = f
                       (not w.a_write)
                       || List.for_all accs ~f:(fun x ->
                           match
-                            Affine.pair_conflict ~range ~dup_left:dup ~dup_right:dup ~pairs
-                              ~left:(query_view ~range w) ~right:(query_view ~range x)
+                            Affine.pair_conflict ~left_range:range ~right_range:range ~dup_left:dup
+                              ~dup_right:dup ~pairs ~left:(query_view ~range w)
+                              ~right:(query_view ~range x)
                           with
                           | Affine.Disjoint | Affine.Same_thread -> true
                           | Affine.Cross_thread wit ->

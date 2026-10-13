@@ -36,9 +36,15 @@ let eval_vec env (idcs : Idx.axis_index array) rank : int list option =
   |> Option.all
 
 (* Oracle for [pair_conflict]: enumerate the shared symbols once and each side's duplicated symbols
-   independently; classify the conflicts (common cells) by whether all [pairs] agree. [`Opaque] when
-   some component cannot be evaluated. *)
-let oracle_conflict ~oracle_ranges ~dup_left ~dup_right ~pairs ~left ~right =
+   independently — the right side's over [right_ranges], which may bind them with other bounds
+   (gh-ocannl-1282), the shared ones and the left side's over [oracle_ranges]; classify the
+   conflicts (common cells) by whether all [pairs] agree. [`Opaque] when some component cannot be
+   evaluated. *)
+let rec oracle_conflict ~oracle_ranges ~dup_left ~dup_right ~pairs ~left ~right =
+  oracle_conflict_sides ~oracle_ranges ~right_ranges:oracle_ranges ~dup_left ~dup_right ~pairs ~left
+    ~right
+
+and oracle_conflict_sides ~oracle_ranges ~right_ranges ~dup_left ~dup_right ~pairs ~left ~right =
   let mentioned idcs =
     Array.to_list idcs
     |> List.concat_map ~f:(function
@@ -54,7 +60,7 @@ let oracle_conflict ~oracle_ranges ~dup_left ~dup_right ~pairs ~left ~right =
   let conflicts = ref [] and opaque = ref false in
   List.iter (envs oracle_ranges shared) ~f:(fun senv ->
       List.iter (envs oracle_ranges l_only) ~f:(fun lenv ->
-          List.iter (envs oracle_ranges r_only) ~f:(fun renv ->
+          List.iter (envs right_ranges r_only) ~f:(fun renv ->
               match (eval_vec (senv @ lenv) left rank, eval_vec (senv @ renv) right rank) with
               | Some lv, Some rv ->
                   if List.equal Int.equal lv rv then
@@ -114,14 +120,23 @@ let unsound name =
 let roomy rank = Array.create ~len:rank 64
 let view_in ~rank idcs = Aff.view ~dims:(roomy rank) idcs
 
-let check_conflict ~name ~query_ranges ~oracle_ranges ~dup_left ~dup_right ~pairs ~left ~right =
-  let range s = find_range query_ranges s in
+let rec check_conflict ~name ~query_ranges ~oracle_ranges ~dup_left ~dup_right ~pairs ~left ~right =
+  check_conflict_sides ~name ~query_ranges ~right_query_ranges:query_ranges ~oracle_ranges
+    ~right_ranges:oracle_ranges ~dup_left ~dup_right ~pairs ~left ~right
+
+(* [right_query_ranges] / [right_ranges]: the right side's own bounds, for the query and the
+   oracle. *)
+and check_conflict_sides ~name ~query_ranges ~right_query_ranges ~oracle_ranges ~right_ranges
+    ~dup_left ~dup_right ~pairs ~left ~right =
   let rank = max (Array.length left) (Array.length right) in
   let verdict =
-    Aff.pair_conflict ~range ~dup_left ~dup_right ~pairs ~left:(view_in ~rank left)
-      ~right:(view_in ~rank right)
+    Aff.pair_conflict ~left_range:(find_range query_ranges)
+      ~right_range:(find_range right_query_ranges) ~dup_left ~dup_right ~pairs
+      ~left:(view_in ~rank left) ~right:(view_in ~rank right)
   in
-  let oracle = oracle_conflict ~oracle_ranges ~dup_left ~dup_right ~pairs ~left ~right in
+  let oracle =
+    oracle_conflict_sides ~oracle_ranges ~right_ranges ~dup_left ~dup_right ~pairs ~left ~right
+  in
   let ok = sound verdict oracle in
   if not ok then unsound name;
   Stdio.printf "%-34s query %-12s oracle %-12s%s\n" name (show_verdict verdict) (show_oracle oracle)
@@ -268,7 +283,7 @@ let () =
           let range s = find_range ranges s in
           let dup = dup_of [ p; q ] in
           let verdict =
-            Aff.pair_conflict ~range ~dup_left:dup ~dup_right:dup
+            Aff.pair_conflict ~left_range:range ~right_range:range ~dup_left:dup ~dup_right:dup
               ~pairs:[ (p, p) ]
               ~left:(view_in ~rank:1 [| lc |]) ~right:(view_in ~rank:1 [| rc |])
           in
@@ -280,6 +295,86 @@ let () =
           if not (sound verdict oracle) then (
             unsound (ln ^ " vs " ^ rn);
             Stdio.printf "UNSOUND: %s vs %s: query %s oracle %s\n" ln rn (show_verdict verdict)
+              (show_oracle oracle));
+          Hashtbl.incr tally (show_verdict verdict ^ "/" ^ show_oracle oracle)));
+  Hashtbl.to_alist tally
+  |> List.sort ~compare:(fun (a, _) (b, _) -> String.compare a b)
+  |> List.iter ~f:(fun (k, n) -> Stdio.printf "%-28s %d\n" k n);
+
+  (* gh-ocannl-1282: each side ranges the symbols it iterates over its OWN bounds. The issue's
+     reproducer, as one pair: the writer's [s] is [0..1], the reader's [0..3], so the reader's
+     columns 2..3 meet the writer's while the rows ([p] against [1-p]) belong to the other
+     thread. *)
+  let s01 = [ (p, (0, 1)); (s, (0, 1)) ] and s03 = [ (p, (0, 1)); (s, (0, 3)) ] in
+  let hull = s03 in
+  let writer = [| Idx.Iterator p; aff [ (1, s) ] 2 |]
+  and reader = [| aff [ (-1, p) ] 1; Idx.Iterator s |] in
+  let per_side ~name ~query_left ~query_right left right =
+    check_conflict_sides ~name ~query_ranges:query_left ~right_query_ranges:query_right
+      ~oracle_ranges:s01 ~right_ranges:s03
+      ~dup_left:(dup_of [ p; s ])
+      ~dup_right:(dup_of [ p; s ])
+      ~pairs:[ (p, p) ]
+      ~left ~right
+  in
+  per_side ~name:"per-side bounds: writer vs reader" ~query_left:s01 ~query_right:s03 writer reader;
+  (* The control the issue named: the hull of both sides' bounds on both sides also declines. *)
+  per_side ~name:"control: hull bounds on both sides" ~query_left:hull ~query_right:hull writer
+    reader;
+  (* The oracle catches the old reading, so the first case can fail: lending the writer's [0..1] to
+     the reader's [s] is Disjoint, which the per-side enumeration refutes. *)
+  (let left_only =
+     Aff.pair_conflict ~left_range:(find_range s01) ~right_range:(find_range s01)
+       ~dup_left:(dup_of [ p; s ])
+       ~dup_right:(dup_of [ p; s ])
+       ~pairs:[ (p, p) ]
+       ~left:(view_in ~rank:2 writer) ~right:(view_in ~rank:2 reader)
+   in
+   let truth =
+     oracle_conflict_sides ~oracle_ranges:s01 ~right_ranges:s03
+       ~dup_left:(dup_of [ p; s ])
+       ~dup_right:(dup_of [ p; s ])
+       ~pairs:[ (p, p) ]
+       ~left:writer ~right:reader
+   in
+   Verdict.claim "control: one side's bounds for both sides is refuted by the enumeration"
+     (not (sound left_only truth)));
+
+  Stdio.printf "\n=== pair_conflict: exhaustive sweep (per-side bounds, pairs=[p]) ===\n";
+  (* Rows and columns over [p] (paired) and [s], which the left side iterates over [0..1] and the
+     right over [0..3]: every left map against every right map, in both roles. *)
+  let rows = [ ("p", Idx.Iterator p); ("1-p", aff [ (-1, p) ] 1); ("F0", Idx.Fixed_idx 0) ] in
+  let cols =
+    [
+      ("s", Idx.Iterator s);
+      ("s+2", aff [ (1, s) ] 2);
+      ("2s", aff [ (2, s) ] 0);
+      ("F1", Idx.Fixed_idx 1);
+      ("p+s", aff [ (1, p); (1, s) ] 0);
+    ]
+  in
+  let maps =
+    List.concat_map rows ~f:(fun (rn, rc) ->
+        List.map cols ~f:(fun (cn, cc) -> (rn ^ "," ^ cn, [| rc; cc |])))
+  in
+  let tally = Hashtbl.create (module String) in
+  let dup = dup_of [ p; s ] in
+  List.iter maps ~f:(fun (ln, lm) ->
+      List.iter maps ~f:(fun (rn, rm) ->
+          let verdict =
+            Aff.pair_conflict ~left_range:(find_range s01) ~right_range:(find_range s03)
+              ~dup_left:dup ~dup_right:dup
+              ~pairs:[ (p, p) ]
+              ~left:(view_in ~rank:2 lm) ~right:(view_in ~rank:2 rm)
+          in
+          let oracle =
+            oracle_conflict_sides ~oracle_ranges:s01 ~right_ranges:s03 ~dup_left:dup ~dup_right:dup
+              ~pairs:[ (p, p) ]
+              ~left:lm ~right:rm
+          in
+          if not (sound verdict oracle) then (
+            unsound ("[" ^ ln ^ "] vs [" ^ rn ^ "]");
+            Stdio.printf "UNSOUND: [%s] vs [%s]: query %s oracle %s\n" ln rn (show_verdict verdict)
               (show_oracle oracle));
           Hashtbl.incr tally (show_verdict verdict ^ "/" ^ show_oracle oracle)));
   Hashtbl.to_alist tally

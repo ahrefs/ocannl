@@ -21,6 +21,15 @@ Cross_thread/cross-thread    50
 Cross_thread/same-thread     4
 Disjoint/disjoint            6
 Same_thread/same-thread      4
+per-side bounds: writer vs reader  query Cross_thread oracle cross-thread
+control: hull bounds on both sides query Cross_thread oracle cross-thread
+
+=== pair_conflict: exhaustive sweep (per-side bounds, pairs=[p]) ===
+Cross_thread/cross-thread    138
+Cross_thread/disjoint        1
+Cross_thread/same-thread     1
+Disjoint/disjoint            45
+Same_thread/same-thread      40
 
 === covers_box ===
 iterators cover box                query true         oracle true        
