@@ -546,6 +546,9 @@ refuses a gate read off a key inserted into the population: true
 refuses a gate read off the source a transfer drains into the population: true
 does not take a gated_all a local module brings in by open for Verdict's: true
 follows a collection module beneath an alias of Base: true
+refuses a gate read off a default find_or_add inserts into the population: true
+refuses a gate read off a value written through a constrained alias: true
+refuses a gate read off what a map's callback returns: true
 refuses a planted gate that reads its population, and a gated claim it cannot read: true
 every synthetic control has a row in the mutation-run manifest: true
 every control phrase in the mutation-run manifest names a live control: true

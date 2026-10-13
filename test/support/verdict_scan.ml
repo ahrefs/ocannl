@@ -642,7 +642,8 @@ let complete arguments =
     direction. A generator's count builds nothing: [make] and [create] build from the value they
     fill in, [init] from what its callback returns (labeled [~f], or positional after the count),
     and [range] from nothing. An inserting function's labeled [~key] joins the population
-    ([Map.set m ~key ~data]); a selector's does not.
+    ([Map.set m ~key ~data]), and so does what a transforming function's [~f] returns
+    ([List.map xs ~f]); a selector's key and predicate do not.
 
     The labeled arguments that carry data rather than steer are followed too: [~default] (the
     fallback [Option.value] returns), [~init] (a fold's seed) and [~data] (a stored element). *)
@@ -697,13 +698,28 @@ let collection_arguments ~stdlib name arguments =
     positional
     @ List.filter_map arguments ~f:(function
       | (Ppxlib.Asttypes.Labelled "key" | Optional "key"), key -> Some key
+      (* [List.map xs ~f]: what the callback returns is the population's elements ({!population}
+         follows a function in data position into its body); a selector's [~f] is a predicate. *)
+      | (Ppxlib.Asttypes.Labelled "f" | Optional "f"), callback -> Some callback
       | _ -> None)
     @ data
 
 (** The collection-module functions that write into their first positional argument, a mutable
     container: what they are handed joins it. *)
 let writers =
-  [ "set"; "add"; "push"; "enqueue"; "replace"; "fill"; "blit"; "update"; "change"; "transfer" ]
+  [
+    "set";
+    "add";
+    "push";
+    "enqueue";
+    "replace";
+    "fill";
+    "blit";
+    "update";
+    "change";
+    "transfer";
+    "find_or_add";
+  ]
 
 let gate_census content =
   let ast = Read.structure_of content in
@@ -987,11 +1003,19 @@ let gate_census content =
           match expr.pexp_desc with
           | Pexp_ident { txt = Ppxlib.Longident.Lident name; _ } -> (
               match Lexical_scope.lookup env name with
-              | Some { definition = Some (({ pexp_desc = Pexp_ident _; _ } as aliased), env); _ } ->
+              | Some
+                  {
+                    definition =
+                      Some
+                        ( ({ pexp_desc = Pexp_ident _ | Pexp_constraint _ | Pexp_coerce _; _ } as
+                           aliased),
+                          env );
+                    _;
+                  } ->
                   target env aliased
               | Some { identity; _ } -> Some identity
               | None -> None)
-          | Pexp_constraint (inner, _) -> target env inner
+          | Pexp_constraint (inner, _) | Pexp_coerce (inner, _, _) -> target env inner
           | _ -> None
         in
         let target = target env in

@@ -3360,7 +3360,7 @@ let () =
   let results = List.map seeds ~f:run in
   gated_all ~when_:(not (List.is_empty results)) ~on:backend_name
     "every GPU sketch matches the materialized run" results ~f:snd|ocaml},
-      [ "results, seeds" ] );
+      [ "results, run, seeds" ] );
     ( "refuses a gate read off the collection the population is mapped from",
       {ocaml|open Verdict.Claims
 let () =
@@ -3737,6 +3737,27 @@ let () =
   let rows = B.List.map raw ~f:run in
   Verdict.gated_all ~when_:(not (B.List.is_empty raw)) ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
       [ "raw" ] );
+    ( "refuses a gate read off a default find_or_add inserts into the population",
+      {ocaml|open Base
+let () =
+  let table = Hashtbl.create (module String) in
+  ignore (Hashtbl.find_or_add table key ~default:(fun () -> sample) : int);
+  Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" (Hashtbl.data table) ~f:positive|ocaml},
+      [ "sample" ] );
+    ( "refuses a gate read off a value written through a constrained alias",
+      {ocaml|open Base
+let () =
+  let rows = ref [] in
+  let alias = (rows : int list ref) in
+  alias := List.map raw ~f:run;
+  Verdict.gated_all ~when_:(not (List.is_empty raw)) ~on:"cc" "all rows pass" !rows ~f:positive|ocaml},
+      [ "raw" ] );
+    ( "refuses a gate read off what a map's callback returns",
+      {ocaml|open Base
+let () =
+  let rows = List.map [ () ] ~f:(fun _ -> sample) in
+  Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" rows ~f:positive|ocaml},
+      [ "sample" ] );
   ]
 
 let gate_control_findings source =
