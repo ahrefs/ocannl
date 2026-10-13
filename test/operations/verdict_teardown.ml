@@ -97,6 +97,12 @@ let () =
           has err
             ~substring:
               "STOPPED EARLY: an exit inside case \"exits\" ended the run, so no case after it ran\n");
+      (* What tools/mutation-run.sh relies on to skip a failure's rows when it matches a mutated
+         run's stdout against the golden: every line of a multi-line message is a [FAIL: ] row. *)
+      let multi_line_fail = "FAIL: the first line\nFAIL:   expected a\nFAIL:   got      b\n" in
+      about "fail_multiline" "every line of a multi-line failure carries the FAIL prefix"
+        (run_child "fail_multiline") ~holds:(fun status out err ->
+          exited 1 status && String.equal out multi_line_fail && has err ~substring:multi_line_fail);
       let pass_status, pass_out, _ = run_child "pass" in
       let case_status, case_out, _ = run_child "case_pass" in
       p "a case that returns prints only what its claims print"
@@ -128,6 +134,7 @@ let () =
           p "the claim" false;
           case "exits" (fun () -> Stdlib.exit 0);
           p "after the exit" true
+      | "fail_multiline" -> fail "the first line\n  expected a\n  got      b\n"
       | "pass" -> p "the claim" true
       | "case_pass" -> case "the case" (fun () -> p "the claim" true)
       | other -> failwith ("verdict_teardown: unknown mode " ^ other))
