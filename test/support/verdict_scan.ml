@@ -492,9 +492,10 @@ let dialect_census content =
       [nth], [take], [remove], ...) contributes its collection alone and a generator none, plus the
       data-bearing labels [~default], [~init], [~data];
     - and, for a name it reaches, whatever the source writes into that binding: the right-hand side
-      of [x := e], and what a writer of a collection module ([Queue.enqueue x e],
-      [Hashtbl.set x ~key ~data], ... — see {!writers}) is handed with [x], where [x] is the first
-      positional argument in [Base]'s order and any of them in [Stdlib]'s.
+      of [x := e], and what a writer of a mutable collection module ({!mutable_modules}:
+      [Queue.enqueue x e], [Hashtbl.set x ~key ~data], ... — see {!writers}) is handed with [x],
+      where [x] is the first positional argument in [Base]'s order and any of them in [Stdlib]'s.
+      [x] is a name the source binds; a container only an [open] brought in is not tracked.
 
     The claim is refused when the two share a binding. The asymmetry is the point: a gate may read
     what the population is COMPUTED from (the site, the hardware limits, the backend steering an
@@ -523,7 +524,8 @@ let dialect_census content =
     [Base]'s (the collection first). *)
 type gate_module =
   | Verdict_module
-  | Collection_module of { stdlib : bool }
+  | Collection_module of { stdlib : bool; mutable_ : bool }
+      (** [mutable_]: its values are mutable containers ({!mutable_modules}). *)
   | Base_library  (** [Base] or [Core], whose [open] rebinds the collection modules. *)
   | Other_module
 
@@ -551,20 +553,61 @@ let gated_forms = [ "gated_all"; "gated_alli"; "gated_exists" ]
     component just before the function's name ([List.map], [Base.List.map], [Stdlib.List.map]). *)
 let collection_modules =
   [
+    (* Base and Core *)
     "List";
-    "ListLabels";
     "Array";
-    "ArrayLabels";
-    "Seq";
     "Sequence";
     "Hashtbl";
+    "Hash_set";
+    "Hash_queue";
     "Map";
     "Set";
     "Queue";
+    "Linked_queue";
     "Stack";
+    "Deque";
+    "Doubly_linked";
+    "Bag";
+    "Fqueue";
     "Option";
+    "Option_array";
+    "Uniform_array";
+    "Nonempty_list";
     "String";
+    "Bytes";
+    (* Stdlib *)
+    "ListLabels";
+    "ArrayLabels";
+    "StringLabels";
+    "BytesLabels";
+    "Seq";
+    "Dynarray";
+    (* submodules *)
     "Assoc";
+    "Poly";
+  ]
+
+(** The collection modules whose values are mutable containers: only a writer of one of these writes
+    into its argument; [Set.add] or [Map.update] returns a new collection and leaves its argument as
+    it was. *)
+let mutable_modules =
+  [
+    "Array";
+    "ArrayLabels";
+    "Bytes";
+    "BytesLabels";
+    "Hashtbl";
+    "Hash_set";
+    "Hash_queue";
+    "Queue";
+    "Linked_queue";
+    "Stack";
+    "Deque";
+    "Doubly_linked";
+    "Bag";
+    "Option_array";
+    "Uniform_array";
+    "Dynarray";
   ]
 
 (* Whether a claim's arguments so far are all it takes: its gate, and its label and population. *)
@@ -702,6 +745,8 @@ let gate_census content =
                     (* An unqualified [List] is [Stdlib]'s unless an [open Base] in scope rebound
                        it, which {!opened} records. *)
                     stdlib = not (List.mem [ "Base"; "Core" ] head ~equal:String.equal);
+                    mutable_ =
+                      List.mem mutable_modules (List.last_exn components) ~equal:String.equal;
                   }
               else Other_module)
 
@@ -716,7 +761,13 @@ let gate_census content =
               env with
               Lexical_scope.modules =
                 List.fold collection_modules ~init:env.Lexical_scope.modules ~f:(fun modules name ->
-                    Map.set modules ~key:name ~data:(Collection_module { stdlib = false }));
+                    Map.set modules ~key:name
+                      ~data:
+                        (Collection_module
+                           {
+                             stdlib = false;
+                             mutable_ = List.mem mutable_modules name ~equal:String.equal;
+                           }));
             }
         | _ -> env
 
@@ -826,7 +877,7 @@ let gate_census content =
                       List.iter positional ~f:(visit env)
                   | Pexp_ident { txt = Ppxlib.Longident.Ldot (prefix, name); _ } -> (
                       match self#module_path env prefix with
-                      | Some (Collection_module { stdlib }) ->
+                      | Some (Collection_module { stdlib; _ }) ->
                           List.iter (collection_arguments ~stdlib name arguments) ~f:(visit env)
                       | _ -> ())
                   | _ -> ()))
@@ -854,7 +905,7 @@ let gate_census content =
         | Pexp_ident { txt = Ppxlib.Longident.Ldot (prefix, name); _ }, _
           when List.exists writers ~f:(fun w -> String.is_prefix name ~prefix:w) -> (
             match self#module_path env prefix with
-            | Some (Collection_module { stdlib }) ->
+            | Some (Collection_module { stdlib; mutable_ = true }) ->
                 let positional =
                   List.filter_map arguments ~f:(function
                     | Ppxlib.Asttypes.Nolabel, argument -> Some argument

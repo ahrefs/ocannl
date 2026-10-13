@@ -1517,7 +1517,7 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   `open Base`: every positional argument, except that a Base-ordered selector (`find`, `nth`,
   `take`, `remove`, ...) contributes its collection alone (the key after it selects) and an `init`
   generator none, plus `~default`/`~init`/`~data` — never another call's arguments — and whatever
-  is written into a binding it reaches (`x := e`, `Queue.enqueue x e`). A name the source never
+  is written into a binding it reaches (`x := e`, `Queue.enqueue x e` on a mutable container). A name the source never
   binds is one identity on both sides. The forms it recognizes are held equal to the `gated_*`
   members `Verdict.Claims` exports.
   That asymmetry is the rule: a capability gate may read the program, limits and backend the

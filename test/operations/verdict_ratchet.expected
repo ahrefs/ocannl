@@ -526,6 +526,10 @@ refuses a gate read off a value pushed into a mutable population: true
 refuses a gate read off a ref's initializer: true
 refuses a gate read off a value a Stdlib writer adds before its container: true
 follows List.Assoc under an open Base: true
+accepts a gate on an element a persistent Set.add leaves out of the original: true
+accepts a gate and a population destructured from one pattern: true
+refuses a gate read off the hash set a population is listed from: true
+refuses a gate read off a value pushed through an alias of a mutable module: true
 refuses a planted gate that reads its population, and a gated claim it cannot read: true
 every synthetic control has a row in the mutation-run manifest: true
 every control phrase in the mutation-run manifest names a live control: true

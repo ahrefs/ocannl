@@ -3600,6 +3600,33 @@ let () =
   let rows = List.Assoc.find_exn entries ~equal:String.equal backend_name in
   Verdict.gated_all ~when_:(not (List.is_empty entries)) ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
       [ "entries" ] );
+    ( "accepts a gate on an element a persistent Set.add leaves out of the original",
+      {ocaml|open Base
+let () =
+  let existing = Set.of_list (module Int) raw in
+  let bigger = Set.add existing sample in
+  report bigger;
+  Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" (Set.to_list existing)
+    ~f:positive|ocaml},
+      [] );
+    ( "accepts a gate and a population destructured from one pattern",
+      {ocaml|let check (enabled, rows) = Verdict.gated_all ~when_:enabled ~on:"cc" "rows pass" rows ~f:Fn.id
+let () = check (on_gpu, probe ())|ocaml},
+      [] );
+    ( "refuses a gate read off the hash set a population is listed from",
+      {ocaml|open Base
+let () =
+  let rows = Hash_set.to_list seen in
+  Verdict.gated_all ~when_:(not (Hash_set.is_empty seen)) ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
+      [ "seen" ] );
+    ( "refuses a gate read off a value pushed through an alias of a mutable module",
+      {ocaml|open Base
+module Q = Queue
+let () =
+  let queue = Q.create () in
+  Q.enqueue queue sample;
+  Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" (Q.to_list queue) ~f:positive|ocaml},
+      [ "sample" ] );
   ]
 
 let gate_control_findings source =
