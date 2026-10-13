@@ -15,6 +15,10 @@ split-reduce: the coalesced, split, default-scheduled reduction computes the pla
 stage: the load nest's read of the coalesced source stays flattened: true
 privatize: the transfers' accesses of the coalesced target stay flattened: true
 stage+privatize: the coalesced, packed reduction computes the plain one's values bitwise: true
+fuse-epilogue: the uncoalesced reduction's tail fuses: true
+fuse-epilogue: the relocation declines the coalesced accumulation nest's flattened site: true
+fuse-epilogue: the witness names the flattened site as the reason: true
+fuse-epilogue: the relocation declines the coalesced Privatize tile store-back's flattened site: true
 projection: the serial reference is not all zeros: true
 projection: the coalesced layout's prefix applies: true
 projection: the prefix expands the zeroing, coalesces its pair, then the site's: true

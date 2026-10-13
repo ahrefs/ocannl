@@ -278,11 +278,14 @@ files.
   derives from an original one (`Stage`'s load, `Privatize`'s transfers, `Split_reduce`'s combine
   cell, which a tuner composition reaches) is the original with loops renamed,
   `Schedule.rename_index`, which keeps a `Sub_axis` by construction — never a rebuild from the
-  components' `terms_of_index` decompositions, where `Sub_axis` and `Fixed_idx 0` read alike.
-  `Tensorize` and `Fuse_epilogue`'s tail relocation decline a flattened access instead (v1). No
-  scan guards this: a fresh tile's coordinates are legitimately built from those same
-  decompositions (its tile parts), and only the node being addressed tells the two apart. A new
-  transform that re-addresses an existing node renames.
+  components' `terms_of_index` decompositions. Those used to read a `Sub_axis` as the empty sum at
+  offset 0, i.e. as `Fixed_idx 0`; it is now the `Flattened` case of the decomposition's own variant
+  (gh-ocannl-1293), so each caller's match states what a flattened run means to it: no symbol of
+  its own, the access renamed (`Stage`, `Privatize`, `Split_reduce`), or a refusal naming the
+  flattening (`Fuse_epilogue`'s tail relocation and cover check, `add_symbol`, hence `Tensorize`).
+  No scan guards the rename itself: a fresh tile's coordinates are legitimately built from those
+  same decompositions (its tile parts), and only the node being addressed tells the two apart. A
+  new transform that re-addresses an existing node renames.
 - **A dynamic access is viewed, not refused** (gh-ocannl-1174): `Affine.access` carries the
   dynamic axis itself (`a_dyn_axis`), so `may_touch_same_cell`, `read_covered_before` and
   `Cost_model.access_cells` read a gather or scatter through `view ~dyn_axis` — refuse one

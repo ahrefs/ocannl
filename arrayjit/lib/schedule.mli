@@ -531,8 +531,8 @@ val add_symbol : Indexing.axis_index -> Indexing.symbol -> Indexing.axis_index o
 (** [add_symbol idx s] is [idx] plus [s] with coefficient 1: the per-tile coordinate
     {!constructor-Tensorize} and {!constructor-Fuse_epilogue} add to an accumulator's base index.
     [None] -- which each caller refuses in its own words -- for a [Concat] and for a [Sub_axis]: the
-    latter has no per-axis affine form, and extending its empty decomposition would turn it into an
-    ordinary [Iterator s] coordinate where the flattened component after it carries the address
+    latter has no per-axis affine form, and extended as the empty sum it would turn into an ordinary
+    [Iterator s] coordinate where the flattened component after it carries the address
     (gh-ocannl-1165). *)
 
 val split_reduce_hoist : Low_level.optimized -> optop -> Indexing.symbol list

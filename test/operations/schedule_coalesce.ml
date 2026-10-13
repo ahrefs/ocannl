@@ -189,11 +189,10 @@ let () =
    The coalesced output [d[Sub_axis; f]] of a reduction [d[h,e] += x[k,h,e]] is split over [k]:
    [Split_reduce] derives the cell of its combine nest from the original cell with the enclosing
    loops renamed to the combine indices. Rebuilt instead from the cell's decomposition, where a
-   [Sub_axis] decomposes to nothing, the marker comes back as [Fixed_idx 0]: the combine's write
-   renders the same address but reads to the address queries as an ordinary in-bounds coordinate,
-   under which the flattened component [f] (extent [hh * ee]) is taken to stay below [ee]. The
-   executed leg runs the composition through the default (fissioned, on GPU hardware-mapped)
-   schedules. *)
+   [Sub_axis] has none, the marker comes back as [Fixed_idx 0]: the combine's write renders the same
+   address but reads to the address queries as an ordinary in-bounds coordinate, under which the
+   flattened component [f] (extent [hh * ee]) is taken to stay below [ee]. The executed leg runs the
+   composition through the default (fissioned, on GPU hardware-mapped) schedules. *)
 
 let () =
   let hh = 3 and ee = 4 and kk = 16 in
@@ -253,8 +252,8 @@ let () =
    nest, [Privatize] the target's init-load and store-back transfers — and both derive that access
    from the original one, renaming the tile loops' symbols to the nest's fresh ones. A [Sub_axis]
    has no symbols, so the rename keeps it; derived instead by rebuilding each component from its
-   affine decomposition, where a [Sub_axis] decomposes to nothing, it comes back as [Fixed_idx 0]:
-   the same address, read by the address queries as an ordinary coordinate under which the flattened
+   affine decomposition, where a [Sub_axis] has none, it comes back as [Fixed_idx 0]: the same
+   address, read by the address queries as an ordinary coordinate under which the flattened
    component after it stays below its own axis's dim. After both ops every remaining access of the
    two nodes is one of those derived accesses (the computation reads the tiles), so the structural
    claims below read exactly what the derivation wrote. Every backend runs this leg: non-shared
@@ -317,6 +316,67 @@ let () =
   let got = List.hd_exn (L.execute ~name:"cp_packed_run" os ~seed ~read:[ d ]) in
   p "stage+privatize: the coalesced, packed reduction computes the plain one's values bitwise"
     (Array.exists want ~f:(fun v -> Float.(v <> 0.)) && Array.equal Float.equal want got)
+
+(* {1 Composition: a coalesced pair under [Fuse_epilogue]}
+
+   The one caller of the shared per-axis decomposition ([Schedule.terms_of_index]) that refuses a
+   flattened component rather than carrying it (gh-ocannl-1293): relocating the elementwise tail
+   [out[h', e'] = d[h', e'] + 1] into the store-back of the coalesced [d[Sub_axis; f]] substitutes
+   the site's per-axis index for each tail symbol, and a flattened site has none. Read as the empty
+   sum at offset 0 instead, the [Sub_axis] was a per-axis coordinate to the exact-radix cover check,
+   which then refused the site as an incomplete cover -- the right outcome for the wrong reason, and
+   nothing in the decomposition's type said a sub-axis needs an answer of its own. The claims name
+   the reason, at both sites the relocation knows: the plain accumulation nest and the [Privatize]
+   tile store-back. The uncoalesced nest is the control: the same tail fuses there. *)
+
+let () =
+  let hh = 3 and ee = 4 and kk = 5 in
+  let mk = L.node_factory ~first_id:129300 ~dims:[||] () in
+  let x = mk ~dims:[| kk; hh; ee |] "cf_x" and d = mk ~dims:[| hh; ee |] "cf_d" in
+  let out = mk ~dims:[| hh; ee |] "cf_out" in
+  List.iter [ x; d; out ] ~f:L.materialize;
+  let h = L.sym () and e = L.sym () and k = L.sym () in
+  let at = [| L.iter h; L.iter e |] in
+  let h' = L.sym () and e' = L.sym () in
+  let at' = [| L.iter h'; L.iter e' |] in
+  let llc =
+    L.seq
+      (L.seq (L.zero d)
+         (L.loop_n h hh
+            (L.loop_n e ee
+               (L.loop_n k kk
+                  (L.set d at (L.add (L.get d at) (L.get x [| L.iter k; L.iter h; L.iter e |])))))))
+      (L.loop_n h' hh (L.loop_n e' ee (L.set out at' (L.add (L.get d at') (L.c 1.)))))
+  in
+  let o = L.optimize ~name:"cf_plain" llc in
+  let fuse = Sched.Fuse_epilogue { target = d; shared = false } in
+  let flattened = "flattened (Sub_axis)" in
+  p "fuse-epilogue: the uncoalesced reduction's tail fuses"
+    (Option.is_none (Sched.fuse_epilogue_witness ~target:d o)
+    && Result.is_ok (Result.try_with (fun () -> Sched.apply [ fuse ] o)));
+  let co, _ = Sched.coalesce ~outer:h ~inner:e in
+  let oc = Sched.apply [ co ] o in
+  (* The refusal's own words, echoed to stderr so a failing claim shows what the relocation said. *)
+  let refusal what f =
+    let why = match f () with _ -> None | exception Invalid_argument msg -> Some msg in
+    Stdio.eprintf "fuse-epilogue %s: %s (not part of the golden)\n" what
+      (Option.value why ~default:"<no refusal>");
+    why
+  in
+  let names_flattened = function
+    | Some why -> String.is_substring why ~substring:flattened
+    | None -> false
+  in
+  p "fuse-epilogue: the relocation declines the coalesced accumulation nest's flattened site"
+    (names_flattened (refusal "nest" (fun () -> Sched.apply [ fuse ] oc)));
+  p "fuse-epilogue: the witness names the flattened site as the reason"
+    (names_flattened (Sched.fuse_epilogue_witness ~target:d oc));
+  p
+    "fuse-epilogue: the relocation declines the coalesced Privatize tile store-back's flattened \
+     site"
+    (names_flattened
+       (refusal "privatized" (fun () ->
+            Sched.apply [ co; Sched.privatize ~accum_prec ~target:d ~over:k; fuse ] o)))
 
 (* {1 The real projection site} *)
 
