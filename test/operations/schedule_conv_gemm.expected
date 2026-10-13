@@ -8,36 +8,47 @@ matmul is not a conv site: true
 cvg: reorder-only conv matches the natural form within tolerance: true
 cvg: packed+tensorized conv matches the reorder-only twin bitwise: true
 cvg: packed+tensorized conv matches the natural form within tolerance: true
+cvg: the packed+tensorized conv's routine is labeled tensorized: true
 cvp: reorder-only conv matches the natural form within tolerance: true
 cvp: packed+tensorized conv matches the reorder-only twin bitwise: true
 cvp: packed+tensorized conv matches the natural form within tolerance: true
+cvp: the packed+tensorized conv's routine is labeled tensorized: true
 cvg2: reorder-only conv matches the natural form within tolerance: true
 cvg2: packed+tensorized conv matches the reorder-only twin bitwise: true
 cvg2: packed+tensorized conv matches the natural form within tolerance: true
+cvg2: the packed+tensorized conv's routine is labeled tensorized: true
 conv pipeline structure: im2col packs, register tiling, resident fragment: true
 cvg2 pipeline structure: compacted im2col packs, register tiling fires on the strided row: true
 cvg2: hoisted staging of a strided window rejected (no compaction in v1): true
 cvs2: the stride-2 conv seeds are the serial pipeline and its Grid twin: true
 cvs2: every seeded stride-2 candidate matches the natural form within tolerance: true
+cvs2: every seeded stride-2 candidate's routine is labeled tensorized: true
 conv sketches seeded (serial+grid, with fused-epilogue twins): true
 tuned conv+tail matches the untuned twin within tolerance: true
 cvf: fusion merges the tail into the conv nest: true
 cvf: fused conv twin matches the unfused pipeline bitwise: true
 cvf: fused conv twin matches the natural form within tolerance: true
+cvf: the unfused and the fused conv routines are both labeled tensorized: true
 cvu: GPU staged conv pipeline matches the natural form within tolerance: true
+cvu: the GPU staged conv pipeline's routine is labeled tensorized: true
 cvu: conv seeds per fission segment (GPU staged on metal; serial+grid on cc): true
 cvu: tuned conv matches the untuned twin within tolerance: true
 cvu2: GPU staged stride-2 conv (compacted) matches the natural form within tolerance: true
+cvu2: the GPU staged stride-2 conv pipeline's routine is labeled tensorized: true
 cvu2: stride-2 conv seeds per fission segment (GPU staged on metal; serial+grid on cc): true
 cvu2: tuned stride-2 conv matches the untuned twin within tolerance: true
 cvs2b: the strided non-dividing row seeds a padded row-panel flavor: true
 cvs2b: every per-segment stride-2 candidate matches the natural form within tolerance: true
+cvs2b: every per-segment stride-2 candidate's routine is labeled tensorized: true
 cvb: blocked (row-panel) conv pipeline matches the natural form within tolerance: true
+cvb: the blocked conv pipeline's routine is labeled tensorized: true
 cvb: blocked flavors seeded per fission segment: true
 cvb: tuned blocked conv matches the untuned twin within tolerance: true
 cvmb: merged-segment blocked conv pipeline matches the natural form within tolerance: true
+cvmb: the merged-segment blocked conv pipeline's routine is labeled tensorized: true
 cvmb: blocked flavor seeded on the merged fission segment: true
 cvmb: tuned merged-blocked conv matches the untuned twin within tolerance: true
 cva: aligned-grid conv pipeline on a merged segment matches within tolerance: true
+cva: the aligned-grid conv pipeline's routine is labeled tensorized: true
 cva: aligned-grid conv seeded and timed on the merged fission segment: true
 cva: tuned merged conv graph matches the untuned twin within tolerance: true

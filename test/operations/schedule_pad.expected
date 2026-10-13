@@ -7,4 +7,5 @@ awkward site seeds staged GPU MMA pad-compositions: true
 awkward site does not seed the unstaged (in-place) GPU flavor: true
 awkward site seeds the CPU packed pad-composition: true
 seeded packed pad-composition matches the serial twin bitwise: true
+seeded packed pad-composition's routine is labeled tensorized: true
 pad guard over an unstaged operand is rejected: true

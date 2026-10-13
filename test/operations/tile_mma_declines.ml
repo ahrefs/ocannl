@@ -200,27 +200,29 @@ let () =
     in
     (* Executed parity, not just structure: per-chunk privatization rewrites where the packed values
        live, so compare against a serial twin of the same computation. *)
-    (if run_parity then
-       let ctx = Context.run ctx routine in
-       let got = Context.get_values ctx c.Tensor.value in
-       let a2 =
-         TDSL.ndarray av ~label:[ "tmd_bp_a2" ] ~input_dims:[ dim ] ~output_dims:[ dim ] ()
-       in
-       let b2 =
-         TDSL.ndarray bv ~label:[ "tmd_bp_b2" ] ~input_dims:[ dim ] ~output_dims:[ dim ] ()
-       in
-       let%op c2 = a2 * b2 in
-       let sctx = Context.auto () in
-       let sctx, sroutine =
-         Context.compile
-           ~lowered_transform:(fun opt -> [ opt ])
-           sctx
-           (named (name ^ "_serial") (Train.forward c2))
-           Ir.Indexing.Empty
-       in
-       let sctx = Context.run sctx sroutine in
-       let want = nonzero "decl_serial" (Context.get_values sctx c2.Tensor.value) in
-       p_all2 "per-chunk B~ re-pack matches the serial twin bitwise" got want ~f:Float.equal);
+    if run_parity then (
+      let ctx = Context.run ctx routine in
+      let got = Context.get_values ctx c.Tensor.value in
+      let a2 = TDSL.ndarray av ~label:[ "tmd_bp_a2" ] ~input_dims:[ dim ] ~output_dims:[ dim ] () in
+      let b2 = TDSL.ndarray bv ~label:[ "tmd_bp_b2" ] ~input_dims:[ dim ] ~output_dims:[ dim ] () in
+      let%op c2 = a2 * b2 in
+      let sctx = Context.auto () in
+      let sctx, sroutine =
+        Context.compile
+          ~lowered_transform:(fun opt -> [ opt ])
+          sctx
+          (named (name ^ "_serial") (Train.forward c2))
+          Ir.Indexing.Empty
+      in
+      let sctx = Context.run sctx sroutine in
+      let want = nonzero "decl_serial" (Context.get_values sctx c2.Tensor.value) in
+      p_all2 "per-chunk B~ re-pack matches the serial twin bitwise" got want ~f:Float.equal;
+      (* Parity holds for the scalar fallback too; the routine's census says which ran
+         (gh-ocannl-1283). *)
+      p "per-chunk B~ re-pack's routine is labeled tensorized"
+        ((not on_cpu)
+        || Ir.C_syntax.equal_tensorization routine.Context.mma.Ir.C_syntax.tensorization
+             Ir.C_syntax.Tensorized));
     Generated.read name
   in
   (let src = compile_bpack ~run_parity:true ~name:"tmd_bpack_fits" ~dim:256 () in

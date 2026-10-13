@@ -321,7 +321,13 @@ let () =
       p "awkward site does not seed the unstaged (in-place) GPU flavor" false;
       p "awkward site seeds the CPU packed pad-composition" false);
   p_all2 "seeded packed pad-composition matches the serial twin bitwise" got want ~f:(fun a b ->
-      (not on_cpu) || Float.equal a b)
+      (not on_cpu) || Float.equal a b);
+  (* Parity holds for the scalar fallback too; the routine's census says which ran
+     (gh-ocannl-1283). *)
+  p "seeded packed pad-composition's routine is labeled tensorized"
+    ((not on_cpu)
+    || Ir.C_syntax.equal_tensorization routine.Context.mma.Ir.C_syntax.tensorization
+         Ir.C_syntax.Tensorized)
 
 (* === Negative pin: a pad guard over an in-place operand (no zero-fringe staged tile) must be
    rejected — the intrinsic path would read past the operand's extent. === *)

@@ -224,6 +224,11 @@ let () =
   in
   gated ~when_:capable ~on:backend_name
     "under the device's limits the preset emits Fold_mma for the fold" !device_emitted;
+  (* The schedule asking is not the emission delivering: the routine's census says whether the
+     emitted [Fold_mma] rendered the intrinsics (gh-ocannl-1283). *)
+  gated ~when_:capable ~on:backend_name
+    "under the device's limits the folded routine is labeled tensorized"
+    (Ir.C_syntax.equal_tensorization device.mma.Ir.C_syntax.tensorization Ir.C_syntax.Tensorized);
   gated ~when_:(not capable) ~on:backend_name "without f32 MMA units the preset emits no Fold_mma"
     (not !device_emitted);
   p "a grid cap of 1 keeps the scalar fold: no Fold_mma emitted, no Tile_mma"

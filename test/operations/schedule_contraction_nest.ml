@@ -153,8 +153,8 @@ let binds_hardware q opt =
 (* Execute every seed against the serial reference, each under its own armed artifact; [outs] and
    [wants] pair the compared tensors with their reference values, [close] is the per-cell agreement.
    Returns how many ran and how many matched on every compared tensor. *)
-let execute_seeds ?(on_routine = fun (_ : Context.routine) -> ()) ~tag ~routine ~fwd ~outs ~wants
-    ~close seeds =
+let execute_seeds ?(on_routine = fun (_ : Autotune.sketch_params) (_ : Context.routine) -> ()) ~tag
+    ~routine ~fwd ~outs ~wants ~close seeds =
   let n_ran = ref 0 and n_match = ref 0 in
   List.iter seeds ~f:(fun q ->
       Generated.arm routine;
@@ -166,7 +166,7 @@ let execute_seeds ?(on_routine = fun (_ : Context.routine) -> ()) ~tag ~routine 
             (Context.auto ()) fwd Ir.Indexing.Empty
         in
         let ctx = Context.run ctx r in
-        on_routine r;
+        on_routine q r;
         List.map outs ~f:(values ctx)
       with
       | gots ->
@@ -192,7 +192,8 @@ let leg ~tag ~ko_extents ~nk ?(companion = false) ~build () =
   let outs = outs_of built in
   let fwd = named (tag ^ "_sched") (Train.forward cand) in
   let opt = capture fwd in
-  (match Autotune.detect_matmul opt.LL.llc with
+  let site = Autotune.detect_matmul opt.LL.llc in
+  (match site with
   | None ->
       p (tag ^ ": the multi-axis contraction is detected as a matmul site") false;
       p (tag ^ ": the outer contraction loops carry the expected extents") false;
@@ -257,19 +258,35 @@ let leg ~tag ~ko_extents ~nk ?(companion = false) ~build () =
     p
       (tag ^ ": the Grid-bound CPU shapes decline on the uncovered companion")
       (not (List.is_empty cpu_invalid));
+  (* Returns the seeds whose routine rendered tensorized per its mma census (gh-ocannl-1283): a
+     tensorized seed whose [Tile_mma] declined to the scalar fallback still matches bitwise. *)
   let execute ~what seeds =
+    let rendered = ref [] in
     let n_ran, n_match =
-      execute_seeds ~tag ~routine:(tag ^ "_sched") ~fwd ~outs ~wants:want ~close:Float.equal seeds
+      execute_seeds
+        ~on_routine:(fun q r ->
+          if Ll_test.rendered_tensorized r.Context.mma then rendered := q :: !rendered
+          else if q.Autotune.sk_mma then
+            Stdio.eprintf "%s: a tensorized %s seed rendered %s\n" tag what
+              (Ir.C_syntax.mma_summary_string r.Context.mma))
+        ~tag ~routine:(tag ^ "_sched") ~fwd ~outs ~wants:want ~close:Float.equal seeds
     in
     p
       (Printf.sprintf "%s: every %s seed compiles and runs" tag what)
       (n_ran = List.length seeds && n_ran > 0);
     p
       (Printf.sprintf "%s: every %s candidate matches the serial reference bitwise" tag what)
-      (n_ran = n_match)
+      (n_ran = n_match);
+    !rendered
+  in
+  (* The executed CPU family's tensorized members (the register-tiled packed pipelines) must render
+     register-tiled, gated on the seeder's own capability judgment for the site's precisions under
+     the CPU limits -- never on the seeds under test (gh-ocannl-1115). *)
+  let cpu_rendered_label =
+    tag ^ ": every CPU tensorized candidate renders tensorized per its mma census"
   in
   if on_gpu then begin
-    execute ~what:"GPU blocktile" gpu_seeds;
+    ignore (execute ~what:"GPU blocktile" gpu_seeds : Autotune.sketch_params list);
     (* The seed that shipped untiled before: its kernel now carries a workgroup-shared tile. *)
     (* This is intentionally dialect identity: [assert_emits] below searches for the language's
        literal shared-address-space qualifier; tensorization itself is read from the routine. *)
@@ -290,7 +307,8 @@ let leg ~tag ~ko_extents ~nk ?(companion = false) ~build () =
       backend_name;
     skipped (tag ^ ": the CPU seeds include the register-tiled packed pipelines");
     skipped (tag ^ ": every CPU seed compiles and runs");
-    skipped (tag ^ ": every CPU candidate matches the serial reference bitwise")
+    skipped (tag ^ ": every CPU candidate matches the serial reference bitwise");
+    skipped cpu_rendered_label
   end
   else begin
     Stdio.eprintf "%s: %s cannot execute workgroup-shared staging -- GPU execution legs skipped\n"
@@ -303,7 +321,19 @@ let leg ~tag ~ko_extents ~nk ?(companion = false) ~build () =
     p
       (tag ^ ": the CPU seeds include the register-tiled packed pipelines")
       (List.exists cpu_seeds ~f:(fun q -> q.Autotune.sk_mma && q.Autotune.sk_bk > 0));
-    execute ~what:"CPU" cpu_valid
+    let rendered = execute ~what:"CPU" cpu_valid in
+    match site with
+    | None -> p cpu_rendered_label false
+    | Some site -> (
+        match
+          Ll_test.tensorized_matmul_capability ~is_gpu:false ~is_cpu:true ~limits:cpu_limits
+            ~a:site.Autotune.m_a ~b:site.Autotune.m_b ~d:site.Autotune.m_d
+        with
+        | `Advertised ->
+            p_all cpu_rendered_label
+              (List.filter cpu_valid ~f:(fun q -> q.Autotune.sk_mma))
+              ~f:(fun q -> List.mem rendered q ~equal:phys_equal)
+        | `Withheld aggregation -> skipped ~aggregation cpu_rendered_label)
   end
 
 (* The tensorized pipelines through the real mma hook: an out projection at bf16 -- the one operand
@@ -385,7 +415,7 @@ let bf16_leg ~tag ~build =
               let tensorized = ref false in
               let n_ran, n_match =
                 execute_seeds
-                  ~on_routine:(fun r ->
+                  ~on_routine:(fun _ r ->
                     tensorized :=
                       Ir.C_syntax.equal_tensorization r.mma.Ir.C_syntax.tensorization
                         Ir.C_syntax.Tensorized)
@@ -465,7 +495,7 @@ let pipelined_leg ~tag ~build =
               let tensorized = ref false in
               let n_ran, n_match =
                 execute_seeds
-                  ~on_routine:(fun r ->
+                  ~on_routine:(fun _ r ->
                     tensorized :=
                       Ir.C_syntax.equal_tensorization r.mma.Ir.C_syntax.tensorization
                         Ir.C_syntax.Tensorized)

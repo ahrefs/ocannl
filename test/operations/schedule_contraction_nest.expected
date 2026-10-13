@@ -21,6 +21,7 @@ out_proj: the blocktiled kernel stages operands through workgroup-shared tiles: 
 out_proj: the CPU seeds include the register-tiled packed pipelines: true
 out_proj: every CPU seed compiles and runs: true
 out_proj: every CPU candidate matches the serial reference bitwise: true
+out_proj: every CPU tensorized candidate renders tensorized per its mma census: true
 out_proj f32: the multi-axis site seeds a pipelined-staged tensorized candidate: true
 out_proj f32: the pipelined-staged candidate compiles and runs: true
 out_proj f32: the pipelined-staged candidate matches the serial twin bitwise: true
@@ -60,6 +61,7 @@ three_axis_companion: the blocktiled kernel stages operands through workgroup-sh
 three_axis_companion: the CPU seeds include the register-tiled packed pipelines: true
 three_axis_companion: every CPU seed compiles and runs: true
 three_axis_companion: every CPU candidate matches the serial reference bitwise: true
+three_axis_companion: every CPU tensorized candidate renders tensorized per its mma census: true
 out_proj bf16: the multi-axis site seeds the backend's advertised tile: true
 out_proj bf16: no pipelined twin is seeded below the async arms' 4-byte element floor: true
 out_proj bf16: the unstaged candidate compiles and runs: true

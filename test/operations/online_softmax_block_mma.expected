@@ -24,6 +24,7 @@ a value tensor indexed by the query (the block micro-kernel does not tensorize):
 a value tensor indexed by the query (the block micro-kernel does not tensorize): no Tile_mma emitted: true
 a value tensor indexed by the query (the block micro-kernel does not tensorize): matches the composed output within 1e-4 relative: true
 under the device's limits the preset emits Fold_mma for the fold: true
+under the device's limits the folded routine is labeled tensorized: true
 without f32 MMA units the preset emits no Fold_mma: true
 a grid cap of 1 keeps the scalar fold: no Fold_mma emitted, no Tile_mma: true
 under the grid cap the output matches the composed output within 1e-4 relative: true

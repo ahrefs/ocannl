@@ -120,7 +120,7 @@ let census tag ~m ~n ~k =
   let rctx, rroutine = Context.compile rctx fwd Ir.Indexing.Empty in
   let rctx = Context.run rctx rroutine in
   let want = nonzero (tag ^ "_ref") (Context.get_values rctx mc.Tensor.value) in
-  let n_ran = ref 0 and n_correct = ref 0 in
+  let n_ran = ref 0 and n_correct = ref 0 and n_rendered = ref 0 in
   List.iter ep_params ~f:(fun q ->
       match
         let ctx = Context.auto () in
@@ -131,15 +131,24 @@ let census tag ~m ~n ~k =
             ctx fwd Ir.Indexing.Empty
         in
         let ctx = Context.run ctx routine in
-        Context.get_values ctx mc.Tensor.value
+        (Context.get_values ctx mc.Tensor.value, routine.Context.mma)
       with
-      | got ->
+      | got, census ->
           Int.incr n_ran;
-          if Array.for_all2_exn got want ~f:approx then Int.incr n_correct
+          if Array.for_all2_exn got want ~f:approx then Int.incr n_correct;
+          (* A twin whose [Tile_mma] declined to the scalar fallback runs and matches too; only the
+             routine's census says it ran tensorized (gh-ocannl-1283). *)
+          if Ll_test.rendered_tensorized census then Int.incr n_rendered
+          else
+            Stdio.eprintf "%s: an epilogue twin rendered %s\n" tag
+              (Ir.C_syntax.mma_summary_string census)
       | exception _ -> ());
   mma_gated (tag ^ ": mma epilogue twins are seeded") (List.length ep_params > 0);
   mma_gated (tag ^ ": at least one epilogue twin applies and validates (reaches timing)") (n_ok >= 1);
   mma_gated (tag ^ ": some epilogue twin compiles and runs end-to-end") (!n_ran >= 1);
+  mma_gated
+    (tag ^ ": every running epilogue twin renders tensorized per its mma census")
+    (!n_ran >= 1 && !n_rendered = !n_ran);
   p (tag ^ ": every running twin matches the untuned reference") (!n_ran = !n_correct)
 
 let () =
