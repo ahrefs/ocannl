@@ -596,13 +596,12 @@ let foreign_carriers ~carriers ~foreign ~owner ~source content =
     resolves its own target when it is made, so a chain needs no second lookup and cannot cycle. The
     owner's constructors are reached through aliases and opens this reader cannot follow, which is
     why the rule names what is excluded rather than what is included. *)
-let read_source ~carriers ?(foreign = []) ?(owner = ("", "")) ~source content =
+let read_structure ~carriers ?(foreign = []) ?(owner = ("", "")) ~source structure =
   let mints = ref []
   and malformed = ref []
   and consumers = ref []
   and closed = ref []
   and exports = ref [] in
-  let structure = parse content in
   let own_module = module_of_path source in
   let module_path, is_carrier, bind_extension, scope_model =
     carrier_model ~carriers ~foreign ~owner ~source
@@ -869,6 +868,12 @@ let read_source ~carriers ?(foreign = []) ?(owner = ("", "")) ~source content =
     consumers = List.rev !consumers;
     malformed = List.rev !malformed;
   }
+
+(** [read_structure] over [content] as parsed by the compiler running the scan, whose grammar can be
+    older than the parse tree: a case for a construct the floor compiler cannot parse builds its
+    tree and calls [read_structure] directly. *)
+let read_source ~carriers ?foreign ?owner ~source content =
+  read_structure ~carriers ?foreign ?owner ~source (parse content)
 
 (** The carriers a scope of the source [path] reaches: those its own handlers apply to its payload,
     and those a caller of its declaring function -- that function of [path]'s module, not merely one

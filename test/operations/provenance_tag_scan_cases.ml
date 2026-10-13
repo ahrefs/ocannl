@@ -58,6 +58,31 @@ let resolve reads = Scan.merge (fst (Scan.resolve reads))
 let read ?(source = "lib/fixture.ml") ?foreign ?owner text =
   Scan.read_source ~carriers ?foreign ?owner ~source text
 
+(* [let exception Site = Tnode.Site in ...] -- the rebinding form of a local exception -- parses
+   only from OCaml 5.4 on, while the floor the opam files claim is 5.3, whose parser rejects it with
+   [Syntaxerr.Error] (gh-ocannl-1271). The scanner's AST has carried [Pext_rebind] under
+   [Pexp_letexception] all along, so the case reaches it on every compiler by parsing the declaring
+   form and rebinding its constructor to [target] in the tree. *)
+let local_rebinding ~target text =
+  let rebind =
+    object
+      inherit Ppxlib.Ast_traverse.map as super
+
+      method! expression e =
+        match e.pexp_desc with
+        | Pexp_letexception (({ pext_kind = Pext_decl _; pext_loc = loc; _ } as ext), body) ->
+            let txt = Ppxlib.Longident.parse target in
+            {
+              e with
+              pexp_desc =
+                Pexp_letexception
+                  ({ ext with pext_kind = Pext_rebind { txt; loc } }, super#expression body);
+            }
+        | _ -> super#expression e
+    end
+  in
+  rebind#structure (Scan.parse text)
+
 let rendered = Scan.renderings ~renderer:"provenance_to_string" ~source:"lib/tnode.ml" type_source
 let mints = Scan.merge (rendered @ resolve [ read library ])
 
@@ -674,8 +699,9 @@ let () =
      ~f:(fun (target, expected) ->
        strings
          (tags
-            (read ~foreign:[ "Key_scan" ]
-               ("let x = let exception Site = " ^ target ^ " in Site \"13:fixture-owned\""))
+            (Scan.read_structure ~carriers ~foreign:[ "Key_scan" ] ~source:"lib/fixture.ml"
+               (local_rebinding ~target
+                  "let x = let exception Site of string in Site \"13:fixture-owned\""))
               .mints)
          expected);
    p_all "direct exports take effect in declaration order"
