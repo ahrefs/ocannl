@@ -1,6 +1,6 @@
 # OCANNL Roadmap
 
-**v1.1 released October 4, 2026: fused attention and better transformer scheduling. Next: consolidation (v1.1.1, October 16), performance beyond transformers (v1.1.2, October 24), consumers (v1.1.3, October 31) and v1.2 around November 15, 2026.**
+**v1.1 released October 4, 2026: fused attention and better transformer scheduling. Next: consolidation as a bounded release (v1.1.1, October 20), performance beyond transformers (v1.1.2, October 27), the training experience (v1.1.3, October 31) and reusable tensor programs (v1.2, November 15, 2026).**
 
 This roadmap outlines the development plan for OCANNL through version 1.0 and beyond. Dates indicate **end of period** targets. Through v1.0 the schedule was pinned to conference deadlines; it is now project-internal, and the dates below are aspirational rather than external commitments.
 
@@ -26,7 +26,9 @@ This roadmap outlines the development plan for OCANNL through version 1.0 and be
 >
 > **Update (October 4, 2026):** the September 29 split keeps **v1.1 focused on transformer workloads**. Convolution and CPU kernel/sketch economy now have their own **v1.1.2** milestone; consumers moved to **v1.1.3**. **v1.1 released October 4** with fused attention and better transformer scheduling, ahead of its October 5 GitHub due date. Later GitHub targets remain October 16, 24 and 31, then November 15 for v1.2. Undated v1.2.1/v1.2.2 placeholders allow consolidation and consumers to continue if scope moves again. These dates supersede the September schedule above.
 >
-> The version sequence is: `0.7 → 0.8 → 0.9 → 1.0 → 1.0.1 → 1.0.2 → 1.1 → 1.1.1 → 1.1.2 → 1.1.3 → 1.2`. Milestone *scope* below tracks the GitHub milestones, which are the source of truth for issue assignments. Release outcomes distinguish delivered work from unfinished goals; they do not imply that every issue in a released milestone is closed.
+> **Rebalance (October 13, 2026):** the ladder was re-fit to keep **November 15** for v1.2 by cutting scope rather than moving the date. **v1.1.1** (October 20) is released as a bounded set against a release gate — CI green, three soundness finds, a full-step training comparison — since its queue grows about as fast as waves close it; leftovers move to v1.2.1. **v1.1.2** moves to October 27. **v1.1.3** (October 31) is cut to the training experience a newcomer meets, with models and explorations moved to v1.2.2. **v1.2** is cut to reusable tensor programs: shape schemes (#404) with checkpoint rollback (#903) as their first work package, beside an end-to-end newcomer path; the package split (#852) is optional and the other feature-grade work moved to a new, undated **v1.3**. #903 was rescoped from session-owned persistent shapes to a rollback over open inference state, and its coarse level split out as #1301 in v1.1.3. These dates supersede the October 4 targets above.
+>
+> The version sequence is: `0.7 → 0.8 → 0.9 → 1.0 → 1.0.1 → 1.0.2 → 1.1 → 1.1.1 → 1.1.2 → 1.1.3 → 1.2 → 1.2.1 → 1.2.2 → 1.3`. Milestone *scope* below tracks the GitHub milestones, which are the source of truth for issue assignments. Release outcomes distinguish delivered work from unfinished goals; they do not imply that every issue in a released milestone is closed.
 
 ---
 
@@ -417,32 +419,48 @@ and the pending compiler split are not presented as complete.
 
 ---
 
-## v1.1.1 — October 16, 2026
+## v1.1.1 — October 20, 2026
 **Theme: Consolidation after the transformer work**
 
 GitHub scope remains testing-side refactorings, scanner maintenance, diagnostics, stable goldens,
-test tooling and remaining IR/API work. As of October 4, 88 assigned issues are closed and 109
-remain open: much consolidation has already landed alongside the performance experiments, and
-review continues to add follow-ups. The September redistribution tables above are historical
-snapshots, not the current inventory. Use the measured v1.1 defects to prioritize a bounded
-release; emptying the queue is not a prerequisite to subsequent work. The PPX migration (#695)
-remains upstream-release-gated. Legacy-lock retirement (#966) remains tied to its documented
-trigger rather than to the roadmap date alone.
+test tooling and remaining IR/API work. The milestone does not converge by count: the waves that
+close its issues file follow-ups about as fast (46 open at the v1.0.2 tag, 127 on October 13 after
+178 closures). The October 13 rebalance therefore releases it as a **bounded set**, against a
+release gate rather than an empty queue:
+
+- **CI green on master**: the scheduled-run reds (#1271; the Windows cluster #1228, #1195, #1223)
+  and a PR-time OCaml 5.3 leg (#1267).
+- **The soundness finds**: aligned-chain dependence checks across nests (#1282), `Sub_axis` in
+  `Schedule.terms_of_index` (#1293), and executed tensorized seeds that decline to scalar code
+  (#1283).
+- **The full-step training comparison** for #1183: the backward-contraction sketches (staging
+  PR [#1041](https://github.com/lukstafi/ocannl-staging/pull/1041)) took a single layer's weight
+  gradient from 65.0 to 6.56 ms at batch 256 on discrete HIP; the gate re-runs the issue's original
+  `gpt2_mini_train` comparison against torch at batch 8 and 256.
+
+Waves keep working the D1/D2 queue until the tag; at release prep every leftover moves to v1.2.1.
+The D3 items moved there on October 13: the rounding-changing algebra split (#998), earlier
+composite formation (#1138), codegen-chosen privatize width (#1151), the out-projection coalesce
+(#1279), half pack loads on the GPU packed path (#1295), and cross-statement conflicts on a pinned
+device cell (#963, from v1.2). The PPX migration (#695) remains upstream-release-gated;
+legacy-lock retirement (#966) remains tied to its documented trigger.
 
 ---
 
-## v1.1.2 — October 24, 2026
+## v1.1.2 — October 27, 2026
 **Theme: Performance beyond transformers**
 
-Created in the September 29 split, with 11 open issues as of October 4. Each compiler improvement
-should close with a before/after benchmark cell; a measured null result is useful evidence too.
+Created in the September 29 split. Each compiler improvement should close with a before/after
+benchmark cell; a measured null result is useful evidence too. The reduced ResNet-style leg comes
+first, since it is the cell the rest is measured on.
 
 - **Reduced ResNet-style benchmark** (#1161): padded 3×3 convolution, residual adds, strided
-  1×1 shortcuts and batch-1 latency. The full ResNet consumer, with batch norm and `resnet_block`,
-  belongs to v1.1.3.
-- **Convolution compiler work**: Winograd F(2×2, 3×3) (#505), zero-nest workgroup geometry (#503),
-  flavor-indexed convolution family search (#697), second-reader staging (#1147), and batch-1
-  strided 1×1 seeds (#1148).
+  1×1 shortcuts and batch-1 latency, with batch-1 strided 1×1 seeds (#1148) and second-reader
+  staging (#1147).
+- **Convolution compiler work**: flavor-indexed convolution family search (#697), Winograd
+  F(2×2, 3×3) (#505) and zero-nest workgroup geometry (#503). The last two have moved between
+  milestones since v1.0; if they are not moving by about October 22 they go to v1.3 rather than
+  hold the release.
 - **CPU kernel and sketch economy**: non-dividing packed GEBP (#627), pad profitability (#740),
   blocktile/packed-scalar padding (#741), per-site flip-chain profitability (#717), and hermetic
   `bin/` benchmark drivers (#743).
@@ -450,75 +468,60 @@ should close with a before/after benchmark cell; a measured null result is usefu
 ---
 
 ## v1.1.3 — October 31, 2026
-**Theme: Consumers and explorations**
+**Theme: The training experience a newcomer meets**
 
-GitHub scope: models, reproductions, demos, integrations and the training experience
-(checkpointing, tracking, plots). Renamed from v1.1.2 in the September 29 split; 24 open issues
-as of October 4. It can continue in the undated v1.2.2 descendant if scope is deferred.
+Renamed from v1.1.2 in the September 29 split, and cut on October 13 to what the v1.2
+demonstration's newcomer path needs:
 
-**Training experience:**
-- Explicit persistent optimizer state (#793) and computed-value observability (#777).
-- Batch-norm running-stat momentum (#879), MobileNet width multiplier (#880), and compilable
-  `resnet_block` channel constraints (#1146).
 - Resumable checkpoints (#96), experiment tracking (#122), plot legends and axis ticks (#103).
+- Explicit persistent optimizer state (#793) and computed-value observability (#777).
+- Interfaces for `lib/` (#1010), so the user-facing surface is stated rather than arguable.
+- **Recovery for REPL and notebook use** (#1301): a failed tensor construction taints the session
+  instead of silently corrupting the next one, and `rewind_to_last_closure` discards the open
+  state. It relies on closure being a commit: `finish_inference` is global and empties the solver,
+  and a closed tensor cannot be spoiled by a later failed inference. A guard on writes to closed
+  shapes makes that premise enforced rather than assumed.
+- MobileNet width multiplier (#880) and cumulative/top-k operations (#952).
 
-**Models, reproductions and demos:**
-- Model surgery (#33), LSTM (#60), Bonsai RNN (#182), digit addition (#427), BERT/ModernBERT (#297),
-  DisTrO (#278), and Gemma 3 with real weights and long context (#570).
-
-**Explorations, integrations and deployment:**
-- Simply/NanoDO study (#435), inference plugins/binaries (#97), Polars (#219), krnl/autograph
-  (#277), public `lib/` interfaces (#1010), cumulative/top-k operations (#952), mmap-backed
-  checkpoint zero-copy (#585), async-copy staging (#576), and pressure-aware memory policy (#565).
+**Moved to v1.2.2 on October 13**: model surgery (#33), LSTM (#60), Bonsai RNN (#182), digit
+addition (#427), BERT/ModernBERT (#297), DisTrO (#278), Gemma 3 with real weights (#570), the
+Simply/NanoDO study (#435), inference plugins/binaries (#97), Polars (#219), krnl/autograph
+(#277), mmap-backed checkpoint zero-copy (#585), async-copy staging (#576), and pressure-aware
+memory policy (#565).
 
 ---
 
 ## v1.2 — November 15, 2026
-**Proposed theme: Reusable tensor programs on a standalone ArrayJIT compiler**
+**Theme: Reusable tensor programs**
 
-GitHub currently calls this *"Ambitious feature-grade work"*, with **11 open issues as of
-October 4**: #404, #903, #852, #444, #477, #170, #195, #963, #1000, #1122 and #1123.
-The three architectural anchors below remain a proposed core; the later additions concern
-compiler phase order, cross-statement conflict analysis and general scan/scheduling licences.
-#585 is now consumer work in v1.1.3. November 15 is the current soft target, not a promise
-to finish all 11 design spaces.
+v1.2 is the release the schedule is anchored on. The October 13 rebalance cut it to one
+architectural track, chosen because it tests the project's founding bet — constraint-based shape
+inference with row variables — in its most demanding form, plus the user path that makes it
+reachable.
 
-**Recommended core, with concrete completion criteria:**
+| Track | Issue | Deliverable |
+|-------|-------|-------------|
+| Reusable tensor functions | #404 | Infer a function's constraint scheme once, freshen it at each application, and report a contradictory application at the call site with its provenance. Demonstrate reuse at different shapes and measure inference cost against re-tracing. Generalization follows the Hindley–Milner level discipline: the function's own variables generalize, while parameters captured in its closure stay shared. |
+| Checkpoint rollback | #903 | #404's first work package: an explicit checkpoint snapshots the mutable fields of the **open** inference state (closed state cannot change), and a rewind restores it and discards what was created since. #404 infers a scheme by tracing inside a checkpoint and rewinding. Completeness is over field types, checked by exhaustive record patterns, rather than over write sites. |
+| Newcomer path | v1.1.3 | Train, checkpoint, resume and run inference on one small model through `lib/`'s stated interfaces, recovering from a shape error in a notebook-style session. |
 
-| Track | Existing issue | Proposed deliverable |
-|-------|----------------|----------------------|
-| Standalone compiler | #852 | ArrayJIT accepts a loop-nest program without depending on tensor/Assignments orchestration, with a reference driver, documented package boundary and an executed non-neural example. The public `arrayjit.ll_builders` from PR #686 is useful groundwork, not completion of the package split. |
-| Recoverable inference sessions | #903 | Solver state belongs to a session; a failed tensor construction can rewind without contaminating a later valid one. Exercise shared operand state and two independent sessions. The maintainer still needs to choose the transaction representation. |
-| Reusable tensor functions | #404 | Infer a function's constraint scheme once, freshen it at multiple applications and report contradictory shapes at the appropriate boundary. Demonstrate reuse at different shapes, error provenance and measured inference cost against retracing. |
+The release demonstration pairs one tensor function reused at several shapes, including an
+application whose shapes contradict the scheme, reported at the call site, with the newcomer path.
 
-Sequence the session ownership/rollback contract before committing to shape-scheme storage and
-freshening. The package split can progress alongside that design, but agree the frontend/compiler
-boundary first to avoid moving APIs twice. C renderer state isolation (PR #707) removes one
-source of shared mutable state; it does **not** establish compiler-wide or solver reentrance.
+**Optional:** the standalone ArrayJIT package split (#852), with a reference driver and an
+executed non-neural example. It matters most if the project is ever handed over, since a separable
+loop-nest compiler is easier to adopt.
 
-Flesh out these three issues with acceptance work packages rather than adding unrelated features:
-a package-dependency/install check and standalone example for #852; failure-recovery and session
-isolation examples for #903; polymorphic reuse, diagnostics and an inference benchmark for #404.
-A release demonstration should pair the standalone ArrayJIT example with one reusable tensor
-block compiled at several shapes, including a failed application followed by a valid one.
-These are proposed scope refinements, not newly filed issues.
+Session-owned persistent shapes and reentrance (one inference session per domain) were considered
+for #903 and dropped: they would make the solver harder to change, and nothing asks for concurrent
+graph construction. If #404 cannot fit by November 15, finish a coherent subset and defer the
+remainder explicitly, preserving the date.
 
-**Optional companions, not core release gates:**
-
-- PoPE (#444) can demonstrate a reusable position-embedding block; it should not determine the
-  session architecture or hold the release if interest lies elsewhere.
-- CUDA pinned host buffers (#170) and `__constant__` arrays (#195) need explicit ownership,
-  capability and transfer/read benchmarks before promotion into the core scope. They may ship
-  independently when measured.
-- CDNA MFMA (#477) requires a CDNA machine; the current fleet's gfx1151 HIP results do not cover
-  wave64 MFMA. Keep it hardware-gated and propose a later backend milestone only when hardware
-  access exists, rather than inventing a v1.3 date now.
-
-If the three architectural tracks cannot fit by November 15, finish a coherent subset and defer
-the remainder explicitly, preserving the current landing target. A useful v1.2 advances reusable programs and clear ownership; clearing
-11 heterogeneous issue numbers is not its acceptance criterion. The undated v1.2.1 and v1.2.2
-milestones reserve room for later consolidation and consumers; they are not additional scheduled
-feature releases.
+**Moved to v1.3 on October 13** (undated): CDNA MFMA (#477, which needs CDNA hardware), CUDA
+pinned host buffers and `__constant__` arrays (#170, #195), PoPE (#444), the design question of a
+compilation pipeline that can loop (#1000), and the scan licence and attention block geometry
+postponed from #1003 (#1122, #1123). The undated v1.2.1 and v1.2.2 milestones hold the
+consolidation and consumer work deferred from v1.1.1 and v1.1.3.
 
 ---
 
@@ -537,11 +540,12 @@ feature releases.
 | **1.0.1** | Aug 26, 2026 | **released** | **Consolidation after v1.0** (planned as "v1.1"): search follow-through, inlining and reduction soundness, test and benchmark seams that cannot report a false pass, and the training-loop mechanics |
 | **1.0.2** | Sep 16, 2026 | **released** | **Robustness pulled forward, plus compiler elegance through shared structure**: the landed robustness fixes and eight compiler-structure/coverage issues |
 | **1.1** | Oct 4, 2026 | **released** | **Fused attention and better transformer scheduling**; tuned f32 inference improves over the same-night August anchor, while approximate performance remains workload-dependent |
-| 1.1.1  | Oct 16, 2026 | planned; work already landing | Consolidation informed by transformer measurements and review findings |
-| 1.1.2  | Oct 24, 2026 | planned | Performance beyond transformers: reduced ResNet-style convs and CPU kernel/sketch economy |
-| 1.1.3  | Oct 31, 2026 | planned | Consumers, models, integrations, checkpointing and observability |
-| 1.2    | Nov 15, 2026 | planned; core refinement proposed | Standalone ArrayJIT, session transactions and shape schemes; broader compiler licences and hardware features remain design spaces |
-| 1.2.1 / 1.2.2 | undated | placeholders | Later consolidation / consumers if scope moves beyond the current ladder |
+| 1.1.1  | Oct 20, 2026 | planned; bounded release | Consolidation against a release gate: CI green, the soundness finds, the full-step training comparison |
+| 1.1.2  | Oct 27, 2026 | planned | Performance beyond transformers: reduced ResNet-style convs and CPU kernel/sketch economy |
+| 1.1.3  | Oct 31, 2026 | planned | The training experience: checkpoints, tracking, plots, `lib/` interfaces, REPL/notebook recovery |
+| 1.2    | Nov 15, 2026 | planned | Reusable tensor programs: shape schemes with checkpoint rollback, beside an end-to-end newcomer path; standalone ArrayJIT optional |
+| 1.2.1 / 1.2.2 | undated | overflow | Consolidation deferred from v1.1.1 / models, reproductions and explorations deferred from v1.1.3 |
+| 1.3    | undated | design spaces | Feature-grade and hardware-gated work moved out of v1.2: CDNA MFMA, CUDA pinned/constant memory, PoPE, a looping compilation pipeline, scan licences |
 
 ---
 
