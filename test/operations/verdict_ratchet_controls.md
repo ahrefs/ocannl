@@ -455,3 +455,24 @@ The baseline run `20260925T141810Z-58665` exited 0.
 | A computed label is keyed by its printed expression | `verdict_scan.ml`: each computed key made unique to its site | Failed: `refuses a label computed by the same expression on both sides` | `20260925T141912Z-74727` |
 | `p` is not the PASS/FAIL dialect | `verdict_scan.ml`: `"p"` added to `pass_fail_callees` | Failed: `accepts a gated claim reported through p on its evaluated side`, and the corpus claim that no label reaches both dialects, since every correctly converted gated leg then reads as a pairing | `20260925T141922Z-77799` |
 | A pairing needs one label on both sides | `verdict_scan.ml`: the key comparison dropped from `same_label` | Failed: `accepts pass_fail and skipped on different labels`, `does not pair labels computed by different expressions, the blind spot gated closes` | `20260925T141933Z-80834` |
+
+## gh-ocannl-1289 mutation runs
+
+The gate-population reader (`Verdict_scan.gate_census`) refuses a `gated_all`, `gated_alli` or
+`gated_exists` claim whose `~when_` gate reads the population the claim quantifies, or a
+collection that population is built from. Every run used tools/mutation-run.sh on
+`test/support/verdict_scan.ml` and the focused verdict_ratchet alias, exited 1 on exactly the
+listed false claims, and restored the source byte-for-byte with cmp.
+
+| Mechanism | Mutation | Controls | Run |
+|---|---|---|---|
+| A binding both sides share refuses the claim | the shared set is never reported | Failed: `refuses a gate that tests its own population for emptiness`, `refuses a population gate on a wrapper's own parameter`, `refuses a planted gate that reads its population, and a gated claim it cannot read`, and every other refusing control below | PENDING |
+| The population follows a name into its right-hand side | population side stops at the name | Failed: `refuses a gate read off the collection the population is mapped from` | PENDING |
+| The gate follows a name into its right-hand side | gate side stops at the names it spells | Failed: `refuses a gate bound to a name that reads the population's source` | PENDING |
+| A match builds the population from its cases | the match arm of the population side removed | Failed: `refuses a gate read off a collection a match branch builds the population from` | PENDING |
+| Dereference and append are followed | the operator arm of the population side removed | Failed: `refuses a gate that reads a dereferenced population appended with another` | PENDING |
+| An if condition steers the population and is not part of it | the condition visited with the branches | Failed: `accepts a backend gate that also steers the population's construction`, `accepts a capability-derived gate over a population built from the same program`, and the corpus claim, since qkv_zero_init's backend gate then reads its seeds | PENDING |
+| A partial application bound to a name is completed at its uses | the name lookup of the claim resolver removed | Failed: `refuses a population gate behind a partially applied gated wrapper`, `accepts a host gate behind a partially applied gated wrapper`, and the corpus claim through atomic_file_race's wrapper | PENDING |
+| A pipeline is an application | the pipeline rewrite answers nothing | Failed: `refuses a population gate applied through a pipeline` | PENDING |
+| Identity is lexical, a name plus its binding | the shared set compared by name alone | Failed: `does not take a shadowed binding of the same name for the population` | PENDING |
+| A claim the reader cannot complete is reported | every unconsumed partial application dropped | Failed: `names a gated claim it cannot complete instead of counting it clean`, and the refusal control above | PENDING |

@@ -496,6 +496,8 @@ let raw_entries =
         "[scanner-refusal:52b0c212a9f1ba97a1400cd478d7cfda] shadowing definitions separate";
         "[scanner-refusal:28926aa707bb0e8c7e5a087d40f0bf13] exempted claim-shaped literal";
         "[scanner-refusal:b0f5d68f72c0eeaca59c45fd980450cd] reports the claim";
+        "[scanner-refusal:b743906541a11550a0513ec369b96184] which reads";
+        "[scanner-refusal:6fa8a8891ce1cc5457a70a7dc0955684] let`-bound partial application";
         "[scanner-refusal:0f307832357ee7ca58b9798a86530dac] arguments the rule's";
         "[scanner-refusal:f3e306858423827e6575d13a17d57af6] check cannot vouch";
         "[scanner-refusal:53b71ea33a69d24c941985f4eb35406b] prints the claim";
@@ -506,6 +508,8 @@ let raw_entries =
         "[scanner-refusal:63d9475f3df44af6baac8bdc03a3310b] every quantified binding";
         "[scanner-refusal:d4d40c92b012f9347593f527cb7ad30d] pass_fail";
         "[scanner-refusal:5378ba5390debc4a8425ccdeb107f2d1] pass_fail";
+        "[scanner-refusal:b42517e6f02cc3aa2ca5691ebdd70c62] population it quantifies";
+        "[scanner-refusal:a51e429cf1070db9d057a59d7b50c801] reader completed gated";
         "[scanner-refusal:be24b406399ca10a3226fec87a6d2b7f] every literal planted";
         "[scanner-refusal:7b69f1ae79d020bf8ce24352f17dec6d] every exemption on";
         "[scanner-refusal:bd1c6476261fa5d1b680ca8c0959f3f9] exempted claim-shaped literal";

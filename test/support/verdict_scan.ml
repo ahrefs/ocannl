@@ -448,3 +448,316 @@ let dialect_census content =
             if same_label pass_fail skipped then Some { pass_fail; skipped } else None))
   in
   { pairings; skipped_sites = List.length skips; pass_fail_sites = List.length pass_fails }
+
+(** {1 A gate that reads the population it quantifies (gh-ocannl-1289)}
+
+    [Verdict.gated_all ~when_ ~on label xs ~f] (and [gated_alli], [gated_exists]) skips its claim
+    where [when_] is false. A gate computed from the values under test turns the regression the
+    claim exists to catch into a skip: had the population emptied or lost its interesting members,
+    the gate closes, the run prints [p]'s line on stderr's say-so, and the golden stays green. That
+    is the gh-ocannl-1115 trap, and it shipped twice in one wave through these very forms — a gate
+    asking whether the claim's own [results] were non-empty (staging#1049), and one asking whether
+    the [real] seeds [results] was mapped from held a tensorized one (staging#1063). A gate comes
+    from an invariant — the backend, an advertised capability, the configuration — never from the
+    population.
+
+    {2 What is read}
+
+    Every application of a callee whose last path component is [gated_all], [gated_alli] or
+    [gated_exists] (qualified, or opened through [Verdict.Claims]) that carries its [~when_] and
+    both positional arguments. A partial application bound by [let] to a name, under any number of
+    further partial applications, is completed at each application of that name, and [x |> f] and
+    [f @@ x] are read as [f x]; so the [let check = Verdict.gated_all ~when_ ~on in check label xs]
+    wrapper is one site per use. The two sides are then compared by LEXICAL identity, a name plus
+    the binding it resolves to through {!Lexical_scope}, so a shadowed name is a different value:
+
+    - the GATE is every value identifier the [~when_] expression spells, and transitively every one
+      spelled by the right-hand side of a [let] it resolves to (function bodies included), in any
+      position;
+    - the POPULATION is the identifier the quantified argument spells, and the collections it is
+      BUILT from: following a [let]-bound name into its right-hand side, the branches (not the
+      condition) of an [if] and the cases (not the scrutinee) of a [match], the body of a [let] or
+      sequence, the elements of a list, array or tuple literal or constructor payload, the operand
+      of [!] and both operands of [@], and the positional arguments of a function qualified by a
+      collection module ([List], [Array], [Hashtbl], [Map], [Option], [String], ... — see
+      {!collection_modules}).
+
+    The claim is refused when the two share a binding. The asymmetry is the point: a gate may read
+    what the population is COMPUTED from (the site, the hardware limits, the backend steering an
+    [if]), which is how a capability judgment over the same program reads, and must not read the
+    population or a collection it is mapped, filtered or appended from.
+
+    {2 What is not read}
+
+    The population is not followed through a call to any other function (a file-local
+    [gpu_seeds pre] stops at the call), through a record field, through a function parameter (the
+    caller's argument is not substituted), or through an [open List]-style unqualified collection
+    call; a destructured [let] binds names that are followed no further. A gate threaded into a
+    wrapper as its own parameter ([let check ~when_ label xs = gated_all ~when_ ...]) is read at the
+    wrapper's definition, where it is a parameter, and not at its callers. [Verdict.gated]'s boolean
+    is not a population and is out of scope. Each of these is a place a population gate can hide
+    from this reader; none is a place it reports one that is not there.
+
+    A [gated_*] application the reader cannot complete — passed un-applied to another function, say
+    — is reported as unread rather than counted as clean, so the boundary is loud there. *)
+
+type gate_denotation = {
+  identity : int;
+  definition : (expression * (gate_denotation, unit) Lexical_scope.env) option;
+}
+
+type gate_reading = {
+  form : string;  (** The callee as written: [gated_all], [Verdict.gated_exists], a wrapper. *)
+  line : int;
+  gate : string;  (** The [~when_] expression, printed. *)
+  reads : string list;  (** The population bindings the gate reads, by name, sorted. *)
+}
+
+type gate_census = {
+  readings : gate_reading list;  (** Claims whose gate reads their population, in source order. *)
+  gated_sites : int;  (** Every completed [gated_*] claim the reader compared. *)
+  unread : (string * int) list;  (** [gated_*] applications it could not complete: callee, line. *)
+}
+
+let gated_forms = [ "gated_all"; "gated_alli"; "gated_exists" ]
+
+(** The modules whose functions build a collection from their positional arguments, by the module
+    component just before the function's name ([List.map], [Base.List.map], [Stdlib.List.map]). *)
+let collection_modules =
+  [
+    "List";
+    "ListLabels";
+    "Array";
+    "ArrayLabels";
+    "Seq";
+    "Sequence";
+    "Hashtbl";
+    "Map";
+    "Set";
+    "Queue";
+    "Stack";
+    "Option";
+    "String";
+  ]
+
+let gate_census content =
+  let ast = Read.structure_of content in
+  let readings = ref [] and gated_sites = ref 0 in
+  let partials = ref [] and consumed = Hash_set.create (module Int) in
+  let position expr = expr.pexp_loc.loc_start.pos_cnum in
+  let walker =
+    object (self)
+      inherit [gate_denotation, unit] Lexical_scope.scoped as super
+      val mutable next_local = 0
+      val mutable quiet = 0
+      val mutable collecting : (string * gate_denotation) list ref option = None
+
+      method local =
+        next_local <- next_local - 1;
+        { identity = next_local; definition = None }
+
+      method module_path _ _ = None
+
+      method! binding_denotes env binding =
+        let identity = binding.pvb_loc.loc_start.pos_cnum + 1 in
+        match Read.pattern_name binding.pvb_pat with
+        | Some _ -> { identity; definition = Some (binding.pvb_expr, env) }
+        | None -> { identity; definition = None }
+
+      method! attribute _ attr = attr
+
+      method! ident env ident =
+        match (collecting, ident.txt) with
+        | Some found, Ppxlib.Longident.Lident name -> (
+            match Lexical_scope.lookup env name with
+            | Some denotation -> found := (name, denotation) :: !found
+            | None -> ())
+        | _ -> ()
+
+      (* Every value identifier [expr] spells, resolved in [env], without recording sites. *)
+      method identifiers env expr =
+        let saved = collecting in
+        let found = ref [] in
+        collecting <- Some found;
+        quiet <- quiet + 1;
+        Exn.protect
+          ~f:(fun () -> ignore (self#expression env expr : expression))
+          ~finally:(fun () ->
+            collecting <- saved;
+            quiet <- quiet - 1);
+        List.rev !found
+
+      (* The gate's side: everything it spells, through every [let] it reaches. *)
+      method gate_reads env expr =
+        let seen = Hash_set.create (module Int) in
+        let reads = Hash_set.Poly.create () in
+        let rec visit env expr =
+          List.iter (self#identifiers env expr) ~f:(fun (name, denotation) ->
+              Hash_set.add reads (name, denotation.identity);
+              if not (Hash_set.mem seen denotation.identity) then (
+                Hash_set.add seen denotation.identity;
+                Option.iter denotation.definition ~f:(fun (rhs, env) -> visit env rhs)))
+        in
+        visit env expr;
+        reads
+
+      (* The population's side: the collections it is built from. *)
+      method population env expr =
+        let seen = Hash_set.create (module Int) in
+        let found = Hash_set.Poly.create () in
+        let rec visit env expr =
+          match expr.pexp_desc with
+          | Pexp_ident { txt = Ppxlib.Longident.Lident name; _ } -> (
+              match Lexical_scope.lookup env name with
+              | Some denotation ->
+                  Hash_set.add found (name, denotation.identity);
+                  if not (Hash_set.mem seen denotation.identity) then (
+                    Hash_set.add seen denotation.identity;
+                    Option.iter denotation.definition ~f:(fun (rhs, env) -> visit env rhs))
+              | None -> ())
+          | Pexp_constraint (inner, _)
+          | Pexp_coerce (inner, _, _)
+          | Pexp_sequence (_, inner)
+          | Pexp_open (_, inner) ->
+              visit env inner
+          | Pexp_ifthenelse (_, yes, no) ->
+              visit env yes;
+              Option.iter no ~f:(visit env)
+          | Pexp_match (_, cases) | Pexp_try (_, cases) ->
+              List.iter cases ~f:(fun case ->
+                  visit (self#bind_patterns env [ case.pc_lhs ]) case.pc_rhs)
+          | Pexp_let (rec_flag, bindings, body) ->
+              visit (self#bind_group env bindings (self#denotations env rec_flag bindings)) body
+          | Pexp_tuple elements | Pexp_array elements -> List.iter elements ~f:(visit env)
+          | Pexp_construct (_, Some payload) | Pexp_variant (_, Some payload) -> visit env payload
+          | Pexp_apply (callee, arguments) -> (
+              match self#pipeline callee arguments with
+              | Some (callee, arguments, _) ->
+                  visit env { expr with pexp_desc = Pexp_apply (callee, arguments) }
+              | None -> (
+                  let positional =
+                    List.filter_map arguments ~f:(function
+                      | Ppxlib.Asttypes.Nolabel, argument -> Some argument
+                      | _ -> None)
+                  in
+                  match Read.longident_of callee with
+                  | Some [ ("!" | "@") ] -> List.iter positional ~f:(visit env)
+                  | Some path
+                    when List.length path >= 2
+                         && List.mem collection_modules
+                              (List.nth_exn path (List.length path - 2))
+                              ~equal:String.equal ->
+                      List.iter positional ~f:(visit env)
+                  | _ -> ()))
+          | _ -> ()
+        in
+        visit env expr;
+        found
+
+      (* [x |> f] and [f @@ x], as the application [f x]; with the position of [f] when [f] is
+         itself an application, which the rewrite absorbs. *)
+      method pipeline callee arguments =
+        match (Read.longident_of callee, arguments) with
+        | Some [ "|>" ], [ (Ppxlib.Asttypes.Nolabel, x); (Ppxlib.Asttypes.Nolabel, f) ]
+        | Some [ "@@" ], [ (Ppxlib.Asttypes.Nolabel, f); (Ppxlib.Asttypes.Nolabel, x) ] -> (
+            match f.pexp_desc with
+            | Pexp_apply (inner, inner_arguments) ->
+                Some (inner, inner_arguments @ [ (Ppxlib.Asttypes.Nolabel, x) ], Some (position f))
+            | _ -> Some (f, [ (Ppxlib.Asttypes.Nolabel, x) ], None))
+        | _ -> None
+
+      (* The [gated_*] claim an application reaches, with every argument it has been handed so far,
+         each with the scope it was written in; the applications it went through are marked
+         consumed. *)
+      method gated env expr ~through =
+        match expr.pexp_desc with
+        | Pexp_constraint (inner, _) -> self#gated env inner ~through
+        | Pexp_ident { txt; _ } -> (
+            match (Read.longident_of expr, txt) with
+            | Some path, _ when List.mem gated_forms (List.last_exn path) ~equal:String.equal ->
+                Some (String.concat ~sep:"." path, [])
+            | _, Ppxlib.Longident.Lident name -> (
+                match Lexical_scope.lookup env name with
+                | Some { identity; definition = Some (rhs, rhs_env) }
+                  when not (Hash_set.mem through identity) ->
+                    Hash_set.add through identity;
+                    Option.map (self#gated rhs_env rhs ~through) ~f:(fun (_, arguments) ->
+                        (name, arguments))
+                | _ -> None)
+            | _ -> None)
+        | Pexp_apply (callee, arguments) -> (
+            let callee, arguments, absorbed =
+              match self#pipeline callee arguments with
+              | Some rewritten -> rewritten
+              | None -> (callee, arguments, None)
+            in
+            match self#gated env callee ~through with
+            | Some (form, prior) ->
+                (* The partial applications this one completes are read here, not on their own. *)
+                Option.iter absorbed ~f:(Hash_set.add consumed);
+                (match callee.pexp_desc with
+                | Pexp_apply _ -> Hash_set.add consumed (position callee)
+                | Pexp_ident { txt = Ppxlib.Longident.Lident name; _ } -> (
+                    match Lexical_scope.lookup env name with
+                    | Some { definition = Some (rhs, _); _ } -> Hash_set.add consumed (position rhs)
+                    | _ -> ())
+                | _ -> ());
+                Some
+                  ( form,
+                    prior @ List.map arguments ~f:(fun (label, argument) -> (label, argument, env))
+                  )
+            | None -> None)
+        | _ -> None
+
+      method! expression env expr =
+        (if quiet = 0 && not (Hash_set.mem consumed (position expr)) then
+           match expr.pexp_desc with
+           | Pexp_apply _ -> (
+               match self#gated env expr ~through:(Hash_set.create (module Int)) with
+               | None -> ()
+               | Some (form, arguments) -> (
+                   let gate =
+                     List.find_map arguments ~f:(function
+                       | Ppxlib.Asttypes.Labelled "when_", argument, env -> Some (argument, env)
+                       | _ -> None)
+                   in
+                   let positional =
+                     List.filter_map arguments ~f:(function
+                       | Ppxlib.Asttypes.Nolabel, argument, env -> Some (argument, env)
+                       | _ -> None)
+                   in
+                   let line = expr.pexp_loc.loc_start.pos_lnum in
+                   match (gate, List.nth positional 1) with
+                   | Some (gate, gate_env), Some (population, population_env) ->
+                       Int.incr gated_sites;
+                       let reads = self#gate_reads gate_env gate in
+                       let shared =
+                         Hash_set.filter
+                           (self#population population_env population)
+                           ~f:(Hash_set.mem reads)
+                         |> Hash_set.to_list |> List.map ~f:fst
+                         |> List.dedup_and_sort ~compare:String.compare
+                       in
+                       if not (List.is_empty shared) then
+                         readings :=
+                           {
+                             form;
+                             line;
+                             gate = Ppxlib.Pprintast.string_of_expression gate;
+                             reads = shared;
+                           }
+                           :: !readings
+                   | _ -> partials := (position expr, form, line) :: !partials))
+           | _ -> ());
+        super#expression env expr
+    end
+  in
+  ignore
+    (walker#structure { Lexical_scope.frames = []; modules = Map.empty (module String) } ast
+      : structure);
+  let unread =
+    List.rev !partials
+    |> List.filter_map ~f:(fun (at, form, line) ->
+        if Hash_set.mem consumed at then None else Some (form, line))
+  in
+  { readings = List.rev !readings; gated_sites = !gated_sites; unread }
