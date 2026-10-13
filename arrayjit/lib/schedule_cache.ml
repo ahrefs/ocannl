@@ -777,7 +777,16 @@ let cache_key ?objective ~timing_identity ~(limits : Backend_intf.hardware_limit
              match component name with "" -> None | part -> Some part)))
 
 let ensure_dir = Utils.Atomic_file.ensure_dir
-let cache_file ~dir ~key = Stdlib.Filename.concat dir (sanitize key ^ ".sexp")
+
+(* An entry's filename is a fixed-length digest of its key, never the key itself (gh-ocannl-1228). A
+   key grows with every component [key_components] adds, and a filename spelling it out grew past
+   Windows' MAX_PATH (260 characters for the whole path, without [LongPathsEnabled]) and, for a long
+   enough key, past every filesystem's 255-byte component limit: every store was then refused. The
+   digest bounds the name whatever the key; the key itself is stored inside the entry
+   ([stored_entry]), and a lookup compares it, so two keys that share a digest -- or that differ
+   only in case, on a case-insensitive volume -- read as a miss, never as each other's entry. *)
+let cache_file ~dir ~key =
+  Stdlib.Filename.concat dir (Stdlib.Digest.to_hex (Stdlib.Digest.string key) ^ ".sexp")
 
 (* The key REGIME is deliberately independent of [entry_version]. The latter says whether the
    payload at a key can be decoded; this stamp says whether the directory's filenames were minted by
@@ -792,8 +801,9 @@ let cache_file ~dir ~key = Stdlib.Filename.concat dir (sanitize key ^ ".sexp")
    4: gh-ocannl-1124 -- lanes for nests with a preamble reduction change the default segmentation
    5: gh-ocannl-1167 -- lane geometry gated per device: HIP segmentation moves under unchanged keys
    6: gh-ocannl-1164 -- [fission] is gone: a fissioned winner persists its own segmentation
+   7: gh-ocannl-1228 -- an entry's filename is a digest of its key, which the entry now stores
 *)
-let cache_regime_version = 6
+let cache_regime_version = 7
 let regime_stamp_filename = ".ocannl-schedule-cache-regime"
 let regime_lock_filename = ".ocannl-schedule-cache.lock"
 let regime_stamp_file dir = Stdlib.Filename.concat dir regime_stamp_filename
@@ -921,6 +931,28 @@ let recording_cache_io f =
   let result = Exn.protect ~f ~finally:detach in
   (result, Queue.to_list q)
 
+(* The failures a cache read never absorbs: they are about the process, not the entry, and a miss
+   that hides one turns Ctrl-C during a lookup into the start of a search it was meant to stop. *)
+let process_level = function
+  | Out_of_memory | Stdlib.Sys.Break | Stack_overflow -> true
+  | _ -> false
+
+(* What an entry file holds: the full key the filename is a digest of, beside the payload. *)
+type stored_entry = { key : string; payload : Sexp.t } [@@deriving sexp]
+
+let entry_keys ~dir =
+  match Stdlib.Sys.readdir dir with
+  | exception Stdlib.Sys_error _ -> []
+  | names ->
+      Array.to_list names
+      |> List.filter ~f:(fun name ->
+          String.is_suffix name ~suffix:".sexp" && not (Utils.Atomic_file.is_staging_file name))
+      |> List.sort ~compare:String.compare
+      |> List.filter_map ~f:(fun name ->
+          match stored_entry_of_sexp (Sexplib.Sexp.load_sexp (Stdlib.Filename.concat dir name)) with
+          | { key; _ } -> Some key
+          | exception exn when not (process_level exn) -> None)
+
 (* One entry I/O protocol for every kind of entry the directory holds: schedule winners, abandoned
    searches and placement decisions (gh-ocannl-786) share the lock, the regime stamp and the atomic
    commit, and differ only in payload and version check. *)
@@ -940,7 +972,8 @@ let store_sexp ~dir ~key sexp =
                  an intention. The injection point sits in the staged-but-uncommitted window, which
                  is what makes that guarantee testable. *)
               try
-                Utils.Atomic_file.write_all ~path:file ~data:(Sexp.to_string_hum sexp)
+                Utils.Atomic_file.write_all ~path:file
+                  ~data:(Sexp.to_string_hum (sexp_of_stored_entry { key; payload = sexp }))
                   ~before_commit:(fun () ->
                     Resource_fault_injection.hit Schedule_cache_before_commit)
                   ();
@@ -959,12 +992,6 @@ let store_sexp ~dir ~key sexp =
       in
       note_io { op = Store; dir; key; refusal })
 
-(* The failures a cache read never absorbs: they are about the process, not the entry, and a miss
-   that hides one turns Ctrl-C during a lookup into the start of a search it was meant to stop. *)
-let process_level = function
-  | Out_of_memory | Stdlib.Sys.Break | Stack_overflow -> true
-  | _ -> false
-
 let lookup_sexp ~dir ~key ~of_sexp ~current =
   Option.bind key ~f:(fun key ->
       let opened =
@@ -977,8 +1004,13 @@ let lookup_sexp ~dir ~key ~of_sexp ~current =
             | Ok true -> (
                 try
                   Resource_fault_injection.hit Schedule_cache_before_replay;
-                  let entry = of_sexp (Sexplib.Sexp.load_sexp file) in
-                  Ok (if current entry then Some entry else None)
+                  let stored = stored_entry_of_sexp (Sexplib.Sexp.load_sexp file) in
+                  (* Another key's entry under this key's digest is a miss, decided before the
+                     payload is decoded: it is not this key's answer, however well it decodes. *)
+                  if not (String.equal stored.key key) then Ok None
+                  else
+                    let entry = of_sexp stored.payload in
+                    Ok (if current entry then Some entry else None)
                 with
                 (* The filesystem refusing an entry the directory listing just showed -- a Windows
                    peer holding it without share-read -- is a refusal; an entry that fails to parse

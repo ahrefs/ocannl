@@ -425,7 +425,7 @@ let () =
   p "cache-replay control reads the committed replacement"
     (Option.equal String.equal (cache_backend cache_key) (Some "new"));
   Stdio.Out_channel.write_all
-    (Stdlib.Filename.concat resource_cache_dir (cache_key ^ ".sexp"))
+    (SC.cache_file ~dir:resource_cache_dir ~key:cache_key)
     ~data:"not a schedule cache entry";
   p "corrupt cache replay is an honest miss"
     (Option.is_none (SC.lookup ~dir:resource_cache_dir ~key:(Some cache_key)))

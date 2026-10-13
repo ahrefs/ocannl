@@ -100,6 +100,13 @@ val is_staging_file_for : path:string -> string -> bool
     filesystem exactly would mean carrying a Unicode table and still disagreeing with some volume,
     so it is left as a known bound rather than approximated (Codex P2, round 8). *)
 
+val windows_path_length_note : ?win32:bool -> string -> string option
+(** [Some note] when [path], resolved against the working directory if relative, is longer than the
+    259 characters Win32 accepts without [LongPathsEnabled], on Windows ([?win32] defaults to
+    [Sys.win32]); [None] otherwise. Such a path is refused as [ENOENT], "No such file or directory",
+    which names nothing about length, so a refused staging open appends this note to its [Sys_error]
+    (gh-ocannl-1228). Exposed with [?win32] so the note can be tested on any host. *)
+
 val ensure_dir : string -> unit
 (** Creates the directory and its missing parents, tolerating concurrent creators. A no-op for
     ["."], ["/"] and the empty string, so a bare filename's [Filename.dirname] is safe to pass. *)

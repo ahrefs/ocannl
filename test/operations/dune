@@ -4468,6 +4468,16 @@
  (libraries base ocannl stdio unix arrayjit.verdict))
 
 (test
+ ; ocannl-backend: none -- pure filesystem exercise of Schedule_cache entry naming; no context or compile.
+ (name schedule_cache_entry_name)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules schedule_cache_entry_name)
+ ; `arrayjit.utils` for `Atomic_file.windows_path_length_note`, the staging-open refusal's
+ ; path-length diagnosis.
+ (libraries base ocannl stdio arrayjit.utils arrayjit.verdict))
+
+(test
  ; ocannl-backend: none -- cross-process filesystem exercise of Schedule_cache; no context or compile.
  ; ocannl-lifecycle: schedule_cache_regime_race -- checks allocation and cleanup across resource seams
  (name schedule_cache_regime_race)

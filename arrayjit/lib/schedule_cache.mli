@@ -358,12 +358,13 @@ val cache_key :
   backend:string ->
   string option
 (** [None] if the concrete timing identity is unavailable; all cache I/O with [None] is a no-op,
-    including directory creation, locking and regime changes. Otherwise a filename-safe cache key:
-    the digest, the backend name, {!numerics_tag} of the current numerics policy, {!codegen_tag} of
-    the codegen configuration (including [limits.codegen_tag], the compiling backend's own
-    contribution, and the [capabilities]' precision resolution), the worker-pool signature
-    ([limits.worker_pool_tag], gh-ocannl-530: CPU crowns do not transfer across pools), and the
-    autotuner's timing objective ([objective], defaulting to {!objective_tag}).
+    including directory creation, locking and regime changes. Otherwise a cache key (its entry's
+    filename is a digest of it, {!cache_file}): the digest, the backend name, {!numerics_tag} of the
+    current numerics policy, {!codegen_tag} of the codegen configuration (including
+    [limits.codegen_tag], the compiling backend's own contribution, and the [capabilities]'
+    precision resolution), the worker-pool signature ([limits.worker_pool_tag], gh-ocannl-530: CPU
+    crowns do not transfer across pools), and the autotuner's timing objective ([objective],
+    defaulting to {!objective_tag}).
 
     The objective is a key component because the two objectives crown DIFFERENT candidates
     (gh-ocannl-755, measured): an entry crowned under isolated timing is not the answer to a search
@@ -381,8 +382,8 @@ val cache_key :
 
 val cache_regime_version : int
 (** Version of the filename-key regime recorded once per cache directory (gh-ocannl-835). Bump it
-    when the schema of {!key_components} changes. This is independent of {!entry_version}, which
-    versions the payload stored at one key. *)
+    when the schema of {!key_components} changes, or how a key becomes a filename ({!cache_file}).
+    This is independent of {!entry_version}, which versions the payload stored at one key. *)
 
 val regime_stamp_filename : string
 (** The directory-local file containing {!cache_regime_version}. Exposed as part of the on-disk
@@ -394,23 +395,38 @@ val regime_lock_filename : string
     cache format for synthetic cache-directory tests; callers must never unlink a live cache's lock
     file. *)
 
+val cache_file : dir:string -> key:string -> string
+(** The path of [key]'s entry in [dir]: a fixed-length digest of the key plus [.sexp], whatever the
+    key's length (gh-ocannl-1228). A filename that spelled the key out grew with every key component
+    and was refused past Windows' MAX_PATH, and for a long enough key past every filesystem's
+    component limit. The full key is stored inside the entry and compared on {!lookup}, so another
+    key's entry under the same digest is a miss, never a wrong replay. Exposed so tests and tools
+    derive an entry's path rather than restating the naming. *)
+
+val entry_keys : dir:string -> string list
+(** The keys of the entries in [dir], read from inside the entry files (namespace prefixes such as
+    ["placements-"] and ["abandonment-"] included), in filename order. Best-effort and lock-free:
+    what a test or a person inspecting a cache wants, since the filenames are digests. A missing
+    directory, and a file that is not a readable entry of this format, contribute nothing. *)
+
 val store : dir:string -> key:string option -> entry -> unit
-(** Writes the entry to [dir]/[key].sexp, creating [dir] (and parents) if missing. Publication goes
-    through {!Utils.Atomic_file}, so concurrent writers tolerate each other (last write wins) and a
-    failed write or commit removes its own staging artifact and leaves an earlier complete entry
-    intact. Before writing, cache-open serializes participating processes on a permanent lock file:
-    an older or absent regime stamp sweeps every [.sexp] entry and is atomically replaced by the
-    current stamp; a malformed or newer stamp refuses the operation without changing its stamp or
-    entries. Holding that lock through the write prevents a concurrent regime transition from
-    deleting the new entry. A filesystem refusal is not propagated: the cache is an optimization,
-    and an entry that could not be written is a future miss rather than a failed run. It is noted,
-    with its reason, to {!recording_cache_io}. *)
+(** Writes the entry, together with its key, to {!cache_file}[ ~dir ~key], creating [dir] (and
+    parents) if missing. Publication goes through {!Utils.Atomic_file}, so concurrent writers
+    tolerate each other (last write wins) and a failed write or commit removes its own staging
+    artifact and leaves an earlier complete entry intact. Before writing, cache-open serializes
+    participating processes on a permanent lock file: an older or absent regime stamp sweeps every
+    [.sexp] entry and is atomically replaced by the current stamp; a malformed or newer stamp
+    refuses the operation without changing its stamp or entries. Holding that lock through the write
+    prevents a concurrent regime transition from deleting the new entry. A filesystem refusal is not
+    propagated: the cache is an optimization, and an entry that could not be written is a future
+    miss rather than a failed run. It is noted, with its reason, to {!recording_cache_io}. *)
 
 val lookup : dir:string -> key:string option -> entry option
-(** [None] on missing file, unparsable content, version/digest mismatch, or a refused cache-open.
-    Process-level failures ([Out_of_memory], [Sys.Break], [Stack_overflow]) propagate rather than
-    reading as a miss (gh-ocannl-786): an interrupt during a lookup must not start the search the
-    lookup was about to spare.
+(** [None] on missing file, unparsable content, an entry stored under a different key (a digest
+    collision), version/digest mismatch, or a refused cache-open. Process-level failures
+    ([Out_of_memory], [Sys.Break], [Stack_overflow]) propagate rather than reading as a miss
+    (gh-ocannl-786): an interrupt during a lookup must not start the search the lookup was about to
+    spare.
 
     Together with {!store} this participates in the same permanent record lock and regime-stamp
     protocol described there, and sweeps the cache directory's crash-stale staging files
@@ -521,8 +537,8 @@ val placement_key :
   canonical ->
   backend:string ->
   string option
-(** {!cache_key} over a {!canonicalize_source} identity, in the placement store's own filename
-    space. *)
+(** {!cache_key} over a {!canonicalize_source} identity, in the placement store's own key space (the
+    ["placements-"] prefix). *)
 
 val store_placements : dir:string -> key:string option -> placement_entry -> unit
 (** {!store}'s protocol, for a placement entry. *)

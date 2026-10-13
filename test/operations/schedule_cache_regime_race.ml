@@ -42,7 +42,7 @@ let entry backend : SC.entry =
 
 let stamp_file = Stdlib.Filename.concat cache_dir SC.regime_stamp_filename
 let lock_file = Stdlib.Filename.concat cache_dir SC.regime_lock_filename
-let entry_file key = Stdlib.Filename.concat cache_dir (key ^ ".sexp")
+let entry_file key = SC.cache_file ~dir:cache_dir ~key
 let marker name = Stdlib.Filename.concat cache_dir ("rendezvous-" ^ name)
 
 let clean_dir () =
