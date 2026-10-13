@@ -44,6 +44,9 @@ let stand_in ?(count = 1) ~idle () =
         (Mtime.Span.to_float_ns (Mtime_clock.count started) /. 1e9))
 
 let () =
+  (* Binary stdout: the driver matches "read at exit: 15\n" byte for byte, and Windows' text mode
+     would end the line "\r\n". *)
+  Stdlib.set_binary_mode_out Stdlib.stdout true;
   match Array.to_list (Sys.get_argv ()) |> List.tl_exn |> List.hd with
   | Some "device" ->
       (* The program's own [at_exit], registered before the device opens, reads the device at exit:

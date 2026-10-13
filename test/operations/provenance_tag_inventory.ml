@@ -254,7 +254,11 @@ let scan ~records ~pinned root generated =
   printf "Read, not part of the checklist:\n";
   List.iter records ~f:(fun (prefix, reason) -> printf "  %s -- %s\n" prefix reason)
 
+(* Binary streams: the fixture cases match multi-line reports byte for byte, and Windows' text mode
+   would end each line "\r\n". Dune's diff of this scanner's own golden ignores the line ending. *)
 let () =
+  Stdlib.set_binary_mode_out Stdlib.stdout true;
+  Stdlib.set_binary_mode_out Stdlib.stderr true;
   match Array.to_list Stdlib.Sys.argv with
   | [ _; "--fixture"; root ] -> scan ~records:[] ~pinned:[] root []
   | _ :: root :: generated -> scan ~records ~pinned root generated
