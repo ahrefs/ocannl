@@ -16,8 +16,12 @@ open Base
     none of which JSON has: a diverged training run is exactly the run whose evidence the result
     line exists to carry, so it must not be the run whose result line fails to parse. The consumer
     side of the same rule is [orchestrate.py]'s DIVERGED verdict — [null] in a loss vector means the
-    cell ran and diverged, which is a parity failure naming its cause, not a missing cell. *)
-let num ?(prec = 6) v = if Float.is_finite v then Printf.sprintf "%.*g" prec v else "null"
+    cell ran and diverged, which is a parity failure naming its cause, not a missing cell.
+
+    The exponent is spelled as glibc spells it ([5e+12]): the Windows C runtime pads it to three
+    digits ([5e+012]), and the result line is the same line on every platform. *)
+let num ?(prec = 6) v =
+  if Float.is_finite v then Utils.normalize_exponent (Printf.sprintf "%.*g" prec v) else "null"
 
 (** As {!num}, with a fixed number of decimals ([%f] rather than [%g]). *)
 let fixed ?(prec = 3) v = if Float.is_finite v then Printf.sprintf "%.*f" prec v else "null"

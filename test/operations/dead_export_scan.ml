@@ -318,7 +318,6 @@ let exempt_zero_reference_exports =
     "Utils.log_files_dir";
     "Utils.log_trace_tree";
     "Utils.never_capture_stdout";
-    "Utils.normalize_exponent";
     "Utils.original_log_level";
     "Utils.pair";
     "Utils.parallel_merge";
