@@ -2705,7 +2705,8 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   the box turns up leaves a no-verdict the merge refuses. On a booted
   Windows host, use native Git Bash in an isolated checkout of the intended commit, source
   `tools/opam-env.sh`, and run the relevant aliases through `tools/test-run.sh`, keeping host,
-  SHA, command and exit sentinel as evidence; WSL does not establish native Windows coverage.
+  SHA, command and exit sentinel as evidence (driving rog over ssh: the leg recipe below); WSL
+  does not establish native Windows coverage.
   The fallback dispatches `ci.yml` on the chosen branch with
   `windows_only: true` and the full `expected_sha`; this opt-in runs only Windows main/training,
   without duplicating Linux/macOS, formatting or floor jobs (the floor job has its own
@@ -2749,6 +2750,42 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   PATH can omit even `uname`, preventing the MSYS detection from running (gh-ocannl-770 fleet
   verification). Invoke `C:/Program Files/Git/usr/bin/bash.exe` explicitly where `bash` resolves
   to the WindowsApps WSL launcher.
+- **A leg on `rog-nv-win`, driven over ssh** — the recipe the 2026-10-13 wave settled on
+  (staging#1086, staging#1088):
+  - **Write the leg as a script and feed it to Git Bash on stdin**:
+    `ssh rog-nv-win '"C:/Program Files/Git/usr/bin/bash.exe" --noprofile --norc -s' < leg.sh`,
+    the script opening with the PATH prepend above. Do not quote the command through cmd.exe
+    (`ssh rog-nv-win 'bash.exe -c "..."'`): that adds a quoting layer that does not treat a
+    backslash as an escape, so staging#1086's escaped `\$PATH` reached bash literally, the leg's
+    PATH lost its inherited entries and `tools/opam-env.sh` found no `opam`. On stdin, bash is the
+    only parser, and the script reads exactly as it would run locally.
+  - **The checkout**: rog's Windows-side clone is `C:/Users/lukst/GitHub/ocannl-staging` — there
+    is no `~/ocannl-staging` on that side, unlike its Ubuntu boot. Fetch there and make a detached
+    worktree of the intended commit under `C:/Users/lukst/ocannl-staging-worktrees/`. Run
+    directories land under `C:/Users/lukst/.ocannl-test-runs/`. These paths are machine-local, but
+    every Windows leg on rog needs them.
+  - **Pin `core.autocrlf=false` for every git call in the leg**, starting with
+    `git -c core.autocrlf=false worktree add --detach ...` (or export
+    `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.autocrlf GIT_CONFIG_VALUE_0=false` at the top of the
+    script, which also reaches the git calls tests make themselves). rog's system git config sets
+    `true`, which checks sources out CRLF. Hosted CI sets it `false` before checkout (`ci.yml`'s
+    `Set git to use LF`), and under `true` `refusal_control_scan_cases` fails, since it edits
+    `verdict.ml` by `\n`-anchored patterns (ahrefs/ocannl#1311 tracks making such tests
+    line-ending-proof). A leg on a CRLF tree is not the check CI runs.
+  - **Run `tools/test-windows-opam-cache.sh` before sourcing `tools/opam-env.sh`** (or in a
+    subshell that never sources it): the switch's `bin/` holds opam's Cygwin `cygpath.exe`, and
+    once `opam-env.sh` puts that directory on PATH it shadows Git Bash's, answering with
+    `/cygdrive/...` paths Git Bash cannot open. staging#1088's first leg ran the fixture after
+    sourcing and had to discard its result. CI's cache steps never source `opam-env.sh`, so this
+    order is also CI's.
+- **A Windows opam-cache key bump is verified only by the SECOND hosted run after it.** The first
+  run misses the new key, so it builds the dependencies and exercises `windows-opam-cache.sh pack`
+  and the save; only the next run restores the entry, and the restore is where the v2 payload
+  broke (the links above). So a change to the key, to what is packed or to how it is restored
+  dispatches `windows_only` twice at its head, the second only after the first has finished (the
+  entry is saved in a job's post step), and counts the second run's cache hit, read in its
+  `Restore opam dependency archives (Windows)` step. staging#1088 needed runs 38399107756 (miss,
+  pack, save) and 38410117323 (the first v3 hit). A green first run proves the cold path only.
 - The Git Bash requirement is specifically MSYS, not any bash on the box: opam's cygwin bash — or
   whatever `bash` resolves to once opam's cygwin is on PATH — reports `OSTYPE=cygwin` exactly like
   Git Bash, so the two are told apart by `uname -o` (`Msys` vs `Cygwin`). Only the MSYS one gets
