@@ -26,6 +26,12 @@
    host oracle below computes both and pins that they differ, so the parity claims cover the stride.
    The tolerance is the sketch tier's, but on exact integers it only admits exact matches.
 
+   Parity cannot say a tensorized ([sk_mma]) seed ran tensorized: a [Tile_mma] that declines at
+   codegen renders its scalar fallback, which computes the same values. So each leg also claims,
+   over its [sk_mma] seeds only, that every executed one renders tensorized per its routine's mma
+   census (gh-ocannl-1283) — gated on the backend's tensorized capability for the site (the register
+   tiling on cc, an advertised fragment format on a GPU), never on the seeds proposed.
+
    Every seed the tuner would propose on this box is executed, in both of [Autotune.tune]'s flavors:
    whole-routine seeds under the device's own limits (and, on the C backends, also under
    [conv_detection_boundary]'s pinned 16-byte vector width), and the per-segment flavor mirrored
@@ -167,7 +173,9 @@ let oracle s ~stride =
 
 (* Every run builds its own graph in its own context, and releases both contexts after the readback,
    leaf first: device buffers live in backend pool tables the GC does not reclaim, and a leg runs
-   tens of candidates. *)
+   tens of candidates. It returns the readback with the routine's mma census ([Context.routine.mma],
+   gh-ocannl-1283): how its [Tile_mma] statements actually rendered, which a tensorized seed's
+   values cannot tell (see {!leg}). *)
 let run_with name s ~lowered_transform =
   let _, y = make s name in
   let init = init_params (Context.auto ()) s y in
@@ -178,9 +186,9 @@ let run_with name s ~lowered_transform =
   let got = Context.get_values ctx y.Tensor.value in
   Context.release ctx;
   Context.release init;
-  got
+  (got, routine.Context.mma)
 
-let run_plain name s = run_with name s ~lowered_transform:(fun opt -> [ opt ])
+let run_plain name s = fst (run_with name s ~lowered_transform:(fun opt -> [ opt ]))
 
 (* The tuner's per-segment flavor, mirrored ([Autotune.tune]'s [enum_fiss_entries] and its
    [F_sketch] candidates): the routine is fissioned with the default preset and the pipeline's own
@@ -276,8 +284,9 @@ let run_seg_candidate name s ~arity_cuts ~key q =
    Against the unscheduled form, it differs also in the default preset's reduction orders over the
    other segments, which round differently once the values are inexact. *)
 let run_default_fission name s ~arity_cuts =
-  candidate name s (fun opt ->
-      List.map (fission ~arity_cuts ~preset:default_preset opt) ~f:(fun (_, _, _, post) -> post))
+  Option.map ~f:fst
+    (candidate name s (fun opt ->
+         List.map (fission ~arity_cuts ~preset:default_preset opt) ~f:(fun (_, _, _, post) -> post)))
 
 (* The accumulation's read map on the input [x], and its write map: the one read of [x] that shares
    its statement with a read-modify-write — of the matmul site's output when there is a site (the
@@ -449,7 +458,29 @@ let stride_on_batch_loops o =
            (unit_out_syms ~in_map:o.in_map ~out_map:o.out_map)
            m.Autotune.m_i ~equal:Idx.equal_symbol
 
-let leg ?mma ?(declines = false) ~what ~tag s =
+(* The seeder's own judgment of a tensorized pipeline for the site's operands on this backend
+   ([Ll_test.tensorized_capability], gh-ocannl-1115): the register tiling on the C backends, an
+   advertised fragment format on a GPU. Read off the probed site's nodes, at the leg's precision
+   when no site was found (the stride claim then fails on its own). *)
+let capability s (o : probed) =
+  let is_gpu = not on_cpu and is_cpu = on_cpu and limits = device_limits in
+  match o.site with
+  | Some m ->
+      Ll_test.tensorized_matmul_capability ~is_gpu ~is_cpu ~limits ~a:m.Autotune.m_a
+        ~b:m.Autotune.m_b ~d:m.Autotune.m_d
+  | None ->
+      Ll_test.tensorized_capability ~is_gpu ~is_cpu ~limits ~a_prec:s.prec ~b_prec:s.prec
+        ~d_prec:s.prec
+
+(* Whether a run rendered tensorized per its mma census; a seed that did not is named on stderr. *)
+let rendered name q census =
+  let ok = Ll_test.rendered_tensorized census in
+  if not ok then
+    Stdio.eprintf "%s (%s): rendered %s (not part of the golden)\n%!" name (show q)
+      (Ir.C_syntax.mma_summary_string census);
+  ok
+
+let leg ?(declines = false) ~what ~tag s =
   let o = probe ~tag s in
   let unscheduled = run_plain (tag ^ "_ref") s in
   (match s.build with
@@ -518,24 +549,15 @@ let leg ?mma ?(declines = false) ~what ~tag s =
    else
      p_all (what ^ ": the device's own limits seed both flavors") [ whole_n; seg_n ] ~f:(fun n ->
          n > 0));
-  (match mma with
-  | None -> ()
-  | Some `Required ->
-      p_exists (what ^ ": the whole-routine seeds include tensorized ones") o.whole ~f:(fun q ->
-          q.Autotune.sk_mma);
-      p_exists (what ^ ": the per-segment seeds include tensorized ones") seg_seeds
-        ~f:(fun (_, _, q) -> q.Autotune.sk_mma)
-  | Some `Unavailable ->
-      Stdio.eprintf "%s: the device advertises no f16 tile-MMA format\n%!" tag;
-      skipped (what ^ ": the whole-routine seeds include tensorized ones");
-      skipped (what ^ ": the per-segment seeds include tensorized ones"));
-  (* Declined candidates (see {!candidate}) yield [None]. *)
+  (* Declined candidates (see {!candidate}) yield [None]; a run keeps its name and seed for the
+     census claims below. *)
   let whole_runs =
     List.mapi o.whole ~f:(fun i q ->
         let name = Printf.sprintf "%s_w%d" tag i in
         let r = run_whole_candidate name s q in
-        Option.iter r ~f:(report ~against:"unscheduled" ~want:unscheduled name (show q));
-        r)
+        Option.iter r ~f:(fun (got, _) ->
+            report ~against:"unscheduled" ~want:unscheduled name (show q) got);
+        (name, q, r))
   in
   (* The form a per-segment seed is compared against: on the bare sites the unscheduled one, whose
      values are exact integers; in the block, the default-preset run of the seed's own segmentation
@@ -569,31 +591,62 @@ let leg ?mma ?(declines = false) ~what ~tag s =
     List.mapi seg_seeds ~f:(fun i (arity_cuts, key, q) ->
         let name = Printf.sprintf "%s_s%d" tag i in
         let r = run_seg_candidate name s ~arity_cuts ~key q in
-        Option.iter r ~f:(fun (hit, got) ->
+        Option.iter r ~f:(fun (hit, (got, _)) ->
             if not hit then
               Stdio.eprintf "%s (%s): no final segment carried its key (not part of the golden)\n%!"
                 name (show q);
             Option.iter (seg_want arity_cuts) ~f:(fun (against, want) ->
                 report ~against ~want name (show q) got));
-        Option.map r ~f:(fun (hit, got) -> (arity_cuts, hit, got)))
+        (name, q, Option.map r ~f:(fun (hit, (got, census)) -> (arity_cuts, hit, got, census))))
   in
-  let seg_ok (arity_cuts, hit, got) =
+  let seg_ok (arity_cuts, hit, got, _) =
     hit
     && Option.value_map (seg_want arity_cuts) ~default:false ~f:(fun (_, want) ->
         matches_ref ~want got)
+  in
+  let values runs = List.map runs ~f:(fun (_, _, r) -> r) in
+  (* A tensorized seed whose [Tile_mma] declines at codegen renders the scalar fallback, which
+     computes the same values, so parity cannot say it ran tensorized: every executed [sk_mma] seed
+     also answers for its routine's mma census (gh-ocannl-1283). The claims are over the [sk_mma]
+     subset only (the block-tile seeds request no tensorization), gated on {!capability}, never on
+     the seeds proposed: where the capability holds, a flavor that proposes no tensorized seed fails
+     the claim's population floor. *)
+  let census runs = List.map runs ~f:(fun (name, q, r) -> (name, q, Option.map r ~f:snd)) in
+  let whole_census = census whole_runs
+  and seg_census =
+    List.map seg_runs ~f:(fun (name, q, r) ->
+        (name, q, Option.map r ~f:(fun (_, _, _, census) -> census)))
+  in
+  let tensorized = List.filter ~f:(fun (_, q, _) -> q.Autotune.sk_mma) in
+  let advertised, aggregation =
+    match capability s o with `Advertised -> (true, None) | `Withheld a -> (false, Some a)
+  in
+  let census_claim ~on_decline label runs =
+    gated_all ?aggregation ~when_:advertised ~on:backend_name label (tensorized runs)
+      ~f:(fun (name, q, census) -> Option.value_map census ~default:on_decline ~f:(rendered name q))
   in
   if not declines then (
     (* The bare sites: each flavor seeds, and every seed runs — a decline fails. *)
     p_all
       (what ^ ": every whole-routine seed runs and matches the unscheduled form")
-      whole_runs
-      ~f:(Option.value_map ~default:false ~f:matches);
+      (values whole_runs)
+      ~f:(Option.value_map ~default:false ~f:(fun (got, _) -> matches got));
     p_all
       (what
      ^ ": every per-segment seed runs, scheduling the segment it was keyed on, and matches the \
         unscheduled form")
-      seg_runs
-      ~f:(Option.value_map ~default:false ~f:seg_ok))
+      (values seg_runs)
+      ~f:(Option.value_map ~default:false ~f:seg_ok);
+    census_claim ~on_decline:false
+      (what
+     ^ ": the whole-routine seeds include tensorized ones, and every one renders tensorized per \
+        its routine's mma census")
+      whole_census;
+    census_claim ~on_decline:false
+      (what
+     ^ ": the per-segment seeds include tensorized ones, and every one renders tensorized per its \
+        routine's mma census")
+      seg_census)
   else (
     (* The block: which flavor seeds is backend-dependent (whole-routine on the C backends, which do
        not fission it; per-segment on GPU, which gates the zeroed whole-routine site), and inside it
@@ -608,9 +661,15 @@ let leg ?mma ?(declines = false) ~what ~tag s =
      ^ ": every seed either tuner flavor proposes, applied alone, declines with a typed cause or \
         runs and matches the form it replaces one schedule of: the unscheduled form for a \
         whole-routine seed, its segmentation on the default preset for a per-segment one")
-      (List.map whole_runs ~f:(Option.value_map ~default:true ~f:matches)
-      @ List.map seg_runs ~f:(Option.value_map ~default:true ~f:seg_ok))
+      (List.map (values whole_runs)
+         ~f:(Option.value_map ~default:true ~f:(fun (got, _) -> matches got))
+      @ List.map (values seg_runs) ~f:(Option.value_map ~default:true ~f:seg_ok))
       ~f:Fn.id;
+    census_claim ~on_decline:true
+      (what
+     ^ ": every tensorized seed either tuner flavor proposes declines with a typed cause or \
+        renders tensorized per its routine's mma census")
+      (whole_census @ seg_census);
     (* The per-segment comparison above is only as good as its reference: each default-preset
        segmentation must itself compute the block, up to the f32 rounding of reordered inexact sums.
        On the C backends the block does not fission, so there is no segmentation. *)
@@ -670,20 +729,12 @@ let () =
      ~over:(Array.to_list o.in_map)
      (unit_out_syms ~in_map:o.in_map ~out_map:o.out_map));
   (* The f16 leg: every GPU runs it — the block-tile seeds do not depend on an MMA capability — and
-     only the tensorized-seed claims wait on an advertised f16 fragment format (HIP's rocWMMA, CUDA,
-     Metal), where the operands reach the Stage + Tensorize pipelines. The C backends' seeding
-     pre-filters to uniform f32/f64. *)
+     only the tensorized-seed claims wait on the f16 capability (an advertised f16 fragment format:
+     HIP's rocWMMA, CUDA, Metal), where the operands reach the Stage + Tensorize pipelines. The C
+     backends' seeding pre-filters to uniform f32/f64. *)
   let what = "downsample einsum f16" in
   if not on_cpu then
-    leg
-      ~mma:
-        (if
-           List.exists [ Ir.Backend_intf.Mma_f32; Ir.Backend_intf.Mma_f16 ] ~f:(fun d ->
-               Ir.Backend_intf.advertises_mma_format device_limits ~a:Ir.Backend_intf.Mma_f16
-                 ~b:Ir.Backend_intf.Mma_f16 ~d)
-         then `Required
-         else `Unavailable)
-      ~what ~tag:"s11h"
+    leg ~what ~tag:"s11h"
       {
         prec = Ir.Ops.half;
         b = 2;
@@ -702,9 +753,11 @@ let () =
         "a matmul site whose stride-2 axes are its interior batch loops, the row read at unit \
          stride";
         "the device's own limits seed both flavors";
-        "the whole-routine seeds include tensorized ones";
-        "the per-segment seeds include tensorized ones";
         "every whole-routine seed runs and matches the unscheduled form";
         "every per-segment seed runs, scheduling the segment it was keyed on, and matches the \
          unscheduled form";
+        "the whole-routine seeds include tensorized ones, and every one renders tensorized per its \
+         routine's mma census";
+        "the per-segment seeds include tensorized ones, and every one renders tensorized per its \
+         routine's mma census";
       ] ~f:(fun c -> skipped (what ^ ": " ^ c))

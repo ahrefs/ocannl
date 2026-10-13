@@ -4,15 +4,20 @@ k11s witness: a matmul site whose stride-2 axes are its interior batch loops, th
 k11s witness: the device's own limits seed both flavors: true
 k11s witness: every whole-routine seed runs and matches the unscheduled form: true
 k11s witness: every per-segment seed runs, scheduling the segment it was keyed on, and matches the unscheduled form: true
+k11s witness: the whole-routine seeds include tensorized ones, and every one renders tensorized per its routine's mma census: true
+k11s witness: the per-segment seeds include tensorized ones, and every one renders tensorized per its routine's mma census: true
 downsample einsum f32: the producers discriminate: a unit-stride read of A changes the result: true
 downsample einsum f32: the unscheduled form matches the host oracle: true
 downsample einsum f32: a matmul site whose stride-2 axes are its interior batch loops, the row read at unit stride: true
 downsample einsum f32: the device's own limits seed both flavors: true
 downsample einsum f32: every whole-routine seed runs and matches the unscheduled form: true
 downsample einsum f32: every per-segment seed runs, scheduling the segment it was keyed on, and matches the unscheduled form: true
+downsample einsum f32: the whole-routine seeds include tensorized ones, and every one renders tensorized per its routine's mma census: true
+downsample einsum f32: the per-segment seeds include tensorized ones, and every one renders tensorized per its routine's mma census: true
 resnet block: a matmul site whose stride-2 axes are its interior batch loops, the row read at unit stride: true
 resnet block: the device's own limits seed at least one flavor: true
 resnet block: every seed either tuner flavor proposes, applied alone, declines with a typed cause or runs and matches the form it replaces one schedule of: the unscheduled form for a whole-routine seed, its segmentation on the default preset for a per-segment one: true
+resnet block: every tensorized seed either tuner flavor proposes declines with a typed cause or renders tensorized per its routine's mma census: true
 resnet block: every segmentation a seed is keyed in, on the default preset, runs and matches the unscheduled form up to f32 rounding: true
 unit-stride control: a matmul site whose row is the minor spatial axis, read at unit stride: true
 unit-stride control: the input is read at no stride-2 axis: true
@@ -23,7 +28,7 @@ downsample einsum f16: the producers discriminate: a unit-stride read of A chang
 downsample einsum f16: the unscheduled form matches the host oracle: true
 downsample einsum f16: a matmul site whose stride-2 axes are its interior batch loops, the row read at unit stride: true
 downsample einsum f16: the device's own limits seed both flavors: true
-downsample einsum f16: the whole-routine seeds include tensorized ones: true
-downsample einsum f16: the per-segment seeds include tensorized ones: true
 downsample einsum f16: every whole-routine seed runs and matches the unscheduled form: true
 downsample einsum f16: every per-segment seed runs, scheduling the segment it was keyed on, and matches the unscheduled form: true
+downsample einsum f16: the whole-routine seeds include tensorized ones, and every one renders tensorized per its routine's mma census: true
+downsample einsum f16: the per-segment seeds include tensorized ones, and every one renders tensorized per its routine's mma census: true
