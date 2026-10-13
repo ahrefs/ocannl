@@ -808,7 +808,9 @@ if git -C "$MAIN" show "$full_sha:benchmarks/fixtures/DIGESTS.txt" >"$matrix_doc
   matrix_rc=$?
   rm -f "$matrix_document"
   [ "$matrix_rc" -eq 0 ] || die "cannot parse measurement boxes at $run_sha"
+  # Python's stdout is text mode on Windows: drop the "\r" a line ends with there.
   while IFS= read -r box; do
+    box=${box%$'\r'}
     [ -n "$box" ] && known_boxes+=("$box")
   done <<<"$matrix_output"
 else
