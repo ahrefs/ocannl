@@ -5595,12 +5595,15 @@
  (deps
   (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
   ocannl_config
-  ; The f16 leg branches on the ADVERTISED tile-MMA capability, so the rocWMMA-header probe's three
-  ; variables are inputs to its verdict (the rationale, and the residual: schedule_mma_matmul's
-  ; stanza, gh-ocannl-1032). The numerics policy is pinned in the test instead.
+  ; The census claims are gated on the tensorized capability (Ll_test.tensorized_capability): on a
+  ; GPU the ADVERTISED tile-MMA formats, so the rocWMMA-header probe's three variables are inputs to
+  ; its verdict (the rationale, and the residual: schedule_mma_matmul's stanza, gh-ocannl-1032); on
+  ; the C backends the register tiling's vector file. The numerics policy is pinned in the test
+  ; instead; routine logging is declared below.
   (env_var ROCWMMA_PATH)
   (env_var LOCALAPPDATA)
   (env_var HIP_PATH)
+  (env_var OCANNL_CC_VECTOR_BYTES)
   ; Every configuration key the two modules its seeding and segmentation run through read --
   ; schedule.ml (default presets, zero expansion, fission) and sketch_families.ml (seeding) -- so a
   ; changed setting re-runs the test rather than serving the previous result.
