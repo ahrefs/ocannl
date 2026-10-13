@@ -3360,7 +3360,7 @@ let () =
   let results = List.map seeds ~f:run in
   gated_all ~when_:(not (List.is_empty results)) ~on:backend_name
     "every GPU sketch matches the materialized run" results ~f:snd|ocaml},
-      [ "results" ] );
+      [ "results, seeds" ] );
     ( "refuses a gate read off the collection the population is mapped from",
       {ocaml|open Verdict.Claims
 let () =
@@ -3470,6 +3470,35 @@ let () =
   check "other rows pass" [ true ];
   List.iter2_exn [ "rows pass" ] [ raw ] ~f:check|ocaml},
       [ "unread check" ] );
+    ( "names a bound partial claim whose only use goes through a module path",
+      {ocaml|module Checks = struct
+  let check = Verdict.gated_all ~when_:(not (List.is_empty rows)) ~on:"cc"
+end
+let () = Checks.check "all rows pass" rows ~f:Fn.id|ocaml},
+      [ "unread Verdict.gated_all" ] );
+    ( "refuses a gate on a population name an unmodelled open brings in",
+      {ocaml|open Fixture
+let () = Verdict.gated_all ~when_:(not (List.is_empty rows)) ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
+      [ "rows" ] );
+    ( "accepts a backend gate on the key that selects the population",
+      {ocaml|let () =
+  let rows = Map.find_exn results backend_name in
+  Verdict.gated_all ~when_:(String.equal backend_name "cuda") ~on:backend_name "all rows pass" rows
+    ~f:Fn.id|ocaml},
+      [] );
+    ( "does not take a file's own gated_all for Verdict's",
+      {ocaml|let gated_all ~when_ ~on label xs ~f = if when_ then List.iter xs ~f:(fun x -> f x label on)
+let () = gated_all ~when_:(not (List.is_empty rows)) ~on:"cc" "all rows pass" rows ~f:check|ocaml},
+      [] );
+    ( "does not take another module's gated_all for Verdict's",
+      {ocaml|module Verdict = Local_verdict
+let () =
+  Verdict.gated_all ~when_:(not (List.is_empty rows)) ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
+      [] );
+    ( "refuses a population gate through a module alias of Verdict",
+      {ocaml|module V = Verdict
+let () = V.gated_all ~when_:(not (List.is_empty rows)) ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
+      [ "rows" ] );
   ]
 
 let gate_control_findings source =

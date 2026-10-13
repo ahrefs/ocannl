@@ -463,13 +463,17 @@ let dialect_census content =
 
     {2 What is read}
 
-    Every application of a callee whose last path component is [gated_all], [gated_alli] or
-    [gated_exists] (qualified, or opened through [Verdict.Claims]) that carries its [~when_] and
-    both positional arguments. A partial application bound by [let] to a name, under any number of
-    further partial applications, is completed at each application of that name, and [x |> f] and
-    [f @@ x] are read as [f x]; so the [let check = Verdict.gated_all ~when_ ~on in check label xs]
-    wrapper is one site per use. The two sides are then compared by LEXICAL identity, a name plus
-    the binding it resolves to through {!Lexical_scope}, so a shadowed name is a different value:
+    Every application of [gated_all], [gated_alli] or [gated_exists] that carries its [~when_] and
+    both positional arguments: unqualified where no binding of the source gives the name (an open of
+    [Verdict.Claims] is how it arrives), or qualified by a module that denotes [Verdict] -- the name
+    itself, unless a [module Verdict = ...] took it over, or an alias of it ([module V = Verdict]).
+    A file's own [gated_all] is its own. A partial application bound by [let] to a name, under any
+    number of further partial applications, is completed at each application of that name, and
+    [x |> f] and [f @@ x] are read as [f x]; so the
+    [let check = Verdict.gated_all ~when_ ~on in check label xs] wrapper is one site per use. The
+    two sides are then compared by LEXICAL identity, a name plus the binding it resolves to through
+    {!Lexical_scope}, so a shadowed name is a different value; a name no binding of the source gives
+    (a global, or one an unmodelled [open] brought in) is one identity, the same on both sides:
 
     - the GATE is every value identifier the [~when_] expression spells, and transitively every one
       spelled by the right-hand side of a [let] it resolves to (function bodies included), in any
@@ -480,7 +484,9 @@ let dialect_census content =
       [try], the body of a [let] or sequence, the elements of a list, array or tuple literal or
       constructor payload, the operand of [!] and both operands of [@], and the positional arguments
       of a function qualified by a collection module ([List], [Array], [Hashtbl], [Map], [Option],
-      [String], ... — see {!collection_modules}).
+      [String], ... — see {!collection_modules}) that build it: the first alone for a selector, a
+      [find] or [nth] whose key or index picks the population, none for a generator — see
+      {!collection_arguments}.
 
     The claim is refused when the two share a binding. The asymmetry is the point: a gate may read
     what the population is COMPUTED from (the site, the hardware limits, the backend steering an
@@ -499,13 +505,14 @@ let dialect_census content =
     population and is out of scope. Each of these is a place a population gate can hide from this
     reader; none is a place it reports one that is not there.
 
-    A [gated_*] application the reader cannot complete — a partial application no [let] binds, or a
-    claim (or a [let]-bound wrapper of one) named as a value, handed to [List.iter] say — is
-    reported as unread rather than counted as clean, so the boundary is loud there. *)
+    A [gated_*] application the reader cannot complete — a partial application no [let] binds, a
+    [let]-bound one that no use the reader resolves completes (reached only through a module path,
+    say), or a claim (or a [let]-bound wrapper of one) named as a value, handed to [List.iter] say —
+    is reported as unread rather than counted as clean, so the boundary is loud there. *)
 
 type gate_denotation = {
   identity : int;
-  definition : (expression * (gate_denotation, unit) Lexical_scope.env) option;
+  definition : (expression * (gate_denotation, bool) Lexical_scope.env) option;
 }
 
 type gate_reading = {
@@ -547,11 +554,30 @@ let complete arguments =
   List.exists arguments ~f:(function Ppxlib.Asttypes.Labelled "when_", _, _ -> true | _ -> false)
   && List.count arguments ~f:(function Ppxlib.Asttypes.Nolabel, _, _ -> true | _ -> false) >= 2
 
+(** Which positional arguments of a collection-module function the population is built from, by the
+    function's name. A selector ([find], [nth], [take], [sub], ...) builds it from its first
+    argument only, the collection: a key, index or count picks the population, as an [if] condition
+    steers one, and a gate on it is a gate on what was selected, not on what was found. A generator
+    ([init], [range], [make], [create]) takes sizes and builds from none of them. Every other
+    function -- [map], [filter], [append], [concat], [zip], ... -- from all of them. *)
+let collection_arguments name positional =
+  let starts prefix = String.is_prefix name ~prefix in
+  if List.exists [ "init"; "range"; "make"; "create"; "replicate" ] ~f:starts then []
+  else if
+    List.exists
+      [ "find"; "nth"; "get"; "take"; "drop"; "sub"; "slice"; "split_n"; "chunks_of"; "mem" ]
+      ~f:starts
+  then List.take positional 1
+  else positional
+
 let gate_census content =
   let ast = Read.structure_of content in
   let readings = ref [] and gated_sites = ref 0 in
-  let partials = ref [] and consumed = Hash_set.create (module Int) in
+  let partials = ref [] and bound_partials = ref [] and consumed = Hash_set.create (module Int) in
   let position expr = expr.pexp_loc.loc_start.pos_cnum in
+  (* The nodes a claim's resolution went through, made [consumed] only once the claim is read --
+     compared, or reported unread -- so that a binding no read claim reaches stays uncompleted. *)
+  let commit marks = Hash_set.iter marks ~f:(Hash_set.add consumed) in
   (* The right-hand side of every [let], under any type constraint: a gated claim bound there,
      partially applied or merely renamed, is read at the uses of the name it is bound to. *)
   let bound = Hash_set.create (module Int) in
@@ -571,7 +597,7 @@ let gate_census content =
   binder#structure ast;
   let walker =
     object (self)
-      inherit [gate_denotation, unit] Lexical_scope.scoped as super
+      inherit [gate_denotation, bool] Lexical_scope.scoped as super
       val mutable next_local = 0
       val mutable quiet = 0
       val mutable collecting : (string * gate_denotation) list ref option = None
@@ -580,7 +606,16 @@ let gate_census content =
         next_local <- next_local - 1;
         { identity = next_local; definition = None }
 
-      method module_path _ _ = None
+      (* A module denotes [true] when it is [Verdict] or reaches into it ([Verdict.Claims], a
+         [module V = Verdict] alias), [false] when it is anything else; a name some binding the scan
+         cannot see into takes over denotes something else. *)
+      method module_path env path =
+        let head = Lexical_scope.head path in
+        match Map.find env.Lexical_scope.modules head with
+        | Some denotes -> Some denotes
+        | None -> Some (String.equal head "Verdict")
+
+      method! shadowed = Some false
 
       method! binding_denotes env binding =
         let identity = binding.pvb_loc.loc_start.pos_cnum + 1 in
@@ -592,10 +627,14 @@ let gate_census content =
 
       method! ident env ident =
         match (collecting, ident.txt) with
-        | Some found, Ppxlib.Longident.Lident name -> (
-            match Lexical_scope.lookup env name with
-            | Some denotation -> found := (name, denotation) :: !found
-            | None -> ())
+        | Some found, Ppxlib.Longident.Lident name ->
+            (* A name no binding of this source gives, one an unmodelled [open] may have brought in,
+               is still a name: identity 0, the same on both sides. *)
+            let denotation =
+              Option.value (Lexical_scope.lookup env name)
+                ~default:{ identity = 0; definition = None }
+            in
+            found := (name, denotation) :: !found
         | _ -> ()
 
       (* Every value identifier [expr] spells, resolved in [env], without recording sites. *)
@@ -618,7 +657,7 @@ let gate_census content =
         let rec visit env expr =
           List.iter (self#identifiers env expr) ~f:(fun (name, denotation) ->
               Hash_set.add reads (name, denotation.identity);
-              if not (Hash_set.mem seen denotation.identity) then (
+              if denotation.identity <> 0 && not (Hash_set.mem seen denotation.identity) then (
                 Hash_set.add seen denotation.identity;
                 Option.iter denotation.definition ~f:(fun (rhs, env) -> visit env rhs)))
         in
@@ -638,7 +677,7 @@ let gate_census content =
                   if not (Hash_set.mem seen denotation.identity) then (
                     Hash_set.add seen denotation.identity;
                     Option.iter denotation.definition ~f:(fun (rhs, env) -> visit env rhs))
-              | None -> ())
+              | None -> Hash_set.add found (name, 0))
           | Pexp_constraint (inner, _)
           | Pexp_coerce (inner, _, _)
           | Pexp_sequence (_, inner)
@@ -676,7 +715,9 @@ let gate_census content =
                          && List.mem collection_modules
                               (List.nth_exn path (List.length path - 2))
                               ~equal:String.equal ->
-                      List.iter positional ~f:(visit env)
+                      List.iter
+                        (collection_arguments (List.last_exn path) positional)
+                        ~f:(visit env)
                   | _ -> ()))
           | _ -> ()
         in
@@ -699,21 +740,32 @@ let gate_census content =
          each with the scope it was written in. The nodes it absorbs -- the callee of an
          application, an application a pipeline rewrites -- are marked [consumed]: read here, they
          are not read again on their own. *)
-      method gated env expr ~through =
+      method gated env expr ~through ~marks =
         match expr.pexp_desc with
-        | Pexp_constraint (inner, _) -> self#gated env inner ~through
+        | Pexp_constraint (inner, _) -> self#gated env inner ~through ~marks
         | Pexp_ident { txt; _ } -> (
-            match (Read.longident_of expr, txt) with
-            | Some path, _ when List.mem gated_forms (List.last_exn path) ~equal:String.equal ->
-                Some (String.concat ~sep:"." path, [])
-            | _, Ppxlib.Longident.Lident name -> (
+            let form () = Option.map (Read.longident_of expr) ~f:(String.concat ~sep:".") in
+            match txt with
+            | Ppxlib.Longident.Lident name -> (
+                (* A local binding of the name comes first: a file's own [gated_all] is not
+                   [Verdict]'s, and a [let check = Verdict.gated_all ...] is followed. *)
                 match Lexical_scope.lookup env name with
                 | Some { identity; definition = Some (rhs, rhs_env) }
                   when not (Hash_set.mem through identity) ->
                     Hash_set.add through identity;
-                    Option.map (self#gated rhs_env rhs ~through) ~f:(fun (_, arguments) ->
+                    (* The binding this use completes, through every renaming on the way. *)
+                    Hash_set.add marks (position rhs);
+                    Option.map (self#gated rhs_env rhs ~through ~marks) ~f:(fun (_, arguments) ->
                         (name, arguments))
-                | _ -> None)
+                | Some _ -> None
+                | None ->
+                    if List.mem gated_forms name ~equal:String.equal then
+                      Option.map (form ()) ~f:(fun form -> (form, []))
+                    else None)
+            | Ppxlib.Longident.Ldot (prefix, name)
+              when List.mem gated_forms name ~equal:String.equal
+                   && Option.value (self#module_path env prefix) ~default:false ->
+                Option.map (form ()) ~f:(fun form -> (form, []))
             | _ -> None)
         | Pexp_apply (callee, arguments) -> (
             let callee, arguments, absorbed =
@@ -721,10 +773,10 @@ let gate_census content =
               | Some rewritten -> rewritten
               | None -> (callee, arguments, None)
             in
-            match self#gated env callee ~through with
+            match self#gated env callee ~through ~marks with
             | Some (form, prior) ->
-                Option.iter absorbed ~f:(Hash_set.add consumed);
-                Hash_set.add consumed (position callee);
+                Option.iter absorbed ~f:(Hash_set.add marks);
+                Hash_set.add marks (position callee);
                 Some
                   ( form,
                     prior @ List.map arguments ~f:(fun (label, argument) -> (label, argument, env))
@@ -739,13 +791,16 @@ let gate_census content =
                (* A claim named as a value rather than applied -- handed to [List.iter], say -- is
                   one this reader cannot complete. A [let] binding it to another name is not a use;
                   that name's own uses are. *)
-               match self#gated env expr ~through:(Hash_set.create (module Int)) with
+               let marks = Hash_set.create (module Int) in
+               match self#gated env expr ~through:(Hash_set.create (module Int)) ~marks with
                | Some (form, arguments)
                  when (not (complete arguments)) && not (Hash_set.mem bound (position expr)) ->
+                   commit marks;
                    partials := (form, expr.pexp_loc.loc_start.pos_lnum) :: !partials
                | _ -> ())
            | Pexp_apply _ -> (
-               match self#gated env expr ~through:(Hash_set.create (module Int)) with
+               let marks = Hash_set.create (module Int) in
+               match self#gated env expr ~through:(Hash_set.create (module Int)) ~marks with
                | None -> ()
                | Some (form, arguments) -> (
                    let gate =
@@ -762,6 +817,7 @@ let gate_census content =
                    match (gate, List.nth positional 1) with
                    | Some (gate, gate_env), Some (population, population_env)
                      when complete arguments ->
+                       commit marks;
                        Int.incr gated_sites;
                        let reads = self#gate_reads gate_env gate in
                        let shared =
@@ -782,9 +838,12 @@ let gate_census content =
                            :: !readings
                    | _ ->
                        (* A partial application bound by [let] is completed at that name's uses,
-                          which are read on their own. *)
-                       if not (Hash_set.mem bound (position expr)) then
-                         partials := (form, line) :: !partials))
+                          which are read on their own -- unless none is, below. *)
+                       if Hash_set.mem bound (position expr) then
+                         bound_partials := (position expr, form, line) :: !bound_partials
+                       else (
+                         commit marks;
+                         partials := (form, line) :: !partials)))
            | _ -> ());
         super#expression env expr
     end
@@ -792,4 +851,13 @@ let gate_census content =
   ignore
     (walker#structure { Lexical_scope.frames = []; modules = Map.empty (module String) } ast
       : structure);
-  { readings = List.rev !readings; gated_sites = !gated_sites; unread = List.rev !partials }
+  (* A bound partial application no resolved use completed -- reached only through a module path,
+     say, or from another source -- is one this reader never compared. *)
+  let uncompleted =
+    List.filter_map !bound_partials ~f:(fun (at, form, line) ->
+        if Hash_set.mem consumed at then None else Some (form, line))
+  in
+  let unread =
+    List.sort (!partials @ uncompleted) ~compare:(fun (_, a) (_, b) -> Int.compare a b)
+  in
+  { readings = List.rev !readings; gated_sites = !gated_sites; unread }

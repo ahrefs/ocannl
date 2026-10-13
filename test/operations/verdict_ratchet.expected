@@ -505,6 +505,12 @@ accepts a host gate behind a renamed partially applied wrapper: true
 does not take a shadowed binding of the same name for the population: true
 names a gated claim it cannot complete instead of counting it clean: true
 names a gated wrapper handed to another function beside a use it reads: true
+names a bound partial claim whose only use goes through a module path: true
+refuses a gate on a population name an unmodelled open brings in: true
+accepts a backend gate on the key that selects the population: true
+does not take a file's own gated_all for Verdict's: true
+does not take another module's gated_all for Verdict's: true
+refuses a population gate through a module alias of Verdict: true
 refuses a planted gate that reads its population, and a gated claim it cannot read: true
 every synthetic control has a row in the mutation-run manifest: true
 every control phrase in the mutation-run manifest names a live control: true

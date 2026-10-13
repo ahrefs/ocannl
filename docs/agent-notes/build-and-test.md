@@ -1504,18 +1504,22 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   read from `verdict.ml`, so a new `Claims` member is red until judged in one of them.
 - `verdict_ratchet`'s fourth reader is about GATES (gh-ocannl-1289): `Verdict_scan.gate_census`
   refuses a `gated_all`/`gated_alli`/`gated_exists` claim whose `~when_` reads the population it
-  quantifies or a collection that population is built from. Such a gate closes when a regression
+  quantifies or a collection that population is built from. Only `Verdict`'s forms count: a
+  file's own `gated_all`, or one under a `module Verdict = …` that took the name, does not. Such a gate closes when a regression
   empties or changes the population, so the failure reads as a skip — the gh-ocannl-1115 trap,
   shipped twice in wave 2026-10-05 (a gate on the claim's own `results` being non-empty; one on
   `List.exists real` over `results` mapped from `real`). Both sides are compared by lexical identity,
   a name plus its binding. The GATE side is every identifier `~when_` spells, through every `let`
   it reaches. The POPULATION side is the quantified argument and what it is built FROM: `let`
   right-hand sides, `if`/`match` branches (never the condition or scrutinee), a `try` body, literals, `!`, `@`,
-  and the positional arguments of `List.`/`Array.`/... functions — never another call's arguments.
+  and the positional arguments of `List.`/`Array.`/... functions that build it (the collection alone
+  for a `find`/`nth`/`take` selector, none for an `init` generator) — never another call's
+  arguments. A name the source never binds is one identity on both sides.
   That asymmetry is the rule: a capability gate may read the program, limits and backend the
   population is computed from, and must not read the population. A `let`-bound partial
   application is completed at each use and `|>`/`@@` read as application; a `gated_*` application
-  it cannot complete, or a claim handed unapplied to another function, is refused as unread. Outside the boundary: a population threaded through a
+  it cannot complete — a bound one no resolved use completes included — or a claim handed
+  unapplied to another function, is refused as unread. Outside the boundary: a population threaded through a
   function parameter, record field, unqualified `open List` call or destructured `let`, and
   `Verdict.gated`'s boolean. A gate folded into the claim value (`p "…" ((not on_cpu) || ok)`),
   which prints `true` where it should report a skip, is a different shape it does not see. Most of its
