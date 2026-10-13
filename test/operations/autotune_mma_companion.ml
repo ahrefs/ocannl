@@ -80,39 +80,52 @@ let () =
     in
     List.length !captured
   in
-  (* Vacuous where the backend seeds no unfused GPU tensorized candidate: cc has none by
-     construction (the filter asks for [sk_gpu]), and CUDA/HIP need the tf32 arm (config
-     [tf32_matmuls]) for an f32 site while Metal's simdgroup matrices take f32 directly. Reported
-     through [Verdict.skipped] rather than as a bare passing line (gh-ocannl-729): a quantifier over
-     an empty seed list used to print the same `true` a hundred verified seeds print, so on cc this
-     claim announced coverage it never had. The golden stays backend-independent either way. *)
+  (* Gated on the seeder's own capability judgment for the site's f32 operands and destination
+     (gh-ocannl-1115), never on the seed list under test (gh-ocannl-1283): cc has no GPU tile, CUDA
+     needs the tf32 arm (config [tf32_matmuls]) for an f32 site, HIP's rocWMMA has no f32-input
+     shape, while Metal's simdgroup matrices take f32 directly. Where the tile is advertised, an
+     empty seed list fails both claims rather than skipping them. A seed whose [Tile_mma] declined
+     to the scalar fallback computes the same values, so each seed's routine census must also say it
+     ran tensorized. *)
   let claim = "mc: every unfused GPU tensorized seed compiles and computes correctly" in
-  if n_seeds = 0 then
-    let aggregation =
-      match backend_name with
-      | ("cuda" | "hip") when not (Ir.Numerics.get ()).tf32_matmuls -> `Environment
-      | _ -> `Backend
-    in
-    Verdict.skipped ~aggregation ~backend:backend_name claim
-  else
-    p_all claim (List.init n_seeds ~f:Fn.id) ~f:(fun k ->
-        let transform opt =
-          let p = List.nth_exn (seeds_of opt) k in
-          Sched.apply (Autotune.sketch_schedule ~accum_prec ~p opt) opt
-        in
-        match
-          let sctx, sroutine =
-            Context.compile
-              ~lowered_transform:(fun o -> [ transform o ])
-              (Context.auto ()) comp Ir.Indexing.Empty
-          in
-          let sctx = Context.run sctx sroutine in
-          Context.get_values sctx y.Tensor.value
-        with
-        | got -> Array.for_all2_exn got expected ~f:(fun a b -> Float.(abs (a - b) < 1e-3))
-        | exception exn ->
-            Stdio.eprintf "mc: GPU tensorized seed %d FAILED %s\n" k (Exn.to_string exn);
-            false);
+  let rendered_claim =
+    "mc: every unfused GPU tensorized seed renders tensorized per its mma census"
+  in
+  (match
+     Ll_test.tensorized_matmul_capability ~is_gpu ~is_cpu:false ~limits ~a:x.Tensor.value
+       ~b:w.Tensor.value ~d:z.Tensor.value
+   with
+  | `Withheld aggregation ->
+      Verdict.skipped ~aggregation ~backend:backend_name claim;
+      Verdict.skipped ~aggregation ~backend:backend_name rendered_claim
+  | `Advertised ->
+      let results =
+        List.init n_seeds ~f:(fun k ->
+            let transform opt =
+              let p = List.nth_exn (seeds_of opt) k in
+              Sched.apply (Autotune.sketch_schedule ~accum_prec ~p opt) opt
+            in
+            match
+              let sctx, sroutine =
+                Context.compile
+                  ~lowered_transform:(fun o -> [ transform o ])
+                  (Context.auto ()) comp Ir.Indexing.Empty
+              in
+              let sctx = Context.run sctx sroutine in
+              (Context.get_values sctx y.Tensor.value, sroutine.Context.mma)
+            with
+            | got, census ->
+                if not (Ll_test.rendered_tensorized census) then
+                  Stdio.eprintf "mc: GPU tensorized seed %d rendered %s\n" k
+                    (Ir.C_syntax.mma_summary_string census);
+                ( Array.for_all2_exn got expected ~f:(fun a b -> Float.(abs (a - b) < 1e-3)),
+                  Ll_test.rendered_tensorized census )
+            | exception exn ->
+                Stdio.eprintf "mc: GPU tensorized seed %d FAILED %s\n" k (Exn.to_string exn);
+                (false, false))
+      in
+      p_all claim results ~f:fst;
+      p_all rendered_claim results ~f:snd);
 
   let reports = ref [] in
   let ctx = Context.auto () in

@@ -1,3 +1,4 @@
 mc: every unfused GPU tensorized seed compiles and computes correctly: true
+mc: every unfused GPU tensorized seed renders tensorized per its mma census: true
 mc: tuned classifier head matches the reference: true
 mc: no tensorized candidate family is seeded without any of it being timed: true

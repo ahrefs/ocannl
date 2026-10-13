@@ -79,6 +79,43 @@ module Generated = Test_utils.Generated
 
 let () = Generated.init ~backend_name
 
+(* Every leg below asks for a tensorized conv pipeline, and a [Tile_mma] that declines to the scalar
+   fallback computes the same values: parity alone cannot say the pipeline ran tensorized, so each
+   executed leg also claims its routine's mma census (gh-ocannl-1283). Gated on the seeder's own
+   capability judgment for the f32 site on this backend -- the register tiling on the C backends, an
+   advertised f32-input tile on a GPU -- never on what a leg seeded. *)
+let tensorized_capability =
+  lazy
+    (Ll_test.tensorized_capability ~is_gpu:(not on_cpu) ~is_cpu:on_cpu
+       ~limits:(Context.hardware_limits (Context.auto ()))
+       ~a_prec:Ir.Ops.single ~b_prec:Ir.Ops.single ~d_prec:Ir.Ops.single)
+
+let rendered_tensorized (census : Ir.C_syntax.mma_summary) =
+  let ok = Ll_test.rendered_tensorized census in
+  if not ok then
+    Stdio.eprintf "a conv pipeline rendered %s\n" (Ir.C_syntax.mma_summary_string census);
+  ok
+
+let claim_tensorized label ok =
+  match Lazy.force tensorized_capability with
+  | `Advertised -> p label ok
+  | `Withheld aggregation -> Verdict.skipped ~aggregation ~backend:backend_name label
+
+(* Whether the tile the device advertises for an f32 site, under the current policy, divides a
+   hand-built micro-kernel of these extents. An unpadded pipeline the tile does not divide declines
+   by construction (CUDA's 16x16x8 tf32 tile against an 8-row kernel), so its census claim is
+   reported skipped there rather than required. *)
+let advertised_tile_divides ~m ~n ~k =
+  match (Context.hardware_limits (Context.auto ())).Ir.Backend_intf.mma with
+  | None -> false
+  | Some mma -> (
+      match
+        Autotune.mma_tile_for_precisions_in_scope mma ~scope:Ir.Backend_intf.Mma_per_statement
+          ~a_prec:Ir.Ops.single ~b_prec:Ir.Ops.single ~d_prec:Ir.Ops.single
+      with
+      | Some (tm, tn, tk) -> m % tm = 0 && n % tn = 0 && k % tk = 0
+      | None -> false)
+
 (* Deterministic operands so sibling graphs compute identical values (forward code is consumed by
    compilation, so each leg builds its own graph). *)
 let make_x tag =
@@ -277,26 +314,30 @@ let () =
         Ir.Indexing.Empty
     in
     let ctx = Context.run ctx routine in
-    Context.get_values ctx y.Tensor.value
+    (Context.get_values ctx y.Tensor.value, routine.Context.mma)
   in
   let pipeline_leg tag make_conv =
     let want =
       let _, _, y = make_conv (tag ^ "_r") in
       run_plain (tag ^ "_ref") y
     in
-    let swapped = run_sched (tag ^ "_swap") (make_conv (tag ^ "_s")) ~tensorized:false in
+    let swapped, _ = run_sched (tag ^ "_swap") (make_conv (tag ^ "_s")) ~tensorized:false in
     p_all2 (tag ^ ": reorder-only conv matches the natural form within tolerance") swapped want
       ~f:(fun a b -> Float.(abs (a - b) < 1e-3));
     if on_cpu then (
-      let full = run_sched (tag ^ "_gemm") (make_conv (tag ^ "_g")) ~tensorized:true in
+      let full, census = run_sched (tag ^ "_gemm") (make_conv (tag ^ "_g")) ~tensorized:true in
       p_all2
         (tag ^ ": packed+tensorized conv matches the reorder-only twin bitwise")
         full swapped ~f:Float.equal;
       p_all2 (tag ^ ": packed+tensorized conv matches the natural form within tolerance") full want
-        ~f:(fun a b -> Float.(abs (a - b) < 1e-3)))
+        ~f:(fun a b -> Float.(abs (a - b) < 1e-3));
+      claim_tensorized
+        (tag ^ ": the packed+tensorized conv's routine is labeled tensorized")
+        (rendered_tensorized census))
     else (
       skipped (tag ^ ": packed+tensorized conv matches the reorder-only twin bitwise");
-      skipped (tag ^ ": packed+tensorized conv matches the natural form within tolerance"))
+      skipped (tag ^ ": packed+tensorized conv matches the natural form within tolerance");
+      skipped (tag ^ ": the packed+tensorized conv's routine is labeled tensorized"))
   in
   pipeline_leg "cvg" make_conv_s1v;
   (* The padded pipeline leg: the packing Stage's tile loads iterate the padded buffer (its edge
@@ -403,19 +444,24 @@ let () =
       in
       let ctx = Context.run ctx routine in
       let got = Context.get_values ctx y.Tensor.value in
-      (not (Array.is_empty got))
-      && Array.for_all2_exn got want2 ~f:(fun a b -> Float.(abs (a - b) < 1e-3))
+      ( (not (Array.is_empty got))
+        && Array.for_all2_exn got want2 ~f:(fun a b -> Float.(abs (a - b) < 1e-3)),
+        rendered_tensorized routine.Context.mma )
     in
     p_all "cvs2: the stride-2 conv seeds are the serial pipeline and its Grid twin" !seeds
       ~f:(fun s ->
         List.length !seeds = 2
         && s.Autotune.sk_conv && (not s.Autotune.sk_gpu)
         && List.count !seeds ~f:(fun t -> t.Autotune.sk_grid) = 1);
-    p_alli "cvs2: every seeded stride-2 candidate matches the natural form within tolerance" !seeds
-      ~f:run_seed)
+    let results = List.mapi !seeds ~f:run_seed in
+    p_all "cvs2: every seeded stride-2 candidate matches the natural form within tolerance" results
+      ~f:fst;
+    claim_tensorized "cvs2: every seeded stride-2 candidate's routine is labeled tensorized"
+      (List.for_all results ~f:snd && not (List.is_empty results)))
   else (
     skipped "cvs2: the stride-2 conv seeds are the serial pipeline and its Grid twin";
-    skipped "cvs2: every seeded stride-2 candidate matches the natural form within tolerance");
+    skipped "cvs2: every seeded stride-2 candidate matches the natural form within tolerance";
+    skipped "cvs2: every seeded stride-2 candidate's routine is labeled tensorized");
 
   (* === Autotune seeding on conv+bias+relu: serial + Grid conv pipelines, each with its
      fused-epilogue twin (2-D convs fuse since the whole-window contraction, gh-ocannl-501; the
@@ -532,18 +578,23 @@ let () =
           Ir.Indexing.Empty
       in
       let ctx = Context.run ctx routine in
-      (Context.get_values ctx y.Tensor.value, !n_real)
+      (Context.get_values ctx y.Tensor.value, !n_real, routine.Context.mma)
     in
-    let unfused, n_unfused = run_tail_sched "cvf_unfused" (make_tail "cvf_u") ~fused:false in
-    let fused, n_fused = run_tail_sched "cvf_fused" (make_tail "cvf_f") ~fused:true in
+    let unfused, n_unfused, census_u =
+      run_tail_sched "cvf_unfused" (make_tail "cvf_u") ~fused:false
+    in
+    let fused, n_fused, census_f = run_tail_sched "cvf_fused" (make_tail "cvf_f") ~fused:true in
     p "cvf: fusion merges the tail into the conv nest" (n_unfused = 2 && n_fused = 1);
     p_all2 "cvf: fused conv twin matches the unfused pipeline bitwise" fused unfused ~f:Float.equal;
     p_all2 "cvf: fused conv twin matches the natural form within tolerance" fused want_t
-      ~f:(fun a b -> Float.(abs (a - b) < 1e-3)))
+      ~f:(fun a b -> Float.(abs (a - b) < 1e-3));
+    claim_tensorized "cvf: the unfused and the fused conv routines are both labeled tensorized"
+      (rendered_tensorized census_u && rendered_tensorized census_f))
   else (
     skipped "cvf: fusion merges the tail into the conv nest";
     skipped "cvf: fused conv twin matches the unfused pipeline bitwise";
-    skipped "cvf: fused conv twin matches the natural form within tolerance");
+    skipped "cvf: fused conv twin matches the natural form within tolerance";
+    skipped "cvf: the unfused and the fused conv routines are both labeled tensorized");
 
   (* === The GPU staged leg and the aligned-merged Grid flavor (gh-ocannl-493 follow-ups). Both legs
      use micro-kernel extents divisible by Metal's 8x8x8 intrinsic tile: row = 8, oc = 16, ic = 8.
@@ -610,7 +661,7 @@ let () =
         Ir.Indexing.Empty
     in
     let ctx = Context.run ctx routine in
-    Context.get_values ctx y.Tensor.value
+    (Context.get_values ctx y.Tensor.value, routine.Context.mma)
   in
   let want8 =
     let _, _, y = make_conv8 "cvu_r" in
@@ -620,7 +671,7 @@ let () =
      kernel-window anchor, Tensorize at the backend lane width (the accumulator fragment stays
      resident across the whole kernel window, gh-ocannl-480/501). Tolerance tier: the reorder and
      the fragment arithmetic reassociate each element's reduction. --- *)
-  if has_uniform_f32_mma then
+  if has_uniform_f32_mma then (
     let x, kern, y = make_conv8 "cvu_g" in
     let conv_sched (site : Autotune.conv_site) _seg =
       let w =
@@ -654,10 +705,14 @@ let () =
           tz;
         ]
     in
-    let got = run_fiss_sched "cvu_gpu" y ~conv_sched in
+    let got, census = run_fiss_sched "cvu_gpu" y ~conv_sched in
     p_all2 "cvu: GPU staged conv pipeline matches the natural form within tolerance" got want8
-      ~f:(fun a b -> Float.(abs (a - b) < 1e-3))
-  else skipped "cvu: GPU staged conv pipeline matches the natural form within tolerance";
+      ~f:(fun a b -> Float.(abs (a - b) < 1e-3));
+    claim_tensorized "cvu: the GPU staged conv pipeline's routine is labeled tensorized"
+      (rendered_tensorized census))
+  else (
+    skipped "cvu: GPU staged conv pipeline matches the natural form within tolerance";
+    skipped "cvu: the GPU staged conv pipeline's routine is labeled tensorized");
   (* --- Seeding + tuning on the conv-alone graph: the C backends seed serial + Grid per fission
      segment (and whole-routine); metal seeds the staged GPU flavor per fission segment (the
      whole-routine site is zeroed, hence gated). --- *)
@@ -712,9 +767,11 @@ let () =
     let _, _, y = make_conv8_s2 "cvu2_r" in
     run_plain "cvu2_ref" y
   in
-  if has_f32_input_mma then
+  if has_f32_input_mma then (
     let x, kern, y = make_conv8_s2 "cvu2_g" in
+    let kernel_extents = ref None in
     let conv_sched (site : Autotune.conv_site) _seg =
+      kernel_extents := Some (site.Autotune.c_nrow, site.Autotune.c_noc, site.Autotune.c_nred);
       let w =
         match (Context.hardware_limits (Context.auto ())).Ir.Backend_intf.mma with
         | Some m -> m.Ir.Backend_intf.mma_simd_width
@@ -746,11 +803,22 @@ let () =
           tz;
         ]
     in
-    let got = run_fiss_sched "cvu2_gpu" y ~conv_sched in
+    let got, census = run_fiss_sched "cvu2_gpu" y ~conv_sched in
     p_all2 "cvu2: GPU staged stride-2 conv (compacted) matches the natural form within tolerance"
-      got want8s2 ~f:(fun a b -> Float.(abs (a - b) < 1e-3))
-  else
+      got want8s2 ~f:(fun a b -> Float.(abs (a - b) < 1e-3));
+    let rendered_label =
+      "cvu2: the GPU staged stride-2 conv pipeline's routine is labeled tensorized"
+    in
+    match !kernel_extents with
+    | Some (m, n, k) when not (advertised_tile_divides ~m ~n ~k) ->
+        Stdio.eprintf
+          "cvu2: the advertised f32-site tile does not divide the %dx%dx%d micro-kernel\n" m n k;
+        skipped rendered_label
+    | Some _ -> claim_tensorized rendered_label (rendered_tensorized census)
+    | None -> p rendered_label false)
+  else (
     skipped "cvu2: GPU staged stride-2 conv (compacted) matches the natural form within tolerance";
+    skipped "cvu2: the GPU staged stride-2 conv pipeline's routine is labeled tensorized");
 
   (* --- The same stride-2 site through the seeding wave (gh-ocannl-502): the per-segment counts
      match the unit-stride [cvu] leg — the stride only changes the packing Stage's load arithmetic,
@@ -828,22 +896,27 @@ let () =
     let run_seed i p_ =
       let tag = Printf.sprintf "cvs2b_%d" i in
       let _, _, y = make_conv_s2_r12 tag in
-      let got =
+      let got, census =
         run_fiss_sched tag y ~conv_sched:(fun site seg ->
             if site.Autotune.c_zeroed then [] else Autotune.sketch_schedule ~accum_prec ~p:p_ seg)
       in
-      (not (Array.is_empty got))
-      && Array.for_all2_exn got want12 ~f:(fun a b -> Float.(abs (a - b) < 1e-3))
+      ( (not (Array.is_empty got))
+        && Array.for_all2_exn got want12 ~f:(fun a b -> Float.(abs (a - b) < 1e-3)),
+        rendered_tensorized census )
     in
     p_all "cvs2b: the strided non-dividing row seeds a padded row-panel flavor" !seeds ~f:(fun s ->
         List.exists !seeds ~f:(fun t -> t.Autotune.sk_bm = 8)
         && List.length !seeds = 3
         && s.Autotune.sk_conv);
-    p_alli "cvs2b: every per-segment stride-2 candidate matches the natural form within tolerance"
-      !seeds ~f:run_seed)
+    let results = List.mapi !seeds ~f:run_seed in
+    p_all "cvs2b: every per-segment stride-2 candidate matches the natural form within tolerance"
+      results ~f:fst;
+    claim_tensorized "cvs2b: every per-segment stride-2 candidate's routine is labeled tensorized"
+      (List.for_all results ~f:snd && not (List.is_empty results)))
   else (
     skipped "cvs2b: the strided non-dividing row seeds a padded row-panel flavor";
-    skipped "cvs2b: every per-segment stride-2 candidate matches the natural form within tolerance");
+    skipped "cvs2b: every per-segment stride-2 candidate matches the natural form within tolerance";
+    skipped "cvs2b: every per-segment stride-2 candidate's routine is labeled tensorized");
 
   (* === Blocked tile flavors (gh-ocannl-500): the GEMM row is split into [Grid] panels before the
      reorder — cache-blocked pool panels on the C backends, extra threadgroups per row-block on GPU
@@ -921,24 +994,29 @@ let () =
   let blocked_claim =
     "cvb: blocked (row-panel) conv pipeline matches the natural form within tolerance"
   in
-  if on_cpu then
+  let blocked_rendered_claim = "cvb: the blocked conv pipeline's routine is labeled tensorized" in
+  if on_cpu then (
     let x, kern, y = make_conv16 "cvb_c" in
-    let got =
+    let got, census =
       run_fiss_sched "cvb_cpu" y ~conv_sched:(blocked_sched ~shared:false ~simd_width:1 (x, kern))
     in
-    p_all2 blocked_claim got want16 ~f:(fun a b -> Float.(abs (a - b) < 1e-3))
-  else if has_uniform_f32_mma then
+    p_all2 blocked_claim got want16 ~f:(fun a b -> Float.(abs (a - b) < 1e-3));
+    claim_tensorized blocked_rendered_claim (rendered_tensorized census))
+  else if has_uniform_f32_mma then (
     let w =
       match (Context.hardware_limits (Context.auto ())).Ir.Backend_intf.mma with
       | Some m -> m.Ir.Backend_intf.mma_simd_width
       | None -> 32
     in
     let x, kern, y = make_conv16 "cvb_g" in
-    let got =
+    let got, census =
       run_fiss_sched "cvb_gpu" y ~conv_sched:(blocked_sched ~shared:true ~simd_width:w (x, kern))
     in
-    p_all2 blocked_claim got want16 ~f:(fun a b -> Float.(abs (a - b) < 1e-3))
-  else skipped blocked_claim;
+    p_all2 blocked_claim got want16 ~f:(fun a b -> Float.(abs (a - b) < 1e-3));
+    claim_tensorized blocked_rendered_claim (rendered_tensorized census))
+  else (
+    skipped blocked_claim;
+    skipped blocked_rendered_claim);
 
   (* --- Seeding: the fission segment now proposes the row-block flavors alongside the whole-extent
      ones — an extra CPU cache-panel seed (bm=8, two panels) and an extra GPU threadgroup-block seed
@@ -992,7 +1070,7 @@ let () =
     let _, _, y = make_merged16 "cvmb_r" in
     run_plain "cvmb_ref" y
   in
-  if on_cpu then
+  if on_cpu then (
     let x, kern, y = make_merged16 "cvmb_g" in
     let conv_sched (site : Autotune.conv_site) seg =
       let sp_row, row_o, row_i =
@@ -1032,11 +1110,15 @@ let () =
           tz;
         ]
     in
-    let got = run_fiss_sched "cvmb_cpu" y ~conv_sched in
+    let got, census = run_fiss_sched "cvmb_cpu" y ~conv_sched in
     p_all2 "cvmb: merged-segment blocked conv pipeline matches the natural form within tolerance"
-      got want_mb ~f:(fun a b -> Float.(abs (a - b) < 1e-3))
-  else
+      got want_mb ~f:(fun a b -> Float.(abs (a - b) < 1e-3));
+    claim_tensorized
+      "cvmb: the merged-segment blocked conv pipeline's routine is labeled tensorized"
+      (rendered_tensorized census))
+  else (
     skipped "cvmb: merged-segment blocked conv pipeline matches the natural form within tolerance";
+    skipped "cvmb: the merged-segment blocked conv pipeline's routine is labeled tensorized");
   clean_cache "autotune_cache_conv_merged_blocked";
   let _, _, y = make_merged16 "cvmb_t" in
   let reports = ref [] in
@@ -1087,7 +1169,7 @@ let () =
     let _, _, y = make_merged "cva_r" in
     run_plain "cva_ref" y
   in
-  if on_cpu then
+  if on_cpu then (
     let x, kern, y = make_merged "cva_g" in
     let conv_sched (site : Autotune.conv_site) seg =
       let stage source tile_loops =
@@ -1116,10 +1198,14 @@ let () =
           tz;
         ]
     in
-    let got = run_fiss_sched "cva_gemm" y ~conv_sched in
+    let got, census = run_fiss_sched "cva_gemm" y ~conv_sched in
     p_all2 "cva: aligned-grid conv pipeline on a merged segment matches within tolerance" got want_m
-      ~f:(fun a b -> Float.(abs (a - b) < 1e-3))
-  else skipped "cva: aligned-grid conv pipeline on a merged segment matches within tolerance";
+      ~f:(fun a b -> Float.(abs (a - b) < 1e-3));
+    claim_tensorized "cva: the aligned-grid conv pipeline's routine is labeled tensorized"
+      (rendered_tensorized census))
+  else (
+    skipped "cva: aligned-grid conv pipeline on a merged segment matches within tolerance";
+    skipped "cva: the aligned-grid conv pipeline's routine is labeled tensorized");
   clean_cache "autotune_cache_conv_aligned";
   let _, _, y = make_merged "cva_t" in
   let reports = ref [] in

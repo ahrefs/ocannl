@@ -3,6 +3,7 @@ census: the honoured schedule's routine is labeled tensorized: true
 census: transposed-B layout falls back to the lane-0 scalar rendering: true
 census: the declined schedule's routine is labeled scalar-fallback, not tensorized: true
 per-chunk B~ re-pack matches the serial twin bitwise: true
+per-chunk B~ re-pack's routine is labeled tensorized: true
 per-chunk B~ re-pack under the cap pool-parallelizes: true
 per-chunk B~ re-pack over the cap declines to serial: true
 seeds: standard, both hoistable: total=32 whole=4 packed=24 hoist=14 grid=4 packrest=0

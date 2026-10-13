@@ -1,10 +1,12 @@
 div: mma epilogue twins are seeded: true
 div: at least one epilogue twin applies and validates (reaches timing): true
 div: some epilogue twin compiles and runs end-to-end: true
+div: every running epilogue twin renders tensorized per its mma census: true
 div: every running twin matches the untuned reference: true
 nondiv: mma epilogue twins are seeded: true
 nondiv: at least one epilogue twin applies and validates (reaches timing): true
 nondiv: some epilogue twin compiles and runs end-to-end: true
+nondiv: every running epilogue twin renders tensorized per its mma census: true
 nondiv: every running twin matches the untuned reference: true
 
 Done.

@@ -123,11 +123,15 @@ let folded_seed_claims ~tag ~what ~pre ~out ~seed ~want ~matches =
     results
     ~f:(fun (_, ok, _) -> ok);
   let label =
-    "a tensorized " ^ what ^ " sketch renders tensorized and matches the materialized run"
+    "every tensorized " ^ what ^ " sketch renders tensorized and matches the materialized run"
   in
   match capability with
   | `Advertised ->
-      p_exists label results ~f:(fun (q, ok, rendered) -> q.Autotune.sk_mma && rendered && ok)
+      (* Every tensorized seed, not some (gh-ocannl-1283): one seed declining to the scalar fallback
+         fails the claim even while its siblings render the intrinsics. *)
+      p_all label
+        (List.filter results ~f:(fun (q, _, _) -> q.Autotune.sk_mma))
+        ~f:(fun (_, ok, rendered) -> rendered && ok)
   | `Withheld aggregation -> Verdict.skipped ~aggregation ~backend:backend_name label
 
 let () =

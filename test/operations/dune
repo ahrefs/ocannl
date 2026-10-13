@@ -4699,7 +4699,8 @@
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
   (env_var OCANNL_LARGE_MODELS)
   (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_BIG_MODELS))
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_TF32_MATMULS))
  ; Keep execution off @default as well as @runtest; @check still compiles the source.
  (action
   (no-infer
@@ -4931,7 +4932,8 @@
   (env_var OCANNL_LOG_LEVEL)
   (env_var OCANNL_PROFILE)
   (env_var OCANNL_BIG_MODELS)
-  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
+  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES)
+  (env_var OCANNL_TF32_MATMULS))
  (modules launch_predicate_parity)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
@@ -5579,7 +5581,9 @@
   (env_var OCANNL_LOG_LEVEL)
   (env_var OCANNL_PROFILE)
   (env_var OCANNL_BIG_MODELS)
-  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
+  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES)
+  (env_var OCANNL_TF32_MATMULS)
+  (env_var OCANNL_CC_VECTOR_BYTES))
  (modules schedule_conv_gemm)
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
@@ -6901,7 +6905,8 @@
   (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
   (env_var OCANNL_LARGE_MODELS)
   (env_var OCANNL_PROFILE)
-  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA))
+  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
+  (env_var OCANNL_TF32_MATMULS))
  (modules matmul_interchange)
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess

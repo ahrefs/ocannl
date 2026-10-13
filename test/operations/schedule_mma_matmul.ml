@@ -95,6 +95,30 @@ let () = Generated.init ~backend_name
    rendering is then a claim of its own rather than an unexplained red. *)
 let hip_mma = lazy (Option.is_some (Context.hardware_limits (Context.auto ())).Ir.Backend_intf.mma)
 
+(* Where a structure claim below accepts either the intrinsic or the lane-0 fallback because the arm
+   is device-dependent (CUDA's wmma below sm_70, its fp8 inline PTX below sm_89, Metal before
+   Apple7), a decline on a device that DOES advertise the tile used to pass as the "older device"
+   alternative (gh-ocannl-1283). The routine's mma census, read against the seeder's own capability
+   judgment for the leg's storage precisions, takes that choice away: where the tile is advertised
+   the routine must render tensorized, elsewhere the deliberate scalar fallback. *)
+let census_agrees_with_capability (routine : Context.routine) ~what ~a_prec ~b_prec ~d_prec =
+  let expected =
+    match
+      Ll_test.tensorized_capability ~is_gpu:on_gpu ~is_cpu:(not on_gpu)
+        ~limits:(Context.hardware_limits (Context.auto ()))
+        ~a_prec ~b_prec ~d_prec
+    with
+    | `Advertised -> Ir.C_syntax.Tensorized
+    | `Withheld _ -> Ir.C_syntax.Scalar_fallback
+  in
+  let got = routine.Context.mma in
+  let agrees = Ir.C_syntax.equal_tensorization got.Ir.C_syntax.tensorization expected in
+  if not agrees then
+    Stdio.eprintf "%s: expected a %s routine per the capability, rendered %s\n" what
+      (Ir.C_syntax.tensorization_name expected)
+      (Ir.C_syntax.mma_summary_string got);
+  agrees
+
 (* Named once so a degraded run explains itself on the channel the golden does not see. *)
 let () =
   if on_hip && not (Lazy.force hip_mma) then
@@ -582,8 +606,11 @@ let () =
             compile, since the headers are what is missing. *)
          has "== 0)" && not (has "rocwmma")
      else if on_gpu then
-       (* CUDA: the wmma f16 intrinsic, or the lane-0 fallback on older devices. *)
-       has "nvcuda::wmma" || has "== 0)"
+       (* CUDA: the wmma f16 intrinsic, or the lane-0 fallback on older devices -- which of the two
+          is the capability's to say, not the source's. *)
+       census_agrees_with_capability routine_h ~what:"half" ~a_prec:Ir.Ops.half ~b_prec:Ir.Ops.half
+         ~d_prec:Ir.Ops.half
+       && (has "nvcuda::wmma" || has "== 0)")
      else
        (* gh-ocannl-575: the register tiling fires over narrow storage — the compute precision is
           f32 under the default [narrow_compute_f32] policy ([fp16_arithmetic] is off), and all
@@ -1245,8 +1272,11 @@ let () =
      let has s = String.is_substring src ~substring:s in
      let ok =
        if on_gpu then
-         (* CUDA sm_89+: the inline-PTX path; the lane-0 fallback on older devices. *)
-         has "mma.sync.aligned.m16n8k32" || has "== 0)"
+         (* CUDA sm_89+: the inline-PTX path; the lane-0 fallback on older devices and on the
+            backends with no fp8 tile -- which of the two is the capability's to say. *)
+         census_agrees_with_capability routine_f8 ~what:tag ~a_prec:Ir.Ops.fp8 ~b_prec:Ir.Ops.fp8
+           ~d_prec:Ir.Ops.single
+         && (has "mma.sync.aligned.m16n8k32" || has "== 0)")
        else if String.equal tag "f8_tb" then
          (* Transposed B declines the register tiling on the C backends. *)
          has "== 0)" && (not (has "simdgroup")) && not (has "Tile_mma register tiling")
@@ -1732,7 +1762,10 @@ let () =
         && has "simdgroup_half8x8 __mma_af"
         && not (has "ocannl_mma_rc8")
       else if on_hip then if Lazy.force hip_mma then staged_half_resident src else has "== 0)"
-      else staged_half_resident src || has "== 0)"
+      else
+        census_agrees_with_capability routine_d ~what:"staged half->f32" ~a_prec:Ir.Ops.half
+          ~b_prec:Ir.Ops.half ~d_prec:Ir.Ops.single
+        && (staged_half_resident src || has "== 0)")
     in
     p "staged+tensorized half fragment residency" ok)
   else (
@@ -1772,7 +1805,10 @@ let () =
        also accept the pre-Apple7 / pre-sm_70 lane-0 fallback. *)
     let ok =
       if on_hip then if Lazy.force hip_mma then staged_half_resident src else has "== 0)"
-      else staged_half_resident src || has "== 0)"
+      else
+        census_agrees_with_capability routine_u ~what:"staged uniform-f16" ~a_prec:Ir.Ops.half
+          ~b_prec:Ir.Ops.half ~d_prec:Ir.Ops.half
+        && (staged_half_resident src || has "== 0)")
     in
     p "staged+tensorized uniform-f16 fragment residency" ok)
   else (

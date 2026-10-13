@@ -41,6 +41,7 @@ conv coverage: every GPU seed maps the covering zero companion: true
 conv+bias coverage: the conv+bias segment carries the conv's folded per-cell zero: true
 conv+bias coverage: GPU seeds remain eligible and validate with the zero companion: true
 conv+bias coverage: GPU sketches match a materialized run with discriminating operands: true
+conv+bias coverage: every GPU sketch renders tensorized per its mma census: true
 conv prediction: the fission segment seeds a whole-extent GPU flavor: true
 conv prediction: the fission segment seeds a row-blocked GPU flavor: true
 conv prediction: no GPU seed predicts a dimension above its applied launch geometry: true

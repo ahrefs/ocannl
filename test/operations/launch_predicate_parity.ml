@@ -430,37 +430,58 @@ let () =
   let parity_label =
     "conv+bias coverage: GPU sketches match a materialized run with discriminating operands"
   in
-  let backend = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc") in
-  let real_gpu =
-    if not (Sched.backend_is_gpu backend) then []
-    else
-      Autotune.sketch_seed_params ~is_gpu:true ~is_cpu:false
-        ~limits:(Context.hardware_limits (Context.auto ()))
-        biased_opt
-      |> List.filter ~f:(fun q -> q.Autotune.sk_gpu && q.Autotune.sk_conv)
+  let rendered_label =
+    "conv+bias coverage: every GPU sketch renders tensorized per its mma census"
   in
-  if List.is_empty real_gpu then Verdict.skipped ~backend parity_label
-  else begin
-    let outputs = [ biased_conv.Tensor.value; biased.Tensor.value ] in
-    let seed =
-      List.map outputs ~f:(fun tn -> (tn, Array.create ~len:(Ir.Tnode.num_elems tn) (-999.)))
-    in
-    let want =
-      List.hd_exn
-        (Ll_test.execute ~name:"lpp_cb_materialized" biased_opt ~seed ~read:[ biased.Tensor.value ])
-    in
-    p_all parity_label real_gpu ~f:(fun q ->
-        let got =
-          List.hd_exn
-            (Ll_test.execute
-               ~name:
-                 ("lpp_cb_sketch_" ^ Int.to_string q.Autotune.sk_bm ^ "_"
-                 ^ Bool.to_string q.Autotune.sk_epilogue
-                 ^ "_" ^ Int.to_string q.Autotune.sk_depth)
-               (apply_conv biased_opt q) ~seed ~read:[ biased.Tensor.value ])
-        in
-        Array.equal Float.equal got want)
-  end;
+  let backend = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc") in
+  let real_limits = Context.hardware_limits (Context.auto ()) in
+  (* Gated on the seeder's own capability judgment for the site's operand and destination
+     precisions, never on the seed list under test (gh-ocannl-1115, gh-ocannl-1283): where the
+     backend advertises a tile, an empty seed list fails both claims instead of skipping them. Every
+     conv sketch is a tensorized pipeline, and its scalar fallback computes the same values, so
+     parity alone cannot say it ran tensorized: each routine's mma census must. *)
+  let capability =
+    if not (Sched.backend_is_gpu backend) then `Withheld `Backend
+    else
+      let site = Option.value_exn ~here:[%here] (Autotune.detect_conv biased_opt.LL.llc) in
+      Ll_test.tensorized_matmul_capability ~is_gpu:true ~is_cpu:false ~limits:real_limits
+        ~a:site.Autotune.c_a ~b:site.Autotune.c_b ~d:site.Autotune.c_d
+  in
+  (match capability with
+  | `Withheld aggregation ->
+      Verdict.skipped ~aggregation ~backend parity_label;
+      Verdict.skipped ~aggregation ~backend rendered_label
+  | `Advertised ->
+      let real_gpu =
+        Autotune.sketch_seed_params ~is_gpu:true ~is_cpu:false ~limits:real_limits biased_opt
+        |> List.filter ~f:(fun q -> q.Autotune.sk_gpu && q.Autotune.sk_conv)
+      in
+      let outputs = [ biased_conv.Tensor.value; biased.Tensor.value ] in
+      let seed =
+        List.map outputs ~f:(fun tn -> (tn, Array.create ~len:(Ir.Tnode.num_elems tn) (-999.)))
+      in
+      let want =
+        List.hd_exn
+          (Ll_test.execute ~name:"lpp_cb_materialized" biased_opt ~seed
+             ~read:[ biased.Tensor.value ])
+      in
+      let results =
+        List.map real_gpu ~f:(fun q ->
+            let got, census =
+              Ll_test.execute_with_census
+                ~name:
+                  ("lpp_cb_sketch_" ^ Int.to_string q.Autotune.sk_bm ^ "_"
+                  ^ Bool.to_string q.Autotune.sk_epilogue
+                  ^ "_" ^ Int.to_string q.Autotune.sk_depth)
+                (apply_conv biased_opt q) ~seed ~read:[ biased.Tensor.value ]
+            in
+            if not (Ll_test.rendered_tensorized census) then
+              Stdio.eprintf "conv+bias sketch (bm=%d) rendered %s\n" q.Autotune.sk_bm
+                (Ir.C_syntax.mma_summary_string census);
+            (Array.equal Float.equal (List.hd_exn got) want, census))
+      in
+      p_all parity_label results ~f:fst;
+      p_all rendered_label results ~f:(fun (_, census) -> Ll_test.rendered_tensorized census));
   p_exists "conv prediction: the fission segment seeds a whole-extent GPU flavor" conv_gpu
     ~f:(fun q -> q.Autotune.sk_bm = 0);
   p_exists "conv prediction: the fission segment seeds a row-blocked GPU flavor" conv_gpu
