@@ -1511,10 +1511,12 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   `List.exists real` over `results` mapped from `real`). Both sides are compared by lexical identity,
   a name plus its binding. The GATE side is every identifier `~when_` spells, through every `let`
   it reaches. The POPULATION side is the quantified argument and what it is built FROM: `let`
-  right-hand sides, `if`/`match` branches (never the condition or scrutinee), a `try` body, literals, `!`, `@`,
-  and the positional arguments of `List.`/`Array.`/... functions that build it (the collection alone
-  for a `find`/`nth`/`take` selector, none for an `init` generator) — never another call's
-  arguments. A name the source never binds is one identity on both sides.
+  right-hand sides, `if`/`match` branches (never the condition or scrutinee), a `try` body, a
+  `let module` body, literals, `!`, `@`, and the arguments that carry the collection into a
+  standard collection module's function, resolved through module aliases and shadowing: in Base's
+  order the first alone (a key, index or count after it selects the population), all for a
+  two-collection function (`append`, `zip`, ...), none for an `init` generator, all for a
+  Stdlib-ordered call, plus `~default`/`~init`/`~data` — never another call's arguments. A name the source never binds is one identity on both sides.
   That asymmetry is the rule: a capability gate may read the program, limits and backend the
   population is computed from, and must not read the population. A `let`-bound partial
   application is completed at each use and `|>`/`@@` read as application; a `gated_*` application

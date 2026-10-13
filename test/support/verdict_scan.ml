@@ -481,12 +481,15 @@ let dialect_census content =
     - the POPULATION is the identifier the quantified argument spells, and the collections it is
       BUILT from: following a [let]-bound name into its right-hand side, the branches (not the
       condition) of an [if], the cases (not the scrutinee) of a [match], the body and handlers of a
-      [try], the body of a [let] or sequence, the elements of a list, array or tuple literal or
-      constructor payload, the operand of [!] and both operands of [@], and the positional arguments
-      of a function qualified by a collection module ([List], [Array], [Hashtbl], [Map], [Option],
-      [String], ... — see {!collection_modules}) that build it: the first alone for a selector, a
-      [find] or [nth] whose key or index picks the population, none for a generator — see
-      {!collection_arguments}.
+      [try], the body of a [let], [let module], local [open] or sequence, the elements of a list,
+      array or tuple literal or constructor payload, the operand of [!] and both operands of [@],
+      and the arguments that carry the collection into a function of a standard collection module
+      ([List], [Array], [Hashtbl], [Map], [Option], [String], ... — see {!collection_modules}),
+      reached by name, through an alias ([module Rows = List]), and not under a name a local module
+      took over ([module Map = Custom]). Which arguments carry it is {!collection_arguments}': in
+      [Base]'s order the first, keys and indices after it being selectors; for a two-collection
+      function ([append], [zip], ...) all; for a generator none; for a [Stdlib]-ordered call all;
+      and the data-bearing labels [~default], [~init], [~data].
 
     The claim is refused when the two share a binding. The asymmetry is the point: a gate may read
     what the population is COMPUTED from (the site, the hardware limits, the backend steering an
@@ -510,9 +513,14 @@ let dialect_census content =
     say), or a claim (or a [let]-bound wrapper of one) named as a value, handed to [List.iter] say —
     is reported as unread rather than counted as clean, so the boundary is loud there. *)
 
+(** What a module name denotes to this reader. A collection module carries whether its functions
+    take arguments in [Stdlib]'s order (the function first, the collection last) rather than
+    [Base]'s (the collection first). *)
+type gate_module = Verdict_module | Collection_module of { stdlib : bool } | Other_module
+
 type gate_denotation = {
   identity : int;
-  definition : (expression * (gate_denotation, bool) Lexical_scope.env) option;
+  definition : (expression * (gate_denotation, gate_module) Lexical_scope.env) option;
 }
 
 type gate_reading = {
@@ -547,6 +555,7 @@ let collection_modules =
     "Stack";
     "Option";
     "String";
+    "Assoc";
   ]
 
 (* Whether a claim's arguments so far are all it takes: its gate, and its label and population. *)
@@ -554,24 +563,68 @@ let complete arguments =
   List.exists arguments ~f:(function Ppxlib.Asttypes.Labelled "when_", _, _ -> true | _ -> false)
   && List.count arguments ~f:(function Ppxlib.Asttypes.Nolabel, _, _ -> true | _ -> false) >= 2
 
-(** Which positional arguments of a collection-module function the population is built from, by the
-    function's name. A selector ([find], [nth], [take], [sub], ...) builds it from its first
-    argument only, the collection: a key, index or count picks the population, as an [if] condition
-    steers one, and a gate on it is a gate on what was selected, not on what was found. A generator
-    ([init], [range], [make], [create]) takes sizes and builds from none of them. Every other
-    function -- [map], [filter], [append], [concat], [zip], ... -- from all of them. *)
-let collection_arguments name positional =
+(** Which arguments of a collection-module function the population is built from, by the function's
+    name and the library's argument order.
+
+    In [Base]'s order the collection is the first positional argument (after any first-class module,
+    as in [Map.of_alist_exn (module String) rows]), and everything after it is a key, an index, a
+    count or an element to look for: [Map.find_exn m k], [List.nth_exn xs i], [Map.remove m k],
+    [List.take xs n]. Those select the population, as an [if] condition steers one, and a gate on
+    them is a gate on what was selected, not on what was found. So the first alone, except for the
+    functions that build from two collections ({!multi_collection}: [append], [zip], [map2],
+    [union], [merge], [cons], ...), which take every positional argument. A generator ([init],
+    [range], [make], [create]) takes sizes and builds from none of them. [Stdlib]'s order puts the
+    function first and the collection last, and varies by function, so a [Stdlib]-ordered call takes
+    every positional argument -- the loud direction.
+
+    The labeled arguments that carry data rather than steer are followed too: [~default] (the
+    fallback [Option.value] returns), [~init] (a fold's seed) and [~data] (a stored element). *)
+let multi_collection =
+  [
+    "append";
+    "rev_append";
+    "zip";
+    "map2";
+    "mapi2";
+    "fold2";
+    "iter2";
+    "cartesian_product";
+    "union";
+    "inter";
+    "diff";
+    "merge";
+    "cons";
+  ]
+
+let collection_arguments ~stdlib name arguments =
   let starts prefix = String.is_prefix name ~prefix in
+  let positional =
+    List.filter_map arguments ~f:(function
+      | Ppxlib.Asttypes.Nolabel, { pexp_desc = Pexp_pack _; _ } -> None
+      | Ppxlib.Asttypes.Nolabel, argument -> Some argument
+      | _ -> None)
+  in
+  let data =
+    List.filter_map arguments ~f:(function
+      | (Ppxlib.Asttypes.Labelled label | Optional label), argument
+        when List.mem [ "default"; "init"; "data" ] label ~equal:String.equal ->
+          Some argument
+      | _ -> None)
+  in
   if List.exists [ "init"; "range"; "make"; "create"; "replicate" ] ~f:starts then []
-  else if
-    List.exists
-      [ "find"; "nth"; "get"; "take"; "drop"; "sub"; "slice"; "split_n"; "chunks_of"; "mem" ]
-      ~f:starts
-  then List.take positional 1
-  else positional
+  else if stdlib || List.exists multi_collection ~f:starts then positional @ data
+  else List.take positional 1 @ data
 
 let gate_census content =
   let ast = Read.structure_of content in
+  (* Whether an unqualified [List] is [Base]'s: the file opens [Base] or [Core] at top level. *)
+  let opens_base =
+    List.exists ast ~f:(fun item ->
+        match item.pstr_desc with
+        | Pstr_open { popen_expr = { pmod_desc = Pmod_ident { txt; _ }; _ }; _ } ->
+            List.mem [ "Base"; "Core" ] (Lexical_scope.head txt) ~equal:String.equal
+        | _ -> false)
+  in
   let readings = ref [] and gated_sites = ref 0 in
   let partials = ref [] and bound_partials = ref [] and consumed = Hash_set.create (module Int) in
   let position expr = expr.pexp_loc.loc_start.pos_cnum in
@@ -597,7 +650,7 @@ let gate_census content =
   binder#structure ast;
   let walker =
     object (self)
-      inherit [gate_denotation, bool] Lexical_scope.scoped as super
+      inherit [gate_denotation, gate_module] Lexical_scope.scoped as super
       val mutable next_local = 0
       val mutable quiet = 0
       val mutable collecting : (string * gate_denotation) list ref option = None
@@ -610,12 +663,34 @@ let gate_census content =
          [module V = Verdict] alias), [false] when it is anything else; a name some binding the scan
          cannot see into takes over denotes something else. *)
       method module_path env path =
+        let components = Read.flatten_longident path in
         let head = Lexical_scope.head path in
-        match Map.find env.Lexical_scope.modules head with
-        | Some denotes -> Some denotes
-        | None -> Some (String.equal head "Verdict")
+        let single = List.length components = 1 in
+        Some
+          (match Map.find env.Lexical_scope.modules head with
+          | Some denotes when single -> denotes
+          | Some Verdict_module -> Verdict_module
+          | Some _ -> Other_module
+          | None when String.equal head "Verdict" -> Verdict_module
+          | None ->
+              (* [List], [Base.List], [Stdlib.List], [List.Assoc]: a path through the standard
+                 libraries' collection modules alone. *)
+              let standard = [ "Base"; "Core"; "Stdlib"; "Caml" ] in
+              if
+                List.for_all components ~f:(fun c ->
+                    List.mem collection_modules c ~equal:String.equal
+                    || List.mem standard c ~equal:String.equal)
+                && List.mem collection_modules (List.last_exn components) ~equal:String.equal
+              then
+                Collection_module
+                  {
+                    stdlib =
+                      List.mem [ "Stdlib"; "Caml" ] head ~equal:String.equal
+                      || ((not (List.mem standard head ~equal:String.equal)) && not opens_base);
+                  }
+              else Other_module)
 
-      method! shadowed = Some false
+      method! shadowed = Some Other_module
 
       method! binding_denotes env binding =
         let identity = binding.pvb_loc.loc_start.pos_cnum + 1 in
@@ -681,8 +756,16 @@ let gate_census content =
           | Pexp_constraint (inner, _)
           | Pexp_coerce (inner, _, _)
           | Pexp_sequence (_, inner)
-          | Pexp_open (_, inner) ->
+          | Pexp_letexception (_, inner)
+          | Pexp_newtype (_, inner) ->
               visit env inner
+          | Pexp_open ({ popen_expr; _ }, inner) ->
+              visit
+                (self#opened ~top:false ~include_:false env (self#module_of env popen_expr))
+                inner
+          | Pexp_letmodule ({ txt = Some name; _ }, module_expr, inner) ->
+              visit (self#bind_module env name module_expr) inner
+          | Pexp_letmodule ({ txt = None; _ }, _, inner) -> visit env inner
           | Pexp_ifthenelse (_, yes, no) ->
               visit env yes;
               Option.iter no ~f:(visit env)
@@ -708,16 +791,14 @@ let gate_census content =
                       | Ppxlib.Asttypes.Nolabel, argument -> Some argument
                       | _ -> None)
                   in
-                  match Read.longident_of callee with
-                  | Some [ ("!" | "@") ] -> List.iter positional ~f:(visit env)
-                  | Some path
-                    when List.length path >= 2
-                         && List.mem collection_modules
-                              (List.nth_exn path (List.length path - 2))
-                              ~equal:String.equal ->
-                      List.iter
-                        (collection_arguments (List.last_exn path) positional)
-                        ~f:(visit env)
+                  match callee.pexp_desc with
+                  | Pexp_ident { txt = Ppxlib.Longident.Lident ("!" | "@"); _ } ->
+                      List.iter positional ~f:(visit env)
+                  | Pexp_ident { txt = Ppxlib.Longident.Ldot (prefix, name); _ } -> (
+                      match self#module_path env prefix with
+                      | Some (Collection_module { stdlib }) ->
+                          List.iter (collection_arguments ~stdlib name arguments) ~f:(visit env)
+                      | _ -> ())
                   | _ -> ()))
           | _ -> ()
         in
@@ -764,7 +845,7 @@ let gate_census content =
                     else None)
             | Ppxlib.Longident.Ldot (prefix, name)
               when List.mem gated_forms name ~equal:String.equal
-                   && Option.value (self#module_path env prefix) ~default:false ->
+                   && Poly.equal (self#module_path env prefix) (Some Verdict_module) ->
                 Option.map (form ()) ~f:(fun form -> (form, []))
             | _ -> None)
         | Pexp_apply (callee, arguments) -> (

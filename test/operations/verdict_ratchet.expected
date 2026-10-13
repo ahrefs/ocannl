@@ -511,6 +511,14 @@ accepts a backend gate on the key that selects the population: true
 does not take a file's own gated_all for Verdict's: true
 does not take another module's gated_all for Verdict's: true
 refuses a population gate through a module alias of Verdict: true
+accepts a backend gate on the key a Map.remove drops from the population: true
+refuses a gate read off the default the population falls back to: true
+refuses a gate read off a collection a local module expression builds the population from: true
+follows a collection module through its alias: true
+does not take a shadowed collection module for the standard one: true
+follows the collection a Base function takes after a first-class module: true
+refuses a gate read off the second list a population is appended from: true
+follows a Stdlib-ordered collection call through its last argument: true
 refuses a planted gate that reads its population, and a gated claim it cannot read: true
 every synthetic control has a row in the mutation-run manifest: true
 every control phrase in the mutation-run manifest names a live control: true

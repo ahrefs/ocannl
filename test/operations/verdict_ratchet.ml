@@ -3481,7 +3481,8 @@ let () = Checks.check "all rows pass" rows ~f:Fn.id|ocaml},
 let () = Verdict.gated_all ~when_:(not (List.is_empty rows)) ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
       [ "rows" ] );
     ( "accepts a backend gate on the key that selects the population",
-      {ocaml|let () =
+      {ocaml|open Base
+let () =
   let rows = Map.find_exn results backend_name in
   Verdict.gated_all ~when_:(String.equal backend_name "cuda") ~on:backend_name "all rows pass" rows
     ~f:Fn.id|ocaml},
@@ -3499,6 +3500,60 @@ let () =
       {ocaml|module V = Verdict
 let () = V.gated_all ~when_:(not (List.is_empty rows)) ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
       [ "rows" ] );
+    ( "accepts a backend gate on the key a Map.remove drops from the population",
+      {ocaml|open Base
+let () =
+  let rows = Map.data (Map.remove results backend_name) in
+  Verdict.gated_all ~when_:(String.equal backend_name "cuda") ~on:backend_name "all rows pass" rows
+    ~f:Fn.id|ocaml},
+      [] );
+    ( "refuses a gate read off the default the population falls back to",
+      {ocaml|open Base
+let () =
+  let rows = Option.value maybe_rows ~default:fallback in
+  Verdict.gated_all ~when_:(not (List.is_empty fallback)) ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
+      [ "fallback" ] );
+    ( "refuses a gate read off a collection a local module expression builds the population from",
+      {ocaml|open Base
+let () =
+  let rows =
+    let module M = Impl in
+    List.map raw ~f:M.run
+  in
+  Verdict.gated_all ~when_:(not (List.is_empty raw)) ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
+      [ "raw" ] );
+    ( "follows a collection module through its alias",
+      {ocaml|open Base
+module Rows = List
+let () =
+  let rows = Rows.map raw ~f:run in
+  Verdict.gated_all ~when_:(not (Rows.is_empty raw)) ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
+      [ "raw" ] );
+    ( "does not take a shadowed collection module for the standard one",
+      {ocaml|open Base
+module Map = Custom_selectors
+let () =
+  let rows = Map.merge all_rows backend_name in
+  Verdict.gated_all ~when_:(String.equal backend_name "cuda") ~on:backend_name "all rows pass" rows
+    ~f:Fn.id|ocaml},
+      [] );
+    ( "follows the collection a Base function takes after a first-class module",
+      {ocaml|open Base
+let () =
+  let rows = Map.data (Map.of_alist_exn (module String) raw) in
+  Verdict.gated_all ~when_:(not (List.is_empty raw)) ~on:"cc" "all rows pass" rows ~f:snd|ocaml},
+      [ "raw" ] );
+    ( "refuses a gate read off the second list a population is appended from",
+      {ocaml|open Base
+let () =
+  let rows = List.append first raw in
+  Verdict.gated_all ~when_:(not (List.is_empty raw)) ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
+      [ "raw" ] );
+    ( "follows a Stdlib-ordered collection call through its last argument",
+      {ocaml|let () =
+  let rows = Stdlib.List.map run raw in
+  Verdict.gated_all ~when_:(raw <> []) ~on:"cc" "all rows pass" rows ~f:Fun.id|ocaml},
+      [ "raw" ] );
   ]
 
 let gate_control_findings source =
