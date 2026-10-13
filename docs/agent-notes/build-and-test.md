@@ -37,20 +37,23 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
 - **What reaches the scans is wider than what looks like infrastructure.** Two members of
   `@test/operations/scans` census sources across the tree, tests included, so a test-only edit can
   turn them red with no config key, stanza or new file in the diff. `codegen_text_inventory`
-  lists each golden holding emitted text at FILE level (its backend family and markers), and
-  itemises a test SOURCE's pins fragment by fragment, the string literals it asserts on included:
-  a test `.ml` that stops (or starts) pinning a spelling, or a golden that stops (or starts)
-  holding emitted text, changes the inventory's golden, which then wants a re-promote. A changed
-  spelling inside a golden that stays listed moves nothing there, so a green scan is no
-  spelling-level coverage of goldens. `dead_export_scan` counts a test's qualified reference to a
-  library value as a caller, and a test's type path as a mention of a library type: a test that
-  starts referencing an exempted zero-reference export (or an exempted unmentioned type) makes
-  that exemption stale, which fails until it is deleted, and one that drops a value's last
-  reference or a type's last mention makes it a new finding. lukstafi/ocannl-staging#1095 lost a CI round to both at once: moving
-  `schedule_mma_matmul` from emitted-text matching to the mma census dropped two inventory lines
-  and gave `C_syntax.is_tensorized_rendering` its first caller. Neither shows in the diff's file
-  list, so the `AGENTS.md` trigger names the edit's effect rather than its location; the scans run
-  in seconds, which is what makes running them on that trigger cheap.
+  lists each golden holding emitted text at FILE level, with its backend families and the content
+  markers it recognises there, and itemises a test SOURCE's pins fragment by fragment, the string
+  literals it asserts on included. So any edit that touches pinned emitted text can move the
+  inventory's golden and want a re-promote: a test `.ml` that starts or stops pinning a spelling, a
+  golden that starts or stops holding emitted text, or a re-promoted golden whose recognised
+  markers change. A spelling change inside a listed golden that leaves its markers alone moves
+  nothing there, so a green scan is no spelling-level coverage of goldens. `dead_export_scan`
+  counts a test's qualified reference to a library value as a caller, and a test's type path as a
+  mention of a library type: a test that starts referencing an exempted zero-reference export (or
+  an exempted unmentioned type) makes that exemption stale, which fails until it is deleted, and
+  one that drops a value's last reference or a type's last mention makes it a new finding.
+  lukstafi/ocannl-staging#1095 lost a CI round to both at once: moving `schedule_mma_matmul` from
+  emitted-text matching to the mma census dropped two inventory lines and gave
+  `C_syntax.is_tensorized_rendering` its first caller. Neither shows in the diff's file list, so
+  the `AGENTS.md` trigger names the edit's effect, as broadly as "touches", rather than its
+  location or an enumeration of the ways an inventory line can move; the scans run in seconds,
+  which is what makes running them on that trigger cheap.
 - `AGENTS.md` stays under 32 KiB, and `test/operations/agents_md_size` holds it there. Claude Code
   truncates an imported instructions file at that size -- silently, from the end, which is where
   the PR, configuration and syntax sections sit -- and the guide crossed the line one review-fix
