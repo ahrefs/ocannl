@@ -32,13 +32,20 @@ def field(text, name):
     return ' '.join(line.strip() for line in content)
 
 
-def expression(value, event, windows=False):
+def gh_format(template, *args):
+    # GitHub's format(): {N} is the Nth argument, {{ and }} are literal braces.
+    return re.sub(r'\{\{|\}\}|\{(\d+)\}',
+                  lambda m: m[0][0] if m[1] is None else str(args[int(m[1])]), template)
+
+
+def expression(value, event, windows=False, compiler=''):
     # This is the workflow's small expression vocabulary, not a second matrix.
     # Parse and whitelist the translated AST so a new operator fails loudly.
     value = value.removeprefix('${{').removesuffix('}}').strip()
-    tokens = re.findall(r"'(?:[^']*)'|github\.event_name|inputs\.[a-z_]+|fromJSON|&&|\|\||!=|==|!|[(),]|\s+", value)
+    tokens = re.findall(r"'(?:[^']*)'|github\.event_name|inputs\.[a-z_]+|fromJSON|format|&&|\|\||!=|==|!|[(),]|\s+", value)
     assert ''.join(tokens) == value, value
     mapping = {'github.event_name': 'event', 'inputs.windows_only': 'windows',
+               'inputs.ocaml_compiler': 'compiler',
                '&&': ' and ', '||': ' or ', '!': ' not '}
     translated = ''.join(mapping.get(token, token) for token in tokens).strip()
     tree = ast.parse(translated, mode='eval')
@@ -47,9 +54,10 @@ def expression(value, event, windows=False):
     assert all(isinstance(node, permitted) for node in ast.walk(tree)), translated
     for node in ast.walk(tree):
         if isinstance(node, ast.Call):
-            assert isinstance(node.func, ast.Name) and node.func.id == 'fromJSON'
+            assert isinstance(node.func, ast.Name) and node.func.id in ('fromJSON', 'format')
     return eval(compile(tree, '<workflow expression>', 'eval'), {'__builtins__': {}},
-                dict(event=event, windows=windows, fromJSON=json.loads))
+                dict(event=event, windows=windows, compiler=compiler,
+                     fromJSON=json.loads, format=gh_format))
 
 
 def documentation_triggers(text):
@@ -91,15 +99,14 @@ def job_keys(text):
     return jobs
 
 
-def matrix(text, event, windows=False):
-    systems = expression(field(text, 'os'), event, windows)
-    includes = expression(field(text, 'include'), event, windows)
-    axes = []
-    for name in ('ocaml-compiler', 'suite'):
-        match = re.search(r'^        ' + name + r':\n((?:          - .+\n)+)', text, re.M)
-        assert match, name
-        axes.append([line.strip().removeprefix('- ') for line in match[1].splitlines()])
-    jobs = [job + ('',) for job in itertools.product(systems, *axes)]
+def matrix(text, event, windows=False, compiler=''):
+    systems = expression(field(text, 'os'), event, windows, compiler)
+    compilers = expression(field(text, 'ocaml-compiler'), event, windows, compiler)
+    includes = expression(field(text, 'include'), event, windows, compiler)
+    match = re.search(r'^        suite:\n((?:          - .+\n)+)', text, re.M)
+    assert match, 'suite'
+    suites = [line.strip().removeprefix('- ') for line in match[1].splitlines()]
+    jobs = [job + ('',) for job in itertools.product(systems, compilers, suites)]
     jobs += [(entry['os'], entry['ocaml-compiler'], entry['suite'], entry.get('shard', ''))
              for entry in includes]
     # Every job but the matrix itself and the triage notifier (which runs
@@ -111,7 +118,7 @@ def matrix(text, event, windows=False):
     for job in side:
         guard = re.search(r'^  ' + re.escape(job) + r':\n    if: (.*)$', text, re.M)
         assert guard, job + ' selection missing'
-        selected[job] = bool(expression(guard[1], event, windows))
+        selected[job] = bool(expression(guard[1], event, windows, compiler))
     assert len(set(selected.values())) == 1, 'side jobs select differently: %s' % selected
     return unshard(sorted(jobs)), selected[side[0]]
 
@@ -151,17 +158,50 @@ def suite_step(text):
     assert named == sys.argv[3].split(), 'ci.yml names %s, ci-shard.sh %s' % (named, sys.argv[3].split())
 
 
+def compiler_input(text):
+    # The dispatch schema's `ocaml_compiler` choice, read from ci.yml: its
+    # options and its default. Only the shape written there is accepted.
+    block = re.search(r'^      ocaml_compiler:\n((?:        .*\n)+)', text, re.M)
+    assert block, 'ocaml_compiler dispatch input missing'
+    body = block[1]
+    assert re.search(r'^        type: choice$', body, re.M), 'ocaml_compiler must be a choice'
+    options = re.search(r'^        options:\n((?:          - .+\n)+)', body, re.M)
+    default = re.findall(r'^        default: (.+)$', body, re.M)
+    assert options and len(default) == 1, 'ocaml_compiler options/default unreadable'
+    options = [line.strip().removeprefix('- ') for line in options[1].splitlines()]
+    assert len(set(options)) == len(options) and default[0] in options, options
+    return options, default[0]
+
+
 def controls(text):
     documentation_triggers(text)
     # Opt-in stays false in the actual dispatch schema, not just this evaluator.
     option = text.split('      windows_only:\n', 1)[1].split('      expected_sha:', 1)[0]
     assert 'default: false' in option, 'fallback must be opt-in'
+    compilers, ordinary = compiler_input(text)
+    # Inputs are empty on every other event; no value of either may narrow them.
     for option in (False, True):
-        for event in ('pull_request', 'push'):
-            assert matrix(text, event, option) == (normal, True), event
-        assert matrix(text, 'schedule', option) == (full, True), 'scheduled full coverage'
-    assert matrix(text, 'workflow_dispatch', False) == (normal, True), 'ordinary manual run'
-    assert matrix(text, 'workflow_dispatch', True) == (windows, False), 'explicit Windows fallback'
+        for compiler in [''] + compilers:
+            for event in ('pull_request', 'push'):
+                assert matrix(text, event, option, compiler) == (normal, True), event
+            assert matrix(text, 'schedule', option, compiler) == (full, True), 'scheduled full coverage'
+    assert matrix(text, 'workflow_dispatch', False, ordinary) == (normal, True), 'ordinary manual run'
+    # The input's default IS the compiler of the ordinary matrix, read from it.
+    assert {job[1] for job in normal} == {ordinary}, 'default compiler is not the ordinary matrix'
+    for compiler in compilers:
+        assert matrix(text, 'workflow_dispatch', True, compiler) == (windows, False), \
+            'explicit Windows fallback'
+        if compiler != ordinary:
+            assert matrix(text, 'workflow_dispatch', False, compiler) == \
+                ([('ubuntu-latest', compiler, 'main')], False), 'compiler dispatch ' + compiler
+    # Every compiler the schedule alone builds can be dispatched, and its
+    # dispatch runs exactly the scheduled job (gh-ocannl-1267).
+    floors = sorted({job[1] for job in full} - {ordinary})
+    assert floors, 'the schedule builds no compiler beside the ordinary one'
+    for compiler in floors:
+        assert compiler in compilers, 'scheduled compiler %s cannot be dispatched' % compiler
+        assert matrix(text, 'workflow_dispatch', False, compiler)[0] == \
+            [job for job in full if job[1] == compiler], 'compiler dispatch is not the scheduled job'
     suite_step(text)
 
 
@@ -178,9 +218,15 @@ fallback_guard = re.search(r'^  fmt:\n(    if: .*\n)', source, re.M)[1]
 controls(extra_job('new-side-job', fallback_guard))
 print('PASS documentation compiler inputs are unfiltered on push and PR')
 print('PASS normal, scheduled and explicit Windows fallback matrix selections')
+print('PASS every ocaml_compiler option: the default is the ordinary matrix, another is one ubuntu job')
+print('PASS every scheduled-only compiler dispatches as exactly its scheduled job')
 print('PASS side jobs are read from ci.yml: a new guarded job joins the selection')
 print('PASS ubuntu main shards are exactly 1/N..N/N, over the aliases ci-shard.sh shards')
 second = '{"os": "ubuntu-latest", "ocaml-compiler": "5.5.x", "suite": "main", "shard": "2/2"},'
+side_guard = "github.event_name != 'workflow_dispatch' || !inputs.windows_only && inputs.ocaml_compiler == '5.5.x'"
+assert source.count(side_guard) == 4, 'side-job guard text moved; update the mutants below'
+compiler_axis = "&& format('[\"{0}\"]', inputs.ocaml_compiler)"
+assert compiler_axis in source, 'compiler axis text moved; update the mutants below'
 for label, mutant in (
     ('fallback enabled by default', source.replace('default: false', 'default: true')),
     ('push skips documentation inputs', source.replace('  push:\n', '  push:\n    paths-ignore:\n      - "docs/**"\n', 1)),
@@ -190,10 +236,19 @@ for label, mutant in (
     ('automatic Windows jobs', source.replace("github.event_name == 'schedule'", "github.event_name != 'workflow_dispatch'")),
     ('schedule loses coverage', source.replace("github.event_name == 'schedule'", "github.event_name == 'never'")),
     ('schedule narrowed by dispatch input', source.replace("github.event_name == 'workflow_dispatch' && inputs.windows_only", 'inputs.windows_only')),
-    ('duplicate formatting job', source.replace("github.event_name != 'workflow_dispatch' || !inputs.windows_only", "github.event_name != 'never'", 1)),
-    ('harnesses in the Windows fallback', source.replace("  harnesses:\n    if: github.event_name != 'workflow_dispatch' || !inputs.windows_only", "  harnesses:\n    if: github.event_name != 'never'")),
-    ('Dune-floor promotion harnesses in the Windows fallback', source.replace("  promotion-floor:\n    if: github.event_name != 'workflow_dispatch' || !inputs.windows_only", "  promotion-floor:\n    if: github.event_name != 'never'")),
-    ('CPU-torch benchmark tests in the Windows fallback', source.replace("  torch-runner:\n    if: github.event_name != 'workflow_dispatch' || !inputs.windows_only", "  torch-runner:\n    if: github.event_name != 'never'")),
+    ('schedule narrowed by compiler input', source.replace("github.event_name == 'workflow_dispatch' && inputs.ocaml_compiler", 'inputs.ocaml_compiler')),
+    ('duplicate formatting job', source.replace(side_guard, "github.event_name != 'never'", 1)),
+    ('harnesses in the Windows fallback', source.replace("  harnesses:\n    if: " + side_guard, "  harnesses:\n    if: github.event_name != 'never'")),
+    ('Dune-floor promotion harnesses in the Windows fallback', source.replace("  promotion-floor:\n    if: " + side_guard, "  promotion-floor:\n    if: github.event_name != 'never'")),
+    ('CPU-torch benchmark tests in the Windows fallback', source.replace("  torch-runner:\n    if: " + side_guard, "  torch-runner:\n    if: github.event_name != 'never'")),
+    ('formatting in the compiler dispatch', source.replace(side_guard, "github.event_name != 'workflow_dispatch' || !inputs.windows_only", 1)),
+    ('compiler dispatch builds the ordinary compiler', source.replace(compiler_axis, "&& '[\"5.5.x\"]'")),
+    ('compiler dispatch keeps macOS', source.replace("&& '[\"ubuntu-latest\"]'", "&& '[\"ubuntu-latest\", \"macos-latest\"]'")),
+    ('compiler dispatch keeps the 5.5 shards and train', source.replace("inputs.ocaml_compiler != '5.5.x'\n          && '[]'", "inputs.ocaml_compiler == 'never'\n          && '[]'")),
+    ('compiler dispatch combined with the Windows fallback', source.replace("&& !inputs.windows_only\n", "\n", 1)),
+    ('scheduled floor not dispatchable', source.replace('          - 5.5.x\n          - 5.3.x\n', '          - 5.5.x\n', 1)),
+    ('compiler input defaults to the floor', source.replace('          - 5.3.x\n        default: 5.5.x\n', '          - 5.3.x\n        default: 5.3.x\n', 1)),
+    ('compiler input as free text', source.replace('        type: choice\n', '        type: string\n', 1)),
     ('a new side job without the Windows-fallback guard', extra_job('new-side-job')),
     ('per-PR shard dropped', source[:source.rindex(second)] + source[source.rindex(second) + len(second):]),
     ('scheduled shard dropped', source.replace(second, '', 1)),
@@ -230,11 +285,16 @@ gh.write_text('#!/usr/bin/env bash\n'
               'printf "%s\\n" "$RELATION"\n')
 gh.chmod(0o755)
 
-def guard(code, expected, run, checkout, only=True, ref=master, relation='ahead'):
+compilers, ordinary = compiler_input(source)
+floor = [compiler for compiler in compilers if compiler != ordinary][0]
+# The guard's literal for the ordinary compiler is the schema's default.
+assert '[ "$OCAML_COMPILER" != %s ]' % ordinary in script, 'guard names another ordinary compiler'
+
+def guard(code, expected, run, checkout, only=True, ref=master, relation='ahead', compiler=ordinary):
     env = dict(os.environ, PATH=scratch + os.pathsep + os.environ['PATH'],
                EXPECTED_SHA=expected, GITHUB_SHA=run, CHECKOUT_SHA=checkout,
                WINDOWS_ONLY=str(only).lower(), GITHUB_REF=ref,
-               GITHUB_REPOSITORY='owner/repo', RELATION=relation)
+               GITHUB_REPOSITORY='owner/repo', RELATION=relation, OCAML_COMPILER=compiler)
     result = subprocess.run(['bash', '-eo', 'pipefail', '-c', code], env=env,
                             capture_output=True, text=True)
     return result.returncode
@@ -243,7 +303,19 @@ assert guard(script, sha, sha, sha) == 0
 assert guard(script, sha, sha, sha, ref=branch) == 0  # a branch's own head
 assert guard(script, '', sha, sha, False) == 0  # ordinary manual dispatch
 assert guard(script, sha, other, sha, False) == 0  # bisection probe: an ancestor of master's head
-print('PASS accepts the head, an ordinary dispatch, and an ancestor of master')
+assert guard(script, sha, sha, sha, False, ref=branch, compiler=floor) == 0  # floor at a PR head
+assert guard(script, sha, other, sha, False, compiler=floor) == 0  # floor probe inside a master span
+print('PASS accepts the head, an ordinary dispatch, an ancestor of master, and a floor dispatch')
+for label, only, expected in (
+    ('floor dispatch without an intended SHA', False, ''),
+    ('floor dispatch combined with the Windows fallback', True, sha),
+):
+    assert guard(script, expected, sha, sha, only, ref=branch, compiler=floor) == 1, label
+    print('PASS rejects', label)
+check = '[ "$OCAML_COMPILER" != %s ]' % ordinary
+assert guard(script.replace(check, 'false'), '', sha, sha, False, ref=branch, compiler=floor) == 0
+assert guard(script.replace(check, 'false'), sha, sha, sha, True, ref=branch, compiler=floor) == 0
+print('PASS negative control exposes removed floor-dispatch refusals')
 for label, expected, run, checkout, ref, relation in (
     ('missing intended SHA', '', sha, sha, master, 'ahead'),
     ('malformed SHA', 'abc', sha, sha, master, 'ahead'),

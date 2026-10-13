@@ -26,9 +26,23 @@ on:
         type: boolean
         default: false
       expected_sha:
-        description: "Full commit SHA to build: the dispatched ref's head, or on master an ancestor of it (required for Windows-only dispatch)"
+        description: "Full commit SHA to build: the dispatched ref's head, or on master an ancestor of it (required for Windows-only and OCaml-floor dispatch)"
         type: string
         default: ""
+      # The OCaml floor (5.3.x) otherwise runs only on the schedule, so a fix
+      # whose result depends on the compiler -- a compiler message in a golden,
+      # a parse-tree shape a scan matches -- could not show it on its PR
+      # (gh-ocannl-1267). Choosing 5.3.x runs that one scheduled floor job and
+      # nothing else; 5.5.x, the default, is the ordinary matrix. A dispatch,
+      # not a path filter on PRs: it costs runner time only when someone needs
+      # the answer, and a list of "compiler-sensitive" paths would go stale.
+      ocaml_compiler:
+        description: "OCaml for the build: 5.5.x is the ordinary matrix; 5.3.x runs only the scheduled OCaml-floor job (ubuntu main), and requires expected_sha"
+        type: choice
+        options:
+          - 5.5.x
+          - 5.3.x
+        default: 5.5.x
 # On a pull request, a push superseded by another push no longer needs a
 # verdict: runs here serialize on a queue that is often hours deep, so without
 # cancellation a review round of N pushes creates N queued runs and the head
@@ -90,6 +104,15 @@ jobs:
         # Windows main/training and requires the intended full commit SHA.
         # Guard the option by event name so it cannot narrow scheduled coverage.
         #
+        # An `ocaml_compiler` dispatch other than the ordinary 5.5.x (today
+        # 5.3.x, the floor) runs ONE job, ubuntu `main` on that compiler --
+        # for 5.3.x exactly the scheduled floor job -- through the same three
+        # expressions: os, ocaml-compiler and include below. Combined with
+        # windows_only, the Windows selection wins here and the dispatch
+        # guard step refuses the run, rather than either input silently
+        # dropping the other. test/operations/ci_matrix.sh evaluates every
+        # option of the input against these expressions.
+        #
         # ubuntu is absent here on purpose: its 5.5 `main` suite runs as shards,
         # which `include` below adds (it says why).
         #
@@ -99,11 +122,16 @@ jobs:
         os: >-
           ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.windows_only
           && '["windows-latest"]'
+          || github.event_name == 'workflow_dispatch' && inputs.ocaml_compiler != '5.5.x'
+          && '["ubuntu-latest"]'
           || github.event_name == 'schedule'
           && '["macos-latest", "windows-latest"]'
           || '["macos-latest"]') }}
-        ocaml-compiler:
-          - 5.5.x
+        ocaml-compiler: >-
+          ${{ fromJSON(github.event_name == 'workflow_dispatch' && !inputs.windows_only
+          && inputs.ocaml_compiler != '5.5.x'
+          && format('["{0}"]', inputs.ocaml_compiler)
+          || '["5.5.x"]') }}
         # Which dune targets the job builds. `main` is the regular suite; the
         # `train` shard (added through `include` below) builds only the
         # training-integration tier, which lives off the runtest path because
@@ -149,6 +177,8 @@ jobs:
         include: >-
           ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.windows_only
           && '[{"os": "windows-latest", "ocaml-compiler": "5.5.x", "suite": "train"}]'
+          || github.event_name == 'workflow_dispatch' && inputs.ocaml_compiler != '5.5.x'
+          && '[]'
           || github.event_name == 'schedule'
           && '[{"os": "ubuntu-latest", "ocaml-compiler": "5.5.x", "suite": "main", "shard": "1/2"},
                {"os": "ubuntu-latest", "ocaml-compiler": "5.5.x", "suite": "main", "shard": "2/2"},
@@ -234,17 +264,32 @@ jobs:
     # a branch of its own. That run's checks
     # still attach to master's head, which is why it is named for the commit it
     # built (`run-name`) and fires no triage (`notify-triage-routine`).
+    # The narrow dispatches (windows_only, an ocaml_compiler other than the
+    # ordinary 5.5.x) exist to put evidence on one commit, so each requires
+    # expected_sha, and the two are refused together: one would silently
+    # narrow the other away.
     - name: Verify dispatch commit
       if: github.event_name == 'workflow_dispatch'
       shell: bash
       env:
         EXPECTED_SHA: ${{ inputs.expected_sha }}
         WINDOWS_ONLY: ${{ inputs.windows_only }}
+        OCAML_COMPILER: ${{ inputs.ocaml_compiler }}
         GH_TOKEN: ${{ github.token }}
       run: |
         if [ "$WINDOWS_ONLY" = true ] && [ -z "$EXPECTED_SHA" ]; then
           echo "::error::Windows-only dispatch requires expected_sha"
           exit 1
+        fi
+        if [ "$OCAML_COMPILER" != 5.5.x ]; then
+          if [ "$WINDOWS_ONLY" = true ]; then
+            echo "::error::windows_only and ocaml_compiler=$OCAML_COMPILER are separate dispatches; run them one at a time"
+            exit 1
+          fi
+          if [ -z "$EXPECTED_SHA" ]; then
+            echo "::error::OCaml-floor dispatch (ocaml_compiler=$OCAML_COMPILER) requires expected_sha"
+            exit 1
+          fi
         fi
         if [ -n "$EXPECTED_SHA" ]; then
           [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]] &&
@@ -606,7 +651,7 @@ jobs:
   # conflicts with every branch in flight, while on the author's branch it costs
   # one command. AGENTS.md says when to run it.)
   fmt:
-    if: github.event_name != 'workflow_dispatch' || !inputs.windows_only
+    if: github.event_name != 'workflow_dispatch' || !inputs.windows_only && inputs.ocaml_compiler == '5.5.x'
     name: Formatting
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -658,7 +703,7 @@ jobs:
   # and checked. OCaml is the declared 5.3 floor too: a Dune release predating
   # the current compiler need not build with it.
   promotion-floor:
-    if: github.event_name != 'workflow_dispatch' || !inputs.windows_only
+    if: github.event_name != 'workflow_dispatch' || !inputs.windows_only && inputs.ocaml_compiler == '5.5.x'
     name: Promotion harnesses (Dune floor)
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -709,7 +754,7 @@ jobs:
   # verifier uses loopback SSH, its local transport and fake opam/Dune, with
   # real disposable Git worktrees.
   harnesses:
-    if: github.event_name != 'workflow_dispatch' || !inputs.windows_only
+    if: github.event_name != 'workflow_dispatch' || !inputs.windows_only && inputs.ocaml_compiler == '5.5.x'
     name: Shell harnesses
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -733,7 +778,7 @@ jobs:
   # file (whose header says why CPU wheels) and the exact Python, since a venv
   # is bound to the interpreter that made it.
   torch-runner:
-    if: github.event_name != 'workflow_dispatch' || !inputs.windows_only
+    if: github.event_name != 'workflow_dispatch' || !inputs.windows_only && inputs.ocaml_compiler == '5.5.x'
     name: Benchmark tests (CPU torch)
     runs-on: ubuntu-latest
     timeout-minutes: 20

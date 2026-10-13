@@ -2105,16 +2105,26 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   inside that lazy's own computation; two record types sharing a field name resolve to the
   LAST-defined type, silently mistyping `x.a.b` (which is why the scheduler's event field is
   `dev_state`); and `Base.Float.max_value` is INFINITY — the finite maximum is `max_finite_value`.
-- The OCaml floor (`>= 5.3.0`) runs only in the scheduled matrix (the Windows CI subsection below),
-  never on a PR, so a change whose result depends on the compiler — a compiler message in a golden,
-  a parse-tree shape a scan matches — is checked on the floor switch locally:
+- The OCaml floor (`>= 5.3.0`) runs in the scheduled matrix (the Windows CI subsection below),
+  never automatically on a PR, so a change whose result depends on the compiler — a compiler
+  message in a golden, a parse-tree shape a scan matches — needs the floor checked on purpose, in
+  two steps. First locally, on the floor switch:
   `DUNE_BUILD_DIR=<scratch>/build53 opam exec --switch=<floor> -- tools/test-run.sh run build @<alias>`,
   where `<floor>` is the HANDLE of a 5.3 switch as `opam switch list` prints it — a global `5.3.0`,
   or the checkout's path for a local switch. The separate build directory keeps the two compilers' artifacts apart, so neither run rebuilds
   the other's tree. It does not make the run concurrent with another: `tools/test-run.sh` holds one
   run per worktree whatever the build directory, so wait for the active run (or use a second
   worktree). The switch needs the project's dependencies installed; with them, a targeted alias
-  takes about a minute.
+  takes about a minute. Then, for evidence on the PR itself, dispatch the floor job at the head
+  (gh-ocannl-1267):
+  `gh workflow run ci.yml --repo lukstafi/ocannl-staging --ref <branch> -f ocaml_compiler=5.3.x -f expected_sha=<full head SHA>`.
+  That runs ONE job, `Build (ubuntu-latest, 5.3.x, main)`, the scheduled floor job's full suite,
+  and its check attaches to the head like the PR run's; no formatting, harness or macOS job runs.
+  Its verdict is a check on the head, so a red one is a red `pr-review.sh merge` reads: when the
+  floor is already red on master for another cause (the scheduled sweep says so), the floor job
+  is red on your head too, and the merge needs `--override` naming the master red's issue —
+  compare the failing rules with the scheduled run's first. The guard step refuses a floor
+  dispatch without `expected_sha`, and one combined with `windows_only`.
 
 ## What CI actually covers
 
@@ -2218,7 +2228,9 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   a scheduled red covers about a day of merges.
   Narrow a red span of more than one merge by hand: dispatch `ci` on `master` with `expected_sha`
   set to a commit inside it, bisecting. On master an ancestor of the head is accepted, the run is
-  named `ci at <sha>`, and its red fires no triage.
+  named `ci at <sha>`, and its red fires no triage. A red only the OCaml-floor job shows bisects the
+  same way with `ocaml_compiler: 5.3.x` added, which runs that one job instead of the ordinary
+  matrix (which never builds the floor).
   Merging sessions do not watch CI after landing (roll-forward, ahrefs/ocannl#861); before fixing
   a master red by hand, find the claiming issue and any linked PR, and take over only where triage
   visibly stopped short — saying so on the issue first.
@@ -2649,13 +2661,16 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   SHA, command and exit sentinel as evidence; WSL does not establish native Windows coverage.
   The fallback dispatches `ci.yml` on the chosen branch with
   `windows_only: true` and the full `expected_sha`; this opt-in runs only Windows main/training,
-  without duplicating Linux/macOS, formatting or floor jobs. Each job rejects a missing or
+  without duplicating Linux/macOS, formatting or floor jobs (the floor job has its own
+  dispatch, `ocaml_compiler: 5.3.x`; the OCaml and dune traps section says when). Each job rejects a missing or
   mismatched intended SHA before dependency setup. Verify the run's `head_sha` and both jobs'
   executed results before counting that evidence; an existing commit needs no new push.
   Do not wait for the independent scheduled sweep to merge a PR. Ordinary current-head PR checks
   remain required.
   `test/operations/ci_matrix.sh` evaluates the actual matrix expressions,
-  pins the opt-in default and trigger separation, and exercises the dispatch commit guard. It
+  pins the opt-in default and trigger separation, evaluates every `ocaml_compiler` option (the
+  default is the ordinary matrix, any other one ubuntu job, and every compiler only the schedule
+  builds must be dispatchable as exactly its scheduled job), and exercises the dispatch commit guard. It
   reads the side jobs from `ci.yml` (every job but `run` and `notify-triage-routine`), so a new
   job lacking the fallback guard fails it with no list to extend.
   Daily, so a scheduled red spans about a day of merges rather than the 50-150 a twice-weekly
