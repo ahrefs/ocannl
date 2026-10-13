@@ -126,11 +126,11 @@ let normalize_affine ~terms ~offset = Indexing.affine ~symbols:terms ~offset
 (* Rename the symbols of one access component. A transform that inserts a nest accessing an existing
    node at the original access with some loops replaced by fresh ones ([Stage]'s load, [Privatize]'s
    transfers, [Split_reduce]'s combine) derives that access by renaming the original components,
-   never by rebuilding them from their affine decompositions ({!terms_of_index}): a [Sub_axis]
-   decomposes to nothing and comes back as [Fixed_idx 0], the same address but an ordinary in-bounds
-   coordinate to the address queries, turning the flattened component after it into an out-of-range
-   one (gh-ocannl-1165). A rename has nothing to rewrite in a [Sub_axis] or a [Fixed_idx], so it
-   keeps them by construction. *)
+   never by rebuilding them from their affine decompositions ({!terms_of_index}): a [Sub_axis] has
+   none, and rebuilt as the empty sum it comes back as [Fixed_idx 0], the same address but an
+   ordinary in-bounds coordinate to the address queries, turning the flattened component after it
+   into an out-of-range one (gh-ocannl-1165). A rename has nothing to rewrite in a [Sub_axis] or a
+   [Fixed_idx], so it keeps them by construction. *)
 let rename_index ~(f : Indexing.symbol -> Indexing.symbol) (idx : Indexing.axis_index) :
     Indexing.axis_index =
   match idx with
@@ -1218,25 +1218,39 @@ let fresh_tile_id =
     Int.incr c;
     !c
 
-let terms_of_index (idx : Indexing.axis_index) : ((int * Indexing.symbol) list * int) option =
+(* The per-axis affine decomposition of one access component, for the transforms that partition an
+   access's symbols (tile part vs outer part, the reduction loop vs the cell) or substitute into it.
+   Only [Fixed_idx], [Iterator] and [Affine] have one ([Terms]). A [Sub_axis] is NAMED rather than
+   decomposed (gh-ocannl-1293): read as the empty sum at offset 0 it is [Fixed_idx 0] -- the same
+   rendered address, but an ordinary in-bounds coordinate where the axis actually keeps its stride
+   and makes the component after it a flattened index over the run ([Indexing.Sub_axis]). So every
+   caller says, in its own match arm, what a flattened run means for it: a component carrying no
+   symbol of its own whose access is then derived by renaming ({!rename_index}), never rebuilt from
+   the terms ([Stage], [Privatize], [Split_reduce]); or a refusal ([Fuse_epilogue]'s tail
+   relocation, {!add_symbol}). [Concatenated] is the [Concat] the callers refuse. *)
+type index_terms =
+  | Terms of (int * Indexing.symbol) list * int  (** The terms and the offset. *)
+  | Flattened  (** A [Sub_axis]. *)
+  | Concatenated  (** A [Concat]. *)
+
+let terms_of_index (idx : Indexing.axis_index) : index_terms =
   match idx with
-  | Indexing.Fixed_idx k -> Some ([], k)
-  | Indexing.Iterator s -> Some ([ (1, s) ], 0)
-  | Indexing.Affine { symbols; offset } -> Some (symbols, offset)
-  | Indexing.Sub_axis -> Some ([], 0)
-  | Indexing.Concat _ -> None
+  | Indexing.Fixed_idx k -> Terms ([], k)
+  | Indexing.Iterator s -> Terms ([ (1, s) ], 0)
+  | Indexing.Affine { symbols; offset } -> Terms (symbols, offset)
+  | Indexing.Sub_axis -> Flattened
+  | Indexing.Concat _ -> Concatenated
 
 (* [idx] plus the fresh symbol [s] (coefficient 1): the tile coordinate a cooperative-tile transform
    adds to an accumulator's base index. [None] for an index with no per-axis affine form to extend,
-   which each caller refuses in its own words: a [Concat], and a [Sub_axis] -- the latter decomposes
-   to the empty sum ({!terms_of_index}) and would come back as [Iterator s], an ordinary coordinate
-   where the flattened component after it carries the address (gh-ocannl-1165). *)
+   which each caller refuses in its own words: a [Concat], and a [Sub_axis] -- the latter has no
+   per-axis affine form ({!terms_of_index}), and extended as the empty sum it would come back as
+   [Iterator s], an ordinary coordinate where the flattened component after it carries the address
+   (gh-ocannl-1165). *)
 let add_symbol (idx : Indexing.axis_index) (s : Indexing.symbol) : Indexing.axis_index option =
-  match idx with
-  | Indexing.Sub_axis | Indexing.Concat _ -> None
-  | Indexing.Fixed_idx _ | Indexing.Iterator _ | Indexing.Affine _ ->
-      Option.map (terms_of_index idx) ~f:(fun (terms, offset) ->
-          normalize_affine ~terms:((1, s) :: terms) ~offset)
+  match terms_of_index idx with
+  | Flattened | Concatenated -> None
+  | Terms (terms, offset) -> Some (normalize_affine ~terms:((1, s) :: terms) ~offset)
 
 (* All reads [Get (source, idcs)] with their enclosing statement-level loop stacks (outermost-first;
    [floop.body] is dummied out). Writes to [source] are rejected. *)
@@ -1553,12 +1567,18 @@ let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_
           ("Schedule.Stage: tile loop " ^ Indexing.symbol_ident s
          ^ " does not enclose the source access")
   in
-  (* Per source axis: tile part (terms over tile loops), outer part, offset. *)
+  (* Per source axis: tile part (terms over tile loops), outer part, offset. A flattened
+     ([Sub_axis]) axis carries no symbol of its own, so it has neither part and is no tile axis: the
+     component after it holds the flattened coordinate, the load reads the source through
+     {!rename_index}, which keeps the [Sub_axis], and its edge guard bounds that component by the
+     run's extent product ({!Affine.axis_extents}). The hoisted path refuses a flattened access
+     below. *)
   let decomp =
     Array.map idcs0 ~f:(fun idx ->
         match terms_of_index idx with
-        | None -> invalid_arg "Schedule.Stage: Concat indices are unsupported"
-        | Some (terms, offset) ->
+        | Concatenated -> invalid_arg "Schedule.Stage: Concat indices are unsupported"
+        | Flattened -> ([], [], 0)
+        | Terms (terms, offset) ->
             let tile_part, outer_part = List.partition_tf terms ~f:(fun (_, s) -> is_tile s) in
             (tile_part, outer_part, offset))
   in
@@ -2599,12 +2619,17 @@ let apply_privatize ~target ~over ~acc_prec (opt : Low_level.optimized) : Low_le
             List.find stack ~f:(fun fl -> Indexing.equal_symbol fl.index s))
       in
       (* Per axis: tile part (terms over inner loops) and outer part. The [over] symbol itself must
-         not occur — the accumulator is carried across that loop. *)
+         not occur — the accumulator is carried across that loop. A flattened ([Sub_axis]) axis
+         carries no symbol of its own, so it has neither part and is no tile axis: the component
+         after it holds the flattened coordinate, the transfers address the target through
+         {!rename_index}, which keeps the [Sub_axis], and their guards bound that component by the
+         run's extent product ({!Affine.axis_extents}). *)
       let decomp =
         Array.map idcs0 ~f:(fun idx ->
             match terms_of_index idx with
-            | None -> invalid_arg "Schedule.Privatize: Concat indices are unsupported"
-            | Some (terms, offset) ->
+            | Concatenated -> invalid_arg "Schedule.Privatize: Concat indices are unsupported"
+            | Flattened -> ([], [], 0)
+            | Terms (terms, offset) ->
                 if List.exists terms ~f:(fun (_, s) -> Indexing.equal_symbol s over) then
                   invalid_arg
                     ("Schedule.Privatize: the target's indices mention the accumulation loop "
@@ -3111,11 +3136,17 @@ let apply_split_reduce ~axis ~target ~num_blocks ~block_index ~inner_index ~comb
                per-block init runs once per cell) and the combine nest re-iterates exactly the
                written cells. *)
             let enclosing_syms = List.map enclosing ~f:(fun fl -> fl.index) in
+            (* A flattened ([Sub_axis]) component mentions no symbol, so no enclosing loop pins it:
+               the component after it holds the flattened coordinate and is pinned like any other,
+               and the combine nest's cell keeps the [Sub_axis] through {!rename_index},
+               re-iterating that coordinate over its own loop's range. *)
             let comp_terms =
               Array.map idcs ~f:(fun idx ->
                   match terms_of_index idx with
-                  | None -> invalid_arg "Schedule.Split_reduce: Concat indices are unsupported"
-                  | Some (terms, off) -> (terms, off))
+                  | Concatenated ->
+                      invalid_arg "Schedule.Split_reduce: Concat indices are unsupported"
+                  | Flattened -> ([], 0)
+                  | Terms (terms, off) -> (terms, off))
             in
             let all_syms =
               Array.to_list comp_terms |> List.concat_map ~f:(fun (t, _) -> List.map t ~f:snd)
@@ -3763,17 +3794,23 @@ let apply_fuse_epilogue ~target ~shared (opt : Low_level.optimized) : Low_level.
   (* --- The relocated tail: substitute each tail symbol by the store-back site's index for that
      axis. Site indices never mention the (fresh, distinct) tail symbols, so per-symbol substitution
      composes. --- *)
+  (* A flattened site (a coalesced pair, gh-ocannl-1165) has no per-axis index for the tail's own
+     symbol of each axis, and its exact-radix cover would be judged per axis, against dims the
+     flattened component does not range over: the relocation declines it (v1), in these words,
+     wherever the site is first looked at. *)
+  let fail_flattened () =
+    fail
+      "the store-back site's indices are flattened (Sub_axis): the relocated tail needs a per-axis \
+       index (v1)"
+  in
   let subst_tail ~(site_idcs : Indexing.axis_index array) : Low_level.t =
     let stmt = Set { tn = out; idcs = tail_idcs; llsc = tail_llsc; debug = tail_debug } in
     Array.foldi site_idcs ~init:stmt ~f:(fun ax stmt idx ->
-        match (idx, terms_of_index idx) with
-        | Indexing.Sub_axis, _ ->
-            (* A flattened site (a coalesced pair, gh-ocannl-1165) has no per-axis index for the
-               tail's own symbol of this axis. *)
-            fail "the store-back site's indices are flattened (Sub_axis)"
-        | _, Some (terms, offset) ->
+        match terms_of_index idx with
+        | Flattened -> fail_flattened ()
+        | Terms (terms, offset) ->
             map_code ~fidx:(subst_axis_index ~sym:tail_syms.(ax) ~by:{ terms; offset }) stmt
-        | _, None -> fail "the store-back site's indices must be affine")
+        | Concatenated -> fail "the store-back site's indices must be affine")
   in
   (* Does [idcs], with symbols ranging over [env] extents (zero-based loops), cover [target]'s index
      space bijectively over all enclosing iterations? Per axis: offset 0 and the (coefficient,
@@ -3784,9 +3821,18 @@ let apply_fuse_epilogue ~target ~shared (opt : Low_level.optimized) : Low_level.
      dimension exactly. *)
   let covers_bijectively ?guarded ~env (idcs : Indexing.axis_index array) : bool =
     let guarded = Option.value guarded ~default:(Array.create ~len:rank false) in
+    (* Every component is decomposed before any is judged, so a flattened one is refused as such
+       whichever axis the cover check would have failed on first. *)
+    let decomps =
+      Array.map idcs ~f:(fun idx ->
+          match terms_of_index idx with
+          | Flattened -> fail_flattened ()
+          | Concatenated -> None
+          | Terms (terms, offset) -> Some (terms, offset))
+    in
     Array.length idcs = rank
-    && Array.for_alli idcs ~f:(fun ax idx ->
-        match terms_of_index idx with
+    && Array.for_alli decomps ~f:(fun ax decomp ->
+        match decomp with
         | None -> false
         | Some (terms, offset) -> (
             offset = 0
@@ -3897,7 +3943,8 @@ let apply_fuse_epilogue ~target ~shared (opt : Low_level.optimized) : Low_level.
   let add_symbol idx s =
     match add_symbol idx s with
     | Some idx -> idx
-    | None -> fail "the accumulator's base indices must be affine"
+    | None ->
+        fail "the accumulator's base indices must be affine (no Concat, no flattened Sub_axis)"
   in
   let fused = ref false in
   let rec fuse_at_fragment env llc =
