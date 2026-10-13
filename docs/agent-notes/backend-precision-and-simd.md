@@ -1595,6 +1595,25 @@ files.
   never requesting more — and gated on that AVX2 stage having fired, so `cc_backend_simd_flags=none`
   still answers 16. Worth 1.7x on the packed f32 GEBP of `bin/narrow_gebp_bench` at n = 512 on
   Zen 5 (225.7 vs 130.5 GFLOP/s; f16 189.6 vs 108.1, bf16 140.6 vs 95.1), checksums identical.
+- **An ARM box's 16-byte vectors hide failures that depend on the width: before pushing, rerun at
+  `OCANNL_CC_VECTOR_BYTES=32`.** Without AVX2 the auto width is 16 bytes
+  (`Cc_backend.vector_bytes_setting`), so a NEON dev box and CI's `macos-latest` leg render cc
+  kernels at the width a fixture written there tends to assume, while the ubuntu leg and x86 boxes
+  render at 32 (AVX2) or 64 (AVX-512). A claim that silently depends on the width agrees with the
+  device by coincidence on ARM and meets the disagreement first in CI. staging#1094 is
+  the worked case: on cc, `schedule_strided_1x1` adds a seed population minted under a pinned
+  `simd_vector_bytes = 16` record, codegen renders those seeds at the configured width, and at 32
+  bytes their widest register tiles (128x128x128, 64x128x256) decline to the scalar fallback. Its
+  new census claim (every tensorized seed renders tensorized) passed locally and failed four claims
+  on the ubuntu leg; rerun on ARM at that pre-fix commit (18307f22b), it passes unforced and fails
+  the same four at `OCANNL_CC_VECTOR_BYTES=32` (whether the decline is intended: gh-ocannl-1317).
+  So a change to a cc mma or register-tile census claim, a `Register_tile` geometry claim or a SIMD
+  rendering test gets one more targeted run of the affected aliases at 32. Pinning a
+  `hardware_limits` record in the test does not make it width-independent, as staging#1094 shows:
+  codegen still reads the configured width. The stanza must DECLARE `(env_var OCANNL_CC_VECTOR_BYTES)`, or
+  dune serves the previous 16-byte result as a pass (AGENTS.md, *Testing*); most SIMD-sensitive
+  stanzas do not yet — `cpu_vectorized` and `schedule_mma_matmul` read the device's
+  `simd_vector_bytes` undeclared — so add the declaration in the same change.
 - **A single width per machine would make a wider machine emit LESS vector code, and "the widest
   that fits" is still not enough.** Every explicit-SIMD rendering declines below one full vector,
   so at 64 bytes an f32 loop of extent 8..15 — and a `Tile_mma` column extent in that range — falls

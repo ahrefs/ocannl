@@ -2454,6 +2454,10 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   clears every ambient `OCANNL_*`, as it must), and at stand-ins for the two backend readers;
   each observes every build's `-j` at the fake dune, and mutants restoring the flat default or
   judging the pinned backend alone must fail them.
+- Besides the compiler (next entry), the cc VECTOR WIDTH separates an ARM box's pass from the
+  ubuntu leg's (16 bytes against 32 or 64; `macos-latest` is ARM too, so per PR only ubuntu sees
+  it). The local proxy is a targeted rerun at `OCANNL_CC_VECTOR_BYTES=32` in a stanza that declares it; when and
+  why: [backend-precision-and-simd.md](backend-precision-and-simd.md#simd-widths-and-narrow-storage-performance).
 - `tools/ci-compiler-test.sh` is the cheap local proxy for a compiler-sensitive Ubuntu CI failure
   (gh-ocannl-846): it downloads the GCC 13 packages with `apt-get download`, extracts them into a
   scratch prefix with `dpkg-deb -x`, and runs exactly one named `runtest-` alias in a fresh Dune
