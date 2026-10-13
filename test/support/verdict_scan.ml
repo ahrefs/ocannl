@@ -491,13 +491,16 @@ let dialect_census content =
       ([module Map = Custom]); an unqualified [List] is [Stdlib]'s until an [open Base] in scope
       rebinds it. Which arguments carry it is {!collection_arguments}': every positional one, except
       that a [Base]-ordered selector ([find], [nth], [take], [remove], ...) contributes its
-      collection alone, a [make]/[create] the value it fills in and not its count, and an
-      [init]/[range] none, plus the data-bearing labels [~default], [~init], [~data];
-    - and, for a name it reaches, whatever the source writes into that binding: the right-hand side
-      of [x := e], and what a writer of a mutable collection module ({!mutable_modules}:
-      [Queue.enqueue x e], [Hashtbl.set x ~key ~data], ... — see {!writers}) is handed with [x],
-      where [x] is the first positional argument in [Base]'s order and any of them in [Stdlib]'s.
-      [x] is a name the source binds; a container only an [open] brought in is not tracked.
+      collection alone, a [make]/[create] the value it fills in and not its count, an [init] what
+      its [~f] returns, and a [range] nothing, plus the data-bearing labels [~default], [~init],
+      [~data];
+    - the body of a binding operator ([let+ x = e in body]), where [x] is a part of [e];
+    - and, for a name it reaches, whatever the source writes into that binding, directly or through
+      a [let alias = name] renaming: the right-hand side of [x := e], and what a writer of a mutable
+      collection module ({!mutable_modules}: [Queue.enqueue x e], [Hashtbl.set x ~key ~data], ... —
+      see {!writers}) is handed with [x], where [x] is the first positional argument in [Base]'s
+      order and any of them in [Stdlib]'s. [x] is a name the source binds; a container only an
+      [open] brought in is not tracked.
 
     The claim is refused when the two share a binding. The asymmetry is the point: a gate may read
     what the population is COMPUTED from (the site, the hardware limits, the backend steering an
@@ -505,6 +508,9 @@ let dialect_census content =
     population or a collection it is mapped, filtered or appended from.
 
     {2 What is not read}
+
+    The forms above are a closed list: any other expression form ends the population side there, and
+    a population reached only through one is not compared. The ones known to matter:
 
     The population is not followed through a call to any other function (a file-local
     [gpu_seeds pre] stops at the call), through a record field, through a function parameter (the
@@ -666,7 +672,13 @@ let collection_arguments ~stdlib name arguments =
           Some argument
       | _ -> None)
   in
-  if List.exists [ "init"; "range" ] ~f:starts then []
+  if List.exists [ "init"; "range" ] ~f:starts then
+    (* [Array.init n ~f]: the elements are what [~f] returns ({!population} follows a function in
+       data position into its body); the count builds nothing. *)
+    List.filter_map arguments ~f:(function
+      | (Ppxlib.Asttypes.Labelled "f" | Optional "f"), callback -> Some callback
+      | _ -> None)
+    @ data
   else if List.exists [ "make"; "create"; "replicate" ] ~f:starts then
     (* [Array.make n x], [Array.create ~len x]: the value filled in, not the count before it. *)
     (match positional with _ :: (_ :: _ as values) -> values | values -> values) @ data
@@ -856,6 +868,15 @@ let gate_census content =
           | Pexp_letmodule ({ txt = Some name; _ }, module_expr, inner) ->
               visit (self#bind_module env name module_expr) inner
           | Pexp_letmodule ({ txt = None; _ }, _, inner) -> visit env inner
+          | Pexp_letop { let_; ands; body } ->
+              (* [let+ x = e in body]: [x] is a part of [e], as a match case's name is of its
+                 scrutinee. *)
+              visit
+                (List.fold (let_ :: ands) ~init:env ~f:(fun scope operand ->
+                     Lexical_scope.bind_values scope
+                       (Lexical_scope.pattern_vars [ operand.pbop_pat ])
+                       { (self#local) with definition = Some (operand.pbop_exp, env) }))
+                body
           | Pexp_ifthenelse (_, yes, no) ->
               visit env yes;
               Option.iter no ~f:(visit env)
@@ -914,12 +935,20 @@ let gate_census content =
       (* A write into a binding: [x := e], or a writer of a collection module ({!writers}) handed
          [x] first. *)
       method record_write env callee arguments =
-        let target expr =
+        (* The binding written into, through any [let alias = rows] renaming on the way: a write
+           through an alias is a write into what it names. *)
+        let rec target env expr =
           match expr.pexp_desc with
-          | Pexp_ident { txt = Ppxlib.Longident.Lident name; _ } ->
-              Option.map (Lexical_scope.lookup env name) ~f:(fun d -> d.identity)
+          | Pexp_ident { txt = Ppxlib.Longident.Lident name; _ } -> (
+              match Lexical_scope.lookup env name with
+              | Some { definition = Some (({ pexp_desc = Pexp_ident _; _ } as aliased), env); _ } ->
+                  target env aliased
+              | Some { identity; _ } -> Some identity
+              | None -> None)
+          | Pexp_constraint (inner, _) -> target env inner
           | _ -> None
         in
+        let target = target env in
         let record identity written =
           List.iter written ~f:(fun e -> Hashtbl.add_multi writes ~key:identity ~data:(e, env))
         in

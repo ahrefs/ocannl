@@ -535,6 +535,9 @@ refuses a gate read off the scrutinee a match case returns a part of: true
 reads a collection call after open Stdlib in Stdlib's order: true
 refuses a gate read off a thunk the population defaults to: true
 refuses a gate a later write computes from the population: true
+refuses a gate read off what an initializer's callback fills the population with: true
+refuses a gate read off a value written through an alias of the population: true
+refuses a gate read off what a binding operator builds the population from: true
 refuses a planted gate that reads its population, and a gated claim it cannot read: true
 every synthetic control has a row in the mutation-run manifest: true
 every control phrase in the mutation-run manifest names a live control: true
@@ -621,6 +624,7 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:28926aa707bb0e8c7e5a087d40f0bf13] exempted claim-shaped literal
   [scanner-refusal:b0f5d68f72c0eeaca59c45fd980450cd] reports the claim
   [scanner-refusal:b743906541a11550a0513ec369b96184] which reads
+  [scanner-refusal:06f7a9a77b49e173f538bb4f1b062a58] gate reader raised
   [scanner-refusal:6fa8a8891ce1cc5457a70a7dc0955684] let`-bound partial application
   [scanner-refusal:b3bbed986e758647a2db67f9428972c6] claims through Verdict
   [scanner-refusal:63d9475f3df44af6baac8bdc03a3310b] every quantified binding

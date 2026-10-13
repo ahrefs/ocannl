@@ -497,6 +497,7 @@ let raw_entries =
         "[scanner-refusal:28926aa707bb0e8c7e5a087d40f0bf13] exempted claim-shaped literal";
         "[scanner-refusal:b0f5d68f72c0eeaca59c45fd980450cd] reports the claim";
         "[scanner-refusal:b743906541a11550a0513ec369b96184] which reads";
+        "[scanner-refusal:06f7a9a77b49e173f538bb4f1b062a58] gate reader raised";
         "[scanner-refusal:6fa8a8891ce1cc5457a70a7dc0955684] let`-bound partial application";
         "[scanner-refusal:0f307832357ee7ca58b9798a86530dac] arguments the rule's";
         "[scanner-refusal:f3e306858423827e6575d13a17d57af6] check cannot vouch";

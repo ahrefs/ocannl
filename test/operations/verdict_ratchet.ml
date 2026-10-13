@@ -3660,6 +3660,31 @@ let () =
   enabled := not (List.is_empty rows);
   Verdict.gated_all ~when_:!enabled ~on:"cc" "all rows pass" rows ~f:Fn.id|ocaml},
       [ "rows" ] );
+    ( "refuses a gate read off what an initializer's callback fills the population with",
+      {ocaml|open Base
+let () =
+  let rows = Array.to_list (Array.init 3 ~f:(fun _ -> sample)) in
+  Verdict.gated_all ~when_:(sample > 0) ~on:"cc" "all rows pass" rows ~f:positive|ocaml},
+      [ "sample" ] );
+    ( "refuses a gate read off a value written through an alias of the population",
+      {ocaml|open Base
+let () =
+  let rows = ref [] in
+  let alias = rows in
+  alias := List.map raw ~f:run;
+  Verdict.gated_all ~when_:(not (List.is_empty raw)) ~on:"cc" "all rows pass" !rows ~f:Fn.id|ocaml},
+      [ "raw" ] );
+    ( "refuses a gate read off what a binding operator builds the population from",
+      {ocaml|open Base
+let () =
+  let maybe =
+    let open Option.Let_syntax in
+    let+ found = maybe_rows in
+    found
+  in
+  Verdict.gated_all ~when_:(Option.is_some maybe_rows) ~on:"cc" "all rows pass"
+    (Option.value maybe ~default:[]) ~f:Fn.id|ocaml},
+      [ "maybe_rows" ] );
   ]
 
 let gate_control_findings source =
@@ -3687,6 +3712,22 @@ let refuse_gate_reading ~fail ~source (reading : Scan.gate_reading) =
         the population does not decide: the backend, an advertised capability, the configuration"
        source reading.line reading.form reading.gate
        (String.concat ~sep:"`, `" reading.reads))
+
+(* The gate reader over one source, its failures told apart (gh-ocannl-1289 review): a source that
+   does not parse is reported by the catch-all the other readers share, and an exception from a
+   source that parses is the gate reader's own defect, named as such rather than as a syntax
+   error. *)
+let read_gates ~fail ~source ~census content =
+  match Test_utils.Scan_attempt.run (fun () -> census content) with
+  | Test_utils.Scan_attempt.Scanned gates -> gates
+  | Unparsed -> { Scan.readings = []; gated_sites = 0; unread = [] }
+  | Raised exn ->
+      fail
+        (Printf.sprintf
+           "the gate reader raised %s on %s, which parses -- a defect of Verdict_scan.gate_census, \
+            not of the source, and the source's gated claims went uncompared"
+           exn source);
+      { Scan.readings = []; gated_sites = 0; unread = [] }
 
 let refuse_unread_gate ~fail ~source (form, line) =
   fail
@@ -3731,8 +3772,21 @@ let run_gate_refusal_control () =
       (refuse_unread_gate ~source:"fixture.ml" ~fail:(fun _ ->
            refused_unread := true;
            Test_utils.Refusal_control_manifest.observe_failure ~source ~format:unread_format));
+  let raised_format =
+    "the gate reader raised %s on %s, which parses -- a defect of Verdict_scan.gate_census, not of \
+     the source, and the source's gated claims went uncompared"
+  in
+  let refused_raise = ref false in
+  ignore
+    (read_gates ~source:"fixture.ml"
+       ~fail:(fun _ ->
+         refused_raise := true;
+         Test_utils.Refusal_control_manifest.observe_failure ~source ~format:raised_format)
+       ~census:(fun _ -> raise Stdlib.Exit)
+       "let () = ()"
+      : Scan.gate_census);
   ( "refuses a planted gate that reads its population, and a gated claim it cannot read",
-    !refused_reading && !refused_unread )
+    !refused_reading && !refused_unread && !refused_raise )
 
 let base_dir = Dune.base_dir
 let repo_relative = Dune.repo_relative
@@ -3824,21 +3878,20 @@ let () =
          arrives is whatever the test directories hold -- including whatever a `(select …)` or a ppx
          put there -- and the one thing worse than a parse failure here is one that leaves nobody
          knowing which of three hundred files it was about. *)
-      let scanned, helper_claims, dialects, gates =
+      let scanned, helper_claims, dialects =
         try
           ( Scan.scan content,
             quantified_claims (Sources.structure_of content),
-            Scan.dialect_census content,
-            Scan.gate_census content )
+            Scan.dialect_census content )
         with exception_ ->
           fail
             (Printf.sprintf "%s does not parse as OCaml, so this check cannot vouch for it: %s"
                source (Exn.to_string exception_));
           ( { Scan.sites = []; literals = 0; applied_literals = 0 },
             [],
-            { Scan.pairings = []; skipped_sites = 0; pass_fail_sites = 0 },
-            { Scan.readings = []; gated_sites = 0; unread = [] } )
+            { Scan.pairings = []; skipped_sites = 0; pass_fail_sites = 0 } )
       in
+      let gates = read_gates ~fail ~source ~census:Scan.gate_census content in
       gated_sites := !gated_sites + gates.Scan.gated_sites;
       List.iter gates.Scan.readings ~f:(fun reading ->
           Int.incr gate_offenders;
