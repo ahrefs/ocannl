@@ -37,12 +37,16 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
 - **What reaches the scans is wider than what looks like infrastructure.** Two members of
   `@test/operations/scans` census sources across the tree, tests included, so a test-only edit can
   turn them red with no config key, stanza or new file in the diff. `codegen_text_inventory`
-  itemises every fragment of emitted text a test pins, string literals in its `.ml` as well as its
-  goldens: a test that stops (or starts) pinning a spelling changes the inventory's golden, which
-  then wants a re-promote. `dead_export_scan` counts a test's qualified reference to a library value
-  as a caller: a test that starts referencing an exempted zero-reference export makes that
-  exemption stale, which fails until it is deleted, and one that drops a value's last reference
-  makes it a new finding. lukstafi/ocannl-staging#1095 lost a CI round to both at once: moving
+  lists each golden holding emitted text at FILE level (its backend family and markers), and
+  itemises a test SOURCE's pins fragment by fragment, the string literals it asserts on included:
+  a test `.ml` that stops (or starts) pinning a spelling, or a golden that stops (or starts)
+  holding emitted text, changes the inventory's golden, which then wants a re-promote. A changed
+  spelling inside a golden that stays listed moves nothing there, so a green scan is no
+  spelling-level coverage of goldens. `dead_export_scan` counts a test's qualified reference to a
+  library value as a caller, and a test's type path as a mention of a library type: a test that
+  starts referencing an exempted zero-reference export (or an exempted unmentioned type) makes
+  that exemption stale, which fails until it is deleted, and one that drops a value's last
+  reference or a type's last mention makes it a new finding. lukstafi/ocannl-staging#1095 lost a CI round to both at once: moving
   `schedule_mma_matmul` from emitted-text matching to the mma census dropped two inventory lines
   and gave `C_syntax.is_tensorized_rendering` its first caller. Neither shows in the diff's file
   list, so the `AGENTS.md` trigger names the edit's effect rather than its location; the scans run
