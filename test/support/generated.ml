@@ -271,19 +271,21 @@ let kept_libraries ?(owner = `This_process) routine =
     uninitialized ("Generated.kept_libraries " ^ routine);
     [])
   else
-    let wanted_owner =
+    (* This process is its OS id AND its nonce: a gone process, or one in another PID namespace, can
+       have reported the same id. *)
+    let wanted { Utils.owner_pid; owner_nonce; _ } =
       match owner with
-      | `This_process -> Some (Utils.os_process_id ())
-      | `Pid p -> Some p
-      | `Any -> None
+      | `This_process ->
+          owner_pid = Utils.os_process_id () && String.equal owner_nonce (Utils.process_nonce ())
+      | `Pid p -> owner_pid = p
+      | `Any -> true
     in
     let dir = Utils.build_files_dir () in
     Stdlib.Sys.readdir dir |> Array.to_list
     |> List.filter_map ~f:(fun entry ->
         match Utils.parse_kept_library_name entry with
-        | Some { kernel_name; owner_pid; library_run_id }
-          when String.equal kernel_name (Utils.clean_filename routine)
-               && Option.for_all wanted_owner ~f:(Int.equal owner_pid) ->
+        | Some ({ kernel_name; owner_pid; library_run_id; _ } as kept)
+          when String.equal kernel_name (Utils.clean_filename routine) && wanted kept ->
             Some ((owner_pid, library_run_id), Stdlib.Filename.concat dir entry)
         | Some _ | None -> None)
     |> List.sort ~compare:(fun ((p1, r1), _) ((p2, r2), _) ->
@@ -298,7 +300,7 @@ let plant_kept_library ~pid routine =
   else
     Stdio.Out_channel.write_all
       (Stdlib.Filename.concat (Utils.build_files_dir ())
-         (Utils.kept_library_name ~pid ~run_id:1 routine))
+         (Utils.kept_library_name ~pid ~nonce:(Utils.process_nonce ()) ~run_id:1 routine))
       ~data:"planted"
 
 (** [assert_emits ~routine ~contains claim] records [claim] as holding exactly when [routine]'s

@@ -277,11 +277,13 @@ configuration.
   or `output_dlls_in_build_directory` (library) asks for them (gh-ocannl-1197,
   `test/operations/cc_temp_ownership`). Library output does not keep the library beside the source
   the compiler read, which is a private temporary even under debug files: it writes
-  `build_files/<exe>/<kernel>_pid<P>_run<N>.so` (`Utils.kept_library_file`, gh-ocannl-1247), the pid
-  because concurrent processes of one executable share that directory -- the OS id
-  (`Utils.os_process_id`), never `Unix.getpid`, which on Windows answers a process-local handle.
-  For the same reason the startup cleanup spares a kept library whose process is still running:
-  that process may be between linking it and loading it. Tests list them with
+  `build_files/<exe>/<kernel>_pid<P>_n<nonce>_run<N>.so` (`Utils.kept_library_file`,
+  gh-ocannl-1247), the pid because concurrent processes of one executable share that directory --
+  the OS id (`Utils.os_process_id`), never `Unix.getpid`, which on Windows answers a process-local
+  handle -- and the per-process random nonce because an OS id is not unique across PID namespaces.
+  For the same reason the startup cleanup spares a kept library whose process is still running,
+  and empties its directory without removing it: that process may be between choosing the path and
+  linking or loading it. Tests list them with
   `Test_utils.Generated.kept_libraries` (`test/operations/cc_kept_library`). The library is unlinked right after `dlopen`: the kernel
   runs from the mapping, which POSIX keeps alive past the unlink. Windows refuses to delete a
   mapped DLL, so a failed removal is retried after the finalizer's `dlclose`, never before it. OCaml
