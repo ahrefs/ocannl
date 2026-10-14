@@ -651,11 +651,47 @@ def ocannl_cell(model, backend, regime, variant, flags, ambient):
     return [str(ocannl_exe(model)), *args], stamp
 
 
+_DISPLAY_PLAIN_RE = re.compile(r"[A-Za-z0-9_.,:/=+@%~-]*")
+
+
+def display_value(value):
+    """An operator-supplied value as a label, a report cell or a failure note shows it.
+
+    Plain values (`16`, `/tmp/cache`) are shown as they are. Anything else is JSON-quoted with `|`
+    and the backtick escaped as well, so a value cannot add a column to a report table, a line to
+    the report or the run log, or open a code span -- `debug_highlight_pcre=a|b` is a legitimate
+    setting -- while the shown text still decodes to the exact value. The raw value is what the
+    command line, the row's `ocannl_flags` and the JSON records carry.
+    """
+    if _DISPLAY_PLAIN_RE.fullmatch(value):
+        return value
+    return json.dumps(value).replace("|", "\\u007c").replace("`", "\\u0060")
+
+
 def ocannl_flags_note(flag_args):
     """The per-cell flags as a cell label and the report's variant column show them, e.g.
     ` +tune_inline_flips=16`: in the label as well as the row, because a failure has only the
-    label."""
-    return "".join(" +" + arg[len(CLI_SETTING_PREFIX) :] for arg in flag_args)
+    label. Values go through `display_value`."""
+    notes = []
+    for arg in flag_args:
+        key, _, value = arg[len(CLI_SETTING_PREFIX) :].partition("=")
+        notes.append(f" +{key}={display_value(value)}")
+    return "".join(notes)
+
+
+def ocannl_cache_dir(argv, env):
+    """The schedule cache an OCANNL cell reads and writes, as the failure guidance names it.
+
+    `autotune_cache_dir` comes from the cell's command line (a `--cell-flag`), else the
+    environment, else the built-in `autotune_cache` under the cell's working directory -- no
+    profile payload sets the key and benchmarks/ocannl_config does not (`test_orchestrate` pins
+    both), so nothing else stands between those sources and the default.
+    """
+    arg = cmdline_settings(argv).get("autotune_cache_dir")
+    if arg:
+        return display_value(arg.split("=", 1)[1])
+    value = env.get("OCANNL_AUTOTUNE_CACHE_DIR")
+    return display_value(value) if value else "autotune_cache/"
 
 
 def torch_regime_args(regime):
@@ -1539,7 +1575,7 @@ def beam_cell_env(base_env, beam_parallel):
     return env
 
 
-def ocannl_cache_note(_killed=True):
+def ocannl_cache_note(_killed=True, cache_dir="autotune_cache/"):
     """What a killed OCANNL search leaves in its schedule cache, for the failure record.
 
     Nothing to undo — see `quarantine_tinygrad_cache` for why the two caches differ — but the
@@ -1552,12 +1588,15 @@ def ocannl_cache_note(_killed=True):
     mixed pass reports SEARCHED. Its compile cost is then neither a from-scratch search's nor a
     replay's while wearing the from-scratch label, which is precisely the misreading this note
     exists to prevent (gh-ocannl-760 review).
+
+    `cache_dir` is the cell's own cache (`ocannl_cache_dir`): a cell given another
+    `autotune_cache_dir` leaves its arms there, and wiping the default would leave them in place.
     """
     return (
-        "autotune_cache/ keeps the arms that finished before the kill (entries are committed "
+        f"{cache_dir} keeps the arms that finished before the kill (entries are committed "
         "atomically, so none of them is torn); a retry replays those and searches the rest, and "
         "since the pass reports SEARCHED whenever any arm searched, its search cost is a partial "
-        "one wearing a from-scratch label — wipe autotune_cache/ for a comparable search timing"
+        f"one wearing a from-scratch label — wipe {cache_dir} for a comparable search timing"
     )
 
 
@@ -2127,7 +2166,7 @@ def dominant_kernel_ceilings(rows):
 # the numerics regime it was dispatched in (None when unstated) -- the last two for
 # `saved_loss_parity`, which takes the envelope's regime from the checkpoint when it names one.
 Failure = collections.namedtuple(
-    "Failure", "label note checkpoint regime", defaults=(None, None)
+    "Failure", "label note checkpoint regime stamp", defaults=(None, None, None)
 )
 
 
@@ -2243,9 +2282,9 @@ def ambient_env_line(results, ambient=None):
     return "ambient OCANNL_* environment: " + json.dumps(ambient, sort_keys=True)
 
 
-def shadowed_env_line(results):
-    """The report's header line naming the ambient OCANNL_* variables some OCANNL row's own command
-    line outranked (`ambient_ocannl_shadowed`, gh-ocannl-1273), or None when no row records one.
+def shadowed_env_line(results, failures=()):
+    """The report's header line naming the ambient OCANNL_* variables some OCANNL cell's own command
+    line outranked (`ambient_ocannl_shadowed`, gh-ocannl-1273), or None when no cell records one.
 
     The ambient line above it states what the sweep inherited; without this one it reads as what
     applied, and an OCANNL_TUNE_INLINE_FLIPS=16 under the approximate profile -- whose payload
@@ -2253,19 +2292,26 @@ def shadowed_env_line(results):
     argument), since whether a variable is outranked is a fact about a cell's command line: the
     same variable applies in the exact rows and not in the approximate ones. JSON-quoted like the
     ambient line, so no value can break the line.
+
+    A failed OCANNL cell counts too, through the stamp its failure carries: the header's ambient
+    line covers the failures as well, so a variable outranked only in cells that failed would
+    otherwise read as applied there. Failures without a stamp are not OCANNL cells.
     """
-    ours = [r for r in results if r.get("framework") == "ocannl"]
+    stamps = [r.get("ambient_ocannl_shadowed") for r in results if r.get("framework") == "ocannl"]
+    stamps += [
+        (f.stamp or {}).get("ambient_ocannl_shadowed")
+        for f in map(lambda f: Failure(*f), failures)
+        if f.stamp
+    ]
     counts = collections.Counter(
-        (var, by)
-        for r in ours
-        for var, by in sorted((r.get("ambient_ocannl_shadowed") or {}).items())
+        (var, by) for stamp in stamps for var, by in sorted((stamp or {}).items())
     )
     if not counts:
         return None
     return (
         "ambient OCANNL_* variables outranked by a cell's own command line (not applied there): "
         + "; ".join(
-            f"{json.dumps(var)} by {json.dumps(by)} in {n} of {len(ours)} OCANNL rows"
+            f"{json.dumps(var)} by {json.dumps(by)} in {n} of {len(stamps)} OCANNL cells"
             for (var, by), n in sorted(counts.items())
         )
     )
@@ -2326,7 +2372,7 @@ def report(
         + "\n"
     )
     lines.append(ambient_line + "\n")
-    shadowed_line = shadowed_env_line(results)
+    shadowed_line = shadowed_env_line(results, failures)
     if shadowed_line:
         lines.append(shadowed_line + "\n")
     for workload in sorted({r["workload"] for r in results}):
@@ -2910,7 +2956,7 @@ def main():
         pass's own failure went straight to the list and so vanished from the artifact
         (gh-ocannl-760 review).
         """
-        failures.append(Failure(label, note, checkpoint, regime))
+        failures.append(Failure(label, note, checkpoint, regime, cell_stamp))
         with open(partial_failures, "a") as f:
             # The ambient environment rides on the failure record too: a sweep whose OCANNL cells
             # all failed -- which is what an ambient setting they cannot run under looks like --
@@ -3039,7 +3085,9 @@ def main():
                                     cell_stamp,
                                     env=env,
                                     cwd=HERE,
-                                    on_incomplete=ocannl_cache_note,
+                                    on_incomplete=functools.partial(
+                                        ocannl_cache_note, cache_dir=ocannl_cache_dir(cmd, env)
+                                    ),
                                 )
                                 if pass1 is None:
                                     record_failure(

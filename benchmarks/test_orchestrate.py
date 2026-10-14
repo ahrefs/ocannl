@@ -474,7 +474,7 @@ class FailureRecordTest(unittest.TestCase):
         self.assertIn("source = source_identity(ROOT)", main)
         self.assertIn("provenance=dict(stamp, **source), regime=regime", main)
         # The report's saved-loss diagnostic reads the checkpoint and regime off the failure.
-        self.assertIn("failures.append(Failure(label, note, checkpoint, regime))", main)
+        self.assertIn("failures.append(Failure(label, note, checkpoint, regime, cell_stamp))", main)
         # Both the cell and its search pass go through the helper that records an interrupted
         # cell's checkpoint before the cancellation propagates.
         self.assertEqual(main.count("run_cell("), 1)
@@ -5892,6 +5892,82 @@ class OcannlFlagTest(unittest.TestCase):
             "ocannl_flags", orchestrate.failure_record("w pytorch/cpu/eager", "x", {})
         )
 
+    def test_a_flag_value_cannot_break_a_label_or_a_report_table(self):
+        # Review round 1: `debug_highlight_pcre=a|b` is a legitimate setting, and a raw `|` in
+        # the variant column adds a table column; a newline adds a report line.
+        for value in ("a|b", "x\ny", "a`b", "two words"):
+            with self.subTest(value=value):
+                shown = orchestrate.display_value(value)
+                self.assertNotIn("|", shown)
+                self.assertNotIn("\n", shown)
+                self.assertNotIn("`", shown)
+                self.assertEqual(json.loads(shown), value)
+        self.assertEqual(orchestrate.display_value("/tmp/cache-1"), "/tmp/cache-1")
+        self.assertEqual(
+            orchestrate.ocannl_flags_note(["--ocannl_debug_highlight_pcre=a|b"]),
+            ' +debug_highlight_pcre="a\\u007cb"',
+        )
+
+        out = Path(tempfile.mkdtemp())
+        row = cell("ocannl", "cc", "default", [2.3026, 2.3010, 2.3000])
+        row["ocannl_flags"] = ["--ocannl_debug_highlight_pcre=a|b"]
+        rows = [cell("pytorch", "cpu", "eager", [2.3026, 2.3010, 2.3000]), row]
+        orchestrate.parity_check(rows)
+        orchestrate.report(rows, out)
+
+        table = [l for l in (out / "report.md").read_text().splitlines() if l.startswith("| ")]
+        self.assertEqual(len({l.count("|") for l in table}), 1, table)
+
+    def test_the_cache_guidance_names_the_cells_own_cache(self):
+        # Review round 1: a tuned cell given another autotune_cache_dir leaves its finished arms
+        # there, so guidance naming the default would leave the real cache populated.
+        argv = orchestrate.ocannl_cell_args(
+            "cc", "exact", "tuned", [("autotune_cache_dir", "/c/x")]
+        )
+        env = {"OCANNL_AUTOTUNE_CACHE_DIR": "/env/cache"}
+        self.assertEqual(orchestrate.ocannl_cache_dir(argv, env), "/c/x")
+        plain = orchestrate.ocannl_cell_args("cc", "exact", "tuned")
+        self.assertEqual(orchestrate.ocannl_cache_dir(plain, env), "/env/cache")
+        self.assertEqual(orchestrate.ocannl_cache_dir(plain, {}), "autotune_cache/")
+        self.assertEqual(
+            orchestrate.ocannl_cache_dir(plain, {"OCANNL_AUTOTUNE_CACHE_DIR": "a|b"}),
+            '"a\\u007cb"',
+        )
+        note = orchestrate.ocannl_cache_note(True, cache_dir="/c/x")
+        self.assertIn("wipe /c/x for a comparable", note)
+        self.assertNotIn("autotune_cache/", note)
+        # What makes those the only sources: no profile payload sets the key, and the benchmarks'
+        # own config file does not either.
+        for name, payload in orchestrate.config_reference()[1].items():
+            with self.subTest(profile=name):
+                self.assertNotIn("autotune_cache_dir", payload)
+        config = (HERE / "ocannl_config").read_text().splitlines()
+        self.assertFalse(
+            [l for l in config if l.strip().split("=", 1)[0].strip() == "autotune_cache_dir"]
+        )
+
+    def test_a_failed_cell_still_says_what_its_command_line_outranked(self):
+        # Review round 1: when only the cells that shadow a variable fail, the rows alone would
+        # leave the header saying nothing, and the variable reading as applied in those cells.
+        stamp = {
+            "ocannl_flags": [],
+            "ambient_ocannl_shadowed": {
+                "OCANNL_TUNE_INLINE_FLIPS": "--ocannl_profile=approximate"
+            },
+        }
+        exact = cell("ocannl", "cc", "default", [2.3026, 2.3010, 2.3000])
+        exact["ambient_ocannl_shadowed"] = {}
+        failed = orchestrate.Failure(
+            "w ocannl/cc/default [approximate]", "TIMED OUT", None, "approximate", stamp
+        )
+        other = ("w pytorch/cpu/eager", "no result line")
+
+        line = orchestrate.shadowed_env_line([exact], [failed, other])
+
+        self.assertIn('"OCANNL_TUNE_INLINE_FLIPS"', line)
+        self.assertIn("in 1 of 2 OCANNL cells", line)
+        self.assertIsNone(orchestrate.shadowed_env_line([exact], [other]))
+
 
 class OcannlFlagSweepTest(unittest.TestCase):
     """The issue's acceptance, through `main` itself (gh-ocannl-1273): a sweep under the
@@ -5987,7 +6063,7 @@ class OcannlFlagSweepTest(unittest.TestCase):
         self.assertIn(
             'ambient OCANNL_* variables outranked by a cell\'s own command line (not applied '
             'there): "OCANNL_TUNE_INLINE_FLIPS" by "--ocannl_profile=approximate" in 1 of 1 '
-            "OCANNL rows",
+            "OCANNL cells",
             report_text,
         )
 
