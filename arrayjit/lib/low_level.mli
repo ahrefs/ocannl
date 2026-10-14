@@ -640,6 +640,26 @@ val zero_seed_candidate :
     is for [Privatize], which retains the barriers while replacing the target accesses with
     private-tile accesses. Opaque effects and [Tile_mma] are always refused. *)
 
+val zero_fill_target : t -> Tnode.t option
+(** {!zero_initializer_target}, also admitting the launch-extent guards of a hardware-mapped zero
+    nest: a guard bounding an enclosing loop's own symbol trims that loop's range before the
+    covering query (gh-ocannl-1257). *)
+
+val seed_first_write : tn:Tnode.t -> t -> t option
+(** [seed_first_write ~tn stmt]: [stmt], the first statement to touch [tn] after a covering zero of
+    it, rewritten so that its accumulation into [tn] opens from zero itself (gh-ocannl-1257) —
+    value-identical, given that zero. A constant zero where no loop repeats a cell, the localized
+    scope form where code generation would localize, otherwise the opening read guarded by the first
+    iteration of the repeating ([Serial]/[Unrolled]) loops. [None] when {!zero_seed_candidate}
+    refuses [stmt] or no form applies. *)
+
+val elide_covered_zeros : t list -> t option list
+(** [elide_covered_zeros segments], over a routine's kernel bodies in launch order: drops every
+    covering zero ({!zero_fill_target}) whose node's next access is a statement {!seed_first_write}
+    accepts, rewriting that statement (gh-ocannl-1257). Nothing opaque may lie between the two.
+    [None] marks a segment left with no statement. Post-schedule: the rewritten accumulations are no
+    longer in the shapes schedule transforms and sketch detection expect. *)
+
 (** {2 Hardware axis analyses}
 
     Phase B of docs/proposals/axis-types-for-loops.md. Hardware slot assignment is positional, not

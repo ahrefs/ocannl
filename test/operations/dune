@@ -5454,6 +5454,41 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; gh-ocannl-1257. The elision gate (OCANNL_GPU_ELIDE_COVERED_ZEROS) is set by the test itself
+; before each compile, so the ambient value never reaches it.
+
+(test
+ (name zero_elision)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND)
+  ; Its explicit leg runs the default pipeline, which reads every default-schedule key.
+  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
+  (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
+  (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
+  (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
+  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
+  (env_var OCANNL_GPU_SERIAL_LANES)
+  (env_var OCANNL_GPU_FISSION_KEEP_MAPPING)
+  (env_var OCANNL_AUTOMATIC_CPU_SCHEDULE)
+  (env_var OCANNL_AUTOMATIC_GPU_SCHEDULE)
+  (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
+  (env_var OCANNL_SCHEDULE_FISSION)
+  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
+  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
+  (env_var OCANNL_LARGE_MODELS)
+  (env_var OCANNL_LEGALITY_CROSSCHECK)
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_PROFILE)
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
+ (modules zero_elision)
+ (libraries base ocannl stdio unix arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 (test
  (name buffer_aliasing)
  (package neural_nets_lib)

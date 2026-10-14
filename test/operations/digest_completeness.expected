@@ -69,6 +69,9 @@ keyed: codegen -- it changes the emitted code or the mechanics a search measures
   buffer_aliasing [read at codegen]
   gpu_graph_capture [read at codegen]
 
+keyed: codegen -- it rewrites a GPU routine's kernel list after the transform that produced it -- the zeros it launches and the accumulations they fed (gh-ocannl-1257) -- so it is not a property of the lowered code the digest names, and a search times every candidate in the form it ships in
+  gpu_elide_covered_zeros
+
 search-shaping -- it defines the untuned default pipeline -- its schedules and, on GPU backends, its fission segmentation (since gh-ocannl-1126 the merge decision compares the default GPU schedule's per-statement mappings) -- which a search seeds from and reports against; a cached winner carries its own ops, and a fissioned one its segmentation and every segment's schedule, zero expansions included, so it replays without consulting these (gh-ocannl-1164; [Schedule.default_schedule_fingerprint] records them for the [default_ms] diagnostic)
   automatic_cpu_schedule
   automatic_gpu_schedule

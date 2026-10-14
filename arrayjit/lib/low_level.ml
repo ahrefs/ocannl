@@ -6909,6 +6909,230 @@ let zero_initializer_target (stmt : t) : Tn.t option =
                 tn
           | _ -> None))
 
+(* gh-ocannl-1257: {!zero_initializer_target}, plus the launch-extent guards a lane-planned zero
+   nest carries once a schedule has mapped it to hardware ([gid.x < 1] where the union launch is
+   wider than the node). A guard [s < c] or [s <= c] over an enclosing loop's own symbol, or a
+   conjunction of such, only trims that loop's range, so the covering query runs over the trimmed
+   box. Any other guard is refused. *)
+let zero_fill_target (stmt : t) : Tn.t option =
+  match zero_initializer_target stmt with
+  | Some _ as found -> found
+  | None ->
+      let const = function
+        | Constant c when Float.is_integer c -> Some (Float.to_int c)
+        | Embed_index (Indexing.Fixed_idx c) -> Some c
+        | _ -> None
+      in
+      let rec trims (c : scalar_t) : (Indexing.symbol * int) list option =
+        match c with
+        | Binop (Ops.And, (a, _), (b, _)) -> (
+            match (trims a, trims b) with Some x, Some y -> Some (x @ y) | _ -> None)
+        | Binop (Ops.Cmplt, (Embed_index (Indexing.Iterator s), _), (k, _)) ->
+            Option.map (const k) ~f:(fun k -> [ (s, k - 1) ])
+        | Binop (Ops.Cmple, (Embed_index (Indexing.Iterator s), _), (k, _)) ->
+            Option.map (const k) ~f:(fun k -> [ (s, k) ])
+        | _ -> None
+      in
+      let trim ranges (s, hi') =
+        Option.bind ranges ~f:(fun ranges ->
+            match List.Assoc.find ranges s ~equal:Indexing.equal_symbol with
+            | Some (lo, hi) when Int.min hi hi' >= lo ->
+                Some (List.Assoc.add ranges s (lo, Int.min hi hi') ~equal:Indexing.equal_symbol)
+            | _ -> None)
+      in
+      let rec leaf ranges = function
+        | For_loop { index; from_; to_; body; _ } when to_ >= from_ ->
+            leaf ((index, (from_, to_)) :: ranges) body
+        | If { cond = c, _; body } ->
+            Option.bind (trims c) ~f:(fun ts ->
+                Option.bind (List.fold ts ~init:(Some ranges) ~f:trim) ~f:(fun ranges ->
+                    leaf ranges body))
+        | Seq _ as body -> (
+            match
+              List.filter (flat_lines [ body ]) ~f:(function
+                | Noop | Comment _ -> false
+                | _ -> true)
+            with
+            | [ st ] -> leaf ranges st
+            | _ -> None)
+        | Set { tn; idcs; llsc = Constant z; _ } when Int64.equal (Stdlib.Int64.bits_of_float z) 0L
+          ->
+            let range s = List.Assoc.find ranges s ~equal:Indexing.equal_symbol in
+            Option.some_if
+              (Affine.covers_box ~range (Affine.view ~dims:(Lazy.force tn.Tn.dims) idcs))
+              tn
+        | _ -> None
+      in
+      leaf [] stmt
+
+(* gh-ocannl-1257: [stmt], the first statement to touch [tn] after a covering positive zero of it,
+   rewritten so that its accumulation into [tn] no longer needs that zero: on every cell, the read
+   that the first execution of the accumulation makes is a read of the zero, and the rewrite
+   supplies the zero itself. {!zero_seed_candidate} proves the shape: one unconditional same-cell
+   read-modify-write pair, covering the node, with nothing else in [stmt] touching [tn]. Three
+   forms, each value-identical to the zero-then-accumulate original (the zero a [Zero_out] stores is
+   the positive zero, which is what [Constant 0.] reads as at any precision): - No loop repeats a
+   cell: the read becomes [Constant 0.]. - The repeating loops sit innermost, below every loop of
+   the cell, where code generation would localize the accumulator anyway ({!peel_accum_nest}, under
+   the same widening decision as [C_syntax.decide_accum_width], {!accum_update_widens}): the nest
+   becomes the scope form that localization renders, opening at [Constant 0.] instead of the loaded
+   cell. - Otherwise the read is guarded by the first iteration of the repeating loops: [where (Σ r
+   <= Σ from) 0 tn[..]]. Every repeating loop must be [Serial] or [Unrolled]: the first iteration is
+   a program-order notion, which a hardware-mapped or vectorized repeating loop does not have. The
+   guard is a short-circuiting ternary on every backend, so the opening read never executes. [None]
+   when the proof or a form's precondition fails: the caller then keeps the zero. *)
+let seed_first_write ~(tn : Tn.t) (stmt : t) : t option =
+  match zero_seed_candidate tn stmt with
+  | None -> None
+  | Some (write, repeated) -> (
+      let rec binders acc = function
+        | For_loop { index; axis; body; _ } -> binders ((index, Some axis) :: acc) body
+        | Scan_loop { index; body; _ } -> binders ((index, None) :: acc) body
+        | Seq (a, b) -> binders (binders acc a) b
+        | If { body; _ } -> binders acc body
+        | _ -> acc
+      in
+      let binders = binders [] stmt in
+      let program_ordered s =
+        match List.Assoc.find binders s ~equal:Indexing.equal_symbol with
+        | Some (Some (Serial | Unrolled)) -> true
+        | _ -> false
+      in
+      let rec map_reads ~(seed : scalar_arg -> scalar_arg) (llc : t) : t =
+        let rec scalar ((s, p) as arg : scalar_arg) : scalar_arg =
+          match s with
+          | Get (tn', _) when Tn.equal tn tn' -> seed arg
+          | Ternop (op, a, b, c) -> (Ternop (op, scalar a, scalar b, scalar c), p)
+          | Binop (op, a, b) -> (Binop (op, scalar a, scalar b), p)
+          | Unop (op, a) -> (Unop (op, scalar a), p)
+          | _ -> arg
+        in
+        match llc with
+        | Seq (a, b) -> Seq (map_reads ~seed a, map_reads ~seed b)
+        | For_loop r -> For_loop { r with body = map_reads ~seed r.body }
+        | If r -> If { r with body = map_reads ~seed r.body }
+        | Set ({ tn = tn'; llsc; _ } as r) when Tn.equal tn tn' ->
+            Set { r with llsc = fst (scalar (llsc, Lazy.force tn.Tn.storage_prec)) }
+        | _ -> llc
+      in
+      let zero ((_, p) : scalar_arg) : scalar_arg = (Constant 0., p) in
+      let writes_tn llc =
+        List.exists (affine_accesses llc) ~f:(fun a -> a.Affine.a_write && Tn.equal a.a_tn tn)
+      in
+      let rec scope_form ~bounds (llc : t) : t option =
+        match llc with
+        | For_loop ({ index; from_; to_; body; _ } as r) ->
+            let bounds = (index, (from_, to_)) :: bounds in
+            if List.mem repeated index ~equal:Indexing.equal_symbol then
+              match peel_accum_nest ~loop_bounds:bounds ~free_of:[ index ] body with
+              | Some (tn', idcs, `Update llsc, debug, rebuild)
+                when Tn.equal tn tn' && accum_update_widens ~tn ~idcs llsc ->
+                  let id = get_scope tn in
+                  let update = Set_local (id, subst_accum_read ~tn ~idcs ~id llsc) in
+                  let body =
+                    Seq (Set_local (id, Constant 0.), For_loop { r with body = rebuild update })
+                  in
+                  Some
+                    (Set
+                       {
+                         tn;
+                         idcs;
+                         llsc =
+                           Local_scope { id; body; orig_indices = idcs; mint = Schedule_minted };
+                         debug;
+                       })
+              | _ -> None
+            else Option.map (scope_form ~bounds body) ~f:(fun body -> For_loop { r with body })
+        | Seq (a, b) ->
+            if writes_tn a then Option.map (scope_form ~bounds a) ~f:(fun a -> Seq (a, b))
+            else Option.map (scope_form ~bounds b) ~f:(fun b -> Seq (a, b))
+        | _ -> None
+      in
+      match repeated with
+      | [] -> Some (map_reads ~seed:zero stmt)
+      | _ when not (List.for_all repeated ~f:program_ordered) -> None
+      | _ -> (
+          match scope_form ~bounds:[] stmt with
+          | Some _ as scoped -> scoped
+          | None ->
+              let from_ s =
+                Option.value_map ~default:0 ~f:fst
+                  (List.Assoc.find write.Affine.a_loops s ~equal:Indexing.equal_symbol)
+              in
+              let iprec = Ops.index_prec () in
+              let first =
+                Binop
+                  ( Ops.Cmple,
+                    ( Embed_index
+                        (Indexing.affine
+                           ~symbols:(List.map repeated ~f:(fun s -> (1, s)))
+                           ~offset:0),
+                      iprec ),
+                    ( Embed_index (Indexing.Fixed_idx (List.sum (module Int) repeated ~f:from_)),
+                      iprec ) )
+              in
+              let guarded ((_, p) as read : scalar_arg) : scalar_arg =
+                (Ternop (Ops.Where, (first, iprec), (Constant 0., p), read), p)
+              in
+              Some (map_reads ~seed:guarded stmt)))
+
+(* gh-ocannl-1257: drop every covering positive zero whose node's next access, in the order the
+   kernels run, is an accumulation {!seed_first_write} can open from zero itself -- [segments] are a
+   routine's kernel bodies in launch order. The [(b, h, s, s)] attention gradients of a composed
+   backward were the motivating case: each is zeroed in a zero kernel and then accumulated, so the
+   zero kernel's bandwidth and the accumulation's first read of every cell were both pure overhead.
+   A zero is kept when anything opaque ([Staged_compilation], a top-level [Workgroup_barrier]) lies
+   between it and that next access, or when the access is not such an accumulation. Each result is
+   [None] for a segment left with no statement, which the caller drops. *)
+let elide_covered_zeros (segments : t list) : t option list =
+  let lines =
+    Array.of_list
+      (List.concat_mapi segments ~f:(fun si seg ->
+           List.map (flat_lines [ seg ]) ~f:(fun line -> (si, line))))
+  in
+  let n = Array.length lines in
+  let dropped = Array.create ~len:n false and rewritten = Array.create ~len:n false in
+  let next_access tn i =
+    let rec go j =
+      if j >= n then None
+      else
+        match snd lines.(j) with
+        | Workgroup_barrier -> None
+        | line ->
+            let touched = ref false and opaque = ref false in
+            iter_buffer_accesses line
+              ~touch:(fun tn' -> if Tn.equal tn tn' then touched := true)
+              ~on_opaque:(fun () -> opaque := true);
+            if !opaque then None else if !touched then Some j else go (j + 1)
+    in
+    go (i + 1)
+  in
+  for i = 0 to n - 1 do
+    Option.iter
+      (zero_fill_target (snd lines.(i)))
+      ~f:(fun tn ->
+        Option.iter (next_access tn i) ~f:(fun j ->
+            Option.iter
+              (seed_first_write ~tn (snd lines.(j)))
+              ~f:(fun line ->
+                lines.(j) <- (fst lines.(j), line);
+                rewritten.(j) <- true;
+                dropped.(i) <- true)))
+  done;
+  let touched si =
+    Array.existsi lines ~f:(fun k (s, _) -> s = si && (dropped.(k) || rewritten.(k)))
+  in
+  List.mapi segments ~f:(fun si seg ->
+      if not (touched si) then Some seg
+      else
+        let kept =
+          Array.to_list
+            (Array.filter_mapi lines ~f:(fun k (s, l) ->
+                 Option.some_if (s = si && not dropped.(k)) l))
+        in
+        if List.for_all kept ~f:(function Noop | Comment _ -> true | _ -> false) then None
+        else Some (unflat_lines kept))
+
 (* gh-343: extract the per-iteration one-hot contribution from an accumulation [acc] in which the
    running total is recognized by [acc_is]. Handles the [Binop (Add, total, contribution)] form
    (either operand order) and the fused [Ternop (FMA, a, b, total)] form, where FMA(a,b,total) = a*b

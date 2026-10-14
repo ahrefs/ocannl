@@ -302,6 +302,14 @@
 # whatever the race analysis admits.
 #gpu_fission_keep_mapping=true
 
+# If true, a GPU routine drops each whole-node zeroing whose node is next touched by an
+# accumulation that covers every cell, and that accumulation opens from zero itself instead of
+# reading the zeroed cells back (gh-ocannl-1257): no zero kernel writes them and no first read
+# fetches them. Values are unchanged. Applies to the final kernel list of every compile, the
+# default schedules and tuned candidates alike; CPU backends keep their zeroing, which renders as
+# memset. If false, every zeroing is kept.
+#gpu_elide_covered_zeros=true
+
 # If true, backend compilation logs one stderr line per compiled kernel/segment with its launch
 # grid/block dimensions and statement count — for diffing what two compiles of nominally
 # identical code actually emit. Debugging aid; independent of the ppx_minidebug log levels.
