@@ -926,7 +926,13 @@ files.
   and pins that `differing` times exactly `full`'s round minus the near-copy's shared-segment moves
   and crowns `full`'s round best. The `autotune_log` line `round N: K candidate(s) from a beam of
   W, expansion <rule>: ...` gives each entry's `units differing` from the head and how many of its
-  units the rule expanded.
+  units the rule expanded. Measured on rog (gpt2_mini, CUDA, approximate profile, beam 4, a
+  correctness-grade probe on a shared box, two legs at an equal 2100 s cap): arm A's round 1 took
+  332 candidates (302 + 7 + 4 + 19) and ~406 s under `differing`, 1204 and ~1490 s under `full`, and
+  both reached the same best, 2.2047 ms, 0.2-0.35% under the seed winner, so not adopted. That best
+  came from a near-copy's differing segment, which `head` would not have expanded. With the time
+  saved, `differing` reached arm B's round (624 = 524 + 48 + 4 + 48) before the cap; `full` did not
+  start it.
 ## Action enumeration and budget sharing
 - The action menu's loop enumeration is provenance-aimed **by action category**, not by loop
   (gh-ocannl-687). `Local_scope` has two producers — virtualization's inline at a read site, and the
