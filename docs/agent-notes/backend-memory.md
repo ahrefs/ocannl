@@ -162,6 +162,18 @@ files.
   baseline is never dispatched either, but recording both would double-count it under a reason that
   is not the one. One refusal, one entry. Guard:
   `test/operations/hip_scratch_tune_survives.ml` (`slow` alias).
+- The compiler's frame limit is the other half, and it is gated BEFORE codegen (gh-ocannl-1313):
+  LLVM AMDGPU refuses a stack frame over 262136 B, and hiprtc says so untyped, only after compiling
+  the whole kernel — 52 s on the `gpt2_mini_train` step's serial base form, fatal under strict
+  classification, so `tune_placements`' default-placements arm ended `pre-search-failure`. Each
+  node there sat under `stack_threshold_in_bytes` (89 `Local` arrays of 4 KiB) while their sum did
+  not: the threshold is per node, the limit per kernel. `Schedule.thread_private_bytes` sums the
+  arrays codegen will declare through the pure `Tn.Placements.is_local_peek` (360452 B against the
+  measured 360544 B frame), and `check_hardware_limits_classified` refuses it at `Hardware_limits`
+  against `hardware_limits.max_thread_private_bytes` (HIP only). The base and the whole-routine
+  presets then decline in about a second each, and the fissioned candidates, whose `promote_locals`
+  moves the crossing scratch to device memory, compile and get searched. Guard:
+  `test/operations/thread_private_gate.ml`.
 - Building a test kernel that actually *has* a big scratch frame takes care: write the `Local`
   array in one loop and read it back in REVERSE in another. A forward read in the same order lets
   the compiler forward each store to its load and delete the array, leaving nothing to reject.

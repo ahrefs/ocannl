@@ -1181,6 +1181,16 @@ end = struct
   let hip_scratch_validation =
     lazy (Utils.get_global_flag ~default:true ~arg_name:"hip_scratch_validation")
 
+  (* The compile-side half (gh-ocannl-1313): LLVM AMDGPU refuses a kernel whose stack frame exceeds
+     this many bytes, and hiprtc reports it only after compiling the whole kernel, as an untyped
+     [HIPRTC_ERROR_COMPILATION] — "stack frame size (360544) exceeds limit (262136)", measured on
+     gfx1102 after 52 s; gh-ocannl-533 saw the same limit on gfx1151. Published as
+     [hardware_limits.max_thread_private_bytes], so [Schedule.check_hardware_limits_classified]
+     declines such a kernel from its declared [Local] scratch before codegen. A compiler limit, not
+     a budget model like the post-link check below, so [hip_scratch_validation] does not lift it:
+     past it there is no kernel to validate. *)
+  let compiler_frame_limit_bytes = 262136
+
   (* Total scratch the runtime backs = per-work-item size, rounded up to the allocation granule,
      times the device's maximum resident work-items. *)
   let scratch_granule_bytes = 64
@@ -1527,6 +1537,7 @@ end = struct
              min_over (fun (a : H.Device.attributes) -> a.max_threads_per_block);
            max_workgroup_memory_bytes =
              min_over (fun (a : H.Device.attributes) -> a.shared_mem_per_block);
+           max_thread_private_bytes = Some compiler_frame_limit_bytes;
            (* Per-dimension workgroup caps (gh-ocannl-679), from the same queried [max_threads_dim]
               the dump above surfaces. On the AMD parts seen so far it reads (1024, 1024, 1024) --
               equal to [max_threads_per_block], so on those devices every per-dimension violation is
