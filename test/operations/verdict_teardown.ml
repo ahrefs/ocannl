@@ -117,14 +117,14 @@ let () =
                (Some
                   {|FAILED: 3 checks did not hold: "first claim", "second claim", "third claim".|}));
       about "fail_many"
-        "a run with more failed checks than the line shows names the first ones, cut, and counts \
-         the rest"
+        "a run with more failed checks than the line shows names the first ones, cut and on one \
+         line, and counts the rest"
         (run_child "fail_many") ~holds:(fun status _ err ->
           exited 1 status
           && Option.equal String.equal (last_line err)
                (Some
                   (Printf.sprintf
-                     {|FAILED: 5 checks did not hold: "%s...", "second claim", "third claim" and 2 more.|}
+                     {|FAILED: 5 checks did not hold: "%s...", "second claim", "third claim " and 2 more.|}
                      (String.make 58 'x'))));
       let pass_status, pass_out, _ = run_child "pass" in
       let case_status, case_out, _ = run_child "case_pass" in
@@ -166,7 +166,8 @@ let () =
       | "fail_many" ->
           p long_label false;
           p "second claim" false;
-          claim "third claim" false;
+          (* A label carrying line breaks: the teardown names it on its own one line. *)
+          claim "third\nclaim\r" false;
           p "fourth claim" false;
           p "fifth claim" false
       | "pass" -> p "the claim" true

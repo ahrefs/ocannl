@@ -628,9 +628,14 @@ let rec teardown () =
 let teardown_names_shown = 3
 let teardown_name_bytes = 60
 
-(* [name] cut to {!teardown_name_bytes}, at a character boundary of its UTF-8 so a cut never splits
-   one, and marked as cut. *)
+(* [name] on one physical line -- every control character a space, since a label can carry a newline
+   ([test_random_histograms] passes one) and the teardown must stay the LAST line, the one
+   [tools/mutation-run.sh] and a truncated log read -- cut to {!teardown_name_bytes}, at a character
+   boundary of its UTF-8 so a cut never splits one, and marked as cut. *)
 let shorten name =
+  let name =
+    String.map name ~f:(fun c -> if Char.to_int c < 0x20 || Char.equal c '\x7f' then ' ' else c)
+  in
   if String.length name <= teardown_name_bytes then name
   else
     let rec boundary i =
