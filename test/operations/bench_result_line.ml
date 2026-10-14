@@ -352,27 +352,45 @@ let () =
    [benchmarks/test_orchestrate.py] feeds these very lines to the driver's salvage path, so the
    prefix and the fields it reads are pinned from both sides. One is taken mid-parity on a diverged
    trajectory under the approximate profile, the other after the timed steps, as the dominant-kernel
-   instrument starts, under no profile. *)
+   instrument starts, under no profile. The last is an exact cell an ambient knob reached with no
+   profile behind it (gh-ocannl-1297): its profile reads null like an honest exact cell's, and only
+   its [regime_knobs] says otherwise -- which is what the driver's saved-loss diagnostic reads back.
+   The source labels are {!Utils.config_source_label}'s spellings. *)
+let exact_knobs = [ ("tf32_matmuls", None); ("cc_backend_fast_math", None) ]
+
+let approximate_knobs =
+  List.map exact_knobs ~f:(fun (key, _) ->
+      (key, Some ("true", "profile 'approximate' via the commandline")))
+
 let checkpoints =
   [
     ( "mid-parity",
       Bench_json.checkpoint_line ~backend:"hip" ~variant:"default" ~precision:"f16"
-        ~profile:(Some "approximate") ~workload:"gpt2_mini_train_s1024"
+        ~profile:(Some "approximate") ~regime_knobs:approximate_knobs
+        ~workload:"gpt2_mini_train_s1024"
         ~fixture:(Some ("fixtures/gpt2_mini_train_s1024.safetensors", 14756136))
         ~executable:"bench_gpt.exe" ~parity_steps:6 ~dominant_kernel:true ~completed_steps:2
         ~at:(Bench_json.In_parity 2) ~losses:[| 10.375; Float.nan |] );
     ( "before diagnostics",
       Bench_json.checkpoint_line ~backend:"hip" ~variant:"default" ~precision:"f16" ~profile:None
-        ~workload:"gpt2_mini_train_s1024"
+        ~regime_knobs:exact_knobs ~workload:"gpt2_mini_train_s1024"
         ~fixture:(Some ("fixtures/gpt2_mini_train_s1024.safetensors", 14756136))
         ~executable:"bench_gpt.exe" ~parity_steps:6 ~dominant_kernel:true ~completed_steps:46
         ~at:Bench_json.Before_diagnostics
         ~losses:[| 10.375; 10.25; 10.125; 10.0; 9.875; 9.75 |] );
     ( "in memory, instrument off",
       Bench_json.checkpoint_line ~backend:"cc" ~variant:"self-test" ~precision:"f32" ~profile:None
-        ~workload:"selftest-tiny" ~fixture:None ~executable:"bench_self_test.exe" ~parity_steps:2
-        ~dominant_kernel:false ~completed_steps:13 ~at:Bench_json.Before_diagnostics
-        ~losses:[| 1.25; 1.125 |] );
+        ~regime_knobs:exact_knobs ~workload:"selftest-tiny" ~fixture:None
+        ~executable:"bench_self_test.exe" ~parity_steps:2 ~dominant_kernel:false ~completed_steps:13
+        ~at:Bench_json.Before_diagnostics ~losses:[| 1.25; 1.125 |] );
+    ( "ambient knob leak",
+      Bench_json.checkpoint_line ~backend:"cuda" ~variant:"default" ~precision:"f32" ~profile:None
+        ~regime_knobs:
+          [ ("tf32_matmuls", Some ("true", "environment")); ("cc_backend_fast_math", None) ]
+        ~workload:"mlp_wide"
+        ~fixture:(Some ("fixtures/mlp_wide.safetensors", 9650952))
+        ~executable:"bench_mlp.exe" ~parity_steps:4 ~dominant_kernel:true ~completed_steps:3
+        ~at:(Bench_json.In_parity 3) ~losses:[| 2.5; 1.75; 1.25 |] );
   ]
 
 let () =
@@ -412,6 +430,25 @@ let () =
             ("dominant_kernel", `String "running");
             ("result", `String "pending");
           ]));
+  let leaked = List.Assoc.find_exn parsed ~equal:String.equal "ambient knob leak" in
+  let knob key j = member key (member "regime_knobs" j) in
+  let knobs (_, j) = match member "regime_knobs" j with `Assoc knobs -> knobs | _ -> [] in
+  p_none "no checkpoint lacks the result line's per-setting record of its regime" parsed
+    ~f:(fun c -> List.is_empty (knobs c));
+  p_all "every recorded knob names where it resolved from" (List.concat_map parsed ~f:knobs)
+    ~f:(fun (_, k) -> match member "source" k with `String _ -> true | _ -> false);
+  p "a knob nothing set reads as the default, a profile-borne one names its profile"
+    (Yojson.Safe.equal (knob "tf32_matmuls" late) (`Assoc [ ("source", `String "default") ])
+    && Yojson.Safe.equal (knob "tf32_matmuls" mid)
+         (`Assoc
+            [
+              ("value", `String "true");
+              ("source", `String "profile 'approximate' via the commandline");
+            ]));
+  p "an ambient knob with no profile behind it shows on the checkpoint, though its profile is null"
+    (Yojson.Safe.equal (member "profile" leaked) `Null
+    && Yojson.Safe.equal (knob "tf32_matmuls" leaked)
+         (`Assoc [ ("value", `String "true"); ("source", `String "environment") ]));
   let off = List.Assoc.find_exn parsed ~equal:String.equal "in memory, instrument off" in
   p "an instrument switched off is skipped, and an in-memory model names no fixture"
     (Yojson.Safe.equal (stage "dominant_kernel" off) (`String "skipped")

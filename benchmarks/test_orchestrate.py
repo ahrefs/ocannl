@@ -338,6 +338,119 @@ class SavedLossParityTest(unittest.TestCase):
         self.assertIn("outside the envelope 0.002", pinned)
         self.assertNotIn("dispatched", pinned)
 
+    def leaked(self):
+        """The golden's exact cell an ambient knob reached with no profile behind it."""
+        found = [
+            orchestrate.last_checkpoint(line)
+            for line in golden_checkpoint_lines()
+            if orchestrate.last_checkpoint(line)["workload"] == "mlp_wide"
+        ]
+        self.assertEqual(len(found), 1, found)
+        return found[0]
+
+    def test_an_ambient_knob_no_profile_shows_is_named_from_the_checkpoint(self):
+        """gh-ocannl-1297: the checkpoint's `regime_knobs`, read as the row gate reads a row's."""
+        leaked = self.leaked()
+        # The profile alone says exact: only the per-setting record shows the knob.
+        self.assertIsNone(leaked["profile"])
+        self.assertEqual(
+            leaked["regime_knobs"]["tf32_matmuls"], {"value": "true", "source": "environment"}
+        )
+        ref = self.reference(leaked, 1 + 1e-4)
+
+        note = orchestrate.saved_loss_parity(leaked, "exact", [ref])
+        # Named in the row gate's own words, beside a drift that alone would read as on course.
+        named = orchestrate.regime_knob_leaks(leaked, regime="exact")
+        self.assertEqual(list(named), ["tf32_matmuls"])
+        self.assertIn(f"outside the exact regime: {named['tf32_matmuls']}", note)
+        self.assertIn("tf32_matmuls=true (environment)", note)
+        self.assertIn("inside the envelope 0.002", note)
+        # Whatever the call site dispatched, the regime is the one the runner resolved.
+        self.assertIn("outside the exact regime: tf32_matmuls=true", orchestrate.saved_loss_parity(
+            leaked, None, [ref]))
+        for verdict in ("PASS", "FAIL", "REF", "DIVERGED"):
+            self.assertNotIn(verdict, note)
+
+    def test_checkpoints_inside_their_regime_name_no_leak(self):
+        saved = self.checkpoint(complete=True)  # every knob at its default, no profile
+        cut = self.checkpoint(complete=False)  # every knob from the approximate profile
+        legacy = {k: v for k, v in self.leaked().items() if k != "regime_knobs"}
+        ref = self.reference(saved, 1.0)
+        for checkpoint, dispatched in ((saved, "exact"), (cut, "approximate"), (legacy, "exact")):
+            with self.subTest(profile=checkpoint["profile"], knobs="regime_knobs" in checkpoint):
+                note = orchestrate.saved_loss_parity(checkpoint, dispatched, [ref])
+                self.assertNotIn("regime:", note)
+        # A runner predating the field reports nothing to judge, as `regime_knob_leaks` says.
+        self.assertIsNone(orchestrate.regime_knob_leaks(legacy, regime="exact"))
+
+    def test_a_declared_cell_flag_is_no_leak_on_a_checkpoint_either(self):
+        """The `--cell-flag` exemption (gh-ocannl-1273) holds on the checkpoint, given the flags."""
+        flag = orchestrate.ocannl_arg("tf32_matmuls", "true")
+        overridden = dict(
+            self.leaked(),
+            regime_knobs={
+                "tf32_matmuls": {"value": "true", "source": "commandline"},
+                "cc_backend_fast_math": {"source": "default"},
+            },
+        )
+        ref = self.reference(overridden, 1.0)
+
+        declared = orchestrate.saved_loss_parity(overridden, "exact", [ref], [flag])
+        undeclared = orchestrate.saved_loss_parity(overridden, "exact", [ref])
+        other = orchestrate.saved_loss_parity(
+            overridden, "exact", [ref], [orchestrate.ocannl_arg("tf32_matmuls", "false")]
+        )
+
+        self.assertNotIn("regime:", declared)
+        self.assertIn("outside the exact regime: tf32_matmuls=true (commandline)", undeclared)
+        self.assertIn("outside the exact regime: tf32_matmuls=true (commandline)", other)
+
+    def test_the_leak_survives_partial_failures_jsonl_and_reaches_the_report(self):
+        """An offline reader of the failure record, and the report, both see it named."""
+        leaked = self.leaked()
+        ref = cell("pytorch", "cpu", "eager", [x * (1 + 1e-4) for x in leaked["losses"]])
+        orchestrate.parity_check([ref])
+        label = "mlp_wide ocannl/cuda/default"
+        stamp = {"ocannl_flags": [], "ambient_ocannl_shadowed": {}}
+
+        record = orchestrate.failure_record(
+            label, "TIMED OUT after 90s", {"OCANNL_TF32_MATMULS": "true"}, dict(leaked),
+            regime="exact", cell_stamp=stamp,
+        )
+        back = json.loads(json.dumps(orchestrate.json_safe(record), allow_nan=False))
+        offline = orchestrate.saved_loss_parity(
+            back["checkpoint"], back["regime"], [ref], back["ocannl_flags"]
+        )
+        self.assertIn("outside the exact regime: tf32_matmuls=true (environment)", offline)
+
+        # Beside it, a cell whose knob came from its own declared `--cell-flag`: the report hands
+        # the failure's stamp to the diagnostic, so that one is not named.
+        flagged = "mlp_wide ocannl/cuda/default +tf32_matmuls=true"
+        declared = dict(
+            leaked,
+            regime_knobs=dict(
+                leaked["regime_knobs"], tf32_matmuls={"value": "true", "source": "commandline"}
+            ),
+        )
+        flags = {"ocannl_flags": [orchestrate.ocannl_arg("tf32_matmuls", "true")]}
+        failures = [
+            orchestrate.Failure(label, "TIMED OUT after 90s", leaked, "exact", stamp),
+            orchestrate.Failure(flagged, "TIMED OUT after 90s", declared, "exact", flags),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            with contextlib.redirect_stdout(io.StringIO()):
+                orchestrate.report([ref], out, (), failures)
+            text = (out / "report.md").read_text()
+        section = text[text.index("## Runner failures") :]
+        rows = {
+            name: next(line for line in section.splitlines() if line.startswith(f"| {name} |"))
+            for name in (label, flagged)
+        }
+        self.assertIn("outside the exact regime: tf32_matmuls=true (environment)", rows[label])
+        self.assertIn("inside the envelope 0.002", rows[flagged])
+        self.assertNotIn("regime:", rows[flagged])
+
     def test_a_trajectory_that_went_non_finite_reports_where_and_its_drift_before(self):
         cut = self.checkpoint(complete=False)
         self.assertEqual(cut["losses"][1], None)
