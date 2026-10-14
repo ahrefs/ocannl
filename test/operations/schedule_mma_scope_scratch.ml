@@ -3,9 +3,9 @@
    accumulator over half storage under [Fp16_wide], gh-ocannl-1075) initializes a coordinate table
    in [threadgroup] memory once per scope. Before this the estimate summed the staged tiles alone,
    so a candidate that fit them but not the table reached backend compilation, where
-   [newComputePipelineStateWithFunction] refused it with an untyped [Failure] before the post-link
-   allocation check could classify it: a fatal to a search, not a decline (measured on an M4 Max;
-   the classification gap is gh-ocannl-1226).
+   [newComputePipelineStateWithFunction] refused it (measured on an M4 Max) — then an untyped
+   [Failure], a fatal to a search; since gh-ocannl-1226 a typed [Backend_link] decline, but the gate
+   refuses before compiling anything.
 
    The legs work at the device's own limit [L], on a staged + tensorized uniform-half matmul whose
    accumulator is a resident fragment across two [k_o] blocks (one converted scope).

@@ -8225,6 +8225,27 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; gh-ocannl-1226: Metal's pipeline-creation threadgroup-memory refusal is a typed Backend_link decline.
+
+(test
+ (name metal_threadgroup_overflow)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND)
+  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
+  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
+  (env_var OCANNL_LARGE_MODELS)
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_PROFILE)
+  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA))
+ (modules metal_threadgroup_overflow)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 (test
  (name fission_replay_segmentation)
  (package neural_nets_lib)

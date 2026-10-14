@@ -1521,7 +1521,6 @@ using namespace metal;|}
     let queue = dev.runner.queue in
     let runner_label = get_name dev in
     let func = Me.Library.new_function_with_name library func_name in
-    let pso, _ = Me.ComputePipelineState.on_device_with_function metal_device func in
     (* Post-link validation (gh-ocannl-536 landing step 3, the portable half): the pre-compile
        [Schedule.check_hardware_limits] judges the schedule against DEVICE-wide limits, but the
        compiled pipeline can be stricter — [maxTotalThreadsPerThreadgroup] drops below the device
@@ -1538,6 +1537,36 @@ using namespace metal;|}
              Schedule_outcome.Resource_exceeded { resource; requested; limit = Some limit; detail }
            )
     in
+    (* Over-limit threadgroup memory never reaches a pipeline to query: Metal refuses to create one,
+       and the binding reports it as a bare [Failure] carrying the driver's sentence. It is typed
+       here, at the same cause as the post-link check below, with the driver's own byte counts
+       (gh-ocannl-1226): the driver applies per-allocation alignment the schedule-level estimate
+       does not (each [threadgroup] array is rounded up to 4 bytes, so two odd-length [half] tiles
+       summing exactly to the limit are refused), so an estimate at the limit can still be over it
+       here. Any other pipeline-creation failure keeps propagating untyped: nothing here establishes
+       that it is the candidate's rather than the environment's. *)
+    let pso, _ =
+      try Me.ComputePipelineState.on_device_with_function metal_device func
+      with Failure msg as exn -> (
+        let backtrace = Stdlib.Printexc.get_raw_backtrace () in
+        let overflow =
+          Option.bind (String.substr_index msg ~pattern:"Threadgroup memory size (") ~f:(fun pos ->
+              try
+                Some
+                  (Stdlib.Scanf.sscanf (String.drop_prefix msg pos)
+                     "Threadgroup memory size (%d) exceeds the maximum threadgroup memory allowed \
+                      (%d)" (fun requested limit -> (requested, limit)))
+              with Stdlib.Scanf.Scan_failure _ | End_of_file | Failure _ -> None)
+        in
+        match overflow with
+        | Some (requested, limit) ->
+            reject Schedule_outcome.Workgroup_memory ~requested ~limit
+              [%string
+                "Metal: pipeline creation for %{func_name} refused its threadgroup memory: \
+                 %{requested#Int} bytes requested, over the device limit of %{limit#Int} bytes \
+                 (driver: %{msg})"]
+        | None -> Stdlib.Printexc.raise_with_backtrace exn backtrace)
+    in
     let block_product = launch.block.(0) * launch.block.(1) * launch.block.(2) in
     let max_threads = Me.ComputePipelineState.get_max_total_threads_per_threadgroup pso in
     if block_product > max_threads then
@@ -1546,8 +1575,10 @@ using namespace metal;|}
           "Metal: threadgroup size %{block_product#Int} for %{func_name} exceeds \
            maxTotalThreadsPerThreadgroup %{max_threads#Int}"];
     (* The compiled kernel's own static threadgroup allocation, which the schedule-level accounting
-       (a sum over the staged tnodes) only approximates. Checked against the same device limit the
-       schedule layer used, so this rejects exactly what could not launch. *)
+       (a sum over the staged tnodes) only approximates. A backstop, not the primary check: a kernel
+       whose allocation is over the device limit never gets here, because pipeline creation above
+       already refused it (gh-ocannl-1226). What remains is a pipeline the driver accepted yet
+       reports as over the limit the schedule layer used. *)
     Option.iter (hardware_limits ()).Backend_intf.max_workgroup_memory_bytes ~f:(fun max_bytes ->
         let static_bytes = Me.ComputePipelineState.get_static_threadgroup_memory_length pso in
         if static_bytes > max_bytes then
