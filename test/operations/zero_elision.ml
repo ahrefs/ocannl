@@ -324,3 +324,42 @@ let () =
   | Some rewritten ->
       p "the scan's accumulation is rewritten" true;
       p "the rewritten scan no longer reads the cell" (reads_acc rewritten = 0)
+
+(* The guard's cost model: a guarded first-iteration read costs an evaluation per iteration of the
+   repeating loops per cell, to save one pass over the cells, so it is placed only where the
+   repeating loops iterate no more times than the node has cells. The same reduction shape -- a
+   repeating loop outside the cell loop, so nothing localizes and only the guard could seed it -- at
+   both sides of the line: 4 trips into 16 cells is elided, 16 trips into 4 cells (the shape of a
+   bias gradient reduced over the whole batch, which on CUDA got slower guarded, staging#1113) keeps
+   its zero. A direct call on the kernel bodies: nothing here is compiled. *)
+let () =
+  printf "--- a guard is placed only where it pays ---\n";
+  let node = Ll_test.node_factory ~first_id:12590 ~dims:[| 1 |] () in
+  let case ~trips ~cells =
+    let src = node ~dims:[| trips; cells |] "ze_cost_src"
+    and out = node ~dims:[| cells |] "ze_cost_out" in
+    let r = Ll_test.sym () and i = Ll_test.sym () in
+    let cell = [| Ll_test.iter i |] in
+    let nest =
+      Ll_test.loop_n r trips
+        (Ll_test.loop_n i cells
+           (Ll_test.set out cell
+              (Ll_test.add (Ll_test.get out cell)
+                 (Ll_test.get src [| Ll_test.iter r; Ll_test.iter i |]))))
+    in
+    let zeros llc = Ll_test.count_stmt ~f:(function LL.Zero_out _ -> true | _ -> false) llc in
+    match LL.elide_covered_zeros [ LL.Zero_out out; nest ] with
+    | [ zero_seg; Some nest' ] ->
+        ( Option.value_map zero_seg ~default:0 ~f:zeros,
+          first_iteration_guards [ nest' ],
+          Option.is_some (LL.seed_first_write ~tn:out nest) )
+    | _ -> (-1, -1, false)
+  in
+  let short_zeros, short_guards, short_seeded = case ~trips:4 ~cells:16 in
+  let long_zeros, long_guards, long_seeded = case ~trips:16 ~cells:4 in
+  p "4 trips into 16 cells: the guard pays, and seeds the accumulation" short_seeded;
+  p "4 trips into 16 cells: the zero is dropped and the read guarded"
+    (short_zeros = 0 && short_guards = 1);
+  p "16 trips into 4 cells: the guard does not pay" (not long_seeded);
+  p "16 trips into 4 cells: the zero stays and nothing is guarded"
+    (long_zeros = 1 && long_guards = 0)

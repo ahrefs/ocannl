@@ -6971,21 +6971,25 @@ let zero_fill_target (stmt : t) : Tn.t option =
    supplies the zero itself. {!zero_seed_candidate} proves the shape: one unconditional same-cell
    read-modify-write pair, covering the node, with nothing else in [stmt] touching [tn]. The forms
    are value-identical to the zero-then-accumulate original (the zero a [Zero_out] stores is the
-   positive zero, which is what [Constant 0.] reads as at any precision) -- including the
-   accumulator's residency, which decides narrow-format results: - No loop repeats a cell: the read
-   becomes [Constant 0.]. - Code generation would localize the accumulator
-   ([try_localize_serial_reduce]: the outermost serial loop at which {!peel_accum_nest} reaches the
-   update, under the widening decision {!accum_update_widens}): the nest becomes that localized
-   scope form, its opening supplied -- zero where every repeating loop is inside the scope,
-   otherwise the cell's value guarded by the first iteration of the repeating loops outside it. The
-   localization level is asked of the peel twice, vouching for no hardware level and for every one,
-   since which hardware levels a backend serializes is code generation's knowledge; where the two
-   answers differ, [None]. - No level localizes (or the decision pins the per-step update): the read
-   is guarded by the first iteration of the repeating loops, [where (sum r <= sum from) 0 tn[..]].
+   positive zero, which is what [Constant 0.] reads as at any precision), the accumulator's
+   residency included, since that decides narrow-format results.
+
+   Where no loop repeats a cell, the read becomes [Constant 0.]. Where code generation would
+   localize the accumulator ([try_localize_serial_reduce]: the outermost serial loop at which
+   {!peel_accum_nest} reaches the update, under the widening decision {!accum_update_widens}), the
+   nest becomes that localized scope form with its opening supplied: zero where every repeating loop
+   is inside the scope, otherwise the cell's value guarded by the first iteration of the repeating
+   loops outside it. The localization level is asked of the peel twice, vouching for no hardware
+   level and for every one, since which hardware levels a backend serializes is code generation's
+   knowledge; where the two answers differ, [None]. Where no level localizes, or the decision pins
+   the per-step update, the read itself is guarded by the first iteration of the repeating loops,
+   [where (sum r <= sum from) 0 tn[..]].
+
    Every repeating loop must be [Serial] or [Unrolled]: the first iteration is a program-order
    notion, which a hardware-mapped or vectorized repeating loop does not have. The guard is a
-   short-circuiting ternary on every backend, so the opening read never executes. [None] when the
-   proof or a form's precondition fails: the caller then keeps the zero. *)
+   short-circuiting ternary on every backend, so the opening read never executes, and it is placed
+   only where it pays (the cost model at [pays]). [None] when the proof, a form's precondition or
+   the cost model fails: the caller then keeps the zero. *)
 let seed_first_write ~(tn : Tn.t) (stmt : t) : t option =
   match zero_seed_candidate tn stmt with
   | None -> None
@@ -7049,6 +7053,24 @@ let seed_first_write ~(tn : Tn.t) (stmt : t) : t option =
       let guarded syms ((_, p) as read : scalar_arg) : scalar_arg =
         (Ternop (Ops.Where, (first_of syms, iprec), (Constant 0., p), read), p)
       in
+      (* The guard's cost model: a guard over the loops [syms] is evaluated on every one of their
+         iterations for every cell, [cells * trips] evaluations, while what it saves is one pass
+         over the cells (the zero's store and the first read). So a guard is placed only where
+         [trips <= cells]. The attention gradients' short reductions (32 to 256 steps over large
+         nodes) pass. A parameter gradient reduced over the whole batch does not: its node is a few
+         hundred cells and its reduction tens of thousands of steps, and on CUDA (gpt2_mini_train
+         b256, staging#1113) guarding those reductions cost 27 ms of kernel time to save a
+         negligible zero. *)
+      let pays syms =
+        let trips =
+          List.fold syms ~init:1 ~f:(fun acc s ->
+              match List.Assoc.find write.Affine.a_loops s ~equal:Indexing.equal_symbol with
+              | Some (lo, hi) -> acc * (hi - lo + 1)
+              | None -> acc)
+        in
+        trips <= Array.fold (Lazy.force tn.Tn.dims) ~init:1 ~f:( * )
+      in
+      let guarded_rewrite syms = if pays syms then rewrite ~seed:(guarded syms) else None in
       let writes_tn llc =
         List.exists (affine_accesses llc) ~f:(fun a -> a.Affine.a_write && Tn.equal a.a_tn tn)
       in
@@ -7097,25 +7119,27 @@ let seed_first_write ~(tn : Tn.t) (stmt : t) : t option =
                       List.filter repeated ~f:(fun s ->
                           not (List.mem inside s ~equal:Indexing.equal_symbol))
                     in
-                    let p = Lazy.force tn.Tn.storage_prec in
-                    let opening =
-                      if List.is_empty outer then Constant 0.
-                      else fst (guarded outer (Get (tn, idcs), p))
-                    in
-                    let id = get_scope tn in
-                    let update = Set_local (id, subst_accum_read ~tn ~idcs ~id llsc) in
-                    let body =
-                      Seq (Set_local (id, opening), For_loop { r with body = rebuild update })
-                    in
-                    `Scoped
-                      (Set
-                         {
-                           tn;
-                           idcs;
-                           llsc =
-                             Local_scope { id; body; orig_indices = idcs; mint = Schedule_minted };
-                           debug;
-                         })
+                    if not (pays outer) then `Unprofitable
+                    else
+                      let p = Lazy.force tn.Tn.storage_prec in
+                      let opening =
+                        if List.is_empty outer then Constant 0.
+                        else fst (guarded outer (Get (tn, idcs), p))
+                      in
+                      let id = get_scope tn in
+                      let update = Set_local (id, subst_accum_read ~tn ~idcs ~id llsc) in
+                      let body =
+                        Seq (Set_local (id, opening), For_loop { r with body = rebuild update })
+                      in
+                      `Scoped
+                        (Set
+                           {
+                             tn;
+                             idcs;
+                             llsc =
+                               Local_scope { id; body; orig_indices = idcs; mint = Schedule_minted };
+                             debug;
+                           })
               | _ -> `Refused)
         | Scan_loop ({ index; from_; to_; body; _ } as r) ->
             under
@@ -7135,7 +7159,7 @@ let seed_first_write ~(tn : Tn.t) (stmt : t) : t option =
             ( level ~extra:(fun _ _ -> false) ~bounds:[] stmt,
               level ~extra:(fun _ _ -> true) ~bounds:[] stmt )
           with
-          | None, None -> rewrite ~seed:(guarded repeated)
+          | None, None -> guarded_rewrite repeated
           | Some l, Some l'
             when Indexing.equal_symbol l l'
                  && Poly.equal
@@ -7143,8 +7167,8 @@ let seed_first_write ~(tn : Tn.t) (stmt : t) : t option =
                       (Some (Some Serial)) -> (
               match scope_at ~l ~bounds:[] stmt with
               | `Scoped stmt -> Some stmt
-              | `Pinned -> rewrite ~seed:(guarded repeated)
-              | `Refused -> None)
+              | `Pinned -> guarded_rewrite repeated
+              | `Refused | `Unprofitable -> None)
           | _ -> None))
 
 (* gh-ocannl-1257: drop every covering positive zero whose node's next access, in the order the

@@ -167,7 +167,10 @@ files.
   opening read guarded by the first iteration of the repeating loops. The scope form must sit where
   code generation would have localized (`peel_accum_nest`, asked with and without the hardware
   levels): guarding the read of an update the localizer would have taken narrows a bf16 cell on
-  every step instead of once, which is a different value wherever accumulators widen. It runs in `Backends.compile`
+  every step instead of once, which is a different value wherever accumulators widen. A guard is
+  placed only where its loops iterate no more times than the node has cells. Guarding the bias and
+  layer-norm gradients' whole-batch reductions saved a negligible zero, yet cost the b256
+  gpt2_mini_train step 1.2% on CUDA (staging#1113). It runs in `Backends.compile`
   on the final kernel list, after the transform that produced it. So schedule transforms, sketch
   site detection and the schedule cache never see the rewritten accumulations. A pre-fission rewrite
   would hide every gradient contraction from the sketches, and would change the unit lists that

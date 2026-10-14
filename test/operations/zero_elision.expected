@@ -42,3 +42,8 @@ elided: out is bitwise equal to the reference's: true
 the statement reads the accumulated cell: true
 the scan's accumulation is rewritten: true
 the rewritten scan no longer reads the cell: true
+--- a guard is placed only where it pays ---
+4 trips into 16 cells: the guard pays, and seeds the accumulation: true
+4 trips into 16 cells: the zero is dropped and the read guarded: true
+16 trips into 4 cells: the guard does not pay: true
+16 trips into 4 cells: the zero stays and nothing is guarded: true
