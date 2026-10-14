@@ -1333,6 +1333,20 @@ val affine_accesses : t -> Tnode.t Affine.access list
 val statement_effects : t -> Tnode.t Affine.statement_effect list
 (** The effect half of {!affine_relations}. *)
 
+val reads_covered_query :
+  ?write_eligible:(read:Tnode.t Affine.access -> write:Tnode.t Affine.access -> bool) ->
+  Indexing.static_symbol list ->
+  Tnode.t Affine.access list ->
+  Tnode.t ->
+  [ `Covered | `Covered_rmw_exempt of string | `Unknown of string ]
+(** The read-before-write fact behind the placement decisions and the routine interface: whether
+    every read of a node in [accesses] (typically {!affine_accesses}) is covered by prior writes
+    ([`Covered]), covered only thanks to the read-modify-write exemption — a read at its enclosing
+    statement's own write position ([`Covered_rmw_exempt]) — or not covered ([`Unknown], with a
+    witness). [?write_eligible] restricts which writes may cover which reads. Exposed so hand-built
+    IR tests can assert the verdict itself where the pipeline's later passes would mask a wrong one
+    (gh-ocannl-1244). *)
+
 val buffer_access_spans : stmt_serial:bool -> t list -> (Tnode.t, int * int) Base.Hashtbl.t option
 (** gh-ocannl-489 liveness-based buffer aliasing: per-tnode access span over the final
     (post-schedule, post-fission) code of a routine, as a closed interval of positions; the input is

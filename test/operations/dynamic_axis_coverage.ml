@@ -21,8 +21,21 @@
    where the writes miss part of what the gather can touch — a row (the dynamic axis), then a column
    (a known axis). The table must stay read-before-write, an input, and the gather must read the
    ENTRY values seeded into the cells no write covers: a coverage claim that were wrong here would
-   have placed the table as scratch, and the seed would either be refused or never reach the
-   read. *)
+   have placed the table as scratch, and the seed would either be refused or never reach the read.
+
+   gh-ocannl-1244 adds the read-modify-write exemption's side of the same rule: a dynamic slot holds
+   a [Fixed_idx 0] placeholder, so comparing a read's map with its statement's write map
+   ([rmw_exempt]) must not take the placeholder for row 0. Legs 5-10 ask the coverage verdict itself
+   ([LL.reads_covered_query]) of single statements with no prior write, where an exempt read reads
+   [`Covered_rmw_exempt] and any other uncovered read [`Unknown]: the gather of another row under a
+   fixed-row [Set] (the issue's shape), a static read under a scatter, and gathers under a scatter
+   of another runtime row or another axis are NOT exempt, while the same-position reads — static
+   under a static write, and a gather of the scatter's own row along its own axis — stay exempt. The
+   verdict is asserted directly because no placement outcome shows it yet: a gathered table is
+   committed non-virtual at the read, and [reconcile_traced_store] promotes every
+   exemption-dependent writer to read-before-write over the settled placements anyway. Leg 11
+   executes the issue's shape, so the table's classification is pinned by the values the gather
+   reads. *)
 
 open Base
 module LL = Ir.Low_level
@@ -121,3 +134,119 @@ let () =
   (* Leg 4: only column 0 written, both columns gathered — a miss on a known axis. Row 1 reads the
      write in column 0 and its entry value (flat cell 3) in column 1. *)
   uncovered_leg ~name:"dac_cols" ~fill:fill_column0 ~row:1 ~expected:[| 2.; entry 3 |]
+
+(* gh-ocannl-1244: the exemption legs. [idx] holds two runtime rows, so a gather can name the
+   scatter's own row ([idx[0]] for both) or another one ([idx[1]]). *)
+let verdict_name = function
+  | `Covered -> "covered"
+  | `Covered_rmw_exempt _ -> "covered only by the rmw exemption"
+  | `Unknown _ -> "uncovered"
+
+let row_of idx k : LL.scalar_arg = (Ll_test.get idx [| Ll_test.fixed k |], Ops.single)
+
+let verdict_leg ~name ?(dims = [| 3; 2 |]) ~expected stmt =
+  let tbl = node ~dims (name ^ "_tbl") in
+  let idx = node ~dims:[| 2 |] (name ^ "_idx") in
+  let e = Ll_test.sym () in
+  let prog = Ll_test.loop_n e 2 (stmt ~tbl ~idx (Ll_test.iter e) (Ll_test.tick e)) in
+  let got = LL.reads_covered_query [] (LL.affine_accesses prog) tbl in
+  pf "%s: the table's reads are %s" name (verdict_name expected)
+    (String.equal (verdict_name got) (verdict_name expected))
+
+let exempt = `Covered_rmw_exempt ""
+let uncovered = `Unknown ""
+
+let gather_leg ~name ~fill ~row ~expected =
+  let tbl = node (name ^ "_tbl") in
+  let idx = node ~dims:[| 1 |] (name ^ "_idx") in
+  let out = node ~dims:[| 2 |] (name ^ "_out") in
+  Ll_test.materialize idx;
+  Ll_test.materialize out;
+  let e = Ll_test.sym () in
+  let prog =
+    Ll_test.seq (fill ~tbl ~idx)
+      (Ll_test.loop_n e 2
+         (Ll_test.set out
+            [| Ll_test.iter e |]
+            (Ll_test.get tbl [| Ll_test.fixed 0; Ll_test.iter e |])))
+  in
+  let o = Ll_test.optimize ~materialized:[ idx; out ] ~name prog in
+  pf "%s: the gather is not covered, so the table stays read-before-write" name
+    (read_before_write o tbl);
+  pf "%s: the table stays an input of the routine" name (is_input o tbl);
+  let seed = [ (tbl, entries); (idx, [| Float.of_int row |]); (out, Ll_test.blank 2) ] in
+  let got = Ll_test.execute ~name o ~seed ~read:[ out ] in
+  pf "%s: the gather reads the entry values of the row it names" name
+    (Ll_test.same got [ expected ]);
+  let name_mat = name ^ "_mat" in
+  let o_mat = Ll_test.optimize ~materialized:[ idx; out; tbl ] ~name:name_mat prog in
+  let got_mat = Ll_test.execute ~name:name_mat o_mat ~seed ~read:[ out ] in
+  pf "%s: the materialized-table twin reads the same values" name (Ll_test.same got got_mat)
+
+let () =
+  (* Leg 5, the issue's shape: [tbl[0; e] := tbl[?; e] + tick e] — the gather can name rows 1-2,
+     which no write covers; the placeholder row 0 of its map is not the write's row 0. *)
+  verdict_leg ~name:"rmw_gather_in_set" ~expected:uncovered (fun ~tbl ~idx e v ->
+      Ll_test.set tbl
+        [| Ll_test.fixed 0; e |]
+        (Ll_test.add
+           (Ll_test.gather ~tn:tbl
+              ~idcs:[| Ll_test.fixed 0; e |]
+              ~dyn_axis:0 ~dyn_value:(row_of idx 0))
+           v));
+  (* Leg 6, the control: [tbl[0; e] := tbl[0; e] + tick e] reads the write's own cell. *)
+  verdict_leg ~name:"rmw_same_cell" ~expected:exempt (fun ~tbl ~idx:_ e v ->
+      Ll_test.set tbl
+        [| Ll_test.fixed 0; e |]
+        (Ll_test.add (Ll_test.get tbl [| Ll_test.fixed 0; e |]) v));
+  (* Leg 7: [tbl[?; e] := tbl[0; e] + tick e] — the scattered row need not be row 0. *)
+  verdict_leg ~name:"rmw_static_in_scatter" ~expected:uncovered (fun ~tbl ~idx e v ->
+      Ll_test.scatter ~tn:tbl
+        ~idcs:[| Ll_test.fixed 0; e |]
+        ~dyn_axis:0 ~dyn_value:(row_of idx 0)
+        (Ll_test.add (Ll_test.get tbl [| Ll_test.fixed 0; e |]) v));
+  (* Leg 8, the dynamic control: the scatter's own row, [tbl[?(idx[0]); e] := tbl[?(idx[0]); e] +
+     tick e] — the embedding-gradient accumulation. *)
+  verdict_leg ~name:"rmw_same_row_gather" ~expected:exempt (fun ~tbl ~idx e v ->
+      Ll_test.scatter ~tn:tbl
+        ~idcs:[| Ll_test.fixed 0; e |]
+        ~dyn_axis:0 ~dyn_value:(row_of idx 0)
+        (Ll_test.add
+           (Ll_test.gather ~tn:tbl
+              ~idcs:[| Ll_test.fixed 0; e |]
+              ~dyn_axis:0 ~dyn_value:(row_of idx 0))
+           v));
+  (* Leg 9: another runtime row, [tbl[?(idx[0]); e] := tbl[?(idx[1]); e] + tick e]. *)
+  verdict_leg ~name:"rmw_other_row_gather" ~expected:uncovered (fun ~tbl ~idx e v ->
+      Ll_test.scatter ~tn:tbl
+        ~idcs:[| Ll_test.fixed 0; e |]
+        ~dyn_axis:0 ~dyn_value:(row_of idx 0)
+        (Ll_test.add
+           (Ll_test.gather ~tn:tbl
+              ~idcs:[| Ll_test.fixed 0; e |]
+              ~dyn_axis:0 ~dyn_value:(row_of idx 1))
+           v));
+  (* Leg 10: the same runtime value along another axis of a square table, [tbl[?(idx[0]); 0] :=
+     tbl[0; ?(idx[0])] + tick e] — both maps read [0; 0] once the placeholders are planted, yet the
+     cells are transposed. *)
+  verdict_leg ~name:"rmw_other_axis_gather" ~dims:[| 3; 3 |] ~expected:uncovered
+    (fun ~tbl ~idx _e v ->
+      Ll_test.scatter ~tn:tbl
+        ~idcs:[| Ll_test.fixed 0; Ll_test.fixed 0 |]
+        ~dyn_axis:0 ~dyn_value:(row_of idx 0)
+        (Ll_test.add
+           (Ll_test.gather ~tn:tbl
+              ~idcs:[| Ll_test.fixed 0; Ll_test.fixed 0 |]
+              ~dyn_axis:1 ~dyn_value:(row_of idx 0))
+           v));
+  (* Leg 11, the issue's shape executed: row 2 is flat cells 4-5, which only their entry values
+     fill, so [tbl[0; e]] becomes [entry (4 + e) + tick e]. *)
+  gather_leg ~name:"rmw_gather_exec"
+    ~fill:(fun ~tbl ~idx ->
+      let e = Ll_test.sym () in
+      Ll_test.loop_n e 2
+        (Ll_test.set tbl
+           [| Ll_test.fixed 0; Ll_test.iter e |]
+           (Ll_test.add (gather ~tbl ~idx (Ll_test.iter e)) (Ll_test.tick e))))
+    ~row:2
+    ~expected:[| entry 4 +. 1.; entry 5 +. 2. |]
