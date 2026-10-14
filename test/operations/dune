@@ -237,6 +237,7 @@
   (alias runtest-cc_temp_ownership-compiler_debug)
   (alias runtest-cc_temp_ownership-compiler_dll)
   (alias runtest-cc_kept_library)
+  (alias runtest-cc_temp_library_sweep)
   (alias runtest-micrograd_demo_logging)
   (alias runtest-n3_fwd_with_prec-unoptimized)
   (alias runtest-top_down_prec-unoptimized)
@@ -1156,6 +1157,41 @@
   (alias runtest-env_spelling_gate))
  (action
   (diff cc_kept_library.expected cc_kept_library.actual)))
+
+; gh-ocannl-1268: a process's startup removes the temporary cc libraries of processes that are gone
+; (Windows keeps a loaded DLL past its routine's exit) and keeps those of running processes. Two
+; child processes run with a private temp directory.
+
+(executable
+ (name cc_temp_library_sweep)
+ (modules cc_temp_library_sweep)
+ (libraries base ocannl stdio unix arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(rule
+ ; ocannl-backend: cc -- the temporary library is the cc compile's; the command line pins the backend.
+ (target cc_temp_library_sweep.actual)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:cc_temp_library_sweep.exe}
+    parent
+    --ocannl_backend=cc
+    --ocannl_cc_backend_probe_cache=false
+    --ocannl_output_debug_files_in_build_directory=false
+    --ocannl_output_dlls_in_build_directory=false))))
+
+(rule
+ (alias runtest-cc_temp_library_sweep)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate))
+ (action
+  (diff cc_temp_library_sweep.expected cc_temp_library_sweep.actual)))
 
 (test
  (name hip_half_load)
