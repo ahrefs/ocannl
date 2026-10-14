@@ -359,6 +359,7 @@ module Impl = struct
            max_workgroup_memory_bytes =
              min_over (fun (a : Me.Device.attributes) ->
                  Unsigned.ULong.to_int a.max_threadgroup_memory_length);
+           max_thread_private_bytes = None;
            (* Per-dimension threadgroup caps (gh-ocannl-679): [maxThreadsPerThreadgroup] is a 3-D
               [MTLSize] and only its [width] was being read (as the thread-product cap above). Apple
               parts report the three components equal, so this row does not fire alone here; it is

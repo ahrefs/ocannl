@@ -1089,6 +1089,16 @@ val workgroup_memory_bytes :
     [Context.codegen_capabilities]; the capability-free {!Backend_intf.no_codegen_capabilities}
     counts the tiles alone. *)
 
+val thread_private_bytes : Low_level.optimized -> int
+(** The per-work-item scratch bytes the kernel will declare (gh-ocannl-1313): one function-scope
+    array per node of its traced store that settles [Local] ({!Tnode.Placements.is_local_peek}),
+    sized at its storage precision, workgroup-shared tiles excepted. Settles no placement. An upper
+    estimate of what codegen declares — the CPU backends' per-chunk privatization and Metal's
+    simdgroup fragments are rendering decisions that can drop arrays from the function scope — and
+    of the device compiler's frame, which may drop an array it proves dead; checked by
+    {!check_hardware_limits_classified} against {!Backend_intf.hardware_limits}'
+    [max_thread_private_bytes]. *)
+
 val check_hardware_limits :
   name:string ->
   limits:Backend_intf.hardware_limits ->
@@ -1098,7 +1108,8 @@ val check_hardware_limits :
 (** Validates the scheduled kernel [name] against the device limits, raising [Utils.User_error] on
     violation: the launch's workgroup size (the product of {!Low_level.launch_dims}' block
     dimensions) against {!field:Backend_intf.max_threads_per_workgroup}, the
-    {!workgroup_memory_bytes} estimate against {!field:Backend_intf.max_workgroup_memory_bytes}, and
+    {!workgroup_memory_bytes} estimate against {!field:Backend_intf.max_workgroup_memory_bytes}, the
+    {!thread_private_bytes} estimate against {!field:Backend_intf.max_thread_private_bytes}, and
     then the launch geometry dimension by dimension through the shared {!launch_geometry_excess} —
     the workgroup's [.x]/[.y]/[.z] extents against {!field:Backend_intf.max_workgroup_dims} (a
     separate hardware fact from the thread product: CUDA caps [maxThreadsDim.z] at 64 while the
@@ -1117,7 +1128,9 @@ val check_hardware_limits_classified :
   Low_level.optimized ->
   unit
 (** Internal candidate-facing variant of {!check_hardware_limits}; transports excess thread,
-    workgroup-memory, per-workgroup-dimension, [.y]-grid or folded-[.z]-grid requests as typed
+    workgroup-memory, per-work-item scratch ({!Schedule_outcome.Thread_scratch} at phase
+    [Hardware_limits], before any codegen — the post-link HIP budget check reports the same resource
+    at [Backend_link]), per-workgroup-dimension, [.y]-grid or folded-[.z]-grid requests as typed
     {!Schedule_outcome.Resource_exceeded} causes, one variant per launch dimension
     ({!Schedule_outcome.Workgroup_x_extent} .. {!Schedule_outcome.Grid_z_extent}) so an autotune
     search's declines group by the dimension that asked too much. *)

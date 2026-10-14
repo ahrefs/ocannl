@@ -8249,6 +8249,22 @@ let workgroup_memory_bytes ~(capabilities : Backend_intf.codegen_capabilities)
         let p = prec site.lar_local.Low_level.tn in
         acc + max (bytes (capabilities.compute_prec p)) (bytes (capabilities.accum_prec p)))
 
+(* gh-ocannl-1313: the per-work-item scratch the kernel declares — the function-scope arrays
+   [C_syntax]'s [local_decls] emits, one per [Local]-settling node of the kernel's traced store,
+   sized [num_elems] at its storage precision — less the workgroup-shared tiles, which it declares
+   once per workgroup instead. Read with the pure placement peek, so asking settles nothing. An
+   upper estimate of the arrays: on the CPU backends a pool-parallel [Grid] loop declares its
+   privatized locals per chunk instead, and on Metal a rendered simdgroup fragment suppresses its
+   array, both rendering decisions taken after this point. A device compiler may still drop an array
+   it can prove dead; the GPT-2 step that motivated this declared 360452 bytes against hiprtc's
+   measured frame of 360544. *)
+let thread_private_bytes (opt : Low_level.optimized) : int =
+  let plc = opt.optimize_ctx.placements in
+  Hashtbl.fold opt.traced_store ~init:0 ~f:(fun ~key:tn ~data:_ acc ->
+      if Tn.Placements.is_local_peek plc tn && not (Set.mem opt.workgroup_shared tn) then
+        acc + Lazy.force tn.Tn.size_in_bytes
+      else acc)
+
 let check_hardware_limits_classified ~name ~(limits : Backend_intf.hardware_limits) ~capabilities
     (opt : Low_level.optimized) : unit =
   Option.iter limits.max_threads_per_workgroup ~f:(fun max_threads ->
@@ -8286,6 +8302,27 @@ let check_hardware_limits_classified ~name ~(limits : Backend_intf.hardware_limi
                  {
                    resource = Schedule_outcome.Workgroup_memory;
                    requested = shared_bytes;
+                   limit = Some max_bytes;
+                   detail;
+                 } )));
+  (* gh-ocannl-1313: past this the device compiler refuses the kernel, untyped and only after
+     compiling all of it — 52 s for hiprtc on a GPT-2 training step's serial base form. *)
+  Option.iter limits.max_thread_private_bytes ~f:(fun max_bytes ->
+      let private_bytes = thread_private_bytes opt in
+      if private_bytes > max_bytes then
+        let detail =
+          [%string
+            "Schedule: kernel %{name} declares %{private_bytes#Int} bytes of per-work-item scratch \
+             (its Local arrays), exceeding the %{max_bytes#Int} bytes the device compiler's frame \
+             limit leaves for them"]
+        in
+        raise
+          (Schedule_outcome.Cause_at
+             ( Schedule_outcome.Hardware_limits,
+               Schedule_outcome.Resource_exceeded
+                 {
+                   resource = Schedule_outcome.Thread_scratch;
+                   requested = private_bytes;
                    limit = Some max_bytes;
                    detail;
                  } )));

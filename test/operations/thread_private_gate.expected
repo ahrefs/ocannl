@@ -1,0 +1,14 @@
+premise: big is over the stack threshold, so a Never_virtual big settles On_device: true
+premise: small is under it, so it settles Local: true
+premise: every scratch node is in the kernel's traced store: true
+premise: the Never_virtual nodes are still open before codegen: true
+estimate: the Local and the under-threshold nodes, nothing else: true
+estimate: asking settles nothing: true
+estimate: a workgroup-shared tile is declared per workgroup, not counted per work-item: true
+gate: no cap accepts: true
+gate: a cap at the estimate accepts: true
+gate: a cap one below refuses at Hardware_limits as a typed Thread_scratch excess: true
+codegen: the declared arrays add up to the estimate: true
+codegen: one array per counted node: true
+codegen: the forcing family settled the peek's two as Local and the other two On_device: true
+thread_private_gate: done
