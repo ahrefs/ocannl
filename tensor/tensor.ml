@@ -302,8 +302,9 @@ type grad_spec = Require_grad | Prohibit_grad | If_needed [@@deriving sexp, equa
    [values] ([Constant_fill]'s in-kernel semantics; the [Total_elems] shape constraint pins the
    element count to the values length, so cycling matters only for the 1-element [Constant] case,
    which broadcasts, including [Broadcast] host-init data), and padding regions are filled with the
-   committed padding value, matching [reset_padding_regions]. The broadcast case fills the interior
-   directly, so it allocates nothing the size of the buffer (gh-ocannl-1218). *)
+   committed padding value, matching [reset_padding_regions]. Both cases write the interior
+   directly, so neither allocates anything the size of the buffer (gh-ocannl-1218,
+   gh-ocannl-1258). *)
 let register_constant_host_init tn values =
   Ir.Host_inits.register tn
     (lazy
@@ -315,17 +316,7 @@ let register_constant_host_init tn values =
        let pads = Option.map padding ~f:fst in
        (match values with
        | [| value |] -> Nd.fill_from_float ?padding:pads nd value
-       | _ ->
-           let interior =
-             match pads with
-             | None -> dims
-             | Some pads ->
-                 Array.map2_exn dims pads ~f:(fun d Ir.Ops.{ left; right } -> d - left - right)
-           in
-           let numel = Array.fold interior ~init:1 ~f:( * ) in
-           let size = Array.length values in
-           let flat = Array.init numel ~f:(fun i -> values.(i % size)) in
-           Nd.set_flat_values ?padding:pads nd flat);
+       | _ -> Nd.set_flat_values ?padding:pads ~cycle:true nd values);
        nd))
 
 let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)

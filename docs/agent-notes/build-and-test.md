@@ -3760,6 +3760,12 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   3-word pair, exceeds the bound (512 runs against 512 words). And do not argue from the source
   that a helper is allocation-free: without flambda, a function returning a tuple allocates it on
   every call.
+- What boxes per cell in a host loop without flambda, all measured on `Ndarray.set_flat_values`
+  (gh-ocannl-1258, witness `ndarray_flat_writer`): a bigarray store whose kind is not known where
+  it is written (a polymorphic helper), so match the precision first; any out-of-line call taking
+  or returning a float, `int32` or `int64` — Base's checked `of_float`s, an `external` without
+  `[@unboxed]`; an `[@inline]` helper whose branches join a boxed result, which boxes the fast path
+  too; and a `Complex.t` store, whose record the compiler does not elide.
 
 ## Test support and placement
 

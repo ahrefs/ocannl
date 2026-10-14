@@ -132,8 +132,8 @@ let padded_fill_offsets label dims pads =
    of OCaml heap words, independent of its cell count: a full-size float temporary alone is [numel]
    words, and a view per contiguous run grows with the run count. 512 is about five times what the
    buffer's own creation costs. Measured while lowering, after shape inference committed the padding
-   and before linking forces it. *)
-let allocation_witness ~name ~numel (x : Tensor.t) y ~check_layout =
+   and before linking forces it. gh-ocannl-1258 holds multi-value data to the same bound. *)
+let allocation_witness ?(data = "scalar") ~name ~numel (x : Tensor.t) y ~check_layout =
   let measured = ref None in
   let ctx, _routine =
     compile name y ~inspect:(fun _ ->
@@ -152,9 +152,9 @@ let allocation_witness ~name ~numel (x : Tensor.t) y ~check_layout =
     words numel;
   p "witness forces the host initializer itself" (not forced_before);
   p "witness buffer carries committed padding" (check_layout padding);
-  p "padded scalar host fill allocates under 512 heap words, whatever its cell count"
+  pf "padded %s host fill allocates under 512 heap words, whatever its cell count" data
     Float.(words < 512.);
-  Context.release ctx
+  ctx
 
 (* A rank-1 halo: the run is the whole interior. *)
 let allocation_witness_rank1 () =
@@ -163,7 +163,17 @@ let allocation_witness_rank1 () =
   Train.set_materialized x.value;
   let kernel = NTDSL.ndarray [| 1.; 2.; 3. |] ~output_dims:[ 3 ] () in
   let%op y = x +* "i=+k; k => i" kernel in
-  allocation_witness ~name:"alloc_witness" ~numel x y ~check_layout:Option.is_some
+  Context.release
+  @@ allocation_witness ~name:"alloc_witness" ~numel x y ~check_layout:Option.is_some
+
+let hwc_layout (x : Tensor.t) = function
+  | Some (pads, _) ->
+      let dims = Lazy.force x.value.Ir.Tnode.dims in
+      Array.length dims = 3
+      && dims.(2) = 1
+      && Ir.Ops.equal_axis_padding pads.(2) { left = 0; right = 0 }
+      && pads.(0).left > 0 && pads.(1).left > 0
+  | None -> false
 
 (* A 2-D halo over an innermost unpadded channel axis of extent 1: [h] contiguous runs, or [h * w]
    for a fill that issued one per innermost row, as many as there are cells. Over [h = 512] runs,
@@ -174,14 +184,49 @@ let allocation_witness_rank3 () =
   Train.set_materialized x.value;
   let kernel = NTDSL.ndarray (Array.init 9 ~f:Float.of_int) ~output_dims:[ 3; 3 ] () in
   let%op y = x +* "oh=+kh, ow=+kw, c; kh, kw => oh, ow, c" kernel in
-  allocation_witness ~name:"alloc_witness_hwc" ~numel:(h * w) x y ~check_layout:(function
-    | Some (pads, _) ->
-        let dims = Lazy.force x.value.Ir.Tnode.dims in
-        Array.length dims = 3
-        && dims.(2) = 1
-        && Ir.Ops.equal_axis_padding pads.(2) { left = 0; right = 0 }
-        && pads.(0).left > 0 && pads.(1).left > 0
-    | None -> false)
+  Context.release
+  @@ allocation_witness ~name:"alloc_witness_hwc" ~numel:(h * w) x y ~check_layout:(hwc_layout x)
+
+(* gh-ocannl-1258: the same halo over multi-value data, which the writer copies run by run rather
+   than through a cycled full-size temporary and a per-cell indexed store. Multi-value data reaches
+   [register_constant_host_init] only at or below [limit_constant_fill_size] -- above it the literal
+   is a reshaped ndarray, a different initializer -- so the limit is raised while the literal is
+   created and lowered (lowering refuses a fill over it), and the fetch claim pins that the witness
+   measures the intended path. 512 runs of 8 cells: the cycled temporary alone was one word per
+   cell. The forced buffer must still hold the values row-major in the interior and the neutral
+   value in the margins. *)
+let allocation_witness_multi_value () =
+  let h = 512 and w = 8 in
+  let values =
+    Array.init (h * w) ~f:(Ll_test.cycle_flat ~dims:[| h; w; 1 |] ~modulus:97 ~offset:0. ~stride:1.)
+  in
+  let key = "limit_constant_fill_size" in
+  let limit = Hashtbl.find Utils.config_file_args key in
+  Hashtbl.set Utils.config_file_args ~key ~data:(Int.to_string (h * w));
+  let x = NTDSL.ndarray values ~output_dims:[ h; w; 1 ] () in
+  p "multi-value literal within the limit initializes through its values"
+    (fetches x.value x.forward.asgns);
+  Train.set_materialized x.value;
+  let kernel = NTDSL.ndarray (Array.init 9 ~f:Float.of_int) ~output_dims:[ 3; 3 ] () in
+  let%op y = x +* "oh=+kh, ow=+kw, c; kh, kw => oh, ow, c" kernel in
+  let ctx =
+    allocation_witness ~data:"multi-value" ~name:"alloc_witness_values" ~numel:(h * w) x y
+      ~check_layout:(hwc_layout x)
+  in
+  let nd = Lazy.force (Option.value_exn (Ir.Host_inits.find x.value)) in
+  let pads, neutral = Option.value_exn (Ir.Tnode.get_padding x.value) in
+  p "multi-value host buffer holds the values row-major inside neutral margins"
+    (Array.equal Float.equal (Ir.Ndarray.retrieve_flat_values ~padding:pads nd) values
+    && Ir.Ndarray.fold_as_float nd ~init:true ~f:(fun ok idx v ->
+        let inside =
+          Array.for_alli idx ~f:(fun axis i ->
+              i >= pads.(axis).left && i < (Ir.Ndarray.dims nd).(axis) - pads.(axis).right)
+        in
+        ok && (inside || Float.equal v neutral)));
+  (match limit with
+  | Some data -> Hashtbl.set Utils.config_file_args ~key ~data
+  | None -> Hashtbl.remove Utils.config_file_args key);
+  Context.release ctx
 
 let parameter_reinit limit =
   let p = TDSL.param ~value:3. ("reinit_scalar_" ^ Int.to_string limit) ~output_dims:[ 3 ] () in
@@ -289,4 +334,5 @@ let () =
     padded_fill_offsets "padded fill folds an unpadded innermost axis into its runs" [| 4; 5; 3 |]
       [| { left = 1; right = 0 }; { left = 2; right = 1 }; { left = 0; right = 0 } |]);
   allocation_witness_rank1 ();
-  allocation_witness_rank3 ()
+  allocation_witness_rank3 ();
+  allocation_witness_multi_value ()
