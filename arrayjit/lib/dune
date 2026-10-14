@@ -13,8 +13,9 @@
   (env_var OCANNL_LOG_LEVEL_UTILS))
  (modules utils datatypes cpu_topology atomic_file)
  ; `unix` for `Unix.environment`, which the unknown-environment-variable warning walks, and for
- ; `Atomic_file`'s pid, file mtime and sub-second sleep. `mtime.clock.os` for the one thing `unix`
- ; has no clock for: `Atomic_file`'s commit retry is bounded by a DURATION, and a wall clock that
+ ; `Atomic_file`'s exclusive open, file mtime and sub-second sleep (its pid comes from the
+ ; `utils_stubs` C stub, not `Unix.getpid`). `mtime.clock.os` for the one thing `unix` has no clock
+ ; for: `Atomic_file`'s commit retry is bounded by a DURATION, and a wall clock that
  ; an NTP step moves would either cut that bound short or extend it by the size of the adjustment.
  (libraries
   base

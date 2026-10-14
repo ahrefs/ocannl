@@ -97,11 +97,19 @@ let rec ensure_dir dir =
     (* Concurrent creators race benignly. *)
     try Stdlib.Sys.mkdir dir 0o777 with Stdlib.Sys_error _ -> ())
 
-(* The counter distinguishes the staging files of two writers inside ONE process; the pid
-   distinguishes processes on one host. Neither is enough on a filesystem shared between hosts or
-   pid namespaces, where two writers can hold the same pid and both counters start at zero (Codex
-   P1, round 2) — so a nonce joins them, and, because a nonce only makes a collision unlikely, the
-   file is CREATED EXCLUSIVELY: a name already taken is retried rather than opened. *)
+(* The operating system's id of this process: the same C stub as [Utils.os_process_id], declared
+   again here because [Utils] re-exports this module and so cannot be referenced from it. Not
+   [Unix.getpid], which on Windows answers a process-local handle that need not differ between two
+   processes. *)
+external os_process_id : unit -> int = "ocannl_os_process_id"
+
+(* The counter distinguishes the staging files of two writers inside ONE process; the OS pid
+   distinguishes processes on one host while they live, though the field keeps only its low 32 bits.
+   Neither is enough on a filesystem shared between hosts or pid namespaces, where two writers can
+   hold the same pid and both counters start at zero (Codex P1, round 2) — so a nonce joins them,
+   and, because a nonce only makes a collision unlikely, the file is CREATED EXCLUSIVELY: a name
+   already taken is retried rather than opened. The pid is a label for whoever reads a leftover
+   staging file; uniqueness rests on the nonce and the exclusive creation. *)
 let next_staging_id : int Atomic.t = Atomic.make 0
 
 (* One 64-bit draw, so every value the recognizer accepts is one the generator can produce. Two
@@ -124,7 +132,7 @@ let staging_path path =
     Printf.sprintf "%s%s%s.%s.%s"
       (staging_stem (Stdlib.Filename.basename path))
       staging_infix
-      (field (Unix.getpid ()))
+      (field (os_process_id ()))
       (field (Atomic.fetch_and_add next_staging_id 1))
       (fresh_nonce ())
   in
