@@ -19,8 +19,9 @@
    to end, with [autotune_progress] on: a hopeless flip is abandoned and reported in the progress
    record, and the A/B winner ships; a flip that becomes profitable is searched in full and ships;
    and a warm chain replays its abandonment even with every placement-level key stated
-   (gh-ocannl-1192) or every key of the untuned regime's model pick (gh-ocannl-1241), while a key
-   the search reads, stated, still loses the abandonment record. *)
+   (gh-ocannl-1192), every key of the untuned regime's model pick (gh-ocannl-1241), or keys the
+   search reads stated at their defaults in other spellings (gh-ocannl-1272), while a key the search
+   reads, stated off its default, still loses the abandonment record. *)
 
 open Base
 open Ocannl
@@ -333,11 +334,16 @@ let cache_replay comp =
     in
     Option.value_exn !report
   in
-  (* The dune rule sets [autotune_keep_fraction] (Search_shaping) and [autotune_progress]
-     (Execution_neutral) on the command line. *)
+  (* The dune rule sets, on the command line, [cpu_schedule_min_parallel] off its default and
+     [autotune_keep_fraction] at it (["1"] against the read site's ["1."]), both Search_shaping, and
+     [autotune_progress] (Execution_neutral). Only a value off its default is identity
+     (gh-ocannl-1272). *)
   let shape = Utils.config_class_fingerprint Utils.Search_shaping in
-  p "the trajectory's identity carries a set Search_shaping key and no other class's"
-    (String.is_substring shape ~substring:"autotune_keep_fraction=1;"
+  p
+    "the trajectory's identity carries the Search_shaping key set off its default, not the one set \
+     at it, and no other class's"
+    (String.is_substring shape ~substring:"cpu_schedule_min_parallel=32768;"
+    && (not (String.is_substring shape ~substring:"autotune_keep_fraction"))
     && not (String.is_substring shape ~substring:"autotune_progress"));
   clean_cache "autotune_cache_flip_abandonment";
   let first = tune_once () in
@@ -625,16 +631,45 @@ let () =
     "under them the warm flip chain still replays both arms and the abandonment, and ships the \
      same winner"
     (replays_abandonment chain);
-  (* The control: a key [Autotune.tune] does read, stated at its default, still changes the
-     identity, and the same warm chain then has no record to abandon against -- so the claims above
-     are ones the chain can fail. Here that means a full search of the flip (no crown was ever
-     cached for it, only its abandonment), which caches a crown; hence this leg comes last. *)
+  (* gh-ocannl-1272: keys [Autotune.tune] does read, stated at their defaults in spellings their
+     read sites do not use. The identity compares values against the built-in default, so they key
+     nothing; while it rendered every key some source sets, each of them cost the warm chain its
+     records, which is what the control below still shows for a value off the default. *)
   let read_key = "autotune_split_reduce_max_sites" in
-  p "the control key is search-shaping"
-    (List.mem (class_keys Utils.Search_shaping) read_key ~equal:String.equal);
-  let stated, shape_unchanged, (arms, flips, _, _) = warm_chain_with_stated [ (read_key, "8") ] in
-  p "the control key is stated for the warm chain" stated;
-  p "stating a key the search reads changes the search-trajectory identity" (not shape_unchanged);
+  let default_keys =
+    [
+      (read_key, "08"); ("autotune_bound_pruning", "0"); ("autotune_register_tile_rm_twin", "False");
+    ]
+  in
+  p_all ~min:3
+    "they are search-shaping keys, stated at their registered defaults but not in those defaults' \
+     spelling"
+    default_keys ~f:(fun (key, data) ->
+      List.mem (class_keys Utils.Search_shaping) key ~equal:String.equal
+      &&
+      match Utils.registered_config_default key with
+      | Some (kind, default) ->
+          (not (String.equal data default))
+          && Option.equal String.equal
+               (Utils.canonical_config_value kind data)
+               (Utils.canonical_config_value kind default)
+      | None -> false);
+  let stated, shape_unchanged, chain = warm_chain_with_stated default_keys in
+  p "the search-shaping keys are stated at their defaults for the warm chain" stated;
+  p "stating them at their defaults leaves the search-trajectory identity unchanged" shape_unchanged;
+  p
+    "under them the warm flip chain still replays both arms and the abandonment, and ships the \
+     same winner"
+    (replays_abandonment chain);
+  (* The control: the same key [Autotune.tune] reads, stated OFF its default, changes the identity,
+     and the same warm chain then has no record to abandon against -- so the claims above are ones
+     the chain can fail. Here that means a full search of the flip (no crown was ever cached for it,
+     only its abandonment), which caches a crown; hence this leg comes last. The value changes no
+     candidate here (the computation has no reduction to split), only the identity. *)
+  let stated, shape_unchanged, (arms, flips, _, _) = warm_chain_with_stated [ (read_key, "7") ] in
+  p "the control key is stated off its default for the warm chain" stated;
+  p "stating a key the search reads off its default changes the search-trajectory identity"
+    (not shape_unchanged);
   p_all ~min:2 "under it the warm chain still replays both placement arms" arms ~f:(fun r ->
       Poly.equal r.Autotune.outcome Autotune.Cache_replay);
   p "but no longer replays the flip's abandonment: nothing was recorded under this identity"

@@ -14,6 +14,8 @@ raising the log level alone does not churn the key: true
 nor does asking for routine logs the log level keeps switched off: true
 while logs that actually reach the kernel separate the key: true
 an aliasing flip separates the key without touching the digest: true
+the keyed knobs stated at their defaults took effect: true
+keyed knobs stated at their defaults, spelled otherwise, leave the key alone: true
 the OpenMP team size separates the key on the backend that runs OpenMP Grid loops: true
 a numerics knob (tf32_matmuls) leaves the digest alone: true
 while the cache key separates the policies: true

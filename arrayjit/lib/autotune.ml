@@ -3877,23 +3877,6 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
         (float_setting ~default:1.
         @@ Utils.get_global_arg ~arg_name:"autotune_keep_fraction" ~default:"1.")
   in
-  (* gh-ocannl-1110: what shapes which candidates this search times, and in what order, that the
-     schedule cache's key does not carry: every [Search_shaping] configuration key (the class the
-     key leaves out by definition), plus every argument of this function that resolves one — each
-     resolved value, whether passed or read. A cached [best_steps] replays only under the same
-     shape: the flip chain compares at equal depth, which presumes the same candidate order and
-     sampling. The keys that steer the placement level above this call ([Utils.Placement_shaping]:
-     the flip budget and ordering, the shipped arm, the placement store) are not in it: no search
-     reads them, and with them in it a warm chain run under [tune_placement_store=false] searched
-     every abandoned flip in full (gh-ocannl-1192). Nor are the keys of the untuned regime's model
-     pick ([Utils.Untimed_model]: [model_default_*]), which only {!model_default} reads
-     (gh-ocannl-1241). *)
-  let search_shape =
-    Printf.sprintf "search=%b beam=%d rounds=%d repeats=%d keep=%h split_sites=%d blocks=%s|%s"
-      search beam_width rounds repeats keep_fraction max_split_reduce_sites
-      (String.concat ~sep:"," (List.map seed_block_sizes ~f:Int.to_string))
-      (Utils.config_class_fingerprint Utils.Search_shaping)
-  in
   let static_indices = Idx.bound_symbols bindings in
   let backend = Context.backend_name ctx in
   let device = Context.ordinal ctx in
@@ -4077,6 +4060,29 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
           emit_pre_search_failure ~phase:Outcome.Hardware_limits ~candidate:None
             ~detail:(Exn.to_string exn) ();
           Stdlib.Printexc.raise_with_backtrace exn backtrace
+    in
+    (* gh-ocannl-1110: what shapes which candidates this search times, and in what order, that the
+       schedule cache's key does not carry: every [Search_shaping] configuration key (the class the
+       key leaves out by definition), plus every argument of this function that resolves one — each
+       resolved value, whether passed or read. A cached [best_steps] replays only under the same
+       shape: the flip chain compares at equal depth, which presumes the same candidate order and
+       sampling. The keys that steer the placement level above this call ([Utils.Placement_shaping]:
+       the flip budget and ordering, the shipped arm, the placement store) are not in it: no search
+       reads them, and with them in it a warm chain run under [tune_placement_store=false] searched
+       every abandoned flip in full (gh-ocannl-1192). Nor are the keys of the untuned regime's model
+       pick ([Utils.Untimed_model]: [model_default_*]), which only {!model_default} reads
+       (gh-ocannl-1241). A key renders only when its resolved value is not its default, as this
+       device resolves the default (gh-ocannl-1272): stating a key at its default must not cost a
+       warm chain its records. Hence computed here, once [limits] is known: the cache key the
+       trajectory is stored under hashes the whole limits record, so two processes sharing a record
+       resolve every [auto] alike. *)
+    let search_shape =
+      Printf.sprintf "search=%b beam=%d rounds=%d repeats=%d keep=%h split_sites=%d blocks=%s|%s"
+        search beam_width rounds repeats keep_fraction max_split_reduce_sites
+        (String.concat ~sep:"," (List.map seed_block_sizes ~f:Int.to_string))
+        (Utils.config_class_fingerprint
+           ~resolve:(Sched.resolve_search_shaping_value limits)
+           Utils.Search_shaping)
     in
     (* The accumulator residency the seeded [Privatize] tiles are minted at: the same resolution the
        backend's code generation widens the serial rendering by (gh-ocannl-1116). *)

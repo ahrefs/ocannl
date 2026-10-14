@@ -6453,11 +6453,8 @@ let chain_loops chain =
 type lane_preamble_reduction = Preamble_refused | Preamble_duplicated | Preamble_cooperative
 [@@deriving sexp_of, equal]
 
-let gpu_lane_preamble_reduction () =
-  match
-    String.lowercase
-      (String.strip (Utils.get_global_arg ~arg_name:"gpu_lane_preamble_reduction" ~default:"auto"))
-  with
+let lane_preamble_reduction_of_string value =
+  match String.lowercase (String.strip value) with
   | "auto" -> None
   | "refused" -> Some Preamble_refused
   | "duplicated" -> Some Preamble_duplicated
@@ -6467,26 +6464,28 @@ let gpu_lane_preamble_reduction () =
         ("gpu_lane_preamble_reduction: expected auto, refused, duplicated or cooperative, got "
        ^ other)
 
+let gpu_lane_preamble_reduction () =
+  lane_preamble_reduction_of_string
+    (Utils.get_global_arg ~arg_name:"gpu_lane_preamble_reduction" ~default:"auto")
+
 (* [auto] resolves from the device's economics ({!Backend_intf.hardware_limits}'s
    [lane_scalar_recompute_cheap]): the lanes recompute each pair's scalar preamble ([p], [ds]) once
    per lane, which Metal and CUDA absorb and HIP does not (gh-ocannl-1124). *)
-let lane_preamble_reduction_for (limits : Backend_intf.hardware_limits) =
-  match gpu_lane_preamble_reduction () with
+let resolve_lane_preamble_reduction (limits : Backend_intf.hardware_limits) = function
   | Some mode -> mode
   | None ->
       if limits.Backend_intf.lane_scalar_recompute_cheap then Preamble_cooperative
       else Preamble_refused
 
+let lane_preamble_reduction_for limits =
+  resolve_lane_preamble_reduction limits (gpu_lane_preamble_reduction ())
+
 (* The most simdgroups a cooperative lane reduction may span -- config
    [gpu_lane_all_reduce_simdgroups] (gh-ocannl-1168): [auto] ([None]) or a positive count. At one
    simdgroup the all-reduce is a register butterfly; past it, each simdgroup's partial goes through
    workgroup-shared memory between two barriers per pair ([C_syntax.try_lane_all_reduce]). *)
-let gpu_lane_all_reduce_simdgroups () =
-  match
-    String.lowercase
-      (String.strip
-         (Utils.get_global_arg ~arg_name:"gpu_lane_all_reduce_simdgroups" ~default:"auto"))
-  with
+let lane_all_reduce_simdgroups_of_string value =
+  match String.lowercase (String.strip value) with
   | "auto" -> None
   | other -> (
       match Int.of_string_opt other with
@@ -6495,13 +6494,19 @@ let gpu_lane_all_reduce_simdgroups () =
           invalid_arg
             ("gpu_lane_all_reduce_simdgroups: expected auto or a positive integer, got " ^ other))
 
+let gpu_lane_all_reduce_simdgroups () =
+  lane_all_reduce_simdgroups_of_string
+    (Utils.get_global_arg ~arg_name:"gpu_lane_all_reduce_simdgroups" ~default:"auto")
+
 (* [auto] resolves from the device's measured economics ({!Backend_intf.hardware_limits}'s
    [lane_all_reduce_simdgroups]): one simdgroup wherever the barriers' cost was not measured to be
    repaid. *)
-let lane_all_reduce_simdgroups_for (limits : Backend_intf.hardware_limits) =
-  match gpu_lane_all_reduce_simdgroups () with
+let resolve_lane_all_reduce_simdgroups (limits : Backend_intf.hardware_limits) = function
   | Some k -> k
   | None -> limits.Backend_intf.lane_all_reduce_simdgroups
+
+let lane_all_reduce_simdgroups_for limits =
+  resolve_lane_all_reduce_simdgroups limits (gpu_lane_all_reduce_simdgroups ())
 
 (* How the default GPU schedule weighs its lane geometry -- config [gpu_serial_lanes]
    (gh-ocannl-1167): taken where a kernel admits it, and a reason for fission to cut a kernel
@@ -6509,16 +6514,16 @@ let lane_all_reduce_simdgroups_for (limits : Backend_intf.hardware_limits) =
    ([off]). *)
 type serial_lanes = Lanes_cut | Lanes_admitted | Lanes_off [@@deriving sexp_of, equal]
 
-let gpu_serial_lanes () =
-  match
-    String.lowercase
-      (String.strip (Utils.get_global_arg ~arg_name:"gpu_serial_lanes" ~default:"auto"))
-  with
+let serial_lanes_of_string value =
+  match String.lowercase (String.strip value) with
   | "auto" -> None
   | "cut" -> Some Lanes_cut
   | "admitted" -> Some Lanes_admitted
   | "off" -> Some Lanes_off
   | other -> invalid_arg ("gpu_serial_lanes: expected auto, cut, admitted or off, got " ^ other)
+
+let gpu_serial_lanes () =
+  serial_lanes_of_string (Utils.get_global_arg ~arg_name:"gpu_serial_lanes" ~default:"auto")
 
 (* [auto] resolves from the same economics as {!lane_preamble_reduction_for}. Every lane recomputes
    its nest's per-pair scalar preamble, which the plain plan pays once per thread over its channel
@@ -6527,10 +6532,36 @@ let gpu_serial_lanes () =
    whole row in one thread -- but the fused backward's dV loses: cut from dK to keep its lanes, it
    took 2.30 ms beside dK's 1.03 ms, where the two merged on the plain plan take 1.72 ms
    (gh-ocannl-1167). *)
-let serial_lanes_for (limits : Backend_intf.hardware_limits) =
-  match gpu_serial_lanes () with
+let resolve_serial_lanes (limits : Backend_intf.hardware_limits) = function
   | Some mode -> mode
   | None -> if limits.Backend_intf.lane_scalar_recompute_cheap then Lanes_cut else Lanes_admitted
+
+let serial_lanes_for limits = resolve_serial_lanes limits (gpu_serial_lanes ())
+
+(* gh-ocannl-1272: what a [Search_shaping] key's canonical value ([Utils.canonical_config_value])
+   resolves to on the device [limits] describes, for [Utils.config_class_fingerprint ~resolve]. The
+   [auto] lane modes resolve per device (above), so [cooperative] stated where [auto] resolves to it
+   is the default; a block size is clamped to the device's caps before any schedule reads it. The
+   keys are matched by name because the fingerprint walks the class's keys by name; any other key,
+   and a value its parser rejects, passes through unchanged, which renders it (never under-keys). *)
+let resolve_search_shaping_value (limits : Backend_intf.hardware_limits) ~key value =
+  let preamble = function
+    | Preamble_refused -> "refused"
+    | Preamble_duplicated -> "duplicated"
+    | Preamble_cooperative -> "cooperative"
+  in
+  let lanes = function Lanes_cut -> "cut" | Lanes_admitted -> "admitted" | Lanes_off -> "off" in
+  try
+    match key with
+    | "gpu_lane_preamble_reduction" ->
+        preamble (resolve_lane_preamble_reduction limits (lane_preamble_reduction_of_string value))
+    | "gpu_lane_all_reduce_simdgroups" ->
+        Int.to_string
+          (resolve_lane_all_reduce_simdgroups limits (lane_all_reduce_simdgroups_of_string value))
+    | "gpu_serial_lanes" -> lanes (resolve_serial_lanes limits (serial_lanes_of_string value))
+    | "gpu_schedule_block_size" -> Int.to_string (clamp_block_size ~limits (Int.of_string value))
+    | _ -> value
+  with Invalid_argument _ | Failure _ -> value
 
 (* Lane geometry (gh-ocannl-1003 stage 1). A nest whose parallel loop sits under a serial loop past
    a lane-uniform preamble -- the online-softmax hoist's value pass, [for (b, s, h) { for t { p :=

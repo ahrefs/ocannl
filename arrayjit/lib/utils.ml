@@ -495,6 +495,76 @@ let bool_of_config_string ~arg_name s =
   | "false" | "0" -> false
   | _ -> invalid_arg @@ "ocannl_" ^ arg_name ^ " setting should be a boolean; found: " ^ s
 
+(** How a configuration key's read sites parse its value, for telling two spellings of one value
+    apart from two values (gh-ocannl-1272). Each kind is the read sites' own parse, so two spellings
+    a kind calls equal are two the program cannot tell apart either. *)
+type config_value_kind =
+  | Flag  (** {!bool_of_config_string}: [true]/[1] and [false]/[0], any case, stripped *)
+  | Integer  (** [Int.of_string] of the stripped text *)
+  | Float_number  (** [Float.of_string] of the stripped text *)
+  | Keyword  (** a mode name, stripped and lowercased, such as [auto] *)
+  | Text  (** stripped text, such as a path *)
+  | Positive_float_or_unset
+      (** an override that only a positive float sets: empty, non-positive and unparsable text all
+          mean "not overridden", as [Autotune.peak_override] reads it *)
+
+(** The value [s] has under [kind], spelled canonically, or [None] when [s] does not parse as one.
+*)
+let canonical_config_value kind s =
+  let s = String.strip s in
+  match kind with
+  | Flag -> (
+      match String.lowercase s with
+      | "true" | "1" -> Some "true"
+      | "false" | "0" -> Some "false"
+      | _ -> None)
+  | Integer -> Option.map (Int.of_string_opt s) ~f:Int.to_string
+  | Float_number -> Option.map (Float.of_string_opt s) ~f:Float.to_string
+  | Keyword -> Some (String.lowercase s)
+  | Text -> Some s
+  | Positive_float_or_unset -> (
+      match Float.of_string_opt s with
+      | Some f when Float.(f > 0.) -> Some (Float.to_string f)
+      | _ -> Some "")
+
+(** The built-in default of every key whose RESOLVED value an identity renders -- today the
+    [Search_shaping] class, which {!config_class_fingerprint} renders into [Autotune.tune]'s search
+    trajectory identity -- with the kind its read sites parse it as. A key's default otherwise lives
+    only at its read sites ([~default:] of {!get_global_arg}), and the fingerprint has to know it to
+    leave out a key stated at it (gh-ocannl-1272). The two copies are held equal where the link is
+    already paid for: {!get_global_arg_with_source} refuses a read of a key listed here whose
+    [~default:] means another value. [test/operations/config_class_fingerprint] holds the
+    [Search_shaping] class equal to this list's keys. *)
+let config_key_defaults : (string * (config_value_kind * string)) list =
+  [
+    ("automatic_gpu_schedule", (Flag, "true"));
+    ("automatic_cpu_schedule", (Flag, "true"));
+    ("cpu_schedule_min_parallel", (Integer, "16384"));
+    ("schedule_fission", (Flag, "true"));
+    ("gpu_fission_keep_mapping", (Flag, "true"));
+    ("gpu_schedule_block_size", (Integer, "256"));
+    ("gpu_schedule_min_parallel", (Integer, "64"));
+    ("gpu_schedule_workgroup_fill", (Integer, "256"));
+    ("gpu_lane_preamble_reduction", (Keyword, "auto"));
+    ("gpu_lane_all_reduce_simdgroups", (Keyword, "auto"));
+    ("gpu_serial_lanes", (Keyword, "auto"));
+    ("autotune_search", (Flag, "true"));
+    ("autotune_beam_width", (Integer, "2"));
+    ("autotune_rounds", (Integer, "2"));
+    ("autotune_repeats", (Integer, "3"));
+    ("autotune_split_reduce_max_sites", (Integer, "8"));
+    ("autotune_register_tile_rm_twin", (Flag, "false"));
+    ("autotune_composite_playoff_width", (Integer, "2"));
+    ("autotune_keep_fraction", (Float_number, "1."));
+    ("autotune_bound_pruning", (Flag, "false"));
+    ("autotune_calibration_file", (Text, ""));
+    ("model_peak_flops", (Positive_float_or_unset, ""));
+    ("model_peak_memory_bandwidth", (Positive_float_or_unset, ""));
+    ("strict_failure_classification", (Flag, "true"));
+  ]
+
+let registered_config_default key = List.Assoc.find config_key_defaults key ~equal:String.equal
+
 (** Whether to print where each configuration setting comes from (commandline, environment, config
     file, or the hard-coded default). It gates the logging of the config-reading functions
     themselves, so it is bootstrapped directly rather than via {!get_global_arg}: the initial value
@@ -1387,6 +1457,16 @@ let profile_lookup =
     payload of the profile picked at one of those levels; returns [default] if none has it, together
     with where the value came from. *)
 let get_global_arg_with_source ~default ~arg_name:n =
+  (* The read site's [~default:] against the registered one (gh-ocannl-1272), compared as values:
+     ["1."] and ["1"] are one default. A read site whose default does not parse disagrees too. *)
+  Option.iter (registered_config_default n) ~f:(fun (kind, registered) ->
+      let canonical = canonical_config_value kind in
+      if not (Option.equal String.equal (canonical default) (canonical registered)) then
+        invalid_arg
+          (Printf.sprintf
+             "OCANNL: a read of %s defaults to %S, but Utils.config_key_defaults registers %S -- \
+              the trajectory identity would misjudge which statements are at the default"
+             n default registered));
   let with_debug = !log_config_sourcing && not (Hash_set.mem accessed_global_args n) in
   if with_debug then
     Stdio.eprintf "Retrieving commandline, environment, or config file variable ocannl_%s\n%!" n;
@@ -1419,16 +1499,50 @@ let profile_key_source key =
   | _, From_default -> None
   | value, source -> Some (value, source)
 
-(** Every key [classify_config_key] puts in [cls] that some source sets, as [key=value;] in the
-    classification's order: an identity for the resolved settings of one class. [Autotune.tune] keys
-    a cached search trajectory by the [Search_shaping] class this way (gh-ocannl-1110), so a key
-    classified into it later joins the identity with no second list to update. Not logged and not
+(** Every key [classify_config_key] puts in [cls] whose resolved value is not its default, as
+    [key=value;] in the classification's order: an identity for the resolved settings of one class.
+    [Autotune.tune] keys a cached search trajectory by the [Search_shaping] class this way
+    (gh-ocannl-1110), so a key classified into it later joins the identity with no second list to
+    update.
+
+    What is compared is the VALUE, not whether some source states it (gh-ocannl-1272): a key stated
+    at its default -- in any spelling its read sites parse to the same value
+    ({!canonical_config_value} of its kind in {!config_key_defaults}) -- renders exactly as a key
+    nothing states, and a rendered value is spelled canonically. The reference point is the built-in
+    default, not "what the key would resolve to without this statement": the identity is then a
+    function of the resolved values alone, so a profile that moves a key off its default renders it
+    (as a statement of the same value would), and a statement that restores the built-in default
+    under such a profile renders nothing (as the profile-less process it then behaves like does).
+    The profile's name is in no identity.
+
+    [resolve] maps a key's canonical value to the value the device it runs on resolves it to, for a
+    default that is itself device-dependent: [auto] lane modes, which [Ir.Schedule] resolves from
+    the hardware limits. The value it receives and returns is canonical; the default is resolved the
+    same way before the comparison, so [cooperative] stated where [auto] resolves to [cooperative]
+    is at the default. A key with no registered default renders whenever some source sets it, as
+    every key did before gh-ocannl-1272: conservative, never under-keyed. Not logged and not
     recorded as an access, like [profile_key_source]. *)
-let config_class_fingerprint cls =
+let config_class_fingerprint ?(resolve = fun ~key:_ value -> value) cls =
   List.concat_map config_key_classification ~f:(fun (c, _, keys) ->
       if Poly.equal c cls then keys else [])
   |> List.filter_map ~f:(fun key ->
-      Option.map (profile_key_source key) ~f:(fun (value, _) -> key ^ "=" ^ value ^ ";"))
+      Option.bind (profile_key_source key) ~f:(fun (value, _) ->
+          match registered_config_default key with
+          | None -> Some (key ^ "=" ^ value ^ ";")
+          | Some (kind, default) -> (
+              match canonical_config_value kind value with
+              (* Unparsable: no value to compare, so it renders as stated. A read site rejects it or
+                 falls back to its own handling; either way it is not what a default-run did. *)
+              | None -> Some (key ^ "=" ^ value ^ ";")
+              | Some canonical ->
+                  let resolved = resolve ~key canonical in
+                  let default_resolved =
+                    Option.value_map
+                      (canonical_config_value kind default)
+                      ~default ~f:(resolve ~key)
+                  in
+                  if String.equal resolved default_resolved then None
+                  else Some (key ^ "=" ^ resolved ^ ";"))))
   |> String.concat
 
 let profile_payload_sources name =

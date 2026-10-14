@@ -842,8 +842,8 @@ files.
   `Search_abandoned`. On gh-719's cuda gpt2_mini cell arm A sat at 11.7x its final 6.862 ms for 207 of
   209 timed candidates (the recombination composites delivered the rest), so a final-best rule would
   abandon every flip. `best_steps` is cached like `mma_best_ms`, keyed by every `Search_shaping`
-  key's value (`Utils.config_class_fingerprint`, `SC.trajectory`), so a replayed incumbent still
-  has one; a failed one abandons nothing. A clean abandoned prefix is also persisted
+  key whose resolved value is not its default (`Utils.config_class_fingerprint`, `SC.trajectory`),
+  so a replayed incumbent still has one; a failed one abandons nothing. A clean abandoned prefix is also persisted
   (gh-ocannl-1136), under the unchanged schedule key with an `abandonment-` key prefix.
   A replay requires the same search shape and re-evaluates the current incumbent and ratio
   against those timings; without a qualifying rule it searches normally. It reports
@@ -855,8 +855,8 @@ files.
   `Placement_shaping` class, outside the fingerprint (gh-ocannl-1192), and so are the
   `model_default_*` keys, read only by the zero-timing `Autotune.model_default`, as the
   `Untimed_model` class (gh-ocannl-1241). While they were
-  `Search_shaping`, merely STATING one changed the identity, since the fingerprint renders every
-  key some source sets: on rog's approximate CUDA gpt2_mini cell a warm chain run under
+  `Search_shaping`, merely STATING one changed the identity, since the fingerprint then rendered
+  every key some source sets: on rog's approximate CUDA gpt2_mini cell a warm chain run under
   `tune_placement_store=false` (gh-1020's way to compare the arms afresh) replayed both arms yet
   searched each of the eight flips abandoned cold in full (775 s and 310 attempts apiece where the
   cold abandonment took 19 s), because the replayed incumbent had no record under that shape and no
@@ -865,7 +865,15 @@ files.
   commandline-picked profile (`--ocannl_profile=approximate`, whose payload sets 2) the flip budget
   cannot be raised by `OCANNL_TUNE_INLINE_FLIPS`, since the profile outranks the environment --
   pass `--ocannl_tune_inline_flips=N`, which `benchmarks/orchestrate.py` does per cell with
-  `--cell-flag tune_inline_flips=N`.
+  `--cell-flag tune_inline_flips=N`. **The fingerprint compares values, against the built-in
+  default** (gh-ocannl-1272): a `Search_shaping` key renders only when its resolved value, parsed
+  as its read sites parse it (`Utils.config_key_defaults` registers each default with its kind),
+  differs from that default, so `autotune_keep_fraction=1` against the read site's `"1."` keys
+  nothing, while a profile's non-default value renders exactly as a statement of it would. An
+  `auto` lane mode is resolved per device (`Schedule.resolve_search_shaping_value`, passed by
+  `tune` once `limits` is known), so an explicit mode equal to `auto`'s pick is also the default.
+  A new `Search_shaping` key needs a `config_key_defaults` row (the `config_class_fingerprint`
+  test fails without one), and every read of a registered key refuses a `~default:` that disagrees.
 - **A per-segment single is timed against a backdrop, so near-tie singles rank by noise**
   (gh-ocannl-1166). An `F_sketch` single times the WHOLE routine with every other segment on its
   untuned preset: on gpt2_mini/CUDA tf32 a q/k/v single measured ~23.2 ms where the composite it

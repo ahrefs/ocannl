@@ -275,6 +275,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-changelog_unreleased_scan
   test/operations/dune                     @runtest-codegen_text_inventory
   test/operations/dune                     @runtest-codegen_text_inventory_control
+  test/operations/dune                     @runtest-config_class_fingerprint
   test/operations/dune                     @runtest-config_dep_completeness
   test/operations/dune                     @runtest-config_usage_scan
   test/operations/dune                     @runtest-config_usage_scan_control

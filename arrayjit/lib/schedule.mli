@@ -723,6 +723,14 @@ val serial_lanes_for : Backend_intf.hardware_limits -> serial_lanes
     [Lanes_admitted] otherwise (HIP: the forward value pass wins on lanes in its own kernel, the
     fused backward's dV loses when cut from dK for them). *)
 
+val resolve_search_shaping_value : Backend_intf.hardware_limits -> key:string -> string -> string
+(** What the canonical value of the configuration key [key] ([Utils.canonical_config_value])
+    resolves to on the device [limits] describes, for [Utils.config_class_fingerprint ~resolve]
+    (gh-ocannl-1272): an [auto] lane mode becomes the mode {!lane_preamble_reduction_for},
+    {!lane_all_reduce_simdgroups_for} or {!serial_lanes_for} picks at [limits], and an explicit one
+    stays itself; a [gpu_schedule_block_size] becomes its clamp to the device's caps. Any other key,
+    and a value its parser rejects, is returned unchanged. *)
+
 val default_gpu :
   ?block_size:int ->
   ?min_parallel:int ->
