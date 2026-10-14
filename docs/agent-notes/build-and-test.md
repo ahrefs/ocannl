@@ -3386,9 +3386,9 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   4 bytes off (gh-ocannl-1222, removed by staging#1005). The fault is probably that miscompile,
   but this is not proven: after the removal, `bandwidth_calibration` ran four times alone on tuf
   (the same 16 rows, golden matched, device queries clean before and after, no kernel line), and
-  it had also passed once with the flag. Two bounds now apply to `run`/`start` (not `repeat`,
-  `tools/sweep.sh` or `tools/machine-verify.sh`, which run their own supervisors). (1) **The
-  per-test cap**: a watcher beside dune times every child of a `dune` process, and the first one
+  it had also passed once with the flag. Two bounds now apply to `run`/`start` (not `repeat` or
+  `tools/machine-verify.sh`, which run their own supervisors); the per-test cap applies to each GPU
+  unit of `tools/sweep.sh` too (below). (1) **The per-test cap**: a watcher beside dune times every child of a `dune` process, and the first one
   past the cap ENDS the run. The supervisor gets the SIGALRM the run's own cap sends, so it is the
   same reap and the same `TIMEOUT` (142), with the digest naming the test from the run's
   `test-cap` record and the remedy (`--test-cap 0`, or a larger one); only on a GPU batch does it
@@ -3401,7 +3401,13 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   all under correctness-slot load, where load stretched tests 5-15x), but no trace holds an `@slow`
   member: `slow-cifar_conv` runs ~300 s solo plus its dataset download, so at those load ratios it
   could pass 1500 s legitimately, and CPU batches are not the failure class. So `@slow` and CPU
-  batches keep only the run's cap unless asked; `plan` says which applies and why. Tests are found as children of `dune`, because dune
+  batches keep only the run's cap unless asked; `plan` says which applies and why. The default and
+  the watcher live in `tools/per-test-cap.sh`, which `tools/sweep.sh` sources as well: a sweep unit
+  on a non-CPU backend runs the same watcher beside its `@runtest @train` leg (not its `@slow`
+  leg), signalling the unit's own supervisor, so a hung test ends the unit as `timeout` and the
+  lane's line names it (`OCANNL_TOOL_SWEEP_TEST_CAP`, 0 lifts it). Before that, the 2026-10-14
+  sweep (stamp 20261014T051751Z) had sixteen tuf hip tests hung at once burn the unit's full
+  5400 s cap with no test named. Tests are found as children of `dune`, because dune
   starts each action as its own process-group leader. The run's group kill therefore reaches dune
   and not the action, but dune's TERM handling kills every action it has running, a
   TERM-ignoring one included (measured on 3.24). A watcher counting every group in the run would
