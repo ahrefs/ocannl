@@ -158,15 +158,20 @@ val compile :
     whole-routine transform returns a singleton ([fun o -> [ f o ]]) and a transform that splits the
     routine into several kernels (fission) returns one element per segment; the segments run
     back-to-back on the routine's stream with device-side events at the boundaries, like
-    {!Ir.Schedule.maybe_default_schedules}' segments. It must return a non-empty list.
+    {!Ir.Schedule.maybe_default_schedules}' segments. It must return a non-empty list. On a GPU
+    backend the kernel list -- the transform's, or the default schedules' without one -- then goes
+    through zero elision ([gpu_elide_covered_zeros], gh-ocannl-1257): a covering zero whose node an
+    accumulation next covers is dropped, and the accumulation opens from zero itself, with values
+    unchanged.
 
-    [prelowered] (gh-ocannl-562) is a test seam: it replaces this compile's lowering of [comp] with
-    the given optimized code, which then drives codegen AND the analysis layer (I/O classification,
-    liveness planning, the context-buffer delta) alike — so a hand-built {!Ir.Low_level.optimized}
-    can be seeded with {!set_values}, run, and read back with {!get_values}, rather than only
-    analyzed. Pass [~name] and {!Ir.Assignments.empty_comp} unless the routine's nodes must settle
-    against a prior context. The record's [optimize_ctx] becomes the returned context's lineage
-    state, so the caller owns its provenance; production code should not use this parameter. *)
+    [prelowered] (gh-ocannl-562) is a test seam, exempt from that elision: it replaces this
+    compile's lowering of [comp] with the given optimized code, which then drives codegen AND the
+    analysis layer (I/O classification, liveness planning, the context-buffer delta) alike — so a
+    hand-built {!Ir.Low_level.optimized} can be seeded with {!set_values}, run, and read back with
+    {!get_values}, rather than only analyzed. Pass [~name] and {!Ir.Assignments.empty_comp} unless
+    the routine's nodes must settle against a prior context. The record's [optimize_ctx] becomes the
+    returned context's lineage state, so the caller owns its provenance; production code should not
+    use this parameter. *)
 
 val compile_outcome :
   ?name:string ->

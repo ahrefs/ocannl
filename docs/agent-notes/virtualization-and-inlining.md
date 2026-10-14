@@ -161,6 +161,26 @@ files.
   symbolic-extent guard can make only a prefix execute. A localizer/SIMD decline, partial or
   conditional coverage, an opaque effect, or an accumulation with no preceding zero retains the
   original opening value.
+- **The same proof drops a GPU routine's zeros when the zero and its accumulation are kernels apart**
+  (gh-ocannl-1257, `Low_level.elide_covered_zeros`, gate `gpu_elide_covered_zeros`). The
+  accumulation then opens from zero itself: a constant opening, the localized scope form, or the
+  opening read guarded by the first iteration of the repeating loops. The scope form must sit where
+  code generation would have localized (`peel_accum_nest`, asked with and without the hardware
+  levels): guarding the read of an update the localizer would have taken narrows a bf16 cell on
+  every step instead of once, which is a different value wherever accumulators widen. A guard is
+  placed only where its loops iterate no more times than the node has cells. Guarding the bias and
+  layer-norm gradients' whole-batch reductions saved a negligible zero, yet cost the b256
+  gpt2_mini_train step 1.2% on CUDA (staging#1113). It runs in `Backends.compile`
+  on the final kernel list, after the transform that produced it. So schedule transforms, sketch
+  site detection and the schedule cache never see the rewritten accumulations. A pre-fission rewrite
+  would hide every gradient contraction from the sketches, and would change the unit lists that
+  recorded segmentations replay onto. `?prelowered` compiles are exempt. The forms are
+  value-identical, because the opening is `Constant 0.`, which is what `Zero_out` stores. The sign
+  of a zero is kept only where the backend compiler honours signed zeros: never fold `0 + x` to
+  `x` in OCANNL's own passes, but a compiler under a no-signed-zeros licence (HIP's
+  `-ffast-math`) may fold the literal, as it may any other addition of a zero. Trap for its tests: a fresh buffer is usually zero,
+  so a dropped seed passes a routine's first run. Run the routine twice and compare the second run
+  too. In `zero_elision.ml`, an unseeded guard failed only there.
 - **A virtualization candidate under an `If` is rejected, and the guard's position decides which
   arm rejects it** (gh-ocannl-651). `check_and_store_virtual`'s walk sees only the subtree it is
   handed, so a guard INTERIOR to that subtree hits its own `If` arm while a guard ENCLOSING it is

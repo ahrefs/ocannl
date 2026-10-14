@@ -1,0 +1,49 @@
+--- executed parity ---
+reference: every parameter gradient is nonzero somewhere: true
+reference: the second run repeats the first: true
+elided: the loss is bitwise equal: true
+elided: w_q_attn.grad is bitwise equal on the first run: true
+elided: w_k_attn.grad is bitwise equal on the first run: true
+elided: w_v_attn.grad is bitwise equal on the first run: true
+elided: w_o_attn.grad is bitwise equal on the first run: true
+elided: w_q_attn.grad is bitwise equal on the second run: true
+elided: w_k_attn.grad is bitwise equal on the second run: true
+elided: w_v_attn.grad is bitwise equal on the second run: true
+elided: w_o_attn.grad is bitwise equal on the second run: true
+shipped: the loss is bitwise equal: true
+shipped: w_q_attn.grad is bitwise equal on the first run: true
+shipped: w_k_attn.grad is bitwise equal on the first run: true
+shipped: w_v_attn.grad is bitwise equal on the first run: true
+shipped: w_o_attn.grad is bitwise equal on the first run: true
+shipped: w_q_attn.grad is bitwise equal on the second run: true
+shipped: w_k_attn.grad is bitwise equal on the second run: true
+shipped: w_v_attn.grad is bitwise equal on the second run: true
+shipped: w_o_attn.grad is bitwise equal on the second run: true
+--- structure ---
+reference: the attention's (b, h, s, s) gradients are zeroed: true
+reference: some covering zero is next touched by an accumulation the pass accepts: true
+elided: none of the reference's zeroed (b, h, s, s) gradients is zeroed: true
+elided: no covering zero is left whose next access the pass accepts: true
+elided: fewer covering zeros than the reference: true
+reference: no constant openings: true
+elided: constant openings occur: true
+reference: no localized scopes opening at zero: true
+elided: localized scopes opening at zero occur: true
+reference: no first-iteration guards: true
+elided: first-iteration guards occur: true
+--- the gate ---
+shipped: elides exactly on a GPU backend, as the explicit pass does: true
+--- narrow format: the inner reduction stays localized ---
+reference: the program keeps its zero: true
+elided: the zero is gone: true
+elided: the accumulator is a localized scope opening at the cell, guarded by r's first iteration: true
+elided: out is bitwise equal to the reference's: true
+--- a scan body's read is rewritten ---
+the statement reads the accumulated cell: true
+the scan's accumulation is rewritten: true
+the rewritten scan no longer reads the cell: true
+--- a guard is placed only where it pays ---
+4 trips into 16 cells: the guard pays, and seeds the accumulation: true
+4 trips into 16 cells: the zero is dropped and the read guarded: true
+16 trips into 4 cells: the guard does not pay: true
+16 trips into 4 cells: the zero stays and nothing is guarded: true

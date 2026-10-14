@@ -196,7 +196,7 @@ let () =
       SC.version = SC.entry_version;
       backend;
       numerics = SC.numerics_tag ();
-      codegen = Some (SC.codegen_tag ~limits ~capabilities ());
+      codegen = Some (SC.codegen_tag ~backend ~limits ~capabilities ());
       objective = Some (SC.objective_tag ());
       source_digest = SC.digest canon;
       saved = [];

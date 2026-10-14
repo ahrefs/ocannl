@@ -140,6 +140,7 @@ let known_config_keys =
       "cpu_schedule_min_parallel";
       "schedule_fission";
       "gpu_fission_keep_mapping";
+      "gpu_elide_covered_zeros";
       "schedule_log_launches";
       "schedule_log_declines";
       "legality_crosscheck";
@@ -329,6 +330,12 @@ let config_key_classification : (config_key_class * string * string list) list =
        capture fires only for multi-segment routines, so it moves a fissioned candidate's launch \
        overhead relative to a whole-routine one",
       [ "buffer_aliasing"; "gpu_graph_capture" ] );
+    ( Keyed "codegen",
+      "it rewrites a GPU routine's kernel list after the transform that produced it -- the zeros \
+       it launches and the accumulations they fed (gh-ocannl-1257) -- so it is not a property of \
+       the lowered code the digest names, and a search times every candidate in the form it ships \
+       in",
+      [ "gpu_elide_covered_zeros" ] );
     ( Search_shaping,
       "it defines the untuned default pipeline -- its schedules and, on GPU backends, its fission \
        segmentation (since gh-ocannl-1126 the merge decision compares the default GPU schedule's \

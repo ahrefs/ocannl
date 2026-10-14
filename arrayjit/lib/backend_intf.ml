@@ -1106,7 +1106,9 @@ module type Backend = sig
       linked context's lineage state in place of the fork a real compile would make, so the caller
       owns its provenance. Everything downstream of lowering is unchanged, including the default
       schedule annotator — pass [~lowered_transform:(fun o -> [ o ])] to keep hand-built code
-      exactly as written. *)
+      exactly as written. A [prelowered] routine is also exempt from the GPU backends'
+      post-transform zero elision ([gpu_elide_covered_zeros], {!Low_level.elide_covered_zeros}),
+      which every other compile's kernel list goes through. *)
 
   include Backend_device_common
 

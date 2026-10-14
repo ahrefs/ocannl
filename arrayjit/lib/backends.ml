@@ -184,6 +184,32 @@ let maybe_sink_zeros (lowered : Low_level.optimized) : Low_level.optimized =
     { lowered with Low_level.llc = Low_level.sink_zero_outs lowered.Low_level.llc }
   else lowered
 
+(* gh-ocannl-1257: on GPU backends, a covering zero whose node is next touched by an accumulation
+   that can open from zero itself is dropped, and that accumulation rewritten
+   ({!Low_level.elide_covered_zeros}) -- the composed attention backward's [(b, h, s, s)] gradients
+   made the zero kernel the step's dominant zeroing cost, all of it bandwidth spent writing zeros
+   that the first accumulation then read back. It runs on the final kernel list, after whatever
+   transform produced it (the default schedules or a tuned candidate's), so neither the schedule
+   transforms nor the search ever see the rewritten accumulations, and a tuned candidate is timed in
+   the form it ships in. Value-identical by construction, so no numerics gate: the key is the
+   kill-switch, read per call like the aliasing gates. CPU backends keep their zero segments, which
+   render as [memset], and so does a hand-built [?prelowered] routine (see [compile]). *)
+let elide_covered_zeros () = Utils.get_global_flag ~default:true ~arg_name:"gpu_elide_covered_zeros"
+
+let maybe_elide_zeros ~backend_name (segments : Low_level.optimized list) : Low_level.optimized list
+    =
+  if not (Schedule.backend_is_gpu backend_name && elide_covered_zeros ()) then segments
+  else
+    let elided =
+      List.filter_map
+        (List.zip_exn segments
+           (Low_level.elide_covered_zeros (List.map segments ~f:(fun seg -> seg.Low_level.llc))))
+        ~f:(fun (seg, llc) ->
+          Option.map llc ~f:(fun llc ->
+              if phys_equal llc seg.Low_level.llc then seg else { seg with Low_level.llc }))
+    in
+    if List.is_empty elided then segments else elided
+
 (* gh-ocannl-1006: the kernel segments a compile SHIPPED, recorded where they are decided and read
    back by [Context.compile_outcome], which brackets every compile with {!with_segments_census} and
    stores the result on the routine. The same bracket pattern as [C_syntax.with_census], for the
@@ -282,7 +308,10 @@ let score_footprint ~(backend_name : string) ~(limits : hardware_limits)
     ~(static_indices : Indexing.static_symbol list) (lowered : Low_level.optimized) :
     Low_level.footprint =
   let lowered = maybe_sink_zeros lowered in
-  let segments = Schedule.maybe_default_schedules ~backend_name ~limits ~static_indices lowered in
+  let segments =
+    maybe_elide_zeros ~backend_name
+      (Schedule.maybe_default_schedules ~backend_name ~limits ~static_indices lowered)
+  in
   let spans = plan_alias_spans ~name:"<footprint>" ~limits ~lowered ~segments in
   (* Score the union store, as the compile's own fold-back does -- but on a copy: scoring must not
      mutate the routine's own traced store. *)
@@ -956,6 +985,12 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
                  run back-to-back on the routine's stream (see [link]). *)
               Schedule.maybe_default_schedules ~backend_name:Device.name ~limits
                 ~static_indices:(Indexing.bound_symbols bindings) lowered)
+    in
+    (* A [?prelowered] routine is hand-built IR compiled as written (the gh-ocannl-562 test seam):
+       its zeros are what the test is about, so they are not elided. *)
+    let lowereds =
+      if Option.is_some prelowered then lowereds
+      else maybe_elide_zeros ~backend_name:Device.name lowereds
     in
     record_segments lowereds;
     (* Per-compile launch-geometry trace (config [schedule_log_launches]): one line per segment with

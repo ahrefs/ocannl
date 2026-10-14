@@ -155,7 +155,11 @@ let store ~cache_dir rut segments =
       SC.version = SC.entry_version;
       backend = Context.backend_name rut.base_ctx;
       numerics = SC.numerics_tag ();
-      codegen = Some (SC.codegen_tag ~limits:rut.limits ~capabilities:rut.caps ());
+      codegen =
+        Some
+          (SC.codegen_tag
+             ~backend:(Context.backend_name rut.base_ctx)
+             ~limits:rut.limits ~capabilities:rut.caps ());
       objective = Some (SC.objective_tag ());
       source_digest = SC.digest rut.base_canon;
       saved = [];

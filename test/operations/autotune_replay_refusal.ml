@@ -140,7 +140,9 @@ let plant ~saved ~segments =
             SC.version = SC.entry_version;
             backend = Context.backend_name base_ctx;
             numerics = SC.numerics_tag ();
-            codegen = Some (SC.codegen_tag ~limits ~capabilities ());
+            codegen =
+              Some
+                (SC.codegen_tag ~backend:(Context.backend_name base_ctx) ~limits ~capabilities ());
             objective = Some (SC.objective_tag ());
             source_digest = SC.digest canon;
             saved;

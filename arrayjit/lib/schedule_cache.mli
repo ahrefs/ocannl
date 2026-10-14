@@ -228,6 +228,7 @@ val numerics_tag : unit -> string
     and {!entry}. *)
 
 val codegen_tag :
+  backend:string ->
   limits:Backend_intf.hardware_limits ->
   capabilities:Backend_intf.codegen_capabilities ->
   unit ->
@@ -249,7 +250,10 @@ val codegen_tag :
     this backend — including which tensor-unit arm it selects — is identity by derivation rather
     than by a hand-named component (gh-ocannl-1117, gh-ocannl-1153). Pass the compiling context's
     [Context.codegen_capabilities]: a required argument, so no key-minting site can default to a
-    resolution codegen does not use. *)
+    resolution codegen does not use. On a GPU [backend] with [gpu_elide_covered_zeros] on, the tag
+    also hashes the elision, which rewrites a GPU routine's timed kernel list after its transform
+    (gh-ocannl-1257): entries crowned before it, or with it off, keep the identity they had, and a
+    CPU backend's kernels never depend on it. *)
 
 type trajectory = {
   search_shape : string;

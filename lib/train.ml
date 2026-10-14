@@ -1237,7 +1237,7 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
               SC.version = SC.placement_entry_version;
               backend;
               numerics = SC.numerics_tag ();
-              codegen = SC.codegen_tag ~limits ~capabilities ();
+              codegen = SC.codegen_tag ~backend ~limits ~capabilities ();
               objective = SC.objective_tag ();
               problem_digest = SC.digest problem;
               decision;
@@ -1262,7 +1262,7 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
                  (String.equal e.SC.problem_digest (SC.digest problem)
                  && String.equal e.SC.backend backend
                  && String.equal e.SC.numerics (SC.numerics_tag ())
-                 && String.equal e.SC.codegen (SC.codegen_tag ~limits ~capabilities ())
+                 && String.equal e.SC.codegen (SC.codegen_tag ~backend ~limits ~capabilities ())
                  && String.equal e.SC.objective (SC.objective_tag ())) ->
             (* Belt-and-braces like the schedule cache's: the key carries every one of these, so
                only a hand-moved file fails here -- and every one is checked, since a decision
