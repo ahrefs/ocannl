@@ -541,6 +541,9 @@ module Impl = struct
     kparams : (string * kparam_source) list;
     bindings : Indexing.unit_bindings;
     launch : Low_level.launch_dims;
+    routine_names : (string * string) list;
+        (* (emitted, given): the link-time compile attributes a name-caused failure to the name the
+           caller asked for (gh-ocannl-707) *)
   }
   [@@deriving sexp_of]
 
@@ -549,6 +552,7 @@ module Impl = struct
     funcs : (string * (string * kparam_source) list * Low_level.launch_dims) array;
         (* func_name * kparams * launch dims *)
     bindings : Indexing.unit_bindings;
+    routine_names : (string * string) list; (* (emitted, given), as in [code] *)
   }
   [@@deriving sexp_of]
 
@@ -653,6 +657,147 @@ module Impl = struct
           (* MSL built-in variables *)
           "gid";
           "lid";
+        ]
+
+    (* gh-ocannl-707: the file-scope names [metal_stdlib] puts in the GLOBAL namespace, which a
+       [kernel void <name>(] definition collides with ("redefinition of 'float4' as different kind
+       of symbol", "expected unqualified-id"). Harvested empirically rather than by reading: every
+       identifier token of the toolchain's [include/metal] headers was compiled as a kernel name
+       through [MTLDevice newLibraryWithSource:] after [#include <metal_stdlib>] and [using
+       namespace metal;] (the prelude's exact shape), bisecting batches of 64; what failed is below,
+       as the grammar it instantiates. Functions are absent on purpose -- they live in namespace
+       [metal] and C++ overloading lets a global kernel of the same name coexist with them ([dot],
+       [exp], [clamp], [select], [simd_sum] all compiled) -- and so are the names other tables
+       already hold: the C and C++ keywords, the C floor's macros and types, and this backend's own
+       [ident_blacklist] above. *)
+    let vendor_routine_idents =
+      let scalars =
+        [
+          "bool";
+          "char";
+          "uchar";
+          "short";
+          "ushort";
+          "int";
+          "uint";
+          "long";
+          "ulong";
+          "llong";
+          "ullong";
+          "half";
+          "float";
+          "double";
+          "bfloat";
+          "quad";
+        ]
+      in
+      let float_kinds = [ "F"; "H"; "BF" ] in
+      List.concat
+        [
+          (* Scalar type names, and the vector families over them ([float4], [packed_half2],
+             [simd_uint3], [vector_bool8], ...). *)
+          scalars;
+          C_syntax.vector_type_names
+            ~prefixes:[ ""; "packed_"; "simd_"; "simd_packed_"; "vector_" ]
+            ~scalars ~widths:[ 2; 3; 4; 8; 16 ];
+          (* Math constants per float kind: [M_PI_F], [M_SQRT2_H], [M_E_BF], ... *)
+          List.concat_map
+            [
+              "1_PI";
+              "2_PI";
+              "2_SQRTPI";
+              "E";
+              "LN10";
+              "LN2";
+              "LOG10E";
+              "LOG2E";
+              "PI_2";
+              "PI_4";
+              "PI";
+              "SQRT1_2";
+              "SQRT2";
+            ] ~f:(fun c -> List.map float_kinds ~f:(fun kind -> "M_" ^ c ^ "_" ^ kind));
+          (* Float limits per kind: [FLT_MAX], [HALF_EPSILON], [BFLT_DIG], ... *)
+          List.concat_map [ "FLT"; "HALF"; "BFLT" ] ~f:(fun kind ->
+              List.map
+                [
+                  "DECIMAL_DIG";
+                  "DIG";
+                  "EPSILON";
+                  "MANT_DIG";
+                  "MAX";
+                  "MAX_10_EXP";
+                  "MAX_EXP";
+                  "MIN";
+                  "MIN_10_EXP";
+                  "MIN_EXP";
+                  "RADIX";
+                ] ~f:(fun limit -> kind ^ "_" ^ limit));
+          List.map float_kinds ~f:(fun kind -> "HUGE_VAL" ^ kind);
+          [ "MAXFLOAT"; "MAXHALF"; "MAXBFLOAT" ];
+          (* Integer limits. *)
+          [
+            "CHAR_BIT";
+            "CHAR_MAX";
+            "CHAR_MIN";
+            "SCHAR_MAX";
+            "SCHAR_MIN";
+            "UCHAR_MAX";
+            "SHRT_MAX";
+            "SHRT_MIN";
+            "USHRT_MAX";
+            "INT_MAX";
+            "INT_MIN";
+            "UINT_MAX";
+            "LONG_MAX";
+            "LONG_MIN";
+            "ULONG_MAX";
+          ];
+          (* The headers' own attribute macros. *)
+          [
+            "METAL_ALIGN";
+            "METAL_ARG_UNIFORM";
+            "METAL_ASM";
+            "METAL_CONST";
+            "METAL_CONST_ARG";
+            "METAL_DEPRECATED";
+            "METAL_ENABLE_IF";
+            "METAL_EXPLICIT";
+            "METAL_FUNC";
+            "METAL_IMPLICIT";
+            "METAL_INTERNAL";
+            "METAL_MAYBE_UNDEF";
+            "METAL_NON_NULL_RETURN";
+            "METAL_NOTHROW";
+            "METAL_OS_LOG_FORMAT";
+            "METAL_PURE";
+            "METAL_UNAVAILABLE";
+            "METAL_VALID_COMPARE_EXCHANGE_FAILURE_ORDER";
+            "METAL_VALID_COMPARE_EXCHANGE_SUCCESS_ORDER";
+            "METAL_VALID_EXCHANGE_ORDER";
+            "METAL_VALID_LEVEL_ARG";
+            "METAL_VALID_LOAD_ORDER";
+            "METAL_VALID_LOD_ARG";
+            "METAL_VALID_MODIFY_ORDER";
+            "METAL_VALID_RENDER_TARGET";
+            "METAL_VALID_STORE_ORDER";
+            "METAL_ZERO_ARG";
+          ];
+          (* Dialect keywords and global names outside the families above. [main] is the reserved
+             entry point; [metal] and [simd] are namespaces. *)
+          [
+            "as_type";
+            "coherent";
+            "complex";
+            "imaginary";
+            "is_function_constant_defined";
+            "main";
+            "metal";
+            "nullptr_t";
+            "object_data";
+            "ray_data";
+            "simd";
+          ];
         ]
 
     let metal_log_object_name = "os_log_default"
@@ -1376,7 +1521,7 @@ module Impl = struct
        probe. *)
     lazy (Metal_math_api_runtime.get ())
 
-  let%diagn_sexp compile_metal_source ~name ~source ~device =
+  let%diagn_sexp compile_metal_source ~name ~routine_names ~source ~device =
     let options = Me.CompileOptions.init () in
     let math_api = Lazy.force runtime_math_api in
     let option_state =
@@ -1412,7 +1557,12 @@ module Impl = struct
           source
       in
       Stdio.prerr_endline error_msg;
-      failwith error_msg
+      (* Metal compiles here, at link time, so the failure never crosses [Compile_driver]'s
+         attribution; this is the same check (gh-ocannl-707). Attributed on [msg] alone: [error_msg]
+         embeds the source, where every routine's declaration appears. *)
+      let backtrace = Stdlib.Printexc.get_callstack 16 in
+      C_syntax.attribute_routine_name_failure ~report:msg ~routine_names (Failure error_msg)
+        backtrace
 
   module Compile = C_syntax.Compile_driver (C_syntax_config)
 
@@ -1429,7 +1579,7 @@ using namespace metal;|}
       Compile.compile ~name bindings lowered ~includes:metal_includes
         ~builtins:Builtins_metal.builtins ~conditional_includes ~compile_source ()
     in
-    { metal_source; func_name; kparams; bindings; launch }
+    { metal_source; func_name; kparams; bindings; launch; routine_names = [ (func_name, name) ] }
 
   let compile_batch ~names bindings lowereds =
     let metal_source, entries =
@@ -1437,7 +1587,10 @@ using namespace metal;|}
         ~builtins:Builtins_metal.builtins ~conditional_includes ~compile_source ()
     in
     let funcs = Array.map entries ~f:(fun (kparams, name, launch) -> (name, kparams, launch)) in
-    { metal_source; funcs; bindings }
+    let routine_names =
+      Array.to_list (Array.map2_exn funcs names ~f:(fun (emitted, _, _) given -> (emitted, given)))
+    in
+    { metal_source; funcs; bindings; routine_names }
 
   (* gh-ocannl-344: from the routine's materialized nodes, assign each distinct pool an index (first
      use order), build the [(pool_index, byte_offset)] slot table (one [uint] pair per node,
@@ -1692,7 +1845,10 @@ using namespace metal;|}
 
   let link prior_context code ctx_buffers =
     let device = prior_context.device.dev in
-    let library = compile_metal_source ~name:code.func_name ~source:code.metal_source ~device in
+    let library =
+      compile_metal_source ~name:code.func_name ~routine_names:code.routine_names
+        ~source:code.metal_source ~device
+    in
     let lowered_bindings : Indexing.lowered_bindings =
       List.map (Indexing.bound_symbols code.bindings) ~f:(fun s -> (s, ref 0))
     in
@@ -1713,7 +1869,10 @@ using namespace metal;|}
         @@ common_prefix (List.map (Array.to_list code_batch.funcs) ~f:(fun (n, _, _) -> n)))
     in
     let base_name = if String.is_empty base_name then "batch" else base_name in
-    let library = compile_metal_source ~name:base_name ~source:code_batch.metal_source ~device in
+    let library =
+      compile_metal_source ~name:base_name ~routine_names:code_batch.routine_names
+        ~source:code_batch.metal_source ~device
+    in
     let lowered_bindings : Indexing.lowered_bindings =
       List.map (Indexing.bound_symbols code_batch.bindings) ~f:(fun s -> (s, ref 0))
     in

@@ -253,12 +253,14 @@ test/operations/reduction_forms.ml [also pins text this scan cannot name: untrac
     "ocannl_shfl_xor"
     "volatile "
     ... ^ "["
-test/operations/reserved_routine_names.ml
+test/operations/reserved_routine_names.ml [also pins text this scan cannot name: untraced callback, opaque aggregate component]
     "arrayjit_threefry4x32__"
     "asm__"
     "exp__"
     "gh686_bad_name_"
     "k_686_leading_digit"
+    "k__gh707_reserved"
+    "main__"
     "printf__"
     "void " ^ "gh686_ordinary_name" ^ "("
     "void " ^ ... ^ "("

@@ -177,6 +177,18 @@ files.
   the routine record, the `.cd`/`.ll` sources, calibration rows — deliberately keeps the caller's
   spelling; only the C-family artifacts carry the mangled one. Guard:
   `test/operations/reserved_routine_names.ml` (executes each colliding routine, not just parses it).
+- Beyond the C floor (gh-ocannl-707), a routine name meets the vendor headers, and only some of
+  their names collide with a kernel DEFINITION: global types, macros, dialect keywords and
+  C-linkage functions do; ordinary C++ functions do not, since overloading lets a kernel coexist
+  with them (on Metal every `metal::` function compiled as a kernel name). Three layers: the
+  implementation's reserved namespace (`__x`, `_X`, where vendors put most intrinsics) is closed by
+  rule, `C_syntax.implementation_reserved`; each backend's `vendor_routine_idents` holds the rest,
+  Metal's harvested by compiling every identifier token of the toolchain's `include/metal` headers
+  as a kernel name (582 failed), CUDA/HIP's read from their headers; and whatever a later SDK adds
+  fails through `C_syntax.attribute_routine_name_failure`, which turns a compiler report quoting a
+  routine's `void <name>(` line, or an error line quoting the name, into a `Utils.User_error`
+  naming the routine. A Metal compile error is a `Failure` carrying the whole source, where every
+  declaration appears, so attribution there reads the compiler's message alone.
 - `test/config/ocannl_config` pins `backend=cc`, so `dune runtest` never exercises GPU codegen —
   a Metal/CUDA-only rendering bug passes a fully green suite. The bf16 bug above was already
   covered by `test/training/mixed_prec_parity.ml` (its "loss trajectory parity within 0.1" check

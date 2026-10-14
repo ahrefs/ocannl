@@ -612,6 +612,15 @@ module type C_syntax_config = sig
   val vec_typ_of_prec : length:int -> Ops.prec -> string
   val ident_blacklist : string list
 
+  val vendor_routine_idents : string list
+  (** File-scope names the backend's own vendor headers declare (or its compiler predefines) that a
+      kernel DEFINITION cannot take, beyond the C floor {!c_stdlib_idents} already covers: global
+      type names, macros, dialect keywords, and C-linkage functions (gh-ocannl-707). Constrains
+      routine names only ({!C_syntax.kernel_ident}), for the reason {!c_stdlib_idents} does: a
+      parameter or a local may shadow these, a file-scope definition may not. Names in the
+      implementation's reserved namespace ([__x], [_X]) need no entry: {!implementation_reserved}
+      closes that class by rule. [[]] for a dialect whose headers stop at the C floor. *)
+
   val ptr_param_style : [ `Per_param | `Pooled of int ]
   (** How materialized in-context tensor nodes are passed to the kernel. [`Per_param] (the default,
       used by C and CUDA) emits one typed pointer parameter per node, whose host side binds
@@ -1575,6 +1584,10 @@ let c_stdlib_macros =
     callee the same kernel invokes. *)
 let c_stdlib_idents =
   [
+    (* Not a library declaration but the standard's own: a hosted program's entry point, whose
+       signature clang enforces ("first parameter of 'main' must be of type 'int'") and whose name
+       MSL reserves outright (gh-ocannl-707). *)
+    "main";
     "FILE";
     "fpos_t";
     "fopen";
@@ -1851,6 +1864,127 @@ let cpp_keywords =
     "xor_eq";
   ]
 
+(** Whether [name] lies in the namespace C and C++ reserve for the implementation in every scope: a
+    leading double underscore, or an underscore followed by an uppercase letter. That is where the
+    vendors put the bulk of what their headers declare -- [__half], [__nv_bfloat16], [__hadd],
+    [__expf], [__syncthreads], [__builtin_*] -- so a routine name there is mangled by this rule
+    rather than by enumerating any header (gh-ocannl-707). A single leading underscore before a
+    lowercase letter is reserved only at file scope in C and is left alone:
+    [Assignments.get_name_exn] can produce such names ([_then_...]), and renaming them would buy
+    nothing a header declares. *)
+let implementation_reserved name =
+  String.is_prefix name ~prefix:"__"
+  || (String.length name >= 2 && Char.equal name.[0] '_' && Char.is_uppercase name.[1])
+
+(** Every [<prefix><scalar><width>] spelling: the vector-type families GPU dialects declare as
+    global type names, which a kernel definition of the same name collides with as "redefinition as
+    a different kind of symbol". A generator rather than a list because the families are a grammar
+    and the headers instantiate it (sometimes partially, which only makes the generated set a
+    superset -- harmless for a routine-name blacklist). *)
+let vector_type_names ~prefixes ~scalars ~widths =
+  List.concat_map prefixes ~f:(fun prefix ->
+      List.concat_map scalars ~f:(fun scalar ->
+          List.map widths ~f:(fun width -> prefix ^ scalar ^ Int.to_string width)))
+
+(** {2 Name-caused compile failures (gh-ocannl-707)}
+
+    The reserved-name tables above are a floor, not a proof: a vendor SDK can declare a name after
+    the table was harvested. What must hold regardless is that a failure the routine's NAME caused
+    says so -- gh-ocannl-686's complaint was a compile error reported as "a bug in OCANNL" while the
+    cause, the name, appeared nowhere in it. *)
+
+(** [routine_name_in_diagnostics ~routine_names report] is the first of [routine_names] (emitted
+    spellings) that [report], a compiler's failure output, attributes the failure to, if any. Two
+    shapes count, both of them the compiler pointing at the routine's own declaration rather than at
+    anything in its body:
+
+    - the report quotes the declaration line, [void <name>(] -- gcc, clang (cc, Metal, hiprtc) and
+      nvrtc echo the offending source line, and the emitted header puts the parameters on the lines
+      after it, so a quoted [void <name>(] is the name's line and nothing else;
+    - an error line names it in quotes (['name'], ["name"], [‘name’]) AND says the name conflicts
+      with a declaration ("redefinition of", "conflicting types for", "has already been declared",
+      "redeclaration", "different kind of symbol") -- the shape of the declaration's own diagnostic
+      when the compiler does not echo the line.
+
+    Deliberately not counted: a quoted name on any other error line --
+    ["use of undeclared identifier 'name'"] is about the routine's BODY, where a node or local may
+    share the routine's spelling, and blaming the name would both mislead the user and turn a
+    schedule decline into a fatal error (PR review) -- nor gcc's ["In function 'name':"] context
+    line, which precedes ANY error in the body. *)
+let routine_name_in_diagnostics ~routine_names report =
+  let lines = String.split_lines report in
+  let is_ident_char c = Char.is_alphanum c || Char.equal c '_' in
+  let quotes_declaration name =
+    let pattern = "void " ^ name ^ "(" in
+    List.exists lines ~f:(fun line ->
+        List.exists (String.substr_index_all line ~may_overlap:false ~pattern) ~f:(fun i ->
+            i = 0 || not (is_ident_char line.[i - 1])))
+  in
+  let error_line_quotes name =
+    let quoted = [ "'" ^ name ^ "'"; "\"" ^ name ^ "\""; "\u{2018}" ^ name ^ "\u{2019}" ] in
+    let conflict_phrases =
+      [
+        "redefinition";
+        "conflicting types";
+        "conflicting declaration";
+        "already been declared";
+        "already declared";
+        "redeclaration";
+        "redeclared";
+        "different kind of symbol";
+      ]
+    in
+    List.exists lines ~f:(fun line ->
+        let lower = String.lowercase line in
+        String.is_substring lower ~substring:"error"
+        && List.exists conflict_phrases ~f:(fun substring -> String.is_substring lower ~substring)
+        && List.exists quoted ~f:(fun substring -> String.is_substring line ~substring))
+  in
+  List.find routine_names ~f:(fun name ->
+      (not (String.is_empty name)) && (quotes_declaration name || error_line_quotes name))
+
+(** [attribute_routine_name_failure ~routine_names exn backtrace] re-raises a failed compile's
+    exception: as a [Utils.User_error] naming the routine when {!routine_name_in_diagnostics}
+    attributes the failure to a routine's name, unchanged otherwise. [routine_names] pairs each
+    emitted spelling with the name the caller asked for. A user error, not a schedule decline: the
+    name is shared by every candidate of a search, so the failure would repeat identically, and
+    nothing about it is OCANNL's codegen. [?report] overrides the report read off [exn] for a
+    backend whose exception embeds more than the compiler's output -- Metal's carries the whole
+    source, in which every routine's declaration appears. *)
+let attribute_routine_name_failure ?report ~routine_names exn backtrace =
+  let report =
+    match (report, exn) with
+    | Some report, _ -> report
+    (* The compiler's report as each backend raises it: a [Failure] (Metal), a
+       {!Schedule_outcome.Cause_at} detail (cc), or a toolchain exception whose registered printer
+       renders the log (nvrtc, hiprtc). *)
+    | None, (Failure report | Invalid_argument report | Utils.User_error report) -> report
+    | None, Schedule_outcome.Cause_at (_, cause) -> Schedule_outcome.detail_of_cause cause
+    | None, exn -> Stdlib.Printexc.to_string exn
+  in
+  match routine_name_in_diagnostics ~routine_names:(List.map routine_names ~f:fst) report with
+  | None -> Stdlib.Printexc.raise_with_backtrace exn backtrace
+  | Some emitted ->
+      let given =
+        List.Assoc.find routine_names ~equal:String.equal emitted |> Option.value ~default:emitted
+      in
+      let spelled =
+        if String.equal given emitted then Printf.sprintf "%S" given
+        else Printf.sprintf "%S (emitted as %S)" given emitted
+      in
+      Stdlib.Printexc.raise_with_backtrace
+        (Utils.User_error
+           (Printf.sprintf
+              "The routine name %s does not compile: the compiler's error points at that routine's \
+               declaration, so the name most likely collides with an identifier the backend's \
+               toolchain headers declare, or with another routine of the same batch \
+               (gh-ocannl-707). Rename the routine (the [~name] argument, or the [Block_comment] \
+               label it was derived from). If a fresh name fails the same way, this is a bug in \
+               OCANNL. The compiler's report follows.\n\
+               %s"
+              spelled report))
+        backtrace
+
 (** {!C_syntax_config.full_printf_support} for a dialect whose [printf] does support [%g] — every
     backend except Metal, whose MSL [printf] does not. Such a backend still gives the scaled-integer
     rendering up when asked for backend uniformity, so that its routine logs read the same as
@@ -1878,6 +2012,10 @@ struct
   let typ_of_prec = Ops.c_typ_of_prec
   let supports_f64 = true
   let vec_typ_of_prec = Ops.c_vec_typ_of_prec
+
+  (* The C preludes include only the standard headers, whose declarations {!c_stdlib_idents} and
+     {!c_stdlib_macros} already cover. *)
+  let vendor_routine_idents = []
   let ptr_param_style = `Per_param
 
   (* Plain C backends bind no hardware axes: annotated loops fall back to serial [for] loops (sound
@@ -2152,8 +2290,10 @@ module C_syntax (B : C_syntax_config) = struct
 
       - characters C does not admit in an identifier become [_], and a name starting with a digit
         (or empty after that pass) gains a [k_] prefix, so the result is always well-formed;
+      - a name in the implementation's reserved namespace ({!implementation_reserved}: [__x], [_X])
+        gains a [k] prefix, which leaves that namespace for good (gh-ocannl-707);
       - a result still equal to a reserved word or builtin gains a [__] suffix, repeatedly until it
-        is clear of [ident_blacklist] -- which terminates, the list being finite.
+        is clear of {!routine_ident_blacklist} -- which terminates, the list being finite.
 
       The name a routine is KNOWN by is untouched: [Context.routine]'s [name] field, the [.cd] and
       [.ll] sources (written by {!Backends} before any backend sees the code), and the calibration
@@ -2165,17 +2305,20 @@ module C_syntax (B : C_syntax_config) = struct
       the language's keywords, C plus C++ for the GPU dialects, the backend's intrinsic globals, its
       builtins table's keys, and the names its own operator renderings emit) plus
       {!c_stdlib_idents}, the standard-library functions and types the preludes' unconditional
-      includes declare, which constrain a file-scope definition and not a parameter.
+      includes declare, plus the backend's [vendor_routine_idents] -- what its vendor headers
+      declare at file scope beyond that floor (gh-ocannl-707) -- all of which constrain a file-scope
+      definition and not a parameter.
 
       Two things it deliberately does not do. Uniqueness {e among} the routines of one batch is not
       its business and never was -- two routines given the same name collide as duplicate C symbols
-      with or without mangling. And it cannot see what a BACKEND-SPECIFIC header declares beyond the
-      C standard floor ([<cuda_fp16.h>], [metal_stdlib]'s namespace): those names are covered only
-      where a rendering emits them, so a routine named after an unused vendor intrinsic still
-      reaches the vendor compiler. That failure is an ordinary compile error naming the conflict,
-      which is the state this function put the reserved words in -- not the misattributed "bug in
-      OCANNL" the issue was about. *)
-  let routine_ident_blacklist = ident_blacklist @ c_stdlib_idents
+      with or without mangling. And it does not claim the vendor tables are complete: an SDK can
+      declare a name after the table was harvested. A routine name that collides with one anyway
+      fails in the vendor compiler, and {!Compile_driver} (or Metal's link-time compile) reports
+      that failure as the NAME's, through {!attribute_routine_name_failure} -- not as the "bug in
+      OCANNL" gh-ocannl-686 was about. *)
+  let routine_ident_blacklist = ident_blacklist @ c_stdlib_idents @ B.vendor_routine_idents
+
+  let routine_ident_table = Hash_set.of_list (module String) routine_ident_blacklist
 
   let kernel_ident name =
     let sanitized =
@@ -2185,9 +2328,8 @@ module C_syntax (B : C_syntax_config) = struct
       if String.is_empty sanitized || Char.is_digit sanitized.[0] then "k_" ^ sanitized
       else sanitized
     in
-    let rec avoid s =
-      if List.mem routine_ident_blacklist s ~equal:String.equal then avoid (s ^ "__") else s
-    in
+    let sanitized = if implementation_reserved sanitized then "k" ^ sanitized else sanitized in
+    let rec avoid s = if Hash_set.mem routine_ident_table s then avoid (s ^ "__") else s in
     avoid sanitized
 
   (* {3 Storage precision vs. compute precision (gh-ocannl-517)}
@@ -7860,7 +8002,9 @@ end
 
 (** One driver owns naming, binding order, emission order and batch source assembly. The compiler
     callback retains ownership of its artifacts and libraries; its return value is shared by every
-    batch member, and exceptions cross this boundary unchanged. *)
+    batch member, and its exceptions cross this boundary unchanged -- except one whose compiler
+    report points at a routine's declaration, which is re-raised as the routine NAME's failure
+    ({!attribute_routine_name_failure}, gh-ocannl-707). *)
 module Compile_driver
     (Config : functor
       (Input : sig
@@ -7874,6 +8018,7 @@ struct
       let procs = Array.map lowereds ~f:(fun l -> l.Low_level.llc)
     end))
     in
+    let given_names = names in
     let names = Array.map names ~f:Syntax.kernel_ident in
     let idx_params = Indexing.bound_symbols bindings in
     let entries =
@@ -7890,7 +8035,14 @@ struct
       if batch then String.(strip ~drop:(equal_char '_') @@ common_prefix (Array.to_list names))
       else names.(0)
     in
-    let result = compile_source ~name source in
+    let result =
+      try compile_source ~name source
+      with exn ->
+        let backtrace = Stdlib.Printexc.get_raw_backtrace () in
+        attribute_routine_name_failure
+          ~routine_names:(Array.to_list (Array.zip_exn names given_names))
+          exn backtrace
+    in
     (result, Array.map entries ~f:fst)
 
   let compile ~name bindings lowered ~includes ~builtins ?conditional_includes ~compile_source () =
