@@ -460,7 +460,10 @@ val release : t -> unit
     no-op), and safe to call on a context derived from a still-live parent. Compile siblings own
     separate working pools; upload siblings reference-count their shared pools, freeing each after
     its last sibling releases it. A linear chain of uploads supersedes its intermediate values:
-    release its latest value, after releasing any compiled descendants.
+    release its latest value, after releasing any compiled descendants. Releasing it also retires
+    the merge-buffer consumers compiled into the chain before the uploads, so they no longer block a
+    refill of the merge buffer; an upload fork keeps them pending until every leaf holding their
+    buffers is released (gh-ocannl-1203).
 
     {b Precondition, not checked}: the context must have no live descendants. A context compiled
     {e from} this one inherits its buffer locations while keeping it as their backend parent, so

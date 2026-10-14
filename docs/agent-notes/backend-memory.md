@@ -64,6 +64,12 @@ files.
   locations, so releasing an ancestor leaves the descendant resolving a dropped `pool_id`. This
   precondition remains for compiled descendants; upload siblings reference-count shared working
   pools (gh-ocannl-1173) without counting superseded values in a linear upload chain.
+- **`Context.t.context_id` names a release unit, not a value** (gh-ocannl-1203). The merge-buffer
+  ledger retires a consumer's registration by the released context's id, so every value that shares
+  a backend release flag (`finalized`: a linear upload chain, an upload into an existing buffer)
+  must share the id, and `Context.derive` preserves it for them; a fresh id per upload strands the
+  readers compiled before it and refuses every later refill. An upload fork gets its own id and a
+  copy of its parent's registrations; `test_execution_deps` Test 9 pins both directions.
 - **Read-only in one routine does not make a parameter a device-wide constant** (gh-ocannl-641).
   A host-backed parameter used only as another parameter's initializer input has no executable
   write in that routine. Its `Tnode.context_owned` construction marker keeps it in the working
