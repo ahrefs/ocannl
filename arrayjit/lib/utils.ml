@@ -1517,6 +1517,25 @@ let build_files_dir () = ensure_artifacts_dir "build_files" (artifacts_subdir ()
 
 let build_file fname = filename_concat (build_files_dir ()) @@ clean_filename fname
 
+(** The file extension of a dynamically loaded library on this platform. *)
+let dynamic_library_extension = if Sys.win32 then ".dll" else ".so"
+
+(** [kept_library_prefix ~pid base_name] is the file-name prefix shared by every library that the
+    process [pid] keeps in {!build_files_dir} for the kernel [base_name] under
+    [output_dlls_in_build_directory] (gh-ocannl-1247); the full name is the prefix, the run id, then
+    {!dynamic_library_extension}. The pid keeps concurrently running processes of one executable
+    apart, since they share that directory; the run id keeps the compiles of one process apart. *)
+let kept_library_prefix ~pid base_name =
+  clean_filename base_name ^ "_pid" ^ Int.to_string pid ^ "_run"
+
+(** [kept_library_file ~run_id base_name] is where this process keeps the library of [base_name]'s
+    compile number [run_id] under [output_dlls_in_build_directory]: beside [base_name]'s debug
+    source, under a name no other compile, in this process or a concurrent one, uses. *)
+let kept_library_file ~run_id base_name =
+  filename_concat (build_files_dir ())
+    (kept_library_prefix ~pid:(Unix.getpid ()) base_name
+    ^ Int.to_string run_id ^ dynamic_library_extension)
+
 (** The directory diagnostic and routine-debug logs are written to (created if missing):
     [log_files/<prefix>/], sharing the prefix resolution of {!build_files_dir}. *)
 let log_files_dir () = ensure_artifacts_dir "log_files" (artifacts_subdir ())

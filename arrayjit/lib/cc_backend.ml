@@ -877,20 +877,19 @@ type procedure = {
 }
 [@@deriving sexp_of]
 
-let%track7_sexp c_compile_and_load ~f_path =
+let%track7_sexp c_compile_and_load ~name:(base_name : string) ~f_path =
   (* The pool restriction (gh-ocannl-530) must be in force before the first [-fopenmp] kernel is
      dlopened, not merely before its first parallel region: libgomp computes its default team size
      from the affinity mask in its ELF/PE constructor, which runs at dlopen. Forced unconditionally
      — the decision itself no-ops under [`Dispatch]/[`None], and re-reading the syntax setting here
      would re-scan argv per kernel compile just to guard an already-memoized force. *)
   ignore (Lazy.force pool_restriction : Utils.Cpu_topology.pool_decision);
-  let _base_name : string = Stdlib.Filename.chop_extension f_path in
   (* Temporary-file ownership (gh-ocannl-1197). [f_path] is handed over by [compile_source]: a
      temporary that only the compiler reads. This compilation also creates the compiler log and,
      unless library output was requested, the library. The log is always removed; the source and the
      library are removed on every path, success included, unless a setting asks for them: debug
-     files retain both, library output retains the library. The [build_files/] copy of the source is
-     a debug output written elsewhere, never one of these. *)
+     files retain both, library output keeps the library in [build_files/] (gh-ocannl-1247). The
+     [build_files/] copy of the source is a debug output written elsewhere, never one of these. *)
   let retain_debug = Utils.settings.output_debug_files_in_build_directory in
   let library_requested =
     Utils.get_global_flag ~default:false ~arg_name:"output_dlls_in_build_directory"
@@ -912,16 +911,19 @@ let%track7_sexp c_compile_and_load ~f_path =
      with that mapping, without reading the file; the library is unlinked while still mapped (below)
      and [Dl.dlclose] need not unload it, so a later [temp_file] landing on the freed name would
      otherwise run the earlier kernel. *)
-  let run_id = Int.to_string @@ Utils.get_global_run_id () in
+  let run_id = Utils.get_global_run_id () in
   let libname =
-    let file_stem = Stdlib.Filename.chop_extension @@ Stdlib.Filename.basename f_path in
     if library_requested then
-      (* Use only the path from f_path for the linked library libname *)
-      _base_name ^ "_run_id_" ^ run_id ^ if Sys.win32 then ".dll" else ".so"
+      (* Not beside [f_path]: that is a private temporary even under debug files (see
+         [compilation_copy]). The kept library goes beside the kernel's [build_files/] source, named
+         apart per process as well as per compile, since concurrent processes of one executable
+         share that directory (gh-ocannl-1247). *)
+      Utils.kept_library_file ~run_id base_name
     else
+      let file_stem = Stdlib.Filename.chop_extension @@ Stdlib.Filename.basename f_path in
       Stdlib.Filename.temp_file
-        (file_stem ^ "_run_id_" ^ run_id ^ "_")
-        (if Sys.win32 then ".dll" else ".so")
+        (file_stem ^ "_run_id_" ^ Int.to_string run_id ^ "_")
+        Utils.dynamic_library_extension
   in
   (try Stdlib.Sys.remove libname with _ -> ());
   let kernel_link_flags = Lazy.force kernel_link_flags in
@@ -1354,7 +1356,7 @@ let compile_source ~name source =
   let build_file = Utils.open_build_file ~base_name:name ~extension:".c" in
   Out_channel.output_string build_file.oc source;
   build_file.finalize ();
-  c_compile_and_load ~f_path:(compilation_copy ~name build_file source)
+  c_compile_and_load ~name ~f_path:(compilation_copy ~name build_file source)
 
 let%diagn_sexp compile ~(name : string) bindings (lowered : Low_level.optimized) : procedure =
   let result, kparams, name, _launch =
