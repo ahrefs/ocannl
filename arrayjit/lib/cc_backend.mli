@@ -60,3 +60,11 @@ val kernel_link_flags : string Lazy.t
 (** Platform-specific kernel shared-library flags. In particular, ELF kernels bind their own builtin
     calls locally even when the host stubs use a different native-half ABI. Runtime compiler probes
     use this same policy rather than restating the linker flags. *)
+
+val compile_failure_detail :
+  exit_code:int -> source_note:string -> command:string -> compiler_output:string -> string
+(** The detail of the [Backend_rejected] a failed C compile raises: the exit code, the
+    {!Ir.C_syntax.codegen_bug_claim} asking for [source_note]'s file, the command and the compiler's
+    output. Exposed so a test can hand {!Ir.C_syntax.attribute_routine_name_failure} the report this
+    backend actually raises: attributed to a routine's name, it is quoted without that claim; not
+    attributed, it propagates with the claim intact. *)

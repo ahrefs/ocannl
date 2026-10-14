@@ -877,6 +877,17 @@ type procedure = {
 }
 [@@deriving sexp_of]
 
+let compile_failure_detail ~exit_code ~source_note ~command ~compiler_output =
+  Printf.sprintf
+    "OCANNL cc backend: generated code failed to compile (exit code %d).\n\
+     %s\n\
+     Compilation command: %s\n\
+     Compiler output:\n\
+     %s"
+    exit_code
+    (C_syntax.codegen_bug_claim ~artifact:source_note)
+    command compiler_output
+
 let%track7_sexp c_compile_and_load ~name:(base_name : string) ~f_path =
   (* The pool restriction (gh-ocannl-530) must be in force before the first [-fopenmp] kernel is
      dlopened, not merely before its first parallel region: libgomp computes its default team size
@@ -991,13 +1002,7 @@ let%track7_sexp c_compile_and_load ~name:(base_name : string) ~f_path =
     (* A compiler can exit non-zero after writing part of its output. *)
     if library_owned then remove libname;
     let detail =
-      Printf.sprintf
-        "OCANNL cc backend: generated code failed to compile (exit code %d).\n\
-         This is a bug in OCANNL. Please file an issue with %s\n\
-         Compilation command: %s\n\
-         Compiler output:\n\
-         %s"
-        _rc source_note _cmdline compiler_output
+      compile_failure_detail ~exit_code:_rc ~source_note ~command:_cmdline ~compiler_output
     in
     raise
       (Schedule_outcome.Cause_at

@@ -254,7 +254,7 @@ test/operations/reduction_forms.ml [also pins text this scan cannot name: untrac
     "ocannl_shfl_xor"
     "volatile "
     ... ^ "["
-test/operations/reserved_routine_names.ml [also pins text this scan cannot name: untraced callback, opaque aggregate component]
+test/operations/reserved_routine_names.ml [also pins text this scan cannot name: untraced callback, opaque aggregate component, unvalidated haystack]
     "arrayjit_threefry4x32__"
     "asm__"
     "exp__"

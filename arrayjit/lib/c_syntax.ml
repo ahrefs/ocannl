@@ -1943,6 +1943,16 @@ let routine_name_in_diagnostics ~routine_names report =
   List.find routine_names ~f:(fun name ->
       (not (String.is_empty name)) && (quotes_declaration name || error_line_quotes name))
 
+(** The opening of the sentence a backend's compile-failure report blames OCANNL's codegen with.
+    {!codegen_bug_claim} is the only producer, and {!attribute_routine_name_failure} the only
+    reader: a report it hands to the user as the routine NAME's failure must not go on to call
+    itself "a bug in OCANNL". *)
+let codegen_bug_claim_prefix = "This is a bug in OCANNL. Please file an issue with "
+
+(** [codegen_bug_claim ~artifact] is that sentence, asking for [artifact] (the generated source the
+    issue should carry). One line, so {!attribute_routine_name_failure} removes exactly it. *)
+let codegen_bug_claim ~artifact = codegen_bug_claim_prefix ^ artifact
+
 (** [attribute_routine_name_failure ~routine_names exn backtrace] re-raises a failed compile's
     exception: as a [Utils.User_error] naming the routine when {!routine_name_in_diagnostics}
     attributes the failure to a routine's name, unchanged otherwise. [routine_names] pairs each
@@ -1950,7 +1960,10 @@ let routine_name_in_diagnostics ~routine_names report =
     name is shared by every candidate of a search, so the failure would repeat identically, and
     nothing about it is OCANNL's codegen. [?report] overrides the report read off [exn] for a
     backend whose exception embeds more than the compiler's output -- Metal's carries the whole
-    source, in which every routine's declaration appears. *)
+    source, in which every routine's declaration appears. The attributed message quotes the report
+    less every line opening with {!codegen_bug_claim_prefix}, keeping the rest -- the compiler's own
+    output in particular -- verbatim: cc's report carries that claim for the unattributed case, and
+    here it would contradict the message quoting it (the unattributed re-raise keeps it). *)
 let attribute_routine_name_failure ?report ~routine_names exn backtrace =
   let report =
     match (report, exn) with
@@ -1968,6 +1981,11 @@ let attribute_routine_name_failure ?report ~routine_names exn backtrace =
       let given =
         List.Assoc.find routine_names ~equal:String.equal emitted |> Option.value ~default:emitted
       in
+      let quoted =
+        String.split report ~on:'\n'
+        |> List.filter ~f:(fun line -> not (String.is_prefix line ~prefix:codegen_bug_claim_prefix))
+        |> String.concat ~sep:"\n"
+      in
       let spelled =
         if String.equal given emitted then Printf.sprintf "%S" given
         else Printf.sprintf "%S (emitted as %S)" given emitted
@@ -1982,7 +2000,7 @@ let attribute_routine_name_failure ?report ~routine_names exn backtrace =
                label it was derived from). If a fresh name fails the same way, this is a bug in \
                OCANNL. The compiler's report follows.\n\
                %s"
-              spelled report))
+              spelled quoted))
         backtrace
 
 (** {!C_syntax_config.full_printf_support} for a dialect whose [printf] does support [%g] — every
