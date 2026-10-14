@@ -528,9 +528,14 @@ files.
   `Schedule.pipeline_violation` (gh-ocannl-1231): `op_legality` refuses any op leaving one — a
   `Split` or materializing `Unroll` of the rotor (its binder vanishes, so the reads fall outside),
   an in-place `Unroll` or retype of it — so the beam menu, seeding's `schedule_legality` and the
-  renderer agree, and the renderer's declines are the backstop. A new op whose output can move a
-  tile read or rewrite a loop needs nothing extra; a new pipelined-rendering precondition belongs
-  in both places (`pipelined_move_legality` pins their agreement on GPU backends).
+  renderer agree, and the renderer's declines are the backstop. The renderer builds those declines
+  from the same type (`Schedule.pipeline_violation_cause`), so each fact has one wording and one
+  decline feature. A new op whose output can move a tile read or rewrite a loop needs nothing
+  extra; a new pipelined-rendering precondition is a new constructor, raised by the renderer
+  through that function, plus a fixture producing it: `pipelined_move_legality` derives the
+  oracle's reasons from the type (ppx_variants_conv) and fails until the fixtures exercise every
+  one, and on GPU backends it relates each renderer decline to the oracle's violations of the
+  very IR it was compiled from, in both directions.
 - Autotune fault injection keyed by ATTEMPT INDEX (`Autotune.on_candidate_attempt`) is
   backend-dependent and silently vacuous: how many attempts precede an arm's first *timed* candidate
   varies. On Metal a small matmul's materialize-all arm has a baseline binding no hardware dimension
