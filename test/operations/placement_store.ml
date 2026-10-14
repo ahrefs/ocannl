@@ -45,6 +45,7 @@ open Ocannl.Operation.DSL_modules
 module Tn = Ir.Tnode
 module SC = Ir.Schedule_cache
 open Verdict.Claims
+module Cache_plant = Test_utils.Cache_plant
 
 let approx a b = Float.(abs (a -. b) < 1e-4)
 let n = 8
@@ -106,25 +107,18 @@ let placement_stores p = List.filter p.io ~f:(fun r -> is_store r && is_placemen
 let placement_lookups p = List.filter p.io ~f:(fun r -> (not (is_store r)) && is_placement r)
 let schedule_stores p = List.filter p.io ~f:(fun r -> is_store r && not (is_placement r))
 let lookups p = List.filter p.io ~f:(Fn.non is_store)
-let refused (r : SC.cache_io) = Option.is_some r.SC.refusal
+let refused = Cache_plant.refused
+let refused_on = Cache_plant.refused_on
 
 (* Whether any of the operations [ops] rests on was refused, naming on stderr, for the claim [label]
-   it waives, what refused and why. *)
-let refused_in ops label =
-  let refusals = List.filter (List.concat ops) ~f:refused in
-  List.iter refusals ~f:(fun (r : SC.cache_io) ->
-      Stdio.eprintf "%s (not part of the golden): cache I/O under %s refused: %s\n%!" label r.SC.key
-        (Option.value r.SC.refusal ~default:""));
-  not (List.is_empty refusals)
-
-let refused_on = "refused cache I/O"
+   it waives, what refused and why ([Cache_plant.refused_in]). *)
+let refused_in ops label = Cache_plant.refused_in (List.concat ops) label
 
 (* [label] over [b], evaluated where none of the operations [ops] was refused; a refusal waives it
    as an environment skip, never as a pass. A refusal that is no transient -- a filename the
    filesystem rejects, a commit that always fails -- would waive these on every run, which the
    process-wide claim before run 8 keeps red. *)
-let unless_refused ops label b =
-  gated ~aggregation:`Environment ~when_:(not (refused_in ops label)) ~on:refused_on label b
+let unless_refused ops label b = Cache_plant.unless_refused (List.concat ops) label b
 
 (* One placement tune of [graph]'s routine from [ctx] (a fresh [Context.auto ()] by default) with
    [cache_dir] as the cache directory, run and read back: the arm and flip reports in order, what

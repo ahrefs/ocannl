@@ -31,6 +31,7 @@ module LL = Ir.Low_level
 module Sched = Ir.Schedule
 module SC = Ir.Schedule_cache
 module Generated = Test_utils.Generated
+module Cache_plant = Test_utils.Cache_plant
 open Verdict.Claims
 
 let () = Utils.settings.output_debug_files_in_build_directory <- true
@@ -143,34 +144,19 @@ let fission rut ?arity_cuts ?fold_zeros ?keep_mapping ?segmentation () =
     ~preset:(preset rut) ~zero_sched:(zero_sched rut) ~static_indices:[] (copy rut.base_opt)
 
 let cache_key rut =
-  SC.cache_key
+  Cache_plant.key
+    ~backend:(Context.backend_name rut.base_ctx)
     ~timing_identity:(Context.timing_identity rut.base_ctx)
     ~limits:rut.limits ~capabilities:rut.caps rut.base_canon
-    ~backend:(Context.backend_name rut.base_ctx)
 
 (* A fissioned winner stored the way [Autotune.tune] stores one. *)
 let store ~cache_dir rut segments =
-  SC.store ~dir:cache_dir ~key:(cache_key rut)
-    {
-      SC.version = SC.entry_version;
-      backend = Context.backend_name rut.base_ctx;
-      numerics = SC.numerics_tag ();
-      codegen =
-        Some
-          (SC.codegen_tag
-             ~backend:(Context.backend_name rut.base_ctx)
-             ~limits:rut.limits ~capabilities:rut.caps ());
-      objective = Some (SC.objective_tag ());
-      source_digest = SC.digest rut.base_canon;
-      saved = [];
-      segments = Some segments;
-      best_ms = 0.;
-      baseline_ms = 0.;
-      default_ms = None;
-      mma_best_ms = None;
-      default_fingerprint = None;
-      best_steps = None;
-    }
+  ignore
+    (Cache_plant.plant ~segments ~cache_dir
+       ~backend:(Context.backend_name rut.base_ctx)
+       ~timing_identity:(Context.timing_identity rut.base_ctx)
+       ~limits:rut.limits ~capabilities:rut.caps rut.base_canon
+      : SC.cache_io list)
 
 let tune ?search ~name ~cache_dir comp ~read =
   let report = ref None in

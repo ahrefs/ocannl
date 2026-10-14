@@ -31,6 +31,7 @@ module Sched = Ir.Schedule
 module SC = Ir.Schedule_cache
 module Asgns = Ir.Assignments
 open Verdict.Claims
+module Cache_plant = Test_utils.Cache_plant
 
 (* The report's outcome as the questions this test asks of it (gh-ocannl-677): the outcome is a
    variant naming one of five mutually exclusive states, so a claim names the state it means instead
@@ -173,30 +174,12 @@ let () =
   in
   let blimits = Context.hardware_limits bctx in
   let bcaps = Context.codegen_capabilities bctx in
-  SC.store ~dir:cache_dir
-    ~key:
-      (SC.cache_key ~timing_identity:(Context.timing_identity bctx) ~limits:blimits
-         ~capabilities:bcaps base_canon ~backend:(Context.backend_name bctx))
-    {
-      SC.version = SC.entry_version;
-      backend = Context.backend_name bctx;
-      numerics = SC.numerics_tag ();
-      codegen =
-        Some
-          (SC.codegen_tag ~backend:(Context.backend_name bctx) ~limits:blimits ~capabilities:bcaps
-             ());
-      objective = Some (SC.objective_tag ());
-      source_digest = SC.digest base_canon;
-      saved = [];
-      segments = Some !saved_segments;
-      best_ms = 0.;
-      baseline_ms = 0.;
-      default_ms = None;
-      (* Also pre-gh-579: no stored tensorized best, so a replay of it reports none. *)
-      mma_best_ms = None;
-      default_fingerprint = None;
-      best_steps = None;
-    };
+  (* Also pre-gh-579: no stored tensorized best, so a replay of it reports none. *)
+  ignore
+    (Cache_plant.plant ~segments:!saved_segments ~cache_dir ~backend:(Context.backend_name bctx)
+       ~timing_identity:(Context.timing_identity bctx) ~limits:blimits ~capabilities:bcaps
+       base_canon
+      : SC.cache_io list);
   let hit_report = ref None in
   let hctx = Context.auto () in
   let hctx, hroutine =

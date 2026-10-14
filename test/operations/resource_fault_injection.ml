@@ -10,6 +10,7 @@ module FI = Ir.Resource_fault_injection
 module AC = Ir.Alloc_census
 module SC = Ir.Schedule_cache
 open Verdict.Claims
+module Cache_plant = Test_utils.Cache_plant
 
 let injected ?(at = 1) point f =
   let hits = ref 0 in
@@ -43,23 +44,8 @@ let approx_array a b =
   && Array.length a = Array.length b
   && Array.for_all2_exn a b ~f:(fun x y -> Float.(abs (x - y) < 1e-5))
 
-let cache_entry backend best_ms : SC.entry =
-  {
-    version = SC.entry_version;
-    backend;
-    numerics = SC.numerics_tag ();
-    codegen = None;
-    objective = None;
-    source_digest = "gh571-source";
-    saved = [];
-    segments = None;
-    best_ms;
-    baseline_ms = best_ms +. 1.;
-    mma_best_ms = None;
-    default_ms = None;
-    default_fingerprint = None;
-    best_steps = None;
-  }
+let cache_entry backend best_ms =
+  Cache_plant.entry ~backend ~source_digest:"gh571-source" ~best_ms ~baseline_ms:(best_ms +. 1.) ()
 
 let resource_cache_dir = "autotune_cache_resource_fault_injection"
 

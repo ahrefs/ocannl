@@ -15,6 +15,7 @@ open Base
 module FI = Ir.Resource_fault_injection
 module SC = Ir.Schedule_cache
 open Verdict.Claims
+module Cache_plant = Test_utils.Cache_plant
 
 let cache_dir = "autotune_cache_regime_race"
 let old_key = "old"
@@ -22,23 +23,8 @@ let writer_key = "concurrent-writer"
 let transition_mode = "--regime-transition-child"
 let writer_mode = "--regime-writer-child"
 
-let entry backend : SC.entry =
-  {
-    version = SC.entry_version;
-    backend;
-    numerics = SC.numerics_tag ();
-    codegen = None;
-    objective = None;
-    source_digest = "gh884-source";
-    saved = [];
-    segments = None;
-    best_ms = 1.;
-    baseline_ms = 2.;
-    default_ms = None;
-    mma_best_ms = None;
-    default_fingerprint = None;
-    best_steps = None;
-  }
+let entry backend =
+  Cache_plant.entry ~backend ~source_digest:"gh884-source" ~best_ms:1. ~baseline_ms:2. ()
 
 let stamp_file = Stdlib.Filename.concat cache_dir SC.regime_stamp_filename
 let lock_file = Stdlib.Filename.concat cache_dir SC.regime_lock_filename
