@@ -164,7 +164,10 @@ files.
 - **The same proof drops a GPU routine's zeros when the zero and its accumulation are kernels apart**
   (gh-ocannl-1257, `Low_level.elide_covered_zeros`, gate `gpu_elide_covered_zeros`). The
   accumulation then opens from zero itself: a constant opening, the localized scope form, or the
-  opening read guarded by the first iteration of the repeating loops. It runs in `Backends.compile`
+  opening read guarded by the first iteration of the repeating loops. The scope form must sit where
+  code generation would have localized (`peel_accum_nest`, asked with and without the hardware
+  levels): guarding the read of an update the localizer would have taken narrows a bf16 cell on
+  every step instead of once, which is a different value wherever accumulators widen. It runs in `Backends.compile`
   on the final kernel list, after the transform that produced it. So schedule transforms, sketch
   site detection and the schedule cache never see the rewritten accumulations. A pre-fission rewrite
   would hide every gradient contraction from the sketches, and would change the unit lists that

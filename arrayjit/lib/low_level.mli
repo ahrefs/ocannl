@@ -648,10 +648,12 @@ val zero_fill_target : t -> Tnode.t option
 val seed_first_write : tn:Tnode.t -> t -> t option
 (** [seed_first_write ~tn stmt]: [stmt], the first statement to touch [tn] after a covering zero of
     it, rewritten so that its accumulation into [tn] opens from zero itself (gh-ocannl-1257) —
-    value-identical, given that zero. A constant zero where no loop repeats a cell, the localized
-    scope form where code generation would localize, otherwise the opening read guarded by the first
-    iteration of the repeating ([Serial]/[Unrolled]) loops. [None] when {!zero_seed_candidate}
-    refuses [stmt] or no form applies. *)
+    value-identical, given that zero, down to the accumulator's residency. A constant zero where no
+    loop repeats a cell; the localized scope form where code generation would localize, opening at
+    zero or at the cell guarded by the first iteration of the repeating loops outside the scope;
+    otherwise the opening read guarded by the first iteration of the repeating ([Serial]/[Unrolled])
+    loops. [None] when {!zero_seed_candidate} refuses [stmt], when where code generation localizes
+    depends on which hardware levels it serializes, or when no form applies. *)
 
 val elide_covered_zeros : t list -> t option list
 (** [elide_covered_zeros segments], over a routine's kernel bodies in launch order: drops every

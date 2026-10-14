@@ -237,3 +237,90 @@ let () =
     (List.length (zeros_with_next shipped.segments)
      = List.length (zeros_with_next expected.segments)
     && List.length shipped.segments = List.length expected.segments)
+
+(* The accumulator's residency is part of the value on a narrow format: code generation localizes
+   the innermost reduction [s] of a [reduction r -> output i -> reduction s] nest, holding the bf16
+   cell's accumulator wide across [s] and narrowing once per [(r, i)], so the elided form must keep
+   that localization (a scope whose opening is the cell, guarded by [r]'s first iteration) rather
+   than guard the per-step read, which would narrow on every [s] step. Hand-built, the pass applied
+   explicitly; the reference is the same program with its zero ([?prelowered] compiles keep their
+   zeros). [Ll_test.drift] inputs are bf16-exact while their 16-term partial sums are not, so where
+   the backend widens bf16 accumulators (the CPU backends, CUDA, HIP) a per-step narrowing changes
+   the result; on Metal, which keeps bf16 residency by design, the two agree either way. Both
+   routines start from a sentinel in [out], so the elided one cannot lean on a zero left behind. *)
+let () =
+  printf "--- narrow format: the inner reduction stays localized ---\n";
+  let node = Ll_test.node_factory ~prec:Ir.Ops.bfloat16 ~first_id:12570 ~dims:[| 1 |] () in
+  let r_n = 3 and i_n = 4 and s_n = 16 in
+  let src = node ~dims:[| r_n; i_n; s_n |] "ze_narrow_src"
+  and out = node ~dims:[| i_n |] "ze_narrow_out" in
+  List.iter [ src; out ] ~f:Ll_test.materialize;
+  let r = Ll_test.sym () and i = Ll_test.sym () and s = Ll_test.sym () in
+  let cell = [| Ll_test.iter i |] in
+  let program =
+    LL.Seq
+      ( LL.Zero_out out,
+        Ll_test.loop_n r r_n
+          (Ll_test.loop_n i i_n
+             (Ll_test.loop_n s s_n
+                (Ll_test.set out cell
+                   (Ll_test.add (Ll_test.get out cell)
+                      (Ll_test.get src [| Ll_test.iter r; Ll_test.iter i; Ll_test.iter s |]))))) )
+  in
+  let src_values =
+    let dims = [| r_n; i_n; s_n |] in
+    Array.init (r_n * i_n * s_n) ~f:(fun k -> Ll_test.drift ~dims (Ll_test.unflat ~dims k))
+  in
+  let run ~name ~elide_it =
+    let o = Ll_test.optimize ~materialized:[ src; out ] ~name program in
+    let o =
+      if not elide_it then o
+      else
+        match LL.elide_covered_zeros [ o.LL.llc ] with [ Some llc ] -> { o with LL.llc } | _ -> o
+    in
+    let linked = Ll_test.link ~name o in
+    let ctx =
+      Ll_test.run_linked linked ~seed:[ (src, src_values); (out, Array.create ~len:i_n (-7.)) ]
+    in
+    (o, Context.get_values ctx out)
+  in
+  let reference_code, reference = run ~name:"ze_narrow_ref" ~elide_it:false in
+  let elided_code, elided = run ~name:"ze_narrow_elided" ~elide_it:true in
+  p "reference: the program keeps its zero"
+    (Ll_test.count_stmt ~f:(function LL.Zero_out _ -> true | _ -> false) reference_code.LL.llc = 1);
+  p "elided: the zero is gone"
+    (Ll_test.count_stmt ~f:(function LL.Zero_out _ -> true | _ -> false) elided_code.LL.llc = 0);
+  p
+    "elided: the accumulator is a localized scope opening at the cell, guarded by r's first \
+     iteration"
+    (Ll_test.count_stmt
+       ~f:(function
+         | LL.Set_local (_, LL.Ternop (Ir.Ops.Where, _, (LL.Constant 0., _), (LL.Get _, _))) -> true
+         | _ -> false)
+       elided_code.LL.llc
+    = 1);
+  p_all2 "elided: out is bitwise equal to the reference's" (bits elided) (bits reference)
+    ~f:Int64.equal
+
+(* A covering accumulation under a [Scan_loop] whose index is the cell's (no loop repeats a cell):
+   the constant opening must reach the read inside the scan's body, or the zero would go while the
+   read of the stale cell stayed. A direct call on the statement: nothing here is compiled. *)
+let () =
+  printf "--- a scan body's read is rewritten ---\n";
+  let node = Ll_test.node_factory ~first_id:12580 ~dims:[| 4 |] () in
+  let x = node "ze_scan_x" and acc = node "ze_scan_acc" in
+  let i = Ll_test.sym () in
+  let cell = [| Ll_test.iter i |] in
+  let stmt =
+    Ll_test.scan ~upto:3 i ~carried:[]
+      (Ll_test.set acc cell (Ll_test.add (Ll_test.get acc cell) (Ll_test.get x cell)))
+  in
+  let reads_acc llc =
+    Ll_test.count_scalar ~f:(function LL.Get (tn, _) -> Tn.equal tn acc | _ -> false) llc
+  in
+  p "the statement reads the accumulated cell" (reads_acc stmt = 1);
+  match LL.seed_first_write ~tn:acc stmt with
+  | None -> p "the scan's accumulation is rewritten" false
+  | Some rewritten ->
+      p "the scan's accumulation is rewritten" true;
+      p "the rewritten scan no longer reads the cell" (reads_acc rewritten = 0)

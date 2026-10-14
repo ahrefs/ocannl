@@ -33,3 +33,12 @@ reference: no first-iteration guards: true
 elided: first-iteration guards occur: true
 --- the gate ---
 shipped: elides exactly on a GPU backend, as the explicit pass does: true
+--- narrow format: the inner reduction stays localized ---
+reference: the program keeps its zero: true
+elided: the zero is gone: true
+elided: the accumulator is a localized scope opening at the cell, guarded by r's first iteration: true
+elided: out is bitwise equal to the reference's: true
+--- a scan body's read is rewritten ---
+the statement reads the accumulated cell: true
+the scan's accumulation is rewritten: true
+the rewritten scan no longer reads the cell: true

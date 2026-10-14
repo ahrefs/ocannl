@@ -6969,18 +6969,23 @@ let zero_fill_target (stmt : t) : Tn.t option =
    rewritten so that its accumulation into [tn] no longer needs that zero: on every cell, the read
    that the first execution of the accumulation makes is a read of the zero, and the rewrite
    supplies the zero itself. {!zero_seed_candidate} proves the shape: one unconditional same-cell
-   read-modify-write pair, covering the node, with nothing else in [stmt] touching [tn]. Three
-   forms, each value-identical to the zero-then-accumulate original (the zero a [Zero_out] stores is
-   the positive zero, which is what [Constant 0.] reads as at any precision): - No loop repeats a
-   cell: the read becomes [Constant 0.]. - The repeating loops sit innermost, below every loop of
-   the cell, where code generation would localize the accumulator anyway ({!peel_accum_nest}, under
-   the same widening decision as [C_syntax.decide_accum_width], {!accum_update_widens}): the nest
-   becomes the scope form that localization renders, opening at [Constant 0.] instead of the loaded
-   cell. - Otherwise the read is guarded by the first iteration of the repeating loops: [where (Σ r
-   <= Σ from) 0 tn[..]]. Every repeating loop must be [Serial] or [Unrolled]: the first iteration is
-   a program-order notion, which a hardware-mapped or vectorized repeating loop does not have. The
-   guard is a short-circuiting ternary on every backend, so the opening read never executes. [None]
-   when the proof or a form's precondition fails: the caller then keeps the zero. *)
+   read-modify-write pair, covering the node, with nothing else in [stmt] touching [tn]. The forms
+   are value-identical to the zero-then-accumulate original (the zero a [Zero_out] stores is the
+   positive zero, which is what [Constant 0.] reads as at any precision) -- including the
+   accumulator's residency, which decides narrow-format results: - No loop repeats a cell: the read
+   becomes [Constant 0.]. - Code generation would localize the accumulator
+   ([try_localize_serial_reduce]: the outermost serial loop at which {!peel_accum_nest} reaches the
+   update, under the widening decision {!accum_update_widens}): the nest becomes that localized
+   scope form, its opening supplied -- zero where every repeating loop is inside the scope,
+   otherwise the cell's value guarded by the first iteration of the repeating loops outside it. The
+   localization level is asked of the peel twice, vouching for no hardware level and for every one,
+   since which hardware levels a backend serializes is code generation's knowledge; where the two
+   answers differ, [None]. - No level localizes (or the decision pins the per-step update): the read
+   is guarded by the first iteration of the repeating loops, [where (sum r <= sum from) 0 tn[..]].
+   Every repeating loop must be [Serial] or [Unrolled]: the first iteration is a program-order
+   notion, which a hardware-mapped or vectorized repeating loop does not have. The guard is a
+   short-circuiting ternary on every backend, so the opening read never executes. [None] when the
+   proof or a form's precondition fails: the caller then keeps the zero. *)
 let seed_first_write ~(tn : Tn.t) (stmt : t) : t option =
   match zero_seed_candidate tn stmt with
   | None -> None
@@ -6992,16 +6997,22 @@ let seed_first_write ~(tn : Tn.t) (stmt : t) : t option =
         | If { body; _ } -> binders acc body
         | _ -> acc
       in
-      let binders = binders [] stmt in
+      let stmt_binders = binders [] stmt in
       let program_ordered s =
-        match List.Assoc.find binders s ~equal:Indexing.equal_symbol with
+        match List.Assoc.find stmt_binders s ~equal:Indexing.equal_symbol with
         | Some (Some (Serial | Unrolled)) -> true
         | _ -> false
       in
+      (* Every rewrite replaces the one self-read {!zero_seed_candidate} found; [rewrite] refuses a
+         statement where the walk reached a different number of reads (a construct it does not
+         descend into would otherwise keep its read while the zero went). *)
+      let substituted = ref 0 in
       let rec map_reads ~(seed : scalar_arg -> scalar_arg) (llc : t) : t =
         let rec scalar ((s, p) as arg : scalar_arg) : scalar_arg =
           match s with
-          | Get (tn', _) when Tn.equal tn tn' -> seed arg
+          | Get (tn', _) when Tn.equal tn tn' ->
+              Int.incr substituted;
+              seed arg
           | Ternop (op, a, b, c) -> (Ternop (op, scalar a, scalar b, scalar c), p)
           | Binop (op, a, b) -> (Binop (op, scalar a, scalar b), p)
           | Unop (op, a) -> (Unop (op, scalar a), p)
@@ -7010,71 +7021,131 @@ let seed_first_write ~(tn : Tn.t) (stmt : t) : t option =
         match llc with
         | Seq (a, b) -> Seq (map_reads ~seed a, map_reads ~seed b)
         | For_loop r -> For_loop { r with body = map_reads ~seed r.body }
+        | Scan_loop r -> Scan_loop { r with body = map_reads ~seed r.body }
         | If r -> If { r with body = map_reads ~seed r.body }
         | Set ({ tn = tn'; llsc; _ } as r) when Tn.equal tn tn' ->
             Set { r with llsc = fst (scalar (llsc, Lazy.force tn.Tn.storage_prec)) }
         | _ -> llc
       in
-      let zero ((_, p) : scalar_arg) : scalar_arg = (Constant 0., p) in
+      let rewrite ~seed =
+        substituted := 0;
+        let stmt = map_reads ~seed stmt in
+        Option.some_if (!substituted = 1) stmt
+      in
+      let iprec = Ops.index_prec () in
+      (* The first iteration of the loops [syms] repeat a cell over: each at its lower bound, i.e.
+         their sum at the sum of the bounds, since none can be below its own. *)
+      let first_of syms =
+        let from_ s =
+          Option.value_map ~default:0 ~f:fst
+            (List.Assoc.find write.Affine.a_loops s ~equal:Indexing.equal_symbol)
+        in
+        Binop
+          ( Ops.Cmple,
+            ( Embed_index (Indexing.affine ~symbols:(List.map syms ~f:(fun s -> (1, s))) ~offset:0),
+              iprec ),
+            (Embed_index (Indexing.Fixed_idx (List.sum (module Int) syms ~f:from_)), iprec) )
+      in
+      let guarded syms ((_, p) as read : scalar_arg) : scalar_arg =
+        (Ternop (Ops.Where, (first_of syms, iprec), (Constant 0., p), read), p)
+      in
       let writes_tn llc =
         List.exists (affine_accesses llc) ~f:(fun a -> a.Affine.a_write && Tn.equal a.a_tn tn)
       in
-      let rec scope_form ~bounds (llc : t) : t option =
+      (* Where code generation would localize the accumulator: the outermost loop on the path to the
+         write at which [peel_accum_nest] reaches it ([try_localize_serial_reduce]'s question), with
+         [extra] deciding the hardware-annotated levels. Code generation vouches for the hardware
+         levels its backend serializes, which this pass cannot know, so it asks twice: accepting no
+         hardware level and accepting every one. Where the two answers agree, so does code
+         generation's. *)
+      let rec level ~extra ~bounds (llc : t) =
         match llc with
-        | For_loop ({ index; from_; to_; body; _ } as r) ->
+        | For_loop { index; from_; to_; body; _ } -> (
             let bounds = (index, (from_, to_)) :: bounds in
-            if List.mem repeated index ~equal:Indexing.equal_symbol then
-              match peel_accum_nest ~loop_bounds:bounds ~free_of:[ index ] body with
-              | Some (tn', idcs, `Update llsc, debug, rebuild)
-                when Tn.equal tn tn' && accum_update_widens ~tn ~idcs llsc ->
-                  let id = get_scope tn in
-                  let update = Set_local (id, subst_accum_read ~tn ~idcs ~id llsc) in
-                  let body =
-                    Seq (Set_local (id, Constant 0.), For_loop { r with body = rebuild update })
-                  in
-                  Some
-                    (Set
-                       {
-                         tn;
-                         idcs;
-                         llsc =
-                           Local_scope { id; body; orig_indices = idcs; mint = Schedule_minted };
-                         debug;
-                       })
-              | _ -> None
-            else Option.map (scope_form ~bounds body) ~f:(fun body -> For_loop { r with body })
-        | Seq (a, b) ->
-            if writes_tn a then Option.map (scope_form ~bounds a) ~f:(fun a -> Seq (a, b))
-            else Option.map (scope_form ~bounds b) ~f:(fun b -> Seq (a, b))
+            match
+              peel_accum_nest ~extra_level:extra ~loop_bounds:bounds ~free_of:[ index ] body
+            with
+            | Some (tn', _, _, _, _) when Tn.equal tn tn' -> Some index
+            | _ -> level ~extra ~bounds body)
+        | Scan_loop { index; from_; to_; body; _ } ->
+            level ~extra ~bounds:((index, (from_, to_)) :: bounds) body
+        | If { body; _ } -> level ~extra ~bounds body
+        | Seq (a, b) -> if writes_tn a then level ~extra ~bounds a else level ~extra ~bounds b
         | _ -> None
       in
+      (* The localized form at the loop binding [l], as [try_localize_serial_reduce] renders it,
+         with its opening supplied: zero where every repeating loop is inside the scope, otherwise
+         the cell's value guarded by the first iteration of the repeating loops outside it.
+         [`Pinned] where code generation would keep the per-step update instead (logging, an RNG
+         conversion), [`Refused] for a base this pass does not rebuild. *)
+      let rec scope_at ~l ~bounds (llc : t) =
+        let under ?(bounds = bounds) f body =
+          match scope_at ~l ~bounds body with `Scoped b -> `Scoped (f b) | r -> r
+        in
+        match llc with
+        | For_loop ({ index; from_; to_; body; _ } as r) -> (
+            let bounds = (index, (from_, to_)) :: bounds in
+            if not (Indexing.equal_symbol index l) then
+              under ~bounds (fun body -> For_loop { r with body }) body
+            else
+              match peel_accum_nest ~loop_bounds:bounds ~free_of:[ index ] body with
+              | Some (tn', idcs, `Update llsc, debug, rebuild) when Tn.equal tn tn' ->
+                  if not (accum_update_widens ~tn ~idcs llsc) then `Pinned
+                  else
+                    let inside = index :: List.map (binders [] body) ~f:fst in
+                    let outer =
+                      List.filter repeated ~f:(fun s ->
+                          not (List.mem inside s ~equal:Indexing.equal_symbol))
+                    in
+                    let p = Lazy.force tn.Tn.storage_prec in
+                    let opening =
+                      if List.is_empty outer then Constant 0.
+                      else fst (guarded outer (Get (tn, idcs), p))
+                    in
+                    let id = get_scope tn in
+                    let update = Set_local (id, subst_accum_read ~tn ~idcs ~id llsc) in
+                    let body =
+                      Seq (Set_local (id, opening), For_loop { r with body = rebuild update })
+                    in
+                    `Scoped
+                      (Set
+                         {
+                           tn;
+                           idcs;
+                           llsc =
+                             Local_scope { id; body; orig_indices = idcs; mint = Schedule_minted };
+                           debug;
+                         })
+              | _ -> `Refused)
+        | Scan_loop ({ index; from_; to_; body; _ } as r) ->
+            under
+              ~bounds:((index, (from_, to_)) :: bounds)
+              (fun body -> Scan_loop { r with body })
+              body
+        | If r -> under (fun body -> If { r with body }) r.body
+        | Seq (a, b) ->
+            if writes_tn a then under (fun a -> Seq (a, b)) a else under (fun b -> Seq (a, b)) b
+        | _ -> `Refused
+      in
       match repeated with
-      | [] -> Some (map_reads ~seed:zero stmt)
+      | [] -> rewrite ~seed:(fun (_, p) -> (Constant 0., p))
       | _ when not (List.for_all repeated ~f:program_ordered) -> None
       | _ -> (
-          match scope_form ~bounds:[] stmt with
-          | Some _ as scoped -> scoped
-          | None ->
-              let from_ s =
-                Option.value_map ~default:0 ~f:fst
-                  (List.Assoc.find write.Affine.a_loops s ~equal:Indexing.equal_symbol)
-              in
-              let iprec = Ops.index_prec () in
-              let first =
-                Binop
-                  ( Ops.Cmple,
-                    ( Embed_index
-                        (Indexing.affine
-                           ~symbols:(List.map repeated ~f:(fun s -> (1, s)))
-                           ~offset:0),
-                      iprec ),
-                    ( Embed_index (Indexing.Fixed_idx (List.sum (module Int) repeated ~f:from_)),
-                      iprec ) )
-              in
-              let guarded ((_, p) as read : scalar_arg) : scalar_arg =
-                (Ternop (Ops.Where, (first, iprec), (Constant 0., p), read), p)
-              in
-              Some (map_reads ~seed:guarded stmt)))
+          match
+            ( level ~extra:(fun _ _ -> false) ~bounds:[] stmt,
+              level ~extra:(fun _ _ -> true) ~bounds:[] stmt )
+          with
+          | None, None -> rewrite ~seed:(guarded repeated)
+          | Some l, Some l'
+            when Indexing.equal_symbol l l'
+                 && Poly.equal
+                      (List.Assoc.find stmt_binders l ~equal:Indexing.equal_symbol)
+                      (Some (Some Serial)) -> (
+              match scope_at ~l ~bounds:[] stmt with
+              | `Scoped stmt -> Some stmt
+              | `Pinned -> rewrite ~seed:(guarded repeated)
+              | `Refused -> None)
+          | _ -> None))
 
 (* gh-ocannl-1257: drop every covering positive zero whose node's next access, in the order the
    kernels run, is an accumulation {!seed_first_write} can open from zero itself -- [segments] are a
