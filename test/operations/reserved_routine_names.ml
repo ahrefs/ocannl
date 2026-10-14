@@ -148,3 +148,186 @@ let () =
   p_all2 "a node labeled by a C++ alternative token computes correct values"
     (Context.get_values ctx t.Tensor.value)
     expected_not ~f:approx
+
+(* --- 7. gh-ocannl-707: beyond the C floor. The implementation's reserved namespace ([__x], [_X]),
+   where the vendors put most of what their headers declare, is closed by rule rather than by table:
+   such a name gains a [k] prefix on every backend. [main] is the C standard's own reserved entry
+   point, which clang refuses as a [void] kernel and MSL reserves outright. --- *)
+let () = colliding ~label:"gh707_ir" ~name:"__gh707_reserved" ~emitted:"k__gh707_reserved"
+let () = colliding ~label:"gh707_mn" ~name:"main" ~emitted:"main__"
+
+(* --- 8. Names a GPU backend's VENDOR headers declare at file scope: a global type, a macro, a
+   dialect keyword, a C-linkage function -- each reaches a kernel definition [void <name>(] and
+   collides with it ("redefinition of 'float4' as different kind of symbol"). Each backend's
+   exemplars come from its own [vendor_routine_idents] classes, one per class, plus one name of the
+   implementation namespace a vendor actually declares. The per-name outcome goes to stderr (not
+   part of the golden); the golden carries one claim per property, evaluated on the GPU backends and
+   skipped on the C ones, whose headers stop at the C floor sections 1-2b already probe. --- *)
+let metal_exemplars =
+  [
+    ("float4", "float4__");
+    ("packed_half2", "packed_half2__");
+    ("M_PI_F", "M_PI_F__");
+    ("METAL_FUNC", "METAL_FUNC__");
+    ("as_type", "as_type__");
+    ("metal", "metal__");
+  ]
+
+let cuda_exemplars =
+  [
+    ("half2", "half2__");
+    ("float4", "float4__");
+    ("nv_bfloat16", "nv_bfloat16__");
+    ("CUDART_INF_FP16", "CUDART_INF_FP16__");
+    ("rsqrtf", "rsqrtf__");
+    ("__hadd", "k__hadd");
+  ]
+
+let hip_exemplars =
+  [
+    ("half2", "half2__");
+    ("float4", "float4__");
+    ("hip_fp8_storage_t", "hip_fp8_storage_t__");
+    ("HIPRT_INF_FP16", "HIPRT_INF_FP16__");
+    ("rsqrtf", "rsqrtf__");
+    ("__hadd", "k__hadd");
+  ]
+
+(* The CUDA and HIP tables are GPU-free code ([Cuda_like_config] builds everywhere), so their half
+   of the relationship is checked on every backend: each exemplar is a name the table or the
+   reserved-namespace rule actually covers, not merely one the GPU leg happened to mangle. The
+   rule's boundary is pinned beside it: a single underscore before a lowercase letter
+   ([Assignments.get_name_exn]'s [_then_] joins) and an interior double underscore stay outside. *)
+let () =
+  p_all
+    "every CUDA and HIP exemplar is reserved by the shared vendor table or the reserved namespace"
+    (cuda_exemplars @ hip_exemplars) ~f:(fun (name, _) ->
+      List.mem Ir.Cuda_like_config.vendor_routine_idents name ~equal:String.equal
+      || Ir.C_syntax.implementation_reserved name);
+  p_all "names in the implementation's reserved namespace are recognized"
+    [ "__half"; "__nv_bfloat16"; "__syncthreads"; "_Float16"; "__builtin_expf" ]
+    ~f:Ir.C_syntax.implementation_reserved;
+  p_none "names outside the implementation's reserved namespace are left alone"
+    [ "_then_b"; "half_step"; "a__b"; "k__half"; "gh707" ]
+    ~f:Ir.C_syntax.implementation_reserved
+
+let vendor_exemplars =
+  match backend_name with
+  | "metal" -> metal_exemplars
+  | "cuda" -> cuda_exemplars
+  | "hip" -> hip_exemplars
+  | _ -> []
+
+(* Each exemplar compiled, run and read back once: [(values correct, given name kept, mangled symbol
+   emitted)]. A compile that raises answers all-false, with the exception on stderr, so one failing
+   name does not hide the others. *)
+let vendor_results =
+  List.mapi vendor_exemplars ~f:(fun i (name, emitted) ->
+      let result =
+        match run_named ~label:(Printf.sprintf "gh707_v%d" i) ~name with
+        | values, routine_name ->
+            let correct = Array.length values = n && Array.for_all2_exn values expected ~f:approx in
+            let source = Generated.read emitted in
+            ( correct,
+              String.equal routine_name name,
+              String.is_substring source ~substring:("void " ^ emitted ^ "(") )
+        | exception exn ->
+            Stdio.eprintf "vendor identifier %S as a routine name raised: %s\n%!" name
+              (Exn.to_string exn);
+            (false, false, false)
+      in
+      let ok, kept, emits = result in
+      Stdio.eprintf
+        "vendor identifier %S -> %S on %s: values %b, name kept %b, symbol emitted %b (not part of \
+         the golden)\n\
+         %!"
+        name emitted backend_name ok kept emits;
+      result)
+
+let vendor_gate = List.mem [ "metal"; "cuda"; "hip" ] backend_name ~equal:String.equal
+
+let () =
+  gated_all ~when_:vendor_gate ~on:backend_name
+    "every vendor-header identifier probed as a routine name computes correct values" vendor_results
+    ~f:(fun (ok, _, _) -> ok);
+  gated_all ~when_:vendor_gate ~on:backend_name
+    "every vendor-header identifier probed keeps its given name in the routine record"
+    vendor_results ~f:(fun (_, kept, _) -> kept);
+  gated_all ~when_:vendor_gate ~on:backend_name
+    "every vendor-header identifier probed emits its mangled symbol" vendor_results
+    ~f:(fun (_, _, emits) -> emits)
+
+(* --- 9. The backstop: what no table covers fails as the NAME's failure. The tables are a floor
+   harvested at one SDK version, so a name a later header declares, or a platform extension outside
+   the C standard, still reaches the compiler. [Compile_driver] then reads the compiler's report
+   and, when it points at a routine's declaration, re-raises the failure as a [Utils.User_error]
+   naming the routine -- never as the "bug in OCANNL" a codegen fault is.
+
+   First the attribution itself, over the report shapes the toolchains produce: the quoted
+   declaration line (gcc and clang print the source line; nvrtc and hiprtc too), and an error line
+   quoting the name. The negatives are what must NOT blame the name: an error in the routine's body
+   that gcc prefixes with its "In function" context line, and a report naming some other routine. *)
+let () =
+  let attributed report =
+    Ir.C_syntax.routine_name_in_diagnostics ~routine_names:[ "other_fwd"; "random" ] report
+  in
+  let blames_random report = Option.equal String.equal (attributed report) (Some "random") in
+  p_all "compiler reports pointing at the routine's declaration blame its name"
+    [
+      (* clang (cc on macOS), from a real run *)
+      "k.c:6:6: error: conflicting types for 'random'\n\
+      \    6 | void random(\n\
+      \      |      ^\n\
+       _stdlib.h:250:7: note: previous declaration is here";
+      (* gcc's typographic quotes *)
+      "k.c:6:6: error: conflicting types for \u{2018}random\u{2019}; have \u{2018}void(float \
+       *)\u{2019}";
+      (* the Metal front end: the error names nothing, the quoted line does *)
+      "program_source:3:13: error: expected unqualified-id\n\
+       kernel void random(device char* __pool0 [[buffer(0)]],\n\
+      \            ^";
+      (* nvrtc's double-quoted names *)
+      "default_program(12): error: invalid redeclaration of type name \"random\"";
+    ]
+    ~f:blames_random;
+  p_none "compiler reports about a routine's body or another routine do not blame the name"
+    [
+      "k.c: In function 'random':\nk.c:9:5: error: 'x' undeclared (first use in this function)";
+      "k.c:9:5: error: use of undeclared identifier 'random_ptr'";
+      "k.c:3:6: error: conflicting types for 'other_fwd_v2'\n    3 | void other_fwd_v2(";
+    ] ~f:(fun report -> Option.is_some (attributed report))
+
+(* Then executed. [random] is a POSIX/BSD extension, not C: the macOS and glibc [<stdlib.h>] the cc
+   prelude includes declare it ([long random(void)]), so [void random(float *...)] is a conflicting
+   declaration there, outside every table on purpose. Mingw's headers do not declare it, and no GPU
+   prelude does, so elsewhere the routine simply runs. Either way the claim below holds: the name
+   never fails anonymously. The second claim is the one with teeth, gated to the hosts whose headers
+   make it collide. *)
+let () =
+  let outcome =
+    match run_named ~label:"gh707_rn" ~name:"random" with
+    | values, _ -> `Ran values
+    | exception Utils.User_error msg -> `Attributed msg
+    | exception exn -> `Other (Exn.to_string exn)
+  in
+  (match outcome with
+  | `Ran _ -> Stdio.eprintf "routine named \"random\" ran\n%!"
+  | `Attributed msg -> Stdio.eprintf "routine named \"random\" failed as its name's: %s\n%!" msg
+  | `Other msg -> Stdio.eprintf "routine named \"random\" failed UNATTRIBUTED: %s\n%!" msg);
+  let names_random msg =
+    String.is_substring msg ~substring:"\"random\""
+    && String.is_substring msg ~substring:"gh-ocannl-707"
+  in
+  let label = "a routine named after a header name no table holds runs or fails as its name's" in
+  (match outcome with
+  | `Ran values -> p_all2 label values expected ~f:approx
+  | `Attributed msg -> p label (names_random msg)
+  | `Other _ -> p label false);
+  let collides_here =
+    List.mem [ "cc"; "multidev_cc" ] backend_name ~equal:String.equal
+    && not (String.equal Stdlib.Sys.os_type "Win32")
+  in
+  gated ~aggregation:`Environment ~when_:collides_here
+    ~on:(backend_name ^ " on " ^ Stdlib.Sys.os_type)
+    "where the C headers declare random, the routine's compile failure names the routine"
+    (match outcome with `Attributed msg -> names_random msg | `Ran _ | `Other _ -> false)
