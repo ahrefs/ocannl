@@ -167,6 +167,12 @@ type sketch_params = {
     documentation. Exposed for tests (the seeding pre-filter of gh-ocannl-479 and the mixed
     grid-outermost shape of gh-ocannl-473 are asserted on directly). *)
 
+val digest_tag : string -> string
+(** The short tag of a candidate's post-schedule digest (the [~digest] {!on_candidate_measured}
+    receives; a fissioned candidate's is its segments' digests joined by ['+']) that the
+    [autotune_log] lines print and that a beam-round candidate's label names its parent by
+    ([F_saved[N segs from <tag>]+seg<i>:<move>], gh-ocannl-1230). *)
+
 val sketch_params_label : sketch_params -> string
 (** How a sketch's parameters print inside its candidate label ([W_sketch[...]], and each entry of
     [F_sketch[...]]) in the [autotune_log] lines and {!report.best_label}: every field renders, so
@@ -2074,7 +2080,9 @@ val tune :
   (* Default from config [autotune_beam_width] (2). *)
   ?rounds:int ->
   (* Maximum beam-expansion rounds beyond the seeds; default from config [autotune_rounds] (2). The
-     search also stops when a round improves the incumbent by less than 1%. *)
+     search also stops when a round improves the incumbent by less than 1%. A round expands the
+     beam's head in full and, on a fissioned routine, every other entry only on the segments where
+     it differs from the head (config [autotune_round_expansion], gh-ocannl-1229). *)
   ?repeats:int ->
   (* Timed runs per candidate (after one warmup), min taken; default from config [autotune_repeats]
      (3). In [Queued] timing each such run is a whole batch of dispatches, so this is a floor on

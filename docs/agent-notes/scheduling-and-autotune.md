@@ -927,13 +927,34 @@ files.
   timed and dropped, and the winner stays the beam head. Arm A finished round 1 (635 candidates,
   +1002 s on 674 s of seeds) 0.50% ahead and shipped its rounds:0 winner. Arm B was cut off 97
   candidates into a 1325-candidate round (~1.9 s each, ~+480% projected on 528 s of seeds), 0.31%
-  ahead so far; whether its round clears 1% is unmeasured. A round expands every beam entry by every
-  menu move of every segment unit, and after the composite playoff the beam is the composite plus its
-  near-copies (1-4 of 122-150 segments apart), so the round pays ~4x one entry's moves for little
-  diversity. Hence every benchmark runner keeps `~rounds:0` and records it as each arm's
-  `rounds_run`/`beam_width` on the result line; the `autotune_log` line
-  `round N: K candidate(s) from a beam of W: ...` gives each entry's `units differing` from the
-  incumbent.
+  ahead so far. Hence every benchmark runner keeps `~rounds:0` and records it as each arm's
+  `rounds_run`/`beam_width` on the result line. That probe's rounds expanded every beam entry in
+  full, and after the composite playoff the beam is the composite plus its near-copies (1-4 of
+  122-150 segments apart), so a round re-timed one entry's menu ~4x; the next bullet is the fix.
+- **A round expands the beam's head in full and every other entry only where it differs from the
+  head** (gh-ocannl-1229, `autotune_round_expansion=differing`, the default). A fissioned routine's
+  time is the sum of its segments', and every non-head entry trails the head, so on a segment the two
+  share, the entry's move is the head's same move over a backdrop already measured slower: that child
+  is dominated before it is compiled. On the entry's differing segments its moves start from a
+  geometry the head lacks (the playoff's near-tie alternate), which is the one thing a second
+  starting point buys; a differently segmented or whole-routine entry shares no unit and expands in
+  full. `full` is the old rule; `head` (the head alone) is the single-entry control, which loses
+  exactly the gains that start from an alternate geometry. **The duplication is in the expansion,
+  not the admission**: deduping the beam by `units_differing`, or admitting only the playoff
+  alternates that swapped, frees the slots for the next-fastest candidates, which on gpt2_mini are
+  the per-segment singles and split-reduce seeds at ~29.4 ms against the composites' ~2.44 ms --
+  expanded in full, so the round keeps its size and spends three quarters of it on hopeless parents.
+  `test/operations/autotune_round_expansion` scripts an additive landscape over the playoff chain
+  and pins that `differing` times exactly `full`'s round minus the near-copy's shared-segment moves
+  and crowns `full`'s round best. The `autotune_log` line `round N: K candidate(s) from a beam of
+  W, expansion <rule>: ...` gives each entry's `units differing` from the head and how many of its
+  units the rule expanded. Measured on rog (gpt2_mini, CUDA, approximate profile, beam 4, a
+  correctness-grade probe on a shared box, two legs at an equal 2100 s cap): arm A's round 1 took
+  332 candidates (302 + 7 + 4 + 19) and ~406 s under `differing`, 1204 and ~1490 s under `full`, and
+  both reached the same best, 2.2047 ms, 0.2-0.35% under the seed winner, so not adopted. That best
+  came from a near-copy's differing segment, which `head` would not have expanded. With the time
+  saved, `differing` reached arm B's round (624 = 524 + 48 + 4 + 48) before the cap; `full` did not
+  start it.
 ## Action enumeration and budget sharing
 - The action menu's loop enumeration is provenance-aimed **by action category**, not by loop
   (gh-ocannl-687). `Local_scope` has two producers — virtualization's inline at a read site, and the

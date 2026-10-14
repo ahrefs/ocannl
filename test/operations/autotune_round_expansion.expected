@@ -1,0 +1,21 @@
+setup: every rule ran its round: true
+setup: every rule entered round 1 with the same beam: true
+setup: the near-copy differs from the head in exactly one segment: true
+full: every round candidate extends a beam entry: true
+full: the round extends the near-copy on a segment it shares with the head: true
+full: the round extends the near-copy on its differing segment: true
+differing: the round extends the head: true
+differing: the head's moves are exactly full's: true
+differing: the near-copy's moves are on its differing segment: true
+differing: the near-copy's moves are exactly full's on that segment: true
+differing: the round is smaller than full's: true
+differing: the round's best is full's: true
+differing: the round's best gained on the near-copy's differing segment: true
+differing: it crowns what full crowns: true
+differing: the crown is the round's best: true
+head: every round candidate extends the head: true
+head: the head's moves are exactly full's: true
+head: the control misses the round's best: true
+head: the control's crown is the seed winner, the round falling short: true
+malformed: the refusal names the key: true
+malformed: nothing was compiled: true

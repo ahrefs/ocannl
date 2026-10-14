@@ -26,6 +26,7 @@ Configuration keys tracked as ambient dependencies, in the one spelling OCANNL r
   autotune_log
   autotune_progress
   autotune_register_tile_rm_twin
+  autotune_round_expansion
   autotune_rounds
   autotune_search
   backend
