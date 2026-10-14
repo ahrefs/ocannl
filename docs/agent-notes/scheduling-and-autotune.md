@@ -571,7 +571,8 @@ files.
   `F_saved[N segs from <tag>]+seg<i>:<move>` (`W_saved[N ops from <tag>]+<move>` whole-routine):
   `<tag>` is the parent's digest tag, the one the `round k:` beam line and the parent's timing line
   print, and `<move>` the appended op's s-expression; a replay prints no suffix. An `F_sketch`
-  entry ends in ` @<tag>` of its segment key. A sketch label renders every `sketch_params` field, and `autotune_labels` reads the field list off the type's
+  entry ends in ` @<tag>:u<units>` of its segment key: the structural digest's tag, then the keyed
+  segments' first units joined by `+u`, since two keys can share the digest (gh-ocannl-1243). A sketch label renders every `sketch_params` field, and `autotune_labels` reads the field list off the type's
   derived s-expression, so a new field fails that test until `sketch_params_label` renders it.
 - A per-kernel profile's sum may only be validated against the step time of **the compile it came
   from**. Each search rep crowns a different artifact with different tile sizes, so holding one rep's
@@ -1390,7 +1391,14 @@ files.
   digest**: the structural digest leaves placements out, and two segments of one structure can
   differ in placements, hence in kind (`Solo` vs `Normal`) and schedule — a first-match lookup hands
   the later one a schedule the search never timed (`fission_replay_segmentation` leg 5; the same
-  holds for `extend_spec`, whose units name their segment index). The replay-validity check rides
+  holds for `extend_spec`, whose units name their segment index, and for the per-segment sketch
+  candidates, gh-ocannl-1243: an `F_sketch` replays the segmentation its seeds were enumerated
+  under, its `replay` callback answering `None` for a segment left to its kind's preset, and keys
+  its segments by first unit plus structural digest, `Autotune.seg_key`). Segments of one structure
+  share a sketch key only when their placement-aware digests agree too, so repeated layers still
+  share one sketch. On the C backends fission's crossing promotions leave such twins agreeing in
+  placements; a GPU's restored `Local` products are what split them (`autotune_sketch_placements`).
+  The replay-validity check rides
   on the position: segment `i`'s digest must equal the saved `i`th, and a recorded segmentation
   that does not partition the routine's units, or separates a scope-local definition from a use,
   is refused by `fission_segmented`. **A candidate transform's failure must be a typed cause**

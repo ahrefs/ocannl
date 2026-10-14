@@ -66,20 +66,22 @@
       incrementally: a bare [Tensorize] from the serial baseline loses its round and is discarded
       before Grid retypes could join it. The sketches are seeded whole-routine {e and} per fission
       segment: on a fissionable computation, the fission segmentation is enumerated once and the
-      sketch pipelines are instantiated for each segment where a matmul site is detected (keyed by
-      the segment's pre-schedule digest), the remaining segments keeping the default preset. GPU
-      segments can carry a covering per-cell zero companion, mapped with the site's geometry;
-      [Privatize] forwards its seed when its scope owns the whole reduction. Whole-node zeros
-      retained by the policy (including CPU zeros) remain separate, and the accumulator init-load
-      observes them. [Tile_mma] loads its accumulator fragment before the reduction. On GPU backends
-      the segmentation is additionally enumerated under {!Ir.Schedule.fission_scheduled}'s
-      [arity_cuts] (finer) mode (gh-ocannl-574): a segment carrying a companion that cannot follow
-      its site's full arity — the lm_head GEMM with its max-logits row reduction — has every seed of
-      the shared segment decline on companion coverage, and the finer cut frees the site into its
-      own kernel; segments whose digest is new versus the coarse segmentation seed [fine]-flagged
-      singles, one composite recombines the fine keys' best-timed singles (coarse-timed bests staff
-      the digest-identical segments); a fine winner's cached segmentation is the fine one, so its
-      replay needs no record of the mode.
+      sketch pipelines are instantiated for each segment where a matmul site is detected, the
+      remaining segments keeping the default preset. The candidates replay that segmentation and
+      find their segments in it by position ({!seg_key}, gh-ocannl-1243): segments of one structure
+      are sketched together only when their placements agree too. GPU segments can carry a covering
+      per-cell zero companion, mapped with the site's geometry; [Privatize] forwards its seed when
+      its scope owns the whole reduction. Whole-node zeros retained by the policy (including CPU
+      zeros) remain separate, and the accumulator init-load observes them. [Tile_mma] loads its
+      accumulator fragment before the reduction. On GPU backends the segmentation is additionally
+      enumerated under {!Ir.Schedule.fission_scheduled}'s [arity_cuts] (finer) mode (gh-ocannl-574):
+      a segment carrying a companion that cannot follow its site's full arity — the lm_head GEMM
+      with its max-logits row reduction — has every seed of the shared segment decline on companion
+      coverage, and the finer cut frees the site into its own kernel; segments whose key is new
+      versus the coarse segmentation seed [fine]-flagged singles, one composite recombines the fine
+      keys' best-timed singles (coarse-timed bests staff the segments the finer cuts leave
+      unchanged); a fine winner's cached segmentation is the fine one, so its replay needs no record
+      of the mode.
     - {b Convolution sketches} (gh-ocannl-493): when a convolution accumulation site is detected
       ({!detect_conv}), the implicit-GEMM pipeline — the packing [Stage] serving as im2col, the
       micro-kernel the ordinary [Tile_mma]. On the C backends: serial and Grid-parallel flavors, the
@@ -172,11 +174,19 @@ val sketch_params_label : sketch_params -> string
     geometry — never share a label (gh-ocannl-1230). Contains no [','], the separator of a
     composite's entries. *)
 
-val fiss_sketch_label : fine:bool -> (string * sketch_params) list -> string
+type seg_key = { key_units : int list; key_digest : string }
+(** Which segments of a recorded fission segmentation a per-segment sketch is for (gh-ocannl-1243):
+    each one's first unit ({!Ir.Schedule.segmentation}'s units) and their common structural
+    pre-schedule digest. The digest leaves placements out, so it cannot name a segment on its own:
+    segments of one structure share a key only when their placement-aware digests agree too. *)
+
+val fiss_sketch_label : fine:bool -> (seg_key * sketch_params) list -> string
 (** The label of a per-segment sketch candidate ([F_sketch[...]]) over its [(segment key, params)]
-    entries: each entry is {!sketch_params_label} followed by [" @"] and a tag of its segment key,
-    so one-entry candidates of two segments that admit the same parameters print apart. Entries are
-    separated by [','] in key order; [fine] marks the finer segmentation. *)
+    entries: each entry is {!sketch_params_label} followed by [" @"] and a tag of its segment key —
+    a tag of the digest, then [":u"] and the keyed segments' first units joined by ["+u"] — so
+    one-entry candidates of two segments that admit the same parameters print apart, structurally
+    identical segments included. Entries are separated by [','] in key order; [fine] marks the finer
+    segmentation. *)
 
 type matmul_site = {
   m_i : Ir.Indexing.symbol;
