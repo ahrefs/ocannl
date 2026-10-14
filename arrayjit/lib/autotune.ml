@@ -3273,10 +3273,14 @@ let geometry_lattice_enabled =
    that ranking loop: removing it made an invalid tensorized argmin displace a viable schedule and
    then fall back all the way to the default. This is no longer needed for exception attribution or
    advisory containment -- codegen carries the same typed cause -- only to preserve "best viable
-   model candidate" selection without compiling every contender. *)
-let validate_segments_for_model (segs : LL.optimized list) =
+   model candidate" selection without compiling every contender. [limits]' shuffle width lets it see
+   the barriers the warp-shuffle renderings insert (gh-ocannl-1238), as codegen's does. *)
+let validate_segments_for_model ~(limits : Ir.Backend_intf.hardware_limits)
+    (segs : LL.optimized list) =
+  let warp_size = Option.value limits.simdgroup_width ~default:0 in
   List.iter segs ~f:(fun (o : LL.optimized) ->
-      LL.validate_parallel_classified o.LL.optimize_ctx.LL.placements o.LL.llc);
+      LL.validate_parallel_classified ~warp_size ~reassociable:Ir.Online_softmax.reassociable_local
+        o.LL.optimize_ctx.LL.placements o.LL.llc);
   segs
 
 let compile_advisory ?name ?on_fallback ?fallback_if lowered_transform ctx comp bindings =
@@ -3341,7 +3345,7 @@ let model_default ?name ?report ctx comp bindings =
        way back to default. The validator is typed, so only an expected schedule rejection is
        excluded; compiler assertions and other failures still escape. *)
     let score_valid opts =
-      match validate_segments_for_model opts with
+      match validate_segments_for_model ~limits opts with
       | opts -> score opts
       | exception Outcome.Cause_at _ ->
           Int.incr n_rejected;
@@ -3550,7 +3554,7 @@ let model_default ?name ?report ctx comp bindings =
         match action with
         | `Default -> default_segs ()
         | `Whole p ->
-            validate_segments_for_model
+            validate_segments_for_model ~limits
               [ Sched.apply_classified ~static_indices (sketch_schedule ~accum_prec ~p opt) opt ]
         | `Fiss entries ->
             let subst_preset seg =
@@ -3558,7 +3562,7 @@ let model_default ?name ?report ctx comp bindings =
               | Some p -> sketch_schedule ~accum_prec ~p seg
               | None -> preset seg
             in
-            validate_segments_for_model
+            validate_segments_for_model ~limits
               (List.map
                  (Sched.fission_scheduled ~promote_locals:is_gpu ~fold_zeros:true
                     ?keep_mapping:(Sched.fission_keep_mapping ~is_gpu ~limits)

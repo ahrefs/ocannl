@@ -5410,161 +5410,6 @@ let rec scalar_scopes_have_annotated (llc : t) : bool =
   | Noop | Comment _ | Staged_compilation _ | Zero_out _ | Declare_local _ | Workgroup_barrier ->
       false
 
-(** Backend-independent well-formedness of hardware annotations (axis-types proposal §2). A no-op
-    for all-[Serial] code. Raises [Invalid_argument] on: annotated loops with [from_ <> 0]; more
-    than 3 [Workgroup] slots ([Grid] slots [>= 2] fold onto [.z], see the hardware-axis section
-    comment); annotated loops inside [Local_scope] bodies; a kernel containing barriers whose
-    same-slot workgroup extents differ (a barrier under divergent control flow is UB) or with a
-    barrier lexically under an [If] guard; and writes to materialized tensor nodes lexically outside
-    all annotated loops (every hardware thread would execute them, racing with the annotated writes
-    — there is no grid-wide synchronization). Cannot prove iteration independence; that is the
-    annotating pass's obligation. *)
-let validate_parallel plc (llc : t) : unit =
-  let axes = hardware_axes llc in
-  if not (List.is_empty axes) then (
-    List.iter axes ~f:(fun a ->
-        if a.ha_from_ <> 0 then
-          invalid_arg
-            ("Low_level.validate_parallel: annotated loop " ^ Indexing.symbol_ident a.ha_index
-           ^ " must start at 0, starts at " ^ Int.to_string a.ha_from_);
-        (* Grid slots [>= 2] fold onto the hardware [.z] dimension (see the hardware-axis section
-           comment), so any number of grid axes is renderable; workgroup slots stay capped at the
-           three threadgroup dimensions. *)
-        if a.ha_slot > 2 && Poly.equal a.ha_kind `Workgroup then
-          invalid_arg
-            ("Low_level.validate_parallel: more than 3 " ^ hardware_kind_label a.ha_kind
-           ^ " axes in one kernel (loop " ^ Indexing.symbol_ident a.ha_index ^ " needs slot "
-           ^ Int.to_string a.ha_slot ^ ")"));
-    if scalar_scopes_have_annotated llc then
-      invalid_arg "Low_level.validate_parallel: hardware-annotated loop inside a Local_scope body";
-    if contains_barrier llc then (
-      List.iter axes ~f:(fun a ->
-          match a.ha_kind with
-          | `Workgroup ->
-              let m = slot_max_extent axes `Workgroup a.ha_slot in
-              if a.ha_extent <> m then
-                invalid_arg
-                  ("Low_level.validate_parallel: kernel contains barriers but workgroup extents \
-                    differ at slot " ^ Int.to_string a.ha_slot
-                 ^ " (a barrier under divergent control flow is UB): " ^ Int.to_string a.ha_extent
-                 ^ " vs " ^ Int.to_string m)
-          | `Grid -> ());
-      let rec no_guarded_barrier llc =
-        match llc with
-        | If { body; _ } ->
-            if contains_barrier body then
-              invalid_arg "Low_level.validate_parallel: barrier under an If guard is divergent"
-        | Seq (a, b) ->
-            no_guarded_barrier a;
-            no_guarded_barrier b
-        | For_loop { body; _ } | Scan_loop { body; _ } -> no_guarded_barrier body
-        | Noop | Comment _ | Staged_compilation _ | Zero_out _ | Set _ | Set_dynamic _
-        | Set_from_vec _ | Set_local _ | Declare_local _ | Workgroup_barrier | Tile_mma _ ->
-            ()
-      in
-      no_guarded_barrier llc);
-    (* Launch dimensions are global to the kernel, so a materialized write must be nested under
-       annotated loops covering EVERY active (non-unit) hardware dimension -- a statement covering
-       only some of them executes once per hardware index of each uncovered dimension, racing or
-       repeating read-modify-write updates (PR #89 review). A whole-node [Zero_out] is never
-       distributed across threads by nesting, so in a multi-threaded kernel it is rejected outright;
-       distribute zeroing as ordinary per-element [Set]s instead. *)
-    let pair_equal (k1, s1) (k2, s2) = Poly.equal k1 k2 && s1 = s2 in
-    let active =
-      List.filter_map axes ~f:(fun a ->
-          if slot_max_extent axes a.ha_kind a.ha_slot > 1 then Some (a.ha_kind, a.ha_slot) else None)
-      |> List.dedup_and_sort ~compare:Poly.compare
-    in
-    let slot_of_index = List.map axes ~f:(fun a -> (a.ha_index, (a.ha_kind, a.ha_slot))) in
-    let describe_pair (kind, slot) = hardware_kind_label kind ^ " slot " ^ Int.to_string slot in
-    let check_covered_write ~covered tn =
-      let missing = List.filter active ~f:(fun p -> not (List.mem covered p ~equal:pair_equal)) in
-      if
-        (not (List.is_empty missing))
-        && Tn.Placements.is_materialized_force plc tn (Site "160:parallel-validation")
-      then
-        invalid_arg
-          ("Low_level.validate_parallel: write to materialized node " ^ Tn.debug_name tn
-         ^ " is not nested under annotated loops covering all active hardware dimensions (missing: "
-          ^ String.concat ~sep:", " (List.map missing ~f:describe_pair)
-          ^ "): every hardware index of an uncovered dimension executes it, racing or repeating \
-             the update"
-          ^
-          (* gh-ocannl-633: a constant's in-kernel init normally moves to a link-time [Host_inits]
-             upload before this check ([hosted_constant_inits_to_link_time]); when a bail-out kept
-             it (e.g. a padded constant), name the actual culprit — the schedule is not at fault.
-             [Broadcast] host-init data preserves scalar shape inference, so the escape also reaches
-             one-element literals (gh-ocannl-641). *)
-          if Tn.known_host_constant tn then
-            ". The write is the in-kernel initialization of a constant that could not be moved to \
-             link time; for ndarray literals, --ocannl_limit_constant_fill_size=0 forces host-side \
-             initialization"
-          else "")
-    in
-    let rec check_writes ~covered ~enclosing llc =
-      match llc with
-      | For_loop { index; body; _ } ->
-          let covered =
-            match List.Assoc.find slot_of_index ~equal:Indexing.equal_symbol index with
-            | Some pair -> pair :: covered
-            | None -> covered
-          in
-          check_writes ~covered ~enclosing:(index :: enclosing) body
-      | Scan_loop { index; body; _ } -> check_writes ~covered ~enclosing:(index :: enclosing) body
-      | Seq (a, b) ->
-          check_writes ~covered ~enclosing a;
-          check_writes ~covered ~enclosing b
-      | If { body; _ } -> check_writes ~covered ~enclosing body
-      | Zero_out tn ->
-          if
-            (not (List.is_empty active))
-            && Tn.Placements.is_materialized_force plc tn (Site "160:parallel-validation")
-          then
-            invalid_arg
-              ("Low_level.validate_parallel: Zero_out of materialized node " ^ Tn.debug_name tn
-             ^ " in a multi-threaded kernel: whole-node zeroing is not distributed across hardware \
-                threads; zero via per-element writes under the annotated loops instead \
-                (Schedule.Expand_zero expands the init into a loop nest the same geometry ops can \
-                annotate)")
-      | Set { tn; _ } | Set_dynamic { tn; _ } | Set_from_vec { tn; _ } ->
-          check_covered_write ~covered tn
-      | Tile_mma { d = d_tn, d_idcs; a = _, a_idcs; b = _, b_idcs; lane; _ } ->
-          (* The cooperating [lane] axis must be a real enclosing [Workgroup]-typed loop: the launch
-             needs its threads, hardware backends reach the intrinsic on all of them together, and
-             serial renderers key their once-per-simdgroup guard off its index. *)
-          (match List.Assoc.find slot_of_index ~equal:Indexing.equal_symbol lane with
-          | Some (`Workgroup, _) when List.mem enclosing lane ~equal:Indexing.equal_symbol -> ()
-          | _ ->
-              invalid_arg
-                ("Low_level.validate_parallel: Tile_mma lane " ^ Indexing.symbol_ident lane
-               ^ " must be bound by an enclosing Workgroup-typed loop"));
-          (* The tile is jointly owned by the simdgroup: per-lane element ownership is
-             architecture-opaque, so no base index may mention the lane. *)
-          Array.iter
-            (Array.concat [ d_idcs; a_idcs; b_idcs ])
-            ~f:(fun idx ->
-              if axis_index_mentions_symbol lane idx then
-                invalid_arg
-                  ("Low_level.validate_parallel: Tile_mma base indices must not mention the lane \
-                    axis " ^ Indexing.symbol_ident lane ^ " (the tile is jointly owned)"));
-          (* The tile store covers the lane slot by decree (the statement is nested under the lane
-             loop, adding its slot to [covered]); other active slots follow the ordinary rule. *)
-          check_covered_write ~covered d_tn
-      | Noop | Comment _ | Staged_compilation _ | Set_local _ | Declare_local _ | Workgroup_barrier
-        ->
-          ()
-    in
-    check_writes ~covered:[] ~enclosing:[] llc)
-
-let validate_parallel_classified plc llc =
-  match validate_parallel plc llc with
-  | () -> ()
-  | exception Invalid_argument detail ->
-      raise
-        (Schedule_outcome.Cause_at
-           ( Schedule_outcome.Backend_codegen,
-             Schedule_outcome.Illegal_schedule { check = "Low_level.validate_parallel"; detail } ))
-
 (** Wraps the body of each hardware-annotated loop whose extent is smaller than its slot's launch
     dimension in an [If (index < extent)] guard, for the kinds [should_guard] selects (backends
     binding the axis in hardware; the serial fallback iterates the true extent and needs no guard).
@@ -6286,98 +6131,6 @@ type lane_all_reduce_site = {
   lar_cross_simdgroup : bool;
 }
 
-(* gh-ocannl-1168. The lane all-reduce's sites, and which of them may stage partials between
-   barriers: every lane of the workgroup must reach both, so the site must cover the whole [.x]
-   dimension of a one-dimensional workgroup and sit under workgroup-uniform control. Uniform is
-   judged conservatively: no enclosing workgroup loop, and every enclosing [If] condition built from
-   constants and index symbols no workgroup loop binds -- a scope local or a memory read could carry
-   a lane-dependent value ([flag := lane < 32; if flag { ... }]), so either makes it non-uniform. *)
-let lane_all_reduce_sites ~(reassociable : Tn.t -> bool) (llc : t) : lane_all_reduce_site list =
-  let axes = hardware_axes llc in
-  let lane s =
-    List.exists axes ~f:(fun a ->
-        Poly.equal a.ha_kind `Workgroup && Indexing.equal_symbol a.ha_index s)
-  in
-  let slot_max = slot_max_extent axes `Workgroup 0 in
-  let one_dimensional =
-    List.for_all axes ~f:(fun a ->
-        match a.ha_kind with `Workgroup -> a.ha_slot = 0 | `Grid -> true)
-  in
-  let index_uniform : Indexing.axis_index -> bool = function
-    | Fixed_idx _ | Sub_axis -> true
-    | Iterator s -> not (lane s)
-    | Affine { symbols; _ } -> not (List.exists symbols ~f:(fun (_, s) -> lane s))
-    | Concat syms -> not (List.exists syms ~f:lane)
-  in
-  let rec uniform_scalar (sc : scalar_t) =
-    match sc with
-    | Constant _ | Constant_bits _ -> true
-    | Embed_index idx -> index_uniform idx
-    | Binop (_, (a, _), (b, _)) -> uniform_scalar a && uniform_scalar b
-    | Unop (_, (a, _)) -> uniform_scalar a
-    | Ternop (_, (a, _), (b, _), (c, _)) -> uniform_scalar a && uniform_scalar b && uniform_scalar c
-    | Local_scope _ | Get_local _ | Get _ | Get_dynamic _ | Get_merge_buffer _ -> false
-  in
-  let stmts_of body =
-    List.filter (flat_lines [ body ]) ~f:(function Noop | Comment _ -> false | _ -> true)
-  in
-  let sites = ref [] in
-  let rec walk ~uniform llc =
-    match llc with
-    | For_loop { index; from_; to_; axis; body; _ } -> (
-        let extent = to_ - from_ + 1 in
-        let stmts =
-          match stmts_of body with
-          | [
-           If
-             {
-               cond = Binop (Ops.Cmplt, (Embed_index (Indexing.Iterator s), _), (Constant c, _)), _;
-               body = guarded;
-             };
-          ]
-            when Indexing.equal_symbol s index && Float.equal c (Float.of_int extent) ->
-              stmts_of guarded
-          | stmts -> stmts
-        in
-        match (axis, stmts) with
-        | Workgroup_reduce, [ Set_local (id, llsc) ]
-          when reassociable id.tn && Option.is_some (accum_local_update_parts ~id llsc) ->
-            sites :=
-              {
-                lar_index = index;
-                lar_extent = extent;
-                lar_local = id;
-                lar_cross_simdgroup = uniform && from_ = 0 && extent = slot_max && one_dimensional;
-              }
-              :: !sites
-        | _ ->
-            let lanes_diverge =
-              Option.equal Poly.equal (hardware_kind_of_axis axis) (Some `Workgroup)
-            in
-            walk ~uniform:(uniform && not lanes_diverge) body)
-    | If { cond = c, _; body } -> walk ~uniform:(uniform && uniform_scalar c) body
-    | Seq (a, b) ->
-        walk ~uniform a;
-        walk ~uniform b
-    | Scan_loop { body; _ } -> walk ~uniform body
-    | Noop | Comment _ | Staged_compilation _ | Zero_out _ | Set _ | Set_dynamic _ | Set_from_vec _
-    | Set_local _ | Declare_local _ | Workgroup_barrier | Tile_mma _ ->
-        ()
-  in
-  walk ~uniform:true llc;
-  (* Admission is per symbol, not per occurrence: a materializing [Unroll] or a [Partition] copies a
-     body with its nested loop symbols, so one symbol can name a copy under uniform control and a
-     copy under a lane-dependent guard (staging#1028 review round 2). The renderer meets a loop by
-     its symbol, so every copy stages partials only when every copy may. *)
-  let refused =
-    List.filter_map !sites ~f:(fun site ->
-        Option.some_if (not site.lar_cross_simdgroup) site.lar_index)
-  in
-  List.rev_map !sites ~f:(fun site ->
-      if List.mem refused site.lar_index ~equal:Indexing.equal_symbol then
-        { site with lar_cross_simdgroup = false }
-      else site)
-
 (* A scalar reading only embedded indices and constants — the semantic notion behind
    {!pure_index_guard}, closed over the index arithmetic ([And]-joined range conditions, [Cmpeq]
    unit-solve conditions) that virtualization's guarded reads build. Such an expression cannot
@@ -6857,6 +6610,403 @@ let peel_accum_nest ?(extra_level = fun _ _ -> false) ?report ~loop_bounds ~free
   let result, rep = peel ~free_of ~pending:[] ~levels:0 ~guards:[] ~rebuild:(fun b -> b) body in
   Option.iter report ~f:(fun f -> f rep);
   result
+
+(* gh-ocannl-1168 / gh-ocannl-1238. The [Workgroup_reduce] sites the renderer owns the communication
+   of, and whether workgroup-uniform control reaches each: the lane all-reduce into a reassociable
+   scope local ([C_syntax.try_lane_all_reduce]) and the warp-shuffle tree into a cell
+   ([C_syntax.try_warp_reduce]). Both stage per-simdgroup partials between barriers past one
+   simdgroup, and every lane of the workgroup must reach those barriers. Uniform is judged
+   conservatively: no enclosing workgroup loop, and every enclosing [If] condition built from
+   constants and index symbols no workgroup loop binds -- a scope local or a memory read could carry
+   a lane-dependent value ([flag := lane < 32; if flag { ... }]), so either makes it non-uniform.
+
+   Uniformity is decided per loop SYMBOL, not per occurrence: a materializing [Unroll] or a
+   [Partition] copies a body with its nested loop symbols, so one symbol can name a copy under
+   uniform control and a copy under a lane-dependent guard (staging#1028 review round 2). The
+   renderer meets a loop by its symbol, so every copy counts as uniform only when every copy is. *)
+type workgroup_reduce_form = Wr_scope_local of scope_id | Wr_cell
+
+type workgroup_reduce_site = {
+  wr_index : Indexing.symbol;
+  wr_from : int;
+  wr_extent : int;
+  wr_form : workgroup_reduce_form;
+  wr_uniform : bool;
+}
+
+(* The warp-shuffle rendering's base: ONE accumulation statement at the level itself, no level or
+   guard between -- [C_syntax.statement_accumulation] of [C_syntax.decide_accum_width], asked of the
+   same peel. A single [Set] body reaches [peel_accum_nest]'s base directly, so no level, guard or
+   loop bound enters the answer. *)
+let warp_reduce_cell_statement ~index (stmts : t list) =
+  match stmts with
+  | [ (Set _ as st) ] -> (
+      match peel_accum_nest ~loop_bounds:[] ~free_of:[ index ] st with
+      | Some (_, _, `Update _, _, _) -> true
+      | Some (_, _, `Scope _, _, _) | None -> false)
+  | _ -> false
+
+let workgroup_reduce_sites ~(reassociable : Tn.t -> bool) (llc : t) : workgroup_reduce_site list =
+  let axes = hardware_axes llc in
+  let lane s =
+    List.exists axes ~f:(fun a ->
+        Poly.equal a.ha_kind `Workgroup && Indexing.equal_symbol a.ha_index s)
+  in
+  let index_uniform : Indexing.axis_index -> bool = function
+    | Fixed_idx _ | Sub_axis -> true
+    | Iterator s -> not (lane s)
+    | Affine { symbols; _ } -> not (List.exists symbols ~f:(fun (_, s) -> lane s))
+    | Concat syms -> not (List.exists syms ~f:lane)
+  in
+  let rec uniform_scalar (sc : scalar_t) =
+    match sc with
+    | Constant _ | Constant_bits _ -> true
+    | Embed_index idx -> index_uniform idx
+    | Binop (_, (a, _), (b, _)) -> uniform_scalar a && uniform_scalar b
+    | Unop (_, (a, _)) -> uniform_scalar a
+    | Ternop (_, (a, _), (b, _), (c, _)) -> uniform_scalar a && uniform_scalar b && uniform_scalar c
+    | Local_scope _ | Get_local _ | Get _ | Get_dynamic _ | Get_merge_buffer _ -> false
+  in
+  let stmts_of body =
+    List.filter (flat_lines [ body ]) ~f:(function Noop | Comment _ -> false | _ -> true)
+  in
+  let sites = ref [] in
+  let rec walk ~uniform llc =
+    match llc with
+    | For_loop { index; from_; to_; axis; body; _ } -> (
+        let extent = to_ - from_ + 1 in
+        (* The loop's own launch guard ([guard_annotated_extents]) is vacuous with respect to its
+           iteration space; both renderers strip exactly this shape. *)
+        let stmts =
+          match stmts_of body with
+          | [
+           If
+             {
+               cond = Binop (Ops.Cmplt, (Embed_index (Indexing.Iterator s), _), (Constant c, _)), _;
+               body = guarded;
+             };
+          ]
+            when Indexing.equal_symbol s index && Float.equal c (Float.of_int extent) ->
+              stmts_of guarded
+          | stmts -> stmts
+        in
+        let site wr_form =
+          sites :=
+            { wr_index = index; wr_from = from_; wr_extent = extent; wr_form; wr_uniform = uniform }
+            :: !sites
+        in
+        match (axis, stmts) with
+        | Workgroup_reduce, [ Set_local (id, llsc) ]
+          when reassociable id.tn && Option.is_some (accum_local_update_parts ~id llsc) ->
+            site (Wr_scope_local id)
+        | Workgroup_reduce, _ when warp_reduce_cell_statement ~index stmts -> site Wr_cell
+        | _ ->
+            let lanes_diverge =
+              Option.equal Poly.equal (hardware_kind_of_axis axis) (Some `Workgroup)
+            in
+            walk ~uniform:(uniform && not lanes_diverge) body)
+    | If { cond = c, _; body } -> walk ~uniform:(uniform && uniform_scalar c) body
+    | Seq (a, b) ->
+        walk ~uniform a;
+        walk ~uniform b
+    | Scan_loop { body; _ } -> walk ~uniform body
+    | Noop | Comment _ | Staged_compilation _ | Zero_out _ | Set _ | Set_dynamic _ | Set_from_vec _
+    | Set_local _ | Declare_local _ | Workgroup_barrier | Tile_mma _ ->
+        ()
+  in
+  walk ~uniform:true llc;
+  let divergent =
+    List.filter_map !sites ~f:(fun site -> Option.some_if (not site.wr_uniform) site.wr_index)
+  in
+  List.rev_map !sites ~f:(fun site ->
+      if List.mem divergent site.wr_index ~equal:Indexing.equal_symbol then
+        { site with wr_uniform = false }
+      else site)
+
+(* The lane all-reduce's sites (gh-ocannl-1168), and which of them may stage partials between
+   barriers: besides workgroup-uniform control, the site must cover the whole [.x] dimension of a
+   one-dimensional workgroup. Admission is all-or-none per symbol, like uniformity above. *)
+let lane_all_reduce_sites_of ~axes (sites : workgroup_reduce_site list) : lane_all_reduce_site list
+    =
+  let slot_max = slot_max_extent axes `Workgroup 0 in
+  let one_dimensional =
+    List.for_all axes ~f:(fun a ->
+        match a.ha_kind with `Workgroup -> a.ha_slot = 0 | `Grid -> true)
+  in
+  let sites =
+    List.filter_map sites ~f:(fun site ->
+        match site.wr_form with
+        | Wr_cell -> None
+        | Wr_scope_local id ->
+            Some
+              {
+                lar_index = site.wr_index;
+                lar_extent = site.wr_extent;
+                lar_local = id;
+                lar_cross_simdgroup =
+                  site.wr_uniform && site.wr_from = 0 && site.wr_extent = slot_max
+                  && one_dimensional;
+              })
+  in
+  let refused =
+    List.filter_map sites ~f:(fun site ->
+        Option.some_if (not site.lar_cross_simdgroup) site.lar_index)
+  in
+  List.map sites ~f:(fun site ->
+      if List.mem refused site.lar_index ~equal:Indexing.equal_symbol then
+        { site with lar_cross_simdgroup = false }
+      else site)
+
+let lane_all_reduce_sites ~(reassociable : Tn.t -> bool) (llc : t) : lane_all_reduce_site list =
+  lane_all_reduce_sites_of ~axes:(hardware_axes llc) (workgroup_reduce_sites ~reassociable llc)
+
+type inserted_barrier_form = Lane_all_reduce_partials | Warp_reduce_partials
+[@@deriving sexp_of, equal]
+
+type inserted_barrier = {
+  ib_index : Indexing.symbol;
+  ib_extent : int;
+  ib_form : inserted_barrier_form;
+  ib_uniform : bool;
+}
+
+(* gh-ocannl-1238. The statements whose rendering emits a workgroup barrier the IR does not contain:
+   ONE notion, read by [validate_parallel] (which refuses such a barrier under control flow that is
+   not workgroup-uniform, before anything renders) and by the renderer of each form. A backend
+   without warp shuffles ([warp_size <= 0], the C backends) renders neither form with a barrier.
+
+   - The lane all-reduce stages partials only past one simdgroup and only where
+   [lar_cross_simdgroup] holds; elsewhere it renders the serial loop in every lane, which needs no
+   barrier. Its admission already asks for uniform control, so the validator refuses none of its
+   entries today: under divergent control this form declines to the serial loop. The entries are
+   listed anyway, each with the walk's own uniformity, so that the validator covers every barrier
+   the renderer inserts rather than only the ones known to be at risk. - The warp-shuffle tree into
+   a cell stages per-warp partials whenever the extent spans more than one warp, and has no
+   barrier-free fallback: binding the index instead would race every lane's read-modify-write of the
+   one cell. So its entries carry the walk's uniformity, and a non-uniform one is a refusal. Listed
+   past one warp whatever else the renderer requires of it (whole warps, a power-of-two count, slot
+   0, the whole [.x] dimension, a wide residency): a site failing those is refused by the renderer
+   anyway, so the list over-approximates only by statements that never render. *)
+let inserted_barriers ~(reassociable : Tn.t -> bool) ~(warp_size : int) (llc : t) :
+    inserted_barrier list =
+  if warp_size <= 0 then []
+  else
+    let sites = workgroup_reduce_sites ~reassociable llc in
+    (* Each lane-form entry pairs a site with the walk's own uniformity, not with
+       [lar_cross_simdgroup]'s use of it: were the admission ever to stage partials without asking,
+       the validator would still see the divergent barrier. *)
+    let scope_sites =
+      List.filter sites ~f:(fun site ->
+          match site.wr_form with Wr_scope_local _ -> true | Wr_cell -> false)
+    in
+    let lane =
+      List.filter_map
+        (List.zip_exn scope_sites (lane_all_reduce_sites_of ~axes:(hardware_axes llc) sites))
+        ~f:(fun (site, lar) ->
+          Option.some_if
+            (lar.lar_cross_simdgroup
+            && lar.lar_extent % warp_size = 0
+            && lar.lar_extent / warp_size > 1)
+            {
+              ib_index = lar.lar_index;
+              ib_extent = lar.lar_extent;
+              ib_form = Lane_all_reduce_partials;
+              ib_uniform = site.wr_uniform;
+            })
+    in
+    let cell =
+      List.filter_map sites ~f:(fun site ->
+          match site.wr_form with
+          | Wr_cell when site.wr_extent > warp_size ->
+              Some
+                {
+                  ib_index = site.wr_index;
+                  ib_extent = site.wr_extent;
+                  ib_form = Warp_reduce_partials;
+                  ib_uniform = site.wr_uniform;
+                }
+          | Wr_cell | Wr_scope_local _ -> None)
+    in
+    lane @ cell
+
+(** Backend-independent well-formedness of hardware annotations (axis-types proposal §2). A no-op
+    for all-[Serial] code. Raises [Invalid_argument] on: annotated loops with [from_ <> 0]; more
+    than 3 [Workgroup] slots ([Grid] slots [>= 2] fold onto [.z], see the hardware-axis section
+    comment); annotated loops inside [Local_scope] bodies; a kernel containing barriers whose
+    same-slot workgroup extents differ (a barrier under divergent control flow is UB) or with a
+    barrier lexically under an [If] guard; a barrier the renderer inserts ({!inserted_barriers}, for
+    a backend whose warp shuffles span [warp_size] lanes; none by default) under control flow that
+    is not workgroup-uniform; and writes to materialized tensor nodes lexically outside all
+    annotated loops (every hardware thread would execute them, racing with the annotated writes —
+    there is no grid-wide synchronization). Cannot prove iteration independence; that is the
+    annotating pass's obligation. *)
+let validate_parallel ?(warp_size = 0) ?(reassociable = fun _ -> false) plc (llc : t) : unit =
+  let axes = hardware_axes llc in
+  if not (List.is_empty axes) then (
+    List.iter axes ~f:(fun a ->
+        if a.ha_from_ <> 0 then
+          invalid_arg
+            ("Low_level.validate_parallel: annotated loop " ^ Indexing.symbol_ident a.ha_index
+           ^ " must start at 0, starts at " ^ Int.to_string a.ha_from_);
+        (* Grid slots [>= 2] fold onto the hardware [.z] dimension (see the hardware-axis section
+           comment), so any number of grid axes is renderable; workgroup slots stay capped at the
+           three threadgroup dimensions. *)
+        if a.ha_slot > 2 && Poly.equal a.ha_kind `Workgroup then
+          invalid_arg
+            ("Low_level.validate_parallel: more than 3 " ^ hardware_kind_label a.ha_kind
+           ^ " axes in one kernel (loop " ^ Indexing.symbol_ident a.ha_index ^ " needs slot "
+           ^ Int.to_string a.ha_slot ^ ")"));
+    if scalar_scopes_have_annotated llc then
+      invalid_arg "Low_level.validate_parallel: hardware-annotated loop inside a Local_scope body";
+    if contains_barrier llc then (
+      List.iter axes ~f:(fun a ->
+          match a.ha_kind with
+          | `Workgroup ->
+              let m = slot_max_extent axes `Workgroup a.ha_slot in
+              if a.ha_extent <> m then
+                invalid_arg
+                  ("Low_level.validate_parallel: kernel contains barriers but workgroup extents \
+                    differ at slot " ^ Int.to_string a.ha_slot
+                 ^ " (a barrier under divergent control flow is UB): " ^ Int.to_string a.ha_extent
+                 ^ " vs " ^ Int.to_string m)
+          | `Grid -> ());
+      let rec no_guarded_barrier llc =
+        match llc with
+        | If { body; _ } ->
+            if contains_barrier body then
+              invalid_arg "Low_level.validate_parallel: barrier under an If guard is divergent"
+        | Seq (a, b) ->
+            no_guarded_barrier a;
+            no_guarded_barrier b
+        | For_loop { body; _ } | Scan_loop { body; _ } -> no_guarded_barrier body
+        | Noop | Comment _ | Staged_compilation _ | Zero_out _ | Set _ | Set_dynamic _
+        | Set_from_vec _ | Set_local _ | Declare_local _ | Workgroup_barrier | Tile_mma _ ->
+            ()
+      in
+      no_guarded_barrier llc);
+    (* gh-ocannl-1238: the guarded-barrier rule for the barriers the IR does not contain. An
+       inserted barrier is not held to the rule above -- no [If] at all -- but to uniformity, the
+       question its renderer asks: the lane all-reduce keeps its cross-simdgroup form under a guard
+       on a serial query symbol (gh-ocannl-1168), and a [Workgroup_reduce] reduction under a padding
+       or symbolic-extent guard on a [Grid] or serial symbol has every lane of the workgroup on one
+       side of it. Nor to the extent rule: an inserted barrier sits inside its own loop's rendering,
+       which covers the whole [.x] dimension, never under a guarded sibling workgroup loop. *)
+    List.iter (inserted_barriers ~reassociable ~warp_size llc) ~f:(fun ib ->
+        if not ib.ib_uniform then
+          invalid_arg
+            ("Low_level.validate_parallel: Workgroup_reduce loop "
+           ^ Indexing.symbol_ident ib.ib_index ^ " renders as "
+            ^ (match ib.ib_form with
+              | Warp_reduce_partials -> "the multi-warp warp-shuffle reduction into a cell"
+              | Lane_all_reduce_partials -> "the cross-simdgroup lane all-reduce")
+            ^ Printf.sprintf
+                " (extent %d past %d-lane warps), whose inserted workgroup barrier is under \
+                 control                  flow that is not workgroup-uniform (an enclosing \
+                 workgroup loop, or a guard reading                  a scope local, memory, or a \
+                 workgroup symbol): lanes taking the other side would                  skip the \
+                 barrier the rest wait at"
+                ib.ib_extent warp_size));
+    (* Launch dimensions are global to the kernel, so a materialized write must be nested under
+       annotated loops covering EVERY active (non-unit) hardware dimension -- a statement covering
+       only some of them executes once per hardware index of each uncovered dimension, racing or
+       repeating read-modify-write updates (PR #89 review). A whole-node [Zero_out] is never
+       distributed across threads by nesting, so in a multi-threaded kernel it is rejected outright;
+       distribute zeroing as ordinary per-element [Set]s instead. *)
+    let pair_equal (k1, s1) (k2, s2) = Poly.equal k1 k2 && s1 = s2 in
+    let active =
+      List.filter_map axes ~f:(fun a ->
+          if slot_max_extent axes a.ha_kind a.ha_slot > 1 then Some (a.ha_kind, a.ha_slot) else None)
+      |> List.dedup_and_sort ~compare:Poly.compare
+    in
+    let slot_of_index = List.map axes ~f:(fun a -> (a.ha_index, (a.ha_kind, a.ha_slot))) in
+    let describe_pair (kind, slot) = hardware_kind_label kind ^ " slot " ^ Int.to_string slot in
+    let check_covered_write ~covered tn =
+      let missing = List.filter active ~f:(fun p -> not (List.mem covered p ~equal:pair_equal)) in
+      if
+        (not (List.is_empty missing))
+        && Tn.Placements.is_materialized_force plc tn (Site "160:parallel-validation")
+      then
+        invalid_arg
+          ("Low_level.validate_parallel: write to materialized node " ^ Tn.debug_name tn
+         ^ " is not nested under annotated loops covering all active hardware dimensions (missing: "
+          ^ String.concat ~sep:", " (List.map missing ~f:describe_pair)
+          ^ "): every hardware index of an uncovered dimension executes it, racing or repeating \
+             the update"
+          ^
+          (* gh-ocannl-633: a constant's in-kernel init normally moves to a link-time [Host_inits]
+             upload before this check ([hosted_constant_inits_to_link_time]); when a bail-out kept
+             it (e.g. a padded constant), name the actual culprit — the schedule is not at fault.
+             [Broadcast] host-init data preserves scalar shape inference, so the escape also reaches
+             one-element literals (gh-ocannl-641). *)
+          if Tn.known_host_constant tn then
+            ". The write is the in-kernel initialization of a constant that could not be moved to \
+             link time; for ndarray literals, --ocannl_limit_constant_fill_size=0 forces host-side \
+             initialization"
+          else "")
+    in
+    let rec check_writes ~covered ~enclosing llc =
+      match llc with
+      | For_loop { index; body; _ } ->
+          let covered =
+            match List.Assoc.find slot_of_index ~equal:Indexing.equal_symbol index with
+            | Some pair -> pair :: covered
+            | None -> covered
+          in
+          check_writes ~covered ~enclosing:(index :: enclosing) body
+      | Scan_loop { index; body; _ } -> check_writes ~covered ~enclosing:(index :: enclosing) body
+      | Seq (a, b) ->
+          check_writes ~covered ~enclosing a;
+          check_writes ~covered ~enclosing b
+      | If { body; _ } -> check_writes ~covered ~enclosing body
+      | Zero_out tn ->
+          if
+            (not (List.is_empty active))
+            && Tn.Placements.is_materialized_force plc tn (Site "160:parallel-validation")
+          then
+            invalid_arg
+              ("Low_level.validate_parallel: Zero_out of materialized node " ^ Tn.debug_name tn
+             ^ " in a multi-threaded kernel: whole-node zeroing is not distributed across hardware \
+                threads; zero via per-element writes under the annotated loops instead \
+                (Schedule.Expand_zero expands the init into a loop nest the same geometry ops can \
+                annotate)")
+      | Set { tn; _ } | Set_dynamic { tn; _ } | Set_from_vec { tn; _ } ->
+          check_covered_write ~covered tn
+      | Tile_mma { d = d_tn, d_idcs; a = _, a_idcs; b = _, b_idcs; lane; _ } ->
+          (* The cooperating [lane] axis must be a real enclosing [Workgroup]-typed loop: the launch
+             needs its threads, hardware backends reach the intrinsic on all of them together, and
+             serial renderers key their once-per-simdgroup guard off its index. *)
+          (match List.Assoc.find slot_of_index ~equal:Indexing.equal_symbol lane with
+          | Some (`Workgroup, _) when List.mem enclosing lane ~equal:Indexing.equal_symbol -> ()
+          | _ ->
+              invalid_arg
+                ("Low_level.validate_parallel: Tile_mma lane " ^ Indexing.symbol_ident lane
+               ^ " must be bound by an enclosing Workgroup-typed loop"));
+          (* The tile is jointly owned by the simdgroup: per-lane element ownership is
+             architecture-opaque, so no base index may mention the lane. *)
+          Array.iter
+            (Array.concat [ d_idcs; a_idcs; b_idcs ])
+            ~f:(fun idx ->
+              if axis_index_mentions_symbol lane idx then
+                invalid_arg
+                  ("Low_level.validate_parallel: Tile_mma base indices must not mention the lane \
+                    axis " ^ Indexing.symbol_ident lane ^ " (the tile is jointly owned)"));
+          (* The tile store covers the lane slot by decree (the statement is nested under the lane
+             loop, adding its slot to [covered]); other active slots follow the ordinary rule. *)
+          check_covered_write ~covered d_tn
+      | Noop | Comment _ | Staged_compilation _ | Set_local _ | Declare_local _ | Workgroup_barrier
+        ->
+          ()
+    in
+    check_writes ~covered:[] ~enclosing:[] llc)
+
+let validate_parallel_classified ~warp_size ~reassociable plc llc =
+  match validate_parallel ~warp_size ~reassociable plc llc with
+  | () -> ()
+  | exception Invalid_argument detail ->
+      raise
+        (Schedule_outcome.Cause_at
+           ( Schedule_outcome.Backend_codegen,
+             Schedule_outcome.Illegal_schedule { check = "Low_level.validate_parallel"; detail } ))
 
 (* Whether [body] contains an effect whose buffer accesses or ordering are deliberately opaque to
    the affine access list. A zero store may not move through either one. [Tile_mma] is rejected as a

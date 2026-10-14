@@ -994,8 +994,8 @@ files.
   `try_warp_reduce`'s decline arm with the one lane it is about to bind un-deferred. Both raise the
   typed `Schedule_outcome.Cause_at (Backend_codegen, Illegal_schedule {check =
   "hardware_binding_race"})`, one candidate's decline under the autotuner and `Invalid_argument`
-  at the `Context.compile` boundary. `validate_parallel` stays structural and
-  backend-independent; the check lives at the binding because a `Workgroup` loop on cc iterates,
+  at the `Context.compile` boundary. `validate_parallel` stays structural (its one backend input
+  is the shuffle width that decides which barriers the renderer inserts, gh-ocannl-1238); the check lives at the binding because a `Workgroup` loop on cc iterates,
   so the reduction-axis-to-`Workgroup` form `reduction_forms` runs cpu-only is legal there and
   refused where a register binds it. A `Tile_mma` is judged through its `fallback`'s stores with
   its own cooperating `lane` excused (gh-ocannl-960), a `Set_dynamic` by its static slots, a
