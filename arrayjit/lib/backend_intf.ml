@@ -196,8 +196,9 @@ type hardware_limits = {
       (** Capacity in bytes of the workgroup-shared memory (CUDA [__shared__] / Metal
           [threadgroup]); [None] when the backend imposes no limit. *)
   max_thread_private_bytes : int option; [@sexp.option]
-      (** The largest per-work-item private (stack) frame the backend's compiler accepts for one
-          kernel (gh-ocannl-1313). The kernel's routine-scoped scratch, the function-scope arrays of
+      (** The per-work-item budget for one kernel's declared scratch arrays: the largest private
+          (stack) frame the backend's compiler accepts, less a reserve for what else lands on the
+          frame (gh-ocannl-1313). The kernel's routine-scoped scratch, the function-scope arrays of
           its [Local]-placed nodes ([Schedule.thread_private_bytes]), is checked against it
           pre-driver by [Schedule.check_hardware_limits_classified], as
           [Schedule_outcome.Thread_scratch]. Without the check, a kernel over the limit reaches the
@@ -205,10 +206,11 @@ type hardware_limits = {
           took 52 s to report [stack frame size (360544) exceeds limit (262136)] on the serial base
           form of a GPT-2 training step, whose 89 [Local] arrays declare 360452 bytes, and under
           strict failure classification that ended the search (outcome [pre-search-failure]). HIP:
-          262136, LLVM AMDGPU's frame limit, on every AMD part seen (gfx1102, gfx1151), independent
-          of the post-link scratch-budget check that HIP applies to what does compile. [None] where
-          unmeasured, which checks nothing, and on the C backends. Omitted from the record's sexp
-          when [None], so adding it moved no other backend's schedule-cache key. *)
+          LLVM AMDGPU's frame limit of 262136 bytes, on every AMD part seen (gfx1102, gfx1151), less
+          a 1 KiB reserve (that kernel's frame held 92 bytes beyond its arrays; spills add more),
+          independent of the post-link scratch-budget check that HIP applies to what does compile.
+          [None] where unmeasured, which checks nothing, and on the C backends. Omitted from the
+          record's sexp when [None], so adding it moved no other backend's schedule-cache key. *)
   max_workgroup_dims : (int * int * int) option;
       (** Per-dimension upper bounds on the launch's workgroup shape — the caps on [.x], [.y] and
           [.z] of {!Low_level.launch_dims}' [block], in that order. Beside, not instead of,

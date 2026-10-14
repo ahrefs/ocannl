@@ -1188,8 +1188,17 @@ end = struct
      [hardware_limits.max_thread_private_bytes], so [Schedule.check_hardware_limits_classified]
      declines such a kernel from its declared [Local] scratch before codegen. A compiler limit, not
      a budget model like the post-link check below, so [hip_scratch_validation] does not lift it:
-     past it there is no kernel to validate. *)
+     past it there is no kernel to validate.
+
+     What is compared is the DECLARED arrays, and the frame holds more than them: 92 bytes more on
+     that kernel, and a kernel that spills registers puts its spill slots there too. So the
+     published budget keeps a reserve below the compiler's limit, for the same reason
+     [hip_scratch_budget]'s near-limit fixture sizes itself about 2 KB under it: a kernel whose
+     arrays land just under 262136 bytes would otherwise pass the gate and still die in hiprtc,
+     untyped (Codex P1 on PR #1115). A kernel whose non-array frame exceeds the reserve can still
+     reach that failure; the reserve narrows the band, it cannot close it before codegen. *)
   let compiler_frame_limit_bytes = 262136
+  let frame_reserve_bytes = 1024
 
   (* Total scratch the runtime backs = per-work-item size, rounded up to the allocation granule,
      times the device's maximum resident work-items. *)
@@ -1537,7 +1546,7 @@ end = struct
              min_over (fun (a : H.Device.attributes) -> a.max_threads_per_block);
            max_workgroup_memory_bytes =
              min_over (fun (a : H.Device.attributes) -> a.shared_mem_per_block);
-           max_thread_private_bytes = Some compiler_frame_limit_bytes;
+           max_thread_private_bytes = Some (compiler_frame_limit_bytes - frame_reserve_bytes);
            (* Per-dimension workgroup caps (gh-ocannl-679), from the same queried [max_threads_dim]
               the dump above surfaces. On the AMD parts seen so far it reads (1024, 1024, 1024) --
               equal to [max_threads_per_block], so on those devices every per-dimension violation is

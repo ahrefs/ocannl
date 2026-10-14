@@ -8313,8 +8313,8 @@ let check_hardware_limits_classified ~name ~(limits : Backend_intf.hardware_limi
         let detail =
           [%string
             "Schedule: kernel %{name} declares %{private_bytes#Int} bytes of per-work-item scratch \
-             (its Local arrays), exceeding the %{max_bytes#Int}-byte frame the device compiler \
-             accepts"]
+             (its Local arrays), exceeding the %{max_bytes#Int} bytes the device compiler's frame \
+             limit leaves for them"]
         in
         raise
           (Schedule_outcome.Cause_at
