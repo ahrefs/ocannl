@@ -102,7 +102,8 @@
 #      cuda on a native NVIDIA boot is capped at its own, and so is a CPU
 #      backend on the fleet's rog-nv-linux (named by a faked FLEET_LOCAL_BOX,
 #      or by the hostname through FLEET_HOSTNAME_MAP; gh-ocannl-1065), with
-#      the `execution slot --cpu` note.
+#      the `execution slot --cpu` note; the sweep's native tuf/hip and
+#      rog-nv/cuda units run at exactly the width injected on that box.
 #  49. negative controls: no KFD topology, a GPU node that reports no pool, a
 #      CPU backend on each AMD hazard, on an NVIDIA box that is not the
 #      fleet's rog and on a WSL boot of rog, and each GPU backend on the other
@@ -2771,10 +2772,11 @@ fi
 if [ -z "$dxg_detail" ]; then
   # The values themselves, from the shipping table, in one shell: the sweep's
   # hip unit over each of minix's boots (and with no destination, or one the
-  # table does not know), rog's cuda unit over each of its boots, a CPU unit on
-  # a native boot, tuf's hip unit uncapped (measured, lukstafi/ludics-lite#344), the
-  # override that must still win over both transports, the local probe, and the
-  # two constants.
+  # table does not know), rog's cuda unit over each of its boots (uncapped over
+  # the bridge, its slot width natively), a CPU unit on a native boot, tuf's
+  # native hip unit at its slot width (leg 48 pins both slot widths to the ones
+  # test-run.sh injects on such a box), the override that must still win over
+  # both transports, the local probe, and the two constants.
   sweep_cap=$(
     . "$JOBS_SRC"
     . "$LAB_MAP_SRC"
@@ -2794,8 +2796,8 @@ if [ -z "$dxg_detail" ]; then
       "$BOX_JOBS_DXG_CAP/$BOX_JOBS_SDMA_CAP"
   )
   case $sweep_cap in
-    "2|2|8|2|||||7|7||2|2/8") ;;
-    *) dxg_detail="shared table disagrees: $sweep_cap (want 2|2|8|2|||||7|7||2|2/8)" ;;
+    "2|2|8|2||8||8|7|7||2|2/8") ;;
+    *) dxg_detail="shared table disagrees: $sweep_cap (want 2|2|8|2||8||8|7|7||2|2/8)" ;;
   esac
 fi
 if [ -z "$dxg_detail" ]; then
@@ -2895,12 +2897,18 @@ native_probe() { # tag dxg kfd nvidia backend subcommand [argv...]
 # fleet's state records rog's slots here, which the CPU rows need.
 native_detail=
 native_fleet=$fleet_rog
-for probe in "sdma:$kfd_small:$nv_absent:hip:4:SDMA" \
-             "wide-sdma:$kfd_large:$nv_absent:hip:8:AMD GPU reports 12 allocatable SDMA" \
-"nvidia:$kfd_absent:$nv_present:cuda:8:native NVIDIA boot" \
-             "nvidia-cc:$kfd_absent:$nv_present:cc:8:rog-nv-linux, natively booted" \
-             "nvidia-multidev:$kfd_absent:$nv_present:multidev_cc:8:execution slot --cpu"; do
-  IFS=: read -r tag kfd nv backend want what <<<"$probe"
+# The last field is the sweep unit the same box runs, as `<machine>/<lab box>`:
+# a sweep unit takes no correctness slot, so on tuf and rog it must run at the
+# slot width injected here, and its width is compared with the injected one
+# rather than with a number (gh-ocannl-1211's 2026-10-14 sweep ran tuf's unit 16
+# wide). minix's unit is the deliberate exception: one unit's SDMA cap, not its
+# slot width (tools/box-jobs.sh, box_jobs_sweep_cap).
+for probe in "sdma:$kfd_small:$nv_absent:hip:4:SDMA:-" \
+             "wide-sdma:$kfd_large:$nv_absent:hip:8:AMD GPU reports 12 allocatable SDMA:tuf/tuf" \
+"nvidia:$kfd_absent:$nv_present:cuda:8:native NVIDIA boot:rog-nv/rog" \
+             "nvidia-cc:$kfd_absent:$nv_present:cc:8:rog-nv-linux, natively booted:-" \
+             "nvidia-multidev:$kfd_absent:$nv_present:multidev_cc:8:execution slot --cpu:-"; do
+  IFS=: read -r tag kfd nv backend want what sweep_unit <<<"$probe"
   native_probe "native-$tag" "$dxg_absent" "$kfd" "$nv" "$backend" run build @cheap
   [ "$argv_rc" = 0 ] || { native_detail="$tag: exit $argv_rc"; break; }
   [ "$argv_calls" = "build -j $want @cheap" ] ||
@@ -2913,6 +2921,12 @@ for probe in "sdma:$kfd_small:$nv_absent:hip:4:SDMA" \
     { native_detail="$tag: the run log does not carry the cap: ${argv_dir:-<no run>}"; break; }
   { [ -n "$argv_dir" ] && grep -q -- "-j $want" "$argv_dir/cmd"; } ||
     { native_detail="$tag: the recorded command does not carry the cap: $(cat "$argv_dir/cmd" 2>/dev/null)"; break; }
+  if [ "$sweep_unit" != - ]; then
+    sweep_width=$(unset OCANNL_TOOL_SWEEP_JOBS; . "$JOBS_SRC"; . "$LAB_MAP_SRC"
+      box_jobs_sweep_jobs "${sweep_unit%/*}" "$backend" "$(lab_dest_of "${sweep_unit#*/}" linux)")
+    [ "build -j $sweep_width @cheap" = "$argv_calls" ] ||
+      { native_detail="$tag: the sweep's native ${sweep_unit%/*}/$backend unit runs at '${sweep_width}', not the injected width ($argv_calls)"; break; }
+  fi
 done
 # The hostname path of the fleet's identity rule: with FLEET_LOCAL_BOX unset, a
 # map whose glob matches any host names it rog, and one matching none does not.
