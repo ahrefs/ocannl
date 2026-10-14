@@ -454,12 +454,13 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
      arena's last tenant may extend it, so branches cannot overlap allocations.
 
      First fit, among arenas of the same residency hint that this value may extend. The first arena
-     of a residency hint is sized exactly to its node, so a lone upload costs what it always did;
-     each later one targets the capacity that hint's arenas hold so far, rounded up to the node's
-     alignment so that the padding between tenants cannot eat the room the doubling promised.
-     Capacities double: [n] consecutive uploads take O(log n) pools, and the unused room is bounded
-     by the capacity already filled. A node over the per-pool cap gets an exact pool of its own, as
-     before.
+     of a residency hint this value holds a tenant of is sized exactly to its node, so a lone upload
+     costs what it always did; each later one targets the capacity that hint's arenas held by this
+     value hold so far, rounded up to the node's alignment so that the padding between tenants
+     cannot eat the room the doubling promised. Sibling-only arenas do not count (gh-ocannl-1204):
+     [k] forks each uploading one node take [k] exact pools, not a doubling series. Capacities
+     double: [n] consecutive uploads take O(log n) pools, and the unused room is bounded by the
+     capacity already filled. A node over the per-pool cap gets an exact pool of its own, as before.
 
      Returns the location and the [release] that gives it back if the upload fails: a fresh arena is
      freed and forgotten, a bump into an existing one is rolled back (only if still on top, which it
@@ -491,8 +492,19 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
         ({ pool_id = a.arena_pool_id; offset }, release)
     | None ->
         let cap = pool_cap () in
+        (* gh-ocannl-1204: only the arenas this value holds a tenant of. A sibling's arenas are
+           shared lineage state but can never be extended from here, so counting them doubled each
+           simultaneously held fork's arena over the last. *)
+        let holds (a : Backend_intf.upload_arena) =
+          List.exists a.tenants ~f:(fun (tenant, _) ->
+              Option.exists (Map.find ctx.ctx_buffers tenant)
+                ~f:(fun (loc : Backend_intf.buffer_loc) -> loc.pool_id = a.arena_pool_id))
+        in
         let minted =
-          List.sum (module Int) arenas.arenas ~f:(fun a -> if same_mode a then a.capacity else 0)
+          List.sum
+            (module Int)
+            arenas.arenas
+            ~f:(fun a -> if same_mode a && holds a then a.capacity else 0)
         in
         let capacity =
           if size_in_bytes >= cap then size_in_bytes

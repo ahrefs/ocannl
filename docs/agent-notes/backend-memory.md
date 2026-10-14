@@ -109,7 +109,9 @@ files.
   (gh-ocannl-1125). One pool per `set_values` of a not-yet-linked node made a routine reading 18
   such parameters need 20 pools, over Metal's 16-binding budget (`build_pool_binding`), so
   `upload_slot` bump-packs them first-fit into `context.upload_arenas`: first arena exact, later
-  ones doubling. The arenas are shared by the values `evolve_with_buffer` derives (one `finalized`
+  ones doubling. The doubling sums only arenas the uploading value holds a tenant of: summing the
+  whole lineage made `k` simultaneously held forks, each uploading one node, mint `2^k - 1` nodes'
+  worth (gh-ocannl-1204). The arenas are shared by the values `evolve_with_buffer` derives (one `finalized`
   flag along a linear chain) and fresh in `make_child`. Uploading into an earlier value forks an
   independent release flag; `upload_arenas.pool_owners` reference-counts the pools those sibling
   leaves share (gh-ocannl-1173). Linear uploads supersede their intermediate values without retaining
