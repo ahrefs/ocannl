@@ -1,0 +1,16 @@
+uneven margins on all three axes, as many values as cells: flat writer matches per-cell writes in every precision: true
+uneven margins on all three axes, fewer values: flat writer matches per-cell writes in every precision: true
+uneven margins on all three axes, more values: flat writer matches per-cell writes in every precision: true
+unpadded innermost axis, as many values as cells: flat writer matches per-cell writes in every precision: true
+unpadded innermost axis, fewer values: flat writer matches per-cell writes in every precision: true
+unpadded innermost axis, more values: flat writer matches per-cell writes in every precision: true
+padding shorter than the rank, as many values as cells: flat writer matches per-cell writes in every precision: true
+padding shorter than the rank, fewer values: flat writer matches per-cell writes in every precision: true
+padding shorter than the rank, more values: flat writer matches per-cell writes in every precision: true
+padded rank 1, as many values as cells: flat writer matches per-cell writes in every precision: true
+padded rank 1, fewer values: flat writer matches per-cell writes in every precision: true
+padded rank 1, more values: flat writer matches per-cell writes in every precision: true
+unpadded rank 3, as many values as cells: flat writer matches per-cell writes in every precision: true
+unpadded rank 3, fewer values: flat writer matches per-cell writes in every precision: true
+unpadded rank 3, more values: flat writer matches per-cell writes in every precision: true
+rank 0: flat writer matches the per-cell write in every precision: true
