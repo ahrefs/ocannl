@@ -5460,6 +5460,9 @@
 (test
  (name zero_elision)
  (package neural_nets_lib)
+ ; Runs attention training steps: the shared training lock keeps its OpenMP pool apart from the
+ ; other training tests'.
+ (locks ocannl_training_test)
  (deps
   ocannl_config
   (env_var OCANNL_BACKEND)

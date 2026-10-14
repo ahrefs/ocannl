@@ -175,8 +175,10 @@ files.
   site detection and the schedule cache never see the rewritten accumulations. A pre-fission rewrite
   would hide every gradient contraction from the sketches, and would change the unit lists that
   recorded segmentations replay onto. `?prelowered` compiles are exempt. The forms are
-  value-identical down to the sign of zero, because the opening is `Constant 0.`, which is what
-  `Zero_out` stores; never fold `0 + x` to `x` there. Trap for its tests: a fresh buffer is usually zero,
+  value-identical, because the opening is `Constant 0.`, which is what `Zero_out` stores. The sign
+  of a zero is kept only where the backend compiler honours signed zeros: never fold `0 + x` to
+  `x` in OCANNL's own passes, but a compiler under a no-signed-zeros licence (HIP's
+  `-ffast-math`) may fold the literal, as it may any other addition of a zero. Trap for its tests: a fresh buffer is usually zero,
   so a dropped seed passes a routine's first run. Run the routine twice and compare the second run
   too. In `zero_elision.ml`, an unseeded guard failed only there.
 - **A virtualization candidate under an `If` is rejected, and the guard's position decides which

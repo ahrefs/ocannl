@@ -6972,7 +6972,10 @@ let zero_fill_target (stmt : t) : Tn.t option =
    read-modify-write pair, covering the node, with nothing else in [stmt] touching [tn]. The forms
    are value-identical to the zero-then-accumulate original (the zero a [Zero_out] stores is the
    positive zero, which is what [Constant 0.] reads as at any precision), the accumulator's
-   residency included, since that decides narrow-format results.
+   residency included, since that decides narrow-format results. The sign of a zero result is kept
+   where the backend compiler honours signed zeros; one compiling under a no-signed-zeros licence
+   (HIP's [-ffast-math]) may fold the seeded [0 + x] to [x], changing only the sign of a zero
+   result, as that licence already allows for every other addition of a zero.
 
    Where no loop repeats a cell, the read becomes [Constant 0.]. Where code generation would
    localize the accumulator ([try_localize_serial_reduce]: the outermost serial loop at which
