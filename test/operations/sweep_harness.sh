@@ -20,6 +20,7 @@
 # helper such as `dest_refused` ends the harness without naming any line.
 set -Eeuo pipefail
 . "$(dirname "$0")/../../scripts/harness-support.sh"
+. "$(dirname "$0")/../../scripts/process-group.sh"
 
 # Most assertions below are deliberately quiet shell predicates. If one fails
 # under errexit, name the exact site before cleanup removes its evidence; the
@@ -97,6 +98,19 @@ absent() {
 # line per call -- its argv, a tab, the names it saw. Every call must have seen the plain variable
 # (without it the record proves nothing about what the leg's shell inherits) and neither
 # credential, and at least MIN calls must be on record.
+# A hung test the per-test cap legs left behind (gh-ocannl-1211). The fake test leads its own
+# process group, so group_alive reads it state-aware: a killed test still awaiting its reaper (a
+# zombie, which `kill -0` counts as alive) is dead. A survivor is killed with its group before the
+# failure is reported, so a red leg -- the negative controls' expected outcome -- leaves no hung
+# test running past the harness.
+hung_test_survives() { # pid-file label
+  local pid
+  pid=$(cat "$1")
+  group_alive "$pid" || return 1
+  kill -KILL -- "-$pid" 2>/dev/null || true
+  printf 'sweep_harness: the %s hung test outlived its timed-out unit\n' "$2" >&2
+}
+
 credential_free() { # record min
   local calls
   calls=$(awk 'END { print NR }' "$1" 2>/dev/null) || calls=0
@@ -1425,10 +1439,7 @@ case $hang_probe in
     grep -q 'm4-max/metal: timeout' <<<"$hung"
     grep -q "m4-max/metal: hung test, past the per-test cap: pid $(cat "$hang_pid") has run [0-9]*s, past the 2s cap: sleep 60" \
       <<<"$hung"
-    if kill -0 "$(cat "$hang_pid")" 2>/dev/null; then
-      printf 'sweep_harness: the hung test outlived its timed-out unit\n' >&2
-      exit 1
-    fi
+    if hung_test_survives "$hang_pid" local; then exit 1; fi
     hung_log=$(awk -F '\t' '$3 == "metal" { print $9 }' "$state/history.tsv" | tail -1)
     grep -q 'Legitimately long? Rerun with OCANNL_TOOL_SWEEP_TEST_CAP=0, or a larger cap' "$hung_log"
     for hang_leg in cc:2 metal:0; do
