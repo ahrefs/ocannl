@@ -570,7 +570,9 @@ files.
 - A label names one candidate (gh-ocannl-1230). A beam-round candidate prints as
   `F_saved[N segs from <tag>]+seg<i>:<move>` (`W_saved[N ops from <tag>]+<move>` whole-routine):
   `<tag>` is the parent's digest tag, the one the `round k:` beam line and the parent's timing line
-  print, and `<move>` the appended op's s-expression; a replay prints no suffix. An `F_split` entry renders every
+  print, and `<move>` the appended op's s-expression; a cache replay prints no suffix, while the
+  winner rebuilt into the caller's context (`?timing_ctx`) compiles under the label it was timed
+  under, so a failed winner replay names the round candidate. An `F_split` entry renders every
   `sr_site` field (target `name#id`, axis, `red`/`out`/`cost`, `b`, `dyn`, `swap:o/i+…`). An `F_sketch`
   entry ends in ` @<tag>:u<units>` of its segment key: the structural digest's tag, then the keyed
   segments' first units joined by `+u`, since two keys can share the digest (gh-ocannl-1243). A sketch label renders every `sketch_params` field, and `autotune_labels` reads the field list off the type's

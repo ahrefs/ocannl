@@ -23,7 +23,10 @@
    A split-reduce candidate's label printed a site's target name, extents and only the NUMBER of its
    interchange swaps, so two sites on alike-named targets, or with equal-length chains, printed
    alike. Part 1b reads [Autotune.sr_site]'s fields off its derived s-expression and claims that
-   changing any one of them changes the label.
+   changing any one of them changes the label. And the winner a [timing_ctx] search rebuilds in the
+   caller's context lost its round move, so its replay -- and a failure it reported -- printed as
+   the bare [F_saved[N segs]] its parent's every round candidate shares. Part 3 crowns a round
+   candidate and claims its replay is labeled exactly as it was timed.
 
    Pinned to cc ([Context.cpu]): the scripted ranking is backend-independent, and cc is always
    available. *)
@@ -318,3 +321,68 @@ let () =
       | None -> false);
   p_pairwise_distinct "the round's candidates all print apart" rounds ~equal:String.equal
     ~to_string:Fn.id
+
+(* --- Part 3: a winner replay keeps the label its winner was timed under --- *)
+
+(* Runs [f] with stderr routed into a file and returns its result with the lines it wrote; the
+   captured text is echoed back once stderr is restored, so nothing the run wrote is hidden. *)
+let with_stderr_captured f =
+  let file = Stdlib.Filename.temp_file "autotune_labels" ".stderr" in
+  Exn.protect
+    ~finally:(fun () -> try Stdlib.Sys.remove file with Sys_error _ -> ())
+    ~f:(fun () ->
+      Stdio.Out_channel.flush Stdio.stderr;
+      let saved = Unix.dup Unix.stderr in
+      let result =
+        Exn.protect
+          ~finally:(fun () ->
+            Stdio.Out_channel.flush Stdio.stderr;
+            Unix.dup2 saved Unix.stderr;
+            Unix.close saved)
+          ~f:(fun () ->
+            let fd = Unix.openfile file [ Unix.O_WRONLY; Unix.O_TRUNC ] 0o600 in
+            Exn.protect ~finally:(fun () -> Unix.close fd) ~f:(fun () -> Unix.dup2 fd Unix.stderr);
+            f ())
+      in
+      let text = Stdio.In_channel.read_all file in
+      Stdio.eprintf "%s%!" text;
+      (result, String.split_lines text))
+
+(* With a [timing_ctx] the search times against a scratch lineage and the winner is rebuilt from its
+   saved schedule in the caller's context. That rebuilt spec carries no round move, so the replay
+   used to print -- and a failed one to be reported -- as the bare [F_saved[N segs]] every round
+   candidate of that parent shares. The ranking is scripted so a round candidate wins (the fissioned
+   presets lead the seeds, the round's extensions beat them), and the replay's log line is claimed
+   to name exactly the crowned label. *)
+let () =
+  let report = ref None in
+  let old_measured = !Autotune.on_candidate_measured in
+  let (), lines =
+    with_stderr_captured (fun () ->
+        Exn.protect
+          ~finally:(fun () -> Autotune.on_candidate_measured := old_measured)
+          ~f:(fun () ->
+            (Autotune.on_candidate_measured :=
+               fun ~label ~digest:_ _ms ->
+                 if String.is_prefix label ~prefix:"F_preset[" then 1.
+                 else if is_saved label && String.is_substring label ~substring:" from " then 0.5
+                 else 1000.);
+            let ctx = Context.cpu () in
+            let ctx, _routine =
+              Autotune.with_uncontended_test_windows (fun () ->
+                  Autotune.tune ~beam_width:2 ~rounds:1 ~repeats:1 ~cache_dir:"" ~log:true
+                    ~progress:false ~timing_ctx:ctx
+                    ~report:(fun r -> report := Some r)
+                    ctx (chain ()) Ir.Indexing.Empty)
+            in
+            Context.release ctx))
+  in
+  let best = Option.value_map !report ~default:"" ~f:(fun r -> r.Autotune.best_label) in
+  Stdio.eprintf "crowned (not part of the golden): %s\n" best;
+  p "the crowned candidate is a round candidate, named by its parent and move"
+    (is_saved best && String.is_substring best ~substring:" from ");
+  let replays =
+    List.filter_map lines ~f:(String.chop_prefix ~prefix:"autotune: winner replay ok: ")
+  in
+  p "the winner replayed once" (List.length replays = 1);
+  p_all "the winner replay is labeled as its winner was timed" replays ~f:(String.equal best)

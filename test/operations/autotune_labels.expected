@@ -16,3 +16,6 @@ a round candidate extends a segment of a fissioned parent: true
 every fissioned round candidate names a segment of its parent: true
 every round candidate names its move: true
 the round's candidates all print apart: true
+the crowned candidate is a round candidate, named by its parent and move: true
+the winner replayed once: true
+the winner replay is labeled as its winner was timed: true
