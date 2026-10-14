@@ -524,6 +524,13 @@ files.
   renderer precondition in a test, do surgery on the applied `optimized` (re-point `pt_rotor`)
   rather than retyping loops — a retyped anchor trips `Low_level.validate_parallel` first and never
   reaches the check under test.
+- The two pipelined-tile facts are also stated upstream, over the applied IR, as
+  `Schedule.pipeline_violation` (gh-ocannl-1231): `op_legality` refuses any op leaving one — a
+  `Split` or materializing `Unroll` of the rotor (its binder vanishes, so the reads fall outside),
+  an in-place `Unroll` or retype of it — so the beam menu, seeding's `schedule_legality` and the
+  renderer agree, and the renderer's declines are the backstop. A new op whose output can move a
+  tile read or rewrite a loop needs nothing extra; a new pipelined-rendering precondition belongs
+  in both places (`pipelined_move_legality` pins their agreement on GPU backends).
 - Autotune fault injection keyed by ATTEMPT INDEX (`Autotune.on_candidate_attempt`) is
   backend-dependent and silently vacuous: how many attempts precede an arm's first *timed* candidate
   varies. On Metal a small matmul's materialize-all arm has a baseline binding no hardware dimension

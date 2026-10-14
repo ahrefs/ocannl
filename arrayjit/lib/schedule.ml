@@ -5175,7 +5175,80 @@ let stage_legality (opt : Low_level.optimized) (op : optop) : op_verdict =
                      validated downstream (validate_parallel)"
                 else Op_legal))
 
-let op_legality (opt : Low_level.optimized) (op : optop) : op_verdict =
+(* gh-ocannl-1231: the staging scope's invariant. A pipelined tile ({!Low_level.pipelined_tile}) is
+   rendered with a buffer-selection term rotated by its rotor loop's serial counter, so the IR is
+   renderable only while (1) every loop binding the rotor symbol is [Serial] — the rotation renders
+   off the serial counter, a retyped rotor would freeze the selection — and (2) every read of the
+   tile sits inside a rotor loop, where there is a rotor value to select the copy with (writes
+   outside it are the prologue load, which fills copy 0). These are exactly the two positional facts
+   [C_syntax] checks while rendering; stating them here, over the applied IR, refuses a move that
+   breaks them before it costs a candidate compile — whatever the move's shape: a [Split] or a
+   materializing [Unroll] of the rotor removes the rotor binder, an [Unroll] in place or a retype
+   changes its kind. *)
+type pipeline_violation =
+  | Read_outside_rotor of { tile : Tn.t; rotor : Indexing.symbol }
+  | Rotor_not_serial of { tile : Tn.t; rotor : Indexing.symbol; axis : Low_level.axis_type }
+[@@deriving sexp_of]
+
+let pipeline_violation_message = function
+  | Read_outside_rotor { tile; rotor } ->
+      "pipelined tile " ^ Tn.debug_name tile ^ " is read outside its rotor loop "
+      ^ Indexing.symbol_ident rotor
+      ^ " (the buffer rotation only remaps reads within the staging scope)"
+  | Rotor_not_serial { tile; rotor; axis } ->
+      "the rotor loop " ^ Indexing.symbol_ident rotor ^ " of pipelined tile " ^ Tn.debug_name tile
+      ^ " is no longer Serial (it is "
+      ^ Sexp.to_string (Low_level.sexp_of_axis_type axis)
+      ^ ")"
+
+let pipeline_violation (opt : Low_level.optimized) : pipeline_violation option =
+  if Map.is_empty opt.Low_level.pipelined then None
+  else
+    let tiles = Map.to_alist opt.Low_level.pipelined in
+    let not_serial =
+      List.find_map tiles ~f:(fun (tile, { Low_level.pt_rotor = rotor; _ }) ->
+          List.find_map (find_loops rotor opt.Low_level.llc) ~f:(function
+            | Low_level.For_loop { axis = Low_level.Serial; _ } -> None
+            | Low_level.For_loop { axis; _ } -> Some (Rotor_not_serial { tile; rotor; axis })
+            | _ -> None))
+    in
+    match not_serial with
+    | Some _ -> not_serial
+    | None ->
+        let accesses = Low_level.affine_accesses opt.Low_level.llc in
+        List.find_map tiles ~f:(fun (tile, { Low_level.pt_rotor = rotor; _ }) ->
+            if
+              List.exists accesses ~f:(fun (a : _ Affine.access) ->
+                  Tn.equal a.a_tn tile && (not a.a_write)
+                  && not (List.exists a.a_loops ~f:(fun (s, _) -> Indexing.equal_symbol s rotor)))
+            then Some (Read_outside_rotor { tile; rotor })
+            else None)
+
+(* The invariant as an op verdict: [Some (Op_illegal _)] when [op], applied to [opt] (which carries
+   pipelined tiles), leaves IR that violates it. Applicability itself stays the op's own arm's
+   question ([None] on a raising apply). Only [opt]'s store-mutating ops need the hermetic copy; the
+   loop rewrites only rebuild [llc]. *)
+let staging_scope_verdict (opt : Low_level.optimized) (op : optop) : op_verdict option =
+  if Map.is_empty opt.Low_level.pipelined then None
+  else
+    let probe =
+      match op with
+      | Split _ | Swap _ | Retype _ | Unroll _ | Partition _ | Pad _ | Coalesce _ | Expand_zero _ ->
+          opt
+      | Stage _ | Privatize _ | Tensorize _ | Fold_mma _ | Fuse_epilogue _ | Split_reduce _ ->
+          {
+            opt with
+            Low_level.traced_store = Hashtbl.copy opt.Low_level.traced_store;
+            optimize_ctx = Low_level.copy_optimize_ctx opt.Low_level.optimize_ctx;
+          }
+    in
+    match apply_opt_op probe op with
+    | exception (Invalid_argument _ | Failure _) -> None
+    | applied ->
+        Option.map (pipeline_violation applied) ~f:(fun v ->
+            Op_illegal (pipeline_violation_message v))
+
+let access_legality (opt : Low_level.optimized) (op : optop) : op_verdict =
   let open Low_level in
   let hardware = function Grid | Workgroup -> true | _ -> false in
   let vectorized = function Vectorized -> true | _ -> false in
@@ -5288,6 +5361,11 @@ let op_legality (opt : Low_level.optimized) (op : optop) : op_verdict =
       | (_ : Low_level.optimized) -> Op_legal)
   | Privatize _ | Expand_zero _ | Fuse_epilogue _ | Fold_mma _ ->
       Op_unknown "not modeled by the oracle (the op's own preconditions apply)"
+
+(* The staging-scope invariant first: a move that breaks it is unrenderable whatever the access
+   queries would say about its races. *)
+let op_legality (opt : Low_level.optimized) (op : optop) : op_verdict =
+  match staging_scope_verdict opt op with Some v -> v | None -> access_legality opt op
 
 (** [schedule_legality opt sched]: per-op verdicts, each against the code with the preceding ops
     applied (on a hermetic copy — checking never mutates [opt]). Stops after a proven-illegal op or

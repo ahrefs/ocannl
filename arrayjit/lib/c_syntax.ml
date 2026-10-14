@@ -4233,7 +4233,10 @@ module C_syntax (B : C_syntax_config) = struct
              reached as a tuner candidate (a pipelined twin surviving into a beam round), an untyped
              exception is classified [Fatal] under [strict_failure_classification] and ends the
              whole search. At the public [Context.compile] boundary [Schedule_outcome.raise_cause]
-             still renders it as the same [Invalid_argument] carrying this message. *)
+             still renders it as the same [Invalid_argument] carrying this message. Since
+             gh-ocannl-1231 [Schedule.op_legality] refuses the moves that produce such a read
+             ([Schedule.pipeline_violation] states this fact and the rotor-Serial one below over the
+             applied IR), so this is the backstop for schedules that bypass the oracle. *)
           raise
             (Schedule_outcome.Cause_at
                ( Schedule_outcome.Backend_codegen,
