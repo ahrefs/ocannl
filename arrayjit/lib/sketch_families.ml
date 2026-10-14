@@ -53,6 +53,7 @@ type sketch_params = {
   sk_pack_prec : Ir.Ops.prec option;
   sk_tile : Ir.Register_tile.t option;
 }
+[@@deriving sexp]
 
 (* Resolve the tensor-core input format from storage precision before seeding a typed matmul/conv
    site. Single-precision storage has two possible compute formats: prefer tf32 when the numerics

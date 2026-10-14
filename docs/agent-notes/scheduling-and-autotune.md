@@ -560,6 +560,12 @@ files.
   does NOT identify a usable capture: a torn file can already carry every `__global__` line while its
   last body is incomplete, and glob order is hash order. Require balanced braces AND a clean `hipcc`
   compile before accepting a snapshot (`benchmarks/gh612_cells.sh pick_armA`).
+- A label names one candidate (gh-ocannl-1230). A beam-round candidate prints as
+  `F_saved[N segs from <tag>]+seg<i>:<move>` (`W_saved[N ops from <tag>]+<move>` whole-routine):
+  `<tag>` is the parent's digest tag, the one the `round k:` beam line and the parent's timing line
+  print, and `<move>` the appended op's s-expression; a replay prints no suffix. An `F_sketch`
+  entry ends in ` @<tag>` of its segment key. A sketch label renders every `sketch_params` field, and `autotune_labels` reads the field list off the type's
+  derived s-expression, so a new field fails that test until `sketch_params_label` renders it.
 - A per-kernel profile's sum may only be validated against the step time of **the compile it came
   from**. Each search rep crowns a different artifact with different tile sizes, so holding one rep's
   profile against another rep's step p50 measures the search lottery, not the reconstruction — on
