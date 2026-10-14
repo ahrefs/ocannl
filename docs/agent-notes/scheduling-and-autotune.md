@@ -1380,6 +1380,19 @@ files.
   declining the candidate (a cache replay into a re-search). Two compiles of one schedule in one
   process differ in the process-wide `i<n>`/`v<n>_` counters, so a same-process comparison of
   emitted code renumbers those stems first (the test's `alpha_normalize`).
+- **What a cache entry says is input, so its refusals are typed** (gh-ocannl-1242). The rule above
+  holds for every raise a replay can reach: `SC.of_saved`'s dangling symbol reference and
+  `SC.tn_of_ref`'s out-of-range node index raise `Cause_at (Transform, Illegal_schedule
+  { check = "Schedule_cache.of_saved" | "Schedule_cache.tn_of_ref" })`, so a stale or corrupt
+  `W_saved` entry or split-reduce prelude declines into a re-search instead of ending `tune`. The
+  report names the cause in `cache_replay_refusal` (outside `declines`, which counts candidates);
+  `autotune_replay_refusal` plants both entries. The line between converting and keeping: a raise
+  whose trigger is the entry (or the program) is a refusal; one that only a bug of the search's own
+  builders can reach stays untyped and fatal — `SC.to_saved` (it serializes a schedule built
+  against the very canonical form it resolves through), the `map2_exn`/`zip_exn` pairings of one
+  fission's outputs, "the transform was not invoked". A replay failure that is NOT typed is still
+  fatal under strict classification, on `Cache_replay` provenance too, so a new decodable-but-wrong
+  field must be checked where it is read, typed.
 - **`Train.tune_placements` persists its decision beside the schedule entries** (gh-ocannl-786,
   `Schedule_cache.store_placements` / `lookup_placements`, same directory, lock, regime stamp and
   key components). Placement stays outside the schedule value — a schedule is keyed by the
