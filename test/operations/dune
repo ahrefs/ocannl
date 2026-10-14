@@ -8008,6 +8008,22 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; gh-ocannl-1229: which units of each beam entry a round expands (autotune_round_expansion).
+; Scripted timings, pinned to cc.
+
+(test
+ (name autotune_round_expansion)
+ ; ocannl-backend: cc -- Context.cpu (); the scripted ranking is backend-independent
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_AUTOTUNE_COMPOSITE_PLAYOFF_WIDTH)
+  (env_var OCANNL_AUTOTUNE_ROUND_EXPANSION))
+ (modules autotune_round_expansion)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 (test
  (name autotune_measured_refusal)
  (package neural_nets_lib)

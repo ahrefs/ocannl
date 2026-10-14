@@ -1,0 +1,277 @@
+(* gh-ocannl-1229: which units of each beam entry a beam-expansion round expands
+   ([autotune_round_expansion]).
+
+   After the composite playoff (gh-ocannl-1166) the beam is the recombined composite and its
+   near-copies: each runner-up is the head with one segment's sketch swapped. A fissioned routine's
+   time is the sum of its segments' times, so on a segment a runner-up shares with the head its move
+   is the head's same move over a backdrop already measured slower: that child can never beat the
+   head's own. The default rule, [differing], expands the head in full and every other entry only on
+   the segments where it differs from the head; [full] is the rule before gh-ocannl-1229, and
+   [head], expanding the head alone, is the single-entry control.
+
+   The ranking is the test's: every admitted window is scripted through
+   [Autotune.on_candidate_measured] (gh-ocannl-1027), with the windows opted out of host contention
+   ([with_uncontended_test_windows], gh-ocannl-1156). The seeds are scripted as the playoff test's
+   [slower] scenario: singles tie, so every keyed segment plays alternates, and each later composite
+   is slower, so nothing swaps and the beam (width 2) enters round 1 as the recombined composite
+   plus its first alternate. A round child is scripted additively from its parent's time: a move on
+   the near-copy's differing segment gains a full unit (it starts from the alternate geometry the
+   head lacks); every other move loses a little. That landscape is the one the rule is built for,
+   and on it a rule that expanded the head alone would lose the round's best, while one that skipped
+   a differing segment would too.
+
+   One search per rule, then the claims comparing them: [differing] times exactly [full]'s round
+   candidates minus the near-copy's moves on the segments it shares with the head, and crowns the
+   same round best; [head] times exactly the head's moves and misses that best. A malformed setting
+   is refused before the search compiles anything.
+
+   Pinned to cc: the seeding and the scripted ranking are backend-independent, and cc is always
+   available. *)
+open Base
+open Ocannl
+open Ocannl.Operation.DSL_modules
+open Verdict.Claims
+
+let is_single label = String.is_prefix label ~prefix:"F_sketch[" && not (String.mem label ',')
+let is_composite label = String.is_prefix label ~prefix:"F_sketch[" && String.mem label ','
+let q = 32
+
+let matrix ~label ~modulus ~offset ~stride =
+  TDSL.ndarray
+    (Array.init (q * q) ~f:(Ll_test.cycle_flat ~dims:[| q; q |] ~modulus ~offset ~stride))
+    ~label:[ label ] ~input_dims:[ q ] ~output_dims:[ q ] ()
+
+(* The playoff test's chain: two matmul segments of different shapes, each a keyed segment of its
+   own behind a materialized sum. *)
+let chain () =
+  let qa = matrix ~label:"qa" ~modulus:11 ~offset:0. ~stride:0.125 in
+  let qb = matrix ~label:"qb" ~modulus:7 ~offset:(-3.) ~stride:1. in
+  let qc = matrix ~label:"qc" ~modulus:5 ~offset:(-2.) ~stride:0.5 in
+  let qc16 =
+    TDSL.ndarray
+      (Array.init (16 * q)
+         ~f:(Ll_test.cycle_flat ~dims:[| 16; q |] ~modulus:9 ~offset:(-4.) ~stride:0.25))
+      ~label:[ "qc16" ] ~input_dims:[ q ] ~output_dims:[ 16 ] ()
+  in
+  let%op qd = qa + qb in
+  Train.set_materialized qd.Tensor.value;
+  let%op qe = qd * qc in
+  Train.set_materialized qe.Tensor.value;
+  let%op qg = qc16 * qe in
+  Train.forward qg
+
+let expansion_key = "autotune_round_expansion"
+
+(* A beam-round candidate's parent tag and the segment its move extends: [F_saved[<n> segs from
+   <tag>]+seg<i>:<move>] (gh-ocannl-1230). *)
+let round_move label =
+  let ( let* ) = Option.( >>= ) in
+  let* rest = String.chop_prefix label ~prefix:"F_saved[" in
+  let* _, rest = String.lsplit2 rest ~on:' ' in
+  let* rest = String.chop_prefix rest ~prefix:"segs from " in
+  let* tag, ext = String.lsplit2 rest ~on:']' in
+  let* ext = String.chop_prefix ext ~prefix:"+seg" in
+  let* i, _move = String.lsplit2 ext ~on:':' in
+  let* i = Int.of_string_opt i in
+  Some (tag, i)
+
+(* A fissioned candidate's per-segment digests, in the positions [+seg<i>] names. *)
+let segment_digests digest = String.split digest ~on:'+'
+
+type child = { label : string; parent : string; segment : int; ms : float }
+
+type observed = {
+  report : Autotune.report;
+  head : string;  (** The beam head's digest tag as round 1 starts. *)
+  near_copy : string;  (** The other beam entry's. *)
+  differing : int list;  (** The segments where the near-copy differs from the head. *)
+  children : child list;  (** Round 1's timed candidates, in attempt order. *)
+}
+
+let gain = 1.0
+let loss = 0.05
+
+(* One search under [rule] (stated at the config-file level for this search only). *)
+let search rule =
+  let report = ref None and composites = ref 0 and children = ref [] in
+  (* Every timed candidate's digest tag -> (full digest, scripted time). *)
+  let timed = Hashtbl.create (module String) in
+  (* The two fastest composites: the beam round 1 expands (its singles, presets and baseline are
+     scripted far slower). Fixed at the first round candidate. *)
+  let beam = ref None in
+  let old_measured = !Autotune.on_candidate_measured in
+  Exn.protect
+    ~finally:(fun () ->
+      Autotune.on_candidate_measured := old_measured;
+      Hashtbl.remove Utils.config_file_args expansion_key)
+    ~f:(fun () ->
+      Hashtbl.set Utils.config_file_args ~key:expansion_key ~data:rule;
+      (Autotune.on_candidate_measured :=
+         fun ~label ~digest _ms ->
+           let ms =
+             if is_single label then 100.
+             else if is_composite label then (
+               let n = !composites in
+               Int.incr composites;
+               10. +. (0.1 *. Float.of_int n))
+             else
+               match round_move label with
+               | None -> 1000.
+               | Some (parent, segment) ->
+                   let head, near_copy, differing =
+                     match !beam with
+                     | Some b -> b
+                     | None ->
+                         let ranked =
+                           Hashtbl.to_alist timed
+                           |> List.sort ~compare:(fun (_, (_, a)) (_, (_, b)) -> Float.compare a b)
+                         in
+                         let b =
+                           match ranked with
+                           | (h, (hd, _)) :: (n, (nd, _)) :: _ ->
+                               let hs = segment_digests hd and ns = segment_digests nd in
+                               let differing =
+                                 if List.length hs <> List.length ns then [ -1 ]
+                                 else
+                                   List.filter_mapi (List.zip_exn hs ns) ~f:(fun i (x, y) ->
+                                       if String.equal x y then None else Some i)
+                               in
+                               (h, n, differing)
+                           | _ -> ("", "", [])
+                         in
+                         beam := Some b;
+                         b
+                   in
+                   let parent_ms =
+                     Option.value_map (Hashtbl.find timed parent) ~default:1000. ~f:snd
+                   in
+                   let ms =
+                     if
+                       String.equal parent near_copy
+                       && (not (String.equal near_copy head))
+                       && List.mem differing segment ~equal:Int.equal
+                     then parent_ms -. gain
+                     else parent_ms +. loss
+                   in
+                   children := { label; parent; segment; ms } :: !children;
+                   ms
+           in
+           Hashtbl.set timed ~key:(Autotune.digest_tag digest) ~data:(digest, ms);
+           ms);
+      let ctx, _routine =
+        Autotune.with_uncontended_test_windows (fun () ->
+            Autotune.tune ~beam_width:2 ~rounds:1 ~repeats:1 ~cache_dir:"" ~log:false
+              ~progress:false
+              ~report:(fun r -> report := Some r)
+              (Context.cpu ()) (chain ()) Ir.Indexing.Empty)
+      in
+      Context.release ctx);
+  match (!report, !beam) with
+  | Some report, Some (head, near_copy, differing) ->
+      let children = List.rev !children in
+      Stdio.eprintf
+        "%s (not part of the golden): beam %s + %s (differing in segment(s) %s), %d round \
+         candidate(s), crown %s %.2f ms\n\
+         %!"
+        rule head near_copy
+        (String.concat ~sep:"," (List.map differing ~f:Int.to_string))
+        (List.length children) report.Autotune.best_label report.Autotune.best_ms;
+      { report; head; near_copy; differing; children }
+  | Some _, None -> failwith (rule ^ ": the search timed no round candidate")
+  | None, _ -> failwith (rule ^ ": the search delivered no report")
+
+let labels children = List.map children ~f:(fun c -> c.label)
+let from parent (o : observed) = List.filter o.children ~f:(fun c -> String.equal c.parent parent)
+
+let round_best (o : observed) =
+  List.min_elt o.children ~compare:(fun a b -> Float.compare a.ms b.ms)
+
+let same_labels a b = List.equal String.equal (labels a) (labels b)
+
+let () =
+  let full = search "full" in
+  let differing = search "differing" in
+  let head = search "head" in
+  (* The setup the rule is about, read off the [full] search. *)
+  p_all "setup: every rule ran its round" [ full; differing; head ] ~f:(fun o ->
+      o.report.Autotune.rounds_run = 1);
+  p_all "setup: every rule entered round 1 with the same beam" [ differing; head ] ~f:(fun o ->
+      String.equal o.head full.head && String.equal o.near_copy full.near_copy);
+  p "setup: the near-copy differs from the head in exactly one segment"
+    (match full.differing with [ i ] -> i >= 0 | _ -> false);
+  p_all "full: every round candidate extends a beam entry" full.children ~f:(fun c ->
+      String.equal c.parent full.head || String.equal c.parent full.near_copy);
+  p_exists "full: the round extends the near-copy on a segment it shares with the head"
+    (from full.near_copy full) ~f:(fun c ->
+      not (List.mem full.differing c.segment ~equal:Int.equal));
+  p_exists "full: the round extends the near-copy on its differing segment"
+    (from full.near_copy full) ~f:(fun c -> List.mem full.differing c.segment ~equal:Int.equal);
+  (* [differing]: the head in full, the near-copy on its differing segment only. *)
+  p_exists "differing: the round extends the head" (from differing.head differing) ~f:(fun _ ->
+      true);
+  p "differing: the head's moves are exactly full's"
+    (same_labels (from differing.head differing) (from full.head full));
+  p_all "differing: the near-copy's moves are on its differing segment"
+    (from differing.near_copy differing) ~f:(fun c ->
+      List.mem differing.differing c.segment ~equal:Int.equal);
+  p "differing: the near-copy's moves are exactly full's on that segment"
+    (same_labels
+       (from differing.near_copy differing)
+       (List.filter (from full.near_copy full) ~f:(fun c ->
+            List.mem full.differing c.segment ~equal:Int.equal)));
+  p "differing: the round is smaller than full's"
+    (List.length differing.children < List.length full.children);
+  (match (round_best full, round_best differing) with
+  | Some f, Some d ->
+      p "differing: the round's best is full's"
+        (String.equal f.label d.label && Float.equal f.ms d.ms);
+      p "differing: the round's best gained on the near-copy's differing segment"
+        (String.equal d.parent differing.near_copy
+        && List.mem differing.differing d.segment ~equal:Int.equal);
+      p "differing: it crowns what full crowns"
+        (String.equal differing.report.Autotune.best_label full.report.Autotune.best_label
+        && Float.equal differing.report.Autotune.best_ms full.report.Autotune.best_ms);
+      p "differing: the crown is the round's best"
+        (Float.equal differing.report.Autotune.best_ms d.ms)
+  | _ ->
+      p "differing: the round's best is full's" false;
+      p "differing: the round's best gained on the near-copy's differing segment" false;
+      p "differing: it crowns what full crowns" false;
+      p "differing: the crown is the round's best" false);
+  (* [head], the single-entry control. *)
+  p_all "head: every round candidate extends the head" head.children ~f:(fun c ->
+      String.equal c.parent head.head);
+  p "head: the head's moves are exactly full's" (same_labels head.children (from full.head full));
+  (match (round_best full, round_best head) with
+  | Some f, Some h -> p "head: the control misses the round's best" Float.(h.ms > f.ms)
+  | _ -> p "head: the control misses the round's best" false);
+  p "head: the control's crown is the seed winner, the round falling short"
+    Float.(head.report.Autotune.best_ms > differing.report.Autotune.best_ms)
+
+(* A malformed rule refuses the search before it compiles anything. *)
+let () =
+  let attempts = ref 0 in
+  let old_attempt = !Autotune.on_candidate_attempt in
+  let outcome =
+    Exn.protect
+      ~finally:(fun () ->
+        Autotune.on_candidate_attempt := old_attempt;
+        Hashtbl.remove Utils.config_file_args expansion_key)
+      ~f:(fun () ->
+        Hashtbl.set Utils.config_file_args ~key:expansion_key ~data:"widest";
+        (Autotune.on_candidate_attempt := fun _ -> Int.incr attempts);
+        match
+          Autotune.tune ~beam_width:2 ~rounds:1 ~repeats:1 ~cache_dir:"" ~log:false ~progress:false
+            (Context.cpu ()) (chain ()) Ir.Indexing.Empty
+        with
+        | ctx, _ ->
+            Context.release ctx;
+            `Accepted
+        | exception Utils.User_error msg -> `Refused msg)
+  in
+  (match outcome with
+  | `Refused msg ->
+      p "malformed: the refusal names the key"
+        (String.is_substring msg ~substring:"autotune_round_expansion")
+  | `Accepted -> p "malformed: the refusal names the key" false);
+  p "malformed: nothing was compiled" (!attempts = 0)

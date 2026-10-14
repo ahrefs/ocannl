@@ -159,6 +159,7 @@ let known_config_keys =
       "autotune_split_reduce_max_sites";
       "autotune_register_tile_rm_twin";
       "autotune_composite_playoff_width";
+      "autotune_round_expansion";
       "autotune_log";
       "autotune_progress";
       "tune_inline_flips";
@@ -359,6 +360,7 @@ let config_key_classification : (config_key_class * string * string list) list =
         "autotune_split_reduce_max_sites";
         "autotune_register_tile_rm_twin";
         "autotune_composite_playoff_width";
+        "autotune_round_expansion";
         "autotune_keep_fraction";
         "autotune_bound_pruning";
         "autotune_calibration_file";
@@ -555,6 +557,7 @@ let config_key_defaults : (string * (config_value_kind * string)) list =
     ("autotune_split_reduce_max_sites", (Integer, "8"));
     ("autotune_register_tile_rm_twin", (Flag, "false"));
     ("autotune_composite_playoff_width", (Integer, "2"));
+    ("autotune_round_expansion", (Keyword, "differing"));
     ("autotune_keep_fraction", (Float_number, "1."));
     ("autotune_bound_pruning", (Flag, "false"));
     ("autotune_calibration_file", (Text, ""));

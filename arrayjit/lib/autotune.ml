@@ -453,6 +453,36 @@ let float_setting ~default s = try Float.of_string (String.strip s) with _ -> de
 (* A candidate round-improvement below this fraction of the incumbent ends the search. *)
 let min_progress = 0.01
 
+(* Which units of each beam entry a round expands (gh-ocannl-1229; config
+   [autotune_round_expansion]). The beam is there to give a round more than one starting point. On a
+   fissioned routine a starting point is new only on the units where it differs from the head: on a
+   unit both hold alike, the entry's move is the head's same move over a backdrop already measured
+   slower, because the routine's time is the sum of its segments' and the entry trails the head.
+   After the composite playoff (gh-ocannl-1166) every runner-up is the head with one to four of
+   122-150 segments swapped, so expanding each one in full re-timed the head's menu once per entry:
+   #1137's probe paid 635 candidates for a 157-move menu. [Expand_differing] (the default) expands
+   the head in full and every other entry only on the units where it differs from the head; an entry
+   that segments differently, or a whole-routine one, has no shared units and is expanded in full.
+   [Expand_full] is the previous rule; [Expand_head], expanding the head alone, is the single-entry
+   control. *)
+type round_expansion = Expand_differing | Expand_full | Expand_head
+
+let round_expansion_of_setting s =
+  match String.lowercase (String.strip s) with
+  | "differing" -> Expand_differing
+  | "full" -> Expand_full
+  | "head" -> Expand_head
+  | other ->
+      raise
+      @@ Utils.User_error
+           ("ocannl_autotune_round_expansion setting should be differing, full or head; found: "
+          ^ other)
+
+let round_expansion_name = function
+  | Expand_differing -> "differing"
+  | Expand_full -> "full"
+  | Expand_head -> "head"
+
 (* The composite playoff (gh-ocannl-1166). A per-segment single is timed as the WHOLE routine with
    every other segment on its untuned preset, so its time carries that backdrop: on gpt2_mini/CUDA
    tf32 the q/k/v singles measure about 23.2 ms where the composite they staff runs at 2.4 ms, and
@@ -2189,31 +2219,48 @@ type compiled = {
 let dshort d =
   String.prefix d 8 ^ "/" ^ String.prefix (Stdlib.Digest.to_hex (Stdlib.Digest.string d)) 8
 
+let digest_tag = dshort
 let bs_label = function None -> "cfg" | Some b -> Int.to_string b
 
+(* The two forms' segment lists side by side when they segment alike -- the same form, and every
+   segment of the same kind, length and pre-schedule digest, the identity a replay checks -- with
+   the split-reduce preludes for a [Split_saved] pair; [None] when no unit-by-unit comparison exists
+   (different forms, a different segmentation, or two whole-routine forms). *)
+let aligned_segments (a : compiled) (b : compiled) =
+  let same_cut (x : SC.saved_segment) (y : SC.saved_segment) =
+    Poly.equal x.seg_kind y.seg_kind && x.seg_units = y.seg_units
+    && String.equal x.seg_digest y.seg_digest
+  in
+  let aligned xs ys = List.length xs = List.length ys && List.for_all2_exn xs ys ~f:same_cut in
+  match (a.form, b.form) with
+  | Fiss_saved xs, Fiss_saved ys when aligned xs ys -> Some (None, List.zip_exn xs ys)
+  | Split_saved (px, xs), Split_saved (py, ys) when aligned xs ys ->
+      Some (Some (px, py), List.zip_exn xs ys)
+  | _ -> None
+
+(* The positions of the segments of [b] whose saved schedule differs from the same segment of [a],
+   in the indexing [unit_gen.u_segment] uses; [None] when the two do not segment alike
+   ([aligned_segments]). *)
+let segments_differing (a : compiled) (b : compiled) =
+  Option.map (aligned_segments a b) ~f:(fun (_, pairs) ->
+      List.filter_mapi pairs ~f:(fun i ((x : SC.saved_segment), (y : SC.saved_segment)) ->
+          if Poly.equal x.seg_saved y.seg_saved then None else Some i))
+
 (* How many units of [b] carry a different saved schedule than the same unit of [a] (a split-reduce
-   prelude counting as one); [None] when the two forms do not segment alike -- different forms, or a
-   segment whose kind, length or pre-schedule digest differs, the identity a replay checks -- so no
-   unit-by-unit comparison exists. *)
+   prelude counting as one); [None] when the two forms do not segment alike, so no unit-by-unit
+   comparison exists. *)
 let units_differing (a : compiled) (b : compiled) =
   let differ x y = if Poly.equal x y then 0 else 1 in
-  let segments xs ys =
-    let same_cut (x : SC.saved_segment) (y : SC.saved_segment) =
-      Poly.equal x.seg_kind y.seg_kind && x.seg_units = y.seg_units
-      && String.equal x.seg_digest y.seg_digest
-    in
-    if List.length xs = List.length ys && List.for_all2_exn xs ys ~f:same_cut then
-      Some
-        (List.fold2_exn xs ys ~init:0 ~f:(fun n (x : SC.saved_segment) (y : SC.saved_segment) ->
-             n + differ x.seg_saved y.seg_saved))
-    else None
-  in
   match (a.form, b.form) with
   | Whole_saved x, Whole_saved y -> Some (differ x y)
-  | Fiss_saved xs, Fiss_saved ys -> segments xs ys
-  | Split_saved (px, xs), Split_saved (py, ys) ->
-      Option.map (segments xs ys) ~f:(fun n -> n + differ px py)
-  | _ -> None
+  | _ ->
+      Option.map (aligned_segments a b) ~f:(fun (preludes, pairs) ->
+          List.sum
+            (module Int)
+            pairs
+            ~f:(fun ((x : SC.saved_segment), (y : SC.saved_segment)) ->
+              differ x.seg_saved y.seg_saved)
+          + Option.value_map preludes ~default:0 ~f:(fun (px, py) -> differ px py))
 
 (* Calibration output (gh-ocannl-491 task 4) and the bound-agreement invariant (gh-ocannl-514 phase
    0): the model score next to the measured time — every tuning run is free calibration data for the
@@ -3979,6 +4026,14 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
       @@ Utils.get_global_arg ~arg_name:"autotune_composite_playoff_width"
            ~default:(Int.to_string default_playoff_width))
   in
+  (* Read only where a round can run, so a malformed value refuses the searches it would shape and
+     no other call (like [autotune_timing] above). *)
+  let round_expansion =
+    if search && rounds > 0 then
+      round_expansion_of_setting
+        (Utils.get_global_arg ~arg_name:"autotune_round_expansion" ~default:"differing")
+    else Expand_differing
+  in
   let seed_block_sizes = Option.value seed_block_sizes ~default:[ 64; 128; 256; 512 ] in
   let cache_dir = resolve_cache_dir ?cache_dir ~search () in
   let keep_fraction =
@@ -5693,8 +5748,9 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
           let continue_ = ref true in
           while !continue_ && !rounds_run < rounds do
             Int.incr rounds_run;
+            let head = Option.map (List.hd !beam) ~f:fst in
             let per_entry =
-              List.map !beam ~f:(fun (elem, ms) ->
+              List.mapi !beam ~f:(fun i (elem, ms) ->
                   (* On a GPU backend the beam can hold an incumbent that was never dispatched — the
                      serial baseline, whose [infinity] rank keeps it in the pool when fewer than
                      [beam_width] candidates were timed. Expanding it is worthwhile only through the
@@ -5724,31 +5780,52 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                              (optop_family op));
                       false)
                   in
+                  (* gh-ocannl-1229 (see [round_expansion]): the units this entry's moves extend.
+                     The head always expands in full. Units outside the scope are not even offered
+                     to [menu], so they cost no legality check and leave no census record. *)
+                  let differing =
+                    match (round_expansion, head) with
+                    | Expand_differing, Some head when i > 0 -> segments_differing head elem
+                    | _ -> None
+                  in
+                  let units =
+                    match (round_expansion, differing) with
+                    | _ when i = 0 -> elem.units
+                    | Expand_full, _ | Expand_differing, None -> elem.units
+                    | Expand_head, _ -> []
+                    | Expand_differing, Some segs ->
+                        List.filter elem.units ~f:(fun u ->
+                            Option.exists u.u_segment ~f:(List.mem segs ~equal:Int.equal))
+                  in
                   ( elem,
                     ms,
-                    List.concat_map elem.units ~f:(fun u ->
+                    List.length units,
+                    List.concat_map units ~f:(fun u ->
                         List.filter_map
                           (menu ~admits ~is_cpu ~is_gpu ~limits ~registry:u.u_registry u.u_opt)
                           ~f:(fun op -> extend_spec elem u op)) ))
             in
-            let cands = List.concat_map per_entry ~f:(fun (_, _, c) -> c) in
+            let cands = List.concat_map per_entry ~f:(fun (_, _, _, c) -> c) in
             (* gh-ocannl-1137: what the round expands. The beam is the [beam_width] fastest timed
                candidates, and a near-tie sweep (the gh-ocannl-1166 composite playoff, a block-size
                ladder) can fill it with variants of one schedule; [units differing] counts each
                entry's units whose saved schedule differs from the incumbent's, so a beam of
-               near-copies reads as a column of small numbers. *)
+               near-copies reads as a column of small numbers, and [units expanded] says how many of
+               its units the round's [round_expansion] rule offered to the menu (gh-ocannl-1229). *)
             (match per_entry with
             | [] -> ()
-            | (head, _, _) :: _ ->
-                logf "round %d: %d candidate(s) from a beam of %d: %s" !rounds_run
+            | (head, _, _, _) :: _ ->
+                logf "round %d: %d candidate(s) from a beam of %d, expansion %s: %s" !rounds_run
                   (List.length cands) (List.length per_entry)
+                  (round_expansion_name round_expansion)
                   (String.concat ~sep:"; "
-                     (List.map per_entry ~f:(fun (elem, ms, c) ->
-                          Printf.sprintf "%s %.4f ms, %s units differing, %d move(s)"
+                     (List.map per_entry ~f:(fun (elem, ms, n_units, c) ->
+                          Printf.sprintf
+                            "%s %.4f ms, %s units differing, %d of %d units expanded, %d move(s)"
                             (dshort elem.digest_after) ms
                             (Option.value_map (units_differing head elem) ~default:"resegmented"
                                ~f:Int.to_string)
-                            (List.length c)))));
+                            n_units (List.length elem.units) (List.length c)))));
             (* gh-ocannl-550: bounded like the seed pass, but in a SECOND accumulator, because a
                round's decision compares its own best against the incumbent and, if it wins,
                replaces the beam wholesale — so the previous beam has to stay alive until that

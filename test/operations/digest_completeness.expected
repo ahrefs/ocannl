@@ -90,6 +90,7 @@ search-shaping -- it steers the search: how wide, how long, what is proposed, wh
   autotune_keep_fraction
   autotune_register_tile_rm_twin
   autotune_repeats
+  autotune_round_expansion
   autotune_rounds
   autotune_search
   autotune_split_reduce_max_sites

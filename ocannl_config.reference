@@ -609,6 +609,19 @@
 # searches, and `reproducible` does not search.
 #autotune_composite_playoff_width=2
 
+# Which units of each beam entry a beam-expansion round of `Autotune.tune` expands
+# (gh-ocannl-1229): `differing`, `full` or `head`. A fissioned routine's time is the sum of its
+# segments' times, and after the composite playoff the beam's runners-up are the head with a few
+# segments swapped, so on a segment an entry shares with the head its move is the head's same move
+# over a backdrop already measured slower. `differing` expands the head in full and every other
+# entry only on the segments where it differs from the head (an entry segmented differently, or a
+# whole-routine one, in full). `full` expands every entry in full, the rule before gh-ocannl-1229,
+# which on gpt2_mini/CUDA re-timed one 157-move menu four times over (635 candidates in round 1).
+# `head` expands the head alone, the single-entry control. Read only when a search runs rounds. It
+# shapes what a search times, not what a crowned schedule means, so a warm schedule cache replays
+# its winner whatever the rule.
+#autotune_round_expansion=differing
+
 # If true, `Autotune.tune` logs each candidate to stderr: its spec, whether it failed (with the
 # error message), deduplicated against an already-seen post-schedule digest, or was timed (and
 # its time), plus the cache-hit, winner-replay and fallback outcomes. For debugging search
