@@ -404,7 +404,7 @@ let () =
          let s = carry ~init:(c 0.) (state "sl_bad_shadow_s") in
          scan ~upto:(n - 1) i ~carried:[ s ]
            (seq
-              (LL.Declare_local { id = s.LL.prev; needs_init = true })
+              (declare_local ~needs_init:true s.LL.prev)
               (seq (set_next s (add (prev s) (get x [| iter i |]))) (set_at out (iter i) (next s))))));
   p "a Local_scope binder reusing a carried id inside the body is refused"
     (entry "sl_bad_scope" (fun (x, out, i) ->
@@ -476,7 +476,7 @@ let () =
             counter never produces and the integer-keyed censuses assume away. *)
          let clash = { LL.tn = other; scope_id = s.LL.prev.LL.scope_id } in
          seq
-           (seq (LL.Declare_local { id = clash; needs_init = true }) (LL.Set_local (clash, c 1.)))
+           (seq (declare_local ~needs_init:true clash) (LL.Set_local (clash, c 1.)))
            (scan ~upto:(n - 1) i ~carried:[ s ]
               (seq (set_next s (add (prev s) (get x [| iter i |]))) (set_at out (iter i) (next s))))));
   p "a carried pair over two different nodes is refused"

@@ -238,15 +238,9 @@ let () =
   let v = mk "V" and u = mk "U" in
   let vec_body =
     loop_n i 1
-      (LL.Set_from_vec
-         {
-           tn = v;
-           idcs = [| aff [ (4, i) ] 0 |];
-           length = 4;
-           vec_unop = Ops.Uint4x32_to_prec_uniform;
-           arg = (get u [| iter i |], single);
-           debug = "";
-         })
+      (set_from_vec ~length:4 ~vec_unop:Ops.Uint4x32_to_prec_uniform v
+         [| aff [ (4, i) ] 0 |]
+         (get u [| iter i |], single))
   in
   let vec = price ~self:v [ (Some [| aff [ (4, i) ] 0 |], vec_body) ] in
   show_opt "packed-uniform producer (lane extract)" vec;
@@ -667,15 +661,9 @@ let () =
       (loop_n j 1 (set u [| iter j |] (add (get wp [| iter j |]) (c 1.))))
       (seq
          (loop_n i 1
-            (LL.Set_from_vec
-               {
-                 tn = v;
-                 idcs = [| aff [ (4, i) ] 0 |];
-                 length = 4;
-                 vec_unop = Ops.Uint4x32_to_prec_uniform;
-                 arg = (get u [| iter i |], single);
-                 debug = "";
-               }))
+            (set_from_vec ~length:4 ~vec_unop:Ops.Uint4x32_to_prec_uniform v
+               [| aff [ (4, i) ] 0 |]
+               (get u [| iter i |], single)))
          (loop_n x 4 (loop_n y 2 (set o [| iter x; iter y |] (get v [| iter x |])))))
   in
   price_replay ~name:"packed-uniform, virtual counter" ~self:v ~materialized:[ wp; o ] llc;

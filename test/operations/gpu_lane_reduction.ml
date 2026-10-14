@@ -140,7 +140,7 @@ let dk_nest ?(minted = true) ?guard ~name ~e_n ~d_n () =
         in
         ( Some a,
           [
-            LL.Declare_local { id = flag; needs_init = false };
+            L.declare_local flag;
             L.loop_n a e_n (LL.Set_local (flag, L.lt (L.embed a) (L.ic 32)));
             L.if_ cond reduction;
           ] )
@@ -148,7 +148,7 @@ let dk_nest ?(minted = true) ?guard ~name ~e_n ~d_n () =
   let llc =
     L.loop_n b b_n @@ L.loop_n t t_n @@ L.loop_n h h_n @@ L.loop_n s s_n
     @@ LL.unflat_lines
-         ([ LL.Declare_local { id = dp; needs_init = false }; LL.Set_local (dp, L.c 0.) ]
+         ([ L.declare_local dp; LL.Set_local (dp, L.c 0.) ]
          @ guarded
          @ [
              (let k_idx = [| L.iter b; L.iter t; L.iter h; L.iter d |] in

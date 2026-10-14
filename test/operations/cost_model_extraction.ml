@@ -379,15 +379,8 @@ let () =
   (* for i < n: setv4 tn[idcs] from the random bits U[i]. *)
   let vec_store ?(n = 4) tn idcs =
     Ll_test.loop_n i n
-      (LL.Set_from_vec
-         {
-           tn;
-           idcs;
-           length = 4;
-           vec_unop = Ops.Uint4x32_to_prec_uniform;
-           arg = (get src [| it i |], sp);
-           debug = "";
-         })
+      (Ll_test.set_from_vec ~length:4 ~vec_unop:Ops.Uint4x32_to_prec_uniform tn idcs
+         (get src [| it i |], sp))
   in
   let vec_of = vec_store v16 in
   show_summary "vectorized writes, disjoint runs (exact)" (CM.analyze (vec_of [| base4 i |]));

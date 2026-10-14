@@ -76,6 +76,21 @@ let loop_n ?axis s n body : LL.t = loop ?axis ~upto:(n - 1) s body
     which is the shape of every hand-built one-dimensional case. *)
 let set_at tn idx llsc : LL.t = set tn [| idx |] llsc
 
+(** [declare_local id] declares the scope-local scalar [id] ({!Ir.Low_level.Declare_local}) — the
+    statement a virtualizer or [Privatize] emits ahead of the [Set_local]s of a lifted local.
+    [~needs_init] (default [false], the computation writes the local before reading it) asks codegen
+    to zero the declaration, which an accumulating local read on its first update needs. *)
+let declare_local ?(needs_init = false) id : LL.t = LL.Declare_local { id; needs_init }
+
+(** [set_from_vec ~length ~vec_unop tn idcs arg] stores [length] consecutive lanes of the vector
+    operation [vec_unop] applied to [arg] into [tn], starting at the cell [idcs]
+    ({!Ir.Low_level.Set_from_vec}) — the packed form the lowering mints for e.g. the
+    [uint4x32]-counter uniform. [length] is explicit: it may be fewer than the operation's
+    {!Ir.Ops.vec_unop_lanes} (a peeled tail store), and [arg] carries its OWN precision, typically
+    [uint4x32] for a counter block. *)
+let set_from_vec ?(debug = "") ~length ~vec_unop tn idcs (arg : LL.scalar_arg) : LL.t =
+  LL.Set_from_vec { tn; idcs; length; vec_unop; arg; debug }
+
 (** {2 Scan loops}
 
     {!Ir.Low_level.Scan_loop} (gh-ocannl-696): a loop with declared loop-carried scalar state. A

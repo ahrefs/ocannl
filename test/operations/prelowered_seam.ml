@@ -221,8 +221,7 @@ let phase4 () =
        (rejected (fun () ->
             LL.validate_scope_bodies
               (stmt
-                 (seq
-                    (LL.Declare_local { id = id_b; needs_init = false })
+                 (seq (declare_local id_b)
                     (seq
                        (LL.Set_local (id_b, get x [| iter i |]))
                        (LL.Set_local (id_a, LL.Get_local id_b))))))));
@@ -284,7 +283,7 @@ let phase5 () =
   let set_at idx llsc : LL.t = set y [| fixed idx |] llsc in
   let program ~mutated =
     seq
-      (seq (LL.Declare_local { id = ext; needs_init = false }) (LL.Set_local (ext, c 1.)))
+      (seq (declare_local ext) (LL.Set_local (ext, c 1.)))
       (seq
          (set_at 0 (scope ()))
          (seq (if mutated then LL.Set_local (ext, c 2.) else LL.Noop) (set_at 1 (scope ()))))

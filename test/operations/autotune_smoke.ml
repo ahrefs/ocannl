@@ -149,25 +149,11 @@ let () =
       }
     in
     fake
-      (LL.For_loop
-         {
-           index = s;
-           from_ = 0;
-           to_ = 3;
-           axis = LL.Serial;
-           body =
-             LL.Seq
-               ( LL.Declare_local { id = scope; needs_init = false },
-                 LL.Seq
-                   ( LL.Set_local (scope, LL.Constant 1.),
-                     LL.Set
-                       {
-                         tn = scope_tn;
-                         idcs = [| Ir.Indexing.Iterator s |];
-                         llsc = LL.Get_local scope;
-                         debug = "";
-                       } ) );
-         })
+      (Ll_builders.loop ~upto:3 s
+         (Ll_builders.seq (Ll_builders.declare_local scope)
+            (Ll_builders.seq
+               (LL.Set_local (scope, LL.Constant 1.))
+               (Ll_builders.set scope_tn [| Ll_builders.iter s |] (LL.Get_local scope)))))
   in
   p "scope ids alpha-numbered in the digest"
     (String.equal

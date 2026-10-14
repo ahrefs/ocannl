@@ -385,8 +385,7 @@ let row_hoisted_local () =
     seq (zero x)
       (seq
          (loop_n s n
-            (seq
-               (LL.Declare_local { id = p; needs_init = false })
+            (seq (declare_local p)
                (seq (LL.Set_local (p, tick s)) (set x [| iter s |] (LL.Get_local p)))))
          (loop_n t n (set out [| iter t |] (get x [| iter t |]))))
   in

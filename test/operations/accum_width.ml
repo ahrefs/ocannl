@@ -1467,11 +1467,7 @@ let () =
     let raw () =
       Ll_test.loop_n k 2
         (LL.unflat_lines
-           ((if local then
-               [
-                 LL.Declare_local { id = loc; needs_init = false };
-                 LL.Set_local (loc, LL.Constant 0.0);
-               ]
+           ((if local then [ Ll_test.declare_local loc; LL.Set_local (loc, LL.Constant 0.0) ]
              else [])
            @ List.init siblings ~f:(fun _ -> Ll_test.set acc cell llsc)
            @ (if other then [ Ll_test.set other_node cell (LL.Constant 7.0) ] else [])

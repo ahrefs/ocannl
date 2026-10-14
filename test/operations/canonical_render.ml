@@ -68,7 +68,7 @@ let build_rich (table, ids, out, acc) =
   let scope = LL.get_scope acc in
   let guarded =
     LL.Seq
-      ( LL.Declare_local { id = scope; needs_init = true },
+      ( Ll_test.declare_local ~needs_init:true scope,
         LL.Seq
           ( LL.Set_local
               ( scope,
@@ -141,15 +141,9 @@ let build_rich (table, ids, out, acc) =
                               };
                           debug = "";
                         },
-                      LL.Set_from_vec
-                        {
-                          tn = out;
-                          idcs = [| Idx.Fixed_idx 2 |];
-                          length = 4;
-                          vec_unop = Ops.Uint4x32_to_prec_uniform;
-                          arg = arg (LL.Get (table, [| Idx.Fixed_idx 3 |]));
-                          debug = "";
-                        } ) ) ) ) )
+                      Ll_test.set_from_vec ~length:4 ~vec_unop:Ops.Uint4x32_to_prec_uniform out
+                        [| Idx.Fixed_idx 2 |]
+                        (arg (LL.Get (table, [| Idx.Fixed_idx 3 |]))) ) ) ) ) )
 
 let part1 () =
   let tns = (mk "cr_table", mk "cr_ids", mk "cr_out", mk "cr_acc") in
