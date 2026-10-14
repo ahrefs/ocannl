@@ -40,5 +40,17 @@ y2 is measured after y1 timed nothing: true
 the winning chain ships a refined placement: true
 no flip is skipped as a twin when the flips win: true
 y2 is measured after y1 won: true
+the earlier routine stored computations for u1 and u2 in its lineage: true
+v1 and v2 are flip candidates without an identity: true
+the rule with the lineage's inheritance gives the surface's verdict: true
+with the refusal lifted, the same lowering twins v2 with v1: true
+under an inheriting caller lineage, v1 and v2 are both measured, neither as a twin: true
+the held lineage stores no computation for u1 or u2: true
+on the held caller's surface, v2 is v1's twin: true
+under an inheriting timing lineage, v1 and v2 are both measured, neither as a twin: true
 a bounds candidate on x2's operand separates x2 from x1: true
 declaring y2 observable separates it from its twin y1: true
+control: with equal definitions of their locals, x1 and x2 are twins: true
+a local defined by a different statement separates x2 from x1: true
+x1's identity is the same in both programs: true
+a local no statement defines leaves no identity: true

@@ -890,7 +890,15 @@ files.
   timing lineage's tag and decided placement, observability, enablement class, bounds candidate),
   then the readings and recompute cost. It refuses (no identity) where the source cannot be the
   whole local reading: an opaque construct anywhere, an unassigned flipped node, a node with a
-  computation inherited from an earlier routine. **Keep it a stated list, not a promise**: the
+  computation inherited from an earlier routine (in the caller's lineage, or in the timing lineage
+  via `Train.tune_placements`' timing tag), a statement-level local no statement defines. The
+  neighbourhood closes over the locals it reads, but no `Assignments` lowering puts a local's
+  definition in a top-level statement apart from its reads (online softmax emits its locals inside
+  the reading nest; probed on 2-layer attention, forward, fused backward and block mode), so the
+  closure and that refusal fire only on hand-built code: `flip_twins` reaches them through
+  `Autotune.flip_twin_identity`. To isolate the inheritance refusal, inline BOTH twins' operands
+  into one earlier routine: every rendered tag stays symmetric, so only the refusal separates them.
+  **Keep it a stated list, not a promise**: the
   review of staging#1124 ran five rounds, each naming one more fact a flip's outcome can depend
   on. What ended the loop was a stated boundary. Whole-routine context (live ranges) is
   deliberately out, since per-layer twins differ in exactly that, and a false twin costs one

@@ -19,7 +19,11 @@
    reaches 2 distinct classes past a skipped twin; - a warm rerun of that chain replays the anchors'
    abandonments and skips the same twins; - a flip searched in full that loses anchors its twin just
    as an abandoned one does; - the control: flips that WIN anchor nothing, so their twins are
-   measured. *)
+   measured; - two refusals, each with a control showing the refusal is what keeps the flips apart:
+   a computation inherited from an earlier routine, in the caller's lineage and in the timing
+   lineage alone (both flips measured; the rule with the refusal lifted twins them), and a
+   neighbourhood's statement-level local, defined by a different statement or by none (hand-built:
+   no [Assignments] lowering emits the shape). *)
 
 open Base
 open Ocannl
@@ -94,11 +98,11 @@ type chain = {
   shipped : string list;
 }
 
-(* [Train.tune_placements] with arm A's windows at 4 ms, arm B's at 50 ms, and each flip's per
-   [flip_script ~flip window] (both 1-based: the flip's ordinal among the measured ones, the
-   window's within that flip's search). The searches are told apart by how many reports have been
-   delivered when a window is admitted. *)
-let run_chain ?(cache_dir = "") ?timing_ctx ~budget comp loss ~flip_script =
+(* [Train.tune_placements] from [ctx] (a fresh [Context.auto ()] by default) with arm A's windows at
+   4 ms, arm B's at 50 ms, and each flip's per [flip_script ~flip window] (both 1-based: the flip's
+   ordinal among the measured ones, the window's within that flip's search). The searches are told
+   apart by how many reports have been delivered when a window is admitted. *)
+let run_chain ?(cache_dir = "") ?ctx ?timing_ctx ~budget comp loss ~flip_script =
   let arm_reports = ref [] and flip_reports = ref [] and shipped = ref [] in
   let delivered () = List.length !arm_reports + List.length !flip_reports in
   let flip_window = ref 0 and flip_seen = ref 0 in
@@ -122,7 +126,9 @@ let run_chain ?(cache_dir = "") ?timing_ctx ~budget comp loss ~flip_script =
                 ~report:(fun r -> arm_reports := r :: !arm_reports)
                 ~flip_report:(fun r -> flip_reports := r :: !flip_reports)
                 ~on_ship:(fun what -> shipped := what :: !shipped)
-                ?timing_ctx ~inline_flips:budget (Context.auto ()) loss comp Ir.Indexing.Empty
+                ?timing_ctx ~inline_flips:budget
+                (match ctx with Some ctx -> ctx | None -> Context.auto ())
+                loss comp Ir.Indexing.Empty
             in
             ()))
   in
@@ -329,6 +335,94 @@ let () =
   p "the winning chain ships a refined placement" (List.equal String.equal won.shipped [ "flip" ]);
   p_empty "no flip is skipped as a twin when the flips win" ~over:won.measured_arms won.twins;
   p "y2 is measured after y1 won" (measured y1 won && measured y2 won);
+  (* An inherited computation refuses an identity, in either lineage. [u1 = c1 + d1] and [u2 = c2 +
+     d2] are inlined into an earlier routine [shared = u1 + u2], whose compile stores their
+     computations in its lineage; a later routine reading them replays those templates, which its
+     source does not show. The second loss sums [v1 = u1 *. e1] and [v2 = u2 *. e2], so the
+     neighbourhoods of [v1] and [v2] render [u1] and [u2]. The earlier routine treats [u1] and [u2]
+     alike, so every tag the identity renders is symmetric between the two flips, and only the
+     refusal keeps them apart. *)
+  let c1 = nd "c1" n 7 0. and d1 = nd "d1" n 5 (-2.) in
+  let c2 = nd "c2" n 11 1. and d2 = nd "d2" n 3 (-1.) in
+  let e1 = nd "e1" n 13 0.5 and e2 = nd "e2" n 9 (-0.5) in
+  let%op u1 = c1 + d1 in
+  let%op u2 = c2 + d2 in
+  let%op shared = u1 + u2 in
+  let earlier = Train.forward shared in
+  let%op v1 = u1 *. e1 in
+  let%op v2 = u2 *. e2 in
+  let%op loss2 = v1 ++ "ij => 0" + (v2 ++ "ij => 0") in
+  let comp2 = Train.forward loss2 in
+  let first_alternative (s : Autotune.placement_surface) (t : Tensor.t) =
+    List.find_map s.Autotune.ps_candidates ~f:(fun fc ->
+        if Tn.equal fc.LL.fc_tn t.Tensor.value then
+          Option.map (List.hd fc.LL.fc_alternatives) ~f:(fun fa -> (fc, fa))
+        else None)
+  in
+  let alternatives (s : Autotune.placement_surface) =
+    List.sum (module Int) s.Autotune.ps_candidates ~f:(fun fc -> List.length fc.LL.fc_alternatives)
+  in
+  let identity_by rule s t =
+    Option.bind (first_alternative s t) ~f:(fun (fc, fa) ->
+        rule ~node_tag:no_tag ~chain:no_chain fc fa)
+  in
+  let surface_identity (s : Autotune.placement_surface) =
+    identity_by s.Autotune.ps_twin_identity s
+  in
+  let measured_untwinned c t = measured t c && Option.is_none (twin_of t c) in
+  (* The caller's lineage inherits. *)
+  let inheriting, _ = Context.compile (Context.auto ()) earlier Ir.Indexing.Empty in
+  let inherits = Context.inherits_computation inheriting in
+  p "the earlier routine stored computations for u1 and u2 in its lineage"
+    (inherits u1.Tensor.value && inherits u2.Tensor.value);
+  let surface2 = Autotune.placement_surface inheriting comp2 Ir.Indexing.Empty in
+  p_all "v1 and v2 are flip candidates without an identity" [ v1; v2 ] ~f:(fun t ->
+      Option.is_some (first_alternative surface2 t) && Option.is_none (surface_identity surface2 t));
+  (* The control: the surface's own rule over the same lowering, once with the lineage's inheritance
+     -- which reproduces the surface's verdict -- and once with the refusal lifted, which twins the
+     two flips. *)
+  let rule ~inherited =
+    identity_by
+      (Autotune.flip_twin_identity ~static_indices:[] ~lineage:(Context.placements inheriting)
+         ~inherited ~enablement:surface2.Autotune.ps_enablement
+         ~disablement:surface2.Autotune.ps_disablement
+         (Context.lowered_for_decisions inheriting comp2 Ir.Indexing.Empty))
+      surface2
+  in
+  p_all "the rule with the lineage's inheritance gives the surface's verdict" [ v1; v2 ]
+    ~f:(fun t -> Option.is_none (rule ~inherited:inherits t));
+  let lifted = rule ~inherited:(fun _ -> false) in
+  p "with the refusal lifted, the same lowering twins v2 with v1"
+    (Option.is_some (lifted v1) && Option.equal String.equal (lifted v1) (lifted v2));
+  let inherited_chain =
+    run_chain ~ctx:inheriting ~budget:(alternatives surface2) comp2 loss2 ~flip_script:hopeless
+  in
+  p_all "under an inheriting caller lineage, v1 and v2 are both measured, neither as a twin"
+    [ v1; v2 ]
+    ~f:(measured_untwinned inherited_chain);
+  (* The timing lineage inherits. [held] computed [shared] with [u1] and [u2] materialized: the
+     caller's surface reads two buffers and twins [v1] with [v2], while the flips are measured in
+     [inheriting], which replays the stored templates. The flip chain's timing tag refuses there. *)
+  let held, _ =
+    Context.compile
+      (Context.decide_materialized (Context.auto ()) [ u1.Tensor.value; u2.Tensor.value ])
+      earlier Ir.Indexing.Empty
+  in
+  p "the held lineage stores no computation for u1 or u2"
+    (not
+       (Context.inherits_computation held u1.Tensor.value
+       || Context.inherits_computation held u2.Tensor.value));
+  let surface3 = Autotune.placement_surface held comp2 Ir.Indexing.Empty in
+  p "on the held caller's surface, v2 is v1's twin"
+    (Option.is_some (surface_identity surface3 v1)
+    && Option.equal String.equal (surface_identity surface3 v1) (surface_identity surface3 v2));
+  let timed_inherited =
+    run_chain ~ctx:held ~timing_ctx:inheriting ~budget:(alternatives surface3) comp2 loss2
+      ~flip_script:hopeless
+  in
+  p_all "under an inheriting timing lineage, v1 and v2 are both measured, neither as a twin"
+    [ v1; v2 ]
+    ~f:(measured_untwinned timed_inherited);
   (* Two per-node facts, each declared on one member of a still-twinned pair, last since both
      declarations are monotone. The compile-time bounds candidate (the simplifier folds guards on
      it): a proposal on [b2], an operand of [x2]'s producer, separates [x2] from [x1]. *)
@@ -344,3 +438,65 @@ let () =
   Tn.set_observable y2.Tensor.value;
   p "declaring y2 observable separates it from its twin y1"
     (y_were_twins && (not was_observable) && not (twins y1 y2))
+
+(* Statement-level locals. A neighbourhood is closed over the scope locals it reads: a top-level
+   statement defining one joins it, and a local no statement defines refuses the identity. No
+   [Assignments] lowering puts a local's definition in a top-level statement apart from its reads --
+   even the online-softmax rewrite emits its locals inside the nest that reads them -- so the case
+   is hand-built and handed to the surface's rule ([Autotune.flip_twin_identity]) directly. [xi]
+   reads the local [pi], defined ahead of it from [ai]; with equal definitions [x1] and [x2] are
+   twins, which is the control that the definitions are all that differs between the programs
+   below. *)
+let () =
+  let open Ll_test in
+  let node = node_factory ~first_id:1_274_000 ~dims:[| 8 |] () in
+  let a1 = node "la1" and a2 = node "la2" and b1 = node "lb1" and b2 = node "lb2" in
+  let s1 = node "ls1" and s2 = node "ls2" in
+  let p1 = node ~dims:[| 1 |] "lp1" and p2 = node ~dims:[| 1 |] "lp2" in
+  let x1 = node "lx1" and x2 = node "lx2" in
+  List.iter [ a1; a2; b1; b2; s1; s2 ] ~f:materialize;
+  List.iter [ p1; p2 ] ~f:virtualize;
+  let p1 = LL.get_scope p1 and p2 = LL.get_scope p2 in
+  let produce x p b =
+    let i = sym () in
+    loop_n i 8 (set_at x (iter i) (mul (LL.Get_local p) (get b [| iter i |])))
+  in
+  let consume s x =
+    let i = sym () in
+    loop_n i 8 (set_at s (iter i) (add (get x [| iter i |]) (c 1.)))
+  in
+  let identities name ~def2 =
+    let o =
+      optimize ~name
+        (LL.unflat_lines
+           (define_local p1 (mul (get a1 [| fixed 0 |]) (c 2.))
+           @ Option.value_map def2 ~default:[] ~f:(define_local p2)
+           @ [ produce x1 p1 b1; produce x2 p2 b2; consume s1 x1; consume s2 x2 ]))
+    in
+    let rule =
+      Autotune.flip_twin_identity ~static_indices:[]
+        ~lineage:(LL.empty_optimize_ctx ()).LL.placements
+        ~inherited:(fun _ -> false)
+        ~enablement:(Set.empty (module Tn))
+        ~disablement:(Set.empty (module Tn))
+        o
+    in
+    let identity x =
+      List.find_map o.LL.flip_candidates ~f:(fun fc ->
+          if Tn.equal fc.LL.fc_tn x then
+            Option.bind (List.hd fc.LL.fc_alternatives) ~f:(fun fa ->
+                rule ~node_tag:(fun _ -> Some "") ~chain:(fun _ -> None) fc fa)
+          else None)
+    in
+    (identity x1, identity x2)
+  in
+  let same1, same2 = identities "lt_same" ~def2:(Some (mul (get a2 [| fixed 0 |]) (c 2.))) in
+  let diff1, diff2 = identities "lt_differ" ~def2:(Some (add (get a2 [| fixed 0 |]) (c 1.))) in
+  let unbound1, unbound2 = identities "lt_unbound" ~def2:None in
+  p "control: with equal definitions of their locals, x1 and x2 are twins"
+    (Option.is_some same1 && Option.equal String.equal same1 same2);
+  p "a local defined by a different statement separates x2 from x1"
+    (Option.is_some diff1 && Option.is_some diff2 && not (Option.equal String.equal diff1 diff2));
+  p "x1's identity is the same in both programs" (Option.equal String.equal diff1 same1);
+  p "a local no statement defines leaves no identity"
+    (Option.is_some unbound1 && Option.is_none unbound2)
