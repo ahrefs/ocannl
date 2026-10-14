@@ -841,7 +841,9 @@ files.
   trajectory identity holds only what a single search reads**: the keys that steer
   `Train.tune_placements` above it (`tune_inline_flips`, `tune_flip_ordering`,
   `tune_flip_profit_margin`, `tune_ship_arm`, `tune_placement_store`) are their own
-  `Placement_shaping` class, outside the fingerprint (gh-ocannl-1192). While they were
+  `Placement_shaping` class, outside the fingerprint (gh-ocannl-1192), and so are the
+  `model_default_*` keys, read only by the zero-timing `Autotune.model_default`, as the
+  `Untimed_model` class (gh-ocannl-1241). While they were
   `Search_shaping`, merely STATING one changed the identity, since the fingerprint renders every
   key some source sets: on rog's approximate CUDA gpt2_mini cell a warm chain run under
   `tune_placement_store=false` (gh-1020's way to compare the arms afresh) replayed both arms yet

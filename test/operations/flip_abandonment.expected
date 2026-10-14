@@ -67,6 +67,17 @@ the placement-level keys are stated for the warm chain: true
 stating them leaves the search-trajectory identity unchanged: true
 under them the warm flip chain still replays both placement arms: true
 under them the warm flip chain still replays the abandonment and ships the same winner: true
+they are exactly the Untimed_model class: true
+the shipped routine computes the plain compile's values: true
+the untimed-model keys are stated for the warm chain: true
+stating them leaves the search-trajectory identity unchanged: true
+under them the warm flip chain still replays both arms and the abandonment, and ships the same winner: true
+the control key is search-shaping: true
+the shipped routine computes the plain compile's values: true
+the control key is stated for the warm chain: true
+stating a key the search reads changes the search-trajectory identity: true
+under it the warm chain still replays both placement arms: true
+but no longer replays the flip's abandonment: nothing was recorded under this identity: true
 the shipped routine computes the plain compile's values: true
 a flip that becomes profitable is searched in full: true
 and the refined placement ships: true
