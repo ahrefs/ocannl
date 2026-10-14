@@ -26,8 +26,12 @@ one: no segment is challenged by more than one window: true
 trace: one decision per playoff window says phase playoff: true
 trace: an unobserved seam reports nothing: true
 trace: the same windows, crown and time with the seam observed and unobserved: true
+trace: every traced call is one of the search's own, tagged: true
+trace: the report counts exactly the traced calls by settle and admission: true
+trace: an unobserved search counts as many calls: true
 streams: the ambient config leaves both diagnostic streams off: true
 log: the logged search adds exactly one decision, last and phase-less (the untuned control): true
+log: the report's counts leave out the untuned control, the one untagged call: true
 log: the same windows, crown and time with the control on and off: true
 log: the scoped search wrote autotune: diagnostics: true
 progress: the scoped search wrote one search_start and one search_done: true

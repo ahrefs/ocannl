@@ -1,7 +1,8 @@
 (* gh-ocannl-1199: the [BENCH_TIMING_TRACE] decision line says what the queued calibration decided,
-   read from the policy's own metadata ([Autotune.on_batch_decision]) rather than re-derived from
-   probe readings. Two synthetic CUDA/HIP devices on an injected clock, sharing the singles (9.75
-   ms, which owe a batch) and the depth-2/depth-3 pair geometry of the gh-ocannl-1184 boundary:
+   read from the policy's own metadata (the [decision] of each [Autotune.timing_call] record,
+   gh-ocannl-1263) rather than re-derived from probe readings. Two synthetic CUDA/HIP devices on an
+   injected clock, sharing the singles (9.75 ms, which owe a batch) and the depth-2/depth-3 pair
+   geometry of the gh-ocannl-1184 boundary:
 
    - [retained]: 1.25 ms fixed plus 9 ms a launch. The fit puts one launch at 10.25 ms, just above
    the 10 ms target, but its marginal work fits the target and its fixed term is below it, so the
@@ -15,20 +16,20 @@
 open Base
 open Verdict.Claims
 
+(* The decisions arrive through the domain's trace observer, as [BENCH_TIMING_TRACE] receives them;
+   the depth through the call's own [on_call], as a search's accounting does. *)
 let call ~fixed ~marginal =
   let decisions = ref [] and depth = ref None in
-  let old_decision = !Autotune.on_batch_decision and old_depth = !Autotune.on_batch_depth in
-  Exn.protect
-    ~finally:(fun () ->
-      Autotune.on_batch_decision := old_decision;
-      Autotune.on_batch_depth := old_depth)
-    ~f:(fun () ->
-      (Autotune.on_batch_decision := fun d -> decisions := d :: !decisions);
-      (Autotune.on_batch_depth := fun d ~calibration_samples:_ -> depth := Some d);
+  Autotune.with_timing_call_observer
+    (fun c -> decisions := c.Autotune.decision :: !decisions)
+    (fun () ->
       let reading =
-        Autotune.calibrate_and_time ~retry_contended:false ~timing:Autotune.Queued ~repeats:3
-          ~queue_depth_cap:(Autotune.queue_depth_cap_for_backend "hip") ~batch:(fun d ->
-            if d = 1 then 9.75 else fixed +. (marginal *. Float.of_int d))
+        Autotune.calibrate_and_time_with_retry_observer
+          ~on_retry:(fun () -> ())
+          ~on_call:(fun c -> depth := Some c.Autotune.decision.depth)
+          ~phase:None ~retry_contended:false ~timing:Autotune.Queued ~repeats:3
+          ~queue_depth_cap:(Autotune.queue_depth_cap_for_backend "hip")
+          ~batch:(fun d -> if d = 1 then 9.75 else fixed +. (marginal *. Float.of_int d))
       in
       (reading, !depth, !decisions))
 
@@ -58,10 +59,10 @@ let () =
       | [ line ] ->
           Bool.equal (says ", admitted" line) (Option.is_some (Autotune.admitted_timing_ms reading))
       | _ -> false);
-  p_all "the line says refused unbatched exactly when the call refused as unbatched" traced
+  p_all "the line says refused_unbatched exactly when the call refused as unbatched" traced
     ~f:(fun (_, reading, _, lines) ->
       match lines with
-      | [ line ] -> Bool.equal (says ", refused unbatched" line) reading.Autotune.unbatched
+      | [ line ] -> Bool.equal (says ", refused_unbatched" line) reading.Autotune.unbatched
       | _ -> false);
   match traced with
   | [ (_, retained, _, [ kept ]); (_, refused, _, [ refusal ]) ] ->

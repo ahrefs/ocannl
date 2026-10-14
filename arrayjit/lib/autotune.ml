@@ -181,12 +181,49 @@ let timing_of_setting s =
   | other ->
       invalid_arg ("ocannl_autotune_timing setting should be isolated or queued; found: " ^ other)
 
+(* Which exit of the calibration chose the depth before the post-calibration bounds
+   (gh-ocannl-1199). Each branch of [calibrate_and_time_from] returns its own, so the trace reports
+   the decision taken rather than a reconstruction of it. *)
+type batch_settle =
+  | Isolated_objective
+  | Single_estimate
+  | Singles_reach_target
+  | Measured_batch
+  | Affine_projection
+  | Wall_scaled
+  | Cap_measured
+  | Cap_unresolved
+  | Budget_exhausted
+
+type batch_admission = Admitted | Refused_unbatched | Refused_contended | Refused_unreadable
+
+(* The spellings the benchmark trace and result line use, one per constructor. *)
+let batch_settle_name = function
+  | Isolated_objective -> "isolated"
+  | Single_estimate -> "single_estimate"
+  | Singles_reach_target -> "singles_reach_target"
+  | Measured_batch -> "measured_batch"
+  | Affine_projection -> "affine_projection"
+  | Wall_scaled -> "wall_scaled"
+  | Cap_measured -> "cap_measured"
+  | Cap_unresolved -> "cap_unresolved"
+  | Budget_exhausted -> "budget_exhausted"
+
+let batch_admission_name = function
+  | Admitted -> "admitted"
+  | Refused_unbatched -> "refused_unbatched"
+  | Refused_contended -> "refused_contended"
+  | Refused_unreadable -> "refused_unreadable"
+
 type report = {
   outcome : outcome;
   candidates_timed : int;
   timings_contended : int;
   timings_retried : int;
   timings_unbatched : int;
+  timing_decisions : (batch_settle * batch_admission * int) list;
+      (** How this call's search timing calls settled and were admitted (gh-ocannl-1263). See the
+          interface. *)
   candidates_contended : int;
   default_refused : bool;
   candidates_failed : int;
@@ -267,6 +304,7 @@ let no_search_report ~timing =
     timings_contended = 0;
     timings_retried = 0;
     timings_unbatched = 0;
+    timing_decisions = [];
     candidates_contended = 0;
     default_refused = false;
     candidates_failed = 0;
@@ -896,42 +934,6 @@ let apply_measurement_seam ~label ~digest timing_result =
   | None -> timing_result
   | Some ms -> { timing_result with ms = !on_candidate_measured ~label ~digest ms }
 
-(* Observation seam for the timing tests (gh-ocannl-851), reporting the batch depth each
-   [time_routine] call settles on -- after calibration, before the timed loop; [Isolated] reports 1.
-   The negative control for a twice-divided queued reading needs the depth the call ACTUALLY used:
-   the call recalibrates independently, so re-applying the policy to an estimate taken outside it
-   guesses wrong exactly on the busy runners the control must survive. The calibration dispatch
-   count accompanies it so the instrument can account for both the single-launch estimate and the
-   provisional queued probe. Default no-op, no config key selects it. *)
-let on_batch_depth : (int -> calibration_samples:int -> unit) ref =
-  ref (fun _depth ~calibration_samples:_ -> ())
-
-(* Observation seam for the timing tests (gh-ocannl-994), reporting the window the returned minimum
-   was actually taken over: how many batches the timed loop ran, counted by the loop itself rather
-   than restated from its result, and their summed wall. A bound written on the reading needs THAT
-   window's mean, not the whole call's: the call's wall also holds the warmup and the calibration's
-   synchronized singles, and on a backend whose host round trip is two orders of magnitude above an
-   amortized launch (Linux multidev_cc: ~57 us against ~0.44 us) those few dozen singles are a
-   comparable share of the call to the tens of thousands of timed dispatches -- about 40% of it --
-   so the whole-call mean is diluted by construction, and a host stall landing in the untimed part
-   moves it without moving the reading. The MEDIAN batch wall accompanies the sum because this
-   window's mean is still a stalled minority's to move: [contended] is declared on a MAJORITY of the
-   window's batches exceeding twice its floor, so a bound meant to hold whenever the claim is not
-   bypassed belongs on a statistic a minority cannot move -- which the median is over exactly the
-   regime the contention rule leaves to it. [reused] says how many of the window's [samples] the
-   loop did NOT dispatch (gh-ocannl-1074): a queued call that settles at depth 1 resumes the
-   calibration's synchronized singles as its window, and those launches are already counted in
-   [on_batch_depth]'s [calibration_samples] -- so the launches the timed loop itself dispatched are
-   [depth * (samples - reused)]. Default no-op; no configuration key selects it. *)
-let on_timed_window :
-    (samples:int -> reused:int -> wall_ms:float -> median_wall_ms:float -> unit) ref =
-  ref (fun ~samples:_ ~reused:_ ~wall_ms:_ ~median_wall_ms:_ -> ())
-
-(* A discarded contention window, immediately before its one fresh retry (gh-ocannl-1060).
-   [on_timed_window] describes only the returned window. These counts account for the extra
-   dispatches without treating the discarded window as a candidate refusal. *)
-let on_timing_retry : (samples:int -> reused:int -> unit) ref = ref (fun ~samples:_ ~reused:_ -> ())
-
 (* Which of the calibration's branches dispatched a batch probe. *)
 type calibration_probe_role =
   | Provisional_probe
@@ -941,6 +943,11 @@ type calibration_probe_role =
   | Crossing_probe
   | Rescue_probe
 
+(* One CUDA/HIP calibration batch probe as it ended (gh-ocannl-1119): the branch that started it,
+   how many minima it took, the wall it charged to [queue_calibration_wall_ms] and its minimum. A
+   test that saw only the [batch] calls had to reconstruct probes from runs of same-depth batches,
+   which merged a stall retry into the confirmation it repeats and counted probes only as a lower
+   bound. *)
 type calibration_probe = {
   role : calibration_probe_role;
   depth : int;
@@ -948,30 +955,6 @@ type calibration_probe = {
   wall_ms : float;
   min_ms : float;
 }
-
-(* Observation seam for the timing tests (gh-ocannl-1119), fired once per CUDA/HIP calibration batch
-   probe as it ends, in dispatch order, with the branch that started it, how many minima it took,
-   the wall it charged to [queue_calibration_wall_ms] and its minimum. A test that saw only the
-   [batch] calls had to reconstruct probes from runs of same-depth batches, which merged a stall
-   retry into the confirmation it repeats and counted probes only as a lower bound. Default no-op;
-   no configuration key selects it. *)
-let on_calibration_probe : (calibration_probe -> unit) ref = ref (fun _ -> ())
-
-(* Which exit of the calibration chose the depth before the post-calibration bounds
-   (gh-ocannl-1199). Each branch of [calibrate_and_time_with_retry_observer] returns its own, so the
-   trace reports the decision taken rather than a reconstruction of it. *)
-type batch_settle =
-  | Isolated_objective
-  | Single_estimate
-  | Singles_reach_target
-  | Measured_batch
-  | Affine_projection
-  | Wall_scaled
-  | Cap_measured
-  | Cap_unresolved
-  | Budget_exhausted
-
-type batch_admission = Admitted | Refused_unbatched | Refused_contended | Refused_unreadable
 
 type batch_decision = {
   phase : string option;
@@ -993,18 +976,68 @@ type batch_decision = {
   retried : bool;
 }
 
-(* Trace-only seam (gh-ocannl-1199), fired once per timing call after its window, with the depth
-   decision's own metadata and the call's admission verdict. Observing it changes nothing a search
-   measures or ranks. Default a no-op; no configuration selects it. *)
-let on_batch_decision : (batch_decision -> unit) ref = ref (fun _ -> ())
+(* A window of the timed loop (gh-ocannl-994): how many batches it ran, counted by the loop itself
+   rather than restated from its result, and their summed and median wall. A bound written on the
+   reading needs THAT window, not the whole call: the call's wall also holds the warmup and the
+   calibration's synchronized singles, and on a backend whose host round trip is two orders of
+   magnitude above an amortized launch (Linux multidev_cc: ~57 us against ~0.44 us) those few dozen
+   singles are a comparable share of the call to the tens of thousands of timed dispatches -- about
+   40% of it -- so the whole-call mean is diluted by construction, and a host stall landing in the
+   untimed part moves it without moving the reading. The MEDIAN accompanies the sum because the
+   window's mean is still a stalled minority's to move: [contended] is declared on a MAJORITY of the
+   window's batches exceeding twice its floor, so a bound meant to hold whenever the claim is not
+   bypassed belongs on a statistic a minority cannot move. [reused] says how many of [samples] the
+   loop did NOT dispatch (gh-ocannl-1074): a queued call that settles at depth 1 resumes the
+   calibration's synchronized singles as its window, and those launches are already counted as
+   calibration -- so the launches the loop itself dispatched are [depth * (samples - reused)]. *)
+type timed_window = { samples : int; reused : int; wall_ms : float; median_wall_ms : float }
+
+(* Everything one timing call did, reported once, as it returns (gh-ocannl-1263). It replaces four
+   seams fired at different moments of the call -- the depth decision (gh-ocannl-851), each
+   calibration probe (gh-ocannl-1119), a discarded contention window (gh-ocannl-1060) and the
+   returned window (gh-ocannl-994) -- beside the decision record (gh-ocannl-1199), which their
+   consumers had to stitch together by arrival order. *)
+type timing_call = {
+  decision : batch_decision;
+  tagged : bool;
+  calibration_singles : int;
+  calibration_launches : int;
+  calibration_probes : calibration_probe list;
+  discarded_window : timed_window option;
+  window : timed_window;
+  setup_ms : float;
+  timed_ms : float;
+}
+
+(* Trace-only observation of every timing call, per domain (gh-ocannl-1263) -- the treatment
+   [autotune_log] got for concurrent searches: a search running in another domain neither reaches
+   nor disturbs this domain's observers. Observers compose, each installation calling the enclosing
+   observer first. Observing changes nothing a search measures or ranks. Default a no-op; no
+   configuration selects it. A search's own accounting goes through [time_routine]'s per-call
+   [on_call] instead, so it never depends on who else observes. *)
+let timing_call_observer : (timing_call -> unit) Stdlib.Domain.DLS.key =
+  Stdlib.Domain.DLS.new_key (fun () _ -> ())
+
+let chain_timing_call_observer f =
+  let enclosing = Stdlib.Domain.DLS.get timing_call_observer in
+  Stdlib.Domain.DLS.set timing_call_observer (fun call ->
+      enclosing call;
+      f call);
+  enclosing
+
+let install_timing_call_observer f = ignore (chain_timing_call_observer f : timing_call -> unit)
+
+let with_timing_call_observer f body =
+  let enclosing = chain_timing_call_observer f in
+  Exn.protect ~f:body ~finally:(fun () -> Stdlib.Domain.DLS.set timing_call_observer enclosing)
 
 (* The measurement proper, after the warmup: the calibration and the timed loop, with the device
    reduced to [batch depth], which dispatches [depth] launches back to back, synchronizes once and
    returns the wall in milliseconds. Separated from [time_routine] so a test can drive the whole
    policy -- which depth a call settles on, which window it times, how many launches each costs --
    on an injected clock, with no device and no machine-dependent routine (gh-ocannl-1074). *)
-let calibrate_and_time_with_retry_observer ~on_retry ~phase ~retry_contended ~timing ~repeats
-    ~queue_depth_cap ~batch =
+let calibrate_and_time_from ~started ~tagged ~on_retry ~on_call ~phase ~retry_contended ~timing
+    ~repeats ~queue_depth_cap ~batch =
   (* Every finite positive batch minimum the calibration measured, as [(depth, wall)]: the evidence
      that bounds an unresolved calibration's fallback depth. *)
   let observed = ref [] and no_supported_batch = ref false in
@@ -1015,9 +1048,9 @@ let calibrate_and_time_with_retry_observer ~on_retry ~phase ~retry_contended ~ti
   (* The probes' summed wall, against [queue_calibration_wall_ms]. Only finite positive readings are
      charged: a clock that resolved nothing spends no measurable wall, and must not end a probe on a
      NaN comparison. *)
-  let probe_wall_ms = ref 0. and probes_started = ref 0 in
-  (* The decision metadata [on_batch_decision] reports (gh-ocannl-1199): the latest affine fit and
-     the validation probes a fit wanting the unmeasured cap directed (gh-ocannl-1144). *)
+  let probe_wall_ms = ref 0. and probes_started = ref 0 and probes_ended = ref [] in
+  (* The decision metadata a [timing_call] record reports (gh-ocannl-1199): the latest affine fit
+     and the validation probes a fit wanting the unmeasured cap directed (gh-ocannl-1144). *)
   let last_fit = ref None and cap_directed_probes = ref 0 in
   let refine ~min_depth ~base_depth ~base_ms ~probe_depth ~probe_ms =
     let depth, wall_ms, fit =
@@ -1052,7 +1085,8 @@ let calibrate_and_time_with_retry_observer ~on_retry ~phase ~retry_contended ~ti
     done;
     probe_wall_ms := !probe_wall_ms +. !wall_ms;
     observe ~depth !best_ms;
-    !on_calibration_probe { role; depth; runs = !runs; wall_ms = !wall_ms; min_ms = !best_ms };
+    probes_ended :=
+      { role; depth; runs = !runs; wall_ms = !wall_ms; min_ms = !best_ms } :: !probes_ended;
     { ms = !best_ms; contended = false; unbatched = false; samples = !runs }
   in
   (* [singles] is the calibration's window of synchronized single launches, kept rather than reduced
@@ -1379,7 +1413,8 @@ let calibrate_and_time_with_retry_observer ~on_retry ~phase ~retry_contended ~ti
             "queued batch capped at depth %d: batch wall estimate is unresolved, so the shortfall \
              from the %.1f ms target cannot be quantified"
             depth queued_batch_ms);
-  !on_batch_depth depth ~calibration_samples:calibration_dispatches;
+  let setup_ms = Mtime.Span.to_float_ns (Mtime_clock.count started) /. 1e6
+  and decided = Mtime_clock.counter () in
   (* The calibration's own contention verdict is not consulted (gh-ocannl-888): it judged single
      dispatches, and the window that gets judged for refusal is the batch below.
 
@@ -1417,38 +1452,38 @@ let calibrate_and_time_with_retry_observer ~on_retry ~phase ~retry_contended ~ti
              { per_launch_ms = wall /. Float.of_int depth; contention_ms = wall })
            ()
     in
-    let report () =
-      let median_wall_ms =
-        let sorted = Array.of_list !timed_walls in
-        Array.sort sorted ~compare:Float.compare;
-        let n = Array.length sorted in
-        if n = 0 then 0.
-        else if n % 2 = 1 then sorted.(n / 2)
-        else (sorted.((n / 2) - 1) +. sorted.(n / 2)) /. 2.
-      in
-      !on_timed_window ~samples:!timed_batches ~reused:(List.length reused) ~wall_ms:!timed_wall_ms
-        ~median_wall_ms
+    let median_wall_ms =
+      let sorted = Array.of_list !timed_walls in
+      Array.sort sorted ~compare:Float.compare;
+      let n = Array.length sorted in
+      if n = 0 then 0.
+      else if n % 2 = 1 then sorted.(n / 2)
+      else (sorted.((n / 2) - 1) +. sorted.(n / 2)) /. 2.
     in
-    (result, report)
+    ( result,
+      {
+        samples = !timed_batches;
+        reused = List.length reused;
+        wall_ms = !timed_wall_ms;
+        median_wall_ms;
+      } )
   in
   let reused = if depth = 1 then singles else [] in
-  let ((result, _) as window) = time_window reused in
+  let ((first, discarded) as window) = time_window reused in
   let retried =
-    retry_contended && Poly.equal timing Queued && result.contended && Float.is_finite result.ms
-    && Float.is_positive result.ms
+    retry_contended && Poly.equal timing Queued && first.contended && Float.is_finite first.ms
+    && Float.is_positive first.ms
   in
-  let result, report =
+  let (result, window), discarded_window =
     if retried then (
       (* Keep the depth and the 2x-majority rule. A fresh independent window can outlast a transient
          Metal scheduler burst; mixing windows would instead dilute its refusal evidence. Depth-1
          retries must likewise dispatch fresh singles rather than resume the refused ones. *)
-      logf "queued timing retry: contention refused the first window (%d samples)" result.samples;
+      logf "queued timing retry: contention refused the first window (%d samples)" first.samples;
       on_retry ();
-      !on_timing_retry ~samples:result.samples ~reused:(List.length reused);
-      time_window [])
-    else window
+      (time_window [], Some discarded))
+    else (window, None)
   in
-  report ();
   let result =
     if !no_supported_batch then (
       logf
@@ -1458,7 +1493,7 @@ let calibrate_and_time_with_retry_observer ~on_retry ~phase ~retry_contended ~ti
       { result with unbatched = true })
     else result
   in
-  !on_batch_decision
+  let decision =
     {
       phase;
       timing;
@@ -1481,20 +1516,47 @@ let calibrate_and_time_with_retry_observer ~on_retry ~phase ~retry_contended ~ti
          else if Option.is_none (admitted_timing_ms result) then Refused_unreadable
          else Admitted);
       retried;
-    };
+    }
+  in
+  let call =
+    {
+      decision;
+      tagged;
+      calibration_singles = List.length singles;
+      calibration_launches = calibration_dispatches;
+      calibration_probes = List.rev !probes_ended;
+      discarded_window;
+      window;
+      setup_ms;
+      timed_ms = Mtime.Span.to_float_ns (Mtime_clock.count decided) /. 1e6;
+    }
+  in
+  on_call call;
+  Stdlib.Domain.DLS.get timing_call_observer call;
   result
+
+(* Exposed for tests with an injected clock: the per-call observers [time_routine] gives a search,
+   timed from this call's own start. *)
+let calibrate_and_time_with_retry_observer ~on_retry ~on_call ~phase ~retry_contended ~timing
+    ~repeats ~queue_depth_cap ~batch =
+  calibrate_and_time_from ~started:(Mtime_clock.counter ()) ~tagged:false ~on_retry ~on_call ~phase
+    ~retry_contended ~timing ~repeats ~queue_depth_cap ~batch
 
 (* Preserve the original all-labelled helper's source interface: an optional observer would not
    erase without adding a positional argument. *)
 let calibrate_and_time ~retry_contended ~timing ~repeats ~queue_depth_cap ~batch =
   calibrate_and_time_with_retry_observer
     ~on_retry:(fun () -> ())
+    ~on_call:(fun _ -> ())
     ~phase:None ~retry_contended ~timing ~repeats ~queue_depth_cap ~batch
 
 (* [routine.bindings] exposes the routine's live binding refs — restore them after timing (Codex P2
    on PR #103), or the returned winner would stay bound to the tuner's midpoint test values. *)
-let time_routine ?(on_retry = fun () -> ()) ?(tag_failures = false) ?phase ~timing ~repeats cctx
-    routine =
+let time_routine ?(on_retry = fun () -> ()) ?(on_call = fun _ -> ()) ?(tag_failures = false) ?phase
+    ~timing ~repeats cctx routine =
+  (* The call's [setup_ms] runs from here: the pre-dispatch validation, the warmup and the
+     calibration. *)
+  let started = Mtime_clock.counter () in
   let saved_bindings = List.map routine.Context.bindings ~f:(fun (_ss, r) -> (r, !r)) in
   let run ctx =
     if tag_failures then Outcome.tag Outcome.Launch (fun () -> Context.run ctx routine)
@@ -1533,7 +1595,8 @@ let time_routine ?(on_retry = fun () -> ()) ?(tag_failures = false) ?phase ~timi
         sync !ctx;
         Mtime.Span.to_float_ns (Mtime_clock.count c0) /. 1e6
       in
-      calibrate_and_time_with_retry_observer ~on_retry ~phase ~timing ~repeats
+      calibrate_and_time_from ~started ~tagged:tag_failures ~on_retry ~on_call ~phase ~timing
+        ~repeats
         ~retry_contended:(retry_contended_window_for_backend (Context.backend_name cctx))
         ~queue_depth_cap:(queue_depth_cap_for_backend (Context.backend_name cctx))
         ~batch)
@@ -3969,12 +4032,26 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
      learn before failing (e.g. a decline census). *)
   let n_timings_retried = ref 0 in
   let on_retry () = Int.incr n_timings_retried in
+  (* gh-ocannl-1263: how the search's timing calls settled and were admitted, from each call's own
+     record through the per-call [on_call] -- the baseline's and every candidate's, never the
+     diagnostic untuned control's -- so the counts belong to this call whatever else observes, and
+     whatever runs in another domain. *)
+  let decision_counts = Hashtbl.Poly.create () in
+  let on_call (c : timing_call) =
+    Hashtbl.incr decision_counts (c.decision.settle, c.decision.admission)
+  in
+  let timing_decisions () =
+    Hashtbl.to_alist decision_counts
+    |> List.sort ~compare:(fun (a, _) (b, _) -> Poly.compare a b)
+    |> List.map ~f:(fun ((settle, admission), calls) -> (settle, admission, calls))
+  in
   let emit_pre_search_failure ?(base = base_report) ~phase ~candidate ~detail () =
     let r =
       {
         base with
         outcome = Pre_search_failure { phase; candidate; detail };
         timings_retried = !n_timings_retried;
+        timing_decisions = timing_decisions ();
       }
     in
     try emit_report r
@@ -4295,6 +4372,7 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                     timings_contended = 0;
                     timings_retried = 0;
                     timings_unbatched = 0;
+                    timing_decisions = timing_decisions ();
                     candidates_contended = 0;
                     default_refused = false;
                     (* No search ran, so the only rejection this can carry is the baseline's. *)
@@ -4506,7 +4584,7 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                 Outcome.tag Outcome.Preflight (fun () ->
                     Context.check_lineage_runnable b.cctx b.routine);
                 progress_stage "baseline_timing";
-                time_routine ~on_retry ~tag_failures:true ~timing ~repeats b.cctx b.routine
+                time_routine ~on_retry ~on_call ~tag_failures:true ~timing ~repeats b.cctx b.routine
               with
               | timing_result -> (
                   let timing_result =
@@ -4784,6 +4862,7 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
             timings_contended = !n_timings_contended;
             timings_retried = !n_timings_retried;
             timings_unbatched = !n_timings_unbatched;
+            timing_decisions = timing_decisions ();
             candidates_contended = candidates_contended ();
             default_refused = default_refused ();
             candidates_failed = failed_count declines;
@@ -4971,8 +5050,8 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                         ~provenance:Outcome.Candidate ~phase:Outcome.Launch
                         ~candidate:(spec_label spec) (fun () ->
                           timed_into progress_timing_s (fun () ->
-                              time_routine ~on_retry ~tag_failures:true ~phase:!progress_phase
-                                ~timing ~repeats c.cctx c.routine))
+                              time_routine ~on_retry ~on_call ~tag_failures:true
+                                ~phase:!progress_phase ~timing ~repeats c.cctx c.routine))
                       (* Outside the boundary: the seam is not a candidate failure to classify. *)
                       |> Result.map
                            ~f:
@@ -5750,6 +5829,7 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
               timings_contended = !n_timings_contended;
               timings_retried = !n_timings_retried;
               timings_unbatched = !n_timings_unbatched;
+              timing_decisions = timing_decisions ();
               candidates_contended = candidates_contended ();
               default_refused = default_refused ();
               candidates_failed = failed_count declines;
