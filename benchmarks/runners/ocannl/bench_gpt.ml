@@ -58,13 +58,14 @@ let () =
        callback is wired, and a flip search loads this process like an arm search. *)
     (* [~rounds:0] overrides [autotune_rounds], the profiles' 4 included; the arms' [rounds_run] on
        the result line records it. Why, from a capped correctness-grade probe on a shared rog box
-       (CUDA, approximate profile, gh-ocannl-1137): with rounds=4, arm A finished one round -- 635
-       candidates, +1002 s on its 674 s of seeds (+150%) -- whose best beat the seed winner by
-       0.50%, under the 1% a round needs to be adopted, so the arm shipped its rounds:0 winner.
-       Arm B was cut off 97 candidates into its 1325-candidate round (~+480% projected on 528 s of
-       seeds), 0.31% ahead at that point; whether a later candidate clears 1% is unmeasured. The
-       beam a round expands is the composite and its playoff near-copies (1-4 of 122-150 segments
-       apart). *)
+       (CUDA, approximate profile, gh-ocannl-1229): a round expands the beam's head (the composite)
+       in full and its playoff near-copies only on the segments where they differ from it. With
+       rounds=4, arm A's round 1 timed 332 candidates (1204 under the old full-expansion rule),
+       ~406 s on top of its 413 s of seeds (~+100%), and its best came in 0.35% under the seed
+       winner, below the 1% a round needs to be adopted, so the arm shipped its rounds:0 winner.
+       Arm B's 624-candidate round was cut off 287 candidates in, at the probe's 2100 s cap.
+       Whether rounds should run here -- adopting a sub-threshold win whose replicate spread is
+       tight, or not at all -- is open as gh-ocannl-1346. *)
     Train.tune_placements ~report:(H.collect_arm arms) ~flip_report:(H.collect_search arms)
       ~on_ship:(H.collect_ship arms) ~rounds:0 ~timing_ctx:scratch ctx batch_loss comp bindings
   in
