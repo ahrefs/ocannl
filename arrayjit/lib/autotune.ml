@@ -421,10 +421,13 @@ let min_progress = 0.01
    crowned [mma 32x32x0 bgrid], the other [mma 16x32x0 bgrid-in]). The playoff re-ranks those
    near-ties where the backdrop is small: inside the composite. A single within [playoff_margin] of
    its key's best single is close enough that the backdrop's noise could have inverted the order. At
-   most [playoff_width] of them per key go to the playoff, nearest first. Changing either constant
-   changes the search menu, so bump [Schedule_cache.entry_version]. *)
+   most [playoff_width] of them per key go to the playoff, nearest first: config
+   [autotune_composite_playoff_width], default [default_playoff_width], and 0 turns the playoff off
+   (gh-ocannl-1259). Changing the margin or the default changes the default search menu, so bump
+   [Schedule_cache.entry_version]; a stated width is [Search_shaping], like the beam width, so a
+   crown found under one width replays under another. *)
 let playoff_margin = 0.005
-let playoff_width = 2
+let default_playoff_width = 2
 
 (* The beam holds no compiled candidate exactly when nothing was timed, which every consumer of the
    winner tests first ([nothing_timed]). *)
@@ -3860,6 +3863,12 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
            (int_setting ~default:8
            @@ Utils.get_global_arg ~arg_name:"autotune_split_reduce_max_sites" ~default:"8"))
   in
+  let playoff_width =
+    max 0
+      (int_setting ~default:default_playoff_width
+      @@ Utils.get_global_arg ~arg_name:"autotune_composite_playoff_width"
+           ~default:(Int.to_string default_playoff_width))
+  in
   let seed_block_sizes = Option.value seed_block_sizes ~default:[ 64; 128; 256; 512 ] in
   let cache_dir = resolve_cache_dir ?cache_dir ~search () in
   let keep_fraction =
@@ -5503,11 +5512,14 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                     else acc)
                 |> List.rev |> Fn.flip List.take playoff_width
           in
+          (* With width 0 the playoff, its progress phase included, is skipped outright: the search
+             times exactly what it timed before the playoff existed (gh-ocannl-1259). *)
           (match
              List.min_elt
                (List.filter_opt [ coarse_composite; fine_composite ])
                ~compare:(fun (_, _, a) (_, _, b) -> Float.compare a b)
            with
+          | _ when playoff_width = 0 -> ()
           | None -> ()
           | Some (entries, fine, ms) ->
               progress_phase_begin "playoff" None;

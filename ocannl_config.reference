@@ -595,6 +595,20 @@
 # schedule cache replays its winner without searching again.
 #autotune_register_tile_rm_twin=false
 
+# How many near-tie singles per keyed fission segment `Autotune.tune`'s composite playoff re-times
+# (gh-ocannl-1166); 0 turns the playoff off (gh-ocannl-1259). A per-segment single is timed as the
+# whole routine with every other segment on its untuned preset, and that backdrop's noise can
+# invert singles whose times lie within 0.5% of the segment's best; after the recombination the
+# playoff times up to this many of them, nearest first, in the faster composite's place, keeping
+# each faster alternate. It cost about 14 extra candidates and 5-26% of search wall time per
+# placement arm on gpt2_mini/CUDA, and on tf32 it made both replicate searches crown the same
+# q/k/v geometry and the replayed step faster by more than the replicate spread. With 0 a search
+# times exactly the candidates it timed before the playoff existed. It shapes what a search times,
+# not what a crowned schedule means, so a warm schedule cache replays its winner whatever the
+# width. No profile sets it: the profiles that search (`performance`, `approximate`) choose wider
+# searches, and `reproducible` does not search.
+#autotune_composite_playoff_width=2
+
 # If true, `Autotune.tune` logs each candidate to stderr: its spec, whether it failed (with the
 # error message), deduplicated against an already-seen post-schedule digest, or was timed (and
 # its time), plus the cache-hit, winner-replay and fallback outcomes. For debugging search

@@ -871,10 +871,11 @@ type report = {
       (** The composite playoff's windows (gh-ocannl-1166), counted here and NOT in
           [fiss_sketch_timed]. A per-segment single is timed against every other segment's untuned
           preset, a backdrop several times the composite's time, so near-tie singles are re-ranked
-          inside the faster timed composite: per keyed segment, up to [playoff_width] singles within
-          [playoff_margin] of the segment's best single take its place (constants in [autotune.ml]);
-          changing either bumps [Schedule_cache.entry_version]. Includes refused windows, like
-          [fiss_sketch_timed]. *)
+          inside the faster timed composite: per keyed segment, up to config
+          [autotune_composite_playoff_width] (2) singles within [playoff_margin] of the segment's
+          best single take its place; [0] turns the playoff off, and this count stays [0]
+          (gh-ocannl-1259). Changing the margin or the default width bumps
+          [Schedule_cache.entry_version]. Includes refused windows, like [fiss_sketch_timed]. *)
   fiss_sketch_playoff_swaps : int;
       (** Of [fiss_sketch_playoff_timed], the alternates that ran faster than the incumbent
           composite and replaced it, so later segments' alternates build on them. *)
