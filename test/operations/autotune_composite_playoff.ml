@@ -9,6 +9,14 @@
    per-segment sketch is scripted far slower than any of them, so the crown is a composite's by
    construction. Every search is over one two-matmul chain.
 
+   Each search compiles every single it times, and those compiles are the test's cost: unpruned, the
+   chain offers 21 singles per segment, and the test took about 430 s on mac-studio. So every search
+   keeps a fifth of each segment's sketches by the roofline model ([autotune_keep_fraction=0.2],
+   with the envelope constants the model needs, since cc has none of its own, all stated below):
+   five singles per segment, which is all the playoff's claims need. Which five is the model's
+   choice and no claim depends on it; that each segment still offers three or more, without which
+   the width claims could not fail, is claimed ([menu]).
+
    In [ties] every single measures the same, so each segment has near-tie contenders, and each later
    composite is scripted faster than the one before: every admitted playoff window swaps, so each
    window challenges the previous one, differs from it in one segment, and the crown is the last
@@ -90,6 +98,19 @@ type observed = {
 
 let playoff_width_key = "autotune_composite_playoff_width"
 let playoff_margin_key = "autotune_composite_playoff_margin"
+
+(* The model pre-filter (see the header), for every search here, [Train.tune_placements]' arms
+   included: stated at the config-file level before the first search, as the envelope overrides are
+   read once per process (the stanza declares the three keys' environment variables). The envelope
+   only ranks the sketches against each other, so it need not describe the machine. *)
+let () =
+  List.iter
+    [
+      ("autotune_keep_fraction", "0.2");
+      ("model_peak_flops", "1e12");
+      ("model_peak_memory_bandwidth", "1e11");
+    ]
+    ~f:(fun (key, data) -> Hashtbl.set Utils.config_file_args ~key ~data)
 
 (* A list of records as a report counts them: per (settle, admission), in constructor order. *)
 let tally (calls : Autotune.timing_call list) =
@@ -253,6 +274,12 @@ let faster n = 10. -. (0.1 *. Float.of_int n)
 let ties = search ~tag:"ties" ~single:(fun _ -> 100.) ~composite:faster ()
 
 let () =
+  (* The width claims below can fail only where a segment offers more singles than the width. *)
+  let per_segment = singles_per_segment ties in
+  Stdio.eprintf "menu (not part of the golden): singles per segment %s\n%!"
+    (String.concat ~sep:" " (List.map per_segment ~f:Int.to_string));
+  p "menu: the pre-filtered seeding keys two segments" (List.length per_segment = 2);
+  p_all "menu: each segment offers three or more singles" per_segment ~f:(fun n -> n >= 3);
   let r = ties.report in
   p "ties: the coarse composite was timed" (Poly.equal r.Autotune.fiss_sketch_composite `Timed);
   p "ties: the playoff timed alternates" (r.Autotune.fiss_sketch_playoff_timed >= 1);

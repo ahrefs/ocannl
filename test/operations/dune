@@ -8031,7 +8031,8 @@
  (libraries base stdio bench_harness ocannl test_utils arrayjit.verdict))
 
 ; gh-ocannl-1166: the composite playoff re-ranks near-tie per-segment singles inside the
-; recombined composite. Scripted timings, pinned to cc.
+; recombined composite. Scripted timings, pinned to cc; the model pre-filter keeps its searches
+; small, so its three keys are declared alongside the playoff's own.
 
 (test
  (name autotune_composite_playoff)
@@ -8042,7 +8043,10 @@
   (env_var OCANNL_AUTOTUNE_LOG)
   (env_var OCANNL_AUTOTUNE_PROGRESS)
   (env_var OCANNL_AUTOTUNE_COMPOSITE_PLAYOFF_WIDTH)
-  (env_var OCANNL_AUTOTUNE_COMPOSITE_PLAYOFF_MARGIN))
+  (env_var OCANNL_AUTOTUNE_COMPOSITE_PLAYOFF_MARGIN)
+  (env_var OCANNL_AUTOTUNE_KEEP_FRACTION)
+  (env_var OCANNL_MODEL_PEAK_FLOPS)
+  (env_var OCANNL_MODEL_PEAK_MEMORY_BANDWIDTH))
  (modules autotune_composite_playoff)
  (libraries base ocannl stdio unix arrayjit.verdict ll_test)
  (preprocess
