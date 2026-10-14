@@ -4485,7 +4485,14 @@ class CellTimeoutTest(unittest.TestCase):
         # Review round 1: a non-ASCII fixture name reaches the label as `\uXXXX` escapes, six bytes
         # a character, and a long one past 255 bytes would lose the log to a temporary file.
         short = orchestrate.cell_log_name("gpt2 ocannl/cc/tuned (search pass)")
-        self.assertEqual(short, "gpt2_ocannl_cc_tuned__search_pass_.log")
+        self.assertTrue(short.startswith("gpt2_ocannl_cc_tuned__search_pass_-"), short)
+        # Review round 2: sanitizing is lossy and a file system may fold case, so labels the
+        # sanitizer or the file system would merge still get files of their own.
+        merged = [
+            orchestrate.cell_log_name(f"{orchestrate.display_value(stem)} ocannl/cc/default")
+            for stem in ("_a_b_", "a b", "A b")
+        ]
+        self.assertEqual(len({name.lower() for name in merged}), 3, merged)
         stem = orchestrate.display_value("\u5b57" * 40)
         names = {
             orchestrate.cell_log_name(f"{stem} ocannl/cc/{variant}")

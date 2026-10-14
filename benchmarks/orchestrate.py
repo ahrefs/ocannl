@@ -1150,17 +1150,18 @@ CELL_LOG_NAME_MAX = 200
 
 
 def cell_log_name(label):
-    """The file name a cell's log gets under BENCH_CELL_LOG_DIR.
+    """The file name a cell's log gets under BENCH_CELL_LOG_DIR: the label, sanitized and bounded,
+    then a digest of the whole label.
 
-    Bounded: a label longer than `CELL_LOG_NAME_MAX` bytes keeps a prefix and gains a digest of the
-    whole label, so labels sharing that prefix still get distinct files. A long fixture name -- and
-    a non-ASCII one, which `display_value` spells as `\\uXXXX` in the label -- would otherwise
-    produce a name the file system refuses, and the sweep would fall back to a temporary log that
-    is deleted: the durable log the operator asked for, lost.
+    The digest is what makes the name the label's own. Sanitizing is lossy (`a b` and `a_b` both
+    read `a_b`, and a case-folding file system merges `A` and `a`), and every cell opens its log
+    with `wb`, so two labels on one name lose the first cell's durable log to the second. The
+    sanitized prefix is for the reader and stops at `CELL_LOG_NAME_MAX` bytes: a long fixture
+    name -- and a non-ASCII one, which `display_value` spells as `\\uXXXX`, six bytes a character
+    -- would otherwise make a name the file system refuses, and the sweep would fall back to a
+    temporary log that is deleted.
     """
     name = "".join(c if c.isalnum() or c in "-._" else "_" for c in label)
-    if len((name + ".log").encode("utf-8", "surrogatepass")) <= CELL_LOG_NAME_MAX:
-        return name + ".log"
     digest = hashlib.sha256(label.encode("utf-8", "surrogatepass")).hexdigest()[:16]
     suffix = f"-{digest}.log"
     while len((name + suffix).encode("utf-8", "surrogatepass")) > CELL_LOG_NAME_MAX:
