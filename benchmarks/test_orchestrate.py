@@ -241,6 +241,25 @@ def golden_checkpoint_lines():
     ]
 
 
+def golden_checkpoint_line(workload, **stages):
+    """The one golden checkpoint line of `workload` whose stages are as given, e.g.
+    `golden_checkpoint_line("gpt2_mini_train_s1024", dominant_kernel="running")`.
+
+    Looked up by identity, never by position: a checkpoint added to the golden mid-list must not
+    silently change what a test reads. None or several matching is a failure, not a pick."""
+    found = [
+        line
+        for line in golden_checkpoint_lines()
+        if (c := orchestrate.last_checkpoint(line))["workload"] == workload
+        and all(c["stages"].get(stage) == status for stage, status in stages.items())
+    ]
+    if len(found) != 1:
+        raise AssertionError(
+            f"{len(found)} golden checkpoints of {workload} with stages {stages}, expected one"
+        )
+    return found[0]
+
+
 class CheckpointLineTest(unittest.TestCase):
     """gh-ocannl-1209: the checkpoints an OCANNL runner writes before its later stages, as the
     driver reads them."""
@@ -259,7 +278,9 @@ class CheckpointLineTest(unittest.TestCase):
                 self.assertFalse(line.startswith("{"))
 
     def test_the_last_whole_checkpoint_wins_over_a_line_the_kill_cut(self):
-        first, second = golden_checkpoint_lines()[:2]
+        # Cut mid-parity, then the one written before the dominant-kernel instrument.
+        first = golden_checkpoint_line("gpt2_mini_train_s1024", parity="running")
+        second = golden_checkpoint_line("gpt2_mini_train_s1024", dominant_kernel="running")
         text = "\n".join(["bench: parity step 0 loss 10.4", first, second[: len(second) // 2]])
 
         self.assertEqual(orchestrate.last_checkpoint(text), strict_loads(
@@ -275,14 +296,11 @@ class SavedLossParityTest(unittest.TestCase):
     """
 
     def checkpoint(self, complete):
-        lines = [
-            orchestrate.last_checkpoint(line)
-            for line in golden_checkpoint_lines()
-            if orchestrate.last_checkpoint(line)["workload"] == "gpt2_mini_train_s1024"
-        ]
-        found = [c for c in lines if (c["stages"]["parity"] == "complete") == complete]
-        self.assertEqual(len(found), 1, lines)
-        return found[0]
+        return orchestrate.last_checkpoint(
+            golden_checkpoint_line(
+                "gpt2_mini_train_s1024", parity="complete" if complete else "running"
+            )
+        )
 
     def reference(self, checkpoint, scale):
         ref = result("pytorch", "cpu", "eager", [x * scale for x in checkpoint["losses"]])
@@ -340,13 +358,7 @@ class SavedLossParityTest(unittest.TestCase):
 
     def leaked(self):
         """The golden's exact cell an ambient knob reached with no profile behind it."""
-        found = [
-            orchestrate.last_checkpoint(line)
-            for line in golden_checkpoint_lines()
-            if orchestrate.last_checkpoint(line)["workload"] == "mlp_wide"
-        ]
-        self.assertEqual(len(found), 1, found)
-        return found[0]
+        return orchestrate.last_checkpoint(golden_checkpoint_line("mlp_wide", parity="running"))
 
     def test_an_ambient_knob_no_profile_shows_is_named_from_the_checkpoint(self):
         """gh-ocannl-1297: the checkpoint's `regime_knobs`, read as the row gate reads a row's."""
@@ -535,7 +547,9 @@ class FailureRecordTest(unittest.TestCase):
 
     def test_a_checkpoint_is_kept_whole_beside_the_fixture_stamp_and_source(self):
         checkpoint = strict_loads(
-            golden_checkpoint_lines()[1][len(orchestrate.CHECKPOINT_PREFIX):]
+            golden_checkpoint_line("gpt2_mini_train_s1024", dominant_kernel="running")[
+                len(orchestrate.CHECKPOINT_PREFIX):
+            ]
         )
         stamp = {"fixture": "gpt2_mini_train_s1024.safetensors", "fixture_sha256": "ab" * 32,
                  "fixture_origin": "tuf"}
@@ -3478,7 +3492,7 @@ class CellTimeoutTest(unittest.TestCase):
 
     def golden_checkpoint(self, name):
         """A checkpoint line as the OCaml emitter built it (see CheckpointLineTest)."""
-        return next(l for l in golden_checkpoint_lines() if f'"dominant_kernel":"{name}"' in l)
+        return golden_checkpoint_line("gpt2_mini_train_s1024", dominant_kernel=name)
 
     # What a runner writes before its dominant-kernel instrument, as the first line of a child's
     # source: the golden checkpoint arrives as the child's last argument.
