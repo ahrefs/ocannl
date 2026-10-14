@@ -7,3 +7,7 @@ f64: a negative base's power is its mirror's, negated exactly for odd exponents:
 negative zero's integral powers carry C pow's signs: true
 a zero exponent gives 1 for every base, as in C pow: true
 negative bases under fractional or NaN exponents stay NaN: true
+f32: the CUDA-like integer-power helper matches the C one bitwise over the domain: true
+f32: a CUDA-like helper converting where it should reinterpret bits differs from the C one: true
+f64: the CUDA-like integer-power helper matches the C one bitwise over the domain: true
+f64: a CUDA-like helper converting where it should reinterpret bits differs from the C one: true

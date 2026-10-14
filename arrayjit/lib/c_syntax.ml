@@ -23,6 +23,25 @@ let warp_shuffle_stages ~width =
   let rec halvings mask = if mask = 0 then [] else mask :: halvings (mask / 2) in
   halvings (width / 2)
 
+(** The exponent operands of the [ocannl_powi_*] helpers ([Builtins_cc.integer_power_builtins]):
+    [|exponent|] as two unsigned 32-bit words [(lo, hi)] times [2^shift], and whether the exponent
+    is negative. Binary decomposition avoids machine-int overflow and narrowing the exponent; an
+    integral float of magnitude at least [2^53] keeps its 53-bit mantissa and moves the rest into
+    [shift]. The emitter writes exactly these, and a test that calls a helper on the host takes them
+    from here. *)
+let integer_power_operands exponent =
+  let magnitude = Float.abs exponent in
+  let magnitude, shift =
+    if Float.(magnitude < 0x1p53) then (Int64.of_float magnitude, 0)
+    else
+      let mantissa, exponent = Float.frexp magnitude in
+      (Int64.of_float Float.(mantissa * 0x1p53), exponent - 53)
+  in
+  ( Stdlib.Int64.logand magnitude 0xffffffffL,
+    Stdlib.Int64.shift_right_logical magnitude 32,
+    shift,
+    Float.(exponent < 0.) )
+
 (* gh-ocannl-344: integer width of the Metal pooled slot table (pool_index, byte_offset per node).
    With [large_models] the per-pool 4 GB cap is lifted (see {!Backends.plan_pool_segments}), so a
    byte offset can exceed [UINT32_MAX] and the slot table -- together with the MSL type the shader
@@ -2358,16 +2377,7 @@ module C_syntax (B : C_syntax_config) = struct
     let pow_prec = match prec with Ops.Double_prec _ -> Ops.double | _ -> Ops.single in
     let prefix, suffix = B.convert_precision ~from:prec ~to_:pow_prec in
     let base_doc = string prefix ^^ base_doc ^^ string suffix in
-    (* Binary decomposition avoids machine-int overflow and exponent narrowing. *)
-    let magnitude = Float.abs exponent in
-    let magnitude, shift =
-      if Float.(magnitude < 0x1p53) then (Int64.of_float magnitude, 0)
-      else
-        let mantissa, exponent = Float.frexp magnitude in
-        (Int64.of_float Float.(mantissa * 0x1p53), exponent - 53)
-    in
-    let lo = Stdlib.Int64.logand magnitude 0xffffffffL in
-    let hi = Stdlib.Int64.shift_right_logical magnitude 32 in
+    let lo, hi, shift, negative = integer_power_operands exponent in
     let name =
       if Ops.equal_prec pow_prec Ops.double then "ocannl_powi_f64" else "ocannl_powi_f32"
     in
@@ -2375,9 +2385,8 @@ module C_syntax (B : C_syntax_config) = struct
       string name
       ^^ parens
            (base_doc
-           ^^ string
-                (Printf.sprintf ", %LuU, %LuU, %d, %d" lo hi shift
-                   (if Float.(exponent < 0.) then 1 else 0)))
+           ^^ string (Printf.sprintf ", %LuU, %LuU, %d, %d" lo hi shift (if negative then 1 else 0))
+           )
     in
     let prefix, suffix = B.convert_precision ~from:pow_prec ~to_:prec in
     group (string prefix ^^ call ^^ string suffix)

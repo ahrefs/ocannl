@@ -99,6 +99,14 @@
  (modules emitter_frontier)
  (libraries base compiler-libs.common))
 
+; The integer-power domain shared by the backend test and the GPU-free emulation test, stdlib
+; only (gh-ocannl-1185, gh-ocannl-1240).
+
+(library
+ (name integer_power_cases)
+ (package neural_nets_lib)
+ (modules integer_power_cases))
+
 (library
  (name ll_builders)
  (public_name arrayjit.ll_builders)

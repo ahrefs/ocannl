@@ -8359,7 +8359,14 @@
   (env_var OCANNL_BACKEND)
   (env_var OCANNL_BUILD_FILES_PREFIX)
   (env_var OCANNL_SIMPLIFY_FP_ALGEBRA))
- (libraries base ocannl stdio arrayjit.verdict ll_test test_utils))
+ (libraries
+  base
+  ocannl
+  stdio
+  arrayjit.verdict
+  ll_test
+  test_utils
+  integer_power_cases))
 
 ; gh-ocannl-1198: fractional and dynamic half powers compile and execute on CUDA/HIP.
 
@@ -8395,7 +8402,13 @@
  (deps
   ocannl_config
   (env_var OCANNL_CC_BACKEND_COMPILER_COMMAND))
- (libraries arrayjit.context arrayjit.verdict ctypes ctypes.foreign))
+ (libraries
+  arrayjit.context
+  arrayjit.ir
+  arrayjit.verdict
+  integer_power_cases
+  ctypes
+  ctypes.foreign))
 
 ; gh-ocannl-946: declaration-reader controls and real first-parent merge attribution; gh-ocannl-1201
 ; refusals for unread source and Dune forms; gh-ocannl-1213 compact rendering.
