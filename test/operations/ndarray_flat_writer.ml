@@ -1,9 +1,10 @@
 (* gh-ocannl-1258: [Ndarray.set_flat_values] -- the host writer behind [Context.set_values] and
    multi-value host initialization -- against the per-cell [Ndarray.set_from_float] it must agree
-   with, in every storage precision, padded and unpadded. The per-cell oracle walks the
-   before-padding index space with nested loops and lets [set_from_float] apply the margins, so it
-   shares no run arithmetic with the writer. Margins and cells past the end of the values keep a
-   sentinel both buffers were filled with; the raw buffers, margins included, must be equal. *)
+   with, in every storage precision, padded and unpadded, with and without [~cycle]. The per-cell
+   oracle walks the before-padding index space with nested loops and lets [set_from_float] apply the
+   margins, so it shares no run arithmetic with the writer. Margins and cells past the end of the
+   values keep a sentinel both buffers were filled with; the raw buffers, margins included, must be
+   equal. Then: values the conversions reject or wrap, and the writer's heap allocation. *)
 open Base
 open Verdict.Claims
 module Nd = Ir.Ndarray
@@ -30,7 +31,7 @@ let interior ~dims ~pads =
           if axis < Array.length pads then d - pads.(axis).Ops.left - pads.(axis).right else d)
 
 (* The old per-cell path, spelled independently of the writer's run arithmetic. *)
-let per_cell nd ~dims ~pads values =
+let per_cell ~cycle nd ~dims ~pads values =
   let count = Array.length values in
   if Array.is_empty dims then Nd.set_from_float ?padding:pads nd [||] values.(0)
   else
@@ -39,7 +40,8 @@ let per_cell nd ~dims ~pads values =
     let k = ref 0 in
     let rec go axis =
       if axis = Array.length dims then (
-        if !k < count then Nd.set_from_float ?padding:pads nd (Array.copy idx) values.(!k);
+        if cycle then Nd.set_from_float ?padding:pads nd (Array.copy idx) values.(!k % count)
+        else if !k < count then Nd.set_from_float ?padding:pads nd (Array.copy idx) values.(!k);
         Int.incr k)
       else
         for i = 0 to inner.(axis) - 1 do
@@ -49,11 +51,11 @@ let per_cell nd ~dims ~pads values =
     in
     go 0
 
-let agrees ~label ~dims ~pads ~count prec =
+let agrees ?(cycle = false) ~label ~dims ~pads ~count prec =
   let values = make_values count in
   let written = fresh prec ~dims ~pads and expected = fresh prec ~dims ~pads in
-  Nd.set_flat_values ?padding:pads written values;
-  per_cell expected ~dims ~pads values;
+  Nd.set_flat_values ?padding:pads ~cycle written values;
+  per_cell ~cycle expected ~dims ~pads values;
   let got = Nd.retrieve_flat_values written and want = Nd.retrieve_flat_values expected in
   let ok = Array.equal Float.equal got want in
   if not ok then
@@ -61,20 +63,90 @@ let agrees ~label ~dims ~pads ~count prec =
       (Ops.prec_string prec);
   ok
 
+(* The runs both host writers walk ([Ndarray.iter_interior_runs]): non-empty, in increasing order,
+   never adjacent (adjacent runs would be one maximal run, so a run count proportional to the cells
+   would show here), and covering exactly the linear indices inside the margins -- decomposed
+   independently, innermost axis first. *)
+let check_runs label ~dims ~pads =
+  let runs = ref [] in
+  Nd.iter_interior_runs ?padding:pads dims ~f:(fun lo hi -> runs := (lo, hi) :: !runs);
+  let runs = List.rev !runs in
+  let numel = Array.fold dims ~init:1 ~f:( * ) in
+  let axes =
+    Array.mapi dims ~f:(fun axis d ->
+        match pads with
+        | Some pads when axis < Array.length pads -> (d, pads.(axis))
+        | _ -> (d, Ops.{ left = 0; right = 0 }))
+  in
+  let inside k =
+    snd
+      (Array.fold_right axes ~init:(k, true) ~f:(fun (d, Ops.{ left; right }) (rest, inside) ->
+           let i = rest % d in
+           (rest / d, inside && i >= left && i < d - right)))
+  in
+  let covered = Array.create ~len:numel false in
+  let in_bounds = ref true in
+  List.iter runs ~f:(fun (lo, hi) ->
+      if not (0 <= lo && lo < hi && hi <= numel) then in_bounds := false
+      else
+        for j = lo to hi - 1 do
+          covered.(j) <- true
+        done);
+  let rec separated = function
+    | (_, hi) :: ((lo, _) :: _ as rest) -> hi < lo && separated rest
+    | _ -> true
+  in
+  pf "%s: interior runs are non-empty, in bounds, increasing and never adjacent" label
+    ((not (List.is_empty runs)) && !in_bounds && separated runs);
+  p_alli (Printf.sprintf "%s: interior runs cover exactly the cells inside the margins" label)
+    (Array.to_list covered) ~f:(fun k c -> Bool.equal c (inside k))
+
 let case label ~dims ~pads =
+  check_runs label ~dims ~pads;
   let numel = Array.fold (interior ~dims ~pads) ~init:1 ~f:( * ) in
+  (* [numel / 2 + 1] values divide no interior here, so cycling wraps in the middle of a run. *)
   List.iter
-    [ ("as many values as cells", numel); ("fewer values", numel / 2); ("more values", numel + 4) ]
-    ~f:(fun (count_label, count) ->
+    [
+      ("as many values as cells", false, numel);
+      ("fewer values", false, numel / 2);
+      ("more values", false, numel + 4);
+      ("cycling fewer values", true, (numel / 2) + 1);
+      ("cycling more values", true, numel + 4);
+    ]
+    ~f:(fun (count_label, cycle, count) ->
       p_all
         (Printf.sprintf "%s, %s: flat writer matches per-cell writes in every precision" label
            count_label)
         Ops.storage_precs
-        ~f:(agrees ~label ~dims ~pads ~count))
+        ~f:(agrees ~cycle ~label ~dims ~pads ~count))
+
+(* Values a conversion rejects (NaN, out of range: Base's checked [of_float]s, [Char.of_int_exn]) or
+   wraps (the unsigned and narrow ones): each written alone, through both writers, must end the same
+   way -- the same exception, or the same stored cell. *)
+let edge_values = [| Float.nan; 300.; -1.; 3e9; -3e9; 1e19; -1e19; 1e30; -1e30; Float.infinity |]
+
+let same_outcome prec v =
+  let outcome write =
+    let nd = fresh prec ~dims:[| 1 |] ~pads:None in
+    match write nd with
+    | () -> Ok (Nd.retrieve_flat_values nd).(0)
+    | exception exn -> Error (Exn.to_string exn)
+  in
+  let flat = outcome (fun nd -> Nd.set_flat_values nd [| v |]) in
+  let cell = outcome (fun nd -> Nd.set_from_float nd [| 0 |] v) in
+  let ok =
+    match (flat, cell) with
+    | Ok a, Ok b -> Float.(equal a b || (is_nan a && is_nan b))
+    | Error a, Error b -> String.equal a b
+    | _ -> false
+  in
+  if not ok then
+    Stdio.eprintf "edge value %h: %s outcomes differ between the writers\n" v (Ops.prec_string prec);
+  ok
 
 (* Heap words [set_flat_values] allocates over [numel] interior cells: on stderr, as the cost of a
-   host write is a property of this build, not of the golden. Measured on a buffer of 512 runs of 128
-   cells (padded) and on one unpadded run of the same size. *)
+   host write is a property of this build, not of the golden. Measured on a buffer of 512 runs of
+   128 cells (padded) and on one unpadded run of the same size. *)
 let allocated_words ~dims ~pads prec =
   let numel = Array.fold (interior ~dims ~pads) ~init:1 ~f:( * ) in
   let values = make_values numel in
@@ -107,7 +179,26 @@ let () =
     case "unpadded rank 3" ~dims:[| 2; 3; 4 |] ~pads:None);
   p_all "rank 0: flat writer matches the per-cell write in every precision" Ops.storage_precs
     ~f:(agrees ~label:"rank 0" ~dims:[||] ~pads:None ~count:1);
-  List.iter Ops.storage_precs ~f:(fun prec ->
-      let _ : float = allocated_words ~dims:witness_padded_dims ~pads:(Some witness_pads) prec in
-      let _ : float = allocated_words ~dims:witness_unpadded_dims ~pads:None prec in
-      ())
+  p_all "edge values: flat writer raises or stores as the per-cell writer does, in every precision"
+    (List.cartesian_product Ops.storage_precs (Array.to_list edge_values))
+    ~f:(fun (prec, v) -> same_outcome prec v);
+  (* Both witness shapes, for every precision. *)
+  let writes precs =
+    List.concat_map precs ~f:(fun prec ->
+        [
+          allocated_words ~dims:witness_padded_dims ~pads:(Some witness_pads) prec;
+          allocated_words ~dims:witness_unpadded_dims ~pads:None prec;
+        ])
+  in
+  let packed_precs, scalar_precs =
+    List.partition_tf Ops.storage_precs ~f:(fun prec ->
+        match Ops.prec_family prec with Packed_integer -> true | _ -> false)
+  in
+  p_all
+    "a 65536-cell flat write allocates under 512 heap words, padded or not, in every scalar \
+     precision"
+    (writes scalar_precs) ~f:(fun words -> Float.(words < 512.));
+  (* A [uint4x32] cell is an OCaml [Complex.t] record, which the store reads its two halves from:
+     the compiler does not elide that 3-word record, so the bound is the record per cell. *)
+  p_all "a packed uint4x32 flat write allocates no more than its 3-word record per cell"
+    (writes packed_precs) ~f:(fun words -> Float.(words < 512. + (3. * 65536.)))

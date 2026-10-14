@@ -262,6 +262,13 @@ CAMLprim value arrayjit_single_to_bfloat16(value v_float)
   CAMLreturn(Val_int(bf16));
 }
 
+/* The native-code entry point ([@unboxed]/[@untagged], [@@noalloc] in ops.ml): the host writers
+   narrow per cell, and boxing the argument would allocate per cell (gh-ocannl-1258). */
+intnat arrayjit_single_to_bfloat16_unboxed(double f)
+{
+  return single_to_bfloat16((float)f);
+}
+
 /* Half (Float16) to Float conversion (OCaml wrapper) */
 CAMLprim value arrayjit_half_to_single(value v_half)
 {
@@ -306,6 +313,12 @@ CAMLprim value arrayjit_double_to_fp8(value v_float)
   double f = Double_val(v_float);
   uint8_t fp8 = double_to_fp8(f);
   CAMLreturn(Val_int(fp8));
+}
+
+/* Native-code entry point, as for [arrayjit_single_to_bfloat16_unboxed]. */
+intnat arrayjit_double_to_fp8_unboxed(double f)
+{
+  return double_to_fp8(f);
 }
 
 // TODO: a more efficient approach would involve computing strides once and using memcpy

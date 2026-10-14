@@ -1061,13 +1061,20 @@ type axis_padding = { left : int; right : int } [@@deriving sexp, equal]
 external bfloat16_to_single : int -> float = "arrayjit_bfloat16_to_single"
 (** Original conversion functions *)
 
-external single_to_bfloat16 : float -> int = "arrayjit_single_to_bfloat16"
+(* The host-side narrowings are unboxed in native code, so a per-cell host write allocates nothing
+   (gh-ocannl-1258). *)
+external single_to_bfloat16 : (float[@unboxed]) -> (int[@untagged])
+  = "arrayjit_single_to_bfloat16" "arrayjit_single_to_bfloat16_unboxed"
+[@@noalloc]
+
 external half_to_single : int -> float = "arrayjit_half_to_single"
 external single_to_half : float -> int = "arrayjit_single_to_half"
 external fp8_to_single : int -> float = "arrayjit_fp8_to_single"
 external single_to_fp8 : float -> int = "arrayjit_single_to_fp8"
 
-external double_to_fp8 : float -> int = "arrayjit_double_to_fp8"
+external double_to_fp8 : (float[@unboxed]) -> (int[@untagged])
+  = "arrayjit_double_to_fp8" "arrayjit_double_to_fp8_unboxed"
+[@@noalloc]
 (** One-step f64 -> e5m2, for the host side (an OCaml float is a double) and for the C backends'
     [Double_prec] sources. Narrowing via f32 first rounds twice, which disagrees with the GPU fp8
     types for values just off an f32 tie (gh-ocannl-648). *)

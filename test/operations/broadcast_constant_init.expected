@@ -98,3 +98,8 @@ padded scalar host fill allocates under 512 heap words, whatever its cell count:
 witness forces the host initializer itself: true
 witness buffer carries committed padding: true
 padded scalar host fill allocates under 512 heap words, whatever its cell count: true
+multi-value literal within the limit initializes through its values: true
+witness forces the host initializer itself: true
+witness buffer carries committed padding: true
+padded multi-value host fill allocates under 512 heap words, whatever its cell count: true
+multi-value host buffer holds the values row-major inside neutral margins: true

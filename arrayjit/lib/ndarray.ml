@@ -251,7 +251,7 @@ let compute_end_idx ?padding dims axis =
 let uint32_to_float (x : int32) =
   Stdlib.Int64.to_float (Stdlib.Int64.logand (Stdlib.Int64.of_int32 x) 0xFFFFFFFFL)
 
-let float_to_uint32 v = Stdlib.Int64.to_int32 (Stdlib.Int64.of_float v)
+let[@inline] float_to_uint32 v = Stdlib.Int64.to_int32 (Stdlib.Int64.of_float v)
 let two_pow_63 = 9_223_372_036_854_775_808.0
 
 let uint64_to_float (x : int64) =
@@ -267,7 +267,7 @@ let uint64_to_float (x : int64) =
       (Stdlib.Int64.logor (Stdlib.Int64.shift_right_logical x 1) (Stdlib.Int64.logand x 1L))
     *. 2.0
 
-let float_to_uint64 v =
+let[@inline] float_to_uint64 v =
   if Float.(v < two_pow_63) then Stdlib.Int64.of_float v
   else Stdlib.Int64.add (Stdlib.Int64.of_float (v -. two_pow_63)) Stdlib.Int64.min_int
 
@@ -289,45 +289,55 @@ let set_from_float ?padding arr idx v =
   | Single_nd arr -> A.set arr adjusted_idx v
   | Double_nd arr -> A.set arr adjusted_idx v
 
+(** Calls [f lo hi] on each maximal contiguous run [\[lo, hi)] of row-major linear indices of a
+    [dims]-shaped buffer that lies inside [padding]'s margins, in row-major order. A run is the
+    interior of the last padded axis together with every unpadded axis after it; without margins
+    there is one run, the whole buffer. Axes past the end of [padding] are unpadded. It allocates
+    nothing per run or per cell (gh-ocannl-1218): an [Array1.sub] view per run would cost about 7
+    heap words each, which for a short innermost run is proportional to the cell count again -- so
+    its callers write through one flat view ({!Bigarray.reshape_1}) cell by cell. *)
+let iter_interior_runs ?padding dims ~f =
+  (* Reads the margins in place: a fresh pair per run would allocate. *)
+  let pad axis =
+    match padding with
+    | Some padding when axis < Array.length padding -> padding.(axis)
+    | _ -> Ops.{ left = 0; right = 0 }
+  in
+  let lo axis = (pad axis).left and hi axis = dims.(axis) - (pad axis).right in
+  let last_padded =
+    Array.foldi dims ~init:(-1) ~f:(fun axis acc d ->
+        if lo axis > 0 || hi axis < d then axis else acc)
+  in
+  if last_padded < 0 then f 0 (Array.fold dims ~init:1 ~f:( * ))
+  else
+    let run_unit =
+      Array.foldi dims ~init:1 ~f:(fun axis acc d -> if axis > last_padded then acc * d else acc)
+    in
+    (* [base] is the linear index, over the axes before [axis], of the current prefix, scaled by
+       [dims.(axis)]: the linear index over axes up to [axis] of position 0 along [axis]. *)
+    let rec go axis base =
+      if axis = last_padded then (
+        if lo axis < hi axis then f ((base + lo axis) * run_unit) ((base + hi axis) * run_unit))
+      else
+        for i = lo axis to hi axis - 1 do
+          go (axis + 1) ((base + i) * dims.(axis + 1))
+        done
+    in
+    go 0 0
+
 (** Sets every cell of [arr] to [v]; with [~padding], only the cells inside the margins, which keep
     their contents. *)
 let fill_from_float ?padding arr v =
-  (* A padded fill writes contiguous runs -- the interior of the last padded axis together with
-     every unpadded axis after it -- cell by cell through a flat view. It allocates nothing per run
-     or per cell (gh-ocannl-1218): an [Array1.sub] view per run would cost about 7 heap words each,
-     which for a short innermost run is proportional to the cell count again. *)
   let fill (type ocaml elt_t) (arr : (ocaml, elt_t) bigarray) (x : ocaml) =
     let dims = A.dims arr in
-    (* Reads the margins in place: a fresh pair per run would allocate. *)
-    let pad axis =
-      match padding with
-      | Some padding when axis < Array.length padding -> padding.(axis)
-      | _ -> Ops.{ left = 0; right = 0 }
-    in
-    let lo axis = (pad axis).left and hi axis = dims.(axis) - (pad axis).right in
-    let last_padded =
-      Array.foldi dims ~init:(-1) ~f:(fun axis acc d ->
-          if lo axis > 0 || hi axis < d then axis else acc)
-    in
-    if last_padded < 0 then A.fill arr x
-    else
-      let flat = Bigarray.reshape_1 arr (Array.fold dims ~init:1 ~f:( * )) in
-      let run_unit =
-        Array.foldi dims ~init:1 ~f:(fun axis acc d -> if axis > last_padded then acc * d else acc)
-      in
-      (* [base] is the linear index, over the axes before [axis], of the current prefix, scaled by
-         [dims.(axis)]: the linear index over axes up to [axis] of position 0 along [axis]. *)
-      let rec go axis base =
-        if axis = last_padded then
-          for j = (base + lo axis) * run_unit to ((base + hi axis) * run_unit) - 1 do
-            Bigarray.Array1.set flat j x
-          done
+    let numel = Array.fold dims ~init:1 ~f:( * ) in
+    let flat = Bigarray.reshape_1 arr numel in
+    iter_interior_runs ?padding dims ~f:(fun lo hi ->
+        if hi - lo = numel then A.fill arr x
         else
-          for i = lo axis to hi axis - 1 do
-            go (axis + 1) ((base + i) * dims.(axis + 1))
-          done
-      in
-      go 0 0
+          for j = lo to hi - 1 do
+            Bigarray.Array1.set flat j x
+          done)
   in
   match arr with
   | Byte_nd arr -> fill arr @@ Char.of_int_exn @@ Int.of_float v
@@ -487,26 +497,97 @@ let retrieve_flat_values ?padding arr =
     iter 0;
     Array.of_list_rev !result
 
-let set_flat_values ?padding arr values =
+(** Writes [values] into the cells of [arr] inside [padding]'s margins, in row-major order, through
+    the same conversions as {!set_from_float}; the margins keep their contents. Cells past the end
+    of [values] keep theirs too, and surplus values are ignored -- unless [~cycle:true], where the
+    values repeat from the start to cover every interior cell ([Constant_fill]'s semantics; an empty
+    [values] then writes nothing). A rank-0 [arr] takes [values.(0)].
+
+    It allocates a constant number of heap words whatever the cell count (gh-ocannl-1258): runs come
+    from {!iter_interior_runs}, and each precision's store is written where its bigarray kind is
+    known, so the compiler stores the converted value unboxed. *)
+let set_flat_values ?padding ?(cycle = false) arr values =
   let dims = dims arr in
   if Array.is_empty dims then set_from_float ?padding arr [||] values.(0)
   else
-    let n_axes = Array.length dims in
-    let idx = Array.create ~len:n_axes 0 in
-    let values_idx = ref 0 in
-    let rec iter axis =
-      if axis = n_axes then (
-        if !values_idx < Array.length values then (
-          set_from_float ?padding arr idx values.(!values_idx);
-          Int.incr values_idx))
-      else
-        let end_idx = compute_end_idx ?padding dims axis in
-        for p = 0 to end_idx do
-          idx.(axis) <- p;
-          iter (axis + 1)
-        done
+    let count = Array.length values in
+    let numel = Array.fold dims ~init:1 ~f:( * ) in
+    let flat_view arr = Bigarray.reshape_1 arr numel in
+    (* Base's checked [of_float]s are out-of-line calls, so each one boxes its float argument (and
+       the [int32]/[int64] result): heap words per cell in a bulk writer. These convert with the
+       unboxed primitive, which is what Base returns wherever it accepts the argument, and consult
+       Base only outside a range inside the one it accepts -- NaN, out of range -- where it raises
+       exactly as {!set_from_float} does. Base's result is discarded rather than returned: a branch
+       that returned it would make the result boxed on the fast path too. *)
+    let[@inline] checked_int_of_float v =
+      if not Float.(v >= -4611686018427387904. && v < 4611686018427387904.) then
+        ignore (Int.of_float v : int);
+      Int.of_float_unchecked v
     in
-    iter 0
+    let[@inline] checked_int32_of_float v =
+      if not Float.(v >= -2147483648. && v < 2147483648.) then ignore (Int32.of_float v : int32);
+      Int32.of_float_unchecked v
+    in
+    let[@inline] checked_int64_of_float v =
+      if not Float.(v >= -9223372036854775808. && v < 9223372036854775808.) then
+        ignore (Int64.of_float v : int64);
+      Int64.of_float_unchecked v
+    in
+    (* [set j k] stores [values.(k)] at linear index [j]; it takes ints, so the call boxes
+       nothing. *)
+    let write (set : int -> int -> unit) =
+      let k = ref 0 in
+      if count > 0 then
+        iter_interior_runs ?padding dims ~f:(fun lo hi ->
+            if cycle then
+              for j = lo to hi - 1 do
+                set j !k;
+                k := if !k + 1 = count then 0 else !k + 1
+              done
+            else
+              for j = lo to min hi (lo + count - !k) - 1 do
+                set j !k;
+                Int.incr k
+              done)
+    in
+    let module A1 = Bigarray.Array1 in
+    match arr with
+    | Byte_nd arr ->
+        let flat = flat_view arr in
+        write (fun j k -> A1.set flat j @@ Char.of_int_exn @@ checked_int_of_float values.(k))
+    | Uint16_nd arr ->
+        let flat = flat_view arr in
+        write (fun j k -> A1.set flat j @@ checked_int_of_float values.(k))
+    | Int32_nd arr ->
+        let flat = flat_view arr in
+        write (fun j k -> A1.set flat j @@ checked_int32_of_float values.(k))
+    | Uint32_nd arr ->
+        let flat = flat_view arr in
+        write (fun j k -> A1.set flat j @@ float_to_uint32 values.(k))
+    | Int64_nd arr ->
+        let flat = flat_view arr in
+        write (fun j k -> A1.set flat j @@ checked_int64_of_float values.(k))
+    | Uint64_nd arr ->
+        let flat = flat_view arr in
+        write (fun j k -> A1.set flat j @@ float_to_uint64 values.(k))
+    | Uint4x32_nd arr ->
+        let flat = flat_view arr in
+        write (fun j k -> A1.set flat j Stdlib.Complex.{ re = values.(k); im = 0.0 })
+    | Half_nd arr ->
+        let flat = flat_view arr in
+        write (fun j k -> A1.set flat j values.(k))
+    | Bfloat16_nd arr ->
+        let flat = flat_view arr in
+        write (fun j k -> A1.set flat j @@ Ops.single_to_bfloat16 values.(k))
+    | Fp8_nd arr ->
+        let flat = flat_view arr in
+        write (fun j k -> A1.set flat j @@ Char.of_int_exn @@ Ops.double_to_fp8 values.(k))
+    | Single_nd arr ->
+        let flat = flat_view arr in
+        write (fun j k -> A1.set flat j values.(k))
+    | Double_nd arr ->
+        let flat = flat_view arr in
+        write (fun j k -> A1.set flat j values.(k))
 
 let c_ptr_to_string nd =
   let prec = get_prec nd in
