@@ -9,7 +9,7 @@
    it can become routine scratch. The raw analysis sees a gather only in IR handed to [optimize]
    already carrying one, as here ([Ll_test]'s supported input class); in the pipeline, gathers are
    minted after it, and the same coverage reaches [reconcile_traced_store]'s re-judgement of spliced
-   reads instead.
+   reads instead — leg 12 executes that path (gh-ocannl-1245).
 
    Coverage changes which buffer a cell's value comes from, so each leg is executed, with the table
    writes discriminating ([Ll_test.tag]/[tick] values, clear of the zero-init) and the runtime row
@@ -250,3 +250,95 @@ let () =
            (Ll_test.add (gather ~tbl ~idx (Ll_test.iter e)) (Ll_test.tick e))))
     ~row:2
     ~expected:[| entry 4 +. 1.; entry 5 +. 2. |]
+
+(* Leg 12 (gh-ocannl-1245): the decision the coverage change moves in production —
+   [reconcile_traced_store]'s re-judgement of SPLICED reads. A packed-uniform producer [u :=
+   uniform(ctr)] ([Set_from_vec], four single lanes per [uint4x32] counter block) is deferred by
+   routine A. Routine B first writes every block of the counter (threefry bits of a range, so each
+   block and each lane differ), then reads [u]. The inherited computation is spliced at B's read in
+   the lane-extract form [uniform_lane(ctr[flat / 4], flat mod 4)]: the counter read becomes a
+   GATHER that splicing put after the counter's write. The strict re-check applies only to reads
+   spliced from an INHERITED computation (a uniform deferred and read within one routine splices
+   locally and keeps the raw verdicts, hence the separate routine A), and [reads_covered_query]
+   answers it over B's final code; the gather's row is a universal coordinate the full write covers,
+   so the counter must stay out of read-before-write — no flip, no input of B. The structural claims
+   pin that the case reaches that path. B then executes, with the counter never seeded, against a
+   twin that evaluates the same text with [u] materialized in B itself, right after the counter's
+   write: recompute-at-read is that reading (gh-ocannl-617). The random bits vary with every block
+   and lane, so a read of the wrong block or lane, or of a counter buffer B never filled, cannot
+   reproduce the twin's values. *)
+let () =
+  Verdict.case "dac_lane" @@ fun () ->
+  let name = "dac_lane" in
+  let blocks = 3 and lanes = Ops.vec_unop_lanes Ops.single in
+  let cells = blocks * lanes in
+  let u4 = Ll_test.node_factory ~prec:Ops.uint4x32 ~first_id:12450 ~dims:[| blocks |] () in
+  let ctr = u4 (name ^ "_ctr") and rng = u4 (name ^ "_rng") in
+  let u = node ~dims:[| cells |] (name ^ "_u") in
+  let out = node ~dims:[| cells |] (name ^ "_out") in
+  Ll_test.materialize ctr;
+  Ll_test.materialize out;
+  (* [u[lanes * b .. lanes * b + lanes - 1] := uniform(ctr[b])], the lowering's packed form. *)
+  let store_u () =
+    let b = Ll_test.sym () in
+    Ll_test.loop_n b blocks
+      (LL.Set_from_vec
+         {
+           tn = u;
+           idcs = [| Ll_test.aff [ (lanes, b) ] 0 |];
+           length = lanes;
+           vec_unop = Ops.Uint4x32_to_prec_uniform;
+           arg = (Ll_test.get ctr [| Ll_test.iter b |], Ops.uint4x32);
+           debug = "";
+         })
+  in
+  (* [rng[b] := b; ctr[b] := threefry(rng[b], rng[b])]: the counter in full, before the read. *)
+  let write_ctr () =
+    let b = Ll_test.sym () and b' = Ll_test.sym () in
+    let r = (Ll_test.get rng [| Ll_test.iter b' |], Ops.uint4x32) in
+    Ll_test.seq
+      (Ll_test.loop_n b blocks (Ll_test.set rng [| Ll_test.iter b |] (Ll_test.embed b)))
+      (Ll_test.loop_n b' blocks
+         (Ll_test.set ctr [| Ll_test.iter b' |] (LL.Binop (Ops.Threefry4x32_light, r, r))))
+  in
+  let read_u () =
+    let i = Ll_test.sym () in
+    Ll_test.loop_n i cells
+      (Ll_test.set out [| Ll_test.iter i |] (Ll_test.get u [| Ll_test.iter i |]))
+  in
+  let ctx = LL.empty_optimize_ctx () in
+  let o_a = Ll_test.optimize_in ctx ~name:(name ^ "_a") (store_u ()) in
+  pf "%s: routine A defers the uniform" name (Ll_test.known_virtual o_a u);
+  let o = Ll_test.optimize_in ctx ~name (Ll_test.seq (write_ctr ()) (read_u ())) in
+  let gathers_ctr =
+    Ll_test.count_scalar o.LL.llc ~f:(function
+      | LL.Get_dynamic { tn; _ } -> Tn.equal tn ctr
+      | _ -> false)
+  in
+  pf "%s: routine B writes the counter" name (Ll_test.count_set o ctr > 0);
+  pf "%s: the splice reads the counter through a lane-extract gather" name (gathers_ctr > 0);
+  pf "%s: the gather is covered, so the counter is not read-before-write" name
+    (not (read_before_write o ctr));
+  pf "%s: the splice did not flip the counter to read-before-write" name
+    (not (Set.mem o.LL.spliced_rbw ctr));
+  pf "%s: the counter is not an input of routine B" name (not (is_input o ctr));
+  let got = Ll_test.execute ~name o ~seed:[ (out, Ll_test.blank cells) ] ~read:[ out ] in
+  Stdio.eprintf "%s: backend=%s (not part of the golden)\n%!" name
+    (Context.backend_name (Lazy.force Ll_test.base_ctx));
+  let name_mat = name ^ "_mat" in
+  let o_mat =
+    Ll_test.optimize ~materialized:[ u ] ~name:name_mat
+      (Ll_test.seq (write_ctr ()) (Ll_test.seq (store_u ()) (read_u ())))
+  in
+  let got_mat =
+    Ll_test.execute ~name:name_mat o_mat ~seed:[ (out, Ll_test.blank cells) ] ~read:[ out ]
+  in
+  pf "%s: the twin stores the uniform" name (Ll_test.count_set o_mat u > 0);
+  let values = List.hd_exn got in
+  pf "%s: the random stream holds %d pairwise distinct values" name cells
+    (Array.length values = cells
+    && List.length (List.dedup_and_sort (Array.to_list values) ~compare:Float.compare) = cells);
+  p_all (name ^ ": every value lies in [0, 1)") (Array.to_list values) ~f:(fun v ->
+      Float.(v >= 0. && v < 1.));
+  pf "%s: the twin with the uniform materialized in B reads the same values" name
+    (Ll_test.same got got_mat)

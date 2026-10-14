@@ -2103,6 +2103,9 @@
 ; environment's backend, each beside a materialized twin or seeded entry values. gh-ocannl-1244:
 ; the read-modify-write exemption never takes a dynamic slot's placeholder for a position --
 ; verdict legs over gathers and scatters, and the issue's gather-under-a-fixed-row-Set executed.
+; gh-ocannl-1245: a deferred packed uniform spliced into a later routine as a lane-extract gather of
+; a counter that routine writes first -- reconcile_traced_store's re-check keeps the counter out of
+; read-before-write; executed against a twin with the uniform materialized.
 
 (test
  (name dynamic_axis_coverage)
@@ -2111,7 +2114,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules dynamic_axis_coverage)
- (libraries base ocannl arrayjit.verdict ll_test))
+ (libraries base ocannl stdio arrayjit.verdict ll_test))
 
 ; gh-ocannl-696: the loop-carried recurrence construct [Scan_loop] on hand-built IR -- executed
 ; cumulative sums in both directions, the online-softmax recurrence, a per-row scan under a Grid
