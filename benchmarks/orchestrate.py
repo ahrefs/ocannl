@@ -739,7 +739,7 @@ def runner_regime(result):
     return result.get("runner_regime")
 
 
-def regime_knob_leaks(result):
+def regime_knob_leaks(result, regime=None, ocannl_flags=None):
     """The approximate-payload keys an OCANNL row resolved from a source its regime does not own.
 
     None when the runner did not report them. The regime is the resolution of those keys, not the
@@ -756,12 +756,18 @@ def regime_knob_leaks(result):
     reports the key from the commandline at exactly the value the row's `ocannl_flags` records
     the sweep passing, so the operator asked for it, and the row's variant names it in the report
     (`ocannl_flags_note`) where the number is read.
+
+    A checkpoint carries the same `regime_knobs` (gh-ocannl-1297) but neither the sweep's `regime`
+    stamp nor the cell's `ocannl_flags`, so `saved_loss_parity` passes both: `regime` and
+    `ocannl_flags` stand in for the record's own when given.
     """
     knobs = result.get("regime_knobs")
     if knobs is None:
         return None
-    regime = regime_of(result)
-    declared = cmdline_settings(result.get("ocannl_flags") or [])
+    regime = regime or regime_of(result)
+    if ocannl_flags is None:
+        ocannl_flags = result.get("ocannl_flags")
+    declared = cmdline_settings(ocannl_flags or [])
     leaks = {}
     for key, knob in sorted(knobs.items()):
         source = knob.get("source", "?")
@@ -1755,7 +1761,7 @@ def parity_check(results):
                     r["parity_exact_envelope"] = bool(max_rel is not None and max_rel < exact_tol)
 
 
-def saved_loss_parity(checkpoint, regime, results):
+def saved_loss_parity(checkpoint, regime, results, ocannl_flags=None):
     """What a failed cell's saved losses say against the reference: a DIAGNOSTIC, never acceptance.
 
     A cell killed after its parity steps keeps the losses it completed in its last checkpoint
@@ -1770,6 +1776,13 @@ def saved_loss_parity(checkpoint, regime, results):
     an offline reader of partial-failures.jsonl falls back to the wrong envelope. `regime` is what
     the sweep dispatched, None when unstated: the envelope for a checkpoint predating the field,
     and named beside the drift when the runner resolved a different regime.
+
+    A profile name cannot show an ambient knob with no profile behind it (an OCANNL_TF32_MATMULS
+    reaching an exact cell), so the checkpoint also records where each approximate-payload key
+    resolved from (`regime_knobs`, gh-ocannl-1297), and a key outside the envelope's regime is
+    named as `regime_knob_leaks` names it for a row -- the envelope is the regime's, and these
+    losses were not computed in it. `ocannl_flags` is the cell's declared `--cell-flag` settings
+    (its failure stamp), the one commandline override that is not a leak, as for a row.
     """
     if checkpoint is None:
         return "no checkpoint"
@@ -1783,6 +1796,9 @@ def saved_loss_parity(checkpoint, regime, results):
     notes = []
     if ran is not None and regime is not None and ran != regime:
         notes.append(f"the runner resolved the {ran} regime, the sweep dispatched {regime}")
+    leaks = regime_knob_leaks(checkpoint, regime=gated, ocannl_flags=ocannl_flags)
+    if leaks:
+        notes.append(f"outside the {gated} regime: " + ", ".join(leaks.values()))
     if ref is None or diverged_at(ref["losses"]) is not None:
         # Only the drift needs the reference; what the trajectory says about itself still stands.
         notes.append(f"no usable reference row for `{checkpoint.get('workload')}`")
@@ -2707,7 +2723,9 @@ def report(
         lines.append("| cell | why | saved losses vs reference (diagnostic, never acceptance) |")
         lines.append("|---|---|---|")
         for f in map(lambda f: Failure(*f), failures):
-            diagnostic = saved_loss_parity(f.checkpoint, f.regime, results)
+            diagnostic = saved_loss_parity(
+                f.checkpoint, f.regime, results, (f.stamp or {}).get("ocannl_flags")
+            )
             lines.append(f"| {f.label} | {f.note or 'no result line'} | {diagnostic} |")
     text = "\n".join(lines) + "\n"
     (out_dir / "report.md").write_text(text)

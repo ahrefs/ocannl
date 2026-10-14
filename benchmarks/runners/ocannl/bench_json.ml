@@ -391,9 +391,12 @@ type checkpoint_at =
     same bytes for the same step. [profile] is the profile this process resolved, as on the result
     line: the losses' numerics regime travels with them, so [orchestrate.py]'s saved-loss diagnostic
     reads the envelope off the checkpoint rather than off what the sweep remembered dispatching, and
-    an offline reader of [partial-failures.jsonl] can recompute it. *)
-let checkpoint_line ~backend ~variant ~precision ~profile ~workload ~fixture ~executable
-    ~parity_steps ~dominant_kernel ~completed_steps ~at ~losses =
+    an offline reader of [partial-failures.jsonl] can recompute it. [regime_knobs] is the result
+    line's own per-setting record of that regime ({!regime_knobs_object}, gh-ocannl-1297): a profile
+    name cannot show an ambient knob with no profile behind it — [OCANNL_TF32_MATMULS] on an exact
+    cell — so without it the saved-loss diagnostic read such a cell's losses as exact ones. *)
+let checkpoint_line ~backend ~variant ~precision ~profile ~regime_knobs ~workload ~fixture
+    ~executable ~parity_steps ~dominant_kernel ~completed_steps ~at ~losses =
   let parity, warmup, timing, instrument =
     match at with
     | In_parity k ->
@@ -407,7 +410,8 @@ let checkpoint_line ~backend ~variant ~precision ~profile ~workload ~fixture ~ex
     | Some (path, bytes) -> Printf.sprintf {|{"path":"%s","bytes":%d}|} (string path) bytes
   in
   Printf.sprintf
-    {|{"record":"checkpoint","accepted":false,"framework":"ocannl","backend":"%s","variant":"%s","precision":"%s","profile":%s,"workload":"%s","fixture":%s,"executable":"%s","stages":{"parity":"%s","warmup":"%s","timing":"%s","dominant_kernel":"%s","result":"pending"},"parity_steps":%d,"completed_steps":%d,"losses":[%s]}|}
-    (string backend) (string variant) (string precision) (profile_value profile) (string workload)
-    fixture_field (string executable) parity warmup timing instrument parity_steps completed_steps
-    (nums ~prec:9 losses)
+    {|{"record":"checkpoint","accepted":false,"framework":"ocannl","backend":"%s","variant":"%s","precision":"%s","profile":%s,"regime_knobs":%s,"workload":"%s","fixture":%s,"executable":"%s","stages":{"parity":"%s","warmup":"%s","timing":"%s","dominant_kernel":"%s","result":"pending"},"parity_steps":%d,"completed_steps":%d,"losses":[%s]}|}
+    (string backend) (string variant) (string precision) (profile_value profile)
+    (regime_knobs_object regime_knobs)
+    (string workload) fixture_field (string executable) parity warmup timing instrument parity_steps
+    completed_steps (nums ~prec:9 losses)
