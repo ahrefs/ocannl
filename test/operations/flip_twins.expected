@@ -33,6 +33,10 @@ it skips at least one twin on the way: true
 the two flips it measures are of distinct twin classes: true
 every measured flip is searched in full: true
 a flip that lost a full search anchors its twin: true
+a flip whose windows were all refused timed nothing: true
+a flip that timed nothing anchors no twin: true
+y2 is measured after y1 timed nothing: true
 the winning chain ships a refined placement: true
 no flip is skipped as a twin when the flips win: true
 y2 is measured after y1 won: true
+declaring x2 observable separates it from its twin x1: true

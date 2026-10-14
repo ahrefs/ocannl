@@ -309,10 +309,27 @@ let () =
       Poly.equal r.Autotune.outcome Autotune.Searched);
   p "a flip that lost a full search anchors its twin"
     (Option.exists (twin_of y2 lost) ~f:(names y1));
+  (* Only clean evidence anchors: a flip whose every window is refused (a NaN reading, refused as a
+     contended window is) measured nothing, so its twin is measured in turn. *)
+  let refused ~flip:_ _ = Float.nan in
+  let unclean = run_chain ~budget:2 comp loss ~flip_script:refused in
+  p "a flip whose windows were all refused timed nothing"
+    (match unclean.flip_reports with
+    | r :: _ -> r.Autotune.candidates_timed = 0 && r.Autotune.timings_contended > 0
+    | [] -> false);
+  p_empty "a flip that timed nothing anchors no twin" ~over:unclean.measured_arms unclean.twins;
+  p "y2 is measured after y1 timed nothing" (measured y1 unclean && measured y2 unclean);
   (* The control: every flip wins, each beating the one accepted before it. A flip that is accepted
      did not lose, so it anchors nothing and its twin is measured. *)
   let winning ~flip _ = 2.0 /. Float.of_int flip in
   let won = run_chain ~budget:2 comp loss ~flip_script:winning in
   p "the winning chain ships a refined placement" (List.equal String.equal won.shipped [ "flip" ]);
   p_empty "no flip is skipped as a twin when the flips win" ~over:won.measured_arms won.twins;
-  p "y2 is measured after y1 won" (measured y1 won && measured y2 won)
+  p "y2 is measured after y1 won" (measured y1 won && measured y2 won);
+  (* Observability decides whether a materialized buffer can be aliased, so it enters the identity:
+     declaring [x2] observable separates it from [x1]. Last, since the declaration is monotone. *)
+  let was_twin = twins x1 x2 in
+  let was_observable = Tn.is_observable x2.Tensor.value in
+  Tn.set_observable x2.Tensor.value;
+  p "declaring x2 observable separates it from its twin x1"
+    (was_twin && (not was_observable) && not (twins x1 x2))

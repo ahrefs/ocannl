@@ -1478,9 +1478,13 @@ type placement_surface = {
           whose identity matches one already measured and lost in the same chain, without a budget
           slot. [None] — never a twin — when the rendering is incomplete, or the raw program holds
           an opaque construct anywhere (a [Staged_compilation] touches no node the neighbourhood
-          filter can see). The neighbourhood is one hop: a difference that reaches the flip only
-          through a farther node (a producer of a producer) shows only through the recompute cost.
-      *)
+          filter can see), or no statement here assigns the node (an inherited footprint-scoped one,
+          whose computation lives in the lineage). Each node's observability is tagged too: it
+          decides whether a materialized buffer can be aliased. The identity is LOCAL by design:
+          whole-routine context such as where the neighbourhood sits in the routine (and so the
+          node's live range) is not in it, since per-layer twins differ in exactly that. The
+          neighbourhood is one hop: a difference that reaches the flip only through a farther node
+          (a producer of a producer) shows only through the recompute cost. *)
 }
 (** The placement decision surface prepared for search (gh-ocannl-514): the per-node
     inline/materialize levels of the joint placement x sketch x fission space. *)

@@ -1702,15 +1702,27 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
                   List.min_elt results ~compare:(fun (_, _, a, _, _, _, _) (_, _, b, _, _, _, _) ->
                       Float.compare a b)
                 in
-                (* Every alternative that lost to the incumbent becomes a twin anchor: abandoned, or
-                   completed no faster than the incumbent. A failed search measured nothing about
-                   the flip, and a sibling that beat the incumbent but not the group's best did not
-                   lose. *)
-                List.iter results ~f:(fun (_, r, ms, _, _, _, (arm, identity)) ->
+                (* Every alternative that lost to the incumbent on clean evidence becomes a twin
+                   anchor: abandoned, or completed at a finite time no faster than the incumbent. A
+                   failed search measured nothing about the flip, and a sibling that beat the
+                   incumbent but not the group's best did not lose. *)
+                List.iter results ~f:(fun (_, r, ms, _, _, rep, (arm, identity)) ->
+                    (* Only clean evidence anchors: a search with a refused (contended) window
+                       ranked an incomplete candidate set, and one that timed nothing measured
+                       nothing -- its twin gets its own chance. The search-disabled report is the
+                       exception: nothing is ever timed there, nothing can ship from a flip, and
+                       anchoring is what makes a search-off chain list its twin classes. *)
+                    let search_off, clean =
+                      match rep with
+                      | Some { Autotune.outcome = Autotune.Search_disabled; _ } -> (true, true)
+                      | Some rep -> (false, rep.Autotune.timings_contended = 0)
+                      | None -> (false, false)
+                    in
                     let lost_to_incumbent =
                       match r with
-                      | Error (Autotune.Search_abandoned _, _) -> true
-                      | Ok _ -> Float.(ms >= chain_ms)
+                      | Error (Autotune.Search_abandoned _, _) -> clean
+                      | Ok _ when search_off -> true
+                      | Ok _ -> clean && Float.is_finite ms && Float.(ms >= chain_ms)
                       | Error _ -> false
                     in
                     match identity with
