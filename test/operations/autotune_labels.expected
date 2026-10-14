@@ -2,7 +2,7 @@ the two base points differ in every field: true
 changing any one field of the common base point changes its label: true
 changing any one field of the unusual base point changes its label: true
 no label carries a comma: true
-one-entry sketch candidates of two segments with equal parameters print apart: true
+one-entry sketch candidates of distinct segment keys with equal parameters print apart: true
 the search ran its round: true
 a round candidate extends a segment of a fissioned parent: true
 every fissioned round candidate names a segment of its parent: true

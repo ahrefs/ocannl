@@ -203,6 +203,22 @@ let () =
   unset_config "buffer_aliasing";
   p "an aliasing flip separates the key without touching the digest" (not (String.equal key0 key_a));
 
+  (* gh-ocannl-1272 asked the cache key the question it fixed for the search-trajectory identity:
+     does a key STATED at its default move it? It does not -- every component renders a resolved
+     value (an effective gate, a lowercased objective), never whether some source states a key -- so
+     keyed knobs stated at their defaults, spelled otherwise than their read sites, key nothing. *)
+  let at_defaults = [ ("buffer_aliasing", "0"); ("autotune_timing", " Queued") ] in
+  List.iter at_defaults ~f:(fun (key, data) -> set_config key data);
+  let took_effect =
+    List.map at_defaults ~f:(fun (key, data) ->
+        Option.equal String.equal (Option.map (Utils.profile_key_source key) ~f:fst) (Some data))
+  in
+  let key_d = key_of ctx canon in
+  List.iter at_defaults ~f:(fun (key, _) -> unset_config key);
+  p_all ~min:2 "the keyed knobs stated at their defaults took effect" took_effect ~f:Fn.id;
+  p "keyed knobs stated at their defaults, spelled otherwise, leave the key alone"
+    (String.equal key0 key_d);
+
   (* The OpenMP runtime's controls decide the team every Grid loop executes on, and the pool tag —
      derived from process affinity — cannot see them (Codex P1 on PR #337). Only meaningful where
      Grid loops render as OpenMP, so the setting is forced for the key computation alone; no compile

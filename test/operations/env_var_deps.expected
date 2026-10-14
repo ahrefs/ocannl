@@ -156,6 +156,7 @@ declared or pinned by every rule running the program (gh-ocannl-1149):
   test/operations/dune, test autotune_privatize: Ir.Schedule.apply, Ir.Schedule.default_cpu, Ir.Schedule.default_gpu
   test/operations/dune, test autotune_scope_menu: Ir.Schedule.apply
   test/operations/dune, test autotune_serial_baseline: Ir.Schedule.automatic_schedule_active, Ir.Schedule.maybe_default_schedules
+  test/operations/dune, test autotune_sketch_placements: Ir.Schedule.default_cpu, Ir.Schedule.default_gpu, Ir.Schedule.fission_keep_mapping, Ir.Schedule.fission_segmented, Ir.Schedule.zero_expansion
   test/operations/dune, test autotune_smoke: Ir.Schedule.apply
   test/operations/dune, test autotune_split_reduce: Ir.Schedule.apply, Ir.Schedule.default_cpu, Ir.Schedule.default_gpu, Ir.Schedule.fission_segmented
   test/operations/dune, test bench_mma_writes: Ir.Schedule.apply
@@ -277,6 +278,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-changelog_unreleased_scan
   test/operations/dune                     @runtest-codegen_text_inventory
   test/operations/dune                     @runtest-codegen_text_inventory_control
+  test/operations/dune                     @runtest-config_class_fingerprint
   test/operations/dune                     @runtest-config_dep_completeness
   test/operations/dune                     @runtest-config_usage_scan
   test/operations/dune                     @runtest-config_usage_scan_control

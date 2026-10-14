@@ -60,8 +60,8 @@ let tune =
             (* An arm that timed nothing still names an objective: [tune] resolves it before it can
                construct any report, so every arm on the line carries one. *)
           ~timing:"queued" ~rounds_run:0 ~beam_width:4 ~timings_contended:0 ~timings_unbatched:0
-          ~best_ms:Float.infinity ~best_label:"tile 32x32" ~tensorized:false ~tensorization:None
-          ~mma_statements:0 ~mma_scalar_fallbacks:0 ~mma_seeded:4 ~mma_timed:0
+          ~timing_decisions:[] ~best_ms:Float.infinity ~best_label:"tile 32x32" ~tensorized:false
+          ~tensorization:None ~mma_statements:0 ~mma_scalar_fallbacks:0 ~mma_seeded:4 ~mma_timed:0
           ~mma_best_ms:Float.infinity
           ~terminal_failure:
             (Some
@@ -69,18 +69,28 @@ let tune =
                   (Char.of_int_exn 27)));
         Bench_json.tune_arm ~name:"B" ~state:"cache-replay" ~searched:false ~cache_hit:true
           ~timing:"queued" ~rounds_run:0 ~beam_width:4 ~timings_contended:0 ~timings_unbatched:0
-          ~best_ms:0.75 ~best_label:"grid 128" ~tensorized:true
+          ~timing_decisions:[] ~best_ms:0.75 ~best_label:"grid 128" ~tensorized:true
           ~tensorization:(Some "scalar-fallback") ~mma_statements:2 ~mma_scalar_fallbacks:2
           ~mma_seeded:6 ~mma_timed:3 ~mma_best_ms:0.8 ~terminal_failure:None;
         (* Neither searched nor replayed: every counter zero, no winner to name. *)
         Bench_json.tune_arm ~name:"C" ~state:"search-disabled" ~searched:false ~cache_hit:false
           ~timing:"queued" ~rounds_run:0 ~beam_width:2 ~timings_contended:0 ~timings_unbatched:0
-          ~best_ms:Float.infinity ~best_label:"" ~tensorized:false ~tensorization:None
-          ~mma_statements:0 ~mma_scalar_fallbacks:0 ~mma_seeded:0 ~mma_timed:0
+          ~timing_decisions:[] ~best_ms:Float.infinity ~best_label:"" ~tensorized:false
+          ~tensorization:None ~mma_statements:0 ~mma_scalar_fallbacks:0 ~mma_seeded:0 ~mma_timed:0
           ~mma_best_ms:Float.infinity ~terminal_failure:None;
         (* An honestly tensorized winner, and an ordinary one that never asked. *)
         Bench_json.tune_arm ~name:"D" ~state:"searched" ~searched:true ~cache_hit:false
-          ~timing:"queued" ~rounds_run:1 ~beam_width:4 ~timings_contended:2 ~timings_unbatched:1
+          ~timing:"queued" ~rounds_run:1 ~beam_width:4 ~timings_contended:2
+          ~timings_unbatched:1
+            (* gh-ocannl-1263: the settle-by-admission matrix behind those two refusals, in the
+               order a report lists it -- one settle carrying two admissions. *)
+          ~timing_decisions:
+            [
+              ("singles_reach_target", "admitted", 3);
+              ("measured_batch", "admitted", 4);
+              ("measured_batch", "refused_contended", 1);
+              ("wall_scaled", "refused_unbatched", 1);
+            ]
           ~best_ms:0.5 ~best_label:"mma-gpu 16x16x16" ~tensorized:true
           ~tensorization:(Some "tensorized") ~mma_statements:4 ~mma_scalar_fallbacks:0 ~mma_seeded:6
           ~mma_timed:5 ~mma_best_ms:0.5 ~terminal_failure:None;
@@ -88,6 +98,7 @@ let tune =
           ~cache_hit:false
             (* The other objective, so the golden shows both spellings on one line. *)
           ~timing:"isolated" ~rounds_run:0 ~beam_width:2 ~timings_contended:0 ~timings_unbatched:0
+          ~timing_decisions:[ ("isolated", "admitted", 3) ]
           ~best_ms:1.25 ~best_label:"grid 64" ~tensorized:false
           ~tensorization:(Some "not-requested") ~mma_statements:0 ~mma_scalar_fallbacks:0
           ~mma_seeded:0 ~mma_timed:0 ~mma_best_ms:Float.infinity ~terminal_failure:None;
@@ -241,6 +252,30 @@ let () =
      target, which a queue threshold repeats on every rerun and a stall does not. *)
   p "an arm's no-batch refusals reach the wire apart from its contention count"
     (Yojson.Safe.equal (member "timings_unbatched" (arm "D")) (`Int 1));
+  (* gh-ocannl-1263: per arm, how its timing calls settled and were admitted, keyed by settle and
+     then by admission, so a sweep reads one cell without scraping the trace. *)
+  let decisions name = member "timing_decisions" (arm name) in
+  let cell name ~settle ~admission = member admission (member settle (decisions name)) in
+  p "an arm's settle-by-admission counts reach the wire, one settle carrying two admissions"
+    (Yojson.Safe.equal (cell "D" ~settle:"measured_batch" ~admission:"admitted") (`Int 4)
+    && Yojson.Safe.equal (cell "D" ~settle:"measured_batch" ~admission:"refused_contended") (`Int 1)
+    && Yojson.Safe.equal (cell "D" ~settle:"singles_reach_target" ~admission:"admitted") (`Int 3)
+    && Yojson.Safe.equal (cell "D" ~settle:"wall_scaled" ~admission:"refused_unbatched") (`Int 1)
+    && Yojson.Safe.equal (cell "E" ~settle:"isolated" ~admission:"admitted") (`Int 3));
+  (* Shell consumers read an arm's scalars with a [[^}]*] scan from its name, which stops at the
+     first closing brace ([benchmarks/gh834_cells.sh] reads [best_ms] that way); the matrix is the
+     arm's one nested object, so it must come after every scalar, empty or not. *)
+  p_all "every arm's scalars precede its first closing brace" [ "A"; "B"; "C"; "D"; "E" ]
+    ~f:(fun name ->
+      match String.substr_index diverged ~pattern:(Printf.sprintf {|"arm":"%s"|} name) with
+      | None -> false
+      | Some start ->
+          let rest = String.drop_prefix diverged start in
+          let scan = String.prefix rest (Option.value (String.index rest '}') ~default:0) in
+          List.for_all [ "\"best_ms\":"; "\"terminal_failure\":"; "\"timing_decisions\":" ]
+            ~f:(fun key -> String.is_substring scan ~substring:key));
+  p_all "an arm that timed nothing carries an empty matrix, not null" [ "A"; "B"; "C" ] ~f:(fun n ->
+      Yojson.Safe.equal (decisions n) (`Assoc []));
   p_all "an arm with no crowned candidate reports a null tensorization, not a label" [ "A"; "C" ]
     ~f:(fun n -> Yojson.Safe.equal (member "tensorization" (arm n)) `Null);
   p_all "the three tensorization labels reach the wire"

@@ -236,32 +236,39 @@ let percentile sorted p =
 
     [BENCH_TIMING_TRACE=1] splits a searching process's wall between candidate timing and everything
     else, without changing what is measured: it only observes {!Autotune}'s seams. Each
-    [Autotune.time_routine] call prints one stderr line when its timed loop ends, with the batch
-    depth the call settled on, the launches it dispatched (the warmup, the calibration's and [depth]
-    per timed batch the loop itself dispatched), and the wall of its warmup plus calibration (from
-    the pre-dispatch validation to the depth decision) and of its timed loop. A call that settles at
-    depth 1 resumes the calibration's synchronized singles as its window (gh-ocannl-1074): its line
-    says how many of its batches were [reused] -- already dispatched, and counted, as calibration --
-    and its timed wall is only the top-up the caller's [repeats] floor asked for beyond them. Every
-    line also carries the running totals, so the last line of a run killed at a cell cap is still a
-    lower bound on the whole — an [at_exit] summary would never print there. Each candidate the
-    tuner attempts prints an [attempt] line with the elapsed wall, which is how far a killed search
-    got; an attempt is a compile unless [autotune_bound_pruning] prunes it first. A call made
-    without failure tagging — the untuned control [autotune_log=true] times after a search — fires
-    no pre-dispatch seam, so its warmup and calibration are reported as unattributed and counted
-    apart rather than as zero. The seams cannot see a timing call raise, so a tagged call that fails
-    after its validation leaves its start behind until the next attempt clears it: only when a
-    search's LAST timing call fails that way and an [autotune_log] control follows is that control's
-    interval over-attributed, which is why [benchmarks/gh834_cells.sh] pins [autotune_log=false]. A
-    tagged call that raises (a classified launch or synchronization failure the search survives) is
-    closed by no window: it is counted as raised, and a summary with any says INCOMPLETE, since that
-    call's cost is in no total. Each call line is followed by a [decision] line
-    ({!Autotune.on_batch_decision}, gh-ocannl-1199) carrying the policy's own metadata: the search
-    phase, the exit that chose the depth, the fitted fixed and marginal costs and the fit's verdict,
-    what the post-calibration bounds changed, the probe budget used and the admission verdict, so
-    diagnosing a refusal needs no parser that reimplements the calibration. What is not counted: the
-    cc backend's in-kernel fork/joins per launch are a property of each candidate's rendering, so a
-    launch count bounds them only together with the candidate's parallel-region count. *)
+    [Autotune.time_routine] call reports one record as it returns
+    ({!Autotune.install_timing_call_observer}, gh-ocannl-1263), printed as its calibration probes,
+    one call line and one [decision] line -- everything about a call comes from that call's own
+    record, so no line depends on the order in which separate seams fired. The call line carries the
+    batch depth the call settled on, the launches it dispatched (the warmup, the calibration's and
+    [depth] per timed batch the loop itself dispatched, a discarded contention window's included),
+    and the wall of its warmup plus calibration (from the pre-dispatch validation to the depth
+    decision) and of its timed loop. A call that settles at depth 1 resumes the calibration's
+    synchronized singles as its window (gh-ocannl-1074): its line says how many of its batches were
+    [reused] -- already dispatched, and counted, as calibration -- and its timed wall is only the
+    top-up the caller's [repeats] floor asked for beyond them. Every line also carries the running
+    totals, so the last line of a run killed at a cell cap is still a lower bound on the whole — an
+    [at_exit] summary would never print there. A call made without failure tagging — the untuned
+    control [autotune_log=true] times after a search — is marked [untagged] and counted apart.
+
+    Each candidate the tuner attempts prints an [attempt] line with the elapsed wall, which is how
+    far a killed search got; an attempt is a compile unless [autotune_bound_pruning] prunes it
+    first. Each search's [baseline] is an attempt too: it is compiled, so it fires the attempt seam,
+    but a GPU backend refuses to dispatch it (gh-ocannl-532) and [autotune_progress]'s [attempts]
+    does not count it, so this count runs one per search ahead of that log's. A tagged call that
+    raises after its pre-dispatch validation (a classified launch or synchronization failure the
+    search survives) returns no record: the trace counts it as raised -- validations started less
+    tagged records returned -- and a summary with any says INCOMPLETE, since that call's cost is in
+    no total.
+
+    The [decision] line carries the policy's own metadata (gh-ocannl-1199): the search phase, the
+    exit that chose the depth, the fitted fixed and marginal costs and the fit's verdict, what the
+    post-calibration bounds changed, the probe budget used and the admission verdict, so diagnosing
+    a refusal needs no parser that reimplements the calibration; [results.jsonl] carries the same
+    settle and admission per arm as counts ({!Autotune.report}'s [timing_decisions]). What is not
+    counted: the cc backend's in-kernel fork/joins per launch are a property of each candidate's
+    rendering, so a launch count bounds them only together with the candidate's parallel-region
+    count. *)
 
 let timing_trace_on = ref false
 
@@ -273,24 +280,12 @@ let trace_search_done ~compile_s =
     Stdlib.Printf.eprintf "timing-trace: search done: compile_s %.3f\n%!" compile_s
 
 (** The [decision] line of a traced timing call (gh-ocannl-1199): the decision behind the call line
-    printed just before it, from the policy's own metadata ({!Autotune.on_batch_decision}) -- the
-    search phase, what chose the depth, the fit it rested on, what bounded it, the probe budget used
-    and the admission verdict. Pure, so a test pins it against the decision taken. *)
+    printed just before it, from the policy's own metadata ({!Autotune.timing_call}'s [decision]) --
+    the search phase, what chose the depth, the fit it rested on, what bounded it, the probe budget
+    used and the admission verdict. Pure, so a test pins it against the decision taken. *)
 let decision_line ~call (d : Autotune.batch_decision) =
   let ms = Printf.sprintf "%.6f" in
   let opt o ~f = Option.value_map o ~default:"-" ~f in
-  let settle =
-    match d.settle with
-    | Isolated_objective -> "isolated"
-    | Single_estimate -> "single_estimate"
-    | Singles_reach_target -> "singles_reach_target"
-    | Measured_batch -> "measured_batch"
-    | Affine_projection -> "affine_projection"
-    | Wall_scaled -> "wall_scaled"
-    | Cap_measured -> "cap_measured"
-    | Cap_unresolved -> "cap_unresolved"
-    | Budget_exhausted -> "budget_exhausted"
-  in
   let fit =
     opt d.fit ~f:(fun (f : Autotune.affine_fit) ->
         let verdict =
@@ -308,26 +303,20 @@ let decision_line ~call (d : Autotune.batch_decision) =
         Printf.sprintf "%s (depths %d/%d, fixed %s ms, marginal %s ms)" verdict f.base_depth
           f.probe_depth (ms f.fixed_ms) (ms f.marginal_ms))
   in
-  let admission =
-    match d.admission with
-    | Admitted -> "admitted"
-    | Refused_unbatched -> "refused unbatched"
-    | Refused_contended -> "refused contended"
-    | Refused_unreadable -> "refused unreadable"
-  in
   Printf.sprintf
     "timing-trace: decision %d: phase %s, %s, depth %d by %s (cap %d, target %.1f ms, estimated \
      wall %s ms), fit %s, %d cap-directed probes, bounded from %s, fallback from %s, rescue %s, \
      probes %d of %d (%.3f of %.0f ms%s), %s%s"
-    call (opt d.phase ~f:Fn.id) (Autotune.timing_string d.timing) d.depth settle d.cap d.target_ms
-    (opt d.estimated_wall_ms ~f:ms) fit d.cap_directed_probes
+    call (opt d.phase ~f:Fn.id) (Autotune.timing_string d.timing) d.depth
+    (Autotune.batch_settle_name d.settle)
+    d.cap d.target_ms (opt d.estimated_wall_ms ~f:ms) fit d.cap_directed_probes
     (opt d.bounded_from ~f:Int.to_string)
     (opt d.fallback_from ~f:Int.to_string)
     (opt d.rescue ~f:(fun (depth, min_ms) -> Printf.sprintf "depth %d min %s ms" depth (ms min_ms)))
     d.probes Autotune.queue_calibration_max_probes d.probe_wall_ms
     Autotune.queue_calibration_wall_ms
     (if d.budget_spent then ", spent" else "")
-    admission
+    (Autotune.batch_admission_name d.admission)
     (if d.retried then " after a retry" else "")
 
 let install_timing_trace () =
@@ -341,120 +330,94 @@ let install_timing_trace () =
     (* Calls whose window resumed the calibration's singles, and the batches those windows
        reused. *)
     let reusing_calls = ref 0 and reused_batches = ref 0 in
-    (* Tagged calls that raised after their pre-dispatch validation: no window closes them, so their
-       warmup, calibration and any timed batches are in no total -- counted, so a summary that is
-       missing timing cost says so. *)
-    let raised = ref 0 in
-    let preflight_at = ref None and depth_at = ref None in
-    let drop_open_call () =
-      if Option.is_some !preflight_at then begin
-        Int.incr raised;
-        preflight_at := None
-      end
-    in
+    (* Pre-dispatch validations started, and the tagged calls that returned a record. A tagged call
+       that raised after its validation returns none, so the difference counts exactly those calls,
+       whose warmup, calibration and any timed batches are in no total -- by count, so no order in
+       which the seams fire can move it. *)
+    let preflights = ref 0 and tagged = ref 0 in
+    (* The records reach only this domain's observer, so only this domain's validations are counted
+       against them: the preflight seam is process-wide, and a search in another domain would
+       otherwise read as calls raised here. *)
+    let trace_domain = Stdlib.Domain.self () in
+    let raised () = !preflights - !tagged in
     let calib_s = ref 0. and timed_s = ref 0. in
     let depths = Hashtbl.create (module Int) in
     let pr fmt = Stdlib.Printf.kfprintf Stdlib.flush Stdlib.stderr fmt in
     let prev_attempt = !Autotune.on_candidate_attempt in
     (Autotune.on_candidate_attempt :=
        fun label ->
-         (* A tagged call that raised between its pre-dispatch validation and its timed window left
-            its start behind; a new candidate begins a new call, so that start is dropped here --
-            and counted as raised -- rather than charged to a later untagged call. *)
-         drop_open_call ();
          Int.incr attempts;
          pr "timing-trace: attempt %d at %.1fs: %s\n" !attempts (now () -. t0) label;
          prev_attempt label);
     let prev_preflight = !Autotune.on_candidate_preflight in
     (Autotune.on_candidate_preflight :=
        fun name ->
-         drop_open_call ();
-         preflight_at := Some (now ());
+         if Poly.equal (Stdlib.Domain.self ()) trace_domain then Int.incr preflights;
          prev_preflight name);
-    let prev_depth = !Autotune.on_batch_depth in
-    (Autotune.on_batch_depth :=
-       fun depth ~calibration_samples ->
-         depth_at := Some (now (), depth, calibration_samples);
-         prev_depth depth ~calibration_samples);
-    let prev_probe = !Autotune.on_calibration_probe in
-    (Autotune.on_calibration_probe :=
-       fun probe ->
-         let role =
-           match probe.Autotune.role with
-           | Provisional_probe -> "provisional"
-           | Validation_probe -> "validation"
-           | Confirmation_probe -> "confirmation"
-           | Stall_retry_probe -> "stall_retry"
-           | Crossing_probe -> "crossing"
-           | Rescue_probe -> "rescue"
-         in
-         pr
-           "timing-trace: calibration probe: role %s, depth %d, %d batches, min %.6f ms, wall %.6f \
-            ms\n"
-           role probe.depth probe.runs probe.min_ms probe.wall_ms;
-         prev_probe probe);
-    let prev_window = !Autotune.on_timed_window in
-    (* Parenthesized like the three above: an unparenthesized [fun] would swallow the [at_exit]
-       below into the callback and register one summary per timing call. *)
-    (Autotune.on_timed_window :=
-       fun ~samples ~reused ~wall_ms ~median_wall_ms ->
-         let now = now () in
-         (match !depth_at with
-         | None -> pr "timing-trace: a timed window without a depth decision\n"
-         | Some (at, depth, calibration) ->
-             (* No preflight time means an untagged call: its warmup and calibration are counted
-                apart as unattributed, never as zero. *)
-             let calib =
-               match !preflight_at with
-               | Some p -> Printf.sprintf "calib %.1f ms" ((at -. p) *. 1e3)
-               | None ->
-                   Int.incr untagged;
-                   "calib unattributed (untagged call)"
-             in
-             Option.iter !preflight_at ~f:(fun p -> calib_s := !calib_s +. (at -. p));
-             let n = 1 + calibration + (depth * (samples - reused)) in
-             Int.incr calls;
-             if reused > 0 then Int.incr reusing_calls;
-             reused_batches := !reused_batches + reused;
-             launches := !launches + n;
-             timed_s := !timed_s +. (now -. at);
-             Hashtbl.update depths depth ~f:(fun c -> 1 + Option.value c ~default:0);
-             pr
-               "timing-trace: call %d at %.1fs: depth %d, %d batches (%d reused), %d launches, %s, \
-                timed %.1f ms (median batch %.3f ms) | totals: %d calls, %d launches, calib %.2f s \
-                (%d calls unattributed), timed %.2f s, %d calls raised, %d calls reused %d batches\n"
-               !calls (now -. t0) depth samples reused n calib
-               ((now -. at) *. 1e3)
-               median_wall_ms !calls !launches !calib_s !untagged !timed_s !raised !reusing_calls
-               !reused_batches);
-         preflight_at := None;
-         depth_at := None;
-         prev_window ~samples ~reused ~wall_ms ~median_wall_ms);
-    let prev_decision = !Autotune.on_batch_decision in
-    (Autotune.on_batch_decision :=
-       fun d ->
-         pr "%s\n" (decision_line ~call:!calls d);
-         prev_decision d);
+    Autotune.install_timing_call_observer (fun (c : Autotune.timing_call) ->
+        List.iter c.calibration_probes ~f:(fun (probe : Autotune.calibration_probe) ->
+            let role =
+              match probe.role with
+              | Provisional_probe -> "provisional"
+              | Validation_probe -> "validation"
+              | Confirmation_probe -> "confirmation"
+              | Stall_retry_probe -> "stall_retry"
+              | Crossing_probe -> "crossing"
+              | Rescue_probe -> "rescue"
+            in
+            pr
+              "timing-trace: calibration probe: role %s, depth %d, %d batches, min %.6f ms, wall \
+               %.6f ms\n"
+              role probe.depth probe.runs probe.min_ms probe.wall_ms);
+        let depth = c.decision.depth in
+        let dispatched (w : Autotune.timed_window) = depth * (w.samples - w.reused) in
+        (* The warmup, the calibration, and every batch the timed loop dispatched itself -- a
+           discarded contention window's included. *)
+        let n =
+          1 + c.calibration_launches + dispatched c.window
+          + Option.value_map c.discarded_window ~default:0 ~f:dispatched
+        in
+        Int.incr calls;
+        if c.tagged then Int.incr tagged else Int.incr untagged;
+        if c.window.reused > 0 then Int.incr reusing_calls;
+        reused_batches := !reused_batches + c.window.reused;
+        launches := !launches + n;
+        calib_s := !calib_s +. (c.setup_ms /. 1e3);
+        timed_s := !timed_s +. (c.timed_ms /. 1e3);
+        Hashtbl.update depths depth ~f:(fun k -> 1 + Option.value k ~default:0);
+        pr
+          "timing-trace: call %d at %.1fs: depth %d, %d batches (%d reused)%s, %d launches, calib \
+           %.1f ms%s, timed %.1f ms (median batch %.3f ms) | totals: %d calls, %d launches, calib \
+           %.2f s (%d calls untagged), timed %.2f s, %d calls raised, %d calls reused %d batches\n"
+          !calls
+          (now () -. t0)
+          depth c.window.samples c.window.reused
+          (Option.value_map c.discarded_window ~default:"" ~f:(fun w ->
+               Printf.sprintf " after a discarded window of %d" w.samples))
+          n c.setup_ms
+          (if c.tagged then "" else " (untagged call)")
+          c.timed_ms c.window.median_wall_ms !calls !launches !calib_s !untagged !timed_s
+          (raised ()) !reusing_calls !reused_batches;
+        pr "%s\n" (decision_line ~call:!calls c.decision));
     Stdlib.at_exit (fun () ->
-        drop_open_call ();
         let hist =
           Hashtbl.to_alist depths
           |> List.sort ~compare:(fun (a, _) (b, _) -> Int.compare a b)
-          |> List.map ~f:(fun (d, c) -> Printf.sprintf "%dx%d" c d)
+          |> List.map ~f:(fun (d, k) -> Printf.sprintf "%dx%d" k d)
           |> String.concat ~sep:" "
         in
         pr
           "timing-trace: summary: %.1fs wall, %d candidate attempts, %d timing calls, %d launches, \
-           calib %.2f s (%d calls unattributed), timed %.2f s; depth histogram (calls x depth): \
-           %s; %d calls reused %d calibration batches as their window%s\n"
+           calib %.2f s (%d calls untagged), timed %.2f s; depth histogram (calls x depth): %s; %d \
+           calls reused %d calibration batches as their window%s\n"
           (now () -. t0)
           !attempts !calls !launches !calib_s !untagged !timed_s hist !reusing_calls !reused_batches
-          (if !raised = 0 then ""
+          (if raised () = 0 then ""
            else
              Printf.sprintf
                "; INCOMPLETE: %d tagged timing calls raised after validation, and their cost is in \
                 none of these totals"
-               !raised))
+               (raised ())))
   end
 
 (** {1 Placement A/B arms in the emitted result (gh-ocannl-546)}
@@ -559,6 +522,12 @@ let collect_shipped t routines = t.shipped_mma <- Some (step_census routines)
     [searched] field of the result line. See {!measure_and_emit}. *)
 let searched t = t.searches > 0
 
+(** A report's settle-by-admission counts (gh-ocannl-1263) as {!Bench_json.tune_arm} takes them, in
+    Autotune's own spellings. *)
+let timing_decisions_wire decisions =
+  List.map decisions ~f:(fun (settle, admission, calls) ->
+      (Autotune.batch_settle_name settle, Autotune.batch_admission_name admission, calls))
+
 (** The [tune] JSON object, or [None] when no arm reported (an untuned cell). Times are
     milliseconds, and a time that was never measured is [null], not [inf]: [best_ms] is [infinity]
     when an arm timed nothing at all (every candidate failed and the GPU baseline was not
@@ -624,8 +593,10 @@ let tune_json t =
           ~timing:(Autotune.timing_string r.Autotune.timing)
           ~rounds_run:r.Autotune.rounds_run ~beam_width:r.Autotune.beam_width
           ~timings_contended:r.Autotune.timings_contended
-          ~timings_unbatched:r.Autotune.timings_unbatched ~best_ms:r.Autotune.best_ms
-          ~best_label:r.Autotune.best_label ~tensorized:r.Autotune.best_tensorized
+          ~timings_unbatched:r.Autotune.timings_unbatched
+          ~timing_decisions:(timing_decisions_wire r.Autotune.timing_decisions)
+          ~best_ms:r.Autotune.best_ms ~best_label:r.Autotune.best_label
+          ~tensorized:r.Autotune.best_tensorized
           ~tensorization:
             (Option.map r.Autotune.best_tensorization ~f:Ir.C_syntax.tensorization_name)
           ~mma_statements:r.Autotune.best_mma_statements

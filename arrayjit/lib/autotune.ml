@@ -181,12 +181,49 @@ let timing_of_setting s =
   | other ->
       invalid_arg ("ocannl_autotune_timing setting should be isolated or queued; found: " ^ other)
 
+(* Which exit of the calibration chose the depth before the post-calibration bounds
+   (gh-ocannl-1199). Each branch of [calibrate_and_time_from] returns its own, so the trace reports
+   the decision taken rather than a reconstruction of it. *)
+type batch_settle =
+  | Isolated_objective
+  | Single_estimate
+  | Singles_reach_target
+  | Measured_batch
+  | Affine_projection
+  | Wall_scaled
+  | Cap_measured
+  | Cap_unresolved
+  | Budget_exhausted
+
+type batch_admission = Admitted | Refused_unbatched | Refused_contended | Refused_unreadable
+
+(* The spellings the benchmark trace and result line use, one per constructor. *)
+let batch_settle_name = function
+  | Isolated_objective -> "isolated"
+  | Single_estimate -> "single_estimate"
+  | Singles_reach_target -> "singles_reach_target"
+  | Measured_batch -> "measured_batch"
+  | Affine_projection -> "affine_projection"
+  | Wall_scaled -> "wall_scaled"
+  | Cap_measured -> "cap_measured"
+  | Cap_unresolved -> "cap_unresolved"
+  | Budget_exhausted -> "budget_exhausted"
+
+let batch_admission_name = function
+  | Admitted -> "admitted"
+  | Refused_unbatched -> "refused_unbatched"
+  | Refused_contended -> "refused_contended"
+  | Refused_unreadable -> "refused_unreadable"
+
 type report = {
   outcome : outcome;
   candidates_timed : int;
   timings_contended : int;
   timings_retried : int;
   timings_unbatched : int;
+  timing_decisions : (batch_settle * batch_admission * int) list;
+      (** How this call's search timing calls settled and were admitted (gh-ocannl-1263). See the
+          interface. *)
   candidates_contended : int;
   default_refused : bool;
   candidates_failed : int;
@@ -267,6 +304,7 @@ let no_search_report ~timing =
     timings_contended = 0;
     timings_retried = 0;
     timings_unbatched = 0;
+    timing_decisions = [];
     candidates_contended = 0;
     default_refused = false;
     candidates_failed = 0;
@@ -896,42 +934,6 @@ let apply_measurement_seam ~label ~digest timing_result =
   | None -> timing_result
   | Some ms -> { timing_result with ms = !on_candidate_measured ~label ~digest ms }
 
-(* Observation seam for the timing tests (gh-ocannl-851), reporting the batch depth each
-   [time_routine] call settles on -- after calibration, before the timed loop; [Isolated] reports 1.
-   The negative control for a twice-divided queued reading needs the depth the call ACTUALLY used:
-   the call recalibrates independently, so re-applying the policy to an estimate taken outside it
-   guesses wrong exactly on the busy runners the control must survive. The calibration dispatch
-   count accompanies it so the instrument can account for both the single-launch estimate and the
-   provisional queued probe. Default no-op, no config key selects it. *)
-let on_batch_depth : (int -> calibration_samples:int -> unit) ref =
-  ref (fun _depth ~calibration_samples:_ -> ())
-
-(* Observation seam for the timing tests (gh-ocannl-994), reporting the window the returned minimum
-   was actually taken over: how many batches the timed loop ran, counted by the loop itself rather
-   than restated from its result, and their summed wall. A bound written on the reading needs THAT
-   window's mean, not the whole call's: the call's wall also holds the warmup and the calibration's
-   synchronized singles, and on a backend whose host round trip is two orders of magnitude above an
-   amortized launch (Linux multidev_cc: ~57 us against ~0.44 us) those few dozen singles are a
-   comparable share of the call to the tens of thousands of timed dispatches -- about 40% of it --
-   so the whole-call mean is diluted by construction, and a host stall landing in the untimed part
-   moves it without moving the reading. The MEDIAN batch wall accompanies the sum because this
-   window's mean is still a stalled minority's to move: [contended] is declared on a MAJORITY of the
-   window's batches exceeding twice its floor, so a bound meant to hold whenever the claim is not
-   bypassed belongs on a statistic a minority cannot move -- which the median is over exactly the
-   regime the contention rule leaves to it. [reused] says how many of the window's [samples] the
-   loop did NOT dispatch (gh-ocannl-1074): a queued call that settles at depth 1 resumes the
-   calibration's synchronized singles as its window, and those launches are already counted in
-   [on_batch_depth]'s [calibration_samples] -- so the launches the timed loop itself dispatched are
-   [depth * (samples - reused)]. Default no-op; no configuration key selects it. *)
-let on_timed_window :
-    (samples:int -> reused:int -> wall_ms:float -> median_wall_ms:float -> unit) ref =
-  ref (fun ~samples:_ ~reused:_ ~wall_ms:_ ~median_wall_ms:_ -> ())
-
-(* A discarded contention window, immediately before its one fresh retry (gh-ocannl-1060).
-   [on_timed_window] describes only the returned window. These counts account for the extra
-   dispatches without treating the discarded window as a candidate refusal. *)
-let on_timing_retry : (samples:int -> reused:int -> unit) ref = ref (fun ~samples:_ ~reused:_ -> ())
-
 (* Which of the calibration's branches dispatched a batch probe. *)
 type calibration_probe_role =
   | Provisional_probe
@@ -941,6 +943,11 @@ type calibration_probe_role =
   | Crossing_probe
   | Rescue_probe
 
+(* One CUDA/HIP calibration batch probe as it ended (gh-ocannl-1119): the branch that started it,
+   how many minima it took, the wall it charged to [queue_calibration_wall_ms] and its minimum. A
+   test that saw only the [batch] calls had to reconstruct probes from runs of same-depth batches,
+   which merged a stall retry into the confirmation it repeats and counted probes only as a lower
+   bound. *)
 type calibration_probe = {
   role : calibration_probe_role;
   depth : int;
@@ -948,30 +955,6 @@ type calibration_probe = {
   wall_ms : float;
   min_ms : float;
 }
-
-(* Observation seam for the timing tests (gh-ocannl-1119), fired once per CUDA/HIP calibration batch
-   probe as it ends, in dispatch order, with the branch that started it, how many minima it took,
-   the wall it charged to [queue_calibration_wall_ms] and its minimum. A test that saw only the
-   [batch] calls had to reconstruct probes from runs of same-depth batches, which merged a stall
-   retry into the confirmation it repeats and counted probes only as a lower bound. Default no-op;
-   no configuration key selects it. *)
-let on_calibration_probe : (calibration_probe -> unit) ref = ref (fun _ -> ())
-
-(* Which exit of the calibration chose the depth before the post-calibration bounds
-   (gh-ocannl-1199). Each branch of [calibrate_and_time_with_retry_observer] returns its own, so the
-   trace reports the decision taken rather than a reconstruction of it. *)
-type batch_settle =
-  | Isolated_objective
-  | Single_estimate
-  | Singles_reach_target
-  | Measured_batch
-  | Affine_projection
-  | Wall_scaled
-  | Cap_measured
-  | Cap_unresolved
-  | Budget_exhausted
-
-type batch_admission = Admitted | Refused_unbatched | Refused_contended | Refused_unreadable
 
 type batch_decision = {
   phase : string option;
@@ -993,18 +976,68 @@ type batch_decision = {
   retried : bool;
 }
 
-(* Trace-only seam (gh-ocannl-1199), fired once per timing call after its window, with the depth
-   decision's own metadata and the call's admission verdict. Observing it changes nothing a search
-   measures or ranks. Default a no-op; no configuration selects it. *)
-let on_batch_decision : (batch_decision -> unit) ref = ref (fun _ -> ())
+(* A window of the timed loop (gh-ocannl-994): how many batches it ran, counted by the loop itself
+   rather than restated from its result, and their summed and median wall. A bound written on the
+   reading needs THAT window, not the whole call: the call's wall also holds the warmup and the
+   calibration's synchronized singles, and on a backend whose host round trip is two orders of
+   magnitude above an amortized launch (Linux multidev_cc: ~57 us against ~0.44 us) those few dozen
+   singles are a comparable share of the call to the tens of thousands of timed dispatches -- about
+   40% of it -- so the whole-call mean is diluted by construction, and a host stall landing in the
+   untimed part moves it without moving the reading. The MEDIAN accompanies the sum because the
+   window's mean is still a stalled minority's to move: [contended] is declared on a MAJORITY of the
+   window's batches exceeding twice its floor, so a bound meant to hold whenever the claim is not
+   bypassed belongs on a statistic a minority cannot move. [reused] says how many of [samples] the
+   loop did NOT dispatch (gh-ocannl-1074): a queued call that settles at depth 1 resumes the
+   calibration's synchronized singles as its window, and those launches are already counted as
+   calibration -- so the launches the loop itself dispatched are [depth * (samples - reused)]. *)
+type timed_window = { samples : int; reused : int; wall_ms : float; median_wall_ms : float }
+
+(* Everything one timing call did, reported once, as it returns (gh-ocannl-1263). It replaces four
+   seams fired at different moments of the call -- the depth decision (gh-ocannl-851), each
+   calibration probe (gh-ocannl-1119), a discarded contention window (gh-ocannl-1060) and the
+   returned window (gh-ocannl-994) -- beside the decision record (gh-ocannl-1199), which their
+   consumers had to stitch together by arrival order. *)
+type timing_call = {
+  decision : batch_decision;
+  tagged : bool;
+  calibration_singles : int;
+  calibration_launches : int;
+  calibration_probes : calibration_probe list;
+  discarded_window : timed_window option;
+  window : timed_window;
+  setup_ms : float;
+  timed_ms : float;
+}
+
+(* Trace-only observation of every timing call, per domain (gh-ocannl-1263) -- the treatment
+   [autotune_log] got for concurrent searches: a search running in another domain neither reaches
+   nor disturbs this domain's observers. Observers compose, each installation calling the enclosing
+   observer first. Observing changes nothing a search measures or ranks. Default a no-op; no
+   configuration selects it. A search's own accounting goes through [time_routine]'s per-call
+   [on_call] instead, so it never depends on who else observes. *)
+let timing_call_observer : (timing_call -> unit) Stdlib.Domain.DLS.key =
+  Stdlib.Domain.DLS.new_key (fun () _ -> ())
+
+let chain_timing_call_observer f =
+  let enclosing = Stdlib.Domain.DLS.get timing_call_observer in
+  Stdlib.Domain.DLS.set timing_call_observer (fun call ->
+      enclosing call;
+      f call);
+  enclosing
+
+let install_timing_call_observer f = ignore (chain_timing_call_observer f : timing_call -> unit)
+
+let with_timing_call_observer f body =
+  let enclosing = chain_timing_call_observer f in
+  Exn.protect ~f:body ~finally:(fun () -> Stdlib.Domain.DLS.set timing_call_observer enclosing)
 
 (* The measurement proper, after the warmup: the calibration and the timed loop, with the device
    reduced to [batch depth], which dispatches [depth] launches back to back, synchronizes once and
    returns the wall in milliseconds. Separated from [time_routine] so a test can drive the whole
    policy -- which depth a call settles on, which window it times, how many launches each costs --
    on an injected clock, with no device and no machine-dependent routine (gh-ocannl-1074). *)
-let calibrate_and_time_with_retry_observer ~on_retry ~phase ~retry_contended ~timing ~repeats
-    ~queue_depth_cap ~batch =
+let calibrate_and_time_from ~started ~tagged ~on_retry ~on_call ~phase ~retry_contended ~timing
+    ~repeats ~queue_depth_cap ~batch =
   (* Every finite positive batch minimum the calibration measured, as [(depth, wall)]: the evidence
      that bounds an unresolved calibration's fallback depth. *)
   let observed = ref [] and no_supported_batch = ref false in
@@ -1015,9 +1048,9 @@ let calibrate_and_time_with_retry_observer ~on_retry ~phase ~retry_contended ~ti
   (* The probes' summed wall, against [queue_calibration_wall_ms]. Only finite positive readings are
      charged: a clock that resolved nothing spends no measurable wall, and must not end a probe on a
      NaN comparison. *)
-  let probe_wall_ms = ref 0. and probes_started = ref 0 in
-  (* The decision metadata [on_batch_decision] reports (gh-ocannl-1199): the latest affine fit and
-     the validation probes a fit wanting the unmeasured cap directed (gh-ocannl-1144). *)
+  let probe_wall_ms = ref 0. and probes_started = ref 0 and probes_ended = ref [] in
+  (* The decision metadata a [timing_call] record reports (gh-ocannl-1199): the latest affine fit
+     and the validation probes a fit wanting the unmeasured cap directed (gh-ocannl-1144). *)
   let last_fit = ref None and cap_directed_probes = ref 0 in
   let refine ~min_depth ~base_depth ~base_ms ~probe_depth ~probe_ms =
     let depth, wall_ms, fit =
@@ -1052,7 +1085,8 @@ let calibrate_and_time_with_retry_observer ~on_retry ~phase ~retry_contended ~ti
     done;
     probe_wall_ms := !probe_wall_ms +. !wall_ms;
     observe ~depth !best_ms;
-    !on_calibration_probe { role; depth; runs = !runs; wall_ms = !wall_ms; min_ms = !best_ms };
+    probes_ended :=
+      { role; depth; runs = !runs; wall_ms = !wall_ms; min_ms = !best_ms } :: !probes_ended;
     { ms = !best_ms; contended = false; unbatched = false; samples = !runs }
   in
   (* [singles] is the calibration's window of synchronized single launches, kept rather than reduced
@@ -1379,7 +1413,8 @@ let calibrate_and_time_with_retry_observer ~on_retry ~phase ~retry_contended ~ti
             "queued batch capped at depth %d: batch wall estimate is unresolved, so the shortfall \
              from the %.1f ms target cannot be quantified"
             depth queued_batch_ms);
-  !on_batch_depth depth ~calibration_samples:calibration_dispatches;
+  let setup_ms = Mtime.Span.to_float_ns (Mtime_clock.count started) /. 1e6
+  and decided = Mtime_clock.counter () in
   (* The calibration's own contention verdict is not consulted (gh-ocannl-888): it judged single
      dispatches, and the window that gets judged for refusal is the batch below.
 
@@ -1417,38 +1452,38 @@ let calibrate_and_time_with_retry_observer ~on_retry ~phase ~retry_contended ~ti
              { per_launch_ms = wall /. Float.of_int depth; contention_ms = wall })
            ()
     in
-    let report () =
-      let median_wall_ms =
-        let sorted = Array.of_list !timed_walls in
-        Array.sort sorted ~compare:Float.compare;
-        let n = Array.length sorted in
-        if n = 0 then 0.
-        else if n % 2 = 1 then sorted.(n / 2)
-        else (sorted.((n / 2) - 1) +. sorted.(n / 2)) /. 2.
-      in
-      !on_timed_window ~samples:!timed_batches ~reused:(List.length reused) ~wall_ms:!timed_wall_ms
-        ~median_wall_ms
+    let median_wall_ms =
+      let sorted = Array.of_list !timed_walls in
+      Array.sort sorted ~compare:Float.compare;
+      let n = Array.length sorted in
+      if n = 0 then 0.
+      else if n % 2 = 1 then sorted.(n / 2)
+      else (sorted.((n / 2) - 1) +. sorted.(n / 2)) /. 2.
     in
-    (result, report)
+    ( result,
+      {
+        samples = !timed_batches;
+        reused = List.length reused;
+        wall_ms = !timed_wall_ms;
+        median_wall_ms;
+      } )
   in
   let reused = if depth = 1 then singles else [] in
-  let ((result, _) as window) = time_window reused in
+  let ((first, discarded) as window) = time_window reused in
   let retried =
-    retry_contended && Poly.equal timing Queued && result.contended && Float.is_finite result.ms
-    && Float.is_positive result.ms
+    retry_contended && Poly.equal timing Queued && first.contended && Float.is_finite first.ms
+    && Float.is_positive first.ms
   in
-  let result, report =
+  let (result, window), discarded_window =
     if retried then (
       (* Keep the depth and the 2x-majority rule. A fresh independent window can outlast a transient
          Metal scheduler burst; mixing windows would instead dilute its refusal evidence. Depth-1
          retries must likewise dispatch fresh singles rather than resume the refused ones. *)
-      logf "queued timing retry: contention refused the first window (%d samples)" result.samples;
+      logf "queued timing retry: contention refused the first window (%d samples)" first.samples;
       on_retry ();
-      !on_timing_retry ~samples:result.samples ~reused:(List.length reused);
-      time_window [])
-    else window
+      (time_window [], Some discarded))
+    else (window, None)
   in
-  report ();
   let result =
     if !no_supported_batch then (
       logf
@@ -1458,7 +1493,7 @@ let calibrate_and_time_with_retry_observer ~on_retry ~phase ~retry_contended ~ti
       { result with unbatched = true })
     else result
   in
-  !on_batch_decision
+  let decision =
     {
       phase;
       timing;
@@ -1481,20 +1516,47 @@ let calibrate_and_time_with_retry_observer ~on_retry ~phase ~retry_contended ~ti
          else if Option.is_none (admitted_timing_ms result) then Refused_unreadable
          else Admitted);
       retried;
-    };
+    }
+  in
+  let call =
+    {
+      decision;
+      tagged;
+      calibration_singles = List.length singles;
+      calibration_launches = calibration_dispatches;
+      calibration_probes = List.rev !probes_ended;
+      discarded_window;
+      window;
+      setup_ms;
+      timed_ms = Mtime.Span.to_float_ns (Mtime_clock.count decided) /. 1e6;
+    }
+  in
+  on_call call;
+  Stdlib.Domain.DLS.get timing_call_observer call;
   result
+
+(* Exposed for tests with an injected clock: the per-call observers [time_routine] gives a search,
+   timed from this call's own start. *)
+let calibrate_and_time_with_retry_observer ~on_retry ~on_call ~phase ~retry_contended ~timing
+    ~repeats ~queue_depth_cap ~batch =
+  calibrate_and_time_from ~started:(Mtime_clock.counter ()) ~tagged:false ~on_retry ~on_call ~phase
+    ~retry_contended ~timing ~repeats ~queue_depth_cap ~batch
 
 (* Preserve the original all-labelled helper's source interface: an optional observer would not
    erase without adding a positional argument. *)
 let calibrate_and_time ~retry_contended ~timing ~repeats ~queue_depth_cap ~batch =
   calibrate_and_time_with_retry_observer
     ~on_retry:(fun () -> ())
+    ~on_call:(fun _ -> ())
     ~phase:None ~retry_contended ~timing ~repeats ~queue_depth_cap ~batch
 
 (* [routine.bindings] exposes the routine's live binding refs — restore them after timing (Codex P2
    on PR #103), or the returned winner would stay bound to the tuner's midpoint test values. *)
-let time_routine ?(on_retry = fun () -> ()) ?(tag_failures = false) ?phase ~timing ~repeats cctx
-    routine =
+let time_routine ?(on_retry = fun () -> ()) ?(on_call = fun _ -> ()) ?(tag_failures = false) ?phase
+    ~timing ~repeats cctx routine =
+  (* The call's [setup_ms] runs from here: the pre-dispatch validation, the warmup and the
+     calibration. *)
+  let started = Mtime_clock.counter () in
   let saved_bindings = List.map routine.Context.bindings ~f:(fun (_ss, r) -> (r, !r)) in
   let run ctx =
     if tag_failures then Outcome.tag Outcome.Launch (fun () -> Context.run ctx routine)
@@ -1533,7 +1595,8 @@ let time_routine ?(on_retry = fun () -> ()) ?(tag_failures = false) ?phase ~timi
         sync !ctx;
         Mtime.Span.to_float_ns (Mtime_clock.count c0) /. 1e6
       in
-      calibrate_and_time_with_retry_observer ~on_retry ~phase ~timing ~repeats
+      calibrate_and_time_from ~started ~tagged:tag_failures ~on_retry ~on_call ~phase ~timing
+        ~repeats
         ~retry_contended:(retry_contended_window_for_backend (Context.backend_name cctx))
         ~queue_depth_cap:(queue_depth_cap_for_backend (Context.backend_name cctx))
         ~batch)
@@ -1991,6 +2054,62 @@ type whole_flavor =
   | W_preset of { block_size : int option }
   | W_sketch of sketch_params
 
+(* Which segments of a recorded segmentation a per-segment sketch is for (gh-ocannl-1243): each
+   one's first unit in the segmentation, and their common structural pre-schedule digest. The digest
+   leaves placements out, so it cannot name a segment on its own: two segments of one structure can
+   differ in placements and want different sketches. Segments share a key only when their
+   placement-aware digests agree too ({!keyed_segments}) -- one code, one sketch, as for a model's
+   repeated layers. *)
+type seg_key = { key_units : int list; key_digest : string }
+
+let equal_seg_key a b =
+  List.equal Int.equal a.key_units b.key_units && String.equal a.key_digest b.key_digest
+
+(* Each segment's first unit in a segmentation, by position. *)
+let segment_starts (plan : Sched.segmentation) =
+  Array.of_list (List.folding_map plan ~init:0 ~f:(fun at (_, n) -> (at + n, at)))
+
+(* The keyable segments of a fission result ([plan] and its tuples, in order): its [`Normal]
+   segments, grouped by their structural AND their placement-aware pre-schedule digests, in order of
+   first occurrence -- each group's key, and its first member's pre- and post-schedule slices. *)
+let keyed_segments ~static_indices plan tuples =
+  let starts = segment_starts plan in
+  let digest ~with_placements pre =
+    SC.digest (SC.canonicalize ~static_indices ~with_placements pre)
+  in
+  List.filter_mapi tuples ~f:(fun i (kind, pre, _, post) ->
+      match kind with
+      | `Zeros | `Solo -> None
+      | `Normal ->
+          Some
+            ( (digest ~with_placements:false pre, digest ~with_placements:true pre),
+              starts.(i),
+              pre,
+              post ))
+  |> List.fold ~init:[] ~f:(fun groups (ids, at, pre, post) ->
+      if List.exists groups ~f:(fun (ids', _, _, _) -> Poly.equal ids ids') then
+        List.map groups ~f:(fun ((ids', ats, pre', post') as g) ->
+            if Poly.equal ids ids' then (ids', at :: ats, pre', post') else g)
+      else (ids, [ at ], pre, post) :: groups)
+  |> List.rev_map ~f:(fun ((structural, _), ats, pre, post) ->
+      ({ key_units = List.rev ats; key_digest = structural }, pre, post))
+
+(* The replay a per-segment sketch candidate compiles under ({!Sched.fission_segmented}'s [replay]):
+   [plan], with each segment that a key of [entries] names by position scheduled by [sketch] -- once
+   its structural digest is the key's -- and every other segment left to its kind's preset. *)
+let sketch_replay ~static_indices ~sketch plan entries =
+  let starts = segment_starts plan in
+  let schedule i seg =
+    let digest = lazy (SC.digest (SC.canonicalize ~static_indices ~with_placements:false seg)) in
+    List.find_map entries ~f:(fun (key, p) ->
+        if
+          List.mem key.key_units starts.(i) ~equal:Int.equal
+          && String.equal key.key_digest (Lazy.force digest)
+        then Some (sketch p seg)
+        else None)
+  in
+  (plan, schedule)
+
 type fiss_flavor =
   | F_preset of {
       block_size : int option;
@@ -2010,16 +2129,18 @@ type fiss_flavor =
           digest that differs, fails the candidate — for a cache entry, a re-search. Whichever mode
           derived the winner's segmentation (the finer [arity_cuts] one included, gh-ocannl-574) is
           in the data. *)
-  | F_sketch of { entries : (string * sketch_params) list; fine : bool }
-      (** Per-segment matmul sketches: for each listed segment (keyed by its pre-schedule structural
-          digest, like [F_saved]), the composed sketch pipeline instantiated with the given
-          parameters; every other segment gets the plain default preset — the same pipeline the
-          seed-time segment enumeration ran, so the segmentation converges. On a key miss
-          (segmentation drift) the candidate degrades to the plain fissioned preset and dedups away
-          by digest; unlike [F_saved] it never replays a cache entry, so no loud drift guard is
-          needed. [fine]: the {e finer} [arity_cuts] segmentation, which frees a matmul site whose
-          segment otherwise carries a companion that cannot follow the site's full arity (the
-          lm_head's max-logits reduction, gh-ocannl-574). *)
+  | F_sketch of { plan : Sched.segmentation; entries : (seg_key * sketch_params) list; fine : bool }
+      (** Per-segment matmul sketches over the segmentation the seed-time enumeration derived
+          ([plan], replayed like [F_saved]'s, gh-ocannl-1243): each keyed segment gets the composed
+          sketch pipeline instantiated with its entry's parameters, every other segment its kind's
+          plain default preset — the pipeline the enumeration ran. Entries match segments by
+          POSITION, the way a replay matches saved schedules, never by digest alone: the digest
+          leaves placements out. A keyed segment whose digest differs from its key's degrades to the
+          preset (the candidate then dedups away by digest); unlike [F_saved] it never replays a
+          cache entry, so no loud drift guard is needed. [fine]: [plan] is the {e finer}
+          [arity_cuts] segmentation, which frees a matmul site whose segment otherwise carries a
+          companion that cannot follow the site's full arity (the lm_head's max-logits reduction,
+          gh-ocannl-574). *)
   | F_split of { sites : (sr_site * int) list }
       (** Split-reduce seeds (gh-ocannl-484 task 3): per listed site, a
           [Sched.Split_reduce { axis = sr_axis; target = sr_target; num_blocks }] — applied
@@ -2342,15 +2463,22 @@ let move_label = function
           (Option.value_map mv_segment ~default:"" ~f:(Printf.sprintf "seg%d:"))
           (Sexp.to_string_mach (SC.sexp_of_saved_optop mv_op)) )
 
+(* A segment key's tag: {!dshort} of the structural digest, then the keyed segments' first units.
+   Segments of one structure but different placements share the digest and are keyed apart
+   (gh-ocannl-1243), so the units are what tells their keys apart. *)
+let seg_key_tag { key_units; key_digest } =
+  Printf.sprintf "%s:u%s" (dshort key_digest)
+    (String.concat ~sep:"+u" (List.map key_units ~f:Int.to_string))
+
 (* A per-segment sketch candidate's label: each keyed entry renders its parameters and its segment's
-   key tag ({!dshort} of the pre-schedule structural digest). Two segments can admit the same
-   parameters -- two matmul segments sharing a tile geometry -- and their one-entry candidates
-   schedule different kernels, so without the key they would print alike (Codex P2 on PR #1108). *)
+   key tag. Two segments can admit the same parameters -- two matmul segments sharing a tile
+   geometry -- and their one-entry candidates schedule different kernels, so without the key they
+   would print alike (Codex P2 on PR #1108). *)
 let fiss_sketch_label ~fine entries =
   Printf.sprintf "F_sketch[%s%s]"
     (if fine then "fine " else "")
     (String.concat ~sep:","
-       (List.map entries ~f:(fun (key, p) -> sketch_params_label p ^ " @" ^ dshort key)))
+       (List.map entries ~f:(fun (key, p) -> sketch_params_label p ^ " @" ^ seg_key_tag key)))
 
 let spec_label = function
   | Whole (W_saved (s, move)) ->
@@ -2365,7 +2493,7 @@ let spec_label = function
   | Fiss (F_saved (segs, move)) ->
       let from, extension = move_label move in
       Printf.sprintf "F_saved[%d segs%s]%s" (List.length segs) from extension
-  | Fiss (F_sketch { entries; fine }) -> fiss_sketch_label ~fine entries
+  | Fiss (F_sketch { entries; fine; _ }) -> fiss_sketch_label ~fine entries
   | Fiss (F_split { sites }) ->
       Printf.sprintf "F_split[%s]"
         (String.concat ~sep:","
@@ -2494,23 +2622,26 @@ let compile_candidate ?name ~static_indices ~base_opt ~canon ~limits ~is_gpu ~is
             else Sched.apply_classified ~static_indices prelude opt
           in
           let zero_sched tns = if is_gpu then Sched.zero_expansion ~limits tns else [] in
-          (* Per-segment schedule matching keys on the STRUCTURAL canon ([with_placements:false]):
-             placement classes can render differently across compilation lineages on byte-identical
-             segments (decided in one, undecided in the other — e.g. tuning with [timing_ctx]),
-             which used to fail winner replays wholesale. *)
-          let seg_key seg =
-            SC.digest (SC.canonicalize ~static_indices ~with_placements:false seg)
-          in
           (* A replay cuts where its saved segments say and gives the [i]th segment the [i]th saved
              schedule — by position, never by digest: the digest leaves placements out, and two
              segments of one structure can differ in placements, hence in kind and schedule. The
              replay-validity check rides on the same position: the segment cut there must be the one
              its schedule was saved against, otherwise the entry no longer applies and the candidate
              fails (a cache replay then re-searches) rather than running a segment under a schedule
-             saved for other code. *)
+             saved for other code. The check compares the STRUCTURAL canon
+             ([with_placements:false]): placement classes can render differently across compilation
+             lineages on byte-identical segments (decided in one, undecided in the other — e.g.
+             tuning with [timing_ctx]), which used to fail winner replays wholesale. The sketch
+             candidates replay the segmentation their seeds were enumerated under the same way
+             ({!sketch_replay}). *)
           let replay =
             match flavor with
-            | F_preset _ | F_sketch _ | F_split _ -> None
+            | F_preset _ | F_split _ -> None
+            | F_sketch { plan; entries; _ } ->
+                Some
+                  (sketch_replay ~static_indices
+                     ~sketch:(fun p seg -> sketch_schedule ~accum_prec ~p seg)
+                     plan entries)
             | F_saved (saved, _) | F_split_saved (_, saved, _) ->
                 let saved = Array.of_list saved in
                 let schedule i seg =
@@ -2529,7 +2660,7 @@ let compile_candidate ?name ~static_indices ~base_opt ~canon ~limits ~is_gpu ~is
                                     against: the saved segmentation no longer applies"
                                    i;
                              } ));
-                  fst (SC.of_saved seg_canon s.SC.seg_saved)
+                  Some (fst (SC.of_saved seg_canon s.SC.seg_saved))
                 in
                 Some (SC.segmentation_of (Array.to_list saved), schedule)
           in
@@ -2540,33 +2671,18 @@ let compile_candidate ?name ~static_indices ~base_opt ~canon ~limits ~is_gpu ~is
                 if privatize then extend_with_privatize ~accum_prec ~static_indices sched seg
                 else sched
             | F_saved _ | F_split_saved _ -> [] (* Never consulted: a replay brings its own. *)
-            | F_sketch { entries; _ } -> (
-                match List.Assoc.find entries ~equal:String.equal (seg_key seg) with
-                | Some p -> sketch_schedule ~accum_prec ~p seg
-                | None -> preset_sched seg)
-            | F_split _ -> preset_sched seg
+            | F_sketch _ | F_split _ -> preset_sched seg
           in
-          (* The [arity_cuts] (finer) segmentation is part of the candidate's identity: the seeds
-             enumerated their keyed segments under it (gh-ocannl-574). A replay's segmentation is
-             its data, so the mode does not reach it. *)
-          let arity_cuts =
-            match flavor with
-            | F_sketch { fine; _ } -> fine
-            | F_preset _ | F_split _ | F_saved _ | F_split_saved _ -> false
-          in
-          (* The zero fold (gh-ocannl-1175) ships only with the sketches, which seeded their keyed
-             segments under it; the preset flavors keep the untuned pipeline's separate zero. *)
-          let fold_zeros =
-            match flavor with
-            | F_sketch _ -> true
-            | F_preset _ | F_split _ | F_saved _ | F_split_saved _ -> false
-          in
+          (* Neither the [arity_cuts] (finer) segmentation (gh-ocannl-574) nor the zero fold
+             (gh-ocannl-1175) reaches a replay: the sketches' recorded segmentation was enumerated
+             under both, and carries them as data. The preset flavors keep the untuned pipeline's
+             coarse cuts and separate zero. *)
           let segmentation, tuples =
             (* Match the default pipeline's placements (statement-crossing [Local]s promoted on
                GPU), so fissioned candidates and the untuned baseline schedule the same code. *)
             Sched.fission_segmented ~promote_locals:is_gpu
               ?keep_mapping:(Sched.fission_keep_mapping ~is_gpu ~limits)
-              ?replay ~arity_cuts ~fold_zeros ~preset ~zero_sched ~static_indices opt
+              ?replay ~preset ~zero_sched ~static_indices opt
           in
           let saved_with_registries = SC.save_segments ~static_indices segmentation tuples in
           let posts = List.map tuples ~f:(fun (_, _, _, post) -> post) in
@@ -3511,7 +3627,20 @@ let model_default ?name ?report ctx comp bindings =
     in
     let preset seg = if is_gpu then Sched.default_gpu ~limits seg else Sched.default_cpu seg in
     let zero_sched tns = if is_gpu then Sched.zero_expansion ~limits tns else [] in
-    let seg_key seg = SC.digest (SC.canonicalize ~static_indices ~with_placements:false seg) in
+    (* A per-segment substitution, as [tune]'s [F_sketch] candidates apply one: [plan] replayed,
+       each keyed segment found by position (gh-ocannl-1243), the others on their kind's preset. *)
+    let apply_fiss ~plan ~entries opt =
+      let replay =
+        sketch_replay ~static_indices
+          ~sketch:(fun p seg -> sketch_schedule ~accum_prec ~p seg)
+          plan entries
+      in
+      List.map
+        (snd
+           (Sched.fission_segmented ~promote_locals:is_gpu ~replay ~preset ~zero_sched
+              ~static_indices opt))
+        ~f:(fun (_, _, _, post) -> post)
+    in
     (* The model-argmin pipeline choice for one lowering — label, roofline score (seconds), and the
        action reproducing it. Shared between the in-compile transform seam and the placement
        pre-search's leaf scoring (hermetic lowerings of decided placement vectors). *)
@@ -3548,68 +3677,57 @@ let model_default ?name ?report ctx comp bindings =
             in
             (* Per-segment sketch substitution when fission splits the routine or exposes a new
                lowering (a covering GPU zero companion) for sketching. Mirrors [tune]'s [F_sketch]
-               flavor: segments keyed by their structural pre-schedule digest, a key miss degrading
-               to the default preset. *)
+               flavor: the derived segmentation replayed, keyed segments found in it by position
+               (gh-ocannl-1243), a digest mismatch degrading to the default preset. *)
             let fiss =
               match
-                Sched.fission_scheduled ~promote_locals:is_gpu ~fold_zeros:true
+                Sched.fission_segmented ~promote_locals:is_gpu ~fold_zeros:true
                   ?keep_mapping:(Sched.fission_keep_mapping ~is_gpu ~limits)
                   ~preset ~zero_sched ~static_indices (scratch_of opt)
               with
               | exception Outcome.Cause_at _ ->
                   Int.incr n_rejected;
                   None
-              | tuples when not (fission_exposes_sites ~static_indices opt tuples) -> None
-              | tuples -> (
+              | _, tuples when not (fission_exposes_sites ~static_indices opt tuples) -> None
+              | plan, tuples -> (
                   let entries =
-                    List.filter_map tuples ~f:(fun (kind, pre, _sched, post) ->
-                        match kind with
-                        | `Zeros | `Solo -> None
-                        | `Normal -> (
-                            match score [ post ] with
-                            | None -> None
-                            | Some bs -> (
-                                (* The segment's family tree searched with the segment's own
-                                   default-preset score as incumbent; conv segments keep the flat
-                                   path. *)
-                                let best_sketch =
-                                  match tree_search ~incumbent:bs pre with
-                                  | Some tree_best -> tree_best
-                                  | None ->
-                                      best_flat ~threshold:bs pre
-                                        (sketch_seed_params ~is_gpu ~is_cpu ~limits pre)
-                                in
-                                match best_sketch with
-                                | Some (p, _s) -> Some (seg_key pre, p)
-                                | None -> None)))
+                    List.filter_map (keyed_segments ~static_indices plan tuples)
+                      ~f:(fun (key, pre, post) ->
+                        match score [ post ] with
+                        | None -> None
+                        | Some bs -> (
+                            (* The segment's family tree searched with the segment's own
+                               default-preset score as incumbent; conv segments keep the flat
+                               path. *)
+                            let best_sketch =
+                              match tree_search ~incumbent:bs pre with
+                              | Some tree_best -> tree_best
+                              | None ->
+                                  best_flat ~threshold:bs pre
+                                    (sketch_seed_params ~is_gpu ~is_cpu ~limits pre)
+                            in
+                            match best_sketch with Some (p, _s) -> Some (key, p) | None -> None))
                   in
                   if List.is_empty entries then None
                   else
-                    let subst_preset seg =
-                      match List.Assoc.find entries ~equal:String.equal (seg_key seg) with
-                      | Some p -> sketch_schedule ~accum_prec ~p seg
-                      | None -> preset seg
-                    in
                     (* Score the substituted pipeline whole, so it competes on the same footing as
                        the other candidates. *)
-                    match
-                      Sched.fission_scheduled ~promote_locals:is_gpu ~fold_zeros:true
-                        ?keep_mapping:(Sched.fission_keep_mapping ~is_gpu ~limits)
-                        ~preset:subst_preset ~zero_sched ~static_indices (scratch_of opt)
-                    with
+                    match apply_fiss ~plan ~entries (scratch_of opt) with
                     | exception Outcome.Cause_at _ ->
                         Int.incr n_rejected;
                         None
-                    | tuples2 ->
-                        let posts = List.map tuples2 ~f:(fun (_, _, _, post) -> post) in
-                        Option.map (score_valid posts) ~f:(fun s -> (entries, s)))
+                    | posts -> Option.map (score_valid posts) ~f:(fun s -> (plan, entries, s)))
             in
             let contenders =
               contenders
               @
               match fiss with
-              | Some (entries, s) ->
-                  [ (spec_label (Fiss (F_sketch { entries; fine = false })), s, `Fiss entries) ]
+              | Some (plan, entries, s) ->
+                  [
+                    ( spec_label (Fiss (F_sketch { plan; entries; fine = false })),
+                      s,
+                      `Fiss (plan, entries) );
+                  ]
               | None -> []
             in
             (* Argmin with ties to the default: the model only displaces the honest default on a
@@ -3646,18 +3764,8 @@ let model_default ?name ?report ctx comp bindings =
         | `Whole p ->
             validate_segments_for_model ~limits
               [ Sched.apply_classified ~static_indices (sketch_schedule ~accum_prec ~p opt) opt ]
-        | `Fiss entries ->
-            let subst_preset seg =
-              match List.Assoc.find entries ~equal:String.equal (seg_key seg) with
-              | Some p -> sketch_schedule ~accum_prec ~p seg
-              | None -> preset seg
-            in
-            validate_segments_for_model ~limits
-              (List.map
-                 (Sched.fission_scheduled ~promote_locals:is_gpu ~fold_zeros:true
-                    ?keep_mapping:(Sched.fission_keep_mapping ~is_gpu ~limits)
-                    ~preset:subst_preset ~zero_sched ~static_indices opt)
-                 ~f:(fun (_, _, _, post) -> post))
+        | `Fiss (plan, entries) ->
+            validate_segments_for_model ~limits (apply_fiss ~plan ~entries opt)
       in
       match apply_action () with
       | segs ->
@@ -3936,23 +4044,6 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
         (float_setting ~default:1.
         @@ Utils.get_global_arg ~arg_name:"autotune_keep_fraction" ~default:"1.")
   in
-  (* gh-ocannl-1110: what shapes which candidates this search times, and in what order, that the
-     schedule cache's key does not carry: every [Search_shaping] configuration key (the class the
-     key leaves out by definition), plus every argument of this function that resolves one — each
-     resolved value, whether passed or read. A cached [best_steps] replays only under the same
-     shape: the flip chain compares at equal depth, which presumes the same candidate order and
-     sampling. The keys that steer the placement level above this call ([Utils.Placement_shaping]:
-     the flip budget and ordering, the shipped arm, the placement store) are not in it: no search
-     reads them, and with them in it a warm chain run under [tune_placement_store=false] searched
-     every abandoned flip in full (gh-ocannl-1192). Nor are the keys of the untuned regime's model
-     pick ([Utils.Untimed_model]: [model_default_*]), which only {!model_default} reads
-     (gh-ocannl-1241). *)
-  let search_shape =
-    Printf.sprintf "search=%b beam=%d rounds=%d repeats=%d keep=%h split_sites=%d blocks=%s|%s"
-      search beam_width rounds repeats keep_fraction max_split_reduce_sites
-      (String.concat ~sep:"," (List.map seed_block_sizes ~f:Int.to_string))
-      (Utils.config_class_fingerprint Utils.Search_shaping)
-  in
   let static_indices = Idx.bound_symbols bindings in
   let backend = Context.backend_name ctx in
   let device = Context.ordinal ctx in
@@ -4026,12 +4117,26 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
      learn before failing (e.g. a decline census). *)
   let n_timings_retried = ref 0 in
   let on_retry () = Int.incr n_timings_retried in
+  (* gh-ocannl-1263: how the search's timing calls settled and were admitted, from each call's own
+     record through the per-call [on_call] -- the baseline's and every candidate's, never the
+     diagnostic untuned control's -- so the counts belong to this call whatever else observes, and
+     whatever runs in another domain. *)
+  let decision_counts = Hashtbl.Poly.create () in
+  let on_call (c : timing_call) =
+    Hashtbl.incr decision_counts (c.decision.settle, c.decision.admission)
+  in
+  let timing_decisions () =
+    Hashtbl.to_alist decision_counts
+    |> List.sort ~compare:(fun (a, _) (b, _) -> Poly.compare a b)
+    |> List.map ~f:(fun ((settle, admission), calls) -> (settle, admission, calls))
+  in
   let emit_pre_search_failure ?(base = base_report) ~phase ~candidate ~detail () =
     let r =
       {
         base with
         outcome = Pre_search_failure { phase; candidate; detail };
         timings_retried = !n_timings_retried;
+        timing_decisions = timing_decisions ();
       }
     in
     try emit_report r
@@ -4136,6 +4241,29 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
           emit_pre_search_failure ~phase:Outcome.Hardware_limits ~candidate:None
             ~detail:(Exn.to_string exn) ();
           Stdlib.Printexc.raise_with_backtrace exn backtrace
+    in
+    (* gh-ocannl-1110: what shapes which candidates this search times, and in what order, that the
+       schedule cache's key does not carry: every [Search_shaping] configuration key (the class the
+       key leaves out by definition), plus every argument of this function that resolves one — each
+       resolved value, whether passed or read. A cached [best_steps] replays only under the same
+       shape: the flip chain compares at equal depth, which presumes the same candidate order and
+       sampling. The keys that steer the placement level above this call ([Utils.Placement_shaping]:
+       the flip budget and ordering, the shipped arm, the placement store) are not in it: no search
+       reads them, and with them in it a warm chain run under [tune_placement_store=false] searched
+       every abandoned flip in full (gh-ocannl-1192). Nor are the keys of the untuned regime's model
+       pick ([Utils.Untimed_model]: [model_default_*]), which only {!model_default} reads
+       (gh-ocannl-1241). A key renders only when its resolved value is not its default, as this
+       device resolves the default (gh-ocannl-1272): stating a key at its default must not cost a
+       warm chain its records. Hence computed here, once [limits] is known: the cache key the
+       trajectory is stored under hashes the whole limits record, so two processes sharing a record
+       resolve every [auto] alike. *)
+    let search_shape =
+      Printf.sprintf "search=%b beam=%d rounds=%d repeats=%d keep=%h split_sites=%d blocks=%s|%s"
+        search beam_width rounds repeats keep_fraction max_split_reduce_sites
+        (String.concat ~sep:"," (List.map seed_block_sizes ~f:Int.to_string))
+        (Utils.config_class_fingerprint
+           ~resolve:(Sched.resolve_search_shaping_value limits)
+           Utils.Search_shaping)
     in
     (* The accumulator residency the seeded [Privatize] tiles are minted at: the same resolution the
        backend's code generation widens the serial rendering by (gh-ocannl-1116). *)
@@ -4352,6 +4480,7 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                     timings_contended = 0;
                     timings_retried = 0;
                     timings_unbatched = 0;
+                    timing_decisions = timing_decisions ();
                     candidates_contended = 0;
                     default_refused = false;
                     (* No search ran, so the only rejection this can carry is the baseline's. *)
@@ -4563,7 +4692,7 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                 Outcome.tag Outcome.Preflight (fun () ->
                     Context.check_lineage_runnable b.cctx b.routine);
                 progress_stage "baseline_timing";
-                time_routine ~on_retry ~tag_failures:true ~timing ~repeats b.cctx b.routine
+                time_routine ~on_retry ~on_call ~tag_failures:true ~timing ~repeats b.cctx b.routine
               with
               | timing_result -> (
                   let timing_result =
@@ -4697,8 +4826,8 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
         and sr_composite_eligible = ref false
         and sr_composite_timed = ref false in
         let sr_single_results = ref [] in
-        let coarse_single_measured = Hash_set.create (module String) in
-        let coarse_single_refused = Hash_set.create (module String) in
+        let coarse_single_measured = Hash_set.Poly.create () in
+        let coarse_single_refused = Hash_set.Poly.create () in
         let rounds_run = ref 0 in
         let n_sketch_candidates = ref 0
         and n_epilogue_sketch_candidates = ref 0
@@ -4841,6 +4970,7 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
             timings_contended = !n_timings_contended;
             timings_retried = !n_timings_retried;
             timings_unbatched = !n_timings_unbatched;
+            timing_decisions = timing_decisions ();
             candidates_contended = candidates_contended ();
             default_refused = default_refused ();
             candidates_failed = failed_count declines;
@@ -5028,8 +5158,8 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                         ~provenance:Outcome.Candidate ~phase:Outcome.Launch
                         ~candidate:(spec_label spec) (fun () ->
                           timed_into progress_timing_s (fun () ->
-                              time_routine ~on_retry ~tag_failures:true ~phase:!progress_phase
-                                ~timing ~repeats c.cctx c.routine))
+                              time_routine ~on_retry ~on_call ~tag_failures:true
+                                ~phase:!progress_phase ~timing ~repeats c.cctx c.routine))
                       (* Outside the boundary: the seam is not a candidate failure to classify. *)
                       |> Result.map
                            ~f:
@@ -5042,7 +5172,7 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                            [timings_contended] counter covers every unusable timing result. *)
                         (match spec with
                         | Fiss (F_sketch _) when !in_playoff -> Int.incr n_playoff_timed
-                        | Fiss (F_sketch { entries; fine }) -> (
+                        | Fiss (F_sketch { entries; fine; _ }) -> (
                             Int.incr n_fiss_sketch_timed;
                             if not fine then
                               match entries with
@@ -5079,7 +5209,7 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                            can raise, and the partial report still owns this completed window. *)
                         (match spec with
                         | Fiss (F_sketch _) when !in_playoff -> Int.incr n_playoff_timed
-                        | Fiss (F_sketch { entries; fine }) -> (
+                        | Fiss (F_sketch { entries; fine; _ }) -> (
                             Int.incr n_fiss_sketch_timed;
                             if not fine then
                               match entries with
@@ -5320,10 +5450,10 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
              per segment, where the whole-routine sketches never apply. Enumerate the fission
              segmentation once, on a hermetic copy of the base lowering with the same pipeline
              settings the candidate transform uses ([preset_sched]'s defaults), and detect a matmul
-             site per [`Normal] segment — keyed by the segment's structural pre-schedule digest,
-             like [F_saved]. *)
+             site per keyed segment ({!keyed_segments}): the candidates replay this segmentation and
+             find their segments in it by position (gh-ocannl-1243). *)
           let enum_fiss_entries ~arity_cuts =
-            if not (is_gpu || is_cpu) then []
+            if not (is_gpu || is_cpu) then ([], [])
             else
               let scratch =
                 {
@@ -5338,43 +5468,30 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
               in
               let zero_sched tns = if is_gpu then Sched.zero_expansion ~limits tns else [] in
               match
-                Sched.fission_scheduled ~promote_locals:is_gpu ~fold_zeros:true
+                Sched.fission_segmented ~promote_locals:is_gpu ~fold_zeros:true
                   ?keep_mapping:(Sched.fission_keep_mapping ~is_gpu ~limits)
                   ~arity_cuts ~preset ~zero_sched ~static_indices scratch
               with
-              | exception Outcome.Cause_at _ -> []
-              | tuples when not (fission_exposes_sites ~static_indices base_opt tuples) -> []
-              | tuples ->
-                  List.filter_map tuples ~f:(fun (kind, pre, _, _) ->
-                      match kind with
-                      | `Zeros | `Solo -> None
-                      | `Normal -> (
-                          match search_seed_params pre with
-                          | [] -> None
-                          | params ->
-                              Some
-                                ( SC.digest
-                                    (SC.canonicalize ~static_indices ~with_placements:false pre),
-                                  pre,
-                                  params )))
-          in
-          let dedup_by_key entries =
-            (* Structurally identical segments share a digest — and thus, at apply time, a schedule
-               — so keep one entry per digest. *)
-            List.fold entries ~init:[] ~f:(fun acc ((key, _, _) as e) ->
-                if List.exists acc ~f:(fun (k, _, _) -> String.equal k key) then acc else e :: acc)
-            |> List.rev
+              | exception Outcome.Cause_at _ -> ([], [])
+              | _, tuples when not (fission_exposes_sites ~static_indices base_opt tuples) ->
+                  ([], [])
+              | plan, tuples ->
+                  ( plan,
+                    List.filter_map (keyed_segments ~static_indices plan tuples)
+                      ~f:(fun (key, pre, _) ->
+                        match search_seed_params pre with
+                        | [] -> None
+                        | params -> Some (key, pre, params)) )
           in
           let prefilter_entries ~tag entries =
             (* Per-segment pre-filtering: each segment's sketches are their own family —
                cross-segment scores are incomparable (different code volumes), and the singles below
                are also ranked per segment by the recombination step. *)
             List.map entries ~f:(fun (key, pre, ps) ->
-                (key, model_prefilter_params ~seg_opt:pre ~family:(tag ^ dshort key) ps))
+                (key, model_prefilter_params ~seg_opt:pre ~family:(tag ^ seg_key_tag key) ps))
           in
-          let fiss_sketch_entries =
-            prefilter_entries ~tag:"segment " (dedup_by_key (enum_fiss_entries ~arity_cuts:false))
-          in
+          let coarse_plan, coarse_entries = enum_fiss_entries ~arity_cuts:false in
+          let fiss_sketch_entries = prefilter_entries ~tag:"segment " coarse_entries in
           (* The finer ([arity_cuts]) segmentation (gh-ocannl-574): cutting apart a companion that
              cannot follow its site's full arity — the lm_head's max-logits reduction and that
              reduction's initialization nest — frees the site's kernel to seed at full arity, where
@@ -5384,20 +5501,23 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
              unchanged segment's parameters are already timed by its coarse single, and the extra
              cuts elsewhere in a fine twin could only add launches — but the full fine key list is
              kept so the fine recombination below can staff unchanged segments from coarse-timed
-             bests. *)
-          let fine_all_entries =
-            if not is_gpu then []
+             bests. A segment the finer cuts leave unchanged keeps its first unit and its digest, so
+             its key is the coarse one. *)
+          let fine_plan, fine_all_entries =
+            if not is_gpu then ([], [])
             else
-              let fine = dedup_by_key (enum_fiss_entries ~arity_cuts:true) in
+              let plan, fine = enum_fiss_entries ~arity_cuts:true in
               let coarse_keys = List.map fiss_sketch_entries ~f:fst in
-              if List.for_all fine ~f:(fun (k, _, _) -> List.mem coarse_keys k ~equal:String.equal)
-              then [] (* The finer mode cut nothing new: the coarse seeds cover every segment. *)
-              else prefilter_entries ~tag:"fine segment " fine
+              if List.for_all fine ~f:(fun (k, _, _) -> List.mem coarse_keys k ~equal:equal_seg_key)
+              then ([], [])
+                (* The finer mode cut nothing new: the coarse seeds cover every segment. *)
+              else (plan, prefilter_entries ~tag:"fine segment " fine)
           in
+          let plan_of ~fine = if fine then fine_plan else coarse_plan in
           let fine_new_entries =
             let coarse_keys = List.map fiss_sketch_entries ~f:fst in
             List.filter fine_all_entries ~f:(fun (k, _) ->
-                not (List.mem coarse_keys k ~equal:String.equal))
+                not (List.mem coarse_keys k ~equal:equal_seg_key))
           in
           let fiss_sketch_specs =
             (* Single-segment specs: each parameter set of each keyed segment is proposed alone,
@@ -5410,9 +5530,11 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                conv seeds with a companion tail). Cross-segment combination is recovered below by
                recombining each segment's best-timed single into one composite candidate. *)
             List.concat_map fiss_sketch_entries ~f:(fun (key, ps) ->
-                List.map ps ~f:(fun p -> Fiss (F_sketch { entries = [ (key, p) ]; fine = false })))
+                List.map ps ~f:(fun p ->
+                    Fiss (F_sketch { plan = coarse_plan; entries = [ (key, p) ]; fine = false })))
             @ List.concat_map fine_new_entries ~f:(fun (key, ps) ->
-                List.map ps ~f:(fun p -> Fiss (F_sketch { entries = [ (key, p) ]; fine = true })))
+                List.map ps ~f:(fun p ->
+                    Fiss (F_sketch { plan = fine_plan; entries = [ (key, p) ]; fine = true })))
           in
           n_fiss_sketch_candidates := List.length fiss_sketch_specs;
           (* Split-reduce seeds (gh-ocannl-484 task 3), detected on the base lowering — the prelude
@@ -5473,7 +5595,7 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
           List.iter seed_specs ~f:(fun spec ->
               let result = try_spec spec in
               (match (spec, result) with
-              | Fiss (F_sketch { entries = [ (key, p) ]; fine }), Some (_, ms) ->
+              | Fiss (F_sketch { entries = [ (key, p) ]; fine; _ }), Some (_, ms) ->
                   fiss_single_results := (key, fine, (p, ms)) :: !fiss_single_results
               | _ -> ());
               Option.iter result ~f:admit);
@@ -5492,7 +5614,7 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
              singles' own timings, where the full cartesian product would be exponential. *)
           let best_single_for ~fine_ok key =
             List.filter !fiss_single_results ~f:(fun (k, fine, _) ->
-                String.equal k key && (fine_ok || not fine))
+                equal_seg_key k key && (fine_ok || not fine))
             |> List.min_elt ~compare:(fun (_, _, (_, a)) (_, _, (_, b)) -> Float.compare a b)
             |> Option.map ~f:(fun (_, _, (p, _)) -> (key, p))
           in
@@ -5508,7 +5630,7 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
             else if
               List.length fiss_sketch_entries >= 2
               && List.for_all fiss_sketch_entries ~f:(fun (key, _) ->
-                  List.Assoc.mem recombined key ~equal:String.equal
+                  List.Assoc.mem recombined key ~equal:equal_seg_key
                   || Hash_set.mem coarse_single_refused key
                      && not (Hash_set.mem coarse_single_measured key))
             then `Singles_refused
@@ -5517,7 +5639,7 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
              and its time. *)
           let try_composite ~fine entries =
             Option.map
-              (try_spec (Fiss (F_sketch { entries; fine })))
+              (try_spec (Fiss (F_sketch { plan = plan_of ~fine; entries; fine })))
               ~f:(fun ((_, ms) as r) ->
                 admit r;
                 (entries, fine, ms))
@@ -5566,7 +5688,7 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
           let playoff_contenders ~fine_ok ~current key =
             let singles =
               List.filter_map !fiss_single_results ~f:(fun (k, fine, (p, ms)) ->
-                  if String.equal k key && (fine_ok || not fine) then Some (p, ms) else None)
+                  if equal_seg_key k key && (fine_ok || not fine) then Some (p, ms) else None)
               |> List.sort ~compare:(fun (_, a) (_, b) -> Float.compare a b)
             in
             match singles with
@@ -5599,26 +5721,28 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                   ignore
                     (List.fold entries ~init:(entries, ms)
                        ~f:(fun (incumbent, incumbent_ms) (key, _) ->
-                         let current = List.Assoc.find_exn incumbent ~equal:String.equal key in
+                         let current = List.Assoc.find_exn incumbent ~equal:equal_seg_key key in
                          List.fold (playoff_contenders ~fine_ok:fine ~current key)
                            ~init:(incumbent, incumbent_ms) ~f:(fun (incumbent, incumbent_ms) p ->
                              (* What [p] would replace: [current] until an earlier alternate of this
                                 key swapped in. *)
-                             let replaced = List.Assoc.find_exn incumbent ~equal:String.equal key in
+                             let replaced =
+                               List.Assoc.find_exn incumbent ~equal:equal_seg_key key
+                             in
                              let alternate =
                                List.map incumbent ~f:(fun (k, q) ->
-                                   if String.equal k key then (k, p) else (k, q))
+                                   if equal_seg_key k key then (k, p) else (k, q))
                              in
                              match try_composite ~fine alternate with
                              | Some (_, _, alt_ms) when Float.(alt_ms < incumbent_ms) ->
                                  Int.incr n_playoff_swaps;
                                  logf "playoff: segment %s: %s replaces %s (%.4f ms < %.4f ms)"
-                                   (dshort key) (spec_label (Whole (W_sketch p)))
+                                   (seg_key_tag key) (spec_label (Whole (W_sketch p)))
                                    (spec_label (Whole (W_sketch replaced)))
                                    alt_ms incumbent_ms;
                                  (alternate, alt_ms)
                              | Some _ | None -> (incumbent, incumbent_ms)))
-                      : (string * sketch_params) list * float)));
+                      : (seg_key * sketch_params) list * float)));
           (* [None] iff the beam is empty: no candidate timed and the baseline was not eligible (an
              undispatched GPU baseline never enters the beam with a finite rank; a declined one does
              not enter it at all). *)
@@ -5807,6 +5931,7 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
               timings_contended = !n_timings_contended;
               timings_retried = !n_timings_retried;
               timings_unbatched = !n_timings_unbatched;
+              timing_decisions = timing_decisions ();
               candidates_contended = candidates_contended ();
               default_refused = default_refused ();
               candidates_failed = failed_count declines;

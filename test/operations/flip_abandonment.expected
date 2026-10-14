@@ -22,7 +22,7 @@ a flip within the ratio at depth k is searched in full and finds its better time
 the search the hopeless one was cut from had more to time: true
 the completed search records its steps: true
 a flip far behind the incumbent's final best but not at equal depth is not abandoned: true
-the trajectory's identity carries a set Search_shaping key and no other class's: true
+the trajectory's identity carries the Search_shaping key set off its default, not the one set at it, and no other class's: true
 a replayed incumbent carries the storing search's timed record: true
 a replay under another beam width abandons nothing, where the same shape's replay would: true
 a replay under other repeats abandons nothing, where the same shape's replay would: true
@@ -72,10 +72,14 @@ the shipped routine computes the plain compile's values: true
 the untimed-model keys are stated for the warm chain: true
 stating them leaves the search-trajectory identity unchanged: true
 under them the warm flip chain still replays both arms and the abandonment, and ships the same winner: true
-the control key is search-shaping: true
+they are search-shaping keys, stated at their registered defaults but not in those defaults' spelling: true
 the shipped routine computes the plain compile's values: true
-the control key is stated for the warm chain: true
-stating a key the search reads changes the search-trajectory identity: true
+the search-shaping keys are stated at their defaults for the warm chain: true
+stating them at their defaults leaves the search-trajectory identity unchanged: true
+under them the warm flip chain still replays both arms and the abandonment, and ships the same winner: true
+the shipped routine computes the plain compile's values: true
+the control key is stated off its default for the warm chain: true
+stating a key the search reads off its default changes the search-trajectory identity: true
 under it the warm chain still replays both placement arms: true
 but no longer replays the flip's abandonment: nothing was recorded under this identity: true
 the shipped routine computes the plain compile's values: true

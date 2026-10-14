@@ -750,6 +750,14 @@ val serial_lanes_for : Backend_intf.hardware_limits -> serial_lanes
     [Lanes_admitted] otherwise (HIP: the forward value pass wins on lanes in its own kernel, the
     fused backward's dV loses when cut from dK for them). *)
 
+val resolve_search_shaping_value : Backend_intf.hardware_limits -> key:string -> string -> string
+(** What the canonical value of the configuration key [key] ([Utils.canonical_config_value])
+    resolves to on the device [limits] describes, for [Utils.config_class_fingerprint ~resolve]
+    (gh-ocannl-1272): an [auto] lane mode becomes the mode {!lane_preamble_reduction_for},
+    {!lane_all_reduce_simdgroups_for} or {!serial_lanes_for} picks at [limits], and an explicit one
+    stays itself; a [gpu_schedule_block_size] becomes its clamp to the device's caps. Any other key,
+    and a value its parser rejects, is returned unchanged. *)
+
 val default_gpu :
   ?block_size:int ->
   ?min_parallel:int ->
@@ -1001,7 +1009,7 @@ val fission_segmented :
   ?arity_cuts:bool ->
   ?fold_zeros:bool ->
   ?keep_mapping:(Low_level.optimized -> schedule) ->
-  ?replay:segmentation * (int -> Low_level.optimized -> schedule) ->
+  ?replay:segmentation * (int -> Low_level.optimized -> schedule option) ->
   preset:(Low_level.optimized -> schedule) ->
   zero_sched:(Tnode.t list -> schedule) ->
   static_indices:Indexing.static_symbol list ->
@@ -1014,12 +1022,15 @@ val fission_segmented :
     [keep_mapping] do not reach it; the promotions and scope-local replicas are recomputed for its
     boundaries exactly as for derived ones, and the [i]th segment's (pre-schedule) slice gets
     [schedule i] whatever its kind — by position, because segments of one structure can differ in
-    placements, hence in kind and schedule; [preset] and [zero_sched] are not consulted. A
-    segmentation that does not fit the routine — its lengths do not sum to the routine's units, a
-    segment is empty, or a boundary separates a scope-local definition from a use it cannot be
-    replicated for — raises {!Schedule_outcome.Cause_at} with an [Illegal_schedule] cause, a
-    candidate's ordinary decline; it is never repaired into another segmentation. Whatever raises,
-    the promotions made so far are restored first. *)
+    placements, hence in kind and schedule. Where [schedule i] is [None] the segment gets its kind's
+    schedule as in a derived segmentation ([preset], [zero_sched], or none for a [`Solo]): a
+    per-segment substitution over a recorded segmentation (the autotuner's sketch candidates,
+    gh-ocannl-1243) names only the segments it schedules. A segmentation that does not fit the
+    routine — its lengths do not sum to the routine's units, a segment is empty, or a boundary
+    separates a scope-local definition from a use it cannot be replicated for — raises
+    {!Schedule_outcome.Cause_at} with an [Illegal_schedule] cause, a candidate's ordinary decline;
+    it is never repaired into another segmentation. Whatever raises, the promotions made so far are
+    restored first. *)
 
 val maybe_default_schedules :
   backend_name:string ->

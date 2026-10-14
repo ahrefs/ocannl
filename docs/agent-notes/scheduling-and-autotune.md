@@ -571,7 +571,8 @@ files.
   `F_saved[N segs from <tag>]+seg<i>:<move>` (`W_saved[N ops from <tag>]+<move>` whole-routine):
   `<tag>` is the parent's digest tag, the one the `round k:` beam line and the parent's timing line
   print, and `<move>` the appended op's s-expression; a replay prints no suffix. An `F_sketch`
-  entry ends in ` @<tag>` of its segment key. A sketch label renders every `sketch_params` field, and `autotune_labels` reads the field list off the type's
+  entry ends in ` @<tag>:u<units>` of its segment key: the structural digest's tag, then the keyed
+  segments' first units joined by `+u`, since two keys can share the digest (gh-ocannl-1243). A sketch label renders every `sketch_params` field, and `autotune_labels` reads the field list off the type's
   derived s-expression, so a new field fails that test until `sketch_params_label` renders it.
 - A per-kernel profile's sum may only be validated against the step time of **the compile it came
   from**. Each search rep crowns a different artifact with different tile sizes, so holding one rep's
@@ -849,8 +850,8 @@ files.
   `Search_abandoned`. On gh-719's cuda gpt2_mini cell arm A sat at 11.7x its final 6.862 ms for 207 of
   209 timed candidates (the recombination composites delivered the rest), so a final-best rule would
   abandon every flip. `best_steps` is cached like `mma_best_ms`, keyed by every `Search_shaping`
-  key's value (`Utils.config_class_fingerprint`, `SC.trajectory`), so a replayed incumbent still
-  has one; a failed one abandons nothing. A clean abandoned prefix is also persisted
+  key whose resolved value is not its default (`Utils.config_class_fingerprint`, `SC.trajectory`),
+  so a replayed incumbent still has one; a failed one abandons nothing. A clean abandoned prefix is also persisted
   (gh-ocannl-1136), under the unchanged schedule key with an `abandonment-` key prefix.
   A replay requires the same search shape and re-evaluates the current incumbent and ratio
   against those timings; without a qualifying rule it searches normally. It reports
@@ -862,8 +863,8 @@ files.
   `Placement_shaping` class, outside the fingerprint (gh-ocannl-1192), and so are the
   `model_default_*` keys, read only by the zero-timing `Autotune.model_default`, as the
   `Untimed_model` class (gh-ocannl-1241). While they were
-  `Search_shaping`, merely STATING one changed the identity, since the fingerprint renders every
-  key some source sets: on rog's approximate CUDA gpt2_mini cell a warm chain run under
+  `Search_shaping`, merely STATING one changed the identity, since the fingerprint then rendered
+  every key some source sets: on rog's approximate CUDA gpt2_mini cell a warm chain run under
   `tune_placement_store=false` (gh-1020's way to compare the arms afresh) replayed both arms yet
   searched each of the eight flips abandoned cold in full (775 s and 310 attempts apiece where the
   cold abandonment took 19 s), because the replayed incumbent had no record under that shape and no
@@ -872,14 +873,24 @@ files.
   commandline-picked profile (`--ocannl_profile=approximate`, whose payload sets 2) the flip budget
   cannot be raised by `OCANNL_TUNE_INLINE_FLIPS`, since the profile outranks the environment --
   pass `--ocannl_tune_inline_flips=N`, which `benchmarks/orchestrate.py` does per cell with
-  `--cell-flag tune_inline_flips=N`.
+  `--cell-flag tune_inline_flips=N`. **The fingerprint compares values, against the built-in
+  default** (gh-ocannl-1272): a `Search_shaping` key renders only when its resolved value, parsed
+  as its read sites parse it (`Utils.config_key_defaults` registers each default with its kind),
+  differs from that default, so `autotune_keep_fraction=1` against the read site's `"1."` keys
+  nothing, while a profile's non-default value renders exactly as a statement of it would. An
+  `auto` lane mode is resolved per device (`Schedule.resolve_search_shaping_value`, passed by
+  `tune` once `limits` is known), so an explicit mode equal to `auto`'s pick is also the default.
+  A new `Search_shaping` key needs a `config_key_defaults` row (the `config_class_fingerprint`
+  test fails without one), and every read of a registered key refuses a `~default:` that disagrees.
 - **A structural twin of a lost flip is skipped without a budget slot** (gh-ocannl-1274). The
   identity is `placement_surface`'s `ps_twin_identity`: every top-level statement of the raw
   program (`optimized.source`, where an inlined node is still present) that sets or reads the
   flipped node, rendered by the schedule cache's canonical walk (`SC.canonicalize_code`), each node
-  tagged with the lineage's placement, the specialization's decided placement and the chain's
-  committed reading, the flipped node marked; then the readings, the recompute cost and whether it
-  is modeled. One hop only, so a difference two nodes away reaches it only through the cost. An
+  tagged with the lineage's placement, the specialization's decided placement, the chain's
+  committed reading and what the TIMING lineage brings (the flips are measured there), the flipped
+  node marked; then the readings, the recompute cost and whether it
+  is modeled. A source holding an opaque construct anywhere identifies nothing, since
+  `code_touches_tn` cannot see what a `Staged_compilation` touches. One hop only, so a difference two nodes away reaches it only through the cost. An
   anchor is an alternative that was abandoned or completed no faster than its incumbent. A failed
   search measured nothing, and an accepted flip did not lose, so neither anchors. A twin counts as
   rejected (so a default-materialized node still joins `certain_mat`). No twin record is persisted:
@@ -1164,11 +1175,12 @@ files.
   depth 4 of a 64 ms kernel would keep 256 ms batches). None of this changes the objective (the depth picks the scale;
   an entry timed at an older depth is an accurate, merely expensive, reading), so no cache-key
   generation bump. `autotune_timing_modes` pins each change on the injected clock with a claim
-  that fails without it. Its probe claims read `Autotune.on_calibration_probe` (gh-ocannl-1119),
-  one record per probe tagged with the branch that started it, never the `batch` calls: runs of
-  same-depth batches merge a stall retry into its confirmation, so the retry escaped the budget
-  claim, and chunking them counts probes only as a lower bound. A new probe site passes its own
-  `~role`; the test's witness claim holds every report against the device's batch log.
+  that fails without it. Its probe claims read the call record's `calibration_probes`
+  (gh-ocannl-1119), one entry per probe tagged with the branch that started it, never the `batch`
+  calls: runs of same-depth batches merge a stall retry into its confirmation, so the retry escaped
+  the budget claim, and chunking them counts probes only as a lower bound. A new probe site passes
+  its own `~role`; the test's witness claim holds every reported probe, and the timed loop after
+  them, against the device's batch log.
   An unresolved first pair retries at double depth, and the next fit uses the two batch observations so an
   inflated synchronized-single window cannot force the cap. If the last bounded probe first reaches
   the target, the interpolated target depth is still sampled and checked against the measured
@@ -1211,8 +1223,8 @@ files.
   count as they start, so partial/fatal reports retain them too; diagnostic control timing is
   excluded. A depth-one retry takes fresh singles instead of resuming the refused calibration window. Only finite
   positive contention readings qualify, not an unresolved clock.
-  `on_timing_retry` accounts for the discarded window's extra dispatches, while
-  `on_timed_window` describes only the returned window; `autotune_measured_refusal` labels the
+  The call record's `discarded_window` accounts for the discarded window's extra dispatches, while
+  its `window` describes only the returned one; `autotune_measured_refusal` labels the
   retries separately from final host refusals and prints each returned depth and median wall.
   cc, CUDA/HIP and isolated timing keep their existing dispatch counts and policy. This adds
   sampling of the same objective, so cache-key generations stay unchanged.
@@ -1230,7 +1242,7 @@ files.
   non-positive or non-finite minimum is a clock that resolved nothing, refused by
   `Autotune.admitted_timing_ms` on the number itself, and such an estimate batches at the cap
   because sub-resolution readings are exactly what queueing exists to resolve.
-  Symptom to recognize: the `on_batch_depth` seam (printed by `autotune_timing_modes` to stderr)
+  Symptom to recognize: the call record's depth (printed by `autotune_timing_modes` to stderr)
   reporting depth 1 where a batch was expected, alongside `NOT TIMED` for every candidate. Note
   that `autotune_timing_modes`' own device-facing claims are all written `... || contended`, so a
   total refusal reads there as a pass — the tuner tests are what catch it. Downstream,
@@ -1256,11 +1268,21 @@ files.
   at depth 1 after ~40 calibration launches (sixteen singles plus the depth-2 confirmation) and
   then time exactly what `isolated` would. `BENCH_TIMING_TRACE=1` in the benchmark runners splits a
   session's wall this way; `benchmarks/gh834_cells.sh` is the per-box driver. Its per-call
-  `decision` line (gh-ocannl-1199) is `Autotune.on_batch_decision`, built from the calibration's own
-  metadata: each exit of `calibrate_and_time` returns its `batch_settle`, and
-  `fit_queued_batch_depth_between_with_cap` returns the `affine_fit` (fixed, marginal, verdict) behind
-  every depth it chooses — so a new calibration branch must name its settle and verdict, and a
-  diagnosis reads them instead of re-deriving the policy from probe readings. A cold schedule cache
+  `decision` line (gh-ocannl-1199) is the `decision` of the call's `Autotune.timing_call` record,
+  built from the calibration's own metadata: each exit of `calibrate_and_time` returns its
+  `batch_settle`, and `fit_queued_batch_depth_between_with_cap` returns the `affine_fit` (fixed,
+  marginal, verdict) behind every depth it chooses — so a new calibration branch must name its
+  settle and verdict, and a diagnosis reads them instead of re-deriving the policy from probe
+  readings. **Everything a timing call did reaches observers as that ONE record, when the call
+  returns** (gh-ocannl-1263): a search's own accounting takes it through `time_routine`'s per-call
+  `~on_call` (that is how `report.timing_decisions`, the settle × admission counts each benchmark
+  arm carries in `results.jsonl`, is counted, so neither a trace nor a search in another domain
+  moves it), a trace through the domain-local `Autotune.install_timing_call_observer` /
+  `with_timing_call_observer`. Add a new per-call fact as a field of the record, never as a seam
+  fired mid-call: the four such seams it replaced (depth decision, probe, retry, window) made the
+  harness pair them up by arrival order (`depth_at`, `preflight_at`), the class of bug the trace
+  kept patching. A call that raises returns no record; the trace counts those as pre-dispatch
+  validations started less tagged records returned. A cold schedule cache
   is not a cold session: the backend's own compiled-code cache persists across processes, and in
   gh-ocannl-834's CUDA pair the second session's compile-and-bookkeeping time was 64 s against the
   first's 406 s from the PTX ComputeCache alone — the driver gives each CUDA session an empty
@@ -1297,9 +1319,9 @@ files.
   green only because those readings were usually flagged `contended` and took the claim's escape
   hatch. A bound on a batched reading belongs on the SAME quantity, and specifically on the WINDOW
   the reading is a minimum over: the timed batches and their summed wall, which `time_routine`
-  reports through `Autotune.on_timed_window` (payload: `~samples` — counted by the loop, not
-  restated from its result, so a test can hold the two against each other — `~reused`, the window's
-  batches taken from the calibration and already counted there, `~wall_ms` and `~median_wall_ms`). Not the whole call — its wall also holds the warmup
+  reports as its `Autotune.timing_call` record's `window` (`samples` — counted by the loop, not
+  restated from its result, so a test can hold the two against each other — `reused`, the window's
+  batches taken from the calibration and already counted there, `wall_ms` and `median_wall_ms`). Not the whole call — its wall also holds the warmup
   and the calibration's synchronized singles, and on a backend whose round trip is two orders of
   magnitude above an amortized launch those few dozen singles are ~40% of the call against tens of
   thousands of timed dispatches, so a whole-call mean is diluted by construction and a stall in the
@@ -1388,7 +1410,14 @@ files.
   digest**: the structural digest leaves placements out, and two segments of one structure can
   differ in placements, hence in kind (`Solo` vs `Normal`) and schedule — a first-match lookup hands
   the later one a schedule the search never timed (`fission_replay_segmentation` leg 5; the same
-  holds for `extend_spec`, whose units name their segment index). The replay-validity check rides
+  holds for `extend_spec`, whose units name their segment index, and for the per-segment sketch
+  candidates, gh-ocannl-1243: an `F_sketch` replays the segmentation its seeds were enumerated
+  under, its `replay` callback answering `None` for a segment left to its kind's preset, and keys
+  its segments by first unit plus structural digest, `Autotune.seg_key`). Segments of one structure
+  share a sketch key only when their placement-aware digests agree too, so repeated layers still
+  share one sketch. On the C backends fission's crossing promotions leave such twins agreeing in
+  placements; a GPU's restored `Local` products are what split them (`autotune_sketch_placements`).
+  The replay-validity check rides
   on the position: segment `i`'s digest must equal the saved `i`th, and a recorded segmentation
   that does not partition the routine's units, or separates a scope-local definition from a use,
   is refused by `fission_segmented`. **A candidate transform's failure must be a typed cause**
