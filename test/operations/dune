@@ -237,6 +237,7 @@
   (alias runtest-cc_temp_ownership-compiler_debug)
   (alias runtest-cc_temp_ownership-compiler_dll)
   (alias runtest-cc_kept_library)
+  (alias runtest-cc_temp_library_sweep)
   (alias runtest-micrograd_demo_logging)
   (alias runtest-n3_fwd_with_prec-unoptimized)
   (alias runtest-top_down_prec-unoptimized)
@@ -1157,6 +1158,41 @@
   (alias runtest-env_spelling_gate))
  (action
   (diff cc_kept_library.expected cc_kept_library.actual)))
+
+; gh-ocannl-1268: a process's startup removes the temporary cc libraries of processes that are gone
+; (Windows keeps a loaded DLL past its routine's exit) and keeps those of running processes. Two
+; child processes run with a private temp directory.
+
+(executable
+ (name cc_temp_library_sweep)
+ (modules cc_temp_library_sweep)
+ (libraries base ocannl stdio unix arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(rule
+ ; ocannl-backend: cc -- the temporary library is the cc compile's; the command line pins the backend.
+ (target cc_temp_library_sweep.actual)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:cc_temp_library_sweep.exe}
+    parent
+    --ocannl_backend=cc
+    --ocannl_cc_backend_probe_cache=false
+    --ocannl_output_debug_files_in_build_directory=false
+    --ocannl_output_dlls_in_build_directory=false))))
+
+(rule
+ (alias runtest-cc_temp_library_sweep)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate))
+ (action
+  (diff cc_temp_library_sweep.expected cc_temp_library_sweep.actual)))
 
 (test
  (name hip_half_load)
@@ -5218,6 +5254,26 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ (name pipelined_move_legality)
+ (package neural_nets_lib)
+ (deps
+  (env_var OCANNL_PROFILE)
+  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
+  ocannl_config
+  (env_var OCANNL_BACKEND)
+  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
+  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
+  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
+  (env_var OCANNL_LARGE_MODELS)
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
+ (modules pipelined_move_legality)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
  (name schedule_ldmatrix_matmul)
  (package neural_nets_lib)
  (deps
@@ -8436,3 +8492,13 @@
   (alias runtest-env_spelling_gate))
  (action
   (diff flip_twins.expected flip_twins.actual)))
+
+(test
+ (name autotune_replay_refusal)
+ ; ocannl-backend: cc -- Context.cpu (); a corrupt cache entry's refusal is backend-independent
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules autotune_replay_refusal)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))

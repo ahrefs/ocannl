@@ -180,7 +180,10 @@ val complete : canonical -> bool
     they still support {!to_saved}/{!of_saved} round-trips. *)
 
 val tn_of_ref : canonical -> int -> Tnode.t
-(** The tensor node at a canonical index. Raises [Invalid_argument] on out-of-range. *)
+(** The tensor node at a canonical index. On out-of-range raises
+    [Schedule_outcome.Cause_at (Transform, Illegal_schedule { check = "Schedule_cache.tn_of_ref"; _
+     })]: the index comes from a saved schedule or a recorded placement decision, so it is a stale
+    or corrupt entry's refusal, not an invariant violation (gh-ocannl-1242). *)
 
 (** {2 Symbol resolution registries}
 
@@ -205,8 +208,12 @@ val to_saved : registry -> Schedule.schedule -> saved_schedule * registry
 val of_saved : canonical -> saved_schedule -> Schedule.schedule * registry
 (** Replays a saved schedule against a (fresh) compile's canonical form: base and static references
     resolve through [canonical], minting ops go through the {!Schedule} builders and their fresh
-    symbols are recorded for later references. Raises [Invalid_argument] on dangling references
-    (canonical mismatch — always guard with {!digest} equality first). *)
+    symbols are recorded for later references. A dangling reference (canonical mismatch — always
+    guard with {!digest} equality first — or a corrupt entry) raises
+    [Schedule_outcome.Cause_at (Transform, Illegal_schedule { check = "Schedule_cache.of_saved"; _
+     })] ([check = "Schedule_cache.tn_of_ref"] for a tensor-node index, as {!tn_of_ref}): a typed
+    refusal, so a cache replay declines into a re-search instead of ending [Autotune.tune] under
+    strict failure classification (gh-ocannl-1242). *)
 
 (** {2 The disk cache} *)
 

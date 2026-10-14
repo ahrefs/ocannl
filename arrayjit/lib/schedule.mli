@@ -601,6 +601,28 @@ val apply_classified :
 type op_verdict = Op_legal | Op_illegal of string | Op_unknown of string
 [@@deriving sexp_of, equal]
 
+(** gh-ocannl-1231: how an IR breaks the staging scope's invariant for one of its pipelined tiles
+    ({!Low_level.pipelined_tile}) — the two positional facts the renderer's buffer rotation needs.
+*)
+type pipeline_violation =
+  | Read_outside_rotor of { tile : Tn.t; rotor : Indexing.symbol }
+      (** A read of [tile] has no loop binding [rotor] around it: there is no rotor value to select
+          the copy with (writes outside the rotor loop are the prologue load, which fills copy 0). A
+          [Split] or a materializing [Unroll] of the rotor loop removes its binder. *)
+  | Rotor_not_serial of { tile : Tn.t; rotor : Indexing.symbol; axis : Low_level.axis_type }
+      (** A loop binding [rotor] is no longer [Serial] (an [Unroll] in place, a retype): the
+          rotation renders off the serial counter. *)
+[@@deriving sexp_of]
+
+val pipeline_violation : Low_level.optimized -> pipeline_violation option
+(** The first violation of the staging scope's invariant in [opt.llc], over every tile of
+    [opt.pipelined]: every loop binding a rotor is [Serial], and every read of a pipelined tile sits
+    inside a loop binding its rotor. [None] when [opt] has no pipelined tiles. These are the facts
+    [C_syntax] checks while rendering (its typed [Backend_codegen] declines remain as the backstop);
+    {!op_legality} refuses the moves that would break them. *)
+
+val pipeline_violation_message : pipeline_violation -> string
+
 val op_legality : Low_level.optimized -> optop -> op_verdict
 (** gh-494 waypoint 3: the op-legality oracle. A schedule op is a thread-pairing transform over the
     routine's access relations; its obligation is decided by the {!Affine} queries — pairing the
@@ -629,7 +651,12 @@ val op_legality : Low_level.optimized -> optop -> op_verdict
     stage is [Op_legal]; shared staging (barrier placement and launch geometry are validated
     downstream) and hoisted staging (link-time host-side packing) report [Op_unknown].
     [Privatize]/[Expand_zero]/[Fuse_epilogue] report [Op_unknown]; their own apply-time
-    preconditions remain in force. *)
+    preconditions remain in force.
+
+    Before any of that, on code carrying pipelined tiles (gh-ocannl-1231): an op whose application
+    leaves a {!pipeline_violation} is a proven [Op_illegal] carrying {!pipeline_violation_message} —
+    the staging scope's invariant, stated once for every op shape, so that the beam's menu,
+    seeding's {!schedule_legality} and the renderer agree. *)
 
 val schedule_legality : Low_level.optimized -> schedule -> (optop * op_verdict) list
 (** Per-op verdicts, each against the code with the preceding ops applied (on a hermetic copy —

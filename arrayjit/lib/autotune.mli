@@ -828,7 +828,22 @@ type report = {
           case this exists for — before it was contained, that one rejection ended the search. *)
   declines : decline_summary list;
       (** Candidate rejections aggregated by stable cause key. Their counts sum to
-          [candidates_failed]. Cache-entry replay failures are excluded. *)
+          [candidates_failed]. Cache-entry replay failures are excluded: they are
+          [cache_replay_refusal]. *)
+  cache_replay_refusal : Ir.Schedule_outcome.classified_cause option;
+      (** Why the cache entry stored under this call's key did not replay, when its replay was
+          refused with a typed cause (gh-ocannl-1242): a stale or corrupt entry — a reference its
+          saved schedule makes that this lowering's canonical form cannot resolve
+          ([check = "Schedule_cache.of_saved"] or ["Schedule_cache.tn_of_ref"]), a fission segment
+          that drifted from the one its schedule was saved against ([Autotune.fission_replay]), a
+          transform precondition the replayed schedule violates ([Schedule.apply]). The call then
+          proceeds as on a miss — it searches, and the search's store overwrites the entry, or
+          compiles the untuned default under [autotune_search=false] — and every report it emits
+          carries the cause. [None] when no entry was found or matched its key's self-description,
+          when the found one replayed, and when the replay was rejected as an unparallelized GPU
+          routine (gh-ocannl-532, not a cause; logged). An untyped failure of the replay is not a
+          refusal: it ends the call as a [Pre_search_failure] under strict failure classification.
+      *)
   rounds_run : int;  (** Beam-expansion rounds actually executed (0 = seeds only). *)
   beam_width : int;
       (** The beam width the search resolved ([?beam_width], else config [autotune_beam_width]): how

@@ -192,6 +192,7 @@ type report = {
   candidates_failed : int;
   baseline_declined : bool;
   declines : decline_summary list;
+  cache_replay_refusal : Outcome.classified_cause option;
   rounds_run : int;
   beam_width : int;
   sketch_candidates : int;
@@ -271,6 +272,7 @@ let no_search_report ~timing =
     candidates_failed = 0;
     baseline_declined = false;
     declines = [];
+    cache_replay_refusal = None;
     rounds_run = 0;
     beam_width = 0;
     sketch_candidates = 0;
@@ -4252,12 +4254,16 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
        or failure, so a pre-search failure never understates the work already attempted (a declined
        baseline in particular must not read back as [baseline_declined = false], [declines =
        []]). *)
+    (* gh-ocannl-1242: why a cache entry under this key did not replay, when it was refused with a
+       typed cause — set by the lookup below and carried by every report after it. *)
+    let cache_replay_refusal = ref None in
     let census () =
       {
         base_report with
         candidates_failed = failed_count declines;
         baseline_declined = Option.is_some baseline_decline;
         declines = decline_summaries declines;
+        cache_replay_refusal = !cache_replay_refusal;
       }
     in
     let cached =
@@ -4335,6 +4341,7 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                     candidates_failed = failed_count declines;
                     baseline_declined = Option.is_some baseline_decline;
                     declines = decline_summaries declines;
+                    cache_replay_refusal = None;
                     rounds_run = 0;
                     beam_width;
                     sketch_candidates = 0;
@@ -4396,9 +4403,13 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                   };
                 Some (c.cctx, c.routine)
             | Error (Outcome.Classified classified) ->
-                (* Stale or corrupt entry: fall through to a fresh search. *)
+                (* Stale or corrupt entry: fall through to a fresh search, whose store then
+                   overwrites the entry. A reference the canonical form cannot resolve
+                   ([SC.of_saved]), a drifted fission segment and a refused transform all arrive
+                   here typed (gh-ocannl-1242, gh-ocannl-1164); the report carries the cause. *)
                 logf "cache entry replay FAILED, re-searching: %s"
                   (Outcome.detail_of_cause classified.cause);
+                cache_replay_refusal := Some classified;
                 None
             | Error (Outcome.Fatal _ as failure) -> raise_pre_search ~base:(census ()) failure)
         | _ -> None
@@ -4818,6 +4829,7 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
             candidates_failed = failed_count declines;
             baseline_declined = Option.is_some baseline_decline;
             declines = summaries;
+            cache_replay_refusal = !cache_replay_refusal;
             rounds_run = !rounds_run;
             beam_width;
             sketch_candidates = !n_sketch_candidates;
@@ -5783,6 +5795,7 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
               candidates_failed = failed_count declines;
               baseline_declined = Option.is_some baseline_decline;
               declines = decline_summaries declines;
+              cache_replay_refusal = !cache_replay_refusal;
               rounds_run = !rounds_run;
               beam_width;
               sketch_candidates = List.length sketch_params;

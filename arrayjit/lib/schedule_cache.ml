@@ -81,9 +81,20 @@ type canonical = {
 let digest c = c.digest
 let complete c = c.complete
 
+(* gh-ocannl-1242: a reference that a saved schedule (or a recorded placement decision) makes and
+   the canonical form it is replayed against cannot resolve is a fact about the ENTRY -- stale or
+   corrupt -- not a bug of this process. So it is a typed [Illegal_schedule] refusal, like the
+   drifted fission replay (gh-ocannl-1164): a cache replay declines and the tuner re-searches, where
+   the untyped [Invalid_argument] it used to be was fatal under the default strict classification
+   and ended [Autotune.tune] instead. *)
+let stale_reference ~check detail =
+  raise
+    (Schedule_outcome.Cause_at
+       (Schedule_outcome.Transform, Schedule_outcome.Illegal_schedule { check; detail }))
+
 let tn_of_ref c i =
   if i < 0 || i >= Array.length c.ref_tns then
-    invalid_arg
+    stale_reference ~check:"Schedule_cache.tn_of_ref"
       (Printf.sprintf "Schedule_cache.tn_of_ref: index %d out of range (%d tensor nodes)" i
          (Array.length c.ref_tns))
   else c.ref_tns.(i)
@@ -305,7 +316,7 @@ let unresolve_exn r sref =
   match Map.find r.bwd sref with
   | Some s -> s
   | None ->
-      invalid_arg
+      stale_reference ~check:"Schedule_cache.of_saved"
         (Printf.sprintf "Schedule_cache.of_saved: dangling reference %s"
            (Sexp.to_string (sexp_of_sym_ref sref)))
 
