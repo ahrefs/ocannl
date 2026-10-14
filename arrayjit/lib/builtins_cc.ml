@@ -132,6 +132,34 @@ let integer_power_builtins ~prefix ~supports_double ~dialect =
     ]
   else [ single ]
 
+(* Floating [pow] for the CUDA-like dialects, whose fast math (CUDA's [--use_fast_math], HIP's
+   [-ffast-math]) may lower [powf] to [exp2(y * log2(x))]: NaN for every negative base, integral
+   exponents included (gh-ocannl-1240). An integral exponent takes the vendor [pow] of the base's
+   magnitude and restores the sign from the exponent's parity, which is what C [pow] does; any other
+   exponent -- fractional, or NaN -- keeps the vendor domain, so a negative base under a fractional
+   exponent stays NaN. A domain fix, not a correctly rounded [pow]: the magnitude is the vendor's.
+   The sign is read bitwise, so [-0] counts as negative ([(-0)^3 = -0]) and fast math cannot fold
+   the test; every integer beyond the mantissa's reach is even, which the integer-conversion guard
+   encodes. Known integral exponents never get here ([C_syntax.integer_power_doc] takes them). *)
+let runtime_power_builtins ~prefix =
+  let make typ name sign_test pow trunc fabs int_typ int_limit =
+    ( name,
+      Printf.sprintf
+        {|%s %s %s(%s x, %s y) {
+  if (!(%s) || %s(y) != y) return %s(x, y);
+  %s magnitude = %s(%s(x), y);
+  return (%s(y) < %s && ((%s)y & 1) != 0) ? -magnitude : magnitude;
+}|}
+        prefix typ name typ typ sign_test trunc pow typ pow fabs fabs int_limit int_typ,
+      [] )
+  in
+  [
+    make "float" "ocannl_pow_f32" "__float_as_uint(x) >> 31" "powf" "truncf" "fabsf" "int"
+      "16777216.0f";
+    make "double" "ocannl_pow_f64" "__double_as_longlong(x) < 0" "pow" "trunc" "fabs" "long long"
+      "9007199254740992.0";
+  ]
+
 let builtins =
   [
     (* Float16 feature detection and type definitions *)

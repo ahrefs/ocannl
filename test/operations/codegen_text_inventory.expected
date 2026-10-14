@@ -178,7 +178,7 @@ test/operations/gpu_serial_lanes.ml [also pins text this scan cannot name: compu
     "for ("
 test/operations/half_float_power.ml
     "(half)pow((float)("
-    "__float2half(powf(__half2float("
+    "__float2half(ocannl_pow_f32(__half2float("
     "hexp2("
     "ocannl_powi_"
     "pow("
@@ -262,6 +262,10 @@ test/operations/reserved_routine_names.ml
     "printf__"
     "void " ^ "gh686_ordinary_name" ^ "("
     "void " ^ ... ^ "("
+test/operations/runtime_integer_power.ml
+    "__float2half(ocannl_pow_f32(__half2float("
+    "ocannl_pow_f32("
+    "ocannl_powi_"
 test/operations/scan_loop.ml [renders generated text in memory]
 test/operations/schedule_batch_grid.ml [also pins text this scan cannot name: untraced callback]
 test/operations/schedule_batched_mma.ml

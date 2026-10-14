@@ -8145,6 +8145,29 @@
   (env_var OCANNL_SIMPLIFY_FP_ALGEBRA))
  (libraries base ocannl stdio arrayjit.verdict ll_test test_utils))
 
+; gh-ocannl-1240: powers with a run-time exponent keep a negative base's integral powers under the
+; GPU backends' fast math.
+
+(test
+ (name runtime_integer_power)
+ (package neural_nets_lib)
+ (modules runtime_integer_power)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND)
+  (env_var OCANNL_BUILD_FILES_PREFIX))
+ (libraries base ocannl stdio arrayjit.verdict ll_test test_utils))
+
+(test
+ ; ocannl-backend: cc -- compiles the CUDA-like power helper with the host C compiler, no device.
+ (name runtime_power_fast_math_emulation)
+ (package neural_nets_lib)
+ (modules runtime_power_fast_math_emulation)
+ (deps
+  ocannl_config
+  (env_var OCANNL_CC_BACKEND_COMPILER_COMMAND))
+ (libraries arrayjit.context arrayjit.verdict ctypes ctypes.foreign))
+
 ; gh-ocannl-946: declaration-reader controls and real first-parent merge attribution; gh-ocannl-1201
 ; refusals for unread source and Dune forms; gh-ocannl-1213 compact rendering.
 

@@ -1799,7 +1799,8 @@ files.
   NaN. Bitwise classification and final sign restoration are required under HIP fast math:
   the arithmetic-only helper lost half `(-0)^3`'s sign and produced NaN for double `0^-1`.
   This is an integer multiplication policy, not a correctly rounded floating-pow promise;
-  fractional and dynamic exponents retain the vendor operation. Constant integer powers also stay
+  fractional and dynamic exponents retain the vendor operation (on CUDA/HIP through the run-time
+  power helper below). Constant integer powers also stay
   in the IR until codegen: host f64 folding would change the f32 multiplication rounding, so a
   non-dyadic constant/materialized cubic comparison pins this boundary. Guard: `integer_power_domain`.
   Recheck the base after recursive simplification too: an `Identity` wrapper can expose a constant
@@ -1818,10 +1819,8 @@ files.
   takes the legacy `fastMathEnabled=false`), while the widened form is f32 `pow` narrowed under
   both. On M4 Max under the modern policy the overload's results already matched f32 `pow`
   narrowed bitwise (573 random fractional and run-time exponents over bases in [0.01, 100]), so
-  the widening moved no value there. The domain is f32 `pow`'s under the backend's math flags
-  (CUDA compiles `--use_fast_math`): NaN for a negative base under a fractional exponent, and
-  under CUDA fast math also under a run-time integral exponent (the integer-power helper takes
-  only known constants). `half_float_power` executes constant-fractional and buffer-read
+  the widening moved no value there. The domain is f32 `pow`'s as the run-time power helper below
+  shapes it on CUDA/HIP: NaN for a negative base under a fractional exponent. `half_float_power` executes constant-fractional and buffer-read
   exponents within one ulp at half precision of an f64 reference, pins the result bitwise to the
   same backend's f32 `pow` narrowed on the host on every backend, and pins the widened spelling
   on CUDA/HIP and Metal. That is an observation of results, not of the
@@ -1833,3 +1832,15 @@ files.
   packing with a per-lane `pow(` that skips `binop_syntax` fails it, and the values alone would not
   (on M4 Max the half overload matches f32 `pow` narrowed bitwise); routing through
   `binop_syntax` passes.
+
+- A float power whose exponent is only known at run time renders on CUDA and HIP through
+  `ocannl_pow_f32`/`ocannl_pow_f64` (`Builtins_cc.runtime_power_builtins`, gh-ocannl-1240), half
+  and bf16 widened into the f32 one. CUDA's `--use_fast_math` lowers `powf` to
+  `exp2(y * log2(x))`, NaN for every negative base, integral exponents included. The helper takes
+  an integral exponent on `|x|` and restores the sign from its parity (the sign read bitwise, so
+  `-0` is negative); any other exponent keeps the vendor call, so a negative base under a
+  fractional exponent stays NaN. Like the integer-power helper, a domain fix: the magnitude is
+  the vendor's. Metal keeps its own `pow`, which under its fast math functions already returned
+  these powers on M4 Max. `runtime_integer_power` executes it on the devices, and
+  `runtime_power_fast_math_emulation` compiles the helper on the host under a macro emulating
+  the fast-math lowering, with the bare emulated `powf` as its negative control.
