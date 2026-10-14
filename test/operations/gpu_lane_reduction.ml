@@ -426,12 +426,14 @@ let () =
   in
   p "auto on the run's backend resolves to its measured mode"
     (S.equal_lane_preamble_reduction (S.lane_preamble_reduction_for device) expected);
-  (* The cross-simdgroup bound (gh-ocannl-1168): four simdgroups where measured to pay (Metal), one
-     simdgroup elsewhere -- and a 64-wide head's default schedule is the resolved bound's. *)
+  (* The cross-simdgroup bound (gh-ocannl-1168, gh-ocannl-1256): four simdgroups where measured to
+     pay (Metal, CUDA), one simdgroup elsewhere -- and a 64-wide head's default schedule is the
+     resolved bound's. *)
   p "auto spans one simdgroup on an unmeasured device"
     (S.lane_all_reduce_simdgroups_for BI.no_hardware_limits = 1);
   p "auto on the run's backend spans its measured number of simdgroups"
-    (S.lane_all_reduce_simdgroups_for device = match backend_name with "metal" -> 4 | _ -> 1);
+    (S.lane_all_reduce_simdgroups_for device
+    = match backend_name with "metal" | "cuda" -> 4 | _ -> 1);
   (let case = dk_nest ~name:"lred_auto64" ~e_n:64 ~d_n:64 () in
    let sched ?all_reduce_simdgroups () =
      S.sexp_of_schedule

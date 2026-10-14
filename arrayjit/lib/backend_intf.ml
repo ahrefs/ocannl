@@ -325,7 +325,9 @@ type hardware_limits = {
           gh-ocannl-1124 rule) wherever unmeasured, and on the C backends, which run no lane
           geometry. Measured: 4 on Metal (M4 Max; the D1 training step at head width 64 0.97x /
           0.92x / 0.82x at seq 128 / 512 / 1024, at width 128 0.69x at seq 512, against the plain
-          plan: benchmarks/gh1133_cells.sh [d1ar4] vs [d1ar1]). Read by the default GPU schedule's
+          plan: benchmarks/gh1133_cells.sh [d1ar4] vs [d1ar1]); 4 on CUDA (RTX, rog-nv; at head
+          width 64 0.84x / 0.52x / 0.41x at seq 128 / 512 / 1024, at width 128 0.37x at seq 512, the
+          same A/B, gh-ocannl-1256). Read by the default GPU schedule's
           [gpu_lane_all_reduce_simdgroups = auto]. *)
   online_softmax_auto_block : int;
       (** Automatic key-block size for [online_softmax_block=auto] (gh-ocannl-1171); 0 selects the

@@ -98,8 +98,8 @@ files.
   rendering (typed `Illegal_schedule`), and the renderer emits the tree only for a listed uniform
   entry. Inserted barriers answer to uniformity, the IR's own to the stricter no-`If` rule. The schedule retypes at `k` simdgroups only up to
   `gpu_lane_all_reduce_simdgroups` (`auto` = `hardware_limits.lane_all_reduce_simdgroups`: 4 on
-  Metal, where heads of 64 and 128 train 3-31% faster on it; 1 until a device measures the
-  barriers paying).
+  Metal, where heads of 64 and 128 train 3-31% faster on it, and on CUDA (RTX, 16-63% faster,
+  gh-ocannl-1256); 1 until a device measures the barriers paying, HIP included).
   Measured on Metal (D1 training, lukstafi/ocannl-staging PR for gh-ocannl-1124): duplicated is a
   1.07-1.45x step REGRESSION (every lane pays the value width per pair), cooperative a 0.94-0.98x
   win, and it lanes dQ too -- fission then cuts dQ from the row dot `D`, whose merge would now cost
