@@ -305,8 +305,12 @@ files.
   pipeline has minted no `Get_dynamic` yet (the one-hot rewrite and the lane-extract form come
   later, and the raw one-hot reduction already reads every row as plain `Get`s), so the decision
   that changes in production is `reconcile_traced_store`'s re-judgement of spliced reads over the
-  final code — no test executes that path yet. `test/operations/dynamic_axis_coverage.ml` executes
-  the flip on hand-built IR that carries a gather into `optimize`. The same placeholder must not
+  final code. `test/operations/dynamic_axis_coverage.ml` executes the flip on hand-built IR that
+  carries a gather into `optimize`, and that re-judgement in its leg 12 (gh-ocannl-1245). The
+  strict re-check sees only reads spliced from an INHERITED computation (`record_spliced_reads`
+  fires for nodes in the lineage table at routine entry): a uniform deferred and consumed in ONE
+  routine splices its lane-extract gather locally and keeps the raw verdicts, so a test of the
+  re-check defers the producer in one routine and writes the counter, then reads, in the next. The same placeholder must not
   reach the read-modify-write exemption (gh-ocannl-1244): a read records its statement's write map
   (`a_stmt_write`) only when the two dynamic coordinates agree — both static, or the same axis
   with an equal runtime value (`Low_level.stmt_write_for_read`) — so a gather inside a fixed-row
