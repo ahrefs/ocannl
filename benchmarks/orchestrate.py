@@ -379,9 +379,14 @@ def cell_flag_arg(text):
 
 
 def flag_text(flag):
-    """An `CellFlag` spelled as its `--cell-flag` argument (wildcards as `*`)."""
-    selector = "" if flag.selector is None else "/".join(p or "*" for p in flag.selector) + ":"
-    return f"{selector}{flag.key}={flag.value}"
+    """A `CellFlag` spelled as its `--cell-flag` argument (wildcards as `*`), for a message: the
+    operator-supplied parts go through `display_value`."""
+    selector = (
+        ""
+        if flag.selector is None
+        else "/".join(display_value(p) if p else "*" for p in flag.selector) + ":"
+    )
+    return f"{selector}{flag.key}={display_value(flag.value)}"
 
 
 def flag_applies(flag, cell):
@@ -433,7 +438,8 @@ def shadowing_warning(ambient, cells, regimes, flags):
         "WARNING: ambient OCANNL_* variables a cell's own command line outranks -- they do not "
         "apply in those cells, whose rows record them under `ambient_ocannl_shadowed`: "
         + "; ".join(
-            f"{var} (by {', '.join(sorted(by))})" for var, by in sorted(outranked.items())
+            f"{var} (by {', '.join(sorted(map(display_arg, by)))})"
+            for var, by in sorted(outranked.items())
         )
     )
 
@@ -655,7 +661,10 @@ _DISPLAY_PLAIN_RE = re.compile(r"[A-Za-z0-9_.,:/=+@%~-]*")
 
 
 def display_value(value):
-    """An operator-supplied value as a label, a report cell or a failure note shows it.
+    """An operator-supplied value as a label, a report cell, a failure note or a message shows it.
+
+    Every human-facing rendering of a `--cell-flag` value or an ambient path goes through this (or
+    through `json.dumps`, as the report's header lines do); only the records keep the raw value.
 
     Plain values (`16`, `/tmp/cache`) are shown as they are. Anything else is JSON-quoted with `|`
     and the backtick escaped as well, so a value cannot add a column to a report table, a line to
@@ -666,6 +675,12 @@ def display_value(value):
     if _DISPLAY_PLAIN_RE.fullmatch(value):
         return value
     return json.dumps(value).replace("|", "\\u007c").replace("`", "\\u0060")
+
+
+def display_arg(arg):
+    """An OCANNL commandline argument as a message shows it: its value through `display_value`."""
+    key, eq, value = arg.partition("=")
+    return key + eq + display_value(value) if eq else display_value(arg)
 
 
 def ocannl_flags_note(flag_args):

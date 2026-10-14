@@ -5918,6 +5918,20 @@ class OcannlFlagTest(unittest.TestCase):
         table = [l for l in (out / "report.md").read_text().splitlines() if l.startswith("| ")]
         self.assertEqual(len({l.count("|") for l in table}), 1, table)
 
+        # Review round 2: the messages too -- the once-per-sweep warning and the refusals name
+        # the flag, and the class is closed by routing every rendering through `display_value`.
+        flag = orchestrate.CellFlag(None, "debug_highlight_pcre", "x\nWARNING: forged")
+        cells = {("w", "cc", "default", "f32")}
+        warning = orchestrate.shadowing_warning(
+            {"OCANNL_DEBUG_HIGHLIGHT_PCRE": "y"}, cells, ["exact"], [flag]
+        )
+        self.assertNotIn("\n", warning)
+        self.assertIn('--ocannl_debug_highlight_pcre="x\\nWARNING: forged"', warning)
+        [problem] = orchestrate.flag_problems(
+            [orchestrate.CellFlag(("a|b", None, None, None), "debug_highlight_pcre", "a|b")], cells
+        )
+        self.assertNotIn("|", problem)
+
     def test_the_cache_guidance_names_the_cells_own_cache(self):
         # Review round 1: a tuned cell given another autotune_cache_dir leaves its finished arms
         # there, so guidance naming the default would leave the real cache populated.
