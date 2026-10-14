@@ -533,7 +533,7 @@ let numerics_tag () =
    layer is a property of the lowered code, so neither can reach {!digest}. What the numerics policy
    resolves to per backend is neither a knob nor the policy itself; it is derived from the backend's
    [codegen_capabilities] below (gh-ocannl-1117). *)
-let codegen_tag ~(limits : Backend_intf.hardware_limits)
+let codegen_tag ?backend ~(limits : Backend_intf.hardware_limits)
     ~(capabilities : Backend_intf.codegen_capabilities) () =
   (* Every key is spelled out at its call site, as an explicit [arg_name] string literal, rather
      than passed through a helper: that literal IS how the consistency tests find a configuration
@@ -589,10 +589,14 @@ let codegen_tag ~(limits : Backend_intf.hardware_limits)
     ]
     (* GPU zero elision rewrites every timed kernel list after its transform (gh-ocannl-1257), so a
        winner crowned with it off is the answer to a different question. Only the OFF setting is
-       hashed: the default leaves every existing key, cc's included (where the gate does nothing),
-       exactly as it was. Codex P1 on staging#1113. *)
+       hashed, and only for a GPU backend, where the gate does anything: the default leaves every
+       existing key exactly as it was, and a CPU backend's keys never depend on it (Codex P1 and P2
+       on staging#1113). A caller naming no backend is answered as if it could be a GPU one. *)
     @
-    if Utils.get_global_flag ~default:true ~arg_name:"gpu_elide_covered_zeros" then []
+    if
+      Option.exists backend ~f:(fun b -> not (Schedule.backend_is_gpu b))
+      || Utils.get_global_flag ~default:true ~arg_name:"gpu_elide_covered_zeros"
+    then []
     else [ "no-zero-elision" ]
   in
   String.prefix (Stdlib.Digest.to_hex (Stdlib.Digest.string (String.concat ~sep:"\000" parts))) 8
@@ -760,7 +764,7 @@ let cache_key ?objective ~timing_identity ~(limits : Backend_intf.hardware_limit
         | "digest" -> canonical.digest
         | "backend" -> sanitize backend
         | "numerics" -> "n" ^ numerics_tag ()
-        | "codegen" -> "c" ^ codegen_tag ~limits ~capabilities ()
+        | "codegen" -> "c" ^ codegen_tag ~backend ~limits ~capabilities ()
         (* The worker-pool signature (gh-ocannl-530): CPU crowns do not transfer across pools, so a
            pool change re-tunes instead of replaying. [None] (GPU backends) contributes nothing. *)
         | "pool" -> (

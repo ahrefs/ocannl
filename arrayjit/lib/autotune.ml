@@ -4114,7 +4114,7 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
           release_quietly ~what:"the baseline compile" bctx)
     in
     release_baseline_hook := release_baseline;
-    let codegen_tag = SC.codegen_tag ~limits ~capabilities () in
+    let codegen_tag = SC.codegen_tag ~backend ~limits ~capabilities () in
     let objective = timing_string timing in
     let key =
       SC.cache_key
