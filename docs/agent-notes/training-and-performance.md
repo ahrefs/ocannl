@@ -214,6 +214,11 @@ files.
   runners' cells survived while OCANNL's vanished, and the report read as an OCANNL runner bug
   rather than a numerics one — when a sweep loses only one framework's rows, suspect the emitter's
   spelling before the framework.
+- A shell driver reads that line by PARSING it (stdlib `python3`), never with a `sed`/`grep`
+  pattern over its text: a scan from `"arm":"A"` to the first `}` read a nested object placed
+  before `best_ms` as an arm that timed nothing, and pinned the runner's field order to suit it.
+  `benchmarks/gh834_session.py` is the shape; its harness `benchmarks/test-gh834-cells.sh` renders
+  `Bench_json`'s own templates, so a renamed field fails there rather than in a box's session.
 
 - Before its later stages a cell CHECKPOINTS what it completed (gh-ocannl-1209):
   `measure_and_emit` writes a `bench: checkpoint {...}` line to stderr, flushed, after every

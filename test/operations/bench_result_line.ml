@@ -262,18 +262,6 @@ let () =
     && Yojson.Safe.equal (cell "D" ~settle:"singles_reach_target" ~admission:"admitted") (`Int 3)
     && Yojson.Safe.equal (cell "D" ~settle:"wall_scaled" ~admission:"refused_unbatched") (`Int 1)
     && Yojson.Safe.equal (cell "E" ~settle:"isolated" ~admission:"admitted") (`Int 3));
-  (* Shell consumers read an arm's scalars with a [[^}]*] scan from its name, which stops at the
-     first closing brace ([benchmarks/gh834_cells.sh] reads [best_ms] that way); the matrix is the
-     arm's one nested object, so it must come after every scalar, empty or not. *)
-  p_all "every arm's scalars precede its first closing brace" [ "A"; "B"; "C"; "D"; "E" ]
-    ~f:(fun name ->
-      match String.substr_index diverged ~pattern:(Printf.sprintf {|"arm":"%s"|} name) with
-      | None -> false
-      | Some start ->
-          let rest = String.drop_prefix diverged start in
-          let scan = String.prefix rest (Option.value (String.index rest '}') ~default:0) in
-          List.for_all [ "\"best_ms\":"; "\"terminal_failure\":"; "\"timing_decisions\":" ]
-            ~f:(fun key -> String.is_substring scan ~substring:key));
   p_all "an arm that timed nothing carries an empty matrix, not null" [ "A"; "B"; "C" ] ~f:(fun n ->
       Yojson.Safe.equal (decisions n) (`Assoc []));
   p_all "an arm with no crowned candidate reports a null tensorization, not a label" [ "A"; "C" ]
