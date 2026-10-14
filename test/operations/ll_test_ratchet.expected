@@ -24,7 +24,7 @@ test/operations/cpu_parallel.ml -- records=11 traversals=0
 test/operations/footprint_materialization.ml -- records=4 traversals=0
 test/operations/gpu_lane_reduction.ml -- records=2 traversals=3
 test/operations/gpu_serial_lanes.ml -- records=3 traversals=5
-test/operations/hardware_warp_shuffle.ml -- records=1 traversals=0
+test/operations/hardware_warp_shuffle.ml -- records=2 traversals=0
 test/operations/integer_power_domain.ml -- records=1 traversals=0
 test/operations/launch_dim_gate.ml -- records=2 traversals=0
 test/operations/narrow_storage_compute.ml -- records=0 traversals=1

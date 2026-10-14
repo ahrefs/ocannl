@@ -6750,7 +6750,33 @@ module C_syntax (B : C_syntax_config) = struct
             then
               fail
                 "the reduce axis to be the only workgroup axis (the per-warp staging slots are not \
-                 replicated per sibling workgroup thread)");
+                 replicated per sibling workgroup thread)";
+            (* gh-ocannl-1238: every lane of the workgroup must reach the two barriers below. The
+               notion of which statements insert a barrier, and whether uniform control reaches
+               them, is [Low_level.inserted_barriers]' -- the one [validate_parallel] refused a
+               divergent entry by before rendering began. Asked again here, so this rendering emits
+               a barrier only where that notion lists it: a site it does not list means the two
+               recognizers drifted apart, and the validator never saw this barrier. *)
+            match
+              List.filter
+                (Low_level.inserted_barriers ~reassociable:Online_softmax.reassociable_local
+                   ~warp_size:warp !(ctx.current_kernel_llc)) ~f:(fun ib ->
+                  Indexing.equal_symbol ib.Low_level.ib_index i
+                  && Low_level.equal_inserted_barrier_form ib.Low_level.ib_form
+                       Low_level.Warp_reduce_partials)
+            with
+            | [] ->
+                invalid_arg
+                  ("C_syntax.pp_ll: Workgroup_reduce loop " ^ symbol_ident i
+                 ^ " renders the multi-warp warp-shuffle reduction, but \
+                    Low_level.inserted_barriers does not list it: the validator's notion of which \
+                    statements insert a barrier has drifted from this renderer's")
+            | sites ->
+                if List.exists sites ~f:(fun ib -> not ib.Low_level.ib_uniform) then
+                  fail
+                    "workgroup-uniform enclosing control (no enclosing workgroup loop, and no \
+                     enclosing guard reading a scope local, memory, or a workgroup symbol): lanes \
+                     on the other side of the guard would skip the cross-warp barrier");
           let ident = symbol_ident i in
           let ctyp = B.typ_of_prec prec in
           let cast = "(" ^ String.strip B.loop_index_type ^ ")" in
@@ -7577,7 +7603,10 @@ module C_syntax (B : C_syntax_config) = struct
        around it would only hide the defect. *)
     Low_level.validate_scope_bodies llc;
     Low_level.validate_scan_loops optimize_ctx.Low_level.placements llc;
-    Low_level.validate_parallel_classified optimize_ctx.Low_level.placements llc;
+    (* gh-ocannl-1238: with this backend's shuffle width, so the validator sees the barriers the
+       warp-shuffle and lane all-reduce renderings insert, not only the IR's own. *)
+    Low_level.validate_parallel_classified ~warp_size:B.warp_size
+      ~reassociable:Online_softmax.reassociable_local optimize_ctx.Low_level.placements llc;
     (* Launch-extent guards (construct-then-fold, axis-types proposal §2), only for kinds this
        backend binds in hardware -- the serial fallback iterates the true extent. *)
     let llc =

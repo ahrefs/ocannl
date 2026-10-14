@@ -9,6 +9,17 @@ warp-shuffle max parity: true
 non-warp-multiple extent rejected (GPU) or runs serially (CPU): true
 guarded smaller-extent accumulation rejected (GPU) or runs serially (CPU): true
 an unguarded accumulation nest under the Workgroup_reduce level (a Serial level inside it) is refused loudly where a lane index is bound (GPU) or localized whole as a serial nest (CPU): true
+wshfl_grid_guard: the guarded-off row's terms are nonzero, so a dropped guard shows in it: true
+wshfl_grid_guard: the shared notion lists the tree as inserting a barrier, under uniform control: true
+wshfl_grid_guard: the validator admits the tree under a Grid-symbol guard at 32-lane warps: true
+wshfl_grid_guard: every row holds its seed plus, below the guard, its exact sum: true
+wshfl_grid_guard: the emitted kernel stages per-warp partials under the guard: true
+wshfl_flag_guard: the shared notion lists the tree as inserting a barrier, under divergent control: true
+wshfl_flag_guard: a backend rendering no warp shuffles inserts none of those barriers: true
+wshfl_flag_guard: the validator refuses the tree at 32-lane warps, naming the inserted barrier: true
+wshfl_flag_guard: an unguarded copy of the tree beside a divergent one is not uniform either: true
+wshfl_flag_guard: the compile is refused, typed, by the validator where the shuffle renders (GPU), or compiles serially where no barrier is inserted (CPU): true
+wshfl_flag_guard: the refusal comes before rendering: no kernel source is written: true
 the old bf16 128-lane mod7 fixture collapses to 131/131/128: true
 the bf16 single-warp rival-rendering values are pairwise distinct: true
 the bf16 four-warp rival-rendering values are pairwise distinct: true

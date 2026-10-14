@@ -91,7 +91,12 @@ files.
   one predicate: whole `.x`, a one-dimensional workgroup, no enclosing workgroup loop, and every
   enclosing condition built from constants and non-lane index symbols (a local or a memory read
   disqualifies). The renderer and `Schedule.workgroup_memory_bytes` (which counts the slots
-  through the `lane_all_reduce_workgroup_bytes` capability) both read it. The schedule retypes at `k` simdgroups only up to
+  through the `lane_all_reduce_workgroup_bytes` capability) both read it. The same walk finds
+  `try_warp_reduce`'s multi-warp tree into a cell, whose two barriers have NO barrier-free fallback
+  (gh-ocannl-1238): `Low_level.inserted_barriers ~warp_size` lists every statement whose rendering
+  inserts a barrier the IR lacks, `validate_parallel ~warp_size` refuses a non-uniform entry before
+  rendering (typed `Illegal_schedule`), and the renderer emits the tree only for a listed uniform
+  entry. Inserted barriers answer to uniformity, the IR's own to the stricter no-`If` rule. The schedule retypes at `k` simdgroups only up to
   `gpu_lane_all_reduce_simdgroups` (`auto` = `hardware_limits.lane_all_reduce_simdgroups`: 4 on
   Metal, where heads of 64 and 128 train 3-31% faster on it; 1 until a device measures the
   barriers paying).

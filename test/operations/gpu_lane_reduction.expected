@@ -94,9 +94,12 @@ on an unmeasured device the default schedule is the resolved mode's: true
 on the run's device the default schedule is the resolved mode's: true
 --- leg 10: barriers only under workgroup-uniform control ---
 lred_guard_uniform64: a guard on the serial query symbol leaves the site cross-simdgroup: true
+lred_guard_uniform64: the validator's notion lists its barriers at 32-lane shuffles, uniform, and admits them: true
 lred_guard_uniform64: every cell of K holds the serial reference's exact value: true
 lred_guard_uniform64: the emitted kernel spells the cross-simdgroup all-reduce: true
 lred_guard_flag64: a guard reading a lane-dependent local leaves the site serial: true
+lred_guard_flag64: the validator's notion lists no inserted barrier for the site at 32-lane shuffles: true
+lred_guard_flag64: the validator admits the serial fallback at 32-lane shuffles: true
 lred_guard_flag64: the emitted kernel does not spell the all-reduce: true
 lred_guard_flag64: the emitted kernel loops the reduction in every lane: true
 lred_guard_unrolled64: the unroll leaves one copy of the reduction unguarded beside guarded ones: true
