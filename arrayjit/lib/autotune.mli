@@ -1201,9 +1201,13 @@ val no_search_report : timing:timing_mode -> report
       ([ok], [failed] or [abandoned]), [best_ms] and [elapsed_s]. An abandoned flip's [best_ms] is
       its best at the verdict's depth, followed by that depth as [after] and the incumbent's best
       there as [incumbent_ms] (gh-ocannl-1110).
+    - [flip_twin] ({!Train.tune_placements}, gh-ocannl-1274): a flip skipped without a budget slot
+      as a structural twin of one that lost: [arm], and that flip's arm label as [twin_of]. No
+      [arm_start] / [arm_done] frames it, since nothing is searched.
     - [flips_start] / [flips_done] ({!Train.tune_placements}): [candidates] and [budget];
-      [flips_done] adds [measured], [pruned], [abandoned] (of the [measured]), [improved] (whether
-      the chain beat the A/B winner) and [best_ms].
+      [flips_done] adds [measured], [pruned], [abandoned] (of the [measured]), [twinned] (skipped as
+      twins, not among the [measured]), [improved] (whether the chain beat the A/B winner) and
+      [best_ms].
 
     [elapsed_s] is seconds since that search (or arm) started; [compile_s] and [timing_s] are the
     parts of it spent in candidate compiles and in candidate timing windows, [attempts] the
@@ -1455,6 +1459,38 @@ type placement_surface = {
           whose floor meets the best {e measured} time cannot win and is skipped without spending
           budget (the admissible direction — the bound already exceeds the incumbent's measurement).
           [None] when no envelope constant is present, or when {!placement_floor_withheld}. *)
+  ps_twin_identity :
+    node_tag:(Ir.Tnode.t -> string option) ->
+    chain:(Ir.Tnode.t -> Ir.Low_level.reading option) ->
+    Ir.Low_level.flip_candidate ->
+    Ir.Low_level.flip_alternative ->
+    string option;
+      (** gh-ocannl-1274: the structural-twin identity of one alternative of a candidate on this
+          surface, given the readings the flip chain has committed so far ([chain], [None] for an
+          undecided node). [Train.tune_placements] skips an alternative whose identity matches one
+          already measured and lost in the same chain, without a budget slot.
+
+          What equal identities claim is a stated list, not "everything the flip's outcome depends
+          on", which no local reading can be. The neighbourhood is every top-level statement of the
+          raw program that sets or reads the flipped node, closed over the statement-level locals it
+          reads (a top-level statement defining one joins it), rendered with fresh-name
+          normalization ({!Ir.Schedule_cache.canonicalize_code}): per node its dims, precision and
+          constancy, the placement the lineage brought, the placement the specialization decided,
+          the chain's reading of it, the caller's [node_tag] (the flip chain tags its timing
+          lineage, since the flips are measured there; [None] from it refuses, as for an inherited
+          computation in that lineage), observability (an observable buffer is never aliased), the
+          surface's enablement classes and the compile-time bounds candidate; then the flipped
+          node's mark, its default and target readings, recompute cost and whether it is modeled.
+
+          [None] — never a twin — where the rendering cannot be the flip's whole local reading: an
+          incomplete rendering; a raw program holding an opaque construct anywhere (a
+          [Staged_compilation] touches no node the neighbourhood filter can see); a flipped node no
+          statement here assigns; a rendered node with a computation an earlier routine of the
+          lineage stored ({!Context.inherits_computation}), whose replayed prefix the source does
+          not show; a local read that no statement defines. Out by design: whole-routine context
+          (where the neighbourhood sits, hence live ranges — per-layer twins differ in exactly
+          that), and anything a farther node contributes except through the recompute cost. A false
+          twin costs one unmeasured flip, never a wrong value. *)
 }
 (** The placement decision surface prepared for search (gh-ocannl-514): the per-node
     inline/materialize levels of the joint placement x sketch x fission space. *)

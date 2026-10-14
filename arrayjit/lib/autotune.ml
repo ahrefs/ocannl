@@ -3333,7 +3333,140 @@ type placement_surface = {
   ps_enablement : Set.M(Ir.Tnode).t;
   ps_disablement : Set.M(Ir.Tnode).t;
   ps_floor_ms : materialized:Ir.Tnode.t list -> float option;
+  ps_twin_identity :
+    node_tag:(Ir.Tnode.t -> string option) ->
+    chain:(Ir.Tnode.t -> LL.reading option) ->
+    LL.flip_candidate ->
+    LL.flip_alternative ->
+    string option;
 }
+
+(* gh-ocannl-1274: the flip chain's structural-twin identity of one alternative. The neighbourhood
+   is every top-level statement of the raw program ([base.source], where a node the default policy
+   inlines is still present) that sets or reads the flipped node: its producers and its consumers,
+   backward ones included. Rendered by the schedule cache's canonical walk, so node, loop-binder and
+   scope names are normalized by first occurrence and each node carries its dims, precision and
+   constancy.
+
+   What the identity claims is bounded, and stated here as a list rather than as "everything the
+   flip's outcome depends on", which no local reading can be: per rendered node, the placement the
+   lineage brought ([SC.lineage_tag]), the placement this specialization decided, the reading the
+   chain has committed, the caller's [node_tag] (the flip chain's timing lineage; [None] refuses),
+   observability (an
+   observable buffer is never aliased), the surface's enablement classes, and the compile-time
+   bounds candidate (the simplifier folds guards on it); then the flipped node's mark, its default
+   and target readings, its recompute cost and whether the cost is modeled. No identity -- never a
+   twin -- where the rendering cannot be the flip's whole local reading: an incomplete rendering (an
+   opaque construct, a free symbol); a source holding an opaque construct anywhere (a
+   [Staged_compilation] touches no node [code_touches_tn] can see, so the filter would drop it); a
+   flipped node no statement here assigns; and a rendered node with a computation an earlier routine
+   of the lineage stored ([inherited]), whose replayed prefix the source does not show; and a
+   statement-level local read that no statement defines ([close]).
+   Whole-routine context -- where the neighbourhood sits, hence live ranges -- is deliberately out:
+   per-layer twins differ in exactly that. A false twin costs one unmeasured flip, never a wrong
+   value. *)
+(* The scope locals a fragment reads ([Get_local]) and defines ([Set_local], [Declare_local], a
+   [Local_scope]'s own id, a scan's carried state), everything visited. *)
+let scope_locals (code : LL.t) =
+  let module F = LL.Access_fold in
+  let policy =
+    {
+      F.discarded_operands = F.Visit;
+      gated_operands = F.Visit;
+      dead_loops = F.Visit;
+      local_scopes = F.Visit;
+      guards = F.Ignore;
+      scan_implicit = F.Visit;
+    }
+  in
+  let empty = Set.empty (module LL.Scope_id) in
+  let hooks =
+    {
+      (F.hooks ()) with
+      F.statement =
+        (fun _ (reads, defs) (st : LL.t) ->
+          match st with
+          | LL.Set_local (id, _) | LL.Declare_local { id; _ } -> F.Continue (reads, Set.add defs id)
+          | _ -> F.Continue (reads, defs));
+      scalar =
+        (fun _ (reads, defs) (sc : LL.scalar_t) ->
+          match sc with
+          | LL.Get_local id -> F.Continue (Set.add reads id, defs)
+          | LL.Local_scope { id; _ } -> F.Continue (reads, Set.add defs id)
+          | _ -> F.Continue (reads, defs));
+    }
+  in
+  F.fold ~policy ~hooks ~init:(empty, empty) code
+
+let flip_twin_identity ~static_indices ~lineage ~inherited ~enablement ~disablement
+    (base : LL.optimized) =
+  let stmts = LL.flat_lines [ base.LL.source ] in
+  (* A neighbourhood closed over the statement-level locals it reads: a top-level statement that
+     defines one (the [Declare_local] + [Set_local] a rewrite such as online softmax emits) joins
+     it, in source order, until every local read is defined inside; [None] when one never is. The
+     filter by node cannot see those statements, and an unbound local would render as complete. *)
+  let rec close hood =
+    let reads, defs = scope_locals (LL.unflat_lines hood) in
+    let unbound = Set.diff reads defs in
+    if Set.is_empty unbound then Some hood
+    else
+      let defines st =
+        (not (List.mem hood st ~equal:phys_equal))
+        && not (Set.is_empty (Set.inter unbound (snd (scope_locals st))))
+      in
+      if not (List.exists stmts ~f:defines) then None
+      else close (List.filter stmts ~f:(fun st -> List.mem hood st ~equal:phys_equal || defines st))
+  in
+  let octx = base.LL.optimize_ctx in
+  let decided = octx.LL.placements in
+  (* The whole source's completeness, read once per surface on first use. *)
+  let source_complete = ref None in
+  let source_complete () =
+    match !source_complete with
+    | Some c -> c
+    | None ->
+        let c =
+          SC.complete (SC.canonicalize_code ~static_indices ~node_tag:(fun _ -> "") base.LL.source)
+        in
+        source_complete := Some c;
+        c
+  in
+  fun ~node_tag:caller_tag ~chain (fc : LL.flip_candidate) (fa : LL.flip_alternative) ->
+    let tn = fc.LL.fc_tn in
+    let hood = close (List.filter stmts ~f:(LL.code_touches_tn tn)) in
+    let produced_here =
+      Option.exists (Hashtbl.find base.LL.traced_store tn) ~f:(fun ta -> ta.LL.has_assignment)
+    in
+    (* The walk tags each node once, at its first occurrence: every rendered node passes here. *)
+    let any_inherited = ref false in
+    let node_tag n =
+      if inherited n then any_inherited := true;
+      SC.lineage_tag lineage octx n
+      ^ (match caller_tag n with
+        | Some tag -> tag
+        | None ->
+            any_inherited := true;
+            "")
+      ^ (if Ir.Tnode.is_observable n then ";obs" else "")
+      ^ (if Set.mem enablement n then ";en" else "")
+      ^ (if Set.mem disablement n then ";dis" else "")
+      ^ (match Ir.Tnode.bounds_candidate n with
+        | None -> ""
+        | Some iv -> ";b=" ^ Sexp.to_string (Ir.Interval.sexp_of_t iv))
+      ^ (match Ir.Tnode.Placements.get decided n with
+        | None -> ";d=u"
+        | Some (m, _) -> ";d=" ^ Sexp.to_string (Ir.Tnode.sexp_of_memory_mode m))
+      ^ (match chain n with None -> "" | Some r -> ";chain=" ^ LL.reading_to_string r)
+      ^ if Ir.Tnode.equal n tn then ";flip" else ""
+    in
+    Option.bind hood ~f:(fun hood ->
+        let c = SC.canonicalize_code ~static_indices ~node_tag (LL.unflat_lines hood) in
+        Option.some_if
+          (produced_here && (not !any_inherited) && SC.complete c && source_complete ())
+          (Printf.sprintf "%s;%s->%s;cost=%d;modeled=%b" (SC.digest c)
+             (LL.reading_to_string fc.LL.fc_default)
+             (LL.reading_to_string fa.LL.fa_flip)
+             fa.LL.fa_recompute_cost fa.LL.fa_modeled))
 
 let placement_surface ?name ?ordering ?(evidence = []) ctx comp bindings =
   let ordering = match ordering with Some o -> o | None -> flip_ordering () in
@@ -3382,6 +3515,10 @@ let placement_surface ?name ?ordering ?(evidence = []) ctx comp bindings =
     ps_enablement = enablement;
     ps_disablement = disablement;
     ps_floor_ms;
+    ps_twin_identity =
+      flip_twin_identity ~static_indices ~lineage:(Context.placements ctx)
+        ~inherited:(Context.inherits_computation ctx)
+        ~enablement ~disablement base;
   }
 
 (** {2 Model-picked untuned defaults (gh-ocannl-491 task 3)}

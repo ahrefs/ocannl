@@ -647,6 +647,11 @@
 # trails the refined incumbent's best after ITS first as many by more than tune_flip_profit_margin
 # squared. Equal depth, not the incumbent's final best: on gh-719's gpt2_mini cell the arm itself
 # sat 11.7x above its final time for 207 of its 209 timed candidates.
+# gh-ocannl-1274: a flip whose local reading is canonically identical to one already measured and
+# lost in the same chain (the flipped node's producer and consumer statements under fresh-name
+# normalization, with every node's dims and placements, and the flip's recompute cost) is skipped
+# as `twin-of` that flip WITHOUT spending a budget slot -- so the per-layer twins of a transformer
+# (gpt2_mini's q/k/v projections, one set per layer) cost one slot per set, not one per layer.
 #tune_inline_flips=0
 
 # gh-ocannl-638: which placement arm `Train.tune_placements` ships. `auto` (the default) ships the

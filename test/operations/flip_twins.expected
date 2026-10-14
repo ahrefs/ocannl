@@ -1,0 +1,44 @@
+ranked surface (node, default -> alternative, cost, twin class):
+  relu_y1    inline      -> materialize cost 2     class A
+  relu_y2    inline      -> materialize cost 2     class A
+  relu_y3    inline      -> materialize cost 2     class B
+  x1         inline      -> materialize cost 1     class C
+  x2         inline      -> materialize cost 1     class C
+  x3         inline      -> materialize cost 1     class D
+  n15        inline      -> materialize cost 1     class E
+every branch node is a flip candidate with an identity: true
+x1 and x2 are twins: same structure, same dims, same placements: true
+y1 and y2 are twins: true
+x3 shares x1's structure but not its dims, and is not its twin: true
+y3 is not y1's twin either: true
+a producer and its consumer are not twins: true
+a chain-committed neighbour reading separates twins: true
+a caller tag on a twin's neighbour separates the twins: true
+a caller tag refusing a neighbour leaves no identity: true
+a commitment outside the neighbourhood leaves twins twinned: true
+x2 is skipped as twin-of x1: true
+y2 is skipped as twin-of y1: true
+the first of each twin set and the dims-differing branch are measured: true
+a skipped twin is never also measured: true
+every twin names an anchor measured before it: true
+every alternative is either measured or skipped as a twin: true
+flips_done counts the measured flips and the twins apart: true
+every measured flip was abandoned: true
+the A/B winner ships: true
+the warm chain replays every measured flip's abandonment: true
+the warm chain measures the same flips and skips the same twins: true
+under a timing lineage that differs on y2, x2 and y2 are measured, not twinned: true
+the surface ranks a twin among its first three candidates: true
+a budget-2 chain measures two flips: true
+it skips at least one twin on the way: true
+the two flips it measures are of distinct twin classes: true
+every measured flip is searched in full: true
+a flip that lost a full search anchors its twin: true
+a flip whose windows were all refused timed nothing: true
+a flip that timed nothing anchors no twin: true
+y2 is measured after y1 timed nothing: true
+the winning chain ships a refined placement: true
+no flip is skipped as a twin when the flips win: true
+y2 is measured after y1 won: true
+a bounds candidate on x2's operand separates x2 from x1: true
+declaring y2 observable separates it from its twin y1: true

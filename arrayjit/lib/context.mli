@@ -499,6 +499,11 @@ val placements : t -> Ir.Tnode.Placements.t
     ([Virtual]), keep as routine-scoped scratch ([Local]), or give a device buffer ([On_device]).
     Reads are side-effect free; chiefly for tests and diagnostics. *)
 
+val inherits_computation : t -> Ir.Tnode.t -> bool
+(** Whether an earlier routine of the context's compilation lineage stored a computation for the
+    node (gh-ocannl-1274): a later compile that reads or updates it replays that inherited prefix,
+    which the routine's own code does not show. Side-effect free. *)
+
 val decide_materialized : t -> Ir.Tnode.t list -> t
 (** A child context whose compilation lineage additionally decides [On_device] placement for the
     given nodes: subsequent compiles from the returned context materialize them. This is the

@@ -882,6 +882,28 @@ files.
   `tune` once `limits` is known), so an explicit mode equal to `auto`'s pick is also the default.
   A new `Search_shaping` key needs a `config_key_defaults` row (the `config_class_fingerprint`
   test fails without one), and every read of a registered key refuses a `~default:` that disagrees.
+- **A structural twin of a lost flip is skipped without a budget slot** (gh-ocannl-1274). The
+  identity is `placement_surface`'s `ps_twin_identity`: every top-level statement of the raw
+  program (`optimized.source`, where an inlined node is still present) that sets or reads the
+  flipped node, rendered by the schedule cache's canonical walk (`SC.canonicalize_code`), each node
+  tagged with the facts its doc LISTS (lineage and decided placements, the chain's reading, the
+  timing lineage's tag and decided placement, observability, enablement class, bounds candidate),
+  then the readings and recompute cost. It refuses (no identity) where the source cannot be the
+  whole local reading: an opaque construct anywhere, an unassigned flipped node, a node with a
+  computation inherited from an earlier routine. **Keep it a stated list, not a promise**: the
+  review of staging#1124 ran five rounds, each naming one more fact a flip's outcome can depend
+  on. What ended the loop was a stated boundary. Whole-routine context (live ranges) is
+  deliberately out, since per-layer twins differ in exactly that, and a false twin costs one
+  unmeasured flip, never a wrong value. Add a fact when it is per-node and cheap. Rebut it when
+  it is global. Only CLEAN losses anchor: an abandonment or a completed search with no refused
+  window and a finite best no faster than the incumbent. The exception is a search-disabled
+  report, which is what lets a search-off chain (`autotune_search=false`, where every flip and
+  the incumbent sit at `infinity`) list twin classes cheaply. No twin record is persisted. The
+  rule is a function of what the chain measured, and a warm chain's anchors replay, so it skips
+  the same twins. On cc's approximate gpt2_mini search-off listing (budget 16), the q/k/v and
+  gelu flips of layers 2-4 twinned onto layer 1's, plus one more pair: 13 skips, 16 distinct
+  classes measured. The per-layer layer_norm flips did NOT twin: their recompute costs differ by
+  layer (7168 down to 2304), since what reads them differs.
 - **A per-segment single is timed against a backdrop, so near-tie singles rank by noise**
   (gh-ocannl-1166). An `F_sketch` single times the WHOLE routine with every other segment on its
   untuned preset: on gpt2_mini/CUDA tf32 a q/k/v single measured ~23.2 ms where the composite it

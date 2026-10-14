@@ -603,6 +603,10 @@ let mem ctx (tn : Tn.t) : bool =
 let placements ctx =
   Backends.query ctx.wrapped { q = (fun _ c -> c.BI.optimize_ctx.Ir.Low_level.placements) }
 
+let inherits_computation ctx tn =
+  Backends.query ctx.wrapped
+    { q = (fun _ c -> Hashtbl.mem c.BI.optimize_ctx.Ir.Low_level.computations tn) }
+
 (* gh-ocannl-599: [Local] is the unobservable placement class -- routine-scoped scratch the backend
    may keep in registers or on the stack, never a context buffer a routine writes back. Host access
    to such a node is meaningless, and nothing about it looks meaningless from the outside:
