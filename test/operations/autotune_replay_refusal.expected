@@ -9,3 +9,4 @@ the routine numbers fewer than 100 tensor nodes: true
 the corrupt split-reduce prelude's replay is refused with a typed cause: true
 the refused prelude re-searches: true
 the routine re-searched past the refused prelude computes the right values: true
+not every planted entry's store was refused: true

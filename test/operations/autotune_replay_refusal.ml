@@ -19,6 +19,10 @@
    split-reduce winner whose whole-routine prelude names tensor node 99 of a routine with three --
    the prelude is resolved before fission, so its refusal precedes any segment check.
 
+   The cache absorbs filesystem refusals by design, so the claims resting on a replay are waived (an
+   environment skip, never a pass) where the plant's store or the call's lookup was refused, and one
+   unwaived claim keeps a deterministic refusal from turning them into a permanent skip.
+
    Pinned to cc ([Context.cpu]): the refusal is backend-independent, and cc is always available. *)
 open Base
 open Ocannl
@@ -105,37 +109,72 @@ let () =
 let cache_claim label value =
   gated ~aggregation:`Environment ~when_:cache_available ~on:"no-device-identity" label value
 
-let plant ~saved ~segments =
-  SC.store ~dir:cache_dir ~key
-    {
-      SC.version = SC.entry_version;
-      backend = Context.backend_name base_ctx;
-      numerics = SC.numerics_tag ();
-      codegen = Some (SC.codegen_tag ~limits ~capabilities ());
-      objective = Some (SC.objective_tag ());
-      source_digest = SC.digest canon;
-      saved;
-      segments;
-      best_ms = 0.;
-      baseline_ms = 0.;
-      default_ms = None;
-      mma_best_ms = None;
-      default_fingerprint = None;
-      best_steps = None;
-    }
+(* The cache absorbs a filesystem refusal by design (gh-ocannl-1040): a refused plant or lookup
+   leaves the call with no entry to refuse, for a reason none of the claims below observes. Each leg
+   records its I/O, and a claim resting on the replay is waived, as an environment skip, where the
+   plant's store or the call's lookup was refused -- named on stderr. *)
+let refused_in ios label =
+  let refusals = List.filter ios ~f:(fun (io : SC.cache_io) -> Option.is_some io.SC.refusal) in
+  List.iter refusals ~f:(fun (io : SC.cache_io) ->
+      Stdio.eprintf "%s (not part of the golden): cache I/O refused: %s\n%!" label
+        (Option.value io.SC.refusal ~default:""));
+  not (List.is_empty refusals)
 
+let replay_claim ios label value =
+  if not cache_available then cache_claim label value
+  else
+    gated ~aggregation:`Environment
+      ~when_:(not (refused_in ios label))
+      ~on:"refused cache I/O" label value
+
+(* Every planted store, for the one claim no refusal waives: a deterministic refusal (a rejected
+   filename, a commit that always fails) would otherwise turn every claim above into a permanent
+   skip. *)
+let planted = ref []
+
+let plant ~saved ~segments =
+  let (), ios =
+    SC.recording_cache_io (fun () ->
+        SC.store ~dir:cache_dir ~key
+          {
+            SC.version = SC.entry_version;
+            backend = Context.backend_name base_ctx;
+            numerics = SC.numerics_tag ();
+            codegen = Some (SC.codegen_tag ~limits ~capabilities ());
+            objective = Some (SC.objective_tag ());
+            source_digest = SC.digest canon;
+            saved;
+            segments;
+            best_ms = 0.;
+            baseline_ms = 0.;
+            default_ms = None;
+            mma_best_ms = None;
+            default_fingerprint = None;
+            best_steps = None;
+          })
+  in
+  planted := !planted @ ios;
+  ios
+
+(* The call's report and values, and its lookups -- what a replay claim rests on beside the plant
+   (the re-search's own store does not). *)
 let tune ~search =
   let report = ref None in
-  let ctx, routine =
-    Autotune.tune ~search ~name:"replay_refusal" ~beam_width:1 ~rounds:0 ~repeats:1 ~cache_dir
-      ~log:false ~progress:false
-      ~report:(fun r -> report := Some r)
-      (Context.cpu ()) comp Ir.Indexing.Empty
+  let (ctx, routine), ios =
+    SC.recording_cache_io (fun () ->
+        Autotune.tune ~search ~name:"replay_refusal" ~beam_width:1 ~rounds:0 ~repeats:1 ~cache_dir
+          ~log:false ~progress:false
+          ~report:(fun r -> report := Some r)
+          (Context.cpu ()) comp Ir.Indexing.Empty)
   in
   let ctx = Context.run ctx routine in
   let values = Context.get_values ctx c.Tensor.value in
   Context.release ctx;
-  (values, Option.value_exn ~here:[%here] !report)
+  let lookups =
+    List.filter ios ~f:(fun (io : SC.cache_io) ->
+        match io.SC.op with SC.Lookup -> true | SC.Store -> false)
+  in
+  (values, Option.value_exn ~here:[%here] !report, lookups)
 
 let approx x y = Float.(abs (x - y) < 1e-4)
 
@@ -151,18 +190,20 @@ let outcome_is name (r : Autotune.report) = String.equal (Autotune.outcome_name 
 let () =
   (* --- 1. A whole-routine winner with a dangling minted-symbol reference. --- *)
   let dangling = [ SC.Swap { outer = SC.Minted (0, SC.Split_outer); inner = SC.Base 0 } ] in
-  plant ~saved:dangling ~segments:None;
-  let values, r = tune ~search:false in
-  cache_claim "with search off, the corrupt winner's replay is refused with a typed cause"
+  let planted_io = plant ~saved:dangling ~segments:None in
+  let values, r, lookups = tune ~search:false in
+  let ios = planted_io @ lookups in
+  replay_claim ios "with search off, the corrupt winner's replay is refused with a typed cause"
     (refused_by ~check:"Schedule_cache.of_saved" r);
-  cache_claim "with search off, the call compiles the untuned default"
+  replay_claim ios "with search off, the call compiles the untuned default"
     (outcome_is "search-disabled" r);
   p_all2 "with search off, the untuned default computes the right values" values expected ~f:approx;
-  plant ~saved:dangling ~segments:None;
-  let values, r = tune ~search:true in
-  cache_claim "the corrupt winner's replay is refused with a typed cause"
+  let planted_io = plant ~saved:dangling ~segments:None in
+  let values, r, lookups = tune ~search:true in
+  let ios = planted_io @ lookups in
+  replay_claim ios "the corrupt winner's replay is refused with a typed cause"
     (refused_by ~check:"Schedule_cache.of_saved" r);
-  cache_claim "the refused replay re-searches" (outcome_is "searched" r);
+  replay_claim ios "the refused replay re-searches" (outcome_is "searched" r);
   p_all2 "the re-searched routine computes the right values" values expected ~f:approx;
 
   (* --- 2. A split-reduce winner whose prelude names a tensor node the routine lacks. --- *)
@@ -170,12 +211,17 @@ let () =
     (match SC.tn_of_ref canon 99 with
     | _ -> false
     | exception Outcome.Cause_at (_, Outcome.Illegal_schedule _) -> true);
-  plant
-    ~saved:[ SC.Split_reduce { axis = SC.Base 0; target = 99; num_blocks = 2 } ]
-    ~segments:(Some [ { SC.seg_kind = `Normal; seg_units = 1; seg_digest = ""; seg_saved = [] } ]);
-  let values, r = tune ~search:true in
-  cache_claim "the corrupt split-reduce prelude's replay is refused with a typed cause"
+  let planted_io =
+    plant
+      ~saved:[ SC.Split_reduce { axis = SC.Base 0; target = 99; num_blocks = 2 } ]
+      ~segments:(Some [ { SC.seg_kind = `Normal; seg_units = 1; seg_digest = ""; seg_saved = [] } ])
+  in
+  let values, r, lookups = tune ~search:true in
+  let ios = planted_io @ lookups in
+  replay_claim ios "the corrupt split-reduce prelude's replay is refused with a typed cause"
     (refused_by ~check:"Schedule_cache.tn_of_ref" r);
-  cache_claim "the refused prelude re-searches" (outcome_is "searched" r);
+  replay_claim ios "the refused prelude re-searches" (outcome_is "searched" r);
   p_all2 "the routine re-searched past the refused prelude computes the right values" values
-    expected ~f:approx
+    expected ~f:approx;
+  cache_claim "not every planted entry's store was refused"
+    (List.exists !planted ~f:(fun (io : SC.cache_io) -> Option.is_none io.SC.refusal))
