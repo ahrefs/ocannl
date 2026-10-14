@@ -1098,7 +1098,7 @@
 # and unloaded, so libraries of routines alive at exit (and of every OpenMP kernel) stay until
 # the startup of a later OCANNL process removes them, once their process is gone and they are
 # over an hour old: such a temporary library is named
-# `<kernel>_pid<P>_n<nonce>_run_id_<N>_<random>`.
+# `ocannl_cc_<kernel>_pid<P>_n<nonce>_run_id_<N>_<random>`.
 #output_dlls_in_build_directory=false
 
 # Per-tensor-node cutoff in bytes for considering off-stack allocation, opt-in for backends.

@@ -12,12 +12,14 @@
 
    The parent plants, in a private temp directory, the temporary library of a process that is gone
    (an OS id no process can have), one of its own (a running process) -- both aged past the minimum
-   age -- a fresh library of the gone process, a library retained by debug files (whose name records
-   no owner), and an unrelated library. It then starts a child with that directory as its temp
-   directory; the child compiles and runs a routine. The child's startup must remove exactly the
-   first. The child's own library is still loaded at its exit: on POSIX the compile already unlinked
-   it, on Windows it stays; the parent ages it, and a second child's startup must remove it -- the
-   Windows case end to end, gated to Windows where it is not vacuous.
+   age -- a fresh library of the gone process, an aged one of it named after a routine whose name is
+   too long for a file name, a library retained by debug files (whose name records no owner), a file
+   of the same shape as the first but without OCANNL's marker (another program's), and an unrelated
+   library. It then starts a child with that directory as its temp directory; the child compiles and
+   runs a routine. The child's startup must remove exactly the first. The child's own library is
+   still loaded at its exit: on POSIX the compile already unlinked it, on Windows it stays; the
+   parent ages it, and a second child's startup must remove it -- the Windows case end to end, gated
+   to Windows where it is not vacuous.
 
    Each child's verdict output goes to stderr; its judgment reaches the parent as its exit
    status. *)
@@ -61,7 +63,7 @@ let parent () =
   Unix.mkdir dir 0o700;
   let present name = Stdlib.Sys.file_exists (Stdlib.Filename.concat dir name) in
   let listing () = Stdlib.Sys.readdir dir |> Array.to_list |> List.sort ~compare:String.compare in
-  let plant_temp_library ~pid ~nonce =
+  let plant_temp_library ?(routine = routine) ~pid ~nonce () =
     Stdlib.Filename.basename
       (Stdlib.Filename.temp_file ~temp_dir:dir
          (Utils.temp_library_prefix ~pid ~nonce ~run_id:1 routine)
@@ -72,10 +74,22 @@ let parent () =
     let aged = Unix.gettimeofday () -. Utils.temp_library_sweep_min_age -. 3600. in
     Unix.utimes (Stdlib.Filename.concat dir name) aged aged
   in
-  let departed = plant_temp_library ~pid:departed_pid ~nonce:"0badf00d" in
-  let departed_fresh = plant_temp_library ~pid:departed_pid ~nonce:"0badf00d" in
-  let running = plant_temp_library ~pid:(Utils.os_process_id ()) ~nonce:(Utils.process_nonce ()) in
-  List.iter [ departed; running ] ~f:age;
+  let departed = plant_temp_library ~pid:departed_pid ~nonce:"0badf00d" () in
+  let departed_fresh = plant_temp_library ~pid:departed_pid ~nonce:"0badf00d" () in
+  let running =
+    plant_temp_library ~pid:(Utils.os_process_id ()) ~nonce:(Utils.process_nonce ()) ()
+  in
+  (* A routine name past every file-name component limit (255 bytes), of two-byte characters placed
+     so that the kernel-name cut falls inside one. *)
+  let long_routine = "kernel_" ^ String.concat (List.init 150 ~f:(fun _ -> "\u{e9}")) in
+  let departed_long =
+    plant_temp_library ~routine:long_routine ~pid:departed_pid ~nonce:"0badf00d" ()
+  in
+  (* Another program's file of the same shape without OCANNL's marker: the sweep must not take it,
+     however stale its owner-shaped fields look. *)
+  let foreign = String.chop_prefix_exn departed ~prefix:Utils.temp_library_marker in
+  Stdio.Out_channel.write_all (Stdlib.Filename.concat dir foreign) ~data:foreign;
+  List.iter [ departed; running; departed_long; foreign ] ~f:age;
   (* The name shape of a library that [output_debug_files_in_build_directory] retains: the stem of
      the source's private copy, then the run id and [temp_file]'s random suffix. *)
   let retained = routine ^ "_1a2b3c_run_id_1_4d5e6f" ^ library_extension in
@@ -83,10 +97,16 @@ let parent () =
   List.iter [ retained; unrelated ] ~f:(fun f ->
       Stdio.Out_channel.write_all (Stdlib.Filename.concat dir f) ~data:f);
   let owner_of name = Utils.parse_temp_library_name name in
-  p_all "the planted temporary libraries name their owners" [ departed; departed_fresh; running ]
-    ~f:(fun f -> Option.is_some (owner_of f));
-  p_none "the retained and the unrelated library name no owner" [ retained; unrelated ] ~f:(fun f ->
-      Option.is_some (owner_of f));
+  p_all "the planted temporary libraries name their owners"
+    [ departed; departed_fresh; running; departed_long ] ~f:(fun f -> Option.is_some (owner_of f));
+  p_none "the retained, the unmarked and the unrelated library name no owner"
+    [ retained; foreign; unrelated ] ~f:(fun f -> Option.is_some (owner_of f));
+  p "a long routine name is cut to a whole-character prefix within the kernel-name limit"
+    (Option.exists (owner_of departed_long) ~f:(fun { Utils.kernel_name; _ } ->
+         String.length kernel_name <= Utils.temp_library_kernel_name_limit
+         && String.length kernel_name > Utils.temp_library_kernel_name_limit - 2
+         && String.is_prefix long_routine ~prefix:kernel_name
+         && Stdlib.String.is_valid_utf_8 kernel_name));
   p "this process is seen as running" (Utils.process_alive (Utils.os_process_id ()));
   p "the departed library's process is seen as gone" (not (Utils.process_alive departed_pid));
   let exe = Stdlib.Sys.executable_name in
@@ -113,7 +133,9 @@ let parent () =
     let pid = Unix.create_process_env exe args env Unix.stdin Unix.stderr Unix.stderr in
     match Unix.waitpid [] pid with _, Unix.WEXITED 0 -> true | _ -> false
   in
-  let planted = [ departed; departed_fresh; running; retained; unrelated ] in
+  let planted =
+    [ departed; departed_fresh; running; departed_long; retained; foreign; unrelated ]
+  in
   Exn.protect
     ~finally:(fun () ->
       List.iter (listing ()) ~f:(fun f ->
@@ -124,13 +146,13 @@ let parent () =
       let after_first = listing () in
       Stdio.eprintf "temp directory after the first child (not part of the golden): %s\n%!"
         (String.concat ~sep:" " after_first);
-      p "the child's startup removed the temporary library of a process no longer running"
-        (not (present departed));
+      p_none "the child's startup removed the temporary libraries of a process no longer running"
+        [ departed; departed_long ] ~f:present;
       p "the child's startup kept the temporary library of a running process" (present running);
       p "the child's startup kept a gone process's library written too recently to be past loading"
         (present departed_fresh);
-      p_all "the child's startup left the retained and the unrelated library alone"
-        [ retained; unrelated ] ~f:present;
+      p_all "the child's startup left the retained, the unmarked and the unrelated library alone"
+        [ retained; foreign; unrelated ] ~f:present;
       let first_child_left =
         List.filter after_first ~f:(fun f ->
             (not (List.mem planted f ~equal:String.equal)) && Option.is_some (owner_of f))

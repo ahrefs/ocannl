@@ -1,12 +1,13 @@
 the planted temporary libraries name their owners: true
-the retained and the unrelated library name no owner: true
+the retained, the unmarked and the unrelated library name no owner: true
+a long routine name is cut to a whole-character prefix within the kernel-name limit: true
 this process is seen as running: true
 the departed library's process is seen as gone: true
 the first child compiled and ran its routine: true
-the child's startup removed the temporary library of a process no longer running: true
+the child's startup removed the temporary libraries of a process no longer running: true
 the child's startup kept the temporary library of a running process: true
 the child's startup kept a gone process's library written too recently to be past loading: true
-the child's startup left the retained and the unrelated library alone: true
+the child's startup left the retained, the unmarked and the unrelated library alone: true
 the first child's loaded library outlived it, named after its owner: true
 the second child compiled and ran its routine: true
 the second child's startup removed every library the first child left: true

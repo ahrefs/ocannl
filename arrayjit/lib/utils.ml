@@ -1580,9 +1580,28 @@ type kept_library = {
     whose routine is alive at exit stays in the temp directory, and a later process's startup
     removes it once the owner is gone (gh-ocannl-1268). The run id keeps the path unique within the
     process even after the file is gone, and [temp_file]'s random suffix keeps the name
-    unpredictable. [parse_temp_library_name] inverts the name. *)
+    unpredictable. [parse_temp_library_name] inverts the name.
+
+    The temp directory is shared with every other program, so the name opens with
+    {!temp_library_marker}, which the sweep requires: an owner-shaped name another program chose is
+    never taken for OCANNL's. The kernel name is informational there (the owner fields and the run
+    id make the name unique), so it is cut to {!temp_library_kernel_name_limit} bytes, at a UTF-8
+    character boundary, to keep the whole name within a file-name component's limit however long the
+    routine's name is. *)
+let temp_library_marker = "ocannl_cc_"
+
+let temp_library_kernel_name_limit = 64
+
 let temp_library_prefix ~pid ~nonce ~run_id base_name =
-  Printf.sprintf "%s_pid%d_n%s_run_id_%d_" (clean_filename base_name) pid nonce run_id
+  let name = clean_filename base_name in
+  let name =
+    if String.length name <= temp_library_kernel_name_limit then name
+    else
+      (* Back off from a UTF-8 continuation byte, so no character is split. *)
+      let rec cut i = if i > 0 && Char.to_int name.[i] land 0xC0 = 0x80 then cut (i - 1) else i in
+      String.prefix name (cut temp_library_kernel_name_limit)
+  in
+  Printf.sprintf "%s%s_pid%d_n%s_run_id_%d_" temp_library_marker name pid nonce run_id
 
 (** How old, in seconds since its last write, a temporary library of a process that is gone must be
     before a startup removes it (gh-ocannl-1268). Liveness alone cannot protect a library whose
@@ -1633,7 +1652,8 @@ let parse_kept_library_name, parse_temp_library_name =
                 owner ~library_run_id rest)))
   in
   let temp fname : kept_library option =
-    Option.bind (stem fname) ~f:(fun stem ->
+    Option.bind (String.chop_prefix fname ~prefix:temp_library_marker) ~f:stem
+    |> Option.bind ~f:(fun stem ->
         Option.bind (String.rsplit2 stem ~on:'_') ~f:(fun (rest, random) ->
             Option.bind (hex random) ~f:(fun _ ->
                 Option.bind (String.rsplit2 rest ~on:'_') ~f:(fun (rest, run) ->

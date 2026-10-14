@@ -302,9 +302,11 @@ configuration.
   runs no finalisers at exit and the OpenMP arm never unloads, so on Windows only routines
   collected mid-run (autotune candidates, mostly) get their library removed; the libraries of
   routines alive at exit, and of every OpenMP kernel, stay past exit. So a temporary library's name
-  records its owner too, `<kernel>_pid<P>_n<nonce>_run_id_<N>_<random>`
-  (`Utils.temp_library_prefix`/`parse_temp_library_name`), and every process's startup (the
-  `Utils` cleanup block, ungated) removes the temp directory's libraries whose owner is gone, with
+  records its owner too, `ocannl_cc_<kernel>_pid<P>_n<nonce>_run_id_<N>_<random>` (the marker
+  keeps another program's same-shaped file in the shared directory out of the sweep; the kernel
+  name is cut to `Utils.temp_library_kernel_name_limit` bytes there, so a long routine name cannot
+  push the file name past a component limit) (`Utils.temp_library_prefix`/
+  `parse_temp_library_name`), and every process's startup (the `Utils` cleanup block, ungated) removes the temp directory's libraries whose owner is gone, with
   the same liveness test that spares the kept libraries, once they are older than
   `Utils.temp_library_sweep_min_age` (gh-ocannl-1268, `test/operations/cc_temp_library_sweep`,
   whose end-to-end leg is gated to Windows). The age guard is what makes an ungated sweep of a
