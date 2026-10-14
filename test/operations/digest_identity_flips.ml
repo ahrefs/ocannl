@@ -7,7 +7,8 @@
 
    - code-borne: the canonical digest changes (and with it the whole key), - keyed: the digest is
    UNCHANGED — the flip is invisible to the lowered code, which is the hazard — while the cache key
-   separates the regimes, - search-shaping / placement-shaping / execution-neutral: neither changes.
+   separates the regimes, - search-shaping / placement-shaping / untimed-model / execution-neutral:
+   neither changes.
 
    The issue's own caution applies: flips are calibration, not the mechanism. Absence of change is
    weak evidence in general, so this covers a handful of representatives rather than every key, and
@@ -152,6 +153,28 @@ let () =
   p "placement-shaping knobs leave the identity untouched"
     (String.equal digest0 digest_p && String.equal key0 key_p);
 
+  (* Untimed-model (gh-ocannl-1241): it steers [Autotune.model_default], which no compile here
+     calls, so this pins that neither the lowering nor the key derivation ever starts reading it;
+     its exclusion from the search-trajectory identity is [flip_abandonment]'s claim. *)
+  let model_keys =
+    [
+      ("model_default_schedule", "true");
+      ("model_default_placements", "2");
+      ("model_default_geometry_lattice", "true");
+    ]
+  in
+  List.iter model_keys ~f:(fun (key, data) -> set_config key data);
+  let resolved =
+    List.map model_keys ~f:(fun (key, data) ->
+        (data, Option.map (Utils.profile_key_source key) ~f:fst))
+  in
+  let digest_u, key_u = identity_of ctx in
+  List.iter model_keys ~f:(fun (key, _) -> unset_config key);
+  p_all ~min:3 "the untimed-model knobs took effect" resolved ~f:(fun (data, got) ->
+      Option.equal String.equal got (Some data));
+  p "untimed-model knobs leave the identity untouched"
+    (String.equal digest0 digest_u && String.equal key0 key_u);
+
   (* The debug gates bite only at log_level > 1, so the codegen component hashes the EFFECTIVE
      predicates (Codex P1 on PR #337): the regimes must separate where they change the kernel, and
      an ordinary verbosity bump must not churn cache keys. *)
@@ -179,6 +202,22 @@ let () =
   let key_a = key_of ctx canon in
   unset_config "buffer_aliasing";
   p "an aliasing flip separates the key without touching the digest" (not (String.equal key0 key_a));
+
+  (* gh-ocannl-1272 asked the cache key the question it fixed for the search-trajectory identity:
+     does a key STATED at its default move it? It does not -- every component renders a resolved
+     value (an effective gate, a lowercased objective), never whether some source states a key -- so
+     keyed knobs stated at their defaults, spelled otherwise than their read sites, key nothing. *)
+  let at_defaults = [ ("buffer_aliasing", "0"); ("autotune_timing", " Queued") ] in
+  List.iter at_defaults ~f:(fun (key, data) -> set_config key data);
+  let took_effect =
+    List.map at_defaults ~f:(fun (key, data) ->
+        Option.equal String.equal (Option.map (Utils.profile_key_source key) ~f:fst) (Some data))
+  in
+  let key_d = key_of ctx canon in
+  List.iter at_defaults ~f:(fun (key, _) -> unset_config key);
+  p_all ~min:2 "the keyed knobs stated at their defaults took effect" took_effect ~f:Fn.id;
+  p "keyed knobs stated at their defaults, spelled otherwise, leave the key alone"
+    (String.equal key0 key_d);
 
   (* The OpenMP runtime's controls decide the team every Grid loop executes on, and the pool tag —
      derived from process affinity — cannot see them (Codex P1 on PR #337). Only meaningful where

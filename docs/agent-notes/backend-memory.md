@@ -64,6 +64,12 @@ files.
   locations, so releasing an ancestor leaves the descendant resolving a dropped `pool_id`. This
   precondition remains for compiled descendants; upload siblings reference-count shared working
   pools (gh-ocannl-1173) without counting superseded values in a linear upload chain.
+- **`Context.t.context_id` names a release unit, not a value** (gh-ocannl-1203). The merge-buffer
+  ledger retires a consumer's registration by the released context's id, so every value that shares
+  a backend release flag (`finalized`: a linear upload chain, an upload into an existing buffer)
+  must share the id, and `Context.derive` preserves it for them; a fresh id per upload strands the
+  readers compiled before it and refuses every later refill. An upload fork gets its own id and a
+  copy of its parent's registrations; `test_execution_deps` Test 9 pins both directions.
 - **Read-only in one routine does not make a parameter a device-wide constant** (gh-ocannl-641).
   A host-backed parameter used only as another parameter's initializer input has no executable
   write in that routine. Its `Tnode.context_owned` construction marker keeps it in the working
@@ -103,7 +109,9 @@ files.
   (gh-ocannl-1125). One pool per `set_values` of a not-yet-linked node made a routine reading 18
   such parameters need 20 pools, over Metal's 16-binding budget (`build_pool_binding`), so
   `upload_slot` bump-packs them first-fit into `context.upload_arenas`: first arena exact, later
-  ones doubling. The arenas are shared by the values `evolve_with_buffer` derives (one `finalized`
+  ones doubling. The doubling sums only arenas the uploading value holds a tenant of: summing the
+  whole lineage made `k` simultaneously held forks, each uploading one node, mint `2^k - 1` nodes'
+  worth (gh-ocannl-1204). The arenas are shared by the values `evolve_with_buffer` derives (one `finalized`
   flag along a linear chain) and fresh in `make_child`. Uploading into an earlier value forks an
   independent release flag; `upload_arenas.pool_owners` reference-counts the pools those sibling
   leaves share (gh-ocannl-1173). Linear uploads supersede their intermediate values without retaining
@@ -156,22 +164,40 @@ files.
   baseline is never dispatched either, but recording both would double-count it under a reason that
   is not the one. One refusal, one entry. Guard:
   `test/operations/hip_scratch_tune_survives.ml` (`slow` alias).
+- The compiler's frame limit is the other half, and it is gated BEFORE codegen (gh-ocannl-1313):
+  LLVM AMDGPU refuses a stack frame over 262136 B, and hiprtc says so untyped, only after compiling
+  the whole kernel — 52 s on the `gpt2_mini_train` step's serial base form, fatal under strict
+  classification, so `tune_placements`' default-placements arm ended `pre-search-failure`. Each
+  node there sat under `stack_threshold_in_bytes` (89 `Local` arrays of 4 KiB) while their sum did
+  not: the threshold is per node, the limit per kernel. `Schedule.thread_private_bytes` sums the
+  arrays codegen will declare through the pure `Tn.Placements.is_local_peek` (360452 B against the
+  measured 360544 B frame), and `check_hardware_limits_classified` refuses it at `Hardware_limits`
+  against `hardware_limits.max_thread_private_bytes` (HIP only). The base and the whole-routine
+  presets then decline in about a second each, and the fissioned candidates, whose `promote_locals`
+  moves the crossing scratch to device memory, compile and get searched. Guard:
+  `test/operations/thread_private_gate.ml`.
 - Building a test kernel that actually *has* a big scratch frame takes care: write the `Local`
   array in one loop and read it back in REVERSE in another. A forward read in the same order lets
   the compiler forward each store to its load and delete the array, leaving nothing to reject.
-- **On Metal the schedule gate is the only TYPED workgroup-memory refusal** (gh-ocannl-1205). A
-  kernel whose static `threadgroup` allocation exceeds the device limit is refused by
-  `newComputePipelineStateWithFunction` itself, as an untyped `Failure` ("Threadgroup memory size
-  (33024) exceeds the maximum threadgroup memory allowed (32768)"), before the post-link
-  `get_static_threadgroup_memory_length` check can classify it; Metal has no `classify_failure`, so
-  to a tuner that is a fatal, not a decline. So everything a kernel declares in `threadgroup` memory
-  must reach `Schedule.workgroup_memory_bytes`: staged tiles from `workgroup_shared`, and any
-  backend-emitted scratch through `codegen_capabilities.mma_scope_workgroup_bytes`, which the
-  emitting backend derives from the same resolver as its declaration (Metal's converted-boundary
-  coordinate table, 256 B per `Tile_mma` statement, each `Unroll`/`Partition` copy included). A new `threadgroup` or
-  `__shared__` declaration in a backend emitter needs the same route. Guard:
-  `test/operations/schedule_mma_scope_scratch.ml` (tiles of exactly the limit compile; the same
-  tiles plus one converted scope are refused at `Hardware_limits`).
+- **On Metal an over-limit `threadgroup` allocation is refused by pipeline creation, not by the
+  post-link check** (gh-ocannl-1226): `newComputePipelineStateWithFunction` fails first ("Threadgroup
+  memory size (32772) exceeds the maximum threadgroup memory allowed (32768)"), so
+  `get_static_threadgroup_memory_length` never sees it. `Metal_backend.link_proc` types that
+  sentence as `Resource_exceeded Workgroup_memory` at `Backend_link` with the driver's counts (a
+  decline to a search); any other pipeline-creation failure stays untyped. The schedule gate is
+  still the cheaper refusal, before compilation, so everything a kernel declares in `threadgroup`
+  memory must reach `Schedule.workgroup_memory_bytes` (gh-ocannl-1205): staged tiles from
+  `workgroup_shared`, and backend-emitted scratch through
+  `codegen_capabilities.mma_scope_workgroup_bytes`, which the emitting backend derives from the same
+  resolver as its declaration (Metal's converted-boundary coordinate table, 256 B per `Tile_mma`
+  statement, each `Unroll`/`Partition` copy included). A new `threadgroup` or `__shared__`
+  declaration in a backend emitter needs the same route. The estimate sums exact sizes, while Metal
+  rounds each `threadgroup` array up to 4 bytes (measured, M4 Max), so odd-length `half` tiles at
+  the limit pass the gate and reach the link-time refusal. Guards:
+  `test/operations/schedule_mma_scope_scratch.ml` (tiles of exactly the limit compile; plus one
+  converted scope they are refused at `Hardware_limits`) and
+  `test/operations/metal_threadgroup_overflow.ml` (odd tiles at the limit are refused at
+  `Backend_link`, even ones run).
 - `Context.get_used_memory` must report OCANNL's OWN allocation (`Slab.used_memory`, or the
   backend's atomic counter) — never the driver's `total - free`. That is device-global: it counts
   other processes and moves in allocation granules, so it cannot see sub-granule effects like the

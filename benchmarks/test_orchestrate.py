@@ -338,6 +338,119 @@ class SavedLossParityTest(unittest.TestCase):
         self.assertIn("outside the envelope 0.002", pinned)
         self.assertNotIn("dispatched", pinned)
 
+    def leaked(self):
+        """The golden's exact cell an ambient knob reached with no profile behind it."""
+        found = [
+            orchestrate.last_checkpoint(line)
+            for line in golden_checkpoint_lines()
+            if orchestrate.last_checkpoint(line)["workload"] == "mlp_wide"
+        ]
+        self.assertEqual(len(found), 1, found)
+        return found[0]
+
+    def test_an_ambient_knob_no_profile_shows_is_named_from_the_checkpoint(self):
+        """gh-ocannl-1297: the checkpoint's `regime_knobs`, read as the row gate reads a row's."""
+        leaked = self.leaked()
+        # The profile alone says exact: only the per-setting record shows the knob.
+        self.assertIsNone(leaked["profile"])
+        self.assertEqual(
+            leaked["regime_knobs"]["tf32_matmuls"], {"value": "true", "source": "environment"}
+        )
+        ref = self.reference(leaked, 1 + 1e-4)
+
+        note = orchestrate.saved_loss_parity(leaked, "exact", [ref])
+        # Named in the row gate's own words, beside a drift that alone would read as on course.
+        named = orchestrate.regime_knob_leaks(leaked, regime="exact")
+        self.assertEqual(list(named), ["tf32_matmuls"])
+        self.assertIn(f"outside the exact regime: {named['tf32_matmuls']}", note)
+        self.assertIn("tf32_matmuls=true (environment)", note)
+        self.assertIn("inside the envelope 0.002", note)
+        # Whatever the call site dispatched, the regime is the one the runner resolved.
+        self.assertIn("outside the exact regime: tf32_matmuls=true", orchestrate.saved_loss_parity(
+            leaked, None, [ref]))
+        for verdict in ("PASS", "FAIL", "REF", "DIVERGED"):
+            self.assertNotIn(verdict, note)
+
+    def test_checkpoints_inside_their_regime_name_no_leak(self):
+        saved = self.checkpoint(complete=True)  # every knob at its default, no profile
+        cut = self.checkpoint(complete=False)  # every knob from the approximate profile
+        legacy = {k: v for k, v in self.leaked().items() if k != "regime_knobs"}
+        ref = self.reference(saved, 1.0)
+        for checkpoint, dispatched in ((saved, "exact"), (cut, "approximate"), (legacy, "exact")):
+            with self.subTest(profile=checkpoint["profile"], knobs="regime_knobs" in checkpoint):
+                note = orchestrate.saved_loss_parity(checkpoint, dispatched, [ref])
+                self.assertNotIn("regime:", note)
+        # A runner predating the field reports nothing to judge, as `regime_knob_leaks` says.
+        self.assertIsNone(orchestrate.regime_knob_leaks(legacy, regime="exact"))
+
+    def test_a_declared_cell_flag_is_no_leak_on_a_checkpoint_either(self):
+        """The `--cell-flag` exemption (gh-ocannl-1273) holds on the checkpoint, given the flags."""
+        flag = orchestrate.ocannl_arg("tf32_matmuls", "true")
+        overridden = dict(
+            self.leaked(),
+            regime_knobs={
+                "tf32_matmuls": {"value": "true", "source": "commandline"},
+                "cc_backend_fast_math": {"source": "default"},
+            },
+        )
+        ref = self.reference(overridden, 1.0)
+
+        declared = orchestrate.saved_loss_parity(overridden, "exact", [ref], [flag])
+        undeclared = orchestrate.saved_loss_parity(overridden, "exact", [ref])
+        other = orchestrate.saved_loss_parity(
+            overridden, "exact", [ref], [orchestrate.ocannl_arg("tf32_matmuls", "false")]
+        )
+
+        self.assertNotIn("regime:", declared)
+        self.assertIn("outside the exact regime: tf32_matmuls=true (commandline)", undeclared)
+        self.assertIn("outside the exact regime: tf32_matmuls=true (commandline)", other)
+
+    def test_the_leak_survives_partial_failures_jsonl_and_reaches_the_report(self):
+        """An offline reader of the failure record, and the report, both see it named."""
+        leaked = self.leaked()
+        ref = cell("pytorch", "cpu", "eager", [x * (1 + 1e-4) for x in leaked["losses"]])
+        orchestrate.parity_check([ref])
+        label = "mlp_wide ocannl/cuda/default"
+        stamp = {"ocannl_flags": [], "ambient_ocannl_shadowed": {}}
+
+        record = orchestrate.failure_record(
+            label, "TIMED OUT after 90s", {"OCANNL_TF32_MATMULS": "true"}, dict(leaked),
+            regime="exact", cell_stamp=stamp,
+        )
+        back = json.loads(json.dumps(orchestrate.json_safe(record), allow_nan=False))
+        offline = orchestrate.saved_loss_parity(
+            back["checkpoint"], back["regime"], [ref], back["ocannl_flags"]
+        )
+        self.assertIn("outside the exact regime: tf32_matmuls=true (environment)", offline)
+
+        # Beside it, a cell whose knob came from its own declared `--cell-flag`: the report hands
+        # the failure's stamp to the diagnostic, so that one is not named.
+        flagged = "mlp_wide ocannl/cuda/default +tf32_matmuls=true"
+        declared = dict(
+            leaked,
+            regime_knobs=dict(
+                leaked["regime_knobs"], tf32_matmuls={"value": "true", "source": "commandline"}
+            ),
+        )
+        flags = {"ocannl_flags": [orchestrate.ocannl_arg("tf32_matmuls", "true")]}
+        failures = [
+            orchestrate.Failure(label, "TIMED OUT after 90s", leaked, "exact", stamp),
+            orchestrate.Failure(flagged, "TIMED OUT after 90s", declared, "exact", flags),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            with contextlib.redirect_stdout(io.StringIO()):
+                orchestrate.report([ref], out, (), failures)
+            text = (out / "report.md").read_text()
+        section = text[text.index("## Runner failures") :]
+        rows = {
+            name: next(line for line in section.splitlines() if line.startswith(f"| {name} |"))
+            for name in (label, flagged)
+        }
+        self.assertIn("outside the exact regime: tf32_matmuls=true (environment)", rows[label])
+        self.assertIn("inside the envelope 0.002", rows[flagged])
+        self.assertNotIn("regime:", rows[flagged])
+
     def test_a_trajectory_that_went_non_finite_reports_where_and_its_drift_before(self):
         cut = self.checkpoint(complete=False)
         self.assertEqual(cut["losses"][1], None)
@@ -474,7 +587,7 @@ class FailureRecordTest(unittest.TestCase):
         self.assertIn("source = source_identity(ROOT)", main)
         self.assertIn("provenance=dict(stamp, **source), regime=regime", main)
         # The report's saved-loss diagnostic reads the checkpoint and regime off the failure.
-        self.assertIn("failures.append(Failure(label, note, checkpoint, regime))", main)
+        self.assertIn("failures.append(Failure(label, note, checkpoint, regime, cell_stamp))", main)
         # Both the cell and its search pass go through the helper that records an interrupted
         # cell's checkpoint before the cancellation propagates.
         self.assertEqual(main.count("run_cell("), 1)
@@ -5682,6 +5795,432 @@ class SkipCellTest(unittest.TestCase):
         orchestrate.report(cells, out)
 
         self.assertNotIn("Cells skipped", (out / "report.md").read_text())
+
+
+class OcannlFlagTest(unittest.TestCase):
+    """Per-cell `--cell-flag` settings, and the ambient variables a cell's own command line
+    outranks (gh-ocannl-1273).
+
+    The case behind both: a flip-budget sweep under the approximate regime. The regime's
+    `--ocannl_profile=approximate` outranks the environment, so an ambient
+    OCANNL_TUNE_INLINE_FLIPS=16 lost to the payload's 2 while the row recorded the variable as
+    though it applied; and there was no way to give the cells the budget at all.
+    """
+
+    def parse(self, *argv):
+        return orchestrate.build_arg_parser().parse_args(list(argv))
+
+    def refused(self, *argv):
+        with contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                self.parse(*argv)
+
+    def test_the_reference_is_read_for_the_keys_and_the_payloads(self):
+        keys, payloads = orchestrate.config_reference()
+        self.assertEqual(set(payloads), {"reproducible", "performance", "approximate"})
+        self.assertIn("tune_inline_flips", orchestrate.profile_payload_keys("approximate"))
+        self.assertIn("tf32_matmuls", orchestrate.profile_payload_keys("approximate"))
+        self.assertNotIn("tf32_matmuls", orchestrate.profile_payload_keys("performance"))
+        # Every key a payload sets is a key the reference documents (test_config_consistency
+        # holds the library to the same), so the two readings agree with each other.
+        self.assertTrue(keys)
+        for name, payload in payloads.items():
+            with self.subTest(profile=name):
+                self.assertTrue(payload)
+                self.assertLessEqual(payload, keys)
+        with self.assertRaises(ValueError):
+            orchestrate.profile_payload_keys("exact")
+
+    def test_a_flag_parses_with_and_without_a_selector(self):
+        args = self.parse(
+            "--cell-flag", "tune_inline_flips=16",
+            "--cell-flag", "gpt2_mini/*/tuned:autotune_cache_dir=/tmp/a=b:c",
+            "--cell-flag", "*/cuda/default/bf16:tf32_matmuls=false",
+        )
+        F = orchestrate.CellFlag
+        self.assertEqual(
+            args.cell_flag,
+            [
+                F(None, "tune_inline_flips", "16"),
+                # The value is everything after the first `=`: `=` and `:` inside it are its own.
+                F(("gpt2_mini", None, "tuned", None), "autotune_cache_dir", "/tmp/a=b:c"),
+                F((None, "cuda", "default", "bf16"), "tf32_matmuls", "false"),
+            ],
+        )
+        self.assertEqual(self.parse().cell_flag, [])
+
+    def test_a_flag_the_sweep_cannot_honour_is_refused_at_parse_time(self):
+        for bad in (
+            "tune_inline_flips",  # no value
+            "tune_inline_flip=16",  # not a documented key
+            "ocannl_tune_inline_flips=16",  # the prefix is the sweep's to add
+            "tune_inline_flips=",  # empty is unset to OCANNL
+            "gpt2_mini/cc:tune_inline_flips=16",  # selector too short
+            "gpt2_mini/cpu/tuned:tune_inline_flips=16",  # not a swept backend
+            "gpt2_mini/cc/tune:tune_inline_flips=16",  # not a variant
+            "gpt2_mini/cc/tuned/f64:tune_inline_flips=16",  # not a precision
+        ):
+            with self.subTest(bad=bad):
+                self.refused("--cell-flag", bad)
+
+    def test_the_sweeps_own_keys_are_refused_and_derived_from_its_argument_builder(self):
+        owned = orchestrate.sweep_owned_keys()
+        self.assertEqual(owned, {"backend", "profile", "autotune_progress"})
+        for key in sorted(owned):
+            with self.subTest(key=key):
+                self.refused("--cell-flag", f"{key}=x")
+
+    def test_a_per_cell_flag_reaches_the_cells_argv_after_the_profile(self):
+        flags = self.parse(
+            "--cell-flag", "tune_inline_flips=16",
+            "--cell-flag", "*/*/tuned:tf32_matmuls=false",
+        ).cell_flag
+        tuned = orchestrate.cell_flags(flags, ("gpt2_mini", "cuda", "tuned", "f32"))
+        default = orchestrate.cell_flags(flags, ("gpt2_mini", "cuda", "default", "f32"))
+        self.assertEqual(tuned, [("tune_inline_flips", "16"), ("tf32_matmuls", "false")])
+        self.assertEqual(default, [("tune_inline_flips", "16")])
+
+        cmd, stamp = orchestrate.ocannl_cell("gpt2", "cuda", "approximate", "tuned", tuned, {})
+
+        self.assertEqual(cmd[0], str(orchestrate.ocannl_exe("gpt2")))
+        self.assertEqual(
+            cmd[1:],
+            [
+                "--ocannl_backend=cuda",
+                "--ocannl_profile=approximate",
+                "--ocannl_autotune_progress=true",
+                "--ocannl_tune_inline_flips=16",
+                "--ocannl_tf32_matmuls=false",
+            ],
+        )
+        self.assertEqual(
+            stamp,
+            {
+                "ocannl_flags": ["--ocannl_tune_inline_flips=16", "--ocannl_tf32_matmuls=false"],
+                "ambient_ocannl_shadowed": {},
+            },
+        )
+
+    def test_an_ambient_key_the_profile_sets_is_stamped_shadowed_not_applied(self):
+        ambient = {
+            "OCANNL_TUNE_INLINE_FLIPS": "16",  # in the approximate payload
+            "OCANNL_NARROW_COMPUTE_F32": "true",  # in no payload: applies in every regime
+            "OCANNL_PROFILE": "reproducible",  # outranked by the commandline profile only
+            "OCANNL_BACKEND": "metal",  # outranked by the sweep's own --ocannl_backend
+            "OCANNL_tf32_matmuls": "true",  # never read: OCANNL reads the upper-cased name
+            "OCANNL_CC_BACKEND_FAST_MATH": "",  # empty is unset to OCANNL
+        }
+        _, approx = orchestrate.ocannl_cell("gpt2", "cc", "approximate", "default", [], ambient)
+        _, exact = orchestrate.ocannl_cell("gpt2", "cc", "exact", "default", [], ambient)
+
+        self.assertEqual(
+            approx["ambient_ocannl_shadowed"],
+            {
+                "OCANNL_BACKEND": "--ocannl_backend=cc",
+                "OCANNL_PROFILE": "--ocannl_profile=approximate",
+                "OCANNL_TUNE_INLINE_FLIPS": "--ocannl_profile=approximate",
+            },
+        )
+        # No profile on the exact cell's command line, so the environment's keys apply there.
+        self.assertEqual(
+            exact["ambient_ocannl_shadowed"], {"OCANNL_BACKEND": "--ocannl_backend=cc"}
+        )
+        # The flag outranks the ambient variable too, and the row names the flag as the reason.
+        _, flagged = orchestrate.ocannl_cell(
+            "gpt2", "cc", "exact", "default", [("narrow_compute_f32", "false")], ambient
+        )
+        self.assertEqual(
+            flagged["ambient_ocannl_shadowed"]["OCANNL_NARROW_COMPUTE_F32"],
+            "--ocannl_narrow_compute_f32=false",
+        )
+
+    def test_the_warning_is_said_once_for_the_whole_sweep(self):
+        cells = {("gpt2_mini", "cc", v, "f32") for v in ("default", "tuned")}
+        ambient = {"OCANNL_TUNE_INLINE_FLIPS": "16", "OCANNL_NARROW_COMPUTE_F32": "true"}
+
+        warning = orchestrate.shadowing_warning(ambient, cells, ["exact", "approximate"], [])
+
+        self.assertEqual(warning.count("OCANNL_TUNE_INLINE_FLIPS"), 1)
+        self.assertIn("--ocannl_profile=approximate", warning)
+        self.assertNotIn("OCANNL_NARROW_COMPUTE_F32", warning)
+        self.assertIsNone(orchestrate.shadowing_warning(ambient, cells, ["exact"], []))
+
+    def test_an_unmatched_or_conflicting_flag_is_refused_before_the_sweep(self):
+        cells = orchestrate.dispatchable_cells({"gpt2_mini": ["f32"]}, ["cc"], ["default", "tuned"])
+        F = orchestrate.CellFlag
+        everywhere = F(None, "tune_inline_flips", "16")
+        tuned = F((None, None, "tuned", None), "tune_inline_flips", "4")
+        nowhere = F(("gpt2_mini", "metal", None, None), "tf32_matmuls", "false")
+
+        self.assertEqual(orchestrate.flag_problems([everywhere], cells), [])
+        problems = orchestrate.flag_problems([everywhere, tuned, nowhere], cells)
+        self.assertEqual(len(problems), 2, problems)
+        self.assertIn("gpt2_mini/metal/*/*:tf32_matmuls=false names no OCANNL cell", problems[0])
+        self.assertIn("sets tune_inline_flips 2 times on gpt2_mini/cc/tuned/f32", problems[1])
+        # A sweep with no OCANNL cells at all (`--only pytorch`) has nothing for a flag to reach.
+        self.assertEqual(len(orchestrate.flag_problems([everywhere], set())), 1)
+
+    def test_the_regime_gate_accepts_exactly_the_declared_override(self):
+        def row(value, source, flags):
+            r = result("ocannl", "cuda", "tuned", [1.0])
+            r.update(
+                regime="approximate",
+                profile="approximate",
+                ocannl_flags=flags,
+                regime_knobs={"tune_inline_flips": {"value": value, "source": source}},
+            )
+            return r
+
+        declared = ["--ocannl_tune_inline_flips=16"]
+        accepted = row("16", "commandline", declared)
+        # The runner resolved a different value than the sweep passed: not what was declared.
+        other_value = row("8", "commandline", declared)
+        # The profile won after all (the flag never reached the runner): the row's flag is false.
+        profile_won = row("2", "profile 'approximate' via the commandline", declared)
+        # The same commandline source with nothing declared stays a leak (gh-ocannl-719).
+        undeclared = row("16", "commandline", [])
+
+        mismatched = orchestrate.regime_check([accepted, other_value, profile_won, undeclared])
+
+        self.assertEqual(mismatched, [other_value, undeclared])
+        self.assertEqual(orchestrate.regime_knob_leaks(accepted), {})
+        self.assertEqual(orchestrate.regime_knob_leaks(profile_won), {})
+
+    def test_a_failure_record_carries_the_cells_stamp(self):
+        stamp = {
+            "ocannl_flags": ["--ocannl_tune_inline_flips=16"],
+            "ambient_ocannl_shadowed": {"OCANNL_BACKEND": "--ocannl_backend=cc"},
+        }
+        record = orchestrate.failure_record(
+            "w ocannl/cc/tuned [approximate] +tune_inline_flips=16",
+            "timed out",
+            {"OCANNL_BACKEND": "metal"},
+            regime="approximate",
+            cell_stamp=stamp,
+        )
+        self.assertEqual(record["ocannl_flags"], stamp["ocannl_flags"])
+        self.assertEqual(record["ambient_ocannl_shadowed"], stamp["ambient_ocannl_shadowed"])
+        self.assertEqual(record["ambient_ocannl_env"], {"OCANNL_BACKEND": "metal"})
+        self.assertNotIn(
+            "ocannl_flags", orchestrate.failure_record("w pytorch/cpu/eager", "x", {})
+        )
+
+    def test_a_flag_value_cannot_break_a_label_or_a_report_table(self):
+        # Review round 1: `debug_highlight_pcre=a|b` is a legitimate setting, and a raw `|` in
+        # the variant column adds a table column; a newline adds a report line.
+        for value in ("a|b", "x\ny", "a`b", "two words"):
+            with self.subTest(value=value):
+                shown = orchestrate.display_value(value)
+                self.assertNotIn("|", shown)
+                self.assertNotIn("\n", shown)
+                self.assertNotIn("`", shown)
+                self.assertEqual(json.loads(shown), value)
+        self.assertEqual(orchestrate.display_value("/tmp/cache-1"), "/tmp/cache-1")
+        self.assertEqual(
+            orchestrate.ocannl_flags_note(["--ocannl_debug_highlight_pcre=a|b"]),
+            ' +debug_highlight_pcre="a\\u007cb"',
+        )
+
+        out = Path(tempfile.mkdtemp())
+        row = cell("ocannl", "cc", "default", [2.3026, 2.3010, 2.3000])
+        row["ocannl_flags"] = ["--ocannl_debug_highlight_pcre=a|b"]
+        rows = [cell("pytorch", "cpu", "eager", [2.3026, 2.3010, 2.3000]), row]
+        orchestrate.parity_check(rows)
+        orchestrate.report(rows, out)
+
+        table = [l for l in (out / "report.md").read_text().splitlines() if l.startswith("| ")]
+        self.assertEqual(len({l.count("|") for l in table}), 1, table)
+
+        # Review round 2: the messages too -- the once-per-sweep warning and the refusals name
+        # the flag, and the class is closed by routing every rendering through `display_value`.
+        flag = orchestrate.CellFlag(None, "debug_highlight_pcre", "x\nWARNING: forged")
+        cells = {("w", "cc", "default", "f32")}
+        warning = orchestrate.shadowing_warning(
+            {"OCANNL_DEBUG_HIGHLIGHT_PCRE": "y"}, cells, ["exact"], [flag]
+        )
+        self.assertNotIn("\n", warning)
+        self.assertIn('--ocannl_debug_highlight_pcre="x\\nWARNING: forged"', warning)
+        [problem] = orchestrate.flag_problems(
+            [orchestrate.CellFlag(("a|b", None, None, None), "debug_highlight_pcre", "a|b")], cells
+        )
+        self.assertNotIn("|", problem)
+
+    def test_the_cache_guidance_names_the_cells_own_cache(self):
+        # Review round 1: a tuned cell given another autotune_cache_dir leaves its finished arms
+        # there, so guidance naming the default would leave the real cache populated.
+        argv = orchestrate.ocannl_cell_args(
+            "cc", "exact", "tuned", [("autotune_cache_dir", "/c/x")]
+        )
+        env = {"OCANNL_AUTOTUNE_CACHE_DIR": "/env/cache"}
+        self.assertEqual(orchestrate.ocannl_cache_dir(argv, env), "/c/x")
+        plain = orchestrate.ocannl_cell_args("cc", "exact", "tuned")
+        self.assertEqual(orchestrate.ocannl_cache_dir(plain, env), "/env/cache")
+        self.assertEqual(orchestrate.ocannl_cache_dir(plain, {}), "autotune_cache/")
+        self.assertEqual(
+            orchestrate.ocannl_cache_dir(plain, {"OCANNL_AUTOTUNE_CACHE_DIR": "a|b"}),
+            '"a\\u007cb"',
+        )
+        note = orchestrate.ocannl_cache_note(True, cache_dir="/c/x")
+        self.assertIn("wipe /c/x for a comparable", note)
+        self.assertNotIn("autotune_cache/", note)
+        # What makes those the only sources: no profile payload sets the key, and the benchmarks'
+        # own config file does not either.
+        for name, payload in orchestrate.config_reference()[1].items():
+            with self.subTest(profile=name):
+                self.assertNotIn("autotune_cache_dir", payload)
+        config = (HERE / "ocannl_config").read_text().splitlines()
+        self.assertFalse(
+            [l for l in config if l.strip().split("=", 1)[0].strip() == "autotune_cache_dir"]
+        )
+
+    def test_a_failed_cell_still_says_what_its_command_line_outranked(self):
+        # Review round 1: when only the cells that shadow a variable fail, the rows alone would
+        # leave the header saying nothing, and the variable reading as applied in those cells.
+        stamp = {
+            "ocannl_flags": [],
+            "ambient_ocannl_shadowed": {
+                "OCANNL_TUNE_INLINE_FLIPS": "--ocannl_profile=approximate"
+            },
+        }
+        exact = cell("ocannl", "cc", "default", [2.3026, 2.3010, 2.3000])
+        exact["ambient_ocannl_shadowed"] = {}
+        failed = orchestrate.Failure(
+            "w ocannl/cc/default [approximate]", "TIMED OUT", None, "approximate", stamp
+        )
+        other = ("w pytorch/cpu/eager", "no result line")
+
+        line = orchestrate.shadowed_env_line([exact], [failed, other])
+
+        self.assertIn('"OCANNL_TUNE_INLINE_FLIPS"', line)
+        self.assertIn("in 1 of 2 OCANNL cells", line)
+        self.assertIsNone(orchestrate.shadowed_env_line([exact], [other]))
+
+
+class OcannlFlagSweepTest(unittest.TestCase):
+    """The issue's acceptance, through `main` itself (gh-ocannl-1273): a sweep under the
+    approximate regime with OCANNL_TUNE_INLINE_FLIPS=16 in the environment warns and stamps the
+    key as shadowed, and the same sweep with `--cell-flag tune_inline_flips=16` runs its cells
+    with the flag on their command lines, recorded on their rows, past the regime gate.
+
+    Only the cell itself is faked: `run_cell` records the command it was handed and answers the
+    way the runner resolves its configuration -- the commandline, then the commandline profile's
+    payload, then the environment -- so the dispatch loop, the stamps, the gates and the report
+    are the sweep's own.
+    """
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp())
+        fixtures = self.dir / "fixtures"
+        fixtures.mkdir()
+        (fixtures / fixture_digest.DIGEST_FILE).write_bytes(
+            (HERE / "fixtures" / fixture_digest.DIGEST_FILE).read_bytes()
+        )
+        header = json.dumps({"__metadata__": {"model": "mlp", "mode": "train"}}).encode()
+        (fixtures / "flagged.safetensors").write_bytes(len(header).to_bytes(8, "little") + header)
+
+    def fake_cell(self, label, cmd, env=None, **_):
+        self.dispatched.append((label, list(cmd)))
+        settings = orchestrate.cmdline_settings(cmd[1:])
+        if "tune_inline_flips" in settings:
+            value = settings["tune_inline_flips"].split("=", 1)[1]
+            knob = {"value": value, "source": "commandline"}
+        elif settings.get("profile") == "--ocannl_profile=approximate":
+            knob = {"value": "2", "source": "profile 'approximate' via the commandline"}
+        elif (env or {}).get("OCANNL_TUNE_INLINE_FLIPS"):
+            knob = {"value": env["OCANNL_TUNE_INLINE_FLIPS"], "source": "environment"}
+        else:
+            knob = {"source": "default"}
+        row = cell("ocannl", "cc", "default", [2.3026, 2.3010, 2.3000])
+        row.update(
+            workload="flagged",
+            profile="approximate" if "profile" in settings else None,
+            regime_knobs={"tune_inline_flips": knob},
+            searched=False,
+        )
+        return row, None
+
+    def sweep(self, *argv, env=None):
+        self.dispatched = []
+        environ = {k: v for k, v in os.environ.items() if not k.startswith("OCANNL_")}
+        environ.update(env or {})
+        out = io.StringIO()
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(unittest.mock.patch.dict(os.environ, environ, clear=True))
+            stack.enter_context(unittest.mock.patch.object(orchestrate, "HERE", self.dir))
+            stack.enter_context(
+                unittest.mock.patch.object(orchestrate, "RESULTS_DIR", self.dir / "results")
+            )
+            stack.enter_context(unittest.mock.patch.object(orchestrate, "run_cell", self.fake_cell))
+            stack.enter_context(
+                unittest.mock.patch.object(orchestrate, "install_termination_handler", lambda: None)
+            )
+            stack.enter_context(
+                unittest.mock.patch.object(
+                    sys,
+                    "argv",
+                    ["orchestrate.py", "--only", "ocannl", "--gpu", "none", "--skip-build",
+                     "--no-fixture-digest-check", "--profile", "approximate", *argv],
+                )
+            )
+            stack.enter_context(contextlib.redirect_stdout(out))
+            # Returns rather than exiting: every gate passes, the regime gate included.
+            orchestrate.main()
+        rows = [
+            json.loads(line)
+            for line in (self.dir / "results" / "results.jsonl").read_text().splitlines()
+        ]
+        return out.getvalue(), rows, (self.dir / "results" / "report.md").read_text()
+
+    def test_an_ambient_key_the_profile_outranks_is_warned_and_stamped_shadowed(self):
+        stdout, rows, report_text = self.sweep(env={"OCANNL_TUNE_INLINE_FLIPS": "16"})
+
+        warnings = [l for l in stdout.splitlines() if l.startswith("WARNING: ambient OCANNL_*")]
+        self.assertEqual(len(warnings), 1, stdout)
+        self.assertIn("OCANNL_TUNE_INLINE_FLIPS (by --ocannl_profile=approximate)", warnings[0])
+        [(_, cmd)] = self.dispatched
+        self.assertNotIn("tune_inline_flips", " ".join(cmd))
+        [row] = rows
+        # Inherited, and recorded as such -- and named as not having applied.
+        self.assertEqual(row["ambient_ocannl_env"], {"OCANNL_TUNE_INLINE_FLIPS": "16"})
+        self.assertEqual(
+            row["ambient_ocannl_shadowed"],
+            {"OCANNL_TUNE_INLINE_FLIPS": "--ocannl_profile=approximate"},
+        )
+        self.assertEqual(row["ocannl_flags"], [])
+        self.assertIn(
+            'ambient OCANNL_* variables outranked by a cell\'s own command line (not applied '
+            'there): "OCANNL_TUNE_INLINE_FLIPS" by "--ocannl_profile=approximate" in 1 of 1 '
+            "OCANNL cells",
+            report_text,
+        )
+
+    def test_a_flag_reaching_only_skipped_cells_is_refused(self):
+        # Review round 3: validated against the cells the sweep RUNS, so a selector naming only a
+        # `--skip-cell`'d cell is refused instead of applying to nothing, while the sweep still
+        # has a runnable cell for it to have meant.
+        with self.assertRaises(SystemExit) as refused:
+            self.sweep(
+                "--materialized",
+                "--skip-cell", "flagged/cc/materialized",
+                "--cell-flag", "flagged/cc/materialized:tune_inline_flips=16",
+            )
+        self.assertIn("names no OCANNL cell this sweep runs", str(refused.exception.code))
+        self.assertEqual(self.dispatched, [])
+
+    def test_a_per_cell_flag_runs_the_cell_with_the_budget_applied(self):
+        stdout, rows, report_text = self.sweep("--cell-flag", "tune_inline_flips=16")
+
+        self.assertNotIn("WARNING: ambient OCANNL_*", stdout)
+        [(label, cmd)] = self.dispatched
+        self.assertEqual(cmd[-1], "--ocannl_tune_inline_flips=16")
+        self.assertIn("--ocannl_profile=approximate", cmd)
+        self.assertTrue(label.endswith("[approximate] +tune_inline_flips=16"), label)
+        [row] = rows
+        self.assertEqual(row["ocannl_flags"], ["--ocannl_tune_inline_flips=16"])
+        self.assertEqual(row["regime_knobs"]["tune_inline_flips"]["value"], "16")
+        self.assertNotIn("regime_mismatch", row)
+        self.assertIn("| default +tune_inline_flips=16 |", report_text)
+        self.assertNotIn("ambient OCANNL_* variables outranked", report_text)
 
 
 if __name__ == "__main__":

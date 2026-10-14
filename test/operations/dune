@@ -236,6 +236,8 @@
   (alias runtest-cc_temp_ownership-compiler)
   (alias runtest-cc_temp_ownership-compiler_debug)
   (alias runtest-cc_temp_ownership-compiler_dll)
+  (alias runtest-cc_kept_library)
+  (alias runtest-cc_temp_library_sweep)
   (alias runtest-micrograd_demo_logging)
   (alias runtest-n3_fwd_with_prec-unoptimized)
   (alias runtest-top_down_prec-unoptimized)
@@ -276,6 +278,8 @@
   (alias runtest-placement_surface)
   (alias runtest-flip_bound_pruning)
   (alias runtest-flip_abandonment)
+  (alias runtest-flip_twins)
+  (alias runtest-config_class_fingerprint)
   (alias runtest-model_default_placements)
   (alias runtest-agent_notes_structure)
   (alias runtest-doc_examples)
@@ -1118,6 +1122,78 @@
   (diff
    cc_temp_ownership-compiler_dll.expected
    cc_temp_ownership-compiler_dll.actual)))
+
+; gh-ocannl-1247: library output keeps each cc library in build_files/<exe>/ under a name unique per
+; process and per compile; a concurrent child process of the same executable keeps its own. Read
+; through Test_utils.Generated.kept_libraries.
+
+(executable
+ (name cc_kept_library)
+ (modules cc_kept_library)
+ (libraries base ocannl stdio unix test_utils arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(rule
+ ; ocannl-backend: cc -- the kept library is the cc compile's; the command line pins the backend.
+ (target cc_kept_library.actual)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BUILD_FILES_PREFIX))
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:cc_kept_library.exe}
+    parent
+    --ocannl_backend=cc
+    --ocannl_cc_backend_probe_cache=false
+    --ocannl_output_debug_files_in_build_directory=false
+    --ocannl_output_dlls_in_build_directory=true))))
+
+(rule
+ (alias runtest-cc_kept_library)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate))
+ (action
+  (diff cc_kept_library.expected cc_kept_library.actual)))
+
+; gh-ocannl-1268: a process's startup removes the temporary cc libraries of processes that are gone
+; (Windows keeps a loaded DLL past its routine's exit) and keeps those of running processes. Two
+; child processes run with a private temp directory.
+
+(executable
+ (name cc_temp_library_sweep)
+ (modules cc_temp_library_sweep)
+ (libraries base ocannl stdio unix arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(rule
+ ; ocannl-backend: cc -- the temporary library is the cc compile's; the command line pins the backend.
+ (target cc_temp_library_sweep.actual)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:cc_temp_library_sweep.exe}
+    parent
+    --ocannl_backend=cc
+    --ocannl_cc_backend_probe_cache=false
+    --ocannl_output_debug_files_in_build_directory=false
+    --ocannl_output_dlls_in_build_directory=false))))
+
+(rule
+ (alias runtest-cc_temp_library_sweep)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate))
+ (action
+  (diff cc_temp_library_sweep.expected cc_temp_library_sweep.actual)))
 
 (test
  (name hip_half_load)
@@ -2062,7 +2138,12 @@
 ; gh-ocannl-1174: the containment query reads a dynamic gather through its coordinate view -- a
 ; table written before the gather stops being read-before-write once the writes cover every row at
 ; the gathered columns, and stays an input when they miss a row or a column. Executed legs on the
-; environment's backend, each beside a materialized twin or seeded entry values.
+; environment's backend, each beside a materialized twin or seeded entry values. gh-ocannl-1244:
+; the read-modify-write exemption never takes a dynamic slot's placeholder for a position --
+; verdict legs over gathers and scatters, and the issue's gather-under-a-fixed-row-Set executed.
+; gh-ocannl-1245: a deferred packed uniform spliced into a later routine as a lane-extract gather of
+; a counter that routine writes first -- reconcile_traced_store's re-check keeps the counter out of
+; read-before-write; executed against a twin with the uniform materialized.
 
 (test
  (name dynamic_axis_coverage)
@@ -2071,7 +2152,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules dynamic_axis_coverage)
- (libraries base ocannl arrayjit.verdict ll_test))
+ (libraries base ocannl stdio arrayjit.verdict ll_test))
 
 ; gh-ocannl-696: the loop-carried recurrence construct [Scan_loop] on hand-built IR -- executed
 ; cumulative sums in both directions, the online-softmax recurrence, a per-row scan under a Grid
@@ -2301,6 +2382,14 @@
  (deps ocannl_config)
  (modules test_debug_name_collapse)
  (libraries base arrayjit.ir stdio arrayjit.verdict))
+
+(test
+ ; ocannl-backend: none -- links arrayjit.ir alone; host-side Ndarray writes, no device.
+ (name ndarray_flat_writer)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules ndarray_flat_writer)
+ (libraries base stdio arrayjit.ir arrayjit.verdict))
 
 (test
  (name test_ident_blacklist)
@@ -4968,6 +5057,34 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ (name thread_private_gate)
+ (package neural_nets_lib)
+ (deps
+  (env_var OCANNL_BACKEND)
+  (env_var OCANNL_BUILD_FILES_PREFIX)
+  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
+  ocannl_config
+  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
+  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
+  (env_var OCANNL_GPU_SERIAL_LANES)
+  (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
+  (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
+  (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
+  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
+  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
+  (env_var OCANNL_LARGE_MODELS)
+  (env_var OCANNL_LEGALITY_CROSSCHECK)
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_PROFILE)
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
+ (modules thread_private_gate)
+ (libraries base ocannl stdio arrayjit.verdict ll_test test_utils)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
  (name schedule_batch_grid)
  (package neural_nets_lib)
  (deps
@@ -4981,7 +5098,8 @@
   (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
   (env_var OCANNL_LARGE_MODELS)
   (env_var OCANNL_LOG_LEVEL)
-  (env_var OCANNL_BIG_MODELS))
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
  (modules schedule_batch_grid)
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
@@ -5133,6 +5251,26 @@
   (env_var OCANNL_BIG_MODELS))
  (modules schedule_pipelined_matmul)
  (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
+ (name pipelined_move_legality)
+ (package neural_nets_lib)
+ (deps
+  (env_var OCANNL_PROFILE)
+  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
+  ocannl_config
+  (env_var OCANNL_BACKEND)
+  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
+  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
+  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
+  (env_var OCANNL_LARGE_MODELS)
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
+ (modules pipelined_move_legality)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -6518,9 +6656,11 @@
 
 ; gh-ocannl-1110: the flip chain abandons a hopeless flip at equal search depth. Every timing comes
 ; from a synthetic clock (Autotune.on_candidate_measured), so the verdicts are machine-independent;
-; autotune_progress is on because the abandonment is claimed in the progress record, and
-; autotune_keep_fraction is pinned at its default so a Search_shaping key is set for the cached
-; trajectory's identity to be seen carrying.
+; autotune_progress is on because the abandonment is claimed in the progress record;
+; autotune_keep_fraction is pinned at its default, spelled otherwise than its read site, so the
+; cached trajectory's identity can be seen leaving it out (gh-ocannl-1272), and
+; cpu_schedule_min_parallel is raised off its default -- past anything these 64-cell tensors
+; reach, so no schedule changes -- for the identity to be seen carrying it.
 
 (executable
  (name flip_abandonment)
@@ -6542,7 +6682,8 @@
     %{dep:flip_abandonment.exe}
     "--ocannl_backend=cc"
     "--ocannl_autotune_progress=true"
-    "--ocannl_autotune_keep_fraction=1"))))
+    "--ocannl_autotune_keep_fraction=1"
+    "--ocannl_cpu_schedule_min_parallel=32768"))))
 
 (rule
  (alias runtest-flip_abandonment)
@@ -6551,6 +6692,39 @@
   (alias runtest-env_spelling_gate))
  (action
   (diff flip_abandonment.expected flip_abandonment.actual)))
+
+; gh-ocannl-1272: the search-trajectory identity renders a Search_shaping key only when its resolved
+; value is not its built-in default. Run twice: without a profile, and under a commandline-picked
+; profile with one of the keys the profile raises restated at its built-in default.
+
+(executable
+ (name config_class_fingerprint)
+ (modules config_class_fingerprint)
+ (libraries base stdio arrayjit.ir arrayjit.utils arrayjit.verdict))
+
+(rule
+ ; ocannl-backend: none -- links arrayjit.ir alone and opens no context; the device limits it
+ ; resolves against are synthetic records.
+ (target config_class_fingerprint.actual)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (action
+  (with-stdout-to
+   %{target}
+   (progn
+    (run %{dep:config_class_fingerprint.exe})
+    (run
+     %{dep:config_class_fingerprint.exe}
+     "--ocannl_profile=performance"
+     "--ocannl_autotune_rounds=2")))))
+
+(rule
+ (alias runtest-config_class_fingerprint)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate))
+ (action
+  (diff config_class_fingerprint.expected config_class_fingerprint.actual)))
 
 ; gh-ocannl-514: the placement levels of the untuned regime (model_default_placements), with the
 ; envelope pinned so selection runs live on cc.
@@ -7846,7 +8020,7 @@
   (pps ppx_here ppx_ocannl)))
 
 ; gh-ocannl-1199: the BENCH_TIMING_TRACE decision line, formatted by Bench_harness from
-; Autotune.on_batch_decision on an injected clock, agrees with the decision each call took.
+; each Autotune.timing_call record on an injected clock, agrees with the decision each call took.
 
 (test
  (name timing_trace_decision)
@@ -7866,9 +8040,26 @@
  (deps
   ocannl_config
   (env_var OCANNL_AUTOTUNE_LOG)
-  (env_var OCANNL_AUTOTUNE_PROGRESS))
+  (env_var OCANNL_AUTOTUNE_PROGRESS)
+  (env_var OCANNL_AUTOTUNE_COMPOSITE_PLAYOFF_WIDTH))
  (modules autotune_composite_playoff)
  (libraries base ocannl stdio unix arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+; gh-ocannl-1229: which units of each beam entry a round expands (autotune_round_expansion).
+; Scripted timings, pinned to cc.
+
+(test
+ (name autotune_round_expansion)
+ ; ocannl-backend: cc -- Context.cpu (); the scripted ranking is backend-independent
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_AUTOTUNE_COMPOSITE_PLAYOFF_WIDTH)
+  (env_var OCANNL_AUTOTUNE_ROUND_EXPANSION))
+ (modules autotune_round_expansion)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -8183,6 +8374,29 @@
   (env_var OCANNL_SIMPLIFY_FP_ALGEBRA))
  (libraries base ocannl stdio arrayjit.verdict ll_test test_utils))
 
+; gh-ocannl-1240: powers with a run-time exponent keep a negative base's integral powers under the
+; GPU backends' fast math.
+
+(test
+ (name runtime_integer_power)
+ (package neural_nets_lib)
+ (modules runtime_integer_power)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND)
+  (env_var OCANNL_BUILD_FILES_PREFIX))
+ (libraries base ocannl stdio arrayjit.verdict ll_test test_utils))
+
+(test
+ ; ocannl-backend: cc -- compiles the CUDA-like power helper with the host C compiler, no device.
+ (name runtime_power_fast_math_emulation)
+ (package neural_nets_lib)
+ (modules runtime_power_fast_math_emulation)
+ (deps
+  ocannl_config
+  (env_var OCANNL_CC_BACKEND_COMPILER_COMMAND))
+ (libraries arrayjit.context arrayjit.verdict ctypes ctypes.foreign))
+
 ; gh-ocannl-946: declaration-reader controls and real first-parent merge attribution; gh-ocannl-1201
 ; refusals for unread source and Dune forms; gh-ocannl-1213 compact rendering.
 
@@ -8261,6 +8475,27 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; gh-ocannl-1226: Metal's pipeline-creation threadgroup-memory refusal is a typed Backend_link decline.
+
+(test
+ (name metal_threadgroup_overflow)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND)
+  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
+  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
+  (env_var OCANNL_LARGE_MODELS)
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_PROFILE)
+  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA))
+ (modules metal_threadgroup_overflow)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 (test
  (name fission_replay_segmentation)
  (package neural_nets_lib)
@@ -8301,3 +8536,89 @@
  (deps ocannl_config)
  (modules cuda_mma_cutoffs)
  (libraries base stdio arrayjit.ir arrayjit.autotune arrayjit.verdict))
+
+; gh-ocannl-1230: candidate labels tell distinct candidates apart -- every sketch parameter reaches
+; its label, and each beam-round candidate names its parent, segment and move. Scripted ranking,
+; pinned to cc.
+
+(test
+ (name autotune_labels)
+ ; ocannl-backend: cc -- Context.cpu (); the scripted ranking is backend-independent
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules autotune_labels)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+; gh-ocannl-1274: the flip chain skips a structural twin of a flip that lost, without a budget slot.
+; Every timing comes from a synthetic clock (Autotune.on_candidate_measured); autotune_progress is
+; on because the twins and the budget are claimed in the progress record.
+
+(executable
+ (name flip_twins)
+ (modules flip_twins)
+ (libraries base ocannl stdio unix arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(rule
+ ; ocannl-backend: cc -- the command line below pins `--ocannl_backend=cc`, which outranks the
+ ; environment, so the `Context.auto ()` in the source resolves to cc whatever is ambient.
+ (target flip_twins.actual)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:flip_twins.exe}
+    "--ocannl_backend=cc"
+    "--ocannl_autotune_progress=true"))))
+
+(rule
+ (alias runtest-flip_twins)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate))
+ (action
+  (diff flip_twins.expected flip_twins.actual)))
+
+(test
+ (name autotune_replay_refusal)
+ ; ocannl-backend: cc -- Context.cpu (); a corrupt cache entry's refusal is backend-independent
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules autotune_replay_refusal)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
+ (name autotune_sketch_placements)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND)
+  ; The keys of the Ir.Schedule values this test names, which env_var_deps derives (gh-ocannl-1149).
+  (env_var OCANNL_BIG_MODELS)
+  (env_var OCANNL_CHECK_HALF_PREC_CONSTANTS_CUTOFF)
+  (env_var OCANNL_CPU_SCHEDULE_MIN_PARALLEL)
+  (env_var OCANNL_DEBUG_LOG_FROM_ROUTINES)
+  (env_var OCANNL_GPU_FISSION_KEEP_MAPPING)
+  (env_var OCANNL_GPU_LANE_ALL_REDUCE_SIMDGROUPS)
+  (env_var OCANNL_GPU_LANE_PREAMBLE_REDUCTION)
+  (env_var OCANNL_GPU_SCHEDULE_BLOCK_SIZE)
+  (env_var OCANNL_GPU_SCHEDULE_MIN_PARALLEL)
+  (env_var OCANNL_GPU_SCHEDULE_WORKGROUP_FILL)
+  (env_var OCANNL_GPU_SERIAL_LANES)
+  (env_var OCANNL_LARGE_MODELS)
+  (env_var OCANNL_LEGALITY_CROSSCHECK)
+  (env_var OCANNL_LOG_LEVEL)
+  (env_var OCANNL_PROFILE)
+  (env_var OCANNL_SIMPLIFY_FP_ALGEBRA)
+  (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
+ (modules autotune_sketch_placements)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))

@@ -39,6 +39,13 @@ repeated sibling retirement preserves logarithmic upload pool growth: true
 every surviving upload remains intact after repeated sibling retirement: true
 the routine reads every surviving upload within the pool binding budget: true
 repeated sibling retirement leaves no working pools or context owners: true
+8 simultaneously held sibling uploads take one pool each: true
+8 sibling uploads take only the bytes of their nodes: true
+beside the siblings, a linear continuation grows exactly as without them: true
+the linear continuation packs geometrically: true
+every sibling reads back its own upload: true
+the linear continuation reads back every upload: true
+releasing the siblings and the continuation leaves no working pools or context owners: true
 device copies
 24 uploads took at most 1 + ceil(log2 24) working pools: true
 the uploads' pools hold at most twice the bytes uploaded: true
@@ -79,3 +86,10 @@ repeated sibling retirement preserves logarithmic upload pool growth: true
 every surviving upload remains intact after repeated sibling retirement: true
 the routine reads every surviving upload within the pool binding budget: true
 repeated sibling retirement leaves no working pools or context owners: true
+8 simultaneously held sibling uploads take one pool each: true
+8 sibling uploads take only the bytes of their nodes: true
+beside the siblings, a linear continuation grows exactly as without them: true
+the linear continuation packs geometrically: true
+every sibling reads back its own upload: true
+the linear continuation reads back every upload: true
+releasing the siblings and the continuation leaves no working pools or context owners: true

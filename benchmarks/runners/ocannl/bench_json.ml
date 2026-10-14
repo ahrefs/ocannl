@@ -73,6 +73,19 @@ let string s =
     the same, and either leaves the measurement set incomplete. A count that persists across idle
     reruns is the threshold's signature.
 
+    [timing_decisions] is the arm's settle-by-admission matrix (gh-ocannl-1263): one
+    [(settle, admission, calls)] per pair its baseline and candidate timing calls produced, from
+    each call's own record ({!Autotune.report}'s [timing_decisions], spelled by
+    [Autotune.batch_settle_name] and [Autotune.batch_admission_name]). It is rendered as an object
+    keyed by settle, each an object keyed by admission, e.g.
+    [{"measured_batch":{"admitted":12,"refused_contended":1},"singles_reach_target":{"admitted":40}}]
+    — [{}] for an arm that timed nothing — so a sweep compares how calibration settled across boxes
+    without scraping the stderr trace. Its calls sum to every timing call of the arm's search,
+    whereas [timings_contended] counts the refused windows of the baseline and candidates alike. It
+    is the arm's LAST field, and its only nested object: shell consumers read an arm's scalars with
+    a [[^}]*] scan from ["arm":"<name>"] ([benchmarks/gh834_cells.sh] reads [best_ms] that way),
+    which stops at the first closing brace.
+
     [tensorized] and [tensorization] are the two halves of the honesty of a tensorized timing
     (gh-ocannl-626). [tensorized] says the crowned SCHEDULE carries a [Tensorize]; [tensorization]
     says what the EMISSION did, as the {!Ir.C_syntax.tensorization_name} of the compiled routine's
@@ -83,17 +96,36 @@ let string s =
     with [tensorized: true] and a [tensorization] other than ["tensorized"] measured scalar code
     under a tensorized label; [orchestrate.py] marks that cell rather than letting the number stand.
 *)
+let decision_counts_object counts =
+  (* Grouped by settle in first-appearance order, so the caller's order is the rendering's. *)
+  let settles =
+    List.fold counts ~init:[] ~f:(fun acc (settle, _, _) ->
+        if List.mem acc settle ~equal:String.equal then acc else settle :: acc)
+    |> List.rev
+  in
+  let cells settle =
+    List.filter_map counts ~f:(fun (s, admission, calls) ->
+        if String.equal s settle then Some (Printf.sprintf {|"%s":%d|} (string admission) calls)
+        else None)
+  in
+  "{"
+  ^ String.concat ~sep:","
+      (List.map settles ~f:(fun settle ->
+           Printf.sprintf {|"%s":{%s}|} (string settle) (String.concat ~sep:"," (cells settle))))
+  ^ "}"
+
 let tune_arm ~name ~state ~searched ~cache_hit ~timing ~rounds_run ~beam_width ~timings_contended
-    ~timings_unbatched ~best_ms ~best_label ~tensorized ~tensorization ~mma_statements
-    ~mma_scalar_fallbacks ~mma_seeded ~mma_timed ~mma_best_ms ~terminal_failure =
+    ~timings_unbatched ~timing_decisions ~best_ms ~best_label ~tensorized ~tensorization
+    ~mma_statements ~mma_scalar_fallbacks ~mma_seeded ~mma_timed ~mma_best_ms ~terminal_failure =
   Printf.sprintf
-    {|{"arm":"%s","state":"%s","searched":%b,"cache_hit":%b,"timing":"%s","rounds_run":%d,"beam_width":%d,"timings_contended":%d,"timings_unbatched":%d,"best_ms":%s,"best_label":"%s","tensorized":%b,"tensorization":%s,"mma_statements":%d,"mma_scalar_fallbacks":%d,"mma_seeded":%d,"mma_timed":%d,"mma_best_ms":%s,"terminal_failure":%s}|}
+    {|{"arm":"%s","state":"%s","searched":%b,"cache_hit":%b,"timing":"%s","rounds_run":%d,"beam_width":%d,"timings_contended":%d,"timings_unbatched":%d,"best_ms":%s,"best_label":"%s","tensorized":%b,"tensorization":%s,"mma_statements":%d,"mma_scalar_fallbacks":%d,"mma_seeded":%d,"mma_timed":%d,"mma_best_ms":%s,"terminal_failure":%s,"timing_decisions":%s}|}
     (string name) (string state) searched cache_hit (string timing) rounds_run beam_width
     timings_contended timings_unbatched (num best_ms) (string best_label) tensorized
     (Option.value_map tensorization ~default:"null" ~f:(fun t -> Printf.sprintf {|"%s"|} (string t)))
     mma_statements mma_scalar_fallbacks mma_seeded mma_timed (num mma_best_ms)
     (Option.value_map terminal_failure ~default:"null" ~f:(fun detail ->
          Printf.sprintf {|"%s"|} (string detail)))
+    (decision_counts_object timing_decisions)
 
 (** The [tune] object of the result line, over arms already rendered by {!tune_arm}.
 
@@ -391,9 +423,12 @@ type checkpoint_at =
     same bytes for the same step. [profile] is the profile this process resolved, as on the result
     line: the losses' numerics regime travels with them, so [orchestrate.py]'s saved-loss diagnostic
     reads the envelope off the checkpoint rather than off what the sweep remembered dispatching, and
-    an offline reader of [partial-failures.jsonl] can recompute it. *)
-let checkpoint_line ~backend ~variant ~precision ~profile ~workload ~fixture ~executable
-    ~parity_steps ~dominant_kernel ~completed_steps ~at ~losses =
+    an offline reader of [partial-failures.jsonl] can recompute it. [regime_knobs] is the result
+    line's own per-setting record of that regime ({!regime_knobs_object}, gh-ocannl-1297): a profile
+    name cannot show an ambient knob with no profile behind it — [OCANNL_TF32_MATMULS] on an exact
+    cell — so without it the saved-loss diagnostic read such a cell's losses as exact ones. *)
+let checkpoint_line ~backend ~variant ~precision ~profile ~regime_knobs ~workload ~fixture
+    ~executable ~parity_steps ~dominant_kernel ~completed_steps ~at ~losses =
   let parity, warmup, timing, instrument =
     match at with
     | In_parity k ->
@@ -407,7 +442,8 @@ let checkpoint_line ~backend ~variant ~precision ~profile ~workload ~fixture ~ex
     | Some (path, bytes) -> Printf.sprintf {|{"path":"%s","bytes":%d}|} (string path) bytes
   in
   Printf.sprintf
-    {|{"record":"checkpoint","accepted":false,"framework":"ocannl","backend":"%s","variant":"%s","precision":"%s","profile":%s,"workload":"%s","fixture":%s,"executable":"%s","stages":{"parity":"%s","warmup":"%s","timing":"%s","dominant_kernel":"%s","result":"pending"},"parity_steps":%d,"completed_steps":%d,"losses":[%s]}|}
-    (string backend) (string variant) (string precision) (profile_value profile) (string workload)
-    fixture_field (string executable) parity warmup timing instrument parity_steps completed_steps
-    (nums ~prec:9 losses)
+    {|{"record":"checkpoint","accepted":false,"framework":"ocannl","backend":"%s","variant":"%s","precision":"%s","profile":%s,"regime_knobs":%s,"workload":"%s","fixture":%s,"executable":"%s","stages":{"parity":"%s","warmup":"%s","timing":"%s","dominant_kernel":"%s","result":"pending"},"parity_steps":%d,"completed_steps":%d,"losses":[%s]}|}
+    (string backend) (string variant) (string precision) (profile_value profile)
+    (regime_knobs_object regime_knobs)
+    (string workload) fixture_field (string executable) parity warmup timing instrument parity_steps
+    completed_steps (nums ~prec:9 losses)

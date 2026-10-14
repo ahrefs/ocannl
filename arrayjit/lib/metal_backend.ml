@@ -359,6 +359,7 @@ module Impl = struct
            max_workgroup_memory_bytes =
              min_over (fun (a : Me.Device.attributes) ->
                  Unsigned.ULong.to_int a.max_threadgroup_memory_length);
+           max_thread_private_bytes = None;
            (* Per-dimension threadgroup caps (gh-ocannl-679): [maxThreadsPerThreadgroup] is a 3-D
               [MTLSize] and only its [width] was being read (as the thread-product cap above). Apple
               parts report the three components equal, so this row does not fire alone here; it is
@@ -541,6 +542,9 @@ module Impl = struct
     kparams : (string * kparam_source) list;
     bindings : Indexing.unit_bindings;
     launch : Low_level.launch_dims;
+    routine_names : (string * string) list;
+        (* (emitted, given): the link-time compile attributes a name-caused failure to the name the
+           caller asked for (gh-ocannl-707) *)
   }
   [@@deriving sexp_of]
 
@@ -549,6 +553,7 @@ module Impl = struct
     funcs : (string * (string * kparam_source) list * Low_level.launch_dims) array;
         (* func_name * kparams * launch dims *)
     bindings : Indexing.unit_bindings;
+    routine_names : (string * string) list; (* (emitted, given), as in [code] *)
   }
   [@@deriving sexp_of]
 
@@ -653,6 +658,147 @@ module Impl = struct
           (* MSL built-in variables *)
           "gid";
           "lid";
+        ]
+
+    (* gh-ocannl-707: the file-scope names [metal_stdlib] puts in the GLOBAL namespace, which a
+       [kernel void <name>(] definition collides with ("redefinition of 'float4' as different kind
+       of symbol", "expected unqualified-id"). Harvested empirically rather than by reading: every
+       identifier token of the toolchain's [include/metal] headers was compiled as a kernel name
+       through [MTLDevice newLibraryWithSource:] after [#include <metal_stdlib>] and [using
+       namespace metal;] (the prelude's exact shape), bisecting batches of 64; what failed is below,
+       as the grammar it instantiates. Functions are absent on purpose -- they live in namespace
+       [metal] and C++ overloading lets a global kernel of the same name coexist with them ([dot],
+       [exp], [clamp], [select], [simd_sum] all compiled) -- and so are the names other tables
+       already hold: the C and C++ keywords, the C floor's macros and types, and this backend's own
+       [ident_blacklist] above. *)
+    let vendor_routine_idents =
+      let scalars =
+        [
+          "bool";
+          "char";
+          "uchar";
+          "short";
+          "ushort";
+          "int";
+          "uint";
+          "long";
+          "ulong";
+          "llong";
+          "ullong";
+          "half";
+          "float";
+          "double";
+          "bfloat";
+          "quad";
+        ]
+      in
+      let float_kinds = [ "F"; "H"; "BF" ] in
+      List.concat
+        [
+          (* Scalar type names, and the vector families over them ([float4], [packed_half2],
+             [simd_uint3], [vector_bool8], ...). *)
+          scalars;
+          C_syntax.vector_type_names
+            ~prefixes:[ ""; "packed_"; "simd_"; "simd_packed_"; "vector_" ]
+            ~scalars ~widths:[ 2; 3; 4; 8; 16 ];
+          (* Math constants per float kind: [M_PI_F], [M_SQRT2_H], [M_E_BF], ... *)
+          List.concat_map
+            [
+              "1_PI";
+              "2_PI";
+              "2_SQRTPI";
+              "E";
+              "LN10";
+              "LN2";
+              "LOG10E";
+              "LOG2E";
+              "PI_2";
+              "PI_4";
+              "PI";
+              "SQRT1_2";
+              "SQRT2";
+            ] ~f:(fun c -> List.map float_kinds ~f:(fun kind -> "M_" ^ c ^ "_" ^ kind));
+          (* Float limits per kind: [FLT_MAX], [HALF_EPSILON], [BFLT_DIG], ... *)
+          List.concat_map [ "FLT"; "HALF"; "BFLT" ] ~f:(fun kind ->
+              List.map
+                [
+                  "DECIMAL_DIG";
+                  "DIG";
+                  "EPSILON";
+                  "MANT_DIG";
+                  "MAX";
+                  "MAX_10_EXP";
+                  "MAX_EXP";
+                  "MIN";
+                  "MIN_10_EXP";
+                  "MIN_EXP";
+                  "RADIX";
+                ] ~f:(fun limit -> kind ^ "_" ^ limit));
+          List.map float_kinds ~f:(fun kind -> "HUGE_VAL" ^ kind);
+          [ "MAXFLOAT"; "MAXHALF"; "MAXBFLOAT" ];
+          (* Integer limits. *)
+          [
+            "CHAR_BIT";
+            "CHAR_MAX";
+            "CHAR_MIN";
+            "SCHAR_MAX";
+            "SCHAR_MIN";
+            "UCHAR_MAX";
+            "SHRT_MAX";
+            "SHRT_MIN";
+            "USHRT_MAX";
+            "INT_MAX";
+            "INT_MIN";
+            "UINT_MAX";
+            "LONG_MAX";
+            "LONG_MIN";
+            "ULONG_MAX";
+          ];
+          (* The headers' own attribute macros. *)
+          [
+            "METAL_ALIGN";
+            "METAL_ARG_UNIFORM";
+            "METAL_ASM";
+            "METAL_CONST";
+            "METAL_CONST_ARG";
+            "METAL_DEPRECATED";
+            "METAL_ENABLE_IF";
+            "METAL_EXPLICIT";
+            "METAL_FUNC";
+            "METAL_IMPLICIT";
+            "METAL_INTERNAL";
+            "METAL_MAYBE_UNDEF";
+            "METAL_NON_NULL_RETURN";
+            "METAL_NOTHROW";
+            "METAL_OS_LOG_FORMAT";
+            "METAL_PURE";
+            "METAL_UNAVAILABLE";
+            "METAL_VALID_COMPARE_EXCHANGE_FAILURE_ORDER";
+            "METAL_VALID_COMPARE_EXCHANGE_SUCCESS_ORDER";
+            "METAL_VALID_EXCHANGE_ORDER";
+            "METAL_VALID_LEVEL_ARG";
+            "METAL_VALID_LOAD_ORDER";
+            "METAL_VALID_LOD_ARG";
+            "METAL_VALID_MODIFY_ORDER";
+            "METAL_VALID_RENDER_TARGET";
+            "METAL_VALID_STORE_ORDER";
+            "METAL_ZERO_ARG";
+          ];
+          (* Dialect keywords and global names outside the families above. [main] is the reserved
+             entry point; [metal] and [simd] are namespaces. *)
+          [
+            "as_type";
+            "coherent";
+            "complex";
+            "imaginary";
+            "is_function_constant_defined";
+            "main";
+            "metal";
+            "nullptr_t";
+            "object_data";
+            "ray_data";
+            "simd";
+          ];
         ]
 
     let metal_log_object_name = "os_log_default"
@@ -1376,7 +1522,7 @@ module Impl = struct
        probe. *)
     lazy (Metal_math_api_runtime.get ())
 
-  let%diagn_sexp compile_metal_source ~name ~source ~device =
+  let%diagn_sexp compile_metal_source ~name ~routine_names ~source ~device =
     let options = Me.CompileOptions.init () in
     let math_api = Lazy.force runtime_math_api in
     let option_state =
@@ -1412,7 +1558,12 @@ module Impl = struct
           source
       in
       Stdio.prerr_endline error_msg;
-      failwith error_msg
+      (* Metal compiles here, at link time, so the failure never crosses [Compile_driver]'s
+         attribution; this is the same check (gh-ocannl-707). Attributed on [msg] alone: [error_msg]
+         embeds the source, where every routine's declaration appears. *)
+      let backtrace = Stdlib.Printexc.get_callstack 16 in
+      C_syntax.attribute_routine_name_failure ~report:msg ~routine_names (Failure error_msg)
+        backtrace
 
   module Compile = C_syntax.Compile_driver (C_syntax_config)
 
@@ -1429,7 +1580,7 @@ using namespace metal;|}
       Compile.compile ~name bindings lowered ~includes:metal_includes
         ~builtins:Builtins_metal.builtins ~conditional_includes ~compile_source ()
     in
-    { metal_source; func_name; kparams; bindings; launch }
+    { metal_source; func_name; kparams; bindings; launch; routine_names = [ (func_name, name) ] }
 
   let compile_batch ~names bindings lowereds =
     let metal_source, entries =
@@ -1437,7 +1588,10 @@ using namespace metal;|}
         ~builtins:Builtins_metal.builtins ~conditional_includes ~compile_source ()
     in
     let funcs = Array.map entries ~f:(fun (kparams, name, launch) -> (name, kparams, launch)) in
-    { metal_source; funcs; bindings }
+    let routine_names =
+      Array.to_list (Array.map2_exn funcs names ~f:(fun (emitted, _, _) given -> (emitted, given)))
+    in
+    { metal_source; funcs; bindings; routine_names }
 
   (* gh-ocannl-344: from the routine's materialized nodes, assign each distinct pool an index (first
      use order), build the [(pool_index, byte_offset)] slot table (one [uint] pair per node,
@@ -1521,7 +1675,6 @@ using namespace metal;|}
     let queue = dev.runner.queue in
     let runner_label = get_name dev in
     let func = Me.Library.new_function_with_name library func_name in
-    let pso, _ = Me.ComputePipelineState.on_device_with_function metal_device func in
     (* Post-link validation (gh-ocannl-536 landing step 3, the portable half): the pre-compile
        [Schedule.check_hardware_limits] judges the schedule against DEVICE-wide limits, but the
        compiled pipeline can be stricter — [maxTotalThreadsPerThreadgroup] drops below the device
@@ -1538,6 +1691,36 @@ using namespace metal;|}
              Schedule_outcome.Resource_exceeded { resource; requested; limit = Some limit; detail }
            )
     in
+    (* Over-limit threadgroup memory never reaches a pipeline to query: Metal refuses to create one,
+       and the binding reports it as a bare [Failure] carrying the driver's sentence. It is typed
+       here, at the same cause as the post-link check below, with the driver's own byte counts
+       (gh-ocannl-1226): the driver applies per-allocation alignment the schedule-level estimate
+       does not (each [threadgroup] array is rounded up to 4 bytes, so two odd-length [half] tiles
+       summing exactly to the limit are refused), so an estimate at the limit can still be over it
+       here. Any other pipeline-creation failure keeps propagating untyped: nothing here establishes
+       that it is the candidate's rather than the environment's. *)
+    let pso, _ =
+      try Me.ComputePipelineState.on_device_with_function metal_device func
+      with Failure msg as exn -> (
+        let backtrace = Stdlib.Printexc.get_raw_backtrace () in
+        let overflow =
+          Option.bind (String.substr_index msg ~pattern:"Threadgroup memory size (") ~f:(fun pos ->
+              try
+                Some
+                  (Stdlib.Scanf.sscanf (String.drop_prefix msg pos)
+                     "Threadgroup memory size (%d) exceeds the maximum threadgroup memory allowed \
+                      (%d)" (fun requested limit -> (requested, limit)))
+              with Stdlib.Scanf.Scan_failure _ | End_of_file | Failure _ -> None)
+        in
+        match overflow with
+        | Some (requested, limit) ->
+            reject Schedule_outcome.Workgroup_memory ~requested ~limit
+              [%string
+                "Metal: pipeline creation for %{func_name} refused its threadgroup memory: \
+                 %{requested#Int} bytes requested, over the device limit of %{limit#Int} bytes \
+                 (driver: %{msg})"]
+        | None -> Stdlib.Printexc.raise_with_backtrace exn backtrace)
+    in
     let block_product = launch.block.(0) * launch.block.(1) * launch.block.(2) in
     let max_threads = Me.ComputePipelineState.get_max_total_threads_per_threadgroup pso in
     if block_product > max_threads then
@@ -1546,8 +1729,10 @@ using namespace metal;|}
           "Metal: threadgroup size %{block_product#Int} for %{func_name} exceeds \
            maxTotalThreadsPerThreadgroup %{max_threads#Int}"];
     (* The compiled kernel's own static threadgroup allocation, which the schedule-level accounting
-       (a sum over the staged tnodes) only approximates. Checked against the same device limit the
-       schedule layer used, so this rejects exactly what could not launch. *)
+       (a sum over the staged tnodes) only approximates. A backstop, not the primary check: a kernel
+       whose allocation is over the device limit never gets here, because pipeline creation above
+       already refused it (gh-ocannl-1226). What remains is a pipeline the driver accepted yet
+       reports as over the limit the schedule layer used. *)
     Option.iter (hardware_limits ()).Backend_intf.max_workgroup_memory_bytes ~f:(fun max_bytes ->
         let static_bytes = Me.ComputePipelineState.get_static_threadgroup_memory_length pso in
         if static_bytes > max_bytes then
@@ -1661,7 +1846,10 @@ using namespace metal;|}
 
   let link prior_context code ctx_buffers =
     let device = prior_context.device.dev in
-    let library = compile_metal_source ~name:code.func_name ~source:code.metal_source ~device in
+    let library =
+      compile_metal_source ~name:code.func_name ~routine_names:code.routine_names
+        ~source:code.metal_source ~device
+    in
     let lowered_bindings : Indexing.lowered_bindings =
       List.map (Indexing.bound_symbols code.bindings) ~f:(fun s -> (s, ref 0))
     in
@@ -1682,7 +1870,10 @@ using namespace metal;|}
         @@ common_prefix (List.map (Array.to_list code_batch.funcs) ~f:(fun (n, _, _) -> n)))
     in
     let base_name = if String.is_empty base_name then "batch" else base_name in
-    let library = compile_metal_source ~name:base_name ~source:code_batch.metal_source ~device in
+    let library =
+      compile_metal_source ~name:base_name ~routine_names:code_batch.routine_names
+        ~source:code_batch.metal_source ~device
+    in
     let lowered_bindings : Indexing.lowered_bindings =
       List.map (Indexing.bound_symbols code_batch.bindings) ~f:(fun s -> (s, ref 0))
     in

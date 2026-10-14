@@ -30,6 +30,157 @@ module Hip = struct
   let conditional_includes = [ ("rocwmma::", "#include <rocwmma/rocwmma.hpp>") ]
 end
 
+(** gh-ocannl-707: the file-scope names the CUDA and HIP preludes' headers put in the global
+    namespace beyond the C floor, which an [extern "C" __global__ void <name>(] definition collides
+    with. One table for both dialects: each vendor's names are implausible as the other's routine
+    names, and reserving a name a toolchain does not declare only renames that routine.
+
+    Harvested from the headers rather than by probing (the probe needs the toolchain: [nvrtc] on an
+    NVIDIA box, [hiprtc] on an AMD one), and restricted to the classes that collide BY LANGUAGE RULE
+    -- a typedef or macro of the same name, or a C-linkage function -- since C++ overloading lets a
+    kernel coexist with an ordinary C++ function (Metal's harvest, where every vendor function
+    compiled as a kernel name, is the measured instance of that). Everything in the implementation's
+    reserved namespace ([__half], [__nv_bfloat16], [__hadd], [__expf], [__syncthreads], ...) is
+    covered by {!C_syntax.implementation_reserved} instead, and whatever an SDK adds later fails as
+    the routine name's, through {!C_syntax.attribute_routine_name_failure}. Sources as of CUDA 13.4
+    and ROCm 7.1, per group below. *)
+let vendor_header_idents =
+  let scalars =
+    [
+      "char";
+      "uchar";
+      "short";
+      "ushort";
+      "int";
+      "uint";
+      "long";
+      "ulong";
+      "longlong";
+      "ulonglong";
+      "float";
+      "double";
+    ]
+  in
+  List.concat
+    [
+      (* [vector_types.h] (CUDA, widths 1-4, plus the aligned [*4_16a] / [*4_32a] variants) and
+         [amd_hip_vector_types.h] (HIP, widths up to 16): typedef'd vector structs. *)
+      C_syntax.vector_type_names ~prefixes:[ "" ] ~scalars ~widths:[ 1; 2; 3; 4; 8; 16 ];
+      List.concat_map [ "double"; "long"; "ulong"; "longlong"; "ulonglong" ] ~f:(fun scalar ->
+          [ scalar ^ "4_16a"; scalar ^ "4_32a" ]);
+      [ "uchar"; "ushort"; "uint"; "ulong"; "dim3" ];
+      (* [cuda_fp16.h] / [cuda_bf16.h] and [amd_hip_fp16.h] / [amd_hip_fp8.h] /
+         [amd_hip_bfloat16.h]: the unprefixed aliases of the narrow types. *)
+      [
+        "half";
+        "half2";
+        "nv_half";
+        "nv_half2";
+        "nv_bfloat16";
+        "nv_bfloat162";
+        "hip_bfloat16";
+        "hip_fp8_storage_t";
+        "hip_fp8x2_storage_t";
+        "hip_fp8x4_storage_t";
+      ];
+      (* The same headers' constant macros: [CUDART_INF_FP16], [HIPRT_ONE_BF16], ... *)
+      List.concat_map [ "CUDART_"; "HIPRT_" ] ~f:(fun vendor ->
+          List.concat_map [ "INF"; "MAX_NORMAL"; "MIN_DENORM"; "NAN"; "NEG_ZERO"; "ONE"; "ZERO" ]
+            ~f:(fun constant ->
+              List.map [ "FP16"; "BF16" ] ~f:(fun kind -> vendor ^ constant ^ "_" ^ kind)));
+      (* [crt/math_functions.h] and [crt/device_functions.h]: the CUDA math API's C-linkage
+         functions outside C's own [<math.h>] (which {!C_syntax.c_stdlib_idents} holds); HIP's math
+         API mirrors the names. *)
+      [
+        "acoshf";
+        "asinhf";
+        "atanhf";
+        "cospi";
+        "cospif";
+        "cyl_bessel_i0";
+        "cyl_bessel_i0f";
+        "cyl_bessel_i1";
+        "cyl_bessel_i1f";
+        "erfcf";
+        "erfcinv";
+        "erfcinvf";
+        "erfcx";
+        "erfcxf";
+        "erfinv";
+        "erfinvf";
+        "exp10";
+        "exp10f";
+        "expm1f";
+        "fdimf";
+        "fdividef";
+        "frexpf";
+        "ilogbf";
+        "j0";
+        "j0f";
+        "j1";
+        "j1f";
+        "jn";
+        "jnf";
+        "ldexpf";
+        "llmax";
+        "llmin";
+        "llrintf";
+        "llroundf";
+        "log1pf";
+        "logbf";
+        "lrintf";
+        "lroundf";
+        "max";
+        "min";
+        "modff";
+        "nanf";
+        "nearbyintf";
+        "nextafterf";
+        "norm";
+        "norm3d";
+        "norm3df";
+        "norm4d";
+        "norm4df";
+        "normcdf";
+        "normcdff";
+        "normcdfinv";
+        "normcdfinvf";
+        "normf";
+        "rcbrt";
+        "rcbrtf";
+        "remainderf";
+        "remquof";
+        "rhypot";
+        "rhypotf";
+        "rnorm";
+        "rnorm3d";
+        "rnorm3df";
+        "rnorm4d";
+        "rnorm4df";
+        "rnormf";
+        "rsqrt";
+        "rsqrtf";
+        "scalblnf";
+        "scalbnf";
+        "sincos";
+        "sincosf";
+        "sincospi";
+        "sincospif";
+        "sinpi";
+        "sinpif";
+        "ullmax";
+        "ullmin";
+        "umax";
+        "umin";
+        "y0";
+        "y0f";
+        "y1";
+        "y1f";
+        "yn";
+        "ynf";
+      ];
+    ]
+
 (** Shared CUDA/HIP scalar semantics. Hardware MMA, asynchronous copies and conversions with
     different vendor overload contracts stay in the backend; the common operator table lives here so
     fixes to narrow arithmetic reach both consumers. *)
@@ -59,6 +210,9 @@ struct
     @ [ "threadIdx"; "blockIdx"; "blockDim"; "gridDim"; "warpSize" ]
     @ Dialect.extra_blacklist
 
+  (* Bound under another name at top level: [include C_syntax.Pure_C_config] above brings its own
+     empty [vendor_routine_idents] into scope, which a same-named reference here would pick up. *)
+  let vendor_routine_idents = vendor_header_idents
   let fp8_from_float doc = PPrint.(group (string Dialect.fp8_from_float_fn ^^ parens doc))
   let main_kernel_prefix = "extern \"C\" __global__"
 
@@ -150,7 +304,7 @@ struct
     in
     let widened_powf ~widen ~narrow v1 v2 =
       let w v = string widen ^^ parens v in
-      group (string narrow ^^ parens (func "powf" (w v1) (w v2)))
+      group (string narrow ^^ parens (func "ocannl_pow_f32" (w v1) (w v2)))
     in
     match (v, prec) with
     | Ops.Arg1, _ -> invalid_arg (Dialect.error_prefix ^ ".binop_syntax: Arg1 is not an operator")
@@ -181,12 +335,15 @@ struct
     | Sub, _ -> f "-"
     | Mul, _ -> f "*"
     | Div, _ -> f "/"
-    | ToPowOf, Double_prec _ -> func "pow"
-    | ToPowOf, Single_prec _ -> func "powf"
+    (* Through [Builtins_cc.runtime_power_builtins] (gh-ocannl-1240): fast math lowers the vendor
+       [pow] to [exp2(y * log2(x))], NaN for a negative base even under an integral exponent known
+       only at run time. Known integer exponents never reach here: [C_syntax.integer_power_doc]
+       takes them. *)
+    | ToPowOf, Double_prec _ -> func "ocannl_pow_f64"
+    | ToPowOf, Single_prec _ -> func "ocannl_pow_f32"
     (* Neither vendor has a narrow-float pow (and both vendors' [hexp2] is unary, gh-ocannl-1198):
-       widen both operands, take f32 [powf] -- its domain, NaN for a negative base under a
-       fractional exponent included -- and round back once, as cc's codegen does. Known integer
-       exponents never reach here: [C_syntax.integer_power_doc] takes them. *)
+       widen both operands, take the f32 power above -- its domain, NaN for a negative base under a
+       fractional exponent included -- and round back once, as cc's codegen does. *)
     | ToPowOf, Half_prec _ -> widened_powf ~widen:"__half2float" ~narrow:"__float2half"
     | ToPowOf, Bfloat16_prec _ -> widened_powf ~widen:"__bfloat162float" ~narrow:"__float2bfloat16"
     | ToPowOf, (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Int64_prec _ | Uint4x32_prec _) ->

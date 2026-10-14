@@ -195,6 +195,22 @@ type hardware_limits = {
   max_workgroup_memory_bytes : int option;
       (** Capacity in bytes of the workgroup-shared memory (CUDA [__shared__] / Metal
           [threadgroup]); [None] when the backend imposes no limit. *)
+  max_thread_private_bytes : int option; [@sexp.option]
+      (** The per-work-item budget for one kernel's declared scratch arrays: the largest private
+          (stack) frame the backend's compiler accepts, less a reserve for what else lands on the
+          frame (gh-ocannl-1313). The kernel's routine-scoped scratch, the function-scope arrays of
+          its [Local]-placed nodes ([Schedule.thread_private_bytes]), is checked against it
+          pre-driver by [Schedule.check_hardware_limits_classified], as
+          [Schedule_outcome.Thread_scratch]. Without the check, a kernel over the limit reaches the
+          device compiler, which refuses it untyped after compiling the whole kernel: HIP's hiprtc
+          took 52 s to report [stack frame size (360544) exceeds limit (262136)] on the serial base
+          form of a GPT-2 training step, whose 89 [Local] arrays declare 360452 bytes, and under
+          strict failure classification that ended the search (outcome [pre-search-failure]). HIP:
+          LLVM AMDGPU's frame limit of 262136 bytes, on every AMD part seen (gfx1102, gfx1151), less
+          a 1 KiB reserve (that kernel's frame held 92 bytes beyond its arrays; spills add more),
+          independent of the post-link scratch-budget check that HIP applies to what does compile.
+          [None] where unmeasured, which checks nothing, and on the C backends. Omitted from the
+          record's sexp when [None], so adding it moved no other backend's schedule-cache key. *)
   max_workgroup_dims : (int * int * int) option;
       (** Per-dimension upper bounds on the launch's workgroup shape — the caps on [.x], [.y] and
           [.z] of {!Low_level.launch_dims}' [block], in that order. Beside, not instead of,
@@ -309,7 +325,9 @@ type hardware_limits = {
           gh-ocannl-1124 rule) wherever unmeasured, and on the C backends, which run no lane
           geometry. Measured: 4 on Metal (M4 Max; the D1 training step at head width 64 0.97x /
           0.92x / 0.82x at seq 128 / 512 / 1024, at width 128 0.69x at seq 512, against the plain
-          plan: benchmarks/gh1133_cells.sh [d1ar4] vs [d1ar1]). Read by the default GPU schedule's
+          plan: benchmarks/gh1133_cells.sh [d1ar4] vs [d1ar1]); 4 on CUDA (RTX, rog-nv; at head
+          width 64 0.84x / 0.52x / 0.41x at seq 128 / 512 / 1024, at width 128 0.37x at seq 512, the
+          same A/B, gh-ocannl-1256). Read by the default GPU schedule's
           [gpu_lane_all_reduce_simdgroups = auto]. *)
   online_softmax_auto_block : int;
       (** Automatic key-block size for [online_softmax_block=auto] (gh-ocannl-1171); 0 selects the
@@ -529,6 +547,7 @@ let no_hardware_limits =
     max_bound_pools = None;
     max_threads_per_workgroup = None;
     max_workgroup_memory_bytes = None;
+    max_thread_private_bytes = None;
     max_workgroup_dims = None;
     max_grid_yz = None;
     mma = None;

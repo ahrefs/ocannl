@@ -2,26 +2,36 @@ ties: the coarse composite was timed: true
 ties: the playoff timed alternates: true
 ties: every composite window is the recombination's or the playoff's: true
 ties: each faster alternate replaced the incumbent: true
-ties: each window differs from the incumbent it challenged in at most one segment: true
-ties: some window visibly changes a segment: true
+ties: each window differs from the incumbent it challenged in exactly one segment: true
 ties: no segment is challenged by more than two windows: true
 ties: the crown is the last alternate: true
 ties: the crown's time is the last alternate's: true
 slower: the playoff timed alternates: true
 slower: no slower alternate replaced the incumbent: true
 slower: the crown is the recombined composite: true
-slower: each window differs from the recombined composite in at most one segment: true
-slower: some window visibly changes a segment: true
+slower: each window differs from the recombined composite in exactly one segment: true
 slower: no segment is challenged by more than two windows: true
 near: singles 0.3% apart reach the playoff: true
 near: only the single within the margin plays, one per segment: true
 spread: the coarse composite was timed: true
 spread: singles 1% apart leave the playoff nothing to time: true
+off: the reference search played windows a width-0 search must drop: true
+off: width 0 times no playoff window: true
+off: width 0 times exactly the reference's candidates outside its playoff, in order: true
+off: no timing decision is in the playoff phase: true
+off: the crown is the recombined composite: true
+one: width 1 still plays: true
+one: width 1 plays fewer windows than width 2: true
+one: no segment is challenged by more than one window: true
 trace: one decision per playoff window says phase playoff: true
 trace: an unobserved seam reports nothing: true
 trace: the same windows, crown and time with the seam observed and unobserved: true
+trace: every traced call is one of the search's own, tagged: true
+trace: the report counts exactly the traced calls by settle and admission: true
+trace: an unobserved search counts as many calls: true
 streams: the ambient config leaves both diagnostic streams off: true
 log: the logged search adds exactly one decision, last and phase-less (the untuned control): true
+log: the report's counts leave out the untuned control, the one untagged call: true
 log: the same windows, crown and time with the control on and off: true
 log: the scoped search wrote autotune: diagnostics: true
 progress: the scoped search wrote one search_start and one search_done: true

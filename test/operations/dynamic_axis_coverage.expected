@@ -12,3 +12,23 @@ dac_rows: the gather reads the entry values no write replaced: true
 dac_cols: the gather is not covered, so the table stays read-before-write: true
 dac_cols: the table stays an input of the routine: true
 dac_cols: the gather reads the entry values no write replaced: true
+rmw_gather_in_set: the table's reads are uncovered: true
+rmw_same_cell: the table's reads are covered only by the rmw exemption: true
+rmw_static_in_scatter: the table's reads are uncovered: true
+rmw_same_row_gather: the table's reads are covered only by the rmw exemption: true
+rmw_other_row_gather: the table's reads are uncovered: true
+rmw_other_axis_gather: the table's reads are uncovered: true
+rmw_gather_exec: the gather is not covered, so the table stays read-before-write: true
+rmw_gather_exec: the table stays an input of the routine: true
+rmw_gather_exec: the gather reads the entry values of the row it names: true
+rmw_gather_exec: the materialized-table twin reads the same values: true
+dac_lane: routine A defers the uniform: true
+dac_lane: routine B writes the counter: true
+dac_lane: the splice reads the counter through a lane-extract gather: true
+dac_lane: the gather is covered, so the counter is not read-before-write: true
+dac_lane: the splice did not flip the counter to read-before-write: true
+dac_lane: the counter is not an input of routine B: true
+dac_lane: the twin stores the uniform: true
+dac_lane: the random stream holds 12 pairwise distinct values: true
+dac_lane: every value lies in [0, 1): true
+dac_lane: the twin with the uniform materialized in B reads the same values: true

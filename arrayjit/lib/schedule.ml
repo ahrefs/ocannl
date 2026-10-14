@@ -5175,7 +5175,80 @@ let stage_legality (opt : Low_level.optimized) (op : optop) : op_verdict =
                      validated downstream (validate_parallel)"
                 else Op_legal))
 
-let op_legality (opt : Low_level.optimized) (op : optop) : op_verdict =
+(* gh-ocannl-1231: the staging scope's invariant. A pipelined tile ({!Low_level.pipelined_tile}) is
+   rendered with a buffer-selection term rotated by its rotor loop's serial counter, so the IR is
+   renderable only while (1) every loop binding the rotor symbol is [Serial] — the rotation renders
+   off the serial counter, a retyped rotor would freeze the selection — and (2) every read of the
+   tile sits inside a rotor loop, where there is a rotor value to select the copy with (writes
+   outside it are the prologue load, which fills copy 0). These are exactly the two positional facts
+   [C_syntax] checks while rendering; stating them here, over the applied IR, refuses a move that
+   breaks them before it costs a candidate compile — whatever the move's shape: a [Split] or a
+   materializing [Unroll] of the rotor removes the rotor binder, an [Unroll] in place or a retype
+   changes its kind. *)
+type pipeline_violation =
+  | Read_outside_rotor of { tile : Tn.t; rotor : Indexing.symbol }
+  | Rotor_not_serial of { tile : Tn.t; rotor : Indexing.symbol; axis : Low_level.axis_type }
+[@@deriving sexp_of]
+
+let pipeline_violation_message = function
+  | Read_outside_rotor { tile; rotor } ->
+      "pipelined tile " ^ Tn.debug_name tile ^ " is read outside its rotor loop "
+      ^ Indexing.symbol_ident rotor
+      ^ " (the buffer rotation only remaps reads within the staging scope)"
+  | Rotor_not_serial { tile; rotor; axis } ->
+      "the rotor loop " ^ Indexing.symbol_ident rotor ^ " of pipelined tile " ^ Tn.debug_name tile
+      ^ " is no longer Serial (it is "
+      ^ Sexp.to_string (Low_level.sexp_of_axis_type axis)
+      ^ ")"
+
+let pipeline_violation (opt : Low_level.optimized) : pipeline_violation option =
+  if Map.is_empty opt.Low_level.pipelined then None
+  else
+    let tiles = Map.to_alist opt.Low_level.pipelined in
+    let not_serial =
+      List.find_map tiles ~f:(fun (tile, { Low_level.pt_rotor = rotor; _ }) ->
+          List.find_map (find_loops rotor opt.Low_level.llc) ~f:(function
+            | Low_level.For_loop { axis = Low_level.Serial; _ } -> None
+            | Low_level.For_loop { axis; _ } -> Some (Rotor_not_serial { tile; rotor; axis })
+            | _ -> None))
+    in
+    match not_serial with
+    | Some _ -> not_serial
+    | None ->
+        let accesses = Low_level.affine_accesses opt.Low_level.llc in
+        List.find_map tiles ~f:(fun (tile, { Low_level.pt_rotor = rotor; _ }) ->
+            if
+              List.exists accesses ~f:(fun (a : _ Affine.access) ->
+                  Tn.equal a.a_tn tile && (not a.a_write)
+                  && not (List.exists a.a_loops ~f:(fun (s, _) -> Indexing.equal_symbol s rotor)))
+            then Some (Read_outside_rotor { tile; rotor })
+            else None)
+
+(* The invariant as an op verdict: [Some (Op_illegal _)] when [op], applied to [opt] (which carries
+   pipelined tiles), leaves IR that violates it. Applicability itself stays the op's own arm's
+   question ([None] on a raising apply). Only [opt]'s store-mutating ops need the hermetic copy; the
+   loop rewrites only rebuild [llc]. *)
+let staging_scope_verdict (opt : Low_level.optimized) (op : optop) : op_verdict option =
+  if Map.is_empty opt.Low_level.pipelined then None
+  else
+    let probe =
+      match op with
+      | Split _ | Swap _ | Retype _ | Unroll _ | Partition _ | Pad _ | Coalesce _ | Expand_zero _ ->
+          opt
+      | Stage _ | Privatize _ | Tensorize _ | Fold_mma _ | Fuse_epilogue _ | Split_reduce _ ->
+          {
+            opt with
+            Low_level.traced_store = Hashtbl.copy opt.Low_level.traced_store;
+            optimize_ctx = Low_level.copy_optimize_ctx opt.Low_level.optimize_ctx;
+          }
+    in
+    match apply_opt_op probe op with
+    | exception (Invalid_argument _ | Failure _) -> None
+    | applied ->
+        Option.map (pipeline_violation applied) ~f:(fun v ->
+            Op_illegal (pipeline_violation_message v))
+
+let access_legality (opt : Low_level.optimized) (op : optop) : op_verdict =
   let open Low_level in
   let hardware = function Grid | Workgroup -> true | _ -> false in
   let vectorized = function Vectorized -> true | _ -> false in
@@ -5288,6 +5361,11 @@ let op_legality (opt : Low_level.optimized) (op : optop) : op_verdict =
       | (_ : Low_level.optimized) -> Op_legal)
   | Privatize _ | Expand_zero _ | Fuse_epilogue _ | Fold_mma _ ->
       Op_unknown "not modeled by the oracle (the op's own preconditions apply)"
+
+(* The staging-scope invariant first: a move that breaks it is unrenderable whatever the access
+   queries would say about its races. *)
+let op_legality (opt : Low_level.optimized) (op : optop) : op_verdict =
+  match staging_scope_verdict opt op with Some v -> v | None -> access_legality opt op
 
 (** [schedule_legality opt sched]: per-op verdicts, each against the code with the preceding ops
     applied (on a hermetic copy — checking never mutates [opt]). Stops after a proven-illegal op or
@@ -6453,11 +6531,8 @@ let chain_loops chain =
 type lane_preamble_reduction = Preamble_refused | Preamble_duplicated | Preamble_cooperative
 [@@deriving sexp_of, equal]
 
-let gpu_lane_preamble_reduction () =
-  match
-    String.lowercase
-      (String.strip (Utils.get_global_arg ~arg_name:"gpu_lane_preamble_reduction" ~default:"auto"))
-  with
+let lane_preamble_reduction_of_string value =
+  match String.lowercase (String.strip value) with
   | "auto" -> None
   | "refused" -> Some Preamble_refused
   | "duplicated" -> Some Preamble_duplicated
@@ -6467,26 +6542,28 @@ let gpu_lane_preamble_reduction () =
         ("gpu_lane_preamble_reduction: expected auto, refused, duplicated or cooperative, got "
        ^ other)
 
+let gpu_lane_preamble_reduction () =
+  lane_preamble_reduction_of_string
+    (Utils.get_global_arg ~arg_name:"gpu_lane_preamble_reduction" ~default:"auto")
+
 (* [auto] resolves from the device's economics ({!Backend_intf.hardware_limits}'s
    [lane_scalar_recompute_cheap]): the lanes recompute each pair's scalar preamble ([p], [ds]) once
    per lane, which Metal and CUDA absorb and HIP does not (gh-ocannl-1124). *)
-let lane_preamble_reduction_for (limits : Backend_intf.hardware_limits) =
-  match gpu_lane_preamble_reduction () with
+let resolve_lane_preamble_reduction (limits : Backend_intf.hardware_limits) = function
   | Some mode -> mode
   | None ->
       if limits.Backend_intf.lane_scalar_recompute_cheap then Preamble_cooperative
       else Preamble_refused
 
+let lane_preamble_reduction_for limits =
+  resolve_lane_preamble_reduction limits (gpu_lane_preamble_reduction ())
+
 (* The most simdgroups a cooperative lane reduction may span -- config
    [gpu_lane_all_reduce_simdgroups] (gh-ocannl-1168): [auto] ([None]) or a positive count. At one
    simdgroup the all-reduce is a register butterfly; past it, each simdgroup's partial goes through
    workgroup-shared memory between two barriers per pair ([C_syntax.try_lane_all_reduce]). *)
-let gpu_lane_all_reduce_simdgroups () =
-  match
-    String.lowercase
-      (String.strip
-         (Utils.get_global_arg ~arg_name:"gpu_lane_all_reduce_simdgroups" ~default:"auto"))
-  with
+let lane_all_reduce_simdgroups_of_string value =
+  match String.lowercase (String.strip value) with
   | "auto" -> None
   | other -> (
       match Int.of_string_opt other with
@@ -6495,13 +6572,19 @@ let gpu_lane_all_reduce_simdgroups () =
           invalid_arg
             ("gpu_lane_all_reduce_simdgroups: expected auto or a positive integer, got " ^ other))
 
+let gpu_lane_all_reduce_simdgroups () =
+  lane_all_reduce_simdgroups_of_string
+    (Utils.get_global_arg ~arg_name:"gpu_lane_all_reduce_simdgroups" ~default:"auto")
+
 (* [auto] resolves from the device's measured economics ({!Backend_intf.hardware_limits}'s
    [lane_all_reduce_simdgroups]): one simdgroup wherever the barriers' cost was not measured to be
    repaid. *)
-let lane_all_reduce_simdgroups_for (limits : Backend_intf.hardware_limits) =
-  match gpu_lane_all_reduce_simdgroups () with
+let resolve_lane_all_reduce_simdgroups (limits : Backend_intf.hardware_limits) = function
   | Some k -> k
   | None -> limits.Backend_intf.lane_all_reduce_simdgroups
+
+let lane_all_reduce_simdgroups_for limits =
+  resolve_lane_all_reduce_simdgroups limits (gpu_lane_all_reduce_simdgroups ())
 
 (* How the default GPU schedule weighs its lane geometry -- config [gpu_serial_lanes]
    (gh-ocannl-1167): taken where a kernel admits it, and a reason for fission to cut a kernel
@@ -6509,16 +6592,16 @@ let lane_all_reduce_simdgroups_for (limits : Backend_intf.hardware_limits) =
    ([off]). *)
 type serial_lanes = Lanes_cut | Lanes_admitted | Lanes_off [@@deriving sexp_of, equal]
 
-let gpu_serial_lanes () =
-  match
-    String.lowercase
-      (String.strip (Utils.get_global_arg ~arg_name:"gpu_serial_lanes" ~default:"auto"))
-  with
+let serial_lanes_of_string value =
+  match String.lowercase (String.strip value) with
   | "auto" -> None
   | "cut" -> Some Lanes_cut
   | "admitted" -> Some Lanes_admitted
   | "off" -> Some Lanes_off
   | other -> invalid_arg ("gpu_serial_lanes: expected auto, cut, admitted or off, got " ^ other)
+
+let gpu_serial_lanes () =
+  serial_lanes_of_string (Utils.get_global_arg ~arg_name:"gpu_serial_lanes" ~default:"auto")
 
 (* [auto] resolves from the same economics as {!lane_preamble_reduction_for}. Every lane recomputes
    its nest's per-pair scalar preamble, which the plain plan pays once per thread over its channel
@@ -6527,10 +6610,36 @@ let gpu_serial_lanes () =
    whole row in one thread -- but the fused backward's dV loses: cut from dK to keep its lanes, it
    took 2.30 ms beside dK's 1.03 ms, where the two merged on the plain plan take 1.72 ms
    (gh-ocannl-1167). *)
-let serial_lanes_for (limits : Backend_intf.hardware_limits) =
-  match gpu_serial_lanes () with
+let resolve_serial_lanes (limits : Backend_intf.hardware_limits) = function
   | Some mode -> mode
   | None -> if limits.Backend_intf.lane_scalar_recompute_cheap then Lanes_cut else Lanes_admitted
+
+let serial_lanes_for limits = resolve_serial_lanes limits (gpu_serial_lanes ())
+
+(* gh-ocannl-1272: what a [Search_shaping] key's canonical value ([Utils.canonical_config_value])
+   resolves to on the device [limits] describes, for [Utils.config_class_fingerprint ~resolve]. The
+   [auto] lane modes resolve per device (above), so [cooperative] stated where [auto] resolves to it
+   is the default; a block size is clamped to the device's caps before any schedule reads it. The
+   keys are matched by name because the fingerprint walks the class's keys by name; any other key,
+   and a value its parser rejects, passes through unchanged, which renders it (never under-keys). *)
+let resolve_search_shaping_value (limits : Backend_intf.hardware_limits) ~key value =
+  let preamble = function
+    | Preamble_refused -> "refused"
+    | Preamble_duplicated -> "duplicated"
+    | Preamble_cooperative -> "cooperative"
+  in
+  let lanes = function Lanes_cut -> "cut" | Lanes_admitted -> "admitted" | Lanes_off -> "off" in
+  try
+    match key with
+    | "gpu_lane_preamble_reduction" ->
+        preamble (resolve_lane_preamble_reduction limits (lane_preamble_reduction_of_string value))
+    | "gpu_lane_all_reduce_simdgroups" ->
+        Int.to_string
+          (resolve_lane_all_reduce_simdgroups limits (lane_all_reduce_simdgroups_of_string value))
+    | "gpu_serial_lanes" -> lanes (resolve_serial_lanes limits (serial_lanes_of_string value))
+    | "gpu_schedule_block_size" -> Int.to_string (clamp_block_size ~limits (Int.of_string value))
+    | _ -> value
+  with Invalid_argument _ | Failure _ -> value
 
 (* Lane geometry (gh-ocannl-1003 stage 1). A nest whose parallel loop sits under a serial loop past
    a lane-uniform preamble -- the online-softmax hoist's value pass, [for (b, s, h) { for t { p :=
@@ -7951,15 +8060,21 @@ let fission_segmented ?(promote_locals = false) ?(arity_cuts = false) ?(fold_zer
   let max_chain = if arity_cuts then Some Int.max_value else None in
   let units = collect_units ?max_chain ~fold:(reduction_zero_fold ~zero_sched opt) plc opt stmts in
   (* The schedule of the [i]th segment: a replay's own, by position (segments sharing a structural
-     digest can differ in placements, hence in kind and schedule), or the caller's per-kind ones. *)
+     digest can differ in placements, hence in kind and schedule), or the caller's per-kind ones --
+     also where a replay leaves the segment to them ([None], gh-ocannl-1243). *)
   let schedule_of i (seg : segment option) pre =
-    match (replay, seg) with
-    | Some (_, schedule), _ -> schedule i pre
-    | None, (None | Some { g_kind = `Normal; _ }) -> preset pre
-    | None, Some { g_kind = `Solo; _ } -> []
-    | None, Some ({ g_kind = `Zeros; _ } as seg) ->
-        zero_sched
-          (List.filter_map seg.g_units ~f:(fun u -> Option.bind u.f_sum ~f:(fun s -> s.s_top_zero)))
+    let by_kind () =
+      match seg with
+      | None | Some { g_kind = `Normal; _ } -> preset pre
+      | Some { g_kind = `Solo; _ } -> []
+      | Some ({ g_kind = `Zeros; _ } as seg) ->
+          zero_sched
+            (List.filter_map seg.g_units ~f:(fun u ->
+                 Option.bind u.f_sum ~f:(fun s -> s.s_top_zero)))
+    in
+    match replay with
+    | Some (_, schedule) -> ( match schedule i pre with Some s -> s | None -> by_kind ())
+    | None -> by_kind ()
   in
   let units_arr = Array.of_list units in
   let fallback seg_units =
@@ -8249,6 +8364,22 @@ let workgroup_memory_bytes ~(capabilities : Backend_intf.codegen_capabilities)
         let p = prec site.lar_local.Low_level.tn in
         acc + max (bytes (capabilities.compute_prec p)) (bytes (capabilities.accum_prec p)))
 
+(* gh-ocannl-1313: the per-work-item scratch the kernel declares — the function-scope arrays
+   [C_syntax]'s [local_decls] emits, one per [Local]-settling node of the kernel's traced store,
+   sized [num_elems] at its storage precision — less the workgroup-shared tiles, which it declares
+   once per workgroup instead. Read with the pure placement peek, so asking settles nothing. An
+   upper estimate of the arrays: on the CPU backends a pool-parallel [Grid] loop declares its
+   privatized locals per chunk instead, and on Metal a rendered simdgroup fragment suppresses its
+   array, both rendering decisions taken after this point. A device compiler may still drop an array
+   it can prove dead; the GPT-2 step that motivated this declared 360452 bytes against hiprtc's
+   measured frame of 360544. *)
+let thread_private_bytes (opt : Low_level.optimized) : int =
+  let plc = opt.optimize_ctx.placements in
+  Hashtbl.fold opt.traced_store ~init:0 ~f:(fun ~key:tn ~data:_ acc ->
+      if Tn.Placements.is_local_peek plc tn && not (Set.mem opt.workgroup_shared tn) then
+        acc + Lazy.force tn.Tn.size_in_bytes
+      else acc)
+
 let check_hardware_limits_classified ~name ~(limits : Backend_intf.hardware_limits) ~capabilities
     (opt : Low_level.optimized) : unit =
   Option.iter limits.max_threads_per_workgroup ~f:(fun max_threads ->
@@ -8286,6 +8417,27 @@ let check_hardware_limits_classified ~name ~(limits : Backend_intf.hardware_limi
                  {
                    resource = Schedule_outcome.Workgroup_memory;
                    requested = shared_bytes;
+                   limit = Some max_bytes;
+                   detail;
+                 } )));
+  (* gh-ocannl-1313: past this the device compiler refuses the kernel, untyped and only after
+     compiling all of it — 52 s for hiprtc on a GPT-2 training step's serial base form. *)
+  Option.iter limits.max_thread_private_bytes ~f:(fun max_bytes ->
+      let private_bytes = thread_private_bytes opt in
+      if private_bytes > max_bytes then
+        let detail =
+          [%string
+            "Schedule: kernel %{name} declares %{private_bytes#Int} bytes of per-work-item scratch \
+             (its Local arrays), exceeding the %{max_bytes#Int} bytes the device compiler's frame \
+             limit leaves for them"]
+        in
+        raise
+          (Schedule_outcome.Cause_at
+             ( Schedule_outcome.Hardware_limits,
+               Schedule_outcome.Resource_exceeded
+                 {
+                   resource = Schedule_outcome.Thread_scratch;
+                   requested = private_bytes;
                    limit = Some max_bytes;
                    detail;
                  } )));

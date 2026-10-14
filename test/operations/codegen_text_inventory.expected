@@ -106,6 +106,7 @@ test/operations/test_where_precision.c.expected [c] extension .c.expected; marke
 test/operations/test_where_precision.cu.expected [cuda] extension .cu.expected; markers c-decl-banner c-logic-banner c-prec-cast cuda-kernel ll-end
 test/operations/test_where_precision.hip.expected [hip] extension .hip.expected; markers c-decl-banner c-logic-banner c-prec-cast cuda-kernel ll-end
 test/operations/test_where_precision.metal.expected [metal] extension .metal.expected; markers c-decl-banner c-logic-banner c-prec-cast ll-end metal-kernel
+test/operations/thread_private_gate.expected [derived] beside test/operations/thread_private_gate.ml
 test/operations/tile_mma_declines.expected [derived] beside test/operations/tile_mma_declines.ml
 test/operations/tile_mma_geometry.expected [derived] beside test/operations/tile_mma_geometry.ml
 test/operations/top_down_prec-unoptimized.ll.expected [ll] extension .ll.expected; markers ll-assign ll-end
@@ -178,7 +179,7 @@ test/operations/gpu_serial_lanes.ml [also pins text this scan cannot name: compu
     "for ("
 test/operations/half_float_power.ml
     "(half)pow((float)("
-    "__float2half(powf(__half2float("
+    "__float2half(ocannl_pow_f32(__half2float("
     "hexp2("
     "ocannl_powi_"
     "pow("
@@ -253,15 +254,21 @@ test/operations/reduction_forms.ml [also pins text this scan cannot name: untrac
     "ocannl_shfl_xor"
     "volatile "
     ... ^ "["
-test/operations/reserved_routine_names.ml
+test/operations/reserved_routine_names.ml [also pins text this scan cannot name: untraced callback, opaque aggregate component]
     "arrayjit_threefry4x32__"
     "asm__"
     "exp__"
     "gh686_bad_name_"
     "k_686_leading_digit"
+    "k__gh707_reserved"
+    "main__"
     "printf__"
     "void " ^ "gh686_ordinary_name" ^ "("
     "void " ^ ... ^ "("
+test/operations/runtime_integer_power.ml
+    "__float2half(ocannl_pow_f32(__half2float("
+    "ocannl_pow_f32("
+    "ocannl_powi_"
 test/operations/scan_loop.ml [renders generated text in memory]
 test/operations/schedule_batch_grid.ml [also pins text this scan cannot name: untraced callback]
 test/operations/schedule_batched_mma.ml
@@ -499,6 +506,8 @@ test/operations/test_uniform_virtual_lane.ml [also pins text this scan cannot na
     "Main logic"
     "_uniform_lane("
     "_uniform_vec("
+test/operations/thread_private_gate.ml [also pins text this scan cannot name: untraced callback, unvalidated haystack]
+    "Local declarations and initialization"
 test/operations/tile_bf16_row_groups.ml
     "4-lane float"
     "row tail 3"

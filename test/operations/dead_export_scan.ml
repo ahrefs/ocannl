@@ -274,14 +274,12 @@ let exempt_zero_reference_exports =
     "Tnode.memory_mode_of_sexp";
     "Tnode.next_uid";
     "Tnode.prec_of_dalayed";
-    "Tnode.propose_bounds";
     "Tnode.scan_host_bounds";
     "Tnode.transition_memory_mode";
     "Tnode.validate_padded_numel_contract";
     "Utils.accessed_global_args";
     "Utils.artifacts_subdir";
     "Utils.captured_log_processors";
-    "Utils.clean_filename";
     "Utils.compare_requirement";
     "Utils.config_table_of_lines";
     (* gh-ocannl-604: bootstrap resolution and the sourced values carried from startup to its

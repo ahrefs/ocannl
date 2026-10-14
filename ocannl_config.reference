@@ -182,7 +182,9 @@
 #build_files_prefix=
 
 # If true, the build_files/<prefix>/ subdirectory of this process (see build_files_prefix)
-# is deleted on startup; the whole build_files/ directory when the prefix is ".".
+# is emptied on startup; the whole build_files/ directory when the prefix is ".". The
+# directory itself stays, as do libraries kept under output_dlls_in_build_directory by
+# another process that is still running.
 #clean_up_build_files_on_startup=true
 
 # If true, the log_files/<prefix>/ subdirectory of this process (see build_files_prefix)
@@ -251,8 +253,8 @@
 # barriers per (query, key) pair, every lane reading every partial, so a head of 64 or 128 (GPT-2's
 # real widths) can take lanes too (gh-ocannl-1168). A head wider than this many simdgroups keeps
 # the plain plan. `auto` resolves per device to where the barriers were measured to pay: 4 on
-# Metal (heads of 64 and 128 trained 3-31% faster), 1 everywhere unmeasured, so wider heads keep
-# the plain plan there. A positive integer forces that bound.
+# Metal (heads of 64 and 128 trained 3-31% faster) and CUDA (16-63% faster), 1 everywhere
+# unmeasured (HIP), so wider heads keep the plain plan there. A positive integer forces that bound.
 #gpu_lane_all_reduce_simdgroups=auto
 
 # How the default GPU schedule weighs its lane geometry: a parallel loop under a serial loop past
@@ -601,6 +603,33 @@
 # schedule cache replays its winner without searching again.
 #autotune_register_tile_rm_twin=false
 
+# How many near-tie singles per keyed fission segment `Autotune.tune`'s composite playoff re-times
+# (gh-ocannl-1166); 0 turns the playoff off (gh-ocannl-1259). A per-segment single is timed as the
+# whole routine with every other segment on its untuned preset, and that backdrop's noise can
+# invert singles whose times lie within 0.5% of the segment's best; after the recombination the
+# playoff times up to this many of them, nearest first, in the faster composite's place, keeping
+# each faster alternate. It cost about 14 extra candidates and 5-26% of search wall time per
+# placement arm on gpt2_mini/CUDA, and on tf32 it made both replicate searches crown the same
+# q/k/v geometry and the replayed step faster by more than the replicate spread. With 0 a search
+# times exactly the candidates it timed before the playoff existed. It shapes what a search times,
+# not what a crowned schedule means, so a warm schedule cache replays its winner whatever the
+# width. No profile sets it: the profiles that search (`performance`, `approximate`) choose wider
+# searches, and `reproducible` does not search.
+#autotune_composite_playoff_width=2
+
+# Which units of each beam entry a beam-expansion round of `Autotune.tune` expands
+# (gh-ocannl-1229): `differing`, `full` or `head`. A fissioned routine's time is the sum of its
+# segments' times, and after the composite playoff the beam's runners-up are the head with a few
+# segments swapped, so on a segment an entry shares with the head its move is the head's same move
+# over a backdrop already measured slower. `differing` expands the head in full and every other
+# entry only on the segments where it differs from the head (an entry segmented differently, or a
+# whole-routine one, in full). `full` expands every entry in full, the rule before gh-ocannl-1229,
+# which on gpt2_mini/CUDA re-timed one 157-move menu four times over (635 candidates in round 1).
+# `head` expands the head alone, the single-entry control. Read only when a search runs rounds. It
+# shapes what a search times, not what a crowned schedule means, so a warm schedule cache replays
+# its winner whatever the rule.
+#autotune_round_expansion=differing
+
 # If true, `Autotune.tune` logs each candidate to stderr: its spec, whether it failed (with the
 # error message), deduplicated against an already-seen post-schedule digest, or was timed (and
 # its time), plus the cache-hit, winner-replay and fallback outcomes. For debugging search
@@ -639,6 +668,11 @@
 # trails the refined incumbent's best after ITS first as many by more than tune_flip_profit_margin
 # squared. Equal depth, not the incumbent's final best: on gh-719's gpt2_mini cell the arm itself
 # sat 11.7x above its final time for 207 of its 209 timed candidates.
+# gh-ocannl-1274: a flip whose local reading is canonically identical to one already measured and
+# lost in the same chain (the flipped node's producer and consumer statements under fresh-name
+# normalization, with every node's dims and placements, and the flip's recompute cost) is skipped
+# as `twin-of` that flip WITHOUT spending a budget slot -- so the per-layer twins of a transformer
+# (gpt2_mini's q/k/v projections, one set per layer) cost one slot per set, not one per layer.
 #tune_inline_flips=0
 
 # gh-ocannl-638: which placement arm `Train.tune_placements` ships. `auto` (the default) ships the
@@ -1092,13 +1126,19 @@
 # remain the licence.
 #cc_backend_fast_math=false
 
-# If true, the CC backend keeps its compiled dynamic libraries (.dll/.so files), named
-# `<source stem>_run_id_<N>` beside the source the compiler read -- the system temp
-# directory, since the compiler reads a private temporary copy even under
-# `output_debug_files_in_build_directory`. If false (the default), each library is a
-# temporary file removed once it is loaded, unless debug files retain it. Windows refuses
-# to delete a loaded library: there it is removed only after its routine is collected
-# and unloaded, so libraries of routines alive at exit (and of every OpenMP kernel) stay.
+# If true, the CC backend keeps its compiled dynamic libraries (.dll/.so files) in the
+# build_files directory (`build_files/<exe>/` by default, see `build_files_prefix`), beside
+# the kernel's debug source, named `<kernel>_pid<P>_n<nonce>_run<N>`: the process id and a
+# random per-process nonce keep apart the processes sharing the directory (including other
+# PID namespaces), the run id the compiles of one process; another process's startup
+# cleanup spares them while process P runs. If false (the
+# default), each library is a temporary file removed once it is loaded, unless
+# `output_debug_files_in_build_directory` retains it in the system temp directory. Windows
+# refuses to delete a loaded library: there it is removed only after its routine is collected
+# and unloaded, so libraries of routines alive at exit (and of every OpenMP kernel) stay until
+# the startup of a later OCANNL process removes them, once their process is gone and they are
+# over an hour old: such a temporary library is named
+# `ocannl_cc_<kernel>_pid<P>_n<nonce>_run_id_<N>_<random>`.
 #output_dlls_in_build_directory=false
 
 # Per-tensor-node cutoff in bytes for considering off-stack allocation, opt-in for backends.

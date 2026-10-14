@@ -1,4 +1,4 @@
-(* Regression test for gh-ocannl-1125/1172: transfers of nodes no routine has linked yet share
+(* Regression test for gh-ocannl-1125/1172/1204: transfers of nodes no routine has linked yet share
    pools.
 
    Loading parameters with [Transfer.put] before the first compile -- restoring a checkpoint into a
@@ -278,6 +278,80 @@ struct
       && after.live_working_bytes = before.live_working_bytes
       && AC.unreleased_contexts after = AC.unreleased_contexts before)
 
+  (* gh-ocannl-1204: a new arena is sized by the arenas the uploading value holds a tenant of, not
+     by every arena of the lineage. [k] forks of one parent, held simultaneously, each upload one
+     node: none of them can extend another's arena, so each needs a pool of exactly its node --
+     summing the siblings' capacities instead doubled each fork's arena over the last, [2^k - 1]
+     nodes' worth for [k] nodes. The control continues the same parent linearly beside those
+     siblings, and must take exactly the pools and bytes of the same chain in a lineage that has no
+     siblings: the doubling of linear packing is what the fix keeps. *)
+  let case_sibling_sizing () =
+    let module AC = Ir.Alloc_census in
+    let k = 8 in
+    let zeros =
+      Ir.Ndarray.init_array ~debug:"svpc_size" Ir.Ops.single ~dims:[| len |] ~padding:None
+    in
+    let fresh l = TDSL.wrap_param ~l ~o:[ len ] (zeros ~f:(fun _ -> 0.)) () in
+    let node_bytes = len * Ir.Ops.prec_in_bytes Ir.Ops.single in
+    let growth (from : AC.t) (till : AC.t) =
+      ( till.live_working_pools - from.live_working_pools,
+        till.live_working_bytes - from.live_working_bytes )
+    in
+    (* [k] uploads continuing [parent] linearly. Only the latest value of a linear upload chain is
+       released, so [parent] and the reference root never are. *)
+    let chain_from ~tag parent =
+      let nodes = List.init k ~f:(fun j -> fresh (Printf.sprintf "svpc_size_%s%d" tag j)) in
+      let before = AC.snapshot () in
+      let ctx =
+        List.foldi nodes ~init:parent ~f:(fun j ctx x ->
+            Transfer.put ctx x.Tensor.value (values (200 + j)))
+      in
+      (ctx, nodes, growth before (AC.snapshot ()))
+    in
+    let before = AC.snapshot () in
+    let reference_root =
+      Transfer.put (Context.auto ()) (fresh "svpc_size_ref_base").Tensor.value (values 0)
+    in
+    let reference, _, reference_growth = chain_from ~tag:"ref" reference_root in
+    Context.release reference;
+    let base = fresh "svpc_size_base" in
+    let parent = Transfer.put (Context.auto ()) base.Tensor.value (values 0) in
+    let forked = AC.snapshot () in
+    let ys = List.init k ~f:(fun j -> fresh (Printf.sprintf "svpc_size_y%d" j)) in
+    let siblings =
+      List.mapi ys ~f:(fun j y -> Transfer.put parent y.Tensor.value (values (100 + j)))
+    in
+    let sibling_pools, sibling_bytes = growth forked (AC.snapshot ()) in
+    Stdio.eprintf
+      "sibling sizing: %d siblings took %d pools, %d bytes for %d uploaded (not part of the golden)\n\
+       %!"
+      k sibling_pools sibling_bytes (k * node_bytes);
+    pf "%d simultaneously held sibling uploads take one pool each" k (sibling_pools = k);
+    pf "%d sibling uploads take only the bytes of their nodes" k (sibling_bytes = k * node_bytes);
+    let control, chain, control_growth = chain_from ~tag:"ctl" parent in
+    Stdio.eprintf
+      "sibling sizing: linear control %d pools, %d bytes; without siblings %d pools, %d bytes (not \
+       part of the golden)\n\
+       %!"
+      (fst control_growth) (snd control_growth) (fst reference_growth) (snd reference_growth);
+    p "beside the siblings, a linear continuation grows exactly as without them"
+      (fst control_growth = fst reference_growth && snd control_growth = snd reference_growth);
+    p "the linear continuation packs geometrically"
+      (fst control_growth <= 1 + ceil_log2 (k + 1) && snd control_growth <= 2 * (k + 1) * node_bytes);
+    p_alli "every sibling reads back its own upload" (List.zip_exn siblings ys)
+      ~f:(fun j (ctx, y) ->
+        Array.equal Float.equal (Context.get_values ctx y.Tensor.value) (values (100 + j))
+        && Array.equal Float.equal (Context.get_values ctx base.Tensor.value) (values 0));
+    p_alli "the linear continuation reads back every upload" chain ~f:(fun j x ->
+        Array.equal Float.equal (Context.get_values control x.Tensor.value) (values (200 + j)));
+    List.iter siblings ~f:Context.release;
+    Context.release control;
+    let after = AC.snapshot () in
+    p "releasing the siblings and the continuation leaves no working pools or context owners"
+      (after.live_working_pools = before.live_working_pools
+      && after.live_working_bytes = before.live_working_bytes
+      && AC.unreleased_contexts after = AC.unreleased_contexts before)
+
   let () =
     List.iter
       [
@@ -285,6 +359,7 @@ struct
         ("root siblings", case_root_siblings);
         ("shared siblings", case_shared_siblings);
         ("retired tails", case_retired_tails);
+        ("sibling sizing", case_sibling_sizing);
       ]
       ~f:(fun (label, run) -> Verdict.case label run)
 end

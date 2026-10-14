@@ -21,9 +21,16 @@
    segment's runner-up single plays and the one behind it (0.6%) does not; in [spread] they are 1%
    apart, wider than the margin, so the playoff times nothing.
 
-   Every search runs with the timing trace's decision seam observed ([Autotune.on_batch_decision],
-   gh-ocannl-1199), which must attribute each playoff window to the [playoff] phase; [ties] is
-   searched once more with the seam unobserved, and must crown and time exactly the same.
+   [off] is [ties] with [autotune_composite_playoff_width=0] (gh-ocannl-1259): it must time exactly
+   the candidates [ties] timed outside its playoff, in the same order, and crown the recombined
+   composite; [one] is [ties] at width 1, which plays one alternate per segment and so fewer windows
+   than [ties].
+
+   Every search runs with the timing trace observed ([Autotune.with_timing_call_observer], whose
+   records carry the decision of gh-ocannl-1199), which must attribute each playoff window to the
+   [playoff] phase; [ties] is searched once more with the trace unobserved, and must crown and time
+   exactly the same. The report's settle-by-admission counts (gh-ocannl-1263) must be the traced
+   calls' own, the untuned control's left out, whether or not the trace observes them.
 
    Every search passes [tune]'s [?log] explicitly, so none depends on the ambient [autotune_log].
    [ties] is searched once more with [~log:true], which adds the untuned-default in-process control
@@ -71,26 +78,49 @@ let chain () =
 
 type observed = {
   report : Autotune.report;
+  measured : string list;  (** Every admitted window's label, in attempt order. *)
   composite_ms : (string * float) list;  (** Every admitted composite window, in attempt order. *)
-  phases : string option list;
-      (** The search phase of every timing decision, in order; empty when the seam was unobserved.
-      *)
+  calls : Autotune.timing_call list;
+      (** Every timing call's record, in order; empty when the trace was unobserved. *)
+  phases : string option list;  (** The search phase of each of [calls]. *)
 }
 
+let playoff_width_key = "autotune_composite_playoff_width"
+
+(* A list of records as a report counts them: per (settle, admission), in constructor order. *)
+let tally (calls : Autotune.timing_call list) =
+  List.map calls ~f:(fun c -> (c.decision.settle, c.decision.admission))
+  |> List.sort_and_group ~compare:Poly.compare
+  |> List.map ~f:(fun group ->
+      let settle, admission = List.hd_exn group in
+      (settle, admission, List.length group))
+
+let counted (r : Autotune.report) =
+  List.sum (module Int) r.timing_decisions ~f:(fun (_, _, calls) -> calls)
+
 (* One search under a scripted ranking: [single n] is the n-th single's time (0-based, attempt
-   order), [composite n] the n-th composite's. *)
-let search ?(trace = true) ?(log = false) ?progress ~tag ~single ~composite () =
-  let report = ref None and singles = ref 0 and composites = ref [] and phases = ref [] in
-  let old_measured = !Autotune.on_candidate_measured
-  and old_decision = !Autotune.on_batch_decision in
+   order), [composite n] the n-th composite's. [?width] states [autotune_composite_playoff_width]
+   for this search only (at the config-file level; the stanza declares the key's environment
+   variable, so an ambient override reruns the test, whose width claims then fail). *)
+let search ?(trace = true) ?(log = false) ?progress ?width ~tag ~single ~composite () =
+  let report = ref None and singles = ref 0 and composites = ref [] and calls = ref [] in
+  let measured = ref [] in
+  let old_measured = !Autotune.on_candidate_measured in
+  let observed body =
+    if trace then Autotune.with_timing_call_observer (fun c -> calls := c :: !calls) body
+    else body ()
+  in
   Exn.protect
     ~finally:(fun () ->
       Autotune.on_candidate_measured := old_measured;
-      Autotune.on_batch_decision := old_decision)
+      Hashtbl.remove Utils.config_file_args playoff_width_key)
     ~f:(fun () ->
-      (if trace then Autotune.on_batch_decision := fun d -> phases := d.Autotune.phase :: !phases);
+      Option.iter width ~f:(fun w ->
+          Hashtbl.set Utils.config_file_args ~key:playoff_width_key ~data:(Int.to_string w));
+      observed @@ fun () ->
       (Autotune.on_candidate_measured :=
          fun ~label ~digest:_ _ms ->
+           measured := label :: !measured;
            if is_single label then (
              let ms = single !singles in
              Int.incr singles;
@@ -125,7 +155,14 @@ let search ?(trace = true) ?(log = false) ?progress ~tag ~single ~composite () =
         r.Autotune.best_label r.Autotune.best_ms;
       List.iter (List.rev !composites) ~f:(fun (label, ms) ->
           Stdio.eprintf "  %s window (not part of the golden): %s %.2f ms\n%!" tag label ms);
-      { report; composite_ms = List.rev !composites; phases = List.rev !phases }
+      let calls = List.rev !calls in
+      {
+        report;
+        measured = List.rev !measured;
+        composite_ms = List.rev !composites;
+        calls;
+        phases = List.map calls ~f:(fun c -> c.Autotune.decision.phase);
+      }
   | None -> failwith (tag ^ ": the search delivered no report")
 
 (* Runs [f] with stderr routed into a file and returns its result with the lines it wrote. The
@@ -211,16 +248,15 @@ let () =
     (r.Autotune.fiss_sketch_playoff_swaps = r.Autotune.fiss_sketch_playoff_timed);
   (* Every window swapped, so each window's incumbent is the window before it: an alternate built
      from the recombined composite instead of the swapped incumbent differs from it in two segments.
-     "At most one" rather than "exactly one": a label does not render every parameter (two register
-     tile geometries of one tile print alike), so a genuine one-segment change can read as none. *)
+     Exactly one: a sketch's label renders every parameter (gh-ocannl-1230), so two register-tile
+     geometries of one tile print apart and a one-segment change cannot read as none. *)
   let labels = List.map ties.composite_ms ~f:fst in
   let challenges =
     List.zip_exn (List.drop_last_exn labels) (List.tl_exn labels)
     |> List.map ~f:(fun (incumbent, window) -> changed incumbent window)
   in
-  p_all "ties: each window differs from the incumbent it challenged in at most one segment"
-    challenges ~f:(fun c -> List.length c <= 1);
-  p_exists "ties: some window visibly changes a segment" challenges ~f:(fun c -> List.length c = 1);
+  p_all "ties: each window differs from the incumbent it challenged in exactly one segment"
+    challenges ~f:(fun c -> List.length c = 1);
   width_claim "ties: no segment is challenged by more than two windows" ~width:2 challenges;
   (match List.last ties.composite_ms with
   | Some (label, ms) ->
@@ -242,15 +278,12 @@ let () =
   | (first, _) :: windows ->
       p "slower: the crown is the recombined composite" (String.equal r.Autotune.best_label first);
       let challenges = List.map windows ~f:(fun (window, _) -> changed first window) in
-      p_all "slower: each window differs from the recombined composite in at most one segment"
-        challenges ~f:(fun c -> List.length c <= 1);
-      p_exists "slower: some window visibly changes a segment" challenges ~f:(fun c ->
-          List.length c = 1);
+      p_all "slower: each window differs from the recombined composite in exactly one segment"
+        challenges ~f:(fun c -> List.length c = 1);
       width_claim "slower: no segment is challenged by more than two windows" ~width:2 challenges
   | [] ->
       p "slower: the crown is the recombined composite" false;
-      p "slower: each window differs from the recombined composite in at most one segment" false;
-      p "slower: some window visibly changes a segment" false;
+      p "slower: each window differs from the recombined composite in exactly one segment" false;
       p "slower: no segment is challenged by more than two windows" false);
   let near =
     search ~tag:"near" ~single:(fun n -> 100. *. Float.int_pow 1.003 n) ~composite:faster ()
@@ -274,6 +307,47 @@ let () =
   p "spread: singles 1% apart leave the playoff nothing to time"
     (r.Autotune.fiss_sketch_playoff_timed = 0 && List.length spread.composite_ms = 1)
 
+(* gh-ocannl-1259: the playoff's width is a setting, and 0 is off. [ties] is the reference: its
+   composite windows are the recombined composite and then exactly its playoff windows (claimed
+   above), so dropping every composite after the first leaves what a search without the playoff
+   times. *)
+let () =
+  let without_playoff (o : observed) =
+    match o.composite_ms with
+    | [] -> o.measured
+    | _ :: playoff_windows ->
+        let windows = List.map playoff_windows ~f:fst in
+        List.filter o.measured ~f:(fun label -> not (List.mem windows label ~equal:String.equal))
+  in
+  let off = search ~width:0 ~tag:"off" ~single:(fun _ -> 100.) ~composite:faster () in
+  let r = off.report in
+  p "off: the reference search played windows a width-0 search must drop"
+    (ties.report.Autotune.fiss_sketch_playoff_timed >= 1);
+  p "off: width 0 times no playoff window"
+    (r.Autotune.fiss_sketch_playoff_timed = 0 && r.Autotune.fiss_sketch_playoff_swaps = 0);
+  p "off: width 0 times exactly the reference's candidates outside its playoff, in order"
+    (List.equal String.equal off.measured (without_playoff ties));
+  p_none "off: no timing decision is in the playoff phase" off.phases
+    ~f:(Option.equal String.equal (Some "playoff"));
+  (match ties.composite_ms with
+  | (recombined, _) :: _ ->
+      p "off: the crown is the recombined composite" (String.equal r.Autotune.best_label recombined)
+  | [] -> p "off: the crown is the recombined composite" false);
+  let one = search ~width:1 ~tag:"one" ~single:(fun _ -> 100.) ~composite:faster () in
+  let r = one.report in
+  p "one: width 1 still plays" (r.Autotune.fiss_sketch_playoff_timed >= 1);
+  p "one: width 1 plays fewer windows than width 2"
+    (r.Autotune.fiss_sketch_playoff_timed < ties.report.Autotune.fiss_sketch_playoff_timed);
+  let labels = List.map one.composite_ms ~f:fst in
+  let challenges =
+    match labels with
+    | [] -> []
+    | _ ->
+        List.zip_exn (List.drop_last_exn labels) (List.tl_exn labels)
+        |> List.map ~f:(fun (incumbent, window) -> changed incumbent window)
+  in
+  width_claim "one: no segment is challenged by more than one window" ~width:1 challenges
+
 (* gh-ocannl-1199: the decision trace carries the playoff phase, and observing it moves nothing. *)
 let () =
   let traced = ties in
@@ -288,7 +362,15 @@ let () =
   p "trace: the same windows, crown and time with the seam observed and unobserved"
     (List.equal Poly.equal traced.composite_ms quiet.composite_ms
     && String.equal traced.report.Autotune.best_label quiet.report.Autotune.best_label
-    && Float.equal traced.report.Autotune.best_ms quiet.report.Autotune.best_ms)
+    && Float.equal traced.report.Autotune.best_ms quiet.report.Autotune.best_ms);
+  (* gh-ocannl-1263: the search counts its own calls through [time_routine]'s [on_call], apart from
+     the domain observer the trace uses -- so the two agree, and the count is there unobserved. *)
+  p_all "trace: every traced call is one of the search's own, tagged" traced.calls ~f:(fun c ->
+      c.Autotune.tagged);
+  p "trace: the report counts exactly the traced calls by settle and admission"
+    (Poly.equal traced.report.Autotune.timing_decisions (tally traced.calls));
+  p "trace: an unobserved search counts as many calls"
+    (counted quiet.report = List.length traced.calls)
 
 (* The untuned control under a scoped [~log:true]: the logged search times everything the unlogged
    [ties] did, in the same phases, then the control once more with no phase. Its window is real (the
@@ -304,6 +386,11 @@ let () =
     (String.concat ~sep:" " (List.map logged.phases ~f:(Option.value ~default:"-")));
   p "log: the logged search adds exactly one decision, last and phase-less (the untuned control)"
     (List.equal (Option.equal String.equal) logged.phases (ties.phases @ [ None ]));
+  p "log: the report's counts leave out the untuned control, the one untagged call"
+    (List.count logged.calls ~f:(fun c -> not c.Autotune.tagged) = 1
+    && (not (List.last_exn logged.calls).Autotune.tagged)
+    && Poly.equal logged.report.Autotune.timing_decisions
+         (tally (List.filter logged.calls ~f:(fun c -> c.Autotune.tagged))));
   p "log: the same windows, crown and time with the control on and off"
     (List.equal Poly.equal logged.composite_ms ties.composite_ms
     && String.equal logged.report.Autotune.best_label ties.report.Autotune.best_label

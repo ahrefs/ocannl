@@ -132,6 +132,53 @@ let integer_power_builtins ~prefix ~supports_double ~dialect =
     ]
   else [ single ]
 
+(* Floating [pow] for the CUDA-like dialects, whose fast math (CUDA's [--use_fast_math], HIP's
+   [-ffast-math]) may lower [powf] to [exp2(y * log2(x))]: NaN for every negative base, integral
+   exponents included (gh-ocannl-1240). An integral exponent takes the vendor [pow] of the base's
+   magnitude and restores the sign from the exponent's parity, which is what C [pow] does; any other
+   exponent -- fractional, or NaN -- keeps the vendor domain, so a negative base under a fractional
+   exponent stays NaN. A zero exponent gives 1 for every base -- signed zeros, infinities and NaN
+   included -- as in C and as the integer-power helper defines it: the fast-math lowering reads [0 *
+   log2(0)] and [0 * log2(inf)] as NaN. A domain fix, not a correctly rounded [pow]: the magnitude
+   is the vendor's.
+
+   Both operands are classified by their bits, which fast math can neither fold nor flush: the
+   base's sign bit, so [-0] counts as negative ([(-0)^3 = -0]); and the exponent's magnitude bits,
+   so that only [+-0] takes the identity, every nonzero exponent below 1 -- subnormals included,
+   which CUDA's [--ftz=true] (implied by [--use_fast_math]) would otherwise compare equal to 0 --
+   stays fractional, and NaN stays NaN. Only a normal exponent of magnitude at least 1 reaches
+   [trunc], where flushing cannot reach. Every integer beyond the mantissa's reach is even, which
+   the integer-conversion guard encodes. Known integral exponents never get here
+   ([C_syntax.integer_power_doc] takes them). *)
+let runtime_power_builtins ~prefix =
+  let make ~typ ~name ~bits_typ ~to_bits ~magnitude_mask ~one ~infinity ~pow ~trunc ~fabs ~int_typ
+      ~int_limit =
+    let x_negative =
+      Printf.sprintf "(%s(x) >> %d) != 0" to_bits (if typ = "float" then 31 else 63)
+    in
+    ( name,
+      Printf.sprintf
+        {|%s %s %s(%s x, %s y) {
+  %s y_magnitude = %s(y) & %s;
+  if (y_magnitude == 0) return 1;
+  if (!(%s) || y_magnitude < %s || y_magnitude > %s || %s(y) != y) return %s(x, y);
+  %s magnitude = %s(%s(x), y);
+  return (%s(y) < %s && ((%s)y & 1) != 0) ? -magnitude : magnitude;
+}|}
+        prefix typ name typ typ bits_typ to_bits magnitude_mask x_negative one infinity trunc pow
+        typ pow fabs fabs int_limit int_typ,
+      [] )
+  in
+  [
+    make ~typ:"float" ~name:"ocannl_pow_f32" ~bits_typ:"unsigned int" ~to_bits:"__float_as_uint"
+      ~magnitude_mask:"0x7fffffffu" ~one:"0x3f800000u" ~infinity:"0x7f800000u" ~pow:"powf"
+      ~trunc:"truncf" ~fabs:"fabsf" ~int_typ:"int" ~int_limit:"16777216.0f";
+    make ~typ:"double" ~name:"ocannl_pow_f64" ~bits_typ:"unsigned long long"
+      ~to_bits:"(unsigned long long)__double_as_longlong" ~magnitude_mask:"0x7fffffffffffffffull"
+      ~one:"0x3ff0000000000000ull" ~infinity:"0x7ff0000000000000ull" ~pow:"pow" ~trunc:"trunc"
+      ~fabs:"fabs" ~int_typ:"long long" ~int_limit:"9007199254740992.0";
+  ]
+
 let builtins =
   [
     (* Float16 feature detection and type definitions *)

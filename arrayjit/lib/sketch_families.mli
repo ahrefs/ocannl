@@ -167,6 +167,7 @@ type sketch_params = {
           {!Ir.Register_tile.alternatives} of its micro-kernel extents (the "register-tile" level),
           so the width the tuner ships is measured rather than modelled. *)
 }
+[@@deriving sexp]
 
 type matmul_site = {
   m_i : Ir.Indexing.symbol;

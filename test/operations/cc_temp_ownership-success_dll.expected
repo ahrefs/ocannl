@@ -6,7 +6,7 @@ the compile succeeded: true
 the routine computes 2x + 1 from its retained library: true
 the compiler log is removed: true
 the source is retained exactly when debug files are requested: true
-the library is retained exactly when requested: true
+the temp directory retains the library exactly when debug files alone request it: true
 nothing else is added: true
 no file present before the compile is removed: true
 every unrelated sentinel keeps its content: true

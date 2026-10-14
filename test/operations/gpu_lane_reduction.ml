@@ -426,12 +426,14 @@ let () =
   in
   p "auto on the run's backend resolves to its measured mode"
     (S.equal_lane_preamble_reduction (S.lane_preamble_reduction_for device) expected);
-  (* The cross-simdgroup bound (gh-ocannl-1168): four simdgroups where measured to pay (Metal), one
-     simdgroup elsewhere -- and a 64-wide head's default schedule is the resolved bound's. *)
+  (* The cross-simdgroup bound (gh-ocannl-1168, gh-ocannl-1256): four simdgroups where measured to
+     pay (Metal, CUDA), one simdgroup elsewhere -- and a 64-wide head's default schedule is the
+     resolved bound's. *)
   p "auto spans one simdgroup on an unmeasured device"
     (S.lane_all_reduce_simdgroups_for BI.no_hardware_limits = 1);
   p "auto on the run's backend spans its measured number of simdgroups"
-    (S.lane_all_reduce_simdgroups_for device = match backend_name with "metal" -> 4 | _ -> 1);
+    (S.lane_all_reduce_simdgroups_for device
+    = match backend_name with "metal" | "cuda" -> 4 | _ -> 1);
   (let case = dk_nest ~name:"lred_auto64" ~e_n:64 ~d_n:64 () in
    let sched ?all_reduce_simdgroups () =
      S.sexp_of_schedule
@@ -478,6 +480,23 @@ let hand_schedule ?(extra_lanes = []) ?(unroll_queries = false) case =
     @ if unroll_queries then [ S.Unroll { axis = case.s_sym; materialize = true } ] else [])
     case.opt
 
+(* gh-ocannl-1238: the validator's side of leg 10, at the GPU backends' 32-lane shuffles on every
+   backend. *)
+let reassociable = Ir.Online_softmax.reassociable_local
+
+let validator_admits_at_32 (o : LL.optimized) =
+  match
+    LL.validate_parallel ~warp_size:32 ~reassociable o.LL.optimize_ctx.LL.placements o.LL.llc
+  with
+  | () -> true
+  | exception Invalid_argument _ -> false
+
+let inserted_lane_barriers_uniform (o : LL.optimized) =
+  (match LL.inserted_barriers ~reassociable ~warp_size:32 o.LL.llc with
+    | [ { LL.ib_form = LL.Lane_all_reduce_partials; ib_uniform = true; _ } ] -> true
+    | _ -> false)
+  && validator_admits_at_32 o
+
 let () =
   printf "--- leg 10: barriers only under workgroup-uniform control ---\n";
   (* A guard on the serial query symbol is the same in every lane: the site keeps the
@@ -487,6 +506,10 @@ let () =
   Hashtbl.set scheduled_by_name ~key:case.name ~data:scheduled;
   p "lred_guard_uniform64: a guard on the serial query symbol leaves the site cross-simdgroup"
     (match sites scheduled with [ site ] -> site.LL.lar_cross_simdgroup | _ -> false);
+  p
+    "lred_guard_uniform64: the validator's notion lists its barriers at 32-lane shuffles, uniform, \
+     and admits them"
+    (inserted_lane_barriers_uniform scheduled);
   let got = List.hd_exn (L.execute ~name:case.name scheduled ~seed:case.seed ~read:[ case.k_tn ]) in
   p_all2 "lred_guard_uniform64: every cell of K holds the serial reference's exact value" got
     case.expected ~f:Float.equal;
@@ -501,6 +524,15 @@ let () =
   Hashtbl.set scheduled_by_name ~key:case.name ~data:scheduled;
   p "lred_guard_flag64: a guard reading a lane-dependent local leaves the site serial"
     (match sites scheduled with [ site ] -> not site.LL.lar_cross_simdgroup | _ -> false);
+  (* gh-ocannl-1238: this path's counterexample is a decline, not a refusal -- the serial loop in
+     every lane inserts no barrier, so the validator's notion lists none and admits the kernel. *)
+  p_empty
+    "lred_guard_flag64: the validator's notion lists no inserted barrier for the site at 32-lane \
+     shuffles"
+    ~over:(sites scheduled)
+    (LL.inserted_barriers ~reassociable ~warp_size:32 scheduled.LL.llc);
+  p "lred_guard_flag64: the validator admits the serial fallback at 32-lane shuffles"
+    (validator_admits_at_32 scheduled);
   ignore (L.link ~name:case.name scheduled : Context.t * Context.routine);
   let omits = "lred_guard_flag64: the emitted kernel does not spell the all-reduce" in
   let loops = "lred_guard_flag64: the emitted kernel loops the reduction in every lane" in

@@ -43,3 +43,12 @@ first merge consumer reads the executed writer's values: true
 overwriting invalidates the old merge consumer: true
 rolled-back writer does not block the prior source value: true
 replacement merge consumer reads the explicit upload: true
+
+=== Test 9: merge reader under upload continuations ===
+linear chain, nothing released: the refill refuses, naming the pending consumer: true
+linear chain, latest upload value released: the refill goes ahead: true
+forked leaves, linear leaf released: the refill refuses, naming the pending consumer: true
+forked leaves, both released: the refill goes ahead: true
+forked leaves, fork released: the refill refuses, naming the pending consumer: true
+forked leaves, fork then linear leaf released: the refill goes ahead: true
+a reader compiled after the refills reads the source values: true

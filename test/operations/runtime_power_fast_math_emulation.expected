@@ -1,0 +1,9 @@
+the emulated vendor powf loses every negative base under an integral exponent: true
+f32: negative bases under integral exponents match the integer power: true
+f64: negative bases under integral exponents match the integer power: true
+f32: a negative base's power is its mirror's, negated exactly for odd exponents: true
+f64: a negative base's power is its mirror's, negated exactly for odd exponents: true
+(-1)^n takes its sign from n's parity at the edge of the exact integers: true
+negative zero's integral powers carry C pow's signs: true
+a zero exponent gives 1 for every base, as in C pow: true
+negative bases under fractional or NaN exponents stay NaN: true

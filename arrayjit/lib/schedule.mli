@@ -601,6 +601,28 @@ val apply_classified :
 type op_verdict = Op_legal | Op_illegal of string | Op_unknown of string
 [@@deriving sexp_of, equal]
 
+(** gh-ocannl-1231: how an IR breaks the staging scope's invariant for one of its pipelined tiles
+    ({!Low_level.pipelined_tile}) — the two positional facts the renderer's buffer rotation needs.
+*)
+type pipeline_violation =
+  | Read_outside_rotor of { tile : Tn.t; rotor : Indexing.symbol }
+      (** A read of [tile] has no loop binding [rotor] around it: there is no rotor value to select
+          the copy with (writes outside the rotor loop are the prologue load, which fills copy 0). A
+          [Split] or a materializing [Unroll] of the rotor loop removes its binder. *)
+  | Rotor_not_serial of { tile : Tn.t; rotor : Indexing.symbol; axis : Low_level.axis_type }
+      (** A loop binding [rotor] is no longer [Serial] (an [Unroll] in place, a retype): the
+          rotation renders off the serial counter. *)
+[@@deriving sexp_of]
+
+val pipeline_violation : Low_level.optimized -> pipeline_violation option
+(** The first violation of the staging scope's invariant in [opt.llc], over every tile of
+    [opt.pipelined]: every loop binding a rotor is [Serial], and every read of a pipelined tile sits
+    inside a loop binding its rotor. [None] when [opt] has no pipelined tiles. These are the facts
+    [C_syntax] checks while rendering (its typed [Backend_codegen] declines remain as the backstop);
+    {!op_legality} refuses the moves that would break them. *)
+
+val pipeline_violation_message : pipeline_violation -> string
+
 val op_legality : Low_level.optimized -> optop -> op_verdict
 (** gh-494 waypoint 3: the op-legality oracle. A schedule op is a thread-pairing transform over the
     routine's access relations; its obligation is decided by the {!Affine} queries — pairing the
@@ -629,7 +651,12 @@ val op_legality : Low_level.optimized -> optop -> op_verdict
     stage is [Op_legal]; shared staging (barrier placement and launch geometry are validated
     downstream) and hoisted staging (link-time host-side packing) report [Op_unknown].
     [Privatize]/[Expand_zero]/[Fuse_epilogue] report [Op_unknown]; their own apply-time
-    preconditions remain in force. *)
+    preconditions remain in force.
+
+    Before any of that, on code carrying pipelined tiles (gh-ocannl-1231): an op whose application
+    leaves a {!pipeline_violation} is a proven [Op_illegal] carrying {!pipeline_violation_message} —
+    the staging scope's invariant, stated once for every op shape, so that the beam's menu,
+    seeding's {!schedule_legality} and the renderer agree. *)
 
 val schedule_legality : Low_level.optimized -> schedule -> (optop * op_verdict) list
 (** Per-op verdicts, each against the code with the preceding ops applied (on a hermetic copy —
@@ -722,6 +749,14 @@ val serial_lanes_for : Backend_intf.hardware_limits -> serial_lanes
     {!Backend_intf.hardware_limits}' [lane_scalar_recompute_cheap] holds (measured: Metal, CUDA),
     [Lanes_admitted] otherwise (HIP: the forward value pass wins on lanes in its own kernel, the
     fused backward's dV loses when cut from dK for them). *)
+
+val resolve_search_shaping_value : Backend_intf.hardware_limits -> key:string -> string -> string
+(** What the canonical value of the configuration key [key] ([Utils.canonical_config_value])
+    resolves to on the device [limits] describes, for [Utils.config_class_fingerprint ~resolve]
+    (gh-ocannl-1272): an [auto] lane mode becomes the mode {!lane_preamble_reduction_for},
+    {!lane_all_reduce_simdgroups_for} or {!serial_lanes_for} picks at [limits], and an explicit one
+    stays itself; a [gpu_schedule_block_size] becomes its clamp to the device's caps. Any other key,
+    and a value its parser rejects, is returned unchanged. *)
 
 val default_gpu :
   ?block_size:int ->
@@ -974,7 +1009,7 @@ val fission_segmented :
   ?arity_cuts:bool ->
   ?fold_zeros:bool ->
   ?keep_mapping:(Low_level.optimized -> schedule) ->
-  ?replay:segmentation * (int -> Low_level.optimized -> schedule) ->
+  ?replay:segmentation * (int -> Low_level.optimized -> schedule option) ->
   preset:(Low_level.optimized -> schedule) ->
   zero_sched:(Tnode.t list -> schedule) ->
   static_indices:Indexing.static_symbol list ->
@@ -987,12 +1022,15 @@ val fission_segmented :
     [keep_mapping] do not reach it; the promotions and scope-local replicas are recomputed for its
     boundaries exactly as for derived ones, and the [i]th segment's (pre-schedule) slice gets
     [schedule i] whatever its kind — by position, because segments of one structure can differ in
-    placements, hence in kind and schedule; [preset] and [zero_sched] are not consulted. A
-    segmentation that does not fit the routine — its lengths do not sum to the routine's units, a
-    segment is empty, or a boundary separates a scope-local definition from a use it cannot be
-    replicated for — raises {!Schedule_outcome.Cause_at} with an [Illegal_schedule] cause, a
-    candidate's ordinary decline; it is never repaired into another segmentation. Whatever raises,
-    the promotions made so far are restored first. *)
+    placements, hence in kind and schedule. Where [schedule i] is [None] the segment gets its kind's
+    schedule as in a derived segmentation ([preset], [zero_sched], or none for a [`Solo]): a
+    per-segment substitution over a recorded segmentation (the autotuner's sketch candidates,
+    gh-ocannl-1243) names only the segments it schedules. A segmentation that does not fit the
+    routine — its lengths do not sum to the routine's units, a segment is empty, or a boundary
+    separates a scope-local definition from a use it cannot be replicated for — raises
+    {!Schedule_outcome.Cause_at} with an [Illegal_schedule] cause, a candidate's ordinary decline;
+    it is never repaired into another segmentation. Whatever raises, the promotions made so far are
+    restored first. *)
 
 val maybe_default_schedules :
   backend_name:string ->
@@ -1089,6 +1127,16 @@ val workgroup_memory_bytes :
     [Context.codegen_capabilities]; the capability-free {!Backend_intf.no_codegen_capabilities}
     counts the tiles alone. *)
 
+val thread_private_bytes : Low_level.optimized -> int
+(** The per-work-item scratch bytes the kernel will declare (gh-ocannl-1313): one function-scope
+    array per node of its traced store that settles [Local] ({!Tnode.Placements.is_local_peek}),
+    sized at its storage precision, workgroup-shared tiles excepted. Settles no placement. An upper
+    estimate of what codegen declares — the CPU backends' per-chunk privatization and Metal's
+    simdgroup fragments are rendering decisions that can drop arrays from the function scope — and
+    of the device compiler's frame, which may drop an array it proves dead; checked by
+    {!check_hardware_limits_classified} against {!Backend_intf.hardware_limits}'
+    [max_thread_private_bytes]. *)
+
 val check_hardware_limits :
   name:string ->
   limits:Backend_intf.hardware_limits ->
@@ -1098,7 +1146,8 @@ val check_hardware_limits :
 (** Validates the scheduled kernel [name] against the device limits, raising [Utils.User_error] on
     violation: the launch's workgroup size (the product of {!Low_level.launch_dims}' block
     dimensions) against {!field:Backend_intf.max_threads_per_workgroup}, the
-    {!workgroup_memory_bytes} estimate against {!field:Backend_intf.max_workgroup_memory_bytes}, and
+    {!workgroup_memory_bytes} estimate against {!field:Backend_intf.max_workgroup_memory_bytes}, the
+    {!thread_private_bytes} estimate against {!field:Backend_intf.max_thread_private_bytes}, and
     then the launch geometry dimension by dimension through the shared {!launch_geometry_excess} —
     the workgroup's [.x]/[.y]/[.z] extents against {!field:Backend_intf.max_workgroup_dims} (a
     separate hardware fact from the thread product: CUDA caps [maxThreadsDim.z] at 64 while the
@@ -1117,7 +1166,9 @@ val check_hardware_limits_classified :
   Low_level.optimized ->
   unit
 (** Internal candidate-facing variant of {!check_hardware_limits}; transports excess thread,
-    workgroup-memory, per-workgroup-dimension, [.y]-grid or folded-[.z]-grid requests as typed
+    workgroup-memory, per-work-item scratch ({!Schedule_outcome.Thread_scratch} at phase
+    [Hardware_limits], before any codegen — the post-link HIP budget check reports the same resource
+    at [Backend_link]), per-workgroup-dimension, [.y]-grid or folded-[.z]-grid requests as typed
     {!Schedule_outcome.Resource_exceeded} causes, one variant per launch dimension
     ({!Schedule_outcome.Workgroup_x_extent} .. {!Schedule_outcome.Grid_z_extent}) so an autotune
     search's declines group by the dimension that asked too much. *)

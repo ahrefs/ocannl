@@ -22,3 +22,18 @@ an ordinary routine name is emitted unmangled: true
 the block comment derives the reserved name: true
 a Block_comment-named reserved routine computes correct values: true
 a node labeled by a C++ alternative token computes correct values: true
+routine named "__gh707_reserved" computes correct values: true
+routine named "__gh707_reserved" keeps its given name in the routine record: true
+routine named "__gh707_reserved" emits the mangled symbol "k__gh707_reserved": true
+routine named "main" computes correct values: true
+routine named "main" keeps its given name in the routine record: true
+routine named "main" emits the mangled symbol "main__": true
+names in the implementation's reserved namespace are recognized: true
+names outside the implementation's reserved namespace are left alone: true
+every vendor-header identifier probed as a routine name computes correct values: true
+every vendor-header identifier probed keeps its given name in the routine record: true
+every vendor-header identifier probed emits its mangled symbol: true
+compiler reports pointing at the routine's declaration blame its name: true
+compiler reports about a routine's body or another routine do not blame the name: true
+a routine named after a header name no table holds runs or fails as its name's: true
+where the C headers declare random, the routine's compile failure names the routine: true

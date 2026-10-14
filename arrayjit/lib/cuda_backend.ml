@@ -1884,6 +1884,10 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
              min_over (fun (a : Cu.Device.attributes) -> a.max_threads_per_block);
            max_workgroup_memory_bytes =
              min_over (fun (a : Cu.Device.attributes) -> a.max_shared_memory_per_block);
+           (* Unmeasured (gh-ocannl-1313): CUDA documents a 512 KiB local-memory ceiling per thread,
+              but none of our kernels has been checked against it, so the gate stays off rather than
+              encode an untested figure. *)
+           max_thread_private_bytes = None;
            (* Per-dimension workgroup caps (gh-ocannl-679). Queried rather than asserted from the
               Compute Capability tables (where they are (1024, 1024, 64) from cc 2.0 up) because the
               driver answers per device and the fold below shows the query costs nothing extra. The
@@ -1914,8 +1918,9 @@ module Impl : Ir.Backend_impl.Lowered_backend = struct
            simdgroup_width = Some 32;
            (* gh-ocannl-1124: measured true on the RTX of rog-nv; see the field. *)
            lane_scalar_recompute_cheap = true;
-           (* gh-ocannl-1168: unmeasured beyond one simdgroup; see the field. *)
-           lane_all_reduce_simdgroups = 1;
+           (* gh-ocannl-1168, gh-ocannl-1256: measured on the RTX of rog-nv -- heads of 64 and 128
+              on the cross-simdgroup all-reduce train 16-63% faster; see the field. *)
+           lane_all_reduce_simdgroups = 4;
            (* gh-ocannl-1194: the tuned f32 transformer loses with the block fold on the measured
               RTX, while the two-pass rewrite keeps the tf32 gain. Keep unmeasured CUDA devices
               conservative too; an explicit block size still requests the fold. *)

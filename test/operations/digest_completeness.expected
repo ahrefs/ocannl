@@ -89,15 +89,14 @@ search-shaping -- it steers the search: how wide, how long, what is proposed, wh
   autotune_beam_width
   autotune_bound_pruning
   autotune_calibration_file
+  autotune_composite_playoff_width
   autotune_keep_fraction
   autotune_register_tile_rm_twin
   autotune_repeats
+  autotune_round_expansion
   autotune_rounds
   autotune_search
   autotune_split_reduce_max_sites
-  model_default_geometry_lattice
-  model_default_placements
-  model_default_schedule
   model_peak_flops
   model_peak_memory_bandwidth
   strict_failure_classification
@@ -115,6 +114,11 @@ placement-shaping -- it decides which of the two searched placement arms ships, 
 
 placement-shaping -- it decides whether the placement decision is replayed from the placement-decision store or re-derived by comparing the two arms (gh-ocannl-1020): each arm and each flip is a different program keyed on its own digest and cached either way, the store holds only which of them shipped, and a decision re-derived from the arms is as valid a winner as a replayed one
   tune_placement_store
+
+untimed-model -- it steers Autotune.model_default -- whether the recipes' untuned compiles route through it, how many placement levels it branch-and-bounds, whether its family search lifts the tile-size lattice -- which picks by the analytic model without timing anything and never reads or writes the schedule cache; Autotune.tune reads none of them. The envelope keys (model_peak_flops, model_peak_memory_bandwidth) stay search-shaping: tune's keep-fraction ranking and bound pruning read them too
+  model_default_geometry_lattice
+  model_default_placements
+  model_default_schedule
 
 execution-neutral -- startup and configuration-sourcing chatter, and which descriptor foreign C-library chatter follows
   detach_c_stderr

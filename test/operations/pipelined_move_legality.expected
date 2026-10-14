@@ -1,0 +1,8 @@
+the serial reference is not all zeros: true
+the base records both tiles pipelined at depth 2 with k_o as rotor: true
+the base itself satisfies the staging scope's invariant: true
+each move's applied IR has exactly its expected violation (or none): true
+op_legality refuses each fixture move with its reason, admits the legal one: true
+schedule_legality refuses exactly the fixture move at its own position: true
+a split inside the staging scope keeps the invariant and is admitted: true
+compiled anyway, each refused move is the renderer's typed decline; the admitted one runs: true

@@ -234,7 +234,10 @@ files.
   (the one its process resolved, as on the result line), not from what the sweep threads down
   from the dispatch site: a forgotten argument there used to fall back to the exact envelope. The
   `partial-failures.jsonl` record carries the dispatched `regime` beside it, and the diagnostic
-  names a disagreement between the two.
+  names a disagreement between the two. A profile name cannot show an ambient knob with no profile
+  behind it (`OCANNL_TF32_MATMULS` on an exact cell reads `profile: null`), so the checkpoint also
+  carries the result line's `regime_knobs`, and the diagnostic names a knob outside the envelope's
+  regime in `regime_knob_leaks`' words, a declared `--cell-flag` excepted (gh-ocannl-1297).
   Do not give the line a `{` prefix or move it to stdout: drivers take a cell's result from the
   last `{`-line of its combined output, and the checkpoint must never be one.
 

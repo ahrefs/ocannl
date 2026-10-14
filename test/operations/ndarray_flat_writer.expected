@@ -1,0 +1,39 @@
+uneven margins on all three axes: interior runs are non-empty, in bounds, increasing and never adjacent: true
+uneven margins on all three axes: interior runs cover exactly the cells inside the margins: true
+uneven margins on all three axes, as many values as cells: flat writer matches per-cell writes in every precision: true
+uneven margins on all three axes, fewer values: flat writer matches per-cell writes in every precision: true
+uneven margins on all three axes, more values: flat writer matches per-cell writes in every precision: true
+uneven margins on all three axes, cycling fewer values: flat writer matches per-cell writes in every precision: true
+uneven margins on all three axes, cycling more values: flat writer matches per-cell writes in every precision: true
+unpadded innermost axis: interior runs are non-empty, in bounds, increasing and never adjacent: true
+unpadded innermost axis: interior runs cover exactly the cells inside the margins: true
+unpadded innermost axis, as many values as cells: flat writer matches per-cell writes in every precision: true
+unpadded innermost axis, fewer values: flat writer matches per-cell writes in every precision: true
+unpadded innermost axis, more values: flat writer matches per-cell writes in every precision: true
+unpadded innermost axis, cycling fewer values: flat writer matches per-cell writes in every precision: true
+unpadded innermost axis, cycling more values: flat writer matches per-cell writes in every precision: true
+padding shorter than the rank: interior runs are non-empty, in bounds, increasing and never adjacent: true
+padding shorter than the rank: interior runs cover exactly the cells inside the margins: true
+padding shorter than the rank, as many values as cells: flat writer matches per-cell writes in every precision: true
+padding shorter than the rank, fewer values: flat writer matches per-cell writes in every precision: true
+padding shorter than the rank, more values: flat writer matches per-cell writes in every precision: true
+padding shorter than the rank, cycling fewer values: flat writer matches per-cell writes in every precision: true
+padding shorter than the rank, cycling more values: flat writer matches per-cell writes in every precision: true
+padded rank 1: interior runs are non-empty, in bounds, increasing and never adjacent: true
+padded rank 1: interior runs cover exactly the cells inside the margins: true
+padded rank 1, as many values as cells: flat writer matches per-cell writes in every precision: true
+padded rank 1, fewer values: flat writer matches per-cell writes in every precision: true
+padded rank 1, more values: flat writer matches per-cell writes in every precision: true
+padded rank 1, cycling fewer values: flat writer matches per-cell writes in every precision: true
+padded rank 1, cycling more values: flat writer matches per-cell writes in every precision: true
+unpadded rank 3: interior runs are non-empty, in bounds, increasing and never adjacent: true
+unpadded rank 3: interior runs cover exactly the cells inside the margins: true
+unpadded rank 3, as many values as cells: flat writer matches per-cell writes in every precision: true
+unpadded rank 3, fewer values: flat writer matches per-cell writes in every precision: true
+unpadded rank 3, more values: flat writer matches per-cell writes in every precision: true
+unpadded rank 3, cycling fewer values: flat writer matches per-cell writes in every precision: true
+unpadded rank 3, cycling more values: flat writer matches per-cell writes in every precision: true
+rank 0: flat writer matches the per-cell write in every precision: true
+edge values: flat writer raises or stores as the per-cell writer does, in every precision: true
+a 65536-cell flat write allocates under 512 heap words, padded or not, in every scalar precision: true
+a packed uint4x32 flat write allocates no more than its 3-word record per cell: true

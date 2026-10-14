@@ -811,7 +811,11 @@ files.
   in the operator's shell — or any key added after the gate was written — is visible in the
   artifact rather than silently part of the measurement; it is a fact about the sweep, so the
   report states it even when every cell failed, and rows that disagree on it are refused rather
-  than rendered as two unattributable header lines.
+  than rendered as two unattributable header lines. Inherited is not applied: a commandline-picked
+  profile's payload outranks the environment, so each row also names, under
+  `ambient_ocannl_shadowed`, the inherited variables its own command line outranks
+  (gh-ocannl-1273), and `--cell-flag KEY=VALUE` is the way to set a payload key per cell — the
+  regime gate accepts it as a declared override, never as a leak.
 - **The development `simplify_fp_algebra` selector also acts after scheduling** (gh-ocannl-998):
   `Schedule.apply` reruns `simplify_llc`, so a materializing unroll can expose constant algebra
   absent from the pre-schedule code digest. Identical base digests can therefore produce different
@@ -994,8 +998,8 @@ files.
   `try_warp_reduce`'s decline arm with the one lane it is about to bind un-deferred. Both raise the
   typed `Schedule_outcome.Cause_at (Backend_codegen, Illegal_schedule {check =
   "hardware_binding_race"})`, one candidate's decline under the autotuner and `Invalid_argument`
-  at the `Context.compile` boundary. `validate_parallel` stays structural and
-  backend-independent; the check lives at the binding because a `Workgroup` loop on cc iterates,
+  at the `Context.compile` boundary. `validate_parallel` stays structural (its one backend input
+  is the shuffle width that decides which barriers the renderer inserts, gh-ocannl-1238); the check lives at the binding because a `Workgroup` loop on cc iterates,
   so the reduction-axis-to-`Workgroup` form `reduction_forms` runs cpu-only is legal there and
   refused where a register binds it. A `Tile_mma` is judged through its `fallback`'s stores with
   its own cooperating `lane` excused (gh-ocannl-960), a `Set_dynamic` by its static slots, a
@@ -1799,7 +1803,8 @@ files.
   NaN. Bitwise classification and final sign restoration are required under HIP fast math:
   the arithmetic-only helper lost half `(-0)^3`'s sign and produced NaN for double `0^-1`.
   This is an integer multiplication policy, not a correctly rounded floating-pow promise;
-  fractional and dynamic exponents retain the vendor operation. Constant integer powers also stay
+  fractional and dynamic exponents retain the vendor operation (on CUDA/HIP through the run-time
+  power helper below). Constant integer powers also stay
   in the IR until codegen: host f64 folding would change the f32 multiplication rounding, so a
   non-dyadic constant/materialized cubic comparison pins this boundary. Guard: `integer_power_domain`.
   Recheck the base after recursive simplification too: an `Identity` wrapper can expose a constant
@@ -1818,10 +1823,8 @@ files.
   takes the legacy `fastMathEnabled=false`), while the widened form is f32 `pow` narrowed under
   both. On M4 Max under the modern policy the overload's results already matched f32 `pow`
   narrowed bitwise (573 random fractional and run-time exponents over bases in [0.01, 100]), so
-  the widening moved no value there. The domain is f32 `pow`'s under the backend's math flags
-  (CUDA compiles `--use_fast_math`): NaN for a negative base under a fractional exponent, and
-  under CUDA fast math also under a run-time integral exponent (the integer-power helper takes
-  only known constants). `half_float_power` executes constant-fractional and buffer-read
+  the widening moved no value there. The domain is f32 `pow`'s as the run-time power helper below
+  shapes it on CUDA/HIP: NaN for a negative base under a fractional exponent. `half_float_power` executes constant-fractional and buffer-read
   exponents within one ulp at half precision of an f64 reference, pins the result bitwise to the
   same backend's f32 `pow` narrowed on the host on every backend, and pins the widened spelling
   on CUDA/HIP and Metal. That is an observation of results, not of the
@@ -1833,3 +1836,18 @@ files.
   packing with a per-lane `pow(` that skips `binop_syntax` fails it, and the values alone would not
   (on M4 Max the half overload matches f32 `pow` narrowed bitwise); routing through
   `binop_syntax` passes.
+
+- A float power whose exponent is only known at run time renders on CUDA and HIP through
+  `ocannl_pow_f32`/`ocannl_pow_f64` (`Builtins_cc.runtime_power_builtins`, gh-ocannl-1240), half
+  and bf16 widened into the f32 one. CUDA's `--use_fast_math` lowers `powf` to
+  `exp2(y * log2(x))`, NaN for every negative base, integral exponents included. The helper takes
+  an integral exponent on `|x|` and restores the sign from its parity; any other exponent keeps
+  the vendor call, so a negative base under a fractional exponent stays NaN, and a zero exponent
+  gives 1 for every base. Both operands are classified by their bits: the base's sign bit (so
+  `-0` is negative), and the exponent's magnitude, because `--use_fast_math` implies `--ftz=true`
+  and a subnormal exponent would otherwise compare equal to 0 and to its own `truncf`. Metal's
+  own `pow` flushes such an exponent and answers 1 (M4 Max), which the test records as a skip. Like the integer-power helper, a domain fix: the magnitude is
+  the vendor's. Metal keeps its own `pow`, which under its fast math functions already returned
+  these powers on M4 Max. `runtime_integer_power` executes it on the devices, and
+  `runtime_power_fast_math_emulation` compiles the helper on the host under a macro emulating
+  the fast-math lowering, with the bare emulated `powf` as its negative control.

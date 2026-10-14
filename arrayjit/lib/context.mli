@@ -465,7 +465,10 @@ val release : t -> unit
     no-op), and safe to call on a context derived from a still-live parent. Compile siblings own
     separate working pools; upload siblings reference-count their shared pools, freeing each after
     its last sibling releases it. A linear chain of uploads supersedes its intermediate values:
-    release its latest value, after releasing any compiled descendants.
+    release its latest value, after releasing any compiled descendants. Releasing it also retires
+    the merge-buffer consumers compiled into the chain before the uploads, so they no longer block a
+    refill of the merge buffer; an upload fork keeps them pending until every leaf holding their
+    buffers is released (gh-ocannl-1203).
 
     {b Precondition, not checked}: the context must have no live descendants. A context compiled
     {e from} this one inherits its buffer locations while keeping it as their backend parent, so
@@ -500,6 +503,11 @@ val placements : t -> Ir.Tnode.Placements.t
     (docs/proposals/context-scoped-memory-modes.md): which nodes this lineage decided to inline
     ([Virtual]), keep as routine-scoped scratch ([Local]), or give a device buffer ([On_device]).
     Reads are side-effect free; chiefly for tests and diagnostics. *)
+
+val inherits_computation : t -> Ir.Tnode.t -> bool
+(** Whether an earlier routine of the context's compilation lineage stored a computation for the
+    node (gh-ocannl-1274): a later compile that reads or updates it replays that inherited prefix,
+    which the routine's own code does not show. Side-effect free. *)
 
 val decide_materialized : t -> Ir.Tnode.t list -> t
 (** A child context whose compilation lineage additionally decides [On_device] placement for the

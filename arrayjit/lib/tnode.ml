@@ -816,6 +816,17 @@ module Placements = struct
         is_observable tn
         || match most_local_materialized_mode tn with On_device -> true | _ -> false)
 
+  (** Pure: whether the forcing family settles [tn] as [Local] — routine-scoped scratch, which
+      codegen declares as a function-scope array (the nodes neither {!is_virtual_force} nor
+      {!is_materialized_force} claims). An undecided node settles [Virtual] or, observable,
+      [On_device]; [Never_virtual] goes the way {!default_to_most_local} sends it. *)
+  let is_local_peek p tn =
+    match get p tn with
+    | Some (Local, _) -> true
+    | Some (Never_virtual, _) ->
+        (not (is_observable tn)) && equal_memory_mode (most_local_materialized_mode tn) Local
+    | None | Some ((Virtual | Effectively_constant | On_device), _) -> false
+
   let known_not_materialized p tn =
     match get p tn with Some ((Virtual | Local), _) -> true | _ -> false
 

@@ -7,3 +7,7 @@ HIP bfloat16 ReLU keeps its float bridge: true
 every HIP arithmetic arity narrows fp8 through the guard: true
 every CUDA arithmetic arity narrows fp8 through the vendor type: true
 both shared dialects preserve operand evaluation contracts: true
+CUDA routine names avoid the vendor headers' identifiers: true
+HIP routine names avoid the vendor headers' identifiers: true
+every name of the shared vendor-header table is mangled by both effective configs: true
+ordinary CUDA and HIP routine names stay unmangled: true

@@ -324,6 +324,156 @@ let () =
     | None -> p claim false
   else p claim (approx (run ~name:"nested_wshfl" ~transform ms) expected)
 
+(* --- gh-ocannl-1238: a multi-warp reduction's barriers under enclosing control. Past one warp the
+   shuffle stages per-warp partials between two barriers -- barriers the IR does not contain, which
+   the validator's rule for the IR's own barriers never saw. [Low_level.inserted_barriers] is the
+   one notion of which statements insert one, and [validate_parallel] refuses an entry under control
+   that is not workgroup-uniform before anything renders. Two hand-built kernels, built serial for
+   the optimizer and replaced by their annotated twins ([Ll_test.optimize_scoped]):
+
+   - a guard on a [Grid] symbol puts every lane of a workgroup on the same side of it: the tree is
+   admitted, renders, and computes the guarded row sums exactly; - a guard reading a flag that a
+   workgroup loop over the SAME symbol set lane-dependently ([flag := i < 32]; the shuffle's only
+   workgroup axis is its own) would send lanes 32.. past both barriers the rest wait at: refused,
+   typed, by the validator wherever the shuffles are 32 lanes wide, and no kernel source is written.
+   The C backends render no barrier and admit it.
+
+   The listing and the validator's verdict are asked at the GPU backends' 32-lane width on every
+   backend, so the refusal is pinned on cc too; the compile legs follow the run's backend. --- *)
+let wnode = L.node_factory ~first_id:1238000 ~dims:[| 1 |] ()
+let reassociable = Ir.Online_softmax.reassociable_local
+
+let refuses_at_32 placements llc =
+  match LL.validate_parallel ~warp_size ~reassociable placements llc with
+  | () -> None
+  | exception Invalid_argument msg -> Some msg
+
+let () =
+  (* Uniform: rows j < 3 of a [4; 128] input, summed into a seeded [s]; row 3 keeps its seed. *)
+  let rows = 4 and n = 128 in
+  let v = wnode ~dims:[| rows; n |] "wg_v" and s = wnode ~dims:[| rows |] "wg_s" in
+  List.iter [ v; s ] ~f:L.materialize;
+  let v_of j i = Float.of_int (((j * 7) + (i * 3)) % 11) -. 5. in
+  let s_seed = [| 0.5; 1.5; 2.5; -7. |] in
+  let row_sum j = List.sum (module Float) (List.range 0 n) ~f:(v_of j) in
+  let expected =
+    Array.init rows ~f:(fun j -> s_seed.(j) +. if j < rows - 1 then row_sum j else 0.)
+  in
+  p "wshfl_grid_guard: the guarded-off row's terms are nonzero, so a dropped guard shows in it"
+    (Float.( <> ) (row_sum (rows - 1)) 0.);
+  let j = L.sym () and i = L.sym () in
+  let nest ~grid ~reduce =
+    L.loop_n ~axis:grid j rows
+      (L.if_idx
+         (L.lt (L.embed j) (L.ic (rows - 1)))
+         (L.loop_n ~axis:reduce i n
+            (L.set s [| it j |] (L.add (L.get s [| it j |]) (L.get v [| it j; it i |])))))
+  in
+  let name = "wshfl_grid_guard" in
+  let o =
+    L.optimize_scoped ~materialized:[ v; s ] ~name
+      ~raw:(nest ~grid:LL.Serial ~reduce:LL.Serial)
+      (nest ~grid:LL.Grid ~reduce:LL.Workgroup_reduce)
+  in
+  p
+    "wshfl_grid_guard: the shared notion lists the tree as inserting a barrier, under uniform \
+     control"
+    (match LL.inserted_barriers ~reassociable ~warp_size o.LL.llc with
+    | [ { ib_index; ib_form = LL.Warp_reduce_partials; ib_uniform = true; ib_extent } ] ->
+        Ir.Indexing.equal_symbol ib_index i && ib_extent = n
+    | _ -> false);
+  p "wshfl_grid_guard: the validator admits the tree under a Grid-symbol guard at 32-lane warps"
+    (Option.is_none (refuses_at_32 o.LL.optimize_ctx.LL.placements o.LL.llc));
+  let seed =
+    [ (v, Array.init (rows * n) ~f:(fun k -> v_of (k / n) (k % n))); (s, Array.copy s_seed) ]
+  in
+  let got = List.hd_exn (L.execute ~name o ~seed ~read:[ s ]) in
+  p_all2 "wshfl_grid_guard: every row holds its seed plus, below the guard, its exact sum" got
+    expected ~f:Float.equal;
+  let claim = "wshfl_grid_guard: the emitted kernel stages per-warp partials under the guard" in
+  if on_gpu then
+    p claim
+      (let src = Generated.read name in
+       has_shuffle_stages src ~warps:(n / warp_size)
+       && String.is_substring src ~substring:"wred_partials_")
+  else skipped claim
+
+let () =
+  (* Lane-dependent: [flag := i < 32] in a workgroup loop over [i], then [if flag] around the tree
+     over the same [i]. *)
+  let n = 128 in
+  let u = wnode ~dims:[| n |] "wf_u" and acc = wnode "wf_acc" and flag_node = wnode "wf_flag" in
+  List.iter [ u; acc ] ~f:L.materialize;
+  L.virtualize flag_node;
+  let flag = LL.get_scope flag_node and i = L.sym () in
+  let tree reduce =
+    L.loop_n ~axis:reduce i n (L.set_at acc f0 (L.add (L.get acc [| f0 |]) (L.get u [| it i |])))
+  in
+  let kernel ?(also_unguarded = false) ~lanes ~reduce () =
+    LL.unflat_lines
+      ([
+         LL.Declare_local { id = flag; needs_init = false };
+         L.loop_n ~axis:lanes i n (LL.Set_local (flag, L.lt (L.embed i) (L.ic 32)));
+       ]
+      @ (if also_unguarded then [ tree reduce ] else [])
+      @ [ L.if_ (LL.Get_local flag) (tree reduce) ])
+  in
+  let name = "wshfl_flag_guard" in
+  let o =
+    L.optimize_scoped ~materialized:[ u; acc ] ~name
+      ~raw:(kernel ~lanes:LL.Serial ~reduce:LL.Serial ())
+      (kernel ~lanes:LL.Workgroup ~reduce:LL.Workgroup_reduce ())
+  in
+  p
+    "wshfl_flag_guard: the shared notion lists the tree as inserting a barrier, under divergent \
+     control"
+    (match LL.inserted_barriers ~reassociable ~warp_size o.LL.llc with
+    | [ { ib_index; ib_form = LL.Warp_reduce_partials; ib_uniform = false; _ } ] ->
+        Ir.Indexing.equal_symbol ib_index i
+    | _ -> false);
+  p_empty "wshfl_flag_guard: a backend rendering no warp shuffles inserts none of those barriers"
+    ~over:(LL.inserted_barriers ~reassociable ~warp_size o.LL.llc)
+    (LL.inserted_barriers ~reassociable ~warp_size:0 o.LL.llc);
+  p "wshfl_flag_guard: the validator refuses the tree at 32-lane warps, naming the inserted barrier"
+    (match refuses_at_32 o.LL.optimize_ctx.LL.placements o.LL.llc with
+    | Some msg -> String.is_substring msg ~substring:"inserted workgroup barrier"
+    | None -> false);
+  (* Copies sharing the symbol (a materializing unroll's shape): one tree unguarded beside one under
+     the flag. The renderer meets both by [i], so neither counts as uniform. *)
+  p_all
+    "wshfl_flag_guard: an unguarded copy of the tree beside a divergent one is not uniform either"
+    ~min:2
+    (LL.inserted_barriers ~reassociable ~warp_size
+       (kernel ~also_unguarded:true ~lanes:LL.Workgroup ~reduce:LL.Workgroup_reduce ()))
+    ~f:(fun ib -> not ib.LL.ib_uniform);
+  Generated.arm name;
+  let outcome =
+    Context.compile_outcome ~name ~prelowered:o
+      ~lowered_transform:(fun x -> [ x ])
+      ~provenance:Ir.Schedule_outcome.Candidate (Lazy.force L.base_ctx) Asgns.empty_comp
+      Ir.Indexing.Empty
+  in
+  let refused =
+    match outcome with
+    | Error
+        (Ir.Schedule_outcome.Classified
+           {
+             phase = Ir.Schedule_outcome.Backend_codegen;
+             cause =
+               Ir.Schedule_outcome.Illegal_schedule
+                 { check = "Low_level.validate_parallel"; detail };
+             _;
+           }) ->
+        String.is_substring detail ~substring:"inserted workgroup barrier"
+    | Ok _ | Error (Ir.Schedule_outcome.Classified _) | Error (Ir.Schedule_outcome.Fatal _) -> false
+  in
+  p
+    "wshfl_flag_guard: the compile is refused, typed, by the validator where the shuffle renders \
+     (GPU), or compiles serially where no barrier is inserted (CPU)"
+    (if on_gpu then refused else match outcome with Ok _ -> true | Error _ -> false);
+  let claim = "wshfl_flag_guard: the refusal comes before rendering: no kernel source is written" in
+  if on_gpu then p claim (not (Stdlib.Sys.file_exists (Generated.path name))) else skipped claim
+
 (* --- gh-ocannl-682: narrow accumulators. The shuffle stages the value at the backend's accumulator
    RESIDENCY rather than at the node's storage precision, so a bf16 reduction on a widening backend
    computes the same number its serial rendering does, and a residency that stays narrow is refused

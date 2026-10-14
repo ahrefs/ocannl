@@ -23,6 +23,7 @@ the run log and in a report section, rather than quietly not being run (gh-ocann
 import argparse
 import collections
 import contextlib
+import functools
 import hashlib
 import json
 import math
@@ -302,6 +303,148 @@ def unmatched_skips(skips, cells):
     ]
 
 
+# One `--cell-flag` entry (gh-ocannl-1273): `selector` is None for every OCANNL cell, or a
+# (workload, backend, variant, precision) tuple in which None matches anything.
+CellFlag = collections.namedtuple("CellFlag", "selector key value")
+
+
+def sweep_owned_keys():
+    """The configuration keys the sweep sets on an OCANNL cell's command line itself, derived from
+    the argument builder: backend, the regime's profile, the variant's own flags. A per-cell flag
+    naming one would leave the cell with two arguments for one key."""
+    return frozenset(
+        key
+        for backend in SWEEP_BACKENDS
+        for regime in REGIMES
+        for variant in SWEEP_VARIANTS
+        for key in cmdline_settings(ocannl_cell_args(backend, regime, variant))
+    )
+
+
+def cell_flag_arg(text):
+    """`--cell-flag [WORKLOAD/BACKEND/VARIANT[/PRECISION]:]KEY=VALUE` as an `CellFlag`.
+
+    The cell passes `--ocannl_<key>=<value>` on its command line. The optional selector scopes the flag
+    to the OCANNL cells it names, `*` matching anything in its position and a missing PRECISION
+    every precision -- `*/*/tuned:tune_inline_flips=16` reaches only the tuned cells. The key must
+    be one `ocannl_config.reference` documents and not one the sweep sets itself; a misspelt key
+    would otherwise reach the runner as an argument nothing reads, and the sweep would report
+    cells measured under a setting they never had. An empty value is refused for the same reason:
+    OCANNL reads it as unset.
+    """
+    setting, eq, value = text.partition("=")
+    selector_text, colon, key = setting.rpartition(":")
+    if not eq or not key:
+        raise argparse.ArgumentTypeError(
+            f"--cell-flag takes [WORKLOAD/BACKEND/VARIANT[/PRECISION]:]KEY=VALUE (got {text!r})"
+        )
+    if key not in config_reference()[0]:
+        raise argparse.ArgumentTypeError(
+            f"--cell-flag key {key!r} is not a configuration key {CONFIG_REFERENCE.name} "
+            "documents (spell it as there, without the `ocannl_` prefix)"
+        )
+    if key in sweep_owned_keys():
+        raise argparse.ArgumentTypeError(
+            f"--cell-flag cannot set {key!r}: the sweep sets it on every cell it applies to "
+            "(the regime is --profile, the backend is --gpu)"
+        )
+    if value == "":
+        raise argparse.ArgumentTypeError(
+            f"--cell-flag {key}= has an empty value, which OCANNL reads as unset"
+        )
+    selector = None
+    if colon:
+        parts = selector_text.split("/")
+        if len(parts) not in (3, 4) or not all(parts):
+            raise argparse.ArgumentTypeError(
+                "--cell-flag selector takes WORKLOAD/BACKEND/VARIANT[/PRECISION], `*` for any "
+                f"(got {selector_text!r})"
+            )
+        parts = [None if p == "*" else p for p in parts] + [None] * (4 - len(parts))
+        workload, backend, variant, precision = parts
+        if backend is not None and backend not in SWEEP_BACKENDS:
+            raise argparse.ArgumentTypeError(
+                f"--cell-flag backend must be one of {', '.join(SWEEP_BACKENDS)} or * "
+                f"(got {backend!r})"
+            )
+        if variant is not None and variant not in SWEEP_VARIANTS:
+            raise argparse.ArgumentTypeError(
+                f"--cell-flag variant must be one of {', '.join(SWEEP_VARIANTS)} or * "
+                f"(got {variant!r})"
+            )
+        if precision not in (None, "f32"):
+            precision = precision_spec(precision)
+        selector = (workload, backend, variant, precision)
+    return CellFlag(selector, key, value)
+
+
+def flag_text(flag):
+    """A `CellFlag` spelled as its `--cell-flag` argument (wildcards as `*`), for a message: the
+    operator-supplied parts go through `display_value`."""
+    selector = (
+        ""
+        if flag.selector is None
+        else "/".join(display_value(p) if p else "*" for p in flag.selector) + ":"
+    )
+    return f"{selector}{flag.key}={display_value(flag.value)}"
+
+
+def flag_applies(flag, cell):
+    """Whether an `CellFlag` reaches a (workload, backend, variant, precision) cell."""
+    return flag.selector is None or all(s is None or s == c for s, c in zip(flag.selector, cell))
+
+
+def cell_flags(flags, cell):
+    """The `(key, value)` settings the `--cell-flag` entries give one cell, in command-line
+    order. Two entries setting one key on one cell are refused before the sweep starts
+    (`flag_problems`), so here each key occurs once."""
+    return [(f.key, f.value) for f in flags if flag_applies(f, cell)]
+
+
+def flag_problems(flags, cells):
+    """Why the `--cell-flag` entries cannot be dispatched over `cells` -- the cells the sweep runs,
+    skipped ones excluded -- as messages; empty when they can. An entry whose selector names no
+    such cell is a typo, a stale command line or a cell also skipped, refused like an unmatched
+    `--skip-cell`; two entries setting one key on the same cell leave
+    which one applies to the order of the command line, so they are refused too."""
+    problems = [
+        f"--cell-flag {flag_text(f)} names no OCANNL cell this sweep runs"
+        for f in flags
+        if not any(flag_applies(f, cell) for cell in cells)
+    ]
+    for cell in sorted(cells, key=lambda c: tuple(map(str, c))):
+        keys = collections.Counter(f.key for f in flags if flag_applies(f, cell))
+        problems += [
+            f"--cell-flag sets {key} {n} times on {'/'.join(cell)}"
+            for key, n in sorted(keys.items())
+            if n > 1
+        ]
+    return problems
+
+
+def shadowing_warning(ambient, cells, regimes, flags):
+    """The once-per-sweep warning for the ambient OCANNL_* variables some cell's own command line
+    will outrank (`shadowed_ambient`), or None when there are none: said before the first cell
+    runs, since the sweep may run for hours before a report would say it."""
+    outranked = collections.defaultdict(set)
+    for cell in cells:
+        workload, backend, variant, _ = cell
+        for regime in regimes:
+            args = ocannl_cell_args(backend, regime, variant, cell_flags(flags, cell))
+            for var, by in shadowed_ambient(ambient, args).items():
+                outranked[var].add(by)
+    if not outranked:
+        return None
+    return (
+        "WARNING: ambient OCANNL_* variables a cell's own command line outranks -- they do not "
+        "apply in those cells, whose rows record them under `ambient_ocannl_shadowed`: "
+        + "; ".join(
+            f"{var} (by {', '.join(sorted(map(display_arg, by)))})"
+            for var, by in sorted(outranked.items())
+        )
+    )
+
+
 def cell_name(variant, precision):
     """Display name of an OCANNL cell's (scheduling, precision) pair.
 
@@ -321,7 +464,7 @@ def rendered_variant(result):
     `beam_parallel` is absent from results produced under the pinned default (gh-ocannl-760,
     gh-ocannl-843).
     """
-    variant = result["variant"]
+    variant = result["variant"] + ocannl_flags_note(result.get("ocannl_flags") or [])
     parallel = result.get("beam_parallel")
     return variant if parallel is None else f"{variant} P={parallel}"
 
@@ -389,6 +532,184 @@ def ocannl_variant_args(variant):
     return ["--ocannl_autotune_progress=true"] if variant == "tuned" else []
 
 
+# OCANNL's configuration reference (gh-ocannl-1273): every key, as a commented-out `#key=` line,
+# and each built-in profile's payload quoted verbatim between BEGIN/END markers.
+# `test/operations/test_config_consistency` holds both to the library (the keys to
+# `Utils.known_config_keys`, the quotes to the embedded payloads), so reading them here is reading
+# the library's own lists, not keeping a second copy.
+CONFIG_REFERENCE = ROOT / "ocannl_config.reference"
+_REFERENCE_SETTING_RE = re.compile(r"#([a-z0-9_]+)=")
+_REFERENCE_PAYLOAD_RE = re.compile(r"# --- (BEGIN|END) PROFILE PAYLOAD (\S+) ---")
+
+
+@functools.lru_cache(maxsize=None)
+def config_reference(path=CONFIG_REFERENCE):
+    """`(keys, payloads)` as `ocannl_config.reference` states them: the known configuration keys,
+    and `{profile name: the keys its payload sets}`.
+
+    A setting is spelled `#key=` with no space after the `#`; prose comments and the quoted payload
+    lines use `# `, which is how `test_config_consistency` tells them apart too. A payload line is
+    the quoted text with its `# ` prefix removed -- an ordinary config line, so a key is whatever
+    precedes the `=` of a line that is not itself a comment.
+    """
+    keys, payloads, current = set(), {}, None
+    for line in Path(path).read_text().splitlines():
+        line = line.strip()
+        mark = _REFERENCE_PAYLOAD_RE.fullmatch(line)
+        if mark:
+            current = mark.group(2) if mark.group(1) == "BEGIN" else None
+            if current is not None:
+                payloads[current] = set()
+        elif current is not None:
+            text = line[1:].strip() if line.startswith("#") else line
+            if text and not text.startswith("#") and "=" in text:
+                payloads[current].add(text.split("=", 1)[0].strip())
+        else:
+            setting = _REFERENCE_SETTING_RE.match(line)
+            if setting:
+                keys.add(setting.group(1))
+    return frozenset(keys), {name: frozenset(ks) for name, ks in payloads.items()}
+
+
+def profile_payload_keys(profile):
+    """The keys the named built-in profile's payload sets (`Utils.profile_payloads`' own list)."""
+    payloads = config_reference()[1]
+    if profile not in payloads:
+        raise ValueError(
+            f"{CONFIG_REFERENCE.name} quotes no payload for the profile {profile!r} "
+            f"(it quotes {', '.join(sorted(payloads))})"
+        )
+    return payloads[profile]
+
+
+# The qualified commandline spelling OCANNL reads a setting from (`Utils.read_cmdline_var`).
+CLI_SETTING_PREFIX = "--ocannl_"
+
+
+def ocannl_arg(key, value):
+    """A setting as an OCANNL commandline argument."""
+    return CLI_SETTING_PREFIX + key + "=" + value
+
+
+def ocannl_cell_args(backend, regime, variant, flags=()):
+    """Everything after the executable on an OCANNL cell's command line.
+
+    The sweep's own flags (backend, regime, variant), then the operator's per-cell `--cell-flag`
+    settings in the order given (gh-ocannl-1273). A commandline key outranks every other source,
+    the regime's profile included, so a flag here is what the cell runs with -- which is why the
+    sweep's own keys are refused as flags (`SWEEP_OWNED_KEYS`) rather than left to whichever
+    duplicate OCANNL's argv scan happens to meet first.
+    """
+    return [
+        f"--ocannl_backend={backend}",
+        *ocannl_regime_args(regime),
+        *ocannl_variant_args(variant),
+        *(ocannl_arg(key, value) for key, value in flags),
+    ]
+
+
+def cmdline_settings(argv):
+    """`{key: argument}` for each `--ocannl_<key>=<value>` argument in `argv`, the first one of a
+    key winning, as in OCANNL's own scan of its commandline (`Utils.read_cmdline_var`)."""
+    settings = {}
+    for arg in argv:
+        if arg.startswith(CLI_SETTING_PREFIX) and "=" in arg:
+            settings.setdefault(arg[len(CLI_SETTING_PREFIX) :].split("=", 1)[0], arg)
+    return settings
+
+
+def shadowed_ambient(ambient, argv):
+    """Each ambient OCANNL_* variable a cell's own commandline outranks, mapped to the argument
+    that outranks it (gh-ocannl-1273).
+
+    OCANNL resolves a key from, in order: the commandline, the payload of a profile picked on the
+    commandline, the environment (`Utils.resolve_config_value`). So in a cell dispatched with
+    `--ocannl_profile=approximate`, an ambient OCANNL_TUNE_INLINE_FLIPS=16 loses to the payload's
+    `tune_inline_flips=2`, and one the cell sets itself (`--ocannl_backend=...`, a per-cell flag)
+    loses to that argument. Such a variable is still in the environment the cell inherited, which
+    `ambient_ocannl_env` records, but it did not apply there, and the row says so. A variable
+    OCANNL never reads under that spelling (it reads `OCANNL_` + the upper-cased key) or holding
+    an empty value (unset, to OCANNL) has nothing to be outranked and is left out.
+    """
+    settings = cmdline_settings(argv)
+    profile_arg = settings.get("profile")
+    profile = profile_arg.split("=", 1)[1].strip().lower() if profile_arg else ""
+    payload = profile_payload_keys(profile) if profile else frozenset()
+    shadowed = {}
+    for var, value in sorted(ambient.items()):
+        key = var[len("OCANNL_") :].lower()
+        if var != "OCANNL_" + key.upper() or value == "":
+            continue
+        by = settings.get(key) or (profile_arg if key in payload else None)
+        if by:
+            shadowed[var] = by
+    return shadowed
+
+
+def ocannl_cell(model, backend, regime, variant, flags, ambient):
+    """An OCANNL cell's command line, and what its row and failure record state about it: the
+    per-cell flags it was given (`ocannl_flags`, as passed) and the ambient variables its command
+    line outranks (`ambient_ocannl_shadowed`, see `shadowed_ambient`)."""
+    args = ocannl_cell_args(backend, regime, variant, flags)
+    stamp = {
+        "ocannl_flags": [ocannl_arg(key, value) for key, value in flags],
+        "ambient_ocannl_shadowed": shadowed_ambient(ambient, args),
+    }
+    return [str(ocannl_exe(model)), *args], stamp
+
+
+_DISPLAY_PLAIN_RE = re.compile(r"[A-Za-z0-9_.,:/=+@%~-]*")
+
+
+def display_value(value):
+    """An operator-supplied value as a label, a report cell, a failure note or a message shows it.
+
+    Every human-facing rendering of a `--cell-flag` value or an ambient path goes through this (or
+    through `json.dumps`, as the report's header lines do); only the records keep the raw value.
+
+    Plain values (`16`, `/tmp/cache`) are shown as they are. Anything else is JSON-quoted with `|`
+    and the backtick escaped as well, so a value cannot add a column to a report table, a line to
+    the report or the run log, or open a code span -- `debug_highlight_pcre=a|b` is a legitimate
+    setting -- while the shown text still decodes to the exact value. The raw value is what the
+    command line, the row's `ocannl_flags` and the JSON records carry.
+    """
+    if _DISPLAY_PLAIN_RE.fullmatch(value):
+        return value
+    return json.dumps(value).replace("|", "\\u007c").replace("`", "\\u0060")
+
+
+def display_arg(arg):
+    """An OCANNL commandline argument as a message shows it: its value through `display_value`."""
+    key, eq, value = arg.partition("=")
+    return key + eq + display_value(value) if eq else display_value(arg)
+
+
+def ocannl_flags_note(flag_args):
+    """The per-cell flags as a cell label and the report's variant column show them, e.g.
+    ` +tune_inline_flips=16`: in the label as well as the row, because a failure has only the
+    label. Values go through `display_value`."""
+    notes = []
+    for arg in flag_args:
+        key, _, value = arg[len(CLI_SETTING_PREFIX) :].partition("=")
+        notes.append(f" +{key}={display_value(value)}")
+    return "".join(notes)
+
+
+def ocannl_cache_dir(argv, env):
+    """The schedule cache an OCANNL cell reads and writes, as the failure guidance names it.
+
+    `autotune_cache_dir` comes from the cell's command line (a `--cell-flag`), else the
+    environment, else the built-in `autotune_cache` under the cell's working directory -- no
+    profile payload sets the key and benchmarks/ocannl_config does not (`test_orchestrate` pins
+    both), so nothing else stands between those sources and the default.
+    """
+    arg = cmdline_settings(argv).get("autotune_cache_dir")
+    if arg:
+        return display_value(arg.split("=", 1)[1])
+    value = env.get("OCANNL_AUTOTUNE_CACHE_DIR")
+    return display_value(value) if value else "autotune_cache/"
+
+
 def torch_regime_args(regime):
     """The flags the torch runner takes for its regime; its exact arm is its default."""
     return [] if regime == "exact" else ["--regime", regime]
@@ -418,7 +739,7 @@ def runner_regime(result):
     return result.get("runner_regime")
 
 
-def regime_knob_leaks(result):
+def regime_knob_leaks(result, regime=None, ocannl_flags=None):
     """The approximate-payload keys an OCANNL row resolved from a source its regime does not own.
 
     None when the runner did not report them. The regime is the resolution of those keys, not the
@@ -430,14 +751,32 @@ def regime_knob_leaks(result):
     here without a second list. A sweep under another profile (`reproducible` pins these keys to
     exact values, from the profile) is thereby not an exact-regime sweep: the row says which key
     came from where, and the remedy is to run without it.
+
+    The one override that is not a leak is a per-cell `--cell-flag` (gh-ocannl-1273): the runner
+    reports the key from the commandline at exactly the value the row's `ocannl_flags` records
+    the sweep passing, so the operator asked for it, and the row's variant names it in the report
+    (`ocannl_flags_note`) where the number is read.
+
+    A checkpoint carries the same `regime_knobs` (gh-ocannl-1297) but neither the sweep's `regime`
+    stamp nor the cell's `ocannl_flags`, so `saved_loss_parity` passes both: `regime` and
+    `ocannl_flags` stand in for the record's own when given.
     """
     knobs = result.get("regime_knobs")
     if knobs is None:
         return None
-    regime = regime_of(result)
+    regime = regime or regime_of(result)
+    if ocannl_flags is None:
+        ocannl_flags = result.get("ocannl_flags")
+    declared = cmdline_settings(ocannl_flags or [])
     leaks = {}
     for key, knob in sorted(knobs.items()):
         source = knob.get("source", "?")
+        if (
+            source == "commandline"
+            and "value" in knob
+            and declared.get(key) == ocannl_arg(key, knob["value"])
+        ):
+            continue
         owned = (
             source == "default"
             if regime == "exact"
@@ -572,6 +911,11 @@ def stamp_ambient_env(result, ambient):
     OCANNL rows only: the torch and tinygrad runners read none of these, and a row that carried
     them would invite reading a torch number as though the variables had reached it. A copy, not
     the collected dict itself, so one mapping cannot end up shared by every row of the sweep.
+
+    This is what the cell INHERITED, the same for every row of the sweep, not what applied: the
+    variables its own command line outranks -- a key the regime's profile sets, a per-cell flag's
+    key -- are named beside it, per row, under `ambient_ocannl_shadowed` (`ocannl_cell`,
+    gh-ocannl-1273).
     """
     if result.get("framework") == "ocannl":
         result["ambient_ocannl_env"] = dict(ambient)
@@ -865,7 +1209,9 @@ def checkpoint_note(checkpoint):
     )
 
 
-def failure_record(label, note, ambient, checkpoint=None, provenance=None, regime=None):
+def failure_record(
+    label, note, ambient, checkpoint=None, provenance=None, regime=None, cell_stamp=None
+):
     """One line of partial-failures.jsonl: a failed cell, and what it left behind.
 
     `regime` is the numerics regime the sweep dispatched the cell in (gh-ocannl-719), null when
@@ -878,8 +1224,13 @@ def failure_record(label, note, ambient, checkpoint=None, provenance=None, regim
     dispatch, and the content digest of the executable the checkpoint names, read now, right after
     it ran -- the one identity a `--skip-build` sweep or a dirty tree cannot blur. Under a key of
     its own, leaving the checkpoint as the runner wrote it.
+
+    `cell_stamp` is what an OCANNL cell's row would have said about its own command line
+    (`ocannl_cell`): the per-cell flags it was given, and the ambient variables that line
+    outranks -- the record otherwise states the inherited environment as though all of it applied.
     """
     record = {"cell": label, "why": note, "regime": regime, "ambient_ocannl_env": ambient}
+    record.update(cell_stamp or {})
     if checkpoint is not None:
         # The losses a killed cell completed, kept beside the failure and never among the results.
         record["checkpoint"] = checkpoint
@@ -1246,7 +1597,7 @@ def beam_cell_env(base_env, beam_parallel):
     return env
 
 
-def ocannl_cache_note(_killed=True):
+def ocannl_cache_note(_killed=True, cache_dir="autotune_cache/"):
     """What a killed OCANNL search leaves in its schedule cache, for the failure record.
 
     Nothing to undo — see `quarantine_tinygrad_cache` for why the two caches differ — but the
@@ -1259,12 +1610,15 @@ def ocannl_cache_note(_killed=True):
     mixed pass reports SEARCHED. Its compile cost is then neither a from-scratch search's nor a
     replay's while wearing the from-scratch label, which is precisely the misreading this note
     exists to prevent (gh-ocannl-760 review).
+
+    `cache_dir` is the cell's own cache (`ocannl_cache_dir`): a cell given another
+    `autotune_cache_dir` leaves its arms there, and wiping the default would leave them in place.
     """
     return (
-        "autotune_cache/ keeps the arms that finished before the kill (entries are committed "
+        f"{cache_dir} keeps the arms that finished before the kill (entries are committed "
         "atomically, so none of them is torn); a retry replays those and searches the rest, and "
         "since the pass reports SEARCHED whenever any arm searched, its search cost is a partial "
-        "one wearing a from-scratch label — wipe autotune_cache/ for a comparable search timing"
+        f"one wearing a from-scratch label — wipe {cache_dir} for a comparable search timing"
     )
 
 
@@ -1407,7 +1761,7 @@ def parity_check(results):
                     r["parity_exact_envelope"] = bool(max_rel is not None and max_rel < exact_tol)
 
 
-def saved_loss_parity(checkpoint, regime, results):
+def saved_loss_parity(checkpoint, regime, results, ocannl_flags=None):
     """What a failed cell's saved losses say against the reference: a DIAGNOSTIC, never acceptance.
 
     A cell killed after its parity steps keeps the losses it completed in its last checkpoint
@@ -1422,6 +1776,13 @@ def saved_loss_parity(checkpoint, regime, results):
     an offline reader of partial-failures.jsonl falls back to the wrong envelope. `regime` is what
     the sweep dispatched, None when unstated: the envelope for a checkpoint predating the field,
     and named beside the drift when the runner resolved a different regime.
+
+    A profile name cannot show an ambient knob with no profile behind it (an OCANNL_TF32_MATMULS
+    reaching an exact cell), so the checkpoint also records where each approximate-payload key
+    resolved from (`regime_knobs`, gh-ocannl-1297), and a key outside the envelope's regime is
+    named as `regime_knob_leaks` names it for a row -- the envelope is the regime's, and these
+    losses were not computed in it. `ocannl_flags` is the cell's declared `--cell-flag` settings
+    (its failure stamp), the one commandline override that is not a leak, as for a row.
     """
     if checkpoint is None:
         return "no checkpoint"
@@ -1435,6 +1796,9 @@ def saved_loss_parity(checkpoint, regime, results):
     notes = []
     if ran is not None and regime is not None and ran != regime:
         notes.append(f"the runner resolved the {ran} regime, the sweep dispatched {regime}")
+    leaks = regime_knob_leaks(checkpoint, regime=gated, ocannl_flags=ocannl_flags)
+    if leaks:
+        notes.append(f"outside the {gated} regime: " + ", ".join(leaks.values()))
     if ref is None or diverged_at(ref["losses"]) is not None:
         # Only the drift needs the reference; what the trajectory says about itself still stands.
         notes.append(f"no usable reference row for `{checkpoint.get('workload')}`")
@@ -1834,7 +2198,7 @@ def dominant_kernel_ceilings(rows):
 # the numerics regime it was dispatched in (None when unstated) -- the last two for
 # `saved_loss_parity`, which takes the envelope's regime from the checkpoint when it names one.
 Failure = collections.namedtuple(
-    "Failure", "label note checkpoint regime", defaults=(None, None)
+    "Failure", "label note checkpoint regime stamp", defaults=(None, None, None)
 )
 
 
@@ -1950,6 +2314,41 @@ def ambient_env_line(results, ambient=None):
     return "ambient OCANNL_* environment: " + json.dumps(ambient, sort_keys=True)
 
 
+def shadowed_env_line(results, failures=()):
+    """The report's header line naming the ambient OCANNL_* variables some OCANNL cell's own command
+    line outranked (`ambient_ocannl_shadowed`, gh-ocannl-1273), or None when no cell records one.
+
+    The ambient line above it states what the sweep inherited; without this one it reads as what
+    applied, and an OCANNL_TUNE_INLINE_FLIPS=16 under the approximate profile -- whose payload
+    sets 2 -- would be quoted as the budget those cells searched with. Counted per (variable,
+    argument), since whether a variable is outranked is a fact about a cell's command line: the
+    same variable applies in the exact rows and not in the approximate ones. JSON-quoted like the
+    ambient line, so no value can break the line.
+
+    A failed OCANNL cell counts too, through the stamp its failure carries: the header's ambient
+    line covers the failures as well, so a variable outranked only in cells that failed would
+    otherwise read as applied there. Failures without a stamp are not OCANNL cells.
+    """
+    stamps = [r.get("ambient_ocannl_shadowed") for r in results if r.get("framework") == "ocannl"]
+    stamps += [
+        (f.stamp or {}).get("ambient_ocannl_shadowed")
+        for f in map(lambda f: Failure(*f), failures)
+        if f.stamp
+    ]
+    counts = collections.Counter(
+        (var, by) for stamp in stamps for var, by in sorted((stamp or {}).items())
+    )
+    if not counts:
+        return None
+    return (
+        "ambient OCANNL_* variables outranked by a cell's own command line (not applied there): "
+        + "; ".join(
+            f"{json.dumps(var)} by {json.dumps(by)} in {n} of {len(stamps)} OCANNL cells"
+            for (var, by), n in sorted(counts.items())
+        )
+    )
+
+
 def report(
     results, out_dir, unavailable=(), failures=(), digests_path=None, ambient=None, skipped=()
 ):
@@ -2005,6 +2404,9 @@ def report(
         + "\n"
     )
     lines.append(ambient_line + "\n")
+    shadowed_line = shadowed_env_line(results, failures)
+    if shadowed_line:
+        lines.append(shadowed_line + "\n")
     for workload in sorted({r["workload"] for r in results}):
         lines.append(f"\n## {workload}\n")
         rows = [r for r in results if r["workload"] == workload]
@@ -2083,6 +2485,14 @@ def report(
                 "source): its number belongs to neither column and is not comparable with "
                 "anything -- the sweep fails on it, and the row is kept so the failure is "
                 "visible where the numbers are read.\n"
+            )
+        if any(r.get("ocannl_flags") for r in rows):
+            lines.append(
+                "A `+KEY=VALUE` after an OCANNL variant is a per-cell `--cell-flag` "
+                "(gh-ocannl-1273): the cell ran with `--ocannl_<key>=<value>` on its command line, which "
+                "outranks its regime's profile and the environment, so the row is its regime with "
+                "that key overridden. The regime gate accepts that declared override where the "
+                "runner reports it resolved, and nothing else.\n"
             )
         if any(r.get("precision_mismatch") for r in rows):
             lines.append(
@@ -2313,7 +2723,9 @@ def report(
         lines.append("| cell | why | saved losses vs reference (diagnostic, never acceptance) |")
         lines.append("|---|---|---|")
         for f in map(lambda f: Failure(*f), failures):
-            diagnostic = saved_loss_parity(f.checkpoint, f.regime, results)
+            diagnostic = saved_loss_parity(
+                f.checkpoint, f.regime, results, (f.stamp or {}).get("ocannl_flags")
+            )
             lines.append(f"| {f.label} | {f.note or 'no result line'} | {diagnostic} |")
     text = "\n".join(lines) + "\n"
     (out_dir / "report.md").write_text(text)
@@ -2448,6 +2860,23 @@ def build_arg_parser():
         "no cell of the sweep is refused. --no-skip-cells does not override it",
     )
     ap.add_argument(
+        "--cell-flag",
+        action="append",
+        default=[],
+        type=cell_flag_arg,
+        metavar="[WORKLOAD/BACKEND/VARIANT[/PRECISION]:]KEY=VALUE",
+        help="pass --ocannl_<key>=<value> on the command line of the OCANNL cells, in every regime "
+        "(repeatable; gh-ocannl-1273). Without a selector it reaches every OCANNL cell; a selector "
+        "scopes it, `*` matching anything, e.g. `*/*/tuned:tune_inline_flips=16`. A commandline "
+        "key outranks the regime's profile and the environment, so this is how to change a key "
+        "the approximate profile sets, which an ambient OCANNL_* variable cannot. The row records "
+        "it (`ocannl_flags`), the cell label and the report's variant column name it, and the "
+        "regime gate accepts it as declared rather than as a leak. The key must be one "
+        "ocannl_config.reference documents and not one the sweep sets itself (backend, profile, "
+        "autotune_progress); a selector naming no cell, or two entries setting one key on one "
+        "cell, are refused",
+    )
+    ap.add_argument(
         "--only",
         nargs="*",
         default=["ocannl", "pytorch", "tinygrad"],
@@ -2493,24 +2922,28 @@ def main():
     metas = {fx: read_st_metadata(fx) for fx in fixtures}
     models = {fx: metas[fx].get("model", "mlp") for fx in fixtures}
     operator_skips = set(args.skip_cell)
-    unmatched = unmatched_skips(
-        operator_skips,
-        dispatchable_cells(
-            {
-                fx.stem: available_precisions(
-                    models[fx], metas[fx].get("mode", "train"), args.precision
-                )[0]
-                for fx in fixtures
-            },
-            swept_backends(gpu_ocannl) if "ocannl" in args.only else [],
-            selected_variants(args),
-        ),
+    cells = dispatchable_cells(
+        {
+            fx.stem: available_precisions(
+                models[fx], metas[fx].get("mode", "train"), args.precision
+            )[0]
+            for fx in fixtures
+        },
+        swept_backends(gpu_ocannl) if "ocannl" in args.only else [],
+        selected_variants(args),
     )
+    unmatched = unmatched_skips(operator_skips, cells)
     if unmatched:
         sys.exit(
             "--skip-cell names no cell of this sweep: "
             + ", ".join("/".join(p for p in entry if p) for entry in unmatched)
         )
+    # The cells the sweep will actually dispatch: a flag is checked against these, so one whose
+    # selector reaches only skipped cells is refused rather than silently applied to nothing.
+    run_cells = {c for c in cells if not skip_reason(*c, operator_skips, args.no_skip_cells)}
+    problems = flag_problems(args.cell_flag, run_cells)
+    if problems:
+        sys.exit("; ".join(problems))
     if "ocannl" in args.only and not args.skip_build:
         targets = sorted(
             {f"benchmarks/runners/ocannl/bench_{m}.exe" for m in models.values()}
@@ -2538,6 +2971,10 @@ def main():
     # the cells inherit this environment, and only the approximate payload's keys are otherwise
     # accounted for.
     ambient = ambient_ocannl_env(os.environ)
+    # Which of it the cells' own command lines will outrank (gh-ocannl-1273), said once, up front.
+    warning = shadowing_warning(ambient, run_cells, args.profile, args.cell_flag)
+    if warning:
+        print(warning, flush=True)
     # What the runners are built from, read before any cell runs: a checkpoint a failed cell
     # leaves names only its executable's path, which a later rebuild reuses (gh-ocannl-1209).
     source = source_identity(ROOT)
@@ -2547,7 +2984,7 @@ def main():
     # rather than leaving it to how the operator ran the sweep.
     stamp = {}
 
-    def record_failure(label, note, checkpoint=None, regime=None):
+    def record_failure(label, note, checkpoint=None, regime=None, cell_stamp=None):
         """The one path a failed cell takes, wherever in the sweep it failed.
 
         Both the in-memory list the report is built from and the checkpoint an interrupted run
@@ -2555,7 +2992,7 @@ def main():
         pass's own failure went straight to the list and so vanished from the artifact
         (gh-ocannl-760 review).
         """
-        failures.append(Failure(label, note, checkpoint, regime))
+        failures.append(Failure(label, note, checkpoint, regime, cell_stamp))
         with open(partial_failures, "a") as f:
             # The ambient environment rides on the failure record too: a sweep whose OCANNL cells
             # all failed -- which is what an ambient setting they cannot run under looks like --
@@ -2563,11 +3000,12 @@ def main():
             # then the only artifact there is. It says what the SWEEP inherited, not what a runner
             # read: a failed cell produced no result line to name its framework.
             record = failure_record(
-                label, note, ambient, checkpoint, provenance=dict(stamp, **source), regime=regime
+                label, note, ambient, checkpoint,
+                provenance=dict(stamp, **source), regime=regime, cell_stamp=cell_stamp,
             )
             f.write(json.dumps(json_safe(record), allow_nan=False) + "\n")
 
-    def run_kept(label, cmd, regime=None, **kwargs):
+    def run_kept(label, cmd, regime=None, cell_stamp=None, **kwargs):
         """`run_cell` under the sweep's cap, plus the last checkpoint a failed cell left. An
         interrupted cell's checkpoint is recorded before the cancellation propagates: the sweep
         writes nothing else for it."""
@@ -2578,14 +3016,21 @@ def main():
             )
         except BaseException:
             if kept:
-                record_failure(label, "interrupted mid-cell", kept[-1], regime)
+                record_failure(label, "interrupted mid-cell", kept[-1], regime, cell_stamp)
             raise
         return r, note, (kept[-1] if kept else None)
 
     def collect(label, cmd, override=None, **kwargs):
         t0 = time.monotonic()
         regime = (override or {}).get("regime")
-        r, note, checkpoint = run_kept(label, cmd, regime, **kwargs)
+        # An OCANNL cell's own stamp (`ocannl_cell`) rides in its override, and onto its failure
+        # record when there is no row to carry it.
+        cell_stamp = {
+            k: v
+            for k, v in (override or {}).items()
+            if k in ("ocannl_flags", "ambient_ocannl_shadowed")
+        } or None
+        r, note, checkpoint = run_kept(label, cmd, regime, cell_stamp, **kwargs)
         if r:
             r.update(stamp)
             stamp_ambient_env(r, ambient)
@@ -2598,7 +3043,7 @@ def main():
             with open(partial, "a") as f:
                 f.write(json.dumps(json_safe(r), allow_nan=False) + "\n")
         else:
-            record_failure(label, note, checkpoint, regime)
+            record_failure(label, note, checkpoint, regime, cell_stamp)
         print(f"    cell took {time.monotonic() - t0:.0f}s", flush=True)
 
     for fx in fixtures:
@@ -2636,23 +3081,31 @@ def main():
                                 )
                             continue
                         env = cell_env(os.environ, fx, variant, precision)
+                        flags = cell_flags(args.cell_flag, (name, backend, variant, precision))
                         for regime in args.profile:
                             # The regime is a third axis over the cells (gh-ocannl-719): the same
                             # variant and precision, dispatched under the profile that IS the
-                            # regime, gated at that regime's envelope, labelled as such.
-                            cmd = [
-                                str(ocannl_exe(model)),
-                                f"--ocannl_backend={backend}",
-                                *ocannl_regime_args(regime),
-                                *ocannl_variant_args(variant),
-                            ]
-                            label = f"{name} ocannl/{backend}/{cell}{regime_label(regime)}"
+                            # regime, gated at that regime's envelope, labelled as such. The
+                            # operator's per-cell flags follow it (gh-ocannl-1273), and are named in
+                            # the label like the regime.
+                            cmd, cell_stamp = ocannl_cell(
+                                model, backend, regime, variant, flags, ambient
+                            )
+                            label = (
+                                f"{name} ocannl/{backend}/{cell}{regime_label(regime)}"
+                                + ocannl_flags_note(cell_stamp["ocannl_flags"])
+                            )
                             # The cell's identity is what was dispatched, not what the runner chose
                             # to call itself: stamp every axis so a report row cannot silently
                             # collapse two cells (a runner predating gh-ocannl-539 reports a
                             # reduced-precision cell's variant as its precision; the regime is
                             # cross-checked against what the runner resolved by `regime_check`).
-                            ident = {"variant": variant, "precision": precision, "regime": regime}
+                            ident = {
+                                "variant": variant,
+                                "precision": precision,
+                                "regime": regime,
+                                **cell_stamp,
+                            }
                             if variant == "tuned":
                                 # Two-pass protocol: the search leaves the process slower (extra
                                 # per-launch overhead from accumulated modules/buffers — measured at
@@ -2665,13 +3118,20 @@ def main():
                                     f"{label} (search pass)",
                                     cmd,
                                     regime,
+                                    cell_stamp,
                                     env=env,
                                     cwd=HERE,
-                                    on_incomplete=ocannl_cache_note,
+                                    on_incomplete=functools.partial(
+                                        ocannl_cache_note, cache_dir=ocannl_cache_dir(cmd, env)
+                                    ),
                                 )
                                 if pass1 is None:
                                     record_failure(
-                                        f"{label} (search pass)", note, checkpoint, regime
+                                        f"{label} (search pass)",
+                                        note,
+                                        checkpoint,
+                                        regime,
+                                        cell_stamp,
                                     )
                                     continue
                                 # What the search pass actually did, which is not derivable from the

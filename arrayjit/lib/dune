@@ -249,6 +249,8 @@
  (public_name arrayjit.autotune)
  (libraries base stdio unix mtime mtime.clock.os utils ir context)
  (modules autotune sketch_families)
+ (preprocess
+  (pps ppx_sexp_conv))
  (modes best))
 
 ; Host stubs and kernel text consume the same C definitions (gh-ocannl-656).

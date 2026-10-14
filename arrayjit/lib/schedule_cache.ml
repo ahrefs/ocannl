@@ -81,9 +81,20 @@ type canonical = {
 let digest c = c.digest
 let complete c = c.complete
 
+(* gh-ocannl-1242: a reference that a saved schedule (or a recorded placement decision) makes and
+   the canonical form it is replayed against cannot resolve is a fact about the ENTRY -- stale or
+   corrupt -- not a bug of this process. So it is a typed [Illegal_schedule] refusal, like the
+   drifted fission replay (gh-ocannl-1164): a cache replay declines and the tuner re-searches, where
+   the untyped [Invalid_argument] it used to be was fatal under the default strict classification
+   and ended [Autotune.tune] instead. *)
+let stale_reference ~check detail =
+  raise
+    (Schedule_outcome.Cause_at
+       (Schedule_outcome.Transform, Schedule_outcome.Illegal_schedule { check; detail }))
+
 let tn_of_ref c i =
   if i < 0 || i >= Array.length c.ref_tns then
-    invalid_arg
+    stale_reference ~check:"Schedule_cache.tn_of_ref"
       (Printf.sprintf "Schedule_cache.tn_of_ref: index %d out of range (%d tensor nodes)" i
          (Array.length c.ref_tns))
   else c.ref_tns.(i)
@@ -256,6 +267,12 @@ let canonicalize_source ?(static_indices = []) ?(node_tag = fun _ -> "")
   let node_tag tn = lineage_tag lineage opt.LL.optimize_ctx tn ^ node_tag tn in
   canonical_of ~static_indices ~node_tag ~companions:(fun ~add:_ ~emit_tn:_ -> ()) opt.LL.source
 
+(* A code fragment's identity under the same walk (gh-ocannl-1274): the flip chain's structural-twin
+   rule renders a flipped node's producer/consumer neighbourhood with it, the caller's [node_tag]
+   carrying what the flip's pricing reads per node. *)
+let canonicalize_code ?(static_indices = []) ~node_tag (llc : LL.t) : canonical =
+  canonical_of ~static_indices ~node_tag ~companions:(fun ~add:_ ~emit_tn:_ -> ()) llc
+
 (** {2 Registries} *)
 
 type registry = {
@@ -299,7 +316,7 @@ let unresolve_exn r sref =
   match Map.find r.bwd sref with
   | Some s -> s
   | None ->
-      invalid_arg
+      stale_reference ~check:"Schedule_cache.of_saved"
         (Printf.sprintf "Schedule_cache.of_saved: dangling reference %s"
            (Sexp.to_string (sexp_of_sym_ref sref)))
 
@@ -605,9 +622,9 @@ let codegen_tag ~(backend : string) ~(limits : Backend_intf.hardware_limits)
 type trajectory = {
   search_shape : string;
       (** The storing search's candidate-shaping inputs the key does not carry, rendered by
-          [Autotune.tune]: every [Search_shaping] configuration key that some source sets
-          ([Utils.config_class_fingerprint]) and the arguments overriding the ones it reads. A
-          trajectory is an equal-depth record only for a search that times the same candidates in
+          [Autotune.tune]: every [Search_shaping] configuration key whose resolved value is not its
+          default ([Utils.config_class_fingerprint]) and the arguments overriding the ones it reads.
+          A trajectory is an equal-depth record only for a search that times the same candidates in
           the same order, so a replay under another shape reads it as absent. *)
   steps : (int * float) list;
 }

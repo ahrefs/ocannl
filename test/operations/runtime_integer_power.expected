@@ -1,0 +1,13 @@
+rpow_f32: negative bases under run-time integral exponents match the integer power: true
+rpow_f32: a negative base's power is its mirror's, bitwise, negated exactly for odd exponents: true
+rpow_f32: negative bases under run-time fractional exponents stay NaN: true
+rpow_f32: negative bases under run-time subnormal exponents stay NaN: true
+rpow_f32: a run-time zero exponent gives 1 for every base, as in C pow: true
+rpow_f32: run-time exponents bypass the constant integer-power helper: true
+rpow_f32: the kernel calls the run-time power helper: true
+rpow_f16: negative bases under run-time integral exponents match the integer power: true
+rpow_f16: a negative base's power is its mirror's, bitwise, negated exactly for odd exponents: true
+rpow_f16: negative bases under run-time fractional exponents stay NaN: true
+rpow_f16: a run-time zero exponent gives 1 for every base, as in C pow: true
+rpow_f16: run-time exponents bypass the constant integer-power helper: true
+rpow_f16: the kernel calls the run-time power helper: true

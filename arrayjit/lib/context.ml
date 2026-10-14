@@ -49,8 +49,10 @@ type execution_ledger = {
           contexts that allocate distinct buffers for the same tnode. External writes remove their
           buffer. *)
   merge_buffer_readers : (int * int) list Hashtbl.M(Int).t;
-      (** [(consumer routine id, owning context id)] by synthetic merge-transfer id. Ownership lets
-          [release] unregister an abandoned candidate that can no longer execute. *)
+      (** [(consumer routine id, owning context id)] by synthetic merge-transfer id, one entry per
+          release unit that keeps the consumer live (an upload fork adds one, see [derive]).
+          Ownership lets [release] unregister an abandoned candidate that can no longer execute; a
+          consumer stays pending while any of its entries remains. *)
   mutable current_merge_buffer_writer : int option;
       (** The synthetic transfer id whose generation currently occupies this lineage's merge slab.
           Replacing it removes the old id from [executed], invalidating its compiled consumers. *)
@@ -88,9 +90,10 @@ let create_ledger () =
 type t = {
   wrapped : (Backends.wrapped_context[@sexp.opaque]);
   context_id : int;
-      (** Identity of this logical backend-context child, used only to retire ledger registrations
-          when its leaf is released. [run] preserves it; operations that make a child mint one
-          through [derive] below, the only constructor of derived contexts. *)
+      (** Identity of this context's release unit, used only to retire ledger registrations when its
+          leaf is released. [run] preserves it; [derive] below, the only constructor of derived
+          contexts, preserves it for a value of the same backend lifecycle (a linear upload) and
+          mints one for a lifecycle child or an upload fork. *)
   ordinal : int;
       (** The backend's device ordinal this context runs on -- what {!Backends.make_context} was
           given. NOT {!Ir.Backend_intf.device.device_id}, which is a process-global counter across
@@ -103,17 +106,47 @@ type t = {
 
 let backend_name ctx = Backends.backend_name (Backends.wrapped_backend ctx.wrapped)
 
+(* The backend facts that decide a derived context's release unit: its release flag, shared along a
+   linear upload chain and fresh for a lifecycle child or an upload fork, and its upload lineage,
+   shared by an upload fork and fresh for a lifecycle child. *)
+let release_flag wrapped = Backends.query wrapped { q = (fun _ c -> c.BI.finalized) }
+let upload_lineage wrapped = Backends.query wrapped { q = (fun _ c -> c.BI.upload_arenas) }
+
 (* The one constructor for a derived logical context — the result of any operation that makes a
-   child (compiling, transfers that touch the wrapped context, decision recording). Minting the
-   fresh [context_id] here, and only here, is what lets [release] retire exactly the leaf's own
-   ledger registrations: a hand-assembled child that kept its parent's id would retire the parent's
-   merge-buffer reads along with its own. Frontier updates ride along when the operation produced
-   one. Operations that evolve the SAME logical context ([run], [mark_initialized],
-   [record_external_writes]) stay plain record updates: they must preserve the identity. *)
+   child (compiling, transfers that touch the wrapped context, decision recording). [context_id]
+   names a RELEASE UNIT, and the backend context decides which one the result belongs to
+   (gh-ocannl-1203).
+
+   A result sharing its argument's release flag is the same unit: an upload continuing a linear
+   chain ([Backend_intf.evolve_with_buffer]), or an upload into an existing buffer, which returns
+   the backend context unchanged. Releasing either value frees the same pools and sets the same
+   flag, so both must retire the same ledger registrations, and the id is preserved: a fresh one
+   would strand every merge-buffer reader compiled before the upload, refusing all later refills.
+
+   Any other result is a new unit with a fresh id, so [release] retires exactly the leaf's own
+   registrations: a hand-assembled child that kept its parent's id would retire the parent's
+   merge-buffer reads along with its own. An upload FORK (same upload lineage, its own flag) is an
+   independent leaf keeping the pools of the value it forked, so the readers compiled into that
+   value stay live until every leaf holding them is released: their registrations are extended to
+   the fork's id.
+
+   Frontier updates ride along when the operation produced one. Operations that evolve the SAME
+   logical context without touching the wrapped one ([run], [mark_initialized],
+   [record_external_writes]) stay plain record updates. *)
 let derive ?frontier ctx wrapped =
-  let context_id = ctx.ledger.next_context_id in
-  ctx.ledger.next_context_id <- context_id + 1;
-  { ctx with wrapped; context_id; frontier = Option.value frontier ~default:ctx.frontier }
+  let frontier = Option.value frontier ~default:ctx.frontier in
+  if phys_equal (release_flag wrapped) (release_flag ctx.wrapped) then
+    { ctx with wrapped; frontier }
+  else
+    let context_id = ctx.ledger.next_context_id in
+    ctx.ledger.next_context_id <- context_id + 1;
+    (if phys_equal (upload_lineage wrapped) (upload_lineage ctx.wrapped) then
+       let readers = ctx.ledger.merge_buffer_readers in
+       Hashtbl.map_inplace readers ~f:(fun registered ->
+           List.filter_map registered ~f:(fun (reader_id, owner) ->
+               Option.some_if (owner = ctx.context_id) (reader_id, context_id))
+           @ registered));
+    { ctx with wrapped; context_id; frontier }
 
 let buffer_key ctx tn =
   Backends.query ctx.wrapped
@@ -569,6 +602,10 @@ let mem ctx (tn : Tn.t) : bool =
 
 let placements ctx =
   Backends.query ctx.wrapped { q = (fun _ c -> c.BI.optimize_ctx.Ir.Low_level.placements) }
+
+let inherits_computation ctx tn =
+  Backends.query ctx.wrapped
+    { q = (fun _ c -> Hashtbl.mem c.BI.optimize_ctx.Ir.Low_level.computations tn) }
 
 (* gh-ocannl-599: [Local] is the unobservable placement class -- routine-scoped scratch the backend
    may keep in registers or on the stack, never a context buffer a routine writes back. Host access

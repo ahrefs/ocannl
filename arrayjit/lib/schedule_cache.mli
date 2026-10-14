@@ -156,6 +156,19 @@ val canonicalize_source :
     since two calls over one computation with different losses pose different problems. Used as the
     key of the placement-decision store. *)
 
+val canonicalize_code :
+  ?static_indices:Indexing.static_symbol list ->
+  node_tag:(Tnode.t -> string) ->
+  Low_level.t ->
+  canonical
+(** The same walk over an arbitrary code fragment, each first-occurrence node rendered with its
+    dims, precision, hoisted-packing eligibility and [node_tag] — no placement class of its own and
+    no companion sections, since a fragment carries neither an [optimize_ctx] nor codegen
+    companions. Fresh-name normalization makes two fragments over different nodes, loop binders and
+    scopes equal exactly when they are isomorphic and the tags agree. Used by the flip chain's
+    structural-twin rule (gh-ocannl-1274) to render a flipped node's producer/consumer
+    neighbourhood. *)
+
 val digest : canonical -> string
 (** Hex digest of the canonical rendering. Equal digests mean structurally identical code, hence
     interchangeable canonical numberings. *)
@@ -167,7 +180,10 @@ val complete : canonical -> bool
     they still support {!to_saved}/{!of_saved} round-trips. *)
 
 val tn_of_ref : canonical -> int -> Tnode.t
-(** The tensor node at a canonical index. Raises [Invalid_argument] on out-of-range. *)
+(** The tensor node at a canonical index. On out-of-range raises
+    [Schedule_outcome.Cause_at (Transform, Illegal_schedule { check = "Schedule_cache.tn_of_ref"; _
+     })]: the index comes from a saved schedule or a recorded placement decision, so it is a stale
+    or corrupt entry's refusal, not an invariant violation (gh-ocannl-1242). *)
 
 (** {2 Symbol resolution registries}
 
@@ -192,8 +208,12 @@ val to_saved : registry -> Schedule.schedule -> saved_schedule * registry
 val of_saved : canonical -> saved_schedule -> Schedule.schedule * registry
 (** Replays a saved schedule against a (fresh) compile's canonical form: base and static references
     resolve through [canonical], minting ops go through the {!Schedule} builders and their fresh
-    symbols are recorded for later references. Raises [Invalid_argument] on dangling references
-    (canonical mismatch — always guard with {!digest} equality first). *)
+    symbols are recorded for later references. A dangling reference (canonical mismatch — always
+    guard with {!digest} equality first — or a corrupt entry) raises
+    [Schedule_outcome.Cause_at (Transform, Illegal_schedule { check = "Schedule_cache.of_saved"; _
+     })] ([check = "Schedule_cache.tn_of_ref"] for a tensor-node index, as {!tn_of_ref}): a typed
+    refusal, so a cache replay declines into a re-search instead of ending [Autotune.tune] under
+    strict failure classification (gh-ocannl-1242). *)
 
 (** {2 The disk cache} *)
 
@@ -238,9 +258,9 @@ val codegen_tag :
 type trajectory = {
   search_shape : string;
       (** The storing search's candidate-shaping inputs the key does not carry, rendered by
-          [Autotune.tune]: every [Search_shaping] configuration key that some source sets
-          ([Utils.config_class_fingerprint]) and the arguments overriding the ones it reads. A
-          trajectory is an equal-depth record only for a search that times the same candidates in
+          [Autotune.tune]: every [Search_shaping] configuration key whose resolved value is not its
+          default ([Utils.config_class_fingerprint]) and the arguments overriding the ones it reads.
+          A trajectory is an equal-depth record only for a search that times the same candidates in
           the same order, so a replay under another shape reads it as absent. *)
   steps : (int * float) list;
 }

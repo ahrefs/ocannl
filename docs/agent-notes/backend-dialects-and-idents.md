@@ -177,6 +177,18 @@ files.
   the routine record, the `.cd`/`.ll` sources, calibration rows — deliberately keeps the caller's
   spelling; only the C-family artifacts carry the mangled one. Guard:
   `test/operations/reserved_routine_names.ml` (executes each colliding routine, not just parses it).
+- Beyond the C floor (gh-ocannl-707), a routine name meets the vendor headers, and only some of
+  their names collide with a kernel DEFINITION: global types, macros, dialect keywords and
+  C-linkage functions do; ordinary C++ functions do not, since overloading lets a kernel coexist
+  with them (on Metal every `metal::` function compiled as a kernel name). Three layers: the
+  implementation's reserved namespace (`__x`, `_X`, where vendors put most intrinsics) is closed by
+  rule, `C_syntax.implementation_reserved`; each backend's `vendor_routine_idents` holds the rest,
+  Metal's harvested by compiling every identifier token of the toolchain's `include/metal` headers
+  as a kernel name (582 failed), CUDA/HIP's read from their headers; and whatever a later SDK adds
+  fails through `C_syntax.attribute_routine_name_failure`, which turns a compiler report quoting a
+  routine's `void <name>(` line, or an error line quoting the name, into a `Utils.User_error`
+  naming the routine. A Metal compile error is a `Failure` carrying the whole source, where every
+  declaration appears, so attribution there reads the compiler's message alone.
 - `test/config/ocannl_config` pins `backend=cc`, so `dune runtest` never exercises GPU codegen —
   a Metal/CUDA-only rendering bug passes a fully green suite. The bf16 bug above was already
   covered by `test/training/mixed_prec_parity.ml` (its "loss trajectory parity within 0.1" check
@@ -267,22 +279,42 @@ configuration.
   a suite run each. Unloading kernels is not it: with the `Gc.finalise` `Dl.dlclose` in
   `cc_backend.ml`'s `c_compile_and_load` disabled, 5 of 8 runs still trapped. Nor is the trapping
   kernel's indexing: under `--ocannl_output_dlls_in_build_directory=true` the cc backend keeps its
-  compiled `.so` in `TMPDIR` under the name the crash report prints (by default it unlinks the file
-  once loaded, next bullet), so `objdump -d --disassemble-symbols=_<routine>` on that exact file
-  shows what ran -- here a guarded `p[chunk] += 1.0f` over six cells of a six-cell buffer. Reach for
-  that disassembly rather than for `build_files/`, whose same-named artifacts are overwritten by the
-  next candidate.
+  compiled `.so` under the name the crash report prints (by default it unlinks the file once
+  loaded, next bullet), so `objdump -d --disassemble-symbols=_<routine>` on that exact file shows
+  what ran -- here a guarded `p[chunk] += 1.0f` over six cells of a six-cell buffer. Reach for that
+  disassembly rather than for the `build_files/` source, whose same-named copy is overwritten by the
+  next candidate; the kept library is not, since its name carries the pid and the run id.
 - A cc compilation removes its temporary source, log and library on every path, success and
   compiler rejection included, unless `output_debug_files_in_build_directory` (source and library)
   or `output_dlls_in_build_directory` (library) asks for them (gh-ocannl-1197,
-  `test/operations/cc_temp_ownership`). The library is unlinked right after `dlopen`: the kernel
+  `test/operations/cc_temp_ownership`). Library output does not keep the library beside the source
+  the compiler read, which is a private temporary even under debug files: it writes
+  `build_files/<exe>/<kernel>_pid<P>_n<nonce>_run<N>.so` (`Utils.kept_library_file`,
+  gh-ocannl-1247), the pid because concurrent processes of one executable share that directory --
+  the OS id (`Utils.os_process_id`), never `Unix.getpid`, which on Windows answers a process-local
+  handle -- and the per-process random nonce because an OS id is not unique across PID namespaces.
+  For the same reason the startup cleanup spares a kept library whose process is still running,
+  and empties its directory without removing it: that process may be between choosing the path and
+  linking or loading it. Tests list them with
+  `Test_utils.Generated.kept_libraries` (`test/operations/cc_kept_library`). The library is unlinked right after `dlopen`: the kernel
   runs from the mapping, which POSIX keeps alive past the unlink. Windows refuses to delete a
   mapped DLL, so a failed removal is retried after the finalizer's `dlclose`, never before it. OCaml
   runs no finalisers at exit and the OpenMP arm never unloads, so on Windows only routines
   collected mid-run (autotune candidates, mostly) get their library removed; the libraries of
-  routines alive at exit, and of every OpenMP kernel, stay until something outside the process
-  removes them. Unlinking a still-mapped library frees its name, and a loader answers a `dlopen` of a
-  path it has mapped with that mapping without reading the file, which is why every library path
+  routines alive at exit, and of every OpenMP kernel, stay past exit. So a temporary library's name
+  records its owner too, `ocannl_cc_<kernel>_pid<P>_n<nonce>_run_id_<N>_<random>` (the marker
+  keeps another program's same-shaped file in the shared directory out of the sweep; the kernel
+  name is cut to `Utils.temp_library_kernel_name_limit` bytes there, so a long routine name cannot
+  push the file name past a component limit) (`Utils.temp_library_prefix`/
+  `parse_temp_library_name`), and every process's startup (the `Utils` cleanup block, ungated) removes the temp directory's libraries whose owner is gone, with
+  the same liveness test that spares the kept libraries, once they are older than
+  `Utils.temp_library_sweep_min_age` (gh-ocannl-1268, `test/operations/cc_temp_library_sweep`,
+  whose end-to-end leg is gated to Windows). The age guard is what makes an ungated sweep of a
+  SHARED directory safe: liveness answers only within this PID namespace, and a container's
+  process may even report this process's own id (two PID-1 entrypoints), but a library is at risk
+  only between its link and its `dlopen`. A library
+  retained by debug files keeps its owner-free name, so the sweep never takes it. Unlinking a
+  still-mapped library frees its name, and a loader answers a `dlopen` of a path it has mapped with that mapping without reading the file, which is why every library path
   carries the process-unique run id: drop it and a later `temp_file` landing on the freed name runs
   the earlier kernel. Only a FAILED removal is retried (a path already gone counts as removed),
   because a freed name may already belong to another process. Profilers and crash symbolication

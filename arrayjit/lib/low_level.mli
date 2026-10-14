@@ -715,6 +715,44 @@ val lane_all_reduce_sites : reassociable:(Tnode.t -> bool) -> t -> lane_all_redu
     [Schedule.workgroup_memory_bytes] counts the partials of exactly those sites, so the estimate
     and the kernel read one predicate. *)
 
+type inserted_barrier_form =
+  | Lane_all_reduce_partials
+      (** [C_syntax.try_lane_all_reduce]'s cross-simdgroup form: partials of a reassociable scope
+          local between two barriers. *)
+  | Warp_reduce_partials
+      (** [C_syntax.try_warp_reduce]'s multi-warp form: per-warp partials of an accumulation into a
+          cell, a barrier, the first warp's combine, a barrier. *)
+[@@deriving sexp_of, equal]
+
+type inserted_barrier = {
+  ib_index : Indexing.symbol;  (** The [Workgroup_reduce] loop's symbol. *)
+  ib_extent : int;
+  ib_form : inserted_barrier_form;
+  ib_uniform : bool;
+      (** Whether workgroup-uniform control reaches every copy of the loop: no enclosing workgroup
+          loop, and every enclosing [If] condition built from constants and index symbols no
+          workgroup loop binds (the judgement [lar_cross_simdgroup] asks for, gh-ocannl-1168). *)
+}
+
+val inserted_barriers :
+  reassociable:(Tnode.t -> bool) -> warp_size:int -> t -> inserted_barrier list
+(** gh-ocannl-1238: the statements of a kernel whose rendering emits a workgroup barrier the IR does
+    not contain, on a backend whose warp shuffles span [warp_size] lanes ([[]] when
+    [warp_size <= 0]: the C backends render neither form with a barrier). The ONE notion of "this
+    statement renders a barrier" shared by {!validate_parallel}, which refuses a non-uniform entry
+    before anything renders, and by the renderers: [C_syntax.try_warp_reduce] renders its multi-warp
+    form only for a listed, uniform entry, and [C_syntax.try_lane_all_reduce] admits by
+    {!lane_all_reduce_sites}, derived from the same walk.
+
+    Lane-form entries are listed where [lar_cross_simdgroup] holds past one simdgroup; that
+    admission asks for uniformity itself, so it declines to the serial loop under divergent control
+    and the validator refuses none of them. Cell-form entries are every [Workgroup_reduce] loop past
+    one warp whose body (past its own launch guard) is ONE accumulation statement into a cell
+    invariant in the loop -- [C_syntax]'s shared accumulator decision at a single statement, asked
+    of the same {!peel_accum_nest} -- uniform or not: that form has no barrier-free rendering. An
+    entry the renderer refuses for other reasons (partial warps, a narrow residency, ...) is listed
+    too, so the list over-approximates only by statements that never render. *)
+
 val launch_dims : t -> launch_dims
 (** Per-slot maximum extents over the kernel's annotated loops; [grid.(2)] is the product of the
     per-slot maxima of grid slots [>= 2] (the [.z] fold, see the section comment). *)
@@ -753,20 +791,28 @@ val validate_scan_loops : Tnode.Placements.t -> t -> unit
     scan and the clause. Like {!validate_scope_bodies} it runs at both ends of the pipeline:
     {!optimize} on the way in, backend codegen on the way out. *)
 
-val validate_parallel : Tnode.Placements.t -> t -> unit
+val validate_parallel :
+  ?warp_size:int -> ?reassociable:(Tnode.t -> bool) -> Tnode.Placements.t -> t -> unit
 (** Backend-independent well-formedness of hardware annotations (axis-types proposal §2); a no-op
     for all-[Serial] code. Raises [Invalid_argument] on structural violations: nonzero [from_], more
     than 3 slots per kind, annotated loops inside [Local_scope] bodies, barriers under divergent
     extents or [If] guards, writes to materialized nodes not nested under annotated loops covering
     {e every} active (non-unit) hardware dimension — launch dimensions are global to the kernel, so
     an uncovered dimension executes the write once per hardware index — and whole-node [Zero_out] of
-    materialized nodes in multi-threaded kernels (nesting never distributes it). Does not prove
-    iteration independence: an annotating pass proves it for the annotations it mints, and the
-    renderer asks {!unseparated_thread_write} of every binding it actually emits. *)
+    materialized nodes in multi-threaded kernels (nesting never distributes it). With [warp_size]
+    (and the lane all-reduce's [reassociable], [Online_softmax.reassociable_local]) it also refuses
+    a barrier the renderer inserts ({!inserted_barriers}) under control flow that is not
+    workgroup-uniform (gh-ocannl-1238); the default [warp_size] of 0 is a backend rendering no warp
+    shuffles. Does not prove iteration independence: an annotating pass proves it for the
+    annotations it mints, and the renderer asks {!unseparated_thread_write} of every binding it
+    actually emits. *)
 
-val validate_parallel_classified : Tnode.Placements.t -> t -> unit
+val validate_parallel_classified :
+  warp_size:int -> reassociable:(Tnode.t -> bool) -> Tnode.Placements.t -> t -> unit
 (** Internal backend-facing variant of {!validate_parallel}; transports a validation
-    [Invalid_argument] as a typed {!Schedule_outcome.Illegal_schedule}. *)
+    [Invalid_argument] as a typed {!Schedule_outcome.Illegal_schedule}. [warp_size] and
+    [reassociable] are required here: the callers are the ones about to render, or to rank
+    candidates for a backend, and know its shuffle width. *)
 
 val guard_annotated_extents : should_guard:([ `Grid | `Workgroup ] -> bool) -> t -> t
 (** Wraps bodies of annotated loops whose extent is below their slot's launch dimension in
@@ -1357,6 +1403,20 @@ val affine_accesses : t -> Tnode.t Affine.access list
 
 val statement_effects : t -> Tnode.t Affine.statement_effect list
 (** The effect half of {!affine_relations}. *)
+
+val reads_covered_query :
+  ?write_eligible:(read:Tnode.t Affine.access -> write:Tnode.t Affine.access -> bool) ->
+  Indexing.static_symbol list ->
+  Tnode.t Affine.access list ->
+  Tnode.t ->
+  [ `Covered | `Covered_rmw_exempt of string | `Unknown of string ]
+(** The read-before-write fact behind the placement decisions and the routine interface: whether
+    every read of a node in [accesses] (typically {!affine_accesses}) is covered by prior writes
+    ([`Covered]), covered only thanks to the read-modify-write exemption — a read at its enclosing
+    statement's own write position ([`Covered_rmw_exempt]) — or not covered ([`Unknown], with a
+    witness). [?write_eligible] restricts which writes may cover which reads. Exposed so hand-built
+    IR tests can assert the verdict itself where the pipeline's later passes would mask a wrong one
+    (gh-ocannl-1244). *)
 
 val buffer_access_spans : stmt_serial:bool -> t list -> (Tnode.t, int * int) Base.Hashtbl.t option
 (** gh-ocannl-489 liveness-based buffer aliasing: per-tnode access span over the final

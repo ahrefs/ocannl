@@ -826,6 +826,14 @@ let placement_outcome_digest ?name ?timing_ctx ctx loss comp bindings decision =
     the field, or stored under another search shape) leaves the flips to run in full, as does an
     incumbent that failed: its partial record is no shippable routine's.
 
+    gh-ocannl-1274: a flip whose local reading is canonically identical
+    ({!Autotune.placement_surface}'s [ps_twin_identity]) to one already measured and lost in this
+    chain — abandoned, or searched and not faster than its incumbent — is skipped as [twin-of] that
+    flip without a budget slot, logged beside the abandonments and recorded as an [event=flip_twin]
+    progress line ([flips_done] counts them as [twinned]). It is rejected like the loss it repeats.
+    A failed search and an accepted flip anchor nothing. The rule is a function of what the chain
+    measured, so a warm chain whose anchors replay skips the same twins.
+
     gh-ocannl-638, [ship_arm] (config [tune_ship_arm], default [Measured_winner]): ship a chosen
     {!placement_arm} instead of the measured winner. It exists for measurement — a profile of arm
     A's kernels is evidence about arm A's routine, and until that routine is the one that ships,
@@ -1584,7 +1592,58 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
              node whose DEFAULT reading is [`Materialize] (the candidate's own field,
              gh-ocannl-1017) is left certainly materialized by a group whose every alternative
              lost. *)
-          let measured = ref 0 and pruned = ref 0 and abandoned = ref 0 in
+          let measured = ref 0 and pruned = ref 0 and abandoned = ref 0 and twinned = ref 0 in
+          (* gh-ocannl-1274: the structural-twin rule. The identity of every alternative measured
+             and lost in this chain -- abandoned, or searched and not accepted -- with the label of
+             the first flip that lost under it. An alternative whose identity is already here is a
+             canonically identical local reading ({!Autotune.placement_surface}'s
+             [ps_twin_identity]) of a flip that lost, so it is skipped as [twin-of] that flip
+             without a budget slot: on rog's approximate CUDA gpt2_mini cell the per-layer q/k/v
+             flips took the first 11 slots of the chain and each set's members lost by the same
+             figure, so a budget of 2 never reached past layer 1's k and v. Deterministic in what
+             the chain measured, so a warm chain, whose anchors replay their abandonments or their
+             crowns, skips the same twins. *)
+          let lost = Hashtbl.create (module String) in
+          let chain_reading n = List.Assoc.find !accepted n ~equal:Tn.equal in
+          (* The flips are measured in the timing lineage, so a twin must agree on what THAT lineage
+             brings to each neighbour too -- the tag {!placement_problem} gives it -- and on the
+             placement the timing lowering DECIDED from it, which an inherited computation or a
+             virtualization cap can make differ from the surface's for the same code. A timing
+             lineage whose decision surface cannot be read disables the rule rather than twinning on
+             half the evidence. *)
+          let twin_tag =
+            match timing_ctx with
+            | None -> Some (fun _ -> Some "")
+            | Some tctx -> (
+                match
+                  ( Context.placements tctx,
+                    (Context.lowered_for_decisions ?name tctx comp bindings).LL.optimize_ctx )
+                with
+                | plc, octx ->
+                    Some
+                      (fun n ->
+                        (* A computation an earlier routine of THAT lineage stored is replayed where
+                           the flips are measured, and the source does not show it. *)
+                        if Context.inherits_computation tctx n then None
+                        else
+                          Some
+                            (";t"
+                            ^ Ir.Schedule_cache.lineage_tag plc octx n
+                            ^
+                            match Tn.Placements.get octx.LL.placements n with
+                            | None -> ";td=u"
+                            | Some (m, _) -> ";td=" ^ Sexp.to_string (Tn.sexp_of_memory_mode m)))
+                | exception exn when must_propagate exn ->
+                    (* A process-level class propagates, after releasing the arms' results like
+                       every other propagation out of the chain (gh-ocannl-550). *)
+                    let backtrace = Stdlib.Printexc.get_raw_backtrace () in
+                    release_unshipped ();
+                    Stdlib.Printexc.raise_with_backtrace exn backtrace
+                | exception exn ->
+                    logf "structural-twin rule off: the timing lineage's lowering failed: %s"
+                      (Exn.to_string exn);
+                    None)
+          in
           let rec walk = function
             | [] -> ()
             | _ when !measured >= inline_flips -> ()
@@ -1611,45 +1670,87 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
                       (Tn.debug_name tn) fa.LL.fa_recompute_cost
                       (if Set.mem surface.Autotune.ps_enablement tn then ", enablement" else "")
                   in
-                  let floor =
-                    match fa.LL.fa_flip with
-                    | `Materialize when bound_pruning ->
-                        surface.Autotune.ps_floor_ms ~materialized:(tn :: !certain_mat)
-                    | `Materialize | `Inline | `Footprint -> None
+                  let identity =
+                    Option.bind twin_tag ~f:(fun node_tag ->
+                        surface.Autotune.ps_twin_identity ~node_tag ~chain:chain_reading fc fa)
                   in
-                  match floor with
-                  | Some fl when Float.(fl >= chain_ms) ->
-                      (* Fathomed: the floor lower-bounds every completion with this node
-                         materialized, so no nested search from here can beat the incumbent. The
-                         node's placement stays open — nothing to commit. *)
-                      Int.incr pruned;
-                      logf "%s bound-pruned: floor %.4f ms >= incumbent %.4f ms" arm fl chain_ms;
-                      None
-                  | _ ->
-                      let apply c = Context.decide_reading c fa.LL.fa_flip [ tn ] in
-                      let ctx' = apply base_ctx in
-                      let timing' = Option.map base_timing ~f:apply in
-                      let r, ms, rep =
-                        tune_or_release ~to_report:flip_report
-                          ~progress_note:(Printf.sprintf " flip=%d/%d" (!measured + 1) inline_flips)
-                          ?abandon arm ctx' timing'
+                  match Option.bind identity ~f:(Hashtbl.find lost) with
+                  | Some anchor ->
+                      (* Lost by its twin: rejected, like a measured loss, at no budget. *)
+                      Int.incr twinned;
+                      logf "%s skipped: twin-of %s, which lost (no budget slot)" arm anchor;
+                      Autotune.progressf "event=flip_twin arm=%S twin_of=%S" arm anchor;
+                      Some `Twin
+                  | None -> (
+                      let floor =
+                        match fa.LL.fa_flip with
+                        | `Materialize when bound_pruning ->
+                            surface.Autotune.ps_floor_ms ~materialized:(tn :: !certain_mat)
+                        | `Materialize | `Inline | `Footprint -> None
                       in
-                      record r;
-                      (* An abandoned flip spent a budget slot: it was measured, briefly, and
-                         lost. *)
-                      Int.incr measured;
-                      (match r with
-                      | Error (Autotune.Search_abandoned _, _) -> Int.incr abandoned
-                      | Ok _ | Error _ -> ());
-                      Some (fa, r, ms, ctx', timing', rep)
+                      match floor with
+                      | Some fl when Float.(fl >= chain_ms) ->
+                          (* Fathomed: the floor lower-bounds every completion with this node
+                             materialized, so no nested search from here can beat the incumbent. The
+                             node's placement stays open — nothing to commit. *)
+                          Int.incr pruned;
+                          logf "%s bound-pruned: floor %.4f ms >= incumbent %.4f ms" arm fl chain_ms;
+                          None
+                      | _ ->
+                          let apply c = Context.decide_reading c fa.LL.fa_flip [ tn ] in
+                          let ctx' = apply base_ctx in
+                          let timing' = Option.map base_timing ~f:apply in
+                          let r, ms, rep =
+                            tune_or_release ~to_report:flip_report
+                              ~progress_note:
+                                (Printf.sprintf " flip=%d/%d" (!measured + 1) inline_flips)
+                              ?abandon arm ctx' timing'
+                          in
+                          record r;
+                          (* An abandoned flip spent a budget slot: it was measured, briefly, and
+                             lost. *)
+                          Int.incr measured;
+                          (match r with
+                          | Error (Autotune.Search_abandoned _, _) -> Int.incr abandoned
+                          | Ok _ | Error _ -> ());
+                          Some (`Measured (fa, r, ms, ctx', timing', rep, (arm, identity))))
                 in
-                let results = List.filter_map fc.LL.fc_alternatives ~f:try_alternative in
+                let outcomes = List.filter_map fc.LL.fc_alternatives ~f:try_alternative in
+                let results =
+                  List.filter_map outcomes ~f:(function `Measured m -> Some m | `Twin -> None)
+                in
                 let best =
-                  List.min_elt results ~compare:(fun (_, _, a, _, _, _) (_, _, b, _, _, _) ->
+                  List.min_elt results ~compare:(fun (_, _, a, _, _, _, _) (_, _, b, _, _, _, _) ->
                       Float.compare a b)
                 in
+                (* Every alternative that lost to the incumbent on clean evidence becomes a twin
+                   anchor: abandoned, or completed at a finite time no faster than the incumbent. A
+                   failed search measured nothing about the flip, and a sibling that beat the
+                   incumbent but not the group's best did not lose. *)
+                List.iter results ~f:(fun (_, r, ms, _, _, rep, (arm, identity)) ->
+                    (* Only clean evidence anchors: a search with a refused (contended) window
+                       ranked an incomplete candidate set, and one that timed nothing measured
+                       nothing -- its twin gets its own chance. The search-disabled report is the
+                       exception: nothing is ever timed there, nothing can ship from a flip, and
+                       anchoring is what makes a search-off chain list its twin classes. *)
+                    let search_off, clean =
+                      match rep with
+                      | Some { Autotune.outcome = Autotune.Search_disabled; _ } -> (true, true)
+                      | Some rep -> (false, rep.Autotune.timings_contended = 0)
+                      | None -> (false, false)
+                    in
+                    let lost_to_incumbent =
+                      match r with
+                      | Error (Autotune.Search_abandoned _, _) -> clean
+                      | Ok _ when search_off -> true
+                      | Ok _ -> clean && Float.is_finite ms && Float.(ms >= chain_ms)
+                      | Error _ -> false
+                    in
+                    match identity with
+                    | Some id when lost_to_incumbent -> Hashtbl.add lost ~key:id ~data:arm |> ignore
+                    | _ -> ());
                 (match best with
-                | Some (bfa, r, ms, ctx', timing', rep) when Float.(ms < chain_ms) -> (
+                | Some (bfa, r, ms, ctx', timing', rep, _) when Float.(ms < chain_ms) -> (
                     chain := (r, ms, ctx', timing', rep);
                     accepted := (tn, bfa.LL.fa_flip) :: !accepted;
                     if List.length fc.LL.fc_alternatives > 1 then
@@ -1666,7 +1767,7 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
                        leaves the node open too. *)
                     if
                       LL.equal_reading fc.LL.fc_default `Materialize
-                      && List.length results = List.length fc.LL.fc_alternatives
+                      && List.length outcomes = List.length fc.LL.fc_alternatives
                     then certain_mat := tn :: !certain_mat);
                 walk rest
           in
@@ -1675,11 +1776,13 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
             logf "flip refinement: %d flip(s) bound-pruned, %d measured" !pruned !measured;
           if !abandoned > 0 then
             logf "flip refinement: %d of %d measured flip(s) abandoned early" !abandoned !measured;
+          if !twinned > 0 then
+            logf "flip refinement: %d flip(s) skipped as structural twins of a lost flip" !twinned;
           let chain_result, chain_ms, _, _, chain_report = !chain in
           Autotune.progressf
             "event=flips_done candidates=%d budget=%d measured=%d pruned=%d abandoned=%d \
-             improved=%b best_ms=%s"
-            (List.length candidates) inline_flips !measured !pruned !abandoned
+             twinned=%d improved=%b best_ms=%s"
+            (List.length candidates) inline_flips !measured !pruned !abandoned !twinned
             Float.(chain_ms < winner_ms)
             (Autotune.progress_ms (Float.min chain_ms winner_ms));
           if Float.(chain_ms < winner_ms) then (

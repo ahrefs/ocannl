@@ -270,22 +270,31 @@ endpoint, whereas HIP's invalid exact-f16 and beyond-exact approximate rows are 
   "it ranked below `tune_inline_flips`" (gh-ocannl-558,
   [report-gh558-hip-flips.md](report-gh558-hip-flips.md)).
   `BENCH_TIMING_TRACE=1` (all three runners) splits a searching process's wall between candidate
-  timing and the rest (gh-ocannl-834): one stderr line per `Autotune.time_routine` call (the batch
-  depth it settled on, its launches, how many of its window's batches it `reused` from the
-  calibration (a depth-1 settle, gh-ocannl-1074), its warmup-plus-calibration and timed-loop
-  walls, and running totals, so a cell killed at its cap still leaves a lower bound) and one per
-  candidate attempt (a compile, unless `autotune_bound_pruning` prunes it first), plus a closing summary with the
-  depth histogram. An untagged call (the untuned control `autotune_log=true` times) has its warmup
-  and calibration counted as unattributed rather than as zero. A `timing-trace: search done` line
-  marks where the measured compile (`compile_s`) ended, so a cell cut off later is not read as a
-  search still running. Each call line is followed by a `timing-trace: decision` line
-  (gh-ocannl-1199) from `Autotune.on_batch_decision`: the search phase (`playoff` for the composite
-  playoff), the calibration exit that chose the depth (`measured_batch`, `affine_projection`,
-  `cap_measured`, `budget_exhausted`, ...), its latest affine fit with the fitted fixed and marginal
-  costs and the fit's verdict (`boundary_floor` is the gh-ocannl-1184 depth-2 retention), the
-  cap-directed probes, what the projection bound, wall-bounded fallback or rescue changed, the probe
-  budget used, and the admission verdict (`admitted`, `refused unbatched`, ...). It only observes
-  the tuner's seams, so the searched schedules are the ones an untraced run crowns.
+  timing and the rest (gh-ocannl-834). Every `Autotune.time_routine` call reports one record as it
+  returns (gh-ocannl-1263), printed as its calibration probes, one call line (the batch depth it
+  settled on, its launches -- a discarded contention window's included -- how many of its window's
+  batches it `reused` from the calibration (a depth-1 settle, gh-ocannl-1074), its
+  warmup-plus-calibration and timed-loop walls, and running totals, so a cell killed at its cap
+  still leaves a lower bound) and one `timing-trace: decision` line; plus one line per candidate
+  attempt (a compile, unless `autotune_bound_pruning` prunes it first) and a closing summary with
+  the depth histogram. Each search's `baseline` is an attempt too -- it is compiled, though a GPU
+  backend never dispatches it (gh-ocannl-532) -- so the trace's attempt count runs one per search
+  ahead of `autotune_progress`'s `attempts`, which leaves the baseline out. An untagged call (the
+  untuned control `autotune_log=true` times) is marked as such and counted apart. A tagged call
+  that raised after its pre-dispatch validation returns no record; the trace counts it as raised
+  and the summary then says INCOMPLETE. A `timing-trace: search done` line marks where the measured
+  compile (`compile_s`) ended, so a cell cut off later is not read as a search still running. The
+  decision line (gh-ocannl-1199) carries the search phase (`playoff` for the composite playoff),
+  the calibration exit that chose the depth (`measured_batch`, `affine_projection`,
+  `cap_measured`, `budget_exhausted`, ...), its latest affine fit with the fitted fixed and
+  marginal costs and the fit's verdict (`boundary_floor` is the gh-ocannl-1184 depth-2 retention),
+  the cap-directed probes, what the projection bound, wall-bounded fallback or rescue changed, the
+  probe budget used, and the admission verdict (`admitted`, `refused_unbatched`, ...). It only
+  observes the tuner, so the searched schedules are the ones an untraced run crowns. The same
+  settle and admission reach `results.jsonl` without the trace: each `tune` arm carries
+  `timing_decisions`, its search's counts keyed by settle and then admission (e.g.
+  `{"singles_reach_target":{"admitted":40},"measured_batch":{"admitted":12,"refused_contended":1}}`),
+  so a sweep compares calibration behaviour across boxes without scraping stderr.
 - `runners/pytorch/run.py` — flags: `--device cpu|mps|cuda`, `--regime exact|approximate`
   (exact, the default and the parity reference: `highest` matmul precision, cudnn tf32 off,
   hand-composed attention; approximate: torch's own defaults — `high` matmul precision,
@@ -331,6 +340,15 @@ endpoint, whereas HIP's invalid exact-f16 and beyond-exact approximate rows are 
   every regime, e.g. `gpt2_mini/cc/tuned` to reach a GPU tuned row without first sitting through
   an uncapped CPU search; the report lists it under "Cells skipped", and an entry naming no cell
   of the sweep is refused),
+  `--cell-flag [WORKLOAD/BACKEND/VARIANT[/PRECISION]:]KEY=VALUE` (repeatable: pass
+  `--ocannl_<key>=<value>` on the OCANNL cells' command lines in every regime, all of them or the ones
+  the selector names, `*` matching anything — e.g. `*/*/tuned:tune_inline_flips=16`; a commandline
+  key outranks the regime's profile, so this is the way to change a key the approximate payload
+  sets. The row records it as `ocannl_flags`, the cell label and the report's variant column show
+  `+KEY=VALUE`, and the regime gate accepts it as declared where the runner reports that value
+  from the commandline. The key must be one `ocannl_config.reference` documents and not one the
+  sweep sets itself — `backend`, `profile`, `autotune_progress` — and a selector naming no cell, or
+  two entries setting one key on one cell, are refused; gh-ocannl-1273),
   `--gpu metal|cuda|hip|none` (the GPU column of the matrix — OCANNL backend, PyTorch device,
   tinygrad device together; defaults to metal on macOS and cuda elsewhere, `none` runs a
   CPU-only matrix), `--no-fixture-digest-check` (measure fixtures that do not match
@@ -743,6 +761,16 @@ than the driver (`CUDA_ERROR_UNSUPPORTED_PTX_VERSION` at module load), run it wi
   the sweep dispatches `OCANNL_BACKEND` itself, and `OCANNL_AUTOTUNE_LOG` /
   `OCANNL_AUTOTUNE_CACHE_DIR` are documented ways to run one, so a filter would have to guess —
   and the keys worth catching are the ones nobody has enumerated yet.
+  What is inherited is not always what applied, though (gh-ocannl-1273): OCANNL resolves a key from
+  the commandline, then from a commandline-picked profile's payload, and only then from the
+  environment, so under `--profile approximate` an ambient `OCANNL_TUNE_INLINE_FLIPS=16` loses to
+  the payload's `tune_inline_flips=2`, and `OCANNL_BACKEND` always loses to the cell's own
+  `--ocannl_backend`. Each OCANNL row therefore also carries `ambient_ocannl_shadowed`, mapping
+  every inherited variable its cell's command line outranks to the argument that does (the
+  payload's key list is read from `ocannl_config.reference`'s checked quote of it); the failure
+  records carry it too, the sweep warns once before the first cell runs, and the report header
+  adds a line naming each outranked variable and in how many OCANNL rows. To give the cells such a
+  key, use `--cell-flag`.
 - **The peak-memory column** (gh-ocannl-1006, the report side of gh-ocannl-616). `peak MiB` is the
   peak device footprint over a cell's **timed steps**, and the column appears in a workload's
   table once any row in it measured one. Three things make it easy to misread, and the report
