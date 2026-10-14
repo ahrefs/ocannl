@@ -57,7 +57,9 @@ let respelled (kind : Utils.config_value_kind) default =
   match kind with
   | Flag -> if String.equal (String.lowercase default) "true" then " TRUE" else "0"
   | Integer -> "0" ^ default
-  | Float_number -> Printf.sprintf "%.3f" (Float.of_string default)
+  (* Exponent notation at round-trip precision: a default already written with three decimals
+     ([autotune_composite_playoff_margin]'s 0.005) is its own [%.3f] spelling. *)
+  | Float_number -> Printf.sprintf "%.17e" (Float.of_string default)
   | Keyword -> String.uppercase default ^ " "
   | Text -> " " ^ default ^ "  "
   | Positive_float_or_unset -> "0"

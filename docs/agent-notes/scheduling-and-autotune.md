@@ -912,9 +912,10 @@ files.
   (`mma 32x32x0 bgrid` vs `mma 16x32x0 bgrid-in`) — the "step search crowns weaker geometries
   than the per-site search" symptom. Exact mode, whose gaps are larger, crowned the per-site best
   in both. `bench_gpt` tunes with `~rounds:0`, so no beam round refines these crowns (next bullet).
-  The composite playoff re-times each key's singles within `playoff_margin` (0.5%) of its best,
-  at most `autotune_composite_playoff_width` (2; 0 = off, gh-ocannl-1259) per key, inside the
-  faster timed composite, as coordinate descent over the keys; its windows count in
+  The composite playoff re-times each key's singles within `autotune_composite_playoff_margin`
+  (0.005, i.e. 0.5%) of its best, at most `autotune_composite_playoff_width` (2; 0 = off,
+  gh-ocannl-1259) per key, inside the faster timed composite, as coordinate descent over the
+  keys; its windows count in
   `report.fiss_sketch_playoff_timed`, not in `fiss_sketch_timed`. It cost ~14 candidates and
   5-26% of search wall per arm. With it both tf32 replicates crowned `mma 16x32x0 bgrid-in`; the alternates
   it beat by ~1.3% inside the composite had tied it within 0.1% as singles, and the replayed step

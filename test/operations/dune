@@ -8041,7 +8041,8 @@
   ocannl_config
   (env_var OCANNL_AUTOTUNE_LOG)
   (env_var OCANNL_AUTOTUNE_PROGRESS)
-  (env_var OCANNL_AUTOTUNE_COMPOSITE_PLAYOFF_WIDTH))
+  (env_var OCANNL_AUTOTUNE_COMPOSITE_PLAYOFF_WIDTH)
+  (env_var OCANNL_AUTOTUNE_COMPOSITE_PLAYOFF_MARGIN))
  (modules autotune_composite_playoff)
  (libraries base ocannl stdio unix arrayjit.verdict ll_test)
  (preprocess
@@ -8057,6 +8058,7 @@
  (deps
   ocannl_config
   (env_var OCANNL_AUTOTUNE_COMPOSITE_PLAYOFF_WIDTH)
+  (env_var OCANNL_AUTOTUNE_COMPOSITE_PLAYOFF_MARGIN)
   (env_var OCANNL_AUTOTUNE_ROUND_EXPANSION))
  (modules autotune_round_expansion)
  (libraries base ocannl stdio arrayjit.verdict ll_test)

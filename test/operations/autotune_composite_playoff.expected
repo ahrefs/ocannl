@@ -15,6 +15,9 @@ near: singles 0.3% apart reach the playoff: true
 near: only the single within the margin plays, one per segment: true
 spread: the coarse composite was timed: true
 spread: singles 1% apart leave the playoff nothing to time: true
+wide: the same singles as spread, so only the margin differs: true
+wide: a 1.5% margin lets each segment's runner-up 1% behind reach the playoff: true
+wide: only the single within the wider margin plays, one per segment: true
 off: the reference search played windows a width-0 search must drop: true
 off: width 0 times no playoff window: true
 off: width 0 times exactly the reference's candidates outside its playoff, in order: true

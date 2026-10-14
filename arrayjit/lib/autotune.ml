@@ -489,14 +489,16 @@ let round_expansion_name = function
    two replicate searches put the same single 0.02-0.03 ms apart, which is as large as the whole gap
    between the site's top four geometries. The per-key crown among them was a lottery (one replicate
    crowned [mma 32x32x0 bgrid], the other [mma 16x32x0 bgrid-in]). The playoff re-ranks those
-   near-ties where the backdrop is small: inside the composite. A single within [playoff_margin] of
-   its key's best single is close enough that the backdrop's noise could have inverted the order. At
-   most [playoff_width] of them per key go to the playoff, nearest first: config
+   near-ties where the backdrop is small: inside the composite. A single within the playoff margin
+   of its key's best single is close enough that the backdrop's noise could have inverted the order:
+   config [autotune_composite_playoff_margin], a fraction of that best, default
+   [default_playoff_margin]; a box whose backdrop is noisier inverts wider gaps, which only a wider
+   margin reaches. At most [playoff_width] of them per key go to the playoff, nearest first: config
    [autotune_composite_playoff_width], default [default_playoff_width], and 0 turns the playoff off
-   (gh-ocannl-1259). Changing the margin or the default changes the default search menu, so bump
-   [Schedule_cache.entry_version]; a stated width is [Search_shaping], like the beam width, so a
-   crown found under one width replays under another. *)
-let playoff_margin = 0.005
+   (gh-ocannl-1259). Changing either default changes the default search menu, so bump
+   [Schedule_cache.entry_version]; a stated margin or width is [Search_shaping], like the beam
+   width, so a crown found under one setting replays under another. *)
+let default_playoff_margin = 0.005
 let default_playoff_width = 2
 
 (* The beam holds no compiled candidate exactly when nothing was timed, which every consumer of the
@@ -4163,6 +4165,18 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
       @@ Utils.get_global_arg ~arg_name:"autotune_composite_playoff_width"
            ~default:(Int.to_string default_playoff_width))
   in
+  (* A negative margin admits no single and so means what width 0 says; it is floored at 0 (exact
+     ties only) rather than given a second spelling of off. A malformed value, NaN included, is the
+     default, as a malformed width is. *)
+  let playoff_margin =
+    match
+      float_setting ~default:default_playoff_margin
+      @@ Utils.get_global_arg ~arg_name:"autotune_composite_playoff_margin"
+           ~default:(Float.to_string default_playoff_margin)
+    with
+    | m when Float.is_nan m -> default_playoff_margin
+    | m -> Float.max 0. m
+  in
   (* Read only where a round can run, so a malformed value refuses the searches it would shape and
      no other call (like [autotune_timing] above). *)
   let round_expansion =
@@ -5814,12 +5828,13 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
           sr_composite_eligible := List.length recombined >= 2;
           if !sr_composite_eligible then
             Option.iter (try_spec (Fiss (F_split { sites = recombined }))) ~f:admit;
-          (* The composite playoff (gh-ocannl-1166; see [playoff_margin]), after every recombination
-             composite so the [playoff] progress phase holds only its windows: starting from the
-             faster timed composite, each key in turn tries its near-tie singles in the composite's
-             place, and a faster alternate becomes the incumbent the later keys build on. Coordinate
-             descent over the keys, at most [playoff_width] alternates each, so the cost is linear
-             in the keyed segments rather than the cartesian product the recombination avoids. *)
+          (* The composite playoff (gh-ocannl-1166; see [default_playoff_margin]), after every
+             recombination composite so the [playoff] progress phase holds only its windows:
+             starting from the faster timed composite, each key in turn tries its near-tie singles
+             in the composite's place, and a faster alternate becomes the incumbent the later keys
+             build on. Coordinate descent over the keys, at most [playoff_width] alternates each, so
+             the cost is linear in the keyed segments rather than the cartesian product the
+             recombination avoids. *)
           let playoff_contenders ~fine_ok ~current key =
             let singles =
               List.filter_map !fiss_single_results ~f:(fun (k, fine, (p, ms)) ->

@@ -7,7 +7,7 @@
    through [Autotune.on_candidate_measured] (gh-ocannl-1027) and the windows are opted out of host
    contention ([with_uncontended_test_windows], gh-ocannl-1156). Everything that is not a
    per-segment sketch is scripted far slower than any of them, so the crown is a composite's by
-   construction. Four searches over one two-matmul chain.
+   construction. Every search is over one two-matmul chain.
 
    In [ties] every single measures the same, so each segment has near-tie contenders, and each later
    composite is scripted faster than the one before: every admitted playoff window swaps, so each
@@ -19,7 +19,10 @@
 
    In [near] the singles are 0.3% apart in attempt order, inside the playoff margin, so each
    segment's runner-up single plays and the one behind it (0.6%) does not; in [spread] they are 1%
-   apart, wider than the margin, so the playoff times nothing.
+   apart, wider than the margin, so the playoff times nothing. [wide] is [spread] with
+   [autotune_composite_playoff_margin=0.015]: over the same singles, the runner-up 1% behind its
+   segment's best now plays and the one 2% behind does not, so the margin, not the width, decides
+   which singles enter.
 
    [off] is [ties] with [autotune_composite_playoff_width=0] (gh-ocannl-1259): it must time exactly
    the candidates [ties] timed outside its playoff, in the same order, and crown the recombined
@@ -86,6 +89,7 @@ type observed = {
 }
 
 let playoff_width_key = "autotune_composite_playoff_width"
+let playoff_margin_key = "autotune_composite_playoff_margin"
 
 (* A list of records as a report counts them: per (settle, admission), in constructor order. *)
 let tally (calls : Autotune.timing_call list) =
@@ -100,9 +104,10 @@ let counted (r : Autotune.report) =
 
 (* One search under a scripted ranking: [single n] is the n-th single's time (0-based, attempt
    order), [composite n] the n-th composite's. [?width] states [autotune_composite_playoff_width]
-   for this search only (at the config-file level; the stanza declares the key's environment
-   variable, so an ambient override reruns the test, whose width claims then fail). *)
-let search ?(trace = true) ?(log = false) ?progress ?width ~tag ~single ~composite () =
+   and [?margin] [autotune_composite_playoff_margin] for this search only (at the config-file level;
+   the stanza declares both keys' environment variables, so an ambient override reruns the test,
+   whose width and margin claims then fail). *)
+let search ?(trace = true) ?(log = false) ?progress ?width ?margin ~tag ~single ~composite () =
   let report = ref None and singles = ref 0 and composites = ref [] and calls = ref [] in
   let measured = ref [] in
   let old_measured = !Autotune.on_candidate_measured in
@@ -113,10 +118,13 @@ let search ?(trace = true) ?(log = false) ?progress ?width ~tag ~single ~composi
   Exn.protect
     ~finally:(fun () ->
       Autotune.on_candidate_measured := old_measured;
-      Hashtbl.remove Utils.config_file_args playoff_width_key)
+      Hashtbl.remove Utils.config_file_args playoff_width_key;
+      Hashtbl.remove Utils.config_file_args playoff_margin_key)
     ~f:(fun () ->
       Option.iter width ~f:(fun w ->
           Hashtbl.set Utils.config_file_args ~key:playoff_width_key ~data:(Int.to_string w));
+      Option.iter margin ~f:(fun m ->
+          Hashtbl.set Utils.config_file_args ~key:playoff_margin_key ~data:(Float.to_string m));
       observed @@ fun () ->
       (Autotune.on_candidate_measured :=
          fun ~label ~digest:_ _ms ->
@@ -230,6 +238,15 @@ let width_claim name ~width positions =
   p_all name (List.dedup_and_sort all ~compare:Int.compare) ~f:(fun pos ->
       List.count all ~f:(Int.equal pos) <= width)
 
+(* A single's keyed segment: the tag its label ends with ([@<digests>:u<n>]). *)
+let segment_of label = List.last_exn (String.split label ~on:'@')
+
+(* The singles a search timed, per segment, in attempt order of the segments. *)
+let singles_per_segment (o : observed) =
+  List.filter o.measured ~f:is_single
+  |> List.sort_and_group ~compare:(fun a b -> String.compare (segment_of a) (segment_of b))
+  |> List.map ~f:List.length
+
 let faster n = 10. -. (0.1 *. Float.of_int n)
 
 (* Bound at the top level: the trace claims at the end compare it with an unobserved rerun. *)
@@ -305,7 +322,31 @@ let () =
   let r = spread.report in
   p "spread: the coarse composite was timed" (Poly.equal r.Autotune.fiss_sketch_composite `Timed);
   p "spread: singles 1% apart leave the playoff nothing to time"
-    (r.Autotune.fiss_sketch_playoff_timed = 0 && List.length spread.composite_ms = 1)
+    (r.Autotune.fiss_sketch_playoff_timed = 0 && List.length spread.composite_ms = 1);
+  let wide =
+    search ~margin:0.015 ~tag:"wide"
+      ~single:(fun n -> 100. *. Float.int_pow 1.01 n)
+      ~composite:faster ()
+  in
+  let r = wide.report in
+  p "wide: the same singles as spread, so only the margin differs"
+    (List.equal String.equal
+       (List.filter wide.measured ~f:is_single)
+       (List.filter spread.measured ~f:is_single));
+  (* The recombined composite holds each segment's best single, so its runner-up is the one
+     contender a segment has. *)
+  p "wide: a 1.5% margin lets each segment's runner-up 1% behind reach the playoff"
+    (r.Autotune.fiss_sketch_playoff_timed = List.length (singles_per_segment wide));
+  let labels = List.map wide.composite_ms ~f:fst in
+  let challenges =
+    match labels with
+    | [] -> []
+    | _ ->
+        List.zip_exn (List.drop_last_exn labels) (List.tl_exn labels)
+        |> List.map ~f:(fun (incumbent, window) -> changed incumbent window)
+  in
+  width_claim "wide: only the single within the wider margin plays, one per segment" ~width:1
+    challenges
 
 (* gh-ocannl-1259: the playoff's width is a setting, and 0 is off. [ties] is the reference: its
    composite windows are the recombined composite and then exactly its playoff windows (claimed
