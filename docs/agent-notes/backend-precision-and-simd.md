@@ -1837,9 +1837,12 @@ files.
   `ocannl_pow_f32`/`ocannl_pow_f64` (`Builtins_cc.runtime_power_builtins`, gh-ocannl-1240), half
   and bf16 widened into the f32 one. CUDA's `--use_fast_math` lowers `powf` to
   `exp2(y * log2(x))`, NaN for every negative base, integral exponents included. The helper takes
-  an integral exponent on `|x|` and restores the sign from its parity (the sign read bitwise, so
-  `-0` is negative); any other exponent keeps the vendor call, so a negative base under a
-  fractional exponent stays NaN. Like the integer-power helper, a domain fix: the magnitude is
+  an integral exponent on `|x|` and restores the sign from its parity; any other exponent keeps
+  the vendor call, so a negative base under a fractional exponent stays NaN, and a zero exponent
+  gives 1 for every base. Both operands are classified by their bits: the base's sign bit (so
+  `-0` is negative), and the exponent's magnitude, because `--use_fast_math` implies `--ftz=true`
+  and a subnormal exponent would otherwise compare equal to 0 and to its own `truncf`. Metal's
+  own `pow` flushes such an exponent and answers 1 (M4 Max), which the test records as a skip. Like the integer-power helper, a domain fix: the magnitude is
   the vendor's. Metal keeps its own `pow`, which under its fast math functions already returned
   these powers on M4 Max. `runtime_integer_power` executes it on the devices, and
   `runtime_power_fast_math_emulation` compiles the helper on the host under a macro emulating

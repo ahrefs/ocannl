@@ -42,6 +42,13 @@ let negative = List.concat_map bases ~f:(fun x -> List.map exponents ~f:(fun n -
 let mirrored = List.map negative ~f:(fun (x, n) -> (Float.neg x, n))
 let fractional = [ (-2., 0.5); (-1.5, -1.5); (-0.75, 2.5) ]
 
+(* f32 subnormal exponents: CUDA's fast math flushes them to zero in arithmetic and comparisons, so
+   the helper classifies them by their bits to keep them fractional. Metal's own [pow] flushes them
+   too and answers as for a zero exponent (M4 Max), so the claim skips Metal; cc's libm keeps
+   them. *)
+let subnormal_fractional = [ (-2., 0x1p-149); (-1.5, -0x1p-130) ]
+let is_metal = String.equal backend_name "metal"
+
 (* Runs [x ** e] for each [(x, e)] at [prec], with both operands read from buffers. *)
 let run ~prec ~narrow ~name ~first_id cases =
   let len = List.length cases in
@@ -64,7 +71,7 @@ let run ~prec ~narrow ~name ~first_id cases =
 
 let bits v = Int64.bits_of_float v
 
-let check ~prec ~narrow ~tol ~name ~first_id ~call =
+let check ?subnormal ~prec ~narrow ~tol ~name ~first_id ~call () =
   Verdict.case name (fun () ->
       let as_float (x, n) = (x, Float.of_int n) in
       let got = run ~prec ~narrow ~name ~first_id (List.map (negative @ mirrored) ~f:as_float) in
@@ -88,6 +95,13 @@ let check ~prec ~narrow ~tol ~name ~first_id ~call =
       p_all
         (name ^ ": negative bases under run-time fractional exponents stay NaN")
         (Array.to_list nan) ~f:Float.is_nan;
+      Option.iter subnormal ~f:(fun cases ->
+          let got = run ~prec ~narrow ~name:(name ^ "_subnormal") ~first_id:(first_id + 70) cases in
+          Array.iter got ~f:(fun v ->
+              Stdio.eprintf "(not part of the golden) %s subnormal exponent: %h\n" name v);
+          gated_all ~when_:(not is_metal) ~on:backend_name
+            (name ^ ": negative bases under run-time subnormal exponents stay NaN")
+            (Array.to_list got) ~f:Float.is_nan);
       let zero_bases = [ -0.; 0.; Float.infinity; Float.neg_infinity; Float.nan ] in
       let ones =
         run ~prec ~narrow ~name:(name ^ "_zero") ~first_id:(first_id + 80)
@@ -105,8 +119,8 @@ let check ~prec ~narrow ~tol ~name ~first_id ~call =
 
 let () =
   check ~prec:Ops.single ~narrow:f32 ~tol:0x1p-18 ~name:"rpow_f32" ~first_id:19700
-    ~call:"ocannl_pow_f32("
+    ~subnormal:subnormal_fractional ~call:"ocannl_pow_f32(" ()
 
 let () =
   check ~prec:Ops.half ~narrow:f16 ~tol:0x1p-10 ~name:"rpow_f16" ~first_id:19800
-    ~call:"__float2half(ocannl_pow_f32(__half2float("
+    ~call:"__float2half(ocannl_pow_f32(__half2float(" ()

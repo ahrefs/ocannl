@@ -118,6 +118,8 @@ let () =
               List.for_all
                 (fun (pow, y) -> bits (pow x y) = bits 1.)
                 [ (f32_pow, 0.); (f32_pow, -0.); (f64_pow, 0.); (f64_pow, -0.) ]);
-          let fractional = [ (-2., 0.5); (-1.5, -1.5); (-0.75, 2.5); (-2., Float.nan) ] in
+          let fractional =
+            [ (-2., 0.5); (-1.5, -1.5); (-0.75, 2.5); (-2., Float.nan); (-2., 0x1p-149) ]
+          in
           p_all "negative bases under fractional or NaN exponents stay NaN" fractional
             ~f:(fun (x, y) -> Float.is_nan (f32_pow x y) && Float.is_nan (f64_pow x y))))
