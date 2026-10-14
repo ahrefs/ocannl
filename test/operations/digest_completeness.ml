@@ -17,9 +17,9 @@
    reads happen after the lowered code the digest names, so they cannot reach it — which is exactly
    how gh-ocannl-568 happened.
 
-   The exemptions (search-shaping and execution-neutral) are deliberately not machine-checkable:
-   they are the reviewable text the issue asks for, printed below so that a diff shows when one
-   changes. *)
+   The exemptions (search-shaping, placement-shaping, untimed-model and execution-neutral) are
+   deliberately not machine-checkable: they are the reviewable text the issue asks for, printed
+   below so that a diff shows when one changes. *)
 
 open Base
 open Stdio
@@ -64,6 +64,7 @@ let class_name : Utils.config_key_class -> string = function
   | Utils.Keyed component -> "keyed: " ^ component
   | Utils.Search_shaping -> "search-shaping"
   | Utils.Placement_shaping -> "placement-shaping"
+  | Utils.Untimed_model -> "untimed-model"
   | Utils.Execution_neutral -> "execution-neutral"
 
 let () =

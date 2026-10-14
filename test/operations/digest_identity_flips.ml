@@ -7,7 +7,8 @@
 
    - code-borne: the canonical digest changes (and with it the whole key), - keyed: the digest is
    UNCHANGED — the flip is invisible to the lowered code, which is the hazard — while the cache key
-   separates the regimes, - search-shaping / placement-shaping / execution-neutral: neither changes.
+   separates the regimes, - search-shaping / placement-shaping / untimed-model / execution-neutral:
+   neither changes.
 
    The issue's own caution applies: flips are calibration, not the mechanism. Absence of change is
    weak evidence in general, so this covers a handful of representatives rather than every key, and
@@ -151,6 +152,28 @@ let () =
   unset_config "tune_inline_flips";
   p "placement-shaping knobs leave the identity untouched"
     (String.equal digest0 digest_p && String.equal key0 key_p);
+
+  (* Untimed-model (gh-ocannl-1241): it steers [Autotune.model_default], which no compile here
+     calls, so this pins that neither the lowering nor the key derivation ever starts reading it;
+     its exclusion from the search-trajectory identity is [flip_abandonment]'s claim. *)
+  let model_keys =
+    [
+      ("model_default_schedule", "true");
+      ("model_default_placements", "2");
+      ("model_default_geometry_lattice", "true");
+    ]
+  in
+  List.iter model_keys ~f:(fun (key, data) -> set_config key data);
+  let resolved =
+    List.map model_keys ~f:(fun (key, data) ->
+        (data, Option.map (Utils.profile_key_source key) ~f:fst))
+  in
+  let digest_u, key_u = identity_of ctx in
+  List.iter model_keys ~f:(fun (key, _) -> unset_config key);
+  p_all ~min:3 "the untimed-model knobs took effect" resolved ~f:(fun (data, got) ->
+      Option.equal String.equal got (Some data));
+  p "untimed-model knobs leave the identity untouched"
+    (String.equal digest0 digest_u && String.equal key0 key_u);
 
   (* The debug gates bite only at log_level > 1, so the codegen component hashes the EFFECTIVE
      predicates (Codex P1 on PR #337): the regimes must separate where they change the kernel, and

@@ -226,6 +226,13 @@ type config_key_class =
           single [Autotune.tune] call reads it, so it is neither in the cache key nor in the search
           trajectory's identity ({!config_class_fingerprint} of [Search_shaping]): a search's timed
           record is the same record whatever the level above it was told (gh-ocannl-1192). *)
+  | Untimed_model
+      (** Steers [Autotune.model_default], the untuned regime's pick by the analytic cost model:
+          whether a recipe's untuned compile routes through it, and how widely it searches. It times
+          nothing and neither replays nor stores a schedule-cache entry, and no [Autotune.tune] call
+          reads it, so it is neither in the cache key nor in the search trajectory's identity
+          ({!config_class_fingerprint} of [Search_shaping]): a search's timed record is the same
+          record whatever the untuned regime beside it was told (gh-ocannl-1241). *)
   | Execution_neutral
       (** Host-side behavior only: logging, debug artifacts, directories, validation and error
           reporting, allocation layout, launch mechanics. Nothing a kernel does depends on it. *)
@@ -353,9 +360,6 @@ let config_key_classification : (config_key_class * string * string list) list =
         "autotune_keep_fraction";
         "autotune_bound_pruning";
         "autotune_calibration_file";
-        "model_default_schedule";
-        "model_default_placements";
-        "model_default_geometry_lattice";
         "model_peak_flops";
         "model_peak_memory_bandwidth";
         "strict_failure_classification";
@@ -389,6 +393,14 @@ let config_key_classification : (config_key_class * string * string list) list =
        of them shipped, and a decision re-derived from the arms is as valid a winner as a replayed \
        one",
       [ "tune_placement_store" ] );
+    ( Untimed_model,
+      "it steers Autotune.model_default -- whether the recipes' untuned compiles route through it, \
+       how many placement levels it branch-and-bounds, whether its family search lifts the \
+       tile-size lattice -- which picks by the analytic model without timing anything and never \
+       reads or writes the schedule cache; Autotune.tune reads none of them. The envelope keys \
+       (model_peak_flops, model_peak_memory_bandwidth) stay search-shaping: tune's keep-fraction \
+       ranking and bound pruning read them too",
+      [ "model_default_schedule"; "model_default_placements"; "model_default_geometry_lattice" ] );
     ( Execution_neutral,
       "startup and configuration-sourcing chatter, and which descriptor foreign C-library chatter \
        follows",

@@ -3844,7 +3844,9 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
      sampling. The keys that steer the placement level above this call ([Utils.Placement_shaping]:
      the flip budget and ordering, the shipped arm, the placement store) are not in it: no search
      reads them, and with them in it a warm chain run under [tune_placement_store=false] searched
-     every abandoned flip in full (gh-ocannl-1192). *)
+     every abandoned flip in full (gh-ocannl-1192). Nor are the keys of the untuned regime's model
+     pick ([Utils.Untimed_model]: [model_default_*]), which only {!model_default} reads
+     (gh-ocannl-1241). *)
   let search_shape =
     Printf.sprintf "search=%b beam=%d rounds=%d repeats=%d keep=%h split_sites=%d blocks=%s|%s"
       search beam_width rounds repeats keep_fraction max_split_reduce_sites
