@@ -125,14 +125,24 @@ let () =
 
 (* Two segments can admit the same parameters (two matmul segments sharing a tile geometry), and
    their one-entry per-segment candidates schedule different kernels: the label names the segment
-   too. The keys are the shape the search uses, structural digests of two segments. *)
+   too. The keys are the shape the search uses: structural digests of segments, with their first
+   units -- and two segments of one structure but different placements share the digest, so their
+   keys differ in the units alone (gh-ocannl-1243). *)
 let () =
-  let key_a = Stdlib.Digest.(to_hex (string "segment a"))
-  and key_b = Stdlib.Digest.(to_hex (string "segment b")) in
+  let digest_a = Stdlib.Digest.(to_hex (string "segment a"))
+  and digest_b = Stdlib.Digest.(to_hex (string "segment b")) in
+  let keys =
+    [
+      { Autotune.key_units = [ 0 ]; key_digest = digest_a };
+      { key_units = [ 2 ]; key_digest = digest_b };
+      { key_units = [ 4 ]; key_digest = digest_a };
+      { key_units = [ 0; 4 ]; key_digest = digest_a };
+    ]
+  in
   p_pairwise_distinct
-    "one-entry sketch candidates of two segments with equal parameters print apart"
+    "one-entry sketch candidates of distinct segment keys with equal parameters print apart"
     (List.concat_map [ false; true ] ~f:(fun fine ->
-         List.map [ key_a; key_b ] ~f:(fun key -> Autotune.fiss_sketch_label ~fine [ (key, lo) ])))
+         List.map keys ~f:(fun key -> Autotune.fiss_sketch_label ~fine [ (key, lo) ])))
     ~equal:String.equal ~to_string:Fn.id
 
 (* --- Part 2: round candidates name their segment and move --- *)

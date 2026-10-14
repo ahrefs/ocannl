@@ -138,7 +138,7 @@ let zero_sched rut tns = if is_gpu then Sched.zero_expansion ~limits:rut.limits 
 
 let fission rut ?arity_cuts ?fold_zeros ?keep_mapping ?segmentation () =
   (* A recorded segmentation is applied with empty schedules: these checks are about the cuts. *)
-  let replay = Option.map segmentation ~f:(fun plan -> (plan, fun _ _ -> [])) in
+  let replay = Option.map segmentation ~f:(fun plan -> (plan, fun _ _ -> Some [])) in
   Sched.fission_segmented ~promote_locals:is_gpu ?arity_cuts ?fold_zeros ?keep_mapping ?replay
     ~preset:(preset rut) ~zero_sched:(zero_sched rut) ~static_indices:[] (copy rut.base_opt)
 

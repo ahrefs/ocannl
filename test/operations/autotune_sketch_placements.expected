@@ -1,0 +1,13 @@
+differ: two matmul segments share a structural digest: true
+differ: every single compiles the enumerated segmentation: true
+differ: a single is seeded on another segment: true
+differ: the twins differ in placements: true
+differ: a single sketches the first twin alone: true
+differ: a single sketches the second twin alone: true
+differ: no single sketches both twins: true
+agree: two matmul segments share a structural digest: true
+agree: every single compiles the enumerated segmentation: true
+agree: a single is seeded on another segment: true
+agree: the twins agree in placements: true
+agree: a single sketches the twins: true
+agree: every single that sketches one twin sketches both: true

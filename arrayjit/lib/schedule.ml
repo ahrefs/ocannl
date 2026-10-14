@@ -8029,15 +8029,21 @@ let fission_segmented ?(promote_locals = false) ?(arity_cuts = false) ?(fold_zer
   let max_chain = if arity_cuts then Some Int.max_value else None in
   let units = collect_units ?max_chain ~fold:(reduction_zero_fold ~zero_sched opt) plc opt stmts in
   (* The schedule of the [i]th segment: a replay's own, by position (segments sharing a structural
-     digest can differ in placements, hence in kind and schedule), or the caller's per-kind ones. *)
+     digest can differ in placements, hence in kind and schedule), or the caller's per-kind ones --
+     also where a replay leaves the segment to them ([None], gh-ocannl-1243). *)
   let schedule_of i (seg : segment option) pre =
-    match (replay, seg) with
-    | Some (_, schedule), _ -> schedule i pre
-    | None, (None | Some { g_kind = `Normal; _ }) -> preset pre
-    | None, Some { g_kind = `Solo; _ } -> []
-    | None, Some ({ g_kind = `Zeros; _ } as seg) ->
-        zero_sched
-          (List.filter_map seg.g_units ~f:(fun u -> Option.bind u.f_sum ~f:(fun s -> s.s_top_zero)))
+    let by_kind () =
+      match seg with
+      | None | Some { g_kind = `Normal; _ } -> preset pre
+      | Some { g_kind = `Solo; _ } -> []
+      | Some ({ g_kind = `Zeros; _ } as seg) ->
+          zero_sched
+            (List.filter_map seg.g_units ~f:(fun u ->
+                 Option.bind u.f_sum ~f:(fun s -> s.s_top_zero)))
+    in
+    match replay with
+    | Some (_, schedule) -> ( match schedule i pre with Some s -> s | None -> by_kind ())
+    | None -> by_kind ()
   in
   let units_arr = Array.of_list units in
   let fallback seg_units =
