@@ -160,9 +160,17 @@ type sketch_params = {
   sk_pack_prec : Ir.Ops.prec option;
   sk_tile : Ir.Register_tile.t option;
 }
+[@@deriving sexp]
 (** Parameters of one matmul-sketch seed candidate; see {!Sketch_families.sketch_params} for field
     documentation. Exposed for tests (the seeding pre-filter of gh-ocannl-479 and the mixed
     grid-outermost shape of gh-ocannl-473 are asserted on directly). *)
+
+val sketch_params_label : sketch_params -> string
+(** How a sketch's parameters print inside its candidate label ([W_sketch[...]], and each entry of
+    [F_sketch[...]]) in the [autotune_log] lines and {!report.best_label}: every field renders, so
+    two seeds that differ in any one field — a swizzled, pipelined or register-tile twin of one
+    geometry — never share a label (gh-ocannl-1230). Contains no [','], the separator of a
+    composite's entries. *)
 
 type matmul_site = {
   m_i : Ir.Indexing.symbol;
@@ -969,7 +977,7 @@ type report = {
           reader of the artifact does not have at all. *)
   best_label : string;
       (** The crowned candidate's spec label — the same string the [autotune_log] lines carry (e.g.
-          ["F_sketch[mma-gpu 16x32x32 ep]"]). ["baseline"] when no candidate beat the serial
+          ["F_sketch[mma-gpu 16x32x32 simd32 ep]"]). ["baseline"] when no candidate beat the serial
           baseline, and [""] exactly when nothing was timed — including the states that time nothing
           by construction, which say so in [outcome] rather than through this string. Which
           candidate won is otherwise recoverable only by matching [best_ms] against the log's

@@ -211,16 +211,15 @@ let () =
     (r.Autotune.fiss_sketch_playoff_swaps = r.Autotune.fiss_sketch_playoff_timed);
   (* Every window swapped, so each window's incumbent is the window before it: an alternate built
      from the recombined composite instead of the swapped incumbent differs from it in two segments.
-     "At most one" rather than "exactly one": a label does not render every parameter (two register
-     tile geometries of one tile print alike), so a genuine one-segment change can read as none. *)
+     Exactly one: a sketch's label renders every parameter (gh-ocannl-1230), so two register-tile
+     geometries of one tile print apart and a one-segment change cannot read as none. *)
   let labels = List.map ties.composite_ms ~f:fst in
   let challenges =
     List.zip_exn (List.drop_last_exn labels) (List.tl_exn labels)
     |> List.map ~f:(fun (incumbent, window) -> changed incumbent window)
   in
-  p_all "ties: each window differs from the incumbent it challenged in at most one segment"
-    challenges ~f:(fun c -> List.length c <= 1);
-  p_exists "ties: some window visibly changes a segment" challenges ~f:(fun c -> List.length c = 1);
+  p_all "ties: each window differs from the incumbent it challenged in exactly one segment"
+    challenges ~f:(fun c -> List.length c = 1);
   width_claim "ties: no segment is challenged by more than two windows" ~width:2 challenges;
   (match List.last ties.composite_ms with
   | Some (label, ms) ->
@@ -242,15 +241,12 @@ let () =
   | (first, _) :: windows ->
       p "slower: the crown is the recombined composite" (String.equal r.Autotune.best_label first);
       let challenges = List.map windows ~f:(fun (window, _) -> changed first window) in
-      p_all "slower: each window differs from the recombined composite in at most one segment"
-        challenges ~f:(fun c -> List.length c <= 1);
-      p_exists "slower: some window visibly changes a segment" challenges ~f:(fun c ->
-          List.length c = 1);
+      p_all "slower: each window differs from the recombined composite in exactly one segment"
+        challenges ~f:(fun c -> List.length c = 1);
       width_claim "slower: no segment is challenged by more than two windows" ~width:2 challenges
   | [] ->
       p "slower: the crown is the recombined composite" false;
-      p "slower: each window differs from the recombined composite in at most one segment" false;
-      p "slower: some window visibly changes a segment" false;
+      p "slower: each window differs from the recombined composite in exactly one segment" false;
       p "slower: no segment is challenged by more than two windows" false);
   let near =
     search ~tag:"near" ~single:(fun n -> 100. *. Float.int_pow 1.003 n) ~composite:faster ()

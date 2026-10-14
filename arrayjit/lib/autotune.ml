@@ -1974,8 +1974,15 @@ let model_prefilter ~keep_fraction (scored : ('a * float option) list) : ('a * f
     candidates return one element per segment, with per-segment schedules keyed by the pre-schedule
     segment's canonical digest. *)
 
+(* A beam-expansion candidate's provenance (gh-ocannl-1230): the parent it extends, by its digest
+   tag ({!dshort}, the tag the round's beam log and every timing line print), the unit the move
+   extends ([None] whole-routine, [Some i] the [i]th segment), and the appended move. Read only by
+   {!spec_label}: the saved forms already end in the move, so compilation never consults it, but
+   without it every round candidate of one parent prints the same label. [None] for a replay. *)
+type move = { mv_parent : string; mv_segment : int option; mv_op : SC.saved_optop }
+
 type whole_flavor =
-  | W_saved of SC.saved_schedule
+  | W_saved of SC.saved_schedule * move option
   | W_preset of { block_size : int option }
   | W_sketch of sketch_params
 
@@ -1990,7 +1997,7 @@ type fiss_flavor =
               contains the behavior the user gets without tuning: on launch-overhead-bound workloads
               the aggressive [min_parallel:1] presets can all lose to it. *)
     }
-  | F_saved of SC.saved_segment list
+  | F_saved of SC.saved_segment list * move option
       (** Replay of a fissioned winner (gh-ocannl-1164): the routine is cut where the saved segments
           say ({!Sched.fission_segmented}'s [replay]), never re-segmented under the current policy,
           and the [i]th segment gets the [i]th saved schedule — by position, never by digest — once
@@ -2017,7 +2024,7 @@ type fiss_flavor =
           pair is exactly the materialized cross-nest edge fission cuts at. Each resulting segment
           then gets the aggressive default preset — the block loop parallelizes pass 1, the combine
           nest annotates like any small kernel. *)
-  | F_split_saved of SC.saved_schedule * SC.saved_segment list
+  | F_split_saved of SC.saved_schedule * SC.saved_segment list * move option
       (** Replay of a split-reduce winner: the whole-routine prelude (resolved against the base
           canonical form, re-minting the partials node and fresh symbols via [SC.of_saved]), then
           the saved segments of the {e post-prelude} routine, replayed exactly like [F_saved]. *)
@@ -2265,77 +2272,88 @@ let spec_expects_mma = function
   | Fiss (F_sketch { entries; _ }) -> List.exists entries ~f:(fun (_, p) -> p.sk_mma)
   | _ -> false
 
-(* The swizzled staged twin is labeled apart from its plain sibling (gh-ocannl-481 item 3, D3): the
-   two are otherwise identical, so a timing report that could not name which is which would be
-   reporting the same candidate twice. *)
-let swz_label p =
-  match p.sk_swizzle with
-  | None -> ""
-  | Some LL.Swizzle_elem -> " swz-elem"
-  | Some LL.Swizzle_b128 -> " swz-b128"
+(* A sketch's label renders EVERY field of its [sketch_params] (gh-ocannl-1230): the tuner seeds
+   twins that differ in a single field — the swizzled, pipelined, widened-pack, batch-grid and
+   register-tile twins of one geometry — so a field the label leaves out makes two candidates read
+   identically in every search log, and either can be crowned under that one label.
+   test/operations/autotune_labels enumerates the fields from the type's derived s-expression and
+   checks that changing any one of them changes the label, so a new field fails there until it is
+   rendered here. Tokens print only where a field departs from its common value, so a typical label
+   stays short. *)
+let sketch_params_label p =
+  let flag b token = if b then token else "" in
+  String.concat
+    [
+      flag p.sk_conv "conv-";
+      flag p.sk_mma "mma-";
+      (if p.sk_gpu then "gpu" else "cpu");
+      Printf.sprintf " %dx%dx%d" p.sk_bm p.sk_bn p.sk_bk;
+      (* Register-tile factors: the scalar GPU pipeline's; 0x0 (unused) elsewhere. *)
+      (if p.sk_tm = 0 && p.sk_tn = 0 then "" else Printf.sprintf "/%dx%d" p.sk_tm p.sk_tn);
+      (if p.sk_simd = 0 then "" else Printf.sprintf " simd%d" p.sk_simd);
+      (* A widened-pack candidate (gh-ocannl-575) differs from a plain sibling only in the packed
+         tiles' precision. *)
+      (match p.sk_pack_prec with
+      | Some pr -> Printf.sprintf " pack%s" (Ir.Ops.prec_string pr)
+      | None -> "");
+      (* The swizzled staged twin (gh-ocannl-481 item 3, D3). *)
+      (match p.sk_swizzle with
+      | None -> ""
+      | Some LL.Swizzle_elem -> " swz-elem"
+      | Some LL.Swizzle_b128 -> " swz-b128");
+      (* The pipelined staged twin (gh-ocannl-487): the cooperative-stage depth; 1 = unpipelined. *)
+      (if p.sk_depth = 1 then "" else Printf.sprintf " pd%d" p.sk_depth);
+      flag p.sk_hoist " hoist";
+      flag p.sk_grid " grid";
+      flag p.sk_pack_rest " packrest";
+      (* The batch flavors (gh-ocannl-643, gh-ocannl-728): [bgrid] for the batch-grid twin,
+         [bgrid-in] for its interior-batch-inside-the-row-blocks order; [sk_batch_inner] is never
+         seeded without [sk_batch_grid], and [bin] keeps that combination apart anyway. *)
+      (match (p.sk_batch_grid, p.sk_batch_inner) with
+      | false, false -> ""
+      | true, false -> " bgrid"
+      | true, true -> " bgrid-in"
+      | false, true -> " bin");
+      (* The coalesced layout's seeds (gh-ocannl-1165), whose tile fields describe the coalesced
+         site. *)
+      flag p.sk_coalesce " coal";
+      flag p.sk_epilogue " ep";
+      (* The register-tile twins of one CPU tensorized leaf (gh-ocannl-619, gh-ocannl-1166). *)
+      (match p.sk_tile with
+      | None -> ""
+      | Some { Ir.Register_tile.rm; rn; lanes } -> Printf.sprintf " tile-rm%d-rn%d-l%d" rm rn lanes);
+    ]
 
-(* The pipelined staged twin likewise (gh-ocannl-487): identical to its plain sibling except the
-   cooperative-stage depth, so the label must carry it. *)
-let depth_label p = if p.sk_depth > 1 then Printf.sprintf " pd%d" p.sk_depth else ""
-
-(* A widened-pack candidate (gh-ocannl-575) differs from a plain sibling only in the packed tiles'
-   precision, so the label must carry it. *)
-let pack_prec_label p =
-  match p.sk_pack_prec with
-  | Some pr -> Printf.sprintf " pack%s" (Ir.Ops.prec_string pr)
-  | None -> ""
-
-(* The batch flavor's label (gh-ocannl-643, gh-ocannl-728): " bgrid" for the batch-grid twin, "
-   bgrid-in" for its interior-batch-inside-the-row-blocks order — then " coal" for the coalesced
-   layout's seeds (gh-ocannl-1165), whose tile fields describe the coalesced site. *)
-let batch_label p =
-  (if not p.sk_batch_grid then "" else if p.sk_batch_inner then " bgrid-in" else " bgrid")
-  ^ if p.sk_coalesce then " coal" else ""
+(* A round candidate's suffix (gh-ocannl-1230): the parent's digest tag, then the unit the move
+   extended and the move itself, printed from its derived s-expression so every field of the move
+   shows: round candidates that differ in parent, unit or move print apart, where the bare
+   [F_saved[N segs]] they all used to share named none of the three. A replay ([None]) prints
+   nothing. *)
+let move_label = function
+  | None -> ("", "")
+  | Some { mv_parent; mv_segment; mv_op } ->
+      ( " from " ^ mv_parent,
+        Printf.sprintf "+%s%s"
+          (Option.value_map mv_segment ~default:"" ~f:(Printf.sprintf "seg%d:"))
+          (Sexp.to_string_mach (SC.sexp_of_saved_optop mv_op)) )
 
 let spec_label = function
-  | Whole (W_saved s) -> Printf.sprintf "W_saved[%d ops]" (List.length s)
+  | Whole (W_saved (s, move)) ->
+      let from, extension = move_label move in
+      Printf.sprintf "W_saved[%d ops%s]%s" (List.length s) from extension
   | Whole (W_preset { block_size }) -> Printf.sprintf "W_preset[bs=%s]" (bs_label block_size)
-  | Whole (W_sketch p) when p.sk_mma ->
-      Printf.sprintf "W_sketch[%smma-%s %dx%dx%d%s%s%s%s%s%s%s%s%s]"
-        (if p.sk_conv then "conv-" else "")
-        (if p.sk_gpu then "gpu" else "cpu")
-        p.sk_bm p.sk_bn p.sk_bk
-        (if p.sk_bk > 0 then if p.sk_gpu then " staged" else " pack" else "")
-        (pack_prec_label p) (swz_label p) (depth_label p)
-        (if p.sk_hoist then " hoist" else "")
-        (if p.sk_grid then " grid" else "")
-        (if p.sk_pack_rest then " packrest" else "")
-        (batch_label p)
-        (if p.sk_epilogue then " ep" else "")
-  | Whole (W_sketch p) ->
-      Printf.sprintf "W_sketch[%s %dx%dx%d/%dx%d%s%s%s]"
-        (if p.sk_gpu then "gpu" else "cpu")
-        p.sk_bm p.sk_bn p.sk_bk p.sk_tm p.sk_tn
-        (if p.sk_hoist then " hoist" else "")
-        (batch_label p)
-        (if p.sk_epilogue then " ep" else "")
+  | Whole (W_sketch p) -> Printf.sprintf "W_sketch[%s]" (sketch_params_label p)
   | Fiss (F_preset { block_size; privatize; config_thresholds }) ->
       Printf.sprintf "F_preset[bs=%s%s%s]" (bs_label block_size)
         (if privatize then " priv" else "")
         (if config_thresholds then " cfg-thresh" else "")
-  | Fiss (F_saved segs) -> Printf.sprintf "F_saved[%d segs]" (List.length segs)
+  | Fiss (F_saved (segs, move)) ->
+      let from, extension = move_label move in
+      Printf.sprintf "F_saved[%d segs%s]%s" (List.length segs) from extension
   | Fiss (F_sketch { entries; fine }) ->
       Printf.sprintf "F_sketch[%s%s]"
         (if fine then "fine " else "")
-        (String.concat ~sep:","
-           (List.map entries ~f:(fun (_, p) ->
-                Printf.sprintf "%s%s%s %dx%dx%d%s%s%s%s%s%s%s%s%s"
-                  (if p.sk_conv then "conv-" else "")
-                  (if p.sk_mma then "mma-" else "")
-                  (if p.sk_gpu then "gpu" else "cpu")
-                  p.sk_bm p.sk_bn p.sk_bk
-                  (if p.sk_mma then "" else Printf.sprintf "/%dx%d" p.sk_tm p.sk_tn)
-                  (pack_prec_label p) (swz_label p) (depth_label p)
-                  (if p.sk_hoist then " hoist" else "")
-                  (if p.sk_grid then " grid" else "")
-                  (if p.sk_pack_rest then " packrest" else "")
-                  (batch_label p)
-                  (if p.sk_epilogue then " ep" else ""))))
+        (String.concat ~sep:"," (List.map entries ~f:(fun (_, p) -> sketch_params_label p)))
   | Fiss (F_split { sites }) ->
       Printf.sprintf "F_split[%s]"
         (String.concat ~sep:","
@@ -2344,9 +2362,10 @@ let spec_label = function
                   (if s.sr_dynamic then " dyn" else "")
                   s.sr_red s.sr_out b
                   (match List.length s.sr_swaps with 0 -> "" | n -> Printf.sprintf " swap%d" n))))
-  | Fiss (F_split_saved (prelude, segs)) ->
-      Printf.sprintf "F_split_saved[%d prelude ops, %d segs]" (List.length prelude)
-        (List.length segs)
+  | Fiss (F_split_saved (prelude, segs, move)) ->
+      let from, extension = move_label move in
+      Printf.sprintf "F_split_saved[%d prelude ops, %d segs%s]%s" (List.length prelude)
+        (List.length segs) from extension
 
 (* Which candidate [tune] attributes as the untuned default, by the label the measurement seam
    receives for it -- and the ONE place that decides it: the [default_seed_digest] attribution in
@@ -2407,7 +2426,7 @@ let compile_candidate ?name ~static_indices ~base_opt ~canon ~limits ~is_gpu ~is
           let opt = rebase fresh in
           let sched, saved, registry =
             match flavor with
-            | W_saved saved ->
+            | W_saved (saved, _) ->
                 let sched, registry = SC.of_saved canon saved in
                 (sched, saved, registry)
             | W_preset { block_size } ->
@@ -2454,7 +2473,7 @@ let compile_candidate ?name ~static_indices ~base_opt ~canon ~limits ~is_gpu ~is
                 in
                 let saved, _ = SC.to_saved (SC.base_registry canon) sched in
                 (sched, saved)
-            | F_split_saved (psaved, _) ->
+            | F_split_saved (psaved, _, _) ->
                 let sched, _ = SC.of_saved canon psaved in
                 (sched, psaved)
           in
@@ -2480,7 +2499,7 @@ let compile_candidate ?name ~static_indices ~base_opt ~canon ~limits ~is_gpu ~is
           let replay =
             match flavor with
             | F_preset _ | F_sketch _ | F_split _ -> None
-            | F_saved saved | F_split_saved (_, saved) ->
+            | F_saved (saved, _) | F_split_saved (_, saved, _) ->
                 let saved = Array.of_list saved in
                 let schedule i seg =
                   let seg_canon = SC.canonicalize ~static_indices ~with_placements:false seg in
@@ -2936,10 +2955,12 @@ let extend_spec (elem : compiled) (u : unit_gen) (op : SC.saved_optop) : spec op
     List.mapi segs ~f:(fun j (s : SC.saved_segment) ->
         if i = j then { s with seg_saved = u.u_saved @ [ op ] } else s)
   in
+  let move mv_segment = { mv_parent = dshort elem.digest_after; mv_segment; mv_op = op } in
   match (elem.form, u.u_segment) with
-  | Whole_saved _, None -> Some (Whole (W_saved (u.u_saved @ [ op ])))
-  | Fiss_saved segs, Some i -> Some (Fiss (F_saved (extend segs i)))
-  | Split_saved (prelude, segs), Some i -> Some (Fiss (F_split_saved (prelude, extend segs i)))
+  | Whole_saved _, None -> Some (Whole (W_saved (u.u_saved @ [ op ], Some (move None))))
+  | Fiss_saved segs, Some i -> Some (Fiss (F_saved (extend segs i, Some (move (Some i)))))
+  | Split_saved (prelude, segs), Some i ->
+      Some (Fiss (F_split_saved (prelude, extend segs i, Some (move (Some i)))))
   | _ -> None
 
 (** {2 The placement decision surface (gh-ocannl-514, the placement-space search)}
@@ -4196,9 +4217,9 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
               (* A fissioned entry with a non-empty [saved] is a split-reduce winner: [saved] is the
                  whole-routine prelude, [segments] the post-prelude per-segment schedules. *)
               | Some segs when not (List.is_empty entry.SC.saved) ->
-                  Fiss (F_split_saved (entry.SC.saved, segs))
-              | Some segs -> Fiss (F_saved segs)
-              | None -> Whole (W_saved entry.SC.saved)
+                  Fiss (F_split_saved (entry.SC.saved, segs, None))
+              | Some segs -> Fiss (F_saved (segs, None))
+              | None -> Whole (W_saved (entry.SC.saved, None))
             in
             progress_stage "cache_replay";
             match compile_spec_real Outcome.Cache_replay spec with
@@ -5755,9 +5776,9 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                    to the production default schedule. *)
                 let spec =
                   match best_c.form with
-                  | Whole_saved saved -> Whole (W_saved saved)
-                  | Fiss_saved segs -> Fiss (F_saved segs)
-                  | Split_saved (prelude, segs) -> Fiss (F_split_saved (prelude, segs))
+                  | Whole_saved saved -> Whole (W_saved (saved, None))
+                  | Fiss_saved segs -> Fiss (F_saved (segs, None))
+                  | Split_saved (prelude, segs) -> Fiss (F_split_saved (prelude, segs, None))
                 in
                 (* Nothing the replay needs is an artifact — [spec] above is the winner's saved
                    schedule — so the whole beam goes before the compile that reproduces it
