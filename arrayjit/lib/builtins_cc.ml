@@ -137,15 +137,19 @@ let integer_power_builtins ~prefix ~supports_double ~dialect =
    exponents included (gh-ocannl-1240). An integral exponent takes the vendor [pow] of the base's
    magnitude and restores the sign from the exponent's parity, which is what C [pow] does; any other
    exponent -- fractional, or NaN -- keeps the vendor domain, so a negative base under a fractional
-   exponent stays NaN. A domain fix, not a correctly rounded [pow]: the magnitude is the vendor's.
-   The sign is read bitwise, so [-0] counts as negative ([(-0)^3 = -0]) and fast math cannot fold
-   the test; every integer beyond the mantissa's reach is even, which the integer-conversion guard
-   encodes. Known integral exponents never get here ([C_syntax.integer_power_doc] takes them). *)
+   exponent stays NaN. A zero exponent gives 1 for every base -- signed zeros, infinities and NaN
+   included -- as in C and as the integer-power helper defines it: the fast-math lowering reads [0 *
+   log2(0)] and [0 * log2(inf)] as NaN. A domain fix, not a correctly rounded [pow]: the magnitude
+   is the vendor's. The sign is read bitwise, so [-0] counts as negative ([(-0)^3 = -0]) and fast
+   math cannot fold the test; every integer beyond the mantissa's reach is even, which the
+   integer-conversion guard encodes. Known integral exponents never get here
+   ([C_syntax.integer_power_doc] takes them). *)
 let runtime_power_builtins ~prefix =
   let make typ name sign_test pow trunc fabs int_typ int_limit =
     ( name,
       Printf.sprintf
         {|%s %s %s(%s x, %s y) {
+  if (y == 0) return 1;
   if (!(%s) || %s(y) != y) return %s(x, y);
   %s magnitude = %s(%s(x), y);
   return (%s(y) < %s && ((%s)y & 1) != 0) ? -magnitude : magnitude;

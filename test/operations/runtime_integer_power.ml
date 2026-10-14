@@ -88,6 +88,13 @@ let check ~prec ~narrow ~tol ~name ~first_id ~call =
       p_all
         (name ^ ": negative bases under run-time fractional exponents stay NaN")
         (Array.to_list nan) ~f:Float.is_nan;
+      let zero_bases = [ -0.; 0.; Float.infinity; Float.neg_infinity; Float.nan ] in
+      let ones =
+        run ~prec ~narrow ~name:(name ^ "_zero") ~first_id:(first_id + 80)
+          (List.map zero_bases ~f:(fun x -> (x, 0.)))
+      in
+      p_all (name ^ ": a run-time zero exponent gives 1 for every base, as in C pow")
+        (Array.to_list ones) ~f:(fun v -> Float.equal v 1.);
       let src = Generated.read name in
       p
         (name ^ ": run-time exponents bypass the constant integer-power helper")
