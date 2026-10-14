@@ -5,16 +5,19 @@
    delete a loaded DLL, so there the library of a routine alive at exit stays in the temp directory.
    Its name records its owner ([Utils.temp_library_prefix]: pid and nonce, as a kept library's does
    since gh-ocannl-1247), and the startup of any later OCANNL process removes it once that owner is
-   no longer running; the library of a running owner stays, since that process may be between
-   linking it and loading it.
+   no longer running and the library is older than [Utils.temp_library_sweep_min_age]. The library
+   of a running owner stays, since that process may be between linking it and loading it; so does a
+   fresh one, whose owner may be running where the sweeping process cannot see it (another PID
+   namespace sharing the temp directory).
 
    The parent plants, in a private temp directory, the temporary library of a process that is gone
-   (an OS id no process can have), one of its own (a running process), a library retained by debug
-   files (whose name records no owner), and an unrelated library. It then starts a child with that
-   directory as its temp directory; the child compiles and runs a routine. The child's startup must
-   remove exactly the first. The child's own library is still loaded at its exit: on POSIX the
-   compile already unlinked it, on Windows it stays, and a second child's startup must remove it --
-   the Windows case end to end, gated to Windows where it is not vacuous.
+   (an OS id no process can have), one of its own (a running process) -- both aged past the minimum
+   age -- a fresh library of the gone process, a library retained by debug files (whose name records
+   no owner), and an unrelated library. It then starts a child with that directory as its temp
+   directory; the child compiles and runs a routine. The child's startup must remove exactly the
+   first. The child's own library is still loaded at its exit: on POSIX the compile already unlinked
+   it, on Windows it stays; the parent ages it, and a second child's startup must remove it -- the
+   Windows case end to end, gated to Windows where it is not vacuous.
 
    Each child's verdict output goes to stderr; its judgment reaches the parent as its exit
    status. *)
@@ -64,8 +67,15 @@ let parent () =
          (Utils.temp_library_prefix ~pid ~nonce ~run_id:1 routine)
          library_extension)
   in
+  (* Back-dated by an hour past the sweep's minimum age. *)
+  let age name =
+    let aged = Unix.gettimeofday () -. Utils.temp_library_sweep_min_age -. 3600. in
+    Unix.utimes (Stdlib.Filename.concat dir name) aged aged
+  in
   let departed = plant_temp_library ~pid:departed_pid ~nonce:"0badf00d" in
+  let departed_fresh = plant_temp_library ~pid:departed_pid ~nonce:"0badf00d" in
   let running = plant_temp_library ~pid:(Utils.os_process_id ()) ~nonce:(Utils.process_nonce ()) in
+  List.iter [ departed; running ] ~f:age;
   (* The name shape of a library that [output_debug_files_in_build_directory] retains: the stem of
      the source's private copy, then the run id and [temp_file]'s random suffix. *)
   let retained = routine ^ "_1a2b3c_run_id_1_4d5e6f" ^ library_extension in
@@ -73,8 +83,8 @@ let parent () =
   List.iter [ retained; unrelated ] ~f:(fun f ->
       Stdio.Out_channel.write_all (Stdlib.Filename.concat dir f) ~data:f);
   let owner_of name = Utils.parse_temp_library_name name in
-  p_all "the planted temporary libraries name their owners" [ departed; running ] ~f:(fun f ->
-      Option.is_some (owner_of f));
+  p_all "the planted temporary libraries name their owners" [ departed; departed_fresh; running ]
+    ~f:(fun f -> Option.is_some (owner_of f));
   p_none "the retained and the unrelated library name no owner" [ retained; unrelated ] ~f:(fun f ->
       Option.is_some (owner_of f));
   p "this process is seen as running" (Utils.process_alive (Utils.os_process_id ()));
@@ -103,7 +113,7 @@ let parent () =
     let pid = Unix.create_process_env exe args env Unix.stdin Unix.stderr Unix.stderr in
     match Unix.waitpid [] pid with _, Unix.WEXITED 0 -> true | _ -> false
   in
-  let planted = [ departed; running; retained; unrelated ] in
+  let planted = [ departed; departed_fresh; running; retained; unrelated ] in
   Exn.protect
     ~finally:(fun () ->
       List.iter (listing ()) ~f:(fun f ->
@@ -117,6 +127,8 @@ let parent () =
       p "the child's startup removed the temporary library of a process no longer running"
         (not (present departed));
       p "the child's startup kept the temporary library of a running process" (present running);
+      p "the child's startup kept a gone process's library written too recently to be past loading"
+        (present departed_fresh);
       p_all "the child's startup left the retained and the unrelated library alone"
         [ retained; unrelated ] ~f:present;
       let first_child_left =
@@ -129,6 +141,7 @@ let parent () =
         ~f:(fun f ->
           Option.exists (owner_of f) ~f:(fun { Utils.kernel_name; owner_pid; _ } ->
               String.equal kernel_name routine && owner_pid <> Utils.os_process_id ()));
+      List.iter first_child_left ~f:age;
       p "the second child compiled and ran its routine" (run_child ());
       gated_all ~aggregation:`Environment ~when_:Sys.win32
         ~on:"POSIX, which removes a loaded library at once"

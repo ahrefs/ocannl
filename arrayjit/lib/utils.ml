@@ -1584,6 +1584,14 @@ type kept_library = {
 let temp_library_prefix ~pid ~nonce ~run_id base_name =
   Printf.sprintf "%s_pid%d_n%s_run_id_%d_" (clean_filename base_name) pid nonce run_id
 
+(** How old, in seconds since its last write, a temporary library of a process that is gone must be
+    before a startup removes it (gh-ocannl-1268). Liveness alone cannot protect a library whose
+    owner is invisible to this process -- one in another PID namespace sharing the temp directory,
+    which may even report this process's own OS id -- and such a library is at risk only between its
+    compiler finishing and its [dlopen]. An hour is far past that window, macOS's first-load malware
+    scan of a fresh library included, while a Windows leftover still goes at a later startup. *)
+let temp_library_sweep_min_age = 3600.
+
 (** [parse_kept_library_name fname] inverts {!kept_library_name} on a file name, and
     [parse_temp_library_name fname] reads the owner and the compile from the name of a temporary
     library that {!temp_library_prefix} named; each is [None] for any other file name. That includes
@@ -1731,16 +1739,22 @@ let () =
      of a routine alive at exit stays behind (POSIX has already removed it, so this finds none
      there). Not gated by a setting: these are files their owner meant to remove, not artifacts
      anyone asked for. A running owner's library stays, as in the cleanup above; at startup, one
-     under this process's own OS id was left by a predecessor that had the id. *)
+     under this process's own OS id was left by a predecessor that had the id. So does a library
+     written less than [temp_library_sweep_min_age] ago: its owner may be running where this process
+     cannot see it, between linking the library and loading it. *)
   let temp_dir = Stdlib.Filename.get_temp_dir_name () in
+  let past_load_window path =
+    try Float.(Unix.gettimeofday () - (Unix.stat path).Unix.st_mtime > temp_library_sweep_min_age)
+    with Unix.Unix_error _ -> false
+  in
   match Stdlib.Sys.readdir temp_dir with
   | exception Stdlib.Sys_error _ -> ()
   | entries ->
       Array.iter entries ~f:(fun fname ->
+          let path = Stdlib.Filename.concat temp_dir fname in
           match parse_temp_library_name fname with
-          | Some owner when not (library_owner_running owner) -> (
-              try Stdlib.Sys.remove (Stdlib.Filename.concat temp_dir fname)
-              with Stdlib.Sys_error _ -> ())
+          | Some owner when (not (library_owner_running owner)) && past_load_window path -> (
+              try Stdlib.Sys.remove path with Stdlib.Sys_error _ -> ())
           | Some _ | None -> ())
 
 let get_local_debug_runtime =

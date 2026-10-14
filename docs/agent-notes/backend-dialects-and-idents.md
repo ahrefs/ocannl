@@ -305,8 +305,12 @@ configuration.
   records its owner too, `<kernel>_pid<P>_n<nonce>_run_id_<N>_<random>`
   (`Utils.temp_library_prefix`/`parse_temp_library_name`), and every process's startup (the
   `Utils` cleanup block, ungated) removes the temp directory's libraries whose owner is gone, with
-  the same liveness test that spares the kept libraries (gh-ocannl-1268,
-  `test/operations/cc_temp_library_sweep`, whose end-to-end leg is gated to Windows). A library
+  the same liveness test that spares the kept libraries, once they are older than
+  `Utils.temp_library_sweep_min_age` (gh-ocannl-1268, `test/operations/cc_temp_library_sweep`,
+  whose end-to-end leg is gated to Windows). The age guard is what makes an ungated sweep of a
+  SHARED directory safe: liveness answers only within this PID namespace, and a container's
+  process may even report this process's own id (two PID-1 entrypoints), but a library is at risk
+  only between its link and its `dlopen`. A library
   retained by debug files keeps its owner-free name, so the sweep never takes it. Unlinking a
   still-mapped library frees its name, and a loader answers a `dlopen` of a path it has mapped with that mapping without reading the file, which is why every library path
   carries the process-unique run id: drop it and a later `temp_file` landing on the freed name runs

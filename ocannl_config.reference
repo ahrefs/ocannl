@@ -1096,8 +1096,9 @@
 # `output_debug_files_in_build_directory` retains it in the system temp directory. Windows
 # refuses to delete a loaded library: there it is removed only after its routine is collected
 # and unloaded, so libraries of routines alive at exit (and of every OpenMP kernel) stay until
-# the startup of a later OCANNL process removes them, once their process is gone: such a
-# temporary library is named `<kernel>_pid<P>_n<nonce>_run_id_<N>_<random>`.
+# the startup of a later OCANNL process removes them, once their process is gone and they are
+# over an hour old: such a temporary library is named
+# `<kernel>_pid<P>_n<nonce>_run_id_<N>_<random>`.
 #output_dlls_in_build_directory=false
 
 # Per-tensor-node cutoff in bytes for considering off-stack allocation, opt-in for backends.
