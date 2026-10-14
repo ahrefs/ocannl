@@ -8537,9 +8537,9 @@
  (modules cuda_mma_cutoffs)
  (libraries base stdio arrayjit.ir arrayjit.autotune arrayjit.verdict))
 
-; gh-ocannl-1230: candidate labels tell distinct candidates apart -- every sketch parameter reaches
-; its label, and each beam-round candidate names its parent, segment and move. Scripted ranking,
-; pinned to cc.
+; gh-ocannl-1230: candidate labels tell distinct candidates apart -- every sketch parameter and
+; every split-reduce site field reaches its label, and each beam-round candidate names its parent,
+; segment and move. Scripted ranking, pinned to cc.
 
 (test
  (name autotune_labels)

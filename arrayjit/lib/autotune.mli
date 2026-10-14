@@ -570,8 +570,17 @@ type sr_site = {
           before the [Split_reduce], each hoisting an accumulation-cell loop outside [sr_axis].
           Empty when the site is splittable as lowered. *)
 }
+[@@deriving sexp_of]
 (** A reduction-dominated accumulation site eligible for {!Ir.Schedule.constructor-Split_reduce}
     seeding (gh-ocannl-484 task 3); see the implementation's field docs. Exposed for tests. *)
+
+val split_sites_label : (sr_site * int) list -> string
+(** The label of a split-reduce candidate ([F_split[...]]) over its [(site, num_blocks)] entries, in
+    the [autotune_log] lines and {!report.best_label}: each entry renders every field of its site —
+    the target by debug name and, where that differs, its id ([name#id]), the split axis, [red],
+    [out], [cost], the block count, [dyn], and the interchange chain pair by pair ([swap:o/i+o/i]) —
+    so two sites that differ in any one field never share a label (gh-ocannl-1230). Entries are
+    separated by [','], which no entry contains. *)
 
 val split_reduce_sites :
   ?static_indices:Ir.Indexing.static_symbol list -> Ir.Low_level.optimized -> sr_site list

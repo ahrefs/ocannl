@@ -1809,6 +1809,7 @@ type sr_site = {
           before the [Split_reduce]: each hoists an accumulation-cell loop outside [sr_axis]. Empty
           when the site is splittable as lowered. *)
 }
+[@@deriving sexp_of]
 
 (* Sites with more output cells than this have enough output parallelism that the default presets
    already fill a device; splitting the reduction would only add combine traffic. *)
@@ -2527,6 +2528,30 @@ let fiss_sketch_label ~fine entries =
     (String.concat ~sep:","
        (List.map entries ~f:(fun (key, p) -> sketch_params_label p ^ " @" ^ seg_key_tag key)))
 
+(* A split-reduce candidate's label renders EVERY field of each [(site, num_blocks)] entry
+   (post-wave task of gh-ocannl-1230), as {!sketch_params_label} does for a sketch: the target by
+   its debug name AND its id, since two nodes can share a debug name (two [x.grad]s of one model),
+   the split axis, and the interchange chain pair by pair, since two chains of equal length hoist
+   different loops. test/operations/autotune_labels enumerates the fields from the type's derived
+   s-expression, so a new field fails there until it is rendered here. No token contains [','], the
+   entries' separator. *)
+let split_site_label (s, num_blocks) =
+  let name = Ir.Tnode.debug_name s.sr_target and id = Ir.Tnode.id s.sr_target in
+  Printf.sprintf "%s %s red%d out%d cost%d b%d%s%s"
+    (if String.equal name id then name else name ^ "#" ^ id)
+    (Idx.symbol_ident s.sr_axis) s.sr_red s.sr_out s.sr_cost num_blocks
+    (if s.sr_dynamic then " dyn" else "")
+    (match s.sr_swaps with
+    | [] -> ""
+    | swaps ->
+        " swap:"
+        ^ String.concat ~sep:"+"
+            (List.map swaps ~f:(fun (outer, inner) ->
+                 Idx.symbol_ident outer ^ "/" ^ Idx.symbol_ident inner)))
+
+let split_sites_label sites =
+  Printf.sprintf "F_split[%s]" (String.concat ~sep:"," (List.map sites ~f:split_site_label))
+
 let spec_label = function
   | Whole (W_saved (s, move)) ->
       let from, extension = move_label move in
@@ -2541,14 +2566,7 @@ let spec_label = function
       let from, extension = move_label move in
       Printf.sprintf "F_saved[%d segs%s]%s" (List.length segs) from extension
   | Fiss (F_sketch { entries; fine; _ }) -> fiss_sketch_label ~fine entries
-  | Fiss (F_split { sites }) ->
-      Printf.sprintf "F_split[%s]"
-        (String.concat ~sep:","
-           (List.map sites ~f:(fun (s, b) ->
-                Printf.sprintf "%s%s red%d out%d b%d%s" (Ir.Tnode.debug_name s.sr_target)
-                  (if s.sr_dynamic then " dyn" else "")
-                  s.sr_red s.sr_out b
-                  (match List.length s.sr_swaps with 0 -> "" | n -> Printf.sprintf " swap%d" n))))
+  | Fiss (F_split { sites }) -> split_sites_label sites
   | Fiss (F_split_saved (prelude, segs, move)) ->
       let from, extension = move_label move in
       Printf.sprintf "F_split_saved[%d prelude ops, %d segs%s]%s" (List.length prelude)
