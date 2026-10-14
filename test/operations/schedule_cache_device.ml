@@ -114,7 +114,7 @@ let () =
       SC.version = SC.placement_entry_version;
       backend;
       numerics = SC.numerics_tag ();
-      codegen = SC.codegen_tag ~limits ~capabilities ();
+      codegen = SC.codegen_tag ~backend ~limits ~capabilities ();
       objective = SC.objective_tag ();
       problem_digest = SC.digest canon;
       decision = SC.Materialize_all;

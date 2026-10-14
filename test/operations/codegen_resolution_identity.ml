@@ -76,7 +76,9 @@ let resolution (c : BI.codegen_capabilities) =
 
 let () =
   (* --- Synthetic records: the derivation itself, independent of any backend --- *)
-  let tag capabilities = SC.codegen_tag ~limits:BI.no_hardware_limits ~capabilities () in
+  let tag capabilities =
+    SC.codegen_tag ~backend:"cc" ~limits:BI.no_hardware_limits ~capabilities ()
+  in
   let base = BI.no_codegen_capabilities in
   p "a changed accumulator resolution moves the codegen identity"
     (not (String.equal (tag base) (tag { base with BI.accum_prec = widen_bf16 })));
@@ -143,7 +145,10 @@ let () =
     List.map policies ~f:(fun policy ->
         Numerics.set_policy policy;
         let capabilities = Context.codegen_capabilities ctx in
-        let identity = SC.codegen_tag ~limits:(Context.hardware_limits ctx) ~capabilities () in
+        let identity =
+          SC.codegen_tag ~backend:(Context.backend_name ctx) ~limits:(Context.hardware_limits ctx)
+            ~capabilities ()
+        in
         let uniform =
           List.concat_map scopes ~f:(fun scope ->
               List.map [ Ir.Ops.single; Ir.Ops.half; Ir.Ops.bfloat16 ] ~f:(fun prec ->
@@ -194,7 +199,7 @@ let () =
   let first_policy, _, first_identity = List.hd_exn rows in
   Numerics.set_policy first_policy;
   let again =
-    SC.codegen_tag ~limits:(Context.hardware_limits ctx)
+    SC.codegen_tag ~backend:(Context.backend_name ctx) ~limits:(Context.hardware_limits ctx)
       ~capabilities:(Context.codegen_capabilities ctx)
       ()
   in

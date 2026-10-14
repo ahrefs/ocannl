@@ -181,7 +181,10 @@ let () =
       SC.version = SC.entry_version;
       backend = Context.backend_name bctx;
       numerics = SC.numerics_tag ();
-      codegen = Some (SC.codegen_tag ~limits:blimits ~capabilities:bcaps ());
+      codegen =
+        Some
+          (SC.codegen_tag ~backend:(Context.backend_name bctx) ~limits:blimits ~capabilities:bcaps
+             ());
       objective = Some (SC.objective_tag ());
       source_digest = SC.digest base_canon;
       saved = [];
