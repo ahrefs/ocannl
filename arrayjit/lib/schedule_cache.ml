@@ -587,6 +587,13 @@ let codegen_tag ~(limits : Backend_intf.hardware_limits)
          #337. *)
       gate "buffer-aliasing" (Utils.get_global_flag ~default:false ~arg_name:"buffer_aliasing");
     ]
+    (* GPU zero elision rewrites every timed kernel list after its transform (gh-ocannl-1257), so a
+       winner crowned with it off is the answer to a different question. Only the OFF setting is
+       hashed: the default leaves every existing key, cc's included (where the gate does nothing),
+       exactly as it was. Codex P1 on staging#1113. *)
+    @
+    if Utils.get_global_flag ~default:true ~arg_name:"gpu_elide_covered_zeros" then []
+    else [ "no-zero-elision" ]
   in
   String.prefix (Stdlib.Digest.to_hex (Stdlib.Digest.string (String.concat ~sep:"\000" parts))) 8
 
