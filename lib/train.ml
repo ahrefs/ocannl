@@ -1628,7 +1628,13 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
                         match Tn.Placements.get octx.LL.placements n with
                         | None -> ";td=u"
                         | Some (m, _) -> ";td=" ^ Sexp.to_string (Tn.sexp_of_memory_mode m))
-                | exception exn when not (must_propagate exn) ->
+                | exception exn when must_propagate exn ->
+                    (* A process-level class propagates, after releasing the arms' results like
+                       every other propagation out of the chain (gh-ocannl-550). *)
+                    let backtrace = Stdlib.Printexc.get_raw_backtrace () in
+                    release_unshipped ();
+                    Stdlib.Printexc.raise_with_backtrace exn backtrace
+                | exception exn ->
                     logf "structural-twin rule off: the timing lineage's lowering failed: %s"
                       (Exn.to_string exn);
                     None)

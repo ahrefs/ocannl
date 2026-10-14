@@ -3346,19 +3346,25 @@ type placement_surface = {
    inlines is still present) that sets or reads the flipped node: its producers and its consumers,
    backward ones included. Rendered by the schedule cache's canonical walk, so node, loop-binder and
    scope names are normalized by first occurrence and each node carries its dims, precision and
-   constancy; the tag adds, per node, what the flip's pricing reads — the placement the lineage
-   brought ([SC.lineage_tag]), the placement this specialization decided, the reading the chain has
-   committed for it (an accepted flip changes a neighbour's world) — and marks the flipped node, so
-   the correspondence between two twins maps flipped node to flipped node. The alternative's own
-   facts close it: default and target readings, recompute cost, whether the cost is modeled. The
-   caller's [node_tag] adds what its own measurement lineage brings (the flip chain's timing
-   context), and each node's observability, which decides whether a materialized buffer can be
-   aliased. A node no statement here assigns (an inherited footprint-scoped one, whose computation
-   lives in the lineage) identifies nothing. An incomplete rendering (an opaque construct, a free
-   symbol) identifies nothing, and neither does any neighbourhood of a source that holds an opaque
-   construct anywhere: a [Staged_compilation] touches no node [code_touches_tn] can see, so the
-   neighbourhood filter would drop it and a fragment beside it would render as complete. *)
-let flip_twin_identity ~static_indices ~lineage ~enablement ~disablement (base : LL.optimized) =
+   constancy.
+
+   What the identity claims is bounded, and stated here as a list rather than as "everything the
+   flip's outcome depends on", which no local reading can be: per rendered node, the placement the
+   lineage brought ([SC.lineage_tag]), the placement this specialization decided, the reading the
+   chain has committed, the caller's [node_tag] (the flip chain's timing lineage), observability (an
+   observable buffer is never aliased), the surface's enablement classes, and the compile-time
+   bounds candidate (the simplifier folds guards on it); then the flipped node's mark, its default
+   and target readings, its recompute cost and whether the cost is modeled. No identity -- never a
+   twin -- where the rendering cannot be the flip's whole local reading: an incomplete rendering (an
+   opaque construct, a free symbol); a source holding an opaque construct anywhere (a
+   [Staged_compilation] touches no node [code_touches_tn] can see, so the filter would drop it); a
+   flipped node no statement here assigns; and a rendered node with a computation an earlier routine
+   of the lineage stored ([inherited]), whose replayed prefix the source does not show.
+   Whole-routine context -- where the neighbourhood sits, hence live ranges -- is deliberately out:
+   per-layer twins differ in exactly that. A false twin costs one unmeasured flip, never a wrong
+   value. *)
+let flip_twin_identity ~static_indices ~lineage ~inherited ~enablement ~disablement
+    (base : LL.optimized) =
   let stmts = LL.flat_lines [ base.LL.source ] in
   let octx = base.LL.optimize_ctx in
   let decided = octx.LL.placements in
@@ -3377,21 +3383,20 @@ let flip_twin_identity ~static_indices ~lineage ~enablement ~disablement (base :
   fun ~node_tag:caller_tag ~chain (fc : LL.flip_candidate) (fa : LL.flip_alternative) ->
     let tn = fc.LL.fc_tn in
     let hood = List.filter stmts ~f:(LL.code_touches_tn tn) in
-    (* The node's producer must be in the rendering: an inherited footprint-scoped node no statement
-       here assigns offers [`Inline] over a computation stored in the lineage, which the
-       neighbourhood -- its consumers only -- does not show. *)
     let produced_here =
       Option.exists (Hashtbl.find base.LL.traced_store tn) ~f:(fun ta -> ta.LL.has_assignment)
     in
+    (* The walk tags each node once, at its first occurrence: every rendered node passes here. *)
+    let any_inherited = ref false in
     let node_tag n =
+      if inherited n then any_inherited := true;
       SC.lineage_tag lineage octx n ^ caller_tag n
-      (* Observability decides allocation eligibility: [Backends.plan_alias_spans] never aliases an
-         observable node's buffer, so materializing it costs a dedicated one. *)
       ^ (if Ir.Tnode.is_observable n then ";obs" else "")
-      (* The surface's own per-node facts: an enabling [`Materialize] flip changes the feasible
-         schedule set, so its search can reach tensorized candidates a neutral twin's cannot. *)
       ^ (if Set.mem enablement n then ";en" else "")
       ^ (if Set.mem disablement n then ";dis" else "")
+      ^ (match Ir.Tnode.bounds_candidate n with
+        | None -> ""
+        | Some iv -> ";b=" ^ Sexp.to_string (Ir.Interval.sexp_of_t iv))
       ^ (match Ir.Tnode.Placements.get decided n with
         | None -> ";d=u"
         | Some (m, _) -> ";d=" ^ Sexp.to_string (Ir.Tnode.sexp_of_memory_mode m))
@@ -3400,7 +3405,7 @@ let flip_twin_identity ~static_indices ~lineage ~enablement ~disablement (base :
     in
     let c = SC.canonicalize_code ~static_indices ~node_tag (LL.unflat_lines hood) in
     Option.some_if
-      (produced_here && SC.complete c && source_complete ())
+      (produced_here && (not !any_inherited) && SC.complete c && source_complete ())
       (Printf.sprintf "%s;%s->%s;cost=%d;modeled=%b" (SC.digest c)
          (LL.reading_to_string fc.LL.fc_default)
          (LL.reading_to_string fa.LL.fa_flip)
@@ -3454,8 +3459,9 @@ let placement_surface ?name ?ordering ?(evidence = []) ctx comp bindings =
     ps_disablement = disablement;
     ps_floor_ms;
     ps_twin_identity =
-      flip_twin_identity ~static_indices ~lineage:(Context.placements ctx) ~enablement ~disablement
-        base;
+      flip_twin_identity ~static_indices ~lineage:(Context.placements ctx)
+        ~inherited:(Context.inherits_computation ctx)
+        ~enablement ~disablement base;
   }
 
 (** {2 Model-picked untuned defaults (gh-ocannl-491 task 3)}

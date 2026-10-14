@@ -326,10 +326,18 @@ let () =
   p "the winning chain ships a refined placement" (List.equal String.equal won.shipped [ "flip" ]);
   p_empty "no flip is skipped as a twin when the flips win" ~over:won.measured_arms won.twins;
   p "y2 is measured after y1 won" (measured y1 won && measured y2 won);
-  (* Observability decides whether a materialized buffer can be aliased, so it enters the identity:
-     declaring [x2] observable separates it from [x1]. Last, since the declaration is monotone. *)
-  let was_twin = twins x1 x2 in
-  let was_observable = Tn.is_observable x2.Tensor.value in
-  Tn.set_observable x2.Tensor.value;
-  p "declaring x2 observable separates it from its twin x1"
-    (was_twin && (not was_observable) && not (twins x1 x2))
+  (* Two per-node facts, each declared on one member of a still-twinned pair, last since both
+     declarations are monotone. The compile-time bounds candidate (the simplifier folds guards on
+     it): a proposal on [b2], an operand of [x2]'s producer, separates [x2] from [x1]. *)
+  let x_were_twins = twins x1 x2 in
+  let b2_unknown = Option.is_none (Tn.bounds_candidate b2.Tensor.value) in
+  Tn.propose_bounds ~what:"flip_twins" b2.Tensor.value (Ir.Interval.of_int_range 0 3);
+  p "a bounds candidate on x2's operand separates x2 from x1"
+    (x_were_twins && b2_unknown && not (twins x1 x2));
+  (* Observability (an observable buffer is never aliased): declaring [y2] observable separates it
+     from [y1]. *)
+  let y_were_twins = twins y1 y2 in
+  let was_observable = Tn.is_observable y2.Tensor.value in
+  Tn.set_observable y2.Tensor.value;
+  p "declaring y2 observable separates it from its twin y1"
+    (y_were_twins && (not was_observable) && not (twins y1 y2))

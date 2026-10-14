@@ -1467,24 +1467,28 @@ type placement_surface = {
     string option;
       (** gh-ocannl-1274: the structural-twin identity of one alternative of a candidate on this
           surface, given the readings the flip chain has committed so far ([chain], [None] for an
-          undecided node). Two alternatives with equal identities have canonically identical local
-          readings: every top-level statement of the raw program that sets or reads the flipped
-          node, rendered with fresh-name normalization ({!Ir.Schedule_cache.canonicalize_code}),
-          each node tagged with its dims, precision, the placement the lineage brought, the
-          placement the specialization decided, the chain's reading of it and the caller's
-          [node_tag] (the flip chain tags what its timing lineage brings, since the flips are
-          measured there), the flipped node marked; plus the default and target readings, the
-          recompute cost and whether it is modeled. [Train.tune_placements] skips an alternative
-          whose identity matches one already measured and lost in the same chain, without a budget
-          slot. [None] — never a twin — when the rendering is incomplete, or the raw program holds
-          an opaque construct anywhere (a [Staged_compilation] touches no node the neighbourhood
-          filter can see), or no statement here assigns the node (an inherited footprint-scoped one,
-          whose computation lives in the lineage). Each node's observability is tagged too: it
-          decides whether a materialized buffer can be aliased. The identity is LOCAL by design:
-          whole-routine context such as where the neighbourhood sits in the routine (and so the
-          node's live range) is not in it, since per-layer twins differ in exactly that. The
-          neighbourhood is one hop: a difference that reaches the flip only through a farther node
-          (a producer of a producer) shows only through the recompute cost. *)
+          undecided node). [Train.tune_placements] skips an alternative whose identity matches one
+          already measured and lost in the same chain, without a budget slot.
+
+          What equal identities claim is a stated list, not "everything the flip's outcome depends
+          on", which no local reading can be. The neighbourhood is every top-level statement of the
+          raw program that sets or reads the flipped node, rendered with fresh-name normalization
+          ({!Ir.Schedule_cache.canonicalize_code}): per node its dims, precision and constancy, the
+          placement the lineage brought, the placement the specialization decided, the chain's
+          reading of it, the caller's [node_tag] (the flip chain tags its timing lineage, since the
+          flips are measured there), observability (an observable buffer is never aliased), the
+          surface's enablement classes and the compile-time bounds candidate; then the flipped
+          node's mark, its default and target readings, recompute cost and whether it is modeled.
+
+          [None] — never a twin — where the rendering cannot be the flip's whole local reading: an
+          incomplete rendering; a raw program holding an opaque construct anywhere (a
+          [Staged_compilation] touches no node the neighbourhood filter can see); a flipped node no
+          statement here assigns; a rendered node with a computation an earlier routine of the
+          lineage stored ({!Context.inherits_computation}), whose replayed prefix the source does
+          not show. Out by design: whole-routine context (where the neighbourhood sits, hence live
+          ranges — per-layer twins differ in exactly that), and anything a farther node contributes
+          except through the recompute cost. A false twin costs one unmeasured flip, never a wrong
+          value. *)
 }
 (** The placement decision surface prepared for search (gh-ocannl-514): the per-node
     inline/materialize levels of the joint placement x sketch x fission space. *)

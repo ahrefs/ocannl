@@ -886,21 +886,24 @@ files.
   identity is `placement_surface`'s `ps_twin_identity`: every top-level statement of the raw
   program (`optimized.source`, where an inlined node is still present) that sets or reads the
   flipped node, rendered by the schedule cache's canonical walk (`SC.canonicalize_code`), each node
-  tagged with the lineage's placement, the specialization's decided placement, the chain's
-  committed reading and what the TIMING lineage brings (the flips are measured there), the flipped
-  node marked; then the readings, the recompute cost and whether it
-  is modeled. A source holding an opaque construct anywhere identifies nothing, since
-  `code_touches_tn` cannot see what a `Staged_compilation` touches. One hop only, so a difference two nodes away reaches it only through the cost. An
-  anchor is an alternative that was abandoned or completed no faster than its incumbent. A failed
-  search measured nothing, and an accepted flip did not lose, so neither anchors. A twin counts as
-  rejected (so a default-materialized node still joins `certain_mat`). No twin record is persisted:
-  the rule is a function of what the chain measured, and a warm chain's anchors replay their
-  abandonments or crowns, so it skips the same twins. On cc's approximate gpt2_mini search-off
-  listing (budget 16) the q/k/v and gelu flips of layers 2-4 twinned onto layer 1's, and one
-  more pair (13 skips, 16 distinct classes measured). The per-layer layer_norm flips
-  did NOT twin: their recompute costs differ by layer (7168 down to 2304), since what reads them
-  differs. A search-off chain (`autotune_search=false`) is the cheap way to list a chain: every
-  flip and the incumbent sit at `infinity`, so every measured flip "loses" and anchors its twins.
+  tagged with the facts its doc LISTS (lineage and decided placements, the chain's reading, the
+  timing lineage's tag and decided placement, observability, enablement class, bounds candidate),
+  then the readings and recompute cost. It refuses (no identity) where the source cannot be the
+  whole local reading: an opaque construct anywhere, an unassigned flipped node, a node with a
+  computation inherited from an earlier routine. **Keep it a stated list, not a promise**: the
+  review of staging#1124 ran five rounds, each naming one more fact a flip's outcome can depend
+  on. What ended the loop was a stated boundary. Whole-routine context (live ranges) is
+  deliberately out, since per-layer twins differ in exactly that, and a false twin costs one
+  unmeasured flip, never a wrong value. Add a fact when it is per-node and cheap. Rebut it when
+  it is global. Only CLEAN losses anchor: an abandonment or a completed search with no refused
+  window and a finite best no faster than the incumbent. The exception is a search-disabled
+  report, which is what lets a search-off chain (`autotune_search=false`, where every flip and
+  the incumbent sit at `infinity`) list twin classes cheaply. No twin record is persisted. The
+  rule is a function of what the chain measured, and a warm chain's anchors replay, so it skips
+  the same twins. On cc's approximate gpt2_mini search-off listing (budget 16), the q/k/v and
+  gelu flips of layers 2-4 twinned onto layer 1's, plus one more pair: 13 skips, 16 distinct
+  classes measured. The per-layer layer_norm flips did NOT twin: their recompute costs differ by
+  layer (7168 down to 2304), since what reads them differs.
 - **A per-segment single is timed against a backdrop, so near-tie singles rank by noise**
   (gh-ocannl-1166). An `F_sketch` single times the WHOLE routine with every other segment on its
   untuned preset: on gpt2_mini/CUDA tf32 a q/k/v single measured ~23.2 ms where the composite it

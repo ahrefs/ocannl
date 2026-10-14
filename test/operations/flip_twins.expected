@@ -39,4 +39,5 @@ y2 is measured after y1 timed nothing: true
 the winning chain ships a refined placement: true
 no flip is skipped as a twin when the flips win: true
 y2 is measured after y1 won: true
-declaring x2 observable separates it from its twin x1: true
+a bounds candidate on x2's operand separates x2 from x1: true
+declaring y2 observable separates it from its twin y1: true

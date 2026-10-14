@@ -274,7 +274,6 @@ let exempt_zero_reference_exports =
     "Tnode.memory_mode_of_sexp";
     "Tnode.next_uid";
     "Tnode.prec_of_dalayed";
-    "Tnode.propose_bounds";
     "Tnode.scan_host_bounds";
     "Tnode.transition_memory_mode";
     "Tnode.validate_padded_numel_contract";
