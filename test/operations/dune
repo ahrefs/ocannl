@@ -7399,6 +7399,8 @@
   ../../tools/sweep-unit-state.sh
   ; the shared width table sweep.sh sources (gh-ocannl-983)
   ../../tools/box-jobs.sh
+  ; the per-test cap's default and watcher sweep.sh shares with test-run.sh (gh-ocannl-1211)
+  ../../tools/per-test-cap.sh
   ; the kernel-window filters sweep.sh sources and this harness drives (gh-ocannl-979, gh-ocannl-1034)
   ../../tools/kernel-window.sh
   ; the fleet-worker.sh candidates sweep.sh reads the execution registry through (gh-ocannl-1097)

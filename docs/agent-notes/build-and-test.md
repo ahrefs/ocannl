@@ -3123,7 +3123,13 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   the binding's error check, and it cannot help a process whose `hip_init` was refused
   (gh-ocannl-927).
 - **On a native boot the limit is minix's copy-engine queues, not a bridge: the hip unit runs
-  at `-j 8`, and rog-nv's cuda unit is uncapped** (gh-ocannl-1029). The amdgpu driver's **SDMA
+  at `-j 8`; tuf's hip and rog-nv's cuda units run at their boxes' per-slot widths** (gh-ocannl-1029;
+  the slot widths are the next bullet's). Each of those two ran one unit green at dune's default
+  width with the box to itself, but a sweep unit takes no correctness slot, so it shares the box
+  with the batches that do, and a default-width unit beside them was never measured (on 2026-10-14
+  tuf's 16-wide unit also had sixteen tests hung at once on a wedged device). The sweep reads the
+  local view's constants (`box_jobs_hazard_cap`), so the two widths cannot drift, and leg 48 of
+  `tools/test-test-run.sh` compares them on a faked box. The amdgpu driver's **SDMA
   queue pool is device-wide, not per process** (KFD topology: one SDMA engine, 6 allocatable
   queues; the kernel's refusal counts `8 total queues`, the driver's reserved ones included), and
   every HIP process that copies takes one, so what runs out is the number of GPU-holding processes
@@ -3136,7 +3142,7 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   wider than its cap — and the sweep looks for it itself: a `-linux` unit's kernel window is the
   native kind, and a refusal in it (or the ROCr assertion in its log) buys the unit its serial rerun
   (gh-ocannl-1034, below). `dmesg` is restricted on both native boxes (`kernel.dmesg_restrict=1`);
-  the user reads the kernel journal through the `adm` group. rog-nv's native cuda unit ran green at 24, 8, 4 and 2 with no NVRM/Xid line.
+  the user reads the kernel journal through the `adm` group. rog-nv's native cuda unit ran green at 24, 8, 4 and 2 with no NVRM/Xid line, alone.
   The sweep's cap is `BOX_JOBS_SDMA_CAP` in `tools/box-jobs.sh`, one unit's width with the box to
   itself; lukstafi/ludics-lite#344 ran the unit green at `-j 16` too (1223 s, no faster). On
   tuf-amd-linux (discrete gfx1102) a benign kernel line looks like trouble to a loose grep: the
@@ -3380,9 +3386,9 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   4 bytes off (gh-ocannl-1222, removed by staging#1005). The fault is probably that miscompile,
   but this is not proven: after the removal, `bandwidth_calibration` ran four times alone on tuf
   (the same 16 rows, golden matched, device queries clean before and after, no kernel line), and
-  it had also passed once with the flag. Two bounds now apply to `run`/`start` (not `repeat`,
-  `tools/sweep.sh` or `tools/machine-verify.sh`, which run their own supervisors). (1) **The
-  per-test cap**: a watcher beside dune times every child of a `dune` process, and the first one
+  it had also passed once with the flag. Two bounds now apply to `run`/`start` (not `repeat` or
+  `tools/machine-verify.sh`, which run their own supervisors); the per-test cap applies to each GPU
+  unit of `tools/sweep.sh` too (below). (1) **The per-test cap**: a watcher beside dune times every child of a `dune` process, and the first one
   past the cap ENDS the run. The supervisor gets the SIGALRM the run's own cap sends, so it is the
   same reap and the same `TIMEOUT` (142), with the digest naming the test from the run's
   `test-cap` record and the remedy (`--test-cap 0`, or a larger one); only on a GPU batch does it
@@ -3395,7 +3401,13 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   all under correctness-slot load, where load stretched tests 5-15x), but no trace holds an `@slow`
   member: `slow-cifar_conv` runs ~300 s solo plus its dataset download, so at those load ratios it
   could pass 1500 s legitimately, and CPU batches are not the failure class. So `@slow` and CPU
-  batches keep only the run's cap unless asked; `plan` says which applies and why. Tests are found as children of `dune`, because dune
+  batches keep only the run's cap unless asked; `plan` says which applies and why. The default and
+  the watcher live in `tools/per-test-cap.sh`, which `tools/sweep.sh` sources as well: a sweep unit
+  on a non-CPU backend runs the same watcher beside its `@runtest @train` leg (not its `@slow`
+  leg), signalling the unit's own supervisor, so a hung test ends the unit as `timeout` and the
+  lane's line names it (`OCANNL_TOOL_SWEEP_TEST_CAP`, 0 lifts it). Before that, the 2026-10-14
+  sweep (stamp 20261014T051751Z) had sixteen tuf hip tests hung at once burn the unit's full
+  5400 s cap with no test named. Tests are found as children of `dune`, because dune
   starts each action as its own process-group leader. The run's group kill therefore reaches dune
   and not the action, but dune's TERM handling kills every action it has running, a
   TERM-ignoring one included (measured on 3.24). A watcher counting every group in the run would

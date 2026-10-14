@@ -286,6 +286,22 @@ case " $* " in
   # forced red units below need the suite itself to be what fails.
   *" dune clean "*) exit 0 ;;
 esac
+# A hung test (gh-ocannl-1211): the suite leg's dune starts one action, as dune does -- a child
+# leading its own process group, which dune kills on TERM -- that sleeps SWEEP_TEST_OPAM_HANG
+# seconds and records its pid in SWEEP_TEST_OPAM_HANG_PID. The parent is perl renamed `dune`: the
+# per-test cap's watcher finds tests as the children of a process named dune, and a shebang
+# script's process name is its interpreter's.
+if [ -n "${SWEEP_TEST_OPAM_HANG:-}" ]; then
+  case " $* " in
+    *" @runtest "*)
+      exec perl -e '$0 = "dune"; my ($pidf, $secs) = @ARGV;
+        my $c = fork(); die "fork: $!" unless defined $c;
+        if (!$c) { setpgrp(0, 0); open my $f, ">", "$pidf.tmp" or die; print $f "$$\n"; close $f;
+                   rename "$pidf.tmp", $pidf; exec "sleep", $secs; exit 127 }
+        $SIG{TERM} = sub { kill "KILL", -$c; exit 143 };
+        waitpid($c, 0); exit 0' "$SWEEP_TEST_OPAM_HANG_PID" "$SWEEP_TEST_OPAM_HANG" ;;
+  esac
+fi
 # Stands in for what a test run writes to the unit's log. The common output
 # drives failure-fingerprint coverage; the per-backend outputs let the skip
 # aggregation controls distinguish an intersection from a union without GPUs.
@@ -692,6 +708,9 @@ run_sweep_args() {
     "SWEEP_TEST_WAIT_TICKS=$wait_ticks" \
     "OCANNL_TOOL_SWEEP_LOCAL_BOX=${SWEEP_TEST_LOCAL_BOX-m4-max}" \
     "OCANNL_TOOL_SWEEP_JOBS=${SWEEP_TEST_JOBS:-}" \
+    "OCANNL_TOOL_SWEEP_TEST_CAP=${SWEEP_TEST_TEST_CAP:-}" \
+    "SWEEP_TEST_OPAM_HANG=${SWEEP_TEST_OPAM_HANG:-}" \
+    "SWEEP_TEST_OPAM_HANG_PID=${SWEEP_TEST_OPAM_HANG_PID:-}" \
     "OCANNL_TOOL_SWEEP_REPO=$main" \
     "OCANNL_TOOL_SWEEP_STATE=$state")
   # The cancellation controls need the sweep's own pid, and a process group
@@ -1391,6 +1410,37 @@ grep -q 'm4-max/metal: incremental-pass' "$tmp/metal_pass.out"
 metal_pass_log=$(awk -F '\t' '$3 == "metal" { print $9 }' "$state/history.tsv" | tail -1)
 [ -f "$metal_pass_log" ]
 absent 'rtc-context' "$metal_pass_log"
+
+# The per-test cap (gh-ocannl-1211), the watcher tools/test-run.sh runs, beside a GPU unit's
+# suite leg: a test past it ends the unit as `timeout` naming the test, and the test does not
+# survive the unit. A CPU unit, and a GPU unit with the cap lifted, wait the test out. Skipped
+# where a `$0`-renamed process does not read back as `dune` in ps.
+hang_probe=$(perl -e '$0 = "dune"; print qx{ps -o comm= -p $$}' 2>/dev/null)
+case $hang_probe in
+  *dune*)
+    hang_pid=$tmp/hung-test.pid
+    rm -f "$hang_pid"
+    hung=$(SWEEP_TEST_OPAM_HANG=60 SWEEP_TEST_OPAM_HANG_PID=$hang_pid SWEEP_TEST_TEST_CAP=2 \
+      run_sweep_backend metal 2>&1)
+    grep -q 'm4-max/metal: timeout' <<<"$hung"
+    grep -q "m4-max/metal: hung test, past the per-test cap: pid $(cat "$hang_pid") has run [0-9]*s, past the 2s cap: sleep 60" \
+      <<<"$hung"
+    if kill -0 "$(cat "$hang_pid")" 2>/dev/null; then
+      printf 'sweep_harness: the hung test outlived its timed-out unit\n' >&2
+      exit 1
+    fi
+    hung_log=$(awk -F '\t' '$3 == "metal" { print $9 }' "$state/history.tsv" | tail -1)
+    grep -q 'Legitimately long? Rerun with OCANNL_TOOL_SWEEP_TEST_CAP=0, or a larger cap' "$hung_log"
+    for hang_leg in cc:2 metal:0; do
+      rm -f "$hang_pid"
+      hang_waited=$(SWEEP_TEST_OPAM_HANG=4 SWEEP_TEST_OPAM_HANG_PID=$hang_pid SWEEP_TEST_TEST_CAP=${hang_leg#*:} \
+        run_sweep_backend "${hang_leg%%:*}" 2>&1)
+      grep -q "m4-max/${hang_leg%%:*}: incremental-pass" <<<"$hang_waited"
+      absent 'per-test cap' <<<"$hang_waited"
+    done
+    ;;
+  *) printf 'sweep harness: per-test cap legs skipped: ps does not read a renamed process as dune here\n' >&2 ;;
+esac
 
 # Both of dune's location spellings must reach the fingerprint, and a dune
 # location must reduce to the stanza it names. `lines N-M` is what a stanza

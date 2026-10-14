@@ -48,6 +48,8 @@
 #                                      # a remote unit refuses without it), its lock paths are
 #                                      # checked at startup, and it is asked whether tuf is up
 #                                      # before its lane, and to sleep it after
+#   OCANNL_TOOL_SWEEP_TEST_CAP=0 tools/sweep.sh  # lift the per-test cap on GPU units (default:
+#                                      # tools/per-test-cap.sh's 1500s; see test_cmd)
 #   OCANNL_TOOL_FLEET_WORKER=none tools/sweep.sh  # do not consult the fleet's execution registry,
 #                                      # which otherwise skips a unit whose box is under an
 #                                      # exclusive measurement (sweep_fleet_under_measurement)
@@ -73,6 +75,13 @@ AGGREGATE_SKIPS=$SWEEP_TOOLS/aggregate-skips.sh
 }
 # shellcheck source=box-jobs.sh
 . "$SWEEP_TOOLS/box-jobs.sh"
+# The per-test cap's default and watcher, shared with tools/test-run.sh the same way (test_cmd).
+[ -r "$SWEEP_TOOLS/per-test-cap.sh" ] || {
+  echo "sweep: cannot read $SWEEP_TOOLS/per-test-cap.sh" >&2
+  exit 2
+}
+# shellcheck source=per-test-cap.sh
+. "$SWEEP_TOOLS/per-test-cap.sh"
 # The kernel-window filters (dxg for a WSL boot, native for a native one) and their counts, shared
 # with the harness that pins them. After box-jobs.sh, whose transport names pick the kind.
 [ -r "$SWEEP_TOOLS/kernel-window.sh" ] || {
@@ -303,6 +312,14 @@ ONLY=()
 # local and the remote side: macOS has no timeout(1) at all, and where timeout(1)
 # does exist it is not necessarily one whose -k reaches the process group.
 CAP=${OCANNL_TOOL_SWEEP_CAP:-5400}
+# Per-test cap for a GPU unit's test leg (gh-ocannl-1211; test_cmd says where it applies), the
+# default tools/test-run.sh gives a GPU batch; 0 lifts it.
+TEST_CAP=${OCANNL_TOOL_SWEEP_TEST_CAP:-$TEST_CAP_DEFAULT}
+case $TEST_CAP in
+  '' | *[!0-9]*)
+    echo "sweep: OCANNL_TOOL_SWEEP_TEST_CAP must be a whole number of seconds, not '$TEST_CAP'" >&2
+    exit 2 ;;
+esac
 # The budget for the post-unit RTC context collection, deliberately separate from
 # CAP: see collect_rtc_context for why sharing the unit's deadline would let a
 # diagnostic overwrite the verdict it is explaining.
@@ -844,6 +861,8 @@ fi
 # by collect_verdict_records; the stderr copy of each record stays in the log
 # for humans.
 verdict_records_dir() { printf '%s.verdict-records' "$1"; }
+# Where a GPU unit's per-test cap watcher keeps its records (test_cmd), beside the worktree.
+test_cap_dir() { printf '%s.test-cap' "$1"; }
 verdict_records_env() { # wt
   printf 'export OCANNL_TOOL_VERDICT_RECORDS="%s"; ' "$(verdict_records_dir "$1")"
 }
@@ -923,6 +942,23 @@ test_cmd() {
   if [ -n "$jobs" ] && [ -z "$TARGET" ]; then
     printf 'OCANNL_BACKEND=%s %s build @check; ' "$backend" "$(switch_dune_cmd)"
   fi
+  # The per-test cap (gh-ocannl-1211), tools/test-run.sh's own watcher beside this leg's dune: a
+  # GPU fault wedges the device, every test dune starts after it hangs in device init, and the
+  # unit's cap is the only other bound -- on 2026-10-14 (sweep 20261014T051751Z) sixteen tuf hip
+  # tests hung at once and held the unit for its full 5400 s with no test named. The first test
+  # past the cap sends the unit's supervisor (the `sh -c` running this text is its child) the
+  # SIGALRM its own cap sends, so the unit ends as `timeout` (142) with the hung test named in the
+  # log. GPU units only, and only this leg, as test-run.sh's default applies: the `@slow` leg
+  # below, and a --target that reaches the slow aliases, keep only the unit's cap. The watcher
+  # closes fd 9, the worktree lock, so it can never hold the lock past the unit.
+  local watched=
+  if ! box_jobs_cpu_backend "$backend" && [ "$TEST_CAP" -gt 0 ] && ! test_cap_reaches_slow "$TARGET" >/dev/null; then
+    watched=$(test_cap_dir "$wt")
+    printf 'rm -rf "%s" && mkdir -p "%s" || exit 126; ' "$watched" "$watched"
+    printf 'perl -e %s %s "$$" "$PPID" "%s" gpu sweep %s </dev/null 9>&- & watch=$!; ' \
+      "$(sq "$test_cap_watch")" "$TEST_CAP" "$watched" \
+      "$(sq "Rerun with OCANNL_TOOL_SWEEP_TEST_CAP=0, or a larger cap")"
+  fi
   if [ -z "$TARGET" ]; then
     printf 'OCANNL_BACKEND=%s %s build %s%s @runtest @train; rc1=$?; ' \
       "$backend" "$(switch_dune_cmd)" "$jobs_arg${jobs_arg:+ }" "$force_arg"
@@ -930,6 +966,7 @@ test_cmd() {
     printf 'OCANNL_BACKEND=%s %s runtest %s%s %s; rc1=$?; ' \
       "$backend" "$(switch_dune_cmd)" "$jobs_arg${jobs_arg:+ }" "$force_arg" "$TARGET"
   fi
+  [ -z "$watched" ] || printf 'kill $watch 2>/dev/null; wait $watch 2>/dev/null; '
   if [ "$SLOW" = 1 ]; then
     printf 'OCANNL_BACKEND=%s %s build %s%s @slow; rc2=$?; ' \
       "$backend" "$(switch_dune_cmd)" "$jobs_arg${jobs_arg:+ }" "$force_arg"
@@ -2052,7 +2089,7 @@ UNGUARDED_SAID=0
 run_unit() { # machine backend host
   local machine=$1 backend=$2 host=$3
   local log started remote_home remote_probe remote_started remote_boot wt path_prefix= remote_repo
-  local remote_prep remote rc elapsed outcome unreachable=skip unguarded
+  local remote_prep remote rc elapsed outcome unreachable=skip unguarded hung
   WRITTEN_FINGERPRINT=
   CURRENT_UNIT=$machine/$backend
   UNGUARDED_SAID=0
@@ -2255,6 +2292,11 @@ run_unit() { # machine backend host
     *) outcome=fail ;;
   esac
   say "  $machine/$backend: $outcome (${elapsed}s; execution=$execution)"
+  # A unit the per-test cap ended names its hung test in the log (test_cmd); say which.
+  if [ "$outcome" = timeout ]; then
+    hung=$(sed -n 's/^sweep: per-test cap: //p' "$log" 2>/dev/null | head -n 1)
+    [ -z "$hung" ] || say "  $machine/$backend: hung test, past the per-test cap: $hung"
+  fi
   record "$machine" "$backend" "$outcome" "$elapsed" "$log" "$execution"
   # The kernel's own evidence for THIS unit's window, before the rerun
   # decision that reads it -- and before the RTC diagnostics below, which is not

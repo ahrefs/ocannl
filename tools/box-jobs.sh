@@ -51,11 +51,11 @@ BOX_JOBS_DXG_CAP=2
 BOX_JOBS_SDMA_CAP=8
 
 # tuf-amd-linux's hip unit (gh-ocannl-1035) is the fleet's one DISCRETE-memory
-# AMD GPU (RX 7700S, gfx1102, 8 GiB, 16 threads), and its sweep unit is
-# uncapped, as rog-nv's is: lukstafi/ludics-lite#344's ladder ran the forced
-# full hip unit green at dune's default (16) and at 8 -- test phase 1046 s and
-# 1105 s, no red stanza, no GPU kernel line, at most 6 of its 12 SDMA queues in
-# use (2026-09-24). It had started at a placeholder -j 2 until measured.
+# AMD GPU (RX 7700S, gfx1102, 8 GiB, 16 threads). lukstafi/ludics-lite#344's
+# ladder ran the forced full hip unit green at dune's default (16) and at 8 --
+# test phase 1046 s and 1105 s, no red stanza, no GPU kernel line, at most 6 of
+# its 12 SDMA queues in use (2026-09-24) -- with the box to itself; its sweep
+# unit takes the per-slot width all the same (box_jobs_sweep_cap says why).
 
 # The backends that hold the device, i.e. the ones the bridge carries. A CPU
 # backend on the same box runs at full width, except on rog-nv-linux (below).
@@ -99,13 +99,22 @@ box_jobs_dest_transport() { # <ssh-destination>; prints dxg, native, or nothing
 # has no 5400-second budget riding on the answer.
 #
 # On a native boot, minix's hip unit takes the SDMA cap above instead of the
-# bridge's, and rog-nv's cuda unit stays uncapped: its native ladder ran the
-# forced full unit green at dune's default (24), 8, 4 and 2, with no NVRM/Xid
-# line in any window (gh-ocannl-1029); so does tuf's hip unit (above). These
-# are one batch's widths, measured with the box to itself. A manual or worker
-# batch on a native boot may share the box with the fleet's other correctness
-# slots, so it takes the per-slot widths of the local view below instead
-# (gh-ocannl-1033).
+# bridge's. tuf's hip unit and rog-nv's cuda unit take their boxes' per-slot
+# widths (the local view below), because a sweep unit does not take a fleet
+# correctness slot, so it shares the box with whatever batches hold one: their
+# ladders ran one forced full unit green at dune's default width alone (tuf 16,
+# rog 24, 8, 4 and 2, with no NVRM/Xid line; gh-ocannl-1029), but nothing ran
+# a default-width unit beside three `-j 8` hip batches on tuf (40 GPU-holding
+# processes where 24 is the measured budget), or beside two `-j 8` cuda batches
+# on rog, whose third concurrent GPU batch is what ran out of device memory.
+# The per-slot width keeps a unit inside the measured budget whatever else
+# runs, at a cost the ladders put at 6% on tuf (1105 s against 1046 s), and it
+# bounds how many tests a wedged device hangs at once: on 2026-10-14 (sweep
+# 20261014T051751Z) sixteen tuf hip tests hung together until the unit's cap.
+# The values are the local view's constants, read here rather than restated, so
+# the two widths cannot drift. minix keeps the one-unit SDMA cap rather than its
+# slot width of 4: its pool, not a budget over slots, is the bound there, and 8
+# cannot drain it.
 #
 # An unrecognised destination keeps the WSL measurement: running a native unit
 # at the bridge's width costs minutes, while running a dxg one at full width
@@ -114,6 +123,8 @@ box_jobs_sweep_cap() { # <machine> <backend> [<ssh-destination>]; prints the cap
   case "${1:-}:${2:-}:$(box_jobs_dest_transport "${3:-}")" in
     minix:hip:native) printf '%s' "$BOX_JOBS_SDMA_CAP" ;;
     minix:hip:*) printf '%s' "$BOX_JOBS_DXG_CAP" ;;
+    tuf:hip:native) box_jobs_hazard_cap wide-sdma ;;
+    rog-nv:cuda:native) box_jobs_hazard_cap nvidia ;;
     *) ;;
   esac
 }
