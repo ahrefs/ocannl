@@ -415,7 +415,7 @@ def flag_problems(flags, cells):
     for cell in sorted(cells, key=lambda c: tuple(map(str, c))):
         keys = collections.Counter(f.key for f in flags if flag_applies(f, cell))
         problems += [
-            f"--cell-flag sets {key} {n} times on {'/'.join(cell)}"
+            f"--cell-flag sets {key} {n} times on {'/'.join(map(display_value, cell))}"
             for key, n in sorted(keys.items())
             if n > 1
         ]
@@ -1144,9 +1144,28 @@ def run_cell(label, cmd, env=None, cwd=None, timeout=None, on_incomplete=None, o
         return _run_cell(label, cmd, env, cwd, timeout, on_incomplete, on_checkpoint)
 
 
+# The longest a cell log's file name may be, in bytes: below the 255-byte component limit of
+# every file system the fleet writes logs to.
+CELL_LOG_NAME_MAX = 200
+
+
 def cell_log_name(label):
-    """The file name a cell's log gets under BENCH_CELL_LOG_DIR."""
-    return "".join(c if c.isalnum() or c in "-._" else "_" for c in label) + ".log"
+    """The file name a cell's log gets under BENCH_CELL_LOG_DIR.
+
+    Bounded: a label longer than `CELL_LOG_NAME_MAX` bytes keeps a prefix and gains a digest of the
+    whole label, so labels sharing that prefix still get distinct files. A long fixture name -- and
+    a non-ASCII one, which `display_value` spells as `\\uXXXX` in the label -- would otherwise
+    produce a name the file system refuses, and the sweep would fall back to a temporary log that
+    is deleted: the durable log the operator asked for, lost.
+    """
+    name = "".join(c if c.isalnum() or c in "-._" else "_" for c in label)
+    if len((name + ".log").encode("utf-8", "surrogatepass")) <= CELL_LOG_NAME_MAX:
+        return name + ".log"
+    digest = hashlib.sha256(label.encode("utf-8", "surrogatepass")).hexdigest()[:16]
+    suffix = f"-{digest}.log"
+    while len((name + suffix).encode("utf-8", "surrogatepass")) > CELL_LOG_NAME_MAX:
+        name = name[:-1]
+    return name + suffix
 
 
 def open_cell_log(label):
@@ -1284,7 +1303,10 @@ def read_cell_log(path):
         with open(path, encoding="utf-8", errors="replace") as f:
             return f.read()
     except OSError as exc:
-        return f"(the cell's output could not be read back from {path}: {exc})\n"
+        return (
+            f"(the cell's output could not be read back from {display_value(str(path))}: "
+            f"{display_value(str(exc))})\n"
+        )
 
 
 def _run_cell(label, cmd, env, cwd, timeout, on_incomplete, on_checkpoint):

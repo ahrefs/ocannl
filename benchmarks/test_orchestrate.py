@@ -4481,6 +4481,28 @@ class CellTimeoutTest(unittest.TestCase):
         self.assertIn("event=arm_start", log)
         self.assertIn("stderr evidence", log)
 
+    def test_a_cell_log_name_stays_within_the_file_system_limit(self):
+        # Review round 1: a non-ASCII fixture name reaches the label as `\uXXXX` escapes, six bytes
+        # a character, and a long one past 255 bytes would lose the log to a temporary file.
+        short = orchestrate.cell_log_name("gpt2 ocannl/cc/tuned (search pass)")
+        self.assertEqual(short, "gpt2_ocannl_cc_tuned__search_pass_.log")
+        stem = orchestrate.display_value("\u5b57" * 40)
+        names = {
+            orchestrate.cell_log_name(f"{stem} ocannl/cc/{variant}")
+            for variant in ("default", "tuned")
+        }
+        self.assertEqual(len(names), 2, names)
+        for name in names | {orchestrate.cell_log_name("\u5b57" * 200)}:
+            with self.subTest(name=name[:40]):
+                self.assertLessEqual(len(name.encode()), orchestrate.CELL_LOG_NAME_MAX)
+                self.assertTrue(name.endswith(".log"))
+        # And the bounded name is one the file system takes (POSIX: a Windows temp directory plus
+        # 200 bytes can pass MAX_PATH, which is the path's limit, not the component's).
+        if os.name == "posix":
+            path = self.dir / orchestrate.cell_log_name(f"{stem} ocannl/cc/default")
+            path.write_text("log")
+            self.assertEqual(path.read_text(), "log")
+
     def test_the_cell_log_grows_while_the_cell_runs(self):
         # Streaming, not written at the end: the cell reads its own log back mid-run and reports
         # whether its first line was already there.
@@ -5971,6 +5993,12 @@ class OcannlFlagTest(unittest.TestCase):
         self.assertEqual(len(problems), 2, problems)
         self.assertIn("gpt2_mini/metal/*/*:tf32_matmuls=false names no OCANNL cell", problems[0])
         self.assertIn("sets tune_inline_flips 2 times on gpt2_mini/cc/tuned/f32", problems[1])
+        # The cell is named as a label names it: a workload carrying a newline cannot forge a
+        # second line of the refusal.
+        odd = orchestrate.dispatchable_cells({"a\nb|c": ["f32"]}, ["cc"], ["default"])
+        [dup] = orchestrate.flag_problems([everywhere, everywhere], odd)
+        self.assertIn(f"on {orchestrate.display_value('a' + chr(10) + 'b|c')}/cc/default/f32", dup)
+        self.assertNotIn("\n", dup)
         # A sweep with no OCANNL cells at all (`--only pytorch`) has nothing for a flag to reach.
         self.assertEqual(len(orchestrate.flag_problems([everywhere], set())), 1)
 
