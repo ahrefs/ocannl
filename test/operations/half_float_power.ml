@@ -107,8 +107,9 @@ let () =
         (not (String.is_substring src ~substring:"hexp2("));
       p "fractional and dynamic exponents bypass the integer-power helper"
         (not (String.is_substring src ~substring:"ocannl_powi_"));
-      gated ~when_:cuda_like ~on:backend_name "half powers widen both operands into powf"
-        (String.is_substring src ~substring:"__float2half(powf(__half2float(");
+      gated ~when_:cuda_like ~on:backend_name
+        "half powers widen both operands into the f32 run-time power helper"
+        (String.is_substring src ~substring:"__float2half(ocannl_pow_f32(__half2float(");
       gated ~when_:is_metal ~on:backend_name "Metal half powers widen both operands into pow"
         (String.is_substring src ~substring:"(half)pow((float)("))
 

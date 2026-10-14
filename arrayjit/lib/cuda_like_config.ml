@@ -150,7 +150,7 @@ struct
     in
     let widened_powf ~widen ~narrow v1 v2 =
       let w v = string widen ^^ parens v in
-      group (string narrow ^^ parens (func "powf" (w v1) (w v2)))
+      group (string narrow ^^ parens (func "ocannl_pow_f32" (w v1) (w v2)))
     in
     match (v, prec) with
     | Ops.Arg1, _ -> invalid_arg (Dialect.error_prefix ^ ".binop_syntax: Arg1 is not an operator")
@@ -181,12 +181,15 @@ struct
     | Sub, _ -> f "-"
     | Mul, _ -> f "*"
     | Div, _ -> f "/"
-    | ToPowOf, Double_prec _ -> func "pow"
-    | ToPowOf, Single_prec _ -> func "powf"
+    (* Through [Builtins_cc.runtime_power_builtins] (gh-ocannl-1240): fast math lowers the vendor
+       [pow] to [exp2(y * log2(x))], NaN for a negative base even under an integral exponent known
+       only at run time. Known integer exponents never reach here: [C_syntax.integer_power_doc]
+       takes them. *)
+    | ToPowOf, Double_prec _ -> func "ocannl_pow_f64"
+    | ToPowOf, Single_prec _ -> func "ocannl_pow_f32"
     (* Neither vendor has a narrow-float pow (and both vendors' [hexp2] is unary, gh-ocannl-1198):
-       widen both operands, take f32 [powf] -- its domain, NaN for a negative base under a
-       fractional exponent included -- and round back once, as cc's codegen does. Known integer
-       exponents never reach here: [C_syntax.integer_power_doc] takes them. *)
+       widen both operands, take the f32 power above -- its domain, NaN for a negative base under a
+       fractional exponent included -- and round back once, as cc's codegen does. *)
     | ToPowOf, Half_prec _ -> widened_powf ~widen:"__half2float" ~narrow:"__float2half"
     | ToPowOf, Bfloat16_prec _ -> widened_powf ~widen:"__bfloat162float" ~narrow:"__float2bfloat16"
     | ToPowOf, (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Int64_prec _ | Uint4x32_prec _) ->
