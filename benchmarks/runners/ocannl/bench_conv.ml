@@ -103,7 +103,7 @@ let () =
          [searched] (gh-ocannl-644): they run whenever [tune_inline_flips] is configured, whether
          or not a callback is wired, and a flip search loads this process like an arm search. *)
       (* [~rounds:0]: no beam round whatever [autotune_rounds] says; see bench_gpt.ml for the
-         measurement behind it (gh-ocannl-1137). *)
+         measurement behind it (gh-ocannl-1229) and the open decision (gh-ocannl-1346). *)
       Train.tune_placements ~report:(H.collect_arm arms) ~flip_report:(H.collect_search arms)
         ~on_ship:(H.collect_ship arms) ~rounds:0 ~timing_ctx:scratch ctx batch_loss step_comp
         bindings
