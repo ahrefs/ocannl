@@ -288,6 +288,9 @@ let () =
     [
       "k.c: In function 'random':\nk.c:9:5: error: 'x' undeclared (first use in this function)";
       "k.c:9:5: error: use of undeclared identifier 'random_ptr'";
+      (* a body error quoting a node or local that shares the routine's spelling *)
+      "k.c:9:5: error: use of undeclared identifier 'random'";
+      "default_program(14): error: identifier \"random\" is undefined";
       "k.c:3:6: error: conflicting types for 'other_fwd_v2'\n    3 | void other_fwd_v2(";
     ] ~f:(fun report -> Option.is_some (attributed report))
 

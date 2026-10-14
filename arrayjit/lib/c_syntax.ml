@@ -1901,11 +1901,16 @@ let vector_type_names ~prefixes ~scalars ~widths =
     - the report quotes the declaration line, [void <name>(] -- gcc, clang (cc, Metal, hiprtc) and
       nvrtc echo the offending source line, and the emitted header puts the parameters on the lines
       after it, so a quoted [void <name>(] is the name's line and nothing else;
-    - an error line names it in quotes (['name'], ["name"], [‘name’]), as "redefinition of" /
-      "conflicting types for" / "has already been declared" diagnostics do.
+    - an error line names it in quotes (['name'], ["name"], [‘name’]) AND says the name conflicts
+      with a declaration ("redefinition of", "conflicting types for", "has already been declared",
+      "redeclaration", "different kind of symbol") -- the shape of the declaration's own diagnostic
+      when the compiler does not echo the line.
 
-    Deliberately not counted: gcc's ["In function 'name':"] context line, which precedes ANY error
-    in the routine's body and so would blame the name for a codegen bug. *)
+    Deliberately not counted: a quoted name on any other error line --
+    ["use of undeclared identifier 'name'"] is about the routine's BODY, where a node or local may
+    share the routine's spelling, and blaming the name would both mislead the user and turn a
+    schedule decline into a fatal error (PR review) -- nor gcc's ["In function 'name':"] context
+    line, which precedes ANY error in the body. *)
 let routine_name_in_diagnostics ~routine_names report =
   let lines = String.split_lines report in
   let is_ident_char c = Char.is_alphanum c || Char.equal c '_' in
@@ -1917,9 +1922,22 @@ let routine_name_in_diagnostics ~routine_names report =
   in
   let error_line_quotes name =
     let quoted = [ "'" ^ name ^ "'"; "\"" ^ name ^ "\""; "\u{2018}" ^ name ^ "\u{2019}" ] in
+    let conflict_phrases =
+      [
+        "redefinition";
+        "conflicting types";
+        "conflicting declaration";
+        "already been declared";
+        "already declared";
+        "redeclaration";
+        "redeclared";
+        "different kind of symbol";
+      ]
+    in
     List.exists lines ~f:(fun line ->
-        String.is_substring (String.lowercase line) ~substring:"error"
-        && (not (String.is_substring line ~substring:"In function"))
+        let lower = String.lowercase line in
+        String.is_substring lower ~substring:"error"
+        && List.exists conflict_phrases ~f:(fun substring -> String.is_substring lower ~substring)
         && List.exists quoted ~f:(fun substring -> String.is_substring line ~substring))
   in
   List.find routine_names ~f:(fun name ->

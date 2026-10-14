@@ -541,6 +541,9 @@ module Impl = struct
     kparams : (string * kparam_source) list;
     bindings : Indexing.unit_bindings;
     launch : Low_level.launch_dims;
+    routine_names : (string * string) list;
+        (* (emitted, given): the link-time compile attributes a name-caused failure to the name the
+           caller asked for (gh-ocannl-707) *)
   }
   [@@deriving sexp_of]
 
@@ -549,6 +552,7 @@ module Impl = struct
     funcs : (string * (string * kparam_source) list * Low_level.launch_dims) array;
         (* func_name * kparams * launch dims *)
     bindings : Indexing.unit_bindings;
+    routine_names : (string * string) list; (* (emitted, given), as in [code] *)
   }
   [@@deriving sexp_of]
 
@@ -1557,9 +1561,8 @@ module Impl = struct
          attribution; this is the same check (gh-ocannl-707). Attributed on [msg] alone: [error_msg]
          embeds the source, where every routine's declaration appears. *)
       let backtrace = Stdlib.Printexc.get_callstack 16 in
-      C_syntax.attribute_routine_name_failure ~report:msg
-        ~routine_names:(List.map routine_names ~f:(fun n -> (n, n)))
-        (Failure error_msg) backtrace
+      C_syntax.attribute_routine_name_failure ~report:msg ~routine_names (Failure error_msg)
+        backtrace
 
   module Compile = C_syntax.Compile_driver (C_syntax_config)
 
@@ -1576,7 +1579,7 @@ using namespace metal;|}
       Compile.compile ~name bindings lowered ~includes:metal_includes
         ~builtins:Builtins_metal.builtins ~conditional_includes ~compile_source ()
     in
-    { metal_source; func_name; kparams; bindings; launch }
+    { metal_source; func_name; kparams; bindings; launch; routine_names = [ (func_name, name) ] }
 
   let compile_batch ~names bindings lowereds =
     let metal_source, entries =
@@ -1584,7 +1587,10 @@ using namespace metal;|}
         ~builtins:Builtins_metal.builtins ~conditional_includes ~compile_source ()
     in
     let funcs = Array.map entries ~f:(fun (kparams, name, launch) -> (name, kparams, launch)) in
-    { metal_source; funcs; bindings }
+    let routine_names =
+      Array.to_list (Array.map2_exn funcs names ~f:(fun (emitted, _, _) given -> (emitted, given)))
+    in
+    { metal_source; funcs; bindings; routine_names }
 
   (* gh-ocannl-344: from the routine's materialized nodes, assign each distinct pool an index (first
      use order), build the [(pool_index, byte_offset)] slot table (one [uint] pair per node,
@@ -1809,7 +1815,7 @@ using namespace metal;|}
   let link prior_context code ctx_buffers =
     let device = prior_context.device.dev in
     let library =
-      compile_metal_source ~name:code.func_name ~routine_names:[ code.func_name ]
+      compile_metal_source ~name:code.func_name ~routine_names:code.routine_names
         ~source:code.metal_source ~device
     in
     let lowered_bindings : Indexing.lowered_bindings =
@@ -1833,8 +1839,7 @@ using namespace metal;|}
     in
     let base_name = if String.is_empty base_name then "batch" else base_name in
     let library =
-      compile_metal_source ~name:base_name
-        ~routine_names:(List.map (Array.to_list code_batch.funcs) ~f:(fun (n, _, _) -> n))
+      compile_metal_source ~name:base_name ~routine_names:code_batch.routine_names
         ~source:code_batch.metal_source ~device
     in
     let lowered_bindings : Indexing.lowered_bindings =
