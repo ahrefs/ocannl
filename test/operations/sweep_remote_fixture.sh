@@ -308,6 +308,32 @@ local_record=$(sed -n 's/^run:  *//p' <<<"$local_prep_error")
 [ "$(remote_row "$local_record")" = error:1:native ]
 grep -q '^  minix/hip: error (cannot pin ' <<<"$local_prep_error"
 
+# The per-test cap (gh-ocannl-1211) on the far side: test_cmd's watcher signals the `sh -c` running
+# its text's parent ("$PPID"), which is the unit's supervisor only while remote_capped starts that
+# `sh -c` as the supervisor's direct child; the supervisor's 142 must then cross the ssh hop to read
+# as `timeout`, and the watcher's record line reach the unit's log. The local metal leg in
+# sweep_harness.sh pins the same for capped_bg. Skipped where a `$0`-renamed process does not read
+# back as `dune` in ps, as that leg is.
+remote_hang_probe=$(perl -e '$0 = "dune"; print qx{ps -o comm= -p $$}' 2>/dev/null)
+case $remote_hang_probe in
+  *dune*)
+    remote_reset
+    : >"$remote_root/minix-amd-linux/journal-template"
+    remote_hang_pid=$tmp/remote-hung-test.pid
+    rm -f "$remote_hang_pid"
+    local_remote=$(SWEEP_TEST_OPAM_HANG=60 SWEEP_TEST_OPAM_HANG_PID=$remote_hang_pid \
+      SWEEP_TEST_TEST_CAP=2 remote_sweep --only hip)
+    grep -q '^  minix/hip: timeout ' <<<"$local_remote"
+    grep -q "^  minix/hip: hung test, past the per-test cap: pid $(cat "$remote_hang_pid") has run [0-9]*s, past the 2s cap: sleep 60" \
+      <<<"$local_remote"
+    if kill -0 "$(cat "$remote_hang_pid")" 2>/dev/null; then
+      printf 'sweep_harness: the remote hung test outlived its timed-out unit\n' >&2
+      exit 1
+    fi
+    ;;
+  *) printf 'sweep harness: remote per-test cap leg skipped: ps does not read a renamed process as dune here\n' >&2 ;;
+esac
+
 # The former SSH fake and broken shipping commands must lose these oracles.
 # Children isolate the remote cases and never recurse into the controls.
 if [ "$remote_only" = 0 ]; then
@@ -315,14 +341,17 @@ if [ "$remote_only" = 0 ]; then
   # to System32's WSL launcher, not Git Bash.
   this_bash=$BASH
   if command -v cygpath >/dev/null 2>&1; then this_bash=$(cygpath -w "$BASH"); fi
-  python3 - "$this_bash" "$0" "$sweep" "$aggregate" "$verdict_probe" "$tmp/remote-controls" <<'PY_CONTROLS'
+  remote_hang_legs=0
+  case $remote_hang_probe in *dune*) remote_hang_legs=1 ;; esac
+  python3 - "$this_bash" "$remote_hang_legs" "$0" "$sweep" "$aggregate" "$verdict_probe" "$tmp/remote-controls" <<'PY_CONTROLS'
 from pathlib import Path
 import re
 import shutil
 import subprocess
 import sys
 this_bash = sys.argv[1]
-harness, sweep, aggregate, verdict, scratch = map(lambda p: Path(p).resolve(), sys.argv[2:])
+remote_hang_legs = sys.argv[2] == '1'
+harness, sweep, aggregate, verdict, scratch = map(lambda p: Path(p).resolve(), sys.argv[3:])
 controls = [
     ('old-ssh', 'harness', 'local) exec "$SWEEP_TEST_REMOTE_DRIVER" "$@" ;;', 'local) exit 1 ;;', 'remote_row'),
     ('no-evidence', 'sweep', '  window_red "$1" && return 0', '  : # lost evidence arm', 'serial rerun: all clean'),
@@ -330,6 +359,14 @@ controls = [
     ('no-retry', 'sweep', '    [ -n "$GUEST_ID" ] && return 0', '    return 0 # lost identity retry', 'error:vm-replaced:dxg'),
     ('no-credential-scrub', 'sweep', '''  printf 'opam exec -- sh -c %s sweep-dune dune' \\''', "  printf 'opam exec -- dune'; : \\", 'credentials reached dune'),
 ]
+# A shell between the far-side supervisor and test_cmd's `sh -c`: its watcher's "$PPID" is then
+# that shell, so the hung test outlives the unit. Only the remote per-test cap leg sees it, and
+# only where that leg runs.
+if remote_hang_legs:
+    controls.append(('remote-cap-not-parent', 'sweep',
+        '''    printf 'perl -e %s -- --hold %s %s sh -c %s' "$(sq "$capped_perl")" "$(sq "$3")" "$1" "$(sq "$2")"''',
+        '''    printf 'perl -e %s -- --hold %s %s sh -c %s %s' "$(sq "$capped_perl")" "$(sq "$3")" "$1" "$(sq 'sh -c "$0"; exit $?')" "$(sq "$2")"''',
+        'remote hung test outlived'))
 # Derive sourced helpers from the sweep rather than carrying a second list.
 helpers = re.findall(r'^\. "\$SWEEP_TOOLS/([^"\n]+)"$', sweep.read_text(), re.M)
 if not helpers:
