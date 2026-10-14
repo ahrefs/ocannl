@@ -177,9 +177,7 @@ let () =
   let vtn = fresh_tn "hv" [| 1 |] in
   let v = LL.get_scope vtn in
   let get tn idx = LL.Get (tn, [| idx |]) in
-  let def_stmts =
-    [ LL.Declare_local { id = v; needs_init = false }; LL.Set_local (v, get a (Idx.Fixed_idx 0)) ]
-  in
+  let def_stmts = [ Ll_test.declare_local v; LL.Set_local (v, get a (Idx.Fixed_idx 0)) ] in
   let i = Idx.get_symbol () and j = Idx.get_symbol () in
   let nest1 =
     for_over i

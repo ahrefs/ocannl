@@ -798,8 +798,7 @@ let case_local_written_between_setters () =
   let i' = sym () in
   let consumer = loop i' (set o [| iter i' |] (get a [| iter i'; iter i' |])) in
   let llc =
-    seq
-      (LL.Declare_local { id = l; needs_init = false })
+    seq (declare_local l)
       (seq (zero a)
          (seq
             (LL.Set_local (l, c 1.))
@@ -902,11 +901,7 @@ let case_local_in_producer_statement () =
                         (add (LL.Get_local l) (add (tag i j) (mul (c 100.) (embed k))))))))))
   in
   let consumer = loop i' (set o [| iter i' |] (get a [| iter i'; iter i' |])) in
-  let llc =
-    seq
-      (LL.Declare_local { id = l; needs_init = false })
-      (seq (LL.Set_local (l, c 0.)) (seq producer consumer))
-  in
+  let llc = seq (declare_local l) (seq (LL.Set_local (l, c 0.)) (seq producer consumer)) in
   let opt = optimize ~name:"fp_local_in_producer" llc in
   p "local-in-producer: the reduction cap materializes the producer"
     (is_cap opt a Tn.Inline_reduction_cap);
@@ -954,8 +949,7 @@ let case_inherited_reader_writes_local () =
   let ctx = LL.empty_optimize_ctx () in
   let i = sym () and j = sym () and k = sym () in
   let producer =
-    seq
-      (LL.Declare_local { id = l; needs_init = false })
+    seq (declare_local l)
       (seq
          (LL.Set_local (l, c 0.))
          (seq (zero a)
@@ -972,8 +966,7 @@ let case_inherited_reader_writes_local () =
   p "inherited-local: the producer routine leaves the node virtual" (known_virtual producer a);
   let i' = sym () in
   let consumer =
-    seq
-      (LL.Declare_local { id = l; needs_init = false })
+    seq (declare_local l)
       (seq
          (LL.Set_local (l, c 0.))
          (loop i'

@@ -99,7 +99,7 @@ let hoisted ~name ~lane_body ~reference ?(with_plain = false) () =
     L.loop_n b b_n @@ L.loop_n s s_n @@ L.loop_n h h_n @@ L.loop_n t t_n
     @@ LL.unflat_lines
          [
-           LL.Declare_local { id = p; needs_init = false };
+           L.declare_local p;
            LL.Set_local (p, L.get p_tn [| L.iter b; L.iter s; L.iter h; L.iter t |]);
            L.loop_n e e_n (lane_body ~o_tn ~v_tn ~p ~b ~s ~h ~t ~e);
          ]

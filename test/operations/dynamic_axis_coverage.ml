@@ -282,15 +282,9 @@ let () =
   let store_u () =
     let b = Ll_test.sym () in
     Ll_test.loop_n b blocks
-      (LL.Set_from_vec
-         {
-           tn = u;
-           idcs = [| Ll_test.aff [ (lanes, b) ] 0 |];
-           length = lanes;
-           vec_unop = Ops.Uint4x32_to_prec_uniform;
-           arg = (Ll_test.get ctr [| Ll_test.iter b |], Ops.uint4x32);
-           debug = "";
-         })
+      (Ll_test.set_from_vec ~length:lanes ~vec_unop:Ops.Uint4x32_to_prec_uniform u
+         [| Ll_test.aff [ (lanes, b) ] 0 |]
+         (Ll_test.get ctr [| Ll_test.iter b |], Ops.uint4x32))
   in
   (* [rng[b] := b; ctr[b] := threefry(rng[b], rng[b])]: the counter in full, before the read. *)
   let write_ctr () =

@@ -343,7 +343,7 @@ let () =
     LL.unflat_lines
       [
         (* 0 *)
-        LL.Declare_local { id = lc; needs_init = false };
+        B.declare_local lc;
         (* 1: a [Where]'s arms are gated, its condition is not *)
         B.loop_n i8 4
           (LL.Set_local

@@ -412,7 +412,7 @@ let () =
   let kernel ?(also_unguarded = false) ~lanes ~reduce () =
     LL.unflat_lines
       ([
-         LL.Declare_local { id = flag; needs_init = false };
+         L.declare_local flag;
          L.loop_n ~axis:lanes i n (LL.Set_local (flag, L.lt (L.embed i) (L.ic 32)));
        ]
       @ (if also_unguarded then [ tree reduce ] else [])
@@ -1245,15 +1245,9 @@ let () =
   let vx2 = TDSL.ndarray zeros ~label:[ "race_vx2" ] ~output_dims:[ 4 * n ] () in
   let%op vs2 = vx2 ++ "i=>i" in
   let vec_store ~(target : Tensor.t) ~base : LL.t =
-    LL.Set_from_vec
-      {
-        tn = target.Tensor.value;
-        idcs = [| base |];
-        length = 4;
-        vec_unop = Ir.Ops.Uint4x32_to_prec_uniform;
-        arg = (Constant_bits (Int64.of_int 0x9E3779B9), Ir.Ops.uint4x32);
-        debug = "";
-      }
+    L.set_from_vec ~length:4 ~vec_unop:Ir.Ops.Uint4x32_to_prec_uniform target.Tensor.value
+      [| base |]
+      (Constant_bits (Int64.of_int 0x9E3779B9), Ir.Ops.uint4x32)
   in
   let in_unit v = Float.(v >= 0. && v < 1.) in
   let vec_aligned_transform =

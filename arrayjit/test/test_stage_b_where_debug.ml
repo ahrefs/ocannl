@@ -100,7 +100,7 @@ let () =
             (LL.Get_local id, Ops.single) )
       in
       let body = B.set ~debug:"unit-solve guard" out [| Idx.Iterator t |] guarded in
-      let llc = LL.Seq (LL.Declare_local { id; needs_init = true }, B.loop ~upto:5 t body) in
+      let llc = LL.Seq (B.declare_local ~needs_init:true id, B.loop ~upto:5 t body) in
       let c = compile_to_c ~name:"stage_b_where_debug" llc in
       (* then-branch producer read short-circuited on the range condition: [(<cond> ? producer[t] :
          0)]. Mutation: reverting the [debug_float] guard wrap drops the [? producer[] arg form. *)
@@ -173,8 +173,8 @@ let () =
       let body = B.set ~debug:"nested" out [| Idx.Iterator t |] outer_where in
       let llc =
         LL.Seq
-          ( LL.Declare_local { id = id1; needs_init = true },
-            LL.Seq (LL.Declare_local { id = id2; needs_init = true }, B.loop ~upto:3 t body) )
+          ( B.declare_local ~needs_init:true id1,
+            LL.Seq (B.declare_local ~needs_init:true id2, B.loop ~upto:3 t body) )
       in
       let c = compile_to_c ~name:"nested_where" llc in
       (* The inner condition's read [condrd3[t]] is gated by the OUTER guard: [(<outer_cond> ?
