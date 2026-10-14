@@ -44,7 +44,7 @@ end
     covered by {!C_syntax.implementation_reserved} instead, and whatever an SDK adds later fails as
     the routine name's, through {!C_syntax.attribute_routine_name_failure}. Sources as of CUDA 13.4
     and ROCm 7.1, per group below. *)
-let vendor_routine_idents =
+let vendor_header_idents =
   let scalars =
     [
       "char";
@@ -210,7 +210,9 @@ struct
     @ [ "threadIdx"; "blockIdx"; "blockDim"; "gridDim"; "warpSize" ]
     @ Dialect.extra_blacklist
 
-  let vendor_routine_idents = vendor_routine_idents
+  (* Bound under another name at top level: [include C_syntax.Pure_C_config] above brings its own
+     empty [vendor_routine_idents] into scope, which a same-named reference here would pick up. *)
+  let vendor_routine_idents = vendor_header_idents
   let fp8_from_float doc = PPrint.(group (string Dialect.fp8_from_float_fn ^^ parens doc))
   let main_kernel_prefix = "extern \"C\" __global__"
 

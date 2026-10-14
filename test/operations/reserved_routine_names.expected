@@ -28,7 +28,6 @@ routine named "__gh707_reserved" emits the mangled symbol "k__gh707_reserved": t
 routine named "main" computes correct values: true
 routine named "main" keeps its given name in the routine record: true
 routine named "main" emits the mangled symbol "main__": true
-every CUDA and HIP exemplar is reserved by the shared vendor table or the reserved namespace: true
 names in the implementation's reserved namespace are recognized: true
 names outside the implementation's reserved namespace are left alone: true
 every vendor-header identifier probed as a routine name computes correct values: true

@@ -193,17 +193,11 @@ let hip_exemplars =
     ("__hadd", "k__hadd");
   ]
 
-(* The CUDA and HIP tables are GPU-free code ([Cuda_like_config] builds everywhere), so their half
-   of the relationship is checked on every backend: each exemplar is a name the table or the
-   reserved-namespace rule actually covers, not merely one the GPU leg happened to mangle. The
-   rule's boundary is pinned beside it: a single underscore before a lowercase letter
-   ([Assignments.get_name_exn]'s [_then_] joins) and an interior double underscore stay outside. *)
+(* The reserved-namespace rule's boundary: a single underscore before a lowercase letter
+   ([Assignments.get_name_exn]'s [_then_] joins) and an interior double underscore stay outside.
+   (The CUDA and HIP tables' effect is pinned GPU-free in arrayjit/test/test_cuda_like_config.ml,
+   through the instantiated configs, since only the GPU legs below can execute them.) *)
 let () =
-  p_all
-    "every CUDA and HIP exemplar is reserved by the shared vendor table or the reserved namespace"
-    (cuda_exemplars @ hip_exemplars) ~f:(fun (name, _) ->
-      List.mem Ir.Cuda_like_config.vendor_routine_idents name ~equal:String.equal
-      || Ir.C_syntax.implementation_reserved name);
   p_all "names in the implementation's reserved namespace are recognized"
     [ "__half"; "__nv_bfloat16"; "__syncthreads"; "_Float16"; "__builtin_expf" ]
     ~f:Ir.C_syntax.implementation_reserved;

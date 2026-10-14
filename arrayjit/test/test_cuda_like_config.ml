@@ -69,3 +69,36 @@ let () =
     [ (Cuda.binop_syntax, Cuda.ternop_syntax); (Hip.binop_syntax, Hip.ternop_syntax) ]
     ~f:(fun (binop_syntax, ternop_syntax) ->
       List.is_empty (Cs.operand_conditionality_violations ~binop_syntax ~ternop_syntax))
+
+(* gh-ocannl-707: the vendor-header table reaches the EFFECTIVE configs. It is checked through
+   [kernel_ident] of the instantiated syntax rather than by membership in the top-level list: [Make]
+   includes [Pure_C_config], whose own empty [vendor_routine_idents] a same-named binding inside
+   [Make] silently picked up, leaving the table built and unused (local Codex review). *)
+module Cuda_syntax = Cs.C_syntax (Cuda)
+module Hip_syntax = Cs.C_syntax (Hip)
+
+let vendor_exemplars =
+  [
+    ("half2", "half2__");
+    ("float4", "float4__");
+    ("nv_bfloat16", "nv_bfloat16__");
+    ("hip_fp8_storage_t", "hip_fp8_storage_t__");
+    ("CUDART_INF_FP16", "CUDART_INF_FP16__");
+    ("HIPRT_INF_FP16", "HIPRT_INF_FP16__");
+    ("rsqrtf", "rsqrtf__");
+    ("__hadd", "k__hadd");
+  ]
+
+let () =
+  p_all "CUDA routine names avoid the vendor headers' identifiers" vendor_exemplars
+    ~f:(fun (name, emitted) -> String.equal (Cuda_syntax.kernel_ident name) emitted);
+  p_all "HIP routine names avoid the vendor headers' identifiers" vendor_exemplars
+    ~f:(fun (name, emitted) -> String.equal (Hip_syntax.kernel_ident name) emitted);
+  p_all "every name of the shared vendor-header table is mangled by both effective configs"
+    Ir.Cuda_like_config.vendor_header_idents ~f:(fun name ->
+      (not (String.equal (Cuda_syntax.kernel_ident name) name))
+      && not (String.equal (Hip_syntax.kernel_ident name) name));
+  p_all "ordinary CUDA and HIP routine names stay unmangled" [ "c_fwd"; "half_step"; "gh707" ]
+    ~f:(fun name ->
+      String.equal (Cuda_syntax.kernel_ident name) name
+      && String.equal (Hip_syntax.kernel_ident name) name)
