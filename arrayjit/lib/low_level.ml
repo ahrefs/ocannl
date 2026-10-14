@@ -1285,11 +1285,16 @@ let norm_position_comp ~statics_set (idx : Indexing.axis_index) =
    equality with statics zeroed. The [inline_complex_computations] exemption ("a read at the
    enclosing statement's write position is a read-modify-write self-read, not a visit") compares
    positions with this — whichever nodes the two accesses touch, exactly as the retired tracer
-   compared concrete index vectors. *)
-let same_position ~statics_set (m : Indexing.axis_index array) (m' : Indexing.axis_index array) =
+   compared concrete index vectors. [?dyn_axis] leaves that slot out of the comparison: a caller
+   passes it only for two maps whose dynamic coordinates along it are already known to agree, where
+   both slots hold the placeholder rather than a position (gh-ocannl-1244). *)
+let same_position ?dyn_axis ~statics_set (m : Indexing.axis_index array)
+    (m' : Indexing.axis_index array) =
   Array.length m = Array.length m'
-  && Array.for_all2_exn m m' ~f:(fun a b ->
-      match (norm_position_comp ~statics_set a, norm_position_comp ~statics_set b) with
+  && Array.for_alli m ~f:(fun i a ->
+      Option.exists dyn_axis ~f:(Int.equal i)
+      ||
+      match (norm_position_comp ~statics_set a, norm_position_comp ~statics_set m'.(i)) with
       | Some fa, Some fb -> [%equal: (int * Indexing.symbol) list * int] fa fb
       | _ -> false)
 
@@ -1828,6 +1833,16 @@ let scope_value_syms (llc : t) : (int, Indexing.symbol list) Hashtbl.t =
   done;
   locals
 
+(* gh-ocannl-1244: the write map a read of a [Set]-family right-hand side records as its
+   [a_stmt_write] — the position the read-modify-write exemption ({!rmw_exempt}) compares it with. A
+   dynamic slot ([Get_dynamic]'s / [Set_dynamic]'s [dyn_axis]) holds a [Fixed_idx 0] placeholder,
+   not a position, so the two maps are comparable only when the dynamic coordinates agree: both
+   static, or both dynamic along the same axis with structurally equal runtime values (the
+   embedding-gradient accumulation [g[?(id); e] := g[?(id); e] + ...]). Otherwise the read is at no
+   position the statement's write is known to share — a gather [tbl[?; e]] inside [Set tbl[0; e]]
+   can name any row, a static [tbl[0; e]] inside a scatter [tbl[?; e]] need not be the scattered row
+   — and it records none. *)
+
 (** gh-494 waypoint 1: the routine's tensor-node accesses as explicit affine relations
     ({!Affine.access}), extracted from (typically optimized) code — the queryable artifact behind
     the affine legality queries — and, from the same walk, gh-ocannl-1016's sibling view: the
@@ -1841,6 +1856,17 @@ let scope_value_syms (llc : t) : (int, Indexing.symbol list) Hashtbl.t =
     a [Local_scope] body inside one is not (hoisted, it executes unconditionally).
     [Staged_compilation] is an effect row but its accesses are not enumerated — callers needing
     exhaustiveness check for the [Staged] row. *)
+let stmt_write_for_read
+    ?(stmt_write : (Indexing.axis_index array * (int * scalar_arg) option) option)
+    (read_dyn : (int * scalar_arg) option) : Indexing.axis_index array option =
+  Option.bind stmt_write ~f:(fun (map, write_dyn) ->
+      match (write_dyn, read_dyn) with
+      | None, None -> Some map
+      | Some (w_axis, w_value), Some (r_axis, r_value)
+        when w_axis = r_axis && equal_scalar_arg w_value r_value ->
+          Some map
+      | _ -> None)
+
 let affine_relations (llc : t) : Tn.t Affine.access list * Tn.t Affine.statement_effect list =
   let affine_local (id : scope_id) = { Affine.local_tn = id.tn; local_id = id.scope_id } in
   let rec reads_tn uid (llsc : scalar_t) =
@@ -1911,7 +1937,11 @@ let affine_relations (llc : t) : Tn.t Affine.access list * Tn.t Affine.statement
   (* [stmt_write] threads the enclosing [Set]-family statement's write map through its right-hand
      side, and only there: [If] conditions and [Set_local] pass [None], and a [Local_scope] body's
      statements establish their own (its reads are subordinate to the inner setters, not to the
-     statement the scope is inlined into). *)
+     statement the scope is inlined into). It travels with the write's dynamic coordinate
+     ([Set_dynamic]'s axis and value; [None] for a static write), because a dynamic slot of either
+     map holds a placeholder, not a position: a read records the write map ([a_stmt_write]) only
+     when its own dynamic coordinate agrees with the write's ({!stmt_write_for_read},
+     gh-ocannl-1244). *)
   let rec code ~loops ~path ~guarded (llc : t) =
     (* gh-561: paths gain an intra-statement component at each statement the traversal descends into
        — [Cond]/[Body] for [If], [Rhs]/[Write] for the [Set] family — so lexicographic path order is
@@ -1960,18 +1990,21 @@ let affine_relations (llc : t) : Tn.t Affine.access list * Tn.t Affine.statement
         code ~loops ~path:(Affine.Body :: path) ~guarded:true body
     | Zero_out tn -> add ~loops ~path:(Affine.Write :: path) ~guarded ~whole:true ~write:true tn [||]
     | Set { tn; idcs; llsc; _ } ->
-        scalar ~loops ~path:(Affine.Rhs :: path) ~guarded ~gated:false ~arg_c ~stmt_write:idcs llsc;
+        scalar ~loops ~path:(Affine.Rhs :: path) ~guarded ~gated:false ~arg_c
+          ~stmt_write:(idcs, None) llsc;
         add ~loops ~path:(Affine.Write :: path) ~guarded ~rmw:(reads_tn tn.Tn.uid llsc)
           ~val_syms:(scalar_syms llsc) ~write:true tn idcs
-    | Set_dynamic { tn; idcs; dyn_axis; dyn_value = v, _; llsc; _ } ->
-        scalar ~loops ~path:(Affine.Rhs :: path) ~guarded ~gated:false ~arg_c ~stmt_write:idcs v;
-        scalar ~loops ~path:(Affine.Rhs :: path) ~guarded ~gated:false ~arg_c ~stmt_write:idcs llsc;
+    | Set_dynamic { tn; idcs; dyn_axis; dyn_value = (v, _) as dyn_value; llsc; _ } ->
+        let stmt_write = (idcs, Some (dyn_axis, dyn_value)) in
+        scalar ~loops ~path:(Affine.Rhs :: path) ~guarded ~gated:false ~arg_c ~stmt_write v;
+        scalar ~loops ~path:(Affine.Rhs :: path) ~guarded ~gated:false ~arg_c ~stmt_write llsc;
         add ~loops ~path:(Affine.Write :: path) ~guarded ~dyn_axis
           ~rmw:(reads_tn tn.Tn.uid llsc || reads_tn tn.Tn.uid v)
           ~val_syms:(scalar_syms v @ scalar_syms llsc)
           ~write:true tn idcs
     | Set_from_vec { tn; idcs; length; arg = a, _; _ } ->
-        scalar ~loops ~path:(Affine.Rhs :: path) ~guarded ~gated:false ~arg_c ~stmt_write:idcs a;
+        scalar ~loops ~path:(Affine.Rhs :: path) ~guarded ~gated:false ~arg_c
+          ~stmt_write:(idcs, None) a;
         add ~loops ~path:(Affine.Write :: path) ~guarded ~vec_len:length ~rmw:(reads_tn tn.Tn.uid a)
           ~val_syms:(scalar_syms a) ~write:true tn idcs
     | Set_local (id, llsc) ->
@@ -2000,9 +2033,14 @@ let affine_relations (llc : t) : Tn.t Affine.access list * Tn.t Affine.statement
     | Get_merge_buffer (tn, _) -> add_effect ~loops ~path ~guarded ~gated (Affine.Merge_read tn)
     | Get_local id -> add_effect ~loops ~path ~guarded ~gated (Affine.Local_read (affine_local id))
     | Constant _ | Constant_bits _ | Embed_index _ -> ()
-    | Get (tn, idcs) -> add ~loops ~path ~guarded ~gated ?stmt_write ~write:false tn idcs
-    | Get_dynamic { tn; idcs; dyn_axis; dyn_value = v, _; _ } ->
-        add ~loops ~path ~guarded ~gated ~dyn_axis ?stmt_write ~write:false tn idcs;
+    | Get (tn, idcs) ->
+        add ~loops ~path ~guarded ~gated
+          ?stmt_write:(stmt_write_for_read ?stmt_write None)
+          ~write:false tn idcs
+    | Get_dynamic { tn; idcs; dyn_axis; dyn_value = (v, _) as dyn_value; _ } ->
+        add ~loops ~path ~guarded ~gated ~dyn_axis
+          ?stmt_write:(stmt_write_for_read ?stmt_write (Some (dyn_axis, dyn_value)))
+          ~write:false tn idcs;
         operand `Always v
     | Ternop (op, (a, _), (b, _), (c, _)) ->
         let arms =
@@ -7189,7 +7227,9 @@ let statics_set_of static_indices =
    enclosing statement's write position (same {!same_position} map as the write the read is
    subordinate to — [a_stmt_write] — whichever nodes are involved) is a self-read of the
    statement's own store, not a visit — exactly the reads the retired concrete tracer never
-   recorded. Statement subordination, not program-path matching: an [If] condition's read shares
+   recorded. A dynamic coordinate is a position only when read and write share it: a gather inside
+   a static write, a static read inside a scatter, or a gather of another runtime row than the
+   scatter's records no [a_stmt_write], and is never exempt (gh-ocannl-1244). Statement subordination, not program-path matching: an [If] condition's read shares
    its path with the guarded body's write but executes before it, so it is never exempt. Shared by
    {!reads_covered_query} and {!read_multiplicity_query} — but the two consumers read it
    differently (gh-ocannl-618): for per-cell visit counting the exemption is always right (the
@@ -7209,7 +7249,11 @@ let static_bounds (static_indices : Indexing.static_symbol list) s =
 
 let rmw_exempt ~statics_set (r : _ Affine.access) =
   virtualize_settings.inline_complex_computations
-  && Option.exists r.Affine.a_stmt_write ~f:(fun w -> same_position ~statics_set w r.a_map)
+  && Option.exists r.Affine.a_stmt_write ~f:(fun w ->
+      (* [a_stmt_write] is recorded only where the read's dynamic coordinate agrees with the write's
+         ({!stmt_write_for_read}), so a dynamic read's own slot is the agreed row on both sides — a
+         placeholder in each map, compared by neither. *)
+      same_position ?dyn_axis:r.a_dyn_axis ~statics_set w r.a_map)
 
 (* gh-494 waypoint 2 / gh-554: the read-before-write fact of the retired concrete-index tracer (its
    [Recurrent] classification), computed as containment queries — every read covered by prior

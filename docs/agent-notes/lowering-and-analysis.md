@@ -306,7 +306,13 @@ files.
   later, and the raw one-hot reduction already reads every row as plain `Get`s), so the decision
   that changes in production is `reconcile_traced_store`'s re-judgement of spliced reads over the
   final code — no test executes that path yet. `test/operations/dynamic_axis_coverage.ml` executes
-  the flip on hand-built IR that carries a gather into `optimize`.
+  the flip on hand-built IR that carries a gather into `optimize`. The same placeholder must not
+  reach the read-modify-write exemption (gh-ocannl-1244): a read records its statement's write map
+  (`a_stmt_write`) only when the two dynamic coordinates agree — both static, or the same axis
+  with an equal runtime value (`Low_level.stmt_write_for_read`) — so a gather inside a fixed-row
+  `Set`, or a static read inside a scatter, is never exempt. No placement outcome shows that verdict
+  today (a gathered table is committed non-virtual at the read, and `reconcile_traced_store`
+  promotes exemption-dependent writers anyway), so its tests assert `reads_covered_query` itself.
 - **The peel's DECISION is carried, not re-derived from the emitted kernel** (gh-ocannl-733). Two
   nests differing only in whether the accumulated cell mentions the enclosing index peel a different
   number of levels under a different guard verdict and emit the SAME localized kernel — one scope,

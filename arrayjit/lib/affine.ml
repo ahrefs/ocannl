@@ -1039,7 +1039,10 @@ type 'tn access = {
   a_stmt_write : Idx.axis_index array option;
       (** Reads only: the index map of the enclosing [Set]/[Set_from_vec]/[Set_dynamic] statement's
           write when the read occurs in that statement's right-hand side; [None] elsewhere ([If]
-          conditions and [Local_scope] inner statements carry their own statements' writes). The
+          conditions and [Local_scope] inner statements carry their own statements' writes), and
+          [None] when the read's dynamic coordinate ([a_dyn_axis]) disagrees with the write's — one
+          side static and the other dynamic, or two dynamic coordinates of different axes or runtime
+          values — since a dynamic slot holds a placeholder, never a position (gh-ocannl-1244). The
           subject of the read-modify-write exemption ([Low_level.rmw_exempt]): matching by statement
           subordination rather than by program path, so a guarded body's write cannot alias its [If]
           condition's read (they share a path). *)
