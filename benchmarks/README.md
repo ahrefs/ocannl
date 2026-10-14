@@ -331,6 +331,15 @@ endpoint, whereas HIP's invalid exact-f16 and beyond-exact approximate rows are 
   every regime, e.g. `gpt2_mini/cc/tuned` to reach a GPU tuned row without first sitting through
   an uncapped CPU search; the report lists it under "Cells skipped", and an entry naming no cell
   of the sweep is refused),
+  `--cell-flag [WORKLOAD/BACKEND/VARIANT[/PRECISION]:]KEY=VALUE` (repeatable: pass
+  `--ocannl_<key>=<value>` on the OCANNL cells' command lines in every regime, all of them or the ones
+  the selector names, `*` matching anything — e.g. `*/*/tuned:tune_inline_flips=16`; a commandline
+  key outranks the regime's profile, so this is the way to change a key the approximate payload
+  sets. The row records it as `ocannl_flags`, the cell label and the report's variant column show
+  `+KEY=VALUE`, and the regime gate accepts it as declared where the runner reports that value
+  from the commandline. The key must be one `ocannl_config.reference` documents and not one the
+  sweep sets itself — `backend`, `profile`, `autotune_progress` — and a selector naming no cell, or
+  two entries setting one key on one cell, are refused; gh-ocannl-1273),
   `--gpu metal|cuda|hip|none` (the GPU column of the matrix — OCANNL backend, PyTorch device,
   tinygrad device together; defaults to metal on macOS and cuda elsewhere, `none` runs a
   CPU-only matrix), `--no-fixture-digest-check` (measure fixtures that do not match
@@ -743,6 +752,16 @@ than the driver (`CUDA_ERROR_UNSUPPORTED_PTX_VERSION` at module load), run it wi
   the sweep dispatches `OCANNL_BACKEND` itself, and `OCANNL_AUTOTUNE_LOG` /
   `OCANNL_AUTOTUNE_CACHE_DIR` are documented ways to run one, so a filter would have to guess —
   and the keys worth catching are the ones nobody has enumerated yet.
+  What is inherited is not always what applied, though (gh-ocannl-1273): OCANNL resolves a key from
+  the commandline, then from a commandline-picked profile's payload, and only then from the
+  environment, so under `--profile approximate` an ambient `OCANNL_TUNE_INLINE_FLIPS=16` loses to
+  the payload's `tune_inline_flips=2`, and `OCANNL_BACKEND` always loses to the cell's own
+  `--ocannl_backend`. Each OCANNL row therefore also carries `ambient_ocannl_shadowed`, mapping
+  every inherited variable its cell's command line outranks to the argument that does (the
+  payload's key list is read from `ocannl_config.reference`'s checked quote of it); the failure
+  records carry it too, the sweep warns once before the first cell runs, and the report header
+  adds a line naming each outranked variable and in how many OCANNL rows. To give the cells such a
+  key, use `--cell-flag`.
 - **The peak-memory column** (gh-ocannl-1006, the report side of gh-ocannl-616). `peak MiB` is the
   peak device footprint over a cell's **timed steps**, and the column appears in a workload's
   table once any row in it measured one. Three things make it easy to misread, and the report

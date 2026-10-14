@@ -811,7 +811,11 @@ files.
   in the operator's shell — or any key added after the gate was written — is visible in the
   artifact rather than silently part of the measurement; it is a fact about the sweep, so the
   report states it even when every cell failed, and rows that disagree on it are refused rather
-  than rendered as two unattributable header lines.
+  than rendered as two unattributable header lines. Inherited is not applied: a commandline-picked
+  profile's payload outranks the environment, so each row also names, under
+  `ambient_ocannl_shadowed`, the inherited variables its own command line outranks
+  (gh-ocannl-1273), and `--cell-flag KEY=VALUE` is the way to set a payload key per cell — the
+  regime gate accepts it as a declared override, never as a leak.
 - **The development `simplify_fp_algebra` selector also acts after scheduling** (gh-ocannl-998):
   `Schedule.apply` reruns `simplify_llc`, so a materializing unroll can expose constant algebra
   absent from the pre-schedule code digest. Identical base digests can therefore produce different

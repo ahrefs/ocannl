@@ -10,13 +10,16 @@
  ; reads the per-framework runners' sources for the venv-interpreter scan. fixtures/DIGESTS.txt and the workload specs are data it reads
  ; (gh-ocannl-645), pinned so a change to them fails the suite rather than drifting -- and so is
  ; the golden of test/operations/bench_result_line, which holds OCANNL result lines this
- ; orchestrator's own parser has to accept (gh-ocannl-676).
+ ; orchestrator's own parser has to accept (gh-ocannl-676). ocannl_config.reference is where the
+ ; orchestrator reads the configuration keys a per-cell flag may name and the keys each profile's
+ ; payload sets (gh-ocannl-1273).
  (deps
   (glob_files *.py)
   (glob_files test/*.py)
   (glob_files runners/*.py)
   (glob_files runners/*/*.py)
   fixtures/DIGESTS.txt
+  ../ocannl_config.reference
   ../test/operations/bench_result_line.expected
   (glob_files workloads/*.json))
  (action
