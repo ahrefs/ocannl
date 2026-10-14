@@ -1570,10 +1570,28 @@ type kept_library = {
   owner_nonce : string;
   library_run_id : int;
 }
+(** The owner and the compile a library's file name records: a kept library's
+    ([parse_kept_library_name]) or a temporary one's ([parse_temp_library_name]). *)
 
-(** [parse_kept_library_name fname] inverts {!kept_library_name} on a file name, or is [None] for a
-    file name it does not produce. *)
-let parse_kept_library_name fname : kept_library option =
+(** [temp_library_prefix ~pid ~nonce ~run_id base_name] is the [Filename.temp_file] prefix of the
+    temporary library that the process [pid] (with {!process_nonce} [nonce]) names for its compile
+    [run_id] of the kernel [base_name], and removes once it is loaded (gh-ocannl-1197). Like a kept
+    library's name, it records the owner, because Windows refuses to delete a loaded DLL: a library
+    whose routine is alive at exit stays in the temp directory, and a later process's startup
+    removes it once the owner is gone (gh-ocannl-1268). The run id keeps the path unique within the
+    process even after the file is gone, and [temp_file]'s random suffix keeps the name
+    unpredictable. [parse_temp_library_name] inverts the name. *)
+let temp_library_prefix ~pid ~nonce ~run_id base_name =
+  Printf.sprintf "%s_pid%d_n%s_run_id_%d_" (clean_filename base_name) pid nonce run_id
+
+(** [parse_kept_library_name fname] inverts {!kept_library_name} on a file name, and
+    [parse_temp_library_name fname] reads the owner and the compile from the name of a temporary
+    library that {!temp_library_prefix} named; each is [None] for any other file name. That includes
+    the library [output_debug_files_in_build_directory] retains in the temp directory, whose name
+    records no owner since it is kept on request rather than left behind. The two shapes are
+    disjoint: a kept name ends in [_run<N>], a temporary one in [temp_file]'s hex suffix. Fields are
+    read from the right, so a kernel name may itself contain underscores and field-like words. *)
+let parse_kept_library_name, parse_temp_library_name =
   let number s =
     if (not (String.is_empty s)) && String.for_all s ~f:Char.is_digit then Int.of_string_opt s
     else None
@@ -1586,24 +1604,37 @@ let parse_kept_library_name fname : kept_library option =
     else None
   in
   let field ~prefix ~f s = Option.bind (String.chop_prefix s ~prefix) ~f in
-  let last_field s = String.rsplit2 s ~on:'_' in
-  let fields =
-    Option.bind (String.chop_suffix fname ~suffix:dynamic_library_extension) ~f:(fun stem ->
-        Option.bind (last_field stem) ~f:(fun (rest, run) ->
-            Option.bind (last_field rest) ~f:(fun (rest, nonce) ->
-                Option.map (last_field rest) ~f:(fun (kernel, pid) -> (kernel, pid, nonce, run)))))
+  (* [<kernel>_pid<P>_n<nonce>], the owner part both names share. *)
+  let owner ~library_run_id owner =
+    match String.rsplit2 owner ~on:'_' with
+    | None -> None
+    | Some (rest, nonce) -> (
+        match String.rsplit2 rest ~on:'_' with
+        | Some (kernel, pid) when not (String.is_empty kernel) -> (
+            match (field ~prefix:"pid" ~f:number pid, field ~prefix:"n" ~f:hex nonce) with
+            | Some owner_pid, Some owner_nonce ->
+                Some { kernel_name = kernel; owner_pid; owner_nonce; library_run_id }
+            | _ -> None)
+        | Some _ | None -> None)
   in
-  match fields with
-  | Some (kernel, pid, nonce, run) when not (String.is_empty kernel) -> (
-      match
-        ( field ~prefix:"pid" ~f:number pid,
-          field ~prefix:"n" ~f:hex nonce,
-          field ~prefix:"run" ~f:number run )
-      with
-      | Some owner_pid, Some owner_nonce, Some library_run_id ->
-          Some { kernel_name = kernel; owner_pid; owner_nonce; library_run_id }
-      | _ -> None)
-  | _ -> None
+  let stem fname = String.chop_suffix fname ~suffix:dynamic_library_extension in
+  let kept fname : kept_library option =
+    Option.bind (stem fname) ~f:(fun stem ->
+        Option.bind (String.rsplit2 stem ~on:'_') ~f:(fun (rest, run) ->
+            Option.bind (field ~prefix:"run" ~f:number run) ~f:(fun library_run_id ->
+                owner ~library_run_id rest)))
+  in
+  let temp fname : kept_library option =
+    Option.bind (stem fname) ~f:(fun stem ->
+        Option.bind (String.rsplit2 stem ~on:'_') ~f:(fun (rest, random) ->
+            Option.bind (hex random) ~f:(fun _ ->
+                Option.bind (String.rsplit2 rest ~on:'_') ~f:(fun (rest, run) ->
+                    Option.bind (number run) ~f:(fun library_run_id ->
+                        Option.bind
+                          (String.chop_suffix rest ~suffix:"_run_id")
+                          ~f:(owner ~library_run_id))))))
+  in
+  (kept, temp)
 
 (** [kept_library_file ~run_id base_name] is where this process keeps the library of [base_name]'s
     compile number [run_id] under [output_dlls_in_build_directory]: beside [base_name]'s debug
@@ -1629,10 +1660,11 @@ let () =
      executable share its subdirectory, and the running one may be between linking such a library
      and loading it, or a profiler may still need it. A library whose process is gone is stale like
      any other artifact. *)
+  let library_owner_running { owner_pid; _ } =
+    owner_pid <> os_process_id () && process_alive owner_pid
+  in
   let live_foreign_library fname =
-    match parse_kept_library_name fname with
-    | Some { owner_pid; _ } -> owner_pid <> os_process_id () && process_alive owner_pid
-    | None -> false
+    Option.exists (parse_kept_library_name fname) ~f:library_owner_running
   in
   (* Answers whether [dirname] is gone: a directory keeping a live process's library stays. The
      cleanup's own root is emptied but kept ([~keep_root]): a concurrent process of the same
@@ -1693,7 +1725,23 @@ let () =
   let clean_up_build_files_on_startup =
     get_global_flag ~default:true ~arg_name:"clean_up_build_files_on_startup"
   in
-  if clean_up_build_files_on_startup then remove_scoped_dir "build_files"
+  if clean_up_build_files_on_startup then remove_scoped_dir "build_files";
+  (* Temporary libraries of processes that are gone (gh-ocannl-1268). A cc compile removes its
+     temporary library once it is loaded, but Windows refuses to delete a loaded DLL, so the library
+     of a routine alive at exit stays behind (POSIX has already removed it, so this finds none
+     there). Not gated by a setting: these are files their owner meant to remove, not artifacts
+     anyone asked for. A running owner's library stays, as in the cleanup above; at startup, one
+     under this process's own OS id was left by a predecessor that had the id. *)
+  let temp_dir = Stdlib.Filename.get_temp_dir_name () in
+  match Stdlib.Sys.readdir temp_dir with
+  | exception Stdlib.Sys_error _ -> ()
+  | entries ->
+      Array.iter entries ~f:(fun fname ->
+          match parse_temp_library_name fname with
+          | Some owner when not (library_owner_running owner) -> (
+              try Stdlib.Sys.remove (Stdlib.Filename.concat temp_dir fname)
+              with Stdlib.Sys_error _ -> ())
+          | Some _ | None -> ())
 
 let get_local_debug_runtime =
   let snapshot_every_sec =

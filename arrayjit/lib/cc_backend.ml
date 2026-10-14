@@ -920,10 +920,19 @@ let%track7_sexp c_compile_and_load ~name:(base_name : string) ~f_path =
          share that directory (gh-ocannl-1247). *)
       Utils.kept_library_file ~run_id base_name
     else
-      let file_stem = Stdlib.Filename.chop_extension @@ Stdlib.Filename.basename f_path in
-      Stdlib.Filename.temp_file
-        (file_stem ^ "_run_id_" ^ Int.to_string run_id ^ "_")
-        Utils.dynamic_library_extension
+      let prefix =
+        if library_owned then
+          (* Named after its owner: where the removal below fails -- Windows, for a routine alive at
+             exit -- a later process's startup removes it once this process is gone
+             (gh-ocannl-1268). *)
+          Utils.temp_library_prefix ~pid:(Utils.os_process_id ()) ~nonce:(Utils.process_nonce ())
+            ~run_id base_name
+        else
+          (* Retained by request (debug files), so its name records no owner for that sweep. *)
+          let file_stem = Stdlib.Filename.chop_extension @@ Stdlib.Filename.basename f_path in
+          file_stem ^ "_run_id_" ^ Int.to_string run_id ^ "_"
+      in
+      Stdlib.Filename.temp_file prefix Utils.dynamic_library_extension
   in
   (try Stdlib.Sys.remove libname with _ -> ());
   let kernel_link_flags = Lazy.force kernel_link_flags in
@@ -1083,14 +1092,16 @@ let%track7_sexp c_compile_and_load ~name:(base_name : string) ~f_path =
          into it, and the dlclose can drop libgomp itself (loaded only as this object's dependency)
          under its parked workers. Observed as a SIGSEGV shortly after a routine was collected
          (ubuntu CI, PR #97). Leak the mapping instead; kernels are small. A Windows library whose
-         removal is pending therefore stays on disk: nothing unmaps it before exit. *)
+         removal is pending therefore stays on disk until a later process's startup sweeps it
+         (gh-ocannl-1268): nothing unmaps it before exit. *)
       ()
   | `Dispatch | `None ->
       let%track7_sexp finalize (lib : library) : unit =
         Dl.dlclose ~handle:lib.lib;
         (* After the unload, never before: Windows deletes a DLL only once nothing maps it. OCaml
            runs no finalisers at exit, so on Windows only a routine collected before exit gets its
-           library removed. *)
+           library removed here; the rest wait for a later process's startup sweep
+           (gh-ocannl-1268). *)
         if removal_pending then remove lib.libname;
         Alloc_census.count_module_unloaded ()
       in

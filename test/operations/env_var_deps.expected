@@ -264,6 +264,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-cc_post_compile_cause-codesign
   test/operations/dune                     @runtest-cc_post_compile_cause-codesign_debug
   test/operations/dune                     @runtest-cc_post_compile_cause-codesign_dll
+  test/operations/dune                     @runtest-cc_temp_library_sweep
   test/operations/dune                     @runtest-cc_temp_ownership-compiler
   test/operations/dune                     @runtest-cc_temp_ownership-compiler_debug
   test/operations/dune                     @runtest-cc_temp_ownership-compiler_dll

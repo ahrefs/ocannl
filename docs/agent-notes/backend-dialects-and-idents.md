@@ -301,9 +301,14 @@ configuration.
   mapped DLL, so a failed removal is retried after the finalizer's `dlclose`, never before it. OCaml
   runs no finalisers at exit and the OpenMP arm never unloads, so on Windows only routines
   collected mid-run (autotune candidates, mostly) get their library removed; the libraries of
-  routines alive at exit, and of every OpenMP kernel, stay until something outside the process
-  removes them. Unlinking a still-mapped library frees its name, and a loader answers a `dlopen` of a
-  path it has mapped with that mapping without reading the file, which is why every library path
+  routines alive at exit, and of every OpenMP kernel, stay past exit. So a temporary library's name
+  records its owner too, `<kernel>_pid<P>_n<nonce>_run_id_<N>_<random>`
+  (`Utils.temp_library_prefix`/`parse_temp_library_name`), and every process's startup (the
+  `Utils` cleanup block, ungated) removes the temp directory's libraries whose owner is gone, with
+  the same liveness test that spares the kept libraries (gh-ocannl-1268,
+  `test/operations/cc_temp_library_sweep`, whose end-to-end leg is gated to Windows). A library
+  retained by debug files keeps its owner-free name, so the sweep never takes it. Unlinking a
+  still-mapped library frees its name, and a loader answers a `dlopen` of a path it has mapped with that mapping without reading the file, which is why every library path
   carries the process-unique run id: drop it and a later `temp_file` landing on the freed name runs
   the earlier kernel. Only a FAILED removal is retried (a path already gone counts as removed),
   because a freed name may already belong to another process. Profilers and crash symbolication
