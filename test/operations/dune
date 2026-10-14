@@ -7410,6 +7410,7 @@
   sweep_harness.sh
   sweep_remote_fixture.sh
   ../../scripts/harness-support.sh
+  ../../scripts/process-group.sh
   (env_var ProgramFiles)
   (env_var ProgramW6432)
   (env_var "ProgramFiles(x86)")

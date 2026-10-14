@@ -326,10 +326,7 @@ case $remote_hang_probe in
     grep -q '^  minix/hip: timeout ' <<<"$local_remote"
     grep -q "^  minix/hip: hung test, past the per-test cap: pid $(cat "$remote_hang_pid") has run [0-9]*s, past the 2s cap: sleep 60" \
       <<<"$local_remote"
-    if kill -0 "$(cat "$remote_hang_pid")" 2>/dev/null; then
-      printf 'sweep_harness: the remote hung test outlived its timed-out unit\n' >&2
-      exit 1
-    fi
+    if hung_test_survives "$remote_hang_pid" remote; then exit 1; fi
     ;;
   *) printf 'sweep harness: remote per-test cap leg skipped: ps does not read a renamed process as dune here\n' >&2 ;;
 esac
@@ -381,7 +378,8 @@ for name, target, old, new, oracle in controls:
     shutil.copy2(sweep.parent.parent / 'benchmarks/fixture_digest.py', dest / 'benchmarks/fixture_digest.py')
     for file in [harness, harness.parent / 'sweep_remote_fixture.sh']:
         shutil.copy2(file, dest / 'test/operations' / file.name)
-    shutil.copy2(harness.parent.parent.parent / 'scripts/harness-support.sh', dest / 'scripts/harness-support.sh')
+    for support in ['harness-support.sh', 'process-group.sh']:
+        shutil.copy2(harness.parent.parent.parent / 'scripts' / support, dest / 'scripts' / support)
     file = dest / ('test/operations/' + harness.name if target == 'harness' else 'tools/' + sweep.name)
     text = file.read_text()
     if text.count(old) != 1:
