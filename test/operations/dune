@@ -236,6 +236,7 @@
   (alias runtest-cc_temp_ownership-compiler)
   (alias runtest-cc_temp_ownership-compiler_debug)
   (alias runtest-cc_temp_ownership-compiler_dll)
+  (alias runtest-cc_kept_library)
   (alias runtest-micrograd_demo_logging)
   (alias runtest-n3_fwd_with_prec-unoptimized)
   (alias runtest-top_down_prec-unoptimized)
@@ -1118,6 +1119,43 @@
   (diff
    cc_temp_ownership-compiler_dll.expected
    cc_temp_ownership-compiler_dll.actual)))
+
+; gh-ocannl-1247: library output keeps each cc library in build_files/<exe>/ under a name unique per
+; process and per compile; a concurrent child process of the same executable keeps its own. Read
+; through Test_utils.Generated.kept_libraries.
+
+(executable
+ (name cc_kept_library)
+ (modules cc_kept_library)
+ (libraries base ocannl stdio unix test_utils arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(rule
+ ; ocannl-backend: cc -- the kept library is the cc compile's; the command line pins the backend.
+ (target cc_kept_library.actual)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BUILD_FILES_PREFIX))
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:cc_kept_library.exe}
+    parent
+    --ocannl_backend=cc
+    --ocannl_cc_backend_probe_cache=false
+    --ocannl_output_debug_files_in_build_directory=false
+    --ocannl_output_dlls_in_build_directory=true))))
+
+(rule
+ (alias runtest-cc_kept_library)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate))
+ (action
+  (diff cc_kept_library.expected cc_kept_library.actual)))
 
 (test
  (name hip_half_load)

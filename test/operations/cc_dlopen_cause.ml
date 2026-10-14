@@ -137,11 +137,12 @@ let run () =
   in
   let sources = List.filter added ~f:(String.is_suffix ~suffix:".c") in
   let libraries = List.filter added ~f:(String.is_suffix ~suffix:".so") in
+  (* Library output keeps the library in [build_files/], not here (gh-ocannl-1247). *)
   claim "the rejected compile retains exactly its requested temporary artifacts"
     ((List.length sources = if debug then 1 else 0)
     && (List.length libraries
        =
-       if (debug || dll_output) && not (String.equal expected_stage "artifact_missing") then 1
+       if debug && (not dll_output) && not (String.equal expected_stage "artifact_missing") then 1
        else 0)
     && List.length added = List.length sources + List.length libraries);
   claim "the unrelated temporary file is preserved"

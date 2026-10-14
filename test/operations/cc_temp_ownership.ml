@@ -9,6 +9,10 @@
    [output_dlls_in_build_directory] retains the library. The [build_files/] copy is a debug output,
    never a temporary, and stays.
 
+   Under [output_dlls_in_build_directory] the library is not a temporary either: it is kept in
+   [build_files/] (gh-ocannl-1247, [test/operations/cc_kept_library]), so the temp directory gains a
+   library only when debug files alone ask for one.
+
    The test runs in a private temp directory holding an unrelated sentinel per artifact suffix, and
    counts what a compile adds there. The success mode then RUNS the routine and checks its values:
    the library is unlinked as soon as it is mapped, and the mapping, not the path, is what the
@@ -105,12 +109,14 @@ let run directory =
   p "the compiler log is removed" (logs = 0);
   p "the source is retained exactly when debug files are requested"
     (sources = if debug then 1 else 0);
-  (* A rejected compile produced no library; a successful one's is retained exactly when asked. *)
-  let expected_libraries = if success && (debug || dll_output) then 1 else 0 in
+  (* A rejected compile produced no library; a successful one's is retained here exactly when debug
+     files ask for it and library output does not take it to [build_files/]. *)
+  let expected_libraries = if success && debug && not dll_output then 1 else 0 in
   gated ~aggregation:`Environment
     ~when_:(not (success && Sys.win32))
     ~on:"Windows, which refuses to delete a mapped DLL"
-    "the library is retained exactly when requested" (libraries = expected_libraries);
+    "the temp directory retains the library exactly when debug files alone request it"
+    (libraries = expected_libraries);
   p "nothing else is added" (List.length added = sources + libraries + logs);
   p_empty "no file present before the compile is removed" ~over:before removed;
   p_all "every unrelated sentinel keeps its content" sentinels ~f:(fun f ->

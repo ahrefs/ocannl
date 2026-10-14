@@ -267,15 +267,24 @@ configuration.
   a suite run each. Unloading kernels is not it: with the `Gc.finalise` `Dl.dlclose` in
   `cc_backend.ml`'s `c_compile_and_load` disabled, 5 of 8 runs still trapped. Nor is the trapping
   kernel's indexing: under `--ocannl_output_dlls_in_build_directory=true` the cc backend keeps its
-  compiled `.so` in `TMPDIR` under the name the crash report prints (by default it unlinks the file
-  once loaded, next bullet), so `objdump -d --disassemble-symbols=_<routine>` on that exact file
-  shows what ran -- here a guarded `p[chunk] += 1.0f` over six cells of a six-cell buffer. Reach for
-  that disassembly rather than for `build_files/`, whose same-named artifacts are overwritten by the
-  next candidate.
+  compiled `.so` under the name the crash report prints (by default it unlinks the file once
+  loaded, next bullet), so `objdump -d --disassemble-symbols=_<routine>` on that exact file shows
+  what ran -- here a guarded `p[chunk] += 1.0f` over six cells of a six-cell buffer. Reach for that
+  disassembly rather than for the `build_files/` source, whose same-named copy is overwritten by the
+  next candidate; the kept library is not, since its name carries the pid and the run id.
 - A cc compilation removes its temporary source, log and library on every path, success and
   compiler rejection included, unless `output_debug_files_in_build_directory` (source and library)
   or `output_dlls_in_build_directory` (library) asks for them (gh-ocannl-1197,
-  `test/operations/cc_temp_ownership`). The library is unlinked right after `dlopen`: the kernel
+  `test/operations/cc_temp_ownership`). Library output does not keep the library beside the source
+  the compiler read, which is a private temporary even under debug files: it writes
+  `build_files/<exe>/<kernel>_pid<P>_n<nonce>_run<N>.so` (`Utils.kept_library_file`,
+  gh-ocannl-1247), the pid because concurrent processes of one executable share that directory --
+  the OS id (`Utils.os_process_id`), never `Unix.getpid`, which on Windows answers a process-local
+  handle -- and the per-process random nonce because an OS id is not unique across PID namespaces.
+  For the same reason the startup cleanup spares a kept library whose process is still running,
+  and empties its directory without removing it: that process may be between choosing the path and
+  linking or loading it. Tests list them with
+  `Test_utils.Generated.kept_libraries` (`test/operations/cc_kept_library`). The library is unlinked right after `dlopen`: the kernel
   runs from the mapping, which POSIX keeps alive past the unlink. Windows refuses to delete a
   mapped DLL, so a failed removal is retried after the finalizer's `dlclose`, never before it. OCaml
   runs no finalisers at exit and the OpenMP arm never unloads, so on Windows only routines
