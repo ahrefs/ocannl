@@ -1520,21 +1520,50 @@ let build_file fname = filename_concat (build_files_dir ()) @@ clean_filename fn
 (** The file extension of a dynamically loaded library on this platform. *)
 let dynamic_library_extension = if Sys.win32 then ".dll" else ".so"
 
-(** [kept_library_prefix ~pid base_name] is the file-name prefix shared by every library that the
-    process [pid] keeps in {!build_files_dir} for the kernel [base_name] under
-    [output_dlls_in_build_directory] (gh-ocannl-1247); the full name is the prefix, the run id, then
-    {!dynamic_library_extension}. The pid keeps concurrently running processes of one executable
-    apart, since they share that directory; the run id keeps the compiles of one process apart. *)
-let kept_library_prefix ~pid base_name =
-  clean_filename base_name ^ "_pid" ^ Int.to_string pid ^ "_run"
+external os_process_id : unit -> int = "ocannl_os_process_id"
+(** The operating system's id of this process. Not [Unix.getpid], which on Windows answers a
+    process-local handle that need not differ between two processes. *)
+
+external process_alive : int -> bool = "ocannl_process_alive"
+(** Whether a process with the given OS id is running now; one that exists but cannot be queried
+    counts as running. *)
+
+(** [kept_library_name ~pid ~run_id base_name] is the file name of the library that the process
+    [pid] keeps in {!build_files_dir} for the kernel [base_name]'s compile [run_id] under
+    [output_dlls_in_build_directory] (gh-ocannl-1247). The pid keeps concurrently running processes
+    of one executable apart, since they share that directory; the run id keeps the compiles of one
+    process apart. {!parse_kept_library_name} inverts it. *)
+let kept_library_name ~pid ~run_id base_name =
+  Printf.sprintf "%s_pid%d_run%d%s" (clean_filename base_name) pid run_id dynamic_library_extension
+
+type kept_library = { kernel_name : string; owner_pid : int; library_run_id : int }
+
+(** [parse_kept_library_name fname] inverts {!kept_library_name} on a file name, or is [None] for a
+    file name it does not produce. *)
+let parse_kept_library_name fname : kept_library option =
+  let number s =
+    if (not (String.is_empty s)) && String.for_all s ~f:Char.is_digit then Int.of_string_opt s
+    else None
+  in
+  let field ~prefix s = Option.bind (String.chop_prefix s ~prefix) ~f:number in
+  match
+    Option.bind
+      (String.chop_suffix fname ~suffix:dynamic_library_extension)
+      ~f:(String.rsplit2 ~on:'_')
+  with
+  | None -> None
+  | Some (rest, run) -> (
+      match (field ~prefix:"run" run, String.rsplit2 rest ~on:'_') with
+      | Some run_id, Some (kernel, pid) when not (String.is_empty kernel) ->
+          Option.map (field ~prefix:"pid" pid) ~f:(fun owner_pid ->
+              { kernel_name = kernel; owner_pid; library_run_id = run_id })
+      | _ -> None)
 
 (** [kept_library_file ~run_id base_name] is where this process keeps the library of [base_name]'s
     compile number [run_id] under [output_dlls_in_build_directory]: beside [base_name]'s debug
     source, under a name no other compile, in this process or a concurrent one, uses. *)
 let kept_library_file ~run_id base_name =
-  filename_concat (build_files_dir ())
-    (kept_library_prefix ~pid:(Unix.getpid ()) base_name
-    ^ Int.to_string run_id ^ dynamic_library_extension)
+  filename_concat (build_files_dir ()) (kept_library_name ~pid:(os_process_id ()) ~run_id base_name)
 
 (** The directory diagnostic and routine-debug logs are written to (created if missing):
     [log_files/<prefix>/], sharing the prefix resolution of {!build_files_dir}. *)
@@ -1549,28 +1578,49 @@ let () =
      the tree would cause recursion to delete unrelated files. We unlink the link
      itself instead of descending. *)
   let lstat_kind path = try Some (Unix.lstat path).st_kind with Unix.Unix_error _ -> None in
+  (* A library kept by another process that is still running (gh-ocannl-1247): two processes of one
+     executable share its subdirectory, and the running one may be between linking such a library
+     and loading it, or a profiler may still need it. A library whose process is gone is stale like
+     any other artifact. *)
+  let live_foreign_library fname =
+    match parse_kept_library_name fname with
+    | Some { owner_pid; _ } -> owner_pid <> os_process_id () && process_alive owner_pid
+    | None -> false
+  in
+  (* Answers whether [dirname] is gone: a directory keeping a live process's library stays. *)
   let rec remove_dir_if_exists dirname =
     match lstat_kind dirname with
-    | None -> ()
+    | None -> true
     | Some Unix.S_DIR -> (
         try
-          Array.iter (Stdlib.Sys.readdir dirname) ~f:(fun fname ->
-              let path = Stdlib.Filename.concat dirname fname in
-              match lstat_kind path with
-              | Some Unix.S_DIR -> remove_dir_if_exists path
-              | Some _ | None -> (
-                  (* Regular file, symlink (to file or dir), socket, etc.: unlink the entry, do not
-                     follow. *)
-                  try Stdlib.Sys.remove path with Stdlib.Sys_error _ -> ()));
-          Stdlib.Sys.rmdir dirname
+          let emptied =
+            Array.fold (Stdlib.Sys.readdir dirname) ~init:true ~f:(fun emptied fname ->
+                let path = Stdlib.Filename.concat dirname fname in
+                match lstat_kind path with
+                | Some Unix.S_DIR -> remove_dir_if_exists path && emptied
+                | Some Unix.S_REG when live_foreign_library fname -> false
+                | Some _ | None -> (
+                    (* Regular file, symlink (to file or dir), socket, etc.: unlink the entry, do
+                       not follow. *)
+                    try
+                      Stdlib.Sys.remove path;
+                      emptied
+                    with Stdlib.Sys_error _ -> emptied))
+          in
+          if emptied then Stdlib.Sys.rmdir dirname;
+          emptied
         with exn ->
-          Stdio.eprintf "Failed to delete directory %s: %s\n%!" dirname (Exn.to_string exn))
+          Stdio.eprintf "Failed to delete directory %s: %s\n%!" dirname (Exn.to_string exn);
+          false)
     | Some _ -> (
         (* Symlink (even to a dir), regular file, etc.: unlink the entry. *)
-        try Stdlib.Sys.remove dirname
+        try
+          Stdlib.Sys.remove dirname;
+          true
         with exn ->
           Stdio.eprintf "Failed to delete %s (expected a directory): %s\n%!" dirname
-            (Exn.to_string exn))
+            (Exn.to_string exn);
+          false)
   in
   (* Cleanup is scoped to this process's own subdirectory (see [artifacts_subdir]), so a starting
      test cannot delete the in-flight artifacts of a concurrently running one. If the artifact root
@@ -1578,10 +1628,10 @@ let () =
      would resolve through the link, deleting files outside the working tree. *)
   let remove_scoped_dir base =
     match artifacts_subdir () with
-    | None -> remove_dir_if_exists base
+    | None -> ignore (remove_dir_if_exists base : bool)
     | Some p -> (
         match lstat_kind base with
-        | Some Unix.S_DIR -> remove_dir_if_exists (filename_concat base p)
+        | Some Unix.S_DIR -> ignore (remove_dir_if_exists (filename_concat base p) : bool)
         | Some _ | None -> ())
   in
   let clean_up_log_files_on_startup =

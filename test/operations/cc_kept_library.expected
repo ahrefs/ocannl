@@ -1,7 +1,10 @@
 library output is requested: true
 backend: cc
 the routine computes 3x + 1 from its kept library: true
-the concurrent child process compiled and ran the same routine name: true
-this process kept exactly one library for the routine, in build_files: true
-the concurrent child kept its own library, apart from this process's: true
+this process is seen as running: true
+the stale library's process is seen as gone: true
+the child process compiled and ran the same routine name: true
+this process's library stays in build_files through the child's startup cleanup: true
+the child kept its own library, under a name apart from this process's: true
+the child's startup cleanup removed the library of a process no longer running: true
 each kept library holds the routine's symbol: true

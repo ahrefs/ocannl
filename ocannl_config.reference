@@ -182,7 +182,8 @@
 #build_files_prefix=
 
 # If true, the build_files/<prefix>/ subdirectory of this process (see build_files_prefix)
-# is deleted on startup; the whole build_files/ directory when the prefix is ".".
+# is deleted on startup; the whole build_files/ directory when the prefix is ".". Libraries
+# kept under output_dlls_in_build_directory by another process that is still running stay.
 #clean_up_build_files_on_startup=true
 
 # If true, the log_files/<prefix>/ subdirectory of this process (see build_files_prefix)
@@ -1087,7 +1088,8 @@
 # If true, the CC backend keeps its compiled dynamic libraries (.dll/.so files) in the
 # build_files directory (`build_files/<exe>/` by default, see `build_files_prefix`), beside
 # the kernel's debug source, named `<kernel>_pid<P>_run<N>`: the process id keeps concurrent
-# processes of one executable apart, the run id the compiles of one process. If false (the
+# processes of one executable apart, the run id the compiles of one process; another
+# process's startup cleanup spares them while process P runs. If false (the
 # default), each library is a temporary file removed once it is loaded, unless
 # `output_debug_files_in_build_directory` retains it in the system temp directory. Windows
 # refuses to delete a loaded library: there it is removed only after its routine is collected

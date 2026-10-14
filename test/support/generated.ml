@@ -256,35 +256,50 @@ let read ?ext routine =
       Hashtbl.set read_digests ~key:p ~data:digest;
       src
 
-(** [kept_libraries ?pid routine] lists the paths of the libraries the process [pid] (default: this
-    one) kept for [routine] under [output_dlls_in_build_directory] (gh-ocannl-1247), in compile
-    order. The names are the backend's own ({!Utils.kept_library_prefix}), so a renaming cannot
-    leave this listing looking in the wrong place. A child process of this executable writes into
-    the same directory, which is how a test sees a concurrent process's libraries; it must not call
-    {!init} itself, or it would sweep the parent's.
+(** [kept_libraries ?owner routine] lists the paths of the libraries kept for [routine] under
+    [output_dlls_in_build_directory] (gh-ocannl-1247), in owner then compile order: those of this
+    process ([`This_process], the default), of the process with OS id [p] ([`Pid p]), or of every
+    process ([`Any]). Names are read with the backend's own {!Utils.parse_kept_library_name}, so a
+    renaming cannot leave this listing looking for the wrong ones. A child process of this
+    executable writes into the same directory, which is how a test sees another process's libraries;
+    it must not call {!init} itself, or it would sweep the parent's.
 
     Like {!read}, it answers from this run only: {!init} emptied the directory first. An empty list
     is an answer here, not a failure, so a caller states the count it expects. *)
-let kept_libraries ?(pid = Unix.getpid ()) routine =
+let kept_libraries ?(owner = `This_process) routine =
   if Option.is_none !backend then (
     uninitialized ("Generated.kept_libraries " ^ routine);
     [])
   else
+    let wanted_owner =
+      match owner with
+      | `This_process -> Some (Utils.os_process_id ())
+      | `Pid p -> Some p
+      | `Any -> None
+    in
     let dir = Utils.build_files_dir () in
-    let prefix = Utils.kept_library_prefix ~pid routine in
-    let suffix = Utils.dynamic_library_extension in
     Stdlib.Sys.readdir dir |> Array.to_list
     |> List.filter_map ~f:(fun entry ->
-        match String.chop_prefix entry ~prefix with
-        | None -> None
-        | Some rest -> (
-            match String.chop_suffix rest ~suffix with
-            | Some run_id
-              when (not (String.is_empty run_id)) && String.for_all run_id ~f:Char.is_digit ->
-                Some (Int.of_string run_id, Stdlib.Filename.concat dir entry)
-            | Some _ | None -> None))
-    |> List.sort ~compare:(fun (a, _) (b, _) -> Int.compare a b)
+        match Utils.parse_kept_library_name entry with
+        | Some { kernel_name; owner_pid; library_run_id }
+          when String.equal kernel_name (Utils.clean_filename routine)
+               && Option.for_all wanted_owner ~f:(Int.equal owner_pid) ->
+            Some ((owner_pid, library_run_id), Stdlib.Filename.concat dir entry)
+        | Some _ | None -> None)
+    |> List.sort ~compare:(fun ((p1, r1), _) ((p2, r2), _) ->
+        match Int.compare p1 p2 with 0 -> Int.compare r1 r2 | c -> c)
     |> List.map ~f:snd
+
+(** [plant_kept_library ~pid routine] writes a placeholder under the name of a library the process
+    [pid] kept for [routine]'s first compile: a fixture for what a startup cleanup does with a
+    library it finds, without the test naming the artifact directory itself. *)
+let plant_kept_library ~pid routine =
+  if Option.is_none !backend then uninitialized ("Generated.plant_kept_library " ^ routine)
+  else
+    Stdio.Out_channel.write_all
+      (Stdlib.Filename.concat (Utils.build_files_dir ())
+         (Utils.kept_library_name ~pid ~run_id:1 routine))
+      ~data:"planted"
 
 (** [assert_emits ~routine ~contains claim] records [claim] as holding exactly when [routine]'s
     generated source contains [contains] -- the common case, as an assertion rather than a [match]

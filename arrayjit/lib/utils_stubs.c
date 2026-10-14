@@ -12,7 +12,9 @@
 #include <string.h>
 
 #if !defined(_WIN32)
+#include <errno.h>
 #include <fcntl.h>
+#include <signal.h>
 #include <unistd.h>
 #endif
 
@@ -33,6 +35,43 @@ CAMLprim value ocannl_flush_c_streams(value unit) {
   (void)unit;
   fflush(NULL);
   return Val_unit;
+}
+
+/* The operating system's id of this process (gh-ocannl-1247). Not [Unix.getpid]: on Windows that
+   answers a handle to the current process, duplicated at startup, which is local to the process
+   and need not differ between two of them. */
+CAMLprim value ocannl_os_process_id(value unit) {
+  (void)unit;
+#if defined(_WIN32)
+  return Val_long((long)GetCurrentProcessId());
+#else
+  return Val_long((long)getpid());
+#endif
+}
+
+/* Whether a process with the OS id [pid] is running now. A process that exists but that this one
+   may not signal or open still counts as running: the answer protects its files from deletion. */
+CAMLprim value ocannl_process_alive(value v_pid) {
+#if defined(_WIN32)
+  {
+    DWORD pid = (DWORD)Long_val(v_pid);
+    HANDLE h;
+    DWORD wait;
+    if (Long_val(v_pid) <= 0) return Val_false;
+    h = OpenProcess(SYNCHRONIZE, FALSE, pid);
+    if (h == NULL) return Val_bool(GetLastError() == ERROR_ACCESS_DENIED);
+    wait = WaitForSingleObject(h, 0);
+    CloseHandle(h);
+    return Val_bool(wait == WAIT_TIMEOUT);
+  }
+#else
+  {
+    long pid = Long_val(v_pid);
+    if (pid <= 0 || pid != (long)(pid_t)pid) return Val_false;
+    if (kill((pid_t)pid, 0) == 0) return Val_true;
+    return Val_bool(errno == EPERM);
+  }
+#endif
 }
 
 /* Give the C runtime's [stderr] its own file descriptor, duplicated from the process's real
