@@ -1155,11 +1155,12 @@ files.
   depth 4 of a 64 ms kernel would keep 256 ms batches). None of this changes the objective (the depth picks the scale;
   an entry timed at an older depth is an accurate, merely expensive, reading), so no cache-key
   generation bump. `autotune_timing_modes` pins each change on the injected clock with a claim
-  that fails without it. Its probe claims read `Autotune.on_calibration_probe` (gh-ocannl-1119),
-  one record per probe tagged with the branch that started it, never the `batch` calls: runs of
-  same-depth batches merge a stall retry into its confirmation, so the retry escaped the budget
-  claim, and chunking them counts probes only as a lower bound. A new probe site passes its own
-  `~role`; the test's witness claim holds every report against the device's batch log.
+  that fails without it. Its probe claims read the call record's `calibration_probes`
+  (gh-ocannl-1119), one entry per probe tagged with the branch that started it, never the `batch`
+  calls: runs of same-depth batches merge a stall retry into its confirmation, so the retry escaped
+  the budget claim, and chunking them counts probes only as a lower bound. A new probe site passes
+  its own `~role`; the test's witness claim holds every reported probe, and the timed loop after
+  them, against the device's batch log.
   An unresolved first pair retries at double depth, and the next fit uses the two batch observations so an
   inflated synchronized-single window cannot force the cap. If the last bounded probe first reaches
   the target, the interpolated target depth is still sampled and checked against the measured
@@ -1202,8 +1203,8 @@ files.
   count as they start, so partial/fatal reports retain them too; diagnostic control timing is
   excluded. A depth-one retry takes fresh singles instead of resuming the refused calibration window. Only finite
   positive contention readings qualify, not an unresolved clock.
-  `on_timing_retry` accounts for the discarded window's extra dispatches, while
-  `on_timed_window` describes only the returned window; `autotune_measured_refusal` labels the
+  The call record's `discarded_window` accounts for the discarded window's extra dispatches, while
+  its `window` describes only the returned one; `autotune_measured_refusal` labels the
   retries separately from final host refusals and prints each returned depth and median wall.
   cc, CUDA/HIP and isolated timing keep their existing dispatch counts and policy. This adds
   sampling of the same objective, so cache-key generations stay unchanged.
@@ -1221,7 +1222,7 @@ files.
   non-positive or non-finite minimum is a clock that resolved nothing, refused by
   `Autotune.admitted_timing_ms` on the number itself, and such an estimate batches at the cap
   because sub-resolution readings are exactly what queueing exists to resolve.
-  Symptom to recognize: the `on_batch_depth` seam (printed by `autotune_timing_modes` to stderr)
+  Symptom to recognize: the call record's depth (printed by `autotune_timing_modes` to stderr)
   reporting depth 1 where a batch was expected, alongside `NOT TIMED` for every candidate. Note
   that `autotune_timing_modes`' own device-facing claims are all written `... || contended`, so a
   total refusal reads there as a pass — the tuner tests are what catch it. Downstream,
@@ -1247,11 +1248,21 @@ files.
   at depth 1 after ~40 calibration launches (sixteen singles plus the depth-2 confirmation) and
   then time exactly what `isolated` would. `BENCH_TIMING_TRACE=1` in the benchmark runners splits a
   session's wall this way; `benchmarks/gh834_cells.sh` is the per-box driver. Its per-call
-  `decision` line (gh-ocannl-1199) is `Autotune.on_batch_decision`, built from the calibration's own
-  metadata: each exit of `calibrate_and_time` returns its `batch_settle`, and
-  `fit_queued_batch_depth_between_with_cap` returns the `affine_fit` (fixed, marginal, verdict) behind
-  every depth it chooses — so a new calibration branch must name its settle and verdict, and a
-  diagnosis reads them instead of re-deriving the policy from probe readings. A cold schedule cache
+  `decision` line (gh-ocannl-1199) is the `decision` of the call's `Autotune.timing_call` record,
+  built from the calibration's own metadata: each exit of `calibrate_and_time` returns its
+  `batch_settle`, and `fit_queued_batch_depth_between_with_cap` returns the `affine_fit` (fixed,
+  marginal, verdict) behind every depth it chooses — so a new calibration branch must name its
+  settle and verdict, and a diagnosis reads them instead of re-deriving the policy from probe
+  readings. **Everything a timing call did reaches observers as that ONE record, when the call
+  returns** (gh-ocannl-1263): a search's own accounting takes it through `time_routine`'s per-call
+  `~on_call` (that is how `report.timing_decisions`, the settle × admission counts each benchmark
+  arm carries in `results.jsonl`, is counted, so neither a trace nor a search in another domain
+  moves it), a trace through the domain-local `Autotune.install_timing_call_observer` /
+  `with_timing_call_observer`. Add a new per-call fact as a field of the record, never as a seam
+  fired mid-call: the four such seams it replaced (depth decision, probe, retry, window) made the
+  harness pair them up by arrival order (`depth_at`, `preflight_at`), the class of bug the trace
+  kept patching. A call that raises returns no record; the trace counts those as pre-dispatch
+  validations started less tagged records returned. A cold schedule cache
   is not a cold session: the backend's own compiled-code cache persists across processes, and in
   gh-ocannl-834's CUDA pair the second session's compile-and-bookkeeping time was 64 s against the
   first's 406 s from the PTX ComputeCache alone — the driver gives each CUDA session an empty
@@ -1288,9 +1299,9 @@ files.
   green only because those readings were usually flagged `contended` and took the claim's escape
   hatch. A bound on a batched reading belongs on the SAME quantity, and specifically on the WINDOW
   the reading is a minimum over: the timed batches and their summed wall, which `time_routine`
-  reports through `Autotune.on_timed_window` (payload: `~samples` — counted by the loop, not
-  restated from its result, so a test can hold the two against each other — `~reused`, the window's
-  batches taken from the calibration and already counted there, `~wall_ms` and `~median_wall_ms`). Not the whole call — its wall also holds the warmup
+  reports as its `Autotune.timing_call` record's `window` (`samples` — counted by the loop, not
+  restated from its result, so a test can hold the two against each other — `reused`, the window's
+  batches taken from the calibration and already counted there, `wall_ms` and `median_wall_ms`). Not the whole call — its wall also holds the warmup
   and the calibration's synchronized singles, and on a backend whose round trip is two orders of
   magnitude above an amortized launch those few dozen singles are ~40% of the call against tens of
   thousands of timed dispatches, so a whole-call mean is diluted by construction and a stall in the

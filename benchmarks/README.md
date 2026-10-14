@@ -270,22 +270,31 @@ endpoint, whereas HIP's invalid exact-f16 and beyond-exact approximate rows are 
   "it ranked below `tune_inline_flips`" (gh-ocannl-558,
   [report-gh558-hip-flips.md](report-gh558-hip-flips.md)).
   `BENCH_TIMING_TRACE=1` (all three runners) splits a searching process's wall between candidate
-  timing and the rest (gh-ocannl-834): one stderr line per `Autotune.time_routine` call (the batch
-  depth it settled on, its launches, how many of its window's batches it `reused` from the
-  calibration (a depth-1 settle, gh-ocannl-1074), its warmup-plus-calibration and timed-loop
-  walls, and running totals, so a cell killed at its cap still leaves a lower bound) and one per
-  candidate attempt (a compile, unless `autotune_bound_pruning` prunes it first), plus a closing summary with the
-  depth histogram. An untagged call (the untuned control `autotune_log=true` times) has its warmup
-  and calibration counted as unattributed rather than as zero. A `timing-trace: search done` line
-  marks where the measured compile (`compile_s`) ended, so a cell cut off later is not read as a
-  search still running. Each call line is followed by a `timing-trace: decision` line
-  (gh-ocannl-1199) from `Autotune.on_batch_decision`: the search phase (`playoff` for the composite
-  playoff), the calibration exit that chose the depth (`measured_batch`, `affine_projection`,
-  `cap_measured`, `budget_exhausted`, ...), its latest affine fit with the fitted fixed and marginal
-  costs and the fit's verdict (`boundary_floor` is the gh-ocannl-1184 depth-2 retention), the
-  cap-directed probes, what the projection bound, wall-bounded fallback or rescue changed, the probe
-  budget used, and the admission verdict (`admitted`, `refused unbatched`, ...). It only observes
-  the tuner's seams, so the searched schedules are the ones an untraced run crowns.
+  timing and the rest (gh-ocannl-834). Every `Autotune.time_routine` call reports one record as it
+  returns (gh-ocannl-1263), printed as its calibration probes, one call line (the batch depth it
+  settled on, its launches -- a discarded contention window's included -- how many of its window's
+  batches it `reused` from the calibration (a depth-1 settle, gh-ocannl-1074), its
+  warmup-plus-calibration and timed-loop walls, and running totals, so a cell killed at its cap
+  still leaves a lower bound) and one `timing-trace: decision` line; plus one line per candidate
+  attempt (a compile, unless `autotune_bound_pruning` prunes it first) and a closing summary with
+  the depth histogram. Each search's `baseline` is an attempt too -- it is compiled, though a GPU
+  backend never dispatches it (gh-ocannl-532) -- so the trace's attempt count runs one per search
+  ahead of `autotune_progress`'s `attempts`, which leaves the baseline out. An untagged call (the
+  untuned control `autotune_log=true` times) is marked as such and counted apart. A tagged call
+  that raised after its pre-dispatch validation returns no record; the trace counts it as raised
+  and the summary then says INCOMPLETE. A `timing-trace: search done` line marks where the measured
+  compile (`compile_s`) ended, so a cell cut off later is not read as a search still running. The
+  decision line (gh-ocannl-1199) carries the search phase (`playoff` for the composite playoff),
+  the calibration exit that chose the depth (`measured_batch`, `affine_projection`,
+  `cap_measured`, `budget_exhausted`, ...), its latest affine fit with the fitted fixed and
+  marginal costs and the fit's verdict (`boundary_floor` is the gh-ocannl-1184 depth-2 retention),
+  the cap-directed probes, what the projection bound, wall-bounded fallback or rescue changed, the
+  probe budget used, and the admission verdict (`admitted`, `refused_unbatched`, ...). It only
+  observes the tuner, so the searched schedules are the ones an untraced run crowns. The same
+  settle and admission reach `results.jsonl` without the trace: each `tune` arm carries
+  `timing_decisions`, its search's counts keyed by settle and then admission (e.g.
+  `{"singles_reach_target":{"admitted":40},"measured_batch":{"admitted":12,"refused_contended":1}}`),
+  so a sweep compares calibration behaviour across boxes without scraping stderr.
 - `runners/pytorch/run.py` — flags: `--device cpu|mps|cuda`, `--regime exact|approximate`
   (exact, the default and the parity reference: `highest` matmul precision, cudnn tf32 off,
   hand-composed attention; approximate: torch's own defaults — `high` matmul precision,

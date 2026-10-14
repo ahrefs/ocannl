@@ -93,6 +93,7 @@ the longest calibration path is the provisional probe, four validations, a confi
 the longest calibration path's rescue probes rescue_depth and times the candidate there: true
 every synthetic device's dispatches stay within time_routine's documented maximum: true
 every reported probe is exactly the batches the device dispatched for it: true
+every batch after the calibration is the timed loop's, at the settled depth: true
 
 == autotune_timing spelling ==
 "queued" selects the queued objective: true

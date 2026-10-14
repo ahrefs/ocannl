@@ -11,11 +11,11 @@
    number more.
 
    The host can refuse windows too, and on a loaded Metal device it routinely does: those never
-   reach the seam, so the test counts them itself -- every timed window reports through
-   [Autotune.on_timed_window], named by the [Autotune.on_candidate_attempt] before it, and one the
-   seam does not follow was refused by contention. The report's refusal count must equal the two
-   sources together on every run; the claims only a quiet host can decide are gated on there having
-   been no such refusal. *)
+   reach the seam, so the test counts them itself -- every timing call reports its record through
+   [Autotune.with_timing_call_observer], named by the [Autotune.on_candidate_attempt] before it, and
+   one the seam does not follow was refused by contention. The report's refusal count must equal the
+   two sources together on every run; the claims only a quiet host can decide are gated on there
+   having been no such refusal. *)
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules
@@ -50,39 +50,32 @@ let () =
   let default_digest = ref None and seam_refused = ref 0 and report = ref None in
   (* The label of the latest attempt, the label of a timed window the seam has not yet followed, and
      the labels of the windows the host refused. *)
-  let attempt = ref "" and unfollowed = ref None and host_refused = ref [] and depth = ref 1 in
+  let attempt = ref "" and unfollowed = ref None and host_refused = ref [] in
   let retried = ref [] in
   let settle_window () =
     Option.iter !unfollowed ~f:(fun label -> host_refused := label :: !host_refused);
     unfollowed := None
   in
   let old_measured = !Autotune.on_candidate_measured
-  and old_attempt = !Autotune.on_candidate_attempt
-  and old_window = !Autotune.on_timed_window
-  and old_depth = !Autotune.on_batch_depth
-  and old_retry = !Autotune.on_timing_retry in
+  and old_attempt = !Autotune.on_candidate_attempt in
   Exn.protect
     ~finally:(fun () ->
       Autotune.on_candidate_measured := old_measured;
-      Autotune.on_candidate_attempt := old_attempt;
-      Autotune.on_timed_window := old_window;
-      Autotune.on_batch_depth := old_depth;
-      Autotune.on_timing_retry := old_retry)
+      Autotune.on_candidate_attempt := old_attempt)
     ~f:(fun () ->
+      Autotune.with_timing_call_observer (fun (c : Autotune.timing_call) ->
+          let depth = c.decision.depth in
+          Option.iter c.discarded_window ~f:(fun w ->
+              retried := !attempt :: !retried;
+              Stdio.eprintf "retrying %s: host contention over %d samples at depth %d\n%!" !attempt
+                w.samples depth);
+          Stdio.eprintf
+            "  (not part of the golden) %s: depth %d, samples %d, median batch wall %.4f ms\n%!"
+            !attempt depth c.window.samples c.window.median_wall_ms;
+          settle_window ();
+          unfollowed := Some !attempt)
+      @@ fun () ->
       (Autotune.on_candidate_attempt := fun label -> attempt := label);
-      (Autotune.on_batch_depth := fun d ~calibration_samples:_ -> depth := d);
-      (Autotune.on_timing_retry :=
-         fun ~samples ~reused:_ ->
-           retried := !attempt :: !retried;
-           Stdio.eprintf "retrying %s: host contention over %d samples at depth %d\n%!" !attempt
-             samples !depth);
-      (Autotune.on_timed_window :=
-         fun ~samples ~reused:_ ~wall_ms:_ ~median_wall_ms ->
-           Stdio.eprintf
-             "  (not part of the golden) %s: depth %d, samples %d, median batch wall %.4f ms\n%!"
-             !attempt !depth samples median_wall_ms;
-           settle_window ();
-           unfollowed := Some !attempt);
       (Autotune.on_candidate_measured :=
          fun ~label ~digest ms ->
            unfollowed := None;

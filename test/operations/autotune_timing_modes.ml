@@ -298,31 +298,35 @@ let () =
       same)
 
 (* The whole timing policy on a synthetic device: [batch d] dispatches [d] launches of [launch_ms]
-   behind [fixed_ms] of synchronization and counts them, so every launch a call makes is counted
-   exactly, and the launches after the depth decision -- the ones the timed loop dispatched itself
-   -- are read off the seams rather than inferred. Dyadic costs keep the arithmetic exact. *)
+   behind [fixed_ms] of synchronization and logs them, so every launch a call makes is counted
+   exactly, and the call's one [Autotune.timing_call] record (gh-ocannl-1263) is held against that
+   log rather than trusted: its calibration singles and probes must be the log's leading batches,
+   batch for batch, and the launches after them are the ones the timed loop dispatched itself.
+   Dyadic costs keep the arithmetic exact. *)
 type synthetic_call = {
   settled_depth : int;
   calibration_launches : int;
   window_batches : int;
   reused_batches : int;
   retry_windows : (int * int) list;
+      (** A discarded contention window's [(samples, reused)], when the call retried. *)
   retries_started : int;
-  window_reports : int;
-  fresh_launches : int;
+  window_reports : int;  (** How many records the call delivered. *)
+  loop_batches : (int * float) list;
+      (** The batches the log holds after the calibration's, as the record delimits them: the timed
+          loop's own. *)
+  fresh_launches : int;  (** Their launches. *)
   all_launches : int;
   probes : Autotune.calibration_probe list;
-      (** The calibration's batch probes in dispatch order, as [Autotune.on_calibration_probe]
-          reported them (gh-ocannl-1119). *)
+      (** The calibration's batch probes in dispatch order, as the record lists them
+          (gh-ocannl-1119). *)
   probe_batches : (int * float) list list;
-      (** For each reported probe, the [(depth, wall)] batches the device dispatched since the
-          previous report, the first probe's segment starting at the call's first batch. *)
+      (** For each reported probe, the [(depth, wall)] batches of the log it accounts for -- the
+          first probe's segment starting at the call's first batch, with the singles. *)
   unreported_batches : (int * float) list;
-      (** The batches dispatched after the last probe report and before the depth decision. *)
+      (** The singles, when no probe follows them to carry them in its segment. *)
   reading : Autotune.timing_result;
-  decisions : Autotune.batch_decision list;
-      (** What [Autotune.on_batch_decision] reported (gh-ocannl-1199): one per call when observed,
-          none when the call ran with the seam at its default. *)
+  decisions : Autotune.batch_decision list;  (** The decision of each record the call delivered. *)
   batch_walls : (int * float) list;  (** Every batch the device dispatched, in order. *)
   cap : int;
   repeats : int;
@@ -332,83 +336,81 @@ type synthetic_call = {
    all of them at the end of the budget section. *)
 let synthetic_calls : (string * synthetic_call) list ref = ref []
 
-let synthetic_call ?(repeats = 3) ?(retry_contended = false) ?(observe_decisions = true) ?walls
-    ~timing ~cap ~fixed_ms ~launch_ms () =
-  let launches = ref 0 and batches = ref 0 and decided = ref None in
-  let decisions = ref [] and batch_walls = ref [] in
-  (* [segment] holds the batches since the last probe report, newest first. *)
-  let segment = ref [] and probes = ref [] in
+(* The device alone: [batch] and the log it appends to, oldest first once reversed. *)
+let synthetic_device ?walls ~fixed_ms ~launch_ms () =
+  let batches = ref 0 and batch_walls = ref [] in
   let batch d =
-    launches := !launches + d;
     Int.incr batches;
     let wall =
       match walls with Some f -> f !batches d | None -> fixed_ms +. (launch_ms *. Float.of_int d)
     in
-    if Option.is_none !decided then segment := (d, wall) :: !segment;
     batch_walls := (d, wall) :: !batch_walls;
     wall
   in
-  let window = ref None and unreported = ref [] and retry_windows = ref [] in
-  let window_reports = ref 0 and retries_started = ref 0 in
-  let old_depth = !Autotune.on_batch_depth
-  and old_window = !Autotune.on_timed_window
-  and old_probe = !Autotune.on_calibration_probe
-  and old_retry = !Autotune.on_timing_retry
-  and old_decision = !Autotune.on_batch_decision in
-  Exn.protect
-    ~finally:(fun () ->
-      Autotune.on_batch_depth := old_depth;
-      Autotune.on_timed_window := old_window;
-      Autotune.on_calibration_probe := old_probe;
-      Autotune.on_timing_retry := old_retry;
-      Autotune.on_batch_decision := old_decision)
-    ~f:(fun () ->
-      (if observe_decisions then Autotune.on_batch_decision := fun d -> decisions := d :: !decisions);
-      (Autotune.on_timing_retry :=
-         fun ~samples ~reused -> retry_windows := (samples, reused) :: !retry_windows);
-      (Autotune.on_calibration_probe :=
-         fun probe ->
-           probes := (probe, List.rev !segment) :: !probes;
-           segment := []);
-      (Autotune.on_batch_depth :=
-         fun d ~calibration_samples ->
-           decided := Some (d, calibration_samples, !launches);
-           unreported := List.rev !segment);
-      (Autotune.on_timed_window :=
-         fun ~samples ~reused ~wall_ms:_ ~median_wall_ms:_ ->
-           Int.incr window_reports;
-           window := Some (samples, reused, !launches));
-      let reading =
-        if retry_contended then
-          Autotune.calibrate_and_time_with_retry_observer
-            ~on_retry:(fun () -> Int.incr retries_started)
-            ~phase:None ~retry_contended ~timing ~repeats ~queue_depth_cap:cap ~batch
-        else
-          (* Compile and execute the original public helper without an observer too. *)
-          Autotune.calibrate_and_time ~retry_contended ~timing ~repeats ~queue_depth_cap:cap ~batch
-      in
-      let settled_depth, calibration_launches, at_decision = Option.value_exn !decided in
-      let window_batches, reused_batches, at_window = Option.value_exn !window in
-      let probes, probe_batches = List.unzip (List.rev !probes) in
-      {
-        settled_depth;
-        calibration_launches;
-        window_batches;
-        reused_batches;
-        retry_windows = List.rev !retry_windows;
-        retries_started = !retries_started;
-        window_reports = !window_reports;
-        fresh_launches = at_window - at_decision;
-        all_launches = !launches;
-        probes;
-        probe_batches;
-        unreported_batches = !unreported;
-        reading;
-        decisions = List.rev !decisions;
-        batch_walls = List.rev !batch_walls;
-        cap;
-        repeats;
-      })
+  (batch, fun () -> List.rev !batch_walls)
+
+(* The same device with no observer at all: what an unobserved call dispatches and reads. *)
+let unobserved_call ?(repeats = 3) ?walls ~timing ~cap ~fixed_ms ~launch_ms () =
+  let batch, log = synthetic_device ?walls ~fixed_ms ~launch_ms () in
+  let reading =
+    Autotune.calibrate_and_time ~retry_contended:false ~timing ~repeats ~queue_depth_cap:cap ~batch
+  in
+  (reading, log ())
+
+let synthetic_call ?(repeats = 3) ?(retry_contended = false) ?walls ~timing ~cap ~fixed_ms
+    ~launch_ms () =
+  let batch, log = synthetic_device ?walls ~fixed_ms ~launch_ms () in
+  let records = ref [] and retries_started = ref 0 in
+  let record c = records := c :: !records in
+  let reading =
+    if retry_contended then
+      Autotune.calibrate_and_time_with_retry_observer
+        ~on_retry:(fun () -> Int.incr retries_started)
+        ~on_call:record ~phase:None ~retry_contended ~timing ~repeats ~queue_depth_cap:cap ~batch
+    else
+      (* The original public helper, observed the way a trace observes a search: through the
+         domain's observer rather than a per-call one. *)
+      Autotune.with_timing_call_observer record (fun () ->
+          Autotune.calibrate_and_time ~retry_contended ~timing ~repeats ~queue_depth_cap:cap ~batch)
+  in
+  let batch_walls = log () in
+  let c = match !records with [ c ] -> c | _ -> List.hd_exn !records in
+  (* The record's calibration, batch for batch: its singles, then each probe's [runs]. *)
+  let singles, rest = List.split_n batch_walls c.calibration_singles in
+  let probe_batches, rest =
+    List.fold_map c.calibration_probes ~init:rest ~f:(fun rest (pr : Autotune.calibration_probe) ->
+        let own, rest = List.split_n rest pr.runs in
+        (rest, own))
+    |> fun (rest, segments) -> (segments, rest)
+  in
+  let probe_batches, unreported_batches =
+    match probe_batches with
+    | first :: others -> ((singles @ first) :: others, [])
+    | [] -> ([], singles)
+  in
+  let launches l = List.sum (module Int) l ~f:fst in
+  {
+    settled_depth = c.decision.depth;
+    calibration_launches = c.calibration_launches;
+    window_batches = c.window.samples;
+    reused_batches = c.window.reused;
+    retry_windows =
+      Option.to_list c.discarded_window
+      |> List.map ~f:(fun (w : Autotune.timed_window) -> (w.samples, w.reused));
+    retries_started = !retries_started;
+    window_reports = List.length !records;
+    loop_batches = rest;
+    fresh_launches = launches rest;
+    all_launches = launches batch_walls;
+    probes = c.calibration_probes;
+    probe_batches;
+    unreported_batches;
+    reading;
+    decisions = List.rev_map !records ~f:(fun c -> c.Autotune.decision);
+    batch_walls;
+    cap;
+    repeats;
+  }
 
 let describe what c =
   synthetic_calls := (what, c) :: !synthetic_calls;
@@ -433,15 +435,15 @@ let describe what c =
 let () =
   Stdio.printf "\n== a fitted single crossing keeps supported queued work ==\n";
   let cap = Autotune.queue_depth_cap_for_backend "hip" in
-  let call ?observe_decisions what ~single ~fixed ~marginal =
+  let walls ~single ~fixed ~marginal _nth depth =
+    if depth = 1 then single else fixed +. (marginal *. Float.of_int depth)
+  in
+  let call what ~single ~fixed ~marginal =
     let c =
-      synthetic_call ?observe_decisions ~timing:Autotune.Queued ~cap ~fixed_ms:fixed
-        ~launch_ms:marginal
-        ~walls:(fun _nth depth ->
-          if depth = 1 then single else fixed +. (marginal *. Float.of_int depth))
-        ()
+      synthetic_call ~timing:Autotune.Queued ~cap ~fixed_ms:fixed ~launch_ms:marginal
+        ~walls:(walls ~single ~fixed ~marginal) ()
     in
-    if Option.is_none observe_decisions then describe what c;
+    describe what c;
     c
   in
   let cases =
@@ -539,11 +541,13 @@ let () =
   (* Observing the decision changes nothing: the same device, with the seam left at its default,
      dispatches the same batches and returns the same reading. *)
   p_all "every call dispatches and reads the same with the decision seam unobserved" all_calls
-    ~f:(fun (what, fixed, marginal, c) ->
-      let quiet = call ~observe_decisions:false what ~single:9.75 ~fixed ~marginal in
-      List.is_empty quiet.decisions
-      && Poly.equal quiet.reading c.reading
-      && List.equal Poly.equal quiet.batch_walls c.batch_walls);
+    ~f:(fun (_, fixed, marginal, c) ->
+      let reading, batch_walls =
+        unobserved_call ~timing:Autotune.Queued ~cap ~fixed_ms:fixed ~launch_ms:marginal
+          ~walls:(walls ~single:9.75 ~fixed ~marginal)
+          ()
+      in
+      Poly.equal reading c.reading && List.equal Poly.equal batch_walls c.batch_walls);
   let cacheable calls =
     let admitted c = Option.is_some (Autotune.admitted_timing_ms c.reading) in
     Autotune.search_measurements_cacheable
@@ -1185,11 +1189,11 @@ let () =
       if c.all_launches > bound then
         Stdio.eprintf "  %s: %d launches past the documented %d\n%!" what c.all_launches bound;
       c.all_launches <= bound);
-  (* The seam against the device's own batch log, so a probe that dispatched without reporting, or
-     misreported what it measured, fails here rather than thinning every claim above: each report
-     ends exactly the batches dispatched since the previous one, at its depth, with their minimum
-     and their finite positive sum; only the first report's segment starts earlier, with the
-     synchronized singles; and nothing but singles precedes the depth decision unreported. *)
+  (* The record against the device's own batch log, so a probe that dispatched without reporting, or
+     misreported what it measured, fails here rather than thinning every claim above: the log opens
+     with the record's synchronized singles, then each reported probe's batches in turn, at its
+     depth, with their minimum and their finite positive sum -- and what follows is the timed
+     loop's, at the settled depth, exactly as many batches as its windows dispatched. *)
   let singles = List.for_all ~f:(fun (d, _) -> d = 1) in
   Verdict.p_all "every reported probe is exactly the batches the device dispatched for it"
     !synthetic_calls ~f:(fun (what, c) ->
@@ -1216,6 +1220,18 @@ let () =
       in
       if not ok then
         Stdio.eprintf "  %s: the reported probes disagree with the dispatched batches\n%!" what;
+      ok);
+  Verdict.p_all "every batch after the calibration is the timed loop's, at the settled depth"
+    !synthetic_calls ~f:(fun (what, c) ->
+      let dispatched (samples, reused) = samples - reused in
+      let ok =
+        List.for_all c.loop_batches ~f:(fun (d, _) -> d = c.settled_depth)
+        && List.length c.loop_batches
+           = dispatched (c.window_batches, c.reused_batches)
+             + List.sum (module Int) c.retry_windows ~f:dispatched
+      in
+      if not ok then
+        Stdio.eprintf "  %s: the batches after the calibration are not the timed loop's\n%!" what;
       ok);
   Stdio.eprintf
     "  (not part of the golden) most dispatches of any synthetic device: %d, probes %d\n%!"
@@ -1285,49 +1301,38 @@ let () =
   let ctx = Context.set_values ctx counter_node [| 0. |] in
   measured := Some (opt, ctx);
   let count () = Int.of_float (Context.get_values ctx counter_node).(0) in
-  (* The depth each call settles on, off the instrument's own observation seam: the queued call
-     calibrates independently, so nothing derived from a reading taken outside it (gh-ocannl-851,
-     Codex round 2 on PR #521) stands in for what it actually used. *)
-  let depth_seen = ref 0 and calibration_dispatches_seen = ref 0 in
-  (Autotune.on_batch_depth :=
-     fun d ~calibration_samples ->
-       depth_seen := d;
-       calibration_dispatches_seen := calibration_samples);
-  (* The window the returned minimum was taken over (gh-ocannl-994), off the same kind of seam: the
-     batches the timed loop ran and their summed wall. The per-launch envelope below is written
-     against THIS window rather than against the call the test wraps a clock around, whose wall also
-     holds the warmup and the calibration's synchronized singles. *)
-  let timed_wall_seen = ref 0. and timed_batches_seen = ref 0 and timed_median_seen = ref 0. in
-  let reused_seen = ref 0 in
-  let retry_dispatches_seen = ref 0 in
-  (Autotune.on_timing_retry :=
-     fun ~samples ~reused ->
-       retry_dispatches_seen := !retry_dispatches_seen + ((samples - reused) * !depth_seen));
-  (Autotune.on_timed_window :=
-     fun ~samples ~reused ~wall_ms ~median_wall_ms ->
-       timed_batches_seen := samples;
-       reused_seen := reused;
-       timed_wall_seen := wall_ms;
-       timed_median_seen := median_wall_ms);
+  (* Each call's own record (gh-ocannl-1263), through [time_routine]'s per-call [on_call]. The depth
+     it settled on: the queued call calibrates independently, so nothing derived from a reading
+     taken outside it (gh-ocannl-851, Codex round 2 on PR #521) stands in for what it actually used.
+     And the window the returned minimum was taken over (gh-ocannl-994): the batches the timed loop
+     ran and their summed and median wall. The per-launch envelope below is written against THIS
+     window rather than against the call the test wraps a clock around, whose wall also holds the
+     warmup and the calibration's synchronized singles. *)
   let measure timing =
-    retry_dispatches_seen := 0;
+    let record = ref None in
     let before = count () in
     let c0 = Mtime_clock.counter () in
-    let result = Autotune.time_routine ~repeats:3 ~timing ctx routine in
+    let result =
+      Autotune.time_routine ~on_call:(fun c -> record := Some c) ~repeats:3 ~timing ctx routine
+    in
     let wall_ms = Mtime.Span.to_float_ns (Mtime_clock.count c0) /. 1e6 in
+    let c = Option.value_exn !record in
+    let depth = c.decision.depth in
     {
       ms = result.ms;
       contended = result.contended || result.unbatched;
       samples = result.samples;
       wall_ms;
       dispatches = count () - before;
-      depth = !depth_seen;
-      calibration_dispatches = !calibration_dispatches_seen;
-      retry_dispatches = !retry_dispatches_seen;
-      timed_wall_ms = !timed_wall_seen;
-      timed_median_ms = !timed_median_seen;
-      timed_batches = !timed_batches_seen;
-      reused = !reused_seen;
+      depth;
+      calibration_dispatches = c.calibration_launches;
+      retry_dispatches =
+        Option.value_map c.discarded_window ~default:0 ~f:(fun (w : Autotune.timed_window) ->
+            (w.samples - w.reused) * depth);
+      timed_wall_ms = c.window.wall_ms;
+      timed_median_ms = c.window.median_wall_ms;
+      timed_batches = c.window.samples;
+      reused = c.window.reused;
     }
   in
   (* The anchor the low side of the per-launch envelope below is written against: one launch plus
@@ -1407,12 +1412,12 @@ let () =
      by the depth is about [depth] times the cost of a launch in that call, and a reading divided by
      the depth TWICE is that cost's [1/depth]. Both errors are claims about the same quantity the
      reading is -- the cost of one launch inside THIS call -- so both sides are written against the
-     window the reading is a MINIMUM over, and against that window's MEDIAN batch, per launch.
-     [Autotune.on_timed_window] reports the window: the batches the timed loop ran, their summed
-     wall, and their median. A minimum cannot exceed the median of the same samples, so a correct
-     reading satisfies the upper side by construction and a reading left per-batch overshoots it by
-     [depth / 2]; the low side is below, and the depth from which either discriminates is derived
-     further down from the same contention rule.
+     window the reading is a MINIMUM over, and against that window's MEDIAN batch, per launch. The
+     call's [Autotune.timing_call] record reports the window: the batches the timed loop ran, their
+     summed wall, and their median. A minimum cannot exceed the median of the same samples, so a
+     correct reading satisfies the upper side by construction and a reading left per-batch
+     overshoots it by [depth / 2]; the low side is below, and the depth from which either
+     discriminates is derived further down from the same contention rule.
 
      The window, rather than the whole call the test clocks around: that wall also holds the warmup
      and the calibration's synchronized singles, and on a backend whose host round trip is two
