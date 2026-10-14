@@ -1460,7 +1460,7 @@ type placement_surface = {
           budget (the admissible direction — the bound already exceeds the incumbent's measurement).
           [None] when no envelope constant is present, or when {!placement_floor_withheld}. *)
   ps_twin_identity :
-    node_tag:(Ir.Tnode.t -> string) ->
+    node_tag:(Ir.Tnode.t -> string option) ->
     chain:(Ir.Tnode.t -> Ir.Low_level.reading option) ->
     Ir.Low_level.flip_candidate ->
     Ir.Low_level.flip_alternative ->
@@ -1472,11 +1472,13 @@ type placement_surface = {
 
           What equal identities claim is a stated list, not "everything the flip's outcome depends
           on", which no local reading can be. The neighbourhood is every top-level statement of the
-          raw program that sets or reads the flipped node, rendered with fresh-name normalization
-          ({!Ir.Schedule_cache.canonicalize_code}): per node its dims, precision and constancy, the
-          placement the lineage brought, the placement the specialization decided, the chain's
-          reading of it, the caller's [node_tag] (the flip chain tags its timing lineage, since the
-          flips are measured there), observability (an observable buffer is never aliased), the
+          raw program that sets or reads the flipped node, closed over the statement-level locals it
+          reads (a top-level statement defining one joins it), rendered with fresh-name
+          normalization ({!Ir.Schedule_cache.canonicalize_code}): per node its dims, precision and
+          constancy, the placement the lineage brought, the placement the specialization decided,
+          the chain's reading of it, the caller's [node_tag] (the flip chain tags its timing
+          lineage, since the flips are measured there; [None] from it refuses, as for an inherited
+          computation in that lineage), observability (an observable buffer is never aliased), the
           surface's enablement classes and the compile-time bounds candidate; then the flipped
           node's mark, its default and target readings, recompute cost and whether it is modeled.
 
@@ -1485,10 +1487,10 @@ type placement_surface = {
           [Staged_compilation] touches no node the neighbourhood filter can see); a flipped node no
           statement here assigns; a rendered node with a computation an earlier routine of the
           lineage stored ({!Context.inherits_computation}), whose replayed prefix the source does
-          not show. Out by design: whole-routine context (where the neighbourhood sits, hence live
-          ranges — per-layer twins differ in exactly that), and anything a farther node contributes
-          except through the recompute cost. A false twin costs one unmeasured flip, never a wrong
-          value. *)
+          not show; a local read that no statement defines. Out by design: whole-routine context
+          (where the neighbourhood sits, hence live ranges — per-layer twins differ in exactly
+          that), and anything a farther node contributes except through the recompute cost. A false
+          twin costs one unmeasured flip, never a wrong value. *)
 }
 (** The placement decision surface prepared for search (gh-ocannl-514): the per-node
     inline/materialize levels of the joint placement x sketch x fission space. *)

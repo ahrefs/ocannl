@@ -1613,7 +1613,7 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
              half the evidence. *)
           let twin_tag =
             match timing_ctx with
-            | None -> Some (fun _ -> "")
+            | None -> Some (fun _ -> Some "")
             | Some tctx -> (
                 match
                   ( Context.placements tctx,
@@ -1622,12 +1622,17 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
                 | plc, octx ->
                     Some
                       (fun n ->
-                        ";t"
-                        ^ Ir.Schedule_cache.lineage_tag plc octx n
-                        ^
-                        match Tn.Placements.get octx.LL.placements n with
-                        | None -> ";td=u"
-                        | Some (m, _) -> ";td=" ^ Sexp.to_string (Tn.sexp_of_memory_mode m))
+                        (* A computation an earlier routine of THAT lineage stored is replayed where
+                           the flips are measured, and the source does not show it. *)
+                        if Context.inherits_computation tctx n then None
+                        else
+                          Some
+                            (";t"
+                            ^ Ir.Schedule_cache.lineage_tag plc octx n
+                            ^
+                            match Tn.Placements.get octx.LL.placements n with
+                            | None -> ";td=u"
+                            | Some (m, _) -> ";td=" ^ Sexp.to_string (Tn.sexp_of_memory_mode m)))
                 | exception exn when must_propagate exn ->
                     (* A process-level class propagates, after releasing the arms' results like
                        every other propagation out of the chain (gh-ocannl-550). *)

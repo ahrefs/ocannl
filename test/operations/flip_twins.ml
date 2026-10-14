@@ -169,7 +169,7 @@ let () =
   let comp = Train.forward loss in
   (* The surface, as the chain reads it. *)
   let surface = Autotune.placement_surface (Context.auto ()) comp Ir.Indexing.Empty in
-  let no_chain _ = None and no_tag _ = "" in
+  let no_chain _ = None and no_tag _ = Some "" in
   let classes = Hashtbl.create (module String) in
   let class_of id =
     match id with
@@ -212,11 +212,14 @@ let () =
        (Option.equal String.equal (identity ~chain:x1_committed y1)
           (identity ~chain:x1_committed y2)));
   (* The caller's tag -- the flip chain's timing lineage -- enters per node too. *)
-  let a2_tagged n = if Tn.equal n a2.Tensor.value then ";t-differs" else "" in
+  let a2_tagged n = Some (if Tn.equal n a2.Tensor.value then ";t-differs" else "") in
   p "a caller tag on a twin's neighbour separates the twins"
     (not
        (Option.equal String.equal (identity ~node_tag:a2_tagged x2)
           (identity ~node_tag:a2_tagged x1)));
+  let a2_refused n = if Tn.equal n a2.Tensor.value then None else Some "" in
+  p "a caller tag refusing a neighbour leaves no identity"
+    (Option.is_some (identity x2) && Option.is_none (identity ~node_tag:a2_refused x2));
   p "a commitment outside the neighbourhood leaves twins twinned"
     (Option.equal String.equal (identity ~chain:x1_committed x2) (identity x2));
   let total_alternatives =
