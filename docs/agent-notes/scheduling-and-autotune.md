@@ -855,10 +855,11 @@ files.
   searched each of the eight flips abandoned cold in full (775 s and 310 attempts apiece where the
   cold abandonment took 19 s), because the replayed incumbent had no record under that shape and no
   abandonment record matched. Two traps for reproducing that row: a warm run with the placement
-  store on replays the recorded decision as ONE search and never walks the chain; and through
-  `benchmarks/orchestrate.py` the flip budget cannot be raised by `OCANNL_TUNE_INLINE_FLIPS`,
-  because a commandline-picked profile (`--ocannl_profile=approximate`, whose payload sets 2)
-  outranks the environment -- pass `--ocannl_tune_inline_flips=N` on the commandline.
+  store on replays the recorded decision as ONE search and never walks the chain; and under a
+  commandline-picked profile (`--ocannl_profile=approximate`, whose payload sets 2) the flip budget
+  cannot be raised by `OCANNL_TUNE_INLINE_FLIPS`, since the profile outranks the environment --
+  pass `--ocannl_tune_inline_flips=N`, which `benchmarks/orchestrate.py` does per cell with
+  `--cell-flag tune_inline_flips=N`.
 - **A per-segment single is timed against a backdrop, so near-tie singles rank by noise**
   (gh-ocannl-1166). An `F_sketch` single times the WHOLE routine with every other segment on its
   untuned preset: on gpt2_mini/CUDA tf32 a q/k/v single measured ~23.2 ms where the composite it
