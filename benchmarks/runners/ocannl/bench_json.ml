@@ -81,7 +81,10 @@ let string s =
     [{"measured_batch":{"admitted":12,"refused_contended":1},"singles_reach_target":{"admitted":40}}]
     — [{}] for an arm that timed nothing — so a sweep compares how calibration settled across boxes
     without scraping the stderr trace. Its calls sum to every timing call of the arm's search,
-    whereas [timings_contended] counts the refused windows of the baseline and candidates alike.
+    whereas [timings_contended] counts the refused windows of the baseline and candidates alike. It
+    is the arm's LAST field, and its only nested object: shell consumers read an arm's scalars with
+    a [[^}]*] scan from ["arm":"<name>"] ([benchmarks/gh834_cells.sh] reads [best_ms] that way),
+    which stops at the first closing brace.
 
     [tensorized] and [tensorization] are the two halves of the honesty of a tensorized timing
     (gh-ocannl-626). [tensorized] says the crowned SCHEDULE carries a [Tensorize]; [tensorization]
@@ -115,15 +118,14 @@ let tune_arm ~name ~state ~searched ~cache_hit ~timing ~rounds_run ~beam_width ~
     ~timings_unbatched ~timing_decisions ~best_ms ~best_label ~tensorized ~tensorization
     ~mma_statements ~mma_scalar_fallbacks ~mma_seeded ~mma_timed ~mma_best_ms ~terminal_failure =
   Printf.sprintf
-    {|{"arm":"%s","state":"%s","searched":%b,"cache_hit":%b,"timing":"%s","rounds_run":%d,"beam_width":%d,"timings_contended":%d,"timings_unbatched":%d,"timing_decisions":%s,"best_ms":%s,"best_label":"%s","tensorized":%b,"tensorization":%s,"mma_statements":%d,"mma_scalar_fallbacks":%d,"mma_seeded":%d,"mma_timed":%d,"mma_best_ms":%s,"terminal_failure":%s}|}
+    {|{"arm":"%s","state":"%s","searched":%b,"cache_hit":%b,"timing":"%s","rounds_run":%d,"beam_width":%d,"timings_contended":%d,"timings_unbatched":%d,"best_ms":%s,"best_label":"%s","tensorized":%b,"tensorization":%s,"mma_statements":%d,"mma_scalar_fallbacks":%d,"mma_seeded":%d,"mma_timed":%d,"mma_best_ms":%s,"terminal_failure":%s,"timing_decisions":%s}|}
     (string name) (string state) searched cache_hit (string timing) rounds_run beam_width
-    timings_contended timings_unbatched
-    (decision_counts_object timing_decisions)
-    (num best_ms) (string best_label) tensorized
+    timings_contended timings_unbatched (num best_ms) (string best_label) tensorized
     (Option.value_map tensorization ~default:"null" ~f:(fun t -> Printf.sprintf {|"%s"|} (string t)))
     mma_statements mma_scalar_fallbacks mma_seeded mma_timed (num mma_best_ms)
     (Option.value_map terminal_failure ~default:"null" ~f:(fun detail ->
          Printf.sprintf {|"%s"|} (string detail)))
+    (decision_counts_object timing_decisions)
 
 (** The [tune] object of the result line, over arms already rendered by {!tune_arm}.
 

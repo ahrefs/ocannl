@@ -335,6 +335,10 @@ let install_timing_trace () =
        whose warmup, calibration and any timed batches are in no total -- by count, so no order in
        which the seams fire can move it. *)
     let preflights = ref 0 and tagged = ref 0 in
+    (* The records reach only this domain's observer, so only this domain's validations are counted
+       against them: the preflight seam is process-wide, and a search in another domain would
+       otherwise read as calls raised here. *)
+    let trace_domain = Stdlib.Domain.self () in
     let raised () = !preflights - !tagged in
     let calib_s = ref 0. and timed_s = ref 0. in
     let depths = Hashtbl.create (module Int) in
@@ -348,7 +352,7 @@ let install_timing_trace () =
     let prev_preflight = !Autotune.on_candidate_preflight in
     (Autotune.on_candidate_preflight :=
        fun name ->
-         Int.incr preflights;
+         if Poly.equal (Stdlib.Domain.self ()) trace_domain then Int.incr preflights;
          prev_preflight name);
     Autotune.install_timing_call_observer (fun (c : Autotune.timing_call) ->
         List.iter c.calibration_probes ~f:(fun (probe : Autotune.calibration_probe) ->
