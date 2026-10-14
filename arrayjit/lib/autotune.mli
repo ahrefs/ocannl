@@ -172,6 +172,12 @@ val sketch_params_label : sketch_params -> string
     geometry — never share a label (gh-ocannl-1230). Contains no [','], the separator of a
     composite's entries. *)
 
+val fiss_sketch_label : fine:bool -> (string * sketch_params) list -> string
+(** The label of a per-segment sketch candidate ([F_sketch[...]]) over its [(segment key, params)]
+    entries: each entry is {!sketch_params_label} followed by [" @"] and a tag of its segment key,
+    so one-entry candidates of two segments that admit the same parameters print apart. Entries are
+    separated by [','] in key order; [fine] marks the finer segmentation. *)
+
 type matmul_site = {
   m_i : Ir.Indexing.symbol;
   m_j : Ir.Indexing.symbol;
@@ -977,11 +983,11 @@ type report = {
           reader of the artifact does not have at all. *)
   best_label : string;
       (** The crowned candidate's spec label — the same string the [autotune_log] lines carry (e.g.
-          ["F_sketch[mma-gpu 16x32x32 simd32 ep]"]). ["baseline"] when no candidate beat the serial
-          baseline, and [""] exactly when nothing was timed — including the states that time nothing
-          by construction, which say so in [outcome] rather than through this string. Which
-          candidate won is otherwise recoverable only by matching [best_ms] against the log's
-          per-candidate times (gh-ocannl-546). *)
+          ["F_sketch[mma-gpu 16x32x32 simd32 ep @1a2b3c4d/5e6f7a8b]"]). ["baseline"] when no
+          candidate beat the serial baseline, and [""] exactly when nothing was timed — including
+          the states that time nothing by construction, which say so in [outcome] rather than
+          through this string. Which candidate won is otherwise recoverable only by matching
+          [best_ms] against the log's per-candidate times (gh-ocannl-546). *)
   best_tensorized : bool;
       (** The crowned schedule contains a [Schedule.Tensorize] — read off [best_schedule], so this
           is what the winner {e is}, not what its label promised. This is the fact a caller needs to

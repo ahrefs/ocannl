@@ -10,7 +10,8 @@
    alike, gh-ocannl-1166). The first part enumerates the fields of [Autotune.sketch_params] from the
    type's derived s-expression -- never from a list here, so a field added to the type is covered
    the day it appears -- and claims that changing any one of them, at two base points that differ in
-   every field, changes the label.
+   every field, changes the label; and that a per-segment candidate's label names its segment, since
+   two segments can admit equal parameters.
 
    Every beam-round candidate printed as [F_saved[N segs]], naming neither the segment it extended
    nor the move (gh-ocannl-1137's probe could not recover which of 635 round candidates failed). The
@@ -121,6 +122,18 @@ let () =
            label (with_field_of ~donor:lo hi name);
          ]))
     ~f:(fun l -> String.mem l ',')
+
+(* Two segments can admit the same parameters (two matmul segments sharing a tile geometry), and
+   their one-entry per-segment candidates schedule different kernels: the label names the segment
+   too. The keys are the shape the search uses, structural digests of two segments. *)
+let () =
+  let key_a = Stdlib.Digest.(to_hex (string "segment a"))
+  and key_b = Stdlib.Digest.(to_hex (string "segment b")) in
+  p_pairwise_distinct
+    "one-entry sketch candidates of two segments with equal parameters print apart"
+    (List.concat_map [ false; true ] ~f:(fun fine ->
+         List.map [ key_a; key_b ] ~f:(fun key -> Autotune.fiss_sketch_label ~fine [ (key, lo) ])))
+    ~equal:String.equal ~to_string:Fn.id
 
 (* --- Part 2: round candidates name their segment and move --- *)
 

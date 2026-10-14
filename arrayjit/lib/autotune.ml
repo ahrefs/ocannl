@@ -2337,6 +2337,16 @@ let move_label = function
           (Option.value_map mv_segment ~default:"" ~f:(Printf.sprintf "seg%d:"))
           (Sexp.to_string_mach (SC.sexp_of_saved_optop mv_op)) )
 
+(* A per-segment sketch candidate's label: each keyed entry renders its parameters and its segment's
+   key tag ({!dshort} of the pre-schedule structural digest). Two segments can admit the same
+   parameters -- two matmul segments sharing a tile geometry -- and their one-entry candidates
+   schedule different kernels, so without the key they would print alike (Codex P2 on PR #1108). *)
+let fiss_sketch_label ~fine entries =
+  Printf.sprintf "F_sketch[%s%s]"
+    (if fine then "fine " else "")
+    (String.concat ~sep:","
+       (List.map entries ~f:(fun (key, p) -> sketch_params_label p ^ " @" ^ dshort key)))
+
 let spec_label = function
   | Whole (W_saved (s, move)) ->
       let from, extension = move_label move in
@@ -2350,10 +2360,7 @@ let spec_label = function
   | Fiss (F_saved (segs, move)) ->
       let from, extension = move_label move in
       Printf.sprintf "F_saved[%d segs%s]%s" (List.length segs) from extension
-  | Fiss (F_sketch { entries; fine }) ->
-      Printf.sprintf "F_sketch[%s%s]"
-        (if fine then "fine " else "")
-        (String.concat ~sep:"," (List.map entries ~f:(fun (_, p) -> sketch_params_label p)))
+  | Fiss (F_sketch { entries; fine }) -> fiss_sketch_label ~fine entries
   | Fiss (F_split { sites }) ->
       Printf.sprintf "F_split[%s]"
         (String.concat ~sep:","
