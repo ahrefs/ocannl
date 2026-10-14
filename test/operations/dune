@@ -8401,3 +8401,13 @@
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+(test
+ (name autotune_replay_refusal)
+ ; ocannl-backend: cc -- Context.cpu (); a corrupt cache entry's refusal is backend-independent
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules autotune_replay_refusal)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
