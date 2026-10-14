@@ -6237,5 +6237,138 @@ class OcannlFlagSweepTest(unittest.TestCase):
         self.assertNotIn("ambient OCANNL_* variables outranked", report_text)
 
 
+def markdown_tables(text):
+    """Every Markdown table in `text`, as `(header, rows)`: a `|` line followed by its `|---` rule,
+    then the `|` lines after it up to the first line that is not one."""
+    lines = text.splitlines()
+    tables = []
+    i = 0
+    while i + 1 < len(lines):
+        if lines[i].startswith("|") and lines[i + 1].startswith("|---"):
+            rows = []
+            j = i + 2
+            while j < len(lines) and lines[j].startswith("|"):
+                rows.append(lines[j])
+                j += 1
+            tables.append((lines[i], rows))
+            i = j
+        else:
+            i += 1
+    return tables
+
+
+@unittest.skipUnless(
+    os.name == "posix", "the hostile fixture name is a file name Windows cannot hold"
+)
+class DisplaySafeSweepTest(unittest.TestCase):
+    """Operator- and environment-supplied strings, through `main` to the report and the run log
+    (post-wave follow-up of gh-ocannl-1273): a fixture's file name, the workload a runner names
+    after it, a cache path from the environment and a knob value an ambient variable set. Each
+    carries a `|`, a backtick and a newline; every one must reach the report's tables without
+    adding a column or a line, and the run log without adding a line or opening a code span.
+
+    Only the cell is faked, as in `OcannlFlagSweepTest`; the failure note is the real cache note.
+    """
+
+    NAME = "odd|work`load\nTAIL1"
+    KNOB = "x|y`z\nTAIL2"
+    RAW = ("|work", "`load", "\nTAIL", "x|y", "y`z", "c|a", "a`che")
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp())
+        fixtures = self.dir / "fixtures"
+        fixtures.mkdir()
+        (fixtures / fixture_digest.DIGEST_FILE).write_bytes(
+            (HERE / "fixtures" / fixture_digest.DIGEST_FILE).read_bytes()
+        )
+        # Forward-only, so the requested f16-static gate leg is NOT APPLICABLE and fills that
+        # table too.
+        header = json.dumps({"__metadata__": {"model": "gpt", "mode": "infer"}}).encode()
+        (fixtures / f"{self.NAME}.safetensors").write_bytes(
+            len(header).to_bytes(8, "little") + header
+        )
+        self.cachedb = self.dir / "c|a`che\nTAIL3" / "cache.db"
+
+    def leaking(self):
+        return {"tf32_matmuls": {"value": self.KNOB, "source": "environment"}}
+
+    def fake_cell(self, label, cmd, env=None, on_checkpoint=None, **_):
+        if "ocannl/cc/materialized" in label:
+            checkpoint = orchestrate.last_checkpoint(
+                golden_checkpoint_line("mlp_wide", parity="running")
+            )
+            checkpoint.update(workload=self.NAME, regime_knobs=self.leaking())
+            on_checkpoint(checkpoint)
+            return None, orchestrate.quarantine_tinygrad_cache({"CACHEDB": str(self.cachedb)})
+        row = cell("ocannl", "cc", "default", [2.3026, 2.3010, 2.3000])
+        row.update(workload=self.NAME, profile=None, regime_knobs=self.leaking(), searched=False)
+        return row, None
+
+    def sweep(self):
+        environ = {k: v for k, v in os.environ.items() if not k.startswith("OCANNL_")}
+        out = io.StringIO()
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(unittest.mock.patch.dict(os.environ, environ, clear=True))
+            stack.enter_context(unittest.mock.patch.object(orchestrate, "HERE", self.dir))
+            stack.enter_context(
+                unittest.mock.patch.object(orchestrate, "RESULTS_DIR", self.dir / "results")
+            )
+            stack.enter_context(unittest.mock.patch.object(orchestrate, "run_cell", self.fake_cell))
+            stack.enter_context(
+                unittest.mock.patch.object(orchestrate, "install_termination_handler", lambda: None)
+            )
+            stack.enter_context(
+                unittest.mock.patch.object(
+                    sys,
+                    "argv",
+                    ["orchestrate.py", "--only", "ocannl", "--gpu", "none", "--skip-build",
+                     "--no-fixture-digest-check", "--materialized", "--tuned",
+                     "--precision", "f16-static",
+                     "--skip-cell", f"{self.NAME}/cc/tuned"],
+                )
+            )
+            stack.enter_context(contextlib.redirect_stdout(out))
+            # A regime mismatch and a runner failure: the sweep fails, after writing the report.
+            with self.assertRaises(SystemExit) as failed:
+                orchestrate.main()
+        self.assertEqual(failed.exception.code, 1)
+        return out.getvalue(), (self.dir / "results" / "report.md").read_text()
+
+    def test_report_tables_keep_their_columns_and_the_log_its_lines(self):
+        stdout, report_text = self.sweep()
+
+        tables = {header: rows for header, rows in markdown_tables(report_text)}
+        # Every table the sweep can fill is filled: the results, NOT APPLICABLE, skipped, failures.
+        self.assertEqual(len(tables), 4, report_text)
+        for header, rows in tables.items():
+            with self.subTest(header=header):
+                self.assertEqual(len(rows), 1, rows)
+                for row in rows:
+                    self.assertEqual(row.count("|"), header.count("|"), row)
+        shown = orchestrate.display_value(self.NAME)
+        failure = tables["| cell | why | saved losses vs reference (diagnostic, never acceptance) |"]
+        self.assertTrue(failure[0].startswith(f"| {shown} ocannl/cc/materialized |"), failure)
+        self.assertIn("does not exist; nothing to quarantine", failure[0])
+        self.assertIn(f"no usable reference row for `{shown}`", failure[0])
+        self.assertIn(f"tf32_matmuls={orchestrate.display_value(self.KNOB)} (environment)",
+                      failure[0])
+        self.assertIn(f"\n## {shown}\n", report_text)
+        [measured] = [rows for header, rows in tables.items() if header.startswith("| framework")]
+        self.assertIn("**REGIME MISMATCH**", measured[0])
+        for text in (report_text, stdout):
+            for raw in self.RAW:
+                self.assertNotIn(raw, text)
+        # The run log names the fixture, the failure and the regime gate, each on its own line.
+        [line] = [l for l in stdout.splitlines() if l.startswith("fixture ")]
+        self.assertTrue(
+            line.startswith(f"fixture {orchestrate.display_value(self.NAME + '.safetensors')}: "),
+            line,
+        )
+        for prefix in ("  - ", "REGIME GATE", "NOT APPLICABLE", "SKIPPED"):
+            with self.subTest(prefix=prefix):
+                [line] = [l for l in stdout.splitlines() if l.startswith(prefix)]
+                self.assertIn(shown, line)
+
+
 if __name__ == "__main__":
     unittest.main()
