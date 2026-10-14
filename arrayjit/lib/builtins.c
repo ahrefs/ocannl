@@ -264,7 +264,7 @@ CAMLprim value arrayjit_single_to_bfloat16(value v_float)
 
 /* The native-code entry point ([@unboxed]/[@untagged], [@@noalloc] in ops.ml): the host writers
    narrow per cell, and boxing the argument would allocate per cell (gh-ocannl-1258). */
-intnat arrayjit_single_to_bfloat16_unboxed(double f)
+CAMLprim intnat arrayjit_single_to_bfloat16_unboxed(double f)
 {
   return single_to_bfloat16((float)f);
 }
@@ -316,7 +316,7 @@ CAMLprim value arrayjit_double_to_fp8(value v_float)
 }
 
 /* Native-code entry point, as for [arrayjit_single_to_bfloat16_unboxed]. */
-intnat arrayjit_double_to_fp8_unboxed(double f)
+CAMLprim intnat arrayjit_double_to_fp8_unboxed(double f)
 {
   return double_to_fp8(f);
 }
