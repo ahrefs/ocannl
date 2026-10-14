@@ -866,6 +866,23 @@ files.
   cannot be raised by `OCANNL_TUNE_INLINE_FLIPS`, since the profile outranks the environment --
   pass `--ocannl_tune_inline_flips=N`, which `benchmarks/orchestrate.py` does per cell with
   `--cell-flag tune_inline_flips=N`.
+- **A structural twin of a lost flip is skipped without a budget slot** (gh-ocannl-1274). The
+  identity is `placement_surface`'s `ps_twin_identity`: every top-level statement of the raw
+  program (`optimized.source`, where an inlined node is still present) that sets or reads the
+  flipped node, rendered by the schedule cache's canonical walk (`SC.canonicalize_code`), each node
+  tagged with the lineage's placement, the specialization's decided placement and the chain's
+  committed reading, the flipped node marked; then the readings, the recompute cost and whether it
+  is modeled. One hop only, so a difference two nodes away reaches it only through the cost. An
+  anchor is an alternative that was abandoned or completed no faster than its incumbent. A failed
+  search measured nothing, and an accepted flip did not lose, so neither anchors. A twin counts as
+  rejected (so a default-materialized node still joins `certain_mat`). No twin record is persisted:
+  the rule is a function of what the chain measured, and a warm chain's anchors replay their
+  abandonments or crowns, so it skips the same twins. On cc's approximate gpt2_mini search-off
+  listing (budget 16) the q/k/v and gelu flips of layers 2-4 twinned onto layer 1's, and one
+  more pair (13 skips, 16 distinct classes measured). The per-layer layer_norm flips
+  did NOT twin: their recompute costs differ by layer (7168 down to 2304), since what reads them
+  differs. A search-off chain (`autotune_search=false`) is the cheap way to list a chain: every
+  flip and the incumbent sit at `infinity`, so every measured flip "loses" and anchors its twins.
 - **A per-segment single is timed against a backdrop, so near-tie singles rank by noise**
   (gh-ocannl-1166). An `F_sketch` single times the WHOLE routine with every other segment on its
   untuned preset: on gpt2_mini/CUDA tf32 a q/k/v single measured ~23.2 ms where the composite it

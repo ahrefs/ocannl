@@ -256,6 +256,12 @@ let canonicalize_source ?(static_indices = []) ?(node_tag = fun _ -> "")
   let node_tag tn = lineage_tag lineage opt.LL.optimize_ctx tn ^ node_tag tn in
   canonical_of ~static_indices ~node_tag ~companions:(fun ~add:_ ~emit_tn:_ -> ()) opt.LL.source
 
+(* A code fragment's identity under the same walk (gh-ocannl-1274): the flip chain's structural-twin
+   rule renders a flipped node's producer/consumer neighbourhood with it, the caller's [node_tag]
+   carrying what the flip's pricing reads per node. *)
+let canonicalize_code ?(static_indices = []) ~node_tag (llc : LL.t) : canonical =
+  canonical_of ~static_indices ~node_tag ~companions:(fun ~add:_ ~emit_tn:_ -> ()) llc
+
 (** {2 Registries} *)
 
 type registry = {

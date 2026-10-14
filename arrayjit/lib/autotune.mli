@@ -1141,9 +1141,13 @@ val no_search_report : timing:timing_mode -> report
       ([ok], [failed] or [abandoned]), [best_ms] and [elapsed_s]. An abandoned flip's [best_ms] is
       its best at the verdict's depth, followed by that depth as [after] and the incumbent's best
       there as [incumbent_ms] (gh-ocannl-1110).
+    - [flip_twin] ({!Train.tune_placements}, gh-ocannl-1274): a flip skipped without a budget slot
+      as a structural twin of one that lost: [arm], and that flip's arm label as [twin_of]. No
+      [arm_start] / [arm_done] frames it, since nothing is searched.
     - [flips_start] / [flips_done] ({!Train.tune_placements}): [candidates] and [budget];
-      [flips_done] adds [measured], [pruned], [abandoned] (of the [measured]), [improved] (whether
-      the chain beat the A/B winner) and [best_ms].
+      [flips_done] adds [measured], [pruned], [abandoned] (of the [measured]), [twinned] (skipped as
+      twins, not among the [measured]), [improved] (whether the chain beat the A/B winner) and
+      [best_ms].
 
     [elapsed_s] is seconds since that search (or arm) started; [compile_s] and [timing_s] are the
     parts of it spent in candidate compiles and in candidate timing windows, [attempts] the
@@ -1395,6 +1399,24 @@ type placement_surface = {
           whose floor meets the best {e measured} time cannot win and is skipped without spending
           budget (the admissible direction — the bound already exceeds the incumbent's measurement).
           [None] when no envelope constant is present, or when {!placement_floor_withheld}. *)
+  ps_twin_identity :
+    chain:(Ir.Tnode.t -> Ir.Low_level.reading option) ->
+    Ir.Low_level.flip_candidate ->
+    Ir.Low_level.flip_alternative ->
+    string option;
+      (** gh-ocannl-1274: the structural-twin identity of one alternative of a candidate on this
+          surface, given the readings the flip chain has committed so far ([chain], [None] for an
+          undecided node). Two alternatives with equal identities have canonically identical local
+          readings: every top-level statement of the raw program that sets or reads the flipped
+          node, rendered with fresh-name normalization ({!Ir.Schedule_cache.canonicalize_code}),
+          each node tagged with its dims, precision, the placement the lineage brought, the
+          placement the specialization decided and the chain's reading of it, the flipped node
+          marked; plus the default and target readings, the recompute cost and whether it is
+          modeled. [Train.tune_placements] skips an alternative whose identity matches one already
+          measured and lost in the same chain, without a budget slot. [None] — never a twin — when
+          the rendering is incomplete. The neighbourhood is one hop: a difference that reaches the
+          flip only through a farther node (a producer of a producer) shows only through the
+          recompute cost. *)
 }
 (** The placement decision surface prepared for search (gh-ocannl-514): the per-node
     inline/materialize levels of the joint placement x sketch x fission space. *)

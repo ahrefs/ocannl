@@ -3215,7 +3215,46 @@ type placement_surface = {
   ps_enablement : Set.M(Ir.Tnode).t;
   ps_disablement : Set.M(Ir.Tnode).t;
   ps_floor_ms : materialized:Ir.Tnode.t list -> float option;
+  ps_twin_identity :
+    chain:(Ir.Tnode.t -> LL.reading option) ->
+    LL.flip_candidate ->
+    LL.flip_alternative ->
+    string option;
 }
+
+(* gh-ocannl-1274: the flip chain's structural-twin identity of one alternative. The neighbourhood
+   is every top-level statement of the raw program ([base.source], where a node the default policy
+   inlines is still present) that sets or reads the flipped node: its producers and its consumers,
+   backward ones included. Rendered by the schedule cache's canonical walk, so node, loop-binder and
+   scope names are normalized by first occurrence and each node carries its dims, precision and
+   constancy; the tag adds, per node, what the flip's pricing reads — the placement the lineage
+   brought ([SC.lineage_tag]), the placement this specialization decided, the reading the chain has
+   committed for it (an accepted flip changes a neighbour's world) — and marks the flipped node, so
+   the correspondence between two twins maps flipped node to flipped node. The alternative's own
+   facts close it: default and target readings, recompute cost, whether the cost is modeled. An
+   incomplete rendering (an opaque construct, a free symbol) identifies nothing. *)
+let flip_twin_identity ~static_indices ~lineage (base : LL.optimized) =
+  let stmts = LL.flat_lines [ base.LL.source ] in
+  let octx = base.LL.optimize_ctx in
+  let decided = octx.LL.placements in
+  fun ~chain (fc : LL.flip_candidate) (fa : LL.flip_alternative) ->
+    let tn = fc.LL.fc_tn in
+    let hood = List.filter stmts ~f:(LL.code_touches_tn tn) in
+    let node_tag n =
+      SC.lineage_tag lineage octx n
+      ^ (match Ir.Tnode.Placements.get decided n with
+        | None -> ";d=u"
+        | Some (m, _) -> ";d=" ^ Sexp.to_string (Ir.Tnode.sexp_of_memory_mode m))
+      ^ (match chain n with None -> "" | Some r -> ";chain=" ^ LL.reading_to_string r)
+      ^ if Ir.Tnode.equal n tn then ";flip" else ""
+    in
+    let c = SC.canonicalize_code ~static_indices ~node_tag (LL.unflat_lines hood) in
+    Option.some_if
+      ((not (List.is_empty hood)) && SC.complete c)
+      (Printf.sprintf "%s;%s->%s;cost=%d;modeled=%b" (SC.digest c)
+         (LL.reading_to_string fc.LL.fc_default)
+         (LL.reading_to_string fa.LL.fa_flip)
+         fa.LL.fa_recompute_cost fa.LL.fa_modeled)
 
 let placement_surface ?name ?ordering ?(evidence = []) ctx comp bindings =
   let ordering = match ordering with Some o -> o | None -> flip_ordering () in
@@ -3264,6 +3303,7 @@ let placement_surface ?name ?ordering ?(evidence = []) ctx comp bindings =
     ps_enablement = enablement;
     ps_disablement = disablement;
     ps_floor_ms;
+    ps_twin_identity = flip_twin_identity ~static_indices ~lineage:(Context.placements ctx) base;
   }
 
 (** {2 Model-picked untuned defaults (gh-ocannl-491 task 3)}
