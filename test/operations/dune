@@ -278,6 +278,7 @@
   (alias runtest-placement_surface)
   (alias runtest-flip_bound_pruning)
   (alias runtest-flip_abandonment)
+  (alias runtest-config_class_fingerprint)
   (alias runtest-model_default_placements)
   (alias runtest-agent_notes_structure)
   (alias runtest-doc_examples)
@@ -6616,9 +6617,11 @@
 
 ; gh-ocannl-1110: the flip chain abandons a hopeless flip at equal search depth. Every timing comes
 ; from a synthetic clock (Autotune.on_candidate_measured), so the verdicts are machine-independent;
-; autotune_progress is on because the abandonment is claimed in the progress record, and
-; autotune_keep_fraction is pinned at its default so a Search_shaping key is set for the cached
-; trajectory's identity to be seen carrying.
+; autotune_progress is on because the abandonment is claimed in the progress record;
+; autotune_keep_fraction is pinned at its default, spelled otherwise than its read site, so the
+; cached trajectory's identity can be seen leaving it out (gh-ocannl-1272), and
+; cpu_schedule_min_parallel is raised off its default -- past anything these 64-cell tensors
+; reach, so no schedule changes -- for the identity to be seen carrying it.
 
 (executable
  (name flip_abandonment)
@@ -6640,7 +6643,8 @@
     %{dep:flip_abandonment.exe}
     "--ocannl_backend=cc"
     "--ocannl_autotune_progress=true"
-    "--ocannl_autotune_keep_fraction=1"))))
+    "--ocannl_autotune_keep_fraction=1"
+    "--ocannl_cpu_schedule_min_parallel=32768"))))
 
 (rule
  (alias runtest-flip_abandonment)
@@ -6649,6 +6653,39 @@
   (alias runtest-env_spelling_gate))
  (action
   (diff flip_abandonment.expected flip_abandonment.actual)))
+
+; gh-ocannl-1272: the search-trajectory identity renders a Search_shaping key only when its resolved
+; value is not its built-in default. Run twice: without a profile, and under a commandline-picked
+; profile with one of the keys the profile raises restated at its built-in default.
+
+(executable
+ (name config_class_fingerprint)
+ (modules config_class_fingerprint)
+ (libraries base stdio arrayjit.ir arrayjit.utils arrayjit.verdict))
+
+(rule
+ ; ocannl-backend: none -- links arrayjit.ir alone and opens no context; the device limits it
+ ; resolves against are synthetic records.
+ (target config_class_fingerprint.actual)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (action
+  (with-stdout-to
+   %{target}
+   (progn
+    (run %{dep:config_class_fingerprint.exe})
+    (run
+     %{dep:config_class_fingerprint.exe}
+     "--ocannl_profile=performance"
+     "--ocannl_autotune_rounds=2")))))
+
+(rule
+ (alias runtest-config_class_fingerprint)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate))
+ (action
+  (diff config_class_fingerprint.expected config_class_fingerprint.actual)))
 
 ; gh-ocannl-514: the placement levels of the untuned regime (model_default_placements), with the
 ; envelope pinned so selection runs live on cc.
