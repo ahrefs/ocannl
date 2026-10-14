@@ -1606,9 +1606,11 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
           let lost = Hashtbl.create (module String) in
           let chain_reading n = List.Assoc.find !accepted n ~equal:Tn.equal in
           (* The flips are measured in the timing lineage, so a twin must agree on what THAT lineage
-             brings to each neighbour too -- the tag {!placement_problem} gives it. A timing lineage
-             whose decision surface cannot be read disables the rule rather than twinning on half
-             the evidence. *)
+             brings to each neighbour too -- the tag {!placement_problem} gives it -- and on the
+             placement the timing lowering DECIDED from it, which an inherited computation or a
+             virtualization cap can make differ from the surface's for the same code. A timing
+             lineage whose decision surface cannot be read disables the rule rather than twinning on
+             half the evidence. *)
           let twin_tag =
             match timing_ctx with
             | None -> Some (fun _ -> "")
@@ -1617,7 +1619,15 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
                   ( Context.placements tctx,
                     (Context.lowered_for_decisions ?name tctx comp bindings).LL.optimize_ctx )
                 with
-                | plc, octx -> Some (fun n -> ";t" ^ Ir.Schedule_cache.lineage_tag plc octx n)
+                | plc, octx ->
+                    Some
+                      (fun n ->
+                        ";t"
+                        ^ Ir.Schedule_cache.lineage_tag plc octx n
+                        ^
+                        match Tn.Placements.get octx.LL.placements n with
+                        | None -> ";td=u"
+                        | Some (m, _) -> ";td=" ^ Sexp.to_string (Tn.sexp_of_memory_mode m))
                 | exception exn when not (must_propagate exn) ->
                     logf "structural-twin rule off: the timing lineage's lowering failed: %s"
                       (Exn.to_string exn);
