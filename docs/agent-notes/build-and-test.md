@@ -485,7 +485,8 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   catch was the `FAILED: n checks` teardown total in `config_usage_scan_control`: a negative
   control whose failures ARE its golden ends through `Verdict.exit_negative_control`, which exits 1
   without that line. A one-digit count sits below the number boundary, so the scan also refuses the
-  teardown line itself, `FAILED: <n> check(s) did not hold.` as a whole line, whatever its count.
+  teardown line itself, `FAILED: <n> check(s) did not hold: <names>.` as a whole line, whatever its
+  count.
 
 ### Pinning the relationship
 
@@ -1415,9 +1416,12 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   test's `diff?` then sees no output and every later build of the alias fails with "File
   `<name>.expected` should be deleted" until some real dep changes — the config append is also the
   recovery.
-- Dune truncates a long stderr of a `(test)` stanza's run (`...TRUNCATED BY DUNE...`). To read a
-  long per-row table, run the executable yourself inside `_build/default/<dir>`, where the rule
-  left `ocannl_config`, under the fleet's `execution slot` when on a fleet box.
+- Dune truncates a long stderr of a `(test)` stanza's run (`...TRUNCATED BY DUNE...`), keeping its
+  head and tail. Verdict's teardown line, in that tail, names the first three failed checks
+  (`FAILED: 5 checks did not hold: "a", "b", "c" and 2 more.`), so a truncated failure still says
+  which claims to look at. To read a long per-row table, run the executable yourself inside
+  `_build/default/<dir>`, where the rule left `ocannl_config`, under the fleet's `execution slot`
+  when on a fleet box.
 
 ## Verdict claims
 

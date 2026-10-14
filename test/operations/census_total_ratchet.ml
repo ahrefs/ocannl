@@ -37,7 +37,7 @@
       a total sharing a line with an allowed citation is still refused. An entry that allows nothing
       is stale and fails, which is also this scan's signal that it did not go blind: a scan that
       read no goldens leaves every entry stale.
-    - THE TEARDOWN TOTAL. A whole line [FAILED: <n> check(s) did not hold.] -- the line
+    - THE TEARDOWN TOTAL. A whole line [FAILED: <n> check(s) did not hold: <names>.] -- the line
       [Verdict.report_failures] writes -- is refused whatever its digit count, so the one-digit
       count the number rule does not read cannot carry it in: a negative control whose failures are
       its golden ends through [Verdict.exit_negative_control] instead. *)
@@ -253,7 +253,7 @@ let stale ~entries numbers =
 (** Verdict's teardown line ([Verdict.report_failures]) totals the failure lines above it, so it is
     a census total whatever its digit count -- and a one-digit count is below the number boundary
     above. It is matched as a whole line instead. *)
-let teardown_total = Str.regexp {|^FAILED: [0-9]+ checks? did not hold\.$|}
+let teardown_total = Str.regexp {|^FAILED: [0-9]+ checks? did not hold\(: .*\)?\.$|}
 
 let teardown_totals ~golden content =
   String.split_lines content
@@ -352,9 +352,9 @@ let controls () =
     String.concat_lines
       [
         "FAIL: a";
-        Verdict.teardown_line 3;
-        Verdict.teardown_line 12;
-        Verdict.teardown_line 1 ^ " (not a teardown)";
+        Verdict.teardown_line [ "a"; "b"; "c" ];
+        Verdict.teardown_line (List.init 12 ~f:(fun i -> String.make 1 (Char.of_int_exn (97 + i))));
+        Verdict.teardown_line [ "a" ] ^ " (not a teardown)";
       ]
   in
   p "a one-digit teardown total is refused as a line, though no number the boundary reads"

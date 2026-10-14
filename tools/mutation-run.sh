@@ -280,7 +280,7 @@ my $reported = eval {
                 : $line =~ /^STOPPED EARLY: / ? 'raise' : '';
             # Verdict's teardown (Verdict.teardown_line): the process ended through
             # exit, not a signal, so nothing after a caught raise was cut off.
-            $teardown = 1 if $line =~ /^FAILED: \d+ checks? did not hold\.\r?$/;
+            $teardown = 1 if $line =~ /^FAILED: \d+ checks? did not hold(?:: .*)?\.\r?$/;
         }
         close $claims or refuse("close $log: $!");
         print "(none)\n" unless $found;
