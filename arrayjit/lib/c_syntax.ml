@@ -4254,18 +4254,14 @@ module C_syntax (B : C_syntax_config) = struct
              still renders it as the same [Invalid_argument] carrying this message. Since
              gh-ocannl-1231 [Schedule.op_legality] refuses the moves that produce such a read
              ([Schedule.pipeline_violation] states this fact and the rotor-Serial one below over the
-             applied IR), so this is the backstop for schedules that bypass the oracle. *)
+             applied IR), so this is the backstop for schedules that bypass the oracle — and the
+             decline is built from the oracle's own typed reason, so the two cannot drift apart in
+             wording. *)
           raise
             (Schedule_outcome.Cause_at
                ( Schedule_outcome.Backend_codegen,
-                 Schedule_outcome.Unsupported
-                   {
-                     feature = "pipelined tile read outside its rotor loop";
-                     detail =
-                       "C_syntax: read of pipelined tile " ^ Tn.debug_name tn
-                       ^ " outside its rotor loop (the schedule only remaps reads within the \
-                          staging scope)";
-                   } ))
+                 Schedule.pipeline_violation_cause ~site:"C_syntax"
+                   (Schedule.Read_outside_rotor { tile = tn; rotor = pt_rotor }) ))
 
   (* Recognize the exact scalar fallback region synthesized by
      [Schedule.contract_tensorized_accumulator]:
@@ -7787,7 +7783,8 @@ module C_syntax (B : C_syntax_config) = struct
        selection at copy 0 ([serial_loop_stack] only tracks serial loops). Typed for the same reason
        as the read-position check in [pp_pipelined_rotation]: both say "this renderer cannot express
        that pipelined tile", and a candidate composing its way into one is a decline, not a fatal
-       that ends the search around it. *)
+       that ends the search around it. Like that one, the decline is [Schedule.pipeline_violation]'s
+       own typed reason. *)
     (if not (Map.is_empty pipelined) then
        let check_rotor index axis =
          Map.iteri pipelined ~f:(fun ~key:tn ~data:{ Low_level.pt_rotor; _ } ->
@@ -7798,13 +7795,8 @@ module C_syntax (B : C_syntax_config) = struct
                    raise
                      (Schedule_outcome.Cause_at
                         ( Schedule_outcome.Backend_codegen,
-                          Schedule_outcome.Unsupported
-                            {
-                              feature = "pipelined tile whose rotor loop is not Serial";
-                              detail =
-                                "C_syntax.compile_proc: the rotor loop of pipelined tile "
-                                ^ Tn.debug_name tn ^ " is no longer Serial";
-                            } )))
+                          Schedule.pipeline_violation_cause ~site:"C_syntax.compile_proc"
+                            (Schedule.Rotor_not_serial { tile = tn; rotor = pt_rotor; axis }) )))
        in
        let rec scan (llc : Low_level.t) =
          match llc with

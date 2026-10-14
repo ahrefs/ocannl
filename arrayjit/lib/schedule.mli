@@ -612,7 +612,7 @@ type pipeline_violation =
   | Rotor_not_serial of { tile : Tn.t; rotor : Indexing.symbol; axis : Low_level.axis_type }
       (** A loop binding [rotor] is no longer [Serial] (an [Unroll] in place, a retype): the
           rotation renders off the serial counter. *)
-[@@deriving sexp_of]
+[@@deriving sexp_of, variants]
 
 val pipeline_violation : Low_level.optimized -> pipeline_violation option
 (** The first violation of the staging scope's invariant in [opt.llc], over every tile of
@@ -622,6 +622,17 @@ val pipeline_violation : Low_level.optimized -> pipeline_violation option
     {!op_legality} refuses the moves that would break them. *)
 
 val pipeline_violation_message : pipeline_violation -> string
+
+val pipeline_violation_feature : pipeline_violation -> string
+(** The decline feature naming the violation's kind — the key a search report aggregates
+    [Unsupported] declines under. *)
+
+val pipeline_violation_cause : site:string -> pipeline_violation -> Schedule_outcome.cause
+(** The renderer's typed decline for a violation it meets while rendering (an IR that bypassed
+    {!op_legality}): [Unsupported] with {!pipeline_violation_feature} and [site ^ ": "] followed by
+    {!pipeline_violation_message}. [C_syntax] builds both of its pipelined-tile declines through it,
+    so the oracle and the renderer state each fact in one wording; [pipelined_move_legality] pins
+    that, on the same IR, they reach the same violation. *)
 
 val op_legality : Low_level.optimized -> optop -> op_verdict
 (** gh-494 waypoint 3: the op-legality oracle. A schedule op is a thread-pairing transform over the

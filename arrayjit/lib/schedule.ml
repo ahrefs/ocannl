@@ -5184,11 +5184,16 @@ let stage_legality (opt : Low_level.optimized) (op : optop) : op_verdict =
    [C_syntax] checks while rendering; stating them here, over the applied IR, refuses a move that
    breaks them before it costs a candidate compile — whatever the move's shape: a [Split] or a
    materializing [Unroll] of the rotor removes the rotor binder, an [Unroll] in place or a retype
-   changes its kind. *)
+   changes its kind. The renderer's declines are built from this type too
+   ({!pipeline_violation_cause}), so the two sides share one vocabulary and one wording. *)
 type pipeline_violation =
   | Read_outside_rotor of { tile : Tn.t; rotor : Indexing.symbol }
   | Rotor_not_serial of { tile : Tn.t; rotor : Indexing.symbol; axis : Low_level.axis_type }
-[@@deriving sexp_of]
+[@@deriving sexp_of, variants]
+
+let pipeline_violation_feature = function
+  | Read_outside_rotor _ -> "pipelined tile read outside its rotor loop"
+  | Rotor_not_serial _ -> "pipelined tile whose rotor loop is not Serial"
 
 let pipeline_violation_message = function
   | Read_outside_rotor { tile; rotor } ->
@@ -5200,6 +5205,10 @@ let pipeline_violation_message = function
       ^ " is no longer Serial (it is "
       ^ Sexp.to_string (Low_level.sexp_of_axis_type axis)
       ^ ")"
+
+let pipeline_violation_cause ~site v =
+  Schedule_outcome.Unsupported
+    { feature = pipeline_violation_feature v; detail = site ^ ": " ^ pipeline_violation_message v }
 
 let pipeline_violation (opt : Low_level.optimized) : pipeline_violation option =
   if Map.is_empty opt.Low_level.pipelined then None

@@ -2,7 +2,10 @@ the serial reference is not all zeros: true
 the base records both tiles pipelined at depth 2 with k_o as rotor: true
 the base itself satisfies the staging scope's invariant: true
 each move's applied IR has exactly its expected violation (or none): true
-op_legality refuses each fixture move with its reason, admits the legal one: true
+the fixtures' violations exercise every pipeline_violation reason: true
+op_legality refuses each fixture move with its violation's message, admits the legal one: true
 schedule_legality refuses exactly the fixture move at its own position: true
 a split inside the staging scope keeps the invariant and is admitted: true
-compiled anyway, each refused move is the renderer's typed decline; the admitted one runs: true
+the decline matcher tells the reasons and the tiles apart (synthesized control): true
+on the IR it was compiled from, each renderer decline states one of the oracle's violations, and a fixture with none compiles and runs: true
+the reasons the renderer's declines state are exactly pipeline_violation's: true
