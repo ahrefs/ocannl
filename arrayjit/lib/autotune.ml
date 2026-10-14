@@ -3358,7 +3358,7 @@ type placement_surface = {
    symbol) identifies nothing, and neither does any neighbourhood of a source that holds an opaque
    construct anywhere: a [Staged_compilation] touches no node [code_touches_tn] can see, so the
    neighbourhood filter would drop it and a fragment beside it would render as complete. *)
-let flip_twin_identity ~static_indices ~lineage (base : LL.optimized) =
+let flip_twin_identity ~static_indices ~lineage ~enablement ~disablement (base : LL.optimized) =
   let stmts = LL.flat_lines [ base.LL.source ] in
   let octx = base.LL.optimize_ctx in
   let decided = octx.LL.placements in
@@ -3388,6 +3388,10 @@ let flip_twin_identity ~static_indices ~lineage (base : LL.optimized) =
       (* Observability decides allocation eligibility: [Backends.plan_alias_spans] never aliases an
          observable node's buffer, so materializing it costs a dedicated one. *)
       ^ (if Ir.Tnode.is_observable n then ";obs" else "")
+      (* The surface's own per-node facts: an enabling [`Materialize] flip changes the feasible
+         schedule set, so its search can reach tensorized candidates a neutral twin's cannot. *)
+      ^ (if Set.mem enablement n then ";en" else "")
+      ^ (if Set.mem disablement n then ";dis" else "")
       ^ (match Ir.Tnode.Placements.get decided n with
         | None -> ";d=u"
         | Some (m, _) -> ";d=" ^ Sexp.to_string (Ir.Tnode.sexp_of_memory_mode m))
@@ -3449,7 +3453,9 @@ let placement_surface ?name ?ordering ?(evidence = []) ctx comp bindings =
     ps_enablement = enablement;
     ps_disablement = disablement;
     ps_floor_ms;
-    ps_twin_identity = flip_twin_identity ~static_indices ~lineage:(Context.placements ctx) base;
+    ps_twin_identity =
+      flip_twin_identity ~static_indices ~lineage:(Context.placements ctx) ~enablement ~disablement
+        base;
   }
 
 (** {2 Model-picked untuned defaults (gh-ocannl-491 task 3)}
