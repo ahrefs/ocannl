@@ -6081,6 +6081,19 @@ class OcannlFlagSweepTest(unittest.TestCase):
             report_text,
         )
 
+    def test_a_flag_reaching_only_skipped_cells_is_refused(self):
+        # Review round 3: validated against the cells the sweep RUNS, so a selector naming only a
+        # `--skip-cell`'d cell is refused instead of applying to nothing, while the sweep still
+        # has a runnable cell for it to have meant.
+        with self.assertRaises(SystemExit) as refused:
+            self.sweep(
+                "--materialized",
+                "--skip-cell", "flagged/cc/materialized",
+                "--cell-flag", "flagged/cc/materialized:tune_inline_flips=16",
+            )
+        self.assertIn("names no OCANNL cell this sweep runs", str(refused.exception.code))
+        self.assertEqual(self.dispatched, [])
+
     def test_a_per_cell_flag_runs_the_cell_with_the_budget_applied(self):
         stdout, rows, report_text = self.sweep("--cell-flag", "tune_inline_flips=16")
 

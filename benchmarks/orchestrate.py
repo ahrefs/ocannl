@@ -402,12 +402,13 @@ def cell_flags(flags, cell):
 
 
 def flag_problems(flags, cells):
-    """Why the `--cell-flag` entries cannot be dispatched over `cells`, as messages; empty when
-    they can. An entry whose selector names no cell of the sweep is a typo or a stale command line,
-    refused like an unmatched `--skip-cell`; two entries setting one key on the same cell leave
+    """Why the `--cell-flag` entries cannot be dispatched over `cells` -- the cells the sweep runs,
+    skipped ones excluded -- as messages; empty when they can. An entry whose selector names no
+    such cell is a typo, a stale command line or a cell also skipped, refused like an unmatched
+    `--skip-cell`; two entries setting one key on the same cell leave
     which one applies to the order of the command line, so they are refused too."""
     problems = [
-        f"--cell-flag {flag_text(f)} names no OCANNL cell of this sweep"
+        f"--cell-flag {flag_text(f)} names no OCANNL cell this sweep runs"
         for f in flags
         if not any(flag_applies(f, cell) for cell in cells)
     ]
@@ -2919,7 +2920,10 @@ def main():
             "--skip-cell names no cell of this sweep: "
             + ", ".join("/".join(p for p in entry if p) for entry in unmatched)
         )
-    problems = flag_problems(args.cell_flag, cells)
+    # The cells the sweep will actually dispatch: a flag is checked against these, so one whose
+    # selector reaches only skipped cells is refused rather than silently applied to nothing.
+    run_cells = {c for c in cells if not skip_reason(*c, operator_skips, args.no_skip_cells)}
+    problems = flag_problems(args.cell_flag, run_cells)
     if problems:
         sys.exit("; ".join(problems))
     if "ocannl" in args.only and not args.skip_build:
@@ -2950,7 +2954,6 @@ def main():
     # accounted for.
     ambient = ambient_ocannl_env(os.environ)
     # Which of it the cells' own command lines will outrank (gh-ocannl-1273), said once, up front.
-    run_cells = {c for c in cells if not skip_reason(*c, operator_skips, args.no_skip_cells)}
     warning = shadowing_warning(ambient, run_cells, args.profile, args.cell_flag)
     if warning:
         print(warning, flush=True)
