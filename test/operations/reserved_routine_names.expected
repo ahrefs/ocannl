@@ -37,3 +37,8 @@ compiler reports pointing at the routine's declaration blame its name: true
 compiler reports about a routine's body or another routine do not blame the name: true
 a routine named after a header name no table holds runs or fails as its name's: true
 where the C headers declare random, the routine's compile failure names the routine: true
+where the C headers declare random, the name's failure quotes the compiler without the codegen-bug claim: true
+a name-attributed cc compile failure drops the codegen-bug claim: true
+a name-attributed cc compile failure keeps the compiler's output: true
+an unattributed cc compile failure keeps the codegen-bug claim: true
+an unattributed cc compile failure propagates its report unchanged: true
