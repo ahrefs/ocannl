@@ -15,6 +15,14 @@ near: singles 0.3% apart reach the playoff: true
 near: only the single within the margin plays, one per segment: true
 spread: the coarse composite was timed: true
 spread: singles 1% apart leave the playoff nothing to time: true
+off: the reference search played windows a width-0 search must drop: true
+off: width 0 times no playoff window: true
+off: width 0 times exactly the reference's candidates outside its playoff, in order: true
+off: no timing decision is in the playoff phase: true
+off: the crown is the recombined composite: true
+one: width 1 still plays: true
+one: width 1 plays fewer windows than width 2: true
+one: no segment is challenged by more than one window: true
 trace: one decision per playoff window says phase playoff: true
 trace: an unobserved seam reports nothing: true
 trace: the same windows, crown and time with the seam observed and unobserved: true

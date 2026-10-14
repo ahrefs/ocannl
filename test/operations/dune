@@ -7908,7 +7908,8 @@
  (deps
   ocannl_config
   (env_var OCANNL_AUTOTUNE_LOG)
-  (env_var OCANNL_AUTOTUNE_PROGRESS))
+  (env_var OCANNL_AUTOTUNE_PROGRESS)
+  (env_var OCANNL_AUTOTUNE_COMPOSITE_PLAYOFF_WIDTH))
  (modules autotune_composite_playoff)
  (libraries base ocannl stdio unix arrayjit.verdict ll_test)
  (preprocess

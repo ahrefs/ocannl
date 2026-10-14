@@ -21,6 +21,11 @@
    segment's runner-up single plays and the one behind it (0.6%) does not; in [spread] they are 1%
    apart, wider than the margin, so the playoff times nothing.
 
+   [off] is [ties] with [autotune_composite_playoff_width=0] (gh-ocannl-1259): it must time exactly
+   the candidates [ties] timed outside its playoff, in the same order, and crown the recombined
+   composite; [one] is [ties] at width 1, which plays one alternate per segment and so fewer windows
+   than [ties].
+
    Every search runs with the timing trace's decision seam observed ([Autotune.on_batch_decision],
    gh-ocannl-1199), which must attribute each playoff window to the [playoff] phase; [ties] is
    searched once more with the seam unobserved, and must crown and time exactly the same.
@@ -71,26 +76,36 @@ let chain () =
 
 type observed = {
   report : Autotune.report;
+  measured : string list;  (** Every admitted window's label, in attempt order. *)
   composite_ms : (string * float) list;  (** Every admitted composite window, in attempt order. *)
   phases : string option list;
       (** The search phase of every timing decision, in order; empty when the seam was unobserved.
       *)
 }
 
+let playoff_width_key = "autotune_composite_playoff_width"
+
 (* One search under a scripted ranking: [single n] is the n-th single's time (0-based, attempt
-   order), [composite n] the n-th composite's. *)
-let search ?(trace = true) ?(log = false) ?progress ~tag ~single ~composite () =
+   order), [composite n] the n-th composite's. [?width] states [autotune_composite_playoff_width]
+   for this search only (at the config-file level; the stanza declares the key's environment
+   variable, so an ambient override reruns the test, whose width claims then fail). *)
+let search ?(trace = true) ?(log = false) ?progress ?width ~tag ~single ~composite () =
   let report = ref None and singles = ref 0 and composites = ref [] and phases = ref [] in
+  let measured = ref [] in
   let old_measured = !Autotune.on_candidate_measured
   and old_decision = !Autotune.on_batch_decision in
   Exn.protect
     ~finally:(fun () ->
       Autotune.on_candidate_measured := old_measured;
-      Autotune.on_batch_decision := old_decision)
+      Autotune.on_batch_decision := old_decision;
+      Hashtbl.remove Utils.config_file_args playoff_width_key)
     ~f:(fun () ->
+      Option.iter width ~f:(fun w ->
+          Hashtbl.set Utils.config_file_args ~key:playoff_width_key ~data:(Int.to_string w));
       (if trace then Autotune.on_batch_decision := fun d -> phases := d.Autotune.phase :: !phases);
       (Autotune.on_candidate_measured :=
          fun ~label ~digest:_ _ms ->
+           measured := label :: !measured;
            if is_single label then (
              let ms = single !singles in
              Int.incr singles;
@@ -125,7 +140,12 @@ let search ?(trace = true) ?(log = false) ?progress ~tag ~single ~composite () =
         r.Autotune.best_label r.Autotune.best_ms;
       List.iter (List.rev !composites) ~f:(fun (label, ms) ->
           Stdio.eprintf "  %s window (not part of the golden): %s %.2f ms\n%!" tag label ms);
-      { report; composite_ms = List.rev !composites; phases = List.rev !phases }
+      {
+        report;
+        measured = List.rev !measured;
+        composite_ms = List.rev !composites;
+        phases = List.rev !phases;
+      }
   | None -> failwith (tag ^ ": the search delivered no report")
 
 (* Runs [f] with stderr routed into a file and returns its result with the lines it wrote. The
@@ -269,6 +289,47 @@ let () =
   p "spread: the coarse composite was timed" (Poly.equal r.Autotune.fiss_sketch_composite `Timed);
   p "spread: singles 1% apart leave the playoff nothing to time"
     (r.Autotune.fiss_sketch_playoff_timed = 0 && List.length spread.composite_ms = 1)
+
+(* gh-ocannl-1259: the playoff's width is a setting, and 0 is off. [ties] is the reference: its
+   composite windows are the recombined composite and then exactly its playoff windows (claimed
+   above), so dropping every composite after the first leaves what a search without the playoff
+   times. *)
+let () =
+  let without_playoff (o : observed) =
+    match o.composite_ms with
+    | [] -> o.measured
+    | _ :: playoff_windows ->
+        let windows = List.map playoff_windows ~f:fst in
+        List.filter o.measured ~f:(fun label -> not (List.mem windows label ~equal:String.equal))
+  in
+  let off = search ~width:0 ~tag:"off" ~single:(fun _ -> 100.) ~composite:faster () in
+  let r = off.report in
+  p "off: the reference search played windows a width-0 search must drop"
+    (ties.report.Autotune.fiss_sketch_playoff_timed >= 1);
+  p "off: width 0 times no playoff window"
+    (r.Autotune.fiss_sketch_playoff_timed = 0 && r.Autotune.fiss_sketch_playoff_swaps = 0);
+  p "off: width 0 times exactly the reference's candidates outside its playoff, in order"
+    (List.equal String.equal off.measured (without_playoff ties));
+  p_none "off: no timing decision is in the playoff phase" off.phases
+    ~f:(Option.equal String.equal (Some "playoff"));
+  (match ties.composite_ms with
+  | (recombined, _) :: _ ->
+      p "off: the crown is the recombined composite" (String.equal r.Autotune.best_label recombined)
+  | [] -> p "off: the crown is the recombined composite" false);
+  let one = search ~width:1 ~tag:"one" ~single:(fun _ -> 100.) ~composite:faster () in
+  let r = one.report in
+  p "one: width 1 still plays" (r.Autotune.fiss_sketch_playoff_timed >= 1);
+  p "one: width 1 plays fewer windows than width 2"
+    (r.Autotune.fiss_sketch_playoff_timed < ties.report.Autotune.fiss_sketch_playoff_timed);
+  let labels = List.map one.composite_ms ~f:fst in
+  let challenges =
+    match labels with
+    | [] -> []
+    | _ ->
+        List.zip_exn (List.drop_last_exn labels) (List.tl_exn labels)
+        |> List.map ~f:(fun (incumbent, window) -> changed incumbent window)
+  in
+  width_claim "one: no segment is challenged by more than one window" ~width:1 challenges
 
 (* gh-ocannl-1199: the decision trace carries the playoff phase, and observing it moves nothing. *)
 let () =
