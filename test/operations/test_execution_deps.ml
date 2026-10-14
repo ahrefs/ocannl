@@ -301,6 +301,92 @@ let test_merge_buffer_read_dependency () =
        (Context.get_values replacement_ctx merge_output.Tensor.value)
        [| 5.; 6. |])
 
+(* Test 9 (gh-ocannl-1203): a merge-buffer reader compiled but not dispatched, followed by uploads
+   of nodes unrelated to it. Uploading an absent node into the compiled context continues the same
+   backend lifecycle (one release flag along a linear upload chain), so releasing the latest upload
+   value abandons the reader exactly as releasing the compiled context itself would: the refill must
+   then go ahead. A second upload from the same compiled value forks an independent leaf that still
+   holds the reader's buffers, so releasing just one of the two leaves leaves the reader live and
+   the refill must still refuse. *)
+let test_merge_reader_upload_release () =
+  printf "\n=== Test 9: merge reader under upload continuations ===\n";
+  Tensor.unsafe_reinitialize ();
+  let%op merge_value = [ 0.; 0. ] + [ 0.; 0. ] in
+  let%op source_values = [ 1.; 2. ] + [ 10.; 20. ] in
+  let%op merge_output = [ 0.; 0. ] + [ 0.; 0. ] in
+  Train.set_materialized merge_value.Tensor.value;
+  Train.set_materialized merge_output.Tensor.value;
+  let zeros = Ir.Ndarray.init_array ~debug:"mrur" Ir.Ops.single ~dims:[| 2 |] ~padding:None in
+  (* Host-backed parameters no routine reads: absent from every context until uploaded. *)
+  let unrelated k =
+    (TDSL.wrap_param ~l:(Printf.sprintf "mrur_unrelated%d" k) ~o:[ 2 ] (zeros ~f:(fun _ -> 0.)) ())
+      .Tensor.value
+  in
+  let source_write = [%cd merge_value =: source_values] in
+  let source_write =
+    { source_write with asgns = Ir.Assignments.Block_comment ("mrur_source", source_write.asgns) }
+  in
+  let source_ctx, source_writer = Context.compile (Context.auto ()) source_write IDX.empty in
+  let source_ctx = Context.run source_ctx source_writer in
+  let consumer_comp = [%cd merge_output =: merge_value.merge] in
+  let consumer_comp =
+    {
+      consumer_comp with
+      asgns = Ir.Assignments.Block_comment ("mrur_consumer", consumer_comp.asgns);
+    }
+  in
+  let fill dst =
+    Context.copy ~into_merge_buffer:Copy ~src:source_ctx ~dst merge_value.Tensor.value
+  in
+  (* [Ok] the refilled context, or [Error] the refusal's message. *)
+  let refill dst = try Ok (fill dst) with Failure msg -> Error msg in
+  let refuses_pending what dst =
+    match refill dst with
+    | Ok _ -> Verdict.fail (what ^ ": the refill went ahead")
+    | Error msg ->
+        Verdict.p
+          (what ^ ": the refill refuses, naming the pending consumer")
+          (String.is_substring msg ~substring:"pending consumers"
+          && String.is_substring msg ~substring:"mrur_consumer")
+  in
+  let refills what dst =
+    match refill dst with
+    | Ok ctx ->
+        Verdict.p (what ^ ": the refill goes ahead") true;
+        ctx
+    | Error msg -> failwith (Printf.sprintf "%s: the refill refused: %s" what msg)
+  in
+  let merge_ctx = fill (Context.auto ()) in
+  (* Linear chain: the compiled context, then one unrelated upload. *)
+  let reader_ctx, _reader = Context.compile merge_ctx consumer_comp IDX.empty in
+  let uploaded = Context.set_values reader_ctx (unrelated 1) [| 1.; 2. |] in
+  refuses_pending "linear chain, nothing released" merge_ctx;
+  Context.release uploaded;
+  let merge_ctx = refills "linear chain, latest upload value released" merge_ctx in
+  (* Forked leaves, the linear continuation released first: the fork still holds the reader. *)
+  let reader_ctx, _reader = Context.compile merge_ctx consumer_comp IDX.empty in
+  let linear = Context.set_values reader_ctx (unrelated 2) [| 1.; 2. |] in
+  let fork = Context.set_values reader_ctx (unrelated 3) [| 3.; 4. |] in
+  Context.release linear;
+  refuses_pending "forked leaves, linear leaf released" merge_ctx;
+  Context.release fork;
+  let merge_ctx = refills "forked leaves, both released" merge_ctx in
+  (* The same fork, released in the opposite order. *)
+  let reader_ctx, _reader = Context.compile merge_ctx consumer_comp IDX.empty in
+  let linear = Context.set_values reader_ctx (unrelated 4) [| 1.; 2. |] in
+  let fork = Context.set_values reader_ctx (unrelated 5) [| 3.; 4. |] in
+  Context.release fork;
+  refuses_pending "forked leaves, fork released" merge_ctx;
+  Context.release linear;
+  let merge_ctx = refills "forked leaves, fork then linear leaf released" merge_ctx in
+  (* The reader the last refill made room for reads the new generation. *)
+  let reader_ctx, reader = Context.compile merge_ctx consumer_comp IDX.empty in
+  let reader_ctx = Context.run reader_ctx reader in
+  Verdict.p "a reader compiled after the refills reads the source values"
+    (Array.equal Float.equal
+       (Context.get_values reader_ctx merge_output.Tensor.value)
+       [| 11.; 22. |])
+
 let () =
   Verdict.case "test_raw_dependency" test_raw_dependency;
   Verdict.case "test_disjoint" test_disjoint;
@@ -309,4 +395,5 @@ let () =
   Verdict.case "test_reexecution" test_reexecution;
   Verdict.case "test_rollback_execution" test_rollback_execution;
   Verdict.case "test_poisoned_lineage" test_poisoned_lineage;
-  Verdict.case "test_merge_buffer_read_dependency" test_merge_buffer_read_dependency
+  Verdict.case "test_merge_buffer_read_dependency" test_merge_buffer_read_dependency;
+  Verdict.case "test_merge_reader_upload_release" test_merge_reader_upload_release
