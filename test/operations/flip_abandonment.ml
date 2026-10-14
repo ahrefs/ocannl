@@ -64,17 +64,17 @@ let verdicts () =
    [script i]. Counts the admitted windows through [on_candidate_timed], the tuner's own count. *)
 let with_clock script f =
   let measured = ref 0 and timed = ref 0 in
-  let old_measured = !Autotune.on_candidate_measured and old_timed = !Autotune.on_candidate_timed in
+  let old_measured = Autotune.Seam.get Autotune.on_candidate_measured
+  and old_timed = Autotune.Seam.get Autotune.on_candidate_timed in
   Exn.protect
     ~finally:(fun () ->
-      Autotune.on_candidate_measured := old_measured;
-      Autotune.on_candidate_timed := old_timed)
+      Autotune.Seam.set Autotune.on_candidate_measured old_measured;
+      Autotune.Seam.set Autotune.on_candidate_timed old_timed)
     ~f:(fun () ->
-      (Autotune.on_candidate_measured :=
-         fun ~label:_ ~digest:_ _ms ->
-           Int.incr measured;
-           script !measured);
-      (Autotune.on_candidate_timed := fun _ ~timed_so_far:_ -> Int.incr timed);
+      ( Autotune.Seam.set Autotune.on_candidate_measured @@ fun ~label:_ ~digest:_ _ms ->
+        Int.incr measured;
+        script !measured );
+      (Autotune.Seam.set Autotune.on_candidate_timed @@ fun _ ~timed_so_far:_ -> Int.incr timed);
       let r = Autotune.with_uncontended_test_windows f in
       (r, !timed))
 
@@ -89,16 +89,15 @@ let window_admission_controls () =
       (List.map [ 1.; 3.; 3. ] ~f:(fun ms -> { Autotune.per_launch_ms = ms; contention_ms = ms }))
   in
   let measured = ref 0 in
-  let old = !Autotune.on_candidate_measured in
+  let old = Autotune.Seam.get Autotune.on_candidate_measured in
   let apply window = Autotune.apply_measurement_seam ~label:"control" ~digest:"control" window in
   let refused window = Option.is_none (Autotune.admitted_timing_ms (apply window)) in
   Exn.protect
-    ~finally:(fun () -> Autotune.on_candidate_measured := old)
+    ~finally:(fun () -> Autotune.Seam.set Autotune.on_candidate_measured old)
     ~f:(fun () ->
-      (Autotune.on_candidate_measured :=
-         fun ~label:_ ~digest:_ _ ->
-           Int.incr measured;
-           7.);
+      ( Autotune.Seam.set Autotune.on_candidate_measured @@ fun ~label:_ ~digest:_ _ ->
+        Int.incr measured;
+        7. );
       p "production contention refuses a window before its measurement script"
         (window.Autotune.contended && refused window && !measured = 0);
       Autotune.with_uncontended_test_windows (fun () ->
@@ -112,12 +111,13 @@ let window_admission_controls () =
             (refused { window with unbatched = true } && !measured = 1);
           p_all "the scripted scope still refuses invalid scripted readings"
             [ 0.; -1.; Float.nan; Float.infinity ] ~f:(fun ms ->
-              (Autotune.on_candidate_measured := fun ~label:_ ~digest:_ _ -> ms);
+              (Autotune.Seam.set Autotune.on_candidate_measured @@ fun ~label:_ ~digest:_ _ -> ms);
               refused window);
-          (Autotune.on_candidate_measured := fun ~label:_ ~digest:_ _ -> raise Script_failure);
+          ( Autotune.Seam.set Autotune.on_candidate_measured @@ fun ~label:_ ~digest:_ _ ->
+            raise Script_failure );
           (try Autotune.with_uncontended_test_windows (fun () -> ignore (apply window))
            with Script_failure -> ());
-          (Autotune.on_candidate_measured := fun ~label:_ ~digest:_ _ -> 7.);
+          (Autotune.Seam.set Autotune.on_candidate_measured @@ fun ~label:_ ~digest:_ _ -> 7.);
           p "an injected failure restores the enclosing scripted scope" (not (refused window)));
       p "leaving the scripted scope restores production contention refusal" (refused window);
       (try Autotune.with_uncontended_test_windows (fun () -> raise Script_failure)
@@ -218,14 +218,13 @@ let abandonment_replay comp =
   p "the cached abandonment starts with a search of exactly beam_width timings"
     (match first with Abandoned (r, _) -> is_abandoned r && timed = k | Completed _ -> false);
   let attempts = ref 0 and baselines = ref 0 in
-  let old_attempt = !Autotune.on_candidate_attempt in
+  let old_attempt = Autotune.Seam.get Autotune.on_candidate_attempt in
   let replay, replay_timed =
     Exn.protect
-      ~finally:(fun () -> Autotune.on_candidate_attempt := old_attempt)
+      ~finally:(fun () -> Autotune.Seam.set Autotune.on_candidate_attempt old_attempt)
       ~f:(fun () ->
-        (Autotune.on_candidate_attempt :=
-           fun label ->
-             if String.equal label "baseline" then Int.incr baselines else Int.incr attempts);
+        ( Autotune.Seam.set Autotune.on_candidate_attempt @@ fun label ->
+          if String.equal label "baseline" then Int.incr baselines else Int.incr attempts );
         cold ())
   in
   p "the cold abandonment has no refused windows"
@@ -412,12 +411,11 @@ let executed_chain ?fail_arm_a_at ?(cache_dir = "") comp t2 expected ~flip_scrip
      containment tests' fault-injection seam — after it has timed something, so its report carries a
      partial record. *)
   let arm_a_attempts = ref 0 in
-  let old_attempt = !Autotune.on_candidate_attempt in
-  (Autotune.on_candidate_attempt :=
-     fun _ ->
-       if delivered () = 0 then (
-         Int.incr arm_a_attempts;
-         if Option.exists fail_arm_a_at ~f:(fun n -> !arm_a_attempts = n) then raise Arm_a_dies));
+  let old_attempt = Autotune.Seam.get Autotune.on_candidate_attempt in
+  ( Autotune.Seam.set Autotune.on_candidate_attempt @@ fun _ ->
+    if delivered () = 0 then (
+      Int.incr arm_a_attempts;
+      if Option.exists fail_arm_a_at ~f:(fun n -> !arm_a_attempts = n) then raise Arm_a_dies) );
   let flip_window = ref 0 in
   let script _ =
     match delivered () with
@@ -430,7 +428,7 @@ let executed_chain ?fail_arm_a_at ?(cache_dir = "") comp t2 expected ~flip_scrip
   let (got, _), lines =
     with_stderr_captured (fun () ->
         Exn.protect
-          ~finally:(fun () -> Autotune.on_candidate_attempt := old_attempt)
+          ~finally:(fun () -> Autotune.Seam.set Autotune.on_candidate_attempt old_attempt)
           ~f:(fun () ->
             with_clock script (fun () ->
                 let ctx, routine =

@@ -71,20 +71,19 @@ let clean_cache dir =
 let with_injected_failure ?exn ?(after_arm_timed = 0) ~arms_reported ~at ~message f =
   let attempts = ref 0 in
   let timed = ref 0 in
-  (Autotune.on_candidate_timed :=
-     fun _routine_name ~timed_so_far -> if !arms_reported >= 1 then timed := timed_so_far);
-  (Autotune.on_candidate_attempt :=
-     fun label ->
-       (* Arm A reports exactly once, when its search ends, so this fires within arm B only. *)
-       if !arms_reported >= 1 && !timed >= after_arm_timed then (
-         Int.incr attempts;
-         if !attempts = at then
-           raise
-             (Option.value exn
-                ~default:(Failure (Printf.sprintf "%s at candidate %s" message label)))));
-  Exn.protect ~f ~finally:(fun () ->
-      (Autotune.on_candidate_attempt := fun _ -> ());
-      Autotune.on_candidate_timed := fun _ ~timed_so_far:_ -> ())
+  Autotune.Seam.with_value Autotune.on_candidate_timed (fun _routine_name ~timed_so_far ->
+      if !arms_reported >= 1 then timed := timed_so_far)
+  @@ fun () ->
+  Autotune.Seam.with_value Autotune.on_candidate_attempt
+    (fun label ->
+      (* Arm A reports exactly once, when its search ends, so this fires within arm B only. *)
+      if !arms_reported >= 1 && !timed >= after_arm_timed then (
+        Int.incr attempts;
+        if !attempts = at then
+          raise
+            (Option.value exn
+               ~default:(Failure (Printf.sprintf "%s at candidate %s" message label)))))
+    f
 
 (* gh-ocannl-564: the same discipline at the pre-dispatch validation seam. [at] counts preflights
    across the whole call — 1 is arm A's baseline timing, 2 the first candidate it times — and the
@@ -92,11 +91,13 @@ let with_injected_failure ?exn ?(after_arm_timed = 0) ~arms_reported ~at ~messag
    a search that timed fewer candidates than expected. *)
 let with_injected_preflight_failure ~at ~raise_it f =
   let preflights = ref 0 in
-  (Autotune.on_candidate_preflight :=
-     fun _routine_name ->
-       Int.incr preflights;
-       if !preflights = at then raise_it ());
-  let result = Exn.protect ~f ~finally:(fun () -> Autotune.on_candidate_preflight := fun _ -> ()) in
+  let result =
+    Autotune.Seam.with_value Autotune.on_candidate_preflight
+      (fun _routine_name ->
+        Int.incr preflights;
+        if !preflights = at then raise_it ())
+      f
+  in
   (result, !preflights)
 
 let preflight_declines (r : Autotune.report) =
@@ -280,12 +281,11 @@ let () =
      [Ir.Schedule_outcome.classify_raw] refuses to classify one level down. --- *)
   let attempts = ref 0 in
   let assertion_propagated =
-    Exn.protect
-      ~f:(fun () ->
-        (Autotune.on_candidate_attempt :=
-           fun _ ->
-             Int.incr attempts;
-             if !attempts = 2 then assert false);
+    Autotune.Seam.with_value Autotune.on_candidate_attempt
+      (fun _ ->
+        Int.incr attempts;
+        if !attempts = 2 then assert false)
+      (fun () ->
         try
           let _ =
             Train.tune_placements ~beam_width:2 ~rounds:0 ~repeats:1 ~cache_dir (Context.auto ()) t2
@@ -293,7 +293,6 @@ let () =
           in
           false
         with Assert_failure _ -> true)
-      ~finally:(fun () -> Autotune.on_candidate_attempt := fun _ -> ())
   in
   p "a compiler assertion propagates instead of losing an arm" assertion_propagated;
 
@@ -328,15 +327,14 @@ let () =
   let reports = ref 0 in
   let attempts = ref 0 in
   let poisoned_propagated =
-    Exn.protect
-      ~f:(fun () ->
-        (Autotune.on_candidate_attempt :=
-           fun _ ->
-             Int.incr attempts;
-             if !attempts = 1 then (
-               Context.poison_lineage ctx_p ~routine_name:"injected"
-                 (Failure "injected lineage poisoning");
-               raise (Failure "injected lineage poisoning")));
+    Autotune.Seam.with_value Autotune.on_candidate_attempt
+      (fun _ ->
+        Int.incr attempts;
+        if !attempts = 1 then (
+          Context.poison_lineage ctx_p ~routine_name:"injected"
+            (Failure "injected lineage poisoning");
+          raise (Failure "injected lineage poisoning")))
+      (fun () ->
         match
           Train.tune_placements ~beam_width:2 ~rounds:0 ~repeats:1 ~cache_dir:""
             ~report:(fun _ -> Int.incr reports)
@@ -344,7 +342,6 @@ let () =
         with
         | _ -> false
         | exception Failure msg -> String.is_substring msg ~substring:"injected lineage poisoning")
-      ~finally:(fun () -> Autotune.on_candidate_attempt := fun _ -> ())
   in
   p "a failure that poisons the shared lineage propagates instead of trying the sibling"
     poisoned_propagated;
@@ -357,16 +354,15 @@ let () =
   let arms_reported = ref 0 in
   let attempts = ref 0 in
   let poisoned_winner_refused =
-    Exn.protect
-      ~f:(fun () ->
-        (Autotune.on_candidate_attempt :=
-           fun _ ->
-             if !arms_reported >= 1 then (
-               Int.incr attempts;
-               if !attempts = 3 then (
-                 Context.poison_lineage ctx_q ~routine_name:"injected"
-                   (Failure "injected late poisoning");
-                 raise (Failure "injected late poisoning"))));
+    Autotune.Seam.with_value Autotune.on_candidate_attempt
+      (fun _ ->
+        if !arms_reported >= 1 then (
+          Int.incr attempts;
+          if !attempts = 3 then (
+            Context.poison_lineage ctx_q ~routine_name:"injected"
+              (Failure "injected late poisoning");
+            raise (Failure "injected late poisoning"))))
+      (fun () ->
         match
           Train.tune_placements ~beam_width:2 ~rounds:0 ~repeats:1 ~cache_dir:""
             ~report:(fun _ -> Int.incr arms_reported)
@@ -374,7 +370,6 @@ let () =
         with
         | _ -> false
         | exception Failure msg -> String.is_substring msg ~substring:"poisoned")
-      ~finally:(fun () -> Autotune.on_candidate_attempt := fun _ -> ())
   in
   p "a winner is not shipped out of a lineage a later arm poisoned" poisoned_winner_refused;
 
@@ -382,12 +377,11 @@ let () =
      best-effort reporting on the failure path must not swallow it. --- *)
   let attempts = ref 0 in
   let interrupt_propagated =
-    Exn.protect
-      ~f:(fun () ->
-        (Autotune.on_candidate_attempt :=
-           fun _ ->
-             Int.incr attempts;
-             if !attempts = 3 then raise (Failure "injected failure under interrupt"));
+    Autotune.Seam.with_value Autotune.on_candidate_attempt
+      (fun _ ->
+        Int.incr attempts;
+        if !attempts = 3 then raise (Failure "injected failure under interrupt"))
+      (fun () ->
         match
           Train.tune_placements ~beam_width:2 ~rounds:0 ~repeats:1 ~cache_dir:""
             ~report:(fun r -> if failed r then raise Stdlib.Sys.Break)
@@ -395,7 +389,6 @@ let () =
         with
         | _ -> false
         | exception Stdlib.Sys.Break -> true)
-      ~finally:(fun () -> Autotune.on_candidate_attempt := fun _ -> ())
   in
   p "an interrupt raised by a report callback is not swallowed" interrupt_propagated;
 
@@ -501,16 +494,14 @@ let () =
   let attempts = ref 0 in
   let reports_z = ref [] in
   let poisoned_stops_the_search =
-    Exn.protect
-      ~f:(fun () ->
-        (Autotune.on_candidate_attempt :=
-           fun _ ->
-             Int.incr attempts;
-             (* Poisons without raising: the lineage's own state must stop the search, through the
-                timing run's pre-dispatch check rather than an injected exception. *)
-             if !attempts = 2 then
-               Context.poison_lineage ctx_z ~routine_name:"injected"
-                 (Failure "injected prior poisoning"));
+    Autotune.Seam.with_value Autotune.on_candidate_attempt
+      (fun _ ->
+        Int.incr attempts;
+        (* Poisons without raising: the lineage's own state must stop the search, through the timing
+           run's pre-dispatch check rather than an injected exception. *)
+        if !attempts = 2 then
+          Context.poison_lineage ctx_z ~routine_name:"injected" (Failure "injected prior poisoning"))
+      (fun () ->
         match
           Train.tune_placements ~beam_width:2 ~rounds:0 ~repeats:1 ~cache_dir:""
             ~report:(fun r -> reports_z := r :: !reports_z)
@@ -518,7 +509,6 @@ let () =
         with
         | _ -> false
         | exception Failure msg -> String.is_substring msg ~substring:"poisoned")
-      ~finally:(fun () -> Autotune.on_candidate_attempt := fun _ -> ())
   in
   p "a poisoned lineage is not declined like a fixable pre-dispatch failure"
     poisoned_stops_the_search;

@@ -544,6 +544,15 @@ files.
   grows, and inject relative to that. Relatedly, hoisted (link-time packed) `Stage` candidates are a CPU family only —
   `matmul_seed_params` proposes `sk_hoist` from its `is_cpu` branch — so any test precondition about
   packed-constant pools is false on GPU backends and has to be stated as an equivalence.
+- The search's test seams (`on_candidate_attempt`, `_preflight`, `_timed`, `_measured`,
+  `_callback`, and the `with_uncontended_test_windows` scope) are `Autotune.Seam.t` values, one per
+  DOMAIN: scope one with `Seam.with_value` (restores on exit, nests), set one for the domain's life
+  with `Seam.set`, read it with `Seam.get`. A search reaches only its own domain's values, and a
+  freshly spawned domain starts with the defaults — so a fixture that searches from a spawned domain
+  sets its seams inside that domain. Setting REPLACES (a harness that also wants the enclosing value
+  reads it first and calls it); only the timing-call observers chain. A new seam is a `Seam.t`, never
+  a process-wide ref: two domains' searches would otherwise overwrite and observe each other
+  (`autotune_seam_domains` pins the isolation).
 - Scripted search fixtures opt into `Autotune.with_uncontended_test_windows` (gh-ocannl-1156)
   around `on_candidate_measured`: the measurement callback alone only sees windows the host already
   admitted, so a loaded runner could time nothing and leave cache controls vacuous. The scoped seam

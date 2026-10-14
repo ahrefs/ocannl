@@ -52,9 +52,11 @@ let clean_cache dir =
    candidate each sample precedes. *)
 let sample_between_candidates f =
   let samples = ref [] in
-  (Autotune.on_candidate_attempt :=
-     fun label -> samples := (label, Ir.Alloc_census.snapshot ()) :: !samples);
-  let result = Exn.protect ~f ~finally:(fun () -> Autotune.on_candidate_attempt := fun _ -> ()) in
+  let result =
+    Autotune.Seam.with_value Autotune.on_candidate_attempt
+      (fun label -> samples := (label, Ir.Alloc_census.snapshot ()) :: !samples)
+      f
+  in
   (result, List.rev !samples)
 
 let () =

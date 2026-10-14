@@ -185,19 +185,19 @@ let segment_of label =
 
 let () =
   let attempts = ref [] and report = ref None in
-  let old_attempt = !Autotune.on_candidate_attempt
-  and old_measured = !Autotune.on_candidate_measured in
+  let old_attempt = Autotune.Seam.get Autotune.on_candidate_attempt
+  and old_measured = Autotune.Seam.get Autotune.on_candidate_measured in
   Exn.protect
     ~finally:(fun () ->
-      Autotune.on_candidate_attempt := old_attempt;
-      Autotune.on_candidate_measured := old_measured)
+      Autotune.Seam.set Autotune.on_candidate_attempt old_attempt;
+      Autotune.Seam.set Autotune.on_candidate_measured old_measured)
     ~f:(fun () ->
-      (Autotune.on_candidate_attempt := fun label -> attempts := label :: !attempts);
+      ( Autotune.Seam.set Autotune.on_candidate_attempt @@ fun label ->
+        attempts := label :: !attempts );
       (* The fissioned presets lead the seeds, so the beam holds a fissioned parent; everything
          else, this round's candidates included, is slower, so the search stops after one round. *)
-      (Autotune.on_candidate_measured :=
-         fun ~label ~digest:_ _ms ->
-           if String.is_prefix label ~prefix:"F_preset[" then 1. else 1000.);
+      ( Autotune.Seam.set Autotune.on_candidate_measured @@ fun ~label ~digest:_ _ms ->
+        if String.is_prefix label ~prefix:"F_preset[" then 1. else 1000. );
       let ctx, _routine =
         Autotune.with_uncontended_test_windows (fun () ->
             Autotune.tune ~beam_width:2 ~rounds:1 ~repeats:1 ~cache_dir:"" ~log:false

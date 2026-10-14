@@ -114,14 +114,11 @@ let twins segments =
    timed, as (label, schedule digest components). *)
 let singles comp =
   let measured = ref [] in
-  let old_measured = !Autotune.on_candidate_measured in
-  Exn.protect
-    ~finally:(fun () -> Autotune.on_candidate_measured := old_measured)
-    ~f:(fun () ->
-      (Autotune.on_candidate_measured :=
-         fun ~label ~digest _ms ->
-           measured := (label, digest) :: !measured;
-           1.);
+  Autotune.Seam.with_value Autotune.on_candidate_measured
+    (fun ~label ~digest _ms ->
+      measured := (label, digest) :: !measured;
+      1.)
+    (fun () ->
       let ctx, _routine =
         Autotune.with_uncontended_test_windows (fun () ->
             Autotune.tune ~beam_width:1 ~rounds:0 ~repeats:1 ~cache_dir:"" ~log:false

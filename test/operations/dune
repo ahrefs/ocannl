@@ -8019,6 +8019,19 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; The search's test seams (Autotune.Seam) are per domain: two searches in two domains, each domain
+; with its own value in every seam, and each observer sees only its own domain's search.
+
+(test
+ ; ocannl-backend: cc -- both searches run on an explicit Context.cpu (); the property is the seams', not a backend's.
+ (name autotune_seam_domains)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules autotune_seam_domains)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 ; gh-ocannl-1199: the BENCH_TIMING_TRACE decision line, formatted by Bench_harness from
 ; each Autotune.timing_call record on an injected clock, agrees with the decision each call took.
 
