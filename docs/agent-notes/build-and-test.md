@@ -244,7 +244,13 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   A test or harness fixture's own environment variable therefore takes a name outside the
   prefix (FAKE_TOKEN, not OCANNL_FAKE_TOKEN), or one under `OCANNL_TOOL_*` when it is harness
   control: any other prefixed name reads as an unregistered key and fails the scan, which cost a
-  post-wave worker of 2026-10-06 a review round.
+  post-wave worker of 2026-10-06 a review round. The same holds for a name a tool invents for
+  itself: a command-line option spelled `--ocannl-<x>` or `--ocannl_<x>`, or a constant or variable
+  spelled `OCANNL_<X>`, in a benchmark script, a Python orchestrator or its help text, is OCANNL's
+  own config grammar to the scan, a mention of key `<x>`, and fails it when `<x>` is no registered
+  key. Name such an option after what it does instead: lukstafi/ocannl-staging#1107's per-cell
+  override option for `benchmarks/orchestrate.py`, proposed as --ocannl-flag (unquoted here for the
+  same reason OCANNL_FAKE_TOKEN is), failed the scans twice before it became `--cell-flag`.
 - The `.expected` golden of such a repository-wide check should hold what is TRUE of the repository,
   not how much of it there is. A tally — "170 tests in this directory", "241 test stanzas declare
   the config" — moves on every correct addition anywhere, so every unrelated contributor has to
@@ -2763,11 +2769,18 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   through to the next step. Afterwards ALWAYS run `wake-lab.sh boot-linux --as=<request_id> rog`
   (a no-op when the box is already in Ubuntu; from Windows it is a plain `shutdown /r` into
   BootOrder's first entry), then conclude the reservation: rog's steady state is native Ubuntu,
-  which the daily sweep's CUDA leg and every Linux worker there expect. Only rog qualifies today:
-  minix needs its own `/etc/sudoers.d/50-fleet-boot` grant (the two `efibootmgr` forms and
-  `systemctl reboot`, as on rog; text in ludics-lite's README) before the verbs work there, and
-  tuf has no wired NIC, so the script refuses it. The fallback waits until the request
-  is withdrawn -- the user told, through the same channel, that CI is taking the check, so a late
+  which the daily sweep's CUDA leg and every Linux worker there expect. Only rog qualifies today,
+  and not for want of setup on minix: minix has the `/etc/sudoers.d/50-fleet-boot` grant (the two
+  `efibootmgr` forms and `systemctl reboot`, as on rog; text in ludics-lite's README), but on
+  2026-10-14 `boot-windows` there came back in Ubuntu with exit 1 ("came back in Ubuntu") because
+  its firmware ignores `BootNext`, and its Windows, booted by hand, stopped at the BitLocker
+  recovery-key prompt, so even a firmware that honoured the one-boot entry would leave the reboot
+  waiting on a person. tuf has no wired NIC, so the script refuses it. So a minix Windows leg is a
+  user-booted one, and on that boot `minix-amd-win`'s PATH names a `hip_path_link` folder that no
+  longer exists: with hipjit installed every test executable, cc-only ones included, then fails
+  to start with `0xc00004bc` (`hiprtc0701.dll` not found) unless the leg script prepends
+  `C:/Program Files/AMD/ROCm/*/bin` to PATH (ahrefs/ocannl#1349; staging#1120 did).
+  The fallback waits until the request is withdrawn -- the user told, through the same channel, that CI is taking the check, so a late
   reboot is not wasted -- because a dispatched run's checks gate the head, and cancelling one when
   the box turns up leaves a no-verdict the merge refuses. On a booted
   Windows host, use native Git Bash in an isolated checkout of the intended commit, source
