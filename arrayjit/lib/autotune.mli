@@ -1415,6 +1415,7 @@ type placement_surface = {
           budget (the admissible direction — the bound already exceeds the incumbent's measurement).
           [None] when no envelope constant is present, or when {!placement_floor_withheld}. *)
   ps_twin_identity :
+    node_tag:(Ir.Tnode.t -> string) ->
     chain:(Ir.Tnode.t -> Ir.Low_level.reading option) ->
     Ir.Low_level.flip_candidate ->
     Ir.Low_level.flip_alternative ->
@@ -1425,13 +1426,16 @@ type placement_surface = {
           readings: every top-level statement of the raw program that sets or reads the flipped
           node, rendered with fresh-name normalization ({!Ir.Schedule_cache.canonicalize_code}),
           each node tagged with its dims, precision, the placement the lineage brought, the
-          placement the specialization decided and the chain's reading of it, the flipped node
-          marked; plus the default and target readings, the recompute cost and whether it is
-          modeled. [Train.tune_placements] skips an alternative whose identity matches one already
-          measured and lost in the same chain, without a budget slot. [None] — never a twin — when
-          the rendering is incomplete. The neighbourhood is one hop: a difference that reaches the
-          flip only through a farther node (a producer of a producer) shows only through the
-          recompute cost. *)
+          placement the specialization decided, the chain's reading of it and the caller's
+          [node_tag] (the flip chain tags what its timing lineage brings, since the flips are
+          measured there), the flipped node marked; plus the default and target readings, the
+          recompute cost and whether it is modeled. [Train.tune_placements] skips an alternative
+          whose identity matches one already measured and lost in the same chain, without a budget
+          slot. [None] — never a twin — when the rendering is incomplete, or the raw program holds
+          an opaque construct anywhere (a [Staged_compilation] touches no node the neighbourhood
+          filter can see). The neighbourhood is one hop: a difference that reaches the flip only
+          through a farther node (a producer of a producer) shows only through the recompute cost.
+      *)
 }
 (** The placement decision surface prepared for search (gh-ocannl-514): the per-node
     inline/materialize levels of the joint placement x sketch x fission space. *)

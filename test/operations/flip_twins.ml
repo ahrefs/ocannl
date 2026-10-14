@@ -98,7 +98,7 @@ type chain = {
    [flip_script ~flip window] (both 1-based: the flip's ordinal among the measured ones, the
    window's within that flip's search). The searches are told apart by how many reports have been
    delivered when a window is admitted. *)
-let run_chain ?(cache_dir = "") ~budget comp loss ~flip_script =
+let run_chain ?(cache_dir = "") ?timing_ctx ~budget comp loss ~flip_script =
   let arm_reports = ref [] and flip_reports = ref [] and shipped = ref [] in
   let delivered () = List.length !arm_reports + List.length !flip_reports in
   let flip_window = ref 0 and flip_seen = ref 0 in
@@ -122,7 +122,7 @@ let run_chain ?(cache_dir = "") ~budget comp loss ~flip_script =
                 ~report:(fun r -> arm_reports := r :: !arm_reports)
                 ~flip_report:(fun r -> flip_reports := r :: !flip_reports)
                 ~on_ship:(fun what -> shipped := what :: !shipped)
-                ~inline_flips:budget (Context.auto ()) loss comp Ir.Indexing.Empty
+                ?timing_ctx ~inline_flips:budget (Context.auto ()) loss comp Ir.Indexing.Empty
             in
             ()))
   in
@@ -169,7 +169,7 @@ let () =
   let comp = Train.forward loss in
   (* The surface, as the chain reads it. *)
   let surface = Autotune.placement_surface (Context.auto ()) comp Ir.Indexing.Empty in
-  let no_chain _ = None in
+  let no_chain _ = None and no_tag _ = "" in
   let classes = Hashtbl.create (module String) in
   let class_of id =
     match id with
@@ -185,14 +185,14 @@ let () =
             (LL.reading_to_string fc.LL.fc_default)
             (LL.reading_to_string fa.LL.fa_flip)
             fa.LL.fa_recompute_cost
-            (class_of (surface.Autotune.ps_twin_identity ~chain:no_chain fc fa))));
+            (class_of (surface.Autotune.ps_twin_identity ~node_tag:no_tag ~chain:no_chain fc fa))));
   let candidate (t : Tensor.t) =
     List.find surface.Autotune.ps_candidates ~f:(fun fc -> Tn.equal fc.LL.fc_tn t.Tensor.value)
   in
-  let identity ?(chain = no_chain) t =
+  let identity ?(node_tag = no_tag) ?(chain = no_chain) t =
     Option.bind (candidate t) ~f:(fun fc ->
         Option.bind (List.hd fc.LL.fc_alternatives) ~f:(fun fa ->
-            surface.Autotune.ps_twin_identity ~chain fc fa))
+            surface.Autotune.ps_twin_identity ~node_tag ~chain fc fa))
   in
   let twins s t =
     Option.is_some (identity s) && Option.equal String.equal (identity s) (identity t)
@@ -211,6 +211,12 @@ let () =
     (not
        (Option.equal String.equal (identity ~chain:x1_committed y1)
           (identity ~chain:x1_committed y2)));
+  (* The caller's tag -- the flip chain's timing lineage -- enters per node too. *)
+  let a2_tagged n = if Tn.equal n a2.Tensor.value then ";t-differs" else "" in
+  p "a caller tag on a twin's neighbour separates the twins"
+    (not
+       (Option.equal String.equal (identity ~node_tag:a2_tagged x2)
+          (identity ~node_tag:a2_tagged x1)));
   p "a commitment outside the neighbourhood leaves twins twinned"
     (Option.equal String.equal (identity ~chain:x1_committed x2) (identity x2));
   let total_alternatives =
@@ -255,6 +261,16 @@ let () =
     && List.equal (fun (a, b) (c, d) -> String.equal a c && String.equal b d) warm.twins cold.twins
     );
   clean_cache cache_dir;
+  (* The flips are measured in the timing lineage, so what it brings to a neighbour separates twins
+     there: with [y2] preferred inline in the timing context alone, neither [x2] (whose consumer
+     [y2] is) nor [y2] itself is a twin any more, while [y3]'s branch and the other pair are
+     unaffected. *)
+  let timing_ctx = Context.decide_inline (Context.auto ()) [ y2.Tensor.value ] in
+  let timed = run_chain ~timing_ctx ~budget:big_budget comp loss ~flip_script:hopeless in
+  p "under a timing lineage that differs on y2, x2 and y2 are measured, not twinned"
+    (measured x2 timed && measured y2 timed
+    && Option.is_none (twin_of x2 timed)
+    && Option.is_none (twin_of y2 timed));
   (* Budget 2, the approximate profile's: the first twin pair's second member is skipped without a
      slot, so the chain reaches two distinct classes and not one class twice. *)
   let first_twin_rank =
@@ -279,7 +295,7 @@ let () =
                 fc)
           |> Option.bind ~f:(fun fc ->
               Option.bind (List.hd fc.LL.fc_alternatives) ~f:(fun fa ->
-                  surface.Autotune.ps_twin_identity ~chain:no_chain fc fa))
+                  surface.Autotune.ps_twin_identity ~node_tag:no_tag ~chain:no_chain fc fa))
         in
         Option.is_some (id f1)
         && Option.is_some (id f2)

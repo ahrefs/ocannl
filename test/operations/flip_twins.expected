@@ -13,6 +13,7 @@ x3 shares x1's structure but not its dims, and is not its twin: true
 y3 is not y1's twin either: true
 a producer and its consumer are not twins: true
 a chain-committed neighbour reading separates twins: true
+a caller tag on a twin's neighbour separates the twins: true
 a commitment outside the neighbourhood leaves twins twinned: true
 x2 is skipped as twin-of x1: true
 y2 is skipped as twin-of y1: true
@@ -25,6 +26,7 @@ every measured flip was abandoned: true
 the A/B winner ships: true
 the warm chain replays every measured flip's abandonment: true
 the warm chain measures the same flips and skips the same twins: true
+under a timing lineage that differs on y2, x2 and y2 are measured, not twinned: true
 the surface ranks a twin among its first three candidates: true
 a budget-2 chain measures two flips: true
 it skips at least one twin on the way: true

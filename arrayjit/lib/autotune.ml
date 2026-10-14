@@ -3218,6 +3218,7 @@ type placement_surface = {
   ps_disablement : Set.M(Ir.Tnode).t;
   ps_floor_ms : materialized:Ir.Tnode.t list -> float option;
   ps_twin_identity :
+    node_tag:(Ir.Tnode.t -> string) ->
     chain:(Ir.Tnode.t -> LL.reading option) ->
     LL.flip_candidate ->
     LL.flip_alternative ->
@@ -3233,17 +3234,33 @@ type placement_surface = {
    brought ([SC.lineage_tag]), the placement this specialization decided, the reading the chain has
    committed for it (an accepted flip changes a neighbour's world) — and marks the flipped node, so
    the correspondence between two twins maps flipped node to flipped node. The alternative's own
-   facts close it: default and target readings, recompute cost, whether the cost is modeled. An
-   incomplete rendering (an opaque construct, a free symbol) identifies nothing. *)
+   facts close it: default and target readings, recompute cost, whether the cost is modeled. The
+   caller's [node_tag] adds what its own measurement lineage brings (the flip chain's timing
+   context). An incomplete rendering (an opaque construct, a free symbol) identifies nothing, and
+   neither does any neighbourhood of a source that holds an opaque construct anywhere: a
+   [Staged_compilation] touches no node [code_touches_tn] can see, so the neighbourhood filter would
+   drop it and a fragment beside it would render as complete. *)
 let flip_twin_identity ~static_indices ~lineage (base : LL.optimized) =
   let stmts = LL.flat_lines [ base.LL.source ] in
   let octx = base.LL.optimize_ctx in
   let decided = octx.LL.placements in
-  fun ~chain (fc : LL.flip_candidate) (fa : LL.flip_alternative) ->
+  (* The whole source's completeness, read once per surface on first use. *)
+  let source_complete = ref None in
+  let source_complete () =
+    match !source_complete with
+    | Some c -> c
+    | None ->
+        let c =
+          SC.complete (SC.canonicalize_code ~static_indices ~node_tag:(fun _ -> "") base.LL.source)
+        in
+        source_complete := Some c;
+        c
+  in
+  fun ~node_tag:caller_tag ~chain (fc : LL.flip_candidate) (fa : LL.flip_alternative) ->
     let tn = fc.LL.fc_tn in
     let hood = List.filter stmts ~f:(LL.code_touches_tn tn) in
     let node_tag n =
-      SC.lineage_tag lineage octx n
+      SC.lineage_tag lineage octx n ^ caller_tag n
       ^ (match Ir.Tnode.Placements.get decided n with
         | None -> ";d=u"
         | Some (m, _) -> ";d=" ^ Sexp.to_string (Ir.Tnode.sexp_of_memory_mode m))
@@ -3252,7 +3269,7 @@ let flip_twin_identity ~static_indices ~lineage (base : LL.optimized) =
     in
     let c = SC.canonicalize_code ~static_indices ~node_tag (LL.unflat_lines hood) in
     Option.some_if
-      ((not (List.is_empty hood)) && SC.complete c)
+      ((not (List.is_empty hood)) && SC.complete c && source_complete ())
       (Printf.sprintf "%s;%s->%s;cost=%d;modeled=%b" (SC.digest c)
          (LL.reading_to_string fc.LL.fc_default)
          (LL.reading_to_string fa.LL.fa_flip)
