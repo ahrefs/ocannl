@@ -12,14 +12,14 @@
 # Each leg's body is gated by `harness_leg 'N: what it pins #group'`
 # (scripts/harness-support.sh), its name led by the leg numbers below and
 # closed by the one group it belongs to (gh-ocannl-1202): #group-alive (1-5),
-# #stop (6-8, 67), #queries (39), #repeat (9-25, 38), #options (26-28, 37),
-# #width (29-34, 48-52, 64, 70), #digest (35-36, 68-69, 71-73, 80),
+# #stop (6-8, 67), #queries (39), #repeat (9-25, 38, 83), #options (26-28,
+# 37), #width (29-34, 48-52, 64, 70), #digest (35-36, 68-69, 71-73, 80),
 # #fresh (81), #lifecycle (40-47, 65, 74: the run/start lifecycle with its
 # signal legs, and both fork-window negative controls), #source (59-63, 66),
-# #slot (53-58, 78), #device (75-77), #credentials (79). A selector is an
-# extended regular expression over those names; one matching no leg is
-# refused (exit 2) as nothing tested. The shared fixtures stay outside the
-# gates, so a filtered run sets up and cleans up as a full one does. A
+# #slot (53-58, 78), #device (75-77), #credentials (79), #bisect (82). A
+# selector is an extended regular expression over those names; one matching no
+# leg is refused (exit 2) as nothing tested. The shared fixtures stay outside
+# the gates, so a filtered run sets up and cleans up as a full one does. A
 # filtered run prints FILTERED for each leg it left out, then accounts for
 # the legs it ran and every check they skipped with its reason, and never
 # prints the full-pass footer. With no selector every leg runs, as before.
@@ -5855,7 +5855,7 @@ fi # leg 77
 # batch's device probe runs before each iteration, inside it: a query that does not answer ends
 # the set as DEVICE UNHEALTHY (69) with dune never started -- not even its clean -- and an answer
 # lets every iteration run, the device asked once each.
-if harness_leg '83: repeat has both bounds'; then
+if harness_leg '83: repeat has both bounds #repeat'; then
 rb_label="repeat bounds: a test past the per-test cap ends the set as TIMEOUT naming it, a wedged device ends it as DEVICE UNHEALTHY; inside the cap, an answering device and a CPU batch's default do not"
 if [ -z "${test_cap_named_ok:-}" ]; then
   perl -e '$0 = "dune"; sleep 10' </dev/null >/dev/null 2>&1 &
@@ -6284,7 +6284,7 @@ fi # leg 79
 # replaces tools/test-run.sh with one that exits 3 -- so a bisect that ran a
 # tested commit's own runner, rather than its frozen copy, aborts at the bad
 # end instead of finding anything.
-if harness_leg '82: bisect'; then
+if harness_leg '82: bisect #bisect'; then
 if ! command -v git >/dev/null 2>&1; then
   skip 'bisect: exit mapping, backend, isolation (leg 82)' 'no git on PATH'
 else
