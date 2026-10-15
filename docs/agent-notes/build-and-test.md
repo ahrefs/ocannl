@@ -1621,8 +1621,8 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   `tools/test-run.sh`, prints its actual verdict and run id, and extracts every complete
   `FAIL: ...: false` line from that run's full log, preserving order and duplicates, with a failed
   `pass_fail`'s `FAIL: <label>` or `FAIL: <label> (<detail>)`: that line ends on no `: false`, so
-  it is listed when a stdout row this run wrote (`<label>: FAIL…`) printed it, and a
-  `Verdict.fail` message of the same shape is not (`verdict_teardown` pins both streams' bytes,
+  it is listed when a stdout row this run wrote (`<label>: FAIL…`) printed it, one log line
+  per row, and a `Verdict.fail` message of the same shape is not (`verdict_teardown` pins both streams' bytes,
   and `tools/test-mutation-run.sh`'s fixture reads them from there). The alias
   names ONE test (`@<dir>/runtest-<name>`, `slow-<name>`, `train-<name>`) with a golden
   `<dir>/<name>.expected`, refused otherwise, because 1 means "caught" and 0 "survived" only for a

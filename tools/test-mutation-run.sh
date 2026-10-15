@@ -150,9 +150,10 @@ case "$PROBE_MODE" in
   # Failed Verdict.pass_fail claims, in the bytes verdict_teardown pins for both streams
   # ($PASS_FAIL_OUT, $PASS_FAIL_ERR), and one whose label itself contains `: FAIL (a)`. Then
   # `FAIL: ` lines no stdout row printed: a passing claim's label, a failed one's with a detail its
-  # row lacks, and a Verdict.fail message.
+  # row lacks, and Verdict.fail messages -- one repeating a failed claim's line, whose row is spent.
   passfail) rows "$PASS_FAIL_OUT"'odd: FAIL (a): FAIL (b)\n'
     printf '%b' "$PASS_FAIL_ERR"
+    printf '%b' "$PASS_FAIL_ERR" | head -n 1
     printf 'FAIL: odd: FAIL (a) (b)\nFAIL: held\nFAIL: failed (a detail its row lacks)\n'
     printf 'FAIL: the emit child failed:\nFAILED: 3 checks did not hold: "failed", "detailed", "odd: FAIL (a)".\n'
     exit 1 ;;
@@ -370,7 +371,7 @@ grep -qF 'List.map lines ~f:(fun line -> "FAIL: " ^ line ^ "\n")' "$root/test/su
 printf 'PASS a multi-line failure, every row prefixed, is caught on a trailer-short run; an unprefixed continuation row exits 4\n'
 # A failed pass_fail claim's stderr line ends on no `: false`: it is listed as the line a stdout row
 # of the run printed with it, under each reading of a row whose label contains `: FAIL`; a `FAIL: `
-# line no row printed is not.
+# line no row printed is not, nor a second copy of a line whose one row an earlier copy took.
 export PROBE_MODE=passfail
 PROBE_ALIAS=@runtest-passfail run_case 1
 sed -n '/^false claims:$/,/^rows:/{ /^false claims:$/d; /^rows:/d; p; }' "$fixture/result" > "$fixture/claims"

@@ -175,20 +175,27 @@ sub same_plain_rows {
 # (verdict_teardown pins both streams' bytes): the stderr line ends on no `: false` to recognise it
 # by, and shares its shape with a Verdict.fail message, so it is recognised as the line some stdout
 # row of this run printed with it -- each reading of a row, since a label may contain `: FAIL` too.
+# A row stands for ONE log line: a Verdict.fail message repeating a failed claim's line is not a
+# second claim. Answers a matcher that consumes the first unclaimed row a line is a reading of.
 sub pass_fail_lines {
-    my %lines;
+    my (%rows_of, @claimed);
     for my $out (@_) {
         open my $f, '<:raw', $out or refuse("read $out: $!");
         while (my $row = <$f>) {
             $row =~ s/\r?\n$//;
+            push @claimed, 0;
             for (my $at = index($row, ': FAIL'); $at >= 0; $at = index($row, ': FAIL', $at + 1)) {
                 my $rest = substr($row, $at + length(': FAIL'));
-                $lines{'FAIL: ' . substr($row, 0, $at) . $rest} = 1 if $rest =~ /^(?: \(.*\))?$/;
+                push @{$rows_of{'FAIL: ' . substr($row, 0, $at) . $rest}}, $#claimed
+                    if $rest =~ /^(?: \(.*\))?$/;
             }
         }
         close $f or refuse("close $out: $!");
     }
-    return \%lines;
+    return sub {
+        my ($row) = grep { !$claimed[$_] } @{$rows_of{$_[0]} // []} or return 0;
+        return $claimed[$row] = 1;
+    };
 }
 my $mutated = $original;
 substr($mutated, $at, length($old), $new);
@@ -294,7 +301,7 @@ my $reported = eval {
         my ($found, $stopped, $teardown) = (0, '', 0);
         while (my $line = <$claims>) {
             if ($line =~ /^(FAIL: .*: false)\r?\n?$/
-                || ($line =~ /^(FAIL: .*?)\r?\n?$/ && $pass_fail->{$1})) {
+                || ($line =~ /^(FAIL: .*?)\r?\n?$/ && $pass_fail->($1))) {
                 print "$1\n";
                 $found = 1;
             }
