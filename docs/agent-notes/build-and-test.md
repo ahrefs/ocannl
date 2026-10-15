@@ -3925,7 +3925,15 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
 - Hand-run shell tests source `scripts/harness-support.sh`: `harness_args`,
   `harness_scratch`, `report`/`skip`, and `finish` share the counted SKIP contract,
   complete header help and signal cleanup. `cleanup_fixture` releases owned children even with
-  `--keep`. `shell_scripts_parse` discovers `tools/test-*.sh` and `scripts/test-*.sh`
+  `--keep`. To iterate on one leg, `--only REGEX` runs the legs whose
+  `if harness_leg 'NAME'; then ... fi` gate matches the extended regular expression and prints
+  `FILTERED  NAME` for every other one; its footer is a `FILTERED RUN, not a full pass` line,
+  never `all legs passed`, and a filter that selects no leg (or a harness that declares none)
+  exits 2. It is an option only, with no environment form, so an ambient filter cannot shrink a
+  CI or `tools/test-harnesses.sh` run. A gate holds a leg's body only: fixtures and helpers a
+  later leg reads stay outside it, or a filtered run dies on an unbound variable.
+  `tools/test-test-run.sh` gates every leg by its number (`--only '^81:'`).
+  `shell_scripts_parse` discovers `tools/test-*.sh` and `scripts/test-*.sh`
   (except the production supervisor) and refuses private copies or missing lifecycle calls.
   Standalone harnesses elsewhere declare `# ocannl-harness: standalone`, as
   `test/operations/ci_matrix.sh` does; Dune actions use the function-only API without that marker.
