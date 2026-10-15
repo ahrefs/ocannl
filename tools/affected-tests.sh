@@ -407,24 +407,33 @@ sub glob_regex {   # dune's glob syntax: * ? [set] [!set] {a,b} \x; anything els
   }
   return $depth ? qr/./ : qr/^$re$/;   # unbalanced: matches anything
 }
-sub predicate {   # a glob, or (and (P...)), (or (P...)), (not P): a matcher over file names
+# A glob, or (and (P...)), (or (P...)), (not P), as a pair of matchers over
+# file names: [may, must], what some reading of the printed predicate matches
+# and what every reading does. The list wants "may"; `not` swaps the two.
+# `dune rules` prints a glob with its escapes dropped (`\{x\}*.md` as
+# `{x}*.md`), so which of its metacharacters were literal is lost. The
+# readings of a printed glob: as a glob; with its braces, brackets and commas
+# literal and its wildcards live; and as its own text, every character
+# literal. An escaped wildcard is covered by the live one, an escaped brace or
+# bracket by the second reading.
+sub predicate_pair {
   my ($p) = @_;
-  # `dune rules` prints a glob with its escapes dropped (`\{x\}*.md` as
-  # `{x}*.md`), so which of its metacharacters were literal is lost. A printed
-  # glob matches as a glob; with its braces, brackets and commas literal and
-  # its wildcards live; or as its own text: an escaped wildcard is covered by
-  # the live one, an escaped brace or bracket by the second reading.
   if (!ref $p) {
     my $re = glob_regex($p);
     my $plain = glob_regex($p =~ s/([{}\[\],])/\\$1/gr);
-    return sub { $_[0] eq $p || $_[0] =~ $re || $_[0] =~ $plain };
+    return [sub { $_[0] eq $p || $_[0] =~ $re || $_[0] =~ $plain },
+            sub { $_[0] eq $p && $_[0] =~ $re && $_[0] =~ $plain }];
   }
   my ($op, $arg) = pair($p, "a glob predicate");
-  if ($op eq "not") { my $m = predicate($arg); return sub { !$m->($_[0]) } }
+  if ($op eq "not") { my ($may, $must) = @{predicate_pair($arg)}; return [sub { !$must->($_[0]) }, sub { !$may->($_[0]) }] }
   $op =~ /^(?:and|or)$/ && ref $arg or fail("a glob predicate \"$op\" is outside this helper's boundary");
-  my @m = map { predicate($_) } @$arg;
-  return $op eq "and" ? sub { my $f = $_[0]; !grep { !$_->($f) } @m } : sub { my $f = $_[0]; grep { $_->($f) } @m };
+  my @m = map { predicate_pair($_) } @$arg;
+  my $all = sub { my ($k, $f) = @_; !grep { !$_->[$k]->($f) } @m };
+  my $any = sub { my ($k, $f) = @_; grep { $_->[$k]->($f) } @m };
+  return $op eq "and" ? [sub { $all->(0, $_[0]) }, sub { $all->(1, $_[0]) }]
+                      : [sub { $any->(0, $_[0]) }, sub { $any->(1, $_[0]) }];
 }
+sub predicate { predicate_pair($_[0])->[0] }
 sub strip_ctx { my ($p) = @_; $p =~ s{^\Q$ctx\E/}{} ? $p : undef }
 # `dune rules` over many targets, in batches whose command line stays far below
 # the smallest limit (Windows' 32767 characters for the whole command line).
