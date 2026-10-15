@@ -3703,7 +3703,8 @@ three easy ways to lie; the verb encodes each once (tools/bisect-steps.sh says h
   step, so a configuration a commit changes cannot move the bisect to another backend half-way.
 - **Isolation.** The bisect gets a detached worktree of its own under
   `~/.ocannl-test-runs/bisect-<stamp>-<pid>/tree`, never the caller's checkout, the sweep's or
-  another session's, and its runs take that tree's lock. Every step is judged by the runner frozen
+  another session's, and its runs take that tree's lock; a step hands git its verdict, and git
+  moves the tree, only once nothing those runs started holds it. Every step is judged by the runner frozen
   beside it at the start (`runner/`, pointed at the tree through `OCANNL_TOOL_TESTRUN_TREE`, which
   only `run` and `plan` accept), not by the tested commit's own copy, which may predate the slot or
   the caps, nor by the caller's, which may be edited meanwhile. Each step is two plain `run`s, so

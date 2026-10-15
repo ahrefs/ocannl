@@ -271,7 +271,9 @@
 #      not hold here bisect nothing; no backend, an unrelated GOOD or a
 #      misplaced option is refused before any step; first-parent by default
 #      never steps into a merged branch; a TERM reaps the step's dune and
-#      exits 143. Every dune call sees the pinned backend and neither of the
+#      exits 143; a descendant a step's run leaves holding the tree is
+#      waited for before git moves the tree; a relative runs directory keeps
+#      every step's runs under it. Every dune call sees the pinned backend and neither of the
 #      runner's own variables, and the invoking checkout and its worktree
 #      list end as they began.
 #  70 sits at the very end, after every leg that fakes a device: a leg that
@@ -6032,6 +6034,15 @@ esac
 case $st in
   fail) echo 'Error: the test failed'; exit 1 ;;
   hang) exec sleep 60 ;;
+  escape*)
+    # A descendant that leaves dune's group, keeping the run's lock (fd 9),
+    # and reports the tree's STATE as it found it two seconds later.
+    perl -MPOSIX -e 'POSIX::setsid(); sleep 2; open my $f, "<", "STATE"; my $now = <$f>;
+      chomp $now; open my $o, ">>", $ENV{BISECT_ESCAPE}; print $o "$ARGV[0] $now\n"' "$st" \
+      </dev/null >/dev/null 2>&1 &
+    # Out of the group before dune exits: the supervisor reaps what is left in it.
+    sleep 0.5
+    ;;
   hold)
     printf '%s\n' "$$" >"$BISECT_HOLD.pid"
     exec perl -e 'sleep 60' ;;
@@ -6086,8 +6097,8 @@ EOF
     shift
     : >"$TMP/bisect.calls"
     env GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null OCANNL_TOOL_TEST_RUNS=$bi_runs \
-      BISECT_CALLS=$TMP/bisect.calls BISECT_HOLD=$TMP/bisect-hold PATH=$bi_bin:$PATH \
-      ${envs[@]+"${envs[@]}"} "$bi_root/tools/test-run.sh" bisect "$@" \
+      BISECT_CALLS=$TMP/bisect.calls BISECT_HOLD=$TMP/bisect-hold BISECT_ESCAPE=$TMP/bisect.escape \
+      PATH=$bi_bin:$PATH ${envs[@]+"${envs[@]}"} "$bi_root/tools/test-run.sh" bisect "$@" \
       >"$TMP/bisect.out" 2>"$TMP/bisect.err"
     bi_rc=$?
     bi_out=$(cat "$TMP/bisect.out") bi_err=$(cat "$TMP/bisect.err")
@@ -6261,6 +6272,45 @@ EOF
     fi
   fi
   if [ -z "$bi_detail" ]; then report 0 "$l_fp"; else report 1 "$l_fp" "$bi_detail"; fi
+
+  # (i) a descendant a step's run leaves behind, holding the tree's lock,
+  # finishes before git checks out the next commit: it reads its own commit.
+  l_settle="bisect: a step's verdict waits for a descendant still holding the tree, so it never sees the next commit"
+  bi_detail=
+  rm -f "$TMP/bisect.escape"
+  bi_repo escape1 escape2 fail fail || bi_detail="fixture"
+  [ -n "$bi_detail" ] || bi_run OCANNL_BACKEND=cc OCANNL_TOOL_FLEET_WORKER=none -- "$bi_base" range @t
+  if [ -n "$bi_detail" ]; then :
+  elif [ "$bi_rc" != 0 ] || ! grep -q "^result: FIRST BAD COMMIT ${bi_shas[2]} fail\$" <<<"$bi_out"; then
+    bi_detail="exit $bi_rc: $bi_out $bi_err"
+  elif [ ! -s "$TMP/bisect.escape" ] || awk '$1 != $2 { bad = 1 } END { exit !bad }' "$TMP/bisect.escape"; then
+    bi_detail="a descendant saw another commit's tree (its STATE, then what it read): $(cat "$TMP/bisect.escape" 2>&1)"
+  elif ! bi_clean; then bi_detail="the tree was left, or the checkout changed"
+  fi
+  if [ -z "$bi_detail" ]; then report 0 "$l_settle"; else report 1 "$l_settle" "$bi_detail"; fi
+
+  # (j) a relative runs directory is resolved once, by the bisect: every
+  # step's runs land beside the bisect's records and outlive the tree.
+  l_rel="bisect: a relative OCANNL_TOOL_TEST_RUNS keeps every step's runs under the one directory it names"
+  bi_detail=
+  bi_repo pass fail || bi_detail="fixture"
+  rm -rf "${TMP:?}/bisect-relruns"
+  [ -n "$bi_detail" ] || bi_run OCANNL_BACKEND=cc OCANNL_TOOL_FLEET_WORKER=none OCANNL_TOOL_TEST_RUNS=../bisect-relruns \
+    -- "$bi_base" range @t
+  bi_relruns=$(cd -P "$TMP/bisect-relruns" 2>/dev/null && pwd -P)
+  if [ -n "$bi_detail" ]; then :
+  elif [ "$bi_rc" != 0 ] || [ -z "$bi_relruns" ] || [ "$(dirname "$bi_dir")" != "$bi_relruns" ]; then
+    bi_detail="exit $bi_rc; bisect directory ${bi_dir:-?} (want one under $TMP/bisect-relruns): $bi_out $bi_err"
+  else
+    while IFS=$'\t' read -r _ _ _ b t; do
+      for r in "$b" "$t"; do
+        [ "$r" = - ] && continue
+        [ "$(dirname "$r")" = "$bi_relruns" ] && [ -s "$r/exit" ] ||
+          bi_detail="a step's run is not under $bi_relruns, or did not outlive the tree: $r"
+      done
+    done <"$bi_dir/steps.tsv"
+  fi
+  if [ -z "$bi_detail" ]; then report 0 "$l_rel"; else report 1 "$l_rel" "$bi_detail"; fi
 
   # (h) a TERM to the bisect stops the step's run (its dune reaped), exits
   # 143 and removes the tree.

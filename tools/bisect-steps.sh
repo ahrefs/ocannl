@@ -34,7 +34,10 @@
 #     `<runs>/bisect-<stamp>-<pid>/tree` (detached; `dune-workspace` written,
 #     as scripts/setup-ocaml-env.sh does, so dune roots there), never in the
 #     caller's checkout, the sweep's or another session's; its runs take that
-#     tree's own lock. Every step is judged by ONE runner: a copy of this
+#     tree's own lock, and a step hands git its verdict -- after which git
+#     checks the next commit out -- only once nothing those runs started
+#     holds that lock (bounded; past it, the bisect aborts). Every step is
+#     judged by ONE runner: a copy of this
 #     script and the helpers it sources, frozen beside the tree when the
 #     bisect starts (`runner/`), pointed at the tree through
 #     OCANNL_TOOL_TESTRUN_TREE -- never the tested commit's own copy, which
@@ -163,6 +166,11 @@ bisect_main() {
   git merge-base --is-ancestor "$good_sha" "$bad_sha" ||
     die "bisect: GOOD $good is not an ancestor of BAD $bad"
 
+  # Every runner the bisect starts keeps its runs here, under the path this
+  # launch resolved: a relative OCANNL_TOOL_TEST_RUNS would otherwise be
+  # re-read from each step's own directory, scattering the runs (some inside
+  # the tree the end removes) away from the locks the bisect reads.
+  export OCANNL_TOOL_TEST_RUNS=$RUNS
   dir=$RUNS/bisect-$(date -u +%Y%m%dT%H%M%SZ)-$$
   tree=$dir/tree
   mkdir "$dir" "$dir/steps" "$dir/runner" "$dir/runner/tools" "$dir/runner/scripts" ||
@@ -339,11 +347,33 @@ bisect_step() { # <bisect dir> [label]
     fi
     case $phase_rc in 0) phase_verdict=pass ;; 1) phase_verdict=fail ;; esac
   }
+  # Before a verdict goes back to git, which then checks the next commit out:
+  # nothing a run started may still hold the tree (a descendant that left
+  # dune's group keeps the run's lock for as long as it lives). Bounded; one
+  # that outlives the bound aborts the bisect rather than run under a moving
+  # tree.
+  bisect_settle() {
+    local lock i=0
+    lock=$RUNS/lock-$(wt_key_of "$(cd -P "$tree" && pwd -P)")
+    while :; do
+      probe_locks "$lock"
+      case $? in
+        0) return 0 ;;
+        3) ;;
+        *) bisect_abort 126 "cannot inspect the tree's lock $lock" ;;
+      esac
+      i=$((i + 1))
+      [ "$i" -le 600 ] ||
+        bisect_abort 126 "a process the runs of $sha started still holds $tree after 60s (lock $lock): the next commit cannot be checked out under it"
+      sleep 0.1
+    done
+  }
   bisect_phase build @check ${builds[@]+"${builds[@]}"}
   build_run=${phase_run:--}
   case $phase_verdict in
-    pass) ;;
+    pass) bisect_settle ;;
     fail)
+      bisect_settle
       printf '%s\t%s\tskip\t%s\t-\n' "$label" "$sha" "$build_run" >>"$dir/steps.tsv"
       echo "bisect: $label $sha: skip -- the build is red (steps/$label-build.out)" >&2
       exit 125 ;;
@@ -356,6 +386,7 @@ bisect_step() { # <bisect dir> [label]
     fail) verdict=bad ;;
     *) bisect_abort "$phase_rc" "the test run of $sha is not a verdict: $phase_verdict (steps/$label-test.out)" ;;
   esac
+  bisect_settle
   printf '%s\t%s\t%s\t%s\t%s\n' "$label" "$sha" "$verdict" "$build_run" "$test_run" >>"$dir/steps.tsv"
   echo "bisect: $label $sha: $verdict (steps/$label-test.out)" >&2
   [ "$verdict" = good ] && exit 0
