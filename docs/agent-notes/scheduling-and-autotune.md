@@ -229,7 +229,13 @@ files.
   would build (or vice versa) — keep the invariant, or re-derive the witness. The fused
   (`Fuse_epilogue`) flavor is judged separately: skipping the epilogue tail can empty the
   coverage demand before the alignment analysis is consulted, so twins can survive a routine the
-  unfused family is refuted on. Since gh-ocannl-613 the flavor is the family tree's ROOT level
+  unfused family is refuted on — but on GPU only the TENSORIZED twins compile: `Fuse_epilogue`
+  refuses the scalar block-tiling pipeline's register-tiled store path (an output loop on the write
+  path that is neither Serial nor Grid, or a guarded store), on every backend. So a segment the
+  unfused family is refuted on (a `Local` product whose consumer shares its kernel) has no
+  compilable sketch on a backend without a tensorized pipeline for its triple — CUDA at the
+  default `tf32_matmuls=false`, HIP for f32. A test claiming such a segment is seeded gates on
+  `Ll_test.tensorized_matmul_capability` (`autotune_sketch_placements`' differ leg). Since gh-ocannl-613 the flavor is the family tree's ROOT level
   (`fusion = unfused | fused`, `matmul_family_tree`): the fused child is refuted with the
   recognizer's own reason (`Schedule.fuse_epilogue_witness`) on a site with no fusable tail —
   so a tree's `refutations` always carries one entry more than its pipelines produce, and a

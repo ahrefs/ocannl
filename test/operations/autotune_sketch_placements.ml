@@ -19,6 +19,19 @@
    on the C backends fission promotes every product the next layer reads, and the twins agree, so
    the leg is skipped there. Each twin gets its own singles, and no single sketches both.
 
+   Which sketches can reach the first twin is the backend's call. Its [Local] product keeps the
+   layer's [relu] in the twin's kernel as a companion the unfused sketches cannot cover (GPU
+   companion coverage, gh-ocannl-521), so only the epilogue-fused twins seed it, and of those only
+   the tensorized ones compile: [Fuse_epilogue] refuses the scalar block-tiling pipeline's
+   register-tiled store path. So the claim that the first twin gets a single of its own is gated on
+   the backend advertising a tensorized pipeline for the site's f32 triple
+   ([Ll_test.tensorized_matmul_capability], the seeder's own judgment): Metal's simdgroup does;
+   CUDA's tf32 arm does only under [tf32_matmuls] (an environment skip at the default); HIP's
+   rocWMMA has no f32 shape (a backend skip). The second twin and the third layer have their
+   products materialized, so the scalar pipeline seeds them on every GPU backend: the third layer's
+   single is the reference the claims read the twins against (a [Local] third product would carry
+   the same companion, leaving the reference unseeded wherever the first twin is).
+
    2. [agree]: every product is materialized, so the twins agree in placements as well: they share
    one key, and every single that sketches one twin sketches both.
 
@@ -56,7 +69,8 @@ let matrix ~label ~modulus ~offset ~stride =
 
 (* Three layers [y_k = relu (w_k * y_{k-1})] over a materialized input sum; [materialized] lists the
    layers whose product is materialized. The third layer closes the routine, so its segment carries
-   the closing comment and is not a twin of the first two. *)
+   the closing comment and is not a twin of the first two. Returns the routine's code and the first
+   layer's product with its operands (weight, input, product), for the capability gate. *)
 let chain ~materialized () =
   let qa = matrix ~label:"qa" ~modulus:11 ~offset:0. ~stride:0.125 in
   let qb = matrix ~label:"qb" ~modulus:7 ~offset:(-3.) ~stride:1. in
@@ -67,15 +81,15 @@ let chain ~materialized () =
     let%op h = w * y in
     if List.mem materialized k ~equal:Int.equal then Train.set_materialized h.Tensor.value;
     let%op y = relu h in
-    y
+    (y, h)
   in
   let%op x = qa + qb in
   Train.set_materialized x.Tensor.value;
-  let y1 = layer 1 w1 x in
+  let y1, h1 = layer 1 w1 x in
   Train.set_materialized y1.Tensor.value;
-  let y2 = layer 2 w2 y1 in
+  let y2, _ = layer 2 w2 y1 in
   Train.set_materialized y2.Tensor.value;
-  Train.forward (layer 3 w3 y2)
+  (Train.forward (fst (layer 3 w3 y2)), (w1.Tensor.value, x.Tensor.value, h1.Tensor.value))
 
 (* A hermetic copy: fission promotes placements of the record it is given. *)
 let copy (o : LL.optimized) =
@@ -86,7 +100,8 @@ let copy (o : LL.optimized) =
   }
 
 (* The segmentation the tuner enumerates its per-segment seeds under -- its fission settings and
-   aggressive presets -- with each segment's structural and placement-aware pre-schedule digests. *)
+   aggressive presets -- with each segment's structural and placement-aware pre-schedule digests;
+   and the device's limits. *)
 let enumerate comp =
   let captured = ref None in
   let ctx, _routine =
@@ -109,9 +124,10 @@ let enumerate comp =
       ?keep_mapping:(Sched.fission_keep_mapping ~is_gpu ~limits)
       ~preset ~zero_sched ~static_indices:[] (copy base)
   in
-  List.map tuples ~f:(fun (kind, pre, _, _) ->
-      let digest with_placements = SC.digest (SC.canonicalize ~with_placements pre) in
-      (kind, digest false, digest true))
+  ( limits,
+    List.map tuples ~f:(fun (kind, pre, _, _) ->
+        let digest with_placements = SC.digest (SC.canonicalize ~with_placements pre) in
+        (kind, digest false, digest true)) )
 
 (* The twins: the two [`Normal] segments of one structural digest, by position. *)
 let twins segments =
@@ -155,9 +171,16 @@ let sketched ~reference (i, j) (_, components) =
       | _ -> true)
 
 (* One leg's search over the chain, with what its claims read: the twins' positions, whether they
-   agree in placements, the timed singles, and the twins each single sketched. *)
+   agree in placements, the timed singles, the twins each single sketched, and whether the backend
+   advertises a tensorized pipeline for the first layer's product ([None] where the leg is off). *)
 let leg ~tag ~materialized ~when_ =
-  let segments = if when_ then enumerate (chain ~materialized ()) else [] in
+  let tensorized, segments =
+    if when_ then
+      let comp, (a, b, d) = chain ~materialized () in
+      let limits, segments = enumerate comp in
+      (Some (Ll_test.tensorized_matmul_capability ~is_gpu ~is_cpu ~limits ~a ~b ~d), segments)
+    else (None, [])
+  in
   let found = twins segments in
   gated ~when_ ~on:backend_name
     (tag ^ ": two matmul segments share a structural digest")
@@ -166,7 +189,7 @@ let leg ~tag ~materialized ~when_ =
   let digests k =
     Option.value_map (List.nth segments k) ~default:("", "") ~f:(fun (_, d, p) -> (d, p))
   in
-  let singles = if when_ then singles (chain ~materialized ()) else [] in
+  let singles = if when_ then singles (fst (chain ~materialized ())) else [] in
   Stdio.eprintf "%s singles (not part of the golden): %d\n%!" tag (List.length singles);
   List.iter singles ~f:(fun (l, _) -> Stdio.eprintf "  %s\n%!" l);
   gated_all ~when_ ~on:backend_name (tag ^ ": every single compiles the enumerated segmentation")
@@ -180,21 +203,35 @@ let leg ~tag ~materialized ~when_ =
   let reference =
     Option.value_map ~default:[] ~f:snd (List.find singles ~f:(Fn.non is_twin_single))
   in
-  (pair, String.equal (snd (digests i)) (snd (digests j)), singles, sketched ~reference pair)
+  ( pair,
+    String.equal (snd (digests i)) (snd (digests j)),
+    singles,
+    sketched ~reference pair,
+    tensorized )
 
 let () =
   let when_ = is_gpu and on = backend_name in
-  let (i, j), placed_alike, singles, sketched = leg ~tag:"differ" ~materialized:[ 2 ] ~when_ in
+  let (i, j), placed_alike, singles, sketched, tensorized =
+    leg ~tag:"differ" ~materialized:[ 2; 3 ] ~when_
+  in
   gated ~when_ ~on "differ: the twins differ in placements" (not placed_alike);
-  gated_exists ~when_ ~on "differ: a single sketches the first twin alone" singles ~f:(fun s ->
-      List.equal Int.equal (sketched s) [ i ]);
+  let first_alone = "differ: a single sketches the first twin alone" in
+  (match tensorized with
+  | Some (`Withheld aggregation) ->
+      Stdio.eprintf "differ: %s advertises no tensorized pipeline for the first twin's site\n%!" on;
+      skipped ~aggregation ~backend:on first_alone
+  | Some `Advertised | None ->
+      gated_exists ~when_ ~on first_alone singles ~f:(fun s ->
+          List.equal Int.equal (sketched s) [ i ]));
   gated_exists ~when_ ~on "differ: a single sketches the second twin alone" singles ~f:(fun s ->
       List.equal Int.equal (sketched s) [ j ]);
   gated_all ~when_ ~on "differ: no single sketches both twins" singles ~f:(fun s ->
       List.length (sketched s) < 2)
 
 let () =
-  let _, placed_alike, singles, sketched = leg ~tag:"agree" ~materialized:[ 1; 2; 3 ] ~when_:true in
+  let _, placed_alike, singles, sketched, _ =
+    leg ~tag:"agree" ~materialized:[ 1; 2; 3 ] ~when_:true
+  in
   Fissioned_chain.menu_claim ~when_:is_cpu ~on:backend_name (List.map singles ~f:fst);
   p "agree: the twins agree in placements" placed_alike;
   p_exists "agree: a single sketches the twins" singles ~f:(fun s ->
