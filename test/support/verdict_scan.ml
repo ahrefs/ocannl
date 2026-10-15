@@ -348,11 +348,21 @@ let opened_from_verdict = Int.min_value
    Verdict = ...] took the name over, an alias of it ([module V = Verdict]), or a submodule of
    either ([Verdict.Claims]); [Other.Verdict] is not. An unqualified one is when the name it reaches
    was brought in by an [open] (or [include]) of such a module, as [open Verdict.Claims] brings the
-   claim names in; a name the source binds itself ([let p = Stdio.printf], [let skipped =
-   Verdict.skipped ~backend]), or one no modelled open brings in, is not. *)
+   claim names in, and no later [open] of another module may have rebound it; a name the source
+   binds itself ([let p = Stdio.printf], [let skipped = Verdict.skipped ~backend]), or one no
+   modelled open brings in, is not. *)
 let claim_calls ~callees content =
   let ast = Read.structure_of content in
+  (* A type constraint or coercion does not change which string a label is: [("…" : string)] is the
+     literal it wraps. *)
+  let rec peel expr =
+    match expr.pexp_desc with
+    | Pexp_constraint (inner, _) | Pexp_coerce (inner, _, _) -> peel inner
+    | _ -> expr
+  in
+  let literal_of expr = Read.string_literal (peel expr) in
   let key_of env argument =
+    let argument = peel argument in
     match Read.string_literal argument with
     | Some literal -> Literal literal
     | None -> (
@@ -411,18 +421,24 @@ let claim_calls ~callees content =
 
       method! shadowed = Some false
 
+      (* An open of a module denoting [Verdict] binds every claim name to Verdict's. An open of any
+         other module may export a same-named function, and this scan cannot read what it exports,
+         so it binds the claim names to a local: a later [open Local_printer] shadows an earlier
+         [open Verdict.Claims] the way OCaml would if it exports a [p], and a claim name reached
+         past it is not read as Verdict's. *)
       method! opened ~top:_ ~include_:_ env denotes =
-        if Option.value denotes ~default:false then
-          Lexical_scope.push_frame env
-            (Map.of_alist_reduce
-               (module String)
-               (List.map callees ~f:(fun name -> (name, (None, opened_from_verdict))))
-               ~f:(fun first _ -> first))
-        else env
+        Lexical_scope.push_frame env
+          (Map.of_alist_reduce
+             (module String)
+             (List.map callees ~f:(fun name ->
+                  ( name,
+                    if Option.value denotes ~default:false then (None, opened_from_verdict)
+                    else self#local )))
+             ~f:(fun first _ -> first))
 
       method! let_denotes binding =
         match Read.pattern_name binding.pvb_pat with
-        | Some _ -> (Read.string_literal binding.pvb_expr, binding.pvb_loc.loc_start.pos_cnum + 1)
+        | Some _ -> (literal_of binding.pvb_expr, binding.pvb_loc.loc_start.pos_cnum + 1)
         | None -> self#local
 
       method! define ~top env rec_flag bindings ~walk =

@@ -3392,6 +3392,18 @@ let () = Verdict.p "rows: %d\n" n|ocaml},
       {ocaml|open Printer
 let () = p "rows: %d\n" n|ocaml},
       [] );
+    ( "does not read a claim name a later open of another module may rebind",
+      {ocaml|open Verdict.Claims
+open Local_printer
+let () = p "rows: %d\n" n|ocaml},
+      [] );
+    ( "refuses a literal label under a type constraint",
+      {ocaml|let () = Verdict.p ("first\nsecond" : string) ok|ocaml},
+      [ "first\nsecond" ] );
+    ( "resolves a label binding written with a type annotation",
+      {ocaml|let label : string = ("first\nsecond" :> string)
+let () = Verdict.p label ok|ocaml},
+      [ "first\nsecond" ] );
   ]
 
 let run_line_break_controls () =
@@ -4265,6 +4277,7 @@ let () =
   eprintf "Totals: %d sources, %d string literals (%d of them an argument of a named function).\n"
     (List.length sources) !literals !applied;
   eprintf "Gated quantified claims whose gate and population were compared: %d.\n" !gated_sites;
+  eprintf "Verdict claim labels read for line breaks: %d.\n" !label_sites;
   printf "\n";
   (* Stated so that `true` is the passing reading, as every line of a golden should be. *)
   Verdict.p "every test source decides its claims through Verdict" (!offenders = 0);

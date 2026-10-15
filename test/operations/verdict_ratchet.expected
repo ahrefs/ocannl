@@ -500,6 +500,9 @@ resolves a claim name a local open of Verdict.Claims brings in: true
 does not read a module that took over the name Verdict as Verdict: true
 does not read a path that only passes through a module named Verdict: true
 does not read an unqualified claim name no open of Verdict brings in: true
+does not read a claim name a later open of another module may rebind: true
+refuses a literal label under a type constraint: true
+resolves a label binding written with a type annotation: true
 refuses a planted label literal carrying a line break, naming the one-line remedy: true
 refuses a gate that tests its own population for emptiness: true
 refuses a gate read off the collection the population is mapped from: true
