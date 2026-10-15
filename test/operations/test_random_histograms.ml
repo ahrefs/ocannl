@@ -240,7 +240,8 @@ let test_counter_bifurcation () =
   printf "Counter 0 vs Counter 0 (repeat): %d/%d values same (expected: 100%%)\n" !same_count
     num_values;
 
-  Verdict.pass_fail "\nBifurcation test" (!diff_count > 90 && !same_count = num_values)
+  printf "\n";
+  Verdict.pass_fail "Bifurcation test" (!diff_count > 90 && !same_count = num_values)
 
 (** Test kaiming_at with proper shape structure. The result tensor needs input dimensions for
     kaiming to extract fan_in.

@@ -334,7 +334,14 @@ type dialect_census = {
 let pass_fail_callees = [ "pass_fail"; "pass_fail_all2" ]
 let skipped_callees = [ "skipped" ]
 
-let dialect_census content =
+(* One application whose callee is a path ending in a name of [callees], with a positional argument:
+   its last path component, whether that callee is [Verdict]'s (below), and the site its first
+   positional argument -- the label -- keys. Shared by {!dialect_census} and {!line_break_census},
+   so both key a label one way. The callee is [Verdict]'s when it is qualified through a [Verdict]
+   path component ([Verdict.p], [Verdict.Claims.p]), or unqualified and bound nowhere in the source,
+   which is how an [open Verdict.Claims] brings it in; a name the source binds itself ([let p =
+   Stdio.printf], [let skipped = Verdict.skipped ~backend]) is not. *)
+let claim_calls ~callees content =
   let ast = Read.structure_of content in
   let key_of env argument =
     match Read.string_literal argument with
@@ -374,7 +381,7 @@ let dialect_census content =
             ignore (reader#expression env argument : expression);
             Computed (Ppxlib.Pprintast.string_of_expression argument, List.rev !references))
   in
-  let pass_fails = ref [] and skips = ref [] and item = ref 0 in
+  let calls = ref [] and item = ref 0 in
   let iterator =
     object (self)
       inherit [string option * int, unit] Lexical_scope.scoped as super
@@ -414,18 +421,21 @@ let dialect_census content =
             match (Read.longident_of callee, label) with
             | Some path, Some label ->
                 let name = List.last_exn path in
-                let site () =
-                  {
-                    callee = String.concat ~sep:"." path;
-                    key = key_of env label;
-                    item = !item;
-                    line = expr.pexp_loc.loc_start.pos_lnum;
-                  }
-                in
-                if List.mem pass_fail_callees name ~equal:String.equal then
-                  pass_fails := site () :: !pass_fails
-                else if List.mem skipped_callees name ~equal:String.equal then
-                  skips := site () :: !skips
+                if List.mem callees name ~equal:String.equal then
+                  let verdicts =
+                    match List.drop_last_exn path with
+                    | [] -> Option.is_none (Lexical_scope.lookup env name)
+                    | qualifiers -> List.mem qualifiers "Verdict" ~equal:String.equal
+                  in
+                  let site =
+                    {
+                      callee = String.concat ~sep:"." path;
+                      key = key_of env label;
+                      item = !item;
+                      line = expr.pexp_loc.loc_start.pos_lnum;
+                    }
+                  in
+                  calls := (name, verdicts, site) :: !calls
             | _ -> ())
         | _ -> ());
         super#expression env expr
@@ -434,7 +444,15 @@ let dialect_census content =
   ignore
     (iterator#structure { Lexical_scope.frames = []; modules = Map.empty (module String) } ast
       : structure);
-  let pass_fails = List.rev !pass_fails and skips = List.rev !skips in
+  List.rev !calls
+
+let dialect_census content =
+  let calls = claim_calls ~callees:(pass_fail_callees @ skipped_callees) content in
+  let sites_of callees =
+    List.filter_map calls ~f:(fun (name, _, site) ->
+        Option.some_if (List.mem callees name ~equal:String.equal) site)
+  in
+  let pass_fails = sites_of pass_fail_callees and skips = sites_of skipped_callees in
   (* A literal is the same label anywhere in the source. A name, or an expression over names, is
      only the same label within one top-level item: [label] is the parameter name of half the claim
      helpers in [Verdict] itself, and two functions sharing it share nothing else. *)
@@ -448,6 +466,72 @@ let dialect_census content =
             if same_label pass_fail skipped then Some { pass_fail; skipped } else None))
   in
   { pairings; skipped_sites = List.length skips; pass_fail_sites = List.length pass_fails }
+
+(** {1 A claim label written with a line break (post-wave task of staging#1134)}
+
+    A claim is one row on each channel it prints to: [tools/mutation-run.sh] reads a run's
+    [FAIL: …: false] lines off its log and counts its stdout rows against the golden's. A label with
+    a newline in it used to split its claim into a [FAIL: ] head that is no false claim and an
+    unprefixed tail that is a row the golden lacks. [Verdict] now renders every claim line through
+    [Verdict.one_line] (a control character becomes a space), which keeps a COMPUTED label on one
+    row; a LITERAL one with a line break can only be a mistake -- a cosmetic blank line before the
+    claim, as [test_random_histograms] had, belongs in a [printf] of its own -- so this reader
+    refuses it where it is written rather than leaving the sanitizer to turn it into a stray space.
+
+    What it reads is the label argument of every claim form in {!labelled_claims} that is
+    [Verdict]'s (see {!claim_calls}): the first positional argument, keyed as {!dialect_census} keys
+    it, so a name bound to a literal is that literal. A [pf]/[claimf]/[pf_all2] format is its label
+    too, and a line break in the format is one in every rendered label. [Verdict.fail] is not read:
+    its argument is a message, multi-line by design, and every line of it is printed with the
+    prefix.
+
+    What it cannot see: a label computed from an expression (the sanitizer's case, by design), a
+    claim reached through a wrapper the source binds ([let skipped = Verdict.skipped ~backend]), and
+    one qualified through an alias of [Verdict]. *)
+
+(** The [Verdict.Claims] members whose first positional argument is a claim label (or the format
+    rendering one): every member but [fail], whose argument is a multi-line message. *)
+let labelled_claims =
+  [
+    "claim";
+    "p";
+    "pf";
+    "claimf";
+    "p_all";
+    "p_all2";
+    "pf_all2";
+    "p_none";
+    "p_alli";
+    "p_empty";
+    "p_exists";
+    "p_pairwise_distinct";
+    "skipped";
+    "gated";
+    "gated_all";
+    "gated_alli";
+    "gated_exists";
+    "pass_fail";
+    "pass_fail_all2";
+    "case";
+  ]
+
+type line_break_census = {
+  broken : dialect_site list;  (** Each claim whose literal label carries a line break. *)
+  label_sites : int;  (** Every [Verdict] claim whose label was read. *)
+}
+
+let has_line_break text = String.exists text ~f:(fun c -> Char.equal c '\n' || Char.equal c '\r')
+
+let line_break_census content =
+  let sites =
+    claim_calls ~callees:labelled_claims content
+    |> List.filter_map ~f:(fun (_, verdicts, site) -> Option.some_if verdicts site)
+  in
+  let broken =
+    List.filter sites ~f:(fun site ->
+        match site.key with Literal text -> has_line_break text | Named _ | Computed _ -> false)
+  in
+  { broken; label_sites = List.length sites }
 
 (** {1 A gate that reads the population it quantifies (gh-ocannl-1289)}
 

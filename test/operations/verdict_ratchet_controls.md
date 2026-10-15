@@ -554,3 +554,19 @@ a gate on its own `results` being non-empty (staging#1049's shape, run `20261013
 and by a gate asking whether the `real` seeds `results` is mapped from hold a tensorized one
 (staging#1063's shape, run `20261013T183213Z-38190`). Each failed the corpus claim, naming
 qkv_zero_init.ml:121 and the bindings the gate reads, and nothing else.
+
+## Line-break label mutation runs (post-wave task of staging#1134)
+
+The line-break reader (`Verdict_scan.line_break_census`) refuses a Verdict claim whose LITERAL
+label, or the format a computed one is rendered from, carries a line break; Verdict prints every
+claim line through `Verdict.one_line`, so a computed label stays one row. Every run used
+tools/mutation-run.sh on `test/support/verdict_scan.ml` and the focused verdict_ratchet alias,
+exited 1 on exactly the listed false claims, and restored the source byte-for-byte with cmp. The
+baseline run `RUN-BASELINE` exited 0.
+
+| Mechanism | Mutation | Controls | Run |
+|---|---|---|---|
+| A literal label with a line break refuses the run | `has_line_break` answers false | Failed: `refuses a claim label literal that starts with a line break`, `refuses a line break in the format an opened pf renders its label from`, `resolves a label binding to the literal whose line break it carries`, `refuses a planted label literal carrying a line break, naming the one-line remedy` | `RUN-M1` |
+| A claim name the source binds is not Verdict's | an unqualified callee read as Verdict's whatever binds it | Failed: `does not read a claim name the source binds itself as Verdict's`, and the corpus claim that no literal label carries a line break (bench_checksum_discrimination binds its own printing helper under that name) | `RUN-M2` |
+| A failure message is not a label | `"fail"` added to `labelled_claims` | Failed: `accepts a multi-line failure message, which fail prefixes line by line`, the corpus claim, and the claim that the reader reads every claim form Verdict.Claims exports | `RUN-M3` |
+| A computed label is the sanitizer's, not this reader's | a computed key checked by its printed expression | Failed: `accepts a computed label, which Verdict prints on one line` | `RUN-M4` |

@@ -3342,6 +3342,81 @@ let run_dialect_refusal_control () =
     ~f:(refuse_dialect_pairing ~fail ~source:"fixture.ml");
   ("refuses a planted pass_fail and skipped pairing, naming the gated remedy", !refused)
 
+(* {1 One row per claim: no line break in a literal label (post-wave task of staging#1134)}
+
+   A label with a newline in it split its claim over two lines on each stream, and
+   [tools/mutation-run.sh] -- which lists a run's [FAIL: …: false] lines and counts its stdout rows
+   against the golden's -- read the halves as an extra row and an unlisted failure. [Verdict] now
+   prints every claim line through [Verdict.one_line], which keeps a computed label on one row; a
+   literal label written with a line break is refused here, where the newline can only be a mistake.
+   The reader is [Verdict_scan.line_break_census]; its header lists what it cannot see. The controls
+   are the labels it must find, in order, and the near misses it must not. *)
+let line_break_controls =
+  [
+    ( "refuses a claim label literal that starts with a line break",
+      {ocaml|let () = Verdict.pass_fail "\nthe streams bifurcate" ok|ocaml},
+      [ "\nthe streams bifurcate" ] );
+    ( "refuses a line break in the format an opened pf renders its label from",
+      {ocaml|open Verdict.Claims
+let () = pf "%s holds\n" leg ok|ocaml},
+      [ "%s holds\n" ] );
+    ( "resolves a label binding to the literal whose line break it carries",
+      {ocaml|let label = "first\r\nsecond"
+let () = Verdict.Claims.p label ok|ocaml},
+      [ "first\r\nsecond" ] );
+    ( "accepts a multi-line failure message, which fail prefixes line by line",
+      {ocaml|let () = Verdict.fail "the first line\n  expected a\n  got b"|ocaml},
+      [] );
+    ( "does not read a claim name the source binds itself as Verdict's",
+      {ocaml|let p = Stdio.printf
+let () = p "rows: %d\n" n|ocaml},
+      [] );
+    ( "accepts a computed label, which Verdict prints on one line",
+      {ocaml|let () = Verdict.p (leg ^ "\nholds") ok|ocaml},
+      [] );
+  ]
+
+let run_line_break_controls () =
+  List.map line_break_controls ~f:(fun (label, source, expected) ->
+      let found =
+        (Scan.line_break_census source).Scan.broken
+        |> List.map ~f:(fun (site : Scan.dialect_site) -> Scan.label_key_text site.key)
+      in
+      let ok = List.equal String.equal found expected in
+      if not ok then
+        eprintf "line-break control %S expected [%s], found [%s]\n" label
+          (String.concat ~sep:"; " (List.map expected ~f:String.escaped))
+          (String.concat ~sep:"; " (List.map found ~f:String.escaped));
+      (label, ok))
+
+let refuse_line_break ~fail ~source (site : Scan.dialect_site) =
+  fail
+    (Printf.sprintf
+       "%s:%d reports the claim \"%s\" through `%s`, with a line break in its label -- a claim \
+        prints as one row on each stream, and Verdict renders the break as a space. Put a blank \
+        line before the claim in a printf of its own, and write the label on one line"
+       source site.line
+       (String.escaped (Scan.label_key_text site.key))
+       site.callee)
+
+(* The wiring from a finding to the failure, exercised on the first control's fixture. *)
+let run_line_break_refusal_control () =
+  let source = "test/operations/verdict_ratchet.ml" in
+  let format =
+    "%s:%d reports the claim \"%s\" through `%s`, with a line break in its label -- a claim prints \
+     as one row on each stream, and Verdict renders the break as a space. Put a blank line before \
+     the claim in a printf of its own, and write the label on one line"
+  in
+  let refused = ref false in
+  let fail _message =
+    refused := true;
+    Test_utils.Refusal_control_manifest.observe_failure ~source ~format
+  in
+  let _, fixture, _ = List.hd_exn line_break_controls in
+  List.iter (Scan.line_break_census fixture).Scan.broken
+    ~f:(refuse_line_break ~fail ~source:"fixture.ml");
+  ("refuses a planted label literal carrying a line break, naming the one-line remedy", !refused)
+
 (* {1 A gate never reads the population it quantifies (gh-ocannl-1289)}
 
    [Verdict.gated_all ~when_ ~on label xs ~f] skips where [when_] is false. A gate computed from
@@ -3957,6 +4032,7 @@ let () =
   let literals = ref 0 and applied = ref 0 and offenders = ref 0 in
   let quantified_offenders = ref 0 in
   let dialect_offenders = ref 0 and skipped_sites = ref 0 and pass_fail_sites = ref 0 in
+  let line_break_offenders = ref 0 and label_sites = ref 0 in
   let gate_offenders = ref 0 and gated_sites = ref 0 in
   let manifest =
     List.find_map arguments ~f:(fun (relative, path) ->
@@ -3970,6 +4046,8 @@ let () =
     @ run_shadowed_quantified_controls ()
     @ run_colliding_site_controls () @ run_dialect_pairing_controls ()
     @ [ run_dialect_refusal_control () ]
+    @ run_line_break_controls ()
+    @ [ run_line_break_refusal_control () ]
     @ run_gate_population_controls ()
     @ [ run_gate_refusal_control () ]
   in
@@ -3995,19 +4073,25 @@ let () =
          arrives is whatever the test directories hold -- including whatever a `(select …)` or a ppx
          put there -- and the one thing worse than a parse failure here is one that leaves nobody
          knowing which of three hundred files it was about. *)
-      let scanned, helper_claims, dialects =
+      let scanned, helper_claims, dialects, line_breaks =
         try
           ( Scan.scan content,
             quantified_claims (Sources.structure_of content),
-            Scan.dialect_census content )
+            Scan.dialect_census content,
+            Scan.line_break_census content )
         with exception_ ->
           fail
             (Printf.sprintf "%s does not parse as OCaml, so this check cannot vouch for it: %s"
                source (Exn.to_string exception_));
           ( { Scan.sites = []; literals = 0; applied_literals = 0 },
             [],
-            { Scan.pairings = []; skipped_sites = 0; pass_fail_sites = 0 } )
+            { Scan.pairings = []; skipped_sites = 0; pass_fail_sites = 0 },
+            { Scan.broken = []; label_sites = 0 } )
       in
+      label_sites := !label_sites + line_breaks.Scan.label_sites;
+      List.iter line_breaks.Scan.broken ~f:(fun site ->
+          Int.incr line_break_offenders;
+          refuse_line_break ~fail ~source site);
       let gates = read_gates ~fail ~source ~census:Scan.gate_census content in
       gated_sites := !gated_sites + gates.Scan.gated_sites;
       List.iter gates.Scan.readings ~f:(fun reading ->
@@ -4171,6 +4255,30 @@ let () =
   Verdict.p "no claim label is reported through both pass_fail and skipped" (!dialect_offenders = 0);
   Verdict.p "and the dialect reader found both skipped and pass_fail claims to pair"
     (!skipped_sites > 0 && !pass_fail_sites > 0);
+  Verdict.p "no claim label literal carries a line break" (!line_break_offenders = 0);
+  Verdict.p "and the line-break reader read the labels of Verdict claims" (!label_sites > 0);
+  (* The claim forms whose labels it reads, held equal to every [Verdict.Claims] member but [fail],
+     whose argument is a multi-line message: a new claim form it did not read would be a label it
+     never checks. *)
+  let claims_members =
+    Option.bind (Map.find on_disk "test/support/verdict.ml") ~f:(fun path ->
+        Test_utils.Refusal_control_scan.claims_members (In_channel.read_all path))
+    |> Option.value ~default:[ "<no Claims module in test/support/verdict.ml>" ]
+  in
+  let unlabelled = [ "fail" ] in
+  let exported_label_forms =
+    List.filter claims_members ~f:(fun member ->
+        not (List.mem unlabelled member ~equal:String.equal))
+    |> List.sort ~compare:String.compare
+  in
+  let read_label_forms = List.sort Scan.labelled_claims ~compare:String.compare in
+  let reads_every_label_form = List.equal String.equal exported_label_forms read_label_forms in
+  if not reads_every_label_form then
+    eprintf "Verdict.Claims exports [%s]; the line-break reader reads the labels of [%s]\n"
+      (String.concat ~sep:"; " claims_members)
+      (String.concat ~sep:"; " Scan.labelled_claims);
+  Verdict.p "and it reads the label of every claim form Verdict.Claims exports"
+    reads_every_label_form;
   Verdict.p "no gated claim's gate reads the population it quantifies" (!gate_offenders = 0);
   (* The forms the gate reader recognizes, held equal to the quantified gated forms [Verdict.Claims]
      exports: a new one the reader did not know would be a claim it never compares. *)

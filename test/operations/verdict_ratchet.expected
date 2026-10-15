@@ -489,6 +489,13 @@ accepts a gated claim reported through p on its evaluated side: true
 accepts pass_fail and skipped on different labels: true
 does not pair labels computed by different expressions, the blind spot gated closes: true
 refuses a planted pass_fail and skipped pairing, naming the gated remedy: true
+refuses a claim label literal that starts with a line break: true
+refuses a line break in the format an opened pf renders its label from: true
+resolves a label binding to the literal whose line break it carries: true
+accepts a multi-line failure message, which fail prefixes line by line: true
+does not read a claim name the source binds itself as Verdict's: true
+accepts a computed label, which Verdict prints on one line: true
+refuses a planted label literal carrying a line break, naming the one-line remedy: true
 refuses a gate that tests its own population for emptiness: true
 refuses a gate read off the collection the population is mapped from: true
 refuses a gate bound to a name that reads the population's source: true
@@ -623,6 +630,9 @@ every test source decides its claims through Verdict: true
 every quantified binding used by a claim witnesses a non-empty population: true
 no claim label is reported through both pass_fail and skipped: true
 and the dialect reader found both skipped and pass_fail claims to pair: true
+no claim label literal carries a line break: true
+and the line-break reader read the labels of Verdict claims: true
+and it reads the label of every claim form Verdict.Claims exports: true
 no gated claim's gate reads the population it quantifies: true
 and it recognizes every quantified gated form Verdict.Claims exports: true
 and the gate reader completed gated claims to compare: true
@@ -641,6 +651,7 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:52b0c212a9f1ba97a1400cd478d7cfda] shadowing definitions separate
   [scanner-refusal:28926aa707bb0e8c7e5a087d40f0bf13] exempted claim-shaped literal
   [scanner-refusal:b0f5d68f72c0eeaca59c45fd980450cd] reports the claim
+  [scanner-refusal:044fdb558baa9d634fba0163209c9f3d] reports the claim
   [scanner-refusal:b743906541a11550a0513ec369b96184] which reads
   [scanner-refusal:06f7a9a77b49e173f538bb4f1b062a58] gate reader raised
   [scanner-refusal:6fa8a8891ce1cc5457a70a7dc0955684] let`-bound partial application
@@ -648,6 +659,9 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:63d9475f3df44af6baac8bdc03a3310b] every quantified binding
   [scanner-refusal:d4d40c92b012f9347593f527cb7ad30d] pass_fail
   [scanner-refusal:5378ba5390debc4a8425ccdeb107f2d1] pass_fail
+  [scanner-refusal:df1860b788314bd677ee963aff3f8186] label literal carries
+  [scanner-refusal:7005fe842a74ccccd962cdda19ae98be] line-break reader read
+  [scanner-refusal:20d88fc03901bcbdfbc113ed14029a7a] Verdict.Claims
   [scanner-refusal:b42517e6f02cc3aa2ca5691ebdd70c62] population it quantifies
   [scanner-refusal:567b8c220b002e1bb52a75940f43f392] Verdict.Claims
   [scanner-refusal:a51e429cf1070db9d057a59d7b50c801] reader completed gated
