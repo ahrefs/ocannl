@@ -562,11 +562,16 @@ label, or the format a computed one is rendered from, carries a line break; Verd
 claim line through `Verdict.one_line`, so a computed label stays one row. Every run used
 tools/mutation-run.sh on `test/support/verdict_scan.ml` and the focused verdict_ratchet alias,
 exited 1 on exactly the listed false claims, and restored the source byte-for-byte with cmp. The
-baseline run `RUN-BASELINE` exited 0.
+baseline run `20261015T021331Z-16539` exited 0. The printing side is pinned by verdict_teardown
+rather than here: with `one_line` mutated to the identity its line-break child and its teardown
+child fail (run `20261015T021554Z-66471`), and a mutation of test_random_histograms to a false
+claim with a computed two-line label lists one false claim over the golden's 59 rows (run
+`20261015T021536Z-60525`), where with the sanitizer disabled it listed none over 60 rows (run
+`20261015T021611Z-75132`).
 
 | Mechanism | Mutation | Controls | Run |
 |---|---|---|---|
-| A literal label with a line break refuses the run | `has_line_break` answers false | Failed: `refuses a claim label literal that starts with a line break`, `refuses a line break in the format an opened pf renders its label from`, `resolves a label binding to the literal whose line break it carries`, `refuses a planted label literal carrying a line break, naming the one-line remedy` | `RUN-M1` |
-| A claim name the source binds is not Verdict's | an unqualified callee read as Verdict's whatever binds it | Failed: `does not read a claim name the source binds itself as Verdict's`, and the corpus claim that no literal label carries a line break (bench_checksum_discrimination binds its own printing helper under that name) | `RUN-M2` |
-| A failure message is not a label | `"fail"` added to `labelled_claims` | Failed: `accepts a multi-line failure message, which fail prefixes line by line`, the corpus claim, and the claim that the reader reads every claim form Verdict.Claims exports | `RUN-M3` |
-| A computed label is the sanitizer's, not this reader's | a computed key checked by its printed expression | Failed: `accepts a computed label, which Verdict prints on one line` | `RUN-M4` |
+| A literal label with a line break refuses the run | `has_line_break` answers false | Failed: `refuses a claim label literal that starts with a line break`, `refuses a line break in the format an opened pf renders its label from`, `resolves a label binding to the literal whose line break it carries`, `refuses a planted label literal carrying a line break, naming the one-line remedy` | `20261015T021421Z-32745` |
+| A claim name the source binds is not Verdict's | an unqualified callee read as Verdict's whatever binds it | Failed: `does not read a claim name the source binds itself as Verdict's`, and the corpus claim that no literal label carries a line break (bench_checksum_discrimination binds its own printing helper under that name) | `20261015T021436Z-38398` |
+| A failure message is not a label | `"fail"` added to `labelled_claims` | Failed: `accepts a multi-line failure message, which fail prefixes line by line`, the corpus claim, and the claim that the reader reads every claim form Verdict.Claims exports | `20261015T021451Z-43700` |
+| A computed label is the sanitizer's, not this reader's | every computed key read as carrying a line break | Failed: `accepts a computed label, which Verdict prints on one line`, and the corpus claim, through every computed label in the tree | `20261015T021504Z-48894` |
