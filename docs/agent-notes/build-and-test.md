@@ -3543,7 +3543,7 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   faulted driver can hang along with everything else. On a 69, or a per-test 142 on a GPU
   batch, stop GPU work on that box and read `journalctl -k` before retrying. Legs 75-77 of
   `tools/test-test-run.sh` pin the cap, its controls (a slow dune, the slot's holder), the probe
-  and `plan`'s report, and leg 82 both bounds under `repeat`; `test/operations/sweep_harness.sh`
+  and `plan`'s report, and leg 83 both bounds under `repeat`; `test/operations/sweep_harness.sh`
   pins them in a sweep unit, its serial rerun and its completion pass (a local and a remote unit),
   and `tools/test-machine-verify.sh` in a trip (`test-cap-*`, `probe-*` cases; a fake `uname`
   stands for a Linux far side).
