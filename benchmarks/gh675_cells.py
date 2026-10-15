@@ -7,8 +7,12 @@ so a drifting box moves both halves of a pair together, behind an idle gate and 
 taskset. Every record goes to $GH675_OUT/records.jsonl verbatim; the analysis pairs pass 1 with
 pass 2 WITHIN a repeat and reports the median of the paired ratios.
 
-    python3 gh675_cells.py --arms A_beam2 C_jit_cold C_eager D_ocannl --workloads mlp_small \
-        --repeats 3 --start-repeat 1
+    python3 gh675_cells.py --box rog-nv --arms A_beam2 C_jit_cold C_eager D_ocannl \
+        --workloads mlp_small --repeats 3 --start-repeat 1
+
+`--box` names the measurement box: benchmarks/check-box.sh checks it and the selected workloads'
+fixtures before anything is made or launched (box_gate.py; `--skip-box-check` for a deliberate
+partial run).
 
 Arms: A_beam* tinygrad BEAM=N, B_compiled/B_maxauto torch.compile, C_* the non-searching
 controls (their X must be ~0 or the spread is process noise, not search residue), D_ocannl the
@@ -39,6 +43,7 @@ from collections import Counter
 from pathlib import Path
 
 import bench_venv
+import box_gate
 import cell_group
 import strict_json
 
@@ -574,6 +579,7 @@ if __name__ == "__main__":
     ap.add_argument("--expect-digest", nargs="*", metavar="WORKLOAD=SHA256",
                     help="refuse to run unless the fixture's bytes hash to this -- what makes a "
                          "resumed run the same experiment as the one it resumes")
+    box_gate.add_arguments(ap)
     args = ap.parse_args()
     # Before any directory is made or any child is launched: a typo AFTER a valid entry would
     # otherwise be discovered hours in, by a KeyError, with the preceding cells already recorded
@@ -583,6 +589,7 @@ if __name__ == "__main__":
     if bad_arms or bad_workloads:
         sys.exit(f"unknown arm(s) {bad_arms} / workload(s) {bad_workloads}; "
                  f"arms are {sorted(ARMS)}, workloads are {sorted(FIXTURE)}")
+    box_gate.require("gh675_cells.py", args, HERE / "fixtures", args.workloads)
     CACHES.mkdir(parents=True, exist_ok=True)
     DIGESTS.update(digests(args.workloads))
     print(f"records: {RECORDS}", flush=True)

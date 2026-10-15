@@ -1,6 +1,12 @@
 #!/bin/bash
 # gh-514 phase 6 evaluation cells, one box per invocation.
-# Usage: gh514_cells.sh <backend> <precision>[:<D-cell precision>] <repo-root> [pin-prefix...]
+# Usage: gh514_cells.sh (--box BOX | --skip-box-check) <backend> <precision>[:<D-cell precision>]
+#          <repo-root> [pin-prefix...]
+#
+# --box BOX: before anything is built, benchmarks/check-box.sh checks BOX and the two fixtures the
+# cells load (mlp_wide, gpt2_mini) in <repo-root>'s benchmarks/fixtures, and a GAP refuses the run
+# (benchmarks/box-gate.sh; --skip-box-check is for a deliberate partial run). The fixtures are
+# never regenerated here: their bytes are the recorded workload (benchmarks/README.md).
 #
 # <precision> applies to every cell, the untuned mlp D cells included: since the model_default
 # gate reaches the loss-scale-gated step shapes too, an f16 D comparison measures the model
@@ -19,6 +25,9 @@
 # treatment's values explicitly: command-line settings out-rank every other config source, so an
 # ambient profile or config file cannot contaminate the matrix.
 set -u
+. "$(dirname "$0")/box-gate.sh"
+box_gate_args "$@"; shift "$box_gate_shift"
+[ $# -ge 3 ] || { sed -n '2,4p' "$0"; exit 2; }
 BK=$1; PRECARG=$2; ROOT=$3; shift 3
 PIN=("$@")
 PREC=${PRECARG%%:*}
@@ -36,6 +45,7 @@ while read -r v; do unset "$v"; done < <(env | sed -n 's/^\(OCANNL_[A-Z0-9_]*\)=
 # The BENCH_* family symmetrically: the helpers set every variable a cell consumes, so ambient
 # diagnostic modes (BENCH_SR_SITES and kin) cannot leak into a labeled treatment either.
 while read -r v; do unset "$v"; done < <(env | sed -n 's/^\(BENCH_[A-Z0-9_]*\)=.*/\1/p')
+box_gate gh514_cells "$ROOT/benchmarks/fixtures" mlp_wide gpt2_mini
 FAILED=""
 cd "$ROOT" || exit 1
 opam exec -- dune build tools/fit_envelope.exe benchmarks/runners/ocannl/bench_mlp.exe \
@@ -46,27 +56,6 @@ opam exec -- dune build tools/fit_envelope.exe benchmarks/runners/ocannl/bench_m
   exit 1
 }
 cd benchmarks || exit 1
-# Fixtures are valid only while gen_fixtures.py and workloads/ are unchanged
-# (docs/agent-notes/training-and-performance.md), so freshness is stamped by content hash, not
-# existence: a revision switch regenerates.
-STAMP_WANT=$(python3 - <<'PY'
-import hashlib, glob
-h = hashlib.sha256()
-for f in ['gen_fixtures.py'] + sorted(glob.glob('workloads/*.json')):
-    h.update(open(f, 'rb').read())
-print(h.hexdigest())
-PY
-) || { echo "FIXTURE STAMPING FAILED (python3 required)"; exit 1; }
-NEED_GEN=0
-[ -f fixtures/.gh514-stamp ] && [ "$(cat fixtures/.gh514-stamp)" = "$STAMP_WANT" ] || NEED_GEN=1
-for fx in mlp_wide gpt2_mini; do
-  [ -f "fixtures/$fx.safetensors" ] || NEED_GEN=1
-done
-if [ "$NEED_GEN" = 1 ]; then
-  echo "regenerating fixtures (gen_fixtures.py; needs numpy+safetensors)"
-  python3 gen_fixtures.py || { echo "FIXTURES MISSING"; exit 1; }
-  echo "$STAMP_WANT" > fixtures/.gh514-stamp
-fi
 EXE=../_build/default/benchmarks/runners/ocannl/bench_mlp.exe
 GPT=../_build/default/benchmarks/runners/ocannl/bench_gpt.exe
 FIT=../_build/default/tools/fit_envelope.exe

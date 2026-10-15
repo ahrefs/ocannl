@@ -38,6 +38,7 @@ import time
 from pathlib import Path
 
 import bench_venv
+import box_gate
 import fixture_digest
 import cell_group
 import strict_json
@@ -2993,12 +2994,30 @@ def build_arg_parser():
         default=["ocannl", "pytorch", "tinygrad"],
         help="frameworks to run",
     )
+    box_gate.add_arguments(ap)
     return ap
 
 
 def main():
     args = build_arg_parser().parse_args()
     install_termination_handler()
+    fixtures = sorted((HERE / "fixtures").glob("*.safetensors"))
+    if args.workloads:
+        fixtures = [f for f in fixtures if f.stem in args.workloads]
+    if not fixtures and not args.workloads:
+        sys.exit("no fixtures found — run gen_fixtures.py first")
+    # The box gate (box-gate.sh) before anything touches the machine, over the workloads asked
+    # for rather than the ones found: a requested fixture that is absent is a GAP with its repair,
+    # not a workload the sweep silently drops.
+    box_gate.require(
+        "orchestrate.py",
+        args,
+        HERE / "fixtures",
+        args.workloads or [f.stem for f in fixtures],
+        run=run_supporting,
+    )
+    if not fixtures:
+        sys.exit("no fixtures found — run gen_fixtures.py first")
     gpu_ocannl, gpu_torch, gpu_tiny = GPU_DEVICES[args.gpu]
     if args.gpu == "hip" and gpu_torch and "pytorch" in args.only:
         # "cuda" only reaches the AMD GPU when torch is a ROCm/HIP build (a stock CPU or
@@ -3018,11 +3037,6 @@ def main():
         print("no /dev/kfd (WSL?); using tinygrad's HIP device for the GPU column", flush=True)
         gpu_tiny = "HIP"
 
-    fixtures = sorted((HERE / "fixtures").glob("*.safetensors"))
-    if args.workloads:
-        fixtures = [f for f in fixtures if f.stem in args.workloads]
-    if not fixtures:
-        sys.exit("no fixtures found — run gen_fixtures.py first")
     digests_path = HERE / "fixtures" / fixture_digest.DIGEST_FILE
     digest_entries = fixture_digest.read_digests(digests_path)
     measurement_boxes = fixture_digest.measurement_boxes(digests_path)

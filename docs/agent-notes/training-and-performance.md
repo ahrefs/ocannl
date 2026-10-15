@@ -205,6 +205,10 @@ files.
   a new worktree finding no `benchmarks/.venv` beside a perfectly good shared venv. It checks and
   never provisions; its items, repairs and the per-box state table are in `benchmarks/README.md`
   (Measurement boxes), and the sweep runs it per box without letting a gap touch a unit's row.
+  The drivers enforce it: every fixture-loading driver takes `--box <id>` and refuses to start on
+  a GAP (`benchmarks/box-gate.sh`, `box_gate.py`); `--skip-box-check` is the deliberate partial
+  run, and a new driver that loads a fixture without the gate fails `test_orchestrate.py`'s
+  inventory.
 - Because of that, no *comparable* cell runs without a Python ML venv -- but the MEASUREMENT path
   does: `bench_mlp --self-test` / `Bench_harness.run_self_test` fabricates a tiny model in memory
   and drives the whole protocol and emitter (gh-ocannl-702), and `test/operations/bench_self_test`

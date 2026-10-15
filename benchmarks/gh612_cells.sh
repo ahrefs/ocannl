@@ -23,7 +23,14 @@
 # symlink one fixture rather than regenerating per tree, so the input cannot differ.
 #
 # Results land under $OUT_ROOT/<label>/r<rep> (default /tmp/gh612).
+#
+# [--box BOX] [--skip-box-check] lead the subcommand (gh612_cells.sh --box minix search ...): a
+# subcommand that loads the fixture (search, snap, replay, and sweep's searches) runs
+# benchmarks/check-box.sh on BOX and <tree>'s FIXTURE beside its own fixture check, and a GAP
+# refuses the cell (benchmarks/box-gate.sh; --skip-box-check is for a deliberate partial run).
 set -u
+. "$(dirname "$0")/box-gate.sh"
+box_gate_args "$@"; shift "$box_gate_shift"
 # Hermetic against ambient configuration, categorically -- the same treatment gh514_cells.sh applies,
 # and for the same reason: every cell pins its treatment on the command line (which out-ranks all
 # other config sources), so an exported OCANNL_* or BENCH_* would otherwise reshape the graph or the
@@ -73,6 +80,7 @@ FIXTURE=${FIXTURE:-fixtures/gpt2_mini.safetensors}
 FIXTURE_MD5=${FIXTURE_MD5-5b3dfff860fc8c54af2a7d440f4cf202}
 check_fixture() {
   local tree=$1 f="$1/benchmarks/$FIXTURE" got
+  box_gate gh612_cells "$(dirname "$f")" "$(basename "$f" .safetensors)"
   [ -e "$f" ] || { echo "gh612_cells: fixture missing: $f" >&2; return 2; }
   [ -n "${FIXTURE_MD5:-}" ] || return 0
   got=$(md5sum "$(readlink -f "$f")" 2>/dev/null | cut -d" " -f1)
@@ -899,5 +907,5 @@ case $sub in
   diff)     cmd_diff     "$@" ;;
   sweep)    cmd_sweep    "$@" ;;
   roofline) cmd_roofline "$@" ;;
-  *) sed -n '2,20p' "$0"; exit 1 ;;
+  *) sed -n '2,30p' "$0"; exit 1 ;;
 esac

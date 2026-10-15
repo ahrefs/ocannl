@@ -3,8 +3,12 @@
 # issue comments quote invocations rather than restating commands.
 #
 # Usage (from anywhere; the checkout is the one this script lives in):
-#   benchmarks/gh834_cells.sh BACKEND OUT FIXTURE CAP STEP...
+#   benchmarks/gh834_cells.sh [--box BOX] [--skip-box-check] BACKEND OUT FIXTURE CAP STEP...
 #
+#   --box BOX  required when a session step runs (the steps that read FIXTURE): before OUT is
+#            made, benchmarks/check-box.sh checks BOX and FIXTURE (by its directory and workload
+#            stem), and a GAP refuses the run (benchmarks/box-gate.sh; --skip-box-check is for a
+#            deliberate partial run).
 #   BACKEND  cc | hip | cuda | metal, pinned on every command line (out-ranks every other source).
 #   OUT      results directory, created, and refused unless empty. OUT/driver.log records
 #            everything this script prints (provenance, the device state around each step, each
@@ -55,6 +59,8 @@ while read -r v; do unset "$v"; done < <(env | sed -n 's/^\(BENCH_[A-Z0-9_]*\)=.
 # serial, and cc_backend keys the schedule cache on them), so the cells run the backend's defaults.
 while read -r v; do unset "$v"; done < <(env | sed -n 's/^\(\(OMP\|GOMP\|KMP\)_[A-Z0-9_]*\)=.*/\1/p')
 
+. "$(dirname "$0")/box-gate.sh"
+box_gate_args "$@"; shift "$box_gate_shift"
 [ $# -ge 5 ] || { sed -n '/^# Usage/,/^# crown-/p' "$0" | sed '$d' >&2; exit 2; }
 backend=$1 out=$2 fixture=$3 cap=$4
 shift 4
@@ -66,6 +72,11 @@ if [ -e "$out" ] && [ -n "$(ls -A "$out" 2>/dev/null)" ]; then
   echo "gh834: OUT $out is not empty; give each invocation a fresh directory" >&2
   exit 2
 fi
+for gate_step in "$@"; do
+  case $gate_step in
+    session-*) box_gate gh834 "$(dirname "$fixture")" "$(basename "$fixture" .safetensors)"; break ;;
+  esac
+done
 mkdir -p "$out" || exit 2
 out=$(cd "$out" && pwd -P) && case $out in /?*) ;; *) false ;; esac ||
   { echo "gh834: OUT did not resolve to an absolute directory" >&2; exit 2; }

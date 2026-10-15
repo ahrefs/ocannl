@@ -658,8 +658,11 @@ other runs and is not a provenance baseline.
 python3 -m venv benchmarks/.venv
 benchmarks/.venv/bin/pip install numpy safetensors torch tinygrad
 benchmarks/.venv/bin/python benchmarks/gen_fixtures.py
-benchmarks/.venv/bin/python benchmarks/orchestrate.py
+benchmarks/.venv/bin/python benchmarks/orchestrate.py --box <box>
 ```
+
+`--box` names the measurement box (see [Measurement boxes](#measurement-boxes)); a checkout that is
+no measurement box, measuring for itself, passes `--skip-box-check` instead.
 
 A box that keeps one shared venv outside the checkout (the measurement boxes use
 `~/.venvs/ocannl-bench`) reaches it either by symlinking `benchmarks/.venv` to it or by exporting
@@ -751,6 +754,19 @@ reads (`gh1133_cells.sh`'s `FIXTURE_DIR`) -- never regenerate one to get past a 
 
 The device item puts one tensor on the GPU, so on a fleet box run it under a GPU slot
 (`fleet-worker.sh execution slot` without `--cpu`); a `--cpu` slot is a promise it breaks.
+
+**The drivers run it themselves.** Every driver that loads fixtures -- `orchestrate.py` and the
+`gh*_cells` drivers, shell and Python -- takes `--box <box>` and, before its first measurement,
+runs the check on that box and on exactly the fixtures its requested steps load, from the
+directory it reads them from; a GAP refuses the run with the check's output above the refusal
+(exit 1), a check that judged nothing exits 2, and a measuring run that names no box is refused.
+`--skip-box-check` measures without it, for a deliberate partial run (a box with a known gap the
+run does not touch), and says so on the run's output. Shell drivers take both options ahead of
+their own arguments (`gh1133_cells.sh --box m4-max OUT BASE CAP ...`); a run of steps that load
+no fixture (build, provenance, summary) needs neither. The mechanism is `box-gate.sh` and its
+Python twin `box_gate.py`; `test-box-gate.sh` drives every driver against a stand-in check, and
+`test_orchestrate.py` holds the inventory that every fixture-loading driver calls the gate. The
+gate runs inside whatever slot the driver runs in, so a measurement's GPU slot or hold covers it.
 
 `tools/sweep.sh` runs it once per box (`--box-only`, which skips the checkout-relative
 interpreter, against `<main checkout>/benchmarks/fixtures`) and reports

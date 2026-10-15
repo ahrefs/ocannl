@@ -20,17 +20,19 @@ harness_scratch test-gh1133-cells
 SRC=$here/gh1133_cells.sh
 tree=$TMP/tree
 mkdir -p "$tree/benchmarks" "$TMP/base" "$TMP/runs"
-cp "$here/gh1133_summary.py" "$here/strict_json.py" "$tree/benchmarks/" || exit 2
+cp "$here/gh1133_summary.py" "$here/strict_json.py" "$here/box-gate.sh" "$tree/benchmarks/" || exit 2
 
 # [drive SUBJECT RUN STEP...]: run SUBJECT as the scratch tree's driver with
-# OUT=runs/RUN/out; its stdout (the driver log) goes to runs/RUN/stdout.
+# OUT=runs/RUN/out; its stdout (the driver log) goes to runs/RUN/stdout. The
+# box gate is skipped: the scratch tree is no measurement box, and the gate's
+# own legs are benchmarks/test-box-gate.sh's.
 drive() {
   local subject=$1 run=$2
   shift 2
   mkdir -p "$TMP/runs/$run"
   cp "$subject" "$tree/benchmarks/gh1133_cells.sh" || return 2
   got=0
-  bash "$tree/benchmarks/gh1133_cells.sh" "$TMP/runs/$run/out" "$TMP/base" 60 "$@" \
+  bash "$tree/benchmarks/gh1133_cells.sh" --skip-box-check "$TMP/runs/$run/out" "$TMP/base" 60 "$@" \
     >"$TMP/runs/$run/stdout" 2>&1 || got=$?
 }
 prep_run_passes() { # SUBJECT RUN

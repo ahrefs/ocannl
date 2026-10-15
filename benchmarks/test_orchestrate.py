@@ -17,6 +17,7 @@ import unittest.mock
 from pathlib import Path
 
 import bench_venv
+import box_gate
 import fixture_digest
 import cell_group
 import orchestrate
@@ -6160,6 +6161,292 @@ class CommandLineTest(unittest.TestCase):
         self.assertEqual(args.cell_timeout, 900.0)
 
 
+class BoxGateStandIn:
+    """A stand-in `check-box.sh` in a scratch directory, patched in as `box_gate.CHECK_BOX`: it
+    appends its arguments to `calls` and exits with the status `answer` set (0 READY, 1 GAP)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.dir = Path(self.tmp.name)
+        self.calls = self.dir / "calls"
+        stub = self.dir / "check-box.sh"
+        stub.write_text(
+            "#!/usr/bin/env bash\n"
+            'here=$(dirname "$0")\n'
+            'printf \'%s\\n\' "$*" >>"$here/calls"\n'
+            'exit "$(cat "$here/rc")"\n'
+        )
+        patcher = unittest.mock.patch.object(box_gate, "CHECK_BOX", stub)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.answer(0)
+
+    def answer(self, rc):
+        (self.dir / "rc").write_text(str(rc))
+
+    def called(self):
+        return self.calls.read_text().splitlines() if self.calls.exists() else []
+
+
+class BoxGateTest(BoxGateStandIn, unittest.TestCase):
+    """`box_gate.require`, the Python drivers' half of the box gate (contract: box-gate.sh's
+    header): the check runs on the box and the fixtures named, READY returns, a GAP exits 1 with a
+    refusal, a check that judged nothing exits 2, and a run that names no box is refused before
+    any check unless it skips the check on purpose. The drivers' own refusals and starts are
+    benchmarks/test-box-gate.sh's legs."""
+
+    def require(self, box=None, skip=False, names=("gpt2_mini", "lenet")):
+        args = argparse.Namespace(box=box, skip_box_check=skip)
+        out, err = io.StringIO(), io.StringIO()
+        code = None
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            try:
+                box_gate.require("driver.py", args, Path("/store"), names)
+            except SystemExit as e:
+                code = e.code
+        return code, out.getvalue(), err.getvalue()
+
+    def test_ready_returns_after_checking_the_box_and_every_fixture(self):
+        code, _, err = self.require(box="m4-max")
+
+        self.assertIsNone(code, err)
+        self.assertEqual(
+            self.called(), ["--box m4-max --fixture-dir /store --fixture gpt2_mini --fixture lenet"]
+        )
+
+    def test_a_gap_refuses_to_start(self):
+        self.answer(1)
+
+        code, _, err = self.require(box="m4-max")
+
+        self.assertEqual(code, 1)
+        self.assertIn("driver.py: refusing to start: m4-max is not ready for this run", err)
+        self.assertEqual(len(self.called()), 1)
+
+    def test_a_check_that_judged_nothing_exits_2(self):
+        self.answer(2)
+
+        code, _, err = self.require(box="m4-max")
+
+        self.assertEqual(code, 2)
+        self.assertIn("benchmarks/check-box.sh judged nothing (exit 2)", err)
+
+    def test_no_box_is_refused_before_any_check(self):
+        code, _, err = self.require()
+
+        self.assertEqual(code, 2)
+        self.assertIn("--box BOX is required to measure", err)
+        self.assertEqual(self.called(), [])
+
+    def test_skipping_runs_no_check_and_says_so(self):
+        self.answer(1)
+        for box in (None, "m4-max"):
+            with self.subTest(box=box):
+                code, out, _ = self.require(box=box, skip=True)
+
+                self.assertIsNone(code)
+                self.assertIn("driver.py: --skip-box-check: measuring without", out)
+        self.assertEqual(self.called(), [])
+
+    def test_no_fixture_named_is_refused(self):
+        code, _, err = self.require(box="m4-max", names=())
+
+        self.assertIsNotNone(code)
+        self.assertEqual(self.called(), [])
+
+    def test_the_options_parse_onto_a_driver_parser(self):
+        ap = argparse.ArgumentParser()
+        box_gate.add_arguments(ap)
+
+        self.assertEqual(vars(ap.parse_args([])), {"box": None, "skip_box_check": False})
+        self.assertEqual(
+            vars(ap.parse_args(["--skip-box-check", "--box", "tuf"])),
+            {"box": "tuf", "skip_box_check": True},
+        )
+
+
+class OrchestrateBoxGateTest(BoxGateStandIn, unittest.TestCase):
+    """`orchestrate.py` runs the box gate before anything else touches the machine: on a GAP it
+    exits before reading a fixture's digest, on READY it goes on to read them, and it checks the
+    workloads asked for (an absent one is the check's GAP) or else every fixture it found."""
+
+    class Started(Exception):
+        """Raised by the sweep's first action past the gate: reading fixtures/DIGESTS.txt."""
+
+    def setUp(self):
+        super().setUp()
+        (self.dir / "fixtures").mkdir()
+        (self.dir / "fixtures" / "mlp_small.safetensors").touch()
+        for target, value in (
+            ("HERE", self.dir),
+            ("install_termination_handler", lambda: None),
+        ):
+            patcher = unittest.mock.patch.object(orchestrate, target, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        patcher = unittest.mock.patch.object(
+            orchestrate.fixture_digest, "read_digests", side_effect=self.Started
+        )
+        self.read_digests = patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def sweep(self, *argv):
+        err = io.StringIO()
+        with unittest.mock.patch.object(sys, "argv", ["orchestrate.py", "--only", "ocannl", *argv]):
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+                try:
+                    orchestrate.main()
+                except self.Started:
+                    return "started", err.getvalue()
+                except SystemExit as e:
+                    return e.code, err.getvalue()
+        return "returned", err.getvalue()
+
+    def test_a_gap_refuses_the_sweep_before_it_reads_a_fixture(self):
+        self.answer(1)
+
+        outcome, err = self.sweep("--box", "m4-max")
+
+        self.assertEqual(outcome, 1, err)
+        self.assertIn("orchestrate.py: refusing to start", err)
+        self.read_digests.assert_not_called()
+        self.assertEqual(
+            self.called(),
+            [f"--box m4-max --fixture-dir {self.dir / 'fixtures'} --fixture mlp_small"],
+        )
+
+    def test_ready_starts_the_sweep(self):
+        outcome, err = self.sweep("--box", "m4-max")
+
+        self.assertEqual(outcome, "started", err)
+        self.assertEqual(len(self.called()), 1)
+
+    def test_the_workloads_asked_for_are_checked_even_when_absent(self):
+        self.answer(1)
+
+        outcome, _ = self.sweep("--box", "rog-nv", "--workloads", "mlp_small", "gpt2_mini")
+
+        self.assertEqual(outcome, 1)
+        self.assertEqual(
+            self.called(),
+            [
+                f"--box rog-nv --fixture-dir {self.dir / 'fixtures'} --fixture mlp_small "
+                "--fixture gpt2_mini"
+            ],
+        )
+
+    def test_a_sweep_naming_no_box_is_refused(self):
+        outcome, err = self.sweep()
+
+        self.assertEqual(outcome, 2)
+        self.assertIn("--box BOX is required", err)
+        self.assertEqual(self.called(), [])
+        self.read_digests.assert_not_called()
+
+    def test_a_deliberate_partial_run_skips_the_check(self):
+        self.answer(1)
+
+        outcome, _ = self.sweep("--skip-box-check")
+
+        self.assertEqual(outcome, "started")
+        self.assertEqual(self.called(), [])
+
+
+class FixtureDriverGateInventoryTest(unittest.TestCase):
+    """Every benchmark driver that loads a fixture calls the box gate, or is exempt with a reason.
+
+    The scan's boundary, a fail-closed allowlist. A source is every `*.py` and `*.sh` under
+    benchmarks/ at any depth except test/, `.venv` and the `test_*`/`test-*` files. It LOADS A
+    FIXTURE when its text holds `safetensors`, `BENCH_FIXTURE` or `--fixture` anywhere, comments
+    included -- over-inclusion is the failure this side can have, and an exemption with its
+    reason resolves it. It CALLS THE GATE in exactly one of two forms, read on lines that are not
+    whole-line comments: a shell source that sources box-gate.sh (`. "…/box-gate.sh"`) and calls
+    `box_gate <driver> …`, or a Python source with `import box_gate` and `box_gate.require(`.
+    Anything else -- a gate reached through another driver, a call spelled differently -- is a
+    finding until an exemption names why it is not.
+    """
+
+    LOADS = re.compile(r"safetensors|BENCH_FIXTURE|--fixture")
+    EXEMPT = {
+        "box-gate.sh": "the gate itself",
+        "box_gate.py": "the gate itself",
+        "check-box.sh": "the check the gate runs",
+        "fixture_digest.py": "records and checks fixture digests; measures nothing",
+        "gen_fixtures.py": "writes fixtures; measures nothing",
+        "gh612v_session.sh": "hands --box/--skip-box-check to every gh612_cells.sh cell, whose "
+        "fixture check runs the gate",
+        "runners/bench_common.py": "a runner's helper: reads the fixture its driver hands it",
+        "runners/pytorch/run.py": "a runner: reads the fixture its driver hands it",
+        "runners/tinygrad/run.py": "a runner: reads the fixture its driver hands it",
+    }
+
+    @staticmethod
+    def sources():
+        found = {}
+        for p in sorted(HERE.rglob("*")):
+            rel = p.relative_to(HERE)
+            if p.suffix not in (".py", ".sh") or not p.is_file():
+                continue
+            if rel.parts[0] in ("test", ".venv") or p.name.startswith(("test_", "test-")):
+                continue
+            found[rel.as_posix()] = p.read_text(encoding="utf-8")
+        return found
+
+    @staticmethod
+    def gated(path, text):
+        code = [l for l in text.splitlines() if not l.lstrip().startswith("#")]
+        if path.endswith(".sh"):
+            return any(re.match(r'\s*(\.|source)\s+.*/box-gate\.sh"?\s*$', l) for l in code) and any(
+                re.search(r"(^|[\s;|&(])box_gate\s+[A-Za-z0-9_.-]+\s", l) for l in code
+            )
+        return any(l.strip() == "import box_gate" for l in code) and any(
+            "box_gate.require(" in l for l in code
+        )
+
+    def findings(self, sources):
+        loaders = {path for path, text in sources.items() if self.LOADS.search(text)}
+        ungated = sorted(
+            path for path in loaders if path not in self.EXEMPT and not self.gated(path, sources[path])
+        )
+        stale = sorted(
+            path
+            for path in self.EXEMPT
+            if path not in loaders
+            or (path not in ("box-gate.sh", "box_gate.py") and self.gated(path, sources[path]))
+        )
+        return ungated, stale
+
+    def test_every_fixture_loading_driver_calls_the_gate(self):
+        sources = self.sources()
+        for driver in ("orchestrate.py", "gh514_cells.sh", "gh1181_cells.py"):
+            self.assertIn(driver, sources)
+        ungated, stale = self.findings(sources)
+        self.assertEqual(ungated, [], "call the box gate (box-gate.sh / box_gate.py), or exempt with a reason")
+        self.assertEqual(stale, [], "exemptions that no longer describe a fixture-loading, ungated source")
+
+    def test_a_driver_that_loads_a_fixture_without_the_gate_is_caught(self):
+        sources = self.sources()
+        sources["gh9999_cells.sh"] = 'BENCH_FIXTURE=fixtures/gpt2_mini.safetensors "$GPT"\n'
+        sources["gh9998_cells.py"] = (
+            "import box_gate\n# box_gate.require(...) is called elsewhere\n"
+            'env = {"BENCH_FIXTURE": "x"}\n'
+        )
+        sources["gh9997_cells.sh"] = '. "$here/box-gate.sh"\n# box_gate gh9997 "$fx" a\n--fixture a\n'
+
+        ungated, _ = self.findings(sources)
+
+        self.assertEqual(ungated, ["gh9997_cells.sh", "gh9998_cells.py", "gh9999_cells.sh"])
+
+    def test_a_gated_exemption_is_stale(self):
+        sources = self.sources()
+        sources["gh612v_session.sh"] += '. "$HERE/box-gate.sh"\nbox_gate gh612v "$fx" gpt2_mini\n'
+
+        _, stale = self.findings(sources)
+
+        self.assertEqual(stale, ["gh612v_session.sh"])
+
+
 class ResultsDirTest(unittest.TestCase):
     """`BENCH_RESULTS_DIR`: where a sweep's results/ goes (gh-ocannl-719).
 
@@ -6713,7 +7000,8 @@ class OcannlFlagSweepTest(unittest.TestCase):
                     sys,
                     "argv",
                     ["orchestrate.py", "--only", "ocannl", "--gpu", "none", "--skip-build",
-                     "--no-fixture-digest-check", "--profile", "approximate", *argv],
+                     "--no-fixture-digest-check", "--skip-box-check", "--profile", "approximate",
+                     *argv],
                 )
             )
             stack.enter_context(contextlib.redirect_stdout(out))
@@ -6862,7 +7150,7 @@ class DisplaySafeSweepTest(unittest.TestCase):
                     sys,
                     "argv",
                     ["orchestrate.py", "--only", "ocannl", "--gpu", "none", "--skip-build",
-                     "--no-fixture-digest-check", "--materialized", "--tuned",
+                     "--no-fixture-digest-check", "--skip-box-check", "--materialized", "--tuned",
                      "--precision", "f16-static",
                      "--skip-cell", f"{self.NAME}/cc/tuned"],
                 )
