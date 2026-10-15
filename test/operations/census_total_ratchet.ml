@@ -89,6 +89,13 @@ let allowed =
       reason = "the line of the synthetic fixture a refusal names, moving only with that fixture";
     };
     {
+      golden = Golden "test/operations/config_usage_scan_script_hint.expected";
+      pattern = {|^FAIL: [a-z_]+\.\(sh\|py\|ml\):[0-9]+:|};
+      reason =
+        "the line of the <name>.fixture a refusal names under the source name it stands for, \
+         moving only with that fixture";
+    };
+    {
       golden = Golden "test/operations/env_var_deps.expected";
       pattern = {|the floor of [0-9]+ callers|};
       reason = "the artifact-caller floor, a hand-written constant of the scan";

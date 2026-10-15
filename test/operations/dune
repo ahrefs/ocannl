@@ -136,6 +136,7 @@
   (alias runtest-cache_version_history)
   (alias runtest-config_usage_scan)
   (alias runtest-config_usage_scan_control)
+  (alias runtest-config_usage_scan_script_hint)
   (alias runtest-config_usage_scan_refusal_control)
   (alias runtest-ocamlformat_ignore_scan)
   (alias runtest-ll_test_ratchet)
@@ -290,6 +291,7 @@
   (alias runtest-codegen_text_inventory_control)
   (alias runtest-config_usage_scan)
   (alias runtest-config_usage_scan_control)
+  (alias runtest-config_usage_scan_script_hint)
   (alias runtest-config_usage_scan_refusal_control)
   (alias runtest-ocamlformat_ignore_scan)
   (alias runtest-ll_test_ratchet)
@@ -7514,20 +7516,71 @@
   (diff config_usage_scan_control.expected config_usage_scan_control.actual)))
 
 (rule
- ; ocannl-backend: none -- drives every direct config-usage refusal through injected state.
+ ; ocannl-backend: none -- drives every direct config-usage refusal through injected state, and
+ ; resolves the agent-note pointers those refusals print against the notes' headings.
  (target config_usage_scan_refusal_control.actual)
  (package neural_nets_lib)
  (deps
   ocannl_config
   config_usage_scan.ml
-  config_usage_scan_token_grammar.fixture)
+  config_usage_scan_token_grammar.fixture
+  (glob_files ../../docs/agent-notes/*.md))
  (action
   (with-stdout-to
    %{target}
    (run
     %{dep:config_usage_scan.exe}
     --refusal-control
-    %{dep:config_usage_scan_token_grammar.fixture}))))
+    %{dep:config_usage_scan_token_grammar.fixture}
+    ../../docs/agent-notes))))
+
+; A tool-invented name in a *.sh or *.py source is refused with a hint naming the fix; the same
+; names in an OCaml source keep the general message. Each <name>.fixture is scanned as <name>.
+
+(rule
+ ; ocannl-backend: none -- runs the text scanner on script- and OCaml-named fixtures and requires
+ ; their refusals; it links no backend and runs no OCANNL program.
+ (target config_usage_scan_script_hint.actual)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  config_usage_scan_tool_invented.sh.fixture
+  config_usage_scan_tool_invented.py.fixture
+  config_usage_scan_tool_invented.ml.fixture)
+ (action
+  (setenv
+   OCANNL_LOG_CONFIG_SOURCING
+   false
+   (setenv
+    OCANNL_NO_CONFIG_FILE
+    false
+    (setenv
+     OCANNL_SUPPRESS_WELCOME_MESSAGE
+     true
+     (setenv
+      OCANNL_PROFILE
+      ""
+      (with-stderr-to
+       %{target}
+       (ignore-stdout
+        (with-accepted-exit-codes
+         1
+         (run
+          %{dep:config_usage_scan.exe}
+          --source-fixtures
+          %{dep:config_usage_scan_tool_invented.sh.fixture}
+          %{dep:config_usage_scan_tool_invented.py.fixture}
+          %{dep:config_usage_scan_tool_invented.ml.fixture}))))))))))
+
+(rule
+ (alias runtest-config_usage_scan_script_hint)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate))
+ (action
+  (diff
+   config_usage_scan_script_hint.expected
+   config_usage_scan_script_hint.actual)))
 
 (rule
  (alias runtest-config_usage_scan_refusal_control)

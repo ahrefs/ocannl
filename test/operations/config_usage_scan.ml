@@ -628,6 +628,12 @@ let has_ambiguous_cli_value occurrence =
     | Utils.Ambiguous _ | Utils.Rejected _ -> true
   else false
 
+(* A [*.py] or [*.sh] hit absent from the registry is usually a name a tool invented for itself in
+   OCANNL's config grammar (lukstafi/ocannl-staging#1107, #1130), so its refusal names the fix. The
+   environment form has an exempt tool-private namespace ([non_config_env_key]); the command-line
+   form has none, and the hint says so rather than inventing one. *)
+let script_source path = String.is_suffix path ~suffix:".py" || String.is_suffix path ~suffix:".sh"
+
 let check ?(fail = Verdict.fail) ?(known_keys = Utils.known_config_keys)
     ?(control_non_config_environment_mentions = non_config_environment_mentions)
     ?(control_non_config_assignment_mentions = non_config_assignment_mentions)
@@ -703,6 +709,28 @@ let check ?(fail = Verdict.fail) ?(known_keys = Utils.known_config_keys)
         Hashtbl.incr seen_non_config (mention_site occurrence.path occurrence.key)
       else if Set.mem historical_invalid_config_sites (mention_site occurrence.path occurrence.key)
       then Hashtbl.incr seen_historical (mention_site occurrence.path occurrence.key)
+      else if script_source occurrence.path then
+        match occurrence.kind with
+        | Environment_assignment | Standalone_environment_mention ->
+            fail
+              (Printf.sprintf
+                 "%s:%d: %s `%s` names `%s`, absent from Utils.known_config_keys -- unless it \
+                  misspells a registered key, a script's own name sits in OCANNL's config \
+                  namespace: rename it after what it does, or put harness control under the exempt \
+                  OCANNL_TOOL_* prefix (see \
+                  docs/agent-notes/build-and-test.md#scan-corpora-goldens-and-floors)"
+                 occurrence.path occurrence.line (kind_name occurrence.kind) occurrence.spelling
+                 occurrence.key)
+        | Cli_flag | Prefix_free_cli_flag | Markdown_assignment | Config_file_assignment ->
+            fail
+              (Printf.sprintf
+                 "%s:%d: %s `%s` names `%s`, absent from Utils.known_config_keys -- unless it \
+                  misspells a registered key, a script's own option is spelled in OCANNL's config \
+                  grammar: rename it after what it does; no command-line spelling is exempt, the \
+                  OCANNL_TOOL_* exemption covers environment names only (see \
+                  docs/agent-notes/build-and-test.md#scan-corpora-goldens-and-floors)"
+                 occurrence.path occurrence.line (kind_name occurrence.kind) occurrence.spelling
+                 occurrence.key)
       else
         fail
           (Printf.sprintf "%s:%d: %s `%s` names `%s`, absent from Utils.known_config_keys"
@@ -827,6 +855,17 @@ let direct_refusal_formats =
      ambiguous_bare_config_mentions";
     "%s:%d: prefix-free config flag `%s` lacks a file/key/count entry in \
      prefix_free_config_mentions";
+    (* The script-hint formats share the general one's static runs, so they precede it here: the
+       first matching format is the one a refusal is attributed to. *)
+    "%s:%d: %s `%s` names `%s`, absent from Utils.known_config_keys -- unless it misspells a \
+     registered key, a script's own name sits in OCANNL's config namespace: rename it after what \
+     it does, or put harness control under the exempt OCANNL_TOOL_* prefix (see \
+     docs/agent-notes/build-and-test.md#scan-corpora-goldens-and-floors)";
+    "%s:%d: %s `%s` names `%s`, absent from Utils.known_config_keys -- unless it misspells a \
+     registered key, a script's own option is spelled in OCANNL's config grammar: rename it after \
+     what it does; no command-line spelling is exempt, the OCANNL_TOOL_* exemption covers \
+     environment names only (see \
+     docs/agent-notes/build-and-test.md#scan-corpora-goldens-and-floors)";
     "%s:%d: %s `%s` names `%s`, absent from Utils.known_config_keys";
     "registered config keys collide with Builtins_cc OCANNL_ C macro names -- rename: %s";
     "%s:%d: ambiguous command-line value `%s` for `%s` lacks a file/token/key/count entry in \
@@ -841,7 +880,33 @@ let direct_refusal_formats =
     "ambiguous command-line value occurrence counts drifted: %s";
   ]
 
-let refusal_control grammar_fixture =
+(* Every agent-note pointer a refusal format carries, as [(note basename, anchor)]. *)
+let note_pointers format =
+  let marker = "docs/agent-notes/" in
+  let rec from pos found =
+    match String.substr_index format ~pos ~pattern:marker with
+    | None -> List.rev found
+    | Some start ->
+        let path_start = start + String.length marker in
+        let stop = ref path_start in
+        while
+          !stop < String.length format
+          && (Char.is_alphanum format.[!stop]
+             || List.mem [ '-'; '_'; '.'; '#' ] format.[!stop] ~equal:Char.equal)
+        do
+          Int.incr stop
+        done;
+        let pointer = String.sub format ~pos:path_start ~len:(!stop - path_start) in
+        let found =
+          match String.lsplit2 pointer ~on:'#' with
+          | Some (note, anchor) -> (note, anchor) :: found
+          | None -> found
+        in
+        from !stop found
+  in
+  from 0 []
+
+let refusal_control grammar_fixture notes_dir =
   let source = "test/operations/config_usage_scan.ml" in
   let observed = Hash_set.create (module String) in
   let unexpected = ref [] in
@@ -993,16 +1058,29 @@ let refusal_control grammar_fixture =
         ~kind:Prefix_free_cli_flag ();
       occurrence ~path:"unknown.sh" ~key:"definitely_missing"
         ~spelling:("--ocannl_" ^ "missing=true") ~kind:Cli_flag ();
+      occurrence ~path:"unknown.py" ~key:"definitely_missing"
+        ~spelling:("OCANNL_" ^ "DEFINITELY_MISSING")
+        ~kind:Standalone_environment_mention ();
+      occurrence ~path:"unknown.ml" ~key:"definitely_missing"
+        ~spelling:("--ocannl_" ^ "missing=true") ~kind:Cli_flag ();
       occurrence ~path:"undeclared-alternate.md" ~key:"print_decimals_precision"
         ~spelling:("--ocannl_" ^ "print_decimals_precision-8")
         ~kind:Cli_flag ();
       occurrence ~ambiguous_bare:true ~path:"new-one-word.md" ~key:"backend"
         ~spelling:"backend=metal" ~kind:Markdown_assignment ();
     ];
-  Verdict.p_all ~min:13 "every config-usage direct refusal format is observed"
+  Verdict.p_all ~min:15 "every config-usage direct refusal format is observed"
     direct_refusal_formats ~f:(Hash_set.mem observed);
   Verdict.p_empty "the config-usage refusal control emits no unexpected diagnostic"
     ~over:(Hash_set.to_list observed) !unexpected;
+  (* The pointer is in the refusal text itself, so it is derived from the formats and resolved
+     against the note's rendered heading ids: a renamed heading fails here, not in a reader's
+     hands. *)
+  Verdict.p_all ~min:2 "every agent-note pointer in a config-usage refusal names a heading it has"
+    (List.concat_map direct_refusal_formats ~f:note_pointers) ~f:(fun (note, anchor) ->
+      let path = Stdlib.Filename.concat notes_dir note in
+      Stdlib.Sys.file_exists path
+      && List.mem (Markdown.heading_ids (In_channel.read_all path)) anchor ~equal:String.equal);
   Refusal_manifest.print source
 
 let file_kind path =
@@ -1091,6 +1169,20 @@ let fixture path config_path multiline_path =
         (In_channel.read_all multiline_path));
   Verdict.exit_negative_control ()
 
+(* Each [<name>.fixture] is scanned as the checked-in source [<name>] it stands for, through the
+   live corpus's own file-kind dispatch, so a [*.sh.fixture] gets a shell script's refusals. The
+   fixtures cannot carry their real suffix: the live corpus selects every [*.sh] and [*.py]. *)
+let source_fixtures paths =
+  check ~repository_census:false
+    (List.concat_map paths ~f:(fun path ->
+         let basename = Stdlib.Filename.basename path in
+         let reported_path =
+           Option.value_exn ~message:"a source fixture is named <source name>.fixture"
+             (String.chop_suffix basename ~suffix:".fixture")
+         in
+         occurrences_of_file ~reported_path path));
+  Verdict.exit_negative_control ()
+
 let live workspace_root generated =
   let inventory = Inventory.of_dune_sandbox ~workspace_root ~generated in
   let files =
@@ -1153,7 +1245,9 @@ let live workspace_root generated =
 
 let () =
   match Array.to_list argv with
-  | _ :: [ "--refusal-control"; grammar_fixture ] -> refusal_control grammar_fixture
+  | _ :: [ "--refusal-control"; grammar_fixture; notes_dir ] ->
+      refusal_control grammar_fixture notes_dir
+  | _ :: "--source-fixtures" :: (_ :: _ as paths) -> source_fixtures paths
   | _ :: [ "--fixture"; path; config_path; multiline_path ] ->
       fixture path config_path multiline_path
   | _ :: workspace_root :: generated when not (List.is_empty generated) ->
@@ -1161,6 +1255,7 @@ let () =
   | argv ->
       eprintf
         "Usage: %s <workspace_root> <generated sandbox paths...> | %s --fixture <file> \
-         <config-file> <multiline-markdown-file>\n"
-        (List.hd_exn argv) (List.hd_exn argv);
+         <config-file> <multiline-markdown-file> | %s --source-fixtures <name>.fixture... | %s \
+         --refusal-control <grammar-fixture> <agent-notes-dir>\n"
+        (List.hd_exn argv) (List.hd_exn argv) (List.hd_exn argv) (List.hd_exn argv);
       Stdlib.exit 1

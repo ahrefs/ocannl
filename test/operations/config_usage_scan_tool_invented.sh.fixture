@@ -1,0 +1,10 @@
+#!/bin/sh
+# Scanned as the shell script config_usage_scan_tool_invented.sh: each tool-invented name below
+# must be refused WITH the script hint that names the fix.
+run_bench --ocannl-definitely-tool-invented-option=1
+OCANNL_DEFINITELY_TOOL_INVENTED_SETTING=1 run_bench
+echo "$OCANNL_DEFINITELY_TOOL_INVENTED_MENTION"
+# Exempt, and so not refused: harness control under the tool-private environment namespace.
+OCANNL_TOOL_DEFINITELY_EXEMPT=1 run_bench
+# Refused all the same: that namespace covers environment names, never a command-line spelling.
+run_bench --ocannl_tool_definitely_not_exempt=1

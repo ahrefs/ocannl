@@ -1,0 +1,4 @@
+# Scanned as the Python source config_usage_scan_tool_invented.py: the option a tool invents for
+# itself and the environment variable it reads must be refused WITH the script hint.
+parser.add_argument("--ocannl-definitely-tool-invented-flag", help="per-cell override")
+override = os.environ.get("OCANNL_DEFINITELY_TOOL_INVENTED_ENV")

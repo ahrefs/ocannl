@@ -250,7 +250,10 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   own config grammar to the scan, a mention of key `<x>`, and fails it when `<x>` is no registered
   key. Name such an option after what it does instead: lukstafi/ocannl-staging#1107's per-cell
   override option for `benchmarks/orchestrate.py`, proposed as --ocannl-flag (unquoted here for the
-  same reason OCANNL_FAKE_TOKEN is), failed the scans twice before it became `--cell-flag`.
+  same reason OCANNL_FAKE_TOKEN is), failed the scans twice before it became `--cell-flag`. A hit
+  in a `*.sh` or `*.py` source now says this in its own refusal and points here; the exemption it
+  offers is the environment namespace's alone, as no command-line spelling is exempt
+  (`config_usage_scan_script_hint` pins both hints and the unchanged message of an OCaml hit).
 - The `.expected` golden of such a repository-wide check should hold what is TRUE of the repository,
   not how much of it there is. A tally — "170 tests in this directory", "241 test stanzas declare
   the config" — moves on every correct addition anywhere, so every unrelated contributor has to
