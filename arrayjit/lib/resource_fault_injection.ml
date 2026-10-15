@@ -17,10 +17,14 @@ type point =
   | Schedule_cache_before_replay
 [@@deriving sexp, equal]
 
-let callback : (point -> unit) ref = ref (fun _ -> ())
-let hit point = !callback point
+(* One callback per domain, like [Autotune.Seam] (which this module cannot reuse: [Schedule_cache]
+   calls {!hit}, and [Autotune] depends on [Schedule_cache]). Sound because every {!hit} runs on the
+   domain that called the operation, none inside a task a scheduler enqueues, so on [multidev_cc]
+   the worker domains never reach one. *)
+let callback : (point -> unit) Stdlib.Domain.DLS.key = Stdlib.Domain.DLS.new_key (fun () _ -> ())
+let hit point = Stdlib.Domain.DLS.get callback point
 
 let with_callback cb ~f =
-  let prior = !callback in
-  callback := cb;
-  Exn.protect ~f ~finally:(fun () -> callback := prior)
+  let prior = Stdlib.Domain.DLS.get callback in
+  Stdlib.Domain.DLS.set callback cb;
+  Exn.protect ~f ~finally:(fun () -> Stdlib.Domain.DLS.set callback prior)

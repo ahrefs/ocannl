@@ -1,0 +1,7 @@
+every scenario ran to its readback and cache lookup: true
+the multidev leg ran on multidev_cc: true
+main domain: every hit its callback saw came from its own scenarios: true
+spawned domain: every hit its callback saw came from its own scenario: true
+main domain: its callback saw its scenarios' hits: true
+spawned domain: its callback saw every point the main domain's did: true
+multidev_cc: the calling domain's callback saw every point the cc scenario reaches: true
