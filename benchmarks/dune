@@ -6,7 +6,8 @@
  ; remembers to pin them, and nothing is sandboxed, so an unlisted module is not a build error --
  ; the test reads whatever copy happens to be in _build/default/benchmarks, stale or absent
  ; depending on what ran before (the gh-ocannl-586/597 hazard, in Python). Today the test imports
- ; orchestrate, gh675_cells, bench_venv, cell_group, fixture_digest and runners.bench_common, and
+ ; orchestrate, strict_json, gh675_cells, gh998_cells, gh1002_cells, bench_venv, cell_group,
+ ; fixture_digest and runners.bench_common, and
  ; reads the per-framework runners' sources for the venv-interpreter scan. fixtures/DIGESTS.txt and the workload specs are data it reads
  ; (gh-ocannl-645), pinned so a change to them fails the suite rather than drifting -- and so is
  ; the golden of test/operations/bench_result_line, which holds OCANNL result lines this

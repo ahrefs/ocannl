@@ -8227,7 +8227,8 @@
   (alias runtest-env_spelling_gate)
   gh1133_summary.py
   gh1133_summary.expected
-  ../../benchmarks/gh1133_summary.py)
+  ../../benchmarks/gh1133_summary.py
+  ../../benchmarks/strict_json.py)
  (action
   (no-infer
    (progn
@@ -8249,7 +8250,8 @@
   gh1002_kernels.py
   gh1002_kernels.expected
   ../../benchmarks/gh1002_cells.py
-  ../../benchmarks/cell_group.py)
+  ../../benchmarks/cell_group.py
+  ../../benchmarks/strict_json.py)
  (action
   (no-infer
    (progn

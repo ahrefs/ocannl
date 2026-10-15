@@ -210,10 +210,14 @@ files.
   `orchestrate.py` drops a cell whose line does not parse — so a DIVERGED run, the thing the parity
   gate exists to catch, was reported as a broken runner. All three runners emit `null` there
   (`Bench_json.num`/`fixed`/`nums`, `bench_common.json_safe`) and the orchestrator reads it as the
-  DIVERGED verdict. The general trap: `json.loads` accepts `NaN` and `Infinity`, so the Python
-  runners' cells survived while OCANNL's vanished, and the report read as an OCANNL runner bug
-  rather than a numerics one — when a sweep loses only one framework's rows, suspect the emitter's
-  spelling before the framework.
+  DIVERGED verdict. The general trap: `json.loads` accepts `NaN` and `Infinity` (and reads `1e999`
+  as infinity), so the Python runners' cells survived while OCANNL's vanished, and the report read
+  as an OCANNL runner bug rather than a numerics one — when a sweep loses only one framework's rows,
+  suspect the emitter's spelling before the framework. Every Python reader of a runner's result or
+  checkpoint line therefore parses it with `benchmarks/strict_json.py`'s `loads`, which refuses all
+  three spellings (`NonFinite`, a `ValueError`), so a regressed emitter fails its cell by name instead
+  of reaching only the Python consumers; a new reader uses it too, and a driver run under
+  `python3 -I` puts its own directory on `sys.path` first (`gh834_session.py`).
 - A shell driver reads that line by PARSING it (stdlib `python3`), never with a `sed`/`grep`
   pattern over its text: a scan from `"arm":"A"` to the first `}` read a nested object placed
   before `best_ms` as an arm that timed nothing, and pinned the runner's field order to suit it.

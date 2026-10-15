@@ -13,9 +13,13 @@ gh-ocannl-1263's per-arm timing matrix move to the arm's last field. Every field
 is required to be present with its type, so a renamed or dropped field fails the session rather
 than reading as a pass.
 """
-import json
 import math
+from pathlib import Path
 import sys
+
+# gh834_cells.sh runs this under `python3 -I`, which leaves the script's own directory off sys.path.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import strict_json  # noqa: E402
 
 # The two placement arms a tuned gpt2_mini session runs (Train.tune_placements).
 REQUIRED_ARMS = ("A", "B")
@@ -23,10 +27,6 @@ REQUIRED_ARMS = ("A", "B")
 
 def is_count(v):
     return isinstance(v, int) and not isinstance(v, bool) and v >= 0
-
-
-def reject_constant(name):
-    raise ValueError("non-JSON constant %s" % name)
 
 
 def problems(path):
@@ -38,9 +38,10 @@ def problems(path):
     if not lines:
         return ["INCOMPLETE SESSION: no result line"]
     try:
-        # JSON has no NaN or Infinity, but json.loads accepts both by default; a runner that spells a
-        # non-finite number that way has emitted a line no other consumer can read.
-        record = json.loads(lines[-1], parse_constant=reject_constant)
+        # JSON has no NaN or Infinity, but json.loads accepts both by default (and reads 1e999 as
+        # infinity); a runner that spells a non-finite number either way has emitted a line no other
+        # consumer can read.
+        record = strict_json.loads(lines[-1])
     except ValueError as e:
         return ["INCOMPLETE SESSION: the result line is not JSON (%s)" % e]
     tune = record.get("tune") if isinstance(record, dict) else None
@@ -57,7 +58,7 @@ def problems(path):
         # A search can complete having timed nothing (every candidate declined; the GPU serial
         # baseline is never dispatched): such an arm holds no evidence about timing cost.
         best = found[0].get("best_ms") if len(found) == 1 else None
-        # An overflowing literal (1e999) parses to infinity, which is no timing either.
+        # strict_json refuses a non-finite number, so isfinite only guards what a refactor lets in.
         if not isinstance(best, (int, float)) or isinstance(best, bool) or not math.isfinite(best):
             out.append("INCOMPLETE SESSION: arm %s timed no candidate" % name)
     # The remaining checks span every arm on the line, not only the required two.

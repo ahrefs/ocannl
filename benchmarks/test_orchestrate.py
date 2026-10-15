@@ -20,6 +20,7 @@ import bench_venv
 import fixture_digest
 import cell_group
 import orchestrate
+import strict_json
 from runners import bench_common
 from test.test_cell_group import CellGroupTest  # imported so unittest.main includes shared tests
 from test.test_cell_group import kill_the_group_on_cleanup, publish_pid
@@ -51,13 +52,8 @@ def cell(framework, backend, variant, losses, precision="f32", p50=1.0):
     return r
 
 
-def _reject(token):
-    raise ValueError(f"not JSON: {token}")
-
-
-def strict_loads(text):
-    """`json.loads` without its NaN/Infinity extension -- JSON as every other reader has it."""
-    return json.loads(text, parse_constant=_reject)
+# JSON as every other reader has it: the loader the result-line readers use, not a second copy.
+strict_loads = strict_json.loads
 
 
 class ParityCheckTest(unittest.TestCase):
@@ -192,6 +188,140 @@ class DivergenceTest(unittest.TestCase):
 
         parsed = strict_loads(buf.getvalue().strip())
         self.assertEqual(parsed, {"losses": [1.0, None], "step_ms": {"p50": None}})
+
+
+# A result line in each spelling of a non-finite number that `json.loads` accepts: its two
+# constants (and the negated one) and an overflowing literal. Each spelling sits in its own line, so
+# a loader that refuses only some of them fails on the others.
+NON_FINITE_LINES = {
+    "NaN": '{"losses":[2.5,NaN],"step_ms":{"p50":1.0}}',
+    "Infinity": '{"losses":[2.5,1.75],"step_ms":{"p50":Infinity}}',
+    "-Infinity": '{"losses":[-Infinity,1.75],"step_ms":{"p50":1.0}}',
+    "1e999": '{"losses":[2.5,1.75],"step_ms":{"p50":1e999}}',
+}
+
+
+def refuses_every_non_finite_line(loads):
+    """Whether `loads` raises `ValueError` on every line of NON_FINITE_LINES."""
+    for line in NON_FINITE_LINES.values():
+        try:
+            loads(line)
+        except ValueError:
+            continue
+        return False
+    return True
+
+
+class StrictJsonTest(unittest.TestCase):
+    """The one loader every reader of a runner's result line goes through (benchmarks/strict_json.py,
+    from lukstafi/ocannl-staging#1138): Python's `json.loads` reads NaN, Infinity and 1e999, which
+    no other consumer of results.jsonl does."""
+
+    def mutant(self, name, old, new):
+        """strict_json with `old` replaced by `new` in its source, loaded as a module of its own."""
+        source = (HERE / "strict_json.py").read_text()
+        self.assertIn(old, source, f"mutant {name} no longer applies")
+        module = types.ModuleType(f"strict_json_{name}")
+        exec(compile(source.replace(old, new, 1), f"<strict_json {name}>", "exec"), module.__dict__)
+        return module
+
+    def test_the_lines_are_the_trap(self):
+        # Precondition: the stdlib reads every line, and each carries a non-finite number.
+        for spelled, line in NON_FINITE_LINES.items():
+            with self.subTest(spelled=spelled):
+                parsed = json.loads(line)
+                numbers = parsed["losses"] + [parsed["step_ms"]["p50"]]
+                self.assertFalse(all(orchestrate.finite(x) for x in numbers))
+
+    def test_every_non_finite_spelling_is_refused(self):
+        for spelled, line in NON_FINITE_LINES.items():
+            with self.subTest(spelled=spelled):
+                with self.assertRaises(strict_json.NonFinite) as caught:
+                    strict_json.loads(line)
+                self.assertIn(spelled.lstrip("-"), str(caught.exception))
+                # A ValueError, as JSONDecodeError is, so a reader's existing handler covers it.
+                self.assertIsInstance(caught.exception, ValueError)
+        self.assertTrue(refuses_every_non_finite_line(strict_json.loads))
+
+    def test_finite_json_reads_as_the_stdlib_reads_it(self):
+        line = '{"losses":[2.5,null,-0.0,1e308,3],"step_ms":{"p50":12},"note":"NaN Infinity"}'
+        self.assertEqual(strict_json.loads(line), json.loads(line))
+
+    def test_mutants_that_drop_either_hook_accept_a_line(self):
+        # Mutation control: the refusal above holds only while both hooks are in place.
+        hooks = "parse_constant=_reject_constant, parse_float=_finite_float"
+        for name, new in [
+            ("no_hooks", ""),
+            ("no_constant_hook", "parse_float=_finite_float"),
+            ("no_float_hook", "parse_constant=_reject_constant"),
+        ]:
+            with self.subTest(mutant=name):
+                mutant = self.mutant(name, hooks, new)
+                self.assertFalse(refuses_every_non_finite_line(mutant.loads))
+        self.assertFalse(refuses_every_non_finite_line(json.loads))
+
+
+class NonFiniteResultLineReadersTest(unittest.TestCase):
+    """Each reader of a runner's result line refuses one that spells a non-finite number, as
+    `strict_json` does, instead of taking it as a measurement."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+        self.addCleanup(self.tmp.cleanup)
+
+    def test_run_cell_fails_the_cell_and_names_the_line(self):
+        for spelled, line in NON_FINITE_LINES.items():
+            with self.subTest(spelled=spelled):
+                cell = [sys.executable, "-c", "import sys; print(sys.argv[1])", line]
+                with contextlib.redirect_stdout(io.StringIO()):
+                    result, note = orchestrate.run_cell(f"non-finite {spelled}", cell, timeout=60)
+                self.assertIsNone(result)
+                self.assertIn("its result line is not strict JSON", note)
+        # Negative control: the same cell with a finite line is a result.
+        finite = '{"losses":[2.5,null],"step_ms":{"p50":1.0},"compile_s":0.5}'
+        cell = [sys.executable, "-c", "import sys; print(sys.argv[1])", finite]
+        with contextlib.redirect_stdout(io.StringIO()):
+            result, note = orchestrate.run_cell("finite", cell, timeout=60)
+        self.assertIsNone(note)
+        self.assertEqual(result["losses"], [2.5, None])
+
+    def test_a_checkpoint_spelling_a_non_finite_loss_is_skipped(self):
+        prefix = orchestrate.CHECKPOINT_PREFIX
+        good = prefix + '{"record":"checkpoint","losses":[2.5]}'
+        bad = prefix + '{"record":"checkpoint","losses":[2.5,NaN]}'
+        self.assertEqual(orchestrate.last_checkpoint(good + "\n" + bad)["losses"], [2.5])
+
+    def test_gh998_result_refuses_and_skips_only_noise(self):
+        import gh998_cells
+
+        for spelled, line in NON_FINITE_LINES.items():
+            with self.subTest(spelled=spelled):
+                path = self.dir / f"gh998-{spelled}.stdout"
+                path.write_text("noise\n" + line + "\n")
+                with self.assertRaisesRegex(RuntimeError, "not strict JSON"):
+                    gh998_cells.result(path)
+        # A non-finite JSON line that is no result line is noise, as any other non-result is.
+        path = self.dir / "gh998-noise.stdout"
+        path.write_text('{"probe":NaN}\n{"losses":[2.5],"step_ms":{"p50":1.0}}\n')
+        self.assertEqual(gh998_cells.result(path)["losses"], [2.5])
+
+    def test_gh1002_result_line_is_no_result(self):
+        import gh1002_cells
+
+        fixture = "gpt2_mini_train"
+        steps = gh1002_cells.parity_steps(fixture)
+        losses = ",".join(["2.5"] * steps)
+        base = self.dir / f"cc__{fixture}__A__r0"
+        Path(str(base) + ".status").write_text("0\n")
+        # The losses are finite and complete, so only the non-finite timing can refuse the line.
+        for spelled in ("NaN", "Infinity", "1e999"):
+            with self.subTest(spelled=spelled):
+                Path(str(base) + ".out").write_text(
+                    '{"losses":[%s],"step_ms":{"p50":%s}}\n' % (losses, spelled))
+                self.assertIsNone(gh1002_cells.result_line(base))
+        Path(str(base) + ".out").write_text('{"losses":[%s],"step_ms":{"p50":1.0}}\n' % losses)
+        self.assertEqual(gh1002_cells.result_line(base)["step_ms"]["p50"], 1.0)
 
 
 class OcannlResultLineTest(unittest.TestCase):
