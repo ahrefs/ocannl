@@ -35,6 +35,12 @@
 #     each generated module file, and the C stub objects (`X.o`) and stub
 #     archives (`libNAME_stubs.a`) of a changed path's directory: the
 #     executables those rules run and the files, or globs of files, they read.
+#     A generated file such a rule reads (a `copy_files` copy, a file list) is
+#     asked in turn, and what its rule reads counts as read; compiled objects
+#     and executables are not followed (an executable is reached through its
+#     stanza). Queries are batched to stay within any command-line limit.
+#     `dune rules` prints a glob with its escapes dropped, so a glob also
+#     matches its own text read literally.
 #
 # Boundary, as an allowlist. Whatever it does not cover is reported on stderr,
 # never silently dropped:
@@ -77,8 +83,8 @@
 #     alias's action is opaque (a `tests` stanza with no golden runs its
 #     executable under the stanza's `(deps)`), so such an alias is also
 #     printed whenever a changed path other than an owned module source lies
-#     in its directory. Not seen: what an opaque action reads outside its
-#     directory, and what any rule reaches only through another generated file.
+#     in its directory, or whenever a copy of a changed file is made there.
+#     Not seen: what an opaque action reads outside its directory otherwise.
 #
 # Exit: 0 every changed `.ml`/`.mli` was mapped; 3 the list is printed, but a
 # changed `.ml`/`.mli` is UNMAPPED (see stderr); 2 usage, git or dune failure,
@@ -348,48 +354,75 @@ my %stub_dirs = map { (dir_of($_))[0] => 1 } @changed;
 my @stub_targets = map { my $d = $_; map { in_dir($d, $_) } grep { /\.o$/ || /^lib.+_stubs\.a$/ } @{$targets->{$d} // []} }
   sort keys %stub_dirs;
 my @own_targets = sort { $a cmp $b } keys %{{ map { $_ => 1 } (map { @{$_->{own}} } @al), keys %generated, @stub_targets }};
-my (%runs, %reads, %globs);   # target -> {stanza index}, {path}, [[dir, regex]]
-if (@own_targets) {
-  my $pid = open(my $fh, "-|") // fail("cannot fork for dune rules");
-  if (!$pid) { open STDERR, ">&", \*STDOUT; exec "dune", "rules", "--root", ".", @own_targets; exit 127 }
-  my $text = do { local $/; <$fh> };
-  close $fh or fail("dune rules failed:\n$text");
-  my %exe;   # "DIR\0NAME" -> stanza indices that build that executable
-  for my $i (grep { $st[$_]{kind} ne "library" } 0 .. $#st) {
-    push @{$exe{"$st[$i]{dir}\0$_"}}, $i for @{$st[$i]{names}};
-  }
-  sub glob_regex {   # dune's glob syntax: * ? [set] [!set] {a,b}; anything else is literal
-    my ($g) = @_;
-    my ($re, $depth) = ("", 0);
-    while (length $g) {
-      if ($g =~ s/^\[(!?)([^\]]+)\]//) {   # a class; [!set] is its complement
-        my ($neg, $set) = ($1, $2);
-        $re .= "[" . ($neg ? "^" : "") . ($set =~ s/([\\\[\]^])/\\$1/gr) . "]";
-        next;
-      }
-      my $c = substr($g, 0, 1, "");
-      if ($c eq "*") { $re .= "[^/]*" } elsif ($c eq "?") { $re .= "[^/]" }
-      elsif ($c eq "{") { $re .= "(?:"; $depth++ } elsif ($c eq "}" && $depth) { $re .= ")"; $depth-- }
-      elsif ($c eq "," && $depth) { $re .= "|" }
-      else { $re .= quotemeta $c }
+my %exe;   # "DIR\0NAME" -> stanza indices that build that executable
+for my $i (grep { $st[$_]{kind} ne "library" } 0 .. $#st) {
+  push @{$exe{"$st[$i]{dir}\0$_"}}, $i for @{$st[$i]{names}};
+}
+sub glob_regex {   # dune's glob syntax: * ? [set] [!set] {a,b} \x; anything else is literal
+  my ($g) = @_;
+  my ($re, $depth) = ("", 0);
+  while (length $g) {
+    if ($g =~ s/^\[(!?)([^\]]+)\]//) {   # a class; [!set] is its complement
+      my ($neg, $set) = ($1, $2);
+      $re .= "[" . ($neg ? "^" : "") . ($set =~ s/([\\\[\]^])/\\$1/gr) . "]";
+      next;
     }
-    return $depth ? qr/./ : qr/^$re$/;   # unbalanced: matches anything
+    my $c = substr($g, 0, 1, "");
+    if ($c eq "\\" && length $g) { $re .= quotemeta substr($g, 0, 1, "") }   # an escaped character
+    elsif ($c eq "*") { $re .= "[^/]*" } elsif ($c eq "?") { $re .= "[^/]" }
+    elsif ($c eq "{") { $re .= "(?:"; $depth++ } elsif ($c eq "}" && $depth) { $re .= ")"; $depth-- }
+    elsif ($c eq "," && $depth) { $re .= "|" }
+    else { $re .= quotemeta $c }
   }
-  sub predicate {   # a glob, or (and (P...)), (or (P...)), (not P): a matcher over file names
-    my ($p) = @_;
-    if (!ref $p) { my $re = glob_regex($p); return sub { $_[0] =~ $re } }
-    my ($op, $arg) = pair($p, "a glob predicate");
-    if ($op eq "not") { my $m = predicate($arg); return sub { !$m->($_[0]) } }
-    $op =~ /^(?:and|or)$/ && ref $arg or fail("a glob predicate \"$op\" is outside this helper's boundary");
-    my @m = map { predicate($_) } @$arg;
-    return $op eq "and" ? sub { my $f = $_[0]; !grep { !$_->($f) } @m } : sub { my $f = $_[0]; grep { $_->($f) } @m };
+  return $depth ? qr/./ : qr/^$re$/;   # unbalanced: matches anything
+}
+sub predicate {   # a glob, or (and (P...)), (or (P...)), (not P): a matcher over file names
+  my ($p) = @_;
+  # `dune rules` prints a glob with its escapes dropped (`\{x\}.md` as `{x}.md`),
+  # so a printed glob also matches its own text, read literally.
+  if (!ref $p) { my $re = glob_regex($p); return sub { $_[0] eq $p || $_[0] =~ $re } }
+  my ($op, $arg) = pair($p, "a glob predicate");
+  if ($op eq "not") { my $m = predicate($arg); return sub { !$m->($_[0]) } }
+  $op =~ /^(?:and|or)$/ && ref $arg or fail("a glob predicate \"$op\" is outside this helper's boundary");
+  my @m = map { predicate($_) } @$arg;
+  return $op eq "and" ? sub { my $f = $_[0]; !grep { !$_->($f) } @m } : sub { my $f = $_[0]; grep { $_->($f) } @m };
+}
+sub strip_ctx { my ($p) = @_; $p =~ s{^\Q$ctx\E/}{} ? $p : undef }
+# `dune rules` over many targets, in batches whose command line stays far below
+# the smallest limit (Windows' 32767 characters for the whole command line).
+# OCANNL_TOOL_AFFECTED_ARGS overrides the 16000-character budget, for tests.
+my $arg_budget = $ENV{OCANNL_TOOL_AFFECTED_ARGS} // 16000;
+$arg_budget =~ /^[1-9][0-9]*$/ or fail("OCANNL_TOOL_AFFECTED_ARGS must be a positive integer");
+sub dune_rules {
+  my @todo = @_;
+  my @rules;
+  while (@todo) {
+    my ($len, @batch) = (0);
+    while (@todo && (!@batch || $len + length($todo[0]) + 3 < $arg_budget)) { $len += length($todo[0]) + 3; push @batch, shift @todo }
+    my $pid = open(my $fh, "-|") // fail("cannot fork for dune rules");
+    if (!$pid) { open STDERR, ">&", \*STDOUT; exec "dune", "rules", "--root", ".", @batch; exit 127 }
+    my $text = do { local $/; <$fh> };
+    close $fh or fail("dune rules failed:\n$text");
+    push @rules, @{parse_sexp($text, "dune rules")};
   }
-  sub strip_ctx { my ($p) = @_; $p =~ s{^\Q$ctx\E/}{} ? $p : undef }
-  for my $rule (@{parse_sexp($text, "dune rules")}) {
+  return @rules;
+}
+# Each queried target's rule: the executables it runs, the files and globs it
+# reads, and the generated files it reads (`via`), whose rules are queried in
+# turn -- a `copy_files` copy, a file list -- so what a rule reaches through
+# them counts as its own. Compiled objects and executables are not followed:
+# an executable is reached through its stanza.
+my (%runs, %reads, %globs, %via);
+my %queried;
+my @queue = @own_targets;
+while (@queue) {
+  $queried{$_} = 1 for @queue;
+  my %next;
+  for my $rule (dune_rules(@queue)) {
     ref $rule or fail("unexpected atom in dune rules output");
     my $tg = field($rule, "targets");
     my @files = map { atom($_, "targets") } items(field($tg // [], "files"));
-    my (%r, %p, @g);
+    my (%r, %p, @g, %v);
     for my $dep (items(field($rule, "deps"))) {
       next if !ref $dep && $dep eq "Universe";   # always reruns; reads nothing in particular
       ref $dep && @$dep && !ref $dep->[0] or fail("unexpected dependency in dune rules output");
@@ -399,7 +432,10 @@ if (@own_targets) {
         if ($where eq "In_build_dir") {
           my $rel = strip_ctx($path) // next;   # another context's, or _build/install
           if ($rel =~ m{^(?:(.*)/)?([^/]+)\.(?:exe|bc)$}) { $r{$_} = 1 for @{$exe{($1 // ".") . "\0$2"} // []} }
-          else { $p{$rel} = 1 }
+          else {
+            $p{$rel} = 1;
+            $v{$rel} = 1 if !-e $rel && $rel !~ $artifact && $rel !~ m{(?:^|/)\.[^/]+\.e?objs/};
+          }
         } elsif ($where eq "In_source_tree") { $p{$path} = 1 }
         elsif ($where ne "External") { fail("a File dependency \"$where\" is outside this helper's boundary") }
       } elsif ($k eq "glob") {
@@ -416,10 +452,36 @@ if (@own_targets) {
     }
     for my $f (@files) {
       my $t = strip_ctx($f) // next;
-      $runs{$t} = \%r; $reads{$t} = \%p; $globs{$t} = \@g;
+      $runs{$t} = \%r; $reads{$t} = \%p; $globs{$t} = \@g; $via{$t} = [sort keys %v];
+    }
+    $next{$_} = 1 for grep { !$queried{$_} } keys %v;
+  }
+  exists $runs{$_} or fail("dune rules printed no rule for $_") for @queue;
+  @queue = sort keys %next;
+}
+# A rule-made file with the name of a file it reads, in another directory, is
+# a copy of it (`copy_files`): an opaque action there may read the copy.
+my %copies;   # path -> [directories holding a copy of it]
+for my $t (sort keys %queried) {
+  my ($td, $tb) = dir_of($t);
+  for my $src (keys %{$reads{$t}}) {
+    my ($sd, $sb) = dir_of($src);
+    push @{$copies{$src}}, $td if $sb eq $tb && $sd ne $td;
+  }
+}
+{ # Fold each target's generated inputs into it (cycle-safe: a file is folded once).
+  my %done;
+  sub fold {
+    my ($t) = @_;
+    return if $done{$t}++;
+    for my $u (@{$via{$t}}) {
+      fold($u);
+      $runs{$t} = { %{$runs{$t}}, %{$runs{$u}} };
+      $reads{$t} = { %{$reads{$t}}, %{$reads{$u}} };
+      $globs{$t} = [@{$globs{$t}}, @{$globs{$u}}];
     }
   }
-  exists $runs{$_} or fail("dune rules printed no rule for $_") for @own_targets;
+  fold($_) for sort keys %queried;
 }
 
 # A stub object belongs to the library whose stub archive (`libNAME_stubs.a`,
@@ -499,7 +561,7 @@ for my $p (@changed) {
   print STDERR "affected: $p: " . join("; ", @parts) . "\n" if @parts;
   # Any path but a module source a stanza owns may be an input of an alias
   # action dune does not dump (see `opaque` below).
-  $data_dirs{$d} = 1 unless $b =~ /\.mli?$/ && @ix && !$unmapped;
+  unless ($b =~ /\.mli?$/ && @ix && !$unmapped) { $data_dirs{$_} = 1 for $d, @{$copies{$p} // []} }
   if ($unmapped) { push @unmapped, $p } elsif (!@parts) { push @unread, $p }
 }
 

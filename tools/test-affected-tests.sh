@@ -24,7 +24,7 @@ unset DUNE_BUILD_DIR DUNE_ROOT
 export OCANNL_TOOL_FLEET_WORKER=none OCANNL_TOOL_TEST_RUNS=$TMP/runs
 
 repo=$TMP/proj
-mkdir -p "$repo/tools" "$repo/lib" "$repo/mid" "$repo/t1" "$repo/t2" "$repo/t3" "$repo/docs" || exit 2
+mkdir -p "$repo/tools" "$repo/lib" "$repo/mid" "$repo/t1" "$repo/t2" "$repo/t3" "$repo/cfg" "$repo/docs" || exit 2
 cp "$HERE/affected-tests.sh" "$HERE/test-run.sh" "$repo/tools/" || exit 2
 # Whatever test-run.sh sources, derived from it rather than listed here.
 staged=0
@@ -72,7 +72,8 @@ cat >"$repo/t2/dune" <<'DUNE'
 (rule (alias scans) (deps (alias runtest-scan)) (action (progn)))
 DUNE
 cat >"$repo/t3/dune" <<'DUNE'
-(test (name t_plain) (modules t_plain) (deps plain.cfg))
+(copy_files ../cfg/base.cfg)
+(test (name t_plain) (modules t_plain) (deps plain.cfg base.cfg))
 (test (name t_stub) (modules t_stub) (libraries stubbed))
 (executable (name cexe) (modules cexe) (foreign_stubs (language c) (names cexe_c)))
 (executable (name lister) (modules lister))
@@ -81,6 +82,13 @@ cat >"$repo/t3/dune" <<'DUNE'
  (deps (glob_files %{project_root}/mid/[!c]*.ml))
  (action (with-stdout-to %{target} (run %{exe:lister.exe}))))
 (rule (alias runtest-neg) (action (diff neg.expected neg.actual)))
+(rule (target cfgread.actual) (deps base.cfg) (action (with-stdout-to %{target} (run %{exe:lister.exe}))))
+(rule (alias runtest-cfgread) (action (diff cfgread.expected cfgread.actual)))
+(rule
+ (target esc.actual)
+ (deps (glob_files "%{project_root}/docs/\\{x\\}.md"))
+ (action (with-stdout-to %{target} (run %{exe:lister.exe}))))
+(rule (alias runtest-esc) (action (diff esc.expected esc.actual)))
 DUNE
 for f in lib/core.ml lib/helper.ml lib/leaf.ml lib/myppx.ml lib/optlib.ml lib/stubbed.ml \
   t3/t_plain.ml t3/t_stub.ml t3/cexe.ml t3/lister.ml mid/mid.ml mid/choice.core.ml mid/choice.none.ml \
@@ -89,6 +97,7 @@ for f in lib/core.ml lib/helper.ml lib/leaf.ml lib/myppx.ml lib/optlib.ml lib/st
   printf 'let () = ()\n' >"$repo/$f"
 done
 for f in t2/gen-v1.expected t2/scenario_x.expected t2/scan.expected t3/neg.expected t3/plain.cfg \
+  t3/cfgread.expected t3/esc.expected cfg/base.cfg docs/{x}.md \
   lib/stubbed_c.c t3/cexe_c.c docs/notes.md; do : >"$repo/$f"; done
 printf '{ }\nrule token = parse eof { () }\n' >"$repo/lib/lx.mll"
 git_q() { git -C "$repo" -c user.name=t -c user.email=t@t -c commit.gpgsign=false "$@"; }
@@ -166,7 +175,7 @@ if harness_leg 'dune-project'; then
   expect 'dune-project reaches every per-test alias beneath it' 0 \
     @t1/runtest-m_one @t1/runtest-t_core @t1/runtest-t_leaf @t1/runtest-ta @t1/runtest-tb \
     @t2/runtest-gen-v1 @t2/runtest-orphan @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen \
-    @t3/runtest-neg @t3/runtest-t_plain @t3/runtest-t_stub
+    @t3/runtest-cfgread @t3/runtest-esc @t3/runtest-neg @t3/runtest-t_plain @t3/runtest-t_stub
 fi
 
 if harness_leg 'opaque action'; then
@@ -182,13 +191,38 @@ if harness_leg 'foreign stubs'; then
   expect 'a C stub reaches the library whose stub archive bundles its object' 0 @t3/runtest-t_stub
   affected --files t3/cexe_c.c
   expect 'a C stub no archive bundles reaches every executable and test stanza of its directory' 0 \
-    @t3/runtest-neg @t3/runtest-t_plain @t3/runtest-t_stub
+    @t3/runtest-cfgread @t3/runtest-esc @t3/runtest-neg @t3/runtest-t_plain @t3/runtest-t_stub
 fi
 
 if harness_leg 'negated glob'; then
   affected --files mid/mid.ml
   expect 'a [!set] glob matches outside its set (the select-choice leg pins the inside)' 0 \
     @t1/runtest-t_core @t3/runtest-neg
+fi
+
+if harness_leg 'escaped glob'; then
+  affected --files 'docs/{x}.md'
+  # dune prints `\{x\}.md` as `{x}.md`: the escapes are gone, so the text is matched literally too.
+  expect 'a glob with escaped characters matches the file it names' 0 @t3/runtest-esc
+fi
+
+if harness_leg 'copied file'; then
+  # cfg/ has no dune file; t3 copies cfg/base.cfg in (copy_files), a rule
+  # reads the copy, and t_plain's (deps) name it.
+  affected --files cfg/base.cfg
+  expect 'a file copied into a directory reaches the rules reading the copy and the actions there' 0 \
+    @t3/runtest-cfgread @t3/runtest-t_plain @t3/runtest-t_stub
+fi
+
+if harness_leg 'batched query'; then
+  # A tiny budget splits `dune rules` into many calls; the answer must not move.
+  affected --files cfg/base.cfg
+  cp "$out" "$TMP/whole"
+  rc=0
+  (cd "$TMP" && OCANNL_TOOL_AFFECTED_ARGS=40 "$repo/tools/affected-tests.sh" --files cfg/base.cfg) >"$out" 2>"$err" || rc=$?
+  if [ "$rc" = 0 ] && [ -s "$out" ] && cmp -s "$TMP/whole" "$out"; then
+    report 0 'dune rules queried in small batches gives the same list'
+  else report 1 'dune rules queried in small batches gives the same list' "exit $rc; $(cat "$out" "$err")"; fi
 fi
 
 if harness_leg 'undescribed stanza'; then
@@ -347,6 +381,9 @@ if harness_leg 'negative controls'; then
   control 'a stub archive is what carries a C stub to its library' \
     '$obj_libs{$o}{$_} = 1 for @libs' '1' \
     --files lib/stubbed_c.c -- @t3/runtest-t_stub
+  control 'following generated inputs is what reaches a copied file' \
+    '$v{$rel} = 1 if !-e $rel' '$v{$rel} = 1 if 0 && !-e $rel' \
+    --files cfg/base.cfg -- @t3/runtest-cfgread @t3/runtest-t_plain @t3/runtest-t_stub
 fi
 
 finish
