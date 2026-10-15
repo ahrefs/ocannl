@@ -35,7 +35,8 @@ done < <(sed -n 's/^\. \([A-Za-z0-9_./-]*\)$/\1/p' "$HERE/test-run.sh")
 [ "$staged" -ge 3 ] || exit 2
 printf '(lang dune 3.20)\n' >"$repo/dune-project"
 cat >"$repo/lib/dune" <<'DUNE'
-(library (name core) (modules core helper))
+(library (name core) (modules core helper lx))
+(ocamllex lx)
 (library (name leaf) (modules leaf))
 (library (name myppx) (kind ppx_rewriter) (modules myppx))
 (library (name optlib) (modules optlib) (optional) (libraries not_installed_anywhere))
@@ -75,6 +76,7 @@ for f in lib/core.ml lib/helper.ml lib/leaf.ml lib/myppx.ml lib/optlib.ml mid/mi
   printf 'let () = ()\n' >"$repo/$f"
 done
 for f in t2/gen-v1.expected t2/scenario_x.expected t2/scan.expected docs/notes.md; do : >"$repo/$f"; done
+printf '{ }\nrule token = parse eof { () }\n' >"$repo/lib/lx.mll"
 git_q() { git -C "$repo" -c user.name=t -c user.email=t@t -c commit.gpgsign=false "$@"; }
 git_q init -q && git_q add -A && git_q commit -qm fixture || exit 2
 
@@ -131,6 +133,27 @@ if harness_leg 'ppx rewriter'; then
     @t1/runtest-m_one @t2/runtest-scan
 fi
 
+if harness_leg 'generated module'; then
+  affected --files lib/lx.mll
+  expect 'an .mll reaches the stanza of the module its rule generates' 0 \
+    @t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-orphan @t2/runtest-scenario_x @t2/slow-gen
+fi
+
+if harness_leg 'golden'; then
+  # The diff reading a golden is the alias's own action, which dune does not
+  # dump; the golden's copy into the build is one of the alias's own targets.
+  affected --files t2/gen-v1.expected
+  expect 'a golden lists the alias diffing it (and its directory'"'"'s unattributed one)' 0 \
+    @t2/runtest-gen-v1 @t2/runtest-orphan
+fi
+
+if harness_leg 'dune-project'; then
+  affected --files dune-project
+  expect 'dune-project reaches every per-test alias beneath it' 0 \
+    @t1/runtest-m_one @t1/runtest-t_core @t1/runtest-t_leaf @t1/runtest-ta @t1/runtest-tb \
+    @t2/runtest-gen-v1 @t2/runtest-orphan @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen
+fi
+
 if harness_leg 'undescribed stanza'; then
   affected --files lib/optlib.ml
   if [ "$rc" = 3 ] && grep -q 'UNMAPPED: lib/optlib.ml' "$err" &&
@@ -177,9 +200,9 @@ if harness_leg 'git forms'; then
     @t1/runtest-t_core @t1/runtest-t_leaf @t1/runtest-ta @t1/runtest-tb
   rm -f "$repo/t1/new_helper.ml" && git_q checkout -q -- lib/core.ml || exit 2
   affected
-  if [ "$rc" = 2 ] && grep -q 'origin/HEAD does not resolve' "$err" && [ ! -s "$out" ]; then
-    report 0 'no revision and no origin/HEAD is refused, naming the fix'
-  else report 1 'no revision and no origin/HEAD is refused, naming the fix' "exit $rc; $(cat "$err")"; fi
+  if [ "$rc" = 2 ] && grep -q 'name the base' "$err" && [ ! -s "$out" ]; then
+    report 0 'no revision is refused: the base is named, never guessed from a remote'
+  else report 1 'no revision is refused: the base is named, never guessed from a remote' "exit $rc; $(cat "$err")"; fi
   affected HEAD HEAD~1
   if [ "$rc" = 2 ] && grep -q 'one revision argument at most' "$err"; then
     report 0 'two revision arguments are refused'
@@ -195,6 +218,8 @@ cat >"$TMP/shim/dune" <<SHIM
 "$REAL_DUNE" "\$@"
 rc=\$?
 if [ "\${1:-}" = show ] && [ "\${2:-}" = "\${SHIM_EXTRA_FOR:-}" ]; then echo 'Warning: something new' >&2; fi
+# Mid-run, what a run starting now would find: the worktree lock's state.
+if [ "\${1:-}" = show ] && [ -n "\${SHIM_LOCK_PROBE:-}" ]; then "$repo/tools/test-run.sh" lock-status >>"\$SHIM_LOCK_PROBE" 2>&1; fi
 exit \$rc
 SHIM
 chmod +x "$TMP/shim/dune"
@@ -214,6 +239,12 @@ if harness_leg 'runner entry'; then
   (cd "$TMP" && "$repo/tools/test-run.sh" affected --files lib/helper.ml) >"$out" 2>"$err" || rc=$?
   # shellcheck disable=SC2086
   expect 'tools/test-run.sh affected runs the helper at the repository root' 0 $reached_by_core
+  rc=0
+  (cd "$TMP" && SHIM_LOCK_PROBE=$TMP/lock-probe PATH="$TMP/shim:$PATH" "$repo/tools/test-run.sh" affected --files lib/helper.ml) \
+    >"$out" 2>"$err" || rc=$?
+  if [ "$rc" = 0 ] && [ "$(sort -u "$TMP/lock-probe")" = held ]; then
+    report 0 'the worktree lock is held while affected'"'"'s dune runs, so a run starting then refuses'
+  else report 1 'the worktree lock is held while affected'"'"'s dune runs, so a run starting then refuses' "exit $rc; probe: $(cat "$TMP/lock-probe" 2>&1)"; fi
   lock=$("$repo/tools/test-run.sh" paths lock) || exit 2
   mkdir -p "$(dirname "$lock")" || exit 2
   # Hold the worktree's run lock as a run would, until the fifo is written.
@@ -270,6 +301,9 @@ if harness_leg 'negative controls'; then
   control 'external-lib-deps'"'"' edges are what carry a ppx rewriter to a described library' \
     'push @edges, [$i, field($v, "internal_deps")];' 'push @edges, [$i, field($v, "internal_deps")] if $kind eq "tests";' \
     --files lib/myppx.ml -- @t1/runtest-m_one @t2/runtest-scan
+  control 'a generated module file is what carries an .mll to its stanza' \
+    'push @{$generated{$rel}}, $i unless -e $rel;' '' \
+    --files lib/lx.mll -- @t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-orphan @t2/runtest-scenario_x @t2/slow-gen
 fi
 
 finish

@@ -43,7 +43,7 @@
 #   tools/test-run.sh lock-status [RUN|last]          # idle/held; exits 0/3 (2 error)
 #   tools/test-run.sh idle                             # 0 idle, 3 locked, 2 unreadable
 #                                                     # snapshot, not a reservation
-#   tools/test-run.sh affected [REV|REV..REV|--files PATH...]
+#   tools/test-run.sh affected REV|REV..REV|--files PATH...
 #                                                      # the per-test aliases a change reaches;
 #                                                      # runs none (tools/affected-tests.sh)
 #
@@ -2306,14 +2306,21 @@ shift
 case $sub in
   affected)
     # Read-only, but it asks dune about this worktree, and a dune started
-    # beside a run's dune contends for `_build`: refuse while one is active.
+    # beside a run's dune contends for `_build`. So it takes the worktree's run
+    # lock, as a run does, and holds it on fd 9 through the helper and every
+    # dune it starts: a run refuses meanwhile, and this refuses during a run.
+    # (No owner pointer is published: this is not a run to point at.)
     query_state_for ""
-    probe_locks "$LOCK" "$PWD/.test-run.lock"
+    probe_locks "$PWD/.test-run.lock"
     case $? in
       0) ;;
-      3) die "a run is active in this worktree; affected asks dune too, so wait for it (status last)" ;;
+      3) die "a run of the previous version is active in this worktree; affected asks dune too, so wait for it" ;;
       *) die "cannot inspect worktree lock" ;;
     esac
+    mkdir -p "$RUNS" || die "cannot create $RUNS"
+    exec 9>>"$LOCK" || die "cannot open lock file $LOCK"
+    perl -e 'use Fcntl ":flock"; exit(flock(STDIN, LOCK_EX | LOCK_NB) ? 0 : 3)' <&9 ||
+      die "a run is active in this worktree; affected asks dune too, so wait for it (status last)"
     select_dune
     exec bash tools/affected-tests.sh "$@"
     ;;

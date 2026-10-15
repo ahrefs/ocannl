@@ -5,13 +5,13 @@
 # and then runs this script. It prints aliases and runs none of them.
 #
 # Usage:
-#   tools/test-run.sh affected [REV | REV..REV | REV...REV] [-- PATHSPEC...]
+#   tools/test-run.sh affected REV | REV..REV | REV...REV [-- PATHSPEC...]
 #   tools/test-run.sh affected --files PATH...
 #
 # The changed paths come from `git diff --name-only` with the given revision
 # argument, in git's own forms: one REV compares it with the working tree, so
 # uncommitted edits count, and files git does not track yet are added to that
-# form. With no revision the base is the merge-base of HEAD and `origin/HEAD`.
+# form. There is no default base: remote names are not the contract here.
 # `--files` names repository-relative paths directly, without git.
 #
 # stdout: one alias per line, `@DIR/FAMILY-NAME[-VARIANT]`, sorted, ready for
@@ -31,8 +31,9 @@
 #     modules stay unknown). Its edges are added to the first answer's.
 #   - `dune show aliases DIR...` and `dune show targets DIR...`: the aliases
 #     and the targets of every directory holding a `dune` file.
-#   - `dune rules TARGET...`, for each per-test alias's own targets (below):
-#     the executables and the files, or globs of files, those rules read.
+#   - `dune rules TARGET...`, for each per-test alias's own targets (below)
+#     and each generated module file: the executables those rules run and the
+#     files, or globs of files, they read.
 #
 # Boundary, as an allowlist. Whatever it does not cover is reported on stderr,
 # never silently dropped:
@@ -53,16 +54,22 @@
 #     `foo.cudajit.ml` are `Foo`); failing that, in a directory with `tests`
 #     stanzas, the one named after it or else every one there, since dune does
 #     not describe their modules; failing that, the stanzas of its directory
-#     this build does not compile, and the path is UNMAPPED. A changed `dune`
-#     file reaches every stanza and every per-test alias of its directory.
-#     Reach then spreads to each stanza requiring a reached library, to a
-#     fixpoint.
+#     this build does not compile, and the path is UNMAPPED. A module file
+#     with no source of its name is generated: any changed path its rule
+#     reads (a `.mll`, a `.mly`, a `(select)` choice) reaches its stanza, and
+#     so does the executable the rule runs. A changed `dune` file reaches every
+#     stanza and every per-test alias of its directory, a `dune-project` or
+#     `dune-workspace` those of every directory beneath it. Reach then spreads
+#     to each stanza requiring a reached library, to a fixpoint.
 #   - An alias is printed when its directory's `dune` file changed, when an
 #     owner is reached, or when a rule of its own targets reads a changed path
 #     (a file, or a glob over source files): the repository scans are found
-#     this way. A changed path reaching nothing else is listed as unread.
-#   - Not seen: an alias's action itself (dune does not dump it) and anything
-#     its own targets' rules reach only through another generated file.
+#     this way, and so is a golden, whose copy into the build is one of the
+#     own targets of the alias that diffs it. A changed path reaching nothing
+#     else is listed as unread.
+#   - Not seen: an alias's action itself (dune does not dump it), so a golden
+#     not named after its alias is found only through the fallbacks above; and
+#     anything its own targets' rules reach only through another generated file.
 #
 # Exit: 0 every changed `.ml`/`.mli` was mapped; 3 the list is printed, but a
 # changed `.ml`/`.mli` is UNMAPPED (see stderr); 2 usage, git or dune failure,
@@ -78,7 +85,7 @@ command -v perl >/dev/null 2>&1 || die "perl not found"
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/affected.XXXXXX") || die "cannot create a temporary directory"
 trap 'rm -rf "${tmp:?}"' EXIT
 
-usage="usage: affected [REV | REV..REV | REV...REV] [-- PATHSPEC...] | affected --files PATH..."
+usage="usage: affected REV | REV..REV | REV...REV [-- PATHSPEC...] | affected --files PATH..."
 mode=git
 revs=()
 paths=()
@@ -104,12 +111,10 @@ if [ "$mode" = files ]; then
   printf '%s\n' "${paths[@]}" >"$tmp/changed"
 else
   [ "$in_git" = 1 ] || die "not a git checkout; use --files"
-  if [ ${#revs[@]} -eq 0 ]; then
-    git rev-parse --verify -q origin/HEAD >/dev/null ||
-      die "origin/HEAD does not resolve; name the base (affected REV), or set it: git remote set-head origin -a"
-    base=$(git merge-base HEAD origin/HEAD) || die "no merge-base of HEAD and origin/HEAD"
-    revs=("$base")
-  fi
+  # No default base: which remote carries the base branch is the checkout's
+  # business (AGENTS.md: remote names are not the contract), so it is named.
+  [ ${#revs[@]} -eq 1 ] ||
+    die "name the base: affected REV (the branch's base, e.g. \$(git merge-base HEAD <base-branch>)), REV..REV, or --files PATH... ($usage)"
   case ${revs[0]} in
     *..*) ;;
     *) git rev-parse --verify -q "${revs[0]}^{commit}" >/dev/null || die "not a revision: ${revs[0]}" ;;
@@ -195,6 +200,7 @@ my @st;          # { kind, dir, names, units => {NAME => 1}, to => [stanza index
 my %by_modkey;   # "DIR\0Module" -> [stanza indices]
 my %lib_by_uid;  # local library uid -> stanza index
 my %lib_by_name; # public or local library name -> stanza index
+my %generated;   # generated module file -> [stanza indices owning it]
 my @requires;
 for my $e (@{$ws->[0]}) {
   my ($kind, $v) = pair($e, "dune describe workspace");
@@ -229,7 +235,11 @@ for my $e (@{$ws->[0]}) {
     $st[$i]{units}{lcfirst $name} = 1;
     for my $key ("impl", "intf") {
       for my $p (items(field($m, $key))) {
-        my ($d) = dir_of(atom($p, $key) =~ s{^\Q$ctx\E/}{}r);
+        my $rel = atom($p, $key) =~ s{^\Q$ctx\E/}{}r;
+        my ($d) = dir_of($rel);
+        # A module file with no source of that name is generated (ocamllex,
+        # menhir, a (select) copy, a rule's output): its rule says from what.
+        push @{$generated{$rel}}, $i unless -e $rel;
         my $k = "$d\0$name";
         push @{$by_modkey{$k}}, $i unless grep { $_ == $i } @{$by_modkey{$k} // []};
       }
@@ -322,7 +332,7 @@ for my $d (sort keys %$aliases) {
 }
 
 # The rules of those targets: what they run and what they read.
-my @own_targets = sort { $a cmp $b } keys %{{ map { $_ => 1 } map { @{$_->{own}} } @al }};
+my @own_targets = sort { $a cmp $b } keys %{{ map { $_ => 1 } (map { @{$_->{own}} } @al), keys %generated }};
 my (%runs, %reads, %globs);   # target -> {stanza index}, {path}, [[dir, regex]]
 if (@own_targets) {
   my $pid = open(my $fh, "-|") // fail("cannot fork for dune rules");
@@ -392,20 +402,38 @@ if (@own_targets) {
   exists $runs{$_} or fail("dune rules printed no rule for $_") for @own_targets;
 }
 
+# A generated module's stanza is reached through what its rule reads (a
+# `.mll`, a `.mly`, a (select) choice) and through the executable it runs.
+for my $g (keys %generated) {
+  for my $o (@{$generated{$g}}) { push @{$st[$o]{to}}, keys %{$runs{$g}} }
+}
+
 # Changed paths -> stanzas, and the aliases whose own targets read them.
 my (%hit, %dune_dirs, %read_by, @unmapped, @unread);
 my @changed = grep { $_ ne "" } map { s{^\./}{}r } split /\n/, slurp("$tmp/changed");
 sub label { my $s = $st[$_[0]]; "$s->{kind} @{$s->{names}} ($s->{dir})" }
+sub reads { my ($t, $p, $d, $b) = @_; $reads{$t}{$p} || grep { $_->[0] eq $d && $_->[1]->($b) } @{$globs{$t}} }
+sub under { my ($x, $root) = @_; $root eq "." || $x eq $root || index($x, "$root/") == 0 }
 for my $p (@changed) {
   my ($d, $b) = dir_of($p);
   for my $a (@al) {
-    for my $t (@{$a->{own}}) {
-      if ($reads{$t}{$p} || grep { $_->[0] eq $d && $_->[1]->($b) } @{$globs{$t}}) { $read_by{$p}{$a->{name}} = 1; last }
-    }
+    for my $t (@{$a->{own}}) { if (reads($t, $p, $d, $b)) { $read_by{$p}{$a->{name}} = 1; last } }
   }
   my $n_read = keys %{$read_by{$p} // {}};
   my (@ix, @parts, $unmapped);
-  if ($b eq "dune") {
+  my @gen = grep { reads($_, $p, $d, $b) } sort keys %generated;
+  if (@gen) {
+    my %seen_g;
+    my @g = grep { !$seen_g{$_}++ } map { @{$generated{$_}} } @gen;
+    $hit{$_} = 1 for @g;
+    push @parts, "the rule generating " . join(", ", @gen) . " reads it: " . join(", ", map { label($_) } @g);
+  }
+  if ($b eq "dune-project" || $b eq "dune-workspace") {
+    # The project's language and extensions: every directory beneath it.
+    $dune_dirs{$_} = 1 for grep { under($_, $d) } keys %$aliases;
+    @ix = grep { under($st[$_]{dir}, $d) } 0 .. $#st;
+    push @parts, "every per-test alias and all " . scalar(@ix) . " stanza(s) under " . ($d eq "." ? "the root" : $d);
+  } elsif ($b eq "dune") {
     $dune_dirs{$d} = 1;
     @ix = grep { $st[$_]{dir} eq $d } 0 .. $#st;
     push @parts, "every per-test alias of $d, and its " . scalar(@ix) . " stanza(s)";
@@ -419,7 +447,7 @@ for my $p (@changed) {
       @ix = @named ? @named : @tests;
       $how = @named ? "test module $mod of" : "a module of a tests stanza here (dune does not describe theirs), so all of";
     }
-    unless (@ix) {
+    unless (@ix || @gen) {
       # No stanza of this build owns it. One that dune lists but does not
       # compile here (an optional backend) may: those are reached, unknown
       # modules and all, and the path stays UNMAPPED either way.
