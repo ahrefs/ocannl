@@ -87,7 +87,7 @@ cat >"$repo/t3/dune" <<'DUNE'
 (rule (alias runtest-cfgread) (action (diff cfgread.expected cfgread.actual)))
 (rule
  (target esc.actual)
- (deps (glob_files "%{project_root}/docs/\\{x\\}.md"))
+ (deps (glob_files "%{project_root}/docs/\\{x\\}*.md"))
  (action (with-stdout-to %{target} (run %{exe:lister.exe}))))
 (rule (alias runtest-esc) (action (diff esc.expected esc.actual)))
 (rule
@@ -131,7 +131,7 @@ for f in lib/core.ml lib/helper.ml lib/leaf.ml lib/myppx.ml lib/optlib.ml lib/st
   printf 'let () = ()\n' >"$repo/$f"
 done
 for f in t2/gen-v1.expected t2/scenario_x.expected t2/scan.expected t3/neg.expected t3/plain.cfg \
-  t3/cfgread.expected t3/esc.expected t3/uses.expected cfg/base.cfg docs/{x}.md \
+  t3/cfgread.expected t3/esc.expected t3/uses.expected cfg/base.cfg docs/{x}one.md \
   lib/stubbed_c.c t3/cexe_c.c docs/notes.md; do : >"$repo/$f"; done
 printf '{ }\nrule token = parse eof { () }\n' >"$repo/lib/lx.mll"
 git_q() { git -C "$repo" -c user.name=t -c user.email=t@t -c commit.gpgsign=false "$@"; }
@@ -258,8 +258,8 @@ if harness_leg 'negated glob'; then
 fi
 
 if harness_leg 'escaped glob'; then
-  affected --files 'docs/{x}.md'
-  # dune prints `\{x\}.md` as `{x}.md`: the escapes are gone, so the text is matched literally too.
+  affected --files 'docs/{x}one.md'
+  # dune prints `\{x\}*.md` as `{x}*.md`: the escapes are gone, so braces are also read literally.
   # shellcheck disable=SC2086
   expect 'a glob with escaped characters matches the file it names' 0 @t3/runtest-esc $opaque_all
 fi
@@ -421,15 +421,25 @@ if harness_leg 'runner entry'; then
   else report 1 'the worktree lock is held while affected'"'"'s dune runs, so a run starting then refuses' "exit $rc; probe: $(cat "$TMP/lock-probe" 2>&1)"; fi
   lock=$("$repo/tools/test-run.sh" paths lock) || exit 2
   mkdir -p "$(dirname "$lock")" || exit 2
-  # Hold the worktree's run lock as a run would, until the fifo is written.
-  mkfifo "$TMP/release" || exit 2
-  perl -e 'use Fcntl ":flock"; open my $fh, ">>", $ARGV[0] or exit 1; flock($fh, LOCK_EX) or exit 1;
-    print "held\n"; $| = 1; open my $r, "<", $ARGV[1]; <$r>;' "$lock" "$TMP/release" >"$TMP/holder" &
+  # Hold the worktree's run lock as a run would, until the release fifo is
+  # written. The holder answers on the ready fifo once it holds the lock (or
+  # failed to), and the read blocks until it does: no timed polling.
+  mkfifo "$TMP/release" "$TMP/ready" || exit 2
+  perl -e 'use Fcntl ":flock";
+    my $fh; my $ok = open($fh, ">>", $ARGV[0]) && flock($fh, LOCK_EX);
+    open my $ready, ">", $ARGV[1] or exit 1; print $ready ($ok ? "held\n" : "failed\n"); close $ready;
+    exit 1 unless $ok;
+    open my $r, "<", $ARGV[2]; <$r>;' "$lock" "$TMP/ready" "$TMP/release" &
   holder=$!
-  for _ in 1 2 3 4 5 6 7 8 9 10; do grep -q held "$TMP/holder" 2>/dev/null && break; sleep 0.2; done
+  state=
+  read -r state <"$TMP/ready" || state=
   rc=0
-  (cd "$TMP" && "$repo/tools/test-run.sh" affected --files lib/helper.ml) >"$out" 2>"$err" || rc=$?
-  echo >"$TMP/release"
+  if [ "$state" = held ]; then
+    (cd "$TMP" && "$repo/tools/test-run.sh" affected --files lib/helper.ml) >"$out" 2>"$err" || rc=$?
+    echo >"$TMP/release"
+  else
+    rc=holder-$state
+  fi
   wait "$holder"
   if [ "$rc" = 2 ] && [ ! -s "$out" ] && grep -q 'a run is active in this worktree' "$err"; then
     report 0 'tools/test-run.sh affected refuses while a run holds the worktree'

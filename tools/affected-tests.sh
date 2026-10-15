@@ -42,7 +42,8 @@
 #     and executables are not followed (an executable is reached through its
 #     stanza). Queries are batched to stay within any command-line limit.
 #     `dune rules` prints a glob with its escapes dropped, so a glob also
-#     matches its own text read literally. A compiled artifact a rule reads
+#     matches with its braces, brackets and commas read literally, and as its
+#     own text. A compiled artifact a rule reads
 #     (a stanza's `.NAME.objs` files, an installed library's) makes that
 #     stanza one of the rule's owners, like an executable the rule runs; an
 #     alias a rule needs (`(deps (alias ...))`) is recorded as well.
@@ -408,9 +409,16 @@ sub glob_regex {   # dune's glob syntax: * ? [set] [!set] {a,b} \x; anything els
 }
 sub predicate {   # a glob, or (and (P...)), (or (P...)), (not P): a matcher over file names
   my ($p) = @_;
-  # `dune rules` prints a glob with its escapes dropped (`\{x\}.md` as `{x}.md`),
-  # so a printed glob also matches its own text, read literally.
-  if (!ref $p) { my $re = glob_regex($p); return sub { $_[0] eq $p || $_[0] =~ $re } }
+  # `dune rules` prints a glob with its escapes dropped (`\{x\}*.md` as
+  # `{x}*.md`), so which of its metacharacters were literal is lost. A printed
+  # glob matches as a glob; with its braces, brackets and commas literal and
+  # its wildcards live; or as its own text: an escaped wildcard is covered by
+  # the live one, an escaped brace or bracket by the second reading.
+  if (!ref $p) {
+    my $re = glob_regex($p);
+    my $plain = glob_regex($p =~ s/([{}\[\],])/\\$1/gr);
+    return sub { $_[0] eq $p || $_[0] =~ $re || $_[0] =~ $plain };
+  }
   my ($op, $arg) = pair($p, "a glob predicate");
   if ($op eq "not") { my $m = predicate($arg); return sub { !$m->($_[0]) } }
   $op =~ /^(?:and|or)$/ && ref $arg or fail("a glob predicate \"$op\" is outside this helper's boundary");
