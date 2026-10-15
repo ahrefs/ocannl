@@ -12,10 +12,10 @@
    Each search compiles every single it times, and those compiles are the test's cost: unpruned, the
    chain offers 21 singles per segment, and the test took about 430 s on mac-studio. So every search
    runs on [Fissioned_chain]'s small menu (the roofline pre-filter keeping a fifth of each segment's
-   sketches, [Train.tune_placements]' arms included): five singles per segment, which is all the
-   playoff's claims need. Which five is the model's choice and no claim depends on it; that each
-   segment still offers three or more, without which the width claims could not fail, is claimed
-   ([menu]).
+   sketches, [Train.tune_placements]' arms included): eight and seven singles per segment at the
+   vector width the small menu pins, which is all the playoff's claims need. Which ones is the
+   model's choice and no claim depends on it; that each segment still offers three or more, without
+   which the width claims could not fail, is claimed ([menu]).
 
    In [ties] every single measures the same, so each segment has near-tie contenders, and each later
    composite is scripted faster than the one before: every admitted playoff window swaps, so each

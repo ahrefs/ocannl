@@ -8376,17 +8376,18 @@ let workgroup_memory_bytes ~(capabilities : Backend_intf.codegen_capabilities)
 (* gh-ocannl-1313: the per-work-item scratch the kernel declares — the function-scope arrays
    [C_syntax]'s [local_decls] emits, one per [Local]-settling node of the kernel's traced store,
    sized [num_elems] at its storage precision — less the workgroup-shared tiles, which it declares
-   once per workgroup instead. Read with the pure placement peek, so asking settles nothing. An
-   upper estimate of the arrays: on the CPU backends a pool-parallel [Grid] loop declares its
-   privatized locals per chunk instead, and on Metal a rendered simdgroup fragment suppresses its
-   array, both rendering decisions taken after this point. A device compiler may still drop an array
-   it can prove dead; the GPT-2 step that motivated this declared 360452 bytes against hiprtc's
-   measured frame of 360544. *)
+   once per workgroup instead. Read with the pure placement peek and {!Tn.size_in_bytes_peek}, so
+   asking settles nothing and forces no node's [size_in_bytes] (the forcing would show in its
+   [Tn.header] on HIP alone, the only backend running this check). An upper estimate of the arrays:
+   on the CPU backends a pool-parallel [Grid] loop declares its privatized locals per chunk instead,
+   and on Metal a rendered simdgroup fragment suppresses its array, both rendering decisions taken
+   after this point. A device compiler may still drop an array it can prove dead; the GPT-2 step
+   that motivated this declared 360452 bytes against hiprtc's measured frame of 360544. *)
 let thread_private_bytes (opt : Low_level.optimized) : int =
   let plc = opt.optimize_ctx.placements in
   Hashtbl.fold opt.traced_store ~init:0 ~f:(fun ~key:tn ~data:_ acc ->
       if Tn.Placements.is_local_peek plc tn && not (Set.mem opt.workgroup_shared tn) then
-        acc + Lazy.force tn.Tn.size_in_bytes
+        acc + Tn.size_in_bytes_peek tn
       else acc)
 
 let check_hardware_limits_classified ~name ~(limits : Backend_intf.hardware_limits) ~capabilities

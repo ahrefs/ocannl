@@ -18,7 +18,10 @@
    estimate, node for node in count. A peek that drifted from the forcing family -- counting an
    observable [Never_virtual] node, or one over the stack threshold, both of which codegen puts
    [On_device] -- fails here rather than as a false refusal on a device. - Asking settles nothing:
-   the open placements are still open after the estimate. *)
+   the open placements are still open after the estimate, and no node's [size_in_bytes] is forced by
+   it. A forced size shows in [Tn.header] ([mem in bytes: 64] for [<not-in-yet>]), and HIP is the
+   one backend running this check, so forcing it turned the backend-uniform
+   [test/einsum/moons_demo_variant] golden red on HIP alone. *)
 
 open Base
 open Ll_test
@@ -126,6 +129,11 @@ let () =
   let plc = opt.LL.optimize_ctx.LL.placements in
   let size tn = Lazy.force tn.Tn.size_in_bytes in
   let estimate = Sched.thread_private_bytes opt in
+  (* Read before anything below forces a size through [size]: each node with whether its size was
+     forced by then. *)
+  let sizes_after_estimate =
+    List.map [ declared; small; big; observed ] ~f:(fun tn -> Lazy.is_val tn.Tn.size_in_bytes)
+  in
 
   (* The premises: which scratch node settles where. Without them the estimate below could match for
      the wrong reason, e.g. every node silently virtualized. *)
@@ -144,6 +152,8 @@ let () =
     (estimate = size declared + size small);
   p_all "estimate: asking settles nothing" [ small; big; observed ]
     ~f:(Tn.Placements.mode_is_unspecified plc);
+  p_none "estimate: asking forces no node's size_in_bytes, which Tn.header would print"
+    sizes_after_estimate ~f:Fn.id;
   p "estimate: a workgroup-shared tile is declared per workgroup, not counted per work-item"
     (Sched.thread_private_bytes
        { opt with LL.workgroup_shared = Set.singleton (module Tn) declared }

@@ -40,12 +40,12 @@
    what was fast.
 
    On CPU backends the searches run on [Fissioned_chain]'s small menu (the roofline pre-filter
-   keeping a fifth of each segment's sketches; ten singles per key instead of 38 on cc). The claims
-   ask which segments a single sketched, never which parameters it carries, so they hold for any
-   single the model keeps; they need a single on each key, and [Fissioned_chain.menu_claim] fails
-   loudly if the pruned [agree] search ever keys other than two segments or offers fewer than three
-   singles on one. GPU backends keep the whole menu: their sketch families are their own, and the
-   [differ] leg they run keys three segments. *)
+   keeping a fifth of each segment's sketches; fourteen singles per key instead of 38 on cc, at the
+   vector width the small menu pins). The claims ask which segments a single sketched, never which
+   parameters it carries, so they hold for any single the model keeps; they need a single on each
+   key, and [Fissioned_chain.menu_claim] fails loudly if the pruned [agree] search ever keys other
+   than two segments or offers fewer than three singles on one. GPU backends keep the whole menu:
+   their sketch families are their own, and the [differ] leg they run keys three segments. *)
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules
