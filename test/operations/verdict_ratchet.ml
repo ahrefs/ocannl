@@ -3374,6 +3374,24 @@ let () = p "rows: %d\n" n|ocaml},
     ( "accepts a computed label, which Verdict prints on one line",
       {ocaml|let () = Verdict.p (leg ^ "\nholds") ok|ocaml},
       [] );
+    ( "resolves a claim qualified through a module alias of Verdict",
+      {ocaml|module V = Verdict
+let () = V.p "first\nsecond" ok|ocaml},
+      [ "first\nsecond" ] );
+    ( "resolves a claim name a local open of Verdict.Claims brings in",
+      {ocaml|let () = Verdict.Claims.(pass_fail "first\nsecond" ok)|ocaml},
+      [ "first\nsecond" ] );
+    ( "does not read a module that took over the name Verdict as Verdict",
+      {ocaml|module Verdict = Local_printer
+let () = Verdict.p "rows: %d\n" n|ocaml},
+      [] );
+    ( "does not read a path that only passes through a module named Verdict",
+      {ocaml|let () = Other.Verdict.p "rows: %d\n" n|ocaml},
+      [] );
+    ( "does not read an unqualified claim name no open of Verdict brings in",
+      {ocaml|open Printer
+let () = p "rows: %d\n" n|ocaml},
+      [] );
   ]
 
 let run_line_break_controls () =

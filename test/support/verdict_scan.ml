@@ -334,13 +334,22 @@ type dialect_census = {
 let pass_fail_callees = [ "pass_fail"; "pass_fail_all2" ]
 let skipped_callees = [ "skipped" ]
 
+(* What an [open] of a module denoting [Verdict] binds each claim name to: an identity no [let] and
+   no local can carry ([let]s count up from 1, locals down from -1). *)
+let opened_from_verdict = Int.min_value
+
 (* One application whose callee is a path ending in a name of [callees], with a positional argument:
    its last path component, whether that callee is [Verdict]'s (below), and the site its first
    positional argument -- the label -- keys. Shared by {!dialect_census} and {!line_break_census},
-   so both key a label one way. The callee is [Verdict]'s when it is qualified through a [Verdict]
-   path component ([Verdict.p], [Verdict.Claims.p]), or unqualified and bound nowhere in the source,
-   which is how an [open Verdict.Claims] brings it in; a name the source binds itself ([let p =
-   Stdio.printf], [let skipped = Verdict.skipped ~backend]) is not. *)
+   so both key a label one way.
+
+   Whether the callee is [Verdict]'s is resolved through {!Lexical_scope}, never by spelling. A
+   qualified callee is when its module path denotes [Verdict] in scope: [Verdict] unless a [module
+   Verdict = ...] took the name over, an alias of it ([module V = Verdict]), or a submodule of
+   either ([Verdict.Claims]); [Other.Verdict] is not. An unqualified one is when the name it reaches
+   was brought in by an [open] (or [include]) of such a module, as [open Verdict.Claims] brings the
+   claim names in; a name the source binds itself ([let p = Stdio.printf], [let skipped =
+   Verdict.skipped ~backend]), or one no modelled open brings in, is not. *)
 let claim_calls ~callees content =
   let ast = Read.structure_of content in
   let key_of env argument =
@@ -357,7 +366,7 @@ let claim_calls ~callees content =
             let references = ref [] in
             let reader =
               object
-                inherit [string option * int, unit] Lexical_scope.scoped
+                inherit [string option * int, bool] Lexical_scope.scoped
                 method local = (None, 0)
                 method module_path _ _ = None
                 method! attribute _ attr = attr
@@ -384,14 +393,32 @@ let claim_calls ~callees content =
   let calls = ref [] and item = ref 0 in
   let iterator =
     object (self)
-      inherit [string option * int, unit] Lexical_scope.scoped as super
+      inherit [string option * int, bool] Lexical_scope.scoped as super
       val mutable next_binding = 0
 
       method local =
         next_binding <- next_binding - 1;
         (None, next_binding)
 
-      method module_path _ _ = None
+      (* A module path denotes [true] when its head is [Verdict] with no binding of that name in
+         scope, or a module name bound to something denoting [Verdict]; a name a binding the scan
+         cannot see into took over ({!shadowed}) denotes [false]. *)
+      method module_path env path =
+        let head = Lexical_scope.head path in
+        match Map.find env.Lexical_scope.modules head with
+        | Some denotes -> Some denotes
+        | None -> Some (String.equal head "Verdict")
+
+      method! shadowed = Some false
+
+      method! opened ~top:_ ~include_:_ env denotes =
+        if Option.value denotes ~default:false then
+          Lexical_scope.push_frame env
+            (Map.of_alist_reduce
+               (module String)
+               (List.map callees ~f:(fun name -> (name, (None, opened_from_verdict))))
+               ~f:(fun first _ -> first))
+        else env
 
       method! let_denotes binding =
         match Read.pattern_name binding.pvb_pat with
@@ -418,14 +445,18 @@ let claim_calls ~callees content =
                 | Ppxlib.Asttypes.Nolabel, argument -> Some argument
                 | _ -> None)
             in
-            match (Read.longident_of callee, label) with
-            | Some path, Some label ->
+            match (callee.pexp_desc, Read.longident_of callee, label) with
+            | Pexp_ident { txt = ident; _ }, Some path, Some label ->
                 let name = List.last_exn path in
                 if List.mem callees name ~equal:String.equal then
                   let verdicts =
-                    match List.drop_last_exn path with
-                    | [] -> Option.is_none (Lexical_scope.lookup env name)
-                    | qualifiers -> List.mem qualifiers "Verdict" ~equal:String.equal
+                    match ident with
+                    | Ppxlib.Longident.Ldot (prefix, _) ->
+                        Option.value (self#module_path env prefix) ~default:false
+                    | _ -> (
+                        match Lexical_scope.lookup env name with
+                        | Some (None, identity) -> identity = opened_from_verdict
+                        | Some (Some _, _) | None -> false)
                   in
                   let site =
                     {
@@ -487,7 +518,8 @@ let dialect_census content =
 
     What it cannot see: a label computed from an expression (the sanitizer's case, by design), a
     claim reached through a wrapper the source binds ([let skipped = Verdict.skipped ~backend]), and
-    one qualified through an alias of [Verdict]. *)
+    an unqualified claim name brought in by an [open] this scan does not model (a module that
+    re-exports [Verdict.Claims] under another name). *)
 
 (** The [Verdict.Claims] members whose first positional argument is a claim label (or the format
     rendering one): every member but [fail], whose argument is a multi-line message. *)

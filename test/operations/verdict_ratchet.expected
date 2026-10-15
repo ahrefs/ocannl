@@ -495,6 +495,11 @@ resolves a label binding to the literal whose line break it carries: true
 accepts a multi-line failure message, which fail prefixes line by line: true
 does not read a claim name the source binds itself as Verdict's: true
 accepts a computed label, which Verdict prints on one line: true
+resolves a claim qualified through a module alias of Verdict: true
+resolves a claim name a local open of Verdict.Claims brings in: true
+does not read a module that took over the name Verdict as Verdict: true
+does not read a path that only passes through a module named Verdict: true
+does not read an unqualified claim name no open of Verdict brings in: true
 refuses a planted label literal carrying a line break, naming the one-line remedy: true
 refuses a gate that tests its own population for emptiness: true
 refuses a gate read off the collection the population is mapped from: true
