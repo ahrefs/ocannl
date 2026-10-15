@@ -8,9 +8,11 @@ regressed, and every consumer other than Python -- jq, pandas, the next session'
 it or reads it differently. `loads` refuses it too, so that a Python reader cannot accept a
 non-finite number that no other reader would.
 
-Every reader of a runner's result or checkpoint line goes through `loads`. JSON this tooling
-writes and reads back itself (preflight records, matrices, results.jsonl, fixture headers, workload
-specs) has its own writers, which pass `allow_nan=False`, and is out of scope.
+Every reader of a runner's result or checkpoint line goes through `loads`, the inline Python of the
+shell drivers included (they put this directory on sys.path from STRICT_JSON_DIR). JSON this
+tooling writes and reads back itself (preflight records, matrices, results.jsonl, fixture headers,
+workload specs) is out of scope; test_orchestrate's ResultLineReaderInventoryTest holds each such
+`json.loads` call with its reason and fails on any other.
 """
 import json
 import math

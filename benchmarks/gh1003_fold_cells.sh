@@ -246,30 +246,42 @@ for step in "$@"; do
         echo "gh1003: training fixtures missing or not the m4-max records"; failed=1
       fi ;;
     summary)
-      python3 - "$out" "$treatments $train_treatments" >"$out/summary.md" <<'PY' || failed=1
+      STRICT_JSON_DIR="$root/benchmarks" \
+        python3 - "$out" "$treatments $train_treatments" >"$out/summary.md" <<'PY' || failed=1
 import json, os, re, statistics, sys
+sys.path.insert(0, os.environ["STRICT_JSON_DIR"])
+import strict_json  # a result line spelling NaN, Infinity or 1e999 is no measurement
 out, treatments = sys.argv[1], sys.argv[2].split()
 cells = {}
 missing = []
+unreadable = []
 for name in sorted(os.listdir(out)):
     # The dry cells are a smoke of the matrix, never a repeat: only the numbered passes enter.
     m = re.fullmatch(r"(cc|metal)-(gpt2_mini\w*)-(composed|two-pass(?:-bwd)?|fold-\d+(?:-bwd)?)-(r\d+)\.out", name)
     if not m:
         continue
-    rec = None
+    rec, error = None, None
     for line in open(os.path.join(out, name)):
         line = line.strip()
         if line.startswith("{") and '"step_ms"' in line:
-            rec = json.loads(line)
+            try:
+                rec, error = strict_json.loads(line), None
+            except ValueError as e:
+                rec, error = None, e
+    if error is not None:
+        unreadable.append((name, error))
+        continue
     if rec is None:
         missing.append(name)
         continue
     cells.setdefault(m.group(1, 2, 3), []).append((m.group(4), rec))
 # A summary is only as complete as its cells: a numbered cell without a result line, or no
 # numbered cell at all, fails the step (the table is still printed for what exists).
-incomplete = bool(missing) or not cells
+incomplete = bool(missing) or bool(unreadable) or not cells
 for name in missing:
     print("MISSING RESULT: %s has no result line" % name)
+for name, error in unreadable:
+    print("UNREADABLE RESULT: %s: its result line is not strict JSON (%s)" % (name, error))
 if not cells:
     print("NO MEASUREMENT: no numbered cell produced a result line")
 print("| backend | fixture | treatment | p50 per repeat (ms) | median p50 | vs composed | vs two-pass | p10..p90 spread | shipped mma | loss vs composed |")

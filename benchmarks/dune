@@ -7,9 +7,10 @@
  ; the test reads whatever copy happens to be in _build/default/benchmarks, stale or absent
  ; depending on what ran before (the gh-ocannl-586/597 hazard, in Python). Today the test imports
  ; orchestrate, strict_json, gh675_cells, gh998_cells, gh1002_cells, bench_venv, cell_group,
- ; fixture_digest and runners.bench_common, and
- ; reads the per-framework runners' sources for the venv-interpreter scan. fixtures/DIGESTS.txt and the workload specs are data it reads
- ; (gh-ocannl-645), pinned so a change to them fails the suite rather than drifting -- and so is
+ ; fixture_digest and runners.bench_common; it reads the per-framework runners' sources for the
+ ; venv-interpreter scan, and the drivers' shell scripts for their inline result-line readers and
+ ; the json.loads inventory (an unlisted script is one the inventory silently cannot see).
+ ; fixtures/DIGESTS.txt and the workload specs are data it reads (gh-ocannl-645), pinned so a change to them fails the suite rather than drifting -- and so is
  ; the golden of test/operations/bench_result_line, which holds OCANNL result lines this
  ; orchestrator's own parser has to accept (gh-ocannl-676). ocannl_config.reference is where the
  ; orchestrator reads the configuration keys a per-cell flag may name and the keys each profile's
@@ -22,6 +23,8 @@
   (glob_files test/*.py)
   (glob_files runners/*.py)
   (glob_files runners/*/*.py)
+  (glob_files *.sh)
+  (glob_files runners/*/*.sh)
   fixtures/DIGESTS.txt
   ../ocannl_config.reference
   ../test/operations/bench_result_line.expected

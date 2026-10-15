@@ -216,8 +216,10 @@ files.
   suspect the emitter's spelling before the framework. Every Python reader of a runner's result or
   checkpoint line therefore parses it with `benchmarks/strict_json.py`'s `loads`, which refuses all
   three spellings (`NonFinite`, a `ValueError`), so a regressed emitter fails its cell by name instead
-  of reaching only the Python consumers; a new reader uses it too, and a driver run under
-  `python3 -I` puts its own directory on `sys.path` first (`gh834_session.py`).
+  of reaching only the Python consumers. A new reader uses it too — a driver's inline `python3 -`
+  heredoc imports it from `STRICT_JSON_DIR`, and a script run under `python3 -I` puts its own
+  directory on `sys.path` first (`gh834_session.py`) — and test_orchestrate's inventory scan fails
+  any other `json.loads` in the drivers that is not exempted with a reason.
 - A shell driver reads that line by PARSING it (stdlib `python3`), never with a `sed`/`grep`
   pattern over its text: a scan from `"arm":"A"` to the first `}` read a nested object placed
   before `best_ms` as an arm that timed nothing, and pinned the runner's field order to suit it.

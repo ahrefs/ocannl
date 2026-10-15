@@ -133,10 +133,15 @@ for profile in exact approx; do
     # an incomplete cache searches the missing arms and would publish a search-loaded table.
     (
       set -o pipefail
-      python3 - "$OUT/gpt_${profile}_$pass.out" "$pass" <<'VERIFY' 2>&1 | tee -a "$OUT/manifest.txt"
-import json, sys
+      STRICT_JSON_DIR="$TREE/benchmarks" python3 - "$OUT/gpt_${profile}_$pass.out" "$pass" <<'VERIFY' 2>&1 | tee -a "$OUT/manifest.txt"
+import os, sys
+sys.path.insert(0, os.environ["STRICT_JSON_DIR"])
+import strict_json
 path, want = sys.argv[1], sys.argv[2]
-rows = [json.loads(l) for l in open(path) if l.startswith('{"framework"')]
+try:
+    rows = [strict_json.loads(l) for l in open(path) if l.startswith('{"framework"')]
+except ValueError as e:  # NaN, Infinity or 1e999 included: a runner writes null there
+    sys.exit(f"   protocol: {path}: a result line is not strict JSON ({e})")
 if len(rows) != 1:
     sys.exit(f"   protocol: {path}: expected one result line, found {len(rows)}")
 tune = rows[0].get("tune") or {}
