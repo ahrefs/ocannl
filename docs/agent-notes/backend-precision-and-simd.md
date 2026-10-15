@@ -1807,6 +1807,12 @@ files.
   power helper below). Constant integer powers also stay
   in the IR until codegen: host f64 folding would change the f32 multiplication rounding, so a
   non-dyadic constant/materialized cubic comparison pins this boundary. Guard: `integer_power_domain`.
+  Without a GPU, `runtime_power_fast_math_emulation` compiles the CUDA-like helpers
+  (`Builtins_cc.cuda_like_power_builtins`, what CUDA and HIP prepend) on the host beside the C ones
+  and compares them bitwise over that test's domain (`test/support/integer_power_cases.ml`), with
+  the operands `C_syntax.integer_power_operands` encodes. The two share one template, so the
+  comparison guards the dialect's bit casts, not the shared algorithm; `integer_power_domain` does
+  that.
   Recheck the base after recursive simplification too: an `Identity` wrapper can expose a constant
   after the constant-pair guard. Execution and `debug_float` share `integer_power_doc`, so runtime
   traces show the actual helper, exponent encoding and conversions rather than a vendor `pow` label.
@@ -1838,7 +1844,7 @@ files.
   `binop_syntax` passes.
 
 - A float power whose exponent is only known at run time renders on CUDA and HIP through
-  `ocannl_pow_f32`/`ocannl_pow_f64` (`Builtins_cc.runtime_power_builtins`, gh-ocannl-1240), half
+  `ocannl_pow_f32`/`ocannl_pow_f64` (`Builtins_cc.cuda_like_power_builtins`, gh-ocannl-1240), half
   and bf16 widened into the f32 one. CUDA's `--use_fast_math` lowers `powf` to
   `exp2(y * log2(x))`, NaN for every negative base, integral exponents included. The helper takes
   an integral exponent on `|x|` and restores the sign from its parity; any other exponent keeps

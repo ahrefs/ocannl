@@ -635,8 +635,4 @@ __device__ __forceinline__ double ocannl_shfl_xor(double v, int lane_mask) {
       [] );
   ]
 
-let builtins =
-  Builtins_cc.integer_power_builtins ~prefix:"__device__ __forceinline__" ~supports_double:true
-    ~dialect:`Cuda_like
-  @ Builtins_cc.runtime_power_builtins ~prefix:"__device__ __forceinline__"
-  @ builtins
+let builtins = Builtins_cc.cuda_like_power_builtins @ builtins

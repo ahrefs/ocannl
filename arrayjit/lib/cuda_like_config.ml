@@ -335,7 +335,7 @@ struct
     | Sub, _ -> f "-"
     | Mul, _ -> f "*"
     | Div, _ -> f "/"
-    (* Through [Builtins_cc.runtime_power_builtins] (gh-ocannl-1240): fast math lowers the vendor
+    (* Through [Builtins_cc.cuda_like_power_builtins] (gh-ocannl-1240): fast math lowers the vendor
        [pow] to [exp2(y * log2(x))], NaN for a negative base even under an integral exponent known
        only at run time. Known integer exponents never reach here: [C_syntax.integer_power_doc]
        takes them. *)

@@ -149,8 +149,14 @@ let integer_power_builtins ~prefix ~supports_double ~dialect =
    stays fractional, and NaN stays NaN. Only a normal exponent of magnitude at least 1 reaches
    [trunc], where flushing cannot reach. Every integer beyond the mantissa's reach is even, which
    the integer-conversion guard encodes. Known integral exponents never get here
-   ([C_syntax.integer_power_doc] takes them). *)
-let runtime_power_builtins ~prefix =
+   ([C_syntax.integer_power_doc] takes them).
+
+   Together with the integer-power helpers, these are the power helpers of the CUDA-like dialects
+   exactly as [Builtins_cuda] and [Builtins_hip] emit them: the one definition both backends
+   prepend, and the source the host emulation test
+   ([test/operations/runtime_power_fast_math_emulation]) compiles, so it checks what ships. *)
+let cuda_like_power_builtins =
+  let prefix = "__device__ __forceinline__" in
   let make ~typ ~name ~bits_typ ~to_bits ~magnitude_mask ~one ~infinity ~pow ~trunc ~fabs ~int_typ
       ~int_limit =
     let x_negative =
@@ -169,15 +175,16 @@ let runtime_power_builtins ~prefix =
         typ pow fabs fabs int_limit int_typ,
       [] )
   in
-  [
-    make ~typ:"float" ~name:"ocannl_pow_f32" ~bits_typ:"unsigned int" ~to_bits:"__float_as_uint"
-      ~magnitude_mask:"0x7fffffffu" ~one:"0x3f800000u" ~infinity:"0x7f800000u" ~pow:"powf"
-      ~trunc:"truncf" ~fabs:"fabsf" ~int_typ:"int" ~int_limit:"16777216.0f";
-    make ~typ:"double" ~name:"ocannl_pow_f64" ~bits_typ:"unsigned long long"
-      ~to_bits:"(unsigned long long)__double_as_longlong" ~magnitude_mask:"0x7fffffffffffffffull"
-      ~one:"0x3ff0000000000000ull" ~infinity:"0x7ff0000000000000ull" ~pow:"pow" ~trunc:"trunc"
-      ~fabs:"fabs" ~int_typ:"long long" ~int_limit:"9007199254740992.0";
-  ]
+  integer_power_builtins ~prefix ~supports_double:true ~dialect:`Cuda_like
+  @ [
+      make ~typ:"float" ~name:"ocannl_pow_f32" ~bits_typ:"unsigned int" ~to_bits:"__float_as_uint"
+        ~magnitude_mask:"0x7fffffffu" ~one:"0x3f800000u" ~infinity:"0x7f800000u" ~pow:"powf"
+        ~trunc:"truncf" ~fabs:"fabsf" ~int_typ:"int" ~int_limit:"16777216.0f";
+      make ~typ:"double" ~name:"ocannl_pow_f64" ~bits_typ:"unsigned long long"
+        ~to_bits:"(unsigned long long)__double_as_longlong" ~magnitude_mask:"0x7fffffffffffffffull"
+        ~one:"0x3ff0000000000000ull" ~infinity:"0x7ff0000000000000ull" ~pow:"pow" ~trunc:"trunc"
+        ~fabs:"fabs" ~int_typ:"long long" ~int_limit:"9007199254740992.0";
+    ]
 
 let builtins =
   [
