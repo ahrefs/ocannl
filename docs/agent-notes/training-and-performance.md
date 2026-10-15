@@ -179,7 +179,9 @@ files.
   --record` pins them as they are (stdlib-only, no venv, and it leaves other origins alone);
   `--check` reports disk against record, and `--check --expect-origin <box>` answers a driver
   pinned to one box's records by its exit status -- never grep the report for the box, since its
-  origin field joins every agreeing box (`m4-max,tuf's bytes`). Regeneration is a cross-box
+  origin field joins every agreeing box (`m4-max,tuf's bytes`). `--check` names each fixture's
+  declared boxes with no entry, and `--expect-recorded <box>` fails on any, so confirming a
+  newly recorded box needs no `python -c` over `missing_origins`. Regeneration is a cross-box
   event to be coordinated across every origin in `DIGESTS.txt`'s `# measurement-boxes:` header
   field at once (gh-ocannl-759, gh-ocannl-850). That list is independent of the entry rows, so
   `divergent_origins` and generated reports name a declared box even when its fixture entry is
@@ -225,6 +227,12 @@ files.
   before `best_ms` as an arm that timed nothing, and pinned the runner's field order to suit it.
   `benchmarks/gh834_session.py` is the shape; its harness `benchmarks/test-gh834-cells.sh` renders
   `Bench_json`'s own templates, so a renamed field fails there rather than in a box's session.
+- `orchestrate.py`'s report writes every Markdown table row through `table_row`/`table_lines`,
+  which refuse (`UnsafeTableRow`) a cell holding a raw `|` or line break when the row is rendered.
+  A string the operator, the environment or a runner supplies -- a fixture's file name, a cache
+  path, a knob value -- reaches a cell through `display_value`, which escapes exactly what the
+  builder refuses; the records keep the raw value. `TableRowTest` scans the source for a row
+  literal (`| ...`, `|---`) written outside the builders, so a new table cannot bypass them.
 
 - Before its later stages a cell CHECKPOINTS what it completed (gh-ocannl-1209):
   `measure_and_emit` writes a `bench: checkpoint {...}` line to stderr, flushed, after every

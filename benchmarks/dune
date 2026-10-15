@@ -2,33 +2,43 @@
  ; ocannl-backend: none -- runs the benchmark orchestrator's own Python unit tests, which import
  ; orchestrate.py and bench_common.py and launch no OCANNL executable.
  (alias runtest-test_orchestrate)
+ ; The rule runs sandboxed, so the test sees exactly the files listed below and nothing a
+ ; neighbouring rule happened to copy into _build/default/benchmarks: an unlisted file is absent on
+ ; every run, not only on a fresh build (the gh-ocannl-586/597 hazard, in Python -- unsandboxed,
+ ; this directory's own ocannl_config went unlisted and passed wherever another rule had copied
+ ; it). `preserve_file_kind` rules out the symlink sandbox, which would not isolate anything here:
+ ; Python puts a symlinked script's RESOLVED directory on sys.path, and the test locates its data
+ ; through `Path(__file__).resolve()`, so both would land back in _build/default/benchmarks. Dune
+ ; plants an empty `.git` above every sandbox, so no test may read the enclosing checkout's
+ ; repository; the source-identity test builds a repository of its own.
+ ;
  ; The Python modules are globbed rather than named: the test grows imports faster than anyone
- ; remembers to pin them, and nothing is sandboxed, so an unlisted module is not a build error --
- ; the test reads whatever copy happens to be in _build/default/benchmarks, stale or absent
- ; depending on what ran before (the gh-ocannl-586/597 hazard, in Python). Today the test imports
- ; orchestrate, strict_json, gh675_cells, gh998_cells, gh1002_cells, bench_venv, cell_group,
- ; fixture_digest and runners.bench_common; it reads the per-framework runners' sources for the
- ; venv-interpreter scan, and the drivers' shell scripts for their inline result-line readers and
- ; the json.loads inventory (an unlisted script is one the inventory silently cannot see).
- ; fixtures/DIGESTS.txt and the workload specs are data it reads (gh-ocannl-645), pinned so a change to them fails the suite rather than drifting -- and so is
- ; the golden of test/operations/bench_result_line, which holds OCANNL result lines this
- ; orchestrator's own parser has to accept (gh-ocannl-676). ocannl_config.reference is where the
- ; orchestrator reads the configuration keys a per-cell flag may name and the keys each profile's
- ; payload sets (gh-ocannl-1273); this directory's own ocannl_config is what the test checks sets no
- ; key that would stand between a cell and its cache (unlisted, it is present in _build only when
- ; some other rule happened to copy it).
+ ; remembers to pin them. Today it imports orchestrate, strict_json, gh675_cells, gh998_cells,
+ ; gh1002_cells, gen_fixtures, bench_venv, cell_group, fixture_digest, runners.bench_common and
+ ; test.test_cell_group, and its venv-interpreter scan reads every `*.py` here and under runners/ at
+ ; any depth -- hence the recursive glob, the same population as the scan's `runners/**/*.py`. The
+ ; shell scripts are listed for the same reason: the test runs the drivers' inline result-line
+ ; readers from their text, and its json.loads inventory scans every `*.py` and `*.sh` here and
+ ; under runners/ (an unlisted script is one the inventory silently cannot see).
+ ; fixtures/DIGESTS.txt and the workload specs are data it reads (gh-ocannl-645), pinned so a
+ ; change to them fails the suite rather than drifting -- and so is the golden of
+ ; test/operations/bench_result_line, which holds OCANNL result lines this orchestrator's own
+ ; parser has to accept (gh-ocannl-676). ocannl_config.reference is where the orchestrator reads
+ ; the configuration keys a per-cell flag may name and the keys each profile's payload sets
+ ; (gh-ocannl-1273); this directory's own ocannl_config is what the test checks sets no key that
+ ; would stand between a cell and its cache.
  (deps
   ocannl_config
   (glob_files *.py)
   (glob_files test/*.py)
-  (glob_files runners/*.py)
-  (glob_files runners/*/*.py)
+  (glob_files_rec runners/*.py)
   (glob_files *.sh)
-  (glob_files runners/*/*.sh)
+  (glob_files_rec runners/*.sh)
   fixtures/DIGESTS.txt
   ../ocannl_config.reference
   ../test/operations/bench_result_line.expected
-  (glob_files workloads/*.json))
+  (glob_files workloads/*.json)
+  (sandbox always preserve_file_kind))
  (action
   (run python3 %{dep:test_orchestrate.py})))
 

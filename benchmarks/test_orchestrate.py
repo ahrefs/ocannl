@@ -886,11 +886,42 @@ class FailureRecordTest(unittest.TestCase):
         self.assertIn("regime", record)
         self.assertIsNone(record["regime"])
 
-    def test_the_source_identity_names_this_checkout(self):
-        got = orchestrate.source_identity(HERE)
+    def test_the_source_identity_names_the_checkout_it_is_handed(self):
+        # A checkout of its own rather than this one: the dune rule runs sandboxed, and dune plants
+        # an empty `.git` above every sandbox so that nothing inside one can find the enclosing
+        # repository -- an identity read off HERE would say nothing there. The repository is built
+        # here, so its HEAD and its dirtiness are known to the test, not merely well-formed.
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "checkout"
+            repo.mkdir()
+            env = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1",
+                       GIT_CEILING_DIRECTORIES=tmp)
 
-        self.assertRegex(got["source_revision"], r"^[0-9a-f]{40}$")
-        self.assertIsInstance(got["source_tracked_changes"], bool)
+            def git(*args):
+                return subprocess.run(["git", *args], cwd=repo, env=env, check=True,
+                                      capture_output=True, text=True).stdout.strip()
+
+            with unittest.mock.patch.dict(os.environ, {"GIT_CEILING_DIRECTORIES": tmp}):
+                # Not yet a repository: no revision to name, stated as null rather than a crash.
+                self.assertEqual(orchestrate.source_identity(repo),
+                                 {"source_revision": None, "source_tracked_changes": False})
+
+                git("init", "-q")
+                (repo / "tracked.txt").write_text("one\n")
+                git("add", "tracked.txt")
+                git("-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q",
+                    "-m", "c")
+                head = git("rev-parse", "HEAD")
+                self.assertRegex(head, r"^[0-9a-f]{40}$")
+                self.assertEqual(orchestrate.source_identity(repo),
+                                 {"source_revision": head, "source_tracked_changes": False})
+
+                # An untracked file is not a tracked change; an edit to a tracked one is.
+                (repo / "untracked.txt").write_text("x\n")
+                self.assertFalse(orchestrate.source_identity(repo)["source_tracked_changes"])
+                (repo / "tracked.txt").write_text("two\n")
+                self.assertEqual(orchestrate.source_identity(repo),
+                                 {"source_revision": head, "source_tracked_changes": True})
 
     def test_the_sweep_records_failures_through_it_with_its_stamp_and_source(self):
         # main's closure is not callable from here; pin that it composes the two, read before
@@ -2477,9 +2508,9 @@ class FixtureDigestTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(out.getvalue(), "")
 
-    def test_checked_in_divergence_accounts_for_tuf_copies_of_m4_max(self):
-        # gh-ocannl-720 copies the transformer fixtures to TUF instead of regenerating them.
-        # Pin that recorded policy and keep missing/different origins visible for every entry.
+    def test_checked_in_divergence_accounts_for_copies_of_m4_max(self):
+        # gh-ocannl-720 copies the transformer fixtures to other boxes instead of regenerating
+        # them. Pin that recorded policy and keep missing/different origins visible for every entry.
         digests = HERE / "fixtures" / fixture_digest.DIGEST_FILE
         entries, declared = fixture_digest._read_document(digests)
         expected = {
@@ -2490,19 +2521,19 @@ class FixtureDigestTest(unittest.TestCase):
         self.assertTrue(expected, "no GPT workload specs found")
         copied = {name for name, recorded in entries.items() if any(e.origin == "tuf" for e in recorded)}
         self.assertEqual(copied, expected, "TUF must record every GPT fixture copy")
-        # Further boxes recorded on m4-max's bytes for a GPT fixture, each verified where it sits:
-        # rog-nv's gpt2_mini_train_b256 row was recorded on rog against the gh-ocannl-1183 copy.
-        also_on_m4_max = {"gpt2_mini_train_b256.safetensors": {"rog-nv"}}
-        self.assertLessEqual(set(also_on_m4_max), copied)
 
         for name, recorded in entries.items():
             self.assertTrue(recorded, name)
             by_origin = {e.origin: e for e in recorded}
-            copies = {"m4-max", "tuf"} | also_on_m4_max.get(name, set())
+            # The copy rule: every content-v1 row of a GPT fixture is m4-max's bytes, whichever box
+            # recorded it (TUF's copies, and each further box's row recorded on the copy it holds),
+            # so a box that regenerated its own transformer fixture fails here. Legacy raw-v1 rows
+            # predate the copies and stay their boxes' own bytes, divergent from m4-max's.
+            copies = {e.origin for e in recorded if e.kind == "content-v1"} if name in copied else set()
             if name in copied:
                 self.assertIn("m4-max", by_origin, name)
+                self.assertLessEqual({"m4-max", "tuf"}, copies, name)
                 for origin in copies:
-                    self.assertEqual(by_origin[origin].kind, "content-v1", f"{name} on {origin}")
                     self.assertEqual(
                         by_origin[origin].sha256, by_origin["m4-max"].sha256, f"{name} on {origin}"
                     )
@@ -2970,6 +3001,101 @@ class FixtureDigestTest(unittest.TestCase):
                         [*mode, "--digests", str(digests), "--expect-origin", "m4-max"]
                     )
             self.assertEqual(refused.exception.code, 2, f"--expect-origin with {mode[0]}")
+
+    def check_cli(self, digests, *fixtures, expect_recorded=()):
+        """`--check` over `fixtures`, each of `expect_recorded` as `--expect-recorded`:
+        (exit status, report)."""
+        argv = ["--check", *map(str, fixtures), "--digests", str(digests)]
+        for box in expect_recorded:
+            argv += ["--expect-recorded", box]
+        with contextlib.redirect_stdout(io.StringIO()) as report:
+            code = fixture_digest._main(argv)
+        return code, report.getvalue()
+
+    def test_check_names_the_declared_boxes_with_no_entry(self):
+        # The MISSING DIGEST RECORD reading used to reach only orchestrate reports, so confirming
+        # a newly recorded row (lukstafi/ocannl-staging#1136) took a hand-written
+        # `python -c "missing_origins(...)"`. `--check` prints it per fixture, from the same
+        # function the reports use; on its own it is information, not a failed verdict.
+        fx = self.fixture("gpt2_mini.safetensors", b"m4-max bytes")
+        other = self.write_fixture(self.dir / "other" / "lenet.safetensors", b"nobody's bytes")
+        digests = self.dir / fixture_digest.DIGEST_FILE
+        digests.write_text(fixture_digest.header(["m4-max", "minix", "rog-nv"]))
+        fixture_digest.record(digests, [fx], "m4-max")
+        fixture_digest.record(digests, [fx], "rog-nv")
+        entries = fixture_digest.read_digests(digests)
+        boxes = fixture_digest.measurement_boxes(digests)
+        missing = fixture_digest.missing_origins(fx.name, entries, boxes)
+        self.assertEqual(missing, ["minix"], "control: the reports' reading of this file")
+
+        code, report = self.check_cli(digests, fx)
+        self.assertEqual(code, 0, "a missing entry alone does not fail the bytes' verdict")
+        self.assertIn(
+            f"    no entry for declared measurement box(es): {', '.join(missing)}\n", report
+        )
+        code, report = self.check_cli(digests, other)
+        self.assertEqual(code, 1, "control: UNRECORDED still fails")
+        self.assertIn("box(es): m4-max, minix, rog-nv\n", report, "an unrecorded name lacks all")
+
+        fixture_digest.record(digests, [fx], "minix")
+        code, report = self.check_cli(digests, fx)
+        self.assertEqual(code, 0)
+        self.assertNotIn("no entry", report, "a complete record prints no missing line")
+
+    def test_expect_recorded_decides_on_the_named_box_having_an_entry(self):
+        # "Is the record complete for rog-nv?" as an exit status. It asks whether the box HAS an
+        # entry, not whether that entry is these bytes (--expect-origin's question): a reviewer
+        # on one box confirms another box's rows without that box's bytes.
+        mine = self.fixture("gpt2_mini.safetensors", b"m4-max bytes")
+        theirs = self.write_fixture(self.dir / "other" / "gpt2_mini.safetensors", b"minix bytes")
+        digests = self.dir / fixture_digest.DIGEST_FILE
+        digests.write_text(fixture_digest.header(["m4-max", "minix", "rog-nv"]))
+        fixture_digest.record(digests, [mine], "m4-max")
+        fixture_digest.record(digests, [theirs], "minix")
+
+        self.assertEqual(self.check_cli(digests, mine, expect_recorded=["m4-max"])[0], 0)
+        self.assertEqual(
+            self.check_cli(digests, mine, expect_recorded=["minix"])[0],
+            0,
+            "minix's entry is other bytes, and it is still an entry",
+        )
+        code, report = self.check_cli(digests, mine, expect_recorded=["rog-nv"])
+        self.assertEqual(code, 1)
+        self.assertIn("MATCH — m4-max's bytes", report, "control: the bytes themselves pass")
+        self.assertIn("not recorded for rog-nv (--expect-recorded)", report)
+        self.assertEqual(
+            self.check_cli(digests, mine, expect_recorded=["m4-max", "rog-nv"])[0],
+            1,
+            "every named box must have an entry",
+        )
+        fixture_digest.record(digests, [mine], "rog-nv")
+        self.assertEqual(self.check_cli(digests, mine, expect_recorded=["m4-max", "rog-nv"])[0], 0)
+        self.write_fixture(mine, b"perturbed bytes")
+        self.assertEqual(
+            self.check_cli(digests, mine, expect_recorded=["rog-nv"])[0], 1, "a MISMATCH fails too"
+        )
+
+    def test_expect_recorded_refuses_a_box_the_file_does_not_declare(self):
+        # The --expect-origin refusal's twin: an undeclared box can have no entry, so a
+        # misspelling would read as an incomplete record instead of as the misspelling it is.
+        fx = self.fixture("gpt2_mini.safetensors")
+        digests = self.dir / fixture_digest.DIGEST_FILE
+        fixture_digest.record(digests, [fx], "m4-max")
+
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            with self.assertRaises(SystemExit) as refused:
+                self.check_cli(digests, fx, expect_recorded=["m4max"])
+
+        self.assertEqual(refused.exception.code, 2)
+        self.assertIn("--expect-recorded 'm4max'", err.getvalue())
+        self.assertIn("m4-max", err.getvalue(), "it names the boxes the file does declare")
+        for mode in (["--record", str(fx)], ["--list-declared-measurement-boxes"]):
+            with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
+                with self.assertRaises(SystemExit, msg=mode[0]) as refused:
+                    fixture_digest._main(
+                        [*mode, "--digests", str(digests), "--expect-recorded", "m4-max"]
+                    )
+            self.assertEqual(refused.exception.code, 2, f"--expect-recorded with {mode[0]}")
 
     def test_a_host_that_cannot_name_itself_is_refused_not_given_a_placeholder(self):
         # A literal `unknown-host` is not an origin, it is every nameless box sharing one name:
@@ -6709,6 +6835,124 @@ class DisplaySafeSweepTest(unittest.TestCase):
             with self.subTest(prefix=prefix):
                 [line] = [l for l in stdout.splitlines() if l.startswith(prefix)]
                 self.assertIn(shown, line)
+
+
+
+class TableRowTest(unittest.TestCase):
+    """Every report table row is built by `table_row`, which refuses a raw `|` or line break at
+    render time (post-wave follow-up of gh-ocannl-1273): display safety checked where the row is
+    rendered, not remembered at each interpolation."""
+
+    # The builders themselves, and `display_value`, which spells the `|` it escapes.
+    BUILDERS = ("table_row", "table_lines", "display_value")
+
+    @staticmethod
+    def breaks_a_cell(char):
+        return char == "|" or len(f"a{char}b".splitlines()) != 1
+
+    def test_a_row_renders_its_cells_and_an_empty_one_as_a_blank(self):
+        self.assertEqual(orchestrate.table_row("a", "", "b c"), "| a | | b c |")
+        self.assertEqual(
+            orchestrate.table_lines(["x", "y"], [("1", "2")]), ["| x | y |", "|---|---|", "| 1 | 2 |"]
+        )
+
+    def test_it_refuses_exactly_the_characters_that_break_a_cell(self):
+        # Derived, not restated: the refusal set is `|` plus every character `str.splitlines` (and
+        # so `markdown_tables`, and any line-based reader of the report) breaks a line at.
+        refused = [chr(c) for c in range(0x110000) if orchestrate._TABLE_CELL_BREAKERS_RE.match(chr(c))]
+        breaking = [chr(c) for c in range(0x110000) if self.breaks_a_cell(chr(c))]
+        self.assertEqual(refused, breaking)
+        for char in breaking:
+            with self.subTest(char=char):
+                with self.assertRaises(orchestrate.UnsafeTableRow) as refusal:
+                    orchestrate.table_row("fine", f"odd{char}value")
+                self.assertIn("table cell 1", str(refusal.exception))
+                self.assertIn("display_value", str(refusal.exception))
+                # The remedy the refusal names is sufficient: the shown value renders in one cell.
+                row = orchestrate.table_row("fine", orchestrate.display_value(f"odd{char}value"))
+                self.assertEqual(row.count("|"), 3, row)
+                self.assertEqual(len(row.splitlines()), 1, row)
+
+    def test_it_refuses_a_non_string_cell_and_a_row_of_the_wrong_width(self):
+        with self.assertRaises(TypeError):
+            orchestrate.table_row("a", 1.5)
+        for row in (("1",), ("1", "2", "3")):
+            with self.subTest(row=row):
+                with self.assertRaises(orchestrate.UnsafeTableRow):
+                    orchestrate.table_lines(["x", "y"], [row])
+
+    def test_a_raw_value_in_a_row_fails_the_report_and_writes_nothing(self):
+        # The planted raw interpolation: a failure label that skipped `display_value`.
+        failures = [orchestrate.Failure("odd|work ocannl/cc/default", "exit 1")]
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            with contextlib.redirect_stdout(io.StringIO()):
+                with self.assertRaises(orchestrate.UnsafeTableRow):
+                    orchestrate.report([], out, (), failures)
+            # Refused before results.jsonl or report.md was written, as the report's other
+            # refusals are.
+            self.assertEqual(list(out.iterdir()), [])
+
+    def test_no_table_row_is_written_outside_the_builders(self):
+        self.assertEqual(
+            table_row_literals(Path(orchestrate.__file__).read_text(), self.BUILDERS),
+            [],
+            "build report table rows with orchestrate.table_row",
+        )
+
+    def test_the_scan_finds_a_planted_row(self):
+        for planted in (
+            'def report(lines, x):\n    lines.append(f"| {x} | y |")\n',
+            'def report(lines, x):\n    lines.append("\\n| a | " + x + " |")\n',
+            'def report(lines):\n    lines.append("|---|---|")\n',
+        ):
+            with self.subTest(planted=planted):
+                self.assertTrue(table_row_literals(planted, self.BUILDERS))
+        for clean in (
+            'def table_row(*cells):\n    return "| " + " | ".join(cells) + " |"\n',
+            'def f():\n    """| a | b |"""\n',
+            'def f(a, b):\n    return f"{a} | {b}"\n',
+        ):
+            with self.subTest(clean=clean):
+                self.assertEqual(table_row_literals(clean, self.BUILDERS), [])
+
+
+def table_row_literals(source, builders):
+    """The string literals in `source` that open a Markdown table line (`| ...`, or a `|---` rule)
+    outside the functions named `builders` and outside docstrings: each is a table row written
+    around `table_row`, so its cells are never checked."""
+    import ast
+
+    tree = ast.parse(source)
+    skip = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name in builders:
+            skip.update(id(n) for n in ast.walk(node))
+        # Docstrings document rows; they do not write them.
+        if (
+            isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef))
+            and node.body
+            and isinstance(node.body[0], ast.Expr)
+            and isinstance(node.body[0].value, ast.Constant)
+        ):
+            skip.add(id(node.body[0].value))
+    found = []
+    # Breadth-first, so an f-string is met before its literal pieces: only its FIRST piece can open
+    # a line (`f"platform: {p} | commit"` does not).
+    for node in ast.walk(tree):
+        if id(node) in skip:
+            continue
+        if isinstance(node, ast.JoinedStr):
+            skip.update(id(v) for v in node.values)
+            first = node.values[0] if node.values else None
+            text = first.value if isinstance(first, ast.Constant) else ""
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            text = node.value
+        else:
+            continue
+        if text.lstrip().startswith("|") or "|---" in text:
+            found.append(f"line {node.lineno}: {text!r}")
+    return found
 
 
 if __name__ == "__main__":

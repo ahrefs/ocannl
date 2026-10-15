@@ -1,0 +1,4 @@
+(* Scanned as the OCaml source config_usage_scan_tool_invented.ml: the same two names as the Python
+   fixture are refused WITHOUT the script hint, the general message unchanged. *)
+let flag = "--ocannl-definitely-tool-invented-flag"
+let override = Sys.getenv_opt "OCANNL_DEFINITELY_TOOL_INVENTED_ENV"

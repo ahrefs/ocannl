@@ -684,6 +684,59 @@ def display_value(value):
     return json.dumps(value).replace("|", "\\u007c").replace("`", "\\u0060")
 
 
+# What ends a Markdown table cell early: the column separator, and every character `str.splitlines`
+# breaks a line at (a renderer ends the row there, and so does any reader that splits the report
+# into lines). `display_value` escapes all of them, so a value shown through it never trips this.
+_TABLE_CELL_BREAKERS_RE = re.compile("[|\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029]")
+
+
+class UnsafeTableRow(ValueError):
+    """A report table row whose cell would add a column or end the row (a raw `|` or line break),
+    or whose cell count is not its table's column count.
+
+    Raised by `table_row` and `table_lines` when the row is rendered, so a string that reached a
+    cell without going through `display_value` fails the report loudly instead of shifting every
+    column after it.
+    """
+
+
+def table_row(*cells):
+    """One row of a report table -- its header and rule included -- from its cell texts.
+
+    Every Markdown table `report` writes is built here and only here, so display safety is checked
+    where the row is rendered rather than remembered at each interpolation (post-wave follow-up of
+    gh-ocannl-1273): a cell holding a raw `|` or line break raises `UnsafeTableRow`, naming the
+    cell. Show an operator- or environment-supplied string through `display_value` first; that is
+    the fix the refusal asks for, never escaping at the call site.
+    """
+    for column, cell in enumerate(cells):
+        if not isinstance(cell, str):
+            raise TypeError(f"table cell {column} is {type(cell).__name__}, not str: {cell!r}")
+        breaker = _TABLE_CELL_BREAKERS_RE.search(cell)
+        if breaker:
+            raise UnsafeTableRow(
+                f"table cell {column} holds a raw {breaker.group()!r}, which would "
+                f"{'add a column' if breaker.group() == '|' else 'end the row'}: {cell!r} "
+                "(show the value through display_value)"
+            )
+    return "|" + "|".join(f" {cell} " if cell else " " for cell in cells) + "|"
+
+
+def table_lines(columns, rows):
+    """A report table as its lines: the header row naming `columns`, the rule, then `rows`, each a
+    sequence of cell texts as long as `columns` (a short or long row is refused as a malformed one
+    would be read: every column after the gap shifts)."""
+    lines = [table_row(*columns), "|" + "---|" * len(columns)]
+    for row in rows:
+        row = tuple(row)
+        if len(row) != len(columns):
+            raise UnsafeTableRow(
+                f"table row has {len(row)} cells for {len(columns)} columns: {row!r}"
+            )
+        lines.append(table_row(*row))
+    return lines
+
+
 def display_arg(arg):
     """An OCANNL commandline argument as a message shows it: its value through `display_value`."""
     key, eq, value = arg.partition("=")
@@ -2442,12 +2495,6 @@ def report(
     # after results.jsonl was overwritten would pair fresh raw rows with the report.md a previous
     # sweep left there, which describes different measurements (Codex P2 round 4).
     ambient_line = ambient_env_line(results, ambient)
-    with open(out_dir / "results.jsonl", "w") as f:
-        for r in results:
-            # allow_nan=False so a non-finite value this sweep computed itself cannot slip out as
-            # `NaN`: json_safe has already mapped the ones it expects, and anything left is a bug
-            # worth raising over rather than writing an unreadable file (gh-ocannl-676).
-            f.write(json.dumps(json_safe(r), allow_nan=False) + "\n")
     lines = []
     commit = run_supporting(
         ["git", "rev-parse", "--short", "HEAD"], cwd=ROOT, capture_output=True
@@ -2661,32 +2708,22 @@ def report(
                 "is a scalar timing: quoting it as a tensor-core number is the error this column "
                 "exists to stop.\n"
             )
-        header = "| framework | backend | variant | precision |"
-        rule = "|---|---|---|---|"
+        columns = ["framework", "backend", "variant", "precision"]
         if with_regime:
-            header += " regime |"
-            rule += "---|"
-        header += " step p50 ms | p10 | p90 | queued ms | compile s |"
-        rule += "---|---|---|---|---|"
+            columns.append("regime")
+        columns += ["step p50 ms", "p10", "p90", "queued ms", "compile s"]
         if with_peak_memory:
-            header += " peak MiB |"
-            rule += "---|"
+            columns.append("peak MiB")
         if with_dominant_kernel:
-            header += " kernel %peak |"
-            rule += "---|"
+            columns.append("kernel %peak")
         if with_provenance:
-            header += " pass |"
-            rule += "---|"
+            columns.append("pass")
         if with_tensorization:
-            header += " mma |"
-            rule += "---|"
-        header += " parity |"
-        rule += "---|"
+            columns.append("mma")
+        columns.append("parity")
         if with_tokens:
-            header += " tok/s |"
-            rule += "---|"
-        lines.append(header)
-        lines.append(rule)
+            columns.append("tok/s")
+        table = []
         for r in rows:
             s = r["step_ms"]
             parity = r["parity"]
@@ -2705,43 +2742,41 @@ def report(
                 parity += f" (loss non-finite from step {r['diverged_at']})"
             elif not r["parity_loss_moved"]:
                 parity += " (loss stationary)"
-            tokens = ""
-            if with_tokens:
-                tps = r.get("tokens_per_step")
-                tokens = (
-                    f" {tps * 1000 / s['p50']:,.0f} |" if tps and finite(s["p50"]) else " |"
-                )
-            compile_s = num(r["compile_s"], ".2f")
-            compile_s += COMPILE_S_NOTE.get(r.get("search_pass"), "")
-            peak_memory = f" {peak_memory_mib(r)} |" if with_peak_memory else ""
-            if with_dominant_kernel:
-                peak_memory += f" {dominant_kernel_cell(r)} |"
-            provenance = ""
-            if with_provenance:
-                provenance = " %s |" % PROVENANCE_MARK.get(r.get("provenance"), "—")
-            if with_tensorization:
-                provenance += " %s |" % TENSORIZATION_MARK.get(r.get("tensorization"), "—")
-            regime = ""
-            if with_regime:
-                mismatch = r.get("regime_mismatch")
-                regime = (
-                    f"| **REGIME MISMATCH** (dispatched {regime_of(r)}; ran {mismatch}) "
-                    if mismatch
-                    else f"| {regime_of(r)} "
-                )
             precision = r.get("precision", "f32")
             if r.get("precision_mismatch"):
                 precision = (
                     f"**PRECISION MISMATCH** (dispatched {precision}; ran "
                     f"{r['precision_mismatch']})"
                 )
-            lines.append(
-                f"| {r['framework']} | {r['backend']} | {rendered_variant(r)} "
-                f"| {precision} {regime}"
-                f"| {num(s['p50'], '.3f')} | {num(s['p10'], '.3f')} | {num(s['p90'], '.3f')} "
-                f"| {num(r['queued_step_ms'], '.3f')} | {compile_s} |{peak_memory}"
-                f"{provenance} {parity} |{tokens}"
-            )
+            cells = [r["framework"], r["backend"], rendered_variant(r), precision]
+            if with_regime:
+                mismatch = r.get("regime_mismatch")
+                cells.append(
+                    f"**REGIME MISMATCH** (dispatched {regime_of(r)}; ran {mismatch})"
+                    if mismatch
+                    else regime_of(r)
+                )
+            cells += [
+                num(s["p50"], ".3f"),
+                num(s["p10"], ".3f"),
+                num(s["p90"], ".3f"),
+                num(r["queued_step_ms"], ".3f"),
+                num(r["compile_s"], ".2f") + COMPILE_S_NOTE.get(r.get("search_pass"), ""),
+            ]
+            if with_peak_memory:
+                cells.append(peak_memory_mib(r))
+            if with_dominant_kernel:
+                cells.append(dominant_kernel_cell(r))
+            if with_provenance:
+                cells.append(PROVENANCE_MARK.get(r.get("provenance"), "—"))
+            if with_tensorization:
+                cells.append(TENSORIZATION_MARK.get(r.get("tensorization"), "—"))
+            cells.append(parity)
+            if with_tokens:
+                tps = r.get("tokens_per_step")
+                cells.append(f"{tps * 1000 / s['p50']:,.0f}" if tps and finite(s["p50"]) else "")
+            table.append(cells)
+        lines += table_lines(columns, table)
     if unavailable:
         # Stated where the matrix is read: a cell missing because the workload cannot express it
         # is not a cell someone forgot to run (gh-ocannl-551).
@@ -2750,10 +2785,13 @@ def report(
             "Requested cells this matrix cannot contain — the workload cannot express them, so "
             "their absence above is structural, not an unrun measurement.\n"
         )
-        lines.append("| workload | precision | why |")
-        lines.append("|---|---|---|")
-        for workload, precision, reason in unavailable:
-            lines.append(f"| {display_value(workload)} | {precision} | {reason} |")
+        lines += table_lines(
+            ["workload", "precision", "why"],
+            (
+                (display_value(workload), precision, reason)
+                for workload, precision, reason in unavailable
+            ),
+        )
     if skipped:
         # A skipped cell is as absent from the tables as a failed one, and once the run log is gone
         # only this says it was left out on purpose -- and by whom.
@@ -2762,10 +2800,7 @@ def report(
             "Cells this sweep did not run. Their absence above is a choice, not a measurement and "
             "not a failure.\n"
         )
-        lines.append("| cell | why |")
-        lines.append("|---|---|")
-        for label, why in skipped:
-            lines.append(f"| {label} | {why} |")
+        lines += table_lines(["cell", "why"], skipped)
     if failures:
         # A cell that produced no result is absent from every table above, and an absent row and a
         # failed one read identically once the report outlives the run log — which is the whole
@@ -2782,14 +2817,28 @@ def report(
             "have been gated at -- whether the work before the failure was on course. The cell "
             "still has no result and still fails the sweep.\n"
         )
-        lines.append("| cell | why | saved losses vs reference (diagnostic, never acceptance) |")
-        lines.append("|---|---|---|")
-        for f in map(lambda f: Failure(*f), failures):
-            diagnostic = saved_loss_parity(
-                f.checkpoint, f.regime, results, (f.stamp or {}).get("ocannl_flags")
-            )
-            lines.append(f"| {f.label} | {f.note or 'no result line'} | {diagnostic} |")
+        lines += table_lines(
+            ["cell", "why", "saved losses vs reference (diagnostic, never acceptance)"],
+            (
+                (
+                    f.label,
+                    f.note or "no result line",
+                    saved_loss_parity(
+                        f.checkpoint, f.regime, results, (f.stamp or {}).get("ocannl_flags")
+                    ),
+                )
+                for f in map(lambda f: Failure(*f), failures)
+            ),
+        )
     text = "\n".join(lines) + "\n"
+    # Written only now, after every table row has been rendered: a row `table_row` refuses leaves
+    # the output directory as it found it, as the refusals above do.
+    with open(out_dir / "results.jsonl", "w") as f:
+        for r in results:
+            # allow_nan=False so a non-finite value this sweep computed itself cannot slip out as
+            # `NaN`: json_safe has already mapped the ones it expects, and anything left is a bug
+            # worth raising over rather than writing an unreadable file (gh-ocannl-676).
+            f.write(json.dumps(json_safe(r), allow_nan=False) + "\n")
     (out_dir / "report.md").write_text(text)
     print("\n" + text)
 

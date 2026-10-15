@@ -192,6 +192,10 @@ let raw_entries =
         "[scanner-refusal:7f7db667dc63d73faefa570451cf5f2b] ambiguous command-line value";
         "[scanner-refusal:7a3d690e9ef5541a1c754952c6cf6877] ambiguous bare config";
         "[scanner-refusal:200477f5fecf3e08ff5055af77a00298] prefix-free config flag";
+        "[scanner-refusal:ad6eb9c910ffa6587a73299cb369cb15] \
+         docs/agent-notes/build-and-test.md#scan-corpora-goldens-and-floors";
+        "[scanner-refusal:1d10abd79d54b54414b3bf881e90620f] \
+         docs/agent-notes/build-and-test.md#scan-corpora-goldens-and-floors";
         "[scanner-refusal:8acb2b9087cf4a7e4112382c5e058e1a] Utils.known_config_keys";
         "[scanner-refusal:085d7b5a19f012e46728008a42120c74] non-config environment exemptions";
         "[scanner-refusal:5d123838dd21fb3fd4a7529e51b8a74f] non-config environment-mention \
@@ -218,6 +222,7 @@ let raw_entries =
         "[scanner-refusal:b8ac42648b6918233995586551724f6f] documented OCANNL assignment";
         "[scanner-refusal:84bf7dbb3e9182b1eced5e76a271e5f6] config-usage direct refusal";
         "[scanner-refusal:ed12f66c93e310aaa2996f755dd93a06] config-usage refusal control";
+        "[scanner-refusal:0019608f362162cac94b5c873afbcc80] config-usage refusal names";
         "[scanner-refusal:abf34118c8986fba00fd6d04dbec92e2] source inventory supplies";
         "[scanner-refusal:98de32226b019b81ff6e88bf4e44c14b] supplies OCaml implementation";
         "[scanner-refusal:05a2eb509694607c615f131c6949c1f1] inventory supplies Markdown";

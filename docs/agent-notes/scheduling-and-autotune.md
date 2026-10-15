@@ -557,7 +557,8 @@ files.
   sets its seams inside that domain. Setting REPLACES (a harness that also wants the enclosing value
   reads it first and calls it); only the timing-call observers chain. A new seam is a `Seam.t`, never
   a process-wide ref: two domains' searches would otherwise overwrite and observe each other
-  (`autotune_seam_domains` pins the isolation).
+  (`autotune_seam_domains` pins the isolation). The resource fault-injection callback follows the
+  same per-domain rule; its placement constraint is in backend-memory.md.
 - Scripted search fixtures opt into `Autotune.with_uncontended_test_windows` (gh-ocannl-1156)
   around `on_candidate_measured`: the measurement callback alone only sees windows the host already
   admitted, so a loaded runner could time nothing and leave cache controls vacuous. The scoped seam
