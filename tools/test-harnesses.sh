@@ -2,8 +2,9 @@
 # Run the shell-harness tier CI runs, from any working directory.
 # Usage: tools/test-harnesses.sh [--shell|--toolchain|--promotion] [--list]
 # With no group, run all three. --shell needs no OCaml toolchain; --toolchain
-# runs the formatter controls and --promotion the promotion controls, whose
-# missing-toolchain legs report counted skips. CI runs both after installing
+# runs the formatter controls and --promotion the controls of tools that read
+# Dune's own output (promotion, affected tests), whose missing-toolchain legs
+# report counted skips. CI runs both after installing
 # its toolchain, and --promotion again at the declared Dune floor.
 # Every selected harness runs after ordinary failures; any failure exits 1.
 # HUP/INT/TERM stop immediately and preserve the interruption status.
@@ -41,6 +42,7 @@ shell benchmarks/test-gh834-cells.sh
 toolchain tools/test-fmt-check.sh
 promotion tools/test-promote.sh
 promotion tools/test-promotion-record.sh
+promotion tools/test-affected-tests.sh
 HARNESS_LIST
 }
 failures=0 total=0

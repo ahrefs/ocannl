@@ -1,0 +1,459 @@
+#!/usr/bin/env bash
+# Which per-test aliases can a change reach? Read from dune's own description
+# of the build, never from a hand-kept map (gh-ocannl-1235). The entry point is
+# `tools/test-run.sh affected`, which refuses while a run holds this worktree
+# and then runs this script. It prints aliases and runs none of them.
+#
+# Usage:
+#   tools/test-run.sh affected [REV | REV..REV | REV...REV] [-- PATHSPEC...]
+#   tools/test-run.sh affected --files PATH...
+#
+# The changed paths come from `git diff --name-only` with the given revision
+# argument, in git's own forms: one REV compares it with the working tree, so
+# uncommitted edits count, and files git does not track yet are added to that
+# form. With no revision the base is the merge-base of HEAD and `origin/HEAD`.
+# `--files` names repository-relative paths directly, without git.
+#
+# stdout: one alias per line, `@DIR/FAMILY-NAME[-VARIANT]`, sorted, ready for
+# `tools/test-run.sh run build ...` or `tools/test-run.sh fresh ...`. stderr:
+# what each changed path reached, a per-directory count, and what this script
+# could not place. The graph is always the CURRENT worktree's, whatever
+# revisions were named.
+#
+# What dune is asked (each answer is checked against the forms listed below,
+# and an answer of any other form stops the run, exit 2):
+#   - `dune describe workspace --with-pps`: each library and `executables`
+#     stanza, its modules, and the project libraries it requires (ppx
+#     rewriters included). It omits `tests` stanzas.
+#   - `dune describe external-lib-deps`: the `tests` stanzas, with the project
+#     libraries each one names.
+#   - `dune show aliases DIR...` and `dune show targets DIR...`: the aliases
+#     and the targets of every directory holding a `dune` file.
+#   - `dune rules TARGET...`, for each per-test alias's own targets (below):
+#     the executables and the files, or globs of files, those rules read.
+#
+# Boundary, as an allowlist. Whatever it does not cover is reported on stderr,
+# never silently dropped:
+#   - A per-test alias is `@DIR/FAMILY-NAME` or `@DIR/FAMILY-NAME-VARIANT`
+#     that `dune show aliases` lists, FAMILY one of runtest, train, slow. Other
+#     families (`@scans`, `@lifecycle`, `@bin-smoke`, ...) are aggregates and
+#     never printed.
+#   - Its owners are the stanzas of DIR with NAME as a name, as a library's
+#     local name or as a module name, plus every executable that a rule of its
+#     own targets runs. Its own targets are DIR's targets named `NAME-VARIANT.*`
+#     or `NAME.VARIANT.*` (`NAME.*` when there is no variant) other than
+#     compiled objects, executables and preprocessed copies: `fresh` attributes
+#     a test's time by the same names. An alias with neither owners nor own
+#     targets is unattributed: it is printed whenever a reached stanza or a
+#     changed path lies in its directory, since what it reads is unknown.
+#   - A changed `.ml`/`.mli` reaches the stanza whose module it is (by
+#     directory and module name: `foo.ml`, `foo.mli`, a `(select)` choice
+#     `foo.cudajit.ml` are `Foo`); failing that, in a directory with `tests`
+#     stanzas, the one named after it or else every one there, since dune does
+#     not describe their modules. A changed `dune` file reaches every stanza and
+#     every per-test alias of its directory. Reach then spreads to each stanza
+#     requiring a reached library, to a fixpoint.
+#   - An alias is printed when its directory's `dune` file changed, when an
+#     owner is reached, or when a rule of its own targets reads a changed path
+#     (a file, or a glob over source files): the repository scans are found
+#     this way. A changed `.ml`/`.mli` reaching nothing (a deleted module, one
+#     no stanza of this build compiles) is UNMAPPED; any other changed path
+#     reaching nothing is listed as unread.
+#   - Not seen: an alias's action itself (dune does not dump it) and anything
+#     its own targets' rules reach only through another generated file.
+#
+# Exit: 0 every changed `.ml`/`.mli` was mapped; 3 the list is printed, but a
+# changed `.ml`/`.mli` is UNMAPPED (see stderr); 2 usage, git or dune failure,
+# nothing printed.
+set -u
+die() { echo "affected: $*" >&2; exit 2; }
+
+cd -P "$(dirname "$0")/.." || die "cannot cd to the repository root"
+command -v dune >/dev/null 2>&1 || . tools/opam-env.sh
+command -v dune >/dev/null 2>&1 || die "dune not found (opam environment not set up?)"
+command -v perl >/dev/null 2>&1 || die "perl not found"
+
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/affected.XXXXXX") || die "cannot create a temporary directory"
+trap 'rm -rf "${tmp:?}"' EXIT
+
+usage="usage: affected [REV | REV..REV | REV...REV] [-- PATHSPEC...] | affected --files PATH..."
+mode=git
+revs=()
+paths=()
+if [ "${1:-}" = --files ]; then
+  shift
+  [ $# -ge 1 ] || die "--files needs at least one path ($usage)"
+  mode=files
+  paths=("$@")
+else
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --) shift; paths=("$@"); break ;;
+      -*) die "unknown option: $1 ($usage)" ;;
+      *) revs+=("$1"); shift ;;
+    esac
+  done
+  [ ${#revs[@]} -le 1 ] || die "one revision argument at most, got ${#revs[@]} ($usage)"
+fi
+
+in_git=0
+git rev-parse --is-inside-work-tree >/dev/null 2>&1 && in_git=1
+if [ "$mode" = files ]; then
+  printf '%s\n' "${paths[@]}" >"$tmp/changed"
+else
+  [ "$in_git" = 1 ] || die "not a git checkout; use --files"
+  if [ ${#revs[@]} -eq 0 ]; then
+    git rev-parse --verify -q origin/HEAD >/dev/null ||
+      die "origin/HEAD does not resolve; name the base (affected REV), or set it: git remote set-head origin -a"
+    base=$(git merge-base HEAD origin/HEAD) || die "no merge-base of HEAD and origin/HEAD"
+    revs=("$base")
+  fi
+  case ${revs[0]} in
+    *..*) ;;
+    *) git rev-parse --verify -q "${revs[0]}^{commit}" >/dev/null || die "not a revision: ${revs[0]}" ;;
+  esac
+  git diff --name-only --no-renames "${revs[0]}" -- ${paths[@]+"${paths[@]}"} >"$tmp/changed" ||
+    die "git diff ${revs[0]} failed"
+  case ${revs[0]} in
+    *..*) ;;
+    *) git ls-files --others --exclude-standard -- ${paths[@]+"${paths[@]}"} >>"$tmp/changed" ||
+         die "git ls-files failed" ;;
+  esac
+fi
+
+dune describe workspace --root . --with-pps >"$tmp/workspace" 2>"$tmp/err" ||
+  die "dune describe workspace failed:
+$(cat "$tmp/err")"
+dune describe external-lib-deps --root . >"$tmp/lib-deps" 2>"$tmp/err" ||
+  die "dune describe external-lib-deps failed:
+$(cat "$tmp/err")"
+# Every directory holding a dune file may define per-test aliases.
+if [ "$in_git" = 1 ]; then
+  git ls-files --cached --others --exclude-standard -- dune '*/dune' >"$tmp/dune-files" ||
+    die "git ls-files failed"
+else
+  find . -name _build -prune -o -name dune -type f -print | sed 's|^\./||' >"$tmp/dune-files"
+fi
+while IFS= read -r f; do dirname -- "$f"; done <"$tmp/dune-files" | sort -u >"$tmp/dirs"
+[ -s "$tmp/dirs" ] || die "no dune files found"
+dirs=()
+while IFS= read -r d; do dirs+=("$d"); done <"$tmp/dirs"
+# Dune 3.24 prints these listings on stderr, and exits 0 even after an error,
+# so both streams are read together, and every line must have one of the forms
+# the reader below accepts.
+for what in aliases targets; do
+  dune show "$what" --root . "${dirs[@]}" >"$tmp/$what" 2>&1 ||
+    die "dune show $what failed:
+$(cat "$tmp/$what")"
+done
+
+perl - "$tmp" <<'PERL'
+use strict; use warnings;
+my ($tmp) = @ARGV;
+sub fail { print STDERR "affected: $_[0]\n"; exit 2 }
+sub slurp { local $/; open my $fh, "<", $_[0] or fail("cannot read $_[0]"); my $s = <$fh>; $s }
+
+# A reader for the sexps dune prints: lists, atoms, quoted strings.
+sub parse_sexp {
+  my ($s, $what) = @_;
+  my @stack = ([]);
+  pos($s) = 0;
+  while (pos($s) < length $s) {
+    if ($s =~ /\G\s+/gc) { next }
+    if ($s =~ /\G\(/gc) { push @stack, []; next }
+    if ($s =~ /\G\)/gc) {
+      @stack > 1 or fail("unbalanced output from $what");
+      my $l = pop @stack; push @{$stack[-1]}, $l; next;
+    }
+    if ($s =~ /\G"((?:[^"\\]|\\.)*)"/gcs) {
+      my $a = $1; $a =~ s/\\(.)/$1 eq "n" ? "\n" : $1/ge;
+      push @{$stack[-1]}, $a; next;
+    }
+    if ($s =~ /\G([^\s()"]+)/gc) { push @{$stack[-1]}, $1; next }
+    fail("unreadable output from $what at byte " . pos($s));
+  }
+  @stack == 1 or fail("unbalanced output from $what");
+  return $stack[0];
+}
+sub field { # a value from a list of (key value) pairs
+  my ($fields, $key) = @_;
+  for my $f (@$fields) { return $f->[1] if ref $f && @$f == 2 && !ref $f->[0] && $f->[0] eq $key }
+  return undef;
+}
+sub items { my $v = $_[0]; defined $v && ref $v ? @$v : () }
+sub atom { my ($v, $what) = @_; defined $v && !ref $v or fail("expected an atom in $what"); $v }
+sub pair { my ($e, $what) = @_; ref $e && @$e == 2 && !ref $e->[0] or fail("unexpected entry in $what"); @$e }
+sub dir_of { $_[0] =~ m{^(.*)/([^/]+)$} ? ($1, $2) : (".", $_[0]) }
+
+# Libraries and executables: ((root R) (build_context C) (KIND FIELDS)...).
+my $ws = parse_sexp(slurp("$tmp/workspace"), "dune describe workspace");
+@$ws == 1 && ref $ws->[0] or fail("dune describe workspace printed no workspace");
+my $ctx;
+my @st;          # { kind, dir, names, units => {NAME => 1}, to => [stanza index...] }
+my %by_modkey;   # "DIR\0Module" -> [stanza indices]
+my %lib_by_uid;  # local library uid -> stanza index
+my %lib_by_name; # public or local library name -> stanza index
+my @requires;
+for my $e (@{$ws->[0]}) {
+  my ($kind, $v) = pair($e, "dune describe workspace");
+  next if $kind eq "root";
+  if ($kind eq "build_context") { $ctx = atom($v, "build_context"); next }
+  $kind =~ /^(executables|library)$/
+    or fail("dune describe workspace entry \"$kind\" is outside this helper's boundary (executables, library)");
+  defined $ctx or fail("dune describe workspace gave no build_context before its stanzas");
+  next if $kind eq "library" && (field($v, "local") // "") ne "true";
+  my ($inc) = items(field($v, "include_dirs"));
+  # Dune names a stanza's object directory after it: DIR/.NAME.objs for a
+  # library (NAME its local name), DIR/.NAME.eobjs for executables.
+  my ($dir, $objname) = atom($inc, "include_dirs") =~ m{^\Q$ctx\E/(?:(.+)/)?\.([^/]+)\.e?objs/}
+    or fail("include_dir \"$inc\" is not an object directory under $ctx");
+  $dir //= ".";
+  my @names = $kind eq "library" ? (atom(field($v, "name"), "name")) : map { atom($_, "names") } items(field($v, "names"));
+  @names or fail("an executables entry without names in dune describe workspace");
+  push @st, { kind => $kind, dir => $dir, names => \@names, units => { map { $_ => 1 } @names } };
+  my $i = $#st;
+  push @requires, [items(field($v, "requires"))];
+  if ($kind eq "library") {
+    $lib_by_uid{atom(field($v, "uid"), "uid")} = $i;
+    $st[$i]{units}{$objname} = 1;
+    for my $n ($names[0], $objname) {
+      !defined $lib_by_name{$n} || $lib_by_name{$n} == $i or fail("two libraries answer to the name $n");
+      $lib_by_name{$n} = $i;
+    }
+  }
+  for my $m (items(field($v, "modules"))) {
+    my $name = atom(field($m, "name"), "module name");
+    next if $name =~ /__$/;   # alias modules dune generates
+    $st[$i]{units}{lcfirst $name} = 1;
+    for my $key ("impl", "intf") {
+      for my $p (items(field($m, $key))) {
+        my ($d) = dir_of(atom($p, $key) =~ s{^\Q$ctx\E/}{}r);
+        my $k = "$d\0$name";
+        push @{$by_modkey{$k}}, $i unless grep { $_ == $i } @{$by_modkey{$k} // []};
+      }
+    }
+  }
+}
+for my $i (0 .. $#st) {   # a uid outside %lib_by_uid is an installed library
+  $st[$i]{to} = [map { $lib_by_uid{$_} } grep { defined $lib_by_uid{$_} } @{$requires[$i]}];
+}
+
+# Test stanzas: ((CONTEXT (ENTRY...))), each ENTRY (KIND FIELDS).
+my $ext = parse_sexp(slurp("$tmp/lib-deps"), "dune describe external-lib-deps");
+@$ext == 1 or fail("dune describe external-lib-deps printed " . scalar(@$ext) . " contexts, expected one");
+my (undef, $entries) = pair($ext->[0], "dune describe external-lib-deps");
+my %skipped_optional;
+for my $e (@$entries) {
+  my ($kind, $v) = pair($e, "dune describe external-lib-deps");
+  $kind =~ /^(executables|tests|library)$/
+    or fail("dune describe external-lib-deps entry \"$kind\" is outside this helper's boundary (executables, tests, library)");
+  next unless $kind eq "tests";
+  my @names = map { atom($_, "names") } items(field($v, "names"));
+  my $dir = atom(field($v, "source_dir"), "source_dir");
+  @names or fail("a tests entry without names in $dir");
+  my @to;
+  for my $d (items(field($v, "internal_deps"))) {
+    my ($n, $k) = pair($d, "internal_deps");
+    if (defined $lib_by_name{$n}) { push @to, $lib_by_name{$n} }
+    elsif ($k eq "optional") { $skipped_optional{$n} = 1 }
+    else { fail("tests @names ($dir) uses project library $n, which dune describe workspace does not list") }
+  }
+  push @st, { kind => "tests", dir => $dir, names => \@names, units => { map { $_ => 1 } @names }, to => \@to };
+}
+
+# Per-directory listings: "DIR:" headers, one name per line.
+my @dir_list = grep { $_ ne "" } split /\n/, slurp("$tmp/dirs");
+my %is_dir = map { $_ => 1 } @dir_list;
+sub listing {
+  my ($what) = @_;
+  my (%by, $cur);
+  $cur = $dir_list[0] if @dir_list == 1;
+  for my $l (split /\n/, slurp("$tmp/$what")) {
+    next if $l eq "";
+    # A directory dune does not build (a data-only one, say) defines nothing.
+    if ($l =~ /^Error: Directory (.*) does not exist\.$/ && $is_dir{$1}) { $cur = undef; next }
+    if ($l =~ /^(.*):$/ && $is_dir{$1}) { $cur = $1; next }
+    $l =~ /^[A-Za-z0-9_.+-]+$/ or fail("unexpected line from dune show $what: $l");
+    defined $cur or fail("dune show $what printed $l outside any directory");
+    push @{$by{$cur}}, $l;
+  }
+  return \%by;
+}
+my $aliases = listing("aliases");
+my $targets = listing("targets");
+sub in_dir { my ($d, $f) = @_; $d eq "." ? $f : "$d/$f" }
+
+# Per-test aliases, their name owners and their own targets.
+my @al;   # { name, dir, owners => {index => 1}, own => [target...] }
+my $artifact = qr/\.(?:exe|bc|bc-for-jsoo|js|cmi|cmo|cmx|cmt|cmti|cma|cmxa|cmxs|a|o|so|dll|pp\.ml|pp\.mli|ml-gen|d)$/;
+for my $d (sort keys %$aliases) {
+  my @in = grep { $st[$_]{dir} eq $d } 0 .. $#st;
+  for my $a (@{$aliases->{$d}}) {
+    my ($rest) = $a =~ /^(?:runtest|train|slow)-(.+)$/ or next;
+    my ($unit, @variant) = split /-/, $rest;
+    my @prefix = @variant ? ("$rest.", join(".", $unit, @variant) . ".") : ("$rest.");
+    my @own = map { in_dir($d, $_) }
+      grep { my $t = $_; $t !~ $artifact && grep { index($t, $_) == 0 } @prefix } @{$targets->{$d} // []};
+    push @al, { name => "\@" . in_dir($d, $a), dir => $d,
+                owners => { map { $_ => 1 } grep { $st[$_]{units}{$unit} } @in }, own => \@own };
+  }
+}
+
+# The rules of those targets: what they run and what they read.
+my @own_targets = sort { $a cmp $b } keys %{{ map { $_ => 1 } map { @{$_->{own}} } @al }};
+my (%runs, %reads, %globs);   # target -> {stanza index}, {path}, [[dir, regex]]
+if (@own_targets) {
+  my $pid = open(my $fh, "-|") // fail("cannot fork for dune rules");
+  if (!$pid) { open STDERR, ">&", \*STDOUT; exec "dune", "rules", "--root", ".", @own_targets; exit 127 }
+  my $text = do { local $/; <$fh> };
+  close $fh or fail("dune rules failed:\n$text");
+  my %exe;   # "DIR\0NAME" -> stanza indices that build that executable
+  for my $i (grep { $st[$_]{kind} ne "library" } 0 .. $#st) {
+    push @{$exe{"$st[$i]{dir}\0$_"}}, $i for @{$st[$i]{names}};
+  }
+  sub glob_regex {   # dune's glob syntax: * ? [...] {a,b}; anything else is literal
+    my ($g) = @_;
+    $g =~ s/\[!/[^/g;   # a negated class
+    my ($re, $depth) = ("", 0);
+    for my $c (split //, $g) {
+      if ($c eq "*") { $re .= "[^/]*" } elsif ($c eq "?") { $re .= "[^/]" }
+      elsif ($c eq "{") { $re .= "(?:"; $depth++ } elsif ($c eq "}" && $depth) { $re .= ")"; $depth-- }
+      elsif ($c eq "," && $depth) { $re .= "|" } elsif ($c eq "[" || $c eq "]") { $re .= $c }
+      else { $re .= quotemeta $c }
+    }
+    return $depth ? qr/./ : qr/^$re$/;   # unbalanced: matches anything
+  }
+  sub predicate {   # a glob, or (and (P...)), (or (P...)), (not P): a matcher over file names
+    my ($p) = @_;
+    if (!ref $p) { my $re = glob_regex($p); return sub { $_[0] =~ $re } }
+    my ($op, $arg) = pair($p, "a glob predicate");
+    if ($op eq "not") { my $m = predicate($arg); return sub { !$m->($_[0]) } }
+    $op =~ /^(?:and|or)$/ && ref $arg or fail("a glob predicate \"$op\" is outside this helper's boundary");
+    my @m = map { predicate($_) } @$arg;
+    return $op eq "and" ? sub { my $f = $_[0]; !grep { !$_->($f) } @m } : sub { my $f = $_[0]; grep { $_->($f) } @m };
+  }
+  sub strip_ctx { my ($p) = @_; $p =~ s{^\Q$ctx\E/}{} ? $p : undef }
+  for my $rule (@{parse_sexp($text, "dune rules")}) {
+    ref $rule or fail("unexpected atom in dune rules output");
+    my $tg = field($rule, "targets");
+    my @files = map { atom($_, "targets") } items(field($tg // [], "files"));
+    my (%r, %p, @g);
+    for my $dep (items(field($rule, "deps"))) {
+      next if !ref $dep && $dep eq "Universe";   # always reruns; reads nothing in particular
+      ref $dep && @$dep && !ref $dep->[0] or fail("unexpected dependency in dune rules output");
+      my $k = $dep->[0];
+      if ($k eq "File") {
+        my ($where, $path) = pair($dep->[1], "a File dependency");
+        if ($where eq "In_build_dir") {
+          my $rel = strip_ctx($path) // next;   # another context's, or _build/install
+          if ($rel =~ m{^(?:(.*)/)?([^/]+)\.(?:exe|bc)$}) { $r{$_} = 1 for @{$exe{($1 // ".") . "\0$2"} // []} }
+          else { $p{$rel} = 1 }
+        } elsif ($where eq "In_source_tree") { $p{$path} = 1 }
+        elsif ($where ne "External") { fail("a File dependency \"$where\" is outside this helper's boundary") }
+      } elsif ($k eq "glob") {
+        my $spec = $dep->[1];
+        next if (field($spec, "only_generated_files") // "false") eq "true";
+        my ($where, $path) = pair(field($spec, "dir"), "a glob dependency");
+        next if $where eq "External";
+        my $gd = $where eq "In_build_dir" ? strip_ctx($path) : $path;
+        next unless defined $gd;
+        push @g, [$gd, predicate(field($spec, "predicate"))];
+      } elsif ($k !~ /^(?:Env|Alias|Universe|Sandbox_config)$/) {
+        fail("a dependency \"$k\" in dune rules output is outside this helper's boundary");
+      }
+    }
+    for my $f (@files) {
+      my $t = strip_ctx($f) // next;
+      $runs{$t} = \%r; $reads{$t} = \%p; $globs{$t} = \@g;
+    }
+  }
+  exists $runs{$_} or fail("dune rules printed no rule for $_") for @own_targets;
+}
+
+# Changed paths -> stanzas, and the aliases whose own targets read them.
+my (%hit, %dune_dirs, %read_by, @unmapped, @unread);
+my $unowned = 0;   # a changed module no stanza of this build owns
+my @changed = grep { $_ ne "" } map { s{^\./}{}r } split /\n/, slurp("$tmp/changed");
+sub label { my $s = $st[$_[0]]; "$s->{kind} @{$s->{names}} ($s->{dir})" }
+for my $p (@changed) {
+  my ($d, $b) = dir_of($p);
+  for my $a (@al) {
+    for my $t (@{$a->{own}}) {
+      if ($reads{$t}{$p} || grep { $_->[0] eq $d && $_->[1]->($b) } @{$globs{$t}}) { $read_by{$p}{$a->{name}} = 1; last }
+    }
+  }
+  my @ix;
+  my $how = "";
+  if ($b eq "dune") {
+    $dune_dirs{$d} = 1;
+    @ix = grep { $st[$_]{dir} eq $d } 0 .. $#st;
+    $how = "every per-test alias of $d, and its stanzas:";
+  } elsif ($b =~ /^([^.]+)(?:\.[^.]+)*\.mli?$/) {
+    my $mod = ucfirst $1;
+    @ix = @{$by_modkey{"$d\0$mod"} // []};
+    $how = "module $mod of";
+    unless (@ix) {
+      my @tests = grep { $st[$_]{kind} eq "tests" && $st[$_]{dir} eq $d } 0 .. $#st;
+      my @named = grep { $st[$_]{units}{lcfirst $mod} } @tests;
+      @ix = @named ? @named : @tests;
+      $how = @named ? "test module $mod of" : "a module of a tests stanza here (dune does not describe theirs), so all of";
+    }
+  }
+  $hit{$_} = 1 for @ix;
+  my $n_read = keys %{$read_by{$p} // {}};
+  my @parts;
+  push @parts, "$how " . (@ix > 3 ? scalar(@ix) . " stanzas" : join(", ", map { label($_) } @ix)) if @ix || $how =~ /^every/;
+  $unowned = 1 if !@ix && $b =~ /\.mli?$/;
+  push @parts, "a module no stanza of this build owns" if !@ix && $how =~ /^(?:module|a module)/ && $n_read;
+  push @parts, "read by the rules of $n_read alias(es)" if $n_read;
+  if (@parts) { print STDERR "affected: $p: " . join("; ", @parts) . "\n" }
+  elsif ($b =~ /\.mli?$/) { push @unmapped, $p }
+  else { push @unread, $p }
+}
+
+# Reach, to a fixpoint: a stanza requiring a reached library is reached.
+my %reached = %hit;
+for (my $grew = 1; $grew;) {
+  $grew = 0;
+  for my $i (0 .. $#st) {
+    next if $reached{$i};
+    if (grep { $reached{$_} } @{$st[$i]{to}}) { $reached{$i} = 1; $grew = 1 }
+  }
+}
+
+# A directory is touched when a reached stanza lives there or a changed path
+# does. An alias dune gives no owner and no targets of its own is printed
+# whenever its directory is touched: what it reads is unknown, so it is kept.
+my %touched = map { $st[$_]{dir} => 1 } keys %reached;
+$touched{(dir_of($_))[0]} = 1 for @changed;
+my (%out, %unattributed, %total, %listed, %aliased);
+my %read_any = map { %{$read_by{$_}} } keys %read_by;
+for my $a (@al) {
+  my %owners = (%{$a->{owners}}, map { %{$runs{$_} // {}} } @{$a->{own}});
+  $aliased{$_} = 1 for keys %owners;
+  $total{$a->{dir}}++;
+  my $unknown = !%owners && !@{$a->{own}};
+  $unattributed{$a->{name}} = 1 if $unknown && $touched{$a->{dir}};
+  if ($dune_dirs{$a->{dir}} || $read_any{$a->{name}} || grep({ $reached{$_} } keys %owners)
+      || $unattributed{$a->{name}}) {
+    $out{$a->{name}} = 1;
+    $listed{$a->{dir}}++;
+  }
+}
+
+print "$_\n" for sort keys %out;
+printf STDERR "affected: %s: %d of its %d per-test aliases\n", $_, $listed{$_}, $total{$_} for sort keys %listed;
+my %bare;
+$bare{$st[$_]{dir}}++ for grep { !$aliased{$_} && $st[$_]{kind} ne "library" } keys %reached;
+printf STDERR "affected: %s: %d reached executable stanza(s) no per-test alias runs\n", $_, $bare{$_} for sort keys %bare;
+# Only worth saying when a changed module has no stanza here: it may belong to one of these.
+if ($unowned) {
+  print STDERR "affected: optional library $_ is not in this build; edges to it skipped\n" for sort keys %skipped_optional;
+}
+print STDERR "affected: listed as unattributed: $_ (no stanza of its directory has that name, no targets of its own; its directory is touched)\n" for sort keys %unattributed;
+print STDERR "affected: unread: $_ (no stanza owns it, no per-test alias's rules read it)\n" for @unread;
+print STDERR "affected: UNMAPPED: $_ (no stanza dune describes owns this module, no rule reads it)\n" for @unmapped;
+printf STDERR "affected: %d alias(es) from %d changed path(s)%s\n", scalar(keys %out), scalar(@changed),
+  @unmapped ? "; INCOMPLETE, see UNMAPPED above" : "";
+exit(@unmapped ? 3 : 0);
+PERL

@@ -43,6 +43,9 @@
 #   tools/test-run.sh lock-status [RUN|last]          # idle/held; exits 0/3 (2 error)
 #   tools/test-run.sh idle                             # 0 idle, 3 locked, 2 unreadable
 #                                                     # snapshot, not a reservation
+#   tools/test-run.sh affected [REV|REV..REV|--files PATH...]
+#                                                      # the per-test aliases a change reaches;
+#                                                      # runs none (tools/affected-tests.sh)
 #
 # Read-only queries: `paths run [RUN|last]` resolves a recorded run (default last).
 # `paths worktree|runs|lock|owner|last [RUN|last]` without a run names THIS
@@ -725,7 +728,7 @@ query_state_for() {
 case ${1:-} in
   # Initialize lazily, only if the query needs this root; `_resolve` and
   # `_probe` work in the run directory their supervisor names.
-  paths | lock-status | _resolve | _probe) ;;
+  paths | lock-status | _resolve | _probe | affected) ;;
   *) RUNS=${RUNS:-$HOME/.ocannl-test-runs}
      mkdir -p "$RUNS" || die "cannot create $RUNS"
      RUNS=$(cd "$RUNS" && pwd -P) || die "cannot resolve $RUNS" ;;
@@ -2297,10 +2300,23 @@ finish_run() { # rc -> append sentinel, record verdict
 }
 
 sub=${1:-}
-[ -n "$sub" ] || die "usage: tools/test-run.sh run|start|plan|repeat|fresh|status|wait|stop|list|idle|paths|lock-status ... (see header)"
+[ -n "$sub" ] || die "usage: tools/test-run.sh run|start|plan|repeat|fresh|status|wait|stop|list|idle|paths|lock-status|affected ... (see header)"
 shift
 
 case $sub in
+  affected)
+    # Read-only, but it asks dune about this worktree, and a dune started
+    # beside a run's dune contends for `_build`: refuse while one is active.
+    query_state_for ""
+    probe_locks "$LOCK" "$PWD/.test-run.lock"
+    case $? in
+      0) ;;
+      3) die "a run is active in this worktree; affected asks dune too, so wait for it (status last)" ;;
+      *) die "cannot inspect worktree lock" ;;
+    esac
+    select_dune
+    exec bash tools/affected-tests.sh "$@"
+    ;;
   paths)
     [ $# -ge 1 ] && [ $# -le 2 ] || die "usage: paths FIELD [RUN|last]"
     field=$1
