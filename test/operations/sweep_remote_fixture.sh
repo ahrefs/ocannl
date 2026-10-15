@@ -331,6 +331,20 @@ case $remote_hang_probe in
   *) printf 'sweep harness: remote per-test cap leg skipped: ps does not read a renamed process as dune here\n' >&2 ;;
 esac
 
+# The device probe on the far side (gh-ocannl-1252): test_cmd's probe runs where the worktree is,
+# from its test/config, before any test leg, and its 69 crosses the ssh hop to read as `error`
+# named DEVICE UNHEALTHY, the suite never started there.
+remote_reset
+: >"$remote_root/minix-amd-linux/journal-template"
+: >"$tmp/probe.calls"
+local_remote=$(SWEEP_TEST_DEVICE_PROBE=$fake_bin/fake-device-probe SWEEP_TEST_DEVICE_PROBE_CAP=1 \
+  SWEEP_TEST_PROBE_HANG_AT=1 remote_sweep --only hip)
+grep -q '^  minix/hip: error ' <<<"$local_remote"
+grep -q '^  minix/hip: DEVICE UNHEALTHY, dune not started: a fresh device query for hip did not answer within 1s$' \
+  <<<"$local_remote"
+grep -qx "$remote_root/minix-amd-linux/ocannl-staging-worktrees/sweep/test/config --ocannl_backend=hip" "$tmp/probe.calls"
+absent '@runtest' "$remote_root/commands"
+
 # The former SSH fake and broken shipping commands must lose these oracles.
 # Children isolate the remote cases and never recurse into the controls.
 if [ "$remote_only" = 0 ]; then

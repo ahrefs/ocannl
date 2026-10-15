@@ -49,7 +49,11 @@
 #                                      # checked at startup, and it is asked whether tuf is up
 #                                      # before its lane, and to sleep it after
 #   OCANNL_TOOL_SWEEP_TEST_CAP=0 tools/sweep.sh  # lift the per-test cap on GPU units (default:
-#                                      # tools/per-test-cap.sh's 1500s; see test_cmd)
+#                                      # tools/per-test-cap.sh's 1500s; see test_cap_start_cmd)
+#   OCANNL_TOOL_SWEEP_DEVICE_PROBE=none tools/sweep.sh  # skip the device probe a GPU unit and
+#                                      # its serial rerun start with (or name a stand-in for
+#                                      # bin/device_props; _CAP bounds it, default 60s; see
+#                                      # device_probe_cmd)
 #   OCANNL_TOOL_FLEET_WORKER=none tools/sweep.sh  # do not consult the fleet's execution registry,
 #                                      # which otherwise skips a unit whose box is under an
 #                                      # exclusive measurement (sweep_fleet_under_measurement)
@@ -82,6 +86,13 @@ AGGREGATE_SKIPS=$SWEEP_TOOLS/aggregate-skips.sh
 }
 # shellcheck source=per-test-cap.sh
 . "$SWEEP_TOOLS/per-test-cap.sh"
+# And the device probe, shared the same way (device_probe_cmd).
+[ -r "$SWEEP_TOOLS/device-probe.sh" ] || {
+  echo "sweep: cannot read $SWEEP_TOOLS/device-probe.sh" >&2
+  exit 2
+}
+# shellcheck source=device-probe.sh
+. "$SWEEP_TOOLS/device-probe.sh"
 # The kernel-window filters (dxg for a WSL boot, native for a native one) and their counts, shared
 # with the harness that pins them. After box-jobs.sh, whose transport names pick the kind.
 [ -r "$SWEEP_TOOLS/kernel-window.sh" ] || {
@@ -312,12 +323,28 @@ ONLY=()
 # local and the remote side: macOS has no timeout(1) at all, and where timeout(1)
 # does exist it is not necessarily one whose -k reaches the process group.
 CAP=${OCANNL_TOOL_SWEEP_CAP:-5400}
-# Per-test cap for a GPU unit's test leg (gh-ocannl-1211; test_cmd says where it applies), the
-# default tools/test-run.sh gives a GPU batch; 0 lifts it.
+# Per-test cap for a GPU unit's dune legs (gh-ocannl-1211; test_cap_start_cmd says where it
+# applies), the default tools/test-run.sh gives a GPU batch; 0 lifts it.
 TEST_CAP=${OCANNL_TOOL_SWEEP_TEST_CAP:-$TEST_CAP_DEFAULT}
 case $TEST_CAP in
   '' | *[!0-9]*)
     echo "sweep: OCANNL_TOOL_SWEEP_TEST_CAP must be a whole number of seconds, not '$TEST_CAP'" >&2
+    exit 2 ;;
+esac
+# The device probe a GPU unit and its serial rerun start with (gh-ocannl-1252; device_probe_cmd):
+# empty for bin/device_props, `none` for no probe, or an absolute path to a stand-in taking the
+# same `--ocannl_backend=<name>` (the harness's); and the bound on each query.
+PROBE=${OCANNL_TOOL_SWEEP_DEVICE_PROBE:-}
+case $PROBE in
+  '' | none | /*) ;;
+  *)
+    echo "sweep: OCANNL_TOOL_SWEEP_DEVICE_PROBE must be none or an absolute path, not '$PROBE'" >&2
+    exit 2 ;;
+esac
+PROBE_CAP=${OCANNL_TOOL_SWEEP_DEVICE_PROBE_CAP:-$DEVICE_PROBE_CAP_DEFAULT}
+case $PROBE_CAP in
+  '' | 0 | *[!0-9]*)
+    echo "sweep: OCANNL_TOOL_SWEEP_DEVICE_PROBE_CAP must be a positive number of seconds, not '$PROBE_CAP'" >&2
     exit 2 ;;
 esac
 # The budget for the post-unit RTC context collection, deliberately separate from
@@ -861,10 +888,70 @@ fi
 # by collect_verdict_records; the stderr copy of each record stays in the log
 # for humans.
 verdict_records_dir() { printf '%s.verdict-records' "$1"; }
-# Where a GPU unit's per-test cap watcher keeps its records (test_cmd), beside the worktree.
+# Where a GPU unit's per-test cap watcher keeps its records (test_cap_start_cmd), beside the
+# worktree, and its device probe (device_probe_cmd).
 test_cap_dir() { printf '%s.test-cap' "$1"; }
+device_probe_dir() { printf '%s.device-probe' "$1"; }
 verdict_records_env() { # wt
   printf 'export OCANNL_TOOL_VERDICT_RECORDS="%s"; ' "$(verdict_records_dir "$1")"
+}
+
+# The per-test cap (gh-ocannl-1211) as shell text: tools/test-run.sh's own watcher, started beside
+# one dune leg of a GPU unit -- its suite (test_cmd), each stanza of its serial rerun
+# (serial_rerun_cmd) and its completion pass (suite_completion_cmd) -- and stopped after it by
+# test_cap_stop_cmd. A GPU fault wedges the device, every test dune starts after it hangs in device
+# init, and the unit's cap is the only other bound: on 2026-10-14 (sweep 20261014T051751Z) sixteen
+# tuf hip tests hung at once and held the unit for its full 5400 s with no test named. The serial
+# rerun needs it most, since what triggers it is a kernel-side refusal signature, when the device
+# is most likely faulted (gh-ocannl-1252). The first test past the cap sends the leg's supervisor
+# (the `sh -c` running this text is its child) the SIGALRM its own cap sends, so the leg ends as
+# `timeout` (142) with the hung test named in the log. GPU units only, as test-run.sh's default
+# applies, and not for a leg whose targets reach the slow aliases, which keeps only the unit's cap.
+# The watcher closes fd 9, the worktree lock, so it can never hold the lock past the leg. Prints
+# nothing and fails where the leg gets no watcher.
+test_cap_start_cmd() { # backend wt dune-target...
+  local backend=$1 wt=$2 watched
+  shift 2
+  ! box_jobs_cpu_backend "$backend" && [ "$TEST_CAP" -gt 0 ] || return 1
+  ! test_cap_reaches_slow "$@" >/dev/null || return 1
+  watched=$(test_cap_dir "$wt")
+  printf 'rm -rf "%s" && mkdir -p "%s" || exit 126; ' "$watched" "$watched"
+  printf 'perl -e %s %s "$$" "$PPID" "%s" gpu sweep %s </dev/null 9>&- & watch=$!; ' \
+    "$(sq "$test_cap_watch")" "$TEST_CAP" "$watched" \
+    "$(sq "Rerun with OCANNL_TOOL_SWEEP_TEST_CAP=0, or a larger cap")"
+}
+test_cap_stop_cmd() { printf 'kill $watch 2>/dev/null; wait $watch 2>/dev/null; '; }
+
+# The device probe (gh-ocannl-1252) as shell text, for the side that owns the worktree: the query
+# of tools/device-probe.sh, asked of the unit's backend through bin/device_props -- built here,
+# through the switch, in the worktree's own `_build` -- or the OCANNL_TOOL_SWEEP_DEVICE_PROBE
+# stand-in, bounded at PROBE_CAP. A query that does not answer ends the leg before dune starts,
+# with exit 69 and the probe's explanation in the log, which run_unit files as `error` (nothing was
+# judged) and names DEVICE UNHEALTHY; a wedged device then costs the unit a minute, not the first
+# test's per-test cap. Otherwise the answer goes to the log as a `sweep: device probe:` line and the
+# leg goes on, as it does when device_props does not build (recorded as not probed: the suite then
+# fails to build the same way). Not for a CPU backend, and not for a local unit on macOS without a
+# stand-in: a freshly linked device_props can sit in dlopen for minutes under XProtect, which would
+# read as a hung device (tools/test-run.sh's plan_device_probe has the same rule). Prints nothing
+# and fails where the leg gets no probe.
+device_probe_cmd() { # backend wt host
+  local backend=$1 wt=$2 host=$3 rd prog=$PROBE
+  ! box_jobs_cpu_backend "$backend" && [ "$PROBE" != none ] || return 1
+  [ -n "$PROBE" ] || [ -n "$host" ] || [ "$(uname -s)" != Darwin ] || return 1
+  rd=$(device_probe_dir "$wt")
+  printf 'rm -rf "%s" && mkdir -p "%s" || exit 126; ' "$rd" "$rd"
+  if [ -z "$PROBE" ]; then
+    prog=$wt/_build/default/bin/device_props.exe
+    printf 'if %s build ./bin/device_props.exe </dev/null >"%s/device-probe-build.log" 2>&1 && [ -x "%s" ]; then ' \
+      "$(switch_dune_cmd)" "$rd" "$prog"
+  fi
+  printf 'sh -c %s device-probe sweep %s %s "%s" "%s" %s; [ $? -ne 69 ] || exit 69; ' \
+    "$(sq "$device_probe_sh")" "$(sq "$probe_perl")" "$PROBE_CAP" "$rd" "$prog" "$backend"
+  if [ -z "$PROBE" ]; then
+    printf 'else echo "not probed: %s did not build (%s/device-probe-build.log)" >>"%s/device-probe"; fi; ' \
+      "$prog" "$rd" "$rd"
+  fi
+  printf 'sed "s/^/sweep: device probe: /" "%s/device-probe"; ' "$rd"
 }
 
 # How every leg below starts dune, as shell text: `$(switch_dune_cmd) build ...` runs `dune build
@@ -903,8 +990,8 @@ switch_dune_cmd() {
 # Everything below is written with printf and single quotes so that `$?` and the
 # arithmetic survive into the shell that finally runs them. The result is spliced
 # into the remote string via command substitution, which bash does not rescan.
-test_cmd() {
-  local backend=$1 wt=$2 jobs=${3:-} force_arg= jobs_arg=
+test_cmd() { # backend wt [jobs [host]]
+  local backend=$1 wt=$2 jobs=${3:-} host=${4:-} force_arg= jobs_arg=
   [ "$FORCE" = 1 ] && force_arg=--force
   [ -n "$jobs" ] && jobs_arg="-j $jobs"
   # 127, not a generic failure: a worktree that is not there means nothing ran,
@@ -942,22 +1029,17 @@ test_cmd() {
   if [ -n "$jobs" ] && [ -z "$TARGET" ]; then
     printf 'OCANNL_BACKEND=%s %s build @check; ' "$backend" "$(switch_dune_cmd)"
   fi
-  # The per-test cap (gh-ocannl-1211), tools/test-run.sh's own watcher beside this leg's dune: a
-  # GPU fault wedges the device, every test dune starts after it hangs in device init, and the
-  # unit's cap is the only other bound -- on 2026-10-14 (sweep 20261014T051751Z) sixteen tuf hip
-  # tests hung at once and held the unit for its full 5400 s with no test named. The first test
-  # past the cap sends the unit's supervisor (the `sh -c` running this text is its child) the
-  # SIGALRM its own cap sends, so the unit ends as `timeout` (142) with the hung test named in the
-  # log. GPU units only, and only this leg, as test-run.sh's default applies: the `@slow` leg
-  # below, and a --target that reaches the slow aliases, keep only the unit's cap. The watcher
-  # closes fd 9, the worktree lock, so it can never hold the lock past the unit.
+  # The device probe, after the compile-only prebuild has built most of `bin/device_props` and
+  # before any test touches the device (device_probe_cmd): a wedged device ends the unit here, as
+  # DEVICE UNHEALTHY, rather than at the first test's per-test cap.
+  device_probe_cmd "$backend" "$wt" "$host" || :
+  # The per-test cap beside the suite's dune (test_cap_start_cmd); the `@slow` leg below, and a
+  # --target that reaches the slow aliases, keep only the unit's cap.
   local watched=
-  if ! box_jobs_cpu_backend "$backend" && [ "$TEST_CAP" -gt 0 ] && ! test_cap_reaches_slow "$TARGET" >/dev/null; then
-    watched=$(test_cap_dir "$wt")
-    printf 'rm -rf "%s" && mkdir -p "%s" || exit 126; ' "$watched" "$watched"
-    printf 'perl -e %s %s "$$" "$PPID" "%s" gpu sweep %s </dev/null 9>&- & watch=$!; ' \
-      "$(sq "$test_cap_watch")" "$TEST_CAP" "$watched" \
-      "$(sq "Rerun with OCANNL_TOOL_SWEEP_TEST_CAP=0, or a larger cap")"
+  if watched=$(test_cap_start_cmd "$backend" "$wt" "$TARGET"); then
+    printf '%s' "$watched"
+  else
+    watched=
   fi
   if [ -z "$TARGET" ]; then
     printf 'OCANNL_BACKEND=%s %s build %s%s @runtest @train; rc1=$?; ' \
@@ -966,7 +1048,7 @@ test_cmd() {
     printf 'OCANNL_BACKEND=%s %s runtest %s%s %s; rc1=$?; ' \
       "$backend" "$(switch_dune_cmd)" "$jobs_arg${jobs_arg:+ }" "$force_arg" "$TARGET"
   fi
-  [ -z "$watched" ] || printf 'kill $watch 2>/dev/null; wait $watch 2>/dev/null; '
+  [ -z "$watched" ] || test_cap_stop_cmd
   if [ "$SLOW" = 1 ]; then
     printf 'OCANNL_BACKEND=%s %s build %s%s @slow; rc2=$?; ' \
       "$backend" "$(switch_dune_cmd)" "$jobs_arg${jobs_arg:+ }" "$force_arg"
@@ -1843,15 +1925,24 @@ rerun_aliases() { # log
 # per stanza so each has its own status: a single call over all of them would
 # report one verdict for the set. The markers are what serial_rerun reads back.
 # The actions it re-runs rewrite their own verdict records (verdict_records_dir).
-serial_rerun_cmd() { # backend wt alias...
-  local backend=$1 wt=$2 a
-  shift 2
+# A GPU unit's rerun starts with the device probe and runs each stanza under the
+# per-test cap (device_probe_cmd, test_cap_start_cmd): it is triggered by a
+# kernel-side refusal, when the device is most likely faulted, so a wedged device
+# ends it as DEVICE UNHEALTHY or at the first hung stanza, never at the unit's CAP
+# -- and either way the stanzas it did not reach are reported unjudged.
+serial_rerun_cmd() { # backend wt host alias...
+  local backend=$1 wt=$2 host=$3 a watched
+  shift 3
   printf 'cd "%s" || exit 127; ' "$wt"
   verdict_records_env "$wt"
+  device_probe_cmd "$backend" "$wt" "$host" || :
   for a in "$@"; do
     printf 'echo "=== serial rerun %s ==="; ' "$a"
+    watched=$(test_cap_start_cmd "$backend" "$wt" "$a") && printf '%s' "$watched"
     printf 'OCANNL_BACKEND=%s %s build -j 1 %s; ' "$backend" "$(switch_dune_cmd)" "$a"
-    printf 'echo "=== serial rerun %s: exit $? ==="; ' "$a"
+    printf 'rc=$?; '
+    [ -z "$watched" ] || test_cap_stop_cmd
+    printf 'echo "=== serial rerun %s: exit $rc ==="; ' "$a"
   done
   printf 'exit 0'
 }
@@ -1862,15 +1953,20 @@ serial_rerun_cmd() { # backend wt alias...
 # prerequisite held back, which rerunning the red stanzas alone does not reach
 # -- and replays nothing that already passed. Its exit 0 is the proof that
 # every action of the suite completed, its verdict records written, which is
-# what lets rerun_cleared stage the unit as skip evidence.
+# what lets rerun_cleared stage the unit as skip evidence. A GPU unit's pass runs
+# under the per-test cap (test_cap_start_cmd), unless it reaches `@slow`.
 suite_completion_cmd() { # backend wt
-  local slow_alias=
+  local slow_alias= watched
   [ "$SLOW" = 1 ] && slow_alias=' @slow'
   printf 'cd "%s" || exit 127; ' "$2"
   verdict_records_env "$2"
   printf 'echo "=== suite completion ==="; '
+  # shellcheck disable=SC2086  # the slow alias is word-split on purpose
+  watched=$(test_cap_start_cmd "$1" "$2" @runtest @train $slow_alias) && printf '%s' "$watched"
   printf 'OCANNL_BACKEND=%s %s build -j 1 @runtest @train%s; ' "$1" "$(switch_dune_cmd)" "$slow_alias"
-  printf 'echo "=== suite completion: exit $? ==="; '
+  printf 'rc=$?; '
+  [ -z "$watched" ] || test_cap_stop_cmd
+  printf 'echo "=== suite completion: exit $rc ==="; '
   printf 'exit 0'
 }
 
@@ -1902,6 +1998,7 @@ run_on_unit_host() { # host wt cmd log path_prefix
 serial_rerun() { # backend host wt log label [path_prefix]
   local backend=$1 host=$2 wt=$3 log=$4 label=$5 path_prefix=${6:-}
   local line cmd started rc a entry site stanza_count inline_count fallback_suffix=s completion
+  local log_lines bound
   local aliases=() fallback_aliases=() inline_entries=() inline_sites=()
   local unmapped=() red=() unjudged=()
   environment_red "$log" || return 0
@@ -1927,8 +2024,10 @@ serial_rerun() { # backend host wt log label [path_prefix]
     for site in "${inline_sites[@]}"; do unmapped+=("$site"); done
   fi
   started=$(date +%s)
+  # Where this phase's lines start in the log, for the bounds' own lines below.
+  log_lines=$(wc -l <"$log" | tr -d ' ')
   if [ ${#aliases[@]} -gt 0 ]; then
-    cmd=$(serial_rerun_cmd "$backend" "$wt" "${aliases[@]}")
+    cmd=$(serial_rerun_cmd "$backend" "$wt" "$host" "${aliases[@]}")
     echo "=== serial rerun: ${#aliases[@]} stanzas at -j 1 ===" >>"$log"
     run_on_unit_host "$host" "$wt" "$cmd" "$log" "$path_prefix"
     rc=$?
@@ -1989,6 +2088,13 @@ serial_rerun() { # backend host wt log label [path_prefix]
   [ ${#fallback_aliases[@]} -eq 1 ] && fallback_suffix=
   say "  $label: environment-red, $stanza_count stanzas and ${#fallback_aliases[@]} directory fallback$fallback_suffix rerun at -j 1 ($(( $(date +%s) - started ))s)"
   grep -h '^serial rerun: ' "$log" | sed "s|^|  $label: |" >>"$LANE_OUT"
+  # Why a bounded rerun stopped, from its own lines of the log: for the summary only, never a
+  # `serial rerun:` line, which the fingerprint carries and a pid or a timing would move.
+  bound=$(tail -n "+$((log_lines + 1))" "$log" | sed -n 's/^sweep: device probe: a fresh device query for \(.*\): the$/\1/p' |
+    head -n 1)
+  [ -z "$bound" ] || say "  $label: serial rerun: DEVICE UNHEALTHY, no stanza ran: a fresh device query for $bound"
+  bound=$(tail -n "+$((log_lines + 1))" "$log" | sed -n 's/^sweep: per-test cap: //p' | head -n 1)
+  [ -z "$bound" ] || say "  $label: serial rerun: hung test, past the per-test cap: $bound"
   return 0
 }
 
@@ -2089,7 +2195,7 @@ UNGUARDED_SAID=0
 run_unit() { # machine backend host
   local machine=$1 backend=$2 host=$3
   local log started remote_home remote_probe remote_started remote_boot wt path_prefix= remote_repo
-  local remote_prep remote rc elapsed outcome unreachable=skip unguarded hung
+  local remote_prep remote rc elapsed outcome unreachable=skip unguarded hung unhealthy
   WRITTEN_FINGERPRINT=
   CURRENT_UNIT=$machine/$backend
   UNGUARDED_SAID=0
@@ -2218,7 +2324,7 @@ run_unit() { # machine backend host
     # supervisor capped() uses locally, see remote_capped -- because a
     # per-dune-call cap would let a --slow unit run for twice the budget the
     # script advertises.
-    remote="$(remote_capped "$CAP" "$path_prefix $(remote_lock_cmd "$wt") $(test_cmd "$backend" "$wt" "$(box_jobs_sweep_jobs "$machine" "$backend" "$host")")" \
+    remote="$(remote_capped "$CAP" "$path_prefix $(remote_lock_cmd "$wt") $(test_cmd "$backend" "$wt" "$(box_jobs_sweep_jobs "$machine" "$backend" "$host")" "$host")" \
       "$(sleep_guard_why "$host" suite)")"
     # The far-side cap does not bound the LOCAL ssh: if the connection blackholes
     # after the command starts -- the box suspends, the WiFi drops -- the remote
@@ -2259,7 +2365,7 @@ run_unit() { # machine backend host
       sweep_state_update "$machine" "$backend" error "$WRITTEN_FINGERPRINT"
       return 0
     fi
-    run_capped "$CAP" /bin/sh -c "$(test_cmd "$backend" "$wt" "$(box_jobs_sweep_jobs "$machine" "$backend" "$host")")" >"$log" 2>&1
+    run_capped "$CAP" /bin/sh -c "$(test_cmd "$backend" "$wt" "$(box_jobs_sweep_jobs "$machine" "$backend" "$host")" "$host")" >"$log" 2>&1
     rc=$?
   fi
 
@@ -2280,6 +2386,13 @@ run_unit() { # machine backend host
   # dune in the selected switch, no worktree to cd into. Nothing was judged, so
   # that is non-coverage, not a red suite -- a distinction that matters most on a
   # GPU box used rarely enough for its switch to rot unnoticed.
+  #
+  # 69 with the device probe's refusal in the log is a wedged device (device_probe_cmd): dune never
+  # started, so it is `error` too, and the line below names it DEVICE UNHEALTHY. A 69 without that
+  # refusal is whatever the suite exited with, as before.
+  unhealthy=
+  [ "$rc" != 69 ] ||
+    unhealthy=$(sed -n 's/^sweep: device probe: a fresh device query for \(.*\): the$/\1/p' "$log" 2>/dev/null | head -n 1)
   case $rc in
     # `pass` is reserved for the mode that makes Dune re-execute every action
     # attached to the selected aliases. An incremental success is useful, but
@@ -2288,6 +2401,7 @@ run_unit() { # machine backend host
     0) [ "$FORCE" = 1 ] && outcome=pass || outcome=incremental-pass ;;
     124 | 137 | 142) outcome=timeout ;;
     126 | 127) outcome=error ;;
+    69) [ -n "$unhealthy" ] && outcome=error || outcome=fail ;;
     255) [ -n "$host" ] && outcome=error || outcome=fail ;;
     *) outcome=fail ;;
   esac
@@ -2297,6 +2411,9 @@ run_unit() { # machine backend host
     hung=$(sed -n 's/^sweep: per-test cap: //p' "$log" 2>/dev/null | head -n 1)
     [ -z "$hung" ] || say "  $machine/$backend: hung test, past the per-test cap: $hung"
   fi
+  # And a unit the device probe refused, which device it found wedged.
+  [ -z "$unhealthy" ] ||
+    say "  $machine/$backend: DEVICE UNHEALTHY, dune not started: a fresh device query for $unhealthy"
   record "$machine" "$backend" "$outcome" "$elapsed" "$log" "$execution"
   # The kernel's own evidence for THIS unit's window, before the rerun
   # decision that reads it -- and before the RTC diagnostics below, which is not
