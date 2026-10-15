@@ -2178,9 +2178,9 @@ class FixtureDigestTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(out.getvalue(), "")
 
-    def test_checked_in_divergence_accounts_for_tuf_copies_of_m4_max(self):
-        # gh-ocannl-720 copies the transformer fixtures to TUF instead of regenerating them.
-        # Pin that recorded policy and keep missing/different origins visible for every entry.
+    def test_checked_in_divergence_accounts_for_copies_of_m4_max(self):
+        # gh-ocannl-720 copies the transformer fixtures to other boxes instead of regenerating
+        # them. Pin that recorded policy and keep missing/different origins visible for every entry.
         digests = HERE / "fixtures" / fixture_digest.DIGEST_FILE
         entries, declared = fixture_digest._read_document(digests)
         expected = {
@@ -2191,19 +2191,19 @@ class FixtureDigestTest(unittest.TestCase):
         self.assertTrue(expected, "no GPT workload specs found")
         copied = {name for name, recorded in entries.items() if any(e.origin == "tuf" for e in recorded)}
         self.assertEqual(copied, expected, "TUF must record every GPT fixture copy")
-        # Further boxes recorded on m4-max's bytes for a GPT fixture, each verified where it sits:
-        # rog-nv's gpt2_mini_train_b256 row was recorded on rog against the gh-ocannl-1183 copy.
-        also_on_m4_max = {"gpt2_mini_train_b256.safetensors": {"rog-nv"}}
-        self.assertLessEqual(set(also_on_m4_max), copied)
 
         for name, recorded in entries.items():
             self.assertTrue(recorded, name)
             by_origin = {e.origin: e for e in recorded}
-            copies = {"m4-max", "tuf"} | also_on_m4_max.get(name, set())
+            # The copy rule: every content-v1 row of a GPT fixture is m4-max's bytes, whichever box
+            # recorded it (TUF's copies, and each further box's row recorded on the copy it holds),
+            # so a box that regenerated its own transformer fixture fails here. Legacy raw-v1 rows
+            # predate the copies and stay their boxes' own bytes, divergent from m4-max's.
+            copies = {e.origin for e in recorded if e.kind == "content-v1"} if name in copied else set()
             if name in copied:
                 self.assertIn("m4-max", by_origin, name)
+                self.assertLessEqual({"m4-max", "tuf"}, copies, name)
                 for origin in copies:
-                    self.assertEqual(by_origin[origin].kind, "content-v1", f"{name} on {origin}")
                     self.assertEqual(
                         by_origin[origin].sha256, by_origin["m4-max"].sha256, f"{name} on {origin}"
                     )
