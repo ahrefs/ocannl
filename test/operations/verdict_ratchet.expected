@@ -503,6 +503,7 @@ does not read an unqualified claim name no open of Verdict brings in: true
 refuses a claim name past a later open as ambiguous, naming the qualified remedy: true
 reads a claim name a later let binds as the source's own, past an open of Verdict: true
 refuses a literal label under a type constraint: true
+resolves a label through a chain of let renamings: true
 resolves a label binding written with a type annotation: true
 refuses a planted label literal carrying a line break, naming the one-line remedy: true
 refuses a gate that tests its own population for emptiness: true

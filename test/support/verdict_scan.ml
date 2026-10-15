@@ -368,7 +368,6 @@ let claim_calls ~callees content =
     | Pexp_constraint (inner, _) | Pexp_coerce (inner, _, _) -> peel inner
     | _ -> expr
   in
-  let literal_of expr = Read.string_literal (peel expr) in
   let key_of env argument =
     let argument = peel argument in
     match Read.string_literal argument with
@@ -458,9 +457,23 @@ let claim_calls ~callees content =
         decide false
           (List.filter_map env.Lexical_scope.frames ~f:(fun frame -> Map.find frame name))
 
-      method! let_denotes binding =
+      (* A name bound to a literal denotes that literal, and so does a name bound to another name
+         that does -- [let label = raw] -- through any chain of such renamings, each resolved in the
+         scope of its own right-hand side. *)
+      method! binding_denotes env binding =
         match Read.pattern_name binding.pvb_pat with
-        | Some _ -> (literal_of binding.pvb_expr, binding.pvb_loc.loc_start.pos_cnum + 1)
+        | Some _ ->
+            let rhs = peel binding.pvb_expr in
+            let literal =
+              match (Read.string_literal rhs, rhs.pexp_desc) with
+              | (Some _ as literal), _ -> literal
+              | None, Pexp_ident { txt = Ppxlib.Longident.Lident name; _ } -> (
+                  match Lexical_scope.lookup env name with
+                  | Some (literal, _) -> literal
+                  | None -> None)
+              | None, _ -> None
+            in
+            (literal, binding.pvb_loc.loc_start.pos_cnum + 1)
         | None -> self#local
 
       method! define ~top env rec_flag bindings ~walk =
@@ -551,6 +564,13 @@ let dialect_census content =
     too, and a line break in the format is one in every rendered label. [Verdict.fail] is not read:
     its argument is a message, multi-line by design, and every line of it is printed with the
     prefix.
+
+    Where a label counts as LITERAL is a deliberate, closed list: a string constant, under any type
+    constraints or coercions, or a name bound to one -- directly or through a chain of [let]
+    renamings. Every other expression is a computed label, however statically it could be evaluated
+    ([if c then "a\nb" else "c"], [String.concat]): that is the sanitizer's case, and [Verdict]
+    prints it on one row whatever it holds. This reader is the lint for the label a person writes
+    out; the sanitizer is what makes the run correct.
 
     What it cannot see: a label computed from an expression (the sanitizer's case, by design), a
     claim reached through a wrapper the source binds ([let skipped = Verdict.skipped ~backend]), and
