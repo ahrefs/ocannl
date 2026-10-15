@@ -210,6 +210,7 @@ config_usage_scan.ml: [scanner-refusal:f39c89d1f700c14082d119fea8a9fb93] tracked
 config_usage_scan.ml: [scanner-refusal:6bb17d62436571b3e716c4bba5c0f746] promised non-OCANNL assignment (claim) is catalogued beside config_usage_scan.expected, config_usage_scan_refusal_control.expected: true
 config_usage_scan.ml: [scanner-refusal:b8ac42648b6918233995586551724f6f] documented OCANNL assignment (claim) is catalogued beside config_usage_scan.expected, config_usage_scan_refusal_control.expected: true
 config_usage_scan.ml: [scanner-refusal:84bf7dbb3e9182b1eced5e76a271e5f6] config-usage direct refusal (claim) is catalogued beside config_usage_scan.expected, config_usage_scan_refusal_control.expected: true
+config_usage_scan.ml: [scanner-refusal:03f2822e76feddd4b79a462013315b06] config-usage refusal is (claim) is catalogued beside config_usage_scan.expected, config_usage_scan_refusal_control.expected: true
 config_usage_scan.ml: [scanner-refusal:ed12f66c93e310aaa2996f755dd93a06] config-usage refusal control (claim) is catalogued beside config_usage_scan.expected, config_usage_scan_refusal_control.expected: true
 config_usage_scan.ml: [scanner-refusal:0019608f362162cac94b5c873afbcc80] config-usage refusal names (claim) is catalogued beside config_usage_scan.expected, config_usage_scan_refusal_control.expected: true
 config_usage_scan.ml: [scanner-refusal:abf34118c8986fba00fd6d04dbec92e2] source inventory supplies (claim) is catalogued beside config_usage_scan.expected, config_usage_scan_refusal_control.expected: true

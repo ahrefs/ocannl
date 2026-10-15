@@ -849,36 +849,28 @@ let check ?(fail = Verdict.fail) ?(known_keys = Utils.known_config_keys)
                Printf.sprintf "%s:%s (%s) expected %d, saw %d" path spelling key expected actual)
            |> String.concat ~sep:", ")))
 
-let direct_refusal_formats =
-  [
-    "%s:%d: ambiguous bare config mention `%s` lacks a file/key/count entry in \
-     ambiguous_bare_config_mentions";
-    "%s:%d: prefix-free config flag `%s` lacks a file/key/count entry in \
-     prefix_free_config_mentions";
-    (* The script-hint formats share the general one's static runs, so they precede it here: the
-       first matching format is the one a refusal is attributed to. *)
-    "%s:%d: %s `%s` names `%s`, absent from Utils.known_config_keys -- unless it misspells a \
-     registered key, a script's own name sits in OCANNL's config namespace: rename it after what \
-     it does, or put harness control under the exempt OCANNL_TOOL_* prefix (see \
-     docs/agent-notes/build-and-test.md#scan-corpora-goldens-and-floors)";
-    "%s:%d: %s `%s` names `%s`, absent from Utils.known_config_keys -- unless it misspells a \
-     registered key, a script's own option is spelled in OCANNL's config grammar: rename it after \
-     what it does; no command-line spelling is exempt, the OCANNL_TOOL_* exemption covers \
-     environment names only (see \
-     docs/agent-notes/build-and-test.md#scan-corpora-goldens-and-floors)";
-    "%s:%d: %s `%s` names `%s`, absent from Utils.known_config_keys";
-    "registered config keys collide with Builtins_cc OCANNL_ C macro names -- rename: %s";
-    "%s:%d: ambiguous command-line value `%s` for `%s` lacks a file/token/key/count entry in \
-     ambiguous_cli_value_mentions";
-    "non-config environment exemptions now name registered config keys -- remove: %s";
-    "non-config environment-mention occurrence counts drifted: %s";
-    "non-config assignment exemptions now name registered config keys -- remove: %s";
-    "non-config assignment exemption occurrence counts drifted: %s";
-    "historical invalid-config exemption occurrence counts drifted: %s";
-    "ambiguous bare config-mention occurrence counts drifted: %s";
-    "prefix-free config-mention occurrence counts drifted: %s";
-    "ambiguous command-line value occurrence counts drifted: %s";
-  ]
+(* The formats [check] hands to [fail], read from this file through the extraction the refusal
+   manifest itself uses, so the control and the raising site cannot hold two copies of one message.
+   The control's rule runs in this directory with the source among its dependencies. *)
+let direct_refusal_formats source =
+  Test_utils.Refusal_control_scan.diagnostics
+    (In_channel.read_all (Stdlib.Filename.basename source))
+  |> List.filter_map ~f:(fun diagnostic ->
+      match diagnostic.Test_utils.Refusal_control_scan.kind with
+      | Test_utils.Refusal_control_scan.Fail -> Some diagnostic.format
+      | Test_utils.Refusal_control_scan.Claim -> None)
+
+(* The format a refusal [message] is credited to: the one that matches it and that no matching
+   format fixing strictly more static text outranks -- the manifest's own [owns_line] rule. The
+   script-hint formats share every static run of the general one and add more, so they win their
+   messages whatever the formats' order; two equally specific matches credit neither. *)
+let attribute formats message =
+  match
+    List.filter formats ~f:(fun format ->
+        Refusal_manifest.owns_line ~rivals:formats ~format message)
+  with
+  | [ format ] -> Some format
+  | _ -> None
 
 (* Every agent-note pointer a refusal format carries, as [(note basename, anchor)]. *)
 let note_pointers format =
@@ -908,13 +900,13 @@ let note_pointers format =
 
 let refusal_control grammar_fixture notes_dir =
   let source = "test/operations/config_usage_scan.ml" in
+  let direct_refusal_formats = direct_refusal_formats source in
   let observed = Hash_set.create (module String) in
   let unexpected = ref [] in
+  let messages = ref [] in
   let fail message =
-    match
-      List.find direct_refusal_formats ~f:(fun format ->
-          Test_utils.Refusal_control_scan.format_matches ~format message)
-    with
+    messages := message :: !messages;
+    match attribute direct_refusal_formats message with
     | Some format ->
         Hash_set.add observed format;
         Refusal_manifest.observe_failure ~source ~format
@@ -1071,6 +1063,11 @@ let refusal_control grammar_fixture notes_dir =
     ];
   Verdict.p_all ~min:15 "every config-usage direct refusal format is observed"
     direct_refusal_formats ~f:(Hash_set.mem observed);
+  Verdict.p_all ~min:15 "a config-usage refusal is credited to the same format in reversed order"
+    !messages ~f:(fun message ->
+      Option.equal String.equal
+        (attribute direct_refusal_formats message)
+        (attribute (List.rev direct_refusal_formats) message));
   Verdict.p_empty "the config-usage refusal control emits no unexpected diagnostic"
     ~over:(Hash_set.to_list observed) !unexpected;
   (* The pointer is in the refusal text itself, so it is derived from the formats and resolved
