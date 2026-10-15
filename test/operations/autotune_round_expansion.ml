@@ -13,13 +13,13 @@
    [Autotune.on_candidate_measured] (gh-ocannl-1027), with the windows opted out of host contention
    ([with_uncontended_test_windows], gh-ocannl-1156). The seeds are scripted as the playoff test's
    [slower] scenario: singles tie, so every keyed segment plays alternates, and every alternate is
-   slower than the recombined composite, so nothing swaps; but each later alternate is faster than
-   the one before, so the beam (width 2) enters round 1 as the recombined composite plus its LAST
-   alternate (why the last, below). A round child is scripted additively from its parent's time: a
-   move on the near-copy's differing segment gains a full unit (it starts from the alternate
-   geometry the head lacks); every other move loses a little. That landscape is the one the rule is
-   built for, and on it a rule that expanded the head alone would lose the round's best, while one
-   that skipped a differing segment would too.
+   slower than the recombined composite, so nothing swaps; one alternate is scripted faster than the
+   others, so the beam (width 2) enters round 1 as the recombined composite plus that alternate
+   (which one, below). A round child is scripted additively from its parent's time: a move on the
+   near-copy's differing segment gains a full unit (it starts from the alternate geometry the head
+   lacks); every other move loses a little. That landscape is the one the rule is built for, and on
+   it a rule that expanded the head alone would lose the round's best, while one that skipped a
+   differing segment would too.
 
    One search per rule, then the claims comparing them: [differing] times exactly [full]'s round
    candidates minus the near-copy's moves on the segments it shares with the head, and crowns the
@@ -31,12 +31,20 @@
    most of the test's cost. That each segment still offers three or more is claimed ([menu]), as the
    playoff test claims it: the beam's second entry is a playoff alternate, and a segment offers one
    only beside its best single. Unlike the playoff's, these claims also depend on WHICH alternate
-   seats: its differing segment must offer round moves, or the rule has nothing to tell apart. On
-   the small menu the first segment's alternates are tensorized geometries that offer none, and the
-   second segment's last alternate is a register-tiled one that does, hence the last alternate. The
-   seating is the scripting's choice, but the moves are the menu's: a cost-model or sketch change
-   that seats a moveless alternate fails [full: the round extends the near-copy on its differing
-   segment] loudly, and the remedy is to re-pick the seated window, not to weaken the claim.
+   seats: its differing segment must offer round moves, or the rule has nothing to tell apart. Some
+   alternates' do not (tensorized or fully register-tiled geometries leave the round nothing to
+   move), and which ones offer moves is the menu's, which the cc vector width reshapes: at 16 bytes
+   (NEON), 32 (AVX2) and 64 (AVX-512) the pre-filter keeps different singles, and the alternate the
+   scripting once seated by position -- the last one timed -- offered moves at 16 and 64 bytes but
+   not at 32, so the test failed on exactly the CI runners without AVX-512. So the seat is chosen by
+   that property instead: a [full] search seats the last alternate, and if its differing segment
+   offered no round move, the alternates are tried latest first, one [full] search each, until one
+   does; the other rules then seat the same one. The width is pinned to 32 bytes, so the menu is the
+   same on every machine and the positional choice fails there: claimed as a setup control, so the
+   selection is exercised on every run. A menu change under which the last alternate offers moves at
+   32 bytes fails that control, and the remedy is to pin a width where it does not; one under which
+   no alternate offers any fails [full: the round extends the near-copy on its differing segment].
+   Neither is to be weakened.
 
    Pinned to cc: the seeding and the scripted ranking are backend-independent, and cc is always
    available. *)
@@ -49,6 +57,9 @@ let is_composite = Fissioned_chain.is_composite
 
 (* The small menu (see the header), for every search here: stated before the first search. *)
 let () = Fissioned_chain.small_menu ()
+
+(* The cc vector width every search runs at (see the header), stated like the small menu. *)
+let () = Hashtbl.set Utils.config_file_args ~key:"cc_vector_bytes" ~data:"32"
 let expansion_key = "autotune_round_expansion"
 
 (* A beam-round candidate's parent tag and the segment its move extends: [F_saved[<n> segs from
@@ -76,14 +87,18 @@ type observed = {
   near_copy : string;  (** The other beam entry's. *)
   differing : int list;  (** The segments where the near-copy differs from the head. *)
   children : child list;  (** Round 1's timed candidates, in attempt order. *)
+  composites : (string * string) list;
+      (** Every timed composite's label and digest tag, in attempt order: the recombined composite,
+          then its alternates. *)
 }
 
 let gain = 1.0
 let loss = 0.05
 
-(* One search under [rule] (stated at the config-file level for this search only). *)
-let search rule =
-  let report = ref None and composites = ref 0 and children = ref [] and measured = ref [] in
+(* One search under [rule] (stated at the config-file level for this search only), seating as the
+   beam's near-copy the alternate labelled [seat], or without one the last alternate timed. *)
+let search ?seat rule =
+  let report = ref None and composites = ref [] and children = ref [] and measured = ref [] in
   (* Every timed candidate's digest tag -> (full digest, scripted time). *)
   let timed = Hashtbl.create (module String) in
   (* The two fastest composites: the beam round 1 expands (its singles, presets and baseline are
@@ -101,11 +116,17 @@ let search rule =
         let ms =
           if is_single label then 100.
           else if is_composite label then (
-            (* The recombined composite, then its alternates: each faster than the one before and
-               all slower than it, however many play. *)
-            let n = !composites in
-            Int.incr composites;
-            if n = 0 then 10. else 10. +. (1. /. Float.of_int (n + 1)))
+            (* The recombined composite, then its alternates, all slower than it however many play.
+               Without [seat] each alternate is faster than the one before, so the last seats; with
+               it, [seat] is faster than every other. *)
+            let n = List.length !composites in
+            composites := (label, Autotune.digest_tag digest) :: !composites;
+            if n = 0 then 10.
+            else
+              match seat with
+              | None -> 10. +. (1. /. Float.of_int (n + 1))
+              | Some seat when String.equal label seat -> 10.01
+              | Some _ -> 10.5 +. (1. /. Float.of_int (n + 1)))
           else
             match round_move label with
             | None -> 1000.
@@ -162,13 +183,23 @@ let search rule =
   | Some report, Some (head, near_copy, differing) ->
       let children = List.rev !children in
       Stdio.eprintf
-        "%s (not part of the golden): beam %s + %s (differing in segment(s) %s), %d round \
-         candidate(s), crown %s %.2f ms\n\
+        "%s, seating %s (not part of the golden): beam %s + %s (differing in segment(s) %s), %d \
+         round candidate(s), crown %s %.2f ms\n\
          %!"
-        rule head near_copy
+        rule
+        (Option.value seat ~default:"the last alternate")
+        head near_copy
         (String.concat ~sep:"," (List.map differing ~f:Int.to_string))
         (List.length children) report.Autotune.best_label report.Autotune.best_ms;
-      { report; measured = List.rev !measured; head; near_copy; differing; children }
+      {
+        report;
+        measured = List.rev !measured;
+        head;
+        near_copy;
+        differing;
+        children;
+        composites = List.rev !composites;
+      }
   | Some _, None -> failwith (rule ^ ": the search timed no round candidate")
   | None, _ -> failwith (rule ^ ": the search delivered no report")
 
@@ -180,10 +211,37 @@ let round_best (o : observed) =
 
 let same_labels a b = List.equal String.equal (labels a) (labels b)
 
+(* Whether a [full] search extended its near-copy on the segment where it differs from the head:
+   what every claim below needs of the seated alternate. *)
+let moves_on_differing (o : observed) =
+  List.exists (from o.near_copy o) ~f:(fun c -> List.mem o.differing c.segment ~equal:Int.equal)
+
+let seated_label (o : observed) =
+  List.find_map o.composites ~f:(fun (label, tag) ->
+      Option.some_if (String.equal tag o.near_copy) label)
+
+(* The seat (see the header): the last alternate if its differing segment offers round moves,
+   otherwise the latest-timed alternate whose does, tried one [full] search each. Returns the
+   positional search, the [full] search at the seat, and the seat to script the other rules with:
+   [None] where the positional search is the one kept, so every rule scripts the same times. *)
+let select_seat () =
+  let positional = search "full" in
+  let tried = seated_label positional in
+  let rec next = function
+    | _ when moves_on_differing positional -> (positional, None)
+    | [] -> (positional, None)
+    | seat :: rest when Option.equal String.equal (Some seat) tried -> next rest
+    | seat :: rest ->
+        let o = search ~seat "full" in
+        if moves_on_differing o then (o, Some seat) else next rest
+  in
+  let full, seat = next (List.rev_map (List.drop positional.composites 1) ~f:fst) in
+  (positional, full, seat)
+
 let () =
-  let full = search "full" in
-  let differing = search "differing" in
-  let head = search "head" in
+  let positional, full, seat = select_seat () in
+  let differing = search ?seat "differing" in
+  let head = search ?seat "head" in
   (* The beam's near-copy is a playoff alternate, so the claims below can fail only where each
      segment offers alternates to its best single. *)
   Fissioned_chain.menu_claim full.measured;
@@ -192,6 +250,11 @@ let () =
       o.report.Autotune.rounds_run = 1);
   p_all "setup: every rule entered round 1 with the same beam" [ differing; head ] ~f:(fun o ->
       String.equal o.head full.head && String.equal o.near_copy full.near_copy);
+  (* The control: at the pinned width, seating by position seats an alternate the claims cannot use,
+     so the selection above is exercised on every machine. *)
+  p_none "setup: the last alternate, seated by position, is extended only on segments it shares"
+    (from positional.near_copy positional) ~f:(fun c ->
+      List.mem positional.differing c.segment ~equal:Int.equal);
   p "setup: the near-copy differs from the head in exactly one segment"
     (match full.differing with [ i ] -> i >= 0 | _ -> false);
   p_all "full: every round candidate extends a beam entry" full.children ~f:(fun c ->
