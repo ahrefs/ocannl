@@ -336,7 +336,10 @@ controls_fixture() {
         ;;
       tokens)
         module=gpu-tokens.sh
-        sed 's/(\$d >> 8) & 0xfff/($d >> 4) \& 0xfff/' "$TOOLS/$module" >"$control/$module"
+        # The inode, not the device: a mutated device formula can land on the same key where the
+        # host's st_dev is small (it did on the macOS runner), the inode cannot.
+        perl -pe 's/\. ":" \. \$st\[1\];/. ":" . (\$st[1] + 1);/' "$TOOLS/$module" >"$control/$module"
+        grep -q 'st\[1\] + 1' "$control/$module" || echo 'tokens mutant did not apply' >&2
         pattern='FAIL  tokens: the reader finds the held token and the cpu slot'
         ;;
     esac
