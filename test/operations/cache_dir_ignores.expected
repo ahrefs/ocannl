@@ -15,6 +15,7 @@ Sources naming a schedule cache directory, all with the `autotune_cache` prefix 
   test/operations/hip_scratch_tune_survives.ml
   test/operations/placement_store.ml
   test/operations/resource_fault_injection.ml
+  test/operations/resource_fault_injection_domains.ml
   test/operations/schedule_cache_device.ml
   test/operations/schedule_cache_entry_name.ml
   test/operations/schedule_cache_numerics.ml

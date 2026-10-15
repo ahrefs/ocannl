@@ -9,6 +9,15 @@ files.
   A release change is not accepted by a flat memory curve: inject after allocation, before and
   during cleanup, and at persistence commit/replay; pair every failure with an uninjected control
   and assert exact ownership (one free, no rooted table entry, retry state honest).
+  `Resource_fault_injection.with_callback` is per DOMAIN (a `Domain.DLS` key, the `Autotune.Seam`
+  rule; it cannot reuse that module, which sits above `Schedule_cache` in the dependency order): a
+  callback installed in one domain is all that domain's operations reach, and a fresh domain starts
+  with the no-op. That holds only while every `hit` fires on the domain that CALLED the operation.
+  On `multidev_cc` the worker runs the task the scheduler ENQUEUES (the backend's kernel or transfer
+  task); the routine-level schedule `Task.enschedule` wraps it in only enqueues, on the caller. A
+  `hit` placed in an enqueued task would fire on the worker against the no-op and vanish from every
+  test. `resource_fault_injection_domains` pins both halves (two-domain isolation on `cc`; the same
+  point set from the caller on `multidev_cc`).
 
 - **Device buffers are not GC-reclaimable, and the reason is a table, not GC pressure**
   (gh-ocannl-550). Each backend's private `Slab.pools` (`(device_id, pool_id) -> base`) holds a
