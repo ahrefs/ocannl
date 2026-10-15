@@ -4,6 +4,7 @@ premise: every scratch node is in the kernel's traced store: true
 premise: the Never_virtual nodes are still open before codegen: true
 estimate: the Local and the under-threshold nodes, nothing else: true
 estimate: asking settles nothing: true
+estimate: asking forces no node's size_in_bytes, which Tn.header would print: true
 estimate: a workgroup-shared tile is declared per workgroup, not counted per work-item: true
 gate: no cap accepts: true
 gate: a cap at the estimate accepts: true

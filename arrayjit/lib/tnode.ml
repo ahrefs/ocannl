@@ -239,6 +239,13 @@ let num_elems tn =
   let dims = Lazy.force tn.dims in
   Array.fold dims ~init:1 ~f:( * )
 
+(** [tn]'s size in bytes at its storage precision, computed WITHOUT forcing [tn.size_in_bytes]. That
+    lazy's state is observable: {!header} prints [mem in bytes: <not-in-yet>] until something forces
+    it, and tests pin those headers backend-uniformly. A query meant to leave the node as it found
+    it — a schedule-time estimate one backend alone runs, such as [Schedule.thread_private_bytes] —
+    reads this instead, so it cannot make that backend's headers diverge. *)
+let size_in_bytes_peek tn = num_elems tn * Ops.prec_in_bytes (Lazy.force tn.storage_prec)
+
 let dims_without_padding tn =
   match Lazy.force tn.padding with
   | None -> Lazy.force tn.dims

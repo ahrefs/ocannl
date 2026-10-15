@@ -184,7 +184,10 @@ files.
   against `hardware_limits.max_thread_private_bytes` (HIP only). The base and the whole-routine
   presets then decline in about a second each, and the fissioned candidates, whose `promote_locals`
   moves the crossing scratch to device memory, compile and get searched. Guard:
-  `test/operations/thread_private_gate.ml`.
+  `test/operations/thread_private_gate.ml`. The sum reads `Tn.size_in_bytes_peek`, never
+  `Lazy.force tn.size_in_bytes`: a forced size shows in `Tn.header` (`mem in bytes: 64` where every
+  other backend prints `<not-in-yet>`), and forcing it from a HIP-only check turned the
+  backend-uniform `test/einsum/moons_demo_variant` golden red on HIP alone.
 - Building a test kernel that actually *has* a big scratch frame takes care: write the `Local`
   array in one loop and read it back in REVERSE in another. A forward read in the same order lets
   the compiler forward each store to its load and delete the array, leaving nothing to reject.
