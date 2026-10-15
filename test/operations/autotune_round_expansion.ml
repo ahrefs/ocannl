@@ -99,65 +99,64 @@ let search rule =
   (* The two fastest composites: the beam round 1 expands (its singles, presets and baseline are
      scripted far slower). Fixed at the first round candidate. *)
   let beam = ref None in
-  let old_measured = !Autotune.on_candidate_measured in
+  let old_measured = Autotune.Seam.get Autotune.on_candidate_measured in
   Exn.protect
     ~finally:(fun () ->
-      Autotune.on_candidate_measured := old_measured;
+      Autotune.Seam.set Autotune.on_candidate_measured old_measured;
       Hashtbl.remove Utils.config_file_args expansion_key)
     ~f:(fun () ->
       Hashtbl.set Utils.config_file_args ~key:expansion_key ~data:rule;
-      (Autotune.on_candidate_measured :=
-         fun ~label ~digest _ms ->
-           let ms =
-             if is_single label then 100.
-             else if is_composite label then (
-               let n = !composites in
-               Int.incr composites;
-               10. +. (0.1 *. Float.of_int n))
-             else
-               match round_move label with
-               | None -> 1000.
-               | Some (parent, segment) ->
-                   let head, near_copy, differing =
-                     match !beam with
-                     | Some b -> b
-                     | None ->
-                         let ranked =
-                           Hashtbl.to_alist timed
-                           |> List.sort ~compare:(fun (_, (_, a)) (_, (_, b)) -> Float.compare a b)
-                         in
-                         let b =
-                           match ranked with
-                           | (h, (hd, _)) :: (n, (nd, _)) :: _ ->
-                               let hs = segment_digests hd and ns = segment_digests nd in
-                               let differing =
-                                 if List.length hs <> List.length ns then [ -1 ]
-                                 else
-                                   List.filter_mapi (List.zip_exn hs ns) ~f:(fun i (x, y) ->
-                                       if String.equal x y then None else Some i)
-                               in
-                               (h, n, differing)
-                           | _ -> ("", "", [])
-                         in
-                         beam := Some b;
-                         b
-                   in
-                   let parent_ms =
-                     Option.value_map (Hashtbl.find timed parent) ~default:1000. ~f:snd
-                   in
-                   let ms =
-                     if
-                       String.equal parent near_copy
-                       && (not (String.equal near_copy head))
-                       && List.mem differing segment ~equal:Int.equal
-                     then parent_ms -. gain
-                     else parent_ms +. loss
-                   in
-                   children := { label; parent; segment; ms } :: !children;
-                   ms
-           in
-           Hashtbl.set timed ~key:(Autotune.digest_tag digest) ~data:(digest, ms);
-           ms);
+      ( Autotune.Seam.set Autotune.on_candidate_measured @@ fun ~label ~digest _ms ->
+        let ms =
+          if is_single label then 100.
+          else if is_composite label then (
+            let n = !composites in
+            Int.incr composites;
+            10. +. (0.1 *. Float.of_int n))
+          else
+            match round_move label with
+            | None -> 1000.
+            | Some (parent, segment) ->
+                let head, near_copy, differing =
+                  match !beam with
+                  | Some b -> b
+                  | None ->
+                      let ranked =
+                        Hashtbl.to_alist timed
+                        |> List.sort ~compare:(fun (_, (_, a)) (_, (_, b)) -> Float.compare a b)
+                      in
+                      let b =
+                        match ranked with
+                        | (h, (hd, _)) :: (n, (nd, _)) :: _ ->
+                            let hs = segment_digests hd and ns = segment_digests nd in
+                            let differing =
+                              if List.length hs <> List.length ns then [ -1 ]
+                              else
+                                List.filter_mapi (List.zip_exn hs ns) ~f:(fun i (x, y) ->
+                                    if String.equal x y then None else Some i)
+                            in
+                            (h, n, differing)
+                        | _ -> ("", "", [])
+                      in
+                      beam := Some b;
+                      b
+                in
+                let parent_ms =
+                  Option.value_map (Hashtbl.find timed parent) ~default:1000. ~f:snd
+                in
+                let ms =
+                  if
+                    String.equal parent near_copy
+                    && (not (String.equal near_copy head))
+                    && List.mem differing segment ~equal:Int.equal
+                  then parent_ms -. gain
+                  else parent_ms +. loss
+                in
+                children := { label; parent; segment; ms } :: !children;
+                ms
+        in
+        Hashtbl.set timed ~key:(Autotune.digest_tag digest) ~data:(digest, ms);
+        ms );
       let ctx, _routine =
         Autotune.with_uncontended_test_windows (fun () ->
             Autotune.tune ~beam_width:2 ~rounds:1 ~repeats:1 ~cache_dir:"" ~log:false
@@ -251,15 +250,15 @@ let () =
 (* A malformed rule refuses the search before it compiles anything. *)
 let () =
   let attempts = ref 0 in
-  let old_attempt = !Autotune.on_candidate_attempt in
+  let old_attempt = Autotune.Seam.get Autotune.on_candidate_attempt in
   let outcome =
     Exn.protect
       ~finally:(fun () ->
-        Autotune.on_candidate_attempt := old_attempt;
+        Autotune.Seam.set Autotune.on_candidate_attempt old_attempt;
         Hashtbl.remove Utils.config_file_args expansion_key)
       ~f:(fun () ->
         Hashtbl.set Utils.config_file_args ~key:expansion_key ~data:"widest";
-        (Autotune.on_candidate_attempt := fun _ -> Int.incr attempts);
+        (Autotune.Seam.set Autotune.on_candidate_attempt @@ fun _ -> Int.incr attempts);
         match
           Autotune.tune ~beam_width:2 ~rounds:1 ~repeats:1 ~cache_dir:"" ~log:false ~progress:false
             (Context.cpu ()) (chain ()) Ir.Indexing.Empty

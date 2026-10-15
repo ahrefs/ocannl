@@ -37,15 +37,11 @@ let k = 1
 (* One [Autotune.on_candidate_measured] script: the [i]-th admitted window measures [script i]. *)
 let with_clock script f =
   let measured = ref 0 in
-  let old_measured = !Autotune.on_candidate_measured in
-  Exn.protect
-    ~finally:(fun () -> Autotune.on_candidate_measured := old_measured)
-    ~f:(fun () ->
-      (Autotune.on_candidate_measured :=
-         fun ~label:_ ~digest:_ _ms ->
-           Int.incr measured;
-           script !measured);
-      Autotune.with_uncontended_test_windows f)
+  Autotune.Seam.with_value Autotune.on_candidate_measured
+    (fun ~label:_ ~digest:_ _ms ->
+      Int.incr measured;
+      script !measured)
+    (fun () -> Autotune.with_uncontended_test_windows f)
 
 let with_stderr_captured f =
   let file = Stdlib.Filename.temp_file "flip_twins" ".stderr" in

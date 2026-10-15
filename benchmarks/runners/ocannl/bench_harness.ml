@@ -333,27 +333,23 @@ let install_timing_trace () =
     (* Pre-dispatch validations started, and the tagged calls that returned a record. A tagged call
        that raised after its validation returns none, so the difference counts exactly those calls,
        whose warmup, calibration and any timed batches are in no total -- by count, so no order in
-       which the seams fire can move it. *)
+       which the seams fire can move it. Both counts are this domain's -- the records reach only
+       this domain's observer, and the preflight seam is per domain too ({!Autotune.Seam}) -- so a
+       search in another domain moves neither. *)
     let preflights = ref 0 and tagged = ref 0 in
-    (* The records reach only this domain's observer, so only this domain's validations are counted
-       against them: the preflight seam is process-wide, and a search in another domain would
-       otherwise read as calls raised here. *)
-    let trace_domain = Stdlib.Domain.self () in
     let raised () = !preflights - !tagged in
     let calib_s = ref 0. and timed_s = ref 0. in
     let depths = Hashtbl.create (module Int) in
     let pr fmt = Stdlib.Printf.kfprintf Stdlib.flush Stdlib.stderr fmt in
-    let prev_attempt = !Autotune.on_candidate_attempt in
-    (Autotune.on_candidate_attempt :=
-       fun label ->
-         Int.incr attempts;
-         pr "timing-trace: attempt %d at %.1fs: %s\n" !attempts (now () -. t0) label;
-         prev_attempt label);
-    let prev_preflight = !Autotune.on_candidate_preflight in
-    (Autotune.on_candidate_preflight :=
-       fun name ->
-         if Poly.equal (Stdlib.Domain.self ()) trace_domain then Int.incr preflights;
-         prev_preflight name);
+    let prev_attempt = Autotune.Seam.get Autotune.on_candidate_attempt in
+    ( Autotune.Seam.set Autotune.on_candidate_attempt @@ fun label ->
+      Int.incr attempts;
+      pr "timing-trace: attempt %d at %.1fs: %s\n" !attempts (now () -. t0) label;
+      prev_attempt label );
+    let prev_preflight = Autotune.Seam.get Autotune.on_candidate_preflight in
+    ( Autotune.Seam.set Autotune.on_candidate_preflight @@ fun name ->
+      Int.incr preflights;
+      prev_preflight name );
     Autotune.install_timing_call_observer (fun (c : Autotune.timing_call) ->
         List.iter c.calibration_probes ~f:(fun (probe : Autotune.calibration_probe) ->
             let role =

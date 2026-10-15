@@ -544,12 +544,12 @@ let () =
      arm B ships, which the cold path already handles (autotune_arm_containment.ml). Either way the
      caller sees the two arms. --- *)
   let attempts = ref 0 in
-  (Autotune.on_candidate_attempt :=
-     fun _ ->
-       Int.incr attempts;
-       if !attempts = 1 then failwith "ps: injected replay failure");
   let arms2b, _, _, _, got2b, persisted2b =
-    Exn.protect ~f:run ~finally:(fun () -> Autotune.on_candidate_attempt := fun _ -> ())
+    Autotune.Seam.with_value Autotune.on_candidate_attempt
+      (fun _ ->
+        Int.incr attempts;
+        if !attempts = 1 then failwith "ps: injected replay failure")
+      run
   in
   p_all2 "after a failed replay, the routine computes the right values" got2b expected ~f:approx;
   p "a failed replay is not reported; the arms it falls back to report in position"

@@ -105,31 +105,30 @@ let counted (r : Autotune.report) =
 let search ?(trace = true) ?(log = false) ?progress ?width ~tag ~single ~composite () =
   let report = ref None and singles = ref 0 and composites = ref [] and calls = ref [] in
   let measured = ref [] in
-  let old_measured = !Autotune.on_candidate_measured in
+  let old_measured = Autotune.Seam.get Autotune.on_candidate_measured in
   let observed body =
     if trace then Autotune.with_timing_call_observer (fun c -> calls := c :: !calls) body
     else body ()
   in
   Exn.protect
     ~finally:(fun () ->
-      Autotune.on_candidate_measured := old_measured;
+      Autotune.Seam.set Autotune.on_candidate_measured old_measured;
       Hashtbl.remove Utils.config_file_args playoff_width_key)
     ~f:(fun () ->
       Option.iter width ~f:(fun w ->
           Hashtbl.set Utils.config_file_args ~key:playoff_width_key ~data:(Int.to_string w));
       observed @@ fun () ->
-      (Autotune.on_candidate_measured :=
-         fun ~label ~digest:_ _ms ->
-           measured := label :: !measured;
-           if is_single label then (
-             let ms = single !singles in
-             Int.incr singles;
-             ms)
-           else if is_composite label then (
-             let ms = composite (List.length !composites) in
-             composites := (label, ms) :: !composites;
-             ms)
-           else 1000.);
+      ( Autotune.Seam.set Autotune.on_candidate_measured @@ fun ~label ~digest:_ _ms ->
+        measured := label :: !measured;
+        if is_single label then (
+          let ms = single !singles in
+          Int.incr singles;
+          ms)
+        else if is_composite label then (
+          let ms = composite (List.length !composites) in
+          composites := (label, ms) :: !composites;
+          ms)
+        else 1000. );
       let ctx, _routine =
         Autotune.with_uncontended_test_windows (fun () ->
             Autotune.tune ~beam_width:2 ~rounds:0 ~repeats:1 ~cache_dir:"" ~log ?progress
@@ -412,13 +411,13 @@ let () =
   let pb = matrix ~label:"pb" ~modulus:7 ~offset:(-3.) ~stride:1. in
   let%op pc = pa * pb in
   let comp = Train.forward pc in
-  let old_measured = !Autotune.on_candidate_measured in
+  let old_measured = Autotune.Seam.get Autotune.on_candidate_measured in
   let (), lines =
     with_stderr_captured (fun () ->
         Exn.protect
-          ~finally:(fun () -> Autotune.on_candidate_measured := old_measured)
+          ~finally:(fun () -> Autotune.Seam.set Autotune.on_candidate_measured old_measured)
           ~f:(fun () ->
-            (Autotune.on_candidate_measured := fun ~label:_ ~digest:_ _ms -> 1.);
+            (Autotune.Seam.set Autotune.on_candidate_measured @@ fun ~label:_ ~digest:_ _ms -> 1.);
             let ctx, _routine =
               Autotune.with_uncontended_test_windows (fun () ->
                   Train.tune_placements ~beam_width:2 ~rounds:0 ~repeats:1 ~cache_dir:"" ~log:true

@@ -56,12 +56,12 @@ let () =
     Option.iter !unfollowed ~f:(fun label -> host_refused := label :: !host_refused);
     unfollowed := None
   in
-  let old_measured = !Autotune.on_candidate_measured
-  and old_attempt = !Autotune.on_candidate_attempt in
+  let old_measured = Autotune.Seam.get Autotune.on_candidate_measured
+  and old_attempt = Autotune.Seam.get Autotune.on_candidate_attempt in
   Exn.protect
     ~finally:(fun () ->
-      Autotune.on_candidate_measured := old_measured;
-      Autotune.on_candidate_attempt := old_attempt)
+      Autotune.Seam.set Autotune.on_candidate_measured old_measured;
+      Autotune.Seam.set Autotune.on_candidate_attempt old_attempt)
     ~f:(fun () ->
       Autotune.with_timing_call_observer (fun (c : Autotune.timing_call) ->
           let depth = c.decision.depth in
@@ -75,16 +75,15 @@ let () =
           settle_window ();
           unfollowed := Some !attempt)
       @@ fun () ->
-      (Autotune.on_candidate_attempt := fun label -> attempt := label);
-      (Autotune.on_candidate_measured :=
-         fun ~label ~digest ms ->
-           unfollowed := None;
-           if String.equal label default_seed_label then default_digest := Some digest;
-           if Option.exists !default_digest ~f:(String.equal digest) then (
-             Int.incr seam_refused;
-             Stdio.eprintf "refusing %s (digest %s)\n%!" label digest;
-             Float.nan)
-           else ms);
+      (Autotune.Seam.set Autotune.on_candidate_attempt @@ fun label -> attempt := label);
+      ( Autotune.Seam.set Autotune.on_candidate_measured @@ fun ~label ~digest ms ->
+        unfollowed := None;
+        if String.equal label default_seed_label then default_digest := Some digest;
+        if Option.exists !default_digest ~f:(String.equal digest) then (
+          Int.incr seam_refused;
+          Stdio.eprintf "refusing %s (digest %s)\n%!" label digest;
+          Float.nan)
+        else ms );
       let ctx, routine =
         Autotune.tune ~search:true ~beam_width:1 ~rounds:0 ~repeats:1 ~timing:Autotune.Queued
           ~cache_dir:""
