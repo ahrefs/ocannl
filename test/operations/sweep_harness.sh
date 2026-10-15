@@ -202,13 +202,16 @@ printf 'fixture\n' >"$main/fixture"
 mkdir -p "$main/test"
 printf 'initial golden\n' >"$main/test/unit.cc_expected.ml"
 printf 'unrelated fixture\n' >"$main/test/noise.expected"
+# The directory the device probe asks from (tools/device-probe.sh), as the real tree has it.
+mkdir -p "$main/test/config"
+printf '# the fixture tree\x27s test configuration\n' >"$main/test/config/ocannl_config"
 printf 'pre-diff golden\n' >"$main/test/pre_diff_expected.ml"
 printf 'let%%expect_test _ = print_endline "old" [%%expect {| old |}]\n' \
   >"$main/test/inline_expect.ml"
 printf '(rule\n (alias runtest-state-probe)\n (deps unit.cc_expected.ml noise.expected)\n (action (diff "unit.%%{read:../config/ocannl_backend.txt}_expected.ml" unit.actual)))\n(rule\n (alias runtest-pre-diff-probe)\n (deps pre_diff_expected.ml)\n (action (progn (run crashing.exe) (diff pre_diff_expected.ml pre_diff.actual))))\n' \
   >"$main/test/dune"
 git -C "$main" add fixture benchmarks/fixtures/DIGESTS.txt test/dune \
-  test/unit.cc_expected.ml test/noise.expected \
+  test/unit.cc_expected.ml test/noise.expected test/config/ocannl_config \
   test/pre_diff_expected.ml test/inline_expect.ml
 git -C "$main" commit -qm fixture
 fixture_sha=$(git -C "$main" rev-parse HEAD)
@@ -270,6 +273,19 @@ suite_text() {
 # announced -- by default what the first attempt did, a deterministic test. The
 # completion pass (`@runtest @train`) re-runs nothing that completed, so it
 # records nothing.
+# A hung test (gh-ocannl-1211): the dune call starts one action, as dune does -- a child leading its
+# own process group, which dune kills on TERM -- that sleeps the given seconds and records its pid
+# in SWEEP_TEST_OPAM_HANG_PID. The parent is perl renamed `dune`: the per-test cap's watcher finds
+# tests as the children of a process named dune, and a shebang script's process name is its
+# interpreter's.
+hang_test() { # seconds
+  exec perl -e '$0 = "dune"; my ($pidf, $secs) = @ARGV;
+    my $c = fork(); die "fork: $!" unless defined $c;
+    if (!$c) { setpgrp(0, 0); open my $f, ">", "$pidf.tmp" or die; print $f "$$\n"; close $f;
+               rename "$pidf.tmp", $pidf; exec "sleep", $secs; exit 127 }
+    $SIG{TERM} = sub { kill "KILL", -$c; exit 143 };
+    waitpid($c, 0); exit 0' "$SWEEP_TEST_OPAM_HANG_PID" "$1"
+}
 case " $* " in
   *" -j 1 "*)
     # The last positional parameter: `${*##* }` is not it -- pattern removal on
@@ -277,6 +293,12 @@ case " $* " in
     for last; do :; done
     completion=
     case " $* " in *" @runtest @train "*) completion=1 ;; esac
+    # A serial-rerun stanza listed in SWEEP_TEST_OPAM_HANG_SERIAL, or the completion pass where it
+    # lists `completion`, hangs for SWEEP_TEST_OPAM_HANG_SERIAL_SECS (gh-ocannl-1252).
+    if [ -n "$completion" ]; then hang_key=completion; else hang_key=$last; fi
+    case " ${SWEEP_TEST_OPAM_HANG_SERIAL:-} " in
+      *" $hang_key "*) hang_test "${SWEEP_TEST_OPAM_HANG_SERIAL_SECS:-60}" ;;
+    esac
     case " ${SWEEP_TEST_OPAM_SERIAL_RED:-} " in
       *" $last "*)
         [ -n "${SWEEP_TEST_OPAM_OUT_SERIAL:-}" ] && printf '%s\n' "$SWEEP_TEST_OPAM_OUT_SERIAL"
@@ -301,20 +323,10 @@ case " $* " in
   # forced red units below need the suite itself to be what fails.
   *" dune clean "*) exit 0 ;;
 esac
-# A hung test (gh-ocannl-1211): the suite leg's dune starts one action, as dune does -- a child
-# leading its own process group, which dune kills on TERM -- that sleeps SWEEP_TEST_OPAM_HANG
-# seconds and records its pid in SWEEP_TEST_OPAM_HANG_PID. The parent is perl renamed `dune`: the
-# per-test cap's watcher finds tests as the children of a process named dune, and a shebang
-# script's process name is its interpreter's.
+# The suite leg's hung test: SWEEP_TEST_OPAM_HANG seconds (hang_test above).
 if [ -n "${SWEEP_TEST_OPAM_HANG:-}" ]; then
   case " $* " in
-    *" @runtest "*)
-      exec perl -e '$0 = "dune"; my ($pidf, $secs) = @ARGV;
-        my $c = fork(); die "fork: $!" unless defined $c;
-        if (!$c) { setpgrp(0, 0); open my $f, ">", "$pidf.tmp" or die; print $f "$$\n"; close $f;
-                   rename "$pidf.tmp", $pidf; exec "sleep", $secs; exit 127 }
-        $SIG{TERM} = sub { kill "KILL", -$c; exit 143 };
-        waitpid($c, 0); exit 0' "$SWEEP_TEST_OPAM_HANG_PID" "$SWEEP_TEST_OPAM_HANG" ;;
+    *" @runtest "*) hang_test "$SWEEP_TEST_OPAM_HANG" ;;
   esac
 fi
 # Stands in for what a test run writes to the unit's log. The common output
@@ -369,6 +381,20 @@ fi
 exit "${SWEEP_TEST_OPAM_RC:-0}"
 EOF
 chmod +x "$fake_bin/opam"
+# The device probe's stand-in for bin/device_props (gh-ocannl-1252; OCANNL_TOOL_SWEEP_DEVICE_PROBE):
+# each query is a line of SWEEP_TEST_PROBE_CALLS (its directory and argv), and the Nth query hangs
+# where SWEEP_TEST_PROBE_HANG_AT lists N, its pid beside the record, as a wedged device's never
+# answers. Every other query answers.
+cat >"$fake_bin/fake-device-probe" <<'EOF'
+#!/bin/sh
+printf '%s %s\n' "$PWD" "$*" >>"$SWEEP_TEST_PROBE_CALLS"
+n=$(grep -c . "$SWEEP_TEST_PROBE_CALLS")
+case " ${SWEEP_TEST_PROBE_HANG_AT:-} " in
+  *" $n "*) printf '%s\n' "$$" >"$SWEEP_TEST_PROBE_CALLS.pid"; exec sleep 30 ;;
+esac
+echo "static.device[0].device_name = fixture ${1#--ocannl_backend=}"
+EOF
+chmod +x "$fake_bin/fake-device-probe"
 # The fake opam's test action: the real probe, under the executable name the
 # fixture records carry.
 cp "$verdict_probe" "$fake_bin/fixture.exe"
@@ -726,6 +752,12 @@ run_sweep_args() {
     "OCANNL_TOOL_SWEEP_TEST_CAP=${SWEEP_TEST_TEST_CAP:-}" \
     "SWEEP_TEST_OPAM_HANG=${SWEEP_TEST_OPAM_HANG:-}" \
     "SWEEP_TEST_OPAM_HANG_PID=${SWEEP_TEST_OPAM_HANG_PID:-}" \
+    "SWEEP_TEST_OPAM_HANG_SERIAL=${SWEEP_TEST_OPAM_HANG_SERIAL:-}" \
+    "SWEEP_TEST_OPAM_HANG_SERIAL_SECS=${SWEEP_TEST_OPAM_HANG_SERIAL_SECS:-}" \
+    "OCANNL_TOOL_SWEEP_DEVICE_PROBE=${SWEEP_TEST_DEVICE_PROBE-none}" \
+    "OCANNL_TOOL_SWEEP_DEVICE_PROBE_CAP=${SWEEP_TEST_DEVICE_PROBE_CAP:-}" \
+    "SWEEP_TEST_PROBE_CALLS=${SWEEP_TEST_PROBE_CALLS:-$tmp/probe.calls}" \
+    "SWEEP_TEST_PROBE_HANG_AT=${SWEEP_TEST_PROBE_HANG_AT:-}" \
     "OCANNL_TOOL_SWEEP_REPO=$main" \
     "OCANNL_TOOL_SWEEP_STATE=$state")
   # The cancellation controls need the sweep's own pid, and a process group
@@ -1454,6 +1486,46 @@ case $hang_probe in
   *) printf 'sweep harness: per-test cap legs skipped: ps does not read a renamed process as dune here\n' >&2 ;;
 esac
 
+# The device probe (gh-ocannl-1252), through the stand-in: a GPU unit asks its backend once, from
+# the worktree's test/config, before any dune leg that runs a test; a query that does not answer
+# ends the unit as `error` named DEVICE UNHEALTHY, with no suite started and the query killed, in
+# a minute rather than at the first test's per-test cap. One that answers is in the log and the
+# unit runs; a CPU unit asks nothing.
+probe_calls=$tmp/probe.calls
+: >"$probe_calls"
+calls_before=$(awk 'END { print NR }' "$calls")
+unhealthy=$(SWEEP_TEST_DEVICE_PROBE=$fake_bin/fake-device-probe SWEEP_TEST_DEVICE_PROBE_CAP=1 \
+  SWEEP_TEST_PROBE_HANG_AT=1 run_sweep_backend metal 2>&1)
+grep -q 'm4-max/metal: error ' <<<"$unhealthy"
+grep -q '^  m4-max/metal: DEVICE UNHEALTHY, dune not started: a fresh device query for metal did not answer within 1s$' \
+  <<<"$unhealthy"
+[ "$(awk -F '\t' '$3 == "metal" { print $5 }' "$state/history.tsv" | tail -1)" = error ]
+unhealthy_log=$(awk -F '\t' '$3 == "metal" { print $9 }' "$state/history.tsv" | tail -1)
+grep -q '^  metal: NO ANSWER within 1s; the query was killed$' "$unhealthy_log"
+grep -q 'journalctl -k' "$unhealthy_log"
+# Asked once, from the worktree's test/config; no test leg started after it.
+[ "$(awk 'END { print NR }' "$probe_calls")" = 1 ]
+grep -q '/test/config --ocannl_backend=metal$' "$probe_calls"
+absent '@runtest' < <(tail -n "+$((calls_before + 1))" "$calls")
+probe_query=$(cat "$probe_calls.pid")
+if kill -0 "$probe_query" 2>/dev/null; then
+  kill -KILL "$probe_query" 2>/dev/null || true
+  printf 'sweep_harness: the wedged query (pid %s) outlived its bound\n' "$probe_query" >&2
+  exit 1
+fi
+: >"$probe_calls"
+answered=$(SWEEP_TEST_DEVICE_PROBE=$fake_bin/fake-device-probe run_sweep_backend metal 2>&1)
+grep -q 'm4-max/metal: incremental-pass' <<<"$answered"
+absent 'DEVICE UNHEALTHY' <<<"$answered"
+answered_log=$(awk -F '\t' '$3 == "metal" { print $9 }' "$state/history.tsv" | tail -1)
+grep -q '^sweep: device probe: metal: answered in ' "$answered_log"
+[ "$(awk 'END { print NR }' "$probe_calls")" = 1 ]
+: >"$probe_calls"
+cpu_unprobed=$(SWEEP_TEST_DEVICE_PROBE=$fake_bin/fake-device-probe SWEEP_TEST_PROBE_HANG_AT=1 \
+  run_sweep_backend cc 2>&1)
+grep -q 'm4-max/cc: incremental-pass' <<<"$cpu_unprobed"
+[ ! -s "$probe_calls" ]
+
 # Both of dune's location spellings must reach the fingerprint, and a dune
 # location must reduce to the stanza it names. `lines N-M` is what a stanza
 # whose action exited non-zero produces -- how every explicit-rule test in this
@@ -2010,6 +2082,63 @@ grep -q 'm4-max/cc: serial rerun: suite completion red (exit 1)$' <<<"$completio
 completion_red_report=$(sed -n 's/^skip coverage: .* -- //p' <<<"$completion_red" | tail -1)
 [ -f "$completion_red_report" ]
 grep -q '^completed backends: <none>$' "$completion_red_report"
+
+# The serial rerun of an environment-red GPU unit starts with the probe too: one the unit's probe
+# answered and the rerun's did not leaves every stanza unjudged and none started, said in the
+# summary.
+: >"$probe_calls"
+calls_before=$(awk 'END { print NR }' "$calls")
+rerun_unhealthy=$(SWEEP_TEST_OPAM_RC=1 SWEEP_TEST_OPAM_OUT=$environment_failure \
+  SWEEP_TEST_DEVICE_PROBE=$fake_bin/fake-device-probe SWEEP_TEST_DEVICE_PROBE_CAP=1 \
+  SWEEP_TEST_PROBE_HANG_AT=2 run_sweep_backend metal --target serial-probe 2>&1)
+grep -q 'm4-max/metal: fail ' <<<"$rerun_unhealthy"
+grep -q '^  m4-max/metal: serial rerun: DEVICE UNHEALTHY, no stanza ran: a fresh device query for metal did not answer within 1s$' \
+  <<<"$rerun_unhealthy"
+grep -q '^  m4-max/metal: serial rerun: unjudged (exit 69): @test/runtest-pre-diff-probe @test/runtest-serial-probe @test/runtest-serial-alpha @test/runtest-serial-beta @test/runtest$' \
+  <<<"$rerun_unhealthy"
+absent -- '-j 1' < <(tail -n "+$((calls_before + 1))" "$calls")
+[ "$(awk 'END { print NR }' "$probe_calls")" = 2 ]
+probe_query=$(cat "$probe_calls.pid")
+if kill -0 "$probe_query" 2>/dev/null; then
+  kill -KILL "$probe_query" 2>/dev/null || true
+  printf 'sweep_harness: the serial rerun'\''s wedged query (pid %s) outlived its bound\n' "$probe_query" >&2
+  exit 1
+fi
+
+# The per-test cap on the serial rerun and the completion pass (gh-ocannl-1252): a GPU unit's
+# rerun stanza that hangs is killed at the cap, which ends the rerun -- the stanzas it did not
+# reach unjudged, the hung test named in the summary -- long before the unit's CAP. The completion
+# pass is capped the same way. A CPU unit's rerun waits its stanza out (no default cap there).
+case $hang_probe in
+  *dune*)
+    rm -f "$hang_pid"
+    rerun_start=$SECONDS
+    rerun_hung=$(SWEEP_TEST_OPAM_RC=1 SWEEP_TEST_OPAM_OUT=$environment_failure \
+      SWEEP_TEST_OPAM_HANG_SERIAL='@test/runtest-serial-probe' SWEEP_TEST_OPAM_HANG_PID=$hang_pid \
+      SWEEP_TEST_TEST_CAP=2 run_sweep_backend metal --target serial-probe 2>&1)
+    [ $((SECONDS - rerun_start)) -lt 40 ]
+    grep -q "^  m4-max/metal: serial rerun: hung test, past the per-test cap: pid $(cat "$hang_pid") has run [0-9]*s, past the 2s cap: sleep 60" \
+      <<<"$rerun_hung"
+    grep -q '^  m4-max/metal: serial rerun: unjudged (exit 142): @test/runtest-serial-probe @test/runtest-serial-alpha @test/runtest-serial-beta @test/runtest$' \
+      <<<"$rerun_hung"
+    if hung_test_survives "$hang_pid" 'serial rerun'; then exit 1; fi
+    rm -f "$hang_pid"
+    completion_hung=$(SWEEP_TEST_OPAM_RC=1 SWEEP_TEST_OPAM_OUT=$environment_failure \
+      SWEEP_TEST_OPAM_HANG_SERIAL=completion SWEEP_TEST_OPAM_HANG_PID=$hang_pid \
+      SWEEP_TEST_TEST_CAP=2 run_sweep_backend metal --force 2>&1)
+    grep -q '^  m4-max/metal: serial rerun: all clean$' <<<"$completion_hung"
+    grep -q '^  m4-max/metal: serial rerun: suite completion unjudged$' <<<"$completion_hung"
+    grep -q "^  m4-max/metal: serial rerun: hung test, past the per-test cap: pid $(cat "$hang_pid") has run [0-9]*s" \
+      <<<"$completion_hung"
+    if hung_test_survives "$hang_pid" 'completion pass'; then exit 1; fi
+    rm -f "$hang_pid"
+    cpu_rerun=$(SWEEP_TEST_OPAM_RC=1 SWEEP_TEST_OPAM_OUT=$environment_failure \
+      SWEEP_TEST_OPAM_HANG_SERIAL='@test/runtest-serial-probe' SWEEP_TEST_OPAM_HANG_SERIAL_SECS=4 \
+      SWEEP_TEST_OPAM_HANG_PID=$hang_pid SWEEP_TEST_TEST_CAP=2 run_sweep_backend cc --target serial-probe 2>&1)
+    grep -q '^  m4-max/cc: serial rerun: all clean$' <<<"$cpu_rerun"
+    absent 'per-test cap' <<<"$cpu_rerun"
+    ;;
+esac
 
 # The dxg window filter (gh-ocannl-979), driven directly: tools/kernel-window.sh is
 # sourced by the sweep and by this harness for exactly that reason (after

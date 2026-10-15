@@ -16,7 +16,7 @@ TMP=$(cd "$TMP" && pwd -P)
 HERE=$(cd "$(dirname "$0")" && pwd)
 REAL_GIT=$(command -v git)
 for f in machine-verify.sh machine-verify-far.sh remote-verify.sh box-jobs.sh batch-backends.sh \
-  credential-env.sh; do
+  credential-env.sh per-test-cap.sh device-probe.sh; do
   printf 'testing %s (cksum %s)\n' "$HERE/$f" "$(cksum <"$HERE/$f")"
 done
 # The subjects run from a scratch copy of tools/: the scripts unchanged, and
@@ -27,7 +27,8 @@ done
 # file can fake a box's GPU; every width decision is still those files' own.
 mkdir -p "$TMP/tools" || exit 2
 cp "$HERE/machine-verify.sh" "$HERE/machine-verify-far.sh" "$HERE/remote-verify.sh" \
-  "$HERE/box-jobs.sh" "$HERE/batch-backends.sh" "$HERE/credential-env.sh" "$TMP/tools/" || exit 2
+  "$HERE/box-jobs.sh" "$HERE/batch-backends.sh" "$HERE/credential-env.sh" "$HERE/per-test-cap.sh" \
+  "$HERE/device-probe.sh" "$TMP/tools/" || exit 2
 printf '. %q\n' "$TMP/fixture.env" >>"$TMP/tools/box-jobs.sh" || exit 2
 SRC=$TMP/tools/machine-verify.sh
 FAR=$TMP/tools/machine-verify-far.sh
@@ -35,6 +36,8 @@ SHIM=$TMP/tools/remote-verify.sh
 BOX_JOBS=$TMP/tools/box-jobs.sh
 BATCH_BACKENDS=$TMP/tools/batch-backends.sh
 CREDENTIAL_ENV=$TMP/tools/credential-env.sh
+PER_TEST_CAP=$TMP/tools/per-test-cap.sh
+DEVICE_PROBE=$TMP/tools/device-probe.sh
 # Isolate Git configuration, hooks, identity and URL rewriting. Every Git
 # mutation is confined to this newly allocated scratch directory.
 mkdir -p "$TMP/bin" "$TMP/home" "$TMP/runs"
@@ -149,11 +152,32 @@ if [ "$1" = build ]; then
               mkdir -p "$lib/.hip_backend.objs/byte" && touch "$lib/.hip_backend.objs/byte/hip_backend.cmi"
             fi ;;
         esac ;;
+      # A hung test (gh-ocannl-1252), or a slow one: the alias's action, started as dune starts
+      # one -- a child leading its own process group, killed on TERM -- by perl renamed `dune`,
+      # since the per-test cap's watcher finds tests as the children of a process named dune.
+      @fixture)
+        case $MODE in
+          hung-test | slow-test)
+            [ "$MODE" = hung-test ] && secs=60 || secs=4
+            exec perl -e '$0 = "dune"; my ($pidf, $secs) = @ARGV;
+              my $c = fork(); die "fork: $!" unless defined $c;
+              if (!$c) { setpgrp(0, 0); open my $f, ">", $pidf or die; print $f "$$\n"; close $f;
+                         exec "sleep", $secs; exit 127 }
+              $SIG{TERM} = sub { kill "KILL", -$c; exit 143 };
+              waitpid($c, 0); exit 0' "$AUDIT.hung-pid" "$secs" ;;
+        esac ;;
       bin/device_props.exe)
         # The backend's own capability readback, as each mode's backend would
         # print it: the backend is the one it observes pinned, and a HIP device
-        # carries the per-device eligibility the tile-MMA check reads.
+        # carries the per-device eligibility the tile-MMA check reads. A wedged
+        # device's never answers (gh-ocannl-1252): the query records its pid and spins.
         mkdir -p _build/default/bin
+        if [ "$MODE" = probe-hang ]; then
+          printf '#!/usr/bin/env bash\necho "$$ $*" >%q\nexec sleep 30\n' "$AUDIT.probe" \
+            >_build/default/bin/device_props.exe
+          chmod +x _build/default/bin/device_props.exe
+          continue
+        fi
         eligible=true mma=advertised
         case $MODE in
           lib-mma-none | lib-no-rocwmma) mma=none ;;
@@ -204,7 +228,14 @@ SH
 mkdir -p "$TMP/hip-complete/include/rocwmma/internal" "$TMP/hip-partial/include/rocwmma"
 touch "$TMP/hip-complete/include/rocwmma/rocwmma.hpp" "$TMP/hip-complete/include/rocwmma/internal/types.hpp" \
   "$TMP/hip-partial/include/rocwmma/rocwmma.hpp"
-chmod +x "$TMP/bin/ssh" "$TMP/bin/opam" "$TMP/bin/dune" "$TMP/bin/hipconfig"
+# The kernel name, which decides whether the far side probes the device (never on macOS): a case
+# that pins FIXTURE_UNAME gets that answer to `uname -s`; every other question is the real uname's.
+cat >"$TMP/bin/uname" <<'SH'
+#!/bin/sh
+if [ "$*" = -s ] && [ -n "${FIXTURE_UNAME:-}" ]; then echo "$FIXTURE_UNAME"; exit 0; fi
+exec /usr/bin/uname "$@"
+SH
+chmod +x "$TMP/bin/ssh" "$TMP/bin/opam" "$TMP/bin/dune" "$TMP/bin/hipconfig" "$TMP/bin/uname"
 # A private Git wrapper is only for deterministic transport/cleanup failures;
 # every other operation is the real executable, including source assertions.
 cat >"$TMP/bin/git" <<'SH'
@@ -234,7 +265,7 @@ chmod +x "$TMP/bin/git"
 # The fakes read their controls from a file rather than the environment: the
 # local transport clears the environment exactly as an SSH session starts
 # without the caller's, so only a file reaches a fake on both transports.
-for fake in ssh opam dune git hipconfig; do
+for fake in ssh opam dune git hipconfig uname; do
   { sed -n 1p "$TMP/bin/$fake"; printf '. %q\n' "$TMP/fixture.env"; sed 1d "$TMP/bin/$fake"; } >"$TMP/fake" &&
     cat "$TMP/fake" >"$TMP/bin/$fake" || exit 2
 done
@@ -276,6 +307,8 @@ DXG=absent KFD=absent NVIDIA=absent FLEET_BOX=fixture-box READERS=stand-in NAMES
 REMOTE_CREDS= SWITCH_CREDS=
 # The BRANCH operand, and the commit the fake dune requires the worktree at.
 REF=fixture WANT_SHA=$SHA
+# The far side's `uname -s`, empty for the real one.
+UNAME=
 
 fixture_device() { # absent|present|small|wide -> the path a probe reads
   case $1 in
@@ -322,7 +355,7 @@ run_case() { # SUBJECT NAME MODE [verifier args]
     OCANNL_TOOL_READ_CONFIG="$(fixture_reader fake-read-config)" \
     OCANNL_TOOL_SLOT_KIND="$(fixture_reader fake-slot-kind)" FIXTURE_NAMES="$NAMES" \
     FIXTURE_DUNE_VERSION="$DUNE_VERSION" FIXTURE_REMOTE_CREDENTIALS="$REMOTE_CREDS" \
-    FIXTURE_SWITCH_CREDENTIALS="$SWITCH_CREDS"; do
+    FIXTURE_SWITCH_CREDENTIALS="$SWITCH_CREDS" FIXTURE_UNAME="$UNAME"; do
     printf 'export %s=%q\n' "${var%%=*}" "${var#*=}"
   done >"$TMP/fixture.env"
   # OPAMSWITCH and DUNE_BUILD_DIR stand for the caller's session: an SSH
@@ -579,6 +612,83 @@ report $? 'width-readers-built: the readers were built in the pushed worktree' "
 check_refusal width-zero '^machine-verify: jobs must be a positive integer$' -j 0
 check_refusal width-word '^machine-verify: jobs must be a positive integer$' --jobs auto
 
+# Whether a process is still running: a zombie is not. Where PID 1 reaps no orphans, a test its
+# fake dune killed stays a zombie, which `kill -0` still answers for (Codex review round 2 on PR
+# #1172).
+running() { # pid
+  local st
+  st=$(ps -o stat= -p "$1" 2>/dev/null) || return 1
+  case $st in '' | Z*) return 1 ;; esac
+}
+# The two bounds of a GPU trip (gh-ocannl-1252). The per-test cap: a test past it ends the trip
+# with 142 long before the per-command cap (10s here) would, the hung test named and killed; the
+# default is a GPU backend's alone, and --test-cap 0 lifts any. The device probe: one query of the
+# pinned GPU backend before its first operation, from the worktree's test/config; one that does
+# not answer within --probe-cap ends the trip as DEVICE UNHEALTHY (69) with no operation built,
+# the query killed; one that answers lets the trip run. Never a CPU backend's, never on macOS.
+check_case test-cap-hung hung-test 142 \
+  '^machine-verify: per-test cap: pid [0-9]+ has run [0-9]+s, past the 2s cap: sleep 60' --test @fixture --test-cap 2
+mv_ok=0
+mv_hung=$(cat "$TMP/runs/test-cap-hung/audit.hung-pid" 2>/dev/null)
+[ -n "$mv_hung" ] || mv_ok=1
+if [ -n "$mv_hung" ] && running "$mv_hung"; then kill -KILL "$mv_hung"; mv_ok=1; fi
+grep -qx 'per-test cap:  2s for each process an operation'\''s dune starts (--test-cap); one past it ends the trip' \
+  "$TMP/runs/test-cap-hung/stdout" || mv_ok=1
+report "$mv_ok" "test-cap-hung: killed at the per-test cap, not the per-command one, and the test is gone" \
+  "$TMP/runs/test-cap-hung"
+# The defaults, as the provenance states them.
+BACKEND=hip UNAME=Darwin check_case test-cap-gpu-default success 0 'verified .*backend=hip' --test @fixture
+grep -q '^per-test cap:  1500s for each process dune starts in a --test or --record-golden alias not reaching @slow (the default for a trip holding a GPU backend: hip); none for --run' \
+  "$TMP/runs/test-cap-gpu-default/stdout" &&
+  grep -qx 'device probe:  none on macOS (a freshly linked bin/device_props can sit in dlopen for minutes under XProtect, which would read as a hung device)' \
+    "$TMP/runs/test-cap-gpu-default/stdout" &&
+  ! grep -q '^machine-verify: device probe: ' "$TMP/runs/test-cap-gpu-default/stdout"
+report $? 'test-cap-gpu-default: a GPU trip states the default cap, and no probe on macOS' "$TMP/runs/test-cap-gpu-default"
+check_case test-cap-cpu-default success 0 'verified .*backend=cc' --test @fixture
+grep -qx 'per-test cap:  none (no default for a trip holding no GPU backend; --test-cap N sets one)' "$TMP/runs/test-cap-cpu-default/stdout" &&
+  grep -qx 'device probe:  none (no GPU backend)' "$TMP/runs/test-cap-cpu-default/stdout"
+report $? 'test-cap-cpu-default: a CPU trip has neither bound by default' "$TMP/runs/test-cap-cpu-default"
+# The bounds follow every GPU backend the trip can hold, not the pinned one alone: a stanza naming
+# cuda under --backend cc gets the default cap and a probe of cuda (Codex review round 2 on PR #1172).
+BACKEND=cc NVIDIA=present NAMES='cuda:arrayjit/test/dune names it' UNAME=Linux \
+  check_case bounds-reached-gpu success 0 'verified .*backend=cc' --test @fixture
+grep -q '^per-test cap:  1500s .*(the default for a trip holding a GPU backend: cuda)' \
+  "$TMP/runs/bounds-reached-gpu/stdout" &&
+  grep -qx 'device probe:  cuda, through bin/device_props before the first device use, bounded at 60s' \
+    "$TMP/runs/bounds-reached-gpu/stdout" &&
+  grep -q '^machine-verify: device probe: cuda: answered in ' "$TMP/runs/bounds-reached-gpu/stdout"
+report $? 'bounds-reached-gpu: a CPU pin over a reached GPU stanza gets both bounds for that GPU' \
+  "$TMP/runs/bounds-reached-gpu"
+BACKEND=hip UNAME=Linux check_case test-cap-lifted slow-test 0 'verified .*backend=hip' --test @fixture --test-cap 0
+grep -qx 'per-test cap:  none (--test-cap 0)' "$TMP/runs/test-cap-lifted/stdout"
+report $? 'test-cap-lifted: --test-cap 0 lets a GPU trip'\''s slow test finish' "$TMP/runs/test-cap-lifted"
+check_refusal test-cap-word '^machine-verify: test cap must be a non-negative integer$' --test-cap 2x
+check_refusal probe-cap-zero '^machine-verify: probe cap must be a positive integer$' --probe-cap 0
+BACKEND=hip UNAME=Linux check_case probe-hang probe-hang 69 \
+  '^machine-verify: device probe: a fresh device query for hip did not answer within 1s: the$' --test @fixture \
+  --probe-cap 1
+mv_ok=0
+! grep -q '@fixture' "$TMP/runs/probe-hang/audit" || mv_ok=1
+grep -q '^  hip: NO ANSWER within 1s; the query was killed$' "$TMP/runs/probe-hang/stdout" || mv_ok=1
+read -r mv_query mv_args <"$TMP/runs/probe-hang/audit.probe" || mv_ok=1
+[ "$mv_args" = --ocannl_backend=hip ] || mv_ok=1
+if [ -n "${mv_query:-}" ] && running "$mv_query"; then kill -KILL "$mv_query"; mv_ok=1; fi
+report "$mv_ok" 'probe-hang: the wedged device ends the trip before any operation, the query killed' "$TMP/runs/probe-hang"
+# A per-command cap shorter than --probe-cap ends the query first: the device is unjudged, and the
+# trip stops there with the cap's 142 rather than going on to use it (Codex review round 1 on PR
+# #1172).
+BACKEND=hip UNAME=Linux check_case probe-past-command-cap probe-hang 142 \
+  '^machine-verify: device probe: the query did not finish \(exit 142\); nothing more runs on an unjudged device$' \
+  --test @fixture --probe-cap 60 --cap 2
+! grep -q '@fixture' "$TMP/runs/probe-past-command-cap/audit"
+report $? 'probe-past-command-cap: no operation ran after the unfinished query' "$TMP/runs/probe-past-command-cap"
+read -r mv_query mv_args <"$TMP/runs/probe-past-command-cap/audit.probe" &&
+  if running "$mv_query"; then kill -KILL "$mv_query"; fi
+BACKEND=hip UNAME=Linux check_case probe-answer success 0 'verified .*backend=hip' --test @fixture
+grep -q '^machine-verify: device probe: hip: answered in [0-9.]*s$' "$TMP/runs/probe-answer/stdout" &&
+  grep -q '|hip|build -j 4 @fixture$' "$TMP/runs/probe-answer/audit"
+report $? 'probe-answer: an answering device is recorded and the trip runs' "$TMP/runs/probe-answer"
+
 # The deprecated name forwards every argument and says so on stderr.
 shim_case() { # NAME
   local ok=0
@@ -634,7 +744,8 @@ switch_credential_oracle() {
 mutant_pair() { # NAME driver|far AWK_PROGRAM -> path of the pair's driver
   local dir=$TMP/mutants/$1 target
   case $2 in driver) target=$SRC ;; far) target=$FAR ;; *) return 1 ;; esac
-  mkdir -p "$dir" && cp "$SRC" "$FAR" "$BOX_JOBS" "$BATCH_BACKENDS" "$CREDENTIAL_ENV" "$dir/" || return 1
+  mkdir -p "$dir" && cp "$SRC" "$FAR" "$BOX_JOBS" "$BATCH_BACKENDS" "$CREDENTIAL_ENV" "$PER_TEST_CAP" \
+    "$DEVICE_PROBE" "$dir/" || return 1
   awk "$3" "$target" >"$dir/${target##*/}" || return 1
   bash -n "$dir/${target##*/}" || return 1
   ! cmp -s "$target" "$dir/${target##*/}" || return 1
