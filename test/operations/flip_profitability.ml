@@ -20,6 +20,7 @@
 
 open Base
 open Verdict.Claims
+module Cache_plant = Test_utils.Cache_plant
 
 (* A completed search that timed [mma_timed] tensorized candidates, the best of them at
    [mma_best_ms], with the search's overall best at [best_ms]. The objective is the default one and
@@ -139,22 +140,8 @@ let () =
      without an [entry_version] bump — and replay as "nothing is known" rather than as a verdict. *)
   let round_trip e = Ir.Schedule_cache.entry_of_sexp (Ir.Schedule_cache.sexp_of_entry e) in
   let entry mma_best_ms =
-    {
-      Ir.Schedule_cache.version = Ir.Schedule_cache.entry_version;
-      backend = "metal";
-      numerics = "n";
-      codegen = None;
-      objective = None;
-      source_digest = "d";
-      saved = [];
-      segments = None;
-      best_ms = 7.5;
-      baseline_ms = 9.0;
-      mma_best_ms;
-      default_ms = None;
-      default_fingerprint = None;
-      best_steps = None;
-    }
+    Cache_plant.entry ~numerics:"n" ~backend:"metal" ~source_digest:"d" ~best_ms:7.5
+      ~baseline_ms:9.0 ?mma_best_ms ()
   in
   p "a stored tensorized best survives the entry round-trip"
     (match (round_trip (entry (Some 92.0))).Ir.Schedule_cache.mma_best_ms with

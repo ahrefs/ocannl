@@ -4,6 +4,7 @@ open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules
 open Verdict.Claims
+module Cache_plant = Test_utils.Cache_plant
 module SC = Ir.Schedule_cache
 module BI = Ir.Backend_intf
 module FI = Ir.Resource_fault_injection
@@ -18,22 +19,7 @@ let clean dir =
     Stdlib.Sys.rmdir dir)
 
 let schedule_entry canon backend =
-  {
-    SC.version = SC.entry_version;
-    backend;
-    numerics = SC.numerics_tag ();
-    codegen = None;
-    objective = None;
-    source_digest = SC.digest canon;
-    saved = [];
-    segments = None;
-    best_ms = 1.;
-    baseline_ms = 2.;
-    default_ms = None;
-    mma_best_ms = None;
-    default_fingerprint = None;
-    best_steps = None;
-  }
+  Cache_plant.entry ~backend ~source_digest:(SC.digest canon) ~best_ms:1. ~baseline_ms:2. ()
 
 let () =
   let registry uuid = "  \"IOPlatformUUID\" = \"" ^ uuid ^ "\"\n" in

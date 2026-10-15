@@ -28,6 +28,7 @@ module Sched = Ir.Schedule
 module SC = Ir.Schedule_cache
 module Asgns = Ir.Assignments
 open Verdict.Claims
+module Cache_plant = Test_utils.Cache_plant
 
 (* The report's outcome as the questions this test asks of it (gh-ocannl-677): the outcome is a
    variant naming one of five mutually exclusive states, so a claim names the state it means instead
@@ -242,29 +243,14 @@ let () =
   in
   p "the hand-crafted entry has a prelude and per-segment schedules"
     ((not (List.is_empty !prelude_saved)) && List.length !saved_segments >= 2);
-  let slimits = Context.hardware_limits sctx in
-  let scaps = Context.codegen_capabilities sctx in
-  SC.store ~dir:cache_dir
-    ~key:
-      (SC.cache_key ~timing_identity:(Context.timing_identity sctx) ~limits:slimits
-         ~capabilities:scaps base_canon ~backend:backend_name)
-    {
-      SC.version = SC.entry_version;
-      backend = backend_name;
-      numerics = SC.numerics_tag ();
-      codegen = Some (SC.codegen_tag ~backend:backend_name ~limits:slimits ~capabilities:scaps ());
-      objective = Some (SC.objective_tag ());
-      source_digest = SC.digest base_canon;
-      saved = !prelude_saved;
-      segments = Some !saved_segments;
-      best_ms = 0.;
-      baseline_ms = 0.;
-      default_ms = None;
-      (* Also pre-gh-579: no stored tensorized best, so a replay of it reports none. *)
-      mma_best_ms = None;
-      default_fingerprint = None;
-      best_steps = None;
-    };
+  (* Also pre-gh-579: no stored tensorized best, so a replay of it reports none. *)
+  ignore
+    (Cache_plant.plant ~saved:!prelude_saved ~segments:!saved_segments ~cache_dir
+       ~backend:backend_name ~timing_identity:(Context.timing_identity sctx)
+       ~limits:(Context.hardware_limits sctx)
+       ~capabilities:(Context.codegen_capabilities sctx)
+       base_canon
+      : SC.cache_io list);
   let hit_report = ref None in
   let hctx = Context.auto () in
   let hctx, hroutine =

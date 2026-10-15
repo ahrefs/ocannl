@@ -90,6 +90,10 @@ module Asm_census = Asm_census
     at all, and counting its innermost loop is what separates "gcc accepted the arm" from "gcc kept
     it in registers as one vector operation". *)
 
+module Cache_plant = Cache_plant
+(** Planting schedule-cache entries by hand from a few named arguments, and the waiver for claims
+    resting on cache I/O the filesystem refused. *)
+
 (** [concise_float ~prec v] formats [v] with [prec] decimals, normalizing exponent digits portably.
     Re-export of [Ir.Ndarray.concise_float]. *)
 let concise_float = Ir.Ndarray.concise_float

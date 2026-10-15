@@ -1532,10 +1532,14 @@ files.
   cache directory, not all were refused. A deterministic refusal (a rejected filename, a commit that always fails) refuses
   every store, and without that claim it turns the test into a permanent skip that hosted CI
   aggregates nowhere. Gate on the timing identity of the run's OWN context, the one the store keys
-  on, never a reference context's. `placement_store`'s `persistence` record, `unless_refused` and
-  its process-wide claim are the exemplar. `schedule_cache_regime` pins the record itself:
-  committed and admitted I/O, the regime, lock, read and commit refusals, keyless calls, and
-  nesting.
+  on, never a reference context's. The waiver is shared: `Test_utils.Cache_plant.unless_refused`
+  (`refused_in` for a hand-written branch); `placement_store`'s `persistence` record and its
+  process-wide claim are the exemplar. A test planting an entry by hand builds it through
+  `Cache_plant.entry` (synthetic) or `Cache_plant.plant` (keyed and self-described as
+  `Autotune.tune` stores one, returning the store's I/O for the waiver), never as a record literal,
+  so a new entry field reaches every planted entry through one default. `schedule_cache_regime`
+  pins the record itself: committed and admitted I/O, the regime, lock, read and commit refusals,
+  keyless calls, and nesting.
 ## Scan-loop scheduling
 
 - **A `Scan_loop` is opaque to the schedule ops in both directions and transparent to the

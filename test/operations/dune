@@ -4512,7 +4512,7 @@
   (env_var OCANNL_BIG_MODELS)
   (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
  (modules autotune_serial_baseline)
- (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -4544,7 +4544,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules schedule_cache_device)
- (libraries base ocannl stdio arrayjit.verdict)
+ (libraries base ocannl stdio arrayjit.verdict test_utils)
  (preprocess
   (pps ppx_here ppx_sexp_conv ppx_ocannl)))
 
@@ -4554,7 +4554,7 @@
  (package neural_nets_lib)
  (deps ocannl_config)
  (modules schedule_cache_regime)
- (libraries base ocannl stdio unix arrayjit.verdict))
+ (libraries base ocannl stdio unix arrayjit.verdict test_utils))
 
 (test
  ; ocannl-backend: none -- pure filesystem exercise of Schedule_cache entry naming; no context or compile.
@@ -4564,7 +4564,7 @@
  (modules schedule_cache_entry_name)
  ; `arrayjit.utils` for `Atomic_file.windows_path_length_note`, the staging-open refusal's
  ; path-length diagnosis.
- (libraries base ocannl stdio arrayjit.utils arrayjit.verdict))
+ (libraries base ocannl stdio arrayjit.utils arrayjit.verdict test_utils))
 
 (test
  ; ocannl-backend: none -- cross-process filesystem exercise of Schedule_cache; no context or compile.
@@ -4574,7 +4574,15 @@
  (locks ocannl_filesystem_stress_test)
  (deps ocannl_config)
  (modules schedule_cache_regime_race)
- (libraries base ocannl stdio unix mtime mtime.clock.os arrayjit.verdict))
+ (libraries
+  base
+  ocannl
+  stdio
+  unix
+  mtime
+  mtime.clock.os
+  arrayjit.verdict
+  test_utils))
 
 (test
  (name digest_identity_flips)
@@ -4724,7 +4732,7 @@
 (executable
  (name autotune_fission_sketch)
  (modules autotune_fission_sketch)
- (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -6265,7 +6273,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules placement_store)
- (libraries base ocannl stdio unix arrayjit.verdict ll_test)
+ (libraries base ocannl stdio unix arrayjit.verdict test_utils ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -6407,7 +6415,7 @@
   (env_var OCANNL_BIG_MODELS)
   (env_var OCANNL_STACK_THRESHOLD_IN_BYTES))
  (modules autotune_split_reduce)
- (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -6549,7 +6557,7 @@
  (modules resource_fault_injection)
  ; `arrayjit.utils` for `Atomic_file.is_staging_file`: the cache-store leg asks the publication
  ; helper which files are staging artifacts instead of restating its naming scheme.
- (libraries base ocannl stdio arrayjit.utils arrayjit.verdict)
+ (libraries base ocannl stdio arrayjit.utils arrayjit.verdict test_utils)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -6584,7 +6592,7 @@
  (package neural_nets_lib)
  (deps ocannl_config)
  (modules flip_profitability)
- (libraries base ocannl stdio arrayjit.verdict))
+ (libraries base ocannl stdio arrayjit.verdict test_utils))
 
 ; Run by a rule so the backend and the model_peak_* envelope overrides are pinned on the
 ; command line (the C backends carry no advisory envelope constants).
@@ -8617,7 +8625,7 @@
  (package neural_nets_lib)
  (deps ocannl_config)
  (modules autotune_replay_refusal)
- (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 

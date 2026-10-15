@@ -16,24 +16,10 @@
 open Base
 module SC = Ir.Schedule_cache
 open Verdict.Claims
+module Cache_plant = Test_utils.Cache_plant
 
-let entry backend : SC.entry =
-  {
-    version = SC.entry_version;
-    backend;
-    numerics = SC.numerics_tag ();
-    codegen = None;
-    objective = None;
-    source_digest = "gh835-source";
-    saved = [];
-    segments = None;
-    best_ms = 1.;
-    baseline_ms = 2.;
-    default_ms = None;
-    mma_best_ms = None;
-    default_fingerprint = None;
-    best_steps = None;
-  }
+let entry backend =
+  Cache_plant.entry ~backend ~source_digest:"gh835-source" ~best_ms:1. ~baseline_ms:2. ()
 
 let clean_dir dir =
   if Stdlib.Sys.file_exists dir && Stdlib.Sys.is_directory dir then (

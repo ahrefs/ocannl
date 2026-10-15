@@ -31,6 +31,7 @@ module LL = Ir.Low_level
 module SC = Ir.Schedule_cache
 module Outcome = Ir.Schedule_outcome
 open Verdict.Claims
+module Cache_plant = Test_utils.Cache_plant
 
 let cache_dir = "autotune_cache_replay_refusal"
 
@@ -91,13 +92,11 @@ let canon =
   in
   SC.canonicalize (Option.value_exn ~here:[%here] !captured)
 
+let backend = Context.backend_name base_ctx
+let timing_identity = Context.timing_identity base_ctx
 let limits = Context.hardware_limits base_ctx
 let capabilities = Context.codegen_capabilities base_ctx
-
-let key =
-  SC.cache_key
-    ~timing_identity:(Context.timing_identity base_ctx)
-    ~limits ~capabilities canon ~backend:(Context.backend_name base_ctx)
+let key = Cache_plant.key ~backend ~timing_identity ~limits ~capabilities canon
 
 (* Timed-cache reuse needs a concrete device identity; without one nothing is looked up. *)
 let cache_available = Option.is_some key
@@ -109,23 +108,11 @@ let () =
 let cache_claim label value =
   gated ~aggregation:`Environment ~when_:cache_available ~on:"no-device-identity" label value
 
-(* The cache absorbs a filesystem refusal by design (gh-ocannl-1040): a refused plant or lookup
-   leaves the call with no entry to refuse, for a reason none of the claims below observes. Each leg
-   records its I/O, and a claim resting on the replay is waived, as an environment skip, where the
-   plant's store or the call's lookup was refused -- named on stderr. *)
-let refused_in ios label =
-  let refusals = List.filter ios ~f:(fun (io : SC.cache_io) -> Option.is_some io.SC.refusal) in
-  List.iter refusals ~f:(fun (io : SC.cache_io) ->
-      Stdio.eprintf "%s (not part of the golden): cache I/O refused: %s\n%!" label
-        (Option.value io.SC.refusal ~default:""));
-  not (List.is_empty refusals)
-
+(* Each leg records its I/O, and a claim resting on the replay is waived where the plant's store or
+   the call's lookup was refused ([Cache_plant.unless_refused]). *)
 let replay_claim ios label value =
   if not cache_available then cache_claim label value
-  else
-    gated ~aggregation:`Environment
-      ~when_:(not (refused_in ios label))
-      ~on:"refused cache I/O" label value
+  else Cache_plant.unless_refused ios label value
 
 (* Every planted store, for the one claim no refusal waives: a deterministic refusal (a rejected
    filename, a commit that always fails) would otherwise turn every claim above into a permanent
@@ -133,27 +120,9 @@ let replay_claim ios label value =
 let planted = ref []
 
 let plant ~saved ~segments =
-  let (), ios =
-    SC.recording_cache_io (fun () ->
-        SC.store ~dir:cache_dir ~key
-          {
-            SC.version = SC.entry_version;
-            backend = Context.backend_name base_ctx;
-            numerics = SC.numerics_tag ();
-            codegen =
-              Some
-                (SC.codegen_tag ~backend:(Context.backend_name base_ctx) ~limits ~capabilities ());
-            objective = Some (SC.objective_tag ());
-            source_digest = SC.digest canon;
-            saved;
-            segments;
-            best_ms = 0.;
-            baseline_ms = 0.;
-            default_ms = None;
-            mma_best_ms = None;
-            default_fingerprint = None;
-            best_steps = None;
-          })
+  let ios =
+    Cache_plant.plant ~saved ?segments ~cache_dir ~backend ~timing_identity ~limits ~capabilities
+      canon
   in
   planted := !planted @ ios;
   ios
