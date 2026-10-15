@@ -498,9 +498,10 @@ let gated_alli ?aggregation ?min ~when_ ~on label xs ~f =
 let gated_exists ?aggregation ?min ~when_ ~on label xs ~f =
   gate ?aggregation ~when_ ~on label (fun () -> p_exists ?min label xs ~f)
 
-(** [pass_fail label b] prints [label: PASS] or [label: FAIL], and fails the run in the latter case.
-    [?detail] is evaluated only on failure and appended in parentheses — the place for a machine-
-    specific number (a measured value, a difference) that must stay out of a passing golden.
+(** [pass_fail label b] prints [label: PASS] or [label: FAIL], and fails the run in the latter case,
+    echoing that row behind [FAIL: ] on stderr. [?detail] is evaluated only on failure and appended
+    in parentheses — the place for a machine- specific number (a measured value, a difference) that
+    must stay out of a passing golden.
 
     Not for a claim some host skips: {!skipped} prints [label: true], never [label: PASS], so that
     pairing breaks the golden wherever the skip fires. A gated claim goes through {!gated}. *)
@@ -510,9 +511,12 @@ let pass_fail ?detail label b =
     Stdio.printf "%s: PASS\n" (one_line label))
   else
     let detail = match detail with None -> "" | Some f -> " (" ^ one_line (f ()) ^ ")" in
+    let row = Printf.sprintf "%s: FAIL%s" (one_line label) detail in
     record_failure label;
-    Stdio.printf "%s: FAIL%s\n" (one_line label) detail;
-    Stdio.eprintf "FAIL: %s%s\n" (one_line label) detail
+    (* Its stderr line is the row behind [FAIL: ], as every claim's is ([FAIL: <label>: false]):
+       [tools/mutation-run.sh] lists a run's failed claims by that line's ending alone. *)
+    Stdio.printf "%s\n" row;
+    Stdio.eprintf "FAIL: %s\n" row
 
 (** [pass_fail_all2 label got want ~f] is {!p_all2} in {!pass_fail}'s output dialect. It refuses
     empty, short, and mismatched pairs before evaluating [f]. On those structural refusals the

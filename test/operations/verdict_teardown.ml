@@ -52,7 +52,7 @@ let one_line_out =
 let one_line_err =
   "FAIL: a computed label : false\n\
    FAIL: a computed label : false\n\
-   FAIL: a computed label  (got 1 want 2)\n\
+   FAIL: a computed label : FAIL (got 1 want 2)\n\
    FAIL: a computed label  (empty): false\n"
   ^ Verdict.teardown_line [ broken_label; broken_label; broken_label; broken_label ]
   ^ "\n"
@@ -159,9 +159,9 @@ let () =
                   (Printf.sprintf
                      {|FAILED: 5 checks did not hold: "%s...", "second claim", "third claim " and 2 more.|}
                      (String.make 58 'x'))));
-      (* tools/mutation-run.sh lists a run's false claims as the [FAIL: …: false] lines of its log
-         and counts its stdout rows against the golden's: a claim split over two lines was neither
-         listed nor one row. *)
+      (* tools/mutation-run.sh lists a run's false claims as the [FAIL: …: false] (and [FAIL: …:
+         FAIL …]) lines of its log and counts its stdout rows against the golden's: a claim split
+         over two lines was neither listed nor one row. *)
       about "label_line_breaks"
         "a claim whose computed label carries line breaks reports on one line of each stream"
         (run_child "label_line_breaks") ~holds:(fun status out err ->
@@ -172,6 +172,19 @@ let () =
         "a failing run omits the success trailer it prints only when no claim failed"
         trailer_omitted ~holds:(fun status out _ ->
           exited 1 status && not (has out ~substring:"OK: "));
+      (* What tools/mutation-run.sh lists a failed claim by: its stderr line is its stdout row
+         behind [FAIL: ] -- for pass_fail too, whose row ends on [FAIL], bare or with a detail. A
+         Verdict.fail message, which is no claim, is a [FAIL: ] row on both streams. *)
+      let pass_fail_forms = run_child "pass_fail_forms" in
+      about "pass_fail_forms"
+        "a failed pass_fail claim's stderr line is its stdout row behind FAIL:, bare or detailed"
+        pass_fail_forms ~holds:(fun status out err ->
+          let rows = String.split_lines out and lines = String.split_lines err in
+          let echoed suffix =
+            List.exists rows ~f:(fun row ->
+                String.is_suffix row ~suffix && List.mem lines ("FAIL: " ^ row) ~equal:String.equal)
+          in
+          exited 1 status && echoed ": FAIL" && echoed ": FAIL (got 1 want 2)");
       let pass_status, pass_out, _ = run_child "pass" in
       let case_status, case_out, _ = run_child "case_pass" in
       p "a case that returns prints only what its claims print"
@@ -182,7 +195,8 @@ let () =
         "\nTranscripts tools/test-mutation-run.sh replays through tools/mutation-run.sh:\n";
       print_transcript "case_raise" case_raise;
       print_transcript "case_exit" case_exit;
-      print_transcript "trailer_omitted" trailer_omitted
+      print_transcript "trailer_omitted" trailer_omitted;
+      print_transcript "pass_fail_forms" pass_fail_forms
   | [ _; mode ] -> (
       (* Only on the paths whose stdout is not compared byte for byte. *)
       if String.is_prefix mode ~prefix:"fail_then_" then Stdlib.Format.printf "%s@\n" formatted;
@@ -236,6 +250,11 @@ let () =
           p "last claim" true;
           if not (Verdict.any_failed ()) then
             Stdio.printf "\nOK: every claim held.\nOK: four claims checked.\n"
+      | "pass_fail_forms" ->
+          pass_fail "held" true;
+          pass_fail "failed" false;
+          fail "a message, not a claim";
+          pass_fail ~detail:(fun () -> "got 1 want 2") "detailed" false
       | "pass" -> p "the claim" true
       | "case_pass" -> case "the case" (fun () -> p "the claim" true)
       | other -> failwith ("verdict_teardown: unknown mode " ^ other))

@@ -1463,10 +1463,12 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   row helper owns the boundary, so future rows inherit it without repeating the label; a new
   multi-case test does the same. No scan holds it: the `case_` prefix is a local habit, and the
   wider population of `test_*` drivers often catches its own exceptions to print them.
-- A claim is one row on each stream it prints to. `tools/mutation-run.sh` lists a run's
-  `FAIL: …: false` lines and counts its stdout rows against the golden's, and a label carrying a
-  newline split its claim into a `FAIL: ` head that is no false claim and a tail that is a row the
-  golden lacks. So Verdict renders every claim line, label and detail, through `Verdict.one_line`
+- A claim is one row on each stream it prints to, and its stderr line is its stdout row behind
+  `FAIL: ` -- `pass_fail`'s too (`FAIL: <label>: FAIL (<detail>)`; a bare `FAIL: <label>` reads
+  exactly as a `Verdict.fail` message). `tools/mutation-run.sh` lists a run's failed claims by
+  those lines' endings (`: false`, `: FAIL`, `: FAIL (…)`) and counts its stdout rows against the
+  golden's, and a label carrying a newline split its claim into a `FAIL: ` head that is no false
+  claim and a tail that is a row the golden lacks. So Verdict renders every claim line, label and detail, through `Verdict.one_line`
   (a control character becomes a space), which keeps a computed label on one row; a literal label,
   or a `pf` format, written with a line break is refused by `verdict_ratchet`
   (`Verdict_scan.line_break_census`) -- a blank line before a claim goes in a `printf` of its own.
@@ -1619,13 +1621,8 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   `OLD@@@NEW`, with exactly one delimiter, a nonempty OLD occurring exactly once (overlapping
   occurrences count), and no implicit newline trimming; NEW can be empty. The runner invokes
   `tools/test-run.sh`, prints its actual verdict and run id, and extracts every complete
-  `FAIL: ...: false` line from that run's full log, preserving order and duplicates, with a failed
-  `pass_fail`'s `FAIL: <label>` or `FAIL: <label> (<detail>)`: that line ends on no `: false`, so
-  it is listed when a stdout row this run wrote (`<label>: FAIL…`) printed it: one log line
-  per row, under any reading of a label containing `: FAIL (…)`, after the copies `Verdict.fail`'s
-  own stdout echo accounts for, as a largest matching of lines to rows; a message of that shape
-  is not listed (`verdict_teardown` pins both streams' bytes,
-  and `tools/test-mutation-run.sh`'s fixture reads them from there). The alias
+  `FAIL: ...: false` line from that run's full log, and every failed `pass_fail`'s
+  `FAIL: ...: FAIL` or `FAIL: ...: FAIL (<detail>)`, preserving order and duplicates. The alias
   names ONE test (`@<dir>/runtest-<name>`, `slow-<name>`, `train-<name>`) with a golden
   `<dir>/<name>.expected`, refused otherwise, because 1 means "caught" and 0 "survived" only for a
   run that reached its last row (gh-ocannl-1083). The runner snapshots the test's stdout
