@@ -2566,11 +2566,18 @@ case $sub in
       # The iteration: a clean build context, then dune -- beside the per-test cap's watcher,
       # whose resolver is this `bash -c` and whose supervisor ($PPID) the iteration's -- and, on a
       # probed batch, after `_probe`, which execs it in its own place once the device answered.
+      # The shell outlives both its children, a signal to the group included: the supervisor's
+      # TERM ends dune and the watcher too, and the trap (run once dune has exited) reaps the
+      # watcher before the shell exits, so no member of the iteration's group is left to a parent
+      # that may never reap it -- a zombie-only group without its leader, which reap_repeat_group
+      # must refuse, under a PID 1 that does not reap orphans (Codex review round 1 on PR #1172).
       iter_cmd=(/bin/bash -c '
         dune=$1 build=$2 tcap=$3 watch=$4 kind=$5 rd=$6
         shift 6
         "$dune" clean --build-dir="$build" || exit 126
         [ "$tcap" -gt 0 ] || exec "$dune" "$@"
+        watcher=
+        trap '\''[ -z "$watcher" ] || { kill "$watcher"; wait "$watcher"; } 2>/dev/null; exit 143'\'' TERM INT HUP
         perl -e "$watch" "$tcap" "$$" "$PPID" "$rd" "$kind" </dev/null 9>&- &
         watcher=$!
         "$dune" "$@"

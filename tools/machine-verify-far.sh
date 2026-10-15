@@ -683,7 +683,15 @@ probe_device() {
   fi
   opam_exec env "OCANNL_BACKEND=$backend" sh -c "$device_probe_sh" device-probe machine-verify \
     "$probe_perl" "$probe_cap" "$probe_dir" "$wt/_build/default/bin/device_props.exe" "$backend"
-  [ $? -ne 69 ] || exit 69
+  probe_rc=$?
+  # 69 is the probe's own refusal; any other failure -- the per-command cap expiring before
+  # --probe-cap did (142), a switch that would not run it -- leaves the device unjudged, and the
+  # trip does not go on to touch it either.
+  if [ "$probe_rc" -ne 0 ]; then
+    [ "$probe_rc" -eq 69 ] ||
+      echo "machine-verify: device probe: the query did not finish (exit $probe_rc); nothing more runs on an unjudged device"
+    exit "$probe_rc"
+  fi
   sed 's/^/machine-verify: device probe: /' "$probe_dir/device-probe"
 }
 

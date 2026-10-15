@@ -655,6 +655,16 @@ read -r mv_query mv_args <"$TMP/runs/probe-hang/audit.probe" || mv_ok=1
 [ "$mv_args" = --ocannl_backend=hip ] || mv_ok=1
 if [ -n "${mv_query:-}" ] && kill -0 "$mv_query" 2>/dev/null; then kill -KILL "$mv_query"; mv_ok=1; fi
 report "$mv_ok" 'probe-hang: the wedged device ends the trip before any operation, the query killed' "$TMP/runs/probe-hang"
+# A per-command cap shorter than --probe-cap ends the query first: the device is unjudged, and the
+# trip stops there with the cap's 142 rather than going on to use it (Codex review round 1 on PR
+# #1172).
+BACKEND=hip UNAME=Linux check_case probe-past-command-cap probe-hang 142 \
+  '^machine-verify: device probe: the query did not finish \(exit 142\); nothing more runs on an unjudged device$' \
+  --test @fixture --probe-cap 60 --cap 2
+! grep -q '@fixture' "$TMP/runs/probe-past-command-cap/audit"
+report $? 'probe-past-command-cap: no operation ran after the unfinished query' "$TMP/runs/probe-past-command-cap"
+read -r mv_query mv_args <"$TMP/runs/probe-past-command-cap/audit.probe" &&
+  if kill -0 "$mv_query" 2>/dev/null; then kill -KILL "$mv_query"; fi
 BACKEND=hip UNAME=Linux check_case probe-answer success 0 'verified .*backend=hip' --test @fixture
 grep -q '^machine-verify: device probe: hip: answered in [0-9.]*s$' "$TMP/runs/probe-answer/stdout" &&
   grep -q '|hip|build -j 4 @fixture$' "$TMP/runs/probe-answer/audit"
