@@ -245,7 +245,8 @@
 #      makes it, a control shows); its digest gives each named test the
 #      seconds of the processes that are its action -- the alias action, also
 #      in a subdirectory under a recursive `@` and not under `@@`, a producer
-#      of NAME.exe.output or NAME.actual, or else an unclaimed NAME.exe in its
+#      of NAME.exe.output, NAME.actual, NAME.ll.actual or (for NAME
+#      BASE-VARIANT) BASE.VARIANT.actual, or else an unclaimed NAME.exe in its
 #      directory -- from a synthetic trace. A named test with no such process
 #      is NOT RUN (exit 2), the others still timed, also when the trace holds
 #      no process at all; a red run is FAIL with its times and not promotable;
@@ -4142,9 +4143,10 @@ fi
 # alias's action in a subdirectory; beta is an alias action named with `@@`,
 # its directory alone, so the subdirectory twin planted for it does not count;
 # gamma's producer is `NAME.actual` under a program of another name, which
-# therefore no other test may claim by that program; delta writes an output
-# of another name, so only its program finds it; the compile and a bystander
-# test count for nobody.
+# therefore no other test may claim by that program; epsilon-c_fwd writes
+# `NAME.ll.actual` and zeta-extension `zeta.extension.actual`, both from a
+# program of another name; delta writes an output of another name, so only
+# its program finds it; the compile and a bystander test count for nobody.
 fresh_label="fresh: forced, uncached, own build directory; per-test times; NOT RUN refused"
 if ! command -v python3 >/dev/null 2>&1; then
   skip "$fresh_label" "no python3 on PATH (tools/action-durations.sh needs it)"
@@ -4169,7 +4171,9 @@ for pid, start, dur, prog, target, owner in [
         (15, 5, 4.5, 'shared.exe', build + '/default/test/operations/gamma.actual', 'gamma'),
         (16, 6, 9.75, 'bystander.exe', build + '/default/test/operations/bystander.exe.output', 'other'),
         (17, 7, 2.0, 'ocamlopt.opt', build + '/default/tensor/x.cmx', 'other'),
-        (18, 8, 2.25, 'delta.exe', build + '/default/test/operations/backend-0-0.log.actual', 'delta')]:
+        (18, 8, 2.25, 'delta.exe', build + '/default/test/operations/backend-0-0.log.actual', 'delta'),
+        (19, 9, 1.75, 'epsilon.exe', build + '/default/test/operations/epsilon-c_fwd.ll.actual', 'epsilon'),
+        (20, 10, 0.5, 'zeta.exe', build + '/default/test/operations/zeta.extension.actual', 'zeta')]:
     if skip in (owner, 'all'):
         continue
     t = T0 + start * S
@@ -4194,7 +4198,7 @@ PY
       f { exit }' | sed 's/^ *//; s/  */ /g'
   }
   fresh_detail=
-  fresh_aliases='@test/operations/runtest-alpha @@test/einsum/slow-beta @test/operations/runtest-gamma @test/operations/runtest-delta'
+  fresh_aliases='@test/operations/runtest-alpha @@test/einsum/slow-beta @test/operations/runtest-gamma @test/operations/runtest-delta @test/operations/runtest-epsilon-c_fwd @test/operations/runtest-zeta-extension'
   # 1. Every named test ran: exit 0, the times attributed, the command forced,
   # uncached and in the run's own build directory -- recorded as such -- and
   # that directory gone with the run.
@@ -4207,7 +4211,9 @@ PY
   fresh_want='13.84 2 0 action @test/operations/runtest-alpha
 3.25 1 0 action @@test/einsum/slow-beta
 4.50 1 0 action @test/operations/runtest-gamma
-2.25 1 0 program @test/operations/runtest-delta'
+2.25 1 0 program @test/operations/runtest-delta
+1.75 1 0 action @test/operations/runtest-epsilon-c_fwd
+0.50 1 0 action @test/operations/runtest-zeta-extension'
   [ -n "$fresh_detail" ] || [ "$(fresh_rows "$argv_out")" = "$fresh_want" ] ||
     fresh_detail="all ran: rows $(fresh_rows "$argv_out" | tr '\n' ';') (want $(printf '%s' "$fresh_want" | tr '\n' ';'))"
   [ -n "$fresh_detail" ] ||
@@ -4238,7 +4244,7 @@ PY
       *) fresh_detail="one skipped: exit $argv_rc (want 2, NOT RUN): $argv_out" ;;
     esac
     [ -n "$fresh_detail" ] || [ "$(fresh_rows "$argv_out" | tr '\n' ';')" = \
-      "13.84 2 0 action @test/operations/runtest-alpha;NOT RUN 0 - - @@test/einsum/slow-beta;4.50 1 0 action @test/operations/runtest-gamma;2.25 1 0 program @test/operations/runtest-delta;" ] ||
+      "13.84 2 0 action @test/operations/runtest-alpha;NOT RUN 0 - - @@test/einsum/slow-beta;4.50 1 0 action @test/operations/runtest-gamma;2.25 1 0 program @test/operations/runtest-delta;1.75 1 0 action @test/operations/runtest-epsilon-c_fwd;0.50 1 0 action @test/operations/runtest-zeta-extension;" ] ||
       fresh_detail="one skipped: rows $(fresh_rows "$argv_out" | tr '\n' ';')"
   fi
   # A program another named test's action already claimed is not a second

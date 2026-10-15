@@ -96,8 +96,11 @@
 # wall time from the run's dune trace (`timings` in the run directory): the
 # seconds of the processes that are its action -- the alias's own action
 # (`@DIR/KIND-NAME`, or one in a subdirectory for a recursive `@`) or the
-# producer of `DIR/NAME.exe.output`, `NAME.output` or `NAME.actual`; failing
-# both, the runs of `NAME.exe` in DIR that no other named test claimed -- summed,
+# producer of an output in DIR named after the test, `NAME.actual`,
+# `NAME.output` or `NAME.<EXT>.actual|output` (a `(test)` stanza's is
+# `NAME.exe.output`), a final `-VARIANT` of NAME read as `.VARIANT` too
+# (`runtest-x-extension` writes `x.extension.actual`); failing both, the runs
+# of `NAME.exe` in DIR that no other named test claimed -- summed,
 # with their count, exits and which rule matched (`action` or `program`). A
 # named test with no such process is NOT RUN: no process of the run is its
 # action, so there is no fresh time to report, and a run
@@ -1534,19 +1537,22 @@ fresh_timings() { # <trace file>
       x = s; sub(/^@/, "", x); sub(/\/[^\/]*$/, "", x)
       return x
     }
-    function action_of(j, s, k, t) { # row j is the alias action, or a producer of its output
+    function produces(s, pre, b) { # row s writes a file in DIR named after pre
+      b = s; sub(/^.*\//, "", b)
+      if (!in_dir(dir_of(s)) || substr(s, 1, 1) == "@" || substr(s, 1, 1) == "(") return 0
+      if (b == pre ".actual" || b == pre ".output") return 1
+      return index(b, pre ".") == 1 && (ends(b, ".actual") || ends(b, ".output"))
+    }
+    function action_of(j, s) { # row j is the alias action, or a producer of its output
       s = act[j]
       if (s == "@" p || (rec && index(s, "@" d "/") == 1 && ends(s, "/" base))) return 1
-      for (k = 1; k <= 3; k++) {
-        t = name sfx[k]
-        if (s == d "/" t || (rec && index(s, d "/") == 1 && ends(s, "/" t))) return 1
-      }
-      return 0
+      if (produces(s, name)) return 1
+      # BASE-VARIANT names BASE.VARIANT.actual (runtest-top_down_prec-extension)
+      return match(name, /-[^-]*$/) && produces(s, substr(name, 1, RSTART - 1) "." substr(name, RSTART + 1))
     }
     NR == FNR { alias[++n] = $0; next }
     { secs[++m] = $1; ex[m] = $2; prog[m] = $3; act[m] = $4; sub(/ \+[0-9]+$/, "", act[m]) }
     END {
-      split(".exe.output .output .actual", sfx, " ")
       for (i = 1; i <= n; i++) {
         named(i)
         for (j = 1; j <= m; j++) if (action_of(j)) { hits[i] = hits[i] " " j; claimed[j] = 1 }
@@ -2156,9 +2162,9 @@ digest() {
         fi
         if [ "$fresh_missing" -gt 0 ]; then
           echo "a test NOT RUN had no process here that is its action: not the alias's own action, not" \
-               "the producer of DIR/NAME.exe.output, NAME.output or NAME.actual, and no unclaimed NAME.exe" \
-               "in DIR. Name the per-test alias whose action runs it; this tool cannot time a test it" \
-               "cannot see run."
+               "the producer of an output in DIR named after it (NAME.actual, NAME.output," \
+               "NAME.<ext>.actual|output), and no unclaimed NAME.exe in DIR. Name the per-test alias" \
+               "whose action runs it; this tool cannot time a test it cannot see run."
         fi
         [ ! -e "$dir/build" ] ||
           echo "the fresh build directory survived its run (remove it): $dir/build"
