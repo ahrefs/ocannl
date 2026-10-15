@@ -5,6 +5,22 @@ an uninjected negative control; a happy-path test alone is listed as structural 
 coverage. CPU rows run on `cc` even when the ambient backend differs. GPU-only rows are explicit
 box-session legs: per-PR CI runs `cc` and cannot turn those cells green.
 
+The named injection points (`Delta_pool_allocated`, `Schedule_cache_before_commit`, ...) are
+`Resource_fault_injection.hit` calls, and `with_callback` installs a test's callback per DOMAIN:
+`hit` calls the value installed in the domain that runs it, and a fresh domain starts with the
+no-op. A new row's point must therefore fire on the domain that called the operation (a `Context`
+transfer, compile or release; a schedule-cache open, store or lookup), never inside a task a
+scheduler enqueues (a kernel or transfer task). On `multidev_cc` such a task runs on a worker
+domain, whose no-op callback never sees the hit, so no test there can force the row's failure, and
+a `cc` leg, which runs every task on the calling thread, would not notice.
+`resource_fault_injection_domains` pins both halves: two-domain isolation on `cc`, and on
+`multidev_cc` the caller's callback seeing the same point set as on `cc`. It derives that set from
+what its uninjected scenario reaches, so a new point such a run can reach belongs in that scenario,
+or it goes unpinned. Two rows inject elsewhere: candidate admission through the `Autotune.Seam`
+hooks, which are per domain under the same rule, and the reserved merge pool's allocation failure
+through a test-local mock raw allocator, outside it. The mechanism is in
+[backend-memory.md](agent-notes/backend-memory.md).
+
 | Seam | Failure mode | Status and acceptance evidence | Remaining leg |
 | --- | --- | --- | --- |
 | `Backends.allocate_delta` | A pool allocation commits, then later placement/initialization raises | Covered on `cc`: `resource_fault_injection` raises at `Delta_pool_allocated` and requires exactly one allocation, one free, zero live growth; its control commits and releases exactly once. | Run the same shared hook on each GPU box when allocator changes touch backend-specific allocation. |
