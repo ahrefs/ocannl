@@ -17,5 +17,25 @@ every line of a multi-line failure carries the FAIL prefix: true
 a run with three failed checks names all three on its last stderr line: true
 a run with more failed checks than the line shows names the first ones, cut and on one line, and counts the rest: true
 a claim whose computed label carries line breaks reports on one line of each stream: true
-a pass_fail claim prints one row on stdout and, failing, one line on stderr: true
+a failing run omits the success trailer it prints only when no claim failed: true
 a case that returns prints only what its claims print: true
+
+Transcripts tools/test-mutation-run.sh replays through tools/mutation-run.sh:
+  case_raise stdout | first: the case ran to completion (raised Failure("boom")): false
+  case_raise stdout | second: reached: true
+  case_raise stderr | FAIL: first: the case ran to completion (raised Failure("boom")): false
+  case_raise stderr | FAILED: 1 check did not hold: "first: the case ran to completion".
+  case_exit stdout | the claim: false
+  case_exit stderr | FAIL: the claim: false
+  case_exit stderr | FAILED: 1 check did not hold: "the claim".
+  case_exit stderr | STOPPED EARLY: an exit inside case "exits" ended the run, so no case after it ran
+  trailer_omitted stdout | first claim: false
+  trailer_omitted stdout | FAIL: second claim
+  trailer_omitted stdout | FAIL:   expected a, got b
+  trailer_omitted stdout | third claim: false
+  trailer_omitted stdout | last claim: true
+  trailer_omitted stderr | FAIL: first claim: false
+  trailer_omitted stderr | FAIL: second claim
+  trailer_omitted stderr | FAIL:   expected a, got b
+  trailer_omitted stderr | FAIL: third claim: false
+  trailer_omitted stderr | FAILED: 3 checks did not hold: "first claim", "second claim", "third claim".

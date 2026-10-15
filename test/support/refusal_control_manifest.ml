@@ -221,6 +221,7 @@ let raw_entries =
         "[scanner-refusal:6bb17d62436571b3e716c4bba5c0f746] promised non-OCANNL assignment";
         "[scanner-refusal:b8ac42648b6918233995586551724f6f] documented OCANNL assignment";
         "[scanner-refusal:84bf7dbb3e9182b1eced5e76a271e5f6] config-usage direct refusal";
+        "[scanner-refusal:03f2822e76feddd4b79a462013315b06] config-usage refusal is";
         "[scanner-refusal:ed12f66c93e310aaa2996f755dd93a06] config-usage refusal control";
         "[scanner-refusal:0019608f362162cac94b5c873afbcc80] config-usage refusal names";
         "[scanner-refusal:abf34118c8986fba00fd6d04dbec92e2] source inventory supplies";

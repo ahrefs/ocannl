@@ -1667,7 +1667,10 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   or supervisor leaves a lock holder alive, restoration is deferred: inspect/stop the worktree
   runs before recovering the source manually. Refusal exits 2; deferred or failed restoration exits 3 and retains the printed recovery copy; after SIGKILL, use that copy
   manually. It is temporary storage, without a power-loss or reboot recovery guarantee. `tools/test-mutation-run.sh` drives the shipping
-  runner and test-run supervisor in isolated fixtures; Ubuntu's shell-harness CI runs it.
+  runner and test-run supervisor in isolated fixtures; Ubuntu's shell-harness CI runs it. The
+  Verdict text the runner reads it takes from `verdict_teardown.expected`, whose last section is
+  three children's streams, and replays through the runner: a refactor of `verdict.ml` keeps the
+  harness green, while a promotion that changes those transcripts means running the harness.
 - The guarded pairwise claim has the same two label dialects as the scalar claim (gh-ocannl-816):
   `pf_all2` formats a computed label before taking the two arrays, and `pass_fail_all2` preserves
   `pass_fail`'s lazy failure detail while adding the structural empty, floor-shortfall, or

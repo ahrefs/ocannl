@@ -40,7 +40,7 @@ case "$*" in
   'build -j 4 @runtest-manifest') name=manifest ;;
   'build -j 4 @runtest-tail') name=tail ;;
   'build -j 4 @runtest-trailer') name=trailer ;;
-  'build -j 4 @runtest-passfail') name=passfail ;;
+  'build -j 4 @runtest-replay') name=replay ;;
   *) exit 98 ;;
 esac
 printf '%s\n' invoked >> "$PROBE_HOME/invocations"
@@ -147,22 +147,9 @@ case "$PROBE_MODE" in
     printf 'FAIL: first: false\nFAILED: 2 checks did not hold: "first", "first: the emit child failed:".\n'; exit 1 ;;
   trailermultibare) rows "first: false\nFAIL: first: the emit child failed:\n  detail one\n$section$m2"'last: true\n'
     printf 'FAIL: first: false\nFAILED: 2 checks did not hold: "first", "first: the emit child failed:".\n'; exit 1 ;;
-  # Failed Verdict.pass_fail claims, in the bytes verdict_teardown pins for both streams
-  # ($PASS_FAIL_OUT, $PASS_FAIL_ERR), and one whose label itself contains `: FAIL (a)`. Then
-  # `FAIL: ` lines no stdout row printed: a passing claim's label, a failed one's with a detail its
-  # row lacks, and Verdict.fail messages: one repeating a failed claim's line, whose row is spent,
-  # and one -- echoed on stdout, as Verdict.fail does -- reading as the odd row's other reading,
-  # ahead of the line the claim printed. Last, two claims whose rows share a reading: the first
-  # row, read either way, and the second, readable only as the first's other reading -- the line
-  # printed first has to give the first row up for the second row.
-  passfail) rows "$PASS_FAIL_OUT"'odd: FAIL (a): FAIL (b)\nFAIL: odd (a): FAIL (b)\n'
-    printf 'p: FAIL (q): FAIL (r)\np (q): FAIL: FAIL (r)\n' >> "$out/$name.exe.output"
-    printf '%b' "$PASS_FAIL_ERR"
-    printf '%b' "$PASS_FAIL_ERR" | head -n 1
-    printf 'FAIL: odd (a): FAIL (b)\nFAIL: odd: FAIL (a) (b)\nFAIL: held\nFAIL: failed (a detail its row lacks)\n'
-    printf 'FAIL: the emit child failed:\nFAIL: p (q): FAIL (r)\nFAIL: p: FAIL (q) (r)\n'
-    printf 'FAILED: 5 checks did not hold: "failed", "detailed", "odd: FAIL (a)" and 2 more.\n'
-    exit 1 ;;
+  # A real Verdict run's streams, staged by the harness from verdict_teardown's golden.
+  replay) rm -f "$out/$name.exe.output"; cp "$PROBE_HOME/replay.stdout" "$out/$name.exe.output"
+    cat "$PROBE_HOME/replay.stderr"; exit 1 ;;
   compile) echo 'Error: injected compile failure'; exit 1 ;;
   refused) printf 'dune: unknown option\nUsage: dune build [OPTION]…\n'; exit 1 ;;
   restore_error) rm module.ml; mkdir module.ml; exit 1 ;;
@@ -179,24 +166,8 @@ export PATH="$fixture/bin:$PATH" PROBE_HOME="$fixture" OCANNL_TOOL_TEST_RUNS="$f
 # the fixture already names (gh-ocannl-1066). No slot, and no device to meet.
 export OCANNL_TOOL_FLEET_WORKER=none OCANNL_TOOL_DXG_DEVICE="$fixture/no-such-dxg" \
   OCANNL_TOOL_KFD_TOPOLOGY="$fixture/no-such-kfd" OCANNL_TOOL_NVIDIA_DEVICE="$fixture/no-such-nvidia"
-# What Verdict.pass_fail prints, on stdout and on stderr, read from the test that pins both
-# streams' bytes: the fixture prints Verdict's forms, not a copy of them.
-pass_fail_literal() {
-  sed -n "s/^let $1 = \"\(.*\)\"\$/\1/p" "$root/test/operations/verdict_teardown.ml"
-}
-PASS_FAIL_OUT=$(pass_fail_literal pass_fail_out)
-PASS_FAIL_ERR=$(pass_fail_literal pass_fail_err)
-# Both forms of a failure, bare and with a detail, or the fixture below pins less than it says.
-printf '%b' "$PASS_FAIL_ERR" | grep -q '^FAIL: [^(]*$' &&
-  printf '%b' "$PASS_FAIL_ERR" | grep -q '^FAIL: .* (.*)$' ||
-  { echo 'verdict_teardown.ml no longer binds pass_fail_err to a one-line literal with a bare and a detailed failure'; exit 1; }
-[ -n "$PASS_FAIL_OUT" ] ||
-  { echo 'verdict_teardown.ml no longer binds pass_fail_out to a one-line literal'; exit 1; }
-export PASS_FAIL_OUT PASS_FAIL_ERR
 cd "$fixture/repo"
 printf 'first: true\nnested: label: true\nlast: true\n' > probe.expected
-# The passing form of every row the passfail mode prints.
-{ printf '%b' "$PASS_FAIL_OUT" | sed 's/: FAIL\( (.*)\)\{0,1\}$/: PASS/'; printf 'odd: FAIL (a): PASS\np: FAIL (q): PASS\np (q): FAIL: PASS\n'; } > passfail.expected
 printf 'first: true\n\nSynthetic controls: scanner refusal diagnostics exercised by this control golden:\n%s\n%s\nlast: true\n' \
   '  [scanner-refusal:00000000000000000000000000000001] first refusal' \
   '  [scanner-refusal:00000000000000000000000000000002] last refusal' > manifest.expected
@@ -287,13 +258,6 @@ for mode in casemid caselast; do
     "$fixture/result" || { cat "$fixture/result"; echo "$mode: no cases-raised line"; exit 1; }
   reached
 done
-# The two lines the runner reads are Verdict's own text; a rewording there must fail here.
-grep -qF '(label ^ ": the case ran to completion") ("raised " ^ text)' "$root/test/support/verdict.ml" ||
-  { echo 'Verdict.case no longer prints "<label>: the case ran to completion (raised …)"'; exit 1; }
-grep -qF 'Printf.sprintf "FAILED: %d check%s did not hold: %s%s."' "$root/test/support/verdict.ml" ||
-  { echo 'Verdict.teardown_line no longer prints "FAILED: <n> check(s) did not hold: <names>."'; exit 1; }
-grep -qF '"STOPPED EARLY: an exit inside case %S ended the run' "$root/test/support/verdict.ml" ||
-  { echo 'Verdict no longer prints "STOPPED EARLY: an exit inside case …"'; exit 1; }
 # DUNE_BUILD_DIR moves the tree the output is read from; _build keeps a full stale output.
 export PROBE_MODE=raise DUNE_BUILD_DIR="$fixture/build-elsewhere"
 run_case 4
@@ -372,23 +336,44 @@ reached
 export PROBE_MODE=trailermultibare
 PROBE_ALIAS=@runtest-trailer run_case 4
 flagged "STOPPED EARLY: the mutated run printed 7 of the golden's 8 rows"
-grep -qF 'List.map lines ~f:(fun line -> "FAIL: " ^ line ^ "\n")' "$root/test/support/verdict.ml" ||
-  { echo 'Verdict.fail no longer prefixes every line of its message with "FAIL: "'; exit 1; }
 printf 'PASS a multi-line failure, every row prefixed, is caught on a trailer-short run; an unprefixed continuation row exits 4\n'
-# A failed pass_fail claim's stderr line ends on no `: false`: it is listed as the line a stdout row
-# of the run printed with it, under each reading of a row whose label contains `: FAIL`; a `FAIL: `
-# line no row printed is not, nor a second copy of a line whose one row an earlier copy took, nor a
-# Verdict.fail message that is another reading of a claim's row; and claims whose rows share a
-# reading are each matched to a row of their own.
-export PROBE_MODE=passfail
-PROBE_ALIAS=@runtest-passfail run_case 1
-sed -n '/^false claims:$/,/^rows:/{ /^false claims:$/d; /^rows:/d; p; }' "$fixture/result" > "$fixture/claims"
-{ printf '%b' "$PASS_FAIL_ERR"; printf 'FAIL: odd: FAIL (a) (b)\nFAIL: p (q): FAIL (r)\nFAIL: p: FAIL (q) (r)\n'; } > "$fixture/expected"
-cmp "$fixture/claims" "$fixture/expected" || { cat "$fixture/result"; echo 'passfail: wrong false claims'; exit 1; }
-rows=$(wc -l < passfail.expected | tr -d ' ')
-grep -q "^rows: $((rows + 1)) printed of $rows in passfail.expected\$" "$fixture/result"
+# The text above is this fixture's own; what the runner reads is Verdict's. So the runner also reads
+# real Verdict runs: the streams of verdict_teardown's children, which its golden pins byte for byte
+# (each line prefixed with its child and stream). A refactor of verdict.ml that keeps its text
+# changes nothing here; a rewording the runner no longer reads fails here once that golden is
+# promoted. Each golden below is what the child's run would print had every claim held.
+teardown_golden="$root/test/operations/verdict_teardown.expected"
+replay() {
+  for stream in stdout stderr; do
+    sed -n "s/^  $1 $stream | //p" "$teardown_golden" > "$fixture/replay.$stream"
+    [ -s "$fixture/replay.$stream" ] ||
+      { echo "verdict_teardown.expected carries no $1 $stream transcript"; exit 1; }
+  done
+  printf "$2" > replay.expected
+  export PROBE_MODE=replay
+  PROBE_ALIAS=@runtest-replay run_case "$3"
+  if grep -q '^(none)$' "$fixture/result"; then
+    cat "$fixture/result"; echo "$1: the runner listed none of Verdict's false claims"; exit 1
+  fi
+}
+# A raising Verdict.case: its claim line, and the teardown line saying the process ended through exit.
+replay case_raise 'first: setup: true\nfirst: result: true\nsecond: reached: true\n' 1
+grep -q '^rows: 2 printed of 3 in replay.expected$' "$fixture/result"
+grep -q '^cases raised: 1 ' "$fixture/result" ||
+  { cat "$fixture/result"; echo 'case_raise: Verdict.case raising read as no case raise'; exit 1; }
 reached
-printf 'PASS failed pass_fail claims, bare and detailed, are listed; FAIL: lines no stdout row printed are not\n'
+# An exit inside a case once a check failed: Verdict's own STOPPED EARLY line names that ending.
+replay case_exit 'the claim: true\nexits: done: true\nafter the exit: true\n' 4
+flagged 'STOPPED EARLY: Verdict reported an exit inside a case; no case after it ran'
+# A scan-shaped run short by its success trailer: every line of a multi-line Verdict.fail carries
+# `FAIL: `, and the teardown names several checks. Its `FAIL: ` rows count among the rows printed,
+# and the runner reads a trailer only on a run short of the golden, hence a trailer of two rows.
+replay trailer_omitted 'first claim: true\nthird claim: true\nlast claim: true\n\nOK: every claim held.\nOK: four claims checked.\n' 1
+grep -q '^rows: 5 printed of 6 in replay.expected$' "$fixture/result"
+grep -q '^success trailer omitted: 3 rows ' "$fixture/result" ||
+  { cat "$fixture/result"; echo 'trailer_omitted: no omitted-trailer line'; exit 1; }
+reached
+printf 'PASS real Verdict runs, from verdict_teardown'"'"'s golden: a raising case is caught, an exit inside a case exits 4, a trailer-short run with a multi-line failure is caught\n'
 for mode in pass compile refused; do
   export PROBE_MODE=$mode
   case $mode in pass) rc=0 ;; compile) rc=4 ;; refused) rc=2 ;; esac
