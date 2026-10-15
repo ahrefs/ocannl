@@ -1408,6 +1408,16 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   mode**: `tools/test-run.sh repeat N build @<dir>/runtest-<name>` runs every iteration in its own
   freshly cleaned, cache-disabled build directory, keeps each stdout/stderr and exit status, and
   diffs the pairs (about 45 s per iteration for a 35 s test on an M4 Max, the rebuild included).
+  For one fresh, TIMED run of named tests (a before/after wall-time comparison),
+  `tools/test-run.sh fresh @<dir>/runtest-<name> [@<dir>/slow-<name>...]` hands dune a build
+  directory of the run's own with `--force --cache=disabled`: the closure compiles there (some
+  ten seconds at -j 4 on mac-studio), nothing the tests build lands in the worktree's `_build`
+  (only the runner's own helpers, as for `run`), and the digest prints each named test's
+  seconds from the run's dune trace. A named test none of whose
+  processes is in that trace is refused as `NOT RUN` (exit 2) rather than timed at zero: the
+  guard against every stale-green reflex below, and against the one that cost a timing baseline
+  (gh-ocannl-staging#1154): `--cache=disabled` without `--force` serves an unchanged `@slow` rule
+  from the memo, silently.
   For a single extra run there is a lighter move: change the content of the `ocannl_config` the
   stanza depends on — append a comment line, `dune build @<dir>/runtest-<name>`, delete the line
   when done (the file is tracked; `git checkout` it only when it carries no other local edits,
