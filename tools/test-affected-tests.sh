@@ -24,7 +24,7 @@ unset DUNE_BUILD_DIR DUNE_ROOT
 export OCANNL_TOOL_FLEET_WORKER=none OCANNL_TOOL_TEST_RUNS=$TMP/runs
 
 repo=$TMP/proj
-mkdir -p "$repo/tools" "$repo/lib" "$repo/mid" "$repo/t1" "$repo/t2" "$repo/t3" "$repo/cfg" "$repo/docs" || exit 2
+mkdir -p "$repo/tools" "$repo/lib" "$repo/mid" "$repo/t1" "$repo/t2" "$repo/t3" "$repo/t4/sub" "$repo/cfg" "$repo/docs" || exit 2
 cp "$HERE/affected-tests.sh" "$HERE/test-run.sh" "$repo/tools/" || exit 2
 # Whatever test-run.sh sources, derived from it rather than listed here.
 staged=0
@@ -96,6 +96,20 @@ cat >"$repo/t3/dune" <<'DUNE'
  (action (with-stdout-to %{target} (run %{exe:lister.exe}))))
 (rule (alias runtest-uses) (action (diff uses.expected uses.actual)))
 DUNE
+cat >"$repo/t4/dune" <<'DUNE'
+(library (name inert) (modules inert))
+(rule
+ (target objs.actual)
+ (deps (glob_files %{project_root}/t4/.inert.objs/byte/*.cmi))
+ (action (with-stdout-to %{target} (echo objs))))
+(rule (alias runtest-objs) (action (diff objs.expected objs.actual)))
+(test (name t_gate) (modules t_gate) (deps gate.cfg))
+(rule (target gated.actual) (deps (alias runtest-t_gate)) (action (with-stdout-to %{target} (echo gated))))
+(rule (alias runtest-gated) (action (diff gated.expected gated.actual)))
+DUNE
+printf '(test (name t_sub) (modules t_sub))\n' >"$repo/t4/sub/dune"
+for f in t4/inert.ml t4/t_gate.ml t4/sub/t_sub.ml; do printf 'let () = ()\n' >"$repo/$f"; done
+for f in t4/objs.expected t4/gated.expected t4/gate.cfg; do : >"$repo/$f"; done
 for f in lib/core.ml lib/helper.ml lib/leaf.ml lib/myppx.ml lib/optlib.ml lib/stubbed.ml \
   t3/t_plain.ml t3/t_stub.ml t3/cexe.ml t3/lister.ml mid/mid.ml mid/choice.core.ml mid/choice.none.ml \
   t1/t_core.ml t1/t_leaf.ml t1/ta.ml t1/tb.ml t1/shared.ml t1/m_one.ml t1/m_two.ml \
@@ -182,7 +196,7 @@ if harness_leg 'dune-project'; then
     @t1/runtest-m_one @t1/runtest-t_core @t1/runtest-t_leaf @t1/runtest-ta @t1/runtest-tb \
     @t2/runtest-gen-v1 @t2/runtest-orphan @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen \
     @t3/runtest-cfgread @t3/runtest-esc @t3/runtest-neg @t3/runtest-t_plain @t3/runtest-t_stub \
-    @t3/runtest-uses
+    @t3/runtest-uses @t4/runtest-gated @t4/runtest-objs @t4/runtest-t_gate @t4/sub/runtest-t_sub
 fi
 
 if harness_leg 'dune file elsewhere'; then
@@ -244,6 +258,34 @@ if harness_leg 'batched query'; then
   if [ "$rc" = 0 ] && [ -s "$out" ] && cmp -s "$TMP/whole" "$out"; then
     report 0 'dune rules queried in small batches gives the same list'
   else report 1 'dune rules queried in small batches gives the same list' "exit $rc; $(cat "$out" "$err")"; fi
+fi
+
+if harness_leg 'compiled artifacts'; then
+  # objs.actual reads inert's compiled interfaces without linking it.
+  affected --files t4/inert.ml
+  expect 'a rule reading a stanza'"'"'s compiled objects is reached through that stanza' 0 @t4/runtest-objs
+fi
+
+if harness_leg 'alias dependency'; then
+  # gated.actual needs the alias runtest-t_gate, listed for its changed config.
+  affected --files t4/gate.cfg
+  expect 'an alias whose rules need a listed alias is listed too' 0 @t4/runtest-gated @t4/runtest-t_gate
+fi
+
+if harness_leg 'dune subtree'; then
+  affected --files t4/dune
+  expect 'a dune file reaches the per-test aliases of the directories beneath it' 0 \
+    @t4/runtest-gated @t4/runtest-objs @t4/runtest-t_gate @t4/sub/runtest-t_sub
+fi
+
+if harness_leg 'CDPATH'; then
+  # Invoked by a relative path, the root lookup must not follow CDPATH to a
+  # decoy holding a tools/ directory (and print it on stdout).
+  mkdir -p "$TMP/decoy/tools" || exit 2
+  rc=0
+  (cd "$repo" && CDPATH="$TMP/decoy" tools/affected-tests.sh --files lib/helper.ml) >"$out" 2>"$err" || rc=$?
+  # shellcheck disable=SC2086
+  expect 'CDPATH does not move the repository root' 0 $reached_by_core
 fi
 
 if harness_leg 'undescribed stanza'; then
@@ -408,6 +450,12 @@ if harness_leg 'negative controls'; then
   control 'reading the files a changed dune file makes is what reaches a consumer elsewhere' \
     '$n_made++ unless $read_by{$p}{$a->{name}}++;' '' \
     --files t1/dune -- @t1/runtest-m_one @t1/runtest-t_core @t1/runtest-t_leaf @t1/runtest-ta @t1/runtest-tb @t3/runtest-uses
+  control 'a compiled-object glob is what reaches the stanza it reads' \
+    'if ($where eq "In_build_dir" and my @o = compiled_owners("$path/")) { $r{$_} = 1 for @o; next }' '' \
+    --files t4/inert.ml -- @t4/runtest-objs
+  control 'the alias fixpoint is what lists an alias needing a listed one' \
+    'next unless grep { my $t = $_; grep { $out{$_} } keys %{$adeps{$t} // {}} } @{$a->{own}};' 'next;' \
+    --files t4/gate.cfg -- @t4/runtest-gated @t4/runtest-t_gate
   control 'an executable target is what finds a test stanza naming no library' \
     'push @st, { kind => "tests", dir => $d, names => [$x]' 'next; push @st, { kind => "tests", dir => $d, names => [$x]' \
     --files t3/t_plain.ml -- @t3/runtest-t_plain

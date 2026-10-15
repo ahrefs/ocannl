@@ -42,7 +42,10 @@
 #     and executables are not followed (an executable is reached through its
 #     stanza). Queries are batched to stay within any command-line limit.
 #     `dune rules` prints a glob with its escapes dropped, so a glob also
-#     matches its own text read literally.
+#     matches its own text read literally. A compiled artifact a rule reads
+#     (a stanza's `.NAME.objs` files, an installed library's) makes that
+#     stanza one of the rule's owners, like an executable the rule runs; an
+#     alias a rule needs (`(deps (alias ...))`) is recorded as well.
 #
 # Boundary, as an allowlist. Whatever it does not cover is reported on stderr,
 # never silently dropped:
@@ -70,12 +73,12 @@
 #     reads (a `.c`, a header) reaches the library whose stub archive bundles
 #     that object, or else every executable and `tests` stanza of its
 #     directory, since which one links it dune does not say without computing
-#     link rules. A changed `dune` file reaches every stanza and every per-test
-#     alias of its directory, and every alias elsewhere whose own targets'
-#     rules read a file or glob of that directory (a file its rules make); a
-#     `dune-project` or `dune-workspace` reaches the stanzas and aliases of
-#     every directory beneath it. Reach then spreads to each stanza requiring a
-#     reached library, to a fixpoint.
+#     link rules. A changed `dune`, `dune-project` or `dune-workspace` file
+#     reaches every stanza and every per-test alias of the directories beneath
+#     it (an `env` stanza applies there too), and every alias elsewhere whose
+#     own targets' rules read a file or glob of those directories (a file
+#     their rules make). Reach then spreads to each stanza requiring a reached
+#     library, to a fixpoint.
 #   - An alias is printed when its directory's `dune` file changed, when an
 #     owner is reached, or when a rule of its own targets reads a changed path
 #     (a file, or a glob over source files): the repository scans are found
@@ -88,7 +91,11 @@
 #     executable under the stanza's `(deps)`), so such an alias is also
 #     printed whenever a changed path other than an owned module source lies
 #     in its directory, or whenever a copy of a changed file is made there.
-#     Not seen: what an opaque action reads outside its directory otherwise.
+#     An alias whose own targets' rules need a printed alias is printed too,
+#     to a fixpoint. Not seen: what an opaque action reads outside its
+#     directory otherwise, and an alias an action itself needs (the ambient
+#     `runtest-env_spelling_gate` most aliases name), which `dune rules` does
+#     not dump in any form it accepts (`@DIR/NAME`, `@@DIR/NAME`).
 #
 # Exit: 0 every changed `.ml`/`.mli` was mapped; 3 the list is printed, but a
 # changed `.ml`/`.mli` is UNMAPPED (see stderr); 2 usage, git or dune failure,
@@ -96,7 +103,7 @@
 set -u
 die() { echo "affected: $*" >&2; exit 2; }
 
-cd -P "$(dirname "$0")/.." || die "cannot cd to the repository root"
+CDPATH= cd -P "$(dirname "$0")/.." || die "cannot cd to the repository root"
 command -v dune >/dev/null 2>&1 || . tools/opam-env.sh
 command -v dune >/dev/null 2>&1 || die "dune not found (opam environment not set up?)"
 command -v perl >/dev/null 2>&1 || die "perl not found"
@@ -425,7 +432,22 @@ sub dune_rules {
 # turn -- a `copy_files` copy, a file list -- so what a rule reaches through
 # them counts as its own. Compiled objects and executables are not followed:
 # an executable is reached through its stanza.
-my (%runs, %reads, %globs, %via);
+# A compiled artifact a rule reads directly -- a stanza's `.NAME.objs` or
+# `.NAME.eobjs` directory, or an installed library's files -- makes that
+# stanza an owner of the reader, as an executable it runs does.
+sub compiled_owners {
+  my ($path) = @_;   # a build path, context prefix included
+  if ($path =~ m{^_build/install/[^/]+/lib/([^/]+)(?:/([^/]+))?/}) {
+    my @n = grep { defined $lib_by_name{$_} } (defined $2 ? ("$1.$2") : ()), $1;
+    return @n ? ($lib_by_name{$n[0]}) : ();
+  }
+  my $rel = strip_ctx($path) // return ();
+  my ($d, $x, $e) = $rel =~ m{^(?:(.*)/)?\.([^/]+)\.(e?)objs(?:/|$)} or return ();
+  $d //= ".";
+  return grep { $st[$_]{dir} eq $d && ($e ? $st[$_]{kind} ne "library" : $st[$_]{kind} eq "library")
+                && $st[$_]{units}{$x} } 0 .. $#st;
+}
+my (%runs, %reads, %globs, %via, %adeps);
 my %queried;
 my @queue = @own_targets;
 while (@queue) {
@@ -435,7 +457,7 @@ while (@queue) {
     ref $rule or fail("unexpected atom in dune rules output");
     my $tg = field($rule, "targets");
     my @files = map { atom($_, "targets") } items(field($tg // [], "files"));
-    my (%r, %p, @g, %v);
+    my (%r, %p, @g, %v, %ad);
     for my $dep (items(field($rule, "deps"))) {
       next if !ref $dep && $dep eq "Universe";   # always reruns; reads nothing in particular
       ref $dep && @$dep && !ref $dep->[0] or fail("unexpected dependency in dune rules output");
@@ -443,6 +465,7 @@ while (@queue) {
       if ($k eq "File") {
         my ($where, $path) = pair($dep->[1], "a File dependency");
         if ($where eq "In_build_dir") {
+          if (my @o = compiled_owners($path)) { $r{$_} = 1 for @o; next }
           my $rel = strip_ctx($path) // next;   # another context's, or _build/install
           if ($rel =~ m{^(?:(.*)/)?([^/]+)\.(?:exe|bc)$}) { $r{$_} = 1 for @{$exe{($1 // ".") . "\0$2"} // []} }
           else {
@@ -453,19 +476,27 @@ while (@queue) {
         elsif ($where ne "External") { fail("a File dependency \"$where\" is outside this helper's boundary") }
       } elsif ($k eq "glob") {
         my $spec = $dep->[1];
-        next if (field($spec, "only_generated_files") // "false") eq "true";
         my ($where, $path) = pair(field($spec, "dir"), "a glob dependency");
         next if $where eq "External";
+        if ($where eq "In_build_dir" and my @o = compiled_owners("$path/")) { $r{$_} = 1 for @o; next }
+        next if (field($spec, "only_generated_files") // "false") eq "true";
         my $gd = $where eq "In_build_dir" ? strip_ctx($path) : $path;
         next unless defined $gd;
         push @g, [$gd, predicate(field($spec, "predicate"))];
-      } elsif ($k !~ /^(?:Env|Alias|Universe|Sandbox_config)$/) {
+      } elsif ($k eq "Alias") {
+        # Another alias this rule needs: when that one is listed, so is this.
+        my $spec = $dep->[1];
+        my ($where, $path) = pair(field($spec, "dir"), "an Alias dependency");
+        my $ad = $where eq "In_build_dir" ? strip_ctx($path) : $path;
+        defined $ad or ($path eq $ctx and $ad = ".") or next;
+        $ad{"\@" . in_dir($ad, atom(field($spec, "name"), "alias name"))} = 1;
+      } elsif ($k !~ /^(?:Env|Universe|Sandbox_config)$/) {
         fail("a dependency \"$k\" in dune rules output is outside this helper's boundary");
       }
     }
     for my $f (@files) {
       my $t = strip_ctx($f) // next;
-      $runs{$t} = \%r; $reads{$t} = \%p; $globs{$t} = \@g; $via{$t} = [sort keys %v];
+      $runs{$t} = \%r; $reads{$t} = \%p; $globs{$t} = \@g; $via{$t} = [sort keys %v]; $adeps{$t} = \%ad;
     }
     $next{$_} = 1 for grep { !$queried{$_} } keys %v;
   }
@@ -492,6 +523,7 @@ for my $t (sort keys %queried) {
       $runs{$t} = { %{$runs{$t}}, %{$runs{$u}} };
       $reads{$t} = { %{$reads{$t}}, %{$reads{$u}} };
       $globs{$t} = [@{$globs{$t}}, @{$globs{$u}}];
+      $adeps{$t} = { %{$adeps{$t}}, %{$adeps{$u}} };
     }
   }
   fold($_) for sort keys %queried;
@@ -540,25 +572,22 @@ for my $p (@changed) {
     push @parts, "compiled into $o, " . (@libs ? "bundled by " . join(", ", map { label($_) } @libs)
       : "which no stub archive of $d bundles, so every executable and test stanza there (" . scalar(@o) . ")");
   }
-  if ($b eq "dune-project" || $b eq "dune-workspace") {
-    # The project's language and extensions: every directory beneath it.
-    $dune_dirs{$_} = 1 for grep { under($_, $d) } keys %$aliases;
+  if ($b eq "dune" || $b eq "dune-project" || $b eq "dune-workspace") {
+    # A `dune` file's settings (`env`, `(dirs)`, ...) apply beneath it as well,
+    # as `dune-project`'s language and extensions do: every directory under it.
+    $dune_dirs{$_} = 1 for grep { under($_, $d) } $d, keys %$aliases;
     @ix = grep { under($st[$_]{dir}, $d) } 0 .. $#st;
-    push @parts, "every per-test alias and all " . scalar(@ix) . " stanza(s) under " . ($d eq "." ? "the root" : $d);
-  } elsif ($b eq "dune") {
-    $dune_dirs{$d} = 1;
-    @ix = grep { $st[$_]{dir} eq $d } 0 .. $#st;
-    # Its rules make the files of its directory: a rule elsewhere reading one
-    # of them (a fixture's generated sources) reads the change.
+    # Its rules make the files there: a rule elsewhere reading one of them (a
+    # fixture's generated sources) reads the change.
     my $n_made = 0;
-    for my $a (grep { $_->{dir} ne $d } @al) {
+    for my $a (grep { !under($_->{dir}, $d) } @al) {
       for my $t (@{$a->{own}}) {
-        next unless grep({ (dir_of($_))[0] eq $d } keys %{$reads{$t}}) || grep { $_->[0] eq $d } @{$globs{$t}};
+        next unless grep({ under((dir_of($_))[0], $d) } keys %{$reads{$t}}) || grep { under($_->[0], $d) } @{$globs{$t}};
         $n_made++ unless $read_by{$p}{$a->{name}}++;
         last;
       }
     }
-    push @parts, "every per-test alias of $d, and its " . scalar(@ix) . " stanza(s)"
+    push @parts, "every per-test alias and all " . scalar(@ix) . " stanza(s) " . ($d eq "." ? "of the project" : "under $d")
       . ($n_made ? "; files its rules make are read by the rules of $n_made alias(es) elsewhere" : "");
   } elsif ($b =~ /^([^.]+)(?:\.[^.]+)*\.mli?$/) {
     my $mod = ucfirst $1;
@@ -626,8 +655,22 @@ for my $a (@al) {
     $listed{$a->{dir}}++;
   }
 }
+# An alias whose own targets' rules need a listed alias (an ambient gate such
+# as `runtest-env_spelling_gate`) is listed too, to a fixpoint.
+my $by_alias = 0;
+for (my $grew = 1; $grew;) {
+  $grew = 0;
+  for my $a (grep { !$out{$_->{name}} } @al) {
+    next unless grep { my $t = $_; grep { $out{$_} } keys %{$adeps{$t} // {}} } @{$a->{own}};
+    $out{$a->{name}} = 1;
+    $listed{$a->{dir}}++;
+    $by_alias++;
+    $grew = 1;
+  }
+}
 
 print "$_\n" for sort keys %out;
+printf STDERR "affected: %d alias(es) listed because their rules need a listed alias\n", $by_alias if $by_alias;
 printf STDERR "affected: %s: %d of its %d per-test aliases\n", $_, $listed{$_}, $total{$_} for sort keys %listed;
 my %bare;
 $bare{$st[$_]{dir}}++ for grep { !$aliased{$_} && $st[$_]{kind} ne "library" } keys %reached;
