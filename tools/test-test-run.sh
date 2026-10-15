@@ -157,7 +157,7 @@
 #  77. `plan` reports the probe and the per-test cap as `run` would apply them
 #      (GPU batches only, not @slow, not where run resolves nothing), and asks
 #      no device.
-#  82. `repeat` has both bounds (gh-ocannl-1252): a test past the per-test cap
+#  83. `repeat` has both bounds (gh-ocannl-1252): a test past the per-test cap
 #      ends the set as TIMEOUT (142) naming it, killed; a GPU batch's wedged
 #      device ends it as DEVICE UNHEALTHY (69) before any dune; the default is
 #      run's (1500s on a GPU batch, none on a CPU one), and a test inside the
@@ -5846,7 +5846,7 @@ else
 fi
 fi # leg 77
 
-# Leg 82: `repeat` has both bounds (gh-ocannl-1252). A repeat samples timing-dependent goldens,
+# Leg 83: `repeat` has both bounds (gh-ocannl-1252). A repeat samples timing-dependent goldens,
 # often GPU tests, and ran with neither: a wedged device held it for N times the iteration cap.
 # Now a test past the per-test cap ends its iteration as TIMEOUT (142) naming the test, the test
 # killed, and ENDS the set, since every later iteration would hang the same way; one inside it does
@@ -5855,7 +5855,7 @@ fi # leg 77
 # batch's device probe runs before each iteration, inside it: a query that does not answer ends
 # the set as DEVICE UNHEALTHY (69) with dune never started -- not even its clean -- and an answer
 # lets every iteration run, the device asked once each.
-if harness_leg '82: repeat has both bounds'; then
+if harness_leg '83: repeat has both bounds'; then
 rb_label="repeat bounds: a test past the per-test cap ends the set as TIMEOUT naming it, a wedged device ends it as DEVICE UNHEALTHY; inside the cap, an answering device and a CPU batch's default do not"
 if [ -z "${test_cap_named_ok:-}" ]; then
   perl -e '$0 = "dune"; sleep 10' </dev/null >/dev/null 2>&1 &
@@ -5967,7 +5967,7 @@ else
   fi
   if [ -z "$rb_detail" ]; then report 0 "$rb_label"; else report 1 "$rb_label" "$rb_detail"; fi
 fi
-fi # leg 82
+fi # leg 83
 
 # ---------------------------------------------------------------------------
 # Leg 79: credentials never reach dune (gh-ocannl-1280)

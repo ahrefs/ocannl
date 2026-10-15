@@ -2535,7 +2535,7 @@ case $sub in
     repeat_build=$run_dir/build
     OCANNL_TOOL_TESTRUN_BG=0 OCANNL_TOOL_TESTRUN_RD=$resolve_dir \
       perl -e "$supervisor_perl" -- "$cap" env "OCANNL_TOOL_TESTRUN_OWN=$run_dir" \
-      "${BASH:-bash}" "$PWD/tools/test-run.sh" _resolve repeat "$cap" "$test_cap" "$DUNE" "$@" \
+      "${BASH:-bash}" "$runner_root/tools/test-run.sh" _resolve repeat "$cap" "$test_cap" "$DUNE" "$@" \
       </dev/null >>"$run_dir/log" 2>&1 &
     repeat_sup=$!
     [ -z "$repeat_cancelled" ] || kill "-$repeat_cancelled" "$repeat_sup" 2>/dev/null
@@ -2581,6 +2581,10 @@ case $sub in
     while [ "$i" -le "$repeats" ] && [ -z "$repeat_cancelled" ]; do
       iter=$run_dir/iteration-$i
       mkdir "$iter" || die "cannot create $iter"
+      # The iteration directory is what a probed iteration's `_probe` owns
+      # (OCANNL_TOOL_TESTRUN_OWN), and a run's own phase reads the tree under
+      # test from its owner's `wt` (gh-ocannl-1225): the run's, recorded again.
+      cp "$run_dir/wt" "$iter/wt" || die "cannot record the tree under test in $iter"
       # Dune's first `--` ends Dune option parsing (`dune exec PROG -- ARGS`).
       # Isolation options belong immediately before it; appending them would
       # silently hand them to PROG and run Dune in its ambient build context.
@@ -2648,7 +2652,7 @@ case $sub in
         "${repeat_cmd[@]:1}")
       if [ -n "$repeat_probe_backends" ]; then
         # shellcheck disable=SC2086  # the backend list is word-split on purpose
-        iter_cmd=(env "OCANNL_TOOL_TESTRUN_OWN=$iter" "${BASH:-bash}" "$PWD/tools/test-run.sh" _probe
+        iter_cmd=(env "OCANNL_TOOL_TESTRUN_OWN=$iter" "${BASH:-bash}" "$runner_root/tools/test-run.sh" _probe
           "$DUNE" "$repeat_probe_prog" "$repeat_probe_cap" $repeat_probe_backends -- "${iter_cmd[@]}")
       fi
       OCANNL_TOOL_TESTRUN_BG=0 OCANNL_TOOL_TESTRUN_RD=$iter \
