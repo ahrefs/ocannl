@@ -175,6 +175,13 @@ processes=4  open=1
     40.00  open  hung_probe.exe               test/operations/hung_probe.exe.output
     21.50     0  fsm_transformer.exe          test/training/fsm_transformer.actual
 EOF
+printf '%s\t%s\t%s\t%s\n' \
+  40.00 open hung_probe.exe test/operations/hung_probe.exe.output \
+  21.50 0 fsm_transformer.exe test/training/fsm_transformer.actual \
+  6.72 0 env_var_deps.exe 'test/operations/env_var_deps.actual +1' \
+  5.43 1 sh @test/operations/runtest-slot_kind_cases \
+  3.25 0 ocamlopt.opt '(in arrayjit/lib)' \
+  1.96 0 env_var_deps.exe test/operations/env_var_deps_control.actual >"$TMP/tsv.expected"
 cat >"$TMP/truncated.expected" <<'EOF'
 processes=1  open=1
   seconds  exit  prog                         action
@@ -227,6 +234,8 @@ leg "--group dir groups by the action's directory" \
   exact "$SUBJECT" dir "$TMP/dir.expected" --group dir "$TMP/trace"
 leg "--prog filters by program basename and -n limits rows" \
   exact "$SUBJECT" filtered "$TMP/filtered.expected" --prog '\.exe$' -n 2 "$TMP/trace"
+leg "--tsv prints the table's rows, tab-separated, without the header" \
+  exact "$SUBJECT" tsv "$TMP/tsv.expected" --tsv "$TMP/trace"
 
 mkdir -p "$TMP/repo/tools" "$TMP/repo/_build"
 cp "$SUBJECT" "$TMP/repo/tools/"
@@ -258,6 +267,8 @@ leg "a missing trace is a usage error" \
   refused "$SUBJECT" missing 2 'no trace at' "$TMP/no-such-trace"
 leg "an unknown --group is a usage error" \
   refused "$SUBJECT" bad-group 2 'wants prog or dir' --group alias "$TMP/trace"
+leg "--tsv with --group is a usage error" \
+  refused "$SUBJECT" tsv-group 2 'not a --group summary' --tsv --group prog "$TMP/trace"
 leg "a non-numeric -n is a usage error" \
   refused "$SUBJECT" bad-n 2 'wants a count' -n x "$TMP/trace"
 leg "an invalid --prog regex is a usage error" \

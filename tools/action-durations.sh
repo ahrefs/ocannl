@@ -18,6 +18,10 @@
 #   --group prog|dir   summarize instead: per program basename (one test
 #                      executable is one unit) or per directory of the
 #                      action, as max/total seconds and count, by max
+#   --tsv              the table's rows for a program to read: no header,
+#                      `SECONDS<TAB>EXIT<TAB>PROG<TAB>ACTION` per process,
+#                      the same fields and order (tools/test-run.sh `fresh`
+#                      reads its per-test times from them); not with --group
 #   -h, --help         this header
 #
 # The trace records no alias membership, so a row names its action by what it
@@ -56,6 +60,7 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 rows=20
 prog_re=
 group=
+tsv=
 trace=
 
 die() {
@@ -80,6 +85,10 @@ while [ $# -gt 0 ]; do
     group=$2
     shift 2
     ;;
+  --tsv)
+    tsv=1
+    shift
+    ;;
   -h | --help)
     sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'
     exit 0
@@ -94,18 +103,19 @@ while [ $# -gt 0 ]; do
 done
 case "$rows" in '' | *[!0-9]*) die "-n wants a count, got: $rows" ;; esac
 case "$group" in '' | prog | dir) ;; *) die "--group wants prog or dir, got: $group" ;; esac
+[ -z "$tsv" ] || [ -z "$group" ] || die "--tsv prints rows, not a --group summary"
 trace=${trace:-$root/_build/trace.csexp}
 [ -f "$trace" ] || die "no trace at $trace (build something first, or name one)"
 
 # exec, so the reader is ONE process: tools/test-run.sh bounds it with a KILL
 # that must reach the parse itself where a process group cannot be signalled
 # (Git Bash), not just a shell whose python would outlive it.
-exec python3 - "$trace" "$rows" "$prog_re" "$group" <<'PY'
+exec python3 - "$trace" "$rows" "$prog_re" "$group" "$tsv" <<'PY'
 import os
 import re
 import sys
 
-path, rows, prog_re, group = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4]
+path, rows, prog_re, group, tsv = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4], sys.argv[5]
 try:
     prog_pat = re.compile(prog_re) if prog_re else None
 except re.error as e:
@@ -337,6 +347,11 @@ if not procs:
     sys.exit('action-durations.sh: no process in %s%s (a cached build starts none)'
              % (path, ' matches --prog' if prog_pat else ''))
 
+if tsv:
+    procs.sort(key=lambda p: (-p[0], p[2], action(p[3])[1]))
+    for s, ex, prog, f in procs[:rows or None]:
+        print('\t'.join(('%.2f' % s, ex, prog, action(f)[1])))
+    sys.exit(0)
 print('processes=%d  open=%d' % (len(procs), sum(1 for p in procs if p[1] == 'open')))
 if group:
     agg = {}

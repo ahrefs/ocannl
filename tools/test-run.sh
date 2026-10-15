@@ -33,6 +33,8 @@
 #   tools/test-run.sh plan  [--cap N] [--test-cap N] [DUNE ARGS...]   # what `run` would inject and take; runs nothing
 #   tools/test-run.sh repeat [--cap N] [--alone] N [DUNE ARGS...]
 #                                                      # compare N isolated runs
+#   tools/test-run.sh fresh [--cap N] [--test-cap N] @DIR/KIND-NAME... [-j N]
+#                                                      # one fresh, timed run of named tests
 #   tools/test-run.sh status [RUN|last]                # one-shot, never blocks
 #   tools/test-run.sh wait   [RUN|last] [--timeout N]  # bounded; exits with the run's status
 #   tools/test-run.sh stop   [RUN|last]                # TERM the run's process group
@@ -72,6 +74,36 @@
 # iteration; N must be at least 2. An stdout/status difference is red (exit 1
 # when dune itself stayed green); stderr-only drift is reported distinctly but
 # is not red. Any red dune iteration keeps a nonzero dune status.
+#
+# `fresh` runs the named per-test aliases once, as `run` does (cap, slot, width,
+# digest), but fresh: dune is given a build directory of the run's own
+# (`<run>/build`, removed when the run ends), `--force` and `--cache=disabled`,
+# so every action the aliases reach executes -- and none of it lands in the
+# worktree's `_build`, so nothing there is cleaned, invalidated or rebuilt.
+# The price is compiling the tests' closure in that directory (some ten
+# seconds at -j 4 on mac-studio). There is no in-place alternative: dune 3.24 re-runs a
+# target-producing rule -- a `(test)` stanza's run, a `(target x.actual)`
+# producer -- only when its rule or dependencies change. `--force` re-runs
+# alias actions alone, and deleting the target from `_build` does NOT re-run
+# its rule: dune trusts its database, and the alias's `diff` then reads a
+# missing file and queues the deletion of the `.expected` as a promotion.
+# The operands are per-test aliases only, `@DIR/runtest-NAME`, `@DIR/slow-NAME`
+# or `@DIR/train-NAME` (`@@` for DIR alone), each named once, plus `-j N`;
+# anything else is refused before dune runs. The digest adds each named test's
+# wall time from the run's dune trace (`timings` in the run directory): the
+# seconds of the processes that are its action -- the alias's own action
+# (`@DIR/KIND-NAME`, or one in a subdirectory for a recursive `@`) or the
+# producer of `DIR/NAME.exe.output`, `NAME.output` or `NAME.actual`; failing
+# both, the runs of `NAME.exe` in DIR that no other named test claimed -- summed,
+# with their count, exits and which rule matched (`action` or `program`). A
+# named test with no such process is NOT RUN: no process of the run is its
+# action, so there is no fresh time to report, and a run
+# that was otherwise green exits 2 under that verdict, naming it; one whose
+# times could not be read is UNTIMED, exit 1. Times are wall-clock under the
+# box's load and the batch's own parallelism -- a test overlapping the
+# closure's compiles or another named test shares the machine with them;
+# name one test, or pass -j 1, to time it alone. A red fresh run cannot be
+# promoted from the worktree (its build directory is gone): rerun it with `run`.
 #
 # Exit codes: `run` and `wait` exit with dune's status, with TWO substitutions.
 # A run the fleet's run-time slot refused (see plan_slot below) exits 75 under
@@ -188,6 +220,7 @@ reject_misplaced_options() {
       --cap | --cap=* | --alone | --alone=* | --test-cap | --test-cap=*)
         case $sub in
           repeat) form='repeat [--cap N] [--alone] N [DUNE ARGS...]' ;;
+          fresh) form='fresh [--cap N] [--test-cap N] @DIR/KIND-NAME... [-j N]' ;;
           *) form="$sub [--cap N] [--test-cap N] [DUNE ARGS...]" ;;
         esac
         die "$arg belongs before the dune arguments, not after them:
@@ -886,6 +919,17 @@ supervisor_perl='
     alarm 0;
     if ($own) {
       $slowest->();
+      # A `fresh` run builds in a directory of its own, which goes with the
+      # run on every path -- the caps and cancellations included -- once dune
+      # is gone; the digest reports one that survived.
+      if (open(my $mf, "<", "$own/mode")) {
+        my $m = <$mf>;
+        close $mf;
+        if (defined $m && $m eq "fresh\n" && -d "$own/build" && !-l "$own/build") {
+          require File::Path;
+          File::Path::remove_tree("$own/build");
+        }
+      }
       print STDOUT "exit: $code\n";
       my $ok = 0;
       for my $try (1 .. 3) {
@@ -1407,6 +1451,135 @@ explicit_trace_file() { # dune argv; 0 iff it names a trace file before dune's `
   return 1
 }
 
+# `fresh`'s operands (see the header): per-test aliases, each once, and `-j N`,
+# into dune's argv `build --force --cache=disabled ALIAS... [-j N]` (fresh_args)
+# and the alias list (fresh_aliases). The run's build directory goes in at
+# `_resolve`, once the run directory exists. DIR must be a plain relative
+# path, each segment starting with a letter, digit or `_` -- so no `.` or `..`
+# segment and nothing absolute -- since it names where the test's action runs.
+fresh_argv() { # operands
+  local arg jobs= seen
+  fresh_aliases=() fresh_args=()
+  while [ $# -gt 0 ]; do
+    arg=$1
+    shift
+    case $arg in
+      -j)
+        [ $# -gt 0 ] || die "fresh: -j needs a width"
+        jobs=$1
+        shift ;;
+      -j*) jobs=${arg#-j} ;;
+      @*)
+        if ! [[ $arg =~ ^@@?([A-Za-z0-9_][A-Za-z0-9_.-]*(/[A-Za-z0-9_][A-Za-z0-9_.-]*)*)/(runtest|slow|train)-[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]]; then
+          die "fresh: not a per-test alias: $arg
+  name each test as @DIR/runtest-NAME, @DIR/slow-NAME or @DIR/train-NAME (@@ for DIR alone);
+  an aggregate (@runtest, @DIR/slow, @DIR/scans) or a directory-less alias is not one -- use \`run\`"
+        fi
+        for seen in ${fresh_aliases[@]+"${fresh_aliases[@]}"}; do
+          [ "$seen" != "$arg" ] || die "fresh: $arg is named twice"
+        done
+        fresh_aliases+=("$arg") ;;
+      *)
+        die "fresh takes per-test aliases and -j N only, not: $arg
+  usage: tools/test-run.sh fresh [--cap N] [--test-cap N] @DIR/KIND-NAME... [-j N]
+  (it passes --force, --cache=disabled and a build directory of its own; see the header)" ;;
+    esac
+  done
+  [ ${#fresh_aliases[@]} -gt 0 ] ||
+    die "fresh: name at least one per-test alias (@DIR/runtest-NAME, @DIR/slow-NAME, @DIR/train-NAME)"
+  if [ -n "$jobs" ]; then
+    case $jobs in '' | *[!0-9]* | 0*) die "fresh: -j wants a positive width, got: $jobs" ;; esac
+  fi
+  fresh_args=(build --force --cache=disabled "${fresh_aliases[@]}")
+  [ -z "$jobs" ] || fresh_args+=(-j "$jobs")
+}
+
+# A `fresh` run's per-test times (see the header), in `_resolve` once dune has
+# exited, from the run's own trace: the shipping reader's `--tsv` rows -- the
+# same whitelisted fields its table prints (gh-ocannl-1280) -- bounded like
+# the slowest-actions reader, then attributed to the named aliases. `timings`
+# holds one line per alias, `ALIAS<TAB>ran|not-run<TAB>SECONDS<TAB>PROCS<TAB>EXITS<TAB>HOW`,
+# HOW naming the rule that found its processes (`action`, `program`, `-`);
+# a reader that fails leaves `timings-skipped` with its last diagnostic
+# instead. A trace holding no process at all is the reader's refusal, and
+# means every named test is NOT RUN, not that the times are unreadable.
+fresh_timings() { # <trace file>
+  local tsv=$run_dir/fresh-processes.tsv err=$run_dir/fresh-processes.err why
+  rm -f "$run_dir/timings" "$run_dir/timings.tmp" "$run_dir/timings-skipped"
+  if ! perl -e 'alarm shift; exec @ARGV or exit 127' 30 \
+       bash tools/action-durations.sh --tsv -n 0 "$1" </dev/null >"$tsv" 2>"$err" 9>&-; then
+    if grep -q '^action-durations.sh: no process in ' "$err" 2>/dev/null; then
+      : >"$tsv"
+    else
+      why=$(grep . "$err" 2>/dev/null | tail -n 1 | cut -c1-300)
+      [ -n "$why" ] || why="the trace reader failed, or did not finish within 30s"
+      printf '%s\n' "$why" >"$run_dir/timings-skipped"
+      rm -f "$tsv" "$err"
+      return 0
+    fi
+  fi
+  awk -F '\t' '
+    function ends(s, t) { return length(s) >= length(t) && substr(s, length(s) - length(t) + 1) == t }
+    function named(i) { # the alias i: a, rec (a recursive @), p, d (its DIR), base, name
+      a = alias[i]; rec = substr(a, 1, 2) != "@@"; p = substr(a, rec ? 2 : 3)
+      d = p; sub(/\/[^\/]*$/, "", d); base = substr(p, length(d) + 2)
+      name = base; sub(/^[^-]*-/, "", name)
+    }
+    function in_dir(x) { return x == d || (rec && index(x, d "/") == 1) }
+    function dir_of(s, x) { # the directory a row names: @D/ALIAS, D/FILE or (in D)
+      if (s ~ /^\(in .*\)$/) return substr(s, 5, length(s) - 5)
+      x = s; sub(/^@/, "", x); sub(/\/[^\/]*$/, "", x)
+      return x
+    }
+    function action_of(j, s, k, t) { # row j is the alias action, or a producer of its output
+      s = act[j]
+      if (s == "@" p || (rec && index(s, "@" d "/") == 1 && ends(s, "/" base))) return 1
+      for (k = 1; k <= 3; k++) {
+        t = name sfx[k]
+        if (s == d "/" t || (rec && index(s, d "/") == 1 && ends(s, "/" t))) return 1
+      }
+      return 0
+    }
+    NR == FNR { alias[++n] = $0; next }
+    { secs[++m] = $1; ex[m] = $2; prog[m] = $3; act[m] = $4; sub(/ \+[0-9]+$/, "", act[m]) }
+    END {
+      split(".exe.output .output .actual", sfx, " ")
+      for (i = 1; i <= n; i++) {
+        named(i)
+        for (j = 1; j <= m; j++) if (action_of(j)) { hits[i] = hits[i] " " j; claimed[j] = 1 }
+        how[i] = "action"
+      }
+      # Only for a test none of whose processes was found so: its program
+      # NAME.exe, in its directory, in a row no other named test claimed.
+      for (i = 1; i <= n; i++) {
+        if (hits[i] != "") continue
+        named(i)
+        how[i] = "program"
+        for (j = 1; j <= m; j++)
+          if (!claimed[j] && prog[j] == name ".exe" && in_dir(dir_of(act[j]))) {
+            hits[i] = hits[i] " " j; claimed[j] = 1
+          }
+      }
+      for (i = 1; i <= n; i++) {
+        nh = split(hits[i], hl, " "); total = 0; exits = ""
+        for (q = 1; q <= nh; q++) {
+          j = hl[q]; total += secs[j]
+          if (index("," exits ",", "," ex[j] ",") == 0) exits = exits (exits == "" ? "" : ",") ex[j]
+        }
+        state = nh ? "ran" : "not-run"
+        if (exits == "") exits = "-"
+        if (!nh) how[i] = "-"
+        printf "%s\t%s\t%.2f\t%d\t%s\t%s\n", alias[i], state, total, nh, exits, how[i]
+      }
+    }' "$run_dir/fresh-aliases" "$tsv" >"$run_dir/timings.tmp" 2>"$err" &&
+    mv -f "$run_dir/timings.tmp" "$run_dir/timings" || {
+      rm -f "$run_dir/timings.tmp"
+      printf 'the per-test times could not be recorded: %s\n' \
+        "$(grep . "$err" 2>/dev/null | head -n 1 | cut -c1-200)" >"$run_dir/timings-skipped"
+    }
+  rm -f "$tsv" "$err"
+}
+
 new_run() {
   run_dir=$RUNS/$(date -u +%Y%m%dT%H%M%SZ)-$$
   mkdir "$run_dir" || die "cannot create $run_dir"
@@ -1904,6 +2077,23 @@ digest() {
     126 | 127) verdict="ERROR (toolchain/setup: nothing ran)" ;;
     *) verdict=FAIL ;;
   esac
+  # A `fresh` run is green only where every named test has a fresh time (see
+  # fresh_timings): one with no process of its own is NOT RUN, the refusal's
+  # code, and times the trace could not give are UNTIMED.
+  local fresh= fresh_missing=0
+  [ "$(cat "$dir/mode" 2>/dev/null)" != fresh ] || fresh=1
+  if [ -n "$fresh" ] && [ "$verdict" = pass ]; then
+    if [ -s "$dir/timings" ]; then
+      fresh_missing=$(awk -F '\t' '$2 != "ran"' "$dir/timings" | grep -c '')
+      if [ "$fresh_missing" -gt 0 ]; then
+        verdict="NOT RUN (no process of this run is the action of $fresh_missing named test(s): no fresh time for them)"
+        digest_rc=2
+      fi
+    else
+      verdict="UNTIMED (dune passed, but the per-test times could not be read from its trace)"
+      digest_rc=1
+    fi
+  fi
   echo "command: dune $(cat "$dir/cmd")"
   echo "verdict: $verdict (exit $digest_rc)"
   echo "log:     $dir/log"
@@ -1943,17 +2133,37 @@ digest() {
   # dune's own run produced: a refused slot, invocation or device probe, or a
   # setup error, ran no batch, so a record beside one is not this verdict's.
   # `open` marks a process the run's end cut short, its seconds a lower bound.
-  case $digest_rc:$verdict in
-    2:* | *:SLOT* | *:DEVICE* | *:ERROR*) ;;
+  case $verdict in
+    INVOCATION* | SLOT* | DEVICE* | ERROR*) ;;
     *)
       if [ -s "$dir/slowest" ]; then
         echo "slowest actions (this run's dune trace, by tools/action-durations.sh):"
         sed -n '1,7p' "$dir/slowest" | sed 's/^/  /'
       elif [ -s "$dir/slowest-skipped" ]; then
         echo "no slowest-actions record: $(head -c 300 "$dir/slowest-skipped" | head -n 1)"
+      fi
+      if [ -n "$fresh" ]; then
+        if [ -s "$dir/timings" ]; then
+          echo "per-test wall time (fresh: own build directory, --force, --cache=disabled; this run's dune trace):"
+          printf '  %9s %6s %5s  %-7s  %s\n' seconds procs exit matched test
+          awk -F '\t' '{ if ($2 == "ran") printf "  %9s %6s %5s  %-7s  %s\n", $3, $4, $5, $6, $1
+                          else printf "  %9s %6s %5s  %-7s  %s\n", "NOT RUN", 0, "-", "-", $1 }' "$dir/timings"
+        elif [ -s "$dir/timings-skipped" ]; then
+          echo "no per-test times: $(head -c 300 "$dir/timings-skipped" | head -n 1)"
+        fi
+        if [ "$fresh_missing" -gt 0 ]; then
+          echo "a test NOT RUN had no process here that is its action: not the alias's own action, not" \
+               "the producer of DIR/NAME.exe.output, NAME.output or NAME.actual, and no unclaimed NAME.exe" \
+               "in DIR. Name the per-test alias whose action runs it; this tool cannot time a test it" \
+               "cannot see run."
+        fi
+        [ ! -e "$dir/build" ] ||
+          echo "the fresh build directory survived its run (remove it): $dir/build"
       fi ;;
   esac
-  if [ "$digest_rc" = 2 ]; then
+  local refused_invocation=
+  case $verdict in INVOCATION*) refused_invocation=1 ;; esac
+  if [ -n "$refused_invocation" ]; then
     # dune's own words name the fix; nothing below (promotion diffs, the
     # fingerprint, a log tail) could apply to a run in which no rule ran.
     echo "dune said:"
@@ -1987,7 +2197,13 @@ digest() {
   # scanned tail, which may hold a hunk above it.
   local log_bytes
   log_bytes=$(wc -c <"$dir/log" 2>/dev/null | tr -d ' ')
-  if [ -n "$promo_n" ] && [ "$promo_n" -gt 0 ]; then
+  if [ -n "$fresh" ]; then
+    # A fresh run built in a directory that is gone: nothing of it is
+    # promotable from the worktree, whatever its log shows.
+    [ "$verdict" != FAIL ] ||
+      echo "a fresh run's corrections are not promotable (its build directory is removed);" \
+           "rerun the failing alias with \`tools/test-run.sh run\` to promote it"
+  elif [ -n "$promo_n" ] && [ "$promo_n" -gt 0 ]; then
     echo "promotion diffs present -- dune's promotion list at the run's end names $promo_n" \
          "file(s); inspect the log, accept with \`dune promote\` (tools/promote.sh on Windows):"
     sed -n '1,20p' "$dir/promotions" | sed 's/^/  /'
@@ -2056,7 +2272,7 @@ finish_run() { # rc -> append sentinel, record verdict
 }
 
 sub=${1:-}
-[ -n "$sub" ] || die "usage: tools/test-run.sh run|start|plan|repeat|status|wait|stop|list|idle|paths|lock-status ... (see header)"
+[ -n "$sub" ] || die "usage: tools/test-run.sh run|start|plan|repeat|fresh|status|wait|stop|list|idle|paths|lock-status ... (see header)"
 shift
 
 case $sub in
@@ -2479,6 +2695,13 @@ case $sub in
     plan_slot_kind
     plan_device_probe
     plan_test_cap "$test_cap" "$@"
+    # A fresh run's own build directory (see the header), recorded in its
+    # command: the digest's `command:` line names where the run built.
+    if [ "$mode" = fresh ]; then
+      fresh_sub=$1
+      shift
+      set -- "$fresh_sub" "--build-dir=$run_dir/build" "$@"
+    fi
     # The width goes immediately after dune's subcommand, where dune accepts
     # it whatever the target is, and always before dune's own `--`.
     if [ -n "$width_cap" ]; then
@@ -2522,7 +2745,7 @@ case $sub in
       } >"$run_dir/plan" || { echo "test-run: cannot write the plan in $run_dir"; exit 126; }
       exit 0
     fi
-    if [ -n "$width_cap" ]; then
+    if [ -n "$width_cap" ] || [ "$mode" = fresh ]; then
       { { printf '%q ' "$@"; echo; } >"$run_dir/cmd.tmp" &&
         mv -f "$run_dir/cmd.tmp" "$run_dir/cmd"; } ||
         { echo "test-run: cannot record the capped command in $run_dir"; exit 126; }
@@ -2593,6 +2816,7 @@ case $sub in
       wait "$watch" 2>/dev/null
     fi
     [ -z "$promotions_recordable" ] || record_promotions
+    [ "$mode" != fresh ] || [ -z "${trace_file:-}" ] || fresh_timings "$trace_file"
     exit "$rc"
     ;;
   _probe)
@@ -2655,7 +2879,7 @@ case $sub in
     fi
     exec "$@"
     ;;
-  run | start | plan)
+  run | start | plan | fresh)
     # `plan` is what `run` would do with this argv, without running it: the
     # batch's resolved backends and why, the width it would inject, and the
     # fleet slot it would take. It is a launch whose first phase is its last
@@ -2679,6 +2903,13 @@ case $sub in
     normalize_cap
     [ -z "$test_cap" ] || normalize_cap test_cap --test-cap
     reject_misplaced_options "$@"
+    # `fresh` is `run` over an argv of its own making (see the header and
+    # fresh_argv); from here on it differs only where `_resolve` and `digest`
+    # read the run's `mode`.
+    if [ "$sub" = fresh ]; then
+      fresh_argv "$@"
+      set -- "${fresh_args[@]}"
+    fi
     [ $# -gt 0 ] || set -- runtest
     # Toolchain checks gate only launches: status/wait/stop/list remain usable
     # from a shell whose opam environment is no longer active.
@@ -2711,6 +2942,11 @@ case $sub in
     trap 'fwd_sig TERM' TERM
     trap 'fwd_sig HUP' HUP
     new_run "$@"
+    if [ "$sub" = fresh ]; then
+      { printf '%s\n' fresh >"$run_dir/mode" &&
+        printf '%s\n' "${fresh_aliases[@]}" >"$run_dir/fresh-aliases"; } ||
+        { rm -rf "$run_dir"; die "cannot record the fresh run's metadata in $run_dir"; }
+    fi
     take_lock
     # After the supervisor exits: the report, and the run directory removed --
     # the lock went with the supervisor, so the owner pointer never names a

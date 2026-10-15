@@ -239,6 +239,18 @@
 #      left. A refused slot or device probe and a setup error never
 #      print a record, a cancellation does. Beside it, against a real dune: a
 #      manual build running beside a managed run keeps its live trace.
+#  81 sits after leg 80: `fresh` hands dune exactly `build --build-dir=<the
+#      run's own> --force --cache=disabled` and the named aliases, records that
+#      command, and removes the build directory with the run (the fixture dune
+#      makes it, a control shows); its digest gives each named test the
+#      seconds of the processes that are its action -- the alias action, also
+#      in a subdirectory under a recursive `@` and not under `@@`, a producer
+#      of NAME.exe.output or NAME.actual, or else an unclaimed NAME.exe in its
+#      directory -- from a synthetic trace. A named test with no such process
+#      is NOT RUN (exit 2), the others still timed, also when the trace holds
+#      no process at all; a red run is FAIL with its times and not promotable;
+#      an unreadable trace is UNTIMED (exit 1); operands other than per-test
+#      aliases and -j N are refused before dune runs.
 #  70 sits at the very end, after every leg that fakes a device: a leg that
 #      names no device probe still reads the harness's absent defaults, the
 #      width-cap probes answer "no device" through the shipping readers, and
@@ -1901,6 +1913,13 @@ if [ -n "${OCANNL_TOOL_TESTRUN_OWN:-}" ] && [ $# -ge 2 ] &&
   shift 2
   set -- "$trace_sub" "$@"
   [ -z "${REPEAT_TEST_TRACE:-}" ] || cp "$REPEAT_TEST_TRACE" "$trace_to"
+fi
+# A build directory the argv names is made, as dune would (leg 81: a `fresh`
+# run's own goes with the run).
+if [ -n "${REPEAT_TEST_MKBUILD:-}" ]; then
+  for arg in "$@"; do
+    case $arg in --build-dir=*) mkdir -p "${arg#--build-dir=}/default" ;; esac
+  done
 fi
 printf '%s\n' "$*" >>"$REPEAT_TEST_CALLS"
 if [ -n "${REPEAT_TEST_WAIT_PREFIX:-}" ] \
@@ -4110,6 +4129,184 @@ PY
     report 0 "$slow_label"
   else
     report 1 "$slow_label" "$slow_detail"
+  fi
+fi
+
+# Leg 81: `fresh` runs the named per-test aliases once, in a build directory of
+# the run's own, forced and uncached, and the digest gives each its wall time
+# from the run's dune trace -- or refuses it as NOT RUN where no process of the
+# trace is its action. The trace is synthetic, as in leg 80; the reader takes
+# the build directory from the trace's own `config init`, so a made-up one
+# serves whatever directory the run hands dune. alpha is a `(test)` stanza's
+# producer (`DIR/NAME.exe.output`) plus, under the recursive `@`, the same
+# alias's action in a subdirectory; beta is an alias action named with `@@`,
+# its directory alone, so the subdirectory twin planted for it does not count;
+# gamma's producer is `NAME.actual` under a program of another name, which
+# therefore no other test may claim by that program; delta writes an output
+# of another name, so only its program finds it; the compile and a bystander
+# test count for nobody.
+fresh_label="fresh: forced, uncached, own build directory; per-test times; NOT RUN refused"
+if ! command -v python3 >/dev/null 2>&1; then
+  skip "$fresh_label" "no python3 on PATH (tools/action-durations.sh needs it)"
+else
+  cp "$HERE/action-durations.sh" "$repeat_root/tools/action-durations.sh"
+  cat >"$TMP/fresh-trace.py" <<'PY'
+import sys
+path, build, skip = sys.argv[1], sys.argv[2], sys.argv[3]
+S, T0 = 1_000_000_000, 1_791_291_000 * 1_000_000_000
+def atom(s):
+    s = str(s).encode()
+    return str(len(s)).encode() + b':' + s
+def sexp(x):
+    return b'(' + b''.join(sexp(e) if isinstance(e, list) else atom(e) for e in x) + b')'
+out = [sexp(['config', 'init', str(T0), ['build_dir', build]])]
+act = build + '/.actions/default/'
+for pid, start, dur, prog, target, owner in [
+        (11, 1, 12.34, 'alpha.exe', build + '/default/test/operations/alpha.exe.output', 'alpha'),
+        (12, 2, 1.5, 'sh', act + 'test/operations/sub/runtest-alpha-' + 'a' * 32, 'alpha'),
+        (13, 3, 3.25, 'beta.exe', act + 'test/einsum/slow-beta-' + 'b' * 32, 'beta'),
+        (14, 4, 7.0, 'beta.exe', act + 'test/einsum/deeper/slow-beta-' + 'c' * 32, 'twin'),
+        (15, 5, 4.5, 'shared.exe', build + '/default/test/operations/gamma.actual', 'gamma'),
+        (16, 6, 9.75, 'bystander.exe', build + '/default/test/operations/bystander.exe.output', 'other'),
+        (17, 7, 2.0, 'ocamlopt.opt', build + '/default/tensor/x.cmx', 'other'),
+        (18, 8, 2.25, 'delta.exe', build + '/default/test/operations/backend-0-0.log.actual', 'delta')]:
+    if skip in (owner, 'all'):
+        continue
+    t = T0 + start * S
+    f = [['pid', str(pid)], ['prog', '/opt/bin/' + prog], ['dir', build + '/default'],
+         ['target_files', [target]]]
+    out.append(sexp(['process', 'start', str(t)] + f))
+    out.append(sexp(['process', 'finish', [str(t), str(int(round(dur * S)))]] + f + [['exit', '0']]))
+open(path, 'wb').write(b''.join(out))
+PY
+  for fresh_skip in '' beta all; do
+    python3 "$TMP/fresh-trace.py" "$TMP/fresh-${fresh_skip:-full}.trace" /fake/build "$fresh_skip"
+  done
+  fresh_probe() { # tag [argv...]: `fresh` through the fixture dune, its trace FRESH_TRACE's
+    local tag=$1
+    shift
+    REPEAT_TEST_TRACE=${FRESH_TRACE:-$TMP/fresh-full.trace} REPEAT_TEST_MKBUILD=1 \
+      argv_probe "$tag" fresh "$@"
+  }
+  fresh_rows() { # digest -> its per-test rows, one line each, blanks squeezed
+    printf '%s\n' "$1" | awk '/^per-test wall time/ { f = 1; next }
+      f && /^  / { if ($1 != "seconds") print; next }
+      f { exit }' | sed 's/^ *//; s/  */ /g'
+  }
+  fresh_detail=
+  fresh_aliases='@test/operations/runtest-alpha @@test/einsum/slow-beta @test/operations/runtest-gamma @test/operations/runtest-delta'
+  # 1. Every named test ran: exit 0, the times attributed, the command forced,
+  # uncached and in the run's own build directory -- recorded as such -- and
+  # that directory gone with the run.
+  # shellcheck disable=SC2086  # the aliases are word-split on purpose
+  fresh_probe fresh-pass $fresh_aliases -j 4
+  case $argv_rc:$argv_out in
+    0:*"verdict: pass (exit 0)"*"per-test wall time (fresh: own build directory, --force, --cache=disabled; this run's dune trace):"*) ;;
+    *) fresh_detail="all ran: exit $argv_rc (want 0 with the table): $argv_out" ;;
+  esac
+  fresh_want='13.84 2 0 action @test/operations/runtest-alpha
+3.25 1 0 action @@test/einsum/slow-beta
+4.50 1 0 action @test/operations/runtest-gamma
+2.25 1 0 program @test/operations/runtest-delta'
+  [ -n "$fresh_detail" ] || [ "$(fresh_rows "$argv_out")" = "$fresh_want" ] ||
+    fresh_detail="all ran: rows $(fresh_rows "$argv_out" | tr '\n' ';') (want $(printf '%s' "$fresh_want" | tr '\n' ';'))"
+  [ -n "$fresh_detail" ] ||
+    [ "$argv_calls" = "build --build-dir=$argv_dir/build --force --cache=disabled $fresh_aliases -j 4" ] ||
+    fresh_detail="all ran: dune was not handed the fresh argv: $argv_calls"
+  case $fresh_detail:$argv_out in
+    :*"command: dune build --build-dir=$argv_dir/build --force --cache=disabled $fresh_aliases -j 4"*) ;;
+    :*) fresh_detail="all ran: the recorded command does not name the build directory: $argv_out" ;;
+  esac
+  [ -n "$fresh_detail" ] || { [ ! -e "$argv_dir/build" ] && [ -s "$argv_dir/timings" ] &&
+    [ "$(cat "$argv_dir/mode")" = fresh ] && [ ! -e "$argv_dir/trace.csexp" ] &&
+    [ ! -e "$argv_dir/fresh-processes.tsv" ] && [ ! -e "$argv_dir/timings-skipped" ]; } ||
+    fresh_detail="all ran: the run directory is not as left: $(ls "$argv_dir" | tr '\n' ' ')"
+  # The negative control for the build directory's removal: the fixture made
+  # it, so its absence is the supervisor's doing.
+  if [ -z "$fresh_detail" ]; then
+    REPEAT_TEST_MKBUILD=1 argv_probe fresh-mk-control run build --build-dir="$TMP/fresh-mk-control" @x
+    [ -d "$TMP/fresh-mk-control/default" ] ||
+      fresh_detail="control: the fixture dune made no build directory, so its removal proves nothing"
+  fi
+  # 2. A named test no process is the action of is NOT RUN, exit 2, while the
+  # others keep their times -- a green dune is not a fresh time.
+  if [ -z "$fresh_detail" ]; then
+    # shellcheck disable=SC2086
+    FRESH_TRACE=$TMP/fresh-beta.trace fresh_probe fresh-skip $fresh_aliases
+    case $argv_rc:$argv_out in
+      2:*"verdict: NOT RUN (no process of this run is the action of 1 named test(s): no fresh time for them) (exit 2)"*"a test NOT RUN"*) ;;
+      *) fresh_detail="one skipped: exit $argv_rc (want 2, NOT RUN): $argv_out" ;;
+    esac
+    [ -n "$fresh_detail" ] || [ "$(fresh_rows "$argv_out" | tr '\n' ';')" = \
+      "13.84 2 0 action @test/operations/runtest-alpha;NOT RUN 0 - - @@test/einsum/slow-beta;4.50 1 0 action @test/operations/runtest-gamma;2.25 1 0 program @test/operations/runtest-delta;" ] ||
+      fresh_detail="one skipped: rows $(fresh_rows "$argv_out" | tr '\n' ';')"
+  fi
+  # A program another named test's action already claimed is not a second
+  # test's: shared.exe is gamma's producer, so runtest-shared is NOT RUN.
+  if [ -z "$fresh_detail" ]; then
+    fresh_probe fresh-claimed @test/operations/runtest-gamma @test/operations/runtest-shared
+    case $argv_rc:$(fresh_rows "$argv_out" | tr '\n' ';') in
+      "2:4.50 1 0 action @test/operations/runtest-gamma;NOT RUN 0 - - @test/operations/runtest-shared;") ;;
+      *) fresh_detail="a claimed program: exit $argv_rc (want 2, shared NOT RUN): $argv_out" ;;
+    esac
+  fi
+  # 3. A trace with no process at all (all served from elsewhere): NOT RUN,
+  # not UNTIMED.
+  if [ -z "$fresh_detail" ]; then
+    FRESH_TRACE=$TMP/fresh-all.trace fresh_probe fresh-none @test/operations/runtest-alpha
+    case $argv_rc:$argv_out in
+      2:*"verdict: NOT RUN (no process of this run is the action of 1 named test(s)"*"NOT RUN"*"@test/operations/runtest-alpha"*) ;;
+      *) fresh_detail="no process: exit $argv_rc (want 2, NOT RUN): $argv_out" ;;
+    esac
+  fi
+  # 4. A red run is FAIL, exit 1, with its times, and never sent to promote
+  # from the worktree; a trace the reader refuses is UNTIMED, exit 1.
+  if [ -z "$fresh_detail" ]; then
+    # shellcheck disable=SC2086
+    argv_mode=red fresh_probe fresh-red $fresh_aliases
+    argv_mode=
+    case $argv_rc:$argv_out in
+      1:*"verdict: FAIL (exit 1)"*"per-test wall time"*"not promotable"*) ;;
+      *) fresh_detail="a red run: exit $argv_rc (want 1, FAIL, times, not promotable): $argv_out" ;;
+    esac
+  fi
+  if [ -z "$fresh_detail" ]; then
+    printf 'not a trace\n' >"$TMP/fresh-garbage.trace"
+    FRESH_TRACE=$TMP/fresh-garbage.trace fresh_probe fresh-untimed @test/operations/runtest-alpha
+    case $argv_rc:$argv_out in
+      1:*"verdict: UNTIMED"*"no per-test times: action-durations.sh: "*"is not a canonical-S-expression dune trace"*) ;;
+      *) fresh_detail="an unreadable trace: exit $argv_rc (want 1, UNTIMED): $argv_out" ;;
+    esac
+  fi
+  # 5. Operands that are not per-test aliases are refused before dune runs,
+  # with the usage code.
+  if [ -z "$fresh_detail" ]; then
+    for probe in "none:" "aggregate:@test/operations/slow" "rootless:@runtest-alpha" \
+                 "dotdot:@test/../x/runtest-alpha" "dot:@./test/runtest-alpha" \
+                 "twice:@test/operations/runtest-alpha @test/operations/runtest-alpha" \
+                 "option:--force @test/operations/runtest-alpha" "word:build @test/operations/runtest-alpha" \
+                 "zero-width:@test/operations/runtest-alpha -j 0" \
+                 "after:@test/operations/runtest-alpha --cap 900"; do
+      # shellcheck disable=SC2086  # the operands are word-split on purpose
+      fresh_probe "fresh-refuse-${probe%%:*}" ${probe#*:}
+      if [ "$argv_rc" != 2 ] || [ -n "$argv_calls" ]; then
+        fresh_detail="'${probe#*:}': exit $argv_rc, calls '$argv_calls' (want 2, dune never run): $argv_err"
+        break
+      fi
+    done
+  fi
+  # The control: the other spelling of the width reaches dune as -j N.
+  if [ -z "$fresh_detail" ]; then
+    fresh_probe fresh-jcompact @test/operations/runtest-alpha -j2
+    case $argv_rc:$argv_calls in
+      0:"build --build-dir=$argv_dir/build --force --cache=disabled @test/operations/runtest-alpha -j 2") ;;
+      *) fresh_detail="-j2: exit $argv_rc, calls $argv_calls" ;;
+    esac
+  fi
+  if [ -z "$fresh_detail" ]; then
+    report 0 "$fresh_label"
+  else
+    report 1 "$fresh_label" "$fresh_detail"
   fi
 fi
 
