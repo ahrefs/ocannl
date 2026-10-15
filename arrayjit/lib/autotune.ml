@@ -1821,6 +1821,7 @@ type sr_site = {
           before the [Split_reduce]: each hoists an accumulation-cell loop outside [sr_axis]. Empty
           when the site is splittable as lowered. *)
 }
+[@@deriving sexp_of]
 
 (* Sites with more output cells than this have enough output parallelism that the default presets
    already fill a device; splitting the reduction would only add combine traffic. *)
@@ -2539,6 +2540,30 @@ let fiss_sketch_label ~fine entries =
     (String.concat ~sep:","
        (List.map entries ~f:(fun (key, p) -> sketch_params_label p ^ " @" ^ seg_key_tag key)))
 
+(* A split-reduce candidate's label renders EVERY field of each [(site, num_blocks)] entry
+   (post-wave task of gh-ocannl-1230), as {!sketch_params_label} does for a sketch: the target by
+   its debug name AND its id, since two nodes can share a debug name (two [x.grad]s of one model),
+   the split axis, and the interchange chain pair by pair, since two chains of equal length hoist
+   different loops. test/operations/autotune_labels enumerates the fields from the type's derived
+   s-expression, so a new field fails there until it is rendered here. No token contains [','], the
+   entries' separator. *)
+let split_site_label (s, num_blocks) =
+  let name = Ir.Tnode.debug_name s.sr_target and id = Ir.Tnode.id s.sr_target in
+  Printf.sprintf "%s %s red%d out%d cost%d b%d%s%s"
+    (if String.equal name id then name else name ^ "#" ^ id)
+    (Idx.symbol_ident s.sr_axis) s.sr_red s.sr_out s.sr_cost num_blocks
+    (if s.sr_dynamic then " dyn" else "")
+    (match s.sr_swaps with
+    | [] -> ""
+    | swaps ->
+        " swap:"
+        ^ String.concat ~sep:"+"
+            (List.map swaps ~f:(fun (outer, inner) ->
+                 Idx.symbol_ident outer ^ "/" ^ Idx.symbol_ident inner)))
+
+let split_sites_label sites =
+  Printf.sprintf "F_split[%s]" (String.concat ~sep:"," (List.map sites ~f:split_site_label))
+
 let spec_label = function
   | Whole (W_saved (s, move)) ->
       let from, extension = move_label move in
@@ -2553,14 +2578,7 @@ let spec_label = function
       let from, extension = move_label move in
       Printf.sprintf "F_saved[%d segs%s]%s" (List.length segs) from extension
   | Fiss (F_sketch { entries; fine; _ }) -> fiss_sketch_label ~fine entries
-  | Fiss (F_split { sites }) ->
-      Printf.sprintf "F_split[%s]"
-        (String.concat ~sep:","
-           (List.map sites ~f:(fun (s, b) ->
-                Printf.sprintf "%s%s red%d out%d b%d%s" (Ir.Tnode.debug_name s.sr_target)
-                  (if s.sr_dynamic then " dyn" else "")
-                  s.sr_red s.sr_out b
-                  (match List.length s.sr_swaps with 0 -> "" | n -> Printf.sprintf " swap%d" n))))
+  | Fiss (F_split { sites }) -> split_sites_label sites
   | Fiss (F_split_saved (prelude, segs, move)) ->
       let from, extension = move_label move in
       Printf.sprintf "F_split_saved[%d prelude ops, %d segs%s]%s" (List.length prelude)
@@ -2600,9 +2618,9 @@ let default_seed_label ~backend_name =
    buffers the kernels reference. Candidate hermeticity is unchanged: each compile forks the lineage
    table anew. The traced store is copied from the base (schedule ops register their tiles in
    it). *)
-let compile_candidate ?name ~static_indices ~base_opt ~canon ~limits ~is_gpu ~is_cpu ~provenance ctx
-    comp bindings spec : compiled Outcome.outcome =
-  let candidate = spec_label spec in
+let compile_candidate ?name ?label ~static_indices ~base_opt ~canon ~limits ~is_gpu ~is_cpu
+    ~provenance ctx comp bindings spec : compiled Outcome.outcome =
+  let candidate = match label with Some l -> l | None -> spec_label spec in
   let accum_prec = (Context.codegen_capabilities ctx).Ir.Backend_intf.accum_prec in
   let rebase (fresh : LL.optimized) =
     {
@@ -4507,9 +4525,9 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
     in
     (* Winner (and cache-hit) compiles target the caller's context; they replay against the same
        base lowering as the search's candidates. *)
-    let compile_spec_real provenance =
-      compile_candidate ?name ~static_indices ~base_opt ~canon ~limits ~is_gpu ~is_cpu ~provenance
-        ctx comp bindings
+    let compile_spec_real ?label provenance =
+      compile_candidate ?name ?label ~static_indices ~base_opt ~canon ~limits ~is_gpu ~is_cpu
+        ~provenance ctx comp bindings
     in
     let flat_schedule = function
       | Whole_saved saved -> saved
@@ -6169,12 +6187,20 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                   | Fiss_saved segs -> Fiss (F_saved (segs, None))
                   | Split_saved (prelude, segs) -> Fiss (F_split_saved (prelude, segs, None))
                 in
+                (* The rebuilt spec has lost what the winner was timed as: a round candidate's
+                   parent and move, a sketch's or preset's parameters -- its saved form alone would
+                   print as the bare [F_saved[N segs]] every round candidate of one parent shares.
+                   So the replay, and a failure it reports, carry the label the winner was timed
+                   under, which is also the report's [best_label]. *)
+                let label =
+                  match winner_label (Some best_c) with "" -> spec_label spec | l -> l
+                in
                 (* Nothing the replay needs is an artifact — [spec] above is the winner's saved
                    schedule — so the whole beam goes before the compile that reproduces it
                    (gh-ocannl-550). *)
                 release_all_candidates ~keep:[] ();
                 progress_stage "winner_compile";
-                match compile_spec_real Outcome.Candidate spec with
+                match compile_spec_real ~label Outcome.Candidate spec with
                 | Ok c when not (dispatchable ~is_gpu c.all_opts) ->
                     (* Completes the invariant rather than fixing an observed bug: the winner was
                        timed, so it was dispatchable when measured, and the replay is
@@ -6182,19 +6208,17 @@ let tune_in_stream_scope ?name ?search ?beam_width ?rounds ?repeats ?timing ?see
                        routine, and none of them may return an unparallelized GPU routine
                        (gh-ocannl-532). The default compile is the same fallback a failed replay
                        takes. *)
-                    logf "winner replay produced an unparallelized routine, falling back: %s"
-                      (spec_label spec);
+                    logf "winner replay produced an unparallelized routine, falling back: %s" label;
                     (* gh-ocannl-550: rejected, so dead — and the fallback compile below wants the
                        memory. Same one-liner as the rejected cache replay above; the pre-replay
                        sweep could not cover this context, which did not exist yet. *)
                     release_quietly ~what:"the rejected winner replay" c.cctx;
                     untuned_default_or_raise ()
                 | Ok c ->
-                    logf "winner replay ok: %s" (spec_label spec);
+                    logf "winner replay ok: %s" label;
                     (c.cctx, c.routine)
                 | Error (Outcome.Classified classified) ->
-                    logf "winner replay FAILED (%s), falling back to the default compile: %s"
-                      (spec_label spec)
+                    logf "winner replay FAILED (%s), falling back to the default compile: %s" label
                       (Outcome.detail_of_cause classified.cause);
                     untuned_default_or_raise ()
                 | Error (Outcome.Fatal fatal) -> emit_partial_and_raise fatal

@@ -8563,9 +8563,10 @@
  (modules cuda_mma_cutoffs)
  (libraries base stdio arrayjit.ir arrayjit.autotune arrayjit.verdict))
 
-; gh-ocannl-1230: candidate labels tell distinct candidates apart -- every sketch parameter reaches
-; its label, and each beam-round candidate names its parent, segment and move. Scripted ranking,
-; pinned to cc.
+; gh-ocannl-1230: candidate labels tell distinct candidates apart -- every sketch parameter and
+; every split-reduce site field reaches its label, each beam-round candidate names its parent,
+; segment and move, and a winner replayed into the caller's context keeps the label it was timed
+; under. Scripted ranking, pinned to cc; unix captures the replay's log line.
 
 (test
  (name autotune_labels)
@@ -8573,7 +8574,7 @@
  (package neural_nets_lib)
  (deps ocannl_config)
  (modules autotune_labels)
- (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (libraries base ocannl stdio unix arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
