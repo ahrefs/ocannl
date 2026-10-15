@@ -17,4 +17,5 @@ every line of a multi-line failure carries the FAIL prefix: true
 a run with three failed checks names all three on its last stderr line: true
 a run with more failed checks than the line shows names the first ones, cut and on one line, and counts the rest: true
 a claim whose computed label carries line breaks reports on one line of each stream: true
+a pass_fail claim prints one row on stdout and, failing, one line on stderr: true
 a case that returns prints only what its claims print: true

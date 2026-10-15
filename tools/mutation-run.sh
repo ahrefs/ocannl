@@ -170,6 +170,26 @@ sub same_plain_rows {
     }
     return undef;
 }
+# The log lines of a run's failed Verdict.pass_fail claims. pass_fail prints `<label>: FAIL` or
+# `<label>: FAIL (<detail>)` on stdout and `FAIL: <label>` or `FAIL: <label> (<detail>)` on stderr
+# (verdict_teardown pins both streams' bytes): the stderr line ends on no `: false` to recognise it
+# by, and shares its shape with a Verdict.fail message, so it is recognised as the line some stdout
+# row of this run printed with it -- each reading of a row, since a label may contain `: FAIL` too.
+sub pass_fail_lines {
+    my %lines;
+    for my $out (@_) {
+        open my $f, '<:raw', $out or refuse("read $out: $!");
+        while (my $row = <$f>) {
+            $row =~ s/\r?\n$//;
+            for (my $at = index($row, ': FAIL'); $at >= 0; $at = index($row, ': FAIL', $at + 1)) {
+                my $rest = substr($row, $at + length(': FAIL'));
+                $lines{'FAIL: ' . substr($row, 0, $at) . $rest} = 1 if $rest =~ /^(?: \(.*\))?$/;
+            }
+        }
+        close $f or refuse("close $out: $!");
+    }
+    return \%lines;
+}
 my $mutated = $original;
 substr($mutated, $at, length($old), $new);
 system('bash', "$root/tools/test-run.sh", 'idle') == 0
@@ -265,11 +285,16 @@ my $reported = eval {
     }
     # Read the digest from THIS invocation, never 'last' or its truncated tail.
     if (defined $log) {
+        # The stdout files this run rewrote: the rows counted below, and the failed pass_fail
+        # claims listed here.
+        my @fresh = grep { -f $_ && !-l $_ && signature($_) ne $before{$_} } @outputs;
+        my $pass_fail = pass_fail_lines(@fresh);
         print 'run: ', basename(dirname($log)), "\nfalse claims:\n";
         open my $claims, '<:raw', $log or refuse("read $log: $!");
         my ($found, $stopped, $teardown) = (0, '', 0);
         while (my $line = <$claims>) {
-            if ($line =~ /^(FAIL: .*: false)\r?\n?$/) {
+            if ($line =~ /^(FAIL: .*: false)\r?\n?$/
+                || ($line =~ /^(FAIL: .*?)\r?\n?$/ && $pass_fail->{$1})) {
                 print "$1\n";
                 $found = 1;
             }
@@ -285,7 +310,6 @@ my $reported = eval {
         close $claims or refuse("close $log: $!");
         print "(none)\n" unless $found;
         # Whether the run reached its last row. Only then is 1 "caught" and 0 "survived".
-        my @fresh = grep { -f $_ && !-l $_ && signature($_) ne $before{$_} } @outputs;
         my $verdict;
         if (@fresh == 1) {
             my $printed = rows($fresh[0]);

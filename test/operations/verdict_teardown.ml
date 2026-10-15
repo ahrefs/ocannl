@@ -57,6 +57,14 @@ let one_line_err =
   ^ Verdict.teardown_line [ broken_label; broken_label; broken_label; broken_label ]
   ^ "\n"
 
+(* What [Verdict.pass_fail] prints for a claim that holds, one that fails, and one that fails with a
+   detail: a row each on stdout, and each failure's line on stderr. A failure's stderr line ends on
+   no [: false], so [tools/mutation-run.sh] lists it as the line a stdout row of the same run
+   printed with it; [tools/test-mutation-run.sh]'s fixture prints these two strings, read from
+   here. *)
+let pass_fail_out = "held: PASS\nfailed: FAIL\ndetailed: FAIL (got 1 want 2)\n"
+let pass_fail_err = "FAIL: failed\nFAIL: detailed (got 1 want 2)\n"
+
 (* Byte-for-byte comparisons below, so both streams are binary (Windows would rewrite "\n"): the
    children's stderr is matched line-exactly too. *)
 let () =
@@ -145,13 +153,18 @@ let () =
                   (Printf.sprintf
                      {|FAILED: 5 checks did not hold: "%s...", "second claim", "third claim " and 2 more.|}
                      (String.make 58 'x'))));
-      (* tools/mutation-run.sh lists a run's false claims as the [FAIL: …: false] lines of its log
-         and counts its stdout rows against the golden's: a claim split over two lines was neither
+      (* tools/mutation-run.sh lists a run's false claims from the [FAIL: ] lines of its log and
+         counts its stdout rows against the golden's: a claim split over two lines was neither
          listed nor one row. *)
       about "label_line_breaks"
         "a claim whose computed label carries line breaks reports on one line of each stream"
         (run_child "label_line_breaks") ~holds:(fun status out err ->
           exited 1 status && String.equal out one_line_out && String.equal err one_line_err);
+      about "pass_fail_forms"
+        "a pass_fail claim prints one row on stdout and, failing, one line on stderr"
+        (run_child "pass_fail_forms") ~holds:(fun status out err ->
+          exited 1 status && String.equal out pass_fail_out
+          && String.equal err (pass_fail_err ^ Verdict.teardown_line [ "failed"; "detailed" ] ^ "\n"));
       let pass_status, pass_out, _ = run_child "pass" in
       let case_status, case_out, _ = run_child "case_pass" in
       p "a case that returns prints only what its claims print"
@@ -201,6 +214,10 @@ let () =
           claim broken_label false;
           pass_fail ~detail:(fun () -> "got 1\nwant 2") broken_label false;
           p_all broken_label [] ~f:Fn.id
+      | "pass_fail_forms" ->
+          pass_fail "held" true;
+          pass_fail "failed" false;
+          pass_fail ~detail:(fun () -> "got 1 want 2") "detailed" false
       | "pass" -> p "the claim" true
       | "case_pass" -> case "the case" (fun () -> p "the claim" true)
       | other -> failwith ("verdict_teardown: unknown mode " ^ other))

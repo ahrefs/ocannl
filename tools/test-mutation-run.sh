@@ -40,6 +40,7 @@ case "$*" in
   'build -j 4 @runtest-manifest') name=manifest ;;
   'build -j 4 @runtest-tail') name=tail ;;
   'build -j 4 @runtest-trailer') name=trailer ;;
+  'build -j 4 @runtest-passfail') name=passfail ;;
   *) exit 98 ;;
 esac
 printf '%s\n' invoked >> "$PROBE_HOME/invocations"
@@ -146,6 +147,15 @@ case "$PROBE_MODE" in
     printf 'FAIL: first: false\nFAILED: 2 checks did not hold: "first", "first: the emit child failed:".\n'; exit 1 ;;
   trailermultibare) rows "first: false\nFAIL: first: the emit child failed:\n  detail one\n$section$m2"'last: true\n'
     printf 'FAIL: first: false\nFAILED: 2 checks did not hold: "first", "first: the emit child failed:".\n'; exit 1 ;;
+  # Failed Verdict.pass_fail claims, in the bytes verdict_teardown pins for both streams
+  # ($PASS_FAIL_OUT, $PASS_FAIL_ERR), and one whose label itself contains `: FAIL (a)`. Then
+  # `FAIL: ` lines no stdout row printed: a passing claim's label, a failed one's with a detail its
+  # row lacks, and a Verdict.fail message.
+  passfail) rows "$PASS_FAIL_OUT"'odd: FAIL (a): FAIL (b)\n'
+    printf '%b' "$PASS_FAIL_ERR"
+    printf 'FAIL: odd: FAIL (a) (b)\nFAIL: held\nFAIL: failed (a detail its row lacks)\n'
+    printf 'FAIL: the emit child failed:\nFAILED: 3 checks did not hold: "failed", "detailed", "odd: FAIL (a)".\n'
+    exit 1 ;;
   compile) echo 'Error: injected compile failure'; exit 1 ;;
   refused) printf 'dune: unknown option\nUsage: dune build [OPTION]…\n'; exit 1 ;;
   restore_error) rm module.ml; mkdir module.ml; exit 1 ;;
@@ -162,8 +172,24 @@ export PATH="$fixture/bin:$PATH" PROBE_HOME="$fixture" OCANNL_TOOL_TEST_RUNS="$f
 # the fixture already names (gh-ocannl-1066). No slot, and no device to meet.
 export OCANNL_TOOL_FLEET_WORKER=none OCANNL_TOOL_DXG_DEVICE="$fixture/no-such-dxg" \
   OCANNL_TOOL_KFD_TOPOLOGY="$fixture/no-such-kfd" OCANNL_TOOL_NVIDIA_DEVICE="$fixture/no-such-nvidia"
+# What Verdict.pass_fail prints, on stdout and on stderr, read from the test that pins both
+# streams' bytes: the fixture prints Verdict's forms, not a copy of them.
+pass_fail_literal() {
+  sed -n "s/^let $1 = \"\(.*\)\"\$/\1/p" "$root/test/operations/verdict_teardown.ml"
+}
+PASS_FAIL_OUT=$(pass_fail_literal pass_fail_out)
+PASS_FAIL_ERR=$(pass_fail_literal pass_fail_err)
+# Both forms of a failure, bare and with a detail, or the fixture below pins less than it says.
+printf '%b' "$PASS_FAIL_ERR" | grep -q '^FAIL: [^(]*$' &&
+  printf '%b' "$PASS_FAIL_ERR" | grep -q '^FAIL: .* (.*)$' ||
+  { echo 'verdict_teardown.ml no longer binds pass_fail_err to a one-line literal with a bare and a detailed failure'; exit 1; }
+[ -n "$PASS_FAIL_OUT" ] ||
+  { echo 'verdict_teardown.ml no longer binds pass_fail_out to a one-line literal'; exit 1; }
+export PASS_FAIL_OUT PASS_FAIL_ERR
 cd "$fixture/repo"
 printf 'first: true\nnested: label: true\nlast: true\n' > probe.expected
+# The passing form of every row the passfail mode prints.
+{ printf '%b' "$PASS_FAIL_OUT" | sed 's/: FAIL\( (.*)\)\{0,1\}$/: PASS/'; printf 'odd: FAIL (a): PASS\n'; } > passfail.expected
 printf 'first: true\n\nSynthetic controls: scanner refusal diagnostics exercised by this control golden:\n%s\n%s\nlast: true\n' \
   '  [scanner-refusal:00000000000000000000000000000001] first refusal' \
   '  [scanner-refusal:00000000000000000000000000000002] last refusal' > manifest.expected
@@ -342,6 +368,18 @@ flagged "STOPPED EARLY: the mutated run printed 7 of the golden's 8 rows"
 grep -qF 'List.map lines ~f:(fun line -> "FAIL: " ^ line ^ "\n")' "$root/test/support/verdict.ml" ||
   { echo 'Verdict.fail no longer prefixes every line of its message with "FAIL: "'; exit 1; }
 printf 'PASS a multi-line failure, every row prefixed, is caught on a trailer-short run; an unprefixed continuation row exits 4\n'
+# A failed pass_fail claim's stderr line ends on no `: false`: it is listed as the line a stdout row
+# of the run printed with it, under each reading of a row whose label contains `: FAIL`; a `FAIL: `
+# line no row printed is not.
+export PROBE_MODE=passfail
+PROBE_ALIAS=@runtest-passfail run_case 1
+sed -n '/^false claims:$/,/^rows:/{ /^false claims:$/d; /^rows:/d; p; }' "$fixture/result" > "$fixture/claims"
+{ printf '%b' "$PASS_FAIL_ERR"; printf 'FAIL: odd: FAIL (a) (b)\n'; } > "$fixture/expected"
+cmp "$fixture/claims" "$fixture/expected" || { cat "$fixture/result"; echo 'passfail: wrong false claims'; exit 1; }
+rows=$(wc -l < passfail.expected | tr -d ' ')
+grep -q "^rows: $rows printed of $rows in passfail.expected\$" "$fixture/result"
+reached
+printf 'PASS failed pass_fail claims, bare and detailed, are listed; FAIL: lines no stdout row printed are not\n'
 for mode in pass compile refused; do
   export PROBE_MODE=$mode
   case $mode in pass) rc=0 ;; compile) rc=4 ;; refused) rc=2 ;; esac
