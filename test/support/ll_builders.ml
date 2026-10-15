@@ -122,6 +122,15 @@ let set_next (cr : LL.carried) v : LL.t = LL.Set_local (cr.next, v)
 let scan ?(from_ = 0) ?(direction = LL.Forward) ~upto s ~carried body : LL.t =
   LL.Scan_loop { index = s; from_; to_ = upto; direction; carried; body }
 
+(** {2 Statement-level scope locals} *)
+
+(** [define_local id v] declares the scope local [id] and assigns it [v]: two statements, the
+    [Declare_local] + [Set_local] pair a rewrite such as online softmax emits. Mint [id] once per
+    local ({!Ir.Low_level.get_scope} returns a fresh id on every call) and read it with
+    [Get_local id]. *)
+let define_local id v : LL.t list =
+  [ LL.Declare_local { id; needs_init = false }; LL.Set_local (id, v) ]
+
 (** {2 Dynamic indexing}
 
     The gather/scatter pair ({!Ir.Low_level.Get_dynamic} / {!Ir.Low_level.Set_dynamic}): a read or

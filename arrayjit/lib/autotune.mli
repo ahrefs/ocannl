@@ -1530,6 +1530,27 @@ val placement_surface :
     measures nothing, so the prior stands there. Under an unconditional ordering the evidence is not
     derived at all, so such a run never reads [tune_flip_profit_margin]. *)
 
+val flip_twin_identity :
+  static_indices:Ir.Indexing.static_symbol list ->
+  lineage:Ir.Tnode.Placements.t ->
+  inherited:(Ir.Tnode.t -> bool) ->
+  enablement:Set.M(Ir.Tnode).t ->
+  disablement:Set.M(Ir.Tnode).t ->
+  Ir.Low_level.optimized ->
+  node_tag:(Ir.Tnode.t -> string option) ->
+  chain:(Ir.Tnode.t -> Ir.Low_level.reading option) ->
+  Ir.Low_level.flip_candidate ->
+  Ir.Low_level.flip_alternative ->
+  string option
+(** The rule behind {!placement_surface}'s [ps_twin_identity], over an already-lowered routine:
+    [placement_surface] applies it to its decision lowering with the context's placements as
+    [lineage], {!Context.inherits_computation} as [inherited] and the surface's enablement classes.
+    Exposed so a test can reach the two refusals no [Assignments] lowering can isolate
+    (test/operations/flip_twins.ml): a neighbourhood whose statement-level local is defined in a
+    separate top-level statement, or by none -- shapes only hand-built raw code has -- and the
+    inherited-computation refusal with everything else held fixed ([inherited] swapped on the same
+    lowering). *)
+
 type model_choice = {
   mc_label : string;
       (** ["default"], or the winning candidate's spec label (matching the [autotune_log] labels).
