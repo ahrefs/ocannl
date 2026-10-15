@@ -207,13 +207,9 @@ let () =
   let r = Option.value_exn ~here:[%here] !report in
   accounting "poisoned-cache search" r;
   let cache_available = Option.is_some (Context.timing_identity ctx) in
-  if cache_available then
-    p "a serial cache entry is rejected on GPU backends and honoured on CPU ones"
-      (Bool.equal (replayed r) (not is_gpu))
-  else (
-    Stdio.eprintf "concrete device identity unavailable: persistent replay disabled\n";
-    skipped ~aggregation:`Environment ~backend
-      "a serial cache entry is rejected on GPU backends and honoured on CPU ones");
+  Cache_plant.unless_unkeyed ~identity:cache_available
+    "a serial cache entry is rejected on GPU backends and honoured on CPU ones"
+    (Bool.equal (replayed r) (not is_gpu));
   (* A replay times nothing and refuses nothing, so on GPU either counter is evidence of the
      re-search; a refused window is still a window the replay would not have opened. *)
   p "rejecting it re-searches rather than returning the serial routine"

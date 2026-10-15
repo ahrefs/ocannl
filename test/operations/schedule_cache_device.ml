@@ -191,11 +191,9 @@ let () =
     (Option.is_some identity || not (Stdlib.Sys.file_exists cache_dir));
   p "the identity is stable across allocation, execution and replay"
     (Option.equal BI.equal_timing_identity identity (Context.timing_identity ctx));
-  if Option.is_none identity then (
-    Stdio.eprintf "concrete device identity unavailable: persistent replay disabled\n";
-    skipped ~aggregation:`Environment ~backend
-      "a complete cold search replays on the same concrete device")
-  else if first_report.Autotune.timings_contended > 0 then
+  if Option.is_some identity && first_report.Autotune.timings_contended > 0 then
     skipped ~aggregation:`Environment ~backend
       "a complete cold search replays on the same concrete device"
-  else p "a complete cold search replays on the same concrete device" replayed
+  else
+    Cache_plant.unless_unkeyed ~identity:(Option.is_some identity)
+      "a complete cold search replays on the same concrete device" replayed

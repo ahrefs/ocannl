@@ -98,7 +98,7 @@ let problem_digest ctx loss comp =
 type persistence = { identity : bool; io : SC.cache_io list }
 
 let is_store (r : SC.cache_io) = match r.SC.op with SC.Store -> true | SC.Lookup -> false
-let is_placement (r : SC.cache_io) = String.is_prefix r.SC.key ~prefix:"placements-"
+let is_placement r = String.equal (Cache_plant.store_kind r) "placement"
 
 (* The operations a claim rests on, by kind: a record claim on its run's placement stores, a
    decision replay on its run's placement lookups, a schedule-cache replay on the recording run's
@@ -456,15 +456,9 @@ let () =
     shipped1 (List.length arms1) (List.length flips1) clean1 stored1;
   (* Gated on the run's own context (gh-ocannl-1043): the store keys on that context's timing
      identity, so a reference context's says nothing about whether this run could record. *)
-  if persisted1.identity then
-    unless_refused
-      [ placement_stores persisted1 ]
-      "the cold run records exactly one decision, whenever its evidence was clean"
-      ((not clean1) || stored1)
-  else (
-    Stdio.eprintf "concrete device identity unavailable: placement persistence disabled\n";
-    skipped ~aggregation:`Environment ~backend:(Context.backend_name ctx_ref)
-      "the cold run records exactly one decision, whenever its evidence was clean");
+  Cache_plant.unless_unkeyed_or_refused ~identity:persisted1.identity (placement_stores persisted1)
+    "the cold run records exactly one decision, whenever its evidence was clean"
+    ((not clean1) || stored1);
   p_all "a decision is never recorded over refused windows or a failed search" observed1
     ~f:(fun r -> (not stored1) || (completed r && uncontended r));
   p "the recorded decision is the shipped one"
@@ -610,7 +604,7 @@ let () =
           && not (SC.equal_placement_decision e'.SC.decision stale_decision) );
     ]
   in
-  let stale_placement_stores = ref [] in
+  let stale_placement_stores = ref [] and stale_runs = ref [] in
   List.iter stale ~f:(fun (how, corrupt, overwritten) ->
       (* The corruption is a store too, and a refused one leaves the valid entry in place. *)
       let (), corrupting =
@@ -621,6 +615,7 @@ let () =
       let corrupting = List.filter corrupting ~f:is_placement in
       let arms, _, _, _, got, persisted = run () in
       stale_placement_stores := !stale_placement_stores @ corrupting @ placement_stores persisted;
+      stale_runs := !stale_runs @ [ (persisted, arms) ];
       p_all2
         (Printf.sprintf "after an entry that %s, the routine computes the right values" how)
         got expected ~f:approx;
@@ -669,16 +664,10 @@ let () =
   in
   Stdio.eprintf "run 6 (not part of the golden): shipped %s, clean %b, stored %b\n%!" shipped6
     clean6 (Option.is_some entry6);
-  if persisted6.identity then
-    unless_refused
-      [ placement_stores persisted6 ]
-      "with a timing context, the cold run records a decision of its own, whenever its evidence \
-       was clean"
-      ((not clean6) || Option.is_some entry6)
-  else
-    skipped ~aggregation:`Environment ~backend:(Context.backend_name ctx_ref)
-      "with a timing context, the cold run records a decision of its own, whenever its evidence \
-       was clean";
+  Cache_plant.unless_unkeyed_or_refused ~identity:persisted6.identity (placement_stores persisted6)
+    "with a timing context, the cold run records a decision of its own, whenever its evidence was \
+     clean"
+    ((not clean6) || Option.is_some entry6);
   let shipped_searches6 =
     match (shipped6, arms6) with "A", [ ra; _ ] -> [ ra ] | "B", [ _; rb ] -> [ rb ] | _ -> flips6
   in
@@ -727,27 +716,40 @@ let () =
         ~f:stores
     @ !stale_placement_stores
   in
-  (* Per cache directory and per kind of entry, so a refusal local to one leg -- the cross-process
-     leg's directory refused for its path or its ACL, or schedule entries refused while placement
-     entries commit -- cannot hide behind another's successes. A group with fewer than two attempts
-     is outside the claim, so one transient refusal cannot fail it. *)
-  let kind r = if is_placement r then "placement" else "schedule" in
-  let groups =
-    List.sort_and_group attempted ~compare:(fun (a : SC.cache_io) (b : SC.cache_io) ->
-        match String.compare a.SC.dir b.SC.dir with 0 -> String.compare (kind a) (kind b) | c -> c)
+  (* Judged per cache directory and per kind of entry, so the cross-process leg's directory, or the
+     schedule entries, refused alone cannot hide behind another's successes. Expected wherever two
+     arm searches of this process's keyed runs stored their winners -- a search that ran, timed
+     something and had no refused window stores into [cache_dir] ([Autotune.tune]'s rule) -- so that
+     directory's schedule group has two attempts by construction; told from the reports, never from
+     the stores the claim judges (gh-ocannl-1115). Contention that leaves fewer is an environment
+     the claim cannot judge. Flips and the cross-process leg go uncounted: counting fewer only skips
+     more. *)
+  let stores_winner (r : Autotune.report) =
+    (match r.Autotune.outcome with Autotune.Searched -> true | _ -> false)
+    && uncontended r
+    && Float.is_finite r.Autotune.best_ms
   in
-  List.iter groups ~f:(fun group ->
-      let r = List.hd_exn group in
-      Stdio.eprintf "%s stores attempted in %s (not part of the golden): %d, %d refused\n%!"
-        (kind r) r.SC.dir (List.length group) (List.count group ~f:refused));
-  let judged = List.filter groups ~f:(fun group -> List.length group >= 2) in
-  gated ~aggregation:`Environment
-    ~when_:(not (List.is_empty judged))
-    ~on:"no cache directory with two stores of a kind attempted"
+  let storing_searches =
+    List.sum
+      (module Int)
+      ([
+         (persisted1, arms1);
+         (persisted2, arms2);
+         (persisted2b, arms2b);
+         (persisted3, arms3);
+         (persisted3b, arms3b);
+         (persisted6, arms6);
+         (persisted6w, arms6w);
+       ]
+      @ !stale_runs)
+      ~f:(fun (p, arms) -> if p.identity then List.count arms ~f:stores_winner else 0)
+  in
+  Stdio.eprintf "arm searches that stored a winner (not part of the golden): %d\n%!"
+    storing_searches;
+  Cache_plant.not_every_store_refused ~expected:(storing_searches >= 2)
     "in each cache directory, the filesystem refused not every placement store, nor every schedule \
      store, the runs attempted"
-    ((not (List.is_empty judged))
-    && List.for_all judged ~f:(fun group -> List.exists group ~f:(Fn.non refused)));
+    attempted;
   (* --- Run 8 (gh-ocannl-1040): the waivers above rest on the cache REPORTING a refusal it
      absorbed. A cold run into a fresh directory whose every commit the filesystem refuses -- the
      [Sys_error] a Windows commit raises once its bounded retry runs out -- runs to the right
