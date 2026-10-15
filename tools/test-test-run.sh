@@ -277,6 +277,25 @@
 #      no process at all; a red run is FAIL with its times and not promotable;
 #      an unreadable trace is UNTIMED (exit 1); operands other than per-test
 #      aliases and -j N are refused before dune runs.
+#  82 sits just before leg 70: `bisect` (gh-ocannl-1225), over fixture
+#      repositories whose commits tell the fixture dune what to do. A red
+#      build is a skip, never bad, and the first bad commit is found under
+#      the runner frozen at the start -- the range's last commit carries one
+#      that cannot run; a range left with only skipped commits lists them
+#      (exit 1); SLOT REFUSED and a cap's TIMEOUT in a step abort the bisect
+#      (75, 142; git stopped by the step's 128) judging nothing; ends that do
+#      not hold here bisect nothing; no backend, an unrelated GOOD or a
+#      misplaced option is refused before any step; first-parent by default
+#      never steps into a merged branch, and refuses a GOOD merged in through
+#      a second parent (--no-first-parent takes it); a TERM reaps the step's dune and
+#      exits 143; a descendant a step's run leaves holding the tree is
+#      waited for before git moves the tree; a relative runs directory keeps
+#      every step's runs under it; a dune-workspace above the runs directory
+#      is refused leaving no worktree behind; a TERM during setup, or before a
+#      step has a group to signal, unwinds with 143 starting nothing. Every
+#      dune call sees the pinned backend and neither of the
+#      runner's own variables, and the invoking checkout and its worktree
+#      list end as they began.
 #  70 sits at the very end, after every leg that fakes a device: a leg that
 #      names no device probe still reads the harness's absent defaults, the
 #      width-cap probes answer "no device" through the shipping readers, and
@@ -6101,6 +6120,445 @@ else
   fi
 fi
 fi # leg 79
+
+# ---------------------------------------------------------------------------
+# Leg 82: bisect (gh-ocannl-1225)
+# ---------------------------------------------------------------------------
+# A fixture repository whose commits each carry a STATE the fixture dune
+# reads from the tree it runs in: `pass`, `fail` (the test red), `nobuild`
+# (`@check` red), `refuse` (the fake slot refuses), `hang` (the test outlives
+# the cap) and `hold` (the test waits to be cancelled). The fixture dune
+# records, per call, the STATE, the OCANNL_BACKEND it saw and whether the
+# runner's own variables reached it. The invoking checkout sits on `master`
+# at the base commit; the range is the `range` branch, whose LAST commit
+# replaces tools/test-run.sh with one that exits 3 -- so a bisect that ran a
+# tested commit's own runner, rather than its frozen copy, aborts at the bad
+# end instead of finding anything.
+if harness_leg '82: bisect'; then
+if ! command -v git >/dev/null 2>&1; then
+  skip 'bisect: exit mapping, backend, isolation (leg 82)' 'no git on PATH'
+else
+  bi_git() { GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null git "$@"; }
+  bi_bin=$TMP/bisect-bin
+  mkdir -p "$bi_bin"
+  cat >"$bi_bin/dune" <<'EOF'
+#!/usr/bin/env bash
+st=$(cat STATE 2>/dev/null)
+printf '%s %s tree=%s runner=%s :: %s\n' "$st" "${OCANNL_BACKEND:-<unset>}" \
+  "${OCANNL_TOOL_TESTRUN_TREE-<unset>}" "${OCANNL_TOOL_TESTRUN_RUNNER-<unset>}" "$*" >>"$BISECT_CALLS"
+case " $* " in
+  *" @check "*) [ "$st" != nobuild ] || { echo 'File "x.ml", line 1: Error: broken'; exit 1; }; exit 0 ;;
+esac
+case $st in
+  fail) echo 'Error: the test failed'; exit 1 ;;
+  hang) exec sleep 60 ;;
+  escape*)
+    # A descendant that leaves dune's group, keeping the run's lock (fd 9),
+    # and reports the tree's STATE as it found it two seconds later.
+    perl -MPOSIX -e 'POSIX::setsid(); sleep 2; open my $f, "<", "STATE"; my $now = <$f>;
+      chomp $now; open my $o, ">>", $ENV{BISECT_ESCAPE}; print $o "$ARGV[0] $now\n"' "$st" \
+      </dev/null >/dev/null 2>&1 &
+    # Out of the group before dune exits: the supervisor reaps what is left in it.
+    sleep 0.5
+    ;;
+  hold)
+    printf '%s\n' "$$" >"$BISECT_HOLD.pid"
+    exec perl -e 'sleep 60' ;;
+esac
+echo ok
+EOF
+  # The slot: refused where the tree's STATE says so, held otherwise.
+  cat >"$bi_bin/fleet-worker.sh" <<'EOF'
+#!/usr/bin/env bash
+if [ "$1 $2 $3" = "execution slot --probe" ]; then echo "EXECUTION SLOT PROBE fakebox 4 2"; exit 0; fi
+while [ "$1" != -- ]; do shift; done
+shift
+if [ "$(cat STATE 2>/dev/null)" = refuse ]; then
+  echo "EXECUTION SLOT REFUSED fakebox: all 2 GPU tokens (slots 1-2 of 4) busy after 0s"
+  exit 1
+fi
+exec "$@"
+EOF
+  chmod +x "$bi_bin/dune" "$bi_bin/fleet-worker.sh"
+  bi_n=0
+  bi_repo() { # <states of the range...>; a fresh fixture, sets bi_root, bi_base, bi_shas
+    local s
+    bi_n=$((bi_n + 1))
+    bi_root=$TMP/bisect-repo-$bi_n
+    mkdir -p "$bi_root/tools" "$bi_root/scripts" || exit 2
+    cp "$SRC" "$bi_root/tools/test-run.sh" || exit 2
+    stage_sourced "$bi_root"
+    printf 'pass\n' >"$bi_root/STATE"
+    { bi_git init -q "$bi_root" && bi_git -C "$bi_root" config user.name harness &&
+      bi_git -C "$bi_root" config user.email harness@invalid &&
+      bi_git -C "$bi_root" config commit.gpgsign false &&
+      bi_git -C "$bi_root" add -A && bi_git -C "$bi_root" commit -q --no-verify -m base &&
+      bi_git -C "$bi_root" branch -M master && bi_git -C "$bi_root" checkout -q -b range; } >/dev/null 2>&1 ||
+      { report 1 'bisect: fixture repository'; return 1; }
+    bi_base=$(bi_git -C "$bi_root" rev-parse HEAD)
+    bi_shas=()
+    for s in "$@"; do
+      printf '%s\n' "$s" >"$bi_root/STATE"
+      bi_git -C "$bi_root" commit -q --no-verify --allow-empty -am "$s" >/dev/null 2>&1 || return 1
+      bi_shas+=("$(bi_git -C "$bi_root" rev-parse HEAD)")
+    done
+    # The range's last commit carries a runner that cannot run anything.
+    printf '#!/usr/bin/env bash\nexit 3\n' >"$bi_root/tools/test-run.sh"
+    bi_git -C "$bi_root" commit -q --no-verify --amend -a --no-edit >/dev/null 2>&1 || return 1
+    bi_shas[${#bi_shas[@]}-1]=$(bi_git -C "$bi_root" rev-parse HEAD)
+    bi_git -C "$bi_root" checkout -q master >/dev/null 2>&1
+  }
+  bi_runs=$TMP/bisect-runs
+  bi_run() { # [VAR=value...] -- bisect args...; sets bi_rc, bi_out, bi_err, bi_dir
+    local envs=()
+    while [ "$1" != -- ]; do envs+=("$1"); shift; done
+    shift
+    : >"$TMP/bisect.calls"
+    env GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null OCANNL_TOOL_TEST_RUNS=$bi_runs \
+      BISECT_CALLS=$TMP/bisect.calls BISECT_HOLD=$TMP/bisect-hold BISECT_ESCAPE=$TMP/bisect.escape \
+      PATH=$bi_bin:$PATH ${envs[@]+"${envs[@]}"} "$bi_root/tools/test-run.sh" bisect "$@" \
+      >"$TMP/bisect.out" 2>"$TMP/bisect.err"
+    bi_rc=$?
+    bi_out=$(cat "$TMP/bisect.out") bi_err=$(cat "$TMP/bisect.err")
+    bi_dir=$(sed -n 's/^bisect: \(\/.*\)$/\1/p' "$TMP/bisect.out" | head -n 1)
+  }
+  bi_clean() { # the invoking checkout as the fixture left it, and no tree behind
+    [ "$(bi_git -C "$bi_root" rev-parse HEAD)" = "$bi_base" ] &&
+      [ -z "$(bi_git -C "$bi_root" status --porcelain)" ] &&
+      [ "$(bi_git -C "$bi_root" worktree list | grep -c '')" = 1 ] &&
+      [ -n "$bi_dir" ] && [ ! -e "$bi_dir/tree" ]
+  }
+  bi_verdicts() { cut -f3 "$bi_dir/steps.tsv" 2>/dev/null | tr '\n' ' '; }
+
+  # (a) the mapping: a red build is a skip, never bad; the first bad commit is
+  # found; every dune call saw the pinned backend, none the runner's own
+  # variables; the bad end ran under the frozen runner; the records stay.
+  l_found="bisect: a red build is skipped, never bad, and the first bad commit is found under the frozen runner"
+  bi_detail=
+  bi_repo pass nobuild pass fail fail || bi_detail="fixture"
+  [ -n "$bi_detail" ] || bi_run OCANNL_BACKEND=hip OCANNL_TOOL_FLEET_WORKER=none -- --cap 60 "$bi_base" range @t
+  if [ -n "$bi_detail" ]; then :
+  elif [ "$bi_rc" != 0 ]; then bi_detail="exit $bi_rc: $bi_out $bi_err"
+  elif ! grep -q "^result: FIRST BAD COMMIT ${bi_shas[3]} fail\$" <<<"$bi_out"; then
+    bi_detail="result: $(grep '^result:' <<<"$bi_out") (want ${bi_shas[3]})"
+  elif ! grep -q "^bad-end	${bi_shas[4]}	bad	" "$bi_dir/steps.tsv" ||
+       ! grep -q "^good-end	$bi_base	good	" "$bi_dir/steps.tsv"; then
+    bi_detail="the ends were not run first: $(cat "$bi_dir/steps.tsv")"
+  elif ! grep -q "	${bi_shas[1]}	skip	" "$bi_dir/steps.tsv"; then
+    bi_detail="the commit whose build is red was not a skip: $(cat "$bi_dir/steps.tsv")"
+  elif ! grep -q '^nobuild hip ' "$TMP/bisect.calls" ||
+       grep -v '^[a-z]* hip tree=<unset> runner=<unset> :: ' "$TMP/bisect.calls" | grep -q .; then
+    bi_detail="a dune call missed the pinned backend, or saw the runner's variables: $(cat "$TMP/bisect.calls")"
+  elif grep -q '^nobuild .* @t$' "$TMP/bisect.calls"; then
+    bi_detail="the test ran on a commit whose build is red: $(cat "$TMP/bisect.calls")"
+  elif [ ! -s "$bi_dir/bisect-log" ] || [ ! -s "$bi_dir/steps/bad-end-test.log" ] ||
+       [ ! -s "$bi_dir/steps/bad-end-test.out" ]; then
+    bi_detail="the records are missing: $(ls "$bi_dir" "$bi_dir/steps" 2>&1 | tr '\n' ' ')"
+  elif ! bi_clean; then
+    bi_detail="the invoking checkout changed, or the tree was left: $(bi_git -C "$bi_root" worktree list)"
+  fi
+  if [ -z "$bi_detail" ]; then report 0 "$l_found"; else report 1 "$l_found" "$bi_detail"; fi
+
+  # (b) a range whose only untested commits did not build ends without a
+  # first bad commit (exit 1, the candidates listed) -- a skip read as bad
+  # would have named the red build.
+  l_skipped="bisect: a range left with only skipped commits names the candidates, exit 1"
+  bi_detail=
+  bi_repo nobuild fail || bi_detail="fixture"
+  [ -n "$bi_detail" ] || bi_run OCANNL_BACKEND=cc OCANNL_TOOL_FLEET_WORKER=none -- "$bi_base" range @t
+  if [ -n "$bi_detail" ]; then :
+  elif [ "$bi_rc" != 1 ] || grep -q 'FIRST BAD COMMIT' <<<"$bi_out" ||
+       ! grep -q "only skipped commits are left" <<<"$bi_out" ||
+       ! grep -q "^  ${bi_shas[0]} nobuild" <<<"$bi_out"; then
+    bi_detail="exit $bi_rc: $bi_out"
+  elif ! bi_clean; then bi_detail="the tree was left, or the checkout changed"
+  fi
+  if [ -z "$bi_detail" ]; then report 0 "$l_skipped"; else report 1 "$l_skipped" "$bi_detail"; fi
+
+  # (c) a refused slot mid-bisect ABORTS it: git bisect stops (the step's 128),
+  # the bisect exits 75, nothing is called bad, and the tree goes.
+  l_slot="bisect: SLOT REFUSED in a step aborts the bisect with exit 75, judging nothing"
+  bi_detail=
+  bi_repo refuse fail || bi_detail="fixture"
+  [ -n "$bi_detail" ] || bi_run OCANNL_BACKEND=cc OCANNL_TOOL_FLEET_WORKER=$bi_bin/fleet-worker.sh -- "$bi_base" range @t
+  if [ -n "$bi_detail" ]; then :
+  elif [ "$bi_rc" != 75 ] || ! grep -q '^result: ABORTED: the build run of .*SLOT REFUSED' <<<"$bi_out"; then
+    bi_detail="exit $bi_rc: $bi_out $bi_err"
+  elif [ "$(bi_verdicts)" != "bad good ABORT " ]; then
+    bi_detail="steps: $(cat "$bi_dir/steps.tsv")"
+  elif ! grep -q 'exit code 128' "$bi_dir/git-bisect.out" 2>/dev/null &&
+       ! grep -q 'exit code 128' <<<"$bi_err"; then
+    bi_detail="git bisect run was not stopped by the step's 128: $(cat "$bi_dir/git-bisect.out") $bi_err"
+  elif grep -q '^refuse ' "$TMP/bisect.calls"; then
+    bi_detail="dune ran under a refused slot: $(cat "$TMP/bisect.calls")"
+  elif ! bi_clean; then bi_detail="the tree was left, or the checkout changed"
+  fi
+  if [ -z "$bi_detail" ]; then report 0 "$l_slot"; else report 1 "$l_slot" "$bi_detail"; fi
+
+  # (d) a test that outlives the cap is not a verdict either: exit 142, abort.
+  l_cap="bisect: a cap's TIMEOUT in a step aborts the bisect with exit 142"
+  bi_detail=
+  bi_repo hang fail || bi_detail="fixture"
+  [ -n "$bi_detail" ] || bi_run OCANNL_BACKEND=cc OCANNL_TOOL_FLEET_WORKER=none -- --cap 3 "$bi_base" range @t
+  if [ -n "$bi_detail" ]; then :
+  elif [ "$bi_rc" != 142 ] || ! grep -q '^result: ABORTED: the test run of .*TIMEOUT' <<<"$bi_out" ||
+       [ "$(bi_verdicts)" != "bad good ABORT " ]; then
+    bi_detail="exit $bi_rc: $bi_out $bi_err"
+  elif ! grep -q 'exit code 128' "$bi_dir/git-bisect.out" 2>/dev/null &&
+       ! grep -q 'exit code 128' <<<"$bi_err"; then
+    bi_detail="git bisect run was not stopped by the step's 128: $(cat "$bi_dir/git-bisect.out") $bi_err"
+  elif ! bi_clean; then bi_detail="the tree was left, or the checkout changed"
+  fi
+  if [ -z "$bi_detail" ]; then report 0 "$l_cap"; else report 1 "$l_cap" "$bi_detail"; fi
+
+  # (e) ends that do not hold here bisect nothing: exit 1, said why.
+  l_ends="bisect: a GOOD end that fails here, or a BAD one that passes, bisects nothing (exit 1)"
+  bi_detail=
+  bi_repo pass pass || bi_detail="fixture"
+  [ -n "$bi_detail" ] || bi_run OCANNL_BACKEND=cc OCANNL_TOOL_FLEET_WORKER=none -- "$bi_base" range @t
+  if [ -n "$bi_detail" ]; then :
+  elif [ "$bi_rc" != 1 ] || ! grep -q "^result: the BAD end ${bi_shas[1]} passes here" <<<"$bi_out" ||
+       [ "$(bi_verdicts)" != "good " ] || [ -s "$bi_dir/bisect-log" ]; then
+    bi_detail="BAD passing: exit $bi_rc: $bi_out"
+  fi
+  if [ -z "$bi_detail" ]; then
+    bi_repo fail fail || bi_detail="fixture"
+    bi_run OCANNL_BACKEND=cc OCANNL_TOOL_FLEET_WORKER=none -- "${bi_shas[0]}" range @t
+    if [ "$bi_rc" != 1 ] || ! grep -q "^result: the GOOD end ${bi_shas[0]} fails here" <<<"$bi_out" ||
+       [ "$(bi_verdicts)" != "bad bad " ]; then
+      bi_detail="GOOD failing: exit $bi_rc: $bi_out"
+    fi
+  fi
+  if [ -z "$bi_detail" ]; then report 0 "$l_ends"; else report 1 "$l_ends" "$bi_detail"; fi
+
+  # (f) refusals before any step: no backend, an unrelated GOOD, a misplaced
+  # option -- exit 2, no dune, no bisect directory; and the tree variable is
+  # refused by a subcommand that does not take it.
+  l_usage="bisect: no backend, a GOOD that is not BAD's ancestor or a misplaced option is refused (exit 2) before any step"
+  bi_detail=
+  bi_repo fail || bi_detail="fixture"
+  bi_before=$(ls "$bi_runs" 2>/dev/null | grep -c '^bisect-')
+  for probe in "nobackend:OCANNL_BACKEND=:$bi_base range @t:passes OCANNL_BACKEND" \
+                "badbackend:OCANNL_BACKEND=vulkan:$bi_base range @t:names no backend" \
+                "unrelated:OCANNL_BACKEND=cc:range $bi_base @t:not an ancestor" \
+                "misplaced:OCANNL_BACKEND=cc:$bi_base range @t --cap 9:belongs before"; do
+    [ -z "$bi_detail" ] || break
+    IFS=: read -r tag benv args want <<<"$probe"
+    # shellcheck disable=SC2086  # the arguments are word-split on purpose
+    bi_run "$benv" OCANNL_TOOL_FLEET_WORKER=none -- $args
+    if [ "$bi_rc" != 2 ] || ! grep -q "$want" <<<"$bi_err" || [ -s "$TMP/bisect.calls" ]; then
+      bi_detail="$tag: exit $bi_rc; stderr: $bi_err; calls: $(cat "$TMP/bisect.calls")"
+    fi
+  done
+  if [ -z "$bi_detail" ] && [ "$(ls "$bi_runs" 2>/dev/null | grep -c '^bisect-')" != "$bi_before" ]; then
+    bi_detail="a refused bisect left a bisect directory"
+  fi
+  if [ -z "$bi_detail" ]; then
+    bi_tree_out=$(OCANNL_TOOL_TESTRUN_TREE=$TMP OCANNL_TOOL_TEST_RUNS=$bi_runs "$bi_root/tools/test-run.sh" list 2>&1)
+    bi_tree_rc=$?
+    [ "$bi_tree_rc" = 2 ] && grep -q 'does not take it' <<<"$bi_tree_out" ||
+      bi_detail="list under OCANNL_TOOL_TESTRUN_TREE: exit $bi_tree_rc: $bi_tree_out"
+  fi
+  if [ -z "$bi_detail" ]; then report 0 "$l_usage"; else report 1 "$l_usage" "$bi_detail"; fi
+
+  # (g) first-parent by default: the commits of a merged branch are never
+  # stepped on, though one of them is red.
+  l_fp="bisect: first-parent by default never steps into a merged branch, and refuses a GOOD only a second parent reaches"
+  bi_detail=
+  bi_repo pass fail || bi_detail="fixture"
+  if [ -z "$bi_detail" ]; then
+    # range: base - pass - M(side: fail, pass) - fail(+broken runner)
+    bi_git -C "$bi_root" checkout -q -b side master >/dev/null 2>&1
+    printf 'fail\n' >"$bi_root/STATE"; bi_git -C "$bi_root" commit -q --no-verify -am side-fail >/dev/null 2>&1
+    bi_side1=$(bi_git -C "$bi_root" rev-parse HEAD)
+    printf 'pass\n' >"$bi_root/STATE"; bi_git -C "$bi_root" commit -q --no-verify -am side-pass >/dev/null 2>&1
+    bi_side2=$(bi_git -C "$bi_root" rev-parse HEAD)
+    bi_git -C "$bi_root" checkout -q -b fp "${bi_shas[0]}" >/dev/null 2>&1
+    bi_git -C "$bi_root" merge -q --no-ff --no-edit side >/dev/null 2>&1
+    printf 'pass\n' >"$bi_root/STATE"; bi_git -C "$bi_root" commit -q --no-verify --allow-empty -am merged >/dev/null 2>&1
+    bi_merge=$(bi_git -C "$bi_root" rev-parse HEAD)
+    printf 'fail\n' >"$bi_root/STATE"; bi_git -C "$bi_root" commit -q --no-verify -am fp-fail >/dev/null 2>&1
+    bi_fpbad=$(bi_git -C "$bi_root" rev-parse HEAD)
+    bi_git -C "$bi_root" checkout -q master >/dev/null 2>&1
+    bi_run OCANNL_BACKEND=cc OCANNL_TOOL_FLEET_WORKER=none -- "$bi_base" fp @t
+    if [ "$bi_rc" != 0 ] || ! grep -q "^result: FIRST BAD COMMIT $bi_fpbad " <<<"$bi_out"; then
+      bi_detail="exit $bi_rc: $bi_out $bi_err"
+    elif grep -q "$bi_side1\|$bi_side2" "$bi_dir/steps.tsv"; then
+      bi_detail="a merged branch's commit was stepped on: $(cat "$bi_dir/steps.tsv")"
+    elif [ -z "$bi_merge" ]; then
+      bi_detail="fixture: no merge"
+    fi
+    # A GOOD merged in through a second parent bounds nothing on the
+    # first-parent chain: refused, unless the walk takes every parent.
+    if [ -z "$bi_detail" ]; then
+      bi_run OCANNL_BACKEND=cc OCANNL_TOOL_FLEET_WORKER=none -- "$bi_side2" fp @t
+      if [ "$bi_rc" != 2 ] || ! grep -q "not on BAD's first-parent chain" <<<"$bi_err" ||
+         [ -s "$TMP/bisect.calls" ]; then
+        bi_detail="a second-parent GOOD: exit $bi_rc: $bi_err"
+      else
+        bi_run OCANNL_BACKEND=cc OCANNL_TOOL_FLEET_WORKER=none -- --no-first-parent "$bi_side2" fp @t
+        [ "$bi_rc" = 0 ] && grep -q "^result: FIRST BAD COMMIT $bi_fpbad " <<<"$bi_out" ||
+          bi_detail="a second-parent GOOD under --no-first-parent: exit $bi_rc: $bi_out $bi_err"
+      fi
+    fi
+  fi
+  if [ -z "$bi_detail" ]; then report 0 "$l_fp"; else report 1 "$l_fp" "$bi_detail"; fi
+
+  # (i) a descendant a step's run leaves behind, holding the tree's lock,
+  # finishes before git checks out the next commit: it reads its own commit.
+  l_settle="bisect: a step's verdict waits for a descendant still holding the tree, so it never sees the next commit"
+  bi_detail=
+  rm -f "$TMP/bisect.escape"
+  bi_repo escape1 escape2 fail fail || bi_detail="fixture"
+  [ -n "$bi_detail" ] || bi_run OCANNL_BACKEND=cc OCANNL_TOOL_FLEET_WORKER=none -- "$bi_base" range @t
+  if [ -n "$bi_detail" ]; then :
+  elif [ "$bi_rc" != 0 ] || ! grep -q "^result: FIRST BAD COMMIT ${bi_shas[2]} fail\$" <<<"$bi_out"; then
+    bi_detail="exit $bi_rc: $bi_out $bi_err"
+  elif [ ! -s "$TMP/bisect.escape" ] || awk '$1 != $2 { bad = 1 } END { exit !bad }' "$TMP/bisect.escape"; then
+    bi_detail="a descendant saw another commit's tree (its STATE, then what it read): $(cat "$TMP/bisect.escape" 2>&1)"
+  elif ! bi_clean; then bi_detail="the tree was left, or the checkout changed"
+  fi
+  if [ -z "$bi_detail" ]; then report 0 "$l_settle"; else report 1 "$l_settle" "$bi_detail"; fi
+
+  # (j) a relative runs directory is resolved once, by the bisect: every
+  # step's runs land beside the bisect's records and outlive the tree.
+  l_rel="bisect: a relative OCANNL_TOOL_TEST_RUNS keeps every step's runs under the one directory it names"
+  bi_detail=
+  bi_repo pass fail || bi_detail="fixture"
+  rm -rf "${TMP:?}/bisect-relruns"
+  [ -n "$bi_detail" ] || bi_run OCANNL_BACKEND=cc OCANNL_TOOL_FLEET_WORKER=none OCANNL_TOOL_TEST_RUNS=../bisect-relruns \
+    -- "$bi_base" range @t
+  bi_relruns=$(cd -P "$TMP/bisect-relruns" 2>/dev/null && pwd -P)
+  if [ -n "$bi_detail" ]; then :
+  elif [ "$bi_rc" != 0 ] || [ -z "$bi_relruns" ] || [ "$(dirname "$bi_dir")" != "$bi_relruns" ]; then
+    bi_detail="exit $bi_rc; bisect directory ${bi_dir:-?} (want one under $TMP/bisect-relruns): $bi_out $bi_err"
+  else
+    while IFS=$'\t' read -r _ _ _ b t; do
+      for r in "$b" "$t"; do
+        [ "$r" = - ] && continue
+        [ "$(dirname "$r")" = "$bi_relruns" ] && [ -s "$r/exit" ] ||
+          bi_detail="a step's run is not under $bi_relruns, or did not outlive the tree: $r"
+      done
+    done <"$bi_dir/steps.tsv"
+  fi
+  if [ -z "$bi_detail" ]; then report 0 "$l_rel"; else report 1 "$l_rel" "$bi_detail"; fi
+
+  # (k) a setup refusal leaves nothing behind: a dune-workspace above the
+  # runs directory would root dune above the tree, and is refused before
+  # any worktree is registered or bisect directory made.
+  l_setup="bisect: a dune-workspace above the runs directory is refused (exit 2) leaving no worktree or bisect directory"
+  bi_detail=
+  bi_repo pass fail || bi_detail="fixture"
+  mkdir -p "$TMP/bisect-wsanc/runs" && printf '(lang dune 3.18)\n' >"$TMP/bisect-wsanc/dune-workspace"
+  [ -n "$bi_detail" ] || bi_run OCANNL_BACKEND=cc OCANNL_TOOL_FLEET_WORKER=none \
+    OCANNL_TOOL_TEST_RUNS=$TMP/bisect-wsanc/runs -- "$bi_base" range @t
+  if [ -n "$bi_detail" ]; then :
+  elif [ "$bi_rc" != 2 ] || ! grep -q 'would root dune above' <<<"$bi_err" || [ -s "$TMP/bisect.calls" ]; then
+    bi_detail="exit $bi_rc: $bi_out $bi_err"
+  elif [ "$(bi_git -C "$bi_root" worktree list | grep -c '')" != 1 ] ||
+       ls "$TMP/bisect-wsanc/runs" | grep -q '^bisect-'; then
+    bi_detail="the refusal left a worktree or bisect directory: $(bi_git -C "$bi_root" worktree list; ls "$TMP/bisect-wsanc/runs")"
+  fi
+  rm -f "$TMP/bisect-wsanc/dune-workspace"
+  if [ -z "$bi_detail" ]; then report 0 "$l_setup"; else report 1 "$l_setup" "$bi_detail"; fi
+
+  # (l) a TERM that lands before a step has a process group to signal: during
+  # setup (`git worktree add` slowed by a git wrapper), the bisect unwinds
+  # leaving nothing; during an end's checkout, no step is started at all.
+  # Either way the exit is 143.
+  l_early="bisect: a TERM during setup or before a step starts unwinds with 143, starting nothing"
+  bi_detail=
+  bi_gitbin=$TMP/bisect-gitbin
+  mkdir -p "$bi_gitbin"
+  bi_realgit=$(command -v git)
+  cat >"$bi_gitbin/git" <<'EOF'
+#!/usr/bin/env bash
+case " $* " in
+  *" worktree add "*) [ "$BISECT_GIT_SLOW" != add ] || { : >"$BISECT_GIT_READY"; sleep 3; } ;;
+  *" checkout --quiet --detach "*) [ "$BISECT_GIT_SLOW" != checkout ] || { : >"$BISECT_GIT_READY"; sleep 3; } ;;
+esac
+exec "$BISECT_REAL_GIT" "$@"
+EOF
+  chmod +x "$bi_gitbin/git"
+  for slow in add checkout; do
+    [ -z "$bi_detail" ] || break
+    bi_repo pass fail || { bi_detail="fixture"; break; }
+    rm -f "$TMP/bisect-git.ready"
+    : >"$TMP/bisect.calls"
+    bi_early_runs=$TMP/bisect-early-$slow
+    env GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null OCANNL_TOOL_TEST_RUNS=$bi_early_runs \
+      BISECT_CALLS=$TMP/bisect.calls BISECT_GIT_SLOW=$slow BISECT_GIT_READY=$TMP/bisect-git.ready \
+      BISECT_REAL_GIT=$bi_realgit PATH=$bi_gitbin:$bi_bin:$PATH OCANNL_BACKEND=cc OCANNL_TOOL_FLEET_WORKER=none \
+      "$bi_root/tools/test-run.sh" bisect "$bi_base" range @t >"$TMP/bisect.out" 2>"$TMP/bisect.err" &
+    bi_pid=$!
+    for _ in $(seq 1 300); do [ -e "$TMP/bisect-git.ready" ] && break; sleep 0.1; done
+    kill -TERM "$bi_pid" 2>/dev/null
+    for _ in $(seq 1 300); do kill -0 "$bi_pid" 2>/dev/null || break; sleep 0.1; done
+    if kill -0 "$bi_pid" 2>/dev/null; then
+      kill -KILL "$bi_pid" 2>/dev/null
+      bi_detail="$slow: the bisect outlived its TERM by 30s"
+    fi
+    wait "$bi_pid" 2>/dev/null
+    bi_rc=$?
+    [ -z "$bi_detail" ] || break
+    if [ ! -e "$TMP/bisect-git.ready" ]; then
+      bi_detail="$slow: the slowed git call never came: $(cat "$TMP/bisect.out" "$TMP/bisect.err")"
+    elif [ "$bi_rc" != 143 ]; then
+      bi_detail="$slow: exit $bi_rc: $(cat "$TMP/bisect.out" "$TMP/bisect.err")"
+    elif [ -s "$TMP/bisect.calls" ]; then
+      bi_detail="$slow: a step started after the TERM: $(cat "$TMP/bisect.calls")"
+    elif [ "$(bi_git -C "$bi_root" worktree list | grep -c '')" != 1 ]; then
+      bi_detail="$slow: a worktree was left registered: $(bi_git -C "$bi_root" worktree list)"
+    elif [ "$slow" = add ] && ls "$bi_early_runs" 2>/dev/null | grep -q '^bisect-'; then
+      bi_detail="add: the cancelled setup left its bisect directory: $(ls "$bi_early_runs")"
+    elif [ "$slow" = checkout ] && ! grep -q '^result: CANCELLED (TERM)' "$TMP/bisect.out"; then
+      bi_detail="checkout: $(cat "$TMP/bisect.out" "$TMP/bisect.err")"
+    fi
+  done
+  if [ -z "$bi_detail" ]; then report 0 "$l_early"; else report 1 "$l_early" "$bi_detail"; fi
+
+  # (h) a TERM to the bisect stops the step's run (its dune reaped), exits
+  # 143 and removes the tree.
+  l_cancel="bisect: TERM stops the running step, reaps its dune, exits 143 and removes the tree"
+  bi_detail=
+  bi_repo hold fail || bi_detail="fixture"
+  rm -f "$TMP/bisect-hold.pid"
+  if [ -z "$bi_detail" ]; then
+    : >"$TMP/bisect.calls"
+    env GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null OCANNL_TOOL_TEST_RUNS=$bi_runs \
+      BISECT_CALLS=$TMP/bisect.calls BISECT_HOLD=$TMP/bisect-hold PATH=$bi_bin:$PATH \
+      OCANNL_BACKEND=cc OCANNL_TOOL_FLEET_WORKER=none \
+      "$bi_root/tools/test-run.sh" bisect "$bi_base" range @t >"$TMP/bisect.out" 2>"$TMP/bisect.err" &
+    bi_pid=$!
+    for _ in $(seq 1 300); do [ -s "$TMP/bisect-hold.pid" ] && break; sleep 0.1; done
+    bi_hold=$(cat "$TMP/bisect-hold.pid" 2>/dev/null)
+    if [ -z "$bi_hold" ]; then
+      bi_detail="the held step never started: $(cat "$TMP/bisect.out" "$TMP/bisect.err")"
+      kill -TERM "$bi_pid" 2>/dev/null
+    else
+      kill -TERM "$bi_pid"
+    fi
+    for _ in $(seq 1 300); do kill -0 "$bi_pid" 2>/dev/null || break; sleep 0.1; done
+    if kill -0 "$bi_pid" 2>/dev/null; then
+      bi_detail="the bisect outlived its TERM by 30s"
+      kill -KILL "$bi_pid" 2>/dev/null
+    fi
+    wait "$bi_pid" 2>/dev/null
+    bi_rc=$?
+    bi_out=$(cat "$TMP/bisect.out")
+    bi_dir=$(sed -n 's/^bisect: \(\/.*\)$/\1/p' "$TMP/bisect.out" | head -n 1)
+    if [ -n "$bi_detail" ]; then :
+    elif [ "$bi_rc" != 143 ] || ! grep -q '^result: CANCELLED (TERM)' <<<"$bi_out"; then
+      bi_detail="exit $bi_rc: $bi_out $(cat "$TMP/bisect.err")"
+    elif case "$(pstate "$bi_hold")" in '' | Z*) false ;; esac; then
+      bi_detail="the held dune $bi_hold survived the cancellation"
+      kill -KILL "$bi_hold" 2>/dev/null
+    elif ! bi_clean; then bi_detail="the tree was left, or the checkout changed"
+    fi
+  fi
+  if [ -z "$bi_detail" ]; then report 0 "$l_cancel"; else report 1 "$l_cancel" "$bi_detail"; fi
+fi
+fi # leg 82
 
 # ---------------------------------------------------------------------------
 # Leg 70: a leg that names no device still reads the fake (gh-ocannl-1108)
