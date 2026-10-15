@@ -389,6 +389,11 @@ rc=\$?
 if [ "\${1:-}" = show ] && [ "\${2:-}" = "\${SHIM_EXTRA_FOR:-}" ]; then echo 'Warning: something new' >&2; fi
 # Mid-run, what a run starting now would find: the worktree lock's state.
 if [ "\${1:-}" = show ] && [ -n "\${SHIM_LOCK_PROBE:-}" ]; then "$repo/tools/test-run.sh" lock-status >>"\$SHIM_LOCK_PROBE" 2>&1; fi
+# ... and the previous version's in-tree lock, as a launcher of that version would find it.
+if [ "\${1:-}" = show ] && [ -n "\${SHIM_LEGACY_PROBE:-}" ]; then
+  legacy="$repo/.test-run.lock"
+  perl -e 'use Fcntl ":flock"; open my \$f, "+<", \$ARGV[0] or exit 2; print((flock(\$f, LOCK_EX | LOCK_NB) ? "free" : "held"), "\n")' "\$legacy" >>"\$SHIM_LEGACY_PROBE" 2>&1
+fi
 exit \$rc
 SHIM
 chmod +x "$TMP/shim/dune"
@@ -419,6 +424,14 @@ if harness_leg 'runner entry'; then
   if [ "$rc" = 0 ] && [ "$(sort -u "$TMP/lock-probe")" = held ]; then
     report 0 'the worktree lock is held while affected'"'"'s dune runs, so a run starting then refuses'
   else report 1 'the worktree lock is held while affected'"'"'s dune runs, so a run starting then refuses' "exit $rc; probe: $(cat "$TMP/lock-probe" 2>&1)"; fi
+  : >"$repo/.test-run.lock"
+  rc=0
+  (cd "$TMP" && SHIM_LEGACY_PROBE=$TMP/legacy-probe PATH="$TMP/shim:$PATH" "$repo/tools/test-run.sh" affected --files lib/helper.ml) \
+    >"$out" 2>"$err" || rc=$?
+  rm -f "$repo/.test-run.lock"
+  if [ "$rc" = 0 ] && [ "$(sort -u "$TMP/legacy-probe")" = held ]; then
+    report 0 'the previous version'"'"'s in-tree lock, where it exists, is held while affected'"'"'s dune runs'
+  else report 1 'the previous version'"'"'s in-tree lock, where it exists, is held while affected'"'"'s dune runs' "exit $rc; probe: $(cat "$TMP/legacy-probe" 2>&1)"; fi
   lock=$("$repo/tools/test-run.sh" paths lock) || exit 2
   mkdir -p "$(dirname "$lock")" || exit 2
   # Hold the worktree's run lock as a run would, until the release fifo is

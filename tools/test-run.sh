@@ -2355,14 +2355,16 @@ case $sub in
     # beside a run's dune contends for `_build`. So it takes the worktree's run
     # lock, as a run does, and holds it on fd 9 through the helper and every
     # dune it starts: a run refuses meanwhile, and this refuses during a run.
-    # (No owner pointer is published: this is not a run to point at.)
+    # (No owner pointer is published: this is not a run to point at.) Where the
+    # previous version's in-tree lock exists it is held too, on fd 5, as
+    # take_lock holds it, so a launcher of that version is refused meanwhile;
+    # it is never created, nor removed, here.
     query_state_for ""
-    probe_locks "$PWD/.test-run.lock"
-    case $? in
-      0) ;;
-      3) die "a run of the previous version is active in this worktree; affected asks dune too, so wait for it" ;;
-      *) die "cannot inspect worktree lock" ;;
-    esac
+    if [ -e "$PWD/.test-run.lock" ]; then
+      exec 5>>"$PWD/.test-run.lock" || die "cannot open the previous version's lock file"
+      perl -e 'use Fcntl ":flock"; exit(flock(STDIN, LOCK_EX | LOCK_NB) ? 0 : 3)' <&5 ||
+        die "a run of the previous version is active in this worktree; affected asks dune too, so wait for it"
+    fi
     mkdir -p "$RUNS" || die "cannot create $RUNS"
     exec 9>>"$LOCK" || die "cannot open lock file $LOCK"
     perl -e 'use Fcntl ":flock"; exit(flock(STDIN, LOCK_EX | LOCK_NB) ? 0 : 3)' <&9 ||
