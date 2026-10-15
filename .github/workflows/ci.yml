@@ -754,7 +754,10 @@ jobs:
   # the real supervisor in isolated fixtures. Run every harness even when one
   # fails, so one regression cannot mask the others' diagnostics. The machine
   # verifier uses loopback SSH, its local transport and fake opam/Dune, with
-  # real disposable Git worktrees.
+  # real disposable Git worktrees. Strict against an explicit list of the
+  # skips this runner expects (gh-ocannl-1236): a skip that newly appears here
+  # fails its harness, and a listed one that stops occurring fails the step,
+  # rather than either being counted silently behind a green footer.
   harnesses:
     if: github.event_name != 'workflow_dispatch' || !inputs.windows_only && inputs.ocaml_compiler == '5.5.x'
     name: Shell harnesses
@@ -765,7 +768,7 @@ jobs:
       with:
         ref: ${{ inputs.expected_sha }}
     - name: Test shell harnesses
-      run: tools/test-harnesses.sh --shell
+      run: tools/test-harnesses.sh --shell --expected-skips tools/harness-skips-ci-shell.txt
 
   # The benchmark tests WITH torch. The main legs run benchmarks/test_orchestrate.py
   # through dune on a runner without torch, so its legs that drive the real torch

@@ -742,16 +742,32 @@ and in the `tools/*.sh` scripts (gh-ocannl-1111).
   passes through this derivation and fails against the former fixed-list fixture.
 - On a fleet box a harness run is a test batch like any other, though unlike `tools/test-run.sh`
   it takes no slot itself, so wrap it:
-  `fleet-worker.sh execution slot --cpu -- tools/test-harnesses.sh --shell`. Until gh-ocannl-1236
-  lands it must also start with SIGHUP at its default. Under `bg-run.sh spawn`,
-  `execution slot --bg` or `nohup` it inherits SIGHUP ignored, which a non-interactive bash
-  cannot trap, so `tools/test-test-run.sh`'s HUP lifecycle legs fail, on master too, and the
-  harness aborts before its later legs (it cost three workers of the 2026-10-05 wave and two of
-  its post-waves a base comparison or a rerun). Run it in the foreground, where a run of four to
-  five minutes (the 2026-10-06 reruns) fits the 600 s tool cap, or reset the signal for the
-  command, `perl -e '$SIG{HUP}="DEFAULT"; exec @ARGV' tools/test-harnesses.sh --shell` after the
-  slot's `--`. Checked on mac-studio under `bg-run.sh spawn`: a bash `trap` on HUP fires behind
-  that reset and not without it, and the run outlives the call that spawned it.
+  `fleet-worker.sh execution slot --cpu -- tools/test-harnesses.sh --shell`, in the foreground or
+  detached. Under `bg-run.sh spawn`, `execution slot --bg` or `nohup` it inherits SIGHUP ignored
+  (and a background `&` SIGINT), which a non-interactive bash cannot trap: before gh-ocannl-1236
+  `tools/test-test-run.sh`'s HUP lifecycle legs failed there, on master too, and the harness
+  aborted before its later legs (three workers of the 2026-10-05 wave and two of its post-waves
+  paid a base comparison or a rerun). Now the signal legs launch their fixture through a perl
+  that ignores INT, HUP and TERM, standing for such a caller in EVERY run, and a second that
+  resets them, so the reset is what each run exercises and the legs pass whatever the harness
+  inherited (its header line `inherited ignored signals:` says what that was); a lifecycle
+  fixture that never becomes ready fails and ends its leg, never the harness. A launcher that
+  keeps HUP ignored on purpose (`nohup`) is right to: the fix belongs in the fixture, not in
+  the callers.
+- Selecting legs (gh-ocannl-1202): a harness built on `harness_leg` takes `--only REGEX` over its
+  leg names, and `tools/test-test-run.sh` closes each name with its one group, so
+  `--only '#lifecycle'` runs the run/start lifecycle legs with the signal legs and both fork
+  negative controls (leg 74's unmasked parent-ownership and inherited-handler twins); the groups
+  are listed in its header. Setup and cleanup outside the gates run as in a full run; a selector
+  matching no leg exits 2; a filtered run lists the legs it ran and each check they skipped,
+  with its reason, above a `FILTERED RUN, not a full pass` footer. To sample a flaky leg, loop
+  over the selected run and count its `FAIL  ` lines.
+- Strict skips: the toolchain-installing jobs set `OCANNL_TOOL_HARNESS_STRICT=1` (every skip is a
+  FAIL); the toolchain-free `harnesses` job runs `tools/test-harnesses.sh --shell --expected-skips
+  tools/harness-skips-ci-shell.txt`, strict except for the `HARNESS<TAB>LABEL` lines listed
+  there, and red on a listed skip that no longer occurs (gh-ocannl-1236). A leg that newly skips
+  on Ubuntu is a defect to fix or a line to add, with its reason in a comment above it; the
+  list's line forms are a fail-closed allowlist (`tools/test-harnesses.sh`'s header).
 
 - Shell harness checks capture failures with `command || rc=$?`, preserving the caller's
   `errexit` state; an unconditional `set -e` after a check makes later unguarded failures
