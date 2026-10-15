@@ -170,32 +170,64 @@ sub same_plain_rows {
     }
     return undef;
 }
-# The log lines of a run's failed Verdict.pass_fail claims. pass_fail prints `<label>: FAIL` or
-# `<label>: FAIL (<detail>)` on stdout and `FAIL: <label>` or `FAIL: <label> (<detail>)` on stderr
-# (verdict_teardown pins both streams' bytes): the stderr line ends on no `: false` to recognise it
-# by, and shares its shape with a Verdict.fail message, so it is recognised as the line some stdout
-# row of this run printed with it -- each reading of a row, since a label may contain `: FAIL` too.
-# A row stands for ONE log line: a Verdict.fail message repeating a failed claim's line is not a
-# second claim. Answers a matcher that consumes the first unclaimed row a line is a reading of.
-sub pass_fail_lines {
-    my (%rows_of, @claimed);
-    for my $out (@_) {
+# How many copies of each log line are a run's failed Verdict.pass_fail claims. pass_fail prints
+# `<label>: FAIL` or `<label>: FAIL (<detail>)` on stdout and `FAIL: <label>` or
+# `FAIL: <label> (<detail>)` on stderr (verdict_teardown pins both streams' bytes): the stderr line
+# ends on no `: false` to recognise it by, and shares its shape with a Verdict.fail message, so it
+# is read against the stdout this run wrote. Each failed row stands for ONE log line, under any
+# reading of it (a label may contain `: FAIL (…)` too); each Verdict.fail line, which Verdict.fail
+# prints on stdout as well, stands for one log line of its own text that is no claim. The claims are
+# then a largest matching of the remaining `FAIL: ` log lines to the rows they are a reading of --
+# not a first-come one, under which a line that is only an alternate reading of a row could take
+# the row from the line the claim really printed.
+sub pass_fail_counts {
+    my ($log, @outs) = @_;
+    my (%rows_of, %messages);
+    my $rows = 0;
+    for my $out (@outs) {
         open my $f, '<:raw', $out or refuse("read $out: $!");
         while (my $row = <$f>) {
             $row =~ s/\r?\n$//;
-            push @claimed, 0;
+            $messages{$row}++ if $row =~ /^FAIL: /;
             for (my $at = index($row, ': FAIL'); $at >= 0; $at = index($row, ': FAIL', $at + 1)) {
                 my $rest = substr($row, $at + length(': FAIL'));
-                push @{$rows_of{'FAIL: ' . substr($row, 0, $at) . $rest}}, $#claimed
+                push @{$rows_of{'FAIL: ' . substr($row, 0, $at) . $rest}}, $rows
                     if $rest =~ /^(?: \(.*\))?$/;
             }
+            $rows++;
         }
         close $f or refuse("close $out: $!");
     }
-    return sub {
-        my ($row) = grep { !$claimed[$_] } @{$rows_of{$_[0]} // []} or return 0;
-        return $claimed[$row] = 1;
+    return {} unless %rows_of;
+    # The log lines that could be a claim, past the copies Verdict.fail messages account for.
+    my %copies;
+    open my $f, '<:raw', $log or refuse("read $log: $!");
+    while (my $line = <$f>) {
+        $copies{$1}++ if $line =~ /^(FAIL: .*?)\r?\n?$/ && $rows_of{$1} && $line !~ /: false\r?\n?$/;
+    }
+    close $f or refuse("close $log: $!");
+    my @lines = map { my $text = $_; ($text) x ($copies{$text} - ($messages{$text} // 0)) }
+        grep { $copies{$_} > ($messages{$_} // 0) } sort keys %copies;
+    # Augmenting paths (Kuhn): the row each line holds, and the line each row is held by.
+    my (%held_by, @holds);
+    my $augment;
+    $augment = sub {
+        my ($i, $seen) = @_;
+        for my $row (@{$rows_of{$lines[$i]}}) {
+            next if $seen->{$row}++;
+            if (!defined $held_by{$row} || $augment->($held_by{$row}, $seen)) {
+                $held_by{$row} = $i;
+                $holds[$i] = $row;
+                return 1;
+            }
+        }
+        return 0;
     };
+    $augment->($_, {}) for 0 .. $#lines;
+    undef $augment;
+    my %claims;
+    $claims{$lines[$_]}++ for grep { defined $holds[$_] } 0 .. $#lines;
+    return \%claims;
 }
 my $mutated = $original;
 substr($mutated, $at, length($old), $new);
@@ -295,13 +327,13 @@ my $reported = eval {
         # The stdout files this run rewrote: the rows counted below, and the failed pass_fail
         # claims listed here.
         my @fresh = grep { -f $_ && !-l $_ && signature($_) ne $before{$_} } @outputs;
-        my $pass_fail = pass_fail_lines(@fresh);
+        my $pass_fail = pass_fail_counts($log, @fresh);
         print 'run: ', basename(dirname($log)), "\nfalse claims:\n";
         open my $claims, '<:raw', $log or refuse("read $log: $!");
         my ($found, $stopped, $teardown) = (0, '', 0);
         while (my $line = <$claims>) {
             if ($line =~ /^(FAIL: .*: false)\r?\n?$/
-                || ($line =~ /^(FAIL: .*?)\r?\n?$/ && $pass_fail->($1))) {
+                || ($line =~ /^(FAIL: .*?)\r?\n?$/ && ($pass_fail->{$1} // 0) > 0 && $pass_fail->{$1}--)) {
                 print "$1\n";
                 $found = 1;
             }
