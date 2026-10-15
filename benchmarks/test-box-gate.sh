@@ -153,6 +153,10 @@ fi
 if harness_leg 'gh728_cells.sh#shell'; then
   pair gh728_cells.sh gh728 "$(want rog-nv "$fx" gpt2_mini)" gh728_cells 'dune build' \
     bash "$tree/benchmarks/gh728_cells.sh" --box rog-nv cc @OUT@ "$fx/gpt2_mini.safetensors" 2 2
+  # An absent fixture reaches the check, whose GAP names the repair, rather than a usage error.
+  drive gh728-absent gap bash "$tree/benchmarks/gh728_cells.sh" --box rog-nv cc @OUT@ "$fx/gpt2_mini_b1.safetensors" 2 2
+  refused gh728-absent "$(want rog-nv "$fx" gpt2_mini_b1)" gh728_cells
+  verdict 'gh728_cells.sh: an absent fixture is the check'"'"'s GAP' $? gh728-absent
 fi
 if harness_leg 'gh834_cells.sh#shell'; then
   pair gh834_cells.sh gh834 "$(want tuf "$fx" gpt2_mini)" gh834 'dune build' \

@@ -42,9 +42,11 @@ for n in "$REPEATS" "$BATCHES"; do
   ((10#$n > 0 && 10#$n % 2 == 0)) || { echo "gh728_cells: repeats and batches must be positive and even, got $n" >&2; exit 2; }
 done
 case $BACKEND in cuda | hip | metal | cc) ;; *) echo "gh728_cells: unknown backend '$BACKEND'" >&2; exit 2 ;; esac
-FIXTURE=$(cd "$(dirname "$3")" 2>/dev/null && pwd -P)/$(basename "$3")
+# The gate first: an absent fixture is the check's GAP, with its repair, not a usage error here.
+fixture_dir=$(cd "$(dirname "$3")" 2>/dev/null && pwd -P) || fixture_dir=$(dirname "$3")
+FIXTURE=$fixture_dir/$(basename "$3")
+box_gate gh728_cells "$fixture_dir" "$(basename "$FIXTURE" .safetensors)"
 [ -f "$FIXTURE" ] || { echo "gh728_cells: no fixture at $3" >&2; exit 2; }
-box_gate gh728_cells "$(dirname "$FIXTURE")" "$(basename "$FIXTURE" .safetensors)"
 mkdir -p "$2" || { echo "gh728_cells: cannot create $2" >&2; exit 2; }
 OUT=$(cd "$2" && pwd -P) || OUT=""
 [ -n "$OUT" ] && [ -d "$OUT" ] || { echo "gh728_cells: not a usable directory: $2" >&2; exit 2; }
