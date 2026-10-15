@@ -27,7 +27,9 @@ harness_scratch test-box-gate
 mkdir -p "$TMP/tree/benchmarks/fixtures" "$TMP/bin" "$TMP/runs"
 tree=$(cd "$TMP/tree" && pwd -P) || exit 2
 fx=$tree/benchmarks/fixtures
+mkdir -p "$tree/benchmarks/runners"
 cp "$here"/*.sh "$here"/*.py "$here/ocannl_config" "$tree/benchmarks/" || exit 2
+cp "$here"/runners/*.py "$tree/benchmarks/runners/" || exit 2
 for f in mlp_wide mlp_small lenet gpt2_mini gpt2_mini_s512 gpt2_mini_s1024 gpt2_mini_train \
   gpt2_mini_train_s512 gpt2_mini_train_s1024 gpt2_mini_train_b1_s128 gpt2_mini_train_b1_s256 \
   gpt2_mini_train_b1_s512; do
@@ -36,6 +38,7 @@ done
 cat >"$tree/benchmarks/check-box.sh" <<EOF
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >>"$TMP/calls"
+printf '%s\n' "\${BENCH_VENV_PY-unset}" >>"$TMP/venv"
 case \$(cat "$TMP/verdict") in
   ready) echo 'check-box: venv: ok -- stand-in'; echo 'check-box: stand-in: READY (1 items)'; exit 0 ;;
   gap) echo 'check-box: fixture stand-in: GAP -- absent from the stand-in store'
@@ -65,12 +68,13 @@ drive() {
   printf '%s\n' "$2" >"$TMP/verdict"
   shift 2
   for a in "$@"; do cmd+=("${a//@OUT@/$d/out}"); done
-  rm -f "$TMP/calls" "$TMP/started"
+  rm -f "$TMP/calls" "$TMP/started" "$TMP/venv"
   mkdir -p "$d"
   got=0
   "${cmd[@]}" >"$d/stdout" 2>&1 </dev/null || got=$?
   mv "$TMP/calls" "$d/calls" 2>/dev/null || : >"$d/calls"
   mv "$TMP/started" "$d/started" 2>/dev/null || : >"$d/started"
+  mv "$TMP/venv" "$d/venv" 2>/dev/null || : >"$d/venv"
 }
 # [refused RUN WANT DRIVER]: exit 1, the check's GAP verdict and DRIVER's refusal on the output,
 # the check called once with WANT, and nothing past the gate: no first action, no OUT.
@@ -133,6 +137,15 @@ if harness_leg 'gh1003_fold_cells.sh#shell'; then
   pair gh1003_fold_cells.sh gh1003 "$(want m4-max "$fx" gpt2_mini gpt2_mini_s512 gpt2_mini_s1024 \
     gpt2_mini_train_s512 gpt2_mini_train_s1024)" gh1003 'dune build' \
     bash "$tree/benchmarks/gh1003_fold_cells.sh" --box m4-max @OUT@ 60 build metal train
+  # The scrub of BENCH_* keeps the cells hermetic; the check still sees the box's interpreter
+  # override, set or not.
+  drive gh1003-venv ready env BENCH_VENV_PY=/shared/venv/bin/python \
+    bash "$tree/benchmarks/gh1003_fold_cells.sh" --box m4-max @OUT@ 60 dry
+  [ "$(cat "$TMP/runs/gh1003-venv/venv")" = /shared/venv/bin/python ]
+  verdict 'gh1003_fold_cells.sh: the check sees BENCH_VENV_PY through the BENCH_* scrub' $? gh1003-venv
+  drive gh1003-novenv ready env -u BENCH_VENV_PY bash "$tree/benchmarks/gh1003_fold_cells.sh" --box m4-max @OUT@ 60 dry
+  [ "$(cat "$TMP/runs/gh1003-novenv/venv")" = unset ]
+  verdict 'gh1003_fold_cells.sh: an unset BENCH_VENV_PY stays unset for the check' $? gh1003-novenv
   drive gh1003-cc gap bash "$tree/benchmarks/gh1003_fold_cells.sh" --box m4-max @OUT@ 60 cc dry
   refused gh1003-cc "$(want m4-max "$fx" gpt2_mini gpt2_mini_s512)" gh1003
   verdict 'gh1003_fold_cells.sh: cc and dry check only the fixtures they load' $? gh1003-cc
@@ -145,6 +158,11 @@ if harness_leg 'gh834_cells.sh#shell'; then
   pair gh834_cells.sh gh834 "$(want tuf "$fx" gpt2_mini)" gh834 'dune build' \
     bash "$tree/benchmarks/gh834_cells.sh" --box tuf cc @OUT@ "$fx/gpt2_mini.safetensors" 60 \
     build provenance session-queued
+  # A relative FIXTURE is read from benchmarks/, wherever the driver was started from.
+  drive gh834-relative gap env -C "$TMP" bash "$tree/benchmarks/gh834_cells.sh" --box tuf cc @OUT@ \
+    fixtures/gpt2_mini.safetensors 60 session-queued
+  refused gh834-relative "$(want tuf "$fx" gpt2_mini)" gh834
+  verdict 'gh834_cells.sh: a relative FIXTURE is checked where the sessions read it' $? gh834-relative
   # The crown steps read no fixture: a run of them needs no box.
   drive gh834-crown gap bash "$tree/benchmarks/gh834_cells.sh" cc @OUT@ "$fx/gpt2_mini.safetensors" 60 build crown-fwd
   started gh834-crown '' 'dune build'

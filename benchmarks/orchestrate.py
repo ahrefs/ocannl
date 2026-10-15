@@ -3014,7 +3014,7 @@ def main():
         args,
         HERE / "fixtures",
         args.workloads or [f.stem for f in fixtures],
-        run=run_supporting,
+        run=lambda cmd: run_supporting(cmd).returncode,
     )
     if not fixtures:
         sys.exit("no fixtures found — run gen_fixtures.py first")

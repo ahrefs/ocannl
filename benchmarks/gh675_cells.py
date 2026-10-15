@@ -589,7 +589,8 @@ if __name__ == "__main__":
     if bad_arms or bad_workloads:
         sys.exit(f"unknown arm(s) {bad_arms} / workload(s) {bad_workloads}; "
                  f"arms are {sorted(ARMS)}, workloads are {sorted(FIXTURE)}")
-    box_gate.require("gh675_cells.py", args, HERE / "fixtures", args.workloads)
+    box_gate.require("gh675_cells.py", args, HERE / "fixtures", args.workloads,
+                     run=lambda cmd: run_managed(cmd, None, "box check")[0].returncode)
     CACHES.mkdir(parents=True, exist_ok=True)
     DIGESTS.update(digests(args.workloads))
     print(f"records: {RECORDS}", flush=True)

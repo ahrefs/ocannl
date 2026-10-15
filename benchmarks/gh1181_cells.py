@@ -194,16 +194,18 @@ def environment(a, fixtures):
 
 
 def measure(a):
-    # Before --out is made, so a refused run leaves nothing to clear before the next attempt.
-    box_gate.require("gh1181_cells.py", a, HERE / "fixtures", a.workloads)
     out = a.out.resolve()
-    out.mkdir(parents=True, exist_ok=False)
     # Read by orchestrate at import: every cell's combined output lands in cells/ as it runs.
     os.environ["BENCH_CELL_LOG_DIR"] = str(out / "cells")
     import orchestrate as o
     import gh675_cells as g
 
     o.install_termination_handler()
+    # The box gate in the sweep's own process-group discipline, and before --out is made, so a
+    # refused run leaves nothing to clear before the next attempt.
+    box_gate.require("gh1181_cells.py", a, HERE / "fixtures", a.workloads,
+                     run=lambda cmd: o.run_supporting(cmd).returncode)
+    out.mkdir(parents=True, exist_ok=False)
     master = HERE.parent
     trees = {"master": master}
     shas = {"master": git_sha(master)}

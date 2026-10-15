@@ -304,7 +304,7 @@ def main():
     if len(set(backends)) != len(backends) or any(b not in ['metal', 'cc', 'cuda'] for b in backends):
         ap.error('backends must be metal,cc,cuda')
     if args.phase in ('prepare', 'run'):  # the phases that load the fixtures (dry runs --self-test)
-        box_gate.require('gh998_cells.py', args, HERE / 'fixtures', workloads)
+        box_gate.require('gh998_cells.py', args, HERE / 'fixtures', workloads, run=run_child)
     out.mkdir(parents=True, exist_ok=True)
     if args.phase == 'summarize':
         summarize(out)

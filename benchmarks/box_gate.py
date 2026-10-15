@@ -5,7 +5,7 @@ check's own output above the refusal.
 
     box_gate.add_arguments(ap)                     # --box BOX, --skip-box-check
     ...
-    box_gate.require("gh1181_cells.py", args, HERE / "fixtures", names)
+    box_gate.require("gh1181_cells.py", args, HERE / "fixtures", names, run=<managed runner>)
 
 `--box` names the measurement box (an ID `fixtures/DIGESTS.txt` declares; `check-box.sh` refuses
 any other). `--skip-box-check` measures without the check, for a deliberate partial run, and says
@@ -13,7 +13,6 @@ so on the run's output. Neither, at `require`, exits 2; a GAP exits 1; any other
 check (a usage or harness error: nothing was judged) exits 2.
 """
 
-import subprocess
 import sys
 from pathlib import Path
 
@@ -37,12 +36,15 @@ def add_arguments(ap):
     )
 
 
-def require(driver, args, fixture_dir, names, run=subprocess.run):
+def require(driver, args, fixture_dir, names, *, run):
     """Return when the box is READY for `names` (workload stems read from `fixture_dir`), or the
     run was told to skip the check; otherwise exit, after the check's own output.
 
-    `run` spawns the check (`subprocess.run`'s calling convention, output not captured): a driver
-    that runs its helpers in their own process group passes its runner for that.
+    `run(cmd)` runs the check, output not captured, and returns its exit status. It is the
+    driver's own managed runner -- the check leads a process group of its own, collected whole if
+    the driver is cancelled -- because the check's device item is a GPU process that a bare
+    `subprocess.run` would leave running past a SIGTERM; so it has no default. Anything but an
+    int (a runner's timeout verdict) is a check that judged nothing.
     """
     names = list(names)
     if not names:
@@ -68,7 +70,7 @@ def require(driver, args, fixture_dir, names, run=subprocess.run):
         cmd += ["--fixture", name]
     sys.stdout.flush()
     sys.stderr.flush()
-    rc = run(cmd).returncode
+    rc = run(cmd)
     if rc == 0:
         return
     if rc == 1:

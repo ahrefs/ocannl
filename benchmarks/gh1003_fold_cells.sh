@@ -58,12 +58,12 @@
 # The environment is cleared of OCANNL_*, BENCH_* and the OpenMP controls, as in gh834_cells.sh:
 # every treatment is pinned on the command line.
 set -u
+. "$(dirname "$0")/box-gate.sh"
+box_gate_args "$@"; shift "$box_gate_shift"
 while read -r v; do unset "$v"; done < <(env | sed -n 's/^\(OCANNL_[A-Z0-9_]*\)=.*/\1/p')
 while read -r v; do unset "$v"; done < <(env | sed -n 's/^\(BENCH_[A-Z0-9_]*\)=.*/\1/p')
 while read -r v; do unset "$v"; done < <(env | sed -n 's/^\(\(OMP\|GOMP\|KMP\)_[A-Z0-9_]*\)=.*/\1/p')
 
-. "$(dirname "$0")/box-gate.sh"
-box_gate_args "$@"; shift "$box_gate_shift"
 [ $# -ge 3 ] || { sed -n '/^# Usage/,/^# Exit/p' "$0" | sed '$d' >&2; exit 2; }
 out=$1 cap=$2
 shift 2

@@ -6196,13 +6196,17 @@ class BoxGateTest(BoxGateStandIn, unittest.TestCase):
     any check unless it skips the check on purpose. The drivers' own refusals and starts are
     benchmarks/test-box-gate.sh's legs."""
 
+    @staticmethod
+    def check_runner(cmd):
+        return subprocess.run(cmd).returncode
+
     def require(self, box=None, skip=False, names=("gpt2_mini", "lenet")):
         args = argparse.Namespace(box=box, skip_box_check=skip)
         out, err = io.StringIO(), io.StringIO()
         code = None
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             try:
-                box_gate.require("driver.py", args, Path("/store"), names)
+                box_gate.require("driver.py", args, Path("/store"), names, run=self.check_runner)
             except SystemExit as e:
                 code = e.code
         return code, out.getvalue(), err.getvalue()
@@ -6231,6 +6235,23 @@ class BoxGateTest(BoxGateStandIn, unittest.TestCase):
 
         self.assertEqual(code, 2)
         self.assertIn("benchmarks/check-box.sh judged nothing (exit 2)", err)
+
+    def test_a_runner_verdict_that_is_no_status_is_a_check_that_judged_nothing(self):
+        # The drivers' managed runners answer "timeout" for a check that outlived their cap.
+        self.check_runner = lambda cmd: "timeout"
+
+        code, _, err = self.require(box="m4-max")
+
+        self.assertEqual(code, 2)
+        self.assertIn("judged nothing (exit timeout)", err)
+
+    def test_the_runner_is_the_drivers_own(self):
+        # No default: a bare subprocess.run would leave the check's GPU probe running past a
+        # SIGTERM to the driver, so each driver hands over its managed, group-killing runner.
+        args = argparse.Namespace(box="m4-max", skip_box_check=False)
+        with self.assertRaises(TypeError):
+            box_gate.require("driver.py", args, Path("/store"), ["gpt2_mini"])
+        self.assertEqual(self.called(), [])
 
     def test_no_box_is_refused_before_any_check(self):
         code, _, err = self.require()

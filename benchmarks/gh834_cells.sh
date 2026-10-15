@@ -51,6 +51,8 @@
 #   session-queued in one invocation, the reverse in a second on a fresh OUT) and compare each
 #   mode's pair, so order effects cancel.
 set -u
+. "$(dirname "$0")/box-gate.sh"
+box_gate_args "$@"; shift "$box_gate_shift"
 # Hermetic against ambient configuration, as gh612_cells.sh is: every treatment is pinned on the
 # command line, so an exported OCANNL_* or BENCH_* could only contaminate every cell consistently.
 while read -r v; do unset "$v"; done < <(env | sed -n 's/^\(OCANNL_[A-Z0-9_]*\)=.*/\1/p')
@@ -59,8 +61,6 @@ while read -r v; do unset "$v"; done < <(env | sed -n 's/^\(BENCH_[A-Z0-9_]*\)=.
 # serial, and cc_backend keys the schedule cache on them), so the cells run the backend's defaults.
 while read -r v; do unset "$v"; done < <(env | sed -n 's/^\(\(OMP\|GOMP\|KMP\)_[A-Z0-9_]*\)=.*/\1/p')
 
-. "$(dirname "$0")/box-gate.sh"
-box_gate_args "$@"; shift "$box_gate_shift"
 [ $# -ge 5 ] || { sed -n '/^# Usage/,/^# crown-/p' "$0" | sed '$d' >&2; exit 2; }
 backend=$1 out=$2 fixture=$3 cap=$4
 shift 4
@@ -72,9 +72,12 @@ if [ -e "$out" ] && [ -n "$(ls -A "$out" 2>/dev/null)" ]; then
   echo "gh834: OUT $out is not empty; give each invocation a fresh directory" >&2
   exit 2
 fi
+# The session steps read FIXTURE from benchmarks/ (the cd below), so a relative one is checked there.
+root=$(cd "$(dirname "$0")/.." && pwd -P)
+case $fixture in /*) gate_fixture=$fixture ;; *) gate_fixture=$root/benchmarks/$fixture ;; esac
 for gate_step in "$@"; do
   case $gate_step in
-    session-*) box_gate gh834 "$(dirname "$fixture")" "$(basename "$fixture" .safetensors)"; break ;;
+    session-*) box_gate gh834 "$(dirname "$gate_fixture")" "$(basename "$gate_fixture" .safetensors)"; break ;;
   esac
 done
 mkdir -p "$out" || exit 2
@@ -88,7 +91,6 @@ exec >>"$out/driver.log" 2>&1 || exit 2
 # A session's CUDA driver cache (below) is scratch: whatever path ends the run -- an interrupt, a
 # survivor of the cap, a usage error mid-list -- leaves none of it in OUT.
 trap 'rm -rf "$out"/nvcache-*; cat "$out/driver.log" >&3' EXIT
-root=$(cd "$(dirname "$0")/.." && pwd -P)
 # The runners read the nearest ocannl_config; benchmarks/ has the suite's own.
 cd "$root/benchmarks" || exit 2
 # Every artifact is labelled by the commit, so the tracked tree must BE that commit: a locally edited

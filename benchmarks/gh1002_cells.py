@@ -354,7 +354,7 @@ def run(args):
     _cancellation.install()
     # Every fixture, whatever the phases: preflight digests them all, and a run without it checks
     # that same identity before its first cell.
-    box_gate.require("gh1002_cells.py", args, HERE / "fixtures", MAIN + SWEEP)
+    box_gate.require("gh1002_cells.py", args, HERE / "fixtures", MAIN + SWEEP, run=run_in_own_group)
     out = Path(args.out).resolve()
     out.mkdir(parents=True, exist_ok=True)
     backends = args.backends.split(",")

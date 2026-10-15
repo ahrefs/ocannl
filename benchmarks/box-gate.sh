@@ -5,7 +5,7 @@
 # missing venv, a dead device or an absent fixture stops the run before its first cell rather than
 # in the middle of it. Sourced, never run (benchmarks/box_gate.py is the Python drivers' twin):
 #
-#   . "$here/box-gate.sh"
+#   . "$here/box-gate.sh"                          # before the driver scrubs its environment
 #   box_gate_args "$@"; shift "$box_gate_shift"   # first: the gate's options lead the driver's own
 #   ...                                           # the driver's own parsing and usage checks
 #   box_gate DRIVER FIXTURE-DIR NAME...            # before the driver's first measurement
@@ -24,9 +24,14 @@
 # decides: READY returns 0, a GAP exits 1 after a `DRIVER: refusing to start` line, and any other
 # status (a usage or harness error, nothing judged) exits 2. The check's device item puts one
 # tensor on the GPU, so a driver on a fleet box runs under a GPU slot, as its measurement does.
+#
+# Sourcing it records BENCH_VENV_PY, the box's interpreter override (benchmarks/bench_venv.py),
+# for the check alone: a driver that then scrubs BENCH_* from its cells' environment still has
+# the check resolve the interpreter the box is set up with, instead of reporting a driver-path GAP.
 
 box_gate_check=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/check-box.sh
 box_gate_box= box_gate_skip=0 box_gate_shift=0
+box_gate_venv_py=${BENCH_VENV_PY-} box_gate_venv_py_set=${BENCH_VENV_PY+1}
 
 box_gate_args() {
   local seen_box=0
@@ -68,7 +73,11 @@ box_gate() { # DRIVER FIXTURE-DIR NAME...
     case $seen in *" $name "*) ;; *) set -- "$@" --fixture "$name"; seen="$seen$name " ;; esac
     shift
   done
-  bash "$box_gate_check" --box "$box_gate_box" --fixture-dir "$dir" "$@" || rc=$?
+  if [ -n "$box_gate_venv_py_set" ]; then
+    BENCH_VENV_PY=$box_gate_venv_py bash "$box_gate_check" --box "$box_gate_box" --fixture-dir "$dir" "$@" || rc=$?
+  else
+    bash "$box_gate_check" --box "$box_gate_box" --fixture-dir "$dir" "$@" || rc=$?
+  fi
   case $rc in
     0) return 0 ;;
     1)

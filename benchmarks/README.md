@@ -766,7 +766,9 @@ their own arguments (`gh1133_cells.sh --box m4-max OUT BASE CAP ...`); a run of 
 no fixture (build, provenance, summary) needs neither. The mechanism is `box-gate.sh` and its
 Python twin `box_gate.py`; `test-box-gate.sh` drives every driver against a stand-in check, and
 `test_orchestrate.py` holds the inventory that every fixture-loading driver calls the gate. The
-gate runs inside whatever slot the driver runs in, so a measurement's GPU slot or hold covers it.
+gate runs inside whatever slot the driver runs in, so a measurement's GPU slot or hold covers it,
+in the driver's own process group discipline (a cancelled driver takes the check's device probe
+with it), and it sees `BENCH_VENV_PY` even where a driver scrubs `BENCH_*` from its cells.
 
 `tools/sweep.sh` runs it once per box (`--box-only`, which skips the checkout-relative
 interpreter, against `<main checkout>/benchmarks/fixtures`) and reports
